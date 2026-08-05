@@ -28,7 +28,7 @@ export const runtimeAuthorityRoutes: FastifyPluginAsync = async (fastify, _opts)
         return reply.code(400).send({ error: "Invalid runtime authority query." });
       }
       try {
-        fastify.services.workspaces.getWorkspace(query.data.workspaceId);
+        await fastify.services.workspaces.getWorkspace(query.data.workspaceId);
       } catch {
         return reply.code(404).send({ error: "Workspace not found." });
       }

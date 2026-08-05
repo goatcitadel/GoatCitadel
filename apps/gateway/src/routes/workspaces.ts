@@ -57,7 +57,7 @@ export const workspacesRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: query.error.flatten() });
     }
     return reply.send({
-      items: fastify.services.workspaces.listWorkspaces(query.data.view, query.data.limit, query.data.citadelId),
+      items: await fastify.services.workspaces.listWorkspaces(query.data.view, query.data.limit, query.data.citadelId),
       view: query.data.view,
       citadelId: query.data.citadelId,
     });
@@ -69,7 +69,7 @@ export const workspacesRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: body.error.flatten() });
     }
     try {
-      return reply.code(201).send(fastify.services.workspaces.createWorkspace(body.data));
+      return reply.code(201).send(await fastify.services.workspaces.createWorkspace(body.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -81,7 +81,7 @@ export const workspacesRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.workspaces.getWorkspace(params.data.workspaceId));
+      return reply.send(await fastify.services.workspaces.getWorkspace(params.data.workspaceId));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -100,7 +100,9 @@ export const workspacesRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       const { expectedRevision, ...input } = body.data;
-      return reply.send(fastify.services.workspaces.updateWorkspace(params.data.workspaceId, input, expectedRevision));
+      return reply.send(
+        await fastify.services.workspaces.updateWorkspace(params.data.workspaceId, input, expectedRevision),
+      );
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -119,7 +121,7 @@ export const workspacesRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(
-        fastify.services.workspaces.archiveWorkspace(params.data.workspaceId, body.data.expectedRevision),
+        await fastify.services.workspaces.archiveWorkspace(params.data.workspaceId, body.data.expectedRevision),
       );
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -139,7 +141,7 @@ export const workspacesRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(
-        fastify.services.workspaces.restoreWorkspace(params.data.workspaceId, body.data.expectedRevision),
+        await fastify.services.workspaces.restoreWorkspace(params.data.workspaceId, body.data.expectedRevision),
       );
     } catch (error) {
       return sendRouteError(reply, error, request.log);

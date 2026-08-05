@@ -16,12 +16,12 @@ describe("chat project routes", () => {
 
   it("lists, creates, updates, archives, restores, and hard-deletes chat projects", async () => {
     const services = {
-      listChatProjects: vi.fn(() => [{ projectId: "project-1" }]),
-      createChatProject: vi.fn(() => ({ projectId: "project-2", name: "New project" })),
-      updateChatProject: vi.fn(() => ({ projectId: "project-2", revision: 4, name: "Renamed" })),
-      archiveChatProject: vi.fn(() => ({ projectId: "project-2", revision: 5, lifecycleStatus: "archived" })),
-      restoreChatProject: vi.fn(() => ({ projectId: "project-2", revision: 6, lifecycleStatus: "active" })),
-      hardDeleteChatProject: vi.fn(() => true),
+      listChatProjects: vi.fn(async () => [{ projectId: "project-1" }]),
+      createChatProject: vi.fn(async () => ({ projectId: "project-2", name: "New project" })),
+      updateChatProject: vi.fn(async () => ({ projectId: "project-2", revision: 4, name: "Renamed" })),
+      archiveChatProject: vi.fn(async () => ({ projectId: "project-2", revision: 5, lifecycleStatus: "archived" })),
+      restoreChatProject: vi.fn(async () => ({ projectId: "project-2", revision: 6, lifecycleStatus: "active" })),
+      hardDeleteChatProject: vi.fn(async () => true),
     };
     app = buildApp(services);
 
@@ -45,6 +45,7 @@ describe("chat project routes", () => {
       },
     });
     expect(created.statusCode).toBe(201);
+    expect(created.json()).toEqual({ projectId: "project-2", name: "New project" });
     expect(services.createChatProject).toHaveBeenCalledWith({
       workspaceId: "workspace-1",
       name: "New project",
@@ -65,6 +66,7 @@ describe("chat project routes", () => {
       payload: { expectedRevision: 3, name: "Renamed", color: "#112233" },
     });
     expect(updated.statusCode).toBe(200);
+    expect(updated.json()).toEqual({ projectId: "project-2", revision: 4, name: "Renamed" });
     expect(services.updateChatProject).toHaveBeenCalledWith(
       "project-2",
       {
@@ -74,15 +76,27 @@ describe("chat project routes", () => {
       3,
     );
 
-    await expect(
-      app.inject({ method: "POST", url: "/api/v1/chat/projects/project-2/archive", payload: { expectedRevision: 4 } }),
-    ).resolves.toMatchObject({
-      statusCode: 200,
+    const archived = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/projects/project-2/archive",
+      payload: { expectedRevision: 4 },
     });
-    await expect(
-      app.inject({ method: "POST", url: "/api/v1/chat/projects/project-2/restore", payload: { expectedRevision: 5 } }),
-    ).resolves.toMatchObject({
-      statusCode: 200,
+    expect(archived.statusCode).toBe(200);
+    expect(archived.json()).toEqual({
+      projectId: "project-2",
+      revision: 5,
+      lifecycleStatus: "archived",
+    });
+    const restored = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/projects/project-2/restore",
+      payload: { expectedRevision: 5 },
+    });
+    expect(restored.statusCode).toBe(200);
+    expect(restored.json()).toEqual({
+      projectId: "project-2",
+      revision: 6,
+      lifecycleStatus: "active",
     });
     const deleted = await app.inject({
       method: "DELETE",
@@ -147,7 +161,7 @@ describe("chat project routes", () => {
 
   it("returns a structured client error when project scope ownership is invalid", async () => {
     app = buildApp({
-      listChatProjects: vi.fn(() => {
+      listChatProjects: vi.fn(async () => {
         throw new ValidationError({
           field: "workspaceId",
           message: "workspace default belongs to citadel personal, not company",
@@ -170,16 +184,16 @@ describe("chat project routes", () => {
 
   it("returns validation and service errors for project mutations", async () => {
     app = buildApp({
-      createChatProject: vi.fn(() => {
+      createChatProject: vi.fn(async () => {
         throw new Error("workspace path already exists");
       }),
-      updateChatProject: vi.fn(() => {
+      updateChatProject: vi.fn(async () => {
         throw new Error("project missing");
       }),
-      archiveChatProject: vi.fn(() => {
+      archiveChatProject: vi.fn(async () => {
         throw new Error("archive failed");
       }),
-      restoreChatProject: vi.fn(() => {
+      restoreChatProject: vi.fn(async () => {
         throw new Error("restore failed");
       }),
       hardDeleteChatProject: vi.fn(),
@@ -243,7 +257,7 @@ describe("chat project routes", () => {
         currentRevision: 6,
       },
     });
-    const fail = vi.fn(() => {
+    const fail = vi.fn(async () => {
       throw conflict;
     });
     app = buildApp({

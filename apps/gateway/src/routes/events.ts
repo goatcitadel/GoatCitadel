@@ -31,7 +31,7 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     const requestedSequenceCursor = parseSequenceCursor(parsed.data.cursor);
-    const bounds = fastify.services.realtimeEvents.getRealtimeEventSequenceBounds();
+    const bounds = await fastify.services.realtimeEvents.getRealtimeEventSequenceBounds();
     if (
       requestedSequenceCursor !== undefined &&
       bounds.oldestSequence !== undefined &&
@@ -45,7 +45,7 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
 
-    const items = fastify.services.realtimeEvents.listRealtimeEvents(parsed.data.limit, parsed.data.cursor);
+    const items = await fastify.services.realtimeEvents.listRealtimeEvents(parsed.data.limit, parsed.data.cursor);
     const last = items[items.length - 1];
     const nextCursor = items.length === parsed.data.limit && last ? String(last.sequence) : undefined;
     return reply.send({ items, nextCursor });
@@ -87,6 +87,10 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
     const corsCredentials = reply.getHeader("Access-Control-Allow-Credentials");
     const corsVary = reply.getHeader("Vary");
 
+    // From this point onward the route owns the raw response. Mark it hijacked
+    // before writing headers so a later async replay/storage failure cannot make
+    // Fastify attempt a second response and crash with ERR_HTTP_HEADERS_SENT.
+    reply.hijack();
     raw.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache, no-transform",
@@ -114,26 +118,26 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
       parseSequenceCursor(parsed.data.afterCursor) ??
       parseSequenceCursor(readLastEventId(request.headers["last-event-id"]));
     const clientId = parsed.data.clientId?.trim() || randomUUID();
-    // Open inside an IIFE so a throw here (e.g. a storage-layer failure) releases the per-IP
-    // connection slot that was incremented above. Without this, a failed open would skip the
-    // disconnect handlers wired further down, leaking the slot permanently and eventually
-    // 429-ing every future stream from this IP.
-    const lease = (() => {
-      try {
-        return fastify.services.realtimeEvents.openRealtimeStreamLease({
-          streamName: "events",
-          clientId,
-          requestedCursor,
-          connectedAt: new Date().toISOString(),
-        });
-      } catch (error) {
-        releaseConnection();
-        throw error;
-      }
-    })();
+    // A failed lease open must release the per-IP slot that was incremented
+    // above. The route already owns the raw response, so end it before letting
+    // Fastify record the rejected handler promise.
+    let lease: Awaited<ReturnType<typeof fastify.services.realtimeEvents.openRealtimeStreamLease>>;
+    try {
+      lease = await fastify.services.realtimeEvents.openRealtimeStreamLease({
+        streamName: "events",
+        clientId,
+        requestedCursor,
+        connectedAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      releaseConnection();
+      controller.abort(new Error("stream_lease_open_error"));
+      raw.end();
+      throw error;
+    }
     let closed = false;
     let writeChain = Promise.resolve();
-    let unsubscribe = () => undefined;
+    let unsubscribe: () => void = () => undefined;
     // Declared up-front (and cleared in cleanup) because cleanup() can run
     // before the keep-alive interval is created — e.g. a replay-gap early return
     // or a disconnect during replay. Assigned after the replay buffer is flushed.
@@ -148,10 +152,12 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
         clearInterval(keepAlive);
       }
       unsubscribe();
-      fastify.services.realtimeEvents.closeRealtimeStreamLease({
-        leaseId: lease.leaseId,
-        closeReason,
-      });
+      void Promise.resolve(
+        fastify.services.realtimeEvents.closeRealtimeStreamLease({
+          leaseId: lease.leaseId,
+          closeReason,
+        }),
+      ).catch(() => undefined);
       releaseConnection();
       try {
         raw.end();
@@ -188,7 +194,7 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
             return;
           }
           lastDeliveredSequence = event.sequence;
-          fastify.services.realtimeEvents.touchRealtimeStreamLease({
+          await fastify.services.realtimeEvents.touchRealtimeStreamLease({
             leaseId: lease.leaseId,
             lastSentSequence: event.sequence,
             lastEventAt: event.timestamp,
@@ -216,7 +222,13 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
     raw.on("close", () => cleanup("client_disconnect"));
     request.raw.on("aborted", () => cleanup("client_aborted"));
 
-    const bounds = fastify.services.realtimeEvents.getRealtimeEventSequenceBounds();
+    let bounds: Awaited<ReturnType<typeof fastify.services.realtimeEvents.getRealtimeEventSequenceBounds>>;
+    try {
+      bounds = await fastify.services.realtimeEvents.getRealtimeEventSequenceBounds();
+    } catch (error) {
+      cleanup("stream_replay_error");
+      throw error;
+    }
     if (
       requestedCursor !== undefined &&
       bounds.oldestSequence !== undefined &&
@@ -229,14 +241,19 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
         newestCursor: bounds.newestSequence,
       });
       cleanup("replay_gap");
-      reply.hijack();
       return;
     }
 
-    const replay: RealtimeEvent[] =
-      requestedCursor !== undefined
-        ? fastify.services.realtimeEvents.listRealtimeEventsAfterSequence(requestedCursor, STREAM_REPLAY_LIMIT)
-        : fastify.services.realtimeEvents.listRealtimeEvents(parsed.data.replay).reverse();
+    let replay: RealtimeEvent[];
+    try {
+      replay =
+        requestedCursor !== undefined
+          ? await fastify.services.realtimeEvents.listRealtimeEventsAfterSequence(requestedCursor, STREAM_REPLAY_LIMIT)
+          : (await fastify.services.realtimeEvents.listRealtimeEvents(parsed.data.replay)).reverse();
+    } catch (error) {
+      cleanup("stream_replay_error");
+      throw error;
+    }
     const latestReplayEvent = replay[replay.length - 1];
     if (
       requestedCursor !== undefined &&
@@ -253,7 +270,6 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
         replayLimit: STREAM_REPLAY_LIMIT,
       });
       cleanup("replay_gap");
-      reply.hijack();
       return;
     }
     // Prefer a live-buffered copy when the same event also appears in the
@@ -291,7 +307,6 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
       const wrote = await send(event, event.sequence);
       if (!wrote) {
         cleanup("stream_write_error");
-        reply.hijack();
         return;
       }
       lastDeliveredSequence = event.sequence;
@@ -301,17 +316,21 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
     replayFlushed = true;
 
     if (closed) {
-      reply.hijack();
       return;
     }
 
     const lastSentEvent = lastFlushedEvent ?? latestDeliveredReplayEvent;
-    fastify.services.realtimeEvents.touchRealtimeStreamLease({
-      leaseId: lease.leaseId,
-      requestedCursor,
-      lastSentSequence: lastSentEvent?.sequence,
-      lastEventAt: lastSentEvent?.timestamp,
-    });
+    try {
+      await fastify.services.realtimeEvents.touchRealtimeStreamLease({
+        leaseId: lease.leaseId,
+        requestedCursor,
+        lastSentSequence: lastSentEvent?.sequence,
+        lastEventAt: lastSentEvent?.timestamp,
+      });
+    } catch (error) {
+      cleanup("stream_lease_touch_error");
+      throw error;
+    }
     await sendNamedEvent("stream-ready", {
       leaseId: lease.leaseId,
       clientId: lease.clientId,
@@ -323,19 +342,17 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
 
     keepAlive = setInterval(() => {
       void writeSseChunk(raw, ": keep-alive\n\n", controller.signal)
-        .then((wrote) => {
+        .then(async (wrote) => {
           if (!wrote) {
             cleanup("keepalive_write_error");
             return;
           }
-          fastify.services.realtimeEvents.touchRealtimeStreamLease({
+          await fastify.services.realtimeEvents.touchRealtimeStreamLease({
             leaseId: lease.leaseId,
           });
         })
         .catch(() => cleanup("keepalive_write_error"));
     }, 25000);
-
-    reply.hijack();
   });
 };
 

@@ -21,7 +21,7 @@ describe("evidence routes", () => {
   }
 
   it("forwards workspace envelope filters to the evidence service", async () => {
-    const listEnvelopes = vi.fn(() => [{ envelopeId: "env-a", eventKind: "memory_write" }]);
+    const listEnvelopes = vi.fn(async () => [{ envelopeId: "env-a", eventKind: "memory_write" }]);
     app = buildApp({ listEnvelopes });
     await app.register(evidenceRoutes);
 

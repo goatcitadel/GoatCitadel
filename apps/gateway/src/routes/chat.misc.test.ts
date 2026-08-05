@@ -151,4 +151,26 @@ describe("chat misc routes", () => {
       authActorSource: "loopback",
     });
   });
+
+  it("awaits proactive run lists before serializing response items", async () => {
+    const listChatSessionProactiveRuns = vi.fn(async () => [
+      {
+        runId: "proactive-run-1",
+        sessionId: "session-1",
+        status: "suggested",
+      },
+    ]);
+    createApp({ listChatSessionProactiveRuns });
+
+    const response = await app!.inject({
+      method: "GET",
+      url: "/api/v1/chat/sessions/session-1/proactive/runs?limit=12",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      items: [{ runId: "proactive-run-1", sessionId: "session-1", status: "suggested" }],
+    });
+    expect(listChatSessionProactiveRuns).toHaveBeenCalledWith("session-1", 12);
+  });
 });

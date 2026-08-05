@@ -16,31 +16,31 @@ describe("workspace and guidance routes", () => {
 
   function createWorkspaceService(overrides: Record<string, unknown> = {}) {
     return {
-      listWorkspaces: vi.fn(() => []),
-      createWorkspace: vi.fn((input: Record<string, unknown>) => ({
+      listWorkspaces: vi.fn(async () => []),
+      createWorkspace: vi.fn(async (input: Record<string, unknown>) => ({
         workspaceId: "workspace-created",
         revision: 1,
         lifecycleStatus: "active",
         ...input,
       })),
-      getWorkspace: vi.fn((workspaceId: string) => ({
+      getWorkspace: vi.fn(async (workspaceId: string) => ({
         workspaceId,
         revision: 1,
         name: "Default",
         slug: "default",
         lifecycleStatus: "active",
       })),
-      updateWorkspace: vi.fn((workspaceId: string, input: Record<string, unknown>, expectedRevision: number) => ({
+      updateWorkspace: vi.fn(async (workspaceId: string, input: Record<string, unknown>, expectedRevision: number) => ({
         workspaceId,
         revision: expectedRevision + 1,
         ...input,
       })),
-      archiveWorkspace: vi.fn((workspaceId: string, expectedRevision: number) => ({
+      archiveWorkspace: vi.fn(async (workspaceId: string, expectedRevision: number) => ({
         workspaceId,
         revision: expectedRevision + 1,
         lifecycleStatus: "archived",
       })),
-      restoreWorkspace: vi.fn((workspaceId: string, expectedRevision: number) => ({
+      restoreWorkspace: vi.fn(async (workspaceId: string, expectedRevision: number) => ({
         workspaceId,
         revision: expectedRevision + 1,
         lifecycleStatus: "active",
@@ -74,7 +74,7 @@ describe("workspace and guidance routes", () => {
   }
 
   it("lists workspaces through gateway service with optional Citadel scope", async () => {
-    const listWorkspaces = vi.fn(() => [
+    const listWorkspaces = vi.fn(async () => [
       {
         workspaceId: "default",
         name: "Default",
@@ -185,6 +185,9 @@ describe("workspace and guidance routes", () => {
     expect(updateResponse.statusCode).toBe(200);
     expect(archiveResponse.statusCode).toBe(200);
     expect(restoreResponse.statusCode).toBe(200);
+    expect(createResponse.json()).toMatchObject({ workspaceId: "workspace-created", name: "Research" });
+    expect(getResponse.json()).toMatchObject({ workspaceId: "workspace-created", name: "Default" });
+    expect(updateResponse.json()).toMatchObject({ workspaceId: "workspace-created", name: "Research Lab" });
     expect(service.createWorkspace).toHaveBeenCalledWith({
       citadelId: "company",
       name: "Research",
@@ -247,19 +250,19 @@ describe("workspace and guidance routes", () => {
 
   it("maps workspace service failures to route error responses", async () => {
     await registerWorkspaceService({
-      createWorkspace: vi.fn(() => {
+      createWorkspace: vi.fn(async () => {
         throw new Error("duplicate slug");
       }),
-      getWorkspace: vi.fn(() => {
+      getWorkspace: vi.fn(async () => {
         throw new Error("missing workspace");
       }),
-      updateWorkspace: vi.fn(() => {
+      updateWorkspace: vi.fn(async () => {
         throw new Error("invalid workspace");
       }),
-      archiveWorkspace: vi.fn(() => {
+      archiveWorkspace: vi.fn(async () => {
         throw new Error("archive blocked");
       }),
-      restoreWorkspace: vi.fn(() => {
+      restoreWorkspace: vi.fn(async () => {
         throw new Error("restore blocked");
       }),
       listWorkspaceGuidance: vi.fn(async () => {
@@ -334,13 +337,13 @@ describe("workspace and guidance routes", () => {
       },
     });
     await registerWorkspaceService({
-      updateWorkspace: vi.fn(() => {
+      updateWorkspace: vi.fn(async () => {
         throw conflict;
       }),
-      archiveWorkspace: vi.fn(() => {
+      archiveWorkspace: vi.fn(async () => {
         throw conflict;
       }),
-      restoreWorkspace: vi.fn(() => {
+      restoreWorkspace: vi.fn(async () => {
         throw conflict;
       }),
     });

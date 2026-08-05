@@ -366,7 +366,7 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(projectProviderRuntimePublicValue(fastify.services.llm.getProviderAdvice(parsed.data)));
+      return reply.send(projectProviderRuntimePublicValue(await fastify.services.llm.getProviderAdvice(parsed.data)));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -379,7 +379,7 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(
-        projectProviderRuntimePublicValue(fastify.services.llm.listLlmRuntimeMeasurements(parsed.data)),
+        projectProviderRuntimePublicValue(await fastify.services.llm.listLlmRuntimeMeasurements(parsed.data)),
       );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -388,7 +388,7 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.get("/api/v1/llm/local-engines", async (_request, reply) => {
     try {
-      return reply.send(projectProviderRuntimePublicValue(fastify.services.llm.listLlmLocalEngines()));
+      return reply.send(projectProviderRuntimePublicValue(await fastify.services.llm.listLlmLocalEngines()));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -401,7 +401,7 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(
-        projectProviderRuntimePublicValue(fastify.services.llm.listLlmEvalProofRuns(parsed.data.limit)),
+        projectProviderRuntimePublicValue(await fastify.services.llm.listLlmEvalProofRuns(parsed.data.limit)),
       );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -415,7 +415,7 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(
-        projectProviderRuntimePublicValue(fastify.services.llm.exportLlmEvalProofRuns(parsed.data.limit)),
+        projectProviderRuntimePublicValue(await fastify.services.llm.exportLlmEvalProofRuns(parsed.data.limit)),
       );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -428,7 +428,7 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(projectProviderRuntimePublicValue(fastify.services.llm.runLlmEvalProof(parsed.data)));
+      return reply.send(projectProviderRuntimePublicValue(await fastify.services.llm.runLlmEvalProof(parsed.data)));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }

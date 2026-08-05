@@ -165,12 +165,12 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     const scope = parsed.data.scope ?? "inspectable";
     // Scope skill-kind catalog entries to the active workspace's effective skill set when a
     // workspaceId is supplied (mirrors GET /api/v1/skills?workspaceId). Absent → unchanged call.
-    const items = parsed.data.workspaceId
+    const items = await (parsed.data.workspaceId
       ? fastify.services.capabilities.listCapabilityCatalog(
           scope,
           await fastify.services.capabilityScope.resolveEffectiveSkills(parsed.data.workspaceId),
         )
-      : fastify.services.capabilities.listCapabilityCatalog(scope);
+      : fastify.services.capabilities.listCapabilityCatalog(scope));
     return reply.send({ scope, items: projectCapabilityPublicValue(items) });
   });
 
@@ -180,7 +180,9 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send(
-      projectCapabilityPublicValue(fastify.services.capabilities.getCompactToolDirectorySnapshot(parsed.data.ttlMs)),
+      projectCapabilityPublicValue(
+        await fastify.services.capabilities.getCompactToolDirectorySnapshot(parsed.data.ttlMs),
+      ),
     );
   });
 
@@ -206,7 +208,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply.send(
         projectCapabilityPublicValue(
-          fastify.services.capabilities.getCapabilityCatalogSnapshot(parsed.data.snapshotId),
+          await fastify.services.capabilities.getCapabilityCatalogSnapshot(parsed.data.snapshotId),
         ),
       );
     } catch (error) {
@@ -221,7 +223,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     }
     return reply.send({
       items: projectCapabilityPublicValue(
-        fastify.services.capabilities.listCapabilityProposals(parsed.data.limit ?? 100),
+        await fastify.services.capabilities.listCapabilityProposals(parsed.data.limit ?? 100),
       ),
     });
   });
@@ -236,7 +238,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
         .code(201)
         .send(
           projectCapabilityPublicValue(
-            fastify.services.capabilities.createCapabilityProposal(parsed.data, resolveActorId(request)),
+            await fastify.services.capabilities.createCapabilityProposal(parsed.data, resolveActorId(request)),
           ),
         );
     } catch (error) {
@@ -313,7 +315,9 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(
-        projectCapabilityPublicValue(fastify.services.capabilities.getCapabilityProposalDetail(parsed.data.proposalId)),
+        projectCapabilityPublicValue(
+          await fastify.services.capabilities.getCapabilityProposalDetail(parsed.data.proposalId),
+        ),
       );
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
@@ -328,7 +332,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply.send(
         projectCapabilityPublicValue(
-          fastify.services.capabilities.getCapabilityCandidateDetail(parsed.data.candidateId),
+          await fastify.services.capabilities.getCapabilityCandidateDetail(parsed.data.candidateId),
         ),
       );
     } catch (error) {
@@ -419,7 +423,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     }
     return reply.send({
       items: projectCapabilityPublicValue(
-        fastify.services.capabilities.listCodeModeRuns({
+        await fastify.services.capabilities.listCodeModeRuns({
           ...parsed.data,
           limit: parsed.data.limit ?? 100,
           workspaceId: parsed.data.workspaceId ?? DEFAULT_WORKSPACE_ID,
@@ -429,7 +433,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.get("/api/v1/code-mode/execution-backends", async (_request, reply) => {
-    return reply.send(fastify.services.capabilities.listCodeModeExecutionBackends());
+    return reply.send(await fastify.services.capabilities.listCodeModeExecutionBackends());
   });
 
   fastify.get("/api/v1/code-mode/runs/:runId", async (request, reply) => {
@@ -445,7 +449,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       const workspaceId = query.data.workspaceId ?? DEFAULT_WORKSPACE_ID;
-      const run = fastify.services.capabilities.getCodeModeRunInScope(parsed.data.runId, {
+      const run = await fastify.services.capabilities.getCodeModeRunInScope(parsed.data.runId, {
         workspaceId,
         ...(query.data.sessionId ? { sessionId: query.data.sessionId } : {}),
         ...(query.data.turnId ? { turnId: query.data.turnId } : {}),
@@ -471,7 +475,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       const { limit, ...scopeQuery } = query.data;
       return reply.send({
         items: projectCapabilityPublicValue(
-          fastify.services.capabilities.listCodeModeRunVerificationEvidence(
+          await fastify.services.capabilities.listCodeModeRunVerificationEvidence(
             params.data.runId,
             {
               ...scopeQuery,
@@ -561,7 +565,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       const workspaceId = query.data.workspaceId ?? DEFAULT_WORKSPACE_ID;
       return reply.send(
         projectCapabilityPublicValue(
-          fastify.services.capabilities.compareCodeModeRuns(parsed.data.runId, parsed.data.baselineRunId, {
+          await fastify.services.capabilities.compareCodeModeRuns(parsed.data.runId, parsed.data.baselineRunId, {
             workspaceId,
             ...(query.data.sessionId ? { sessionId: query.data.sessionId } : {}),
             ...(query.data.turnId ? { turnId: query.data.turnId } : {}),

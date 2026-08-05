@@ -518,7 +518,7 @@ describe("llm routes", () => {
   });
 
   it("returns provider advice as an advisory no-mutation response", async () => {
-    const getProviderAdvice = vi.fn(() => ({
+    const getProviderAdvice = vi.fn(async () => ({
       generatedAt: "2026-05-22T00:00:00.000Z",
       preference: "low_cost",
       candidates: [
@@ -580,21 +580,21 @@ describe("llm routes", () => {
   });
 
   it("exposes runtime measurements, local engines, and eval proof records", async () => {
-    const listLlmRuntimeMeasurements = vi.fn(() => ({
+    const listLlmRuntimeMeasurements = vi.fn(async () => ({
       generatedAt: "2026-05-29T00:00:00.000Z",
       items: [{ measurementId: "measure-1", providerId: "openai", model: "gpt-5", metrics: {} }],
       warnings: [],
     }));
-    const listLlmLocalEngines = vi.fn(() => ({
+    const listLlmLocalEngines = vi.fn(async () => ({
       generatedAt: "2026-05-29T00:00:00.000Z",
       items: [{ engineKind: "ollama", label: "Ollama", configured: true }],
       warnings: [],
     }));
-    const listLlmEvalProofRuns = vi.fn(() => ({
+    const listLlmEvalProofRuns = vi.fn(async () => ({
       generatedAt: "2026-05-29T00:00:00.000Z",
       items: [{ runId: "proof-1", status: "completed" }],
     }));
-    const exportLlmEvalProofRuns = vi.fn(() => ({
+    const exportLlmEvalProofRuns = vi.fn(async () => ({
       version: "llm.eval_proof_export.v1",
       generatedAt: "2026-05-29T00:00:00.000Z",
       format: "json",
@@ -609,7 +609,7 @@ describe("llm routes", () => {
       runs: [{ runId: "proof-1", status: "completed" }],
       content: "{}",
     }));
-    const runLlmEvalProof = vi.fn(() => ({
+    const runLlmEvalProof = vi.fn(async () => ({
       generatedAt: "2026-05-29T00:00:00.000Z",
       run: { runId: "proof-2", status: "completed", results: [] },
     }));
@@ -896,7 +896,7 @@ describe("llm routes", () => {
         listLlmProviders: vi.fn(() => [rawProvider]),
         getLlmConfigWithDetails: vi.fn(() => rawConfig),
         listLlmModels: vi.fn(async () => rawModels),
-        listLlmRuntimeMeasurements: vi.fn(() => rawMeasurements),
+        listLlmRuntimeMeasurements: vi.fn(async () => rawMeasurements),
       },
     } as never);
     await app.register(llmRoutes);

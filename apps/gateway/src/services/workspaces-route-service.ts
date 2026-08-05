@@ -3,11 +3,12 @@ import type {
   GuidanceDocType,
   GuidanceDocumentRecord,
   WorkspaceCreateInput,
+  WorkspaceLifecycleStatus,
   WorkspaceRecord,
   WorkspaceUpdateInput,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
-import { createRouteService, type RoutePort, type RouteService } from "./route-service-factory.js";
+import { createRouteService } from "./route-service-factory.js";
 
 export const workspacesRouteMethods = [
   "archiveWorkspace",
@@ -23,8 +24,29 @@ export const workspacesRouteMethods = [
 ] as const;
 
 export type WorkspacesRouteMethod = (typeof workspacesRouteMethods)[number];
-export type WorkspacesRoutePort = RoutePort<WorkspacesRouteMethod>;
-export type WorkspacesRouteService = RouteService<WorkspacesRouteMethod>;
+
+export interface WorkspacesRoutePort {
+  archiveWorkspace(workspaceId: string, expectedRevision: number): Promise<WorkspaceRecord>;
+  createWorkspace(input: WorkspaceCreateInput): Promise<WorkspaceRecord>;
+  getWorkspace(workspaceId: string): Promise<WorkspaceRecord>;
+  listGlobalGuidance(): Promise<GuidanceDocumentRecord[]>;
+  listWorkspaceGuidance(workspaceId: string): Promise<GuidanceBundleRecord>;
+  listWorkspaces(
+    view?: WorkspaceLifecycleStatus | "all",
+    limit?: number,
+    citadelId?: string,
+  ): Promise<WorkspaceRecord[]>;
+  restoreWorkspace(workspaceId: string, expectedRevision: number): Promise<WorkspaceRecord>;
+  updateGlobalGuidance(docType: GuidanceDocType, content: string): Promise<GuidanceDocumentRecord>;
+  updateWorkspace(workspaceId: string, input: WorkspaceUpdateInput, expectedRevision: number): Promise<WorkspaceRecord>;
+  updateWorkspaceGuidance(
+    workspaceId: string,
+    docType: GuidanceDocType,
+    content: string,
+  ): Promise<GuidanceDocumentRecord>;
+}
+
+export type WorkspacesRouteService = Readonly<WorkspacesRoutePort>;
 
 export interface WorkspacesRoutePortDependencies {
   storage: Pick<Storage, "workspaces">;
@@ -101,5 +123,5 @@ export function createWorkspacesRoutePort(deps: WorkspacesRoutePortDependencies)
 }
 
 export function createWorkspacesRouteService(port: WorkspacesRoutePort): WorkspacesRouteService {
-  return createRouteService(port, workspacesRouteMethods);
+  return createRouteService(port, workspacesRouteMethods) as WorkspacesRouteService;
 }

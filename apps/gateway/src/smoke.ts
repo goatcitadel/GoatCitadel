@@ -237,6 +237,7 @@ async function smokeChat(app: Awaited<ReturnType<typeof buildApp>>): Promise<voi
     url: "/api/v1/chat/projects?view=all&limit=20",
   });
   assert.equal(projectsBefore.statusCode, 200);
+  assert.ok(Array.isArray(projectsBefore.json<{ items?: unknown }>().items));
 
   const createdProject = await postJson<{ projectId: string; name: string }>(
     app,

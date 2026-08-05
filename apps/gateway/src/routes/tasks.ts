@@ -583,7 +583,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      const access = readTaskWorkspaceAccess(request);
+      const access = await readTaskWorkspaceAccess(request);
       return reply.send(
         fastify.services.tasks.listAgenticRuns({
           ...omitCitadelId(parsed.data),
@@ -662,7 +662,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply
         .code(201)
-        .send(fastify.services.tasks.appendTaskDiagnostic(taskId, parsed.data, readTaskWorkspaceAccess(request)));
+        .send(fastify.services.tasks.appendTaskDiagnostic(taskId, parsed.data, await readTaskWorkspaceAccess(request)));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -675,7 +675,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      const access = readTaskWorkspaceAccess(request);
+      const access = await readTaskWorkspaceAccess(request);
       const view = parsed.data.view ?? (parsed.data.includeDeleted ? "all" : "active");
       const items = await fastify.services.tasks.listTasks(
         parsed.data.limit,
@@ -699,7 +699,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      const access = readTaskWorkspaceAccess(request);
+      const access = await readTaskWorkspaceAccess(request);
       const task = fastify.services.tasks.createTask({
         ...omitCitadelId(parsed.data),
         workspaceId: access.workspaceId,
@@ -713,7 +713,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/tasks/:taskId", async (request, reply) => {
     const taskId = (request.params as { taskId: string }).taskId;
     try {
-      return reply.send(fastify.services.tasks.getTask(taskId, readTaskWorkspaceAccess(request)));
+      return reply.send(fastify.services.tasks.getTask(taskId, await readTaskWorkspaceAccess(request)));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -732,7 +732,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
         taskId,
         input,
         expectedRevision,
-        readTaskWorkspaceAccess(request),
+        await readTaskWorkspaceAccess(request),
       );
       return reply.send(task);
     } catch (error) {
@@ -766,14 +766,14 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
           ? fastify.services.tasks.hardDeleteTaskWithRevision(
               taskId,
               expectedRevision,
-              readTaskWorkspaceAccess(request),
+              await readTaskWorkspaceAccess(request),
             )
           : fastify.services.tasks.softDeleteTaskWithRevision(
               taskId,
               expectedRevision,
               deletedBy,
               deleteReason,
-              readTaskWorkspaceAccess(request),
+              await readTaskWorkspaceAccess(request),
             );
 
       if (!deleted) {
@@ -795,7 +795,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
       const restored = fastify.services.tasks.restoreTaskWithRevision(
         taskId,
         parsed.data.expectedRevision,
-        readTaskWorkspaceAccess(request),
+        await readTaskWorkspaceAccess(request),
       );
       if (!restored) {
         return reply.code(404).send({ error: `Task ${taskId} not found or not deleted` });
@@ -810,7 +810,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     const taskId = (request.params as { taskId: string }).taskId;
     try {
       return reply.send({
-        items: fastify.services.tasks.listTaskActivities(taskId, 200, readTaskWorkspaceAccess(request)),
+        items: fastify.services.tasks.listTaskActivities(taskId, 200, await readTaskWorkspaceAccess(request)),
       });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -827,7 +827,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply
         .code(201)
-        .send(fastify.services.tasks.appendTaskActivity(taskId, parsed.data, readTaskWorkspaceAccess(request)));
+        .send(fastify.services.tasks.appendTaskActivity(taskId, parsed.data, await readTaskWorkspaceAccess(request)));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -837,7 +837,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     const taskId = (request.params as { taskId: string }).taskId;
     try {
       return reply.send({
-        items: fastify.services.tasks.listTaskDeliverables(taskId, 200, readTaskWorkspaceAccess(request)),
+        items: fastify.services.tasks.listTaskDeliverables(taskId, 200, await readTaskWorkspaceAccess(request)),
       });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -854,7 +854,9 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply
         .code(201)
-        .send(fastify.services.tasks.appendTaskDeliverable(taskId, parsed.data, readTaskWorkspaceAccess(request)));
+        .send(
+          fastify.services.tasks.appendTaskDeliverable(taskId, parsed.data, await readTaskWorkspaceAccess(request)),
+        );
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -864,7 +866,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     const taskId = (request.params as { taskId: string }).taskId;
     try {
       return reply.send({
-        items: fastify.services.tasks.listTaskSubagents(taskId, 200, readTaskWorkspaceAccess(request)),
+        items: fastify.services.tasks.listTaskSubagents(taskId, 200, await readTaskWorkspaceAccess(request)),
       });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -881,7 +883,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply
         .code(201)
-        .send(fastify.services.tasks.registerTaskSubagent(taskId, parsed.data, readTaskWorkspaceAccess(request)));
+        .send(fastify.services.tasks.registerTaskSubagent(taskId, parsed.data, await readTaskWorkspaceAccess(request)));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -896,7 +898,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
 
     try {
       return reply.send(
-        fastify.services.tasks.updateTaskSubagent(agentSessionId, parsed.data, readTaskWorkspaceAccess(request)),
+        fastify.services.tasks.updateTaskSubagent(agentSessionId, parsed.data, await readTaskWorkspaceAccess(request)),
       );
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -915,7 +917,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
         taskId,
         input,
         expectedRevision,
-        readTaskWorkspaceAccess(request),
+        await readTaskWorkspaceAccess(request),
       );
       return reply.code(201).send(task);
     } catch (error) {
@@ -933,7 +935,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
         signalId,
         { resolvedBy: resolveActorId(request) },
         parsed.data.expectedRevision,
-        readTaskWorkspaceAccess(request),
+        await readTaskWorkspaceAccess(request),
       );
       return reply.send(task);
     } catch (error) {
@@ -950,7 +952,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
         taskId,
         parsed.data.maxRetries,
         parsed.data.expectedRevision,
-        readTaskWorkspaceAccess(request),
+        await readTaskWorkspaceAccess(request),
       );
       return reply.send(task);
     } catch (error) {
@@ -967,7 +969,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
         taskId,
         parsed.data.claims,
         parsed.data.expectedRevision,
-        readTaskWorkspaceAccess(request),
+        await readTaskWorkspaceAccess(request),
       );
       return reply.send(task);
     } catch (error) {
@@ -979,7 +981,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     const parsed = bulkActionBodySchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
     try {
-      const tasks = fastify.services.tasks.bulkUpdateTasks(parsed.data, readTaskWorkspaceAccess(request));
+      const tasks = fastify.services.tasks.bulkUpdateTasks(parsed.data, await readTaskWorkspaceAccess(request));
       return reply.send({ tasks });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -1000,7 +1002,7 @@ function sendA2AHttpJsonRouteError(reply: FastifyReply, error: unknown, request:
   return sendRouteError(reply, error, request.log);
 }
 
-function readTaskWorkspaceAccess(request: FastifyRequest): TaskWorkspaceAccessOptions {
+async function readTaskWorkspaceAccess(request: FastifyRequest): Promise<TaskWorkspaceAccessOptions> {
   const access = {
     citadelId:
       readCitadelIdFromQuery(request.query) ??
@@ -1011,17 +1013,20 @@ function readTaskWorkspaceAccess(request: FastifyRequest): TaskWorkspaceAccessOp
       readWorkspaceIdFromBody(request.body) ??
       readWorkspaceIdFromHeader(request.headers["x-goatcitadel-workspace-id"]),
   };
-  assertTaskCitadelWorkspaceMatch(request, access);
+  await assertTaskCitadelWorkspaceMatch(request, access);
   return access;
 }
 
-function assertTaskCitadelWorkspaceMatch(request: FastifyRequest, access: TaskWorkspaceAccessOptions): void {
+async function assertTaskCitadelWorkspaceMatch(
+  request: FastifyRequest,
+  access: TaskWorkspaceAccessOptions,
+): Promise<void> {
   const citadelId = access.citadelId?.trim();
   if (!citadelId) {
     return;
   }
   const workspaceId = access.workspaceId?.trim() || DEFAULT_WORKSPACE_ID;
-  const workspace = request.server.services.workspaces.getWorkspace(workspaceId);
+  const workspace = await request.server.services.workspaces.getWorkspace(workspaceId);
   if (workspace.citadelId && workspace.citadelId !== citadelId) {
     throw new ValidationError({
       message: `workspace ${workspaceId} belongs to citadel ${workspace.citadelId}, not ${citadelId}`,

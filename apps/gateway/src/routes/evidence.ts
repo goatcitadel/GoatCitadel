@@ -19,7 +19,7 @@ export const evidenceRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send({
-      items: fastify.services.evidence.listEnvelopes(parsed.data),
+      items: await fastify.services.evidence.listEnvelopes(parsed.data),
     });
   });
 };

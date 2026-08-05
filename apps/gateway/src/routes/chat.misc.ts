@@ -196,7 +196,7 @@ export function registerChatMiscRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(chatSupport().getChatSessionPrefs(params.data.sessionId));
+      return reply.send(await chatSupport().getChatSessionPrefs(params.data.sessionId));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -214,7 +214,7 @@ export function registerChatMiscRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
-      return reply.send(chatSupport().updateChatSessionPrefs(params.data.sessionId, body.data));
+      return reply.send(await chatSupport().updateChatSessionPrefs(params.data.sessionId, body.data));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -287,7 +287,7 @@ export function registerChatMiscRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(chatSupport().getChatResearchRun(params.data.sessionId, params.data.runId));
+      return reply.send(await chatSupport().getChatResearchRun(params.data.sessionId, params.data.runId));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -299,7 +299,7 @@ export function registerChatMiscRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(chatSupport().getChatSessionProactiveStatus(params.data.sessionId));
+      return reply.send(await chatSupport().getChatSessionProactiveStatus(params.data.sessionId));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -317,7 +317,7 @@ export function registerChatMiscRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
-      return reply.send(chatSupport().updateChatSessionProactivePolicy(params.data.sessionId, body.data));
+      return reply.send(await chatSupport().updateChatSessionProactivePolicy(params.data.sessionId, body.data));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -361,7 +361,7 @@ export function registerChatMiscRoutes(fastify: FastifyInstance): void {
     }
     try {
       return reply.send({
-        items: chatSupport().listChatSessionProactiveRuns(params.data.sessionId, query.data.limit),
+        items: await chatSupport().listChatSessionProactiveRuns(params.data.sessionId, query.data.limit),
       });
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -380,7 +380,7 @@ export function registerChatMiscRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
-      return reply.send(chatSupport().listChatSessionLearnedMemory(params.data.sessionId, query.data.limit));
+      return reply.send(await chatSupport().listChatSessionLearnedMemory(params.data.sessionId, query.data.limit));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -399,7 +399,7 @@ export function registerChatMiscRoutes(fastify: FastifyInstance): void {
     }
     try {
       return reply.send(
-        chatSupport().updateChatSessionLearnedMemory(params.data.sessionId, params.data.itemId, body.data),
+        await chatSupport().updateChatSessionLearnedMemory(params.data.sessionId, params.data.itemId, body.data),
       );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -430,7 +430,9 @@ export function registerChatMiscRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
-      return reply.send(chatSupport().listChatSessionSpecialistCandidates(params.data.sessionId, query.data.limit));
+      return reply.send(
+        await chatSupport().listChatSessionSpecialistCandidates(params.data.sessionId, query.data.limit),
+      );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -448,7 +450,9 @@ export function registerChatMiscRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
-      return reply.code(201).send(chatSupport().createChatSessionSpecialistCandidate(params.data.sessionId, body.data));
+      return reply
+        .code(201)
+        .send(await chatSupport().createChatSessionSpecialistCandidate(params.data.sessionId, body.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -467,7 +471,11 @@ export function registerChatMiscRoutes(fastify: FastifyInstance): void {
     }
     try {
       return reply.send(
-        chatSupport().updateChatSessionSpecialistCandidate(params.data.sessionId, params.data.candidateId, body.data),
+        await chatSupport().updateChatSessionSpecialistCandidate(
+          params.data.sessionId,
+          params.data.candidateId,
+          body.data,
+        ),
       );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });

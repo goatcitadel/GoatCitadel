@@ -76,7 +76,7 @@ export function registerChatProjectRoutes(fastify: FastifyInstance): void {
     }
     try {
       return reply.send({
-        items: fastify.services.chatProjects.listChatProjects(
+        items: await fastify.services.chatProjects.listChatProjects(
           parsed.data.view,
           parsed.data.limit,
           parsed.data.workspaceId,
@@ -95,7 +95,7 @@ export function registerChatProjectRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      const created = fastify.services.chatProjects.createChatProject(parsed.data);
+      const created = await fastify.services.chatProjects.createChatProject(parsed.data);
       return reply.code(201).send(created);
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -128,7 +128,7 @@ export function registerChatProjectRoutes(fastify: FastifyInstance): void {
     try {
       const { expectedRevision, ...input } = body.data;
       return reply.send(
-        fastify.services.chatProjects.updateChatProject(params.data.projectId, input, expectedRevision),
+        await fastify.services.chatProjects.updateChatProject(params.data.projectId, input, expectedRevision),
       );
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -148,7 +148,7 @@ export function registerChatProjectRoutes(fastify: FastifyInstance): void {
     }
     try {
       return reply.send(
-        fastify.services.chatProjects.archiveChatProject(params.data.projectId, body.data.expectedRevision),
+        await fastify.services.chatProjects.archiveChatProject(params.data.projectId, body.data.expectedRevision),
       );
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -168,7 +168,7 @@ export function registerChatProjectRoutes(fastify: FastifyInstance): void {
     }
     try {
       return reply.send(
-        fastify.services.chatProjects.restoreChatProject(params.data.projectId, body.data.expectedRevision),
+        await fastify.services.chatProjects.restoreChatProject(params.data.projectId, body.data.expectedRevision),
       );
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -190,7 +190,7 @@ export function registerChatProjectRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: "Only hard delete is supported for chat projects." });
     }
     try {
-      const deleted = fastify.services.chatProjects.hardDeleteChatProject(
+      const deleted = await fastify.services.chatProjects.hardDeleteChatProject(
         params.data.projectId,
         query.data.expectedRevision,
       );

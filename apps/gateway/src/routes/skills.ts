@@ -168,9 +168,9 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
     const workspaceId = parsed.data.workspaceId;
     if (workspaceId !== undefined) {
       const effective = await fastify.services.capabilityScope.resolveEffectiveSkills(workspaceId);
-      return reply.send({ items: skills.listSkills(effective) });
+      return reply.send({ items: await skills.listSkills(effective) });
     }
-    return reply.send({ items: skills.listSkills() });
+    return reply.send({ items: await skills.listSkills() });
   });
 
   fastify.get("/api/v1/skills/hub", operatorOnly, async (request, reply) => {
@@ -180,7 +180,7 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(skills.listSkillHub(parsed.data));
+      return reply.send(await skills.listSkillHub(parsed.data));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -275,7 +275,7 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.code(201).send(skills.packageSkillExport({ ...parsed.data, actorId: request.authActorId }));
+      return reply.code(201).send(await skills.packageSkillExport({ ...parsed.data, actorId: request.authActorId }));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -329,7 +329,7 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
     }
     return reply.send(
       projectImportProvenanceReferencesForPublic({
-        items: skills.listSkillImportHistory(parsed.data.limit),
+        items: await skills.listSkillImportHistory(parsed.data.limit),
       }),
     );
   });

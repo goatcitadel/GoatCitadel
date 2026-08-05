@@ -76,7 +76,7 @@ export const reviewReadinessRoutes: FastifyPluginAsync = async (fastify, _opts) 
 
   fastify.get("/api/v1/review/readiness", operatorOnly, async (request, reply) => {
     try {
-      return reply.send(fastify.gatewayRuntime.reviewReadinessService.getReadiness());
+      return reply.send(await fastify.gatewayRuntime.reviewReadinessService.getReadiness());
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -102,7 +102,7 @@ export const reviewReadinessRoutes: FastifyPluginAsync = async (fastify, _opts) 
     try {
       const body = importFindingsSchema.parse(request.body);
       return reply.send(
-        fastify.gatewayRuntime.reviewReadinessService.importFindings({
+        await fastify.gatewayRuntime.reviewReadinessService.importFindings({
           findings: body.findings,
           actorId: resolveActorId(request),
         }),
@@ -129,7 +129,7 @@ export const reviewReadinessRoutes: FastifyPluginAsync = async (fastify, _opts) 
   fastify.get("/api/v1/review/runs", operatorOnly, async (request, reply) => {
     try {
       const query = reviewRunsQuerySchema.parse(request.query ?? {});
-      return reply.send(fastify.gatewayRuntime.reviewReadinessService.listStructuredReviewRuns(query.limit));
+      return reply.send(await fastify.gatewayRuntime.reviewReadinessService.listStructuredReviewRuns(query.limit));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -138,7 +138,7 @@ export const reviewReadinessRoutes: FastifyPluginAsync = async (fastify, _opts) 
   fastify.get("/api/v1/review/runs/:reviewRunId", operatorOnly, async (request, reply) => {
     try {
       const params = reviewRunParamsSchema.parse(request.params);
-      return reply.send(fastify.gatewayRuntime.reviewReadinessService.getStructuredReviewRun(params.reviewRunId));
+      return reply.send(await fastify.gatewayRuntime.reviewReadinessService.getStructuredReviewRun(params.reviewRunId));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -149,7 +149,7 @@ export const reviewReadinessRoutes: FastifyPluginAsync = async (fastify, _opts) 
       const params = reviewFindingParamsSchema.parse(request.params);
       const body = acceptFindingSchema.parse(request.body ?? {});
       return reply.send(
-        fastify.gatewayRuntime.reviewReadinessService.acceptStructuredReviewFinding(params.findingId, {
+        await fastify.gatewayRuntime.reviewReadinessService.acceptStructuredReviewFinding(params.findingId, {
           actorId: resolveActorId(request),
           mirrorToTask: body.mirrorToTask,
         }),
@@ -163,7 +163,7 @@ export const reviewReadinessRoutes: FastifyPluginAsync = async (fastify, _opts) 
     try {
       const params = reviewFindingParamsSchema.parse(request.params);
       return reply.send(
-        fastify.gatewayRuntime.reviewReadinessService.dismissStructuredReviewFinding(
+        await fastify.gatewayRuntime.reviewReadinessService.dismissStructuredReviewFinding(
           params.findingId,
           resolveActorId(request),
         ),
@@ -194,7 +194,7 @@ export const reviewReadinessRoutes: FastifyPluginAsync = async (fastify, _opts) 
       const params = reviewFindingParamsSchema.parse(request.params);
       const body = closeFindingSchema.parse(request.body);
       return reply.send(
-        fastify.gatewayRuntime.reviewReadinessService.closeStructuredReviewFinding(params.findingId, {
+        await fastify.gatewayRuntime.reviewReadinessService.closeStructuredReviewFinding(params.findingId, {
           ...body,
           actorId: resolveActorId(request),
         }),

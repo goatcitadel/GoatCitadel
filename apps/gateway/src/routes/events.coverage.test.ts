@@ -21,8 +21,8 @@ describe("events routes additional coverage", () => {
 
   it("lists realtime events with cursor pagination and reports replay gaps", async () => {
     const realtimeEvents = {
-      getRealtimeEventSequenceBounds: vi.fn(() => ({ oldestSequence: 10, newestSequence: 42 })),
-      listRealtimeEvents: vi.fn(() => [
+      getRealtimeEventSequenceBounds: vi.fn(async () => ({ oldestSequence: 10, newestSequence: 42 })),
+      listRealtimeEvents: vi.fn(async () => [
         { eventId: "event-1", sequence: 41 },
         { eventId: "event-2", sequence: 42 },
       ]),
@@ -55,8 +55,8 @@ describe("events routes additional coverage", () => {
   it("falls back for invalid cursors and resolves SSE connection limits from the environment", async () => {
     process.env.GOATCITADEL_SSE_MAX_CONNECTIONS_PER_IP = "not-a-number";
     app = buildApp({
-      getRealtimeEventSequenceBounds: vi.fn(() => ({ oldestSequence: 10, newestSequence: undefined })),
-      listRealtimeEvents: vi.fn(() => []),
+      getRealtimeEventSequenceBounds: vi.fn(async () => ({ oldestSequence: 10, newestSequence: undefined })),
+      listRealtimeEvents: vi.fn(async () => []),
     });
 
     const invalidCursor = await app.inject({ method: "GET", url: "/api/v1/events?cursor=abc&limit=1" });

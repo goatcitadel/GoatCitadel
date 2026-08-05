@@ -6,7 +6,7 @@ describe("runtime authority routes", () => {
     const get = vi.fn();
     const requireOperatorAuth = vi.fn();
     const getProjection = vi.fn(async (input) => ({ schemaVersion: 1, generatedAt: "now", ...input, items: [] }));
-    const getWorkspace = vi.fn((workspaceId: string) => {
+    const getWorkspace = vi.fn(async (workspaceId: string) => {
       if (workspaceId === "workspace-missing") throw new Error("not found");
       return { workspaceId };
     });

@@ -412,21 +412,23 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
     const now = new Date();
     const to = now.toISOString();
     const from = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
-    const [backups, database, costSummary, costUsageAvailability, qmd] = await Promise.all([
+    const [backups, database, costSummary, costUsageAvailability, qmd, daemonStatus, daemonLogs] = await Promise.all([
       fastify.services.dashboard.listBackups(parsed.data.backupLimit),
       fastify.services.health.getDatabaseHealthSnapshot(),
       fastify.services.dashboard.costSummary(parsed.data.costScope, from, to),
       fastify.services.dashboard.costUsageAvailability(from, to),
       fastify.services.dashboard.getMemoryQmdStats(from, to),
+      fastify.services.daemon.getDaemonStatus(),
+      fastify.services.daemon.listDaemonLogs(parsed.data.logTail),
     ]);
     return reply.send(
       projectPublicSecretValue({
         generatedAt: to,
         database,
         systemVitals: fastify.services.dashboard.getSystemVitals(),
-        daemonStatus: fastify.services.daemon.getDaemonStatus(),
+        daemonStatus,
         daemonLogs: {
-          items: fastify.services.daemon.listDaemonLogs(parsed.data.logTail),
+          items: daemonLogs,
         },
         costs: {
           summary: {

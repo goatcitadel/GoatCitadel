@@ -49,9 +49,11 @@ export const costsRoutes: FastifyPluginAsync = async (fastify) => {
     const to = parsed.data.to ?? now.toISOString();
     const from = parsed.data.from ?? new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
-    const items = fastify.services.costs.costSummary(parsed.data.scope, from, to);
-    const dailySeries = fastify.services.costs.costDailySeries(from, to);
-    const usageAvailability = fastify.services.costs.costUsageAvailability(from, to);
+    const [items, dailySeries, usageAvailability] = await Promise.all([
+      fastify.services.costs.costSummary(parsed.data.scope, from, to),
+      fastify.services.costs.costDailySeries(from, to),
+      fastify.services.costs.costUsageAvailability(from, to),
+    ]);
     return reply.send({
       items,
       dailySeries,
@@ -63,7 +65,7 @@ export const costsRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.post("/api/v1/costs/run-cheaper", async (_request, reply) => {
-    return reply.send(fastify.services.costs.runCheaper());
+    return reply.send(await fastify.services.costs.runCheaper());
   });
 
   fastify.get(
@@ -75,7 +77,7 @@ export const costsRoutes: FastifyPluginAsync = async (fastify) => {
       if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
       if (!query.success) return reply.code(400).send({ error: query.error.flatten() });
       try {
-        return reply.send(fastify.services.costs.listModelUsageEvents(params.data.workspaceId, query.data));
+        return reply.send(await fastify.services.costs.listModelUsageEvents(params.data.workspaceId, query.data));
       } catch (error) {
         return sendRouteError(reply, error, request.log);
       }
@@ -89,7 +91,9 @@ export const costsRoutes: FastifyPluginAsync = async (fastify) => {
       const params = workspaceEventParams.safeParse(request.params);
       if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
       try {
-        return reply.send(fastify.services.costs.getModelUsageEvent(params.data.workspaceId, params.data.eventId));
+        return reply.send(
+          await fastify.services.costs.getModelUsageEvent(params.data.workspaceId, params.data.eventId),
+        );
       } catch (error) {
         return sendRouteError(reply, error, request.log);
       }

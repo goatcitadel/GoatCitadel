@@ -51,7 +51,7 @@ describe("memory routes", () => {
   });
 
   it("defaults the item-list status to active so forgotten content is not returned by default", async () => {
-    const listItems = vi.fn(() => []);
+    const listItems = vi.fn(async () => []);
     const built = buildApp({ listItems });
     app = built.app;
     await app.register(memoryRoutes);
@@ -63,7 +63,7 @@ describe("memory routes", () => {
   });
 
   it("requests a memory.lifecycle approval with commit callbacks and authenticated requester for single-item forget", async () => {
-    const requestForgetApproval = vi.fn(() => ({ pendingApproval: pendingApprovalFixture() }));
+    const requestForgetApproval = vi.fn(async () => ({ pendingApproval: pendingApprovalFixture() }));
     const built = buildApp({ requestForgetApproval });
     app = built.app;
     app.decorateRequest("authActorId", "operator:single-forget");
@@ -97,7 +97,7 @@ describe("memory routes", () => {
   });
 
   it("answers 200 with a zero-mutation outcome when a forget request needs no approval", async () => {
-    const requestForgetApproval = vi.fn(() => ({
+    const requestForgetApproval = vi.fn(async () => ({
       pendingApproval: null,
       noMutationRequired: true,
       matchedCount: 1,
@@ -148,7 +148,7 @@ describe("memory routes", () => {
   });
 
   it("forwards scoped bulk-forget criteria and the authenticated requester into the approval request", async () => {
-    const requestForgetApproval = vi.fn(() => ({
+    const requestForgetApproval = vi.fn(async () => ({
       pendingApproval: pendingApprovalFixture({
         subjectKind: "memory_item_batch",
         subjectId: undefined,
@@ -271,7 +271,7 @@ describe("memory routes", () => {
   });
 
   it("routes item patches into the approval request surface", async () => {
-    const requestItemPatchApproval = vi.fn(() => ({
+    const requestItemPatchApproval = vi.fn(async () => ({
       pendingApproval: pendingApprovalFixture({ action: "item_updated" }),
     }));
     const built = buildApp({ requestItemPatchApproval });
@@ -302,7 +302,7 @@ describe("memory routes", () => {
   });
 
   it("routes atomic memory item batch mutations into one batch approval request", async () => {
-    const requestBatchMutationApproval = vi.fn(() => ({
+    const requestBatchMutationApproval = vi.fn(async () => ({
       pendingApproval: pendingApprovalFixture({
         action: "batch_mutated",
         subjectKind: "memory_item_batch",
@@ -368,7 +368,7 @@ describe("memory routes", () => {
   });
 
   it("validates memory context route params", async () => {
-    const getMemoryContext = vi.fn(() => ({ contextId: "ctx-1", scope: "chat" }));
+    const getMemoryContext = vi.fn(async () => ({ contextId: "ctx-1", scope: "chat" }));
     app = Fastify();
     app.decorate("gatewayConfig", {
       assistant: {
@@ -406,7 +406,7 @@ describe("memory routes", () => {
   });
 
   it("passes explicit memory relation scope through context composition", async () => {
-    const composeContext = vi.fn((input) => ({
+    const composeContext = vi.fn(async (input) => ({
       contextId: "ctx-compose",
       scope: input.scope,
       relationScope: input.relationScope,
@@ -445,7 +445,7 @@ describe("memory routes", () => {
   });
 
   it("returns additive memory retrieval status truth", async () => {
-    const getRetrievalStatus = vi.fn(() => ({
+    const getRetrievalStatus = vi.fn(async () => ({
       checkedAt: "2026-06-06T12:00:00.000Z",
       enabled: true,
       retrievalMode: "hybrid_rank",
@@ -493,14 +493,14 @@ describe("memory routes", () => {
 
   it("routes explicit recall, feedback, and trace-memory candidate flows through the memory service", async () => {
     const recall = vi.fn(async () => ({ mode: "summary", feedback: [], traceCandidates: [] }));
-    const listFeedback = vi.fn(() => [{ feedbackId: "fb-1" }]);
-    const recordFeedback = vi.fn(() => ({ feedbackId: "fb-2" }));
-    const listQualityIssues = vi.fn(() => [{ issueId: "quality-1" }]);
-    const runQualityScan = vi.fn(() => ({ issueCount: 1, issues: [{ issueId: "quality-1" }] }));
-    const patchQualityIssue = vi.fn(() => ({ issueId: "quality-1", status: "resolved" }));
-    const listTraceCandidates = vi.fn(() => [{ candidateId: "trace-1" }]);
-    const proposeTraceCandidate = vi.fn(() => ({ candidateId: "trace-2", status: "proposed" }));
-    const promoteTraceCandidate = vi.fn(() => ({ learningId: "learn-1" }));
+    const listFeedback = vi.fn(async () => [{ feedbackId: "fb-1" }]);
+    const recordFeedback = vi.fn(async () => ({ feedbackId: "fb-2" }));
+    const listQualityIssues = vi.fn(async () => [{ issueId: "quality-1" }]);
+    const runQualityScan = vi.fn(async () => ({ issueCount: 1, issues: [{ issueId: "quality-1" }] }));
+    const patchQualityIssue = vi.fn(async () => ({ issueId: "quality-1", status: "resolved" }));
+    const listTraceCandidates = vi.fn(async () => [{ candidateId: "trace-1" }]);
+    const proposeTraceCandidate = vi.fn(async () => ({ candidateId: "trace-2", status: "proposed" }));
+    const promoteTraceCandidate = vi.fn(async () => ({ learningId: "learn-1" }));
     const built = buildApp({
       recall,
       listFeedback,
@@ -622,7 +622,7 @@ describe("memory routes", () => {
   });
 
   it("accepts memory maintenance run-now on both the canonical and compatibility paths", async () => {
-    const runMemoryMaintenanceNow = vi.fn(() => ({
+    const runMemoryMaintenanceNow = vi.fn(async () => ({
       runId: "mmrun_123",
       workspaceId: "default",
       triggerSource: "manual",

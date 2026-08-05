@@ -2,6 +2,36 @@ import { describe, expect, it, vi } from "vitest";
 import { reviewReadinessRoutes } from "./review-readiness.js";
 
 describe("review readiness routes", () => {
+  it("awaits the readiness summary before sending it", async () => {
+    const summary = {
+      generatedAt: "2026-08-05T00:00:00.000Z",
+      branch: "main",
+      sha: "a".repeat(40),
+      ready: true,
+    };
+    const get = vi.fn();
+    const post = vi.fn();
+    const getReadiness = vi.fn(async () => summary);
+    const fastify = {
+      get,
+      post,
+      requireOperatorAuth: vi.fn(),
+      gatewayRuntime: {
+        reviewReadinessService: {
+          getReadiness,
+        },
+      },
+    };
+
+    await reviewReadinessRoutes(fastify as never, {});
+
+    const registration = get.mock.calls.find(([url]) => url === "/api/v1/review/readiness");
+    const send = vi.fn((payload) => payload);
+    await expect(registration?.[2]({ log: {} }, { send })).resolves.toEqual(summary);
+    expect(getReadiness).toHaveBeenCalledOnce();
+    expect(send).toHaveBeenCalledWith(summary);
+  });
+
   it("keeps the build identity endpoint operator-scoped and server-authored", async () => {
     const identity = {
       schemaVersion: 1,

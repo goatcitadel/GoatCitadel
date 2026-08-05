@@ -929,6 +929,28 @@ describe("tasks routes", () => {
     expect(listAgenticRuns).toHaveBeenCalledWith({ workspaceId: "default", surface: "cowork", limit: 100 });
   });
 
+  it("awaits workspace lookup before enforcing Citadel-scoped task access", async () => {
+    const listTasks = vi.fn(() => []);
+    const getWorkspace = vi.fn(async (workspaceId: string) => ({
+      workspaceId,
+      citadelId: "personal",
+    }));
+    app = buildApp({ listTasks }, { workspaces: { getWorkspace } });
+    await app.register(tasksRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/tasks?citadelId=company&workspaceId=default",
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({
+      error: "workspace default belongs to citadel personal, not company",
+    });
+    expect(getWorkspace).toHaveBeenCalledWith("default");
+    expect(listTasks).not.toHaveBeenCalled();
+  });
+
   it("emits a distress signal through the task route service", async () => {
     const emitDistressSignalWithRevision = vi.fn((_taskId: string, input: Record<string, unknown>) => ({
       taskId: "task-1",
@@ -1171,7 +1193,10 @@ describe("tasks routes", () => {
 
 function buildApp(
   taskOverrides: Record<string, unknown>,
-  serviceOverrides: { a2a?: ReturnType<typeof createDefaultA2AService> } = {},
+  serviceOverrides: {
+    a2a?: ReturnType<typeof createDefaultA2AService>;
+    workspaces?: { getWorkspace: (workspaceId: string) => Promise<{ workspaceId: string; citadelId?: string }> };
+  } = {},
 ): FastifyInstance {
   const next = Fastify();
   next.decorate("requireOperatorAuth", async () => undefined);
@@ -1179,6 +1204,7 @@ function buildApp(
   next.decorateRequest("authActorSource", "loopback");
   next.decorate("services", {
     a2a: serviceOverrides.a2a ?? createDefaultA2AService(),
+    workspaces: serviceOverrides.workspaces,
     tasks: {
       appendTaskActivity: vi.fn(),
       appendTaskDeliverable: vi.fn(),

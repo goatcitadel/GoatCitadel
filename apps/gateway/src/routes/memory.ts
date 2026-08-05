@@ -436,7 +436,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(400).send({ error: params.error.flatten() });
       }
       try {
-        return reply.send(memory.getContext(params.data.contextId));
+        return reply.send(await memory.getContext(params.data.contextId));
       } catch (error) {
         return reply.code(404).send({ error: (error as Error).message });
       }
@@ -449,7 +449,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(memory.getMaintenancePolicy(parsed.data.workspaceId));
+      return reply.send(await memory.getMaintenancePolicy(parsed.data.workspaceId));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -462,7 +462,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       const { workspaceId, ...patch } = parsed.data;
-      return reply.send(memory.patchMaintenancePolicy(workspaceId, patch));
+      return reply.send(await memory.patchMaintenancePolicy(workspaceId, patch));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -474,7 +474,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(memory.getMaintenanceStatus(parsed.data.workspaceId));
+      return reply.send(await memory.getMaintenanceStatus(parsed.data.workspaceId));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -487,7 +487,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send({
-        items: memory.listMaintenanceRuns(parsed.data.workspaceId, parsed.data.limit ?? 50),
+        items: await memory.listMaintenanceRuns(parsed.data.workspaceId, parsed.data.limit ?? 50),
       });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -506,7 +506,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(memory.runMaintenanceNow(parsed.data));
+      return reply.send(await memory.runMaintenanceNow(parsed.data));
     } catch (error) {
       return sendMaintenanceError(reply, error);
     }
@@ -521,7 +521,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(memory.getMaintenanceRunProvenance(parsed.data.runId));
+      return reply.send(await memory.getMaintenanceRunProvenance(parsed.data.runId));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -534,7 +534,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send({
-        items: memory.listMaintenanceRecommendations(parsed.data.workspaceId, parsed.data.limit ?? 50),
+        items: await memory.listMaintenanceRecommendations(parsed.data.workspaceId, parsed.data.limit ?? 50),
       });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -550,7 +550,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(400).send({ error: parsed.error.flatten() });
       }
       try {
-        return reply.send(memory.acceptMaintenanceRecommendation(parsed.data.recommendationId));
+        return reply.send(await memory.acceptMaintenanceRecommendation(parsed.data.recommendationId));
       } catch (error) {
         return sendRouteError(reply, error, request.log);
       }
@@ -566,7 +566,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(400).send({ error: parsed.error.flatten() });
       }
       try {
-        return reply.send(memory.rejectMaintenanceRecommendation(parsed.data.recommendationId));
+        return reply.send(await memory.rejectMaintenanceRecommendation(parsed.data.recommendationId));
       } catch (error) {
         return sendRouteError(reply, error, request.log);
       }
@@ -581,8 +581,10 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
 
     const to = parsed.data.to ?? new Date().toISOString();
     const from = parsed.data.from ?? new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const stats = memory.getQmdStats(from, to);
-    const recent = memory.listRecentContexts(parsed.data.limit);
+    const [stats, recent] = await Promise.all([
+      memory.getQmdStats(from, to),
+      memory.listRecentContexts(parsed.data.limit),
+    ]);
     return reply.send({
       ...stats,
       recent,
@@ -593,7 +595,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
     "/api/v1/memory/retrieval/status",
     withRouteAccess(fastify, "authenticated-read"),
     async (_request, reply) => {
-      return reply.send(memory.getRetrievalStatus());
+      return reply.send(await memory.getRetrievalStatus());
     },
   );
 
@@ -627,7 +629,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send({ items: memory.listFeedback(parsed.data) });
+      return reply.send({ items: await memory.listFeedback(parsed.data) });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -639,7 +641,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.code(201).send(memory.recordFeedback(parsed.data, resolveActorId(request)));
+      return reply.code(201).send(await memory.recordFeedback(parsed.data, resolveActorId(request)));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -651,7 +653,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send({ items: memory.listQualityIssues(parsed.data) });
+      return reply.send({ items: await memory.listQualityIssues(parsed.data) });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -663,7 +665,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(memory.runQualityScan(parsed.data, resolveActorId(request)));
+      return reply.send(await memory.runQualityScan(parsed.data, resolveActorId(request)));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -681,7 +683,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(memory.patchQualityIssue(params.data.issueId, body.data, resolveActorId(request)));
+      return reply.send(await memory.patchQualityIssue(params.data.issueId, body.data, resolveActorId(request)));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -693,7 +695,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send({ items: memory.listTraceCandidates(parsed.data) });
+      return reply.send({ items: await memory.listTraceCandidates(parsed.data) });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -717,7 +719,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(memory.promoteTraceCandidate(parsed.data.candidateId, resolveActorId(request)));
+      return reply.send(await memory.promoteTraceCandidate(parsed.data.candidateId, resolveActorId(request)));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -730,7 +732,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send({
-        items: memory.listItems(parsed.data),
+        items: await memory.listItems(parsed.data),
       });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -748,7 +750,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.code(202).send(
-        memory.requestBatchMutationApproval(
+        await memory.requestBatchMutationApproval(
           {
             actionId: body.data.actionId,
             source: body.data.source,
@@ -775,7 +777,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.code(202).send(
-        memory.requestItemPatchApproval(
+        await memory.requestItemPatchApproval(
           params.data.itemId,
           {
             title: body.data.title,
@@ -878,7 +880,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send({ items: memory.listLearnings(parsed.data) });
+      return reply.send({ items: await memory.listLearnings(parsed.data) });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -890,7 +892,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.code(201).send(memory.createLearning(parsed.data, resolveActorId(request)));
+      return reply.code(201).send(await memory.createLearning(parsed.data, resolveActorId(request)));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -902,7 +904,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.code(202).send(memory.proposeLearning(parsed.data, resolveActorId(request)));
+      return reply.code(202).send(await memory.proposeLearning(parsed.data, resolveActorId(request)));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -920,7 +922,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(memory.supersedeLearning(params.data.id, body.data, resolveActorId(request)));
+      return reply.send(await memory.supersedeLearning(params.data.id, body.data, resolveActorId(request)));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -932,7 +934,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(memory.forgetLearning(parsed.data.id, resolveActorId(request)));
+      return reply.send(await memory.forgetLearning(parsed.data.id, resolveActorId(request)));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -944,7 +946,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(memory.checkLearningStaleness(parsed.data));
+      return reply.send(await memory.checkLearningStaleness(parsed.data));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -956,7 +958,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send({ items: memory.listEntities(parsed.data) });
+      return reply.send({ items: await memory.listEntities(parsed.data) });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -980,7 +982,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(memory.forgetEntity(parsed.data.id, resolveActorId(request)));
+      return reply.send(await memory.forgetEntity(parsed.data.id, resolveActorId(request)));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -992,7 +994,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send({ items: memory.listRelations(parsed.data) });
+      return reply.send({ items: await memory.listRelations(parsed.data) });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -1016,7 +1018,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send({ items: memory.listDecisions(parsed.data) });
+      return reply.send({ items: await memory.listDecisions(parsed.data) });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -1046,7 +1048,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(memory.addDecisionRetrospective(params.data.id, body.data, resolveActorId(request)));
+      return reply.send(await memory.addDecisionRetrospective(params.data.id, body.data, resolveActorId(request)));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -1058,7 +1060,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(memory.forgetDecision(parsed.data.id, resolveActorId(request)));
+      return reply.send(await memory.forgetDecision(parsed.data.id, resolveActorId(request)));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -1077,7 +1079,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send({
-        items: memory.listStructuredHistory(params.data.kind, params.data.id, query.data.limit),
+        items: await memory.listStructuredHistory(params.data.kind, params.data.id, query.data.limit),
       });
     } catch (error) {
       return sendRouteError(reply, error, request.log);

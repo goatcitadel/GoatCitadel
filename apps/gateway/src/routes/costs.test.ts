@@ -34,7 +34,7 @@ describe("costs routes", () => {
   it("returns provider daily series alongside aggregate cost summary", async () => {
     const services = {
       costs: {
-        costSummary: vi.fn(() => [
+        costSummary: vi.fn(async () => [
           {
             key: "2026-02-23",
             tokenInput: 20,
@@ -50,7 +50,7 @@ describe("costs routes", () => {
             },
           },
         ]),
-        costDailySeries: vi.fn(() => [
+        costDailySeries: vi.fn(async () => [
           {
             isoDate: "2026-02-23",
             shortLabel: "02-23",
@@ -85,7 +85,7 @@ describe("costs routes", () => {
             ],
           },
         ]),
-        costUsageAvailability: vi.fn(() => ({
+        costUsageAvailability: vi.fn(async () => ({
           trackedEvents: 1,
           unknownEvents: 0,
           totalAgentEvents: 1,
@@ -159,7 +159,7 @@ describe("costs routes", () => {
   it("lists canonical attempts only through the workspace-scoped operator route", async () => {
     const services = {
       costs: {
-        listModelUsageEvents: vi.fn(() => ({ items: [], summary: { attemptCount: 0 } })),
+        listModelUsageEvents: vi.fn(async () => ({ items: [], summary: { attemptCount: 0 } })),
       },
     };
     app = await createApp(services);

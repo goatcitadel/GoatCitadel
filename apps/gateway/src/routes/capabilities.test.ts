@@ -16,7 +16,7 @@ describe("capabilities routes", () => {
 
   function createCapabilitiesService(overrides: Record<string, unknown> = {}) {
     return {
-      listCapabilityCatalog: vi.fn((scope: "inspectable" | "callable") => [
+      listCapabilityCatalog: vi.fn(async (scope: "inspectable" | "callable") => [
         {
           capabilityId: `cap-${scope}`,
           name: `Catalog ${scope}`,
@@ -25,11 +25,11 @@ describe("capabilities routes", () => {
           callable: scope === "callable",
         },
       ]),
-      getCapabilityCatalogSnapshot: vi.fn((snapshotId: string) => ({
+      getCapabilityCatalogSnapshot: vi.fn(async (snapshotId: string) => ({
         snapshotId,
         items: [],
       })),
-      getCompactToolDirectorySnapshot: vi.fn((ttlMs?: number) => ({
+      getCompactToolDirectorySnapshot: vi.fn(async (ttlMs?: number) => ({
         snapshotId: "compact-tools-abc123",
         version: "compact-tool-directory.v1",
         source: "callable_catalog",
@@ -76,7 +76,7 @@ describe("capabilities routes", () => {
           required: ["path", "password", "token"],
         },
       })),
-      getCapabilityCandidateDetail: vi.fn((candidateId: string) => ({
+      getCapabilityCandidateDetail: vi.fn(async (candidateId: string) => ({
         candidateId,
         revision: 1,
         versions: [],
@@ -84,7 +84,7 @@ describe("capabilities routes", () => {
         activationBlocked: false,
         activationBlockers: [],
       })),
-      getCapabilityProposalDetail: vi.fn((proposalId: string) => ({
+      getCapabilityProposalDetail: vi.fn(async (proposalId: string) => ({
         proposalId,
         status: "proposal",
       })),
@@ -117,11 +117,11 @@ describe("capabilities routes", () => {
           approvalId: "rollback-approval",
         },
       })),
-      createCapabilityProposal: vi.fn((payload: Record<string, unknown>) => ({
+      createCapabilityProposal: vi.fn(async (payload: Record<string, unknown>) => ({
         proposalId: "proposal-created",
         ...payload,
       })),
-      listCapabilityProposals: vi.fn((limit: number) => [{ proposalId: `proposal-${limit}` }]),
+      listCapabilityProposals: vi.fn(async (limit: number) => [{ proposalId: `proposal-${limit}` }]),
       listAutonomousActivationGrants: vi.fn((includeExpired: boolean) => [
         { grantId: includeExpired ? "grant-all" : "grant-active", status: "active" },
       ]),
@@ -142,13 +142,13 @@ describe("capabilities routes", () => {
         governance: ["grant matched"],
         ...payload,
       })),
-      listCodeModeRuns: vi.fn((input: number | { limit?: number; workspaceId?: string }) => [
+      listCodeModeRuns: vi.fn(async (input: number | { limit?: number; workspaceId?: string }) => [
         {
           runId: `code-run-${typeof input === "number" ? input : input.limit}`,
           workspaceId: typeof input === "number" ? undefined : input.workspaceId,
         },
       ]),
-      listCodeModeExecutionBackends: vi.fn(() => ({
+      listCodeModeExecutionBackends: vi.fn(async () => ({
         generatedAt: "2026-05-31T00:00:00.000Z",
         readOnly: true,
         mutationSemantics: "none",
@@ -191,7 +191,7 @@ describe("capabilities routes", () => {
         workspaceId: "default",
       })),
       getCodeModeRunInScope: vi.fn(
-        (runId: string, scope: { workspaceId?: string; sessionId?: string; turnId?: string }) => {
+        async (runId: string, scope: { workspaceId?: string; sessionId?: string; turnId?: string }) => {
           const run = {
             runId,
             status: "completed",
@@ -226,7 +226,7 @@ describe("capabilities routes", () => {
         }),
       ),
       compareCodeModeRuns: vi.fn(
-        (
+        async (
           runId: string,
           baselineRunId: string,
           scope: { workspaceId?: string; sessionId?: string; turnId?: string },
@@ -256,9 +256,11 @@ describe("capabilities routes", () => {
           },
         }),
       ),
-      listCodeModeRunVerificationEvidence: vi.fn((runId: string, scope: Record<string, unknown>, limit: number) => [
-        { evidenceId: "proof-1", runId, scope, limit },
-      ]),
+      listCodeModeRunVerificationEvidence: vi.fn(
+        async (runId: string, scope: Record<string, unknown>, limit: number) => [
+          { evidenceId: "proof-1", runId, scope, limit },
+        ],
+      ),
       ...overrides,
     };
   }
@@ -276,7 +278,7 @@ describe("capabilities routes", () => {
   }
 
   it("returns the requested catalog scope from the capability route service", async () => {
-    const listCapabilityCatalog = vi.fn((scope: "inspectable" | "callable") => [
+    const listCapabilityCatalog = vi.fn(async (scope: "inspectable" | "callable") => [
       {
         capabilityId: `cap-${scope}`,
         name: `Catalog ${scope}`,
@@ -312,7 +314,7 @@ describe("capabilities routes", () => {
   it("scopes the catalog by the workspace's effective skill set when workspaceId is supplied", async () => {
     const effective = new Set(["skill-a"]);
     const resolveEffectiveSkills = vi.fn((_workspaceId: string) => effective);
-    const listCapabilityCatalog = vi.fn((scope: "inspectable" | "callable") => [
+    const listCapabilityCatalog = vi.fn(async (scope: "inspectable" | "callable") => [
       { capabilityId: `cap-${scope}`, name: `Catalog ${scope}`, kind: "tool", category: "built_in", callable: false },
     ]);
 
@@ -334,7 +336,7 @@ describe("capabilities routes", () => {
 
   it("leaves the catalog call unscoped (argument-identical) when workspaceId is absent", async () => {
     const resolveEffectiveSkills = vi.fn();
-    const listCapabilityCatalog = vi.fn(() => []);
+    const listCapabilityCatalog = vi.fn(async () => []);
 
     app = Fastify();
     app.decorateRequest("authActorId", "operator-test");
@@ -405,7 +407,7 @@ describe("capabilities routes", () => {
   });
 
   it("creates a capability proposal through the capability route service", async () => {
-    const createCapabilityProposal = vi.fn((payload: Record<string, unknown>) => ({
+    const createCapabilityProposal = vi.fn(async (payload: Record<string, unknown>) => ({
       proposalId: "proposal-1",
       proposalKind: payload.proposalKind,
       status: "proposal",
@@ -681,7 +683,7 @@ describe("capabilities routes", () => {
   });
 
   it("returns candidate detail through the capability route service", async () => {
-    const getCapabilityCandidateDetail = vi.fn((candidateId: string) => ({
+    const getCapabilityCandidateDetail = vi.fn(async (candidateId: string) => ({
       candidateId,
       versions: [],
       relatedProposals: [],
@@ -1153,7 +1155,7 @@ describe("capabilities routes", () => {
       matches: { source: false },
       diagnostics: { token: "comparison-short" },
     };
-    const createCapabilityProposal = vi.fn((input: Record<string, unknown>) => ({
+    const createCapabilityProposal = vi.fn(async (input: Record<string, unknown>) => ({
       ...rawProposal,
       payload: input.payload,
     }));
@@ -1162,14 +1164,14 @@ describe("capabilities routes", () => {
       input: input.input,
     }));
     await registerCapabilitiesService({
-      listCapabilityProposals: vi.fn(() => [rawProposal]),
+      listCapabilityProposals: vi.fn(async () => [rawProposal]),
       createCapabilityProposal,
-      getCapabilityProposalDetail: vi.fn(() => ({
+      getCapabilityProposalDetail: vi.fn(async () => ({
         proposal: rawProposal,
         events: [rawEvent],
         candidate: rawCandidate,
       })),
-      getCapabilityCandidateDetail: vi.fn(() => rawCandidate),
+      getCapabilityCandidateDetail: vi.fn(async () => rawCandidate),
       promoteCapabilityCandidate: vi.fn(() => ({
         action: "promote",
         candidateId: rawCandidate.candidateId,
@@ -1197,10 +1199,10 @@ describe("capabilities routes", () => {
         occurredAt: "2026-07-09T00:00:00.000Z",
         detail: rawCandidate,
       })),
-      listCodeModeRuns: vi.fn(() => [rawRun]),
-      getCodeModeRunInScope: vi.fn(() => rawRun),
+      listCodeModeRuns: vi.fn(async () => [rawRun]),
+      getCodeModeRunInScope: vi.fn(async () => rawRun),
       getCodeModeRunArtifactPreview: vi.fn(async () => rawArtifactPreview),
-      compareCodeModeRuns: vi.fn(() => rawComparison),
+      compareCodeModeRuns: vi.fn(async () => rawComparison),
       createCodeModeRun,
     });
 
@@ -1321,7 +1323,7 @@ describe("capabilities routes", () => {
     }));
     await registerCapabilitiesService({
       listCapabilityCatalog: vi.fn(() => [catalogItem]),
-      getCapabilityCatalogSnapshot: vi.fn(() => ({ snapshotId: "snapshot-secret", items: [catalogItem] })),
+      getCapabilityCatalogSnapshot: vi.fn(async () => ({ snapshotId: "snapshot-secret", items: [catalogItem] })),
       listAutonomousActivationGrants: vi.fn(() => [rawGrant]),
       createAutonomousActivationGrant,
       evaluateAutonomousActivationGrant: vi.fn(() => ({
@@ -1395,7 +1397,7 @@ describe("capabilities routes", () => {
 
   it("defaults Code Mode run detail reads to the default workspace", async () => {
     await registerCapabilitiesService({
-      getCodeModeRunInScope: vi.fn((runId: string, scope: { workspaceId?: string }) => {
+      getCodeModeRunInScope: vi.fn(async (runId: string, scope: { workspaceId?: string }) => {
         const run = {
           runId,
           status: "completed",
@@ -1425,13 +1427,13 @@ describe("capabilities routes", () => {
 
   it("maps missing read details to 404 responses", async () => {
     await registerCapabilitiesService({
-      getCapabilityCatalogSnapshot: vi.fn(() => {
+      getCapabilityCatalogSnapshot: vi.fn(async () => {
         throw new Error("snapshot missing");
       }),
-      getCapabilityProposalDetail: vi.fn(() => {
+      getCapabilityProposalDetail: vi.fn(async () => {
         throw new Error("proposal missing");
       }),
-      getCodeModeRunInScope: vi.fn(() => {
+      getCodeModeRunInScope: vi.fn(async () => {
         throw new Error("run missing");
       }),
     });

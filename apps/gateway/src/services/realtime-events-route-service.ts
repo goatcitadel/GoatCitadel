@@ -1,4 +1,5 @@
-import { createRouteService, type RoutePort, type RouteService } from "./route-service-factory.js";
+import type { RealtimeEventService } from "./realtime-event-service.js";
+import { createRouteService } from "./route-service-factory.js";
 
 export const realtimeEventsRouteMethods = [
   "closeRealtimeStreamLease",
@@ -11,9 +12,9 @@ export const realtimeEventsRouteMethods = [
 ] as const;
 
 export type RealtimeEventsRouteMethod = (typeof realtimeEventsRouteMethods)[number];
-export type RealtimeEventsRoutePort = RoutePort<RealtimeEventsRouteMethod>;
-export type RealtimeEventsRouteService = RouteService<RealtimeEventsRouteMethod>;
+export type RealtimeEventsRoutePort = Pick<RealtimeEventService, RealtimeEventsRouteMethod>;
+export type RealtimeEventsRouteService = Readonly<RealtimeEventsRoutePort>;
 
 export function createRealtimeEventsRouteService(port: RealtimeEventsRoutePort): RealtimeEventsRouteService {
-  return createRouteService(port, realtimeEventsRouteMethods);
+  return createRouteService(port, realtimeEventsRouteMethods) as RealtimeEventsRouteService;
 }

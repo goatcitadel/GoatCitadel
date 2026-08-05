@@ -443,7 +443,7 @@ describe("skills routes", () => {
     const lookupSkillSources = vi.fn(async () => lookupResult);
     const validateSkillImport = vi.fn(async () => validationResult);
     const installSkillImport = vi.fn(async () => installResult);
-    const listSkillImportHistory = vi.fn(() => [historyRecord]);
+    const listSkillImportHistory = vi.fn(async () => [historyRecord]);
     app = Fastify();
     app.decorate("services", {
       skills: {
@@ -511,7 +511,7 @@ describe("skills routes", () => {
   });
 
   it("returns all skills when no workspaceId is provided (non-breaking default)", async () => {
-    const listSkills = vi.fn(() => [
+    const listSkills = vi.fn(async () => [
       { skillId: "skill-a", name: "Skill A" },
       { skillId: "skill-b", name: "Skill B" },
     ]);
@@ -531,10 +531,30 @@ describe("skills routes", () => {
     expect(response.json().items).toHaveLength(2);
   });
 
+  it("awaits packaged skill exports before sending the response", async () => {
+    const packageSkillExport = vi.fn(async () => ({
+      packageId: "skill-package-1",
+      target: "codex",
+      files: [{ path: "skills/example/SKILL.md", content: "# Example" }],
+    }));
+    app = Fastify();
+    app.decorate("services", { skills: { packageSkillExport } } as never);
+    await app.register(skillsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/skills/export/package",
+      payload: { skillIds: ["skill-a"], target: "codex" },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toMatchObject({ packageId: "skill-package-1", target: "codex" });
+  });
+
   it("scopes skills by workspace when ?workspaceId is provided", async () => {
     const effectiveSet = new Set(["skill-a"]);
     const resolveEffectiveSkills = vi.fn(() => effectiveSet);
-    const listSkills = vi.fn((effective?: unknown) => {
+    const listSkills = vi.fn(async (effective?: unknown) => {
       if (effective instanceof Set) {
         return [{ skillId: "skill-a", name: "Skill A" }];
       }
@@ -569,7 +589,7 @@ describe("skills routes", () => {
     const resolveEffectiveSkills = vi.fn((workspaceId: string) =>
       workspaceId === "ws-a" ? resolveEffectiveSkillsForA : resolveEffectiveSkillsForB,
     );
-    const listSkills = vi.fn((effective?: unknown) => {
+    const listSkills = vi.fn(async (effective?: unknown) => {
       if (effective === resolveEffectiveSkillsForA) return [{ skillId: "skill-a", name: "A" }];
       if (effective === resolveEffectiveSkillsForB) return [{ skillId: "skill-b", name: "B" }];
       return [];
@@ -592,7 +612,7 @@ describe("skills routes", () => {
   });
 
   it("keeps Skill Hub provenance and lifecycle mutations operator-only with request-derived actors", async () => {
-    const listSkillHub = vi.fn(() => ({
+    const listSkillHub = vi.fn(async () => ({
       schemaVersion: "goatcitadel.skill-hub-operator.v1",
       workspaceId: "workspace-1",
       items: [],
@@ -757,6 +777,11 @@ describe("skills routes", () => {
     expect(createResponse.headers["cache-control"]).toBe("no-store");
     expect(reviewResponse.headers["cache-control"]).toBe("no-store");
     expect(rollbackResponse.headers["cache-control"]).toBe("no-store");
+    expect(listResponse.json()).toMatchObject({
+      schemaVersion: "goatcitadel.skill-hub-operator.v1",
+      workspaceId: "workspace-1",
+      items: [],
+    });
     expect(listSkillHub).toHaveBeenCalledWith({ workspaceId: "workspace-1" });
     expect(createSkillHubApproval).toHaveBeenCalledWith({
       workspaceId: "workspace-1",

@@ -61,9 +61,9 @@ describe("events stream route", () => {
       },
     });
     decorateRealtimeEvents(app, {
-      listRealtimeEvents: () => [],
-      listRealtimeEventsAfterSequence: () => [],
-      getRealtimeEventSequenceBounds: () => ({ oldestSequence: 10, newestSequence: 12 }),
+      listRealtimeEvents: async () => [],
+      listRealtimeEventsAfterSequence: async () => [],
+      getRealtimeEventSequenceBounds: async () => ({ oldestSequence: 10, newestSequence: 12 }),
       subscribeRealtime: () => () => undefined,
       openRealtimeStreamLease: () => ({
         leaseId: "lease-1",
@@ -99,7 +99,7 @@ describe("events stream route", () => {
     app = Fastify();
     await app.register(cors, { origin: true });
     decorateRealtimeEvents(app, {
-      listRealtimeEvents: () => [
+      listRealtimeEvents: async () => [
         {
           eventId: "event-1",
           sequence: 42,
@@ -109,16 +109,16 @@ describe("events stream route", () => {
           payload: { ok: true },
         },
       ],
-      listRealtimeEventsAfterSequence: () => [],
-      getRealtimeEventSequenceBounds: () => ({ oldestSequence: 42, newestSequence: 42 }),
+      listRealtimeEventsAfterSequence: async () => [],
+      getRealtimeEventSequenceBounds: async () => ({ oldestSequence: 42, newestSequence: 42 }),
       subscribeRealtime: () => () => undefined,
-      openRealtimeStreamLease: () => ({
+      openRealtimeStreamLease: async () => ({
         leaseId: "lease-2",
         clientId: "client-2",
         gatewayNodeId: "node-2",
       }),
-      touchRealtimeStreamLease: () => undefined,
-      closeRealtimeStreamLease: () => undefined,
+      touchRealtimeStreamLease: async () => undefined,
+      closeRealtimeStreamLease: async () => undefined,
     });
     await app.register(eventsRoutes);
 
@@ -137,9 +137,9 @@ describe("events stream route", () => {
     app = Fastify();
     await app.register(cors, { origin: true });
     decorateRealtimeEvents(app, {
-      listRealtimeEvents: () => [],
-      listRealtimeEventsAfterSequence: () => [],
-      getRealtimeEventSequenceBounds: () => ({ oldestSequence: 100, newestSequence: 150 }),
+      listRealtimeEvents: async () => [],
+      listRealtimeEventsAfterSequence: async () => [],
+      getRealtimeEventSequenceBounds: async () => ({ oldestSequence: 100, newestSequence: 150 }),
       subscribeRealtime: () => () => undefined,
       openRealtimeStreamLease: () => ({
         leaseId: "lease-3",
@@ -339,8 +339,8 @@ describe("events stream route", () => {
       },
     ];
     decorateRealtimeEvents(app, {
-      listRealtimeEvents: () => [],
-      listRealtimeEventsAfterSequence: () => {
+      listRealtimeEvents: async () => [],
+      listRealtimeEventsAfterSequence: async () => {
         // seq 12 is already in the snapshot (overlap); seq 13 is genuinely new.
         liveListener?.({
           eventId: "event-12",
@@ -362,7 +362,7 @@ describe("events stream route", () => {
       },
       // Bounds are sampled before the snapshot/live publish, so newest is 12;
       // seq 13 only exists because it was published during the snapshot read.
-      getRealtimeEventSequenceBounds: () => ({ oldestSequence: 10, newestSequence: 12 }),
+      getRealtimeEventSequenceBounds: async () => ({ oldestSequence: 10, newestSequence: 12 }),
       subscribeRealtime: (listener: (event: Record<string, unknown>) => void) => {
         liveListener = listener;
         return () => {
@@ -398,6 +398,39 @@ describe("events stream route", () => {
     expect(text.indexOf('"sequence":12')).toBeLessThan(text.indexOf('"sequence":13'));
     expect(text.indexOf('"sequence":13')).toBeLessThan(text.indexOf("event: stream-ready"));
     expect(text).toContain('"lastSentSequence":13');
+  });
+
+  it("ends only the hijacked stream when an async replay read fails", async () => {
+    app = Fastify();
+    const closeRealtimeStreamLease = vi.fn();
+    decorateRealtimeEvents(app, {
+      listRealtimeEvents: async () => [],
+      listRealtimeEventsAfterSequence: async () => {
+        throw new Error("replay storage unavailable");
+      },
+      getRealtimeEventSequenceBounds: async () => ({ oldestSequence: 10, newestSequence: 12 }),
+      subscribeRealtime: () => () => undefined,
+      openRealtimeStreamLease: () => ({
+        leaseId: "lease-replay-error",
+        clientId: "client-replay-error",
+        gatewayNodeId: "node-replay-error",
+      }),
+      touchRealtimeStreamLease: () => undefined,
+      closeRealtimeStreamLease,
+    });
+    app.get("/probe", async () => ({ status: "ok" }));
+    await app.register(eventsRoutes);
+
+    const address = await app.listen({ host: "127.0.0.1", port: 0 });
+    const response = await fetch(`${address}/api/v1/events/stream?afterCursor=10`);
+
+    expect(response.status).toBe(200);
+    await expect(response.text()).resolves.toContain(": connected");
+    expect(closeRealtimeStreamLease).toHaveBeenCalledWith({
+      leaseId: "lease-replay-error",
+      closeReason: "stream_replay_error",
+    });
+    await expect(fetch(`${address}/probe`).then((probe) => probe.json())).resolves.toEqual({ status: "ok" });
   });
 
   it("allows startup reconnect bursts above five active streams by default", async () => {
