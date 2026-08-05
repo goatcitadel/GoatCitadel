@@ -2,6 +2,7 @@ import { describe, it, mock } from "node:test";
 import assert from "node:assert/strict";
 import type { DbRunResult } from "./db.js";
 import { PostgresSyncDatabaseClient, __postgresSyncInternals } from "./postgres/sync.js";
+import type { PostgresSyncWaitDiagnostic } from "./postgres/sync.js";
 import {
   buildPostgresSyncWorkerPoolConfig,
   handlePostgresSyncWorkerRequest,
@@ -44,6 +45,11 @@ type SyncHarnessInternals = {
   activeTransactionId?: string;
   activeSessionId?: string;
   nestedTransactionDepth: number;
+  observability?: {
+    now?: () => number;
+    onWait?: (diagnostic: PostgresSyncWaitDiagnostic) => void;
+    waitTimeoutMs?: number;
+  };
 };
 
 function createSyncHarness(
@@ -187,6 +193,30 @@ describe("PostgresSyncDatabaseClient statement adapter", () => {
     assert.throws(() => fatal.client.exec("SELECT fatal"), /worker failed/);
   });
 
+  it("reports wait posture and duration without exposing SQL or parameters", () => {
+    const diagnostics: PostgresSyncWaitDiagnostic[] = [];
+    const { client, internals } = createSyncHarness(() => ({ ok: true, result: undefined }));
+    const times = [100, 475];
+    internals.observability = {
+      now: () => times.shift() ?? 475,
+      onWait: (diagnostic) => diagnostics.push(diagnostic),
+    };
+
+    client.exec("SELECT secret_value FROM private_table WHERE token = 'do-not-record'");
+
+    assert.deepEqual(diagnostics, [
+      {
+        operationKind: "exec",
+        transactionPosture: "none",
+        sessionPosture: "none",
+        outcome: "completed",
+        durationMs: 375,
+      },
+    ]);
+    assert.equal(JSON.stringify(diagnostics).includes("secret_value"), false);
+    assert.equal(JSON.stringify(diagnostics).includes("do-not-record"), false);
+  });
+
   it("pins queries and independent transactions to one worker session and can retire it", () => {
     const { client, requests } = createSyncHarness(() => ({ ok: true, result: undefined }));
 
@@ -294,6 +324,29 @@ describe("PostgresSyncDatabaseClient statement adapter", () => {
     });
 
     assert.throws(() => noResponse.client.exec("SELECT no-response"), /did not return a response/);
+  });
+
+  it("uses the configured compatibility wait ceiling and clamps unsafe values", () => {
+    const harness = createSyncHarness(() => ({ ok: true, result: undefined }));
+    harness.internals.observability = { waitTimeoutMs: 180_000 };
+    const observedTimeouts: number[] = [];
+    const waitMock = mock.method(
+      Atomics,
+      "wait",
+      (_state: Int32Array, _index: number, _value: number, timeout?: number) => {
+        observedTimeouts.push(Number(timeout));
+        return "timed-out";
+      },
+    );
+    try {
+      assert.throws(() => harness.client.exec("SELECT timeout"), /Timed out waiting for Postgres response/);
+    } finally {
+      waitMock.mock.restore();
+    }
+    assert.deepEqual(observedTimeouts, [180_000]);
+    assert.equal(__postgresSyncInternals.resolveSyncWaitTimeoutMs(999_999), 300_000);
+    assert.equal(__postgresSyncInternals.resolveSyncWaitTimeoutMs(1), 1_000);
+    assert.equal(__postgresSyncInternals.resolveSyncWaitTimeoutMs(Number.NaN), 60_000);
   });
 
   it("terminates the worker when a close response times out", () => {

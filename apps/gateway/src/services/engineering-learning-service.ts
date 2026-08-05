@@ -12,7 +12,7 @@ import {
   type EngineeringLearningRecord,
   type EngineeringLearningStatus,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 
 export const ENGINEERING_LEARNING_APPROVAL_KIND = "engineering_learning.lifecycle" as const;
 export const ENGINEERING_LEARNING_EFFECT_KIND = "engineering_learning_lifecycle_apply" as const;
@@ -49,18 +49,18 @@ export interface EngineeringLearningActionInput {
 interface EngineeringLearningServiceDependencies {
   storage: Pick<Storage, "approvals" | "engineeringLearnings">;
   rootDir: string;
-  isEnabled: () => boolean;
+  isEnabled: () => boolean | Promise<boolean>;
   createApproval: (input: ApprovalCreateInput) => Promise<ApprovalRequest>;
-  resolveSourceRoot: (input: { sessionId?: string; projectId?: string }) => string | undefined;
-  resolveProjectId?: (sessionId: string) => string | undefined;
-  appendAudit?: (payload: Record<string, unknown>) => void;
+  resolveSourceRoot: (input: { sessionId?: string; projectId?: string }) => Promise<string | undefined>;
+  resolveProjectId?: (sessionId: string) => string | undefined | Promise<string | undefined>;
+  appendAudit?: (payload: Record<string, unknown>) => void | Promise<void>;
 }
 
 export class EngineeringLearningService {
   public constructor(private readonly deps: EngineeringLearningServiceDependencies) {}
 
-  public propose(input: EngineeringLearningProposalInput): EngineeringLearningRecord {
-    this.requireEnabled();
+  public async propose(input: EngineeringLearningProposalInput): Promise<EngineeringLearningRecord> {
+    await this.requireEnabled();
     if (
       input.disposition !== "completed" ||
       input.failedClaimVerification === true ||
@@ -72,9 +72,9 @@ export class EngineeringLearningService {
       );
     }
     const sourceRunId = requiredText(input.source.runId, "source run", 256);
-    const existing = this.readBySourceRun(input.workspaceId, sourceRunId);
-    if (existing) return this.refreshFreshness(existing);
-    const sourceRoot = this.deps.resolveSourceRoot({
+    const existing = await this.readBySourceRun(input.workspaceId, sourceRunId);
+    if (existing) return await this.refreshFreshness(existing);
+    const sourceRoot = await this.deps.resolveSourceRoot({
       sessionId: input.source.sessionId,
       projectId: input.projectId,
     });
@@ -119,22 +119,22 @@ export class EngineeringLearningService {
       ...base,
       provenanceHash: sha256(canonicalJsonString(base)),
     };
-    this.deps.storage.engineeringLearnings.create(record, fingerprint);
-    this.deps.appendAudit?.({ event: "engineering_learning.proposed", learningId, sourceRunId });
+    await this.deps.storage.engineeringLearnings.create(record, fingerprint);
+    await this.deps.appendAudit?.({ event: "engineering_learning.proposed", learningId, sourceRunId });
     return record;
   }
 
-  public proposeFromVerifiedCodeModeRun(
+  public async proposeFromVerifiedCodeModeRun(
     response: CodeModeRunVerificationResponse,
-  ): EngineeringLearningRecord | undefined {
-    if (!this.deps.isEnabled() || response.evidence.status !== "verified") return undefined;
+  ): Promise<EngineeringLearningRecord | undefined> {
+    if (!(await this.deps.isEnabled()) || response.evidence.status !== "verified") return undefined;
     const run = response.run;
     const changedFiles = response.evidence.subject.changedFiles;
     if (run.status !== "completed" || changedFiles.length < 1) return undefined;
-    const projectId = run.sessionId ? this.deps.resolveProjectId?.(run.sessionId) : undefined;
+    const projectId = run.sessionId ? await this.deps.resolveProjectId?.(run.sessionId) : undefined;
     const result = run.result && typeof run.result === "object" ? run.result : {};
     const resultSummary = firstRecordText(result, ["summary", "message", "output", "result"]);
-    return this.propose({
+    return await this.propose({
       workspaceId: run.workspaceId ?? "default",
       projectId,
       source: {
@@ -164,31 +164,43 @@ export class EngineeringLearningService {
     });
   }
 
-  public list(input: { workspaceId: string; projectId?: string; status?: EngineeringLearningStatus; limit?: number }): {
+  public async list(input: {
+    workspaceId: string;
+    projectId?: string;
+    status?: EngineeringLearningStatus;
+    limit?: number;
+  }): Promise<{
     items: EngineeringLearningRecord[];
-  } {
-    this.requireEnabled();
-    const records = this.deps.storage.engineeringLearnings.list(input);
-    return { items: records.map((record) => this.refreshFreshness(record)) };
+  }> {
+    await this.requireEnabled();
+    const records = await this.deps.storage.engineeringLearnings.list(input);
+    return { items: await Promise.all(records.map((record) => this.refreshFreshness(record))) };
   }
 
-  public get(learningId: string): EngineeringLearningRecord {
-    this.requireEnabled();
-    const record = this.read(learningId);
+  public async get(learningId: string): Promise<EngineeringLearningRecord> {
+    await this.requireEnabled();
+    const record = await this.read(learningId);
     if (!record) throw new Error(`Engineering learning not found: ${learningId}`);
-    return this.refreshFreshness(record);
+    return await this.refreshFreshness(record);
   }
 
-  public retrieveContext(input: { workspaceId: string; projectId?: string; paths?: string[]; limit?: number }): {
+  public async retrieveContext(input: {
+    workspaceId: string;
+    projectId?: string;
+    paths?: string[];
+    limit?: number;
+  }): Promise<{
     items: EngineeringLearningRecord[];
     citations: Array<{ learningId: string; sourceRunId: string; evidence: string[] }>;
-  } {
-    const candidates = this.list({
-      workspaceId: input.workspaceId,
-      projectId: input.projectId,
-      status: "active",
-      limit: input.limit ?? 20,
-    }).items;
+  }> {
+    const candidates = (
+      await this.list({
+        workspaceId: input.workspaceId,
+        projectId: input.projectId,
+        status: "active",
+        limit: input.limit ?? 20,
+      })
+    ).items;
     const paths = normalizeApplicablePaths(input.paths ?? []);
     const items = candidates.filter(
       (record) => record.status === "active" && (paths.length === 0 || pathsOverlap(paths, record.applicablePaths)),
@@ -203,26 +215,24 @@ export class EngineeringLearningService {
     };
   }
 
-  public findOverlaps(learningId: string): EngineeringLearningRecord[] {
-    const learning = this.get(learningId);
-    return this.deps.storage.engineeringLearnings
-      .listWorkspaceExcept(learning.workspaceId, learningId)
-      .filter(
-        (candidate) =>
-          normalizedSubject(candidate) === normalizedSubject(learning) ||
-          pathsOverlap(candidate.applicablePaths, learning.applicablePaths) ||
-          candidate.fileEvidence.some((file) => learning.fileEvidence.some((other) => other.sha256 === file.sha256)),
-      );
+  public async findOverlaps(learningId: string): Promise<EngineeringLearningRecord[]> {
+    const learning = await this.get(learningId);
+    return (await this.deps.storage.engineeringLearnings.listWorkspaceExcept(learning.workspaceId, learningId)).filter(
+      (candidate) =>
+        normalizedSubject(candidate) === normalizedSubject(learning) ||
+        pathsOverlap(candidate.applicablePaths, learning.applicablePaths) ||
+        candidate.fileEvidence.some((file) => learning.fileEvidence.some((other) => other.sha256 === file.sha256)),
+    );
   }
 
   public async requestAction(learningId: string, input: EngineeringLearningActionInput): Promise<ApprovalRequest> {
-    this.requireEnabled();
-    const learning = this.get(learningId);
+    await this.requireEnabled();
+    const learning = await this.get(learningId);
     if (input.action === "activate" && learning.status === "stale") {
       throw new Error("Stale engineering learnings must be updated or replaced before activation.");
     }
     const targetLearningIds = [...new Set((input.targetLearningIds ?? []).map((item) => item.trim()).filter(Boolean))];
-    for (const targetId of targetLearningIds) this.get(targetId);
+    for (const targetId of targetLearningIds) await this.get(targetId);
     const updates = input.updates ? sanitizeLearningUpdates(input.updates) : undefined;
     const payload = {
       schemaVersion: "engineering-learning.lifecycle.v1",
@@ -255,7 +265,7 @@ export class EngineeringLearningService {
       rollbackNote: "The learning remains outside automatic context until this lifecycle effect completes.",
       expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
     });
-    this.deps.appendAudit?.({
+    await this.deps.appendAudit?.({
       event: "engineering_learning.action_requested",
       learningId,
       action: input.action,
@@ -264,12 +274,12 @@ export class EngineeringLearningService {
     return approval;
   }
 
-  public applyApprovedAction(approvalId: string): {
+  public async applyApprovedAction(approvalId: string): Promise<{
     learningId: string;
     action: EngineeringLearningAction;
     status: EngineeringLearningStatus;
-  } {
-    const approval = this.deps.storage.approvals.get(approvalId);
+  }> {
+    const approval = await this.deps.storage.approvals.get(approvalId);
     if (!approval || approval.kind !== ENGINEERING_LEARNING_APPROVAL_KIND || approval.status !== "approved") {
       throw new Error(`Approval ${approvalId} is not an approved engineering-learning lifecycle request.`);
     }
@@ -279,7 +289,7 @@ export class EngineeringLearningService {
     if (!["activate", "update", "consolidate", "replace", "reject", "archive"].includes(action)) {
       throw new Error("Engineering learning lifecycle action is invalid.");
     }
-    const current = this.get(learningId);
+    const current = await this.get(learningId);
     if (current.provenanceHash !== payload.expectedProvenanceHash) {
       throw new Error("Engineering learning changed after approval was requested.");
     }
@@ -308,10 +318,10 @@ export class EngineeringLearningService {
       ...nextWithoutHash,
       provenanceHash: sha256(canonicalJsonString(nextWithoutHash)),
     };
-    this.persistRecord(next);
+    await this.persistRecord(next);
     if (action === "replace" || action === "consolidate") {
       for (const targetId of targets) {
-        const target = this.read(targetId);
+        const target = await this.read(targetId);
         if (!target || target.workspaceId !== current.workspaceId) continue;
         const supersededWithoutHash = {
           ...target,
@@ -319,13 +329,13 @@ export class EngineeringLearningService {
           supersedesLearningId: learningId,
           updatedAt,
         } as const;
-        this.persistRecord({
+        await this.persistRecord({
           ...supersededWithoutHash,
           provenanceHash: sha256(canonicalJsonString(supersededWithoutHash)),
         });
       }
     }
-    this.deps.appendAudit?.({
+    await this.deps.appendAudit?.({
       event: "engineering_learning.lifecycle_applied",
       learningId,
       action,
@@ -335,19 +345,19 @@ export class EngineeringLearningService {
     return { learningId, action, status };
   }
 
-  public refreshAll(limit = 500): number {
-    if (!this.deps.isEnabled()) return 0;
-    const records = this.deps.storage.engineeringLearnings.listRefreshCandidates(limit);
+  public async refreshAll(limit = 500): Promise<number> {
+    if (!(await this.deps.isEnabled())) return 0;
+    const records = await this.deps.storage.engineeringLearnings.listRefreshCandidates(limit);
     let stale = 0;
     for (const record of records) {
-      if (this.refreshFreshness(record).status === "stale") stale += 1;
+      if ((await this.refreshFreshness(record)).status === "stale") stale += 1;
     }
     return stale;
   }
 
-  private refreshFreshness(record: EngineeringLearningRecord): EngineeringLearningRecord {
+  private async refreshFreshness(record: EngineeringLearningRecord): Promise<EngineeringLearningRecord> {
     if (record.status !== "active" && record.status !== "proposed") return record;
-    const root = this.deps.resolveSourceRoot({ sessionId: record.source.sessionId, projectId: record.projectId });
+    const root = await this.deps.resolveSourceRoot({ sessionId: record.source.sessionId, projectId: record.projectId });
     const reasons: string[] = [];
     if (!root) {
       reasons.push("source_root_missing");
@@ -368,26 +378,33 @@ export class EngineeringLearningService {
       ...staleWithoutHash,
       provenanceHash: sha256(canonicalJsonString(staleWithoutHash)),
     };
-    this.persistRecord(next);
-    this.deps.appendAudit?.({ event: "engineering_learning.marked_stale", learningId: record.learningId, reasons });
+    await this.persistRecord(next);
+    await this.deps.appendAudit?.({
+      event: "engineering_learning.marked_stale",
+      learningId: record.learningId,
+      reasons,
+    });
     return next;
   }
 
-  private persistRecord(record: EngineeringLearningRecord): void {
+  private async persistRecord(record: EngineeringLearningRecord): Promise<void> {
     const fingerprint = buildLearningFingerprint(record);
-    this.deps.storage.engineeringLearnings.update(record, fingerprint);
+    await this.deps.storage.engineeringLearnings.update(record, fingerprint);
   }
 
-  private read(learningId: string): EngineeringLearningRecord | undefined {
+  private async read(learningId: string): Promise<EngineeringLearningRecord | undefined> {
     return this.deps.storage.engineeringLearnings.get(learningId);
   }
 
-  private readBySourceRun(workspaceId: string, sourceRunId: string): EngineeringLearningRecord | undefined {
+  private async readBySourceRun(
+    workspaceId: string,
+    sourceRunId: string,
+  ): Promise<EngineeringLearningRecord | undefined> {
     return this.deps.storage.engineeringLearnings.getBySourceRun(workspaceId, sourceRunId);
   }
 
-  private requireEnabled(): void {
-    if (!this.deps.isEnabled()) throw new Error("Feature engineeringLearningsV1Enabled is disabled.");
+  private async requireEnabled(): Promise<void> {
+    if (!(await this.deps.isEnabled())) throw new Error("Feature engineeringLearningsV1Enabled is disabled.");
   }
 }
 

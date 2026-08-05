@@ -9,9 +9,11 @@ import {
   type MeshCapabilityManifestEntry,
 } from "@goatcitadel/contracts";
 import {
+  createSqliteAsyncStorage,
   Storage,
   buildMeshCapabilityActivationDiffs,
   computeMeshCapabilityDescriptorSha256,
+  type AsyncStorage,
 } from "@goatcitadel/storage";
 import { ApprovalEffectsService } from "./approval-resolution-effects-service.js";
 import { createMeshCapabilityActivationApproval } from "./mesh-capability-activation-approval-service.js";
@@ -27,25 +29,25 @@ import {
 } from "./mesh-capability-publication-service.js";
 import type { ServiceContext } from "./service-context.js";
 
-const storages: Storage[] = [];
+const storages: AsyncStorage[] = [];
 
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
-  for (const storage of storages.splice(0)) storage.close();
+  for (const storage of storages.splice(0)) await storage.close();
 });
 
-function createHarness(): {
-  storage: Storage;
+async function createHarness(): Promise<{
+  storage: AsyncStorage;
   publication: MeshCapabilityPublicationService;
   service: MeshCapabilityActivationService;
   identity: MeshCapabilityAuthenticatedNodeIdentity;
-} {
-  const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
+}> {
+  const storage = createSqliteAsyncStorage(new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." }));
   storages.push(storage);
-  admitNode(storage, { nodeId: "node-a", token: "join-node-a" });
+  await admitNode(storage, { nodeId: "node-a", token: "join-node-a" });
   const publication = new MeshCapabilityPublicationService({ storage });
   const service = new MeshCapabilityActivationService({ storage, publication });
-  const auth = publication.authenticateNodeRequest({
+  const auth = await publication.authenticateNodeRequest({
     headers: {
       authorization: "Bearer join-node-a",
       "x-goatcitadel-mesh-tls-fingerprint": "sha256:node-a",
@@ -56,10 +58,13 @@ function createHarness(): {
   return { storage, publication, service, identity };
 }
 
-function admitNode(storage: Storage, input: { nodeId: string; token: string; workspaceId?: string }): void {
+async function admitNode(
+  storage: AsyncStorage,
+  input: { nodeId: string; token: string; workspaceId?: string },
+): Promise<void> {
   const workspaceId = input.workspaceId ?? "default";
   const now = new Date().toISOString();
-  storage.mesh.upsertNode({
+  await storage.mesh.upsertNode({
     nodeId: input.nodeId,
     transport: "lan",
     status: "online",
@@ -68,9 +73,9 @@ function admitNode(storage: Storage, input: { nodeId: string; token: string; wor
     joinedAt: now,
     lastSeenAt: now,
   });
-  storage.mesh.issueJoinToken(input.token, "2099-01-01T00:00:00.000Z");
-  expect(storage.mesh.consumeJoinToken(input.token, input.nodeId, now)).toBe(true);
-  storage.meshCapabilityNodeAdmissions.admit({
+  await storage.mesh.issueJoinToken(input.token, "2099-01-01T00:00:00.000Z");
+  expect(await storage.mesh.consumeJoinToken(input.token, input.nodeId, now)).toBe(true);
+  await storage.meshCapabilityNodeAdmissions.admit({
     workspaceId,
     nodeId: input.nodeId,
     expectedAdmissionGeneration: 0,
@@ -128,20 +133,20 @@ function descriptorOf(
   };
 }
 
-function publish(
-  harness: ReturnType<typeof createHarness>,
+async function publish(
+  harness: Awaited<ReturnType<typeof createHarness>>,
   options: {
     publicationKey?: string;
     entries?: Array<{ kind: "tool" | "mcp_server" | "skill"; localId: string; descriptor?: Record<string, unknown> }>;
     supersedesManifestSha256?: string;
   } = {},
-): MeshCapabilityManifest {
+): Promise<MeshCapabilityManifest> {
   const entries = options.entries ?? [
     { kind: "tool" as const, localId: "project.status" },
     { kind: "mcp_server" as const, localId: "project.files" },
     { kind: "skill" as const, localId: "project.guide" },
   ];
-  const receipt = harness.publication.publishCapabilityManifest(harness.identity, {
+  const receipt = await harness.publication.publishCapabilityManifest(harness.identity, {
     publicationKey: options.publicationKey ?? "publication-1",
     ...(options.supersedesManifestSha256 === undefined
       ? {}
@@ -182,17 +187,17 @@ function requestFor(
   };
 }
 
-function approve(storage: Storage, approvalId: string, resolvedBy = "operator-approver"): void {
-  storage.approvals.resolve(approvalId, { decision: "approve", resolvedBy });
+async function approve(storage: AsyncStorage, approvalId: string, resolvedBy = "operator-approver"): Promise<void> {
+  await storage.approvals.resolve(approvalId, { decision: "approve", resolvedBy });
 }
 
 describe("MeshCapabilityActivationService request + approve + activate", () => {
-  it("activates one exact tool entry through a real deterministic approval and replays idempotently", () => {
-    const harness = createHarness();
-    const manifest = publish(harness);
+  it("activates one exact tool entry through a real deterministic approval and replays idempotently", async () => {
+    const harness = await createHarness();
+    const manifest = await publish(harness);
     const tool = entryOf(manifest, "tool");
 
-    const first = harness.service.requestActivation(requestFor(manifest, tool));
+    const first = await harness.service.requestActivation(requestFor(manifest, tool));
     expect(first.replayed).toBe(false);
     expect(first.activationRevision).toBe(1);
     expect(first.approval.kind).toBe(MESH_CAPABILITY_ACTIVATION_APPROVAL_KIND);
@@ -203,7 +208,7 @@ describe("MeshCapabilityActivationService request + approve + activate", () => {
     expect(first.permissionDiff.disposition).toBe("initial");
     expect(first.effectDiff).toMatchObject({ disposition: "initial", currentEffectPosture: "read_only" });
     // Request Journey evidence commits atomically with the approval.
-    const evidence = harness.storage.governanceJourneyEvents.findByIdempotencyKey(
+    const evidence = await harness.storage.governanceJourneyEvents.findByIdempotencyKey(
       activationRequestJourneyIdempotencyKey(first.approval.approvalId),
     );
     expect(evidence).toMatchObject({
@@ -214,22 +219,22 @@ describe("MeshCapabilityActivationService request + approve + activate", () => {
     });
 
     // Determinism: the same exact request converges on the same approval.
-    const replay = harness.service.requestActivation(requestFor(manifest, tool));
+    const replay = await harness.service.requestActivation(requestFor(manifest, tool));
     expect(replay.replayed).toBe(true);
     expect(replay.approval.approvalId).toBe(first.approval.approvalId);
     expect(replay.activationId).toBe(first.activationId);
     // A different requester derives a different deterministic identity.
-    const otherActor = harness.service.requestActivation(requestFor(manifest, tool, { actorId: "operator-b" }));
+    const otherActor = await harness.service.requestActivation(requestFor(manifest, tool, { actorId: "operator-b" }));
     expect(otherActor.approval.approvalId).not.toBe(first.approval.approvalId);
 
     // Not yet approved: the apply fails closed and nothing becomes callable.
-    expect(() =>
+    await expect(
       harness.service.executeApprovedActivation({ workspaceId: "default", approvalId: first.approval.approvalId }),
-    ).toThrow(MeshCapabilityActivationServiceError);
-    expect(harness.storage.meshCapabilityPublications.listCallableActivations("default")).toHaveLength(0);
+    ).rejects.toThrow(MeshCapabilityActivationServiceError);
+    expect(await harness.storage.meshCapabilityPublications.listCallableActivations("default")).toHaveLength(0);
 
-    approve(harness.storage, first.approval.approvalId);
-    const applied = harness.service.executeApprovedActivation({
+    await approve(harness.storage, first.approval.approvalId);
+    const applied = await harness.service.executeApprovedActivation({
       workspaceId: "default",
       approvalId: first.approval.approvalId,
     });
@@ -243,11 +248,13 @@ describe("MeshCapabilityActivationService request + approve + activate", () => {
       effectPosture: "read_only",
     });
     expect(
-      harness.storage.meshCapabilityPublications.listCallableActivations("default").map((row) => row.activationId),
+      (await harness.storage.meshCapabilityPublications.listCallableActivations("default")).map(
+        (row) => row.activationId,
+      ),
     ).toEqual([first.activationId]);
-    const catalogTool = harness.publication
-      .listCatalogEntries("default")
-      .find((candidate) => candidate.kind === "mesh_tool");
+    const catalogTool = (await harness.publication.listCatalogEntries("default")).find(
+      (candidate) => candidate.kind === "mesh_tool",
+    );
     expect(catalogTool?.callable).toBe(true);
     expect(catalogTool?.mesh?.status).toBe("active");
     expect(catalogTool?.mesh?.activation).toMatchObject({
@@ -258,7 +265,7 @@ describe("MeshCapabilityActivationService request + approve + activate", () => {
     });
 
     // Replayed apply converges without a second activation row.
-    const reapplied = harness.service.executeApprovedActivation({
+    const reapplied = await harness.service.executeApprovedActivation({
       workspaceId: "default",
       approvalId: first.approval.approvalId,
     });
@@ -266,9 +273,9 @@ describe("MeshCapabilityActivationService request + approve + activate", () => {
     expect(reapplied.activation.activationId).toBe(first.activationId);
   });
 
-  it("activates an exact mcp_server entry and preserves an unknown effect posture end to end", () => {
-    const harness = createHarness();
-    const manifest = publish(harness, {
+  it("activates an exact mcp_server entry and preserves an unknown effect posture end to end", async () => {
+    const harness = await createHarness();
+    const manifest = await publish(harness, {
       entries: [
         { kind: "mcp_server", localId: "project.files" },
         { kind: "tool", localId: "project.mutate", descriptor: descriptorOf("tool", { effectPosture: "unknown" }) },
@@ -277,25 +284,25 @@ describe("MeshCapabilityActivationService request + approve + activate", () => {
     const mcp = entryOf(manifest, "mcp_server");
     const unknownTool = entryOf(manifest, "tool");
 
-    const mcpRequest = harness.service.requestActivation(requestFor(manifest, mcp));
-    approve(harness.storage, mcpRequest.approval.approvalId);
-    const mcpApplied = harness.service.executeApprovedActivation({
+    const mcpRequest = await harness.service.requestActivation(requestFor(manifest, mcp));
+    await approve(harness.storage, mcpRequest.approval.approvalId);
+    const mcpApplied = await harness.service.executeApprovedActivation({
       workspaceId: "default",
       approvalId: mcpRequest.approval.approvalId,
     });
     expect(mcpApplied.activation.capabilityId).toBe(mcp.capabilityId);
 
-    const unknownRequest = harness.service.requestActivation(requestFor(manifest, unknownTool));
+    const unknownRequest = await harness.service.requestActivation(requestFor(manifest, unknownTool));
     expect(unknownRequest.effectDiff.currentEffectPosture).toBe("unknown");
-    approve(harness.storage, unknownRequest.approval.approvalId);
-    const unknownApplied = harness.service.executeApprovedActivation({
+    await approve(harness.storage, unknownRequest.approval.approvalId);
+    const unknownApplied = await harness.service.executeApprovedActivation({
       workspaceId: "default",
       approvalId: unknownRequest.approval.approvalId,
     });
     // Unknown is preserved as unknown — never upgraded to none.
     expect(unknownApplied.activation.effectPosture).toBe("unknown");
     expect(unknownApplied.activation.effectDiff.currentEffectPosture).toBe("unknown");
-    const binding = harness.service.resolveProfileBinding({
+    const binding = await harness.service.resolveProfileBinding({
       workspaceId: "default",
       capabilityId: unknownTool.capabilityId,
       entrySha256: unknownTool.entrySha256,
@@ -305,33 +312,62 @@ describe("MeshCapabilityActivationService request + approve + activate", () => {
     expect(binding?.effectPosture).toBe("unknown");
   });
 
-  it("defers genuine storage infrastructure errors for retry while keeping guard conflicts terminal", () => {
-    const harness = createHarness();
-    const manifest = publish(harness);
+  it("defers genuine storage infrastructure errors for retry while keeping guard conflicts terminal", async () => {
+    const harness = await createHarness();
+    const manifest = await publish(harness);
     const tool = entryOf(manifest, "tool");
-    const requested = harness.service.requestActivation(requestFor(manifest, tool));
-    approve(harness.storage, requested.approval.approvalId);
+    const requested = await harness.service.requestActivation(requestFor(manifest, tool));
+    await approve(harness.storage, requested.approval.approvalId);
 
     // Genuine infrastructure failure (SQLITE_BUSY / serialization): the raw
     // error must propagate so the approval-effect worker defers the effect
     // for bounded retry instead of failing it terminally.
     const busy = Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
-    const activateSpy = vi.spyOn(harness.storage.meshCapabilityPublications, "activate").mockImplementation(() => {
+    const realPublicationRepository = harness.storage.meshCapabilityPublications;
+    const activateSpy = vi.fn(async (...args: Parameters<typeof realPublicationRepository.activate>) =>
+      realPublicationRepository.activate(...args),
+    );
+    const publicationRepository = new Proxy(realPublicationRepository, {
+      get(target, property, receiver) {
+        return property === "activate" ? activateSpy : Reflect.get(target, property, receiver);
+      },
+    });
+    const faultInjectingStorage = new Proxy(harness.storage, {
+      get(target, property, receiver) {
+        return property === "meshCapabilityPublications"
+          ? publicationRepository
+          : Reflect.get(target, property, receiver);
+      },
+    });
+    const faultInjectingService = new MeshCapabilityActivationService({
+      storage: faultInjectingStorage,
+      publication: harness.publication,
+    });
+    activateSpy.mockImplementation(async () => {
       throw busy;
     });
-    expect(() =>
-      harness.service.executeApprovedActivation({ workspaceId: "default", approvalId: requested.approval.approvalId }),
-    ).toThrow(busy);
-    expect(() =>
-      harness.service.executeApprovedActivation({ workspaceId: "default", approvalId: requested.approval.approvalId }),
-    ).not.toThrow(MeshCapabilityActivationServiceError);
+    await expect(
+      faultInjectingService.executeApprovedActivation({
+        workspaceId: "default",
+        approvalId: requested.approval.approvalId,
+      }),
+    ).rejects.toThrow(busy);
+    await expect(
+      faultInjectingService.executeApprovedActivation({
+        workspaceId: "default",
+        approvalId: requested.approval.approvalId,
+      }),
+    ).rejects.not.toBeInstanceOf(MeshCapabilityActivationServiceError);
 
     // Storage guard/constraint violations stay terminal governance conflicts.
-    activateSpy.mockImplementation(() => {
+    activateSpy.mockImplementation(async () => {
       throw new ConflictError("Mesh capability activation conflicts with a storage invariant.");
     });
     try {
-      harness.service.executeApprovedActivation({ workspaceId: "default", approvalId: requested.approval.approvalId });
+      await faultInjectingService.executeApprovedActivation({
+        workspaceId: "default",
+        approvalId: requested.approval.approvalId,
+      });
       expect.unreachable("guard conflicts must fail closed");
     } catch (error) {
       expect(error).toBeInstanceOf(MeshCapabilityActivationServiceError);
@@ -339,53 +375,53 @@ describe("MeshCapabilityActivationService request + approve + activate", () => {
     }
 
     // After the transient failure clears, the retry converges normally.
-    activateSpy.mockRestore();
-    const applied = harness.service.executeApprovedActivation({
+    activateSpy.mockImplementation(async (...args) => realPublicationRepository.activate(...args));
+    const applied = await faultInjectingService.executeApprovedActivation({
       workspaceId: "default",
       approvalId: requested.approval.approvalId,
     });
     expect(applied.activation.capabilityId).toBe(tool.capabilityId);
   });
 
-  it("fails skill activation closed as deferred staging without writing any approval", () => {
-    const harness = createHarness();
-    const manifest = publish(harness);
+  it("fails skill activation closed as deferred staging without writing any approval", async () => {
+    const harness = await createHarness();
+    const manifest = await publish(harness);
     const skill = entryOf(manifest, "skill");
 
-    expect(() => harness.service.requestActivation(requestFor(manifest, skill))).toThrow(
+    await expect(harness.service.requestActivation(requestFor(manifest, skill))).rejects.toThrow(
       /mesh_capability_skill_staging_deferred/u,
     );
-    expect(harness.storage.approvals.list(undefined, 10)).toHaveLength(0);
-    expect(harness.storage.meshCapabilityPublications.listCallableActivations("default")).toHaveLength(0);
+    expect(await harness.storage.approvals.list(undefined, 10)).toHaveLength(0);
+    expect(await harness.storage.meshCapabilityPublications.listCallableActivations("default")).toHaveLength(0);
   });
 
-  it("rejects cross-workspace requests, unknown manifests, and stale entry bindings", () => {
-    const harness = createHarness();
-    const manifest = publish(harness);
+  it("rejects cross-workspace requests, unknown manifests, and stale entry bindings", async () => {
+    const harness = await createHarness();
+    const manifest = await publish(harness);
     const tool = entryOf(manifest, "tool");
 
-    expect(() => harness.service.requestActivation(requestFor(manifest, tool, { workspaceId: "workspace-b" }))).toThrow(
-      /mesh_capability_manifest_not_found/u,
-    );
-    expect(() =>
+    await expect(
+      harness.service.requestActivation(requestFor(manifest, tool, { workspaceId: "workspace-b" })),
+    ).rejects.toThrow(/mesh_capability_manifest_not_found/u);
+    await expect(
       harness.service.requestActivation(requestFor(manifest, tool, { manifestSha256: "9".repeat(64) })),
-    ).toThrow(/mesh_capability_manifest_not_found/u);
-    expect(() =>
+    ).rejects.toThrow(/mesh_capability_manifest_not_found/u);
+    await expect(
       harness.service.requestActivation(requestFor(manifest, tool, { entrySha256: "8".repeat(64) })),
-    ).toThrow(/mesh_capability_entry_binding_mismatch/u);
-    expect(() =>
+    ).rejects.toThrow(/mesh_capability_entry_binding_mismatch/u);
+    await expect(
       harness.service.requestActivation(
         requestFor(manifest, tool, { capabilityId: entryOf(manifest, "mcp_server").capabilityId }),
       ),
-    ).toThrow(/mesh_capability_entry_binding_mismatch/u);
+    ).rejects.toThrow(/mesh_capability_entry_binding_mismatch/u);
   });
 
-  it("requires a healthy publisher at request time", () => {
-    const harness = createHarness();
-    const manifest = publish(harness);
+  it("requires a healthy publisher at request time", async () => {
+    const harness = await createHarness();
+    const manifest = await publish(harness);
     const tool = entryOf(manifest, "tool");
-    const publisher = harness.storage.meshCapabilityPublications.findCurrentPublisher("default", "node-a")!;
-    harness.storage.meshCapabilityPublications.transitionPublisherHealth({
+    const publisher = (await harness.storage.meshCapabilityPublications.findCurrentPublisher("default", "node-a"))!;
+    await harness.storage.meshCapabilityPublications.transitionPublisherHealth({
       workspaceId: "default",
       nodeId: "node-a",
       publisherGeneration: publisher.publisherGeneration,
@@ -396,29 +432,29 @@ describe("MeshCapabilityActivationService request + approve + activate", () => {
       tlsFingerprint: "sha256:node-a",
     });
 
-    expect(() => harness.service.requestActivation(requestFor(manifest, tool))).toThrow(
+    await expect(harness.service.requestActivation(requestFor(manifest, tool))).rejects.toThrow(
       /mesh_capability_publisher_not_activatable/u,
     );
   });
 
-  it("fails closed on missing, foreign, pending, workspace-mismatched, and expired approvals", () => {
-    const harness = createHarness();
-    const manifest = publish(harness);
+  it("fails closed on missing, foreign, pending, workspace-mismatched, and expired approvals", async () => {
+    const harness = await createHarness();
+    const manifest = await publish(harness);
     const tool = entryOf(manifest, "tool");
-    const request = harness.service.requestActivation(requestFor(manifest, tool));
+    const request = await harness.service.requestActivation(requestFor(manifest, tool));
 
-    expect(() =>
+    await expect(
       harness.service.executeApprovedActivation({
         workspaceId: "default",
         approvalId: "00000000-0000-0000-0000-000000000000",
       }),
-    ).toThrow(/mesh_capability_approval_not_executable/u);
+    ).rejects.toThrow(/mesh_capability_approval_not_executable/u);
     // Pending approval is not executable.
-    expect(() =>
+    await expect(
       harness.service.executeApprovedActivation({ workspaceId: "default", approvalId: request.approval.approvalId }),
-    ).toThrow(/mesh_capability_approval_not_executable/u);
+    ).rejects.toThrow(/mesh_capability_approval_not_executable/u);
     // Foreign kind under a workspace linkage is not executable.
-    const foreign = harness.storage.approvals.createDeterministicDetachedWithTtlDuration(
+    const foreign = await harness.storage.approvals.createDeterministicDetachedWithTtlDuration(
       {
         approvalId: "11111111-1111-4111-8111-111111111111",
         kind: "foreign.approval",
@@ -429,19 +465,19 @@ describe("MeshCapabilityActivationService request + approve + activate", () => {
       },
       15 * 60_000,
     );
-    approve(harness.storage, foreign.approval.approvalId);
-    expect(() =>
+    await approve(harness.storage, foreign.approval.approvalId);
+    await expect(
       harness.service.executeApprovedActivation({ workspaceId: "default", approvalId: foreign.approval.approvalId }),
-    ).toThrow(/mesh_capability_approval_not_executable/u);
+    ).rejects.toThrow(/mesh_capability_approval_not_executable/u);
 
-    approve(harness.storage, request.approval.approvalId);
+    await approve(harness.storage, request.approval.approvalId);
     // Cross-workspace execution is rejected even with the right approval.
-    expect(() =>
+    await expect(
       harness.service.executeApprovedActivation({
         workspaceId: "workspace-b",
         approvalId: request.approval.approvalId,
       }),
-    ).toThrow(/mesh_capability_approval_not_executable/u);
+    ).rejects.toThrow(/mesh_capability_approval_not_executable/u);
 
     // A stale (expired) approval fails closed before any rebuild.
     const staleClock = new MeshCapabilityActivationService({
@@ -449,19 +485,19 @@ describe("MeshCapabilityActivationService request + approve + activate", () => {
       publication: harness.publication,
       now: () => new Date("2099-01-01T00:00:00.000Z"),
     });
-    expect(() =>
+    await expect(
       staleClock.executeApprovedActivation({ workspaceId: "default", approvalId: request.approval.approvalId }),
-    ).toThrow(/mesh_capability_approval_expired/u);
-    expect(harness.storage.meshCapabilityPublications.listCallableActivations("default")).toHaveLength(0);
+    ).rejects.toThrow(/mesh_capability_approval_expired/u);
+    expect(await harness.storage.meshCapabilityPublications.listCallableActivations("default")).toHaveLength(0);
   });
 
-  it("fails closed when the requester Journey evidence is missing", () => {
-    const harness = createHarness();
-    const manifest = publish(harness);
+  it("fails closed when the requester Journey evidence is missing", async () => {
+    const harness = await createHarness();
+    const manifest = await publish(harness);
     const tool = entryOf(manifest, "tool");
     // Bypass the request owner: commit an otherwise-valid approval WITHOUT the
     // atomically-committed request Journey evidence the apply must recover.
-    const health = harness.storage.meshCapabilityPublications.getPublisherHealth("default", "node-a", 1);
+    const health = await harness.storage.meshCapabilityPublications.getPublisherHealth("default", "node-a", 1);
     const diffs = buildMeshCapabilityActivationDiffs({ currentEntry: tool });
     const activationId = deriveMeshCapabilityActivationId({
       workspaceId: "default",
@@ -477,7 +513,7 @@ describe("MeshCapabilityActivationService request + approve + activate", () => {
       sessionId: "session-a",
       turnId: "turn-a",
     });
-    const bare = createMeshCapabilityActivationApproval(
+    const bare = await createMeshCapabilityActivationApproval(
       { storage: harness.storage },
       {
         workspaceId: "default",
@@ -502,28 +538,28 @@ describe("MeshCapabilityActivationService request + approve + activate", () => {
       },
     );
     expect(
-      harness.storage.governanceJourneyEvents.findByIdempotencyKey(
+      await harness.storage.governanceJourneyEvents.findByIdempotencyKey(
         activationRequestJourneyIdempotencyKey(bare.approval.approvalId),
       ),
     ).toBeUndefined();
-    approve(harness.storage, bare.approval.approvalId);
-    expect(() =>
+    await approve(harness.storage, bare.approval.approvalId);
+    await expect(
       harness.service.executeApprovedActivation({ workspaceId: "default", approvalId: bare.approval.approvalId }),
-    ).toThrow(/mesh_capability_request_evidence_missing/u);
-    expect(harness.storage.meshCapabilityPublications.listCallableActivations("default")).toHaveLength(0);
+    ).rejects.toThrow(/mesh_capability_request_evidence_missing/u);
+    expect(await harness.storage.meshCapabilityPublications.listCallableActivations("default")).toHaveLength(0);
   });
 
-  it("fails closed on permission drift (manifest supersession) between request and approve", () => {
-    const harness = createHarness();
-    const manifest = publish(harness, {
+  it("fails closed on permission drift (manifest supersession) between request and approve", async () => {
+    const harness = await createHarness();
+    const manifest = await publish(harness, {
       entries: [{ kind: "tool", localId: "project.status" }],
     });
     const tool = entryOf(manifest, "tool");
-    const request = harness.service.requestActivation(requestFor(manifest, tool));
-    approve(harness.storage, request.approval.approvalId);
+    const request = await harness.service.requestActivation(requestFor(manifest, tool));
+    await approve(harness.storage, request.approval.approvalId);
 
     // The node publishes a superseding manifest whose tool wants MORE permissions.
-    publish(harness, {
+    await publish(harness, {
       publicationKey: "publication-2",
       supersedesManifestSha256: manifest.manifestSha256,
       entries: [
@@ -535,20 +571,20 @@ describe("MeshCapabilityActivationService request + approve + activate", () => {
       ],
     });
 
-    expect(() =>
+    await expect(
       harness.service.executeApprovedActivation({ workspaceId: "default", approvalId: request.approval.approvalId }),
-    ).toThrow(MeshCapabilityActivationServiceError);
-    expect(harness.storage.meshCapabilityPublications.listCallableActivations("default")).toHaveLength(0);
+    ).rejects.toThrow(MeshCapabilityActivationServiceError);
+    expect(await harness.storage.meshCapabilityPublications.listCallableActivations("default")).toHaveLength(0);
   });
 
-  it("fails closed on publisher health drift between request and approve", () => {
-    const harness = createHarness();
-    const manifest = publish(harness);
+  it("fails closed on publisher health drift between request and approve", async () => {
+    const harness = await createHarness();
+    const manifest = await publish(harness);
     const tool = entryOf(manifest, "tool");
-    const request = harness.service.requestActivation(requestFor(manifest, tool));
-    approve(harness.storage, request.approval.approvalId);
-    const publisher = harness.storage.meshCapabilityPublications.findCurrentPublisher("default", "node-a")!;
-    harness.storage.meshCapabilityPublications.transitionPublisherHealth({
+    const request = await harness.service.requestActivation(requestFor(manifest, tool));
+    await approve(harness.storage, request.approval.approvalId);
+    const publisher = (await harness.storage.meshCapabilityPublications.findCurrentPublisher("default", "node-a"))!;
+    await harness.storage.meshCapabilityPublications.transitionPublisherHealth({
       workspaceId: "default",
       nodeId: "node-a",
       publisherGeneration: publisher.publisherGeneration,
@@ -559,13 +595,13 @@ describe("MeshCapabilityActivationService request + approve + activate", () => {
       tlsFingerprint: "sha256:node-a",
     });
 
-    expect(() =>
+    await expect(
       harness.service.executeApprovedActivation({ workspaceId: "default", approvalId: request.approval.approvalId }),
-    ).toThrow(/mesh_capability_activation_state_drift/u);
+    ).rejects.toThrow(/mesh_capability_activation_state_drift/u);
 
     // Recovering to online bumps the health generation: the approved bytes
     // still bind the request-time generation, so the apply stays closed.
-    harness.storage.meshCapabilityPublications.transitionPublisherHealth({
+    await harness.storage.meshCapabilityPublications.transitionPublisherHealth({
       workspaceId: "default",
       nodeId: "node-a",
       publisherGeneration: publisher.publisherGeneration,
@@ -575,42 +611,45 @@ describe("MeshCapabilityActivationService request + approve + activate", () => {
       publicationLeaseExpiresAt: publisher.publicationLeaseExpiresAt,
       tlsFingerprint: "sha256:node-a",
     });
-    expect(() =>
+    await expect(
       harness.service.executeApprovedActivation({ workspaceId: "default", approvalId: request.approval.approvalId }),
-    ).toThrow(/mesh_capability_activation_state_drift/u);
-    expect(harness.storage.meshCapabilityPublications.listCallableActivations("default")).toHaveLength(0);
+    ).rejects.toThrow(/mesh_capability_activation_state_drift/u);
+    expect(await harness.storage.meshCapabilityPublications.listCallableActivations("default")).toHaveLength(0);
   });
 
-  it("fails closed on an expired publication lease between request and approve", () => {
-    const harness = createHarness();
-    const manifest = publish(harness);
+  it("fails closed on an expired publication lease between request and approve", async () => {
+    const harness = await createHarness();
+    const manifest = await publish(harness);
     const tool = entryOf(manifest, "tool");
-    const request = harness.service.requestActivation(requestFor(manifest, tool));
-    approve(harness.storage, request.approval.approvalId);
-    const publisher = harness.storage.meshCapabilityPublications.findCurrentPublisher("default", "node-a")!;
-    harness.storage.db
+    const request = await harness.service.requestActivation(requestFor(manifest, tool));
+    await approve(harness.storage, request.approval.approvalId);
+    const publisher = (await harness.storage.meshCapabilityPublications.findCurrentPublisher("default", "node-a"))!;
+    await harness.storage.db
       .prepare("UPDATE mesh_leases SET expires_at = ? WHERE lease_key = ?")
       .run("2000-01-01T00:00:00.000Z", publisher.publicationLeaseKey);
 
     // The storage activation guard rejects the insert on its own DB clock.
-    expect(() =>
+    await expect(
       harness.service.executeApprovedActivation({ workspaceId: "default", approvalId: request.approval.approvalId }),
-    ).toThrow(MeshCapabilityActivationServiceError);
-    expect(harness.storage.meshCapabilityPublications.listCallableActivations("default")).toHaveLength(0);
+    ).rejects.toThrow(MeshCapabilityActivationServiceError);
+    expect(await harness.storage.meshCapabilityPublications.listCallableActivations("default")).toHaveLength(0);
   });
 });
 
 describe("MeshCapabilityActivationService revoke + projection", () => {
-  it("revoke removes callability immediately, flips the projection, and replays terminally", () => {
-    const harness = createHarness();
-    const manifest = publish(harness);
+  it("revoke removes callability immediately, flips the projection, and replays terminally", async () => {
+    const harness = await createHarness();
+    const manifest = await publish(harness);
     const tool = entryOf(manifest, "tool");
-    const request = harness.service.requestActivation(requestFor(manifest, tool));
-    approve(harness.storage, request.approval.approvalId);
-    harness.service.executeApprovedActivation({ workspaceId: "default", approvalId: request.approval.approvalId });
-    expect(harness.storage.meshCapabilityPublications.listCallableActivations("default")).toHaveLength(1);
+    const request = await harness.service.requestActivation(requestFor(manifest, tool));
+    await approve(harness.storage, request.approval.approvalId);
+    await harness.service.executeApprovedActivation({
+      workspaceId: "default",
+      approvalId: request.approval.approvalId,
+    });
+    expect(await harness.storage.meshCapabilityPublications.listCallableActivations("default")).toHaveLength(1);
 
-    const revoked = harness.service.revokeActivation({
+    const revoked = await harness.service.revokeActivation({
       workspaceId: "default",
       activationId: request.activationId,
       reason: "Operator revoked the grant.",
@@ -618,16 +657,16 @@ describe("MeshCapabilityActivationService revoke + projection", () => {
     });
     expect(revoked.replayed).toBe(false);
     // Callability is gone before the next read.
-    expect(harness.storage.meshCapabilityPublications.listCallableActivations("default")).toHaveLength(0);
-    const catalogTool = harness.publication
-      .listCatalogEntries("default")
-      .find((candidate) => candidate.kind === "mesh_tool");
+    expect(await harness.storage.meshCapabilityPublications.listCallableActivations("default")).toHaveLength(0);
+    const catalogTool = (await harness.publication.listCatalogEntries("default")).find(
+      (candidate) => candidate.kind === "mesh_tool",
+    );
     expect(catalogTool?.callable).toBe(false);
     expect(catalogTool?.mesh?.status).toBe("review_required");
     expect(catalogTool?.mesh?.reasons).toContain("activation_revoked");
     expect(catalogTool?.mesh?.activation).toMatchObject({ activationId: request.activationId, revoked: true });
 
-    const replay = harness.service.revokeActivation({
+    const replay = await harness.service.revokeActivation({
       workspaceId: "default",
       activationId: request.activationId,
       reason: "Different reason converges on the immutable revocation.",
@@ -636,38 +675,41 @@ describe("MeshCapabilityActivationService revoke + projection", () => {
     expect(replay.replayed).toBe(true);
     expect(replay.revocation.reason).toBe("Operator revoked the grant.");
 
-    expect(() =>
+    await expect(
       harness.service.revokeActivation({
         workspaceId: "default",
         activationId: "missing-activation",
         reason: "No such activation.",
         actorId: "operator-a",
       }),
-    ).toThrow(/mesh_capability_activation_not_found/u);
-    expect(() =>
+    ).rejects.toThrow(/mesh_capability_activation_not_found/u);
+    await expect(
       harness.service.revokeActivation({
         workspaceId: "workspace-b",
         activationId: request.activationId,
         reason: "Cross-workspace revoke.",
         actorId: "operator-a",
       }),
-    ).toThrow(/mesh_capability_activation_not_found/u);
+    ).rejects.toThrow(/mesh_capability_activation_not_found/u);
   });
 });
 
 describe("MeshCapabilityActivationService freeze binding + pre-dispatch gate", () => {
-  function activateTool(harness: ReturnType<typeof createHarness>) {
-    const manifest = publish(harness);
+  async function activateTool(harness: Awaited<ReturnType<typeof createHarness>>) {
+    const manifest = await publish(harness);
     const tool = entryOf(manifest, "tool");
-    const request = harness.service.requestActivation(requestFor(manifest, tool));
-    approve(harness.storage, request.approval.approvalId);
-    harness.service.executeApprovedActivation({ workspaceId: "default", approvalId: request.approval.approvalId });
+    const request = await harness.service.requestActivation(requestFor(manifest, tool));
+    await approve(harness.storage, request.approval.approvalId);
+    await harness.service.executeApprovedActivation({
+      workspaceId: "default",
+      approvalId: request.approval.approvalId,
+    });
     return { manifest, tool, request };
   }
 
-  it("resolves the packet's exact snapshot fields for a callable entry and blocks on every drift class", () => {
-    const harness = createHarness();
-    const { manifest, tool, request } = activateTool(harness);
+  it("resolves the packet's exact snapshot fields for a callable entry and blocks on every drift class", async () => {
+    const harness = await createHarness();
+    const { manifest, tool, request } = await activateTool(harness);
     const bindingInput = {
       workspaceId: "default",
       capabilityId: tool.capabilityId,
@@ -675,7 +717,7 @@ describe("MeshCapabilityActivationService freeze binding + pre-dispatch gate", (
       manifestSha256: manifest.manifestSha256,
       publisherGeneration: manifest.publisherGeneration,
     };
-    const binding = harness.service.resolveProfileBinding(bindingInput);
+    const binding = await harness.service.resolveProfileBinding(bindingInput);
     expect(binding).toEqual({
       nodeId: "node-a",
       publisherGeneration: 1,
@@ -690,23 +732,27 @@ describe("MeshCapabilityActivationService freeze binding + pre-dispatch gate", (
     });
     expect(Object.isFrozen(binding)).toBe(true);
     // Wrong exact identity never resolves a binding.
-    expect(harness.service.resolveProfileBinding({ ...bindingInput, entrySha256: "9".repeat(64) })).toBeUndefined();
-    expect(harness.service.resolveProfileBinding({ ...bindingInput, workspaceId: "workspace-b" })).toBeUndefined();
+    expect(
+      await harness.service.resolveProfileBinding({ ...bindingInput, entrySha256: "9".repeat(64) }),
+    ).toBeUndefined();
+    expect(
+      await harness.service.resolveProfileBinding({ ...bindingInput, workspaceId: "workspace-b" }),
+    ).toBeUndefined();
 
     // Valid binding: the M2 pre-dispatch terminal is the M3-pending rejection.
-    expect(harness.service.resolvePreDispatchBlock("default", binding!)).toBe("mesh_capability_dispatch_unready");
+    expect(await harness.service.resolvePreDispatchBlock("default", binding!)).toBe("mesh_capability_dispatch_unready");
 
     // Node disconnect removes callability: freeze and dispatch both block.
-    const node = harness.storage.mesh.getNode("node-a");
-    harness.storage.mesh.upsertNode({ ...node, status: "offline" });
-    expect(harness.service.resolveProfileBinding(bindingInput)).toBeUndefined();
-    expect(harness.service.resolvePreDispatchBlock("default", binding!)).toBe("mesh_capability_binding_drift");
-    harness.storage.mesh.upsertNode(node);
-    expect(harness.service.resolvePreDispatchBlock("default", binding!)).toBe("mesh_capability_dispatch_unready");
+    const node = await harness.storage.mesh.getNode("node-a");
+    await harness.storage.mesh.upsertNode({ ...node, status: "offline" });
+    expect(await harness.service.resolveProfileBinding(bindingInput)).toBeUndefined();
+    expect(await harness.service.resolvePreDispatchBlock("default", binding!)).toBe("mesh_capability_binding_drift");
+    await harness.storage.mesh.upsertNode(node);
+    expect(await harness.service.resolvePreDispatchBlock("default", binding!)).toBe("mesh_capability_dispatch_unready");
 
     // Publisher health offline removes callability.
-    const publisher = harness.storage.meshCapabilityPublications.findCurrentPublisher("default", "node-a")!;
-    harness.storage.meshCapabilityPublications.transitionPublisherHealth({
+    const publisher = (await harness.storage.meshCapabilityPublications.findCurrentPublisher("default", "node-a"))!;
+    await harness.storage.meshCapabilityPublications.transitionPublisherHealth({
       workspaceId: "default",
       nodeId: "node-a",
       publisherGeneration: publisher.publisherGeneration,
@@ -716,13 +762,13 @@ describe("MeshCapabilityActivationService freeze binding + pre-dispatch gate", (
       publicationLeaseExpiresAt: publisher.publicationLeaseExpiresAt,
       tlsFingerprint: "sha256:node-a",
     });
-    expect(harness.service.resolveProfileBinding(bindingInput)).toBeUndefined();
-    expect(harness.service.resolvePreDispatchBlock("default", binding!)).toBe("mesh_capability_binding_drift");
+    expect(await harness.service.resolveProfileBinding(bindingInput)).toBeUndefined();
+    expect(await harness.service.resolvePreDispatchBlock("default", binding!)).toBe("mesh_capability_binding_drift");
   });
 
-  it("blocks on lease expiry, manifest supersession, revoke, and reconnect-new-generation", () => {
-    const harness = createHarness();
-    const { manifest, tool, request } = activateTool(harness);
+  it("blocks on lease expiry, manifest supersession, revoke, and reconnect-new-generation", async () => {
+    const harness = await createHarness();
+    const { manifest, tool, request } = await activateTool(harness);
     const bindingInput = {
       workspaceId: "default",
       capabilityId: tool.capabilityId,
@@ -730,41 +776,41 @@ describe("MeshCapabilityActivationService freeze binding + pre-dispatch gate", (
       manifestSha256: manifest.manifestSha256,
       publisherGeneration: manifest.publisherGeneration,
     };
-    const binding = harness.service.resolveProfileBinding(bindingInput)!;
-    const publisher = harness.storage.meshCapabilityPublications.findCurrentPublisher("default", "node-a")!;
+    const binding = (await harness.service.resolveProfileBinding(bindingInput))!;
+    const publisher = (await harness.storage.meshCapabilityPublications.findCurrentPublisher("default", "node-a"))!;
 
     // Lease expiry (database clock) removes callability.
-    harness.storage.db
+    await harness.storage.db
       .prepare("UPDATE mesh_leases SET expires_at = ? WHERE lease_key = ?")
       .run("2000-01-01T00:00:00.000Z", publisher.publicationLeaseKey);
-    expect(harness.service.resolveProfileBinding(bindingInput)).toBeUndefined();
-    expect(harness.service.resolvePreDispatchBlock("default", binding)).toBe("mesh_capability_binding_drift");
-    harness.storage.mesh.acquireLease(publisher.publicationLeaseKey, "node-a", 3_600, new Date().toISOString());
-    expect(harness.service.resolvePreDispatchBlock("default", binding)).toBe("mesh_capability_dispatch_unready");
+    expect(await harness.service.resolveProfileBinding(bindingInput)).toBeUndefined();
+    expect(await harness.service.resolvePreDispatchBlock("default", binding)).toBe("mesh_capability_binding_drift");
+    await harness.storage.mesh.acquireLease(publisher.publicationLeaseKey, "node-a", 3_600, new Date().toISOString());
+    expect(await harness.service.resolvePreDispatchBlock("default", binding)).toBe("mesh_capability_dispatch_unready");
 
     // Manifest supersession removes callability for the superseded entry.
-    publish(harness, {
+    await publish(harness, {
       publicationKey: "publication-2",
       supersedesManifestSha256: manifest.manifestSha256,
       entries: [{ kind: "tool", localId: "project.status" }],
     });
-    expect(harness.service.resolveProfileBinding(bindingInput)).toBeUndefined();
-    expect(harness.service.resolvePreDispatchBlock("default", binding)).toBe("mesh_capability_binding_drift");
+    expect(await harness.service.resolveProfileBinding(bindingInput)).toBeUndefined();
+    expect(await harness.service.resolvePreDispatchBlock("default", binding)).toBe("mesh_capability_binding_drift");
 
     // Revoke stays terminal regardless of later state.
-    harness.service.revokeActivation({
+    await harness.service.revokeActivation({
       workspaceId: "default",
       activationId: request.activationId,
       reason: "Terminal revoke.",
       actorId: "operator-a",
     });
-    expect(harness.service.resolveProfileBinding(bindingInput)).toBeUndefined();
-    expect(harness.service.resolvePreDispatchBlock("default", binding)).toBe("mesh_capability_binding_drift");
+    expect(await harness.service.resolveProfileBinding(bindingInput)).toBeUndefined();
+    expect(await harness.service.resolvePreDispatchBlock("default", binding)).toBe("mesh_capability_binding_drift");
   });
 
-  it("never resumes callability for a prior generation after reconnect", () => {
-    const harness = createHarness();
-    const { manifest, tool } = activateTool(harness);
+  it("never resumes callability for a prior generation after reconnect", async () => {
+    const harness = await createHarness();
+    const { manifest, tool } = await activateTool(harness);
     const bindingInput = {
       workspaceId: "default",
       capabilityId: tool.capabilityId,
@@ -772,10 +818,10 @@ describe("MeshCapabilityActivationService freeze binding + pre-dispatch gate", (
       manifestSha256: manifest.manifestSha256,
       publisherGeneration: manifest.publisherGeneration,
     };
-    const binding = harness.service.resolveProfileBinding(bindingInput)!;
-    const publisher = harness.storage.meshCapabilityPublications.findCurrentPublisher("default", "node-a")!;
+    const binding = (await harness.service.resolveProfileBinding(bindingInput))!;
+    const publisher = (await harness.storage.meshCapabilityPublications.findCurrentPublisher("default", "node-a"))!;
     // Terminal health forces the next publish onto generation 2.
-    harness.storage.meshCapabilityPublications.transitionPublisherHealth({
+    await harness.storage.meshCapabilityPublications.transitionPublisherHealth({
       workspaceId: "default",
       nodeId: "node-a",
       publisherGeneration: publisher.publisherGeneration,
@@ -785,16 +831,16 @@ describe("MeshCapabilityActivationService freeze binding + pre-dispatch gate", (
       publicationLeaseExpiresAt: publisher.publicationLeaseExpiresAt,
       tlsFingerprint: "sha256:node-a",
     });
-    const reconnected = publish(harness, { publicationKey: "publication-reconnected" });
+    const reconnected = await publish(harness, { publicationKey: "publication-reconnected" });
     expect(reconnected.publisherGeneration).toBe(2);
 
     // The generation-1 activation never revalidates again.
-    expect(harness.service.resolveProfileBinding(bindingInput)).toBeUndefined();
-    expect(harness.service.resolvePreDispatchBlock("default", binding)).toBe("mesh_capability_binding_drift");
+    expect(await harness.service.resolveProfileBinding(bindingInput)).toBeUndefined();
+    expect(await harness.service.resolvePreDispatchBlock("default", binding)).toBe("mesh_capability_binding_drift");
     // The new generation's entry requires its own governed review.
     const reconnectedTool = entryOf(reconnected, "tool");
     expect(
-      harness.service.resolveProfileBinding({
+      await harness.service.resolveProfileBinding({
         workspaceId: "default",
         capabilityId: reconnectedTool.capabilityId,
         entrySha256: reconnectedTool.entrySha256,
@@ -807,12 +853,12 @@ describe("MeshCapabilityActivationService freeze binding + pre-dispatch gate", (
 
 describe("mesh activation approval resolution effect", () => {
   it("enqueues one deterministic apply effect on approve and executes it through the composed owner", async () => {
-    const harness = createHarness();
-    const manifest = publish(harness);
+    const harness = await createHarness();
+    const manifest = await publish(harness);
     const tool = entryOf(manifest, "tool");
-    const request = harness.service.requestActivation(requestFor(manifest, tool));
-    approve(harness.storage, request.approval.approvalId);
-    const approvedApproval = harness.storage.approvals.get(request.approval.approvalId);
+    const request = await harness.service.requestActivation(requestFor(manifest, tool));
+    await approve(harness.storage, request.approval.approvalId);
+    const approvedApproval = await harness.storage.approvals.get(request.approval.approvalId);
 
     const backgroundTasks = new Set<Promise<void>>();
     const effectsService = new ApprovalEffectsService(
@@ -830,7 +876,7 @@ describe("mesh activation approval resolution effect", () => {
       },
     );
 
-    const enqueued = effectsService.enqueueResolutionEffects(approvedApproval, {
+    const enqueued = await effectsService.enqueueResolutionEffects(approvedApproval, {
       decision: "approve",
       resolvedBy: "operator-approver",
     });
@@ -849,7 +895,7 @@ describe("mesh activation approval resolution effect", () => {
     await Promise.all([...backgroundTasks]);
     effectsService.stopWorker();
 
-    const settled = harness.storage.approvalEffects.get(meshEffect!.effectId);
+    const settled = await harness.storage.approvalEffects.get(meshEffect!.effectId);
     expect(settled.status).toBe("completed");
     expect(settled.result).toMatchObject({
       disposition: "activated",
@@ -857,11 +903,13 @@ describe("mesh activation approval resolution effect", () => {
       replayed: false,
     });
     expect(
-      harness.storage.meshCapabilityPublications.listCallableActivations("default").map((row) => row.activationId),
+      (await harness.storage.meshCapabilityPublications.listCallableActivations("default")).map(
+        (row) => row.activationId,
+      ),
     ).toEqual([request.activationId]);
 
     // Re-enqueueing the same resolution converges on the same effect row.
-    const replayed = effectsService.enqueueResolutionEffects(approvedApproval, {
+    const replayed = await effectsService.enqueueResolutionEffects(approvedApproval, {
       decision: "approve",
       resolvedBy: "operator-approver",
     });
@@ -870,14 +918,14 @@ describe("mesh activation approval resolution effect", () => {
   });
 
   it("fails the effect closed with the content-free code when live state drifted after approval", async () => {
-    const harness = createHarness();
-    const manifest = publish(harness);
+    const harness = await createHarness();
+    const manifest = await publish(harness);
     const tool = entryOf(manifest, "tool");
-    const request = harness.service.requestActivation(requestFor(manifest, tool));
-    approve(harness.storage, request.approval.approvalId);
-    const approvedApproval = harness.storage.approvals.get(request.approval.approvalId);
-    const publisher = harness.storage.meshCapabilityPublications.findCurrentPublisher("default", "node-a")!;
-    harness.storage.meshCapabilityPublications.transitionPublisherHealth({
+    const request = await harness.service.requestActivation(requestFor(manifest, tool));
+    await approve(harness.storage, request.approval.approvalId);
+    const approvedApproval = await harness.storage.approvals.get(request.approval.approvalId);
+    const publisher = (await harness.storage.meshCapabilityPublications.findCurrentPublisher("default", "node-a"))!;
+    await harness.storage.meshCapabilityPublications.transitionPublisherHealth({
       workspaceId: "default",
       nodeId: "node-a",
       publisherGeneration: publisher.publisherGeneration,
@@ -903,7 +951,7 @@ describe("mesh activation approval resolution effect", () => {
         executeApprovedMeshCapabilityActivation: (input) => harness.service.executeApprovedActivation(input),
       },
     );
-    const enqueued = effectsService.enqueueResolutionEffects(approvedApproval, {
+    const enqueued = await effectsService.enqueueResolutionEffects(approvedApproval, {
       decision: "approve",
       resolvedBy: "operator-approver",
     });
@@ -913,9 +961,9 @@ describe("mesh activation approval resolution effect", () => {
     await Promise.all([...backgroundTasks]);
     effectsService.stopWorker();
 
-    const settled = harness.storage.approvalEffects.get(meshEffect!.effectId);
+    const settled = await harness.storage.approvalEffects.get(meshEffect!.effectId);
     expect(settled.status).toBe("failed");
     expect(settled.result).toMatchObject({ errorCode: "mesh_capability_activation_state_drift" });
-    expect(harness.storage.meshCapabilityPublications.listCallableActivations("default")).toHaveLength(0);
+    expect(await harness.storage.meshCapabilityPublications.listCallableActivations("default")).toHaveLength(0);
   });
 });

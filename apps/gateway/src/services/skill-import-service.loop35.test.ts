@@ -57,7 +57,7 @@ describe("SkillImportService loop 35 import behavior", () => {
         "No license file detected.",
       ]),
     );
-    expect(service.listHistory(1)).toEqual([
+    expect(await service.listHistory(1)).toEqual([
       expect.objectContaining({
         action: "validate",
         outcome: "rejected",
@@ -114,7 +114,7 @@ describe("SkillImportService loop 35 import behavior", () => {
       }),
     ).rejects.toThrow("Failed to clone git source");
 
-    expect(service.listHistory(4)).toEqual([
+    expect(await service.listHistory(4)).toEqual([
       expect.objectContaining({
         action: "validate",
         outcome: "failed",
@@ -255,7 +255,7 @@ describe("SkillImportService loop 35 import behavior", () => {
       sourceUrl: "https://example.test/skill.md",
       alreadyInstalled: false,
     });
-    expect(service.listHistory(1)).toEqual([
+    expect(await service.listHistory(1)).toEqual([
       expect.objectContaining({
         action: "install",
         outcome: "accepted",

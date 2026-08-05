@@ -6,7 +6,7 @@ import type {
   WorkspaceRecord,
   WorkspaceUpdateInput,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { createRouteService, type RoutePort, type RouteService } from "./route-service-factory.js";
 
 export const workspacesRouteMethods = [
@@ -29,7 +29,7 @@ export type WorkspacesRouteService = RouteService<WorkspacesRouteMethod>;
 export interface WorkspacesRoutePortDependencies {
   storage: Pick<Storage, "workspaces">;
   normalizeWorkspaceId: (workspaceId?: string) => string;
-  publishRealtime: (eventType: string, source: string, payload?: Record<string, unknown>) => void;
+  publishRealtime: (eventType: string, source: string, payload?: Record<string, unknown>) => Promise<unknown>;
   listGlobalGuidance: () => Promise<GuidanceDocumentRecord[]>;
   listWorkspaceGuidance: (workspaceId: string) => Promise<GuidanceBundleRecord>;
   updateGlobalGuidance: (docType: GuidanceDocType, content: string) => Promise<GuidanceDocumentRecord>;
@@ -41,23 +41,23 @@ export interface WorkspacesRoutePortDependencies {
 }
 
 export function createWorkspacesRoutePort(deps: WorkspacesRoutePortDependencies): WorkspacesRoutePort {
-  const getWorkspace = (workspaceId: string): WorkspaceRecord =>
+  const getWorkspace = async (workspaceId: string): Promise<WorkspaceRecord> =>
     deps.storage.workspaces.get(deps.normalizeWorkspaceId(workspaceId));
 
   return {
-    archiveWorkspace: (workspaceId, expectedRevision: number) => {
-      const archived = deps.storage.workspaces.archiveWithRevision(
+    archiveWorkspace: async (workspaceId, expectedRevision: number) => {
+      const archived = await deps.storage.workspaces.archiveWithRevision(
         deps.normalizeWorkspaceId(workspaceId),
         expectedRevision,
       );
-      deps.publishRealtime("workspace_archived", "system", {
+      await deps.publishRealtime("workspace_archived", "system", {
         workspaceId: archived.workspaceId,
       });
       return archived;
     },
-    createWorkspace: (input: WorkspaceCreateInput) => {
-      const created = deps.storage.workspaces.create(input);
-      deps.publishRealtime("workspace_created", "system", {
+    createWorkspace: async (input: WorkspaceCreateInput) => {
+      const created = await deps.storage.workspaces.create(input);
+      await deps.publishRealtime("workspace_created", "system", {
         workspaceId: created.workspaceId,
         name: created.name,
         slug: created.slug,
@@ -71,24 +71,24 @@ export function createWorkspacesRoutePort(deps: WorkspacesRoutePortDependencies)
       citadelId?.trim()
         ? deps.storage.workspaces.listByCitadel(citadelId, view, limit)
         : deps.storage.workspaces.list(view, limit),
-    restoreWorkspace: (workspaceId, expectedRevision: number) => {
-      const restored = deps.storage.workspaces.restoreWithRevision(
+    restoreWorkspace: async (workspaceId, expectedRevision: number) => {
+      const restored = await deps.storage.workspaces.restoreWithRevision(
         deps.normalizeWorkspaceId(workspaceId),
         expectedRevision,
       );
-      deps.publishRealtime("workspace_restored", "system", {
+      await deps.publishRealtime("workspace_restored", "system", {
         workspaceId: restored.workspaceId,
       });
       return restored;
     },
     updateGlobalGuidance: (docType, content) => deps.updateGlobalGuidance(docType, content),
-    updateWorkspace: (workspaceId: string, input: WorkspaceUpdateInput, expectedRevision: number) => {
-      const updated = deps.storage.workspaces.updateWithRevision(
+    updateWorkspace: async (workspaceId: string, input: WorkspaceUpdateInput, expectedRevision: number) => {
+      const updated = await deps.storage.workspaces.updateWithRevision(
         deps.normalizeWorkspaceId(workspaceId),
         input,
         expectedRevision,
       );
-      deps.publishRealtime("workspace_updated", "system", {
+      await deps.publishRealtime("workspace_updated", "system", {
         workspaceId: updated.workspaceId,
         name: updated.name,
         slug: updated.slug,

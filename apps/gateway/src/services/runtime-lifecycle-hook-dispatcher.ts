@@ -28,7 +28,7 @@ async function runObserveHook<TTrigger extends RuntimeLifecycleHookTrigger>(
   });
 }
 
-function enqueueObserveHook<TTrigger extends RuntimeLifecycleHookTrigger>(
+async function enqueueObserveHook<TTrigger extends RuntimeLifecycleHookTrigger>(
   hooksService: ObserveHooksService,
   input: {
     workspaceId?: string;
@@ -38,10 +38,10 @@ function enqueueObserveHook<TTrigger extends RuntimeLifecycleHookTrigger>(
     idempotencyDiscriminator?: string;
     payload: RuntimeLifecycleHookPayloadByTrigger[TTrigger];
     expectedInterposition?: ToolCallBeforeHookInterpositionBinding;
-    beforeExternalDispatch?: () => void;
+    beforeExternalDispatch?: () => Promise<void>;
   },
-): void {
-  hooksService.enqueueAfterHooks({
+): Promise<void> {
+  await hooksService.enqueueAfterHooks({
     workspaceId: input.workspaceId,
     trigger: input.trigger as HookTrigger,
     entityType: input.entityType,

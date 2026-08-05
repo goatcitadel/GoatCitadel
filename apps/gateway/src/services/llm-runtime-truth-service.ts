@@ -22,13 +22,13 @@ import { estimateUsageCostUsd } from "./llm-pricing.js";
 interface LlmRuntimeTruthServiceOptions {
   storage: {
     llmRuntimeMeasurements: {
-      insert(record: LlmRuntimeMeasurementRecord): LlmRuntimeMeasurementRecord;
-      list(query?: LlmRuntimeMeasurementsQuery): LlmRuntimeMeasurementRecord[];
-      latest(providerId: string, model: string): LlmRuntimeMeasurementRecord | undefined;
+      insert(record: LlmRuntimeMeasurementRecord): Promise<LlmRuntimeMeasurementRecord>;
+      list(query?: LlmRuntimeMeasurementsQuery): Promise<LlmRuntimeMeasurementRecord[]>;
+      latest(providerId: string, model: string): Promise<LlmRuntimeMeasurementRecord | undefined>;
     };
     llmEvalProofRuns: {
-      insert(record: LlmEvalProofRunRecord): LlmEvalProofRunRecord;
-      list(limit?: number): LlmEvalProofRunRecord[];
+      insert(record: LlmEvalProofRunRecord): Promise<LlmEvalProofRunRecord>;
+      list(limit?: number): Promise<LlmEvalProofRunRecord[]>;
     };
   };
   listProviders: () => LlmProviderSummary[];
@@ -74,38 +74,44 @@ export class LlmRuntimeTruthService {
     this.listProviders = options.listProviders;
   }
 
-  public recordMeasurement(record: LlmRuntimeMeasurementRecord): LlmRuntimeMeasurementRecord {
-    return this.storage.llmRuntimeMeasurements.insert(record);
+  public async recordMeasurement(record: LlmRuntimeMeasurementRecord): Promise<LlmRuntimeMeasurementRecord> {
+    return await this.storage.llmRuntimeMeasurements.insert(record);
   }
 
-  public listMeasurements(query: LlmRuntimeMeasurementsQuery = {}): LlmRuntimeMeasurementsResponse {
+  public async listMeasurements(query: LlmRuntimeMeasurementsQuery = {}): Promise<LlmRuntimeMeasurementsResponse> {
     return {
       generatedAt: new Date().toISOString(),
-      items: this.storage.llmRuntimeMeasurements.list(query),
+      items: await this.storage.llmRuntimeMeasurements.list(query),
       warnings: ["Runtime telemetry is source-labeled; unavailable hardware metrics are not fabricated."],
     };
   }
 
-  public latestMeasurement(providerId: string, model: string): LlmRuntimeMeasurementRecord | undefined {
-    return this.storage.llmRuntimeMeasurements.latest(providerId, model);
+  public async latestMeasurement(providerId: string, model: string): Promise<LlmRuntimeMeasurementRecord | undefined> {
+    return await this.storage.llmRuntimeMeasurements.latest(providerId, model);
   }
 
-  public listLocalEngines(): LlmLocalEngineCatalogResponse {
+  public async listLocalEngines(): Promise<LlmLocalEngineCatalogResponse> {
     const providers = this.listProviders();
-    const items = LOCAL_ENGINE_LABELS.map(({ engineKind, label }) => {
-      const matchingProviders = providers.filter((provider) => inferRuntimeEngineKind(provider) === engineKind);
-      const latestMeasurement = newestMeasurement(
-        matchingProviders
-          .map((provider) => this.storage.llmRuntimeMeasurements.latest(provider.providerId, provider.defaultModel))
-          .filter(isDefined),
-      );
-      return buildLocalEngineRecord({
-        engineKind,
-        label,
-        providers: matchingProviders,
-        latestMeasurement,
-      });
-    });
+    const items = await Promise.all(
+      LOCAL_ENGINE_LABELS.map(async ({ engineKind, label }) => {
+        const matchingProviders = providers.filter((provider) => inferRuntimeEngineKind(provider) === engineKind);
+        const latestMeasurement = newestMeasurement(
+          (
+            await Promise.all(
+              matchingProviders.map((provider) =>
+                this.storage.llmRuntimeMeasurements.latest(provider.providerId, provider.defaultModel),
+              ),
+            )
+          ).filter(isDefined),
+        );
+        return buildLocalEngineRecord({
+          engineKind,
+          label,
+          providers: matchingProviders,
+          latestMeasurement,
+        });
+      }),
+    );
     return {
       generatedAt: new Date().toISOString(),
       items,
@@ -116,7 +122,7 @@ export class LlmRuntimeTruthService {
     };
   }
 
-  public runEvalProof(input: LlmEvalProofRunRequest): LlmEvalProofRunResponse {
+  public async runEvalProof(input: LlmEvalProofRunRequest): Promise<LlmEvalProofRunResponse> {
     const createdAt = new Date().toISOString();
     const candidates = normalizeEvalCandidates(input.candidates, this.listProviders());
     const warnings = [
@@ -127,7 +133,7 @@ export class LlmRuntimeTruthService {
       warnings.push("No configured provider candidates were available for this proof run.");
     }
 
-    const preliminary = candidates.map((candidate) => this.buildEvalCandidateResult(candidate));
+    const preliminary = await Promise.all(candidates.map((candidate) => this.buildEvalCandidateResult(candidate)));
     const results = markPareto(preliminary);
     const run: LlmEvalProofRunRecord = {
       runId: randomUUID(),
@@ -140,23 +146,23 @@ export class LlmRuntimeTruthService {
       results,
       warnings,
     };
-    this.storage.llmEvalProofRuns.insert(run);
+    await this.storage.llmEvalProofRuns.insert(run);
     return {
       generatedAt: createdAt,
       run,
     };
   }
 
-  public listEvalProofRuns(limit = 20): LlmEvalProofRunsResponse {
+  public async listEvalProofRuns(limit = 20): Promise<LlmEvalProofRunsResponse> {
     return {
       generatedAt: new Date().toISOString(),
-      items: this.storage.llmEvalProofRuns.list(limit),
+      items: await this.storage.llmEvalProofRuns.list(limit),
     };
   }
 
-  public exportEvalProofRuns(limit = 20): LlmEvalProofExportResponse {
+  public async exportEvalProofRuns(limit = 20): Promise<LlmEvalProofExportResponse> {
     const generatedAt = new Date().toISOString();
-    const runs = this.storage.llmEvalProofRuns.list(limit);
+    const runs = await this.storage.llmEvalProofRuns.list(limit);
     const payload = {
       version: "llm.eval_proof_export.v1" as const,
       generatedAt,
@@ -177,8 +183,8 @@ export class LlmRuntimeTruthService {
     };
   }
 
-  private buildEvalCandidateResult(candidate: LlmEvalProofCandidate): LlmEvalProofCandidateResult {
-    const latestMeasurement = this.storage.llmRuntimeMeasurements.latest(candidate.providerId, candidate.model);
+  private async buildEvalCandidateResult(candidate: LlmEvalProofCandidate): Promise<LlmEvalProofCandidateResult> {
+    const latestMeasurement = await this.storage.llmRuntimeMeasurements.latest(candidate.providerId, candidate.model);
     const notes: string[] = [];
     if (!latestMeasurement) {
       notes.push("No runtime measurement is available for this provider/model.");

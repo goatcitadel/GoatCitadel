@@ -6,12 +6,12 @@ import type { SurfaceRouteOverrideSignalInput } from "./improvement-service.js";
 
 export interface AutoRouteHost {
   surfaceRouter?: { route(req: SurfaceRouteRequest): Promise<SurfaceClassification> };
-  readChatSessionMode?(sessionId: string): ChatMode | undefined;
-  persistChatSessionMode?(sessionId: string, mode: ChatMode): void;
+  readChatSessionMode?(sessionId: string): Promise<ChatMode | undefined>;
+  persistChatSessionMode?(sessionId: string, mode: ChatMode): Promise<void>;
   normalizeWorkspaceId(workspaceId?: string): string;
   storage: {
-    chatSessionMeta: { ensure(sessionId: string): { workspaceId?: string } };
-    workspaces?: { find(workspaceId: string): { citadelId?: string } | undefined };
+    chatSessionMeta: { ensure(sessionId: string): Promise<{ workspaceId?: string }> };
+    workspaces?: { find(workspaceId: string): Promise<{ citadelId?: string } | undefined> };
   };
 }
 
@@ -25,22 +25,22 @@ export async function applyAutoRouteToInput(
   input: ChatSendMessageRequest,
 ): Promise<ChatSendMessageRequest> {
   if (input.mode !== undefined && input.mode !== "chat") {
-    host.persistChatSessionMode?.(sessionId, "chat");
+    await host.persistChatSessionMode?.(sessionId, "chat");
     return { ...input, mode: "chat", autoRoute: false };
   }
   if (!input.autoRoute || input.mode !== undefined || !host.surfaceRouter || !host.persistChatSessionMode) {
     return input.mode === undefined ? input : { ...input, mode: "chat" };
   }
-  const persistedMode = host.readChatSessionMode?.(sessionId);
+  const persistedMode = await host.readChatSessionMode?.(sessionId);
   if (persistedMode !== undefined) {
     if (persistedMode !== "chat") {
-      host.persistChatSessionMode(sessionId, "chat");
+      await host.persistChatSessionMode(sessionId, "chat");
     }
     return { ...input, mode: "chat", autoRoute: false };
   }
-  const sessionMeta = host.storage.chatSessionMeta.ensure(sessionId);
+  const sessionMeta = await host.storage.chatSessionMeta.ensure(sessionId);
   const workspaceId = host.normalizeWorkspaceId(sessionMeta.workspaceId);
-  const citadelId = host.storage.workspaces?.find(workspaceId)?.citadelId ?? DEFAULT_CITADEL_ID;
+  const citadelId = (await host.storage.workspaces?.find(workspaceId))?.citadelId ?? DEFAULT_CITADEL_ID;
   const classified = await host.surfaceRouter.route({
     prompt: input.content,
     citadelId,
@@ -50,18 +50,18 @@ export async function applyAutoRouteToInput(
     context: { hasBoundProject: false }, // TODO(#136 Phase 2): resolve the session's project binding to improve code-intent routing
   });
   void classified;
-  host.persistChatSessionMode(sessionId, "chat");
+  await host.persistChatSessionMode(sessionId, "chat");
   return { ...input, mode: "chat", autoRoute: false };
 }
 
 export interface ModeOverrideHost {
-  readChatSessionMode?(sessionId: string): ChatMode | undefined;
-  persistChatSessionMode?(sessionId: string, mode: ChatMode): void;
-  recordSurfaceRouteOverrideSignal?(input: SurfaceRouteOverrideSignalInput): void;
+  readChatSessionMode?(sessionId: string): Promise<ChatMode | undefined>;
+  persistChatSessionMode?(sessionId: string, mode: ChatMode): Promise<void>;
+  recordSurfaceRouteOverrideSignal?(input: SurfaceRouteOverrideSignalInput): Promise<void>;
   normalizeWorkspaceId(workspaceId?: string): string;
   storage: {
-    chatSessionMeta: { ensure(sessionId: string): { workspaceId?: string } };
-    workspaces?: { find(workspaceId: string): { citadelId?: string } | undefined };
+    chatSessionMeta: { ensure(sessionId: string): Promise<{ workspaceId?: string }> };
+    workspaces?: { find(workspaceId: string): Promise<{ citadelId?: string } | undefined> };
   };
 }
 
@@ -71,20 +71,20 @@ export interface ModeOverrideHost {
  * mode and record a learning signal. No-op on the first turn (no persisted mode)
  * or a sticky turn (mode unchanged).
  */
-export function recordModeOverrideIfChanged(
+export async function recordModeOverrideIfChanged(
   host: ModeOverrideHost,
   sessionId: string,
   input: ChatSendMessageRequest,
-): void {
+): Promise<void> {
   if (input.mode === undefined || !host.readChatSessionMode || !host.persistChatSessionMode) {
     return;
   }
-  const persistedMode = host.readChatSessionMode(sessionId);
+  const persistedMode = await host.readChatSessionMode(sessionId);
   if (persistedMode === undefined) {
     return;
   }
   if (persistedMode !== "chat") {
-    host.persistChatSessionMode(sessionId, "chat");
+    await host.persistChatSessionMode(sessionId, "chat");
   }
 }
 
@@ -101,7 +101,7 @@ export async function applySurfaceRoutingPreflight(
 ): Promise<ChatSendMessageRequest> {
   try {
     const routed = await applyAutoRouteToInput(host, sessionId, input);
-    recordModeOverrideIfChanged(host, sessionId, routed);
+    await recordModeOverrideIfChanged(host, sessionId, routed);
     return routed;
   } catch (error) {
     onError?.(error);

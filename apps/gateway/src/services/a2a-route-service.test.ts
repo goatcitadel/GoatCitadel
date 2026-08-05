@@ -5,7 +5,7 @@ import type {
   TaskDeliverableRecord,
   TaskRecord,
 } from "@goatcitadel/contracts";
-import { Storage } from "@goatcitadel/storage";
+import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import { projectA2AExternalValue } from "./a2a-public-projection.js";
 import { A2ARouteService } from "./a2a-route-service.js";
 import { buildInboundIdempotencyKey, normalizeInboundMessage } from "./a2a-route-utils.js";
@@ -1040,7 +1040,7 @@ describe("A2ARouteService", () => {
       },
       "2026-06-01T00:00:00.000Z",
     );
-    const events = harness.service.getHttpJsonTaskEvents(
+    const events = await harness.service.getHttpJsonTaskEvents(
       { peerId: "peer-1", scopes: ["a2a:http-json"] },
       { taskId: task.id, lastEventSequence: 0 },
       "2026-06-01T00:00:00.000Z",
@@ -1231,12 +1231,12 @@ describe("A2ARouteService", () => {
       "2026-06-01T00:00:00.000Z",
     );
     const jsonRpcTask = readResultTask(created);
-    const httpTask = harness.service.getHttpJsonTask(
+    const httpTask = await harness.service.getHttpJsonTask(
       { peerId: "peer-1", scopes: ["a2a:http-json"] },
       { taskId: jsonRpcTask.id },
       "2026-06-01T00:00:01.000Z",
     );
-    const httpEvents = harness.service.getHttpJsonTaskEvents(
+    const httpEvents = await harness.service.getHttpJsonTaskEvents(
       { peerId: "peer-1", scopes: ["a2a:http-json"] },
       { taskId: jsonRpcTask.id, lastEventSequence: 0 },
       "2026-06-01T00:00:01.000Z",
@@ -1385,6 +1385,7 @@ describe("A2ARouteService", () => {
       transcriptsDir: ".",
       auditDir: ".",
     });
+    const asyncStorage = createSqliteAsyncStorage(storage);
     const taskRecords = new Map<string, TaskRecord>();
     const activityRecords = new Map<string, Record<string, unknown>>();
     let nextTaskNumber = 1;
@@ -1511,7 +1512,7 @@ describe("A2ARouteService", () => {
     };
     let nextSessionNumber = 1;
     const stableSessions = new Map<string, string>();
-    const createChatSession = vi.fn((input: { stableKey?: string; workspaceId?: string }) => {
+    const createChatSession = vi.fn(async (input: { stableKey?: string; workspaceId?: string }) => {
       const stableKey = input.stableKey?.trim();
       if (stableKey) {
         const existing = stableSessions.get(stableKey);
@@ -1523,7 +1524,7 @@ describe("A2ARouteService", () => {
       if (stableKey) {
         stableSessions.set(stableKey, sessionId);
       }
-      storage!.chatSessionMeta.ensure(sessionId, "2026-06-01T00:00:00.000Z", input.workspaceId ?? "default");
+      await asyncStorage.chatSessionMeta.ensure(sessionId, "2026-06-01T00:00:00.000Z", input.workspaceId ?? "default");
       return { sessionId };
     });
     const service = new A2ARouteService({
@@ -1550,11 +1551,11 @@ describe("A2ARouteService", () => {
           },
         },
       } as never,
-      storage,
+      storage: asyncStorage,
       tasks,
       createChatSession,
       chatTurnRuntime,
-      mutationIdempotencyStore: storage.mutationIdempotency,
+      mutationIdempotencyStore: asyncStorage.mutationIdempotency,
       pushDeliveryFetch: options.pushDeliveryFetch,
     });
     return { service, storage, tasks, chatTurnRuntime, createChatSession, seedTask };

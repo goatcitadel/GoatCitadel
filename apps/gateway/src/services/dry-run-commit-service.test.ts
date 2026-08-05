@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { Storage } from "@goatcitadel/storage";
+import { Storage, createSqliteAsyncStorage } from "@goatcitadel/storage";
 import {
   approveDryRun,
   commitDryRun,
@@ -18,8 +18,8 @@ const PLANNED: DryRunPlannedAction = {
   payload: { flowId: "flow-1", body: { message: "send", to: "ops@example.com" } },
 };
 
-function preview(store = createInMemoryDryRunCommitStore()) {
-  const record = createDryRunPreview(store, {
+async function preview(store = createInMemoryDryRunCommitStore()) {
+  const record = await createDryRunPreview(store, {
     runId: "extfx-1",
     boundary: "integration_operator_action",
     plannedAction: PLANNED,
@@ -55,8 +55,8 @@ describe("dry-run-commit-service", () => {
   });
 
   describe("createDryRunPreview", () => {
-    it("yields a stable dryRunHash and an awaiting-commit record without crossing any boundary", () => {
-      const { record } = preview();
+    it("yields a stable dryRunHash and an awaiting-commit record without crossing any boundary", async () => {
+      const { record } = await preview();
       expect(record.state).toBe("awaiting_commit");
       expect(record.dryRunHash).toBe(computeDryRunHash(PLANNED));
       expect(record.approvedAt).toBeUndefined();
@@ -67,8 +67,11 @@ describe("dry-run-commit-service", () => {
 
   describe("commitDryRun", () => {
     it("commits and crosses the boundary EXACTLY ONCE when the committed action matches the approved dry-run", async () => {
-      const { store, record } = preview();
-      approveDryRun(store, record.dryRunId, { approvedBy: "operator", approvedAt: "2026-06-19T00:01:00.000Z" });
+      const { store, record } = await preview();
+      await approveDryRun(store, record.dryRunId, {
+        approvedBy: "operator",
+        approvedAt: "2026-06-19T00:01:00.000Z",
+      });
 
       const boundary = vi.fn(async () => ({ output: { id: "msg-123" } }));
       const result = await commitDryRun(store, {
@@ -91,8 +94,11 @@ describe("dry-run-commit-service", () => {
     });
 
     it("REJECTS the commit BEFORE the boundary when the committed action differs from the dry-run (the moat)", async () => {
-      const { store, record } = preview();
-      approveDryRun(store, record.dryRunId, { approvedBy: "operator", approvedAt: "2026-06-19T00:01:00.000Z" });
+      const { store, record } = await preview();
+      await approveDryRun(store, record.dryRunId, {
+        approvedBy: "operator",
+        approvedAt: "2026-06-19T00:01:00.000Z",
+      });
 
       const boundary = vi.fn(async () => ({ output: { id: "should-never-happen" } }));
       // The agent previewed sending to ops@example.com but tries to commit a drained-funds payload.
@@ -128,7 +134,7 @@ describe("dry-run-commit-service", () => {
     });
 
     it("refuses to commit an unapproved (but matching) dry-run before the boundary", async () => {
-      const { store, record } = preview();
+      const { store, record } = await preview();
       const boundary = vi.fn(async () => ({ output: { id: "x" } }));
 
       const result = await commitDryRun(store, {
@@ -149,8 +155,8 @@ describe("dry-run-commit-service", () => {
     });
 
     it("cannot be committed twice (second commit is refused, boundary not re-crossed)", async () => {
-      const { store, record } = preview();
-      approveDryRun(store, record.dryRunId, { approvedAt: "2026-06-19T00:01:00.000Z" });
+      const { store, record } = await preview();
+      await approveDryRun(store, record.dryRunId, { approvedAt: "2026-06-19T00:01:00.000Z" });
       const boundary = vi.fn(async () => ({ output: { id: "once" } }));
 
       const first = await commitDryRun(store, {
@@ -181,8 +187,8 @@ describe("dry-run-commit-service", () => {
     });
 
     it("records a durable diagnostic and surfaces reconciliation state when the matched commit fails downstream", async () => {
-      const { store, record } = preview();
-      approveDryRun(store, record.dryRunId, { approvedAt: "2026-06-19T00:01:00.000Z" });
+      const { store, record } = await preview();
+      await approveDryRun(store, record.dryRunId, { approvedAt: "2026-06-19T00:01:00.000Z" });
 
       const result = await commitDryRun(store, {
         dryRunId: record.dryRunId,
@@ -299,7 +305,8 @@ describe("dry-run-commit-service", () => {
     it("runs preview → refuse-unapproved → approve → commit against the sqlite-backed store", async () => {
       const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
       try {
-        const record = createDryRunPreview(storage.dryRunCommits, {
+        const asyncDryRunCommits = createSqliteAsyncStorage(storage).dryRunCommits;
+        const record = await createDryRunPreview(asyncDryRunCommits, {
           runId: "extfx-durable-1",
           boundary: "integration_operator_action",
           plannedAction: PLANNED,
@@ -309,7 +316,7 @@ describe("dry-run-commit-service", () => {
         });
         expect(storage.dryRunCommits.get(record.dryRunId)?.state).toBe("awaiting_commit");
 
-        const premature = await commitDryRun(storage.dryRunCommits, {
+        const premature = await commitDryRun(asyncDryRunCommits, {
           dryRunId: record.dryRunId,
           committedAction: PLANNED,
           committedAt: "2026-07-07T00:01:00.000Z",
@@ -318,12 +325,12 @@ describe("dry-run-commit-service", () => {
         expect(premature.status).toBe("rejected");
         expect(storage.dryRunCommits.get(record.dryRunId)?.diagnostic?.code).toBe("not_approved");
 
-        approveDryRun(storage.dryRunCommits, record.dryRunId, {
+        await approveDryRun(asyncDryRunCommits, record.dryRunId, {
           approvedBy: "operator",
           approvedAt: "2026-07-07T00:02:00.000Z",
         });
 
-        const committed = await commitDryRun(storage.dryRunCommits, {
+        const committed = await commitDryRun(asyncDryRunCommits, {
           dryRunId: record.dryRunId,
           committedAction: PLANNED,
           committedAt: "2026-07-07T00:03:00.000Z",

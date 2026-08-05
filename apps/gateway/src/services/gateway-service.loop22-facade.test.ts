@@ -138,6 +138,7 @@ function createDeferredInitHarness(overrides: Record<string, unknown> = {}) {
       startScheduler: vi.fn(),
       stopScheduler: vi.fn(),
     },
+    inboundChannelEventService: { start: vi.fn(async () => undefined) },
     llamaCppRuntime: { close: vi.fn(async () => undefined), init: vi.fn(async () => undefined) },
     isFeatureEnabled: vi.fn((flag: string) => flag === "chatTurnInterruptionRecoveryV1Disabled"),
     mediaVoiceService: { resumeInterruptedMediaJobs: vi.fn() },
@@ -421,8 +422,8 @@ describe("GatewayService memory consolidation scheduler", () => {
 });
 
 describe("GatewayService loop 22 durable and async lifecycle helpers", () => {
-  it("delegates durable run-state updates to DurableRunService (body moved in B2)", () => {
-    const updateRunState = vi.fn((input: Record<string, unknown>) => ({ ...input, version: 8 }));
+  it("delegates durable run-state updates to DurableRunService (body moved in B2)", async () => {
+    const updateRunState = vi.fn(async (input: Record<string, unknown>) => ({ ...input, version: 8 }));
     const gateway = createGatewayHarness({
       durableRunService: { updateRunState },
     });
@@ -434,7 +435,7 @@ describe("GatewayService loop 22 durable and async lifecycle helpers", () => {
       clearLastError: true,
       finishedAt: "2026-05-14T21:30:00.000Z",
     };
-    expect(GatewayService.prototype.updateDurableRunState.call(gateway, input)).toMatchObject({
+    expect(await GatewayService.prototype.updateDurableRunState.call(gateway, input)).toMatchObject({
       runId: "run-1",
       status: "completed",
       version: 8,
@@ -442,21 +443,21 @@ describe("GatewayService loop 22 durable and async lifecycle helpers", () => {
     expect(updateRunState).toHaveBeenCalledWith(input);
   });
 
-  it("delegates realtime publishing and creates checkpoints with the current git ref", () => {
+  it("delegates realtime publishing and creates checkpoints with the current git ref", async () => {
     const gateway = createGatewayHarness({
       getGitHead: vi.fn(() => "abc123"),
       realtimeEventService: {
-        publishRealtime: vi.fn(() => ({ eventId: "event-1" })),
+        publishRealtime: vi.fn(async () => ({ eventId: "event-1" })),
       },
       storage: {
         orchestration: {
-          createCheckpoint: vi.fn((input: Record<string, unknown>) => ({ checkpointId: "cp-1", ...input })),
+          createCheckpoint: vi.fn(async (input: Record<string, unknown>) => ({ checkpointId: "cp-1", ...input })),
         },
       },
     });
 
     expect(
-      GatewayService.prototype.publishRealtime.call(
+      await GatewayService.prototype.publishRealtime.call(
         gateway,
         "system",
         "tests",
@@ -472,7 +473,7 @@ describe("GatewayService loop 22 durable and async lifecycle helpers", () => {
     );
 
     expect(
-      GatewayService.prototype.createCheckpoint.call(gateway, {
+      await GatewayService.prototype.createCheckpoint.call(gateway, {
         runId: "run-1",
         phaseId: "phase-1",
         type: "phase_started",

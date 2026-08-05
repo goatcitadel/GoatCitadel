@@ -4,7 +4,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage, Storage } from "@goatcitadel/storage";
 
 const mocked = vi.hoisted(() => ({
   isBrowserToolName: vi.fn<(name: string) => boolean>(),
@@ -63,7 +63,7 @@ const storageStub = {
     find: findPendingApprovalAction,
     findFreshPending: vi.fn(() => findPendingApprovalAction()),
   },
-} as unknown as Storage;
+} as unknown as Storage & AsyncStorage;
 
 const policyConfig: ToolPolicyConfig = {
   profiles: {
@@ -91,7 +91,7 @@ describe("executeTool", () => {
     mocked.isBrowserToolName.mockReset();
     mocked.executeBrowserTool.mockReset();
     vi.mocked(storageStub.approvals.get).mockReset();
-    vi.mocked(storageStub.approvals.get).mockImplementation((approvalId: string) => ({
+    vi.mocked(storageStub.approvals.get).mockImplementation(async (approvalId: string) => ({
       approvalId,
       kind: "tool",
       riskLevel: "caution",
@@ -102,7 +102,7 @@ describe("executeTool", () => {
       explanationStatus: "not_requested",
     }));
     vi.mocked(storageStub.pendingApprovalActions.find).mockReset();
-    vi.mocked(storageStub.pendingApprovalActions.find).mockReturnValue(undefined);
+    vi.mocked(storageStub.pendingApprovalActions.find).mockResolvedValue(undefined);
   });
 
   afterEach(async () => {
@@ -193,7 +193,7 @@ describe("executeTool", () => {
       chatSessionMeta: {
         get: vi.fn(() => ({ workspaceId: "workspace-search", includeInHistory: true })),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const request: ToolInvokeRequest = {
       toolName: "session.search",
@@ -226,7 +226,7 @@ describe("executeTool", () => {
       chatSessionMeta: {
         get: vi.fn(() => ({ workspaceId: "workspace-search", includeInHistory: true })),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const request: ToolInvokeRequest = {
       toolName: "session.search",
@@ -274,7 +274,7 @@ describe("executeTool", () => {
             : { workspaceId: "workspace-search", includeInHistory: sessionId !== "hidden" },
         ),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -332,7 +332,7 @@ describe("executeTool", () => {
       chatSessionMeta: {
         get: vi.fn(() => ({ workspaceId: "workspace-search", includeInHistory: true })),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -375,7 +375,7 @@ describe("executeTool", () => {
               : { workspaceId: "workspace-foreign", includeInHistory: true },
         ),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
     const base = {
       toolName: "session.history",
       agentId: "agent",
@@ -403,7 +403,7 @@ describe("executeTool", () => {
   it("session.search returns empty without hitting the repo for a blank query", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const searchMessages = vi.fn(() => []);
-    const searchStorage = { chatMessages: { searchMessages } } as unknown as Storage;
+    const searchStorage = { chatMessages: { searchMessages } } as unknown as Storage & AsyncStorage;
 
     const request: ToolInvokeRequest = {
       toolName: "session.search",
@@ -495,7 +495,7 @@ describe("executeTool", () => {
           },
         ]),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     try {
       const result = await executeTool(
@@ -554,7 +554,7 @@ describe("executeTool", () => {
     );
     const storageWithGrant = {
       toolGrants: { listActive },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     try {
       const result = await executeTool(
@@ -631,7 +631,7 @@ describe("executeTool", () => {
         listChunksByDocument: vi.fn((docId: string) => chunksByDocId.get(docId) ?? []),
         listChunksByNamespace: vi.fn(() => []),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     try {
       const result = await executeTool(
@@ -680,7 +680,7 @@ describe("executeTool", () => {
           },
         ]),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     try {
       await expect(
@@ -727,7 +727,7 @@ describe("executeTool", () => {
           },
         ]),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     try {
       await expect(
@@ -781,7 +781,7 @@ describe("executeTool", () => {
           ];
         }),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     try {
       const result = await executeTool(
@@ -812,7 +812,7 @@ describe("executeTool", () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const filePath = path.join(os.tmpdir(), `tool-executor-approved-${randomUUID()}.ts`);
     await fs.writeFile(filePath, ["alpha", "beta"].join("\n"), "utf8");
-    vi.mocked(storageStub.pendingApprovalActions.find).mockReturnValue({
+    vi.mocked(storageStub.pendingApprovalActions.find).mockResolvedValue({
       approvalId: "apr_read_123",
       actionType: "tool.invoke",
       request: {
@@ -861,7 +861,7 @@ describe("executeTool", () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const filePath = path.join(os.tmpdir(), `tool-executor-roots-only-${randomUUID()}.ts`);
     await fs.writeFile(filePath, ["alpha", "beta"].join("\n"), "utf8");
-    vi.mocked(storageStub.pendingApprovalActions.find).mockReturnValue({
+    vi.mocked(storageStub.pendingApprovalActions.find).mockResolvedValue({
       approvalId: "apr_roots_only",
       actionType: "tool.invoke",
       request: {
@@ -1017,7 +1017,7 @@ describe("executeTool", () => {
           },
         ]),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const request: ToolInvokeRequest = {
       toolName: "memory.read",
@@ -1263,7 +1263,7 @@ describe("executeTool", () => {
         requireApprovalForRiskyShell: true,
       },
     };
-    vi.mocked(storageStub.pendingApprovalActions.find).mockReturnValue({
+    vi.mocked(storageStub.pendingApprovalActions.find).mockResolvedValue({
       approvalId: "apr_123",
       actionType: "tool.invoke",
       request: {
@@ -1355,7 +1355,7 @@ describe("executeTool", () => {
         requireApprovalForRiskyShell: true,
       },
     };
-    vi.mocked(storageStub.pendingApprovalActions.find).mockReturnValue({
+    vi.mocked(storageStub.pendingApprovalActions.find).mockResolvedValue({
       approvalId: "apr_bg_123",
       actionType: "tool.invoke",
       request: {
@@ -1443,7 +1443,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const request: ToolInvokeRequest = {
       toolName: "channel.send",
@@ -1482,7 +1482,7 @@ describe("executeTool", () => {
       {
         resolveApprovalActionTokenSecret,
         deleteApprovalActionTokenSecret,
-        isApprovalActionConnectorReady: vi.fn(() => true),
+        isApprovalActionConnectorReady: vi.fn(async () => true),
       },
     );
 
@@ -1550,7 +1550,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -1641,7 +1641,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed,
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -1710,7 +1710,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed,
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -1794,7 +1794,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed,
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -1861,7 +1861,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed,
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -1928,7 +1928,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed,
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -1998,7 +1998,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed,
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -2065,7 +2065,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed,
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -2118,7 +2118,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed,
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -2197,7 +2197,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -2260,7 +2260,7 @@ describe("executeTool", () => {
         }),
         markFailed,
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -2328,7 +2328,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -2406,7 +2406,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     await executeTool(
       {
@@ -2477,7 +2477,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -2547,7 +2547,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed,
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -2614,7 +2614,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -2718,7 +2718,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -2806,7 +2806,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -2866,7 +2866,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -2930,7 +2930,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     await executeTool(
       {
@@ -3002,7 +3002,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -3100,7 +3100,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -3208,7 +3208,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -3294,7 +3294,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -3377,7 +3377,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -3461,7 +3461,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     await executeTool(
       {
@@ -3519,7 +3519,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -3585,7 +3585,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -3672,7 +3672,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -3772,7 +3772,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -3871,7 +3871,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -3983,7 +3983,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -4129,7 +4129,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -4240,7 +4240,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -4310,7 +4310,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -4381,7 +4381,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -4454,7 +4454,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -4514,7 +4514,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -4581,7 +4581,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -4648,7 +4648,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -4714,7 +4714,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -4843,7 +4843,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -4968,7 +4968,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -5050,7 +5050,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -5146,7 +5146,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -5241,7 +5241,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -5308,7 +5308,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -5372,7 +5372,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -5456,7 +5456,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -5548,7 +5548,7 @@ describe("executeTool", () => {
         markSent: vi.fn(),
         markFailed: vi.fn(),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeTool(
       {
@@ -5684,7 +5684,7 @@ describe("executeTool", () => {
           },
         ]),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     try {
       const result = await executeTool(
@@ -5751,7 +5751,7 @@ describe("executeTool", () => {
           return matchingDocIds.flatMap((docId) => chunksByDocId.get(docId) ?? []);
         }),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const ingestRequest: ToolInvokeRequest = {
       toolName: "docs.ingest",
@@ -5828,7 +5828,7 @@ describe("executeTool", () => {
         listChunksByDocument: vi.fn((docId: string) => chunksByDocId.get(docId) ?? []),
         listChunksByNamespace: vi.fn(() => []),
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     vi.stubGlobal(
       "fetch",
@@ -6497,7 +6497,7 @@ function toolRequest(toolName: string, args: Record<string, unknown>): ToolInvok
   };
 }
 
-function createExecutorKnowledgeHarness(): { storage: Storage } {
+function createExecutorKnowledgeHarness(): { storage: Storage & AsyncStorage } {
   const documents: Array<Record<string, unknown>> = [];
   const chunksByDocId = new Map<string, Array<Record<string, unknown>>>();
   let documentSeq = 0;
@@ -6556,7 +6556,7 @@ function createExecutorKnowledgeHarness(): { storage: Storage } {
         },
       ),
     },
-  } as unknown as Storage;
+  } as unknown as Storage & AsyncStorage;
 
   return { storage };
 }

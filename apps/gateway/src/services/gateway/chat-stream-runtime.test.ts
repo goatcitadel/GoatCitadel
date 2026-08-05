@@ -4,7 +4,7 @@ import { ChatTurnExecutionRegistry, ChatTurnStreamRegistrationMismatchError } fr
 import { GatewayChatStreamRuntime } from "./chat-stream-runtime.js";
 
 describe("GatewayChatStreamRuntime registration identity", () => {
-  it("rejects stale producer deltas before they can mutate the resumed stream projector", () => {
+  it("rejects stale producer deltas before they can mutate the resumed stream projector", async () => {
     const appended: Array<{ payload: Record<string, unknown> }> = [];
     const registry = new ChatTurnExecutionRegistry();
     const storage = {
@@ -21,8 +21,8 @@ describe("GatewayChatStreamRuntime registration identity", () => {
       initialLastChatStreamPurgeAt: Date.now(),
     });
 
-    const pausedAttempt = runtime.registerActiveChatTurnStream("session-1", "turn-1", "run-1");
-    runtime.persistChatStreamChunk(
+    const pausedAttempt = await runtime.registerActiveChatTurnStream("session-1", "turn-1", "run-1");
+    await runtime.persistChatStreamChunk(
       {
         type: "delta",
         sessionId: "session-1",
@@ -33,12 +33,12 @@ describe("GatewayChatStreamRuntime registration identity", () => {
       "run-1",
       pausedAttempt,
     );
-    const resumedAttempt = runtime.registerActiveChatTurnStream("session-1", "turn-1", "run-1", {
+    const resumedAttempt = await runtime.registerActiveChatTurnStream("session-1", "turn-1", "run-1", {
       continuation: true,
     });
     const appendCountBeforeStaleWrite = appended.length;
 
-    expect(() =>
+    await expect(
       runtime.persistChatStreamChunk(
         {
           type: "delta",
@@ -50,7 +50,7 @@ describe("GatewayChatStreamRuntime registration identity", () => {
         "run-1",
         pausedAttempt,
       ),
-    ).toThrow(ChatTurnStreamRegistrationMismatchError);
+    ).rejects.toThrow(ChatTurnStreamRegistrationMismatchError);
     expect(appended).toHaveLength(appendCountBeforeStaleWrite);
 
     expect(runtime.completeActiveChatTurnStream("turn-1", pausedAttempt.registrationId)).toBe(false);
@@ -58,7 +58,7 @@ describe("GatewayChatStreamRuntime registration identity", () => {
     expect(runtime.getActiveChatTurnStream("turn-1")).toBe(resumedAttempt);
     expect(resumedAttempt.completed).toBe(false);
 
-    runtime.persistChatStreamChunk(
+    await runtime.persistChatStreamChunk(
       {
         type: "delta",
         sessionId: "session-1",
@@ -74,7 +74,7 @@ describe("GatewayChatStreamRuntime registration identity", () => {
     expect(appended.at(-1)?.payload).toMatchObject({ type: "delta" });
   });
 
-  it("rejects stale producer terminal chunks without resetting the resumed stream projector", () => {
+  it("rejects stale producer terminal chunks without resetting the resumed stream projector", async () => {
     const appended: Array<{ payload: Record<string, unknown> }> = [];
     const registry = new ChatTurnExecutionRegistry();
     const runtime = new GatewayChatStreamRuntime({
@@ -90,8 +90,8 @@ describe("GatewayChatStreamRuntime registration identity", () => {
       initialLastChatStreamPurgeAt: Date.now(),
     });
 
-    const pausedAttempt = runtime.registerActiveChatTurnStream("session-1", "turn-1", "run-1");
-    runtime.persistChatStreamChunk(
+    const pausedAttempt = await runtime.registerActiveChatTurnStream("session-1", "turn-1", "run-1");
+    await runtime.persistChatStreamChunk(
       {
         type: "delta",
         sessionId: "session-1",
@@ -102,12 +102,12 @@ describe("GatewayChatStreamRuntime registration identity", () => {
       "run-1",
       pausedAttempt,
     );
-    const resumedAttempt = runtime.registerActiveChatTurnStream("session-1", "turn-1", "run-1", {
+    const resumedAttempt = await runtime.registerActiveChatTurnStream("session-1", "turn-1", "run-1", {
       continuation: true,
     });
     const appendCountBeforeStaleTerminal = appended.length;
 
-    expect(() =>
+    await expect(
       runtime.persistChatStreamChunk(
         {
           type: "done",
@@ -118,11 +118,11 @@ describe("GatewayChatStreamRuntime registration identity", () => {
         "run-1",
         pausedAttempt,
       ),
-    ).toThrow(ChatTurnStreamRegistrationMismatchError);
+    ).rejects.toThrow(ChatTurnStreamRegistrationMismatchError);
     expect(appended).toHaveLength(appendCountBeforeStaleTerminal);
     expect(runtime.getActiveChatTurnStream("turn-1")).toBe(resumedAttempt);
 
-    runtime.persistChatStreamChunk(
+    await runtime.persistChatStreamChunk(
       {
         type: "delta",
         sessionId: "session-1",
@@ -137,7 +137,7 @@ describe("GatewayChatStreamRuntime registration identity", () => {
     expect(JSON.stringify(appended)).not.toContain("hunter2");
   });
 
-  it("keeps resumed text suppressed even after retained stream events expire", () => {
+  it("keeps resumed text suppressed even after retained stream events expire", async () => {
     const appended: Array<{ payload: Record<string, unknown> }> = [];
     const runtime = new GatewayChatStreamRuntime({
       storage: {
@@ -152,13 +152,13 @@ describe("GatewayChatStreamRuntime registration identity", () => {
       initialLastChatStreamPurgeAt: Date.now(),
     });
 
-    runtime.registerActiveChatTurnStream("session-1", "turn-expired", "run-1", {
+    await runtime.registerActiveChatTurnStream("session-1", "turn-expired", "run-1", {
       continuation: false,
     });
-    const resumedAttempt = runtime.registerActiveChatTurnStream("session-1", "turn-expired", "run-1", {
+    const resumedAttempt = await runtime.registerActiveChatTurnStream("session-1", "turn-expired", "run-1", {
       continuation: true,
     });
-    runtime.persistChatStreamChunk(
+    await runtime.persistChatStreamChunk(
       {
         type: "delta",
         sessionId: "session-1",
@@ -174,7 +174,7 @@ describe("GatewayChatStreamRuntime registration identity", () => {
     expect(JSON.stringify(appended)).not.toContain("ordinary public response");
   });
 
-  it("keeps a fresh durable producer live when only message_start was already persisted", () => {
+  it("keeps a fresh durable producer live when only message_start was already persisted", async () => {
     const appended: Array<{ payload: Record<string, unknown> }> = [];
     const runtime = new GatewayChatStreamRuntime({
       storage: {
@@ -189,8 +189,8 @@ describe("GatewayChatStreamRuntime registration identity", () => {
       initialLastChatStreamPurgeAt: Date.now(),
     });
 
-    const producer = runtime.registerActiveChatTurnStream("session-1", "turn-fresh", "run-1");
-    runtime.persistChatStreamChunk(
+    const producer = await runtime.registerActiveChatTurnStream("session-1", "turn-fresh", "run-1");
+    await runtime.persistChatStreamChunk(
       {
         type: "delta",
         sessionId: "session-1",
@@ -205,7 +205,7 @@ describe("GatewayChatStreamRuntime registration identity", () => {
     expect(appended.at(-1)?.payload).toMatchObject({ type: "delta", delta: "ordinary public response.\n" });
   });
 
-  it("falls back to retained sequence truth when no explicit continuation signal is supplied", () => {
+  it("falls back to retained sequence truth when no explicit continuation signal is supplied", async () => {
     const appended: Array<{ payload: Record<string, unknown> }> = [];
     const runtime = new GatewayChatStreamRuntime({
       storage: {
@@ -220,10 +220,10 @@ describe("GatewayChatStreamRuntime registration identity", () => {
       initialLastChatStreamPurgeAt: Date.now(),
     });
 
-    const producer = runtime.registerActiveChatTurnStream("session-1", "turn-resumed", "run-1", {
+    const producer = await runtime.registerActiveChatTurnStream("session-1", "turn-resumed", "run-1", {
       continuation: false,
     });
-    runtime.persistChatStreamChunk(
+    await runtime.persistChatStreamChunk(
       {
         type: "delta",
         sessionId: "session-1",
@@ -238,7 +238,7 @@ describe("GatewayChatStreamRuntime registration identity", () => {
     expect(appended.at(-1)?.payload).toMatchObject({ type: "delta", delta: "" });
   });
 
-  it("rejects a producer lease presented for another turn", () => {
+  it("rejects a producer lease presented for another turn", async () => {
     const runtime = new GatewayChatStreamRuntime({
       storage: {
         chatStreamEvents: {
@@ -251,9 +251,9 @@ describe("GatewayChatStreamRuntime registration identity", () => {
       createHydratedChatTurnTrace: (_turnId, trace) => trace,
       initialLastChatStreamPurgeAt: Date.now(),
     });
-    const producer = runtime.registerActiveChatTurnStream("session-1", "turn-1", "run-1");
+    const producer = await runtime.registerActiveChatTurnStream("session-1", "turn-1", "run-1");
 
-    expect(() =>
+    await expect(
       runtime.persistChatStreamChunk(
         {
           type: "delta",
@@ -265,7 +265,7 @@ describe("GatewayChatStreamRuntime registration identity", () => {
         "run-1",
         producer,
       ),
-    ).toThrow(ChatTurnStreamRegistrationMismatchError);
+    ).rejects.toThrow(ChatTurnStreamRegistrationMismatchError);
   });
 });
 

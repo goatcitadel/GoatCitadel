@@ -157,7 +157,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
           traceId: readTraceId(request.headers.traceparent, request.headers["x-goatcitadel-correlation-id"]),
           originSurface: readHeaderValue(request.headers["x-goatcitadel-origin-surface"]),
         });
-        markMutationCommitted(request);
+        await markMutationCommitted(request);
         return reply.code(201).send(created);
       } catch (error) {
         return reply.code(400).send({
@@ -249,7 +249,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       // throws, this is skipped and the Idempotency-Key is revived, so a retry
       // re-runs the revoke — safe only because revoke is idempotent (COALESCE
       // guards make re-revoking an already-revoked session a no-op).
-      markMutationCommitted(request);
+      await markMutationCommitted(request);
       return reply.send(result);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -280,7 +280,9 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
 
-    const items = authAdmin.listDeviceAccessGrants().filter((item) => parsed.data.view === "all" || !item.revokedAt);
+    const items = (await authAdmin.listDeviceAccessGrants()).filter(
+      (item) => parsed.data.view === "all" || !item.revokedAt,
+    );
     return reply.send({ items });
   });
 
@@ -300,7 +302,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       // throws, this is skipped and the Idempotency-Key is revived, so a retry
       // re-runs the revoke — safe only because revoke is idempotent (COALESCE
       // guards make re-revoking an already-revoked grant a no-op).
-      markMutationCommitted(request);
+      await markMutationCommitted(request);
       return reply.send({ grant });
     } catch (error) {
       const message = (error as Error).message;

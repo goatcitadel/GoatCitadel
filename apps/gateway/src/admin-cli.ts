@@ -94,7 +94,7 @@ async function runRetentionCommand(
   args: string[],
 ): Promise<void> {
   if (action === "show") {
-    console.log(JSON.stringify(gateway.getRetentionPolicy(), null, 2));
+    console.log(JSON.stringify(await gateway.getRetentionPolicy(), null, 2));
     return;
   }
 
@@ -103,7 +103,7 @@ async function runRetentionCommand(
     const backupKeep = readFlag(args, "--backup-keep");
     const transcriptDays = readFlag(args, "--transcript-days");
     const auditDays = readFlag(args, "--audit-days");
-    const updated = gateway.updateRetentionPolicy({
+    const updated = await gateway.updateRetentionPolicy({
       realtimeEventsDays: realtimeDays ? Number.parseInt(realtimeDays, 10) : undefined,
       backupsKeep: backupKeep ? Number.parseInt(backupKeep, 10) : undefined,
       transcriptsDays: parseOptionalDays(transcriptDays),

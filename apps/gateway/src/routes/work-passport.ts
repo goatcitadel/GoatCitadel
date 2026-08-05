@@ -24,10 +24,10 @@ export const workPassportRoutes: FastifyPluginAsync = async (fastify, _opts) => 
     }
     try {
       const query = parsed.data;
-      fastify.services.workspaces.getWorkspace(query.workspaceId);
+      await fastify.services.workspaces.getWorkspace(query.workspaceId);
       const response: WorkPassportBaselineResponse = {
         workspaceId: query.workspaceId,
-        baseline: fastify.gatewayRuntime.workPassportService.getBaseline(query.workspaceId),
+        baseline: await fastify.gatewayRuntime.workPassportService.getBaseline(query.workspaceId),
       };
       return reply.send(response);
     } catch (error) {
@@ -42,10 +42,10 @@ export const workPassportRoutes: FastifyPluginAsync = async (fastify, _opts) => 
     }
     try {
       const body = parsed.data;
-      fastify.services.workspaces.getWorkspace(body.workspaceId);
+      await fastify.services.workspaces.getWorkspace(body.workspaceId);
       const response: WorkPassportBaselineResponse = {
         workspaceId: body.workspaceId,
-        baseline: fastify.gatewayRuntime.workPassportService.updateBaseline(body),
+        baseline: await fastify.gatewayRuntime.workPassportService.updateBaseline(body),
       };
       return reply.send(response);
     } catch (error) {

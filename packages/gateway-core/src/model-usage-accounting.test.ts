@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, it } from "vitest";
-import { Storage } from "@goatcitadel/storage";
+import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import {
   ModelUsageAccountingService,
   ModelUsageDispatchPersistenceError,
@@ -34,7 +34,12 @@ function createHarness(): { storage: Storage; accounting: ModelUsageAccountingSe
   storages.push(storage);
   return {
     storage,
-    accounting: new ModelUsageAccountingService(storage.modelUsageEvents, "gateway-owner-test", 60_000, 60_000),
+    accounting: new ModelUsageAccountingService(
+      createSqliteAsyncStorage(storage).modelUsageEvents,
+      "gateway-owner-test",
+      60_000,
+      60_000,
+    ),
   };
 }
 
@@ -76,18 +81,18 @@ function dispatchInput(overrides: Partial<BeginModelUsageDispatchInput> = {}): B
   };
 }
 
-function invokeFetch<T>(
+async function invokeFetch<T>(
   reservation: ModelUsageDispatchReservation,
   fetcher: () => Promise<T>,
-): { pending: Promise<T>; handle: ReturnType<ModelUsageDispatchReservation["accept"]> } {
+): Promise<{ pending: Promise<T>; handle: Awaited<ReturnType<ModelUsageDispatchReservation["accept"]>> }> {
   let pending: Promise<T>;
   try {
     pending = fetcher();
   } catch (error) {
-    reservation.abandon();
+    await reservation.abandon();
     throw error;
   }
-  return { pending, handle: reservation.accept() };
+  return { pending, handle: await reservation.accept() };
 }
 
 // Every case uses a real SQLite database. Concurrent package coverage on the
@@ -102,26 +107,22 @@ describe("ModelUsageAccountingService", { timeout: 20_000 }, () => {
       if (finalizeCalls === 1) throw new Error("injected settlement persistence fault");
       return originalFinalize(...args);
     }) as typeof storage.modelUsageEvents.finalizeAndProject;
-    const call = invokeFetch(accounting.prepareDispatch(dispatchInput()), () => Promise.resolve({ ok: true }));
+    const call = await invokeFetch(await accounting.prepareDispatch(dispatchInput()), () =>
+      Promise.resolve({ ok: true }),
+    );
     await call.pending;
 
     let settlement: unknown;
     try {
-      call.handle.succeed({ prompt_tokens: 3, completion_tokens: 1 });
+      await call.handle.succeed({ prompt_tokens: 3, completion_tokens: 1 });
     } catch (error) {
       settlement = error;
     }
 
     assert.ok(settlement instanceof ModelUsageSettlementError);
     assert.equal(settlement.intendedOutcome, "succeeded");
-    assert.throws(
-      () => call.handle.fail(new Error("late reclassification")),
-      (error) => error === settlement,
-    );
-    assert.throws(
-      () => call.handle.cancel(),
-      (error) => error === settlement,
-    );
+    await assert.rejects(call.handle.fail(new Error("late reclassification")), (error) => error === settlement);
+    await assert.rejects(call.handle.cancel(), (error) => error === settlement);
     assert.equal(finalizeCalls, 1);
     assert.equal(storage.modelUsageEvents.findByEventId(call.handle.eventId)?.terminalOutcome, "in_flight");
   });
@@ -135,25 +136,26 @@ describe("ModelUsageAccountingService", { timeout: 20_000 }, () => {
       if (finalizeCalls === 1) throw new Error("injected failure settlement persistence fault");
       return originalFinalize(...args);
     }) as typeof storage.modelUsageEvents.finalizeAndProject;
-    const call = invokeFetch(accounting.prepareDispatch(dispatchInput()), () => Promise.resolve({ ok: false }));
+    const call = await invokeFetch(await accounting.prepareDispatch(dispatchInput()), () =>
+      Promise.resolve({ ok: false }),
+    );
     await call.pending;
 
-    assert.throws(
-      () => call.handle.fail(new Error("provider transport rejected")),
+    await assert.rejects(
+      call.handle.fail(new Error("provider transport rejected")),
       (error: unknown) => error instanceof ModelUsageSettlementError && error.intendedOutcome === "failed_before_usage",
     );
     assert.equal(finalizeCalls, 1);
     assert.equal(storage.modelUsageEvents.findByEventId(call.handle.eventId)?.terminalOutcome, "in_flight");
   });
 
-  it("abandons a synchronous fetch throw without counting a network attempt", () => {
+  it("abandons a synchronous fetch throw without counting a network attempt", async () => {
     const { storage, accounting } = createHarness();
-    const reservation = accounting.prepareDispatch(dispatchInput());
-    assert.throws(
-      () =>
-        invokeFetch(reservation, () => {
-          throw new TypeError("invalid fetch input");
-        }),
+    const reservation = await accounting.prepareDispatch(dispatchInput());
+    await assert.rejects(
+      invokeFetch(reservation, () => {
+        throw new TypeError("invalid fetch input");
+      }),
       /invalid fetch input/u,
     );
     assert.equal(storage.modelUsageEvents.findByEventId(reservation.eventId), undefined);
@@ -164,9 +166,9 @@ describe("ModelUsageAccountingService", { timeout: 20_000 }, () => {
   // and sits close to vitest's 5s default under CI load. The suite ran under
   // node:test before, which applied no such default, so the margin was never
   // exercised. Give it explicit headroom rather than leaving it marginal.
-  it("makes an intent-abandon persistence fault authoritative over a synchronous fetch error", () => {
+  it("makes an intent-abandon persistence fault authoritative over a synchronous fetch error", async () => {
     const { storage, accounting } = createHarness();
-    const reservation = accounting.prepareDispatch(dispatchInput());
+    const reservation = await accounting.prepareDispatch(dispatchInput());
     let abandonCalls = 0;
     storage.modelUsageEvents.abandonTransportIntent = ((
       ..._args: Parameters<typeof storage.modelUsageEvents.abandonTransportIntent>
@@ -175,11 +177,10 @@ describe("ModelUsageAccountingService", { timeout: 20_000 }, () => {
       throw new Error("injected abandon persistence fault");
     }) as typeof storage.modelUsageEvents.abandonTransportIntent;
 
-    assert.throws(
-      () =>
-        invokeFetch(reservation, () => {
-          throw new TypeError("invalid fetch input");
-        }),
+    await assert.rejects(
+      invokeFetch(reservation, () => {
+        throw new TypeError("invalid fetch input");
+      }),
       (error: unknown) =>
         error instanceof ModelUsageDispatchPersistenceError &&
         error.action === "abandon_intent" &&
@@ -189,9 +190,9 @@ describe("ModelUsageAccountingService", { timeout: 20_000 }, () => {
     assert.equal(storage.modelUsageEvents.findByEventId(reservation.eventId)?.transportStatus, "intent");
   }, 20_000);
 
-  it("makes a dispatch-unknown persistence fault authoritative and leaves recovery ownership intact", () => {
+  it("makes a dispatch-unknown persistence fault authoritative and leaves recovery ownership intact", async () => {
     const { storage, accounting } = createHarness();
-    const reservation = accounting.prepareDispatch(dispatchInput());
+    const reservation = await accounting.prepareDispatch(dispatchInput());
     let markCalls = 0;
     storage.modelUsageEvents.markDispatchUnknown = ((
       ..._args: Parameters<typeof storage.modelUsageEvents.markDispatchUnknown>
@@ -200,8 +201,8 @@ describe("ModelUsageAccountingService", { timeout: 20_000 }, () => {
       throw new Error("injected dispatch-unknown persistence fault");
     }) as typeof storage.modelUsageEvents.markDispatchUnknown;
 
-    assert.throws(
-      () => reservation.markDispatchUnknown(),
+    await assert.rejects(
+      reservation.markDispatchUnknown(),
       (error: unknown) =>
         error instanceof ModelUsageDispatchPersistenceError &&
         error.action === "mark_dispatch_unknown" &&
@@ -213,7 +214,9 @@ describe("ModelUsageAccountingService", { timeout: 20_000 }, () => {
 
   it("makes an accepted lease-renewal persistence fault authoritative and leaves recovery ownership intact", async () => {
     const { storage, accounting } = createHarness();
-    const call = invokeFetch(accounting.prepareDispatch(dispatchInput()), () => Promise.resolve({ ok: true }));
+    const call = await invokeFetch(await accounting.prepareDispatch(dispatchInput()), () =>
+      Promise.resolve({ ok: true }),
+    );
     await call.pending;
     let renewCalls = 0;
     storage.modelUsageEvents.renewTransportLease = ((
@@ -223,8 +226,8 @@ describe("ModelUsageAccountingService", { timeout: 20_000 }, () => {
       throw new Error("injected accepted lease-renewal persistence fault");
     }) as typeof storage.modelUsageEvents.renewTransportLease;
 
-    assert.throws(
-      () => call.handle.renewLease(Date.now() + 60_000),
+    await assert.rejects(
+      call.handle.renewLease(Date.now() + 60_000),
       (error: unknown) =>
         error instanceof ModelUsageDispatchPersistenceError &&
         error.action === "renew_accepted_lease" &&
@@ -238,11 +241,11 @@ describe("ModelUsageAccountingService", { timeout: 20_000 }, () => {
 
   it("records promise rejection as failed_before_usage", async () => {
     const { storage, accounting } = createHarness();
-    const reservation = accounting.prepareDispatch(dispatchInput());
+    const reservation = await accounting.prepareDispatch(dispatchInput());
     const failure = new Error("provider unavailable");
-    const { pending, handle } = invokeFetch(reservation, () => Promise.reject(failure));
+    const { pending, handle } = await invokeFetch(reservation, () => Promise.reject(failure));
     await assert.rejects(pending, /provider unavailable/u);
-    const record = handle.fail(failure);
+    const record = await handle.fail(failure);
     assert.equal(record.terminalOutcome, "failed_before_usage");
     assert.equal(record.availability, "unknown");
     assert.equal(storage.modelUsageEvents.list({ workspaceId: "workspace-1" }).summary.unknownAttemptCount, 1);
@@ -250,10 +253,10 @@ describe("ModelUsageAccountingService", { timeout: 20_000 }, () => {
 
   it("preserves provider-reported cost provenance and Responses cached input usage", async () => {
     const { accounting } = createHarness();
-    const reservation = accounting.prepareDispatch(dispatchInput());
-    const { pending, handle } = invokeFetch(reservation, () => Promise.resolve({ ok: true }));
+    const reservation = await accounting.prepareDispatch(dispatchInput());
+    const { pending, handle } = await invokeFetch(reservation, () => Promise.resolve({ ok: true }));
     await pending;
-    const record = handle.succeed({
+    const record = await handle.succeed({
       input_tokens: 12,
       output_tokens: 4,
       input_tokens_details: { cached_tokens: 3 },
@@ -272,16 +275,16 @@ describe("ModelUsageAccountingService", { timeout: 20_000 }, () => {
 
   it("keeps partial usage on failure and classifies cancellation once", async () => {
     const { accounting } = createHarness();
-    const partialReservation = accounting.prepareDispatch(dispatchInput());
-    const partial = invokeFetch(partialReservation, () => Promise.resolve({ ok: true }));
+    const partialReservation = await accounting.prepareDispatch(dispatchInput());
+    const partial = await invokeFetch(partialReservation, () => Promise.resolve({ ok: true }));
     await partial.pending;
     partial.handle.observe({ input_tokens: 5 });
-    const failed = partial.handle.fail(new Error("stream disconnected"));
+    const failed = await partial.handle.fail(new Error("stream disconnected"));
     assert.equal(failed.terminalOutcome, "failed_after_usage");
     assert.equal(failed.inputTokens, 5);
     assert.equal(failed.outputTokens, undefined);
 
-    const cancelReservation = accounting.prepareDispatch(
+    const cancelReservation = await accounting.prepareDispatch(
       dispatchInput({
         attribution: {
           ...dispatchInput().attribution,
@@ -289,40 +292,40 @@ describe("ModelUsageAccountingService", { timeout: 20_000 }, () => {
         },
       }),
     );
-    const cancelledCall = invokeFetch(cancelReservation, () => Promise.resolve({ ok: true }));
+    const cancelledCall = await invokeFetch(cancelReservation, () => Promise.resolve({ ok: true }));
     await cancelledCall.pending;
     const abort = new Error("operator cancelled stream");
     abort.name = "AbortError";
-    const cancelled = cancelledCall.handle.fail(abort);
+    const cancelled = await cancelledCall.handle.fail(abort);
     assert.equal(cancelled.terminalOutcome, "cancelled");
-    assert.equal(cancelledCall.handle.cancel(abort).eventId, cancelled.eventId);
+    assert.equal((await cancelledCall.handle.cancel(abort)).eventId, cancelled.eventId);
   });
 
-  it("blocks duplicate dispatch identity but permits an explicit new generation", () => {
+  it("blocks duplicate dispatch identity but permits an explicit new generation", async () => {
     const { storage, accounting } = createHarness();
-    const first = accounting.prepareDispatch(dispatchInput());
-    assert.throws(
-      () => accounting.prepareDispatch(dispatchInput()),
+    const first = await accounting.prepareDispatch(dispatchInput());
+    await assert.rejects(
+      accounting.prepareDispatch(dispatchInput()),
       (error: unknown) =>
         error instanceof ModelUsageDispatchUncertainError &&
         error.eventId === first.eventId &&
         /advance dispatchGeneration/u.test(error.message),
     );
     assert.equal(storage.modelUsageEvents.findByEventId(first.eventId)?.transportStatus, "intent");
-    const next = accounting.prepareDispatch(
+    const next = await accounting.prepareDispatch(
       dispatchInput({ attribution: { ...dispatchInput().attribution, dispatchGeneration: "generation-2" } }),
     );
     assert.notEqual(next.eventId, first.eventId);
-    first.abandon();
-    next.abandon();
+    await first.abandon();
+    await next.abandon();
   });
 
   it("tracks exact numeric zero instead of treating it as unknown", async () => {
     const { storage, accounting } = createHarness();
-    const reservation = accounting.prepareDispatch(dispatchInput());
-    const call = invokeFetch(reservation, () => Promise.resolve({ ok: true }));
+    const reservation = await accounting.prepareDispatch(dispatchInput());
+    const call = await invokeFetch(reservation, () => Promise.resolve({ ok: true }));
     await call.pending;
-    const record = call.handle.succeed({
+    const record = await call.handle.succeed({
       prompt_tokens: 0,
       completion_tokens: 0,
       cached_input_tokens: 0,
@@ -338,24 +341,24 @@ describe("ModelUsageAccountingService", { timeout: 20_000 }, () => {
 
   it("merges split stream usage, drops invalid values, and never detaches cost provenance", async () => {
     const { accounting } = createHarness();
-    const reservation = accounting.prepareDispatch(dispatchInput());
-    const call = invokeFetch(reservation, () => Promise.resolve({ ok: true }));
+    const reservation = await accounting.prepareDispatch(dispatchInput());
+    const call = await invokeFetch(reservation, () => Promise.resolve({ ok: true }));
     await call.pending;
     call.handle.observe({ input_tokens: 20, cached_input_tokens: -1 });
     call.handle.observeNormalized({ costSource: "gateway_estimate", pricingSource: "gateway_estimate" });
     call.handle.observe({ output_tokens: 6, cached_input_tokens: 4, cost_usd: 0.01 });
-    const record = call.handle.succeed();
+    const record = await call.handle.succeed();
     assert.equal(record.inputTokens, 20);
     assert.equal(record.outputTokens, 6);
     assert.equal(record.cachedInputTokens, 4);
     assert.equal(record.costUsd, 0.01);
     assert.equal(record.costSource, "provider_reported");
-    assert.equal(call.handle.fail(new Error("late failure")).eventId, record.eventId);
+    assert.equal((await call.handle.fail(new Error("late failure"))).eventId, record.eventId);
   });
 
-  it("persists frozen reasoning, service-account, and ADC attribution at the transport seam", () => {
+  it("persists frozen reasoning, service-account, and ADC attribution at the transport seam", async () => {
     const { storage, accounting } = createHarness();
-    const reservation = accounting.prepareDispatch(
+    const reservation = await accounting.prepareDispatch(
       dispatchInput({
         attribution: {
           ...dispatchInput().attribution,
@@ -379,12 +382,12 @@ describe("ModelUsageAccountingService", { timeout: 20_000 }, () => {
     assert.equal(record?.reasoningReasonCode, "provider_cap");
     assert.equal(record?.credentialType, "service_account");
     assert.equal(record?.credentialSource, "adc");
-    reservation.abandon();
+    await reservation.abandon();
   });
 
-  it("keeps local dispatch uncertainty unresolved while proving exact zero cost", () => {
+  it("keeps local dispatch uncertainty unresolved while proving exact zero cost", async () => {
     const { storage, accounting } = createHarness();
-    const reservation = accounting.prepareDispatch(
+    const reservation = await accounting.prepareDispatch(
       dispatchInput({
         effectiveProviderId: "llamacpp",
         effectiveModelId: "local-model",
@@ -402,7 +405,7 @@ describe("ModelUsageAccountingService", { timeout: 20_000 }, () => {
         },
       }),
     );
-    reservation.markDispatchUnknown("transport_acceptance_persistence_failed");
+    await reservation.markDispatchUnknown("transport_acceptance_persistence_failed");
 
     const record = storage.modelUsageEvents.findByEventId(reservation.eventId);
     assert.equal(record?.transportStatus, "dispatch_unknown");

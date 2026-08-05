@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ToolInvokeRequest, ToolPolicyActorContext, ToolPolicyConfig } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage, Storage } from "@goatcitadel/storage";
 import { executeTool, type ToolExecutorRuntimeHooks } from "./tool-executor.js";
 
 // agent.fanout is a pure dispatch case (R3-8): the child-turn spawning is
@@ -67,10 +67,10 @@ function config(): ToolPolicyConfig {
   };
 }
 
-function storageStub(): Storage {
+function storageStub(): Storage & AsyncStorage {
   return {
     toolGrants: {
       listActiveBySession: vi.fn(() => []),
     },
-  } as unknown as Storage;
+  } as unknown as Storage & AsyncStorage;
 }

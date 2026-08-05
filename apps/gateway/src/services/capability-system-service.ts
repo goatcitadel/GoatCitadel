@@ -68,7 +68,7 @@ import {
   redactStructuredSecrets,
   ValidationError,
 } from "@goatcitadel/contracts";
-import type { GovernedLifecycleEventRepository, Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import {
   buildCapabilityLifecycleApprovalBinding,
   buildCapabilityLifecycleApprovalPayload,
@@ -85,6 +85,7 @@ import {
   persistApprovedCapabilityCandidateEvidence,
   persistCapabilityProposalCreatedEvidence,
   persistCapabilitySystemRevokeEvidence,
+  type AsyncGovernedLifecycleEventRepository,
   type CapabilityLifecycleApprovalAction,
   type CapabilityLifecycleApprovalBindingV1,
   type SkillGovernanceSystemAuthority,
@@ -150,13 +151,13 @@ type LateCodeModeApprovalCleanupResult = {
   errors: string[];
 };
 
-type ChatInlineApprovalRecord = ReturnType<Storage["chatInlineApprovals"]["listBySession"]>[number];
+type ChatInlineApprovalRecord = Awaited<ReturnType<Storage["chatInlineApprovals"]["listBySession"]>>[number];
 
 export interface CapabilitySystemServiceOptions {
   rootDir: string;
   runtimeConfig: CapabilityRuntimeConfig;
   storage: Storage;
-  readFeatureFlags: () => Pick<FeatureFlagsConfig, "codeModeV1Enabled"> & Record<string, boolean>;
+  readFeatureFlags: () => Promise<Pick<FeatureFlagsConfig, "codeModeV1Enabled"> & Record<string, boolean>>;
   listToolCatalog: () => ToolCatalogEntry[];
   /**
    * HX-408: server-built mesh publication projection. Entries arrive with
@@ -165,14 +166,14 @@ export interface CapabilitySystemServiceOptions {
    * appends them to the inspectable catalog (callable filtering stays the
    * shared `entry.callable` rule).
    */
-  listMeshCapabilityCatalogEntries?: () => CapabilityCatalogEntry[];
+  listMeshCapabilityCatalogEntries?: () => Promise<CapabilityCatalogEntry[]>;
   listLoadedSkills: () => LoadedSkill[];
-  readSkillStates: () => Map<string, SkillStateRecord>;
+  readSkillStates: () => Promise<Map<string, SkillStateRecord>>;
   invokeTool: (request: ToolInvokeRequest) => Promise<ToolInvokeResult>;
   createApproval: (input: ApprovalCreateInput) => Promise<ApprovalRequest>;
   resolveApproval: (approvalId: string, input: ApprovalResolveInput) => Promise<ApprovalResolveResult>;
-  publishRealtime: (eventType: string, source: string, payload: Record<string, unknown>) => void;
-  readPolicySnapshot: () => Record<string, unknown>;
+  publishRealtime: (eventType: string, source: string, payload: Record<string, unknown>) => Promise<void>;
+  readPolicySnapshot: () => Promise<Record<string, unknown>>;
   resolveSandboxMetadata?: (config: CapabilityRuntimeConfig["codeModeSandbox"]) => CodeModeSandboxMetadata;
   resolvePolicyContext?: (input: {
     operatorId?: string;
@@ -183,7 +184,7 @@ export interface CapabilitySystemServiceOptions {
     surface?: CodeModeOriginSurface;
     permissionProfileId?: string;
     localOperatorOverrideId?: string;
-  }) => ToolPolicyActorContext;
+  }) => Promise<ToolPolicyActorContext>;
   getChatSessionWorkbench?: (sessionId: string) => Promise<ChatSessionWorkbenchRecord>;
   runChatSessionWorkbenchCommand?: (
     sessionId: string,
@@ -383,7 +384,7 @@ export class CapabilitySystemService {
   private readonly autonomousActivationGrants: AutonomousActivationGrantService;
   private readonly codeModeVerification?: CodeModeVerificationService;
   /** HX-402 P2: lazily created write-through to the immutable P0 governed lifecycle owner. */
-  private governedLifecycleRepository?: GovernedLifecycleEventRepository;
+  private governedLifecycleRepository?: AsyncGovernedLifecycleEventRepository;
   /** HX-402 P2: module-private branded authority for the fail-safe internal revoke path. */
   private governanceSystemAuthority?: SkillGovernanceSystemAuthority;
 
@@ -395,7 +396,7 @@ export class CapabilitySystemService {
       options.resolveSandboxMetadata ?? ((config) => resolveCodeModeSandboxMetadata(config));
     this.autonomousActivationGrants = new AutonomousActivationGrantService(
       options.storage.systemSettings,
-      (eventType, source, payload) => options.publishRealtime(eventType, source, payload),
+      async (eventType, source, payload) => await options.publishRealtime(eventType, source, payload),
     );
     if (options.getChatSessionWorkbench && options.runChatSessionWorkbenchCommand) {
       this.codeModeVerification = new CodeModeVerificationService({
@@ -413,50 +414,52 @@ export class CapabilitySystemService {
     return this.resolveSandboxMetadata(this.options.runtimeConfig.codeModeSandbox);
   }
 
-  public ensureSkillLifecycleBackfill(): void {
+  public async ensureSkillLifecycleBackfill(): Promise<void> {
     const skills = this.options.listLoadedSkills();
     for (const skill of skills) {
-      if (this.options.storage.skillLifecycle.find(skill.skillId)) {
+      if (await this.options.storage.skillLifecycle.find(skill.skillId)) {
         continue;
       }
-      this.options.storage.skillLifecycle.upsert(buildSkillLifecycleRecord(skill));
+      await this.options.storage.skillLifecycle.upsert(buildSkillLifecycleRecord(skill));
     }
   }
 
-  public listSkills(effectiveSkills: EffectiveCapabilitySet = "ALL"): SkillListItem[] {
-    this.ensureSkillLifecycleBackfill();
-    const stateMap = this.options.readSkillStates();
-    const all = this.options.listLoadedSkills().map((skill) => {
-      const state = stateMap.get(skill.skillId);
-      const lifecycle = this.resolveSkillLifecycle(skill);
-      return {
-        ...skill,
-        revision:
-          state?.revision ??
-          this.options.storage.skillAggregateRevisions.ensure("runtime_skill", skill.skillId).revision,
-        state: state?.state ?? "enabled",
-        note: state?.note,
-        stateUpdatedAt: state?.updatedAt,
-        pinned: state?.pinned,
-        usageCount: state?.usageCount,
-        lastUsedAt: state?.lastUsedAt,
-        capabilityCategory: lifecycle.category,
-        lifecycleState: lifecycle.lifecycleState,
-        lifecycle,
-        callable: isSkillCallable(lifecycle, state?.state ?? "enabled"),
-        trustLabel: lifecycle.trustLabel,
-        reviewWarning: lifecycle.reviewWarning,
-      };
-    });
+  public async listSkills(effectiveSkills: EffectiveCapabilitySet = "ALL"): Promise<SkillListItem[]> {
+    await this.ensureSkillLifecycleBackfill();
+    const stateMap = await this.options.readSkillStates();
+    const all = await Promise.all(
+      this.options.listLoadedSkills().map(async (skill) => {
+        const state = stateMap.get(skill.skillId);
+        const lifecycle = await this.resolveSkillLifecycle(skill);
+        return {
+          ...skill,
+          revision:
+            state?.revision ??
+            (await this.options.storage.skillAggregateRevisions.ensure("runtime_skill", skill.skillId)).revision,
+          state: state?.state ?? "enabled",
+          note: state?.note,
+          stateUpdatedAt: state?.updatedAt,
+          pinned: state?.pinned,
+          usageCount: state?.usageCount,
+          lastUsedAt: state?.lastUsedAt,
+          capabilityCategory: lifecycle.category,
+          lifecycleState: lifecycle.lifecycleState,
+          lifecycle,
+          callable: isSkillCallable(lifecycle, state?.state ?? "enabled"),
+          trustLabel: lifecycle.trustLabel,
+          reviewWarning: lifecycle.reviewWarning,
+        };
+      }),
+    );
     return filterSkillItemsByEffectiveSet(all, effectiveSkills);
   }
 
-  private resolveSkillLifecycle(skill: LoadedSkill): SkillLifecycleRecord {
-    const existing = this.options.storage.skillLifecycle.find(skill.skillId);
+  private async resolveSkillLifecycle(skill: LoadedSkill): Promise<SkillLifecycleRecord> {
+    const existing = await this.options.storage.skillLifecycle.find(skill.skillId);
     const projected = buildSkillLifecycleRecord(skill, existing?.createdAt);
     if (skill.source !== "extra") {
       if (!existing) {
-        return this.options.storage.skillLifecycle.upsert(projected);
+        return await this.options.storage.skillLifecycle.upsert(projected);
       }
       if (!skillLifecycleExactIntegrityMatches(existing, projected)) {
         projected.lifecycleState = "candidate";
@@ -472,7 +475,7 @@ export class CapabilitySystemService {
       if (skillLifecycleProjectionMatches(existing, projected)) {
         return existing;
       }
-      return this.options.storage.skillLifecycle.upsert(projected);
+      return await this.options.storage.skillLifecycle.upsert(projected);
     }
     // Revocation is durable deny-wins truth. Filesystem discovery or editable
     // source metadata must never hydrate a revoked imported skill back into a
@@ -496,25 +499,25 @@ export class CapabilitySystemService {
     if (existing && skillLifecycleProjectionMatches(existing, projected)) {
       return existing;
     }
-    return this.options.storage.skillLifecycle.upsert(projected);
+    return await this.options.storage.skillLifecycle.upsert(projected);
   }
 
-  public listCatalog(
+  public async listCatalog(
     scope: CapabilityCatalogScope,
     effectiveSkills: EffectiveCapabilitySet = "ALL",
-  ): CapabilityCatalogEntry[] {
-    this.ensureSkillLifecycleBackfill();
-    const inspectable = this.buildInspectableCatalog(effectiveSkills);
+  ): Promise<CapabilityCatalogEntry[]> {
+    await this.ensureSkillLifecycleBackfill();
+    const inspectable = await this.buildInspectableCatalog(effectiveSkills);
     return scope === "callable" ? inspectable.filter((entry) => entry.callable) : inspectable;
   }
 
-  public getCompactToolDirectorySnapshot(ttlMs = 300_000): CompactToolDirectorySnapshot {
-    this.ensureSkillLifecycleBackfill();
+  public async getCompactToolDirectorySnapshot(ttlMs = 300_000): Promise<CompactToolDirectorySnapshot> {
+    await this.ensureSkillLifecycleBackfill();
     const now = new Date();
     const createdAt = now.toISOString();
     const resolvedTtlMs = Math.max(1_000, Math.min(ttlMs, 3_600_000));
     const expiresAt = new Date(now.getTime() + resolvedTtlMs).toISOString();
-    const inspectable = this.buildInspectableCatalog();
+    const inspectable = await this.buildInspectableCatalog();
     const callableTools = inspectable.filter((entry) => entry.callable && entry.kind === "tool" && entry.toolName);
     const toolCatalogByName = new Map(this.options.listToolCatalog().map((tool) => [tool.toolName, tool]));
     const tools = callableTools.map((entry) => {
@@ -579,9 +582,9 @@ export class CapabilitySystemService {
     };
   }
 
-  public listCodeModeExecutionBackends() {
+  public async listCodeModeExecutionBackends() {
     return buildCodeModeExecutionBackends({
-      codeModeEnabled: this.options.readFeatureFlags().codeModeV1Enabled,
+      codeModeEnabled: (await this.options.readFeatureFlags()).codeModeV1Enabled,
       sandbox: this.resolveCurrentSandboxMetadata(),
       dockerBackend: this.options.runtimeConfig.codeModeDockerBackend,
       aiderAdapter: this.options.runtimeConfig.codeModeAiderAdapter,
@@ -608,39 +611,39 @@ export class CapabilitySystemService {
     return this.autonomousActivationGrants.recordGrantUse(grantId, estimatedCostUsd);
   }
 
-  public freezeCatalogSnapshot(): CapabilityCatalogSnapshotRecord {
-    const inspectableEntries = this.listCatalog("inspectable");
+  public async freezeCatalogSnapshot(): Promise<CapabilityCatalogSnapshotRecord> {
+    const inspectableEntries = await this.listCatalog("inspectable");
     const snapshot: CapabilityCatalogSnapshotRecord = {
       snapshotId: `cap-snap-${randomUUID()}`,
       inspectableEntries,
       callableEntries: inspectableEntries.filter((entry) => entry.callable),
       createdAt: new Date().toISOString(),
     };
-    return this.options.storage.capabilityCatalogSnapshots.create(snapshot);
+    return await this.options.storage.capabilityCatalogSnapshots.create(snapshot);
   }
 
-  public getCatalogSnapshot(snapshotId: string): CapabilityCatalogSnapshotRecord {
-    return this.options.storage.capabilityCatalogSnapshots.get(snapshotId);
+  public async getCatalogSnapshot(snapshotId: string): Promise<CapabilityCatalogSnapshotRecord> {
+    return await this.options.storage.capabilityCatalogSnapshots.get(snapshotId);
   }
 
-  public getCandidateDetail(candidateId: string): CandidateSkillDetailRecord {
-    return this.buildCandidateDetail(candidateId);
+  public async getCandidateDetail(candidateId: string): Promise<CandidateSkillDetailRecord> {
+    return await this.buildCandidateDetail(candidateId);
   }
 
-  public listProposals(limit = 100): CapabilityProposalRecord[] {
-    return this.options.storage.capabilityProposals.list(limit);
+  public async listProposals(limit = 100): Promise<CapabilityProposalRecord[]> {
+    return await this.options.storage.capabilityProposals.list(limit);
   }
 
-  public getProposalDetail(proposalId: string): CapabilityProposalDetailRecord {
-    const proposal = this.options.storage.capabilityProposals.get(proposalId);
+  public async getProposalDetail(proposalId: string): Promise<CapabilityProposalDetailRecord> {
+    const proposal = await this.options.storage.capabilityProposals.get(proposalId);
     const candidate = proposal.candidateId
-      ? this.options.storage.candidateSkillVersions.findLatestByCandidateId(proposal.candidateId)
-        ? this.buildCandidateDetail(proposal.candidateId)
+      ? (await this.options.storage.candidateSkillVersions.findLatestByCandidateId(proposal.candidateId))
+        ? await this.buildCandidateDetail(proposal.candidateId)
         : undefined
       : undefined;
     return {
       proposal,
-      events: this.options.storage.capabilityProposalEvents.listByProposalId(proposalId),
+      events: await this.options.storage.capabilityProposalEvents.listByProposalId(proposalId),
       candidate,
     };
   }
@@ -652,7 +655,7 @@ export class CapabilitySystemService {
    * immediate transaction — and the proposal remains non-callable (nothing
    * here touches the callable catalog or candidate lifecycle states).
    */
-  public createProposal(
+  public async createProposal(
     input: {
       proposalKind: CapabilityProposalKind;
       title: string;
@@ -662,7 +665,7 @@ export class CapabilitySystemService {
       activationTargetId?: string;
     },
     actorId = "operator",
-  ): CapabilityProposalRecord {
+  ): Promise<CapabilityProposalRecord> {
     const now = new Date().toISOString();
     const proposal: CapabilityProposalRecord = {
       proposalId: `proposal-${randomUUID()}`,
@@ -677,10 +680,10 @@ export class CapabilitySystemService {
       updatedAt: now,
     };
     const repository = this.getGovernedLifecycleRepository();
-    const stored = this.options.storage.runImmediateTransaction(() => {
-      const upserted = this.options.storage.capabilityProposals.upsert(proposal);
+    const stored = await this.options.storage.runImmediateTransaction(async () => {
+      const upserted = await this.options.storage.capabilityProposals.upsert(proposal);
       const proposalEventId = randomUUID();
-      this.options.storage.capabilityProposalEvents.append({
+      await this.options.storage.capabilityProposalEvents.append({
         eventId: proposalEventId,
         proposalId: upserted.proposalId,
         eventType: "created",
@@ -691,7 +694,7 @@ export class CapabilitySystemService {
         },
         createdAt: now,
       });
-      persistCapabilityProposalCreatedEvidence(repository, {
+      await persistCapabilityProposalCreatedEvidence(repository, {
         proposalId: upserted.proposalId,
         proposalKind: upserted.proposalKind,
         proposalEventId,
@@ -700,7 +703,7 @@ export class CapabilitySystemService {
       });
       return upserted;
     });
-    this.options.publishRealtime("capability_proposal_created", "capabilities", {
+    await this.options.publishRealtime("capability_proposal_created", "capabilities", {
       proposalId: stored.proposalId,
       proposalKind: stored.proposalKind,
       status: stored.status,
@@ -708,8 +711,8 @@ export class CapabilitySystemService {
     return stored;
   }
 
-  private getGovernedLifecycleRepository(): GovernedLifecycleEventRepository {
-    this.governedLifecycleRepository ??= createSkillGovernedLifecycleRepository(this.options.storage.gatewaySql);
+  private getGovernedLifecycleRepository(): AsyncGovernedLifecycleEventRepository {
+    this.governedLifecycleRepository ??= createSkillGovernedLifecycleRepository(this.options.storage);
     return this.governedLifecycleRepository;
   }
 
@@ -726,25 +729,25 @@ export class CapabilitySystemService {
   // plus immutable requester Journey evidence. Only the recovered
   // `capability_lifecycle_apply` effect executes the transition.
 
-  public promoteCandidate(
+  public async promoteCandidate(
     candidateId: string,
     expectedRevision: number,
     versionId?: string,
     requesterId?: string,
-  ): CapabilityCandidateMutationOutcome {
-    const versions = this.requireCandidateVersions(candidateId);
-    const selected = versionId ? this.requireCandidateVersion(candidateId, versionId) : versions[0]!;
-    this.verifyCandidateVersionArtifacts(selected);
-    const currentRevision = this.assertCandidateRevisionCurrent(candidateId, expectedRevision);
+  ): Promise<CapabilityCandidateMutationOutcome> {
+    const versions = await this.requireCandidateVersions(candidateId);
+    const selected = versionId ? await this.requireCandidateVersion(candidateId, versionId) : versions[0]!;
+    await this.verifyCandidateVersionArtifacts(selected);
+    const currentRevision = await this.assertCandidateRevisionCurrent(candidateId, expectedRevision);
     const wouldChange = versions.some((version) =>
       version.versionId === selected.versionId
         ? version.lifecycleState !== "approved" && version.lifecycleState !== "trusted"
         : version.lifecycleState === "approved" || version.lifecycleState === "trusted",
     );
     if (!wouldChange) {
-      return this.candidateMutationNoOp(candidateId, currentRevision);
+      return await this.candidateMutationNoOp(candidateId, currentRevision);
     }
-    return this.commitCapabilityLifecycleApproval({
+    return await this.commitCapabilityLifecycleApproval({
       candidateId,
       action: "candidate_promoted",
       mutation: { candidateId, versionId: selected.versionId },
@@ -760,15 +763,15 @@ export class CapabilitySystemService {
     });
   }
 
-  public revokeCandidate(
+  public async revokeCandidate(
     candidateId: string,
     expectedRevision: number,
     versionId?: string,
     requesterId?: string,
-  ): CapabilityCandidateMutationOutcome {
-    const versions = this.requireCandidateVersions(candidateId);
-    const selected = versionId ? this.requireCandidateVersion(candidateId, versionId) : versions[0]!;
-    const currentRevision = this.assertCandidateRevisionCurrent(candidateId, expectedRevision);
+  ): Promise<CapabilityCandidateMutationOutcome> {
+    const versions = await this.requireCandidateVersions(candidateId);
+    const selected = versionId ? await this.requireCandidateVersion(candidateId, versionId) : versions[0]!;
+    const currentRevision = await this.assertCandidateRevisionCurrent(candidateId, expectedRevision);
     // Criteria resolve to exact version IDs at request time so scope can never
     // widen between review and execution (P1 forget precedent).
     const targetVersionIds = (versionId ? [selected] : versions)
@@ -776,9 +779,9 @@ export class CapabilitySystemService {
       .map((version) => version.versionId)
       .sort(compareCodeUnits);
     if (targetVersionIds.length === 0) {
-      return this.candidateMutationNoOp(candidateId, currentRevision);
+      return await this.candidateMutationNoOp(candidateId, currentRevision);
     }
-    return this.commitCapabilityLifecycleApproval({
+    return await this.commitCapabilityLifecycleApproval({
       candidateId,
       action: "candidate_revoked",
       mutation: { candidateId, selectedVersionId: selected.versionId, targetVersionIds },
@@ -794,25 +797,25 @@ export class CapabilitySystemService {
     });
   }
 
-  public rollbackCandidate(
+  public async rollbackCandidate(
     candidateId: string,
     targetVersionId: string,
     expectedRevision: number,
     requesterId?: string,
-  ): CapabilityCandidateMutationOutcome {
-    const versions = this.requireCandidateVersions(candidateId);
-    const target = this.requireCandidateVersion(candidateId, targetVersionId);
-    this.verifyCandidateVersionArtifacts(target);
-    const currentRevision = this.assertCandidateRevisionCurrent(candidateId, expectedRevision);
+  ): Promise<CapabilityCandidateMutationOutcome> {
+    const versions = await this.requireCandidateVersions(candidateId);
+    const target = await this.requireCandidateVersion(candidateId, targetVersionId);
+    await this.verifyCandidateVersionArtifacts(target);
+    const currentRevision = await this.assertCandidateRevisionCurrent(candidateId, expectedRevision);
     const wouldChange = versions.some((version) =>
       version.versionId === target.versionId
         ? version.lifecycleState !== "approved" && version.lifecycleState !== "trusted"
         : version.lifecycleState !== "revoked" && version.lifecycleState !== "deprecated",
     );
     if (!wouldChange) {
-      return this.candidateMutationNoOp(candidateId, currentRevision);
+      return await this.candidateMutationNoOp(candidateId, currentRevision);
     }
-    return this.commitCapabilityLifecycleApproval({
+    return await this.commitCapabilityLifecycleApproval({
       candidateId,
       action: "candidate_rolled_back",
       mutation: { candidateId, targetVersionId: target.versionId },
@@ -828,14 +831,12 @@ export class CapabilitySystemService {
     });
   }
 
-  private assertCandidateRevisionCurrent(candidateId: string, expectedRevision: number): number {
+  private async assertCandidateRevisionCurrent(candidateId: string, expectedRevision: number): Promise<number> {
     if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) {
       throw new ValidationError({ code: "FIELD_INVALID", field: "expectedRevision" });
     }
-    const currentRevision = this.options.storage.skillAggregateRevisions.ensure(
-      "candidate_skill",
-      candidateId,
-    ).revision;
+    const currentRevision = (await this.options.storage.skillAggregateRevisions.ensure("candidate_skill", candidateId))
+      .revision;
     if (expectedRevision !== currentRevision) {
       throw new ConflictError({
         code: "WRITE_CONFLICT",
@@ -846,15 +847,18 @@ export class CapabilitySystemService {
     return currentRevision;
   }
 
-  private candidateMutationNoOp(candidateId: string, revision: number): CapabilityCandidateMutationNoOpOutcome {
+  private async candidateMutationNoOp(
+    candidateId: string,
+    revision: number,
+  ): Promise<CapabilityCandidateMutationNoOpOutcome> {
     return {
       pendingApproval: null,
       noMutationRequired: true,
-      detail: { ...this.buildCandidateDetail(candidateId, revision), revision },
+      detail: { ...(await this.buildCandidateDetail(candidateId, revision)), revision },
     };
   }
 
-  private commitCapabilityLifecycleApproval(input: {
+  private async commitCapabilityLifecycleApproval(input: {
     candidateId: string;
     action: CapabilityLifecycleApprovalAction;
     mutation: Record<string, unknown>;
@@ -862,7 +866,7 @@ export class CapabilitySystemService {
     currentRevision: number;
     requesterId?: string;
     preview: Record<string, unknown>;
-  }): CapabilityCandidateMutationPendingOutcome {
+  }): Promise<CapabilityCandidateMutationPendingOutcome> {
     const requesterId = normalizeCapabilityRequesterId(input.requesterId);
     const binding = buildCapabilityLifecycleApprovalBinding({
       subjectId: input.candidateId,
@@ -872,8 +876,8 @@ export class CapabilitySystemService {
     });
     const approvalId = deriveCapabilityLifecycleApprovalId(binding);
     const payload = buildCapabilityLifecycleApprovalPayload({ binding, requesterId, mutation: input.mutation });
-    const committed = this.options.storage.runImmediateTransaction(() => {
-      const stored = this.options.storage.approvals.createDeterministicDetachedWithTtlDuration(
+    const committed = await this.options.storage.runImmediateTransaction(async () => {
+      const stored = await this.options.storage.approvals.createDeterministicDetachedWithTtlDuration(
         {
           approvalId,
           kind: CAPABILITY_LIFECYCLE_APPROVAL_KIND,
@@ -884,7 +888,7 @@ export class CapabilitySystemService {
         CAPABILITY_LIFECYCLE_APPROVAL_TTL_MS,
       );
       if (stored.created) {
-        this.options.storage.approvalEvents.append({
+        await this.options.storage.approvalEvents.append({
           approvalId,
           eventType: "created",
           actorId: "system",
@@ -895,15 +899,15 @@ export class CapabilitySystemService {
             status: stored.approval.status,
           },
         });
-        this.options.storage.governanceJourneyEvents.create(
+        await this.options.storage.governanceJourneyEvents.create(
           buildCapabilityLifecycleRequestJourneyEvent({ approval: stored.approval, binding, requesterId }),
         );
       } else {
-        const evidence = this.options.storage.governanceJourneyEvents.findByIdempotencyKey(
+        const evidence = await this.options.storage.governanceJourneyEvents.findByIdempotencyKey(
           capabilityLifecycleRequestJourneyIdempotencyKey(approvalId),
         );
         if (!evidence) {
-          this.options.storage.governanceJourneyEvents.create(
+          await this.options.storage.governanceJourneyEvents.create(
             buildCapabilityLifecycleRequestJourneyEvent({ approval: stored.approval, binding, requesterId }),
           );
         }
@@ -911,7 +915,7 @@ export class CapabilitySystemService {
       return stored;
     });
     if (committed.created) {
-      this.options.publishRealtime("capability_mutation_approval_requested", "capabilities", {
+      await this.options.publishRealtime("capability_mutation_approval_requested", "capabilities", {
         approvalId,
         action: binding.action,
         candidateId: input.candidateId,
@@ -944,10 +948,12 @@ export class CapabilitySystemService {
    * throw the terminal {@link CapabilityLifecycleApplyError}; infrastructure
    * errors propagate raw so the worker defers the effect for bounded retry.
    */
-  public executeApprovedCapabilityLifecycleMutation(input: { approvalId: string }): CandidateLifecycleActionResult {
+  public async executeApprovedCapabilityLifecycleMutation(input: {
+    approvalId: string;
+  }): Promise<CandidateLifecycleActionResult> {
     let approval: ApprovalRequest;
     try {
-      approval = this.options.storage.approvals.get(input.approvalId);
+      approval = await this.options.storage.approvals.get(input.approvalId);
     } catch (error) {
       if (error instanceof NotFoundError) {
         throw new CapabilityLifecycleApplyError("capability_lifecycle_approval_not_executable");
@@ -969,7 +975,7 @@ export class CapabilitySystemService {
     if (approval.expiresAt && Date.parse(approval.expiresAt) <= Date.now()) {
       throw new CapabilityLifecycleApplyError("capability_lifecycle_approval_expired");
     }
-    const evidence = this.options.storage.governanceJourneyEvents.findByIdempotencyKey(
+    const evidence = await this.options.storage.governanceJourneyEvents.findByIdempotencyKey(
       capabilityLifecycleRequestJourneyIdempotencyKey(approval.approvalId),
     );
     if (!evidence || evidence.approvalId !== approval.approvalId || evidence.actorId !== envelope.requesterId) {
@@ -998,15 +1004,14 @@ export class CapabilitySystemService {
     };
     const repository = this.getGovernedLifecycleRepository();
     try {
-      return this.options.storage.runImmediateTransaction(() => {
+      return await this.options.storage.runImmediateTransaction(async () => {
         // Exact-replay convergence: committed evidence is the truth.
-        const replayed = this.readApprovedCapabilityReplay(binding, plan, applyAuthority.approvalId);
+        const replayed = await this.readApprovedCapabilityReplay(binding, plan, applyAuthority.approvalId);
         if (replayed) return replayed;
         const candidateId = binding.subjectId;
-        const currentVersions = this.requireCandidateVersions(candidateId);
-        const currentRevision = this.options.storage.skillAggregateRevisions.ensure(
-          "candidate_skill",
-          candidateId,
+        const currentVersions = await this.requireCandidateVersions(candidateId);
+        const currentRevision = (
+          await this.options.storage.skillAggregateRevisions.ensure("candidate_skill", candidateId)
         ).revision;
         if (
           buildCapabilityLifecycleStateSha256(
@@ -1016,40 +1021,48 @@ export class CapabilitySystemService {
           throw new CapabilityLifecycleApplyError("capability_lifecycle_state_drift");
         }
         if (plan.verifyArtifactsVersionId) {
-          this.verifyCandidateVersionArtifacts(
-            this.requireCandidateVersion(candidateId, plan.verifyArtifactsVersionId),
+          await this.verifyCandidateVersionArtifacts(
+            await this.requireCandidateVersion(candidateId, plan.verifyArtifactsVersionId),
           );
         }
-        const mutation = this.options.storage.skillAggregateRevisions.runWithRevision(
+        const fence = await this.options.storage.skillAggregateRevisions.fenceExpectedRevision(
           "candidate_skill",
           candidateId,
           currentRevision,
-          () => {
-            const changedVersionIds = this.applyCandidateTransition(
-              candidateId,
-              plan,
-              currentVersions,
-              applyAuthority.occurredAt,
-            );
-            persistApprovedCapabilityCandidateEvidence(repository, {
-              authority: applyAuthority,
-              candidateId,
-              action: binding.action,
-              selectedVersionId: plan.selectedVersionId,
-              changedVersionIds,
-            });
-            return {
-              value: {
-                changedVersionIds,
-                detail: this.buildCandidateDetail(candidateId, currentRevision),
-              },
-              changed: changedVersionIds.length > 0,
-            };
-          },
           applyAuthority.occurredAt,
         );
+        const changedVersionIds = await this.applyCandidateTransition(
+          candidateId,
+          plan,
+          currentVersions,
+          applyAuthority.occurredAt,
+        );
+        await persistApprovedCapabilityCandidateEvidence(repository, {
+          authority: applyAuthority,
+          candidateId,
+          action: binding.action,
+          selectedVersionId: plan.selectedVersionId,
+          changedVersionIds,
+        });
+        const revision =
+          changedVersionIds.length > 0
+            ? await this.options.storage.skillAggregateRevisions.advanceExpectedRevision(
+                "candidate_skill",
+                candidateId,
+                currentRevision,
+                applyAuthority.occurredAt,
+              )
+            : fence;
+        const mutation = {
+          value: {
+            changedVersionIds,
+            detail: await this.buildCandidateDetail(candidateId, currentRevision),
+          },
+          changed: changedVersionIds.length > 0,
+          revision: revision.revision,
+        };
         const detail = { ...mutation.value.detail, revision: mutation.revision };
-        this.publishCapabilityLifecycleApplied(
+        await this.publishCapabilityLifecycleApplied(
           binding.action,
           candidateId,
           plan,
@@ -1075,19 +1088,20 @@ export class CapabilitySystemService {
     }
   }
 
-  private readApprovedCapabilityReplay(
+  private async readApprovedCapabilityReplay(
     binding: CapabilityLifecycleApprovalBindingV1,
     plan: ApprovedCapabilityMutationPlan,
     approvalId: string,
-  ): CandidateLifecycleActionResult | undefined {
-    const existing = this.options.storage.gatewaySql
+  ): Promise<CandidateLifecycleActionResult | undefined> {
+    const existing = await this.options.storage.db
       .prepare(
         `SELECT event_id AS eventId, occurred_at AS occurredAt FROM governed_lifecycle_events WHERE event_id = @eventId`,
       )
-      .get({ eventId: `capability-lifecycle:${approvalId}` }) as { eventId: string; occurredAt: string } | undefined;
+      .get<{ eventId: string; occurredAt: string }>({ eventId: `capability-lifecycle:${approvalId}` });
     if (!existing) return undefined;
     const candidateId = binding.subjectId;
-    const revision = this.options.storage.skillAggregateRevisions.ensure("candidate_skill", candidateId).revision;
+    const revision = (await this.options.storage.skillAggregateRevisions.ensure("candidate_skill", candidateId))
+      .revision;
     return {
       action: plan.resultAction,
       candidateId,
@@ -1095,22 +1109,26 @@ export class CapabilitySystemService {
       selectedVersionId: plan.selectedVersionId,
       changedVersionIds: [],
       occurredAt: existing.occurredAt,
-      detail: { ...this.buildCandidateDetail(candidateId, revision), revision },
+      detail: { ...(await this.buildCandidateDetail(candidateId, revision)), revision },
     };
   }
 
-  private applyCandidateTransition(
+  private async applyCandidateTransition(
     candidateId: string,
     plan: ApprovedCapabilityMutationPlan,
     currentVersions: CandidateSkillVersionRecord[],
     occurredAt: string,
-  ): string[] {
+  ): Promise<string[]> {
     const changedVersionIds: string[] = [];
     if (plan.kind === "revoke") {
       const targetIds = new Set(plan.targetVersionIds);
       for (const version of currentVersions) {
         if (!targetIds.has(version.versionId) || version.lifecycleState === "revoked") continue;
-        this.options.storage.candidateSkillVersions.updateLifecycleState(version.versionId, "revoked", occurredAt);
+        await this.options.storage.candidateSkillVersions.updateLifecycleState(
+          version.versionId,
+          "revoked",
+          occurredAt,
+        );
         changedVersionIds.push(version.versionId);
       }
       return changedVersionIds.sort(compareCodeUnits);
@@ -1118,7 +1136,11 @@ export class CapabilitySystemService {
     for (const version of currentVersions) {
       if (version.versionId === plan.selectedVersionId) {
         if (version.lifecycleState !== "approved" && version.lifecycleState !== "trusted") {
-          this.options.storage.candidateSkillVersions.updateLifecycleState(version.versionId, "approved", occurredAt);
+          await this.options.storage.candidateSkillVersions.updateLifecycleState(
+            version.versionId,
+            "approved",
+            occurredAt,
+          );
           changedVersionIds.push(version.versionId);
         }
         continue;
@@ -1128,23 +1150,27 @@ export class CapabilitySystemService {
           ? version.lifecycleState === "approved" || version.lifecycleState === "trusted"
           : version.lifecycleState !== "revoked" && version.lifecycleState !== "deprecated";
       if (demote) {
-        this.options.storage.candidateSkillVersions.updateLifecycleState(version.versionId, "deprecated", occurredAt);
+        await this.options.storage.candidateSkillVersions.updateLifecycleState(
+          version.versionId,
+          "deprecated",
+          occurredAt,
+        );
         changedVersionIds.push(version.versionId);
       }
     }
     return changedVersionIds.sort(compareCodeUnits);
   }
 
-  private publishCapabilityLifecycleApplied(
+  private async publishCapabilityLifecycleApplied(
     action: CapabilityLifecycleApprovalAction,
     candidateId: string,
     plan: ApprovedCapabilityMutationPlan,
     changedVersionIds: string[],
     revision: number,
-  ): void {
+  ): Promise<void> {
     if (changedVersionIds.length === 0) return;
     if (action === "candidate_promoted") {
-      this.options.publishRealtime("candidate_skill_promoted", "capabilities", {
+      await this.options.publishRealtime("candidate_skill_promoted", "capabilities", {
         candidateId,
         versionId: plan.selectedVersionId,
         revision,
@@ -1152,7 +1178,7 @@ export class CapabilitySystemService {
       return;
     }
     if (action === "candidate_revoked") {
-      this.options.publishRealtime("candidate_skill_revoked", "capabilities", {
+      await this.options.publishRealtime("candidate_skill_revoked", "capabilities", {
         candidateId,
         versionId: plan.selectedVersionId,
         revokedVersionIds: changedVersionIds,
@@ -1160,7 +1186,7 @@ export class CapabilitySystemService {
       });
       return;
     }
-    this.options.publishRealtime("candidate_skill_rolled_back", "capabilities", {
+    await this.options.publishRealtime("candidate_skill_rolled_back", "capabilities", {
       candidateId,
       targetVersionId: plan.selectedVersionId,
       revision,
@@ -1174,15 +1200,14 @@ export class CapabilitySystemService {
    * `system_revoked` event, and Journey — in one immediate transaction. Route
    * inputs can never mint the authority object the producer verifies.
    */
-  public systemRevokeCandidate(candidateId: string, reasonCode: string): CandidateLifecycleActionResult {
+  public async systemRevokeCandidate(candidateId: string, reasonCode: string): Promise<CandidateLifecycleActionResult> {
     const authority = this.getGovernanceSystemAuthority();
     const repository = this.getGovernedLifecycleRepository();
     const occurredAt = new Date().toISOString();
-    return this.options.storage.runImmediateTransaction(() => {
-      const currentVersions = this.requireCandidateVersions(candidateId);
-      const currentRevision = this.options.storage.skillAggregateRevisions.ensure(
-        "candidate_skill",
-        candidateId,
+    return await this.options.storage.runImmediateTransaction(async () => {
+      const currentVersions = await this.requireCandidateVersions(candidateId);
+      const currentRevision = (
+        await this.options.storage.skillAggregateRevisions.ensure("candidate_skill", candidateId)
       ).revision;
       const targets = currentVersions.filter((version) => version.lifecycleState !== "revoked");
       if (targets.length === 0) {
@@ -1193,35 +1218,44 @@ export class CapabilitySystemService {
           selectedVersionId: currentVersions[0]!.versionId,
           changedVersionIds: [],
           occurredAt,
-          detail: { ...this.buildCandidateDetail(candidateId, currentRevision), revision: currentRevision },
+          detail: { ...(await this.buildCandidateDetail(candidateId, currentRevision)), revision: currentRevision },
         };
       }
-      const mutation = this.options.storage.skillAggregateRevisions.runWithRevision(
+      await this.options.storage.skillAggregateRevisions.fenceExpectedRevision(
         "candidate_skill",
         candidateId,
         currentRevision,
-        () => {
-          const changedVersionIds: string[] = [];
-          for (const version of targets) {
-            this.options.storage.candidateSkillVersions.updateLifecycleState(version.versionId, "revoked", occurredAt);
-            changedVersionIds.push(version.versionId);
-          }
-          const sorted = changedVersionIds.sort(compareCodeUnits);
-          persistCapabilitySystemRevokeEvidence(repository, {
-            authority,
-            candidateId,
-            revokedVersionIds: sorted,
-            reasonCode: reasonCode.slice(0, 128),
-            occurredAt,
-          });
-          return {
-            value: { changedVersionIds: sorted, detail: this.buildCandidateDetail(candidateId, currentRevision) },
-            changed: true,
-          };
-        },
         occurredAt,
       );
-      this.options.publishRealtime("candidate_skill_revoked", "capabilities", {
+      const changedVersionIds: string[] = [];
+      for (const version of targets) {
+        await this.options.storage.candidateSkillVersions.updateLifecycleState(
+          version.versionId,
+          "revoked",
+          occurredAt,
+        );
+        changedVersionIds.push(version.versionId);
+      }
+      const sorted = changedVersionIds.sort(compareCodeUnits);
+      await persistCapabilitySystemRevokeEvidence(repository, {
+        authority,
+        candidateId,
+        revokedVersionIds: sorted,
+        reasonCode: reasonCode.slice(0, 128),
+        occurredAt,
+      });
+      const revision = await this.options.storage.skillAggregateRevisions.advanceExpectedRevision(
+        "candidate_skill",
+        candidateId,
+        currentRevision,
+        occurredAt,
+      );
+      const mutation = {
+        value: { changedVersionIds: sorted, detail: await this.buildCandidateDetail(candidateId, currentRevision) },
+        changed: true,
+        revision: revision.revision,
+      };
+      await this.options.publishRealtime("candidate_skill_revoked", "capabilities", {
         candidateId,
         versionId: mutation.value.changedVersionIds[0],
         revokedVersionIds: mutation.value.changedVersionIds,
@@ -1240,16 +1274,18 @@ export class CapabilitySystemService {
     });
   }
 
-  public listCodeModeRuns(options: number | CodeModeRunListOptions = 100): CodeModeRunRecord[] {
+  public async listCodeModeRuns(options: number | CodeModeRunListOptions = 100): Promise<CodeModeRunRecord[]> {
     const filters = normalizeCodeModeRunListOptions(options);
-    const runs = this.listStoredCodeModeRunsForRead(filters).map((run) => this.hydrateCodeModeRunForRead(run));
+    const runs = await Promise.all(
+      (await this.listStoredCodeModeRunsForRead(filters)).map(async (run) => await this.hydrateCodeModeRunForRead(run)),
+    );
     return filters.status
       ? runs.filter((run) => run.status === filters.status).slice(0, filters.limit)
       : runs.slice(0, filters.limit);
   }
 
-  public getCodeModeRun(runId: string): CodeModeRunRecord {
-    return this.hydrateCodeModeRunForRead(this.options.storage.codeModeRuns.get(runId));
+  public async getCodeModeRun(runId: string): Promise<CodeModeRunRecord> {
+    return await this.hydrateCodeModeRunForRead(await this.options.storage.codeModeRuns.get(runId));
   }
 
   public async getCodeModeRunArtifactPreview(
@@ -1257,7 +1293,7 @@ export class CapabilitySystemService {
     artifactKind: CodeModeRunArtifactKind,
     scope?: Pick<CodeModeRunListOptions, "sessionId" | "turnId" | "workspaceId">,
   ): Promise<CodeModeRunArtifactPreview> {
-    const run = scope ? this.getCodeModeRunInScope(runId, scope) : this.getCodeModeRun(runId);
+    const run = scope ? await this.getCodeModeRunInScope(runId, scope) : await this.getCodeModeRun(runId);
     const target = selectCodeModeRunArtifact(run, artifactKind);
     const content = await this.readVerifiedManagedArtifactText(target.artifact, {
       label: target.label,
@@ -1288,13 +1324,15 @@ export class CapabilitySystemService {
     };
   }
 
-  public compareCodeModeRuns(
+  public async compareCodeModeRuns(
     runId: string,
     baselineRunId: string,
     scope?: Pick<CodeModeRunListOptions, "sessionId" | "turnId" | "workspaceId">,
-  ): CodeModeRunComparisonRecord {
-    const run = scope ? this.getCodeModeRunInScope(runId, scope) : this.getCodeModeRun(runId);
-    const baseline = scope ? this.getCodeModeRunInScope(baselineRunId, scope) : this.getCodeModeRun(baselineRunId);
+  ): Promise<CodeModeRunComparisonRecord> {
+    const run = scope ? await this.getCodeModeRunInScope(runId, scope) : await this.getCodeModeRun(runId);
+    const baseline = scope
+      ? await this.getCodeModeRunInScope(baselineRunId, scope)
+      : await this.getCodeModeRun(baselineRunId);
     return {
       runId: run.runId,
       baselineRunId: baseline.runId,
@@ -1320,11 +1358,11 @@ export class CapabilitySystemService {
     };
   }
 
-  public getCodeModeRunInScope(
+  public async getCodeModeRunInScope(
     runId: string,
     scope: Pick<CodeModeRunListOptions, "sessionId" | "turnId" | "workspaceId">,
-  ): CodeModeRunRecord {
-    const run = this.options.storage.codeModeRuns.get(runId);
+  ): Promise<CodeModeRunRecord> {
+    const run = await this.options.storage.codeModeRuns.get(runId);
     if (
       (scope.sessionId && run.sessionId !== scope.sessionId) ||
       (scope.turnId && run.turnId !== scope.turnId) ||
@@ -1332,7 +1370,7 @@ export class CapabilitySystemService {
     ) {
       throw new NotFoundError({ entity: "code mode run", id: runId });
     }
-    return this.hydrateCodeModeRunForRead(run);
+    return await this.hydrateCodeModeRunForRead(run);
   }
 
   public async verifyCodeModeRun(
@@ -1344,11 +1382,11 @@ export class CapabilitySystemService {
     if (!this.codeModeVerification) {
       throw new ConflictError({ message: "Code Mode workbench verification is unavailable." });
     }
-    const run = this.getCodeModeRunInScope(runId, scope);
+    const run = await this.getCodeModeRunInScope(runId, scope);
     const recorded = await this.codeModeVerification.verifyRun(run, request.commandName, operatorId);
     const response = {
       ...recorded,
-      run: this.hydrateCodeModeRunForRead(recorded.run),
+      run: await this.hydrateCodeModeRunForRead(recorded.run),
     };
     if (response.evidence.status === "verified") {
       await this.options.onVerifiedCodeModeRun?.(response);
@@ -1356,33 +1394,34 @@ export class CapabilitySystemService {
     return response;
   }
 
-  public listCodeModeRunVerificationEvidence(
+  public async listCodeModeRunVerificationEvidence(
     runId: string,
     scope: Pick<CodeModeRunListOptions, "sessionId" | "turnId" | "workspaceId">,
     limit = 50,
-  ): CodeModeVerificationEvidenceRecord[] {
-    this.getCodeModeRunInScope(runId, scope);
-    return this.options.storage.codeModeRuns.listVerificationEvidence(runId, limit);
+  ): Promise<CodeModeVerificationEvidenceRecord[]> {
+    await this.getCodeModeRunInScope(runId, scope);
+    return await this.options.storage.codeModeRuns.listVerificationEvidence(runId, limit);
   }
 
-  private listStoredCodeModeRuns(filters: Required<Pick<CodeModeRunListOptions, "limit">> & CodeModeRunListOptions) {
+  private async listStoredCodeModeRuns(
+    filters: Required<Pick<CodeModeRunListOptions, "limit">> & CodeModeRunListOptions,
+  ): Promise<CodeModeRunRecord[]> {
     const repository = this.options.storage.codeModeRuns as typeof this.options.storage.codeModeRuns & {
-      listFiltered?: (options: CodeModeRunListOptions) => CodeModeRunRecord[];
+      listFiltered?: (options: CodeModeRunListOptions) => Promise<CodeModeRunRecord[]>;
     };
     if (repository.listFiltered) {
-      return repository.listFiltered(filters);
+      return await repository.listFiltered(filters);
     }
-    return repository
-      .list(filters.limit)
+    return (await repository.list(filters.limit))
       .filter((run) => (filters.workspaceId ? run.workspaceId === filters.workspaceId : true))
       .filter((run) => (filters.sessionId ? run.sessionId === filters.sessionId : true))
       .filter((run) => (filters.turnId ? run.turnId === filters.turnId : true))
       .filter((run) => (filters.status ? run.status === filters.status : true));
   }
 
-  private listStoredCodeModeRunsForRead(
+  private async listStoredCodeModeRunsForRead(
     filters: Required<Pick<CodeModeRunListOptions, "limit">> & CodeModeRunListOptions,
-  ): CodeModeRunRecord[] {
+  ): Promise<CodeModeRunRecord[]> {
     if (
       filters.status === "expired" ||
       filters.status === "approval_pending" ||
@@ -1392,10 +1431,10 @@ export class CapabilitySystemService {
       const repository = this.options.storage.codeModeRuns as typeof this.options.storage.codeModeRuns & {
         listFilteredForStatusHydration?: (
           options: CodeModeRunListOptions & { status: CodeModeRunRecord["status"] },
-        ) => CodeModeRunRecord[];
+        ) => Promise<CodeModeRunRecord[]>;
       };
       if (repository.listFilteredForStatusHydration) {
-        return repository.listFilteredForStatusHydration({
+        return await repository.listFilteredForStatusHydration({
           workspaceId: filters.workspaceId,
           sessionId: filters.sessionId,
           turnId: filters.turnId,
@@ -1404,23 +1443,22 @@ export class CapabilitySystemService {
         });
       }
       const scanLimit = Math.min(Math.max(filters.limit * 4, filters.limit), 1000);
-      return repository
-        .list(scanLimit)
+      return (await repository.list(scanLimit))
         .filter((run) => (filters.workspaceId ? run.workspaceId === filters.workspaceId : true))
         .filter((run) => (filters.sessionId ? run.sessionId === filters.sessionId : true))
         .filter((run) => (filters.turnId ? run.turnId === filters.turnId : true))
         .filter((run) => run.status === filters.status || run.status === "approval_pending");
     }
-    return this.listStoredCodeModeRuns(filters);
+    return await this.listStoredCodeModeRuns(filters);
   }
 
-  public listChatPendingApprovals(sessionId: string): CodeModeApprovalQueueItem[] {
-    const approvals = this.listChatInlineApprovalsForSessionTree(sessionId);
-    return approvals
-      .map((item) => {
+  public async listChatPendingApprovals(sessionId: string): Promise<CodeModeApprovalQueueItem[]> {
+    const approvals = await this.listChatInlineApprovalsForSessionTree(sessionId);
+    const queue = await Promise.all(
+      approvals.map(async (item) => {
         let approval: ApprovalRequest | undefined;
         try {
-          approval = this.options.storage.approvals.get(item.approvalId);
+          approval = await this.options.storage.approvals.get(item.approvalId);
         } catch {
           approval = undefined;
         }
@@ -1455,11 +1493,12 @@ export class CapabilitySystemService {
           staleReason,
         } satisfies CodeModeApprovalQueueItem;
         return redactStructuredSecrets(queueItem).value;
-      })
-      .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+      }),
+    );
+    return queue.sort((left, right) => left.createdAt.localeCompare(right.createdAt));
   }
 
-  private listChatInlineApprovalsForSessionTree(sessionId: string): ChatInlineApprovalRecord[] {
+  private async listChatInlineApprovalsForSessionTree(sessionId: string): Promise<ChatInlineApprovalRecord[]> {
     const approvalsById = new Map<string, ChatInlineApprovalRecord>();
     const addApprovals = (items: ChatInlineApprovalRecord[]) => {
       for (const item of items) {
@@ -1468,14 +1507,14 @@ export class CapabilitySystemService {
         }
       }
     };
-    addApprovals(this.options.storage.chatInlineApprovals.listBySession(sessionId));
-    for (const childSessionId of this.resolveWaitingDelegatedApprovalSessionIds(sessionId)) {
-      addApprovals(this.options.storage.chatInlineApprovals.listBySession(childSessionId));
+    addApprovals(await this.options.storage.chatInlineApprovals.listBySession(sessionId));
+    for (const childSessionId of await this.resolveWaitingDelegatedApprovalSessionIds(sessionId)) {
+      addApprovals(await this.options.storage.chatInlineApprovals.listBySession(childSessionId));
     }
     return [...approvalsById.values()];
   }
 
-  private resolveWaitingDelegatedApprovalSessionIds(sessionId: string): string[] {
+  private async resolveWaitingDelegatedApprovalSessionIds(sessionId: string): Promise<string[]> {
     const childSessionIds = new Set<string>();
     const addChildSessionId = (value: unknown) => {
       const childSessionId = asOptionalString(value);
@@ -1484,7 +1523,7 @@ export class CapabilitySystemService {
       }
     };
     try {
-      const plans = this.options.storage.chatExecutionPlans.listBySession(sessionId, 10);
+      const plans = await this.options.storage.chatExecutionPlans.listBySession(sessionId, 10);
       const activePlan =
         plans.find((plan) => plan.status === "running") ??
         plans.find((plan) => plan.status === "ready") ??
@@ -1502,7 +1541,7 @@ export class CapabilitySystemService {
     }
     let traces: ChatTurnTraceRecord[];
     try {
-      traces = this.options.storage.chatTurnTraces.listBySession(sessionId, 25);
+      traces = await this.options.storage.chatTurnTraces.listBySession(sessionId, 25);
     } catch {
       return [...childSessionIds];
     }
@@ -1529,15 +1568,15 @@ export class CapabilitySystemService {
   }
 
   public async createCodeModeRun(request: CodeModeRunRequest): Promise<CodeModeRunRecord> {
-    this.requireCodeModeEnabled();
+    await this.requireCodeModeEnabled();
     const source = request.source.trim();
     if (!source) {
       throw new ValidationError({ message: "Code Mode source is required." });
     }
     validateGuestSource(source);
-    this.ensureSkillLifecycleBackfill();
+    await this.ensureSkillLifecycleBackfill();
 
-    const snapshot = this.freezeCatalogSnapshot();
+    const snapshot = await this.freezeCatalogSnapshot();
     const createdAt = new Date().toISOString();
     const wrapperManifest = this.buildWrapperManifest(snapshot, createdAt);
     const codeHash = sha256Text(source);
@@ -1564,7 +1603,7 @@ export class CapabilitySystemService {
     const originSurface = normalizeCodeModeOriginSurface(request.originSurface);
     const sessionId = request.sessionId?.trim() || undefined;
     const turnId = request.turnId?.trim() || undefined;
-    const chatSessionMeta = sessionId ? this.options.storage.chatSessionMeta.get(sessionId) : undefined;
+    const chatSessionMeta = sessionId ? await this.options.storage.chatSessionMeta.get(sessionId) : undefined;
     if (sessionId && !chatSessionMeta) {
       throw new ValidationError({ message: `Code Mode session ${sessionId} was not found.` });
     }
@@ -1574,7 +1613,7 @@ export class CapabilitySystemService {
       }
       let turnTrace: ChatTurnTraceRecord;
       try {
-        turnTrace = this.options.storage.chatTurnTraces.get(turnId);
+        turnTrace = await this.options.storage.chatTurnTraces.get(turnId);
       } catch {
         throw new ValidationError({ message: `Code Mode turn ${turnId} was not found.` });
       }
@@ -1590,7 +1629,7 @@ export class CapabilitySystemService {
       requestWorkspaceId: request.workspaceId,
       sessionWorkspaceId,
     });
-    const policyContext = this.options.resolvePolicyContext?.({
+    const policyContext = await this.options.resolvePolicyContext?.({
       operatorId: request.operatorId,
       workspaceId,
       sessionId,
@@ -1610,14 +1649,14 @@ export class CapabilitySystemService {
       });
     }
     const autonomousActivation = request.autonomousActivation
-      ? this.prepareCodeModeAutonomousActivation({
+      ? await this.prepareCodeModeAutonomousActivation({
           workspaceId,
           surface: originSurface ?? "code",
           estimatedCostUsd: request.estimatedCostUsd,
         })
       : undefined;
     const policySnapshot = {
-      ...this.options.readPolicySnapshot(),
+      ...(await this.options.readPolicySnapshot()),
       codeModePermissionContext: serializePolicyContext(policyContext),
       codeModeInput: runInput,
       codeModeInputHash: runInputHash,
@@ -1677,16 +1716,16 @@ export class CapabilitySystemService {
       localOperatorOverrideId: policyContext?.localOperatorOverrideId,
     });
 
-    const buildFailedRunRecord = (
+    const buildFailedRunRecord = async (
       error: unknown,
       errorCode: "approval_create_failed" | "approval_registration_failed",
       phase: "approval_create" | "approval_registration",
       approvalId?: string,
       cleanup?: LateCodeModeApprovalCleanupResult,
-    ): CodeModeRunRecord => {
+    ): Promise<CodeModeRunRecord> => {
       const normalized = normalizeCodeModeIpcError(error);
       const failedAt = new Date().toISOString();
-      return this.options.storage.codeModeRuns.upsert({
+      return await this.options.storage.codeModeRuns.upsert({
         runId,
         status: "failed",
         language: request.language,
@@ -1733,8 +1772,8 @@ export class CapabilitySystemService {
         finishedAt: failedAt,
       });
     };
-    const publishCreationFailure = (record: CodeModeRunRecord) => {
-      this.options.publishRealtime("code_mode_run_failed", "capabilities", {
+    const publishCreationFailure = async (record: CodeModeRunRecord) => {
+      await this.options.publishRealtime("code_mode_run_failed", "capabilities", {
         runId: record.runId,
         approvalId: record.approvalId,
         capabilitySnapshotId: record.capabilitySnapshotId,
@@ -1764,8 +1803,8 @@ export class CapabilitySystemService {
       const cleanup = lateApprovalId
         ? await this.terminalizeLateFailedCodeModeApproval(lateApprovalId, error)
         : undefined;
-      publishCreationFailure(
-        buildFailedRunRecord(error, "approval_create_failed", "approval_create", lateApprovalId, cleanup),
+      await publishCreationFailure(
+        await buildFailedRunRecord(error, "approval_create_failed", "approval_create", lateApprovalId, cleanup),
       );
       throw error;
     }
@@ -1813,8 +1852,8 @@ export class CapabilitySystemService {
 
     let stored: CodeModeRunRecord | undefined;
     try {
-      stored = this.options.storage.codeModeRuns.upsert(runRecord);
-      this.options.storage.pendingApprovalActions.upsertPending({
+      stored = await this.options.storage.codeModeRuns.upsert(runRecord);
+      await this.options.storage.pendingApprovalActions.upsertPending({
         approvalId: approval.approvalId,
         actionType: "code_mode.run",
         request: {
@@ -1830,7 +1869,7 @@ export class CapabilitySystemService {
         createdAt,
         expiresAt: approval.expiresAt,
       });
-      this.options.storage.approvalEvents.append({
+      await this.options.storage.approvalEvents.append({
         approvalId: approval.approvalId,
         eventType: "pending_action_registered",
         actorId: "system",
@@ -1845,7 +1884,7 @@ export class CapabilitySystemService {
       });
 
       if (sessionId) {
-        this.options.storage.chatInlineApprovals.upsert({
+        await this.options.storage.chatInlineApprovals.upsert({
           approvalId: approval.approvalId,
           sessionId,
           turnId: turnId ?? `code-mode-${stored.runId}`,
@@ -1865,11 +1904,11 @@ export class CapabilitySystemService {
         error: error instanceof Error ? error.message : String(error),
         errorCode: "approval_registration_failed",
       };
-      publishCreationFailure(
-        buildFailedRunRecord(error, "approval_registration_failed", "approval_registration", approval.approvalId),
+      await publishCreationFailure(
+        await buildFailedRunRecord(error, "approval_registration_failed", "approval_registration", approval.approvalId),
       );
       try {
-        this.options.storage.pendingApprovalActions.markResolved(approval.approvalId, "failed", failureDetails);
+        await this.options.storage.pendingApprovalActions.markResolved(approval.approvalId, "failed", failureDetails);
       } catch (pendingResolveError) {
         // If pending-action creation itself failed, there is nothing to resolve.
         void pendingResolveError;
@@ -1884,7 +1923,7 @@ export class CapabilitySystemService {
         void approvalResolveError;
       }
       try {
-        this.options.storage.approvalEvents.append({
+        await this.options.storage.approvalEvents.append({
           approvalId: approval.approvalId,
           eventType: "pending_action_refused",
           actorId: "system",
@@ -1910,7 +1949,7 @@ export class CapabilitySystemService {
       createdAt,
     });
 
-    this.options.publishRealtime("code_mode_run_created", "capabilities", {
+    await this.options.publishRealtime("code_mode_run_created", "capabilities", {
       runId: stored.runId,
       approvalId: stored.approvalId,
       capabilitySnapshotId: stored.capabilitySnapshotId,
@@ -1923,7 +1962,7 @@ export class CapabilitySystemService {
       localOperatorOverrideId: stored.localOperatorOverrideId,
       autonomousActivation: stored.autonomousActivation,
     });
-    return this.hydrateCodeModeRunForRead(stored);
+    return await this.hydrateCodeModeRunForRead(stored);
   }
 
   private recordCodeModeCapabilityProfileDecision(input: {
@@ -2055,12 +2094,12 @@ export class CapabilitySystemService {
     }
   }
 
-  private prepareCodeModeAutonomousActivation(input: {
+  private async prepareCodeModeAutonomousActivation(input: {
     workspaceId?: string;
     surface: CodeModeOriginSurface;
     estimatedCostUsd?: number;
-  }): CodeModeAutonomousActivationEvidence {
-    const result = this.autonomousActivationGrants.evaluateGrant({
+  }): Promise<CodeModeAutonomousActivationEvidence> {
+    const result = await this.autonomousActivationGrants.evaluateGrant({
       workspaceId: input.workspaceId,
       surface: input.surface,
       riskLevel: "danger",
@@ -2087,7 +2126,7 @@ export class CapabilitySystemService {
     // prevents concurrently-prepared runs from collectively exceeding the operator's
     // activation/budget ceiling. The trade-off is that a later-aborted run still consumes
     // its reservation (conservative — it over-restricts, never over-permits).
-    this.autonomousActivationGrants.recordGrantUse(result.matchedGrantId, input.estimatedCostUsd ?? 0);
+    await this.autonomousActivationGrants.recordGrantUse(result.matchedGrantId, input.estimatedCostUsd ?? 0);
     return evidence;
   }
 
@@ -2095,16 +2134,16 @@ export class CapabilitySystemService {
     approvalId: string,
     signal?: AbortSignal,
   ): Promise<ToolInvokeResult | undefined> {
-    const pending = this.options.storage.pendingApprovalActions.find(approvalId);
+    const pending = await this.options.storage.pendingApprovalActions.find(approvalId);
     if (!pending || pending.resolutionStatus !== "pending" || pending.actionType !== "code_mode.run") {
-      return this.terminalizeCodeModeRunForMissingPendingAction(approvalId);
+      return await this.terminalizeCodeModeRunForMissingPendingAction(approvalId);
     }
-    const approval = this.options.storage.approvals.get(approvalId);
+    const approval = await this.options.storage.approvals.get(approvalId);
     const approvalRunId = approval.kind === "code_mode.run" ? resolveCodeModeApprovalRunId(approval) : undefined;
     const runId = asOptionalString(pending.request.runId);
     if (!runId) {
       const reason = "missing code mode run id";
-      const terminalized = this.terminalizeCodeModeRunForCorruptPendingAction(approval, pending, {
+      const terminalized = await this.terminalizeCodeModeRunForCorruptPendingAction(approval, pending, {
         reason,
         errorCode: "RUN_ID_MISSING",
         terminalReason: "Code Mode pending action is missing its run id; approved run cannot execute safely.",
@@ -2113,10 +2152,10 @@ export class CapabilitySystemService {
       if (terminalized) {
         return terminalized;
       }
-      this.options.storage.pendingApprovalActions.markResolved(approvalId, "failed", {
+      await this.options.storage.pendingApprovalActions.markResolved(approvalId, "failed", {
         reason,
       });
-      this.options.storage.approvalEvents.append({
+      await this.options.storage.approvalEvents.append({
         approvalId,
         eventType: "pending_action_refused",
         actorId: "system",
@@ -2126,7 +2165,7 @@ export class CapabilitySystemService {
           errorCode: "RUN_ID_MISSING",
         },
       });
-      this.options.publishRealtime("code_mode_run_refused", "capabilities", {
+      await this.options.publishRealtime("code_mode_run_refused", "capabilities", {
         approvalId,
         error: reason,
         errorCode: "RUN_ID_MISSING",
@@ -2135,7 +2174,7 @@ export class CapabilitySystemService {
     }
     if (approvalRunId && approvalRunId !== runId) {
       const reason = `Code Mode pending action points at ${runId}, but approval ${approvalId} belongs to ${approvalRunId}.`;
-      const terminalized = this.terminalizeCodeModeRunForCorruptPendingAction(approval, pending, {
+      const terminalized = await this.terminalizeCodeModeRunForCorruptPendingAction(approval, pending, {
         reason,
         errorCode: "RUN_ID_MISMATCH",
         terminalReason: "Code Mode pending action targets a different run; approved run cannot execute safely.",
@@ -2146,9 +2185,9 @@ export class CapabilitySystemService {
       }
     }
 
-    let existing = this.options.storage.codeModeRuns.find(runId);
+    let existing = await this.options.storage.codeModeRuns.find(runId);
     if (!existing) {
-      const terminalized = this.terminalizeCodeModeRunForCorruptPendingAction(approval, pending, {
+      const terminalized = await this.terminalizeCodeModeRunForCorruptPendingAction(approval, pending, {
         reason: `Code Mode run ${runId} is missing; approved pending action cannot execute.`,
         errorCode: "RUN_NOT_FOUND",
         terminalReason: "Code Mode pending action points at a missing run; approved run cannot execute safely.",
@@ -2158,8 +2197,8 @@ export class CapabilitySystemService {
         return terminalized;
       }
       const reason = `Code Mode run ${runId} is missing; approved pending action cannot execute.`;
-      this.options.storage.pendingApprovalActions.markResolved(approvalId, "failed", { runId, reason });
-      this.options.storage.approvalEvents.append({
+      await this.options.storage.pendingApprovalActions.markResolved(approvalId, "failed", { runId, reason });
+      await this.options.storage.approvalEvents.append({
         approvalId,
         eventType: "pending_action_refused",
         actorId: "system",
@@ -2170,7 +2209,7 @@ export class CapabilitySystemService {
           errorCode: "RUN_NOT_FOUND",
         },
       });
-      this.options.publishRealtime("code_mode_run_refused", "capabilities", {
+      await this.options.publishRealtime("code_mode_run_refused", "capabilities", {
         runId,
         approvalId,
         error: reason,
@@ -2179,7 +2218,7 @@ export class CapabilitySystemService {
       throw new NotFoundError({ entity: "code mode run", id: runId });
     }
     if (existing.status === "running") {
-      const recovered = recoverStaleCodeModeExecutionClaim(
+      const recovered = await recoverStaleCodeModeExecutionClaim(
         this.options.storage.codeModeRuns,
         existing,
         approvalId,
@@ -2187,7 +2226,7 @@ export class CapabilitySystemService {
       );
       if (recovered) {
         existing = recovered;
-        this.options.publishRealtime(
+        await this.options.publishRealtime(
           existing.status === "approval_pending"
             ? "code_mode_run_claim_recovered"
             : "code_mode_run_manual_reconciliation_required",
@@ -2201,7 +2240,7 @@ export class CapabilitySystemService {
           },
         );
       } else {
-        this.options.publishRealtime("code_mode_run_refused", "capabilities", {
+        await this.options.publishRealtime("code_mode_run_refused", "capabilities", {
           runId: existing.runId,
           approvalId,
           status: existing.status,
@@ -2213,7 +2252,7 @@ export class CapabilitySystemService {
       }
     }
     if (existing.status === "completed" || existing.status === "failed") {
-      this.options.storage.pendingApprovalActions.markResolved(
+      await this.options.storage.pendingApprovalActions.markResolved(
         approvalId,
         existing.status === "completed" ? "executed" : "failed",
         {
@@ -2229,14 +2268,14 @@ export class CapabilitySystemService {
           ...(existing.errorDetails ? { errorDetails: existing.errorDetails } : {}),
         },
       );
-      this.enqueueCodeModeFinalTranscriptSafely(existing);
+      await this.enqueueCodeModeFinalTranscriptSafely(existing);
       await this.flushCodeModeFinalTranscriptOutbox();
       return buildCodeModeToolInvokeResult(existing);
     }
     if (existing.status !== "approval_pending") {
       const reason = `Code Mode run ${runId} is ${existing.status}; only approval_pending runs can execute.`;
-      this.options.storage.pendingApprovalActions.markResolved(approvalId, "failed", { runId, reason });
-      this.options.storage.approvalEvents.append({
+      await this.options.storage.pendingApprovalActions.markResolved(approvalId, "failed", { runId, reason });
+      await this.options.storage.approvalEvents.append({
         approvalId,
         eventType: "pending_action_refused",
         actorId: "system",
@@ -2247,7 +2286,7 @@ export class CapabilitySystemService {
           error: reason,
         },
       });
-      this.options.publishRealtime("code_mode_run_refused", "capabilities", {
+      await this.options.publishRealtime("code_mode_run_refused", "capabilities", {
         runId: existing.runId,
         approvalId,
         status: existing.status,
@@ -2263,15 +2302,15 @@ export class CapabilitySystemService {
           ? `approval kind ${approval.kind} cannot execute Code Mode`
           : `approval status is ${approval.status}`;
       const refusedAt = new Date().toISOString();
-      const refusedRun = this.options.storage.codeModeRuns.upsert({
+      const refusedRun = await this.options.storage.codeModeRuns.upsert({
         ...existing,
         status: "failed",
         error: reason,
         sandbox: existing.sandbox ?? this.resolveCurrentSandboxMetadata(),
         finishedAt: refusedAt,
       });
-      this.options.storage.pendingApprovalActions.markResolved(approvalId, "failed", { reason });
-      this.options.storage.approvalEvents.append({
+      await this.options.storage.pendingApprovalActions.markResolved(approvalId, "failed", { reason });
+      await this.options.storage.approvalEvents.append({
         approvalId,
         eventType: "pending_action_refused",
         actorId: "system",
@@ -2282,7 +2321,7 @@ export class CapabilitySystemService {
           error: reason,
         },
       });
-      this.options.publishRealtime("code_mode_run_failed", "capabilities", {
+      await this.options.publishRealtime("code_mode_run_failed", "capabilities", {
         runId: refusedRun.runId,
         approvalId,
         status: refusedRun.status,
@@ -2294,15 +2333,15 @@ export class CapabilitySystemService {
     if (!isCodeModePendingActionExecutable(pending, approval)) {
       const reason = "Code Mode pending action expired before approval execution";
       const refusedAt = new Date().toISOString();
-      const refusedRun = this.options.storage.codeModeRuns.upsert({
+      const refusedRun = await this.options.storage.codeModeRuns.upsert({
         ...existing,
         status: "expired",
         error: reason,
         sandbox: existing.sandbox ?? this.resolveCurrentSandboxMetadata(),
         finishedAt: refusedAt,
       });
-      this.options.storage.pendingApprovalActions.markResolved(approvalId, "failed", { reason });
-      this.options.storage.approvalEvents.append({
+      await this.options.storage.pendingApprovalActions.markResolved(approvalId, "failed", { reason });
+      await this.options.storage.approvalEvents.append({
         approvalId,
         eventType: "pending_action_refused",
         actorId: "system",
@@ -2315,7 +2354,7 @@ export class CapabilitySystemService {
           approvalResolvedAt: approval.resolvedAt,
         },
       });
-      this.options.publishRealtime("code_mode_run_failed", "capabilities", {
+      await this.options.publishRealtime("code_mode_run_failed", "capabilities", {
         runId: refusedRun.runId,
         approvalId,
         status: refusedRun.status,
@@ -2338,7 +2377,7 @@ export class CapabilitySystemService {
       }
       throwIfCapabilitySystemAborted(signal, `Code mode run ${runId} was aborted before execution claim.`);
       if (!sandbox.available) {
-        this.options.publishRealtime("code_mode_sandbox_unavailable", "capabilities", {
+        await this.options.publishRealtime("code_mode_sandbox_unavailable", "capabilities", {
           runId,
           approvalId,
           sandbox,
@@ -2347,15 +2386,15 @@ export class CapabilitySystemService {
       }
       assertCodeModeSandboxAvailable(sandbox);
       claimStartedAt = new Date().toISOString();
-      const claimedRun = this.options.storage.codeModeRuns.claimForExecution({
+      const claimedRun = await this.options.storage.codeModeRuns.claimForExecution({
         runId,
         approvalId,
         sandbox,
         startedAt: claimStartedAt,
       });
       if (!claimedRun) {
-        const currentRun = this.options.storage.codeModeRuns.find(runId);
-        this.options.publishRealtime("code_mode_run_refused", "capabilities", {
+        const currentRun = await this.options.storage.codeModeRuns.find(runId);
+        await this.options.publishRealtime("code_mode_run_refused", "capabilities", {
           runId,
           approvalId,
           status: currentRun?.status ?? "missing",
@@ -2368,7 +2407,7 @@ export class CapabilitySystemService {
       claimGeneration = claimedRun.executionRecovery.generation;
       const activeClaimStartedAt = claimStartedAt;
       const activeClaimGeneration = claimGeneration;
-      this.options.publishRealtime("code_mode_run_started", "capabilities", {
+      await this.options.publishRealtime("code_mode_run_started", "capabilities", {
         runId,
         approvalId,
         startedAt: claimStartedAt,
@@ -2396,7 +2435,7 @@ export class CapabilitySystemService {
         policySnapshot,
       });
       assertCodeModeRunPolicyContextMatchesStoredRun(finalRun, runPolicyContext);
-      const livePolicyContext = this.options.resolvePolicyContext?.({
+      const livePolicyContext = await this.options.resolvePolicyContext?.({
         operatorId: finalRun.operatorId,
         workspaceId: finalRun.workspaceId,
         sessionId: finalRun.sessionId,
@@ -2413,7 +2452,7 @@ export class CapabilitySystemService {
       const beforeExecutionDispatch = async () => {
         throwIfCapabilitySystemAborted(signal, `Code mode run ${runId} was aborted before execution dispatch.`);
         const boundaryCrossedAt = new Date().toISOString();
-        const boundaryRun = this.options.storage.codeModeRuns.markExecutionBoundaryCrossed({
+        const boundaryRun = await this.options.storage.codeModeRuns.markExecutionBoundaryCrossed({
           runId,
           approvalId,
           startedAt: activeClaimStartedAt,
@@ -2424,7 +2463,7 @@ export class CapabilitySystemService {
           throw new ConflictError({ message: `Code Mode run ${runId} execution claim moved before dispatch.` });
         }
         finalRun = boundaryRun;
-        this.options.publishRealtime("code_mode_execution_boundary_crossed", "capabilities", {
+        await this.options.publishRealtime("code_mode_execution_boundary_crossed", "capabilities", {
           runId,
           approvalId,
           startedAt: claimStartedAt,
@@ -2433,7 +2472,7 @@ export class CapabilitySystemService {
         });
       };
       const onExecutionDispatchFailed = async () => {
-        const resetRun = this.options.storage.codeModeRuns.resetExecutionBoundaryBeforeDispatch({
+        const resetRun = await this.options.storage.codeModeRuns.resetExecutionBoundaryBeforeDispatch({
           runId,
           approvalId,
           startedAt: activeClaimStartedAt,
@@ -2509,7 +2548,7 @@ export class CapabilitySystemService {
         stderr: stderrArtifact ? { artifact: stderrArtifact, content: execution.stderr.text } : undefined,
       });
       const executionResult = attachTrustedCodeWriteVerification(execution.result, trustedCodeWriteVerification);
-      const outputRun = this.options.storage.codeModeRuns.recordExecutionOutput({
+      const outputRun = await this.options.storage.codeModeRuns.recordExecutionOutput({
         ...finalRun,
         sandbox,
         stdoutArtifact,
@@ -2536,7 +2575,7 @@ export class CapabilitySystemService {
         executionPhase: execution.failed ? "output_captured_failed" : "output_captured_completed",
       });
       if (!outputRun) {
-        return this.handleLostCodeModeExecutionClaim({
+        return await this.handleLostCodeModeExecutionClaim({
           runId,
           approvalId,
           claimStartedAt,
@@ -2553,7 +2592,7 @@ export class CapabilitySystemService {
             : `Code mode run ${runId} was interrupted after execution started.`
         : execution.manualReconciliationReason;
       const terminalRun = interruptionReason
-        ? this.options.storage.codeModeRuns.markExecutionInterrupted({
+        ? await this.options.storage.codeModeRuns.markExecutionInterrupted({
             runId,
             approvalId,
             startedAt: claimStartedAt,
@@ -2567,7 +2606,7 @@ export class CapabilitySystemService {
               ...(execution.errorDetails ? { childErrorDetails: execution.errorDetails } : {}),
             },
           })
-        : this.options.storage.codeModeRuns.finishExecutionClaim({
+        : await this.options.storage.codeModeRuns.finishExecutionClaim({
             ...finalRun,
             status: execution.failed ? "failed" : "completed",
             verification: execution.failed
@@ -2582,7 +2621,7 @@ export class CapabilitySystemService {
             finishedAt,
           });
       if (!terminalRun) {
-        return this.handleLostCodeModeExecutionClaim({
+        return await this.handleLostCodeModeExecutionClaim({
           runId,
           approvalId,
           claimStartedAt,
@@ -2592,7 +2631,7 @@ export class CapabilitySystemService {
       }
       finalRun = terminalRun;
       if (finalRun.executionRecovery.disposition === "manual_reconciliation") {
-        this.options.publishRealtime("code_mode_run_interrupted", "capabilities", {
+        await this.options.publishRealtime("code_mode_run_interrupted", "capabilities", {
           runId: finalRun.runId,
           approvalId,
           status: finalRun.status,
@@ -2615,7 +2654,7 @@ export class CapabilitySystemService {
           await this.stageCandidateBundle(finalRun, source, wrapperManifest, runInput);
         } catch (candidateError) {
           const message = candidateError instanceof Error ? candidateError.message : String(candidateError);
-          finalRun = this.options.storage.codeModeRuns.upsert({
+          finalRun = await this.options.storage.codeModeRuns.upsert({
             ...finalRun,
             status: "failed",
             error: message,
@@ -2626,7 +2665,7 @@ export class CapabilitySystemService {
             },
             finishedAt: new Date().toISOString(),
           });
-          this.options.publishRealtime("candidate_skill_stage_failed", "capabilities", {
+          await this.options.publishRealtime("candidate_skill_stage_failed", "capabilities", {
             runId: finalRun.runId,
             approvalId,
             error: message,
@@ -2634,7 +2673,7 @@ export class CapabilitySystemService {
         }
       }
 
-      this.options.storage.pendingApprovalActions.markResolved(
+      await this.options.storage.pendingApprovalActions.markResolved(
         approvalId,
         finalRun.status === "completed" ? "executed" : "failed",
         {
@@ -2649,7 +2688,7 @@ export class CapabilitySystemService {
           ...(finalRun.errorDetails ? { errorDetails: finalRun.errorDetails } : {}),
         },
       );
-      this.options.storage.approvalEvents.append({
+      await this.options.storage.approvalEvents.append({
         approvalId,
         eventType: "approved_action_executed",
         actorId: "system",
@@ -2659,7 +2698,7 @@ export class CapabilitySystemService {
           status: finalRun.status,
         },
       });
-      this.options.publishRealtime(
+      await this.options.publishRealtime(
         finalRun.status === "completed" ? "code_mode_run_completed" : "code_mode_run_failed",
         "capabilities",
         {
@@ -2674,7 +2713,7 @@ export class CapabilitySystemService {
           sandbox,
         },
       );
-      this.enqueueCodeModeFinalTranscriptSafely(finalRun);
+      await this.enqueueCodeModeFinalTranscriptSafely(finalRun);
       await this.flushCodeModeFinalTranscriptOutbox();
 
       return {
@@ -2708,7 +2747,7 @@ export class CapabilitySystemService {
         if (claimStartedAt && claimGeneration !== undefined) {
           if (finalRun.executionRecovery.phase === "claimed") {
             finalRun =
-              this.options.storage.codeModeRuns.releaseExecutionClaim({
+              (await this.options.storage.codeModeRuns.releaseExecutionClaim({
                 runId,
                 approvalId,
                 startedAt: claimStartedAt,
@@ -2716,10 +2755,10 @@ export class CapabilitySystemService {
                 interruptedAt,
                 interruptionReason,
                 sandbox,
-              }) ?? finalRun;
+              })) ?? finalRun;
           } else {
             finalRun =
-              this.options.storage.codeModeRuns.markExecutionInterrupted({
+              (await this.options.storage.codeModeRuns.markExecutionInterrupted({
                 runId,
                 approvalId,
                 startedAt: claimStartedAt,
@@ -2730,10 +2769,10 @@ export class CapabilitySystemService {
                   phase: "after_execution_boundary",
                   completedOutputPrefixPersisted: Boolean(finalRun.stdoutArtifact || finalRun.stderrArtifact),
                 },
-              }) ?? finalRun;
+              })) ?? finalRun;
           }
         }
-        this.options.publishRealtime(
+        await this.options.publishRealtime(
           retryablePreDispatchFailure && finalRun.status === "approval_pending"
             ? "code_mode_run_dispatch_deferred"
             : "code_mode_run_interrupted",
@@ -2748,13 +2787,13 @@ export class CapabilitySystemService {
           },
         );
         if (finalRun.status === "failed") {
-          this.options.storage.pendingApprovalActions.markResolved(approvalId, "failed", {
+          await this.options.storage.pendingApprovalActions.markResolved(approvalId, "failed", {
             runId,
             error: finalRun.error,
             errorCode: finalRun.errorCode,
             manualReconciliationRequired: true,
           });
-          this.enqueueCodeModeFinalTranscriptSafely(finalRun);
+          await this.enqueueCodeModeFinalTranscriptSafely(finalRun);
           await this.flushCodeModeFinalTranscriptOutbox();
           return buildCodeModeToolInvokeResult(finalRun);
         }
@@ -2765,7 +2804,7 @@ export class CapabilitySystemService {
       if (claimStartedAt && claimGeneration !== undefined) {
         const terminalRun =
           finalRun.executionRecovery.phase === "claimed"
-            ? this.options.storage.codeModeRuns.failExecutionClaimBeforeDispatch({
+            ? await this.options.storage.codeModeRuns.failExecutionClaimBeforeDispatch({
                 runId,
                 approvalId,
                 startedAt: claimStartedAt,
@@ -2775,7 +2814,7 @@ export class CapabilitySystemService {
                 errorCode: normalizedError.code,
                 errorDetails: normalizedError.details,
               })
-            : this.options.storage.codeModeRuns.markExecutionInterrupted({
+            : await this.options.storage.codeModeRuns.markExecutionInterrupted({
                 runId,
                 approvalId,
                 startedAt: claimStartedAt,
@@ -2790,7 +2829,7 @@ export class CapabilitySystemService {
                 },
               });
         if (!terminalRun) {
-          return this.handleLostCodeModeExecutionClaim({
+          return await this.handleLostCodeModeExecutionClaim({
             runId,
             approvalId,
             claimStartedAt,
@@ -2800,7 +2839,7 @@ export class CapabilitySystemService {
         }
         finalRun = terminalRun;
       } else {
-        finalRun = this.options.storage.codeModeRuns.upsert({
+        finalRun = await this.options.storage.codeModeRuns.upsert({
           ...finalRun,
           status: "failed",
           sandbox,
@@ -2811,13 +2850,13 @@ export class CapabilitySystemService {
           finishedAt: failedAt,
         });
       }
-      this.options.storage.pendingApprovalActions.markResolved(approvalId, "failed", {
+      await this.options.storage.pendingApprovalActions.markResolved(approvalId, "failed", {
         runId: finalRun.runId,
         error: finalRun.error,
         errorCode: finalRun.errorCode,
         errorDetails: finalRun.errorDetails,
       });
-      this.options.storage.approvalEvents.append({
+      await this.options.storage.approvalEvents.append({
         approvalId,
         eventType: "approved_action_executed",
         actorId: "system",
@@ -2830,7 +2869,7 @@ export class CapabilitySystemService {
           errorDetails: finalRun.errorDetails,
         },
       });
-      this.options.publishRealtime("code_mode_run_failed", "capabilities", {
+      await this.options.publishRealtime("code_mode_run_failed", "capabilities", {
         runId: finalRun.runId,
         approvalId,
         error: finalRun.error,
@@ -2838,7 +2877,7 @@ export class CapabilitySystemService {
         errorDetails: finalRun.errorDetails,
         sandbox,
       });
-      this.enqueueCodeModeFinalTranscriptSafely(finalRun);
+      await this.enqueueCodeModeFinalTranscriptSafely(finalRun);
       await this.flushCodeModeFinalTranscriptOutbox();
       return {
         outcome: "executed",
@@ -2861,12 +2900,12 @@ export class CapabilitySystemService {
    * previous process could publish their deterministic transcript event.
    * The outbox event id is stable, so repeated boots remain idempotent.
    */
-  public reconcileCodeModeFinalTranscriptDeliveries(limit = 500): {
+  public async reconcileCodeModeFinalTranscriptDeliveries(limit = 500): Promise<{
     checked: number;
     enqueued: number;
     errors: string[];
     omittedErrors: number;
-  } {
+  }> {
     const normalizedLimit = Number.isFinite(limit) ? Math.floor(limit) : 500;
     const pageSize = Math.max(1, Math.min(normalizedLimit, 500));
     const errors: string[] = [];
@@ -2876,7 +2915,7 @@ export class CapabilitySystemService {
     let checked = 0;
     let cursor: { finishedAt: string; runId: string } | undefined;
     while (true) {
-      const pending = this.options.storage.codeModeRuns.listPendingFinalTranscriptDeliveryPage({
+      const pending = await this.options.storage.codeModeRuns.listPendingFinalTranscriptDeliveryPage({
         afterFinishedAt: cursor?.finishedAt,
         afterRunId: cursor?.runId,
         limit: pageSize,
@@ -2887,7 +2926,7 @@ export class CapabilitySystemService {
       checked += pending.length;
       for (const run of pending) {
         try {
-          if (this.enqueueCodeModeFinalTranscript(run)) {
+          if (await this.enqueueCodeModeFinalTranscript(run)) {
             enqueued += 1;
           }
         } catch (error) {
@@ -2913,12 +2952,12 @@ export class CapabilitySystemService {
     return { checked, enqueued, errors, omittedErrors };
   }
 
-  private enqueueCodeModeFinalTranscriptSafely(run: CodeModeRunRecord): boolean {
+  private async enqueueCodeModeFinalTranscriptSafely(run: CodeModeRunRecord): Promise<boolean> {
     try {
-      return this.enqueueCodeModeFinalTranscript(run);
+      return await this.enqueueCodeModeFinalTranscript(run);
     } catch (error) {
       try {
-        this.options.publishRealtime("code_mode_transcript_delivery_deferred", "capabilities", {
+        await this.options.publishRealtime("code_mode_transcript_delivery_deferred", "capabilities", {
           runId: run.runId,
           error: boundRedactedError(errorMessage(error)),
         });
@@ -2930,7 +2969,7 @@ export class CapabilitySystemService {
     }
   }
 
-  private enqueueCodeModeFinalTranscript(run: CodeModeRunRecord): boolean {
+  private async enqueueCodeModeFinalTranscript(run: CodeModeRunRecord): Promise<boolean> {
     const eventId = run.executionRecovery.finalTranscriptEventId;
     if (
       !run.sessionId ||
@@ -2948,7 +2987,7 @@ export class CapabilitySystemService {
     ) {
       return false;
     }
-    const session = this.options.storage.sessions.getBySessionId(run.sessionId);
+    const session = await this.options.storage.sessions.getBySessionId(run.sessionId);
     const timestamp = run.finishedAt ?? new Date().toISOString();
     const message: ChatMessageRecord = {
       messageId: eventId,
@@ -2971,9 +3010,9 @@ export class CapabilitySystemService {
       actorId: "code-mode",
       payload: { message },
     };
-    const wasQueued = Boolean(this.options.storage.transcriptOutbox.get(eventId));
-    this.options.storage.runImmediateTransaction(() => {
-      const latest = this.options.storage.codeModeRuns.get(run.runId);
+    const wasQueued = Boolean(await this.options.storage.transcriptOutbox.get(eventId));
+    await this.options.storage.runImmediateTransaction(async () => {
+      const latest = await this.options.storage.codeModeRuns.get(run.runId);
       if (
         latest.executionRecovery.finalTranscriptEnqueuedAt ||
         latest.executionRecovery.generation !== run.executionRecovery.generation ||
@@ -2982,16 +3021,16 @@ export class CapabilitySystemService {
       ) {
         return;
       }
-      this.options.storage.chatMessages.upsert(message, timestamp);
-      this.options.storage.transcriptOutbox.enqueue(event, timestamp);
-      this.options.storage.codeModeRuns.markFinalTranscriptEnqueued({
+      await this.options.storage.chatMessages.upsert(message, timestamp);
+      await this.options.storage.transcriptOutbox.enqueue(event, timestamp);
+      await this.options.storage.codeModeRuns.markFinalTranscriptEnqueued({
         runId: latest.runId,
         executionGeneration: latest.executionRecovery.generation,
         eventId,
         enqueuedAt: timestamp,
       });
     });
-    return !wasQueued && Boolean(this.options.storage.transcriptOutbox.get(eventId));
+    return !wasQueued && Boolean(await this.options.storage.transcriptOutbox.get(eventId));
   }
 
   private async flushCodeModeFinalTranscriptOutbox(): Promise<void> {
@@ -3002,7 +3041,7 @@ export class CapabilitySystemService {
       await this.options.flushTranscriptOutbox();
     } catch (error) {
       try {
-        this.options.publishRealtime("code_mode_transcript_delivery_deferred", "capabilities", {
+        await this.options.publishRealtime("code_mode_transcript_delivery_deferred", "capabilities", {
           error: boundRedactedError(errorMessage(error)),
         });
       } catch (diagnosticError) {
@@ -3012,16 +3051,16 @@ export class CapabilitySystemService {
     }
   }
 
-  private handleLostCodeModeExecutionClaim(input: {
+  private async handleLostCodeModeExecutionClaim(input: {
     runId: string;
     approvalId: string;
     claimStartedAt: string;
     claimGeneration: number;
     sandbox: CodeModeSandboxMetadata;
-  }): undefined {
-    const currentRun = this.options.storage.codeModeRuns.find(input.runId);
+  }): Promise<undefined> {
+    const currentRun = await this.options.storage.codeModeRuns.find(input.runId);
     const reason = `Code Mode run ${input.runId} execution claim moved before terminal update.`;
-    this.options.storage.approvalEvents.append({
+    await this.options.storage.approvalEvents.append({
       approvalId: input.approvalId,
       eventType: "code_mode_execution_claim_lost",
       actorId: "system",
@@ -3036,7 +3075,7 @@ export class CapabilitySystemService {
         error: reason,
       },
     });
-    this.options.publishRealtime("code_mode_run_claim_lost", "capabilities", {
+    await this.options.publishRealtime("code_mode_run_claim_lost", "capabilities", {
       runId: input.runId,
       approvalId: input.approvalId,
       status: currentRun?.status ?? "missing",
@@ -3068,7 +3107,7 @@ export class CapabilitySystemService {
       );
     }
     try {
-      this.options.storage.approvalEvents.append({
+      await this.options.storage.approvalEvents.append({
         approvalId,
         eventType: "pending_action_refused",
         actorId: "system",
@@ -3092,17 +3131,19 @@ export class CapabilitySystemService {
     };
   }
 
-  private hydrateCodeModeRunForRead(run: CodeModeRunRecord): CodeModeRunRecord {
-    const hydrated = this.hydrateCodeModeRunLinkage(
-      this.terminalizeExpiredCodeModeRun(this.terminalizeResolvedCodeModeRunWithMissingPendingAction(run)),
+  private async hydrateCodeModeRunForRead(run: CodeModeRunRecord): Promise<CodeModeRunRecord> {
+    const hydrated = await this.hydrateCodeModeRunLinkage(
+      await this.terminalizeExpiredCodeModeRun(await this.terminalizeResolvedCodeModeRunWithMissingPendingAction(run)),
     );
     return this.codeModeVerification?.refreshRun(hydrated) ?? hydrated;
   }
 
-  private terminalizeCodeModeRunForMissingPendingAction(approvalId: string): ToolInvokeResult | undefined {
+  private async terminalizeCodeModeRunForMissingPendingAction(
+    approvalId: string,
+  ): Promise<ToolInvokeResult | undefined> {
     let approval: ApprovalRequest;
     try {
-      approval = this.options.storage.approvals.get(approvalId);
+      approval = await this.options.storage.approvals.get(approvalId);
     } catch {
       return undefined;
     }
@@ -3110,9 +3151,9 @@ export class CapabilitySystemService {
     if (approval.kind !== "code_mode.run" || !runId || !isResolvedCodeModeApprovalStatus(approval.status)) {
       return undefined;
     }
-    const run = this.options.storage.codeModeRuns.find(runId);
+    const run = await this.options.storage.codeModeRuns.find(runId);
     if (!run) {
-      this.appendCodeModeMissingPendingActionEvent(approval, undefined, {
+      await this.appendCodeModeMissingPendingActionEvent(approval, undefined, {
         status: "missing",
         error: `Code Mode run ${runId} is missing while recovering a resolved approval without a pending action.`,
         errorCode: "RUN_NOT_FOUND",
@@ -3128,7 +3169,7 @@ export class CapabilitySystemService {
         },
       };
     }
-    const terminal = this.terminalizeResolvedCodeModeRunWithMissingPendingAction(run, approval);
+    const terminal = await this.terminalizeResolvedCodeModeRunWithMissingPendingAction(run, approval);
     return {
       outcome: "executed",
       policyReason: `code_mode_run:${terminal.status}`,
@@ -3144,7 +3185,7 @@ export class CapabilitySystemService {
     };
   }
 
-  private terminalizeCodeModeRunForCorruptPendingAction(
+  private async terminalizeCodeModeRunForCorruptPendingAction(
     approval: ApprovalRequest,
     pending: PendingApprovalAction,
     input: {
@@ -3153,27 +3194,27 @@ export class CapabilitySystemService {
       terminalReason: string;
       terminalErrorCode: string;
     },
-  ): ToolInvokeResult | undefined {
+  ): Promise<ToolInvokeResult | undefined> {
     const runId = resolveCodeModeApprovalRunId(approval);
     if (approval.kind !== "code_mode.run" || !runId || !isResolvedCodeModeApprovalStatus(approval.status)) {
       return undefined;
     }
-    const run = this.options.storage.codeModeRuns.find(runId);
+    const run = await this.options.storage.codeModeRuns.find(runId);
     if (!run) {
       const pendingRunId = pending.request.runId === undefined ? null : asOptionalString(pending.request.runId);
-      this.options.storage.pendingApprovalActions.markResolved(approval.approvalId, "failed", {
+      await this.options.storage.pendingApprovalActions.markResolved(approval.approvalId, "failed", {
         runId,
         pendingRunId,
         reason: input.reason,
         errorCode: input.errorCode,
       });
-      this.appendCodeModeMissingPendingActionEvent(approval, undefined, {
+      await this.appendCodeModeMissingPendingActionEvent(approval, undefined, {
         status: "missing",
         pendingRunId,
         error: input.reason,
         errorCode: input.errorCode,
       });
-      this.options.publishRealtime("code_mode_run_refused", "capabilities", {
+      await this.options.publishRealtime("code_mode_run_refused", "capabilities", {
         runId,
         approvalId: approval.approvalId,
         pendingRunId,
@@ -3192,13 +3233,13 @@ export class CapabilitySystemService {
       };
     }
     const pendingRunId = pending.request.runId === undefined ? null : asOptionalString(pending.request.runId);
-    this.options.storage.pendingApprovalActions.markResolved(approval.approvalId, "failed", {
+    await this.options.storage.pendingApprovalActions.markResolved(approval.approvalId, "failed", {
       runId: run.runId,
       pendingRunId,
       reason: input.reason,
       errorCode: input.errorCode,
     });
-    const terminal = this.terminalizeResolvedCodeModeRunWithMissingPendingAction(run, approval, {
+    const terminal = await this.terminalizeResolvedCodeModeRunWithMissingPendingAction(run, approval, {
       force: true,
       reason: input.terminalReason,
       errorCode: input.terminalErrorCode,
@@ -3220,7 +3261,7 @@ export class CapabilitySystemService {
     };
   }
 
-  private terminalizeResolvedCodeModeRunWithMissingPendingAction(
+  private async terminalizeResolvedCodeModeRunWithMissingPendingAction(
     run: CodeModeRunRecord,
     approvalInput?: ApprovalRequest,
     options?: {
@@ -3230,23 +3271,24 @@ export class CapabilitySystemService {
       errorDetailsReason?: string;
       pendingRunId?: string | null;
     },
-  ): CodeModeRunRecord {
+  ): Promise<CodeModeRunRecord> {
     if (run.status !== "approval_pending" || !run.approvalId) {
       return run;
     }
-    const pending = this.options.storage.pendingApprovalActions.find(run.approvalId);
+    const approvalId = run.approvalId;
+    const pending = await this.options.storage.pendingApprovalActions.find(approvalId);
     if (!options?.force && pending?.resolutionStatus === "pending") {
       return run;
     }
     const approval =
       approvalInput ??
-      (() => {
+      (await (async () => {
         try {
-          return this.options.storage.approvals.get(run.approvalId);
+          return await this.options.storage.approvals.get(approvalId);
         } catch {
           return undefined;
         }
-      })();
+      })());
     if (!approval || approval.kind !== "code_mode.run" || !isResolvedCodeModeApprovalStatus(approval.status)) {
       return run;
     }
@@ -3269,7 +3311,7 @@ export class CapabilitySystemService {
         : approval.status === "edited"
           ? "approval_edited_pending_action_missing"
           : "pending_action_missing");
-    const terminal = this.options.storage.codeModeRuns.upsert({
+    const terminal = await this.options.storage.codeModeRuns.upsert({
       ...run,
       status: nonExecutingApproval ? "rejected" : "failed",
       error: reason,
@@ -3284,13 +3326,13 @@ export class CapabilitySystemService {
       sandbox: run.sandbox ?? this.resolveCurrentSandboxMetadata(),
       finishedAt: run.finishedAt ?? new Date().toISOString(),
     });
-    this.appendCodeModeMissingPendingActionEvent(approval, terminal, {
+    await this.appendCodeModeMissingPendingActionEvent(approval, terminal, {
       status: terminal.status,
       error: reason,
       errorCode,
       ...(options?.pendingRunId !== undefined ? { pendingRunId: options.pendingRunId } : {}),
     });
-    this.options.publishRealtime(
+    await this.options.publishRealtime(
       nonExecutingApproval ? "code_mode_run_refused" : "code_mode_run_failed",
       "capabilities",
       {
@@ -3306,12 +3348,12 @@ export class CapabilitySystemService {
     return terminal;
   }
 
-  private appendCodeModeMissingPendingActionEvent(
+  private async appendCodeModeMissingPendingActionEvent(
     approval: ApprovalRequest,
     run: CodeModeRunRecord | undefined,
     payload: Record<string, unknown>,
-  ): void {
-    this.options.storage.approvalEvents.append({
+  ): Promise<void> {
+    await this.options.storage.approvalEvents.append({
       approvalId: approval.approvalId,
       eventType: "pending_action_refused",
       actorId: "system",
@@ -3325,22 +3367,22 @@ export class CapabilitySystemService {
     });
   }
 
-  private terminalizeExpiredCodeModeRun(run: CodeModeRunRecord): CodeModeRunRecord {
+  private async terminalizeExpiredCodeModeRun(run: CodeModeRunRecord): Promise<CodeModeRunRecord> {
     if (run.status !== "approval_pending" || !run.approvalId) {
       return run;
     }
     let approval: ApprovalRequest | undefined;
     try {
-      approval = this.options.storage.approvals.get(run.approvalId);
+      approval = await this.options.storage.approvals.get(run.approvalId);
     } catch {
       approval = undefined;
     }
-    const pending = this.options.storage.pendingApprovalActions.find(run.approvalId);
+    const pending = await this.options.storage.pendingApprovalActions.find(run.approvalId);
     if (!isCodeModeApprovalExpiredForRead(approval, pending)) {
       return run;
     }
     const reason = "Code Mode approval expired before execution";
-    const expired = this.options.storage.codeModeRuns.upsert({
+    const expired = await this.options.storage.codeModeRuns.upsert({
       ...run,
       status: "expired",
       error: reason,
@@ -3348,7 +3390,7 @@ export class CapabilitySystemService {
       finishedAt: run.finishedAt ?? new Date().toISOString(),
     });
     try {
-      this.options.storage.pendingApprovalActions.markResolved(run.approvalId, "failed", {
+      await this.options.storage.pendingApprovalActions.markResolved(run.approvalId, "failed", {
         runId: run.runId,
         reason,
       });
@@ -3357,7 +3399,7 @@ export class CapabilitySystemService {
       // Missing/corrupt pending-action rows should not hide the Code Mode run
       // terminalization truth from list/detail reads.
     }
-    this.options.storage.approvalEvents.append({
+    await this.options.storage.approvalEvents.append({
       approvalId: run.approvalId,
       eventType: "pending_action_refused",
       actorId: "system",
@@ -3371,7 +3413,7 @@ export class CapabilitySystemService {
         pendingExpiresAt: pending?.expiresAt,
       },
     });
-    this.options.publishRealtime("code_mode_run_failed", "capabilities", {
+    await this.options.publishRealtime("code_mode_run_failed", "capabilities", {
       runId: expired.runId,
       approvalId: run.approvalId,
       status: expired.status,
@@ -3381,12 +3423,12 @@ export class CapabilitySystemService {
     return expired;
   }
 
-  private hydrateCodeModeRunLinkage(run: CodeModeRunRecord): CodeModeRunRecord {
+  private async hydrateCodeModeRunLinkage(run: CodeModeRunRecord): Promise<CodeModeRunRecord> {
     if (run.originSurface || !run.approvalId) {
       return run;
     }
     try {
-      const approval = this.options.storage.approvals.get(run.approvalId);
+      const approval = await this.options.storage.approvals.get(run.approvalId);
       const originSurface = normalizeCodeModeOriginSurface(approval.linkage?.originSurface);
       return originSurface ? { ...run, originSurface } : run;
     } catch {
@@ -3394,19 +3436,21 @@ export class CapabilitySystemService {
     }
   }
 
-  private buildCandidateDetail(candidateId: string, revision?: number): CandidateSkillDetailRecord {
-    const versions = this.requireCandidateVersions(candidateId);
+  private async buildCandidateDetail(candidateId: string, revision?: number): Promise<CandidateSkillDetailRecord> {
+    const versions = await this.requireCandidateVersions(candidateId);
     const aggregateRevision =
-      revision ?? this.options.storage.skillAggregateRevisions.ensure("candidate_skill", candidateId).revision;
+      revision ?? (await this.options.storage.skillAggregateRevisions.ensure("candidate_skill", candidateId)).revision;
     const activeVersion = versions.find(
       (version) => version.lifecycleState === "approved" || version.lifecycleState === "trusted",
     );
     const latestVersion = versions[0]!;
-    const relatedProposals = this.options.storage.capabilityProposals
-      .list(200)
-      .filter((proposal) => proposal.candidateId === candidateId || proposal.activationTargetId === candidateId);
+    const relatedProposals = (await this.options.storage.capabilityProposals.list(200)).filter(
+      (proposal) => proposal.candidateId === candidateId || proposal.activationTargetId === candidateId,
+    );
     const originatingRunId = activeVersion?.originatingRunId ?? latestVersion?.originatingRunId;
-    const originatingRun = originatingRunId ? this.options.storage.codeModeRuns.find(originatingRunId) : undefined;
+    const originatingRun = originatingRunId
+      ? await this.options.storage.codeModeRuns.find(originatingRunId)
+      : undefined;
     const activationBlockers = activeVersion
       ? []
       : ["No candidate version has been promoted into an approved or trusted lifecycle state."];
@@ -3423,23 +3467,23 @@ export class CapabilitySystemService {
     };
   }
 
-  private requireCandidateVersions(candidateId: string) {
-    const versions = this.options.storage.candidateSkillVersions.listByCandidateId(candidateId, 200);
+  private async requireCandidateVersions(candidateId: string) {
+    const versions = await this.options.storage.candidateSkillVersions.listByCandidateId(candidateId, 200);
     if (versions.length === 0) {
       throw new NotFoundError({ entity: "candidate skill", id: candidateId });
     }
     return versions;
   }
 
-  private requireCandidateVersion(candidateId: string, versionId: string) {
-    const version = this.options.storage.candidateSkillVersions.get(versionId);
+  private async requireCandidateVersion(candidateId: string, versionId: string) {
+    const version = await this.options.storage.candidateSkillVersions.get(versionId);
     if (version.candidateId !== candidateId) {
       throw new NotFoundError({ entity: "candidate skill version", id: versionId });
     }
     return version;
   }
 
-  private verifyCandidateVersionArtifacts(version: CandidateSkillVersionRecord): void {
+  private async verifyCandidateVersionArtifacts(version: CandidateSkillVersionRecord): Promise<void> {
     const artifacts = [
       { label: "Candidate manifest", artifact: version.manifestArtifact },
       { label: "Candidate instructions", artifact: version.instructionArtifact },
@@ -3452,7 +3496,7 @@ export class CapabilitySystemService {
       assertPathInsideRoot(targetPath, this.candidateRoot, item.label);
       const content = fsSync.readFileSync(targetPath, "utf8");
       if (sha256Text(content) !== item.artifact.sha256) {
-        this.options.publishRealtime("candidate_skill_artifact_tamper_detected", "capabilities", {
+        await this.options.publishRealtime("candidate_skill_artifact_tamper_detected", "capabilities", {
           candidateId: version.candidateId,
           versionId: version.versionId,
           artifactId: item.artifact.artifactId,
@@ -3465,7 +3509,9 @@ export class CapabilitySystemService {
     }
   }
 
-  private buildInspectableCatalog(effectiveSkills: EffectiveCapabilitySet = "ALL"): CapabilityCatalogEntry[] {
+  private async buildInspectableCatalog(
+    effectiveSkills: EffectiveCapabilitySet = "ALL",
+  ): Promise<CapabilityCatalogEntry[]> {
     const entries: CapabilityCatalogEntry[] = [];
     for (const tool of this.options.listToolCatalog()) {
       entries.push({
@@ -3494,7 +3540,7 @@ export class CapabilitySystemService {
       });
     }
 
-    for (const skill of this.listSkills(effectiveSkills)) {
+    for (const skill of await this.listSkills(effectiveSkills)) {
       entries.push({
         capabilityId: `skill:${skill.skillId}`,
         kind: "skill",
@@ -3513,7 +3559,7 @@ export class CapabilitySystemService {
       });
     }
 
-    for (const candidate of this.options.storage.candidateSkillVersions.list(200)) {
+    for (const candidate of await this.options.storage.candidateSkillVersions.list(200)) {
       entries.push({
         capabilityId: `candidate:${candidate.candidateId}:${candidate.versionId}`,
         kind: "candidate_skill",
@@ -3527,7 +3573,7 @@ export class CapabilitySystemService {
       });
     }
 
-    for (const proposal of this.options.storage.capabilityProposals.list(200)) {
+    for (const proposal of await this.options.storage.capabilityProposals.list(200)) {
       entries.push({
         capabilityId: `proposal:${proposal.proposalId}`,
         kind: "proposal",
@@ -3544,7 +3590,7 @@ export class CapabilitySystemService {
     // server-resolved statuses. With no activation grants (M2), every entry
     // arrives callable=false, so the callable catalog stays empty for mesh
     // capabilities by construction.
-    for (const entry of this.options.listMeshCapabilityCatalogEntries?.() ?? []) {
+    for (const entry of (await this.options.listMeshCapabilityCatalogEntries?.()) ?? []) {
       entries.push(entry);
     }
     return entries;
@@ -3591,7 +3637,7 @@ export class CapabilitySystemService {
     onExecutionDispatchFailed: () => Promise<void>;
     signal?: AbortSignal;
   }) {
-    return this.executeChildHarness(input);
+    return await this.executeChildHarness(input);
   }
 
   private async executeAiderAdapterRun(input: {
@@ -3926,7 +3972,7 @@ export class CapabilitySystemService {
           if (deadlineAt && Date.now() > deadlineAt) {
             throw new ConflictError({ message: `Wrapper ${wrapperName} missed its execution deadline.` });
           }
-          this.options.publishRealtime("code_mode_wrapper_call_started", "capabilities", {
+          await this.options.publishRealtime("code_mode_wrapper_call_started", "capabilities", {
             runId: input.runId,
             wrapperName,
             requestId: message.id,
@@ -3951,7 +3997,7 @@ export class CapabilitySystemService {
               message: `Wrapper ${wrapperName} did not execute: ${invocationResult.policyReason}`,
             });
           }
-          this.options.publishRealtime("code_mode_wrapper_call_completed", "capabilities", {
+          await this.options.publishRealtime("code_mode_wrapper_call_completed", "capabilities", {
             runId: input.runId,
             wrapperName,
             requestId: message.id,
@@ -4168,7 +4214,7 @@ export class CapabilitySystemService {
     try {
       await fs.rm(resolvedRunTempRoot, { recursive: true, force: true });
     } catch (error) {
-      this.options.publishRealtime("code_mode_temp_cleanup_failed", "capabilities", {
+      await this.options.publishRealtime("code_mode_temp_cleanup_failed", "capabilities", {
         runId,
         path: resolvedRunTempRoot,
         error: error instanceof Error ? error.message : String(error),
@@ -4233,7 +4279,7 @@ export class CapabilitySystemService {
     }
     const workspaceId =
       run.workspaceId?.trim() ||
-      (run.sessionId ? this.options.storage.chatSessionMeta.get(run.sessionId)?.workspaceId : undefined) ||
+      (run.sessionId ? (await this.options.storage.chatSessionMeta.get(run.sessionId))?.workspaceId : undefined) ||
       "default";
     const sourceFingerprint = run.codeHash;
     const createdByActorId = run.operatorId?.trim() || "system:code-mode";
@@ -4364,11 +4410,11 @@ export class CapabilitySystemService {
       lastSuccessfulExecutionAt: now,
     };
 
-    const replay = this.options.storage.candidateSkillVersions.find(versionId);
+    const replay = await this.options.storage.candidateSkillVersions.find(versionId);
     if (replay) {
       assertCodeModeCandidateReplay(replay, candidateRecord);
-      this.verifyCandidateVersionArtifacts(replay);
-      if (!this.options.storage.skillAggregateRevisions.get("candidate_skill", candidateId)) {
+      await this.verifyCandidateVersionArtifacts(replay);
+      if (!(await this.options.storage.skillAggregateRevisions.get("candidate_skill", candidateId))) {
         throw new ConflictError({
           code: "WRITE_CONFLICT",
           message: `Candidate skill ${candidateId} has a version but no canonical aggregate revision.`,
@@ -4377,8 +4423,8 @@ export class CapabilitySystemService {
       return;
     }
 
-    const existingVersions = this.options.storage.candidateSkillVersions.listByCandidateId(candidateId, 1);
-    const existingRevision = this.options.storage.skillAggregateRevisions.get("candidate_skill", candidateId);
+    const existingVersions = await this.options.storage.candidateSkillVersions.listByCandidateId(candidateId, 1);
+    const existingRevision = await this.options.storage.skillAggregateRevisions.get("candidate_skill", candidateId);
     if ((existingVersions.length === 0) !== (existingRevision === undefined)) {
       throw new ConflictError({
         code: "WRITE_CONFLICT",
@@ -4395,28 +4441,32 @@ export class CapabilitySystemService {
     await this.persistManagedArtifactRecord(this.candidateRoot, programArtifact, source);
     await this.persistManagedArtifactRecord(this.candidateRoot, schemaArtifact, schemaContent);
 
-    const staged = existingRevision
-      ? this.options.storage.skillAggregateRevisions.runWithRevision(
-          "candidate_skill",
-          candidateId,
-          existingRevision.revision,
-          () => ({
-            value: this.options.storage.candidateSkillVersions.upsert(candidateRecord),
-            changed: true,
-          }),
-          now,
-        )
-      : this.options.storage.skillAggregateRevisions.createWithInitialRevision(
-          "candidate_skill",
-          candidateId,
-          () => ({
-            value: this.options.storage.candidateSkillVersions.upsert(candidateRecord),
-            changed: true,
-          }),
-          now,
-        );
+    const staged = await this.options.storage.runImmediateTransaction(async () => {
+      const fence = existingRevision
+        ? await this.options.storage.skillAggregateRevisions.fenceExpectedRevision(
+            "candidate_skill",
+            candidateId,
+            existingRevision.revision,
+            now,
+          )
+        : await this.options.storage.skillAggregateRevisions.createInitialRevisionFence(
+            "candidate_skill",
+            candidateId,
+            now,
+          );
+      const value = await this.options.storage.candidateSkillVersions.upsert(candidateRecord);
+      const revision = existingRevision
+        ? await this.options.storage.skillAggregateRevisions.advanceExpectedRevision(
+            "candidate_skill",
+            candidateId,
+            existingRevision.revision,
+            now,
+          )
+        : fence;
+      return { value, changed: true, revision: revision.revision };
+    });
 
-    this.options.publishRealtime("candidate_skill_staged", "capabilities", {
+    await this.options.publishRealtime("candidate_skill_staged", "capabilities", {
       candidateId,
       versionId,
       originatingRunId: run.runId,
@@ -4424,8 +4474,8 @@ export class CapabilitySystemService {
     });
   }
 
-  private requireCodeModeEnabled(): void {
-    if (!this.options.readFeatureFlags().codeModeV1Enabled) {
+  private async requireCodeModeEnabled(): Promise<void> {
+    if (!(await this.options.readFeatureFlags()).codeModeV1Enabled) {
       throw new ConflictError({
         message: "Code Mode v1 is disabled. Enable codeModeV1Enabled before creating runs.",
       });
@@ -4438,7 +4488,7 @@ export class CapabilitySystemService {
     filename: string,
     value: unknown,
   ): Promise<CapabilityArtifactRecord> {
-    return this.persistManagedTextArtifact(
+    return await this.persistManagedTextArtifact(
       root,
       segments,
       filename,
@@ -4449,16 +4499,16 @@ export class CapabilitySystemService {
 
   private buildAiderArtifactPersister() {
     return {
-      persistText: (input: { segments: string[]; filename: string; content: string; mimeType: string }) =>
-        this.persistManagedTextArtifact(
+      persistText: async (input: { segments: string[]; filename: string; content: string; mimeType: string }) =>
+        await this.persistManagedTextArtifact(
           this.artifactRoot,
           input.segments,
           input.filename,
           input.content,
           input.mimeType,
         ),
-      persistJson: (input: { segments: string[]; filename: string; value: unknown }) =>
-        this.persistManagedJsonArtifact(this.artifactRoot, input.segments, input.filename, input.value),
+      persistJson: async (input: { segments: string[]; filename: string; value: unknown }) =>
+        await this.persistManagedJsonArtifact(this.artifactRoot, input.segments, input.filename, input.value),
     };
   }
 
@@ -6146,7 +6196,7 @@ function isCodeModeExecutionInterrupted(error: unknown, signal: AbortSignal | un
   );
 }
 
-function recoverStaleCodeModeExecutionClaim(
+async function recoverStaleCodeModeExecutionClaim(
   repository: {
     releaseExecutionClaim(input: {
       runId: string;
@@ -6155,7 +6205,7 @@ function recoverStaleCodeModeExecutionClaim(
       executionGeneration: number;
       interruptedAt: string;
       interruptionReason: string;
-    }): CodeModeRunRecord | undefined;
+    }): Promise<CodeModeRunRecord | undefined>;
     markExecutionInterrupted(input: {
       runId: string;
       approvalId: string;
@@ -6164,18 +6214,18 @@ function recoverStaleCodeModeExecutionClaim(
       interruptedAt: string;
       interruptionReason: string;
       errorDetails?: Record<string, unknown>;
-    }): CodeModeRunRecord | undefined;
+    }): Promise<CodeModeRunRecord | undefined>;
   },
   run: CodeModeRunRecord,
   approvalId: string,
   recoveredAt: string,
-): CodeModeRunRecord | undefined {
+): Promise<CodeModeRunRecord | undefined> {
   if (!isStaleCodeModeExecutionClaim(run.startedAt)) {
     return undefined;
   }
   const interruptionReason = `Gateway restarted or lost the Code Mode execution owner while phase was ${run.executionRecovery.phase}.`;
   if (run.executionRecovery.phase === "claimed" && run.startedAt) {
-    return repository.releaseExecutionClaim({
+    return await repository.releaseExecutionClaim({
       runId: run.runId,
       approvalId,
       startedAt: run.startedAt,
@@ -6184,7 +6234,7 @@ function recoverStaleCodeModeExecutionClaim(
       interruptionReason,
     });
   }
-  return repository.markExecutionInterrupted({
+  return await repository.markExecutionInterrupted({
     runId: run.runId,
     approvalId,
     startedAt: run.startedAt,

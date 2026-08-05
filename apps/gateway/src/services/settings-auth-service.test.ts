@@ -9,6 +9,7 @@ import {
   PostgresDatabaseClient,
   PostgresSyncDatabaseClient,
   Storage,
+  createLocalAsyncStorage,
   runPostgresMigrations,
 } from "@goatcitadel/storage";
 import {
@@ -234,8 +235,8 @@ function buildHost(): SettingsRuntimeDependencies {
       stop: vi.fn(async () => undefined),
       start: vi.fn(async () => undefined),
     },
-    readFeatureFlags: vi.fn(() => ({ ...flags })),
-    updateFeatureFlags: vi.fn((patch) => {
+    readFeatureFlags: vi.fn(async () => ({ ...flags })),
+    updateFeatureFlags: vi.fn(async (patch) => {
       flags = { ...flags, ...patch, durableKernelV1Enabled: true };
       return { ...flags };
     }),
@@ -262,6 +263,7 @@ function buildAuthHarness(options: { storage?: Storage; rootDir?: string } = {})
   const auditRecords: Record<string, unknown>[] = [];
   const realtimeEvents: AuthHarness["realtimeEvents"] = [];
   const deviceTokenVault = new DeviceTokenVault();
+  const asyncStorage = createLocalAsyncStorage(storage);
   const deps: SettingsAuthRuntimeDependencies = {
     config: {
       assistant: {
@@ -270,13 +272,13 @@ function buildAuthHarness(options: { storage?: Storage; rootDir?: string } = {})
         },
       },
     } as never,
-    gatewaySql: storage.gatewaySql,
+    gatewaySql: asyncStorage.gatewaySql,
     deviceTokenVault,
     storage: {
-      approvals: storage.approvals,
-      approvalEvents: storage.approvalEvents,
-      sessionControls: storage.sessionControls,
-      runImmediateTransaction: storage.runImmediateTransaction.bind(storage),
+      approvals: asyncStorage.approvals,
+      approvalEvents: asyncStorage.approvalEvents,
+      sessionControls: asyncStorage.sessionControls,
+      runImmediateTransaction: asyncStorage.runImmediateTransaction.bind(asyncStorage),
       audit: {
         append: vi.fn(async (_stream: string, payload: Record<string, unknown>) => {
           auditRecords.push({
@@ -288,11 +290,11 @@ function buildAuthHarness(options: { storage?: Storage; rootDir?: string } = {})
       },
     } as never,
     createApproval: vi.fn(async (input: ApprovalCreateInput) => {
-      const approval = storage.approvals.create(input);
+      const approval = await asyncStorage.approvals.create(input);
       return { approvalId: approval.approvalId };
     }),
     resolveApproval: vi.fn(async (approvalId: string, input: ApprovalResolveInput) =>
-      storage.approvals.resolve(approvalId, input),
+      asyncStorage.approvals.resolve(approvalId, input),
     ),
     enqueueApprovalResolutionEffects: vi.fn(() => []),
     enqueueApprovalObservabilityEffects: vi.fn((_approvalId, items) => {
@@ -339,7 +341,7 @@ async function approveDeviceRequest(harness: AuthHarness, approvalId: string): P
     decision: "approve",
     resolvedBy: "operator:test",
   });
-  const grant = listDeviceAccessGrants(harness.deps)[0];
+  const grant = (await listDeviceAccessGrants(harness.deps))[0];
   expect(grant).toBeDefined();
   return grant.grantId;
 }
@@ -506,25 +508,25 @@ function signCompanionRequest(input: {
 }
 
 describe("settings-auth-service durable settings", () => {
-  it("rejects attempts to disable the durable kernel through updateSettings", () => {
+  it("rejects attempts to disable the durable kernel through updateSettings", async () => {
     const host = buildHost();
-    host.updateFeatureFlags = vi.fn(() => {
+    host.updateFeatureFlags = vi.fn(async () => {
       throw new Error("features.durableKernelV1Enabled is a shipped baseline runtime setting and cannot be disabled.");
     });
 
-    expect(() =>
+    await expect(
       updateSettings(host, {
         features: {
           durableKernelV1Enabled: false,
         },
       }),
-    ).toThrow(/cannot be disabled/i);
+    ).rejects.toThrow(/cannot be disabled/i);
   });
 
-  it("still applies unrelated feature flag updates through updateSettings", () => {
+  it("still applies unrelated feature flag updates through updateSettings", async () => {
     const host = buildHost();
 
-    const settings = updateSettings(host, {
+    const settings = await updateSettings(host, {
       features: {
         replayRegressionV1Enabled: true,
       },
@@ -535,14 +537,14 @@ describe("settings-auth-service durable settings", () => {
     });
     expect(settings.features.durableKernelV1Enabled).toBe(true);
     expect(settings.features.replayRegressionV1Enabled).toBe(true);
-    expect(getSettings(host).features.durableKernelV1Enabled).toBe(true);
+    expect((await getSettings(host)).features.durableKernelV1Enabled).toBe(true);
   });
 
-  it("ignores inherited settings mutation fields and rejects dangerous own keys", () => {
+  it("ignores inherited settings mutation fields and rejects dangerous own keys", async () => {
     const host = buildHost();
     const inheritedInput = Object.create({ budgetMode: "power" });
 
-    const settings = updateSettings(host, inheritedInput as never);
+    const settings = await updateSettings(host, inheritedInput as never);
 
     expect(settings.budgetMode).toBe("balanced");
     expect(host.persistBudgetsConfig).not.toHaveBeenCalled();
@@ -552,16 +554,16 @@ describe("settings-auth-service durable settings", () => {
       enumerable: true,
       value: { budgetMode: "power" },
     });
-    expect(() => updateSettings(host, dangerousInput as never)).toThrow(
+    await expect(updateSettings(host, dangerousInput as never)).rejects.toThrow(
       "Unsafe config key is not allowed: settings.__proto__",
     );
   });
 
-  it("accepts legacy tool profile names when the profile map is empty", () => {
+  it("accepts legacy tool profile names when the profile map is empty", async () => {
     const host = buildHost();
     host.config.toolPolicy.profiles = {};
 
-    const settings = updateSettings(host, {
+    const settings = await updateSettings(host, {
       defaultToolProfile: "minimal",
     });
 
@@ -570,10 +572,10 @@ describe("settings-auth-service durable settings", () => {
     expect(host.persistAssistantConfig).not.toHaveBeenCalled();
   });
 
-  it("builds first-run tool profile and approval mode without direct mirror persistence", () => {
+  it("builds first-run tool profile and approval mode without direct mirror persistence", async () => {
     const host = buildHost();
 
-    const settings = updateSettings(host, {
+    const settings = await updateSettings(host, {
       defaultToolProfile: "minimal",
       toolApprovalMode: "approve_all",
     });
@@ -588,18 +590,18 @@ describe("settings-auth-service durable settings", () => {
     expect(host.persistAssistantConfig).not.toHaveBeenCalled();
   });
 
-  it("rejects unknown legacy tool profile names when profiles are explicit", () => {
+  it("rejects unknown legacy tool profile names when profiles are explicit", async () => {
     const host = buildHost();
 
-    expect(() =>
+    await expect(
       updateSettings(host, {
         defaultToolProfile: "unknown",
       }),
-    ).toThrow("Unknown legacy tool profile: unknown");
+    ).rejects.toThrow("Unknown legacy tool profile: unknown");
   });
 
-  it("rejects empty runtime endpoints before mutating persisted settings", () => {
-    expect(() =>
+  it("rejects empty runtime endpoints before mutating persisted settings", async () => {
+    await expect(
       updateSettings(buildHost(), {
         web: {
           firecrawl: {
@@ -607,48 +609,48 @@ describe("settings-auth-service durable settings", () => {
           },
         },
       }),
-    ).toThrow("web.firecrawl.baseUrl cannot be empty");
-    expect(() =>
+    ).rejects.toThrow("web.firecrawl.baseUrl cannot be empty");
+    await expect(
       updateSettings(buildHost(), {
         mesh: {
           nodeId: "   ",
         },
       }),
-    ).toThrow("mesh.nodeId cannot be empty");
-    expect(() =>
+    ).rejects.toThrow("mesh.nodeId cannot be empty");
+    await expect(
       updateSettings(buildHost(), {
         npu: {
           sidecarUrl: "   ",
         },
       }),
-    ).toThrow("npu.sidecarUrl cannot be empty");
-    expect(() =>
+    ).rejects.toThrow("npu.sidecarUrl cannot be empty");
+    await expect(
       updateSettings(buildHost(), {
         llamaCpp: {
           baseUrl: "   ",
         },
       }),
-    ).toThrow("llamaCpp.baseUrl cannot be empty");
-    expect(() =>
+    ).rejects.toThrow("llamaCpp.baseUrl cannot be empty");
+    await expect(
       updateSettings(buildHost(), {
         llamaCpp: {
           command: "   ",
         },
       }),
-    ).toThrow("llamaCpp.command cannot be empty");
-    expect(() =>
+    ).rejects.toThrow("llamaCpp.command cannot be empty");
+    await expect(
       updateSettings(buildHost(), {
         llamaCpp: {
           alias: "   ",
         },
       }),
-    ).toThrow("llamaCpp.alias cannot be empty");
+    ).rejects.toThrow("llamaCpp.alias cannot be empty");
   });
 
-  it("applies profile, budget, memory, web, and read policy updates through the durable settings surface", () => {
+  it("applies profile, budget, memory, web, and read policy updates through the durable settings surface", async () => {
     const host = buildHost();
 
-    const settings = updateSettings(host, {
+    const settings = await updateSettings(host, {
       deploymentProfile: "trusted_local",
       toolApprovalMode: "approve_all",
       budgetMode: "power",
@@ -726,10 +728,10 @@ describe("settings-auth-service durable settings", () => {
     expect(host.persistBudgetsConfig).not.toHaveBeenCalled();
   });
 
-  it("rejects unsafe Firecrawl API key env-name settings", () => {
+  it("rejects unsafe Firecrawl API key env-name settings", async () => {
     const host = buildHost();
 
-    expect(() =>
+    await expect(
       updateSettings(host, {
         web: {
           firecrawl: {
@@ -737,16 +739,18 @@ describe("settings-auth-service durable settings", () => {
           },
         },
       }),
-    ).toThrow("web.firecrawl.apiKeyEnv must be FIRECRAWL_API_KEY, FIRECRAWL_KEY, or GOATCITADEL_FIRECRAWL_API_KEY");
+    ).rejects.toThrow(
+      "web.firecrawl.apiKeyEnv must be FIRECRAWL_API_KEY, FIRECRAWL_KEY, or GOATCITADEL_FIRECRAWL_API_KEY",
+    );
     expect(host.config.assistant.web.firecrawl.apiKeyEnv).toBeUndefined();
   });
 
-  it("applies mesh and llama.cpp updates while normalizing retired NPU settings", () => {
+  it("applies mesh and llama.cpp updates while normalizing retired NPU settings", async () => {
     const host = buildHost();
     process.env.GOATCITADEL_MESH_JOIN_TOKEN = "join-token-test";
 
     try {
-      const settings = updateSettings(host, {
+      const settings = await updateSettings(host, {
         mesh: {
           enabled: true,
           mode: "tailnet",
@@ -852,13 +856,13 @@ describe("settings-auth-service durable settings", () => {
     }
   });
 
-  it("preserves hidden llama.cpp command credentials during a public settings round trip", () => {
+  it("preserves hidden llama.cpp command credentials during a public settings round trip", async () => {
     const host = buildHost();
     host.config.assistant.llamaCpp.server.command = "llama-server --api-key command-secret";
     host.config.assistant.llamaCpp.server.extraArgs = ["--api-key", "argument-secret", "--port", "8080"];
-    const displayed = projectSettingsPublicValue(getSettings(host));
+    const displayed = projectSettingsPublicValue(await getSettings(host));
 
-    const updated = updateSettings(host, {
+    const updated = await updateSettings(host, {
       llamaCpp: {
         ...displayed.llamaCpp,
         threads: 8,
@@ -1059,7 +1063,7 @@ describe("settings-auth-service durable settings", () => {
     });
   });
 
-  it("restores projected settings secrets without losing partial sibling edits or mutating the patch", () => {
+  it("restores projected settings secrets without losing partial sibling edits or mutating the patch", async () => {
     const host = buildHost();
     host.config.assistant.web.firecrawl.baseUrl =
       "https://firecrawl.example.test/token/firecrawl-path-secret?token=firecrawl-query-secret&mode=read";
@@ -1077,7 +1081,7 @@ describe("settings-auth-service durable settings", () => {
     host.config.assistant.llamaCpp.launch.modelPath = "https://models.example.test/password/model-path-secret";
     host.config.assistant.llamaCpp.launch.alias = "token=alias-secret";
 
-    const displayed = projectSettingsPublicValue(getSettings(host));
+    const displayed = projectSettingsPublicValue(await getSettings(host));
     const patch = {
       web: {
         firecrawl: {
@@ -1105,7 +1109,7 @@ describe("settings-auth-service durable settings", () => {
     };
     const patchSnapshot = structuredClone(patch);
 
-    const updated = updateSettings(host, patch);
+    const updated = await updateSettings(host, patch);
 
     expect(host.config.assistant.web.firecrawl.baseUrl).toBe(
       "https://firecrawl.example.test/token/firecrawl-path-secret?token=firecrawl-query-secret&mode=write",
@@ -1135,7 +1139,7 @@ describe("settings-auth-service durable settings", () => {
     expect(JSON.stringify(host.config.assistant)).not.toContain("[REDACTED]");
   });
 
-  it("restores hidden settings array slots while preserving safe siblings and rejecting marker movement", () => {
+  it("restores hidden settings array slots while preserving safe siblings and rejecting marker movement", async () => {
     const host = buildHost();
     host.config.assistant.mesh.discovery.staticPeers = [
       "https://peer-a.example.test/token/peer-a-secret?mode=sync",
@@ -1149,7 +1153,7 @@ describe("settings-auth-service durable settings", () => {
       "--threads",
       "4",
     ];
-    const displayed = projectSettingsPublicValue(getSettings(host));
+    const displayed = projectSettingsPublicValue(await getSettings(host));
     const patch = {
       mesh: {
         staticPeers: [displayed.mesh.staticPeers[0]!, "https://peer-b.example.test/v2"],
@@ -1160,7 +1164,7 @@ describe("settings-auth-service durable settings", () => {
     };
     const patchSnapshot = structuredClone(patch);
 
-    updateSettings(host, patch);
+    await updateSettings(host, patch);
 
     expect(host.config.assistant.mesh.discovery.staticPeers).toEqual([
       "https://peer-a.example.test/token/peer-a-secret?mode=sync",
@@ -1189,7 +1193,7 @@ describe("settings-auth-service durable settings", () => {
       },
     };
     const partialCredentialReplacementSnapshot = structuredClone(partialCredentialReplacement);
-    updateSettings(host, partialCredentialReplacement);
+    await updateSettings(host, partialCredentialReplacement);
     expect(host.config.assistant.llamaCpp.server.extraArgs).toEqual([
       "--api-key",
       "argument-secret",
@@ -1202,14 +1206,14 @@ describe("settings-auth-service durable settings", () => {
 
     const rawPeers = structuredClone(host.config.assistant.mesh.discovery.staticPeers);
     const rawExtraArgs = structuredClone(host.config.assistant.llamaCpp.server.extraArgs);
-    expect(() =>
+    await expect(
       updateSettings(host, {
         mesh: {
           staticPeers: ["https://peer-b.example.test/v2", displayed.mesh.staticPeers[0]!],
         },
       }),
-    ).toThrow("Projected settings arrays with hidden values cannot be reordered or resized.");
-    expect(() =>
+    ).rejects.toThrow("Projected settings arrays with hidden values cannot be reordered or resized.");
+    await expect(
       updateSettings(host, {
         llamaCpp: {
           extraArgs: [
@@ -1222,12 +1226,12 @@ describe("settings-auth-service durable settings", () => {
           ],
         },
       }),
-    ).toThrow("Projected settings arrays with hidden values cannot be reordered or resized.");
+    ).rejects.toThrow("Projected settings arrays with hidden values cannot be reordered or resized.");
     expect(host.config.assistant.mesh.discovery.staticPeers).toEqual(rawPeers);
     expect(host.config.assistant.llamaCpp.server.extraArgs).toEqual(rawExtraArgs);
   });
 
-  it("keeps omitted projected fields omitted and accepts explicit non-marker replacements", () => {
+  it("keeps omitted projected fields omitted and accepts explicit non-marker replacements", async () => {
     const host = buildHost();
     host.config.assistant.web.firecrawl.baseUrl = "https://firecrawl.example.test/token/firecrawl-secret";
     host.config.assistant.mesh.discovery.staticPeers = ["https://peer.example.test/token/peer-secret"];
@@ -1238,7 +1242,7 @@ describe("settings-auth-service durable settings", () => {
     host.config.assistant.llamaCpp.launch.modelsRootPath = "https://models.example.test/token/models-root-secret";
     host.config.assistant.llamaCpp.launch.modelPath = "https://models.example.test/password/model-path-secret";
     host.config.assistant.llamaCpp.launch.alias = "token=alias-secret";
-    const current = getSettings(host);
+    const current = await getSettings(host);
     const currentSnapshot = structuredClone(current);
     const partialPatch = {
       web: { firecrawl: { timeoutMs: 19_000 } },
@@ -1252,7 +1256,7 @@ describe("settings-auth-service durable settings", () => {
     expect(current).toEqual(currentSnapshot);
     expect(partialPatch).toEqual(partialPatchSnapshot);
 
-    updateSettings(host, {
+    await updateSettings(host, {
       web: { firecrawl: { baseUrl: "https://firecrawl-new.example.test/v2" } },
       mesh: { staticPeers: ["https://peer-new.example.test/v1"] },
       npu: { sidecarUrl: "https://npu-new.example.test/v1" },
@@ -1281,10 +1285,10 @@ describe("settings-auth-service durable settings", () => {
     });
   });
 
-  it("does not persist a public API-key projection marker as a provider credential", () => {
+  it("does not persist a public API-key projection marker as a provider credential", async () => {
     const host = buildHost();
 
-    updateSettings(host, {
+    await updateSettings(host, {
       llm: {
         upsertProvider: {
           providerId: "custom",
@@ -1302,12 +1306,12 @@ describe("settings-auth-service durable settings", () => {
     });
   });
 
-  it("stops disabled NPU and llama.cpp runtimes after settings updates", () => {
+  it("stops disabled NPU and llama.cpp runtimes after settings updates", async () => {
     const host = buildHost();
     host.config.assistant.npu.enabled = true;
     host.config.assistant.llamaCpp.enabled = true;
 
-    const settings = updateSettings(host, {
+    const settings = await updateSettings(host, {
       npu: {
         enabled: false,
       },
@@ -1322,7 +1326,7 @@ describe("settings-auth-service durable settings", () => {
     expect(host.llamaCppRuntime.stop).toHaveBeenCalledWith("disabled");
   });
 
-  it("keeps settings updates synchronous when runtime stop and autostart hooks reject", async () => {
+  it("keeps settings updates successful when runtime stop and autostart hooks reject", async () => {
     const host = buildHost();
     host.npuSidecar.stop = vi.fn(async () => {
       throw new Error("npu stop failed");
@@ -1340,7 +1344,7 @@ describe("settings-auth-service durable settings", () => {
     host.config.assistant.npu.enabled = true;
     host.config.assistant.llamaCpp.enabled = true;
     expect(
-      updateSettings(host, {
+      await updateSettings(host, {
         npu: { enabled: false },
         llamaCpp: { enabled: false },
       }),
@@ -1350,7 +1354,7 @@ describe("settings-auth-service durable settings", () => {
     });
 
     expect(
-      updateSettings(host, {
+      await updateSettings(host, {
         npu: { enabled: true, autoStart: true },
         llamaCpp: { enabled: true, autoStart: true },
       }),
@@ -1367,7 +1371,7 @@ describe("settings-auth-service durable settings", () => {
     expect(host.llamaCppRuntime.start).toHaveBeenCalledWith("config_autostart");
   });
 
-  it("rejects submitted provider keys before mutating secret, config, or persistence owners", () => {
+  it("rejects submitted provider keys before mutating secret, config, or persistence owners", async () => {
     const host = buildHost();
     host.llmService.getProviderSecretStatus = vi.fn((providerId: string) => ({
       providerId,
@@ -1377,7 +1381,7 @@ describe("settings-auth-service durable settings", () => {
       apiKeyRef: `keychain:goatcitadel:provider:${providerId}`,
     }));
 
-    expect(() =>
+    await expect(
       updateSettings(host, {
         llm: {
           upsertProvider: {
@@ -1391,7 +1395,7 @@ describe("settings-auth-service durable settings", () => {
           },
         },
       }),
-    ).toThrow(/provider secret endpoint/i);
+    ).rejects.toThrow(/provider secret endpoint/i);
 
     expect(host.llmService.setProviderApiKey).not.toHaveBeenCalled();
     expect(host.llmService.updateRuntimeConfig).not.toHaveBeenCalled();
@@ -1520,14 +1524,14 @@ describe("settings-auth-service device access lifecycle", () => {
     const delivered = await getDeviceAccessRequestStatus(harness.deps, request.requestId, request.requestSecret);
     expect(delivered.status).toBe("approved");
     expect(delivered.deviceToken).toBeUndefined();
-    expect(validateDeviceAccessToken(harness.deps, approved.deviceToken!)).toEqual({
+    expect(await validateDeviceAccessToken(harness.deps, approved.deviceToken!)).toEqual({
       actorId: `device:${grantId}`,
       deviceId: grantId,
       grantId,
       principalPurpose: "general_companion",
     });
 
-    const grant = listDeviceAccessGrants(harness.deps)[0];
+    const grant = (await listDeviceAccessGrants(harness.deps))[0];
     expect(grant).toMatchObject({
       grantId,
       requestId: request.requestId,
@@ -1549,7 +1553,7 @@ describe("settings-auth-service device access lifecycle", () => {
         )
         .get({ grantId }),
     ).toEqual({ binding_kind: "device_grant", binding_id: grantId });
-    expect(validateDeviceAccessToken(harness.deps, approved.deviceToken!)).toBeUndefined();
+    expect(await validateDeviceAccessToken(harness.deps, approved.deviceToken!)).toBeUndefined();
     expect(harness.auditRecords.map((record) => record.event)).toEqual(
       expect.arrayContaining([
         "auth.device_request.create",
@@ -1577,9 +1581,9 @@ describe("settings-auth-service device access lifecycle", () => {
          WHERE binding_kind = 'device_grant' AND binding_id = @grantId`,
       )
       .get<{ count: number }>({ grantId: fixture.grantId })!.count;
-    const originalPrepare = harness.deps.gatewaySql.prepare.bind(harness.deps.gatewaySql);
+    const originalPrepare = harness.storage.gatewaySql.prepare.bind(harness.storage.gatewaySql);
     let grantSelectCount = 0;
-    vi.spyOn(harness.deps.gatewaySql, "prepare").mockImplementation((sql: string) => {
+    vi.spyOn(harness.storage.gatewaySql, "prepare").mockImplementation((sql: string) => {
       const statement = originalPrepare(sql);
       if (sql.includes("SELECT * FROM auth_device_grants") && ++grantSelectCount === 2) {
         return new Proxy(statement, {
@@ -1631,7 +1635,7 @@ describe("settings-auth-service device access lifecycle", () => {
       try {
         const harness = buildAuthHarness();
         const request = await createDeviceAccessRequest(harness.deps, { deviceType: "desktop" }, {});
-        const stored = getAuthDeviceRequestById(harness.deps, request.requestId);
+        const stored = await getAuthDeviceRequestById(harness.deps, request.requestId);
 
         expect(stored).toBeDefined();
         expect(Math.abs(Date.parse(stored!.createdAt) - databaseNowBefore)).toBeLessThan(5_000);
@@ -1658,7 +1662,7 @@ describe("settings-auth-service device access lifecycle", () => {
       vi.setSystemTime(new Date(hostClock));
       try {
         await approveDeviceRequest(harness, request.approvalId);
-        const grant = listDeviceAccessGrants(harness.deps)[0]!;
+        const grant = (await listDeviceAccessGrants(harness.deps))[0]!;
         expect(Math.abs(Date.parse(grant.createdAt) - databaseNowBefore)).toBeLessThan(5_000);
         expect(Date.parse(grant.expiresAt!) - Date.parse(grant.createdAt)).toBe(DEVICE_ACCESS_TOKEN_TTL_MS);
 
@@ -1678,8 +1682,8 @@ describe("settings-auth-service device access lifecycle", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2099-01-01T00:00:00.000Z"));
     try {
-      expect(getActiveAuthDeviceGrantById(harness.deps, grant.grantId)).toBeDefined();
-      expect(validateDeviceAccessToken(harness.deps, grant.deviceToken)).toBeDefined();
+      expect(await getActiveAuthDeviceGrantById(harness.deps, grant.grantId)).toBeDefined();
+      expect(await validateDeviceAccessToken(harness.deps, grant.deviceToken)).toBeDefined();
     } finally {
       vi.useRealTimers();
     }
@@ -1687,20 +1691,20 @@ describe("settings-auth-service device access lifecycle", () => {
     harness.storage.gatewaySql
       .prepare("UPDATE auth_device_grants SET expires_at = NULL, revoked_at = NULL WHERE grant_id = @grantId")
       .run({ grantId: grant.grantId });
-    expect(getActiveAuthDeviceGrantById(harness.deps, grant.grantId)).toBeDefined();
-    expect(validateDeviceAccessToken(harness.deps, grant.deviceToken)).toBeDefined();
+    expect(await getActiveAuthDeviceGrantById(harness.deps, grant.grantId)).toBeDefined();
+    expect(await validateDeviceAccessToken(harness.deps, grant.deviceToken)).toBeDefined();
 
     harness.storage.gatewaySql
       .prepare("UPDATE auth_device_grants SET expires_at = 'not-a-timestamp' WHERE grant_id = @grantId")
       .run({ grantId: grant.grantId });
-    expect(getActiveAuthDeviceGrantById(harness.deps, grant.grantId)).toBeUndefined();
-    expect(validateDeviceAccessToken(harness.deps, grant.deviceToken)).toBeUndefined();
+    expect(await getActiveAuthDeviceGrantById(harness.deps, grant.grantId)).toBeUndefined();
+    expect(await validateDeviceAccessToken(harness.deps, grant.deviceToken)).toBeUndefined();
 
     harness.storage.gatewaySql
       .prepare("UPDATE auth_device_grants SET expires_at = NULL, revoked_at = '' WHERE grant_id = @grantId")
       .run({ grantId: grant.grantId });
-    expect(getActiveAuthDeviceGrantById(harness.deps, grant.grantId)).toBeUndefined();
-    expect(validateDeviceAccessToken(harness.deps, grant.deviceToken)).toBeUndefined();
+    expect(await getActiveAuthDeviceGrantById(harness.deps, grant.grantId)).toBeUndefined();
+    expect(await validateDeviceAccessToken(harness.deps, grant.deviceToken)).toBeUndefined();
   });
 
   it("terminalizes malformed and boundary-expired device requests using database timestamp parsing", async () => {
@@ -1711,7 +1715,7 @@ describe("settings-auth-service device access lifecycle", () => {
       .run({ requestId: malformed.requestId });
 
     await expect(expirePendingDeviceAccessRequests(malformedHarness.deps, 10)).resolves.toBe(1);
-    expect(getAuthDeviceRequestById(malformedHarness.deps, malformed.requestId)?.status).toBe("expired");
+    expect((await getAuthDeviceRequestById(malformedHarness.deps, malformed.requestId))?.status).toBe("expired");
     expect(malformedHarness.storage.approvals.get(malformed.approvalId).status).toBe("rejected");
 
     const boundaryHarness = buildAuthHarness();
@@ -1722,7 +1726,7 @@ describe("settings-auth-service device access lifecycle", () => {
       .run({ requestId: boundary.requestId, expiresAt: databaseNow.replace("Z", "+00:00") });
 
     await expect(expirePendingDeviceAccessRequests(boundaryHarness.deps, 10)).resolves.toBe(1);
-    expect(getAuthDeviceRequestById(boundaryHarness.deps, boundary.requestId)?.status).toBe("expired");
+    expect((await getAuthDeviceRequestById(boundaryHarness.deps, boundary.requestId))?.status).toBe("expired");
 
     const futureHarness = buildAuthHarness();
     const future = await createDeviceAccessRequest(futureHarness.deps, { deviceType: "desktop" }, {});
@@ -1735,7 +1739,7 @@ describe("settings-auth-service device access lifecycle", () => {
           .replace("Z", "+00:00"),
       });
     await expect(expirePendingDeviceAccessRequests(futureHarness.deps, 10)).resolves.toBe(0);
-    expect(getAuthDeviceRequestById(futureHarness.deps, future.requestId)?.status).toBe("pending");
+    expect((await getAuthDeviceRequestById(futureHarness.deps, future.requestId))?.status).toBe("pending");
   });
 
   it("rolls back the device grant, request, approval, and plaintext handoff when effect enqueue fails", async () => {
@@ -1764,8 +1768,8 @@ describe("settings-auth-service device access lifecycle", () => {
     ).rejects.toThrow("approval observability store unavailable");
 
     expect(harness.storage.approvals.get(request.approvalId).status).toBe("pending");
-    expect(getAuthDeviceRequestById(harness.deps, request.requestId)?.status).toBe("pending");
-    expect(listDeviceAccessGrants(harness.deps)).toEqual([]);
+    expect((await getAuthDeviceRequestById(harness.deps, request.requestId))?.status).toBe("pending");
+    expect(await listDeviceAccessGrants(harness.deps)).toEqual([]);
     expect(harness.deviceTokenVault.has(request.requestId)).toBe(false);
   });
 
@@ -1787,10 +1791,10 @@ describe("settings-auth-service device access lifecycle", () => {
 
     expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
     expect(outcomes.filter((outcome) => outcome.status === "rejected")).toHaveLength(1);
-    expect(listDeviceAccessGrants(harness.deps)).toHaveLength(1);
+    expect(await listDeviceAccessGrants(harness.deps)).toHaveLength(1);
     const winningToken = harness.deviceTokenVault.claim(request.requestId);
     expect(winningToken?.token).toBeDefined();
-    expect(validateDeviceAccessToken(harness.deps, winningToken!.token)).toMatchObject({
+    expect(await validateDeviceAccessToken(harness.deps, winningToken!.token)).toMatchObject({
       actorId: expect.stringMatching(/^device:/),
       grantId: expect.any(String),
     });
@@ -1824,8 +1828,8 @@ describe("settings-auth-service device access lifecycle", () => {
     ).rejects.toThrow(/no longer pending or has expired/i);
 
     expect(harness.storage.approvals.get(request.approvalId).status).toBe("pending");
-    expect(getAuthDeviceRequestById(harness.deps, request.requestId)?.status).toBe("pending");
-    expect(listDeviceAccessGrants(harness.deps)).toEqual([]);
+    expect((await getAuthDeviceRequestById(harness.deps, request.requestId))?.status).toBe("pending");
+    expect(await listDeviceAccessGrants(harness.deps)).toEqual([]);
     expect(harness.deviceTokenVault.has(request.requestId)).toBe(false);
   });
 
@@ -1856,8 +1860,8 @@ describe("settings-auth-service device access lifecycle", () => {
     ).rejects.toThrow(/expired before the approval transaction committed/i);
 
     expect(harness.storage.approvals.get(request.approvalId).status).toBe("pending");
-    expect(getAuthDeviceRequestById(harness.deps, request.requestId)?.status).toBe("pending");
-    expect(listDeviceAccessGrants(harness.deps)).toEqual([]);
+    expect((await getAuthDeviceRequestById(harness.deps, request.requestId))?.status).toBe("pending");
+    expect(await listDeviceAccessGrants(harness.deps)).toEqual([]);
     expect(harness.deviceTokenVault.has(request.requestId)).toBe(false);
   });
 
@@ -1895,7 +1899,7 @@ describe("settings-auth-service device access lifecycle", () => {
       message: "This device request expired before it was approved.",
     });
     expect(harness.storage.approvals.get(request.approvalId).status).toBe("rejected");
-    expect(listDeviceAccessGrants(harness.deps)).toEqual([]);
+    expect(await listDeviceAccessGrants(harness.deps)).toEqual([]);
     expect(harness.deps.enqueueApprovalResolutionEffects).toHaveBeenCalledWith(
       expect.objectContaining({ approvalId: request.approvalId, status: "rejected" }),
       expect.objectContaining({ decision: "reject", resolvedBy: APPROVAL_EXPIRY_ACTOR_ID }),
@@ -1919,7 +1923,7 @@ describe("settings-auth-service device access lifecycle", () => {
 
     await expect(expirePendingDeviceAccessRequests(harness.deps, 10)).resolves.toBe(1);
 
-    expect(getAuthDeviceRequestById(harness.deps, request.requestId)?.status).toBe("expired");
+    expect((await getAuthDeviceRequestById(harness.deps, request.requestId))?.status).toBe("expired");
     expect(harness.storage.approvals.get(request.approvalId).status).toBe("rejected");
     expect(harness.deps.enqueueApprovalResolutionEffects).toHaveBeenCalledWith(
       expect.objectContaining({ approvalId: request.approvalId, status: "rejected" }),
@@ -1948,8 +1952,8 @@ describe("settings-auth-service device access lifecycle", () => {
 
   it("rejects the approval when device request persistence fails", async () => {
     const harness = buildAuthHarness();
-    const originalPrepare = harness.deps.gatewaySql.prepare.bind(harness.deps.gatewaySql);
-    vi.spyOn(harness.deps.gatewaySql, "prepare").mockImplementation((sql: string) => {
+    const originalPrepare = harness.storage.gatewaySql.prepare.bind(harness.storage.gatewaySql);
+    vi.spyOn(harness.storage.gatewaySql, "prepare").mockImplementation((sql: string) => {
       if (sql.includes("INSERT INTO auth_device_requests")) {
         throw new Error("sqlite write failed");
       }
@@ -2072,7 +2076,7 @@ describe("settings-auth-service device access lifecycle", () => {
       resolutionNote: "unrecognized browser",
     });
 
-    expect(listDeviceAccessGrants(harness.deps)).toEqual([]);
+    expect(await listDeviceAccessGrants(harness.deps)).toEqual([]);
     await expect(
       getDeviceAccessRequestStatus(harness.deps, rejectedRequest.requestId, rejectedRequest.requestSecret),
     ).resolves.toMatchObject({
@@ -2093,7 +2097,7 @@ describe("settings-auth-service device access lifecycle", () => {
         requestId: expiringRequest.requestId,
         expiresAt: new Date(Date.now() - 1_000).toISOString(),
       });
-    const stored = getAuthDeviceRequestById(harness.deps, expiringRequest.requestId);
+    const stored = await getAuthDeviceRequestById(harness.deps, expiringRequest.requestId);
     expect(stored).toBeDefined();
     harness.storage.gatewaySql
       .prepare("DELETE FROM auth_device_requests WHERE request_id = @requestId")
@@ -2111,9 +2115,9 @@ describe("settings-auth-service device access lifecycle", () => {
     const deliveryHarness = buildAuthHarness();
     const request = await createDeviceAccessRequest(deliveryHarness.deps, { deviceType: "desktop" }, {});
     await approveDeviceRequest(deliveryHarness, request.approvalId);
-    const originalPrepare = deliveryHarness.deps.gatewaySql.prepare.bind(deliveryHarness.deps.gatewaySql);
+    const originalPrepare = deliveryHarness.storage.gatewaySql.prepare.bind(deliveryHarness.storage.gatewaySql);
     let interceptedDeliveryUpdate = false;
-    vi.spyOn(deliveryHarness.deps.gatewaySql, "prepare").mockImplementation((sql: string) => {
+    vi.spyOn(deliveryHarness.storage.gatewaySql, "prepare").mockImplementation((sql: string) => {
       const statement = originalPrepare(sql);
       if (
         !interceptedDeliveryUpdate &&
@@ -2155,8 +2159,8 @@ describe("settings-auth-service device access lifecycle", () => {
     expect(racedStatus.deviceToken).toBeUndefined();
 
     const cleanupHarness = buildAuthHarness();
-    const cleanupPrepare = cleanupHarness.deps.gatewaySql.prepare.bind(cleanupHarness.deps.gatewaySql);
-    vi.spyOn(cleanupHarness.deps.gatewaySql, "prepare").mockImplementation((sql: string) => {
+    const cleanupPrepare = cleanupHarness.storage.gatewaySql.prepare.bind(cleanupHarness.storage.gatewaySql);
+    vi.spyOn(cleanupHarness.storage.gatewaySql, "prepare").mockImplementation((sql: string) => {
       if (sql.includes("INSERT INTO auth_device_requests")) {
         throw new Error("sqlite write failed");
       }
@@ -2170,9 +2174,9 @@ describe("settings-auth-service device access lifecycle", () => {
 
     const grantHarness = buildAuthHarness();
     const grant = await createApprovedDeviceGrant(grantHarness);
-    expect(getActiveAuthDeviceGrantById(grantHarness.deps, grant.grantId)).toBeDefined();
+    expect(await getActiveAuthDeviceGrantById(grantHarness.deps, grant.grantId)).toBeDefined();
     await revokeDeviceAccessGrant(grantHarness.deps, grant.grantId, "operator:test");
-    expect(getActiveAuthDeviceGrantById(grantHarness.deps, grant.grantId)).toBeUndefined();
+    expect(await getActiveAuthDeviceGrantById(grantHarness.deps, grant.grantId)).toBeUndefined();
 
     const expiredGrant = await createApprovedDeviceGrant(grantHarness);
     grantHarness.storage.gatewaySql
@@ -2187,7 +2191,7 @@ describe("settings-auth-service device access lifecycle", () => {
         grantId: expiredGrant.grantId,
         expiresAt: new Date(Date.now() - 1_000).toISOString(),
       });
-    expect(getActiveAuthDeviceGrantById(grantHarness.deps, expiredGrant.grantId)).toBeUndefined();
+    expect(await getActiveAuthDeviceGrantById(grantHarness.deps, expiredGrant.grantId)).toBeUndefined();
   });
 });
 
@@ -2253,7 +2257,7 @@ describe("settings-auth-service device token is never at rest", () => {
     const remotePoll = await getDeviceAccessRequestStatus(otherNodeDeps, request.requestId, request.requestSecret);
     expect(remotePoll.status).toBe("approved");
     expect(remotePoll.deviceToken).toBeUndefined();
-    expect(getAuthDeviceRequestById(harness.deps, request.requestId)?.deliveredAt).toBeUndefined();
+    expect((await getAuthDeviceRequestById(harness.deps, request.requestId))?.deliveredAt).toBeUndefined();
     expect(harness.deviceTokenVault.has(request.requestId)).toBe(true);
 
     const approvingNodePoll = await getDeviceAccessRequestStatus(
@@ -2262,15 +2266,15 @@ describe("settings-auth-service device token is never at rest", () => {
       request.requestSecret,
     );
     expect(approvingNodePoll.deviceToken).toMatch(/^[A-Za-z0-9_-]+$/);
-    expect(getAuthDeviceRequestById(harness.deps, request.requestId)?.deliveredAt).toBeDefined();
+    expect((await getAuthDeviceRequestById(harness.deps, request.requestId))?.deliveredAt).toBeDefined();
   });
 
   it("restores the plaintext vault entry when the delivery CAS throws", async () => {
     const harness = buildAuthHarness();
     const request = await createDeviceAccessRequest(harness.deps, { deviceType: "desktop" }, {});
     await approveDeviceRequest(harness, request.approvalId);
-    const originalPrepare = harness.deps.gatewaySql.prepare.bind(harness.deps.gatewaySql);
-    vi.spyOn(harness.deps.gatewaySql, "prepare").mockImplementation((sql: string) => {
+    const originalPrepare = harness.storage.gatewaySql.prepare.bind(harness.storage.gatewaySql);
+    vi.spyOn(harness.storage.gatewaySql, "prepare").mockImplementation((sql: string) => {
       const statement = originalPrepare(sql);
       if (sql.includes("SET delivered_at = @deliveredAt")) {
         return new Proxy(statement, {
@@ -2291,7 +2295,7 @@ describe("settings-auth-service device token is never at rest", () => {
       "delivery CAS unavailable",
     );
     expect(harness.deviceTokenVault.has(request.requestId)).toBe(true);
-    expect(getAuthDeviceRequestById(harness.deps, request.requestId)?.deliveredAt).toBeUndefined();
+    expect((await getAuthDeviceRequestById(harness.deps, request.requestId))?.deliveredAt).toBeUndefined();
   });
 
   it("does not deliver a token whose vault entry has already expired", async () => {
@@ -2316,12 +2320,12 @@ describe("settings-auth-service companion session lifecycle", () => {
     const harness = buildAuthHarness();
     const fixture = await createActiveCompanionControlFixture(harness, "purpose-projection");
 
-    const grant = listDeviceAccessGrants(harness.deps).find((item) => item.grantId === fixture.grantId);
+    const grant = (await listDeviceAccessGrants(harness.deps)).find((item) => item.grantId === fixture.grantId);
     expect(grant?.principalPurpose).toBe("session_control_client");
-    expect(getCompanionSessionRecord(harness.deps, fixture.companionSessionId).principalPurpose).toBe(
+    expect((await getCompanionSessionRecord(harness.deps, fixture.companionSessionId)).principalPurpose).toBe(
       "session_control_client",
     );
-    expect(getCompanionSessionInfo(harness.deps, fixture.companionSessionId).principalPurpose).toBe(
+    expect((await getCompanionSessionInfo(harness.deps, fixture.companionSessionId)).principalPurpose).toBe(
       "session_control_client",
     );
   });
@@ -2347,7 +2351,7 @@ describe("settings-auth-service companion session lifecycle", () => {
       // A generic (non-control) grant projects the generic purpose onto its session.
       principalPurpose: "general_companion",
     });
-    expect(validateCompanionAccessToken(harness.deps, exchanged.accessToken)).toEqual({
+    expect(await validateCompanionAccessToken(harness.deps, exchanged.accessToken)).toEqual({
       actorId: `companion:${exchanged.sessionId}`,
       deviceId: grant.grantId,
       grantId: grant.grantId,
@@ -2363,8 +2367,8 @@ describe("settings-auth-service companion session lifecycle", () => {
     expect(rotated.refreshToken).not.toBe(exchanged.refreshToken);
     // Refresh carries the same immutable purpose; it can never broaden it.
     expect(rotated.principalPurpose).toBe("general_companion");
-    expect(validateCompanionAccessToken(harness.deps, exchanged.accessToken)).toBeUndefined();
-    expect(validateCompanionAccessToken(harness.deps, rotated.accessToken)).toEqual({
+    expect(await validateCompanionAccessToken(harness.deps, exchanged.accessToken)).toBeUndefined();
+    expect(await validateCompanionAccessToken(harness.deps, rotated.accessToken)).toEqual({
       actorId: `companion:${exchanged.sessionId}`,
       deviceId: grant.grantId,
       grantId: grant.grantId,
@@ -2375,34 +2379,38 @@ describe("settings-auth-service companion session lifecycle", () => {
       "Refresh token is required.",
     );
 
-    expect(listCompanionSessions(harness.deps).items).toHaveLength(1);
+    expect((await listCompanionSessions(harness.deps)).items).toHaveLength(1);
     expect(
-      listCompanionSessions(harness.deps, { grantId: grant.grantId, view: "all", limit: 500 }).items[0],
+      (await listCompanionSessions(harness.deps, { grantId: grant.grantId, view: "all", limit: 500 })).items[0],
     ).toMatchObject({
       sessionId: exchanged.sessionId,
       grantId: grant.grantId,
       actorId: `companion:${exchanged.sessionId}`,
     });
-    expect(getCompanionSessionInfo(harness.deps, exchanged.sessionId)).toMatchObject({
+    expect(await getCompanionSessionInfo(harness.deps, exchanged.sessionId)).toMatchObject({
       sessionId: exchanged.sessionId,
       actorId: `companion:${exchanged.sessionId}`,
       deviceLabel: "Field tablet",
       signatureAlgorithm: "ed25519",
     });
-    expect(getCompanionSessionRecord(harness.deps, exchanged.sessionId)).toMatchObject({
+    expect(await getCompanionSessionRecord(harness.deps, exchanged.sessionId)).toMatchObject({
       sessionId: exchanged.sessionId,
       grantId: grant.grantId,
       actorId: `companion:${exchanged.sessionId}`,
       revokedAt: undefined,
     });
-    expect(() => getCompanionSessionInfo(harness.deps, "missing-session")).toThrow("Companion session not found.");
-    expect(() => getCompanionSessionRecord(harness.deps, "missing-session")).toThrow("Companion session not found.");
+    await expect(getCompanionSessionInfo(harness.deps, "missing-session")).rejects.toThrow(
+      "Companion session not found.",
+    );
+    await expect(getCompanionSessionRecord(harness.deps, "missing-session")).rejects.toThrow(
+      "Companion session not found.",
+    );
 
     const revoked = await revokeCompanionSession(harness.deps, exchanged.sessionId, "operator:test");
     expect(revoked.session.revokedAt).toBeDefined();
-    expect(validateCompanionAccessToken(harness.deps, rotated.accessToken)).toBeUndefined();
-    expect(listCompanionSessions(harness.deps).items).toEqual([]);
-    expect(listCompanionSessions(harness.deps, { view: "all" }).items[0].revokedAt).toBeDefined();
+    expect(await validateCompanionAccessToken(harness.deps, rotated.accessToken)).toBeUndefined();
+    expect((await listCompanionSessions(harness.deps)).items).toEqual([]);
+    expect((await listCompanionSessions(harness.deps, { view: "all" })).items[0].revokedAt).toBeDefined();
 
     const auditEvents = await listCompanionAuditEvents(harness.deps, {
       sessionId: exchanged.sessionId,
@@ -2465,8 +2473,8 @@ describe("settings-auth-service companion session lifecycle", () => {
       ).toMatchObject({ target_count: 2, session_count: 2 });
       if (replacementSessionId) {
         expect(replacementSessionId).not.toBe(fixture.companionSessionId);
-        expect(getCompanionSessionRecord(harness.deps, fixture.companionSessionId).revokedAt).toBeDefined();
-        expect(getCompanionSessionRecord(harness.deps, replacementSessionId).revokedAt).toBeUndefined();
+        expect((await getCompanionSessionRecord(harness.deps, fixture.companionSessionId)).revokedAt).toBeDefined();
+        expect((await getCompanionSessionRecord(harness.deps, replacementSessionId)).revokedAt).toBeUndefined();
       }
     },
   );
@@ -2474,9 +2482,9 @@ describe("settings-auth-service companion session lifecycle", () => {
   it("rolls companion-session control revocation back when the auth projection fails", async () => {
     const harness = buildAuthHarness();
     const fixture = await createActiveCompanionControlFixture(harness, "companion-rollback");
-    const originalPrepare = harness.deps.gatewaySql.prepare.bind(harness.deps.gatewaySql);
+    const originalPrepare = harness.storage.gatewaySql.prepare.bind(harness.storage.gatewaySql);
     let sessionProjectionCount = 0;
-    vi.spyOn(harness.deps.gatewaySql, "prepare").mockImplementation((sql: string) => {
+    vi.spyOn(harness.storage.gatewaySql, "prepare").mockImplementation((sql: string) => {
       const statement = originalPrepare(sql);
       if (sql.includes("FROM companion_sessions s") && sql.includes("WHERE s.session_id = @sessionId")) {
         sessionProjectionCount += 1;
@@ -2498,7 +2506,7 @@ describe("settings-auth-service companion session lifecycle", () => {
     await expect(revokeCompanionSession(harness.deps, fixture.companionSessionId, "operator:test")).rejects.toThrow(
       "companion projection failed",
     );
-    expect(getCompanionSessionRecord(harness.deps, fixture.companionSessionId).revokedAt).toBeUndefined();
+    expect((await getCompanionSessionRecord(harness.deps, fixture.companionSessionId)).revokedAt).toBeUndefined();
     expect(harness.storage.sessionControls.getControl("default", fixture.activeChatSessionId)).toMatchObject({
       ownerKind: "external_companion",
       leaseState: "external_live",
@@ -2522,9 +2530,9 @@ describe("settings-auth-service companion session lifecycle", () => {
          WHERE binding_kind = 'device_grant' AND binding_id = @grantId`,
       )
       .get<{ count: number }>({ grantId: fixture.grantId })!.count;
-    const originalPrepare = harness.deps.gatewaySql.prepare.bind(harness.deps.gatewaySql);
+    const originalPrepare = harness.storage.gatewaySql.prepare.bind(harness.storage.gatewaySql);
     let intercepted = false;
-    vi.spyOn(harness.deps.gatewaySql, "prepare").mockImplementation((sql: string) => {
+    vi.spyOn(harness.storage.gatewaySql, "prepare").mockImplementation((sql: string) => {
       const statement = originalPrepare(sql);
       if (!intercepted && sql.includes("INSERT INTO companion_sessions")) {
         intercepted = true;
@@ -2548,7 +2556,7 @@ describe("settings-auth-service companion session lifecycle", () => {
         signingPublicKeyPem: createCompanionSigningKeys().publicKeyPem,
       }),
     ).rejects.toThrow("replacement insert failed");
-    expect(getCompanionSessionRecord(harness.deps, fixture.companionSessionId).revokedAt).toBeUndefined();
+    expect((await getCompanionSessionRecord(harness.deps, fixture.companionSessionId)).revokedAt).toBeUndefined();
     expect(harness.storage.sessionControls.getControl("default", fixture.activeChatSessionId)).toMatchObject({
       ownerKind: "external_companion",
       leaseState: "external_live",
@@ -2587,8 +2595,8 @@ describe("settings-auth-service companion session lifecycle", () => {
       expect(Date.parse(session.refreshTokenExpiresAt) - Date.parse(session.issuedAt)).toBe(
         COMPANION_REFRESH_TOKEN_TTL_MS,
       );
-      expect(validateCompanionAccessToken(harness.deps, session.accessToken)).toBeDefined();
-      expect(listCompanionSessions(harness.deps).items).toEqual([
+      expect(await validateCompanionAccessToken(harness.deps, session.accessToken)).toBeDefined();
+      expect((await listCompanionSessions(harness.deps)).items).toEqual([
         expect.objectContaining({ sessionId: session.sessionId }),
       ]);
 
@@ -2611,7 +2619,7 @@ describe("settings-auth-service companion session lifecycle", () => {
         signature,
         body,
       };
-      expect(() => verifyCompanionRequestSignature(harness.deps, signedRequest)).not.toThrow();
+      await expect(verifyCompanionRequestSignature(harness.deps, signedRequest)).resolves.toBeUndefined();
       harness.storage.gatewaySql
         .prepare(
           `
@@ -2621,7 +2629,7 @@ describe("settings-auth-service companion session lifecycle", () => {
           `,
         )
         .run({ sessionId: session.sessionId, nonce: "nonce-db-clock-1" });
-      expect(() => verifyCompanionRequestSignature(harness.deps, signedRequest)).toThrow(
+      await expect(verifyCompanionRequestSignature(harness.deps, signedRequest)).rejects.toThrow(
         "Companion request replay detected.",
       );
       const replay = harness.storage.gatewaySql
@@ -2656,7 +2664,7 @@ describe("settings-auth-service companion session lifecycle", () => {
       body,
     });
 
-    verifyCompanionRequestSignature(harness.deps, {
+    await verifyCompanionRequestSignature(harness.deps, {
       sessionId: session.sessionId,
       method: "post",
       path: "/api/v1/companion/sync",
@@ -2665,7 +2673,7 @@ describe("settings-auth-service companion session lifecycle", () => {
       signature,
       body,
     });
-    expect(() =>
+    await expect(
       verifyCompanionRequestSignature(harness.deps, {
         sessionId: session.sessionId,
         method: "post",
@@ -2675,8 +2683,8 @@ describe("settings-auth-service companion session lifecycle", () => {
         signature,
         body,
       }),
-    ).toThrow("Companion request replay detected.");
-    expect(() =>
+    ).rejects.toThrow("Companion request replay detected.");
+    await expect(
       verifyCompanionRequestSignature(harness.deps, {
         sessionId: session.sessionId,
         method: "post",
@@ -2686,8 +2694,8 @@ describe("settings-auth-service companion session lifecycle", () => {
         signature: "invalid-signature",
         body,
       }),
-    ).toThrow("Invalid companion request signature.");
-    expect(() =>
+    ).rejects.toThrow("Invalid companion request signature.");
+    await expect(
       verifyCompanionRequestSignature(harness.deps, {
         sessionId: session.sessionId,
         method: "post",
@@ -2697,10 +2705,10 @@ describe("settings-auth-service companion session lifecycle", () => {
         signature,
         body,
       }),
-    ).toThrow("Companion request timestamp is outside the accepted skew window.");
+    ).rejects.toThrow("Companion request timestamp is outside the accepted skew window.");
 
     await revokeCompanionSession(harness.deps, session.sessionId, "operator:test");
-    expect(() =>
+    await expect(
       verifyCompanionRequestSignature(harness.deps, {
         sessionId: session.sessionId,
         method: "post",
@@ -2710,7 +2718,7 @@ describe("settings-auth-service companion session lifecycle", () => {
         signature,
         body,
       }),
-    ).toThrow("Companion session is no longer active.");
+    ).rejects.toThrow("Companion session is no longer active.");
 
     const auditEvents = await listCompanionAuditEvents(harness.deps, {
       sessionId: session.sessionId,
@@ -2738,12 +2746,12 @@ describe("settings-auth-service companion session lifecycle", () => {
       signingPublicKeyPem: keys.publicKeyPem,
     });
 
-    expect(validateCompanionAccessToken(harness.deps, session.accessToken)).toBeDefined();
-    expect(listCompanionSessions(harness.deps).items).toEqual([
+    expect(await validateCompanionAccessToken(harness.deps, session.accessToken)).toBeDefined();
+    expect((await listCompanionSessions(harness.deps)).items).toEqual([
       expect.objectContaining({ sessionId: session.sessionId, grantExpiresAt: undefined }),
     ]);
     const rotated = await rotateCompanionSession(harness.deps, { refreshToken: session.refreshToken });
-    expect(validateCompanionAccessToken(harness.deps, rotated.accessToken)).toBeDefined();
+    expect(await validateCompanionAccessToken(harness.deps, rotated.accessToken)).toBeDefined();
   });
 
   it("fails closed for malformed companion expiries and empty revocation markers", async () => {
@@ -2753,14 +2761,14 @@ describe("settings-auth-service companion session lifecycle", () => {
     const session = await exchangeCompanionSessionFromDeviceGrant(harness.deps, grant.grantId, {
       signingPublicKeyPem: keys.publicKeyPem,
     });
-    const grantExpiresAt = listDeviceAccessGrants(harness.deps).find(
+    const grantExpiresAt = (await listDeviceAccessGrants(harness.deps)).find(
       (candidate) => candidate.grantId === grant.grantId,
     )!.expiresAt!;
 
     harness.storage.gatewaySql
       .prepare("UPDATE companion_sessions SET access_token_expires_at = '' WHERE session_id = @sessionId")
       .run({ sessionId: session.sessionId });
-    expect(validateCompanionAccessToken(harness.deps, session.accessToken)).toBeUndefined();
+    expect(await validateCompanionAccessToken(harness.deps, session.accessToken)).toBeUndefined();
     harness.storage.gatewaySql
       .prepare(
         "UPDATE companion_sessions SET access_token_expires_at = @expiresAt, revoked_at = NULL WHERE session_id = @sessionId",
@@ -2770,8 +2778,8 @@ describe("settings-auth-service companion session lifecycle", () => {
     harness.storage.gatewaySql
       .prepare("UPDATE auth_device_grants SET expires_at = '' WHERE grant_id = @grantId")
       .run({ grantId: grant.grantId });
-    expect(validateCompanionAccessToken(harness.deps, session.accessToken)).toBeUndefined();
-    expect(listCompanionSessions(harness.deps).items).toEqual([]);
+    expect(await validateCompanionAccessToken(harness.deps, session.accessToken)).toBeUndefined();
+    expect((await listCompanionSessions(harness.deps)).items).toEqual([]);
     harness.storage.gatewaySql
       .prepare("UPDATE auth_device_grants SET expires_at = @expiresAt WHERE grant_id = @grantId")
       .run({ grantId: grant.grantId, expiresAt: grantExpiresAt });
@@ -2779,7 +2787,7 @@ describe("settings-auth-service companion session lifecycle", () => {
     harness.storage.gatewaySql
       .prepare("UPDATE companion_sessions SET revoked_at = '' WHERE session_id = @sessionId")
       .run({ sessionId: session.sessionId });
-    expect(validateCompanionAccessToken(harness.deps, session.accessToken)).toBeUndefined();
+    expect(await validateCompanionAccessToken(harness.deps, session.accessToken)).toBeUndefined();
     harness.storage.gatewaySql
       .prepare("UPDATE companion_sessions SET revoked_at = NULL WHERE session_id = @sessionId")
       .run({ sessionId: session.sessionId });
@@ -2787,7 +2795,7 @@ describe("settings-auth-service companion session lifecycle", () => {
     harness.storage.gatewaySql
       .prepare("UPDATE auth_device_grants SET revoked_at = '' WHERE grant_id = @grantId")
       .run({ grantId: grant.grantId });
-    expect(validateCompanionAccessToken(harness.deps, session.accessToken)).toBeUndefined();
+    expect(await validateCompanionAccessToken(harness.deps, session.accessToken)).toBeUndefined();
   });
 
   it("rechecks companion refresh and grant authority in the winning update", async () => {
@@ -2797,10 +2805,10 @@ describe("settings-auth-service companion session lifecycle", () => {
     const session = await exchangeCompanionSessionFromDeviceGrant(harness.deps, grant.grantId, {
       signingPublicKeyPem: keys.publicKeyPem,
     });
-    const originalPrepare = harness.deps.gatewaySql.prepare.bind(harness.deps.gatewaySql);
+    const originalPrepare = harness.storage.gatewaySql.prepare.bind(harness.storage.gatewaySql);
     let intercepted = false;
     const preparedSql: string[] = [];
-    vi.spyOn(harness.deps.gatewaySql, "prepare").mockImplementation((sql: string) => {
+    vi.spyOn(harness.storage.gatewaySql, "prepare").mockImplementation((sql: string) => {
       preparedSql.push(sql);
       const statement = originalPrepare(sql);
       if (!intercepted && sql.includes("SET access_token_hash = @accessTokenHash")) {
@@ -2844,14 +2852,14 @@ describe("settings-auth-service companion session lifecycle", () => {
     const session = await exchangeCompanionSessionFromDeviceGrant(harness.deps, grant.grantId, {
       signingPublicKeyPem: keys.publicKeyPem,
     });
-    const originalPrepare = harness.deps.gatewaySql.prepare.bind(harness.deps.gatewaySql);
+    const originalPrepare = harness.storage.gatewaySql.prepare.bind(harness.storage.gatewaySql);
     const preparedSql: string[] = [];
-    vi.spyOn(harness.deps.gatewaySql, "prepare").mockImplementation((sql: string) => {
+    vi.spyOn(harness.storage.gatewaySql, "prepare").mockImplementation((sql: string) => {
       preparedSql.push(sql);
       return originalPrepare(sql);
     });
 
-    expect(validateCompanionAccessToken(harness.deps, session.accessToken)).toBeDefined();
+    expect(await validateCompanionAccessToken(harness.deps, session.accessToken)).toBeDefined();
     const grantLockIndex = preparedSql.findIndex(
       (sql) =>
         sql.includes("SELECT *") && sql.includes("FROM auth_device_grants") && sql.includes("grant_id = @grantId"),
@@ -2923,9 +2931,9 @@ describe("settings-auth-service companion session lifecycle", () => {
     const refreshSession = await exchangeCompanionSessionFromDeviceGrant(refreshHarness.deps, refreshGrant.grantId, {
       signingPublicKeyPem: refreshKeys.publicKeyPem,
     });
-    const originalRefreshPrepare = refreshHarness.deps.gatewaySql.prepare.bind(refreshHarness.deps.gatewaySql);
+    const originalRefreshPrepare = refreshHarness.storage.gatewaySql.prepare.bind(refreshHarness.storage.gatewaySql);
     let interceptedRefresh = false;
-    vi.spyOn(refreshHarness.deps.gatewaySql, "prepare").mockImplementation((sql: string) => {
+    vi.spyOn(refreshHarness.storage.gatewaySql, "prepare").mockImplementation((sql: string) => {
       const statement = originalRefreshPrepare(sql);
       if (!interceptedRefresh && sql.includes("SET access_token_hash = @accessTokenHash")) {
         interceptedRefresh = true;
@@ -2959,9 +2967,9 @@ describe("settings-auth-service companion session lifecycle", () => {
     const revokeSession = await exchangeCompanionSessionFromDeviceGrant(revokeHarness.deps, revokeGrant.grantId, {
       signingPublicKeyPem: revokeKeys.publicKeyPem,
     });
-    const originalRevokePrepare = revokeHarness.deps.gatewaySql.prepare.bind(revokeHarness.deps.gatewaySql);
+    const originalRevokePrepare = revokeHarness.storage.gatewaySql.prepare.bind(revokeHarness.storage.gatewaySql);
     let interceptedRevoke = false;
-    vi.spyOn(revokeHarness.deps.gatewaySql, "prepare").mockImplementation((sql: string) => {
+    vi.spyOn(revokeHarness.storage.gatewaySql, "prepare").mockImplementation((sql: string) => {
       const statement = originalRevokePrepare(sql);
       if (!interceptedRevoke && sql.includes("SET revoked_at = COALESCE(revoked_at, @revokedAt)")) {
         interceptedRevoke = true;
@@ -3113,13 +3121,13 @@ describe.skipIf(!realPostgresUrl)("settings-auth-service real PostgreSQL authori
         harness.storage.gatewaySql
           .prepare("UPDATE auth_device_grants SET expires_at = @expiresAt WHERE grant_id = @grantId")
           .run({ grantId: strictGrant.grantId, expiresAt: malformed });
-        expect(getActiveAuthDeviceGrantById(harness.deps, strictGrant.grantId), malformed).toBeUndefined();
-        expect(validateDeviceAccessToken(harness.deps, strictGrant.deviceToken), malformed).toBeUndefined();
+        expect(await getActiveAuthDeviceGrantById(harness.deps, strictGrant.grantId), malformed).toBeUndefined();
+        expect(await validateDeviceAccessToken(harness.deps, strictGrant.deviceToken), malformed).toBeUndefined();
       }
       harness.storage.gatewaySql
         .prepare("UPDATE auth_device_grants SET expires_at = @expiresAt WHERE grant_id = @grantId")
         .run({ grantId: strictGrant.grantId, expiresAt: databaseWindow.expiresAt.replace("Z", "+00:00") });
-      expect(validateDeviceAccessToken(harness.deps, strictGrant.deviceToken)).toBeDefined();
+      expect(await validateDeviceAccessToken(harness.deps, strictGrant.deviceToken)).toBeDefined();
 
       const request = await createDeviceAccessRequest(harness.deps, { deviceType: "desktop" }, {});
       const requestLock = await scopedPool.connect();
@@ -3150,7 +3158,9 @@ describe.skipIf(!realPostgresUrl)("settings-auth-service real PostgreSQL authori
         requestLock.release();
       }
       expect(storage.approvals.get(request.approvalId).status).toBe("pending");
-      expect(listDeviceAccessGrants(harness.deps).filter((item) => item.requestId === request.requestId)).toEqual([]);
+      expect(
+        (await listDeviceAccessGrants(harness.deps)).filter((item) => item.requestId === request.requestId),
+      ).toEqual([]);
 
       const grant = await createApprovedDeviceGrant(harness);
       const keys = createCompanionSigningKeys();
@@ -3158,7 +3168,7 @@ describe.skipIf(!realPostgresUrl)("settings-auth-service real PostgreSQL authori
         signingPublicKeyPem: keys.publicKeyPem,
       });
       expect(Math.abs(Date.parse(firstSession.issuedAt) - Date.now())).toBeLessThan(5_000);
-      expect(validateCompanionAccessToken(harness.deps, firstSession.accessToken)).toBeDefined();
+      expect(await validateCompanionAccessToken(harness.deps, firstSession.accessToken)).toBeDefined();
 
       const rotationLock = await scopedPool.connect();
       try {
@@ -3222,19 +3232,18 @@ describe.skipIf(!realPostgresUrl)("settings-auth-service real PostgreSQL authori
           nonce: malformedNonce,
           body: malformedBody,
         });
-        expect(
-          () =>
-            verifyCompanionRequestSignature(harness!.deps, {
-              sessionId: replaySession.sessionId,
-              method: "POST",
-              path: "/api/v1/companion/sync",
-              timestamp: malformedReplayTimestamp,
-              nonce: malformedNonce,
-              signature: malformedSignature,
-              body: malformedBody,
-            }),
+        await expect(
+          verifyCompanionRequestSignature(harness!.deps, {
+            sessionId: replaySession.sessionId,
+            method: "POST",
+            path: "/api/v1/companion/sync",
+            timestamp: malformedReplayTimestamp,
+            nonce: malformedNonce,
+            signature: malformedSignature,
+            body: malformedBody,
+          }),
           malformed,
-        ).toThrow("Companion request replay detected.");
+        ).rejects.toThrow("Companion request replay detected.");
       }
 
       const cleanupNonce = "nonce-pg-cleanup-lock";
@@ -3278,7 +3287,7 @@ describe.skipIf(!realPostgresUrl)("settings-auth-service real PostgreSQL authori
         });
         const releaseCleanupLock = cleanupLock.query("SELECT pg_sleep(3); COMMIT;");
 
-        expect(() =>
+        await expect(
           verifyCompanionRequestSignature(harness!.deps, {
             sessionId: replaySession.sessionId,
             method: "POST",
@@ -3288,7 +3297,7 @@ describe.skipIf(!realPostgresUrl)("settings-auth-service real PostgreSQL authori
             signature: boundarySignature,
             body: boundaryBody,
           }),
-        ).toThrow("Companion request timestamp is outside the accepted skew window.");
+        ).rejects.toThrow("Companion request timestamp is outside the accepted skew window.");
         await releaseCleanupLock;
         expect(
           harness.storage.gatewaySql
@@ -3332,7 +3341,7 @@ describe.skipIf(!realPostgresUrl)("settings-auth-service real PostgreSQL authori
         );
         const releaseReplayLock = replayLock.query("SELECT pg_sleep(0.35); COMMIT;");
 
-        expect(() =>
+        await expect(
           verifyCompanionRequestSignature(harness!.deps, {
             sessionId: replaySession.sessionId,
             method,
@@ -3342,7 +3351,7 @@ describe.skipIf(!realPostgresUrl)("settings-auth-service real PostgreSQL authori
             signature,
             body,
           }),
-        ).toThrow("Companion request replay detected.");
+        ).rejects.toThrow("Companion request replay detected.");
         await releaseReplayLock;
       } finally {
         replayLock.release();

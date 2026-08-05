@@ -29,31 +29,33 @@ function resolver(rows: CapabilityScopeAssignment[], disabled = false): Capabili
 }
 
 describe("MCP capability enforcement decision", () => {
-  it("allows any server when the citadel/workspace are unconfigured", () => {
-    const effective = resolver([]).resolve("personal", "default").mcpServers;
+  it("allows any server when the citadel/workspace are unconfigured", async () => {
+    const effective = (await resolver([]).resolve("personal", "default")).mcpServers;
     expect(isCapabilityAllowed(effective, "denied")).toBe(true);
   });
 
-  it("denies a server outside the citadel grant", () => {
-    const effective = resolver([citadelMcpGrant("allowed")]).resolve("personal", "default").mcpServers;
+  it("denies a server outside the citadel grant", async () => {
+    const effective = (await resolver([citadelMcpGrant("allowed")]).resolve("personal", "default")).mcpServers;
     expect(isCapabilityAllowed(effective, "allowed")).toBe(true);
     expect(isCapabilityAllowed(effective, "denied")).toBe(false);
   });
 
-  it("allows everything when the kill-switch disables scoping (fail-open)", () => {
-    const effective = resolver([citadelMcpGrant("allowed")], true).resolve("personal", "default").mcpServers;
+  it("allows everything when the kill-switch disables scoping (fail-open)", async () => {
+    const effective = (await resolver([citadelMcpGrant("allowed")], true).resolve("personal", "default")).mcpServers;
     expect(isCapabilityAllowed(effective, "denied")).toBe(true);
   });
 
-  it("denies all capabilities when scope resolution faults", () => {
-    const effective = new CapabilityScopeResolver({
-      listAssignmentsForScope: () => {
-        throw new Error("storage unavailable");
-      },
-      listAllSkillIds: () => ["skill-1"],
-      listAllIntegrationIds: () => ["integration-1"],
-      listAllMcpServerIds: () => ["denied"],
-    }).resolve("personal", "default").mcpServers;
+  it("denies all capabilities when scope resolution faults", async () => {
+    const effective = (
+      await new CapabilityScopeResolver({
+        listAssignmentsForScope: () => {
+          throw new Error("storage unavailable");
+        },
+        listAllSkillIds: () => ["skill-1"],
+        listAllIntegrationIds: () => ["integration-1"],
+        listAllMcpServerIds: () => ["denied"],
+      }).resolve("personal", "default")
+    ).mcpServers;
 
     expect(isCapabilityAllowed(effective, "denied")).toBe(false);
   });
@@ -64,44 +66,46 @@ describe("MCP capability enforcement decision", () => {
 function gate(
   rows: CapabilityScopeAssignment[],
   opts: { disabled?: boolean; noResolver?: boolean } = {},
-): (request: McpInvokeRequest) => void {
+): (request: McpInvokeRequest) => Promise<void> {
   const svc = Object.create(GatewayService.prototype) as Record<string, unknown>;
   if (!opts.noResolver) {
     svc.capabilityScopeResolver = resolver(rows, opts.disabled);
   }
-  svc.storage = { workspaces: { find: () => ({ citadelId: "personal" }) } };
+  svc.storage = { workspaces: { find: async () => ({ citadelId: "personal" }) } };
   return (request) =>
     (
-      svc as unknown as { assertMcpServerInCapabilityScope: (r: McpInvokeRequest) => void }
+      svc as unknown as { assertMcpServerInCapabilityScope: (r: McpInvokeRequest) => Promise<void> }
     ).assertMcpServerInCapabilityScope(request);
 }
 
 const req = (serverId: string): McpInvokeRequest => ({ serverId, toolName: "t", workspaceId: "default" });
 
 describe("assertMcpServerInCapabilityScope (real gate method)", () => {
-  it("throws PolicyViolationError for a scoped-out MCP server", () => {
-    expect(() => gate([citadelMcpGrant("allowed")])(req("denied"))).toThrow(PolicyViolationError);
+  it("throws PolicyViolationError for a scoped-out MCP server", async () => {
+    await expect(gate([citadelMcpGrant("allowed")])(req("denied"))).rejects.toThrow(PolicyViolationError);
   });
 
-  it("allows an MCP server within the citadel grant", () => {
-    expect(() => gate([citadelMcpGrant("allowed")])(req("allowed"))).not.toThrow();
+  it("allows an MCP server within the citadel grant", async () => {
+    await expect(gate([citadelMcpGrant("allowed")])(req("allowed"))).resolves.toBeUndefined();
   });
 
-  it("allows any server when unconfigured (non-breaking)", () => {
-    expect(() => gate([])(req("anything"))).not.toThrow();
+  it("allows any server when unconfigured (non-breaking)", async () => {
+    await expect(gate([])(req("anything"))).resolves.toBeUndefined();
   });
 
-  it("fails open when the kill-switch disables scoping", () => {
-    expect(() => gate([citadelMcpGrant("allowed")], { disabled: true })(req("denied"))).not.toThrow();
+  it("fails open when the kill-switch disables scoping", async () => {
+    await expect(gate([citadelMcpGrant("allowed")], { disabled: true })(req("denied"))).resolves.toBeUndefined();
   });
 
-  it("fails closed when the resolver is absent (constructor-bypass harness)", () => {
-    expect(() => gate([], { noResolver: true })(req("denied"))).toThrow(PolicyViolationError);
+  it("fails closed when the resolver is absent (constructor-bypass harness)", async () => {
+    await expect(gate([], { noResolver: true })(req("denied"))).rejects.toThrow(PolicyViolationError);
   });
 
-  it("keeps internal approval and durable-task MCP servers available through the scope gate", () => {
-    expect(() => gate([citadelMcpGrant("allowed")])(req("goatcitadel-internal-approval-inbox"))).not.toThrow();
-    expect(() => gate([], { noResolver: true })(req("goatcitadel-internal-durable-tasks"))).not.toThrow();
+  it("keeps internal approval and durable-task MCP servers available through the scope gate", async () => {
+    await expect(
+      gate([citadelMcpGrant("allowed")])(req("goatcitadel-internal-approval-inbox")),
+    ).resolves.toBeUndefined();
+    await expect(gate([], { noResolver: true })(req("goatcitadel-internal-durable-tasks"))).resolves.toBeUndefined();
   });
 });
 

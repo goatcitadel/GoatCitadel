@@ -29,7 +29,7 @@ export interface TelegramCommandContext {
   actorDisplayName?: string;
   content: string;
   personalityCatalog?: PersonalityCatalogResponse;
-  isActiveRun?: () => boolean;
+  isActiveRun?: () => Promise<boolean>;
   runChatCommand?: (commandText: string) => Promise<{ message: string }>;
   cancelActiveSession?: () => Promise<TelegramStopCommandOutcome>;
   resolveApprovalToken?: (
@@ -61,7 +61,7 @@ export async function handleTelegramChannelCommand(context: TelegramCommandConte
   }
   const command = normalized.command;
   const definition = SHARED_CHANNEL_COMMANDS.find((item) => item.name === normalized.name);
-  if (context.isActiveRun?.() && !definition?.bypassesActiveRunGuard) {
+  if ((await context.isActiveRun?.()) && !definition?.bypassesActiveRunGuard) {
     return respond(
       command,
       context,

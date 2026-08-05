@@ -31,9 +31,9 @@ function createHarness(record = usageRecord()) {
 }
 
 describe("costs route service model-usage authority", () => {
-  it("forces the path workspace into canonical list queries", () => {
+  it("forces the path workspace into canonical list queries", async () => {
     const { port, modelUsageEvents } = createHarness();
-    port.listModelUsageEvents("workspace-a", { sessionId: "session-a", limit: 20 });
+    await port.listModelUsageEvents("workspace-a", { sessionId: "session-a", limit: 20 });
     expect(modelUsageEvents.list).toHaveBeenCalledWith({
       workspaceId: "workspace-a",
       sessionId: "session-a",
@@ -41,9 +41,9 @@ describe("costs route service model-usage authority", () => {
     });
   });
 
-  it("hides events owned by another workspace", () => {
+  it("hides events owned by another workspace", async () => {
     const { port } = createHarness(usageRecord({ workspaceId: "workspace-b" }));
-    expect(() => port.getModelUsageEvent("workspace-a", "usage-1")).toThrow(NotFoundError);
+    await expect(port.getModelUsageEvent("workspace-a", "usage-1")).rejects.toBeInstanceOf(NotFoundError);
   });
 
   it("persists actor/evidence and appends idempotent durable audit evidence", async () => {

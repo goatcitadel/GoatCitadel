@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DurableRunRecord } from "@goatcitadel/contracts";
-import { Storage } from "@goatcitadel/storage";
+import { createSqliteAsyncStorage, Storage, type AsyncStorage } from "@goatcitadel/storage";
 import {
   GENERAL_CHAT_POST_COMMIT_EFFECTS,
   type GeneralChatPostCommitEffectWorkflowPayload,
@@ -29,6 +29,7 @@ import {
 const roots: string[] = [];
 const services: DurableRunService[] = [];
 const storages: Storage[] = [];
+const asyncStorages = new WeakMap<Storage, AsyncStorage>();
 
 afterEach(() => {
   for (const service of services.splice(0)) {
@@ -52,15 +53,16 @@ describe("DurableRunService general Chat post-commit integration", () => {
     const seeded = seedRunningRetainedPrefix(harness.storage);
     const backgroundTasks = new Set<Promise<void>>();
     const executeWorkflow = vi.fn(async () => undefined);
+    const asyncStorage = getAsyncStorage(harness.storage);
     const workflowHost = {
-      storage: harness.storage,
+      storage: asyncStorage,
       publishRealtime: vi.fn(),
       recordDevDiagnostic: vi.fn(),
       persistChatStreamChunk: vi.fn(),
     };
     const service = new DurableRunService(
       {
-        storage: harness.storage,
+        storage: asyncStorage,
         config: {
           assistant: { durable: { enabled: true, workflowTimeoutMs: 30_000 }, mesh: { nodeId: "test-node" } },
         },
@@ -81,7 +83,7 @@ describe("DurableRunService general Chat post-commit integration", () => {
         },
         onGeneralChatPostCommit: async (_run, progress) => {
           for (const effect of GENERAL_CHAT_POST_COMMIT_EFFECTS) {
-            progress.runEffect(effect, () => undefined);
+            await progress.runEffect(effect, () => undefined);
           }
           return { status: "failed" };
         },
@@ -170,7 +172,7 @@ describe("DurableRunService general Chat post-commit integration", () => {
       return originalUpdate(input);
     });
     const onGeneral = vi.fn(async (_run: DurableRunRecord, progress: GeneralChatPostCommitProgress) => {
-      reconcileGeneralEffects(progress);
+      await reconcileGeneralEffects(progress);
       return { status: "enqueued" };
     });
     const firstService = createService(harness.storage, onGeneral);
@@ -255,7 +257,7 @@ describe("DurableRunService general Chat post-commit integration", () => {
     const harness = createStorageHarness();
     const parent = seedParent(harness.storage, "generation-child-failure");
     const onGeneral = vi.fn(async (_run: DurableRunRecord, progress: GeneralChatPostCommitProgress) => {
-      reconcileGeneralEffects(progress);
+      await reconcileGeneralEffects(progress);
       return { status: "dispatched" };
     });
     const firstService = createService(harness.storage, onGeneral);
@@ -298,7 +300,7 @@ describe("DurableRunService general Chat post-commit integration", () => {
     const harness = createStorageHarness();
     const parent = seedParent(harness.storage, "generation-foreign-worker");
     const onGeneral = vi.fn(async (_run: DurableRunRecord, progress: GeneralChatPostCommitProgress) => {
-      reconcileGeneralEffects(progress);
+      await reconcileGeneralEffects(progress);
       return { status: "dispatched" };
     });
     const service = createService(harness.storage, onGeneral);
@@ -327,21 +329,24 @@ describe("DurableRunService general Chat post-commit integration", () => {
   it("never emits a live parent realtime ghost and replays one stable delivery after receipt commit", async () => {
     const harness = createStorageHarness();
     const parent = seedParent(harness.storage, "generation-parent-realtime");
-    const realtime = new RealtimeEventService({ storage: harness.storage, getGatewayNodeId: () => "node-test" });
+    const realtime = new RealtimeEventService({
+      storage: getAsyncStorage(harness.storage),
+      getGatewayNodeId: () => "node-test",
+    });
     const listener = vi.fn();
     realtime.subscribeRealtime(listener);
     const onGeneral = vi.fn(async (_run: DurableRunRecord, progress: GeneralChatPostCommitProgress) => {
-      progress.publishEffect("realtime", () => {
+      await progress.publishEffect("realtime", () =>
         realtime.publishRealtime("chat_thread_updated", "chat", {
           sessionId: "session-post-commit",
           [IDEMPOTENT_REALTIME_ENVELOPE_KEY]: {
             deliveryId: `${parent.runId}:${progress.generationId}:chat-thread-updated`,
             occurredAt: progress.requestedAt,
           },
-        });
-      });
+        }),
+      );
       for (const effect of GENERAL_CHAT_POST_COMMIT_EFFECTS) {
-        progress.runEffect(effect, () => undefined);
+        await progress.runEffect(effect, () => undefined);
       }
       return { status: "completed" };
     });
@@ -375,7 +380,7 @@ describe("DurableRunService general Chat post-commit integration", () => {
       generationHarness.storage,
       vi.fn(async (_run, progress) => {
         observedGenerations.push(progress.generationId);
-        progress.runEffect("capability_gap", () => undefined);
+        await progress.runEffect("capability_gap", () => undefined);
         if (progress.generationId === "generation-waiting") {
           const current = generationHarness.storage.durableRuns.getRun(generationParent.runId);
           const replacement = buildParentRuntimeTransition(generationParent.runId, "generation-completed", "completed");
@@ -412,7 +417,7 @@ describe("DurableRunService general Chat post-commit integration", () => {
           return { status: "waiting" };
         }
         for (const effect of GENERAL_CHAT_POST_COMMIT_EFFECTS) {
-          progress.runEffect(effect, () => undefined);
+          await progress.runEffect(effect, () => undefined);
         }
         return { status: "completed" };
       }),
@@ -432,8 +437,8 @@ describe("DurableRunService general Chat post-commit integration", () => {
     const partialService = createService(
       partialHarness.storage,
       vi.fn(async (_run, progress) => {
-        progress.runEffect("learned_memory_user", learnedMemory);
-        progress.publishEffect("realtime", () => {
+        await progress.runEffect("learned_memory_user", learnedMemory);
+        await progress.publishEffect("realtime", () => {
           realtime();
           if (failRealtime) {
             failRealtime = false;
@@ -441,7 +446,7 @@ describe("DurableRunService general Chat post-commit integration", () => {
           }
         });
         for (const effect of GENERAL_CHAT_POST_COMMIT_EFFECTS) {
-          progress.runEffect(effect, () => undefined);
+          await progress.runEffect(effect, () => undefined);
         }
         return { status: "completed" };
       }),
@@ -457,15 +462,15 @@ describe("DurableRunService general Chat post-commit integration", () => {
   });
 });
 
-function reconcileGeneralEffects(progress: GeneralChatPostCommitProgress): void {
-  progress.enqueueDurableEffect({
+async function reconcileGeneralEffects(progress: GeneralChatPostCommitProgress): Promise<void> {
+  await progress.enqueueDurableEffect({
     effect: "commitments",
     sessionId: "session-post-commit",
     workspaceId: "workspace-post-commit",
     turnId: "turn-post-commit",
     autonomous: false,
   });
-  progress.enqueueDurableEffect({
+  await progress.enqueueDurableEffect({
     effect: "background_review",
     sessionId: "session-post-commit",
     workspaceId: "workspace-post-commit",
@@ -473,7 +478,7 @@ function reconcileGeneralEffects(progress: GeneralChatPostCommitProgress): void 
     delegatedChild: false,
     autonomous: false,
   });
-  progress.enqueueDurableEffect({
+  await progress.enqueueDurableEffect({
     effect: "memory_maintenance",
     sessionId: "session-post-commit",
     workspaceId: "workspace-post-commit",
@@ -485,7 +490,7 @@ function reconcileGeneralEffects(progress: GeneralChatPostCommitProgress): void 
       !["commitments", "background_review", "memory_maintenance"].includes(effect) &&
       !progress.completedEffects.includes(effect)
     ) {
-      progress.runEffect(effect, () => undefined);
+      await progress.runEffect(effect, () => undefined);
     }
   }
 }
@@ -515,6 +520,14 @@ function openStorage(harness: { dbPath: string; transcriptsDir: string; auditDir
   return storage;
 }
 
+function getAsyncStorage(storage: Storage): AsyncStorage {
+  const existing = asyncStorages.get(storage);
+  if (existing) return existing;
+  const asyncStorage = createSqliteAsyncStorage(storage);
+  asyncStorages.set(storage, asyncStorage);
+  return asyncStorage;
+}
+
 function createService(
   storage: Storage,
   onGeneral?: (run: DurableRunRecord, progress: GeneralChatPostCommitProgress) => Promise<Record<string, unknown>>,
@@ -522,7 +535,7 @@ function createService(
 ): DurableRunService {
   const service = new DurableRunService(
     {
-      storage,
+      storage: getAsyncStorage(storage),
       config: {
         assistant: { durable: { enabled: true, workflowTimeoutMs: 30_000 }, mesh: { nodeId: "test-node" } },
       },

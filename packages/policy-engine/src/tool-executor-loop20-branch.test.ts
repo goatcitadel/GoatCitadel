@@ -4,13 +4,15 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage, Storage } from "@goatcitadel/storage";
 
 // shell.exec executes through a manual spawn (so process trees can be killed on
 // timeout/abort). Provide a controllable fake child driven by `mocked.spawnResult`.
 type SpawnResult = { stdout?: string; stderr?: string; exitCode?: number | null; error?: Error };
 
-function makeSpawnChild(result: SpawnResult): EventEmitter & { pid: number; stdout: EventEmitter; stderr: EventEmitter } {
+function makeSpawnChild(
+  result: SpawnResult,
+): EventEmitter & { pid: number; stdout: EventEmitter; stderr: EventEmitter } {
   const child = new EventEmitter() as EventEmitter & {
     pid: number;
     stdout: EventEmitter;
@@ -277,19 +279,19 @@ function request(toolName: string, args: Record<string, unknown> = {}): ToolInvo
   };
 }
 
-function storageStub(): Storage {
+function storageStub(): Storage & AsyncStorage {
   return {
     toolGrants: {
       listActiveBySession: vi.fn(() => []),
     },
-  } as unknown as Storage;
+  } as unknown as Storage & AsyncStorage;
 }
 
 function channelStorageStub(connection: {
   connectionId: string;
   key: string;
   config: Record<string, unknown>;
-}): Storage {
+}): Storage & AsyncStorage {
   return {
     integrationConnections: {
       get: vi.fn(() => ({
@@ -323,5 +325,5 @@ function channelStorageStub(connection: {
     toolGrants: {
       listActiveBySession: vi.fn(() => []),
     },
-  } as unknown as Storage;
+  } as unknown as Storage & AsyncStorage;
 }

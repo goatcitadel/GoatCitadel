@@ -78,7 +78,7 @@ export interface FilesRoutePortDependencies {
   writeJailRoots: string[];
   readOnlyRoots: string[];
   serializeRootPath: (fullPath: string) => string;
-  publishRealtime: (eventType: string, source: string, payload?: Record<string, unknown>) => void;
+  publishRealtime: (eventType: string, source: string, payload?: Record<string, unknown>) => Promise<unknown>;
 }
 
 export function createFilesRoutePort(deps: FilesRoutePortDependencies): FilesRoutePort {
@@ -104,7 +104,7 @@ export function createFilesRoutePort(deps: FilesRoutePortDependencies): FilesRou
       bytes,
     };
 
-    deps.publishRealtime("system", "files", {
+    await deps.publishRealtime("system", "files", {
       type: "file_uploaded",
       ...result,
     });

@@ -11,7 +11,7 @@ export const complianceRouteMethods = ["buildComplianceBundle", "verifyComplianc
 export type ComplianceRouteMethod = (typeof complianceRouteMethods)[number];
 
 export interface ComplianceRoutePort {
-  buildComplianceBundle(input: BuildComplianceBundleInput): ComplianceBundle;
+  buildComplianceBundle(input: BuildComplianceBundleInput): Promise<ComplianceBundle>;
   verifyComplianceBundle(bundle: unknown): ComplianceBundleVerification;
 }
 

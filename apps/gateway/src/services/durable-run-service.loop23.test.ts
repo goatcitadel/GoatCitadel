@@ -59,7 +59,7 @@ describe("DurableRunService loop23 lifecycle coverage", () => {
     });
   });
 
-  it("reports diagnostics and read APIs from durable storage without mutating runs", () => {
+  it("reports diagnostics and read APIs from durable storage without mutating runs", async () => {
     const run = {
       ...createRun("run-diag", "running"),
       leaseOwnerId: "worker-old",
@@ -102,7 +102,7 @@ describe("DurableRunService loop23 lifecycle coverage", () => {
     });
     const service = new DurableRunService(context as unknown as ServiceContext);
 
-    expect(service.getDurableDiagnostics()).toMatchObject({
+    expect(await service.getDurableDiagnostics()).toMatchObject({
       enabled: true,
       replayFoundationReady: false,
       runCount: 1,
@@ -114,16 +114,16 @@ describe("DurableRunService loop23 lifecycle coverage", () => {
       recentRuns: [expect.objectContaining({ runId: "run-diag", workerHealth: "expired_lease" })],
       recentDeadLetters: deadLetters,
     });
-    expect(service.listDurableRuns()).toEqual([expect.objectContaining({ runId: "run-diag" })]);
-    expect(service.listDurableDeadLetters()).toEqual(deadLetters);
-    expect(service.listDurableRunCheckpoints(run.runId)).toEqual(checkpoints);
-    expect(service.listDurableRunTimeline(run.runId)).toEqual(timeline);
-    expect(service.getDurableRun(run.runId)).toMatchObject({ runId: "run-diag", workerHealth: "expired_lease" });
+    expect(await service.listDurableRuns()).toEqual([expect.objectContaining({ runId: "run-diag" })]);
+    expect(await service.listDurableDeadLetters()).toEqual(deadLetters);
+    expect(await service.listDurableRunCheckpoints(run.runId)).toEqual(checkpoints);
+    expect(await service.listDurableRunTimeline(run.runId)).toEqual(timeline);
+    expect(await service.getDurableRun(run.runId)).toMatchObject({ runId: "run-diag", workerHealth: "expired_lease" });
     expect(requireFeatureEnabled).toHaveBeenCalledWith("durableKernelV1Enabled");
     expect(run.status).toBe("running");
   });
 
-  it("persists pause, resume, and cancel transitions with retained timeline and realtime signals", () => {
+  it("persists pause, resume, and cancel transitions with retained timeline and realtime signals", async () => {
     const run = {
       ...createRun("run-lifecycle", "queued"),
       leaseOwnerId: "worker-old",
@@ -147,18 +147,18 @@ describe("DurableRunService loop23 lifecycle coverage", () => {
     );
     const service = new DurableRunService(context as unknown as ServiceContext);
 
-    expect(service.pauseDurableRun(run.runId, "operator-1")).toMatchObject({
+    expect(await service.pauseDurableRun(run.runId, "operator-1")).toMatchObject({
       status: "paused",
       leaseOwnerId: undefined,
       leaseExpiresAt: undefined,
       leaseHeartbeatAt: undefined,
     });
-    expect(service.resumeDurableRun(run.runId, "operator-1")).toMatchObject({ status: "queued" });
-    expect(service.cancelDurableRun(run.runId, "operator-1")).toMatchObject({
+    expect(await service.resumeDurableRun(run.runId, "operator-1")).toMatchObject({ status: "queued" });
+    expect(await service.cancelDurableRun(run.runId, "operator-1")).toMatchObject({
       status: "cancelled",
       lastError: "cancelled by operator-1",
     });
-    expect(() => service.pauseDurableRun(terminal.runId)).toThrow(/already terminal/);
+    await expect(service.pauseDurableRun(terminal.runId)).rejects.toThrow(/already terminal/);
 
     expect(timeline.map((event) => event.eventType)).toEqual(["run_paused", "run_resumed", "run_cancelled"]);
     expect(checkpoints.map((checkpoint) => checkpoint.checkpointKind)).toEqual(["run_resumed", "run_cancelled"]);
@@ -170,7 +170,7 @@ describe("DurableRunService loop23 lifecycle coverage", () => {
     );
   });
 
-  it("wakes waiting runs, preserves mismatches, and returns failed wake diagnostics on version conflicts", () => {
+  it("wakes waiting runs, preserves mismatches, and returns failed wake diagnostics on version conflicts", async () => {
     const waiting = {
       ...createRun("run-wait", "waiting"),
       metadata: {
@@ -202,7 +202,7 @@ describe("DurableRunService loop23 lifecycle coverage", () => {
     const service = new DurableRunService(context as unknown as ServiceContext);
 
     expect(
-      service.wakeDurableRun(waiting.runId, {
+      await service.wakeDurableRun(waiting.runId, {
         eventKey: "approval.rejected",
         correlationId: "approval-1",
       }),
@@ -213,7 +213,7 @@ describe("DurableRunService loop23 lifecycle coverage", () => {
     expect(runs.get(waiting.runId)?.status).toBe("waiting");
 
     expect(
-      service.wakeDurableRun(waiting.runId, {
+      await service.wakeDurableRun(waiting.runId, {
         eventKey: "approval.resolved",
         correlationId: "approval-1",
         payload: { decision: "approve" },
@@ -230,14 +230,14 @@ describe("DurableRunService loop23 lifecycle coverage", () => {
       expect.any(Object),
     );
 
-    expect(service.wakeDurableRun(conflict.runId, { eventKey: "approval.resolved" })).toMatchObject({
+    expect(await service.wakeDurableRun(conflict.runId, { eventKey: "approval.resolved" })).toMatchObject({
       outcome: "failed",
       run: expect.objectContaining({ status: "waiting" }),
       detail: "Durable run run-conflict update conflict",
     });
   });
 
-  it("enforces waitForEvent registration: matching key/correlation wakes, stale wakes are rejected", () => {
+  it("enforces waitForEvent registration: matching key/correlation wakes, stale wakes are rejected", async () => {
     // A chat turn parked on approval, keyed to its own approval.
     const approvalWait = {
       ...createRun("run-approval-wait", "waiting"),
@@ -260,32 +260,32 @@ describe("DurableRunService loop23 lifecycle coverage", () => {
 
     // Cross-type stale wake (wrong eventKey) -> rejected, run stays waiting.
     expect(
-      service.wakeDurableRun(approvalWait.runId, { eventKey: "some.other.key", correlationId: "approval-A" }),
+      await service.wakeDurableRun(approvalWait.runId, { eventKey: "some.other.key", correlationId: "approval-A" }),
     ).toMatchObject({ outcome: "skipped_event_key_mismatch" });
     expect(runs.get(approvalWait.runId)?.status).toBe("waiting");
 
     // Right key but a DIFFERENT approval's correlationId -> rejected (the premature-resume bug).
     expect(
-      service.wakeDurableRun(approvalWait.runId, { eventKey: "approval.resolved", correlationId: "approval-B" }),
+      await service.wakeDurableRun(approvalWait.runId, { eventKey: "approval.resolved", correlationId: "approval-B" }),
     ).toMatchObject({ outcome: "skipped_correlation_mismatch" });
     expect(runs.get(approvalWait.runId)?.status).toBe("waiting");
 
     // The legit wake (matching key + correlationId) resumes the run.
     expect(
-      service.wakeDurableRun(approvalWait.runId, { eventKey: "approval.resolved", correlationId: "approval-A" }),
+      await service.wakeDurableRun(approvalWait.runId, { eventKey: "approval.resolved", correlationId: "approval-A" }),
     ).toMatchObject({ outcome: "woke", run: expect.objectContaining({ status: "queued" }) });
     expect(runs.get(approvalWait.runId)?.status).toBe("queued");
 
     // Core bug: a run with NO waitForEvent must REJECT a caller-supplied eventKey
     // rather than silently accept any wake.
     expect(
-      service.wakeDurableRun(noRegistration.runId, { eventKey: "approval.resolved", correlationId: "whatever" }),
+      await service.wakeDurableRun(noRegistration.runId, { eventKey: "approval.resolved", correlationId: "whatever" }),
     ).toMatchObject({ outcome: "skipped_event_key_mismatch" });
     expect(runs.get(noRegistration.runId)?.status).toBe("waiting");
 
     // Back-compat: the same no-registration run is still wakeable by a caller
     // that supplies NO eventKey (the only legitimate keyless path).
-    expect(service.wakeDurableRun(noRegistration.runId, { eventKey: "" })).toMatchObject({
+    expect(await service.wakeDurableRun(noRegistration.runId, { eventKey: "" })).toMatchObject({
       outcome: "woke",
       run: expect.objectContaining({ status: "queued" }),
     });
@@ -317,14 +317,16 @@ describe("DurableRunService loop23 lifecycle coverage", () => {
       },
     });
 
-    expect(service.retryDurableRun(exhausted.runId, "manual_retry", "operator-1")).toMatchObject({
+    expect(await service.retryDurableRun(exhausted.runId, "manual_retry", "operator-1")).toMatchObject({
       status: "dead_lettered",
       lastError: "retry_exhausted:manual_retry",
     });
     const [deadLetter] = [...deadLetters.values()];
     expect(deadLetter).toMatchObject({ runId: exhausted.runId, reason: "retry_exhausted:manual_retry" });
 
-    const recovered = service.recoverDurableDeadLetter(deadLetter!.deadLetterId, "operator-2", { maxAttempts: 99 });
+    const recovered = await service.recoverDurableDeadLetter(deadLetter!.deadLetterId, "operator-2", {
+      maxAttempts: 99,
+    });
     await Promise.all([...backgroundTasks]);
 
     expect(recovered.maxAttempts).toBe(20);

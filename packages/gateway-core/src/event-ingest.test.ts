@@ -4,9 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayEventInput, InboundEventIndexRow, SessionMeta, TranscriptEvent } from "@goatcitadel/contracts";
-import { Storage } from "@goatcitadel/storage";
+import { createSqliteAsyncStorage, Storage, type AsyncStorage } from "@goatcitadel/storage";
 import { deriveCredentialDims, EventIngestService } from "./event-ingest.js";
 import { resolveSessionRoute } from "./session-key.js";
+
+function asAsyncStorage(storage: Storage): AsyncStorage {
+  return storage instanceof Storage ? createSqliteAsyncStorage(storage) : (storage as unknown as AsyncStorage);
+}
 
 function buildPayload(): GatewayEventInput {
   return {
@@ -44,7 +48,7 @@ describe("EventIngestService", () => {
       auditDir: path.join(root, "audit"),
     });
     try {
-      const service = new EventIngestService(storage);
+      const service = new EventIngestService(asAsyncStorage(storage));
       const payload: GatewayEventInput = {
         ...buildPayload(),
         eventId: "evt-partial-usage",
@@ -162,10 +166,10 @@ describe("EventIngestService", () => {
           }
         }),
       },
-      runImmediateTransaction: vi.fn((callback: () => unknown) => {
+      runImmediateTransaction: vi.fn(async (callback: () => unknown | Promise<unknown>) => {
         storage.db.exec("BEGIN IMMEDIATE");
         try {
-          const result = callback();
+          const result = await callback();
           storage.db.exec("COMMIT");
           return result;
         } catch (error) {
@@ -213,7 +217,7 @@ describe("EventIngestService", () => {
       },
     } as unknown as Storage;
 
-    const service = new EventIngestService(storage);
+    const service = new EventIngestService(asAsyncStorage(storage));
     const onCommit = vi.fn(() => {
       expect(inTransaction).toBe(true);
     });
@@ -248,7 +252,7 @@ describe("EventIngestService", () => {
       auditDir: path.join(os.tmpdir(), `goatcitadel-event-ingest-${unique}`, "audit"),
     });
     try {
-      const service = new EventIngestService(storage);
+      const service = new EventIngestService(asAsyncStorage(storage));
       const mutationIdentity = {
         method: "POST",
         routePath: "/api/v1/chat/sessions/:sessionId/messages",
@@ -293,7 +297,7 @@ describe("EventIngestService", () => {
       auditDir: path.join(os.tmpdir(), `goatcitadel-event-ingest-${unique}`, "audit"),
     });
     try {
-      const service = new EventIngestService(storage);
+      const service = new EventIngestService(asAsyncStorage(storage));
       const mutationIdentity = {
         method: "POST",
         routePath: "/api/v1/chat/sessions/:sessionId/messages",
@@ -325,7 +329,7 @@ describe("EventIngestService", () => {
     } finally {
       storage.close();
     }
-  });
+  }, 15_000);
 
   it("rolls back a stale owner and commits the same event only for the winning claim generation", async () => {
     const unique = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -335,7 +339,7 @@ describe("EventIngestService", () => {
       auditDir: path.join(os.tmpdir(), `goatcitadel-event-ingest-${unique}`, "audit"),
     });
     try {
-      const service = new EventIngestService(storage);
+      const service = new EventIngestService(asAsyncStorage(storage));
       const identity = {
         method: "POST",
         routePath: "/api/v1/chat/sessions/:sessionId/agent-send/stream",
@@ -486,7 +490,7 @@ describe("EventIngestService", () => {
     } as unknown as Storage;
 
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const service = new EventIngestService(storage);
+    const service = new EventIngestService(asAsyncStorage(storage));
 
     const result = await service.ingest({
       endpoint: "/api/v1/gateway/events",
@@ -554,7 +558,7 @@ describe("EventIngestService", () => {
       },
     } as unknown as Storage;
 
-    const service = new EventIngestService(storage);
+    const service = new EventIngestService(asAsyncStorage(storage));
     const delivered = await service.flushPendingTranscriptOutbox();
 
     expect(delivered).toBe(1);
@@ -601,7 +605,7 @@ describe("EventIngestService", () => {
       },
     } as unknown as Storage;
 
-    const service = new EventIngestService(storage);
+    const service = new EventIngestService(asAsyncStorage(storage));
     const result = await service.ingest({
       endpoint: "/api/v1/gateway/events",
       idempotencyKey: "idem-1",
@@ -656,7 +660,7 @@ describe("EventIngestService", () => {
       },
     } as unknown as Storage;
 
-    const service = new EventIngestService(storage);
+    const service = new EventIngestService(asAsyncStorage(storage));
     const result = await service.ingest({
       endpoint: "/api/v1/gateway/events",
       idempotencyKey: "idem-1",
@@ -712,7 +716,7 @@ describe("EventIngestService", () => {
       },
     } as unknown as Storage;
 
-    const service = new EventIngestService(storage);
+    const service = new EventIngestService(asAsyncStorage(storage));
     const result = await service.ingest({
       endpoint: "/api/v1/gateway/events",
       idempotencyKey: "idem-1",
@@ -767,7 +771,7 @@ describe("EventIngestService", () => {
       },
     } as unknown as Storage;
 
-    const service = new EventIngestService(storage);
+    const service = new EventIngestService(asAsyncStorage(storage));
     await service.ingest({
       endpoint: "/api/v1/gateway/events",
       idempotencyKey: "idem-assistant",
@@ -860,7 +864,7 @@ describe("EventIngestService", () => {
       },
     } as unknown as Storage;
 
-    const service = new EventIngestService(storage);
+    const service = new EventIngestService(asAsyncStorage(storage));
     const result = await service.ingest({
       endpoint: "/api/v1/gateway/events",
       idempotencyKey: "idem-plain",
@@ -954,7 +958,7 @@ describe("EventIngestService", () => {
       },
     } as unknown as Storage;
 
-    const service = new EventIngestService(storage);
+    const service = new EventIngestService(asAsyncStorage(storage));
 
     await expect(service.flushPendingTranscriptOutbox()).resolves.toBe(2);
     expect(storage.transcriptOutbox.listPending).toHaveBeenNthCalledWith(2, 200, "sess_shared");
@@ -997,7 +1001,7 @@ describe("EventIngestService", () => {
     } as unknown as Storage;
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    const service = new EventIngestService(storage);
+    const service = new EventIngestService(asAsyncStorage(storage));
     await expect(service.flushPendingTranscriptOutbox()).resolves.toBe(0);
 
     expect(storage.transcriptOutbox.markFailed).toHaveBeenCalledWith(
@@ -1183,7 +1187,7 @@ describe("EventIngestService canonical usage references", () => {
       seedCanonicalUsage(storage, payload, { taskId: "task-a" });
       const before = storage.sessions.getBySessionId(route.sessionId);
 
-      const result = await new EventIngestService(storage).ingest({
+      const result = await new EventIngestService(asAsyncStorage(storage)).ingest({
         endpoint: "/api/v1/gateway/events",
         idempotencyKey: "canonical-ingest-1",
         payload,
@@ -1202,7 +1206,7 @@ describe("EventIngestService canonical usage references", () => {
         costUsd: 0.25,
       });
 
-      const replay = await new EventIngestService(storage).ingest({
+      const replay = await new EventIngestService(asAsyncStorage(storage)).ingest({
         endpoint: "/api/v1/gateway/events",
         idempotencyKey: "canonical-ingest-1",
         payload,
@@ -1232,7 +1236,7 @@ describe("EventIngestService canonical usage references", () => {
         costUsd: 0,
       });
 
-      await new EventIngestService(storage).ingest({
+      await new EventIngestService(asAsyncStorage(storage)).ingest({
         endpoint: "/api/v1/gateway/events",
         idempotencyKey: "canonical-zero-1",
         payload,
@@ -1343,7 +1347,7 @@ describe("EventIngestService canonical usage references", () => {
         const beforeCostCount = costLedgerCount(storage);
 
         await expect(
-          new EventIngestService(storage).ingest({
+          new EventIngestService(asAsyncStorage(storage)).ingest({
             endpoint: "/api/v1/gateway/events",
             idempotencyKey: `canonical-invalid-${scenario}`,
             payload,
@@ -1374,7 +1378,7 @@ describe("EventIngestService canonical usage references", () => {
       delete payload.usage!.canonicalUsageOwner;
       const route = resolveSessionRoute(payload.route);
 
-      await new EventIngestService(storage).ingest({
+      await new EventIngestService(asAsyncStorage(storage)).ingest({
         endpoint: "/api/v1/gateway/events",
         idempotencyKey: "legacy-usage-1",
         payload,

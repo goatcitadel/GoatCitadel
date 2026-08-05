@@ -6,7 +6,12 @@ import {
   type CronJobActionConfig,
   type CronJobRecord,
 } from "@goatcitadel/contracts";
-import type { CronJobRuntimeTelemetryPatch, CronJobSpecInput, CronJobSpecPatch, Storage } from "@goatcitadel/storage";
+import type {
+  CronJobRuntimeTelemetryPatch,
+  CronJobSpecInput,
+  CronJobSpecPatch,
+  AsyncStorage as Storage,
+} from "@goatcitadel/storage";
 import {
   ConfigGenerationApplyError,
   ConfigGenerationService,
@@ -113,8 +118,8 @@ export class CronConfigGenerationOwner implements CronSpecMutationOwner {
 
   public async createSpec(spec: CronJobSpecInput, telemetry?: CronJobRuntimeTelemetryPatch): Promise<CronJobRecord> {
     const desired = projectCanonicalCronSpec(spec);
-    return this.commitMutation<CronJobRecord>(() => {
-      const existing = this.storage.cronJobs.get(desired.jobId);
+    return await this.commitMutation<CronJobRecord>(async () => {
+      const existing = await this.storage.cronJobs.get(desired.jobId);
       if (existing) {
         throw new ConflictError({
           code: "WRITE_CONFLICT",
@@ -140,8 +145,8 @@ export class CronConfigGenerationOwner implements CronSpecMutationOwner {
     telemetry?: CronJobRuntimeTelemetryPatch,
   ): Promise<CronJobRecord> {
     const desired = projectCanonicalCronSpec(spec);
-    return this.commitMutation<CronJobRecord>(() => {
-      const current = this.requireExpectedRevision(desired.jobId, expectedRevision);
+    return await this.commitMutation<CronJobRecord>(async () => {
+      const current = await this.requireExpectedRevision(desired.jobId, expectedRevision);
       return {
         mutation: {
           kind: "update",
@@ -157,8 +162,8 @@ export class CronConfigGenerationOwner implements CronSpecMutationOwner {
 
   public async deleteSpec(jobId: string, expectedRevision: number): Promise<boolean> {
     const normalizedJobId = normalizeCronJobId(jobId);
-    return this.commitMutation<boolean>(() => {
-      this.requireExpectedRevision(normalizedJobId, expectedRevision);
+    return await this.commitMutation<boolean>(async () => {
+      await this.requireExpectedRevision(normalizedJobId, expectedRevision);
       return {
         mutation: { kind: "delete", jobId: normalizedJobId, expectedRevision },
         updateSpecs: (specs) => specs.filter((spec) => spec.jobId !== normalizedJobId),
@@ -168,8 +173,8 @@ export class CronConfigGenerationOwner implements CronSpecMutationOwner {
 
   public async reconcileSpec(spec: CronJobSpecInput): Promise<CronJobRecord> {
     const desired = projectCanonicalCronSpec(spec);
-    return this.commitMutation<CronJobRecord>(() => {
-      const current = this.storage.cronJobs.get(desired.jobId);
+    return await this.commitMutation<CronJobRecord>(async () => {
+      const current = await this.storage.cronJobs.get(desired.jobId);
       if (!current) {
         return {
           mutation: { kind: "create", spec: desired },
@@ -194,10 +199,10 @@ export class CronConfigGenerationOwner implements CronSpecMutationOwner {
       await this.configGeneration.commit<CronStorageMutation>({
         requireExpectedRevision: false,
         previousRuntime: { kind: "reconcile_all", specs: [], deleteExtraneous: false },
-        buildCandidate: () => {
+        buildCandidate: async () => {
           const active = this.configGeneration.getActivePayload();
           const activeSpecs = readCanonicalCronSpecs(active.cronJobs);
-          const merged = mergeStorageOnlySpecs(activeSpecs, this.storage.cronJobs.list());
+          const merged = mergeStorageOnlySpecs(activeSpecs, await this.storage.cronJobs.list());
           const mutation: CronStorageMutation = {
             kind: "reconcile_all",
             specs: merged,
@@ -208,9 +213,9 @@ export class CronConfigGenerationOwner implements CronSpecMutationOwner {
           }
           return { payload: withCanonicalCronSpecs(active, merged), runtime: mutation };
         },
-        apply: (mutation) => {
+        apply: async (mutation) => {
           try {
-            applied = this.applyStorageMutation(mutation) as CronJobRecord[];
+            applied = (await this.applyStorageMutation(mutation)) as CronJobRecord[];
           } catch (error) {
             throw new RuntimeOwnerApplyAlreadyRestoredError(error);
           }
@@ -219,7 +224,7 @@ export class CronConfigGenerationOwner implements CronSpecMutationOwner {
       });
     } catch (error) {
       if (error instanceof CronConfigNoOp) {
-        return this.applyStorageMutation(error.result as CronStorageMutation) as CronJobRecord[];
+        return (await this.applyStorageMutation(error.result as CronStorageMutation)) as CronJobRecord[];
       }
       throw error;
     }
@@ -234,27 +239,31 @@ export class CronConfigGenerationOwner implements CronSpecMutationOwner {
    * spec projection before the transaction marker is cleared; runtime telemetry
    * on matching jobs is retained byte-for-byte.
    */
-  public reconcileCommittedGeneration(): CronJobRecord[] {
+  public async reconcileCommittedGeneration(): Promise<CronJobRecord[]> {
     const specs = readCanonicalCronSpecs(this.configGeneration.getActivePayload().cronJobs);
-    return this.applyStorageMutation({ kind: "reconcile_all", specs, deleteExtraneous: true }) as CronJobRecord[];
+    return (await this.applyStorageMutation({
+      kind: "reconcile_all",
+      specs,
+      deleteExtraneous: true,
+    })) as CronJobRecord[];
   }
 
   private async commitMutation<T extends CronMutationResult>(
-    build: () => {
+    build: () => Promise<{
       mutation: CronStorageMutation;
       updateSpecs(specs: CronJobSpecInput[]): CronJobSpecInput[];
       noOpResult?: T;
-    },
+    }>,
   ): Promise<T> {
     let applied: CronMutationResult | undefined;
     try {
       await this.configGeneration.commit<CronStorageMutation>({
         requireExpectedRevision: false,
         previousRuntime: { kind: "reconcile_all", specs: [], deleteExtraneous: false },
-        buildCandidate: () => {
+        buildCandidate: async () => {
           const active = this.configGeneration.getActivePayload();
           const currentSpecs = readCanonicalCronSpecs(active.cronJobs);
-          const candidate = build();
+          const candidate = await build();
           const nextSpecs = sortCanonicalSpecs(candidate.updateSpecs(currentSpecs));
           const nextPayload = withCanonicalCronSpecs(active, nextSpecs);
           if (candidate.noOpResult !== undefined && unifiedCronSectionMatches(active.cronJobs, nextSpecs)) {
@@ -265,9 +274,9 @@ export class CronConfigGenerationOwner implements CronSpecMutationOwner {
           }
           return { payload: nextPayload, runtime: candidate.mutation };
         },
-        apply: (mutation) => {
+        apply: async (mutation) => {
           try {
-            applied = this.applyStorageMutation(mutation);
+            applied = await this.applyStorageMutation(mutation);
           } catch (error) {
             throw new RuntimeOwnerApplyAlreadyRestoredError(error);
           }
@@ -292,17 +301,17 @@ export class CronConfigGenerationOwner implements CronSpecMutationOwner {
     return applied as T;
   }
 
-  private applyStorageMutation(mutation: CronStorageMutation): CronMutationResult {
-    return this.storage.runImmediateTransaction(() => {
+  private async applyStorageMutation(mutation: CronStorageMutation): Promise<CronMutationResult> {
+    return await this.storage.runImmediateTransaction(async () => {
       let result: CronMutationResult;
       if (mutation.kind === "create") {
-        result = this.storage.cronJobs.createSpec(mutation.spec);
+        result = await this.storage.cronJobs.createSpec(mutation.spec);
         if (mutation.telemetry && hasTelemetryFields(mutation.telemetry)) {
-          result = this.storage.cronJobs.mergeRuntimeTelemetry(mutation.spec.jobId, mutation.telemetry);
+          result = await this.storage.cronJobs.mergeRuntimeTelemetry(mutation.spec.jobId, mutation.telemetry);
         }
       } else if (mutation.kind === "update") {
-        const before = this.storage.cronJobs.get(mutation.spec.jobId);
-        result = this.storage.cronJobs.updateSpecWithRevision(
+        const before = await this.storage.cronJobs.get(mutation.spec.jobId);
+        result = await this.storage.cronJobs.updateSpecWithRevision(
           mutation.spec.jobId,
           toFullSpecPatch(mutation.spec),
           mutation.expectedRevision,
@@ -313,35 +322,35 @@ export class CronConfigGenerationOwner implements CronSpecMutationOwner {
           mutation.telemetry &&
           hasTelemetryFields(mutation.telemetry)
         ) {
-          result = this.storage.cronJobs.mergeRuntimeTelemetry(mutation.spec.jobId, mutation.telemetry);
+          result = await this.storage.cronJobs.mergeRuntimeTelemetry(mutation.spec.jobId, mutation.telemetry);
         }
       } else if (mutation.kind === "delete") {
-        result = this.storage.cronJobs.deleteWithRevision(mutation.jobId, mutation.expectedRevision);
+        result = await this.storage.cronJobs.deleteWithRevision(mutation.jobId, mutation.expectedRevision);
       } else {
-        result = this.reconcileAllSpecs(mutation.specs, mutation.deleteExtraneous);
+        result = await this.reconcileAllSpecs(mutation.specs, mutation.deleteExtraneous);
       }
       this.hooks.afterStorageMutation?.(mutation);
       return result;
     });
   }
 
-  private reconcileAllSpecs(specs: CronJobSpecInput[], deleteExtraneous: boolean): CronJobRecord[] {
+  private async reconcileAllSpecs(specs: CronJobSpecInput[], deleteExtraneous: boolean): Promise<CronJobRecord[]> {
     const desiredIds = new Set(specs.map((spec) => spec.jobId));
     if (deleteExtraneous) {
-      for (const existing of this.storage.cronJobs.list()) {
+      for (const existing of await this.storage.cronJobs.list()) {
         if (!desiredIds.has(existing.jobId)) {
-          this.storage.cronJobs.deleteWithRevision(existing.jobId, existing.revision);
+          await this.storage.cronJobs.deleteWithRevision(existing.jobId, existing.revision);
         }
       }
     }
 
     const saved: CronJobRecord[] = [];
     for (const spec of specs) {
-      const before = this.storage.cronJobs.get(spec.jobId);
+      const before = await this.storage.cronJobs.get(spec.jobId);
       const changed = !before || !cronJobSpecMatches(before, spec);
-      let next = this.storage.cronJobs.reconcileSpec(spec);
+      let next = await this.storage.cronJobs.reconcileSpec(spec);
       if (changed) {
-        next = this.storage.cronJobs.mergeRuntimeTelemetry(spec.jobId, {
+        next = await this.storage.cronJobs.mergeRuntimeTelemetry(spec.jobId, {
           nextRunAt: isSelfScheduledAction(spec.action)
             ? (computeNextCronRunAt(spec.schedule, new Date(), spec.endAt) ?? null)
             : null,
@@ -352,11 +361,11 @@ export class CronConfigGenerationOwner implements CronSpecMutationOwner {
     return saved;
   }
 
-  private requireExpectedRevision(jobId: string, expectedRevision: number): CronJobRecord {
+  private async requireExpectedRevision(jobId: string, expectedRevision: number): Promise<CronJobRecord> {
     if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) {
       throw new ValidationError({ field: "expectedRevision" });
     }
-    const current = this.storage.cronJobs.get(jobId);
+    const current = await this.storage.cronJobs.get(jobId);
     if (!current) {
       throw new NotFoundError({ entity: "Cron job", id: jobId });
     }

@@ -10,8 +10,8 @@ import type { McpRequesterScopeLastOutcome } from "./mcp-requester-resolution-se
 
 export interface McpDiagnosticsHost {
   requireFeatureEnabled(flag: string): void;
-  listMcpTemplates(): Array<McpServerTemplateRecord & { installed: boolean }>;
-  requireMcpServer(serverId: string): {
+  listMcpTemplates(): Promise<Array<McpServerTemplateRecord & { installed: boolean }>>;
+  requireMcpServer(serverId: string): Promise<{
     enabled: boolean;
     status: string;
     transport: string;
@@ -21,9 +21,9 @@ export interface McpDiagnosticsHost {
       blockedToolPatterns: string[];
       allowedToolPatterns: string[];
     };
-  };
+  }>;
   pickConnectorDiagnosticAction(checks: ConnectorDiagnosticReport["checks"]): string | undefined;
-  recordConnectorHealthRun(report: ConnectorDiagnosticReport): void;
+  recordConnectorHealthRun(report: ConnectorDiagnosticReport): Promise<void>;
 }
 
 /** Exact non-secret resolver binding reference from a server's configuration. */
@@ -150,9 +150,9 @@ export function listMcpRequesterScopePostures(host: McpRequesterScopePostureHost
   return postures;
 }
 
-export function listMcpTemplateDiscovery(host: McpDiagnosticsHost): McpTemplateDiscoveryResult[] {
+export async function listMcpTemplateDiscovery(host: McpDiagnosticsHost): Promise<McpTemplateDiscoveryResult[]> {
   host.requireFeatureEnabled("connectorDiagnosticsV1Enabled");
-  return host.listMcpTemplates().map((template: McpServerTemplateRecord & { installed: boolean }) => {
+  return (await host.listMcpTemplates()).map((template: McpServerTemplateRecord & { installed: boolean }) => {
     const checks: McpTemplateDiscoveryResult["dependencyChecks"] = [];
     if (template.transport === "stdio") {
       checks.push({
@@ -204,9 +204,12 @@ export function listMcpTemplateDiscovery(host: McpDiagnosticsHost): McpTemplateD
   });
 }
 
-export function runMcpServerHealthCheck(host: McpDiagnosticsHost, serverId: string): ConnectorDiagnosticReport {
+export async function runMcpServerHealthCheck(
+  host: McpDiagnosticsHost,
+  serverId: string,
+): Promise<ConnectorDiagnosticReport> {
   host.requireFeatureEnabled("connectorDiagnosticsV1Enabled");
-  const server = host.requireMcpServer(serverId);
+  const server = await host.requireMcpServer(serverId);
   const checks: ConnectorDiagnosticReport["checks"] = [];
   checks.push({
     key: "enabled",
@@ -252,6 +255,6 @@ export function runMcpServerHealthCheck(host: McpDiagnosticsHost, serverId: stri
     recommendedNextAction: host.pickConnectorDiagnosticAction(checks),
     checkedAt: new Date().toISOString(),
   };
-  host.recordConnectorHealthRun(report);
+  await host.recordConnectorHealthRun(report);
   return report;
 }

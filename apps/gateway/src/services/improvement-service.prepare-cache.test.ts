@@ -1,7 +1,7 @@
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Storage } from "@goatcitadel/storage";
+import { createLocalAsyncStorage, Storage } from "@goatcitadel/storage";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ImprovementService, type ImprovementServiceCallbacks } from "./improvement-service.js";
 import {
@@ -27,7 +27,7 @@ afterEach(() => {
   }
 });
 
-function createHarness(): Harness {
+async function createHarness(): Promise<Harness> {
   const rootDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "gc-improvement-prepare-cache-"));
   const transcriptsDir = path.join(rootDir, "transcripts");
   const auditDir = path.join(rootDir, "audit");
@@ -40,12 +40,12 @@ function createHarness(): Harness {
     auditDir,
   });
   const ctx: ServiceContext = {
-    storage,
+    storage: createLocalAsyncStorage(storage),
     config: {} as never,
     llmService: {} as never,
     policyEngine: {} as never,
     gatewaySql: storage.gatewaySql,
-    publishRealtime: () => undefined,
+    publishRealtime: async () => undefined,
     requireFeatureEnabled: () => undefined,
     isFeatureEnabled: () => true,
     normalizeWorkspaceId: (workspaceId?: string) => workspaceId?.trim() || "default",
@@ -70,14 +70,15 @@ function createHarness(): Harness {
   };
 
   const service = new ImprovementService(ctx, callbacks);
+  await service.initialize();
   const harness: Harness = { rootDir, storage, service };
   harnesses.push(harness);
   return harness;
 }
 
-function seedSignals(service: ImprovementService, count: number): void {
+async function seedSignals(service: ImprovementService, count: number): Promise<void> {
   for (let index = 0; index < count; index += 1) {
-    service.recordPromptLabRegressionCompletionSignal({
+    await service.recordPromptLabRegressionCompletionSignal({
       regressionRunId: `regression-${index}`,
       packId: "pack-cache",
       capability: `cache-capability-${index}`,
@@ -88,75 +89,57 @@ function seedSignals(service: ImprovementService, count: number): void {
   }
 }
 
-// Count how many times prepare() was invoked with a SQL string that matches the
-// list query for a given table — i.e. a SELECT … ORDER BY against that table.
-// (The per-row reconcile path issues its own single-row prepares against the
-// same table without ORDER BY, so the ORDER BY clause isolates the list query.)
-function countListPrepares(prepareSpy: ReturnType<typeof vi.spyOn>, table: string): number {
-  return prepareSpy.mock.calls.filter((call) => {
-    const sql = String(call[0]);
-    return sql.includes(`FROM ${table}`) && sql.includes("ORDER BY");
-  }).length;
+function preparedCacheSize(service: ImprovementService): number {
+  return (service as unknown as { preparedCache: Map<string, unknown> }).preparedCache.size;
 }
 
 describe("ImprovementService prepared-statement caching", () => {
-  it("prepares the listImprovementSignals statement once across repeated calls", () => {
-    const harness = createHarness();
-    seedSignals(harness.service, 3);
+  it("prepares the listImprovementSignals statement once across repeated calls", async () => {
+    const harness = await createHarness();
+    await seedSignals(harness.service, 3);
 
-    const prepareSpy = vi.spyOn(harness.storage.gatewaySql, "prepare");
+    // First call retains the async statement handle; subsequent identical-shape
+    // calls reuse it. The local async adapter intentionally prepares the native
+    // SQLite statement at execution time, so the service-owned cache is the
+    // authoritative boundary to assert here.
+    const first = await harness.service.listImprovementSignals(100);
+    const second = await harness.service.listImprovementSignals(100);
+    const third = await harness.service.listImprovementSignals(100);
 
-    // First call compiles the statement; subsequent identical-shape calls must
-    // reuse the cached one. Without caching this filtered count would be 3.
-    const first = harness.service.listImprovementSignals(100);
-    const second = harness.service.listImprovementSignals(100);
-    const third = harness.service.listImprovementSignals(100);
-
-    expect(countListPrepares(prepareSpy, "improvement_signals")).toBe(1);
+    expect(preparedCacheSize(harness.service)).toBe(1);
 
     // Results are unchanged across calls.
     expect(first.length).toBeGreaterThan(0);
     expect(second).toEqual(first);
     expect(third).toEqual(first);
-
-    prepareSpy.mockRestore();
   });
 
-  it("prepares the listImprovementCandidates statement once across repeated calls", () => {
-    const harness = createHarness();
-    seedSignals(harness.service, 3);
+  it("prepares the listImprovementCandidates statement once across repeated calls", async () => {
+    const harness = await createHarness();
+    await seedSignals(harness.service, 3);
 
-    const prepareSpy = vi.spyOn(harness.storage.gatewaySql, "prepare");
+    // First call materializes the async list handle; later calls reuse it.
+    const first = await harness.service.listImprovementCandidates(100);
+    const second = await harness.service.listImprovementCandidates(100);
+    const third = await harness.service.listImprovementCandidates(100);
 
-    // First call materializes + compiles the list statement; later calls reuse it.
-    // Without caching the filtered count would be 3.
-    const first = harness.service.listImprovementCandidates(100);
-    const second = harness.service.listImprovementCandidates(100);
-    const third = harness.service.listImprovementCandidates(100);
-
-    expect(countListPrepares(prepareSpy, "improvement_candidates")).toBe(1);
+    expect(preparedCacheSize(harness.service)).toBe(1);
 
     expect(first.length).toBeGreaterThan(0);
     expect(second).toEqual(first);
     expect(third).toEqual(first);
-
-    prepareSpy.mockRestore();
   });
 
-  it("caches workspace-filtered and unfiltered variants independently (one prepare each)", () => {
-    const harness = createHarness();
-    seedSignals(harness.service, 2);
+  it("caches workspace-filtered and unfiltered variants independently (one prepare each)", async () => {
+    const harness = await createHarness();
+    await seedSignals(harness.service, 2);
 
-    const prepareSpy = vi.spyOn(harness.storage.gatewaySql, "prepare");
-
-    harness.service.listImprovementSignals(100);
-    harness.service.listImprovementSignals(100);
-    harness.service.listImprovementSignals(100, "prompt-lab");
-    harness.service.listImprovementSignals(100, "prompt-lab");
+    await harness.service.listImprovementSignals(100);
+    await harness.service.listImprovementSignals(100);
+    await harness.service.listImprovementSignals(100, "prompt-lab");
+    await harness.service.listImprovementSignals(100, "prompt-lab");
 
     // Two distinct SQL variants → two prepares total, regardless of call count.
-    expect(countListPrepares(prepareSpy, "improvement_signals")).toBe(2);
-
-    prepareSpy.mockRestore();
+    expect(preparedCacheSize(harness.service)).toBe(2);
   });
 });

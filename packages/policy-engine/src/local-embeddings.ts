@@ -68,16 +68,16 @@ export interface EmbeddingUsageAttempt {
     pricingSource?: ModelUsagePricingSource;
     effectiveModelId?: string;
   }): void;
-  succeed(usage?: unknown): { eventId: string };
-  fail(error: unknown, usage?: unknown): { eventId: string };
-  cancel(reason?: unknown): { eventId: string };
+  succeed(usage?: unknown): Promise<{ eventId: string }>;
+  fail(error: unknown, usage?: unknown): Promise<{ eventId: string }>;
+  cancel(reason?: unknown): Promise<{ eventId: string }>;
 }
 
 export interface EmbeddingUsageDispatchReservation {
   readonly eventId: string;
-  accept(): EmbeddingUsageAttempt;
-  abandon(): void;
-  markDispatchUnknown(reason?: string): void;
+  accept(): Promise<EmbeddingUsageAttempt>;
+  abandon(): Promise<void>;
+  markDispatchUnknown(reason?: string): Promise<void>;
 }
 
 export interface EmbeddingUsageDispatchInput {
@@ -105,7 +105,7 @@ export interface EmbeddingUsageDispatchInput {
 
 export type PrepareEmbeddingUsageDispatch = (
   input: EmbeddingUsageDispatchInput,
-) => EmbeddingUsageDispatchReservation | undefined;
+) => Promise<EmbeddingUsageDispatchReservation | undefined>;
 
 /**
  * Canonical usage ownership or settlement could not be persisted. This must
@@ -368,7 +368,7 @@ async function generateRealEmbedding(
     if (dispatched.attempt) {
       settlementStarted = true;
       try {
-        terminal = dispatched.attempt.succeed();
+        terminal = await dispatched.attempt.succeed();
       } catch (error) {
         throw new EmbeddingUsageSettlementError(error);
       }
@@ -392,9 +392,9 @@ async function generateRealEmbedding(
     if (dispatched?.attempt && !settlementStarted) {
       try {
         if (runtimeOptions?.signal?.aborted) {
-          dispatched.attempt.cancel(runtimeOptions.signal.reason ?? error);
+          await dispatched.attempt.cancel(runtimeOptions.signal.reason ?? error);
         } else {
-          dispatched.attempt.fail(error);
+          await dispatched.attempt.fail(error);
         }
       } catch (settlementError) {
         throw asEmbeddingUsageSettlementError(settlementError);
@@ -487,7 +487,7 @@ async function fetchEmbeddingJson(
   throwIfCallerAborted(runtimeOptions?.signal);
   let reservation: EmbeddingUsageDispatchReservation | undefined;
   try {
-    reservation = runtimeOptions?.prepareModelUsageDispatch?.(
+    reservation = await runtimeOptions?.prepareModelUsageDispatch?.(
       buildEmbeddingUsageDispatchInput(providerId, config, runtimeOptions),
     );
   } catch (error) {
@@ -507,7 +507,7 @@ async function fetchEmbeddingJson(
     });
   } catch (error) {
     try {
-      reservation?.abandon();
+      await reservation?.abandon();
     } catch (settlementError) {
       throw asEmbeddingUsageSettlementError(settlementError);
     }
@@ -516,11 +516,11 @@ async function fetchEmbeddingJson(
 
   let attempt: EmbeddingUsageAttempt | undefined;
   try {
-    attempt = reservation?.accept();
+    attempt = await reservation?.accept();
   } catch (error) {
     try {
       try {
-        reservation?.markDispatchUnknown("embedding_transport_acceptance_persistence_failed");
+        await reservation?.markDispatchUnknown("embedding_transport_acceptance_persistence_failed");
       } catch (settlementError) {
         throw asEmbeddingUsageSettlementError(settlementError);
       }
@@ -545,9 +545,9 @@ async function fetchEmbeddingJson(
     if (attempt) {
       try {
         if (runtimeOptions?.signal?.aborted) {
-          attempt.cancel(runtimeOptions.signal.reason ?? error);
+          await attempt.cancel(runtimeOptions.signal.reason ?? error);
         } else {
-          attempt.fail(error);
+          await attempt.fail(error);
         }
       } catch (settlementError) {
         throw asEmbeddingUsageSettlementError(settlementError);

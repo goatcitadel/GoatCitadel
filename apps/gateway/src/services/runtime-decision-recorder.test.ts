@@ -17,13 +17,13 @@ function createRecord(input: RuntimeDecisionTraceAppendInput): RuntimeDecisionTr
 }
 
 describe("RuntimeDecisionRecorder", () => {
-  it("appends compact decision records through the storage spine", () => {
+  it("appends compact decision records through the storage spine", async () => {
     const append = vi.fn((input: RuntimeDecisionTraceAppendInput) => createRecord(input));
     const recorder = new RuntimeDecisionRecorder({
       runtimeDecisionTraces: { append },
     });
 
-    const record = recorder.record({
+    const record = await recorder.record({
       kind: "workflow_choice",
       scope: { sessionId: "session-1", turnId: "turn-1" },
       selected: "Use Cowork orchestration",
@@ -34,7 +34,7 @@ describe("RuntimeDecisionRecorder", () => {
     expect(append).toHaveBeenCalledTimes(1);
   });
 
-  it("never throws when storage append fails", () => {
+  it("never throws when storage append fails", async () => {
     const diagnostics = vi.fn();
     const recorder = new RuntimeDecisionRecorder({
       runtimeDecisionTraces: {
@@ -45,14 +45,14 @@ describe("RuntimeDecisionRecorder", () => {
       recordDevDiagnostic: diagnostics,
     });
 
-    expect(() =>
+    await expect(
       recorder.record({
         kind: "tool_failed",
         scope: { sessionId: "session-1", turnId: "turn-1", toolRunId: "tool-1" },
         selected: "Mark tool failed",
         rationale: "The tool invocation returned an error.",
       }),
-    ).not.toThrow();
+    ).resolves.toBeUndefined();
     expect(diagnostics).toHaveBeenCalledWith(
       expect.objectContaining({
         category: "runtime_decision_trace",
@@ -62,7 +62,7 @@ describe("RuntimeDecisionRecorder", () => {
     );
   });
 
-  it("does not revive a committed mutation when both decision storage and diagnostics fail", () => {
+  it("does not revive a committed mutation when both decision storage and diagnostics fail", async () => {
     const recorder = new RuntimeDecisionRecorder({
       runtimeDecisionTraces: {
         append: vi.fn(() => {
@@ -74,17 +74,17 @@ describe("RuntimeDecisionRecorder", () => {
       }),
     });
 
-    expect(() =>
+    await expect(
       recorder.record({
         kind: "approval_requested",
         scope: { approvalId: "approval-1" },
         selected: "Requested shell.exec approval",
         rationale: "The canonical approval transaction already committed.",
       }),
-    ).not.toThrow();
+    ).resolves.toBeUndefined();
   });
 
-  it("records 100 compact decisions within a small local threshold", () => {
+  it("records 100 compact decisions within a small local threshold", async () => {
     const append = vi.fn((input: RuntimeDecisionTraceAppendInput) => createRecord(input));
     const host: RuntimeDecisionRecorderHost = {
       runtimeDecisionTraces: { append },
@@ -92,15 +92,19 @@ describe("RuntimeDecisionRecorder", () => {
     const recorder = new RuntimeDecisionRecorder(host);
     const startedAt = performance.now();
 
+    const records: Array<Promise<RuntimeDecisionTraceRecord | undefined>> = [];
     for (let index = 0; index < 100; index += 1) {
-      recorder.record({
-        decisionId: `decision-${index}`,
-        kind: "routing_choice",
-        scope: { sessionId: "session-1", turnId: `turn-${index}` },
-        selected: "Answer directly",
-        rationale: "No tool, approval, or workflow signal required orchestration.",
-      });
+      records.push(
+        recorder.record({
+          decisionId: `decision-${index}`,
+          kind: "routing_choice",
+          scope: { sessionId: "session-1", turnId: `turn-${index}` },
+          selected: "Answer directly",
+          rationale: "No tool, approval, or workflow signal required orchestration.",
+        }),
+      );
     }
+    await Promise.all(records);
 
     const elapsedMs = performance.now() - startedAt;
     expect(append).toHaveBeenCalledTimes(100);

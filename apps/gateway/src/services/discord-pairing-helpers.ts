@@ -2,31 +2,31 @@ import { randomBytes, randomUUID } from "node:crypto";
 import type { DiscordPairingRecord } from "@goatcitadel/contracts";
 
 export interface DiscordPairingHost {
-  readDiscordPairings(): DiscordPairingRecord[];
-  writeDiscordPairings(records: DiscordPairingRecord[]): void;
+  readDiscordPairings(): Promise<DiscordPairingRecord[]>;
+  writeDiscordPairings(records: DiscordPairingRecord[]): Promise<void>;
 }
 
 export function generateDiscordPairingCode(): string {
   return randomBytes(3).toString("hex").toUpperCase();
 }
 
-export function findApprovedDiscordPairing(
+export async function findApprovedDiscordPairing(
   host: DiscordPairingHost,
   connectionId: string,
   userId: string,
-): DiscordPairingRecord | undefined {
-  return host
-    .readDiscordPairings()
-    .find((item) => item.connectionId === connectionId && item.userId === userId && item.status === "approved");
+): Promise<DiscordPairingRecord | undefined> {
+  return (await host.readDiscordPairings()).find(
+    (item) => item.connectionId === connectionId && item.userId === userId && item.status === "approved",
+  );
 }
 
-export function ensurePendingDiscordPairing(
+export async function ensurePendingDiscordPairing(
   host: DiscordPairingHost,
   connectionId: string,
   userId: string,
   displayName?: string,
-): DiscordPairingRecord {
-  const records = host.readDiscordPairings();
+): Promise<DiscordPairingRecord> {
+  const records = await host.readDiscordPairings();
   const now = new Date().toISOString();
   const existing = records.find(
     (item) => item.connectionId === connectionId && item.userId === userId && item.status === "pending",
@@ -37,7 +37,7 @@ export function ensurePendingDiscordPairing(
       displayName: displayName?.trim() || existing.displayName,
       updatedAt: now,
     };
-    host.writeDiscordPairings(records.map((item) => (item.pairingId === updated.pairingId ? updated : item)));
+    await host.writeDiscordPairings(records.map((item) => (item.pairingId === updated.pairingId ? updated : item)));
     return updated;
   }
   const created: DiscordPairingRecord = {
@@ -50,14 +50,14 @@ export function ensurePendingDiscordPairing(
     createdAt: now,
     updatedAt: now,
   };
-  host.writeDiscordPairings([created, ...records]);
+  await host.writeDiscordPairings([created, ...records]);
   return created;
 }
 
-export function touchDiscordPairing(host: DiscordPairingHost, pairingId: string): void {
+export async function touchDiscordPairing(host: DiscordPairingHost, pairingId: string): Promise<void> {
   const now = new Date().toISOString();
-  host.writeDiscordPairings(
-    host.readDiscordPairings().map((item) =>
+  await host.writeDiscordPairings(
+    (await host.readDiscordPairings()).map((item) =>
       item.pairingId === pairingId
         ? {
             ...item,

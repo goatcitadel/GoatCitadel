@@ -6,7 +6,7 @@ import { logger } from "@goatcitadel/gateway-core";
 import { WorktreeManager } from "@goatcitadel/orchestration";
 import { assertWritePathInJail } from "@goatcitadel/policy-engine";
 import { type OrchestrationRun, ValidationError } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { OrchestrationWorktreeLeaseRecord, OrchestrationWorktreeLeaseToken } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
 import { DurableWorkerInterruptionError } from "./durable-run-service.js";
@@ -27,7 +27,7 @@ export interface OrchestrationWorktreeServiceDeps {
   readonly leaseDurationMs?: number;
   readonly heartbeatIntervalMs?: number | false;
   readonly now?: () => string;
-  readonly onLeaseLost?: (event: OrchestrationWorktreeLeaseLossEvent) => void;
+  readonly onLeaseLost?: (event: OrchestrationWorktreeLeaseLossEvent) => void | Promise<void>;
 }
 
 export interface OrchestrationWorktreeAllocation {
@@ -81,7 +81,7 @@ export class OrchestrationWorktreeService {
           "Orchestration worktree path already exists but is not a valid git worktree. Clean it up before retrying.",
       });
     }
-    const claimed = this.deps.worktreeLeases.claim({
+    const claimed = await this.deps.worktreeLeases.claim({
       worktreePath: targetPath,
       runId: input.runId,
       ownerId: this.ownerId,
@@ -102,7 +102,7 @@ export class OrchestrationWorktreeService {
         await this.createManager(worktreesRoot).create(input.runId, baseRef);
       }
     } catch (error) {
-      this.deps.worktreeLeases.release({ ...token, releasedAt: this.now() });
+      await this.deps.worktreeLeases.release({ ...token, releasedAt: this.now() });
       throw error;
     }
     this.startLeaseHeartbeat(claimed.lease);
@@ -116,7 +116,7 @@ export class OrchestrationWorktreeService {
     };
   }
 
-  public ensureLeaseForExecution(run: OrchestrationRun): OrchestrationRun {
+  public async ensureLeaseForExecution(run: OrchestrationRun): Promise<OrchestrationRun> {
     const worktreePath = run.worktreePath?.trim();
     if (!worktreePath) {
       return run;
@@ -131,7 +131,7 @@ export class OrchestrationWorktreeService {
       });
     }
 
-    const claimed = this.deps.worktreeLeases.claim({
+    const claimed = await this.deps.worktreeLeases.claim({
       worktreePath: resolvedPath,
       runId: run.runId,
       ownerId: this.ownerId,
@@ -147,7 +147,7 @@ export class OrchestrationWorktreeService {
     }
 
     const token = toLeaseToken(claimed.lease);
-    const adopted = this.deps.orchestrationRuns.adoptWorktreeLease({
+    const adopted = await this.deps.orchestrationRuns.adoptWorktreeLease({
       runId: run.runId,
       worktreePath: resolvedPath,
       expectedWorktreeLeaseOwnerId: run.worktreeLeaseOwnerId,
@@ -157,7 +157,7 @@ export class OrchestrationWorktreeService {
       worktreeLeaseExpiresAt: claimed.lease.leaseExpiresAt,
     });
     if (!adopted) {
-      this.deps.worktreeLeases.release({ ...token, releasedAt: this.now() });
+      await this.deps.worktreeLeases.release({ ...token, releasedAt: this.now() });
       throw new DurableWorkerInterruptionError(
         "lease_lost",
         `Orchestration run ${run.runId} changed before worktree generation ${claimed.lease.generation} could attach.`,
@@ -177,10 +177,10 @@ export class OrchestrationWorktreeService {
     this.assertWithinWorktreesRoot(worktreesRoot, resolvedPath, worktreePath);
     assertWritePathInJail(resolvedPath, this.deps.config.toolPolicy.sandbox.writeJailRoots);
     if (!fsSync.existsSync(resolvedPath)) {
-      this.releaseMissingPathLease(input.run, resolvedPath);
+      await this.releaseMissingPathLease(input.run, resolvedPath);
       return;
     }
-    const cleanupLease = this.acquireCleanupLease(input.run, resolvedPath);
+    const cleanupLease = await this.acquireCleanupLease(input.run, resolvedPath);
     this.stopLeaseHeartbeat(resolvedPath, cleanupLease);
     const manager = this.createManager(worktreesRoot);
     try {
@@ -200,17 +200,20 @@ export class OrchestrationWorktreeService {
     const pruned = await this.pruneWorktreeMetadata(manager, input.run.runId, input.reason, resolvedPath);
     if (
       pruned &&
-      !this.deps.worktreeLeases.release({
+      !(await this.deps.worktreeLeases.release({
         ...cleanupLease,
         releasedAt: this.now(),
-      })
+      }))
     ) {
       throw new Error(`Orchestration worktree lease changed before cleanup completed: ${resolvedPath}`);
     }
   }
 
-  private acquireCleanupLease(run: OrchestrationRun, resolvedPath: string): OrchestrationWorktreeLeaseToken {
-    const current = this.deps.worktreeLeases.get(resolvedPath);
+  private async acquireCleanupLease(
+    run: OrchestrationRun,
+    resolvedPath: string,
+  ): Promise<OrchestrationWorktreeLeaseToken> {
+    const current = await this.deps.worktreeLeases.get(resolvedPath);
     if (current && current.runId !== run.runId) {
       throw new ValidationError({
         message: `Orchestration worktree lease belongs to another run and cannot be released: ${resolvedPath}`,
@@ -227,7 +230,7 @@ export class OrchestrationWorktreeService {
       expectedGeneration === current.generation &&
       current.ownerId === expectedOwnerId
     ) {
-      const renewed = this.deps.worktreeLeases.renew({
+      const renewed = await this.deps.worktreeLeases.renew({
         ...toLeaseToken(current),
         leaseDurationMs: this.leaseDurationMs,
         now: this.now(),
@@ -240,7 +243,7 @@ export class OrchestrationWorktreeService {
     if (current && isLeaseActive(current, Date.parse(this.now()))) {
       throw this.buildLeaseConflictError(resolvedPath, current);
     }
-    const claimed = this.deps.worktreeLeases.claim({
+    const claimed = await this.deps.worktreeLeases.claim({
       worktreePath: resolvedPath,
       runId: run.runId,
       ownerId: this.ownerId,
@@ -253,7 +256,7 @@ export class OrchestrationWorktreeService {
     return toLeaseToken(claimed.lease);
   }
 
-  private releaseMissingPathLease(run: OrchestrationRun, resolvedPath: string): void {
+  private async releaseMissingPathLease(run: OrchestrationRun, resolvedPath: string): Promise<void> {
     const ownerId = run.worktreeLeaseOwnerId?.trim();
     const generation = run.worktreeLeaseGeneration;
     if (ownerId !== this.ownerId || typeof generation !== "number" || !Number.isSafeInteger(generation)) {
@@ -265,7 +268,7 @@ export class OrchestrationWorktreeService {
       ownerId,
       generation,
     });
-    this.deps.worktreeLeases.release({
+    await this.deps.worktreeLeases.release({
       worktreePath: resolvedPath,
       runId: run.runId,
       ownerId,
@@ -287,39 +290,39 @@ export class OrchestrationWorktreeService {
     }
     const token = toLeaseToken(lease);
     this.stopLeaseHeartbeat(token.worktreePath);
-    const timer = setInterval(() => this.renewOwnedLease(token.worktreePath), this.heartbeatIntervalMs);
+    const timer = setInterval(() => void this.renewOwnedLease(token.worktreePath), this.heartbeatIntervalMs);
     if (typeof timer === "object" && "unref" in timer && typeof timer.unref === "function") {
       timer.unref();
     }
     this.leaseHeartbeats.set(token.worktreePath, { token, timer });
   }
 
-  private renewOwnedLease(worktreePath: string): void {
+  private async renewOwnedLease(worktreePath: string): Promise<void> {
     const heartbeat = this.leaseHeartbeats.get(worktreePath);
     if (!heartbeat) {
       return;
     }
     try {
-      const renewed = this.deps.worktreeLeases.renew({
+      const renewed = await this.deps.worktreeLeases.renew({
         ...heartbeat.token,
         leaseDurationMs: this.leaseDurationMs,
         now: this.now(),
       });
       if (!renewed) {
-        this.handleLeaseLoss(heartbeat.token, "lease_renewal_rejected");
+        await this.handleLeaseLoss(heartbeat.token, "lease_renewal_rejected");
         return;
       }
-      const renewedRun = this.deps.orchestrationRuns.renewWorktreeLease({
+      const renewedRun = await this.deps.orchestrationRuns.renewWorktreeLease({
         runId: renewed.runId,
         worktreeLeaseOwnerId: renewed.ownerId,
         worktreeLeaseGeneration: renewed.generation,
         worktreeLeaseExpiresAt: renewed.leaseExpiresAt,
       });
       if (!renewedRun) {
-        this.handleLeaseLoss(heartbeat.token, "run_lease_fence_rejected");
+        await this.handleLeaseLoss(heartbeat.token, "run_lease_fence_rejected");
       }
     } catch (error) {
-      this.handleLeaseLoss(
+      await this.handleLeaseLoss(
         heartbeat.token,
         "lease_renewal_error",
         error instanceof Error ? error.message : String(error),
@@ -327,18 +330,18 @@ export class OrchestrationWorktreeService {
     }
   }
 
-  private handleLeaseLoss(
+  private async handleLeaseLoss(
     token: OrchestrationWorktreeLeaseToken,
     reason: OrchestrationWorktreeLeaseLossEvent["reason"],
     error?: string,
-  ): void {
+  ): Promise<void> {
     this.stopLeaseHeartbeat(token.worktreePath, token);
     const lastError =
       `Orchestration worktree lease lost (${reason}) for owner ${token.ownerId} ` + `generation ${token.generation}.`;
     let fencedRun: OrchestrationRun | undefined;
     let fenceError: string | undefined;
     try {
-      fencedRun = this.deps.orchestrationRuns.fenceWorktreeLease({
+      fencedRun = await this.deps.orchestrationRuns.fenceWorktreeLease({
         runId: token.runId,
         worktreePath: token.worktreePath,
         worktreeLeaseOwnerId: token.ownerId,
@@ -351,7 +354,7 @@ export class OrchestrationWorktreeService {
     }
 
     try {
-      this.deps.onLeaseLost?.({
+      await this.deps.onLeaseLost?.({
         token,
         reason,
         ...(error ? { error } : {}),
@@ -432,8 +435,7 @@ export class OrchestrationWorktreeService {
 
     const activeStatuses = new Set<OrchestrationRun["status"]>(["queued", "running", "paused"]);
     const activeWorktreePaths = new Set(
-      this.deps.orchestrationRuns
-        .listRuns(5000)
+      (await this.deps.orchestrationRuns.listRuns(5000))
         .filter((run) => activeStatuses.has(run.status))
         .map((run) => (run.worktreePath ? path.resolve(run.worktreePath).toLowerCase() : undefined))
         .filter((value): value is string => Boolean(value)),
@@ -462,7 +464,7 @@ export class OrchestrationWorktreeService {
         continue;
       }
       assertWritePathInJail(candidatePath, this.deps.config.toolPolicy.sandbox.writeJailRoots);
-      const currentLease = this.deps.worktreeLeases.get(candidatePath);
+      const currentLease = await this.deps.worktreeLeases.get(candidatePath);
       if (currentLease && isLeaseActive(currentLease, now)) {
         skippedActive.push(candidatePath);
         continue;
@@ -471,7 +473,7 @@ export class OrchestrationWorktreeService {
         removed.push(candidatePath);
         continue;
       }
-      const claimed = this.deps.worktreeLeases.claim({
+      const claimed = await this.deps.worktreeLeases.claim({
         worktreePath: candidatePath,
         runId: currentLease?.runId ?? entry.name,
         ownerId: this.ownerId,
@@ -483,7 +485,7 @@ export class OrchestrationWorktreeService {
         continue;
       }
       await fs.rm(candidatePath, { recursive: true, force: true });
-      if (!this.deps.worktreeLeases.release({ ...toLeaseToken(claimed.lease), releasedAt: this.now() })) {
+      if (!(await this.deps.worktreeLeases.release({ ...toLeaseToken(claimed.lease), releasedAt: this.now() }))) {
         throw new Error(`Orchestration worktree lease changed before orphan cleanup completed: ${candidatePath}`);
       }
       removed.push(candidatePath);

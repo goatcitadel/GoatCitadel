@@ -24,6 +24,7 @@ export interface DatabaseCutoverServiceDeps {
   readonly createBackup: (input?: { name?: string; outputPath?: string }) => Promise<BackupCreateResponse>;
   /** Revision-fenced public settings read used before any execute side effect. */
   readonly readSettingsRevision: () => number;
+  readonly getStorageWaitSnapshot?: () => NonNullable<DatabaseHealthSnapshot["storageWait"]>;
   /** Persists the next-start driver through the Gateway config-generation owner. */
   readonly commitDatabaseDriver?: (input: {
     driver: "postgres";
@@ -389,6 +390,7 @@ export class DatabaseCutoverService {
         reachable: health.reachable,
         migrationVersion: health.migrationVersion,
         latencyMs: health.latencyMs,
+        ...(this.deps.getStorageWaitSnapshot ? { storageWait: this.deps.getStorageWaitSnapshot() } : {}),
         issues: health.issues,
       };
     } finally {

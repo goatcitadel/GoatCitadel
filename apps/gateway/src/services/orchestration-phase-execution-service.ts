@@ -21,12 +21,12 @@ const DEFAULT_WORKSPACE_ID = "default";
 
 export interface OrchestrationPhaseExecutionServiceDeps {
   readonly rootDir: string;
-  createChatSession(input: ChatSessionCreateInput): ChatSessionRecord;
-  updateChatSessionPrefs(sessionId: string, input: ChatSessionPrefsPatch): ChatSessionPrefsRecord;
+  createChatSession(input: ChatSessionCreateInput): Promise<ChatSessionRecord>;
+  updateChatSessionPrefs(sessionId: string, input: ChatSessionPrefsPatch): Promise<ChatSessionPrefsRecord>;
   agentSendChatMessage(
     sessionId: string,
     input: ChatSendMessageRequest,
-    options?: { abortSignal?: AbortSignal; onChildDurableRunLaunched?: (runId: string) => void },
+    options?: { abortSignal?: AbortSignal; onChildDurableRunLaunched?: (runId: string) => Promise<void> },
   ): Promise<ChatSendMessageResponse>;
   normalizeWorkspaceId(workspaceId: string): string;
 }
@@ -44,7 +44,7 @@ export interface OrchestrationPhaseExecutionInput {
    * with the child session id before the turn is launched, and again with the
    * child durable run id once the durable child run has been created.
    */
-  onChildDispatched?: (dispatch: OrchestrationPhaseChildDispatch) => void;
+  onChildDispatched?: (dispatch: OrchestrationPhaseChildDispatch) => Promise<void>;
 }
 
 export class OrchestrationPhaseExecutionService {
@@ -55,7 +55,7 @@ export class OrchestrationPhaseExecutionService {
     const startedAt = new Date().toISOString();
     const workspaceId = this.deps.normalizeWorkspaceId(input.run.workspaceId ?? DEFAULT_WORKSPACE_ID);
     const specText = await this.readPhaseSpec(input.run, input.phase);
-    const childSession = this.deps.createChatSession({
+    const childSession = await this.deps.createChatSession({
       workspaceId,
       mode: "cowork",
       origin: "system",
@@ -64,11 +64,11 @@ export class OrchestrationPhaseExecutionService {
     });
     // Crash-safe breadcrumb #1: record the child session before the turn is
     // dispatched, so an interruption mid-turn never re-dispatches this phase.
-    input.onChildDispatched?.({
+    await input.onChildDispatched?.({
       phaseId: input.phase.phaseId,
       childSessionId: childSession.sessionId,
     });
-    this.deps.updateChatSessionPrefs(childSession.sessionId, {
+    await this.deps.updateChatSessionPrefs(childSession.sessionId, {
       mode: "cowork",
       planningMode: "off",
       memoryMode: "auto",
@@ -133,8 +133,8 @@ export class OrchestrationPhaseExecutionService {
           // run id the instant the child run is created, before the (possibly
           // long-running) turn settles. This is what resume harvests/reattaches.
           onChildDurableRunLaunched: input.onChildDispatched
-            ? (runId) =>
-                input.onChildDispatched?.({
+            ? async (runId) =>
+                await input.onChildDispatched?.({
                   phaseId: input.phase.phaseId,
                   childSessionId: childSession.sessionId,
                   childRunId: runId,

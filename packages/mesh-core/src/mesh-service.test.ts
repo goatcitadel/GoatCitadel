@@ -14,11 +14,11 @@ const baseOptions: MeshRuntimeOptions = {
 };
 
 describe("MeshService", () => {
-  it("initializes local node status and issues configured join token", () => {
+  it("initializes local node status and issues configured join token", async () => {
     const storage = createMeshStorage();
     const service = new MeshService(storage as never, baseOptions);
 
-    service.init();
+    await service.init();
 
     expect(storage.mesh.upsertNode).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -32,36 +32,36 @@ describe("MeshService", () => {
     expect(storage.mesh.issueJoinToken).toHaveBeenCalledWith("join-token", expect.any(String));
   });
 
-  it("rejects joins when mesh is disabled", () => {
+  it("rejects joins when mesh is disabled", async () => {
     const storage = createMeshStorage();
     const service = new MeshService(storage as never, { ...baseOptions, enabled: false });
 
-    expect(() =>
+    await expect(
       service.join({
         token: "join-token",
         nodeId: "node-peer",
         label: "Peer",
         transport: "tailnet",
       }),
-    ).toThrow(/Mesh is disabled/);
+    ).rejects.toThrow(/Mesh is disabled/);
     expect(storage.mesh.join).not.toHaveBeenCalled();
   });
 
-  it("requires a TLS fingerprint when mTLS is required", () => {
+  it("requires a TLS fingerprint when mTLS is required", async () => {
     const storage = createMeshStorage();
     const service = new MeshService(storage as never, { ...baseOptions, requireMtls: true });
 
-    expect(() =>
+    await expect(
       service.join({
         token: "join-token",
         nodeId: "node-peer",
         label: "Peer",
         transport: "tailnet",
       }),
-    ).toThrow(/tlsFingerprint/);
+    ).rejects.toThrow(/tlsFingerprint/);
     expect(storage.mesh.join).not.toHaveBeenCalled();
 
-    expect(() =>
+    await expect(
       service.join({
         token: "join-token",
         nodeId: "node-peer",
@@ -69,14 +69,14 @@ describe("MeshService", () => {
         transport: "tailnet",
         tlsFingerprint: "   ",
       }),
-    ).toThrow(/tlsFingerprint/);
+    ).rejects.toThrow(/tlsFingerprint/);
   });
 
-  it("accepts joins and exposes status/listing delegates", () => {
+  it("accepts joins and exposes status/listing delegates", async () => {
     const storage = createMeshStorage();
     const service = new MeshService(storage as never, baseOptions);
 
-    const joined = service.join({
+    const joined = await service.join({
       token: "join-token",
       nodeId: "node-peer",
       label: "Peer",
@@ -90,24 +90,24 @@ describe("MeshService", () => {
         nodeId: "node-peer",
       },
     });
-    expect(service.status()).toMatchObject({ enabled: true, localNodeId: "node-local" });
-    expect(service.listNodes()).toEqual([]);
-    expect(service.listNodes(10)).toEqual([]);
+    expect(await service.status()).toMatchObject({ enabled: true, localNodeId: "node-local" });
+    expect(await service.listNodes()).toEqual([]);
+    expect(await service.listNodes(10)).toEqual([]);
     expect(storage.mesh.listNodes).toHaveBeenCalledWith(200);
     expect(storage.mesh.listNodes).toHaveBeenCalledWith(10);
   });
 
-  it("updates runtime options, trims replacement node ids, and reinitializes", () => {
+  it("updates runtime options, trims replacement node ids, and reinitializes", async () => {
     const storage = createMeshStorage();
     const service = new MeshService(storage as never, {
       ...baseOptions,
       joinToken: "   ",
     });
 
-    service.init();
+    await service.init();
     expect(storage.mesh.issueJoinToken).not.toHaveBeenCalled();
 
-    service.updateOptions({
+    await service.updateOptions({
       enabled: false,
       mode: "lan",
       localNodeId: " node-next ",
@@ -128,53 +128,53 @@ describe("MeshService", () => {
       }),
     );
     expect(storage.mesh.issueJoinToken).toHaveBeenCalledWith("next-token", expect.any(String));
-    expect(() =>
+    await expect(
       service.join({
         token: "next-token",
         nodeId: "node-peer",
         label: "Peer",
         transport: "lan",
       }),
-    ).toThrow(/Mesh is disabled/);
+    ).rejects.toThrow(/Mesh is disabled/);
 
-    service.updateOptions({ enabled: true, localNodeId: " " });
+    await service.updateOptions({ enabled: true, localNodeId: " " });
     expect(storage.mesh.upsertNode).toHaveBeenLastCalledWith(expect.objectContaining({ nodeId: "node-next" }));
   });
 
-  it("retains the existing enabled flag when an update omits it", () => {
+  it("retains the existing enabled flag when an update omits it", async () => {
     const storage = createMeshStorage();
     const service = new MeshService(storage as never, { ...baseOptions, enabled: false });
 
-    service.updateOptions({ localNodeLabel: "Still Disabled" });
+    await service.updateOptions({ localNodeLabel: "Still Disabled" });
 
     expect(storage.mesh.buildStatus).not.toHaveBeenCalled();
-    service.status();
+    await service.status();
     expect(storage.mesh.buildStatus).toHaveBeenCalledWith(false, "tailnet", "node-local");
   });
 
-  it("keeps prior runtime options when an atomic durable replacement fails", () => {
+  it("keeps prior runtime options when an atomic durable replacement fails", async () => {
     const storage = createMeshStorage();
     const service = new MeshService(storage as never, baseOptions);
     storage.mesh.issueJoinToken.mockImplementationOnce(() => {
       throw new Error("join token write failed");
     });
 
-    expect(() =>
+    await expect(
       service.replaceOptions({
         ...baseOptions,
         enabled: false,
         localNodeId: "node-next",
         joinToken: "next-token",
       }),
-    ).toThrow("join token write failed");
+    ).rejects.toThrow("join token write failed");
 
     expect(storage.db.transaction).toHaveBeenCalledWith("immediate", expect.any(Function));
     expect(service.getOptionsSnapshot()).toEqual(baseOptions);
-    service.status();
+    await service.status();
     expect(storage.mesh.buildStatus).toHaveBeenLastCalledWith(true, "tailnet", "node-local");
   });
 
-  it("returns an exact durable rollback handle for a reversible replacement", () => {
+  it("returns an exact durable rollback handle for a reversible replacement", async () => {
     const storage = createMeshStorage();
     const service = new MeshService(storage as never, baseOptions);
     const artifactSnapshot = {
@@ -183,7 +183,7 @@ describe("MeshService", () => {
     };
     storage.mesh.snapshotRuntimeArtifacts.mockReturnValueOnce(artifactSnapshot);
 
-    const replacement = service.replaceOptionsReversibly({
+    const replacement = await service.replaceOptionsReversibly({
       ...baseOptions,
       localNodeId: "node-next",
       joinToken: "next-token",
@@ -192,13 +192,13 @@ describe("MeshService", () => {
     expect(storage.mesh.snapshotRuntimeArtifacts).toHaveBeenCalledWith("node-next", "next-token");
     expect(service.getOptionsSnapshot()).toMatchObject({ localNodeId: "node-next", joinToken: "next-token" });
 
-    replacement.rollback();
+    await replacement.rollback();
 
     expect(storage.mesh.restoreRuntimeArtifacts).toHaveBeenCalledWith(artifactSnapshot);
     expect(service.getOptionsSnapshot()).toEqual(baseOptions);
   });
 
-  it("idempotently restores a journaled runtime artifact receipt during startup recovery", () => {
+  it("idempotently restores a journaled runtime artifact receipt during startup recovery", async () => {
     const storage = createMeshStorage();
     const service = new MeshService(storage as never, baseOptions);
     const snapshot = {
@@ -206,24 +206,24 @@ describe("MeshService", () => {
       tokenHash: "a".repeat(64),
     };
 
-    service.restoreRuntimeArtifactsForRecovery(snapshot);
-    service.restoreRuntimeArtifactsForRecovery(snapshot);
+    await service.restoreRuntimeArtifactsForRecovery(snapshot);
+    await service.restoreRuntimeArtifactsForRecovery(snapshot);
 
     expect(storage.db.transaction).toHaveBeenCalledTimes(2);
     expect(storage.mesh.restoreRuntimeArtifacts).toHaveBeenNthCalledWith(1, snapshot);
     expect(storage.mesh.restoreRuntimeArtifacts).toHaveBeenNthCalledWith(2, snapshot);
   });
 
-  it("uses the service default lease ttl unless the request overrides it", () => {
+  it("uses the service default lease ttl unless the request overrides it", async () => {
     const storage = createMeshStorage();
     const service = new MeshService(storage as never, baseOptions);
 
-    service.acquireLease({ leaseKey: "session:1", holderNodeId: "node-local" });
-    service.renewLease({ leaseKey: "session:1", holderNodeId: "node-local", fencingToken: 7, ttlSeconds: 120 });
-    service.renewLease({ leaseKey: "session:2", holderNodeId: "node-local", fencingToken: 8 });
-    service.releaseLease({ leaseKey: "session:1", holderNodeId: "node-local", fencingToken: 7 });
-    service.listLeases();
-    service.listLeases(20);
+    await service.acquireLease({ leaseKey: "session:1", holderNodeId: "node-local" });
+    await service.renewLease({ leaseKey: "session:1", holderNodeId: "node-local", fencingToken: 7, ttlSeconds: 120 });
+    await service.renewLease({ leaseKey: "session:2", holderNodeId: "node-local", fencingToken: 8 });
+    await service.releaseLease({ leaseKey: "session:1", holderNodeId: "node-local", fencingToken: 7 });
+    await service.listLeases();
+    await service.listLeases(20);
 
     expect(storage.mesh.acquireLease).toHaveBeenCalledWith("session:1", "node-local", 60);
     expect(storage.mesh.renewLease).toHaveBeenCalledWith("session:1", "node-local", 7, 120);
@@ -233,18 +233,18 @@ describe("MeshService", () => {
     expect(storage.mesh.listLeases).toHaveBeenCalledWith(20);
   });
 
-  it("delegates session ownership helpers to storage", () => {
+  it("delegates session ownership helpers to storage", async () => {
     const storage = createMeshStorage();
     const service = new MeshService(storage as never, baseOptions);
 
-    service.claimSessionOwner("sess-1", {
+    await service.claimSessionOwner("sess-1", {
       ownerNodeId: "node-local",
       expectedEpoch: 1,
       force: true,
     });
-    service.getSessionOwner("sess-1");
-    service.listSessionOwners();
-    service.listSessionOwners(25);
+    await service.getSessionOwner("sess-1");
+    await service.listSessionOwners();
+    await service.listSessionOwners(25);
 
     expect(storage.mesh.claimSessionOwner).toHaveBeenCalledWith("sess-1", {
       ownerNodeId: "node-local",
@@ -256,20 +256,20 @@ describe("MeshService", () => {
     expect(storage.mesh.listSessionOwners).toHaveBeenCalledWith(25);
   });
 
-  it("delegates replication ingestion, listing, and offset state to storage", () => {
+  it("delegates replication ingestion, listing, and offset state to storage", async () => {
     const storage = createMeshStorage();
     const service = new MeshService(storage as never, baseOptions);
 
-    service.ingestReplicationEvent({
+    await service.ingestReplicationEvent({
       sourceNodeId: "node-local",
       eventType: "events.created",
       payload: { ok: true },
       idempotencyKey: "events.created:1",
     });
-    service.listReplicationEvents(10, "cursor-1");
-    service.setReplicationOffset("consumer-1", "node-local", "repl-1");
-    service.listReplicationOffsets();
-    service.listReplicationOffsets(15);
+    await service.listReplicationEvents(10, "cursor-1");
+    await service.setReplicationOffset("consumer-1", "node-local", "repl-1");
+    await service.listReplicationOffsets();
+    await service.listReplicationOffsets(15);
 
     expect(storage.mesh.appendReplicationEvent).toHaveBeenCalledWith({
       sourceNodeId: "node-local",

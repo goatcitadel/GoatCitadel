@@ -63,6 +63,7 @@ function buildAuthenticatedReadinessSnapshot(
         driver: database.driver,
         migrationVersion: database.migrationVersion,
         latencyMs: database.latencyMs,
+        storageWait: database.storageWait,
         issueCount: database.issues.length,
       },
       {

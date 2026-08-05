@@ -3,14 +3,14 @@ import fsSync from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { redactSecretText, redactStructuredSecrets, ValidationError } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { ChatSessionRecord } from "@goatcitadel/contracts";
 
 export interface ChatToolArtifactHost {
   readonly config: GatewayRuntimeConfig;
   readonly storage: Pick<Storage, "chatToolArtifacts">;
-  requireChatSession(sessionId: string): ChatSessionRecord;
+  requireChatSession(sessionId: string): Promise<ChatSessionRecord>;
 }
 
 export async function persistChatToolArtifact(
@@ -24,7 +24,7 @@ export async function persistChatToolArtifact(
     contentType?: string;
     snippet?: string;
     createdAt?: string;
-    canonicalWriteFence?: <T>(work: () => T) => T;
+    canonicalWriteFence?: <T>(work: () => T | Promise<T>) => Promise<Awaited<T>>;
   },
 ): Promise<{
   artifactId: string;
@@ -46,8 +46,8 @@ export async function persistChatToolArtifact(
   if (!fsSync.existsSync(absolutePath)) {
     await fs.writeFile(absolutePath, projectedContent.content, "utf8");
   }
-  const createRecord = () =>
-    deps.storage.chatToolArtifacts.create({
+  const createRecord = async () =>
+    await deps.storage.chatToolArtifacts.create({
       artifactId,
       sessionId: input.sessionId,
       turnId: input.turnId,
@@ -59,7 +59,7 @@ export async function persistChatToolArtifact(
       storageRelPath,
       createdAt: input.createdAt ?? new Date().toISOString(),
     });
-  const record = input.canonicalWriteFence ? input.canonicalWriteFence(createRecord) : createRecord();
+  const record = input.canonicalWriteFence ? await input.canonicalWriteFence(createRecord) : await createRecord();
   return {
     artifactId: record.artifactId,
     storageRelPath: record.storageRelPath,
@@ -97,8 +97,8 @@ export async function getChatToolArtifactContent(
   if (!workspaceId) {
     throw new ValidationError({ code: "FIELD_REQUIRED", field: "workspaceId" });
   }
-  const artifact = deps.storage.chatToolArtifacts.get(artifactId);
-  const session = deps.requireChatSession(artifact.sessionId);
+  const artifact = await deps.storage.chatToolArtifacts.get(artifactId);
+  const session = await deps.requireChatSession(artifact.sessionId);
   if (session.workspaceId !== workspaceId) {
     throw new ValidationError({ message: "Artifact does not belong to the requested workspace." });
   }

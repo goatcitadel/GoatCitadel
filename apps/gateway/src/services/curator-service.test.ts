@@ -45,28 +45,28 @@ describe("CuratorService.listCuratorStatus", () => {
     });
   });
 
-  it("ranks skills by usage count descending (most-used first)", () => {
-    const response = service.listCuratorStatus();
+  it("ranks skills by usage count descending (most-used first)", async () => {
+    const response = await service.listCuratorStatus();
     const names = response.items.map((item) => item.name);
     expect(names).toEqual(["gamma", "alpha", "delta", "beta"]);
   });
 
-  it("marks bundled skills immune", () => {
-    const response = service.listCuratorStatus();
+  it("marks bundled skills immune", async () => {
+    const response = await service.listCuratorStatus();
     const delta = response.items.find((i) => i.name === "delta");
     expect(delta?.immune).toBe(true);
     expect(delta?.immunityReason).toBe("bundled");
   });
 
-  it("recommends 'archive' for unused skills", () => {
-    const response = service.listCuratorStatus();
+  it("recommends 'archive' for unused skills", async () => {
+    const response = await service.listCuratorStatus();
     const beta = response.items.find((i) => i.name === "beta");
     expect(beta?.recommendation).toBe("archive");
   });
 });
 
 describe("CuratorService.archive", () => {
-  it("requires confirm: true to archive", () => {
+  it("requires confirm: true to archive", async () => {
     const skills = [makeSkill({ name: "alpha", usageCount: 0 })];
     const service = new CuratorService({
       listSkills: () => skills,
@@ -79,12 +79,12 @@ describe("CuratorService.archive", () => {
       publishRealtime: () => undefined,
       cycleDays: 7,
     });
-    expect(() => service.archive({ skillId: skills[0].skillId, confirm: false as unknown as true })).toThrow(
+    await expect(service.archive({ skillId: skills[0].skillId, confirm: false as unknown as true })).rejects.toThrow(
       /confirm/i,
     );
   });
 
-  it("archives a managed unpinned skill (calls archiveSkill once)", () => {
+  it("archives a managed unpinned skill (calls archiveSkill once)", async () => {
     let archivedId: string | undefined;
     let archiveReason: string | undefined;
     const skills = [makeSkill({ name: "alpha", usageCount: 0 })];
@@ -101,14 +101,18 @@ describe("CuratorService.archive", () => {
       publishRealtime: () => undefined,
       cycleDays: 7,
     });
-    const response = service.archive({ skillId: skills[0].skillId, confirm: true, reason: "manual operator archive" });
+    const response = await service.archive({
+      skillId: skills[0].skillId,
+      confirm: true,
+      reason: "manual operator archive",
+    });
     expect(archivedId).toBe(skills[0].skillId);
     expect(archiveReason).toBe("curator:archived manual operator archive");
     expect(response.archived).toBe(true);
     expect(response.state).toBe("disabled");
   });
 
-  it("refuses to archive a pinned skill", () => {
+  it("refuses to archive a pinned skill", async () => {
     const skills = [makeSkill({ name: "alpha", pinned: true })];
     const service = new CuratorService({
       listSkills: () => skills,
@@ -121,10 +125,10 @@ describe("CuratorService.archive", () => {
       publishRealtime: () => undefined,
       cycleDays: 7,
     });
-    expect(() => service.archive({ skillId: skills[0].skillId, confirm: true })).toThrow(/pinned/i);
+    await expect(service.archive({ skillId: skills[0].skillId, confirm: true })).rejects.toThrow(/pinned/i);
   });
 
-  it("refuses to archive a bundled skill", () => {
+  it("refuses to archive a bundled skill", async () => {
     const skills = [makeSkill({ name: "alpha", source: "bundled" })];
     const service = new CuratorService({
       listSkills: () => skills,
@@ -137,10 +141,10 @@ describe("CuratorService.archive", () => {
       publishRealtime: () => undefined,
       cycleDays: 7,
     });
-    expect(() => service.archive({ skillId: skills[0].skillId, confirm: true })).toThrow(/bundled/i);
+    await expect(service.archive({ skillId: skills[0].skillId, confirm: true })).rejects.toThrow(/bundled/i);
   });
 
-  it("throws NotFoundError for unknown skill ids", () => {
+  it("throws NotFoundError for unknown skill ids", async () => {
     const service = new CuratorService({
       listSkills: () => [],
       archiveSkill: () => {
@@ -152,12 +156,12 @@ describe("CuratorService.archive", () => {
       publishRealtime: () => undefined,
       cycleDays: 7,
     });
-    expect(() => service.archive({ skillId: "skill-missing", confirm: true })).toThrow(/not found/i);
+    await expect(service.archive({ skillId: "skill-missing", confirm: true })).rejects.toThrow(/not found/i);
   });
 });
 
 describe("CuratorService.prune", () => {
-  it("requires confirm: true to actually prune", () => {
+  it("requires confirm: true to actually prune", async () => {
     const skills = [makeSkill({ name: "alpha", state: "disabled" })];
     const service = new CuratorService({
       listSkills: () => skills,
@@ -170,10 +174,12 @@ describe("CuratorService.prune", () => {
       publishRealtime: () => undefined,
       cycleDays: 7,
     });
-    expect(() => service.prune({ skillId: skills[0].skillId, confirm: false as unknown as true })).toThrow(/confirm/i);
+    await expect(service.prune({ skillId: skills[0].skillId, confirm: false as unknown as true })).rejects.toThrow(
+      /confirm/i,
+    );
   });
 
-  it("prunes a managed, archived, unpinned, non-bundled skill", () => {
+  it("prunes a managed, archived, unpinned, non-bundled skill", async () => {
     const skills = [makeSkill({ name: "alpha", state: "disabled" })];
     let prunedId: string | undefined;
     const service = new CuratorService({
@@ -188,13 +194,13 @@ describe("CuratorService.prune", () => {
       publishRealtime: () => undefined,
       cycleDays: 7,
     });
-    const response = service.prune({ skillId: skills[0].skillId, confirm: true });
+    const response = await service.prune({ skillId: skills[0].skillId, confirm: true });
     expect(prunedId).toBe(skills[0].skillId);
     expect(response.pruned).toBe(true);
     expect(response.filesRemoved).toContain("/tmp/skills/alpha/SKILL.md");
   });
 
-  it("refuses to prune a pinned skill", () => {
+  it("refuses to prune a pinned skill", async () => {
     const skills = [makeSkill({ name: "alpha", pinned: true })];
     const service = new CuratorService({
       listSkills: () => skills,
@@ -207,10 +213,10 @@ describe("CuratorService.prune", () => {
       publishRealtime: () => undefined,
       cycleDays: 7,
     });
-    expect(() => service.prune({ skillId: skills[0].skillId, confirm: true })).toThrow(/pinned/i);
+    await expect(service.prune({ skillId: skills[0].skillId, confirm: true })).rejects.toThrow(/pinned/i);
   });
 
-  it("refuses to prune a bundled skill", () => {
+  it("refuses to prune a bundled skill", async () => {
     const skills = [makeSkill({ name: "alpha", source: "bundled" })];
     const service = new CuratorService({
       listSkills: () => skills,
@@ -223,12 +229,12 @@ describe("CuratorService.prune", () => {
       publishRealtime: () => undefined,
       cycleDays: 7,
     });
-    expect(() => service.prune({ skillId: skills[0].skillId, confirm: true })).toThrow(/bundled/i);
+    await expect(service.prune({ skillId: skills[0].skillId, confirm: true })).rejects.toThrow(/bundled/i);
   });
 });
 
 describe("CuratorService.listArchived", () => {
-  it("returns only skills with curator:archived note marker", () => {
+  it("returns only skills with curator:archived note marker", async () => {
     const skills: SkillListItem[] = [
       makeSkill({ name: "alpha", state: "enabled" }) as SkillListItem,
       {
@@ -246,7 +252,7 @@ describe("CuratorService.listArchived", () => {
       publishRealtime: () => undefined,
       cycleDays: 7,
     });
-    const response = service.listArchived();
+    const response = await service.listArchived();
     expect(response.items.map((i) => i.name)).toEqual(["beta"]);
     expect(response.items[0].archived).toBe(true);
   });

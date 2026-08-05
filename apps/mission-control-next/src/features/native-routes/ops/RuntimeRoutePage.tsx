@@ -438,6 +438,7 @@ export function RuntimeRoutePage({
     const daemonRepairActions = readDaemonRepairActions(data);
     const latestBackup = data.health?.backups?.latest;
     const latestBackupVerified = latestBackup?.verified === true && latestBackup?.contractVerified === true;
+    const storageWait = data.health?.database?.storageWait;
     const memoryUsed = healthSourceUnavailable
       ? "unavailable"
       : formatBytes(data.health?.systemVitals?.memoryUsedBytes ?? 0);
@@ -1147,6 +1148,20 @@ export function RuntimeRoutePage({
                     value: memoryUsed,
                     meta: processRss,
                   },
+                  ...(storageWait
+                    ? [
+                        {
+                          label: "DB wait p95",
+                          value: formatMilliseconds(storageWait.p95Ms),
+                          meta: `${storageWait.count} waits / 5m`,
+                        },
+                        {
+                          label: "DB wait max",
+                          value: formatMilliseconds(storageWait.maxMs),
+                          meta: `${storageWait.criticalCount} critical / 5m`,
+                        },
+                      ]
+                    : []),
                 ]}
               />
               {!daemonControllable && daemonHandoff ? (

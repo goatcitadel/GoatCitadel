@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { BackupCreateResponse, CronJobRecord } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { logger } from "@goatcitadel/gateway-core";
 import type { EvidenceEnvelopeService } from "../evidence-envelope-service.js";
 import type { MemoryConsolidationRunSummary } from "../memory-consolidation-service.js";
@@ -64,8 +64,8 @@ export type SystemCronFeatureFlag =
 export interface SystemCronSchedulerDeps {
   storage: Pick<Storage, "cronJobs" | "systemSettings" | "memoryContexts" | "memoryQmdRuns" | "costLedger">;
   rootDir: string;
-  isFeatureEnabled(flag: SystemCronFeatureFlag): boolean;
-  publishRealtime(eventType: string, source: string, payload?: Record<string, unknown>): void;
+  isFeatureEnabled(flag: SystemCronFeatureFlag): Promise<boolean>;
+  publishRealtime(eventType: string, source: string, payload?: Record<string, unknown>): Promise<unknown>;
   evidenceEnvelopeService?: Pick<EvidenceEnvelopeService, "createEnvelope">;
   recordDevDiagnostic(input: {
     level: "info" | "warn" | "error";
@@ -85,7 +85,7 @@ export interface SystemCronSchedulerDeps {
     status: "open" | "resolved";
     summary: Record<string, unknown>;
     diff?: Record<string, unknown>;
-  }): void;
+  }): Promise<unknown>;
 }
 
 function shouldRecordSystemCronState(options: SystemCronSchedulerOptions): boolean {
@@ -118,7 +118,7 @@ async function runSystemCronBody<T>(
   } catch (error) {
     if (shouldRecordSystemCronState(options)) {
       try {
-        recordSystemCronRunFailure(deps, job, runId, error, new Date());
+        await recordSystemCronRunFailure(deps, job, runId, error, new Date());
       } catch (recordError) {
         log.warn("failed to record system cron failure state", {
           jobId: job.jobId,
@@ -130,7 +130,7 @@ async function runSystemCronBody<T>(
   }
 }
 
-function recordSystemCronRunSuccess(
+async function recordSystemCronRunSuccess(
   deps: SystemCronSchedulerDeps,
   job: CronJobRecord,
   input: {
@@ -140,11 +140,11 @@ function recordSystemCronRunSuccess(
     lastRunOutput?: string;
     summary?: Record<string, unknown>;
   },
-): CronJobRecord {
-  const evidenceEnvelopeId = recordSystemCronRunEvidence(deps, job, input.runId, "ok", input.finishedAtIso, {
+): Promise<CronJobRecord> {
+  const evidenceEnvelopeId = await recordSystemCronRunEvidence(deps, job, input.runId, "ok", input.finishedAtIso, {
     summary: input.summary,
   });
-  const saved = deps.storage.cronJobs.mergeRuntimeTelemetry(
+  const saved = await deps.storage.cronJobs.mergeRuntimeTelemetry(
     job.jobId,
     {
       lastRunAt: input.finishedAtIso,
@@ -163,27 +163,27 @@ function recordSystemCronRunSuccess(
   return saved;
 }
 
-function recordSystemCronRunFailure(
+async function recordSystemCronRunFailure(
   deps: SystemCronSchedulerDeps,
   job: CronJobRecord,
   runId: string,
   error: unknown,
   failedAt: Date,
-): CronJobRecord {
+): Promise<CronJobRecord> {
   const failedAtIso = failedAt.toISOString();
   const message = normalizeCronFailureMessage(error);
   const failureCount = Math.max(0, job.failureCount ?? 0) + 1;
   const backoffUntil = computeCronBackoffUntil(failedAt, failureCount);
-  const saved = deps.storage.cronJobs.mergeRuntimeTelemetry(
+  const saved = await deps.storage.cronJobs.mergeRuntimeTelemetry(
     job.jobId,
     {
       lastRunAt: failedAtIso,
       lastRunId: runId,
       lastRunStatus: "failed",
       lastRunEvidenceEnvelopeId:
-        recordSystemCronRunEvidence(deps, job, runId, "failed", failedAtIso, {
+        (await recordSystemCronRunEvidence(deps, job, runId, "failed", failedAtIso, {
           failureMessage: message,
-        }) ?? null,
+        })) ?? null,
       lastFailureAt: failedAtIso,
       lastFailure: {
         message,
@@ -197,7 +197,7 @@ function recordSystemCronRunFailure(
     },
     failedAtIso,
   );
-  deps.publishRealtime("cron_job_run", "cron", {
+  await deps.publishRealtime("cron_job_run", "cron", {
     type: "cron_job_run_failed",
     jobId: saved.jobId,
     name: saved.name,
@@ -210,17 +210,17 @@ function recordSystemCronRunFailure(
   return saved;
 }
 
-function recordSystemCronRunEvidence(
+async function recordSystemCronRunEvidence(
   deps: SystemCronSchedulerDeps,
   job: CronJobRecord,
   runId: string,
   status: "ok" | "failed",
   finishedAtIso: string,
   details: { summary?: Record<string, unknown>; failureMessage?: string } = {},
-): string | undefined {
-  const evidenceEnabled = (() => {
+): Promise<string | undefined> {
+  const evidenceEnabled = await (async () => {
     try {
-      return deps.isFeatureEnabled("cronEvidenceV1Enabled") === true;
+      return (await deps.isFeatureEnabled("cronEvidenceV1Enabled")) === true;
     } catch {
       return false;
     }
@@ -232,7 +232,7 @@ function recordSystemCronRunEvidence(
     ? createHash("sha256").update(JSON.stringify(details.summary), "utf8").digest("hex")
     : undefined;
   try {
-    const envelope = deps.evidenceEnvelopeService.createEnvelope({
+    const envelope = await deps.evidenceEnvelopeService.createEnvelope({
       eventKind: "cron_job_executed",
       runId,
       createdAt: finishedAtIso,
@@ -271,7 +271,7 @@ export async function runPrivateBetaBackupSchedulerIfDue(
   deps: SystemCronSchedulerDeps,
   options: SystemCronSchedulerOptions = {},
 ): Promise<void> {
-  const job = deps.storage.cronJobs.get(PRIVATE_BETA_BACKUP_JOB_ID);
+  const job = await deps.storage.cronJobs.get(PRIVATE_BETA_BACKUP_JOB_ID);
   if (!job?.enabled) {
     return;
   }
@@ -291,7 +291,7 @@ export async function runPrivateBetaBackupSchedulerIfDue(
     return;
   }
   const dayKey = toDayKeyForTimezone(now, PRIVATE_BETA_BACKUP_TIME_ZONE);
-  const lastDayKey = deps.storage.systemSettings.get<string>(PRIVATE_BETA_BACKUP_DEDUP_SETTING_KEY)?.value;
+  const lastDayKey = (await deps.storage.systemSettings.get<string>(PRIVATE_BETA_BACKUP_DEDUP_SETTING_KEY))?.value;
   if (!options.force && dayKey === lastDayKey) {
     return;
   }
@@ -300,11 +300,11 @@ export async function runPrivateBetaBackupSchedulerIfDue(
     const backupName = `private-beta-${dayKey.replaceAll("-", "")}`;
     const backup = await deps.createBackup({ name: backupName });
     await deps.pruneRetention({ dryRun: false });
-    deps.storage.systemSettings.set(PRIVATE_BETA_BACKUP_DEDUP_SETTING_KEY, dayKey);
+    await deps.storage.systemSettings.set(PRIVATE_BETA_BACKUP_DEDUP_SETTING_KEY, dayKey);
 
     const finishedAt = new Date().toISOString();
     if (shouldRecordSystemCronState(options)) {
-      recordSystemCronRunSuccess(deps, job, {
+      await recordSystemCronRunSuccess(deps, job, {
         runId,
         finishedAtIso: finishedAt,
         nextRunAt: computeSystemCronNextRunAt(job, finishedAt, 24 * 60 * 60 * 1000),
@@ -315,7 +315,7 @@ export async function runPrivateBetaBackupSchedulerIfDue(
         },
       });
     }
-    deps.publishRealtime("backup_created", "system", {
+    await deps.publishRealtime("backup_created", "system", {
       type: "private_beta_daily_backup",
       backupId: backup.backupId,
       outputPath: backup.outputPath,
@@ -328,16 +328,16 @@ export async function runMemoryConsolidationSchedulerIfDue(
   deps: SystemCronSchedulerDeps,
   options: SystemCronSchedulerOptions = {},
 ): Promise<void> {
-  const job = deps.storage.cronJobs.get(MEMORY_CONSOLIDATION_WEEKLY_JOB_ID);
+  const job = await deps.storage.cronJobs.get(MEMORY_CONSOLIDATION_WEEKLY_JOB_ID);
   if (!job?.enabled) {
     return;
   }
   // Both gates are re-checked inside the service too; checking here avoids
   // bookkeeping writes for a run that would immediately no-op.
   if (
-    !deps.isFeatureEnabled("memoryConsolidationV1Enabled") ||
-    !deps.isFeatureEnabled("memoryLifecycleAdminV1Enabled") ||
-    deps.isFeatureEnabled("autonomyV1Disabled")
+    !(await deps.isFeatureEnabled("memoryConsolidationV1Enabled")) ||
+    !(await deps.isFeatureEnabled("memoryLifecycleAdminV1Enabled")) ||
+    (await deps.isFeatureEnabled("autonomyV1Disabled"))
   ) {
     return;
   }
@@ -353,7 +353,7 @@ export async function runMemoryConsolidationSchedulerIfDue(
     }
   }
   const weekKey = toWeekKeyForTimezone(now, MEMORY_CONSOLIDATION_TIME_ZONE);
-  const lastWeekKey = deps.storage.systemSettings.get<string>(MEMORY_CONSOLIDATION_DEDUP_SETTING_KEY)?.value;
+  const lastWeekKey = (await deps.storage.systemSettings.get<string>(MEMORY_CONSOLIDATION_DEDUP_SETTING_KEY))?.value;
   if (!options.force && lastWeekKey === weekKey) {
     return;
   }
@@ -362,10 +362,10 @@ export async function runMemoryConsolidationSchedulerIfDue(
     if (summary.status !== "completed") {
       return;
     }
-    deps.storage.systemSettings.set(MEMORY_CONSOLIDATION_DEDUP_SETTING_KEY, weekKey);
+    await deps.storage.systemSettings.set(MEMORY_CONSOLIDATION_DEDUP_SETTING_KEY, weekKey);
     const finishedAt = new Date().toISOString();
     if (shouldRecordSystemCronState(options)) {
-      recordSystemCronRunSuccess(deps, job, {
+      await recordSystemCronRunSuccess(deps, job, {
         runId,
         finishedAtIso: finishedAt,
         lastRunOutput: JSON.stringify(summary),
@@ -380,7 +380,7 @@ export async function runMemoryFlushSchedulerIfDue(
   deps: SystemCronSchedulerDeps,
   options: SystemCronSchedulerOptions = {},
 ): Promise<void> {
-  const job = deps.storage.cronJobs.get(MEMORY_FLUSH_DAILY_JOB_ID);
+  const job = await deps.storage.cronJobs.get(MEMORY_FLUSH_DAILY_JOB_ID);
   if (!job?.enabled) {
     return;
   }
@@ -400,7 +400,7 @@ export async function runMemoryFlushSchedulerIfDue(
     return;
   }
   const dayKey = toDayKeyForTimezone(now, MEMORY_FLUSH_DAILY_TIME_ZONE);
-  const lastDayKey = deps.storage.systemSettings.get<string>(MEMORY_FLUSH_DAILY_DEDUP_SETTING_KEY)?.value;
+  const lastDayKey = (await deps.storage.systemSettings.get<string>(MEMORY_FLUSH_DAILY_DEDUP_SETTING_KEY))?.value;
   if (!options.force && dayKey === lastDayKey) {
     return;
   }
@@ -408,14 +408,15 @@ export async function runMemoryFlushSchedulerIfDue(
   await runSystemCronBody(deps, job, options, async ({ runId }) => {
     const nowIso = now.toISOString();
     const cutoffIso = new Date(now.getTime() - MEMORY_FLUSH_HISTORY_DAYS * 24 * 60 * 60 * 1000).toISOString();
-    const prunedExpiredContextPacks = deps.storage.memoryContexts.pruneExpired(nowIso);
-    const prunedOldContextPacks = deps.storage.memoryContexts.pruneOlderThan(cutoffIso);
-    const prunedOldQmdRuns = deps.storage.memoryQmdRuns.pruneOlderThan(cutoffIso);
-    const expiredMemoryLedger = deps.isFeatureEnabled("memoryLifecycleAutoForgetEnabled")
-      ? forgetExpiredMemoryItemsForFlush(deps, nowIso)
-      : inspectExpiredMemoryItemsForFlush(deps, nowIso);
+    const prunedExpiredContextPacks = await deps.storage.memoryContexts.pruneExpired(nowIso);
+    const prunedOldContextPacks = await deps.storage.memoryContexts.pruneOlderThan(cutoffIso);
+    const prunedOldQmdRuns = await deps.storage.memoryQmdRuns.pruneOlderThan(cutoffIso);
+    const memoryLifecycleAutoForgetEnabled = await deps.isFeatureEnabled("memoryLifecycleAutoForgetEnabled");
+    const expiredMemoryLedger = memoryLifecycleAutoForgetEnabled
+      ? await forgetExpiredMemoryItemsForFlush(deps, nowIso)
+      : await inspectExpiredMemoryItemsForFlush(deps, nowIso);
 
-    deps.storage.systemSettings.set(MEMORY_FLUSH_DAILY_DEDUP_SETTING_KEY, dayKey);
+    await deps.storage.systemSettings.set(MEMORY_FLUSH_DAILY_DEDUP_SETTING_KEY, dayKey);
     const finishedAt = new Date().toISOString();
     const summary = {
       type: "memory_flush_daily",
@@ -430,18 +431,18 @@ export async function runMemoryFlushSchedulerIfDue(
       expiredMemoryFlushTruncated: expiredMemoryLedger.truncated,
     };
     if (shouldRecordSystemCronState(options)) {
-      recordSystemCronRunSuccess(deps, job, {
+      await recordSystemCronRunSuccess(deps, job, {
         runId,
         finishedAtIso: finishedAt,
         nextRunAt: computeSystemCronNextRunAt(job, finishedAt, 24 * 60 * 60 * 1000),
         summary,
       });
     }
-    deps.publishRealtime("cron_job_run", "cron", {
+    await deps.publishRealtime("cron_job_run", "cron", {
       ...summary,
       jobId: MEMORY_FLUSH_DAILY_JOB_ID,
       expiredMemoryItemCount: expiredMemoryLedger.expiredActiveCount,
-      memoryLifecycleAutoForgetEnabled: deps.isFeatureEnabled("memoryLifecycleAutoForgetEnabled"),
+      memoryLifecycleAutoForgetEnabled,
       expiredMemoryItemIds: expiredMemoryLedger.forgottenItems.map((item) => item.itemId),
       expiredMemoryNamespacesSample: [...new Set(expiredMemoryLedger.forgottenItems.map((item) => item.namespace))],
       retainedPinnedExpiredMemoryItemIds: expiredMemoryLedger.retainedPinnedItems.map((item) => item.itemId),
@@ -453,22 +454,26 @@ export async function runMemoryFlushSchedulerIfDue(
 }
 
 /** Exported for focused unit tests; the flush scheduler is the only production caller. */
-export function forgetExpiredMemoryItemsForFlush(
+export async function forgetExpiredMemoryItemsForFlush(
   deps: Pick<SystemCronSchedulerDeps, "memoryLifecycle">,
   nowIso: string,
-): {
+): Promise<{
   expiredActiveCount: number;
   forgottenCount: number;
   retainedPinnedCount: number;
   remainingExpiredUnpinnedCount: number;
   truncated: boolean;
-  forgottenItems: ReturnType<MemoryLifecycleService["forgetExpiredActiveMemoryItems"]>["forgottenItems"];
-  retainedPinnedItems: ReturnType<MemoryLifecycleService["forgetExpiredActiveMemoryItems"]>["retainedPinnedItems"];
-} {
-  const forgottenItems: ReturnType<MemoryLifecycleService["forgetExpiredActiveMemoryItems"]>["forgottenItems"] = [];
+  forgottenItems: Awaited<ReturnType<MemoryLifecycleService["forgetExpiredActiveMemoryItems"]>>["forgottenItems"];
+  retainedPinnedItems: Awaited<
+    ReturnType<MemoryLifecycleService["forgetExpiredActiveMemoryItems"]>
+  >["retainedPinnedItems"];
+}> {
+  const forgottenItems: Awaited<
+    ReturnType<MemoryLifecycleService["forgetExpiredActiveMemoryItems"]>
+  >["forgottenItems"] = [];
   while (forgottenItems.length < MEMORY_FLUSH_EXPIRED_SAFETY_LIMIT) {
     const remainingCapacity = MEMORY_FLUSH_EXPIRED_SAFETY_LIMIT - forgottenItems.length;
-    const batch = deps.memoryLifecycle.forgetExpiredActiveMemoryItems({
+    const batch = await deps.memoryLifecycle.forgetExpiredActiveMemoryItems({
       nowIso,
       limit: Math.min(MEMORY_FLUSH_EXPIRED_BATCH_LIMIT, remainingCapacity),
     });
@@ -477,7 +482,7 @@ export function forgetExpiredMemoryItemsForFlush(
       break;
     }
   }
-  const ledger = deps.memoryLifecycle.inspectExpiredActiveMemoryLedger({ nowIso });
+  const ledger = await deps.memoryLifecycle.inspectExpiredActiveMemoryLedger({ nowIso });
   return {
     expiredActiveCount: ledger.totalCount + forgottenItems.length,
     forgottenCount: forgottenItems.length,
@@ -490,19 +495,21 @@ export function forgetExpiredMemoryItemsForFlush(
 }
 
 /** Exported for focused unit tests; the flush scheduler is the only production caller. */
-export function inspectExpiredMemoryItemsForFlush(
+export async function inspectExpiredMemoryItemsForFlush(
   deps: Pick<SystemCronSchedulerDeps, "memoryLifecycle">,
   nowIso: string,
-): {
+): Promise<{
   expiredActiveCount: number;
   forgottenCount: number;
   retainedPinnedCount: number;
   remainingExpiredUnpinnedCount: number;
   truncated: boolean;
   forgottenItems: [];
-  retainedPinnedItems: ReturnType<MemoryLifecycleService["inspectExpiredActiveMemoryLedger"]>["retainedPinnedItems"];
-} {
-  const ledger = deps.memoryLifecycle.inspectExpiredActiveMemoryLedger({ nowIso });
+  retainedPinnedItems: Awaited<
+    ReturnType<MemoryLifecycleService["inspectExpiredActiveMemoryLedger"]>
+  >["retainedPinnedItems"];
+}> {
+  const ledger = await deps.memoryLifecycle.inspectExpiredActiveMemoryLedger({ nowIso });
   return {
     expiredActiveCount: ledger.totalCount,
     forgottenCount: 0,
@@ -518,7 +525,7 @@ export async function runCostReportSchedulerIfDue(
   deps: SystemCronSchedulerDeps,
   options: SystemCronSchedulerOptions = {},
 ): Promise<void> {
-  const job = deps.storage.cronJobs.get(COST_REPORT_HOURLY_JOB_ID);
+  const job = await deps.storage.cronJobs.get(COST_REPORT_HOURLY_JOB_ID);
   if (!job?.enabled) {
     return;
   }
@@ -538,7 +545,7 @@ export async function runCostReportSchedulerIfDue(
     return;
   }
   const hourKey = toHourKeyForTimezone(now, COST_REPORT_HOURLY_TIME_ZONE);
-  const lastHourKey = deps.storage.systemSettings.get<string>(COST_REPORT_HOURLY_DEDUP_SETTING_KEY)?.value;
+  const lastHourKey = (await deps.storage.systemSettings.get<string>(COST_REPORT_HOURLY_DEDUP_SETTING_KEY))?.value;
   if (!options.force && hourKey === lastHourKey) {
     return;
   }
@@ -546,11 +553,11 @@ export async function runCostReportSchedulerIfDue(
   await runSystemCronBody(deps, job, options, async ({ runId }) => {
     const windowEndIso = now.toISOString();
     const windowStartIso = new Date(now.getTime() - COST_REPORT_LOOKBACK_HOURS * 60 * 60 * 1000).toISOString();
-    const byDay = deps.storage.costLedger.summary("day", windowStartIso, windowEndIso);
-    const bySession = deps.storage.costLedger.summary("session", windowStartIso, windowEndIso);
-    const byAgent = deps.storage.costLedger.summary("agent", windowStartIso, windowEndIso);
-    const byTask = deps.storage.costLedger.summary("task", windowStartIso, windowEndIso);
-    const usageAvailability = deps.storage.costLedger.usageAvailability(windowStartIso, windowEndIso);
+    const byDay = await deps.storage.costLedger.summary("day", windowStartIso, windowEndIso);
+    const bySession = await deps.storage.costLedger.summary("session", windowStartIso, windowEndIso);
+    const byAgent = await deps.storage.costLedger.summary("agent", windowStartIso, windowEndIso);
+    const byTask = await deps.storage.costLedger.summary("task", windowStartIso, windowEndIso);
+    const usageAvailability = await deps.storage.costLedger.usageAvailability(windowStartIso, windowEndIso);
     const totalCostUsd = byDay.reduce((sum, row) => sum + row.costUsd, 0);
     const totalTokens = byDay.reduce((sum, row) => sum + row.tokenTotal, 0);
 
@@ -606,7 +613,7 @@ export async function runCostReportSchedulerIfDue(
     const outputPath = path.join(reportDir, reportFileName);
     await fs.writeFile(outputPath, `${lines.join("\n")}\n`, "utf8");
 
-    deps.storage.systemSettings.set(COST_REPORT_HOURLY_DEDUP_SETTING_KEY, hourKey);
+    await deps.storage.systemSettings.set(COST_REPORT_HOURLY_DEDUP_SETTING_KEY, hourKey);
     const finishedAt = new Date().toISOString();
     const summary = {
       type: "cost_report_hourly",
@@ -619,14 +626,14 @@ export async function runCostReportSchedulerIfDue(
       windowEndIso,
     };
     if (shouldRecordSystemCronState(options)) {
-      recordSystemCronRunSuccess(deps, job, {
+      await recordSystemCronRunSuccess(deps, job, {
         runId,
         finishedAtIso: finishedAt,
         nextRunAt: computeSystemCronNextRunAt(job, finishedAt, 60 * 60 * 1000),
         summary,
       });
     }
-    deps.publishRealtime("cron_job_run", "cron", {
+    await deps.publishRealtime("cron_job_run", "cron", {
       ...summary,
       jobId: COST_REPORT_HOURLY_JOB_ID,
     });
@@ -637,7 +644,7 @@ export async function runUpdateReviewSchedulerIfDue(
   deps: SystemCronSchedulerDeps,
   options: SystemCronSchedulerOptions = {},
 ): Promise<void> {
-  const job = deps.storage.cronJobs.get(UPDATE_REVIEW_DAILY_JOB_ID);
+  const job = await deps.storage.cronJobs.get(UPDATE_REVIEW_DAILY_JOB_ID);
   if (!job?.enabled) {
     return;
   }
@@ -657,7 +664,7 @@ export async function runUpdateReviewSchedulerIfDue(
     return;
   }
   const dayKey = toDayKeyForTimezone(now, UPDATE_REVIEW_DAILY_TIME_ZONE);
-  const lastDayKey = deps.storage.systemSettings.get<string>(UPDATE_REVIEW_DAILY_DEDUP_SETTING_KEY)?.value;
+  const lastDayKey = (await deps.storage.systemSettings.get<string>(UPDATE_REVIEW_DAILY_DEDUP_SETTING_KEY))?.value;
   if (!options.force && dayKey === lastDayKey) {
     return;
   }
@@ -670,7 +677,7 @@ export async function runUpdateReviewSchedulerIfDue(
     const outputPath = path.join(reportDir, reportFileName);
     await fs.writeFile(outputPath, `${renderUpdateReviewMarkdown(report)}\n`, "utf8");
 
-    deps.storage.systemSettings.set(UPDATE_REVIEW_DAILY_DEDUP_SETTING_KEY, dayKey);
+    await deps.storage.systemSettings.set(UPDATE_REVIEW_DAILY_DEDUP_SETTING_KEY, dayKey);
     const finishedAt = new Date().toISOString();
     const summary = {
       type: "update_review_daily",
@@ -681,7 +688,7 @@ export async function runUpdateReviewSchedulerIfDue(
       checkedSkillCount: report.summary.checkedSkillCount,
     };
     if (shouldRecordSystemCronState(options)) {
-      recordSystemCronRunSuccess(deps, job, {
+      await recordSystemCronRunSuccess(deps, job, {
         runId,
         finishedAtIso: finishedAt,
         nextRunAt: computeSystemCronNextRunAt(job, finishedAt, 24 * 60 * 60 * 1000),
@@ -693,8 +700,8 @@ export async function runUpdateReviewSchedulerIfDue(
       report.summary.outdatedDependencyCount > 0 ||
       report.summary.changedSkillSourceCount > 0 ||
       report.summary.warningCount > 0;
-    if (deps.isFeatureEnabled("cronReviewQueueV1Enabled")) {
-      deps.recordCronReviewItem({
+    if (await deps.isFeatureEnabled("cronReviewQueueV1Enabled")) {
+      await deps.recordCronReviewItem({
         jobId: UPDATE_REVIEW_DAILY_JOB_ID,
         runId,
         severity: hasAlerts ? "medium" : "low",
@@ -717,7 +724,7 @@ export async function runUpdateReviewSchedulerIfDue(
       });
     }
 
-    deps.publishRealtime("cron_job_run", "cron", {
+    await deps.publishRealtime("cron_job_run", "cron", {
       ...summary,
       jobId: UPDATE_REVIEW_DAILY_JOB_ID,
     });

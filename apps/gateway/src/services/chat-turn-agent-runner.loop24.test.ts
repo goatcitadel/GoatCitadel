@@ -217,6 +217,145 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
     expect(result.assistantContent).toContain(".pptx");
   });
 
+  it.each(["presentations.create", "documents.create"])(
+    "does not invoke %s or repair completion after a provider timeout",
+    async (toolName) => {
+      const content =
+        toolName === "presentations.create"
+          ? "Please do some research on funny jokes and put together a PowerPoint presentation on it."
+          : "Please do some research on funny jokes and put together a PDF report on it.";
+      const createChatCompletion = vi
+        .fn<() => Promise<ChatCompletionResponse>>()
+        .mockRejectedValue(new Error("provider timed out waiting for completion"));
+      const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>();
+      const orchestrator = new ChatTurnAgentRunner({
+        storage: createMockStorage() as never,
+        listToolCatalog: () => createToolCatalog([toolName]),
+        createChatCompletion,
+        invokeTool,
+      });
+
+      const result = await orchestrator.run(
+        turnInput({
+          content,
+          webMode: "auto",
+          historyMessages: [{ role: "user", content }],
+        }),
+      );
+
+      expect(result.turnTrace.status).toBe("failed");
+      expect(result.turnTrace.failure?.failureClass).toBe("provider_timeout");
+      expect(result.turnTrace.completion?.repaired).toBe(false);
+      expect(invokeTool).not.toHaveBeenCalled();
+      expect(result.turnTrace.toolRuns).toEqual([]);
+    },
+  );
+
+  it("routes the exact research-deck prompt through a cleaned search before presentation creation", async () => {
+    const content = "Please do some research on funny jokes and put together a PowerPoint presentation on it.";
+    const providerRequests: ChatCompletionRequest[] = [];
+    const createChatCompletion = vi
+      .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
+      .mockImplementationOnce(async (request) => {
+        providerRequests.push(request);
+        return namedToolCallCompletion("presentations.create", {
+          path: "./workspace/goatcitadel_out/funny-jokes.pptx",
+          title: "Why Funny Jokes Work",
+          slides: [
+            {
+              title: "What Makes a Joke Funny",
+              bullets: ["Surprise changes the expected interpretation at the punchline."],
+            },
+            {
+              title: "Reliable Joke Structures",
+              bullets: ["Misdirection, callbacks, and the rule of three create recognizable comic rhythm."],
+            },
+            {
+              title: "Examples and Delivery",
+              bullets: ["Concise setup and deliberate timing give the audience room to recognize the twist."],
+            },
+          ],
+        });
+      })
+      .mockImplementationOnce(async (request) => {
+        providerRequests.push(request);
+        return completion(
+          "I researched common joke structures, preserved the source evidence, and created the PowerPoint presentation.",
+        );
+      });
+    const invokeTool = vi.fn(async (request: ToolInvokeRequest): Promise<ToolInvokeResult> => {
+      if (request.toolName === "browser.search") {
+        return {
+          outcome: "executed",
+          result: {
+            results: [
+              {
+                title: "Humor and incongruity",
+                url: "https://www.britannica.com/art/humour",
+                snippet: "Research describes incongruity and resolution as common mechanisms in humor.",
+              },
+              {
+                title: "Comedy writing structures",
+                url: "https://www.masterclass.com/articles/how-to-write-comedy",
+                snippet: "Callbacks, misdirection, and the rule of three are common joke-writing structures.",
+              },
+            ],
+          },
+        };
+      }
+      return {
+        outcome: "executed",
+        result: {
+          path: "F:\\code\\personal-ai\\workspace\\goatcitadel_out\\funny-jokes.pptx",
+          bytesWritten: 24_000,
+          format: "pptx",
+          title: request.args.title,
+          slideCount: 3,
+        },
+      };
+    });
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search", "presentations.create"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run(
+      turnInput({
+        content,
+        webMode: "auto",
+        historyMessages: [{ role: "user", content }],
+      }),
+    );
+
+    expect(invokeTool.mock.calls.map(([request]) => request.toolName)).toEqual([
+      "browser.search",
+      "presentations.create",
+    ]);
+    expect(invokeTool.mock.calls[0]?.[0].args).toMatchObject({ query: "funny jokes" });
+    expect(extractRequestToolNames(providerRequests[0])).toEqual(
+      expect.arrayContaining(["browser_search", "presentations_create"]),
+    );
+    expect(providerRequests[0]).toMatchObject({
+      timeoutMs: 300_000,
+      max_tokens: 2_400,
+    });
+    expect(result.turnTrace.routing.executionBudget).toMatchObject({
+      profile: "research_artifact",
+      promotionReason: "explicit_research_artifact",
+      turnBudgetMs: 600_000,
+      completionTimeoutMs: 300_000,
+      maxToolLoops: 6,
+      maxToolRunsPerTurn: 12,
+      searchMaxResults: 6,
+      maxTokens: 2_400,
+    });
+    expect(result.turnTrace.completion?.firstProviderRequestUsage?.effectiveInputTokens).toBeLessThan(12_000);
+    expect(result.turnTrace.status).toBe("completed");
+    expect(result.turnTrace.citations).toHaveLength(2);
+  });
+
   it("defers synthetic presentation visuals until after policy authorization", async () => {
     const createChatCompletion = vi.fn(async (): Promise<ChatCompletionResponse> => {
       return completion("Here is an outline, but I did not create a deck.");
@@ -640,7 +779,7 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
     let capturedRequest: ChatCompletionRequest | undefined;
     const createChatCompletion = vi.fn(async (request: ChatCompletionRequest): Promise<ChatCompletionResponse> => {
       capturedRequest = request;
-      return completion("I can draft the report, but I did not create a document file.");
+      return completion(FREE_TIME_RESEARCH);
     });
     const evaluateToolAccess = vi.fn((input: { toolName: string; args?: Record<string, unknown> }) => ({
       allowed: input.toolName !== "documents.create" || typeof input.args?.path === "string",
@@ -718,7 +857,7 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
     {
       toolName: "documents.create",
       content: "Create a real PDF report file about daily walking.",
-      modelContent: "I can draft the report, but I did not create a document file.",
+      modelContent: WALKING_RESEARCH,
       historyMessages: undefined,
     },
   ])("parks a synthetic $toolName fallback when artifact creation needs approval", async (scenario) => {

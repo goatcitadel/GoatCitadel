@@ -89,9 +89,9 @@ function createHost(overrides: Partial<OrchestrationLifecycleHost> = {}): Orches
     updatedAt: "2026-04-12T00:00:00.000Z",
   };
   const storage = {
-    runImmediateTransaction: vi.fn(<T>(callback: () => T): T => callback()),
+    runImmediateTransaction: vi.fn(async <T>(callback: () => T | Promise<T>): Promise<Awaited<T>> => await callback()),
     durableRuns: {
-      lockFreshActiveLeaseForUpdate: vi.fn((runId: string, expectedLeaseOwnerId: string) => {
+      lockFreshActiveLeaseForUpdate: vi.fn(async (runId: string, expectedLeaseOwnerId: string) => {
         if (
           durableRun.runId !== runId ||
           durableRun.status !== "running" ||
@@ -105,25 +105,25 @@ function createHost(overrides: Partial<OrchestrationLifecycleHost> = {}): Orches
       }),
     },
     orchestration: {
-      upsertPlan: vi.fn(),
-      getPlan: vi.fn(() => plan),
-      createRun: vi.fn((value: OrchestrationRun) => {
+      upsertPlan: vi.fn(async () => undefined),
+      getPlan: vi.fn(async () => plan),
+      createRun: vi.fn(async (value: OrchestrationRun) => {
         run = value;
         return value;
       }),
-      findLatestRunByPlan: vi.fn(() => undefined),
-      findActiveRunByPlan: vi.fn(() => undefined),
-      updateRun: vi.fn((value: OrchestrationRun) => {
+      findLatestRunByPlan: vi.fn(async () => undefined),
+      findActiveRunByPlan: vi.fn(async () => undefined),
+      updateRun: vi.fn(async (value: OrchestrationRun) => {
         run = value;
         return value;
       }),
-      updateRunIfCurrentState: vi.fn((value: OrchestrationRun) => {
+      updateRunIfCurrentState: vi.fn(async (value: OrchestrationRun) => {
         run = value;
         return value;
       }),
-      appendRunEvent: vi.fn(),
-      listCheckpoints: vi.fn(() => checkpoints),
-      getRun: vi.fn(() => run),
+      appendRunEvent: vi.fn(async () => undefined),
+      listCheckpoints: vi.fn(async () => checkpoints),
+      getRun: vi.fn(async () => run),
     },
   };
 
@@ -175,9 +175,9 @@ function createHost(overrides: Partial<OrchestrationLifecycleHost> = {}): Orches
     },
     hooksService: {
       runInlineHooks: vi.fn(async () => ({ blockedBy: undefined, patch: undefined })),
-      enqueueAfterHooks: vi.fn(),
+      enqueueAfterHooks: vi.fn(async () => undefined),
     },
-    createCheckpoint: vi.fn((input) => {
+    createCheckpoint: vi.fn(async (input) => {
       const checkpoint = {
         checkpointId: `cp-${checkpoints.length + 1}`,
         createdAt: "2026-04-12T00:00:00.000Z",
@@ -187,19 +187,19 @@ function createHost(overrides: Partial<OrchestrationLifecycleHost> = {}): Orches
       checkpoints.push(checkpoint);
       return checkpoint;
     }),
-    publishRealtime: vi.fn(),
-    scheduleOrchestrationMemoryContext: vi.fn(),
+    publishRealtime: vi.fn(async () => undefined),
+    scheduleOrchestrationMemoryContext: vi.fn(async () => undefined),
     parseOrchestrationRunHookPatch: vi.fn(() => undefined),
     parseOrchestrationPhaseHookPatch: vi.fn(() => undefined),
     applyOrchestrationPhaseHookPatch: vi.fn((currentPlan) => currentPlan),
-    createDurableRun: vi.fn(() => durableRun),
+    createDurableRun: vi.fn(async () => durableRun),
     getDurableRun: vi.fn(() => durableRun),
-    requestDurableRunProcessing: vi.fn(),
-    pauseDurableRun: vi.fn(() => ({
+    requestDurableRunProcessing: vi.fn(async () => undefined),
+    pauseDurableRun: vi.fn(async () => ({
       ...durableRun,
       status: "paused",
     })),
-    resumeDurableRun: vi.fn(() => {
+    resumeDurableRun: vi.fn(async () => {
       durableRun = {
         ...durableRun,
         status: "queued",
@@ -208,7 +208,7 @@ function createHost(overrides: Partial<OrchestrationLifecycleHost> = {}): Orches
       };
       return durableRun;
     }),
-    cancelDurableRun: vi.fn(() => {
+    cancelDurableRun: vi.fn(async () => {
       durableRun = {
         ...durableRun,
         status: "cancelled",
@@ -218,7 +218,7 @@ function createHost(overrides: Partial<OrchestrationLifecycleHost> = {}): Orches
       };
       return durableRun;
     }),
-    updateDurableRunState: vi.fn((input) => {
+    updateDurableRunState: vi.fn(async (input) => {
       if (
         input.expectedLeaseOwnerId &&
         (durableRun.status !== "running" ||
@@ -253,7 +253,7 @@ function createHost(overrides: Partial<OrchestrationLifecycleHost> = {}): Orches
       };
       return durableRun;
     }),
-    recordDurableTimelineEvent: vi.fn(),
+    recordDurableTimelineEvent: vi.fn(async () => undefined),
   };
   return {
     ...host,
@@ -283,7 +283,7 @@ function createRuntimeDeps(overrides: RuntimeDepsOverrides = {}): OrchestrationL
         worktreeBaseRef: "HEAD",
       })),
       release: vi.fn(async () => undefined),
-      ensureLeaseForExecution: vi.fn((run) => run),
+      ensureLeaseForExecution: vi.fn(async (run) => run),
       ...overrides.worktrees,
     },
     phaseExecutor: {
@@ -312,30 +312,38 @@ function createRuntimeDeps(overrides: RuntimeDepsOverrides = {}): OrchestrationL
  * The optimistic OUTER read of findActiveRunByPlan always misses (returns
  * undefined) — this represents the race window where two callers both observe
  * "no active run" before either has committed. The serialization point is the
- * synchronous runImmediateTransaction: the active-run re-check performed INSIDE
+ * serialized async runImmediateTransaction: the active-run re-check performed INSIDE
  * the transaction sees committed state, exactly like SQLite IMMEDIATE
  * transactions, so only the first caller inserts and the second observes the
  * committed run.
  */
 function createRaceStore(): {
   createdRuns: OrchestrationRun[];
-  runImmediateTransaction: <T>(callback: () => T) => T;
+  runImmediateTransaction: <T>(callback: () => T | Promise<T>) => Promise<Awaited<T>>;
   findActiveRunByPlan: (planId: string, workspaceId?: string) => OrchestrationRun | undefined;
   createRun: (run: OrchestrationRun) => OrchestrationRun;
 } {
   const createdRuns: OrchestrationRun[] = [];
   const activeByKey = new Map<string, OrchestrationRun>();
   let insideTransaction = false;
+  let transactionTail = Promise.resolve();
   const keyFor = (planId: string, workspaceId = "default"): string => `${planId}::${workspaceId}`;
 
   return {
     createdRuns,
-    runImmediateTransaction: vi.fn(<T>(callback: () => T): T => {
+    runImmediateTransaction: vi.fn(async <T>(callback: () => T | Promise<T>): Promise<Awaited<T>> => {
+      const previous = transactionTail;
+      let release!: () => void;
+      transactionTail = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      await previous;
       insideTransaction = true;
       try {
-        return callback();
+        return await callback();
       } finally {
         insideTransaction = false;
+        release();
       }
     }),
     findActiveRunByPlan: vi.fn((planId: string, workspaceId = "default") => {
@@ -916,7 +924,7 @@ describe("orchestration-lifecycle-service", () => {
     expect(host.requestDurableRunProcessing).not.toHaveBeenCalled();
   });
 
-  it("hides orchestration runs outside the requested workspace scope", () => {
+  it("hides orchestration runs outside the requested workspace scope", async () => {
     const host = createHost({
       storage: {
         orchestration: {
@@ -929,10 +937,12 @@ describe("orchestration-lifecycle-service", () => {
       } as OrchestrationLifecycleHost["storage"],
     });
 
-    expect(() => getOrchestrationRun(host, "run-1", "workspace-b")).toThrow("Orchestration run run-1 not found");
+    await expect(getOrchestrationRun(host, "run-1", "workspace-b")).rejects.toThrow(
+      "Orchestration run run-1 not found",
+    );
   });
 
-  it("projects all orchestration trace sources through bounded structured secret containment", () => {
+  it("projects all orchestration trace sources through bounded structured secret containment", async () => {
     const base = createHost();
     const rawRuntimeDecision = {
       decisionId: "runtime-decision-1",
@@ -1011,7 +1021,7 @@ describe("orchestration-lifecycle-service", () => {
       } as OrchestrationLifecycleHost["storage"],
     });
 
-    const trace = getRunTrace(host, "run-1", "workspace-a");
+    const trace = await getRunTrace(host, "run-1", "workspace-a");
 
     expect(trace.decisions.map((decision) => decision.kind)).toEqual(["run_started", "phase_completed", "unknown"]);
     expect(trace.checkpoints[0]?.details).toMatchObject({
@@ -1046,7 +1056,7 @@ describe("orchestration-lifecycle-service", () => {
     expect(rawRuntimeDecision.rationale).toBe("Bearer short");
   });
 
-  it("denies trace reads for a run owned by another workspace", () => {
+  it("denies trace reads for a run owned by another workspace", async () => {
     const base = createHost();
     const host = createHost({
       storage: {
@@ -1060,10 +1070,10 @@ describe("orchestration-lifecycle-service", () => {
       } as OrchestrationLifecycleHost["storage"],
     });
 
-    expect(() => getRunTrace(host, "run-1", "workspace-b")).toThrow("Orchestration run run-1 not found");
+    await expect(getRunTrace(host, "run-1", "workspace-b")).rejects.toThrow("Orchestration run run-1 not found");
   });
 
-  it("caps the run lastError text included in the trace", () => {
+  it("caps the run lastError text included in the trace", async () => {
     const base = createHost();
     const host = createHost({
       storage: {
@@ -1078,7 +1088,7 @@ describe("orchestration-lifecycle-service", () => {
       } as OrchestrationLifecycleHost["storage"],
     });
 
-    const trace = getRunTrace(host, "run-1", "workspace-a");
+    const trace = await getRunTrace(host, "run-1", "workspace-a");
 
     expect(trace.run.lastError).toContain("[truncated]");
     expect(trace.run.lastError?.length ?? 0).toBeLessThan(700);

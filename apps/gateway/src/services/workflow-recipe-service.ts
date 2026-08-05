@@ -51,7 +51,7 @@ const DEFAULT_LIMITS: Required<WorkflowRecipeLimits> = {
 };
 
 export interface WorkflowRecipeServiceHost {
-  listSkills(): SkillListItem[];
+  listSkills(): Promise<SkillListItem[]>;
   listToolNames?(): string[];
   createOrchestrationPlan(
     plan: OrchestrationPlan,
@@ -62,10 +62,10 @@ export interface WorkflowRecipeServiceHost {
 export class WorkflowRecipeService {
   public constructor(private readonly host: WorkflowRecipeServiceHost) {}
 
-  public previewRecipe(input: WorkflowRecipePreviewRequest): WorkflowRecipePreviewResponse {
+  public async previewRecipe(input: WorkflowRecipePreviewRequest): Promise<WorkflowRecipePreviewResponse> {
     const recipe = normalizeRecipe(parseRecipeInput(input));
     const warnings = buildWarnings(recipe);
-    const missingSkills = detectMissingSkills(recipe, this.host.listSkills());
+    const missingSkills = detectMissingSkills(recipe, await this.host.listSkills());
     const missingTools = detectMissingTools(recipe, this.host.listToolNames?.() ?? []);
     const estimatedLimits = normalizeLimits(recipe.limits);
     const requiredApprovals = normalizeRequiredApprovals(recipe);
@@ -84,7 +84,7 @@ export class WorkflowRecipeService {
     input: WorkflowRecipePlanCreateRequest,
     policyContext?: OrchestrationRunPolicyContext,
   ): Promise<WorkflowRecipePlanCreateResponse> {
-    const preview = this.previewRecipe(input);
+    const preview = await this.previewRecipe(input);
     const run = policyContext
       ? await this.host.createOrchestrationPlan(preview.plan, policyContext)
       : await this.host.createOrchestrationPlan(preview.plan);
@@ -98,9 +98,9 @@ export class WorkflowRecipeService {
     return STARTER_TEMPLATES;
   }
 
-  public draftAutomationRecipe(input: AutomationRecipeDraftRequest): AutomationRecipeDraftResponse {
+  public async draftAutomationRecipe(input: AutomationRecipeDraftRequest): Promise<AutomationRecipeDraftResponse> {
     const recipe = buildAutomationDraftRecipe(input);
-    const preview = this.previewRecipe({ recipe });
+    const preview = await this.previewRecipe({ recipe });
     return {
       ...preview,
       roiEstimate: estimateAutomationRoi(input),
@@ -109,11 +109,11 @@ export class WorkflowRecipeService {
     };
   }
 
-  public exportActivepiecesTemplate(
+  public async exportActivepiecesTemplate(
     input: WorkflowRecipeActivepiecesTemplateExportRequest,
     generatedAt = new Date().toISOString(),
-  ): WorkflowRecipeActivepiecesTemplateExportResponse {
-    const preview = this.previewRecipe(input);
+  ): Promise<WorkflowRecipeActivepiecesTemplateExportResponse> {
+    const preview = await this.previewRecipe(input);
     const activepiecesTemplate = buildActivepiecesTemplate(preview, input);
     const validation = validateActivepiecesTemplateExport(activepiecesTemplate);
     const filename = `${slugify(activepiecesTemplate.name)}-activepieces-template.json`;
@@ -166,11 +166,11 @@ export class WorkflowRecipeService {
     };
   }
 
-  public exportN8nTemplate(
+  public async exportN8nTemplate(
     input: WorkflowRecipeN8nTemplateExportRequest,
     generatedAt = new Date().toISOString(),
-  ): WorkflowRecipeN8nTemplateExportResponse {
-    const preview = this.previewRecipe(input);
+  ): Promise<WorkflowRecipeN8nTemplateExportResponse> {
+    const preview = await this.previewRecipe(input);
     const n8nWorkflow = buildN8nWorkflowTemplate(preview, input);
     const validation = validateN8nTemplateExport(n8nWorkflow);
     const filename = `${slugify(n8nWorkflow.name)}-n8n-template.json`;

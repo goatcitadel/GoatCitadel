@@ -10,7 +10,7 @@ import type {
   ToolInvokeRequest,
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { createUtilityModelUsageAttribution } from "./utility-model-usage-attribution.js";
 
 interface ResearchServiceDeps {
@@ -31,7 +31,7 @@ interface ResearchServiceDeps {
     surface?: ToolPolicyActorContext["surface"];
     permissionProfileId?: string;
     localOperatorOverrideId?: string;
-  }) => ToolPolicyActorContext;
+  }) => Promise<ToolPolicyActorContext>;
 }
 
 export class ResearchService {
@@ -56,7 +56,7 @@ export class ResearchService {
     const runId = randomUUID();
     const policyRunId = input.policyRunId ?? runId;
     const policyTaskId = input.policyTaskId ?? runId;
-    const policyContext = this.deps.resolveToolPolicyContext?.({
+    const policyContext = await this.deps.resolveToolPolicyContext?.({
       operatorId: input.operatorId ?? input.authActorId,
       authActorId: input.authActorId,
       authActorSource: input.authActorSource,
@@ -68,7 +68,7 @@ export class ResearchService {
       permissionProfileId: input.permissionProfileId,
       localOperatorOverrideId: input.localOperatorOverrideId,
     });
-    this.deps.storage.researchRuns.create({
+    await this.deps.storage.researchRuns.create({
       runId,
       sessionId: input.sessionId,
       query: input.query,
@@ -119,20 +119,20 @@ export class ResearchService {
         }))
         .filter((item) => item.url.length > 0);
 
-      const persistedSources = this.deps.storage.researchSources.replaceForRun(runId, sources);
+      const persistedSources = await this.deps.storage.researchSources.replaceForRun(runId, sources);
+      const sessionMeta = await this.deps.storage.chatSessionMeta.get(input.sessionId);
       const summary = await this.summarize(
         {
           ...input,
           runId,
-          trustedWorkspaceId:
-            policyContext?.workspaceId ?? this.deps.storage.chatSessionMeta.get(input.sessionId)?.workspaceId,
+          trustedWorkspaceId: policyContext?.workspaceId ?? sessionMeta?.workspaceId,
           trustedTaskId: policyContext?.taskId,
           trustedRunId: policyContext?.runId,
         },
         persistedSources,
       );
       const finishedAt = new Date().toISOString();
-      this.deps.storage.researchRuns.patch(runId, {
+      await this.deps.storage.researchRuns.patch(runId, {
         status: "completed",
         summary,
         finishedAt,
@@ -145,7 +145,7 @@ export class ResearchService {
         sources: persistedSources,
       };
     } catch (error) {
-      this.deps.storage.researchRuns.patch(runId, {
+      await this.deps.storage.researchRuns.patch(runId, {
         status: "failed",
         error: (error as Error).message,
         finishedAt: new Date().toISOString(),
@@ -154,20 +154,20 @@ export class ResearchService {
     }
   }
 
-  public getRun(
+  public async getRun(
     sessionId: string,
     runId: string,
-  ): {
+  ): Promise<{
     run: ResearchRunRecord;
     sources: ResearchSourceRecord[];
-  } {
-    const run = this.deps.storage.researchRuns.get(runId);
+  }> {
+    const run = await this.deps.storage.researchRuns.get(runId);
     if (run.sessionId !== sessionId) {
       throw new Error(`Research run ${runId} does not belong to session ${sessionId}`);
     }
     return {
       run,
-      sources: this.deps.storage.researchSources.listByRun(runId),
+      sources: await this.deps.storage.researchSources.listByRun(runId),
     };
   }
 

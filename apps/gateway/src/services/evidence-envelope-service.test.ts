@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { EvidenceEnvelopeService, evidenceDigestHex, sha256, stableStringify } from "./evidence-envelope-service.js";
 
 describe("evidence-envelope-service digest helpers", () => {
-  it("returns canonical evidence when retained realtime publication fails", () => {
+  it("returns canonical evidence when retained realtime publication fails", async () => {
     const create = vi.fn((input) => input);
     const service = new EvidenceEnvelopeService({
       storage: {
@@ -18,7 +18,7 @@ describe("evidence-envelope-service digest helpers", () => {
       },
     });
 
-    const envelope = service.createEnvelope({ eventKind: "continuation_gate", runId: "run-1" });
+    const envelope = await service.createEnvelope({ eventKind: "continuation_gate", runId: "run-1" });
 
     expect(envelope).toMatchObject({ eventKind: "continuation_gate", runId: "run-1" });
     expect(create).toHaveBeenCalledOnce();
@@ -45,7 +45,7 @@ describe("evidence-envelope-service digest helpers", () => {
     expect(source).not.toMatch(/createHmac\("sha256",\s*EVIDENCE_DIGEST_DOMAIN_KEY\)/);
   });
 
-  it("uses the canonical structured projector for secret-safe, cycle-safe evidence metadata", () => {
+  it("uses the canonical structured projector for secret-safe, cycle-safe evidence metadata", async () => {
     const circular: Record<string, unknown> = { visible: "ok" };
     circular.self = circular;
     const metadata = {
@@ -69,7 +69,7 @@ describe("evidence-envelope-service digest helpers", () => {
       } as never,
     });
 
-    const envelope = service.createEnvelope({
+    const envelope = await service.createEnvelope({
       eventKind: "tool_call_completed",
       metadata,
       createdAt: "2026-07-09T12:00:00.000Z",
@@ -92,7 +92,7 @@ describe("evidence-envelope-service digest helpers", () => {
     expect(circular.self).toBe(circular);
   });
 
-  it("projects legacy metadata on reads without changing canonical hashes, signatures, or stored rows", () => {
+  it("projects legacy metadata on reads without changing canonical hashes, signatures, or stored rows", async () => {
     const stored = {
       envelopeId: "envelope-legacy-1",
       eventKind: "tool_invocation" as const,
@@ -120,7 +120,7 @@ describe("evidence-envelope-service digest helpers", () => {
       } as never,
     });
 
-    const [projected] = service.listEnvelopes();
+    const [projected] = await service.listEnvelopes();
 
     expect(projected).toMatchObject({
       contentHash: "content-hash-1",

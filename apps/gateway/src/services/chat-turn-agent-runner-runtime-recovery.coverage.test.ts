@@ -18,16 +18,19 @@ describe("ChatTurnAgentRunner runtime recovery coverage", () => {
     let sideEffectStarted = false;
     const leaseError = new Error("worker A no longer owns the durable lease");
     leaseError.name = "DurableWorkerInterruptionError";
-    const canonicalWriteFence = vi.fn(<T>(work: () => T): T => {
+    const canonicalWriteFence = vi.fn(async <T>(work: () => T | Promise<T>): Promise<Awaited<T>> => {
       if (!leaseOwned) {
         throw leaseError;
       }
-      return work();
+      return await work();
     });
     const invokeTool = vi.fn(
-      async (_request: ToolInvokeRequest, options?: { executionFence?: () => void }): Promise<ToolInvokeResult> => {
+      async (
+        _request: ToolInvokeRequest,
+        options?: { executionFence?: () => Promise<void> },
+      ): Promise<ToolInvokeResult> => {
         leaseOwned = false;
-        options?.executionFence?.();
+        await options?.executionFence?.();
         sideEffectStarted = true;
         return {
           outcome: "executed",
@@ -248,7 +251,7 @@ describe("ChatTurnAgentRunner runtime recovery coverage", () => {
       contentType: input.contentType,
       snippet: input.snippet,
     }));
-    const canonicalWriteFence = vi.fn(<T>(work: () => T): T => work());
+    const canonicalWriteFence = vi.fn(async <T>(work: () => T | Promise<T>): Promise<Awaited<T>> => await work());
     const executeToolCall = createExecuteToolCall({ invokeTool, persistToolArtifact });
 
     const result = await executeToolCall({

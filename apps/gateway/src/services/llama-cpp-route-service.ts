@@ -19,7 +19,7 @@ export type LlamaCppRouteService = RouteService<LlamaCppRouteMethod>;
 
 export interface LlamaCppRoutePortDependencies {
   llamaCppRuntime: LlamaCppRuntimeService;
-  publishRealtime: (eventType: string, source: string, payload: Record<string, unknown>) => void;
+  publishRealtime: (eventType: string, source: string, payload: Record<string, unknown>) => Promise<unknown>;
 }
 
 export function createLlamaCppRoutePort(deps: LlamaCppRoutePortDependencies): LlamaCppRoutePort {
@@ -31,7 +31,7 @@ export function createLlamaCppRoutePort(deps: LlamaCppRoutePortDependencies): Ll
     listLlamaCppModels: () => deps.llamaCppRuntime.listModels(),
     refreshLlamaCppRuntime: async () => {
       const status = await deps.llamaCppRuntime.refresh();
-      deps.publishRealtime("system", "llamacpp", {
+      await deps.publishRealtime("system", "llamacpp", {
         type: "llamacpp_refreshed",
         status,
       });
@@ -40,7 +40,7 @@ export function createLlamaCppRoutePort(deps: LlamaCppRoutePortDependencies): Ll
     startLlamaCppHuggingFaceDownload: (input) => deps.llamaCppRuntime.startHuggingFaceDownload(input),
     startLlamaCppRuntime: async () => {
       const status = await deps.llamaCppRuntime.start("api");
-      deps.publishRealtime("system", "llamacpp", {
+      await deps.publishRealtime("system", "llamacpp", {
         type: "llamacpp_started",
         status,
       });
@@ -48,7 +48,7 @@ export function createLlamaCppRoutePort(deps: LlamaCppRoutePortDependencies): Ll
     },
     stopLlamaCppRuntime: async () => {
       const status = await deps.llamaCppRuntime.stop("api");
-      deps.publishRealtime("system", "llamacpp", {
+      await deps.publishRealtime("system", "llamacpp", {
         type: "llamacpp_stopped",
         status,
       });

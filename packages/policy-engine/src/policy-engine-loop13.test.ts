@@ -4,7 +4,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ToolPolicyConfig } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage } from "@goatcitadel/storage";
 import { ToolPolicyEngine } from "./engine.js";
 import { resolveExecutableCommand, resolveRestrictedCommand } from "./tool-executor.js";
 
@@ -41,10 +41,13 @@ function createConfig(
   };
 }
 
-function createStorageStub(): Storage {
+function createStorageStub(): AsyncStorage {
   return {
+    runImmediateTransaction: vi.fn(
+      async <T>(operation: () => T | Promise<T>): Promise<Awaited<T>> => await operation(),
+    ),
     approvals: {
-      create: vi.fn((input) => ({
+      create: vi.fn(async (input) => ({
         approvalId: "approval-loop13",
         kind: input.kind,
         riskLevel: input.riskLevel,
@@ -55,7 +58,7 @@ function createStorageStub(): Storage {
         expiresAt: input.expiresAt,
         explanationStatus: "not_requested",
       })),
-      createWithTtlDuration: vi.fn((input, ttlMs) => ({
+      createWithTtlDuration: vi.fn(async (input, ttlMs) => ({
         approvalId: "approval-loop13",
         kind: input.kind,
         riskLevel: input.riskLevel,
@@ -67,25 +70,25 @@ function createStorageStub(): Storage {
         explanationStatus: "not_requested",
       })),
     },
-    approvalEvents: { append: vi.fn() },
+    approvalEvents: { append: vi.fn(async () => undefined) },
     audit: { append: vi.fn(async () => undefined) },
-    db: { prepare: vi.fn(() => ({ run: vi.fn() })) },
+    db: { prepare: vi.fn(() => ({ run: vi.fn(async () => undefined) })) },
     pendingApprovalActions: {
-      find: vi.fn(() => undefined),
-      markResolved: vi.fn(),
-      upsertPending: vi.fn(),
+      find: vi.fn(async () => undefined),
+      markResolved: vi.fn(async () => undefined),
+      upsertPending: vi.fn(async () => undefined),
     },
     toolAccessDecisions: {
-      countToolCallsInLastHourInScope: vi.fn(() => 0),
-      countWritesInLastHourInScope: vi.fn(() => 0),
-      record: vi.fn(),
+      countToolCallsInLastHourInScope: vi.fn(async () => 0),
+      countWritesInLastHourInScope: vi.fn(async () => 0),
+      record: vi.fn(async () => undefined),
     },
     toolGrants: {
-      consumeOne: vi.fn(),
-      list: vi.fn(() => []),
-      listActive: vi.fn(() => []),
+      consumeOne: vi.fn(async () => true),
+      list: vi.fn(async () => []),
+      listActive: vi.fn(async () => []),
     },
-  } as unknown as Storage;
+  } as unknown as AsyncStorage;
 }
 
 function request(toolName: string, args: Record<string, unknown> = {}) {
@@ -108,13 +111,13 @@ describe("policy engine loop13 branch tails", () => {
       result: { sessionId: "session-loop13", status: "unavailable" },
     });
 
-    expect(engine.evaluateAccess(request("fs.move", { to: path.join(root, "dest.txt") }))).toMatchObject({
+    expect(await engine.evaluateAccess(request("fs.move", { to: path.join(root, "dest.txt") }))).toMatchObject({
       allowed: true,
     });
-    expect(engine.evaluateAccess(request("fs.delete", { from: path.join(root, "obsolete.txt") }))).toMatchObject({
+    expect(await engine.evaluateAccess(request("fs.delete", { from: path.join(root, "obsolete.txt") }))).toMatchObject({
       allowed: true,
     });
-    expect(engine.evaluateAccess(request("fs.delete"))).toMatchObject({
+    expect(await engine.evaluateAccess(request("fs.delete"))).toMatchObject({
       allowed: false,
       reasonCodes: expect.arrayContaining(["structural_safety_block"]),
     });
@@ -150,7 +153,7 @@ describe("policy engine loop13 branch tails", () => {
     );
   });
 
-  it("quotes Windows package-manager commands and leaves non-package managers untouched", () => {
+  it("quotes Windows package-manager commands and leaves non-package managers untouched", async () => {
     const win = resolveRestrictedCommand("pnpm", ["--filter", "@scope/pkg name", "run", "test"], "win32");
     expect(win.file.toLowerCase()).toMatch(/cmd\.exe$/);
     expect(win.args.join(" ")).toContain('"@scope/pkg name"');

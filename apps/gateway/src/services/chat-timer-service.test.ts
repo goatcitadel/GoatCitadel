@@ -14,7 +14,7 @@ function harness(ownerId = "worker-a", dispatch = vi.fn(async () => dispatchResu
   openStorage.push(storage);
   storage.chatSessionMeta.ensure("session-1", undefined, "workspace-1");
   storage.chatSessionMeta.ensure("session-2", undefined, "workspace-2");
-  const publishRealtime = vi.fn();
+  const publishRealtime = vi.fn(async () => undefined);
   const service = new ChatTimerService({
     storage,
     ownerId,
@@ -26,21 +26,21 @@ function harness(ownerId = "worker-a", dispatch = vi.fn(async () => dispatchResu
 }
 
 describe("ChatTimerService", () => {
-  it("validates bounds and rejects a notification rule from another workspace", () => {
+  it("validates bounds and rejects a notification rule from another workspace", async () => {
     const { storage, service } = harness();
-    expect(() =>
+    await expect(
       service.create(
         "session-1",
         { dueAt: new Date(Date.now() + 1_000).toISOString(), timezone: "UTC", message: "Too soon" },
         "operator",
       ),
-    ).toThrow(/at least 5 seconds/i);
+    ).rejects.toThrow(/at least 5 seconds/i);
     storage.notificationRouting.createRule("foreign-rule", "workspace-2", {
       label: "Foreign",
       eventTypes: ["timer.due"],
       targetIds: [],
     });
-    expect(() =>
+    await expect(
       service.create(
         "session-1",
         {
@@ -51,10 +51,10 @@ describe("ChatTimerService", () => {
         },
         "operator",
       ),
-    ).toThrow(/notification rule/i);
+    ).rejects.toThrow(/notification rule/i);
   });
 
-  it("enforces active timer caps per session and workspace", () => {
+  it("enforces active timer caps per session and workspace", async () => {
     const { storage, service } = harness();
     const dueAt = new Date(Date.now() + 60_000).toISOString();
     for (let index = 0; index < 25; index += 1) {
@@ -69,9 +69,9 @@ describe("ChatTimerService", () => {
         createdBy: "operator",
       });
     }
-    expect(() => service.create("session-1", { dueAt, timezone: "UTC", message: "One too many" }, "operator")).toThrow(
-      /maximum of 25/i,
-    );
+    await expect(
+      service.create("session-1", { dueAt, timezone: "UTC", message: "One too many" }, "operator"),
+    ).rejects.toThrow(/maximum of 25/i);
 
     for (let sessionIndex = 0; sessionIndex < 3; sessionIndex += 1) {
       const sessionId = `workspace-cap-${sessionIndex}`;
@@ -90,9 +90,9 @@ describe("ChatTimerService", () => {
       }
     }
     storage.chatSessionMeta.ensure("workspace-cap-final", undefined, "workspace-1");
-    expect(() =>
+    await expect(
       service.create("workspace-cap-final", { dueAt, timezone: "UTC", message: "One too many" }, "operator"),
-    ).toThrow(/maximum of 100/i);
+    ).rejects.toThrow(/maximum of 100/i);
   });
 
   it("fires provider-free once across workers and retains notice plus canonical notification evidence", async () => {
@@ -102,7 +102,7 @@ describe("ChatTimerService", () => {
       ownerId: "worker-b",
       normalizeWorkspaceId: (workspaceId) => workspaceId?.trim() || "default",
       dispatchNotificationEvent: dispatch,
-      publishRealtime: vi.fn(),
+      publishRealtime: vi.fn(async () => undefined),
     });
     storage.chatTimers.create({
       timerId: "timer-due",
@@ -151,9 +151,9 @@ describe("ChatTimerService", () => {
     expect(storage.chatTimers.get("timer-failed-delivery").notificationDeliveryStatus).toBe("failed");
   });
 
-  it("cancels reply-sensitive timers only when given a committed message id", () => {
+  it("cancels reply-sensitive timers only when given a committed message id", async () => {
     const { service } = harness();
-    const timer = service.create(
+    const timer = await service.create(
       "session-1",
       {
         dueAt: new Date(Date.now() + 10_000).toISOString(),
@@ -163,8 +163,8 @@ describe("ChatTimerService", () => {
       },
       "operator",
     );
-    expect(service.cancelOnCommittedReply("session-1", "committed-message")).toBe(1);
-    expect(service.list("session-1").find((item) => item.timerId === timer.timerId)).toMatchObject({
+    await expect(service.cancelOnCommittedReply("session-1", "committed-message")).resolves.toBe(1);
+    expect((await service.list("session-1")).find((item) => item.timerId === timer.timerId)).toMatchObject({
       status: "cancelled",
       cancelledByMessageId: "committed-message",
     });

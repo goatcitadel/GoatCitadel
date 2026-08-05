@@ -66,6 +66,43 @@ test("replaceDispatchPlan re-arms the next deterministic completion after fixtur
   }
 });
 
+test("scripted tool calls use native Responses and Chat Completions protocols", async () => {
+  const stub = await startDeterministicLlmStub({
+    dispatchPlan: [
+      { type: "tool_call", name: "presentations_create", arguments: { title: "Fixture deck" }, callId: "call_deck" },
+      { type: "tool_call", name: "browser_search", arguments: { query: "fixture" }, callId: "call_search" },
+    ],
+  });
+  try {
+    const responses = await fetch(`${stub.baseUrl}/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: stub.model, stream: true, input: "fixture" }),
+    });
+    const responsesBody = await responses.text();
+    assert.match(responsesBody, /"type":"response\.output_item\.done"/u);
+    assert.match(responsesBody, /"name":"presentations_create"/u);
+    assert.match(responsesBody, /"call_id":"call_deck"/u);
+
+    const chat = await fetch(`${stub.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: stub.model, messages: [{ role: "user", content: "fixture" }] }),
+    });
+    const chatBody = await chat.json();
+    assert.equal(chatBody.choices[0].finish_reason, "tool_calls");
+    assert.deepEqual(chatBody.choices[0].message.tool_calls, [
+      {
+        id: "call_search",
+        type: "function",
+        function: { name: "browser_search", arguments: '{"query":"fixture"}' },
+      },
+    ]);
+  } finally {
+    await stub.close();
+  }
+});
+
 test("prompt reply rules survive auxiliary dispatches without retaining matched prompt content", async () => {
   const stub = await startDeterministicLlmStub({
     replyText: "AUXILIARY_OK",
@@ -161,7 +198,11 @@ test("scripted stream disconnect exposes one partial frame and never synthesizes
       body: JSON.stringify({ model: stub.model, stream: true, messages: [{ role: "user", content: "fixture" }] }),
     });
     assert.equal(response.status, 200);
-    await assert.rejects(response.text());
+    const reader = response.body.getReader();
+    const first = await reader.read();
+    assert.equal(first.done, false);
+    assert.match(new TextDecoder().decode(first.value), /PARTIAL/u);
+    await assert.rejects(reader.read());
     await stub.waitForCompletionDispatchCount(1);
     assert.equal(stub.completionDispatches(), 1);
     assert.equal(stub.completionDispatchRecords()[0]?.behavior, "stream_disconnect");

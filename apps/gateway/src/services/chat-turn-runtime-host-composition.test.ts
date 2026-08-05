@@ -121,7 +121,7 @@ describe("createChatTurnRuntimeHost", () => {
         delegatedChild: false,
       }),
     ).toBe("background-review");
-    expect(host.publishRealtime("chat_thread_updated", "chat", {}, undefined)).toBe("published");
+    await expect(host.publishRealtime("chat_thread_updated", "chat", {}, undefined)).resolves.toBe("published");
     expect(host.commsSend({ message: "hello" } as never)).toBe("sent");
     expect(host.ensureSessionInternalToolGrant("session-1", "tool", "reason")).toBe("grant");
     expect(host.requireExecutedToolResult("tool", {})).toBe("required");
@@ -224,7 +224,7 @@ function createSourceHost(options: { listLlmModels?: boolean } = {}) {
     scheduleChatMemoryContextPrewarm: vi.fn(() => "prewarm"),
     scheduleMemoryMaintenancePostTurnEvaluation: vi.fn(() => "maintenance"),
     scheduleBackgroundReviewIfDue: vi.fn(() => "background-review"),
-    publishRealtime: vi.fn(() => "published"),
+    publishRealtime: vi.fn(async () => "published"),
     ingestEvent: vi.fn(async () => "ingested"),
     commsSend: vi.fn(() => "sent"),
     ensureSessionInternalToolGrant: vi.fn(() => "grant"),

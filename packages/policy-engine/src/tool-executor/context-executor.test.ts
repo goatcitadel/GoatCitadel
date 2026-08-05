@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatRoutedContextSnapshotRecord, ToolInvokeRequest } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage } from "@goatcitadel/storage";
 import { executeRoutedContextTool, listAvailableRoutedContextTools } from "./context-executor.js";
 
 const SNAPSHOT_HASH = "a".repeat(64);
@@ -73,11 +73,11 @@ function snapshot(overrides: Partial<ChatRoutedContextSnapshotRecord> = {}): Cha
   };
 }
 
-function storage(record = snapshot()): Storage {
+function storage(record = snapshot()): AsyncStorage {
   return {
-    routedContextSnapshots: { get: vi.fn(() => record) },
-    chatSessionMeta: { get: vi.fn(() => ({ workspaceId: "workspace-1" })) },
-  } as unknown as Storage;
+    routedContextSnapshots: { get: vi.fn(async () => record) },
+    chatSessionMeta: { get: vi.fn(async () => ({ workspaceId: "workspace-1" })) },
+  } as unknown as AsyncStorage;
 }
 
 function request(toolName: ToolInvokeRequest["toolName"], args: Record<string, unknown> = {}): ToolInvokeRequest {
@@ -200,9 +200,11 @@ describe("routed context tool executor", () => {
     ).rejects.toThrow(/does not match/u);
   });
 
-  it("reports no callable tools without an exact server-authored binding", () => {
-    expect(listAvailableRoutedContextTools({ ...request("session.status"), turnId: undefined }, storage())).toEqual([]);
-    expect(listAvailableRoutedContextTools(request("session.status"), storage())).toEqual([
+  it("reports no callable tools without an exact server-authored binding", async () => {
+    await expect(
+      listAvailableRoutedContextTools({ ...request("session.status"), turnId: undefined }, storage()),
+    ).resolves.toEqual([]);
+    await expect(listAvailableRoutedContextTools(request("session.status"), storage())).resolves.toEqual([
       "context.list",
       "context.grep",
       "context.query",

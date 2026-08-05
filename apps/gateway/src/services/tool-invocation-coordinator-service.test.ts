@@ -3639,8 +3639,8 @@ describe("ToolInvocationCoordinatorService requester-scoped MCP seam (HX-415)", 
 
   it("defers HX-305 effect markers into the runtime effect-dispatch callback", async () => {
     const markExternalCallStarted = vi.fn();
-    let capturedEffectDispatch: (() => void) | undefined;
-    const invoke = vi.fn(async (_input, options: { effectDispatch: () => void }) => {
+    let capturedEffectDispatch: (() => Promise<void>) | undefined;
+    const invoke = vi.fn(async (_input, options: { effectDispatch: () => Promise<void> }) => {
       capturedEffectDispatch = options.effectDispatch;
       return { ok: true, output: {} };
     });
@@ -3659,7 +3659,7 @@ describe("ToolInvocationCoordinatorService requester-scoped MCP seam (HX-415)", 
     // The coordinator never fires the marker early; it fires only when the
     // runtime invokes the effect-dispatch callback at the tools/call write.
     expect(markExternalCallStarted).not.toHaveBeenCalled();
-    capturedEffectDispatch?.();
+    await capturedEffectDispatch?.();
     expect(markExternalCallStarted).toHaveBeenCalledTimes(1);
   });
 

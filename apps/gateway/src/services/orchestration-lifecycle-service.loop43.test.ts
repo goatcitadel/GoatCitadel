@@ -438,9 +438,9 @@ describe("orchestration lifecycle loop43 durable edge behavior", () => {
       }),
     );
 
-    const checkpoints = listRunCheckpoints(harness.host, "run-1", " default ");
+    const checkpoints = await listRunCheckpoints(harness.host, "run-1", " default ");
     expect(checkpoints.length).toBeGreaterThan(0);
-    expect(() => listRunCheckpoints(harness.host, "run-1", "bad workspace")).toThrow(
+    await expect(listRunCheckpoints(harness.host, "run-1", "bad workspace")).rejects.toThrow(
       "workspaceId contains unsupported characters",
     );
   });
@@ -455,7 +455,7 @@ describe("orchestration lifecycle loop43 durable edge behavior", () => {
       },
     });
     vi.mocked(harness.runtime.phaseExecutor.execute).mockImplementation(async (input) => {
-      input.onChildDispatched?.({
+      await input.onChildDispatched?.({
         phaseId: "phase-1",
         childSessionId: "child-session-1",
         childTurnId: "child-turn-1",
@@ -561,7 +561,7 @@ describe("orchestration lifecycle loop43 durable edge behavior", () => {
         version: harness.getDurableRun().version + 1,
       };
       harness.setDurableRun(replacement);
-      input.onChildDispatched?.({
+      await input.onChildDispatched?.({
         phaseId: "phase-1",
         childSessionId: "child-session-1",
         childTurnId: "child-turn-1",
@@ -1091,12 +1091,12 @@ function createHarness(options: HarnessOptions = {}): {
   let run = options.run ?? buildRun();
   let durableRun = options.durableRun ?? buildDurableRun();
   const storage = {
-    runImmediateTransaction: vi.fn(<T>(callback: () => T): T => {
+    runImmediateTransaction: vi.fn(async <T>(callback: () => T | Promise<T>): Promise<Awaited<T>> => {
       const runSnapshot = run;
       const durableRunSnapshot = durableRun;
       const checkpointCount = checkpoints.length;
       try {
-        return callback();
+        return await callback();
       } catch (error) {
         run = runSnapshot;
         durableRun = durableRunSnapshot;

@@ -1,4 +1,4 @@
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { ToolPolicyEngine } from "@goatcitadel/policy-engine";
 import type { MeshService } from "@goatcitadel/mesh-core";
 import type { GatewayRuntimeConfig } from "../config.js";
@@ -74,7 +74,7 @@ export interface GatewayRouteCompositionPort {
   resolveChatRunVariableInput(
     sessionId: string,
     input: import("@goatcitadel/contracts").ChatSendMessageRequest,
-  ): import("@goatcitadel/contracts").ChatSendMessageRequest;
+  ): Promise<import("@goatcitadel/contracts").ChatSendMessageRequest>;
   readonly addonsService: AddonsService;
   readonly addonSlotService: AddonSlotService;
   readonly approvalEffectsService: ApprovalEffectsService;
@@ -169,7 +169,7 @@ export interface GatewayRouteCompositionPort {
   getSessionSummary: RouteDependencyMethod<"sessionsList", "getSessionSummary">;
   getSkillActivationPolicy: RouteDependencyMethod<"skills", "getSkillActivationPolicy">;
   getTranscript: RouteDependencyMethod<"runtimeLifecycle", "getTranscript">;
-  hasRunningTurn(sessionId: string): boolean;
+  hasRunningTurn(sessionId: string): Promise<boolean>;
   hydrateChatPrefsWithAutonomy: chatSessionService.ChatSessionDependencies["hydrateChatPrefsWithAutonomy"];
   ingestChannelMessage: RouteDependencyMethod<"integrationWebhooks", "ingestChannelMessage">;
   ingestEvent: RouteDependencyMethod<"gatewayEvents", "ingestEvent">;

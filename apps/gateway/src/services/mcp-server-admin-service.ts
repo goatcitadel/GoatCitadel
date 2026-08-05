@@ -10,7 +10,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { normalizeSafeEnvKeyNames } from "@goatcitadel/policy-engine";
 import { resolveMcpServerConnectionMode } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { ToolPolicyActorContext } from "@goatcitadel/contracts";
 import { inferMcpCategory, normalizeMcpPolicy } from "./mcp-server-policy.js";
 import { discoverMcpTools } from "./mcp-runtime.js";
@@ -46,24 +46,24 @@ export interface McpServerAdminHost {
   readonly storage: {
     approvalInbox: Pick<Storage["approvalInbox"], "deleteByReceiver">;
   };
-  readMcpServers(): McpServerRecord[];
-  writeMcpServers(servers: McpServerRecord[]): void;
-  patchMcpServerState(serverId: string, patch: Partial<McpServerRecord>): McpServerRecord;
-  readMcpTools(): McpToolRecord[];
-  writeMcpTools(tools: McpToolRecord[]): void;
+  readMcpServers(): Promise<McpServerRecord[]>;
+  writeMcpServers(servers: McpServerRecord[]): Promise<void>;
+  patchMcpServerState(serverId: string, patch: Partial<McpServerRecord>): Promise<McpServerRecord>;
+  readMcpTools(): Promise<McpToolRecord[]>;
+  writeMcpTools(tools: McpToolRecord[]): Promise<void>;
   resolveConnectedMcpTools(server: McpServerRecord, existing: McpToolRecord[]): Promise<McpToolRecord[]>;
   exchangeMcpOAuthCode?(
     server: McpServerRecord,
     code: string,
     stateRecord: McpAuthStateRecord,
   ): Promise<McpAuthStateRecord>;
-  requireMcpServer(serverId: string): McpServerRecord;
-  readMcpAuthState(): Record<string, McpAuthStateRecord>;
-  writeMcpAuthState(state: Record<string, McpAuthStateRecord>): void;
-  publishRealtime(eventType: string, source: string, payload: Record<string, unknown>): void;
+  requireMcpServer(serverId: string): Promise<McpServerRecord>;
+  readMcpAuthState(): Promise<Record<string, McpAuthStateRecord>>;
+  writeMcpAuthState(state: Record<string, McpAuthStateRecord>): Promise<void>;
+  publishRealtime(eventType: string, source: string, payload: Record<string, unknown>): Promise<unknown>;
 }
 
-export function createMcpServer(host: McpServerAdminHost, input: McpServerCreateInput): McpServerRecord {
+export async function createMcpServer(host: McpServerAdminHost, input: McpServerCreateInput): Promise<McpServerRecord> {
   if (isInternalMcpServerUrl(input.url)) {
     throw new Error(buildInternalMcpServerCreateBlockedMessage());
   }
@@ -90,9 +90,9 @@ export function createMcpServer(host: McpServerAdminHost, input: McpServerCreate
     createdAt: now,
     updatedAt: now,
   };
-  const servers = [created, ...host.readMcpServers()];
-  host.writeMcpServers(servers);
-  host.publishRealtime("system", "mcp", {
+  const servers = [created, ...(await host.readMcpServers())];
+  await host.writeMcpServers(servers);
+  await host.publishRealtime("system", "mcp", {
     type: "mcp_server_created",
     serverId: created.serverId,
     transport: created.transport,
@@ -100,17 +100,17 @@ export function createMcpServer(host: McpServerAdminHost, input: McpServerCreate
   return created;
 }
 
-export function updateMcpServer(
+export async function updateMcpServer(
   host: McpServerAdminHost,
   serverId: string,
   input: McpServerUpdateInput,
-): McpServerRecord {
+): Promise<McpServerRecord> {
   if (isInternalMcpServerUrl(input.url)) {
     throw new Error(buildInternalMcpServerCreateBlockedMessage());
   }
   const now = new Date().toISOString();
   let updated: McpServerRecord | undefined;
-  const servers = host.readMcpServers().map((item) => {
+  const servers = (await host.readMcpServers()).map((item) => {
     if (item.serverId !== serverId) {
       return item;
     }
@@ -135,20 +135,20 @@ export function updateMcpServer(
   if (!updated) {
     throw new Error(`Unknown MCP server: ${serverId}`);
   }
-  host.writeMcpServers(servers);
+  await host.writeMcpServers(servers);
   return updated;
 }
 
-export function updateMcpServerPolicy(
+export async function updateMcpServerPolicy(
   host: McpServerAdminHost,
   serverId: string,
   policy: Partial<McpServerPolicy>,
-): McpServerRecord {
-  return updateMcpServer(host, serverId, { policy });
+): Promise<McpServerRecord> {
+  return await updateMcpServer(host, serverId, { policy });
 }
 
 export async function connectMcpServer(host: McpServerAdminHost, serverId: string): Promise<McpServerRecord> {
-  const server = host.requireMcpServer(serverId);
+  const server = await host.requireMcpServer(serverId);
   // HX-415: a requester-scoped server resolves its connection per authenticated
   // requester. It is never connected or discovered globally, and never mutates
   // shared server status, tool cache, or error state. Fail closed BEFORE any
@@ -161,24 +161,24 @@ export async function connectMcpServer(host: McpServerAdminHost, serverId: strin
   if (!isRuntimeSupportedMcpDefinition(server)) {
     throw new Error(buildUnsupportedMcpTransportMessage(server.transport));
   }
-  const connecting = host.patchMcpServerState(serverId, {
+  const connecting = await host.patchMcpServerState(serverId, {
     status: "connecting",
     lastError: undefined,
   });
   try {
-    const tools = host.readMcpTools();
+    const tools = await host.readMcpTools();
     const existing = tools.filter((item) => item.serverId === serverId);
     const resolvedTools = await host.resolveConnectedMcpTools(connecting, existing);
     // Live discovery is authoritative, including a valid empty catalog. Always
     // replace this server's cache so removed tools cannot survive reconnect.
-    host.writeMcpTools([...tools.filter((item) => item.serverId !== serverId), ...resolvedTools]);
-    return host.patchMcpServerState(serverId, {
+    await host.writeMcpTools([...tools.filter((item) => item.serverId !== serverId), ...resolvedTools]);
+    return await host.patchMcpServerState(serverId, {
       status: "connected",
       lastConnectedAt: new Date().toISOString(),
       lastError: undefined,
     });
   } catch (error) {
-    host.patchMcpServerState(serverId, {
+    await host.patchMcpServerState(serverId, {
       status: "error",
       lastError: (error as Error).message,
     });
@@ -186,14 +186,14 @@ export async function connectMcpServer(host: McpServerAdminHost, serverId: strin
   }
 }
 
-export function disconnectMcpServer(host: McpServerAdminHost, serverId: string): McpServerRecord {
-  return host.patchMcpServerState(serverId, {
+export async function disconnectMcpServer(host: McpServerAdminHost, serverId: string): Promise<McpServerRecord> {
+  return await host.patchMcpServerState(serverId, {
     status: "disconnected",
   });
 }
 
-export function startMcpOAuth(host: McpServerAdminHost, serverId: string): McpOAuthStartResponse {
-  const server = host.requireMcpServer(serverId);
+export async function startMcpOAuth(host: McpServerAdminHost, serverId: string): Promise<McpOAuthStartResponse> {
+  const server = await host.requireMcpServer(serverId);
   if (server.authType !== "oauth2") {
     throw new Error("MCP OAuth can only be started for oauth2 servers.");
   }
@@ -213,14 +213,14 @@ export function startMcpOAuth(host: McpServerAdminHost, serverId: string): McpOA
   if (server.oauth.scopes?.length) {
     authorizeUrl.searchParams.set("scope", server.oauth.scopes.join(" "));
   }
-  const authRows = host.readMcpAuthState();
+  const authRows = await host.readMcpAuthState();
   authRows[serverId] = {
     ...(authRows[serverId] ?? {}),
     oauthState: state,
     error: undefined,
     updatedAt: new Date().toISOString(),
   };
-  host.writeMcpAuthState(authRows);
+  await host.writeMcpAuthState(authRows);
   return { authorizeUrl: authorizeUrl.toString(), state };
 }
 
@@ -230,7 +230,7 @@ export async function completeMcpOAuth(
   code: string,
   state?: string,
 ): Promise<McpServerRecord> {
-  const authRows = host.readMcpAuthState();
+  const authRows = await host.readMcpAuthState();
   const authRow = authRows[serverId];
   if (!authRow?.oauthState) {
     throw new Error("No OAuth handshake in progress for this server.");
@@ -241,29 +241,29 @@ export async function completeMcpOAuth(
   if (authRow.oauthState !== state) {
     throw new Error("OAuth state mismatch.");
   }
-  const server = host.requireMcpServer(serverId);
+  const server = await host.requireMcpServer(serverId);
   if (!host.exchangeMcpOAuthCode) {
     throw new Error("MCP OAuth token exchange is not available in this Gateway runtime.");
   }
   authRows[serverId] = await host.exchangeMcpOAuthCode(server, code, authRow);
-  host.writeMcpAuthState(authRows);
-  return connectMcpServer(host, serverId);
+  await host.writeMcpAuthState(authRows);
+  return await connectMcpServer(host, serverId);
 }
 
-export function deleteMcpServer(host: McpServerAdminHost, serverId: string): { deleted: boolean } {
-  const previous = host.readMcpServers();
+export async function deleteMcpServer(host: McpServerAdminHost, serverId: string): Promise<{ deleted: boolean }> {
+  const previous = await host.readMcpServers();
   const next = previous.filter((item) => item.serverId !== serverId);
   const deleted = next.length !== previous.length;
   if (deleted) {
-    host.writeMcpServers(next);
-    host.writeMcpTools(host.readMcpTools().filter((tool) => tool.serverId !== serverId));
-    const authRows = host.readMcpAuthState();
+    await host.writeMcpServers(next);
+    await host.writeMcpTools((await host.readMcpTools()).filter((tool) => tool.serverId !== serverId));
+    const authRows = await host.readMcpAuthState();
     if (authRows[serverId]) {
       delete authRows[serverId];
-      host.writeMcpAuthState(authRows);
+      await host.writeMcpAuthState(authRows);
     }
-    host.storage.approvalInbox.deleteByReceiver("mcp", serverId);
-    host.publishRealtime("system", "mcp", {
+    await host.storage.approvalInbox.deleteByReceiver("mcp", serverId);
+    await host.publishRealtime("system", "mcp", {
       type: "mcp_server_deleted",
       serverId,
     });

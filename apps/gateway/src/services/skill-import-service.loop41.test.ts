@@ -74,7 +74,7 @@ describe("SkillImportService loop41 zip install behavior", () => {
       sourceProvider: "local",
       alreadyInstalled: false,
     });
-    expect(service.listHistory(3)).toEqual([
+    expect(await service.listHistory(3)).toEqual([
       expect.objectContaining({
         action: "install",
         outcome: "accepted",

@@ -8,9 +8,9 @@ import type {
   ChatSessionPrefsRecord,
   ChatSessionRecord,
   IntegrationConnection,
-  IntegrationConnectionUpdateInput,
   PersonalityCatalogResponse,
 } from "@goatcitadel/contracts";
+import type { AsyncStorage } from "@goatcitadel/storage";
 import type { ApprovalResolveResult } from "./approval-types.js";
 import type { ChatCommandOptions } from "./chat-command-service.js";
 import {
@@ -45,58 +45,24 @@ export interface DiscordRouteSessionRecord {
 }
 
 export interface DiscordRuntimeBridgeHost {
-  readonly storage: {
-    runImmediateTransaction<T>(callback: () => T): T;
-    chatSessionBindings: {
-      upsert(
-        input: {
-          sessionId: string;
-          workspaceId: string;
-          transport: "integration";
-          connectionId: string;
-          target: string;
-          writable: boolean;
-        },
-        now?: string,
-      ): void;
-    };
-    chatSessionMeta: {
-      ensure(sessionId: string, now?: string, workspaceId?: string): { workspaceId?: string };
-      get(sessionId: string): { workspaceId?: string } | undefined;
-    };
-    chatSessionPrefs: {
-      ensure(sessionId: string, now?: string): void;
-    };
-    chatSessionProjects: {
-      get(sessionId: string): { projectId: string } | undefined;
-    };
-    integrationConnections: {
-      get(connectionId: string): IntegrationConnection;
-      update(connectionId: string, input: IntegrationConnectionUpdateInput): IntegrationConnection;
-    };
-    sessions: {
-      upsert(input: {
-        sessionId: string;
-        sessionKey: string;
-        kind: string;
-        channel: string;
-        account: string;
-        displayName?: string;
-        timestamp: string;
-      }): unknown;
-    };
-    systemSettings: {
-      get<T>(key: string): { value: T } | undefined;
-      set(key: string, value: unknown): void;
-    };
-  };
+  readonly storage: Pick<
+    AsyncStorage,
+    | "runImmediateTransaction"
+    | "chatSessionBindings"
+    | "chatSessionMeta"
+    | "chatSessionPrefs"
+    | "chatSessionProjects"
+    | "integrationConnections"
+    | "sessions"
+    | "systemSettings"
+  >;
   readonly operatorSummaryCache: {
     invalidate(): void;
   };
-  assignChatSessionProject(sessionId: string, projectId?: string): unknown;
+  assignChatSessionProject(sessionId: string, projectId?: string): Promise<unknown>;
   acceptInboundChannelEvent(input: DurableInboundChannelAcceptInput): Promise<DurableInboundChannelAcceptResult>;
   awaitInboundChannelCommandResult(inboundEventId: string): Promise<InboundChannelCommandResult>;
-  findRemoteActionTokenId(token: string): string | undefined;
+  findRemoteActionTokenId(token: string): Promise<string | undefined>;
   cancelLatestActiveChatTurnForSession(
     sessionId: string,
     cancelledBy?: string,
@@ -108,10 +74,10 @@ export interface DiscordRuntimeBridgeHost {
     durableCancelled?: boolean;
     error?: string;
   }>;
-  ensureChatSessionRuntimeGrants(sessionId: string): void;
-  getPersonalityCatalog?(): PersonalityCatalogResponse;
-  getChatSessionPrefs(sessionId: string): ChatSessionPrefsRecord;
-  hasRunningTurn(sessionId: string): boolean;
+  ensureChatSessionRuntimeGrants(sessionId: string): Promise<void>;
+  getPersonalityCatalog?(): Promise<PersonalityCatalogResponse>;
+  getChatSessionPrefs(sessionId: string): Promise<ChatSessionPrefsRecord>;
+  hasRunningTurn(sessionId: string): Promise<boolean>;
   ingestChannelMessage(
     channel: string,
     dedupeKey: string,
@@ -137,8 +103,8 @@ export interface DiscordRuntimeBridgeHost {
     event: string;
     message: string;
     context?: Record<string, unknown>;
-  }): void;
-  requireChatSession(sessionId: string): ChatSessionRecord;
+  }): void | Promise<void>;
+  requireChatSession(sessionId: string): Promise<ChatSessionRecord>;
   resolveApprovalWithRemoteToken(input: {
     token: string;
     connectorId: string;
@@ -158,13 +124,16 @@ export interface DiscordRuntimeBridgeHost {
     connectionId: string;
     target: string;
     writable: boolean;
-  }): void;
-  updateChatSession(sessionId: string, patch: { title?: string }): unknown;
-  updateChatSessionPrefs(sessionId: string, patch: Record<string, unknown>): unknown;
+  }): Promise<unknown>;
+  updateChatSession(sessionId: string, patch: { title?: string }): Promise<unknown>;
+  updateChatSessionPrefs(sessionId: string, patch: Record<string, unknown>): Promise<unknown>;
 }
 
-export function readDiscordRouteSessions(host: DiscordRuntimeBridgeHost): DiscordRouteSessionRecord[] {
-  return host.storage.systemSettings.get<DiscordRouteSessionRecord[]>(DISCORD_ROUTE_SESSIONS_SETTING_KEY)?.value ?? [];
+export async function readDiscordRouteSessions(host: DiscordRuntimeBridgeHost): Promise<DiscordRouteSessionRecord[]> {
+  return (
+    (await host.storage.systemSettings.get<DiscordRouteSessionRecord[]>(DISCORD_ROUTE_SESSIONS_SETTING_KEY))?.value ??
+    []
+  );
 }
 
 // SECURITY (codex finding #4): Operator allowlist for Discord-side commands
@@ -194,11 +163,14 @@ export function isDiscordChannelOperator(config: Record<string, unknown>, actorI
   return false;
 }
 
-export function writeDiscordRouteSessions(host: DiscordRuntimeBridgeHost, records: DiscordRouteSessionRecord[]): void {
-  host.storage.systemSettings.set(DISCORD_ROUTE_SESSIONS_SETTING_KEY, records);
+export async function writeDiscordRouteSessions(
+  host: DiscordRuntimeBridgeHost,
+  records: DiscordRouteSessionRecord[],
+): Promise<void> {
+  await host.storage.systemSettings.set(DISCORD_ROUTE_SESSIONS_SETTING_KEY, records);
 }
 
-export function resolveDiscordInboundRoute(
+export async function resolveDiscordInboundRoute(
   host: DiscordRuntimeBridgeHost,
   input: {
     connectionId: string;
@@ -207,12 +179,12 @@ export function resolveDiscordInboundRoute(
     room?: string;
     threadId?: string;
   },
-): {
+): Promise<{
   peer?: string;
   room?: string;
   threadId?: string;
-} {
-  const routeSession = readDiscordRouteSessions(host).find(
+}> {
+  const routeSession = (await readDiscordRouteSessions(host)).find(
     (item) => item.connectionId === input.connectionId && item.target === input.target,
   );
   if (!routeSession?.logicalSessionKey) {
@@ -230,7 +202,7 @@ export function resolveDiscordInboundRoute(
   };
 }
 
-export function ensureDiscordChatSession(
+export async function ensureDiscordChatSession(
   host: DiscordRuntimeBridgeHost,
   input: {
     connectionId: string;
@@ -240,8 +212,8 @@ export function ensureDiscordChatSession(
     room?: string;
     threadId?: string;
   },
-): ChatSessionRecord {
-  const route = resolveDiscordInboundRoute(host, input);
+): Promise<ChatSessionRecord> {
+  const route = await resolveDiscordInboundRoute(host, input);
   const resolution = resolveSessionRoute({
     channel: "discord",
     account: input.connectionId,
@@ -250,16 +222,16 @@ export function ensureDiscordChatSession(
     threadId: route.threadId,
   });
   const now = new Date().toISOString();
-  const existingMeta = host.storage.chatSessionMeta.get(resolution.sessionId);
+  const existingMeta = await host.storage.chatSessionMeta.get(resolution.sessionId);
   if (existingMeta?.workspaceId && existingMeta.workspaceId !== DEFAULT_DISCORD_WORKSPACE_ID) {
     throw new Error("stable Discord session key already belongs to another workspace");
   }
-  host.storage.runImmediateTransaction(() => {
-    const lockedMeta = host.storage.chatSessionMeta.get(resolution.sessionId);
+  await host.storage.runImmediateTransaction(async () => {
+    const lockedMeta = await host.storage.chatSessionMeta.get(resolution.sessionId);
     if (lockedMeta?.workspaceId && lockedMeta.workspaceId !== DEFAULT_DISCORD_WORKSPACE_ID) {
       throw new Error("stable Discord session key already belongs to another workspace");
     }
-    host.storage.sessions.upsert({
+    await host.storage.sessions.upsert({
       sessionId: resolution.sessionId,
       sessionKey: resolution.sessionKey,
       kind: resolution.kind,
@@ -268,9 +240,9 @@ export function ensureDiscordChatSession(
       displayName: input.displayName?.trim() || undefined,
       timestamp: now,
     });
-    host.storage.chatSessionMeta.ensure(resolution.sessionId, now, DEFAULT_DISCORD_WORKSPACE_ID);
-    host.storage.chatSessionPrefs.ensure(resolution.sessionId, now);
-    host.storage.chatSessionBindings.upsert(
+    await host.storage.chatSessionMeta.ensure(resolution.sessionId, now, DEFAULT_DISCORD_WORKSPACE_ID);
+    await host.storage.chatSessionPrefs.ensure(resolution.sessionId, now);
+    await host.storage.chatSessionBindings.upsert(
       {
         sessionId: resolution.sessionId,
         workspaceId: DEFAULT_DISCORD_WORKSPACE_ID,
@@ -283,11 +255,11 @@ export function ensureDiscordChatSession(
     );
   });
   host.operatorSummaryCache.invalidate();
-  host.ensureChatSessionRuntimeGrants(resolution.sessionId);
-  return host.requireChatSession(resolution.sessionId);
+  await host.ensureChatSessionRuntimeGrants(resolution.sessionId);
+  return await host.requireChatSession(resolution.sessionId);
 }
 
-export function startNewDiscordRouteSession(
+export async function startNewDiscordRouteSession(
   host: DiscordRuntimeBridgeHost,
   input: {
     connectionId: string;
@@ -298,9 +270,9 @@ export function startNewDiscordRouteSession(
     threadId?: string;
     title?: string;
   },
-): ChatSessionRecord {
-  const sourceSession = ensureDiscordChatSession(host, input);
-  const records = readDiscordRouteSessions(host);
+): Promise<ChatSessionRecord> {
+  const sourceSession = await ensureDiscordChatSession(host, input);
+  const records = await readDiscordRouteSessions(host);
   const now = new Date().toISOString();
   const logicalSessionKey = randomUUID().replaceAll("-", "").slice(0, 12);
   const nextRecord: DiscordRouteSessionRecord = {
@@ -311,21 +283,21 @@ export function startNewDiscordRouteSession(
     createdAt: now,
     updatedAt: now,
   };
-  writeDiscordRouteSessions(host, [
+  await writeDiscordRouteSessions(host, [
     nextRecord,
     ...records.filter((item) => !(item.connectionId === input.connectionId && item.target === input.target)),
   ]);
-  const createdSession = ensureDiscordChatSession(host, input);
+  const createdSession = await ensureDiscordChatSession(host, input);
   nextRecord.sessionId = createdSession.sessionId;
-  writeDiscordRouteSessions(host, [
+  await writeDiscordRouteSessions(host, [
     nextRecord,
     ...records.filter((item) => !(item.connectionId === input.connectionId && item.target === input.target)),
   ]);
-  cloneChatSessionContext(host, sourceSession.sessionId, createdSession.sessionId);
+  await cloneChatSessionContext(host, sourceSession.sessionId, createdSession.sessionId);
   if (input.title?.trim()) {
-    host.updateChatSession(createdSession.sessionId, { title: input.title.trim() });
+    await host.updateChatSession(createdSession.sessionId, { title: input.title.trim() });
   }
-  return host.requireChatSession(createdSession.sessionId);
+  return await host.requireChatSession(createdSession.sessionId);
 }
 
 /**
@@ -348,8 +320,8 @@ export async function acceptDiscordRuntimeSlashCommand(
     metadata?: Record<string, unknown>;
   },
 ): Promise<DurableInboundChannelAcceptResult> {
-  const route = resolveDiscordInboundRoute(host, input);
-  const durableCommand = buildDurableDiscordCommand(host, input.commandText, input.metadata);
+  const route = await resolveDiscordInboundRoute(host, input);
+  const durableCommand = await buildDurableDiscordCommand(host, input.commandText, input.metadata);
   return host.acceptInboundChannelEvent({
     channel: "discord",
     connectionId: input.connectionId,
@@ -374,11 +346,11 @@ export async function acceptDiscordRuntimeSlashCommand(
 
 type DiscordApprovalDecision = "approve" | "reject";
 
-function buildDurableDiscordCommand(
+async function buildDurableDiscordCommand(
   host: DiscordRuntimeBridgeHost,
   commandText: string,
   metadata: Record<string, unknown> | undefined,
-): { commandText: string; metadata?: Record<string, unknown> } {
+): Promise<{ commandText: string; metadata?: Record<string, unknown> }> {
   const command = normalizeChannelCommandInput(commandText, { platform: "discord" });
   if (!command.approvalDecision || !command.command) {
     return { commandText, metadata };
@@ -386,7 +358,7 @@ function buildDurableDiscordCommand(
   if (!command.approvalToken) {
     return { commandText: command.command, metadata };
   }
-  const approvalActionId = host.findRemoteActionTokenId(command.approvalToken);
+  const approvalActionId = await host.findRemoteActionTokenId(command.approvalToken);
   return {
     // The raw single-use bearer value must never cross the durable boundary.
     commandText: command.command,
@@ -514,7 +486,7 @@ export async function handleDiscordRuntimeSlashCommand(
   const normalizedCommand = normalizeChannelCommandInput(commandText, { platform: "discord" });
   if (normalizedCommand.name === "new") {
     const title = normalizedCommand.argText;
-    const session = startNewDiscordRouteSession(host, {
+    const session = await startNewDiscordRouteSession(host, {
       connectionId: input.connectionId,
       target: input.target,
       displayName: input.displayName,
@@ -554,7 +526,7 @@ export async function handleDiscordRuntimeSlashCommand(
     return handleDiscordSharedChannelCommand(host, input, normalizedCommand);
   }
 
-  const session = ensureDiscordChatSession(host, {
+  const session = await ensureDiscordChatSession(host, {
     connectionId: input.connectionId,
     target: input.target,
     displayName: input.displayName,
@@ -563,7 +535,7 @@ export async function handleDiscordRuntimeSlashCommand(
     threadId: input.threadId,
   });
   const sharedDefinition = normalizedCommand.name ? findSharedChannelCommand(normalizedCommand.name) : undefined;
-  if (!sharedDefinition?.bypassesActiveRunGuard && host.hasRunningTurn(session.sessionId)) {
+  if (!sharedDefinition?.bypassesActiveRunGuard && (await host.hasRunningTurn(session.sessionId))) {
     return "A GoatCitadel run is already active for this Discord channel. Use /status to inspect it or /stop to cancel it before starting another request.";
   }
   const result = await host.parseChatCommand(session.sessionId, commandText, {
@@ -583,10 +555,10 @@ async function handleDiscordSharedChannelCommand(
   input: Parameters<typeof handleDiscordRuntimeSlashCommand>[1],
   command: ReturnType<typeof normalizeChannelCommandInput>,
 ): Promise<string> {
-  const connection = host.storage.integrationConnections.get(input.connectionId);
+  const connection = await host.storage.integrationConnections.get(input.connectionId);
   switch (command.name) {
     case "status":
-      return renderDiscordStatus(connection, input.target, host.getPersonalityCatalog?.());
+      return renderDiscordStatus(connection, input.target, await host.getPersonalityCatalog?.());
     case "sethome": {
       // SECURITY (codex finding #4): `/sethome` rewrites operator config
       // (`defaultChannelId`/`defaultDiscordChannelId`) and reroutes future
@@ -602,7 +574,7 @@ async function handleDiscordSharedChannelCommand(
           "Ask an operator to add your Discord user ID to the operator allowlist in GoatCitadel settings.",
         ].join(" ");
       }
-      host.storage.integrationConnections.update(input.connectionId, {
+      await host.storage.integrationConnections.update(input.connectionId, {
         config: {
           ...connection.config,
           defaultChannelId: input.target,
@@ -621,9 +593,9 @@ async function handleDiscordSharedChannelCommand(
     case "tools":
       return renderDiscordTools();
     case "personality":
-      return handleDiscordPersonalityCommand(host, input, command.argText, connection);
+      return await handleDiscordPersonalityCommand(host, input, command.argText, connection);
     case "stop": {
-      const session = ensureDiscordChatSession(host, input);
+      const session = await ensureDiscordChatSession(host, input);
       const outcome = await host.cancelLatestActiveChatTurnForSession(session.sessionId, `discord:${input.actorId}`);
       if (outcome.status === "no_active_run") {
         return "No active Discord channel run is currently running for this channel.";
@@ -691,13 +663,13 @@ function renderDiscordTools(): string {
   ].join("\n");
 }
 
-function handleDiscordPersonalityCommand(
+async function handleDiscordPersonalityCommand(
   host: DiscordRuntimeBridgeHost,
   input: Parameters<typeof handleDiscordRuntimeSlashCommand>[1],
   argument: string,
   connection: IntegrationConnection,
-): string {
-  const catalog = host.getPersonalityCatalog?.() ?? {
+): Promise<string> {
+  const catalog = (await host.getPersonalityCatalog?.()) ?? {
     items: listPersonalityPresets(),
     defaultPersonalityId: "default",
   };
@@ -723,7 +695,7 @@ function handleDiscordPersonalityCommand(
   } else {
     nextPersonalities[input.target] = preset.id;
   }
-  host.storage.integrationConnections.update(input.connectionId, {
+  await host.storage.integrationConnections.update(input.connectionId, {
     config: {
       ...connection.config,
       channelPersonalities: nextPersonalities,
@@ -783,7 +755,7 @@ export async function handleDiscordRuntimeInbound(
     metadata?: Record<string, unknown>;
   },
 ): Promise<void> {
-  const route = resolveDiscordInboundRoute(host, input);
+  const route = await resolveDiscordInboundRoute(host, input);
   await host.acceptInboundChannelEvent({
     channel: "discord",
     connectionId: input.connectionId,
@@ -806,11 +778,11 @@ export async function handleDiscordRuntimeInbound(
   });
 }
 
-export function cloneChatSessionContext(
+export async function cloneChatSessionContext(
   host: DiscordRuntimeBridgeHost,
   sourceSessionId: string,
   targetSessionId: string,
-): void {
+): Promise<void> {
   if (sourceSessionId === targetSessionId) {
     return;
   }
@@ -819,10 +791,10 @@ export function cloneChatSessionContext(
     createdAt: _sourceCreatedAt,
     updatedAt: _sourceUpdatedAt,
     ...prefsPatch
-  } = host.getChatSessionPrefs(sourceSessionId);
-  host.updateChatSessionPrefs(targetSessionId, prefsPatch);
-  const projectId = host.storage.chatSessionProjects.get(sourceSessionId)?.projectId;
+  } = await host.getChatSessionPrefs(sourceSessionId);
+  await host.updateChatSessionPrefs(targetSessionId, prefsPatch);
+  const projectId = (await host.storage.chatSessionProjects.get(sourceSessionId))?.projectId;
   if (projectId) {
-    host.assignChatSessionProject(targetSessionId, projectId);
+    await host.assignChatSessionProject(targetSessionId, projectId);
   }
 }

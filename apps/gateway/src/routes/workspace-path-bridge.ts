@@ -71,8 +71,8 @@ export interface WorkspacePathBridgeRouteService {
     request: WorkspacePathBridgeResolveRequest,
     options?: { signal?: AbortSignal },
   ): Promise<WorkspacePathBridgeSnapshotRecord>;
-  inspect(workspaceId: string, snapshotId: string): WorkspacePathBridgeSnapshotRecord;
-  list(workspaceId: string, limit?: number): WorkspacePathBridgeSnapshotRecord[];
+  inspect(workspaceId: string, snapshotId: string): Promise<WorkspacePathBridgeSnapshotRecord>;
+  list(workspaceId: string, limit?: number): Promise<WorkspacePathBridgeSnapshotRecord[]>;
 }
 
 export interface WorkspacePathBridgeRoutesOptions {
@@ -122,7 +122,7 @@ export const workspacePathBridgeRoutes: FastifyPluginAsync<WorkspacePathBridgeRo
       return reply.code(400).send({ error: "Invalid workspace path bridge inspection query." });
     }
     try {
-      return reply.send(options.service.inspect(query.data.workspaceId, params.data.snapshotId));
+      return reply.send(await options.service.inspect(query.data.workspaceId, params.data.snapshotId));
     } catch (error) {
       if (isWorkspaceScopeMiss(error)) {
         return reply.code(404).send({ error: "Workspace path bridge snapshot not found." });
@@ -140,7 +140,7 @@ export const workspacePathBridgeRoutes: FastifyPluginAsync<WorkspacePathBridgeRo
     try {
       return reply.send({
         workspaceId: query.data.workspaceId,
-        snapshots: options.service.list(query.data.workspaceId, query.data.limit ?? 50),
+        snapshots: await options.service.list(query.data.workspaceId, query.data.limit ?? 50),
       });
     } catch (error) {
       return sendRouteError(reply, error, request.log);

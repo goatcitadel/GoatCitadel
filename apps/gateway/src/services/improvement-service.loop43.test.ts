@@ -2,7 +2,7 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Storage } from "@goatcitadel/storage";
+import { createLocalAsyncStorage, Storage } from "@goatcitadel/storage";
 import {
   ImprovementService,
   type ImprovementServiceCallbacks,
@@ -36,10 +36,10 @@ afterEach(() => {
 describe("ImprovementService loop43 weekly scheduler behavior", () => {
   it("does not run replay work without an enabled weekly cron job or outside the scheduled window", async () => {
     vi.useFakeTimers({ now: new Date("2026-05-15T17:00:00.000Z") });
-    const harness = createHarness();
+    const harness = await createHarness();
 
     await harness.service.runWeeklyImprovementSchedulerIfDue({ force: true });
-    expect(harness.service.listDecisionReplayRuns(5)).toEqual([]);
+    expect(await harness.service.listDecisionReplayRuns(5)).toEqual([]);
 
     await harness.service.ensureWeeklyImprovementCronJob();
     const enabledJob = harness.storage.cronJobs.get(IMPROVEMENT_WEEKLY_JOB_ID);
@@ -53,7 +53,7 @@ describe("ImprovementService loop43 weekly scheduler behavior", () => {
     );
 
     await harness.service.runWeeklyImprovementSchedulerIfDue({ force: true });
-    expect(harness.service.listDecisionReplayRuns(5)).toEqual([]);
+    expect(await harness.service.listDecisionReplayRuns(5)).toEqual([]);
 
     harness.storage.cronJobs.upsert(
       {
@@ -64,13 +64,13 @@ describe("ImprovementService loop43 weekly scheduler behavior", () => {
     );
     await harness.service.runWeeklyImprovementSchedulerIfDue();
 
-    expect(harness.service.listDecisionReplayRuns(5)).toEqual([]);
+    expect(await harness.service.listDecisionReplayRuns(5)).toEqual([]);
     expect(harness.published).toEqual([]);
   });
 
   it("runs a forced weekly replay audit, persists the report, and advances the cron watermark", async () => {
     vi.useFakeTimers({ now: new Date("2026-05-17T09:30:00.000Z") });
-    const harness = createHarness();
+    const harness = await createHarness();
     await harness.service.ensureWeeklyImprovementCronJob();
     // First-run default is disabled (codex finding #27). Opt the operator in
     // before forcing the run, since the scheduler skips disabled jobs even
@@ -80,7 +80,7 @@ describe("ImprovementService loop43 weekly scheduler behavior", () => {
 
     await harness.service.runWeeklyImprovementSchedulerIfDue({ force: true });
 
-    const [run] = harness.service.listDecisionReplayRuns(5);
+    const [run] = await harness.service.listDecisionReplayRuns(5);
     expect(run).toMatchObject({
       triggerMode: "manual",
       sampleSize: 500,
@@ -92,7 +92,7 @@ describe("ImprovementService loop43 weekly scheduler behavior", () => {
     });
     expect(run?.reportId).toBeDefined();
 
-    const [report] = harness.service.listImprovementReports(5);
+    const [report] = await harness.service.listImprovementReports(5);
     expect(report).toMatchObject({
       reportId: run?.reportId,
       runId: run?.runId,
@@ -127,7 +127,7 @@ describe("ImprovementService loop43 weekly scheduler behavior", () => {
   });
 });
 
-function createHarness(): Harness {
+async function createHarness(): Promise<Harness> {
   const rootDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "gc-improvement-loop43-"));
   const transcriptsDir = path.join(rootDir, "transcripts");
   const auditDir = path.join(rootDir, "audit");
@@ -140,12 +140,12 @@ function createHarness(): Harness {
   });
   const published: Harness["published"] = [];
   const ctx: ImprovementServiceContext = {
-    storage,
+    storage: createLocalAsyncStorage(storage),
     cronSpecOwner: {
       reconcileSpec: async (cronSpec) => storage.cronJobs.reconcileSpec(cronSpec),
     },
     gatewaySql: storage.gatewaySql,
-    publishRealtime: (channel, topic, payload) => {
+    publishRealtime: async (channel, topic, payload) => {
       published.push({ channel, topic, payload });
     },
     requireFeatureEnabled: () => undefined,
@@ -170,10 +170,12 @@ function createHarness(): Harness {
     backgroundTasks: new Set<Promise<void>>(),
     closing: false,
   } as unknown as ImprovementServiceCallbacks;
+  const service = new ImprovementService(ctx, callbacks);
+  await service.initialize();
   const harness = {
     rootDir,
     storage,
-    service: new ImprovementService(ctx, callbacks),
+    service,
     published,
   };
   harnesses.push(harness);

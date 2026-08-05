@@ -34,7 +34,7 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
     }
   });
 
-  it("stores the bearer before enqueueing an opaque durable delivery", () => {
+  it("stores the bearer before enqueueing an opaque durable delivery", async () => {
     const rawToken = `grat_${"q".repeat(43)}`;
     const tokenRef = "keychain:goatcitadel:approval-remote-action:rat_123";
     const createDurableRun = vi.fn(() => ({ runId: "delivery-run-1" }));
@@ -43,7 +43,7 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
       delete: vi.fn(),
     };
 
-    const run = enqueueApprovalRemoteTokenConnectorDelivery(
+    const run = await enqueueApprovalRemoteTokenConnectorDelivery(
       {
         tokenSecrets,
         requestAttribution: { traceId: "trace-1", originSurface: "chat" },
@@ -70,7 +70,7 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
     );
   });
 
-  it("returns committed durable truth and preserves its secret when post-commit publication fails", () => {
+  it("returns committed durable truth and preserves its secret when post-commit publication fails", async () => {
     const rawToken = `grat_${"c".repeat(43)}`;
     const tokenRef = "keychain:goatcitadel:approval-remote-action:rat_committed";
     const committedRun = { runId: "delivery-run-committed", status: "queued" } as never;
@@ -90,7 +90,7 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
       );
     });
 
-    const run = enqueueApprovalRemoteTokenConnectorDelivery(
+    const run = await enqueueApprovalRemoteTokenConnectorDelivery(
       {
         tokenSecrets,
         requestAttribution: {},
@@ -111,7 +111,7 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
     expect(tokenSecrets.delete).not.toHaveBeenCalled();
   });
 
-  it("deletes an uncommitted secret when durable creation fails before commit", () => {
+  it("deletes an uncommitted secret when durable creation fails before commit", async () => {
     const rawToken = `grat_${"f".repeat(43)}`;
     const tokenRef = "keychain:goatcitadel:approval-remote-action:rat_uncommitted";
     const tokenSecrets = {
@@ -122,7 +122,7 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
       throw new Error("checkpoint write unavailable");
     });
 
-    expect(() =>
+    await expect(
       enqueueApprovalRemoteTokenConnectorDelivery(
         {
           tokenSecrets,
@@ -139,11 +139,11 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
           },
         },
       ),
-    ).toThrow("checkpoint write unavailable");
+    ).rejects.toThrow("checkpoint write unavailable");
     expect(tokenSecrets.delete).toHaveBeenCalledWith(tokenRef);
   });
 
-  it("does not fail token issuance when cleanup of an undeliverable connector secret is deferred", () => {
+  it("does not fail token issuance when cleanup of an undeliverable connector secret is deferred", async () => {
     const rawToken = `grat_${"z".repeat(43)}`;
     const tokenRef = "keychain:goatcitadel:approval-remote-action:rat_deferred_cleanup";
     const tokenSecrets = {
@@ -153,28 +153,24 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
       }),
     };
     const createDurableRun = vi.fn();
-    let run: ReturnType<typeof enqueueApprovalRemoteTokenConnectorDelivery>;
-
-    expect(() => {
-      run = enqueueApprovalRemoteTokenConnectorDelivery(
-        {
-          tokenSecrets,
-          requestAttribution: {},
-          createDurableRun: createDurableRun as never,
+    const run = await enqueueApprovalRemoteTokenConnectorDelivery(
+      {
+        tokenSecrets,
+        requestAttribution: {},
+        createDurableRun: createDurableRun as never,
+      },
+      {
+        approval: createApproval(),
+        connector: createConnector("browser", "degraded", ["approvals", "interactive_actions"]),
+        tokenRecord: {
+          token: rawToken,
+          tokenId: "rat_deferred_cleanup",
+          expiresAt: "2099-03-20T12:00:00.000Z",
         },
-        {
-          approval: createApproval(),
-          connector: createConnector("browser", "degraded", ["approvals", "interactive_actions"]),
-          tokenRecord: {
-            token: rawToken,
-            tokenId: "rat_deferred_cleanup",
-            expiresAt: "2099-03-20T12:00:00.000Z",
-          },
-        },
-      );
-    }).not.toThrow();
+      },
+    );
 
-    expect(run!).toBeUndefined();
+    expect(run).toBeUndefined();
     expect(tokenSecrets.store).toHaveBeenCalledWith("rat_deferred_cleanup", rawToken);
     expect(tokenSecrets.delete).toHaveBeenCalledTimes(1);
     expect(tokenSecrets.delete).toHaveBeenCalledWith(tokenRef);
@@ -332,7 +328,7 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
     });
   });
 
-  it("keeps unsupported integration providers on Mission Control resolution without storing a bearer", () => {
+  it("keeps unsupported integration providers on Mission Control resolution without storing a bearer", async () => {
     const rawToken = `grat_${"u".repeat(43)}`;
     const createDurableRun = vi.fn(() => ({ runId: "delivery-run-unsupported" }));
     const tokenSecrets = {
@@ -350,7 +346,7 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
       },
     );
 
-    const run = enqueueApprovalRemoteTokenConnectorDelivery(
+    const run = await enqueueApprovalRemoteTokenConnectorDelivery(
       {
         tokenSecrets,
         requestAttribution: {},

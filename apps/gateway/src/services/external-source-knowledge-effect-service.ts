@@ -21,7 +21,7 @@ import {
   buildApprovalEffectIdempotencyKey,
   buildExternalSourceKnowledgeDocumentBinding,
   sealExternalSourceKnowledgeLink,
-  type Storage,
+  type AsyncStorage as Storage,
 } from "@goatcitadel/storage";
 import {
   ExternalSourceAttachmentService,
@@ -84,7 +84,7 @@ export interface ExternalSourceKnowledgeSnapshotPolicyPort {
     itemId: string;
     approvalId: string;
     normalizedArtifactSha256: string;
-  }): ExternalSourceKnowledgeSnapshotPolicyDecision;
+  }): Promise<ExternalSourceKnowledgeSnapshotPolicyDecision>;
 }
 
 interface ExternalSourceKnowledgeEffectServiceClock {
@@ -99,10 +99,10 @@ export interface ExternalSourceKnowledgeEffectServiceDependencies {
    */
   requests: Pick<ExternalSourceAttachmentService, "buildKnowledgeSnapshotRequest" | "readAttachedExternalContext">;
   approvals: Pick<Storage["approvals"], "createDeterministicDetachedWithTtlDuration" | "get">;
-  links: Pick<Storage["externalSourceKnowledgeLinks"], "materializeApprovedSnapshotWithJourney">;
+  links: Pick<Storage["externalSourceKnowledgeLinks"], "find" | "materializeApprovedSnapshotWithJourneyResolved">;
   journeys: Pick<Storage["governanceJourneyEvents"], "create">;
   policy: ExternalSourceKnowledgeSnapshotPolicyPort;
-  runImmediateTransaction: <T>(callback: () => T) => T;
+  runImmediateTransaction: <T>(callback: () => T | Promise<T>) => Promise<Awaited<T>>;
   clock?: ExternalSourceKnowledgeEffectServiceClock;
 }
 
@@ -273,8 +273,8 @@ export class ExternalSourceKnowledgeEffectService {
     throwIfAborted(signal);
     const approvalId = deriveExternalSourceKnowledgeSnapshotApprovalId(material.payload);
     try {
-      return this.dependencies.runImmediateTransaction(() => {
-        const existing = this.findApproval(approvalId);
+      return await this.dependencies.runImmediateTransaction(async () => {
+        const existing = await this.findApproval(approvalId);
         if (existing) {
           if (
             existing.kind !== EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_APPROVAL_KIND ||
@@ -282,7 +282,7 @@ export class ExternalSourceKnowledgeEffectService {
           ) {
             throw new ExternalSourceKnowledgeEffectServiceError("approval_conflict");
           }
-          this.commitRequestJourney(material.payload, approvalId, actor, existing.createdAt);
+          await this.commitRequestJourney(material.payload, approvalId, actor, existing.createdAt);
           return {
             schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,
             approval: existing,
@@ -290,7 +290,7 @@ export class ExternalSourceKnowledgeEffectService {
             disposition: "replayed" as const,
           };
         }
-        const stored = this.dependencies.approvals.createDeterministicDetachedWithTtlDuration(
+        const stored = await this.dependencies.approvals.createDeterministicDetachedWithTtlDuration(
           {
             approvalId,
             kind: material.approvalKind,
@@ -307,7 +307,7 @@ export class ExternalSourceKnowledgeEffectService {
           },
           EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_APPROVAL_TTL_MS,
         );
-        this.commitRequestJourney(material.payload, approvalId, actor, stored.approval.createdAt);
+        await this.commitRequestJourney(material.payload, approvalId, actor, stored.approval.createdAt);
         return {
           schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,
           approval: stored.approval,
@@ -337,7 +337,7 @@ export class ExternalSourceKnowledgeEffectService {
   ): Promise<ExternalSourceKnowledgeSnapshotApplyResult> {
     assertSignal(signal);
     const input = normalizeExternalSourceKnowledgeSnapshotApplyInput(rawInput);
-    const approval = this.requireWorkspaceApproval(input.workspaceId, input.approvalId);
+    const approval = await this.requireWorkspaceApproval(input.workspaceId, input.approvalId);
     const payload = readApprovalPayload(approval);
     if (payload.workspaceId !== input.workspaceId) {
       throw new ExternalSourceKnowledgeEffectServiceError("not_found");
@@ -456,25 +456,29 @@ export class ExternalSourceKnowledgeEffectService {
     };
 
     try {
-      const materialized = this.dependencies.links.materializeApprovedSnapshotWithJourney({
-        link,
-        documentTitle: `External source snapshot ${payload.itemId}`,
-        chunks,
-        threadAttachment,
-        effect,
-        approvalExpiryCutoffIso: nowIso,
-        createdAt: nowIso,
-        evaluatePolicy: () =>
-          this.dependencies.policy.evaluateKnowledgeSnapshotApply({
-            workspaceId: payload.workspaceId,
-            sourceId: payload.sourceId,
-            importId: payload.importId,
-            itemId: payload.itemId,
-            approvalId: approval.approvalId,
-            normalizedArtifactSha256: payload.normalizedArtifactSha256,
-          }),
-        buildJourneyEvents: (storedLink, chunkCount) =>
-          this.buildApplyJourneyEvents(storedLink, chunkCount, payload, actor),
+      const materialized = await this.dependencies.runImmediateTransaction(async () => {
+        const policyDecision = await this.dependencies.policy.evaluateKnowledgeSnapshotApply({
+          workspaceId: payload.workspaceId,
+          sourceId: payload.sourceId,
+          importId: payload.importId,
+          itemId: payload.itemId,
+          approvalId: approval.approvalId,
+          normalizedArtifactSha256: payload.normalizedArtifactSha256,
+        });
+        const storedLink = await this.dependencies.links.find(link.workspaceId, link.linkId);
+        const effectiveLink = storedLink ?? link;
+        const journeyEvents = this.buildApplyJourneyEvents(effectiveLink, chunks.length, payload, actor);
+        return await this.dependencies.links.materializeApprovedSnapshotWithJourneyResolved({
+          link,
+          documentTitle: `External source snapshot ${payload.itemId}`,
+          chunks,
+          threadAttachment,
+          effect,
+          approvalExpiryCutoffIso: nowIso,
+          createdAt: nowIso,
+          policyDecision,
+          journeyEvents,
+        });
       });
       return {
         schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,
@@ -530,13 +534,13 @@ export class ExternalSourceKnowledgeEffectService {
     return events;
   }
 
-  private commitRequestJourney(
+  private async commitRequestJourney(
     payload: ExternalSourceKnowledgeSnapshotApprovalPayload,
     approvalId: string,
     actor: ExternalSourceRequestActor,
     occurredAt: string,
-  ): void {
-    this.dependencies.journeys.create(
+  ): Promise<void> {
+    await this.dependencies.journeys.create(
       buildExternalSourceKnowledgeSnapshotJourneyEvent({
         action: "approval_requested",
         payload,
@@ -547,8 +551,8 @@ export class ExternalSourceKnowledgeEffectService {
     );
   }
 
-  private requireWorkspaceApproval(workspaceId: string, approvalId: string): ApprovalRequest {
-    const approval = this.findApproval(approvalId);
+  private async requireWorkspaceApproval(workspaceId: string, approvalId: string): Promise<ApprovalRequest> {
+    const approval = await this.findApproval(approvalId);
     if (
       !approval ||
       approval.kind !== EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_APPROVAL_KIND ||
@@ -559,9 +563,9 @@ export class ExternalSourceKnowledgeEffectService {
     return approval;
   }
 
-  private findApproval(approvalId: string): ApprovalRequest | undefined {
+  private async findApproval(approvalId: string): Promise<ApprovalRequest | undefined> {
     try {
-      return this.dependencies.approvals.get(approvalId);
+      return await this.dependencies.approvals.get(approvalId);
     } catch (error) {
       if (error instanceof NotFoundError) return undefined;
       throw error;

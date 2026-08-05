@@ -1,5 +1,5 @@
 import type { ApprovalEffectRecord, ApprovalRequest } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { deriveApprovalResolutionEffectsResult } from "./approval-resolution-effects-service.js";
 import { readApprovalReplay } from "./approval-replay-reader.js";
 import type { ApprovalResolveResult } from "./approval-types.js";
@@ -18,22 +18,22 @@ export function withApprovalFollowUp(approval: ApprovalRequest, effects: Approva
 }
 
 /** Re-reads effect truth after commit and projects the truthful API result. */
-export function buildApprovalResolveResult(
+export async function buildApprovalResolveResult(
   storage: ApprovalResultStorage,
   approvalInput: ApprovalRequest,
   effects: ApprovalEffectRecord[],
-): ApprovalResolveResult {
+): Promise<ApprovalResolveResult> {
   const resolutionEffects = deriveApprovalResolutionEffectsResult(effects);
   const wakeRunId = resolutionEffects?.approvalWaitDurableRunId;
   let approval = approvalInput;
   if (wakeRunId && approval.linkage?.durableRunId !== wakeRunId) {
-    approval = storage.approvals.mergeLinkage(approval.approvalId, { durableRunId: wakeRunId });
+    approval = await storage.approvals.mergeLinkage(approval.approvalId, { durableRunId: wakeRunId });
   }
   approval = withApprovalFollowUp(approval, effects);
   return {
     approval,
     effects,
-    replay: readApprovalReplay(storage, approval, effects),
+    replay: await readApprovalReplay(storage, approval, effects),
     durableRunId: wakeRunId,
     resolutionEffects,
   };

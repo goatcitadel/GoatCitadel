@@ -14,7 +14,7 @@ import type {
   ToolPolicyConfig,
 } from "@goatcitadel/contracts";
 import { coerceRetryAfterMs } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage } from "@goatcitadel/storage";
 import { hasVerifiedApprovalBypass } from "./approval-bypass.js";
 import { assertReadPathAllowed, assertWritePathInJail, resolveReadPathAccess } from "./sandbox/path-jail.js";
 import { assertHostAllowed, fetchAllowlistedOnce, redactUrlForError } from "./sandbox/network-guard.js";
@@ -54,6 +54,8 @@ export { resolveFixedOutboundHostsForTool } from "./tool-executor/fixed-outbound
 const execFileAsync = promisify(execFile);
 const SHELL_EXEC_DEFAULT_TIMEOUT_MS = 20000;
 const SHELL_EXEC_MAX_BUFFER_BYTES = 1024 * 1024;
+const GIT_DIFF_SNIPPET_BYTES = 12_000;
+const GIT_DIFF_ERROR_BYTES = 4_000;
 let shellExecTimeoutMs = SHELL_EXEC_DEFAULT_TIMEOUT_MS;
 
 /**
@@ -84,7 +86,7 @@ export interface ToolExecutorRuntimeHooks {
   /** Remove a protected approval action bearer after a terminal provider outcome. */
   deleteApprovalActionTokenSecret?: (secretRef: string) => void;
   /** Revalidate authenticated callback ingress immediately before a protected provider send. */
-  isApprovalActionConnectorReady?: (connectionId: string) => boolean;
+  isApprovalActionConnectorReady?: (connectionId: string) => Promise<boolean>;
   /** Called at the concrete provider or irreversible mutation boundary. */
   beforeExternalSideEffect?: () => void;
   /**
@@ -120,7 +122,7 @@ export interface ToolExecutorRuntimeHooks {
    */
   subagentFanout?: (request: ToolInvokeRequest) => Promise<Record<string, unknown>>;
   /** Gateway-owned canonical status projection used by the model-safe `session.status` tool. */
-  getChatSessionStatus?: (sessionId: string) => ChatSessionStatusModelProjection;
+  getChatSessionStatus?: (sessionId: string) => Promise<ChatSessionStatusModelProjection>;
   /** Gateway-owned governed attention request; operator-authored rules select external targets. */
   requestNotification?: (request: ToolInvokeRequest, input: NotifyRequest) => Promise<Record<string, unknown>>;
   /** Gateway-bound assistant proposal. The model cannot supply runtime identity or apply the document mutation. */
@@ -179,7 +181,7 @@ function resolveToolActorId(request: ToolInvokeRequest): string {
 const executeKnowledgeFamily = (
   request: ToolInvokeRequest,
   config: ToolPolicyConfig,
-  storage: Storage,
+  storage: AsyncStorage,
   runtimeHooks: ToolExecutorRuntimeHooks,
 ) =>
   executeKnowledgeTool(request, config, storage, {
@@ -198,7 +200,7 @@ const executeKnowledgeFamily = (
 export async function executeTool(
   request: ToolInvokeRequest,
   config: ToolPolicyConfig,
-  storage: Storage,
+  storage: AsyncStorage,
   runtimeHooks: ToolExecutorRuntimeHooks = {},
 ): Promise<Record<string, unknown>> {
   const browserContentGuard = scanBrowserContentGuard(request.args);
@@ -219,7 +221,7 @@ export async function executeTool(
     const rawResult = await executeBrowserTool(request.toolName, request.args, config, {
       sessionId: request.sessionId,
       signal: request.signal,
-      matchedGrantAllowedHosts: resolveExecutionGrantAllowedHosts(request, storage),
+      matchedGrantAllowedHosts: await resolveExecutionGrantAllowedHosts(request, storage),
       fullWebAccess: hasFullWebAccess(request),
       actorId: resolveToolActorId(request),
       ...(request.runId ? { runId: request.runId } : {}),
@@ -261,7 +263,7 @@ export async function executeTool(
     case "session.status":
       return finalizeToolResult(
         runtimeHooks.getChatSessionStatus
-          ? { ...runtimeHooks.getChatSessionStatus(request.sessionId) }
+          ? { ...(await runtimeHooks.getChatSessionStatus(request.sessionId)) }
           : {
               sessionId: request.sessionId,
               status: "unavailable",
@@ -360,7 +362,7 @@ export async function executeTool(
           request,
           config,
           storage,
-          resolveExecutionGrantAllowedHosts(request, storage),
+          await resolveExecutionGrantAllowedHosts(request, storage),
           runtimeHooks,
         ),
       );
@@ -440,7 +442,7 @@ function timeNow() {
   };
 }
 
-async function httpGet(request: ToolInvokeRequest, config: ToolPolicyConfig, storage?: Storage) {
+async function httpGet(request: ToolInvokeRequest, config: ToolPolicyConfig, storage?: AsyncStorage) {
   const args = request.args;
   const url = required(args.url, "url");
   const res = await fetchAllowlisted(
@@ -448,7 +450,7 @@ async function httpGet(request: ToolInvokeRequest, config: ToolPolicyConfig, sto
     { method: "GET" },
     resolveNetworkAllowlist(request, config),
     request.signal,
-    resolveExecutionGrantAllowedHosts(request, storage),
+    await resolveExecutionGrantAllowedHosts(request, storage),
   );
   const text = await res.response.text();
   return {
@@ -464,14 +466,14 @@ async function httpGet(request: ToolInvokeRequest, config: ToolPolicyConfig, sto
 async function httpPost(
   request: ToolInvokeRequest,
   config: ToolPolicyConfig,
-  storage: Storage | undefined,
+  storage: AsyncStorage | undefined,
   runtimeHooks: ToolExecutorRuntimeHooks,
 ) {
   const args = request.args;
   const url = required(args.url, "url");
   const body = JSON.stringify(args.body ?? {});
   const allowlist = config.sandbox.networkAllowlist;
-  const grantAllowlist = resolveExecutionGrantAllowedHosts(request, storage);
+  const grantAllowlist = await resolveExecutionGrantAllowedHosts(request, storage);
   assertHostAllowed(url, allowlist);
   if (grantAllowlist && grantAllowlist.length > 0) {
     assertHostAllowed(url, grantAllowlist);
@@ -512,14 +514,14 @@ async function httpPost(
 async function shellExec(
   request: ToolInvokeRequest,
   config: ToolPolicyConfig,
-  storage: Storage,
+  storage: AsyncStorage,
   runtimeHooks: ToolExecutorRuntimeHooks,
 ) {
   const args = request.args;
   const command = required(args.command, "command");
-  const cwd = resolveOptionalCwd(args.cwd, request, config, storage);
+  const cwd = await resolveOptionalCwd(args.cwd, request, config, storage);
   const shellRisk = classifyShellRisk(command, config.sandbox.riskyShellPatterns);
-  const approvalBypass = hasVerifiedApprovalBypass(request, storage);
+  const approvalBypass = await hasVerifiedApprovalBypass(request, storage);
   if (shellRisk.risky && config.sandbox.requireApprovalForRiskyShell && !approvalBypass) {
     throw new Error(
       `Risky shell command requires approval (matched pattern: ${shellRisk.matchedPattern ?? "unknown"})`,
@@ -661,14 +663,14 @@ function runShellExecToCompletion(
 async function shellExecBackground(
   request: ToolInvokeRequest,
   config: ToolPolicyConfig,
-  storage: Storage,
+  storage: AsyncStorage,
   runtimeHooks: ToolExecutorRuntimeHooks,
 ) {
   const args = request.args;
   const command = required(args.command, "command");
-  const cwd = resolveOptionalCwd(args.cwd, request, config, storage);
+  const cwd = await resolveOptionalCwd(args.cwd, request, config, storage);
   const shellRisk = classifyShellRisk(command, config.sandbox.riskyShellPatterns);
-  const approvalBypass = hasVerifiedApprovalBypass(request, storage);
+  const approvalBypass = await hasVerifiedApprovalBypass(request, storage);
   if (shellRisk.risky && config.sandbox.requireApprovalForRiskyShell && !approvalBypass) {
     throw new Error(
       `Risky shell command requires approval (matched pattern: ${shellRisk.matchedPattern ?? "unknown"})`,
@@ -724,12 +726,78 @@ async function gitStatus() {
 
 async function gitDiff(args: Record<string, unknown>) {
   const staged = asBoolean(args.staged, false);
-  const { stdout } = await execFileAsync("git", staged ? ["diff", "--cached"] : ["diff"], {
-    timeout: 15000,
-    windowsHide: true,
-    maxBuffer: 4 * 1024 * 1024,
+  const result = await readGitDiffBounded(staged ? ["diff", "--cached"] : ["diff"]);
+  return { staged, diffSnippet: result.stdout, truncated: result.truncated };
+}
+
+function readGitDiffBounded(args: string[]): Promise<{ stdout: string; truncated: boolean }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("git", args, { windowsHide: true });
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let truncated = false;
+    let settled = false;
+
+    const collect = (chunk: Buffer | string, target: "stdout" | "stderr") => {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      const isStdout = target === "stdout";
+      const limit = isStdout ? GIT_DIFF_SNIPPET_BYTES : GIT_DIFF_ERROR_BYTES;
+      const currentBytes = isStdout ? stdoutBytes : stderrBytes;
+      const remaining = Math.max(0, limit - currentBytes);
+      if (remaining > 0) {
+        (isStdout ? stdoutChunks : stderrChunks).push(buffer.subarray(0, remaining));
+      }
+      const acceptedBytes = Math.min(buffer.byteLength, remaining);
+      if (isStdout) {
+        stdoutBytes += acceptedBytes;
+        truncated ||= acceptedBytes < buffer.byteLength;
+      } else {
+        stderrBytes += acceptedBytes;
+      }
+    };
+
+    child.stdout?.on("data", (chunk: Buffer | string) => collect(chunk, "stdout"));
+    child.stderr?.on("data", (chunk: Buffer | string) => collect(chunk, "stderr"));
+
+    const timer = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      child.kill();
+      reject(new Error("git diff timed out after 15000ms"));
+    }, 15_000);
+    timer.unref?.();
+
+    child.once("error", (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once("close", (code, signal) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      const stdout = Buffer.concat(stdoutChunks).toString("utf8");
+      if (code === 0) {
+        resolve({ stdout, truncated });
+        return;
+      }
+      const stderr = Buffer.concat(stderrChunks).toString("utf8").trim();
+      reject(
+        new Error(
+          `git diff failed (${code === null ? `signal ${signal ?? "unknown"}` : `exit ${code}`}): ${stderr || "no stderr"}`,
+        ),
+      );
+    });
   });
-  return { staged, diffSnippet: stdout.slice(0, 12000), truncated: stdout.length > 12000 };
 }
 
 async function gitAdd(args: Record<string, unknown>, config: ToolPolicyConfig) {
@@ -781,13 +849,13 @@ async function runRestricted(
   kind: "test" | "lint" | "build",
   request: ToolInvokeRequest,
   config: ToolPolicyConfig,
-  storage: Storage,
+  storage: AsyncStorage,
   runtimeHooks: ToolExecutorRuntimeHooks,
 ) {
   const args = request.args;
   const manager = asString(args.manager) ?? "pnpm";
   const filter = asString(args.filter);
-  const cwd = resolveOptionalCwd(args.cwd, request, config, storage);
+  const cwd = await resolveOptionalCwd(args.cwd, request, config, storage);
   if (filter && !/^[a-zA-Z0-9@/_\-.]+$/.test(filter)) {
     throw new Error(`Invalid filter: ${filter}`);
   }
@@ -1018,17 +1086,17 @@ function asBoolean(value: unknown, fallback: boolean): boolean {
   return fallback;
 }
 
-function resolveOptionalCwd(
+async function resolveOptionalCwd(
   value: unknown,
   request: ToolInvokeRequest,
   config: ToolPolicyConfig,
-  storage: Storage,
-): string | undefined {
+  storage: AsyncStorage,
+): Promise<string | undefined> {
   const cwd = asString(value);
   if (!cwd) {
     return undefined;
   }
-  assertReadPathAllowedForRequest(cwd, request, config, storage);
+  await assertReadPathAllowedForRequest(cwd, request, config, storage);
   return path.resolve(cwd);
 }
 
@@ -1095,29 +1163,29 @@ function parseExecFileCommand(command: string): { file: string; args: string[] }
   return { file, args };
 }
 
-function assertReadPathAllowedForRequest(
+async function assertReadPathAllowedForRequest(
   targetPath: string,
   request: ToolInvokeRequest,
   config: ToolPolicyConfig,
-  storage?: Storage,
-): void {
-  if (canBypassReadPath(targetPath, request, config, storage)) {
+  storage?: AsyncStorage,
+): Promise<void> {
+  if (await canBypassReadPath(targetPath, request, config, storage)) {
     return;
   }
   assertReadPathAllowed(targetPath, config.sandbox.writeJailRoots, config.sandbox.readOnlyRoots);
 }
 
-function canBypassReadPath(
+async function canBypassReadPath(
   targetPath: string,
   request: ToolInvokeRequest,
   config: ToolPolicyConfig,
-  storage?: Storage,
-): boolean {
+  storage?: AsyncStorage,
+): Promise<boolean> {
   const readAccessMode = getStrictestReadAccessMode(
     config.sandbox.readAccessMode,
     request.policyContext?.permissionProfile?.readAccessMode,
   );
-  const matchedExecutionGrant = resolveMatchedExecutionAllowGrant(request, storage);
+  const matchedExecutionGrant = await resolveMatchedExecutionAllowGrant(request, storage);
   const matchedAllowedPaths = matchedExecutionGrant ? getAllowedGrantReadPaths(matchedExecutionGrant) : [];
   if (matchedAllowedPaths.length > 0) {
     const resolvedPath = resolveReadPathAccess(
@@ -1127,7 +1195,7 @@ function canBypassReadPath(
     ).resolvedPath;
     return isPathWithinAnyGrantRoot(resolvedPath, matchedAllowedPaths);
   }
-  const grants = resolveMatchingAllowGrants(request, storage);
+  const grants = await resolveMatchingAllowGrants(request, storage);
   const grantsWithPathConstraints = grants
     .map((grant) => ({
       grant,
@@ -1145,7 +1213,7 @@ function canBypassReadPath(
   if (readAccessMode === "full_disk") {
     return true;
   }
-  if (readAccessMode === "approval_required" && storage && hasVerifiedApprovalBypass(request, storage)) {
+  if (readAccessMode === "approval_required" && storage && (await hasVerifiedApprovalBypass(request, storage))) {
     return true;
   }
   if (grants.length === 0) {
@@ -1167,7 +1235,10 @@ function getAllowedGrantReadPaths(grant: ToolGrantRecord): string[] {
   ];
 }
 
-function resolveExecutionGrantAllowedHosts(request: ToolInvokeRequest, storage?: Storage): string[] | undefined {
+async function resolveExecutionGrantAllowedHosts(
+  request: ToolInvokeRequest,
+  storage?: AsyncStorage,
+): Promise<string[] | undefined> {
   const contextHosts = request.policyContext?.matchedGrantAllowedHosts
     ?.map((host) => host.trim())
     .filter((host) => host.length > 0);
@@ -1175,25 +1246,28 @@ function resolveExecutionGrantAllowedHosts(request: ToolInvokeRequest, storage?:
     return contextHosts;
   }
   if (request.policyContext?.matchedGrantId) {
-    const matchedGrant = resolveMatchedExecutionAllowGrant(request, storage);
+    const matchedGrant = await resolveMatchedExecutionAllowGrant(request, storage);
     const grantHosts = matchedGrant?.constraints?.allowedHosts?.map((host) => host.trim()).filter(Boolean);
     return grantHosts && grantHosts.length > 0 ? grantHosts : undefined;
   }
-  const matchingGrant = resolveMatchingAllowGrants(request, storage).find(
+  const matchingGrant = (await resolveMatchingAllowGrants(request, storage)).find(
     (grant) => (grant.constraints?.allowedHosts?.length ?? 0) > 0,
   );
   const grantHosts = matchingGrant?.constraints?.allowedHosts?.map((host) => host.trim()).filter(Boolean);
   return grantHosts && grantHosts.length > 0 ? grantHosts : undefined;
 }
 
-function resolveMatchedExecutionAllowGrant(request: ToolInvokeRequest, storage?: Storage): ToolGrantRecord | undefined {
+async function resolveMatchedExecutionAllowGrant(
+  request: ToolInvokeRequest,
+  storage?: AsyncStorage,
+): Promise<ToolGrantRecord | undefined> {
   const grantId = request.policyContext?.matchedGrantId?.trim();
   const grantRepo = storage?.toolGrants;
   if (!grantId || !grantRepo) {
     return undefined;
   }
   try {
-    const grant = grantRepo.findActive(grantId);
+    const grant = await grantRepo.findActive(grantId);
     if (!grant) {
       return undefined;
     }
@@ -1218,15 +1292,17 @@ function getStrictestReadAccessMode(
   return rank[profileMode] < rank[normalizedConfigMode] ? profileMode : normalizedConfigMode;
 }
 
-function resolveMatchingAllowGrants(request: ToolInvokeRequest, storage?: Storage): ToolGrantRecord[] {
+async function resolveMatchingAllowGrants(
+  request: ToolInvokeRequest,
+  storage?: AsyncStorage,
+): Promise<ToolGrantRecord[]> {
   const grantRepo = storage?.toolGrants;
   if (!grantRepo?.listActive) {
     return [];
   }
   const grants: ToolGrantRecord[] = [];
   for (const candidate of buildGrantScopeCandidates(request)) {
-    const scoped = grantRepo
-      .listActive(candidate.scope, candidate.scopeRef)
+    const scoped = (await grantRepo.listActive(candidate.scope, candidate.scopeRef))
       .filter((grant) => grant.decision === "allow")
       .filter((grant) => matchesGrantToolPattern(grant.toolPattern, request.toolName));
     grants.push(...scoped);

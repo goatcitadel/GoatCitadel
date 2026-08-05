@@ -1104,13 +1104,15 @@ describe("AssemblyService", () => {
       storage: storage as never,
       rootDir,
       createChatCompletion: createChatCompletion as never,
-      publishRealtime: (eventType, _source, payload) => published.push({ eventType, payload }),
+      publishRealtime: async (eventType, _source, payload) => {
+        published.push({ eventType, payload });
+      },
     });
 
     try {
       const run = await service.createRun(createRunInput());
       await service.close();
-      const detail = service.getRunDetail(run.runId);
+      const detail = await service.getRunDetail(run.runId);
 
       expect(detail.run.status).toBe("completed");
       expect(detail.rounds.map((round) => round.stage)).toEqual([
@@ -1122,7 +1124,7 @@ describe("AssemblyService", () => {
         "S5_synthesis",
       ]);
       expect(detail.artifacts.map((artifact) => artifact.artifactType)).toContain("result");
-      expect(service.listReputations()).toHaveLength(3);
+      expect(await service.listReputations()).toHaveLength(3);
       expect(published.map((event) => event.eventType)).toContain("assembly_run_completed");
       const artifactPath = path.join(rootDir, "artifacts", "assembly", `${run.runId}.md`);
       await expect(fs.readFile(artifactPath, "utf8")).resolves.toContain("# Runtime decomposition");
@@ -1176,7 +1178,7 @@ describe("AssemblyService", () => {
         }),
       );
       await service.close();
-      const detail = service.getRunDetail(run.runId);
+      const detail = await service.getRunDetail(run.runId);
 
       expect(detail.run.status).toBe("completed");
       expect(detail.rounds.map((round) => round.stage)).toEqual(
@@ -1314,7 +1316,7 @@ describe("AssemblyService", () => {
       expect(participantRequests.every((request) => request.reasoning === undefined)).toBe(true);
       expect(synthesisRequest?.reasoning).toEqual({ effort: "xhigh" });
       expect(synthesisRequest?.temperature).toBeUndefined();
-      const detail = service.getRunDetail(result.runId);
+      const detail = await service.getRunDetail(result.runId);
       expect(detail.run.status).toBe("completed");
       expect(detail.rounds.map((round) => round.stage)).toEqual([
         "C0_resolve",
@@ -1846,7 +1848,7 @@ describe("AssemblyService", () => {
     );
 
     usageEvents[0] = { ...usageEvents[0]!, turnId: "foreign-turn" };
-    expect(() => service.getRunDetail(result.runId)).toThrow(/foreign or unfrozen HX-306 attribution/i);
+    await expect(service.getRunDetail(result.runId)).rejects.toThrow(/foreign or unfrozen HX-306 attribution/i);
   });
 
   it("fails closed when a started council call has no canonical HX-306 row", async () => {
@@ -1922,7 +1924,7 @@ describe("AssemblyService", () => {
     const participantIndex = artifacts.findIndex((artifact) => artifact.artifactType === "model_council_participant");
     const originalParticipant = artifacts[participantIndex]!;
     artifacts[participantIndex] = { ...originalParticipant, participantModelRef: "tampered:model" };
-    expect(() => service.getRunDetail(completed.runId)).toThrow(/route binding/i);
+    await expect(service.getRunDetail(completed.runId)).rejects.toThrow(/route binding/i);
     artifacts[participantIndex] = originalParticipant;
 
     const recoveredRun = storage.__state.runs.get(completed.runId)!;
@@ -1930,7 +1932,7 @@ describe("AssemblyService", () => {
       ...recoveredRun,
       result: { ...recoveredRun.result!, recommendation: "tampered answer" },
     });
-    expect(() => service.getRunDetail(completed.runId)).toThrow(/canonical answer binding/i);
+    await expect(service.getRunDetail(completed.runId)).rejects.toThrow(/canonical answer binding/i);
   });
 
   it("rejects non-exact or repeated HX-307 context occurrences before dispatch", async () => {
@@ -2014,7 +2016,7 @@ describe("AssemblyService", () => {
       usage: undefined,
       finishedAt: undefined,
     });
-    expect(() => service.getRunDetail(completed.runId)).toThrow(/future round C2_assemble/i);
+    await expect(service.getRunDetail(completed.runId)).rejects.toThrow(/future round C2_assemble/i);
 
     storage.__state.runs.set(completed.runId, {
       ...completedRun,
@@ -2029,7 +2031,7 @@ describe("AssemblyService", () => {
       completed.runId,
       completedRounds.filter((round) => round.stage !== "C1_participate" && round.stage !== "C3_synthesize"),
     );
-    expect(() => service.getRunDetail(completed.runId)).toThrow(/missing prior round C1_participate/i);
+    await expect(service.getRunDetail(completed.runId)).rejects.toThrow(/missing prior round C1_participate/i);
 
     storage.__state.runs.set(completed.runId, {
       ...completedRun,
@@ -2045,6 +2047,6 @@ describe("AssemblyService", () => {
       completedRounds.filter((round) => round.stage === "C0_resolve" || round.stage === "C1_participate"),
     );
     storage.__state.artifacts.set(completed.runId, completedArtifacts);
-    expect(() => service.getRunDetail(completed.runId)).toThrow(/future C3_synthesize artifact truth/i);
+    await expect(service.getRunDetail(completed.runId)).rejects.toThrow(/future C3_synthesize artifact truth/i);
   });
 });

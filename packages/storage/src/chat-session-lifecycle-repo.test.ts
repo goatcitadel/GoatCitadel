@@ -54,6 +54,53 @@ describe("ChatSessionLifecycleRepository SQLite", () => {
     db.close();
   });
 
+  it("accepts an exact lifecycle bootstrap after the intent freshness window has elapsed", () => {
+    const db = createDatabase({ dbPath: ":memory:" });
+    const createdAt = (
+      db.prepare("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now') AS created_at").get() as { created_at: string }
+    ).created_at;
+    const hash = "a".repeat(64);
+    db.prepare(
+      `INSERT INTO chat_session_lifecycle_intents (
+         intent_id, session_incarnation_id, workspace_id, session_id, intent_kind,
+         expected_generation, next_generation, expected_revision, actor_kind, actor_id,
+         idempotency_key, request_sha256, correlation_id, event_id, created_at
+       ) VALUES (
+         'intent-delayed', 'intent-delayed', 'workspace-a', 'session-delayed', 'initialize',
+         NULL, 1, NULL, 'system', 'system',
+         'lifecycle:init:session-delayed', @hash, 'correlation:session-delayed',
+         'event:session-delayed', @createdAt
+       )`,
+    ).run({ hash, createdAt });
+
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1_100);
+
+    db.prepare(
+      `INSERT INTO chat_session_meta (
+         session_id, workspace_id, revision, lifecycle_intent_id, created_at, updated_at
+       ) VALUES (
+         'session-delayed', 'workspace-a', 1, 'intent-delayed', @createdAt, @createdAt
+       )`,
+    ).run({ createdAt });
+    assert.deepEqual(
+      {
+        ...(db
+          .prepare(
+            `SELECT generation, owner_kind, lease_state, transition_idempotency_key
+             FROM chat_session_control_grants WHERE session_id = 'session-delayed'`,
+          )
+          .get() as Record<string, unknown>),
+      },
+      {
+        generation: 1,
+        owner_kind: "operator",
+        lease_state: "operator_active",
+        transition_idempotency_key: "lifecycle:init:session-delayed",
+      },
+    );
+    db.close();
+  });
+
   it("rejects implicit synthesis, raw inserts, workspace replacement, and intent reuse", () => {
     const db = createDatabase({ dbPath: ":memory:" });
     const meta = new ChatSessionMetaRepository(db);

@@ -8,7 +8,7 @@ import type {
 import { ExternalConnectorCatalogService } from "./external-connector-catalog-service.js";
 
 describe("ExternalConnectorCatalogService", () => {
-  it("projects the pinned MSCR snapshot as dormant integration catalog entries", () => {
+  it("projects the pinned MSCR snapshot as dormant integration catalog entries", async () => {
     const service = createService();
 
     const source = service.listSources()[0];
@@ -19,7 +19,7 @@ describe("ExternalConnectorCatalogService", () => {
       actionCount: 857,
     });
 
-    const notion = service.getService("mscr", "notion", "default");
+    const notion = await service.getService("mscr", "notion", "default");
     expect(notion.actionCount).toBe(19);
     expect(notion.callable).toBe(false);
     expect(notion.actions[0]?.callable).toBe(false);
@@ -40,11 +40,11 @@ describe("ExternalConnectorCatalogService", () => {
     });
   });
 
-  it("stages actions as capability proposals while keeping them non-callable", () => {
+  it("stages actions as capability proposals while keeping them non-callable", async () => {
     const createdProposals: CapabilityProposalRecord[] = [];
     const service = createService(createdProposals);
 
-    const result = service.stageAction(
+    const result = await service.stageAction(
       { sourceId: "mscr", serviceId: "notion", actionId: "append-block-children" },
       { workspaceId: "default" },
     );

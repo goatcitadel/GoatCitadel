@@ -211,30 +211,27 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
   const operatorMutationRoute = withRouteAccess(fastify, "operator", MUTATION_ROUTE_OPTIONS);
 
   fastify.get("/api/v1/mcp/servers", operatorReadRoute, async (_request, reply) => {
-    return reply.send(projectMcpPublicValue({ items: fastify.services.mcp.listMcpServers() }));
+    return reply.send(projectMcpPublicValue({ items: await fastify.services.mcp.listMcpServers() }));
   });
 
   fastify.get("/api/v1/mcp/templates", operatorReadRoute, async (_request, reply) => {
-    return reply.send(projectMcpPublicValue({ items: fastify.services.mcp.listMcpTemplates() }));
+    return reply.send(projectMcpPublicValue({ items: await fastify.services.mcp.listMcpTemplates() }));
   });
 
   fastify.get("/api/v1/mcp/templates/discovery", operatorReadRoute, async (_request, reply) => {
     try {
-      return reply.send(projectMcpPublicValue({ items: fastify.services.mcp.listMcpTemplateDiscovery() }));
+      return reply.send(projectMcpPublicValue({ items: await fastify.services.mcp.listMcpTemplateDiscovery() }));
     } catch (error) {
       return sendMcpPublicError(reply, 409, error);
     }
   });
 
   fastify.get("/api/v1/mcp/remote-preview", operatorReadRoute, async (_request, reply) => {
-    return reply.send(
-      projectMcpPublicValue(
-        buildMcpRemotePreview({
-          servers: fastify.services.mcp.listMcpServers(),
-          templates: fastify.services.mcp.listMcpTemplates(),
-        }),
-      ),
-    );
+    const [servers, templates] = await Promise.all([
+      fastify.services.mcp.listMcpServers(),
+      fastify.services.mcp.listMcpTemplates(),
+    ]);
+    return reply.send(projectMcpPublicValue(buildMcpRemotePreview({ servers, templates })));
   });
 
   fastify.get("/api/v1/mcp/elicitations", operatorReadRoute, async (request, reply) => {
@@ -286,7 +283,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply.send(
         projectMcpPublicValue(
-          mcpElicitations.respondToRequest(params.data.elicitationId, {
+          await mcpElicitations.respondToRequest(params.data.elicitationId, {
             ...body.data,
             owner: resolveElicitationCallerOwner(request, body.data.owner),
           }),
@@ -301,8 +298,8 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.send(
       projectMcpPublicValue(
         buildMcpServerModeManifest({
-          inspectableCatalog: fastify.services.capabilities.listCapabilityCatalog("inspectable"),
-          callableCatalog: fastify.services.capabilities.listCapabilityCatalog("callable"),
+          inspectableCatalog: await fastify.services.capabilities.listCapabilityCatalog("inspectable"),
+          callableCatalog: await fastify.services.capabilities.listCapabilityCatalog("callable"),
           callPreviewAvailable: isMcpServerModeCallPreviewAvailable(fastify.services),
         }),
       ),
@@ -318,7 +315,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       return sendMcpPublicError(reply, 409, "MCP server-mode call preview is not available in this Gateway runtime.");
     }
 
-    const callableCatalog = fastify.services.capabilities.listCapabilityCatalog("callable");
+    const callableCatalog = await fastify.services.capabilities.listCapabilityCatalog("callable");
     const descriptor = findServerModeToolDescriptor(callableCatalog, parsed.data.descriptorName);
     if (!descriptor) {
       return sendMcpPublicError(reply, 404, `Unknown MCP server-mode descriptor ${parsed.data.descriptorName}.`);
@@ -410,7 +407,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error });
     }
     try {
-      return reply.code(201).send(projectMcpPublicValue(fastify.services.mcp.createMcpServer(parsed.data)));
+      return reply.code(201).send(projectMcpPublicValue(await fastify.services.mcp.createMcpServer(parsed.data)));
     } catch (error) {
       return sendMcpPublicError(reply, 400, error);
     }
@@ -428,7 +425,9 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(projectMcpPublicValue(fastify.services.mcp.updateMcpServer(params.data.serverId, body.data)));
+      return reply.send(
+        projectMcpPublicValue(await fastify.services.mcp.updateMcpServer(params.data.serverId, body.data)),
+      );
     } catch (error) {
       return sendMcpPublicError(reply, 400, error);
     }
@@ -439,7 +438,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     if (!params.success) {
       return reply.code(400).send({ error: params.error.flatten() });
     }
-    return reply.send(projectMcpPublicValue(fastify.services.mcp.deleteMcpServer(params.data.serverId)));
+    return reply.send(projectMcpPublicValue(await fastify.services.mcp.deleteMcpServer(params.data.serverId)));
   });
 
   fastify.post("/api/v1/mcp/servers/:serverId/connect", operatorMutationRoute, async (request, reply) => {
@@ -460,7 +459,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(projectMcpPublicValue(fastify.services.mcp.disconnectMcpServer(params.data.serverId)));
+      return reply.send(projectMcpPublicValue(await fastify.services.mcp.disconnectMcpServer(params.data.serverId)));
     } catch (error) {
       return sendMcpPublicError(reply, 400, error);
     }
@@ -472,7 +471,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.mcp.startMcpOAuth(params.data.serverId));
+      return reply.send(await fastify.services.mcp.startMcpOAuth(params.data.serverId));
     } catch (error) {
       return sendMcpPublicError(reply, 400, error);
     }
@@ -506,7 +505,9 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(projectMcpPublicValue({ items: fastify.services.mcp.listMcpTools(params.data.serverId) }));
+      return reply.send(
+        projectMcpPublicValue({ items: await fastify.services.mcp.listMcpTools(params.data.serverId) }),
+      );
     } catch (error) {
       return sendMcpPublicError(reply, 404, error);
     }
@@ -519,20 +520,20 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     }
     // Resolve the concrete (serverId, toolName) target, honoring mcp__<serverId>__<tool>
     // namespacing and rejecting ambiguous bare-name collisions BEFORE dispatch.
-    const target = resolveMcpInvokeTarget(fastify.services.mcp, parsed.data.serverId, parsed.data.toolName);
+    const target = await resolveMcpInvokeTarget(fastify.services.mcp, parsed.data.serverId, parsed.data.toolName);
     if (!target.ok) {
       return sendMcpPublicError(reply, target.statusCode, target.error);
     }
     // Fail closed on stale / missing OAuth: never reach invokeMcpTool when the
     // server still needs (re)authentication.
-    const authBlock = evaluateMcpInvokeAuthGate(fastify.services.mcp, target.serverId);
+    const authBlock = await evaluateMcpInvokeAuthGate(fastify.services.mcp, target.serverId);
     if (authBlock) {
       return sendMcpPublicError(reply, 401, authBlock);
     }
     // HX-415: fail a requester-scoped target closed before building any
     // body-derived policy context; the direct route cannot supply requester
     // authority.
-    const requesterContextBlock = evaluateMcpRequesterContextGate(fastify.services.mcp, target.serverId);
+    const requesterContextBlock = await evaluateMcpRequesterContextGate(fastify.services.mcp, target.serverId);
     if (requesterContextBlock) {
       return sendMcpPublicError(reply, 400, requesterContextBlock);
     }
@@ -594,7 +595,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(
-        projectMcpPublicValue(fastify.services.mcp.updateMcpServerPolicy(params.data.serverId, body.data)),
+        projectMcpPublicValue(await fastify.services.mcp.updateMcpServerPolicy(params.data.serverId, body.data)),
       );
     } catch (error) {
       return sendMcpPublicError(reply, 404, error);
@@ -607,7 +608,9 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(projectMcpPublicValue(fastify.services.mcp.runMcpServerHealthCheck(params.data.serverId)));
+      return reply.send(
+        projectMcpPublicValue(await fastify.services.mcp.runMcpServerHealthCheck(params.data.serverId)),
+      );
     } catch (error) {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("unknown mcp server");
@@ -644,8 +647,8 @@ function sendMcpPublicError(reply: FastifyReply, statusCode: number, error: unkn
 
 /** Minimal read surface of the MCP service used by the invoke-time gates. */
 interface McpInvokeGatePort {
-  listMcpServers(): McpServerRecord[];
-  listMcpTools(serverId: string): McpToolRecord[];
+  listMcpServers(): Promise<McpServerRecord[]>;
+  listMcpTools(serverId: string): Promise<McpToolRecord[]>;
 }
 
 type McpInvokeTargetResolution =
@@ -665,12 +668,12 @@ type McpInvokeTargetResolution =
  *
  * Single-server / unique-tool invocations resolve unchanged.
  */
-export function resolveMcpInvokeTarget(
+export async function resolveMcpInvokeTarget(
   mcp: McpInvokeGatePort,
   requestedServerId: string,
   requestedToolName: string,
-): McpInvokeTargetResolution {
-  const servers = safeListMcpServers(mcp);
+): Promise<McpInvokeTargetResolution> {
+  const servers = await safeListMcpServers(mcp);
   const namespaced = parseNamespacedMcpToolName(requestedToolName);
   if (namespaced) {
     const exists = servers.some((server) => server.serverId === namespaced.serverId);
@@ -684,8 +687,15 @@ export function resolveMcpInvokeTarget(
     return { ok: true, serverId: namespaced.serverId, toolName: namespaced.toolName };
   }
 
-  const exposingServers = findServersExposingTool(requestedToolName, servers, (serverId) =>
-    safeListMcpTools(mcp, serverId),
+  const toolLists = new Map(
+    await Promise.all(
+      servers.map(async (server) => [server.serverId, await safeListMcpTools(mcp, server.serverId)] as const),
+    ),
+  );
+  const exposingServers = findServersExposingTool(
+    requestedToolName,
+    servers,
+    (serverId) => toolLists.get(serverId) ?? [],
   );
   if (exposingServers.length > 1 && !exposingServers.every((serverId) => serverId === requestedServerId)) {
     return {
@@ -704,8 +714,8 @@ export function resolveMcpInvokeTarget(
  * server is `ready` / `not_required` or cannot be resolved here (the downstream
  * service still performs its own checks).
  */
-export function evaluateMcpInvokeAuthGate(mcp: McpInvokeGatePort, serverId: string): string | undefined {
-  const server = safeListMcpServers(mcp).find((candidate) => candidate.serverId === serverId);
+export async function evaluateMcpInvokeAuthGate(mcp: McpInvokeGatePort, serverId: string): Promise<string | undefined> {
+  const server = (await safeListMcpServers(mcp)).find((candidate) => candidate.serverId === serverId);
   if (!server) {
     return undefined;
   }
@@ -725,8 +735,11 @@ export function evaluateMcpInvokeAuthGate(mcp: McpInvokeGatePort, serverId: stri
  * when the target is static (or cannot be resolved here; the coordinator still
  * fails such a server closed downstream).
  */
-export function evaluateMcpRequesterContextGate(mcp: McpInvokeGatePort, serverId: string): string | undefined {
-  const server = safeListMcpServers(mcp).find((candidate) => candidate.serverId === serverId);
+export async function evaluateMcpRequesterContextGate(
+  mcp: McpInvokeGatePort,
+  serverId: string,
+): Promise<string | undefined> {
+  const server = (await safeListMcpServers(mcp)).find((candidate) => candidate.serverId === serverId);
   if (!server) {
     return undefined;
   }
@@ -735,9 +748,9 @@ export function evaluateMcpRequesterContextGate(mcp: McpInvokeGatePort, serverId
     : undefined;
 }
 
-function safeListMcpServers(mcp: McpInvokeGatePort): McpServerRecord[] {
+async function safeListMcpServers(mcp: McpInvokeGatePort): Promise<McpServerRecord[]> {
   try {
-    return mcp.listMcpServers() ?? [];
+    return (await mcp.listMcpServers()) ?? [];
   } catch {
     // A failure to list servers must not crash the route; downstream invoke
     // still enforces its own server-resolution and policy checks.
@@ -745,9 +758,9 @@ function safeListMcpServers(mcp: McpInvokeGatePort): McpServerRecord[] {
   }
 }
 
-function safeListMcpTools(mcp: McpInvokeGatePort, serverId: string): McpToolRecord[] {
+async function safeListMcpTools(mcp: McpInvokeGatePort, serverId: string): Promise<McpToolRecord[]> {
   try {
-    return mcp.listMcpTools(serverId) ?? [];
+    return (await mcp.listMcpTools(serverId)) ?? [];
   } catch {
     return [];
   }

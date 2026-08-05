@@ -27,13 +27,13 @@ export interface OrchestrationRoutePort {
     input: WorkflowRecipePlanCreateRequest,
     policyContext?: OrchestrationRunPolicyContext,
   ): Promise<WorkflowRecipePlanCreateResponse>;
-  draftAutomationRecipe(input: AutomationRecipeDraftRequest): AutomationRecipeDraftResponse;
+  draftAutomationRecipe(input: AutomationRecipeDraftRequest): Promise<AutomationRecipeDraftResponse>;
   exportActivepiecesTemplate(
     input: WorkflowRecipeActivepiecesTemplateExportRequest,
-  ): WorkflowRecipeActivepiecesTemplateExportResponse;
-  exportN8nTemplate(input: WorkflowRecipeN8nTemplateExportRequest): WorkflowRecipeN8nTemplateExportResponse;
+  ): Promise<WorkflowRecipeActivepiecesTemplateExportResponse>;
+  exportN8nTemplate(input: WorkflowRecipeN8nTemplateExportRequest): Promise<WorkflowRecipeN8nTemplateExportResponse>;
   listRecipeTemplates(): WorkflowRecipeTemplatesResponse;
-  previewRecipe(input: WorkflowRecipePreviewRequest): WorkflowRecipePreviewResponse;
+  previewRecipe(input: WorkflowRecipePreviewRequest): Promise<WorkflowRecipePreviewResponse>;
   runOrchestrationPlan(planId: string, policyContext?: OrchestrationRunPolicyContext): Promise<OrchestrationRun>;
   cancelOrchestrationRun(
     runId: string,
@@ -47,10 +47,10 @@ export interface OrchestrationRoutePort {
     costIncrementUsd: number,
     workspaceId?: string,
   ): Promise<unknown>;
-  getRun(runId: string, workspaceId?: string): OrchestrationRun;
-  listRunCheckpoints(runId: string, workspaceId?: string): OrchestrationCheckpoint[];
-  getRunTrace(runId: string, workspaceId?: string): OrchestrationDecisionTrace;
-  listRunContexts(runId: string): MemoryContextPack[];
+  getRun(runId: string, workspaceId?: string): Promise<OrchestrationRun>;
+  listRunCheckpoints(runId: string, workspaceId?: string): Promise<OrchestrationCheckpoint[]>;
+  getRunTrace(runId: string, workspaceId?: string): Promise<OrchestrationDecisionTrace>;
+  listRunContexts(runId: string): Promise<MemoryContextPack[]>;
 }
 
 export class OrchestrationRouteService {
@@ -65,8 +65,8 @@ export class OrchestrationRouteService {
       : this.orchestration.createOrchestrationPlan(plan);
   }
 
-  public previewRecipe(input: WorkflowRecipePreviewRequest): WorkflowRecipePreviewResponse {
-    return this.orchestration.previewRecipe(input);
+  public async previewRecipe(input: WorkflowRecipePreviewRequest): Promise<WorkflowRecipePreviewResponse> {
+    return await this.orchestration.previewRecipe(input);
   }
 
   public async createPlanFromRecipe(
@@ -82,18 +82,20 @@ export class OrchestrationRouteService {
     return this.orchestration.listRecipeTemplates();
   }
 
-  public draftAutomationRecipe(input: AutomationRecipeDraftRequest): AutomationRecipeDraftResponse {
-    return this.orchestration.draftAutomationRecipe(input);
+  public async draftAutomationRecipe(input: AutomationRecipeDraftRequest): Promise<AutomationRecipeDraftResponse> {
+    return await this.orchestration.draftAutomationRecipe(input);
   }
 
-  public exportActivepiecesTemplate(
+  public async exportActivepiecesTemplate(
     input: WorkflowRecipeActivepiecesTemplateExportRequest,
-  ): WorkflowRecipeActivepiecesTemplateExportResponse {
-    return this.orchestration.exportActivepiecesTemplate(input);
+  ): Promise<WorkflowRecipeActivepiecesTemplateExportResponse> {
+    return await this.orchestration.exportActivepiecesTemplate(input);
   }
 
-  public exportN8nTemplate(input: WorkflowRecipeN8nTemplateExportRequest): WorkflowRecipeN8nTemplateExportResponse {
-    return this.orchestration.exportN8nTemplate(input);
+  public async exportN8nTemplate(
+    input: WorkflowRecipeN8nTemplateExportRequest,
+  ): Promise<WorkflowRecipeN8nTemplateExportResponse> {
+    return await this.orchestration.exportN8nTemplate(input);
   }
 
   public async runPlan(planId: string, policyContext?: OrchestrationRunPolicyContext): Promise<OrchestrationRun> {
@@ -120,19 +122,19 @@ export class OrchestrationRouteService {
     return this.orchestration.approvePhase(runId, phaseId, approvedBy, costIncrementUsd, workspaceId);
   }
 
-  public getRun(runId: string, workspaceId?: string): OrchestrationRun {
-    return this.orchestration.getRun(runId, workspaceId);
+  public async getRun(runId: string, workspaceId?: string): Promise<OrchestrationRun> {
+    return await this.orchestration.getRun(runId, workspaceId);
   }
 
-  public listRunCheckpoints(runId: string, workspaceId?: string): OrchestrationCheckpoint[] {
-    return this.orchestration.listRunCheckpoints(runId, workspaceId);
+  public async listRunCheckpoints(runId: string, workspaceId?: string): Promise<OrchestrationCheckpoint[]> {
+    return await this.orchestration.listRunCheckpoints(runId, workspaceId);
   }
 
-  public getRunTrace(runId: string, workspaceId?: string): OrchestrationDecisionTrace {
-    return this.orchestration.getRunTrace(runId, workspaceId);
+  public async getRunTrace(runId: string, workspaceId?: string): Promise<OrchestrationDecisionTrace> {
+    return await this.orchestration.getRunTrace(runId, workspaceId);
   }
 
-  public listRunContexts(runId: string): MemoryContextPack[] {
-    return this.orchestration.listRunContexts(runId);
+  public async listRunContexts(runId: string): Promise<MemoryContextPack[]> {
+    return await this.orchestration.listRunContexts(runId);
   }
 }

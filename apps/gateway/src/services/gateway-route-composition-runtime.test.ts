@@ -59,22 +59,27 @@ const mocks = vi.hoisted(() => ({
     }),
   ),
   WorkflowRecipeService: vi.fn().mockImplementation(function (deps: {
-    listSkills: () => unknown[];
+    listSkills: () => Promise<unknown[]>;
     listToolNames: () => string[];
     createOrchestrationPlan: (plan: unknown) => unknown;
   }) {
     return {
-      createPlanFromRecipe: (input: unknown) =>
+      createPlanFromRecipe: async (input: unknown) =>
         deps.createOrchestrationPlan({
           goal: "recipe",
           input,
           tools: deps.listToolNames(),
-          skills: deps.listSkills(),
+          skills: await deps.listSkills(),
         }),
-      exportActivepiecesTemplate: (input: unknown) => ({ input, format: "activepieces" }),
-      exportN8nTemplate: (input: unknown) => ({ input, format: "n8n" }),
+      draftAutomationRecipe: async (input: unknown) => ({ input, kind: "automation-draft" }),
+      exportActivepiecesTemplate: async (input: unknown) => ({ input, format: "activepieces" }),
+      exportN8nTemplate: async (input: unknown) => ({ input, format: "n8n" }),
       listTemplates: () => [{ templateId: "template-1" }],
-      previewRecipe: (input: unknown) => ({ input, tools: deps.listToolNames(), skills: deps.listSkills() }),
+      previewRecipe: async (input: unknown) => ({
+        input,
+        tools: deps.listToolNames(),
+        skills: await deps.listSkills(),
+      }),
     };
   }),
   bootstrapOnboarding: vi.fn((gateway: unknown, input: unknown) => ({ gateway, input, bootstrapped: true })),
@@ -313,25 +318,31 @@ describe("composeRuntimeAdminRouteDependencies", () => {
     expect(deps.onboarding.bootstrapOnboarding({ level: "beginner" })).toMatchObject({ bootstrapped: true });
     expect(deps.onboarding.getOnboardingStartupState()).toEqual({ startup: true });
     expect(deps.onboarding.getOnboardingState()).toEqual({ complete: false });
-    expect(deps.onboarding.markOnboardingComplete("operator")).toMatchObject({ completedBy: "operator" });
+    await expect(deps.onboarding.markOnboardingComplete("operator")).resolves.toMatchObject({
+      completedBy: "operator",
+    });
 
     expect(deps.orchestration.createOrchestrationPlan({ goal: "ship" })).toEqual({
       planId: "plan-1",
       plan: { goal: "ship" },
     });
-    expect(deps.orchestration.createPlanFromRecipe({ templateId: "template-1" })).toMatchObject({
+    await expect(deps.orchestration.createPlanFromRecipe({ templateId: "template-1" })).resolves.toMatchObject({
       planId: "plan-1",
       plan: expect.objectContaining({ goal: "recipe", tools: ["tool.a", "tool.b", "tool.c", ""] }),
     });
+    await expect(deps.orchestration.draftAutomationRecipe({ taskDescription: "Draft it" })).resolves.toEqual({
+      input: { taskDescription: "Draft it" },
+      kind: "automation-draft",
+    });
     expect(deps.orchestration.listRecipeTemplates()).toEqual({ items: [{ templateId: "template-1" }] });
-    expect(deps.orchestration.previewRecipe({ templateId: "template-1" })).toMatchObject({
+    await expect(deps.orchestration.previewRecipe({ templateId: "template-1" })).resolves.toMatchObject({
       tools: ["tool.a", "tool.b", "tool.c", ""],
     });
-    expect(deps.orchestration.exportActivepiecesTemplate({ templateId: "template-1" })).toEqual({
+    await expect(deps.orchestration.exportActivepiecesTemplate({ templateId: "template-1" })).resolves.toEqual({
       input: { templateId: "template-1" },
       format: "activepieces",
     });
-    expect(deps.orchestration.exportN8nTemplate({ templateId: "template-1" })).toEqual({
+    await expect(deps.orchestration.exportN8nTemplate({ templateId: "template-1" })).resolves.toEqual({
       input: { templateId: "template-1" },
       format: "n8n",
     });
@@ -344,7 +355,7 @@ describe("composeRuntimeAdminRouteDependencies", () => {
     expect(deps.orchestration.getRunTrace("run-1", "workspace-1")).toEqual({ runId: "run-1", trace: true });
     expect(deps.orchestration.listRunContexts("run-1")).toEqual([{ contextId: "ctx-1" }]);
     expect(deps.promptPacks).toBe(gateway.promptPackService);
-    expect(deps.modelComparisons.listComparisons(1)).toEqual({ items: [] });
+    await expect(deps.modelComparisons.listComparisons(1)).resolves.toEqual({ items: [] });
     expect(deps.realtimeEvents).toBe(gateway.realtimeEventService);
     expect(deps.runtimeLifecycle.getRuntimeLifecycle({ limit: 1 })).toEqual({ lifecycle: true });
     expect(deps.runtimeLifecycle.getTranscript("session-1")).toEqual([{ role: "user" }]);
@@ -430,6 +441,7 @@ function createGateway() {
     runtimeLifecycleReadService: { getRuntimeLifecycle: vi.fn(() => ({ lifecycle: true })) },
     storage: {
       db: createDatabaseStub(),
+      gatewaySql: createDatabaseStub(),
       promptPackRuns: { listByTest: vi.fn(() => []) },
       systemSettings: { get: vi.fn() },
     },
@@ -446,7 +458,7 @@ function createGateway() {
     isFeatureEnabled: vi.fn((flag: string) => flag === "codeModeV1Enabled"),
     listRunCheckpoints: vi.fn(() => [{ checkpointId: "cp-1" }]),
     listSessionTimeline: vi.fn(() => [{ timelineId: "timeline-1" }]),
-    listSkills: vi.fn(() => [{ skillId: "skill-1" }]),
+    listSkills: vi.fn(async () => [{ skillId: "skill-1" }]),
     normalizeWorkspaceId: vi.fn((workspaceId?: string) => `workspace:${workspaceId?.trim() ?? "default"}`),
     publishRealtime: vi.fn(() => ({ eventId: "event-1" })),
     readSettingsRevision: vi.fn(() => 12),

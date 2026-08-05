@@ -47,7 +47,7 @@ describe("SkillImportService loop42 git install behavior", () => {
         }),
       ).rejects.toThrow("Failed to clone git source");
       expect(fs.existsSync(path.join(rootDir, "skills", "extra", "git-runtime-tool"))).toBe(false);
-      expect(service.listHistory(1)).toEqual([
+      expect(await service.listHistory(1)).toEqual([
         expect.objectContaining({
           action: "install",
           outcome: "failed",

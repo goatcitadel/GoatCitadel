@@ -43,11 +43,11 @@ type ImprovementOperationsPort = Pick<
 >;
 
 export interface ImprovementAuditPort {
-  getSkillActivationPolicy(): SkillActivationPolicy;
-  listCapabilityCatalog(scope: "inspectable"): CapabilityCatalogEntry[];
-  listCapabilityProposals(limit: number): CapabilityProposalRecord[];
-  listSkillImportHistory(limit: number): SkillImportHistoryRecord[];
-  listSkills(): SkillListItem[];
+  getSkillActivationPolicy(): Promise<SkillActivationPolicy>;
+  listCapabilityCatalog(scope: "inspectable"): Promise<CapabilityCatalogEntry[]>;
+  listCapabilityProposals(limit: number): Promise<CapabilityProposalRecord[]>;
+  listSkillImportHistory(limit: number): Promise<SkillImportHistoryRecord[]>;
+  listSkills(): Promise<SkillListItem[]>;
 }
 
 export interface ImprovementRouteDependencies {
@@ -163,14 +163,22 @@ export class ImprovementRouteService {
     return this.deps.improvement.listImprovementReports(limit);
   }
 
-  public getHarnessAuditReport(): HarnessAuditReportRecord {
+  public async getHarnessAuditReport(): Promise<HarnessAuditReportRecord> {
+    const [skills, policy, inspectableCatalog, proposals, importHistory, improvementReports] = await Promise.all([
+      this.deps.audit.listSkills(),
+      this.deps.audit.getSkillActivationPolicy(),
+      this.deps.audit.listCapabilityCatalog("inspectable"),
+      this.deps.audit.listCapabilityProposals(100),
+      this.deps.audit.listSkillImportHistory(50),
+      this.deps.improvement.listImprovementReports(24),
+    ]);
     return buildHarnessAuditReport({
-      skills: this.deps.audit.listSkills(),
-      policy: this.deps.audit.getSkillActivationPolicy(),
-      inspectableCatalog: this.deps.audit.listCapabilityCatalog("inspectable"),
-      proposals: this.deps.audit.listCapabilityProposals(100),
-      importHistory: this.deps.audit.listSkillImportHistory(50),
-      improvementReportCount: this.deps.improvement.listImprovementReports(24).length,
+      skills,
+      policy,
+      inspectableCatalog,
+      proposals,
+      importHistory,
+      improvementReportCount: improvementReports.length,
     });
   }
 

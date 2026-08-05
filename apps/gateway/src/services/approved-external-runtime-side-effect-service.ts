@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { PendingApprovalAction, ToolInvokeRequest, ToolInvokeResult } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { runIdempotentExternalSideEffect } from "./external-side-effect-runner-service.js";
 
 const APPROVED_EXTERNAL_RUNTIME_IN_PROGRESS_STALE_MS = 5 * 60 * 1000;
@@ -18,7 +18,7 @@ export interface ApprovedExternalRuntimeSideEffectInput {
   >;
   approvalId: string;
   request: ToolInvokeRequest;
-  execute(markExternalCallStarted: () => void): Promise<ToolInvokeResult>;
+  execute(markExternalCallStarted: () => Promise<void>): Promise<ToolInvokeResult>;
 }
 
 export async function executeApprovedExternalRuntimeSideEffect(
@@ -71,7 +71,7 @@ async function executeApprovedExternalRuntimeSideEffectOnce(
     },
     requireDurableBoundaryRecord: true,
     execute: async (claim) => {
-      const result = await input.execute(claim.markExternalCallStarted);
+      const result = await input.execute(() => claim.markExternalCallStarted());
       if (!claim.externalCallStarted) {
         claim.markExternalCallNotRequired();
       }
@@ -84,7 +84,7 @@ async function executeApprovedExternalRuntimeSideEffectOnce(
     return sideEffect.value;
   }
 
-  const persisted = input.storage.pendingApprovalActions.find(input.approvalId);
+  const persisted = await input.storage.pendingApprovalActions.find(input.approvalId);
   if (persisted?.resolutionStatus && persisted.resolutionStatus !== "pending") {
     return toolInvokeResultFromPendingAction(persisted);
   }
@@ -95,10 +95,10 @@ async function executeApprovedExternalRuntimeSideEffectOnce(
 
   const reconciledResumeState =
     sideEffect.claim.resumeState === "in_progress"
-      ? resolveManualReconciliationState(input, sideEffect.claim)
+      ? await resolveManualReconciliationState(input, sideEffect.claim)
       : undefined;
   if (sideEffect.claim.resumeState === "in_progress" && !reconciledResumeState) {
-    const settled = input.storage.pendingApprovalActions.find(input.approvalId);
+    const settled = await input.storage.pendingApprovalActions.find(input.approvalId);
     if (settled?.resolutionStatus && settled.resolutionStatus !== "pending") {
       return toolInvokeResultFromPendingAction(settled);
     }
@@ -107,7 +107,7 @@ async function executeApprovedExternalRuntimeSideEffectOnce(
 
   const replayState = reconciledResumeState ?? sideEffect.claim.resumeState;
   const reconciledRun = sideEffect.claim.sideEffectRunId
-    ? input.storage.externalSideEffectRuns.get(sideEffect.claim.sideEffectRunId)
+    ? await input.storage.externalSideEffectRuns.get(sideEffect.claim.sideEffectRunId)
     : undefined;
   const externalBoundaryState: ApprovedSideEffectBoundaryState = reconciledRun?.externalCallStartedAt
     ? usesApprovedExternalRuntimeAdapter(input.request)
@@ -136,7 +136,7 @@ async function executeApprovedExternalRuntimeSideEffectOnce(
   return persistManualReconciliation(input, result);
 }
 
-function commitApprovedResult(
+async function commitApprovedResult(
   input: ApprovedExternalRuntimeSideEffectInput,
   claim: {
     routePath: string;
@@ -148,19 +148,19 @@ function commitApprovedResult(
     externalCallNotRequired: boolean;
   },
   result: ToolInvokeResult,
-): void {
+): Promise<void> {
   let lastError: unknown;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      input.storage.runImmediateTransaction(() => {
-        const pending = input.storage.pendingApprovalActions.find(input.approvalId);
+      await input.storage.runImmediateTransaction(async () => {
+        const pending = await input.storage.pendingApprovalActions.find(input.approvalId);
         const terminalMatches = Boolean(
           pending && pending.resolutionStatus !== "pending" && pendingResultMatches(pending, result),
         );
         if (pending?.resolutionStatus !== "pending" && !terminalMatches) {
           throw new Error(`Approved action ${input.approvalId} already has conflicting terminal truth.`);
         }
-        const mutationSettled = input.storage.mutationIdempotency.markCompleted({
+        const mutationSettled = await input.storage.mutationIdempotency.markCompleted({
           method: "POST",
           routePath: claim.routePath,
           idempotencyKey: claim.idempotencyKey,
@@ -172,19 +172,19 @@ function commitApprovedResult(
           throw new Error(`Approved action ${input.approvalId} lost mutation ownership before completion.`);
         }
         if (claim.sideEffectRunId) {
-          input.storage.externalSideEffectRuns.markCompleted(
+          await input.storage.externalSideEffectRuns.markCompleted(
             claim.sideEffectRunId,
             { responsePayload: toolInvokeResultRecord(result) },
             new Date().toISOString(),
           );
         }
         if (!terminalMatches) {
-          input.storage.pendingApprovalActions.markResolved(
+          await input.storage.pendingApprovalActions.markResolved(
             input.approvalId,
             result.outcome === "executed" ? "executed" : "failed",
             toolInvokeResultRecord(result),
           );
-          appendApprovedActionEvent(input, result, readApprovedSideEffectBoundaryState(input.request, claim));
+          await appendApprovedActionEvent(input, result, readApprovedSideEffectBoundaryState(input.request, claim));
         }
       });
       return;
@@ -195,29 +195,29 @@ function commitApprovedResult(
   throw lastError instanceof Error ? lastError : new Error("Approved side effect result commit failed.");
 }
 
-function persistManualReconciliation(
+async function persistManualReconciliation(
   input: ApprovedExternalRuntimeSideEffectInput,
   result: ToolInvokeResult,
-): ToolInvokeResult {
+): Promise<ToolInvokeResult> {
   let resolved = result;
-  input.storage.runImmediateTransaction(() => {
-    const pending = input.storage.pendingApprovalActions.find(input.approvalId);
+  await input.storage.runImmediateTransaction(async () => {
+    const pending = await input.storage.pendingApprovalActions.find(input.approvalId);
     if (pending && pending.resolutionStatus !== "pending") {
       resolved = toolInvokeResultFromPendingAction(pending);
       return;
     }
-    input.storage.pendingApprovalActions.markResolved(input.approvalId, "failed", toolInvokeResultRecord(result));
-    appendApprovedActionEvent(input, result, readResultExternalBoundaryState(result));
+    await input.storage.pendingApprovalActions.markResolved(input.approvalId, "failed", toolInvokeResultRecord(result));
+    await appendApprovedActionEvent(input, result, readResultExternalBoundaryState(result));
   });
   return resolved;
 }
 
-function appendApprovedActionEvent(
+async function appendApprovedActionEvent(
   input: ApprovedExternalRuntimeSideEffectInput,
   result: ToolInvokeResult,
   externalBoundaryState: ApprovedSideEffectBoundaryState,
-): void {
-  input.storage.approvalEvents.append({
+): Promise<void> {
+  await input.storage.approvalEvents.append({
     approvalId: input.approvalId,
     eventType: "approved_action_executed",
     actorId: "system",
@@ -265,19 +265,19 @@ function pendingResultMatches(pending: PendingApprovalAction, result: ToolInvoke
   );
 }
 
-function resolveManualReconciliationState(
+async function resolveManualReconciliationState(
   input: ApprovedExternalRuntimeSideEffectInput,
   claim: { sideEffectRunId?: string },
-): "manual_review_unknown_external_outcome" | undefined {
+): Promise<"manual_review_unknown_external_outcome" | undefined> {
   if (!claim.sideEffectRunId) {
     return undefined;
   }
-  const run = input.storage.externalSideEffectRuns.get(claim.sideEffectRunId);
+  const run = await input.storage.externalSideEffectRuns.get(claim.sideEffectRunId);
   if (run.status === "unknown_external_outcome") {
     return "manual_review_unknown_external_outcome";
   }
   if (run.status === "claimed_not_sent") {
-    const reconciled = input.storage.externalSideEffectRuns.markFailureIfStatusStale(
+    const reconciled = await input.storage.externalSideEffectRuns.markFailureIfStatusStale(
       run.runId,
       "claimed_not_sent",
       APPROVED_EXTERNAL_RUNTIME_IN_PROGRESS_STALE_MS,
@@ -292,7 +292,7 @@ function resolveManualReconciliationState(
   if (run.status !== "external_call_started") {
     return undefined;
   }
-  const reconciled = input.storage.externalSideEffectRuns.markFailureIfStatusStale(
+  const reconciled = await input.storage.externalSideEffectRuns.markFailureIfStatusStale(
     run.runId,
     "external_call_started",
     APPROVED_EXTERNAL_RUNTIME_IN_PROGRESS_STALE_MS,

@@ -167,7 +167,7 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
     }
     const workspaceId = parsed.data.workspaceId;
     if (workspaceId !== undefined) {
-      const effective = fastify.services.capabilityScope.resolveEffectiveSkills(workspaceId);
+      const effective = await fastify.services.capabilityScope.resolveEffectiveSkills(workspaceId);
       return reply.send({ items: skills.listSkills(effective) });
     }
     return reply.send({ items: skills.listSkills() });
@@ -340,7 +340,7 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(skills.getSkillEvaluationRun(params.data.runId));
+      return reply.send(await skills.getSkillEvaluationRun(params.data.runId));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -352,7 +352,7 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.code(201).send(skills.createSkillEvaluationProposal(params.data.runId));
+      return reply.code(201).send(await skills.createSkillEvaluationProposal(params.data.runId));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -365,7 +365,7 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
     }
     const { skillId, ...input } = body.data;
     try {
-      return reply.send(skills.previewSkillEvaluation(skillId, input));
+      return reply.send(await skills.previewSkillEvaluation(skillId, input));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -378,7 +378,7 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
     }
     const { skillId, ...input } = body.data;
     try {
-      return reply.code(201).send(skills.runSkillEvaluation(skillId, input));
+      return reply.code(201).send(await skills.runSkillEvaluation(skillId, input));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -390,7 +390,7 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: query.error.flatten() });
     }
     try {
-      return reply.send(skills.listSkillEvaluationRuns(query.data.skillId));
+      return reply.send(await skills.listSkillEvaluationRuns(query.data.skillId));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -406,7 +406,7 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: body.error.flatten() });
     }
     try {
-      const outcome = skills.setSkillState(body.data.skillId, body.data.state, body.data.note, {
+      const outcome = await skills.setSkillState(body.data.skillId, body.data.state, body.data.note, {
         expectedRevision: body.data.expectedRevision,
         requesterId: resolveActorId(request),
       });
@@ -428,7 +428,7 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(skills.previewSkillEvaluation(params.data.skillId, body.data));
+      return reply.send(await skills.previewSkillEvaluation(params.data.skillId, body.data));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -446,7 +446,7 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.code(201).send(skills.runSkillEvaluation(params.data.skillId, body.data));
+      return reply.code(201).send(await skills.runSkillEvaluation(params.data.skillId, body.data));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -458,7 +458,7 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(skills.listSkillEvaluationRuns(params.data.skillId));
+      return reply.send(await skills.listSkillEvaluationRuns(params.data.skillId));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -475,7 +475,7 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
 
-    const decision = skills.resolveSkillActivation(parsed.data);
+    const decision = await skills.resolveSkillActivation(parsed.data);
     return reply.send(decision);
   });
 
@@ -491,7 +491,7 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      const outcome = skills.setSkillState(params.data.skillId, body.data.state, body.data.note, {
+      const outcome = await skills.setSkillState(params.data.skillId, body.data.state, body.data.note, {
         expectedRevision: body.data.expectedRevision,
         requesterId: resolveActorId(request),
       });
@@ -507,7 +507,7 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      const outcome = skills.bulkSetSkillState(parsed.data.skillIds, parsed.data.state, parsed.data.note, {
+      const outcome = await skills.bulkSetSkillState(parsed.data.skillIds, parsed.data.state, parsed.data.note, {
         expectedRevisionsBySkillId: parsed.data.expectedRevisionsBySkillId,
         requesterId: resolveActorId(request),
       });
@@ -518,7 +518,7 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.get("/api/v1/skills/activation-policies", async (_request, reply) => {
-    return reply.send(skills.getSkillActivationPolicy());
+    return reply.send(await skills.getSkillActivationPolicy());
   });
 
   fastify.patch("/api/v1/skills/activation-policies", async (request, reply) => {
@@ -528,7 +528,7 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
     }
     const { expectedRevision, ...input } = parsed.data;
     try {
-      const outcome = skills.updateSkillActivationPolicy(input, {
+      const outcome = await skills.updateSkillActivationPolicy(input, {
         expectedRevision,
         requesterId: resolveActorId(request),
       });

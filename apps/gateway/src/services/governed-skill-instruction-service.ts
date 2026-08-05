@@ -13,7 +13,8 @@ import { captureSkillContentIntegritySync } from "./skill-content-integrity.js";
 
 const DESIGN_SKILL_ID = "bundled:design-intelligence";
 const DESIGN_SKILL_NAME = "design-intelligence";
-const PRESENTATION_MODULES = ["enforcement", "layout", "taste", "assets", "audit"] as const;
+const PRESENTATION_MODULE = { name: "presentation", relativePath: "presentation.md" } as const;
+const PRESENTATION_MODULE_MAX_BYTES = 8 * 1024;
 const PRESENTATION_INTENT = /\b(?:powerpoint|presentation|slide\s*deck|slides?|pptx|presentations\.create)\b/iu;
 
 interface ActivatedSkillSource {
@@ -118,12 +119,11 @@ function buildReceipt(input: {
   ) {
     throw new Error(`Activated skill ${input.source.skillId} failed exact-byte lifecycle verification.`);
   }
-  const modulePaths = input.modulePaths ?? [
-    { name: "main", relativePath: "SKILL.md" },
-    ...(isPresentationDesignSkill(input.source, input.presentationIntent)
-      ? PRESENTATION_MODULES.map((name) => ({ name, relativePath: `${name}.md` }))
-      : []),
-  ];
+  const modulePaths =
+    input.modulePaths ??
+    (isPresentationDesignSkill(input.source, input.presentationIntent)
+      ? [PRESENTATION_MODULE]
+      : [{ name: "main", relativePath: "SKILL.md" }]);
   const manifestByPath = new Map(currentIntegrity.files.map((file) => [normalizeRelativePath(file.path), file]));
   const modules = modulePaths.map((module) => {
     const relativePath = normalizeRelativePath(module.relativePath);
@@ -139,6 +139,15 @@ function buildReceipt(input: {
       throw new Error(`Activated skill ${input.source.skillId} module escaped its skill root.`);
     }
     const bytes = fs.readFileSync(fullPath);
+    if (
+      relativePath === PRESENTATION_MODULE.relativePath &&
+      isDesignSkill(input.source) &&
+      bytes.byteLength > PRESENTATION_MODULE_MAX_BYTES
+    ) {
+      throw new Error(
+        `Activated skill ${input.source.skillId} presentation module exceeds the ${PRESENTATION_MODULE_MAX_BYTES}-byte limit.`,
+      );
+    }
     const sha256 = createHash("sha256").update(bytes).digest("hex");
     if (sha256 !== manifestFile.sha256 || bytes.byteLength !== manifestFile.bytes) {
       throw new Error(`Activated skill ${input.source.skillId} module ${relativePath} drifted after lifecycle freeze.`);
@@ -170,11 +179,14 @@ function isPresentationDesignSkill(
   source: ActivatedSkillSource & { name?: string },
   presentationIntent?: boolean,
 ): boolean {
+  return Boolean(presentationIntent) && isDesignSkill(source);
+}
+
+function isDesignSkill(source: ActivatedSkillSource & { name?: string }): boolean {
   return (
-    Boolean(presentationIntent) &&
-    (source.skillId === DESIGN_SKILL_ID ||
-      source.skillId.endsWith(`:${DESIGN_SKILL_NAME}`) ||
-      source.name === DESIGN_SKILL_NAME)
+    source.skillId === DESIGN_SKILL_ID ||
+    source.skillId.endsWith(`:${DESIGN_SKILL_NAME}`) ||
+    source.name === DESIGN_SKILL_NAME
   );
 }
 

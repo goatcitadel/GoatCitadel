@@ -210,6 +210,20 @@ export class ConfigGenerationService {
     return readGenerationRevision(this.activePayload);
   }
 
+  /**
+   * Replaces the in-memory first-install placeholder after async storage is
+   * ready. This is only legal before a canonical config has been published;
+   * an appearing file is treated as concurrent ownership and fails closed.
+   */
+  public hydrateUnpublishedBootstrapPayload(payload: CompleteUnifiedConfigPayload): void {
+    if (fsSync.existsSync(this.activePath)) {
+      throw new Error("Cannot hydrate config bootstrap after canonical config publication.");
+    }
+    assertValidCompleteUnifiedConfig(payload, "async storage bootstrap");
+    assertGenerationDigest(payload, "async storage bootstrap");
+    this.activePayload = structuredClone(payload);
+  }
+
   public getGenerationId(): string {
     return this.activePayload.generation?.generationId ?? legacyGenerationId(this.activePayload);
   }

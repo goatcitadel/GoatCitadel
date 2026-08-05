@@ -15,7 +15,7 @@ import type {
   SkillListItem,
 } from "@goatcitadel/contracts";
 import { NotFoundError, ValidationError } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 
 const DEFAULT_TARGET_PASS_RATE = 0.85;
 const DEFAULT_MAX_ROUNDS = 3;
@@ -35,7 +35,7 @@ export interface SkillEvaluationImprovementResult {
 
 export interface SkillEvaluationServiceHost {
   storage: Pick<Storage, "skillEvaluationRuns" | "capabilityProposals">;
-  listSkills(): SkillListItem[];
+  listSkills(): Promise<SkillListItem[]>;
   createCapabilityProposal(input: {
     proposalKind: "skill";
     title: string;
@@ -43,7 +43,7 @@ export interface SkillEvaluationServiceHost {
     payload: Record<string, unknown>;
     candidateId?: string;
     activationTargetId?: string;
-  }): CapabilityProposalRecord;
+  }): Promise<CapabilityProposalRecord>;
   recordSkillEvaluationSignal?(input: {
     skillId: string;
     skillName: string;
@@ -53,28 +53,31 @@ export interface SkillEvaluationServiceHost {
     passRate: number;
     improvementDelta: number;
     summary: string;
-  }): SkillEvaluationImprovementResult | undefined;
+  }): Promise<SkillEvaluationImprovementResult | undefined>;
 }
 
 export class SkillEvaluationService {
   public constructor(private readonly host: SkillEvaluationServiceHost) {}
 
-  public previewSkillEvaluation(skillId: string, input: SkillEvaluationPreviewRequest = {}): SkillEvaluationRunRecord {
-    const skill = this.requireSkill(skillId);
+  public async previewSkillEvaluation(
+    skillId: string,
+    input: SkillEvaluationPreviewRequest = {},
+  ): Promise<SkillEvaluationRunRecord> {
+    const skill = await this.requireSkill(skillId);
     return this.buildEvaluationRun(skill, input, "preview");
   }
 
-  public runSkillEvaluation(
+  public async runSkillEvaluation(
     skillId: string,
     input: SkillEvaluationRunRequest = {},
-  ): {
+  ): Promise<{
     run: SkillEvaluationRunRecord;
     improvementSignal?: ImprovementSignalRecord;
     improvementCandidate?: ImprovementCandidateRecord;
-  } {
-    const skill = this.requireSkill(skillId);
+  }> {
+    const skill = await this.requireSkill(skillId);
     const run = this.buildEvaluationRun(skill, input, "completed");
-    const ledger = this.host.recordSkillEvaluationSignal?.({
+    const ledger = await this.host.recordSkillEvaluationSignal?.({
       skillId: run.skillId,
       skillName: run.skillName,
       runId: run.runId,
@@ -83,7 +86,7 @@ export class SkillEvaluationService {
       improvementDelta: run.improvementDelta,
       summary: run.mutation?.summary ?? "Skill evaluation completed without an accepted mutation.",
     });
-    const stored = this.host.storage.skillEvaluationRuns.upsert({
+    const stored = await this.host.storage.skillEvaluationRuns.upsert({
       ...run,
       ledgerSignalId: ledger?.signal?.signalId,
       improvementCandidateId: ledger?.candidate?.candidateId,
@@ -96,20 +99,20 @@ export class SkillEvaluationService {
     };
   }
 
-  public listSkillEvaluationRuns(skillId: string): SkillEvaluationRunRecord[] {
-    this.requireSkill(skillId);
-    return this.host.storage.skillEvaluationRuns.listBySkill(skillId);
+  public async listSkillEvaluationRuns(skillId: string): Promise<SkillEvaluationRunRecord[]> {
+    await this.requireSkill(skillId);
+    return await this.host.storage.skillEvaluationRuns.listBySkill(skillId);
   }
 
-  public getSkillEvaluationRun(runId: string): SkillEvaluationRunRecord {
-    return this.host.storage.skillEvaluationRuns.get(runId);
+  public async getSkillEvaluationRun(runId: string): Promise<SkillEvaluationRunRecord> {
+    return await this.host.storage.skillEvaluationRuns.get(runId);
   }
 
-  public createSkillEvaluationProposal(runId: string): {
+  public async createSkillEvaluationProposal(runId: string): Promise<{
     run: SkillEvaluationRunRecord;
     proposal: CapabilityProposalRecord;
-  } {
-    const run = this.host.storage.skillEvaluationRuns.get(runId);
+  }> {
+    const run = await this.host.storage.skillEvaluationRuns.get(runId);
     if (!run.accepted || !run.mutation || !run.candidateResult) {
       throw new ValidationError({
         field: "runId",
@@ -117,12 +120,12 @@ export class SkillEvaluationService {
       });
     }
     if (run.proposalId) {
-      const existing = this.host.storage.capabilityProposals.find(run.proposalId);
+      const existing = await this.host.storage.capabilityProposals.find(run.proposalId);
       if (existing) {
         return { run, proposal: existing };
       }
     }
-    const proposal = this.host.createCapabilityProposal({
+    const proposal = await this.host.createCapabilityProposal({
       proposalKind: "skill",
       title: `Review skill revision: ${run.skillName}`,
       summary: `${run.mutation.summary} Score changed from ${formatRate(
@@ -149,7 +152,7 @@ export class SkillEvaluationService {
         operatorTruth: run.operatorTruth,
       },
     });
-    const ledger = this.host.recordSkillEvaluationSignal?.({
+    const ledger = await this.host.recordSkillEvaluationSignal?.({
       skillId: run.skillId,
       skillName: run.skillName,
       runId: run.runId,
@@ -159,7 +162,7 @@ export class SkillEvaluationService {
       improvementDelta: run.improvementDelta,
       summary: `Skill revision proposal created for ${run.skillName}.`,
     });
-    const updated = this.host.storage.skillEvaluationRuns.upsert({
+    const updated = await this.host.storage.skillEvaluationRuns.upsert({
       ...run,
       status: "proposal_created",
       proposalId: proposal.proposalId,
@@ -215,9 +218,9 @@ export class SkillEvaluationService {
     };
   }
 
-  private requireSkill(skillId: string): SkillListItem {
+  private async requireSkill(skillId: string): Promise<SkillListItem> {
     const normalized = skillId.trim();
-    const skill = this.host.listSkills().find((item) => item.skillId === normalized);
+    const skill = (await this.host.listSkills()).find((item) => item.skillId === normalized);
     if (!skill) {
       throw new NotFoundError({ entity: "skill", id: normalized });
     }

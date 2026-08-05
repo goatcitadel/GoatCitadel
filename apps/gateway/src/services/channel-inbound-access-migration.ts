@@ -1,5 +1,6 @@
 import type { IntegrationConnection, RealtimeEvent } from "@goatcitadel/contracts";
 import { resolveAllowedSenders } from "@goatcitadel/contracts";
+import type { AsyncStorage } from "@goatcitadel/storage";
 import { OPEN_INBOUND_CHANNELS } from "./integration-channel-service.js";
 
 /**
@@ -26,29 +27,20 @@ import { OPEN_INBOUND_CHANNELS } from "./integration-channel-service.js";
 export const LEGACY_OPEN_STAMP_SETTING_KEY = "channels.inbound_access.legacy_open_stamp.v1";
 
 export interface ChannelInboundAccessMigrationDeps {
-  storage: {
-    integrationConnections: {
-      list(kind?: IntegrationConnection["kind"], limit?: number): IntegrationConnection[];
-      update(connectionId: string, input: { config: Record<string, unknown> }): IntegrationConnection;
-    };
-    systemSettings: {
-      get<T>(key: string): { value: T } | undefined;
-      set(key: string, value: unknown): void;
-    };
-  };
+  storage: Pick<AsyncStorage, "integrationConnections" | "systemSettings">;
   publishRealtime(
     eventType: string,
     source: string,
     payload: Record<string, unknown>,
     options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
-  ): RealtimeEvent;
+  ): Promise<RealtimeEvent>;
   recordDevDiagnostic?(input: {
     level: "info" | "warn";
     category: "channels";
     event: string;
     message: string;
     context?: Record<string, unknown>;
-  }): void;
+  }): void | Promise<void>;
   now: string;
 }
 
@@ -57,15 +49,15 @@ export interface ChannelInboundAccessMigrationResult {
   stampedConnectionIds: string[];
 }
 
-export function stampLegacyOpenChannelInboundAccess(
+export async function stampLegacyOpenChannelInboundAccess(
   deps: ChannelInboundAccessMigrationDeps,
-): ChannelInboundAccessMigrationResult {
-  const marker = deps.storage.systemSettings.get<{ completedAt: string }>(LEGACY_OPEN_STAMP_SETTING_KEY)?.value;
+): Promise<ChannelInboundAccessMigrationResult> {
+  const marker = (await deps.storage.systemSettings.get<{ completedAt: string }>(LEGACY_OPEN_STAMP_SETTING_KEY))?.value;
   if (marker?.completedAt) {
     return { ranNow: false, stampedConnectionIds: [] };
   }
 
-  const connections = deps.storage.integrationConnections.list("channel", 1_000);
+  const connections = await deps.storage.integrationConnections.list("channel", 1_000);
   const stampedConnectionIds: string[] = [];
   const stampedLabels: string[] = [];
 
@@ -74,7 +66,7 @@ export function stampLegacyOpenChannelInboundAccess(
       continue;
     }
     try {
-      deps.storage.integrationConnections.update(connection.connectionId, {
+      await deps.storage.integrationConnections.update(connection.connectionId, {
         config: {
           ...connection.config,
           inboundAccessMode: "open_legacy",
@@ -87,7 +79,7 @@ export function stampLegacyOpenChannelInboundAccess(
       // Best-effort per connection: a single failed write must not block boot
       // or the remaining stamps; the connection simply stays in the unset
       // class and is retried on the next boot (marker is only set on success).
-      deps.recordDevDiagnostic?.({
+      await deps.recordDevDiagnostic?.({
         level: "warn",
         category: "channels",
         event: "channel.inbound_access_legacy_stamp_failed",
@@ -101,13 +93,13 @@ export function stampLegacyOpenChannelInboundAccess(
     }
   }
 
-  deps.storage.systemSettings.set(LEGACY_OPEN_STAMP_SETTING_KEY, {
+  await deps.storage.systemSettings.set(LEGACY_OPEN_STAMP_SETTING_KEY, {
     completedAt: deps.now,
     stampedConnectionIds,
   });
 
   if (stampedConnectionIds.length > 0) {
-    deps.publishRealtime(
+    await deps.publishRealtime(
       "channel_inbound_access_migrated",
       "channels",
       {
@@ -123,7 +115,7 @@ export function stampLegacyOpenChannelInboundAccess(
         links: {},
       },
     );
-    deps.recordDevDiagnostic?.({
+    await deps.recordDevDiagnostic?.({
       level: "info",
       category: "channels",
       event: "channel.inbound_access_legacy_stamped",

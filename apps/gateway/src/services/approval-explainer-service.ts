@@ -5,7 +5,7 @@ import {
   type ChatCompletionRequest,
   type ChatCompletionResponse,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { ApprovalExplainerConfig } from "../config.js";
 import { LlmService } from "./llm-service.js";
 import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
@@ -25,7 +25,7 @@ export class ApprovalExplainerService {
     private readonly storage: Storage,
     private readonly llmService: LlmService,
     private readonly config: ApprovalExplainerConfig,
-    private readonly publishRealtime: (payload: ApprovalExplainerRealtimePayload) => void,
+    private readonly publishRealtime: (payload: ApprovalExplainerRealtimePayload) => Promise<void>,
   ) {}
 
   public shouldExplain(approval: ApprovalRequest): boolean {
@@ -45,12 +45,12 @@ export class ApprovalExplainerService {
       return;
     }
 
-    const markedPending = this.storage.approvals.markExplanationPending(approval.approvalId);
+    const markedPending = await this.storage.approvals.markExplanationPending(approval.approvalId);
     if (!markedPending) {
       return;
     }
 
-    this.storage.approvalEvents.append({
+    await this.storage.approvalEvents.append({
       approvalId: approval.approvalId,
       eventType: "explanation_requested",
       actorId: "system",
@@ -123,8 +123,8 @@ export class ApprovalExplainerService {
         model,
       };
 
-      this.storage.approvals.setExplanation(approval.approvalId, explanation);
-      this.storage.approvalEvents.append({
+      await this.storage.approvals.setExplanation(approval.approvalId, explanation);
+      await this.storage.approvalEvents.append({
         approvalId: approval.approvalId,
         eventType: "explanation_generated",
         actorId: "system",
@@ -134,7 +134,7 @@ export class ApprovalExplainerService {
         },
       });
 
-      this.publishRealtime({
+      await this.publishRealtime({
         approvalId: approval.approvalId,
         status: "completed",
         providerId,
@@ -145,8 +145,8 @@ export class ApprovalExplainerService {
         throw error;
       }
       const message = truncate((error as Error).message, 500);
-      this.storage.approvals.setExplanationFailed(approval.approvalId, message);
-      this.storage.approvalEvents.append({
+      await this.storage.approvals.setExplanationFailed(approval.approvalId, message);
+      await this.storage.approvalEvents.append({
         approvalId: approval.approvalId,
         eventType: "explanation_failed",
         actorId: "system",
@@ -154,7 +154,7 @@ export class ApprovalExplainerService {
           error: message,
         },
       });
-      this.publishRealtime({
+      await this.publishRealtime({
         approvalId: approval.approvalId,
         status: "failed",
         error: message,

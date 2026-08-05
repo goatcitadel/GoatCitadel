@@ -49,14 +49,14 @@ vi.mock("./chat-command-service.js", () => ({
 }));
 
 vi.mock("./chat-generated-artifact-service.js", () => ({
-  createChatGeneratedArtifactFromTurn: vi.fn((deps, input) => ({
+  createChatGeneratedArtifactFromTurn: vi.fn(async (deps, input) => ({
     input,
-    session: deps.requireChatSession("session-1"),
+    session: await deps.requireChatSession("session-1"),
   })),
-  getChatGeneratedArtifact: vi.fn((deps, artifactId, options) => ({
+  getChatGeneratedArtifact: vi.fn(async (deps, artifactId, options) => ({
     artifactId,
     options,
-    session: deps.requireChatSession("session-1"),
+    session: await deps.requireChatSession("session-1"),
   })),
   listChatGeneratedArtifacts: vi.fn((_deps, input) => ({ items: [input] })),
 }));
@@ -84,14 +84,14 @@ vi.mock("./chat-session-service.js", () => ({
     return {
       input,
       workspaceId: deps.normalizeWorkspaceId(" Team "),
-      grants: deps.ensureChatSessionRuntimeGrants("session-1"),
-      required: deps.requireChatSession("session-1"),
-      session: deps.getSession("session-1"),
-      emitted: deps.publishRealtime("session_created", "chat", { sessionId: "session-1" }),
-      cleared: deps.clearChatTurnWriteLease("session-1"),
-      defaults: deps.ensureChatSessionModelDefaults("session-1", { providerId: "openai" }),
-      autonomy: deps.hydrateChatPrefsWithAutonomy("session-1", { toolAutonomy: "safe_auto" }),
-      patched: deps.patchSessionAutonomyPrefs("session-1", { toolAutonomy: "manual" }),
+      grants: await deps.ensureChatSessionRuntimeGrants("session-1"),
+      required: await deps.requireChatSession("session-1"),
+      session: await deps.getSession("session-1"),
+      emitted: await deps.publishRealtime("session_created", "chat", { sessionId: "session-1" }),
+      cleared: await deps.clearChatTurnWriteLease("session-1"),
+      defaults: await deps.ensureChatSessionModelDefaults("session-1", { providerId: "openai" }),
+      autonomy: await deps.hydrateChatPrefsWithAutonomy("session-1", { toolAutonomy: "safe_auto" }),
+      patched: await deps.patchSessionAutonomyPrefs("session-1", { toolAutonomy: "manual" }),
     };
   }),
   deleteChatSession: vi.fn((_deps, sessionId) => ({ op: "delete", sessionId })),
@@ -124,11 +124,11 @@ vi.mock("./chat-tool-artifact-service.js", () => ({
 }));
 
 vi.mock("./chat-workbench-service.js", () => ({
-  applyChatSessionWorkbenchPatch: vi.fn((deps, sessionId, input) => ({
+  applyChatSessionWorkbenchPatch: vi.fn(async (deps, sessionId, input) => ({
     sessionId,
     input,
-    session: deps.requireChatSession(sessionId),
-    emitted: deps.publishRealtime("chat", "workbench", { sessionId }),
+    session: await deps.requireChatSession(sessionId),
+    emitted: await deps.publishRealtime("chat", "workbench", { sessionId }),
   })),
   createChatSessionWorkbenchWorktree: vi.fn((_deps, sessionId, input) => ({ sessionId, input })),
   exportChatSessionWorkbenchPatch: vi.fn((_deps, sessionId) => ({ sessionId, patch: "" })),
@@ -154,6 +154,13 @@ import {
 
 function fn<TArgs extends unknown[] = unknown[], TResult = unknown>(impl: (...args: TArgs) => TResult) {
   return vi.fn(impl);
+}
+
+async function firstStreamItem<T>(stream: AsyncIterable<T>): Promise<T | undefined> {
+  for await (const item of stream) {
+    return item;
+  }
+  return undefined;
 }
 
 function createGateway() {
@@ -253,11 +260,9 @@ function createGateway() {
     },
     chatTurnRuntime: {
       agentSendChatMessage: fn((sessionId: string, input: unknown) => ({ method: "send", sessionId, input })),
-      agentSendChatMessageStream: fn((sessionId: string, input: unknown) => ({
-        method: "sendStream",
-        sessionId,
-        input,
-      })),
+      agentSendChatMessageStream: fn(async function* (sessionId: string, input: unknown) {
+        yield { method: "sendStream", sessionId, input };
+      }),
       cancelChatTurn: fn((sessionId: string, turnId: string, cancelledBy: string) => ({
         sessionId,
         turnId,
@@ -392,7 +397,7 @@ describe("composeChatRouteDependencies", () => {
     mocks.assertWritePathInJail.mockClear();
   });
 
-  it("authorizes capability-profile scope before materializing full provider definitions", () => {
+  it("authorizes capability-profile scope before materializing full provider definitions", async () => {
     const gateway = createGateway() as any;
     const inspectByTurn = vi.fn(() => ({
       state: "available",
@@ -491,26 +496,26 @@ describe("composeChatRouteDependencies", () => {
     };
     const deps = composeChatRouteDependencies(gateway as never) as any;
 
-    expect(() =>
+    await expect(
       deps.chatMessages.getChatTurnCapabilityProfile("session-1", "turn-1", {
         workspaceId: "wrong-workspace",
         operatorId: "operator-1",
       }),
-    ).toThrow(NotFoundError);
+    ).rejects.toThrow(NotFoundError);
     expect(findScopeByTurn).not.toHaveBeenCalled();
     expect(inspectByTurn).not.toHaveBeenCalled();
 
-    expect(() =>
+    await expect(
       deps.chatMessages.getChatTurnCapabilityProfile("session-1", "turn-1", {
         workspaceId: "workspace-1",
         operatorId: "other-operator",
       }),
-    ).toThrow(NotFoundError);
+    ).rejects.toThrow(NotFoundError);
     expect(findScopeByTurn).toHaveBeenCalledWith("turn-1");
     expect(inspectByTurn).not.toHaveBeenCalled();
 
     expect(
-      deps.chatMessages.getChatTurnCapabilityProfile("session-1", "turn-1", {
+      await deps.chatMessages.getChatTurnCapabilityProfile("session-1", "turn-1", {
         workspaceId: "workspace-1",
         operatorId: "operator-1",
       }),
@@ -542,12 +547,12 @@ describe("composeChatRouteDependencies", () => {
         },
       },
     }));
-    expect(() =>
+    await expect(
       deps.chatMessages.getChatTurnCapabilityProfile("session-1", "turn-1", {
         workspaceId: "workspace-1",
         operatorId: "operator-1",
       }),
-    ).toThrow(NotFoundError);
+    ).rejects.toThrow(NotFoundError);
     expect(inspectRoutedContextByTurn).toHaveBeenCalledOnce();
   });
 
@@ -583,12 +588,14 @@ describe("composeChatRouteDependencies", () => {
     ]);
     expect(mocks.rm).toHaveBeenCalledWith("F:\\code\\personal-ai\\workspace\\notes\\session.md", { force: true });
 
-    expect(deps.chatSessions.archiveChatSession("session-1")).toMatchObject({ op: "archive" });
-    expect(deps.chatSessions.archiveChatSessionsBulk({ ids: ["session-1"] })).toMatchObject({ op: "archiveBulk" });
-    expect(deps.chatSessions.applyChatSessionWorkbenchPatch("session-1", { diff: "x" })).toMatchObject({
+    expect(await deps.chatSessions.archiveChatSession("session-1")).toMatchObject({ op: "archive" });
+    expect(await deps.chatSessions.archiveChatSessionsBulk({ ids: ["session-1"] })).toMatchObject({
+      op: "archiveBulk",
+    });
+    expect(await deps.chatSessions.applyChatSessionWorkbenchPatch("session-1", { diff: "x" })).toMatchObject({
       session: { required: true },
     });
-    expect(deps.chatSessions.assignChatSessionProject("session-1", "project-1")).toMatchObject({
+    expect(await deps.chatSessions.assignChatSessionProject("session-1", "project-1")).toMatchObject({
       projectId: "project-1",
     });
     await expect(
@@ -597,36 +604,40 @@ describe("composeChatRouteDependencies", () => {
       session: { sessionId: "session-1" },
       ingest: { realtimeType: "knowledge_docs_ingest" },
     });
-    expect(deps.chatSessions.createChatGeneratedArtifactFromTurn({ turnId: "turn-1" })).toMatchObject({
+    expect(await deps.chatSessions.createChatGeneratedArtifactFromTurn({ turnId: "turn-1" })).toMatchObject({
       session: { required: true },
     });
-    expect(deps.chatSessions.createChatTimer("session-1", { message: "Reminder" }, "operator")).toMatchObject({
+    expect(await deps.chatSessions.createChatTimer("session-1", { message: "Reminder" }, "operator")).toMatchObject({
       sessionId: "session-1",
       actorId: "operator",
     });
-    expect(deps.chatSessions.createChatSessionWorkbenchWorktree("session-1", { branch: "main" })).toMatchObject({
+    expect(await deps.chatSessions.createChatSessionWorkbenchWorktree("session-1", { branch: "main" })).toMatchObject({
       sessionId: "session-1",
     });
-    expect(deps.chatSessions.deleteChatSession("session-1")).toMatchObject({ op: "delete" });
-    expect(deps.chatSessions.exportChatSessionWorkbenchPatch("session-1")).toMatchObject({ patch: "" });
-    expect(deps.chatSessions.getChatGeneratedArtifact("artifact-1", { includeContent: true })).toMatchObject({
+    expect(await deps.chatSessions.deleteChatSession("session-1")).toMatchObject({ op: "delete" });
+    expect(await deps.chatSessions.exportChatSessionWorkbenchPatch("session-1")).toMatchObject({ patch: "" });
+    expect(await deps.chatSessions.getChatGeneratedArtifact("artifact-1", { includeContent: true })).toMatchObject({
       artifactId: "artifact-1",
     });
-    expect(deps.chatSessions.getChatSessionBinding("session-1")).toMatchObject({ binding: null });
-    expect(deps.chatSessions.getChatSessionWorkbench("session-1")).toMatchObject({ workbench: true });
-    expect(deps.chatSessions.getChatSessionWorkbenchDiff("session-1")).toMatchObject({ diff: "" });
-    expect(deps.chatSessions.getChatSessionWorkbenchFile("session-1", "README.md")).toMatchObject({
+    expect(await deps.chatSessions.getChatSessionBinding("session-1")).toMatchObject({ binding: null });
+    expect(await deps.chatSessions.getChatSessionWorkbench("session-1")).toMatchObject({ workbench: true });
+    expect(await deps.chatSessions.getChatSessionWorkbenchDiff("session-1")).toMatchObject({ diff: "" });
+    expect(await deps.chatSessions.getChatSessionWorkbenchFile("session-1", "README.md")).toMatchObject({
       relativePath: "README.md",
     });
-    expect(deps.chatSessions.getChatSessionWorkbenchFileDiff("session-1", "README.md")).toMatchObject({ diff: "" });
-    expect(deps.chatSessions.getChatSessionWorkbenchOutput("session-1")).toMatchObject({ output: "" });
-    expect(deps.chatSessions.getChatSessionWorkbenchTree("session-1")).toMatchObject({ items: [] });
-    expect(deps.chatSessions.listChatGeneratedArtifacts({ sessionId: "session-1" })).toMatchObject({
+    expect(await deps.chatSessions.getChatSessionWorkbenchFileDiff("session-1", "README.md")).toMatchObject({
+      diff: "",
+    });
+    expect(await deps.chatSessions.getChatSessionWorkbenchOutput("session-1")).toMatchObject({ output: "" });
+    expect(await deps.chatSessions.getChatSessionWorkbenchTree("session-1")).toMatchObject({ items: [] });
+    expect(await deps.chatSessions.listChatGeneratedArtifacts({ sessionId: "session-1" })).toMatchObject({
       items: [{ sessionId: "session-1" }],
     });
-    expect(deps.chatSessions.listChatSessions({ limit: 1 })).toMatchObject({ items: [{ limit: 1 }] });
-    expect(deps.chatSessions.listChatTimers("session-1")).toEqual([{ sessionId: "session-1", timerId: "timer-1" }]);
-    expect(deps.chatSessions.searchChatSessions({ query: "deploy" })).toMatchObject({
+    expect(await deps.chatSessions.listChatSessions({ limit: 1 })).toMatchObject({ items: [{ limit: 1 }] });
+    expect(await deps.chatSessions.listChatTimers("session-1")).toEqual([
+      { sessionId: "session-1", timerId: "timer-1" },
+    ]);
+    expect(await deps.chatSessions.searchChatSessions({ query: "deploy" })).toMatchObject({
       query: "deploy",
       items: [{ query: "deploy" }],
     });
@@ -634,70 +645,84 @@ describe("composeChatRouteDependencies", () => {
       content: { attachmentId: "attachment-1" },
       query: { realtimeType: "knowledge_embeddings_query" },
     });
-    expect(deps.chatSessions.pinChatSession("session-1")).toMatchObject({ pinned: true });
-    expect(deps.chatSessions.removeChatThreadKnowledgeAttachment("session-1", "attachment-1")).toMatchObject({
+    expect(await deps.chatSessions.pinChatSession("session-1")).toMatchObject({ pinned: true });
+    expect(await deps.chatSessions.removeChatThreadKnowledgeAttachment("session-1", "attachment-1")).toMatchObject({
       attachmentId: "attachment-1",
     });
-    expect(deps.chatSessions.restoreChatSession("session-1")).toMatchObject({ archived: false });
-    expect(deps.chatSessions.revertChatSessionWorkbenchChanges("session-1")).toMatchObject({ reverted: true });
-    expect(deps.chatSessions.revertChatSessionWorkbenchFile("session-1", { path: "README.md" })).toMatchObject({
+    expect(await deps.chatSessions.restoreChatSession("session-1")).toMatchObject({ archived: false });
+    expect(await deps.chatSessions.revertChatSessionWorkbenchChanges("session-1")).toMatchObject({ reverted: true });
+    expect(await deps.chatSessions.revertChatSessionWorkbenchFile("session-1", { path: "README.md" })).toMatchObject({
       reverted: true,
     });
-    expect(deps.chatSessions.runChatSessionWorkbenchCommand("session-1", { command: "pnpm test" })).toMatchObject({
-      exitCode: 0,
-    });
+    expect(await deps.chatSessions.runChatSessionWorkbenchCommand("session-1", { command: "pnpm test" })).toMatchObject(
+      {
+        exitCode: 0,
+      },
+    );
     expect(
-      deps.chatSessions.runChatSessionWorkbenchFileOperation("session-1", {
+      await deps.chatSessions.runChatSessionWorkbenchFileOperation("session-1", {
         operation: "create_file",
         path: "src/new.ts",
       }),
     ).toMatchObject({ operated: true });
-    expect(deps.chatSessions.saveChatSessionWorkbenchFile("session-1", { path: "README.md" })).toMatchObject({
+    expect(await deps.chatSessions.saveChatSessionWorkbenchFile("session-1", { path: "README.md" })).toMatchObject({
       saved: true,
     });
-    expect(deps.chatSessions.setChatSessionBinding({ sessionId: "session-1" })).toMatchObject({
+    expect(await deps.chatSessions.setChatSessionBinding({ sessionId: "session-1" })).toMatchObject({
       input: { sessionId: "session-1" },
     });
-    expect(deps.chatSessions.unpinChatSession("session-1")).toMatchObject({ pinned: false });
-    expect(deps.chatSessions.updateChatSession("session-1", { title: "Updated" })).toMatchObject({
+    expect(await deps.chatSessions.unpinChatSession("session-1")).toMatchObject({ pinned: false });
+    expect(await deps.chatSessions.updateChatSession("session-1", { title: "Updated" })).toMatchObject({
       input: { title: "Updated" },
     });
-    expect(deps.chatSessions.cancelChatTimer("session-1", "timer-1", 2)).toMatchObject({
+    expect(await deps.chatSessions.cancelChatTimer("session-1", "timer-1", 2)).toMatchObject({
       status: "cancelled",
       expectedRevision: 2,
     });
 
-    expect(deps.chatDelegate.acceptChatDelegation("session-1", { accepted: true })).toMatchObject({ accepted: true });
-    expect(deps.chatDelegate.getChatDelegationRun("session-1", "run-1")).toMatchObject({
+    expect(await deps.chatDelegate.acceptChatDelegation("session-1", { accepted: true })).toMatchObject({
+      accepted: true,
+    });
+    expect(await deps.chatDelegate.getChatDelegationRun("session-1", "run-1")).toMatchObject({
       run: { runId: "run-1" },
       steps: [{ stepId: "step-1" }],
     });
-    expect(() => deps.chatDelegate.getChatDelegationRun("session-1", "foreign-run")).toThrow(NotFoundError);
-    expect(deps.chatDelegate.runChatDelegation("session-1", { goal: "ship" })).toMatchObject({ run: true });
+    await expect(deps.chatDelegate.getChatDelegationRun("session-1", "foreign-run")).rejects.toThrow(NotFoundError);
+    expect(await deps.chatDelegate.runChatDelegation("session-1", { goal: "ship" })).toMatchObject({ run: true });
     const abortController = new AbortController();
     expect(
-      deps.chatDelegate.runChatDelegationStream("session-1", { goal: "ship" }, { abortSignal: abortController.signal }),
+      await deps.chatDelegate.runChatDelegationStream(
+        "session-1",
+        { goal: "ship" },
+        { abortSignal: abortController.signal },
+      ),
     ).toMatchObject({ stream: true, options: { abortSignal: abortController.signal } });
-    expect(deps.chatDelegate.suggestChatDelegation("session-1", { goal: "ship" })).toMatchObject({ suggestions: [] });
+    expect(await deps.chatDelegate.suggestChatDelegation("session-1", { goal: "ship" })).toMatchObject({
+      suggestions: [],
+    });
 
-    expect(deps.chatTools.getChatToolArtifactContent("artifact-1", { encoding: "text" })).toMatchObject({
+    expect(await deps.chatTools.getChatToolArtifactContent("artifact-1", { encoding: "text" })).toMatchObject({
       artifactId: "artifact-1",
     });
-    expect(deps.chatTools.listChatPendingApprovals("session-1")).toEqual([
+    expect(await deps.chatTools.listChatPendingApprovals("session-1")).toEqual([
       { sessionId: "session-1", approvalId: "approval-1" },
     ]);
     expect(
-      deps.chatTools.resolveChatToolApproval("session-1", "approval-1", "approved", { actor: "operator" }),
+      await deps.chatTools.resolveChatToolApproval("session-1", "approval-1", "approved", { actor: "operator" }),
     ).toMatchObject({
       decision: "approved",
     });
 
-    expect(deps.chatMessages.agentSendChatMessage("session-1", { content: "hi" })).toMatchObject({ method: "send" });
-    expect(deps.chatMessages.agentSendChatMessageStream("session-1", { content: "hi" })).toMatchObject({
+    expect(await deps.chatMessages.agentSendChatMessage("session-1", { content: "hi" })).toMatchObject({
+      method: "send",
+    });
+    expect(
+      await firstStreamItem(deps.chatMessages.agentSendChatMessageStream("session-1", { content: "hi" })),
+    ).toMatchObject({
       method: "sendStream",
     });
     expect(
-      deps.chatMessages.answerChatUserInputPrompt(
+      await deps.chatMessages.answerChatUserInputPrompt(
         "session-1",
         "turn-1",
         "prompt-1",
@@ -708,96 +733,105 @@ describe("composeChatRouteDependencies", () => {
       promptId: "prompt-1",
       responder: { actorId: "operator-1", authActorSource: "token" },
     });
-    expect(deps.chatMessages.cancelChatTurn("session-1", "turn-1", "operator")).toMatchObject({
+    expect(await deps.chatMessages.cancelChatTurn("session-1", "turn-1", "operator")).toMatchObject({
       cancelledBy: "operator",
     });
-    expect(deps.chatMessages.editChatTurn("session-1", "turn-1", { content: "edit" })).toMatchObject({
+    expect(await deps.chatMessages.editChatTurn("session-1", "turn-1", { content: "edit" })).toMatchObject({
       method: "edit",
     });
-    expect(deps.chatMessages.editChatTurnStream("session-1", "turn-1", { content: "edit" })).toMatchObject({
+    expect(await deps.chatMessages.editChatTurnStream("session-1", "turn-1", { content: "edit" })).toMatchObject({
       method: "editStream",
     });
-    expect(deps.chatMessages.getChatThread("session-1")).toMatchObject({ turns: [] });
-    expect(deps.chatMessages.getTurnContextManifestForSession("session-1", "turn-1")).toMatchObject({
+    expect(await deps.chatMessages.getChatThread("session-1")).toMatchObject({ turns: [] });
+    expect(await deps.chatMessages.getTurnContextManifestForSession("session-1", "turn-1")).toMatchObject({
       turnId: "turn-1",
     });
-    expect(deps.chatMessages.listChatMessages("session-1", 10, "cursor-1")).toMatchObject({ cursor: "cursor-1" });
-    expect(deps.chatMessages.resumeAgentChatTurnStream("session-1", "turn-1", "event-1")).toMatchObject({
+    expect(await deps.chatMessages.listChatMessages("session-1", 10, "cursor-1")).toMatchObject({ cursor: "cursor-1" });
+    expect(await deps.chatMessages.resumeAgentChatTurnStream("session-1", "turn-1", "event-1")).toMatchObject({
       sinceEventId: "event-1",
     });
-    expect(deps.chatMessages.retryChatTurn("session-1", "turn-1", { reason: "again" })).toMatchObject({
+    expect(await deps.chatMessages.retryChatTurn("session-1", "turn-1", { reason: "again" })).toMatchObject({
       method: "retry",
     });
-    expect(deps.chatMessages.retryChatTurnStream("session-1", "turn-1", { reason: "again" })).toMatchObject({
+    expect(await deps.chatMessages.retryChatTurnStream("session-1", "turn-1", { reason: "again" })).toMatchObject({
       method: "retryStream",
     });
-    expect(deps.chatMessages.routePreflight("session-1", { content: "hi" })).toMatchObject({ status: "ok" });
-    expect(deps.chatMessages.selectChatBranchTurn("session-1", "turn-1")).toMatchObject({ turnId: "turn-1" });
+    expect(await deps.chatMessages.routePreflight("session-1", { content: "hi" })).toMatchObject({ status: "ok" });
+    expect(await deps.chatMessages.selectChatBranchTurn("session-1", "turn-1")).toMatchObject({ turnId: "turn-1" });
 
-    expect(deps.chatProjects.archiveChatProject("project-1", 2)).toMatchObject({ archived: true, expectedRevision: 2 });
-    expect(deps.chatProjects.createChatProject({ name: "Project" })).toMatchObject({ projectId: "project-1" });
-    expect(deps.chatProjects.hardDeleteChatProject("project-1", 3)).toMatchObject({
+    expect(await deps.chatProjects.archiveChatProject("project-1", 2)).toMatchObject({
+      archived: true,
+      expectedRevision: 2,
+    });
+    expect(await deps.chatProjects.createChatProject({ name: "Project" })).toMatchObject({ projectId: "project-1" });
+    expect(await deps.chatProjects.hardDeleteChatProject("project-1", 3)).toMatchObject({
       deleted: true,
       expectedRevision: 3,
     });
-    expect(deps.chatProjects.importChatProject({ name: "Import" })).toMatchObject({ projectId: "imported" });
-    expect(deps.chatProjects.listChatProjects("active", 5, "workspace-1")).toMatchObject({
+    expect(await deps.chatProjects.importChatProject({ name: "Import" })).toMatchObject({ projectId: "imported" });
+    expect(await deps.chatProjects.listChatProjects("active", 5, "workspace-1")).toMatchObject({
       view: "active",
       workspaceId: "normalized:workspace-1",
     });
-    expect(deps.chatProjects.restoreChatProject("project-1", 4)).toMatchObject({
+    expect(await deps.chatProjects.restoreChatProject("project-1", 4)).toMatchObject({
       archived: false,
       expectedRevision: 4,
     });
-    expect(deps.chatProjects.updateChatProject("project-1", { name: "New" }, 5)).toMatchObject({
+    expect(await deps.chatProjects.updateChatProject("project-1", { name: "New" }, 5)).toMatchObject({
       input: { name: "New" },
       expectedRevision: 5,
     });
 
-    expect(deps.chatSupport.commands.listChatCommandCatalog()).toEqual([{ command: "/delegate" }]);
+    expect(await deps.chatSupport.commands.listChatCommandCatalog()).toEqual([{ command: "/delegate" }]);
     expect(
-      deps.chatSupport.commands.parseChatCommand("session-1", "/delegate qa", { resolvedBy: "operator-test" }),
+      await deps.chatSupport.commands.parseChatCommand("session-1", "/delegate qa", { resolvedBy: "operator-test" }),
     ).toMatchObject({
       commandText: "/delegate qa",
       options: { resolvedBy: "operator-test" },
     });
-    expect(deps.chatSupport.learnedMemory.listChatSessionLearnedMemory("session-1", 3)).toEqual([
+    expect(await deps.chatSupport.learnedMemory.listChatSessionLearnedMemory("session-1", 3)).toEqual([
       { sessionId: "session-1", limit: 3 },
     ]);
-    expect(deps.chatSupport.learnedMemory.rebuildChatSessionLearnedMemory("session-1")).toMatchObject({
+    expect(await deps.chatSupport.learnedMemory.rebuildChatSessionLearnedMemory("session-1")).toMatchObject({
       rebuilt: true,
     });
     expect(
-      deps.chatSupport.learnedMemory.updateChatSessionLearnedMemory("session-1", "memory-1", { text: "x" }),
+      await deps.chatSupport.learnedMemory.updateChatSessionLearnedMemory("session-1", "memory-1", { text: "x" }),
     ).toMatchObject({
       itemId: "memory-1",
     });
-    expect(deps.chatSupport.prefs.getChatSessionPrefs("session-1")).toMatchObject({ mode: "chat" });
-    expect(deps.chatSupport.prefs.updateChatSessionPrefs("session-1", { mode: "cowork" })).toMatchObject({
+    expect(await deps.chatSupport.prefs.getChatSessionPrefs("session-1")).toMatchObject({ mode: "chat" });
+    expect(await deps.chatSupport.prefs.updateChatSessionPrefs("session-1", { mode: "cowork" })).toMatchObject({
       input: { mode: "cowork" },
     });
-    expect(deps.chatSupport.proactive.getChatSessionProactiveStatus("session-1")).toMatchObject({ enabled: true });
-    expect(deps.chatSupport.proactive.listChatSessionProactiveRuns("session-1", 4)).toEqual([
+    expect(await deps.chatSupport.proactive.getChatSessionProactiveStatus("session-1")).toMatchObject({
+      enabled: true,
+    });
+    expect(await deps.chatSupport.proactive.listChatSessionProactiveRuns("session-1", 4)).toEqual([
       { sessionId: "session-1", limit: 4 },
     ]);
-    expect(deps.chatSupport.proactive.triggerChatSessionProactive("session-1", { reason: "manual" })).toMatchObject({
+    expect(
+      await deps.chatSupport.proactive.triggerChatSessionProactive("session-1", { reason: "manual" }),
+    ).toMatchObject({
       input: { reason: "manual" },
     });
-    expect(deps.chatSupport.proactive.updateChatSessionProactivePolicy("session-1", { enabled: false })).toMatchObject({
+    expect(
+      await deps.chatSupport.proactive.updateChatSessionProactivePolicy("session-1", { enabled: false }),
+    ).toMatchObject({
       input: { enabled: false },
     });
-    expect(deps.chatSupport.research.getChatResearchRun("session-1", "research-1")).toMatchObject({
+    expect(await deps.chatSupport.research.getChatResearchRun("session-1", "research-1")).toMatchObject({
       runId: "research-1",
     });
-    expect(deps.chatSupport.research.runChatResearch("session-1", { query: "news" })).toMatchObject({
+    expect(await deps.chatSupport.research.runChatResearch("session-1", { query: "news" })).toMatchObject({
       input: { query: "news" },
     });
     expect(
-      deps.chatSupport.specialists.createChatSessionSpecialistCandidate("session-1", { role: "QA" }),
+      await deps.chatSupport.specialists.createChatSessionSpecialistCandidate("session-1", { role: "QA" }),
     ).toMatchObject({
       input: { role: "QA" },
     });
-    expect(deps.chatSupport.specialists.listChatSessionSpecialistCandidates("session-1")).toEqual({
+    expect(await deps.chatSupport.specialists.listChatSessionSpecialistCandidates("session-1")).toEqual({
       items: [{ sessionId: "session-1", limit: 200 }],
     });
     await expect(
@@ -826,37 +860,41 @@ describe("composeChatRouteDependencies", () => {
       turnBudget: null,
     });
     expect(
-      deps.chatSupport.specialists.updateChatSessionSpecialistCandidate("session-1", "candidate-1", { role: "QA" }),
+      await deps.chatSupport.specialists.updateChatSessionSpecialistCandidate("session-1", "candidate-1", {
+        role: "QA",
+      }),
     ).toMatchObject({
       candidateId: "candidate-1",
     });
-    expect(() =>
+    await expect(
       deps.chatSupport.specialists.updateChatSessionSpecialistCandidate("session-1", "foreign-candidate", {
         role: "QA",
       }),
-    ).toThrow("Specialist candidate does not belong to this session.");
+    ).rejects.toThrow("Specialist candidate does not belong to this session.");
   });
 
-  it("forwards streamed Chat mutation lifecycle signals into the runtime options", () => {
+  it("forwards streamed Chat mutation lifecycle signals into the runtime options", async () => {
     const gateway = createGateway();
     const deps = composeChatRouteDependencies(gateway as never) as any;
     const controller = new AbortController();
     const mutationLifecycle = { markCommitted: vi.fn() };
 
-    deps.chatMessages.agentSendChatMessageStream(
-      "session-1",
-      { content: "send" },
-      controller.signal,
-      mutationLifecycle,
+    await firstStreamItem(
+      deps.chatMessages.agentSendChatMessageStream(
+        "session-1",
+        { content: "send" },
+        controller.signal,
+        mutationLifecycle,
+      ),
     );
-    deps.chatMessages.retryChatTurnStream(
+    await deps.chatMessages.retryChatTurnStream(
       "session-1",
       "turn-1",
       { content: "retry" },
       controller.signal,
       mutationLifecycle,
     );
-    deps.chatMessages.editChatTurnStream(
+    await deps.chatMessages.editChatTurnStream(
       "session-1",
       "turn-1",
       { content: "edit" },
@@ -883,7 +921,7 @@ describe("composeChatRouteDependencies", () => {
     );
   });
 
-  it("forwards the route-authenticated operator context separately from Chat request bodies", () => {
+  it("forwards the route-authenticated operator context separately from Chat request bodies", async () => {
     const gateway = createGateway();
     const deps = composeChatRouteDependencies(gateway as never) as any;
     const authenticatedOperator = createAuthenticatedOperatorAdmissionContext({
@@ -891,16 +929,18 @@ describe("composeChatRouteDependencies", () => {
       authActorSource: "loopback",
     });
 
-    deps.chatMessages.agentSendChatMessage("session-1", { content: "send" }, authenticatedOperator);
-    deps.chatMessages.agentSendChatMessageStream(
-      "session-1",
-      { content: "send stream" },
-      undefined,
-      undefined,
-      authenticatedOperator,
+    await deps.chatMessages.agentSendChatMessage("session-1", { content: "send" }, authenticatedOperator);
+    await firstStreamItem(
+      deps.chatMessages.agentSendChatMessageStream(
+        "session-1",
+        { content: "send stream" },
+        undefined,
+        undefined,
+        authenticatedOperator,
+      ),
     );
-    deps.chatMessages.retryChatTurn("session-1", "turn-1", { content: "retry" }, authenticatedOperator);
-    deps.chatMessages.retryChatTurnStream(
+    await deps.chatMessages.retryChatTurn("session-1", "turn-1", { content: "retry" }, authenticatedOperator);
+    await deps.chatMessages.retryChatTurnStream(
       "session-1",
       "turn-1",
       { content: "retry stream" },
@@ -908,8 +948,8 @@ describe("composeChatRouteDependencies", () => {
       undefined,
       authenticatedOperator,
     );
-    deps.chatMessages.editChatTurn("session-1", "turn-1", { content: "edit" }, authenticatedOperator);
-    deps.chatMessages.editChatTurnStream(
+    await deps.chatMessages.editChatTurn("session-1", "turn-1", { content: "edit" }, authenticatedOperator);
+    await deps.chatMessages.editChatTurnStream(
       "session-1",
       "turn-1",
       { content: "edit stream" },
@@ -954,7 +994,7 @@ describe("composeChatRouteDependencies", () => {
     );
   });
 
-  it("threads the bound external-controller context into the canonical send facade without a new route", () => {
+  it("threads the bound external-controller context into the canonical send facade without a new route", async () => {
     const gateway = createGateway();
     const deps = composeChatRouteDependencies(gateway as never) as any;
     const externalCompanion = createExternalCompanionAdmissionContext({
@@ -965,14 +1005,16 @@ describe("composeChatRouteDependencies", () => {
       expectedGeneration: 4,
     });
 
-    deps.chatMessages.agentSendChatMessage("session-1", { content: "send" }, undefined, externalCompanion);
-    deps.chatMessages.agentSendChatMessageStream(
-      "session-1",
-      { content: "send stream" },
-      undefined,
-      undefined,
-      undefined,
-      externalCompanion,
+    await deps.chatMessages.agentSendChatMessage("session-1", { content: "send" }, undefined, externalCompanion);
+    await firstStreamItem(
+      deps.chatMessages.agentSendChatMessageStream(
+        "session-1",
+        { content: "send stream" },
+        undefined,
+        undefined,
+        undefined,
+        externalCompanion,
+      ),
     );
 
     expect(gateway.chatTurnRuntime.agentSendChatMessage).toHaveBeenLastCalledWith(
@@ -987,11 +1029,11 @@ describe("composeChatRouteDependencies", () => {
     );
   });
 
-  it("rejects explicit Citadel and workspace mismatches before chat project services run", () => {
+  it("rejects explicit Citadel and workspace mismatches before chat project services run", async () => {
     const gateway = createGateway();
     const deps = composeChatRouteDependencies(gateway as never) as any;
 
-    expect(() => deps.chatProjects.listChatProjects("active", 5, "engineering", "personal")).toThrow(
+    await expect(deps.chatProjects.listChatProjects("active", 5, "engineering", "personal")).rejects.toThrow(
       /belongs to citadel company, not personal/,
     );
     expect(gateway.chatProjectService.listChatProjects).not.toHaveBeenCalled();

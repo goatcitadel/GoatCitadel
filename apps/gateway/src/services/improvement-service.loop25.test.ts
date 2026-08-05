@@ -2,7 +2,7 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Storage } from "@goatcitadel/storage";
+import { createLocalAsyncStorage, Storage } from "@goatcitadel/storage";
 import type { ApprovalRequest, DurableRunRecord, RealtimeEvent } from "@goatcitadel/contracts";
 import {
   ImprovementService,
@@ -34,10 +34,10 @@ afterEach(() => {
 });
 
 describe("ImprovementService loop25 runtime signals", () => {
-  it("skips durable-run signal writes when the improvement ledger feature is disabled", () => {
-    const harness = createHarness({ featureEnabled: false });
+  it("skips durable-run signal writes when the improvement ledger feature is disabled", async () => {
+    const harness = await createHarness({ featureEnabled: false });
 
-    const signal = harness.service.recordDurableRunFailureSignal({
+    const signal = await harness.service.recordDurableRunFailureSignal({
       run: createDurableRun({ runId: "run-disabled" }),
       message: "model provider failed",
     });
@@ -47,8 +47,8 @@ describe("ImprovementService loop25 runtime signals", () => {
     expect(harness.published).toEqual([]);
   });
 
-  it("persists durable-run failure details and returns the existing idempotent signal on retry", () => {
-    const harness = createHarness();
+  it("persists durable-run failure details and returns the existing idempotent signal on retry", async () => {
+    const harness = await createHarness();
     const run = createDurableRun({
       runId: "run-failed",
       workflowKey: "chat.turn",
@@ -61,11 +61,11 @@ describe("ImprovementService loop25 runtime signals", () => {
       finishedAt: "2026-05-15T04:01:00.000Z",
     });
 
-    const first = harness.service.recordDurableRunFailureSignal({
+    const first = await harness.service.recordDurableRunFailureSignal({
       run,
       message: "provider timeout persisted for operator review",
     });
-    const second = harness.service.recordDurableRunFailureSignal({
+    const second = await harness.service.recordDurableRunFailureSignal({
       run,
       message: "provider timeout persisted for operator review",
     });
@@ -104,10 +104,10 @@ describe("ImprovementService loop25 runtime signals", () => {
     ]);
   });
 
-  it("records focused tool failures with durable-run evidence and trims optional workspace ids", () => {
-    const harness = createHarness();
+  it("records focused tool failures with durable-run evidence and trims optional workspace ids", async () => {
+    const harness = await createHarness();
 
-    const signal = harness.service.recordFocusedToolFailureSignal({
+    const signal = await harness.service.recordFocusedToolFailureSignal({
       workspaceId: " ws-tools ",
       sessionId: "sess-tools",
       turnId: "turn-tools",
@@ -127,7 +127,7 @@ describe("ImprovementService loop25 runtime signals", () => {
       durableRunId: "run-tools",
       outcome: "negative",
     });
-    const stored = harness.service.getImprovementSignal(signal!.signalId);
+    const stored = await harness.service.getImprovementSignal(signal!.signalId);
     expect(stored.metadata).toMatchObject({
       providerId: "openai",
       model: "gpt-5.4",
@@ -143,8 +143,8 @@ describe("ImprovementService loop25 runtime signals", () => {
     ]);
   });
 
-  it("persists approval resolution signals with approval linkage and human outcome", () => {
-    const harness = createHarness();
+  it("persists approval resolution signals with approval linkage and human outcome", async () => {
+    const harness = await createHarness();
     const approval = {
       approvalId: "approval-1",
       kind: "tool",
@@ -164,7 +164,7 @@ describe("ImprovementService loop25 runtime signals", () => {
       },
     } as unknown as ApprovalRequest;
 
-    const signal = harness.service.recordApprovalResolutionSignal(approval);
+    const signal = await harness.service.recordApprovalResolutionSignal(approval);
 
     expect(signal).toMatchObject({
       sourceService: "gatehouse",
@@ -177,7 +177,7 @@ describe("ImprovementService loop25 runtime signals", () => {
       taskId: "task-approval",
       toolName: "filesystem.write",
     });
-    expect(harness.service.getImprovementSignal(signal!.signalId).metadata).toMatchObject({
+    expect((await harness.service.getImprovementSignal(signal!.signalId)).metadata).toMatchObject({
       approvalKind: "tool",
       riskLevel: "high",
       status: "rejected",
@@ -185,7 +185,7 @@ describe("ImprovementService loop25 runtime signals", () => {
   });
 });
 
-function createHarness(options: { featureEnabled?: boolean } = {}): Harness {
+async function createHarness(options: { featureEnabled?: boolean } = {}): Promise<Harness> {
   const rootDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "gc-improvement-loop25-"));
   const transcriptsDir = path.join(rootDir, "transcripts");
   const auditDir = path.join(rootDir, "audit");
@@ -205,9 +205,9 @@ function createHarness(options: { featureEnabled?: boolean } = {}): Harness {
     featureEnabled: options.featureEnabled ?? true,
   };
   const ctx: ImprovementServiceContext = {
-    storage,
+    storage: createLocalAsyncStorage(storage),
     gatewaySql: storage.gatewaySql,
-    publishRealtime: (channel, topic, payload, realtimeOptions) => {
+    publishRealtime: async (channel, topic, payload, realtimeOptions) => {
       published.push({ channel, topic, payload, options: realtimeOptions });
     },
     requireFeatureEnabled: (flag) => {
@@ -235,6 +235,7 @@ function createHarness(options: { featureEnabled?: boolean } = {}): Harness {
   } as unknown as ImprovementServiceCallbacks;
 
   harness.service = new ImprovementService(ctx, callbacks);
+  await harness.service.initialize();
   harnesses.push(harness);
   return harness;
 }

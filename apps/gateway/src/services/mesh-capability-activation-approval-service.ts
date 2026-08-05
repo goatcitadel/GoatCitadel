@@ -49,10 +49,10 @@ export interface CreateMeshCapabilityActivationApprovalResult {
 
 export type MeshCapabilityActivationApprovalServiceHost = MeshCapabilityActivationApprovalLifecycleHost;
 
-export function createMeshCapabilityActivationApproval(
+export async function createMeshCapabilityActivationApproval(
   host: MeshCapabilityActivationApprovalServiceHost,
   input: CreateMeshCapabilityActivationApprovalInput,
-): CreateMeshCapabilityActivationApprovalResult {
+): Promise<CreateMeshCapabilityActivationApprovalResult> {
   assertExactActivationApprovalInput(input);
   // Validate the caller's original nested records before cloning. Cloning
   // first would silently discard unknown keys and turn malformed input into a
@@ -83,7 +83,7 @@ export function createMeshCapabilityActivationApproval(
     idempotencyKey: input.idempotencyKey,
   });
   const payload = buildMeshCapabilityActivationApprovalPayload(activationInput);
-  const committed = commitMeshCapabilityActivationApproval(host, {
+  const committed = await commitMeshCapabilityActivationApproval(host, {
     approvalId,
     payload,
     preview: {

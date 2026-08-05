@@ -14,20 +14,11 @@ import {
   type BrowserSessionStateProjection,
   type BrowserSessionStateSummary,
 } from "@goatcitadel/contracts";
-
-type SqlStatement = {
-  run(params?: Record<string, unknown>): unknown;
-  get(params?: Record<string, unknown>): unknown;
-  all(params?: Record<string, unknown>): unknown[];
-};
-
-interface BrowserSessionSql {
-  prepare(sql: string): SqlStatement;
-}
+import type { AsyncGatewaySqlRepository } from "@goatcitadel/storage";
 
 export interface BrowserSessionRuntimeDependencies {
-  gatewaySql: BrowserSessionSql;
-  publishRealtime?(eventType: string, source: string, payload: Record<string, unknown>): void;
+  gatewaySql: AsyncGatewaySqlRepository;
+  publishRealtime?(eventType: string, source: string, payload: Record<string, unknown>): Promise<unknown>;
   describeState?(sessionId: string): BrowserSessionStateSummary;
 }
 
@@ -71,11 +62,12 @@ const SCOPE_RANK: Record<BrowserSessionGrantScope, number> = {
 };
 
 export class BrowserSessionRuntimeService {
-  public constructor(private readonly deps: BrowserSessionRuntimeDependencies) {
-    this.ensureSchema();
-  }
+  private schemaReady?: Promise<void>;
 
-  public createSession(input: BrowserSessionCreateInput = {}): BrowserSessionRecord {
+  public constructor(private readonly deps: BrowserSessionRuntimeDependencies) {}
+
+  public async createSession(input: BrowserSessionCreateInput = {}): Promise<BrowserSessionRecord> {
+    await this.waitForSchema();
     const now = new Date().toISOString();
     const session: BrowserSessionRecord = {
       sessionId: randomUUID(),
@@ -86,7 +78,7 @@ export class BrowserSessionRuntimeService {
       createdAt: now,
       updatedAt: now,
     };
-    this.deps.gatewaySql
+    await this.deps.gatewaySql
       .prepare(
         `
         INSERT INTO browser_sessions (
@@ -105,12 +97,15 @@ export class BrowserSessionRuntimeService {
         createdAt: session.createdAt,
         updatedAt: session.updatedAt,
       });
-    this.recordEvent(session.sessionId, "session_created", session.createdBy, { label: session.label });
-    this.publish("browser_session_created", { sessionId: session.sessionId, workspaceId: session.workspaceId });
+    await this.recordEvent(session.sessionId, "session_created", session.createdBy, { label: session.label });
+    await this.publish("browser_session_created", { sessionId: session.sessionId, workspaceId: session.workspaceId });
     return session;
   }
 
-  public listSessions(input: { workspaceId?: string; status?: "active" | "closed" | "all"; limit?: number } = {}) {
+  public async listSessions(
+    input: { workspaceId?: string; status?: "active" | "closed" | "all"; limit?: number } = {},
+  ): Promise<BrowserSessionRecord[]> {
+    await this.waitForSchema();
     const clauses: string[] = [];
     const params: Record<string, unknown> = { limit: normalizeLimit(input.limit) };
     if (input.workspaceId?.trim()) {
@@ -122,7 +117,7 @@ export class BrowserSessionRuntimeService {
       params.status = input.status;
     }
     const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
-    const rows = this.deps.gatewaySql
+    const rows = (await this.deps.gatewaySql
       .prepare(
         `
         SELECT *
@@ -132,17 +127,19 @@ export class BrowserSessionRuntimeService {
         LIMIT @limit
       `,
       )
-      .all(params) as BrowserSessionRow[];
+      .all(params)) as BrowserSessionRow[];
     return rows.map(mapSessionRow);
   }
 
-  public getSession(sessionId: string): BrowserSessionRecord {
-    return this.requireSession(sessionId);
+  public async getSession(sessionId: string): Promise<BrowserSessionRecord> {
+    await this.waitForSchema();
+    return await this.requireSession(sessionId);
   }
 
-  public getStateProjection(sessionId: string): BrowserSessionStateProjection {
-    const session = this.requireSession(sessionId);
-    const recentEvents = this.listEvents(sessionId, 100);
+  public async getStateProjection(sessionId: string): Promise<BrowserSessionStateProjection> {
+    await this.waitForSchema();
+    const session = await this.requireSession(sessionId);
+    const recentEvents = await this.listEvents(sessionId, 100);
     return {
       session,
       state: this.deps.describeState?.(sessionId) ?? createUnavailableBrowserSessionStateSummary(),
@@ -150,13 +147,14 @@ export class BrowserSessionRuntimeService {
     };
   }
 
-  public closeSession(sessionId: string, actorId = "operator"): BrowserSessionRecord {
-    const current = this.requireSession(sessionId);
+  public async closeSession(sessionId: string, actorId = "operator"): Promise<BrowserSessionRecord> {
+    await this.waitForSchema();
+    const current = await this.requireSession(sessionId);
     if (current.status === "closed") {
       return current;
     }
     const now = new Date().toISOString();
-    this.deps.gatewaySql
+    await this.deps.gatewaySql
       .prepare(
         `
         UPDATE browser_sessions
@@ -165,7 +163,7 @@ export class BrowserSessionRuntimeService {
       `,
       )
       .run({ sessionId, updatedAt: now, closedAt: now });
-    this.deps.gatewaySql
+    await this.deps.gatewaySql
       .prepare(
         `
         UPDATE browser_session_grants
@@ -174,17 +172,18 @@ export class BrowserSessionRuntimeService {
       `,
       )
       .run({ sessionId, revokedAt: now });
-    this.recordEvent(sessionId, "session_closed", actorId, {});
-    this.publish("browser_session_closed", { sessionId });
-    return this.requireSession(sessionId);
+    await this.recordEvent(sessionId, "session_closed", actorId, {});
+    await this.publish("browser_session_closed", { sessionId });
+    return await this.requireSession(sessionId);
   }
 
-  public createGrant(
+  public async createGrant(
     sessionId: string,
     input: BrowserSessionGrantInput,
     actorId = "operator",
-  ): BrowserSessionGrantRecord {
-    const session = this.requireSession(sessionId);
+  ): Promise<BrowserSessionGrantRecord> {
+    await this.waitForSchema();
+    const session = await this.requireSession(sessionId);
     if (session.status !== "active") {
       throw new ValidationError({ message: "Cannot create a grant for a closed browser session." });
     }
@@ -200,7 +199,7 @@ export class BrowserSessionRuntimeService {
         ? new Date(Date.now() + normalizeTtl(input.ttlSeconds) * 1000).toISOString()
         : undefined,
     };
-    this.deps.gatewaySql
+    await this.deps.gatewaySql
       .prepare(
         `
         INSERT INTO browser_session_grants (
@@ -219,24 +218,29 @@ export class BrowserSessionRuntimeService {
         createdAt: grant.createdAt,
         expiresAt: grant.expiresAt ?? null,
       });
-    this.recordEvent(sessionId, "grant_created", actorId, {
+    await this.recordEvent(sessionId, "grant_created", actorId, {
       grantId: grant.grantId,
       grantActorId: grant.actorId,
       scopes: grant.scopes,
       allowedHosts: grant.allowedHosts,
     });
-    this.publish("browser_session_grant_created", { sessionId, grantId: grant.grantId });
+    await this.publish("browser_session_grant_created", { sessionId, grantId: grant.grantId });
     return grant;
   }
 
-  public revokeGrant(sessionId: string, grantId: string, actorId = "operator"): BrowserSessionGrantRecord {
-    this.requireSession(sessionId);
-    const current = this.requireGrant(sessionId, grantId);
+  public async revokeGrant(
+    sessionId: string,
+    grantId: string,
+    actorId = "operator",
+  ): Promise<BrowserSessionGrantRecord> {
+    await this.waitForSchema();
+    await this.requireSession(sessionId);
+    const current = await this.requireGrant(sessionId, grantId);
     if (current.revokedAt) {
       return current;
     }
     const now = new Date().toISOString();
-    this.deps.gatewaySql
+    await this.deps.gatewaySql
       .prepare(
         `
         UPDATE browser_session_grants
@@ -245,17 +249,22 @@ export class BrowserSessionRuntimeService {
       `,
       )
       .run({ sessionId, grantId, revokedAt: now });
-    this.recordEvent(sessionId, "grant_revoked", actorId, { grantId });
-    this.publish("browser_session_grant_revoked", { sessionId, grantId });
-    return this.requireGrant(sessionId, grantId);
+    await this.recordEvent(sessionId, "grant_revoked", actorId, { grantId });
+    await this.publish("browser_session_grant_revoked", { sessionId, grantId });
+    return await this.requireGrant(sessionId, grantId);
   }
 
-  public rotateGrant(sessionId: string, grantId: string, actorId = "operator"): BrowserSessionGrantRecord {
-    const current = this.revokeGrant(sessionId, grantId, actorId);
+  public async rotateGrant(
+    sessionId: string,
+    grantId: string,
+    actorId = "operator",
+  ): Promise<BrowserSessionGrantRecord> {
+    await this.waitForSchema();
+    const current = await this.revokeGrant(sessionId, grantId, actorId);
     const remainingTtlSeconds = current.expiresAt
       ? Math.floor((new Date(current.expiresAt).getTime() - Date.now()) / 1000)
       : undefined;
-    const rotated = this.createGrant(
+    const rotated = await this.createGrant(
       sessionId,
       {
         actorId: current.actorId,
@@ -265,13 +274,17 @@ export class BrowserSessionRuntimeService {
       },
       actorId,
     );
-    this.recordEvent(sessionId, "grant_rotated", actorId, { previousGrantId: grantId, grantId: rotated.grantId });
+    await this.recordEvent(sessionId, "grant_rotated", actorId, {
+      previousGrantId: grantId,
+      grantId: rotated.grantId,
+    });
     return rotated;
   }
 
-  public listEvents(sessionId: string, limit = 100): BrowserSessionEventRecord[] {
-    this.requireSession(sessionId);
-    const rows = this.deps.gatewaySql
+  public async listEvents(sessionId: string, limit = 100): Promise<BrowserSessionEventRecord[]> {
+    await this.waitForSchema();
+    await this.requireSession(sessionId);
+    const rows = (await this.deps.gatewaySql
       .prepare(
         `
         SELECT *
@@ -281,15 +294,16 @@ export class BrowserSessionRuntimeService {
         LIMIT @limit
       `,
       )
-      .all({ sessionId, limit: normalizeLimit(limit) }) as BrowserSessionEventRow[];
-    return rows.map((row) => mapEventRow(this.deps.gatewaySql, row));
+      .all({ sessionId, limit: normalizeLimit(limit) })) as BrowserSessionEventRow[];
+    return rows.map(mapEventRow);
   }
 
-  public listGrants(
+  public async listGrants(
     sessionId: string,
     input: { status?: "active" | "revoked" | "all"; limit?: number } = {},
-  ): BrowserSessionGrantRecord[] {
-    this.requireSession(sessionId);
+  ): Promise<BrowserSessionGrantRecord[]> {
+    await this.waitForSchema();
+    await this.requireSession(sessionId);
     const clauses = ["session_id = @sessionId"];
     const params: Record<string, unknown> = { sessionId, limit: normalizeLimit(input.limit) };
     if (input.status === "active") {
@@ -299,7 +313,7 @@ export class BrowserSessionRuntimeService {
     } else if (input.status === "revoked") {
       clauses.push("revoked_at IS NOT NULL");
     }
-    const rows = this.deps.gatewaySql
+    const rows = (await this.deps.gatewaySql
       .prepare(
         `
         SELECT *
@@ -309,15 +323,16 @@ export class BrowserSessionRuntimeService {
         LIMIT @limit
       `,
       )
-      .all(params) as BrowserSessionGrantRow[];
-    return rows.map((row) => mapGrantRow(this.deps.gatewaySql, row));
+      .all(params)) as BrowserSessionGrantRow[];
+    return rows.map(mapGrantRow);
   }
 
-  public assertAccess(check: BrowserSessionAccessCheck): void {
-    const session = this.requireSession(check.sessionId);
+  public async assertAccess(check: BrowserSessionAccessCheck): Promise<void> {
+    await this.waitForSchema();
+    const session = await this.requireSession(check.sessionId);
     const host = check.host ? normalizeHost(check.host) : undefined;
     if (session.status !== "active") {
-      this.recordEvent(check.sessionId, "tool_guard_blocked", check.actorId, {
+      await this.recordEvent(check.sessionId, "tool_guard_blocked", check.actorId, {
         requiredScope: check.requiredScope,
         host,
         toolName: check.toolName,
@@ -326,14 +341,14 @@ export class BrowserSessionRuntimeService {
       });
       throw new PolicyViolationError({ message: "Browser session is closed." });
     }
-    const activeGrants = this.listActiveGrants(check.sessionId, check.actorId);
+    const activeGrants = await this.listActiveGrants(check.sessionId, check.actorId);
     const allowed = activeGrants.some((grant) => {
       const hasScope = grant.scopes.some((scope) => SCOPE_RANK[scope] >= SCOPE_RANK[check.requiredScope]);
       const hasHost = !host || grant.allowedHosts.length === 0 || grant.allowedHosts.includes(host);
       return hasScope && hasHost;
     });
     if (!allowed) {
-      this.recordEvent(check.sessionId, "tool_guard_blocked", check.actorId, {
+      await this.recordEvent(check.sessionId, "tool_guard_blocked", check.actorId, {
         requiredScope: check.requiredScope,
         host,
         toolName: check.toolName,
@@ -343,7 +358,7 @@ export class BrowserSessionRuntimeService {
         message: `Browser session ${check.sessionId} does not grant ${check.requiredScope} access to ${check.actorId}.`,
       });
     }
-    this.recordEvent(check.sessionId, "tool_access_granted", check.actorId, {
+    await this.recordEvent(check.sessionId, "tool_access_granted", check.actorId, {
       requiredScope: check.requiredScope,
       host,
       toolName: check.toolName,
@@ -351,9 +366,9 @@ export class BrowserSessionRuntimeService {
     });
   }
 
-  private listActiveGrants(sessionId: string, actorId: string): BrowserSessionGrantRecord[] {
+  private async listActiveGrants(sessionId: string, actorId: string): Promise<BrowserSessionGrantRecord[]> {
     const now = new Date().toISOString();
-    const rows = this.deps.gatewaySql
+    const rows = (await this.deps.gatewaySql
       .prepare(
         `
         SELECT *
@@ -365,22 +380,22 @@ export class BrowserSessionRuntimeService {
         ORDER BY created_at DESC
       `,
       )
-      .all({ sessionId, actorId, now }) as BrowserSessionGrantRow[];
-    return rows.map((row) => mapGrantRow(this.deps.gatewaySql, row));
+      .all({ sessionId, actorId, now })) as BrowserSessionGrantRow[];
+    return rows.map(mapGrantRow);
   }
 
-  private requireSession(sessionId: string): BrowserSessionRecord {
-    const row = this.deps.gatewaySql
+  private async requireSession(sessionId: string): Promise<BrowserSessionRecord> {
+    const row = (await this.deps.gatewaySql
       .prepare("SELECT * FROM browser_sessions WHERE session_id = @sessionId")
-      .get({ sessionId }) as BrowserSessionRow | undefined;
+      .get({ sessionId })) as BrowserSessionRow | undefined;
     if (!row) {
       throw new NotFoundError({ entity: "browser session", id: sessionId });
     }
     return mapSessionRow(row);
   }
 
-  private requireGrant(sessionId: string, grantId: string): BrowserSessionGrantRecord {
-    const row = this.deps.gatewaySql
+  private async requireGrant(sessionId: string, grantId: string): Promise<BrowserSessionGrantRecord> {
+    const row = (await this.deps.gatewaySql
       .prepare(
         `
         SELECT *
@@ -388,19 +403,19 @@ export class BrowserSessionRuntimeService {
         WHERE session_id = @sessionId AND grant_id = @grantId
       `,
       )
-      .get({ sessionId, grantId }) as BrowserSessionGrantRow | undefined;
+      .get({ sessionId, grantId })) as BrowserSessionGrantRow | undefined;
     if (!row) {
       throw new NotFoundError({ entity: "browser session grant", id: grantId });
     }
-    return mapGrantRow(this.deps.gatewaySql, row);
+    return mapGrantRow(row);
   }
 
-  private recordEvent(
+  private async recordEvent(
     sessionId: string,
     eventType: BrowserSessionEventType,
     actorId: string | undefined,
     payload: Record<string, unknown>,
-  ): void {
+  ): Promise<void> {
     const event: BrowserSessionEventRecord = {
       eventId: randomUUID(),
       sessionId,
@@ -409,7 +424,7 @@ export class BrowserSessionRuntimeService {
       payload,
       createdAt: new Date().toISOString(),
     };
-    this.deps.gatewaySql
+    await this.deps.gatewaySql
       .prepare(
         `
         INSERT INTO browser_session_events (
@@ -429,12 +444,17 @@ export class BrowserSessionRuntimeService {
       });
   }
 
-  private publish(eventType: string, payload: Record<string, unknown>): void {
-    this.deps.publishRealtime?.(eventType, "browser-sessions", payload);
+  private async publish(eventType: string, payload: Record<string, unknown>): Promise<void> {
+    await this.deps.publishRealtime?.(eventType, "browser-sessions", payload);
   }
 
-  private ensureSchema(): void {
-    this.deps.gatewaySql
+  private waitForSchema(): Promise<void> {
+    this.schemaReady ??= this.ensureSchema();
+    return this.schemaReady;
+  }
+
+  private async ensureSchema(): Promise<void> {
+    await this.deps.gatewaySql
       .prepare(
         `
         CREATE TABLE IF NOT EXISTS browser_sessions (
@@ -450,7 +470,7 @@ export class BrowserSessionRuntimeService {
       `,
       )
       .run();
-    this.deps.gatewaySql
+    await this.deps.gatewaySql
       .prepare(
         `
         CREATE TABLE IF NOT EXISTS browser_session_grants (
@@ -466,7 +486,7 @@ export class BrowserSessionRuntimeService {
       `,
       )
       .run();
-    this.deps.gatewaySql
+    await this.deps.gatewaySql
       .prepare(
         `
         CREATE TABLE IF NOT EXISTS browser_session_events (
@@ -480,15 +500,15 @@ export class BrowserSessionRuntimeService {
       `,
       )
       .run();
-    this.deps.gatewaySql
+    await this.deps.gatewaySql
       .prepare("CREATE INDEX IF NOT EXISTS idx_browser_sessions_workspace ON browser_sessions(workspace_id, status)")
       .run();
-    this.deps.gatewaySql
+    await this.deps.gatewaySql
       .prepare(
         "CREATE INDEX IF NOT EXISTS idx_browser_session_grants_lookup ON browser_session_grants(session_id, actor_id, revoked_at)",
       )
       .run();
-    this.deps.gatewaySql
+    await this.deps.gatewaySql
       .prepare(
         "CREATE INDEX IF NOT EXISTS idx_browser_session_events_session ON browser_session_events(session_id, created_at)",
       )
@@ -509,26 +529,26 @@ function mapSessionRow(row: BrowserSessionRow): BrowserSessionRecord {
   };
 }
 
-function mapGrantRow(sql: BrowserSessionSql, row: BrowserSessionGrantRow): BrowserSessionGrantRecord {
+function mapGrantRow(row: BrowserSessionGrantRow): BrowserSessionGrantRecord {
   return {
     grantId: row.grant_id,
     sessionId: row.session_id,
     actorId: row.actor_id,
-    scopes: parseJson(sql, row.scopes_json, []).filter(isScope),
-    allowedHosts: parseJson(sql, row.allowed_hosts_json, []),
+    scopes: parseJson(row.scopes_json, []).filter(isScope),
+    allowedHosts: parseJson(row.allowed_hosts_json, []),
     createdAt: row.created_at,
     expiresAt: row.expires_at ?? undefined,
     revokedAt: row.revoked_at ?? undefined,
   };
 }
 
-function mapEventRow(sql: BrowserSessionSql, row: BrowserSessionEventRow): BrowserSessionEventRecord {
+function mapEventRow(row: BrowserSessionEventRow): BrowserSessionEventRecord {
   return {
     eventId: row.event_id,
     sessionId: row.session_id,
     eventType: row.event_type,
     actorId: row.actor_id ?? undefined,
-    payload: parseJson(sql, row.payload_json, {}),
+    payload: parseJson(row.payload_json, {}),
     createdAt: row.created_at,
   };
 }
@@ -629,7 +649,7 @@ function requireTrimmed(value: string | undefined, field: string): string {
   return trimmed;
 }
 
-function parseJson<T>(_sql: BrowserSessionSql, raw: string | undefined, fallback: T): T {
+function parseJson<T>(raw: string | undefined, fallback: T): T {
   try {
     return raw ? (JSON.parse(raw) as T) : fallback;
   } catch {

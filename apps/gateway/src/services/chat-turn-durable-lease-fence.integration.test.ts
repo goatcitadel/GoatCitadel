@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EventIngestService, resolveSessionRoute } from "@goatcitadel/gateway-core";
-import { Storage } from "@goatcitadel/storage";
+import { Storage, createSqliteAsyncStorage } from "@goatcitadel/storage";
 import {
   buildDurableChatCanonicalWriteFence,
   executePreparedAgentChatTurnBackground,
@@ -19,7 +19,7 @@ afterEach(() => {
 });
 
 describe("durable Chat canonical write lease fence", () => {
-  it("rolls back canonical writes when the database lease expires during the fenced work", () => {
+  it("rolls back canonical writes when the database lease expires during the fenced work", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-chat-lease-expiry-"));
     const storage = new Storage({
       dbPath: ":memory:",
@@ -43,12 +43,16 @@ describe("durable Chat canonical write lease fence", () => {
       leaseExpiresAt: new Date(now.getTime() + 1_000).toISOString(),
       now: now.toISOString(),
     });
+    const asyncStorage = createSqliteAsyncStorage(storage);
     const lockFreshActiveLeaseForUpdate = vi.spyOn(storage.durableRuns, "lockFreshActiveLeaseForUpdate");
     const fence = buildDurableChatCanonicalWriteFence(
       // HX-411: the fence asserts the turn's immutable admission is still active
       // before/after the fenced work. The admission stays active here; only the
       // durable database lease expires, which is what this test exercises.
-      { storage, sessionControlRuntimeOwner: { assertActiveTurnWrite: vi.fn() } } as unknown as ChatTurnDispatchHost,
+      {
+        storage: asyncStorage,
+        sessionControlRuntimeOwner: { assertActiveTurnWrite: vi.fn() },
+      } as unknown as ChatTurnDispatchHost,
       {
         turnId: "turn-expire-during-write",
         turnAdmission: {
@@ -72,9 +76,9 @@ describe("durable Chat canonical write lease fence", () => {
       },
     );
 
-    expect(() =>
-      fence?.(() => {
-        storage.chatMessages.upsert({
+    await expect(
+      fence?.(async () => {
+        await asyncStorage.chatMessages.upsert({
           messageId: "assistant-expired-write",
           sessionId: "session-expired-write",
           role: "assistant",
@@ -85,7 +89,7 @@ describe("durable Chat canonical write lease fence", () => {
         });
         Atomics.wait(new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)), 0, 0, 1_200);
       }),
-    ).toThrow(/lease.*no longer active/i);
+    ).rejects.toThrow(/lease.*no longer active/i);
 
     expect(lockFreshActiveLeaseForUpdate).toHaveBeenCalledTimes(2);
     expect(storage.chatMessages.get("assistant-expired-write")).toBeUndefined();
@@ -138,8 +142,9 @@ describe("durable Chat canonical write lease fence", () => {
       startedAt: heartbeatAt,
     });
     storage.chatSessionBranchState.setActiveLeaf(sessionId, parentTurnId, heartbeatAt);
+    const asyncStorage = createSqliteAsyncStorage(storage);
 
-    const eventIngest = new EventIngestService(storage);
+    const eventIngest = new EventIngestService(asyncStorage);
     const lockFreshActiveLeaseForUpdate = vi.spyOn(storage.durableRuns, "lockFreshActiveLeaseForUpdate");
     const lockActiveLeaseForUpdate = vi.spyOn(storage.durableRuns, "lockActiveLeaseForUpdate");
     const streamRegistry = new ChatTurnExecutionRegistry();
@@ -149,7 +154,7 @@ describe("durable Chat canonical write lease fence", () => {
     const markChatTurnCancelled = vi.fn();
     let transferred = false;
     const host = {
-      storage,
+      storage: asyncStorage,
       config: {
         assistant: {
           durable: { enabled: true, executionEnabled: true, chatAutoPromoteEnabled: true },
@@ -189,9 +194,9 @@ describe("durable Chat canonical write lease fence", () => {
       ingestEvent: vi.fn(async (idempotencyKey, payload, options) => {
         if (!transferred) {
           transferred = true;
-          const current = storage.durableRuns.getRun(runId);
+          const current = await asyncStorage.durableRuns.getRun(runId);
           const takeoverAt = new Date().toISOString();
-          storage.durableRuns.updateRun({
+          await asyncStorage.durableRuns.updateRun({
             runId,
             status: "running",
             leaseOwnerId: "worker-b",
@@ -208,8 +213,8 @@ describe("durable Chat canonical write lease fence", () => {
           ...(options?.onCommit ? { onCommit: options.onCommit } : {}),
         });
       }),
-      updateActiveLeafOrThrow: vi.fn((nextSessionId, expectedLeaf, nextLeaf) => {
-        const updated = storage.chatSessionBranchState.setActiveLeafIfCurrent(
+      updateActiveLeafOrThrow: vi.fn(async (nextSessionId, expectedLeaf, nextLeaf) => {
+        const updated = await asyncStorage.chatSessionBranchState.setActiveLeafIfCurrent(
           nextSessionId,
           expectedLeaf,
           nextLeaf,

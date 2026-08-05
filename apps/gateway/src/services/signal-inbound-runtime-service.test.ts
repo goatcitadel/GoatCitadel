@@ -7,14 +7,14 @@ import {
 } from "./signal-inbound-runtime-service.js";
 
 describe("SignalInboundRuntimeService outbound-only posture", () => {
-  it("never schedules, receives, or claims inbound work when every legacy switch is true", () => {
+  it("never schedules, receives, or claims inbound work when every legacy switch is true", async () => {
     const receiveBridge = vi.fn();
     const schedule = vi.fn();
     const acceptInboundChannelEvents = vi.fn();
     const recordDevDiagnostic = vi.fn();
     const callbacks = {
-      isEnabled: () => true,
-      listConnections: () => [createSignalConnection({ inboundEnabled: true, pollIntervalSeconds: 5 })],
+      isEnabled: async () => true,
+      listConnections: async () => [createSignalConnection({ inboundEnabled: true, pollIntervalSeconds: 5 })],
       recordDevDiagnostic,
       // Deliberate legacy extras: the compatibility facade must never touch
       // these even if an older composition still supplies them at runtime.
@@ -24,7 +24,7 @@ describe("SignalInboundRuntimeService outbound-only posture", () => {
     };
     const service = new SignalInboundRuntimeService(callbacks);
 
-    service.sync();
+    await service.sync();
 
     expect(service.activePollerCount).toBe(0);
     expect(schedule).not.toHaveBeenCalled();
@@ -47,16 +47,16 @@ describe("SignalInboundRuntimeService outbound-only posture", () => {
     );
   });
 
-  it("reports a legacy global feature value once even without a Signal connection", () => {
+  it("reports a legacy global feature value once even without a Signal connection", async () => {
     const recordDevDiagnostic = vi.fn();
     const service = new SignalInboundRuntimeService({
-      isEnabled: () => true,
-      listConnections: () => [],
+      isEnabled: async () => true,
+      listConnections: async () => [],
       recordDevDiagnostic,
     });
 
-    service.sync();
-    service.sync();
+    await service.sync();
+    await service.sync();
 
     expect(recordDevDiagnostic).toHaveBeenCalledTimes(1);
     expect(recordDevDiagnostic).toHaveBeenCalledWith(
@@ -67,15 +67,15 @@ describe("SignalInboundRuntimeService outbound-only posture", () => {
     );
   });
 
-  it("reports connection-level legacy inbound=true even when the old feature flag is false", () => {
+  it("reports connection-level legacy inbound=true even when the old feature flag is false", async () => {
     const recordDevDiagnostic = vi.fn();
     const service = new SignalInboundRuntimeService({
-      isEnabled: () => false,
-      listConnections: () => [createSignalConnection({ inboundEnabled: "true" })],
+      isEnabled: async () => false,
+      listConnections: async () => [createSignalConnection({ inboundEnabled: "true" })],
       recordDevDiagnostic,
     });
 
-    service.sync();
+    await service.sync();
 
     expect(recordDevDiagnostic).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -88,20 +88,20 @@ describe("SignalInboundRuntimeService outbound-only posture", () => {
     );
   });
 
-  it("keeps a clean outbound-only connection quiet and stop prevents later reconciliation", () => {
+  it("keeps a clean outbound-only connection quiet and stop prevents later reconciliation", async () => {
     let featureEnabled = false;
     const recordDevDiagnostic = vi.fn();
     const service = new SignalInboundRuntimeService({
-      isEnabled: () => featureEnabled,
-      listConnections: () => [createSignalConnection({})],
+      isEnabled: async () => featureEnabled,
+      listConnections: async () => [createSignalConnection({})],
       recordDevDiagnostic,
     });
 
-    service.sync();
+    await service.sync();
     expect(recordDevDiagnostic).not.toHaveBeenCalled();
     service.stop();
     featureEnabled = true;
-    service.sync();
+    await service.sync();
     expect(recordDevDiagnostic).not.toHaveBeenCalled();
     expect(service.activePollerCount).toBe(0);
   });

@@ -3,14 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { ChatSendMessageRequest } from "@goatcitadel/contracts";
-import { Storage } from "@goatcitadel/storage";
+import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import { beginDurableChatRun } from "./chat-durable-run-service.js";
 import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 import { DurableRunService } from "./durable-run-service.js";
 import type { ServiceContext } from "./service-context.js";
 
 describe("stable durable delegated Chat run identity", () => {
-  it("converges repeated begin calls on one real durable row and one provider-processing identity", () => {
+  it("converges repeated begin calls on one real durable row and one provider-processing identity", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-stable-durable-chat-"));
     const storage = new Storage({
       dbPath: path.join(root, "gateway.db"),
@@ -18,8 +18,9 @@ describe("stable durable delegated Chat run identity", () => {
       auditDir: path.join(root, "audit"),
     });
     try {
+      const asyncStorage = createSqliteAsyncStorage(storage);
       const durableRunService = new DurableRunService({
-        storage,
+        storage: asyncStorage,
         requireFeatureEnabled: vi.fn(),
         publishRealtime: vi.fn(),
       } as unknown as ServiceContext);
@@ -58,10 +59,10 @@ describe("stable durable delegated Chat run identity", () => {
       } as PreparedAgentChatTurn;
       const request = { content: "Run stable child work", mode: "chat" } as ChatSendMessageRequest;
 
-      const first = beginDurableChatRun(deps, prepared, request, "chat_thread_turn_appended", {
+      const first = await beginDurableChatRun(deps, prepared, request, "chat_thread_turn_appended", {
         runId: "durable-chat-stable",
       });
-      const duplicate = beginDurableChatRun(deps, prepared, request, "chat_thread_turn_appended", {
+      const duplicate = await beginDurableChatRun(deps, prepared, request, "chat_thread_turn_appended", {
         runId: "durable-chat-stable",
       });
 
@@ -72,7 +73,7 @@ describe("stable durable delegated Chat run identity", () => {
       expect(processingRunIds).toEqual(new Set(["durable-chat-stable"]));
       expect(providerExecutions).toBe(1);
 
-      expect(() =>
+      await expect(
         durableRunService.createDurableRun(
           {
             runId: "durable-chat-stable",
@@ -81,7 +82,7 @@ describe("stable durable delegated Chat run identity", () => {
           },
           { publishRealtime: false, idempotentIfExists: true },
         ),
-      ).toThrow(/different immutable workflow payload/);
+      ).rejects.toThrow(/different immutable workflow payload/);
     } finally {
       storage.close();
       fs.rmSync(root, { recursive: true, force: true });

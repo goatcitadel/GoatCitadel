@@ -572,7 +572,7 @@ describe("prompt-pack grants, profiles, and allowlists", () => {
     expect(homeEnergyPromptInput).not.toContain("Home-energy extraction prompt");
   });
 
-  it("resumes stale benchmark runs when status is requested", () => {
+  it("resumes stale benchmark runs when status is requested", async () => {
     const service = Object.create(PromptPackService.prototype) as PromptPackService & Record<string, unknown>;
     const staleRun = {
       benchmark_run_id: "ppb-stale",
@@ -590,18 +590,18 @@ describe("prompt-pack grants, profiles, and allowlists", () => {
       started_at: "2026-03-16T00:00:00.000Z",
       finished_at: null,
     };
-    service.getPromptPackBenchmarkRunRow = vi.fn(() => staleRun);
-    service.listPromptPackBenchmarkItems = vi.fn(() => []);
+    service.getPromptPackBenchmarkRunRow = vi.fn(async () => staleRun);
+    service.listPromptPackBenchmarkItems = vi.fn(async () => []);
     service.enqueuePromptPackBenchmarkTask = vi.fn();
 
-    const status = service.getPromptPackBenchmarkStatus("ppb-stale");
+    const status = await service.getPromptPackBenchmarkStatus("ppb-stale");
 
     expect(status.run.status).toBe("running");
     expect(status.progress.completedItems).toBe(54);
     expect(service.enqueuePromptPackBenchmarkTask).toHaveBeenCalledWith("ppb-stale");
   });
 
-  it("does not resume actively claimed benchmark runs when status is requested", () => {
+  it("does not resume actively claimed benchmark runs when status is requested", async () => {
     const service = Object.create(PromptPackService.prototype) as PromptPackService & Record<string, unknown>;
     const activeRun = {
       benchmark_run_id: "ppb-active",
@@ -619,11 +619,11 @@ describe("prompt-pack grants, profiles, and allowlists", () => {
       started_at: "2026-03-16T00:00:00.000Z",
       finished_at: null,
     };
-    service.getPromptPackBenchmarkRunRow = vi.fn(() => activeRun);
-    service.listPromptPackBenchmarkItems = vi.fn(() => []);
+    service.getPromptPackBenchmarkRunRow = vi.fn(async () => activeRun);
+    service.listPromptPackBenchmarkItems = vi.fn(async () => []);
     service.enqueuePromptPackBenchmarkTask = vi.fn();
 
-    const status = service.getPromptPackBenchmarkStatus("ppb-active");
+    const status = await service.getPromptPackBenchmarkStatus("ppb-active");
 
     expect(status.run.status).toBe("running");
     expect(status.progress.completedItems).toBe(30);
@@ -1389,7 +1389,7 @@ describe("prompt-pack grants, profiles, and allowlists", () => {
     );
   });
 
-  it("still grants non-denied tools when one requested tool has an active deny", () => {
+  it("still grants non-denied tools when one requested tool has an active deny", async () => {
     const service = Object.create(PromptPackService.prototype) as PromptPackService & Record<string, unknown>;
     const createGrant = vi.fn();
     service.ctx = {
@@ -1436,9 +1436,9 @@ describe("prompt-pack grants, profiles, and allowlists", () => {
       },
     });
 
-    (
+    await (
       service as unknown as {
-        ensurePromptPackSessionToolGrants(sessionId: string, profile: unknown, prompt: string): void;
+        ensurePromptPackSessionToolGrants(sessionId: string, profile: unknown, prompt: string): Promise<void>;
       }
     ).ensurePromptPackSessionToolGrants("session-mixed-grants", coworkProfile, prompt);
 

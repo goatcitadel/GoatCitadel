@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ChatStreamChunk, ChatStreamChunkDraft, ChatTurnTraceRecord } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { ActiveChatTurnStreamExecution, ChatTurnExecutionRegistry } from "../chat-turn-execution-registry.js";
 import type { ChatTurnStreamRegistrationOptions } from "../chat-turn-runtime-collaborators.js";
 import type { PersistableChatStreamChunk } from "../chat-turn-types.js";
@@ -18,13 +18,13 @@ const CHAT_STREAM_EVENT_RETENTION_MS = 24 * 60 * 60 * 1000;
 export interface GatewayChatStreamRuntimeHost {
   storage: Storage;
   chatTurnExecutionRegistry: ChatTurnExecutionRegistry;
-  createHydratedChatTurnTrace(turnId: string, trace: ChatTurnTraceRecord): ChatTurnTraceRecord;
+  createHydratedChatTurnTrace(turnId: string, trace: ChatTurnTraceRecord): Promise<ChatTurnTraceRecord>;
   beforeDeliverTerminalChatStreamEvent?(input: { runId: string; sessionId: string; turnId: string }): Promise<boolean>;
   persistChatStreamChunk?(
     chunk: PersistableChatStreamChunk,
     runId?: string,
     streamRegistration?: ActiveChatTurnStreamExecution,
-  ): ChatStreamChunk;
+  ): Promise<ChatStreamChunk>;
   initialLastChatStreamPurgeAt?: number;
 }
 
@@ -45,13 +45,13 @@ export class GatewayChatStreamRuntime {
     return this.lastChatStreamPurgeAt;
   }
 
-  public registerActiveChatTurnStream(
+  public async registerActiveChatTurnStream(
     sessionId: string,
     turnId: string,
     runId?: string,
     options?: ChatTurnStreamRegistrationOptions,
-  ): ActiveChatTurnStreamExecution {
-    const latestSequence = this.host.storage.chatStreamEvents.getLatestSequence(turnId);
+  ): Promise<ActiveChatTurnStreamExecution> {
+    const latestSequence = await this.host.storage.chatStreamEvents.getLatestSequence(turnId);
     if (options?.reservation !== true) {
       this.secretProjector.beginTurn(turnId, {
         suppressTextUntilTerminal: options?.continuation === true || latestSequence > 1,
@@ -78,18 +78,18 @@ export class GatewayChatStreamRuntime {
     return true;
   }
 
-  public persistChatStreamChunk(
+  public async persistChatStreamChunk(
     chunk: PersistableChatStreamChunk,
     runId?: string,
     streamRegistration?: ActiveChatTurnStreamExecution,
-  ): ChatStreamChunk {
+  ): Promise<ChatStreamChunk> {
     if (streamRegistration) {
       streamRegistration.requireActive(chunk.turnId);
     }
     const activeStream = streamRegistration ?? this.host.chatTurnExecutionRegistry.getActiveStream(chunk.turnId);
     let persisted: ChatStreamChunk | undefined;
     for (const projectedChunk of this.secretProjector.projectAll(chunk) as PersistableChatStreamChunk[]) {
-      persisted = this.persistProjectedChatStreamChunk(
+      persisted = await this.persistProjectedChatStreamChunk(
         projectedChunk,
         runId,
         activeStream?.isActive() ? activeStream : undefined,
@@ -101,14 +101,14 @@ export class GatewayChatStreamRuntime {
     return persisted;
   }
 
-  private persistProjectedChatStreamChunk(
+  private async persistProjectedChatStreamChunk(
     projectedChunk: PersistableChatStreamChunk,
     runId?: string,
     activeStream?: ActiveChatTurnStreamExecution,
-  ): ChatStreamChunk {
+  ): Promise<ChatStreamChunk> {
     const sequence =
       activeStream?.claimNextSequence(projectedChunk.turnId) ??
-      this.host.storage.chatStreamEvents.getLatestSequence(projectedChunk.turnId) + 1;
+      (await this.host.storage.chatStreamEvents.getLatestSequence(projectedChunk.turnId)) + 1;
     const eventId = randomUUID();
     const enriched = {
       ...projectedChunk,
@@ -116,7 +116,7 @@ export class GatewayChatStreamRuntime {
       sequence,
       ...(runId ? { runId } : {}),
     } as ChatStreamChunk;
-    this.host.storage.chatStreamEvents.append({
+    await this.host.storage.chatStreamEvents.append({
       eventId,
       sessionId: projectedChunk.sessionId,
       turnId: projectedChunk.turnId,
@@ -132,18 +132,18 @@ export class GatewayChatStreamRuntime {
     // Wake any live-tail reader immediately so it doesn't wait out the poll
     // interval before forwarding this chunk to the client (P0-#1).
     this.signalChatStreamEvent(projectedChunk.turnId);
-    this.purgeExpiredChatStreamEventsIfNeeded();
+    await this.purgeExpiredChatStreamEventsIfNeeded();
     return enriched;
   }
 
-  public purgeExpiredChatStreamEventsIfNeeded(): void {
+  public async purgeExpiredChatStreamEventsIfNeeded(): Promise<void> {
     const now = Date.now();
     if (now - this.lastChatStreamPurgeAt < 60_000) {
       return;
     }
     this.lastChatStreamPurgeAt = now;
     const cutoffIso = new Date(now - CHAT_STREAM_EVENT_RETENTION_MS).toISOString();
-    this.host.storage.chatStreamEvents.purgeBefore(cutoffIso);
+    await this.host.storage.chatStreamEvents.purgeBefore(cutoffIso);
   }
 
   public async *streamPersistedChatTurnEvents(
@@ -158,7 +158,7 @@ export class GatewayChatStreamRuntime {
   ): AsyncGenerator<ChatStreamChunk> {
     let afterSequence = 0;
     if (options?.sinceEventId) {
-      const priorEvent = this.host.storage.chatStreamEvents.getByEventId(options.sinceEventId);
+      const priorEvent = await this.host.storage.chatStreamEvents.getByEventId(options.sinceEventId);
       if (priorEvent?.turnId === turnId) {
         const priorPayload = toChatStreamChunk(priorEvent.payload);
         // A client can receive the retained terminal id together with a
@@ -168,7 +168,7 @@ export class GatewayChatStreamRuntime {
         afterSequence = priorPayload?.type === "done" ? Math.max(0, priorEvent.sequence - 1) : priorEvent.sequence;
       } else {
         const terminalFallback = yield* this.streamTurnStateFallback(sessionId, turnId, options.sinceEventId);
-        afterSequence = this.host.storage.chatStreamEvents.getLatestSequence(turnId);
+        afterSequence = await this.host.storage.chatStreamEvents.getLatestSequence(turnId);
         if (terminalFallback || !options?.liveTail) {
           return;
         }
@@ -179,7 +179,7 @@ export class GatewayChatStreamRuntime {
       if (options?.signal?.aborted) {
         return;
       }
-      const events = this.host.storage.chatStreamEvents.listByTurn(turnId, afterSequence, 200);
+      const events = await this.host.storage.chatStreamEvents.listByTurn(turnId, afterSequence, 200);
       if (events.length > 0) {
         for (const event of events) {
           afterSequence = event.sequence;
@@ -227,7 +227,7 @@ export class GatewayChatStreamRuntime {
 
       const active = this.host.chatTurnExecutionRegistry.getActiveStream(turnId);
       const durablePending = options?.liveTail
-        ? this.isDurableTurnStillStreaming(turnId, {
+        ? await this.isDurableTurnStillStreaming(turnId, {
             includeInterrupts: options.returnOnDurableInterrupt !== true,
           })
         : false;
@@ -301,22 +301,24 @@ export class GatewayChatStreamRuntime {
     });
   }
 
-  public isDurableTurnStillStreaming(turnId: string, options?: { includeInterrupts?: boolean }): boolean {
-    const eventRow = this.host.storage.gatewaySql
-      .prepare(
-        `
+  public async isDurableTurnStillStreaming(
+    turnId: string,
+    options?: { includeInterrupts?: boolean },
+  ): Promise<boolean> {
+    const statement = await this.host.storage.gatewaySql.prepare(
+      `
       SELECT run_id
       FROM chat_stream_events
       WHERE turn_id = ?
       ORDER BY sequence DESC
       LIMIT 1
     `,
-      )
-      .get(turnId) as { run_id: string | null } | undefined;
+    );
+    const eventRow = await statement.get<{ run_id: string | null }>(turnId);
     let runId = eventRow?.run_id ?? null;
     if (!runId) {
       try {
-        runId = this.host.storage.chatTurnTraces.get(turnId).durable?.runId ?? null;
+        runId = (await this.host.storage.chatTurnTraces.get(turnId)).durable?.runId ?? null;
       } catch {
         runId = null;
       }
@@ -325,7 +327,7 @@ export class GatewayChatStreamRuntime {
       return false;
     }
     try {
-      const run = this.host.storage.durableRuns.getRun(runId);
+      const run = await this.host.storage.durableRuns.getRun(runId);
       if (run.status === "queued" || run.status === "running") {
         return true;
       }
@@ -384,14 +386,14 @@ export class GatewayChatStreamRuntime {
     turnId: string,
     recoveryEventId?: string,
   ): AsyncGenerator<ChatStreamChunk, boolean> {
-    const trace = this.host.storage.chatTurnTraces.get(turnId);
+    const trace = await this.host.storage.chatTurnTraces.get(turnId);
     if (trace.sessionId !== sessionId) {
       return true;
     }
-    const hydratedTrace = this.host.createHydratedChatTurnTrace(turnId, trace);
+    const hydratedTrace = await this.host.createHydratedChatTurnTrace(turnId, trace);
     const terminalRunId = hydratedTrace.durable?.runId;
     const assistantMessage = trace.assistantMessageId
-      ? this.host.storage.chatMessages.get(trace.assistantMessageId)
+      ? await this.host.storage.chatMessages.get(trace.assistantMessageId)
       : undefined;
     if (assistantMessage && terminalRunId) {
       const released = await this.host.beforeDeliverTerminalChatStreamEvent?.({
@@ -406,7 +408,7 @@ export class GatewayChatStreamRuntime {
         yield {
           type: "error",
           eventId: recoveryEventId ?? "",
-          sequence: this.host.storage.chatStreamEvents.getLatestSequence(turnId),
+          sequence: await this.host.storage.chatStreamEvents.getLatestSequence(turnId),
           sessionId,
           turnId,
           error:
@@ -416,7 +418,7 @@ export class GatewayChatStreamRuntime {
       }
     }
     const persist = this.host.persistChatStreamChunk ?? ((chunk, runId) => this.persistChatStreamChunk(chunk, runId));
-    yield persist(
+    yield await persist(
       {
         type: "trace_update",
         sessionId,
@@ -426,7 +428,7 @@ export class GatewayChatStreamRuntime {
       hydratedTrace.durable?.runId,
     );
     if (assistantMessage) {
-      yield persist(
+      yield await persist(
         {
           type: "message_done",
           sessionId,
@@ -437,7 +439,7 @@ export class GatewayChatStreamRuntime {
         } as PersistableChatStreamChunk,
         hydratedTrace.durable?.runId,
       );
-      yield persist(
+      yield await persist(
         {
           type: "done",
           sessionId,

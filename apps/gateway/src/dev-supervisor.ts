@@ -152,17 +152,33 @@ async function main(): Promise<void> {
   }
 
   process.on("SIGINT", () => {
-    void shutdown("SIGINT");
+    void shutdown("SIGINT").catch((error: unknown) => {
+      log.error("gateway supervisor shutdown failed", {
+        signal: "SIGINT",
+        error: error instanceof Error ? error.message : String(error),
+      });
+      process.exitCode = 1;
+    });
   });
   process.on("SIGTERM", () => {
-    void shutdown("SIGTERM");
+    void shutdown("SIGTERM").catch((error: unknown) => {
+      log.error("gateway supervisor shutdown failed", {
+        signal: "SIGTERM",
+        error: error instanceof Error ? error.message : String(error),
+      });
+      process.exitCode = 1;
+    });
   });
 
   lastSignature = await computeSignature();
   await restartGateway("initial start");
 
   setInterval(() => {
-    void pollForChanges();
+    void pollForChanges().catch((error: unknown) => {
+      log.error("gateway source poll failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   }, pollMs).unref();
 }
 
@@ -191,7 +207,7 @@ function scheduleSourceChangeRestart(): void {
   }
   sourceChangeRestartTimer = setTimeout(() => {
     sourceChangeRestartTimer = null;
-    void restartGateway("source/config change");
+    restartGatewayInBackground("source/config change");
   }, watchDebounceMs);
 }
 
@@ -668,8 +684,21 @@ function scheduleRestartAfter(delayMs: number, reason: string): void {
   log.info(`scheduling restart in ${delay}ms`, { reason });
   restartTimer = setTimeout(() => {
     restartTimer = null;
-    void restartGateway(reason);
+    restartGatewayInBackground(reason);
   }, delay);
+}
+
+function restartGatewayInBackground(reason: string): void {
+  void restartGateway(reason).catch((error: unknown) => {
+    log.error("gateway restart failed", {
+      reason,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    const delay = registerFailureAndGetDelay("restart_failure");
+    if (delay !== null) {
+      scheduleRestartAfter(delay, "restart failure");
+    }
+  });
 }
 
 function clearRestartTimer(): void {

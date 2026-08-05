@@ -28,7 +28,7 @@ import {
   sealChatTurnCapabilityProfile,
   verifyCapabilityCatalogEntryUniqueness,
   verifyChatTurnCapabilityProfile,
-  type Storage,
+  type AsyncStorage as Storage,
 } from "@goatcitadel/storage";
 import type { ResolvedChatTurnToolSchema } from "./chat-turn-agent-runner.js";
 import type { ChatTurnRoute } from "./chat-turn-prep-service.js";
@@ -87,7 +87,7 @@ export interface ChatTurnCapabilityProfileResolveInput {
 
 export interface ChatTurnCapabilityProfileResolveDeps {
   storage: CapabilityProfileStorage;
-  listCapabilityCatalog(scope: "inspectable" | "callable"): CapabilityCatalogEntry[];
+  listCapabilityCatalog(scope: "inspectable" | "callable"): Promise<CapabilityCatalogEntry[]>;
   resolveToolSchema(input: {
     sessionId: string;
     turnId: string;
@@ -127,7 +127,7 @@ export interface ChatTurnCapabilityProfileResolveDeps {
     surface?: ChatMode;
     permissionProfileId?: string;
     localOperatorOverrideId?: string;
-  }): ToolPolicyActorContext;
+  }): Promise<ToolPolicyActorContext>;
   getProviderReadiness(providerId: string | undefined):
     | {
         configured: boolean;
@@ -135,12 +135,12 @@ export interface ChatTurnCapabilityProfileResolveDeps {
       }
     | undefined;
   /** Gateway-owned, operator-correctable task-boundary classification. */
-  classifyWorkPassport?(workspaceId: string, content: string): WorkPassportRecord;
+  classifyWorkPassport?(workspaceId: string, content: string): Promise<WorkPassportRecord>;
   /** Gateway-owned governed runtime-skill activation and exact-byte receipt builder. */
   resolveActivatedSkills?(input: {
     content: string;
     trustedSkills: ChatTurnCapabilityProfileRecord["selection"]["trustedSkills"];
-  }): ChatTurnCapabilityProfileRecord["selection"]["activatedSkills"];
+  }): Promise<ChatTurnCapabilityProfileRecord["selection"]["activatedSkills"]>;
   resolveToolRuntimeOwnerBinding?(toolName: string): ChatTurnCapabilityToolRuntimeOwnerBinding;
   /**
    * Gateway-owned profile-freeze seam. Implementations may return only the
@@ -173,7 +173,7 @@ export interface ChatTurnCapabilityProfileResolveDeps {
     entrySha256: string;
     manifestSha256: string;
     publisherGeneration: number;
-  }): ChatTurnCapabilityToolMeshPublicationBinding | undefined;
+  }): Promise<ChatTurnCapabilityToolMeshPublicationBinding | undefined>;
 }
 
 export interface ChatTurnCapabilityProfileResolution {
@@ -188,12 +188,20 @@ export async function resolveChatTurnCapabilityProfile(
 ): Promise<ChatTurnCapabilityProfileResolution> {
   const createdAt = input.createdAt ?? new Date().toISOString();
   const toolCallBeforeInterposition = buildToolCallBeforeHookInterpositionBinding(
-    TOOL_EFFECT_INTERPOSITION_TRIGGERS.flatMap((trigger) =>
-      deps.storage.workspaceHooks.listByTrigger(input.workspaceId, trigger, TOOL_CALL_BEFORE_HOOK_BINDING_LIMIT),
-    ),
+    (
+      await Promise.all(
+        TOOL_EFFECT_INTERPOSITION_TRIGGERS.map((trigger) =>
+          deps.storage.workspaceHooks.listByTrigger(input.workspaceId, trigger, TOOL_CALL_BEFORE_HOOK_BINDING_LIMIT),
+        ),
+      )
+    ).flat(),
   );
-  const inspectableEntries = sortCatalogEntries(deps.listCapabilityCatalog("inspectable"));
-  const callableEntries = sortCatalogEntries(deps.listCapabilityCatalog("callable"));
+  const [inspectableCatalog, callableCatalog] = await Promise.all([
+    deps.listCapabilityCatalog("inspectable"),
+    deps.listCapabilityCatalog("callable"),
+  ]);
+  const inspectableEntries = sortCatalogEntries(inspectableCatalog);
+  const callableEntries = sortCatalogEntries(callableCatalog);
   assertCanonicalCatalogPair(inspectableEntries, callableEntries);
   const inspectableHash = digest(inspectableEntries);
   const callableHash = digest(callableEntries);
@@ -208,7 +216,7 @@ export async function resolveChatTurnCapabilityProfile(
 
   const policyContext =
     input.policyContext ??
-    deps.resolveToolPolicyContext({
+    (await deps.resolveToolPolicyContext({
       operatorId: input.operatorId,
       authActorId: input.authActorId,
       authActorSource: input.authActorSource,
@@ -219,7 +227,7 @@ export async function resolveChatTurnCapabilityProfile(
       surface: input.mode,
       permissionProfileId: input.permissionProfileId,
       localOperatorOverrideId: input.localOperatorOverrideId,
-    });
+    }));
   const resolvedPermissionProfileId = policyContext.permissionProfileId ?? input.permissionProfileId ?? "safe";
   const requesterScopeSha256 =
     policyContext.authActorId && isMcpRequesterScopeAuthActorSource(policyContext.authActorSource)
@@ -294,7 +302,7 @@ export async function resolveChatTurnCapabilityProfile(
         throw new Error(`Resolved provider tool ${canonicalName} is outside the canonical callable catalog.`);
       }
       const meshPublication = meshCatalogEntry
-        ? resolveFrozenMeshPublicationBinding(deps, input.workspaceId, canonicalName, meshCatalogEntry)
+        ? await resolveFrozenMeshPublicationBinding(deps, input.workspaceId, canonicalName, meshCatalogEntry)
         : undefined;
       const runtimeOwner =
         deps.resolveToolRuntimeOwnerBinding?.(canonicalName) ?? buildToolRuntimeOwnerBinding("builtin");
@@ -348,9 +356,9 @@ export async function resolveChatTurnCapabilityProfile(
     }),
   );
   const modelNameAllowMap = tools.map(({ modelName, canonicalName }) => ({ modelName, canonicalName }));
-  const trustedSkills = buildTrustedSkillSnapshot(callableEntries, deps.storage.skillLifecycle.list());
-  const activatedSkills = deps.resolveActivatedSkills?.({ content: input.content, trustedSkills }) ?? [];
-  const activeGrants = collectActiveGrants(deps.storage, input).map((grant) => ({
+  const trustedSkills = buildTrustedSkillSnapshot(callableEntries, await deps.storage.skillLifecycle.list());
+  const activatedSkills = (await deps.resolveActivatedSkills?.({ content: input.content, trustedSkills })) ?? [];
+  const activeGrants = (await collectActiveGrants(deps.storage, input)).map((grant) => ({
     grantId: grant.grantId,
     toolPattern: grant.toolPattern,
     decision: grant.decision,
@@ -380,7 +388,7 @@ export async function resolveChatTurnCapabilityProfile(
   const providerReadiness = buildProviderReadiness(deps, input);
   const source = buildChatTurnCapabilityProfileSourceScope(input.route);
   const contentHash = digest(input.content);
-  const workPassport = deps.classifyWorkPassport?.(input.workspaceId, input.content);
+  const workPassport = await deps.classifyWorkPassport?.(input.workspaceId, input.content);
   const memory = {
     mode: input.memoryMode,
     retrievalMode: input.retrievalMode,
@@ -584,7 +592,7 @@ export function buildChatTurnCapabilityProfileSourceScope(
 
 function buildTrustedSkillSnapshot(
   callableEntries: CapabilityCatalogEntry[],
-  lifecycleRows: ReturnType<CapabilityProfileStorage["skillLifecycle"]["list"]>,
+  lifecycleRows: Awaited<ReturnType<CapabilityProfileStorage["skillLifecycle"]["list"]>>,
 ): ChatTurnCapabilityProfileRecord["selection"]["trustedSkills"] {
   const lifecycleBySkill = new Map(lifecycleRows.map((row) => [row.skillId, row]));
   return callableEntries
@@ -622,7 +630,7 @@ function buildTrustedSkillSnapshot(
     .sort((left, right) => left.capabilityId.localeCompare(right.capabilityId));
 }
 
-function collectActiveGrants(storage: CapabilityProfileStorage, input: ChatTurnCapabilityProfileResolveInput) {
+async function collectActiveGrants(storage: CapabilityProfileStorage, input: ChatTurnCapabilityProfileResolveInput) {
   const scopes: Array<[Parameters<CapabilityProfileStorage["toolGrants"]["listActive"]>[0], string]> = [
     ["global", "global"],
     ["agent", "assistant"],
@@ -634,8 +642,8 @@ function collectActiveGrants(storage: CapabilityProfileStorage, input: ChatTurnC
     scopes.push(["task", input.policyTaskId]);
   }
   const byId = new Map(
-    scopes
-      .flatMap(([scope, scopeRef]) => storage.toolGrants.listActive(scope, scopeRef))
+    (await Promise.all(scopes.map(([scope, scopeRef]) => storage.toolGrants.listActive(scope, scopeRef))))
+      .flat()
       .map((grant) => [grant.grantId, grant]),
   );
   return [...byId.values()].sort((left, right) => left.grantId.localeCompare(right.grantId));
@@ -693,19 +701,19 @@ function copyAndFreezeMcpRequesterResolutionBinding(
  * revalidation, or any identity divergence blocks the turn fail-closed with a
  * content-free reason.
  */
-function resolveFrozenMeshPublicationBinding(
+async function resolveFrozenMeshPublicationBinding(
   deps: ChatTurnCapabilityProfileResolveDeps,
   workspaceId: string,
   canonicalName: string,
   catalogEntry: CapabilityCatalogEntry,
-): ChatTurnCapabilityToolMeshPublicationBinding {
+): Promise<ChatTurnCapabilityToolMeshPublicationBinding> {
   const projection = catalogEntry.mesh;
   const blocked = () =>
     new Error(`Mesh-published tool ${canonicalName} is blocked because mesh_capability_freeze_drift.`);
   if (!projection || !deps.resolveMeshPublicationBinding) {
     throw blocked();
   }
-  const binding = deps.resolveMeshPublicationBinding({
+  const binding = await deps.resolveMeshPublicationBinding({
     workspaceId,
     capabilityId: catalogEntry.capabilityId,
     entrySha256: projection.entrySha256,

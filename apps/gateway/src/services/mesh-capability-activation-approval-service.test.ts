@@ -5,7 +5,12 @@ import {
   MESH_CAPABILITY_PERMISSION_DIFF_SCHEMA_VERSION,
   canonicalJsonString,
 } from "@goatcitadel/contracts";
-import { Storage, computeMeshCapabilityActivationRequestSha256 } from "@goatcitadel/storage";
+import {
+  Storage,
+  computeMeshCapabilityActivationRequestSha256,
+  createLocalAsyncStorage,
+  type AsyncStorage,
+} from "@goatcitadel/storage";
 import {
   createMeshCapabilityActivationApproval,
   deriveMeshCapabilityActivationApprovalId,
@@ -45,10 +50,10 @@ afterEach(() => {
   for (const storage of openStorage.splice(0)) storage.close();
 });
 
-function createHost(): { storage: Storage } {
-  const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
-  openStorage.push(storage);
-  return { storage };
+function createHost(): { storage: AsyncStorage; syncStorage: Storage } {
+  const syncStorage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
+  openStorage.push(syncStorage);
+  return { storage: createLocalAsyncStorage(syncStorage), syncStorage };
 }
 
 function activationApprovalInput(
@@ -89,16 +94,16 @@ function activationApprovalInput(
 }
 
 describe("mesh capability activation approval service", () => {
-  it("derives one exact detached database-clock approval and replays without a duplicate event", () => {
+  it("derives one exact detached database-clock approval and replays without a duplicate event", async () => {
     const host = createHost();
     const input = activationApprovalInput();
-    const genericCreateSpy = vi.spyOn(host.storage.approvals, "create");
-    const activationSpy = vi.spyOn(host.storage.meshCapabilityPublications, "activate");
+    const genericCreateSpy = vi.spyOn(host.syncStorage.approvals, "create");
+    const activationSpy = vi.spyOn(host.syncStorage.meshCapabilityPublications, "activate");
     const wallClockBefore = Date.now();
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2099-01-01T00:00:00.000Z"));
 
-    const first = createMeshCapabilityActivationApproval(host, input);
+    const first = await createMeshCapabilityActivationApproval(host, input);
     const expectedApprovalId = expectedDeterministicApprovalId(input);
 
     expect(first.replayed).toBe(false);
@@ -139,7 +144,7 @@ describe("mesh capability activation approval service", () => {
     );
     expect(Date.parse(first.approval.expiresAt!) - Date.parse(first.approval.createdAt)).toBe(15 * 60_000);
     expect(Math.abs(Date.parse(first.approval.createdAt) - wallClockBefore)).toBeLessThan(5_000);
-    expect(host.storage.approvalEvents.listByApprovalId(expectedApprovalId)).toEqual([
+    expect(host.syncStorage.approvalEvents.listByApprovalId(expectedApprovalId)).toEqual([
       expect.objectContaining({
         approvalId: expectedApprovalId,
         eventType: "created",
@@ -149,29 +154,29 @@ describe("mesh capability activation approval service", () => {
       }),
     ]);
 
-    const replay = createMeshCapabilityActivationApproval(host, input);
+    const replay = await createMeshCapabilityActivationApproval(host, input);
     expect(replay).toEqual({ approval: first.approval, activationInput: first.activationInput, replayed: true });
-    expect(host.storage.approvalEvents.listByApprovalId(expectedApprovalId)).toHaveLength(1);
+    expect(host.syncStorage.approvalEvents.listByApprovalId(expectedApprovalId)).toHaveLength(1);
     expect(genericCreateSpy).not.toHaveBeenCalled();
     expect(activationSpy).not.toHaveBeenCalled();
   });
 
-  it("uses workspace-only linkage when session and turn are absent", () => {
+  it("uses workspace-only linkage when session and turn are absent", async () => {
     const host = createHost();
     const input = activationApprovalInput();
     delete input.sessionId;
     delete input.turnId;
 
-    const created = createMeshCapabilityActivationApproval(host, input);
+    const created = await createMeshCapabilityActivationApproval(host, input);
     expect(created.approval.linkage).toEqual({ workspaceId: input.workspaceId });
     expect(created.activationInput).not.toHaveProperty("sessionId");
     expect(created.activationInput).not.toHaveProperty("turnId");
   });
 
-  it("copies and freezes nested diff bindings before returning the approved activation input", () => {
+  it("copies and freezes nested diff bindings before returning the approved activation input", async () => {
     const host = createHost();
     const input = activationApprovalInput();
-    const created = createMeshCapabilityActivationApproval(host, input);
+    const created = await createMeshCapabilityActivationApproval(host, input);
     input.permissionDiff.added.push("filesystemRead:C:/changed-after-approval");
     input.effectDiff.currentEffectPosture = "unknown";
 
@@ -186,10 +191,10 @@ describe("mesh capability activation approval service", () => {
     );
   });
 
-  it("collides changed publisher, manifest, entry, permission, and effect bytes on the same approval ID", () => {
+  it("collides changed publisher, manifest, entry, permission, and effect bytes on the same approval ID", async () => {
     const host = createHost();
     const input = activationApprovalInput();
-    const created = createMeshCapabilityActivationApproval(host, input);
+    const created = await createMeshCapabilityActivationApproval(host, input);
     const changedInputs: CreateMeshCapabilityActivationApprovalInput[] = [
       activationApprovalInput({ publisherGeneration: 2 }),
       activationApprovalInput({ manifestSha256: "5".repeat(64) }),
@@ -211,16 +216,18 @@ describe("mesh capability activation approval service", () => {
     ];
 
     for (const changed of changedInputs) {
-      expect(() => createMeshCapabilityActivationApproval(host, changed)).toThrow(/different immutable request bytes/i);
+      await expect(createMeshCapabilityActivationApproval(host, changed)).rejects.toThrow(
+        /different immutable request bytes/i,
+      );
     }
-    expect(host.storage.approvalEvents.listByApprovalId(created.approval.approvalId)).toHaveLength(1);
+    expect(host.syncStorage.approvalEvents.listByApprovalId(created.approval.approvalId)).toHaveLength(1);
   });
 
-  it("fails closed on foreign pre-existing bytes for the derived approval identity", () => {
+  it("fails closed on foreign pre-existing bytes for the derived approval identity", async () => {
     const host = createHost();
     const input = activationApprovalInput();
     const approvalId = expectedDeterministicApprovalId(input);
-    host.storage.approvals.createDeterministicDetachedWithTtlDuration(
+    host.syncStorage.approvals.createDeterministicDetachedWithTtlDuration(
       {
         approvalId,
         kind: "foreign.approval",
@@ -232,25 +239,27 @@ describe("mesh capability activation approval service", () => {
       15 * 60_000,
     );
 
-    expect(() => createMeshCapabilityActivationApproval(host, input)).toThrow(/different immutable request bytes/i);
-    expect(host.storage.approvalEvents.listByApprovalId(approvalId)).toEqual([]);
+    await expect(createMeshCapabilityActivationApproval(host, input)).rejects.toThrow(
+      /different immutable request bytes/i,
+    );
+    expect(host.syncStorage.approvalEvents.listByApprovalId(approvalId)).toEqual([]);
   });
 
-  it("rejects caller approval IDs, unknown keys, noncanonical identity, and accessors before storage", () => {
+  it("rejects caller approval IDs, unknown keys, noncanonical identity, and accessors before storage", async () => {
     const host = createHost();
-    const createSpy = vi.spyOn(host.storage.approvals, "createDeterministicDetachedWithTtlDuration");
-    expect(() =>
+    const createSpy = vi.spyOn(host.syncStorage.approvals, "createDeterministicDetachedWithTtlDuration");
+    await expect(
       createMeshCapabilityActivationApproval(host, {
         ...activationApprovalInput(),
         approvalId: "caller-owned",
       } as CreateMeshCapabilityActivationApprovalInput),
-    ).toThrow(/invalid key set/i);
-    expect(() =>
+    ).rejects.toThrow(/invalid key set/i);
+    await expect(
       createMeshCapabilityActivationApproval(host, {
         ...activationApprovalInput(),
         workspaceId: " workspace-1",
       }),
-    ).toThrow(/canonical identifier/i);
+    ).rejects.toThrow(/canonical identifier/i);
 
     let getterReads = 0;
     const unsafePermissionDiff = Object.defineProperty({}, "schemaVersion", {
@@ -260,12 +269,12 @@ describe("mesh capability activation approval service", () => {
         return MESH_CAPABILITY_PERMISSION_DIFF_SCHEMA_VERSION;
       },
     });
-    expect(() =>
+    await expect(
       createMeshCapabilityActivationApproval(host, {
         ...activationApprovalInput(),
         permissionDiff: unsafePermissionDiff,
       } as CreateMeshCapabilityActivationApprovalInput),
-    ).toThrow(/accessor/i);
+    ).rejects.toThrow(/accessor/i);
     expect(getterReads).toBe(0);
 
     for (const malformed of [
@@ -282,22 +291,22 @@ describe("mesh capability activation approval service", () => {
         } as CreateMeshCapabilityActivationApprovalInput["effectDiff"],
       }),
     ]) {
-      expect(() => createMeshCapabilityActivationApproval(host, malformed)).toThrow(/unknown field/i);
+      await expect(createMeshCapabilityActivationApproval(host, malformed)).rejects.toThrow(/unknown field/i);
     }
     expect(createSpy).not.toHaveBeenCalled();
   });
 
-  it("rolls back the approval row when its canonical created event cannot commit", () => {
+  it("rolls back the approval row when its canonical created event cannot commit", async () => {
     const host = createHost();
     const input = activationApprovalInput();
-    const appendSpy = vi.spyOn(host.storage.approvalEvents, "append").mockImplementationOnce(() => {
+    const appendSpy = vi.spyOn(host.syncStorage.approvalEvents, "append").mockImplementationOnce(() => {
       throw new Error("event store unavailable");
     });
 
-    expect(() => createMeshCapabilityActivationApproval(host, input)).toThrow(/event store unavailable/i);
+    await expect(createMeshCapabilityActivationApproval(host, input)).rejects.toThrow(/event store unavailable/i);
     appendSpy.mockRestore();
-    const retry = createMeshCapabilityActivationApproval(host, input);
+    const retry = await createMeshCapabilityActivationApproval(host, input);
     expect(retry.replayed).toBe(false);
-    expect(host.storage.approvalEvents.listByApprovalId(retry.approval.approvalId)).toHaveLength(1);
+    expect(host.syncStorage.approvalEvents.listByApprovalId(retry.approval.approvalId)).toHaveLength(1);
   });
 });

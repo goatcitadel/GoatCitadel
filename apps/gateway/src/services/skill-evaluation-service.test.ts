@@ -3,7 +3,7 @@ import type { CapabilityProposalRecord, SkillEvaluationRunRecord, SkillListItem 
 import { SkillEvaluationService } from "./skill-evaluation-service.js";
 
 describe("SkillEvaluationService", () => {
-  it("scores instruction behavior, accepts only improved mutations, and does not write skill files", () => {
+  it("scores instruction behavior, accepts only improved mutations, and does not write skill files", async () => {
     const skill = createSkill();
     const storage = createStorage();
     const service = new SkillEvaluationService({
@@ -16,7 +16,7 @@ describe("SkillEvaluationService", () => {
       })),
     });
 
-    const response = service.runSkillEvaluation(skill.skillId, {
+    const response = await service.runSkillEvaluation(skill.skillId, {
       scenarios: [
         {
           title: "Boundary check",
@@ -42,7 +42,7 @@ describe("SkillEvaluationService", () => {
     expect(storage.runs.get(response.run.runId)).toMatchObject({ runId: response.run.runId });
   });
 
-  it("creates proposal evidence without activating the candidate directly", () => {
+  it("creates proposal evidence without activating the candidate directly", async () => {
     const skill = createSkill();
     const storage = createStorage();
     const createCapabilityProposal = vi.fn((input) => {
@@ -69,8 +69,8 @@ describe("SkillEvaluationService", () => {
       recordSkillEvaluationSignal: vi.fn(() => undefined),
     });
 
-    const run = service.runSkillEvaluation(skill.skillId).run;
-    const response = service.createSkillEvaluationProposal(run.runId);
+    const run = (await service.runSkillEvaluation(skill.skillId)).run;
+    const response = await service.createSkillEvaluationProposal(run.runId);
 
     expect(createCapabilityProposal).toHaveBeenCalledWith(
       expect.objectContaining({

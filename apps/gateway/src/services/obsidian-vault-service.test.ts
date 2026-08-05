@@ -57,10 +57,10 @@ function createService(settings = new FakeSystemSettings()): {
 }
 
 describe("ObsidianVaultService", () => {
-  it("normalizes config updates and preserves allowed subpaths when omitted", () => {
+  it("normalizes config updates and preserves allowed subpaths when omitted", async () => {
     const { service, settings } = createService();
 
-    expect(service.getConfig()).toEqual({
+    await expect(service.getConfig()).resolves.toEqual({
       enabled: false,
       vaultPath: "",
       mode: "read_append",
@@ -73,7 +73,7 @@ describe("ObsidianVaultService", () => {
       ],
     });
 
-    const updated = service.updateConfig({
+    const updated = await service.updateConfig({
       enabled: true,
       vaultPath: "  C:/Vault  ",
       mode: "read_only",
@@ -87,8 +87,8 @@ describe("ObsidianVaultService", () => {
       allowedSubpaths: ["GoatCitadel/Inbox"],
     });
 
-    expect(service.updateConfig({ mode: "read_append" }).allowedSubpaths).toEqual(["GoatCitadel/Inbox"]);
-    expect(() => service.updateConfig({ allowedSubpaths: ["../escape"] })).toThrow(
+    expect((await service.updateConfig({ mode: "read_append" })).allowedSubpaths).toEqual(["GoatCitadel/Inbox"]);
+    await expect(service.updateConfig({ allowedSubpaths: ["../escape"] })).rejects.toThrow(
       "Parent-directory segments are not allowed.",
     );
     expect(settings.get("obsidian_integration_v1")?.value).toMatchObject({
@@ -105,20 +105,20 @@ describe("ObsidianVaultService", () => {
     expect(disabled.vaultReachable).toBe(false);
     expect(disabled.lastError).toBeUndefined();
 
-    service.updateConfig({ enabled: true, vaultPath: "   " });
+    await service.updateConfig({ enabled: true, vaultPath: "   " });
     await expect(service.getStatus()).resolves.toMatchObject({
       vaultReachable: false,
       lastError: "Obsidian integration enabled but vault path is empty.",
     });
 
     const notDirectory = path.join(vault, "GoatCitadel", "Alpha.md");
-    service.updateConfig({ vaultPath: notDirectory });
+    await service.updateConfig({ vaultPath: notDirectory });
     await expect(service.testConnection()).resolves.toMatchObject({
       vaultReachable: false,
       lastError: "Configured Obsidian vault path is not a directory.",
     });
 
-    service.updateConfig({ vaultPath: vault, allowedSubpaths: ["GoatCitadel"] });
+    await service.updateConfig({ vaultPath: vault, allowedSubpaths: ["GoatCitadel"] });
     const reachable = await service.getStatus();
     expect(reachable.vaultReachable).toBe(true);
     expect(reachable.lastError).toBeUndefined();
@@ -140,7 +140,7 @@ describe("ObsidianVaultService", () => {
 
     await expect(service.searchNotes("alpha")).rejects.toThrow("Obsidian integration is disabled.");
 
-    service.updateConfig({ enabled: true, vaultPath: vault, allowedSubpaths: ["GoatCitadel", "Missing"] });
+    await service.updateConfig({ enabled: true, vaultPath: vault, allowedSubpaths: ["GoatCitadel", "Missing"] });
     await expect(service.searchNotes("   ")).rejects.toThrow("query is required");
 
     const results = await service.searchNotes("alpha", 20);
@@ -161,7 +161,7 @@ describe("ObsidianVaultService", () => {
   it("reads and appends only markdown notes inside configured allowed roots", async () => {
     const vault = await createVault();
     const { service } = createService();
-    service.updateConfig({ enabled: true, vaultPath: vault, allowedSubpaths: ["GoatCitadel/Inbox"] });
+    await service.updateConfig({ enabled: true, vaultPath: vault, allowedSubpaths: ["GoatCitadel/Inbox"] });
 
     await expect(service.readNote("GoatCitadel/Alpha.md")).rejects.toThrow(
       "Path is outside configured Obsidian allowed subpaths.",
@@ -181,7 +181,7 @@ describe("ObsidianVaultService", () => {
 
     await expect(service.appendToNote("GoatCitadel/Inbox/Empty.md", "  ")).rejects.toThrow("markdownBlock is required");
 
-    service.updateConfig({ mode: "read_only" });
+    await service.updateConfig({ mode: "read_only" });
     await expect(service.appendToNote("GoatCitadel/Inbox/Read Only.md", "content")).rejects.toThrow(
       "Obsidian integration is read-only.",
     );
@@ -197,7 +197,7 @@ describe("ObsidianVaultService", () => {
     await fs.symlink(outside, path.join(vault, "GoatCitadel", "LinkedRoot"));
 
     const { service } = createService();
-    service.updateConfig({ enabled: true, vaultPath: vault, allowedSubpaths: ["GoatCitadel/Inbox"] });
+    await service.updateConfig({ enabled: true, vaultPath: vault, allowedSubpaths: ["GoatCitadel/Inbox"] });
 
     await expect(service.readNote("GoatCitadel/Inbox/Linked.md")).rejects.toThrow(
       "Path resolves outside configured Obsidian allowed subpaths.",
@@ -209,14 +209,14 @@ describe("ObsidianVaultService", () => {
       "Path resolves outside configured Obsidian allowed subpaths.",
     );
 
-    service.updateConfig({ allowedSubpaths: ["GoatCitadel/LinkedRoot"] });
+    await service.updateConfig({ allowedSubpaths: ["GoatCitadel/LinkedRoot"] });
     await expect(service.searchNotes("outside", 20)).resolves.toEqual([]);
   });
 
   it("captures sanitized inbox rows with defaults", async () => {
     const vault = await createVault();
     const { service } = createService();
-    service.updateConfig({ enabled: true, vaultPath: vault, allowedSubpaths: ["GoatCitadel/Inbox"] });
+    await service.updateConfig({ enabled: true, vaultPath: vault, allowedSubpaths: ["GoatCitadel/Inbox"] });
 
     const captured = await service.captureInboxEntry({
       id: "GC|12",

@@ -6,8 +6,8 @@ vi.mock("node:sqlite", () => ({
 }));
 
 vi.mock("./approval-remote-token-service.js", () => ({
-  consumeRemoteActionToken: vi.fn(() => ({ tokenId: "token-consumed", state: "consumed" })),
-  consumeRemoteActionTokenById: vi.fn(() => ({ tokenId: "token-by-id-consumed", state: "consumed" })),
+  consumeRemoteActionToken: vi.fn(async () => ({ tokenId: "token-consumed", state: "consumed" })),
+  consumeRemoteActionTokenById: vi.fn(async () => ({ tokenId: "token-by-id-consumed", state: "consumed" })),
 }));
 
 import { GatewayService } from "./gateway-service.js";
@@ -18,13 +18,12 @@ function createGatewayFacadeHarness(): GatewayService {
 }
 
 describe("GatewayService approvals facade delegation", () => {
-  it("forwards consumeRemoteActionToken to the extracted remote-token service", () => {
+  it("forwards consumeRemoteActionToken to the extracted remote-token service", async () => {
     const gateway = createGatewayFacadeHarness();
 
-    expect(GatewayService.prototype.consumeRemoteActionToken.call(gateway, "raw-token", "approval.resolve")).toEqual({
-      tokenId: "token-consumed",
-      state: "consumed",
-    });
+    await expect(
+      GatewayService.prototype.consumeRemoteActionToken.call(gateway, "raw-token", "approval.resolve"),
+    ).resolves.toEqual({ tokenId: "token-consumed", state: "consumed" });
 
     expect(approvalRemoteTokenService.consumeRemoteActionToken).toHaveBeenCalledWith(
       gateway,
@@ -33,13 +32,12 @@ describe("GatewayService approvals facade delegation", () => {
     );
   });
 
-  it("forwards consumeRemoteActionTokenById to the extracted remote-token service", () => {
+  it("forwards consumeRemoteActionTokenById to the extracted remote-token service", async () => {
     const gateway = createGatewayFacadeHarness();
 
-    expect(GatewayService.prototype.consumeRemoteActionTokenById.call(gateway, "token-1", "approval.resolve")).toEqual({
-      tokenId: "token-by-id-consumed",
-      state: "consumed",
-    });
+    await expect(
+      GatewayService.prototype.consumeRemoteActionTokenById.call(gateway, "token-1", "approval.resolve"),
+    ).resolves.toEqual({ tokenId: "token-by-id-consumed", state: "consumed" });
 
     expect(approvalRemoteTokenService.consumeRemoteActionTokenById).toHaveBeenCalledWith(
       gateway,

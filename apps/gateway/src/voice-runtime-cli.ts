@@ -131,5 +131,8 @@ function isDirectVoiceRuntimeCli(): boolean {
 }
 
 if (isDirectVoiceRuntimeCli()) {
-  void runVoiceRuntimeCliMain();
+  void runVoiceRuntimeCliMain().catch((error: unknown) => {
+    defaultVoiceRuntimeCliDeps.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  });
 }

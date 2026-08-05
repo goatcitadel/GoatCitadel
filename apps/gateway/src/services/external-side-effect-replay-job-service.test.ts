@@ -55,7 +55,7 @@ function createHost(
           return connection;
         }),
       },
-      runImmediateTransaction: (work) => work(),
+      runImmediateTransaction: async (work) => await work(),
     },
     fetchWithDiagnosticsTimeout: vi.fn(),
     readConnectionConfigValue: vi.fn((config: Record<string, unknown>, key: string) => {
@@ -300,13 +300,13 @@ function createTrackedSideEffectRunStore(seed: ExternalSideEffectRunRecord): Ext
 }
 
 describe("buildGatewayExternalSideEffectReplayJob", () => {
-  it("builds an identity-preserving replay job for an allowlisted failed-before-boundary activepieces run", () => {
+  it("builds an identity-preserving replay job for an allowlisted failed-before-boundary activepieces run", async () => {
     const connection = createConnection();
     const host = createHost(connection);
     const run = buildRun();
     const payload = buildPayload();
 
-    const job = buildGatewayExternalSideEffectReplayJob(host, run, payload);
+    const job = await buildGatewayExternalSideEffectReplayJob(host, run, payload);
 
     expect(job).toBeDefined();
     // Mirrors readReplayJobIdentityMismatch's checks (external-side-effect-runner-service.ts,
@@ -325,14 +325,14 @@ describe("buildGatewayExternalSideEffectReplayJob", () => {
     expect(job?.requireDurableBoundaryRecord).toBe(true);
   });
 
-  it("refuses to build an executable replay job without the canonical transaction owner", () => {
+  it("refuses to build an executable replay job without the canonical transaction owner", async () => {
     const base = createHost(createConnection());
     const host: IntegrationActionHost = {
       ...base,
       storage: { integrationConnections: base.storage.integrationConnections },
     };
 
-    expect(buildGatewayExternalSideEffectReplayJob(host, buildRun(), buildPayload())).toBeUndefined();
+    expect(await buildGatewayExternalSideEffectReplayJob(host, buildRun(), buildPayload())).toBeUndefined();
   });
 
   it("replays end-to-end through the replay-safe worker", async () => {
@@ -413,12 +413,12 @@ describe("buildGatewayExternalSideEffectReplayJob", () => {
       mutationStore,
     });
 
-    expect(buildGatewayExternalSideEffectReplayJob(host, run, buildPayload())).toBeUndefined();
+    expect(await buildGatewayExternalSideEffectReplayJob(host, run, buildPayload())).toBeUndefined();
     expect(fetchMock).not.toHaveBeenCalled();
     expect(mutationStore.claim).not.toHaveBeenCalled();
   });
 
-  it("persists only a destination digest and never the raw target or embedded credential", () => {
+  it("persists only a destination digest and never the raw target or embedded credential", async () => {
     const targetWithSecret = `${ACTIVEPIECES_WEBHOOK_A}?token=do-not-persist`;
     let persistedRequest: Record<string, unknown> | undefined;
     const sideEffectRunStore: ExternalSideEffectRunStore = {
@@ -447,10 +447,10 @@ describe("buildGatewayExternalSideEffectReplayJob", () => {
       { sideEffectRunStore },
     );
     const run = buildRun();
-    const job = buildGatewayExternalSideEffectReplayJob(host, run, buildPayload());
+    const job = await buildGatewayExternalSideEffectReplayJob(host, run, buildPayload());
     expect(job).toBeDefined();
 
-    claimIdempotentExternalSideEffect(job!);
+    await claimIdempotentExternalSideEffect(job!);
 
     expect(job?.externalDestinationFingerprint).toBe(fingerprintExternalSideEffectDestination(targetWithSecret));
     expect(job?.externalDestinationFingerprint).toMatch(/^[a-f0-9]{64}$/);
@@ -491,9 +491,9 @@ describe("buildGatewayExternalSideEffectReplayJob", () => {
     const host = createHost(createConnection());
     const payload = buildPayload();
 
-    expect(buildGatewayExternalSideEffectReplayJob(host, gmailWriteRun, payload)).toBeUndefined();
-    expect(buildGatewayExternalSideEffectReplayJob(host, trelloWriteRun, payload)).toBeUndefined();
-    expect(buildGatewayExternalSideEffectReplayJob(host, localBridgeRun, payload)).toBeUndefined();
+    expect(await buildGatewayExternalSideEffectReplayJob(host, gmailWriteRun, payload)).toBeUndefined();
+    expect(await buildGatewayExternalSideEffectReplayJob(host, trelloWriteRun, payload)).toBeUndefined();
+    expect(await buildGatewayExternalSideEffectReplayJob(host, localBridgeRun, payload)).toBeUndefined();
 
     const results = await runReplaySafeExternalSideEffectWorker({
       runs: [gmailWriteRun, trelloWriteRun, localBridgeRun],
@@ -557,51 +557,50 @@ describe("buildGatewayExternalSideEffectReplayJob", () => {
     expect(run.status).toBe("failed_before_boundary");
   });
 
-  it("returns undefined when ward denies or requires dry-run at replay time", () => {
+  it("returns undefined when ward denies or requires dry-run at replay time", async () => {
     const connection = createConnection({ workspaceId: "ws-guarded" });
     const run = buildRun();
     const payload = buildPayload();
 
     const denyHost = wardHost(connection, [{ actionPattern: "integration.*", effect: "deny" }]);
-    expect(buildGatewayExternalSideEffectReplayJob(denyHost, run, payload)).toBeUndefined();
+    expect(await buildGatewayExternalSideEffectReplayJob(denyHost, run, payload)).toBeUndefined();
 
     const dryRunHost = wardHost(connection, [
       { actionPattern: "integration.automation.activepieces.*", effect: "require_dry_run" },
     ]);
-    expect(buildGatewayExternalSideEffectReplayJob(dryRunHost, run, payload)).toBeUndefined();
+    expect(await buildGatewayExternalSideEffectReplayJob(dryRunHost, run, payload)).toBeUndefined();
 
     const approvalHost = wardHost(connection, [{ actionPattern: "integration.*", effect: "require_approval" }]);
-    expect(buildGatewayExternalSideEffectReplayJob(approvalHost, run, payload)).toBeUndefined();
+    expect(await buildGatewayExternalSideEffectReplayJob(approvalHost, run, payload)).toBeUndefined();
   });
 
-  it("returns undefined for missing connection or missing webhook url", () => {
+  it("returns undefined for missing connection or missing webhook url", async () => {
     const run = buildRun();
     const payload = buildPayload();
 
     const missingConnectionHost = createHost(createConnection({ connectionId: "some-other-connection" }));
-    expect(buildGatewayExternalSideEffectReplayJob(missingConnectionHost, run, payload)).toBeUndefined();
+    expect(await buildGatewayExternalSideEffectReplayJob(missingConnectionHost, run, payload)).toBeUndefined();
 
     const noWebhookHost = createHost(createConnection({ config: { defaultFlowId: "flow-1" } }));
-    expect(buildGatewayExternalSideEffectReplayJob(noWebhookHost, run, payload)).toBeUndefined();
+    expect(await buildGatewayExternalSideEffectReplayJob(noWebhookHost, run, payload)).toBeUndefined();
   });
 
-  it("returns undefined when the connection's catalogId has drifted since the original claim", () => {
+  it("returns undefined when the connection's catalogId has drifted since the original claim", async () => {
     const run = buildRun();
     const payload = buildPayload();
     const driftedHost = createHost(createConnection({ catalogId: "automation.gmail" }));
 
-    expect(buildGatewayExternalSideEffectReplayJob(driftedHost, run, payload)).toBeUndefined();
+    expect(await buildGatewayExternalSideEffectReplayJob(driftedHost, run, payload)).toBeUndefined();
   });
 
-  it("does not propagate a builder error from a malformed webhook URL (job unavailable, not a crash)", () => {
+  it("does not propagate a builder error from a malformed webhook URL (job unavailable, not a crash)", async () => {
     const run = buildRun();
     const payload = buildPayload();
     const malformedHost = createHost(
       createConnection({ config: { webhookUrl: "not-a-url", defaultFlowId: "flow-1" } }),
     );
 
-    expect(() => buildGatewayExternalSideEffectReplayJob(malformedHost, run, payload)).not.toThrow();
-    expect(buildGatewayExternalSideEffectReplayJob(malformedHost, run, payload)).toBeUndefined();
+    await expect(buildGatewayExternalSideEffectReplayJob(malformedHost, run, payload)).resolves.toBeUndefined();
   });
 
   it("exposes exactly the Activepieces trigger_webhook allowlist entry", () => {

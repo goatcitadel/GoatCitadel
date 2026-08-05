@@ -101,9 +101,9 @@ interface ResolvedAgentPreset {
 // turn runs AS that agent — its preferred provider/model and persona framing.
 // Returns null when agent_ref does not resolve: an advisory turn must not fail
 // just because the agent isn't registered, so it falls back to the gateway default.
-function resolveAgentPreset(fastify: FastifyInstance, agentRef: string): ResolvedAgentPreset | null {
+async function resolveAgentPreset(fastify: FastifyInstance, agentRef: string): Promise<ResolvedAgentPreset | null> {
   try {
-    const preset = fastify.services.agents.getAgent(agentRef).presetDefaults;
+    const preset = (await fastify.services.agents.getAgent(agentRef)).presetDefaults;
     if (!preset) {
       return null;
     }
@@ -134,7 +134,7 @@ export const turnsRoutes: FastifyPluginAsync = async (fastify) => {
 
     // Run the turn AS the referenced agent: its preferred provider/model and its
     // persona framing. An unknown agent_ref falls back to the gateway default.
-    const preset = resolveAgentPreset(fastify, body.agent_ref);
+    const preset = await resolveAgentPreset(fastify, body.agent_ref);
 
     // Map the turn messages to a provider completion. author_ref is accepted for
     // attribution but not forwarded to the model (speaker context already rides

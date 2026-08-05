@@ -4,8 +4,8 @@ import type { McpAuthStateRecord } from "./mcp-server-admin-service.js";
 
 export interface GatewayMcpOAuthServiceOptions {
   tokenService: McpOAuthTokenService;
-  readAuthState: () => Record<string, McpAuthStateRecord>;
-  writeAuthState: (state: Record<string, McpAuthStateRecord>) => void;
+  readAuthState: () => Promise<Record<string, McpAuthStateRecord>>;
+  writeAuthState: (state: Record<string, McpAuthStateRecord>) => Promise<void>;
 }
 
 /**
@@ -27,13 +27,13 @@ export class GatewayMcpOAuthService {
       return await this.options.tokenService.exchangeAuthorizationCode(server, code, stateRecord);
     } catch (error) {
       const message = sanitizeMcpAuthError((error as Error).message);
-      const authRows = this.options.readAuthState();
+      const authRows = await this.options.readAuthState();
       authRows[server.serverId] = {
         ...(authRows[server.serverId] ?? stateRecord),
         error: message,
         updatedAt: new Date().toISOString(),
       };
-      this.options.writeAuthState(authRows);
+      await this.options.writeAuthState(authRows);
       throw new Error(message, { cause: error });
     }
   }
@@ -42,11 +42,11 @@ export class GatewayMcpOAuthService {
     if (server.authType !== "oauth2") {
       return undefined;
     }
-    const authRows = this.options.readAuthState();
+    const authRows = await this.options.readAuthState();
     try {
       const resolved = await this.options.tokenService.resolveAccessToken(server, authRows[server.serverId]);
       authRows[server.serverId] = resolved.state;
-      this.options.writeAuthState(authRows);
+      await this.options.writeAuthState(authRows);
       return resolved.accessToken;
     } catch (error) {
       authRows[server.serverId] = {
@@ -54,7 +54,7 @@ export class GatewayMcpOAuthService {
         error: sanitizeMcpAuthError((error as Error).message),
         updatedAt: new Date().toISOString(),
       };
-      this.options.writeAuthState(authRows);
+      await this.options.writeAuthState(authRows);
       throw error;
     }
   }

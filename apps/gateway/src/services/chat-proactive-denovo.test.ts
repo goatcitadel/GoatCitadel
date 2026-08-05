@@ -269,6 +269,15 @@ function createHarness(options: HarnessOptions = {}) {
 
   const ctx = {
     storage: {
+      db: {
+        dialect: "sqlite",
+        prepare: () => ({
+          // listChatSessionProactiveRuns lookup (used by findReusableTask) ⇒ no runs.
+          get: () => undefined,
+          all: () => [],
+          run: () => ({ changes: 0 }),
+        }),
+      },
       agentCommitments: {
         listBySession: (id: string) => commitments.filter((c) => c.sessionId === id),
         // Mirror the real repo: existence of ≥1 pending commitment for the session,

@@ -214,6 +214,20 @@ describe("dashboard observe aggregate routes", () => {
         getDaemonStatus: vi.fn(() => ({ running: true, state: "running" })),
         listDaemonLogs: vi.fn(() => [{ timestamp: "2026-04-10T00:00:00.000Z", level: "info", message: "ready" }]),
       },
+      health: {
+        getDatabaseHealthSnapshot: vi.fn(async () => ({
+          driver: "postgres",
+          healthy: true,
+          storageWait: {
+            windowMs: 300_000,
+            count: 4,
+            slowCount: 1,
+            criticalCount: 0,
+            p95Ms: 280,
+            maxMs: 410,
+          },
+        })),
+      },
     } as never);
     await app.register(dashboardRoutes);
 
@@ -227,6 +241,11 @@ describe("dashboard observe aggregate routes", () => {
       systemVitals: { hostname: "goat-box", platform: "win32", release: "11" },
       daemonStatus: { running: true, state: "running" },
       daemonLogs: { items: [{ message: "ready" }] },
+      database: {
+        driver: "postgres",
+        healthy: true,
+        storageWait: { count: 4, p95Ms: 280, maxMs: 410 },
+      },
       costs: {
         summary: {
           scope: "day",

@@ -2,7 +2,7 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AuditLog, Storage, TranscriptLog } from "@goatcitadel/storage";
+import { AuditLog, createLocalAsyncStorage, Storage, TranscriptLog } from "@goatcitadel/storage";
 import {
   buildImprovementActivateReviewedStateMaterial,
   buildImprovementRestoreReviewedStateMaterial,
@@ -36,7 +36,7 @@ afterEach(() => {
   }
 });
 
-function createHarness(): Harness {
+async function createHarness(): Promise<Harness> {
   const rootDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "gc-improvement-pg-dialect-"));
   const transcriptsDir = path.join(rootDir, "transcripts");
   const auditDir = path.join(rootDir, "audit");
@@ -54,12 +54,12 @@ function createHarness(): Harness {
   });
 
   const ctx: ServiceContext = {
-    storage,
+    storage: createLocalAsyncStorage(storage),
     config: {} as never,
     llmService: {} as never,
     policyEngine: {} as never,
     gatewaySql: storage.gatewaySql,
-    publishRealtime: () => undefined,
+    publishRealtime: async () => undefined,
     requireFeatureEnabled: () => undefined,
     isFeatureEnabled: () => true,
     normalizeWorkspaceId: (workspaceId?: string) => workspaceId?.trim() || "default",
@@ -97,6 +97,7 @@ function createHarness(): Harness {
   } as unknown as ImprovementServiceCallbacks;
 
   const service = new ImprovementService(ctx, callbacks);
+  await service.initialize();
   const harness = { rootDir, storage, service, callbacks };
   harnesses.push(harness);
   return harness;
@@ -152,18 +153,18 @@ describe("ImprovementService on the postgres dialect", () => {
     // Regression: the weekly improvement replay used raw `exec("BEGIN IMMEDIATE")`,
     // which is sqlite-only syntax and failed every run on Postgres deployments
     // with `syntax error at or near "IMMEDIATE"` (observed live 2026-07-06).
-    const harness = createHarness();
+    const harness = await createHarness();
 
     const result = await harness.service.runImprovementReplayManually({ sampleSize: 50 });
 
     expect(result.run.status).toBe("completed");
   });
 
-  it("runs the governed improvement lifecycle (activate -> pause) without sqlite-only syntax", () => {
+  it("runs the governed improvement lifecycle (activate -> pause) without sqlite-only syntax", async () => {
     // HX-402 P3: the approval-first request verbs, the recovered effect's
     // durable intent/claim/inspection/settlement machine, and the one-
     // transaction DB half must all execute under the postgres dialect facade.
-    const harness = createHarness();
+    const harness = await createHarness();
     const policies: Record<string, unknown> = {};
     (harness.callbacks.captureRoutingPolicySnapshot as ReturnType<typeof vi.fn>).mockImplementation(
       (targetKey: string) => ({
@@ -198,7 +199,7 @@ describe("ImprovementService on the postgres dialect", () => {
       },
     );
 
-    harness.service.recordPromptLabRegressionCompletionSignal({
+    await harness.service.recordPromptLabRegressionCompletionSignal({
       regressionRunId: "regression-pg-governed",
       packId: "pack-routing",
       capability: "provider-balance",
@@ -206,11 +207,11 @@ describe("ImprovementService on the postgres dialect", () => {
       passDelta: -0.2,
       latencyDeltaMs: 35,
     });
-    const candidate = harness.service
-      .listImprovementCandidates(50, "prompt-lab")
-      .find((item) => item.kind === "routing_policy");
+    const candidate = (await harness.service.listImprovementCandidates(50, "prompt-lab")).find(
+      (item) => item.kind === "routing_policy",
+    );
     expect(candidate).toBeDefined();
-    const detail = harness.service.getImprovementCandidateDetail(candidate!.candidateId);
+    const detail = await harness.service.getImprovementCandidateDetail(candidate!.candidateId);
     const revision = detail.currentRevision!;
     const evaluation = detail.latestEvaluation!;
     const metadata = revision.candidateRef.metadata as Record<string, unknown> | undefined;
@@ -243,22 +244,22 @@ describe("ImprovementService on the postgres dialect", () => {
     });
     expect(policies).toEqual({});
 
-    const applied = harness.service.executeApprovedImprovementLifecycleMutation({
+    const applied = await harness.service.executeApprovedImprovementLifecycleMutation({
       workspaceId: "prompt-lab",
       approvalId: activateApprovalId,
     });
     expect(applied.disposition).toBe("applied");
     expect(policies[candidate!.targetKey]).toMatchObject({ strategy: "route_rebalance" });
-    expect(harness.service.getImprovementActivation(applied.activationId!).status).toBe("active");
+    expect((await harness.service.getImprovementActivation(applied.activationId!)).status).toBe("active");
     // Exact replay converges on the immutable settlement.
     expect(
-      harness.service.executeApprovedImprovementLifecycleMutation({
+      await harness.service.executeApprovedImprovementLifecycleMutation({
         workspaceId: "prompt-lab",
         approvalId: activateApprovalId,
       }),
     ).toMatchObject({ disposition: "applied", replayed: true, settlementId: applied.settlementId });
 
-    const activation = harness.service.getImprovementActivation(applied.activationId!);
+    const activation = await harness.service.getImprovementActivation(applied.activationId!);
     const pauseBinding = buildImprovementLifecycleApprovalBinding({
       workspaceId: "prompt-lab",
       operationKind: "pause",
@@ -276,25 +277,25 @@ describe("ImprovementService on the postgres dialect", () => {
       preState: { hadValue: true, value: targetValue },
       targetState: { hadValue: false, value: null },
     });
-    const paused = harness.service.executeApprovedImprovementLifecycleMutation({
+    const paused = await harness.service.executeApprovedImprovementLifecycleMutation({
       workspaceId: "prompt-lab",
       approvalId: pauseApprovalId,
     });
     expect(paused).toMatchObject({ disposition: "applied", operationKind: "pause" });
-    expect(harness.service.getImprovementActivation(applied.activationId!).status).toBe("paused");
+    expect((await harness.service.getImprovementActivation(applied.activationId!)).status).toBe("paused");
     expect(policies[candidate!.targetKey]).toBeUndefined();
   });
 
-  it("types the optional expected-status predicate before binding a null on the postgres dialect", () => {
-    const harness = createHarness();
-    const prepare = vi.spyOn(harness.storage.gatewaySql, "prepare");
+  it("types the optional expected-status predicate before binding a null on the postgres dialect", async () => {
+    const harness = await createHarness();
+    const prepare = vi.spyOn(harness.storage.db, "prepare");
     const markActivationFailed = (
       harness.service as unknown as {
         markActivationFailed: (activationId: string, reason: string) => unknown;
       }
     ).markActivationFailed.bind(harness.service);
 
-    expect(() => markActivationFailed("missing-activation", "probe")).toThrow(/not found/i);
+    await expect(markActivationFailed("missing-activation", "probe")).rejects.toThrow(/not found/i);
     const transitionSql = prepare.mock.calls
       .map(([sql]) => sql)
       .find((sql) => sql.includes("UPDATE improvement_activations") && sql.includes("expectedStatus"));

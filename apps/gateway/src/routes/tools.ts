@@ -351,10 +351,10 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
           scopeRef: scope === "operator" ? request.authActorId : parsed.data.scopeRef,
           createdBy: request.authActorId,
         });
-        markMutationCommitted(request);
+        await markMutationCommitted(request);
         return reply.code(201).send(created);
       } catch (error) {
-        markMutationCommittedFromError(request, error);
+        await markMutationCommittedFromError(request, error);
         return reply.code(request.mutationCommitted ? 500 : 400).send({ error: (error as Error).message });
       }
     },
@@ -392,10 +392,10 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
           ...body.data,
           updatedBy: request.authActorId,
         });
-        markMutationCommitted(request);
+        await markMutationCommitted(request);
         return reply.send(updated);
       } catch (error) {
-        markMutationCommittedFromError(request, error);
+        await markMutationCommittedFromError(request, error);
         return reply.code(request.mutationCommitted ? 500 : 400).send({ error: (error as Error).message });
       }
     },
@@ -425,7 +425,7 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
         }
         const archived = fastify.services.tools.archivePermissionProfile(params.data.profileId, request.authActorId);
         if (archived) {
-          markMutationCommitted(request);
+          await markMutationCommitted(request);
         }
         return archived
           ? reply.send({ archived: true, profileId: params.data.profileId })
@@ -433,7 +433,7 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
               .code(404)
               .send({ error: `Permission profile ${params.data.profileId} not found or already archived` });
       } catch (error) {
-        markMutationCommittedFromError(request, error);
+        await markMutationCommittedFromError(request, error);
         return reply.code(request.mutationCommitted ? 500 : 400).send({ error: (error as Error).message });
       }
     },
@@ -461,10 +461,10 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
           operatorId: profile?.scope === "workspace" ? undefined : request.authActorId,
           createdBy: request.authActorId,
         });
-        markMutationCommitted(request);
+        await markMutationCommitted(request);
         return reply.send(activation);
       } catch (error) {
-        markMutationCommittedFromError(request, error);
+        await markMutationCommittedFromError(request, error);
         return reply.code(request.mutationCommitted ? 500 : 400).send({ error: (error as Error).message });
       }
     },
@@ -489,10 +489,10 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
           operatorId: request.authActorId,
           createdBy: request.authActorId,
         });
-        markMutationCommitted(request);
+        await markMutationCommitted(request);
         return reply.code(201).send(override);
       } catch (error) {
-        markMutationCommittedFromError(request, error);
+        await markMutationCommittedFromError(request, error);
         return reply.code(request.mutationCommitted ? 500 : 400).send({ error: (error as Error).message });
       }
     },
@@ -524,7 +524,7 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
           request.authActorId,
         );
         if (override) {
-          markMutationCommitted(request);
+          await markMutationCommitted(request);
         }
         return override
           ? reply.send({
@@ -537,7 +537,7 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
             })
           : reply.code(404).send({ error: `Local operator override ${params.data.overrideId} not found or inactive` });
       } catch (error) {
-        markMutationCommittedFromError(request, error);
+        await markMutationCommittedFromError(request, error);
         return reply.code(request.mutationCommitted ? 500 : 400).send({ error: (error as Error).message });
       }
     },
@@ -550,7 +550,7 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     return reply.send({
-      items: fastify.services.tools.listToolGrants(parsed.data.scope, parsed.data.scopeRef, parsed.data.limit),
+      items: await fastify.services.tools.listToolGrants(parsed.data.scope, parsed.data.scopeRef, parsed.data.limit),
     });
   });
 
@@ -566,14 +566,14 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
       }
 
       try {
-        const created = fastify.services.tools.createToolGrant({
+        const created = await fastify.services.tools.createToolGrant({
           ...parsed.data,
           createdBy: request.authActorId,
         });
-        markMutationCommitted(request);
+        await markMutationCommitted(request);
         return reply.code(201).send(created);
       } catch (error) {
-        markMutationCommittedFromError(request, error);
+        await markMutationCommittedFromError(request, error);
         return reply.code(request.mutationCommitted ? 500 : 400).send({ error: (error as Error).message });
       }
     },
@@ -591,15 +591,15 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
       }
 
       try {
-        const revoked = fastify.services.tools.revokeToolGrant(params.data.grantId, request.authActorId);
+        const revoked = await fastify.services.tools.revokeToolGrant(params.data.grantId, request.authActorId);
         if (!revoked) {
           return reply.code(404).send({ error: `Tool grant ${params.data.grantId} not found or already revoked` });
         }
 
-        markMutationCommitted(request);
+        await markMutationCommitted(request);
         return reply.send({ revoked: true, grantId: params.data.grantId, revokedBy: request.authActorId });
       } catch (error) {
-        markMutationCommittedFromError(request, error);
+        await markMutationCommittedFromError(request, error);
         return reply.code(request.mutationCommitted ? 500 : 400).send({ error: (error as Error).message });
       }
     },

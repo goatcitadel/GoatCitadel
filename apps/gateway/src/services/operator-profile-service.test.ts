@@ -2,7 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs/promises";
 import { afterEach, describe, expect, it } from "vitest";
-import { Storage } from "@goatcitadel/storage";
+import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import type { OperatorProfileFact } from "@goatcitadel/contracts";
 import { OperatorProfileService } from "./operator-profile-service.js";
 
@@ -24,12 +24,9 @@ async function createStorage(): Promise<Storage> {
   });
 }
 
-function createService(
-  storage: Storage,
-  options: { autonomyDisabled?: boolean } = {},
-): OperatorProfileService {
+function createService(storage: Storage, options: { autonomyDisabled?: boolean } = {}): OperatorProfileService {
   return new OperatorProfileService({
-    storage,
+    storage: createSqliteAsyncStorage(storage),
     isFeatureEnabled: (flag) => (flag === "autonomyV1Disabled" ? Boolean(options.autonomyDisabled) : false),
   });
 }
@@ -41,7 +38,7 @@ describe("OperatorProfileService.ensureOperatorProfile", () => {
     expect(workspace.workspacePrefs?.operatorProfileId).toBeUndefined();
 
     const service = createService(storage);
-    const profile = service.ensureOperatorProfile(workspace.workspaceId);
+    const profile = await service.ensureOperatorProfile(workspace.workspaceId);
 
     expect(profile.operatorProfileId).toMatch(/^op_/);
     expect(profile.workspaceId).toBe(workspace.workspaceId);
@@ -52,7 +49,7 @@ describe("OperatorProfileService.ensureOperatorProfile", () => {
     expect(reloaded.workspacePrefs?.operatorProfileId).toBe(profile.operatorProfileId);
 
     // Idempotent: a second ensure returns the same profile without re-stamping.
-    const again = service.ensureOperatorProfile(workspace.workspaceId);
+    const again = await service.ensureOperatorProfile(workspace.workspaceId);
     expect(again.operatorProfileId).toBe(profile.operatorProfileId);
     expect(again.revision).toBe(1);
   });
@@ -60,7 +57,7 @@ describe("OperatorProfileService.ensureOperatorProfile", () => {
   it("works without a workspace record (default fallback), keyed by workspaceId", async () => {
     const storage = await createStorage();
     const service = createService(storage);
-    const profile = service.ensureOperatorProfile("default");
+    const profile = await service.ensureOperatorProfile("default");
     expect(profile.workspaceId).toBe("default");
     expect(storage.operatorProfiles.getByWorkspace("default")?.operatorProfileId).toBe(profile.operatorProfileId);
   });
@@ -76,7 +73,7 @@ describe("OperatorProfileService.recordOperatorProfileFacts", () => {
     const storage = await createStorage();
     const service = createService(storage, { autonomyDisabled: false });
 
-    const result = service.recordOperatorProfileFacts("default", { facts });
+    const result = await service.recordOperatorProfileFacts("default", { facts });
     expect(result.outcome).toBe("applied");
     expect(result.record.facts).toHaveLength(2);
     // Prior snapshot is the empty profile created by ensure (revision 1).
@@ -91,7 +88,7 @@ describe("OperatorProfileService.recordOperatorProfileFacts", () => {
     const storage = await createStorage();
     const service = createService(storage, { autonomyDisabled: true });
 
-    const result = service.recordOperatorProfileFacts("default", { facts });
+    const result = await service.recordOperatorProfileFacts("default", { facts });
     expect(result.outcome).toBe("proposed");
     expect(result.proposedFacts).toHaveLength(2);
 
@@ -105,7 +102,7 @@ describe("OperatorProfileService.recordOperatorProfileFacts", () => {
     const storage = await createStorage();
     const service = createService(storage, { autonomyDisabled: true });
 
-    const result = service.recordOperatorProfileFacts("default", { facts, authority: "operator" });
+    const result = await service.recordOperatorProfileFacts("default", { facts, authority: "operator" });
     expect(result.outcome).toBe("applied");
     expect(result.record.facts).toHaveLength(2);
   });
@@ -114,7 +111,7 @@ describe("OperatorProfileService.recordOperatorProfileFacts", () => {
     const storage = await createStorage();
     const service = createService(storage, { autonomyDisabled: true });
 
-    const result = service.recordOperatorProfileFacts("default", {
+    const result = await service.recordOperatorProfileFacts("default", {
       facts: [
         { kind: "fact", content: "Prefers dark mode.", confidence: 0.7 },
         { kind: "fact", content: "API key is sk-abcdef0123456789abcdef.", confidence: 0.9 },
@@ -134,7 +131,7 @@ describe("OperatorProfileService.recordOperatorProfileFacts", () => {
     const storage = await createStorage();
     const service = createService(storage, { autonomyDisabled: false });
 
-    const result = service.recordOperatorProfileFacts("default", {
+    const result = await service.recordOperatorProfileFacts("default", {
       facts: [
         { kind: "preference", content: "Prefers metric units.", confidence: 0.9 },
         { kind: "fact", content: "Token is ghp_abcdef0123456789abcdef.", confidence: 0.9 },
@@ -152,7 +149,7 @@ describe("OperatorProfileService.recordOperatorProfileFacts", () => {
     const storage = await createStorage();
     const service = createService(storage, { autonomyDisabled: false });
 
-    const result = service.recordOperatorProfileFacts("default", {
+    const result = await service.recordOperatorProfileFacts("default", {
       facts: [
         { kind: "fact", content: "Prefers dark mode.", confidence: 0.7 },
         { kind: "fact", content: "API key is sk-abcdef0123456789abcdef.", confidence: 0.9 },
@@ -170,15 +167,15 @@ describe("OperatorProfileService.composeFrozenProfileDigest", () => {
   it("returns undefined when there is nothing to inject", async () => {
     const storage = await createStorage();
     const service = createService(storage);
-    service.ensureOperatorProfile("default");
-    expect(service.composeFrozenProfileDigest("default")).toBeUndefined();
+    await service.ensureOperatorProfile("default");
+    expect(await service.composeFrozenProfileDigest("default")).toBeUndefined();
   });
 
   it("renders a bounded USER.md-style block grouped by kind, with secrets stripped", async () => {
     const storage = await createStorage();
     const service = createService(storage);
-    service.setOperatorProfileSummary("default", "Founder who prefers terse, source-grounded answers.");
-    service.recordOperatorProfileFacts("default", {
+    await service.setOperatorProfileSummary("default", "Founder who prefers terse, source-grounded answers.");
+    await service.recordOperatorProfileFacts("default", {
       authority: "operator",
       facts: [
         { kind: "preference", content: "Prefers metric units.", confidence: 0.9 },
@@ -187,7 +184,7 @@ describe("OperatorProfileService.composeFrozenProfileDigest", () => {
       ],
     });
 
-    const digest = service.composeFrozenProfileDigest("default");
+    const digest = await service.composeFrozenProfileDigest("default");
     expect(digest).toBeDefined();
     expect(digest).toContain("Operator profile");
     expect(digest).toContain("Founder who prefers terse");
@@ -200,21 +197,21 @@ describe("OperatorProfileService.composeFrozenProfileDigest", () => {
   it("is byte-stable across calls at the same revision and changes when the profile changes (cache key = revision)", async () => {
     const storage = await createStorage();
     const service = createService(storage);
-    service.recordOperatorProfileFacts("default", {
+    await service.recordOperatorProfileFacts("default", {
       authority: "operator",
       facts: [{ kind: "preference", content: "Prefers metric units.", confidence: 0.9 }],
     });
 
-    const first = service.composeFrozenProfileDigest("default");
-    const second = service.composeFrozenProfileDigest("default");
+    const first = await service.composeFrozenProfileDigest("default");
+    const second = await service.composeFrozenProfileDigest("default");
     expect(first).toBe(second);
 
     // A new write bumps the revision and busts the cache.
-    service.recordOperatorProfileFacts("default", {
+    await service.recordOperatorProfileFacts("default", {
       authority: "operator",
       facts: [{ kind: "goal", content: "Ship v1.", confidence: 0.8 }],
     });
-    const third = service.composeFrozenProfileDigest("default");
+    const third = await service.composeFrozenProfileDigest("default");
     expect(third).not.toBe(first);
     expect(third).toContain("Goals:");
   });
@@ -222,7 +219,7 @@ describe("OperatorProfileService.composeFrozenProfileDigest", () => {
   it("strips a secret that somehow landed in a stored summary before rendering", async () => {
     const storage = await createStorage();
     const service = createService(storage);
-    const profile = service.ensureOperatorProfile("default");
+    const profile = await service.ensureOperatorProfile("default");
     // Simulate a tainted summary written directly to storage (defense in depth).
     storage.operatorProfiles.upsert({
       operatorProfileId: profile.operatorProfileId,
@@ -230,7 +227,7 @@ describe("OperatorProfileService.composeFrozenProfileDigest", () => {
       summary: "password=hunter2 is the operator login.",
       facts: [{ kind: "preference", content: "Prefers metric units.", confidence: 0.9 }],
     });
-    const digest = service.composeFrozenProfileDigest("default");
+    const digest = await service.composeFrozenProfileDigest("default");
     expect(digest).toBeDefined();
     expect(digest).not.toContain("hunter2");
     expect(digest).toContain("Prefers metric units.");
@@ -241,17 +238,17 @@ describe("OperatorProfileService.restoreOperatorProfileSnapshot", () => {
   it("restores a captured snapshot and re-bumps the revision", async () => {
     const storage = await createStorage();
     const service = createService(storage);
-    service.recordOperatorProfileFacts("default", {
+    await service.recordOperatorProfileFacts("default", {
       authority: "operator",
       facts: [{ kind: "preference", content: "Original preference.", confidence: 0.9 }],
     });
-    const write = service.recordOperatorProfileFacts("default", {
+    const write = await service.recordOperatorProfileFacts("default", {
       authority: "operator",
       facts: [{ kind: "goal", content: "New goal.", confidence: 0.8 }],
     });
     expect(write.priorSnapshot).toBeDefined();
 
-    const restored = service.restoreOperatorProfileSnapshot(write.priorSnapshot!);
+    const restored = await service.restoreOperatorProfileSnapshot(write.priorSnapshot!);
     expect(restored.facts.map((fact) => fact.content)).toEqual(["Original preference."]);
     expect(restored.revision).toBeGreaterThan(write.record.revision);
   });

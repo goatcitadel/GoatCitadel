@@ -149,13 +149,13 @@ const deadLetterRecoverBodySchema = z
   })
   .strict();
 
-function sendDurableMutationError(
+async function sendDurableMutationError(
   reply: FastifyReply,
   request: FastifyRequest,
   error: unknown,
   fallbackStatus: number,
 ) {
-  markMutationCommittedFromError(request, error);
+  await markMutationCommittedFromError(request, error);
   const message = error instanceof Error ? error.message : "Durable operation failed";
   if (!request.mutationCommitted) {
     return reply.code(fallbackStatus).send(projectDurableRouteResponse({ error: message }));
@@ -191,7 +191,7 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
   const durable = fastify.services.durable;
 
   fastify.get("/api/v1/durable/diagnostics", operatorOnly, async () => {
-    return projectDurableRouteResponse(durable.getDiagnostics());
+    return projectDurableRouteResponse(await durable.getDiagnostics());
   });
 
   fastify.get("/api/v1/durable/runs", operatorOnly, async (request, reply) => {
@@ -200,7 +200,7 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send(projectDurableRouteResponse({ error: parsed.error.flatten() }));
     }
     return projectDurableRouteResponse({
-      items: durable.listRuns(parsed.data.limit),
+      items: await durable.listRuns(parsed.data.limit),
     });
   });
 
@@ -210,7 +210,7 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send(projectDurableRouteResponse({ error: parsed.error.flatten() }));
     }
     return projectDurableRouteResponse({
-      items: durable.listDeadLetters(parsed.data.limit),
+      items: await durable.listDeadLetters(parsed.data.limit),
     });
   });
 
@@ -228,7 +228,7 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
       );
     }
     return projectDurableRouteResponse({
-      items: durable.listRunCheckpoints(params.data.runId, query.data.limit),
+      items: await durable.listRunCheckpoints(params.data.runId, query.data.limit),
     });
   });
 
@@ -238,8 +238,8 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send(projectDurableRouteResponse({ error: body.error.flatten() }));
     }
     try {
-      const run = durable.createRun(body.data);
-      markMutationCommitted(request);
+      const run = await durable.createRun(body.data);
+      await markMutationCommitted(request);
       return reply.code(201).send(projectDurableRouteResponse(run));
     } catch (error) {
       return sendDurableMutationError(reply, request, error, 409);
@@ -252,7 +252,7 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send(projectDurableRouteResponse({ error: params.error.flatten() }));
     }
     try {
-      return reply.send(projectDurableRouteResponse(durable.getRun(params.data.runId)));
+      return reply.send(projectDurableRouteResponse(await durable.getRun(params.data.runId)));
     } catch (error) {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("not found");
@@ -275,7 +275,7 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(
-        projectDurableRouteResponse({ items: durable.listRunTimeline(params.data.runId, query.data.limit) }),
+        projectDurableRouteResponse({ items: await durable.listRunTimeline(params.data.runId, query.data.limit) }),
       );
     } catch (error) {
       const message = (error as Error).message;
@@ -299,7 +299,7 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(
-        projectDurableRouteResponse({ items: durable.listChildWatchers(params.data.runId, query.data.limit) }),
+        projectDurableRouteResponse({ items: await durable.listChildWatchers(params.data.runId, query.data.limit) }),
       );
     } catch (error) {
       const message = (error as Error).message;
@@ -324,7 +324,7 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply
         .header("Cache-Control", "private, no-store")
-        .send(projectDurableRouteResponse(durable.getBackgroundTaskRail(params.data.runId, query.data)));
+        .send(projectDurableRouteResponse(await durable.getBackgroundTaskRail(params.data.runId, query.data)));
     } catch (error) {
       const message = error instanceof Error ? error.message : "Background-task rail failed";
       const notFound = message.toLowerCase().includes("not found");
@@ -349,13 +349,13 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
         );
       }
       try {
-        const result = durable.controlBackgroundTask(
+        const result = await durable.controlBackgroundTask(
           params.data.runId,
           params.data.watcherId,
           body.data,
           resolveActorId(request),
         );
-        markMutationCommitted(request);
+        await markMutationCommitted(request);
         return reply.header("Cache-Control", "private, no-store").send(projectDurableRouteResponse(result));
       } catch (error) {
         const message = error instanceof Error ? error.message : "Background-task control failed";
@@ -391,12 +391,12 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
       );
     }
     try {
-      const watcher = durable.watchChildRun({
+      const watcher = await durable.watchChildRun({
         parentRunId: params.data.runId,
         childRunId: params.data.childRunId,
         ...body.data,
       });
-      markMutationCommitted(request);
+      await markMutationCommitted(request);
       return reply.code(201).send(projectDurableRouteResponse(watcher));
     } catch (error) {
       return sendDurableMutationError(reply, request, error, 409);
@@ -417,8 +417,8 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
       );
     }
     try {
-      const watcher = durable.detachChildWatcher(params.data.watcherId);
-      markMutationCommitted(request);
+      const watcher = await durable.detachChildWatcher(params.data.watcherId);
+      await markMutationCommitted(request);
       return reply.send(projectDurableRouteResponse(watcher));
     } catch (error) {
       return sendDurableMutationError(reply, request, error, 409);
@@ -439,8 +439,8 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
       );
     }
     try {
-      const result = durable.reattachChildWatcher(params.data.watcherId);
-      markMutationCommitted(request);
+      const result = await durable.reattachChildWatcher(params.data.watcherId);
+      await markMutationCommitted(request);
       return reply.send(projectDurableRouteResponse(result));
     } catch (error) {
       return sendDurableMutationError(reply, request, error, 409);
@@ -461,8 +461,8 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
       );
     }
     try {
-      const watcher = durable.closeChildWatcher(params.data.watcherId);
-      markMutationCommitted(request);
+      const watcher = await durable.closeChildWatcher(params.data.watcherId);
+      await markMutationCommitted(request);
       return reply.send(projectDurableRouteResponse(watcher));
     } catch (error) {
       return sendDurableMutationError(reply, request, error, 409);
@@ -483,8 +483,8 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
       );
     }
     try {
-      const run = durable.pauseRun(params.data.runId, resolveActorId(request));
-      markMutationCommitted(request);
+      const run = await durable.pauseRun(params.data.runId, resolveActorId(request));
+      await markMutationCommitted(request);
       return reply.send(projectDurableRouteResponse(run));
     } catch (error) {
       return sendDurableMutationError(reply, request, error, 409);
@@ -505,8 +505,8 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
       );
     }
     try {
-      const run = durable.resumeRun(params.data.runId, resolveActorId(request));
-      markMutationCommitted(request);
+      const run = await durable.resumeRun(params.data.runId, resolveActorId(request));
+      await markMutationCommitted(request);
       return reply.send(projectDurableRouteResponse(run));
     } catch (error) {
       return sendDurableMutationError(reply, request, error, 409);
@@ -527,8 +527,8 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
       );
     }
     try {
-      const run = durable.cancelRun(params.data.runId, resolveActorId(request));
-      markMutationCommitted(request);
+      const run = await durable.cancelRun(params.data.runId, resolveActorId(request));
+      await markMutationCommitted(request);
       return reply.send(projectDurableRouteResponse(run));
     } catch (error) {
       return sendDurableMutationError(reply, request, error, 409);
@@ -549,8 +549,8 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
       );
     }
     try {
-      const run = durable.retryRun(params.data.runId, body.data.reason, resolveActorId(request));
-      markMutationCommitted(request);
+      const run = await durable.retryRun(params.data.runId, body.data.reason, resolveActorId(request));
+      await markMutationCommitted(request);
       return reply.send(projectDurableRouteResponse(run));
     } catch (error) {
       return sendDurableMutationError(reply, request, error, 409);
@@ -571,11 +571,11 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
       );
     }
     try {
-      const result = durable.wakeRun(params.data.runId, body.data);
+      const result = await durable.wakeRun(params.data.runId, body.data);
       if (result.outcome === "failed") {
         return reply.code(503).send(projectDurableRouteResponse(result));
       }
-      markMutationCommitted(request);
+      await markMutationCommitted(request);
       return reply.send(projectDurableRouteResponse(result));
     } catch (error) {
       return sendDurableMutationError(reply, request, error, 409);
@@ -596,12 +596,12 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
       );
     }
     try {
-      const run = durable.recoverDeadLetter(
+      const run = await durable.recoverDeadLetter(
         params.data.entryId,
         resolveActorId(request),
         body.data.maxAttempts ? { maxAttempts: body.data.maxAttempts } : undefined,
       );
-      markMutationCommitted(request);
+      await markMutationCommitted(request);
       return reply.send(projectDurableRouteResponse(run));
     } catch (error) {
       const message = (error as Error).message;

@@ -10,29 +10,29 @@ import type {
 } from "@goatcitadel/contracts";
 
 export interface CuratorRoutePort {
-  listCuratorStatus(): CuratorStatusResponse;
-  archiveCuratorSkill(input: CuratorArchiveRequest): CuratorArchiveResponse;
-  pruneCuratorSkill(input: CuratorPruneRequest): CuratorPruneResponse;
-  listCuratorArchived(): CuratorListArchivedResponse;
+  listCuratorStatus(): Promise<CuratorStatusResponse>;
+  archiveCuratorSkill(input: CuratorArchiveRequest): Promise<CuratorArchiveResponse>;
+  pruneCuratorSkill(input: CuratorPruneRequest): Promise<CuratorPruneResponse>;
+  listCuratorArchived(): Promise<CuratorListArchivedResponse>;
   runCurator(input: CuratorRunRequest): Promise<CuratorRunResponse>;
 }
 
 export class CuratorRouteService {
   public constructor(private readonly deps: CuratorRoutePort) {}
 
-  public listStatus(): CuratorStatusResponse {
+  public listStatus(): Promise<CuratorStatusResponse> {
     return this.deps.listCuratorStatus();
   }
 
-  public archive(input: CuratorArchiveRequest): CuratorArchiveResponse {
+  public archive(input: CuratorArchiveRequest): Promise<CuratorArchiveResponse> {
     return this.deps.archiveCuratorSkill(input);
   }
 
-  public prune(input: CuratorPruneRequest): CuratorPruneResponse {
+  public prune(input: CuratorPruneRequest): Promise<CuratorPruneResponse> {
     return this.deps.pruneCuratorSkill(input);
   }
 
-  public listArchived(): CuratorListArchivedResponse {
+  public listArchived(): Promise<CuratorListArchivedResponse> {
     return this.deps.listCuratorArchived();
   }
 

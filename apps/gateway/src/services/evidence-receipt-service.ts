@@ -135,10 +135,10 @@ export interface EvidenceReceiptVerification {
 
 /** Read-only data port. Narrow on purpose so the service stays testable and lineage is explicit. */
 export interface EvidenceReceiptDataPort {
-  getDurableRun(runId: string): DurableRunRecord;
-  findCodeModeRun(runId: string): CodeModeRunRecord | undefined;
-  listApprovalEffects(approvalId: string): ApprovalEffectRecord[];
-  listSideEffectsForWorkspace(workspaceId: string): ExternalSideEffectRunRecord[];
+  getDurableRun(runId: string): Promise<DurableRunRecord>;
+  findCodeModeRun(runId: string): Promise<CodeModeRunRecord | undefined>;
+  listApprovalEffects(approvalId: string): Promise<ApprovalEffectRecord[]>;
+  listSideEffectsForWorkspace(workspaceId: string): Promise<ExternalSideEffectRunRecord[]>;
 }
 
 /**
@@ -174,12 +174,12 @@ export class EvidenceReceiptService {
   }
 
   /** Assemble, canonicalize, hash, and sign an Evidence Receipt for a run. */
-  public buildEvidenceReceipt(runId: string): EvidenceReceipt {
+  public async buildEvidenceReceipt(runId: string): Promise<EvidenceReceipt> {
     const trimmedRunId = runId.trim();
     if (!trimmedRunId) {
       throw new Error("runId is required to build an evidence receipt");
     }
-    const manifest = this.assembleManifest(trimmedRunId);
+    const manifest = await this.assembleManifest(trimmedRunId);
     return signManifest(manifest, this.signingKeys.getSigningKeyPair());
   }
 
@@ -192,9 +192,9 @@ export class EvidenceReceiptService {
     return verifyEvidenceReceipt(receipt);
   }
 
-  private assembleManifest(runId: string): EvidenceReceiptManifest {
+  private async assembleManifest(runId: string): Promise<EvidenceReceiptManifest> {
     const notes: string[] = [];
-    const run = this.data.getDurableRun(runId);
+    const run = await this.data.getDurableRun(runId);
     const correlation = extractCorrelation(run);
 
     const lineage: EvidenceReceiptLineage = {
@@ -218,7 +218,7 @@ export class EvidenceReceiptService {
     // Code Mode artifacts: code-mode runs are keyed by the same runId. The artifact hashes
     // (code, wrapper manifest, policy snapshot, stdout/stderr) are the verifiable lineage.
     const artifacts: EvidenceReceiptArtifact[] = [];
-    const codeModeRun = this.data.findCodeModeRun(runId);
+    const codeModeRun = await this.data.findCodeModeRun(runId);
     if (codeModeRun) {
       if (!lineage.approvalId && codeModeRun.approvalId) {
         lineage.approvalId = codeModeRun.approvalId;
@@ -244,7 +244,7 @@ export class EvidenceReceiptService {
     // Approval effects: the explicit follow-on effect records tied to the run's approval.
     let approvalEffects: EvidenceReceiptApprovalEffect[] = [];
     if (lineage.approvalId) {
-      approvalEffects = this.data.listApprovalEffects(lineage.approvalId).map(toReceiptApprovalEffect);
+      approvalEffects = (await this.data.listApprovalEffects(lineage.approvalId)).map(toReceiptApprovalEffect);
       if (approvalEffects.length === 0) {
         notes.push(`No approval effects were recorded for approval ${lineage.approvalId}.`);
       }
@@ -259,7 +259,7 @@ export class EvidenceReceiptService {
     // ledger when a workspaceId is known, and document that the correlation is workspace-scoped.
     let sideEffects: EvidenceReceiptSideEffect[] = [];
     if (lineage.workspaceId) {
-      sideEffects = this.data.listSideEffectsForWorkspace(lineage.workspaceId).map(toReceiptSideEffect);
+      sideEffects = (await this.data.listSideEffectsForWorkspace(lineage.workspaceId)).map(toReceiptSideEffect);
       notes.push(
         `Side-effects are workspace-scoped (workspace ${lineage.workspaceId}); the external side-effect ledger is not keyed by durable runId, so entries reflect the run's workspace rather than this run alone.`,
       );

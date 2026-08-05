@@ -76,7 +76,7 @@ export interface ChatRoutedContextExternalAttachmentContent {
 }
 
 export interface ChatRoutedContextSourceDeps {
-  getAttachment(attachmentId: string): ChatAttachmentRecord;
+  getAttachment(attachmentId: string): Promise<ChatAttachmentRecord>;
   readAttachmentContent(
     attachmentId: string,
     options: { maxBytes: number },
@@ -85,9 +85,9 @@ export interface ChatRoutedContextSourceDeps {
     itemId: string,
     workspaceId: string,
     options: { allowGlobal: boolean },
-  ): MemoryItemRecord | undefined;
-  getPersonalNote?(noteId: string): NoteRecord;
-  getGeneratedArtifact?(artifactId: string): ChatGeneratedArtifactRecord;
+  ): Promise<MemoryItemRecord | undefined>;
+  getPersonalNote?(noteId: string): Promise<NoteRecord>;
+  getGeneratedArtifact?(artifactId: string): Promise<ChatGeneratedArtifactRecord>;
   /**
    * Governed exact-byte read for one live `read_only_external` attachment.
    * Absent in compositions that have not enabled the external-source runtime:
@@ -131,57 +131,61 @@ export async function resolveChatRoutedContextSources(
     throw new ConflictError({ message: "Routed memory context is unavailable while memory mode is off." });
   }
   const ordinaryAttachments = new Set((input.ordinaryAttachmentIds ?? []).map((item) => item.trim()).filter(Boolean));
-  const prepared = refs.map((ref) => {
-    if (ref.kind === "attachment") {
-      const record = deps.getAttachment(ref.ref);
-      assertAttachmentRecord(record, ref.ref, input.sessionId, input.workspaceId);
-      return { type: "attachment" as const, ref, record, alreadyAttached: ordinaryAttachments.has(ref.ref) };
-    }
-    if (ref.kind === "external_attachment") {
-      return { type: "external" as const, ref };
-    }
-    if (ref.kind === "personal_note") {
-      if (!deps.getPersonalNote)
-        throw new ConflictError({ message: `Personal note ${ref.ref} is unavailable in this runtime.` });
-      const note = deps.getPersonalNote(ref.ref);
-      if (note.noteId !== ref.ref || note.workspaceId !== input.workspaceId || note.lifecycleStatus !== "active") {
-        throw new ConflictError({ message: `Personal note ${ref.ref} is unavailable in the effective workspace.` });
+  const prepared = await Promise.all(
+    refs.map(async (ref) => {
+      if (ref.kind === "attachment") {
+        const record = await deps.getAttachment(ref.ref);
+        assertAttachmentRecord(record, ref.ref, input.sessionId, input.workspaceId);
+        return { type: "attachment" as const, ref, record, alreadyAttached: ordinaryAttachments.has(ref.ref) };
       }
-      assertExactUtf8(note.body, `personal note ${ref.ref}`);
-      const bytes = Buffer.byteLength(note.body, "utf8");
+      if (ref.kind === "external_attachment") {
+        return { type: "external" as const, ref };
+      }
+      if (ref.kind === "personal_note") {
+        if (!deps.getPersonalNote)
+          throw new ConflictError({ message: `Personal note ${ref.ref} is unavailable in this runtime.` });
+        const note = await deps.getPersonalNote(ref.ref);
+        if (note.noteId !== ref.ref || note.workspaceId !== input.workspaceId || note.lifecycleStatus !== "active") {
+          throw new ConflictError({ message: `Personal note ${ref.ref} is unavailable in the effective workspace.` });
+        }
+        assertExactUtf8(note.body, `personal note ${ref.ref}`);
+        const bytes = Buffer.byteLength(note.body, "utf8");
+        assertSourceSize(ref.ref, bytes);
+        return { type: "note" as const, ref, note, bytes };
+      }
+      if (ref.kind === "generated_artifact") {
+        if (!deps.getGeneratedArtifact)
+          throw new ConflictError({ message: `Generated artifact ${ref.ref} is unavailable in this runtime.` });
+        const artifact = await deps.getGeneratedArtifact(ref.ref);
+        if (artifact.artifactId !== ref.ref || (artifact.workspaceId ?? "default") !== input.workspaceId) {
+          throw new ConflictError({
+            message: `Generated artifact ${ref.ref} is unavailable in the effective workspace.`,
+          });
+        }
+        assertExactUtf8(artifact.content, `generated artifact ${ref.ref}`);
+        const bytes = Buffer.byteLength(artifact.content, "utf8");
+        assertSourceSize(ref.ref, bytes);
+        const contentHash = digestText(artifact.content);
+        if (artifact.contentHash && artifact.contentHash !== contentHash) {
+          throw new ConflictError({
+            message: `Generated artifact ${ref.ref} failed its immutable content hash check.`,
+          });
+        }
+        return { type: "artifact" as const, ref, artifact, bytes, contentHash };
+      }
+      const item = await deps.getActiveMemoryItem(ref.ref, input.workspaceId, {
+        allowGlobal: input.allowGlobalMemory,
+      });
+      if (!item || item.itemId !== ref.ref || item.status !== "active" || item.lifecycleState !== "active") {
+        throw new ConflictError({ message: `Routed memory item ${ref.ref} is unavailable in the effective scope.` });
+      }
+      assertExactUtf8(item.content, `memory item ${ref.ref}`);
+      const provenance = resolveMemoryScope(item, input.workspaceId, input.allowGlobalMemory);
+      const bytes = Buffer.byteLength(item.content, "utf8");
       assertSourceSize(ref.ref, bytes);
-      return { type: "note" as const, ref, note, bytes };
-    }
-    if (ref.kind === "generated_artifact") {
-      if (!deps.getGeneratedArtifact)
-        throw new ConflictError({ message: `Generated artifact ${ref.ref} is unavailable in this runtime.` });
-      const artifact = deps.getGeneratedArtifact(ref.ref);
-      if (artifact.artifactId !== ref.ref || (artifact.workspaceId ?? "default") !== input.workspaceId) {
-        throw new ConflictError({
-          message: `Generated artifact ${ref.ref} is unavailable in the effective workspace.`,
-        });
-      }
-      assertExactUtf8(artifact.content, `generated artifact ${ref.ref}`);
-      const bytes = Buffer.byteLength(artifact.content, "utf8");
-      assertSourceSize(ref.ref, bytes);
-      const contentHash = digestText(artifact.content);
-      if (artifact.contentHash && artifact.contentHash !== contentHash) {
-        throw new ConflictError({ message: `Generated artifact ${ref.ref} failed its immutable content hash check.` });
-      }
-      return { type: "artifact" as const, ref, artifact, bytes, contentHash };
-    }
-    const item = deps.getActiveMemoryItem(ref.ref, input.workspaceId, {
-      allowGlobal: input.allowGlobalMemory,
-    });
-    if (!item || item.itemId !== ref.ref || item.status !== "active" || item.lifecycleState !== "active") {
-      throw new ConflictError({ message: `Routed memory item ${ref.ref} is unavailable in the effective scope.` });
-    }
-    assertExactUtf8(item.content, `memory item ${ref.ref}`);
-    const provenance = resolveMemoryScope(item, input.workspaceId, input.allowGlobalMemory);
-    const bytes = Buffer.byteLength(item.content, "utf8");
-    assertSourceSize(ref.ref, bytes);
-    return { type: "memory" as const, ref, item, provenance, bytes };
-  });
+      return { type: "memory" as const, ref, item, provenance, bytes };
+    }),
+  );
   // External bytes exist only in the governed managed artifact, so their exact
   // size is knowable solely from a verified read; load them (fail closed when
   // the runtime is not composed) before the aggregate budget check.

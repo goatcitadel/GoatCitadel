@@ -78,7 +78,7 @@ describe("DurableRunService", () => {
     expect(resolveDurableWorkflowTimeoutMs(connectorRun, 300_000)).toBe(300_000);
   });
 
-  it("updates run state against the current version and preserves unspecified fields (moved from the gateway facade, B2)", () => {
+  it("updates run state against the current version and preserves unspecified fields (moved from the gateway facade, B2)", async () => {
     const current = {
       runId: "run-1",
       status: "running",
@@ -96,7 +96,7 @@ describe("DurableRunService", () => {
     } as unknown as ServiceContext);
 
     expect(
-      service.updateRunState({
+      await service.updateRunState({
         runId: "run-1",
         status: "completed",
         metadata: { next: true },
@@ -119,7 +119,7 @@ describe("DurableRunService", () => {
       }),
     );
 
-    service.updateRunState({ runId: "run-1" });
+    await service.updateRunState({ runId: "run-1" });
     expect(updateRun).toHaveBeenLastCalledWith(
       expect.objectContaining({
         status: "running",
@@ -129,7 +129,7 @@ describe("DurableRunService", () => {
     );
   });
 
-  it("fences workflow state updates to the expected unexpired lease owner", () => {
+  it("fences workflow state updates to the expected unexpired lease owner", async () => {
     const current = {
       ...createRun("run-fenced-update", "running"),
       version: 7,
@@ -155,7 +155,7 @@ describe("DurableRunService", () => {
 
     let staleError: unknown;
     try {
-      service.updateRunState({
+      await service.updateRunState({
         runId: current.runId,
         metadata: { stale: true },
         expectedLeaseOwnerId: "worker-a",
@@ -167,7 +167,7 @@ describe("DurableRunService", () => {
     expect(updateRun).not.toHaveBeenCalled();
 
     expect(
-      service.updateRunState({
+      await service.updateRunState({
         runId: current.runId,
         status: "waiting",
         metadata: { committed: true },
@@ -219,13 +219,13 @@ describe("DurableRunService", () => {
     ).toEqual([]);
   });
 
-  it("preserves caller metadata when creating durable runs", () => {
+  it("preserves caller metadata when creating durable runs", async () => {
     const runs = new Map<string, DurableRunRecord>();
     const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
     const timeline: Array<{ runId: string; eventType: string }> = [];
     const service = new DurableRunService(createContext(runs, checkpoints, timeline) as unknown as ServiceContext);
 
-    const created = service.createDurableRun({
+    const created = await service.createDurableRun({
       workflowKey: "proactive.tick",
       metadata: {
         proactive: {
@@ -245,30 +245,30 @@ describe("DurableRunService", () => {
     });
   });
 
-  it("rejects raw remote approval bearers before durable persistence", () => {
+  it("rejects raw remote approval bearers before durable persistence", async () => {
     const runs = new Map<string, DurableRunRecord>();
     const service = new DurableRunService(createContext(runs, [], []) as unknown as ServiceContext);
     const rawToken = `grat_${"p".repeat(43)}`;
 
-    expect(() =>
+    await expect(
       service.createDurableRun({
         workflowKey: "connector.delivery",
         payload: { interactiveActions: { callbackData: `gca:${rawToken}:a` } },
       }),
-    ).toThrow(/cannot be persisted in durable run state/i);
-    expect(() =>
+    ).rejects.toThrow(/cannot be persisted in durable run state/i);
+    await expect(
       service.createDurableRun({
         workflowKey: "connector.delivery",
         payload: { message: `prefix x${rawToken}y suffix` },
       }),
-    ).toThrow(/cannot be persisted in durable run state/i);
-    expect(() => service.createDurableRun({ workflowKey: `connector.${rawToken}` })).toThrow(
+    ).rejects.toThrow(/cannot be persisted in durable run state/i);
+    await expect(service.createDurableRun({ workflowKey: `connector.${rawToken}` })).rejects.toThrow(
       /cannot be persisted in durable run state/i,
     );
     expect(runs.size).toBe(0);
   });
 
-  it("rejects raw remote approval bearers in wake and retry mutation fields", () => {
+  it("rejects raw remote approval bearers in wake and retry mutation fields", async () => {
     const rawToken = `grat_${"q".repeat(43)}`;
     const waiting = {
       ...createRun("run-wait-secret", "waiting"),
@@ -282,13 +282,13 @@ describe("DurableRunService", () => {
     const timeline: Array<{ runId: string; eventType: string }> = [];
     const service = new DurableRunService(createContext(runs, [], timeline) as unknown as ServiceContext);
 
-    expect(() =>
+    await expect(
       service.wakeDurableRun(waiting.runId, {
         eventKey: "approval.resolved",
         payload: { token: `prefix-${rawToken}-suffix` },
       }),
-    ).toThrow(/cannot be persisted in durable run state/i);
-    expect(() => service.retryDurableRun(failed.runId, `retry ${rawToken}`, "operator")).toThrow(
+    ).rejects.toThrow(/cannot be persisted in durable run state/i);
+    await expect(service.retryDurableRun(failed.runId, `retry ${rawToken}`, "operator")).rejects.toThrow(
       /cannot be persisted in durable run state/i,
     );
     expect(runs.get(waiting.runId)?.status).toBe("waiting");
@@ -296,30 +296,30 @@ describe("DurableRunService", () => {
     expect(timeline).toEqual([]);
   });
 
-  it("does not reject benign token-like durable content", () => {
+  it("does not reject benign token-like durable content", async () => {
     const runs = new Map<string, DurableRunRecord>();
     const service = new DurableRunService(createContext(runs, [], []) as unknown as ServiceContext);
 
-    expect(() =>
+    await expect(
       service.createDurableRun({
         workflowKey: "connector.delivery",
         payload: { message: "Use grat_community_discount_code for this test fixture." },
       }),
-    ).not.toThrow();
+    ).resolves.toBeDefined();
     expect(runs.size).toBe(1);
   });
 
-  it("commits run creation, checkpoints, and timeline as one storage transaction", () => {
+  it("commits run creation, checkpoints, and timeline as one storage transaction", async () => {
     const runs = new Map<string, DurableRunRecord>();
     const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
     const timeline: Array<{ runId: string; eventType: string }> = [];
     const context = createContext(runs, checkpoints, timeline);
-    context.storage.runImmediateTransaction = <T>(callback: () => T): T => {
+    context.storage.runImmediateTransaction = async <T>(callback: () => T | Promise<T>): Promise<T> => {
       const runSnapshot = new Map(runs);
       const checkpointLength = checkpoints.length;
       const timelineLength = timeline.length;
       try {
-        return callback();
+        return await callback();
       } catch (error) {
         runs.clear();
         for (const [runId, run] of runSnapshot) {
@@ -335,7 +335,7 @@ describe("DurableRunService", () => {
     };
     const service = new DurableRunService(context as unknown as ServiceContext);
 
-    expect(() => service.createDurableRun({ workflowKey: "connector.delivery" })).toThrow(
+    await expect(service.createDurableRun({ workflowKey: "connector.delivery" })).rejects.toThrow(
       "checkpoint write unavailable",
     );
     expect(runs.size).toBe(0);
@@ -343,7 +343,7 @@ describe("DurableRunService", () => {
     expect(timeline).toHaveLength(0);
   });
 
-  it("returns committed run truth when retained realtime publication fails", () => {
+  it("returns committed run truth when retained realtime publication fails", async () => {
     const runs = new Map<string, DurableRunRecord>();
     const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
     const timeline: Array<{ runId: string; eventType: string }> = [];
@@ -354,7 +354,7 @@ describe("DurableRunService", () => {
         },
       }) as unknown as ServiceContext,
     );
-    const run = service.createDurableRun({ workflowKey: "connector.delivery" });
+    const run = await service.createDurableRun({ workflowKey: "connector.delivery" });
 
     expect(run).toMatchObject({ runId: "run-1", status: "queued" });
     expect(runs.size).toBe(1);
@@ -441,7 +441,7 @@ describe("DurableRunService", () => {
 
     service.startWorker();
     await Promise.all([...backgroundTasks]);
-    service.stopWorker();
+    await service.stopWorker();
 
     expect(executeWorkflow).toHaveBeenCalledTimes(1);
     expect(runs.get(run.runId)?.status).toBe("completed");
@@ -475,7 +475,7 @@ describe("DurableRunService", () => {
 
     service.startWorker();
     await Promise.all([...backgroundTasks]);
-    service.stopWorker();
+    await service.stopWorker();
 
     expect(runs.get(run.runId)).toMatchObject({
       status: "failed",
@@ -510,7 +510,7 @@ describe("DurableRunService", () => {
     const backgroundTasks = new Set<Promise<void>>();
     const markWorkflowUnrecoverable = vi.fn(async () => undefined);
     const context = createContext(runs, [], []);
-    installAdmittedChatRuntimeFixture(context, fixture);
+    await installAdmittedChatRuntimeFixture(context, fixture);
     const service = new DurableRunService(context as unknown as ServiceContext, {
       backgroundTasks,
       sharedHostLifecycle: new SharedHostLifecycleService({ enabled: false }),
@@ -524,7 +524,7 @@ describe("DurableRunService", () => {
 
     service.startWorker();
     await Promise.all([...backgroundTasks]);
-    service.stopWorker();
+    await service.stopWorker();
 
     expect(runs.get(run.runId)).toMatchObject({
       status: "running",
@@ -588,7 +588,7 @@ describe("DurableRunService", () => {
 
     service.startWorker();
     await Promise.all([...backgroundTasks]);
-    service.stopWorker();
+    await service.stopWorker();
 
     expect(executeWorkflow).not.toHaveBeenCalled();
     expect(runs.get(run.runId)).toMatchObject({ status: "running", leaseOwnerId: fixture.leaseOwnerId });
@@ -621,7 +621,7 @@ describe("DurableRunService", () => {
 
     service.startWorker();
     await Promise.all([...backgroundTasks]);
-    service.stopWorker();
+    await service.stopWorker();
 
     expect(lockFreshActiveLeaseForUpdate).toHaveBeenCalledWith(run.runId, leaseOwnerId);
     expect(executeWorkflow).not.toHaveBeenCalled();
@@ -686,7 +686,7 @@ describe("DurableRunService", () => {
         expect.anything(),
       );
     } finally {
-      service.stopWorker();
+      await service.stopWorker();
     }
   });
 
@@ -714,7 +714,7 @@ describe("DurableRunService", () => {
       expect(runs.get(run.runId)).toMatchObject({ status: "queued", leaseOwnerId: undefined });
       expect(lifecycle.snapshot()).toMatchObject({ state: "quiesced", activeByKind: { worker: 0 } });
     } finally {
-      service.stopWorker();
+      await service.stopWorker();
     }
   });
 
@@ -752,7 +752,7 @@ describe("DurableRunService", () => {
       await Promise.allSettled([...firstTasks]);
       expect(runs.get(run.runId)).toMatchObject({ status: "running", leaseOwnerId: expect.any(String) });
     } finally {
-      first.stopWorker();
+      await first.stopWorker();
     }
 
     const interrupted = runs.get(run.runId);
@@ -776,7 +776,7 @@ describe("DurableRunService", () => {
     });
     second.startWorker();
     await Promise.allSettled([...secondTasks]);
-    second.stopWorker();
+    await second.stopWorker();
 
     expect(secondExecute).toHaveBeenCalledTimes(1);
     expect(runs.get(run.runId)).toMatchObject({ status: "completed" });
@@ -813,7 +813,7 @@ describe("DurableRunService", () => {
         metadata: { waitForEvent: { eventKey: "approval.resolved", correlationId: "approval-1" } },
       });
     } finally {
-      service.stopWorker();
+      await service.stopWorker();
     }
   });
 
@@ -1146,16 +1146,16 @@ describe("DurableRunService", () => {
     const persistLearnedMemory = vi.fn();
     const scheduleMaintenance = vi.fn();
     const onGeneralChatPostCommit = vi.fn(async (_run: DurableRunRecord, progress: GeneralChatPostCommitProgress) => {
-      progress.runEffect("agent_end", enqueueAgentEnd);
-      progress.runEffect("learned_memory_user", persistLearnedMemory);
-      progress.runEffect("memory_maintenance", scheduleMaintenance);
+      await progress.runEffect("agent_end", enqueueAgentEnd);
+      await progress.runEffect("learned_memory_user", persistLearnedMemory);
+      await progress.runEffect("memory_maintenance", scheduleMaintenance);
       for (const effect of GENERAL_CHAT_POST_COMMIT_EFFECTS) {
-        progress.runEffect(effect, () => undefined);
+        await progress.runEffect(effect, () => undefined);
       }
       return { status: "completed" };
     });
     const context = createContext(runs, [], []);
-    installAdmittedChatRuntimeFixture(context, fixture);
+    await installAdmittedChatRuntimeFixture(context, fixture);
     const service = new DurableRunService(context as unknown as ServiceContext, {
       backgroundTasks,
       workflowRegistry: {
@@ -1197,7 +1197,7 @@ describe("DurableRunService", () => {
       });
       const runs = new Map<string, DurableRunRecord>([[fixture.run.runId, fixture.run]]);
       const context = createContext(runs, [], []);
-      installAdmittedChatRuntimeFixture(context, fixture);
+      await installAdmittedChatRuntimeFixture(context, fixture);
       let attempt = 0;
       const onGeneralChatPostCommit = vi.fn(async (_run: DurableRunRecord, progress: GeneralChatPostCommitProgress) => {
         attempt += 1;
@@ -1205,7 +1205,7 @@ describe("DurableRunService", () => {
           return new Promise<Record<string, unknown>>(() => undefined);
         }
         for (const effect of GENERAL_CHAT_POST_COMMIT_EFFECTS) {
-          progress.runEffect(effect, () => undefined);
+          await progress.runEffect(effect, () => undefined);
         }
         return { status: "completed" };
       });
@@ -1296,7 +1296,7 @@ describe("DurableRunService", () => {
       });
       const runs = new Map<string, DurableRunRecord>([[fixture.run.runId, fixture.run]]);
       const context = createContext(runs, [], []);
-      installAdmittedChatRuntimeFixture(context, fixture);
+      await installAdmittedChatRuntimeFixture(context, fixture);
       const attempts: Array<{
         progress: GeneralChatPostCommitProgress;
         resolve: (resolution: Record<string, unknown>) => void;
@@ -1327,7 +1327,7 @@ describe("DurableRunService", () => {
       expect(onGeneralChatPostCommit).toHaveBeenCalledTimes(2);
 
       const staleEffect = vi.fn();
-      expect(attempts[0]!.progress.runEffect("agent_end", staleEffect)).toBe(false);
+      expect(await attempts[0]!.progress.runEffect("agent_end", staleEffect)).toBe(false);
       expect(staleEffect).not.toHaveBeenCalled();
       attempts[0]!.resolve({ status: "stale" });
       await vi.advanceTimersByTimeAsync(0);
@@ -1336,7 +1336,7 @@ describe("DurableRunService", () => {
       expect(onGeneralChatPostCommit).toHaveBeenCalledTimes(2);
 
       for (const effect of GENERAL_CHAT_POST_COMMIT_EFFECTS) {
-        attempts[1]!.progress.runEffect(effect, () => undefined);
+        await attempts[1]!.progress.runEffect(effect, () => undefined);
       }
       attempts[1]!.resolve({ status: "completed" });
 
@@ -1356,7 +1356,7 @@ describe("DurableRunService", () => {
     });
     const runs = new Map<string, DurableRunRecord>([[fixture.run.runId, fixture.run]]);
     const context = createContext(runs, [], []);
-    installAdmittedChatRuntimeFixture(context, fixture);
+    await installAdmittedChatRuntimeFixture(context, fixture);
     const service = new DurableRunService(context as unknown as ServiceContext, {
       backgroundTasks: new Set(),
       workflowRegistry: {
@@ -1365,7 +1365,9 @@ describe("DurableRunService", () => {
         markWorkflowUnrecoverable: vi.fn(),
       },
       onGeneralChatPostCommit: async (_run, progress) => {
-        for (const effect of GENERAL_CHAT_POST_COMMIT_EFFECTS) progress.runEffect(effect, () => undefined);
+        for (const effect of GENERAL_CHAT_POST_COMMIT_EFFECTS) {
+          await progress.runEffect(effect, () => undefined);
+        }
         return { status: "waiting_for_approval" };
       },
     });
@@ -1374,14 +1376,14 @@ describe("DurableRunService", () => {
       correlationId: string;
     };
 
-    expect(service.wakeDurableRun(fixture.run.runId, waitForEvent)).toMatchObject({
+    expect(await service.wakeDurableRun(fixture.run.runId, waitForEvent)).toMatchObject({
       outcome: "failed",
       detail: expect.stringContaining("waiting generation settles"),
     });
     expect(runs.get(fixture.run.runId)?.status).toBe("waiting");
 
     await expect(service.reconcileGeneralChatPostCommit(fixture.run.runId)).resolves.toBe(true);
-    expect(service.wakeDurableRun(fixture.run.runId, waitForEvent)).toMatchObject({
+    expect(await service.wakeDurableRun(fixture.run.runId, waitForEvent)).toMatchObject({
       outcome: "woke",
       run: { status: "queued" },
     });
@@ -1413,7 +1415,7 @@ describe("DurableRunService", () => {
       }
       const runs = new Map<string, DurableRunRecord>([[fixture.run.runId, fixture.run]]);
       const context = createContext(runs, [], []);
-      installAdmittedChatRuntimeFixture(context, fixture);
+      await installAdmittedChatRuntimeFixture(context, fixture);
       const service = new DurableRunService(context as unknown as ServiceContext, {
         backgroundTasks: new Set(),
         workflowRegistry: {
@@ -1422,7 +1424,9 @@ describe("DurableRunService", () => {
           markWorkflowUnrecoverable: vi.fn(),
         },
         onGeneralChatPostCommit: async (_run, progress) => {
-          for (const effect of GENERAL_CHAT_POST_COMMIT_EFFECTS) progress.runEffect(effect, () => undefined);
+          for (const effect of GENERAL_CHAT_POST_COMMIT_EFFECTS) {
+            await progress.runEffect(effect, () => undefined);
+          }
           return { status: "waiting_for_approval" };
         },
       });
@@ -1430,7 +1434,7 @@ describe("DurableRunService", () => {
         eventKey: string;
         correlationId: string;
       };
-      expect(service.wakeDurableRun(fixture.run.runId, waitForEvent)).toMatchObject({ outcome: "failed" });
+      expect(await service.wakeDurableRun(fixture.run.runId, waitForEvent)).toMatchObject({ outcome: "failed" });
       expect(runs.get(fixture.run.runId)?.status).toBe("waiting");
     },
   );
@@ -1450,14 +1454,16 @@ describe("DurableRunService", () => {
       });
       const runs = new Map<string, DurableRunRecord>([[fixture.run.runId, fixture.run]]);
       const context = createContext(runs, [], []);
-      installAdmittedChatRuntimeFixture(context, fixture);
+      await installAdmittedChatRuntimeFixture(context, fixture);
       let releasePostCommit!: () => void;
       const postCommitGate = new Promise<void>((resolve) => {
         releasePostCommit = resolve;
       });
       const onGeneralChatPostCommit = vi.fn(async (_run: DurableRunRecord, progress: GeneralChatPostCommitProgress) => {
         await postCommitGate;
-        for (const effect of GENERAL_CHAT_POST_COMMIT_EFFECTS) progress.runEffect(effect, () => undefined);
+        for (const effect of GENERAL_CHAT_POST_COMMIT_EFFECTS) {
+          await progress.runEffect(effect, () => undefined);
+        }
         return { status: durableStatus };
       });
       const service = new DurableRunService(context as unknown as ServiceContext, {
@@ -1503,7 +1509,7 @@ describe("DurableRunService", () => {
     });
     const runs = new Map<string, DurableRunRecord>([[fixture.run.runId, fixture.run]]);
     const context = createContext(runs, [], []);
-    installAdmittedChatRuntimeFixture(context, fixture);
+    await installAdmittedChatRuntimeFixture(context, fixture);
     const service = new DurableRunService(context as unknown as ServiceContext, {
       backgroundTasks: new Set(),
       workflowRegistry: {
@@ -1539,7 +1545,7 @@ describe("DurableRunService", () => {
     });
     const runs = new Map<string, DurableRunRecord>([[fixture.run.runId, fixture.run]]);
     const context = createContext(runs, [], []);
-    installAdmittedChatRuntimeFixture(context, fixture);
+    await installAdmittedChatRuntimeFixture(context, fixture);
     const onGeneralChatPostCommit = vi.fn(() => new Promise<Record<string, unknown>>(() => undefined));
     const service = new DurableRunService(context as unknown as ServiceContext, {
       backgroundTasks: new Set(),
@@ -1571,11 +1577,11 @@ describe("DurableRunService", () => {
 
   it("boot-recovers a completed silent system heartbeat through terminal admission and occurrence handoff", async () => {
     const fixture = createCompletedHeartbeatPostCommitFixture("run-heartbeat-silent-boot-recovery");
-    const recovery = createHeartbeatBootRecoveryHarness(fixture);
+    const recovery = await createHeartbeatBootRecoveryHarness(fixture);
 
     recovery.service.startWorker();
     await Promise.all([...recovery.backgroundTasks]);
-    recovery.service.stopWorker();
+    await recovery.service.stopWorker();
 
     const recovered = recovery.runs.get(fixture.run.runId)!;
     expect(recovered.metadata).not.toHaveProperty("autonomousChatPostCommitPending");
@@ -1629,11 +1635,11 @@ describe("DurableRunService", () => {
     const fixture = createCompletedHeartbeatPostCommitFixture("run-heartbeat-notifying-boot-recovery", {
       rawOutput: '{"notify":true,"message":"  Check the backup now.  "}',
     });
-    const recovery = createHeartbeatBootRecoveryHarness(fixture);
+    const recovery = await createHeartbeatBootRecoveryHarness(fixture);
 
     recovery.service.startWorker();
     await Promise.all([...recovery.backgroundTasks]);
-    recovery.service.stopWorker();
+    await recovery.service.stopWorker();
 
     const recovered = recovery.runs.get(fixture.run.runId)!;
     expect(fixture.assistantMessage).toMatchObject({
@@ -1676,11 +1682,11 @@ describe("DurableRunService", () => {
     const fixture = createCompletedHeartbeatPostCommitFixture("run-heartbeat-silent-tampered-boot", {
       metadataRawOutput: '{ "notify": false }',
     });
-    const recovery = createHeartbeatBootRecoveryHarness(fixture);
+    const recovery = await createHeartbeatBootRecoveryHarness(fixture);
 
     recovery.service.startWorker();
     await Promise.all([...recovery.backgroundTasks]);
-    recovery.service.stopWorker();
+    await recovery.service.stopWorker();
 
     const retained = recovery.runs.get(fixture.run.runId)!;
     expect(retained.metadata).toMatchObject({
@@ -1727,9 +1733,9 @@ describe("DurableRunService", () => {
     let failRealtime = true;
     const onGeneralChatPostCommit = vi.fn(
       async (_observed: DurableRunRecord, progress: GeneralChatPostCommitProgress) => {
-        progress.runEffect("learned_memory_user", persistLearnedMemory);
-        progress.runEffect("background_review", advanceBackgroundReview);
-        progress.publishEffect("realtime", () => {
+        await progress.runEffect("learned_memory_user", persistLearnedMemory);
+        await progress.runEffect("background_review", advanceBackgroundReview);
+        await progress.publishEffect("realtime", () => {
           publishRealtime();
           if (failRealtime) {
             failRealtime = false;
@@ -1737,13 +1743,13 @@ describe("DurableRunService", () => {
           }
         });
         for (const effect of GENERAL_CHAT_POST_COMMIT_EFFECTS) {
-          progress.runEffect(effect, () => undefined);
+          await progress.runEffect(effect, () => undefined);
         }
         return { status: "completed" };
       },
     );
     const context = createContext(runs, [], []);
-    installAdmittedChatRuntimeFixture(context, fixture);
+    await installAdmittedChatRuntimeFixture(context, fixture);
     const service = new DurableRunService(context as unknown as ServiceContext, {
       backgroundTasks: new Set(),
       workflowRegistry: {
@@ -1780,13 +1786,13 @@ describe("DurableRunService", () => {
     const run = fixture.run;
     const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
     const context = createContext(runs, [], []);
-    const runtimeEvidence = installAdmittedChatRuntimeFixture(context, fixture);
+    const runtimeEvidence = await installAdmittedChatRuntimeFixture(context, fixture);
     const observedGenerations: string[] = [];
     const onGeneralChatPostCommit = vi.fn(
       async (_observed: DurableRunRecord, progress: GeneralChatPostCommitProgress) => {
         observedGenerations.push(progress.generationId);
         for (const effect of GENERAL_CHAT_POST_COMMIT_EFFECTS) {
-          progress.runEffect(effect, () => undefined);
+          await progress.runEffect(effect, () => undefined);
         }
         if (progress.generationId === "generation-waiting") {
           const current = runs.get(run.runId)!;
@@ -1806,7 +1812,7 @@ describe("DurableRunService", () => {
             finishedAt: replacement.run.finishedAt,
             updatedAt: replacement.run.updatedAt,
           });
-          runtimeEvidence.recordTransitionEvidence(replacement);
+          await runtimeEvidence.recordTransitionEvidence(replacement);
           return { status: "waiting_for_approval" };
         }
         return { status: "completed" };
@@ -1965,8 +1971,9 @@ describe("DurableRunService", () => {
       releaseFinalizer = resolve;
     });
     const markWorkflowUnrecoverable = vi.fn(async () => finalizerGate);
+    const sharedContext = createContext(runs, [], []);
     const buildService = (backgroundTasks: Set<Promise<void>>) =>
-      new DurableRunService(createContext(runs, [], []) as unknown as ServiceContext, {
+      new DurableRunService(sharedContext as unknown as ServiceContext, {
         backgroundTasks,
         workflowRegistry: {
           executeWorkflow: vi.fn(),
@@ -1992,8 +1999,8 @@ describe("DurableRunService", () => {
 
     releaseFinalizer();
     await Promise.allSettled([...firstTasks, ...secondTasks]);
-    first.stopWorker();
-    second.stopWorker();
+    await first.stopWorker();
+    await second.stopWorker();
 
     expect(markWorkflowUnrecoverable).toHaveBeenCalledTimes(1);
     expect(runs.get(run.runId)?.metadata).not.toHaveProperty("linkedFinalizationPending");
@@ -2095,8 +2102,8 @@ describe("DurableRunService", () => {
       releaseFinalizer();
       await vi.advanceTimersByTimeAsync(0);
       await Promise.allSettled([...firstTasks, ...secondTasks]);
-      first.stopWorker();
-      second.stopWorker();
+      await first.stopWorker();
+      await second.stopWorker();
       expect(runs.get(run.runId)?.metadata).not.toHaveProperty("linkedFinalizationPending");
     } finally {
       vi.useRealTimers();
@@ -2373,7 +2380,7 @@ describe("DurableRunService", () => {
     const backgroundTasks = new Set<Promise<void>>();
     const serviceRef: { current?: DurableRunService } = {};
     const executeWorkflow = vi.fn(async (claimed: DurableRunRecord) => {
-      const retry = serviceRef.current!.scheduleRunningWorkflowRetry(
+      const retry = await serviceRef.current!.scheduleRunningWorkflowRetry(
         claimed.runId,
         "temporary hook outage",
         "hooks",
@@ -2494,7 +2501,7 @@ describe("DurableRunService", () => {
     const backgroundTasks = new Set<Promise<void>>();
     const serviceRef: { current?: DurableRunService } = {};
     const executeWorkflow = vi.fn(async (claimed: DurableRunRecord) => {
-      const queued = serviceRef.current!.scheduleRunningWorkflowRetry(
+      const queued = await serviceRef.current!.scheduleRunningWorkflowRetry(
         claimed.runId,
         "heartbeat_decision_invalid",
         "system-heartbeat",
@@ -2582,7 +2589,7 @@ describe("DurableRunService", () => {
     });
     const serviceRef: { current?: DurableRunService } = {};
     const executeWorkflow = vi.fn(async (claimed: DurableRunRecord) => {
-      const terminal = serviceRef.current!.scheduleRunningWorkflowRetry(
+      const terminal = await serviceRef.current!.scheduleRunningWorkflowRetry(
         claimed.runId,
         "heartbeat_decision_invalid",
         "system-heartbeat",
@@ -2828,7 +2835,7 @@ describe("DurableRunService", () => {
           requestActor: payload.requestActor,
         },
       };
-      finalizeDurableChatRun(
+      await finalizeDurableChatRun(
         {
           runImmediateTransaction: context.storage.runImmediateTransaction,
           durableRuns: context.storage.durableRuns,
@@ -2986,7 +2993,7 @@ describe("DurableRunService", () => {
     },
   );
 
-  it("rejects a running retry after the worker lease expired", () => {
+  it("rejects a running retry after the worker lease expired", async () => {
     const run = {
       ...createRun("run-hook-expired-retry", "running", "hook.delivery"),
       leaseOwnerId: "claim-expired",
@@ -3004,14 +3011,14 @@ describe("DurableRunService", () => {
       },
     });
 
-    expect(() => service.scheduleRunningWorkflowRetry(run.runId, "late hook", "hooks", "claim-expired")).toThrow(
-      /cannot schedule running retry/,
-    );
+    await expect(
+      service.scheduleRunningWorkflowRetry(run.runId, "late hook", "hooks", "claim-expired"),
+    ).rejects.toThrow(/cannot schedule running retry/);
     expect(runs.get(run.runId)?.status).toBe("running");
     expect(timeline).toEqual([]);
   });
 
-  it("schedules a worker-owned retry from database lease and retry clocks under fast host skew", () => {
+  it("schedules a worker-owned retry from database lease and retry clocks under fast host skew", async () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2100-03-14T00:00:00.000Z"));
@@ -3052,7 +3059,12 @@ describe("DurableRunService", () => {
         },
       });
 
-      const scheduled = service.scheduleRunningWorkflowRetry(run.runId, "temporary outage", "hooks", "worker-db-clock");
+      const scheduled = await service.scheduleRunningWorkflowRetry(
+        run.runId,
+        "temporary outage",
+        "hooks",
+        "worker-db-clock",
+      );
 
       expect(scheduled.status).toBe("queued");
       expect(lockFreshActiveLeaseForUpdate).toHaveBeenCalledWith(run.runId, "worker-db-clock");
@@ -3085,7 +3097,7 @@ describe("DurableRunService", () => {
     const backgroundTasks = new Set<Promise<void>>();
     const serviceRef: { current?: DurableRunService } = {};
     const executeWorkflow = vi.fn(async (claimed: DurableRunRecord) => {
-      const retry = serviceRef.current!.scheduleRunningWorkflowRetry(
+      const retry = await serviceRef.current!.scheduleRunningWorkflowRetry(
         claimed.runId,
         "terminal hook failure",
         "hooks",
@@ -3228,12 +3240,14 @@ describe("DurableRunService", () => {
         markWorkflowUnrecoverable: vi.fn(),
       },
       onGeneralChatPostCommit: async (_observed, progress) => {
-        for (const effect of GENERAL_CHAT_POST_COMMIT_EFFECTS) progress.runEffect(effect, () => undefined);
+        for (const effect of GENERAL_CHAT_POST_COMMIT_EFFECTS) {
+          await progress.runEffect(effect, () => undefined);
+        }
         return { status: "failed" };
       },
     });
 
-    const failed = service.scheduleRunningWorkflowRetry(run.runId, "provider exhausted", "worker", "worker-chat");
+    const failed = await service.scheduleRunningWorkflowRetry(run.runId, "provider exhausted", "worker", "worker-chat");
     expect(failed.status).toBe("failed");
     expect(failed.metadata).toMatchObject({
       linkedFinalizationPending: expect.any(Object),
@@ -3264,7 +3278,7 @@ describe("DurableRunService", () => {
         correlationId: run.runId,
       }),
     );
-    const nextTurn = context.storage.sessionMutationAdmissions.admit({
+    const nextTurn = await context.storage.sessionMutationAdmissions.admit({
       workspaceId: "default",
       sessionId: "session-chat",
       expectedSessionIncarnationId: "incarnation-chat",
@@ -3352,7 +3366,7 @@ describe("DurableRunService", () => {
 
       service.startWorker();
       await Promise.all([...backgroundTasks]);
-      service.stopWorker();
+      await service.stopWorker();
 
       await vi.advanceTimersByTimeAsync(5_000);
 
@@ -3386,7 +3400,7 @@ describe("DurableRunService", () => {
 
     service.startWorker();
     await vi.waitFor(() => expect(executeWorkflow).toHaveBeenCalledTimes(1));
-    service.stopWorker();
+    await service.stopWorker();
     await Promise.allSettled([...backgroundTasks]);
 
     expect(runs.get(run.runId)).toMatchObject({
@@ -3424,7 +3438,7 @@ describe("DurableRunService", () => {
       },
     );
 
-    const recovered = service.recoverDurableDeadLetter("dead-1", "operator-1");
+    const recovered = await service.recoverDurableDeadLetter("dead-1", "operator-1");
     await Promise.all([...backgroundTasks]);
 
     expect(recovered.status).toBe("queued");
@@ -3436,11 +3450,11 @@ describe("DurableRunService", () => {
     });
     expect(timeline.map((item) => item.eventType)).toContain("dead_letter_recovered");
     expect(timeline.map((item) => item.eventType)).toContain("run_started");
-    expect(() => service.recoverDurableDeadLetter("dead-1", "operator-2")).toThrow(/already resolved/);
+    await expect(service.recoverDurableDeadLetter("dead-1", "operator-2")).rejects.toThrow(/already resolved/);
     expect(executeWorkflow).toHaveBeenCalledTimes(1);
   });
 
-  it("enforces the absolute dead-letter recovery attempt ceiling", () => {
+  it("enforces the absolute dead-letter recovery attempt ceiling", async () => {
     const run = { ...createRun("run-dead-ceiling", "dead_lettered"), attemptCount: 20, maxAttempts: 20 };
     const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
     const deadLetters = new Map([
@@ -3448,13 +3462,13 @@ describe("DurableRunService", () => {
     ]);
     const service = new DurableRunService(createContext(runs, [], [], { deadLetters }) as unknown as ServiceContext);
 
-    expect(() => service.recoverDurableDeadLetter("dead-ceiling", "operator", { maxAttempts: 20 })).toThrow(
+    await expect(service.recoverDurableDeadLetter("dead-ceiling", "operator", { maxAttempts: 20 })).rejects.toThrow(
       /hard 20-attempt recovery ceiling/,
     );
     expect(runs.get(run.runId)?.status).toBe("dead_lettered");
   });
 
-  it("refuses to recover dead letters the workflow registry classifies as unrecoverable", () => {
+  it("refuses to recover dead letters the workflow registry classifies as unrecoverable", async () => {
     const unrecoverabilityReason =
       "Durable chat run was interrupted after tool execution began and cannot be safely replayed.";
     const run = {
@@ -3486,7 +3500,7 @@ describe("DurableRunService", () => {
       },
     );
 
-    expect(() => service.recoverDurableDeadLetter("dead-unsafe", "operator-1")).toThrow(unrecoverabilityReason);
+    await expect(service.recoverDurableDeadLetter("dead-unsafe", "operator-1")).rejects.toThrow(unrecoverabilityReason);
     expect(isWorkflowRecoverable).toHaveBeenCalledWith(expect.objectContaining({ runId: run.runId }));
     expect(runs.get(run.runId)?.status).toBe("dead_lettered");
     expect(deadLetters.get("dead-unsafe")).toEqual({
@@ -3505,7 +3519,7 @@ describe("DurableRunService", () => {
     expect(executeWorkflow).not.toHaveBeenCalled();
   });
 
-  it("skips waking waiting runs when the correlation id does not match", () => {
+  it("skips waking waiting runs when the correlation id does not match", async () => {
     const run = createRun("run-wait", "waiting", "approval.wait");
     run.metadata = {
       waitForEvent: {
@@ -3521,7 +3535,7 @@ describe("DurableRunService", () => {
       createContext(runs, checkpoints, timeline, { publishRealtime }) as unknown as ServiceContext,
     );
 
-    const result = service.wakeDurableRun(run.runId, {
+    const result = await service.wakeDurableRun(run.runId, {
       eventKey: "approval.resolved",
       correlationId: "approval-other",
     });
@@ -3535,7 +3549,7 @@ describe("DurableRunService", () => {
     expect(publishRealtime).not.toHaveBeenCalled();
   });
 
-  it("emits a durable retry scheduled signal when manual retry queues another attempt", () => {
+  it("emits a durable retry scheduled signal when manual retry queues another attempt", async () => {
     const run = {
       ...createRun("run-retry", "failed", "connector.delivery"),
       finishedAt: "2026-03-14T00:00:05.000Z",
@@ -3549,7 +3563,7 @@ describe("DurableRunService", () => {
       createContext(runs, checkpoints, timeline, { publishRealtime }) as unknown as ServiceContext,
     );
 
-    const retried = service.retryDurableRun(run.runId, "manual_retry", "operator-1");
+    const retried = await service.retryDurableRun(run.runId, "manual_retry", "operator-1");
 
     expect(retried.status).toBe("queued");
     expect(retried.finishedAt).toBeUndefined();
@@ -3572,7 +3586,7 @@ describe("DurableRunService", () => {
     );
   });
 
-  it("refuses to retry runs the workflow registry classifies as unrecoverable", () => {
+  it("refuses to retry runs the workflow registry classifies as unrecoverable", async () => {
     const unrecoverabilityReason =
       "Durable chat run was interrupted after tool execution began and cannot be safely replayed.";
     const run = {
@@ -3600,7 +3614,9 @@ describe("DurableRunService", () => {
       },
     );
 
-    expect(() => service.retryDurableRun(run.runId, "manual_retry", "operator-1")).toThrow(unrecoverabilityReason);
+    await expect(service.retryDurableRun(run.runId, "manual_retry", "operator-1")).rejects.toThrow(
+      unrecoverabilityReason,
+    );
     expect(isWorkflowRecoverable).toHaveBeenCalledWith(expect.objectContaining({ runId: run.runId }));
     expect(runs.get(run.runId)?.status).toBe("failed");
     expect(runs.get(run.runId)?.attemptCount).toBe(0);
@@ -3614,7 +3630,7 @@ describe("DurableRunService", () => {
 
   it.each(["completed", "running", "queued", "waiting", "paused", "cancelled", "dead_lettered"] as const)(
     "refuses to retry %s durable runs without changing lifecycle truth",
-    (status) => {
+    async (status) => {
       const run = {
         ...createRun("run-retry-blocked", status, "connector.delivery"),
         ...(status === "completed" || status === "cancelled" || status === "dead_lettered"
@@ -3638,7 +3654,7 @@ describe("DurableRunService", () => {
         },
       );
 
-      expect(() => service.retryDurableRun(run.runId, "manual_retry", "operator-1")).toThrow(
+      await expect(service.retryDurableRun(run.runId, "manual_retry", "operator-1")).rejects.toThrow(
         `Durable run ${run.runId} cannot be retried from ${status}`,
       );
       expect(isWorkflowRecoverable).not.toHaveBeenCalled();
@@ -3650,7 +3666,7 @@ describe("DurableRunService", () => {
     },
   );
 
-  it("refuses to resume paused autonomous runs while the autonomy kill switch is engaged", () => {
+  it("refuses to resume paused autonomous runs while the autonomy kill switch is engaged", async () => {
     const run = {
       ...createRun("run-autonomous-paused", "paused", "chat.turn.execute"),
       metadata: {
@@ -3671,7 +3687,7 @@ describe("DurableRunService", () => {
       }) as unknown as ServiceContext,
     );
 
-    expect(() => service.resumeDurableRun(run.runId, "operator-1")).toThrow(/autonomy kill switch/i);
+    await expect(service.resumeDurableRun(run.runId, "operator-1")).rejects.toThrow(/autonomy kill switch/i);
     expect(runs.get(run.runId)?.status).toBe("paused");
     expect(checkpoints).toEqual([]);
     expect(timeline).toEqual([]);
@@ -3811,9 +3827,9 @@ describe("DurableRunService", () => {
       service.startWorker();
       await workflowStartedPromise;
       if (action === "pause") {
-        service.pauseDurableRun(run.runId, "operator-1");
+        await service.pauseDurableRun(run.runId, "operator-1");
       } else {
-        service.cancelDurableRun(run.runId, "operator-1");
+        await service.cancelDurableRun(run.runId, "operator-1");
       }
       await Promise.allSettled([...backgroundTasks]);
 
@@ -3847,7 +3863,7 @@ describe("DurableRunService", () => {
       const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
       const timeline: Array<{ runId: string; eventType: string }> = [];
       const context = createContext(runs, checkpoints, timeline);
-      installAdmittedChatRuntimeFixture(context, fixture);
+      await installAdmittedChatRuntimeFixture(context, fixture);
       const lockOrder: string[] = [];
       Object.assign(context.storage.durableRuns, {
         getRunForUpdate: (runId: string) => {
@@ -3920,9 +3936,9 @@ describe("DurableRunService", () => {
       const onGeneralChatPostCommit = vi.fn(
         async (_observed: DurableRunRecord, progress: GeneralChatPostCommitProgress) => {
           expect(progress.targetTraceStatus).toBe("cancelled");
-          progress.runEffect("agent_end", agentEnd);
+          await progress.runEffect("agent_end", agentEnd);
           for (const effect of GENERAL_CHAT_POST_COMMIT_EFFECTS) {
-            progress.runEffect(effect, () => undefined);
+            await progress.runEffect(effect, () => undefined);
           }
           return { status: "cancelled" };
         },
@@ -3937,7 +3953,7 @@ describe("DurableRunService", () => {
         onGeneralChatPostCommit,
       });
 
-      const cancelled = service.cancelDurableRun(run.runId, "operator-cancel");
+      const cancelled = await service.cancelDurableRun(run.runId, "operator-cancel");
 
       expect(cancelled.status).toBe("cancelled");
       expect(trace).toMatchObject({
@@ -3965,7 +3981,7 @@ describe("DurableRunService", () => {
     },
   );
 
-  it("rolls back a wake when its timeline event cannot commit", () => {
+  it("rolls back a wake when its timeline event cannot commit", async () => {
     const run = {
       ...createRun("run-wake-rollback", "waiting"),
       metadata: { waitForEvent: { eventKey: "approval.resolved" } },
@@ -3974,10 +3990,10 @@ describe("DurableRunService", () => {
     const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
     const timeline: Array<{ runId: string; eventType: string }> = [];
     const context = createContext(runs, checkpoints, timeline);
-    context.storage.runImmediateTransaction = <T>(callback: () => T): T => {
+    context.storage.runImmediateTransaction = async <T>(callback: () => T | Promise<T>): Promise<T> => {
       const runSnapshot = new Map(runs);
       try {
-        return callback();
+        return await callback();
       } catch (error) {
         runs.clear();
         for (const [runId, current] of runSnapshot) {
@@ -3991,13 +4007,13 @@ describe("DurableRunService", () => {
     };
     const service = new DurableRunService(context as unknown as ServiceContext);
 
-    const result = service.wakeDurableRun(run.runId, { eventKey: "approval.resolved" });
+    const result = await service.wakeDurableRun(run.runId, { eventKey: "approval.resolved" });
 
     expect(result).toMatchObject({ outcome: "failed", detail: "timeline write unavailable" });
     expect(runs.get(run.runId)?.status).toBe("waiting");
   });
 
-  it("treats repeated operator cancellation of an already-cancelled durable run as idempotent", () => {
+  it("treats repeated operator cancellation of an already-cancelled durable run as idempotent", async () => {
     const run = {
       ...createRun("run-already-cancelled", "cancelled"),
       finishedAt: "2026-03-14T00:00:05.000Z",
@@ -4011,7 +4027,7 @@ describe("DurableRunService", () => {
       createContext(runs, checkpoints, timeline, { publishRealtime }) as unknown as ServiceContext,
     );
 
-    const secondCancel = service.cancelDurableRun(run.runId, "operator-2");
+    const secondCancel = await service.cancelDurableRun(run.runId, "operator-2");
 
     expect(secondCancel).toBe(run);
     expect(runs.get(run.runId)?.version).toBe(run.version);
@@ -4019,7 +4035,7 @@ describe("DurableRunService", () => {
     expect(publishRealtime).not.toHaveBeenCalled();
   });
 
-  it("treats repeated operator pause of an already-paused durable run as idempotent", () => {
+  it("treats repeated operator pause of an already-paused durable run as idempotent", async () => {
     const run = createRun("run-already-paused", "paused");
     const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
     const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
@@ -4029,7 +4045,7 @@ describe("DurableRunService", () => {
       createContext(runs, checkpoints, timeline, { publishRealtime }) as unknown as ServiceContext,
     );
 
-    const secondPause = service.pauseDurableRun(run.runId, "operator-2");
+    const secondPause = await service.pauseDurableRun(run.runId, "operator-2");
 
     expect(secondPause).toBe(run);
     expect(runs.get(run.runId)?.version).toBe(run.version);
@@ -4037,7 +4053,7 @@ describe("DurableRunService", () => {
     expect(publishRealtime).not.toHaveBeenCalled();
   });
 
-  it("rejects pause attempts for already-cancelled durable runs", () => {
+  it("rejects pause attempts for already-cancelled durable runs", async () => {
     const run = {
       ...createRun("run-cancelled-pause", "cancelled"),
       finishedAt: "2026-03-14T00:00:05.000Z",
@@ -4046,12 +4062,12 @@ describe("DurableRunService", () => {
     const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
     const service = new DurableRunService(createContext(runs, [], []) as unknown as ServiceContext);
 
-    expect(() => service.pauseDurableRun(run.runId, "operator-2")).toThrow(
+    await expect(service.pauseDurableRun(run.runId, "operator-2")).rejects.toThrow(
       "Durable run run-cancelled-pause is already terminal (cancelled)",
     );
   });
 
-  it("rejects pause and cancel attempts for dead-lettered durable runs", () => {
+  it("rejects pause and cancel attempts for dead-lettered durable runs", async () => {
     const run = {
       ...createRun("run-dead-lettered-control", "dead_lettered"),
       finishedAt: "2026-03-14T00:00:05.000Z",
@@ -4065,10 +4081,10 @@ describe("DurableRunService", () => {
       createContext(runs, checkpoints, timeline, { publishRealtime }) as unknown as ServiceContext,
     );
 
-    expect(() => service.pauseDurableRun(run.runId, "operator-2")).toThrow(
+    await expect(service.pauseDurableRun(run.runId, "operator-2")).rejects.toThrow(
       "Durable run run-dead-lettered-control is already terminal (dead_lettered)",
     );
-    expect(() => service.cancelDurableRun(run.runId, "operator-2")).toThrow(
+    await expect(service.cancelDurableRun(run.runId, "operator-2")).rejects.toThrow(
       "Durable run run-dead-lettered-control is already terminal (dead_lettered)",
     );
     expect(runs.get(run.runId)?.status).toBe("dead_lettered");
@@ -4321,7 +4337,7 @@ describe("DurableRunService", () => {
     );
   });
 
-  it("resumes autonomy kill-switch parked runs when the switch is disengaged", () => {
+  it("resumes autonomy kill-switch parked runs when the switch is disengaged", async () => {
     const run = {
       ...createRun("run-parked-for-kill-switch", "waiting", "chat.turn.execute"),
       metadata: {
@@ -4351,7 +4367,7 @@ describe("DurableRunService", () => {
       },
     });
 
-    const result = service.resumeRunsWaitingForAutonomyKillSwitch();
+    const result = await service.resumeRunsWaitingForAutonomyKillSwitch();
 
     expect(result.woken).toEqual(["run-parked-for-kill-switch"]);
     expect(runs.get("run-parked-for-kill-switch")).toMatchObject({ status: "queued" });
@@ -4685,7 +4701,7 @@ describe("DurableRunService", () => {
     service.startWorker();
     await Promise.all([...backgroundTasks]);
 
-    const diag = service.getDurableDiagnostics();
+    const diag = await service.getDurableDiagnostics();
     expect(diag.lastBootRecovery).toBeDefined();
     expect(diag.lastBootRecovery?.resumedCount).toBe(1);
     expect(diag.lastBootRecovery?.prunedOrphanCheckpoints).toBe(3);
@@ -4697,7 +4713,7 @@ describe("DurableRunService", () => {
     expect(resumeLog).toBeDefined();
     expect(prune.mock.calls.length).toBe(1);
 
-    service.stopWorker();
+    await service.stopWorker();
   });
 
   it("emits a debug-level boot log when no runs were resumed", async () => {
@@ -4739,7 +4755,7 @@ describe("DurableRunService", () => {
     expect(debugLogs.some((m) => m.includes("no durable runs required resume"))).toBe(true);
     expect(infoLogs.filter((m) => m.includes("resumed after restart")).length).toBe(0);
 
-    service.stopWorker();
+    await service.stopWorker();
   });
 });
 
@@ -4805,6 +4821,21 @@ function createContext(
         resolution_note?: string;
       }
     >();
+  let transactionTail: Promise<void> = Promise.resolve();
+
+  const runImmediateTransaction = async <T>(callback: () => T | Promise<T>): Promise<T> => {
+    const previous = transactionTail;
+    let release!: () => void;
+    transactionTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await callback();
+    } finally {
+      release();
+    }
+  };
 
   return {
     storage: {
@@ -4956,6 +4987,7 @@ function createContext(
           leaseOwnerId?: string;
           leaseExpiresAt?: string;
           leaseHeartbeatAt?: string;
+          expectedVersion?: number;
         }) => updateRun(runs, input.runId, input),
         tryClaimQueuedRun: (input: {
           runId: string;
@@ -5106,7 +5138,7 @@ function createContext(
         },
         listByRun: (runId: string) => timeline.filter((entry) => entry.runId === runId),
       },
-      runImmediateTransaction: <T>(callback: () => T): T => callback(),
+      runImmediateTransaction,
     },
     config: {
       assistant: {
@@ -5307,17 +5339,17 @@ function createAdmittedChatRuntimeFixture(input: {
   };
 }
 
-function installAdmittedChatRuntimeFixture(
+async function installAdmittedChatRuntimeFixture(
   context: ReturnType<typeof createContext>,
   fixture: AdmittedChatRuntimeFixture,
-): {
-  recordTransitionEvidence(next: AdmittedChatRuntimeFixture): void;
-} {
+): Promise<{
+  recordTransitionEvidence(next: AdmittedChatRuntimeFixture): Promise<void>;
+}> {
   const admission = fixture.admission;
   const assistantMessages = new Map<string, NonNullable<AdmittedChatRuntimeFixture["assistantMessage"]>>();
-  const recordTransitionEvidence = (next: AdmittedChatRuntimeFixture) => {
+  const recordTransitionEvidence = async (next: AdmittedChatRuntimeFixture): Promise<void> => {
     if (next.checkpointKind && next.checkpointState) {
-      context.storage.durableRuns.createCheckpoint({
+      await context.storage.durableRuns.createCheckpoint({
         runId: next.run.runId,
         checkpointKind: next.checkpointKind,
         state: next.checkpointState,
@@ -5347,11 +5379,11 @@ function installAdmittedChatRuntimeFixture(
             }
           : undefined,
       settleTurnWriteAuthority: () => ({ disposition: "current", admission }),
-      closeTurnWrite: (input: { status: "completed" | "cancelled"; correlationId: string }) => {
+      closeTurnWrite: async (input: { status: "completed" | "cancelled"; correlationId: string }) => {
         admission.status = input.status;
         admission.terminalAuthorityKind = "durable_terminal";
         admission.terminalDurableRunId = input.correlationId;
-        admission.terminalDurableRunStatus = context.storage.durableRuns.getRun(input.correlationId).status;
+        admission.terminalDurableRunStatus = (await context.storage.durableRuns.getRun(input.correlationId)).status;
         return admission;
       },
     },
@@ -5365,7 +5397,7 @@ function installAdmittedChatRuntimeFixture(
       get: (messageId: string) => assistantMessages.get(messageId),
     },
   });
-  recordTransitionEvidence(fixture);
+  await recordTransitionEvidence(fixture);
   return { recordTransitionEvidence };
 }
 
@@ -5565,7 +5597,9 @@ function createCompletedHeartbeatPostCommitFixture(
   return { run, admission, trace, checkpointState, generationId, receipt, assistantMessage };
 }
 
-function createHeartbeatBootRecoveryHarness(fixture: ReturnType<typeof createCompletedHeartbeatPostCommitFixture>) {
+async function createHeartbeatBootRecoveryHarness(
+  fixture: ReturnType<typeof createCompletedHeartbeatPostCommitFixture>,
+) {
   const runs = new Map<string, DurableRunRecord>([[fixture.run.runId, fixture.run]]);
   const backgroundTasks = new Set<Promise<void>>();
   const recoveryError = vi.fn();
@@ -5613,7 +5647,7 @@ function createHeartbeatBootRecoveryHarness(fixture: ReturnType<typeof createCom
     },
     chatMessages: { get: getMessage },
   });
-  context.storage.durableRuns.createCheckpoint({
+  await context.storage.durableRuns.createCheckpoint({
     runId: fixture.run.runId,
     checkpointKind: "run_completed",
     state: fixture.checkpointState,
@@ -5740,11 +5774,15 @@ function updateRun(
     leaseExpiresAt?: string;
     leaseHeartbeatAt?: string;
     clearLease?: boolean;
+    expectedVersion?: number;
   },
 ): DurableRunRecord {
   const current = runs.get(runId);
   if (!current) {
     throw new Error(`Unknown run ${runId}`);
+  }
+  if (patch.expectedVersion !== undefined && current.version !== patch.expectedVersion) {
+    throw new Error(`Durable run ${runId} update conflict`);
   }
   const next = {
     ...current,

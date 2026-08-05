@@ -65,14 +65,18 @@ export const IMPROVEMENT_TUNE_DEFAULTS = {
  * `Storage["systemSettings"].get`, so callers can pass the repo directly.
  */
 export interface SystemSettingsReader {
-  get<T = unknown>(key: string): { value: T } | undefined;
+  get<T = unknown>(key: string): Promise<{ value: T } | undefined>;
 }
 
-function readNumericSetting(settings: SystemSettingsReader | undefined, key: string, fallback: number): number {
+async function readNumericSetting(
+  settings: SystemSettingsReader | undefined,
+  key: string,
+  fallback: number,
+): Promise<number> {
   if (!settings) {
     return fallback;
   }
-  const raw = settings.get<unknown>(key)?.value;
+  const raw = (await settings.get<unknown>(key))?.value;
   if (typeof raw === "number" && Number.isFinite(raw)) {
     return raw;
   }
@@ -94,9 +98,9 @@ export function resolveBlockerTemplateStrictness(raw: number): number {
   return Math.min(10, Math.max(1, rounded));
 }
 
-export function readBlockerTemplateStrictness(settings: SystemSettingsReader | undefined): number {
+export async function readBlockerTemplateStrictness(settings: SystemSettingsReader | undefined): Promise<number> {
   return resolveBlockerTemplateStrictness(
-    readNumericSetting(
+    await readNumericSetting(
       settings,
       IMPROVEMENT_TUNE_SETTING_KEYS.blockerTemplate,
       IMPROVEMENT_TUNE_DEFAULTS.blockerTemplate,
@@ -123,9 +127,9 @@ export function resolveRetryRepairThreshold(raw: number): number {
   return Math.max(0, Math.round(raw));
 }
 
-export function readRetryRepairThreshold(settings: SystemSettingsReader | undefined): number {
+export async function readRetryRepairThreshold(settings: SystemSettingsReader | undefined): Promise<number> {
   return resolveRetryRepairThreshold(
-    readNumericSetting(
+    await readNumericSetting(
       settings,
       IMPROVEMENT_TUNE_SETTING_KEYS.retryThreshold,
       IMPROVEMENT_TUNE_DEFAULTS.retryThreshold,
@@ -164,9 +168,9 @@ export function resolveLiveIntentThreshold(raw: number): number {
   return Math.min(1, Math.max(0, raw));
 }
 
-export function readLiveIntentThreshold(settings: SystemSettingsReader | undefined): number {
+export async function readLiveIntentThreshold(settings: SystemSettingsReader | undefined): Promise<number> {
   return resolveLiveIntentThreshold(
-    readNumericSetting(
+    await readNumericSetting(
       settings,
       IMPROVEMENT_TUNE_SETTING_KEYS.liveIntentThreshold,
       IMPROVEMENT_TUNE_DEFAULTS.liveIntentThreshold,

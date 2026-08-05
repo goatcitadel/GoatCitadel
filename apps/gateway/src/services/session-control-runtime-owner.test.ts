@@ -16,7 +16,7 @@ afterEach(() => {
 });
 
 describe("SessionControlRuntimeOwner", () => {
-  it("creates a unique explicit request owner for each turn admission", () => {
+  it("creates a unique explicit request owner for each turn admission", async () => {
     const admitOperatorChatTurn = vi.fn((input) => ({
       identity: { admissionId: "a", sessionIncarnationId: "i" },
       requestClaim: { runtimeOwnerId: input.runtimeOwnerId, leaseRevision: 1 },
@@ -31,8 +31,8 @@ describe("SessionControlRuntimeOwner", () => {
       correlationId: "correlation-1",
     };
 
-    const first = owner.admitOperatorChatTurn(input);
-    const second = owner.admitOperatorChatTurn({ ...input, turnId: "turn-2", idempotencyKey: "admit-2" });
+    const first = await owner.admitOperatorChatTurn(input);
+    const second = await owner.admitOperatorChatTurn({ ...input, turnId: "turn-2", idempotencyKey: "admit-2" });
 
     expect(first.requestClaim?.runtimeOwnerId).toMatch(/^chat-turn-request:/u);
     expect(second.requestClaim?.runtimeOwnerId).toMatch(/^chat-turn-request:/u);
@@ -151,7 +151,7 @@ describe("SessionControlRuntimeOwner", () => {
     expect(recoverTerminal).toHaveBeenCalledWith(activeAdmission);
   });
 
-  it("passes an explicit system actor through the generic admission owner", () => {
+  it("passes an explicit system actor through the generic admission owner", async () => {
     const admitChatTurn = vi.fn((input) => ({
       identity: { admissionId: "a", sessionIncarnationId: "i" },
       requestActor: { actorKind: "system", actorId: input.actor.actorId },
@@ -159,7 +159,7 @@ describe("SessionControlRuntimeOwner", () => {
     }));
     const owner = new SessionControlRuntimeOwner({ admitChatTurn } as unknown as SessionControlService);
 
-    const admission = owner.admitChatTurn({
+    const admission = await owner.admitChatTurn({
       sessionId: "session-1",
       turnId: "turn-1",
       request: { content: "system work" },
@@ -180,7 +180,7 @@ describe("SessionControlRuntimeOwner", () => {
     });
   });
 
-  it("derives one stable request owner for the same internal system occurrence", () => {
+  it("derives one stable request owner for the same internal system occurrence", async () => {
     const admitChatTurn = vi.fn((input) => ({
       identity: { admissionId: "a", sessionIncarnationId: "i" },
       requestActor: input.actor,
@@ -197,8 +197,8 @@ describe("SessionControlRuntimeOwner", () => {
       correlationId: "run-cron-1",
     };
 
-    const first = owner.admitSystemChatTurn(input);
-    const replay = owner.admitSystemChatTurn(input);
+    const first = await owner.admitSystemChatTurn(input);
+    const replay = await owner.admitSystemChatTurn(input);
 
     expect(first.requestClaim?.runtimeOwnerId).toMatch(/^chat-turn-system:[a-f0-9]{64}$/u);
     expect(replay.requestClaim?.runtimeOwnerId).toBe(first.requestClaim?.runtimeOwnerId);
@@ -319,13 +319,13 @@ describe("SessionControlRuntimeOwner", () => {
     expect(() => handle.stop()).not.toThrow();
   });
 
-  it("drains expired unbound admissions in bounded stable startup batches", () => {
+  it("drains expired unbound admissions in bounded stable startup batches", async () => {
     const cancelExpiredUnboundTurnAdmissions = vi
       .fn()
       .mockReturnValueOnce(Array.from({ length: 100 }, (_, index) => `admission-${index}`))
       .mockReturnValueOnce(["admission-final"]);
 
-    const cancelled = cancelExpiredUnboundChatTurnAdmissionsOnBoot(
+    const cancelled = await cancelExpiredUnboundChatTurnAdmissionsOnBoot(
       { cancelExpiredUnboundTurnAdmissions },
       "gateway-startup:correlation-1",
     );
@@ -375,7 +375,7 @@ describe("SessionControlRuntimeOwner", () => {
    * from the route seam, so no route-level exercise reaches them. Cover the
    * delegation directly instead.
    */
-  it("delegates every turn-authority pass-through to the sole control-domain owner unchanged", () => {
+  it("delegates every turn-authority pass-through to the sole control-domain owner unchanged", async () => {
     const admission = { identity: { admissionId: "admission-1" } } as never;
     const renewed = { identity: { admissionId: "admission-1" }, requestClaim: { leaseRevision: 2 } } as never;
     const renewRequestLease = vi.fn(() => renewed);
@@ -398,12 +398,12 @@ describe("SessionControlRuntimeOwner", () => {
       limit: 10,
     } as never;
 
-    expect(owner.renewRequestLease(admission)).toBe(renewed);
-    owner.bindDurableRun(admission, "run-1");
-    owner.assertActiveTurnWrite(admission);
-    owner.closeTurnWrite(closeInput);
+    expect(await owner.renewRequestLease(admission)).toBe(renewed);
+    await owner.bindDurableRun(admission, "run-1");
+    await owner.assertActiveTurnWrite(admission);
+    await owner.closeTurnWrite(closeInput);
 
-    expect(owner.cancelExpiredUnboundTurnAdmissions(cancelInput)).toEqual(["admission-1"]);
+    expect(await owner.cancelExpiredUnboundTurnAdmissions(cancelInput)).toEqual(["admission-1"]);
     expect(renewRequestLease).toHaveBeenCalledWith(admission);
     expect(bindDurableRun).toHaveBeenCalledWith(admission, "run-1");
     expect(assertActiveTurnWrite).toHaveBeenCalledWith(admission);

@@ -44,14 +44,14 @@ export function composeMemoryKnowledgeRouteDependencies(
   });
   const skillEvaluation = new SkillEvaluationService({
     storage: gateway.storage,
-    listSkills: () => gateway.listSkills(),
+    listSkills: async () => gateway.listSkills(),
     createCapabilityProposal: (input) => gateway.capabilitySystemService.createProposal(input),
     recordSkillEvaluationSignal: (input) => gateway.improvementService.recordSkillEvaluationSignal(input),
   });
   const skillHubOperator = new SkillHubOperatorService({
     storage: gateway.storage,
     createApproval: (input) => gateway.createApproval(input),
-    listInspectableCatalog: () => gateway.capabilitySystemService.listCatalog("inspectable"),
+    listInspectableCatalog: async () => await gateway.capabilitySystemService.listCatalog("inspectable"),
   });
 
   return {
@@ -87,11 +87,11 @@ export function composeMemoryKnowledgeRouteDependencies(
     },
     improvement: {
       audit: {
-        getSkillActivationPolicy: () => gateway.getSkillActivationPolicy(),
-        listCapabilityCatalog: (scope) => gateway.capabilitySystemService.listCatalog(scope),
-        listCapabilityProposals: (limit) => gateway.capabilitySystemService.listProposals(limit),
-        listSkillImportHistory: (limit) => gateway.listSkillImportHistory(limit),
-        listSkills: () => gateway.listSkills(),
+        getSkillActivationPolicy: async () => await gateway.getSkillActivationPolicy(),
+        listCapabilityCatalog: async (scope) => await gateway.capabilitySystemService.listCatalog(scope),
+        listCapabilityProposals: async (limit) => await gateway.capabilitySystemService.listProposals(limit),
+        listSkillImportHistory: async (limit) => await gateway.listSkillImportHistory(limit),
+        listSkills: async () => gateway.listSkills(),
       },
       improvement: gateway.improvementService,
     },
@@ -106,7 +106,7 @@ export function composeMemoryKnowledgeRouteDependencies(
       listSkillHub: (input) => skillHubOperator.list(input),
       prepareSkillHubRollbackReview: (input) => gateway.prepareSkillHubRollbackReview(input),
       reviewSkillHubSource: (input) => gateway.reviewSkillHubSource(input),
-      listSkillEvaluationRuns: (skillId) => ({ items: skillEvaluation.listSkillEvaluationRuns(skillId) }),
+      listSkillEvaluationRuns: async (skillId) => ({ items: await skillEvaluation.listSkillEvaluationRuns(skillId) }),
       listSkillImportHistory: (limit) => gateway.listSkillImportHistory(limit),
       listSkillSources: (query, limit) => gateway.listSkillSources(query, limit),
       listSkills: () => gateway.listSkills(),
@@ -114,7 +114,9 @@ export function composeMemoryKnowledgeRouteDependencies(
       lookupSkillSources: (queryOrUrl, limit) => gateway.lookupSkillSources(queryOrUrl, limit),
       packageSkillExport: (input) => gateway.packageSkillExport(input),
       previewSkillExport: (input) => gateway.previewSkillExport(input),
-      previewSkillEvaluation: (skillId, input) => ({ run: skillEvaluation.previewSkillEvaluation(skillId, input) }),
+      previewSkillEvaluation: async (skillId, input) => ({
+        run: await skillEvaluation.previewSkillEvaluation(skillId, input),
+      }),
       runSkillEvaluation: (skillId, input) => skillEvaluation.runSkillEvaluation(skillId, input),
       getSkillEvaluationRun: (runId) => skillEvaluation.getSkillEvaluationRun(runId),
       createSkillEvaluationProposal: (runId) => skillEvaluation.createSkillEvaluationProposal(runId),

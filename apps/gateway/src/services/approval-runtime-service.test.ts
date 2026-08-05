@@ -27,17 +27,17 @@ import { ApprovalRuntimeService } from "./approval-runtime-service.js";
 describe("ApprovalRuntimeService", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    lifecycle.listToolGrants.mockReturnValue([{ grantId: "grant-1" }]);
-    lifecycle.createToolGrant.mockReturnValue({ grantId: "grant-2" });
-    lifecycle.revokeToolGrant.mockReturnValue(true);
+    lifecycle.listToolGrants.mockResolvedValue([{ grantId: "grant-1" }]);
+    lifecycle.createToolGrant.mockResolvedValue({ grantId: "grant-2" });
+    lifecycle.revokeToolGrant.mockResolvedValue(true);
     lifecycle.createApproval.mockResolvedValue({ approvalId: "approval-1" });
-    remoteActions.createApprovalRemoteActionToken.mockReturnValue({ tokenId: "token-id", token: "token" });
+    remoteActions.createApprovalRemoteActionToken.mockResolvedValue({ tokenId: "token-id", token: "token" });
     remoteActions.resolveApprovalWithRemoteToken.mockResolvedValue({ approval: { approvalId: "approval-1" } });
     remoteActions.resolveApprovalWithRemoteTokenId.mockResolvedValue({ approval: { approvalId: "approval-1" } });
-    lifecycle.listApprovals.mockReturnValue([{ approvalId: "approval-1" }]);
-    lifecycle.listApprovalsPage.mockReturnValue({ items: [{ approvalId: "approval-1" }], nextCursor: "next" });
+    lifecycle.listApprovals.mockResolvedValue([{ approvalId: "approval-1" }]);
+    lifecycle.listApprovalsPage.mockResolvedValue({ items: [{ approvalId: "approval-1" }], nextCursor: "next" });
     lifecycle.resolveApprovalsBulk.mockResolvedValue({ resolved: 1, failed: [] });
-    lifecycle.getApprovalReplay.mockReturnValue({ approval: { approvalId: "approval-1" }, events: [] });
+    lifecycle.getApprovalReplay.mockResolvedValue({ approval: { approvalId: "approval-1" }, events: [] });
     lifecycle.resolveApproval.mockResolvedValue({ approval: { approvalId: "approval-1", status: "approved" } });
     lifecycle.resolveChatToolApproval.mockResolvedValue({
       allowScope: "session",
@@ -50,18 +50,17 @@ describe("ApprovalRuntimeService", () => {
     const host = { storage: {} };
     const service = new ApprovalRuntimeService(host as never);
 
-    expect(service.listToolGrants()).toEqual([{ grantId: "grant-1" }]);
-    expect(service.createToolGrant({ toolPattern: "session.*", decision: "allow", scope: "global" } as never)).toEqual({
-      grantId: "grant-2",
-    });
-    expect(service.revokeToolGrant("grant-1", "operator-test")).toBe(true);
+    await expect(service.listToolGrants()).resolves.toEqual([{ grantId: "grant-1" }]);
+    await expect(
+      service.createToolGrant({ toolPattern: "session.*", decision: "allow", scope: "global" } as never),
+    ).resolves.toEqual({ grantId: "grant-2" });
+    await expect(service.revokeToolGrant("grant-1", "operator-test")).resolves.toBe(true);
     await expect(service.createApproval({ reason: "Needs review" } as never)).resolves.toEqual({
       approvalId: "approval-1",
     });
-    expect(service.createApprovalRemoteActionToken("approval-1", { connectorId: "integration:conn-1" })).toEqual({
-      tokenId: "token-id",
-      token: "token",
-    });
+    await expect(
+      service.createApprovalRemoteActionToken("approval-1", { connectorId: "integration:conn-1" }),
+    ).resolves.toEqual({ tokenId: "token-id", token: "token" });
     await expect(
       service.resolveApprovalWithRemoteToken({
         token: "token",
@@ -80,8 +79,8 @@ describe("ApprovalRuntimeService", () => {
     ).resolves.toEqual({
       approval: { approvalId: "approval-1" },
     });
-    expect(service.listApprovals()).toEqual([{ approvalId: "approval-1" }]);
-    expect(service.listApprovalsPage({ status: "pending", limit: 25, cursor: "cursor-1" })).toEqual({
+    await expect(service.listApprovals()).resolves.toEqual([{ approvalId: "approval-1" }]);
+    await expect(service.listApprovalsPage({ status: "pending", limit: 25, cursor: "cursor-1" })).resolves.toEqual({
       items: [{ approvalId: "approval-1" }],
       nextCursor: "next",
     });
@@ -91,7 +90,10 @@ describe("ApprovalRuntimeService", () => {
       resolved: 1,
       failed: [],
     });
-    expect(service.getApprovalReplay("approval-1")).toEqual({ approval: { approvalId: "approval-1" }, events: [] });
+    await expect(service.getApprovalReplay("approval-1")).resolves.toEqual({
+      approval: { approvalId: "approval-1" },
+      events: [],
+    });
     await expect(service.resolveApproval("approval-1", { decision: "approve" } as never)).resolves.toEqual({
       approval: { approvalId: "approval-1", status: "approved" },
     });
@@ -118,9 +120,9 @@ describe("ApprovalRuntimeService", () => {
     const host = { storage: {} };
     const service = new ApprovalRuntimeService(host as never);
 
-    service.listToolGrants("session", "session-1", 5);
-    service.listApprovals("pending" as never, 7);
-    service.getApprovalReplay("approval-2", "auditor");
+    await service.listToolGrants("session", "session-1", 5);
+    await service.listApprovals("pending" as never, 7);
+    await service.getApprovalReplay("approval-2", "auditor");
     await service.resolveChatToolApproval("session-2", "approval-2", "reject");
 
     expect(lifecycle.listToolGrants).toHaveBeenCalledWith(host, "session", "session-1", 5);

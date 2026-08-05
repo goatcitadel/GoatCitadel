@@ -24,14 +24,17 @@ export interface ChatTurnRealtimeEmitter {
     topic: string,
     payload: Record<string, unknown>,
     options?: ChatTurnRealtimeOptions,
-  ): void;
+  ): Promise<unknown>;
 }
 
 export interface ChatTurnTranscriptIngress {
   ingestEvent(
     idempotencyKey: string,
     payload: GatewayEventInput,
-    options?: { onCommit?: () => void; afterCommit?: () => void },
+    options?: {
+      onCommit?: () => unknown | Promise<unknown>;
+      afterCommit?: () => unknown | Promise<unknown>;
+    },
   ): Promise<unknown>;
 }
 
@@ -44,7 +47,7 @@ export interface ChatTurnActiveExecutionControl {
         controller: AbortController;
       }
     | undefined;
-  markChatTurnCancelled(sessionId: string, turnId: string, cancelledBy?: string): ChatTurnTraceRecord;
+  markChatTurnCancelled(sessionId: string, turnId: string, cancelledBy?: string): Promise<ChatTurnTraceRecord>;
 }
 
 export interface ChatTurnAdmissionControl {
@@ -95,14 +98,14 @@ export interface ChatTurnStreamLifecycleControl {
     chunk: ChatStreamChunkDraft,
     durableRunId?: string,
     streamRegistration?: ActiveChatTurnStreamExecution,
-  ): void;
-  createHydratedChatTurnTrace(turnId: string, trace: ChatTurnTraceRecord): ChatTurnTraceRecord;
+  ): Promise<unknown>;
+  createHydratedChatTurnTrace(turnId: string, trace: ChatTurnTraceRecord): Promise<ChatTurnTraceRecord>;
   registerActiveChatTurnStream(
     sessionId: string,
     turnId: string,
     durableRunId?: string,
     options?: ChatTurnStreamRegistrationOptions,
-  ): ActiveChatTurnStreamExecution;
+  ): Promise<ActiveChatTurnStreamExecution>;
   getActiveChatTurnStream(turnId: string): ActiveChatTurnStreamExecution | undefined;
   completeActiveChatTurnStream(turnId: string, registrationId: string): boolean;
   closeActiveChatTurnStream(turnId: string, registrationId: string): boolean;
@@ -119,19 +122,19 @@ export interface ChatTurnDurableRunOwner {
     };
   };
   readonly backgroundTasks: Set<Promise<void>>;
-  isFeatureEnabled(flag: string): boolean;
+  isFeatureEnabled(flag: string): Promise<boolean>;
   beginDurableChatRun(
     prepared: PreparedAgentChatTurn,
     input: ChatSendMessageRequest,
     threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
     options?: { mutationLifecycle?: ChatStreamMutationLifecycle; runId?: string },
-  ): DurableRunRecord | undefined;
+  ): Promise<DurableRunRecord | undefined>;
   finalizeDurableChatRun(
     runId: string,
     prepared: PreparedAgentChatTurn,
     trace: ChatTurnTraceRecord,
     expectedLeaseOwnerId?: string,
-  ): void;
+  ): Promise<void>;
   /**
    * Soft-cancel a durable chat run when an external `AbortSignal` fires while
    * `consumePreparedAgentChatTurn` is waiting on its persisted stream. The
@@ -139,7 +142,7 @@ export interface ChatTurnDurableRunOwner {
    * (`cancelDurableRun`). Optional because not every dispatch host owns a
    * durable kernel (e.g., tests).
    */
-  cancelDurableChatRun?(runId: string, actorId?: string): DurableRunRecord | undefined;
+  cancelDurableChatRun?(runId: string, actorId?: string): Promise<DurableRunRecord | undefined>;
 }
 
 export interface ChatTurnMemorySideEffects {
@@ -151,7 +154,7 @@ export interface ChatTurnMemorySideEffects {
       sourceRef: string;
       trace?: Pick<ChatTurnTraceRecord, "status" | "toolRuns">;
     },
-  ): void;
+  ): Promise<void>;
   /**
    * Fire-and-forget post-turn commitment inference (P1-F3). Runs a cheap hidden
    * classifier over the just-completed transcript to infer future follow-up
@@ -167,7 +170,7 @@ export interface ChatTurnMemorySideEffects {
     assistantText: string;
     /** True when the completed turn is itself an autonomous self-wake (skip). */
     autonomous?: boolean;
-  }): void;
+  }): Promise<void>;
   scheduleChatMemoryContextPrewarm(input: {
     sessionId: string;
     prompt: string;
@@ -199,17 +202,17 @@ export interface ChatTurnMemorySideEffects {
     delegatedChild: boolean;
     /** True when the completed turn is itself an autonomous self-wake (skip). */
     autonomous?: boolean;
-  }): void;
+  }): Promise<void>;
   recordCapabilityGapFromTrace(input: {
     sessionId: string;
     turnId: string;
     content: string;
     trace: ChatTurnTraceRecord;
-  }): void;
+  }): Promise<void>;
 }
 
 export interface ChatTurnIntegrationDispatch {
-  ensureSessionInternalToolGrant(sessionId: string, toolName: string, reason: string): void;
+  ensureSessionInternalToolGrant(sessionId: string, toolName: string, reason: string): Promise<void>;
   requireExecutedToolResult(
     toolName: string,
     result: ToolInvokeResult | Record<string, unknown>,

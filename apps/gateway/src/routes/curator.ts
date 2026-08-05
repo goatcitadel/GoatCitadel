@@ -10,7 +10,7 @@ export const curatorRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.get("/api/v1/curator/status", async (_request, reply) => {
     try {
-      return reply.send(curator.listStatus());
+      return reply.send(await curator.listStatus());
     } catch (error) {
       return sendRouteError(reply, error, _request.log);
     }
@@ -28,7 +28,7 @@ export const curatorRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(curator.archive(parsed.data));
+      return reply.send(await curator.archive(parsed.data));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -45,7 +45,7 @@ export const curatorRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(curator.prune(parsed.data));
+      return reply.send(await curator.prune(parsed.data));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -53,7 +53,7 @@ export const curatorRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.get("/api/v1/curator/archived", async (_request, reply) => {
     try {
-      return reply.send(curator.listArchived());
+      return reply.send(await curator.listArchived());
     } catch (error) {
       return sendRouteError(reply, error, _request.log);
     }

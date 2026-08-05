@@ -88,7 +88,7 @@ import {
   resolveLegacyRunVariableTemplate,
   validateRunVariableBindings,
 } from "@goatcitadel/contracts";
-import { hashPromptPackPolicyV2, hashPromptPackPolicyV3, type Storage } from "@goatcitadel/storage";
+import { hashPromptPackPolicyV2, hashPromptPackPolicyV3, type AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import { trackBackgroundTask } from "./background-scheduler.js";
@@ -338,18 +338,19 @@ export interface PromptPackServiceContext {
     | "toolGrants"
     | "chatSessionProjects"
     | "chatSessionMeta"
+    | "db"
+    | "runImmediateTransaction"
   >;
-  readonly gatewaySql: Storage["gatewaySql"];
   readonly config: GatewayRuntimeConfig;
   normalizeWorkspaceId(workspaceId?: string): string;
-  isFeatureEnabled(flag: keyof RuntimeSettings["features"]): boolean;
-  requireFeatureEnabled(flag: keyof RuntimeSettings["features"]): void;
+  isFeatureEnabled(flag: keyof RuntimeSettings["features"]): Promise<boolean>;
+  requireFeatureEnabled(flag: keyof RuntimeSettings["features"]): Promise<void>;
   publishRealtime(
     channel: string,
     topic: string,
     payload: Record<string, unknown>,
     options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
-  ): void;
+  ): Promise<unknown>;
 }
 
 interface PromptPackRuleEvaluationV2 {
@@ -423,7 +424,7 @@ interface PromptPackCurrentGenerationConfig {
 // ── callbacks / deps the service cannot own directly ─────────────────
 export interface PromptPackServiceDeps {
   /** Create a transient chat session for running a prompt-pack test. */
-  createChatSession(input: ChatSessionCreateInput): ChatSessionRecord;
+  createChatSession(input: ChatSessionCreateInput): Promise<ChatSessionRecord>;
   /** Send a message through the full agent pipeline. */
   agentSendChatMessage(
     sessionId: string,
@@ -447,9 +448,9 @@ export interface PromptPackServiceDeps {
     attribution: ModelUsageAttributionContext,
   ): Promise<ChatCompletionResponse>;
   /** Resolve default provider/model for prompt-runner. */
-  getPromptRunnerModelDefaults(): { providerId?: string; model?: string };
+  getPromptRunnerModelDefaults(): Promise<{ providerId?: string; model?: string }>;
   /** Resolve default provider/model for prompt-pack model judging. */
-  getPromptJudgeModelDefaults(): { providerId?: string; model?: string };
+  getPromptJudgeModelDefaults(): Promise<{ providerId?: string; model?: string }>;
   /** Shared background-task set for fire-and-forget benchmark tasks. */
   backgroundTasks: Set<Promise<void>>;
   runBackgroundWork?: <T>(label: string, work: (signal: AbortSignal) => Promise<T>) => Promise<T | undefined>;
@@ -462,7 +463,7 @@ export interface PromptPackServiceDeps {
     passRate?: number;
     runFailures?: number;
     failureSignal?: string;
-  }) => void;
+  }) => void | Promise<void>;
   recordImprovementRegressionSignal?: (input: {
     regressionRunId: string;
     packId: string;
@@ -471,8 +472,8 @@ export interface PromptPackServiceDeps {
     passDelta: number;
     latencyDeltaMs: number;
     capability: string;
-  }) => void;
-  appendAudit?: (payload: Record<string, unknown>) => void;
+  }) => void | Promise<void>;
+  appendAudit?: (payload: Record<string, unknown>) => Promise<unknown>;
 }
 
 /**
@@ -501,19 +502,19 @@ export class PromptPackService {
     this.cancelledBenchmarkRunIds.clear();
   }
 
-  private assertDurablePreflight(profile: PromptPackExecutionProfile): void {
+  private async assertDurablePreflight(profile: PromptPackExecutionProfile): Promise<void> {
     ensurePromptPackDurableReadiness(profile, {
       durable: this.ctx.config.assistant.durable,
-      durableKernelV1Enabled: this.ctx.isFeatureEnabled("durableKernelV1Enabled"),
+      durableKernelV1Enabled: await this.ctx.isFeatureEnabled("durableKernelV1Enabled"),
     });
   }
 
   // ── public API ─────────────────────────────────────────────────────
 
-  importPromptPack(input: { content: string; name?: string; sourceLabel?: string; packId?: string }): {
+  async importPromptPack(input: { content: string; name?: string; sourceLabel?: string; packId?: string }): Promise<{
     pack: PromptPackRecord;
     tests: PromptPackTestRecord[];
-  } {
+  }> {
     const tests = parsePromptPackTests(input.content);
     if (tests.length === 0) {
       throw new Error("No tests found in prompt-pack markdown.");
@@ -524,13 +525,13 @@ export class PromptPackService {
     }
     const packVersionLabel = extractPromptPackVersionLabel(input.content);
     const declaredRunVariableSchema = parsePromptPackRunVariableSchema(input.content);
-    if (declaredRunVariableSchema) this.ctx.requireFeatureEnabled("typedRunVariablesV1Enabled");
+    if (declaredRunVariableSchema) await this.ctx.requireFeatureEnabled("typedRunVariablesV1Enabled");
     const legacyPlaceholders = [...new Set(tests.flatMap((test) => extractPromptPlaceholders(test.prompt)))];
     const runVariableSchema =
       declaredRunVariableSchema ??
       (legacyPlaceholders.length > 0 ? legacyPlaceholderSchema(legacyPlaceholders) : undefined);
     const name = input.name?.trim() || packVersionLabel || inferPromptPackName(input.sourceLabel);
-    const imported = this.ctx.storage.promptPacks.replacePackTests({
+    const imported = await this.ctx.storage.promptPacks.replacePackTests({
       packId: input.packId,
       name,
       sourceLabel: input.sourceLabel?.trim() || packVersionLabel,
@@ -538,14 +539,14 @@ export class PromptPackService {
       tests,
       runVariableSchema,
     });
-    this.refreshPromptPackExportFileBestEffort(imported.pack.packId, "import_prompt_pack");
+    await this.refreshPromptPackExportFileBestEffort(imported.pack.packId, "import_prompt_pack");
     return imported;
   }
 
-  importBuiltinPromptPack(packKey: string): {
+  async importBuiltinPromptPack(packKey: string): Promise<{
     pack: PromptPackRecord;
     tests: PromptPackTestRecord[];
-  } {
+  }> {
     const builtin = BUILTIN_PROMPT_PACKS[packKey];
     if (!builtin) {
       throw new Error(`Unknown built-in prompt pack: ${packKey}`);
@@ -554,7 +555,7 @@ export class PromptPackService {
     if (!filePath) {
       throw new Error(`${builtin.file} was not found in this checkout.`);
     }
-    return this.importPromptPack({
+    return await this.importPromptPack({
       packId: packKey,
       name: builtin.name,
       sourceLabel: builtin.sourceLabelFromBasename ? path.basename(filePath) : undefined,
@@ -562,13 +563,13 @@ export class PromptPackService {
     });
   }
 
-  listPromptPacks(limit = 100): PromptPackRecord[] {
-    return this.ctx.storage.promptPacks.listPacks(limit);
+  async listPromptPacks(limit = 100): Promise<PromptPackRecord[]> {
+    return await this.ctx.storage.promptPacks.listPacks(limit);
   }
 
-  listSecurityEvalPacks(): PromptPackSecurityEvalPacksResponse {
+  async listSecurityEvalPacks(): Promise<PromptPackSecurityEvalPacksResponse> {
     const generatedAt = new Date().toISOString();
-    const importedPacks = this.ctx.storage.promptPacks.listPacks(2000);
+    const importedPacks = await this.ctx.storage.promptPacks.listPacks(2000);
     const warnings: string[] = [
       "Security eval packs are definitions and stored evidence only; this projection does not call providers or run tests.",
       "A listed pack is not release proof until its tests have been run and scored through the prompt-pack workflow.",
@@ -580,12 +581,14 @@ export class PromptPackService {
     };
   }
 
-  listSecurityQualityGates(): PromptPackSecurityQualityGatesResponse {
+  async listSecurityQualityGates(): Promise<PromptPackSecurityQualityGatesResponse> {
     const generatedAt = new Date().toISOString();
-    const securityPacks = this.listSecurityEvalPacks();
+    const securityPacks = await this.listSecurityEvalPacks();
     return {
       generatedAt,
-      items: securityPacks.items.map((pack) => this.buildSecurityQualityGate(pack, generatedAt)),
+      items: await Promise.all(
+        securityPacks.items.map(async (pack) => await this.buildSecurityQualityGate(pack, generatedAt)),
+      ),
       warnings: [
         ...securityPacks.warnings,
         "Security quality gates are read-only projections from stored prompt-pack reports; this endpoint does not run providers, mutate packs, or approve release claims.",
@@ -593,9 +596,9 @@ export class PromptPackService {
     };
   }
 
-  listPromptPackTests(packId: string, limit = 2000): PromptPackTestRecord[] {
-    this.ctx.storage.promptPacks.getPack(packId);
-    return this.ctx.storage.promptPacks.listTests(packId, limit);
+  async listPromptPackTests(packId: string, limit = 2000): Promise<PromptPackTestRecord[]> {
+    await this.ctx.storage.promptPacks.getPack(packId);
+    return await this.ctx.storage.promptPacks.listTests(packId, limit);
   }
 
   async runPromptPackTest(
@@ -619,15 +622,15 @@ export class PromptPackService {
     },
   ): Promise<PromptPackRunRecord> {
     if (input?.runVariableBindings || input?.runVariableSchemaHash) {
-      this.ctx.requireFeatureEnabled("typedRunVariablesV1Enabled");
+      await this.ctx.requireFeatureEnabled("typedRunVariablesV1Enabled");
     }
-    const pack = this.ctx.storage.promptPacks.getPack(packId);
-    const test = this.ctx.storage.promptPacks.getTest(testId);
+    const pack = await this.ctx.storage.promptPacks.getPack(packId);
+    const test = await this.ctx.storage.promptPacks.getTest(testId);
     if (test.packId !== pack.packId) {
       throw new Error("Prompt-pack test does not belong to this pack.");
     }
 
-    const defaults = this.deps.getPromptRunnerModelDefaults();
+    const defaults = await this.deps.getPromptRunnerModelDefaults();
     const providerId = input?.providerId ?? defaults.providerId;
     const model = input?.model ?? defaults.model;
     const executionProfile = resolvePromptPackExecutionProfile({
@@ -635,7 +638,7 @@ export class PromptPackService {
       override: input,
     });
     const executionStyle = resolvePromptPackExecutionStyle(input?.executionStyle);
-    this.assertDurablePreflight(executionProfile);
+    await this.assertDurablePreflight(executionProfile);
     const runVariableResolution = resolvePromptPackRunVariables(pack, test.prompt, {
       bindings: input?.runVariableBindings,
       schemaHash: input?.runVariableSchemaHash,
@@ -653,24 +656,26 @@ export class PromptPackService {
       rootDir: this.ctx.config.rootDir,
       workspaceRoot: path.resolve(this.ctx.config.rootDir, this.ctx.config.assistant.workspaceDir),
     });
-    const projectId = projectBinding ? this.ensurePromptPackProjectBindingFor(projectBinding) : undefined;
+    const projectId = projectBinding ? await this.ensurePromptPackProjectBindingFor(projectBinding) : undefined;
     const runId = randomUUID();
     const sessionId =
       input?.sessionId ??
-      this.deps.createChatSession({
-        title: `[${test.code}] ${test.title}`.slice(0, 200),
-        workspaceId: this.ctx.normalizeWorkspaceId(undefined),
-        projectId,
-        mode: executionProfile.mode,
-        origin: "prompt_pack",
-        includeInHistory: false,
-      }).sessionId;
+      (
+        await this.deps.createChatSession({
+          title: `[${test.code}] ${test.title}`.slice(0, 200),
+          workspaceId: this.ctx.normalizeWorkspaceId(undefined),
+          projectId,
+          mode: executionProfile.mode,
+          origin: "prompt_pack",
+          includeInHistory: false,
+        })
+      ).sessionId;
     if (input?.sessionId && projectId) {
-      this.ctx.storage.chatSessionProjects.assign(sessionId, projectId);
+      await this.ctx.storage.chatSessionProjects.assign(sessionId, projectId);
     }
-    this.ensurePromptPackSessionToolGrants(sessionId, executionProfile, resolvedPrompt.prompt, projectBinding);
+    await this.ensurePromptPackSessionToolGrants(sessionId, executionProfile, resolvedPrompt.prompt, projectBinding);
 
-    this.ctx.storage.promptPackRuns.create({
+    await this.ctx.storage.promptPackRuns.create({
       runId,
       packId: pack.packId,
       testId: test.testId,
@@ -750,7 +755,7 @@ export class PromptPackService {
                     ? "Durable execution finished in failed state."
                     : undefined
           : undefined;
-      const updated = this.ctx.storage.promptPackRuns.patch(runId, {
+      const updated = await this.ctx.storage.promptPackRuns.patch(runId, {
         status,
         responseText: rawResponseText || undefined,
         derivedResponseText: derivedResponse.derivedResponseText,
@@ -761,20 +766,20 @@ export class PromptPackService {
         error,
         finishedAt: new Date().toISOString(),
       });
-      this.refreshPromptPackExportFileBestEffort(pack.packId, "run_prompt_pack_test_success");
+      await this.refreshPromptPackExportFileBestEffort(pack.packId, "run_prompt_pack_test_success");
       return updated;
     } catch (error) {
-      const failed = this.ctx.storage.promptPackRuns.patch(runId, {
+      const failed = await this.ctx.storage.promptPackRuns.patch(runId, {
         status: "failed",
         error: (error as Error).message,
         finishedAt: new Date().toISOString(),
       });
-      this.refreshPromptPackExportFileBestEffort(pack.packId, "run_prompt_pack_test_failure");
+      await this.refreshPromptPackExportFileBestEffort(pack.packId, "run_prompt_pack_test_failure");
       return failed;
     }
   }
 
-  scorePromptPackTest(input: {
+  async scorePromptPackTest(input: {
     packId: string;
     testId: string;
     runId: string;
@@ -792,8 +797,8 @@ export class PromptPackService {
     usabilityScore?: 0 | 1 | 2;
     judge?: PromptPackJudgeRecord;
     notes?: string;
-  }): PromptPackHumanReviewRecordV2 {
-    return this.reviewPromptPackTest({
+  }): Promise<PromptPackHumanReviewRecordV2> {
+    return await this.reviewPromptPackTest({
       packId: input.packId,
       testId: input.testId,
       runId: input.runId,
@@ -804,7 +809,7 @@ export class PromptPackService {
     });
   }
 
-  reviewPromptPackTest(input: {
+  async reviewPromptPackTest(input: {
     packId: string;
     testId: string;
     runId: string;
@@ -812,16 +817,16 @@ export class PromptPackService {
     overrideVerdict?: PromptPackVerdict;
     reviewerId?: string;
     notes?: string;
-  }): PromptPackHumanReviewRecordV2 {
-    const run = this.ctx.storage.promptPackRuns.get(input.runId);
-    const test = this.ctx.storage.promptPacks.getTest(input.testId);
+  }): Promise<PromptPackHumanReviewRecordV2> {
+    const run = await this.ctx.storage.promptPackRuns.get(input.runId);
+    const test = await this.ctx.storage.promptPacks.getTest(input.testId);
     if (run.packId !== input.packId || run.testId !== input.testId) {
       throw new Error("Score target does not match run.");
     }
     assertPromptPackRunScorable(test, run);
-    const latestAutoScore = this.ctx.storage.promptPackAutoScoresV2.listByRun(input.runId, 1)[0];
+    const latestAutoScore = (await this.ctx.storage.promptPackAutoScoresV2.listByRun(input.runId, 1))[0];
     const applicability = latestAutoScore?.applicability ?? deriveManualReviewApplicability(input.scores);
-    const review = this.ctx.storage.promptPackHumanReviewsV2.create({
+    const review = await this.ctx.storage.promptPackHumanReviewsV2.create({
       reviewId: `pprv2-${randomUUID()}`,
       packId: input.packId,
       testId: input.testId,
@@ -834,7 +839,7 @@ export class PromptPackService {
       overrideVerdict: input.overrideVerdict,
       createdAt: new Date().toISOString(),
     });
-    this.refreshPromptPackExportFileBestEffort(input.packId, "review_prompt_pack_test");
+    await this.refreshPromptPackExportFileBestEffort(input.packId, "review_prompt_pack_test");
     return review;
   }
 
@@ -852,15 +857,15 @@ export class PromptPackService {
       throw new Error(`Prompt-pack scoring v2 is disabled via ${PROMPT_PACK_V2_SCORING_ENABLED_ENV}.`);
     }
 
-    const pack = this.ctx.storage.promptPacks.getPack(input.packId);
-    const test = this.ctx.storage.promptPacks.getTest(input.testId);
+    const pack = await this.ctx.storage.promptPacks.getPack(input.packId);
+    const test = await this.ctx.storage.promptPacks.getTest(input.testId);
     if (test.packId !== pack.packId) {
       throw new Error("Prompt-pack test does not belong to this pack.");
     }
 
-    const candidateRuns = this.ctx.storage.promptPackRuns.listByTest(test.testId, 1000);
+    const candidateRuns = await this.ctx.storage.promptPackRuns.listByTest(test.testId, 1000);
     const run = input.runId
-      ? this.ctx.storage.promptPackRuns.get(input.runId)
+      ? await this.ctx.storage.promptPackRuns.get(input.runId)
       : pickPromptPackAutoScoreRun(candidateRuns);
     if (!run) {
       throw new Error(`No run found for ${test.code}. Run this test first.`);
@@ -881,7 +886,7 @@ export class PromptPackService {
     const scorerVersion = scoringSchemaVersion === "v3" ? PROMPT_PACK_V3_SCORER_VERSION : PROMPT_PACK_V2_SCORER_VERSION;
     const judgeRubricVersion =
       scoringSchemaVersion === "v3" ? PROMPT_PACK_V3_JUDGE_RUBRIC_VERSION : PROMPT_PACK_V2_JUDGE_RUBRIC_VERSION;
-    const existingScores = this.ctx.storage.promptPackAutoScoresV2.listByRun(run.runId, 100);
+    const existingScores = await this.ctx.storage.promptPackAutoScoresV2.listByRun(run.runId, 100);
     const matchingScore = existingScores.find(
       (score) =>
         score.scoringSchemaVersion === scoringSchemaVersion &&
@@ -889,7 +894,7 @@ export class PromptPackService {
         score.judgeRubricVersion === judgeRubricVersion &&
         score.policyHash === policyHash,
     );
-    const legacyScore = this.ctx.storage.promptPackScores.listByRun(run.runId, 1)[0];
+    const legacyScore = (await this.ctx.storage.promptPackScores.listByRun(run.runId, 1))[0];
     if (matchingScore && !input.force) {
       return {
         score: matchingScore,
@@ -926,7 +931,7 @@ export class PromptPackService {
             signal: input.signal,
             existingAutoScoreId: matchingScore?.autoScoreId,
           });
-    this.refreshPromptPackExportFileBestEffort(input.packId, "auto_score_prompt_pack_test");
+    await this.refreshPromptPackExportFileBestEffort(input.packId, "auto_score_prompt_pack_test");
 
     return {
       score,
@@ -976,7 +981,7 @@ export class PromptPackService {
       judgeEvaluation: modelScores,
     });
 
-    return this.ctx.storage.promptPackAutoScoresV2.create({
+    return (await this.ctx.storage.promptPackAutoScoresV2.create({
       ...merged,
       autoScoreId: input.existingAutoScoreId ?? `ppasv2-${randomUUID()}`,
       packId: input.pack.packId,
@@ -988,7 +993,7 @@ export class PromptPackService {
       policyHash: input.policyHash,
       policySource: input.policySource,
       createdAt: new Date().toISOString(),
-    }) as PromptPackScoreRecordV2;
+    })) as PromptPackScoreRecordV2;
   }
 
   private async createPromptPackAutoScoreV3(input: {
@@ -1031,7 +1036,7 @@ export class PromptPackService {
       judgeEvaluation: modelScores,
     });
 
-    return this.ctx.storage.promptPackAutoScoresV2.create({
+    return (await this.ctx.storage.promptPackAutoScoresV2.create({
       ...merged,
       autoScoreId: input.existingAutoScoreId ?? `ppasv3-${randomUUID()}`,
       packId: input.pack.packId,
@@ -1043,7 +1048,7 @@ export class PromptPackService {
       policyHash: input.policyHash,
       policySource: input.policySource,
       createdAt: new Date().toISOString(),
-    }) as PromptPackScoreRecordV3;
+    })) as PromptPackScoreRecordV3;
   }
 
   async autoScorePromptPackBatch(input: {
@@ -1056,8 +1061,8 @@ export class PromptPackService {
     force?: boolean;
     scoringSchemaVersion?: PromptPackScoringSchemaVersion;
   }): Promise<PromptPackAutoScoreBatchResult> {
-    const pack = this.ctx.storage.promptPacks.getPack(input.packId);
-    const tests = this.ctx.storage.promptPacks.listTests(pack.packId, 5000);
+    const pack = await this.ctx.storage.promptPacks.getPack(input.packId);
+    const tests = await this.ctx.storage.promptPacks.listTests(pack.packId, 5000);
     const scoringSchemaVersion = input.scoringSchemaVersion ?? PROMPT_PACK_DEFAULT_SCORING_SCHEMA_VERSION;
     const policy = scoringSchemaVersion === "v3" ? resolvePromptPackPolicyV3(pack) : resolvePromptPackPolicy(pack);
     const policyHash =
@@ -1075,22 +1080,20 @@ export class PromptPackService {
     const errors: PromptPackAutoScoreBatchError[] = [];
 
     for (const test of tests.slice(0, limit)) {
-      const candidateRuns = this.ctx.storage.promptPackRuns.listByTest(test.testId, 100);
+      const candidateRuns = await this.ctx.storage.promptPackRuns.listByTest(test.testId, 100);
       const selectedRun = pickPromptPackAutoScoreRun(candidateRuns);
       if (!selectedRun) {
         skipped += 1;
         continue;
       }
       if (onlyUnscored) {
-        const existing = this.ctx.storage.promptPackAutoScoresV2
-          .listByRun(selectedRun.runId, 100)
-          .some(
-            (score) =>
-              score.scoringSchemaVersion === scoringSchemaVersion &&
-              score.scorerVersion === scorerVersion &&
-              score.judgeRubricVersion === judgeRubricVersion &&
-              score.policyHash === policyHash,
-          );
+        const existing = (await this.ctx.storage.promptPackAutoScoresV2.listByRun(selectedRun.runId, 100)).some(
+          (score) =>
+            score.scoringSchemaVersion === scoringSchemaVersion &&
+            score.scorerVersion === scorerVersion &&
+            score.judgeRubricVersion === judgeRubricVersion &&
+            score.policyHash === policyHash,
+        );
         if (existing) {
           skipped += 1;
           continue;
@@ -1150,19 +1153,19 @@ export class PromptPackService {
     if (!pack) {
       throw new Error("No prompt pack is available. Import one in Prompt Lab first.");
     }
-    const tests = this.ctx.storage.promptPacks.listTests(pack.packId, 5000);
+    const tests = await this.ctx.storage.promptPacks.listTests(pack.packId, 5000);
     const test = tests.find((item) => item.code.toUpperCase() === input.testCode.toUpperCase());
     if (!test) {
       throw new Error(`Prompt-pack test ${input.testCode} not found.`);
     }
-    const runs = this.ctx.storage.promptPackRuns
-      .listByTest(test.testId, 1000)
-      .filter((item) => !input.sessionId || item.sessionId === input.sessionId);
+    const runs = (await this.ctx.storage.promptPackRuns.listByTest(test.testId, 1000)).filter(
+      (item) => !input.sessionId || item.sessionId === input.sessionId,
+    );
     const latest = runs.at(0);
     if (!latest) {
       throw new Error(`No run found for ${test.code}. Run /pack run ${test.code} first.`);
     }
-    return this.scorePromptPackTest({
+    return await this.scorePromptPackTest({
       packId: pack.packId,
       testId: test.testId,
       runId: latest.runId,
@@ -1175,13 +1178,13 @@ export class PromptPackService {
     });
   }
 
-  getPromptPackReport(packId: string): PromptPackReportRecord {
-    const pack = this.ctx.storage.promptPacks.getPack(packId);
-    const tests = this.ctx.storage.promptPacks.listTests(packId, 5000);
-    const runs = this.ctx.storage.promptPackRuns.listByPack(packId, 10000);
-    const scores = this.ctx.storage.promptPackScores.listByPack(packId, 10000);
-    const autoScoresV2 = this.ctx.storage.promptPackAutoScoresV2.listByPack(packId, 10000);
-    const humanReviewsV2 = this.ctx.storage.promptPackHumanReviewsV2.listByPack(packId, 10000);
+  async getPromptPackReport(packId: string): Promise<PromptPackReportRecord> {
+    const pack = await this.ctx.storage.promptPacks.getPack(packId);
+    const tests = await this.ctx.storage.promptPacks.listTests(packId, 5000);
+    const runs = await this.ctx.storage.promptPackRuns.listByPack(packId, 10000);
+    const scores = await this.ctx.storage.promptPackScores.listByPack(packId, 10000);
+    const autoScoresV2 = await this.ctx.storage.promptPackAutoScoresV2.listByPack(packId, 10000);
+    const humanReviewsV2 = await this.ctx.storage.promptPackHumanReviewsV2.listByPack(packId, 10000);
     const generation = {
       scoringSchemaVersion: PROMPT_PACK_DEFAULT_SCORING_SCHEMA_VERSION,
       scorerVersion: PROMPT_PACK_V3_SCORER_VERSION,
@@ -1217,10 +1220,10 @@ export class PromptPackService {
     };
   }
 
-  private buildSecurityQualityGate(
+  private async buildSecurityQualityGate(
     pack: PromptPackSecurityEvalPackRecord,
     generatedAt: string,
-  ): PromptPackSecurityQualityGateRecord {
+  ): Promise<PromptPackSecurityQualityGateRecord> {
     const baseEvidence = {
       definitionStatus: pack.status,
       testCount: pack.testCount,
@@ -1247,7 +1250,7 @@ export class PromptPackService {
       ]);
     }
 
-    const report = this.getPromptPackReport(pack.importedPackId);
+    const report = await this.getPromptPackReport(pack.importedPackId);
     const evidence = {
       definitionStatus: pack.status,
       testCount: report.summary.totalTests,
@@ -1296,15 +1299,15 @@ export class PromptPackService {
     return buildSecurityQualityGateRecord(pack, generatedAt, "passed", evidence, []);
   }
 
-  listPromptPackTestReviews(packId: string, testId: string): PromptPackHumanReviewRecordV2[] {
-    const test = this.ctx.storage.promptPacks.getTest(testId);
+  async listPromptPackTestReviews(packId: string, testId: string): Promise<PromptPackHumanReviewRecordV2[]> {
+    const test = await this.ctx.storage.promptPacks.getTest(testId);
     if (test.packId !== packId) {
       throw new Error("Prompt-pack test does not belong to this pack.");
     }
-    return this.ctx.storage.promptPackHumanReviewsV2.listByTest(testId, 500);
+    return await this.ctx.storage.promptPackHumanReviewsV2.listByTest(testId, 500);
   }
 
-  runPromptPackBenchmark(
+  async runPromptPackBenchmark(
     packId: string,
     input: {
       testCodes?: string[];
@@ -1312,9 +1315,9 @@ export class PromptPackService {
       providers: PromptPackBenchmarkProviderInput[];
       executionStyle?: PromptPackExecutionStyle;
     },
-  ): { benchmarkRunId: string } {
-    const pack = this.ctx.storage.promptPacks.getPack(packId);
-    const tests = this.ctx.storage.promptPacks.listTests(pack.packId, 5000);
+  ): Promise<{ benchmarkRunId: string }> {
+    const pack = await this.ctx.storage.promptPacks.getPack(packId);
+    const tests = await this.ctx.storage.promptPacks.listTests(pack.packId, 5000);
     const codeToTest = new Map(tests.map((test) => [test.code.toUpperCase(), test]));
     const normalizedCodes = input.allTests
       ? tests.map((test) => test.code.toUpperCase()).slice(0, PROMPT_PACK_BENCHMARK_MAX_TESTS)
@@ -1333,7 +1336,7 @@ export class PromptPackService {
       selectedTests.push(test);
     }
     for (const test of selectedTests) {
-      this.assertDurablePreflight(resolvePromptPackExecutionProfile({ test }));
+      await this.assertDurablePreflight(resolvePromptPackExecutionProfile({ test }));
     }
 
     const providers = dedupeBenchmarkProviders(input.providers).slice(0, PROMPT_PACK_BENCHMARK_MAX_PROVIDERS);
@@ -1355,8 +1358,8 @@ export class PromptPackService {
     const benchmarkRunId = `ppb-${randomUUID()}`;
     const startedAt = new Date().toISOString();
     const totalItems = selectedTests.length * providers.length;
-    this.ctx.gatewaySql
-      .prepare(
+    await (
+      await this.ctx.storage.db.prepare(
         `
       INSERT INTO prompt_pack_benchmark_runs (
         benchmark_run_id, pack_id, status, test_codes_json, providers_json,
@@ -1369,26 +1372,26 @@ export class PromptPackService {
       )
     `,
       )
-      .run({
-        benchmarkRunId,
-        packId: pack.packId,
-        status: "queued",
-        testCodesJson: JSON.stringify(selectedTests.map((item) => item.code)),
-        providersJson: JSON.stringify(providers),
-        totalItems,
-        completedItems: 0,
-        executionStyle,
-        packContentSha256,
-        policyHash,
-        testSnapshotJson,
-        testSnapshotSha256,
-        scoringSnapshotJson: JSON.stringify(scoringSnapshot),
-        startedAt,
-      });
+    ).run({
+      benchmarkRunId,
+      packId: pack.packId,
+      status: "queued",
+      testCodesJson: JSON.stringify(selectedTests.map((item) => item.code)),
+      providersJson: JSON.stringify(providers),
+      totalItems,
+      completedItems: 0,
+      executionStyle,
+      packContentSha256,
+      policyHash,
+      testSnapshotJson,
+      testSnapshotSha256,
+      scoringSnapshotJson: JSON.stringify(scoringSnapshot),
+      startedAt,
+    });
 
     this.enqueuePromptPackBenchmarkTask(benchmarkRunId);
 
-    this.ctx.publishRealtime("prompt_pack_benchmark_started", "promptLab", {
+    await this.ctx.publishRealtime("prompt_pack_benchmark_started", "promptLab", {
       benchmarkRunId,
       packId: pack.packId,
       totalItems,
@@ -1399,13 +1402,13 @@ export class PromptPackService {
     return { benchmarkRunId };
   }
 
-  getPromptPackBenchmarkStatus(benchmarkRunId: string): PromptPackBenchmarkStatusRecord {
-    this.resumePromptPackBenchmarkRunIfStale(benchmarkRunId);
-    const runRow = this.getPromptPackBenchmarkRunRow(benchmarkRunId);
+  async getPromptPackBenchmarkStatus(benchmarkRunId: string): Promise<PromptPackBenchmarkStatusRecord> {
+    await this.resumePromptPackBenchmarkRunIfStale(benchmarkRunId);
+    const runRow = await this.getPromptPackBenchmarkRunRow(benchmarkRunId);
     if (!runRow) {
       throw new Error(`Prompt-pack benchmark run ${benchmarkRunId} not found.`);
     }
-    const items = this.listPromptPackBenchmarkItems(benchmarkRunId);
+    const items = await this.listPromptPackBenchmarkItems(benchmarkRunId);
     const run = mapPromptPackBenchmarkRunRow(runRow);
     const modelSummaries = summarizePromptPackBenchmarkItems(items);
     return {
@@ -1418,7 +1421,7 @@ export class PromptPackService {
     };
   }
 
-  createPromptRetuneCampaign(
+  async createPromptRetuneCampaign(
     packId: string,
     input: {
       testCodes: string[];
@@ -1428,10 +1431,10 @@ export class PromptPackService {
       maxBenchmarkRuns?: number;
       successBar?: Partial<PromptRetuneSuccessBar>;
     },
-  ): PromptRetuneCampaignRecord {
-    this.ctx.requireFeatureEnabled("promptRetuneCampaignV1Enabled");
-    const pack = this.ctx.storage.promptPacks.getPack(packId);
-    const tests = this.ctx.storage.promptPacks.listTests(packId, 5000);
+  ): Promise<PromptRetuneCampaignRecord> {
+    await this.ctx.requireFeatureEnabled("promptRetuneCampaignV1Enabled");
+    const pack = await this.ctx.storage.promptPacks.getPack(packId);
+    const tests = await this.ctx.storage.promptPacks.listTests(packId, 5000);
     const knownCodes = new Set(tests.map((test) => test.code.toUpperCase()));
     const testCodes = Array.from(new Set(input.testCodes.map((code) => code.trim().toUpperCase()).filter(Boolean)));
     if (testCodes.length < 1 || testCodes.some((code) => !knownCodes.has(code))) {
@@ -1454,7 +1457,7 @@ export class PromptPackService {
     };
     const campaignId = `pprt-${randomUUID()}`;
     const now = new Date().toISOString();
-    this.ctx.storage.promptRetunes.createCampaign({
+    await this.ctx.storage.promptRetunes.createCampaign({
       campaignId,
       packId,
       status: "draft",
@@ -1471,7 +1474,7 @@ export class PromptPackService {
       updatedAt: now,
       passes: [],
     });
-    this.deps.appendAudit?.({
+    await this.deps.appendAudit?.({
       event: "prompt_retune.campaign_created",
       campaignId,
       packId,
@@ -1482,34 +1485,36 @@ export class PromptPackService {
       baselineContentSha256: contentSha256,
       policyHash,
     });
-    return this.getPromptRetuneCampaign(campaignId);
+    return await this.getPromptRetuneCampaign(campaignId);
   }
 
-  listPromptRetuneCampaigns(packId: string): { items: PromptRetuneCampaignRecord[] } {
-    this.ctx.requireFeatureEnabled("promptRetuneCampaignV1Enabled");
-    this.ctx.storage.promptPacks.getPack(packId);
+  async listPromptRetuneCampaigns(packId: string): Promise<{ items: PromptRetuneCampaignRecord[] }> {
+    await this.ctx.requireFeatureEnabled("promptRetuneCampaignV1Enabled");
+    await this.ctx.storage.promptPacks.getPack(packId);
     return {
-      items: this.ctx.storage.promptRetunes
-        .listCampaigns(packId, 100)
-        .map((campaign) => this.refreshAndMapPromptRetuneCampaign(campaign.campaignId)),
+      items: await Promise.all(
+        (await this.ctx.storage.promptRetunes.listCampaigns(packId, 100)).map(
+          async (campaign) => await this.refreshAndMapPromptRetuneCampaign(campaign.campaignId),
+        ),
+      ),
     };
   }
 
-  getPromptRetuneCampaign(campaignId: string): PromptRetuneCampaignRecord {
-    this.ctx.requireFeatureEnabled("promptRetuneCampaignV1Enabled");
-    return this.refreshAndMapPromptRetuneCampaign(campaignId);
+  async getPromptRetuneCampaign(campaignId: string): Promise<PromptRetuneCampaignRecord> {
+    await this.ctx.requireFeatureEnabled("promptRetuneCampaignV1Enabled");
+    return await this.refreshAndMapPromptRetuneCampaign(campaignId);
   }
 
-  startPromptRetuneNoise(campaignId: string): PromptRetuneCampaignRecord {
-    const campaign = this.getPromptRetuneCampaign(campaignId);
+  async startPromptRetuneNoise(campaignId: string): Promise<PromptRetuneCampaignRecord> {
+    const campaign = await this.getPromptRetuneCampaign(campaignId);
     if (campaign.status !== "draft") {
       return campaign;
     }
-    const currentHash = this.resolveCurrentPromptRetuneContentHash(campaign.packId);
+    const currentHash = await this.resolveCurrentPromptRetuneContentHash(campaign.packId);
     if (currentHash !== campaign.baselineContentSha256) {
       throw new Error("Prompt pack changed after campaign registration; create a new campaign.");
     }
-    return this.startPromptRetunePass(campaign, {
+    return await this.startPromptRetunePass(campaign, {
       kind: "noise",
       hypothesis: "A/A null experiment",
       contentSha256: currentHash,
@@ -1517,30 +1522,33 @@ export class PromptPackService {
     });
   }
 
-  startPromptRetuneCandidate(campaignId: string, input: { hypothesis: string }): PromptRetuneCampaignRecord {
-    const campaign = this.getPromptRetuneCampaign(campaignId);
+  async startPromptRetuneCandidate(
+    campaignId: string,
+    input: { hypothesis: string },
+  ): Promise<PromptRetuneCampaignRecord> {
+    const campaign = await this.getPromptRetuneCampaign(campaignId);
     if (campaign.status !== "ready") {
       throw new Error("Retune campaign must finish noise measurement before a candidate pass starts.");
     }
-    const pack = this.ctx.storage.promptPacks.getPack(campaign.packId);
+    const pack = await this.ctx.storage.promptPacks.getPack(campaign.packId);
     const currentPolicyHash = pack.policyHash ?? hashPromptPackPolicyV2(pack.policyV2 ?? DEFAULT_PROMPT_PACK_POLICY_V2);
     if (currentPolicyHash !== campaign.policyHash) {
       throw new Error("Prompt Pack scoring policy drifted after campaign registration; create a new campaign.");
     }
-    return this.startPromptRetunePass(campaign, {
+    return await this.startPromptRetunePass(campaign, {
       kind: "candidate",
       hypothesis: input.hypothesis.trim(),
-      contentSha256: this.resolveCurrentPromptRetuneContentHash(campaign.packId),
+      contentSha256: await this.resolveCurrentPromptRetuneContentHash(campaign.packId),
       status: "running",
     });
   }
 
-  setPromptRetunePassDisposition(
+  async setPromptRetunePassDisposition(
     campaignId: string,
     passId: string,
     input: { disposition: "kept" | "rejected" | "inconclusive"; notes?: string },
-  ): PromptRetuneCampaignRecord {
-    const campaign = this.getPromptRetuneCampaign(campaignId);
+  ): Promise<PromptRetuneCampaignRecord> {
+    const campaign = await this.getPromptRetuneCampaign(campaignId);
     const pass = campaign.passes.find((item) => item.passId === passId);
     if (!pass || pass.kind !== "candidate" || !pass.finishedAt) {
       throw new Error("Only a finished candidate pass can be dispositioned.");
@@ -1549,40 +1557,40 @@ export class PromptPackService {
       throw new Error("Candidate cannot be kept because it did not clear the preregistered success bar.");
     }
     const now = new Date().toISOString();
-    this.ctx.storage.promptRetunes.dispositionCandidate({
+    await this.ctx.storage.promptRetunes.dispositionCandidate({
       campaignId,
       passId,
       disposition: input.disposition,
       notes: input.notes,
       updatedAt: now,
     });
-    this.deps.appendAudit?.({
+    await this.deps.appendAudit?.({
       event: "prompt_retune.pass_dispositioned",
       campaignId,
       passId,
       disposition: input.disposition,
       eligibility: pass.eligibility,
     });
-    return this.getPromptRetuneCampaign(campaignId);
+    return await this.getPromptRetuneCampaign(campaignId);
   }
 
-  cancelPromptRetuneCampaign(campaignId: string): PromptRetuneCampaignRecord {
-    const campaign = this.getPromptRetuneCampaign(campaignId);
+  async cancelPromptRetuneCampaign(campaignId: string): Promise<PromptRetuneCampaignRecord> {
+    const campaign = await this.getPromptRetuneCampaign(campaignId);
     if (["completed", "cancelled", "failed"].includes(campaign.status)) {
       return campaign;
     }
     const active = campaign.passes.find((pass) => pass.passId === campaign.activePassId);
     for (const benchmarkRunId of active?.benchmarkRunIds ?? []) {
-      this.cancelPromptPackBenchmark(benchmarkRunId);
+      await this.cancelPromptPackBenchmark(benchmarkRunId);
     }
     const now = new Date().toISOString();
-    this.ctx.storage.promptRetunes.cancelCampaign(campaignId, now);
-    this.deps.appendAudit?.({ event: "prompt_retune.campaign_cancelled", campaignId });
-    return this.getPromptRetuneCampaign(campaignId);
+    await this.ctx.storage.promptRetunes.cancelCampaign(campaignId, now);
+    await this.deps.appendAudit?.({ event: "prompt_retune.campaign_cancelled", campaignId });
+    return await this.getPromptRetuneCampaign(campaignId);
   }
 
-  private resumePromptPackBenchmarkRunIfStale(benchmarkRunId: string): void {
-    const runRow = this.getPromptPackBenchmarkRunRow(benchmarkRunId);
+  private async resumePromptPackBenchmarkRunIfStale(benchmarkRunId: string): Promise<void> {
+    const runRow = await this.getPromptPackBenchmarkRunRow(benchmarkRunId);
     if (!runRow || (runRow.status !== "queued" && runRow.status !== "running")) {
       return;
     }
@@ -1594,8 +1602,8 @@ export class PromptPackService {
     this.enqueuePromptPackBenchmarkTask(benchmarkRunId);
   }
 
-  cancelPromptPackBenchmark(benchmarkRunId: string): PromptPackBenchmarkStatusRecord {
-    const status = this.getPromptPackBenchmarkStatus(benchmarkRunId);
+  async cancelPromptPackBenchmark(benchmarkRunId: string): Promise<PromptPackBenchmarkStatusRecord> {
+    const status = await this.getPromptPackBenchmarkStatus(benchmarkRunId);
     if (status.run.status === "completed" || status.run.status === "failed" || status.run.status === "cancelled") {
       return status;
     }
@@ -1605,7 +1613,7 @@ export class PromptPackService {
       .get(benchmarkRunId)
       ?.abort(new Error(`Prompt-pack benchmark ${benchmarkRunId} was cancelled by operator.`));
     const finishedAt = new Date().toISOString();
-    const updateResult = this.ctx.gatewaySql
+    const updateResult = await this.ctx.storage.db
       .prepare(
         `
       UPDATE prompt_pack_benchmark_runs
@@ -1626,23 +1634,23 @@ export class PromptPackService {
         finishedAt,
       });
 
-    const cancelled = this.getPromptPackBenchmarkStatus(benchmarkRunId);
+    const cancelled = await this.getPromptPackBenchmarkStatus(benchmarkRunId);
     if (Number(updateResult.changes ?? 0) < 1) {
       this.cancelledBenchmarkRunIds.delete(benchmarkRunId);
       return cancelled;
     }
-    this.ctx.publishRealtime("prompt_pack_benchmark_cancelled", "promptLab", {
+    await this.ctx.publishRealtime("prompt_pack_benchmark_cancelled", "promptLab", {
       benchmarkRunId,
       completedItems: cancelled.progress.completedItems,
     });
     return cancelled;
   }
 
-  resumeInterruptedBenchmarkRuns(): number {
+  async resumeInterruptedBenchmarkRuns(): Promise<number> {
     const now = new Date().toISOString();
     const rows = toPromptPackBenchmarkRunRows(
-      this.ctx.gatewaySql
-        .prepare(
+      await (
+        await this.ctx.storage.db.prepare(
           `
       SELECT *
       FROM prompt_pack_benchmark_runs
@@ -1655,7 +1663,7 @@ export class PromptPackService {
       ORDER BY started_at ASC
     `,
         )
-        .all({ now }),
+      ).all({ now }),
     );
     for (const row of rows) {
       this.enqueuePromptPackBenchmarkTask(row.benchmark_run_id);
@@ -1663,17 +1671,17 @@ export class PromptPackService {
     return rows.length;
   }
 
-  runPromptPackReplayRegression(
+  async runPromptPackReplayRegression(
     packId: string,
     input: {
       testCodes: string[];
       baselineRef?: string;
       baselineBenchmarkRunId?: string;
     },
-  ): { regressionRunId: string } {
-    this.ctx.requireFeatureEnabled("replayRegressionV1Enabled");
-    const pack = this.ctx.storage.promptPacks.getPack(packId);
-    const tests = this.ctx.storage.promptPacks.listTests(pack.packId, 5000);
+  ): Promise<{ regressionRunId: string }> {
+    await this.ctx.requireFeatureEnabled("replayRegressionV1Enabled");
+    const pack = await this.ctx.storage.promptPacks.getPack(packId);
+    const tests = await this.ctx.storage.promptPacks.listTests(pack.packId, 5000);
     const byCode = new Map(tests.map((test) => [test.code.toUpperCase(), test]));
     const selectedCodes = Array.from(
       new Set((input.testCodes ?? []).map((code) => code.trim().toUpperCase()).filter(Boolean)),
@@ -1693,7 +1701,7 @@ export class PromptPackService {
       throw new Error("baselineRef must be an ISO timestamp.");
     }
     const baselineBenchmark = input.baselineBenchmarkRunId
-      ? this.getPromptPackBenchmarkStatus(input.baselineBenchmarkRunId)
+      ? await this.getPromptPackBenchmarkStatus(input.baselineBenchmarkRunId)
       : undefined;
     if (baselineBenchmark && baselineBenchmark.run.packId !== packId) {
       throw new Error("baselineBenchmarkRunId must belong to the same prompt pack.");
@@ -1702,12 +1710,12 @@ export class PromptPackService {
       throw new Error("baselineBenchmarkRunId must reference a completed benchmark.");
     }
     const baselineBenchmarkItems = baselineBenchmark
-      ? this.listPromptPackBenchmarkItems(baselineBenchmark.run.benchmarkRunId)
+      ? await this.listPromptPackBenchmarkItems(baselineBenchmark.run.benchmarkRunId)
       : [];
     const regressionRunId = `ppr-${randomUUID()}`;
     const now = new Date().toISOString();
-    this.ctx.gatewaySql
-      .prepare(
+    await (
+      await this.ctx.storage.db.prepare(
         `
       INSERT INTO replay_regression_runs (
         regression_run_id, pack_id, status, test_codes_json, baseline_ref, baseline_benchmark_run_id,
@@ -1718,21 +1726,21 @@ export class PromptPackService {
       )
     `,
       )
-      .run({
-        regressionRunId,
-        packId,
-        testCodesJson: JSON.stringify(selectedCodes),
-        baselineRef: input.baselineRef ?? null,
-        baselineBenchmarkRunId: input.baselineBenchmarkRunId ?? null,
-        summaryJson: JSON.stringify({}),
-        startedAt: now,
-      });
+    ).run({
+      regressionRunId,
+      packId,
+      testCodesJson: JSON.stringify(selectedCodes),
+      baselineRef: input.baselineRef ?? null,
+      baselineBenchmarkRunId: input.baselineBenchmarkRunId ?? null,
+      summaryJson: JSON.stringify({}),
+      startedAt: now,
+    });
 
     const runById = new Map(
-      this.ctx.storage.promptPackRuns.listByPack(packId, 10_000).map((run) => [run.runId, run] as const),
+      (await this.ctx.storage.promptPackRuns.listByPack(packId, 10_000)).map((run) => [run.runId, run] as const),
     );
     const scoresByTest = new Map<string, PromptPackScoreRecord[]>();
-    for (const score of this.ctx.storage.promptPackScores.listByPack(packId, 10_000)) {
+    for (const score of await this.ctx.storage.promptPackScores.listByPack(packId, 10_000)) {
       const list = scoresByTest.get(score.testId) ?? [];
       list.push(score);
       scoresByTest.set(score.testId, list);
@@ -1741,7 +1749,7 @@ export class PromptPackService {
       list.sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
     }
 
-    const insertResult = this.ctx.gatewaySql.prepare(`
+    const insertResult = this.ctx.storage.db.prepare(`
       INSERT INTO replay_regression_results (
         result_id, regression_run_id, test_code, capability, score_delta, pass_delta, latency_delta_ms, created_at
       ) VALUES (
@@ -1776,7 +1784,7 @@ export class PromptPackService {
         continue;
       }
       const baselineScore = benchmarkItem?.scoreId
-        ? this.ctx.storage.promptPackScores.get(benchmarkItem.scoreId)
+        ? await this.ctx.storage.promptPackScores.get(benchmarkItem.scoreId)
         : pickReplayBaselineScore(scoredRuns, currentScore, input.baselineRef);
       if (!baselineScore) {
         omittedTests.push(`${test.code}:no_baseline`);
@@ -1798,7 +1806,7 @@ export class PromptPackService {
         { capability: "usability", scoreDelta: currentScore.usabilityScore - baselineScore.usabilityScore },
       ];
       for (const entry of capabilities) {
-        insertResult.run({
+        await insertResult.run({
           resultId: `pprr-${randomUUID()}`,
           regressionRunId,
           testCode: test.code,
@@ -1812,8 +1820,8 @@ export class PromptPackService {
       }
     }
 
-    this.ctx.gatewaySql
-      .prepare(
+    await (
+      await this.ctx.storage.db.prepare(
         `
       UPDATE replay_regression_runs
       SET status = 'completed',
@@ -1822,24 +1830,24 @@ export class PromptPackService {
       WHERE regression_run_id = @regressionRunId
     `,
       )
-      .run({
-        regressionRunId,
-        summaryJson: JSON.stringify({
-          totalTests: selectedCodes.length,
-          comparedTests: resultRows / PROMPT_PACK_CAPABILITY_KEYS.length,
-          omittedTests,
-          resultRows,
-        }),
-        finishedAt: new Date().toISOString(),
-      });
-    this.ctx.publishRealtime("prompt_pack_regression_completed", "promptLab", {
+    ).run({
+      regressionRunId,
+      summaryJson: JSON.stringify({
+        totalTests: selectedCodes.length,
+        comparedTests: resultRows / PROMPT_PACK_CAPABILITY_KEYS.length,
+        omittedTests,
+        resultRows,
+      }),
+      finishedAt: new Date().toISOString(),
+    });
+    await this.ctx.publishRealtime("prompt_pack_regression_completed", "promptLab", {
       regressionRunId,
       packId,
       testCodes: selectedCodes,
     });
-    const regressionStatus = this.getPromptPackReplayRegressionStatus(regressionRunId);
+    const regressionStatus = await this.getPromptPackReplayRegressionStatus(regressionRunId);
     for (const result of regressionStatus.results) {
-      this.deps.recordImprovementRegressionSignal?.({
+      await this.deps.recordImprovementRegressionSignal?.({
         regressionRunId,
         packId,
         baselineRef: input.baselineRef,
@@ -1852,12 +1860,12 @@ export class PromptPackService {
     return { regressionRunId };
   }
 
-  getPromptPackReplayRegressionStatus(runId: string): {
+  async getPromptPackReplayRegressionStatus(runId: string): Promise<{
     run: ReplayRegressionRun;
     results: ReplayRegressionResult[];
-  } {
-    this.ctx.requireFeatureEnabled("replayRegressionV1Enabled");
-    const row = this.ctx.gatewaySql
+  }> {
+    await this.ctx.requireFeatureEnabled("replayRegressionV1Enabled");
+    const row = await this.ctx.storage.db
       .prepare(
         `
       SELECT regression_run_id, pack_id, status, test_codes_json, baseline_ref, baseline_benchmark_run_id,
@@ -1866,23 +1874,21 @@ export class PromptPackService {
       WHERE regression_run_id = ?
     `,
       )
-      .get(runId) as
-      | {
-          regression_run_id: string;
-          pack_id: string;
-          status: ReplayRegressionRun["status"];
-          test_codes_json: string;
-          baseline_ref: string | null;
-          baseline_benchmark_run_id: string | null;
-          started_at: string;
-          finished_at: string | null;
-          error_text: string | null;
-        }
-      | undefined;
+      .get<{
+        regression_run_id: string;
+        pack_id: string;
+        status: ReplayRegressionRun["status"];
+        test_codes_json: string;
+        baseline_ref: string | null;
+        baseline_benchmark_run_id: string | null;
+        started_at: string;
+        finished_at: string | null;
+        error_text: string | null;
+      }>(runId);
     if (!row) {
       throw new Error(`Replay regression run not found: ${runId}`);
     }
-    const resultRows = this.ctx.gatewaySql
+    const resultRows = await this.ctx.storage.db
       .prepare(
         `
       SELECT result_id, regression_run_id, test_code, capability, score_delta, pass_delta, latency_delta_ms, created_at
@@ -1891,16 +1897,16 @@ export class PromptPackService {
       ORDER BY created_at ASC
     `,
       )
-      .all(runId) as Array<{
-      result_id: string;
-      regression_run_id: string;
-      test_code: string;
-      capability: ReplayRegressionResult["capability"];
-      score_delta: number;
-      pass_delta: number;
-      latency_delta_ms: number;
-      created_at: string;
-    }>;
+      .all<{
+        result_id: string;
+        regression_run_id: string;
+        test_code: string;
+        capability: ReplayRegressionResult["capability"];
+        score_delta: number;
+        pass_delta: number;
+        latency_delta_ms: number;
+        created_at: string;
+      }>(runId);
     return {
       run: {
         regressionRunId: row.regression_run_id,
@@ -1926,12 +1932,12 @@ export class PromptPackService {
     };
   }
 
-  getPromptPackCapabilityTrends(packId: string): { items: CapabilityTrendSeries[] } {
-    this.ctx.storage.promptPacks.getPack(packId);
-    const scores = [...this.ctx.storage.promptPackAutoScoresV2.listByPack(packId, 10_000)].sort(
+  async getPromptPackCapabilityTrends(packId: string): Promise<{ items: CapabilityTrendSeries[] }> {
+    await this.ctx.storage.promptPacks.getPack(packId);
+    const scores = [...(await this.ctx.storage.promptPackAutoScoresV2.listByPack(packId, 10_000))].sort(
       (left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt),
     );
-    const runs = [...this.ctx.storage.promptPackRuns.listByPack(packId, 10_000)].sort((left, right) => {
+    const runs = [...(await this.ctx.storage.promptPackRuns.listByPack(packId, 10_000))].sort((left, right) => {
       const leftStamp = Date.parse(left.finishedAt ?? left.startedAt);
       const rightStamp = Date.parse(right.finishedAt ?? right.startedAt);
       return leftStamp - rightStamp;
@@ -1992,39 +1998,44 @@ export class PromptPackService {
     };
   }
 
-  getPromptPackExport(packId: string, format: PromptPackExportFormat = "goatcitadel"): PromptPackExportRecord {
-    const pack = this.ctx.storage.promptPacks.getPack(packId);
+  async getPromptPackExport(
+    packId: string,
+    format: PromptPackExportFormat = "goatcitadel",
+  ): Promise<PromptPackExportRecord> {
+    const pack = await this.ctx.storage.promptPacks.getPack(packId);
     if (format === "promptfoo") {
-      return this.readPromptPackPromptfooExportRecord(pack);
+      return await this.readPromptPackPromptfooExportRecord(pack);
     }
     return this.readPromptPackExportRecord(pack);
   }
 
-  exportPromptPack(
+  async exportPromptPack(
     packId: string,
     options: PromptPackExportFormat | { format?: PromptPackExportFormat; createSnapshot?: boolean } = {},
-  ): PromptPackExportRecord {
-    this.ctx.storage.promptPacks.getPack(packId);
+  ): Promise<PromptPackExportRecord> {
+    await this.ctx.storage.promptPacks.getPack(packId);
     const normalized = typeof options === "string" ? { format: options } : options;
     if (normalized.format === "promptfoo") {
-      return this.refreshPromptPackPromptfooExportFile(packId, { createSnapshot: normalized.createSnapshot ?? true });
+      return await this.refreshPromptPackPromptfooExportFile(packId, {
+        createSnapshot: normalized.createSnapshot ?? true,
+      });
     }
-    return this.refreshPromptPackExportFile(packId, { createSnapshot: normalized.createSnapshot ?? true });
+    return await this.refreshPromptPackExportFile(packId, { createSnapshot: normalized.createSnapshot ?? true });
   }
 
-  resetPromptPackRunsAndScores(
+  async resetPromptPackRunsAndScores(
     packId: string,
     options: {
       clearRuns?: boolean;
       clearScores?: boolean;
     } = {},
-  ): {
+  ): Promise<{
     packId: string;
     deletedRuns: number;
     deletedScores: number;
     export: PromptPackExportRecord;
-  } {
-    const pack = this.ctx.storage.promptPacks.getPack(packId);
+  }> {
+    const pack = await this.ctx.storage.promptPacks.getPack(packId);
     const clearRuns = options.clearRuns ?? true;
     const clearScores = options.clearScores ?? true;
     if (!clearRuns && !clearScores) {
@@ -2038,15 +2049,15 @@ export class PromptPackService {
 
     let deletedRuns = 0;
     let deletedScores = 0;
-    this.ctx.gatewaySql.runImmediateTransaction(() => {
+    await this.ctx.storage.runImmediateTransaction(async () => {
       if (clearScores) {
         deletedScores =
-          this.ctx.storage.promptPackScores.deleteByPack(packId) +
-          this.ctx.storage.promptPackAutoScoresV2.deleteByPack(packId) +
-          this.ctx.storage.promptPackHumanReviewsV2.deleteByPack(packId);
+          (await this.ctx.storage.promptPackScores.deleteByPack(packId)) +
+          (await this.ctx.storage.promptPackAutoScoresV2.deleteByPack(packId)) +
+          (await this.ctx.storage.promptPackHumanReviewsV2.deleteByPack(packId));
       }
       if (clearRuns) {
-        deletedRuns = this.ctx.storage.promptPackRuns.deleteByPack(packId);
+        deletedRuns = await this.ctx.storage.promptPackRuns.deleteByPack(packId);
       }
     });
     const exportPath = this.resolvePromptPackExportPath(pack);
@@ -2057,7 +2068,7 @@ export class PromptPackService {
         // no-op
       }
     } else if (clearScores) {
-      this.refreshPromptPackExportFileBestEffort(packId, "reset_prompt_pack_runs_and_scores");
+      await this.refreshPromptPackExportFileBestEffort(packId, "reset_prompt_pack_runs_and_scores");
     }
 
     return {
@@ -2074,11 +2085,11 @@ export class PromptPackService {
     if (!pack) {
       throw new Error("No prompt pack available. Import a pack first.");
     }
-    const tests = this.ctx.storage.promptPacks.listTests(pack.packId, 5000);
+    const tests = await this.ctx.storage.promptPacks.listTests(pack.packId, 5000);
     if (tests.length === 0) {
       throw new Error("Prompt pack has no tests.");
     }
-    const defaults = this.deps.getPromptRunnerModelDefaults();
+    const defaults = await this.deps.getPromptRunnerModelDefaults();
     const selectedTests =
       selector === "all" ? tests : tests.filter((test) => test.code.toUpperCase() === selector.toUpperCase());
     if (selectedTests.length === 0) {
@@ -2100,7 +2111,7 @@ export class PromptPackService {
 
   /** Ensures at least one prompt pack is loaded (from env path or defaults). */
   async ensurePromptPackLoaded(): Promise<PromptPackRecord | undefined> {
-    const existing = this.ctx.storage.promptPacks.listPacks(20);
+    const existing = await this.ctx.storage.promptPacks.listPacks(20);
     if (existing.length > 0) {
       return existing[0];
     }
@@ -2110,7 +2121,7 @@ export class PromptPackService {
     }
     try {
       const markdown = await fs.readFile(sourcePath, "utf8");
-      const imported = this.importPromptPack({
+      const imported = await this.importPromptPack({
         content: markdown,
         sourceLabel: sourcePath,
       });
@@ -2126,7 +2137,7 @@ export class PromptPackService {
 
   // ── private helpers ────────────────────────────────────────────────
 
-  private startPromptRetunePass(
+  private async startPromptRetunePass(
     campaign: PromptRetuneCampaignRecord,
     input: {
       kind: PromptRetunePassRecord["kind"];
@@ -2134,7 +2145,7 @@ export class PromptPackService {
       contentSha256: string;
       status: PromptRetuneCampaignRecord["status"];
     },
-  ): PromptRetuneCampaignRecord {
+  ): Promise<PromptRetuneCampaignRecord> {
     if (!input.hypothesis) {
       throw new Error("Retune pass requires a hypothesis.");
     }
@@ -2147,7 +2158,7 @@ export class PromptPackService {
     }
     const passId = `pprtp-${randomUUID()}`;
     const now = new Date().toISOString();
-    this.ctx.storage.promptRetunes.createPassAndActivate(
+    await this.ctx.storage.promptRetunes.createPassAndActivate(
       {
         passId,
         campaignId: campaign.campaignId,
@@ -2160,7 +2171,7 @@ export class PromptPackService {
       },
       input.status,
     );
-    this.deps.appendAudit?.({
+    await this.deps.appendAudit?.({
       event: "prompt_retune.pass_started",
       campaignId: campaign.campaignId,
       passId,
@@ -2174,27 +2185,29 @@ export class PromptPackService {
     try {
       for (let index = 0; index < campaign.repeatCount; index += 1) {
         benchmarkRunIds.push(
-          this.runPromptPackBenchmark(campaign.packId, {
-            testCodes: campaign.testCodes,
-            providers: campaign.providers,
-            executionStyle: campaign.executionStyle,
-          }).benchmarkRunId,
+          (
+            await this.runPromptPackBenchmark(campaign.packId, {
+              testCodes: campaign.testCodes,
+              providers: campaign.providers,
+              executionStyle: campaign.executionStyle,
+            })
+          ).benchmarkRunId,
         );
       }
-      this.ctx.storage.promptRetunes.setPassBenchmarkRunIds(passId, benchmarkRunIds);
+      await this.ctx.storage.promptRetunes.setPassBenchmarkRunIds(passId, benchmarkRunIds);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       for (const benchmarkRunId of benchmarkRunIds) {
-        this.cancelPromptPackBenchmark(benchmarkRunId);
+        await this.cancelPromptPackBenchmark(benchmarkRunId);
       }
-      this.ctx.storage.promptRetunes.failPassAndCampaign({
+      await this.ctx.storage.promptRetunes.failPassAndCampaign({
         campaignId: campaign.campaignId,
         passId,
         benchmarkRunIds,
         error: message,
         finishedAt: now,
       });
-      this.deps.appendAudit?.({
+      await this.deps.appendAudit?.({
         event: "prompt_retune.campaign_failed",
         campaignId: campaign.campaignId,
         passId,
@@ -2202,11 +2215,11 @@ export class PromptPackService {
         benchmarkRunIds,
       });
     }
-    return this.refreshAndMapPromptRetuneCampaign(campaign.campaignId);
+    return await this.refreshAndMapPromptRetuneCampaign(campaign.campaignId);
   }
 
-  private refreshAndMapPromptRetuneCampaign(campaignId: string): PromptRetuneCampaignRecord {
-    const campaign = this.ctx.storage.promptRetunes.getCampaign(campaignId);
+  private async refreshAndMapPromptRetuneCampaign(campaignId: string): Promise<PromptRetuneCampaignRecord> {
+    const campaign = await this.ctx.storage.promptRetunes.getCampaign(campaignId);
     if (!campaign) {
       throw new Error(`Prompt retune campaign not found: ${campaignId}`);
     }
@@ -2221,44 +2234,48 @@ export class PromptPackService {
     if (benchmarkRunIds.length !== campaign.repeatCount) {
       return campaign;
     }
-    const statuses = benchmarkRunIds.map((runId) => this.getPromptPackBenchmarkStatus(runId));
+    const statuses = await Promise.all(
+      benchmarkRunIds.map(async (runId) => await this.getPromptPackBenchmarkStatus(runId)),
+    );
     const failed = statuses.find((status) => status.run.status === "failed" || status.run.status === "cancelled");
     if (failed) {
       const now = new Date().toISOString();
       const message = failed.run.error ?? `Benchmark ${failed.run.benchmarkRunId} did not complete.`;
-      this.ctx.storage.promptRetunes.failPassAndCampaign({
+      await this.ctx.storage.promptRetunes.failPassAndCampaign({
         campaignId,
         passId: pass.passId,
         benchmarkRunIds,
         error: message,
         finishedAt: now,
       });
-      this.deps.appendAudit?.({
+      await this.deps.appendAudit?.({
         event: "prompt_retune.campaign_failed",
         campaignId,
         passId: pass.passId,
         error: message,
         benchmarkRunIds,
       });
-      return this.ctx.storage.promptRetunes.getCampaign(campaignId)!;
+      return (await this.ctx.storage.promptRetunes.getCampaign(campaignId))!;
     }
     if (statuses.some((status) => status.run.status !== "completed")) {
       return campaign;
     }
 
-    const metricsByRun = statuses.map((status) => this.calculatePromptRetuneBenchmarkMetrics(status));
+    const metricsByRun = await Promise.all(
+      statuses.map(async (status) => await this.calculatePromptRetuneBenchmarkMetrics(status)),
+    );
     const metrics = averagePromptRetuneMetrics(metricsByRun);
     const now = new Date().toISOString();
     if (pass.kind === "noise") {
       const noiseFloor = calculatePromptRetuneNoiseFloor(metricsByRun);
-      this.ctx.storage.promptRetunes.completeNoise({
+      await this.ctx.storage.promptRetunes.completeNoise({
         campaignId,
         passId: pass.passId,
         metrics,
         noiseFloor,
         finishedAt: now,
       });
-      this.deps.appendAudit?.({
+      await this.deps.appendAudit?.({
         event: "prompt_retune.noise_measured",
         campaignId,
         passId: pass.passId,
@@ -2275,14 +2292,14 @@ export class PromptPackService {
         noiseFloor: campaign.noiseFloor,
         successBar: campaign.successBar,
       });
-      this.ctx.storage.promptRetunes.completeCandidate({
+      await this.ctx.storage.promptRetunes.completeCandidate({
         campaignId,
         passId: pass.passId,
         metrics,
         eligibility,
         finishedAt: now,
       });
-      this.deps.appendAudit?.({
+      await this.deps.appendAudit?.({
         event: "prompt_retune.candidate_measured",
         campaignId,
         passId: pass.passId,
@@ -2291,14 +2308,18 @@ export class PromptPackService {
         benchmarkRunIds,
       });
     }
-    return this.ctx.storage.promptRetunes.getCampaign(campaignId)!;
+    return (await this.ctx.storage.promptRetunes.getCampaign(campaignId))!;
   }
 
-  private calculatePromptRetuneBenchmarkMetrics(status: PromptPackBenchmarkStatusRecord): PromptRetuneMetrics {
-    const items = this.listPromptPackBenchmarkItems(status.run.benchmarkRunId);
+  private async calculatePromptRetuneBenchmarkMetrics(
+    status: PromptPackBenchmarkStatusRecord,
+  ): Promise<PromptRetuneMetrics> {
+    const items = await this.listPromptPackBenchmarkItems(status.run.benchmarkRunId);
     const scored = items.filter((item) => typeof item.weightedScore === "number");
     const runById = new Map(
-      this.ctx.storage.promptPackRuns.listByPack(status.run.packId, 10_000).map((run) => [run.runId, run] as const),
+      (await this.ctx.storage.promptPackRuns.listByPack(status.run.packId, 10_000)).map(
+        (run) => [run.runId, run] as const,
+      ),
     );
     const latencies = items
       .map((item) => (item.runId ? runById.get(item.runId) : undefined))
@@ -2315,21 +2336,21 @@ export class PromptPackService {
     };
   }
 
-  private resolveCurrentPromptRetuneContentHash(packId: string): string {
+  private async resolveCurrentPromptRetuneContentHash(packId: string): Promise<string> {
     return resolvePromptPackContentSha256(
-      this.ctx.storage.promptPacks.getPack(packId),
-      this.ctx.storage.promptPacks.listTests(packId, 5000),
+      await this.ctx.storage.promptPacks.getPack(packId),
+      await this.ctx.storage.promptPacks.listTests(packId, 5000),
     );
   }
 
   private async runPromptPackBenchmarkTask(benchmarkRunId: string, signal?: AbortSignal): Promise<void> {
     throwIfPromptPackBenchmarkAborted(signal ?? new AbortController().signal, benchmarkRunId);
-    const claimedRow = this.claimPromptPackBenchmarkRun(benchmarkRunId);
+    const claimedRow = await this.claimPromptPackBenchmarkRun(benchmarkRunId);
     if (!claimedRow) {
       return;
     }
     const run = mapPromptPackBenchmarkRunRow(claimedRow);
-    const existingItems = this.listPromptPackBenchmarkItems(benchmarkRunId);
+    const existingItems = await this.listPromptPackBenchmarkItems(benchmarkRunId);
     const completedKeys = new Set(
       existingItems.map((item) => `${item.providerId}::${item.model}::${item.testCode.toUpperCase()}`),
     );
@@ -2339,12 +2360,12 @@ export class PromptPackService {
     await this.executeWithBenchmarkClaimHeartbeat(benchmarkRunId, async (claimSignal) => {
       const executionSignal = signal ? AbortSignal.any([signal, claimSignal]) : claimSignal;
       throwIfPromptPackBenchmarkAborted(executionSignal, benchmarkRunId);
-      if (!this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId)) {
+      if (!(await this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId))) {
         return;
       }
 
       const snapshottedTests = parsePromptPackTestSnapshot(claimedRow.test_snapshot_json);
-      const tests = snapshottedTests ?? this.ctx.storage.promptPacks.listTests(run.packId, 5000);
+      const tests = snapshottedTests ?? (await this.ctx.storage.promptPacks.listTests(run.packId, 5000));
       const codeToTest = new Map(tests.map((test) => [test.code.toUpperCase(), test]));
       const selectedTests = run.testCodes
         .map((code) => codeToTest.get(code.toUpperCase()))
@@ -2374,8 +2395,8 @@ export class PromptPackService {
             return;
           }
           throwIfPromptPackBenchmarkAborted(executionSignal, benchmarkRunId);
-          this.assertPromptPackBenchmarkOwnership(benchmarkRunId);
-          if (!this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId)) {
+          await this.assertPromptPackBenchmarkOwnership(benchmarkRunId);
+          if (!(await this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId))) {
             stopBenchmark = true;
             return;
           }
@@ -2392,8 +2413,8 @@ export class PromptPackService {
               executionStyle: run.executionStyle,
             });
             throwIfPromptPackBenchmarkAborted(executionSignal, benchmarkRunId);
-            this.assertPromptPackBenchmarkOwnership(benchmarkRunId);
-            if (!this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId)) {
+            await this.assertPromptPackBenchmarkOwnership(benchmarkRunId);
+            if (!(await this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId))) {
               stopBenchmark = true;
               return;
             }
@@ -2408,12 +2429,12 @@ export class PromptPackService {
           }
 
           throwIfPromptPackBenchmarkAborted(executionSignal, benchmarkRunId);
-          this.assertPromptPackBenchmarkOwnership(benchmarkRunId);
-          if (!this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId)) {
+          await this.assertPromptPackBenchmarkOwnership(benchmarkRunId);
+          if (!(await this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId))) {
             stopBenchmark = true;
             return;
           }
-          this.upsertPromptPackBenchmarkItem({
+          await this.upsertPromptPackBenchmarkItem({
             benchmarkRunId,
             packId: run.packId,
             testId: test.testId,
@@ -2428,8 +2449,8 @@ export class PromptPackService {
 
           completedKeys.add(itemKey);
           completedItems += 1;
-          this.updatePromptPackBenchmarkProgress(benchmarkRunId, completedItems);
-          if (!this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId)) {
+          await this.updatePromptPackBenchmarkProgress(benchmarkRunId, completedItems);
+          if (!(await this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId))) {
             stopBenchmark = true;
           }
         },
@@ -2438,7 +2459,7 @@ export class PromptPackService {
         return;
       }
 
-      const itemsToScore = this.listPromptPackBenchmarkItems(benchmarkRunId).filter(
+      const itemsToScore = (await this.listPromptPackBenchmarkItems(benchmarkRunId)).filter(
         (item) => item.runStatus === "completed" && item.runId && !item.autoScoreId,
       );
       await runPromptPackBenchmarkItemsWithConcurrency(
@@ -2449,8 +2470,8 @@ export class PromptPackService {
             return;
           }
           throwIfPromptPackBenchmarkAborted(executionSignal, benchmarkRunId);
-          this.assertPromptPackBenchmarkOwnership(benchmarkRunId);
-          if (!this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId)) {
+          await this.assertPromptPackBenchmarkOwnership(benchmarkRunId);
+          if (!(await this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId))) {
             stopBenchmark = true;
             return;
           }
@@ -2485,12 +2506,12 @@ export class PromptPackService {
             failureSignal = `score_error: ${error instanceof Error ? error.message : String(error)}`;
           }
           throwIfPromptPackBenchmarkAborted(executionSignal, benchmarkRunId);
-          this.assertPromptPackBenchmarkOwnership(benchmarkRunId);
-          if (!this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId)) {
+          await this.assertPromptPackBenchmarkOwnership(benchmarkRunId);
+          if (!(await this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId))) {
             stopBenchmark = true;
             return;
           }
-          this.upsertPromptPackBenchmarkItem({
+          await this.upsertPromptPackBenchmarkItem({
             benchmarkRunId,
             packId: run.packId,
             testId: item.testId,
@@ -2515,12 +2536,12 @@ export class PromptPackService {
       }
 
       throwIfPromptPackBenchmarkAborted(executionSignal, benchmarkRunId);
-      if (!this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId)) {
+      if (!(await this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId))) {
         return;
       }
 
       const finishedAt = new Date().toISOString();
-      const completed = this.ctx.gatewaySql
+      const completed = await this.ctx.storage.db
         .prepare(
           `
         UPDATE prompt_pack_benchmark_runs
@@ -2543,9 +2564,9 @@ export class PromptPackService {
       if (Number(completed.changes ?? 0) < 1) {
         return;
       }
-      const finalBenchmarkStatus = this.getPromptPackBenchmarkStatus(benchmarkRunId);
+      const finalBenchmarkStatus = await this.getPromptPackBenchmarkStatus(benchmarkRunId);
       for (const summary of finalBenchmarkStatus.modelSummaries) {
-        this.deps.recordImprovementBenchmarkSignal?.({
+        await this.deps.recordImprovementBenchmarkSignal?.({
           benchmarkRunId,
           packId: run.packId,
           providerId: summary.providerId,
@@ -2556,22 +2577,22 @@ export class PromptPackService {
           failureSignal: summary.topFailureSignals[0]?.signal,
         });
       }
-      this.ctx.publishRealtime("prompt_pack_benchmark_completed", "promptLab", {
+      await this.ctx.publishRealtime("prompt_pack_benchmark_completed", "promptLab", {
         benchmarkRunId,
         completedItems,
       });
     });
   }
 
-  private claimPromptPackBenchmarkRun(benchmarkRunId: string): PromptPackBenchmarkRunRow | undefined {
+  private async claimPromptPackBenchmarkRun(benchmarkRunId: string): Promise<PromptPackBenchmarkRunRow | undefined> {
     const now = new Date().toISOString();
     const leaseExpiresAt = new Date(Date.now() + PROMPT_PACK_BENCHMARK_CLAIM_TTL_MS).toISOString();
-    const current = this.getPromptPackBenchmarkRunRow(benchmarkRunId);
+    const current = await this.getPromptPackBenchmarkRunRow(benchmarkRunId);
     if (!current || current.status === "completed" || current.status === "failed" || current.status === "cancelled") {
       return undefined;
     }
-    const completedItems = this.listPromptPackBenchmarkItems(benchmarkRunId).length;
-    const claimed = this.ctx.gatewaySql
+    const completedItems = (await this.listPromptPackBenchmarkItems(benchmarkRunId)).length;
+    const claimed = await this.ctx.storage.db
       .prepare(
         `
       UPDATE prompt_pack_benchmark_runs
@@ -2602,13 +2623,13 @@ export class PromptPackService {
     if (Number(claimed.changes ?? 0) < 1) {
       return undefined;
     }
-    return this.getPromptPackBenchmarkRunRow(benchmarkRunId);
+    return await this.getPromptPackBenchmarkRunRow(benchmarkRunId);
   }
 
-  private renewPromptPackBenchmarkClaim(benchmarkRunId: string): boolean {
+  private async renewPromptPackBenchmarkClaim(benchmarkRunId: string): Promise<boolean> {
     const now = new Date().toISOString();
     const leaseExpiresAt = new Date(Date.now() + PROMPT_PACK_BENCHMARK_CLAIM_TTL_MS).toISOString();
-    const renewed = this.ctx.gatewaySql
+    const renewed = await this.ctx.storage.db
       .prepare(
         `
       UPDATE prompt_pack_benchmark_runs
@@ -2627,8 +2648,8 @@ export class PromptPackService {
     return Number(renewed.changes ?? 0) > 0;
   }
 
-  private assertPromptPackBenchmarkOwnership(benchmarkRunId: string): void {
-    if (!this.renewPromptPackBenchmarkClaim(benchmarkRunId)) {
+  private async assertPromptPackBenchmarkOwnership(benchmarkRunId: string): Promise<void> {
+    if (!(await this.renewPromptPackBenchmarkClaim(benchmarkRunId))) {
       throw new Error(`Prompt-pack benchmark ${benchmarkRunId} lost worker ownership.`);
     }
   }
@@ -2645,15 +2666,15 @@ export class PromptPackService {
     const heartbeatFailure = new Promise<never>((_, reject) => {
       rejectHeartbeatFailure = reject;
     });
-    const heartbeat = () => {
+    const heartbeat = async () => {
       if (!active) {
         return;
       }
       try {
-        if (this.isPromptPackBenchmarkCancelled(benchmarkRunId)) {
+        if (await this.isPromptPackBenchmarkCancelled(benchmarkRunId)) {
           throw new Error(`Prompt-pack benchmark ${benchmarkRunId} was cancelled.`);
         }
-        if (!this.renewPromptPackBenchmarkClaim(benchmarkRunId)) {
+        if (!(await this.renewPromptPackBenchmarkClaim(benchmarkRunId))) {
           throw new Error(`Prompt-pack benchmark ${benchmarkRunId} lease renewal lost ownership.`);
         }
       } catch (error) {
@@ -2707,7 +2728,7 @@ export class PromptPackService {
     }
   }
 
-  private upsertPromptPackBenchmarkItem(input: {
+  private async upsertPromptPackBenchmarkItem(input: {
     benchmarkRunId: string;
     packId: string;
     testId: string;
@@ -2724,9 +2745,9 @@ export class PromptPackService {
     scoreState?: PromptPackScoreState;
     failureSignal?: string;
     createdAt: string;
-  }): void {
-    this.ctx.gatewaySql
-      .prepare(
+  }): Promise<void> {
+    await (
+      await this.ctx.storage.db.prepare(
         `
       INSERT INTO prompt_pack_benchmark_items (
         item_id, benchmark_run_id, pack_id, test_id, test_code, provider_id, model,
@@ -2750,30 +2771,30 @@ export class PromptPackService {
         created_at = excluded.created_at
     `,
       )
-      .run({
-        itemId: `ppbi-${randomUUID()}`,
-        benchmarkRunId: input.benchmarkRunId,
-        packId: input.packId,
-        testId: input.testId,
-        testCode: input.testCode,
-        providerId: input.providerId,
-        model: input.model,
-        runId: input.runId ?? null,
-        scoreId: input.scoreId ?? null,
-        autoScoreId: input.autoScoreId ?? null,
-        runStatus: input.runStatus,
-        totalScore: input.totalScore ?? null,
-        weightedScore: input.weightedScore ?? null,
-        verdict: input.verdict ?? null,
-        scoreState: input.scoreState ?? null,
-        failureSignal: input.failureSignal ?? null,
-        createdAt: input.createdAt,
-      });
+    ).run({
+      itemId: `ppbi-${randomUUID()}`,
+      benchmarkRunId: input.benchmarkRunId,
+      packId: input.packId,
+      testId: input.testId,
+      testCode: input.testCode,
+      providerId: input.providerId,
+      model: input.model,
+      runId: input.runId ?? null,
+      scoreId: input.scoreId ?? null,
+      autoScoreId: input.autoScoreId ?? null,
+      runStatus: input.runStatus,
+      totalScore: input.totalScore ?? null,
+      weightedScore: input.weightedScore ?? null,
+      verdict: input.verdict ?? null,
+      scoreState: input.scoreState ?? null,
+      failureSignal: input.failureSignal ?? null,
+      createdAt: input.createdAt,
+    });
   }
 
-  private updatePromptPackBenchmarkProgress(benchmarkRunId: string, completedItems: number): void {
-    this.ctx.gatewaySql
-      .prepare(
+  private async updatePromptPackBenchmarkProgress(benchmarkRunId: string, completedItems: number): Promise<void> {
+    await (
+      await this.ctx.storage.db.prepare(
         `
       UPDATE prompt_pack_benchmark_runs
       SET completed_items = @completedItems
@@ -2782,18 +2803,18 @@ export class PromptPackService {
         AND claimed_by_worker_id = @workerId
     `,
       )
-      .run({
-        benchmarkRunId,
-        completedItems,
-        workerId: this.benchmarkWorkerId,
-      });
+    ).run({
+      benchmarkRunId,
+      completedItems,
+      workerId: this.benchmarkWorkerId,
+    });
   }
 
-  private refreshPromptPackExportFile(
+  private async refreshPromptPackExportFile(
     packId: string,
     options: { createSnapshot?: boolean } = {},
-  ): PromptPackExportRecord {
-    const report = this.getPromptPackReport(packId);
+  ): Promise<PromptPackExportRecord> {
+    const report = await this.getPromptPackReport(packId);
     const filePath = this.resolvePromptPackExportPath(report.pack);
     const generatedAt = new Date().toISOString();
     const body = renderPromptPackMarkdownReport(report, { generatedAt });
@@ -2820,11 +2841,11 @@ export class PromptPackService {
     };
   }
 
-  private refreshPromptPackPromptfooExportFile(
+  private async refreshPromptPackPromptfooExportFile(
     packId: string,
     options: { createSnapshot?: boolean } = {},
-  ): PromptPackExportRecord {
-    const report = this.getPromptPackReport(packId);
+  ): Promise<PromptPackExportRecord> {
+    const report = await this.getPromptPackReport(packId);
     const filePath = this.resolvePromptPackPromptfooExportPath(report.pack);
     const generatedAt = new Date().toISOString();
     const body = JSON.stringify(buildPromptfooExportPayload(report, generatedAt), null, 2);
@@ -2837,7 +2858,7 @@ export class PromptPackService {
       fsSync.writeFileSync(snapshotPath, body, "utf8");
       createdSnapshotPath = snapshotPath;
     }
-    const record = this.readPromptPackPromptfooExportRecord(report.pack);
+    const record = await this.readPromptPackPromptfooExportRecord(report.pack);
     if (!createdSnapshotPath) {
       return record;
     }
@@ -2851,9 +2872,9 @@ export class PromptPackService {
     };
   }
 
-  private refreshPromptPackExportFileBestEffort(packId: string, reason: string): void {
+  private async refreshPromptPackExportFileBestEffort(packId: string, reason: string): Promise<void> {
     try {
-      this.refreshPromptPackExportFile(packId);
+      await this.refreshPromptPackExportFile(packId);
     } catch (error) {
       log.warn("prompt-pack export refresh failed", {
         packId,
@@ -2875,13 +2896,13 @@ export class PromptPackService {
           )
         : this.runPromptPackBenchmarkTask(benchmarkRunId)
     )
-      .catch((error) => {
-        if (this.isPromptPackBenchmarkCancelled(benchmarkRunId)) {
+      .catch(async (error) => {
+        if (await this.isPromptPackBenchmarkCancelled(benchmarkRunId)) {
           return;
         }
         const now = new Date().toISOString();
-        this.ctx.gatewaySql
-          .prepare(
+        await (
+          await this.ctx.storage.db.prepare(
             `
           UPDATE prompt_pack_benchmark_runs
           SET
@@ -2896,12 +2917,12 @@ export class PromptPackService {
             AND claimed_by_worker_id = @workerId
         `,
           )
-          .run({
-            benchmarkRunId,
-            error: error instanceof Error ? error.message : String(error),
-            finishedAt: now,
-            workerId: this.benchmarkWorkerId,
-          });
+        ).run({
+          benchmarkRunId,
+          error: error instanceof Error ? error.message : String(error),
+          finishedAt: now,
+          workerId: this.benchmarkWorkerId,
+        });
       })
       .finally(() => {
         this.activeBenchmarkRunIds.delete(benchmarkRunId);
@@ -2910,32 +2931,32 @@ export class PromptPackService {
     trackBackgroundTask(this.deps.backgroundTasks, task);
   }
 
-  private isPromptPackBenchmarkCancelled(benchmarkRunId: string): boolean {
+  private async isPromptPackBenchmarkCancelled(benchmarkRunId: string): Promise<boolean> {
     if (this.cancelledBenchmarkRunIds.has(benchmarkRunId)) {
       return true;
     }
-    return this.getPromptPackBenchmarkRunRow(benchmarkRunId)?.status === "cancelled";
+    return (await this.getPromptPackBenchmarkRunRow(benchmarkRunId))?.status === "cancelled";
   }
 
-  private shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId: string): boolean {
-    if (this.isPromptPackBenchmarkCancelled(benchmarkRunId)) {
+  private async shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId: string): Promise<boolean> {
+    if (await this.isPromptPackBenchmarkCancelled(benchmarkRunId)) {
       return false;
     }
-    const current = this.getPromptPackBenchmarkRunRow(benchmarkRunId);
+    const current = await this.getPromptPackBenchmarkRunRow(benchmarkRunId);
     return current?.status === "running" && current.claimed_by_worker_id === this.benchmarkWorkerId;
   }
 
-  private getPromptPackBenchmarkRunRow(benchmarkRunId: string): PromptPackBenchmarkRunRow | undefined {
+  private async getPromptPackBenchmarkRunRow(benchmarkRunId: string): Promise<PromptPackBenchmarkRunRow | undefined> {
     return toPromptPackBenchmarkRunRow(
-      this.ctx.gatewaySql
-        .prepare(
+      await (
+        await this.ctx.storage.db.prepare(
           `
       SELECT *
       FROM prompt_pack_benchmark_runs
       WHERE benchmark_run_id = ?
     `,
         )
-        .get(benchmarkRunId),
+      ).get(benchmarkRunId),
     );
   }
 
@@ -2943,8 +2964,8 @@ export class PromptPackService {
     return readPromptPackExportRecordFromFile(this.ctx.config.rootDir, pack);
   }
 
-  private readPromptPackPromptfooExportRecord(pack: PromptPackRecord): PromptPackExportRecord {
-    const tests = this.ctx.storage.promptPacks.listTests(pack.packId, 5000);
+  private async readPromptPackPromptfooExportRecord(pack: PromptPackRecord): Promise<PromptPackExportRecord> {
+    const tests = await this.ctx.storage.promptPacks.listTests(pack.packId, 5000);
     return readPromptPackPromptfooExportRecordFromFile({
       rootDir: this.ctx.config.rootDir,
       pack,
@@ -2978,10 +2999,10 @@ export class PromptPackService {
     });
   }
 
-  private listPromptPackBenchmarkItems(benchmarkRunId: string): PromptPackBenchmarkItemRecord[] {
+  private async listPromptPackBenchmarkItems(benchmarkRunId: string): Promise<PromptPackBenchmarkItemRecord[]> {
     const itemRows = toPromptPackBenchmarkItemRows(
-      this.ctx.gatewaySql
-        .prepare(
+      await (
+        await this.ctx.storage.db.prepare(
           `
       SELECT *
       FROM prompt_pack_benchmark_items
@@ -2989,7 +3010,7 @@ export class PromptPackService {
       ORDER BY created_at ASC
     `,
         )
-        .all(benchmarkRunId),
+      ).all(benchmarkRunId),
     );
     return itemRows.map((row) => mapPromptPackBenchmarkItemRow(row));
   }
@@ -3020,7 +3041,7 @@ export class PromptPackService {
     judgeProviderId?: string;
     judgeModel?: string;
   }> {
-    const defaults = this.deps.getPromptJudgeModelDefaults();
+    const defaults = await this.deps.getPromptJudgeModelDefaults();
     const judgeTarget = resolvePromptPackJudgeTarget({
       inputProviderId: input.providerId,
       inputModel: input.model,
@@ -3305,29 +3326,29 @@ export class PromptPackService {
     };
   }
 
-  private ensurePromptPackProjectBinding(): string {
-    return this.ensurePromptPackProjectBindingFor(PROMPT_PACK_FIXTURE_PROJECT_BINDING);
+  private async ensurePromptPackProjectBinding(): Promise<string> {
+    return await this.ensurePromptPackProjectBindingFor(PROMPT_PACK_FIXTURE_PROJECT_BINDING);
   }
 
-  private ensurePromptPackProjectBindingFor(binding: PromptPackProjectBindingConfig): string {
+  private async ensurePromptPackProjectBindingFor(binding: PromptPackProjectBindingConfig): Promise<string> {
     if (binding.workspacePath === PROMPT_PACK_PROJECT_WORKSPACE_PATH) {
       this.ensurePromptPackWorkspaceMirror();
     }
     const workspaceId = this.ctx.normalizeWorkspaceId(undefined);
     const existingProject = findPromptPackProjectBinding(
-      this.ctx.storage.chatProjects.list("all", 500, workspaceId),
+      await this.ctx.storage.chatProjects.list("all", 500, workspaceId),
       binding.workspacePath,
     );
     if (existingProject) {
       if (existingProject.lifecycleStatus === "archived") {
-        this.ctx.storage.chatProjects.restore(existingProject.projectId);
+        await this.ctx.storage.chatProjects.restore(existingProject.projectId);
       }
       if (
         existingProject.workspacePath !== binding.workspacePath ||
         existingProject.name !== binding.name ||
         existingProject.description !== binding.description
       ) {
-        this.ctx.storage.chatProjects.update(existingProject.projectId, {
+        await this.ctx.storage.chatProjects.update(existingProject.projectId, {
           name: binding.name,
           description: binding.description,
           workspacePath: binding.workspacePath,
@@ -3335,12 +3356,14 @@ export class PromptPackService {
       }
       return existingProject.projectId;
     }
-    return this.ctx.storage.chatProjects.create({
-      workspaceId,
-      name: binding.name,
-      description: binding.description,
-      workspacePath: binding.workspacePath,
-    }).projectId;
+    return (
+      await this.ctx.storage.chatProjects.create({
+        workspaceId,
+        name: binding.name,
+        description: binding.description,
+        workspacePath: binding.workspacePath,
+      })
+    ).projectId;
   }
 
   private ensurePromptPackWorkspaceMirror(): void {
@@ -3363,12 +3386,12 @@ export class PromptPackService {
     });
   }
 
-  private ensurePromptPackSessionToolGrants(
+  private async ensurePromptPackSessionToolGrants(
     sessionId: string,
     profile: PromptPackExecutionProfile,
     prompt: string,
     projectBinding?: PromptPackProjectBindingConfig,
-  ): void {
+  ): Promise<void> {
     const toolNames = buildPromptPackSessionToolAllowlist(profile, prompt);
     if (toolNames.length === 0) {
       return;
@@ -3379,13 +3402,13 @@ export class PromptPackService {
       workspaceRoot: resolvePromptPackWorkspaceRoot(this.ctx.config.rootDir, this.ctx.config.assistant.workspaceDir),
       projectWorkspacePath: projectBinding?.workspacePath,
     });
-    const activeSessionGrants = listActivePromptPackToolGrants(this.ctx.storage, "session", sessionId);
+    const activeSessionGrants = await listActivePromptPackToolGrants(this.ctx.storage, "session", sessionId);
     const activeAllowGrants = activeSessionGrants.filter((grant) => grant.decision === "allow");
     const activeDenyGrants = [
       ...activeSessionGrants,
-      ...listActivePromptPackToolGrants(this.ctx.storage, "global", "global"),
-      ...listActivePromptPackToolGrants(this.ctx.storage, "agent", "assistant"),
-      ...listActivePromptPackWorkspaceGrants(this.ctx.storage, sessionId, DEFAULT_WORKSPACE_ID),
+      ...(await listActivePromptPackToolGrants(this.ctx.storage, "global", "global")),
+      ...(await listActivePromptPackToolGrants(this.ctx.storage, "agent", "assistant")),
+      ...(await listActivePromptPackWorkspaceGrants(this.ctx.storage, sessionId, DEFAULT_WORKSPACE_ID)),
     ].filter((grant) => grant.decision === "deny");
     for (const toolName of toolNames) {
       const hasActiveDeny = activeDenyGrants.some((grant) =>
@@ -3407,7 +3430,7 @@ export class PromptPackService {
       } else if (activeAllowGrants.some((grant) => promptPackGrantPatternMatches(grant.toolPattern, toolName))) {
         continue;
       }
-      this.ctx.storage.toolGrants.createTtlForDuration(
+      await this.ctx.storage.toolGrants.createTtlForDuration(
         {
           toolPattern: toolName,
           decision: "allow",
@@ -3436,7 +3459,7 @@ export class PromptPackService {
     const needsRefresh =
       isPromptPackDurableNonTerminal(initialTrace?.durable?.status) || !response.assistantMessage?.content?.trim();
     if (!needsRefresh) {
-      const hydratedToolRuns = this.readPromptPackToolRunsForTurn(turnId);
+      const hydratedToolRuns = await this.readPromptPackToolRunsForTurn(turnId);
       if (response.trace && hydratedToolRuns.length > 0) {
         return {
           trace: {
@@ -3450,26 +3473,26 @@ export class PromptPackService {
       return {};
     }
 
-    let latest = this.readPromptPackTurnSnapshot(turnId, response);
+    let latest = await this.readPromptPackTurnSnapshot(turnId, response);
     for (let attempt = 0; attempt < 40; attempt += 1) {
       if (latest.assistantContent?.trim()) {
         break;
       }
       await delayPromptPackJudgeRetry(250);
-      latest = this.readPromptPackTurnSnapshot(turnId, response);
+      latest = await this.readPromptPackTurnSnapshot(turnId, response);
     }
     return latest;
   }
 
-  private readPromptPackTurnSnapshot(
+  private async readPromptPackTurnSnapshot(
     turnId: string,
     response: ChatSendMessageResponse,
-  ): {
+  ): Promise<{
     trace?: ChatTurnTraceRecord;
     assistantContent?: string;
     citations?: ChatCitationRecord[];
-  } {
-    const traceRow = this.ctx.gatewaySql
+  }> {
+    const traceRow = await this.ctx.storage.db
       .prepare(
         `
       SELECT
@@ -3485,18 +3508,16 @@ export class PromptPackService {
       WHERE turn_id = ?
     `,
       )
-      .get(turnId) as
-      | {
-          assistant_message_id: string | null;
-          status: ChatTurnTraceRecord["status"];
-          model: string | null;
-          completion_json: string | null;
-          durable_json: string | null;
-          citations_json: string | null;
-          failure_json: string | null;
-          finished_at: string | null;
-        }
-      | undefined;
+      .get<{
+        assistant_message_id: string | null;
+        status: ChatTurnTraceRecord["status"];
+        model: string | null;
+        completion_json: string | null;
+        durable_json: string | null;
+        citations_json: string | null;
+        failure_json: string | null;
+        finished_at: string | null;
+      }>(turnId);
     if (!traceRow) {
       return {};
     }
@@ -3505,7 +3526,7 @@ export class PromptPackService {
       traceRow.citations_json,
       response.trace?.citations ?? response.citations,
     );
-    const hydratedToolRuns = this.readPromptPackToolRunsForTurn(turnId);
+    const hydratedToolRuns = await this.readPromptPackToolRunsForTurn(turnId);
     const mergedTrace: ChatTurnTraceRecord | undefined = response.trace
       ? {
           ...response.trace,
@@ -3523,7 +3544,7 @@ export class PromptPackService {
 
     const assistantMessageId = traceRow.assistant_message_id ?? response.trace?.assistantMessageId;
     const assistantRow = assistantMessageId
-      ? (this.ctx.gatewaySql
+      ? await this.ctx.storage.db
           .prepare(
             `
         SELECT content
@@ -3531,7 +3552,7 @@ export class PromptPackService {
         WHERE message_id = ?
       `,
           )
-          .get(assistantMessageId) as { content: string | null } | undefined)
+          .get<{ content: string | null }>(assistantMessageId)
       : undefined;
 
     return {
@@ -3541,10 +3562,10 @@ export class PromptPackService {
     };
   }
 
-  private readPromptPackToolRunsForTurn(turnId: string): ChatToolRunRecord[] {
+  private async readPromptPackToolRunsForTurn(turnId: string): Promise<ChatToolRunRecord[]> {
     try {
-      const rows = this.ctx.gatewaySql
-        .prepare(
+      const rows = await (
+        await this.ctx.storage.db.prepare(
           `
         SELECT *
         FROM chat_tool_runs
@@ -3552,7 +3573,7 @@ export class PromptPackService {
         ORDER BY started_at ASC, tool_run_id ASC
       `,
         )
-        .all(turnId);
+      ).all(turnId);
       return toPromptPackChatToolRunRows(rows).map(mapPromptPackChatToolRunRow);
     } catch {
       return [];

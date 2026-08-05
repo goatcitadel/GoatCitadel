@@ -2,13 +2,13 @@ import type {
   ApprovalCreateInput,
   ApprovalRequest,
   ApprovalReplayEvent,
-  DryRunCommitStore,
+  DryRunCommitRecord,
   DryRunPlannedAction,
   IntegrationActionInvokeInput,
   PendingApprovalAction,
   WardEffect,
 } from "@goatcitadel/contracts";
-import { commitDryRun, createDryRunPreview } from "./dry-run-commit-service.js";
+import { commitDryRun, createDryRunPreview, type DryRunCommitStorePort } from "./dry-run-commit-service.js";
 import {
   type IdempotentExternalSideEffectRunInput,
   type IdempotentExternalSideEffectRunResult,
@@ -118,9 +118,9 @@ async function openDryRunPreviewForWardRefusal<TValue>(
   if (!store || !pendingActions || !createApproval || !input.connectionId || !input.actionId) {
     return refusal;
   }
-  let record: ReturnType<typeof createDryRunPreview>;
+  let record: DryRunCommitRecord;
   try {
-    record = createDryRunPreview(store, {
+    record = await createDryRunPreview(store, {
       runId: refusal.claim.sideEffectRunId ?? refusal.claim.idempotencyKey,
       boundary: input.boundary,
       plannedAction: buildIntegrationPlannedAction(ward, input, gateOptions),
@@ -167,7 +167,7 @@ async function openDryRunPreviewForWardRefusal<TValue>(
       },
       expiresAt,
     });
-    pendingActions.upsertPending({
+    await pendingActions.upsertPending({
       approvalId: approval.approvalId,
       actionType: INTEGRATION_DRY_RUN_COMMIT_ACTION_TYPE,
       request: {
@@ -183,7 +183,7 @@ async function openDryRunPreviewForWardRefusal<TValue>(
       createdAt: input.checkedAt,
       expiresAt,
     });
-    host.storage.approvalEvents?.append({
+    await host.storage.approvalEvents?.append({
       approvalId: approval.approvalId,
       eventType: "pending_action_registered",
       actorId: "system",
@@ -290,13 +290,13 @@ async function commitApprovedDryRunSideEffect<TValue>(
       // manual-reconciliation diagnostic (unknown external outcome) — restoring over
       // that would erase the operator's evidence and mark a boundary-maybe-crossed
       // record as cleanly retryable. Anything not our own write is left alone.
-      const current = store.get(commitRef.dryRunId);
+      const current = await store.get(commitRef.dryRunId);
       const failureIsOurs =
         current?.state === "rejected_commit_failed" &&
         current.diagnostic?.recordedAt === commit.diagnostic.recordedAt &&
         current.diagnostic?.message === commit.diagnostic.message;
       if (failureIsOurs) {
-        store.update(commitRef.dryRunId, {
+        await store.update(commitRef.dryRunId, {
           state: "awaiting_commit",
           diagnostic: {
             code: "commit_execution_failed",
@@ -388,7 +388,7 @@ function sanitizeExternalDestination(value: string | undefined): string | undefi
 
 /** Structural slices of the approval stores the host may optionally provide (Stage 2). */
 export interface IntegrationDryRunApprovalStores {
-  dryRunCommits?: DryRunCommitStore;
+  dryRunCommits?: DryRunCommitStorePort;
   pendingApprovalActions?: {
     upsertPending(input: {
       approvalId: string;
@@ -396,7 +396,7 @@ export interface IntegrationDryRunApprovalStores {
       request: Record<string, unknown>;
       createdAt?: string;
       expiresAt?: string;
-    }): PendingApprovalAction;
+    }): PendingApprovalAction | Promise<PendingApprovalAction>;
   };
   approvalEvents?: {
     append(input: {
@@ -404,7 +404,7 @@ export interface IntegrationDryRunApprovalStores {
       eventType: ApprovalReplayEvent["eventType"];
       actorId: string;
       payload: Record<string, unknown>;
-    }): unknown;
+    }): unknown | Promise<unknown>;
   };
 }
 

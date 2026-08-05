@@ -87,7 +87,7 @@ describe("GatewayService chat session provider normalization", () => {
     });
   });
 
-  it("normalizes stale cross-provider model selections to the selected provider default", () => {
+  it("normalizes stale cross-provider model selections to the selected provider default", async () => {
     const initialPrefs = createPrefs({
       providerId: "openai",
       model: "claude-sonnet-4-6",
@@ -112,7 +112,7 @@ describe("GatewayService chat session provider normalization", () => {
       },
     };
 
-    const prefs = GatewayService.prototype.getChatSessionPrefs.call(gateway, "sess-1");
+    const prefs = await GatewayService.prototype.getChatSessionPrefs.call(gateway, "sess-1");
 
     expect(prefs.providerId).toBe("openai");
     expect(prefs.model).toBe("gpt-5.4-mini");

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage, Storage } from "@goatcitadel/storage";
 import { executeTool } from "../tool-executor.js";
 
 const TOKEN_ID = "rat_boundary_matrix";
@@ -212,7 +212,7 @@ function createHarness(
   }));
   const resolveSecret = vi.fn(() => RAW_TOKEN);
   const deleteSecret = vi.fn();
-  const approvalReady = vi.fn(() => overrides.approvalReady ?? true);
+  const approvalReady = vi.fn(async () => overrides.approvalReady ?? true);
   const storage = {
     integrationConnections: {
       get: vi.fn(() => ({
@@ -243,7 +243,7 @@ function createHarness(
       markSent: vi.fn(),
       markFailed: vi.fn(),
     },
-  } as unknown as Storage;
+  } as unknown as Storage & AsyncStorage;
   return {
     storage,
     createQueued,

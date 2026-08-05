@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { SystemSettingsRepository } from "@goatcitadel/storage";
+import type { AsyncStorage } from "@goatcitadel/storage";
 import type { InstalledVoiceModelRecord, VoiceRuntimeStatus } from "@goatcitadel/contracts";
 import {
   DEFAULT_MANAGED_VOICE_MODEL_ID,
@@ -60,22 +60,24 @@ export async function writeManagedVoiceManifest(manifest: ManagedVoiceManifest):
   await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 }
 
-export function getVoiceRuntimeConfig(systemSettings: Pick<SystemSettingsRepository, "get">): VoiceRuntimeConfigRecord {
-  return systemSettings.get<VoiceRuntimeConfigRecord>(VOICE_RUNTIME_CONFIG_KEY)?.value ?? {};
+export async function getVoiceRuntimeConfig(
+  systemSettings: Pick<AsyncStorage["systemSettings"], "get">,
+): Promise<VoiceRuntimeConfigRecord> {
+  return (await systemSettings.get<VoiceRuntimeConfigRecord>(VOICE_RUNTIME_CONFIG_KEY))?.value ?? {};
 }
 
-export function setVoiceRuntimeConfig(
-  systemSettings: Pick<SystemSettingsRepository, "set">,
+export async function setVoiceRuntimeConfig(
+  systemSettings: Pick<AsyncStorage["systemSettings"], "set">,
   next: VoiceRuntimeConfigRecord,
-): void {
-  systemSettings.set(VOICE_RUNTIME_CONFIG_KEY, next);
+): Promise<void> {
+  await systemSettings.set(VOICE_RUNTIME_CONFIG_KEY, next);
 }
 
 export async function getManagedVoiceRuntimeStatus(
-  systemSettings?: Pick<SystemSettingsRepository, "get">,
+  systemSettings?: Pick<AsyncStorage["systemSettings"], "get">,
 ): Promise<VoiceRuntimeStatus> {
   const manifest = await readManagedVoiceManifest();
-  const config = systemSettings ? getVoiceRuntimeConfig(systemSettings) : {};
+  const config = systemSettings ? await getVoiceRuntimeConfig(systemSettings) : {};
   const catalog = listManagedVoiceModels();
   const envBinaryPath = process.env.GOATCITADEL_WHISPER_CPP_BIN?.trim();
   const envModelPath = process.env.GOATCITADEL_WHISPER_CPP_MODEL_PATH?.trim();

@@ -66,6 +66,33 @@ describe("withStreamIdleWatchdog", () => {
     ).rejects.toBe(accountingError);
   });
 
+  it("allows bounded event-loop grace for an abort-aware provider", async () => {
+    let rejectRead: ((error: unknown) => void) | undefined;
+    const source: AsyncIterable<string> = {
+      [Symbol.asyncIterator]() {
+        return {
+          next: () =>
+            new Promise<IteratorResult<string>>((_resolve, reject) => {
+              rejectRead = reject;
+            }),
+          return: async () => ({ done: true, value: undefined }),
+        };
+      },
+    };
+
+    const result = await collect(
+      withStreamIdleWatchdog(source, {
+        idleTimeoutMs: 20,
+        abort: () => {
+          setTimeout(() => rejectRead?.(new Error("provider abort acknowledged")), 10);
+        },
+      }),
+    ).catch((error) => error);
+
+    expect(result).toBeInstanceOf(StreamIdleTimeoutError);
+    expect((result as Error).name).toBe("StreamIdleTimeoutError");
+  });
+
   it("stays bounded and blocks redispatch when the provider ignores abort", async () => {
     const source: AsyncIterable<string> = {
       [Symbol.asyncIterator]() {
@@ -78,7 +105,7 @@ describe("withStreamIdleWatchdog", () => {
 
     const result = await Promise.race([
       collect(withStreamIdleWatchdog(source, { idleTimeoutMs: 20, abort: () => undefined })).catch((error) => error),
-      new Promise((resolve) => setTimeout(() => resolve("watchdog-hung"), 250)),
+      new Promise((resolve) => setTimeout(() => resolve("watchdog-hung"), 750)),
     ]);
 
     expect(result).toBeInstanceOf(StreamIdleTimeoutError);

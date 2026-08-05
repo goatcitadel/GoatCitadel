@@ -42,7 +42,7 @@ import {
 } from "./openai-realtime-voice-service.js";
 import { buildVoiceControlStartFailure } from "./voice-control-guard.js";
 import { trackBackgroundTask } from "./background-scheduler.js";
-import type { GatewaySqlRepository, SystemSettingsRepository } from "@goatcitadel/storage";
+import type { AsyncGatewaySqlRepository, AsyncStorage } from "@goatcitadel/storage";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -108,24 +108,19 @@ interface DevDiagnosticInput {
 // ---------------------------------------------------------------------------
 
 export interface MediaVoiceDeps {
-  readonly gatewaySql: GatewaySqlRepository;
-  readonly storage: {
-    readonly systemSettings: SystemSettingsRepository;
-    readonly chatAttachments: {
-      get(attachmentId: string): ChatAttachmentRecord;
-    };
-  };
+  readonly gatewaySql: AsyncGatewaySqlRepository;
+  readonly storage: Pick<AsyncStorage, "systemSettings" | "chatAttachments">;
   readonly backgroundTasks: Set<Promise<unknown>>;
   readonly runBackgroundWork?: <T>(label: string, work: (signal: AbortSignal) => Promise<T>) => Promise<T | undefined>;
   readonly isClosing: () => boolean;
-  readonly publishRealtime: (eventType: string, source: string, payload: Record<string, unknown>) => void;
-  readonly recordDevDiagnostic: (input: DevDiagnosticInput) => void;
+  readonly publishRealtime: (eventType: string, source: string, payload: Record<string, unknown>) => Promise<unknown>;
+  readonly recordDevDiagnostic: (input: DevDiagnosticInput) => void | Promise<void>;
   readonly readChatAttachmentContent: (attachmentId: string) => Promise<{
     record: ChatAttachmentRecord;
     fullPath: string;
     bytes: Buffer;
   }>;
-  readonly getChatAttachment: (attachmentId: string) => ChatAttachmentRecord;
+  readonly getChatAttachment: (attachmentId: string) => Promise<ChatAttachmentRecord>;
 }
 
 // ---------------------------------------------------------------------------
@@ -533,10 +528,10 @@ export class MediaVoiceService {
 
   // ── Media jobs ──────────────────────────────────────────────────────────
 
-  public createMediaJob(input: MediaCreateJobRequest): MediaJobRecord {
+  public async createMediaJob(input: MediaCreateJobRequest): Promise<MediaJobRecord> {
     const now = new Date().toISOString();
     const jobId = randomUUID();
-    this.deps.gatewaySql
+    await this.deps.gatewaySql
       .prepare(
         `
       INSERT INTO media_jobs (
@@ -556,7 +551,7 @@ export class MediaVoiceService {
         createdAt: now,
         updatedAt: now,
       });
-    const created = this.getMediaJob(jobId);
+    const created = await this.getMediaJob(jobId);
     this.processMediaJob(jobId);
     return created;
   }
@@ -566,9 +561,9 @@ export class MediaVoiceService {
    * a previous process exit. Startup is the only caller, so a persisted
    * `running` row necessarily belongs to an interrupted process lifetime.
    */
-  public resumeInterruptedMediaJobs(limit = 100): number {
+  public async resumeInterruptedMediaJobs(limit = 100): Promise<number> {
     if (this.deps.isClosing()) return 0;
-    const rows = this.deps.gatewaySql
+    const rows = (await this.deps.gatewaySql
       .prepare(
         `
       SELECT job_id
@@ -578,7 +573,7 @@ export class MediaVoiceService {
       LIMIT ?
     `,
       )
-      .all(Math.max(1, Math.min(500, Math.trunc(limit)))) as Array<{ job_id?: unknown }>;
+      .all(Math.max(1, Math.min(500, Math.trunc(limit))))) as Array<{ job_id?: unknown }>;
     const jobIds = rows
       .map((row) => (typeof row.job_id === "string" ? row.job_id.trim() : ""))
       .filter((jobId) => jobId.length > 0);
@@ -586,25 +581,25 @@ export class MediaVoiceService {
     return jobIds.length;
   }
 
-  public getMediaJob(jobId: string): MediaJobRecord {
-    const row = this.deps.gatewaySql
+  public async getMediaJob(jobId: string): Promise<MediaJobRecord> {
+    const row = (await this.deps.gatewaySql
       .prepare(
         `
       SELECT * FROM media_jobs
       WHERE job_id = ?
     `,
       )
-      .get(jobId) as MediaJobRow | undefined;
+      .get(jobId)) as MediaJobRow | undefined;
     if (!row) {
       throw new Error(`Unknown media job: ${jobId}`);
     }
     return mapMediaJobRow(row);
   }
 
-  public listMediaJobs(sessionId?: string): MediaJobRecord[] {
+  public async listMediaJobs(sessionId?: string): Promise<MediaJobRecord[]> {
     const rows = toMediaJobRows(
       sessionId
-        ? this.deps.gatewaySql
+        ? await this.deps.gatewaySql
             .prepare(
               `
       SELECT * FROM media_jobs
@@ -614,7 +609,7 @@ export class MediaVoiceService {
     `,
             )
             .all({ sessionId })
-        : this.deps.gatewaySql
+        : await this.deps.gatewaySql
             .prepare(
               `
       SELECT * FROM media_jobs
@@ -627,8 +622,8 @@ export class MediaVoiceService {
     return rows.map(mapMediaJobRow);
   }
 
-  public getChatAttachmentPreview(attachmentId: string): ChatAttachmentPreviewResponse {
-    const record = this.deps.getChatAttachment(attachmentId);
+  public async getChatAttachmentPreview(attachmentId: string): Promise<ChatAttachmentPreviewResponse> {
+    const record = await this.deps.getChatAttachment(attachmentId);
     return {
       attachmentId: record.attachmentId,
       fileName: record.fileName,
@@ -654,7 +649,7 @@ export class MediaVoiceService {
       throw new Error("Audio payload is empty.");
     }
     validateVoiceTranscriptionPayload(bytes, input.mimeType);
-    this.deps.recordDevDiagnostic({
+    await this.deps.recordDevDiagnostic({
       level: "info",
       category: "voice",
       event: "voice.transcribe.start",
@@ -679,7 +674,7 @@ export class MediaVoiceService {
     bytesBase64: string;
     mimeType: string;
   }> {
-    this.deps.recordDevDiagnostic({
+    await this.deps.recordDevDiagnostic({
       level: "info",
       category: "voice",
       event: "voice.synthesize.start",
@@ -697,25 +692,28 @@ export class MediaVoiceService {
   public async getVoiceStatus(): Promise<VoiceStatus> {
     const now = new Date().toISOString();
     const runtime = await getManagedVoiceRuntimeStatus(this.deps.storage.systemSettings);
-    const stt = this.deps.storage.systemSettings.get<VoiceStatus["stt"]>(VOICE_STATUS_SETTING_KEY)?.value ?? {
+    const stt = (await this.deps.storage.systemSettings.get<VoiceStatus["stt"]>(VOICE_STATUS_SETTING_KEY))?.value ?? {
       state: "stopped",
       provider: DEFAULT_VOICE_PROVIDER,
       runtimeReady: runtime.readiness === "ready",
       modelId: runtime.selectedModelId,
       updatedAt: now,
     };
-    const wake = this.deps.storage.systemSettings.get<VoiceStatus["wake"]>(VOICE_WAKE_STATUS_SETTING_KEY)?.value ?? {
+    const wake = (await this.deps.storage.systemSettings.get<VoiceStatus["wake"]>(VOICE_WAKE_STATUS_SETTING_KEY))
+      ?.value ?? {
       enabled: false,
       state: "stopped",
       model: "openwakeword",
       updatedAt: now,
     };
-    const talkRecord = this.deps.storage.systemSettings.get<{
-      activeSessionId?: string;
-      state: "stopped" | "running" | "error";
-      mode?: "push_to_talk" | "wake";
-      updatedAt: string;
-    }>("voice_talk_status_v1")?.value ?? {
+    const talkRecord = (
+      await this.deps.storage.systemSettings.get<{
+        activeSessionId?: string;
+        state: "stopped" | "running" | "error";
+        mode?: "push_to_talk" | "wake";
+        updatedAt: string;
+      }>("voice_talk_status_v1")
+    )?.value ?? {
       activeSessionId: undefined,
       state: "stopped",
       mode: undefined,
@@ -728,7 +726,7 @@ export class MediaVoiceService {
         modelId: runtime.selectedModelId,
       },
       talk: talkRecord,
-      realtime: this.resolveOpenAIRealtimeStatus(now),
+      realtime: await this.resolveOpenAIRealtimeStatus(now),
       wake,
     };
   }
@@ -738,7 +736,7 @@ export class MediaVoiceService {
   }
 
   public async installVoiceRuntime(input: VoiceRuntimeInstallRequest = {}): Promise<VoiceRuntimeStatus> {
-    this.deps.recordDevDiagnostic({
+    await this.deps.recordDevDiagnostic({
       level: "info",
       category: "voice",
       event: "voice.runtime.install.start",
@@ -750,7 +748,7 @@ export class MediaVoiceService {
       },
     });
     const status = await installManagedVoiceRuntime(this.deps.storage.systemSettings, input);
-    this.deps.recordDevDiagnostic({
+    await this.deps.recordDevDiagnostic({
       level: status.readiness === "ready" ? "info" : "warn",
       category: "voice",
       event: "voice.runtime.install.complete",
@@ -761,8 +759,8 @@ export class MediaVoiceService {
         lastError: status.lastError,
       },
     });
-    this.deps.storage.systemSettings.set(VOICE_STATUS_SETTING_KEY, {
-      ...(this.deps.storage.systemSettings.get<VoiceStatus["stt"]>(VOICE_STATUS_SETTING_KEY)?.value ?? {
+    await this.deps.storage.systemSettings.set(VOICE_STATUS_SETTING_KEY, {
+      ...((await this.deps.storage.systemSettings.get<VoiceStatus["stt"]>(VOICE_STATUS_SETTING_KEY))?.value ?? {
         state: "stopped" as const,
         provider: DEFAULT_VOICE_PROVIDER,
         updatedAt: new Date().toISOString(),
@@ -778,8 +776,8 @@ export class MediaVoiceService {
 
   public async selectVoiceRuntimeModel(modelId: string): Promise<VoiceRuntimeStatus> {
     const status = await selectManagedVoiceModel(this.deps.storage.systemSettings, modelId);
-    this.deps.storage.systemSettings.set(VOICE_STATUS_SETTING_KEY, {
-      ...(this.deps.storage.systemSettings.get<VoiceStatus["stt"]>(VOICE_STATUS_SETTING_KEY)?.value ?? {
+    await this.deps.storage.systemSettings.set(VOICE_STATUS_SETTING_KEY, {
+      ...((await this.deps.storage.systemSettings.get<VoiceStatus["stt"]>(VOICE_STATUS_SETTING_KEY))?.value ?? {
         state: "stopped" as const,
         provider: DEFAULT_VOICE_PROVIDER,
         updatedAt: new Date().toISOString(),
@@ -795,8 +793,8 @@ export class MediaVoiceService {
 
   public async removeVoiceRuntimeModel(modelId: string): Promise<VoiceRuntimeStatus> {
     const status = await removeManagedVoiceModel(this.deps.storage.systemSettings, modelId);
-    this.deps.storage.systemSettings.set(VOICE_STATUS_SETTING_KEY, {
-      ...(this.deps.storage.systemSettings.get<VoiceStatus["stt"]>(VOICE_STATUS_SETTING_KEY)?.value ?? {
+    await this.deps.storage.systemSettings.set(VOICE_STATUS_SETTING_KEY, {
+      ...((await this.deps.storage.systemSettings.get<VoiceStatus["stt"]>(VOICE_STATUS_SETTING_KEY))?.value ?? {
         state: "stopped" as const,
         provider: DEFAULT_VOICE_PROVIDER,
         updatedAt: new Date().toISOString(),
@@ -828,9 +826,9 @@ export class MediaVoiceService {
       status: voiceStatus,
     });
     if (failure) {
-      this.deps.storage.systemSettings.set(VOICE_STATUS_SETTING_KEY, failure.stt);
+      await this.deps.storage.systemSettings.set(VOICE_STATUS_SETTING_KEY, failure.stt);
       if (failure.talk) {
-        this.deps.storage.systemSettings.set("voice_talk_status_v1", failure.talk);
+        await this.deps.storage.systemSettings.set("voice_talk_status_v1", failure.talk);
       }
       throw new Error(failure.message);
     }
@@ -842,7 +840,7 @@ export class MediaVoiceService {
       startedAt: now,
       sessionId: input?.sessionId,
     };
-    this.deps.gatewaySql
+    await this.deps.gatewaySql
       .prepare(
         `
       INSERT INTO voice_sessions (
@@ -862,13 +860,13 @@ export class MediaVoiceService {
         createdAt: now,
         updatedAt: now,
       });
-    this.deps.storage.systemSettings.set("voice_talk_status_v1", {
+    await this.deps.storage.systemSettings.set("voice_talk_status_v1", {
       activeSessionId: record.talkSessionId,
       state: "running",
       mode: record.mode,
       updatedAt: now,
     });
-    this.deps.storage.systemSettings.set(VOICE_STATUS_SETTING_KEY, {
+    await this.deps.storage.systemSettings.set(VOICE_STATUS_SETTING_KEY, {
       ...voiceStatus.stt,
       state: "stopped",
       provider: runtime.provider,
@@ -877,7 +875,7 @@ export class MediaVoiceService {
       lastError: undefined,
       updatedAt: now,
     });
-    this.deps.publishRealtime("system", "voice", {
+    await this.deps.publishRealtime("system", "voice", {
       type: "voice_talk_started",
       talkSessionId: record.talkSessionId,
       mode: record.mode,
@@ -885,9 +883,9 @@ export class MediaVoiceService {
     return record;
   }
 
-  public listVoiceTalkSessions(limit = 20): VoiceTalkSessionRecord[] {
+  public async listVoiceTalkSessions(limit = 20): Promise<VoiceTalkSessionRecord[]> {
     const safeLimit = Math.max(1, Math.min(100, Math.trunc(limit) || 20));
-    const rows = this.deps.gatewaySql
+    const rows = (await this.deps.gatewaySql
       .prepare(
         `
       SELECT payload_json
@@ -896,7 +894,7 @@ export class MediaVoiceService {
       LIMIT ?
     `,
       )
-      .all(safeLimit) as Array<{ payload_json: string }>;
+      .all(safeLimit)) as Array<{ payload_json: string }>;
     return rows.map((row) =>
       safeJsonParse<VoiceTalkSessionRecord>(row.payload_json, {
         talkSessionId: randomUUID(),
@@ -907,15 +905,15 @@ export class MediaVoiceService {
     );
   }
 
-  public stopTalkSession(talkSessionId: string): VoiceTalkSessionRecord {
+  public async stopTalkSession(talkSessionId: string): Promise<VoiceTalkSessionRecord> {
     const now = new Date().toISOString();
-    const row = this.deps.gatewaySql
+    const row = (await this.deps.gatewaySql
       .prepare(
         `
       SELECT payload_json FROM voice_sessions WHERE talk_session_id = ?
     `,
       )
-      .get(talkSessionId) as { payload_json: string } | undefined;
+      .get(talkSessionId)) as { payload_json: string } | undefined;
     if (!row) {
       throw new Error(`Unknown talk session: ${talkSessionId}`);
     }
@@ -930,7 +928,7 @@ export class MediaVoiceService {
       state: "stopped",
       stoppedAt: now,
     };
-    this.deps.gatewaySql
+    await this.deps.gatewaySql
       .prepare(
         `
       UPDATE voice_sessions
@@ -943,13 +941,13 @@ export class MediaVoiceService {
         updatedAt: now,
         talkSessionId,
       });
-    this.deps.storage.systemSettings.set("voice_talk_status_v1", {
+    await this.deps.storage.systemSettings.set("voice_talk_status_v1", {
       activeSessionId: undefined,
       state: "stopped",
       mode: stopped.mode,
       updatedAt: now,
     });
-    this.deps.publishRealtime("system", "voice", {
+    await this.deps.publishRealtime("system", "voice", {
       type: "voice_talk_stopped",
       talkSessionId,
     });
@@ -977,12 +975,12 @@ export class MediaVoiceService {
         updatedAt: now,
         lastError: "OPENAI_API_KEY is not configured.",
       };
-      this.deps.storage.systemSettings.set(VOICE_REALTIME_STATUS_SETTING_KEY, status);
+      await this.deps.storage.systemSettings.set(VOICE_REALTIME_STATUS_SETTING_KEY, status);
       throw new OpenAIRealtimeVoiceError("OpenAI Realtime voice requires OPENAI_API_KEY.", 400);
     }
 
     if (input.surface === "google-meet" && input.meetingSessionId) {
-      const meetSession = this.requireGoogleMeetSession(input.meetingSessionId);
+      const meetSession = await this.requireGoogleMeetSession(input.meetingSessionId);
       if (meetSession.state === "blocked") {
         throw new OpenAIRealtimeVoiceError(
           `Google Meet voice session ${input.meetingSessionId} is blocked: ${meetSession.failureReason ?? "prerequisites are not ready"}.`,
@@ -991,7 +989,7 @@ export class MediaVoiceService {
       }
     }
 
-    this.deps.storage.systemSettings.set(VOICE_REALTIME_STATUS_SETTING_KEY, {
+    await this.deps.storage.systemSettings.set(VOICE_REALTIME_STATUS_SETTING_KEY, {
       provider: "openai-realtime",
       state: "connecting",
       apiKeyReady: true,
@@ -1020,9 +1018,9 @@ export class MediaVoiceService {
         updatedAt: createdAt,
         activeVoiceSessionId: voiceSessionId,
       };
-      this.deps.storage.systemSettings.set(VOICE_REALTIME_STATUS_SETTING_KEY, status);
-      this.markGoogleMeetRealtimeSessionStarted(input, createdAt);
-      this.deps.publishRealtime("system", "voice", {
+      await this.deps.storage.systemSettings.set(VOICE_REALTIME_STATUS_SETTING_KEY, status);
+      await this.markGoogleMeetRealtimeSessionStarted(input, createdAt);
+      await this.deps.publishRealtime("system", "voice", {
         type: "openai_realtime_client_secret_created",
         voiceSessionId,
         surface: input.surface,
@@ -1032,7 +1030,7 @@ export class MediaVoiceService {
         voice: token.voice,
         expiresAt: token.expiresAt,
       });
-      this.deps.recordDevDiagnostic({
+      await this.deps.recordDevDiagnostic({
         level: "info",
         category: "voice",
         event: "voice.realtime.client_secret.created",
@@ -1064,7 +1062,7 @@ export class MediaVoiceService {
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : "OpenAI Realtime voice failed.";
-      this.deps.storage.systemSettings.set(VOICE_REALTIME_STATUS_SETTING_KEY, {
+      await this.deps.storage.systemSettings.set(VOICE_REALTIME_STATUS_SETTING_KEY, {
         provider: "openai-realtime",
         state: "error",
         apiKeyReady: true,
@@ -1078,17 +1076,17 @@ export class MediaVoiceService {
     }
   }
 
-  public stopRealtimeVoiceSession(voiceSessionId: string): OpenAIRealtimeVoiceStatus {
+  public async stopRealtimeVoiceSession(voiceSessionId: string): Promise<OpenAIRealtimeVoiceStatus> {
     const trimmedVoiceSessionId = voiceSessionId.trim();
     if (!trimmedVoiceSessionId) {
       throw new OpenAIRealtimeVoiceError("OpenAI Realtime voice session id is required.", 400);
     }
 
     const now = new Date().toISOString();
-    const existing = this.deps.storage.systemSettings.get<OpenAIRealtimeVoiceStatus>(
-      VOICE_REALTIME_STATUS_SETTING_KEY,
+    const existing = (
+      await this.deps.storage.systemSettings.get<OpenAIRealtimeVoiceStatus>(VOICE_REALTIME_STATUS_SETTING_KEY)
     )?.value;
-    const current = this.resolveOpenAIRealtimeStatus(now);
+    const current = await this.resolveOpenAIRealtimeStatus(now);
     if (existing?.activeVoiceSessionId && existing.activeVoiceSessionId !== trimmedVoiceSessionId) {
       return current;
     }
@@ -1101,12 +1099,12 @@ export class MediaVoiceService {
       voice: current.voice,
       updatedAt: now,
     };
-    this.deps.storage.systemSettings.set(VOICE_REALTIME_STATUS_SETTING_KEY, status);
-    this.deps.publishRealtime("system", "voice", {
+    await this.deps.storage.systemSettings.set(VOICE_REALTIME_STATUS_SETTING_KEY, status);
+    await this.deps.publishRealtime("system", "voice", {
       type: "openai_realtime_voice_stopped",
       voiceSessionId: trimmedVoiceSessionId,
     });
-    this.deps.recordDevDiagnostic({
+    await this.deps.recordDevDiagnostic({
       level: "info",
       category: "voice",
       event: "voice.realtime.stopped",
@@ -1133,9 +1131,9 @@ export class MediaVoiceService {
       status: voiceStatus,
     });
     if (failure) {
-      this.deps.storage.systemSettings.set(VOICE_STATUS_SETTING_KEY, failure.stt);
+      await this.deps.storage.systemSettings.set(VOICE_STATUS_SETTING_KEY, failure.stt);
       if (failure.wake) {
-        this.deps.storage.systemSettings.set(VOICE_WAKE_STATUS_SETTING_KEY, failure.wake);
+        await this.deps.storage.systemSettings.set(VOICE_WAKE_STATUS_SETTING_KEY, failure.wake);
       }
       throw new Error(failure.message);
     }
@@ -1145,8 +1143,8 @@ export class MediaVoiceService {
       model: "openwakeword",
       updatedAt: now,
     };
-    this.deps.storage.systemSettings.set(VOICE_WAKE_STATUS_SETTING_KEY, status);
-    this.deps.storage.systemSettings.set(VOICE_STATUS_SETTING_KEY, {
+    await this.deps.storage.systemSettings.set(VOICE_WAKE_STATUS_SETTING_KEY, status);
+    await this.deps.storage.systemSettings.set(VOICE_STATUS_SETTING_KEY, {
       ...voiceStatus.stt,
       state: "stopped",
       provider: runtime.provider,
@@ -1155,21 +1153,21 @@ export class MediaVoiceService {
       lastError: undefined,
       updatedAt: now,
     });
-    this.deps.publishRealtime("system", "voice", {
+    await this.deps.publishRealtime("system", "voice", {
       type: "voice_wake_started",
     });
     return status;
   }
 
-  public stopVoiceWake(): VoiceStatus["wake"] {
+  public async stopVoiceWake(): Promise<VoiceStatus["wake"]> {
     const status: VoiceStatus["wake"] = {
       enabled: false,
       state: "stopped",
       model: "openwakeword",
       updatedAt: new Date().toISOString(),
     };
-    this.deps.storage.systemSettings.set(VOICE_WAKE_STATUS_SETTING_KEY, status);
-    this.deps.publishRealtime("system", "voice", {
+    await this.deps.storage.systemSettings.set(VOICE_WAKE_STATUS_SETTING_KEY, status);
+    await this.deps.publishRealtime("system", "voice", {
       type: "voice_wake_stopped",
     });
     return status;
@@ -1177,8 +1175,8 @@ export class MediaVoiceService {
 
   // ── Google Meet realtime voice ──────────────────────────────────────────
 
-  public listGoogleMeetSessions(limit = 20): GoogleMeetSessionRecord[] {
-    return this.readGoogleMeetSessions()
+  public async listGoogleMeetSessions(limit = 20): Promise<GoogleMeetSessionRecord[]> {
+    return (await this.readGoogleMeetSessions())
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
       .slice(0, Math.max(1, Math.min(100, Math.trunc(limit) || 20)));
   }
@@ -1212,7 +1210,7 @@ export class MediaVoiceService {
     };
   }
 
-  public startGoogleMeetSession(input: GoogleMeetSessionStartRequest): GoogleMeetSessionRecord {
+  public async startGoogleMeetSession(input: GoogleMeetSessionStartRequest): Promise<GoogleMeetSessionRecord> {
     const now = new Date().toISOString();
     const prerequisites = this.resolveGoogleMeetPrerequisites(input);
     const blocked = prerequisites.find((item) => !item.ready);
@@ -1230,9 +1228,9 @@ export class MediaVoiceService {
       prerequisites,
       transcript: [],
     };
-    this.writeGoogleMeetSession(record);
-    this.recordGoogleMeetDiagnostic(record, blocked ? "blocked" : "started", blocked?.message);
-    this.deps.publishRealtime("system", "voice", {
+    await this.writeGoogleMeetSession(record);
+    await this.recordGoogleMeetDiagnostic(record, blocked ? "blocked" : "started", blocked?.message);
+    await this.deps.publishRealtime("system", "voice", {
       type: "google_meet_session_started",
       sessionId: record.sessionId,
       state: record.state,
@@ -1241,11 +1239,11 @@ export class MediaVoiceService {
     return record;
   }
 
-  public appendGoogleMeetTranscriptChunk(
+  public async appendGoogleMeetTranscriptChunk(
     sessionId: string,
     input: Pick<GoogleMeetTranscriptChunk, "text" | "speaker" | "final" | "provider">,
-  ): GoogleMeetSessionRecord {
-    const record = this.requireGoogleMeetSession(sessionId);
+  ): Promise<GoogleMeetSessionRecord> {
+    const record = await this.requireGoogleMeetSession(sessionId);
     if (record.state !== "running" && record.state !== "consulting") {
       throw new Error(`Google Meet session ${sessionId} is ${record.state} and cannot accept transcript chunks.`);
     }
@@ -1258,25 +1256,25 @@ export class MediaVoiceService {
       final: input.final,
       provider: input.provider,
     };
-    const updated = this.writeGoogleMeetSession({
+    const updated = await this.writeGoogleMeetSession({
       ...record,
       updatedAt: chunk.timestamp,
       transcript: [...record.transcript, chunk],
     });
-    this.deps.publishRealtime("system", "voice", {
+    await this.deps.publishRealtime("system", "voice", {
       type: "google_meet_transcript_chunk",
       sessionId,
       chunk,
     });
-    this.recordGoogleMeetDiagnostic(updated, "running", "Google Meet transcript chunk appended");
+    await this.recordGoogleMeetDiagnostic(updated, "running", "Google Meet transcript chunk appended");
     return updated;
   }
 
-  public createGoogleMeetConsultHandoff(
+  public async createGoogleMeetConsultHandoff(
     sessionId: string,
     input: { target?: GoogleMeetConsultHandoff["target"]; prompt?: string },
-  ): GoogleMeetSessionRecord {
-    const record = this.requireGoogleMeetSession(sessionId);
+  ): Promise<GoogleMeetSessionRecord> {
+    const record = await this.requireGoogleMeetSession(sessionId);
     const now = new Date().toISOString();
     const target = input.target === "cowork" || input.target === "code" ? "chat" : (input.target ?? "chat");
     const handoff: GoogleMeetConsultHandoff = {
@@ -1287,23 +1285,23 @@ export class MediaVoiceService {
       prompt: input.prompt?.trim() || "Review this meeting transcript and suggest the next operator action.",
       transcriptChunkIds: record.transcript.map((chunk) => chunk.chunkId),
     };
-    const updated = this.writeGoogleMeetSession({
+    const updated = await this.writeGoogleMeetSession({
       ...record,
       state: "consulting",
       updatedAt: now,
       consultHandoff: handoff,
     });
-    this.deps.publishRealtime("system", "voice", {
+    await this.deps.publishRealtime("system", "voice", {
       type: "google_meet_consult_handoff",
       sessionId,
       handoff,
     });
-    this.recordGoogleMeetDiagnostic(updated, "running", "Google Meet consult handoff created");
+    await this.recordGoogleMeetDiagnostic(updated, "running", "Google Meet consult handoff created");
     return updated;
   }
 
-  public stopGoogleMeetSession(sessionId: string): GoogleMeetSessionRecord {
-    const record = this.requireGoogleMeetSession(sessionId);
+  public async stopGoogleMeetSession(sessionId: string): Promise<GoogleMeetSessionRecord> {
+    const record = await this.requireGoogleMeetSession(sessionId);
     const now = new Date().toISOString();
     const cleanup: GoogleMeetCleanupResult = {
       sessionId,
@@ -1311,27 +1309,27 @@ export class MediaVoiceService {
       stoppedTransport: record.state === "running" || record.state === "consulting",
       releasedAudio: record.state === "running" || record.state === "consulting",
     };
-    const updated = this.writeGoogleMeetSession({
+    const updated = await this.writeGoogleMeetSession({
       ...record,
       state: "stopped",
       updatedAt: now,
       stoppedAt: now,
       cleanup,
     });
-    this.deps.publishRealtime("system", "voice", {
+    await this.deps.publishRealtime("system", "voice", {
       type: "google_meet_session_stopped",
       sessionId,
       cleanup,
     });
-    this.recordGoogleMeetDiagnostic(updated, "completed", "Google Meet voice session stopped");
+    await this.recordGoogleMeetDiagnostic(updated, "completed", "Google Meet voice session stopped");
     return updated;
   }
 
   // ── Private helpers ─────────────────────────────────────────────────────
 
-  private resolveOpenAIRealtimeStatus(now: string): OpenAIRealtimeVoiceStatus {
-    const existing = this.deps.storage.systemSettings.get<OpenAIRealtimeVoiceStatus>(
-      VOICE_REALTIME_STATUS_SETTING_KEY,
+  private async resolveOpenAIRealtimeStatus(now: string): Promise<OpenAIRealtimeVoiceStatus> {
+    const existing = (
+      await this.deps.storage.systemSettings.get<OpenAIRealtimeVoiceStatus>(VOICE_REALTIME_STATUS_SETTING_KEY)
     )?.value;
     const apiKeyReady = Boolean(process.env.OPENAI_API_KEY?.trim());
     const model = normalizeRealtimeModel(existing?.model);
@@ -1377,15 +1375,18 @@ export class MediaVoiceService {
       .digest("hex")}`;
   }
 
-  private markGoogleMeetRealtimeSessionStarted(input: OpenAIRealtimeClientSecretRequest, now: string): void {
+  private async markGoogleMeetRealtimeSessionStarted(
+    input: OpenAIRealtimeClientSecretRequest,
+    now: string,
+  ): Promise<void> {
     if (input.surface !== "google-meet" || !input.meetingSessionId) {
       return;
     }
-    const record = this.requireGoogleMeetSession(input.meetingSessionId);
+    const record = await this.requireGoogleMeetSession(input.meetingSessionId);
     if (record.state === "stopped" || record.state === "failed") {
       return;
     }
-    this.writeGoogleMeetSession({
+    await this.writeGoogleMeetSession({
       ...record,
       provider: "openai-realtime",
       state: record.state === "consulting" ? "consulting" : "running",
@@ -1441,33 +1442,34 @@ export class MediaVoiceService {
     ];
   }
 
-  private readGoogleMeetSessions(): GoogleMeetSessionRecord[] {
+  private async readGoogleMeetSessions(): Promise<GoogleMeetSessionRecord[]> {
     return (
-      this.deps.storage.systemSettings.get<GoogleMeetSessionRecord[]>(GOOGLE_MEET_SESSIONS_SETTING_KEY)?.value ?? []
+      (await this.deps.storage.systemSettings.get<GoogleMeetSessionRecord[]>(GOOGLE_MEET_SESSIONS_SETTING_KEY))
+        ?.value ?? []
     );
   }
 
-  private writeGoogleMeetSession(record: GoogleMeetSessionRecord): GoogleMeetSessionRecord {
-    const sessions = this.readGoogleMeetSessions();
+  private async writeGoogleMeetSession(record: GoogleMeetSessionRecord): Promise<GoogleMeetSessionRecord> {
+    const sessions = await this.readGoogleMeetSessions();
     const next = [record, ...sessions.filter((item) => item.sessionId !== record.sessionId)].slice(0, 100);
-    this.deps.storage.systemSettings.set(GOOGLE_MEET_SESSIONS_SETTING_KEY, next);
+    await this.deps.storage.systemSettings.set(GOOGLE_MEET_SESSIONS_SETTING_KEY, next);
     return record;
   }
 
-  private requireGoogleMeetSession(sessionId: string): GoogleMeetSessionRecord {
-    const record = this.readGoogleMeetSessions().find((item) => item.sessionId === sessionId);
+  private async requireGoogleMeetSession(sessionId: string): Promise<GoogleMeetSessionRecord> {
+    const record = (await this.readGoogleMeetSessions()).find((item) => item.sessionId === sessionId);
     if (!record) {
       throw new Error(`Unknown Google Meet session: ${sessionId}`);
     }
     return record;
   }
 
-  private recordGoogleMeetDiagnostic(
+  private async recordGoogleMeetDiagnostic(
     record: GoogleMeetSessionRecord,
     status: "started" | "running" | "completed" | "blocked",
     message?: string,
-  ): void {
-    this.deps.recordDevDiagnostic({
+  ): Promise<void> {
+    await this.deps.recordDevDiagnostic({
       level: status === "blocked" ? "warn" : "info",
       category: "meet",
       event: "meet.session",
@@ -1498,10 +1500,10 @@ export class MediaVoiceService {
             return this.runMediaJob(jobId, signal);
           })
         : this.runMediaJob(jobId)
-    ).catch((error) => {
+    ).catch(async (error) => {
       const now = new Date().toISOString();
       if (workSignal?.aborted) {
-        this.deps.gatewaySql
+        await this.deps.gatewaySql
           .prepare(
             `
           UPDATE media_jobs
@@ -1514,7 +1516,7 @@ export class MediaVoiceService {
       }
       const errorMessage =
         error instanceof Error ? error.message : typeof error === "string" ? error : JSON.stringify(error);
-      this.deps.gatewaySql
+      await this.deps.gatewaySql
         .prepare(
           `
           UPDATE media_jobs
@@ -1538,7 +1540,7 @@ export class MediaVoiceService {
     }
     throwIfAborted(signal, `Media job ${jobId} was interrupted before execution.`);
     const now = new Date().toISOString();
-    this.deps.gatewaySql
+    await this.deps.gatewaySql
       .prepare(
         `
       UPDATE media_jobs
@@ -1550,11 +1552,11 @@ export class MediaVoiceService {
         updatedAt: now,
         jobId,
       });
-    const job = this.getMediaJob(jobId);
+    const job = await this.getMediaJob(jobId);
     throwIfAborted(signal, `Media job ${jobId} was interrupted before dispatch.`);
     const attachmentId = job.attachmentId;
     if (!attachmentId) {
-      this.deps.gatewaySql
+      await this.deps.gatewaySql
         .prepare(
           `
         UPDATE media_jobs
@@ -1571,14 +1573,14 @@ export class MediaVoiceService {
       return;
     }
 
-    const attachment = this.deps.storage.chatAttachments.get(attachmentId);
+    const attachment = await this.deps.storage.chatAttachments.get(attachmentId);
     if (job.type === "audio_transcribe" || job.type === "video_transcribe") {
       const content = await this.deps.readChatAttachmentContent(attachmentId);
       throwIfAborted(signal, `Media job ${jobId} was interrupted before transcription.`);
       const transcript = await this.transcribeAudioBytes(content.bytes, content.record.mimeType);
       throwIfAborted(signal, `Media job ${jobId} was interrupted after transcription.`);
       const completedAt = new Date().toISOString();
-      this.deps.gatewaySql
+      await this.deps.gatewaySql
         .prepare(
           `
         UPDATE media_jobs
@@ -1592,7 +1594,7 @@ export class MediaVoiceService {
           completedAt,
           jobId,
         });
-      this.deps.gatewaySql
+      await this.deps.gatewaySql
         .prepare(
           `
         UPDATE chat_attachments
@@ -1610,7 +1612,7 @@ export class MediaVoiceService {
     if (job.type === "ocr" && attachment.mediaType === "image") {
       throwIfAborted(signal, `Media job ${jobId} was interrupted before OCR settlement.`);
       const completedAt = new Date().toISOString();
-      this.deps.gatewaySql
+      await this.deps.gatewaySql
         .prepare(
           `
         UPDATE media_jobs
@@ -1626,7 +1628,7 @@ export class MediaVoiceService {
           completedAt,
           jobId,
         });
-      this.deps.gatewaySql
+      await this.deps.gatewaySql
         .prepare(
           `
         UPDATE chat_attachments
@@ -1642,7 +1644,7 @@ export class MediaVoiceService {
 
     throwIfAborted(signal, `Media job ${jobId} was interrupted before settlement.`);
     const completedAt = new Date().toISOString();
-    this.deps.gatewaySql
+    await this.deps.gatewaySql
       .prepare(
         `
       UPDATE media_jobs
@@ -1659,7 +1661,7 @@ export class MediaVoiceService {
         completedAt,
         jobId,
       });
-    this.deps.gatewaySql
+    await this.deps.gatewaySql
       .prepare(
         `
       UPDATE chat_attachments
@@ -1686,7 +1688,7 @@ export class MediaVoiceService {
     const extraArgs = parseVoiceCliArgs(process.env.GOATCITADEL_WHISPER_CPP_ARGS);
     if (!binPath) {
       const now = new Date().toISOString();
-      this.deps.storage.systemSettings.set(VOICE_STATUS_SETTING_KEY, {
+      await this.deps.storage.systemSettings.set(VOICE_STATUS_SETTING_KEY, {
         state: "error",
         provider: DEFAULT_VOICE_PROVIDER,
         modelId: runtime.selectedModelId,
@@ -1706,7 +1708,7 @@ export class MediaVoiceService {
     const outputBase = `${tempBase}-out`;
     const outputPath = `${outputBase}.txt`;
 
-    this.deps.storage.systemSettings.set(VOICE_STATUS_SETTING_KEY, {
+    await this.deps.storage.systemSettings.set(VOICE_STATUS_SETTING_KEY, {
       state: "running",
       provider: DEFAULT_VOICE_PROVIDER,
       modelId: runtime.selectedModelId,
@@ -1737,7 +1739,7 @@ export class MediaVoiceService {
       });
       const text = (await fs.readFile(outputPath, "utf8")).trim();
       const now = new Date().toISOString();
-      this.deps.storage.systemSettings.set(VOICE_STATUS_SETTING_KEY, {
+      await this.deps.storage.systemSettings.set(VOICE_STATUS_SETTING_KEY, {
         state: "stopped",
         provider: DEFAULT_VOICE_PROVIDER,
         modelId: runtime.selectedModelId,
@@ -1755,7 +1757,7 @@ export class MediaVoiceService {
       const detail = isProcessTimeoutError(error)
         ? `Transcription timed out after ${WHISPER_TRANSCRIBE_TIMEOUT_MS}ms and was terminated.`
         : (error as Error).message;
-      this.deps.storage.systemSettings.set(VOICE_STATUS_SETTING_KEY, {
+      await this.deps.storage.systemSettings.set(VOICE_STATUS_SETTING_KEY, {
         state: "error",
         provider: DEFAULT_VOICE_PROVIDER,
         modelId: runtime.selectedModelId,

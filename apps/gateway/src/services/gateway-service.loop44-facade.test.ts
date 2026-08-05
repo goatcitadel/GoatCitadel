@@ -82,7 +82,7 @@ describe("GatewayService loop44 facade behavior", () => {
       limit: 4,
       matches: ["match"],
     });
-    expect(GatewayService.prototype.listSkillImportHistory.call(gateway, 2)).toEqual([
+    await expect(GatewayService.prototype.listSkillImportHistory.call(gateway, 2)).resolves.toEqual([
       { limit: 2, sourceRef: "local:skill" },
     ]);
 
@@ -127,7 +127,7 @@ describe("GatewayService loop44 facade behavior", () => {
     });
   });
 
-  it("normalizes MCP inventory, tools, and fallback approvals from persisted settings", () => {
+  it("normalizes MCP inventory, tools, and fallback approvals from persisted settings", async () => {
     const settings = new Map<string, unknown>();
     settings.set("mcp_servers_v1", [
       {
@@ -161,7 +161,7 @@ describe("GatewayService loop44 facade behavior", () => {
       mcpServerStore: new McpServerStore({ systemSettings }),
     });
 
-    expect(GatewayService.prototype.listMcpServers.call(gateway)).toEqual(
+    expect(await GatewayService.prototype.listMcpServers.call(gateway)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           serverId: "goatcitadel-internal-approval-inbox",
@@ -185,15 +185,19 @@ describe("GatewayService loop44 facade behavior", () => {
         }),
       ]),
     );
-    expect(GatewayService.prototype.listMcpTools.call(gateway, "server-2")).toEqual([
+    await expect(GatewayService.prototype.listMcpTools.call(gateway, "server-2")).resolves.toEqual([
       { serverId: "server-2", toolName: "alpha.read", description: "Read" },
       { serverId: "server-2", toolName: "zeta.write", description: "Write" },
     ]);
-    expect(GatewayService.prototype.listMcpBrowserFallbackTargets.call(gateway)).toEqual([]);
-    expect((GatewayService.prototype as any).isMcpToolApproved.call(gateway, "server-2", "alpha.read")).toBe(true);
-    expect((GatewayService.prototype as any).isMcpToolApproved.call(gateway, "server-2", "zeta.write")).toBe(false);
+    await expect(GatewayService.prototype.listMcpBrowserFallbackTargets.call(gateway)).resolves.toEqual([]);
+    await expect(
+      (GatewayService.prototype as any).isMcpToolApproved.call(gateway, "server-2", "alpha.read"),
+    ).resolves.toBe(true);
+    await expect(
+      (GatewayService.prototype as any).isMcpToolApproved.call(gateway, "server-2", "zeta.write"),
+    ).resolves.toBe(false);
 
-    const patched = GatewayService.prototype.patchMcpServerState.call(gateway, "server-2", {
+    const patched = await GatewayService.prototype.patchMcpServerState.call(gateway, "server-2", {
       status: "error",
       lastConnectedAt: undefined,
       lastError: "spawn failed",
@@ -211,7 +215,9 @@ describe("GatewayService loop44 facade behavior", () => {
         lastError: "spawn failed",
       }),
     ]);
-    expect(() => GatewayService.prototype.requireMcpServer.call(gateway, "missing")).toThrow("Unknown MCP server");
+    await expect(GatewayService.prototype.requireMcpServer.call(gateway, "missing")).rejects.toThrow(
+      "Unknown MCP server",
+    );
   });
 
   it("projects queued channel delivery outcomes for sent and failed runtime records", async () => {

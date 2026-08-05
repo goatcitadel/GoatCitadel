@@ -451,6 +451,8 @@ export interface PostCommitChildStageOutcome<T> {
   admission: SessionMutationAdmissionRecord;
 }
 
+export type PostCommitChildStageSettlementOutcome = Omit<PostCommitChildStageOutcome<never>, "value">;
+
 export interface PostCommitChildStageCallbackOutcome<T> {
   disposition: "allowed" | "late_blocked";
   value: T;
@@ -2810,28 +2812,9 @@ export class SessionMutationAdmissionRepository {
     input: PostCommitChildStageInput,
     callback: (authority: PostCommitChildStageAuthority) => PostCommitChildStageCallbackOutcome<T>,
   ): PostCommitChildStageOutcome<T> {
-    const normalized = normalizePostCommitChildStageInput(input);
     try {
       return this.db.transaction("immediate", () => {
-        this.acquireSessionLock(normalized.childAdmission.sessionId);
-        const admission = this.requireRow(normalized.childAdmission.admissionId, true);
-        this.assertExactPostCommitChildAdmission(admission, normalized.childAdmission);
-        const closedReplayDisposition = this.resolvePostCommitChildClosedReplayDisposition(admission, normalized);
-        if (admission.status !== "active" && !closedReplayDisposition) {
-          throw admissionConflict(
-            "SESSION_MUTATION_POST_COMMIT_CHILD_CLOSED",
-            "Post-commit child admission is already closed.",
-          );
-        }
-        const run = this.requireFreshDurableClaimForWorkflow(normalized.durableClaim, "chat.post_commit.effect");
-        this.assertExactPostCommitChildRun(normalized, run);
-        const authorityDisposition =
-          closedReplayDisposition ?? (this.admissionHasCurrentAuthority(admission) ? "allowed" : "late_blocked");
-        const authority: PostCommitChildStageAuthority = {
-          disposition: authorityDisposition,
-          admission: mapAdmission(admission),
-          durableRunVersion: asPositiveInteger(run.version),
-        };
+        const authority = this.beginPostCommitChildStageInCurrentTransaction(input);
         const callbackOutcome = callback(authority);
         if (isThenable(callbackOutcome)) {
           throw new TypeError("Post-commit child stage callback must be synchronous.");
@@ -2842,41 +2825,126 @@ export class SessionMutationAdmissionRepository {
         ) {
           throw new TypeError("Post-commit child stage callback returned an invalid disposition.");
         }
-        const postCallbackRun = this.requireFreshDurableClaimForWorkflow(
-          normalized.durableClaim,
-          "chat.post_commit.effect",
+        const settlement = this.finishPostCommitChildStageInCurrentTransaction(
+          input,
+          authority,
+          callbackOutcome.disposition,
         );
-        this.assertExactPostCommitChildRun(normalized, postCallbackRun);
-        const postCallbackRunVersion = asPositiveInteger(postCallbackRun.version);
-        const disposition =
-          authorityDisposition === "late_blocked" || callbackOutcome.disposition === "late_blocked"
-            ? "late_blocked"
-            : "allowed";
-        if (admission.status === "completed" && disposition !== "allowed") {
-          throw admissionConflict(
-            "SESSION_MUTATION_POST_COMMIT_CHILD_REPLAY_CONFLICT",
-            "A completed post-commit child stage cannot replay as late-blocked.",
-          );
-        }
-        const shouldSettle = admission.status === "active" && (disposition === "late_blocked" || normalized.terminal);
-        const settled = shouldSettle
-          ? this.closeActiveRow(
-              {
-                admissionId: admission.admission_id,
-                status: disposition === "allowed" ? "completed" : "cancelled",
-                actorId: "system:chat-post-commit-stage",
-                idempotencyKey: postCommitChildStageIdempotencyKey(normalized, disposition),
-                correlationId: normalized.childRunId,
-              },
-              {
-                kind: "post_commit_child_stage",
-                claim: normalized.durableClaim,
-                runVersion: postCallbackRunVersion,
-              },
-            )
-          : mapAdmission(admission);
-        return { disposition, value: callbackOutcome.value, admission: settled };
+        return { ...settlement, value: callbackOutcome.value };
       });
+    } catch (error) {
+      throw normalizeAdmissionWriteError(error);
+    }
+  }
+
+  /**
+   * @internal Promise-storage bridge only. The caller must hold one owned
+   * immediate transaction across this method, the awaited callback, and
+   * {@link finishPostCommitChildStageInCurrentTransaction}. Keeping the phase
+   * explicit lets the Gateway await domain writes without moving PostgreSQL
+   * locks or synchronous repository work onto its main thread.
+   */
+  public beginPostCommitChildStageInCurrentTransaction(
+    input: PostCommitChildStageInput,
+  ): PostCommitChildStageAuthority {
+    const normalized = normalizePostCommitChildStageInput(input);
+    try {
+      this.acquireSessionLock(normalized.childAdmission.sessionId);
+      const admission = this.requireRow(normalized.childAdmission.admissionId, true);
+      this.assertExactPostCommitChildAdmission(admission, normalized.childAdmission);
+      const closedReplayDisposition = this.resolvePostCommitChildClosedReplayDisposition(admission, normalized);
+      if (admission.status !== "active" && !closedReplayDisposition) {
+        throw admissionConflict(
+          "SESSION_MUTATION_POST_COMMIT_CHILD_CLOSED",
+          "Post-commit child admission is already closed.",
+        );
+      }
+      const run = this.requireFreshDurableClaimForWorkflow(normalized.durableClaim, "chat.post_commit.effect");
+      this.assertExactPostCommitChildRun(normalized, run);
+      return {
+        disposition:
+          closedReplayDisposition ?? (this.admissionHasCurrentAuthority(admission) ? "allowed" : "late_blocked"),
+        admission: mapAdmission(admission),
+        durableRunVersion: asPositiveInteger(run.version),
+      };
+    } catch (error) {
+      throw normalizeAdmissionWriteError(error);
+    }
+  }
+
+  /** @internal Promise-storage bridge only; see {@link beginPostCommitChildStageInCurrentTransaction}. */
+  public finishPostCommitChildStageInCurrentTransaction(
+    input: PostCommitChildStageInput,
+    authority: PostCommitChildStageAuthority,
+    callbackDisposition: PostCommitChildStageCallbackOutcome<unknown>["disposition"],
+  ): PostCommitChildStageSettlementOutcome {
+    const normalized = normalizePostCommitChildStageInput(input);
+    try {
+      if (callbackDisposition !== "allowed" && callbackDisposition !== "late_blocked") {
+        throw new TypeError("Post-commit child stage callback returned an invalid disposition.");
+      }
+      this.acquireSessionLock(normalized.childAdmission.sessionId);
+      const admission = this.requireRow(normalized.childAdmission.admissionId, true);
+      this.assertExactPostCommitChildAdmission(admission, normalized.childAdmission);
+      const closedReplayDisposition = this.resolvePostCommitChildClosedReplayDisposition(admission, normalized);
+      if (admission.status !== "active" && !closedReplayDisposition) {
+        throw admissionConflict(
+          "SESSION_MUTATION_POST_COMMIT_CHILD_CLOSED",
+          "Post-commit child admission changed during its callback.",
+        );
+      }
+      const currentAuthorityDisposition =
+        closedReplayDisposition ?? (this.admissionHasCurrentAuthority(admission) ? "allowed" : "late_blocked");
+      if (
+        authority.disposition !== currentAuthorityDisposition ||
+        authority.admission.admissionId !== admission.admission_id ||
+        authority.admission.status !== admission.status ||
+        !Number.isSafeInteger(authority.durableRunVersion) ||
+        authority.durableRunVersion < 1
+      ) {
+        throw admissionConflict(
+          "SESSION_MUTATION_POST_COMMIT_CHILD_AUTHORITY_CHANGED",
+          "Post-commit child authority changed during its callback.",
+        );
+      }
+      const postCallbackRun = this.requireFreshDurableClaimForWorkflow(
+        normalized.durableClaim,
+        "chat.post_commit.effect",
+      );
+      this.assertExactPostCommitChildRun(normalized, postCallbackRun);
+      const postCallbackRunVersion = asPositiveInteger(postCallbackRun.version);
+      if (postCallbackRunVersion < authority.durableRunVersion) {
+        throw admissionConflict(
+          "SESSION_MUTATION_POST_COMMIT_CHILD_RUN_REGRESSED",
+          "Post-commit child durable authority regressed during its callback.",
+        );
+      }
+      const disposition =
+        authority.disposition === "late_blocked" || callbackDisposition === "late_blocked" ? "late_blocked" : "allowed";
+      if (admission.status === "completed" && disposition !== "allowed") {
+        throw admissionConflict(
+          "SESSION_MUTATION_POST_COMMIT_CHILD_REPLAY_CONFLICT",
+          "A completed post-commit child stage cannot replay as late-blocked.",
+        );
+      }
+      const shouldSettle = admission.status === "active" && (disposition === "late_blocked" || normalized.terminal);
+      const settled = shouldSettle
+        ? this.closeActiveRow(
+            {
+              admissionId: admission.admission_id,
+              status: disposition === "allowed" ? "completed" : "cancelled",
+              actorId: "system:chat-post-commit-stage",
+              idempotencyKey: postCommitChildStageIdempotencyKey(normalized, disposition),
+              correlationId: normalized.childRunId,
+            },
+            {
+              kind: "post_commit_child_stage",
+              claim: normalized.durableClaim,
+              runVersion: postCallbackRunVersion,
+            },
+          )
+        : mapAdmission(admission);
+      return { disposition, admission: settled };
     } catch (error) {
       throw normalizeAdmissionWriteError(error);
     }

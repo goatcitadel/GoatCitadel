@@ -104,7 +104,7 @@ describe("channel personalities", () => {
 });
 
 describe("PersonalityCatalogService", () => {
-  it("merges shipped presets, persisted built-in overrides, custom presets, and default fallback", () => {
+  it("merges shipped presets, persisted built-in overrides, custom presets, and default fallback", async () => {
     const { service } = createPersonalityService({
       defaultPersonalityId: "missing",
       builtinOverrides: {
@@ -130,7 +130,7 @@ describe("PersonalityCatalogService", () => {
       ],
     });
 
-    const catalog = service.getCatalog();
+    const catalog = await service.getCatalog();
     expect(catalog.defaultPersonalityId).toBe("default");
     expect(catalog.items.find((item) => item.id === "operator")).toMatchObject({
       label: "Operator Prime",
@@ -147,10 +147,10 @@ describe("PersonalityCatalogService", () => {
     });
   });
 
-  it("creates, edits, deletes custom presets, and clears a deleted default", () => {
+  it("creates, edits, deletes custom presets, and clears a deleted default", async () => {
     const { service } = createPersonalityService();
 
-    service.createPersonality({
+    await service.createPersonality({
       id: "Direct Custom",
       label: "Direct Custom",
       category: "execution",
@@ -160,43 +160,45 @@ describe("PersonalityCatalogService", () => {
       systemOverlay: "Be direct.",
       safetyNotes: ["Tone only."],
     });
-    expect(() => service.createPersonality({ id: "operator", label: "Duplicate built-in" })).toThrow(/already exists/);
+    await expect(service.createPersonality({ id: "operator", label: "Duplicate built-in" })).rejects.toThrow(
+      /already exists/,
+    );
 
-    service.updatePersonality("direct-custom", {
+    await service.updatePersonality("direct-custom", {
       id: "Direct Custom Edited",
       label: "Direct Custom Edited",
       systemOverlay: "Be direct and kind.",
     });
-    service.setDefaultPersonality("direct-custom-edited");
-    let catalog = service.getCatalog();
+    await service.setDefaultPersonality("direct-custom-edited");
+    let catalog = await service.getCatalog();
     expect(catalog.defaultPersonalityId).toBe("direct-custom-edited");
     expect(catalog.items.find((item) => item.id === "direct-custom-edited")).toMatchObject({
       label: "Direct Custom Edited",
       systemOverlay: "Be direct and kind.",
     });
 
-    service.deletePersonality("direct-custom-edited");
-    catalog = service.getCatalog();
+    await service.deletePersonality("direct-custom-edited");
+    catalog = await service.getCatalog();
     expect(catalog.defaultPersonalityId).toBe("default");
     expect(catalog.items.some((item) => item.id === "direct-custom-edited")).toBe(false);
   });
 
-  it("edits and resets built-in presets without removing the shipped preset", () => {
+  it("edits and resets built-in presets without removing the shipped preset", async () => {
     const { service } = createPersonalityService();
 
-    service.updatePersonality("operator", {
+    await service.updatePersonality("operator", {
       label: "Operator Prime",
       systemOverlay: "Use terse command-center language.",
     });
-    service.setDefaultPersonality("operator");
-    let catalog = service.getCatalog();
+    await service.setDefaultPersonality("operator");
+    let catalog = await service.getCatalog();
     expect(catalog.items.find((item) => item.id === "operator")).toMatchObject({
       label: "Operator Prime",
       modified: true,
     });
 
-    service.deletePersonality("operator");
-    catalog = service.getCatalog();
+    await service.deletePersonality("operator");
+    catalog = await service.getCatalog();
     expect(catalog.defaultPersonalityId).toBe("default");
     expect(catalog.items.find((item) => item.id === "operator")).toMatchObject({
       label: "Operator",

@@ -148,7 +148,7 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send({
-        items: citadels.listRecords(query.data.view, query.data.limit),
+        items: await citadels.listRecords(query.data.view, query.data.limit),
         view: query.data.view,
       });
     } catch (error) {
@@ -162,7 +162,7 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.code(201).send(citadels.createRecord(parsed.data));
+      return reply.code(201).send(await citadels.createRecord(parsed.data));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -174,7 +174,7 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      const citadel = citadels.getCitadel(params.data.citadelId);
+      const citadel = await citadels.getCitadel(params.data.citadelId);
       if (!citadel) {
         return reply.code(404).send({ error: `Citadel ${params.data.citadelId} not found.` });
       }
@@ -196,7 +196,7 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(citadels.updateRecord(params.data.citadelId, parsed.data));
+      return reply.send(await citadels.updateRecord(params.data.citadelId, parsed.data));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -208,7 +208,7 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(citadels.archiveRecord(params.data.citadelId));
+      return reply.send(await citadels.archiveRecord(params.data.citadelId));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -220,7 +220,7 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(citadels.restoreRecord(params.data.citadelId));
+      return reply.send(await citadels.restoreRecord(params.data.citadelId));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -236,7 +236,7 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      const charter = citadels.upsertCharter({ citadelId: params.data.citadelId, ...parsed.data });
+      const charter = await citadels.upsertCharter({ citadelId: params.data.citadelId, ...parsed.data });
       return reply.send(charter);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -249,7 +249,7 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send({ items: citadels.listChambers(params.data.citadelId) });
+      return reply.send({ items: await citadels.listChambers(params.data.citadelId) });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -265,7 +265,7 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      const chamber = citadels.createChamber({ citadelId: params.data.citadelId, ...parsed.data });
+      const chamber = await citadels.createChamber({ citadelId: params.data.citadelId, ...parsed.data });
       return reply.code(201).send(chamber);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -278,7 +278,7 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      const summary = citadels.getGatehouse(params.data.citadelId);
+      const summary = await citadels.getGatehouse(params.data.citadelId);
       if (!summary) {
         return reply.code(404).send({ error: `Citadel ${params.data.citadelId} not found.` });
       }
@@ -306,7 +306,7 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      const citadel = citadels.createFromTemplate(params.data.citadelId, parsed.data.templateId);
+      const citadel = await citadels.createFromTemplate(params.data.citadelId, parsed.data.templateId);
       if (!citadel) {
         return reply.code(404).send({ error: `Template ${parsed.data.templateId} not found.` });
       }
@@ -322,7 +322,7 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      const blueprint = citadels.exportBlueprint(params.data.citadelId);
+      const blueprint = await citadels.exportBlueprint(params.data.citadelId);
       if (!blueprint) {
         return reply.code(404).send({ error: `Citadel ${params.data.citadelId} not found.` });
       }
@@ -346,7 +346,7 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      const result = citadels.createFromBlueprint(params.data.citadelId, request.body ?? {});
+      const result = await citadels.createFromBlueprint(params.data.citadelId, request.body ?? {});
       if (!result.ok) {
         return reply.code(400).send({ error: { blueprint: result.errors } });
       }
@@ -364,7 +364,7 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send({ items: citadels.listCouncil(params.data.citadelId) });
+      return reply.send({ items: await citadels.listCouncil(params.data.citadelId) });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -380,7 +380,7 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      const assignment = citadels.assignAgent({ citadelId: params.data.citadelId, agentId: parsed.data.agentId });
+      const assignment = await citadels.assignAgent({ citadelId: params.data.citadelId, agentId: parsed.data.agentId });
       return reply.code(201).send(assignment);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -393,7 +393,7 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      const removed = citadels.unassignAgent(params.data.citadelId, params.data.agentId);
+      const removed = await citadels.unassignAgent(params.data.citadelId, params.data.agentId);
       if (!removed) {
         return reply.code(404).send({ error: `Agent ${params.data.agentId} is not on this Citadel's council.` });
       }
@@ -410,7 +410,7 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send({ items: citadels.listWards(params.data.citadelId) });
+      return reply.send({ items: await citadels.listWards(params.data.citadelId) });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -426,7 +426,7 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      const ward = citadels.addWard({ citadelId: params.data.citadelId, ...parsed.data });
+      const ward = await citadels.addWard({ citadelId: params.data.citadelId, ...parsed.data });
       return reply.code(201).send(ward);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -439,7 +439,7 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      const removed = citadels.removeWard(params.data.citadelId, params.data.wardId);
+      const removed = await citadels.removeWard(params.data.citadelId, params.data.wardId);
       if (!removed) {
         return reply.code(404).send({ error: `Ward ${params.data.wardId} not found.` });
       }
@@ -455,7 +455,7 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send({ items: citadels.listVaultSecrets(params.data.citadelId) });
+      return reply.send({ items: await citadels.listVaultSecrets(params.data.citadelId) });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -471,7 +471,7 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      const result = citadels.storeVaultSecret(params.data.citadelId, parsed.data.name, parsed.data.value);
+      const result = await citadels.storeVaultSecret(params.data.citadelId, parsed.data.name, parsed.data.value);
       if (!result.ok) {
         return reply.code(503).send({ error: "Vault is unavailable — the secret store could not provide a key." });
       }
@@ -487,7 +487,7 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      const result = citadels.revealVaultSecret(params.data.citadelId, params.data.secretId);
+      const result = await citadels.revealVaultSecret(params.data.citadelId, params.data.secretId);
       if (!result.ok) {
         const code = result.reason === "not_found" ? 404 : 503;
         return reply.code(code).send({ error: `Vault secret ${params.data.secretId} ${result.reason}.` });
@@ -504,7 +504,7 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      const removed = citadels.deleteVaultSecret(params.data.citadelId, params.data.secretId);
+      const removed = await citadels.deleteVaultSecret(params.data.citadelId, params.data.secretId);
       if (!removed) {
         return reply.code(404).send({ error: `Vault secret ${params.data.secretId} not found.` });
       }
@@ -521,7 +521,7 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send({ items: citadels.listPassages(params.data.citadelId) });
+      return reply.send({ items: await citadels.listPassages(params.data.citadelId) });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -537,7 +537,7 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      const passage = citadels.createPassage({ sourceCitadelId: params.data.citadelId, ...parsed.data });
+      const passage = await citadels.createPassage({ sourceCitadelId: params.data.citadelId, ...parsed.data });
       return reply.code(201).send(passage);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -550,7 +550,7 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      const removed = citadels.removePassage(params.data.citadelId, params.data.passageId);
+      const removed = await citadels.removePassage(params.data.citadelId, params.data.passageId);
       if (!removed) {
         return reply.code(404).send({ error: `Passage ${params.data.passageId} not found.` });
       }
@@ -567,7 +567,7 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send({ items: citadels.listMembers(params.data.citadelId) });
+      return reply.send({ items: await citadels.listMembers(params.data.citadelId) });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -583,7 +583,7 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      const member = citadels.upsertMember({ citadelId: params.data.citadelId, ...parsed.data });
+      const member = await citadels.upsertMember({ citadelId: params.data.citadelId, ...parsed.data });
       return reply.code(201).send(member);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -596,7 +596,7 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      const removed = citadels.removeMember(params.data.citadelId, params.data.subjectId);
+      const removed = await citadels.removeMember(params.data.citadelId, params.data.subjectId);
       if (!removed) {
         return reply.code(404).send({ error: `Member ${params.data.subjectId} not found.` });
       }
@@ -613,7 +613,7 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send({ items: citadels.listIntegrations(params.data.citadelId) });
+      return reply.send({ items: await citadels.listIntegrations(params.data.citadelId) });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -629,7 +629,7 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      const grant = citadels.addIntegration({ citadelId: params.data.citadelId, ...parsed.data });
+      const grant = await citadels.addIntegration({ citadelId: params.data.citadelId, ...parsed.data });
       return reply.code(201).send(grant);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -642,7 +642,7 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      const removed = citadels.removeIntegration(params.data.citadelId, params.data.grantId);
+      const removed = await citadels.removeIntegration(params.data.citadelId, params.data.grantId);
       if (!removed) {
         return reply.code(404).send({ error: `Integration grant ${params.data.grantId} not found.` });
       }
@@ -677,7 +677,7 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
   // Mason sessions (§22.2): create -> accumulate answers -> draft.
   fastify.post("/api/v1/mason/sessions", operatorOnly, async (request, reply) => {
     try {
-      return reply.code(201).send(citadels.createMasonSession());
+      return reply.code(201).send(await citadels.createMasonSession());
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -689,7 +689,7 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      const session = citadels.getMasonSession(params.data.sessionId);
+      const session = await citadels.getMasonSession(params.data.sessionId);
       if (!session) {
         return reply.code(404).send({ error: `Mason session ${params.data.sessionId} not found.` });
       }
@@ -709,7 +709,7 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      const session = citadels.updateMasonSessionAnswers(params.data.sessionId, parsed.data);
+      const session = await citadels.updateMasonSessionAnswers(params.data.sessionId, parsed.data);
       if (!session) {
         return reply.code(404).send({ error: `Mason session ${params.data.sessionId} not found.` });
       }
@@ -725,7 +725,7 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      const result = citadels.draftFromSession(params.data.sessionId);
+      const result = await citadels.draftFromSession(params.data.sessionId);
       if (!result.ok) {
         if (result.reason === "not_found") {
           return reply.code(404).send({ error: `Mason session ${params.data.sessionId} not found.` });
@@ -753,11 +753,9 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
         if (result.reason === "not_found") {
           return reply.code(404).send({ error: `Mason session ${params.data.sessionId} not found.` });
         }
-        return reply
-          .code(503)
-          .send({
-            error: "No language model is configured for the Mason; use the structured /answers endpoint instead.",
-          });
+        return reply.code(503).send({
+          error: "No language model is configured for the Mason; use the structured /answers endpoint instead.",
+        });
       }
       return reply.send(result.session);
     } catch (error) {
@@ -788,7 +786,7 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      const effect = citadels.evaluateGatehouseAction(params.data.citadelId, parsed.data.action);
+      const effect = await citadels.evaluateGatehouseAction(params.data.citadelId, parsed.data.action);
       return reply.send({ action: parsed.data.action, effect });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -803,7 +801,7 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      const result = citadels.stageBlueprint(params.data.citadelId, request.body ?? {});
+      const result = await citadels.stageBlueprint(params.data.citadelId, request.body ?? {});
       if (!result.ok) {
         return reply.code(400).send({ error: { blueprint: result.errors } });
       }

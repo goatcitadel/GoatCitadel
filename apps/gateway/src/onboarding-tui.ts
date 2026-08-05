@@ -967,4 +967,8 @@ function isLoopbackGatewayUrl(baseUrl: string): boolean {
   }
 }
 
-void run();
+void run().catch((error: unknown) => {
+  console.error("Onboarding wizard terminated with an unhandled error.");
+  console.error(error);
+  process.exitCode = 1;
+});

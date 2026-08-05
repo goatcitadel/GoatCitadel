@@ -20,23 +20,23 @@ const { sendPreparedIntegrationChatTurn, streamPreparedIntegrationChatTurn } =
   await import("./chat-turn-dispatch-service.js");
 
 describe("chat turn dispatch durable ownership", () => {
-  it("treats shipped chat, cowork, and code surfaces as durable-owned when the 1.0 defaults are on", () => {
+  it("treats shipped chat, cowork, and code surfaces as durable-owned when the 1.0 defaults are on", async () => {
     const host = createHost();
-    expect(shouldUseDurableExecution(host, createPrepared("chat"), { content: "hello" })).toBe(true);
-    expect(shouldUseDurableExecution(host, createPrepared("cowork"), { content: "hello" })).toBe(true);
-    expect(shouldUseDurableExecution(host, createPrepared("code"), { content: "hello" })).toBe(true);
+    await expect(shouldUseDurableExecution(host, createPrepared("chat"), { content: "hello" })).resolves.toBe(true);
+    await expect(shouldUseDurableExecution(host, createPrepared("cowork"), { content: "hello" })).resolves.toBe(true);
+    await expect(shouldUseDurableExecution(host, createPrepared("code"), { content: "hello" })).resolves.toBe(true);
   });
 
-  it("keeps quick-web turns on the inline fast path instead of durable execution", () => {
+  it("keeps quick-web turns on the inline fast path instead of durable execution", async () => {
     const host = createHost();
-    expect(
+    await expect(
       shouldUseDurableExecution(host, createPrepared("chat", { normalizationProfile: "quick_web" }), {
         content: "please look up the best way to eat sushi",
       }),
-    ).toBe(false);
+    ).resolves.toBe(false);
   });
 
-  it("forces routed quick-web turns through durable admission", () => {
+  it("forces routed quick-web turns through durable admission", async () => {
     const durableRun = { runId: "run-routed-quick-web" } as DurableRunRecord;
     const host = createHost({ beginDurableChatRun: vi.fn(() => durableRun) });
     const input = {
@@ -49,11 +49,11 @@ describe("chat turn dispatch durable ownership", () => {
     };
     snapshotPrepared.routedContextSnapshot = { snapshotId: "snapshot-quick-web" };
 
-    expect(shouldUseDurableExecution(host, prepared, input)).toBe(true);
-    expect(
+    await expect(shouldUseDurableExecution(host, prepared, input)).resolves.toBe(true);
+    await expect(
       shouldUseDurableExecution(host, snapshotPrepared as never, { content: "use the already-resolved snapshot" }),
-    ).toBe(true);
-    launchPreparedAgentChatTurnStream(host, "session-1", input, prepared, "chat_thread_turn_appended");
+    ).resolves.toBe(true);
+    await launchPreparedAgentChatTurnStream(host, "session-1", input, prepared, "chat_thread_turn_appended");
 
     expect(host.beginDurableChatRun).toHaveBeenCalledTimes(1);
     expect(host.registerActiveChatTurnStream).toHaveBeenCalledWith("session-1", "turn-1", durableRun.runId, {
@@ -62,7 +62,7 @@ describe("chat turn dispatch durable ownership", () => {
     expect(host.backgroundTasks.size).toBe(0);
   });
 
-  it("rejects routed turns before dispatch when durable execution is disabled", () => {
+  it("rejects routed turns before dispatch when durable execution is disabled", async () => {
     const host = createHost();
     host.config.assistant.durable.enabled = false;
     host.isFeatureEnabled = vi.fn(() => false);
@@ -72,10 +72,12 @@ describe("chat turn dispatch durable ownership", () => {
     };
     const prepared = createPrepared("chat");
 
-    expect(() => shouldUseDurableExecution(host, prepared, input)).toThrow(/routed chat context requires durable/i);
-    expect(() =>
+    await expect(shouldUseDurableExecution(host, prepared, input)).rejects.toThrow(
+      /routed chat context requires durable/i,
+    );
+    await expect(
       launchPreparedAgentChatTurnStream(host, "session-1", input, prepared, "chat_thread_turn_appended"),
-    ).toThrow(/routed chat context requires durable/i);
+    ).rejects.toThrow(/routed chat context requires durable/i);
     expect(host.beginDurableChatRun).not.toHaveBeenCalled();
     expect(host.registerActiveChatTurnStream).not.toHaveBeenCalled();
     expect(host.backgroundTasks.size).toBe(0);
@@ -96,7 +98,7 @@ describe("chat turn dispatch durable ownership", () => {
     prepared.parentTurnId = "turn-source-parent";
     prepared.branchSelectionBaseTurnId = "turn-later-active-leaf";
 
-    launchPreparedAgentChatTurnStream(
+    await launchPreparedAgentChatTurnStream(
       host,
       "session-1",
       { content: "quick retry", mode: "chat" },
@@ -120,13 +122,13 @@ describe("chat turn dispatch durable ownership", () => {
     await Promise.allSettled([...host.backgroundTasks]);
   });
 
-  it("registers the active stream against the durable run when one is created", () => {
+  it("registers the active stream against the durable run when one is created", async () => {
     const durableRun = { runId: "run-1" } as DurableRunRecord;
     const host = createHost({
       beginDurableChatRun: vi.fn(() => durableRun),
     });
 
-    launchPreparedAgentChatTurnStream(
+    await launchPreparedAgentChatTurnStream(
       host,
       "session-1",
       { content: "hello", mode: "chat" },
@@ -152,7 +154,7 @@ describe("chat turn dispatch durable ownership", () => {
     expect(host.persistChatStreamChunk).not.toHaveBeenCalledWith(expect.objectContaining({ type: "error" }));
   });
 
-  it("checks delegated dispatch ownership immediately before allocating the deterministic durable run", () => {
+  it("checks delegated dispatch ownership immediately before allocating the deterministic durable run", async () => {
     const assertDispatchOwnership = vi.fn();
     const beginDurableChatRun = vi.fn(() => {
       expect(assertDispatchOwnership).toHaveBeenCalledTimes(1);
@@ -160,7 +162,7 @@ describe("chat turn dispatch durable ownership", () => {
     });
     const host = createHost({ beginDurableChatRun });
 
-    launchPreparedAgentChatTurnStream(
+    await launchPreparedAgentChatTurnStream(
       host,
       "session-1",
       { content: "hello", mode: "chat" },
@@ -178,11 +180,11 @@ describe("chat turn dispatch durable ownership", () => {
     );
   });
 
-  it("forces a deterministic delegated quick-web turn through durable allocation", () => {
+  it("forces a deterministic delegated quick-web turn through durable allocation", async () => {
     const durableRun = { runId: "durable-chat-stable" } as DurableRunRecord;
     const host = createHost({ beginDurableChatRun: vi.fn(() => durableRun) });
 
-    launchPreparedAgentChatTurnStream(
+    await launchPreparedAgentChatTurnStream(
       host,
       "session-1",
       { content: "quick delegated lookup", mode: "chat", policyRunId: "delegation-run-1" },
@@ -196,13 +198,13 @@ describe("chat turn dispatch durable ownership", () => {
     expect(host.backgroundTasks.size).toBe(0);
   });
 
-  it("fails a required delegated durable turn closed before any dispatch when the durable kernel is disabled", () => {
+  it("fails a required delegated durable turn closed before any dispatch when the durable kernel is disabled", async () => {
     const host = createHost();
     host.config.assistant.durable.enabled = false;
     host.isFeatureEnabled = vi.fn(() => false);
     const assertDispatchOwnership = vi.fn();
 
-    expect(() =>
+    await expect(
       launchPreparedAgentChatTurnStream(
         host,
         "session-1",
@@ -216,7 +218,7 @@ describe("chat turn dispatch durable ownership", () => {
           requireDurableExecution: true,
         },
       ),
-    ).toThrow(/requires durable execution/i);
+    ).rejects.toThrow(/requires durable execution/i);
 
     expect(assertDispatchOwnership).not.toHaveBeenCalled();
     expect(host.beginDurableChatRun).not.toHaveBeenCalled();
@@ -224,7 +226,7 @@ describe("chat turn dispatch durable ownership", () => {
     expect(host.backgroundTasks.size).toBe(0);
   });
 
-  it("fails closed instead of silently falling back to background execution when a shipped durable send cannot allocate a run", () => {
+  it("fails closed instead of silently falling back to background execution when a shipped durable send cannot allocate a run", async () => {
     const traceState = {
       turnId: "turn-1",
       sessionId: "session-1",
@@ -238,7 +240,7 @@ describe("chat turn dispatch durable ownership", () => {
       traceState,
     });
 
-    launchPreparedAgentChatTurnStream(
+    await launchPreparedAgentChatTurnStream(
       host,
       "session-1",
       { content: "hello", mode: "chat" },
@@ -278,7 +280,7 @@ describe("chat turn dispatch durable ownership", () => {
     expect(host.getActiveChatTurnStream("turn-1")?.completed).toBe(true);
   });
 
-  it("still completes a durable-unavailable stream when no trace was persisted", () => {
+  it("still completes a durable-unavailable stream when no trace was persisted", async () => {
     const host = createHost({
       beginDurableChatRun: vi.fn(() => undefined),
     });
@@ -286,7 +288,7 @@ describe("chat turn dispatch durable ownership", () => {
       throw new NotFoundError({ entity: "chat turn trace", id: "turn-1" });
     });
 
-    expect(() =>
+    await expect(
       launchPreparedAgentChatTurnStream(
         host,
         "session-1",
@@ -294,7 +296,7 @@ describe("chat turn dispatch durable ownership", () => {
         createPrepared("chat"),
         "chat_thread_turn_appended",
       ),
-    ).not.toThrow();
+    ).resolves.toBeUndefined();
 
     expect(host.getActiveChatTurnStream("turn-1")?.completed).toBe(true);
     expect(host.persistChatStreamChunk).not.toHaveBeenCalled();
@@ -303,7 +305,7 @@ describe("chat turn dispatch durable ownership", () => {
     );
   });
 
-  it("releases a durable-unavailable stream when trace storage is unavailable", () => {
+  it("releases a durable-unavailable stream when trace storage is unavailable", async () => {
     const host = createHost({
       beginDurableChatRun: vi.fn(() => undefined),
     });
@@ -311,7 +313,7 @@ describe("chat turn dispatch durable ownership", () => {
       throw new Error("trace read unavailable");
     });
 
-    expect(() =>
+    await expect(
       launchPreparedAgentChatTurnStream(
         host,
         "session-1",
@@ -319,12 +321,12 @@ describe("chat turn dispatch durable ownership", () => {
         createPrepared("chat"),
         "chat_thread_turn_appended",
       ),
-    ).toThrow("trace read unavailable");
+    ).rejects.toThrow("trace read unavailable");
 
     expect(host.getActiveChatTurnStream("turn-1")?.completed).toBe(true);
   });
 
-  it("releases a durable-unavailable stream when its failure diagnostic sink is unavailable", () => {
+  it("releases a durable-unavailable stream when its failure diagnostic sink is unavailable", async () => {
     const host = createHost({
       beginDurableChatRun: vi.fn(() => undefined),
     });
@@ -334,7 +336,7 @@ describe("chat turn dispatch durable ownership", () => {
         throw new Error("diagnostic sink unavailable");
       });
 
-    expect(() =>
+    await expect(
       launchPreparedAgentChatTurnStream(
         host,
         "session-1",
@@ -342,13 +344,13 @@ describe("chat turn dispatch durable ownership", () => {
         createPrepared("chat"),
         "chat_thread_turn_appended",
       ),
-    ).not.toThrow();
+    ).resolves.toBeUndefined();
 
     expect(host.getActiveChatTurnStream("turn-1")?.completed).toBe(true);
     expect(host.storage.chatTurnTraces.get).toHaveBeenCalled();
   });
 
-  it("does not leak a registered stream when the initial dispatch diagnostic sink is unavailable", () => {
+  it("does not leak a registered stream when the initial dispatch diagnostic sink is unavailable", async () => {
     const host = createHost({
       beginDurableChatRun: vi.fn(() => undefined),
     });
@@ -356,7 +358,7 @@ describe("chat turn dispatch durable ownership", () => {
       throw new Error("diagnostic sink unavailable");
     });
 
-    expect(() =>
+    await expect(
       launchPreparedAgentChatTurnStream(
         host,
         "session-1",
@@ -364,12 +366,12 @@ describe("chat turn dispatch durable ownership", () => {
         createPrepared("chat"),
         "chat_thread_turn_appended",
       ),
-    ).not.toThrow();
+    ).resolves.toBeUndefined();
 
     expect(host.getActiveChatTurnStream("turn-1")?.completed).toBe(true);
   });
 
-  it("releases a durable-unavailable stream when the failure trace cannot be patched", () => {
+  it("releases a durable-unavailable stream when the failure trace cannot be patched", async () => {
     const host = createHost({
       beginDurableChatRun: vi.fn(() => undefined),
     });
@@ -377,7 +379,7 @@ describe("chat turn dispatch durable ownership", () => {
       throw new Error("trace patch unavailable");
     });
 
-    expect(() =>
+    await expect(
       launchPreparedAgentChatTurnStream(
         host,
         "session-1",
@@ -385,7 +387,7 @@ describe("chat turn dispatch durable ownership", () => {
         createPrepared("chat"),
         "chat_thread_turn_appended",
       ),
-    ).toThrow("trace patch unavailable");
+    ).rejects.toThrow("trace patch unavailable");
 
     expect(host.getActiveChatTurnStream("turn-1")?.completed).toBe(true);
   });
@@ -701,7 +703,7 @@ describe("chat turn dispatch durable ownership", () => {
     );
   });
 
-  it("translates only exact heartbeat admission supersession into durable interruption before callback writes", () => {
+  it("translates only exact heartbeat admission supersession into durable interruption before callback writes", async () => {
     const host = createHost();
     vi.mocked(host.sessionControlRuntimeOwner.assertActiveTurnWrite).mockImplementation(() => {
       throw new Error("authority_superseded");
@@ -724,7 +726,7 @@ describe("chat turn dispatch durable ownership", () => {
     });
     const work = vi.fn();
 
-    expect(() => fence!(work)).toThrow(
+    await expect(fence!(work)).rejects.toThrow(
       expect.objectContaining({
         name: "DurableWorkerInterruptionError",
         message: expect.stringMatching(/superseded/i),

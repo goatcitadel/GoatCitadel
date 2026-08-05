@@ -11,12 +11,13 @@ describe("DaemonRouteService", () => {
     vi.useRealTimers();
   });
 
-  it("reports the current gateway process and persisted requested state", () => {
+  it("reports the current gateway process and persisted requested state", async () => {
     const settings = fakeSettings();
     settings.set("daemon_state_v1", { state: "stopped", lastCommandAt: "2026-05-14T11:59:00.000Z" });
     const service = createDaemonRouteService({ systemSettings: settings });
 
-    expect(service.getDaemonStatus()).toEqual(
+    const status = await service.getDaemonStatus();
+    expect(status).toEqual(
       expect.objectContaining({
         running: true,
         pid: process.pid,
@@ -31,8 +32,8 @@ describe("DaemonRouteService", () => {
         ]),
       }),
     );
-    expect(service.getDaemonStatus().controlMessage).toContain("external service manager");
-    expect(service.getDaemonStatus().controlHandoff).toEqual(
+    expect(status.controlMessage).toContain("external service manager");
+    expect(status.controlHandoff).toEqual(
       expect.objectContaining({
         owner: "External service manager or launch terminal",
         serviceName: "GoatCitadel Gateway",
@@ -45,7 +46,7 @@ describe("DaemonRouteService", () => {
     );
   });
 
-  it("surfaces stale PID and port-holder repair metadata without auto-killing unknown processes", () => {
+  it("surfaces stale PID and port-holder repair metadata without auto-killing unknown processes", async () => {
     const settings = fakeSettings();
     settings.set("daemon_state_v1", {
       state: "running",
@@ -65,7 +66,7 @@ describe("DaemonRouteService", () => {
       },
     });
 
-    const status = service.getDaemonStatus();
+    const status = await service.getDaemonStatus();
 
     expect(status.diagnostics).toEqual(
       expect.arrayContaining([
@@ -100,7 +101,7 @@ describe("DaemonRouteService", () => {
     );
   });
 
-  it("requires owner proof before touching a persisted PID that is still alive", () => {
+  it("requires owner proof before touching a persisted PID that is still alive", async () => {
     const settings = fakeSettings();
     settings.set("daemon_state_v1", { state: "running", pid: 7777 });
     const service = createDaemonRouteService({
@@ -115,7 +116,7 @@ describe("DaemonRouteService", () => {
       },
     });
 
-    const status = service.getDaemonStatus();
+    const status = await service.getDaemonStatus();
 
     expect(status.diagnostics).toEqual(
       expect.arrayContaining([
@@ -138,15 +139,15 @@ describe("DaemonRouteService", () => {
     );
   });
 
-  it("rejects daemon control requests and records operator-visible logs", () => {
+  it("rejects daemon control requests and records operator-visible logs", async () => {
     const settings = fakeSettings();
     const service = new DaemonRouteService({ systemSettings: settings });
 
-    expect(service.daemonStart()).toEqual(expect.objectContaining({ accepted: false }));
-    expect(service.daemonStop()).toEqual(expect.objectContaining({ accepted: false }));
-    expect(service.daemonRestart()).toEqual(expect.objectContaining({ accepted: false }));
+    await expect(service.daemonStart()).resolves.toEqual(expect.objectContaining({ accepted: false }));
+    await expect(service.daemonStop()).resolves.toEqual(expect.objectContaining({ accepted: false }));
+    await expect(service.daemonRestart()).resolves.toEqual(expect.objectContaining({ accepted: false }));
 
-    const logs = service.listDaemonLogs();
+    const logs = await service.listDaemonLogs();
     expect(logs).toHaveLength(3);
     expect(logs.map((entry) => entry.level)).toEqual(["warn", "warn", "warn"]);
     expect(logs.map((entry) => entry.message)).toEqual([
@@ -156,26 +157,26 @@ describe("DaemonRouteService", () => {
     ]);
   });
 
-  it("bounds daemon log reads and preserves the private append level mapping", () => {
+  it("bounds daemon log reads and preserves the private append level mapping", async () => {
     const settings = fakeSettings();
     const service = new DaemonRouteService({ systemSettings: settings });
     const appendDaemonLog = (
       service as unknown as {
-        appendDaemonLog(eventType: string, payload: Record<string, unknown>): void;
+        appendDaemonLog(eventType: string, payload: Record<string, unknown>): Promise<void>;
       }
     ).appendDaemonLog.bind(service);
 
-    appendDaemonLog("info", { message: "one" });
-    appendDaemonLog("error", { message: "two" });
+    await appendDaemonLog("info", { message: "one" });
+    await appendDaemonLog("error", { message: "two" });
     for (let index = 0; index < 405; index += 1) {
-      appendDaemonLog("warn", { index });
+      await appendDaemonLog("warn", { index });
     }
 
-    expect(service.listDaemonLogs(0)).toHaveLength(1);
-    expect(service.listDaemonLogs(2.9)).toHaveLength(2);
-    expect(service.listDaemonLogs(9999)).toHaveLength(400);
-    expect(service.listDaemonLogs(400)[0]?.level).toBe("warn");
-    expect(service.listDaemonLogs(400).at(-1)?.message).toContain('"index":404');
+    await expect(service.listDaemonLogs(0)).resolves.toHaveLength(1);
+    await expect(service.listDaemonLogs(2.9)).resolves.toHaveLength(2);
+    await expect(service.listDaemonLogs(9999)).resolves.toHaveLength(400);
+    expect((await service.listDaemonLogs(400))[0]?.level).toBe("warn");
+    expect((await service.listDaemonLogs(400)).at(-1)?.message).toContain('"index":404');
   });
 });
 

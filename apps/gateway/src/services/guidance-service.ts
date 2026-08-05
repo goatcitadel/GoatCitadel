@@ -1,5 +1,5 @@
 import type { GuidanceBundleRecord, GuidanceDocType, GuidanceDocumentRecord } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { GUIDANCE_DOC_FILE_MAP } from "./guidance-doc-files.js";
 import { readGuidanceDocument, writeGuidanceDocument, type GuidanceDocumentHost } from "./guidance-document-helpers.js";
 import type { ResolvedRuntimeGuidance } from "./chat-turn-planning-helpers.js";
@@ -11,7 +11,7 @@ const GUIDANCE_DEBUG_KILL_SWITCH_ENV = "GOATCITADEL_DISABLE_GUIDANCE_INJECTION";
 
 export interface GuidanceServiceContext extends GuidanceDocumentHost {
   readonly storage: Pick<Storage, "workspaces">;
-  publishRealtime(eventType: string, source: string, payload: Record<string, unknown>): void;
+  publishRealtime(eventType: string, source: string, payload: Record<string, unknown>): Promise<unknown>;
 }
 
 export class GuidanceService {
@@ -27,7 +27,7 @@ export class GuidanceService {
 
   public async listWorkspaceGuidance(workspaceId: string): Promise<GuidanceBundleRecord> {
     const normalizedWorkspaceId = this.ctx.normalizeWorkspaceId(workspaceId);
-    this.ctx.storage.workspaces.get(normalizedWorkspaceId);
+    await this.ctx.storage.workspaces.get(normalizedWorkspaceId);
     const [globalDocs, workspaceDocs] = await Promise.all([
       this.listGlobalGuidance(),
       Promise.all(
@@ -45,7 +45,7 @@ export class GuidanceService {
 
   public async updateGlobalGuidance(docType: GuidanceDocType, content: string): Promise<GuidanceDocumentRecord> {
     await writeGuidanceDocument(this.ctx, docType, "global", undefined, content);
-    this.ctx.publishRealtime("guidance_updated", "system", {
+    await this.ctx.publishRealtime("guidance_updated", "system", {
       scope: "global",
       docType,
     });
@@ -58,12 +58,12 @@ export class GuidanceService {
     content: string,
   ): Promise<GuidanceDocumentRecord> {
     const normalizedWorkspaceId = this.ctx.normalizeWorkspaceId(workspaceId);
-    this.ctx.storage.workspaces.get(normalizedWorkspaceId);
+    await this.ctx.storage.workspaces.get(normalizedWorkspaceId);
     if (!WORKSPACE_GUIDANCE_DOC_TYPES.includes(docType)) {
       throw new Error(`Workspace override is not supported for ${docType}; use global guidance instead.`);
     }
     await writeGuidanceDocument(this.ctx, docType, "workspace", normalizedWorkspaceId, content);
-    this.ctx.publishRealtime("guidance_updated", "system", {
+    await this.ctx.publishRealtime("guidance_updated", "system", {
       scope: "workspace",
       workspaceId: normalizedWorkspaceId,
       docType,

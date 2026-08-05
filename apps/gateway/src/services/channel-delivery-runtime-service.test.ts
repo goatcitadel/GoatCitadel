@@ -70,7 +70,7 @@ describe("ChannelDeliveryRuntimeService", () => {
     expect(lifecycle.snapshot()).toMatchObject({ state: "quiesced", activeCount: 0 });
   });
 
-  it("deduplicates queued deliveries by idempotency key", () => {
+  it("deduplicates queued deliveries by idempotency key", async () => {
     const repository = createRepository();
     const service = new ChannelDeliveryRuntimeService({
       repository,
@@ -78,14 +78,14 @@ describe("ChannelDeliveryRuntimeService", () => {
       now: () => new Date("2026-05-05T00:00:00.000Z"),
     });
 
-    const first = service.enqueue({
+    const first = await service.enqueue({
       connectionId: "conn-1",
       channelKey: "telegram",
       target: "chat-1",
       payload: { message: "hello", nested: { a: 1 } },
       idempotencyKey: "approval-1",
     });
-    const second = service.enqueue({
+    const second = await service.enqueue({
       connectionId: "conn-1",
       channelKey: "telegram",
       target: "chat-1",
@@ -97,14 +97,14 @@ describe("ChannelDeliveryRuntimeService", () => {
     expect(repository.created).toHaveLength(1);
   });
 
-  it("rejects idempotency-key reuse with a different payload", () => {
+  it("rejects idempotency-key reuse with a different payload", async () => {
     const service = new ChannelDeliveryRuntimeService({
       repository: createRepository(),
       send: vi.fn(),
       now: () => new Date("2026-05-05T00:00:00.000Z"),
     });
 
-    service.enqueue({
+    await service.enqueue({
       connectionId: "conn-1",
       channelKey: "slack",
       target: "C123",
@@ -112,7 +112,7 @@ describe("ChannelDeliveryRuntimeService", () => {
       idempotencyKey: "same-key",
     });
 
-    expect(() =>
+    await expect(
       service.enqueue({
         connectionId: "conn-1",
         channelKey: "slack",
@@ -120,10 +120,10 @@ describe("ChannelDeliveryRuntimeService", () => {
         payload: { message: "second" },
         idempotencyKey: "same-key",
       }),
-    ).toThrow(/different payload/);
+    ).rejects.toThrow(/different payload/);
   });
 
-  it("deduplicates persisted deliveries after restart using canonical payload fingerprints", () => {
+  it("deduplicates persisted deliveries after restart using canonical payload fingerprints", async () => {
     const repository = {
       ...createRepository(),
       findByIdempotencyKey: vi.fn(() => ({
@@ -148,7 +148,7 @@ describe("ChannelDeliveryRuntimeService", () => {
       now: () => new Date("2026-05-05T00:00:01.000Z"),
     });
 
-    const replay = restartedService.enqueue({
+    const replay = await restartedService.enqueue({
       connectionId: "conn-1",
       channelKey: "slack",
       target: "C123",
@@ -160,7 +160,7 @@ describe("ChannelDeliveryRuntimeService", () => {
     expect(repository.created).toHaveLength(0);
   });
 
-  it("rejects persisted idempotency-key reuse when stored fingerprints disagree", () => {
+  it("rejects persisted idempotency-key reuse when stored fingerprints disagree", async () => {
     const repository = {
       ...createRepository(),
       findByIdempotencyKey: vi.fn(() => ({
@@ -180,7 +180,7 @@ describe("ChannelDeliveryRuntimeService", () => {
       now: () => new Date("2026-05-05T00:00:00.000Z"),
     });
 
-    expect(() =>
+    await expect(
       service.enqueue({
         connectionId: "conn-1",
         channelKey: "slack",
@@ -188,10 +188,10 @@ describe("ChannelDeliveryRuntimeService", () => {
         payload: { message: "fresh payload" },
         idempotencyKey: "restart-idempotency-key",
       }),
-    ).toThrow(/different payload/);
+    ).rejects.toThrow(/different payload/);
   });
 
-  it("returns defensive copies from get/list and normalizes low attempt and timing options", () => {
+  it("returns defensive copies from get/list and normalizes low attempt and timing options", async () => {
     const repository = createRepository();
     const service = new ChannelDeliveryRuntimeService({
       repository,
@@ -200,7 +200,7 @@ describe("ChannelDeliveryRuntimeService", () => {
     });
 
     expect(service.get("missing")).toBeUndefined();
-    const queued = service.enqueue({
+    const queued = await service.enqueue({
       connectionId: "conn-1",
       channelKey: "line",
       target: "Utarget",
@@ -238,7 +238,7 @@ describe("ChannelDeliveryRuntimeService", () => {
       send,
       now: () => now,
     });
-    const queued = service.enqueue({
+    const queued = await service.enqueue({
       connectionId: "conn-1",
       channelKey: "slack",
       target: "C123",
@@ -300,7 +300,7 @@ describe("ChannelDeliveryRuntimeService", () => {
       send,
       now: () => new Date("2026-05-05T00:00:00.000Z"),
     });
-    const queued = service.enqueue({
+    const queued = await service.enqueue({
       connectionId: "conn-1",
       channelKey: "slack",
       target: "C123",
@@ -343,8 +343,8 @@ describe("ChannelDeliveryRuntimeService", () => {
         payload: { message: "claim once across runtimes" },
         idempotencyKey: "shared-runtime-claim-key",
       };
-      const queued = firstService.enqueue(input);
-      expect(secondService.enqueue(input).deliveryId).toBe(queued.deliveryId);
+      const queued = await firstService.enqueue(input);
+      expect((await secondService.enqueue(input)).deliveryId).toBe(queued.deliveryId);
 
       await Promise.all([firstService.drainDue(), secondService.drainDue()]);
 
@@ -393,8 +393,8 @@ describe("ChannelDeliveryRuntimeService", () => {
         idempotencyKey: "stale-runtime-snapshot-key",
         staleAfterMs: 10,
       };
-      const queued = ownerService.enqueue(input);
-      delayedService.enqueue(input);
+      const queued = await ownerService.enqueue(input);
+      await delayedService.enqueue(input);
 
       await ownerService.drainDue();
       now = new Date("2026-05-05T00:00:00.020Z");
@@ -429,7 +429,7 @@ describe("ChannelDeliveryRuntimeService", () => {
       send,
       now: () => now,
     });
-    const queued = service.enqueue({
+    const queued = await service.enqueue({
       connectionId: "conn-1",
       channelKey: "slack",
       target: "C123",
@@ -472,7 +472,7 @@ describe("ChannelDeliveryRuntimeService", () => {
       onDeliverySent,
       now: () => now,
     });
-    const queued = service.enqueue({
+    const queued = await service.enqueue({
       connectionId: "conn-1",
       channelKey: "slack",
       target: "C123",
@@ -521,7 +521,7 @@ describe("ChannelDeliveryRuntimeService", () => {
       onDeliveryFailed,
       now: () => new Date("2026-05-05T00:00:00.000Z"),
     });
-    const queued = service.enqueue({
+    const queued = await service.enqueue({
       connectionId: "conn-1",
       channelKey: "slack",
       target: "C123",
@@ -573,7 +573,7 @@ describe("ChannelDeliveryRuntimeService", () => {
       }),
       now: () => new Date("2026-05-05T00:00:00.000Z"),
     });
-    service.enqueue({
+    await service.enqueue({
       connectionId: "conn-1",
       channelKey: "slack",
       target: "C123",
@@ -605,7 +605,7 @@ describe("ChannelDeliveryRuntimeService", () => {
       send,
       now: () => new Date("2026-05-05T00:00:00.000Z"),
     });
-    const queued = service.enqueue({
+    const queued = await service.enqueue({
       connectionId: "conn-1",
       channelKey: "slack",
       target: "C123",
@@ -637,7 +637,7 @@ describe("ChannelDeliveryRuntimeService", () => {
       onDeliveryFailed,
       now: () => new Date("2026-05-05T00:00:00.000Z"),
     });
-    const queued = service.enqueue({
+    const queued = await service.enqueue({
       connectionId: "conn-1",
       channelKey: "slack",
       target: "C123",
@@ -671,7 +671,7 @@ describe("ChannelDeliveryRuntimeService", () => {
       onDeliveryFailed,
       now: () => new Date("2026-05-05T00:00:00.000Z"),
     });
-    service.enqueue({
+    await service.enqueue({
       connectionId: "conn-1",
       channelKey: "slack",
       target: "C123",
@@ -811,7 +811,7 @@ describe("ChannelDeliveryRuntimeService", () => {
       now: () => now,
     });
 
-    const existing = service.enqueue({
+    const existing = await service.enqueue({
       connectionId: "conn-1",
       channelKey: "slack",
       target: "C123",
@@ -843,7 +843,7 @@ describe("ChannelDeliveryRuntimeService", () => {
     expect(service.get("persisted-active-claim-1")).toBeUndefined();
   });
 
-  it("uses the same conditional quarantine for an expired recovered lease during a stale sweep", () => {
+  it("uses the same conditional quarantine for an expired recovered lease during a stale sweep", async () => {
     const repository = createRepository();
     const quarantineAttempt = vi.fn(() => false);
     let now = new Date("2026-05-05T00:00:02.000Z");
@@ -870,7 +870,7 @@ describe("ChannelDeliveryRuntimeService", () => {
       now: () => now,
     });
 
-    service.enqueue({
+    await service.enqueue({
       connectionId: "conn-1",
       channelKey: "slack",
       target: "C123",
@@ -879,7 +879,7 @@ describe("ChannelDeliveryRuntimeService", () => {
     });
     now = new Date("2026-05-05T00:15:01.000Z");
 
-    expect(service.markStaleDeliveries()).toEqual([]);
+    expect(await service.markStaleDeliveries()).toEqual([]);
     expect(quarantineAttempt).toHaveBeenCalledTimes(1);
     expect(repository.markFailed).not.toHaveBeenCalled();
     expect(service.get("persisted-sweep-claim-1")).toBeUndefined();
@@ -916,7 +916,7 @@ describe("ChannelDeliveryRuntimeService", () => {
       send,
       now: () => new Date("2026-05-05T00:00:01.000Z"),
     });
-    const queued = service.enqueue({
+    const queued = await service.enqueue({
       connectionId: "conn-1",
       channelKey: "telegram",
       target: "chat-1",
@@ -939,7 +939,7 @@ describe("ChannelDeliveryRuntimeService", () => {
       }),
       now: () => new Date("2026-05-05T00:00:00.000Z"),
     });
-    const queued = service.enqueue({
+    const queued = await service.enqueue({
       connectionId: "conn-1",
       channelKey: "telegram",
       target: "chat-1",
@@ -974,7 +974,7 @@ describe("ChannelDeliveryRuntimeService", () => {
       }),
       now: () => new Date("2026-05-05T00:00:00.000Z"),
     });
-    const queued = service.enqueue({
+    const queued = await service.enqueue({
       connectionId: "conn-1",
       channelKey: "telegram",
       target: "chat-1",
@@ -1011,7 +1011,7 @@ describe("ChannelDeliveryRuntimeService", () => {
       send,
       now: () => new Date("2026-05-05T00:00:00.000Z"),
     });
-    const queued = service.enqueue({
+    const queued = await service.enqueue({
       connectionId: "conn-1",
       channelKey: "slack",
       target: "C123",
@@ -1052,7 +1052,7 @@ describe("ChannelDeliveryRuntimeService", () => {
       }),
       now: () => new Date("2026-05-05T00:00:00.000Z"),
     });
-    const queued = service.enqueue({
+    const queued = await service.enqueue({
       connectionId: "conn-1",
       channelKey: "telegram",
       target: "chat-1",
@@ -1081,7 +1081,7 @@ describe("ChannelDeliveryRuntimeService", () => {
       send,
       now: () => now,
     });
-    const queued = service.enqueue({
+    const queued = await service.enqueue({
       connectionId: "conn-1",
       channelKey: "discord",
       target: "channel-1",
@@ -1090,7 +1090,7 @@ describe("ChannelDeliveryRuntimeService", () => {
     });
 
     now = new Date("2026-05-05T00:00:00.500Z");
-    const stale = service.markStaleDeliveries();
+    const stale = await service.markStaleDeliveries();
 
     expect(stale[0]).toMatchObject({
       deliveryId: queued.deliveryId,
@@ -1117,7 +1117,7 @@ describe("ChannelDeliveryRuntimeService", () => {
       onDeliveryFailed,
       now: () => now,
     });
-    const queued = service.enqueue({
+    const queued = await service.enqueue({
       connectionId: "conn-1",
       channelKey: "discord",
       target: "channel-1",
@@ -1126,7 +1126,7 @@ describe("ChannelDeliveryRuntimeService", () => {
     });
 
     now = new Date("2026-05-05T00:00:00.500Z");
-    service.markStaleDeliveries();
+    await service.markStaleDeliveries();
 
     expect(onDeliveryFailed).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1138,7 +1138,7 @@ describe("ChannelDeliveryRuntimeService", () => {
     );
   });
 
-  it("preserves Gateway-built channel chunking diagnostics on queued records", () => {
+  it("preserves Gateway-built channel chunking diagnostics on queued records", async () => {
     const repository = createRepository();
     const service = new ChannelDeliveryRuntimeService({
       repository,
@@ -1146,7 +1146,7 @@ describe("ChannelDeliveryRuntimeService", () => {
       now: () => new Date("2026-05-05T00:00:00.000Z"),
     });
 
-    const queued = service.enqueue({
+    const queued = await service.enqueue({
       connectionId: "conn-1",
       channelKey: "discord",
       target: "channel-1",
@@ -1184,7 +1184,7 @@ describe("ChannelDeliveryRuntimeService", () => {
     });
   });
 
-  it("adds Unicode-safe chunking and rich-format fallback diagnostics when enqueueing raw channel text", () => {
+  it("adds Unicode-safe chunking and rich-format fallback diagnostics when enqueueing raw channel text", async () => {
     const repository = createRepository();
     const service = new ChannelDeliveryRuntimeService({
       repository,
@@ -1192,7 +1192,7 @@ describe("ChannelDeliveryRuntimeService", () => {
       now: () => new Date("2026-05-05T00:00:00.000Z"),
     });
 
-    const queued = service.enqueue({
+    const queued = await service.enqueue({
       connectionId: "conn-1",
       channelKey: "telegram",
       target: "chat-1",
@@ -1220,7 +1220,7 @@ describe("ChannelDeliveryRuntimeService", () => {
     expect(queued.deliveryDiagnostics?.richFormatting?.notes.join(" ")).toContain("Rich formatting must be flattened");
   });
 
-  it("adds provider-backed rich-message diagnostics for WhatsApp attachments", () => {
+  it("adds provider-backed rich-message diagnostics for WhatsApp attachments", async () => {
     const repository = createRepository();
     const service = new ChannelDeliveryRuntimeService({
       repository,
@@ -1228,7 +1228,7 @@ describe("ChannelDeliveryRuntimeService", () => {
       now: () => new Date("2026-05-05T00:00:00.000Z"),
     });
 
-    const queued = service.enqueue({
+    const queued = await service.enqueue({
       connectionId: "conn-1",
       channelKey: "whatsapp",
       target: "+15551234567",
@@ -1280,14 +1280,14 @@ describe("ChannelDeliveryRuntimeService", () => {
     expect(repository.created[0]?.deliveryDiagnostics).toBeUndefined();
   });
 
-  it("rejects Telegram rich payloads that cannot be delivered safely", () => {
+  it("rejects Telegram rich payloads that cannot be delivered safely", async () => {
     const service = new ChannelDeliveryRuntimeService({
       repository: createRepository(),
       send: vi.fn(),
       now: () => new Date("2026-05-05T00:00:00.000Z"),
     });
 
-    expect(() =>
+    await expect(
       service.enqueue({
         connectionId: "conn-1",
         channelKey: "telegram",
@@ -1297,9 +1297,9 @@ describe("ChannelDeliveryRuntimeService", () => {
           attachments: [{ title: "missing-url.pdf", mimeType: "application/pdf" }],
         },
       }),
-    ).toThrow("Telegram rich attachments require a URL, inline data, or an attachmentId to hydrate");
+    ).rejects.toThrow("Telegram rich attachments require a URL, inline data, or an attachmentId to hydrate");
 
-    expect(() =>
+    await expect(
       service.enqueue({
         connectionId: "conn-1",
         channelKey: "telegram",
@@ -1309,7 +1309,7 @@ describe("ChannelDeliveryRuntimeService", () => {
           attachmentIds: Array.from({ length: 11 }, (_, index) => `attachment-${index + 1}`),
         },
       }),
-    ).toThrow("Provider rich delivery is capped at 10 attachments per message");
+    ).rejects.toThrow("Provider rich delivery is capped at 10 attachments per message");
   });
 
   it("classifies channel delivery failures for operator-facing fallback labels", () => {

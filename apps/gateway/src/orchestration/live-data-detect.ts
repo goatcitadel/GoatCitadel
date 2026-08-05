@@ -48,6 +48,12 @@ const EXPLICIT_WEB_PHRASES = [
   "http.post",
 ];
 
+const EXTERNAL_RESEARCH_ACTION_REGEX =
+  /\b(?:(?:do|conduct|perform|undertake|carry\s+out)\s+(?:some\s+|independent\s+|external\s+)?research\s+(?:on|about|into|regarding)\s+|research\s+(?=(?:whether|which|what|who|where|when|why|how|the|a|an)\b))([^\n]+)/iu;
+
+const RESEARCH_DELIVERY_SUFFIX_REGEX =
+  /\s+(?:and|then)\s+(?:put\s+together|create|make|build|produce|draft|generate|turn\s+(?:it|that)\s+into)\b[\s\S]*$/iu;
+
 export { EXPLICIT_WEB_PHRASES };
 
 export function hasLiveDataKeywords(objective: string): boolean {
@@ -76,6 +82,24 @@ export function hasResearchListIntent(objective: string): boolean {
   const hasDetailFields = LOCAL_RESEARCH_DETAIL_REGEX.test(normalized);
   const hasListShape = LOCAL_RESEARCH_LIST_REGEX.test(normalized);
   return hasLocation && hasEntity && (hasDetailFields || hasListShape);
+}
+
+export function extractExternalResearchSubject(objective: string): string | undefined {
+  const delegatedText = extractDelegatedLiveDataText(objective).replace(/\s+/gu, " ").trim();
+  const match = delegatedText.match(EXTERNAL_RESEARCH_ACTION_REGEX);
+  const subject = match?.[1]
+    ?.replace(RESEARCH_DELIVERY_SUFFIX_REGEX, "")
+    .replace(/[.!?]+$/gu, "")
+    .trim();
+  return subject && subject.length >= 3 ? subject.slice(0, 240) : undefined;
+}
+
+export function hasExternalResearchIntent(objective: string): boolean {
+  const delegatedText = extractDelegatedLiveDataText(objective);
+  return Boolean(
+    extractExternalResearchSubject(delegatedText) ||
+    (delegatedText !== objective.trim() ? extractExternalResearchSubject(objective) : undefined),
+  );
 }
 
 export function extractDelegatedLiveDataText(objective: string): string {

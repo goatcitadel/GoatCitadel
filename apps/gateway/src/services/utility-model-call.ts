@@ -45,7 +45,10 @@ export async function runBoundedUtilityModelCall<T>(input: {
         throw terminal.value.error;
       }
       if (terminal.status === "pending") {
-        void operation.then(() => undefined);
+        void operation.then(
+          () => undefined,
+          () => undefined,
+        );
         const uncertain = new Error(`${input.timeoutMessage}; provider abort was not acknowledged`);
         uncertain.name = "ModelUsageDispatchUncertainError";
         throw uncertain;

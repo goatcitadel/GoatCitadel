@@ -3,24 +3,24 @@ import type { DurableRunRecord, DurableWakeResult } from "@goatcitadel/contracts
 import { DurableOperatorService, type DurableOperatorServiceDeps } from "./durable-operator-service.js";
 
 describe("DurableOperatorService", () => {
-  it("delegates read and direct mutation operations with route defaults", () => {
+  it("delegates read and direct mutation operations with route defaults", async () => {
     const deps = fakeDeps();
     const service = new DurableOperatorService(deps);
 
-    expect(service.getDiagnostics()).toEqual({ status: "ok" });
-    expect(service.listRuns()).toEqual([{ runId: "run-1", status: "completed" }]);
-    expect(service.listRuns(7)).toEqual([{ runId: "run-1", status: "completed" }]);
-    expect(service.listDeadLetters()).toEqual([{ entryId: "dead-1" }]);
-    expect(service.listDeadLetters(8)).toEqual([{ entryId: "dead-1" }]);
-    expect(service.listRunCheckpoints("run-1")).toEqual([{ checkpointId: "checkpoint-1" }]);
-    expect(service.listRunCheckpoints("run-1", 9)).toEqual([{ checkpointId: "checkpoint-1" }]);
-    expect(service.getRun("run-1")).toEqual(run("completed"));
-    expect(service.listRunTimeline("run-1")).toEqual([{ eventId: "event-1" }]);
-    expect(service.listRunTimeline("run-1", 10)).toEqual([{ eventId: "event-1" }]);
-    expect(service.pauseRun("run-1")).toEqual(run("paused"));
-    expect(service.pauseRun("run-1", "admin")).toEqual(run("paused"));
-    expect(service.recoverDeadLetter("dead-1")).toEqual(run("queued"));
-    expect(service.recoverDeadLetter("dead-1", "admin", { maxAttempts: 3 })).toEqual(run("queued"));
+    expect(await service.getDiagnostics()).toEqual({ status: "ok" });
+    expect(await service.listRuns()).toEqual([{ runId: "run-1", status: "completed" }]);
+    expect(await service.listRuns(7)).toEqual([{ runId: "run-1", status: "completed" }]);
+    expect(await service.listDeadLetters()).toEqual([{ entryId: "dead-1" }]);
+    expect(await service.listDeadLetters(8)).toEqual([{ entryId: "dead-1" }]);
+    expect(await service.listRunCheckpoints("run-1")).toEqual([{ checkpointId: "checkpoint-1" }]);
+    expect(await service.listRunCheckpoints("run-1", 9)).toEqual([{ checkpointId: "checkpoint-1" }]);
+    expect(await service.getRun("run-1")).toEqual(run("completed"));
+    expect(await service.listRunTimeline("run-1")).toEqual([{ eventId: "event-1" }]);
+    expect(await service.listRunTimeline("run-1", 10)).toEqual([{ eventId: "event-1" }]);
+    expect(await service.pauseRun("run-1")).toEqual(run("paused"));
+    expect(await service.pauseRun("run-1", "admin")).toEqual(run("paused"));
+    expect(await service.recoverDeadLetter("dead-1")).toEqual(run("queued"));
+    expect(await service.recoverDeadLetter("dead-1", "admin", { maxAttempts: 3 })).toEqual(run("queued"));
 
     expect(deps.durableRunService.listDurableRuns).toHaveBeenNthCalledWith(1, 50);
     expect(deps.durableRunService.listDurableRuns).toHaveBeenNthCalledWith(2, 7);
@@ -38,17 +38,17 @@ describe("DurableOperatorService", () => {
     });
   });
 
-  it("requests processing only for queued created and retried runs", () => {
+  it("requests processing only for queued created and retried runs", async () => {
     const deps = fakeDeps();
     const service = new DurableOperatorService(deps);
 
     deps.durableRunService.createDurableRun.mockReturnValueOnce(run("queued")).mockReturnValueOnce(run("completed"));
     deps.durableRunService.retryDurableRun.mockReturnValueOnce(run("queued")).mockReturnValueOnce(run("failed"));
 
-    expect(service.createRun({ kind: "test" } as never)).toEqual(run("queued"));
-    expect(service.createRun({ kind: "test" } as never)).toEqual(run("completed"));
-    expect(service.retryRun("run-1")).toEqual(run("queued"));
-    expect(service.retryRun("run-2", "operator_fix", "admin")).toEqual(run("failed"));
+    expect(await service.createRun({ kind: "test" } as never)).toEqual(run("queued"));
+    expect(await service.createRun({ kind: "test" } as never)).toEqual(run("completed"));
+    expect(await service.retryRun("run-1")).toEqual(run("queued"));
+    expect(await service.retryRun("run-2", "operator_fix", "admin")).toEqual(run("failed"));
 
     expect(deps.durableRunService.requestRunProcessing).toHaveBeenCalledWith("run-1");
     expect(deps.durableRunService.requestRunProcessing).toHaveBeenCalledTimes(2);
@@ -76,14 +76,14 @@ describe("DurableOperatorService", () => {
     );
   });
 
-  it("syncs maintenance for resume and cancel operations", () => {
+  it("syncs maintenance for resume and cancel operations", async () => {
     const deps = fakeDeps();
     const service = new DurableOperatorService(deps);
 
-    expect(service.resumeRun("run-1")).toEqual(run("running"));
-    expect(service.resumeRun("run-1", "admin")).toEqual(run("running"));
-    expect(service.cancelRun("run-1")).toEqual(run("cancelled"));
-    expect(service.cancelRun("run-1", "admin")).toEqual(run("cancelled"));
+    expect(await service.resumeRun("run-1")).toEqual(run("running"));
+    expect(await service.resumeRun("run-1", "admin")).toEqual(run("running"));
+    expect(await service.cancelRun("run-1")).toEqual(run("cancelled"));
+    expect(await service.cancelRun("run-1", "admin")).toEqual(run("cancelled"));
 
     expect(deps.durableRunService.resumeDurableRun).toHaveBeenNthCalledWith(1, "run-1", "operator");
     expect(deps.durableRunService.resumeDurableRun).toHaveBeenNthCalledWith(2, "run-1", "admin");
@@ -93,7 +93,7 @@ describe("DurableOperatorService", () => {
     expect(deps.memoryLifecycleService.syncMaintenanceFromDurableRun).toHaveBeenCalledTimes(4);
   });
 
-  it("enqueues wake hooks only when a run was actually woken", () => {
+  it("enqueues wake hooks only when a run was actually woken", async () => {
     const deps = fakeDeps();
     const service = new DurableOperatorService(deps);
     const woke: DurableWakeResult = { outcome: "woke", run: run("queued") } as never;
@@ -101,13 +101,13 @@ describe("DurableOperatorService", () => {
     deps.durableRunService.wakeDurableRun.mockReturnValueOnce(woke).mockReturnValueOnce(ignored);
 
     expect(
-      service.wakeRun("run-1", {
+      await service.wakeRun("run-1", {
         eventKey: "approval.resolved",
         correlationId: "corr-1",
         payload: { ok: true },
       }),
     ).toEqual(woke);
-    expect(service.wakeRun("run-2", { eventKey: "timer" })).toEqual(ignored);
+    expect(await service.wakeRun("run-2", { eventKey: "timer" })).toEqual(ignored);
 
     expect(deps.durableRunService.requestRunProcessing).toHaveBeenCalledWith("run-1");
     expect(deps.hooksService.enqueueAfterHooks).toHaveBeenCalledTimes(1);
@@ -125,14 +125,35 @@ describe("DurableOperatorService", () => {
     });
   });
 
-  it("preserves retry commit truth when a post-commit hook enqueue fails", () => {
+  it("can defer processing until a larger wake transaction commits", async () => {
+    const deps = fakeDeps();
+    const service = new DurableOperatorService(deps);
+    const woke: DurableWakeResult = { outcome: "woke", run: run("queued") } as never;
+    deps.durableRunService.wakeDurableRun.mockReturnValueOnce(woke);
+
+    await expect(
+      service.wakeRun(
+        "run-1",
+        {
+          eventKey: "approval.resolved",
+          correlationId: "approval-1",
+        },
+        { deferProcessing: true },
+      ),
+    ).resolves.toEqual(woke);
+
+    expect(deps.durableRunService.requestRunProcessing).not.toHaveBeenCalled();
+    expect(deps.hooksService.enqueueAfterHooks).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves retry commit truth when a post-commit hook enqueue fails", async () => {
     const deps = fakeDeps();
     deps.hooksService.enqueueAfterHooks.mockImplementationOnce(() => {
       throw new Error("hook queue unavailable");
     });
     const service = new DurableOperatorService(deps);
 
-    expect(() => service.retryRun("run-1")).toThrow(
+    await expect(service.retryRun("run-1")).rejects.toThrow(
       expect.objectContaining({
         name: "DurableOperatorPostCommitError",
         mutationCommitted: true,
@@ -142,14 +163,14 @@ describe("DurableOperatorService", () => {
     expect(deps.durableRunService.retryDurableRun).toHaveBeenCalledTimes(1);
   });
 
-  it("attempts every retry post-commit consumer before reporting committed failure", () => {
+  it("attempts every retry post-commit consumer before reporting committed failure", async () => {
     const deps = fakeDeps();
     deps.memoryLifecycleService.syncMaintenanceFromDurableRun.mockImplementationOnce(() => {
       throw new Error("maintenance sync unavailable");
     });
     const service = new DurableOperatorService(deps);
 
-    expect(() => service.retryRun("run-1")).toThrow(
+    await expect(service.retryRun("run-1")).rejects.toThrow(
       expect.objectContaining({
         name: "DurableOperatorPostCommitError",
         mutationCommitted: true,

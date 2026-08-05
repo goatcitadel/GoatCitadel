@@ -15,7 +15,7 @@ import {
   type DurableRunRecord,
   type SkillListItem,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { CronSpecMutationOwner } from "./cron-config-generation-owner.js";
 import { computeSkillImmunity, gradeSkillUsage } from "./curator-grader.js";
 import { planCuratorIdleSweep, type CuratorIdleSweepResult, type CuratorIdleSweepDeps } from "./curator-idle-sweep.js";
@@ -49,24 +49,24 @@ export interface CuratorIdleSweepCollaborators {
    * false the sweep is proposal-only: it computes archives/merges but applies
    * nothing.
    */
-  isAutonomyEnabled: () => boolean;
+  isAutonomyEnabled: () => Promise<boolean>;
   /**
    * Capture a reversible snapshot of a skill BEFORE it is archived. Invoked only
    * under full autonomy, immediately before the archive disable. Archive itself
    * stays disable-only (never hard-delete); restore re-enables from the snapshot.
    */
-  snapshotSkill: (skillId: string) => void;
+  snapshotSkill: (skillId: string) => Promise<void> | void;
   /** Optional near-dup similarity override (defaults to name/title overlap). */
   similarity?: CuratorIdleSweepDeps["similarity"];
 }
 
 export interface CuratorServiceDeps {
-  listSkills: () => SkillListItem[];
-  archiveSkill: (skillId: string, reason: string, actorId?: string) => SkillListItem;
-  pruneSkill: (skillId: string, actorId?: string) => { filesRemoved: string[] };
+  listSkills: () => Promise<SkillListItem[]>;
+  archiveSkill: (skillId: string, reason: string, actorId?: string) => Promise<SkillListItem>;
+  pruneSkill: (skillId: string, actorId?: string) => Promise<{ filesRemoved: string[] }>;
   now: () => Date;
   writeReport: (report: CuratorRunReport) => Promise<string>;
-  publishRealtime: (topic: string, payload: Record<string, unknown>) => void;
+  publishRealtime: (topic: string, payload: Record<string, unknown>) => Promise<unknown>;
   cycleDays: number;
   storage?: Pick<Storage, "cronJobs" | "systemSettings">; // NEW: optional, gates curator cron methods
   cronSpecOwner?: Pick<CronSpecMutationOwner, "reconcileSpec">;
@@ -76,10 +76,9 @@ export interface CuratorServiceDeps {
 export class CuratorService {
   public constructor(private readonly deps: CuratorServiceDeps) {}
 
-  public listCuratorStatus(): CuratorStatusResponse {
+  public async listCuratorStatus(): Promise<CuratorStatusResponse> {
     const now = this.deps.now();
-    const items = this.deps
-      .listSkills()
+    const items = (await this.deps.listSkills())
       .map((skill): CuratorSkillStatusItem => this.toStatusItem(skill, now))
       .sort((a, b) => b.usageCount - a.usageCount);
     return {
@@ -112,11 +111,11 @@ export class CuratorService {
     };
   }
 
-  public archive(input: CuratorArchiveRequest): CuratorArchiveResponse {
+  public async archive(input: CuratorArchiveRequest): Promise<CuratorArchiveResponse> {
     if (input.confirm !== true) {
       throw new ValidationError({ message: "Curator: archive requires confirm: true" });
     }
-    const skill = this.deps.listSkills().find((s) => s.skillId === input.skillId);
+    const skill = (await this.deps.listSkills()).find((s) => s.skillId === input.skillId);
     if (!skill) {
       throw new Error(`Curator: skill not found: ${input.skillId}`);
     }
@@ -125,9 +124,9 @@ export class CuratorService {
       throw new Error(`Curator: ${immunity.reason} skill ${input.skillId} cannot be archived`);
     }
     const archiveReason = normalizeArchiveReason(input.reason);
-    const updated = this.deps.archiveSkill(input.skillId, archiveReason, input.actorId);
+    const updated = await this.deps.archiveSkill(input.skillId, archiveReason, input.actorId);
     const archivedAt = this.deps.now().toISOString();
-    this.deps.publishRealtime("curator", {
+    await this.deps.publishRealtime("curator", {
       type: "skill_archived",
       skillId: input.skillId,
       reason: archiveReason,
@@ -141,11 +140,11 @@ export class CuratorService {
     };
   }
 
-  public prune(input: CuratorPruneRequest): CuratorPruneResponse {
+  public async prune(input: CuratorPruneRequest): Promise<CuratorPruneResponse> {
     if (input.confirm !== true) {
       throw new Error("Curator: prune requires confirm: true");
     }
-    const skill = this.deps.listSkills().find((s) => s.skillId === input.skillId);
+    const skill = (await this.deps.listSkills()).find((s) => s.skillId === input.skillId);
     if (!skill) {
       throw new Error(`Curator: skill not found: ${input.skillId}`);
     }
@@ -153,9 +152,9 @@ export class CuratorService {
     if (immunity.immune) {
       throw new Error(`Curator: ${immunity.reason} skill ${input.skillId} cannot be pruned`);
     }
-    const result = this.deps.pruneSkill(input.skillId, input.actorId);
+    const result = await this.deps.pruneSkill(input.skillId, input.actorId);
     const prunedAt = this.deps.now().toISOString();
-    this.deps.publishRealtime("curator", {
+    await this.deps.publishRealtime("curator", {
       type: "skill_pruned",
       skillId: input.skillId,
       prunedAt,
@@ -169,10 +168,9 @@ export class CuratorService {
     };
   }
 
-  public listArchived(): CuratorListArchivedResponse {
+  public async listArchived(): Promise<CuratorListArchivedResponse> {
     const now = this.deps.now();
-    const items = this.deps
-      .listSkills()
+    const items = (await this.deps.listSkills())
       .filter((skill) => skill.state === "disabled" && (skill.note?.startsWith("curator:archived") ?? false))
       .map((skill) => this.toStatusItem(skill, now));
     return {
@@ -191,7 +189,7 @@ export class CuratorService {
     const startedAt = this.deps.now();
     const runId = `curator-run-${randomUUID()}`;
     const dryRun = true;
-    const skills = this.deps.listSkills();
+    const skills = await this.deps.listSkills();
     const entries: CuratorRunReportEntry[] = [];
     let immuneCount = 0;
     const archivedCount = 0;
@@ -255,7 +253,7 @@ export class CuratorService {
       reportDir: "",
     };
     report.reportDir = await this.deps.writeReport(report);
-    this.deps.publishRealtime("curator", {
+    await this.deps.publishRealtime("curator", {
       type: "curator_run_completed",
       runId,
       archivedCount,
@@ -272,7 +270,7 @@ export class CuratorService {
     if (!this.deps.cronSpecOwner) {
       throw new Error("Cron spec owner is required to reconcile the weekly curator job.");
     }
-    const existing = this.deps.storage.cronJobs.get(CURATOR_WEEKLY_JOB_ID);
+    const existing = await this.deps.storage.cronJobs.get(CURATOR_WEEKLY_JOB_ID);
     await this.deps.cronSpecOwner.reconcileSpec({
       jobId: CURATOR_WEEKLY_JOB_ID,
       name: "Curator Weekly Report",
@@ -286,7 +284,7 @@ export class CuratorService {
 
   public async runCuratorWeeklyIfDue(options: { force?: boolean; recordCronState?: boolean } = {}): Promise<void> {
     if (!this.deps.storage) return;
-    const job = this.deps.storage.cronJobs.get(CURATOR_WEEKLY_JOB_ID);
+    const job = await this.deps.storage.cronJobs.get(CURATOR_WEEKLY_JOB_ID);
     if (!job?.enabled) return;
     const now = this.deps.now();
     if (!options.force) {
@@ -295,13 +293,13 @@ export class CuratorService {
       if (parts.weekday !== 0 || parts.hour !== 2) return;
     }
     const weekKey = toWeekKeyForTimezone(now, CURATOR_WEEKLY_TIME_ZONE);
-    const lastWeekKey = this.deps.storage.systemSettings.get<string>(CURATOR_WEEKLY_DEDUP_SETTING_KEY)?.value;
+    const lastWeekKey = (await this.deps.storage.systemSettings.get<string>(CURATOR_WEEKLY_DEDUP_SETTING_KEY))?.value;
     if (!options.force && lastWeekKey === weekKey) return;
     await this.runCurator({ sync: false, dryRun: true, triggerMode: "scheduled" });
-    this.deps.storage.systemSettings.set(CURATOR_WEEKLY_DEDUP_SETTING_KEY, weekKey);
+    await this.deps.storage.systemSettings.set(CURATOR_WEEKLY_DEDUP_SETTING_KEY, weekKey);
     const finishedAt = this.deps.now().toISOString();
     if (options.recordCronState !== false) {
-      this.deps.storage.cronJobs.mergeRuntimeTelemetry(
+      await this.deps.storage.cronJobs.mergeRuntimeTelemetry(
         job.jobId,
         {
           lastRunAt: finishedAt,
@@ -335,15 +333,15 @@ export class CuratorService {
       if (!options.force && !idle.isWorkspaceIdle()) {
         return undefined;
       }
-      if (!options.force && !this.isIdleSweepCadenceDue()) {
+      if (!options.force && !(await this.isIdleSweepCadenceDue())) {
         return undefined;
       }
-      const result = this.runCuratorIdleSweep();
-      this.recordIdleSweepRun();
+      const result = await this.runCuratorIdleSweep();
+      await this.recordIdleSweepRun();
       return result;
     } catch (error) {
       // Best-effort: a janitor failure must never crash the maintenance tick.
-      this.deps.publishRealtime("curator", {
+      await this.deps.publishRealtime("curator", {
         type: "curator_idle_sweep_failed",
         error: error instanceof Error ? error.message : String(error),
       });
@@ -359,24 +357,24 @@ export class CuratorService {
    * exempt. Under full autonomy archives/merges auto-apply (snapshotted, archive
    * = disable, never hard-delete); otherwise they are proposals only.
    */
-  public runCuratorIdleSweep(): CuratorIdleSweepResult {
+  public async runCuratorIdleSweep(): Promise<CuratorIdleSweepResult> {
     const idle = this.deps.idleSweep;
     if (!idle) {
       throw new Error("Curator: idle sweep collaborators are not configured");
     }
-    const autoApply = idle.isAutonomyEnabled();
-    const result = planCuratorIdleSweep({
-      listSkills: () => this.deps.listSkills(),
+    const autoApply = await idle.isAutonomyEnabled();
+    const result = await planCuratorIdleSweep({
+      listSkills: async () => await this.deps.listSkills(),
       now: () => this.deps.now(),
       runId: `curator-idle-${randomUUID()}`,
       autoApply,
       snapshotSkill: (skillId) => idle.snapshotSkill(skillId),
-      archiveSkill: (skillId, reason) => {
-        this.deps.archiveSkill(skillId, reason);
+      archiveSkill: async (skillId, reason) => {
+        await this.deps.archiveSkill(skillId, reason);
       },
       similarity: idle.similarity,
     });
-    this.deps.publishRealtime("curator", {
+    await this.deps.publishRealtime("curator", {
       type: "curator_idle_sweep_completed",
       runId: result.runId,
       autoApplied: result.autoApplied,
@@ -390,12 +388,13 @@ export class CuratorService {
   }
 
   /** Whether the idle sweep cadence (`cycleDays`) has elapsed since the last run. */
-  private isIdleSweepCadenceDue(): boolean {
+  private async isIdleSweepCadenceDue(): Promise<boolean> {
     if (!this.deps.storage) {
       // No settings store ⇒ cannot dedup; allow the sweep (idle gate still applies).
       return true;
     }
-    const lastRunMs = this.deps.storage.systemSettings.get<number>(CURATOR_IDLE_SWEEP_LAST_RUN_SETTING_KEY)?.value;
+    const lastRunMs = (await this.deps.storage.systemSettings.get<number>(CURATOR_IDLE_SWEEP_LAST_RUN_SETTING_KEY))
+      ?.value;
     if (typeof lastRunMs !== "number" || !Number.isFinite(lastRunMs)) {
       return true;
     }
@@ -404,11 +403,11 @@ export class CuratorService {
   }
 
   /** Advance the idle sweep cadence cursor after a clean run. */
-  private recordIdleSweepRun(): void {
+  private async recordIdleSweepRun(): Promise<void> {
     if (!this.deps.storage) {
       return;
     }
-    this.deps.storage.systemSettings.set(CURATOR_IDLE_SWEEP_LAST_RUN_SETTING_KEY, this.deps.now().getTime());
+    await this.deps.storage.systemSettings.set(CURATOR_IDLE_SWEEP_LAST_RUN_SETTING_KEY, this.deps.now().getTime());
   }
 
   public async executeDurableCuratorTickRun(run: DurableRunRecord, _context: unknown): Promise<void> {

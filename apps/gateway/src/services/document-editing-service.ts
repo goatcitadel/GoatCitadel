@@ -11,38 +11,40 @@ import {
   type DocumentPatchProposalRecord,
   type DocumentPatchProposalToolInput,
 } from "@goatcitadel/contracts";
-import { PersonalOpsStorageRepository, type Storage } from "@goatcitadel/storage";
+import { type AsyncStorage as Storage } from "@goatcitadel/storage";
 
 const MAX_DOCUMENT_BYTES = 256 * 1024;
 const HASH_PATTERN = /^[a-f0-9]{64}$/u;
 
 export interface DocumentEditingDependencies {
-  storage: Pick<Storage, "db" | "chatGeneratedArtifacts" | "chatTurnTraces" | "documentPatchProposals">;
-  requireChatSession(sessionId: string): { sessionId: string; workspaceId?: string };
+  storage: Pick<Storage, "chatGeneratedArtifacts" | "chatTurnTraces" | "documentPatchProposals" | "personalOps">;
+  requireChatSession(
+    sessionId: string,
+  ): { sessionId: string; workspaceId?: string } | Promise<{ sessionId: string; workspaceId?: string }>;
 }
 
 export class DocumentEditingService {
-  private readonly notes: PersonalOpsStorageRepository;
+  private readonly notes: Storage["personalOps"];
 
   public constructor(private readonly deps: DocumentEditingDependencies) {
-    this.notes = new PersonalOpsStorageRepository(deps.storage.db);
+    this.notes = deps.storage.personalOps;
   }
 
-  public listProposals(input: {
+  public async listProposals(input: {
     workspaceId: string;
     sessionId?: string;
     state?: DocumentPatchProposalRecord["state"];
   }) {
-    return { items: this.deps.storage.documentPatchProposals.list({ ...input, limit: 200 }) };
+    return { items: await this.deps.storage.documentPatchProposals.list({ ...input, limit: 200 }) };
   }
 
-  public createProposal(
+  public async createProposal(
     input: CreateDocumentPatchProposalRequest & { sessionId?: string },
     actorId: string,
-  ): DocumentPatchProposalRecord {
+  ): Promise<DocumentPatchProposalRecord> {
     const workspaceId = required(input.workspaceId, "workspaceId");
     const sessionId = input.sessionId?.trim() || undefined;
-    if (sessionId) this.assertSessionWorkspace(sessionId, workspaceId);
+    if (sessionId) await this.assertSessionWorkspace(sessionId, workspaceId);
     return this.createBoundProposal(input, {
       workspaceId,
       sessionId,
@@ -51,16 +53,16 @@ export class DocumentEditingService {
     });
   }
 
-  public createAssistantProposal(
+  public async createAssistantProposal(
     input: DocumentPatchProposalToolInput,
     binding: { workspaceId: string; sessionId: string; turnId: string; authorId: string },
-  ): DocumentPatchProposalRecord {
+  ): Promise<DocumentPatchProposalRecord> {
     const workspaceId = required(binding.workspaceId, "workspaceId");
     const sessionId = required(binding.sessionId, "sessionId");
     const turnId = required(binding.turnId, "turnId");
-    const trace = this.deps.storage.chatTurnTraces.get(turnId);
+    const trace = await this.deps.storage.chatTurnTraces.get(turnId);
     if (trace.sessionId !== sessionId) throw new NotFoundError({ entity: "Assistant turn", id: turnId });
-    this.assertSessionWorkspace(sessionId, workspaceId);
+    await this.assertSessionWorkspace(sessionId, workspaceId);
     return this.createBoundProposal(input, {
       workspaceId,
       sessionId,
@@ -70,7 +72,7 @@ export class DocumentEditingService {
     });
   }
 
-  private createBoundProposal(
+  private async createBoundProposal(
     input: DocumentPatchProposalToolInput,
     binding: {
       workspaceId: string;
@@ -79,10 +81,10 @@ export class DocumentEditingService {
       authorKind: DocumentPatchProposalRecord["authorKind"];
       authorId: string;
     },
-  ): DocumentPatchProposalRecord {
+  ): Promise<DocumentPatchProposalRecord> {
     const workspaceId = binding.workspaceId;
     const proposedContent = boundedContent(input.proposedContent);
-    const base = this.readBase(input.targetKind, input.targetId, workspaceId);
+    const base = await this.readBase(input.targetKind, input.targetId, workspaceId);
     if (input.targetKind === "personal_note") {
       if (input.baseRevision !== base.revision) {
         throw new ConflictError({ message: "The note changed before this proposal was created." });
@@ -91,7 +93,7 @@ export class DocumentEditingService {
       throw new ConflictError({ message: "The generated artifact changed before this proposal was created." });
     }
     const now = new Date().toISOString();
-    return this.deps.storage.documentPatchProposals.create({
+    return await this.deps.storage.documentPatchProposals.create({
       proposalId: `dpp_${randomUUID()}`,
       schemaVersion: DOCUMENT_PATCH_PROPOSAL_SCHEMA_VERSION,
       workspaceId,
@@ -111,13 +113,17 @@ export class DocumentEditingService {
     });
   }
 
-  public applyProposal(proposalId: string, workspaceId: string, actorId: string): DocumentPatchProposalRecord {
-    const proposal = this.requireProposalScope(proposalId, workspaceId);
+  public async applyProposal(
+    proposalId: string,
+    workspaceId: string,
+    actorId: string,
+  ): Promise<DocumentPatchProposalRecord> {
+    const proposal = await this.requireProposalScope(proposalId, workspaceId);
     if (proposal.state !== "pending") throw new ConflictError({ message: "Only pending proposals can be applied." });
     const now = new Date().toISOString();
     try {
       if (proposal.targetKind === "personal_note") {
-        const note = this.notes.updateNote(
+        const note = await this.notes.updateNote(
           proposal.targetId,
           {
             body: proposal.proposedContent,
@@ -128,7 +134,7 @@ export class DocumentEditingService {
           { workspaceId: proposal.workspaceId },
           now,
         );
-        return this.deps.storage.documentPatchProposals.settle(proposal.proposalId, "applied", {
+        return await this.deps.storage.documentPatchProposals.settle(proposal.proposalId, "applied", {
           updatedAt: now,
           resolvedBy: actorId,
           appliedTargetId: note.noteId,
@@ -136,12 +142,12 @@ export class DocumentEditingService {
           appliedContentHash: hashText(note.body),
         });
       }
-      const artifact = this.createArtifactVersion(proposal.targetId, {
+      const artifact = await this.createArtifactVersion(proposal.targetId, {
         workspaceId: proposal.workspaceId,
         baseContentHash: required(proposal.baseContentHash, "baseContentHash"),
         content: proposal.proposedContent,
       });
-      return this.deps.storage.documentPatchProposals.settle(proposal.proposalId, "applied", {
+      return await this.deps.storage.documentPatchProposals.settle(proposal.proposalId, "applied", {
         updatedAt: now,
         resolvedBy: actorId,
         appliedTargetId: artifact.artifactId,
@@ -150,7 +156,7 @@ export class DocumentEditingService {
       });
     } catch (error) {
       if (error instanceof ConflictError) {
-        this.deps.storage.documentPatchProposals.settle(proposal.proposalId, "conflicted", {
+        await this.deps.storage.documentPatchProposals.settle(proposal.proposalId, "conflicted", {
           updatedAt: now,
           resolvedBy: actorId,
           conflictReason: error.message,
@@ -160,20 +166,24 @@ export class DocumentEditingService {
     }
   }
 
-  public rejectProposal(proposalId: string, workspaceId: string, actorId: string): DocumentPatchProposalRecord {
-    const proposal = this.requireProposalScope(proposalId, workspaceId);
+  public async rejectProposal(
+    proposalId: string,
+    workspaceId: string,
+    actorId: string,
+  ): Promise<DocumentPatchProposalRecord> {
+    const proposal = await this.requireProposalScope(proposalId, workspaceId);
     if (proposal.state !== "pending") throw new ConflictError({ message: "Only pending proposals can be rejected." });
-    return this.deps.storage.documentPatchProposals.settle(proposal.proposalId, "rejected", {
+    return await this.deps.storage.documentPatchProposals.settle(proposal.proposalId, "rejected", {
       updatedAt: new Date().toISOString(),
       resolvedBy: actorId,
     });
   }
 
-  public createArtifactVersion(
+  public async createArtifactVersion(
     artifactId: string,
     input: CreateGeneratedArtifactVersionRequest,
-  ): ChatGeneratedArtifactRecord {
-    const base = this.deps.storage.chatGeneratedArtifacts.get(required(artifactId, "artifactId"));
+  ): Promise<ChatGeneratedArtifactRecord> {
+    const base = await this.deps.storage.chatGeneratedArtifacts.get(required(artifactId, "artifactId"));
     if ((base.workspaceId ?? "default") !== required(input.workspaceId, "workspaceId")) {
       throw new NotFoundError({ entity: "Generated artifact", id: artifactId });
     }
@@ -188,13 +198,13 @@ export class DocumentEditingService {
     ) {
       throw new ConflictError({ message: "The artifact base hash is stale or invalid." });
     }
-    if (this.deps.storage.chatGeneratedArtifacts.findDirectSuccessor(base.artifactId)) {
+    if (await this.deps.storage.chatGeneratedArtifacts.findDirectSuccessor(base.artifactId)) {
       throw new ConflictError({ message: "A newer artifact version already supersedes this base." });
     }
     const content = boundedContent(input.content);
     const contentHash = hashText(content);
     const now = new Date().toISOString();
-    return this.deps.storage.chatGeneratedArtifacts.create({
+    return await this.deps.storage.chatGeneratedArtifacts.create({
       ...base,
       artifactId: `gartv_${randomUUID()}`,
       title: input.title?.trim() || base.title,
@@ -208,13 +218,13 @@ export class DocumentEditingService {
     });
   }
 
-  private readBase(kind: DocumentPatchProposalRecord["targetKind"], id: string, workspaceId: string) {
+  private async readBase(kind: DocumentPatchProposalRecord["targetKind"], id: string, workspaceId: string) {
     if (kind === "personal_note") {
-      const note = this.notes.getNote(required(id, "targetId"));
+      const note = await this.notes.getNote(required(id, "targetId"));
       if (note.workspaceId !== workspaceId) throw new NotFoundError({ entity: "Note", id });
       return { content: note.body, contentHash: hashText(note.body), revision: note.revision };
     }
-    const artifact = this.deps.storage.chatGeneratedArtifacts.get(required(id, "targetId"));
+    const artifact = await this.deps.storage.chatGeneratedArtifacts.get(required(id, "targetId"));
     if ((artifact.workspaceId ?? "default") !== workspaceId)
       throw new NotFoundError({ entity: "Generated artifact", id });
     if (!(DOCUMENT_EDITABLE_ARTIFACT_KINDS as readonly string[]).includes(artifact.kind)) {
@@ -227,15 +237,15 @@ export class DocumentEditingService {
     };
   }
 
-  private requireProposalScope(proposalId: string, workspaceId: string) {
-    const proposal = this.deps.storage.documentPatchProposals.get(proposalId);
+  private async requireProposalScope(proposalId: string, workspaceId: string) {
+    const proposal = await this.deps.storage.documentPatchProposals.get(proposalId);
     if (proposal.workspaceId !== workspaceId.trim())
       throw new NotFoundError({ entity: "Document patch proposal", id: proposalId });
     return proposal;
   }
 
-  private assertSessionWorkspace(sessionId: string, workspaceId: string): void {
-    const session = this.deps.requireChatSession(sessionId);
+  private async assertSessionWorkspace(sessionId: string, workspaceId: string): Promise<void> {
+    const session = await this.deps.requireChatSession(sessionId);
     if ((session.workspaceId ?? "default") !== workspaceId)
       throw new NotFoundError({ entity: "Chat session", id: sessionId });
   }

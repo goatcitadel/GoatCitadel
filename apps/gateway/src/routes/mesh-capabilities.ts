@@ -166,7 +166,7 @@ export const meshCapabilityRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: "Mesh capability manifest submission is invalid." });
     }
     try {
-      const receipt = service.publishCapabilityManifest(identity, {
+      const receipt = await service.publishCapabilityManifest(identity, {
         publicationKey: parsed.data.publicationKey,
         ...(parsed.data.supersedesManifestSha256 === undefined
           ? {}
@@ -196,7 +196,7 @@ export const meshCapabilityRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: "Mesh capability publication list request is invalid." });
     }
     try {
-      return reply.send(service.listOwnPublications(identity));
+      return reply.send(await service.listOwnPublications(identity));
     } catch (error) {
       const mapped = toMeshCapabilityPublicationHttpError(error);
       if (mapped) return reply.code(mapped.statusCode).send(mapped.body);
@@ -212,7 +212,7 @@ export const meshCapabilityRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: "Mesh capability inspection request is invalid." });
     }
     try {
-      return reply.send(service.listPublicationInspection(query.data.workspaceId ?? "default"));
+      return reply.send(await service.listPublicationInspection(query.data.workspaceId ?? "default"));
     } catch (error) {
       const mapped = toMeshCapabilityPublicationHttpError(error);
       if (mapped) return reply.code(mapped.statusCode).send(mapped.body);
@@ -228,7 +228,7 @@ export const meshCapabilityRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: "Mesh capability activation request is invalid." });
     }
     try {
-      const result = activation.requestActivation({
+      const result = await activation.requestActivation({
         workspaceId: parsed.data.workspaceId ?? "default",
         capabilityId: parsed.data.capabilityId,
         manifestSha256: parsed.data.manifestSha256,
@@ -265,7 +265,7 @@ export const meshCapabilityRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: "Mesh capability invocation request is invalid." });
     }
     try {
-      return reply.send(invocation.readInvocationInput(identity, params.data.invocationId));
+      return reply.send(await invocation.readInvocationInput(identity, params.data.invocationId));
     } catch (error) {
       const mapped = toMeshCapabilityInvocationHttpError(error);
       if (mapped) return reply.code(mapped.statusCode).send(mapped.body);
@@ -284,7 +284,7 @@ export const meshCapabilityRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: "Mesh capability invocation progress is invalid." });
     }
     try {
-      const accepted = invocation.recordProgress(identity, {
+      const accepted = await invocation.recordProgress(identity, {
         invocationId: params.data.invocationId,
         sequence: parsed.data.sequence,
         stage: parsed.data.stage,
@@ -310,7 +310,7 @@ export const meshCapabilityRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: "Mesh capability invocation settlement is invalid." });
     }
     try {
-      const result = invocation.settleFromNode(identity, {
+      const result = await invocation.settleFromNode(identity, {
         invocationId: params.data.invocationId,
         disposition: parsed.data.disposition,
         settlementSha256: parsed.data.settlementSha256,
@@ -350,7 +350,7 @@ export const meshCapabilityRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: "Mesh capability activation revoke request is invalid." });
     }
     try {
-      const result = activation.revokeActivation({
+      const result = await activation.revokeActivation({
         workspaceId: parsed.data.workspaceId ?? "default",
         activationId: params.data.activationId,
         reason: parsed.data.reason,

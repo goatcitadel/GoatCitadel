@@ -6,7 +6,20 @@ import type {
   ModelComparisonStatus,
 } from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
-import type { DatabaseClient } from "./db.js";
+import type { AsyncGatewaySqlRepository } from "./async-storage.js";
+import type { DbBindParams, DbRunResult, DbStatement } from "./db.js";
+
+type MaybeAsyncStatement = {
+  run(...params: DbBindParams[]): DbRunResult | Promise<DbRunResult>;
+  get<T = unknown>(...params: DbBindParams[]): T | undefined | Promise<T | undefined>;
+  all<T = unknown>(...params: DbBindParams[]): T[] | Promise<T[]>;
+};
+
+interface ModelComparisonSqlPort {
+  prepare(sql: string): DbStatement | MaybeAsyncStatement;
+  exec(sql: string): void | Promise<void>;
+  runImmediateTransaction<T>(callback: () => T | Promise<T>): T | Promise<Awaited<T>>;
+}
 
 interface ModelComparisonRunRow {
   comparison_id: string;
@@ -34,61 +47,14 @@ interface ModelComparisonJudgmentRow {
 }
 
 export class ModelComparisonRunRepository {
-  private readonly insertRunStmt;
-  private readonly getRunStmt;
-  private readonly listRunsStmt;
-  private readonly insertJudgmentStmt;
-  private readonly listJudgmentsStmt;
-  private readonly updateRunTimestampStmt;
+  private schemaReady?: Promise<void>;
 
-  public constructor(private readonly db: DatabaseClient) {
-    this.ensureSchema();
-    this.insertRunStmt = db.prepare(`
-      INSERT INTO model_comparison_runs (
-        comparison_id, pack_id, status, title, candidates_json, test_ids_json,
-        results_json, created_at, updated_at, completed_at, error
-      ) VALUES (
-        @comparisonId, @packId, @status, @title, @candidatesJson, @testIdsJson,
-        @resultsJson, @createdAt, @updatedAt, @completedAt, @error
-      )
-    `);
-    this.getRunStmt = db.prepare(`
-      SELECT *
-      FROM model_comparison_runs
-      WHERE comparison_id = ?
-      LIMIT 1
-    `);
-    this.listRunsStmt = db.prepare(`
-      SELECT *
-      FROM model_comparison_runs
-      ORDER BY created_at DESC, comparison_id DESC
-      LIMIT @limit
-    `);
-    this.insertJudgmentStmt = db.prepare(`
-      INSERT INTO model_comparison_judgments (
-        judgment_id, comparison_id, test_id, winner_candidate_id,
-        scores_json, notes, reviewer_id, created_at
-      ) VALUES (
-        @judgmentId, @comparisonId, @testId, @winnerCandidateId,
-        @scoresJson, @notes, @reviewerId, @createdAt
-      )
-    `);
-    this.listJudgmentsStmt = db.prepare(`
-      SELECT *
-      FROM model_comparison_judgments
-      WHERE comparison_id = ?
-      ORDER BY created_at ASC, judgment_id ASC
-    `);
-    this.updateRunTimestampStmt = db.prepare(`
-      UPDATE model_comparison_runs
-      SET updated_at = @updatedAt
-      WHERE comparison_id = @comparisonId
-    `);
-  }
+  public constructor(private readonly db: ModelComparisonSqlPort | AsyncGatewaySqlRepository) {}
 
-  public create(run: ModelComparisonRun): ModelComparisonRun {
-    this.db.transaction("immediate", () => {
-      this.insertRunStmt.run({
+  public async create(run: ModelComparisonRun): Promise<ModelComparisonRun> {
+    await this.ensureSchema();
+    await this.db.runImmediateTransaction(async () => {
+      await this.db.prepare(INSERT_RUN_SQL).run({
         comparisonId: run.comparisonId,
         packId: run.packId,
         status: run.status,
@@ -102,47 +68,50 @@ export class ModelComparisonRunRepository {
         error: run.error ?? null,
       });
       for (const judgment of run.judgments) {
-        this.insertJudgment(run.comparisonId, judgment);
+        await this.insertJudgment(run.comparisonId, judgment);
       }
     });
-    return this.get(run.comparisonId);
+    return await this.get(run.comparisonId);
   }
 
-  public get(comparisonId: string): ModelComparisonRun {
-    const row = toRunRow(this.getRunStmt.get(comparisonId));
+  public async get(comparisonId: string): Promise<ModelComparisonRun> {
+    await this.ensureSchema();
+    const row = toRunRow(await this.db.prepare(GET_RUN_SQL).get(comparisonId));
     if (!row) {
       throw new NotFoundError({ entity: "Model comparison", id: comparisonId });
     }
-    return this.mapRun(row);
+    return await this.mapRun(row);
   }
 
-  public list(limit = 100): ModelComparisonRun[] {
+  public async list(limit = 100): Promise<ModelComparisonRun[]> {
+    await this.ensureSchema();
     const rows = toRunRows(
-      this.listRunsStmt.all({
+      await this.db.prepare(LIST_RUNS_SQL).all({
         limit: Math.max(1, Math.min(limit, 500)),
       }),
     );
-    return rows.map((row) => this.mapRun(row));
+    return await Promise.all(rows.map((row) => this.mapRun(row)));
   }
 
-  public addJudgment(comparisonId: string, judgment: ModelComparisonJudgment): ModelComparisonJudgment {
-    this.get(comparisonId);
-    this.db.transaction("immediate", () => {
-      this.insertJudgment(comparisonId, judgment);
-      this.updateRunTimestampStmt.run({
+  public async addJudgment(comparisonId: string, judgment: ModelComparisonJudgment): Promise<ModelComparisonJudgment> {
+    await this.get(comparisonId);
+    await this.db.runImmediateTransaction(async () => {
+      await this.insertJudgment(comparisonId, judgment);
+      await this.db.prepare(UPDATE_RUN_TIMESTAMP_SQL).run({
         comparisonId,
         updatedAt: judgment.createdAt,
       });
     });
-    const persisted = this.listJudgments(comparisonId).find((item) => item.judgmentId === judgment.judgmentId);
+    const persisted = (await this.listJudgments(comparisonId)).find((item) => item.judgmentId === judgment.judgmentId);
     if (!persisted) {
       throw new NotFoundError({ entity: "Model comparison judgment", id: judgment.judgmentId });
     }
     return persisted;
   }
 
-  private ensureSchema(): void {
-    this.db.exec(`
+  private ensureSchema(): Promise<void> {
+    this.schemaReady ??= Promise.resolve(
+      this.db.exec(`
       CREATE TABLE IF NOT EXISTS model_comparison_runs (
         comparison_id TEXT PRIMARY KEY,
         pack_id TEXT NOT NULL,
@@ -174,11 +143,13 @@ export class ModelComparisonRunRepository {
 
       CREATE INDEX IF NOT EXISTS idx_model_comparison_judgments_comparison_id
         ON model_comparison_judgments(comparison_id, created_at);
-    `);
+    `),
+    );
+    return this.schemaReady;
   }
 
-  private insertJudgment(comparisonId: string, judgment: ModelComparisonJudgment): void {
-    this.insertJudgmentStmt.run({
+  private async insertJudgment(comparisonId: string, judgment: ModelComparisonJudgment): Promise<void> {
+    await this.db.prepare(INSERT_JUDGMENT_SQL).run({
       judgmentId: judgment.judgmentId,
       comparisonId,
       testId: judgment.testId,
@@ -190,11 +161,11 @@ export class ModelComparisonRunRepository {
     });
   }
 
-  private listJudgments(comparisonId: string): ModelComparisonJudgment[] {
-    return toJudgmentRows(this.listJudgmentsStmt.all(comparisonId)).map(mapJudgmentRow);
+  private async listJudgments(comparisonId: string): Promise<ModelComparisonJudgment[]> {
+    return toJudgmentRows(await this.db.prepare(LIST_JUDGMENTS_SQL).all(comparisonId)).map(mapJudgmentRow);
   }
 
-  private mapRun(row: ModelComparisonRunRow): ModelComparisonRun {
+  private async mapRun(row: ModelComparisonRunRow): Promise<ModelComparisonRun> {
     return {
       comparisonId: row.comparison_id,
       packId: row.pack_id,
@@ -203,7 +174,7 @@ export class ModelComparisonRunRepository {
       candidates: safeJsonParse<ModelComparisonCandidate[]>(row.candidates_json, []),
       testIds: safeJsonParse<string[]>(row.test_ids_json, []),
       results: safeJsonParse<ModelComparisonPromptResult[]>(row.results_json, []),
-      judgments: this.listJudgments(row.comparison_id),
+      judgments: await this.listJudgments(row.comparison_id),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       completedAt: row.completed_at ?? undefined,
@@ -211,6 +182,36 @@ export class ModelComparisonRunRepository {
     };
   }
 }
+
+const INSERT_RUN_SQL = `
+  INSERT INTO model_comparison_runs (
+    comparison_id, pack_id, status, title, candidates_json, test_ids_json,
+    results_json, created_at, updated_at, completed_at, error
+  ) VALUES (
+    @comparisonId, @packId, @status, @title, @candidatesJson, @testIdsJson,
+    @resultsJson, @createdAt, @updatedAt, @completedAt, @error
+  )
+`;
+const GET_RUN_SQL = `SELECT * FROM model_comparison_runs WHERE comparison_id = ? LIMIT 1`;
+const LIST_RUNS_SQL = `
+  SELECT * FROM model_comparison_runs ORDER BY created_at DESC, comparison_id DESC LIMIT @limit
+`;
+const INSERT_JUDGMENT_SQL = `
+  INSERT INTO model_comparison_judgments (
+    judgment_id, comparison_id, test_id, winner_candidate_id,
+    scores_json, notes, reviewer_id, created_at
+  ) VALUES (
+    @judgmentId, @comparisonId, @testId, @winnerCandidateId,
+    @scoresJson, @notes, @reviewerId, @createdAt
+  )
+`;
+const LIST_JUDGMENTS_SQL = `
+  SELECT * FROM model_comparison_judgments
+  WHERE comparison_id = ? ORDER BY created_at ASC, judgment_id ASC
+`;
+const UPDATE_RUN_TIMESTAMP_SQL = `
+  UPDATE model_comparison_runs SET updated_at = @updatedAt WHERE comparison_id = @comparisonId
+`;
 
 function mapJudgmentRow(row: ModelComparisonJudgmentRow): ModelComparisonJudgment {
   return {

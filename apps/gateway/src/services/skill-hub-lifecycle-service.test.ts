@@ -10,7 +10,13 @@ import {
   type SkillHubOperationIntentTemplate,
   type SkillPermissionEnvelopeV1,
 } from "@goatcitadel/contracts";
-import { computeSkillHubManifestSha256, Storage, type SkillHubSnapshotCreateInput } from "@goatcitadel/storage";
+import {
+  computeSkillHubManifestSha256,
+  createSqliteAsyncStorage,
+  Storage,
+  type AsyncStorage,
+  type SkillHubSnapshotCreateInput,
+} from "@goatcitadel/storage";
 import { ApprovalEffectsService } from "./approval-resolution-effects-service.js";
 import { SkillHubArtifactStore } from "./skill-hub-artifact-store.js";
 import {
@@ -23,6 +29,7 @@ import {
 interface Harness {
   rootDir: string;
   storage: Storage;
+  asyncStorage: AsyncStorage;
   artifactStore: SkillHubArtifactStore;
   lifecycle: SkillHubLifecycleService;
   treeSha256: string;
@@ -366,15 +373,15 @@ describe("SkillHubLifecycleService", () => {
       return originalUpsert(input);
     });
 
-    expect(() =>
-      harness.storage.runImmediateTransaction(() => {
-        const approved = harness.storage.approvals.resolve(pending.approvalId, {
+    await expect(
+      harness.asyncStorage.runImmediateTransaction(async () => {
+        const approved = await harness.asyncStorage.approvals.resolve(pending.approvalId, {
           decision: "approve",
           resolvedBy: "operator-1",
         });
-        effects.enqueueResolutionEffects(approved, { decision: "approve", resolvedBy: "operator-1" });
+        await effects.enqueueResolutionEffects(approved, { decision: "approve", resolvedBy: "operator-1" });
       }),
-    ).toThrow(/simulated crash/);
+    ).rejects.toThrow(/simulated crash/);
     expect(harness.storage.approvals.get(pending.approvalId).status).toBe("pending");
     expect(harness.storage.skillHubOperations.findIntent("operation-atomic")).toBeUndefined();
     expect(
@@ -400,17 +407,17 @@ describe("SkillHubLifecycleService", () => {
           expectedRuntimeAbsent: true,
         }),
       );
-      const pending = harness.storage.approvals.create({
+      const pending = await harness.asyncStorage.approvals.create({
         ...approvalInput,
         expiresAt: item.allowExpired ? "2020-07-14T00:00:00.000Z" : approvalInput.expiresAt,
       });
-      harness.storage.runImmediateTransaction(() => {
-        const rejected = harness.storage.approvals.resolve(
+      await harness.asyncStorage.runImmediateTransaction(async () => {
+        const rejected = await harness.asyncStorage.approvals.resolve(
           pending.approvalId,
           { decision: "reject", resolvedBy: item.resolvedBy },
           item.allowExpired ? { allowExpired: true } : undefined,
         );
-        effects.enqueueResolutionEffects(
+        await effects.enqueueResolutionEffects(
           rejected,
           { decision: "reject", resolvedBy: item.resolvedBy },
           item.allowExpired ? { allowExpired: true } : undefined,
@@ -641,6 +648,7 @@ async function createHarness(): Promise<Harness> {
   const harness = {
     rootDir,
     storage,
+    asyncStorage: createSqliteAsyncStorage(storage),
     artifactStore,
     lifecycle: undefined as unknown as SkillHubLifecycleService,
     treeSha256: observed.treeSha256,
@@ -660,7 +668,7 @@ function lifecycleFor(
     candidateRoot: "data/capability-candidates",
     skillsExtraRoot: "skills/extra",
     artifactStore: harness.artifactStore,
-    storage: harness.storage,
+    storage: harness.asyncStorage,
     afterRuntimeProjection,
     beforeFilesystemMutation,
   });
@@ -720,7 +728,7 @@ async function approveAndApply(harness: Harness, request: SkillHubOperationInten
 
 function effectsFor(harness: Harness): ApprovalEffectsService {
   return new ApprovalEffectsService(
-    { storage: harness.storage, publishRealtime: vi.fn() },
+    { storage: harness.asyncStorage, publishRealtime: vi.fn() },
     {
       backgroundTasks: new Set(),
       wakeDurableRun: vi.fn(() => ({ outcome: "not_waiting" as const })),

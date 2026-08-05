@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ApprovalRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
 import { SCHEDULED_RESTRICTED_PROFILE } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage, Storage } from "@goatcitadel/storage";
 import { ToolPolicyEngine } from "./engine.js";
 
 /**
@@ -65,7 +65,7 @@ const policyConfig: ToolPolicyConfig = {
   },
 };
 
-function createStorageStub(): Storage {
+function createStorageStub(): Storage & AsyncStorage {
   return {
     approvals: {
       create: vi.fn((input) => ({
@@ -111,5 +111,5 @@ function createStorageStub(): Storage {
     db: {
       prepare: vi.fn(() => ({ run: vi.fn() })),
     },
-  } as unknown as Storage;
+  } as unknown as Storage & AsyncStorage;
 }

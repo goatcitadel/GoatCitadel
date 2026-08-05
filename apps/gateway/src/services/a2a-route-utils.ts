@@ -117,9 +117,12 @@ export function mapTaskStatusToA2AState(
   }
 }
 
-export function readTaskMaybe(tasks: Pick<TaskLifecycleService, "getTask">, taskId: string): TaskRecord | undefined {
+export async function readTaskMaybe(
+  tasks: Pick<TaskLifecycleService, "getTask">,
+  taskId: string,
+): Promise<TaskRecord | undefined> {
   try {
-    return tasks.getTask(taskId);
+    return await tasks.getTask(taskId);
   } catch {
     return undefined;
   }

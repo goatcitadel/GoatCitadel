@@ -5,8 +5,8 @@ export const SIGNAL_INBOUND_BLOCKED_REASON =
 
 export interface SignalInboundRuntimeCallbacks {
   /** Legacy flag retained only so old true values can produce operator evidence. */
-  isEnabled(): boolean;
-  listConnections(): IntegrationConnection[];
+  isEnabled(): Promise<boolean>;
+  listConnections(): Promise<IntegrationConnection[]>;
   recordDevDiagnostic?: (input: {
     level: "info" | "warn" | "error";
     category: string;
@@ -32,15 +32,15 @@ export class SignalInboundRuntimeService {
 
   public constructor(private readonly callbacks: SignalInboundRuntimeCallbacks) {}
 
-  public sync(): void {
+  public async sync(): Promise<void> {
     if (this.closed) {
       return;
     }
 
-    const legacyFeatureEnabled = this.callbacks.isEnabled();
-    const signalConnections = this.callbacks
-      .listConnections()
-      .filter((connection) => connection.kind === "channel" && connection.key === "signal");
+    const legacyFeatureEnabled = await this.callbacks.isEnabled();
+    const signalConnections = (await this.callbacks.listConnections()).filter(
+      (connection) => connection.kind === "channel" && connection.key === "signal",
+    );
 
     if (legacyFeatureEnabled && signalConnections.length === 0) {
       this.reportBlockedPosture("feature:global", {

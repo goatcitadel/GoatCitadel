@@ -11,7 +11,9 @@ import {
   type ExternalSourceRecord,
 } from "@goatcitadel/contracts";
 import {
+  createSqliteAsyncStorage,
   Storage,
+  type AsyncStorage,
   computeExternalSourceArtifactSetSha256,
   computeExternalSourceNormalizedSetSha256,
   computeExternalSourceRawSetSha256,
@@ -61,6 +63,7 @@ function signal(): AbortSignal {
 
 interface Harness {
   storage: Storage;
+  asyncStorage: AsyncStorage;
   artifacts: ExternalSourceArtifactStore;
   service: ExternalSourceAttachmentService;
   source: ExternalSourceRecord;
@@ -74,6 +77,7 @@ interface Harness {
 
 async function createHarness(): Promise<Harness> {
   const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
+  const asyncStorage = createSqliteAsyncStorage(storage);
   cleanups.push(() => storage.close());
   const artifactsDir = fs.mkdtempSync(path.join(os.tmpdir(), "gc-hx407-attachments-"));
   cleanups.push(() => fs.rmSync(artifactsDir, { recursive: true, force: true }));
@@ -282,16 +286,18 @@ async function createHarness(): Promise<Harness> {
   const sessionIncarnationId = sessionMeta.lifecycleIntentId ?? `legacy-session-incarnation:${SESSION_ID}`;
 
   const service = new ExternalSourceAttachmentService({
-    configs: storage.externalSourceConfigs,
-    scans: storage.externalSourceScans,
-    imports: storage.externalSourceImports,
-    attachments: storage.externalSessionAttachments,
-    sessions: { get: (sessionId) => storage.chatSessionMeta.get(sessionId) },
+    configs: asyncStorage.externalSourceConfigs,
+    scans: asyncStorage.externalSourceScans,
+    imports: asyncStorage.externalSourceImports,
+    attachments: asyncStorage.externalSessionAttachments,
+    sessions: { get: (sessionId) => asyncStorage.chatSessionMeta.get(sessionId) },
     artifacts,
+    runImmediateTransaction: asyncStorage.runImmediateTransaction,
     clock: { nowMs: () => NOW_MS },
   });
   return {
     storage,
+    asyncStorage,
     artifacts,
     service,
     source,
@@ -374,7 +380,7 @@ describe("ExternalSourceAttachmentService", () => {
       .get(attached.attachment.attachmentId) as { count: number };
     expect(Number(replayEvents.count)).toBe(1);
 
-    const listed = harness.service.list({ workspaceId: WORKSPACE_ID, sessionId: SESSION_ID }, ACTOR);
+    const listed = await harness.service.list({ workspaceId: WORKSPACE_ID, sessionId: SESSION_ID }, ACTOR);
     expect(listed.items).toEqual([attached.attachment]);
     expect(JSON.stringify(listed)).not.toContain("lobster-matrix-7f3a");
   });
@@ -389,9 +395,9 @@ describe("ExternalSourceAttachmentService", () => {
       harness.service.attach(harness.attachInput({ sessionId: "session-foreign" }), ACTOR, signal()),
       "not_found",
     );
-    expect(() => harness.service.list({ workspaceId: "workspace-other", sessionId: SESSION_ID }, ACTOR)).toThrowError(
-      ExternalSourceAttachmentServiceError,
-    );
+    await expect(
+      harness.service.list({ workspaceId: "workspace-other", sessionId: SESSION_ID }, ACTOR),
+    ).rejects.toThrowError(ExternalSourceAttachmentServiceError);
     const rows = harness.storage.db.prepare("SELECT COUNT(*) AS count FROM chat_external_source_attachments").get() as {
       count: number;
     };
@@ -482,12 +488,13 @@ describe("ExternalSourceAttachmentService", () => {
       rootIdentitySha256: digestText("root:drifted-generation"),
     });
     const driftedService = new ExternalSourceAttachmentService({
-      configs: { find: () => drifted },
-      scans: harness.storage.externalSourceScans,
-      imports: harness.storage.externalSourceImports,
-      attachments: harness.storage.externalSessionAttachments,
-      sessions: { get: (sessionId) => harness.storage.chatSessionMeta.get(sessionId) },
+      configs: { find: async () => drifted },
+      scans: harness.asyncStorage.externalSourceScans,
+      imports: harness.asyncStorage.externalSourceImports,
+      attachments: harness.asyncStorage.externalSessionAttachments,
+      sessions: { get: (sessionId) => harness.asyncStorage.chatSessionMeta.get(sessionId) },
       artifacts: harness.artifacts,
+      runImmediateTransaction: harness.asyncStorage.runImmediateTransaction,
       clock: { nowMs: () => NOW_MS },
     });
     await expectServiceError(driftedService.attach(harness.attachInput(), ACTOR, signal()), "identity_drift");

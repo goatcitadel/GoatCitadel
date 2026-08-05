@@ -67,7 +67,7 @@ export const idempotencyHeaderPlugin = fp<IdempotencyHeaderPluginOptions>(async 
 
     const routePath = getNormalizedRoutePath(request);
     const actorScope = request.authActorId?.trim() || "";
-    const claim = options.mutationStore.claim({
+    const claim = await options.mutationStore.claim({
       method: request.method,
       routePath,
       idempotencyKey: key,
@@ -86,8 +86,8 @@ export const idempotencyHeaderPlugin = fp<IdempotencyHeaderPluginOptions>(async 
       (request as typeof request & { mutationIdempotencyState: MutationIdempotencyState }).mutationIdempotencyState =
         state;
       request.mutationIdempotencyOutcome = "pending";
-      request.mutationIdempotencyCommit = () => {
-        if (options.mutationStore?.markCompleted(state) === false) {
+      request.mutationIdempotencyCommit = async () => {
+        if ((await options.mutationStore?.markCompleted(state)) === false) {
           throw new MutationIdempotencyClaimLostError();
         }
       };
@@ -135,10 +135,10 @@ export const idempotencyHeaderPlugin = fp<IdempotencyHeaderPluginOptions>(async 
  * projection, or response-delivery failure must not revive the same
  * idempotency key and execute the mutation again.
  */
-export function markMutationCommitted(request: FastifyRequest): void {
+export async function markMutationCommitted(request: FastifyRequest): Promise<void> {
   request.mutationCommitted = true;
   request.mutationIdempotencyOutcome = "committed";
-  request.mutationIdempotencyCommit?.();
+  await request.mutationIdempotencyCommit?.();
 }
 
 /**
@@ -147,8 +147,8 @@ export function markMutationCommitted(request: FastifyRequest): void {
  * if the surrounding transaction rolls back, `afterCommit` must remain the
  * only signal that prevents the response boundary from releasing the claim.
  */
-export function commitMutationIdempotencyAlongsideCanonicalWrite(request: FastifyRequest): void {
-  request.mutationIdempotencyCommit?.();
+export async function commitMutationIdempotencyAlongsideCanonicalWrite(request: FastifyRequest): Promise<void> {
+  await request.mutationIdempotencyCommit?.();
 }
 
 /**
@@ -164,14 +164,14 @@ export function markMutationFailedBeforeCommit(request: FastifyRequest): void {
 }
 
 /** Preserve committed idempotency truth for mutation-aware domain errors. */
-export function markMutationCommittedFromError(request: FastifyRequest, error: unknown): void {
+export async function markMutationCommittedFromError(request: FastifyRequest, error: unknown): Promise<void> {
   if (
     error &&
     typeof error === "object" &&
     "mutationCommitted" in error &&
     (error as { mutationCommitted?: unknown }).mutationCommitted === true
   ) {
-    markMutationCommitted(request);
+    await markMutationCommitted(request);
   }
 }
 

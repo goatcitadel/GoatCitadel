@@ -3,39 +3,39 @@ import type { RealtimeEvent } from "@goatcitadel/contracts";
 import { APPROVAL_OBSERVABILITY_REALTIME_ENVELOPE_KEY, RealtimeEventService } from "./realtime-event-service.js";
 
 describe("RealtimeEventService", () => {
-  it("publishes, emits, unsubscribes, and reads realtime events through storage", () => {
+  it("publishes, emits, unsubscribes, and reads realtime events through storage", async () => {
     const storage = fakeStorage();
     const service = new RealtimeEventService({ storage, getGatewayNodeId: () => "node-1" });
     const listener = vi.fn();
     const unsubscribe = service.subscribeRealtime(listener);
 
-    const event = service.publishRealtime("heartbeat", "system", { ok: true });
+    const event = await service.publishRealtime("heartbeat", "system", { ok: true });
     unsubscribe();
-    service.publishRealtime("heartbeat", "system", { ok: false });
+    await service.publishRealtime("heartbeat", "system", { ok: false });
 
     expect(event).toEqual({ sequence: 1, eventType: "heartbeat", source: "system" });
     expect(listener).toHaveBeenCalledTimes(1);
     expect(listener).toHaveBeenCalledWith(event);
-    expect(service.listRealtimeEvents()).toEqual([{ sequence: 1 }]);
-    expect(service.listRealtimeEvents(5, "cursor-1")).toEqual([{ sequence: 1 }]);
-    expect(service.listRealtimeEventsAfterSequence(2)).toEqual([{ sequence: 3 }]);
-    expect(service.listRealtimeEventsAfterSequence(2, 7)).toEqual([{ sequence: 3 }]);
-    expect(service.getRealtimeEventSequenceBounds()).toEqual({ oldestSequence: 1, newestSequence: 3 });
+    expect(await service.listRealtimeEvents()).toEqual([{ sequence: 1 }]);
+    expect(await service.listRealtimeEvents(5, "cursor-1")).toEqual([{ sequence: 1 }]);
+    expect(await service.listRealtimeEventsAfterSequence(2)).toEqual([{ sequence: 3 }]);
+    expect(await service.listRealtimeEventsAfterSequence(2, 7)).toEqual([{ sequence: 3 }]);
+    expect(await service.getRealtimeEventSequenceBounds()).toEqual({ oldestSequence: 1, newestSequence: 3 });
     expect(storage.realtimeEvents.list).toHaveBeenNthCalledWith(1, 100, undefined);
     expect(storage.realtimeEvents.list).toHaveBeenNthCalledWith(2, 5, "cursor-1");
     expect(storage.realtimeEvents.listAfterSequence).toHaveBeenNthCalledWith(1, 2, 100);
     expect(storage.realtimeEvents.listAfterSequence).toHaveBeenNthCalledWith(2, 2, 7);
   });
 
-  it("rejects invalid listeners before registering a deferred callback", () => {
+  it("rejects invalid listeners before registering a deferred callback", async () => {
     const storage = fakeStorage();
     const service = new RealtimeEventService({ storage, getGatewayNodeId: () => "node-1" });
 
     expect(() => service.subscribeRealtime("not-a-listener" as never)).toThrow(TypeError);
-    expect(() => service.publishRealtime("heartbeat", "system", { ok: true })).not.toThrow();
+    await expect(service.publishRealtime("heartbeat", "system", { ok: true })).resolves.toBeDefined();
   });
 
-  it("isolates throwing live listeners after one idempotent retained append", () => {
+  it("isolates throwing live listeners after one idempotent retained append", async () => {
     const storage = fakeStorage();
     const retained = {
       eventId: "approval-observability:approval-1:resolve-realtime",
@@ -69,8 +69,8 @@ describe("RealtimeEventService", () => {
       links: { approvalId: "approval-1" },
     };
 
-    expect(() => service.publishRealtime("approval_resolved", "approvals", payload, options)).not.toThrow();
-    expect(() => service.publishRealtime("approval_resolved", "approvals", payload, options)).not.toThrow();
+    await expect(service.publishRealtime("approval_resolved", "approvals", payload, options)).resolves.toBe(retained);
+    await expect(service.publishRealtime("approval_resolved", "approvals", payload, options)).resolves.toBe(retained);
 
     expect(storage.realtimeEvents.appendIdempotent).toHaveBeenCalledTimes(2);
     expect(healthyListener).toHaveBeenCalledOnce();
@@ -90,11 +90,11 @@ describe("RealtimeEventService", () => {
     warn.mockRestore();
   });
 
-  it("rejects a malformed reserved observability envelope before non-idempotent persistence", () => {
+  it("rejects a malformed reserved observability envelope before non-idempotent persistence", async () => {
     const storage = fakeStorage();
     const service = new RealtimeEventService({ storage, getGatewayNodeId: () => "node-1" });
 
-    expect(() =>
+    await expect(
       service.publishRealtime(
         "approval_resolved",
         "approvals",
@@ -111,12 +111,12 @@ describe("RealtimeEventService", () => {
           links: { approvalId: "approval-1" },
         },
       ),
-    ).toThrow(/invalid approval observability realtime envelope/i);
+    ).rejects.toThrow(/invalid approval observability realtime envelope/i);
     expect(storage.realtimeEvents.append).not.toHaveBeenCalled();
     expect(storage.realtimeEvents.appendIdempotent).not.toHaveBeenCalled();
   });
 
-  it("projects new and legacy realtime payloads without mutating caller or storage truth", () => {
+  it("projects new and legacy realtime payloads without mutating caller or storage truth", async () => {
     const rawPayload = {
       webhookUrl: "https://hooks.example.test/services/team/realtime-secret",
       authorization: "Bearer short",
@@ -141,9 +141,9 @@ describe("RealtimeEventService", () => {
     storage.realtimeEvents.listAfterSequence.mockReturnValue([legacyEvent] as never);
     const service = new RealtimeEventService({ storage, getGatewayNodeId: () => "node-1" });
 
-    const published = service.publishRealtime("legacy_event", "legacy", rawPayload);
-    const listed = service.listRealtimeEvents();
-    const after = service.listRealtimeEventsAfterSequence(0);
+    const published = await service.publishRealtime("legacy_event", "legacy", rawPayload);
+    const listed = await service.listRealtimeEvents();
+    const after = await service.listRealtimeEventsAfterSequence(0);
 
     for (const event of [published, listed[0], after[0]]) {
       expect(event?.payload).toEqual({
@@ -165,28 +165,28 @@ describe("RealtimeEventService", () => {
     expect(legacyEvent.payload).toBe(rawPayload);
   });
 
-  it("requires explicit metadata for protected realtime events", () => {
+  it("requires explicit metadata for protected realtime events", async () => {
     const storage = fakeStorage();
     const service = new RealtimeEventService({ storage, getGatewayNodeId: () => "node-1" });
 
-    expect(() => service.publishRealtime("approval_created", "approvals", {})).toThrow(
+    await expect(service.publishRealtime("approval_created", "approvals", {})).rejects.toThrow(
       "Explicit realtime metadata is required",
     );
-    expect(() =>
+    await expect(
       service.publishRealtime("approval_resolved", "approvals", {}, { eventClass: "approval" } as never),
-    ).toThrow("Explicit realtime metadata is required");
-    expect(() =>
+    ).rejects.toThrow("Explicit realtime metadata is required");
+    await expect(
       service.publishRealtime("task_updated", "tasks", {}, {
         eventClass: "task",
         eventAuthority: "gateway",
         links: { taskId: "   " },
       } as never),
-    ).toThrow("Explicit realtime metadata is required");
-    expect(() => service.publishRealtime("progress", "orchestration", {})).toThrow(
+    ).rejects.toThrow("Explicit realtime metadata is required");
+    await expect(service.publishRealtime("progress", "orchestration", {})).rejects.toThrow(
       "Explicit realtime metadata is required",
     );
 
-    service.publishRealtime(
+    await service.publishRealtime(
       "approval_resolved",
       "approvals",
       { ok: true },
@@ -197,7 +197,7 @@ describe("RealtimeEventService", () => {
         correlationId: "corr-1",
       },
     );
-    service.publishRealtime(
+    await service.publishRealtime(
       "orchestration_event",
       "workflow",
       { ok: true },

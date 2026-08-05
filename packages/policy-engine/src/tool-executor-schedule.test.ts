@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ToolInvokeRequest, ToolPolicyActorContext, ToolPolicyConfig } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage, Storage } from "@goatcitadel/storage";
 import { executeTool, type ToolExecutorRuntimeHooks } from "./tool-executor.js";
 
 // schedule.manage is a pure dispatch case: it never touches the filesystem,
@@ -15,12 +15,9 @@ describe("tool executor — schedule.manage delegation (P1-F2)", () => {
       permissionProfileId: "trusted_local_power",
     };
     const scheduleManage = vi.fn(async () => ({ op: "list", count: 0, jobs: [] }));
-    const result = await executeTool(
-      scheduleRequest({ op: "list" }, policyContext),
-      config(),
-      storageStub(),
-      { scheduleManage } satisfies ToolExecutorRuntimeHooks,
-    );
+    const result = await executeTool(scheduleRequest({ op: "list" }, policyContext), config(), storageStub(), {
+      scheduleManage,
+    } satisfies ToolExecutorRuntimeHooks);
 
     expect(scheduleManage).toHaveBeenCalledTimes(1);
     expect(scheduleManage).toHaveBeenCalledWith({ op: "list" }, policyContext);
@@ -43,10 +40,7 @@ describe("tool executor — schedule.manage delegation (P1-F2)", () => {
   });
 });
 
-function scheduleRequest(
-  args: Record<string, unknown>,
-  policyContext?: ToolPolicyActorContext,
-): ToolInvokeRequest {
+function scheduleRequest(args: Record<string, unknown>, policyContext?: ToolPolicyActorContext): ToolInvokeRequest {
   return {
     toolName: "schedule.manage",
     args,
@@ -71,10 +65,10 @@ function config(): ToolPolicyConfig {
   };
 }
 
-function storageStub(): Storage {
+function storageStub(): Storage & AsyncStorage {
   return {
     toolGrants: {
       listActiveBySession: vi.fn(() => []),
     },
-  } as unknown as Storage;
+  } as unknown as Storage & AsyncStorage;
 }

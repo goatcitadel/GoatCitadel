@@ -13,7 +13,9 @@ import type {
   ModelUsagePricingSource,
   ModelUsageTransportRetryReason,
 } from "@goatcitadel/contracts";
-import type { ModelUsageEventRepository } from "@goatcitadel/storage";
+import type { DeepAsyncRepository, ModelUsageEventRepository } from "@goatcitadel/storage";
+
+type AsyncModelUsageEventRepository = DeepAsyncRepository<ModelUsageEventRepository>;
 
 export interface ModelUsagePricingLineage {
   catalogVersion?: string;
@@ -146,7 +148,7 @@ export class ModelUsageAttemptHandle {
   private nextLeaseRenewalAtMs: number;
 
   public constructor(
-    private readonly repository: ModelUsageEventRepository,
+    private readonly repository: AsyncModelUsageEventRepository,
     public readonly eventId: string,
     private readonly startedAtMs: number,
     private readonly dispatchOwnerId: string,
@@ -158,10 +160,10 @@ export class ModelUsageAttemptHandle {
   }
 
   /** Keep a long-running stream protected from stale-owner recovery. */
-  public renewLease(nowMs = Date.now()): void {
+  public async renewLease(nowMs = Date.now()): Promise<void> {
     if (nowMs < this.nextLeaseRenewalAtMs || this.terminal) return;
     try {
-      this.repository.renewTransportLease(
+      await this.repository.renewTransportLease(
         this.eventId,
         this.dispatchOwnerId,
         new Date(nowMs + this.acceptedLeaseMs).toISOString(),
@@ -180,13 +182,13 @@ export class ModelUsageAttemptHandle {
     this.observation = mergeObservations(this.observation, normalizeObservation(observation));
   }
 
-  public succeed(usage?: unknown): ModelUsageEventRecord {
+  public async succeed(usage?: unknown): Promise<ModelUsageEventRecord> {
     if (usage !== undefined) this.observe(usage);
     this.ensureZeroCostEvidence();
     return this.finish("succeeded");
   }
 
-  public fail(error: unknown, usage?: unknown): ModelUsageEventRecord {
+  public async fail(error: unknown, usage?: unknown): Promise<ModelUsageEventRecord> {
     if (usage !== undefined) this.observe(usage);
     this.ensureZeroCostEvidence();
     if (isCancellation(error)) return this.finish("cancelled", error);
@@ -194,7 +196,7 @@ export class ModelUsageAttemptHandle {
     return this.finish(hasUsage ? "failed_after_usage" : "failed_before_usage", error);
   }
 
-  public cancel(reason?: unknown): ModelUsageEventRecord {
+  public async cancel(reason?: unknown): Promise<ModelUsageEventRecord> {
     this.ensureZeroCostEvidence();
     return this.finish("cancelled", reason);
   }
@@ -205,7 +207,7 @@ export class ModelUsageAttemptHandle {
     }
   }
 
-  private finish(outcome: ModelUsageSettlementOutcome, error?: unknown): ModelUsageEventRecord {
+  private async finish(outcome: ModelUsageSettlementOutcome, error?: unknown): Promise<ModelUsageEventRecord> {
     if (this.terminal) return this.terminal;
     if (this.settlementFailure) throw this.settlementFailure;
     const finishedAt = new Date().toISOString();
@@ -215,7 +217,7 @@ export class ModelUsageAttemptHandle {
     const pricingSource = costKnown ? (this.observation.pricingSource ?? costSource) : "not_available";
     let result;
     try {
-      result = this.repository.finalizeAndProject(this.eventId, {
+      result = await this.repository.finalizeAndProject(this.eventId, {
         dispatchOwnerId: this.dispatchOwnerId,
         terminalOutcome: outcome,
         availability: hasUsage ? "tracked" : "unknown",
@@ -246,7 +248,7 @@ export class ModelUsageDispatchReservation {
   private settled = false;
 
   public constructor(
-    private readonly repository: ModelUsageEventRepository,
+    private readonly repository: AsyncModelUsageEventRepository,
     public readonly eventId: string,
     private readonly startedAtMs: number,
     private readonly dispatchOwnerId: string,
@@ -256,9 +258,9 @@ export class ModelUsageDispatchReservation {
   ) {}
 
   /** Mark the request as a real transport attempt after fetch returned a promise. */
-  public accept(): ModelUsageAttemptHandle {
+  public async accept(): Promise<ModelUsageAttemptHandle> {
     if (this.settled) throw new Error("Model usage dispatch reservation is already settled");
-    this.repository.acceptTransport(
+    await this.repository.acceptTransport(
       this.eventId,
       this.dispatchOwnerId,
       new Date(Date.now() + this.acceptedLeaseMs).toISOString(),
@@ -276,10 +278,10 @@ export class ModelUsageDispatchReservation {
   }
 
   /** Remove an intent when fetch throws synchronously before accepting transport. */
-  public abandon(): void {
+  public async abandon(): Promise<void> {
     if (this.settled) return;
     try {
-      if (!this.repository.abandonTransportIntent(this.eventId, this.dispatchOwnerId)) {
+      if (!(await this.repository.abandonTransportIntent(this.eventId, this.dispatchOwnerId))) {
         throw new Error("Model usage dispatch intent could not be abandoned");
       }
     } catch (cause) {
@@ -289,10 +291,10 @@ export class ModelUsageDispatchReservation {
   }
 
   /** Preserve an already-started but not durably accepted dispatch as uncertain. */
-  public markDispatchUnknown(reason = "transport_acceptance_persistence_failed"): void {
+  public async markDispatchUnknown(reason = "transport_acceptance_persistence_failed"): Promise<void> {
     if (this.settled) return;
     try {
-      this.repository.markDispatchUnknown(this.eventId, this.dispatchOwnerId, new Date().toISOString(), reason);
+      await this.repository.markDispatchUnknown(this.eventId, this.dispatchOwnerId, new Date().toISOString(), reason);
     } catch (cause) {
       throw new ModelUsageDispatchPersistenceError(this.eventId, "mark_dispatch_unknown", cause);
     }
@@ -302,7 +304,7 @@ export class ModelUsageDispatchReservation {
 
 export class ModelUsageAccountingService {
   public constructor(
-    private readonly repository: ModelUsageEventRepository,
+    private readonly repository: AsyncModelUsageEventRepository,
     private readonly dispatchOwnerId: string = randomUUID(),
     private readonly intentLeaseMs = 5 * 60_000,
     private readonly acceptedLeaseMs = 30 * 60_000,
@@ -313,7 +315,7 @@ export class ModelUsageAccountingService {
    * transport wrapper accepts it only after fetch synchronously returns a
    * promise; synchronous fetch throws abandon the intent and leave no attempt.
    */
-  public prepareDispatch(input: BeginModelUsageDispatchInput): ModelUsageDispatchReservation {
+  public async prepareDispatch(input: BeginModelUsageDispatchInput): Promise<ModelUsageDispatchReservation> {
     const startedAt = input.startedAt ?? new Date().toISOString();
     const startedAtMs = Date.parse(startedAt);
     const attribution = normalizeAttribution(input.attribution);
@@ -334,7 +336,7 @@ export class ModelUsageAccountingService {
     };
     const idempotencyKey = `model-usage:${sha256(JSON.stringify(identity))}`;
     const eventId = randomUUID();
-    const result = this.repository.begin({
+    const result = await this.repository.begin({
       eventId,
       idempotencyKey,
       source: input.source,

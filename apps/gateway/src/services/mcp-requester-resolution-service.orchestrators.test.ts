@@ -367,7 +367,7 @@ function buildHarness(): Harness {
       outcomes,
       scanner,
       networkAllowlist: NETWORK_ALLOWLIST,
-      readCurrentState: (check) => ({
+      readCurrentState: async (check) => ({
         ...fixture.freezeState,
         connectionGenerationCurrent:
           fixture.freezeState.connectionGenerationCurrent &&
@@ -392,7 +392,7 @@ function buildHarness(): Harness {
       outcomes,
       scanner,
       networkAllowlist: NETWORK_ALLOWLIST,
-      readCurrentState: (check) => ({
+      readCurrentState: async (check) => ({
         ...fixture.toolCallState,
         connectionGenerationCurrent:
           fixture.toolCallState.connectionGenerationCurrent &&
@@ -454,7 +454,7 @@ describe("resolveRequesterScopedBindingForProfileFreeze", () => {
     const input = harness.freezeInput(fixture);
 
     await expect(
-      resolveRequesterScopedBindingForProfileFreeze({ ...input, readCurrentState: () => undefined }),
+      resolveRequesterScopedBindingForProfileFreeze({ ...input, readCurrentState: async () => undefined }),
     ).resolves.toBeUndefined();
 
     expect(harness.discoveryResolver).not.toHaveBeenCalled();
@@ -562,9 +562,9 @@ describe("resolveRequesterScopedBindingForProfileFreeze", () => {
     let reads = 0;
     const revokingInput: McpRequesterScopedProfileFreezeInput = {
       ...input,
-      readCurrentState: (check) => {
+      readCurrentState: async (check) => {
         reads += 1;
-        const state = input.readCurrentState(check);
+        const state = await input.readCurrentState(check);
         return reads > 3 && state ? { ...state, revoked: true } : state;
       },
     };

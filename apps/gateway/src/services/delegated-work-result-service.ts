@@ -9,7 +9,7 @@ import type {
   DelegatedWorkResult,
   ToolInvokeRequest,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { assertWritePathInJail, SUBMIT_WORK_RESULT_TOOL_NAME } from "@goatcitadel/policy-engine";
 
 export const DELEGATION_SCOPE_EXPANSION_APPROVAL_KIND = "delegation_scope_expansion" as const;
@@ -18,25 +18,25 @@ export const DELEGATION_SCOPE_EXPANSION_EFFECT_KIND = "delegation_scope_expansio
 interface DelegatedWorkResultServiceDependencies {
   storage: Storage;
   writeJailRoots: string[];
-  isEnabled: () => boolean;
+  isEnabled: () => boolean | Promise<boolean>;
   createApproval: (input: ApprovalCreateInput) => Promise<ApprovalRequest>;
-  appendAudit?: (payload: Record<string, unknown>) => void;
+  appendAudit?: (payload: Record<string, unknown>) => void | Promise<void>;
 }
 
 export class DelegatedWorkResultService {
   public constructor(private readonly deps: DelegatedWorkResultServiceDependencies) {}
 
-  public assertToolRequestWithinApprovedScope(request: ToolInvokeRequest): void {
-    if (!this.deps.isEnabled() || request.toolName === SUBMIT_WORK_RESULT_TOOL_NAME) {
+  public async assertToolRequestWithinApprovedScope(request: ToolInvokeRequest): Promise<void> {
+    if (!(await this.deps.isEnabled()) || request.toolName === SUBMIT_WORK_RESULT_TOOL_NAME) {
       return;
     }
-    const parent = this.deps.storage.chatDelegationSteps
-      .listParentsByChildSessionIds([request.sessionId])
-      .get(request.sessionId);
+    const parent = (await this.deps.storage.chatDelegationSteps.listParentsByChildSessionIds([request.sessionId])).get(
+      request.sessionId,
+    );
     if (!parent) {
       return;
     }
-    const scope = this.deps.storage.chatDelegationSteps.get(parent.stepId).scopeControl;
+    const scope = (await this.deps.storage.chatDelegationSteps.get(parent.stepId)).scopeControl;
     if (!scope) {
       return;
     }
@@ -61,24 +61,24 @@ export class DelegatedWorkResultService {
   }
 
   public async execute(request: ToolInvokeRequest): Promise<Record<string, unknown>> {
-    if (!this.deps.isEnabled()) {
+    if (!(await this.deps.isEnabled())) {
       throw new Error(`${SUBMIT_WORK_RESULT_TOOL_NAME} is disabled.`);
     }
-    const parent = this.deps.storage.chatDelegationSteps
-      .listParentsByChildSessionIds([request.sessionId])
-      .get(request.sessionId);
+    const parent = (await this.deps.storage.chatDelegationSteps.listParentsByChildSessionIds([request.sessionId])).get(
+      request.sessionId,
+    );
     if (!parent) {
       throw new Error(`${SUBMIT_WORK_RESULT_TOOL_NAME} is available only inside delegated work.`);
     }
-    const step = this.deps.storage.chatDelegationSteps.get(parent.stepId);
+    const step = await this.deps.storage.chatDelegationSteps.get(parent.stepId);
     if (step.status !== "running" || step.childSessionId !== request.sessionId) {
       throw new Error("Delegated work result cannot update an inactive or superseded step.");
     }
     const parsed = parseDelegatedWorkResult(request.args ?? {});
     if (parsed.disposition !== "scope_expansion") {
       const verified = this.verifyTerminalWorkResult(step.scopeControl, parsed);
-      this.deps.storage.chatDelegationSteps.patch(step.stepId, { workResult: verified });
-      this.deps.appendAudit?.({
+      await this.deps.storage.chatDelegationSteps.patch(step.stepId, { workResult: verified });
+      await this.deps.appendAudit?.({
         event: "delegation.work_result_submitted",
         stepId: step.stepId,
         runId: step.runId,
@@ -165,8 +165,8 @@ export class DelegatedWorkResultService {
         requestedAt,
       },
     };
-    this.deps.storage.chatDelegationSteps.patch(step.stepId, { workResult });
-    this.deps.appendAudit?.({
+    await this.deps.storage.chatDelegationSteps.patch(step.stepId, { workResult });
+    await this.deps.appendAudit?.({
       event: "delegation.scope_expansion_requested",
       approvalId: approval.approvalId,
       stepId: step.stepId,

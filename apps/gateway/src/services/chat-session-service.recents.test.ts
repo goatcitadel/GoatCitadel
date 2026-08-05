@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { Storage } from "@goatcitadel/storage";
+import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import {
   assignChatSessionProject,
   createChatSession,
@@ -28,15 +28,16 @@ function createStorage(): { storage: Storage; cleanup: () => void } {
 }
 
 function createDeps(storage: Storage): ChatSessionDependencies {
+  const asyncStorage = createSqliteAsyncStorage(storage);
   const deps = {
-    storage,
+    storage: asyncStorage,
     operatorSummaryCache: {
       invalidate: vi.fn(),
     },
     normalizeWorkspaceId: (workspaceId?: string) => workspaceId ?? "default",
     ensureChatSessionRuntimeGrants: vi.fn(),
     requireChatSession: vi.fn() as never,
-    getSession: (sessionId: string) => storage.sessions.getBySessionId(sessionId),
+    getSession: (sessionId: string) => asyncStorage.sessions.getBySessionId(sessionId),
     publishRealtime: vi.fn(),
     clearChatTurnWriteLease: vi.fn(),
     removeChatSessionStoredFile: vi.fn(),
@@ -44,15 +45,17 @@ function createDeps(storage: Storage): ChatSessionDependencies {
     hydrateChatPrefsWithAutonomy: (_sessionId, prefs) => prefs,
     patchSessionAutonomyPrefs: vi.fn(),
   };
-  deps.requireChatSession = vi.fn((sessionId: string) => {
+  deps.requireChatSession = vi.fn(async (sessionId: string) => {
     const workspaceId = storage.chatSessionMeta.get(sessionId)?.workspaceId ?? "default";
-    const session = listChatSessions(deps, {
-      workspaceId,
-      scope: "all",
-      view: "all",
-      includeHidden: true,
-      limit: 1000,
-    }).find((record) => record.sessionId === sessionId);
+    const session = (
+      await listChatSessions(deps, {
+        workspaceId,
+        scope: "all",
+        view: "all",
+        includeHidden: true,
+        limit: 1000,
+      })
+    ).find((record) => record.sessionId === sessionId);
     if (!session) {
       throw new Error(`Session ${sessionId} not found`);
     }
@@ -75,7 +78,7 @@ function touchSessionActivity(storage: Storage, sessionId: string, isoTimestamp:
 }
 
 describe("listRecentCrossProjectSessions", () => {
-  it("returns only project-bound active sessions for the requested workspace, sorted by lastActivityAt desc", () => {
+  it("returns only project-bound active sessions for the requested workspace, sorted by lastActivityAt desc", async () => {
     const { storage, cleanup } = createStorage();
     try {
       const deps = createDeps(storage);
@@ -91,17 +94,17 @@ describe("listRecentCrossProjectSessions", () => {
       });
 
       // Three project-bound sessions in workspace=default
-      const sessionOldest = createChatSession(deps, {
+      const sessionOldest = await createChatSession(deps, {
         workspaceId: "default",
         title: "Oldest",
         projectId: project.projectId,
       });
-      const sessionMid = createChatSession(deps, {
+      const sessionMid = await createChatSession(deps, {
         workspaceId: "default",
         title: "Mid",
         projectId: otherProject.projectId,
       });
-      const sessionNewest = createChatSession(deps, {
+      const sessionNewest = await createChatSession(deps, {
         workspaceId: "default",
         title: "Newest",
         projectId: project.projectId,
@@ -112,10 +115,10 @@ describe("listRecentCrossProjectSessions", () => {
       touchSessionActivity(storage, sessionNewest.sessionId, "2026-05-05T08:00:00.000Z");
 
       // Unbound session — must be excluded
-      const unbound = createChatSession(deps, { workspaceId: "default", title: "Unbound" });
+      const unbound = await createChatSession(deps, { workspaceId: "default", title: "Unbound" });
       touchSessionActivity(storage, unbound.sessionId, "2026-05-04T08:00:00.000Z");
 
-      const result = listRecentCrossProjectSessions(deps, { workspaceId: "default", limit: 10 });
+      const result = await listRecentCrossProjectSessions(deps, { workspaceId: "default", limit: 10 });
 
       expect(result.map((item) => item.sessionId)).toEqual([
         sessionNewest.sessionId,
@@ -137,7 +140,7 @@ describe("listRecentCrossProjectSessions", () => {
     }
   });
 
-  it("scopes results to the requested workspaceId and ignores sessions from other workspaces", () => {
+  it("scopes results to the requested workspaceId and ignores sessions from other workspaces", async () => {
     const { storage, cleanup } = createStorage();
     try {
       const deps = createDeps(storage);
@@ -152,12 +155,12 @@ describe("listRecentCrossProjectSessions", () => {
         workspacePath: "apps/other",
       });
 
-      const defaultSession = createChatSession(deps, {
+      const defaultSession = await createChatSession(deps, {
         workspaceId: "default",
         title: "Default scoped",
         projectId: projectDefault.projectId,
       });
-      const otherSession = createChatSession(deps, {
+      const otherSession = await createChatSession(deps, {
         workspaceId: "other-workspace",
         title: "Other scoped",
         projectId: projectOther.projectId,
@@ -166,17 +169,17 @@ describe("listRecentCrossProjectSessions", () => {
       touchSessionActivity(storage, defaultSession.sessionId, "2026-05-01T10:00:00.000Z");
       touchSessionActivity(storage, otherSession.sessionId, "2026-05-05T10:00:00.000Z");
 
-      const defaultResult = listRecentCrossProjectSessions(deps, { workspaceId: "default", limit: 10 });
+      const defaultResult = await listRecentCrossProjectSessions(deps, { workspaceId: "default", limit: 10 });
       expect(defaultResult.map((item) => item.sessionId)).toEqual([defaultSession.sessionId]);
 
-      const otherResult = listRecentCrossProjectSessions(deps, { workspaceId: "other-workspace", limit: 10 });
+      const otherResult = await listRecentCrossProjectSessions(deps, { workspaceId: "other-workspace", limit: 10 });
       expect(otherResult.map((item) => item.sessionId)).toEqual([otherSession.sessionId]);
     } finally {
       cleanup();
     }
   });
 
-  it("clamps limit between 1 and 20", () => {
+  it("clamps limit between 1 and 20", async () => {
     const { storage, cleanup } = createStorage();
     try {
       const deps = createDeps(storage);
@@ -188,7 +191,7 @@ describe("listRecentCrossProjectSessions", () => {
 
       const sessionIds: string[] = [];
       for (let index = 0; index < 25; index += 1) {
-        const session = createChatSession(deps, {
+        const session = await createChatSession(deps, {
           workspaceId: "default",
           title: `Session ${index}`,
           projectId: project.projectId,
@@ -198,20 +201,20 @@ describe("listRecentCrossProjectSessions", () => {
         touchSessionActivity(storage, session.sessionId, timestamp);
       }
 
-      const overLimit = listRecentCrossProjectSessions(deps, { workspaceId: "default", limit: 100 });
+      const overLimit = await listRecentCrossProjectSessions(deps, { workspaceId: "default", limit: 100 });
       expect(overLimit).toHaveLength(20);
 
-      const underLimit = listRecentCrossProjectSessions(deps, { workspaceId: "default", limit: 0 });
+      const underLimit = await listRecentCrossProjectSessions(deps, { workspaceId: "default", limit: 0 });
       expect(underLimit).toHaveLength(1);
 
-      const exactLimit = listRecentCrossProjectSessions(deps, { workspaceId: "default", limit: 5 });
+      const exactLimit = await listRecentCrossProjectSessions(deps, { workspaceId: "default", limit: 5 });
       expect(exactLimit).toHaveLength(5);
     } finally {
       cleanup();
     }
   });
 
-  it("excludes archived sessions", () => {
+  it("excludes archived sessions", async () => {
     const { storage, cleanup } = createStorage();
     try {
       const deps = createDeps(storage);
@@ -221,12 +224,12 @@ describe("listRecentCrossProjectSessions", () => {
         workspacePath: "apps/lifecycle",
       });
 
-      const active = createChatSession(deps, {
+      const active = await createChatSession(deps, {
         workspaceId: "default",
         title: "Active",
         projectId: project.projectId,
       });
-      const toArchive = createChatSession(deps, {
+      const toArchive = await createChatSession(deps, {
         workspaceId: "default",
         title: "ToArchive",
         projectId: project.projectId,
@@ -240,14 +243,14 @@ describe("listRecentCrossProjectSessions", () => {
         archivedAt: "2026-05-06T00:00:00.000Z",
       });
 
-      const result = listRecentCrossProjectSessions(deps, { workspaceId: "default", limit: 10 });
+      const result = await listRecentCrossProjectSessions(deps, { workspaceId: "default", limit: 10 });
       expect(result.map((item) => item.sessionId)).toEqual([active.sessionId]);
     } finally {
       cleanup();
     }
   });
 
-  it("uses projectId as projectLabel fallback when project name is unavailable", () => {
+  it("uses projectId as projectLabel fallback when project name is unavailable", async () => {
     const { storage, cleanup } = createStorage();
     try {
       const deps = createDeps(storage);
@@ -256,19 +259,19 @@ describe("listRecentCrossProjectSessions", () => {
         name: "Visible Name",
         workspacePath: "apps/visible",
       });
-      const session = createChatSession(deps, {
+      const session = await createChatSession(deps, {
         workspaceId: "default",
         title: "Bound session",
         projectId: project.projectId,
       });
       touchSessionActivity(storage, session.sessionId, "2026-05-01T01:00:00.000Z");
 
-      const result = listRecentCrossProjectSessions(deps, { workspaceId: "default", limit: 10 });
+      const result = await listRecentCrossProjectSessions(deps, { workspaceId: "default", limit: 10 });
       expect(result[0]?.projectLabel).toBe("Visible Name");
 
       // Confirm that unassigning the project drops the session from results
-      assignChatSessionProject(deps, session.sessionId, undefined);
-      const after = listRecentCrossProjectSessions(deps, { workspaceId: "default", limit: 10 });
+      await assignChatSessionProject(deps, session.sessionId, undefined);
+      const after = await listRecentCrossProjectSessions(deps, { workspaceId: "default", limit: 10 });
       expect(after).toEqual([]);
     } finally {
       cleanup();

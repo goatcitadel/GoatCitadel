@@ -267,7 +267,7 @@ export const authPlugin = fp(async (fastify) => {
     }
 
     if (providedBearerToken) {
-      const deviceGrant = fastify.gatewayAuth.validateDeviceAccessToken(providedBearerToken);
+      const deviceGrant = await fastify.gatewayAuth.validateDeviceAccessToken(providedBearerToken);
       if (deviceGrant) {
         setAuthActor(request, deviceGrant.actorId, "device");
         request.authDeviceId = deviceGrant.deviceId;
@@ -281,7 +281,7 @@ export const authPlugin = fp(async (fastify) => {
         return;
       }
 
-      const companionSession = fastify.gatewayAuth.validateCompanionAccessToken(providedBearerToken);
+      const companionSession = await fastify.gatewayAuth.validateCompanionAccessToken(providedBearerToken);
       if (companionSession) {
         setAuthActor(request, companionSession.actorId, "companion");
         request.authDeviceId = companionSession.deviceId;

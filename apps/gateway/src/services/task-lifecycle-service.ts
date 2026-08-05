@@ -28,7 +28,7 @@ import type {
 import { ConflictError, isDurableRunStatus, NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import { emitDistressSignal, resolveDistressSignal, type EmitDistressInput } from "./task-distress-engine.js";
 import { verifyClaimedArtifacts, type ArtifactProbers } from "./task-artifact-verifier.js";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { createHash, randomUUID } from "node:crypto";
 import { CoworkAgenticProjectionService } from "./cowork-agentic-projection-service.js";
 import { canonicalJsonString } from "./evidence-receipt-service.js";
@@ -90,9 +90,9 @@ export interface TaskLifecycleServiceDependencies {
     source: string,
     payload: Record<string, unknown>,
     options?: TaskRealtimeOptions,
-  ): void;
-  pauseDurableRun?(runId: string, actorId?: string): { status: string };
-  cancelDurableRun?(runId: string, actorId?: string): { status: string };
+  ): Promise<unknown>;
+  pauseDurableRun?(runId: string, actorId?: string): Promise<{ status: string }>;
+  cancelDurableRun?(runId: string, actorId?: string): Promise<{ status: string }>;
   recordAgenticDiagnosticSignal?(input: { task: TaskRecord; diagnostic: AgenticDiagnosticSignal }): void;
   storage: TaskStorage;
   probers?: ArtifactProbers;
@@ -106,14 +106,14 @@ export interface TaskWorkspaceAccessOptions {
 export class TaskLifecycleService {
   public constructor(private readonly deps: TaskLifecycleServiceDependencies) {}
 
-  public listTasks(
+  public async listTasks(
     limit: number,
     status?: TaskStatus,
     cursor?: string,
     view: "active" | "trash" | "all" = "active",
     workspaceId?: string,
-  ): TaskRecord[] {
-    return this.deps.storage.tasks.list({
+  ): Promise<TaskRecord[]> {
+    return await this.deps.storage.tasks.list({
       workspaceId: this.normalizeWorkspaceId(workspaceId),
       status,
       limit,
@@ -122,27 +122,27 @@ export class TaskLifecycleService {
     });
   }
 
-  public getTask(taskId: string, options?: TaskWorkspaceAccessOptions): TaskRecord {
-    return this.requireTaskInWorkspace(taskId, options);
+  public async getTask(taskId: string, options?: TaskWorkspaceAccessOptions): Promise<TaskRecord> {
+    return await this.requireTaskInWorkspace(taskId, options);
   }
 
   /** Locks a task for a caller-owned cross-repository transaction. */
-  public lockTaskForDelegationAggregate(taskId: string): TaskRecord {
-    return this.deps.storage.tasks.getForUpdate(taskId);
+  public async lockTaskForDelegationAggregate(taskId: string): Promise<TaskRecord> {
+    return await this.deps.storage.tasks.getForUpdate(taskId);
   }
 
   /** Locks a task subagent after the parent/run/step/task lock order is established. */
-  public lockDelegationSubagentProjection(agentSessionId: string): TaskSubagentSession {
-    return this.deps.storage.taskSubagents.getByAgentSessionIdForUpdate(agentSessionId);
+  public async lockDelegationSubagentProjection(agentSessionId: string): Promise<TaskSubagentSession> {
+    return await this.deps.storage.taskSubagents.getByAgentSessionIdForUpdate(agentSessionId);
   }
 
   /** Persists delegation-owned task truth without publishing before commit. */
-  public persistDelegationAggregateTask(
+  public async persistDelegationAggregateTask(
     taskId: string,
     input: { status: TaskStatus; agenticContext: Partial<AgenticTaskContext> },
-  ): TaskRecord {
-    const current = this.deps.storage.tasks.get(taskId);
-    return this.deps.storage.tasks.updateWithRevision(
+  ): Promise<TaskRecord> {
+    const current = await this.deps.storage.tasks.get(taskId);
+    return await this.deps.storage.tasks.updateWithRevision(
       taskId,
       {
         status: input.status,
@@ -153,13 +153,13 @@ export class TaskLifecycleService {
   }
 
   /** Publishes the already-committed aggregate task snapshot. */
-  public publishDelegationAggregateTask(task: TaskRecord): void {
-    this.publishTaskEvent("task_updated", { task }, buildTaskRealtimeLinks(task));
+  public async publishDelegationAggregateTask(task: TaskRecord): Promise<void> {
+    await this.publishTaskEvent("task_updated", { task }, buildTaskRealtimeLinks(task));
   }
 
   /** Links an A2A task to canonical durable execution inside a caller-owned transaction. */
-  public persistA2ADurableRunLink(taskId: string, durableRunId: string): TaskRecord {
-    const current = this.deps.storage.tasks.getForUpdate(taskId);
+  public async persistA2ADurableRunLink(taskId: string, durableRunId: string): Promise<TaskRecord> {
+    const current = await this.deps.storage.tasks.getForUpdate(taskId);
     const existingDurableRunId = current.agenticContext?.durableRunId?.trim();
     if (existingDurableRunId && existingDurableRunId !== durableRunId) {
       throw new ConflictError({
@@ -170,7 +170,7 @@ export class TaskLifecycleService {
     if (existingDurableRunId === durableRunId) {
       return current;
     }
-    return this.deps.storage.tasks.updateWithRevision(
+    return await this.deps.storage.tasks.updateWithRevision(
       taskId,
       {
         agenticContext: mergeAgenticContext(current.agenticContext, { durableRunId }),
@@ -180,107 +180,111 @@ export class TaskLifecycleService {
   }
 
   /** Publishes an A2A durable-run link only after the caller commits binding and task truth. */
-  public publishA2ADurableRunLink(task: TaskRecord): void {
-    this.publishTaskEvent("task_updated", { task }, buildTaskRealtimeLinks(task));
+  public async publishA2ADurableRunLink(task: TaskRecord): Promise<void> {
+    await this.publishTaskEvent("task_updated", { task }, buildTaskRealtimeLinks(task));
   }
 
   /** Persists a dispatch-fenced waiting subagent projection without publishing before commit. */
-  public persistDelegationSubagentProjection(
+  public async persistDelegationSubagentProjection(
     agentSessionId: string,
     input: TaskSubagentUpdateInput,
-  ): TaskSubagentSession {
-    const current = this.deps.storage.taskSubagents.findByAgentSessionId(agentSessionId);
+  ): Promise<TaskSubagentSession> {
+    const current = await this.deps.storage.taskSubagents.findByAgentSessionId(agentSessionId);
     if (!current) {
       throw new NotFoundError({ entity: "Sub-agent session", id: agentSessionId });
     }
     return input.metadata
-      ? this.deps.storage.taskSubagents.updateByAgentSessionIdWithMetadataPatch(agentSessionId, {
+      ? await this.deps.storage.taskSubagents.updateByAgentSessionIdWithMetadataPatch(agentSessionId, {
           status: input.status,
           endedAt: input.endedAt,
           metadataPatch: input.metadata,
         })
-      : this.deps.storage.taskSubagents.updateByAgentSessionId(agentSessionId, input);
+      : await this.deps.storage.taskSubagents.updateByAgentSessionId(agentSessionId, input);
   }
 
   /** Publishes an already-committed dispatch-fenced subagent projection. */
-  public publishDelegationSubagentProjection(session: TaskSubagentSession): void {
-    this.publishTaskEvent(
+  public async publishDelegationSubagentProjection(session: TaskSubagentSession): Promise<void> {
+    await this.publishTaskEvent(
       "subagent_updated",
       { taskId: session.taskId, session },
-      buildTaskRealtimeLinks(this.deps.storage.tasks.find(session.taskId), session.taskId),
+      buildTaskRealtimeLinks(await this.deps.storage.tasks.find(session.taskId), session.taskId),
     );
   }
 
   /** Persists delegation evidence inside a caller-owned outcome transaction. */
-  public persistDelegationActivity(
+  public async persistDelegationActivity(
     taskId: string,
     input: TaskActivityCreateInput,
     createdAt: string,
-  ): TaskActivityRecord {
-    return this.deps.storage.taskActivities.append(taskId, input, createdAt);
+  ): Promise<TaskActivityRecord> {
+    return await this.deps.storage.taskActivities.append(taskId, input, createdAt);
   }
 
-  public persistDelegationActivityOnce(
+  public async persistDelegationActivityOnce(
     activityId: string,
     taskId: string,
     input: TaskActivityCreateInput,
     createdAt: string,
-  ): { activity: TaskActivityRecord; created: boolean } {
-    return this.deps.storage.taskActivities.appendOnce(activityId, taskId, input, createdAt);
+  ): Promise<{ activity: TaskActivityRecord; created: boolean }> {
+    return await this.deps.storage.taskActivities.appendOnce(activityId, taskId, input, createdAt);
   }
 
-  public publishDelegationActivity(activity: TaskActivityRecord): void {
-    this.publishTaskEvent(
+  public async publishDelegationActivity(activity: TaskActivityRecord): Promise<void> {
+    await this.publishTaskEvent(
       "activity_logged",
       { taskId: activity.taskId, activity },
-      buildTaskRealtimeLinks(this.deps.storage.tasks.find(activity.taskId), activity.taskId),
+      buildTaskRealtimeLinks(await this.deps.storage.tasks.find(activity.taskId), activity.taskId),
     );
   }
 
   /** Persists a delegation deliverable inside a caller-owned outcome transaction. */
-  public persistDelegationDeliverable(
+  public async persistDelegationDeliverable(
     taskId: string,
     input: TaskDeliverableCreateInput,
     createdAt: string,
-  ): TaskDeliverableRecord {
-    return this.deps.storage.taskDeliverables.append(taskId, input, createdAt);
+  ): Promise<TaskDeliverableRecord> {
+    return await this.deps.storage.taskDeliverables.append(taskId, input, createdAt);
   }
 
-  public publishDelegationDeliverable(deliverable: TaskDeliverableRecord): void {
-    this.publishTaskEvent(
+  public async publishDelegationDeliverable(deliverable: TaskDeliverableRecord): Promise<void> {
+    await this.publishTaskEvent(
       "deliverable_added",
       { taskId: deliverable.taskId, deliverable },
-      buildTaskRealtimeLinks(this.deps.storage.tasks.find(deliverable.taskId), deliverable.taskId),
+      buildTaskRealtimeLinks(await this.deps.storage.tasks.find(deliverable.taskId), deliverable.taskId),
     );
   }
 
-  public createTask(input: TaskCreateInput, options?: { taskId?: string }): TaskRecord {
+  public async createTask(input: TaskCreateInput, options?: { taskId?: string }): Promise<TaskRecord> {
     const normalizedInput = {
       ...input,
       workspaceId: this.normalizeWorkspaceId(input.workspaceId),
     };
     const created = options?.taskId
-      ? this.deps.storage.tasks.create(normalizedInput, undefined, { taskId: options.taskId })
-      : this.deps.storage.tasks.create(normalizedInput);
-    this.publishTaskEvent("task_created", { task: created }, buildTaskRealtimeLinks(created));
+      ? await this.deps.storage.tasks.create(normalizedInput, undefined, { taskId: options.taskId })
+      : await this.deps.storage.tasks.create(normalizedInput);
+    await this.publishTaskEvent("task_created", { task: created }, buildTaskRealtimeLinks(created));
     return created;
   }
 
-  public updateTask(taskId: string, input: TaskUpdateInput, options?: TaskWorkspaceAccessOptions): TaskRecord {
-    const current = this.requireTaskInWorkspace(taskId, options);
-    return this.updateTaskWithRevision(taskId, input, current.revision, options);
+  public async updateTask(
+    taskId: string,
+    input: TaskUpdateInput,
+    options?: TaskWorkspaceAccessOptions,
+  ): Promise<TaskRecord> {
+    const current = await this.requireTaskInWorkspace(taskId, options);
+    return await this.updateTaskWithRevision(taskId, input, current.revision, options);
   }
 
-  public updateTaskWithRevision(
+  public async updateTaskWithRevision(
     taskId: string,
     input: TaskUpdateInput,
     expectedRevision: number,
     options?: TaskWorkspaceAccessOptions,
-  ): TaskRecord {
-    const current = this.requireTaskInWorkspace(taskId, options);
+  ): Promise<TaskRecord> {
+    const current = await this.requireTaskInWorkspace(taskId, options);
     assertTaskExpectedRevision(current, expectedRevision);
     if (input.status === "done") {
-      const deliverables = this.deps.storage.taskDeliverables.countByTask(taskId);
+      const deliverables = await this.deps.storage.taskDeliverables.countByTask(taskId);
       if (deliverables < 1) {
         throw new ValidationError({
           message: "Cannot mark task done without at least one deliverable",
@@ -288,32 +292,36 @@ export class TaskLifecycleService {
       }
     }
 
-    const updated = this.deps.storage.tasks.updateWithRevision(taskId, input, expectedRevision);
-    this.publishTaskEvent("task_updated", { task: updated }, buildTaskRealtimeLinks(updated));
+    const updated = await this.deps.storage.tasks.updateWithRevision(taskId, input, expectedRevision);
+    await this.publishTaskEvent("task_updated", { task: updated }, buildTaskRealtimeLinks(updated));
     return updated;
   }
 
-  public emitDistressSignal(
+  public async emitDistressSignal(
     taskId: string,
     input: EmitDistressInput,
     options?: TaskWorkspaceAccessOptions,
-  ): TaskRecord {
-    const current = this.requireTaskInWorkspace(taskId, options);
-    return this.emitDistressSignalWithRevision(taskId, input, current.revision, options);
+  ): Promise<TaskRecord> {
+    const current = await this.requireTaskInWorkspace(taskId, options);
+    return await this.emitDistressSignalWithRevision(taskId, input, current.revision, options);
   }
 
-  public emitDistressSignalWithRevision(
+  public async emitDistressSignalWithRevision(
     taskId: string,
     input: EmitDistressInput,
     expectedRevision: number,
     options?: TaskWorkspaceAccessOptions,
-  ): TaskRecord {
-    const current = this.requireTaskInWorkspace(taskId, options);
+  ): Promise<TaskRecord> {
+    const current = await this.requireTaskInWorkspace(taskId, options);
     assertTaskExpectedRevision(current, expectedRevision);
     const next = emitDistressSignal(current.distressSignals, input);
-    const updated = this.deps.storage.tasks.updateWithRevision(taskId, { distressSignals: next }, expectedRevision);
+    const updated = await this.deps.storage.tasks.updateWithRevision(
+      taskId,
+      { distressSignals: next },
+      expectedRevision,
+    );
     const newSignal = next.find((s) => !current.distressSignals?.some((existing) => existing.signalId === s.signalId));
-    this.publishTaskEvent(
+    await this.publishTaskEvent(
       "task_distress_emitted",
       { taskId, signal: newSignal ?? next[0] },
       buildTaskRealtimeLinks(updated),
@@ -321,24 +329,24 @@ export class TaskLifecycleService {
     return updated;
   }
 
-  public resolveDistressSignal(
+  public async resolveDistressSignal(
     taskId: string,
     signalId: string,
     input: { resolvedBy?: string } = {},
     options?: TaskWorkspaceAccessOptions,
-  ): TaskRecord {
-    const current = this.requireTaskInWorkspace(taskId, options);
-    return this.resolveDistressSignalWithRevision(taskId, signalId, input, current.revision, options);
+  ): Promise<TaskRecord> {
+    const current = await this.requireTaskInWorkspace(taskId, options);
+    return await this.resolveDistressSignalWithRevision(taskId, signalId, input, current.revision, options);
   }
 
-  public resolveDistressSignalWithRevision(
+  public async resolveDistressSignalWithRevision(
     taskId: string,
     signalId: string,
     input: { resolvedBy?: string },
     expectedRevision: number,
     options?: TaskWorkspaceAccessOptions,
-  ): TaskRecord {
-    const current = this.requireTaskInWorkspace(taskId, options);
+  ): Promise<TaskRecord> {
+    const current = await this.requireTaskInWorkspace(taskId, options);
     assertTaskExpectedRevision(current, expectedRevision);
     const next = resolveDistressSignal(current.distressSignals, signalId, input);
     const matched = current.distressSignals?.some((s) => s.signalId === signalId && !s.resolvedAt);
@@ -347,8 +355,12 @@ export class TaskLifecycleService {
         message: `No unresolved distress signal with signalId="${signalId}" on task ${taskId}`,
       });
     }
-    const updated = this.deps.storage.tasks.updateWithRevision(taskId, { distressSignals: next }, expectedRevision);
-    this.publishTaskEvent(
+    const updated = await this.deps.storage.tasks.updateWithRevision(
+      taskId,
+      { distressSignals: next },
+      expectedRevision,
+    );
+    await this.publishTaskEvent(
       "task_distress_resolved",
       { taskId, signalId, resolvedBy: input.resolvedBy },
       buildTaskRealtimeLinks(updated),
@@ -356,31 +368,39 @@ export class TaskLifecycleService {
     return updated;
   }
 
-  public setRetryBudget(taskId: string, maxRetries: number, options?: TaskWorkspaceAccessOptions): TaskRecord {
-    const current = this.requireTaskInWorkspace(taskId, options);
-    return this.setRetryBudgetWithRevision(taskId, maxRetries, current.revision, options);
+  public async setRetryBudget(
+    taskId: string,
+    maxRetries: number,
+    options?: TaskWorkspaceAccessOptions,
+  ): Promise<TaskRecord> {
+    const current = await this.requireTaskInWorkspace(taskId, options);
+    return await this.setRetryBudgetWithRevision(taskId, maxRetries, current.revision, options);
   }
 
-  public setRetryBudgetWithRevision(
+  public async setRetryBudgetWithRevision(
     taskId: string,
     maxRetries: number,
     expectedRevision: number,
     options?: TaskWorkspaceAccessOptions,
-  ): TaskRecord {
+  ): Promise<TaskRecord> {
     if (!Number.isInteger(maxRetries) || maxRetries < 0) {
       throw new ValidationError({ message: "maxRetries must be a non-negative integer" });
     }
-    const current = this.requireTaskInWorkspace(taskId, options);
+    const current = await this.requireTaskInWorkspace(taskId, options);
     assertTaskExpectedRevision(current, expectedRevision);
     const retryBudget: TaskRetryBudget = {
       maxRetries,
       retryCount: current.retryBudget?.retryCount ?? 0,
     };
-    return this.deps.storage.tasks.updateWithRevision(taskId, { retryBudget }, expectedRevision);
+    return await this.deps.storage.tasks.updateWithRevision(taskId, { retryBudget }, expectedRevision);
   }
 
-  public recordRetryAttempt(taskId: string, reason: string, options?: TaskWorkspaceAccessOptions): TaskRecord {
-    const current = this.requireTaskInWorkspace(taskId, options);
+  public async recordRetryAttempt(
+    taskId: string,
+    reason: string,
+    options?: TaskWorkspaceAccessOptions,
+  ): Promise<TaskRecord> {
+    const current = await this.requireTaskInWorkspace(taskId, options);
     const budget = current.retryBudget ?? { maxRetries: 0, retryCount: 0 };
     const nextCount = budget.retryCount + 1;
     const now = new Date().toISOString();
@@ -392,8 +412,8 @@ export class TaskLifecycleService {
       exhaustedAt: exhausted ? now : budget.exhaustedAt,
     };
     if (!exhausted) {
-      const updated = this.deps.storage.tasks.updateWithRevision(taskId, { retryBudget }, current.revision);
-      this.publishTaskEvent(
+      const updated = await this.deps.storage.tasks.updateWithRevision(taskId, { retryBudget }, current.revision);
+      await this.publishTaskEvent(
         "task_retry_attempted",
         { taskId, retryCount: nextCount, reason },
         buildTaskRealtimeLinks(updated),
@@ -406,7 +426,7 @@ export class TaskLifecycleService {
       title: "Retry budget exhausted",
       summary: reason,
     });
-    const updated = this.deps.storage.tasks.updateWithRevision(
+    const updated = await this.deps.storage.tasks.updateWithRevision(
       taskId,
       {
         retryBudget,
@@ -415,7 +435,7 @@ export class TaskLifecycleService {
       },
       current.revision,
     );
-    this.publishTaskEvent(
+    await this.publishTaskEvent(
       "task_retry_budget_exhausted",
       { taskId, retryCount: nextCount, reason },
       buildTaskRealtimeLinks(updated),
@@ -423,8 +443,8 @@ export class TaskLifecycleService {
     return updated;
   }
 
-  public autoBlockOnIncompleteExit(taskId: string, runId: string): TaskRecord {
-    const current = this.deps.storage.tasks.get(taskId);
+  public async autoBlockOnIncompleteExit(taskId: string, runId: string): Promise<TaskRecord> {
+    const current = await this.deps.storage.tasks.get(taskId);
     if (current.status === "done" || current.status === "blocked") {
       return current;
     }
@@ -456,11 +476,11 @@ export class TaskLifecycleService {
     if (agenticContext) {
       update.agenticContext = agenticContext;
     }
-    const updated = this.deps.storage.tasks.updateWithRevision(taskId, update, current.revision);
+    const updated = await this.deps.storage.tasks.updateWithRevision(taskId, update, current.revision);
     if (agenticContext) {
       this.deps.recordAgenticDiagnosticSignal?.({ task: updated, diagnostic });
     }
-    this.publishTaskEvent(
+    await this.publishTaskEvent(
       "task_auto_blocked",
       { taskId, runId, reason: "worker_incomplete_exit", diagnostic },
       buildTaskRealtimeLinks(updated),
@@ -468,12 +488,12 @@ export class TaskLifecycleService {
     return updated;
   }
 
-  public bulkUpdateTasks(input: BulkTaskAction, options?: TaskWorkspaceAccessOptions): TaskRecord[] {
+  public async bulkUpdateTasks(input: BulkTaskAction, options?: TaskWorkspaceAccessOptions): Promise<TaskRecord[]> {
     validateBulkTaskRevisionSet(input);
-    const committed = this.deps.storage.runImmediateTransaction(() => {
+    const committed = await this.deps.storage.runImmediateTransaction(async () => {
       const lockedByTaskId = new Map<string, TaskRecord>();
       for (const taskId of [...input.taskIds].sort()) {
-        const task = this.deps.storage.tasks.getForUpdate(taskId);
+        const task = await this.deps.storage.tasks.getForUpdate(taskId);
         if (!this.isTaskAllowedForWorkspace(task, options)) {
           throw new NotFoundError({ entity: "Task", id: taskId });
         }
@@ -482,7 +502,7 @@ export class TaskLifecycleService {
       }
       if (input.action === "close") {
         for (const taskId of input.taskIds) {
-          if (this.deps.storage.taskDeliverables.countByTask(taskId) < 1) {
+          if ((await this.deps.storage.taskDeliverables.countByTask(taskId)) < 1) {
             throw new ValidationError({
               message: `Cannot mark task ${taskId} done without at least one deliverable`,
             });
@@ -490,20 +510,22 @@ export class TaskLifecycleService {
         }
       }
 
-      return input.taskIds.map((taskId) => {
-        const current = lockedByTaskId.get(taskId)!;
-        const expectedRevision = input.expectedRevisionsByTaskId[taskId]!;
-        return this.deps.storage.tasks.updateWithRevision(
-          taskId,
-          buildBulkTaskUpdate(current, input),
-          expectedRevision,
-        );
-      });
+      return await Promise.all(
+        input.taskIds.map(async (taskId) => {
+          const current = lockedByTaskId.get(taskId)!;
+          const expectedRevision = input.expectedRevisionsByTaskId[taskId]!;
+          return await this.deps.storage.tasks.updateWithRevision(
+            taskId,
+            buildBulkTaskUpdate(current, input),
+            expectedRevision,
+          );
+        }),
+      );
     });
 
     for (const task of committed) {
       const eventType = input.action === "retry" ? retryTaskEventType(task) : "task_updated";
-      this.publishTaskEvent(
+      await this.publishTaskEvent(
         eventType,
         input.action === "retry"
           ? {
@@ -523,8 +545,8 @@ export class TaskLifecycleService {
     claims: TaskArtifactClaim[],
     options?: TaskWorkspaceAccessOptions,
   ): Promise<TaskRecord> {
-    const current = this.requireTaskInWorkspace(taskId, options);
-    return this.verifyTaskArtifactsWithRevision(taskId, claims, current.revision, options);
+    const current = await this.requireTaskInWorkspace(taskId, options);
+    return await this.verifyTaskArtifactsWithRevision(taskId, claims, current.revision, options);
   }
 
   public async verifyTaskArtifactsWithRevision(
@@ -533,7 +555,7 @@ export class TaskLifecycleService {
     expectedRevision: number,
     options?: TaskWorkspaceAccessOptions,
   ): Promise<TaskRecord> {
-    const current = this.requireTaskInWorkspace(taskId, options);
+    const current = await this.requireTaskInWorkspace(taskId, options);
     assertTaskExpectedRevision(current, expectedRevision);
     if (!this.deps.probers) {
       throw new ValidationError({ message: "Artifact verification probers not configured" });
@@ -551,7 +573,7 @@ export class TaskLifecycleService {
           summary: `${missingCount} missing, ${failedCount} unreachable`,
         })
       : current.distressSignals;
-    const updated = this.deps.storage.tasks.updateWithRevision(
+    const updated = await this.deps.storage.tasks.updateWithRevision(
       taskId,
       {
         artifactVerification: merged,
@@ -560,7 +582,7 @@ export class TaskLifecycleService {
       },
       expectedRevision,
     );
-    this.publishTaskEvent(
+    await this.publishTaskEvent(
       "task_artifacts_verified",
       { taskId, verifiedCount: verification.filter((v) => v.status === "verified").length, missingCount, failedCount },
       buildTaskRealtimeLinks(updated),
@@ -568,7 +590,7 @@ export class TaskLifecycleService {
     return updated;
   }
 
-  public listAgenticRuns(
+  public async listAgenticRuns(
     input: {
       workspaceId?: string;
       limit?: number;
@@ -579,7 +601,7 @@ export class TaskLifecycleService {
       boardId?: string;
       parentRunId?: string;
     } = {},
-  ): { items: AgenticRunListItem[]; nextCursor?: string } {
+  ): Promise<{ items: AgenticRunListItem[]; nextCursor?: string }> {
     const limit = clampLimit(input.limit, 200);
     const workspaceId = this.normalizeWorkspaceId(input.workspaceId);
     const matched: TaskRecord[] = [];
@@ -587,7 +609,7 @@ export class TaskLifecycleService {
     let exhausted = false;
     const pageLimit = Math.max(limit + 1, Math.min(500, limit * 2));
     while (matched.length <= limit && !exhausted) {
-      const tasks = this.deps.storage.tasks.list({
+      const tasks = await this.deps.storage.tasks.list({
         workspaceId,
         limit: pageLimit,
         cursor,
@@ -612,7 +634,7 @@ export class TaskLifecycleService {
     const taskItems = page.map(mapAgenticRunListItem);
     const projectedRuns = input.cursor
       ? []
-      : this.listProjectedCoworkRuns({
+      : await this.listProjectedCoworkRuns({
           workspaceId,
           limit,
           status: input.status,
@@ -639,12 +661,12 @@ export class TaskLifecycleService {
     };
   }
 
-  public getAgenticRunTree(runId: string, options?: TaskWorkspaceAccessOptions): AgenticRunTreeResponse {
+  public async getAgenticRunTree(runId: string, options?: TaskWorkspaceAccessOptions): Promise<AgenticRunTreeResponse> {
     const normalizedRunId = sanitizeRequired(runId, "runId");
     const workspaceOptions = this.normalizeWorkspaceAccessOptions(options);
-    const tasks = this.listTasksInAgenticRun(normalizedRunId, workspaceOptions);
+    const tasks = await this.listTasksInAgenticRun(normalizedRunId, workspaceOptions);
     if (tasks.length === 0) {
-      const projected = this.buildProjectedCoworkRunTree(normalizedRunId, workspaceOptions);
+      const projected = await this.buildProjectedCoworkRunTree(normalizedRunId, workspaceOptions);
       if (projected) {
         return projected;
       }
@@ -697,7 +719,7 @@ export class TaskLifecycleService {
       edges.push({ from: parentId, to: taskNodeId, kind: "contains" });
       diagnostics.push(...(task.agenticContext?.diagnostics ?? []));
 
-      for (const subagent of this.deps.storage.taskSubagents.listByTask(task.taskId, 200)) {
+      for (const subagent of await this.deps.storage.taskSubagents.listByTask(task.taskId, 200)) {
         const subagentNodeId = `subagent:${subagent.agentSessionId}`;
         const waiting = subagent.metadata?.waiting;
         nodes.push({
@@ -733,7 +755,7 @@ export class TaskLifecycleService {
         diagnostics.push(...(subagent.metadata?.diagnostics ?? []));
       }
 
-      for (const deliverable of this.deps.storage.taskDeliverables.listByTask(task.taskId, 200)) {
+      for (const deliverable of await this.deps.storage.taskDeliverables.listByTask(task.taskId, 200)) {
         const artifactNodeId = `artifact:${deliverable.deliverableId}`;
         nodes.push({
           id: artifactNodeId,
@@ -782,7 +804,7 @@ export class TaskLifecycleService {
     };
   }
 
-  private listProjectedCoworkRuns(input: {
+  private async listProjectedCoworkRuns(input: {
     workspaceId?: string;
     limit?: number;
     status?: AgenticTaskContext["status"];
@@ -790,7 +812,7 @@ export class TaskLifecycleService {
     sessionId?: string;
     boardId?: string;
     parentRunId?: string;
-  }): AgenticRunListItem[] {
+  }): Promise<AgenticRunListItem[]> {
     const projection = this.createCoworkProjectionService();
     return (
       projection?.listAgenticRuns({
@@ -800,10 +822,10 @@ export class TaskLifecycleService {
     );
   }
 
-  private buildProjectedCoworkRunTree(
+  private async buildProjectedCoworkRunTree(
     runId: string,
     options?: TaskWorkspaceAccessOptions,
-  ): AgenticRunTreeResponse | undefined {
+  ): Promise<AgenticRunTreeResponse | undefined> {
     return this.createCoworkProjectionService()?.getAgenticRunTree(runId, { workspaceId: options?.workspaceId });
   }
 
@@ -826,10 +848,10 @@ export class TaskLifecycleService {
     });
   }
 
-  public updateTaskAgenticContext(taskId: string, patch: Partial<AgenticTaskContext>): TaskRecord {
-    const updated = this.deps.storage.runImmediateTransaction(() => {
-      const current = this.deps.storage.tasks.getForUpdate(taskId);
-      return this.deps.storage.tasks.updateWithRevision(
+  public async updateTaskAgenticContext(taskId: string, patch: Partial<AgenticTaskContext>): Promise<TaskRecord> {
+    const updated = await this.deps.storage.runImmediateTransaction(async () => {
+      const current = await this.deps.storage.tasks.getForUpdate(taskId);
+      return await this.deps.storage.tasks.updateWithRevision(
         taskId,
         {
           agenticContext: mergeAgenticContext(current.agenticContext, patch),
@@ -837,7 +859,7 @@ export class TaskLifecycleService {
         current.revision,
       );
     });
-    this.publishTaskEvent(
+    await this.publishTaskEvent(
       "agentic_context_updated",
       { taskId, agenticContext: updated.agenticContext },
       buildTaskRealtimeLinks(updated),
@@ -845,18 +867,21 @@ export class TaskLifecycleService {
     return updated;
   }
 
-  public recordTaskHeartbeat(taskId: string, input: { summary?: string; agentSessionId?: string }): TaskRecord {
+  public async recordTaskHeartbeat(
+    taskId: string,
+    input: { summary?: string; agentSessionId?: string },
+  ): Promise<TaskRecord> {
     const now = new Date().toISOString();
-    const task = this.updateTaskAgenticContext(taskId, { heartbeatAt: now });
+    const task = await this.updateTaskAgenticContext(taskId, { heartbeatAt: now });
     if (input.agentSessionId) {
-      const subagent = this.deps.storage.taskSubagents.findByAgentSessionId(input.agentSessionId);
+      const subagent = await this.deps.storage.taskSubagents.findByAgentSessionId(input.agentSessionId);
       if (subagent) {
-        this.deps.storage.taskSubagents.updateByAgentSessionIdWithMetadataPatch(input.agentSessionId, {
+        await this.deps.storage.taskSubagents.updateByAgentSessionIdWithMetadataPatch(input.agentSessionId, {
           metadataPatch: { heartbeatAt: now },
         });
       }
     }
-    this.appendTaskActivity(taskId, {
+    await this.appendTaskActivity(taskId, {
       activityType: "heartbeat",
       message: input.summary ?? "Agentic task heartbeat recorded.",
       metadata: compactRecord({ heartbeatAt: now, agentSessionId: input.agentSessionId }),
@@ -864,15 +889,15 @@ export class TaskLifecycleService {
     return task;
   }
 
-  public appendTaskDiagnostic(
+  public async appendTaskDiagnostic(
     taskId: string,
     input: Omit<AgenticDiagnosticSignal, "signalId" | "createdAt"> & {
       signalId?: string;
       createdAt?: string;
     },
     options?: TaskWorkspaceAccessOptions,
-  ): AgenticDiagnosticSignal {
-    const task = this.requireTaskInWorkspace(taskId, options);
+  ): Promise<AgenticDiagnosticSignal> {
+    const task = await this.requireTaskInWorkspace(taskId, options);
     const diagnostic: AgenticDiagnosticSignal = {
       signalId: input.signalId ?? randomUUID(),
       code: input.code,
@@ -883,7 +908,7 @@ export class TaskLifecycleService {
       createdAt: input.createdAt ?? new Date().toISOString(),
       resolvedAt: input.resolvedAt,
     };
-    const updatedTask = this.deps.storage.tasks.updateWithRevision(
+    const updatedTask = await this.deps.storage.tasks.updateWithRevision(
       taskId,
       {
         agenticContext: {
@@ -894,7 +919,7 @@ export class TaskLifecycleService {
       },
       task.revision,
     );
-    this.appendTaskActivity(
+    await this.appendTaskActivity(
       taskId,
       {
         activityType: "diagnostic",
@@ -907,7 +932,7 @@ export class TaskLifecycleService {
       this.deps.recordAgenticDiagnosticSignal?.({ task: updatedTask, diagnostic });
     } catch (error) {
       try {
-        this.appendTaskActivity(
+        await this.appendTaskActivity(
           taskId,
           {
             activityType: "diagnostic",
@@ -931,16 +956,16 @@ export class TaskLifecycleService {
     return diagnostic;
   }
 
-  public invokeAgenticControl(
+  public async invokeAgenticControl(
     runId: string,
     input: AgenticControlRequest,
     options?: TaskWorkspaceAccessOptions,
-  ): AgenticControlResponse {
-    const task = this.findRootTaskForRun(runId, this.normalizeWorkspaceAccessOptions(options));
+  ): Promise<AgenticControlResponse> {
+    const task = await this.findRootTaskForRun(runId, this.normalizeWorkspaceAccessOptions(options));
     const now = new Date().toISOString();
-    const controlId = input.controlId?.trim() || this.buildImplicitAgenticControlId(task, runId, input);
+    const controlId = input.controlId?.trim() || (await this.buildImplicitAgenticControlId(task, runId, input));
     input = { ...input, controlId };
-    const existing = findControlActivityForReplay(this.deps.storage.taskActivities, task.taskId, controlId);
+    const existing = await findControlActivityForReplay(this.deps.storage.taskActivities, task.taskId, controlId);
     if (existing) {
       return buildValidatedIdempotentControlReplay(task, input, existing);
     }
@@ -953,7 +978,7 @@ export class TaskLifecycleService {
       idempotencyKey: controlId,
       actorScope: task.taskId,
     };
-    const claim = this.deps.storage.mutationIdempotency.claim({
+    const claim = await this.deps.storage.mutationIdempotency.claim({
       ...identity,
       payloadHash: hashAgenticControlPayload(runId, task.taskId, input),
       leaseDurationMs: AGENTIC_RUNTIME_CONTROL_CLAIM_LEASE_MS,
@@ -965,7 +990,7 @@ export class TaskLifecycleService {
       });
     }
     if (claim.outcome === "duplicate" || claim.outcome === "in_progress") {
-      const receipt = findControlActivityForReplay(this.deps.storage.taskActivities, task.taskId, controlId);
+      const receipt = await findControlActivityForReplay(this.deps.storage.taskActivities, task.taskId, controlId);
       if (receipt) {
         return buildValidatedIdempotentControlReplay(task, input, receipt);
       }
@@ -996,7 +1021,7 @@ export class TaskLifecycleService {
     const rejectionReason = validateAgenticControlTransition(currentStatus, input);
 
     if (rejectionReason) {
-      return this.recordRejectedAgenticControl(task, input, {
+      return await this.recordRejectedAgenticControl(task, input, {
         controlId,
         mutationClaim,
         message: rejectionReason,
@@ -1009,7 +1034,7 @@ export class TaskLifecycleService {
 
     let runtimeEffectAlreadyApplied =
       mutationClaim && mutationClaim.claimKind !== "new"
-        ? this.probeAgenticRuntimeControlOutcome(task, input, controlId!)
+        ? await this.probeAgenticRuntimeControlOutcome(task, input, controlId!)
         : false;
 
     if (input.action === "pause") {
@@ -1017,12 +1042,16 @@ export class TaskLifecycleService {
       if (durableRunId && this.deps.pauseDurableRun) {
         try {
           if (!runtimeEffectAlreadyApplied) {
-            runtimeReportedStatus = this.deps.pauseDurableRun(durableRunId, input.actorId ?? "operator").status;
+            runtimeReportedStatus = (await this.deps.pauseDurableRun(durableRunId, input.actorId ?? "operator")).status;
           }
         } catch (error) {
-          runtimeEffectAlreadyApplied = this.probeAgenticRuntimeControlOutcome(task, input, controlId ?? input.action);
+          runtimeEffectAlreadyApplied = await this.probeAgenticRuntimeControlOutcome(
+            task,
+            input,
+            controlId ?? input.action,
+          );
           if (!runtimeEffectAlreadyApplied) {
-            return this.recordRejectedAgenticControl(task, input, {
+            return await this.recordRejectedAgenticControl(task, input, {
               controlId,
               mutationClaim,
               evidenceRef: durableRunId,
@@ -1043,12 +1072,17 @@ export class TaskLifecycleService {
       if (durableRunId && this.deps.cancelDurableRun) {
         try {
           if (!runtimeEffectAlreadyApplied) {
-            runtimeReportedStatus = this.deps.cancelDurableRun(durableRunId, input.actorId ?? "operator").status;
+            runtimeReportedStatus = (await this.deps.cancelDurableRun(durableRunId, input.actorId ?? "operator"))
+              .status;
           }
         } catch (error) {
-          runtimeEffectAlreadyApplied = this.probeAgenticRuntimeControlOutcome(task, input, controlId ?? input.action);
+          runtimeEffectAlreadyApplied = await this.probeAgenticRuntimeControlOutcome(
+            task,
+            input,
+            controlId ?? input.action,
+          );
           if (!runtimeEffectAlreadyApplied) {
-            return this.recordRejectedAgenticControl(task, input, {
+            return await this.recordRejectedAgenticControl(task, input, {
               controlId,
               mutationClaim,
               evidenceRef: durableRunId,
@@ -1067,16 +1101,16 @@ export class TaskLifecycleService {
       }
     } else if (input.action === "kill_child") {
       if (!input.agentSessionId) {
-        this.failAgenticControlMutation(mutationClaim, now);
+        await this.failAgenticControlMutation(mutationClaim, now);
         throw new ValidationError({ field: "agentSessionId", message: "agentSessionId is required for kill_child." });
       }
-      const subagent = this.deps.storage.taskSubagents.findByAgentSessionId(input.agentSessionId);
-      const runTasks = this.listTasksInAgenticRun(runId, this.normalizeWorkspaceAccessOptions(options), {
+      const subagent = await this.deps.storage.taskSubagents.findByAgentSessionId(input.agentSessionId);
+      const runTasks = await this.listTasksInAgenticRun(runId, this.normalizeWorkspaceAccessOptions(options), {
         includeParentRunLinks: false,
       });
       const allowedTaskIds = new Set(runTasks.map((candidate) => candidate.taskId));
       if (!subagent || !allowedTaskIds.has(subagent.taskId)) {
-        this.failAgenticControlMutation(mutationClaim, now);
+        await this.failAgenticControlMutation(mutationClaim, now);
         throw new NotFoundError({ entity: "Sub-agent session", id: input.agentSessionId });
       }
     } else if (input.action === "open_child") {
@@ -1094,10 +1128,10 @@ export class TaskLifecycleService {
               ? "Durable run cancellation was applied and mirrored into the Cowork board."
               : "Control was recorded with an operator-visible runtime effect.";
     try {
-      const committed = this.deps.storage.runImmediateTransaction(() => {
-        const current = this.deps.storage.tasks.getForUpdate(task.taskId);
+      const committed = await this.deps.storage.runImmediateTransaction(async () => {
+        const current = await this.deps.storage.tasks.getForUpdate(task.taskId);
         assertTaskExpectedRevision(current, expectedRevision);
-        const outcome = this.reconcileAgenticControlCommit(
+        const outcome = await this.reconcileAgenticControlCommit(
           current,
           input,
           {
@@ -1112,7 +1146,7 @@ export class TaskLifecycleService {
         );
         const updatedTask =
           outcome.nextStatus || outcome.nextAgenticStatus
-            ? this.deps.storage.tasks.updateWithRevision(
+            ? await this.deps.storage.tasks.updateWithRevision(
                 task.taskId,
                 {
                   ...(outcome.nextStatus ? { status: outcome.nextStatus } : {}),
@@ -1123,7 +1157,7 @@ export class TaskLifecycleService {
                 expectedRevision,
               )
             : current;
-        const persistedActivity = this.deps.storage.taskActivities.append(
+        const persistedActivity = await this.deps.storage.taskActivities.append(
           task.taskId,
           {
             activityType: "control",
@@ -1143,7 +1177,7 @@ export class TaskLifecycleService {
           },
           now,
         );
-        this.completeAgenticControlMutation(mutationClaim, now);
+        await this.completeAgenticControlMutation(mutationClaim, now);
         const response: AgenticControlResponse = {
           action: input.action,
           taskId: task.taskId,
@@ -1156,21 +1190,21 @@ export class TaskLifecycleService {
         };
         return { persistedActivity, response };
       });
-      this.publishDelegationActivity(committed.persistedActivity);
+      await this.publishDelegationActivity(committed.persistedActivity);
       return committed.response;
     } catch (error) {
-      this.failAgenticControlMutation(mutationClaim, now);
+      await this.failAgenticControlMutation(mutationClaim, now);
       throw error;
     }
   }
 
-  private reconcileAgenticControlCommit(
+  private async reconcileAgenticControlCommit(
     currentTask: TaskRecord,
     input: AgenticControlRequest,
     planned: AgenticControlCommitOutcome,
     runtimeReportedStatus: string | undefined,
     controlId: string,
-  ): AgenticControlCommitOutcome {
+  ): Promise<AgenticControlCommitOutcome> {
     if (
       (input.action !== "pause" && input.action !== "cancel") ||
       (planned.runtimeEffect !== "runtime_pause" && planned.runtimeEffect !== "runtime_cancel")
@@ -1187,7 +1221,7 @@ export class TaskLifecycleService {
       try {
         // The task row is already locked. This is intentionally a committed-state
         // read, not a second row lock that would invert durable-run -> task order.
-        canonicalDurableStatus = this.deps.storage.durableRuns.getRun(durableRunId).status;
+        canonicalDurableStatus = (await this.deps.storage.durableRuns.getRun(durableRunId)).status;
       } catch (error) {
         if (!(error instanceof NotFoundError) || !canonicalDurableStatus) {
           throw new ConflictError({
@@ -1228,7 +1262,7 @@ export class TaskLifecycleService {
     };
   }
 
-  private recordRejectedAgenticControl(
+  private async recordRejectedAgenticControl(
     task: TaskRecord,
     input: AgenticControlRequest,
     options: {
@@ -1241,7 +1275,7 @@ export class TaskLifecycleService {
       signalPrefix: string;
       title: string;
     },
-  ): AgenticControlResponse {
+  ): Promise<AgenticControlResponse> {
     const diagnostic: AgenticDiagnosticSignal = {
       signalId: `${options.signalPrefix}-${input.action}-${options.controlId ?? randomUUID()}`,
       code: "unsafe_status_transition",
@@ -1262,11 +1296,11 @@ export class TaskLifecycleService {
       message: options.message,
     };
     try {
-      const committed = this.deps.storage.runImmediateTransaction(() => {
-        const current = this.deps.storage.tasks.getForUpdate(task.taskId);
+      const committed = await this.deps.storage.runImmediateTransaction(async () => {
+        const current = await this.deps.storage.tasks.getForUpdate(task.taskId);
         const expectedRevision = input.expectedRevision ?? task.revision;
         assertTaskExpectedRevision(current, expectedRevision);
-        const updatedTask = this.deps.storage.tasks.updateWithRevision(
+        const updatedTask = await this.deps.storage.tasks.updateWithRevision(
           task.taskId,
           {
             agenticContext: {
@@ -1277,7 +1311,7 @@ export class TaskLifecycleService {
           },
           expectedRevision,
         );
-        const diagnosticActivity = this.deps.storage.taskActivities.append(
+        const diagnosticActivity = await this.deps.storage.taskActivities.append(
           task.taskId,
           {
             activityType: "diagnostic",
@@ -1286,7 +1320,7 @@ export class TaskLifecycleService {
           },
           options.now,
         );
-        const controlActivity = this.deps.storage.taskActivities.append(
+        const controlActivity = await this.deps.storage.taskActivities.append(
           task.taskId,
           {
             activityType: "control",
@@ -1303,24 +1337,27 @@ export class TaskLifecycleService {
           },
           options.now,
         );
-        this.completeAgenticControlMutation(options.mutationClaim, options.now);
+        await this.completeAgenticControlMutation(options.mutationClaim, options.now);
         return { updatedTask, diagnosticActivity, controlActivity };
       });
-      this.publishDelegationActivity(committed.diagnosticActivity);
-      this.publishDelegationActivity(committed.controlActivity);
-      this.mirrorAgenticControlDiagnostic(committed.updatedTask, diagnostic);
+      await this.publishDelegationActivity(committed.diagnosticActivity);
+      await this.publishDelegationActivity(committed.controlActivity);
+      await this.mirrorAgenticControlDiagnostic(committed.updatedTask, diagnostic);
       return { ...response, taskRevision: committed.updatedTask.revision };
     } catch (error) {
-      this.failAgenticControlMutation(options.mutationClaim, options.now);
+      await this.failAgenticControlMutation(options.mutationClaim, options.now);
       throw error;
     }
   }
 
-  private completeAgenticControlMutation(claim: AgenticControlMutationClaim | undefined, updatedAt: string): void {
+  private async completeAgenticControlMutation(
+    claim: AgenticControlMutationClaim | undefined,
+    updatedAt: string,
+  ): Promise<void> {
     if (!claim) {
       return;
     }
-    const completed = this.deps.storage.mutationIdempotency.markCompleted({
+    const completed = await this.deps.storage.mutationIdempotency.markCompleted({
       ...claim.identity,
       claimToken: claim.claimToken,
       updatedAt,
@@ -1333,12 +1370,16 @@ export class TaskLifecycleService {
     }
   }
 
-  private buildImplicitAgenticControlId(task: TaskRecord, runId: string, input: AgenticControlRequest): string {
+  private async buildImplicitAgenticControlId(
+    task: TaskRecord,
+    runId: string,
+    input: AgenticControlRequest,
+  ): Promise<string> {
     const durableRunId = task.agenticContext?.durableRunId?.trim();
     if ((input.action === "pause" || input.action === "cancel") && durableRunId) {
       let generation: string = `task:${task.updatedAt}`;
       try {
-        const durableRun = this.deps.storage.durableRuns?.getRun(durableRunId);
+        const durableRun = await this.deps.storage.durableRuns?.getRun(durableRunId);
         if (durableRun) {
           const alreadyAtTarget =
             (input.action === "pause" && durableRun.status === "paused") ||
@@ -1372,22 +1413,25 @@ export class TaskLifecycleService {
     return `generated-agentic-control-${randomUUID()}`;
   }
 
-  private failAgenticControlMutation(claim: AgenticControlMutationClaim | undefined, updatedAt: string): void {
+  private async failAgenticControlMutation(
+    claim: AgenticControlMutationClaim | undefined,
+    updatedAt: string,
+  ): Promise<void> {
     if (!claim) {
       return;
     }
-    this.deps.storage.mutationIdempotency.markFailed({
+    await this.deps.storage.mutationIdempotency.markFailed({
       ...claim.identity,
       claimToken: claim.claimToken,
       updatedAt,
     });
   }
 
-  private probeAgenticRuntimeControlOutcome(
+  private async probeAgenticRuntimeControlOutcome(
     task: TaskRecord,
     input: AgenticControlRequest,
     controlId: string,
-  ): boolean {
+  ): Promise<boolean> {
     if (input.action !== "pause" && input.action !== "cancel") {
       return false;
     }
@@ -1403,7 +1447,7 @@ export class TaskLifecycleService {
       });
     }
     try {
-      const durableRun = durableRuns.getRun(durableRunId);
+      const durableRun = await durableRuns.getRun(durableRunId);
       return input.action === "pause" ? durableRun.status === "paused" : durableRun.status === "cancelled";
     } catch (error) {
       throw new ConflictError({
@@ -1413,12 +1457,12 @@ export class TaskLifecycleService {
     }
   }
 
-  private mirrorAgenticControlDiagnostic(task: TaskRecord, diagnostic: AgenticDiagnosticSignal): void {
+  private async mirrorAgenticControlDiagnostic(task: TaskRecord, diagnostic: AgenticDiagnosticSignal): Promise<void> {
     try {
       this.deps.recordAgenticDiagnosticSignal?.({ task, diagnostic });
     } catch (error) {
       try {
-        this.appendTaskActivity(task.taskId, {
+        await this.appendTaskActivity(task.taskId, {
           activityType: "diagnostic",
           message: "Agentic diagnostic was saved, but improvement-ledger mirroring failed.",
           metadata: {
@@ -1435,129 +1479,139 @@ export class TaskLifecycleService {
     }
   }
 
-  public softDeleteTask(
+  public async softDeleteTask(
     taskId: string,
     deletedBy?: string,
     deleteReason?: string,
     options?: TaskWorkspaceAccessOptions,
-  ): boolean {
-    const existing = this.findTaskInWorkspace(taskId, options);
+  ): Promise<boolean> {
+    const existing = await this.findTaskInWorkspace(taskId, options);
     if (!existing) {
       return false;
     }
-    return this.softDeleteTaskWithRevision(taskId, existing.revision, deletedBy, deleteReason, options);
+    return await this.softDeleteTaskWithRevision(taskId, existing.revision, deletedBy, deleteReason, options);
   }
 
-  public softDeleteTaskWithRevision(
+  public async softDeleteTaskWithRevision(
     taskId: string,
     expectedRevision: number,
     deletedBy?: string,
     deleteReason?: string,
     options?: TaskWorkspaceAccessOptions,
-  ): boolean {
-    const existing = this.findTaskInWorkspace(taskId, options);
+  ): Promise<boolean> {
+    const existing = await this.findTaskInWorkspace(taskId, options);
     if (!existing) {
       return false;
     }
     assertTaskExpectedRevision(existing, expectedRevision);
-    const deleted = this.deps.storage.tasks.softDeleteWithRevision(taskId, expectedRevision, deletedBy, deleteReason);
+    const deleted = await this.deps.storage.tasks.softDeleteWithRevision(
+      taskId,
+      expectedRevision,
+      deletedBy,
+      deleteReason,
+    );
     if (deleted) {
-      this.publishTaskEvent("task_deleted", { taskId, mode: "soft" }, buildTaskRealtimeLinks(existing, taskId));
+      await this.publishTaskEvent("task_deleted", { taskId, mode: "soft" }, buildTaskRealtimeLinks(existing, taskId));
     }
     return deleted;
   }
 
-  public restoreTask(taskId: string, options?: TaskWorkspaceAccessOptions): boolean {
-    const existing = this.findTaskInWorkspace(taskId, options);
+  public async restoreTask(taskId: string, options?: TaskWorkspaceAccessOptions): Promise<boolean> {
+    const existing = await this.findTaskInWorkspace(taskId, options);
     if (!existing) {
       return false;
     }
-    return this.restoreTaskWithRevision(taskId, existing.revision, options);
+    return await this.restoreTaskWithRevision(taskId, existing.revision, options);
   }
 
-  public restoreTaskWithRevision(
+  public async restoreTaskWithRevision(
     taskId: string,
     expectedRevision: number,
     options?: TaskWorkspaceAccessOptions,
-  ): boolean {
-    const existing = this.findTaskInWorkspace(taskId, options);
+  ): Promise<boolean> {
+    const existing = await this.findTaskInWorkspace(taskId, options);
     if (!existing) {
       return false;
     }
     assertTaskExpectedRevision(existing, expectedRevision);
-    const restored = this.deps.storage.tasks.restoreWithRevision(taskId, expectedRevision);
+    const restored = await this.deps.storage.tasks.restoreWithRevision(taskId, expectedRevision);
     if (restored) {
-      this.publishTaskEvent(
+      await this.publishTaskEvent(
         "task_restored",
         { taskId },
-        buildTaskRealtimeLinks(this.deps.storage.tasks.find(taskId), taskId),
+        buildTaskRealtimeLinks(await this.deps.storage.tasks.find(taskId), taskId),
       );
     }
     return restored;
   }
 
-  public hardDeleteTask(taskId: string, options?: TaskWorkspaceAccessOptions): boolean {
-    const existing = this.findTaskInWorkspace(taskId, options);
+  public async hardDeleteTask(taskId: string, options?: TaskWorkspaceAccessOptions): Promise<boolean> {
+    const existing = await this.findTaskInWorkspace(taskId, options);
     if (!existing) {
       return false;
     }
-    return this.hardDeleteTaskWithRevision(taskId, existing.revision, options);
+    return await this.hardDeleteTaskWithRevision(taskId, existing.revision, options);
   }
 
-  public hardDeleteTaskWithRevision(
+  public async hardDeleteTaskWithRevision(
     taskId: string,
     expectedRevision: number,
     options?: TaskWorkspaceAccessOptions,
-  ): boolean {
-    const existing = this.findTaskInWorkspace(taskId, options);
+  ): Promise<boolean> {
+    const existing = await this.findTaskInWorkspace(taskId, options);
     if (!existing) {
       return false;
     }
     assertTaskExpectedRevision(existing, expectedRevision);
-    const deleted = this.deps.storage.tasks.hardDeleteWithRevision(taskId, expectedRevision);
+    const deleted = await this.deps.storage.tasks.hardDeleteWithRevision(taskId, expectedRevision);
     if (deleted) {
-      this.publishTaskEvent("task_deleted", { taskId, mode: "hard" }, buildTaskRealtimeLinks(existing, taskId));
+      await this.publishTaskEvent("task_deleted", { taskId, mode: "hard" }, buildTaskRealtimeLinks(existing, taskId));
     }
     return deleted;
   }
 
-  private findRootTaskForRun(runId: string, options?: TaskWorkspaceAccessOptions): TaskRecord {
+  private async findRootTaskForRun(runId: string, options?: TaskWorkspaceAccessOptions): Promise<TaskRecord> {
     const normalizedRunId = sanitizeRequired(runId, "runId");
-    const task = this.findTaskByAgenticRunId(normalizedRunId, options);
+    const task = await this.findTaskByAgenticRunId(normalizedRunId, options);
     if (!task) {
       throw new ValidationError({ message: `Agentic run not found: ${normalizedRunId}` });
     }
     return task;
   }
 
-  private listTasksInAgenticRun(
+  private async listTasksInAgenticRun(
     runId: string,
     options?: TaskWorkspaceAccessOptions,
     control?: { includeParentRunLinks?: boolean },
-  ): TaskRecord[] {
+  ): Promise<TaskRecord[]> {
     const includeParentRunLinks = control?.includeParentRunLinks ?? true;
-    return this.scanActiveTasks(
+    return await this.scanActiveTasks(
       (task) =>
         isTaskInAgenticRun(task, runId, { includeParentRunLinks }) && this.isTaskAllowedForWorkspace(task, options),
     );
   }
 
-  private findTaskByAgenticRunId(runId: string, options?: TaskWorkspaceAccessOptions): TaskRecord | undefined {
-    return this.scanActiveTasks(
-      (task) => task.agenticContext?.runId === runId && this.isTaskAllowedForWorkspace(task, options),
-      { stopAfterFirst: true },
+  private async findTaskByAgenticRunId(
+    runId: string,
+    options?: TaskWorkspaceAccessOptions,
+  ): Promise<TaskRecord | undefined> {
+    return (
+      await this.scanActiveTasks(
+        (task) => task.agenticContext?.runId === runId && this.isTaskAllowedForWorkspace(task, options),
+        { stopAfterFirst: true },
+      )
     )[0];
   }
 
-  private scanActiveTasks(
+  private async scanActiveTasks(
     predicate: (task: TaskRecord) => boolean,
     options: { stopAfterFirst?: boolean } = {},
-  ): TaskRecord[] {
+  ): Promise<TaskRecord[]> {
     const matched: TaskRecord[] = [];
     let cursor: string | undefined;
     const pageLimit = 500;
     while (true) {
-      const tasks = this.deps.storage.tasks.list({ limit: pageLimit, cursor, view: "active" });
+      const tasks = await this.deps.storage.tasks.list({ limit: pageLimit, cursor, view: "active" });
       if (tasks.length === 0) {
         return matched;
       }
@@ -1577,91 +1631,102 @@ export class TaskLifecycleService {
     }
   }
 
-  public listTaskActivities(taskId: string, limit = 200, options?: TaskWorkspaceAccessOptions): TaskActivityRecord[] {
-    this.requireTaskInWorkspace(taskId, options);
-    return this.deps.storage.taskActivities.listByTask(taskId, limit);
-  }
-
-  public appendTaskActivity(
-    taskId: string,
-    input: TaskActivityCreateInput,
-    options?: TaskWorkspaceAccessOptions,
-  ): TaskActivityRecord {
-    const task = this.requireTaskInWorkspace(taskId, options);
-    const activity = this.deps.storage.taskActivities.append(taskId, input);
-    this.publishTaskEvent("activity_logged", { taskId, activity }, buildTaskRealtimeLinks(task));
-    return activity;
-  }
-
-  public listTaskDeliverables(
+  public async listTaskActivities(
     taskId: string,
     limit = 200,
     options?: TaskWorkspaceAccessOptions,
-  ): TaskDeliverableRecord[] {
-    this.requireTaskInWorkspace(taskId, options);
-    return this.deps.storage.taskDeliverables.listByTask(taskId, limit);
+  ): Promise<TaskActivityRecord[]> {
+    await this.requireTaskInWorkspace(taskId, options);
+    return await this.deps.storage.taskActivities.listByTask(taskId, limit);
   }
 
-  public appendTaskDeliverable(
+  public async appendTaskActivity(
+    taskId: string,
+    input: TaskActivityCreateInput,
+    options?: TaskWorkspaceAccessOptions,
+  ): Promise<TaskActivityRecord> {
+    const task = await this.requireTaskInWorkspace(taskId, options);
+    const activity = await this.deps.storage.taskActivities.append(taskId, input);
+    await this.publishTaskEvent("activity_logged", { taskId, activity }, buildTaskRealtimeLinks(task));
+    return activity;
+  }
+
+  public async listTaskDeliverables(
+    taskId: string,
+    limit = 200,
+    options?: TaskWorkspaceAccessOptions,
+  ): Promise<TaskDeliverableRecord[]> {
+    await this.requireTaskInWorkspace(taskId, options);
+    return await this.deps.storage.taskDeliverables.listByTask(taskId, limit);
+  }
+
+  public async appendTaskDeliverable(
     taskId: string,
     input: TaskDeliverableCreateInput,
     options?: TaskWorkspaceAccessOptions,
-  ): TaskDeliverableRecord {
-    const task = this.requireTaskInWorkspace(taskId, options);
-    const deliverable = this.deps.storage.taskDeliverables.append(taskId, input);
-    this.publishTaskEvent("deliverable_added", { taskId, deliverable }, buildTaskRealtimeLinks(task));
+  ): Promise<TaskDeliverableRecord> {
+    const task = await this.requireTaskInWorkspace(taskId, options);
+    const deliverable = await this.deps.storage.taskDeliverables.append(taskId, input);
+    await this.publishTaskEvent("deliverable_added", { taskId, deliverable }, buildTaskRealtimeLinks(task));
     return deliverable;
   }
 
-  public listTaskSubagents(taskId: string, limit = 200, options?: TaskWorkspaceAccessOptions): TaskSubagentSession[] {
-    this.requireTaskInWorkspace(taskId, options);
-    return this.deps.storage.taskSubagents.listByTask(taskId, limit);
+  public async listTaskSubagents(
+    taskId: string,
+    limit = 200,
+    options?: TaskWorkspaceAccessOptions,
+  ): Promise<TaskSubagentSession[]> {
+    await this.requireTaskInWorkspace(taskId, options);
+    return await this.deps.storage.taskSubagents.listByTask(taskId, limit);
   }
 
-  public registerTaskSubagent(
+  public async registerTaskSubagent(
     taskId: string,
     input: TaskSubagentCreateInput,
     options?: TaskWorkspaceAccessOptions,
-  ): TaskSubagentSession {
-    const task = this.requireTaskInWorkspace(taskId, options);
-    const session = this.deps.storage.taskSubagents.create(taskId, input);
-    this.publishTaskEvent("subagent_registered", { taskId, session }, buildTaskRealtimeLinks(task));
+  ): Promise<TaskSubagentSession> {
+    const task = await this.requireTaskInWorkspace(taskId, options);
+    const session = await this.deps.storage.taskSubagents.create(taskId, input);
+    await this.publishTaskEvent("subagent_registered", { taskId, session }, buildTaskRealtimeLinks(task));
     return session;
   }
 
-  public updateTaskSubagent(
+  public async updateTaskSubagent(
     agentSessionId: string,
     input: TaskSubagentUpdateInput,
     options?: TaskWorkspaceAccessOptions,
-  ): TaskSubagentSession {
-    const current = this.deps.storage.taskSubagents.findByAgentSessionId(agentSessionId);
+  ): Promise<TaskSubagentSession> {
+    const current = await this.deps.storage.taskSubagents.findByAgentSessionId(agentSessionId);
     if (!current) {
       throw new NotFoundError({ entity: "Sub-agent session", id: agentSessionId });
     }
-    this.requireTaskInWorkspace(current.taskId, options);
-    const updated = this.deps.storage.taskSubagents.updateByAgentSessionId(agentSessionId, {
+    await this.requireTaskInWorkspace(current.taskId, options);
+    const updated = await this.deps.storage.taskSubagents.updateByAgentSessionId(agentSessionId, {
       ...input,
       endedAt: input.endedAt ?? (input.status && input.status !== "active" ? new Date().toISOString() : undefined),
     });
 
-    this.publishTaskEvent(
+    await this.publishTaskEvent(
       "subagent_updated",
       { taskId: updated.taskId, session: updated },
-      buildTaskRealtimeLinks(this.deps.storage.tasks.find(updated.taskId), updated.taskId),
+      buildTaskRealtimeLinks(await this.deps.storage.tasks.find(updated.taskId), updated.taskId),
     );
     return updated;
   }
 
-  private requireTaskInWorkspace(taskId: string, options?: TaskWorkspaceAccessOptions): TaskRecord {
-    const task = this.deps.storage.tasks.get(taskId);
+  private async requireTaskInWorkspace(taskId: string, options?: TaskWorkspaceAccessOptions): Promise<TaskRecord> {
+    const task = await this.deps.storage.tasks.get(taskId);
     if (!this.isTaskAllowedForWorkspace(task, options)) {
       throw new NotFoundError({ entity: "Task", id: taskId });
     }
     return task;
   }
 
-  private findTaskInWorkspace(taskId: string, options?: TaskWorkspaceAccessOptions): TaskRecord | undefined {
-    const task = this.deps.storage.tasks.find(taskId);
+  private async findTaskInWorkspace(
+    taskId: string,
+    options?: TaskWorkspaceAccessOptions,
+  ): Promise<TaskRecord | undefined> {
+    const task = await this.deps.storage.tasks.find(taskId);
     if (!task || !this.isTaskAllowedForWorkspace(task, options)) {
       return undefined;
     }
@@ -1690,8 +1755,12 @@ export class TaskLifecycleService {
     return normalized;
   }
 
-  private publishTaskEvent(eventType: string, payload: Record<string, unknown>, links: RealtimeEvent["links"]): void {
-    this.deps.publishRealtime(eventType, "tasks", payload, {
+  private async publishTaskEvent(
+    eventType: string,
+    payload: Record<string, unknown>,
+    links: RealtimeEvent["links"],
+  ): Promise<void> {
+    await this.deps.publishRealtime(eventType, "tasks", payload, {
       eventClass: "domain_fact",
       eventAuthority: "retained_stream",
       links,
@@ -2035,17 +2104,17 @@ function deriveAgenticDiagnostics(input: {
   );
 }
 
-function findControlActivityForReplay(
+async function findControlActivityForReplay(
   taskActivities: TaskStorage["taskActivities"],
   taskId: string,
   controlId: string,
-): TaskActivityRecord | undefined {
+): Promise<TaskActivityRecord | undefined> {
   const repository = taskActivities as TaskStorage["taskActivities"] & {
     findControlByTaskAndControlId?: (taskId: string, controlId: string) => TaskActivityRecord | undefined;
   };
   return repository.findControlByTaskAndControlId
-    ? repository.findControlByTaskAndControlId(taskId, controlId)
-    : findControlActivityById(repository.listByTask(taskId, Number.MAX_SAFE_INTEGER), controlId);
+    ? await repository.findControlByTaskAndControlId(taskId, controlId)
+    : findControlActivityById(await repository.listByTask(taskId, Number.MAX_SAFE_INTEGER), controlId);
 }
 
 function findControlActivityById(activities: TaskActivityRecord[], controlId: string): TaskActivityRecord | undefined {

@@ -18,13 +18,8 @@ import {
   type ExternalSourceImportItem,
   type ExternalSourceKnowledgeSnapshotRequestMaterial,
   type ExternalSourceRecord,
-  type ExternalSourceScanRecord,
 } from "@goatcitadel/contracts";
-import {
-  verifyExternalSourceImportSettlement,
-  type ExternalSessionAttachmentRepository,
-  type ExternalSourceImportRepository,
-} from "@goatcitadel/storage";
+import { verifyExternalSourceImportSettlement, type AsyncStorage } from "@goatcitadel/storage";
 import {
   ExternalSourceArtifactStoreError,
   type ExternalSourceArtifactStore,
@@ -70,15 +65,16 @@ interface ExternalSourceAttachmentServiceClock {
 }
 
 export interface ExternalSourceAttachmentServiceDependencies {
-  configs: { find(workspaceId: string, sourceId: string): ExternalSourceRecord | undefined };
-  scans: { find(workspaceId: string, scanId: string): ExternalSourceScanRecord | undefined };
-  imports: Pick<ExternalSourceImportRepository, "getIntent" | "getItem" | "getSettlement" | "listItems">;
+  configs: Pick<AsyncStorage["externalSourceConfigs"], "find">;
+  scans: Pick<AsyncStorage["externalSourceScans"], "find">;
+  imports: Pick<AsyncStorage["externalSourceImports"], "getIntent" | "getItem" | "getSettlement" | "listItems">;
   attachments: Pick<
-    ExternalSessionAttachmentRepository,
-    "attachWithJourney" | "detachCasWithJourney" | "find" | "findBySessionBinding" | "listBySession"
+    AsyncStorage["externalSessionAttachments"],
+    "attachWithJourneyResolved" | "detachCasWithJourneyResolved" | "find" | "findBySessionBinding" | "listBySession"
   >;
-  sessions: { get(sessionId: string): ExternalSourceAttachmentSessionMeta | undefined };
+  sessions: { get(sessionId: string): Promise<ExternalSourceAttachmentSessionMeta | undefined> };
   artifacts: Pick<ExternalSourceArtifactStore, "read">;
+  runImmediateTransaction: AsyncStorage["runImmediateTransaction"];
   clock?: ExternalSourceAttachmentServiceClock;
 }
 
@@ -144,19 +140,19 @@ export class ExternalSourceAttachmentService {
     assertSignal(signal);
     assertActor(actor);
     const input = normalizeExternalSessionAttachInput(rawInput);
-    const session = this.requireActiveSessionIncarnation(
+    const session = await this.requireActiveSessionIncarnation(
       input.workspaceId,
       input.sessionId,
       input.expectedSessionIncarnationId,
     );
-    const source = this.requireOwnedSource(input.workspaceId, input.sourceId, actor, { requireActive: true });
-    const { intent, item } = this.requireAppliedImportItem(
+    const source = await this.requireOwnedSource(input.workspaceId, input.sourceId, actor, { requireActive: true });
+    const { intent, item } = await this.requireAppliedImportItem(
       input.workspaceId,
       input.sourceId,
       input.importId,
       input.itemId,
     );
-    this.assertNoIdentityDrift(source, intent.scanId);
+    await this.assertNoIdentityDrift(source, intent.scanId);
     await this.verifyManagedArtifact(item, signal);
     throwIfAborted(signal);
     const record: ExternalSessionAttachmentRecord = {
@@ -175,12 +171,22 @@ export class ExternalSourceAttachmentService {
       attachedAt: new Date(this.clock.nowMs()).toISOString(),
     };
     try {
-      const committed = this.dependencies.attachments.attachWithJourney(record, (attachment) =>
-        buildExternalSourceAttachmentJourneyEvent({
-          attachment,
-          sessionIncarnationId: session.sessionIncarnationId,
-        }),
-      );
+      const committed = await this.dependencies.runImmediateTransaction(async () => {
+        const existing = await this.dependencies.attachments.findBySessionBinding(
+          record.workspaceId,
+          record.sessionId,
+          record.importId,
+          record.itemId,
+        );
+        const attachment = existing ?? record;
+        return await this.dependencies.attachments.attachWithJourneyResolved(
+          record,
+          buildExternalSourceAttachmentJourneyEvent({
+            attachment,
+            sessionIncarnationId: session.sessionIncarnationId,
+          }),
+        );
+      });
       return {
         schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,
         attachment: committed.attachment,
@@ -191,10 +197,13 @@ export class ExternalSourceAttachmentService {
     }
   }
 
-  public list(rawInput: unknown, actor: ExternalSourceRequestActor): ExternalSessionAttachmentListResponse {
+  public async list(
+    rawInput: unknown,
+    actor: ExternalSourceRequestActor,
+  ): Promise<ExternalSessionAttachmentListResponse> {
     assertActor(actor);
     const input = normalizeExternalSessionAttachmentListInput(rawInput);
-    const meta = this.requireSessionInWorkspace(input.workspaceId, input.sessionId);
+    const meta = await this.requireSessionInWorkspace(input.workspaceId, input.sessionId);
     try {
       return {
         schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,
@@ -203,7 +212,11 @@ export class ExternalSourceAttachmentService {
         // The durable reload surface is where clients learn the exact
         // incarnation the mutation contracts demand (C4 composition).
         sessionIncarnationId: meta.lifecycleIntentId ?? `legacy-session-incarnation:${input.sessionId}`,
-        items: this.dependencies.attachments.listBySession(input.workspaceId, input.sessionId, input.limit ?? 100),
+        items: await this.dependencies.attachments.listBySession(
+          input.workspaceId,
+          input.sessionId,
+          input.limit ?? 100,
+        ),
       };
     } catch (error) {
       throw normalizeAttachmentFailure(error, undefined, "not_found");
@@ -224,14 +237,14 @@ export class ExternalSourceAttachmentService {
     assertSignal(signal);
     assertActor(actor);
     const input = normalizeExternalSessionDetachInput(rawInput);
-    const session = this.requireActiveSessionIncarnation(
+    const session = await this.requireActiveSessionIncarnation(
       input.workspaceId,
       input.sessionId,
       input.expectedSessionIncarnationId,
     );
-    const current = this.requireSessionAttachment(input.workspaceId, input.sessionId, input.attachmentId);
-    this.requireOwnedSource(input.workspaceId, current.sourceId, actor, { requireActive: false });
-    const { item } = this.requireAppliedImportItem(
+    const current = await this.requireSessionAttachment(input.workspaceId, input.sessionId, input.attachmentId);
+    await this.requireOwnedSource(input.workspaceId, current.sourceId, actor, { requireActive: false });
+    const { item } = await this.requireAppliedImportItem(
       input.workspaceId,
       current.sourceId,
       current.importId,
@@ -256,14 +269,13 @@ export class ExternalSourceAttachmentService {
       throw new ExternalSourceAttachmentServiceError("conflict");
     }
     try {
-      const committed = this.dependencies.attachments.detachCasWithJourney(
+      const committed = await this.dependencies.attachments.detachCasWithJourneyResolved(
         detachTarget,
         input.expectedRevision,
-        (attachment) =>
-          buildExternalSourceAttachmentJourneyEvent({
-            attachment,
-            sessionIncarnationId: session.sessionIncarnationId,
-          }),
+        buildExternalSourceAttachmentJourneyEvent({
+          attachment: detachTarget,
+          sessionIncarnationId: session.sessionIncarnationId,
+        }),
       );
       return {
         schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,
@@ -287,19 +299,19 @@ export class ExternalSourceAttachmentService {
     signal: AbortSignal,
   ): Promise<ExternalSessionAttachmentReadResult> {
     assertSignal(signal);
-    this.requireSessionInWorkspace(input.workspaceId, input.sessionId);
-    const current = this.requireSessionAttachment(input.workspaceId, input.sessionId, input.attachmentId);
+    await this.requireSessionInWorkspace(input.workspaceId, input.sessionId);
+    const current = await this.requireSessionAttachment(input.workspaceId, input.sessionId, input.attachmentId);
     if (current.status !== "attached") {
       throw new ExternalSourceAttachmentServiceError("conflict");
     }
-    const source = this.requireLiveSource(input.workspaceId, current.sourceId);
-    const { intent, item } = this.requireAppliedImportItem(
+    const source = await this.requireLiveSource(input.workspaceId, current.sourceId);
+    const { intent, item } = await this.requireAppliedImportItem(
       input.workspaceId,
       current.sourceId,
       current.importId,
       current.itemId,
     );
-    this.assertNoIdentityDrift(source, intent.scanId);
+    await this.assertNoIdentityDrift(source, intent.scanId);
     if (item.normalizedArtifactSha256 !== current.normalizedArtifactSha256) {
       throw new ExternalSourceAttachmentServiceError("conflict");
     }
@@ -333,12 +345,12 @@ export class ExternalSourceAttachmentService {
     assertSignal(signal);
     assertActor(actor);
     const input = normalizeExternalSourceKnowledgeSnapshotRequestInput(rawInput);
-    const session = this.requireActiveSessionIncarnation(
+    const session = await this.requireActiveSessionIncarnation(
       input.workspaceId,
       input.sessionId,
       input.expectedSessionIncarnationId,
     );
-    const current = this.requireSessionAttachment(input.workspaceId, input.sessionId, input.attachmentId);
+    const current = await this.requireSessionAttachment(input.workspaceId, input.sessionId, input.attachmentId);
     if (
       current.status !== "attached" ||
       current.revision !== input.expectedAttachmentRevision ||
@@ -347,14 +359,14 @@ export class ExternalSourceAttachmentService {
     ) {
       throw new ExternalSourceAttachmentServiceError("conflict");
     }
-    const source = this.requireOwnedSource(input.workspaceId, current.sourceId, actor, { requireActive: true });
-    const { intent, item } = this.requireAppliedImportItem(
+    const source = await this.requireOwnedSource(input.workspaceId, current.sourceId, actor, { requireActive: true });
+    const { intent, item } = await this.requireAppliedImportItem(
       input.workspaceId,
       current.sourceId,
       input.importId,
       input.itemId,
     );
-    this.assertNoIdentityDrift(source, intent.scanId);
+    await this.assertNoIdentityDrift(source, intent.scanId);
     if (item.normalizedArtifactSha256 !== current.normalizedArtifactSha256) {
       throw new ExternalSourceAttachmentServiceError("conflict");
     }
@@ -389,12 +401,12 @@ export class ExternalSourceAttachmentService {
     };
   }
 
-  private requireActiveSessionIncarnation(
+  private async requireActiveSessionIncarnation(
     workspaceId: string,
     sessionId: string,
     expectedSessionIncarnationId: string,
-  ): { sessionIncarnationId: string } {
-    const meta = this.requireSessionInWorkspace(workspaceId, sessionId);
+  ): Promise<{ sessionIncarnationId: string }> {
+    const meta = await this.requireSessionInWorkspace(workspaceId, sessionId);
     const sessionIncarnationId = meta.lifecycleIntentId ?? `legacy-session-incarnation:${sessionId}`;
     if (expectedSessionIncarnationId !== sessionIncarnationId) {
       throw new ExternalSourceAttachmentServiceError("session_incarnation_stale");
@@ -402,8 +414,11 @@ export class ExternalSourceAttachmentService {
     return { sessionIncarnationId };
   }
 
-  private requireSessionInWorkspace(workspaceId: string, sessionId: string): ExternalSourceAttachmentSessionMeta {
-    const meta = this.dependencies.sessions.get(sessionId);
+  private async requireSessionInWorkspace(
+    workspaceId: string,
+    sessionId: string,
+  ): Promise<ExternalSourceAttachmentSessionMeta> {
+    const meta = await this.dependencies.sessions.get(sessionId);
     if (!meta || meta.workspaceId !== workspaceId) {
       throw new ExternalSourceAttachmentServiceError("not_found");
     }
@@ -413,14 +428,14 @@ export class ExternalSourceAttachmentService {
     return meta;
   }
 
-  private requireSessionAttachment(
+  private async requireSessionAttachment(
     workspaceId: string,
     sessionId: string,
     attachmentId: string,
-  ): ExternalSessionAttachmentRecord {
+  ): Promise<ExternalSessionAttachmentRecord> {
     let current: ExternalSessionAttachmentRecord | undefined;
     try {
-      current = this.dependencies.attachments.find(workspaceId, attachmentId);
+      current = await this.dependencies.attachments.find(workspaceId, attachmentId);
     } catch (error) {
       throw normalizeAttachmentFailure(error, undefined, "not_found");
     }
@@ -430,13 +445,13 @@ export class ExternalSourceAttachmentService {
     return current;
   }
 
-  private requireOwnedSource(
+  private async requireOwnedSource(
     workspaceId: string,
     sourceId: string,
     actor: ExternalSourceRequestActor,
     options: { requireActive: boolean },
-  ): ExternalSourceRecord {
-    const source = this.dependencies.configs.find(workspaceId, sourceId);
+  ): Promise<ExternalSourceRecord> {
+    const source = await this.dependencies.configs.find(workspaceId, sourceId);
     if (
       !source ||
       source.ownerActorId !== actor.actorId ||
@@ -451,8 +466,8 @@ export class ExternalSourceAttachmentService {
     return source;
   }
 
-  private requireLiveSource(workspaceId: string, sourceId: string): ExternalSourceRecord {
-    const source = this.dependencies.configs.find(workspaceId, sourceId);
+  private async requireLiveSource(workspaceId: string, sourceId: string): Promise<ExternalSourceRecord> {
+    const source = await this.dependencies.configs.find(workspaceId, sourceId);
     if (!source) throw new ExternalSourceAttachmentServiceError("not_found");
     if (source.status !== "active") {
       throw new ExternalSourceAttachmentServiceError("source_not_active");
@@ -460,15 +475,15 @@ export class ExternalSourceAttachmentService {
     return source;
   }
 
-  private requireAppliedImportItem(workspaceId: string, sourceId: string, importId: string, itemId: string) {
+  private async requireAppliedImportItem(workspaceId: string, sourceId: string, importId: string, itemId: string) {
     try {
-      const intent = this.dependencies.imports.getIntent(workspaceId, importId);
+      const intent = await this.dependencies.imports.getIntent(workspaceId, importId);
       if (intent.sourceId !== sourceId) {
         throw new ExternalSourceAttachmentServiceError("conflict");
       }
-      const item = this.dependencies.imports.getItem(workspaceId, importId, itemId);
-      const settlement = this.dependencies.imports.getSettlement(workspaceId, importId);
-      const items = this.dependencies.imports.listItems(workspaceId, importId);
+      const item = await this.dependencies.imports.getItem(workspaceId, importId, itemId);
+      const settlement = await this.dependencies.imports.getSettlement(workspaceId, importId);
+      const items = await this.dependencies.imports.listItems(workspaceId, importId);
       verifyExternalSourceImportSettlement(settlement, items);
       if (settlement.disposition !== "applied") {
         throw new ExternalSourceAttachmentServiceError("conflict");
@@ -484,8 +499,8 @@ export class ExternalSourceAttachmentService {
    * identity chain no longer matches the import's sealed scan binding
    * invalidates live attachment use without deleting immutable imports.
    */
-  private assertNoIdentityDrift(source: ExternalSourceRecord, scanId: string): void {
-    const scan = this.dependencies.scans.find(source.workspaceId, scanId);
+  private async assertNoIdentityDrift(source: ExternalSourceRecord, scanId: string): Promise<void> {
+    const scan = await this.dependencies.scans.find(source.workspaceId, scanId);
     if (
       !scan ||
       scan.sourceId !== source.sourceId ||

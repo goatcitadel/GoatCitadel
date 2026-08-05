@@ -26,7 +26,11 @@ import type {
   ProactiveRunRecord,
 } from "@goatcitadel/contracts";
 import { ConflictError, isChatTurnActiveStatus, isChatTurnTerminalStatus, NotFoundError } from "@goatcitadel/contracts";
-import type { SessionAutonomyPrefsRecord, SessionMutationAdmissionRecord, Storage } from "@goatcitadel/storage";
+import type {
+  SessionAutonomyPrefsRecord,
+  SessionMutationAdmissionRecord,
+  AsyncStorage as Storage,
+} from "@goatcitadel/storage";
 import { looksLowConfidenceResponse } from "./learned-memory-utils.js";
 import {
   preflightChatRoute,
@@ -100,11 +104,11 @@ export interface AgentChatTurnIdentity {
 
 export interface AgentChatTurnRequestOptions {
   abortSignal?: AbortSignal;
-  onChildDurableRunLaunched?: (runId: string) => void;
+  onChildDurableRunLaunched?: (runId: string) => Promise<void>;
   turnIdentity?: AgentChatTurnIdentity;
   /** Pre-admitted authority used only by deterministic internal callers/recovery. */
   turnAdmission?: ActiveTurnAdmission;
-  assertDispatchOwnership?: () => void;
+  assertDispatchOwnership?: () => Promise<void>;
   /** Present only on authenticated operator HTTP route calls. */
   authenticatedOperator?: AuthenticatedOperatorAdmissionContext;
   /**
@@ -189,20 +193,20 @@ export interface ChatTurnEntryHost
     content: string;
     capabilitySuggestions: ChatCapabilityUpgradeSuggestion[];
     trace: ChatTurnTraceRecord;
-  }): ChatSpecialistCandidateSuggestionRecord[];
-  isReplayScratchSession(sessionId: string): boolean;
+  }): Promise<ChatSpecialistCandidateSuggestionRecord[]>;
+  isReplayScratchSession(sessionId: string): Promise<boolean>;
   triggerChatSessionProactive(sessionId: string, input?: ChatTurnProactiveTriggerInput): Promise<ProactiveRunRecord>;
   // Optional surface-router hooks — provided by the composition root when the auto-router is wired up.
   surfaceRouter?: { route(req: SurfaceRouteRequest): Promise<SurfaceClassification> };
-  readChatSessionMode?(sessionId: string): ChatMode | undefined;
-  persistChatSessionMode?(sessionId: string, mode: ChatMode): void;
-  recordSurfaceRouteOverrideSignal?(input: SurfaceRouteOverrideSignalInput): void;
+  readChatSessionMode?(sessionId: string): Promise<ChatMode | undefined>;
+  persistChatSessionMode?(sessionId: string, mode: ChatMode): Promise<void>;
+  recordSurfaceRouteOverrideSignal?(input: SurfaceRouteOverrideSignalInput): Promise<void>;
 }
 
 export interface ChatTurnResumeHost {
   readonly storage: {
     readonly chatTurnTraces: {
-      get(turnId: string): Pick<ChatTurnTraceRecord, "sessionId">;
+      get(turnId: string): Promise<Pick<ChatTurnTraceRecord, "sessionId">>;
     };
   };
   streamPersistedChatTurnEvents(
@@ -238,7 +242,7 @@ async function admitEntryOperatorChatTurn(
   authenticatedOperator?: AuthenticatedOperatorAdmissionContext,
 ): Promise<ActiveTurnAdmission> {
   if (!authenticatedOperator) {
-    return host.sessionControlRuntimeOwner.admitOperatorChatTurn(input);
+    return await host.sessionControlRuntimeOwner.admitOperatorChatTurn(input);
   }
   try {
     return await host.sessionControlRuntimeOwner.admitAuthenticatedOperatorChatTurnWithHeartbeatRecovery(
@@ -285,7 +289,7 @@ async function admitEntrySendChatTurn(
   context: EntrySendAdmissionContext,
 ): Promise<ActiveTurnAdmission> {
   if (!context.externalCompanion) {
-    return admitEntryOperatorChatTurn(host, input, context.authenticatedOperator);
+    return await admitEntryOperatorChatTurn(host, input, context.authenticatedOperator);
   }
   if (context.authenticatedOperator) {
     throw new ConflictError({
@@ -307,7 +311,7 @@ async function admitEntrySendChatTurn(
     requiredCapability: "send",
     expectedGeneration: companion.expectedGeneration,
   };
-  return host.sessionControlRuntimeOwner.admitChatTurn({ ...actorlessInput, actor });
+  return await host.sessionControlRuntimeOwner.admitChatTurn({ ...actorlessInput, actor });
 }
 
 function resolveEntrySendAdmissionActorId(
@@ -360,8 +364,8 @@ export async function agentSendChatMessage(
     let terminalEntryResponse: ChatSendMessageResponse | undefined;
     let entryCompletedNormally = false;
     try {
-      assertEntryAdmissionActive(host, turnAdmission, admissionHeartbeat);
-      options?.assertDispatchOwnership?.();
+      await assertEntryAdmissionActive(host, turnAdmission, admissionHeartbeat);
+      await options?.assertDispatchOwnership?.();
       input = await applySurfaceRoutingPreflight(
         createAdmissionGuardedSurfaceHost(host, turnAdmission, admissionHeartbeat),
         sessionId,
@@ -377,9 +381,9 @@ export async function agentSendChatMessage(
           });
         },
       );
-      assertEntryAdmissionActive(host, turnAdmission, admissionHeartbeat);
+      await assertEntryAdmissionActive(host, turnAdmission, admissionHeartbeat);
       const requireDurableExecution = Boolean(options?.turnIdentity && input.policyRunId?.trim());
-      const binding = resolveAdmissionFencedChatSessionBinding(
+      const binding = await resolveAdmissionFencedChatSessionBinding(
         host,
         turnAdmission,
         admissionHeartbeat,
@@ -389,7 +393,7 @@ export async function agentSendChatMessage(
       if (requireDurableExecution && binding.transport !== "llm") {
         throw new Error("Deterministic delegated Chat execution requires an LLM session binding.");
       }
-      const routeDescriptor = resolveChatRouteDescriptor(host as ChatTurnPreflightHost, sessionId, {
+      const routeDescriptor = await resolveChatRouteDescriptor(host as ChatTurnPreflightHost, sessionId, {
         action: "send",
         providerId: input.providerId,
         model: input.model,
@@ -431,16 +435,16 @@ export async function agentSendChatMessage(
         assistantMessageId: turnIdentity.assistantMessageId,
         turnAdmission,
       });
-      assertEntryAdmissionActive(host, turnAdmission, admissionHeartbeat);
-      const useDurableExecution = chatTurnDispatchService.shouldUseDurableExecution(
+      await assertEntryAdmissionActive(host, turnAdmission, admissionHeartbeat);
+      const useDurableExecution = await chatTurnDispatchService.shouldUseDurableExecution(
         host,
         prepared,
         input,
         requireDurableExecution,
       );
       if (binding.transport !== "llm") {
-        assertEntryAdmissionActive(host, turnAdmission, admissionHeartbeat);
-        options?.assertDispatchOwnership?.();
+        await assertEntryAdmissionActive(host, turnAdmission, admissionHeartbeat);
+        await options?.assertDispatchOwnership?.();
         terminalEntryResponse = await chatTurnDispatchService.sendPreparedIntegrationChatTurn(
           host,
           sessionId,
@@ -468,7 +472,7 @@ export async function agentSendChatMessage(
           sessionId,
           turnId: prepared.turnId,
         });
-        assertEntryAdmissionActive(host, turnAdmission, admissionHeartbeat);
+        await assertEntryAdmissionActive(host, turnAdmission, admissionHeartbeat);
         terminalEntryResponse = await chatTurnDispatchService.consumePreparedAgentChatTurn(
           host,
           sessionId,
@@ -491,7 +495,7 @@ export async function agentSendChatMessage(
         return terminalEntryResponse;
       }
       if (requireDurableExecution || useDurableExecution) {
-        assertEntryAdmissionActive(host, turnAdmission, admissionHeartbeat);
+        await assertEntryAdmissionActive(host, turnAdmission, admissionHeartbeat);
         terminalEntryResponse = await chatTurnDispatchService.consumePreparedAgentChatTurn(
           host,
           sessionId,
@@ -513,7 +517,7 @@ export async function agentSendChatMessage(
         entryCompletedNormally = true;
         return terminalEntryResponse;
       }
-      assertEntryAdmissionActive(host, turnAdmission, admissionHeartbeat);
+      await assertEntryAdmissionActive(host, turnAdmission, admissionHeartbeat);
       terminalEntryResponse = await runAgentSendChatMessageLlmPath(host, sessionId, input, prepared, options);
       assertWaitingResponseHasDurableOwner(turnAdmission, terminalEntryResponse);
       entryCompletedNormally = true;
@@ -521,7 +525,7 @@ export async function agentSendChatMessage(
     } finally {
       admissionHeartbeat.stop();
       if (turnAdmission.requestClaim) {
-        host.sessionControlRuntimeOwner.closeTurnWrite({
+        await host.sessionControlRuntimeOwner.closeTurnWrite({
           admission: turnAdmission,
           status:
             entryCompletedNormally && terminalEntryResponse?.trace?.status !== "cancelled" ? "completed" : "cancelled",
@@ -546,17 +550,17 @@ function createEntryTurnIdentity(): AgentChatTurnIdentity {
   };
 }
 
-function closeEntryRequestAdmission(
+async function closeEntryRequestAdmission(
   host: ChatTurnEntryHost,
   admission: ActiveTurnAdmission,
   heartbeat: import("./session-control-runtime-owner.js").TurnAdmissionHeartbeatHandle,
   actorId: string,
   terminalStatus: ChatTurnTraceRecord["status"] | undefined,
   completedNormally: boolean,
-): void {
+): Promise<void> {
   heartbeat.stop();
   if (!admission.requestClaim) return;
-  host.sessionControlRuntimeOwner.closeTurnWrite({
+  await host.sessionControlRuntimeOwner.closeTurnWrite({
     admission,
     status: completedNormally && terminalStatus !== "cancelled" ? "completed" : "cancelled",
     actorId,
@@ -580,13 +584,13 @@ function assertEntryTurnAdmission(
   }
 }
 
-function assertEntryAdmissionActive(
+async function assertEntryAdmissionActive(
   host: ChatTurnEntryHost,
   admission: ActiveTurnAdmission,
   heartbeat: import("./session-control-runtime-owner.js").TurnAdmissionHeartbeatHandle,
-): void {
+): Promise<void> {
   heartbeat.assertHealthy();
-  host.sessionControlRuntimeOwner.assertActiveTurnWrite(admission);
+  await host.sessionControlRuntimeOwner.assertActiveTurnWrite(admission);
 }
 
 function assertWaitingResponseHasDurableOwner(admission: ActiveTurnAdmission, response: ChatSendMessageResponse): void {
@@ -633,22 +637,22 @@ function createAdmissionGuardedSurfaceHost(
     surfaceRouter: host.surfaceRouter,
     readChatSessionMode: host.readChatSessionMode,
     persistChatSessionMode: host.persistChatSessionMode
-      ? (sessionId: string, mode: ChatMode) => {
+      ? async (sessionId: string, mode: ChatMode) => {
           heartbeat.assertHealthy();
-          host.storage.runImmediateTransaction(() => {
-            assertEntryAdmissionActive(host, admission, heartbeat);
-            host.persistChatSessionMode?.(sessionId, mode);
-            assertEntryAdmissionActive(host, admission, heartbeat);
+          await host.storage.runImmediateTransaction(async () => {
+            await assertEntryAdmissionActive(host, admission, heartbeat);
+            await host.persistChatSessionMode?.(sessionId, mode);
+            await assertEntryAdmissionActive(host, admission, heartbeat);
           });
         }
       : undefined,
     recordSurfaceRouteOverrideSignal: host.recordSurfaceRouteOverrideSignal
-      ? (input: SurfaceRouteOverrideSignalInput) => {
+      ? async (input: SurfaceRouteOverrideSignalInput) => {
           heartbeat.assertHealthy();
-          host.storage.runImmediateTransaction(() => {
-            assertEntryAdmissionActive(host, admission, heartbeat);
-            host.recordSurfaceRouteOverrideSignal?.(input);
-            assertEntryAdmissionActive(host, admission, heartbeat);
+          await host.storage.runImmediateTransaction(async () => {
+            await assertEntryAdmissionActive(host, admission, heartbeat);
+            await host.recordSurfaceRouteOverrideSignal?.(input);
+            await assertEntryAdmissionActive(host, admission, heartbeat);
           });
         }
       : undefined,
@@ -656,15 +660,15 @@ function createAdmissionGuardedSurfaceHost(
     storage: {
       ...host.storage,
       chatSessionMeta: {
-        ensure: (targetSessionId: string) => {
+        ensure: async (targetSessionId: string) => {
           heartbeat.assertHealthy();
-          return host.storage.runImmediateTransaction(() => {
-            assertEntryAdmissionActive(host, admission, heartbeat);
-            const meta = host.storage.chatSessionMeta.get(targetSessionId);
+          return await host.storage.runImmediateTransaction(async () => {
+            await assertEntryAdmissionActive(host, admission, heartbeat);
+            const meta = await host.storage.chatSessionMeta.get(targetSessionId);
             if (!meta) {
               throw new Error(`Chat session not found: ${targetSessionId}`);
             }
-            assertEntryAdmissionActive(host, admission, heartbeat);
+            await assertEntryAdmissionActive(host, admission, heartbeat);
             return meta;
           });
         },
@@ -673,29 +677,29 @@ function createAdmissionGuardedSurfaceHost(
   };
 }
 
-function resolveAdmissionFencedChatSessionBinding(
+async function resolveAdmissionFencedChatSessionBinding(
   host: ChatTurnEntryHost,
   admission: ActiveTurnAdmission,
   heartbeat: import("./session-control-runtime-owner.js").TurnAdmissionHeartbeatHandle,
   sessionId: string,
   workspaceId: string,
-): ChatSessionBindingRecord {
+): Promise<ChatSessionBindingRecord> {
   heartbeat.assertHealthy();
-  return host.storage.runImmediateTransaction(() => {
-    assertEntryAdmissionActive(host, admission, heartbeat);
+  return await host.storage.runImmediateTransaction(async () => {
+    await assertEntryAdmissionActive(host, admission, heartbeat);
     const resolved =
-      host.storage.chatSessionBindings.get(sessionId) ??
-      host.storage.chatSessionBindings.upsert({
+      (await host.storage.chatSessionBindings.get(sessionId)) ??
+      (await host.storage.chatSessionBindings.upsert({
         sessionId,
         workspaceId,
         transport: "llm",
         writable: true,
-      });
-    const persisted = host.storage.chatSessionBindings.get(sessionId);
+      }));
+    const persisted = await host.storage.chatSessionBindings.get(sessionId);
     if (!persisted || !sameChatSessionBindingIdentity(resolved, persisted)) {
       throw new Error(`Chat session binding ${sessionId} changed during admitted turn routing.`);
     }
-    assertEntryAdmissionActive(host, admission, heartbeat);
+    await assertEntryAdmissionActive(host, admission, heartbeat);
     return persisted;
   });
 }
@@ -826,18 +830,18 @@ async function runAgentSendChatMessageLlmPath(
       )
     : undefined;
   try {
-    options?.assertDispatchOwnership?.();
-    const admit = () => {
-      persistPreparedChatCapabilityAdmission(host.storage, prepared);
-      persistInitialChatTurnTrace({ chatTurnTraces: host.storage.chatTurnTraces }, prepared, input);
+    await options?.assertDispatchOwnership?.();
+    const admit = async () => {
+      await persistPreparedChatCapabilityAdmission(host.storage, prepared);
+      await persistInitialChatTurnTrace({ chatTurnTraces: host.storage.chatTurnTraces }, prepared, input);
     };
     if (typeof host.storage.runImmediateTransaction === "function") {
-      host.storage.runImmediateTransaction(admit);
+      await host.storage.runImmediateTransaction(admit);
     } else {
       if (prepared.capabilityProfile) {
         throw new Error("Chat capability admission requires a storage transaction boundary.");
       }
-      admit();
+      await admit();
     }
     let turnId = prepared.turnId;
     let turnResult = await host.turnRuntime.run({
@@ -891,7 +895,7 @@ async function runAgentSendChatMessageLlmPath(
       capabilityProfileContent: prepared.capabilityProfileContent,
       compactionDimensionHash: prepared.compactionDimensionHash,
     });
-    assertChatTurnCompletionWritable(host, prepared.turnId, controller.signal, [turnResult.turnTrace.status]);
+    await assertChatTurnCompletionWritable(host, prepared.turnId, controller.signal, [turnResult.turnTrace.status]);
     let reflectionTrace: ChatTurnTraceRecord["reflection"] = {
       attempted: false,
       attemptCount: 0,
@@ -916,7 +920,7 @@ async function runAgentSendChatMessageLlmPath(
         reason: retryReason,
         outcome: "still_failed",
       };
-      host.storage.chatReflectionAttempts.create({
+      await host.storage.chatReflectionAttempts.create({
         attemptId: randomUUID(),
         turnId: retryTurnId,
         sessionId,
@@ -974,7 +978,7 @@ async function runAgentSendChatMessageLlmPath(
         signal: controller.signal,
         compactionDimensionHash: prepared.compactionDimensionHash,
       });
-      assertChatTurnCompletionWritable(host, retryTurnId, controller.signal, [retryResult.turnTrace.status]);
+      await assertChatTurnCompletionWritable(host, retryTurnId, controller.signal, [retryResult.turnTrace.status]);
       if (retryResult.turnTrace.status === "completed" && retryResult.assistantContent.trim().length > 0) {
         turnId = retryTurnId;
         turnResult = retryResult;
@@ -994,7 +998,7 @@ async function runAgentSendChatMessageLlmPath(
     const persistedTurnFailure =
       turnResult.turnTrace.failure ?? inferDegradedAssistantTurnFailure(turnResult.assistantContent);
     if (turnResult.requiresApproval || turnResult.turnTrace.status === "cancelled") {
-      let traceWithMeta: ChatTurnTraceRecord = host.storage.chatTurnTraces.patch(turnId, {
+      let traceWithMeta: ChatTurnTraceRecord = await host.storage.chatTurnTraces.patch(turnId, {
         retrieval: prepared.retrievalTrace,
         reflection: reflectionTrace,
         proactive: {
@@ -1016,27 +1020,27 @@ async function runAgentSendChatMessageLlmPath(
         assistantText: turnResult.assistantContent,
         trace: {
           ...traceWithMeta,
-          toolRuns: host.storage.chatToolRuns.listByTurn(turnId),
+          toolRuns: await host.storage.chatToolRuns.listByTurn(turnId),
         },
       });
       if (capabilityUpgradeSuggestions.length > 0) {
-        traceWithMeta = host.storage.chatTurnTraces.patch(turnId, {
+        traceWithMeta = await host.storage.chatTurnTraces.patch(turnId, {
           capabilityUpgradeSuggestions,
         });
       }
-      host.recordCapabilityGapFromTrace({
+      await host.recordCapabilityGapFromTrace({
         sessionId,
         turnId,
         content: prepared.content,
         trace: {
           ...traceWithMeta,
           citations: dedupedTurnCitations,
-          toolRuns: host.storage.chatToolRuns.listByTurn(turnId),
+          toolRuns: await host.storage.chatToolRuns.listByTurn(turnId),
         },
       });
       if (turnResult.turnTrace.status !== "cancelled") {
-        host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
-        host.publishRealtime(
+        await host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
+        await host.publishRealtime(
           "chat_thread_updated",
           "chat",
           {
@@ -1058,7 +1062,7 @@ async function runAgentSendChatMessageLlmPath(
         trace: {
           ...traceWithMeta,
           citations: dedupedTurnCitations,
-          toolRuns: host.storage.chatToolRuns.listByTurn(turnId),
+          toolRuns: await host.storage.chatToolRuns.listByTurn(turnId),
         },
         citations: dedupedTurnCitations,
         routing: turnResult.turnTrace.routing,
@@ -1100,7 +1104,7 @@ async function runAgentSendChatMessageLlmPath(
       ...new Set(["running", turnResult.turnTrace.status]),
     ] as ChatTurnTraceRecord["status"][];
     let trace: ChatTurnTraceRecord | undefined;
-    assertChatTurnCompletionWritable(host, turnId, controller.signal, completionOwnerStatuses);
+    await assertChatTurnCompletionWritable(host, turnId, controller.signal, completionOwnerStatuses);
     await host.ingestEvent(
       randomUUID(),
       {
@@ -1133,12 +1137,22 @@ async function runAgentSendChatMessageLlmPath(
             : undefined,
       },
       {
-        onCommit: () => {
-          trace = patchChatTurnTraceIfStatus(storage.chatTurnTraces, turnId, completionOwnerStatuses, finalTracePatch);
+        onCommit: async () => {
+          trace = await patchChatTurnTraceIfStatus(
+            storage.chatTurnTraces,
+            turnId,
+            completionOwnerStatuses,
+            finalTracePatch,
+          );
         },
       },
     );
-    trace ??= patchChatTurnTraceIfStatus(storage.chatTurnTraces, turnId, completionOwnerStatuses, finalTracePatch);
+    trace ??= await patchChatTurnTraceIfStatus(
+      storage.chatTurnTraces,
+      turnId,
+      completionOwnerStatuses,
+      finalTracePatch,
+    );
     const assistantMessage: ChatMessageRecord = {
       messageId: assistantEventId,
       sessionId,
@@ -1151,7 +1165,7 @@ async function runAgentSendChatMessageLlmPath(
     let hydratedTrace: ChatTurnTraceRecord = {
       ...trace,
       citations: dedupedTurnCitations,
-      toolRuns: storage.chatToolRuns.listByTurn(turnId),
+      toolRuns: await storage.chatToolRuns.listByTurn(turnId),
     };
     const capabilityUpgradeSuggestions = await host.collectCapabilityUpgradeSuggestions({
       sessionId,
@@ -1159,7 +1173,7 @@ async function runAgentSendChatMessageLlmPath(
       assistantText,
       trace: hydratedTrace,
     });
-    const specialistCandidateSuggestions = host.collectSpecialistCandidateSuggestions({
+    const specialistCandidateSuggestions = await host.collectSpecialistCandidateSuggestions({
       sessionId,
       mode,
       content: prepared.content,
@@ -1167,16 +1181,16 @@ async function runAgentSendChatMessageLlmPath(
       trace: hydratedTrace,
     });
     if (capabilityUpgradeSuggestions.length > 0 || specialistCandidateSuggestions.length > 0) {
-      hydratedTrace = storage.chatTurnTraces.patch(turnId, {
+      hydratedTrace = await storage.chatTurnTraces.patch(turnId, {
         capabilityUpgradeSuggestions: capabilityUpgradeSuggestions.length > 0 ? capabilityUpgradeSuggestions : [],
         specialistCandidateSuggestions: specialistCandidateSuggestions.length > 0 ? specialistCandidateSuggestions : [],
       });
       hydratedTrace = {
         ...hydratedTrace,
-        toolRuns: storage.chatToolRuns.listByTurn(turnId),
+        toolRuns: await storage.chatToolRuns.listByTurn(turnId),
       };
     }
-    host.recordCapabilityGapFromTrace({
+    await host.recordCapabilityGapFromTrace({
       sessionId,
       turnId,
       content: prepared.content,
@@ -1186,8 +1200,8 @@ async function runAgentSendChatMessageLlmPath(
     // Learned-memory promotion and commitments are production-dark on this
     // compatibility path. Canonical Chat completion owns governed post-commit
     // work through admitted durable children.
-    host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
-    host.publishRealtime(
+    await host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
+    await host.publishRealtime(
       "chat_thread_updated",
       "chat",
       {
@@ -1200,7 +1214,7 @@ async function runAgentSendChatMessageLlmPath(
     );
     const delegationDetection = detectDelegationRoles(prepared.content);
     if (
-      !host.isReplayScratchSession(sessionId) &&
+      !(await host.isReplayScratchSession(sessionId)) &&
       prepared.prefs.planningMode !== "advisory" &&
       delegationDetection.length > 1
     ) {
@@ -1233,18 +1247,18 @@ async function runAgentSendChatMessageLlmPath(
   }
 }
 
-function assertChatTurnCompletionWritable(
+async function assertChatTurnCompletionWritable(
   host: Pick<ChatTurnEntryHost, "storage">,
   turnId: string,
   signal: AbortSignal,
   allowedTerminalStatuses: readonly ChatTurnTraceRecord["status"][] = [],
-): void {
+): Promise<void> {
   if (signal.aborted) {
     throw new ChatTurnCancelledError(turnId);
   }
   let status: ChatTurnTraceRecord["status"];
   try {
-    status = host.storage.chatTurnTraces.get(turnId).status;
+    status = (await host.storage.chatTurnTraces.get(turnId)).status;
   } catch (error) {
     if (error instanceof NotFoundError) {
       // The turn runtime may not have persisted its trace yet. The abort
@@ -1337,8 +1351,8 @@ export async function* agentSendChatMessageStream(
             });
           },
         );
-        assertEntryAdmissionActive(host, turnAdmission, heartbeat);
-        const binding = resolveAdmissionFencedChatSessionBinding(
+        await assertEntryAdmissionActive(host, turnAdmission, heartbeat);
+        const binding = await resolveAdmissionFencedChatSessionBinding(
           host,
           turnAdmission,
           heartbeat,
@@ -1361,7 +1375,7 @@ export async function* agentSendChatMessageStream(
             subagentPolicy: input.subagentPolicy,
           },
         });
-        const routeDescriptor = resolveChatRouteDescriptor(host as ChatTurnPreflightHost, sessionId, {
+        const routeDescriptor = await resolveChatRouteDescriptor(host as ChatTurnPreflightHost, sessionId, {
           action: "send",
           providerId: input.providerId,
           model: input.model,
@@ -1393,7 +1407,7 @@ export async function* agentSendChatMessageStream(
           turnAdmission,
           ...(options?.mutationLifecycle ? { mutationLifecycle: options.mutationLifecycle } : {}),
         });
-        assertEntryAdmissionActive(host, turnAdmission, heartbeat);
+        await assertEntryAdmissionActive(host, turnAdmission, heartbeat);
         if (binding.transport !== "llm") {
           const integrationOptions =
             options?.abortSignal || options?.mutationLifecycle
@@ -1428,8 +1442,8 @@ export async function* agentSendChatMessageStream(
           completedNormally = true;
           return;
         }
-        assertEntryAdmissionActive(host, turnAdmission, heartbeat);
-        const durableRunId = options?.mutationLifecycle
+        await assertEntryAdmissionActive(host, turnAdmission, heartbeat);
+        const durableRunId = await (options?.mutationLifecycle
           ? chatTurnDispatchService.launchPreparedAgentChatTurnStream(
               host,
               sessionId,
@@ -1445,7 +1459,7 @@ export async function* agentSendChatMessageStream(
               input,
               prepared,
               "chat_thread_turn_appended",
-            );
+            ));
         if (!turnAdmission.requestClaim) heartbeat.stop();
         const detachAbortListener = bindStreamAbortToTurn(host, prepared.turnId, durableRunId, options?.abortSignal);
         try {
@@ -1462,7 +1476,14 @@ export async function* agentSendChatMessageStream(
           detachAbortListener?.();
         }
       } finally {
-        closeEntryRequestAdmission(host, turnAdmission, heartbeat, admissionActorId, terminalStatus, completedNormally);
+        await closeEntryRequestAdmission(
+          host,
+          turnAdmission,
+          heartbeat,
+          admissionActorId,
+          terminalStatus,
+          completedNormally,
+        );
       }
     })();
   });
@@ -1500,7 +1521,7 @@ export async function retryChatTurn(
       policyTaskId: overrides.policyTaskId,
       contextRefs: overrides.contextRefs,
     };
-    const routeDescriptor = resolveChatRouteDescriptor(host as ChatTurnPreflightHost, sessionId, {
+    const routeDescriptor = await resolveChatRouteDescriptor(host as ChatTurnPreflightHost, sessionId, {
       action: "retry",
       turnId,
       providerId: request.providerId,
@@ -1544,8 +1565,8 @@ export async function retryChatTurn(
     let response: ChatSendMessageResponse | undefined;
     let completedNormally = false;
     try {
-      assertEntryAdmissionActive(host, turnAdmission, heartbeat);
-      const binding = resolveAdmissionFencedChatSessionBinding(
+      await assertEntryAdmissionActive(host, turnAdmission, heartbeat);
+      const binding = await resolveAdmissionFencedChatSessionBinding(
         host,
         turnAdmission,
         heartbeat,
@@ -1563,7 +1584,7 @@ export async function retryChatTurn(
         ingestUserMessage: false,
         turnAdmission,
       });
-      assertEntryAdmissionActive(host, turnAdmission, heartbeat);
+      await assertEntryAdmissionActive(host, turnAdmission, heartbeat);
       response =
         binding.transport !== "llm"
           ? await chatTurnDispatchService.sendPreparedIntegrationChatTurn(
@@ -1585,7 +1606,7 @@ export async function retryChatTurn(
       completedNormally = true;
       return response;
     } finally {
-      closeEntryRequestAdmission(
+      await closeEntryRequestAdmission(
         host,
         turnAdmission,
         heartbeat,
@@ -1649,15 +1670,15 @@ export async function* retryChatTurnStream(
       let completedNormally = false;
       let terminalStatus: ChatTurnTraceRecord["status"] | undefined;
       try {
-        assertEntryAdmissionActive(host, turnAdmission, heartbeat);
-        const binding = resolveAdmissionFencedChatSessionBinding(
+        await assertEntryAdmissionActive(host, turnAdmission, heartbeat);
+        const binding = await resolveAdmissionFencedChatSessionBinding(
           host,
           turnAdmission,
           heartbeat,
           sessionId,
           turnAdmission.identity.workspaceId,
         );
-        const routeDescriptor = resolveChatRouteDescriptor(host as ChatTurnPreflightHost, sessionId, {
+        const routeDescriptor = await resolveChatRouteDescriptor(host as ChatTurnPreflightHost, sessionId, {
           action: "retry",
           turnId,
           providerId: request.providerId,
@@ -1695,7 +1716,7 @@ export async function* retryChatTurnStream(
           turnAdmission,
           ...(options?.mutationLifecycle ? { mutationLifecycle: options.mutationLifecycle } : {}),
         });
-        assertEntryAdmissionActive(host, turnAdmission, heartbeat);
+        await assertEntryAdmissionActive(host, turnAdmission, heartbeat);
         if (binding.transport !== "llm") {
           const integrationOptions =
             options?.abortSignal || options?.mutationLifecycle
@@ -1730,8 +1751,8 @@ export async function* retryChatTurnStream(
           completedNormally = true;
           return;
         }
-        assertEntryAdmissionActive(host, turnAdmission, heartbeat);
-        const durableRunId = options?.mutationLifecycle
+        await assertEntryAdmissionActive(host, turnAdmission, heartbeat);
+        const durableRunId = await (options?.mutationLifecycle
           ? chatTurnDispatchService.launchPreparedAgentChatTurnStream(
               host,
               sessionId,
@@ -1747,7 +1768,7 @@ export async function* retryChatTurnStream(
               request,
               prepared,
               "chat_thread_turn_retried",
-            );
+            ));
         if (!turnAdmission.requestClaim) heartbeat.stop();
         const detachAbortListener = bindStreamAbortToTurn(host, prepared.turnId, durableRunId, options?.abortSignal);
         try {
@@ -1764,7 +1785,14 @@ export async function* retryChatTurnStream(
           detachAbortListener?.();
         }
       } finally {
-        closeEntryRequestAdmission(host, turnAdmission, heartbeat, admissionActorId, terminalStatus, completedNormally);
+        await closeEntryRequestAdmission(
+          host,
+          turnAdmission,
+          heartbeat,
+          admissionActorId,
+          terminalStatus,
+          completedNormally,
+        );
       }
     })();
   });
@@ -1783,7 +1811,7 @@ export async function editChatTurn(
       ...input,
       attachments: input.attachments ?? current.userMessage.attachments?.map((item) => item.attachmentId),
     };
-    const routeDescriptor = resolveChatRouteDescriptor(host as ChatTurnPreflightHost, sessionId, {
+    const routeDescriptor = await resolveChatRouteDescriptor(host as ChatTurnPreflightHost, sessionId, {
       action: "edit",
       turnId,
       providerId: request.providerId,
@@ -1827,8 +1855,8 @@ export async function editChatTurn(
     let response: ChatSendMessageResponse | undefined;
     let completedNormally = false;
     try {
-      assertEntryAdmissionActive(host, turnAdmission, heartbeat);
-      const binding = resolveAdmissionFencedChatSessionBinding(
+      await assertEntryAdmissionActive(host, turnAdmission, heartbeat);
+      const binding = await resolveAdmissionFencedChatSessionBinding(
         host,
         turnAdmission,
         heartbeat,
@@ -1844,7 +1872,7 @@ export async function editChatTurn(
         parentTurnId: current.trace.parentTurnId,
         turnAdmission,
       });
-      assertEntryAdmissionActive(host, turnAdmission, heartbeat);
+      await assertEntryAdmissionActive(host, turnAdmission, heartbeat);
       response =
         binding.transport !== "llm"
           ? await chatTurnDispatchService.sendPreparedIntegrationChatTurn(
@@ -1866,7 +1894,7 @@ export async function editChatTurn(
       completedNormally = true;
       return response;
     } finally {
-      closeEntryRequestAdmission(
+      await closeEntryRequestAdmission(
         host,
         turnAdmission,
         heartbeat,
@@ -1911,15 +1939,15 @@ export async function* editChatTurnStream(
       let completedNormally = false;
       let terminalStatus: ChatTurnTraceRecord["status"] | undefined;
       try {
-        assertEntryAdmissionActive(host, turnAdmission, heartbeat);
-        const binding = resolveAdmissionFencedChatSessionBinding(
+        await assertEntryAdmissionActive(host, turnAdmission, heartbeat);
+        const binding = await resolveAdmissionFencedChatSessionBinding(
           host,
           turnAdmission,
           heartbeat,
           sessionId,
           turnAdmission.identity.workspaceId,
         );
-        const routeDescriptor = resolveChatRouteDescriptor(host as ChatTurnPreflightHost, sessionId, {
+        const routeDescriptor = await resolveChatRouteDescriptor(host as ChatTurnPreflightHost, sessionId, {
           action: "edit",
           turnId,
           providerId: request.providerId,
@@ -1955,7 +1983,7 @@ export async function* editChatTurnStream(
           turnAdmission,
           ...(options?.mutationLifecycle ? { mutationLifecycle: options.mutationLifecycle } : {}),
         });
-        assertEntryAdmissionActive(host, turnAdmission, heartbeat);
+        await assertEntryAdmissionActive(host, turnAdmission, heartbeat);
         if (binding.transport !== "llm") {
           const integrationOptions =
             options?.abortSignal || options?.mutationLifecycle
@@ -1990,8 +2018,8 @@ export async function* editChatTurnStream(
           completedNormally = true;
           return;
         }
-        assertEntryAdmissionActive(host, turnAdmission, heartbeat);
-        const durableRunId = options?.mutationLifecycle
+        await assertEntryAdmissionActive(host, turnAdmission, heartbeat);
+        const durableRunId = await (options?.mutationLifecycle
           ? chatTurnDispatchService.launchPreparedAgentChatTurnStream(
               host,
               sessionId,
@@ -2007,7 +2035,7 @@ export async function* editChatTurnStream(
               request,
               prepared,
               "chat_thread_turn_edited",
-            );
+            ));
         if (!turnAdmission.requestClaim) heartbeat.stop();
         const detachAbortListener = bindStreamAbortToTurn(host, prepared.turnId, durableRunId, options?.abortSignal);
         try {
@@ -2024,7 +2052,14 @@ export async function* editChatTurnStream(
           detachAbortListener?.();
         }
       } finally {
-        closeEntryRequestAdmission(host, turnAdmission, heartbeat, admissionActorId, terminalStatus, completedNormally);
+        await closeEntryRequestAdmission(
+          host,
+          turnAdmission,
+          heartbeat,
+          admissionActorId,
+          terminalStatus,
+          completedNormally,
+        );
       }
     })();
   });
@@ -2070,7 +2105,7 @@ export async function cancelChatTurn(
   const cancelDurableChatRun = host.cancelDurableChatRun;
   let current: ChatTurnTraceRecord | undefined;
   try {
-    current = storage.chatTurnTraces.get(turnId);
+    current = await storage.chatTurnTraces.get(turnId);
   } catch (error) {
     if (!(error instanceof NotFoundError)) {
       throw error;
@@ -2098,11 +2133,11 @@ export async function cancelChatTurn(
   let durableCancellationError: unknown;
   if (durableRunId && cancelDurableChatRun) {
     try {
-      durableCancellation = cancelDurableChatRun(durableRunId, cancelledBy ?? "operator");
+      durableCancellation = await cancelDurableChatRun(durableRunId, cancelledBy ?? "operator");
     } catch (error) {
       durableCancellationError = error;
       try {
-        durableCancellation = storage.durableRuns.getRun(durableRunId);
+        durableCancellation = await storage.durableRuns.getRun(durableRunId);
       } catch {
         // Preserve the original cancellation error when canonical run truth is unavailable.
       }
@@ -2116,10 +2151,10 @@ export async function cancelChatTurn(
   if (durableCancellationError && !durableTerminalWinner && durableCancellation?.status !== "cancelled") {
     throw durableCancellationError;
   }
-  const trace = durableTerminalWinner
-    ? (() => {
+  const trace = await (durableTerminalWinner
+    ? (async () => {
         try {
-          return storage.chatTurnTraces.get(turnId);
+          return await storage.chatTurnTraces.get(turnId);
         } catch {
           if (current) {
             return current;
@@ -2127,7 +2162,7 @@ export async function cancelChatTurn(
           throw durableCancellationError ?? new Error(`Chat turn ${turnId} terminal projection is unavailable.`);
         }
       })()
-    : host.markChatTurnCancelled(sessionId, turnId, cancelledBy);
+    : host.markChatTurnCancelled(sessionId, turnId, cancelledBy));
   const durableTerminalProjectionAligned =
     !durableTerminalWinner ||
     (durableCancellation?.status === "completed" && trace.status === "completed") ||
@@ -2141,7 +2176,7 @@ export async function cancelChatTurn(
       trace,
     };
   }
-  host.persistChatStreamChunk(
+  await host.persistChatStreamChunk(
     {
       type: "trace_update",
       sessionId,
@@ -2152,7 +2187,7 @@ export async function cancelChatTurn(
     writableActiveStream,
   );
   if (trace.assistantMessageId) {
-    host.persistChatStreamChunk(
+    await host.persistChatStreamChunk(
       {
         type: "done",
         sessionId,
@@ -2190,7 +2225,7 @@ export async function* resumeAgentChatTurnStream(
   sinceEventId?: string,
   options?: { abortSignal?: AbortSignal },
 ): AsyncGenerator<ChatStreamChunk> {
-  const trace = host.storage.chatTurnTraces.get(turnId);
+  const trace = await host.storage.chatTurnTraces.get(turnId);
   if (trace.sessionId !== sessionId) {
     throw new Error(`Chat turn ${turnId} does not belong to session ${sessionId}`);
   }

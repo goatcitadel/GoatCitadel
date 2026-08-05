@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ChatSendMessageResponse, ChatSessionRecord, ChatTurnTraceRecord } from "@goatcitadel/contracts";
-import { Storage } from "@goatcitadel/storage";
+import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import type { OrchestrationRouterInput } from "../orchestration/types.js";
 import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 import { executeDelegatedPlanStep, type ChatTurnStreamHost } from "./chat-turn-stream-service.js";
@@ -71,9 +71,7 @@ describe("executeDelegatedPlanStep", () => {
       runId: "run-1",
     });
 
-    await Promise.resolve();
-
-    expect(agentSendChatMessage).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(agentSendChatMessage).toHaveBeenCalledTimes(1));
     expect(storage.chatDelegationSteps.get("run-1:worker-step")).toMatchObject({
       status: "running",
       childSessionId: "child-session",
@@ -137,7 +135,7 @@ describe("executeDelegatedPlanStep", () => {
       runId: "run-91303",
     });
 
-    await Promise.resolve();
+    await vi.waitFor(() => expect(agentSendChatMessage).toHaveBeenCalledTimes(1));
 
     const delegatedRequest = agentSendChatMessage.mock.calls[0]?.[1];
     expect(delegatedRequest?.content).toContain(
@@ -168,7 +166,7 @@ function createHost(
   agentSendChatMessage: ReturnType<typeof vi.fn<() => Promise<ChatSendMessageResponse>>>,
 ): ChatTurnStreamHost {
   return {
-    storage,
+    storage: createSqliteAsyncStorage(storage),
     createChatSession: vi.fn(
       () =>
         ({

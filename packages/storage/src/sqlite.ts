@@ -110,6 +110,7 @@ class SqliteDatabaseClient implements DatabaseClient {
   public readonly dialect = "sqlite" as const;
   private transactionDepth = 0;
   private savepointCounter = 0;
+  private activeCompatibilityTransactionId?: string;
 
   public constructor(private readonly db: DatabaseSync) {}
 
@@ -197,6 +198,45 @@ class SqliteDatabaseClient implements DatabaseClient {
       throw error;
     } finally {
       this.transactionDepth = 0;
+    }
+  }
+
+  /** @internal Async-storage compatibility use only. */
+  public beginCompatibilityTransaction(transactionId: string, mode: DbTransactionMode): void {
+    if (this.transactionDepth > 0 || this.activeCompatibilityTransactionId) {
+      throw new Error("A SQLite compatibility transaction is already active.");
+    }
+    const beginSql = mode === "exclusive" ? "BEGIN EXCLUSIVE" : mode === "deferred" ? "BEGIN" : "BEGIN IMMEDIATE";
+    this.db.exec(beginSql);
+    this.transactionDepth = 1;
+    this.activeCompatibilityTransactionId = transactionId;
+  }
+
+  /** @internal Async-storage compatibility use only. */
+  public commitCompatibilityTransaction(transactionId: string): void {
+    this.assertCompatibilityTransaction(transactionId);
+    try {
+      this.db.exec("COMMIT");
+    } finally {
+      this.transactionDepth = 0;
+      this.activeCompatibilityTransactionId = undefined;
+    }
+  }
+
+  /** @internal Async-storage compatibility use only. */
+  public rollbackCompatibilityTransaction(transactionId: string): void {
+    this.assertCompatibilityTransaction(transactionId);
+    try {
+      this.db.exec("ROLLBACK");
+    } finally {
+      this.transactionDepth = 0;
+      this.activeCompatibilityTransactionId = undefined;
+    }
+  }
+
+  private assertCompatibilityTransaction(transactionId: string): void {
+    if (this.activeCompatibilityTransactionId !== transactionId || this.transactionDepth !== 1) {
+      throw new Error(`SQLite compatibility transaction posture mismatch for ${transactionId}.`);
     }
   }
 }
@@ -6966,6 +7006,13 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
           createCompoundEngineeringSchema(db);
         },
       },
+      {
+        version: 187,
+        name: "session_control_lifecycle_bootstrap_clock_guard",
+        up: (db) => {
+          upgradeSessionControlLifecycleBootstrapClockGuard(db);
+        },
+      },
     ],
   },
 ];
@@ -11695,6 +11742,54 @@ function replaceSessionControlGrantInsertGuard(db: DatabaseSync): void {
       ))
     BEGIN SELECT RAISE(ABORT, 'session control generation, workspace, or database-clock invariant violated'); END;
   `);
+}
+
+function upgradeSessionControlLifecycleBootstrapClockGuard(db: DatabaseSync): void {
+  const trigger = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?")
+    .get("trg_chat_session_control_grants_insert_guard") as { sql: string | null } | undefined;
+  const triggerSql = trigger?.sql ?? "";
+  if (!triggerSql) {
+    throw new Error("SQLite migration 187 requires the session-control grant insert guard");
+  }
+  if (triggerSql.includes("lifecycle bootstrap clock evidence")) {
+    return;
+  }
+  const anchor = `AND NOT EXISTS (
+          SELECT 1 FROM chat_session_control_events event_row`;
+  if (!triggerSql.includes(anchor)) {
+    throw new Error("SQLite migration 187 could not locate the grant clock guard anchor");
+  }
+  const lifecycleBootstrapEvidence = `AND NOT EXISTS (
+          SELECT 1
+          FROM chat_session_lifecycle_intents intent
+          JOIN chat_session_meta meta ON meta.lifecycle_intent_id = intent.intent_id
+          WHERE /* lifecycle bootstrap clock evidence */
+            intent.workspace_id = NEW.workspace_id
+            AND intent.session_id = NEW.session_id
+            AND intent.intent_kind IN ('initialize', 'reactivate')
+            AND intent.session_incarnation_id = intent.intent_id
+            AND intent.next_generation = NEW.generation
+            AND intent.idempotency_key = NEW.transition_idempotency_key
+            AND intent.request_sha256 = NEW.transition_request_sha256
+            AND intent.created_at = NEW.created_at
+            AND NEW.updated_at = intent.created_at
+            AND NEW.is_current = 1
+            AND NEW.owner_kind = 'operator'
+            AND NEW.lease_state = 'operator_active'
+            AND meta.workspace_id = NEW.workspace_id
+            AND meta.session_id = NEW.session_id
+            AND meta.lifecycle_intent_id = intent.intent_id
+            AND meta.deletion_intent_id IS NULL
+            AND meta.lifecycle_status = 'active'
+        )
+        ${anchor}`;
+  const upgradedSql = triggerSql.replace(anchor, lifecycleBootstrapEvidence);
+  if (upgradedSql === triggerSql) {
+    throw new Error("SQLite migration 187 did not upgrade the grant clock guard");
+  }
+  db.exec("DROP TRIGGER trg_chat_session_control_grants_insert_guard;");
+  db.exec(upgradedSql);
 }
 
 function createSessionControlFoundationSchema(db: DatabaseSync): void {

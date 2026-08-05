@@ -145,10 +145,10 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
           ...approvalInput,
           ...(Object.keys(linkage).length > 0 ? { linkage } : {}),
         });
-        markMutationCommitted(request);
+        await markMutationCommitted(request);
         return reply.code(201).send(projectApprovalPublicResponse(approval));
       } catch (error) {
-        markMutationCommittedFromError(request, error);
+        await markMutationCommittedFromError(request, error);
         return sendRouteError(reply, error, request.log);
       }
     },
@@ -167,24 +167,24 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
           limit?: number;
           cursor?: string;
           workspaceId?: string;
-        }) => { items: unknown[]; nextCursor?: string };
+        }) => Promise<{ items: unknown[]; nextCursor?: string }>;
       };
       return reply.send(
         projectApprovalPublicResponse(
           pagedApprovals.listApprovalsPage
-            ? pagedApprovals.listApprovalsPage({
+            ? await pagedApprovals.listApprovalsPage({
                 status: parsed.data.status,
                 limit: parsed.data.limit,
                 cursor: parsed.data.cursor,
                 workspaceId: parsed.data.workspaceId,
               })
             : {
-                items: approvals.listApprovals(parsed.data.status, parsed.data.limit, parsed.data.workspaceId),
+                items: await approvals.listApprovals(parsed.data.status, parsed.data.limit, parsed.data.workspaceId),
               },
         ),
       );
     } catch (error) {
-      markMutationCommittedFromError(request, error);
+      await markMutationCommittedFromError(request, error);
       return sendRouteError(reply, error, request.log);
     }
   });
@@ -200,10 +200,10 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
         ...parsed.data,
         resolvedBy: resolveActorId(request),
       });
-      markMutationCommitted(request);
+      await markMutationCommitted(request);
       return reply.send(projectApprovalPublicResponse(result));
     } catch (error) {
-      markMutationCommittedFromError(request, error);
+      await markMutationCommittedFromError(request, error);
       return sendRouteError(reply, error, request.log);
     }
   });
@@ -224,10 +224,10 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
         ...parsed.data,
         resolvedBy: resolveActorId(request),
       });
-      markMutationCommitted(request);
+      await markMutationCommitted(request);
       return reply.send(projectApprovalPublicResponse(result));
     } catch (error) {
-      markMutationCommittedFromError(request, error);
+      await markMutationCommittedFromError(request, error);
       return sendRouteError(reply, error, request.log);
     }
   });
@@ -243,15 +243,15 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      const token = approvals.createApprovalRemoteActionToken(params.data.approvalId, {
+      const token = await approvals.createApprovalRemoteActionToken(params.data.approvalId, {
         connectorId: parsed.data.connectorId,
         expiresInMs: parsed.data.expiresInMs,
         issuedBy: resolveActorId(request),
       });
-      markMutationCommitted(request);
+      await markMutationCommitted(request);
       return reply.header("Cache-Control", "private, no-store").code(201).send(token);
     } catch (error) {
-      markMutationCommittedFromError(request, error);
+      await markMutationCommittedFromError(request, error);
       return sendRouteError(reply, error, request.log);
     }
   });
@@ -267,10 +267,10 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
         ...parsed.data,
         connectorId: "browser:mission-control",
       });
-      markMutationCommitted(request);
+      await markMutationCommitted(request);
       return reply.send(projectApprovalPublicResponse(result));
     } catch (error) {
-      markMutationCommittedFromError(request, error);
+      await markMutationCommittedFromError(request, error);
       return sendRouteError(reply, error, request.log);
     }
   });
@@ -283,10 +283,10 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
     const approvalId = params.data.approvalId;
     try {
       return reply.send(
-        projectApprovalPublicResponse(approvals.getApprovalReplay(approvalId, resolveActorId(request))),
+        projectApprovalPublicResponse(await approvals.getApprovalReplay(approvalId, resolveActorId(request))),
       );
     } catch (error) {
-      markMutationCommittedFromError(request, error);
+      await markMutationCommittedFromError(request, error);
       return sendRouteError(reply, error, request.log);
     }
   });

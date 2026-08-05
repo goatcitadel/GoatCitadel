@@ -8,7 +8,7 @@ import type {
   AutonomousActivationRiskLevel,
   PermissionSurface,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { wildcardMatch } from "./mcp-server-policy.js";
 
 const SETTING_KEY = "autonomous_activation_grants_v1";
@@ -23,19 +23,23 @@ const RISK_RANK: Record<AutonomousActivationRiskLevel, number> = {
 export class AutonomousActivationGrantService {
   public constructor(
     private readonly systemSettings: Storage["systemSettings"],
-    private readonly publishRealtime: (eventType: string, source: string, payload: Record<string, unknown>) => void,
+    private readonly publishRealtime: (
+      eventType: string,
+      source: string,
+      payload: Record<string, unknown>,
+    ) => Promise<unknown>,
   ) {}
 
-  public listGrants(options: { includeExpired?: boolean } = {}): AutonomousActivationGrantRecord[] {
+  public async listGrants(options: { includeExpired?: boolean } = {}): Promise<AutonomousActivationGrantRecord[]> {
     const nowMs = Date.now();
-    const grants = this.readGrants().map((grant) => hydrateGrantStatus(grant, nowMs));
+    const grants = (await this.readGrants()).map((grant) => hydrateGrantStatus(grant, nowMs));
     if (!options.includeExpired) {
       return grants.filter((grant) => grant.status !== "expired");
     }
     return grants;
   }
 
-  public createGrant(input: AutonomousActivationGrantCreateInput): AutonomousActivationGrantRecord {
+  public async createGrant(input: AutonomousActivationGrantCreateInput): Promise<AutonomousActivationGrantRecord> {
     const now = new Date().toISOString();
     const expiresAtMs = Date.parse(input.expiresAt);
     if (!Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) {
@@ -68,8 +72,8 @@ export class AutonomousActivationGrantService {
       createdAt: now,
       updatedAt: now,
     };
-    this.writeGrants([grant, ...this.readGrants()]);
-    this.publishRealtime("system", "capabilities", {
+    await this.writeGrants([grant, ...(await this.readGrants())]);
+    await this.publishRealtime("system", "capabilities", {
       type: "autonomous_activation_grant_created",
       grantId: grant.grantId,
       workspaceId: grant.workspaceId,
@@ -79,10 +83,13 @@ export class AutonomousActivationGrantService {
     return grant;
   }
 
-  public revokeGrant(grantId: string, input: AutonomousActivationGrantRevokeInput): AutonomousActivationGrantRecord {
+  public async revokeGrant(
+    grantId: string,
+    input: AutonomousActivationGrantRevokeInput,
+  ): Promise<AutonomousActivationGrantRecord> {
     const now = new Date().toISOString();
     let updated: AutonomousActivationGrantRecord | undefined;
-    const grants = this.readGrants().map((grant) => {
+    const grants = (await this.readGrants()).map((grant) => {
       if (grant.grantId !== grantId) {
         return grant;
       }
@@ -99,8 +106,8 @@ export class AutonomousActivationGrantService {
     if (!updated) {
       throw new Error(`Unknown autonomous activation grant: ${grantId}`);
     }
-    this.writeGrants(grants);
-    this.publishRealtime("system", "capabilities", {
+    await this.writeGrants(grants);
+    await this.publishRealtime("system", "capabilities", {
       type: "autonomous_activation_grant_revoked",
       grantId,
       revokedBy: updated.revokedBy,
@@ -108,8 +115,10 @@ export class AutonomousActivationGrantService {
     return updated;
   }
 
-  public evaluateGrant(input: AutonomousActivationGrantEvaluationInput): AutonomousActivationGrantEvaluationResult {
-    const grants = this.listGrants().filter((grant) => grant.status === "active");
+  public async evaluateGrant(
+    input: AutonomousActivationGrantEvaluationInput,
+  ): Promise<AutonomousActivationGrantEvaluationResult> {
+    const grants = (await this.listGrants()).filter((grant) => grant.status === "active");
     const blockers: string[] = [];
     for (const grant of grants) {
       const result = evaluateSingleGrant(grant, input);
@@ -133,10 +142,10 @@ export class AutonomousActivationGrantService {
     };
   }
 
-  public recordGrantUse(grantId: string, estimatedCostUsd = 0): AutonomousActivationGrantRecord {
+  public async recordGrantUse(grantId: string, estimatedCostUsd = 0): Promise<AutonomousActivationGrantRecord> {
     const now = new Date().toISOString();
     let updated: AutonomousActivationGrantRecord | undefined;
-    const grants = this.readGrants().map((grant) => {
+    const grants = (await this.readGrants()).map((grant) => {
       if (grant.grantId !== grantId) {
         return grant;
       }
@@ -162,8 +171,8 @@ export class AutonomousActivationGrantService {
     if (!updated) {
       throw new Error(`Unknown autonomous activation grant: ${grantId}`);
     }
-    this.writeGrants(grants);
-    this.publishRealtime("system", "capabilities", {
+    await this.writeGrants(grants);
+    await this.publishRealtime("system", "capabilities", {
       type: "autonomous_activation_grant_used",
       grantId,
       usedActivations: updated.usedActivations,
@@ -172,16 +181,16 @@ export class AutonomousActivationGrantService {
     return updated;
   }
 
-  private readGrants(): AutonomousActivationGrantRecord[] {
-    const stored = this.systemSettings.get<AutonomousActivationGrantRecord[]>(SETTING_KEY)?.value;
+  private async readGrants(): Promise<AutonomousActivationGrantRecord[]> {
+    const stored = (await this.systemSettings.get<AutonomousActivationGrantRecord[]>(SETTING_KEY))?.value;
     if (!Array.isArray(stored)) {
       return [];
     }
     return stored.filter((item): item is AutonomousActivationGrantRecord => Boolean(item?.grantId));
   }
 
-  private writeGrants(grants: AutonomousActivationGrantRecord[]): void {
-    this.systemSettings.set(
+  private async writeGrants(grants: AutonomousActivationGrantRecord[]): Promise<void> {
+    await this.systemSettings.set(
       SETTING_KEY,
       grants.map((grant) => hydrateGrantStatus(grant)),
     );

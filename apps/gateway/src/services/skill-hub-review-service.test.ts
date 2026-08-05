@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { Storage } from "@goatcitadel/storage";
+import { Storage, createSqliteAsyncStorage } from "@goatcitadel/storage";
 import type { SkillImportValidationResult } from "@goatcitadel/contracts";
 import { SkillHubArtifactStore } from "./skill-hub-artifact-store.js";
 import { captureSkillContentIntegrity } from "./skill-content-integrity.js";
@@ -469,7 +469,7 @@ function serviceFor(
 ): SkillHubReviewService {
   let clock = Date.parse("2026-07-14T01:00:00.000Z");
   return new SkillHubReviewService({
-    storage: harness.storage,
+    storage: createSqliteAsyncStorage(harness.storage),
     artifactStore: harness.artifactStore,
     skillImport: {
       withMaterializedValidation: async (_input, callback) => callback(await harness.context()),

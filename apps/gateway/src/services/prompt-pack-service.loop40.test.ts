@@ -208,12 +208,12 @@ function createHarness(input: {
           list: () => [],
           create: vi.fn(),
         },
-      },
-      gatewaySql: {
-        prepare: () => ({
-          get: () => undefined,
-          all: () => [],
-        }),
+        db: {
+          prepare: () => ({
+            get: () => undefined,
+            all: () => [],
+          }),
+        },
       },
       config: {
         rootDir,
@@ -345,80 +345,80 @@ function createBenchmarkHarness(): Harness & {
           list: () => [],
           create: vi.fn(),
         },
-      },
-      gatewaySql: {
-        prepare: (sql: string) => ({
-          get: () => (sql.includes("FROM prompt_pack_benchmark_runs") ? benchmarkRun : undefined),
-          all: () => {
-            if (sql.includes("FROM prompt_pack_benchmark_items")) {
-              return benchmarkItems;
-            }
-            return [];
-          },
-          run: (params: Record<string, unknown> = {}) => {
-            if (sql.includes("status = 'completed'")) {
-              benchmarkRun.status = "completed";
-              benchmarkRun.finished_at = params.finishedAt;
-              benchmarkRun.claimed_by_worker_id = null;
-              benchmarkRun.claim_heartbeat_at = null;
-              benchmarkRun.claim_expires_at = null;
-              return { changes: 1 };
-            }
-            if (sql.includes("UPDATE prompt_pack_benchmark_runs") && sql.includes("status = 'running'")) {
-              benchmarkRun.status = "running";
-              benchmarkRun.error = null;
-              benchmarkRun.completed_items = params.completedItems ?? benchmarkRun.completed_items;
-              benchmarkRun.claimed_by_worker_id = params.workerId;
-              benchmarkRun.claim_heartbeat_at = params.now;
-              benchmarkRun.claim_expires_at = params.claimExpiresAt;
-              return { changes: 1 };
-            }
-            if (sql.includes("SET claim_heartbeat_at")) {
-              benchmarkRun.claim_heartbeat_at = params.now;
-              benchmarkRun.claim_expires_at = params.claimExpiresAt;
-              return { changes: 1 };
-            }
-            if (sql.includes("INSERT INTO prompt_pack_benchmark_items")) {
-              const existingIndex = benchmarkItems.findIndex(
-                (item) =>
-                  item.benchmark_run_id === params.benchmarkRunId &&
-                  item.provider_id === params.providerId &&
-                  item.model === params.model &&
-                  item.test_id === params.testId,
-              );
-              const item = {
-                item_id: params.itemId,
-                benchmark_run_id: params.benchmarkRunId,
-                pack_id: params.packId,
-                test_id: params.testId,
-                test_code: params.testCode,
-                provider_id: params.providerId,
-                model: params.model,
-                run_id: params.runId,
-                score_id: params.scoreId,
-                auto_score_id: params.autoScoreId,
-                run_status: params.runStatus,
-                total_score: params.totalScore,
-                weighted_score: params.weightedScore,
-                verdict: params.verdict,
-                score_state: params.scoreState,
-                failure_signal: params.failureSignal,
-                created_at: params.createdAt,
-              };
-              if (existingIndex >= 0) {
-                benchmarkItems[existingIndex] = item;
-              } else {
-                benchmarkItems.push(item);
+        db: {
+          prepare: (sql: string) => ({
+            get: () => (sql.includes("FROM prompt_pack_benchmark_runs") ? benchmarkRun : undefined),
+            all: () => {
+              if (sql.includes("FROM prompt_pack_benchmark_items")) {
+                return benchmarkItems;
+              }
+              return [];
+            },
+            run: (params: Record<string, unknown> = {}) => {
+              if (sql.includes("status = 'completed'")) {
+                benchmarkRun.status = "completed";
+                benchmarkRun.finished_at = params.finishedAt;
+                benchmarkRun.claimed_by_worker_id = null;
+                benchmarkRun.claim_heartbeat_at = null;
+                benchmarkRun.claim_expires_at = null;
+                return { changes: 1 };
+              }
+              if (sql.includes("UPDATE prompt_pack_benchmark_runs") && sql.includes("status = 'running'")) {
+                benchmarkRun.status = "running";
+                benchmarkRun.error = null;
+                benchmarkRun.completed_items = params.completedItems ?? benchmarkRun.completed_items;
+                benchmarkRun.claimed_by_worker_id = params.workerId;
+                benchmarkRun.claim_heartbeat_at = params.now;
+                benchmarkRun.claim_expires_at = params.claimExpiresAt;
+                return { changes: 1 };
+              }
+              if (sql.includes("SET claim_heartbeat_at")) {
+                benchmarkRun.claim_heartbeat_at = params.now;
+                benchmarkRun.claim_expires_at = params.claimExpiresAt;
+                return { changes: 1 };
+              }
+              if (sql.includes("INSERT INTO prompt_pack_benchmark_items")) {
+                const existingIndex = benchmarkItems.findIndex(
+                  (item) =>
+                    item.benchmark_run_id === params.benchmarkRunId &&
+                    item.provider_id === params.providerId &&
+                    item.model === params.model &&
+                    item.test_id === params.testId,
+                );
+                const item = {
+                  item_id: params.itemId,
+                  benchmark_run_id: params.benchmarkRunId,
+                  pack_id: params.packId,
+                  test_id: params.testId,
+                  test_code: params.testCode,
+                  provider_id: params.providerId,
+                  model: params.model,
+                  run_id: params.runId,
+                  score_id: params.scoreId,
+                  auto_score_id: params.autoScoreId,
+                  run_status: params.runStatus,
+                  total_score: params.totalScore,
+                  weighted_score: params.weightedScore,
+                  verdict: params.verdict,
+                  score_state: params.scoreState,
+                  failure_signal: params.failureSignal,
+                  created_at: params.createdAt,
+                };
+                if (existingIndex >= 0) {
+                  benchmarkItems[existingIndex] = item;
+                } else {
+                  benchmarkItems.push(item);
+                }
+                return { changes: 1 };
+              }
+              if (sql.includes("SET completed_items = @completedItems")) {
+                benchmarkRun.completed_items = params.completedItems;
+                return { changes: 1 };
               }
               return { changes: 1 };
-            }
-            if (sql.includes("SET completed_items = @completedItems")) {
-              benchmarkRun.completed_items = params.completedItems;
-              return { changes: 1 };
-            }
-            return { changes: 1 };
-          },
-        }),
+            },
+          }),
+        },
       },
       config: {
         rootDir,

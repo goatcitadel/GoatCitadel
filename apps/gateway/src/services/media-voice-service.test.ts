@@ -73,7 +73,7 @@ describe("MediaVoiceService", () => {
     ).rejects.toThrow("Audio normalization helper is not configured");
   });
 
-  it("creates previews and reports missing media jobs without starting background work when closing", () => {
+  it("creates previews and reports missing media jobs without starting background work when closing", async () => {
     const getChatAttachment = vi.fn(() => ({
       attachmentId: "attachment-1",
       fileName: "capture.bin",
@@ -94,15 +94,15 @@ describe("MediaVoiceService", () => {
       }),
     );
 
-    expect(service.getChatAttachmentPreview("attachment-1")).toMatchObject({
+    await expect(service.getChatAttachmentPreview("attachment-1")).resolves.toMatchObject({
       attachmentId: "attachment-1",
       mediaType: "text",
       analysisStatus: "queued",
     });
-    expect(() => service.getMediaJob("missing")).toThrow("Unknown media job: missing");
+    await expect(service.getMediaJob("missing")).rejects.toThrow("Unknown media job: missing");
   });
 
-  it("lists media jobs without binding unused parameters when no session filter is provided", () => {
+  it("lists media jobs without binding unused parameters when no session filter is provided", async () => {
     const all = vi.fn(() => []);
     const prepare = vi.fn((_sql: string) => ({
       all,
@@ -124,14 +124,14 @@ describe("MediaVoiceService", () => {
       getChatAttachment: vi.fn(),
     });
 
-    expect(service.listMediaJobs()).toEqual([]);
+    await expect(service.listMediaJobs()).resolves.toEqual([]);
     expect(prepare).toHaveBeenCalledTimes(1);
     expect(prepare.mock.calls[0]?.[0]).toContain("FROM media_jobs");
     expect(prepare.mock.calls[0]?.[0]).not.toContain("@sessionId");
     expect(all).toHaveBeenCalledWith();
   });
 
-  it("lists talk sessions without relying on SQLite-only rowid ordering", () => {
+  it("lists talk sessions without relying on SQLite-only rowid ordering", async () => {
     const expected: VoiceTalkSessionRecord = {
       talkSessionId: "talk-1",
       mode: "push_to_talk",
@@ -161,7 +161,7 @@ describe("MediaVoiceService", () => {
       getChatAttachment: vi.fn(),
     });
 
-    expect(service.listVoiceTalkSessions(8)).toEqual([expected]);
+    await expect(service.listVoiceTalkSessions(8)).resolves.toEqual([expected]);
     expect(prepare).toHaveBeenCalledTimes(1);
     expect(prepare.mock.calls[0]?.[0]).toContain("voice_session_id DESC");
     expect(prepare.mock.calls[0]?.[0]).not.toContain("rowid");
@@ -217,7 +217,7 @@ describe("MediaVoiceService", () => {
       }),
     );
 
-    const created = service.createMediaJob({
+    const created = await service.createMediaJob({
       type: "ocr",
       input: { reason: "coverage" },
     });
@@ -228,7 +228,7 @@ describe("MediaVoiceService", () => {
     });
 
     await Promise.allSettled([...backgroundTasks]);
-    expect(service.getMediaJob(created.jobId)).toMatchObject({
+    await expect(service.getMediaJob(created.jobId)).resolves.toMatchObject({
       status: "ready",
       outputJson: { message: "No attachment supplied." },
     });
@@ -287,9 +287,9 @@ describe("MediaVoiceService", () => {
       }),
     );
 
-    const created = first.createMediaJob({ type: "ocr" });
+    const created = await first.createMediaJob({ type: "ocr" });
     await Promise.allSettled([...deniedTasks]);
-    expect(first.getMediaJob(created.jobId).status).toBe("queued");
+    expect((await first.getMediaJob(created.jobId)).status).toBe("queued");
 
     const resumedTasks = new Set<Promise<unknown>>();
     const second = new MediaVoiceService(
@@ -299,9 +299,9 @@ describe("MediaVoiceService", () => {
         runBackgroundWork: async (_label, work) => work(new AbortController().signal),
       }),
     );
-    expect(second.resumeInterruptedMediaJobs()).toBe(1);
+    await expect(second.resumeInterruptedMediaJobs()).resolves.toBe(1);
     await Promise.allSettled([...resumedTasks]);
-    expect(second.getMediaJob(created.jobId)).toMatchObject({
+    await expect(second.getMediaJob(created.jobId)).resolves.toMatchObject({
       status: "ready",
       outputJson: { message: "No attachment supplied." },
     });
@@ -352,8 +352,8 @@ describe("MediaVoiceService", () => {
         state: "running",
         sessionId: "session-1",
       });
-      expect(service.listVoiceTalkSessions(5)).toHaveLength(1);
-      expect(service.stopTalkSession(talk.talkSessionId)).toMatchObject({
+      await expect(service.listVoiceTalkSessions(5)).resolves.toHaveLength(1);
+      await expect(service.stopTalkSession(talk.talkSessionId)).resolves.toMatchObject({
         talkSessionId: talk.talkSessionId,
         state: "stopped",
       });
@@ -362,7 +362,7 @@ describe("MediaVoiceService", () => {
         enabled: true,
         state: "running",
       });
-      expect(service.stopVoiceWake()).toMatchObject({
+      await expect(service.stopVoiceWake()).resolves.toMatchObject({
         enabled: false,
         state: "stopped",
       });
@@ -427,13 +427,13 @@ describe("MediaVoiceService", () => {
     );
   });
 
-  it("keeps Google Meet voice sessions blocked until auth and transport prerequisites are ready", () => {
+  it("keeps Google Meet voice sessions blocked until auth and transport prerequisites are ready", async () => {
     const systemSettings = createSystemSettings();
     const publishRealtime = vi.fn();
     const recordDevDiagnostic = vi.fn();
     const service = new MediaVoiceService(createDeps({ systemSettings, publishRealtime, recordDevDiagnostic }));
 
-    const session = service.startGoogleMeetSession({
+    const session = await service.startGoogleMeetSession({
       meetingUrl: "https://meet.google.com/abc-defg-hij",
       displayName: "Ops Review",
       userStartConfirmed: true,
@@ -462,7 +462,7 @@ describe("MediaVoiceService", () => {
     );
   });
 
-  it("streams Google Meet transcript chunks, consult handoff, and cleanup state", () => {
+  it("streams Google Meet transcript chunks, consult handoff, and cleanup state", async () => {
     const systemSettings = createSystemSettings();
     const publishRealtime = vi.fn();
     const service = new MediaVoiceService(createDeps({ systemSettings, publishRealtime }));
@@ -471,7 +471,7 @@ describe("MediaVoiceService", () => {
     };
     process.env.OPENAI_API_KEY = "test-key";
     try {
-      const session = service.startGoogleMeetSession({
+      const session = await service.startGoogleMeetSession({
         meetingUrl: "https://meet.google.com/abc-defg-hij",
         accountRef: "google:operator",
         userStartConfirmed: true,
@@ -482,19 +482,19 @@ describe("MediaVoiceService", () => {
       expect(session.prerequisites.find((item) => item.id === "browser_transport")?.message).toMatch(/WebRTC/i);
       expect(session.prerequisites.find((item) => item.id === "audio_transport")?.message).toMatch(/available/i);
 
-      const withTranscript = service.appendGoogleMeetTranscriptChunk(session.sessionId, {
+      const withTranscript = await service.appendGoogleMeetTranscriptChunk(session.sessionId, {
         text: "We should review the dashboard plugin states.",
         final: true,
         provider: "openai-realtime",
       });
       expect(withTranscript.transcript).toHaveLength(1);
 
-      const withHandoff = service.createGoogleMeetConsultHandoff(session.sessionId, { target: "cowork" });
+      const withHandoff = await service.createGoogleMeetConsultHandoff(session.sessionId, { target: "cowork" });
       expect(withHandoff.state).toBe("consulting");
       expect(withHandoff.consultHandoff?.target).toBe("chat");
       expect(withHandoff.consultHandoff?.transcriptChunkIds).toHaveLength(1);
 
-      const stopped = service.stopGoogleMeetSession(session.sessionId);
+      const stopped = await service.stopGoogleMeetSession(session.sessionId);
       expect(stopped.state).toBe("stopped");
       expect(stopped.cleanup).toMatchObject({
         stoppedTransport: true,
@@ -591,7 +591,7 @@ describe("MediaVoiceService", () => {
           event: "voice.realtime.client_secret.created",
         }),
       );
-      const stopped = service.stopRealtimeVoiceSession(response.voiceSessionId);
+      const stopped = await service.stopRealtimeVoiceSession(response.voiceSessionId);
       expect(stopped).toMatchObject({
         provider: "openai-realtime",
         state: "stopped",

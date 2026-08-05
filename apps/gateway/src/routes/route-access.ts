@@ -356,11 +356,11 @@ function requireA2APeerAccess(
  * companion credentials always fail this check, keeping the publication
  * surface isolated from ordinary console authority.
  */
-function requireMeshNodeAccess(
+async function requireMeshNodeAccess(
   fastify: FastifyInstance,
   request: FastifyRequest,
   reply: FastifyReply,
-): void | ReturnType<FastifyReply["send"]> {
+): Promise<void | ReturnType<FastifyReply["send"]>> {
   const service = (
     fastify as unknown as {
       services?: { meshCapabilityPublication?: { authenticateNodeRequest?: unknown } };
@@ -371,7 +371,7 @@ function requireMeshNodeAccess(
       error: "Admitted mesh-node authentication is not installed for this route.",
     });
   }
-  const result = service.authenticateNodeRequest(request) as
+  const result = (await service.authenticateNodeRequest(request)) as
     | {
         identity: {
           workspaceId: string;

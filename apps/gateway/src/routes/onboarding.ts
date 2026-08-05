@@ -198,7 +198,7 @@ export const onboardingRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     return reply.send({
-      state: fastify.services.onboarding.markOnboardingComplete(parsed.data.completedBy),
+      state: await fastify.services.onboarding.markOnboardingComplete(parsed.data.completedBy),
     });
   });
 };

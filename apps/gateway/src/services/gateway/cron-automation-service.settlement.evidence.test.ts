@@ -207,7 +207,9 @@ describe("HX-204 canonical cron settlement evidence", () => {
       expect(handler).toHaveBeenCalledTimes(2);
       expect(storage.cronRuns.get("cron-before-launch")).toMatchObject({ status: "admitted" });
       expect(storage.cronRuns.get("cron-after-child")).toMatchObject({ status: "completed" });
-      expect(storage.durableRuns.listRuns(20).filter((run) => run.workflowKey === "chat.turn.execute")).toHaveLength(2);
+      expect(
+        (await storage.durableRuns.listRuns(20)).filter((run) => run.workflowKey === "chat.turn.execute"),
+      ).toHaveLength(2);
     } finally {
       storage.close();
       fs.rmSync(root, { recursive: true, force: true });
@@ -301,7 +303,10 @@ describe("HX-204 canonical cron settlement evidence", () => {
         lastRunEvidenceEnvelopeId: `evidence-${admitted.runId}`,
       });
       expect(evidence).toHaveBeenCalledTimes(1);
-      expect(service.findCronRunById(admitted.runId)).toMatchObject({ status: "ok", finishedAt: expect.any(String) });
+      expect(await service.findCronRunById(admitted.runId)).toMatchObject({
+        status: "ok",
+        finishedAt: expect.any(String),
+      });
     } finally {
       storage.close();
       fs.rmSync(root, { recursive: true, force: true });

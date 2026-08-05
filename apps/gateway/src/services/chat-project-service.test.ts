@@ -28,12 +28,12 @@ describe("ChatProjectService", () => {
     await fsPromises.rm(tempRoot, { recursive: true, force: true });
   });
 
-  it("wraps project CRUD with normalized workspace ids and realtime events", () => {
+  it("wraps project CRUD with normalized workspace ids and realtime events", async () => {
     const { service, storage } = createService();
 
-    expect(service.listChatProjects("active", 5, " ws-a ")).toEqual([]);
+    await expect(service.listChatProjects("active", 5, " ws-a ")).resolves.toEqual([]);
 
-    const created = service.createChatProject({
+    const created = await service.createChatProject({
       workspaceId: " ws-a ",
       name: "Control Plane",
       workspacePath: "apps/gateway",
@@ -50,7 +50,7 @@ describe("ChatProjectService", () => {
       workspaceId: "ws-a",
     });
 
-    const updated = service.updateChatProject(
+    const updated = await service.updateChatProject(
       "project-1",
       {
         workspaceId: " ws-b ",
@@ -60,9 +60,9 @@ describe("ChatProjectService", () => {
     );
     expect(updated).toMatchObject({ projectId: "project-1", workspaceId: "ws-b", name: "Gateway" });
 
-    expect(service.archiveChatProject("project-1", 2).archivedAt).toBeTruthy();
-    expect(service.restoreChatProject("project-1", 3).archivedAt).toBeUndefined();
-    expect(service.hardDeleteChatProject("project-1", 4)).toBe(true);
+    expect((await service.archiveChatProject("project-1", 2)).archivedAt).toBeTruthy();
+    expect((await service.restoreChatProject("project-1", 3)).archivedAt).toBeUndefined();
+    await expect(service.hardDeleteChatProject("project-1", 4)).resolves.toBe(true);
     expect(storage.chatProjects.hardDeleteWithRevision).toHaveBeenCalledWith("project-1", 4);
     expect(published.map((event) => event.payload.type)).toEqual([
       "chat_project_created",
@@ -331,7 +331,7 @@ function createService(input: { workspaceDir?: string; readOnlyRoots?: string[] 
         },
       } as ChatProjectServiceContext["config"],
       normalizeWorkspaceId: (workspaceId?: string) => workspaceId?.trim() || "default-workspace",
-      publishRealtime: (channel, topic, payload) => {
+      publishRealtime: async (channel, topic, payload) => {
         published.push({ channel, topic, payload });
       },
     }),

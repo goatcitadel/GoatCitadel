@@ -4,7 +4,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage, Storage } from "@goatcitadel/storage";
 import { executeBrowserTool } from "./browser-tools.js";
 import { executeTool } from "./tool-executor.js";
 
@@ -47,7 +47,7 @@ function request(toolName: string, args: Record<string, unknown> = {}): ToolInvo
   };
 }
 
-function createKnowledgeStorage(): Storage {
+function createKnowledgeStorage(): Storage & AsyncStorage {
   const documents = [
     {
       docId: "doc-title-only",
@@ -66,7 +66,7 @@ function createKnowledgeStorage(): Storage {
       listChunksByNamespace: () => [],
       updateChunkEmbedding: () => undefined,
     },
-  } as unknown as Storage;
+  } as unknown as Storage & AsyncStorage;
 }
 
 function createCommsStorage() {
@@ -94,7 +94,7 @@ function createCommsStorage() {
       markSent: () => undefined,
       markFailed: () => undefined,
     },
-  } as unknown as Storage;
+  } as unknown as Storage & AsyncStorage;
 }
 
 describe("policy-engine loop 24 branch tails", () => {

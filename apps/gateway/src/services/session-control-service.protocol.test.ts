@@ -178,7 +178,7 @@ function expectSessionControlCode(error: unknown, code: string): void {
 
 describe("SessionControlService controller protocol", () => {
   describe("createExternalRequest", () => {
-    it("resolves the stored workspace and forwards only content-free companion material to storage", () => {
+    it("resolves the stored workspace and forwards only content-free companion material to storage", async () => {
       const { service, sessionControls, metaGet } = buildService({
         createExternalRequest: vi.fn(() => ({
           disposition: "created",
@@ -187,7 +187,7 @@ describe("SessionControlService controller protocol", () => {
         })),
       });
 
-      const response = service.createExternalRequest({
+      const response = await service.createExternalRequest({
         actor: externalActor,
         sessionId: SESSION,
         correlationId: CORRELATION,
@@ -217,11 +217,11 @@ describe("SessionControlService controller protocol", () => {
       expect(response.request.status).toBe("pending");
     });
 
-    it("rejects an operator actor before touching storage", () => {
+    it("rejects an operator actor before touching storage", async () => {
       const { service, sessionControls, metaGet } = buildService();
       let observed: unknown;
       try {
-        service.createExternalRequest({
+        await service.createExternalRequest({
           actor: operatorActor as unknown as SessionControlExternalCompanionActor,
           sessionId: SESSION,
           correlationId: CORRELATION,
@@ -241,11 +241,11 @@ describe("SessionControlService controller protocol", () => {
       expect(sessionControls.createExternalRequest).not.toHaveBeenCalled();
     });
 
-    it("rejects a companion whose principal purpose is not session_control_client", () => {
+    it("rejects a companion whose principal purpose is not session_control_client", async () => {
       const { service, sessionControls } = buildService();
       let observed: unknown;
       try {
-        service.createExternalRequest({
+        await service.createExternalRequest({
           actor: { ...externalActor, principalPurpose: "general_companion" as never },
           sessionId: SESSION,
           correlationId: CORRELATION,
@@ -264,11 +264,11 @@ describe("SessionControlService controller protocol", () => {
       expect(sessionControls.createExternalRequest).not.toHaveBeenCalled();
     });
 
-    it("rejects a body client instance id that does not match the authenticated companion", () => {
+    it("rejects a body client instance id that does not match the authenticated companion", async () => {
       const { service, sessionControls } = buildService();
       let observed: unknown;
       try {
-        service.createExternalRequest({
+        await service.createExternalRequest({
           actor: externalActor,
           sessionId: SESSION,
           correlationId: CORRELATION,
@@ -287,9 +287,9 @@ describe("SessionControlService controller protocol", () => {
       expect(sessionControls.createExternalRequest).not.toHaveBeenCalled();
     });
 
-    it("rejects a read-only capability set before storage", () => {
+    it("rejects a read-only capability set before storage", async () => {
       const { service, sessionControls } = buildService();
-      expect(() =>
+      await expect(
         service.createExternalRequest({
           actor: externalActor,
           sessionId: SESSION,
@@ -302,13 +302,13 @@ describe("SessionControlService controller protocol", () => {
             idempotencyKey: "request-idem-1",
           },
         }),
-      ).toThrow();
+      ).rejects.toThrow();
       expect(sessionControls.createExternalRequest).not.toHaveBeenCalled();
     });
 
-    it("fails not-found when the session has no stored metadata", () => {
+    it("fails not-found when the session has no stored metadata", async () => {
       const { service, sessionControls } = buildService({}, null);
-      expect(() =>
+      await expect(
         service.createExternalRequest({
           actor: externalActor,
           sessionId: SESSION,
@@ -321,13 +321,13 @@ describe("SessionControlService controller protocol", () => {
             idempotencyKey: "request-idem-1",
           },
         }),
-      ).toThrow(/not found/iu);
+      ).rejects.toThrow(/not found/iu);
       expect(sessionControls.createExternalRequest).not.toHaveBeenCalled();
     });
   });
 
   describe("handoff", () => {
-    it("forwards operator-authorized effective capabilities and maps the activation response", () => {
+    it("forwards operator-authorized effective capabilities and maps the activation response", async () => {
       const { service, sessionControls } = buildService({
         handoff: vi.fn(() => ({
           disposition: "created",
@@ -336,7 +336,7 @@ describe("SessionControlService controller protocol", () => {
         })),
       });
 
-      const response = service.handoff({
+      const response = await service.handoff({
         actor: operatorActor,
         sessionId: SESSION,
         correlationId: CORRELATION,
@@ -362,11 +362,11 @@ describe("SessionControlService controller protocol", () => {
       expect(response.request.status).toBe("activated");
     });
 
-    it("rejects a companion actor before storage", () => {
+    it("rejects a companion actor before storage", async () => {
       const { service, sessionControls } = buildService();
       let observed: unknown;
       try {
-        service.handoff({
+        await service.handoff({
           actor: externalActor as unknown as SessionControlOperatorActor,
           sessionId: SESSION,
           correlationId: CORRELATION,
@@ -384,11 +384,11 @@ describe("SessionControlService controller protocol", () => {
       expect(sessionControls.handoff).not.toHaveBeenCalled();
     });
 
-    it("rejects a read-only effective capability set with a validation error before storage", () => {
+    it("rejects a read-only effective capability set with a validation error before storage", async () => {
       const { service, sessionControls } = buildService();
       let observed: unknown;
       try {
-        service.handoff({
+        await service.handoff({
           actor: operatorActor,
           sessionId: SESSION,
           correlationId: CORRELATION,
@@ -406,7 +406,7 @@ describe("SessionControlService controller protocol", () => {
       expect(sessionControls.handoff).not.toHaveBeenCalled();
     });
 
-    it("rejects an operator-action or unknown effective capability member with a validation error", () => {
+    it("rejects an operator-action or unknown effective capability member with a validation error", async () => {
       const { service, sessionControls } = buildService();
       const invalidSets = [
         ["send", "handoff"],
@@ -416,7 +416,7 @@ describe("SessionControlService controller protocol", () => {
       for (const effectiveCapabilities of invalidSets) {
         let observed: unknown;
         try {
-          service.handoff({
+          await service.handoff({
             actor: operatorActor,
             sessionId: SESSION,
             correlationId: CORRELATION,
@@ -437,7 +437,7 @@ describe("SessionControlService controller protocol", () => {
   });
 
   describe("heartbeat", () => {
-    it("presents the header token hash and maps the live-lease response", () => {
+    it("presents the header token hash and maps the live-lease response", async () => {
       const { service, sessionControls } = buildService({
         heartbeat: vi.fn(() => ({
           disposition: "created",
@@ -445,7 +445,7 @@ describe("SessionControlService controller protocol", () => {
         })),
       });
 
-      const response = service.heartbeat({
+      const response = await service.heartbeat({
         actor: externalActor,
         sessionId: SESSION,
         correlationId: CORRELATION,
@@ -469,11 +469,11 @@ describe("SessionControlService controller protocol", () => {
       expect(response.control.leaseState).toBe("external_live");
     });
 
-    it("rejects an operator actor for an intrinsic protocol operation", () => {
+    it("rejects an operator actor for an intrinsic protocol operation", async () => {
       const { service, sessionControls } = buildService();
       let observed: unknown;
       try {
-        service.heartbeat({
+        await service.heartbeat({
           actor: operatorActor as unknown as SessionControlExternalCompanionActor,
           sessionId: SESSION,
           correlationId: CORRELATION,
@@ -487,11 +487,11 @@ describe("SessionControlService controller protocol", () => {
       expect(sessionControls.heartbeat).not.toHaveBeenCalled();
     });
 
-    it("rejects a malformed presented control-token hash before storage", () => {
+    it("rejects a malformed presented control-token hash before storage", async () => {
       const { service, sessionControls } = buildService();
       let observed: unknown;
       try {
-        service.heartbeat({
+        await service.heartbeat({
           actor: externalActor,
           sessionId: SESSION,
           correlationId: CORRELATION,
@@ -507,7 +507,7 @@ describe("SessionControlService controller protocol", () => {
   });
 
   describe("reconnect", () => {
-    it("rotates the token and maps the superseded/new generation response", () => {
+    it("rotates the token and maps the superseded/new generation response", async () => {
       const { service, sessionControls } = buildService({
         reconnect: vi.fn(() => ({
           disposition: "created",
@@ -515,7 +515,7 @@ describe("SessionControlService controller protocol", () => {
         })),
       });
 
-      const response = service.reconnect({
+      const response = await service.reconnect({
         actor: externalActor,
         sessionId: SESSION,
         correlationId: CORRELATION,
@@ -540,11 +540,11 @@ describe("SessionControlService controller protocol", () => {
       expect(response.control.generation).toBe(3);
     });
 
-    it("rejects an operator actor for the intrinsic reconnect protocol before storage", () => {
+    it("rejects an operator actor for the intrinsic reconnect protocol before storage", async () => {
       const { service, sessionControls } = buildService();
       let observed: unknown;
       try {
-        service.reconnect({
+        await service.reconnect({
           actor: operatorActor as unknown as SessionControlExternalCompanionActor,
           sessionId: SESSION,
           correlationId: CORRELATION,
@@ -558,11 +558,11 @@ describe("SessionControlService controller protocol", () => {
       expect(sessionControls.reconnect).not.toHaveBeenCalled();
     });
 
-    it("rejects a malformed presented control-token hash before storage", () => {
+    it("rejects a malformed presented control-token hash before storage", async () => {
       const { service, sessionControls } = buildService();
       let observed: unknown;
       try {
-        service.reconnect({
+        await service.reconnect({
           actor: externalActor,
           sessionId: SESSION,
           correlationId: CORRELATION,
@@ -578,7 +578,7 @@ describe("SessionControlService controller protocol", () => {
   });
 
   describe("release", () => {
-    it("maps the released generation and the returned operator generation", () => {
+    it("maps the released generation and the returned operator generation", async () => {
       const { service, sessionControls } = buildService({
         release: vi.fn(() => ({
           disposition: "created",
@@ -586,7 +586,7 @@ describe("SessionControlService controller protocol", () => {
         })),
       });
 
-      const response = service.release({
+      const response = await service.release({
         actor: externalActor,
         sessionId: SESSION,
         correlationId: CORRELATION,
@@ -610,11 +610,11 @@ describe("SessionControlService controller protocol", () => {
       expect(response.control.ownerKind).toBe("operator");
     });
 
-    it("rejects an operator actor for the intrinsic release protocol before storage", () => {
+    it("rejects an operator actor for the intrinsic release protocol before storage", async () => {
       const { service, sessionControls } = buildService();
       let observed: unknown;
       try {
-        service.release({
+        await service.release({
           actor: operatorActor as unknown as SessionControlExternalCompanionActor,
           sessionId: SESSION,
           correlationId: CORRELATION,
@@ -628,11 +628,11 @@ describe("SessionControlService controller protocol", () => {
       expect(sessionControls.release).not.toHaveBeenCalled();
     });
 
-    it("rejects a malformed presented control-token hash before storage", () => {
+    it("rejects a malformed presented control-token hash before storage", async () => {
       const { service, sessionControls } = buildService();
       let observed: unknown;
       try {
-        service.release({
+        await service.release({
           actor: externalActor,
           sessionId: SESSION,
           correlationId: CORRELATION,
@@ -648,7 +648,7 @@ describe("SessionControlService controller protocol", () => {
   });
 
   describe("revoke", () => {
-    it("revokes the current external controller via the operator revoke op", () => {
+    it("revokes the current external controller via the operator revoke op", async () => {
       const { service, sessionControls } = buildService({
         revoke: vi.fn(() => ({
           disposition: "created",
@@ -656,7 +656,7 @@ describe("SessionControlService controller protocol", () => {
         })),
       });
 
-      const response = service.revoke({
+      const response = await service.revoke({
         actor: operatorActor,
         sessionId: SESSION,
         correlationId: CORRELATION,
@@ -682,7 +682,7 @@ describe("SessionControlService controller protocol", () => {
       expect(response.mode).toBe("emergency_takeover");
     });
 
-    it("revokes a pending request via the operator cancel op", () => {
+    it("revokes a pending request via the operator cancel op", async () => {
       const { service, sessionControls } = buildService({
         cancelExternalRequest: vi.fn(() => ({
           disposition: "created",
@@ -691,7 +691,7 @@ describe("SessionControlService controller protocol", () => {
         })),
       });
 
-      const response = service.revoke({
+      const response = await service.revoke({
         actor: operatorActor,
         sessionId: SESSION,
         correlationId: CORRELATION,
@@ -711,11 +711,11 @@ describe("SessionControlService controller protocol", () => {
       expect(response.request.status).toBe("cancelled");
     });
 
-    it("rejects a companion actor before storage", () => {
+    it("rejects a companion actor before storage", async () => {
       const { service, sessionControls } = buildService();
       let observed: unknown;
       try {
-        service.revoke({
+        await service.revoke({
           actor: externalActor as unknown as SessionControlOperatorActor,
           sessionId: SESSION,
           correlationId: CORRELATION,
@@ -735,7 +735,7 @@ describe("SessionControlService controller protocol", () => {
   });
 
   describe("cancelExternalRequest", () => {
-    it("cancels a pending request for the operator and returns the cancelled record", () => {
+    it("cancels a pending request for the operator and returns the cancelled record", async () => {
       const { service, sessionControls } = buildService({
         cancelExternalRequest: vi.fn(() => ({
           disposition: "created",
@@ -744,7 +744,7 @@ describe("SessionControlService controller protocol", () => {
         })),
       });
 
-      const request = service.cancelExternalRequest({
+      const request = await service.cancelExternalRequest({
         actor: operatorActor,
         sessionId: SESSION,
         correlationId: CORRELATION,
@@ -763,11 +763,11 @@ describe("SessionControlService controller protocol", () => {
       expect(request.status).toBe("cancelled");
     });
 
-    it("rejects a companion actor before storage", () => {
+    it("rejects a companion actor before storage", async () => {
       const { service, sessionControls } = buildService();
       let observed: unknown;
       try {
-        service.cancelExternalRequest({
+        await service.cancelExternalRequest({
           actor: externalActor as unknown as SessionControlOperatorActor,
           sessionId: SESSION,
           correlationId: CORRELATION,
@@ -783,29 +783,29 @@ describe("SessionControlService controller protocol", () => {
   });
 
   describe("getControl", () => {
-    it("returns content-free status for the operator", () => {
+    it("returns content-free status for the operator", async () => {
       const control = externalControl();
       const { service, sessionControls } = buildService({ getControl: vi.fn(() => control) });
-      expect(service.getControl({ actor: operatorActor, sessionId: SESSION })).toBe(control);
+      expect(await service.getControl({ actor: operatorActor, sessionId: SESSION })).toBe(control);
       expect(sessionControls.getControl).toHaveBeenCalledWith(WORKSPACE, SESSION);
     });
 
-    it("returns status to the bound external controller without a delegated read capability", () => {
+    it("returns status to the bound external controller without a delegated read capability", async () => {
       const control = externalControl({ capabilities: ["send"] });
       const { service } = buildService({ getControl: vi.fn(() => control) });
-      expect(service.getControl({ actor: externalActor, sessionId: SESSION })).toBe(control);
+      expect(await service.getControl({ actor: externalActor, sessionId: SESSION })).toBe(control);
     });
 
-    it("returns status to a companion that owns a pending request while the operator still owns the session", () => {
+    it("returns status to a companion that owns a pending request while the operator still owns the session", async () => {
       const control = operatorControl();
       const { service } = buildService({
         getControl: vi.fn(() => control),
         getDetail: vi.fn(() => ({ control, pendingRequests: [pendingRequest()] }) as SessionControlDetailResponse),
       });
-      expect(service.getControl({ actor: externalActor, sessionId: SESSION })).toBe(control);
+      expect(await service.getControl({ actor: externalActor, sessionId: SESSION })).toBe(control);
     });
 
-    it("denies a companion that is neither the bound controller nor a pending requester", () => {
+    it("denies a companion that is neither the bound controller nor a pending requester", async () => {
       const control = operatorControl();
       const { service } = buildService({
         getControl: vi.fn(() => control),
@@ -813,7 +813,7 @@ describe("SessionControlService controller protocol", () => {
       });
       let observed: unknown;
       try {
-        service.getControl({ actor: externalActor, sessionId: SESSION });
+        await service.getControl({ actor: externalActor, sessionId: SESSION });
       } catch (error) {
         observed = error;
       }
@@ -822,7 +822,7 @@ describe("SessionControlService controller protocol", () => {
   });
 
   describe("getDetail", () => {
-    it("returns every pending request to the operator", () => {
+    it("returns every pending request to the operator", async () => {
       const detail = {
         control: operatorControl(),
         pendingRequests: [
@@ -835,10 +835,10 @@ describe("SessionControlService controller protocol", () => {
         ],
       } as SessionControlDetailResponse;
       const { service } = buildService({ getDetail: vi.fn(() => detail) });
-      expect(service.getDetail({ actor: operatorActor, sessionId: SESSION })).toBe(detail);
+      expect(await service.getDetail({ actor: operatorActor, sessionId: SESSION })).toBe(detail);
     });
 
-    it("filters pending requests to the requesting companion", () => {
+    it("filters pending requests to the requesting companion", async () => {
       const own = pendingRequest();
       const foreign = pendingRequest({
         requestId: "request-2",
@@ -847,17 +847,17 @@ describe("SessionControlService controller protocol", () => {
       });
       const detail = { control: operatorControl(), pendingRequests: [own, foreign] } as SessionControlDetailResponse;
       const { service } = buildService({ getDetail: vi.fn(() => detail) });
-      const scoped = service.getDetail({ actor: externalActor, sessionId: SESSION });
+      const scoped = await service.getDetail({ actor: externalActor, sessionId: SESSION });
       expect(scoped.pendingRequests).toHaveLength(1);
       expect(scoped.pendingRequests[0]!.requestId).toBe("request-1");
     });
 
-    it("denies a companion with no relationship to the session", () => {
+    it("denies a companion with no relationship to the session", async () => {
       const detail = { control: operatorControl(), pendingRequests: [] } as SessionControlDetailResponse;
       const { service } = buildService({ getDetail: vi.fn(() => detail) });
       let observed: unknown;
       try {
-        service.getDetail({ actor: externalActor, sessionId: SESSION });
+        await service.getDetail({ actor: externalActor, sessionId: SESSION });
       } catch (error) {
         observed = error;
       }
@@ -866,18 +866,18 @@ describe("SessionControlService controller protocol", () => {
   });
 
   describe("listControls", () => {
-    it("lists workspace controls for the operator", () => {
+    it("lists workspace controls for the operator", async () => {
       const list = { items: [externalControl()] } as SessionControlListResponse;
       const { service, sessionControls } = buildService({ listControls: vi.fn(() => list) });
-      expect(service.listControls({ actor: operatorActor, workspaceId: WORKSPACE, limit: 25 })).toBe(list);
+      expect(await service.listControls({ actor: operatorActor, workspaceId: WORKSPACE, limit: 25 })).toBe(list);
       expect(sessionControls.listControls).toHaveBeenCalledWith(WORKSPACE, 25);
     });
 
-    it("denies a companion from enumerating a workspace", () => {
+    it("denies a companion from enumerating a workspace", async () => {
       const { service, sessionControls } = buildService();
       let observed: unknown;
       try {
-        service.listControls({
+        await service.listControls({
           actor: externalActor as unknown as SessionControlOperatorActor,
           workspaceId: WORKSPACE,
         });
@@ -890,30 +890,30 @@ describe("SessionControlService controller protocol", () => {
   });
 
   describe("listEvents", () => {
-    it("returns control history for the operator", () => {
+    it("returns control history for the operator", async () => {
       const events: SessionControlEventRecord[] = [];
       const { service, sessionControls } = buildService({ listEvents: vi.fn(() => events) });
-      expect(service.listEvents({ actor: operatorActor, sessionId: SESSION, limit: 10 })).toBe(events);
+      expect(await service.listEvents({ actor: operatorActor, sessionId: SESSION, limit: 10 })).toBe(events);
       expect(sessionControls.listEvents).toHaveBeenCalledWith(WORKSPACE, SESSION, { limit: 10 });
     });
 
-    it("returns control history to a bound controller that holds the read capability", () => {
+    it("returns control history to a bound controller that holds the read capability", async () => {
       const events: SessionControlEventRecord[] = [];
       const { service, sessionControls } = buildService({
         getControl: vi.fn(() => externalControl({ capabilities: ["send", "read"] })),
         listEvents: vi.fn(() => events),
       });
-      expect(service.listEvents({ actor: externalActor, sessionId: SESSION })).toBe(events);
+      expect(await service.listEvents({ actor: externalActor, sessionId: SESSION })).toBe(events);
       expect(sessionControls.listEvents).toHaveBeenCalledWith(WORKSPACE, SESSION, {});
     });
 
-    it("denies a send-only bound controller from reading control history", () => {
+    it("denies a send-only bound controller from reading control history", async () => {
       const { service, sessionControls } = buildService({
         getControl: vi.fn(() => externalControl({ capabilities: ["send"] })),
       });
       let observed: unknown;
       try {
-        service.listEvents({ actor: externalActor, sessionId: SESSION });
+        await service.listEvents({ actor: externalActor, sessionId: SESSION });
       } catch (error) {
         observed = error;
       }
@@ -921,7 +921,7 @@ describe("SessionControlService controller protocol", () => {
       expect(sessionControls.listEvents).not.toHaveBeenCalled();
     });
 
-    it("denies a companion that is not the bound controller", () => {
+    it("denies a companion that is not the bound controller", async () => {
       const { service } = buildService({
         getControl: vi.fn(() =>
           externalControl({
@@ -936,7 +936,7 @@ describe("SessionControlService controller protocol", () => {
       });
       let observed: unknown;
       try {
-        service.listEvents({ actor: externalActor, sessionId: SESSION });
+        await service.listEvents({ actor: externalActor, sessionId: SESSION });
       } catch (error) {
         observed = error;
       }
@@ -950,8 +950,8 @@ describe("SessionControlService controller protocol", () => {
       principalPurpose: "general_companion",
     } as unknown as SessionControlExternalCompanionActor;
 
-    it("rejects a wrong-purpose companion on every read before any session-existence read", () => {
-      const reads: Array<(service: SessionControlService) => unknown> = [
+    it("rejects a wrong-purpose companion on every read before any session-existence read", async () => {
+      const reads: Array<(service: SessionControlService) => Promise<unknown>> = [
         (service) => service.getControl({ actor: wrongPurposeCompanion, sessionId: SESSION }),
         (service) => service.getDetail({ actor: wrongPurposeCompanion, sessionId: SESSION }),
         (service) => service.listEvents({ actor: wrongPurposeCompanion, sessionId: SESSION }),
@@ -961,7 +961,7 @@ describe("SessionControlService controller protocol", () => {
           const { service, sessionControls, metaGet } = buildService({}, meta);
           let observed: unknown;
           try {
-            read(service);
+            await read(service);
           } catch (error) {
             observed = error;
           }
@@ -973,11 +973,11 @@ describe("SessionControlService controller protocol", () => {
       }
     });
 
-    it("gives a wrong-purpose companion an identical getControl rejection whether or not the session exists", () => {
+    it("gives a wrong-purpose companion an identical getControl rejection whether or not the session exists", async () => {
       const existing = buildService();
       let existingError: unknown;
       try {
-        existing.service.getControl({ actor: wrongPurposeCompanion, sessionId: SESSION });
+        await existing.service.getControl({ actor: wrongPurposeCompanion, sessionId: SESSION });
       } catch (error) {
         existingError = error;
       }
@@ -985,7 +985,7 @@ describe("SessionControlService controller protocol", () => {
       const missing = buildService({}, null);
       let missingError: unknown;
       try {
-        missing.service.getControl({ actor: wrongPurposeCompanion, sessionId: "nonexistent-session" });
+        await missing.service.getControl({ actor: wrongPurposeCompanion, sessionId: "nonexistent-session" });
       } catch (error) {
         missingError = error;
       }

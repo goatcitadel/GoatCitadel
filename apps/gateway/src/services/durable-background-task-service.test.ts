@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Storage } from "@goatcitadel/storage";
+import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import { DurableRunService } from "./durable-run-service.js";
 
 const cleanups: Array<() => void> = [];
@@ -12,7 +12,7 @@ afterEach(() => {
   for (const cleanup of cleanups.splice(0).reverse()) cleanup();
 });
 
-function createHarness() {
+async function createHarness() {
   const root = path.join(os.tmpdir(), `goatcitadel-background-task-${randomUUID()}`);
   fs.mkdirSync(root, { recursive: true });
   const storage = new Storage({
@@ -41,14 +41,14 @@ function createHarness() {
     now: "2026-07-13T00:00:00.000Z",
   });
   const context = {
-    storage,
+    storage: createSqliteAsyncStorage(storage),
     config: { assistant: { durable: { enabled: true } } },
     publishRealtime: vi.fn(),
     requireFeatureEnabled: vi.fn(),
     isFeatureEnabled: vi.fn(() => true),
   } as never;
   const service = new DurableRunService(context);
-  const watcher = service.watchDurableChildRun({
+  const watcher = await service.watchDurableChildRun({
     parentRunId: "parent-run",
     childRunId: "child-run",
     source: "orchestration_phase",
@@ -58,9 +58,9 @@ function createHarness() {
 }
 
 describe("DurableRunService background-task rail", () => {
-  it("retains child state across service restart and governs detach, reattach, and cancellation races", () => {
-    const { storage, context, service, watcher } = createHarness();
-    const initial = service.getDurableBackgroundTaskRail("parent-run", {
+  it("retains child state across service restart and governs detach, reattach, and cancellation races", async () => {
+    const { storage, context, service, watcher } = await createHarness();
+    const initial = await service.getDurableBackgroundTaskRail("parent-run", {
       workspaceId: "workspace-a",
       sessionId: "parent-session",
     });
@@ -71,7 +71,7 @@ describe("DurableRunService background-task rail", () => {
       controls: { cancel: { enabled: true } },
     });
 
-    const detached = service.controlDurableBackgroundTask(
+    const detached = await service.controlDurableBackgroundTask(
       "parent-run",
       watcher.watcherId,
       {
@@ -85,13 +85,13 @@ describe("DurableRunService background-task rail", () => {
     expect(detached).toMatchObject({ outcome: "applied", rail: { tasks: [{ watcherState: "detached" }] } });
 
     const restarted = new DurableRunService(context);
-    const afterRestart = restarted.getDurableBackgroundTaskRail("parent-run", {
+    const afterRestart = await restarted.getDurableBackgroundTaskRail("parent-run", {
       workspaceId: "workspace-a",
       sessionId: "parent-session",
     });
     expect(afterRestart.tasks[0]).toMatchObject({ watcherState: "detached", canonicalStatus: "running" });
 
-    const reattached = restarted.controlDurableBackgroundTask(
+    const reattached = await restarted.controlDurableBackgroundTask(
       "parent-run",
       watcher.watcherId,
       {
@@ -105,7 +105,7 @@ describe("DurableRunService background-task rail", () => {
     expect(reattached.rail.tasks[0]?.watcherState).toBe("attached");
 
     const currentTask = reattached.rail.tasks[0]!;
-    expect(() =>
+    await expect(
       restarted.controlDurableBackgroundTask(
         "parent-run",
         watcher.watcherId,
@@ -118,10 +118,10 @@ describe("DurableRunService background-task rail", () => {
         },
         "operator-a",
       ),
-    ).toThrow(/changed from version/);
+    ).rejects.toThrow(/changed from version/);
     expect(storage.durableRuns.getRun("child-run").status).toBe("running");
 
-    const cancelled = restarted.controlDurableBackgroundTask(
+    const cancelled = await restarted.controlDurableBackgroundTask(
       "parent-run",
       watcher.watcherId,
       {
@@ -146,7 +146,7 @@ describe("DurableRunService background-task rail", () => {
       reason: "Bearer [REDACTED] operator request",
     });
 
-    const converged = restarted.controlDurableBackgroundTask(
+    const converged = await restarted.controlDurableBackgroundTask(
       "parent-run",
       watcher.watcherId,
       {
@@ -161,28 +161,30 @@ describe("DurableRunService background-task rail", () => {
     expect(converged.outcome).toBe("converged");
   });
 
-  it("fails closed when the requested parent workspace or session scope does not match", () => {
-    const { service } = createHarness();
-    expect(() =>
+  it("fails closed when the requested parent workspace or session scope does not match", async () => {
+    const { service } = await createHarness();
+    await expect(
       service.getDurableBackgroundTaskRail("parent-run", {
         workspaceId: "workspace-b",
         sessionId: "parent-session",
       }),
-    ).toThrow(/not found/i);
-    expect(() =>
+    ).rejects.toThrow(/not found/i);
+    await expect(
       service.getDurableBackgroundTaskRail("parent-run", {
         workspaceId: "workspace-a",
         sessionId: "different-session",
       }),
-    ).toThrow(/not found/i);
+    ).rejects.toThrow(/not found/i);
   });
 
-  it("rejects a stale client revision after same-millisecond watcher ABA changes", () => {
-    const { storage, service, watcher } = createHarness();
-    const clientA = service.getDurableBackgroundTaskRail("parent-run", {
-      workspaceId: "workspace-a",
-      sessionId: "parent-session",
-    }).tasks[0]!;
+  it("rejects a stale client revision after same-millisecond watcher ABA changes", async () => {
+    const { storage, service, watcher } = await createHarness();
+    const clientA = (
+      await service.getDurableBackgroundTaskRail("parent-run", {
+        workspaceId: "workspace-a",
+        sessionId: "parent-session",
+      })
+    ).tasks[0]!;
     const clientB = { ...clientA };
     const sameMillisecond = "2026-07-13T00:00:01.000Z";
     storage.durableChildWatchers.detach(watcher.watcherId, sameMillisecond);
@@ -194,7 +196,7 @@ describe("DurableRunService background-task rail", () => {
     expect(current.revision).toBe(clientA.watcherRevision + 4);
     expect(current.updatedAt).toBe(sameMillisecond);
     for (const staleClient of [clientA, clientB]) {
-      expect(() =>
+      await expect(
         service.controlDurableBackgroundTask(
           "parent-run",
           watcher.watcherId,
@@ -206,7 +208,7 @@ describe("DurableRunService background-task rail", () => {
           },
           "operator-a",
         ),
-      ).toThrow(/changed before detach/);
+      ).rejects.toThrow(/changed before detach/);
     }
     expect(storage.durableChildWatchers.get(watcher.watcherId)).toMatchObject({
       state: "attached",

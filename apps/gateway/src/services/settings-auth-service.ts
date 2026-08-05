@@ -53,7 +53,7 @@ import {
   type ToolApprovalMode,
 } from "@goatcitadel/contracts";
 import type { MeshService } from "@goatcitadel/mesh-core";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
 import {
   preserveSettingsSecretsForPublicUpdate,
@@ -138,9 +138,9 @@ export interface SettingsRuntimeDependencies {
   readonly meshService: Pick<MeshService, "updateOptions">;
   readonly npuSidecar: Pick<NpuSidecarService, "getStatus" | "updateConfig" | "stop" | "start">;
   readonly llamaCppRuntime: Pick<LlamaCppRuntimeService, "getStatus" | "updateConfig" | "stop" | "start">;
-  readFeatureFlags(): RuntimeSettings["features"];
+  readFeatureFlags(): Promise<RuntimeSettings["features"]>;
   readSettingsRevision?(): number;
-  updateFeatureFlags(patch: Partial<RuntimeSettings["features"]>): RuntimeSettings["features"];
+  updateFeatureFlags(patch: Partial<RuntimeSettings["features"]>): Promise<RuntimeSettings["features"]>;
   assertDeploymentProfileUpdate(input: UpdateSettingsInput): void;
   assertFirecrawlRuntimeUpdate(input: UpdateSettingsInput): void;
 }
@@ -164,12 +164,12 @@ export interface SettingsAuthRuntimeDependencies {
     approval: ApprovalRequest,
     input: ApprovalResolveInput,
     options?: ApprovalResolutionEffectEnqueueOptions,
-  ): ApprovalEffectRecord[];
+  ): Promise<ApprovalEffectRecord[]>;
   enqueueApprovalObservabilityEffects(
     approvalId: string,
     items: readonly ApprovalObservabilityEffectInput[],
-  ): ApprovalEffectRecord[];
-  listApprovalEffects(approvalId: string): ApprovalEffectRecord[];
+  ): Promise<ApprovalEffectRecord[]>;
+  listApprovalEffects(approvalId: string): Promise<ApprovalEffectRecord[]>;
   buildApprovalRealtimeLinks(approval: ApprovalRequest): NonNullable<RealtimeEvent["links"]>;
   recordImprovementApprovalResolutionSignal(approval: ApprovalRequest): void;
   handleActivationApprovalResolution(approval: ApprovalRequest): void;
@@ -178,11 +178,11 @@ export interface SettingsAuthRuntimeDependencies {
     source: string,
     payload: Record<string, unknown>,
     options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
-  ): void;
+  ): Promise<unknown>;
 }
 
-export function getSettings(deps: SettingsRuntimeDependencies): RuntimeSettings {
-  const features = deps.readFeatureFlags();
+export async function getSettings(deps: SettingsRuntimeDependencies): Promise<RuntimeSettings> {
+  const features = await deps.readFeatureFlags();
   return {
     revision: deps.readSettingsRevision?.() ?? 1,
     environment: deps.config.assistant.environment,
@@ -390,10 +390,10 @@ function assertProviderConfigMutationIsSecretFree(input: UpdateSettingsInput): v
  * Builds and validates the settings mutation against isolated runtime owners.
  * No live config, owner, persistence, or secure-secret state is mutated.
  */
-export function buildSettingsCandidate(
+export async function buildSettingsCandidate(
   deps: SettingsRuntimeDependencies,
   rawInput: UpdateSettingsInput,
-): SettingsConfigCandidate {
+): Promise<SettingsConfigCandidate> {
   assertProviderConfigMutationIsSecretFree(rawInput);
 
   const candidateConfig = structuredClone(deps.config);
@@ -402,13 +402,13 @@ export function buildSettingsCandidate(
     networkAllowlist: candidateConfig.toolPolicy.sandbox.networkAllowlist,
     enforceNetworkAllowlist: true,
   });
-  let candidateFeatures = structuredClone(deps.readFeatureFlags());
+  let candidateFeatures = structuredClone(await deps.readFeatureFlags());
   const noopNpuStatus = () => deps.npuSidecar.getStatus();
   const noopLlamaStatus = () => deps.llamaCppRuntime.getStatus();
   const candidateDeps: SettingsRuntimeDependencies = {
     config: candidateConfig,
     llmService: candidateLlmService,
-    meshService: { updateOptions: () => undefined },
+    meshService: { updateOptions: async () => undefined },
     npuSidecar: {
       getStatus: noopNpuStatus,
       updateConfig: () => undefined,
@@ -421,9 +421,9 @@ export function buildSettingsCandidate(
       stop: async () => noopLlamaStatus(),
       start: async () => noopLlamaStatus(),
     },
-    readFeatureFlags: () => structuredClone(candidateFeatures),
+    readFeatureFlags: async () => structuredClone(candidateFeatures),
     readSettingsRevision: () => deps.readSettingsRevision?.() ?? 1,
-    updateFeatureFlags: (patch) => {
+    updateFeatureFlags: async (patch) => {
       if (patch.durableKernelV1Enabled === false) {
         throw new ValidationError({
           message: "features.durableKernelV1Enabled is a shipped baseline runtime setting and cannot be disabled.",
@@ -438,7 +438,7 @@ export function buildSettingsCandidate(
 
   let settings: RuntimeSettings;
   try {
-    settings = updateSettings(candidateDeps, rawInput);
+    settings = await updateSettings(candidateDeps, rawInput);
   } catch (error) {
     if (isGoatError(error)) {
       throw error;
@@ -459,10 +459,13 @@ export function buildSettingsCandidate(
   };
 }
 
-export function updateSettings(deps: SettingsRuntimeDependencies, rawInput: UpdateSettingsInput): RuntimeSettings {
+export async function updateSettings(
+  deps: SettingsRuntimeDependencies,
+  rawInput: UpdateSettingsInput,
+): Promise<RuntimeSettings> {
   assertProviderConfigMutationIsSecretFree(rawInput);
   const reconciledInput = requiresSettingsPublicProjectionReconciliation(rawInput)
-    ? preserveSettingsSecretsForPublicUpdate(getSettings(deps), rawInput)
+    ? preserveSettingsSecretsForPublicUpdate(await getSettings(deps), rawInput)
     : rawInput;
   const input = sanitizeConfigMutationInput(reconciledInput, "settings") as UpdateSettingsInput;
   deps.assertDeploymentProfileUpdate(input);
@@ -608,7 +611,7 @@ export function updateSettings(deps: SettingsRuntimeDependencies, rawInput: Upda
       deps.config.assistant.mesh.security.tailnet.enabled = input.mesh.tailnetEnabled;
     }
 
-    deps.meshService.updateOptions({
+    await deps.meshService.updateOptions({
       enabled: deps.config.assistant.mesh.enabled,
       mode: deps.config.assistant.mesh.mode,
       localNodeId: deps.config.assistant.mesh.nodeId,
@@ -735,7 +738,7 @@ export function updateSettings(deps: SettingsRuntimeDependencies, rawInput: Upda
   }
 
   if (input.features) {
-    deps.updateFeatureFlags(input.features);
+    await deps.updateFeatureFlags(input.features);
   }
 
   if (input.llm) {
@@ -750,7 +753,7 @@ export function updateSettings(deps: SettingsRuntimeDependencies, rawInput: Upda
     deps.llmService.updateRuntimeConfig(llmInput satisfies LlmRuntimeUpdateInput);
   }
 
-  return getSettings(deps);
+  return await getSettings(deps);
 }
 
 export function getAuthRuntimeSettings(deps: SettingsRuntimeDependencies): AuthRuntimeSettings {
@@ -925,22 +928,22 @@ function buildSqliteCanonicalZonedInstantPredicate(expression: string): string {
   )`;
 }
 
-function readDatabaseNowMs(deps: SettingsAuthRuntimeDependencies): number {
-  const parsed = Date.parse(deps.gatewaySql.readDatabaseNow());
+async function readDatabaseNowMs(deps: SettingsAuthRuntimeDependencies): Promise<number> {
+  const parsed = Date.parse(await deps.gatewaySql.readDatabaseNow());
   if (!Number.isFinite(parsed)) {
     throw new Error("Database clock did not return a valid timestamp.");
   }
   return parsed;
 }
 
-function createCompanionCredentialWindow(deps: SettingsAuthRuntimeDependencies): {
+async function createCompanionCredentialWindow(deps: SettingsAuthRuntimeDependencies): Promise<{
   issuedAt: string;
   accessTokenExpiresAt: string;
   refreshTokenExpiresAt: string;
-} {
+}> {
   const clock = getAuthDatabaseClockSql(deps);
-  const row = deps.gatewaySql
-    .prepare(
+  const row = await (
+    await deps.gatewaySql.prepare(
       deps.gatewaySql.dialect === "postgres"
         ? `
           WITH database_clock AS (
@@ -969,21 +972,21 @@ function createCompanionCredentialWindow(deps: SettingsAuthRuntimeDependencies):
             strftime('%Y-%m-%dT%H:%M:%fZ', 'now', @refreshTtlModifier) AS refresh_token_expires_at
         `,
     )
-    .get<{
-      issued_at?: unknown;
-      access_token_expires_at?: unknown;
-      refresh_token_expires_at?: unknown;
-    }>(
-      deps.gatewaySql.dialect === "postgres"
-        ? {
-            accessTtlMs: COMPANION_ACCESS_TOKEN_TTL_MS,
-            refreshTtlMs: COMPANION_REFRESH_TOKEN_TTL_MS,
-          }
-        : {
-            accessTtlModifier: `${COMPANION_ACCESS_TOKEN_TTL_MS / 1_000} seconds`,
-            refreshTtlModifier: `${COMPANION_REFRESH_TOKEN_TTL_MS / 1_000} seconds`,
-          },
-    );
+  ).get<{
+    issued_at?: unknown;
+    access_token_expires_at?: unknown;
+    refresh_token_expires_at?: unknown;
+  }>(
+    deps.gatewaySql.dialect === "postgres"
+      ? {
+          accessTtlMs: COMPANION_ACCESS_TOKEN_TTL_MS,
+          refreshTtlMs: COMPANION_REFRESH_TOKEN_TTL_MS,
+        }
+      : {
+          accessTtlModifier: `${COMPANION_ACCESS_TOKEN_TTL_MS / 1_000} seconds`,
+          refreshTtlModifier: `${COMPANION_REFRESH_TOKEN_TTL_MS / 1_000} seconds`,
+        },
+  );
   if (
     typeof row?.issued_at !== "string" ||
     typeof row.access_token_expires_at !== "string" ||
@@ -1029,7 +1032,7 @@ export async function resolveDeviceAccessApproval(
     });
   }
 
-  const existingRequest = getAuthDeviceRequestByApprovalId(deps, currentApproval.approvalId);
+  const existingRequest = await getAuthDeviceRequestByApprovalId(deps, currentApproval.approvalId);
   if (!existingRequest) {
     throw new NotFoundError("Device access request not found.");
   }
@@ -1047,19 +1050,22 @@ export async function resolveDeviceAccessApproval(
   const requestStatus: DeviceAccessRequestStatus = input.decision === "approve" ? "approved" : "rejected";
   const deviceToken =
     input.decision === "approve" ? randomBytes(DEVICE_ACCESS_TOKEN_BYTES).toString("base64url") : undefined;
-  const tokenWindow = deviceToken ? deps.gatewaySql.createDatabaseTtlWindow(DEVICE_ACCESS_TOKEN_TTL_MS) : undefined;
-  const resolvedAt = tokenWindow?.createdAt ?? deps.gatewaySql.readDatabaseNow();
+  const tokenWindow = deviceToken
+    ? await deps.gatewaySql.createDatabaseTtlWindow(DEVICE_ACCESS_TOKEN_TTL_MS)
+    : undefined;
+  const resolvedAt = tokenWindow?.createdAt ?? (await deps.gatewaySql.readDatabaseNow());
   const deviceTokenExpiresAt = tokenWindow?.expiresAt;
   const clock = getAuthDatabaseClockSql(deps);
   let approval!: ApprovalRequest;
   let effects: ApprovalEffectRecord[] = [];
-  let events: ReturnType<SettingsAuthRuntimeDependencies["storage"]["approvalEvents"]["listByApprovalId"]> = [];
+  let events: Awaited<ReturnType<SettingsAuthRuntimeDependencies["storage"]["approvalEvents"]["listByApprovalId"]>> =
+    [];
   let tokenStoredByThisAttempt = false;
 
   try {
-    deps.storage.runImmediateTransaction(() => {
-      const requestUpdate = deps.gatewaySql
-        .prepare(
+    await deps.storage.runImmediateTransaction(async () => {
+      const requestUpdate = await (
+        await deps.gatewaySql.prepare(
           `
         UPDATE auth_device_requests
         SET status = @status,
@@ -1073,16 +1079,16 @@ export async function resolveDeviceAccessApproval(
           AND ${clock.isFuture("expires_at")}
       `,
         )
-        .run({
-          requestId: request.requestId,
-          status: requestStatus,
-          resolvedAt,
-          resolvedBy: input.resolvedBy,
-          resolutionNote: input.resolutionNote ?? null,
-          // SECURITY: only the token hash is persisted. The plaintext remains
-          // in the process-local single-use vault until the winning status poll.
-          approvedTokenExpiresAt: deviceTokenExpiresAt ?? null,
-        });
+      ).run({
+        requestId: request.requestId,
+        status: requestStatus,
+        resolvedAt,
+        resolvedBy: input.resolvedBy,
+        resolutionNote: input.resolutionNote ?? null,
+        // SECURITY: only the token hash is persisted. The plaintext remains
+        // in the process-local single-use vault until the winning status poll.
+        approvedTokenExpiresAt: deviceTokenExpiresAt ?? null,
+      });
       if (requestUpdate.changes !== 1) {
         throw new ConflictError({
           message: "Device access request is no longer pending or has expired.",
@@ -1095,15 +1101,15 @@ export async function resolveDeviceAccessApproval(
       }
 
       if (context?.remoteToken) {
-        deps.storage.approvals.mergeLinkage(currentApproval.approvalId, {
+        await deps.storage.approvals.mergeLinkage(currentApproval.approvalId, {
           connectorId: context.remoteToken.connectorId,
           tokenId: context.remoteToken.tokenId,
         });
       }
 
       if (deviceToken) {
-        deps.gatewaySql
-          .prepare(
+        await (
+          await deps.gatewaySql.prepare(
             `
           INSERT INTO auth_device_grants (
             grant_id, request_id, token_hash, device_label, device_type, platform,
@@ -1114,26 +1120,26 @@ export async function resolveDeviceAccessApproval(
           )
         `,
           )
-          .run({
-            grantId: randomUUID(),
-            requestId: request.requestId,
-            tokenHash: hashSensitiveToken(deviceToken),
-            deviceLabel: request.deviceLabel,
-            deviceType: request.deviceType,
-            platform: request.platform ?? null,
-            grantedBy: input.resolvedBy,
-            createdAt: resolvedAt,
-            expiresAt: deviceTokenExpiresAt ?? null,
-            metadataJson: JSON.stringify({
-              approvalId: currentApproval.approvalId,
-              requestedOrigin: request.requestedOrigin,
-              requestedIp: request.requestedIp,
-            }),
-          });
+        ).run({
+          grantId: randomUUID(),
+          requestId: request.requestId,
+          tokenHash: hashSensitiveToken(deviceToken),
+          deviceLabel: request.deviceLabel,
+          deviceType: request.deviceType,
+          platform: request.platform ?? null,
+          grantedBy: input.resolvedBy,
+          createdAt: resolvedAt,
+          expiresAt: deviceTokenExpiresAt ?? null,
+          metadataJson: JSON.stringify({
+            approvalId: currentApproval.approvalId,
+            requestedOrigin: request.requestedOrigin,
+            requestedIp: request.requestedIp,
+          }),
+        });
       }
 
-      approval = deps.storage.approvals.resolve(currentApproval.approvalId, input);
-      deps.storage.approvalEvents.append({
+      approval = await deps.storage.approvals.resolve(currentApproval.approvalId, input);
+      await deps.storage.approvalEvents.append({
         approvalId: currentApproval.approvalId,
         eventType: "resolved",
         actorId: input.resolvedBy,
@@ -1142,8 +1148,8 @@ export async function resolveDeviceAccessApproval(
           status: approval.status,
         },
       });
-      deps.enqueueApprovalResolutionEffects(approval, input);
-      deps.enqueueApprovalObservabilityEffects(approval.approvalId, [
+      await deps.enqueueApprovalResolutionEffects(approval, input);
+      await deps.enqueueApprovalObservabilityEffects(approval.approvalId, [
         ...buildApprovalResolutionObservabilityEffects(approval, input),
         {
           operationId: `auth.device_request.resolve.audit:${request.requestId}`,
@@ -1193,8 +1199,8 @@ export async function resolveDeviceAccessApproval(
           },
         },
       ]);
-      effects = deps.listApprovalEffects(currentApproval.approvalId);
-      events = deps.storage.approvalEvents.listByApprovalId(currentApproval.approvalId);
+      effects = await deps.listApprovalEffects(currentApproval.approvalId);
+      events = await deps.storage.approvalEvents.listByApprovalId(currentApproval.approvalId);
 
       // Settle the expiry boundary after every potentially blocking write/read
       // in the transaction. In PostgreSQL an UPDATE can wait on a row lock while
@@ -1202,8 +1208,8 @@ export async function resolveDeviceAccessApproval(
       // check makes that stale timestamp incapable of authorizing a grant after
       // the request's actual deadline. Throwing here rolls back the request,
       // grant, approval, events, effects, and the process-local vault entry.
-      const commitRequest = deps.gatewaySql
-        .prepare(
+      const commitRequest = await (
+        await deps.gatewaySql.prepare(
           `
             SELECT request_id
             FROM auth_device_requests
@@ -1213,7 +1219,7 @@ export async function resolveDeviceAccessApproval(
             LIMIT 1
           `,
         )
-        .get({ requestId: request.requestId, status: requestStatus });
+      ).get({ requestId: request.requestId, status: requestStatus });
       if (!commitRequest) {
         throw new ConflictError({
           message: "Device access request expired before the approval transaction committed.",
@@ -1247,7 +1253,7 @@ export async function expireDeviceAccessRequestIfNeeded(
   if (request.status !== "pending") {
     return request;
   }
-  if (!deps.gatewaySql.isDatabaseInstantExpired(request.expiresAt)) {
+  if (!(await deps.gatewaySql.isDatabaseInstantExpired(request.expiresAt))) {
     return request;
   }
 
@@ -1257,13 +1263,13 @@ export async function expireDeviceAccessRequestIfNeeded(
     resolutionNote: "Device access request expired before approval.",
   };
   const clock = getAuthDatabaseClockSql(deps);
-  let resolvedAt = deps.gatewaySql.readDatabaseNow();
+  let resolvedAt = await deps.gatewaySql.readDatabaseNow();
   let approval: ApprovalRequest | undefined;
   let resolvedRequest: AuthDeviceRequestRecord | undefined;
 
-  deps.storage.runImmediateTransaction(() => {
-    const requestUpdate = deps.gatewaySql
-      .prepare(
+  await deps.storage.runImmediateTransaction(async () => {
+    const requestUpdate = await (
+      await deps.gatewaySql.prepare(
         `
         UPDATE auth_device_requests
         SET status = 'expired',
@@ -1275,26 +1281,26 @@ export async function expireDeviceAccessRequestIfNeeded(
           AND ${clock.isExpiredOrInvalid("expires_at")}
       `,
       )
-      .run({
-        requestId: request.requestId,
-        resolvedBy: resolutionInput.resolvedBy,
-        resolutionNote: resolutionInput.resolutionNote ?? null,
-      });
+    ).run({
+      requestId: request.requestId,
+      resolvedBy: resolutionInput.resolvedBy,
+      resolutionNote: resolutionInput.resolutionNote ?? null,
+    });
     if (requestUpdate.changes !== 1) {
-      resolvedRequest = getAuthDeviceRequestById(deps, request.requestId);
+      resolvedRequest = await getAuthDeviceRequestById(deps, request.requestId);
       return;
     }
 
-    resolvedRequest = getAuthDeviceRequestById(deps, request.requestId);
-    resolvedAt = resolvedRequest?.resolvedAt ?? deps.gatewaySql.readDatabaseNow();
+    resolvedRequest = await getAuthDeviceRequestById(deps, request.requestId);
+    resolvedAt = resolvedRequest?.resolvedAt ?? (await deps.gatewaySql.readDatabaseNow());
 
-    const currentApproval = deps.storage.approvals.get(request.approvalId);
+    const currentApproval = await deps.storage.approvals.get(request.approvalId);
     if (currentApproval.status === "pending") {
-      approval = deps.storage.approvals.resolve(request.approvalId, resolutionInput, {
+      approval = await deps.storage.approvals.resolve(request.approvalId, resolutionInput, {
         resolvedAt,
         allowExpired: true,
       });
-      deps.storage.approvalEvents.append({
+      await deps.storage.approvalEvents.append({
         approvalId: request.approvalId,
         eventType: "resolved",
         actorId: resolutionInput.resolvedBy,
@@ -1303,9 +1309,9 @@ export async function expireDeviceAccessRequestIfNeeded(
           status: approval.status,
         },
       });
-      deps.enqueueApprovalResolutionEffects(approval, resolutionInput, { allowExpired: true });
+      await deps.enqueueApprovalResolutionEffects(approval, resolutionInput, { allowExpired: true });
     }
-    deps.enqueueApprovalObservabilityEffects(request.approvalId, [
+    await deps.enqueueApprovalObservabilityEffects(request.approvalId, [
       ...(approval ? buildApprovalResolutionObservabilityEffects(approval, resolutionInput) : []),
       {
         operationId: `auth.device_request.expire.audit:${request.requestId}`,
@@ -1351,7 +1357,7 @@ export async function expireDeviceAccessRequestIfNeeded(
         },
       },
     ]);
-    resolvedRequest ??= getAuthDeviceRequestById(deps, request.requestId);
+    resolvedRequest ??= await getAuthDeviceRequestById(deps, request.requestId);
   });
 
   return resolvedRequest ?? request;
@@ -1362,8 +1368,8 @@ export async function expirePendingDeviceAccessRequests(
   limit = 100,
 ): Promise<number> {
   const clock = getAuthDatabaseClockSql(deps);
-  const rows = deps.gatewaySql
-    .prepare(
+  const rows = (await (
+    await deps.gatewaySql.prepare(
       `
       SELECT request_id
       FROM auth_device_requests
@@ -1373,13 +1379,13 @@ export async function expirePendingDeviceAccessRequests(
       LIMIT @limit
     `,
     )
-    .all({ limit: clampInt(limit, 100, 1, 1000) }) as Array<{ request_id?: unknown }>;
+  ).all({ limit: clampInt(limit, 100, 1, 1000) })) as Array<{ request_id?: unknown }>;
   let expired = 0;
   for (const row of rows) {
     if (typeof row.request_id !== "string") {
       continue;
     }
-    const request = getAuthDeviceRequestById(deps, row.request_id);
+    const request = await getAuthDeviceRequestById(deps, row.request_id);
     if (!request || request.status !== "pending") {
       continue;
     }
@@ -1454,10 +1460,10 @@ export async function createDeviceAccessRequest(
   let createdAt = "";
   let expiresAt = "";
   try {
-    ({ createdAt, expiresAt } = deps.gatewaySql.createDatabaseTtlWindow(DEVICE_ACCESS_REQUEST_TTL_MS));
-    deps.storage.runImmediateTransaction(() => {
-      deps.gatewaySql
-        .prepare(
+    ({ createdAt, expiresAt } = await deps.gatewaySql.createDatabaseTtlWindow(DEVICE_ACCESS_REQUEST_TTL_MS));
+    await deps.storage.runImmediateTransaction(async () => {
+      await (
+        await deps.gatewaySql.prepare(
           `
       INSERT INTO auth_device_requests (
         request_id, approval_id, request_secret_hash, device_label, device_type, platform,
@@ -1468,21 +1474,21 @@ export async function createDeviceAccessRequest(
       )
     `,
         )
-        .run({
-          requestId,
-          approvalId: approval.approvalId,
-          requestSecretHash: hashSensitiveToken(requestSecret),
-          deviceLabel,
-          deviceType,
-          platform: platform ?? null,
-          requestedOrigin: requestedOrigin ?? null,
-          requestedIp: requestedIp ?? null,
-          userAgent: userAgent ?? null,
-          status: "pending",
-          createdAt,
-          expiresAt,
-        });
-      deps.enqueueApprovalObservabilityEffects(approval.approvalId, [
+      ).run({
+        requestId,
+        approvalId: approval.approvalId,
+        requestSecretHash: hashSensitiveToken(requestSecret),
+        deviceLabel,
+        deviceType,
+        platform: platform ?? null,
+        requestedOrigin: requestedOrigin ?? null,
+        requestedIp: requestedIp ?? null,
+        userAgent: userAgent ?? null,
+        status: "pending",
+        createdAt,
+        expiresAt,
+      });
+      await deps.enqueueApprovalObservabilityEffects(approval.approvalId, [
         {
           operationId: `auth.device_request.create.audit:${requestId}`,
           delivery: {
@@ -1537,7 +1543,7 @@ export async function createDeviceAccessRequest(
     });
   } catch (error) {
     try {
-      rejectOrphanedDeviceAccessApproval(deps, approval.approvalId);
+      await rejectOrphanedDeviceAccessApproval(deps, approval.approvalId);
     } catch {
       // Best effort cleanup only.
     }
@@ -1555,19 +1561,22 @@ export async function createDeviceAccessRequest(
   };
 }
 
-function rejectOrphanedDeviceAccessApproval(deps: SettingsAuthRuntimeDependencies, approvalId: string): void {
+async function rejectOrphanedDeviceAccessApproval(
+  deps: SettingsAuthRuntimeDependencies,
+  approvalId: string,
+): Promise<void> {
   const input: ApprovalResolveInput = {
     decision: "reject",
     resolvedBy: "system:auth-device-request",
     resolutionNote: "Device request registration failed.",
   };
-  const commitRejection = (includeEffects: boolean) => {
-    const current = deps.storage.approvals.get(approvalId);
+  const commitRejection = async (includeEffects: boolean) => {
+    const current = await deps.storage.approvals.get(approvalId);
     if (current.status !== "pending") {
       return;
     }
-    const approval = deps.storage.approvals.resolve(approvalId, input);
-    deps.storage.approvalEvents.append({
+    const approval = await deps.storage.approvals.resolve(approvalId, input);
+    await deps.storage.approvalEvents.append({
       approvalId,
       eventType: "resolved",
       actorId: input.resolvedBy,
@@ -1579,20 +1588,20 @@ function rejectOrphanedDeviceAccessApproval(deps: SettingsAuthRuntimeDependencie
       },
     });
     if (includeEffects) {
-      deps.enqueueApprovalResolutionEffects(approval, input);
-      deps.enqueueApprovalObservabilityEffects(
+      await deps.enqueueApprovalResolutionEffects(approval, input);
+      await deps.enqueueApprovalObservabilityEffects(
         approvalId,
         buildApprovalResolutionObservabilityEffects(approval, input),
       );
     }
   };
   try {
-    deps.storage.runImmediateTransaction(() => commitRejection(true));
+    await deps.storage.runImmediateTransaction(() => commitRejection(true));
   } catch {
     // A device approval without its request row is permanently unusable. Keep
     // the terminal approval/event even if an auxiliary effect store is down;
     // the creation observability envelope remains durable for reconciliation.
-    deps.storage.runImmediateTransaction(() => commitRejection(false));
+    await deps.storage.runImmediateTransaction(() => commitRejection(false));
   }
 }
 
@@ -1601,7 +1610,7 @@ export async function getDeviceAccessRequestStatus(
   requestId: string,
   requestSecret: string,
 ): Promise<DeviceAccessRequestStatusResponse> {
-  const request = getAuthDeviceRequestById(deps, requestId);
+  const request = await getAuthDeviceRequestById(deps, requestId);
   if (!request) {
     throw new Error("Device access request not found.");
   }
@@ -1614,7 +1623,7 @@ export async function getDeviceAccessRequestStatus(
     // A process that does not hold the plaintext must never burn the durable
     // handoff marker. This preserves delivery by the approving node in a
     // shared PostgreSQL deployment and after cross-node status polling.
-    const databaseNowMs = readDatabaseNowMs(deps);
+    const databaseNowMs = await readDatabaseNowMs(deps);
     const claimed = deps.deviceTokenVault.claim(current.requestId, databaseNowMs);
     if (!claimed) {
       return mapDeviceAccessStatusResponse(current);
@@ -1623,8 +1632,8 @@ export async function getDeviceAccessRequestStatus(
     const clock = getAuthDatabaseClockSql(deps);
     let result: { changes?: number };
     try {
-      result = deps.gatewaySql
-        .prepare(
+      result = await (
+        await deps.gatewaySql.prepare(
           `
       UPDATE auth_device_requests
       SET delivered_at = @deliveredAt,
@@ -1636,17 +1645,17 @@ export async function getDeviceAccessRequestStatus(
         AND ${clock.isFuture("approved_token_expires_at")}
     `,
         )
-        .run({
-          requestId: current.requestId,
-          deliveredAt,
-        });
+      ).run({
+        requestId: current.requestId,
+        deliveredAt,
+      });
     } catch (error) {
       try {
         deps.deviceTokenVault.store(
           current.requestId,
           claimed.token,
           claimed.deviceTokenExpiresAt,
-          readDatabaseNowMs(deps),
+          await readDatabaseNowMs(deps),
         );
       } catch {
         // Preserve the storage failure. If DB time is unavailable, retaining an
@@ -1658,7 +1667,7 @@ export async function getDeviceAccessRequestStatus(
       // A concurrent poll already won the single-use delivery. This caller must
       // not receive the token. The winning delivery already consumed the
       // durable marker, so the local claim must remain burned.
-      const refreshed = getAuthDeviceRequestById(deps, requestId);
+      const refreshed = await getAuthDeviceRequestById(deps, requestId);
       if (refreshed) {
         return mapDeviceAccessStatusResponse(refreshed);
       }
@@ -1673,12 +1682,12 @@ export async function getDeviceAccessRequestStatus(
   return mapDeviceAccessStatusResponse(current);
 }
 
-export function getAuthDeviceRequestById(
+export async function getAuthDeviceRequestById(
   deps: SettingsAuthRuntimeDependencies,
   requestId: string,
-): AuthDeviceRequestRecord | undefined {
-  const row = deps.gatewaySql
-    .prepare(
+): Promise<AuthDeviceRequestRecord | undefined> {
+  const row = (await (
+    await deps.gatewaySql.prepare(
       `
       SELECT *
       FROM auth_device_requests
@@ -1686,16 +1695,16 @@ export function getAuthDeviceRequestById(
       LIMIT 1
     `,
     )
-    .get({ requestId }) as Record<string, unknown> | undefined;
+  ).get({ requestId })) as Record<string, unknown> | undefined;
   return row ? mapAuthDeviceRequestRow(row) : undefined;
 }
 
-function getAuthDeviceRequestByApprovalId(
+async function getAuthDeviceRequestByApprovalId(
   deps: SettingsAuthRuntimeDependencies,
   approvalId: string,
-): AuthDeviceRequestRecord | undefined {
-  const row = deps.gatewaySql
-    .prepare(
+): Promise<AuthDeviceRequestRecord | undefined> {
+  const row = (await (
+    await deps.gatewaySql.prepare(
       `
       SELECT *
       FROM auth_device_requests
@@ -1703,13 +1712,15 @@ function getAuthDeviceRequestByApprovalId(
       LIMIT 1
     `,
     )
-    .get({ approvalId }) as Record<string, unknown> | undefined;
+  ).get({ approvalId })) as Record<string, unknown> | undefined;
   return row ? mapAuthDeviceRequestRow(row) : undefined;
 }
 
-export function listDeviceAccessGrants(deps: SettingsAuthRuntimeDependencies): DeviceAccessGrantContractRecord[] {
-  const rows = deps.gatewaySql
-    .prepare(
+export async function listDeviceAccessGrants(
+  deps: SettingsAuthRuntimeDependencies,
+): Promise<DeviceAccessGrantContractRecord[]> {
+  const rows = (await (
+    await deps.gatewaySql.prepare(
       `
     SELECT *
     FROM auth_device_grants
@@ -1719,7 +1730,7 @@ export function listDeviceAccessGrants(deps: SettingsAuthRuntimeDependencies): D
       created_at DESC
   `,
     )
-    .all() as Record<string, unknown>[];
+  ).all()) as Record<string, unknown>[];
   return rows.map((row) => toDeviceAccessGrantRecord(mapAuthDeviceGrantRow(row)));
 }
 
@@ -1732,35 +1743,35 @@ export async function revokeDeviceAccessGrant(
   const normalizedGrantId = requireAuthRevokeIdentifier(grantId, "grantId");
   const normalizedRevokedBy = requireAuthRevokeIdentifier(revokedBy, "revokedBy");
   let result!: DeviceAccessGrantContractRecord;
-  deps.storage.runImmediateTransaction(() => {
+  await deps.storage.runImmediateTransaction(async () => {
     const revokeIdentity = buildAuthControlRevokeIdentity("device_grant", normalizedGrantId, normalizedRevokedBy);
-    deps.storage.sessionControls.revokeByAuthBinding(revokeIdentity);
-    const existingRow = deps.gatewaySql
-      .prepare(
+    await deps.storage.sessionControls.revokeByAuthBinding(revokeIdentity);
+    const existingRow = (await (
+      await deps.gatewaySql.prepare(
         `SELECT * FROM auth_device_grants
          WHERE grant_id = @grantId
          LIMIT 1${deps.gatewaySql.dialect === "postgres" ? " FOR UPDATE" : ""}`,
       )
-      .get({ grantId: normalizedGrantId }) as Record<string, unknown> | undefined;
+    ).get({ grantId: normalizedGrantId })) as Record<string, unknown> | undefined;
     if (!existingRow) throw new NotFoundError("Device access grant not found.");
-    const revokedAt = deps.gatewaySql.readDatabaseNow();
-    deps.gatewaySql
-      .prepare(
+    const revokedAt = await deps.gatewaySql.readDatabaseNow();
+    await (
+      await deps.gatewaySql.prepare(
         `UPDATE auth_device_grants
          SET revoked_at = COALESCE(revoked_at, @revokedAt)
          WHERE grant_id = @grantId`,
       )
-      .run({ grantId: normalizedGrantId, revokedAt });
-    deps.gatewaySql
-      .prepare(
+    ).run({ grantId: normalizedGrantId, revokedAt });
+    await (
+      await deps.gatewaySql.prepare(
         `UPDATE companion_sessions
          SET revoked_at = COALESCE(revoked_at, @revokedAt)
          WHERE grant_id = @grantId`,
       )
-      .run({ grantId: normalizedGrantId, revokedAt });
-    const updatedRow = deps.gatewaySql
-      .prepare("SELECT * FROM auth_device_grants WHERE grant_id = @grantId LIMIT 1")
-      .get({ grantId: normalizedGrantId }) as Record<string, unknown> | undefined;
+    ).run({ grantId: normalizedGrantId, revokedAt });
+    const updatedRow = (await (
+      await deps.gatewaySql.prepare("SELECT * FROM auth_device_grants WHERE grant_id = @grantId LIMIT 1")
+    ).get({ grantId: normalizedGrantId })) as Record<string, unknown> | undefined;
     result = toDeviceAccessGrantRecord(mapAuthDeviceGrantRow(updatedRow ?? existingRow));
   });
 
@@ -1775,7 +1786,7 @@ export async function revokeDeviceAccessGrant(
     revokedAt: result.revokedAt,
   });
 
-  deps.publishRealtime(
+  await deps.publishRealtime(
     "auth_device_grant_revoked",
     "auth",
     {
@@ -1794,13 +1805,13 @@ export async function revokeDeviceAccessGrant(
   return result;
 }
 
-export function getActiveAuthDeviceGrantById(
+export async function getActiveAuthDeviceGrantById(
   deps: SettingsAuthRuntimeDependencies,
   grantId: string,
-): AuthDeviceGrantRecord | undefined {
+): Promise<AuthDeviceGrantRecord | undefined> {
   const clock = getAuthDatabaseClockSql(deps);
-  const row = deps.gatewaySql
-    .prepare(
+  const row = (await (
+    await deps.gatewaySql.prepare(
       `
       SELECT *
       FROM auth_device_grants
@@ -1810,7 +1821,7 @@ export function getActiveAuthDeviceGrantById(
       LIMIT 1
     `,
     )
-    .get({ grantId }) as Record<string, unknown> | undefined;
+  ).get({ grantId })) as Record<string, unknown> | undefined;
   if (!row) {
     return undefined;
   }
@@ -1827,16 +1838,18 @@ export function getActiveAuthDeviceGrantById(
   return grant;
 }
 
-export function validateDeviceAccessToken(
+export async function validateDeviceAccessToken(
   deps: SettingsAuthRuntimeDependencies,
   token: string,
-): { actorId: string; deviceId: string; grantId: string; principalPurpose: CompanionPrincipalPurpose } | undefined {
+): Promise<
+  { actorId: string; deviceId: string; grantId: string; principalPurpose: CompanionPrincipalPurpose } | undefined
+> {
   const tokenHash = hashSensitiveToken(token);
   const clock = getAuthDatabaseClockSql(deps);
   let grant: AuthDeviceGrantRecord | undefined;
-  deps.storage.runImmediateTransaction(() => {
-    const row = deps.gatewaySql
-      .prepare(
+  await deps.storage.runImmediateTransaction(async () => {
+    const row = (await (
+      await deps.gatewaySql.prepare(
         `
           SELECT *
           FROM auth_device_grants
@@ -1846,13 +1859,13 @@ export function validateDeviceAccessToken(
           LIMIT 1${clock.lockRow}
         `,
       )
-      .get({ tokenHash }) as Record<string, unknown> | undefined;
+    ).get({ tokenHash })) as Record<string, unknown> | undefined;
     if (!row) {
       return;
     }
     const activeGrant = mapAuthDeviceGrantRow(row);
-    deps.gatewaySql
-      .prepare(
+    await (
+      await deps.gatewaySql.prepare(
         `
           UPDATE auth_device_grants
           SET last_used_at = ${clock.nowText}
@@ -1861,9 +1874,9 @@ export function validateDeviceAccessToken(
             AND (expires_at IS NULL OR ${clock.isFuture("expires_at")})
         `,
       )
-      .run({ grantId: activeGrant.grantId });
-    const finalGrant = deps.gatewaySql
-      .prepare(
+    ).run({ grantId: activeGrant.grantId });
+    const finalGrant = await (
+      await deps.gatewaySql.prepare(
         `
           SELECT grant_id
           FROM auth_device_grants
@@ -1873,7 +1886,7 @@ export function validateDeviceAccessToken(
           LIMIT 1
         `,
       )
-      .get({ grantId: activeGrant.grantId });
+    ).get({ grantId: activeGrant.grantId });
     if (finalGrant) {
       grant = activeGrant;
     }
@@ -1910,13 +1923,13 @@ export async function exchangeCompanionSessionFromDeviceGrant(
   let refreshTokenExpiresAt = "";
   let metadata: Record<string, unknown> = {};
 
-  deps.storage.runImmediateTransaction(() => {
+  await deps.storage.runImmediateTransaction(async () => {
     const replacementActorId = `companion:${sessionId}`;
-    deps.storage.sessionControls.revokeByAuthBinding(
+    await deps.storage.sessionControls.revokeByAuthBinding(
       buildAuthControlRevokeIdentity("device_grant", normalizedGrantId, replacementActorId),
     );
-    const grantRow = deps.gatewaySql
-      .prepare(
+    const grantRow = (await (
+      await deps.gatewaySql.prepare(
         `
           SELECT *
           FROM auth_device_grants
@@ -1926,7 +1939,7 @@ export async function exchangeCompanionSessionFromDeviceGrant(
           LIMIT 1${clock.lockRow}
         `,
       )
-      .get({ grantId: normalizedGrantId }) as Record<string, unknown> | undefined;
+    ).get({ grantId: normalizedGrantId })) as Record<string, unknown> | undefined;
     if (!grantRow) {
       throw new NotFoundError("Device access grant not found.");
     }
@@ -1934,7 +1947,7 @@ export async function exchangeCompanionSessionFromDeviceGrant(
     // The purpose is carried immutably from the device grant (a storage trigger
     // asserts grant.purpose === request.purpose); the exchange can never widen it.
     const principalPurpose = grant.principalPurpose;
-    ({ issuedAt, accessTokenExpiresAt, refreshTokenExpiresAt } = createCompanionCredentialWindow(deps));
+    ({ issuedAt, accessTokenExpiresAt, refreshTokenExpiresAt } = await createCompanionCredentialWindow(deps));
     metadata = {
       ...grant.metadata,
       clientName: normalizeOptionalDeviceAccessText(input.clientName, 120),
@@ -1943,8 +1956,8 @@ export async function exchangeCompanionSessionFromDeviceGrant(
       contractId: COMPANION_CONTRACT_ID,
     };
 
-    deps.gatewaySql
-      .prepare(
+    await (
+      await deps.gatewaySql.prepare(
         `
       UPDATE companion_sessions
       SET revoked_at = COALESCE(revoked_at, @revokedAt)
@@ -1952,13 +1965,13 @@ export async function exchangeCompanionSessionFromDeviceGrant(
         AND revoked_at IS NULL
     `,
       )
-      .run({
-        grantId: normalizedGrantId,
-        revokedAt: issuedAt,
-      });
+    ).run({
+      grantId: normalizedGrantId,
+      revokedAt: issuedAt,
+    });
 
-    deps.gatewaySql
-      .prepare(
+    await (
+      await deps.gatewaySql.prepare(
         `
       INSERT INTO companion_sessions (
         session_id,
@@ -1989,23 +2002,23 @@ export async function exchangeCompanionSessionFromDeviceGrant(
       )
     `,
       )
-      .run({
-        sessionId,
-        grantId: normalizedGrantId,
-        accessTokenHash: hashSensitiveToken(accessToken),
-        accessTokenExpiresAt,
-        refreshTokenHash: hashSensitiveToken(refreshToken),
-        refreshTokenExpiresAt,
-        signingPublicKeyPem,
-        signatureAlgorithm: COMPANION_SIGNATURE_ALGORITHM,
-        createdAt: issuedAt,
-        lastRotatedAt: issuedAt,
-        metadataJson: JSON.stringify(metadata),
-        principalPurpose,
-      });
+    ).run({
+      sessionId,
+      grantId: normalizedGrantId,
+      accessTokenHash: hashSensitiveToken(accessToken),
+      accessTokenExpiresAt,
+      refreshTokenHash: hashSensitiveToken(refreshToken),
+      refreshTokenExpiresAt,
+      signingPublicKeyPem,
+      signatureAlgorithm: COMPANION_SIGNATURE_ALGORITHM,
+      createdAt: issuedAt,
+      lastRotatedAt: issuedAt,
+      metadataJson: JSON.stringify(metadata),
+      principalPurpose,
+    });
 
-    const finalGrant = deps.gatewaySql
-      .prepare(
+    const finalGrant = await (
+      await deps.gatewaySql.prepare(
         `
           SELECT grant_id
           FROM auth_device_grants
@@ -2015,7 +2028,7 @@ export async function exchangeCompanionSessionFromDeviceGrant(
           LIMIT 1
         `,
       )
-      .get({ grantId });
+    ).get({ grantId });
     if (!finalGrant) {
       throw new ConflictError({
         message: "Device access grant expired before the companion session was committed.",
@@ -2072,8 +2085,8 @@ export async function rotateCompanionSession(
   const nextRefreshToken = `gccr_${randomBytes(COMPANION_REFRESH_TOKEN_BYTES).toString("base64url")}`;
   const currentRefreshTokenHash = hashSensitiveToken(refreshToken);
   const clock = getAuthDatabaseClockSql(deps);
-  const candidate = deps.gatewaySql
-    .prepare(
+  const candidate = await (
+    await deps.gatewaySql.prepare(
       `
         SELECT session_id, grant_id
         FROM companion_sessions
@@ -2081,7 +2094,7 @@ export async function rotateCompanionSession(
         LIMIT 1
       `,
     )
-    .get<{ session_id?: unknown; grant_id?: unknown }>({ refreshTokenHash: currentRefreshTokenHash });
+  ).get<{ session_id?: unknown; grant_id?: unknown }>({ refreshTokenHash: currentRefreshTokenHash });
   if (typeof candidate?.session_id !== "string" || typeof candidate.grant_id !== "string") {
     throw new NotFoundError("Companion session not found.");
   }
@@ -2090,9 +2103,9 @@ export async function rotateCompanionSession(
   let accessTokenExpiresAt = "";
   let refreshTokenExpiresAt = "";
 
-  deps.storage.runImmediateTransaction(() => {
-    const grantRow = deps.gatewaySql
-      .prepare(
+  await deps.storage.runImmediateTransaction(async () => {
+    const grantRow = (await (
+      await deps.gatewaySql.prepare(
         `
           SELECT *
           FROM auth_device_grants
@@ -2102,12 +2115,12 @@ export async function rotateCompanionSession(
           LIMIT 1${clock.lockRow}
         `,
       )
-      .get({ grantId: candidate.grant_id }) as Record<string, unknown> | undefined;
+    ).get({ grantId: candidate.grant_id })) as Record<string, unknown> | undefined;
     if (!grantRow) {
       throw new NotFoundError("Companion session not found.");
     }
-    const sessionRow = deps.gatewaySql
-      .prepare(
+    const sessionRow = (await (
+      await deps.gatewaySql.prepare(
         `
           SELECT *
           FROM companion_sessions
@@ -2119,11 +2132,11 @@ export async function rotateCompanionSession(
           LIMIT 1${clock.lockRow}
         `,
       )
-      .get({
-        sessionId: candidate.session_id,
-        grantId: candidate.grant_id,
-        refreshTokenHash: currentRefreshTokenHash,
-      }) as Record<string, unknown> | undefined;
+    ).get({
+      sessionId: candidate.session_id,
+      grantId: candidate.grant_id,
+      refreshTokenHash: currentRefreshTokenHash,
+    })) as Record<string, unknown> | undefined;
     if (!sessionRow) {
       throw new NotFoundError("Companion session not found.");
     }
@@ -2135,10 +2148,10 @@ export async function rotateCompanionSession(
       grant_expires_at: grantRow.expires_at,
       grant_revoked_at: grantRow.revoked_at,
     });
-    ({ issuedAt, accessTokenExpiresAt, refreshTokenExpiresAt } = createCompanionCredentialWindow(deps));
+    ({ issuedAt, accessTokenExpiresAt, refreshTokenExpiresAt } = await createCompanionCredentialWindow(deps));
 
-    const result = deps.gatewaySql
-      .prepare(
+    const result = await (
+      await deps.gatewaySql.prepare(
         `
           UPDATE companion_sessions
           SET access_token_hash = @accessTokenHash,
@@ -2160,24 +2173,24 @@ export async function rotateCompanionSession(
             )
         `,
       )
-      .run({
-        sessionId: session.sessionId,
-        currentRefreshTokenHash,
-        accessTokenHash: hashSensitiveToken(nextAccessToken),
-        accessTokenExpiresAt,
-        refreshTokenHash: hashSensitiveToken(nextRefreshToken),
-        refreshTokenExpiresAt,
-        lastRotatedAt: issuedAt,
-        lastSeenAt: issuedAt,
-      });
+    ).run({
+      sessionId: session.sessionId,
+      currentRefreshTokenHash,
+      accessTokenHash: hashSensitiveToken(nextAccessToken),
+      accessTokenExpiresAt,
+      refreshTokenHash: hashSensitiveToken(nextRefreshToken),
+      refreshTokenExpiresAt,
+      lastRotatedAt: issuedAt,
+      lastSeenAt: issuedAt,
+    });
     if (result.changes === 0) {
       throw new ConflictError({
         message: "Companion session refresh token has already been rotated.",
       });
     }
 
-    const finalSession = deps.gatewaySql
-      .prepare(
+    const finalSession = await (
+      await deps.gatewaySql.prepare(
         `
           SELECT s.session_id
           FROM companion_sessions s
@@ -2192,7 +2205,7 @@ export async function rotateCompanionSession(
           LIMIT 1
         `,
       )
-      .get({ sessionId: session.sessionId, refreshTokenHash: hashSensitiveToken(nextRefreshToken) });
+    ).get({ sessionId: session.sessionId, refreshTokenHash: hashSensitiveToken(nextRefreshToken) });
     if (!finalSession) {
       throw new ConflictError({
         message: "Companion session expired before refresh was committed.",
@@ -2226,13 +2239,13 @@ export async function rotateCompanionSession(
   };
 }
 
-export function getActiveCompanionSessionById(
+export async function getActiveCompanionSessionById(
   deps: SettingsAuthRuntimeDependencies,
   sessionId: string,
-): CompanionSessionRecord | undefined {
+): Promise<CompanionSessionRecord | undefined> {
   const clock = getAuthDatabaseClockSql(deps);
-  const row = deps.gatewaySql
-    .prepare(
+  const row = (await (
+    await deps.gatewaySql.prepare(
       `
         SELECT
           s.*,
@@ -2252,13 +2265,13 @@ export function getActiveCompanionSessionById(
         LIMIT 1
       `,
     )
-    .get({ sessionId }) as Record<string, unknown> | undefined;
+  ).get({ sessionId })) as Record<string, unknown> | undefined;
   if (row) {
     return mapCompanionSessionRow(row);
   }
 
-  deps.gatewaySql
-    .prepare(
+  await (
+    await deps.gatewaySql.prepare(
       `
         UPDATE companion_sessions
         SET revoked_at = COALESCE(revoked_at, ${clock.nowText})
@@ -2278,17 +2291,17 @@ export function getActiveCompanionSessionById(
           )
       `,
     )
-    .run({ sessionId });
+  ).run({ sessionId });
   return undefined;
 }
 
-export function getCompanionSessionById(
+export async function getCompanionSessionById(
   deps: SettingsAuthRuntimeDependencies,
   sessionId: string,
   forUpdate = false,
-): CompanionSessionRecord | undefined {
-  const row = deps.gatewaySql
-    .prepare(
+): Promise<CompanionSessionRecord | undefined> {
+  const row = (await (
+    await deps.gatewaySql.prepare(
       `
       SELECT
         s.*,
@@ -2304,23 +2317,23 @@ export function getCompanionSessionById(
       LIMIT 1${forUpdate && deps.gatewaySql.dialect === "postgres" ? " FOR UPDATE OF s" : ""}
     `,
     )
-    .get({
-      sessionId,
-    }) as Record<string, unknown> | undefined;
+  ).get({
+    sessionId,
+  })) as Record<string, unknown> | undefined;
   if (!row) {
     return undefined;
   }
   return mapCompanionSessionRow(row);
 }
 
-export function getActiveCompanionSessionByRefreshToken(
+export async function getActiveCompanionSessionByRefreshToken(
   deps: SettingsAuthRuntimeDependencies,
   refreshToken: string,
-): CompanionSessionRecord | undefined {
+): Promise<CompanionSessionRecord | undefined> {
   const clock = getAuthDatabaseClockSql(deps);
   const refreshTokenHash = hashSensitiveToken(refreshToken);
-  const row = deps.gatewaySql
-    .prepare(
+  const row = (await (
+    await deps.gatewaySql.prepare(
       `
       SELECT
         s.*,
@@ -2340,15 +2353,15 @@ export function getActiveCompanionSessionByRefreshToken(
       LIMIT 1
     `,
     )
-    .get({
-      refreshTokenHash,
-    }) as Record<string, unknown> | undefined;
+  ).get({
+    refreshTokenHash,
+  })) as Record<string, unknown> | undefined;
   if (row) {
     return mapCompanionSessionRow(row);
   }
 
-  deps.gatewaySql
-    .prepare(
+  await (
+    await deps.gatewaySql.prepare(
       `
         UPDATE companion_sessions
         SET revoked_at = COALESCE(revoked_at, ${clock.nowText})
@@ -2357,29 +2370,29 @@ export function getActiveCompanionSessionByRefreshToken(
           AND ${clock.isExpiredOrInvalid("refresh_token_expires_at")}
       `,
     )
-    .run({ refreshTokenHash });
+  ).run({ refreshTokenHash });
   return undefined;
 }
 
-export function getCompanionSessionInfo(
+export async function getCompanionSessionInfo(
   deps: SettingsAuthRuntimeDependencies,
   sessionId: string,
-): CompanionSessionInfoResponse {
-  const session = getActiveCompanionSessionById(deps, sessionId);
+): Promise<CompanionSessionInfoResponse> {
+  const session = await getActiveCompanionSessionById(deps, sessionId);
   if (!session) {
     throw new NotFoundError("Companion session not found.");
   }
   return toCompanionSessionInfoResponse(session);
 }
 
-export function listCompanionSessions(
+export async function listCompanionSessions(
   deps: SettingsAuthRuntimeDependencies,
   options?: {
     view?: "active" | "all";
     grantId?: string;
     limit?: number;
   },
-): CompanionSessionListResponse {
+): Promise<CompanionSessionListResponse> {
   const view = options?.view === "all" ? "all" : "active";
   const limit = clampInt(options?.limit, 50, 1, 200);
   const grantId = options?.grantId?.trim();
@@ -2410,24 +2423,24 @@ export function listCompanionSessions(
     ORDER BY s.created_at DESC, s.session_id DESC
     LIMIT @limit
   `;
-  const rows = deps.gatewaySql
-    .prepare(
+  const rows = (await (
+    await deps.gatewaySql.prepare(
       `
     ${query}
   `,
     )
-    .all(grantId ? { grantId, limit } : { limit }) as Record<string, unknown>[];
+  ).all(grantId ? { grantId, limit } : { limit })) as Record<string, unknown>[];
 
   return {
     items: rows.map(mapCompanionSessionRow).map(toCompanionSessionAdminRecord),
   };
 }
 
-export function getCompanionSessionRecord(
+export async function getCompanionSessionRecord(
   deps: SettingsAuthRuntimeDependencies,
   sessionId: string,
-): CompanionSessionAdminRecord {
-  const session = getCompanionSessionById(deps, sessionId);
+): Promise<CompanionSessionAdminRecord> {
+  const session = await getCompanionSessionById(deps, sessionId);
   if (!session) {
     throw new NotFoundError("Companion session not found.");
   }
@@ -2443,24 +2456,24 @@ export async function revokeCompanionSession(
   const normalizedSessionId = requireAuthRevokeIdentifier(sessionId, "sessionId");
   const normalizedRevokedBy = requireAuthRevokeIdentifier(revokedBy, "revokedBy");
   let updated!: CompanionSessionRecord;
-  deps.storage.runImmediateTransaction(() => {
+  await deps.storage.runImmediateTransaction(async () => {
     const revokeIdentity = buildAuthControlRevokeIdentity(
       "companion_session",
       normalizedSessionId,
       normalizedRevokedBy,
     );
-    deps.storage.sessionControls.revokeByAuthBinding(revokeIdentity);
-    const session = getCompanionSessionById(deps, normalizedSessionId, true);
+    await deps.storage.sessionControls.revokeByAuthBinding(revokeIdentity);
+    const session = await getCompanionSessionById(deps, normalizedSessionId, true);
     if (!session) throw new NotFoundError("Companion session not found.");
-    const revokedAt = deps.gatewaySql.readDatabaseNow();
-    deps.gatewaySql
-      .prepare(
+    const revokedAt = await deps.gatewaySql.readDatabaseNow();
+    await (
+      await deps.gatewaySql.prepare(
         `UPDATE companion_sessions
          SET revoked_at = COALESCE(revoked_at, @revokedAt)
          WHERE session_id = @sessionId`,
       )
-      .run({ sessionId: normalizedSessionId, revokedAt });
-    updated = getCompanionSessionById(deps, normalizedSessionId) ?? { ...session, revokedAt };
+    ).run({ sessionId: normalizedSessionId, revokedAt });
+    updated = (await getCompanionSessionById(deps, normalizedSessionId)) ?? { ...session, revokedAt };
   });
   const record = toCompanionSessionAdminRecord(updated);
 
@@ -2478,7 +2491,7 @@ export async function revokeCompanionSession(
     platform: record.platform,
   });
 
-  deps.publishRealtime(
+  await deps.publishRealtime(
     "auth_companion_session_revoked",
     "auth",
     {
@@ -2556,7 +2569,7 @@ export async function recordApprovalResolution(
     decision: input.decision,
   });
 
-  deps.publishRealtime(
+  await deps.publishRealtime(
     "approval_resolved",
     "approvals",
     {
@@ -2586,14 +2599,14 @@ export function recordApprovalResolutionSignals(
   deps.handleActivationApprovalResolution(approval);
 }
 
-export function validateCompanionAccessToken(
+export async function validateCompanionAccessToken(
   deps: SettingsAuthRuntimeDependencies,
   token: string,
-): CompanionAccessValidationResult | undefined {
+): Promise<CompanionAccessValidationResult | undefined> {
   const tokenHash = hashSensitiveToken(token);
   const clock = getAuthDatabaseClockSql(deps);
-  const candidate = deps.gatewaySql
-    .prepare(
+  const candidate = await (
+    await deps.gatewaySql.prepare(
       `
         SELECT session_id, grant_id
         FROM companion_sessions
@@ -2601,15 +2614,15 @@ export function validateCompanionAccessToken(
         LIMIT 1
       `,
     )
-    .get<{ session_id?: unknown; grant_id?: unknown }>({ tokenHash });
+  ).get<{ session_id?: unknown; grant_id?: unknown }>({ tokenHash });
   if (typeof candidate?.session_id !== "string" || typeof candidate.grant_id !== "string") {
     return undefined;
   }
   let session: CompanionSessionRecord | undefined;
 
-  deps.storage.runImmediateTransaction(() => {
-    const grantRow = deps.gatewaySql
-      .prepare(
+  await deps.storage.runImmediateTransaction(async () => {
+    const grantRow = (await (
+      await deps.gatewaySql.prepare(
         `
           SELECT *
           FROM auth_device_grants
@@ -2619,12 +2632,12 @@ export function validateCompanionAccessToken(
           LIMIT 1${clock.lockRow}
         `,
       )
-      .get({ grantId: candidate.grant_id }) as Record<string, unknown> | undefined;
+    ).get({ grantId: candidate.grant_id })) as Record<string, unknown> | undefined;
     if (!grantRow) {
       return;
     }
-    const sessionRow = deps.gatewaySql
-      .prepare(
+    const sessionRow = (await (
+      await deps.gatewaySql.prepare(
         `
           SELECT *
           FROM companion_sessions
@@ -2636,7 +2649,7 @@ export function validateCompanionAccessToken(
           LIMIT 1${clock.lockRow}
         `,
       )
-      .get({ sessionId: candidate.session_id, grantId: candidate.grant_id, tokenHash }) as
+    ).get({ sessionId: candidate.session_id, grantId: candidate.grant_id, tokenHash })) as
       | Record<string, unknown>
       | undefined;
     if (!sessionRow) {
@@ -2651,27 +2664,27 @@ export function validateCompanionAccessToken(
       grant_revoked_at: grantRow.revoked_at,
     });
 
-    deps.gatewaySql
-      .prepare(
+    await (
+      await deps.gatewaySql.prepare(
         `
           UPDATE companion_sessions
           SET last_seen_at = ${clock.nowText}
           WHERE session_id = @sessionId
         `,
       )
-      .run({ sessionId: session.sessionId });
-    deps.gatewaySql
-      .prepare(
+    ).run({ sessionId: session.sessionId });
+    await (
+      await deps.gatewaySql.prepare(
         `
           UPDATE auth_device_grants
           SET last_used_at = ${clock.nowText}
           WHERE grant_id = @grantId
         `,
       )
-      .run({ grantId: session.grantId });
+    ).run({ grantId: session.grantId });
 
-    const finalSession = deps.gatewaySql
-      .prepare(
+    const finalSession = await (
+      await deps.gatewaySql.prepare(
         `
           SELECT s.session_id
           FROM companion_sessions s
@@ -2686,7 +2699,7 @@ export function validateCompanionAccessToken(
           LIMIT 1
         `,
       )
-      .get({ sessionId: session.sessionId, tokenHash });
+    ).get({ sessionId: session.sessionId, tokenHash });
     if (!finalSession) {
       session = undefined;
     }
@@ -2705,7 +2718,7 @@ export function validateCompanionAccessToken(
   };
 }
 
-export function verifyCompanionRequestSignature(
+export async function verifyCompanionRequestSignature(
   deps: SettingsAuthRuntimeDependencies,
   input: {
     sessionId: string;
@@ -2716,14 +2729,14 @@ export function verifyCompanionRequestSignature(
     signature: string;
     body: unknown;
   },
-): void {
-  const session = getActiveCompanionSessionById(deps, input.sessionId);
+): Promise<void> {
+  const session = await getActiveCompanionSessionById(deps, input.sessionId);
   if (!session) {
-    rejectInactiveCompanionRequest(deps, input);
+    return await rejectInactiveCompanionRequest(deps, input);
   }
 
-  if (!deps.gatewaySql.isDatabaseInstantWithinSkew(input.timestamp, COMPANION_REQUEST_CLOCK_SKEW_MS)) {
-    rejectStaleCompanionRequest(deps, session, input);
+  if (!(await deps.gatewaySql.isDatabaseInstantWithinSkew(input.timestamp, COMPANION_REQUEST_CLOCK_SKEW_MS))) {
+    await rejectStaleCompanionRequest(deps, session, input);
   }
 
   const nonce = normalizeCompanionNonce(input.nonce);
@@ -2741,7 +2754,7 @@ export function verifyCompanionRequestSignature(
   const signatureBuffer = decodeBase64Url(signature);
   const publicKey = createPublicKey(session.signingPublicKeyPem);
   if (!verify(null, Buffer.from(payload, "utf8"), publicKey, signatureBuffer)) {
-    void deps.storage.audit.append("approvals", {
+    void (await deps.storage.audit.append("approvals", {
       event: "auth.companion_request.signature_invalid",
       actorId: `companion:${session.sessionId}`,
       deviceId: session.grantId,
@@ -2753,28 +2766,28 @@ export function verifyCompanionRequestSignature(
       path,
       nonce,
       requestHash,
-    });
+    }));
     throw new Error("Invalid companion request signature.");
   }
 
   const clock = getAuthDatabaseClockSql(deps);
   try {
-    deps.storage.runImmediateTransaction(() => {
-      deps.gatewaySql
-        .prepare(
+    await deps.storage.runImmediateTransaction(async () => {
+      await (
+        await deps.gatewaySql.prepare(
           `
             DELETE FROM companion_request_replays
             WHERE ${clock.isValidAndExpired("expires_at")}
           `,
         )
-        .run();
+      ).run();
 
-      if (!deps.gatewaySql.isDatabaseInstantWithinSkew(input.timestamp, COMPANION_REQUEST_CLOCK_SKEW_MS)) {
+      if (!(await deps.gatewaySql.isDatabaseInstantWithinSkew(input.timestamp, COMPANION_REQUEST_CLOCK_SKEW_MS))) {
         throw new CompanionRequestTimestampBoundaryError();
       }
-      const { createdAt, expiresAt } = deps.gatewaySql.createDatabaseTtlWindow(COMPANION_REQUEST_REPLAY_TTL_MS);
-      const inserted = deps.gatewaySql
-        .prepare(
+      const { createdAt, expiresAt } = await deps.gatewaySql.createDatabaseTtlWindow(COMPANION_REQUEST_REPLAY_TTL_MS);
+      const inserted = await (
+        await deps.gatewaySql.prepare(
           `
             INSERT INTO companion_request_replays (
               session_id,
@@ -2806,15 +2819,15 @@ export function verifyCompanionRequestSignature(
             )
           `,
         )
-        .run({
-          sessionId: session.sessionId,
-          nonce,
-          method,
-          path,
-          requestHash,
-          createdAt,
-          expiresAt,
-        });
+      ).run({
+        sessionId: session.sessionId,
+        nonce,
+        method,
+        path,
+        requestHash,
+        createdAt,
+        expiresAt,
+      });
       if (inserted.changes !== 1) {
         throw new CompanionRequestSessionBoundaryError();
       }
@@ -2822,13 +2835,13 @@ export function verifyCompanionRequestSignature(
       // The INSERT can wait on a competing nonce. Re-prove all authority at
       // the actual acceptance boundary before committing the tombstone.
       if (
-        !deps.gatewaySql.isDatabaseInstantWithinSkew(input.timestamp, COMPANION_REQUEST_CLOCK_SKEW_MS) ||
-        !deps.gatewaySql.isDatabaseInstantFuture(expiresAt)
+        !(await deps.gatewaySql.isDatabaseInstantWithinSkew(input.timestamp, COMPANION_REQUEST_CLOCK_SKEW_MS)) ||
+        !(await deps.gatewaySql.isDatabaseInstantFuture(expiresAt))
       ) {
         throw new CompanionRequestTimestampBoundaryError();
       }
-      const finalSession = deps.gatewaySql
-        .prepare(
+      const finalSession = await (
+        await deps.gatewaySql.prepare(
           `
             SELECT s.session_id
             FROM companion_sessions s
@@ -2842,19 +2855,19 @@ export function verifyCompanionRequestSignature(
             LIMIT 1
           `,
         )
-        .get({ sessionId: session.sessionId });
+      ).get({ sessionId: session.sessionId });
       if (!finalSession) {
         throw new CompanionRequestSessionBoundaryError();
       }
     });
   } catch (error) {
     if (error instanceof CompanionRequestTimestampBoundaryError) {
-      rejectStaleCompanionRequest(deps, session, input);
+      return await rejectStaleCompanionRequest(deps, session, input);
     }
     if (error instanceof CompanionRequestSessionBoundaryError) {
-      rejectInactiveCompanionRequest(deps, input, session);
+      return await rejectInactiveCompanionRequest(deps, input, session);
     }
-    void deps.storage.audit.append("approvals", {
+    void (await deps.storage.audit.append("approvals", {
       event: "auth.companion_request.replay_rejected",
       actorId: `companion:${session.sessionId}`,
       deviceId: session.grantId,
@@ -2866,11 +2879,11 @@ export function verifyCompanionRequestSignature(
       path,
       nonce,
       requestHash,
-    });
+    }));
     throw new Error("Companion request replay detected.", { cause: error });
   }
 
-  void deps.storage.audit.append("approvals", {
+  void (await deps.storage.audit.append("approvals", {
     event: "auth.companion_request.accepted",
     actorId: `companion:${session.sessionId}`,
     deviceId: session.grantId,
@@ -2881,7 +2894,7 @@ export function verifyCompanionRequestSignature(
     path,
     nonce,
     requestHash,
-  });
+  }));
 }
 
 class CompanionRequestTimestampBoundaryError extends Error {}
@@ -2912,7 +2925,7 @@ function buildAuthControlRevokeIdentity(
   } as const;
 }
 
-function rejectStaleCompanionRequest(
+async function rejectStaleCompanionRequest(
   deps: SettingsAuthRuntimeDependencies,
   session: CompanionSessionRecord,
   input: {
@@ -2921,8 +2934,8 @@ function rejectStaleCompanionRequest(
     timestamp: string;
     nonce: string;
   },
-): never {
-  void deps.storage.audit.append("approvals", {
+): Promise<never> {
+  void (await deps.storage.audit.append("approvals", {
     event: "auth.companion_request.timestamp_invalid",
     actorId: `companion:${session.sessionId}`,
     deviceId: session.grantId,
@@ -2933,16 +2946,16 @@ function rejectStaleCompanionRequest(
     method: input.method.toUpperCase(),
     path: input.path,
     nonce: input.nonce,
-  });
+  }));
   throw new Error("Companion request timestamp is outside the accepted skew window.");
 }
 
-function rejectInactiveCompanionRequest(
+async function rejectInactiveCompanionRequest(
   deps: SettingsAuthRuntimeDependencies,
   input: { sessionId: string; method: string; path: string },
   session?: CompanionSessionRecord,
-): never {
-  void deps.storage.audit.append("approvals", {
+): Promise<never> {
+  void (await deps.storage.audit.append("approvals", {
     event: "auth.companion_request.session_inactive",
     actorId: `companion:${session?.sessionId ?? input.sessionId}`,
     deviceId: session?.grantId,
@@ -2952,7 +2965,7 @@ function rejectInactiveCompanionRequest(
     detail: "Companion session is no longer active.",
     method: input.method.toUpperCase(),
     path: input.path,
-  });
+  }));
   throw new Error("Companion session is no longer active.");
 }
 

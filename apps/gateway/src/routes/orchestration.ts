@@ -89,7 +89,7 @@ export const orchestrationRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(orchestration.previewRecipe(parsed.data));
+      return reply.send(await orchestration.previewRecipe(parsed.data));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -101,7 +101,7 @@ export const orchestrationRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(orchestration.draftAutomationRecipe(parsed.data));
+      return reply.send(await orchestration.draftAutomationRecipe(parsed.data));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -113,7 +113,7 @@ export const orchestrationRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(orchestration.exportActivepiecesTemplate(parsed.data));
+      return reply.send(await orchestration.exportActivepiecesTemplate(parsed.data));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -125,7 +125,7 @@ export const orchestrationRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(orchestration.exportN8nTemplate(parsed.data));
+      return reply.send(await orchestration.exportN8nTemplate(parsed.data));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -250,7 +250,7 @@ export const orchestrationRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(
-        projectOrchestrationRunResponse(orchestration.getRun(params.data.runId, query.data.workspaceId)),
+        projectOrchestrationRunResponse(await orchestration.getRun(params.data.runId, query.data.workspaceId)),
       );
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -268,9 +268,9 @@ export const orchestrationRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send({
-        items: orchestration
-          .listRunCheckpoints(params.data.runId, query.data.workspaceId)
-          .map((checkpoint) => projectOrchestrationPublicValue(checkpoint)),
+        items: (await orchestration.listRunCheckpoints(params.data.runId, query.data.workspaceId)).map((checkpoint) =>
+          projectOrchestrationPublicValue(checkpoint),
+        ),
       });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -287,7 +287,7 @@ export const orchestrationRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: query.error.flatten() });
     }
     try {
-      return reply.send(orchestration.getRunTrace(params.data.runId, query.data.workspaceId));
+      return reply.send(await orchestration.getRunTrace(params.data.runId, query.data.workspaceId));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -303,11 +303,11 @@ export const orchestrationRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: query.error.flatten() });
     }
     try {
-      orchestration.getRun(params.data.runId, query.data.workspaceId);
+      await orchestration.getRun(params.data.runId, query.data.workspaceId);
       return reply.send({
-        items: orchestration
-          .listRunContexts(params.data.runId)
-          .map((context) => projectOrchestrationPublicValue(context)),
+        items: (await orchestration.listRunContexts(params.data.runId)).map((context) =>
+          projectOrchestrationPublicValue(context),
+        ),
       });
     } catch (error) {
       return sendRouteError(reply, error, request.log);

@@ -27,13 +27,13 @@ import {
   type WorkspacePathBridgeReasonCode,
   type WardEffect,
 } from "@goatcitadel/contracts";
-import type { ApprovalInboxRepository } from "@goatcitadel/storage";
 import { ToolExecutionPreconditionError, type ToolProcessSpawnBoundary } from "@goatcitadel/policy-engine";
 import type { HooksService } from "./hooks-service.js";
 import { parseToolCallHookPatch } from "./hook-patch-helpers.js";
 import {
   handleInternalMcpApprovalInboxInvoke,
   isInternalMcpApprovalInboxServer,
+  type ApprovalInboxPort,
   type ListMcpElicitations,
   type RespondToMcpElicitation,
 } from "./mcp-approval-inbox.js";
@@ -420,7 +420,7 @@ function createDeepWorkspacePathBridgePrecondition(input: {
   invocationId: string;
   snapshotIds: string[];
   signal?: AbortSignal;
-  executionFence?: () => void;
+  executionFence?: () => Promise<void>;
 }): (boundary?: ToolProcessSpawnBoundary) => Promise<void> {
   return async (boundary) => {
     if (input.signal?.aborted) {
@@ -458,7 +458,7 @@ function createDeepWorkspacePathBridgePrecondition(input: {
     if (input.signal?.aborted) {
       throw executionPreconditionFromResult(buildToolInvocationCancelledResult());
     }
-    input.executionFence?.();
+    await input.executionFence?.();
     if (input.signal?.aborted) {
       throw executionPreconditionFromResult(buildToolInvocationCancelledResult());
     }
@@ -562,21 +562,18 @@ export interface RequesterScopedMcpDispatchInput {
 export interface RequesterScopedMcpDispatchPort {
   invoke(
     input: RequesterScopedMcpDispatchInput,
-    options: { effectDispatch: () => void },
+    options: { effectDispatch: () => Promise<void> },
   ): Promise<McpRuntimeInvocationResult>;
 }
 
 export interface ToolInvocationCoordinatorHost {
-  readonly approvalInbox: Pick<
-    ApprovalInboxRepository,
-    "receiveMcpApprovalDelivery" | "listByReceiver" | "get" | "markResolved"
-  >;
+  readonly approvalInbox: ApprovalInboxPort;
   readonly durableTasks: McpDurableTasksPort;
   readonly respondToMcpElicitation: RespondToMcpElicitation;
   readonly listMcpElicitations: ListMcpElicitations;
   /** Required capability-scope gate. Throws when the requested MCP server is not
    *  available in the active workspace/citadel scope. Missing wiring fails closed. */
-  assertMcpServerInScope?: (request: McpInvokeRequest) => void;
+  assertMcpServerInScope?: (request: McpInvokeRequest) => Promise<void>;
   readonly policyEngine: {
     invoke(
       request: ToolInvokeRequest,
@@ -595,14 +592,14 @@ export interface ToolInvocationCoordinatorHost {
       agentId: string;
       sessionId: string;
       taskId?: string;
-    }): ToolPolicyAccessResult;
+    }): Promise<ToolPolicyAccessResult>;
   };
   readonly hooksService: Pick<HooksService, "runInlineHooks" | "enqueueAfterHooks">;
-  normalizeToolInvokeRequest(request: ToolInvokeRequest): ToolInvokeRequest;
+  normalizeToolInvokeRequest(request: ToolInvokeRequest): Promise<ToolInvokeRequest>;
   isValidToolName(name: string): boolean;
   evaluateToolDeploymentGuard(request: ToolInvokeRequest): { reason: string } | null | undefined;
-  isFeatureEnabled?(flag: "computerUseGuardrailsV1Enabled"): boolean;
-  resolveToolHookWorkspaceId(request: ToolInvokeRequest): string;
+  isFeatureEnabled?(flag: "computerUseGuardrailsV1Enabled"): Promise<boolean>;
+  resolveToolHookWorkspaceId(request: ToolInvokeRequest): Promise<string>;
   /**
    * Re-resolves any process working directory against current filesystem and
    * Git evidence. Historical snapshot inspection is never execution authority.
@@ -611,23 +608,23 @@ export interface ToolInvocationCoordinatorHost {
     request: ToolInvokeRequest,
     context: WorkspacePathBridgeResolutionContext,
   ): Promise<WorkspacePathBridgeExecutionDecision>;
-  resolveToolCallBeforeHookInterposition?(workspaceId: string): ToolCallBeforeHookInterpositionBinding;
-  primeToolApprovalLifecycle(approvalId: string, request: ToolInvokeRequest): ApprovalRequest;
-  scheduleApprovalExplanationById(approvalId: string): void;
+  resolveToolCallBeforeHookInterposition?(workspaceId: string): Promise<ToolCallBeforeHookInterpositionBinding>;
+  primeToolApprovalLifecycle(approvalId: string, request: ToolInvokeRequest): Promise<ApprovalRequest>;
+  scheduleApprovalExplanationById(approvalId: string): Promise<void>;
   evaluateAutonomousActivationGrant?(
     input: AutonomousActivationGrantEvaluationInput,
-  ): AutonomousActivationGrantEvaluationResult;
-  recordAutonomousActivationGrantUse?(grantId: string, estimatedCostUsd?: number): void;
+  ): Promise<AutonomousActivationGrantEvaluationResult>;
+  recordAutonomousActivationGrantUse?(grantId: string, estimatedCostUsd?: number): Promise<unknown>;
   publishRealtime(
     eventType: string,
     source: string,
     payload: Record<string, unknown>,
     options?: RealtimePublishOptions,
-  ): void;
-  requireMcpServer(serverId: string): McpServerRecord;
-  listMcpTools(serverId: string): McpToolRecord[];
+  ): Promise<unknown>;
+  requireMcpServer(serverId: string): Promise<McpServerRecord>;
+  listMcpTools(serverId: string): Promise<McpToolRecord[]>;
   matchesWildcard(value: string, pattern: string): boolean;
-  isMcpToolApproved(serverId: string, toolName: string): boolean;
+  isMcpToolApproved(serverId: string, toolName: string): Promise<boolean>;
   invokeMcpRuntimeTool(
     server: McpServerRecord,
     input: Pick<McpInvokeRequest, "toolName" | "arguments" | "signal">,
@@ -651,7 +648,7 @@ export interface ToolInvocationCoordinatorHost {
     output: Record<string, unknown>,
     mode: McpServerRecord["policy"]["redactionMode"],
   ): Record<string, unknown>;
-  recordEvidenceEnvelope?(input: EvidenceEnvelopeCreateRequest): void;
+  recordEvidenceEnvelope?(input: EvidenceEnvelopeCreateRequest): Promise<unknown>;
   recordDevDiagnostic?(input: {
     level: "debug" | "info" | "warn" | "error";
     category: string;
@@ -688,13 +685,13 @@ export interface ToolInvocationRuntimeOptions {
    */
   mcpRequesterTurnContext?: McpRequesterScopedTurnContextHandle;
   /** Process-local durable fence immediately before the main tool executor. */
-  executionFence?: () => void;
+  executionFence?: () => Promise<void>;
   /**
    * Process-local durable fence immediately before an auxiliary hook effect.
    * This is deliberately distinct from the main executor boundary so an
    * approval decision reached after a webhook remains actionable.
    */
-  auxiliaryEffectFence?: () => void;
+  auxiliaryEffectFence?: () => Promise<void>;
   /** Process-local concrete external-side-effect boundary; never serialize this object. */
   externalSideEffect?: ToolExternalSideEffectBoundary;
   /**
@@ -713,7 +710,7 @@ export interface ToolInvocationRuntimeOptions {
    * Called before the execution fence when an allowed runtime-owner override
    * invalidates a frozen `none` classification.
    */
-  onEffectPotentialEscalated?: (potential: ToolEffectPotentialRecord) => void;
+  onEffectPotentialEscalated?: (potential: ToolEffectPotentialRecord) => Promise<void>;
   /**
    * Reserved owner-to-caller receipt channel. Until a canonical owner invokes
    * this after committing a matching receipt, concrete Chat settlement remains
@@ -809,9 +806,13 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     );
   }
 
-  private runPostCommitConsumer(consumer: string, request: ToolInvokeRequest, callback: () => void): void {
+  private async runPostCommitConsumer(
+    consumer: string,
+    request: ToolInvokeRequest,
+    callback: () => void | Promise<void>,
+  ): Promise<void> {
     try {
-      callback();
+      await callback();
     } catch (error) {
       try {
         this.host.recordDevDiagnostic?.({
@@ -865,7 +866,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
   ): Promise<McpPolicyEvaluation> {
     const request = this.buildMcpPolicyRequest(input);
     return {
-      access: this.host.policyEngine.evaluateAccess(request),
+      access: await this.host.policyEngine.evaluateAccess(request),
       decision: await this.host.policyEngine.invoke({
         ...request,
         dryRun: options?.externalRuntime === true ? undefined : true,
@@ -933,7 +934,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       };
     }
 
-    const normalizedRequest = this.host.normalizeToolInvokeRequest(request);
+    const normalizedRequest = await this.host.normalizeToolInvokeRequest(request);
     if (containsRawApprovalActionBearer(normalizedRequest.args)) {
       return {
         outcome: "blocked",
@@ -942,11 +943,11 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       };
     }
     const isCodeModeWrapperInvocation = Boolean(normalizedRequest.policyContext?.approvedCodeModeRunId);
-    const toolHookWorkspaceId = this.host.resolveToolHookWorkspaceId(normalizedRequest);
+    const toolHookWorkspaceId = await this.host.resolveToolHookWorkspaceId(normalizedRequest);
     const toolHookEntityId = `${normalizedRequest.sessionId}:${randomUUID()}`;
     let admittedToolCallBeforeHookInterposition: ToolCallBeforeHookInterpositionBinding | undefined;
     if (options.effectPotential) {
-      const currentInterposition = this.host.resolveToolCallBeforeHookInterposition?.(toolHookWorkspaceId);
+      const currentInterposition = await this.host.resolveToolCallBeforeHookInterposition?.(toolHookWorkspaceId);
       const expected = options.toolCallBeforeHookInterposition;
       const expectedValid =
         expected === undefined ||
@@ -1015,12 +1016,12 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
             ...next,
           }),
           expectedInterposition: admittedToolCallBeforeHookInterposition,
-          beforeExternalDispatch: () => {
+          beforeExternalDispatch: async () => {
             if (options.effectPotential?.potential === "none") {
               if (!options.onEffectPotentialEscalated) {
                 throw new Error("Inline hook dispatch cannot retain an unchangeable no-effect classification.");
               }
-              options.onEffectPotentialEscalated(
+              await options.onEffectPotentialEscalated(
                 classifyToolEffectPotential({
                   toolName: normalizedRequest.toolName,
                   trustedBuiltin: false,
@@ -1028,7 +1029,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
                 }),
               );
             }
-            (options.auxiliaryEffectFence ?? options.executionFence)?.();
+            await (options.auxiliaryEffectFence ?? options.executionFence)?.();
           },
         });
     if (beforeHook.blockedBy) {
@@ -1116,7 +1117,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         auditEventId: randomUUID(),
       };
     }
-    if (this.host.isFeatureEnabled?.("computerUseGuardrailsV1Enabled")) {
+    if (await this.host.isFeatureEnabled?.("computerUseGuardrailsV1Enabled")) {
       const safety = evaluateComputerUseSafety(hookableRequest.toolName, hookableRequest.args ?? {});
       if (safety.requiresVerification && !safety.verified) {
         return {
@@ -1224,7 +1225,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
           return buildPluginRuntimeOwnerDriftResult();
         }
         if (options.effectPotential?.potential === "none") {
-          options.onEffectPotentialEscalated?.(
+          await options.onEffectPotentialEscalated?.(
             classifyToolEffectPotential({
               toolName: hookableRequest.toolName,
               trustedBuiltin: false,
@@ -1265,7 +1266,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
               ? buildToolInvocationCancelledResult()
               : buildPluginRuntimeOwnerDriftResult();
           } else {
-            options.executionFence?.();
+            await options.executionFence?.();
             if (
               !this.isPluginRuntimeOwnerAdmissionCurrent(
                 hookableRequest.toolName,
@@ -1342,7 +1343,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
           retryable: false,
         },
       });
-      this.host.hooksService.enqueueAfterHooks({
+      await this.host.hooksService.enqueueAfterHooks({
         workspaceId: toolHookWorkspaceId,
         trigger: "tool.call.error",
         entityType: "tool_call",
@@ -1374,7 +1375,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
 
     const approvalForResult =
       result.outcome === "approval_required" && result.approvalId
-        ? this.host.primeToolApprovalLifecycle(result.approvalId, executionRequest)
+        ? await this.host.primeToolApprovalLifecycle(result.approvalId, executionRequest)
         : undefined;
     const permissionProfileId =
       hookableRequest.policyContext?.permissionProfileId ?? hookableRequest.permissionProfileId;
@@ -1383,8 +1384,8 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     const linkedRunId =
       hookableRequest.runId ?? hookableRequest.policyContext?.runId ?? approvalForResult?.linkage?.durableRunId;
 
-    this.runPostCommitConsumer("realtime projection", hookableRequest, () => {
-      this.host.publishRealtime(
+    await this.runPostCommitConsumer("realtime projection", hookableRequest, async () => {
+      await this.host.publishRealtime(
         "tool_invoked",
         "policy",
         {
@@ -1414,7 +1415,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       );
     });
 
-    this.runPostCommitConsumer("completion diagnostic", hookableRequest, () => {
+    await this.runPostCommitConsumer("completion diagnostic", hookableRequest, () => {
       this.host.recordDevDiagnostic?.({
         level: result.outcome === "blocked" ? "warn" : "info",
         category: "tools",
@@ -1438,8 +1439,8 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         },
       });
     });
-    this.runPostCommitConsumer("evidence recording", hookableRequest, () => {
-      this.host.recordEvidenceEnvelope?.({
+    await this.runPostCommitConsumer("evidence recording", hookableRequest, async () => {
+      await this.host.recordEvidenceEnvelope?.({
         eventKind: "tool_invocation",
         sessionId: hookableRequest.sessionId,
         runId: linkedRunId,
@@ -1460,13 +1461,13 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     });
 
     if (result.outcome === "approval_required" && result.approvalId) {
-      this.runPostCommitConsumer("approval explanation scheduling", hookableRequest, () => {
-        this.host.scheduleApprovalExplanationById(result.approvalId!);
+      await this.runPostCommitConsumer("approval explanation scheduling", hookableRequest, async () => {
+        await this.host.scheduleApprovalExplanationById(result.approvalId!);
       });
     }
 
-    this.runPostCommitConsumer("tool.call.after hook enqueue", hookableRequest, () => {
-      this.host.hooksService.enqueueAfterHooks({
+    await this.runPostCommitConsumer("tool.call.after hook enqueue", hookableRequest, async () => {
+      await this.host.hooksService.enqueueAfterHooks({
         workspaceId: toolHookWorkspaceId,
         trigger: "tool.call.after",
         entityType: "tool_call",
@@ -1482,8 +1483,8 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         beforeExternalDispatch: options.auxiliaryEffectFence ?? options.executionFence,
       });
     });
-    this.runPostCommitConsumer("lifecycle observe hook enqueue", hookableRequest, () => {
-      runtimeLifecycleHookDispatcher.enqueueObserveHook(this.host.hooksService, {
+    await this.runPostCommitConsumer("lifecycle observe hook enqueue", hookableRequest, async () => {
+      await runtimeLifecycleHookDispatcher.enqueueObserveHook(this.host.hooksService, {
         workspaceId: toolHookWorkspaceId,
         trigger: "after_tool_call",
         entityType: "tool_call",
@@ -1518,7 +1519,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         auditEventId: randomUUID(),
       };
     }
-    const normalizedRequest = this.host.normalizeToolInvokeRequest(request);
+    const normalizedRequest = await this.host.normalizeToolInvokeRequest(request);
     if (containsRawApprovalActionBearer(normalizedRequest.args)) {
       return {
         outcome: "blocked",
@@ -1657,8 +1658,8 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     const localOperatorOverrideId =
       executionRequest.policyContext?.localOperatorOverrideId ?? executionRequest.localOperatorOverrideId;
     const linkedRunId = executionRequest.runId ?? executionRequest.policyContext?.runId;
-    this.runPostCommitConsumer("approved external-runtime realtime projection", executionRequest, () => {
-      this.host.publishRealtime(
+    await this.runPostCommitConsumer("approved external-runtime realtime projection", executionRequest, async () => {
+      await this.host.publishRealtime(
         "tool_invoked",
         "policy",
         {
@@ -1687,8 +1688,8 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         },
       );
     });
-    this.runPostCommitConsumer("approved external-runtime evidence recording", executionRequest, () => {
-      this.host.recordEvidenceEnvelope?.({
+    await this.runPostCommitConsumer("approved external-runtime evidence recording", executionRequest, async () => {
+      await this.host.recordEvidenceEnvelope?.({
         eventKind: "tool_invocation",
         sessionId: executionRequest.sessionId,
         runId: linkedRunId,
@@ -1716,7 +1717,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     markExternalCallStarted?: () => void,
   ): Promise<McpInvokeResponse> {
     const runtimeStartedAt = Date.now();
-    const server = this.resolveMcpRuntimeTarget(input);
+    const server = await this.resolveMcpRuntimeTarget(input);
     if (!("serverId" in server)) {
       return server;
     }
@@ -1728,12 +1729,12 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     options: ToolInvocationRuntimeOptions = {},
   ): Promise<McpInvokeResponse> {
     const runtimeStartedAt = Date.now();
-    const server = this.resolveMcpRuntimeTarget(input);
+    const server = await this.resolveMcpRuntimeTarget(input);
     if (!("serverId" in server)) {
       return server;
     }
 
-    const autonomyGate = this.evaluateMcpAutonomousActivation(input, server);
+    const autonomyGate = await this.evaluateMcpAutonomousActivation(input, server);
     if ("ok" in autonomyGate) {
       return autonomyGate;
     }
@@ -1750,7 +1751,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       return runtimeFailure;
     }
 
-    const grantUseFailure = this.recordMcpAutonomousGrantUse(input, autonomyGate.evidence);
+    const grantUseFailure = await this.recordMcpAutonomousGrantUse(input, autonomyGate.evidence);
     if (grantUseFailure) {
       return grantUseFailure;
     }
@@ -1772,10 +1773,10 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     );
   }
 
-  private evaluateMcpAutonomousActivation(
+  private async evaluateMcpAutonomousActivation(
     input: McpInvokeRequest,
     server: McpServerRecord,
-  ): { evidence?: AutonomousActivationRuntimeEvidence } | McpInvokeResponse {
+  ): Promise<{ evidence?: AutonomousActivationRuntimeEvidence } | McpInvokeResponse> {
     if (input.autonomousActivation !== true) {
       return {};
     }
@@ -1790,7 +1791,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       });
     }
     const grantInput = buildMcpAutonomousActivationGrantInput(input, server);
-    const result = this.host.evaluateAutonomousActivationGrant(grantInput);
+    const result = await this.host.evaluateAutonomousActivationGrant(grantInput);
     const evidence: AutonomousActivationRuntimeEvidence = {
       requested: true,
       allowed: result.allowed,
@@ -1805,15 +1806,15 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     return { evidence };
   }
 
-  private recordMcpAutonomousGrantUse(
+  private async recordMcpAutonomousGrantUse(
     input: McpInvokeRequest,
     evidence: AutonomousActivationRuntimeEvidence | undefined,
-  ): McpInvokeResponse | null {
+  ): Promise<McpInvokeResponse | null> {
     if (!evidence?.matchedGrantId) {
       return null;
     }
     try {
-      this.host.recordAutonomousActivationGrantUse?.(evidence.matchedGrantId, input.estimatedCostUsd ?? 0);
+      await this.host.recordAutonomousActivationGrantUse?.(evidence.matchedGrantId, input.estimatedCostUsd ?? 0);
       return null;
     } catch (error) {
       return {
@@ -1833,8 +1834,8 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     }
   }
 
-  private resolveMcpRuntimeTarget(input: McpInvokeRequest): McpServerRecord | McpInvokeResponse {
-    const server = this.host.requireMcpServer(input.serverId);
+  private async resolveMcpRuntimeTarget(input: McpInvokeRequest): Promise<McpServerRecord | McpInvokeResponse> {
+    const server = await this.host.requireMcpServer(input.serverId);
     if (resolveMcpServerConnectionMode(server) === "requester_scoped") {
       // HX-415 precondition routing: a requester-scoped server never joins global
       // connect/discovery/status/tool state (connectMcpServer fails closed before
@@ -1885,9 +1886,9 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       };
     }
 
-    const tool = this.host
-      .listMcpTools(input.serverId)
-      .find((candidate) => candidate.toolName === input.toolName && candidate.enabled);
+    const tool = (await this.host.listMcpTools(input.serverId)).find(
+      (candidate) => candidate.toolName === input.toolName && candidate.enabled,
+    );
     if (!tool) {
       return {
         ok: false,
@@ -1909,7 +1910,10 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         error: `MCP policy does not allow tool ${input.toolName} on server ${server.serverId}.`,
       };
     }
-    if (server.policy.requireFirstToolApproval && !this.host.isMcpToolApproved(input.serverId, input.toolName)) {
+    if (
+      server.policy.requireFirstToolApproval &&
+      !(await this.host.isMcpToolApproved(input.serverId, input.toolName))
+    ) {
       return {
         ok: false,
         error: `First-use approval required for ${input.toolName}. Approve this tool in MCP policy or disable first-use approval.`,
@@ -1925,14 +1929,14 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     autonomousActivation?: AutonomousActivationRuntimeEvidence,
     wardEffect?: WardEffect,
     markExternalCallStarted?: () => void,
-    executionFence?: () => void,
+    executionFence?: () => Promise<void>,
     mcpRequesterTurnContext?: McpRequesterScopedTurnContextHandle,
   ): Promise<McpInvokeResponse> {
     // Capability-scope choke point: every MCP invocation path converges here (model
     // approval-replay via invokeApprovedMcpRuntime, plus REST/durable/connector via
     // invokeMcpTool). The gate is fail-closed and applies to internal MCP surfaces too,
     // including durable tasks, because they expose operator runtime state.
-    const scopeFailure = this.enforceMcpServerScope(input);
+    const scopeFailure = await this.enforceMcpServerScope(input);
     if (scopeFailure) {
       return scopeFailure;
     }
@@ -1967,14 +1971,14 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
           ...(mcpRequesterTurnContext ? { mcpRequesterTurnContext } : {}),
         },
         {
-          effectDispatch: () => {
-            executionFence?.();
+          effectDispatch: async () => {
+            await executionFence?.();
             markExternalCallStarted?.();
           },
         },
       );
     } else {
-      executionFence?.();
+      await executionFence?.();
       markExternalCallStarted?.();
       runtime = isInternalMcpApprovalInboxServer(server)
         ? await handleInternalMcpApprovalInboxInvoke(server, input, {
@@ -2048,7 +2052,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         : policyRedactedContentItems;
     const sanitizedRuntimeError = redactMcpRuntimeError(runtime.error, server.policy.redactionMode);
 
-    this.host.publishRealtime(
+    await this.host.publishRealtime(
       "tool_invoked",
       "mcp",
       {
@@ -2073,7 +2077,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         workspaceId: input.workspaceId,
       }),
     );
-    this.host.recordEvidenceEnvelope?.({
+    await this.host.recordEvidenceEnvelope?.({
       eventKind: "tool_invocation",
       sessionId: input.sessionId,
       runId: input.runId,
@@ -2133,7 +2137,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     };
   }
 
-  private enforceMcpServerScope(input: McpInvokeRequest): McpInvokeResponse | undefined {
+  private async enforceMcpServerScope(input: McpInvokeRequest): Promise<McpInvokeResponse | undefined> {
     if (!this.host.assertMcpServerInScope) {
       return {
         ok: false,
@@ -2143,7 +2147,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       };
     }
     try {
-      this.host.assertMcpServerInScope(input);
+      await this.host.assertMcpServerInScope(input);
       return undefined;
     } catch (error) {
       return {

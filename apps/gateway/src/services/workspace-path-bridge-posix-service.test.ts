@@ -311,10 +311,10 @@ describe("WorkspacePathBridgePosixService", () => {
     const { service } = createService({});
     await service.resolve(request());
 
-    expect(service.inspect("workspace-1", "bridge-1").snapshotId).toBe("bridge-1");
-    expect(service.list("workspace-1")).toHaveLength(1);
-    expect(service.list("workspace-2")).toHaveLength(0);
-    expect(() => service.inspect("workspace-2", "bridge-1")).toThrow(/outside the requested workspace/u);
+    expect((await service.inspect("workspace-1", "bridge-1")).snapshotId).toBe("bridge-1");
+    expect(await service.list("workspace-1")).toHaveLength(1);
+    expect(await service.list("workspace-2")).toHaveLength(0);
+    await expect(service.inspect("workspace-2", "bridge-1")).rejects.toThrow(/outside the requested workspace/u);
   });
 
   it("refuses to resolve without configured allowed roots", async () => {

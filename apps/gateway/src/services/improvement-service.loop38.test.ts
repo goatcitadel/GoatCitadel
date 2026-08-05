@@ -2,7 +2,7 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Storage } from "@goatcitadel/storage";
+import { createLocalAsyncStorage, Storage } from "@goatcitadel/storage";
 import {
   ImprovementService,
   type ImprovementServiceCallbacks,
@@ -27,20 +27,20 @@ afterEach(() => {
 });
 
 describe("ImprovementService loop38 curator lifecycle behavior", () => {
-  it("lists curator review items, rejects candidates, and clears existing suppression", () => {
-    const harness = createHarness();
-    const candidate = createRoutingCandidate(harness.service, "reject");
-    harness.service.snoozeImprovementCandidate(candidate.candidateId, {
+  it("lists curator review items, rejects candidates, and clears existing suppression", async () => {
+    const harness = await createHarness();
+    const candidate = await createRoutingCandidate(harness.service, "reject");
+    await harness.service.snoozeImprovementCandidate(candidate.candidateId, {
       actorId: "operator-a",
       snoozeUntil: "2026-05-20T00:00:00.000Z",
       reason: "temporarily suppress before explicit rejection",
     });
 
-    const rejected = harness.service.rejectImprovementCandidate(candidate.candidateId, {
+    const rejected = await harness.service.rejectImprovementCandidate(candidate.candidateId, {
       actorId: "operator-b",
       reason: "not worth applying",
     });
-    const detail = harness.service.getImprovementCandidateDetail(candidate.candidateId);
+    const detail = await harness.service.getImprovementCandidateDetail(candidate.candidateId);
 
     expect(rejected).toMatchObject({
       action: "reject",
@@ -52,9 +52,9 @@ describe("ImprovementService loop38 curator lifecycle behavior", () => {
       suppressionUntil: undefined,
     });
     expect(
-      harness.service.listCuratorReviewItems({ limit: 20 }).items.map((item) => item.candidate.candidateId),
+      (await harness.service.listCuratorReviewItems({ limit: 20 })).items.map((item) => item.candidate.candidateId),
     ).not.toContain(candidate.candidateId);
-    expect(harness.service.getCuratorReviewItem(candidate.candidateId)).toMatchObject({
+    expect(await harness.service.getCuratorReviewItem(candidate.candidateId)).toMatchObject({
       candidate: expect.objectContaining({
         candidateId: candidate.candidateId,
         status: "rejected",
@@ -62,26 +62,24 @@ describe("ImprovementService loop38 curator lifecycle behavior", () => {
       mutationApplied: false,
     });
     expect(
-      harness.service
-        .listImprovementSignals(20)
-        .some(
-          (signal) =>
-            signal.signalKind === "candidate_rejected" &&
-            signal.metadata.candidateId === candidate.candidateId &&
-            signal.metadata.actorId === "operator-b",
-        ),
+      (await harness.service.listImprovementSignals(20)).some(
+        (signal) =>
+          signal.signalKind === "candidate_rejected" &&
+          signal.metadata.candidateId === candidate.candidateId &&
+          signal.metadata.actorId === "operator-b",
+      ),
     ).toBe(true);
   });
 
-  it("snoozes candidates with default suppression windows and emits lifecycle audit signals", () => {
-    const harness = createHarness();
-    const candidate = createRoutingCandidate(harness.service, "snooze");
+  it("snoozes candidates with default suppression windows and emits lifecycle audit signals", async () => {
+    const harness = await createHarness();
+    const candidate = await createRoutingCandidate(harness.service, "snooze");
 
-    const snoozed = harness.service.snoozeImprovementCandidate(candidate.candidateId, {
+    const snoozed = await harness.service.snoozeImprovementCandidate(candidate.candidateId, {
       actorId: "operator-snooze",
       reason: "wait for next benchmark",
     });
-    const detail = harness.service.getImprovementCandidateDetail(candidate.candidateId);
+    const detail = await harness.service.getImprovementCandidateDetail(candidate.candidateId);
 
     expect(snoozed).toMatchObject({
       action: "snooze",
@@ -91,19 +89,17 @@ describe("ImprovementService loop38 curator lifecycle behavior", () => {
     expect(detail.candidate.status).toBe("rejected");
     expect(Date.parse(detail.candidate.suppressionUntil ?? "")).toBeGreaterThan(Date.now());
     expect(
-      harness.service
-        .listImprovementSignals(20)
-        .some(
-          (signal) =>
-            signal.signalKind === "candidate_snoozed" &&
-            signal.metadata.candidateId === candidate.candidateId &&
-            signal.metadata.actorId === "operator-snooze",
-        ),
+      (await harness.service.listImprovementSignals(20)).some(
+        (signal) =>
+          signal.signalKind === "candidate_snoozed" &&
+          signal.metadata.candidateId === candidate.candidateId &&
+          signal.metadata.actorId === "operator-snooze",
+      ),
     ).toBe(true);
   });
 });
 
-function createHarness(): Harness {
+async function createHarness(): Promise<Harness> {
   const rootDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "gc-improvement-loop38-"));
   const transcriptsDir = path.join(rootDir, "transcripts");
   const auditDir = path.join(rootDir, "audit");
@@ -116,9 +112,9 @@ function createHarness(): Harness {
   });
   const published: Harness["published"] = [];
   const ctx: ImprovementServiceContext = {
-    storage,
+    storage: createLocalAsyncStorage(storage),
     gatewaySql: storage.gatewaySql,
-    publishRealtime: (channel, topic, payload) => {
+    publishRealtime: async (channel, topic, payload) => {
       published.push({ channel, topic, payload });
     },
     requireFeatureEnabled: () => undefined,
@@ -140,18 +136,20 @@ function createHarness(): Harness {
     backgroundTasks: new Set<Promise<void>>(),
     closing: false,
   } as unknown as ImprovementServiceCallbacks;
+  const service = new ImprovementService(ctx, callbacks);
+  await service.initialize();
   const harness: Harness = {
     rootDir,
     storage,
-    service: new ImprovementService(ctx, callbacks),
+    service,
     published,
   };
   harnesses.push(harness);
   return harness;
 }
 
-function createRoutingCandidate(service: ImprovementService, suffix: string) {
-  service.recordPromptLabRegressionCompletionSignal({
+async function createRoutingCandidate(service: ImprovementService, suffix: string) {
+  await service.recordPromptLabRegressionCompletionSignal({
     regressionRunId: `regression-loop38-${suffix}`,
     packId: "pack-routing",
     capability: `provider-balance-${suffix}`,
@@ -159,9 +157,9 @@ function createRoutingCandidate(service: ImprovementService, suffix: string) {
     passDelta: -0.2,
     latencyDeltaMs: 35,
   });
-  const candidate = service
-    .listImprovementCandidates(20, "prompt-lab")
-    .find((item) => item.targetKey === `pack-routing:provider-balance-${suffix}`);
+  const candidate = (await service.listImprovementCandidates(20, "prompt-lab")).find(
+    (item) => item.targetKey === `pack-routing:provider-balance-${suffix}`,
+  );
   expect(candidate).toBeDefined();
   return candidate!;
 }

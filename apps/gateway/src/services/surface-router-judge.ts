@@ -13,7 +13,7 @@ export interface SurfaceRouterJudgeDeps {
     request: ChatCompletionRequest,
     attribution: ModelUsageAttributionContext,
   ) => Promise<ChatCompletionResponse>;
-  resolveModelDefaults: () => { providerId?: string; model?: string };
+  resolveModelDefaults: () => Promise<{ providerId?: string; model?: string }>;
 }
 
 const SURFACE_JUDGE_SYSTEM_PROMPT =
@@ -51,7 +51,7 @@ export function buildSurfaceRouterJudge(deps: SurfaceRouterJudgeDeps) {
       const priorsText = input.priors.length
         ? input.priors.map((prior) => `${prior.fromMode}->${prior.toMode}`).join(", ")
         : "none";
-      const defaults = deps.resolveModelDefaults();
+      const defaults = await deps.resolveModelDefaults();
       const completion = await deps.createChatCompletion(
         {
           providerId: defaults.providerId,

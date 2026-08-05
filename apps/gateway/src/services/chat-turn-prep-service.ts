@@ -36,7 +36,11 @@ import type {
   RuntimeDecisionTraceAppendInput,
   SessionMeta,
 } from "@goatcitadel/contracts";
-import { HEARTBEAT_SYSTEM_ACTOR_ID, type SessionAutonomyPrefsRecord, type Storage } from "@goatcitadel/storage";
+import {
+  HEARTBEAT_SYSTEM_ACTOR_ID,
+  type SessionAutonomyPrefsRecord,
+  type AsyncStorage as Storage,
+} from "@goatcitadel/storage";
 import { normalizeAgentInputFromSend, type NormalizedAgentInputFromSend } from "./chat-agent-input-normalization.js";
 import { executionProfileFromNormalizationProfile } from "./chat-turn-execution-profile.js";
 import { extractPrimaryUserTaskContent } from "./chat-agent-prompt-lab-contract.js";
@@ -76,7 +80,11 @@ import {
 } from "./chat-turn-planning-helpers.js";
 import { trimExecutionPlanDraftToPlan } from "./chat-planner-fanout.js";
 import { selectPlannerDraftModel, shouldSkipPlannerDraft } from "./chat-planner-fast-path.js";
-import { readLiveIntentThreshold } from "./improvement-tune-reads.js";
+import {
+  IMPROVEMENT_TUNE_DEFAULTS,
+  IMPROVEMENT_TUNE_SETTING_KEYS,
+  resolveLiveIntentThreshold,
+} from "./improvement-tune-reads.js";
 import { appendMobileContextParts, recordMobileContextTurnProvenance } from "./chat-turn-mobile-context.js";
 import { recordPreparedTurnDecisions } from "./chat-turn-runtime-decisions.js";
 import { buildSideChatSystemInstruction } from "./chat-turn-side-chat.js";
@@ -152,19 +160,22 @@ type ChatTurnPrepStorage = Pick<
 
 export interface ChatTurnPrepHost {
   readonly storage: ChatTurnPrepStorage;
-  assertTurnAdmissionWrite?(admission: ActiveTurnAdmission): void;
+  assertTurnAdmissionWrite?(admission: ActiveTurnAdmission): Promise<void>;
   readonly llmService: Pick<LlmService, "getModelContextWindow" | "getRuntimeConfig">;
-  getSession(sessionId: string): SessionMeta;
-  ensureChatSessionRuntimeGrants(sessionId: string): void;
-  maybeAutoTitleChatSession(sessionId: string, content: string): void;
+  getSession(sessionId: string): Promise<SessionMeta>;
+  ensureChatSessionRuntimeGrants(sessionId: string): Promise<void>;
+  maybeAutoTitleChatSession(sessionId: string, content: string): Promise<void>;
   normalizeWorkspaceId(workspaceId?: string): string;
   routeFromSession(session: SessionMeta): ChatTurnRoute;
   ingestEvent(
     idempotencyKey: string,
     payload: GatewayEventInput,
-    options?: { onCommit?: () => void; afterCommit?: () => void },
+    options?: {
+      onCommit?: () => unknown | Promise<unknown>;
+      afterCommit?: () => unknown | Promise<unknown>;
+    },
   ): Promise<unknown>;
-  onUserMessageCommitted?(sessionId: string, messageId: string): void;
+  onUserMessageCommitted?(sessionId: string, messageId: string): Promise<void>;
   patchSessionAutonomyPrefs(
     sessionId: string,
     input: Partial<
@@ -178,10 +189,10 @@ export interface ChatTurnPrepHost {
         | "reflectionMode"
       >
     >,
-  ): SessionAutonomyPrefsRecord;
+  ): Promise<SessionAutonomyPrefsRecord>;
   ensureChatSessionModelDefaults(sessionId: string, prefs: ChatSessionPrefsRecord): ChatSessionPrefsRecord;
-  getSessionAutonomyPrefs(sessionId: string): SessionAutonomyPrefsRecord;
-  buildDefaultChatPersonalityOverlay(): string | undefined;
+  getSessionAutonomyPrefs(sessionId: string): Promise<SessionAutonomyPrefsRecord>;
+  buildDefaultChatPersonalityOverlay(): Promise<string | undefined>;
   resolveRuntimeGuidance(workspaceId: string): Promise<ResolvedRuntimeGuidance>;
   resolveThreadKnowledgeContext(sessionId: string, query: string): Promise<ResolvedThreadKnowledgeContext>;
   loadChatTurnSessionState(sessionId: string): Promise<ChatTurnSessionState>;
@@ -207,20 +218,20 @@ export interface ChatTurnPrepHost {
     sessionId: string;
     sealedDimensionHash: string;
     actorId: string;
-  }): { actionId: string; actorHash: string } | undefined;
+  }): Promise<{ actionId: string; actorHash: string } | undefined>;
   createChatCompletion(
     request: ChatCompletionRequest,
     attribution?: ModelUsageAttributionContext,
   ): Promise<ChatCompletionResponse>;
-  recordRuntimeDecision?(input: RuntimeDecisionTraceAppendInput): void;
-  isFeatureEnabled(flag: string): boolean;
+  recordRuntimeDecision?(input: RuntimeDecisionTraceAppendInput): Promise<void>;
+  isFeatureEnabled(flag: string): Promise<boolean>;
   /**
    * Frozen cross-session operator-profile digest (P2-S4b), composed once per
    * session and byte-stable per workspace+revision (cached). Fed to the base
    * prompt as `memoryDigest`. Optional + best-effort: returns `undefined` when
    * there is nothing to inject, and is only consulted when the base prompt is on.
    */
-  composeFrozenOperatorProfileDigest?(workspaceId: string): string | undefined;
+  composeFrozenOperatorProfileDigest?(workspaceId: string): Promise<string | undefined>;
   /**
    * Callable tool/skill catalog for the base prompt's "what you can do" index
    * (P0-#2). Previously the base prompt was built with an empty toolset, so the
@@ -230,8 +241,11 @@ export interface ChatTurnPrepHost {
    * per-tool policy evaluation — real deny-wins enforcement stays inline at call
    * time. Returns empty names when unavailable; never throws on the prep path.
    */
-  resolveBasePromptCapabilityCatalog?(): BaseAgentPromptToolset;
-  resolveChatTurnEffectiveRoute?(sessionId: string, input: ChatSendMessageRequest): ResolvedChatRouteDescriptor;
+  resolveBasePromptCapabilityCatalog?(): Promise<BaseAgentPromptToolset>;
+  resolveChatTurnEffectiveRoute?(
+    sessionId: string,
+    input: ChatSendMessageRequest,
+  ): Promise<ResolvedChatRouteDescriptor>;
   resolveChatTurnCapabilityProfile?(input: {
     sessionId: string;
     turnId: string;
@@ -250,7 +264,7 @@ export interface ChatTurnPrepHost {
     request: ChatSendMessageRequest;
   }): Promise<ChatTurnCapabilityProfileResolution>;
   /** Rehydrates and exact-byte revalidates the skill instructions frozen in the profile. */
-  resolveActivatedSkillInstructions?(profile: ChatTurnCapabilityProfileRecord): string | undefined;
+  resolveActivatedSkillInstructions?(profile: ChatTurnCapabilityProfileRecord): Promise<string | undefined>;
   resolveChatRoutedContextSources(
     input: ResolveChatRoutedContextSourcesInput,
   ): Promise<ResolvedChatRoutedContextSources>;
@@ -259,7 +273,7 @@ export interface ChatTurnPrepHost {
     profileHash: string;
     sessionId: string;
     turnId: string;
-  }): ChatTurnCapabilityProfileRecord;
+  }): Promise<ChatTurnCapabilityProfileRecord>;
 }
 
 export interface PreparedAgentChatTurn {
@@ -496,12 +510,12 @@ export async function prepareAgentChatTurn(
 ): Promise<PreparedAgentChatTurn> {
   const turnId = options?.turnId ?? randomUUID();
   const systemHeartbeatPosture = readSystemHeartbeatTurnPrepPosture(input, options, turnId);
-  assertPrepTurnAdmission(host, options?.turnAdmission);
-  const session = host.getSession(sessionId);
+  await assertPrepTurnAdmission(host, options?.turnAdmission);
+  const session = await host.getSession(sessionId);
   if (!systemHeartbeatPosture) {
-    prepCanonicalWrite(host, options?.turnAdmission, () => host.ensureChatSessionRuntimeGrants(sessionId));
+    await prepCanonicalWrite(host, options?.turnAdmission, () => host.ensureChatSessionRuntimeGrants(sessionId));
   }
-  const sessionMeta = host.storage.chatSessionMeta.get(sessionId);
+  const sessionMeta = await host.storage.chatSessionMeta.get(sessionId);
   if (!sessionMeta) {
     throw new NotFoundError({ entity: "Chat session", id: sessionId });
   }
@@ -515,7 +529,7 @@ export async function prepareAgentChatTurn(
       });
     }
   }
-  const citadelId = host.storage.workspaces?.find(workspaceId)?.citadelId ?? DEFAULT_CITADEL_ID;
+  const citadelId = (await host.storage.workspaces?.find(workspaceId))?.citadelId ?? DEFAULT_CITADEL_ID;
   const branchKind = options?.branchKind ?? "append";
   const sessionStatePromise = host.loadChatTurnSessionState(sessionId);
   let existingUserMessage = options?.existingUserMessage;
@@ -550,7 +564,7 @@ export async function prepareAgentChatTurn(
     if (!host.loadChatTurnCapabilityProfile) {
       throw new Error("This runtime cannot load the capability profile bound to the durable Chat turn.");
     }
-    boundCapabilityProfile = host.loadChatTurnCapabilityProfile({
+    boundCapabilityProfile = await host.loadChatTurnCapabilityProfile({
       profileId: options.capabilityProfileId,
       profileHash: options.capabilityProfileHash,
       sessionId,
@@ -581,7 +595,7 @@ export async function prepareAgentChatTurn(
   const executionProfile = executionProfileFromNormalizationProfile(normalized.normalizationProfile);
   const quickWebTurn = executionProfile === "quick_web";
   if (!systemHeartbeatPosture && branchKind !== "retry") {
-    prepCanonicalWrite(host, options?.turnAdmission, () => host.maybeAutoTitleChatSession(sessionId, content));
+    await prepCanonicalWrite(host, options?.turnAdmission, () => host.maybeAutoTitleChatSession(sessionId, content));
   }
 
   const route = host.routeFromSession(session);
@@ -612,49 +626,61 @@ export async function prepareAgentChatTurn(
       timestamp: new Date().toISOString(),
     };
   } else if (ingestUserMessage || !existingUserMessage) {
-    assertPrepTurnAdmission(host, options?.turnAdmission);
-    const uploadAttachments = host.storage.chatAttachments.listByIds(input.attachments ?? [], workspaceId);
+    await assertPrepTurnAdmission(host, options?.turnAdmission);
+    const uploadAttachments = await host.storage.chatAttachments.listByIds(input.attachments ?? [], workspaceId);
     const inputParts = appendMobileContextParts(
       normalizeChatInputParts(content, input.parts, uploadAttachments),
       input.mobileContext,
     );
     userEventId = options?.userMessageId ?? randomUUID();
     let userIngestAdmissionChecked = false;
-    await host.ingestEvent(
-      randomUUID(),
-      {
-        eventId: userEventId,
-        route,
-        actor: {
-          type: "user",
-          id: "operator",
+    let userMessageCommitted = false;
+    let userIngestError: unknown;
+    try {
+      await host.ingestEvent(
+        randomUUID(),
+        {
+          eventId: userEventId,
+          route,
+          actor: {
+            type: "user",
+            id: "operator",
+          },
+          message: {
+            role: "user",
+            content,
+            parts: inputParts,
+            attachments: uploadAttachments.map((item) => ({
+              attachmentId: item.attachmentId,
+              fileName: item.fileName,
+              mimeType: item.mimeType,
+              sizeBytes: item.sizeBytes,
+            })),
+            parentDelegationStepId: input.parentDelegationStepId,
+          },
         },
-        message: {
-          role: "user",
-          content,
-          parts: inputParts,
-          attachments: uploadAttachments.map((item) => ({
-            attachmentId: item.attachmentId,
-            fileName: item.fileName,
-            mimeType: item.mimeType,
-            sizeBytes: item.sizeBytes,
-          })),
-          parentDelegationStepId: input.parentDelegationStepId,
+        {
+          onCommit: async () => {
+            await assertPrepTurnAdmission(host, options?.turnAdmission);
+            userIngestAdmissionChecked = true;
+            options?.mutationLifecycle?.commitAlongsideCanonicalWrite?.();
+          },
+          afterCommit: () => {
+            options?.mutationLifecycle?.markCommitted();
+            userMessageCommitted = true;
+          },
         },
-      },
-      {
-        onCommit: () => {
-          assertPrepTurnAdmission(host, options?.turnAdmission);
-          userIngestAdmissionChecked = true;
-          options?.mutationLifecycle?.commitAlongsideCanonicalWrite?.();
-        },
-        afterCommit: () => {
-          options?.mutationLifecycle?.markCommitted();
-          host.onUserMessageCommitted?.(sessionId, userEventId);
-        },
-      },
-    );
-    assertPrepTurnAdmission(host, options?.turnAdmission);
+      );
+    } catch (error) {
+      userIngestError = error;
+    }
+    if (userMessageCommitted) {
+      await host.onUserMessageCommitted?.(sessionId, userEventId);
+    }
+    if (userIngestError !== undefined) {
+      throw userIngestError;
+    }
+    await assertPrepTurnAdmission(host, options?.turnAdmission);
     if (options?.turnAdmission && !userIngestAdmissionChecked) {
       throw new ConflictError({ message: "The Chat user-message ingest skipped its mutation-admission fence." });
     }
@@ -713,23 +739,25 @@ export async function prepareAgentChatTurn(
   const splitPrefs = splitChatPrefsPatch(prefsOverride);
   let persistedPrefs: ChatSessionPrefsRecord;
   if (systemHeartbeatPosture) {
-    const existingPrefs = host.storage.chatSessionPrefs.get(sessionId);
+    const existingPrefs = await host.storage.chatSessionPrefs.get(sessionId);
     if (!existingPrefs) {
       throw new Error(`System heartbeat session ${sessionId} has no persisted Chat preferences.`);
     }
     persistedPrefs = existingPrefs;
   } else if (boundCapabilityProfile) {
-    persistedPrefs = prepCanonicalWrite(host, options?.turnAdmission, () =>
-      host.storage.chatSessionPrefs.ensure(sessionId),
+    persistedPrefs = await prepCanonicalWrite(
+      host,
+      options?.turnAdmission,
+      async () => await host.storage.chatSessionPrefs.ensure(sessionId),
     );
   } else {
-    persistedPrefs = prepCanonicalWrite(host, options?.turnAdmission, () => {
+    persistedPrefs = await prepCanonicalWrite(host, options?.turnAdmission, async () => {
       if (Object.keys(splitPrefs.autonomyPatch).length > 0) {
-        host.patchSessionAutonomyPrefs(sessionId, splitPrefs.autonomyPatch);
+        await host.patchSessionAutonomyPrefs(sessionId, splitPrefs.autonomyPatch);
       }
       return host.ensureChatSessionModelDefaults(
         sessionId,
-        host.storage.chatSessionPrefs.patch(sessionId, splitPrefs.basePatch),
+        await host.storage.chatSessionPrefs.patch(sessionId, splitPrefs.basePatch),
       );
     });
   }
@@ -749,7 +777,7 @@ export async function prepareAgentChatTurn(
     : persistedPrefs;
   const effectiveProviderRoute = boundCapabilityProfile
     ? undefined
-    : host.resolveChatTurnEffectiveRoute?.(sessionId, input);
+    : await host.resolveChatTurnEffectiveRoute?.(sessionId, input);
   const effectiveProviderId =
     boundCapabilityProfile?.selection.effectiveProviderId ??
     effectiveProviderRoute?.effectiveProviderId ??
@@ -761,8 +789,8 @@ export async function prepareAgentChatTurn(
     input.model ??
     prefs.model;
   const persistedAutonomy = systemHeartbeatPosture
-    ? host.storage.sessionAutonomyPrefs.get(sessionId)
-    : host.getSessionAutonomyPrefs(sessionId);
+    ? await host.storage.sessionAutonomyPrefs.get(sessionId)
+    : await host.getSessionAutonomyPrefs(sessionId);
   if (!persistedAutonomy) {
     throw new Error(`System heartbeat session ${sessionId} has no persisted autonomy preferences.`);
   }
@@ -776,7 +804,7 @@ export async function prepareAgentChatTurn(
     prompt: content,
     hasAttachments: Boolean(input.attachments?.length || input.parts?.some((part) => part.type !== "text")),
   });
-  const projectId = host.storage.chatSessionProjects.get(sessionId)?.projectId;
+  const projectId = (await host.storage.chatSessionProjects.get(sessionId))?.projectId;
   const effectiveMode = "chat";
   const requiresProjectBinding = chatModeRequiresProjectBinding(effectiveMode);
   const missingRequiredProjectBinding = requiresProjectBinding && !projectId;
@@ -793,7 +821,11 @@ export async function prepareAgentChatTurn(
     // P2-W3: close the self-improvement loop — read the live-data intent
     // sensitivity the weekly tuner writes so a raised threshold actually
     // escalates web retrieval. Safe default (0.6) keeps current behaviour.
-    liveIntentThreshold: readLiveIntentThreshold(host.storage.systemSettings),
+    liveIntentThreshold: resolveLiveIntentThreshold(
+      ((await host.storage.systemSettings.get<unknown>(IMPROVEMENT_TUNE_SETTING_KEYS.liveIntentThreshold))?.value as
+        | number
+        | undefined) ?? IMPROVEMENT_TUNE_DEFAULTS.liveIntentThreshold,
+    ),
   });
   // Previously the personality overlay (and any base instruction) was applied
   // only in chat mode, so cowork/code turns reached the model with no agent
@@ -801,11 +833,11 @@ export async function prepareAgentChatTurn(
   // date) — the single biggest cause of thin cowork responses. With the base
   // system prompt enabled (default on; kill switch coworkRuntimeQualityV1Disabled)
   // we apply a real layered prompt, and the personality overlay, to every mode.
-  const baseSystemPromptEnabled = !host.isFeatureEnabled("coworkRuntimeQualityV1Disabled");
+  const baseSystemPromptEnabled = !(await host.isFeatureEnabled("coworkRuntimeQualityV1Disabled"));
   const personalityOverlay = quickWebTurn
     ? undefined
     : baseSystemPromptEnabled || effectiveMode === "chat"
-      ? host.buildDefaultChatPersonalityOverlay()
+      ? await host.buildDefaultChatPersonalityOverlay()
       : undefined;
   let baseAgentInstruction: ChatCompletionRequest["messages"][number]["content"] | undefined;
   if (baseSystemPromptEnabled) {
@@ -818,7 +850,7 @@ export async function prepareAgentChatTurn(
     let memoryDigest: string | undefined;
     if (!quickWebTurn) {
       try {
-        memoryDigest = host.composeFrozenOperatorProfileDigest?.(workspaceId);
+        memoryDigest = await host.composeFrozenOperatorProfileDigest?.(workspaceId);
       } catch {
         memoryDigest = undefined;
       }
@@ -829,7 +861,7 @@ export async function prepareAgentChatTurn(
     let promptCapabilityCatalog: BaseAgentPromptToolset = { toolNames: [] };
     if (!quickWebTurn && !host.resolveChatTurnCapabilityProfile && host.resolveBasePromptCapabilityCatalog) {
       try {
-        promptCapabilityCatalog = host.resolveBasePromptCapabilityCatalog();
+        promptCapabilityCatalog = await host.resolveBasePromptCapabilityCatalog();
       } catch {
         promptCapabilityCatalog = { toolNames: [] };
       }
@@ -1057,7 +1089,7 @@ export async function prepareAgentChatTurn(
   }
   if (capabilityProfile) {
     history = upsertChatCapabilityProfileSystemInstruction(history, capabilityProfile);
-    const activatedSkillInstructions = host.resolveActivatedSkillInstructions?.(capabilityProfile);
+    const activatedSkillInstructions = await host.resolveActivatedSkillInstructions?.(capabilityProfile);
     history = upsertChatActivatedSkillSystemInstruction(history, activatedSkillInstructions);
   }
   if (hasRoutedContextRefs) {
@@ -1098,14 +1130,14 @@ export async function prepareAgentChatTurn(
   }
 
   if (!systemHeartbeatPosture && sessionMeta.pinnedGoal) {
-    prepCanonicalWrite(host, options?.turnAdmission, () => {
-      const turnsUsed = host.storage.chatSessionMeta.incrementGoalTurnsUsed(sessionId);
+    await prepCanonicalWrite(host, options?.turnAdmission, async () => {
+      const turnsUsed = await host.storage.chatSessionMeta.incrementGoalTurnsUsed(sessionId);
       const { cleared } = advanceGoalForTurn({
         turnsUsed,
         turnBudget: sessionMeta.goalTurnBudget ?? null,
       });
       if (cleared) {
-        host.storage.chatSessionMeta.patchWithRevision(
+        await host.storage.chatSessionMeta.patchWithRevision(
           sessionId,
           {
             pinnedGoal: null,
@@ -1121,7 +1153,7 @@ export async function prepareAgentChatTurn(
   const recoveryActorId = resolveCompactionRecoveryActor(input);
   const pendingForceAction =
     !systemHeartbeatPosture && recoveryActorId
-      ? host.resolvePendingCompactionBreakerForceAction?.({
+      ? await host.resolvePendingCompactionBreakerForceAction?.({
           sessionId,
           sealedDimensionHash: sealedCompactionDimension.dimensionHash,
           actorId: recoveryActorId,
@@ -1192,7 +1224,7 @@ export async function prepareAgentChatTurn(
     ...(routedContextSnapshot ? { routedContextSnapshot } : {}),
   };
   if (!systemHeartbeatPosture) {
-    prepCanonicalWrite(host, options?.turnAdmission, () =>
+    await prepCanonicalWrite(host, options?.turnAdmission, () =>
       recordPreparedTurnDecisions(host, prepared, {
         projectId,
         missingRequiredProjectBinding,
@@ -1242,20 +1274,27 @@ function readSystemHeartbeatTurnPrepPosture(
   return posture;
 }
 
-function assertPrepTurnAdmission(host: ChatTurnPrepHost, admission: ActiveTurnAdmission | undefined): void {
+async function assertPrepTurnAdmission(
+  host: ChatTurnPrepHost,
+  admission: ActiveTurnAdmission | undefined,
+): Promise<void> {
   if (!admission) return;
   if (!host.assertTurnAdmissionWrite) {
     throw new ConflictError({ message: "The Chat preparation host cannot verify its mutation admission." });
   }
-  host.assertTurnAdmissionWrite(admission);
+  await host.assertTurnAdmissionWrite(admission);
 }
 
-function prepCanonicalWrite<T>(host: ChatTurnPrepHost, admission: ActiveTurnAdmission | undefined, work: () => T): T {
-  if (!admission) return work();
-  return host.storage.runImmediateTransaction(() => {
-    assertPrepTurnAdmission(host, admission);
-    const result = work();
-    assertPrepTurnAdmission(host, admission);
+async function prepCanonicalWrite<T>(
+  host: ChatTurnPrepHost,
+  admission: ActiveTurnAdmission | undefined,
+  work: () => Promise<T>,
+): Promise<T> {
+  if (!admission) return await work();
+  return await host.storage.runImmediateTransaction(async () => {
+    await assertPrepTurnAdmission(host, admission);
+    const result = await work();
+    await assertPrepTurnAdmission(host, admission);
     return result;
   });
 }
@@ -1533,7 +1572,7 @@ export async function resolvePreparedTurnOrchestration(
     decision: "allowed",
     reason: modelRouterBypass.reason,
   });
-  const templatePlan = applyApprovedSpecialistsToPlan(host, prepared, buildOrchestrationPlan(routerInput));
+  const templatePlan = await applyApprovedSpecialistsToPlan(host, prepared, buildOrchestrationPlan(routerInput));
   const executionPlanDraft = await generatePreparedExecutionPlanDraft(
     host,
     prepared,
@@ -1552,22 +1591,23 @@ export async function resolvePreparedTurnOrchestration(
   };
 }
 
-export function applyApprovedSpecialistsToPlan(
+export async function applyApprovedSpecialistsToPlan(
   host: ChatTurnPrepHost,
   prepared: PreparedAgentChatTurn,
   plan: ReturnType<typeof buildOrchestrationPlan>,
-): ReturnType<typeof buildOrchestrationPlan> {
+): Promise<ReturnType<typeof buildOrchestrationPlan>> {
   const mode = prepared.effectiveMode;
   if (!chatModeAllowsDynamicTeamGrowth(mode)) {
     return plan;
   }
   const sessionWorkspaceId = host.normalizeWorkspaceId(prepared.workspaceId);
-  const candidates = host.storage.chatSpecialistCandidates
-    .listAutoRoutable(
+  const candidates = (
+    await host.storage.chatSpecialistCandidates.listAutoRoutable(
       prepared.session.sessionId,
       mode,
-      Boolean(host.storage.chatSessionProjects.get(prepared.session.sessionId)?.projectId),
+      Boolean(await (await host.storage.chatSessionProjects.get(prepared.session.sessionId))?.projectId),
     )
+  )
     .filter((candidate) => host.normalizeWorkspaceId(candidate.workspaceId) === sessionWorkspaceId)
     .filter((candidate) => isSpecialistCandidateAutoRouteFresh(candidate.updatedAt));
   if (candidates.length === 0) {
@@ -1642,7 +1682,7 @@ export async function generatePreparedExecutionPlanDraft(
   if ((prepared.normalized?.speedMode ?? prepared.prefs.speedMode) === "fast") {
     return fallbackDraft;
   }
-  const plannerFastPathDisabled = host.isFeatureEnabled("plannerFastPathV1Disabled");
+  const plannerFastPathDisabled = await host.isFeatureEnabled("plannerFastPathV1Disabled");
   if (!plannerFastPathDisabled && shouldSkipPlannerDraft(prepared.content)) {
     // Trivial single-clause ask: the deterministic template draft is the same
     // floor speedMode:"fast" ships, so skip the planner LLM round-trip.
@@ -1652,7 +1692,9 @@ export async function generatePreparedExecutionPlanDraft(
     ? undefined
     : selectPlannerDraftModel({ capabilities: routerInput.capabilities, prefs: prepared.prefs });
   const allowProductionExpansion =
-    prepared.prefs.subagentPolicy !== "off" && !advisoryOnly && !host.isFeatureEnabled("plannerFanoutV1Disabled");
+    prepared.prefs.subagentPolicy !== "off" &&
+    !advisoryOnly &&
+    !(await host.isFeatureEnabled("plannerFanoutV1Disabled"));
   const maxExtraWorkerSteps = Math.max(0, MAX_PLANNER_PRODUCTION_STEPS - countPlannerProductionSteps(templatePlan));
   // Bound and drain the planner so a timeout cannot return a deterministic
   // fallback while model-usage settlement is still in flight.

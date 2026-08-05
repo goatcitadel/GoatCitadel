@@ -155,7 +155,7 @@ describe("chat turn dispatch loop 31 execution coverage", () => {
     });
     const host = createHost({ durableEnabled: false });
 
-    dispatchService.launchPreparedAgentChatTurnStream(
+    await dispatchService.launchPreparedAgentChatTurnStream(
       host,
       "session-1",
       { content: "retry" },
@@ -791,7 +791,7 @@ describe("chat turn dispatch loop 31 execution coverage", () => {
     process.on("unhandledRejection", trackUnhandledRejection);
 
     try {
-      dispatchService.launchPreparedAgentChatTurnStream(
+      await dispatchService.launchPreparedAgentChatTurnStream(
         host,
         "session-1",
         { content: "hello" },

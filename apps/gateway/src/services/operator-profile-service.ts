@@ -29,7 +29,7 @@ import {
   MAX_OPERATOR_PROFILE_FACTS,
   MAX_OPERATOR_PROFILE_SUMMARY_LENGTH,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { createOperatorProfileId } from "@goatcitadel/storage";
 import { MemoryWriteGateService } from "./memory-write-gate-service.js";
 
@@ -38,7 +38,7 @@ type OperatorProfileStorage = Pick<Storage, "operatorProfiles" | "workspaces">;
 export interface OperatorProfileServiceDeps {
   storage: OperatorProfileStorage;
   /** Reuse the master autonomy kill switch (`autonomyV1Disabled`). */
-  isFeatureEnabled(flag: string): boolean;
+  isFeatureEnabled(flag: string): boolean | Promise<boolean>;
   /** Optional injectable gate (defaults to a fresh stateless instance). */
   memoryWriteGate?: MemoryWriteGateService;
   /** Optional clock for deterministic tests. */
@@ -77,7 +77,7 @@ interface CachedDigest {
 
 export class OperatorProfileService {
   private readonly storage: OperatorProfileStorage;
-  private readonly isFeatureEnabled: (flag: string) => boolean;
+  private readonly isFeatureEnabled: (flag: string) => boolean | Promise<boolean>;
   private readonly gate: MemoryWriteGateService;
   private readonly now: () => string;
   /** Frozen-digest cache keyed by workspaceId → {revision, digest}. */
@@ -96,19 +96,19 @@ export class OperatorProfileService {
    * profile record. First use creates an empty profile (revision 1) and stamps
    * its id onto the workspace prefs.
    */
-  public ensureOperatorProfile(workspaceId: string): OperatorProfileRecord {
+  public async ensureOperatorProfile(workspaceId: string): Promise<OperatorProfileRecord> {
     const normalizedWorkspaceId = normalizeWorkspaceId(workspaceId);
-    const workspace = this.storage.workspaces.find(normalizedWorkspaceId);
+    const workspace = await this.storage.workspaces.find(normalizedWorkspaceId);
     const stampedId = workspace?.workspacePrefs?.operatorProfileId;
 
     if (stampedId) {
-      const existing = this.storage.operatorProfiles.get(stampedId);
+      const existing = await this.storage.operatorProfiles.get(stampedId);
       if (existing) {
         return existing;
       }
       // Prefs point at a missing profile (e.g. partial restore) — recreate under
       // the stamped id so the pointer stays valid.
-      return this.storage.operatorProfiles.upsert(
+      return await this.storage.operatorProfiles.upsert(
         { operatorProfileId: stampedId, workspaceId: normalizedWorkspaceId, summary: "", facts: [] },
         this.now(),
       );
@@ -116,14 +116,14 @@ export class OperatorProfileService {
 
     // No pointer yet. Reuse a profile already keyed to this workspace if present,
     // else create a fresh one; then stamp the id onto prefs (when the workspace exists).
-    const byWorkspace = this.storage.operatorProfiles.getByWorkspace(normalizedWorkspaceId);
+    const byWorkspace = await this.storage.operatorProfiles.getByWorkspace(normalizedWorkspaceId);
     const profile =
       byWorkspace ??
-      this.storage.operatorProfiles.upsert(
+      (await this.storage.operatorProfiles.upsert(
         { operatorProfileId: createOperatorProfileId(), workspaceId: normalizedWorkspaceId, summary: "", facts: [] },
         this.now(),
-      );
-    this.stampOperatorProfileId(normalizedWorkspaceId, profile.operatorProfileId);
+      ));
+    await this.stampOperatorProfileId(normalizedWorkspaceId, profile.operatorProfileId);
     return profile;
   }
 
@@ -133,9 +133,9 @@ export class OperatorProfileService {
    * only when the profile changes. Returns `undefined` when there is nothing
    * useful to inject (no summary and no facts). Secrets are always stripped.
    */
-  public composeFrozenProfileDigest(workspaceId: string): string | undefined {
+  public async composeFrozenProfileDigest(workspaceId: string): Promise<string | undefined> {
     const normalizedWorkspaceId = normalizeWorkspaceId(workspaceId);
-    const profile = this.readProfile(normalizedWorkspaceId);
+    const profile = await this.readProfile(normalizedWorkspaceId);
     if (!profile) {
       return undefined;
     }
@@ -159,13 +159,13 @@ export class OperatorProfileService {
    * write is held as `proposed` and NOT persisted. Trusted/operator authorities
    * always apply. Every applied write captures the prior revision for rollback.
    */
-  public recordOperatorProfileFacts(
+  public async recordOperatorProfileFacts(
     workspaceId: string,
     input: RecordOperatorProfileFactsInput,
-  ): RecordOperatorProfileFactsResult {
+  ): Promise<RecordOperatorProfileFactsResult> {
     const normalizedWorkspaceId = normalizeWorkspaceId(workspaceId);
     const authority: MemoryWriteAuthority = input.authority ?? "agent_proposed";
-    const profile = this.ensureOperatorProfile(normalizedWorkspaceId);
+    const profile = await this.ensureOperatorProfile(normalizedWorkspaceId);
 
     const accepted: OperatorProfileFact[] = [];
     const blockedFacts: OperatorProfileFact[] = [];
@@ -186,7 +186,7 @@ export class OperatorProfileService {
     // The gate forces agent writes to `proposed` unless authority is trusted. Under
     // full autonomy we may apply them anyway (snapshotted + secret-filtered); with
     // autonomy off they stay proposed and unpersisted.
-    const fullAutonomy = !this.isFeatureEnabled("autonomyV1Disabled");
+    const fullAutonomy = !(await this.isFeatureEnabled("autonomyV1Disabled"));
     const applyProposed = anyProposed && fullAutonomy;
     const factsToApply = applyProposed
       ? [...accepted, ...this.filterSecretsForAutoApply(input.facts, blockedFacts)]
@@ -209,7 +209,7 @@ export class OperatorProfileService {
     }
 
     const merged = mergeFacts(profile.facts, factsToApply);
-    const write = this.storage.operatorProfiles.upsertCapturingPrior(
+    const write = await this.storage.operatorProfiles.upsertCapturingPrior(
       {
         operatorProfileId: profile.operatorProfileId,
         workspaceId: normalizedWorkspaceId,
@@ -230,8 +230,8 @@ export class OperatorProfileService {
   }
 
   /** Read the current profile without creating or stamping one. */
-  public findOperatorProfile(workspaceId: string): OperatorProfileRecord | undefined {
-    return this.readProfile(normalizeWorkspaceId(workspaceId));
+  public async findOperatorProfile(workspaceId: string): Promise<OperatorProfileRecord | undefined> {
+    return await this.readProfile(normalizeWorkspaceId(workspaceId));
   }
 
   /**
@@ -239,16 +239,16 @@ export class OperatorProfileService {
    * other profile facts. This is a trusted UI path, not a learned-memory path:
    * secrets still fail closed and the prior revision remains recoverable.
    */
-  public replaceOperatorManagedFacts(
+  public async replaceOperatorManagedFacts(
     workspaceId: string,
     input: ReplaceOperatorProfileFactsInput,
-  ): RecordOperatorProfileFactsResult {
+  ): Promise<RecordOperatorProfileFactsResult> {
     const normalizedWorkspaceId = normalizeWorkspaceId(workspaceId);
     const prefix = input.sourceRefPrefix.trim();
     if (!prefix || prefix.length > 80) {
       throw new Error("Operator-managed fact namespace is invalid.");
     }
-    const profile = this.ensureOperatorProfile(normalizedWorkspaceId);
+    const profile = await this.ensureOperatorProfile(normalizedWorkspaceId);
     const accepted: OperatorProfileFact[] = [];
     const blockedFacts: OperatorProfileFact[] = [];
     for (const fact of normalizeFacts(input.facts)) {
@@ -269,7 +269,7 @@ export class OperatorProfileService {
     if (preserved.length + accepted.length > MAX_OPERATOR_PROFILE_FACTS) {
       throw new Error("Operator profile is full; remove an existing fact before configuring this feature.");
     }
-    const write = this.storage.operatorProfiles.upsertCapturingPrior(
+    const write = await this.storage.operatorProfiles.upsertCapturingPrior(
       {
         operatorProfileId: profile.operatorProfileId,
         workspaceId: normalizedWorkspaceId,
@@ -288,14 +288,17 @@ export class OperatorProfileService {
   }
 
   /** Replace the prose summary (trusted path, e.g. the S1 fork). Snapshotted. */
-  public setOperatorProfileSummary(workspaceId: string, summary: string): RecordOperatorProfileFactsResult {
+  public async setOperatorProfileSummary(
+    workspaceId: string,
+    summary: string,
+  ): Promise<RecordOperatorProfileFactsResult> {
     const normalizedWorkspaceId = normalizeWorkspaceId(workspaceId);
-    const profile = this.ensureOperatorProfile(normalizedWorkspaceId);
+    const profile = await this.ensureOperatorProfile(normalizedWorkspaceId);
     const decision = this.gate.evaluate({ authority: "trusted_lifecycle", content: summary });
     if (decision.decision === "blocked") {
       return { record: profile, outcome: "applied", blockedFacts: [] };
     }
-    const write = this.storage.operatorProfiles.upsertCapturingPrior(
+    const write = await this.storage.operatorProfiles.upsertCapturingPrior(
       {
         operatorProfileId: profile.operatorProfileId,
         workspaceId: normalizedWorkspaceId,
@@ -314,25 +317,25 @@ export class OperatorProfileService {
   }
 
   /** Restore a captured snapshot (global "revert autonomous changes" support). */
-  public restoreOperatorProfileSnapshot(snapshot: OperatorProfileRecord): OperatorProfileRecord {
-    const restored = this.storage.operatorProfiles.restore(snapshot, this.now());
+  public async restoreOperatorProfileSnapshot(snapshot: OperatorProfileRecord): Promise<OperatorProfileRecord> {
+    const restored = await this.storage.operatorProfiles.restore(snapshot, this.now());
     this.digestCache.delete(normalizeWorkspaceId(restored.workspaceId));
     return restored;
   }
 
-  private readProfile(workspaceId: string): OperatorProfileRecord | undefined {
-    const stampedId = this.storage.workspaces.find(workspaceId)?.workspacePrefs?.operatorProfileId;
+  private async readProfile(workspaceId: string): Promise<OperatorProfileRecord | undefined> {
+    const stampedId = (await this.storage.workspaces.find(workspaceId))?.workspacePrefs?.operatorProfileId;
     if (stampedId) {
-      const byId = this.storage.operatorProfiles.get(stampedId);
+      const byId = await this.storage.operatorProfiles.get(stampedId);
       if (byId) {
         return byId;
       }
     }
-    return this.storage.operatorProfiles.getByWorkspace(workspaceId);
+    return await this.storage.operatorProfiles.getByWorkspace(workspaceId);
   }
 
-  private stampOperatorProfileId(workspaceId: string, operatorProfileId: string): void {
-    const workspace = this.storage.workspaces.find(workspaceId);
+  private async stampOperatorProfileId(workspaceId: string, operatorProfileId: string): Promise<void> {
+    const workspace = await this.storage.workspaces.find(workspaceId);
     if (!workspace) {
       // No workspace record (e.g. default-only / test fixture). The profile is
       // still keyed by workspaceId, so reads fall back to getByWorkspace.
@@ -342,7 +345,7 @@ export class OperatorProfileService {
     if (prefs.operatorProfileId === operatorProfileId) {
       return;
     }
-    this.storage.workspaces.update(workspaceId, {
+    await this.storage.workspaces.update(workspaceId, {
       workspacePrefs: { ...prefs, operatorProfileId },
     });
   }

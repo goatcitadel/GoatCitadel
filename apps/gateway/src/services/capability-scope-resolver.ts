@@ -63,10 +63,13 @@ export function isCapabilityAllowed(set: EffectiveCapabilitySet, ref: string): b
 }
 
 export interface CapabilityScopeResolverDeps {
-  listAssignmentsForScope: (scopeKind: CapabilityScopeKind, scopeId: string) => readonly CapabilityScopeAssignment[];
-  listAllSkillIds: () => readonly string[];
-  listAllIntegrationIds: () => readonly string[];
-  listAllMcpServerIds: () => readonly string[];
+  listAssignmentsForScope: (
+    scopeKind: CapabilityScopeKind,
+    scopeId: string,
+  ) => Promise<readonly CapabilityScopeAssignment[]> | readonly CapabilityScopeAssignment[];
+  listAllSkillIds: () => Promise<readonly string[]> | readonly string[];
+  listAllIntegrationIds: () => Promise<readonly string[]> | readonly string[];
+  listAllMcpServerIds: () => Promise<readonly string[]> | readonly string[];
   /** Defaults to reading the kill-switch env var. */
   isDisabled?: () => boolean;
   onError?: (error: unknown) => void;
@@ -75,18 +78,23 @@ export interface CapabilityScopeResolverDeps {
 export class CapabilityScopeResolver {
   public constructor(private readonly deps: CapabilityScopeResolverDeps) {}
 
-  public resolve(citadelId: string, workspaceId: string): ResolvedCapabilities {
+  public async resolve(citadelId: string, workspaceId: string): Promise<ResolvedCapabilities> {
     try {
       const disabled = this.deps.isDisabled ? this.deps.isDisabled() : readKillSwitch();
       if (disabled) {
         return ALL_CAPABILITIES;
       }
-      const citadel = this.deps.listAssignmentsForScope("citadel", citadelId || DEFAULT_CITADEL_ID);
-      const workspace = this.deps.listAssignmentsForScope("workspace", workspaceId);
+      const [citadel, workspace, skillIds, integrationIds, mcpServerIds] = await Promise.all([
+        this.deps.listAssignmentsForScope("citadel", citadelId || DEFAULT_CITADEL_ID),
+        this.deps.listAssignmentsForScope("workspace", workspaceId),
+        this.deps.listAllSkillIds(),
+        this.deps.listAllIntegrationIds(),
+        this.deps.listAllMcpServerIds(),
+      ]);
       return {
-        skills: this.forType("skill", this.deps.listAllSkillIds(), citadel, workspace),
-        integrations: this.forType("integration", this.deps.listAllIntegrationIds(), citadel, workspace),
-        mcpServers: this.forType("mcp_server", this.deps.listAllMcpServerIds(), citadel, workspace),
+        skills: this.forType("skill", skillIds, citadel, workspace),
+        integrations: this.forType("integration", integrationIds, citadel, workspace),
+        mcpServers: this.forType("mcp_server", mcpServerIds, citadel, workspace),
       };
     } catch (error) {
       this.deps.onError?.(error);

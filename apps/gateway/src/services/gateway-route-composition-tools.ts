@@ -20,26 +20,26 @@ export function composeToolsMcpRouteDependencies(
     storage: {
       approvalInbox: gateway.storage.approvalInbox,
     },
-    readMcpServers: () => gateway.readMcpServers(),
-    writeMcpServers: (servers) => gateway.writeMcpServers(servers),
-    patchMcpServerState: (serverId, patch) => gateway.patchMcpServerState(serverId, patch),
-    readMcpTools: () => gateway.readMcpTools(),
-    writeMcpTools: (tools) => gateway.writeMcpTools(tools),
-    resolveConnectedMcpTools: (server, existing) => gateway.resolveConnectedMcpTools(server, existing),
+    readMcpServers: async () => await gateway.readMcpServers(),
+    writeMcpServers: async (servers) => await gateway.writeMcpServers(servers),
+    patchMcpServerState: async (serverId, patch) => await gateway.patchMcpServerState(serverId, patch),
+    readMcpTools: async () => await gateway.readMcpTools(),
+    writeMcpTools: async (tools) => await gateway.writeMcpTools(tools),
+    resolveConnectedMcpTools: async (server, existing) => await gateway.resolveConnectedMcpTools(server, existing),
     exchangeMcpOAuthCode: (server, code, stateRecord) =>
       gateway.mcpOAuth.exchangeAuthorizationCode(server, code, stateRecord),
-    requireMcpServer: (serverId) => gateway.requireMcpServer(serverId),
-    readMcpAuthState: () => gateway.readMcpAuthState(),
-    writeMcpAuthState: (state) => gateway.writeMcpAuthState(state),
+    requireMcpServer: async (serverId) => await gateway.requireMcpServer(serverId),
+    readMcpAuthState: async () => await gateway.readMcpAuthState(),
+    writeMcpAuthState: async (state) => await gateway.writeMcpAuthState(state),
     publishRealtime: (eventType, source, payload) => gateway.publishRealtime(eventType, source, payload),
   };
   const mcpDiagnosticsDeps: mcpDiagnosticsService.McpDiagnosticsHost = {
     requireFeatureEnabled: (flag) => gateway.requireFeatureEnabled(flag as keyof RuntimeSettings["features"]),
-    listMcpTemplates: () => gateway.listMcpTemplates(),
-    requireMcpServer: (serverId) => gateway.requireMcpServer(serverId),
+    listMcpTemplates: async () => await gateway.listMcpTemplates(),
+    requireMcpServer: async (serverId) => await gateway.requireMcpServer(serverId),
     pickConnectorDiagnosticAction: (checks) => connectorDiagnosticsHelpers.pickConnectorDiagnosticAction(checks),
-    recordConnectorHealthRun: (report) =>
-      connectorDiagnosticsHelpers.recordConnectorHealthRun({ gatewaySql: gateway.storage.gatewaySql }, report),
+    recordConnectorHealthRun: async (report) =>
+      await connectorDiagnosticsHelpers.recordConnectorHealthRun({ gatewaySql: gateway.storage.gatewaySql }, report),
   };
   const llmRuntimeTruth = new LlmRuntimeTruthService({
     storage: gateway.storage,
@@ -56,11 +56,24 @@ export function composeToolsMcpRouteDependencies(
         ...getLlmConfigForGateway(gateway),
         providerConfigs: gateway.llmService.exportConfigFile().providers,
       }),
-      getProviderAdvice: (input) =>
-        buildLlmProviderAdvice(input, gateway.llmService.listProviders(), {
-          latestMeasurement: (providerId, model) => llmRuntimeTruth.latestMeasurement(providerId, model),
+      getProviderAdvice: async (input) => {
+        const providers = gateway.llmService.listProviders();
+        const latestMeasurements = new Map(
+          await Promise.all(
+            providers.map(
+              async (provider) =>
+                [
+                  `${provider.providerId}\u0000${provider.defaultModel}`,
+                  await llmRuntimeTruth.latestMeasurement(provider.providerId, provider.defaultModel),
+                ] as const,
+            ),
+          ),
+        );
+        return buildLlmProviderAdvice(input, providers, {
+          latestMeasurement: (providerId, model) => latestMeasurements.get(`${providerId}\u0000${model}`),
           inferEngineKind: inferRuntimeEngineKind,
-        }),
+        });
+      },
       exportLlmEvalProofRuns: (limit) => llmRuntimeTruth.exportEvalProofRuns(limit),
       listLlmEvalProofRuns: (limit) => llmRuntimeTruth.listEvalProofRuns(limit),
       listLlmLocalEngines: () => llmRuntimeTruth.listLocalEngines(),
@@ -80,27 +93,30 @@ export function composeToolsMcpRouteDependencies(
     },
     mcp: {
       elicitations: gateway.mcpElicitationService,
-      completeMcpOAuth: (serverId: string, code: string, state?: string) =>
-        mcpServerAdminService.completeMcpOAuth(mcpAdminDeps, serverId, code, state),
-      connectMcpServer: (serverId: string) => mcpServerAdminService.connectMcpServer(mcpAdminDeps, serverId),
-      createMcpServer: (input: McpServerCreateInput) => mcpServerAdminService.createMcpServer(mcpAdminDeps, input),
-      deleteMcpServer: (serverId: string) => mcpServerAdminService.deleteMcpServer(mcpAdminDeps, serverId),
-      disconnectMcpServer: (serverId: string) => mcpServerAdminService.disconnectMcpServer(mcpAdminDeps, serverId),
+      completeMcpOAuth: async (serverId: string, code: string, state?: string) =>
+        await mcpServerAdminService.completeMcpOAuth(mcpAdminDeps, serverId, code, state),
+      connectMcpServer: async (serverId: string) =>
+        await mcpServerAdminService.connectMcpServer(mcpAdminDeps, serverId),
+      createMcpServer: async (input: McpServerCreateInput) =>
+        await mcpServerAdminService.createMcpServer(mcpAdminDeps, input),
+      deleteMcpServer: async (serverId: string) => await mcpServerAdminService.deleteMcpServer(mcpAdminDeps, serverId),
+      disconnectMcpServer: async (serverId: string) =>
+        await mcpServerAdminService.disconnectMcpServer(mcpAdminDeps, serverId),
       // Route through the guarded public method (enrich → capability-scope assert → coordinator)
       // so the REST /mcp/invoke surface is subject to the same workspace/citadel scope as the
       // autonomous-model path (spec §7a: "covers every caller (model and REST)").
       invokeMcpTool: (input: McpInvokeRequest) => gateway.invokeMcpTool(input),
-      listMcpServers: () => gateway.listMcpServers(),
-      listMcpTemplateDiscovery: () => mcpDiagnosticsService.listMcpTemplateDiscovery(mcpDiagnosticsDeps),
-      listMcpTemplates: () => gateway.listMcpTemplates(),
-      listMcpTools: (serverId: string) => gateway.listMcpTools(serverId),
-      runMcpServerHealthCheck: (serverId: string) =>
-        mcpDiagnosticsService.runMcpServerHealthCheck(mcpDiagnosticsDeps, serverId),
-      startMcpOAuth: (serverId: string) => mcpServerAdminService.startMcpOAuth(mcpAdminDeps, serverId),
-      updateMcpServer: (serverId: string, input: McpServerUpdateInput) =>
-        mcpServerAdminService.updateMcpServer(mcpAdminDeps, serverId, input),
-      updateMcpServerPolicy: (serverId: string, policy: Partial<McpServerPolicy>) =>
-        mcpServerAdminService.updateMcpServerPolicy(mcpAdminDeps, serverId, policy),
+      listMcpServers: async () => await gateway.listMcpServers(),
+      listMcpTemplateDiscovery: async () => await mcpDiagnosticsService.listMcpTemplateDiscovery(mcpDiagnosticsDeps),
+      listMcpTemplates: async () => await gateway.listMcpTemplates(),
+      listMcpTools: async (serverId: string) => await gateway.listMcpTools(serverId),
+      runMcpServerHealthCheck: async (serverId: string) =>
+        await mcpDiagnosticsService.runMcpServerHealthCheck(mcpDiagnosticsDeps, serverId),
+      startMcpOAuth: async (serverId: string) => await mcpServerAdminService.startMcpOAuth(mcpAdminDeps, serverId),
+      updateMcpServer: async (serverId: string, input: McpServerUpdateInput) =>
+        await mcpServerAdminService.updateMcpServer(mcpAdminDeps, serverId, input),
+      updateMcpServerPolicy: async (serverId: string, policy: Partial<McpServerPolicy>) =>
+        await mcpServerAdminService.updateMcpServerPolicy(mcpAdminDeps, serverId, policy),
     },
     secrets: {
       deleteProviderSecret: (providerId, expectedRevision, storage) =>
@@ -122,12 +138,12 @@ export function composeToolsMcpRouteDependencies(
       createLocalOperatorOverride: (input) => gateway.createLocalOperatorOverride(input),
       createPermissionProfile: (input) => gateway.createPermissionProfile(input),
       createToolGrant: (input) => gateway.approvalRuntime.createToolGrant(input),
-      evaluateToolAccess: (input) =>
-        gateway.evaluateToolAccess({
+      evaluateToolAccess: async (input) =>
+        await gateway.evaluateToolAccess({
           ...input,
           workspaceId:
             input.workspaceId ??
-            gateway.storage.chatSessionMeta.get(input.sessionId)?.workspaceId ??
+            (await gateway.storage.chatSessionMeta.get(input.sessionId))?.workspaceId ??
             DEFAULT_WORKSPACE_ID,
         }),
       listPermissionProfiles: (includeArchived) => gateway.listPermissionProfiles(includeArchived),

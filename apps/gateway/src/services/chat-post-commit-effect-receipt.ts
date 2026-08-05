@@ -1,4 +1,4 @@
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { DurableWorkerInterruptionError } from "./durable-run-service.js";
 
 const CANONICAL_RECEIPT_METADATA_KEY = "generalChatPostCommitCanonical";
@@ -118,16 +118,18 @@ export interface ChatPostCommitAtomicStageOutcome<TValue> {
 /**
  * Storage-agnostic seam for the D2 integrator. `run` locks the session and exact
  * active synchronous child admission before the exact durable claim, then calls
- * the synchronous callback under those locks. After the callback, an allowed
- * nonterminal stage retains the active admission, an allowed terminal stage
- * completes it, and any late-blocked stage cancels it. Any throw rolls all
- * writes back together.
+ * the awaited callback while the owned storage transaction retains those locks.
+ * After the callback, an allowed nonterminal stage retains the active admission,
+ * an allowed terminal stage completes it, and any late-blocked stage cancels it.
+ * Any rejection rolls all writes back together.
  */
 export interface ChatPostCommitAtomicStageAuthorityPort {
   run<TValue>(
     input: ChatPostCommitStageAuthorityInput,
-    callback: (context: ChatPostCommitAtomicStageCallbackContext) => ChatPostCommitAtomicStageCallbackResult<TValue>,
-  ): ChatPostCommitAtomicStageOutcome<TValue>;
+    callback: (
+      context: ChatPostCommitAtomicStageCallbackContext,
+    ) => Promise<ChatPostCommitAtomicStageCallbackResult<TValue>>,
+  ): Promise<ChatPostCommitAtomicStageOutcome<TValue>>;
 }
 
 export interface GeneralChatPostCommitStageIdentity {
@@ -147,8 +149,8 @@ export interface GeneralChatPostCommitStageCommitOptions {
   };
   /** Used when pre-dispatch already denied authority; provider/domain apply is skipped. */
   forcedDisposition?: "late_blocked";
-  /** Re-evaluated synchronously under the atomic authority locks; may only reduce to late_blocked. */
-  denyOnlyBlocked?: () => boolean;
+  /** Re-evaluated under the atomic authority locks; may only reduce to late_blocked. */
+  denyOnlyBlocked?: () => Promise<boolean>;
 }
 
 export interface GeneralChatPostCommitStageCommitResult<TValue> {
@@ -161,11 +163,11 @@ export interface GeneralChatPostCommitStageCommitResult<TValue> {
  * Reads an already-committed stage receipt so durable retries can avoid another
  * provider call. Canonical writes still go through {@link commitGeneralChatPostCommitStage}.
  */
-export function readGeneralChatPostCommitStage(
+export async function readGeneralChatPostCommitStage(
   storage: ChatPostCommitEffectReceiptStoragePort,
   identity: Omit<GeneralChatPostCommitStageIdentity, "expectedLeaseOwnerId">,
-): GeneralChatPostCommitStageReceipt | undefined {
-  const run = storage.durableRuns.getRun(identity.effectRunId);
+): Promise<GeneralChatPostCommitStageReceipt | undefined> {
+  const run = await storage.durableRuns.getRun(identity.effectRunId);
   assertEffectRunIdentity(run.workflowKey, run.metadata, identity.effect);
   const receipt = readCanonicalReceipt(run.metadata, identity.effect)?.stages[identity.stage];
   return receipt ? sanitizeStageReceipt(identity.stage, receipt) : undefined;
@@ -184,22 +186,22 @@ export function readGeneralChatPostCommitStageResult(
  * Serializes one canonical post-commit write. Lock order is deliberately:
  * outer transaction -> session/admission guard -> exact child lease -> domain
  * write + receipt -> authority settlement. Provider reads happen beforehand;
- * `apply` remains synchronous.
+ * the awaited `apply` remains inside the owned storage transaction.
  */
-export function commitGeneralChatPostCommitStage<TValue>(
+export async function commitGeneralChatPostCommitStage<TValue>(
   storage: ChatPostCommitEffectReceiptStoragePort,
   identity: GeneralChatPostCommitStageIdentity,
-  apply: () => { value: TValue; result: Record<string, unknown> },
+  apply: () => Promise<{ value: TValue; result: Record<string, unknown> }>,
   options: GeneralChatPostCommitStageCommitOptions = {},
-): GeneralChatPostCommitStageCommitResult<TValue> {
+): Promise<GeneralChatPostCommitStageCommitResult<TValue>> {
   // A completed immutable receipt is authoritative replay truth. Its terminal
   // admission may already be closed, so do not call the active-authority guard
   // or settlement callback again.
-  const fastReplay = readGeneralChatPostCommitStage(storage, identity);
+  const fastReplay = await readGeneralChatPostCommitStage(storage, identity);
   if (fastReplay) {
     return { replayed: true, receipt: fastReplay };
   }
-  return storage.runImmediateTransaction(() => {
+  return await storage.runImmediateTransaction(async () => {
     const authorityInput = options.authority
       ? {
           authority: options.authority.context,
@@ -213,9 +215,9 @@ export function commitGeneralChatPostCommitStage<TValue>(
           terminal: options.authority.terminal,
         }
       : undefined;
-    const commitUnderAuthority = (
+    const commitUnderAuthority = async (
       callbackContext: ChatPostCommitAtomicStageCallbackContext,
-    ): GeneralChatPostCommitStageCommitResult<TValue> => {
+    ): Promise<GeneralChatPostCommitStageCommitResult<TValue>> => {
       assertAuthorityDecision(callbackContext.disposition);
       if (!Number.isSafeInteger(callbackContext.durableRunVersion) || callbackContext.durableRunVersion < 1) {
         throw new Error("Durable Chat post-commit authority returned an invalid durable run version.");
@@ -224,7 +226,7 @@ export function commitGeneralChatPostCommitStage<TValue>(
 
       // The authority wrapper has locked session/admission and the exact claim
       // before this defensive exact child-run lock/read.
-      const locked = requireFreshEffectLease(storage, identity);
+      const locked = await requireFreshEffectLease(storage, identity);
       if (locked.version !== callbackContext.durableRunVersion) {
         throw new Error("Durable Chat post-commit authority and effect lease versions diverged.");
       }
@@ -241,7 +243,7 @@ export function commitGeneralChatPostCommitStage<TValue>(
       if (disposition === "late_blocked") {
         stageReceipt = { completedAt, disposition: "late_blocked" };
       } else {
-        const applied = apply();
+        const applied = await apply();
         value = applied.value;
         stageReceipt = {
           completedAt,
@@ -249,7 +251,7 @@ export function commitGeneralChatPostCommitStage<TValue>(
           result: sanitizeStageResult(identity.stage, applied.result),
         };
       }
-      storage.durableRuns.updateRun({
+      await storage.durableRuns.updateRun({
         runId: locked.runId,
         status: locked.status,
         metadata: {
@@ -269,16 +271,16 @@ export function commitGeneralChatPostCommitStage<TValue>(
     };
 
     if (!authorityInput) {
-      const run = storage.durableRuns.getRun(identity.effectRunId);
-      const disposition = reduceAuthorityDecision("allowed", options);
-      return commitUnderAuthority({ disposition, admission: undefined, durableRunVersion: run.version });
+      const run = await storage.durableRuns.getRun(identity.effectRunId);
+      const disposition = await reduceAuthorityDecision("allowed", options);
+      return await commitUnderAuthority({ disposition, admission: undefined, durableRunVersion: run.version });
     }
     let callbackDisposition: ChatPostCommitAuthorityDecision | undefined;
-    const outcome = options.authority!.port.run(authorityInput, (callbackContext) => {
-      callbackDisposition = reduceAuthorityDecision(callbackContext.disposition, options);
+    const outcome = await options.authority!.port.run(authorityInput, async (callbackContext) => {
+      callbackDisposition = await reduceAuthorityDecision(callbackContext.disposition, options);
       return {
         disposition: callbackDisposition,
-        value: commitUnderAuthority({ ...callbackContext, disposition: callbackDisposition }),
+        value: await commitUnderAuthority({ ...callbackContext, disposition: callbackDisposition }),
       };
     });
     assertAuthorityDecision(outcome.disposition);
@@ -289,13 +291,13 @@ export function commitGeneralChatPostCommitStage<TValue>(
   });
 }
 
-function reduceAuthorityDecision(
+async function reduceAuthorityDecision(
   authorityDecision: ChatPostCommitAuthorityDecision,
   options: GeneralChatPostCommitStageCommitOptions,
-): ChatPostCommitAuthorityDecision {
+): Promise<ChatPostCommitAuthorityDecision> {
   return authorityDecision === "late_blocked" ||
     options.forcedDisposition === "late_blocked" ||
-    options.denyOnlyBlocked?.()
+    (options.denyOnlyBlocked ? await options.denyOnlyBlocked() : false)
     ? "late_blocked"
     : "allowed";
 }
@@ -310,11 +312,14 @@ function assertEffectRunIdentity(
   }
 }
 
-function requireFreshEffectLease(
+async function requireFreshEffectLease(
   storage: ChatPostCommitEffectReceiptStoragePort,
   identity: GeneralChatPostCommitStageIdentity,
 ) {
-  const locked = storage.durableRuns.lockFreshActiveLeaseForUpdate(identity.effectRunId, identity.expectedLeaseOwnerId);
+  const locked = await storage.durableRuns.lockFreshActiveLeaseForUpdate(
+    identity.effectRunId,
+    identity.expectedLeaseOwnerId,
+  );
   if (!locked) {
     throw new DurableWorkerInterruptionError(
       "lease_lost",

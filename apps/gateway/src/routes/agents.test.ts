@@ -15,7 +15,7 @@ describe("agents routes", () => {
 
   function createAgentsService(overrides: Record<string, unknown> = {}) {
     return {
-      listAgents: vi.fn((view: string, limit: number) => [
+      listAgents: vi.fn(async (view: string, limit: number) => [
         {
           roleId: `agent-${view}`,
           name: `Agent ${view}`,

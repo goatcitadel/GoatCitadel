@@ -31,7 +31,7 @@ export interface OnboardingStateHost {
     source: string,
     payload: Record<string, unknown>,
     options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
-  ): void;
+  ): Promise<unknown>;
   updateSettings(input: settingsAuthService.UpdateSettingsInput): Promise<RuntimeSettings>;
 }
 
@@ -237,7 +237,7 @@ export async function bootstrapOnboarding(
   });
 
   if (input.markComplete) {
-    markOnboardingComplete(runtime, input.completedBy ?? "operator");
+    await markOnboardingComplete(runtime, input.completedBy ?? "operator");
   }
 
   return {
@@ -246,13 +246,16 @@ export async function bootstrapOnboarding(
   };
 }
 
-export function markOnboardingComplete(runtime: OnboardingStateHost, completedBy = "operator"): OnboardingState {
+export async function markOnboardingComplete(
+  runtime: OnboardingStateHost,
+  completedBy = "operator",
+): Promise<OnboardingState> {
   runtime.onboardingMarker = {
     completedAt: new Date().toISOString(),
     completedBy: completedBy.trim() || "operator",
   };
   onboardingMarkerHelpers.persistOnboardingMarker(runtime);
-  runtime.publishRealtime("system", "onboarding", {
+  await runtime.publishRealtime("system", "onboarding", {
     type: "onboarding_completed",
     completedAt: runtime.onboardingMarker.completedAt,
     completedBy: runtime.onboardingMarker.completedBy,

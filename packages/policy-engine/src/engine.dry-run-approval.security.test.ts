@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage } from "@goatcitadel/storage";
 import type { ToolPolicyConfig } from "@goatcitadel/contracts";
 import { ToolPolicyEngine } from "./engine.js";
 
@@ -24,10 +24,13 @@ function buildConfig(): ToolPolicyConfig {
   } as ToolPolicyConfig;
 }
 
-function createStorageStub(): Storage {
+function createStorageStub(): AsyncStorage {
   return {
+    runImmediateTransaction: vi.fn(
+      async <T>(operation: () => T | Promise<T>): Promise<Awaited<T>> => await operation(),
+    ),
     approvals: {
-      create: vi.fn((input) => ({
+      create: vi.fn(async (input) => ({
         approvalId: "approval-dry-run",
         kind: input.kind,
         riskLevel: input.riskLevel,
@@ -38,7 +41,7 @@ function createStorageStub(): Storage {
         expiresAt: input.expiresAt,
         explanationStatus: "not_requested",
       })),
-      createWithTtlDuration: vi.fn((input, ttlMs) => ({
+      createWithTtlDuration: vi.fn(async (input, ttlMs) => ({
         approvalId: "approval-dry-run",
         kind: input.kind,
         riskLevel: input.riskLevel,
@@ -50,25 +53,25 @@ function createStorageStub(): Storage {
         explanationStatus: "not_requested",
       })),
     },
-    approvalEvents: { append: vi.fn() },
+    approvalEvents: { append: vi.fn(async () => undefined) },
     audit: { append: vi.fn(async () => undefined) },
-    db: { prepare: vi.fn(() => ({ run: vi.fn() })) },
+    db: { prepare: vi.fn(() => ({ run: vi.fn(async () => undefined) })) },
     pendingApprovalActions: {
-      find: vi.fn(() => undefined),
-      markResolved: vi.fn(),
-      upsertPending: vi.fn(),
+      find: vi.fn(async () => undefined),
+      markResolved: vi.fn(async () => undefined),
+      upsertPending: vi.fn(async () => undefined),
     },
     toolAccessDecisions: {
-      countToolCallsInLastHourInScope: vi.fn(() => 0),
-      countWritesInLastHourInScope: vi.fn(() => 0),
-      record: vi.fn(),
+      countToolCallsInLastHourInScope: vi.fn(async () => 0),
+      countWritesInLastHourInScope: vi.fn(async () => 0),
+      record: vi.fn(async () => undefined),
     },
     toolGrants: {
-      consumeOne: vi.fn(),
-      list: vi.fn(() => []),
-      listActive: vi.fn(() => []),
+      consumeOne: vi.fn(async () => true),
+      list: vi.fn(async () => []),
+      listActive: vi.fn(async () => []),
     },
-  } as unknown as Storage;
+  } as unknown as AsyncStorage;
 }
 
 describe("dry-run vs approval-required (codex #16)", () => {

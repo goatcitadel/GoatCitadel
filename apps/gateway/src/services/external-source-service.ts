@@ -80,22 +80,26 @@ export interface ExternalSourceConfigRepositoryPort {
     record: ExternalSourceRecord,
     expectedWorkspaceRevision: number,
     activeRootLimit: number,
-  ): ExternalSourceRecord;
-  updateCas(record: ExternalSourceRecord, expectedRevision: number, activeRootLimit: number): ExternalSourceRecord;
-  find(workspaceId: string, sourceId: string): ExternalSourceRecord | undefined;
-  get(workspaceId: string, sourceId: string): ExternalSourceRecord;
-  listByWorkspace(workspaceId: string, limit?: number): ExternalSourceRecord[];
+  ): Promise<ExternalSourceRecord>;
+  updateCas(
+    record: ExternalSourceRecord,
+    expectedRevision: number,
+    activeRootLimit: number,
+  ): Promise<ExternalSourceRecord>;
+  find(workspaceId: string, sourceId: string): Promise<ExternalSourceRecord | undefined>;
+  get(workspaceId: string, sourceId: string): Promise<ExternalSourceRecord>;
+  listByWorkspace(workspaceId: string, limit?: number): Promise<ExternalSourceRecord[]>;
   listByWorkspaceActor(
     workspaceId: string,
     ownerActorId: string,
     authActorId: string,
     authActorSource: ExternalSourceRequestActor["source"],
     limit?: number,
-  ): ExternalSourceRecord[];
+  ): Promise<ExternalSourceRecord[]>;
 }
 
 export interface ExternalSourceScanRepositoryPort {
-  listScans(workspaceId: string, sourceId: string, limit?: number): ExternalSourceScanRecord[];
+  listScans(workspaceId: string, sourceId: string, limit?: number): Promise<ExternalSourceScanRecord[]>;
   listPage(input: {
     workspaceId: string;
     sourceId: string;
@@ -103,11 +107,11 @@ export interface ExternalSourceScanRepositoryPort {
     dispositions?: ExternalSourceCatalogListInput["dispositions"];
     cursor?: string;
     limit?: number;
-  }): ExternalSourcePage;
+  }): Promise<ExternalSourcePage>;
 }
 
 export interface ExternalSourcePathSnapshotRepositoryPort {
-  find(snapshotId: string): WorkspacePathBridgeSnapshotRecord | undefined;
+  find(snapshotId: string): Promise<WorkspacePathBridgeSnapshotRecord | undefined>;
 }
 
 export interface ExternalSourcePathVerifierPort {
@@ -118,7 +122,7 @@ export interface ExternalSourcePathVerifierPort {
 }
 
 export interface ExternalSourceWorkspaceRepositoryPort {
-  find(workspaceId: string): WorkspaceRecord | undefined;
+  find(workspaceId: string): Promise<WorkspaceRecord | undefined>;
 }
 
 export interface ExternalSourceRootInspectorPort {
@@ -194,7 +198,7 @@ export class ExternalSourceService {
     assertSignal(signal);
     return this.withWorkspaceQueue(input.workspaceId, async () => {
       assertLive(signal);
-      this.requireActiveWorkspace(input.workspaceId, input.expectedWorkspaceRevision);
+      await this.requireActiveWorkspace(input.workspaceId, input.expectedWorkspaceRevision);
       const adapterId = adapterIdForKind(input.kind);
       this.assertFixtureAuthorizedVersions(adapterId, input.acceptedProducerVersions);
       const snapshot = await this.requireCurrentSnapshot(input, signal);
@@ -244,7 +248,7 @@ export class ExternalSourceService {
       };
       const record = sealExternalSourceRecord(draft);
       try {
-        const stored = this.dependencies.configs.createForActiveWorkspace(
+        const stored = await this.dependencies.configs.createForActiveWorkspace(
           record,
           input.expectedWorkspaceRevision,
           EXTERNAL_SOURCE_LIMITS.activeRootsPerWorkspace,
@@ -256,13 +260,13 @@ export class ExternalSourceService {
     });
   }
 
-  public list(workspaceId: string, actor: ExternalSourceRequestActor): ExternalSourceListResponse {
+  public async list(workspaceId: string, actor: ExternalSourceRequestActor): Promise<ExternalSourceListResponse> {
     assertRequestActor(actor);
     assertServerIdentifier(workspaceId);
-    this.requireActiveWorkspace(workspaceId);
+    await this.requireActiveWorkspace(workspaceId);
     let records: ExternalSourceRecord[];
     try {
-      records = this.dependencies.configs.listByWorkspaceActor(
+      records = await this.dependencies.configs.listByWorkspaceActor(
         workspaceId,
         actor.actorId,
         actor.actorId,
@@ -275,13 +279,19 @@ export class ExternalSourceService {
     return {
       schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,
       workspaceId,
-      items: records.map((source) => projectExternalSourceSummary(source, this.latestScan(source))),
+      items: await Promise.all(
+        records.map(async (source) => projectExternalSourceSummary(source, await this.latestScan(source))),
+      ),
     };
   }
 
-  public get(workspaceId: string, sourceId: string, actor: ExternalSourceRequestActor): ExternalSourceDetailResponse {
-    const source = this.requireOwnedSource(workspaceId, sourceId, actor);
-    return detail(source, this.latestScan(source));
+  public async get(
+    workspaceId: string,
+    sourceId: string,
+    actor: ExternalSourceRequestActor,
+  ): Promise<ExternalSourceDetailResponse> {
+    const source = await this.requireOwnedSource(workspaceId, sourceId, actor);
+    return detail(source, await this.latestScan(source));
   }
 
   public async update(
@@ -292,7 +302,7 @@ export class ExternalSourceService {
     assertRequestActor(actor);
     const input = normalizeExternalSourceUpdateInput(rawInput);
     return this.withWorkspaceQueue(input.workspaceId, async () => {
-      const current = this.requireOwnedSource(input.workspaceId, sourceId, actor);
+      const current = await this.requireOwnedSource(input.workspaceId, sourceId, actor);
       if (current.revision !== input.expectedRevision) throw new ExternalSourceServiceError("conflict");
       if (current.status === "revoked") throw new ExternalSourceServiceError("conflict");
       const updatedAt = nextTimestamp(current.updatedAt, this.clock.now());
@@ -309,7 +319,7 @@ export class ExternalSourceService {
       });
       let stored: ExternalSourceRecord;
       try {
-        stored = this.dependencies.configs.updateCas(
+        stored = await this.dependencies.configs.updateCas(
           updated,
           input.expectedRevision,
           EXTERNAL_SOURCE_LIMITS.activeRootsPerWorkspace,
@@ -319,7 +329,7 @@ export class ExternalSourceService {
       }
       let latestScan: ExternalSourceScanRecord | undefined;
       try {
-        latestScan = this.latestScan(stored);
+        latestScan = await this.latestScan(stored);
       } catch {
         // The CAS commit is authoritative. Optional list projection failure
         // cannot turn a successful mutation into an apparent retryable write.
@@ -336,7 +346,7 @@ export class ExternalSourceService {
   ): Promise<ExternalSourceScanRecord> {
     assertRequestActor(actor);
     const input = normalizeExternalSourceScanInput(rawInput);
-    const source = this.requireOwnedSource(input.workspaceId, sourceId, actor);
+    const source = await this.requireOwnedSource(input.workspaceId, sourceId, actor);
     if (source.status !== "active") throw new ExternalSourceServiceError("source_not_active");
     if (source.revision !== input.expectedRevision) throw new ExternalSourceServiceError("conflict");
     assertSignal(signal);
@@ -367,16 +377,16 @@ export class ExternalSourceService {
     }
   }
 
-  public listCatalog(
+  public async listCatalog(
     sourceId: string,
     rawInput: ExternalSourceCatalogListInput,
     actor: ExternalSourceRequestActor,
-  ): ExternalSourcePage {
+  ): Promise<ExternalSourcePage> {
     assertRequestActor(actor);
     const input = normalizeExternalSourceCatalogListInput(rawInput);
-    this.requireOwnedSource(input.workspaceId, sourceId, actor);
+    await this.requireOwnedSource(input.workspaceId, sourceId, actor);
     try {
-      return this.dependencies.scans.listPage({
+      return await this.dependencies.scans.listPage({
         workspaceId: input.workspaceId,
         sourceId,
         scanId: input.scanId,
@@ -399,7 +409,7 @@ export class ExternalSourceService {
   ): Promise<WorkspacePathBridgeSnapshotRecord> {
     let snapshot: WorkspacePathBridgeSnapshotRecord | undefined;
     try {
-      snapshot = this.dependencies.pathSnapshots.find(input.pathBridgeSnapshotId);
+      snapshot = await this.dependencies.pathSnapshots.find(input.pathBridgeSnapshotId);
     } catch (error) {
       throw normalizeServiceFailure(error, undefined, "repository_failure");
     }
@@ -419,18 +429,18 @@ export class ExternalSourceService {
     return current;
   }
 
-  private requireOwnedSource(
+  private async requireOwnedSource(
     workspaceId: string,
     sourceId: string,
     actor: ExternalSourceRequestActor,
-  ): ExternalSourceRecord {
+  ): Promise<ExternalSourceRecord> {
     assertRequestActor(actor);
     assertServerIdentifier(workspaceId);
     assertServerIdentifier(sourceId);
-    this.requireActiveWorkspace(workspaceId);
+    await this.requireActiveWorkspace(workspaceId);
     let source: ExternalSourceRecord | undefined;
     try {
-      source = this.dependencies.configs.find(workspaceId, sourceId);
+      source = await this.dependencies.configs.find(workspaceId, sourceId);
     } catch (error) {
       throw normalizeServiceFailure(error, undefined, "repository_failure");
     }
@@ -438,10 +448,10 @@ export class ExternalSourceService {
     return source;
   }
 
-  private requireActiveWorkspace(workspaceId: string, expectedRevision?: number): void {
+  private async requireActiveWorkspace(workspaceId: string, expectedRevision?: number): Promise<void> {
     let workspace: WorkspaceRecord | undefined;
     try {
-      workspace = this.dependencies.workspaces.find(workspaceId);
+      workspace = await this.dependencies.workspaces.find(workspaceId);
     } catch (error) {
       throw normalizeServiceFailure(error, undefined, "repository_failure");
     }
@@ -451,9 +461,9 @@ export class ExternalSourceService {
     }
   }
 
-  private latestScan(source: ExternalSourceRecord): ExternalSourceScanRecord | undefined {
+  private async latestScan(source: ExternalSourceRecord): Promise<ExternalSourceScanRecord | undefined> {
     try {
-      return this.dependencies.scans.listScans(source.workspaceId, source.sourceId, 1)[0];
+      return (await this.dependencies.scans.listScans(source.workspaceId, source.sourceId, 1))[0];
     } catch (error) {
       throw normalizeServiceFailure(error, undefined, "repository_failure");
     }
@@ -520,9 +530,9 @@ export class StorageExternalSourceIdentityResolver implements ExternalSourceIden
     signal: AbortSignal;
   }): Promise<{ source: ExternalSourceRecord; snapshot: WorkspacePathBridgeSnapshotRecord } | undefined> {
     assertLive(input.signal);
-    const source = this.dependencies.configs.find(input.workspaceId, input.sourceId);
+    const source = await this.dependencies.configs.find(input.workspaceId, input.sourceId);
     if (!source || source.status !== "active") return undefined;
-    const snapshot = this.dependencies.pathSnapshots.find(source.pathBridgeSnapshotId);
+    const snapshot = await this.dependencies.pathSnapshots.find(source.pathBridgeSnapshotId);
     if (!snapshot) return undefined;
     let current: WorkspacePathBridgeSnapshotRecord;
     try {

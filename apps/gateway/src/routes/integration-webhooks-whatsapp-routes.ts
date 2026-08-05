@@ -44,7 +44,7 @@ export function registerWhatsAppWebhookRoutes(fastify: FastifyInstance): void {
 
       let connection;
       try {
-        connection = fastify.services.integrationWebhooks.getIntegrationConnection(params.data.connectionId);
+        connection = await fastify.services.integrationWebhooks.getIntegrationConnection(params.data.connectionId);
       } catch (error) {
         return reply.code(404).send({ error: (error as Error).message });
       }

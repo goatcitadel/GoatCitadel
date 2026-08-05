@@ -7,7 +7,7 @@ import type {
   ToolPolicyConfig,
 } from "@goatcitadel/contracts";
 import { clampInt } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage } from "@goatcitadel/storage";
 import { Buffer } from "node:buffer";
 import { mapWithConcurrency } from "../async-utils.js";
 import { ingestDocumentViaBackend, resolveIngestionTrustLevel, searchIngestedContext } from "../ingestion-backends.js";
@@ -54,8 +54,8 @@ export interface KnowledgeExecutorDeps {
     candidate: string,
     request: ToolInvokeRequest,
     config: ToolPolicyConfig,
-    storage: Storage,
-  ): void;
+    storage: AsyncStorage,
+  ): Promise<void>;
   fetchAllowlisted(
     url: string,
     init: RequestInit,
@@ -63,7 +63,7 @@ export interface KnowledgeExecutorDeps {
     signal?: AbortSignal,
     grantAllowlist?: string[],
   ): Promise<{ response: Response; finalUrl: string }>;
-  resolveExecutionGrantAllowedHosts(request: ToolInvokeRequest, storage?: Storage): string[] | undefined;
+  resolveExecutionGrantAllowedHosts(request: ToolInvokeRequest, storage?: AsyncStorage): Promise<string[] | undefined>;
   resolveNetworkAllowlist(request: ToolInvokeRequest, config: ToolPolicyConfig): string[];
 }
 
@@ -74,7 +74,7 @@ export function isKnowledgeToolName(toolName: string): boolean {
 export async function executeKnowledgeTool(
   request: ToolInvokeRequest,
   config: ToolPolicyConfig,
-  storage: Storage,
+  storage: AsyncStorage,
   deps: KnowledgeExecutorDeps,
 ): Promise<Record<string, unknown>> {
   switch (request.toolName) {
@@ -105,7 +105,12 @@ export async function executeKnowledgeTool(
   }
 }
 
-async function memoryWrite(request: ToolInvokeRequest, storage: Storage, upsert: boolean, deps: KnowledgeExecutorDeps) {
+async function memoryWrite(
+  request: ToolInvokeRequest,
+  storage: AsyncStorage,
+  upsert: boolean,
+  deps: KnowledgeExecutorDeps,
+) {
   const args = request.args;
   const namespace = required(args.namespace, "namespace");
   const title = required(args.title, "title");
@@ -117,7 +122,7 @@ async function memoryWrite(request: ToolInvokeRequest, storage: Storage, upsert:
     ...record(inputMetadata.ingestion),
     ...(carriedTrustLevel ? { trustLevel: carriedTrustLevel } : {}),
   };
-  const doc = storage.knowledge.createDocument({
+  const doc = await storage.knowledge.createDocument({
     namespace,
     sourceType: "memory",
     sourceRef: upsert ? `upsert:${namespace}:${title}` : `memory:${Date.now()}`,
@@ -148,7 +153,7 @@ async function memoryWrite(request: ToolInvokeRequest, storage: Storage, upsert:
       },
     };
   });
-  storage.knowledge.appendChunks(doc.docId, embeddedChunks);
+  await storage.knowledge.appendChunks(doc.docId, embeddedChunks);
   const attribution = knowledgeDocumentAttribution(doc);
   return {
     mode: upsert ? "upsert" : "write",
@@ -170,7 +175,7 @@ async function memoryWrite(request: ToolInvokeRequest, storage: Storage, upsert:
  * calling workspace. Query sanitisation lives in the storage repo, so arbitrary user text is
  * safe here. The repo enforces sensible limit/context-radius bounds.
  */
-function sessionSearch(request: ToolInvokeRequest, storage: Storage) {
+async function sessionSearch(request: ToolInvokeRequest, storage: AsyncStorage) {
   const query = (asString(request.args.query) ?? "").trim();
   const scope = asString(request.args.scope) === "all" ? "all" : "session";
   const limit = clampInt(request.args.limit, 10, 1, 50);
@@ -180,29 +185,31 @@ function sessionSearch(request: ToolInvokeRequest, storage: Storage) {
   if (query.length > 512) {
     throw new Error("session.search query must be 512 characters or fewer");
   }
-  const workspaceId = resolveAuthorizedSessionWorkspace(request, storage, request.sessionId);
-  const hits = storage.chatMessages.searchMessages(query, {
+  const workspaceId = await resolveAuthorizedSessionWorkspace(request, storage, request.sessionId);
+  const hits = await storage.chatMessages.searchMessages(query, {
     workspaceId,
     ...(scope === "session" ? { sessionId: request.sessionId } : {}),
     includeHidden: scope === "session",
     limit,
     contextRadius: 0,
   });
-  const authorizedHits = hits
-    .filter((hit) => {
-      if (
-        hit.workspaceId !== workspaceId ||
-        (scope === "session" && hit.sessionId !== request.sessionId) ||
-        !hit.messageId ||
-        !Number.isSafeInteger(hit.sequence) ||
-        hit.sequence < 1
-      ) {
-        return false;
-      }
-      const meta = storage.chatSessionMeta.get(hit.sessionId);
-      return meta?.workspaceId === workspaceId && (scope === "session" || meta.includeInHistory !== false);
-    })
-    .slice(0, limit);
+  const authorizedHits: typeof hits = [];
+  for (const hit of hits) {
+    if (
+      hit.workspaceId !== workspaceId ||
+      (scope === "session" && hit.sessionId !== request.sessionId) ||
+      !hit.messageId ||
+      !Number.isSafeInteger(hit.sequence) ||
+      hit.sequence < 1
+    ) {
+      continue;
+    }
+    const meta = await storage.chatSessionMeta.get(hit.sessionId);
+    if (meta?.workspaceId === workspaceId && (scope === "session" || meta.includeInHistory !== false)) {
+      authorizedHits.push(hit);
+      if (authorizedHits.length >= limit) break;
+    }
+  }
   return {
     scope,
     query: capUtf8Text(sanitizeForModel(query), 512, ""),
@@ -219,7 +226,7 @@ function sessionSearch(request: ToolInvokeRequest, storage: Storage) {
   };
 }
 
-function sessionHistory(request: ToolInvokeRequest, storage: Storage) {
+async function sessionHistory(request: ToolInvokeRequest, storage: AsyncStorage) {
   const targetSessionId = (asString(request.args.sessionId) ?? request.sessionId).trim();
   const messageId = (asString(request.args.messageId) ?? "").trim();
   const sequence = clampInt(request.args.sequence, 0, 0, Number.MAX_SAFE_INTEGER);
@@ -227,8 +234,8 @@ function sessionHistory(request: ToolInvokeRequest, storage: Storage) {
   if (!messageId || sequence < 1) {
     throw new Error("session.history requires an exact messageId and positive sequence from session.search");
   }
-  const workspaceId = resolveAuthorizedSessionWorkspace(request, storage, targetSessionId);
-  const window = storage.chatMessages.readAnchoredWindow(
+  const workspaceId = await resolveAuthorizedSessionWorkspace(request, storage, targetSessionId);
+  const window = await storage.chatMessages.readAnchoredWindow(
     { workspaceId, sessionId: targetSessionId, messageId, sequence },
     limit,
   );
@@ -246,7 +253,7 @@ function sessionHistory(request: ToolInvokeRequest, storage: Storage) {
 }
 
 function capProviderSessionHistory(
-  source: ReturnType<Storage["chatMessages"]["readAnchoredWindow"]>["items"],
+  source: Awaited<ReturnType<AsyncStorage["chatMessages"]["readAnchoredWindow"]>>["items"],
   maxBytes: number,
 ) {
   let contentWasTruncated = false;
@@ -354,13 +361,15 @@ function isLowSurrogate(value: number): boolean {
   return value >= 0xdc00 && value <= 0xdfff;
 }
 
-function resolveAuthorizedSessionWorkspace(
+async function resolveAuthorizedSessionWorkspace(
   request: ToolInvokeRequest,
-  storage: Storage,
+  storage: AsyncStorage,
   targetSessionId: string,
-): string {
-  const callingMeta = storage.chatSessionMeta.get(request.sessionId);
-  const targetMeta = storage.chatSessionMeta.get(targetSessionId);
+): Promise<string> {
+  const [callingMeta, targetMeta] = await Promise.all([
+    storage.chatSessionMeta.get(request.sessionId),
+    storage.chatSessionMeta.get(targetSessionId),
+  ]);
   const workspaceId = callingMeta?.workspaceId?.trim();
   if (
     !workspaceId ||
@@ -374,17 +383,20 @@ function resolveAuthorizedSessionWorkspace(
   return workspaceId;
 }
 
-async function memoryRead(args: Record<string, unknown>, storage: Storage) {
+async function memoryRead(args: Record<string, unknown>, storage: AsyncStorage) {
   const namespace = asString(args.namespace);
   const query = (asString(args.query) ?? asString(args.title) ?? asString(args.key) ?? "").trim().toLowerCase();
   const limit = clampInt(args.limit, 5, 1, 50);
-  const documents = storage.knowledge.listDocuments(namespace, 500);
-  const chunkMap = new Map<string, ReturnType<Storage["knowledge"]["listChunksByDocument"]>>();
-  const readChunks = (docId: string) => {
+  const documents = await storage.knowledge.listDocuments(namespace, 500);
+  type DocumentChunks = Awaited<ReturnType<AsyncStorage["knowledge"]["listChunksByDocument"]>>;
+  const chunkMap = new Map<string, Promise<DocumentChunks>>();
+  const readChunks = (docId: string): Promise<DocumentChunks> => {
     const existing = chunkMap.get(docId);
     if (existing) {
       return existing;
     }
+    // Cache the in-flight read before yielding so duplicate document records
+    // evaluated concurrently share one repository request.
     const next = storage.knowledge.listChunksByDocument(docId, 25);
     chunkMap.set(docId, next);
     return next;
@@ -393,23 +405,25 @@ async function memoryRead(args: Record<string, unknown>, storage: Storage) {
   if (!query) {
     return {
       namespace: namespace ?? "all",
-      items: documents.slice(0, limit).map((doc) => {
-        const chunks = readChunks(doc.docId);
-        return {
-          docId: doc.docId,
-          title: doc.title,
-          sourceRef: doc.sourceRef,
-          metadata: doc.metadata,
-          attribution: knowledgeDocumentAttribution(doc),
-          snippet: chunks[0]?.content.slice(0, 320) ?? "",
-        };
-      }),
+      items: await Promise.all(
+        documents.slice(0, limit).map(async (doc) => {
+          const chunks = await readChunks(doc.docId);
+          return {
+            docId: doc.docId,
+            title: doc.title,
+            sourceRef: doc.sourceRef,
+            metadata: doc.metadata,
+            attribution: knowledgeDocumentAttribution(doc),
+            snippet: chunks[0]?.content.slice(0, 320) ?? "",
+          };
+        }),
+      ),
     };
   }
 
-  const items = documents
-    .map((doc) => {
-      const chunks = readChunks(doc.docId);
+  const candidates = await Promise.all(
+    documents.map(async (doc) => {
+      const chunks = await readChunks(doc.docId);
       const titleScore = scoreLexical(query, `${doc.title} ${doc.sourceRef}`.toLowerCase());
       const bestChunk = chunks
         .map((chunk) => ({
@@ -429,7 +443,9 @@ async function memoryRead(args: Record<string, unknown>, storage: Storage) {
             snippet: bestChunk?.chunk.content.slice(0, 320) ?? "",
           }
         : undefined;
-    })
+    }),
+  );
+  const items = candidates
     .filter((item): item is NonNullable<typeof item> => Boolean(item))
     .sort((left, right) => right.score - left.score)
     .slice(0, limit);
@@ -441,12 +457,15 @@ async function memoryRead(args: Record<string, unknown>, storage: Storage) {
   };
 }
 
-async function memorySearch(args: Record<string, unknown>, storage: Storage) {
+async function memorySearch(args: Record<string, unknown>, storage: AsyncStorage) {
   const query = required(args.query, "query").toLowerCase();
   const namespace = asString(args.namespace);
   const limit = clampInt(args.limit, 12, 1, 100);
-  const chunks = storage.knowledge.listChunksByNamespace(namespace, 2000);
-  const docById = new Map(storage.knowledge.listDocuments(namespace, 500).map((doc) => [doc.docId, doc] as const));
+  const [chunks, documents] = await Promise.all([
+    storage.knowledge.listChunksByNamespace(namespace, 2000),
+    storage.knowledge.listDocuments(namespace, 500),
+  ]);
+  const docById = new Map(documents.map((doc) => [doc.docId, doc] as const));
   const items = chunks
     .map((chunk) => {
       const doc = docById.get(chunk.docId);
@@ -469,7 +488,7 @@ async function memorySearch(args: Record<string, unknown>, storage: Storage) {
 }
 
 function knowledgeDocumentAttribution(
-  doc: ReturnType<Storage["knowledge"]["listDocuments"]>[number],
+  doc: Awaited<ReturnType<AsyncStorage["knowledge"]["listDocuments"]>>[number],
 ): ContextSourceAttribution {
   const ingestion = record(doc.metadata.ingestion);
   const backend = asString(ingestion.backend);
@@ -539,12 +558,12 @@ function citationsBuild(args: Record<string, unknown>) {
 async function docsIngest(
   request: ToolInvokeRequest,
   config: ToolPolicyConfig,
-  storage: Storage,
+  storage: AsyncStorage,
   deps: KnowledgeExecutorDeps,
 ) {
   const sourceType = parseIngestionSourceType(request.args.sourceType);
   if (sourceType === "file") {
-    deps.assertReadPathAllowedForRequest(String(request.args.source ?? ""), request, config, storage);
+    await deps.assertReadPathAllowedForRequest(String(request.args.source ?? ""), request, config, storage);
   }
   const { purpose: _purpose, ...embeddingRuntime } = embeddingRuntimeOptions(request, deps, "document_ingest");
   const ingested = await ingestDocumentViaBackend({
@@ -552,14 +571,14 @@ async function docsIngest(
     storage,
     embeddingRuntime,
     networkAllowlist: deps.resolveNetworkAllowlist(request, config),
-    sourceAllowlist: deps.resolveExecutionGrantAllowedHosts(request, storage),
+    sourceAllowlist: await deps.resolveExecutionGrantAllowedHosts(request, storage),
     fetchUrl: async (url) => {
       const res = await deps.fetchAllowlisted(
         url,
         { method: "GET" },
         deps.resolveNetworkAllowlist(request, config),
         request.signal,
-        deps.resolveExecutionGrantAllowedHosts(request, storage),
+        await deps.resolveExecutionGrantAllowedHosts(request, storage),
       );
       const body = await res.response.text();
       return {
@@ -581,7 +600,7 @@ async function docsIngest(
   };
 }
 
-function docsSearch(args: Record<string, unknown>, storage: Storage) {
+async function docsSearch(args: Record<string, unknown>, storage: AsyncStorage) {
   const query = required(args.query, "query");
   const namespace = asString(args.namespace);
   const limit = clampInt(args.limit, 8, 1, 50);
@@ -593,7 +612,7 @@ function docsSearch(args: Record<string, unknown>, storage: Storage) {
   });
 }
 
-async function embeddingsIndex(request: ToolInvokeRequest, storage: Storage, deps: KnowledgeExecutorDeps) {
+async function embeddingsIndex(request: ToolInvokeRequest, storage: AsyncStorage, deps: KnowledgeExecutorDeps) {
   const args = request.args;
   const namespace = asString(args.namespace);
   const documentId = asString(args.documentId);
@@ -601,8 +620,8 @@ async function embeddingsIndex(request: ToolInvokeRequest, storage: Storage, dep
   const embeddingProfileRequest = normalizeEmbeddingProfileRequest(args.embeddingProfile);
   const embeddingProfile = currentEmbeddingProfile(embeddingProfileRequest);
   const chunks = documentId
-    ? storage.knowledge.listChunksByDocument(documentId, 2000)
-    : storage.knowledge.listChunksByNamespace(namespace, 2000);
+    ? await storage.knowledge.listChunksByDocument(documentId, 2000)
+    : await storage.knowledge.listChunksByNamespace(namespace, 2000);
   let indexed = 0;
   let skipped = 0;
   let stale = 0;
@@ -624,7 +643,7 @@ async function embeddingsIndex(request: ToolInvokeRequest, storage: Storage, dep
       embeddingRuntimeOptions(request, deps, "embedding_index"),
     );
     collectUsageEventIds(canonicalUsageEventIds, generated.modelUsageEventIds);
-    storage.knowledge.updateChunkEmbedding(chunk.chunkId, generated.embedding, {
+    await storage.knowledge.updateChunkEmbedding(chunk.chunkId, generated.embedding, {
       ...generated.metadata,
       ...(generated.modelUsageEventIds ? { modelUsageEventIds: generated.modelUsageEventIds } : {}),
     });
@@ -643,7 +662,7 @@ async function embeddingsIndex(request: ToolInvokeRequest, storage: Storage, dep
   };
 }
 
-async function embeddingsQuery(request: ToolInvokeRequest, storage: Storage, deps: KnowledgeExecutorDeps) {
+async function embeddingsQuery(request: ToolInvokeRequest, storage: AsyncStorage, deps: KnowledgeExecutorDeps) {
   const args = request.args;
   const namespace = asString(args.namespace);
   const query = required(args.query, "query");
@@ -657,8 +676,11 @@ async function embeddingsQuery(request: ToolInvokeRequest, storage: Storage, dep
   );
   const canonicalUsageEventIds = new Set<string>();
   collectUsageEventIds(canonicalUsageEventIds, generatedQuery.modelUsageEventIds);
-  const chunks = storage.knowledge.listChunksByNamespace(namespace, 2000);
-  const docById = new Map(storage.knowledge.listDocuments(namespace, 500).map((doc) => [doc.docId, doc] as const));
+  const [chunks, documents] = await Promise.all([
+    storage.knowledge.listChunksByNamespace(namespace, 2000),
+    storage.knowledge.listDocuments(namespace, 500),
+  ]);
+  const docById = new Map(documents.map((doc) => [doc.docId, doc] as const));
   let repairedEmbeddings = 0;
   let missingEmbeddings = 0;
   let staleEmbeddings = 0;
@@ -692,7 +714,7 @@ async function embeddingsQuery(request: ToolInvokeRequest, storage: Storage, dep
         ...repaired.metadata,
         ...(repaired.modelUsageEventIds ? { modelUsageEventIds: repaired.modelUsageEventIds } : {}),
       };
-      storage.knowledge.updateChunkEmbedding(chunk.chunkId, repaired.embedding, embeddingMetadata);
+      await storage.knowledge.updateChunkEmbedding(chunk.chunkId, repaired.embedding, embeddingMetadata);
       repairedEmbeddings += 1;
     }
     return {

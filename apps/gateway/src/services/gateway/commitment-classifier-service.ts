@@ -9,7 +9,7 @@ import type {
   ModelUsageAttributionContext,
 } from "@goatcitadel/contracts";
 import { COMMITMENT_CONFIDENCE_THRESHOLD } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { createUtilityModelUsageAttribution } from "../utility-model-usage-attribution.js";
 import { runBoundedUtilityModelCall } from "../utility-model-call.js";
 import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
@@ -71,7 +71,7 @@ export interface CommitmentClassifierServiceDeps {
     attribution: ModelUsageAttributionContext,
   ): Promise<ChatCompletionResponse>;
   /** Cheap-model defaults (mirrors the explainer judge-model resolution). */
-  resolveModelDefaults(): CommitmentClassifierModelDefaults;
+  resolveModelDefaults(): Promise<CommitmentClassifierModelDefaults>;
   /** Resolve the execution api-style so we can gate `response_format`/`temperature`. */
   resolveApiStyle(providerId?: string, model?: string): LlmApiStyle;
   now?: () => Date;
@@ -92,7 +92,7 @@ export class CommitmentClassifierService {
     if (!transcript) {
       return [];
     }
-    const defaults = this.deps.resolveModelDefaults();
+    const defaults = await this.deps.resolveModelDefaults();
     const apiStyle = this.deps.resolveApiStyle(defaults.providerId, defaults.model);
     const nowIso = this.clockNow().toISOString();
 
@@ -157,7 +157,7 @@ export class CommitmentClassifierService {
       return [];
     }
     const classifications = await this.classifyTurnForCommitments(input);
-    return this.persistTurnCommitments(input, classifications);
+    return await this.persistTurnCommitments(input, classifications);
   }
 
   /**
@@ -165,11 +165,11 @@ export class CommitmentClassifierService {
    * write inside their child-run receipt transaction so provider retries cannot
    * create a second semantic set with different model-generated dedupe keys.
    */
-  public persistTurnCommitments(
+  public async persistTurnCommitments(
     input: RecordTurnCommitmentsInput,
     classifications: CommitmentClassification[],
     options: { strict?: boolean } = {},
-  ): AgentCommitmentRecord[] {
+  ): Promise<AgentCommitmentRecord[]> {
     if (
       !input.autonomyEnabled ||
       input.evalIntegrityTurn === true ||
@@ -188,7 +188,7 @@ export class CommitmentClassifierService {
         continue;
       }
       try {
-        const record = this.deps.storage.agentCommitments.upsertByDedupe(
+        const record = await this.deps.storage.agentCommitments.upsertByDedupe(
           {
             commitmentId: this.makeUuid(),
             sessionId: input.sessionId,

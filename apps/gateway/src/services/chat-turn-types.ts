@@ -116,8 +116,8 @@ export interface ActiveTurnAdmission {
 
 export interface PreparedAgentChatTurnDispatchOptions {
   abortSignal?: AbortSignal;
-  onChildDurableRunLaunched?: (runId: string) => void;
-  assertDispatchOwnership?: () => void;
+  onChildDurableRunLaunched?: (runId: string) => Promise<void>;
+  assertDispatchOwnership?: () => Promise<void>;
   durableRunId?: string;
   mutationLifecycle?: ChatStreamMutationLifecycle;
   requireDurableExecution?: boolean;

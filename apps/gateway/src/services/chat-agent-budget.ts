@@ -51,6 +51,7 @@ export const CHAT_TURN_BUDGET_MS_BY_MODE = {
   liveData: 240000,
   deep: 480000,
   coworkResearchList: 480000,
+  researchArtifact: 600000,
   default: 240000,
 } as const;
 export const CHAT_COMPLETION_TIMEOUT_MS_BY_MODE = {
@@ -60,12 +61,23 @@ export const CHAT_COMPLETION_TIMEOUT_MS_BY_MODE = {
   liveData: 150000,
   deep: 240000,
   coworkResearchList: 240000,
+  researchArtifact: 300000,
   default: 150000,
 } as const;
 
 export type ChatLoopLimitBehavior = "terminal" | "checkpoint_continue";
 
 export interface ChatExecutionBudget {
+  readonly profile?:
+    | "quick_web"
+    | "quick"
+    | "off"
+    | "live_data"
+    | "deep"
+    | "cowork_research_list"
+    | "research_artifact"
+    | "default";
+  readonly promotionReason?: "explicit_research_artifact";
   readonly turnBudgetMs: number;
   readonly completionTimeoutMs: number;
   readonly maxToolLoops: number;
@@ -83,6 +95,7 @@ export interface ResolveChatExecutionBudgetInput {
   readonly thinkingLevel: ChatThinkingLevel;
   readonly liveDataIntent?: boolean;
   readonly researchListIntent?: boolean;
+  readonly artifactIntent?: boolean;
   readonly promptLabExplicitTools?: boolean;
   readonly promptLabHarness?: boolean;
   readonly providerId?: string;
@@ -121,6 +134,7 @@ export function resolveChatExecutionBudget(input: ResolveChatExecutionBudgetInpu
   let budget: ChatExecutionBudget;
   if (input.executionProfile === "quick_web") {
     budget = {
+      profile: "quick_web",
       turnBudgetMs: CHAT_TURN_BUDGET_MS_BY_MODE.quickWeb,
       completionTimeoutMs: CHAT_COMPLETION_TIMEOUT_MS_BY_MODE.quickWeb,
       maxToolLoops: 1,
@@ -134,6 +148,7 @@ export function resolveChatExecutionBudget(input: ResolveChatExecutionBudgetInpu
   } else if (shouldUseCoworkResearchListBudget(input)) {
     budget = applyPromptLabExplicitToolBudget(
       {
+        profile: "cowork_research_list",
         turnBudgetMs: CHAT_TURN_BUDGET_MS_BY_MODE.coworkResearchList,
         completionTimeoutMs: CHAT_COMPLETION_TIMEOUT_MS_BY_MODE.coworkResearchList,
         maxToolLoops: COWORK_RESEARCH_LIST_MAX_TOOL_LOOPS,
@@ -146,9 +161,43 @@ export function resolveChatExecutionBudget(input: ResolveChatExecutionBudgetInpu
       },
       input.promptLabExplicitTools,
     );
+  } else if (input.webMode === "off") {
+    budget = applyPromptLabExplicitToolBudget(
+      {
+        profile: "off",
+        turnBudgetMs: CHAT_TURN_BUDGET_MS_BY_MODE.off,
+        completionTimeoutMs: CHAT_COMPLETION_TIMEOUT_MS_BY_MODE.off,
+        maxToolLoops: 2,
+        loopLimitBehavior,
+        maxToolRunsPerTurn: 4,
+        searchMaxResults: 0,
+        maxTokens: Math.min(defaultMaxTokens ?? 700, 800),
+        minSynthesisReserveMs: 7000,
+        expensiveToolMinimumRemainingMs: 14000,
+      },
+      input.promptLabExplicitTools,
+    );
+  } else if (input.liveDataIntent && input.artifactIntent) {
+    budget = applyPromptLabExplicitToolBudget(
+      {
+        profile: "research_artifact",
+        promotionReason: "explicit_research_artifact",
+        turnBudgetMs: CHAT_TURN_BUDGET_MS_BY_MODE.researchArtifact,
+        completionTimeoutMs: CHAT_COMPLETION_TIMEOUT_MS_BY_MODE.researchArtifact,
+        maxToolLoops: 6,
+        loopLimitBehavior,
+        maxToolRunsPerTurn: 12,
+        searchMaxResults: 6,
+        maxTokens: Math.max(defaultMaxTokens ?? 900, 2400),
+        minSynthesisReserveMs: 30000,
+        expensiveToolMinimumRemainingMs: 45000,
+      },
+      input.promptLabExplicitTools,
+    );
   } else if (input.webMode === "deep") {
     budget = applyPromptLabExplicitToolBudget(
       {
+        profile: "deep",
         turnBudgetMs: CHAT_TURN_BUDGET_MS_BY_MODE.deep,
         completionTimeoutMs: CHAT_COMPLETION_TIMEOUT_MS_BY_MODE.deep,
         maxToolLoops: MAX_TOOL_LOOPS,
@@ -164,6 +213,7 @@ export function resolveChatExecutionBudget(input: ResolveChatExecutionBudgetInpu
   } else if (input.webMode === "quick") {
     budget = applyPromptLabExplicitToolBudget(
       {
+        profile: "quick",
         turnBudgetMs: CHAT_TURN_BUDGET_MS_BY_MODE.quick,
         completionTimeoutMs: CHAT_COMPLETION_TIMEOUT_MS_BY_MODE.quick,
         maxToolLoops: 2,
@@ -176,24 +226,10 @@ export function resolveChatExecutionBudget(input: ResolveChatExecutionBudgetInpu
       },
       input.promptLabExplicitTools,
     );
-  } else if (input.webMode === "off") {
-    budget = applyPromptLabExplicitToolBudget(
-      {
-        turnBudgetMs: CHAT_TURN_BUDGET_MS_BY_MODE.off,
-        completionTimeoutMs: CHAT_COMPLETION_TIMEOUT_MS_BY_MODE.off,
-        maxToolLoops: 2,
-        loopLimitBehavior,
-        maxToolRunsPerTurn: 4,
-        searchMaxResults: 0,
-        maxTokens: Math.min(defaultMaxTokens ?? 700, 800),
-        minSynthesisReserveMs: 7000,
-        expensiveToolMinimumRemainingMs: 14000,
-      },
-      input.promptLabExplicitTools,
-    );
   } else if (input.liveDataIntent) {
     budget = applyPromptLabExplicitToolBudget(
       {
+        profile: "live_data",
         turnBudgetMs: CHAT_TURN_BUDGET_MS_BY_MODE.liveData,
         completionTimeoutMs: CHAT_COMPLETION_TIMEOUT_MS_BY_MODE.liveData,
         maxToolLoops: 5,
@@ -209,6 +245,7 @@ export function resolveChatExecutionBudget(input: ResolveChatExecutionBudgetInpu
   } else {
     budget = applyPromptLabExplicitToolBudget(
       {
+        profile: "default",
         turnBudgetMs: CHAT_TURN_BUDGET_MS_BY_MODE.default,
         completionTimeoutMs: CHAT_COMPLETION_TIMEOUT_MS_BY_MODE.default,
         maxToolLoops: 4,

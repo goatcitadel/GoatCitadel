@@ -6,7 +6,7 @@ import type {
   EvidenceEnvelopeListQuery,
   EvidenceEnvelopeSignatureStatus,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 
 export interface EvidenceEnvelopeCreateRequest {
   eventKind: EvidenceEnvelopeEventKind;
@@ -25,7 +25,7 @@ export interface EvidenceEnvelopeCreateRequest {
 export interface EvidenceEnvelopeServiceDependencies {
   storage: Storage;
   signingKey?: string;
-  publishRealtime?: (eventType: string, source: string, payload: Record<string, unknown>) => void;
+  publishRealtime?: (eventType: string, source: string, payload: Record<string, unknown>) => Promise<unknown>;
 }
 
 const EVIDENCE_DIGEST_DOMAIN_KEY = "goatcitadel:evidence-envelope-digest:v1";
@@ -38,11 +38,11 @@ export class EvidenceEnvelopeService {
     this.signingKey = configuredKey || undefined;
   }
 
-  public createEnvelope(input: EvidenceEnvelopeCreateRequest): EvidenceEnvelope {
+  public async createEnvelope(input: EvidenceEnvelopeCreateRequest): Promise<EvidenceEnvelope> {
     const createdAt = input.createdAt ?? new Date().toISOString();
     const metadata = redactStructuredSecrets(input.metadata ?? {}, { marker: "[redacted]" }).value;
     const workspaceId = input.workspaceId?.trim() || undefined;
-    const latest = this.deps.storage.evidenceEnvelopes.latest({ workspaceId });
+    const latest = await this.deps.storage.evidenceEnvelopes.latest({ workspaceId });
     const previousEnvelopeHash = latest?.contentHash;
     const payload = {
       eventKind: input.eventKind,
@@ -70,7 +70,7 @@ export class EvidenceEnvelopeService {
       ? createHmac("sha256", this.signingKey).update(contentHash).digest("hex")
       : undefined;
     const signatureStatus: EvidenceEnvelopeSignatureStatus = signature ? "signed_hmac" : "unsigned_local";
-    const envelope = this.deps.storage.evidenceEnvelopes.create({
+    const envelope = await this.deps.storage.evidenceEnvelopes.create({
       envelopeId: randomUUID(),
       eventKind: input.eventKind,
       workspaceId,
@@ -90,7 +90,7 @@ export class EvidenceEnvelopeService {
       createdAt,
     });
     try {
-      this.deps.publishRealtime?.("evidence_envelope_recorded", "runtime", {
+      await this.deps.publishRealtime?.("evidence_envelope_recorded", "runtime", {
         envelopeId: envelope.envelopeId,
         eventKind: envelope.eventKind,
         workspaceId: envelope.workspaceId,
@@ -107,8 +107,8 @@ export class EvidenceEnvelopeService {
     return envelope;
   }
 
-  public listEnvelopes(query: EvidenceEnvelopeListQuery = {}): EvidenceEnvelope[] {
-    return this.deps.storage.evidenceEnvelopes.list(query).map((envelope) => {
+  public async listEnvelopes(query: EvidenceEnvelopeListQuery = {}): Promise<EvidenceEnvelope[]> {
+    return (await this.deps.storage.evidenceEnvelopes.list(query)).map((envelope) => {
       const projected = redactStructuredSecrets(envelope.metadata, { marker: "[redacted]" });
       return {
         ...envelope,

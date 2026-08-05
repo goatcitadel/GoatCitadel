@@ -140,7 +140,7 @@ describe("Loop 19 channel personality tails", () => {
     };
   }
 
-  it("normalizes overlay ids, default fallbacks, and custom personality mutations", () => {
+  it("normalizes overlay ids, default fallbacks, and custom personality mutations", async () => {
     expect(normalizePersonalityId(" Neutral ")).toBe("default");
     expect(normalizePersonalityId("My Custom Voice!")).toBe("my-custom-voice");
     expect(getPersonalityPreset("missing").id).toBe("default");
@@ -166,7 +166,7 @@ describe("Loop 19 channel personality tails", () => {
       }) as never,
     );
 
-    const catalog = service.getCatalog();
+    const catalog = await service.getCatalog();
     expect(catalog.defaultPersonalityId).toBe("default");
     expect(catalog.items.find((item) => item.id === "technical")).toMatchObject({
       label: "Technical Override",
@@ -178,19 +178,19 @@ describe("Loop 19 channel personality tails", () => {
       visibility: "custom",
       safetyNotes: ["safe"],
     });
-    expect(service.getDefaultPersonalityId()).toBe("default");
-    expect(service.buildDefaultChatPersonalityOverlay()).toBeUndefined();
+    expect(await service.getDefaultPersonalityId()).toBe("default");
+    expect(await service.buildDefaultChatPersonalityOverlay()).toBeUndefined();
   });
 
-  it("keeps personality writes reviewable through explicit service calls", () => {
+  it("keeps personality writes reviewable through explicit service calls", async () => {
     const service = new PersonalityCatalogService(createSettings() as never);
 
-    expect(() => service.setDefaultPersonality("missing")).toThrow("Unknown personality");
-    expect(() => service.createPersonality({ id: "default", label: "Default" })).toThrow(
+    await expect(service.setDefaultPersonality("missing")).rejects.toThrow("Unknown personality");
+    await expect(service.createPersonality({ id: "default", label: "Default" })).rejects.toThrow(
       "Custom personality id cannot be default.",
     );
 
-    const created = service.createPersonality({
+    const created = await service.createPersonality({
       label: "Incident Commander",
       category: "execution",
       systemOverlay: "Keep incident response terse.",
@@ -199,29 +199,37 @@ describe("Loop 19 channel personality tails", () => {
       category: "execution",
       visibility: "custom",
     });
-    expect(() => service.createPersonality({ id: "incident-commander", label: "Duplicate" })).toThrow("already exists");
-    expect(service.setDefaultPersonality("incident-commander").defaultPersonalityId).toBe("incident-commander");
+    await expect(service.createPersonality({ id: "incident-commander", label: "Duplicate" })).rejects.toThrow(
+      "already exists",
+    );
+    expect((await service.setDefaultPersonality("incident-commander")).defaultPersonalityId).toBe("incident-commander");
     expect(
-      service.updatePersonality("incident-commander", {
-        id: "incident-lead",
-        label: "Incident Lead",
-        category: "critical",
-      }).defaultPersonalityId,
+      (
+        await service.updatePersonality("incident-commander", {
+          id: "incident-lead",
+          label: "Incident Lead",
+          category: "critical",
+        })
+      ).defaultPersonalityId,
     ).toBe("incident-lead");
-    service.createPersonality({ id: "second-custom", label: "Second Custom" });
-    expect(() => service.updatePersonality("incident-lead", { id: "technical" })).toThrow("already exists");
-    expect(() => service.updatePersonality("incident-lead", { id: "second-custom" })).toThrow("already exists");
-    expect(() => service.updatePersonality("missing", { label: "Missing" })).toThrow("Unknown personality");
-    expect(() => service.updatePersonality("default", { label: "Default" })).toThrow("cannot be edited");
+    await service.createPersonality({ id: "second-custom", label: "Second Custom" });
+    await expect(service.updatePersonality("incident-lead", { id: "technical" })).rejects.toThrow("already exists");
+    await expect(service.updatePersonality("incident-lead", { id: "second-custom" })).rejects.toThrow("already exists");
+    await expect(service.updatePersonality("missing", { label: "Missing" })).rejects.toThrow("Unknown personality");
+    await expect(service.updatePersonality("default", { label: "Default" })).rejects.toThrow("cannot be edited");
     expect(
-      service.updatePersonality("technical", { label: "Tech Voice" }).items.find((item) => item.id === "technical"),
+      (await service.updatePersonality("technical", { label: "Tech Voice" })).items.find(
+        (item) => item.id === "technical",
+      ),
     ).toMatchObject({
       label: "Tech Voice",
       modified: true,
     });
-    expect(service.deletePersonality("technical").items.find((item) => item.id === "technical")?.modified).toBe(false);
-    expect(service.deletePersonality("incident-lead").defaultPersonalityId).toBe("default");
-    expect(() => service.deletePersonality("missing")).toThrow("Unknown personality");
-    expect(() => service.deletePersonality("default")).toThrow("cannot be removed");
+    expect((await service.deletePersonality("technical")).items.find((item) => item.id === "technical")?.modified).toBe(
+      false,
+    );
+    expect((await service.deletePersonality("incident-lead")).defaultPersonalityId).toBe("default");
+    await expect(service.deletePersonality("missing")).rejects.toThrow("Unknown personality");
+    await expect(service.deletePersonality("default")).rejects.toThrow("cannot be removed");
   });
 });

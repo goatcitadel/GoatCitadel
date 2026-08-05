@@ -17,7 +17,7 @@ import {
   verifyChatTurnCapabilityCatalogBinding,
   verifyChatTurnCapabilityProfile,
   type HeartbeatOccurrenceRecord,
-  type Storage,
+  type AsyncStorage as Storage,
 } from "@goatcitadel/storage";
 import type { AgentTurnCronRunOutcome } from "./gateway/cron-agent-turn-support.js";
 import {
@@ -176,38 +176,42 @@ export interface ChatAutonomousTurnDeps {
     | "runImmediateTransaction"
   >;
   cron: Pick<CronAutomationService, "listCronJobs" | "getCronJob" | "deleteCronJob" | "createCronJob">;
-  isFeatureEnabled(flag: "autonomyV1Disabled" | "durableKernelV1Enabled"): boolean;
-  createCronInboxTask(job: CronJobRecord, options?: { taskId?: string }): TaskRecord;
+  isFeatureEnabled(flag: "autonomyV1Disabled" | "durableKernelV1Enabled"): Promise<boolean>;
+  createCronInboxTask(job: CronJobRecord, options?: { taskId?: string }): Promise<TaskRecord>;
   getSessionAutonomyPrefs: HeartbeatTickDeps["getSessionAutonomyPrefs"];
-  patchSessionAutonomyPrefs(sessionId: string, patch: { proactiveMode: "off" }): void;
+  patchSessionAutonomyPrefs(sessionId: string, patch: { proactiveMode: "off" }): Promise<void>;
   listChatSessions(query: {
     scope: "mission";
     view: "active";
     workspaceId: string;
     cursor?: string;
     limit?: number;
-  }): Array<{
-    sessionId: string;
-    updatedAt: string;
-    lastActivityAt: string;
-  }>;
+  }): Promise<
+    Array<{
+      sessionId: string;
+      updatedAt: string;
+      lastActivityAt: string;
+    }>
+  >;
   getSessionIdleSeconds: HeartbeatTickDeps["getSessionIdleSeconds"];
-  hasRunningTurn(sessionId: string): boolean;
+  hasRunningTurn(sessionId: string): Promise<boolean>;
   claimAndEnqueueHeartbeat(input: {
     workspaceId: string;
     sessionId: string;
     expectedPriorCadence: { lastProactiveAt?: string; lastProactiveRunId?: string };
     idleFloorSeconds: number;
   }): Promise<HeartbeatDatabaseAdmissionOutcome>;
-  isReplayScratchSession(sessionId: string): boolean;
-  getSession(sessionId: string): unknown;
+  isReplayScratchSession(sessionId: string): Promise<boolean>;
+  getSession(sessionId: string): Promise<unknown>;
   normalizeWorkspaceId(workspaceId: string | undefined): string;
-  ensureChatSessionRuntimeGrants(sessionId: string): void;
-  listConnectorRecords(kind: "integration_connection"): Array<{
-    status: string;
-    sourceId?: string;
-    metadata?: Record<string, unknown>;
-  }>;
+  ensureChatSessionRuntimeGrants(sessionId: string): Promise<void>;
+  listConnectorRecords(kind: "integration_connection"): Promise<
+    Array<{
+      status: string;
+      sourceId?: string;
+      metadata?: Record<string, unknown>;
+    }>
+  >;
   listToolCatalog(): Array<{ toolName: string }>;
   registerSyntheticPermissionProfile(profile: PermissionProfileRecord): void;
   sessionControlRuntimeOwner: Pick<
@@ -239,8 +243,8 @@ export interface ChatAutonomousTurnDeps {
     workflowKey: "chat.turn.execute";
     payload: Record<string, unknown>;
     metadata: Record<string, unknown>;
-  }): DurableRunForTrace & { runId: string };
-  getDurableRun(runId: string): DurableRunRecord;
+  }): Promise<DurableRunForTrace & { runId: string }>;
+  getDurableRun(runId: string): Promise<DurableRunRecord>;
   persistChatStreamChunk(
     chunk: {
       type: "message_start";
@@ -252,9 +256,9 @@ export interface ChatAutonomousTurnDeps {
       sourceTurnId: PreparedAgentChatTurn["sourceTurnId"];
     },
     runId: string,
-  ): unknown;
-  onDurableRunCommitted?(run: DurableRunForTrace & { runId: string }): void;
-  requestDurableRunProcessing(runId: string): void;
+  ): Promise<unknown>;
+  onDurableRunCommitted?(run: DurableRunForTrace & { runId: string }): Promise<void>;
+  requestDurableRunProcessing(runId: string): Promise<void>;
 }
 
 export async function runCronAgentTurn(
@@ -270,15 +274,15 @@ export async function runCronAgentTurn(
   const cronRun = input.cronRun ? assertCronRunOwnsInvocation(input.cronRun, input) : undefined;
   const admissionIdentity = cronRun ? buildCronChatAdmissionIdentity(cronRun) : undefined;
   const inboxTaskId = cronRun ? buildCronInboxTaskId(cronRun) : undefined;
-  const autonomyDisabled = deps.isFeatureEnabled("autonomyV1Disabled");
+  const autonomyDisabled = await deps.isFeatureEnabled("autonomyV1Disabled");
   if (autonomyDisabled || input.config.inertInboxFallback) {
-    const task = deps.createCronInboxTask(input.job, inboxTaskId ? { taskId: inboxTaskId } : undefined);
+    const task = await deps.createCronInboxTask(input.job, inboxTaskId ? { taskId: inboxTaskId } : undefined);
     return { mode: "inbox", taskId: task.taskId };
   }
   // Validate the canonical cron owner before creating or mutating a session.
-  const sessionId = ensureCronAgentSession(deps, input.job.jobId, input.config.sessionId);
+  const sessionId = await ensureCronAgentSession(deps, input.job.jobId, input.config.sessionId);
   const systemActorId = `system:cron:${input.job.jobId}`;
-  const scheduledPolicy = resolveScheduledAgentTurnPolicy(deps, {
+  const scheduledPolicy = await resolveScheduledAgentTurnPolicy(deps, {
     config: input.config,
     jobId: input.job.jobId,
     runId: input.runId,
@@ -286,7 +290,7 @@ export async function runCronAgentTurn(
     systemActorId,
   });
   if ("failClosedReason" in scheduledPolicy) {
-    const task = deps.createCronInboxTask(input.job, inboxTaskId ? { taskId: inboxTaskId } : undefined);
+    const task = await deps.createCronInboxTask(input.job, inboxTaskId ? { taskId: inboxTaskId } : undefined);
     return {
       mode: "inbox",
       taskId: task.taskId,
@@ -328,15 +332,15 @@ export async function runCronAgentTurn(
  * (pending-only).
  */
 export async function runCommitmentSweep(deps: ChatAutonomousTurnDeps): Promise<void> {
-  if (deps.isFeatureEnabled("autonomyV1Disabled") || !deps.isFeatureEnabled("durableKernelV1Enabled")) {
+  if ((await deps.isFeatureEnabled("autonomyV1Disabled")) || !(await deps.isFeatureEnabled("durableKernelV1Enabled"))) {
     return;
   }
   await runCommitmentSweepCore({
-    isAutonomyEnabled: () => !deps.isFeatureEnabled("autonomyV1Disabled"),
-    listDueCommitments: (nowIso, limit) => deps.storage.agentCommitments.listDue(nowIso, limit),
+    isAutonomyEnabled: async () => !(await deps.isFeatureEnabled("autonomyV1Disabled")),
+    listDueCommitments: async (nowIso, limit) => await deps.storage.agentCommitments.listDue(nowIso, limit),
     getSessionAutonomyPrefs: (sessionId) => deps.getSessionAutonomyPrefs(sessionId),
     deliverCommitment: async (commitment) => {
-      const deliveryChannel = resolveCommitmentDeliveryChannel(deps, commitment.sessionId);
+      const deliveryChannel = await resolveCommitmentDeliveryChannel(deps, commitment.sessionId);
       if (!deliveryChannel) {
         return false;
       }
@@ -352,16 +356,16 @@ export async function runCommitmentSweep(deps: ChatAutonomousTurnDeps): Promise<
       });
       return Boolean(run?.runId);
     },
-    markDeliveryPending: (commitmentId) => deps.storage.agentCommitments.markDeliveryPending(commitmentId),
-    markDeliveryFailed: (commitmentId) => deps.storage.agentCommitments.markDeliveryFailed(commitmentId),
+    markDeliveryPending: async (commitmentId) => await deps.storage.agentCommitments.markDeliveryPending(commitmentId),
+    markDeliveryFailed: async (commitmentId) => await deps.storage.agentCommitments.markDeliveryFailed(commitmentId),
   } satisfies CommitmentSweepCoreDeps);
 }
 
-function resolveCommitmentDeliveryChannel(
+async function resolveCommitmentDeliveryChannel(
   deps: ChatAutonomousTurnDeps,
   sessionId: string,
-): CronAgentTurnConfig["deliveryChannel"] | undefined {
-  const binding = deps.storage.chatSessionBindings.get(sessionId);
+): Promise<CronAgentTurnConfig["deliveryChannel"] | undefined> {
+  const binding = await deps.storage.chatSessionBindings.get(sessionId);
   if (
     !binding ||
     binding.transport !== "integration" ||
@@ -371,9 +375,9 @@ function resolveCommitmentDeliveryChannel(
   ) {
     return undefined;
   }
-  const connector = deps
-    .listConnectorRecords("integration_connection")
-    .find((item) => item.status === "active" && item.sourceId === binding.connectionId);
+  const connector = (await deps.listConnectorRecords("integration_connection")).find(
+    (item) => item.status === "active" && item.sourceId === binding.connectionId,
+  );
   const channelKey = typeof connector?.metadata?.key === "string" ? connector.metadata.key.trim() : "";
   const target = binding.target.trim();
   if (!channelKey || !target) {
@@ -393,13 +397,13 @@ function resolveCommitmentDeliveryChannel(
  * Eval-integrity / non-human / replay-scratch sessions are excluded.
  */
 export async function runHeartbeatSweep(deps: ChatAutonomousTurnDeps): Promise<void> {
-  if (deps.isFeatureEnabled("autonomyV1Disabled") || !deps.isFeatureEnabled("durableKernelV1Enabled")) {
+  if ((await deps.isFeatureEnabled("autonomyV1Disabled")) || !(await deps.isFeatureEnabled("durableKernelV1Enabled"))) {
     return;
   }
   const now = new Date();
   let afterWorkspaceId = "";
   for (;;) {
-    const workspaceIds = listNextActiveHeartbeatWorkspacePage(deps, afterWorkspaceId);
+    const workspaceIds = await listNextActiveHeartbeatWorkspacePage(deps, afterWorkspaceId);
     for (const workspaceId of workspaceIds) {
       await runHeartbeatWorkspacePages(deps, workspaceId, now);
     }
@@ -418,23 +422,23 @@ function buildHeartbeatTickDeps(
   now: Date,
 ): HeartbeatTickDeps {
   return {
-    isAutonomyEnabled: () => !deps.isFeatureEnabled("autonomyV1Disabled"),
+    isAutonomyEnabled: async () => !(await deps.isFeatureEnabled("autonomyV1Disabled")),
     // One bounded cursor page is processed immediately. The pure tick's
     // historical 300-row default must not truncate this page.
     listSessions: () => sessions,
     sessionLimit: Math.max(1, sessions.length),
     now: () => now,
     getSessionAutonomyPrefs: (sessionId) => deps.getSessionAutonomyPrefs(sessionId),
-    isHeartbeatEligibleSession: (sessionId) => isHeartbeatEligibleSession(deps, sessionId),
+    isHeartbeatEligibleSession: async (sessionId) => await isHeartbeatEligibleSession(deps, sessionId),
     getSessionIdleSeconds: (sessionId) => deps.getSessionIdleSeconds(sessionId),
     hasRunningTurn: (sessionId) => deps.hasRunningTurn(sessionId),
     enqueueHeartbeatTurn: async ({ sessionId, prompt }) => {
       if (prompt !== HEARTBEAT_SYSTEM_PROMPT) {
         throw new Error("Heartbeat sweep objective drifted from its canonical prompt.");
       }
-      const meta = deps.storage.chatSessionMeta.get(sessionId);
+      const meta = await deps.storage.chatSessionMeta.get(sessionId);
       if (!meta) throw new Error(`Heartbeat session ${sessionId} has no controllable Chat lifecycle.`);
-      const prefs = deps.getSessionAutonomyPrefs(sessionId);
+      const prefs = await deps.getSessionAutonomyPrefs(sessionId);
       return deps.claimAndEnqueueHeartbeat({
         workspaceId: meta.workspaceId,
         sessionId,
@@ -457,7 +461,7 @@ function buildHeartbeatTickDeps(
 async function runHeartbeatWorkspacePages(deps: ChatAutonomousTurnDeps, workspaceId: string, now: Date): Promise<void> {
   let cursor: string | undefined;
   for (;;) {
-    const page = deps.listChatSessions({
+    const page = await deps.listChatSessions({
       scope: "mission",
       view: "active",
       workspaceId,
@@ -492,20 +496,22 @@ async function runHeartbeatWorkspacePages(deps: ChatAutonomousTurnDeps, workspac
   }
 }
 
-function listNextActiveHeartbeatWorkspacePage(deps: ChatAutonomousTurnDeps, afterWorkspaceId: string): string[] {
-  const rows = deps.storage.gatewaySql
-    .prepare(
-      `SELECT workspace_id
+async function listNextActiveHeartbeatWorkspacePage(
+  deps: ChatAutonomousTurnDeps,
+  afterWorkspaceId: string,
+): Promise<string[]> {
+  const statement = await deps.storage.gatewaySql.prepare(
+    `SELECT workspace_id
        FROM workspaces
        WHERE lifecycle_status = 'active'
          AND workspace_id > @afterWorkspaceId
        ORDER BY workspace_id ASC
        LIMIT @limit`,
-    )
-    .all<{ workspace_id?: unknown }>({
-      afterWorkspaceId,
-      limit: HEARTBEAT_WORKSPACE_PAGE_LIMIT,
-    });
+  );
+  const rows = await statement.all<{ workspace_id?: unknown }>({
+    afterWorkspaceId,
+    limit: HEARTBEAT_WORKSPACE_PAGE_LIMIT,
+  });
   const result: string[] = [];
   let prior = afterWorkspaceId;
   for (const row of rows) {
@@ -556,12 +562,12 @@ function assertHeartbeatSessionCursorMaterial(session: {
  * `prompt_pack` origins and replay-scratch sessions (safety invariant:
  * eval-integrity turns are never affected).
  */
-export function isHeartbeatEligibleSession(deps: ChatAutonomousTurnDeps, sessionId: string): boolean {
-  const origin = deps.storage.chatSessionMeta.get(sessionId)?.origin;
+export async function isHeartbeatEligibleSession(deps: ChatAutonomousTurnDeps, sessionId: string): Promise<boolean> {
+  const origin = (await deps.storage.chatSessionMeta.get(sessionId))?.origin;
   if (origin === "system" || origin === "prompt_pack") {
     return false;
   }
-  return !deps.isReplayScratchSession(sessionId);
+  return !(await deps.isReplayScratchSession(sessionId));
 }
 
 /**
@@ -570,10 +576,14 @@ export function isHeartbeatEligibleSession(deps: ChatAutonomousTurnDeps, session
  * per-job session and creates it (proactiveMode off, system origin) if it does
  * not yet exist. Immutable: reuses existing rows; only creates when missing.
  */
-function ensureCronAgentSession(deps: ChatAutonomousTurnDeps, jobId: string, configuredSessionId?: string): string {
+async function ensureCronAgentSession(
+  deps: ChatAutonomousTurnDeps,
+  jobId: string,
+  configuredSessionId?: string,
+): Promise<string> {
   const explicit = configuredSessionId?.trim();
-  if (explicit && deps.getSession(explicit)) {
-    if (!deps.storage.chatSessionMeta.get(explicit)) {
+  if (explicit && (await deps.getSession(explicit))) {
+    if (!(await deps.storage.chatSessionMeta.get(explicit))) {
       throw new Error("configured cron session has no controllable Chat lifecycle");
     }
     return explicit;
@@ -583,19 +593,19 @@ function ensureCronAgentSession(deps: ChatAutonomousTurnDeps, jobId: string, con
   const sessionId = `sess_${createHash("sha256").update(sessionKey).digest("hex").slice(0, 24)}`;
   const now = new Date().toISOString();
   const workspaceId = deps.normalizeWorkspaceId(undefined);
-  const existingMeta = deps.storage.chatSessionMeta.get(sessionId);
+  const existingMeta = await deps.storage.chatSessionMeta.get(sessionId);
   if (existingMeta && deps.normalizeWorkspaceId(existingMeta.workspaceId) !== workspaceId) {
     throw new Error("stable cron session key already belongs to another workspace");
   }
-  if (deps.getSession(sessionId) && existingMeta) {
+  if ((await deps.getSession(sessionId)) && existingMeta) {
     return sessionId;
   }
-  deps.storage.runImmediateTransaction(() => {
-    const lockedMeta = deps.storage.chatSessionMeta.get(sessionId);
+  await deps.storage.runImmediateTransaction(async () => {
+    const lockedMeta = await deps.storage.chatSessionMeta.get(sessionId);
     if (lockedMeta && deps.normalizeWorkspaceId(lockedMeta.workspaceId) !== workspaceId) {
       throw new Error("stable cron session key already belongs to another workspace");
     }
-    deps.storage.sessions.upsert({
+    await deps.storage.sessions.upsert({
       sessionId,
       sessionKey,
       kind: "dm",
@@ -604,21 +614,21 @@ function ensureCronAgentSession(deps: ChatAutonomousTurnDeps, jobId: string, con
       displayName: `Cron ${jobId}`,
       timestamp: now,
     });
-    deps.storage.chatSessionMeta.ensure(sessionId, now, workspaceId);
-    deps.storage.chatSessionPrefs.ensure(sessionId, now);
-    deps.storage.chatSessionMeta.patch(
+    await deps.storage.chatSessionMeta.ensure(sessionId, now, workspaceId);
+    await deps.storage.chatSessionPrefs.ensure(sessionId, now);
+    await deps.storage.chatSessionMeta.patch(
       sessionId,
       { workspaceId, title: `Cron ${jobId}`, origin: "system", includeInHistory: false },
       now,
     );
-    deps.storage.chatSessionBindings.upsert({ sessionId, workspaceId, transport: "llm", writable: true }, now);
+    await deps.storage.chatSessionBindings.upsert({ sessionId, workspaceId, transport: "llm", writable: true }, now);
   });
-  deps.ensureChatSessionRuntimeGrants(sessionId);
-  deps.patchSessionAutonomyPrefs(sessionId, { proactiveMode: "off" });
+  await deps.ensureChatSessionRuntimeGrants(sessionId);
+  await deps.patchSessionAutonomyPrefs(sessionId, { proactiveMode: "off" });
   return sessionId;
 }
 
-function resolveScheduledAgentTurnPolicy(
+async function resolveScheduledAgentTurnPolicy(
   deps: ChatAutonomousTurnDeps,
   input: {
     config: CronAgentTurnConfig;
@@ -627,7 +637,7 @@ function resolveScheduledAgentTurnPolicy(
     sessionId: string;
     systemActorId: string;
   },
-):
+): Promise<
   | { policyContext: ToolPolicyActorContext; profilePosture: "scheduled_restricted" | "creator_intersection" }
   | {
       profilePosture:
@@ -636,7 +646,8 @@ function resolveScheduledAgentTurnPolicy(
         | "creator_profile_scope_mismatch"
         | "creator_profile_invalid";
       failClosedReason: string;
-    } {
+    }
+> {
   const base = buildAutonomousTurnContext({
     kind: "scheduled",
     systemActorId: input.systemActorId,
@@ -655,10 +666,10 @@ function resolveScheduledAgentTurnPolicy(
     };
   }
 
-  const workspaceId = deps.storage.chatSessionMeta.get(input.sessionId)?.workspaceId ?? DEFAULT_WORKSPACE_ID;
+  const workspaceId = (await deps.storage.chatSessionMeta.get(input.sessionId))?.workspaceId ?? DEFAULT_WORKSPACE_ID;
   let creatorProfile: PermissionProfileRecord;
   try {
-    creatorProfile = deps.storage.permissionProfiles.getProfile(creatorProfileId);
+    creatorProfile = await deps.storage.permissionProfiles.getProfile(creatorProfileId);
   } catch (error) {
     return {
       profilePosture: "creator_profile_missing",
@@ -729,10 +740,10 @@ export async function enqueueAutonomousChatTurn(
     };
   },
 ): Promise<EnqueuedAutonomousChatTurn | undefined> {
-  if (!deps.isFeatureEnabled("durableKernelV1Enabled")) {
+  if (!(await deps.isFeatureEnabled("durableKernelV1Enabled"))) {
     throw new Error("agent_turn cron execution requires durable execution (durableKernelV1Enabled).");
   }
-  if (deps.isFeatureEnabled("autonomyV1Disabled")) {
+  if (await deps.isFeatureEnabled("autonomyV1Disabled")) {
     throw new Error("Autonomous chat turn execution is disabled while the autonomy kill switch is engaged.");
   }
   const kind: AutonomousTurnKind = input.kind ?? "scheduled";
@@ -801,14 +812,14 @@ export async function enqueueAutonomousChatTurn(
       }
     : (admissionIdentity ?? buildAutonomousChatChildIdentity(input));
   const durableRunId = childIdentity.durableRunId;
-  const existingAdmissionTrace = readOwnedAutonomousChatAdmissionTrace(
+  const existingAdmissionTrace = await readOwnedAutonomousChatAdmissionTrace(
     deps,
     input.sessionId,
     childIdentity,
     admissionIdentity ? "cron" : "autonomous",
   );
   if (existingAdmissionTrace) {
-    const replay = assertOwnedAutonomousDurableReplay(deps, {
+    const replay = await assertOwnedAutonomousDurableReplay(deps, {
       identity: childIdentity,
       trace: existingAdmissionTrace,
       request,
@@ -824,7 +835,7 @@ export async function enqueueAutonomousChatTurn(
       commitmentId: input.commitmentId,
       admissionIdentity,
     });
-    if (replay.requestProcessing) deps.requestDurableRunProcessing(durableRunId);
+    if (replay.requestProcessing) await deps.requestDurableRunProcessing(durableRunId);
     return {
       runId: durableRunId,
       turnId: childIdentity.turnId,
@@ -835,7 +846,7 @@ export async function enqueueAutonomousChatTurn(
   }
   const turnAdmission =
     heartbeatOccurrence?.turnAdmission ??
-    deps.sessionControlRuntimeOwner.admitSystemChatTurn({
+    (await deps.sessionControlRuntimeOwner.admitSystemChatTurn({
       sessionId: input.sessionId,
       turnId: childIdentity.turnId,
       request,
@@ -843,7 +854,7 @@ export async function enqueueAutonomousChatTurn(
       occurrenceId: durableRunId,
       idempotencyKey: `chat-turn:autonomous:${durableRunId}`,
       correlationId: input.runId,
-    });
+    }));
   const requestLease = deps.sessionControlRuntimeOwner.startRequestLeaseHeartbeat(turnAdmission);
   try {
     const prepared = await deps.prepareAgentChatTurn(input.sessionId, request, {
@@ -947,10 +958,10 @@ export async function enqueueAutonomousChatTurn(
         : {}),
     };
     let run!: DurableRunForTrace & { runId: string };
-    const admit = () => {
-      deps.sessionControlRuntimeOwner.assertActiveTurnWrite(turnAdmission);
+    const admit = async () => {
+      await deps.sessionControlRuntimeOwner.assertActiveTurnWrite(turnAdmission);
       if (prepared.capabilityProfile && prepared.capabilityCatalogSnapshot && capabilityStoresPresent) {
-        chatDurableRunService.persistPreparedChatCapabilityAdmission(
+        await chatDurableRunService.persistPreparedChatCapabilityAdmission(
           {
             capabilityCatalogSnapshots: deps.storage.capabilityCatalogSnapshots,
             chatTurnCapabilityProfiles: deps.storage.chatTurnCapabilityProfiles,
@@ -960,10 +971,10 @@ export async function enqueueAutonomousChatTurn(
           prepared,
         );
       }
-      run = deps.createDurableRun({ runId: durableRunId, workflowKey: "chat.turn.execute", payload, metadata });
+      run = await deps.createDurableRun({ runId: durableRunId, workflowKey: "chat.turn.execute", payload, metadata });
       if (admissionIdentity) assertOwnedCronChatDurableRun(run, admissionIdentity, payload);
-      deps.sessionControlRuntimeOwner.bindDurableRun(turnAdmission, run.runId);
-      chatDurableRunService.persistInitialDurableChatTurnTrace(
+      await deps.sessionControlRuntimeOwner.bindDurableRun(turnAdmission, run.runId);
+      await chatDurableRunService.persistInitialDurableChatTurnTrace(
         { chatTurnTraces: deps.storage.chatTurnTraces },
         prepared,
         request,
@@ -973,7 +984,7 @@ export async function enqueueAutonomousChatTurn(
       // notify decision is known. Emitting message_start here would expose an
       // internal turn and advance visible branch/realtime state.
       if (!heartbeatOccurrence) {
-        deps.persistChatStreamChunk(
+        await deps.persistChatStreamChunk(
           {
             type: "message_start",
             sessionId: prepared.session.sessionId,
@@ -990,7 +1001,7 @@ export async function enqueueAutonomousChatTurn(
         if (!prepared.capabilityProfile) {
           throw new Error(`Heartbeat turn ${prepared.turnId} cannot bind without its immutable capability profile.`);
         }
-        deps.storage.heartbeatOccurrences.markDurableBound({
+        await deps.storage.heartbeatOccurrences.markDurableBound({
           occurrenceId: heartbeatOccurrence.occurrence.occurrenceId,
           workspaceId: heartbeatOccurrence.occurrence.workspaceId,
           sessionId: heartbeatOccurrence.occurrence.sessionId,
@@ -1004,10 +1015,10 @@ export async function enqueueAutonomousChatTurn(
       }
     };
     requestLease.assertHealthy();
-    if (typeof deps.storage.runImmediateTransaction === "function") deps.storage.runImmediateTransaction(admit);
-    else admit();
-    deps.onDurableRunCommitted?.(run);
-    deps.requestDurableRunProcessing(run.runId);
+    if (typeof deps.storage.runImmediateTransaction === "function") await deps.storage.runImmediateTransaction(admit);
+    else await admit();
+    await deps.onDurableRunCommitted?.(run);
+    await deps.requestDurableRunProcessing(run.runId);
     return {
       runId: run.runId,
       turnId: prepared.turnId,
@@ -1018,7 +1029,7 @@ export async function enqueueAutonomousChatTurn(
   } finally {
     requestLease.stop();
     if (turnAdmission.requestClaim) {
-      deps.sessionControlRuntimeOwner.closeTurnWrite({
+      await deps.sessionControlRuntimeOwner.closeTurnWrite({
         admission: turnAdmission,
         status: "cancelled",
         actorId: input.systemActorId,
@@ -1139,15 +1150,15 @@ function assertPreparedAutonomousChatAdmission(
   }
 }
 
-function readOwnedAutonomousChatAdmissionTrace(
+async function readOwnedAutonomousChatAdmissionTrace(
   deps: Pick<ChatAutonomousTurnDeps, "storage">,
   sessionId: string,
   identity: AutonomousChatChildIdentity,
   ownerKind: "cron" | "autonomous",
-): ChatTurnTraceRecord | undefined {
+): Promise<ChatTurnTraceRecord | undefined> {
   let trace: ChatTurnTraceRecord;
   try {
-    trace = deps.storage.chatTurnTraces.get(identity.turnId);
+    trace = await deps.storage.chatTurnTraces.get(identity.turnId);
   } catch (error) {
     if (error instanceof NotFoundError) return undefined;
     throw error;
@@ -1193,7 +1204,7 @@ function omitAutonomousChatRuntimeMutableMetadata(metadata: Record<string, unkno
   );
 }
 
-function assertOwnedAutonomousDurableReplay(
+async function assertOwnedAutonomousDurableReplay(
   deps: Pick<ChatAutonomousTurnDeps, "storage" | "getDurableRun">,
   input: {
     identity: AutonomousChatChildIdentity;
@@ -1211,10 +1222,10 @@ function assertOwnedAutonomousDurableReplay(
     commitmentId?: string;
     admissionIdentity?: CronChatAdmissionIdentity;
   },
-): { terminal: boolean; requestProcessing: boolean; runStatus: DurableRunRecord["status"] } {
+): Promise<{ terminal: boolean; requestProcessing: boolean; runStatus: DurableRunRecord["status"] }> {
   let run: DurableRunRecord;
   try {
-    run = deps.getDurableRun(input.identity.durableRunId);
+    run = await deps.getDurableRun(input.identity.durableRunId);
   } catch (error) {
     throw new Error(
       `Deterministic autonomous Chat replay ${input.identity.durableRunId} has no durable owner: ${
@@ -1235,7 +1246,7 @@ function assertOwnedAutonomousDurableReplay(
       ? (payload.requestActor as Record<string, unknown>)
       : undefined;
   const admissionId = typeof payload.admissionId === "string" ? payload.admissionId : "";
-  const admission = admissionId ? deps.storage.sessionMutationAdmissions.require(admissionId) : undefined;
+  const admission = admissionId ? await deps.storage.sessionMutationAdmissions.require(admissionId) : undefined;
   const expectedAutonomousMetadata = {
     kind: input.kind,
     systemActorId: input.systemActorId,
@@ -1351,8 +1362,10 @@ function assertOwnedAutonomousDurableReplay(
     throw new Error(`Deterministic autonomous Chat replay ${run.runId} is missing its v2 capability lineage.`);
   }
   if (capabilityProfileId && capabilityProfileHash) {
-    const profile = deps.storage.chatTurnCapabilityProfiles.findByTurn(input.identity.turnId);
-    const snapshot = profile ? deps.storage.capabilityCatalogSnapshots.find(profile.catalog.snapshotId) : undefined;
+    const profile = await deps.storage.chatTurnCapabilityProfiles.findByTurn(input.identity.turnId);
+    const snapshot = profile
+      ? await deps.storage.capabilityCatalogSnapshots.find(profile.catalog.snapshotId)
+      : undefined;
     const frozenRequestRecord = frozenRequest as typeof frozenRequest & { policyContext?: unknown };
     const frozenPolicyContext =
       frozenRequestRecord.policyContext &&
@@ -1385,7 +1398,7 @@ function assertOwnedAutonomousDurableReplay(
     }
     verifyChatTurnCapabilityProfile(profile);
     verifyChatTurnCapabilityCatalogBinding(profile, snapshot);
-    deps.storage.sessionMutationAdmissions.requireCapabilityProfileBinding({
+    await deps.storage.sessionMutationAdmissions.requireCapabilityProfileBinding({
       admissionId: admission.admissionId,
       sessionIncarnationId: admission.sessionIncarnationId,
       workspaceId: admission.workspaceId,
@@ -1396,7 +1409,7 @@ function assertOwnedAutonomousDurableReplay(
       createdAt: profile.createdAt,
     });
   }
-  verifyAutonomousChatReplayRuntimeAuthority(deps, run, admission, input.trace);
+  await verifyAutonomousChatReplayRuntimeAuthority(deps, run, admission, input.trace);
   if (admission.status !== "active") {
     const expectedAdmissionStatus = run.status === "completed" ? "completed" : "cancelled";
     if (
@@ -1427,7 +1440,7 @@ function assertOwnedAutonomousDurableReplay(
   if (!admission.runtimeOwnerId || !admission.runtimeLeaseRevision) {
     throw new Error(`Deterministic autonomous Chat replay ${run.runId} has no request-owner binding evidence.`);
   }
-  const binding = deps.storage.sessionMutationAdmissions.bindDurableRun({
+  const binding = await deps.storage.sessionMutationAdmissions.bindDurableRun({
     admissionId: admission.admissionId,
     workspaceId: admission.workspaceId,
     sessionId: admission.sessionId,
@@ -1459,12 +1472,12 @@ function isExactAutonomousTerminalTraceStatus(
   return false;
 }
 
-function verifyAutonomousChatReplayRuntimeAuthority(
+async function verifyAutonomousChatReplayRuntimeAuthority(
   deps: Pick<ChatAutonomousTurnDeps, "storage">,
   run: DurableRunRecord,
-  admission: ReturnType<ChatAutonomousTurnDeps["storage"]["sessionMutationAdmissions"]["require"]>,
+  admission: Awaited<ReturnType<ChatAutonomousTurnDeps["storage"]["sessionMutationAdmissions"]["require"]>>,
   trace: ChatTurnTraceRecord,
-): void {
+): Promise<void> {
   const metadata = run.metadata ?? {};
   const authorityValue = metadata[CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY];
   const authority = readChatTurnRuntimeAuthoritySeal(authorityValue);
@@ -1521,7 +1534,7 @@ function verifyAutonomousChatReplayRuntimeAuthority(
   ) {
     throw new Error(`Deterministic autonomous Chat replay ${run.runId} has an invalid runtime transition.`);
   }
-  const checkpoint = deps.storage.durableRuns.getLatestCheckpointByKind(run.runId, checkpointKind);
+  const checkpoint = await deps.storage.durableRuns.getLatestCheckpointByKind(run.runId, checkpointKind);
   if (!checkpoint) {
     throw new Error(`Deterministic autonomous Chat replay ${run.runId} has no ${checkpointKind} authority checkpoint.`);
   }
@@ -1567,7 +1580,7 @@ function verifyAutonomousReplayTerminalOutput(
 
 function verifyAutonomousReplayFinalizerEvidence(
   run: DurableRunRecord,
-  admission: ReturnType<ChatAutonomousTurnDeps["storage"]["sessionMutationAdmissions"]["require"]>,
+  admission: Awaited<ReturnType<ChatAutonomousTurnDeps["storage"]["sessionMutationAdmissions"]["require"]>>,
   authority: ChatTurnRuntimeAuthoritySealV1,
 ): void {
   const metadata = run.metadata ?? {};
@@ -1827,14 +1840,13 @@ export async function scheduleManage(
   args: Record<string, unknown>,
   policyContext: ToolPolicyActorContext | undefined,
 ): Promise<Record<string, unknown>> {
-  if (deps.isFeatureEnabled("autonomyV1Disabled")) {
+  if (await deps.isFeatureEnabled("autonomyV1Disabled")) {
     throw new Error("schedule.manage is disabled while the autonomy kill switch is engaged (autonomyV1Disabled).");
   }
   const parsed = parseScheduleManageArgs(args);
   if (parsed.op === "list") {
     const creatorKey = resolveScheduleCreatorKey(policyContext);
-    const jobs = deps.cron
-      .listCronJobs()
+    const jobs = (await deps.cron.listCronJobs())
       .filter((job) => job.action === "agent_turn")
       .filter((job) => {
         if (!creatorKey) {
@@ -1852,7 +1864,7 @@ export async function scheduleManage(
       throw new Error('schedule.manage cancel requires a "jobId".');
     }
     const creatorKey = resolveScheduleCreatorKey(policyContext);
-    const existing = deps.cron.getCronJob(jobId);
+    const existing = await deps.cron.getCronJob(jobId);
     if (existing.action !== "agent_turn") {
       throw new Error(`schedule.manage cancel refused: ${jobId} is not an agent_turn schedule.`);
     }
@@ -1865,14 +1877,14 @@ export async function scheduleManage(
     return { op: "cancel", jobId: result.jobId, deleted: result.deleted };
   }
   // op === "create"
-  const createdByJobId = resolveSchedulingTurnJobId(deps, policyContext);
+  const createdByJobId = await resolveSchedulingTurnJobId(deps, policyContext);
   const validated = validateScheduleCreate({
     args: parsed,
     policyContext,
-    existingJobs: deps.cron.listCronJobs(),
+    existingJobs: await deps.cron.listCronJobs(),
     ...(createdByJobId ? { createdByJobId } : {}),
   });
-  const jobId = generateScheduleJobId(deps, validated.name);
+  const jobId = await generateScheduleJobId(deps, validated.name);
   const created = await deps.cron.createCronJob({
     jobId,
     name: validated.name,
@@ -1899,17 +1911,17 @@ export async function scheduleManage(
  * records its parent for the anti-recursion chain. Returns undefined for
  * interactive callers (depth 0).
  */
-function resolveSchedulingTurnJobId(
+async function resolveSchedulingTurnJobId(
   deps: ChatAutonomousTurnDeps,
   policyContext: ToolPolicyActorContext | undefined,
-): string | undefined {
+): Promise<string | undefined> {
   if (!isScheduledTurnContext(policyContext) || !policyContext?.sessionId) {
     return undefined;
   }
   const sessionId = policyContext.sessionId;
-  const match = deps.cron
-    .listCronJobs()
-    .find((job) => job.action === "agent_turn" && job.actionConfig?.agentTurn?.sessionId === sessionId);
+  const match = (await deps.cron.listCronJobs()).find(
+    (job) => job.action === "agent_turn" && job.actionConfig?.agentTurn?.sessionId === sessionId,
+  );
   return match?.jobId;
 }
 
@@ -1919,7 +1931,7 @@ function resolveSchedulingTurnJobId(
  * the (vanishingly rare) collision so a model-created schedule never clobbers
  * an existing job.
  */
-function generateScheduleJobId(deps: ChatAutonomousTurnDeps, name: string): string {
+async function generateScheduleJobId(deps: ChatAutonomousTurnDeps, name: string): Promise<string> {
   const base = name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
@@ -1930,7 +1942,7 @@ function generateScheduleJobId(deps: ChatAutonomousTurnDeps, name: string): stri
     const suffix = randomUUID().replace(/-/g, "").slice(0, 8);
     const candidate = `${slug}-${suffix}`.slice(0, 64);
     try {
-      deps.cron.getCronJob(candidate);
+      await deps.cron.getCronJob(candidate);
     } catch {
       return candidate;
     }

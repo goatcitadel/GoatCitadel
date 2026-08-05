@@ -22,7 +22,7 @@ export const evidenceReceiptsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(evidenceReceipts.buildEvidenceReceipt(params.data.runId));
+      return reply.send(await evidenceReceipts.buildEvidenceReceipt(params.data.runId));
     } catch (error) {
       if (error instanceof NotFoundError) {
         return reply.code(404).send({ error: error.message });

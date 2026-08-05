@@ -42,7 +42,7 @@ describe("approval remote token keychain references", () => {
     expect(() => buildApprovalRemoteTokenSecretRef("rat:unsafe")).toThrow(/id is invalid/i);
   });
 
-  it("removes protected secrets before expiring canonical token rows", () => {
+  it("removes protected secrets before expiring canonical token rows", async () => {
     const deleteSecret = vi.fn();
     const tokens = {
       listPendingExpired: vi.fn(() => [{ tokenId: "rat_expired" }]),
@@ -55,7 +55,7 @@ describe("approval remote token keychain references", () => {
       hostNow,
     );
 
-    expect(service.reconcileExpired(25)).toBe(1);
+    await expect(service.reconcileExpired(25)).resolves.toBe(1);
     expect(tokens.listPendingExpired).toHaveBeenCalledWith(25);
     expect(deleteSecret).toHaveBeenCalledWith("approval-remote-action:rat_expired");
     expect(tokens.expirePendingIfExpired).toHaveBeenCalledWith("rat_expired");

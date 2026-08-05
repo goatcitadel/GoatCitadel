@@ -105,7 +105,7 @@ afterEach(() => {
 });
 
 describe("GatewayService loop 27 large service coverage", () => {
-  it("records context manifests for non-memory system prompts and linked memory context", () => {
+  it("records context manifests for non-memory system prompts and linked memory context", async () => {
     const { gateway } = createGatewayHarness();
     const memoryContext = {
       citations: [{ source: "memory" }],
@@ -130,7 +130,7 @@ describe("GatewayService loop 27 large service coverage", () => {
       scope: "workspace",
     };
 
-    GatewayService.prototype.persistContextManifestForCompletionRequest.call(gateway, {
+    await GatewayService.prototype.persistContextManifestForCompletionRequest.call(gateway, {
       memoryContext,
       memoryContextPlacement: {
         position: "before_final_user_message",
@@ -188,13 +188,13 @@ describe("GatewayService loop 27 large service coverage", () => {
       }),
     );
 
-    GatewayService.prototype.persistContextManifestForCompletionRequest.call(gateway, {
+    await GatewayService.prototype.persistContextManifestForCompletionRequest.call(gateway, {
       request: { memory: { turnId: "   " }, messages: [{ role: "system", content: "ignored" }] },
     } as never);
     expect(gateway.storage.contextManifests.ensure).toHaveBeenCalledTimes(1);
   });
 
-  it("consumes remote action tokens by hash and id while preserving expired-token evidence", () => {
+  it("consumes remote action tokens by hash and id while preserving expired-token evidence", async () => {
     vi.setSystemTime(new Date("2026-05-15T00:00:00.000Z"));
     const pending = {
       actionType: "approval.resolve",
@@ -231,7 +231,7 @@ describe("GatewayService loop 27 large service coverage", () => {
     });
 
     expect(
-      GatewayService.prototype.consumeRemoteActionToken.call(gateway, " raw-token ", "approval.resolve", {
+      await GatewayService.prototype.consumeRemoteActionToken.call(gateway, " raw-token ", "approval.resolve", {
         expectedConnectorId: "conn-1",
       }),
     ).toMatchObject({
@@ -240,7 +240,7 @@ describe("GatewayService loop 27 large service coverage", () => {
       consumedBy: "connector:conn-1",
     });
     expect(
-      GatewayService.prototype.consumeRemoteActionTokenById.call(gateway, " token-2 ", "approval.resolve", {
+      await GatewayService.prototype.consumeRemoteActionTokenById.call(gateway, " token-2 ", "approval.resolve", {
         expectedConnectorId: "conn-1",
       }),
     ).toMatchObject({
@@ -259,26 +259,26 @@ describe("GatewayService loop 27 large service coverage", () => {
 
     gateway.storage.remoteActionTokens.findByTokenHash = vi.fn(() => pending);
     gateway.storage.remoteActionTokens.consumePending = vi.fn(() => undefined);
-    expect(() =>
+    await expect(
       GatewayService.prototype.consumeRemoteActionToken.call(gateway, "raw-token", "approval.resolve", {
         expectedConnectorId: "conn-1",
       }),
-    ).toThrow("already been consumed");
+    ).rejects.toThrow("already been consumed");
 
     gateway.storage.remoteActionTokens.get = vi.fn(() => ({
       ...pending,
       expiresAt: "2026-05-14T23:59:00.000Z",
       tokenId: "expired-token",
     }));
-    expect(() =>
+    await expect(
       GatewayService.prototype.consumeRemoteActionTokenById.call(gateway, "expired-token", "approval.resolve", {
         expectedConnectorId: "conn-1",
       }),
-    ).toThrow("expired");
+    ).rejects.toThrow("expired");
     expect(gateway.storage.remoteActionTokens.expirePendingIfExpired).toHaveBeenCalledWith("expired-token");
   });
 
-  it("rejects remote action tokens that are empty, unknown, mismatched, or already consumed (security invariants)", () => {
+  it("rejects remote action tokens that are empty, unknown, mismatched, or already consumed (security invariants)", async () => {
     vi.setSystemTime(new Date("2026-05-15T00:00:00.000Z"));
     const { gateway } = createGatewayHarness({
       storage: {
@@ -291,15 +291,15 @@ describe("GatewayService loop 27 large service coverage", () => {
     });
 
     // Empty token is rejected before any lookup.
-    expect(() => GatewayService.prototype.consumeRemoteActionToken.call(gateway, "   ", "approval.resolve")).toThrow(
-      /required/i,
-    );
+    await expect(
+      GatewayService.prototype.consumeRemoteActionToken.call(gateway, "   ", "approval.resolve"),
+    ).rejects.toThrow(/required/i);
 
     // Unknown token hash cannot resolve anything (the public /remote-resolve endpoint
     // is safe only because it requires an unguessable, server-minted token).
-    expect(() =>
+    await expect(
       GatewayService.prototype.consumeRemoteActionToken.call(gateway, "bogus-token", "approval.resolve"),
-    ).toThrow();
+    ).rejects.toThrow();
     expect(gateway.storage.remoteActionTokens.updateState).not.toHaveBeenCalled();
 
     // A token minted for a different action type cannot be used to resolve approvals.
@@ -310,9 +310,9 @@ describe("GatewayService loop 27 large service coverage", () => {
       state: "pending",
       tokenId: "token-x",
     }));
-    expect(() =>
+    await expect(
       GatewayService.prototype.consumeRemoteActionToken.call(gateway, "wrong-action", "approval.resolve"),
-    ).toThrow(/bound to/i);
+    ).rejects.toThrow(/bound to/i);
 
     // An already-consumed token cannot be replayed (single-use).
     gateway.storage.remoteActionTokens.findByTokenHash = vi.fn(() => ({
@@ -322,25 +322,25 @@ describe("GatewayService loop 27 large service coverage", () => {
       state: "consumed",
       tokenId: "token-y",
     }));
-    expect(() =>
+    await expect(
       GatewayService.prototype.consumeRemoteActionToken.call(gateway, "replayed-token", "approval.resolve", {
         expectedConnectorId: "conn-1",
       }),
-    ).toThrow(/already been consumed/i);
+    ).rejects.toThrow(/already been consumed/i);
   });
 
-  it("guards connector lookup and runtime profile updates with explicit operator-facing errors", () => {
+  it("guards connector lookup and runtime profile updates with explicit operator-facing errors", async () => {
     const { gateway } = createGatewayHarness({
       listConnectorRecords: vi.fn(() => [{ connectorId: "conn-1", connectorType: "integration_connection" }]),
     });
 
-    expect(GatewayService.prototype.requireConnectorRecord.call(gateway, " conn-1 ")).toMatchObject({
+    expect(await GatewayService.prototype.requireConnectorRecord.call(gateway, " conn-1 ")).toMatchObject({
       connectorId: "conn-1",
     });
-    expect(() => GatewayService.prototype.requireConnectorRecord.call(gateway, "   ")).toThrow(
+    await expect(GatewayService.prototype.requireConnectorRecord.call(gateway, "   ")).rejects.toThrow(
       "connectorId is required",
     );
-    expect(() => GatewayService.prototype.requireConnectorRecord.call(gateway, "missing")).toThrow(
+    await expect(GatewayService.prototype.requireConnectorRecord.call(gateway, "missing")).rejects.toThrow(
       "Connector missing not found",
     );
 
@@ -360,7 +360,7 @@ describe("GatewayService loop 27 large service coverage", () => {
     ).toThrow("web.firecrawl.baseUrl must be present");
   });
 
-  it("normalizes MCP records, patches server state, filters tools, and overlays browser fallback approvals", () => {
+  it("normalizes MCP records, patches server state, filters tools, and overlays browser fallback approvals", async () => {
     const { gateway, settings } = createGatewayHarness();
     settings.set("mcp_servers_v1", [
       {
@@ -380,7 +380,7 @@ describe("GatewayService loop 27 large service coverage", () => {
     ]);
     settings.set("mcp_tool_first_approval_v1", { "server-1": ["browser.search"] });
 
-    expect(GatewayService.prototype.readMcpServers.call(gateway)).toEqual(
+    expect(await GatewayService.prototype.readMcpServers.call(gateway)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           serverId: "goatcitadel-internal-approval-inbox",
@@ -401,16 +401,15 @@ describe("GatewayService loop 27 large service coverage", () => {
       ]),
     );
     expect(
-      GatewayService.prototype.patchMcpServerState.call(gateway, "server-1", { status: "connected" }),
+      await GatewayService.prototype.patchMcpServerState.call(gateway, "server-1", { status: "connected" }),
     ).toMatchObject({
       serverId: "server-1",
       status: "connected",
     });
-    expect(GatewayService.prototype.listMcpTools.call(gateway, "server-1").map((tool: any) => tool.toolName)).toEqual([
-      "browser.navigate",
-      "browser.search",
-    ]);
-    expect(GatewayService.prototype.listMcpBrowserFallbackTargets.call(gateway)).toEqual(
+    expect(
+      (await GatewayService.prototype.listMcpTools.call(gateway, "server-1")).map((tool: any) => tool.toolName),
+    ).toEqual(["browser.navigate", "browser.search"]);
+    expect(await GatewayService.prototype.listMcpBrowserFallbackTargets.call(gateway)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           serverId: "server-1",
@@ -508,7 +507,7 @@ describe("GatewayService loop 27 large service coverage", () => {
     expect(gateway.backgroundTasks.size).toBe(0);
 
     expect(
-      GatewayService.prototype.listChannelDeliveryRuntime.call(gateway).map((record: any) => record.deliveryId),
+      (await GatewayService.prototype.listChannelDeliveryRuntime.call(gateway)).map((record: any) => record.deliveryId),
     ).toEqual(["runtime-1", "persisted-1"]);
   });
 
@@ -1014,7 +1013,12 @@ describe("GatewayService loop 27 large service coverage", () => {
       chatSessionMeta: { get: vi.fn(() => ({ workspaceId: "workspace-1" })) },
     };
 
-    GatewayService.prototype.ensureSessionInternalToolGrant.call(gateway, "session-1", "browser.search", "runtime");
+    await GatewayService.prototype.ensureSessionInternalToolGrant.call(
+      gateway,
+      "session-1",
+      "browser.search",
+      "runtime",
+    );
     expect(createdGrant).toHaveBeenCalledWith(
       expect.objectContaining({
         toolPattern: "browser.search",
@@ -1042,9 +1046,9 @@ describe("GatewayService loop 27 large service coverage", () => {
           ]
         : [],
     );
-    expect(() =>
+    await expect(
       GatewayService.prototype.ensureSessionInternalToolGrant.call(gateway, "session-1", "browser.search", "runtime"),
-    ).toThrow("deny policy");
+    ).rejects.toThrow("deny policy");
     expect(publishRealtime).toHaveBeenCalledWith(
       "system",
       "tools",
@@ -1066,12 +1070,12 @@ describe("GatewayService loop 27 large service coverage", () => {
     const createPersistentGrant = vi.fn();
     gateway.approvalRuntime = { createToolGrant: createPersistentGrant };
     createdGrant.mockClear();
-    GatewayService.prototype.ensureChatSessionRuntimeGrants.call(gateway, "session-1");
+    await GatewayService.prototype.ensureChatSessionRuntimeGrants.call(gateway, "session-1");
     expect(createdGrant).not.toHaveBeenCalled();
     expect(createPersistentGrant).not.toHaveBeenCalled();
-    expect(() =>
+    await expect(
       GatewayService.prototype.ensureSessionInternalToolGrant.call(gateway, "session-1", "browser.search", "runtime"),
-    ).toThrow("deny policy");
+    ).rejects.toThrow("deny policy");
 
     await expect(
       GatewayService.prototype.invokeAndUnwrap.call(
@@ -1163,7 +1167,7 @@ describe("GatewayService loop 27 large service coverage", () => {
 
   it("resolves workspace/session routing and chat session truth from storage fallbacks", async () => {
     const { gateway } = createGatewayHarness();
-    const chatSession = GatewayService.prototype.requireChatSession.call(gateway, "session-1");
+    const chatSession = await GatewayService.prototype.requireChatSession.call(gateway, "session-1");
     expect(chatSession).toMatchObject({
       sessionId: "session-1",
       workspaceId: "workspace-a",
@@ -1171,18 +1175,18 @@ describe("GatewayService loop 27 large service coverage", () => {
       mode: "cowork",
     });
 
-    expect(GatewayService.prototype.resolveMemoryWorkspaceRelativeDir.call(gateway, undefined, "session-1")).toBe(
+    expect(await GatewayService.prototype.resolveMemoryWorkspaceRelativeDir.call(gateway, undefined, "session-1")).toBe(
       "workspaces/workspace-a/memory",
     );
     expect(
-      GatewayService.prototype.resolveChatCompletionHookWorkspaceId.call(gateway, {
+      await GatewayService.prototype.resolveChatCompletionHookWorkspaceId.call(gateway, {
         memory: { sessionId: "session-1" },
       } as never),
     ).toBe("workspace-a");
-    expect(GatewayService.prototype.resolveApprovalHookWorkspaceId.call(gateway, { sessionId: "session-1" })).toBe(
-      "workspace-a",
-    );
-    expect(GatewayService.prototype.isReplayScratchSession.call(gateway, "session-1")).toBe(true);
+    expect(
+      await GatewayService.prototype.resolveApprovalHookWorkspaceId.call(gateway, { sessionId: "session-1" }),
+    ).toBe("workspace-a");
+    expect(await GatewayService.prototype.isReplayScratchSession.call(gateway, "session-1")).toBe(true);
     expect(
       GatewayService.prototype.routeFromSession.call(gateway, {
         account: "acct",
@@ -1213,11 +1217,11 @@ describe("GatewayService loop 27 large service coverage", () => {
     expect(gateway.storage.chatMessages.upsertMany).toHaveBeenCalledTimes(1);
   });
 
-  it("does not promote a transport-only session into canonical Chat metadata on read", () => {
+  it("does not promote a transport-only session into canonical Chat metadata on read", async () => {
     const { gateway } = createGatewayHarness();
     gateway.storage.chatSessionMeta.get.mockReturnValue(undefined);
 
-    expect(() => GatewayService.prototype.requireChatSession.call(gateway, "transport-only")).toThrow(
+    await expect(GatewayService.prototype.requireChatSession.call(gateway, "transport-only")).rejects.toThrow(
       /canonical chat session metadata/i,
     );
     expect(gateway.storage.chatSessionMeta.ensure).not.toHaveBeenCalled();

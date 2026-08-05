@@ -26,8 +26,8 @@ describe("ward action name builders", () => {
 });
 
 describe("resolveWardEffectForExternalAction", () => {
-  it("resolves the workspace's citadel and returns a matching ward effect", () => {
-    const result = resolveWardEffectForExternalAction({
+  it("resolves the workspace's citadel and returns a matching ward effect", async () => {
+    const result = await resolveWardEffectForExternalAction({
       storage: {
         workspaces: { find: (id) => (id === "ws-1" ? { citadelId: "citadel-ops" } : undefined) },
         citadels: {
@@ -41,18 +41,18 @@ describe("resolveWardEffectForExternalAction", () => {
     expect(result).toEqual({ effect: "require_dry_run", citadelId: "citadel-ops" });
   });
 
-  it("falls back to the personal citadel when unbound or unresolvable", () => {
+  it("falls back to the personal citadel when unbound or unresolvable", async () => {
     const listWards = (citadelId: string) => (citadelId === DEFAULT_CITADEL_ID ? [ward("a2a.outbound.*", "deny")] : []);
 
     expect(
-      resolveWardEffectForExternalAction({
+      await resolveWardEffectForExternalAction({
         storage: { citadels: { listWards } },
         action: "a2a.outbound.jsonrpc.message.send",
       }),
     ).toEqual({ effect: "deny", citadelId: DEFAULT_CITADEL_ID });
 
     expect(
-      resolveWardEffectForExternalAction({
+      await resolveWardEffectForExternalAction({
         storage: { workspaces: { find: () => undefined }, citadels: { listWards } },
         workspaceId: "ws-unknown",
         action: "a2a.outbound.push",
@@ -60,28 +60,32 @@ describe("resolveWardEffectForExternalAction", () => {
     ).toEqual({ effect: "deny", citadelId: DEFAULT_CITADEL_ID });
   });
 
-  it("collapses allow and no-match to undefined, and inherits deny-wins precedence", () => {
+  it("collapses allow and no-match to undefined, and inherits deny-wins precedence", async () => {
     const storage = {
       citadels: {
         listWards: () => [ward("integration.*", "allow"), ward("integration.automation.gmail.*", "deny")],
       },
     };
-    expect(resolveWardEffectForExternalAction({ storage, action: "integration.automation.gmail.write" }).effect).toBe(
-      "deny",
-    );
     expect(
-      resolveWardEffectForExternalAction({ storage, action: "integration.productivity.trello.write" }).effect,
+      (await resolveWardEffectForExternalAction({ storage, action: "integration.automation.gmail.write" })).effect,
+    ).toBe("deny");
+    expect(
+      (await resolveWardEffectForExternalAction({ storage, action: "integration.productivity.trello.write" })).effect,
     ).toBeUndefined();
     expect(
-      resolveWardEffectForExternalAction({
-        storage: { citadels: { listWards: () => [] } },
-        action: "integration.automation.gmail.write",
-      }).effect,
+      (
+        await resolveWardEffectForExternalAction({
+          storage: { citadels: { listWards: () => [] } },
+          action: "integration.automation.gmail.write",
+        })
+      ).effect,
     ).toBeUndefined();
   });
 
-  it("imposes nothing when the host has no ward storage members", () => {
-    expect(resolveWardEffectForExternalAction({ storage: {}, action: "integration.automation.gmail.write" })).toEqual({
+  it("imposes nothing when the host has no ward storage members", async () => {
+    expect(
+      await resolveWardEffectForExternalAction({ storage: {}, action: "integration.automation.gmail.write" }),
+    ).toEqual({
       effect: undefined,
       citadelId: DEFAULT_CITADEL_ID,
     });

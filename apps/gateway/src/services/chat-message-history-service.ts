@@ -10,7 +10,11 @@ import {
   type TranscriptEvent,
 } from "@goatcitadel/contracts";
 import { estimateTokensFromText } from "@goatcitadel/memory-core";
-import { buildChatCompactionAttemptId, buildChatCompactionStateKey, type Storage } from "@goatcitadel/storage";
+import {
+  buildChatCompactionAttemptId,
+  buildChatCompactionStateKey,
+  type AsyncStorage as Storage,
+} from "@goatcitadel/storage";
 import { buildConversationCompactionSummary } from "./chat-compaction.js";
 import type { LlmService } from "./llm-service.js";
 import type { ChatTurnSessionState } from "./chat-turn-prep-service.js";
@@ -167,7 +171,7 @@ export async function buildLlmMessagesFromBranchPath(
   if (currentUserMessage) {
     orderedMessages.push(currentUserMessage);
   }
-  return buildLlmMessagesFromRecords(deps, orderedMessages, {
+  return await buildLlmMessagesFromRecords(deps, orderedMessages, {
     ...options,
     sessionId,
     branchHeadTurnId: pathTurnIds.at(-1),
@@ -392,14 +396,16 @@ async function compactBranchMappedMessages(
     typeof summaryRepo.observeCompactionEvidence === "function";
   const compatibleState = supportsState
     ? selectCompatibleCompactionState(
-        summaryRepo.listCompactionStates(input.sessionId, dimension.dimensionHash),
+        await summaryRepo.listCompactionStates(input.sessionId, dimension.dimensionHash),
         input.branchTurnIds,
         grouped,
       )
     : undefined;
   let breaker: ChatCompactionBreakerRecord | undefined;
   try {
-    breaker = supportsBreaker ? summaryRepo.getCompactionBreaker(input.sessionId, dimension.dimensionHash) : undefined;
+    breaker = supportsBreaker
+      ? await summaryRepo.getCompactionBreaker(input.sessionId, dimension.dimensionHash)
+      : undefined;
   } catch {
     // Durable anti-thrashing truth is safety state. If it cannot be read, do
     // not silently compact with a process-local approximation.
@@ -419,7 +425,7 @@ async function compactBranchMappedMessages(
     : undefined;
   if (supportsBreaker && breaker?.pendingAttemptId && pendingEvidence) {
     try {
-      breaker = summaryRepo.observeCompactionEvidence({
+      breaker = await summaryRepo.observeCompactionEvidence({
         ...breakerIdentity,
         evidenceTurnId: pendingEvidence.turnId,
         evidenceObservedTurnCount: pendingEvidence.observedTurnCount,
@@ -441,7 +447,7 @@ async function compactBranchMappedMessages(
       return input.mapped;
     }
     try {
-      const validation = summaryRepo.validatePendingCompactionBreakerForceAction({
+      const validation = await summaryRepo.validatePendingCompactionBreakerForceAction({
         sessionId: input.sessionId,
         dimensionHash: dimension.dimensionHash,
         actionId: dimension.forceAction.actionId,
@@ -464,7 +470,7 @@ async function compactBranchMappedMessages(
     observedInputTokens !== undefined &&
     observedInputTokens <= CHAT_COMPACTION_REARM_TOKENS
   ) {
-    activeState = summaryRepo.upsertCompactionState({
+    activeState = await summaryRepo.upsertCompactionState({
       ...activeState,
       baselineInputTokens: observedInputTokens,
       lastObservedInputTokens: observedInputTokens,
@@ -513,7 +519,7 @@ async function compactBranchMappedMessages(
       break;
     }
     const windowMessages = windowTurnIds.flatMap((turnId) => grouped.get(turnId) ?? []);
-    const summaryResult = getOrCreateConversationSummary(deps, {
+    const summaryResult = await getOrCreateConversationSummary(deps, {
       sessionId: input.sessionId,
       branchHeadTurnId: input.branchHeadTurnId,
       turnIds: windowTurnIds,
@@ -547,7 +553,7 @@ async function compactBranchMappedMessages(
       disposition: "no_progress",
     });
     try {
-      breaker = summaryRepo.recordCompactionNoProgress({
+      breaker = await summaryRepo.recordCompactionNoProgress({
         ...breakerIdentity,
         attemptId,
         branchHeadTurnId: input.branchHeadTurnId,
@@ -588,7 +594,7 @@ async function compactBranchMappedMessages(
     });
     try {
       if (supportsBreaker) {
-        const committed = summaryRepo.commitCompactionBoundary({
+        const committed = await summaryRepo.commitCompactionBoundary({
           state: nextState,
           attemptId,
           branchHeadTurnId: input.branchHeadTurnId,
@@ -598,7 +604,7 @@ async function compactBranchMappedMessages(
         });
         activeState = committed.state;
       } else {
-        activeState = summaryRepo.upsertCompactionState(nextState);
+        activeState = await summaryRepo.upsertCompactionState(nextState);
       }
     } catch {
       // A lost response after a successful concurrent commit is safe to
@@ -610,11 +616,11 @@ async function compactBranchMappedMessages(
         return input.mapped;
       }
       try {
-        const refreshedBreaker = summaryRepo.getCompactionBreaker(input.sessionId, dimension.dimensionHash);
+        const refreshedBreaker = await summaryRepo.getCompactionBreaker(input.sessionId, dimension.dimensionHash);
         if (refreshedBreaker?.pendingAttemptId === attemptId || refreshedBreaker?.lastAttemptId === attemptId) {
-          const durableState = summaryRepo
-            .listCompactionStates(input.sessionId, dimension.dimensionHash)
-            .find((state) => state.stateKey === nextState.stateKey);
+          const durableState = (await summaryRepo.listCompactionStates(input.sessionId, dimension.dimensionHash)).find(
+            (state) => state.stateKey === nextState.stateKey,
+          );
           if (!durableState) {
             return input.mapped;
           }
@@ -635,7 +641,7 @@ async function compactBranchMappedMessages(
           });
           // The returned record is intentionally discarded: this path always
           // returns the unmapped prompt, so no later read observes `breaker`.
-          summaryRepo.recordCompactionNoProgress({
+          await summaryRepo.recordCompactionNoProgress({
             ...breakerIdentity,
             attemptId: noProgressAttemptId,
             branchHeadTurnId: input.branchHeadTurnId,
@@ -670,7 +676,7 @@ interface ConversationCompactionSummaryResult {
   disposition: Exclude<ChatCompactionAttemptDisposition, "no_progress">;
 }
 
-function getOrCreateConversationSummary(
+async function getOrCreateConversationSummary(
   deps: ChatMessageHistoryDependencies,
   input: {
     sessionId: string;
@@ -678,7 +684,7 @@ function getOrCreateConversationSummary(
     turnIds: string[];
     messages: ChatMessageRecord[];
   },
-): ConversationCompactionSummaryResult | undefined {
+): Promise<ConversationCompactionSummaryResult | undefined> {
   if (input.turnIds.length === 0 || input.messages.length === 0) {
     return undefined;
   }
@@ -694,10 +700,11 @@ function getOrCreateConversationSummary(
   try {
     const existing =
       typeof summaryRepo.findReusableWindow === "function"
-        ? summaryRepo.findReusableWindow({ sessionId: input.sessionId, turnIds: input.turnIds, sourceHash })
-        : (typeof summaryRepo.listBySession === "function"
-            ? summaryRepo.listBySession(input.sessionId, 128)
-            : summaryRepo.listByBranch(input.sessionId, input.branchHeadTurnId)
+        ? await summaryRepo.findReusableWindow({ sessionId: input.sessionId, turnIds: input.turnIds, sourceHash })
+        : (
+            await (typeof summaryRepo.listBySession === "function"
+              ? summaryRepo.listBySession(input.sessionId, 128)
+              : summaryRepo.listByBranch(input.sessionId, input.branchHeadTurnId))
           ).find((summary) => summary.sourceHash === sourceHash && arraysEqual(summary.turnIds, input.turnIds));
     if (existing) {
       return {
@@ -709,7 +716,7 @@ function getOrCreateConversationSummary(
     if (!summary) {
       return undefined;
     }
-    const persisted = deps.storage.chatConversationSummaries.upsert({
+    const persisted = await deps.storage.chatConversationSummaries.upsert({
       sessionId: input.sessionId,
       branchHeadTurnId: input.branchHeadTurnId,
       startTurnId: input.turnIds[0]!,

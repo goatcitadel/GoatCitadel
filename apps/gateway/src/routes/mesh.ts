@@ -54,11 +54,11 @@ const replicationQuerySchema = z.object({
 
 export const meshRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/mesh/status", async (_request, reply) => {
-    return reply.send(fastify.services.mesh.getMeshStatus());
+    return reply.send(await fastify.services.mesh.getMeshStatus());
   });
 
   fastify.get("/api/v1/mesh/readiness", async (_request, reply) => {
-    return reply.send(fastify.services.mesh.getMeshReadinessDiagnostics());
+    return reply.send(await fastify.services.mesh.getMeshReadinessDiagnostics());
   });
 
   fastify.get("/api/v1/mesh/nodes", async (request, reply) => {
@@ -66,7 +66,7 @@ export const meshRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send({ items: fastify.services.mesh.listMeshNodes(parsed.data.limit) });
+    return reply.send({ items: await fastify.services.mesh.listMeshNodes(parsed.data.limit) });
   });
 
   fastify.post("/api/v1/mesh/join", async (request, reply) => {
@@ -75,7 +75,7 @@ export const meshRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.code(201).send(fastify.services.mesh.meshJoin(parsed.data));
+      return reply.code(201).send(await fastify.services.mesh.meshJoin(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -87,7 +87,7 @@ export const meshRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.mesh.acquireMeshLease(parsed.data));
+      return reply.send(await fastify.services.mesh.acquireMeshLease(parsed.data));
     } catch (error) {
       return reply.code(409).send({ error: (error as Error).message });
     }
@@ -99,7 +99,7 @@ export const meshRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.mesh.renewMeshLease(parsed.data));
+      return reply.send(await fastify.services.mesh.renewMeshLease(parsed.data));
     } catch (error) {
       return reply.code(409).send({ error: (error as Error).message });
     }
@@ -111,7 +111,7 @@ export const meshRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.mesh.releaseMeshLease(parsed.data));
+      return reply.send(await fastify.services.mesh.releaseMeshLease(parsed.data));
     } catch (error) {
       return reply.code(409).send({ error: (error as Error).message });
     }
@@ -122,7 +122,7 @@ export const meshRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send({ items: fastify.services.mesh.listMeshLeases(parsed.data.limit) });
+    return reply.send({ items: await fastify.services.mesh.listMeshLeases(parsed.data.limit) });
   });
 
   fastify.post("/api/v1/mesh/sessions/:sessionId/claim", async (request, reply) => {
@@ -132,7 +132,7 @@ export const meshRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.mesh.claimMeshSessionOwner(sessionId, parsed.data));
+      return reply.send(await fastify.services.mesh.claimMeshSessionOwner(sessionId, parsed.data));
     } catch (error) {
       return reply.code(409).send({ error: (error as Error).message });
     }
@@ -141,7 +141,7 @@ export const meshRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/mesh/sessions/:sessionId/owner", async (request, reply) => {
     const sessionId = (request.params as { sessionId: string }).sessionId;
     try {
-      return reply.send(fastify.services.mesh.getMeshSessionOwner(sessionId));
+      return reply.send(await fastify.services.mesh.getMeshSessionOwner(sessionId));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -152,7 +152,7 @@ export const meshRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send({ items: fastify.services.mesh.listMeshSessionOwners(parsed.data.limit) });
+    return reply.send({ items: await fastify.services.mesh.listMeshSessionOwners(parsed.data.limit) });
   });
 
   fastify.post("/api/v1/mesh/replication/events", async (request, reply) => {
@@ -161,7 +161,7 @@ export const meshRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.code(202).send(fastify.services.mesh.ingestMeshReplicationEvent(parsed.data));
+      return reply.code(202).send(await fastify.services.mesh.ingestMeshReplicationEvent(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -172,7 +172,7 @@ export const meshRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    const items = fastify.services.mesh.listMeshReplicationEvents(parsed.data.limit, parsed.data.cursor);
+    const items = await fastify.services.mesh.listMeshReplicationEvents(parsed.data.limit, parsed.data.cursor);
     const last = items[items.length - 1];
     const nextCursor = items.length === parsed.data.limit ? last?.createdAt : undefined;
     return reply.send({ items, nextCursor });
@@ -183,6 +183,6 @@ export const meshRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send({ items: fastify.services.mesh.listMeshReplicationOffsets(parsed.data.limit) });
+    return reply.send({ items: await fastify.services.mesh.listMeshReplicationOffsets(parsed.data.limit) });
   });
 };

@@ -197,7 +197,7 @@ describe("GatewayService orchestration worktree reaper scheduler", () => {
     expect(reapOrphaned).not.toHaveBeenCalled();
   });
 
-  it("cancels the linked durable worker for an exact worktree lease-loss fence", () => {
+  it("cancels the linked durable worker for an exact worktree lease-loss fence", async () => {
     const token = {
       runId: "run-fenced",
       worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-fenced",
@@ -241,11 +241,11 @@ describe("GatewayService orchestration worktree reaper scheduler", () => {
     gateway.durableRunService = { cancelDurableRun };
     const handle = (
       GatewayService.prototype as never as {
-        handleOrchestrationWorktreeLeaseLoss: (event: Record<string, unknown>) => void;
+        handleOrchestrationWorktreeLeaseLoss: (event: Record<string, unknown>) => Promise<void>;
       }
     ).handleOrchestrationWorktreeLeaseLoss;
 
-    handle.call(gateway, { token, reason: "lease_renewal_rejected", fencedRun: canonicalRun });
+    await handle.call(gateway, { token, reason: "lease_renewal_rejected", fencedRun: canonicalRun });
     expect(cancelDurableRun).toHaveBeenCalledWith("durable-run-fenced", "worktree-lease-fence");
     expect(appendRunEvent).toHaveBeenCalledWith(
       token.runId,
@@ -258,7 +258,7 @@ describe("GatewayService orchestration worktree reaper scheduler", () => {
       worktreeLeaseOwnerId: "owner-b",
       worktreeLeaseGeneration: 5,
     };
-    handle.call(gateway, { token, reason: "lease_renewal_rejected" });
+    await handle.call(gateway, { token, reason: "lease_renewal_rejected" });
     expect(cancelDurableRun).toHaveBeenCalledTimes(1);
   });
 });

@@ -27,7 +27,7 @@ describe("discord pairing helpers", () => {
     expect(generateDiscordPairingCode()).toMatch(/^[0-9A-F]{6}$/u);
   });
 
-  it("finds only approved pairings for the requested connection and user", () => {
+  it("finds only approved pairings for the requested connection and user", async () => {
     const approved: DiscordPairingRecord = {
       pairingId: "pair-approved",
       connectionId: "discord-main",
@@ -43,11 +43,11 @@ describe("discord pairing helpers", () => {
       approved,
     ]);
 
-    expect(findApprovedDiscordPairing(host, "discord-main", "user-1")).toBe(approved);
-    expect(findApprovedDiscordPairing(host, "discord-main", "missing-user")).toBeUndefined();
+    expect(await findApprovedDiscordPairing(host, "discord-main", "user-1")).toBe(approved);
+    expect(await findApprovedDiscordPairing(host, "discord-main", "missing-user")).toBeUndefined();
   });
 
-  it("creates pending pairings with trimmed display names and prepends them to persisted records", () => {
+  it("creates pending pairings with trimmed display names and prepends them to persisted records", async () => {
     const existing: DiscordPairingRecord = {
       pairingId: "existing",
       connectionId: "discord-main",
@@ -59,7 +59,7 @@ describe("discord pairing helpers", () => {
     };
     const host = createPairingHost([existing]);
 
-    const created = ensurePendingDiscordPairing(host, "discord-main", "user-1", "  Operator  ");
+    const created = await ensurePendingDiscordPairing(host, "discord-main", "user-1", "  Operator  ");
 
     expect(created).toMatchObject({
       connectionId: "discord-main",
@@ -75,7 +75,7 @@ describe("discord pairing helpers", () => {
     expect(host.records[1]).toBe(existing);
   });
 
-  it("updates an existing pending pairing without losing its display name when the new one is blank", () => {
+  it("updates an existing pending pairing without losing its display name when the new one is blank", async () => {
     const pending: DiscordPairingRecord = {
       pairingId: "pending",
       connectionId: "discord-main",
@@ -88,7 +88,7 @@ describe("discord pairing helpers", () => {
     };
     const host = createPairingHost([pending]);
 
-    const updated = ensurePendingDiscordPairing(host, "discord-main", "user-1", "   ");
+    const updated = await ensurePendingDiscordPairing(host, "discord-main", "user-1", "   ");
 
     expect(updated).toMatchObject({
       pairingId: "pending",
@@ -100,7 +100,7 @@ describe("discord pairing helpers", () => {
     expect(host.records).toEqual([updated]);
   });
 
-  it("touches only the matching pairing with inbound timestamps", () => {
+  it("touches only the matching pairing with inbound timestamps", async () => {
     const target: DiscordPairingRecord = {
       pairingId: "target",
       connectionId: "discord-main",
@@ -117,7 +117,7 @@ describe("discord pairing helpers", () => {
     };
     const host = createPairingHost([target, untouched]);
 
-    touchDiscordPairing(host, "target");
+    await touchDiscordPairing(host, "target");
 
     expect(host.records[0]).toMatchObject({
       pairingId: "target",

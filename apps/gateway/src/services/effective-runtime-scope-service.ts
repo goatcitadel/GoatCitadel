@@ -5,19 +5,19 @@ import {
   type EffectiveRuntimeScope,
   type EffectiveRuntimeScopeSource,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 
 export interface EffectiveRuntimeScopeDependencies {
   storage: Pick<Storage, "chatProjects" | "chatSessionMeta" | "chatSessionProjects" | "workspaces">;
   normalizeWorkspaceId: (workspaceId?: string) => string;
 }
 
-export function resolveEffectiveRuntimeScopeFromStorage(
+export async function resolveEffectiveRuntimeScopeFromStorage(
   deps: EffectiveRuntimeScopeDependencies,
   source: EffectiveRuntimeScopeSource,
-): EffectiveRuntimeScope {
-  const workspaceId = resolveWorkspaceId(deps, source);
-  const workspace = deps.storage.workspaces.find(workspaceId);
+): Promise<EffectiveRuntimeScope> {
+  const workspaceId = await resolveWorkspaceId(deps, source);
+  const workspace = await deps.storage.workspaces.find(workspaceId);
   const citadelId = source.citadelId?.trim() || workspace?.citadelId || DEFAULT_CITADEL_ID;
   if (workspace?.citadelId && workspace.citadelId !== citadelId) {
     throw new ValidationError({
@@ -26,7 +26,7 @@ export function resolveEffectiveRuntimeScopeFromStorage(
     });
   }
   if (source.projectId?.trim()) {
-    const project = deps.storage.chatProjects.get(source.projectId.trim());
+    const project = await deps.storage.chatProjects.get(source.projectId.trim());
     const projectWorkspaceId = deps.normalizeWorkspaceId(project.workspaceId);
     if (projectWorkspaceId !== workspaceId) {
       throw new ValidationError({
@@ -38,15 +38,18 @@ export function resolveEffectiveRuntimeScopeFromStorage(
   return resolveEffectiveRuntimeScope({ ...source, citadelId, workspaceId }, citadelId);
 }
 
-function resolveWorkspaceId(deps: EffectiveRuntimeScopeDependencies, source: EffectiveRuntimeScopeSource): string {
+async function resolveWorkspaceId(
+  deps: EffectiveRuntimeScopeDependencies,
+  source: EffectiveRuntimeScopeSource,
+): Promise<string> {
   if (source.workspaceId?.trim()) {
     return deps.normalizeWorkspaceId(source.workspaceId);
   }
   if (source.sessionId?.trim()) {
-    return deps.normalizeWorkspaceId(deps.storage.chatSessionMeta.ensure(source.sessionId.trim()).workspaceId);
+    return deps.normalizeWorkspaceId((await deps.storage.chatSessionMeta.ensure(source.sessionId.trim())).workspaceId);
   }
   if (source.projectId?.trim()) {
-    return deps.normalizeWorkspaceId(deps.storage.chatProjects.get(source.projectId.trim()).workspaceId);
+    return deps.normalizeWorkspaceId((await deps.storage.chatProjects.get(source.projectId.trim())).workspaceId);
   }
   return deps.normalizeWorkspaceId(undefined);
 }

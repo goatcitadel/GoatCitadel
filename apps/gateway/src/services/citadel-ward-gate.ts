@@ -19,8 +19,10 @@ import { DEFAULT_CITADEL_ID, evaluateWards } from "@goatcitadel/contracts";
  * through (callers may record them).
  */
 export interface CitadelWardGateStorage {
-  workspaces?: { find(workspaceId: string): { citadelId?: string } | undefined };
-  citadels?: { listWards(citadelId: string): CitadelWard[] };
+  workspaces?: {
+    find(workspaceId: string): { citadelId?: string } | undefined | Promise<{ citadelId?: string } | undefined>;
+  };
+  citadels?: { listWards(citadelId: string): CitadelWard[] | Promise<CitadelWard[]> };
 }
 
 export interface CitadelWardGateResult {
@@ -30,15 +32,15 @@ export interface CitadelWardGateResult {
   citadelId: string;
 }
 
-export function resolveWardEffectForExternalAction(input: {
+export async function resolveWardEffectForExternalAction(input: {
   storage: CitadelWardGateStorage;
   workspaceId?: string;
   action: string;
-}): CitadelWardGateResult {
+}): Promise<CitadelWardGateResult> {
   const workspaceId = input.workspaceId?.trim();
   const citadelId =
-    (workspaceId ? input.storage.workspaces?.find(workspaceId)?.citadelId : undefined) ?? DEFAULT_CITADEL_ID;
-  const wards = input.storage.citadels?.listWards(citadelId) ?? [];
+    (workspaceId ? (await input.storage.workspaces?.find(workspaceId))?.citadelId : undefined) ?? DEFAULT_CITADEL_ID;
+  const wards = (await input.storage.citadels?.listWards(citadelId)) ?? [];
   if (wards.length === 0) {
     return { effect: undefined, citadelId };
   }

@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { SystemSettingsRepository } from "@goatcitadel/storage";
+import type { AsyncStorage } from "@goatcitadel/storage";
 import type { VoiceRuntimeInstallRequest, VoiceRuntimeStatus } from "@goatcitadel/contracts";
 import {
   DEFAULT_MANAGED_VOICE_MODEL_ID,
@@ -31,7 +31,7 @@ import {
 } from "./status.js";
 
 export async function installManagedVoiceRuntime(
-  systemSettings?: Pick<SystemSettingsRepository, "get" | "set">,
+  systemSettings?: Pick<AsyncStorage["systemSettings"], "get" | "set">,
   input: VoiceRuntimeInstallRequest = {},
 ): Promise<VoiceRuntimeStatus> {
   const platform = detectManagedVoicePlatform();
@@ -77,7 +77,7 @@ export async function installManagedVoiceRuntime(
     };
     await writeManagedVoiceManifest(next);
     if (selectedModelId && systemSettings) {
-      setVoiceRuntimeConfig(systemSettings, {
+      await setVoiceRuntimeConfig(systemSettings, {
         selectedModelId,
         mode: "managed",
       });
@@ -96,7 +96,7 @@ export async function installManagedVoiceRuntime(
 }
 
 export async function selectManagedVoiceModel(
-  systemSettings: Pick<SystemSettingsRepository, "get" | "set"> | undefined,
+  systemSettings: Pick<AsyncStorage["systemSettings"], "get" | "set"> | undefined,
   modelId: string,
 ): Promise<VoiceRuntimeStatus> {
   const manifest = await readManagedVoiceManifest();
@@ -108,7 +108,7 @@ export async function selectManagedVoiceModel(
     selectedModelId: modelId,
   });
   if (systemSettings) {
-    setVoiceRuntimeConfig(systemSettings, {
+    await setVoiceRuntimeConfig(systemSettings, {
       selectedModelId: modelId,
       mode: "managed",
     });
@@ -117,7 +117,7 @@ export async function selectManagedVoiceModel(
 }
 
 export async function removeManagedVoiceModel(
-  systemSettings: Pick<SystemSettingsRepository, "get" | "set"> | undefined,
+  systemSettings: Pick<AsyncStorage["systemSettings"], "get" | "set"> | undefined,
   modelId: string,
 ): Promise<VoiceRuntimeStatus> {
   const manifest = await readManagedVoiceManifest();
@@ -125,7 +125,7 @@ export async function removeManagedVoiceModel(
     throw new Error("Managed voice runtime is not installed.");
   }
   const selectedModelId =
-    systemSettings?.get<{ selectedModelId?: string }>(VOICE_RUNTIME_CONFIG_KEY)?.value?.selectedModelId ??
+    (await systemSettings?.get<{ selectedModelId?: string }>(VOICE_RUNTIME_CONFIG_KEY))?.value?.selectedModelId ??
     manifest.selectedModelId ??
     manifest.models.find((item) => item.modelId === DEFAULT_MANAGED_VOICE_MODEL_ID)?.modelId ??
     manifest.models[0]?.modelId;

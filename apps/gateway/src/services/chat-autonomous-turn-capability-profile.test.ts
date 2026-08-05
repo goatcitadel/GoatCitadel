@@ -200,9 +200,9 @@ describe("autonomous Chat capability admission", () => {
             return trace;
           }),
         },
-        runImmediateTransaction: (callback: () => unknown) => {
+        runImmediateTransaction: async (callback: () => unknown) => {
           events.push("tx-start");
-          const result = callback();
+          const result = await callback();
           events.push("tx-commit");
           return result;
         },
@@ -451,9 +451,9 @@ describe("autonomous Chat capability admission", () => {
             return trace;
           }),
         },
-        runImmediateTransaction: (callback: () => unknown) => {
+        runImmediateTransaction: async (callback: () => unknown) => {
           events.push("tx-start");
-          const result = callback();
+          const result = await callback();
           events.push("tx-commit");
           return result;
         },
@@ -552,7 +552,7 @@ describe("autonomous Chat capability admission", () => {
     ]);
   });
 
-  it("persists nothing when catalog verification fails before admission", () => {
+  it("persists nothing when catalog verification fails before admission", async () => {
     const prepared = buildPrepared();
     prepared.capabilityCatalogSnapshot = {
       ...prepared.capabilityCatalogSnapshot!,
@@ -571,7 +571,7 @@ describe("autonomous Chat capability admission", () => {
     const createSnapshot = vi.fn();
     const createProfile = vi.fn();
 
-    expect(() =>
+    await expect(
       persistPreparedChatCapabilityAdmission(
         {
           capabilityCatalogSnapshots: { create: createSnapshot },
@@ -581,7 +581,7 @@ describe("autonomous Chat capability admission", () => {
         },
         prepared,
       ),
-    ).toThrow(/immutable catalog snapshot/);
+    ).rejects.toThrow(/immutable catalog snapshot/);
     expect(createSnapshot).not.toHaveBeenCalled();
     expect(createProfile).not.toHaveBeenCalled();
   });

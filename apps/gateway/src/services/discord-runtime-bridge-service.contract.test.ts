@@ -253,7 +253,7 @@ describe("discord-runtime-bridge-service contract behavior", () => {
     vi.useFakeTimers();
   });
 
-  it("creates a new logical route session and clones chat context into it", () => {
+  it("creates a new logical route session and clones chat context into it", async () => {
     const host = createHost();
     host.storage.chatSessionProjects.get = vi.fn((sessionId: string) =>
       sessionId === [...host.sessionsById.keys()][0]
@@ -261,7 +261,7 @@ describe("discord-runtime-bridge-service contract behavior", () => {
         : undefined,
     );
 
-    const session = startNewDiscordRouteSession(host, {
+    const session = await startNewDiscordRouteSession(host, {
       connectionId: "discord-1",
       target: "dm_1",
       title: "Fresh thread",
@@ -282,10 +282,10 @@ describe("discord-runtime-bridge-service contract behavior", () => {
     expect(host.updateSessionMock).toHaveBeenCalledWith(session.sessionId, { title: "Fresh thread" });
   });
 
-  it("ensures Discord chat sessions, bindings, and route-session thread isolation", () => {
+  it("ensures Discord chat sessions, bindings, and route-session thread isolation", async () => {
     const host = createHost();
 
-    const first = ensureDiscordChatSession(host, {
+    const first = await ensureDiscordChatSession(host, {
       connectionId: "discord-1",
       target: "channel-1",
       displayName: "Ops Channel",
@@ -317,37 +317,37 @@ describe("discord-runtime-bridge-service contract behavior", () => {
       },
     ]);
 
-    expect(
+    await expect(
       resolveDiscordInboundRoute(host, {
         connectionId: "discord-1",
         target: "channel-1",
         room: "room-1",
         threadId: "thread-1",
       }),
-    ).toEqual({
+    ).resolves.toEqual({
       room: "room-1",
       threadId: "discord_thread-1_logical123",
     });
-    expect(
+    await expect(
       resolveDiscordInboundRoute(host, {
         connectionId: "discord-1",
         target: "other-channel",
         peer: "user-1",
       }),
-    ).toEqual({ peer: "user-1", room: "other-channel", threadId: undefined });
+    ).resolves.toEqual({ peer: "user-1", room: "other-channel", threadId: undefined });
   });
 
-  it("rejects a cross-workspace stable Discord identity before any session mutation", () => {
+  it("rejects a cross-workspace stable Discord identity before any session mutation", async () => {
     const host = createHost();
     vi.mocked(host.storage.chatSessionMeta.get).mockReturnValue({ workspaceId: "other-workspace" });
 
-    expect(() =>
+    await expect(
       ensureDiscordChatSession(host, {
         connectionId: "discord-1",
         target: "channel-1",
         displayName: "Ops Channel",
       }),
-    ).toThrow("stable Discord session key already belongs to another workspace");
+    ).rejects.toThrow("stable Discord session key already belongs to another workspace");
     expect(host.sessionsById.size).toBe(0);
     expect(host.storage.chatSessionMeta.ensure).not.toHaveBeenCalled();
     expect(host.storage.chatSessionBindings.upsert).not.toHaveBeenCalled();

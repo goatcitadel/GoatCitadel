@@ -14,7 +14,7 @@ import {
   NotFoundError,
 } from "@goatcitadel/contracts";
 import type { ChatMode, ChatTurnTraceRecord, DurableRunRecord, RealtimeEvent } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { ActiveChatTurnStreamExecution } from "./chat-turn-execution-registry.js";
 import type { DurableChatTurnExecutionPayload } from "./chat-turn-types.js";
 
@@ -22,7 +22,7 @@ export interface ChatTurnCancellationDeps {
   storage: Pick<Storage, "chatTurnTraces" | "durableRuns" | "chatSessionPrefs">;
   getActiveChatTurnStream(turnId: string): ActiveChatTurnStreamExecution | undefined;
   parseDurableChatTurnPayload(run: DurableRunRecord): DurableChatTurnExecutionPayload | undefined;
-  createHydratedChatTurnTrace(turnId: string, trace: ChatTurnTraceRecord): ChatTurnTraceRecord;
+  createHydratedChatTurnTrace(turnId: string, trace: ChatTurnTraceRecord): Promise<ChatTurnTraceRecord>;
   recordDevDiagnostic(input: {
     level: "info";
     category: "chat";
@@ -37,23 +37,23 @@ export interface ChatTurnCancellationDeps {
     source: string,
     payload: Record<string, unknown>,
     options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
-  ): RealtimeEvent;
+  ): Promise<RealtimeEvent>;
 }
 
-export function markChatTurnCancelled(
+export async function markChatTurnCancelled(
   deps: ChatTurnCancellationDeps,
   sessionId: string,
   turnId: string,
   cancelledBy?: string,
-): ChatTurnTraceRecord {
+): Promise<ChatTurnTraceRecord> {
   let current: ChatTurnTraceRecord;
   try {
-    current = deps.storage.chatTurnTraces.get(turnId);
+    current = await deps.storage.chatTurnTraces.get(turnId);
   } catch (error) {
     if (!(error instanceof NotFoundError)) {
       throw error;
     }
-    const recovered = createRunningTraceForActiveStreamCancellation(deps, sessionId, turnId);
+    const recovered = await createRunningTraceForActiveStreamCancellation(deps, sessionId, turnId);
     if (!recovered) {
       throw error;
     }
@@ -63,14 +63,14 @@ export function markChatTurnCancelled(
     throw new Error(`Chat turn ${turnId} does not belong to session ${sessionId}`);
   }
   if (current.status === "cancelled") {
-    return deps.createHydratedChatTurnTrace(turnId, current);
+    return await deps.createHydratedChatTurnTrace(turnId, current);
   }
   if (isChatTurnTerminalStatus(current.status)) {
-    return deps.createHydratedChatTurnTrace(turnId, current);
+    return await deps.createHydratedChatTurnTrace(turnId, current);
   }
   let trace: ChatTurnTraceRecord | undefined;
   while (isChatTurnActiveStatus(current.status)) {
-    trace = deps.storage.chatTurnTraces.patchIfStatus(turnId, CHAT_TURN_ACTIVE_STATUSES, {
+    trace = await deps.storage.chatTurnTraces.patchIfStatus(turnId, CHAT_TURN_ACTIVE_STATUSES, {
       status: "cancelled",
       failure: undefined,
       completion: {
@@ -83,13 +83,13 @@ export function markChatTurnCancelled(
     if (trace) {
       break;
     }
-    current = deps.storage.chatTurnTraces.get(turnId);
+    current = await deps.storage.chatTurnTraces.get(turnId);
     if (current.sessionId !== sessionId) {
       throw new Error(`Chat turn ${turnId} does not belong to session ${sessionId}`);
     }
   }
   if (!trace) {
-    return deps.createHydratedChatTurnTrace(turnId, current);
+    return await deps.createHydratedChatTurnTrace(turnId, current);
   }
   deps.recordDevDiagnostic({
     level: "info",
@@ -102,7 +102,7 @@ export function markChatTurnCancelled(
       cancelledBy,
     },
   });
-  deps.publishRealtime(
+  await deps.publishRealtime(
     "chat_thread_updated",
     "chat",
     {
@@ -119,21 +119,21 @@ export function markChatTurnCancelled(
       },
     },
   );
-  return deps.createHydratedChatTurnTrace(turnId, trace);
+  return await deps.createHydratedChatTurnTrace(turnId, trace);
 }
 
-function createRunningTraceForActiveStreamCancellation(
+async function createRunningTraceForActiveStreamCancellation(
   deps: ChatTurnCancellationDeps,
   sessionId: string,
   turnId: string,
-): ChatTurnTraceRecord | undefined {
+): Promise<ChatTurnTraceRecord | undefined> {
   const activeStream = deps.getActiveChatTurnStream(turnId);
   if (!activeStream || activeStream.sessionId !== sessionId || !activeStream.runId) {
     return undefined;
   }
   let run: DurableRunRecord;
   try {
-    run = deps.storage.durableRuns.getRun(activeStream.runId);
+    run = await deps.storage.durableRuns.getRun(activeStream.runId);
   } catch {
     return undefined;
   }
@@ -141,10 +141,10 @@ function createRunningTraceForActiveStreamCancellation(
   if (!payload || payload.sessionId !== sessionId || payload.turnId !== turnId) {
     return undefined;
   }
-  const prefs = deps.storage.chatSessionPrefs.get(sessionId);
+  const prefs = await deps.storage.chatSessionPrefs.get(sessionId);
   const request = payload.request;
   const mode: ChatMode = request.mode ?? request.prefsOverride?.mode ?? prefs?.mode ?? "chat";
-  return deps.storage.chatTurnTraces.create({
+  return await deps.storage.chatTurnTraces.create({
     turnId,
     sessionId,
     userMessageId: payload.userMessageId,

@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import {
   buildGatewayChatFaultArtifact,
   buildGatewayChatFaultNotes,
+  configureVerificationAssistant,
   createGatewayChatFaultExecutionConfig,
   GATEWAY_CHAT_FAULT_GATEWAY_MODE,
   GATEWAY_CHAT_FAULT_RESTART_PREFIX,
@@ -26,6 +30,27 @@ const POSTGRES_GATEWAY_ENV = Object.freeze({
 
 test("Gateway fault recovery owns the built Gateway process directly", () => {
   assert.equal(GATEWAY_CHAT_FAULT_GATEWAY_MODE, "built");
+});
+
+test("Gateway fault fixture writes the idle watchdog to split and unified config authority", async () => {
+  const runtimeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-chat-fault-config-"));
+  const configDir = path.join(runtimeRoot, "config");
+  await fs.mkdir(configDir, { recursive: true });
+  await fs.writeFile(path.join(configDir, "assistant.config.json"), '{"environment":"local"}\n', "utf8");
+  await fs.writeFile(
+    path.join(configDir, "goatcitadel.json"),
+    '{"version":1,"assistant":{"environment":"local"}}\n',
+    "utf8",
+  );
+  try {
+    await configureVerificationAssistant(runtimeRoot);
+    const split = JSON.parse(await fs.readFile(path.join(configDir, "assistant.config.json"), "utf8"));
+    const unified = JSON.parse(await fs.readFile(path.join(configDir, "goatcitadel.json"), "utf8"));
+    assert.equal(split.streamIdleTimeoutMs, 5_000);
+    assert.equal(unified.assistant.streamIdleTimeoutMs, 5_000);
+  } finally {
+    await fs.rm(runtimeRoot, { recursive: true, force: true });
+  }
 });
 
 test("Gateway fault execution preserves SQLite as the default usability storage", () => {

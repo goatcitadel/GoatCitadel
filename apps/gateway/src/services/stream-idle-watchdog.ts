@@ -15,6 +15,7 @@ import { observePromptSettlement, type PromptSettlement } from "./prompt-settlem
 
 export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 120_000;
 export const MIN_STREAM_IDLE_TIMEOUT_MS = 5_000;
+const STREAM_ABORT_SETTLEMENT_GRACE_MS = 250;
 
 export class StreamIdleTimeoutError extends Error {
   readonly code = "stream_idle_timeout";
@@ -68,7 +69,10 @@ export async function* withStreamIdleWatchdog<T>(
           }
           reject(new StreamIdleTimeoutError(options.idleTimeoutMs));
         }, options.idleTimeoutMs);
-        timer.unref?.();
+        // The watchdog is part of the accepted provider operation and must
+        // remain a referenced handle. Unref'ing it lets a worker/process with
+        // an otherwise handle-free stalled iterator exit before the canonical
+        // timeout and accounting path runs.
       });
       let next: IteratorResult<T>;
       const pendingNext = iterator.next();
@@ -82,12 +86,16 @@ export async function* withStreamIdleWatchdog<T>(
           // pin the watchdog indefinitely: its still-pending attempt is
           // classified as dispatch-uncertain so callers cannot retry/fallback
           // the same generation while recovery owns the accepted row.
-          const readOutcome = await observePromptSettlement(pendingNext);
+          const readOutcome = await observePromptSettlement(pendingNext, {
+            graceMs: STREAM_ABORT_SETTLEMENT_GRACE_MS,
+          });
           let cleanup: Promise<IteratorResult<T>> | undefined;
           let cleanupOutcome: PromptSettlement<IteratorResult<T>> | undefined;
           try {
             cleanup = iterator.return?.();
-            cleanupOutcome = cleanup ? await observePromptSettlement(cleanup) : undefined;
+            cleanupOutcome = cleanup
+              ? await observePromptSettlement(cleanup, { graceMs: STREAM_ABORT_SETTLEMENT_GRACE_MS })
+              : undefined;
           } catch (cleanupError) {
             cleanupOutcome = { status: "rejected", error: cleanupError };
           }

@@ -105,7 +105,7 @@ export interface CuratorIdleSweepResult {
 
 export interface CuratorIdleSweepDeps {
   /** Full skill registry (the sweep filters to self_generated itself). */
-  listSkills: () => SkillListItem[];
+  listSkills: () => Promise<SkillListItem[]>;
   /** Monotonic clock for timestamps. */
   now: () => Date;
   /** Stable run id (e.g. `curator-idle-<uuid>`). */
@@ -120,9 +120,9 @@ export interface CuratorIdleSweepDeps {
    * Capture a reversible snapshot of a skill BEFORE it is archived. Called only
    * when {@link autoApply} is true, immediately before {@link archiveSkill}.
    */
-  snapshotSkill: (skillId: string) => void;
+  snapshotSkill: (skillId: string) => Promise<void> | void;
   /** Archive (disable + curator note) a self-generated skill. Reversible. */
-  archiveSkill: (skillId: string, reason: string) => void;
+  archiveSkill: (skillId: string, reason: string) => Promise<void>;
   /**
    * Near-duplicate similarity in [0,1]. Defaults to {@link nameTitleSimilarity}.
    * Inject a pseudo-embedding cosine (or a real W2 embedding) for better recall.
@@ -143,12 +143,12 @@ const DEFAULT_DUPLICATE_THRESHOLD = 0.6;
  * is true. Immune skills (pinned / built-in / bundled) are never touched. A skill
  * archived as a stale candidate is never also considered for a merge.
  */
-export function planCuratorIdleSweep(deps: CuratorIdleSweepDeps): CuratorIdleSweepResult {
+export async function planCuratorIdleSweep(deps: CuratorIdleSweepDeps): Promise<CuratorIdleSweepResult> {
   const startedAt = deps.now();
   const similarity = deps.similarity ?? nameTitleSimilarity;
   const duplicateThreshold = deps.duplicateThreshold ?? DEFAULT_DUPLICATE_THRESHOLD;
 
-  const selfGenerated = deps.listSkills().filter(isSelfGeneratedSkill);
+  const selfGenerated = (await deps.listSkills()).filter(isSelfGeneratedSkill);
   const archives: CuratorIdleArchiveEntry[] = [];
   const merges: CuratorIdleMergeEntry[] = [];
   const archivedIds = new Set<string>();
@@ -171,8 +171,8 @@ export function planCuratorIdleSweep(deps: CuratorIdleSweepDeps): CuratorIdleSwe
     const reason = "curator:archived idle_self_generated_stale";
     if (deps.autoApply) {
       // Snapshot BEFORE the disable so the archive is fully reversible.
-      deps.snapshotSkill(skill.skillId);
-      deps.archiveSkill(skill.skillId, reason);
+      await deps.snapshotSkill(skill.skillId);
+      await deps.archiveSkill(skill.skillId, reason);
     }
     archivedIds.add(skill.skillId);
     archives.push({
@@ -209,8 +209,8 @@ export function planCuratorIdleSweep(deps: CuratorIdleSweepDeps): CuratorIdleSwe
       const archive = keep === left ? right : left;
       const reason = `curator:archived idle_self_generated_duplicate of ${keep.skillId}`;
       if (deps.autoApply) {
-        deps.snapshotSkill(archive.skillId);
-        deps.archiveSkill(archive.skillId, reason);
+        await deps.snapshotSkill(archive.skillId);
+        await deps.archiveSkill(archive.skillId, reason);
       }
       archivedIds.add(archive.skillId);
       merges.push({

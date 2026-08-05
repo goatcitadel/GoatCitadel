@@ -97,15 +97,19 @@ function buildService(overrides: Partial<OpsSavedBoardRepositoryPort> = {}) {
 }
 
 describe("OpsSavedBoardService", () => {
-  it("proves the exact workspace before every read and mutation and forwards only normalized inputs", () => {
+  it("proves the exact workspace before every read and mutation and forwards only normalized inputs", async () => {
     const { service, boards, workspaces, publishChange } = buildService();
 
-    service.list("workspace-1", true);
-    service.get("workspace-1", "board-1");
-    service.create(createInput({ name: "  Operations  " }), "operator-1");
-    service.update("board-1", { workspaceId: "workspace-1", name: "  New board  ", expectedRevision: 1 }, "operator-1");
-    service.archive("board-1", { workspaceId: "workspace-1", expectedRevision: 2 }, "operator-1");
-    service.restore("board-1", { workspaceId: "workspace-1", expectedRevision: 3 }, "operator-1");
+    await service.list("workspace-1", true);
+    await service.get("workspace-1", "board-1");
+    await service.create(createInput({ name: "  Operations  " }), "operator-1");
+    await service.update(
+      "board-1",
+      { workspaceId: "workspace-1", name: "  New board  ", expectedRevision: 1 },
+      "operator-1",
+    );
+    await service.archive("board-1", { workspaceId: "workspace-1", expectedRevision: 2 }, "operator-1");
+    await service.restore("board-1", { workspaceId: "workspace-1", expectedRevision: 3 }, "operator-1");
 
     expect(workspaces.get).toHaveBeenCalledTimes(6);
     expect(workspaces.get).toHaveBeenCalledWith("workspace-1");
@@ -144,7 +148,7 @@ describe("OpsSavedBoardService", () => {
     ).toBe(true);
   });
 
-  it("preserves idempotent create replay and same-key/different-byte conflict from storage", () => {
+  it("preserves idempotent create replay and same-key/different-byte conflict from storage", async () => {
     const winning = record();
     const createWithOutcome = vi
       .fn<OpsSavedBoardRepositoryPort["createWithOutcome"]>()
@@ -158,13 +162,13 @@ describe("OpsSavedBoardService", () => {
       });
     const { service, publishChange } = buildService({ createWithOutcome });
 
-    expect(service.create(createInput(), "operator-1")).toBe(winning);
-    expect(service.create(createInput(), "operator-1")).toBe(winning);
-    expect(() => service.create(createInput({ name: "Different" }), "operator-1")).toThrow(ConflictError);
+    expect(await service.create(createInput(), "operator-1")).toBe(winning);
+    expect(await service.create(createInput(), "operator-1")).toBe(winning);
+    await expect(service.create(createInput({ name: "Different" }), "operator-1")).rejects.toThrow(ConflictError);
     expect(publishChange).toHaveBeenCalledTimes(1);
   });
 
-  it("preserves stale-revision and archived-board conflicts without retrying a mutation", () => {
+  it("preserves stale-revision and archived-board conflicts without retrying a mutation", async () => {
     const update = vi.fn<OpsSavedBoardRepositoryPort["update"]>(() => {
       throw new ConflictError({ code: "WRITE_CONFLICT", message: "Board changed since revision 1." });
     });
@@ -173,18 +177,18 @@ describe("OpsSavedBoardService", () => {
     });
     const { service, publishChange } = buildService({ update, archive });
 
-    expect(() =>
+    await expect(
       service.update("board-1", { workspaceId: "workspace-1", name: "Changed", expectedRevision: 1 }, "operator-1"),
-    ).toThrow(ConflictError);
-    expect(() => service.archive("board-1", { workspaceId: "workspace-1", expectedRevision: 2 }, "operator-1")).toThrow(
-      ConflictError,
-    );
+    ).rejects.toThrow(ConflictError);
+    await expect(
+      service.archive("board-1", { workspaceId: "workspace-1", expectedRevision: 2 }, "operator-1"),
+    ).rejects.toThrow(ConflictError);
     expect(update).toHaveBeenCalledTimes(1);
     expect(archive).toHaveBeenCalledTimes(1);
     expect(publishChange).not.toHaveBeenCalled();
   });
 
-  it("makes a foreign workspace, missing workspace, and missing board the same board-scoped 404", () => {
+  it("makes a foreign workspace, missing workspace, and missing board the same board-scoped 404", async () => {
     const foreign = buildService({
       get: vi.fn(() => {
         throw new NotFoundError("foreign board is outside the requested workspace");
@@ -200,40 +204,40 @@ describe("OpsSavedBoardService", () => {
       throw new NotFoundError({ entity: "Workspace", id: "workspace-1" });
     });
 
-    const capture = (service: OpsSavedBoardService) => {
+    const capture = async (service: OpsSavedBoardService) => {
       try {
-        service.get("workspace-1", "board-1");
+        await service.get("workspace-1", "board-1");
       } catch (error) {
         return (error as NotFoundError).toJSON();
       }
       throw new Error("Expected a board-scoped miss.");
     };
 
-    expect(capture(foreign.service)).toEqual(capture(missingBoard.service));
-    expect(capture(missingWorkspace.service)).toEqual(capture(missingBoard.service));
+    expect(await capture(foreign.service)).toEqual(await capture(missingBoard.service));
+    expect(await capture(missingWorkspace.service)).toEqual(await capture(missingBoard.service));
     expect(missingWorkspace.boards.get).not.toHaveBeenCalled();
   });
 
-  it("fails closed when the workspace port returns a mismatched identity", () => {
+  it("fails closed when the workspace port returns a mismatched identity", async () => {
     const { service, boards, workspaces } = buildService();
     workspaces.get.mockReturnValue({ workspaceId: "workspace-foreign" });
 
-    expect(() =>
+    await expect(
       service.update("board-1", { workspaceId: "workspace-1", name: "Changed", expectedRevision: 1 }, "operator-1"),
-    ).toThrow(/Ops saved board board-1 not found/u);
+    ).rejects.toThrow(/Ops saved board board-1 not found/u);
     expect(boards.update).not.toHaveBeenCalled();
   });
 
-  it("rejects non-canonical actors before storage mutation", () => {
+  it("rejects non-canonical actors before storage mutation", async () => {
     const { service, boards } = buildService();
 
     for (const actorId of [" operator-1 ", "operator\n1", "operator-\uff11"]) {
-      expect(() => service.create(createInput(), actorId)).toThrow(/actorId is not a canonical identifier/u);
+      await expect(service.create(createInput(), actorId)).rejects.toThrow(/actorId is not a canonical identifier/u);
     }
     expect(boards.createWithOutcome).not.toHaveBeenCalled();
   });
 
-  it("keeps committed board truth canonical when post-commit publication or diagnostics fail", () => {
+  it("keeps committed board truth canonical when post-commit publication or diagnostics fail", async () => {
     const { service, boards, publishChange, reportPublicationFailure } = buildService();
     publishChange.mockImplementation(() => {
       throw new Error("retained realtime unavailable");
@@ -242,7 +246,7 @@ describe("OpsSavedBoardService", () => {
       throw new Error("diagnostics unavailable");
     });
 
-    expect(service.create(createInput(), "operator-1")).toMatchObject({ boardId: "board-1", revision: 1 });
+    expect(await service.create(createInput(), "operator-1")).toMatchObject({ boardId: "board-1", revision: 1 });
     expect(publishChange).toHaveBeenCalledTimes(1);
     expect(boards.createWithOutcome).toHaveBeenCalledTimes(1);
     expect(reportPublicationFailure).toHaveBeenCalledWith(
@@ -257,7 +261,11 @@ describe("OpsSavedBoardService", () => {
     reportPublicationFailure.mockImplementation(() => Promise.reject(new Error("async diagnostics unavailable")));
 
     expect(
-      service.update("board-1", { workspaceId: "workspace-1", name: "Committed", expectedRevision: 1 }, "operator-1"),
+      await service.update(
+        "board-1",
+        { workspaceId: "workspace-1", name: "Committed", expectedRevision: 1 },
+        "operator-1",
+      ),
     ).toMatchObject({ boardId: "board-1", revision: 2 });
     await vi.waitFor(() => expect(reportPublicationFailure).toHaveBeenCalledTimes(1));
     await Promise.resolve();

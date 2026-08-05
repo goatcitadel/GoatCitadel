@@ -6,14 +6,14 @@ const RETIRED_MESSAGE = "NPU sidecar runtime was retired from GoatCitadel 1.0 an
 export interface NpuSidecarServiceOptions {
   rootDir: string;
   config: NpuConfig;
-  onEvent?: (eventType: string, payload: Record<string, unknown>) => void;
+  onEvent?: (eventType: string, payload: Record<string, unknown>) => Promise<unknown>;
 }
 
 export class NpuSidecarService {
   public constructor(private options: NpuSidecarServiceOptions) {}
 
   public async init(): Promise<void> {
-    this.emit("npu_retired", { message: RETIRED_MESSAGE });
+    await this.emit("npu_retired", { message: RETIRED_MESSAGE });
   }
 
   public updateConfig(config: NpuConfig): void {
@@ -32,12 +32,12 @@ export class NpuSidecarService {
   }
 
   public async start(reason = "manual"): Promise<NpuRuntimeStatus> {
-    this.emit("npu_retired_start_blocked", { reason, message: RETIRED_MESSAGE });
+    await this.emit("npu_retired_start_blocked", { reason, message: RETIRED_MESSAGE });
     throw new Error(RETIRED_MESSAGE);
   }
 
   public async stop(reason = "manual"): Promise<NpuRuntimeStatus> {
-    this.emit("npu_retired_stop_noop", { reason });
+    await this.emit("npu_retired_stop_noop", { reason });
     return this.getStatus();
   }
 
@@ -50,14 +50,14 @@ export class NpuSidecarService {
   }
 
   public async close(): Promise<void> {
-    this.emit("npu_retired_close_noop", { message: RETIRED_MESSAGE });
+    await this.emit("npu_retired_close_noop", { message: RETIRED_MESSAGE });
   }
 
-  private emit(eventType: string, payload: Record<string, unknown>): void {
+  private async emit(eventType: string, payload: Record<string, unknown>): Promise<void> {
     if (!this.options.onEvent) {
       return;
     }
-    this.options.onEvent(eventType, payload);
+    await this.options.onEvent(eventType, payload);
   }
 }
 

@@ -6,7 +6,7 @@ import type {
   LearnedMemoryUpdateInput,
   TranscriptEvent,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { extractLearnedMemoryCandidates, shouldExtractLearnedMemoryContent } from "./learned-memory-utils.js";
 import { clampMemoryConfidence, decideLearnedMemoryWrite } from "./memory-lifecycle-policy.js";
 
@@ -66,28 +66,28 @@ export class ChatLearnedMemoryService {
 
   // ── public API ─────────────────────────────────────────────────────
 
-  listChatSessionLearnedMemory(
+  async listChatSessionLearnedMemory(
     sessionId: string,
     limit = 200,
-  ): {
+  ): Promise<{
     items: LearnedMemoryItemRecord[];
     conflicts: LearnedMemoryConflictRecord[];
-  } {
-    this.ctx.storage.sessions.getBySessionId(sessionId);
+  }> {
+    await this.ctx.storage.sessions.getBySessionId(sessionId);
     const boundedLimit = Math.max(1, Math.min(limit, 1000));
     return {
-      items: this.ctx.storage.learnedMemory.listItemsBySession(sessionId, boundedLimit),
-      conflicts: this.ctx.storage.learnedMemory.listConflictsBySession(sessionId, boundedLimit),
+      items: await this.ctx.storage.learnedMemory.listItemsBySession(sessionId, boundedLimit),
+      conflicts: await this.ctx.storage.learnedMemory.listConflictsBySession(sessionId, boundedLimit),
     };
   }
 
-  updateChatSessionLearnedMemory(
+  async updateChatSessionLearnedMemory(
     sessionId: string,
     itemId: string,
     input: LearnedMemoryUpdateInput,
-  ): LearnedMemoryItemRecord {
-    this.ctx.storage.sessions.getBySessionId(sessionId);
-    const current = this.ctx.storage.learnedMemory.getItem(itemId);
+  ): Promise<LearnedMemoryItemRecord> {
+    await this.ctx.storage.sessions.getBySessionId(sessionId);
+    const current = await this.ctx.storage.learnedMemory.getItem(itemId);
     if (!current) {
       throw new Error(`Learned memory item ${itemId} not found.`);
     }
@@ -99,7 +99,7 @@ export class ChatLearnedMemoryService {
     const nextConfidence = clampMemoryConfidence(
       typeof input.confidence === "number" ? input.confidence : current.confidence,
     );
-    this.ctx.storage.learnedMemory.updateItemFields(itemId, {
+    await this.ctx.storage.learnedMemory.updateItemFields(itemId, {
       status: nextStatus,
       content: nextContent,
       confidence: nextConfidence,
@@ -121,15 +121,16 @@ export class ChatLearnedMemoryService {
     items: LearnedMemoryItemRecord[];
     conflicts: LearnedMemoryConflictRecord[];
   }> {
-    this.ctx.storage.sessions.getBySessionId(sessionId);
-    this.ctx.storage.learnedMemory.clearSession(sessionId);
+    await this.ctx.storage.sessions.getBySessionId(sessionId);
+    await this.ctx.storage.learnedMemory.clearSession(sessionId);
 
     const traceByMessageId = new Map<string, Pick<ChatTurnTraceRecord, "status" | "toolRuns">>();
-    const traces = this.ctx.storage.chatTurnTraces.listBySession(sessionId, 5000);
+    const traces = await this.ctx.storage.chatTurnTraces.listBySession(sessionId, 5000);
     for (const trace of traces) {
       const traceContext = {
         status: trace.status,
-        toolRuns: trace.toolRuns.length > 0 ? trace.toolRuns : this.ctx.storage.chatToolRuns.listByTurn(trace.turnId),
+        toolRuns:
+          trace.toolRuns.length > 0 ? trace.toolRuns : await this.ctx.storage.chatToolRuns.listByTurn(trace.turnId),
       } satisfies Pick<ChatTurnTraceRecord, "status" | "toolRuns">;
       traceByMessageId.set(trace.userMessageId, traceContext);
       if (trace.assistantMessageId) {
@@ -149,14 +150,14 @@ export class ChatLearnedMemoryService {
       if (!content.trim()) {
         continue;
       }
-      this.extractAndPersistLearnedMemory(sessionId, content, {
+      await this.extractAndPersistLearnedMemory(sessionId, content, {
         role,
         sourceRef: event.eventId,
         trace: traceByMessageId.get(event.eventId),
       });
     }
     const rebuiltAt = new Date().toISOString();
-    const snapshot = this.listChatSessionLearnedMemory(sessionId, 500);
+    const snapshot = await this.listChatSessionLearnedMemory(sessionId, 500);
     return {
       rebuiltAt,
       items: snapshot.items,
@@ -169,7 +170,7 @@ export class ChatLearnedMemoryService {
    * Called both internally (during rebuild) and from chat-turn
    * processing in gateway-service.
    */
-  extractAndPersistLearnedMemory(
+  async extractAndPersistLearnedMemory(
     sessionId: string,
     content: string,
     source: {
@@ -177,7 +178,7 @@ export class ChatLearnedMemoryService {
       sourceRef: string;
       trace?: Pick<ChatTurnTraceRecord, "status" | "toolRuns">;
     },
-  ): void {
+  ): Promise<void> {
     if (!shouldExtractLearnedMemoryContent(content, source)) {
       return;
     }
@@ -185,7 +186,7 @@ export class ChatLearnedMemoryService {
     const candidates = extractLearnedMemoryCandidates(content, source.role);
     for (const candidate of candidates) {
       if (looksSensitive(candidate.content)) {
-        repo.insertItem({
+        await repo.insertItem({
           sessionId,
           itemType: candidate.itemType,
           content: "[REDACTED]",
@@ -198,7 +199,7 @@ export class ChatLearnedMemoryService {
         });
         continue;
       }
-      this.upsertLearnedMemoryItem({
+      await this.upsertLearnedMemoryItem({
         sessionId,
         itemType: candidate.itemType,
         content: candidate.content,
@@ -212,7 +213,7 @@ export class ChatLearnedMemoryService {
 
   // ── internal helpers ───────────────────────────────────────────────
 
-  private upsertLearnedMemoryItem(input: {
+  private async upsertLearnedMemoryItem(input: {
     sessionId: string;
     itemType: string;
     content: string;
@@ -220,9 +221,9 @@ export class ChatLearnedMemoryService {
     sourceKind: string;
     sourceRef: string;
     snippet: string;
-  }): void {
+  }): Promise<void> {
     const repo = this.ctx.storage.learnedMemory;
-    const existing = repo.findActiveByType(input.sessionId, input.itemType as LearnedMemoryItemType);
+    const existing = await repo.findActiveByType(input.sessionId, input.itemType as LearnedMemoryItemType);
     const decision = decideLearnedMemoryWrite({
       content: input.content,
       confidence: input.confidence,
@@ -232,12 +233,12 @@ export class ChatLearnedMemoryService {
       return;
     }
     if (decision.action === "merge_duplicate") {
-      repo.updateItemConfidence(decision.itemId, decision.nextConfidence);
-      repo.appendSource(decision.itemId, input.sourceKind, input.sourceRef, input.snippet);
+      await repo.updateItemConfidence(decision.itemId, decision.nextConfidence);
+      await repo.appendSource(decision.itemId, input.sourceKind, input.sourceRef, input.snippet);
       return;
     }
     if (decision.action === "record_conflict") {
-      const incomingItem = repo.insertItem({
+      const incomingItem = await repo.insertItem({
         sessionId: input.sessionId,
         itemType: input.itemType as LearnedMemoryItemType,
         content: input.content,
@@ -248,7 +249,7 @@ export class ChatLearnedMemoryService {
         sourceRef: input.sourceRef,
         snippet: input.snippet,
       });
-      repo.insertConflict({
+      await repo.insertConflict({
         sessionId: input.sessionId,
         itemType: input.itemType as LearnedMemoryItemType,
         existingItemId: decision.existingItemId,
@@ -258,7 +259,7 @@ export class ChatLearnedMemoryService {
       return;
     }
     if (decision.action === "supersede") {
-      const next = repo.insertItem({
+      const next = await repo.insertItem({
         sessionId: input.sessionId,
         itemType: input.itemType as LearnedMemoryItemType,
         content: input.content,
@@ -269,11 +270,11 @@ export class ChatLearnedMemoryService {
         sourceRef: input.sourceRef,
         snippet: input.snippet,
       });
-      repo.supersedeItem(decision.existingItemId, next.itemId);
+      await repo.supersedeItem(decision.existingItemId, next.itemId);
       return;
     }
 
-    repo.insertItem({
+    await repo.insertItem({
       sessionId: input.sessionId,
       itemType: input.itemType as LearnedMemoryItemType,
       content: input.content,

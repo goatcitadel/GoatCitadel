@@ -325,7 +325,7 @@ function buildFixture(actorId = "operator-a", revocationSignal?: AbortSignal): F
   });
   const discoveryState = discoveryCurrent(discoveryAuthority);
   const finalState = toolCallCurrent(finalAuthority);
-  const discoveryReader = vi.fn((check: { connectionGeneration?: number; rotationGeneration?: number }) => ({
+  const discoveryReader = vi.fn(async (check: { connectionGeneration?: number; rotationGeneration?: number }) => ({
     ...discoveryState,
     connectionGenerationCurrent:
       discoveryState.connectionGenerationCurrent &&
@@ -334,7 +334,7 @@ function buildFixture(actorId = "operator-a", revocationSignal?: AbortSignal): F
       discoveryState.rotationGenerationCurrent &&
       (check.rotationGeneration === undefined || check.rotationGeneration === 2),
   }));
-  const toolCallReader = vi.fn((check: { connectionGeneration?: number; rotationGeneration?: number }) => ({
+  const toolCallReader = vi.fn(async (check: { connectionGeneration?: number; rotationGeneration?: number }) => ({
     ...finalState,
     connectionGenerationCurrent:
       finalState.connectionGenerationCurrent &&
@@ -414,61 +414,53 @@ describe("McpRequesterResolutionService two-stage authority seam", () => {
     expect((service as unknown as Record<string, unknown>).resolve).toBeUndefined();
     const discovery = await service.resolveForProfileDiscovery(fixture.discoveryInput);
     expect(discovery.stage).toBe("profile_discovery");
-    const initialize = discovery.authorizeInitialize();
-    const initialized = discovery.authorizeInitializedNotification();
-    const toolsList = discovery.authorizeToolsList();
+    const initialize = await discovery.authorizeInitialize();
+    const initialized = await discovery.authorizeInitializedNotification();
+    const toolsList = await discovery.authorizeToolsList();
     expect([initialize.operation, initialized.operation, toolsList.operation]).toEqual([
       "initialize",
       "notifications/initialized",
       "tools/list",
     ]);
     expect(toolsList.rotationGeneration).toBe(2);
-    expect(() => discovery.authorizeToolsList()).toThrowError(expect.objectContaining({ code: "operation_denied" }));
-    expect(discovery.consumeOperationPermit(initialize)).toBe(initialize);
-    expect(discovery.consumeOperationPermit(initialized)).toBe(initialized);
-    expect(discovery.consumeOperationPermit(toolsList)).toBe(toolsList);
-    expect(() => discovery.authorizeToolsList()).toThrowError(expect.objectContaining({ code: "operation_denied" }));
-    expect(() => discovery.consumeOperationPermit(toolsList)).toThrowError(
-      expect.objectContaining({ code: "operation_denied" }),
-    );
+    await expect(discovery.authorizeToolsList()).rejects.toMatchObject({ code: "operation_denied" });
+    await expect(discovery.consumeOperationPermit(initialize)).resolves.toBe(initialize);
+    await expect(discovery.consumeOperationPermit(initialized)).resolves.toBe(initialized);
+    await expect(discovery.consumeOperationPermit(toolsList)).resolves.toBe(toolsList);
+    await expect(discovery.authorizeToolsList()).rejects.toMatchObject({ code: "operation_denied" });
+    await expect(discovery.consumeOperationPermit(toolsList)).rejects.toMatchObject({ code: "operation_denied" });
     expect((discovery as unknown as Record<string, unknown>).authorizeToolsCall).toBeUndefined();
     expect(() => JSON.stringify(toolsList)).toThrowError(expect.objectContaining({ code: "operation_denied" }));
     expect(finalResolver).not.toHaveBeenCalled();
     discovery.dispose();
 
     const final = await service.resolveForToolCall(fixture.toolCallInput);
-    expect(() => final.authorizeToolsCall()).toThrowError(
-      expect.objectContaining({ code: "schema_revalidation_required" }),
-    );
-    const revalidation = final.authorizeToolsListRevalidation();
+    await expect(final.authorizeToolsCall()).rejects.toMatchObject({ code: "schema_revalidation_required" });
+    const revalidation = await final.authorizeToolsListRevalidation();
     expect(revalidation).toMatchObject({
       operation: "tools/list",
       expectedCatalogSha256: fixture.catalog.catalogSha256,
       rotationGeneration: 2,
     });
-    expect(() => final.authorizeToolsListRevalidation()).toThrowError(
-      expect.objectContaining({ code: "operation_denied" }),
-    );
-    expect(() =>
+    await expect(final.authorizeToolsListRevalidation()).rejects.toMatchObject({ code: "operation_denied" });
+    await expect(
       final.acceptFreshToolsListRevalidation({
         revalidationAttemptId: fixture.toolCallInput.requester.revalidationAttemptId,
         revalidationAttemptGeneration: fixture.toolCallInput.requester.revalidationAttemptGeneration,
         catalog: fixture.catalog,
       }),
-    ).toThrowError(expect.objectContaining({ code: "schema_revalidation_required" }));
-    expect(final.consumeToolsListRevalidationPermit(revalidation)).toBe(revalidation);
-    expect(() => final.authorizeToolsListRevalidation()).toThrowError(
-      expect.objectContaining({ code: "operation_denied" }),
-    );
-    expect(() => final.consumeToolsListRevalidationPermit(revalidation)).toThrowError(
-      expect.objectContaining({ code: "operation_denied" }),
-    );
-    final.acceptFreshToolsListRevalidation({
+    ).rejects.toMatchObject({ code: "schema_revalidation_required" });
+    await expect(final.consumeToolsListRevalidationPermit(revalidation)).resolves.toBe(revalidation);
+    await expect(final.authorizeToolsListRevalidation()).rejects.toMatchObject({ code: "operation_denied" });
+    await expect(final.consumeToolsListRevalidationPermit(revalidation)).rejects.toMatchObject({
+      code: "operation_denied",
+    });
+    await final.acceptFreshToolsListRevalidation({
       revalidationAttemptId: fixture.toolCallInput.requester.revalidationAttemptId,
       revalidationAttemptGeneration: fixture.toolCallInput.requester.revalidationAttemptGeneration,
       catalog: fixture.catalog,
     });
-    const call = final.authorizeToolsCall();
+    const call = await final.authorizeToolsCall();
     expect(call).toMatchObject({
       operation: "tools/call",
       rawRemoteToolName: "search",
@@ -476,11 +468,9 @@ describe("McpRequesterResolutionService two-stage authority seam", () => {
       providerAlias: fixture.toolCallInput.requester.providerAlias,
       rotationGeneration: 2,
     });
-    expect(() => final.authorizeToolsCall()).toThrowError(expect.objectContaining({ code: "operation_denied" }));
-    expect(final.consumeToolsCallPermit(call)).toBe(call);
-    expect(() => final.consumeToolsCallPermit(call)).toThrowError(
-      expect.objectContaining({ code: "operation_denied" }),
-    );
+    await expect(final.authorizeToolsCall()).rejects.toMatchObject({ code: "operation_denied" });
+    await expect(final.consumeToolsCallPermit(call)).resolves.toBe(call);
+    await expect(final.consumeToolsCallPermit(call)).rejects.toMatchObject({ code: "operation_denied" });
     expect((final as unknown as Record<string, unknown>).authorizeInitialize).toBeUndefined();
     final.dispose();
   });
@@ -532,45 +522,45 @@ describe("McpRequesterResolutionService two-stage authority seam", () => {
     const service = new McpRequesterResolutionService(registryWith(), { now: () => now });
     const authorize = async (fixture: Fixture) => {
       const attempt = await service.resolveForToolCall(fixture.toolCallInput);
-      const revalidation = attempt.authorizeToolsListRevalidation();
-      attempt.consumeToolsListRevalidationPermit(revalidation);
-      attempt.acceptFreshToolsListRevalidation({
+      const revalidation = await attempt.authorizeToolsListRevalidation();
+      await attempt.consumeToolsListRevalidationPermit(revalidation);
+      await attempt.acceptFreshToolsListRevalidation({
         revalidationAttemptId: fixture.toolCallInput.requester.revalidationAttemptId,
         revalidationAttemptGeneration: fixture.toolCallInput.requester.revalidationAttemptGeneration,
         catalog: fixture.catalog,
       });
-      return { attempt, permit: attempt.authorizeToolsCall() };
+      return { attempt, permit: await attempt.authorizeToolsCall() };
     };
 
     const disposed = buildFixture("dispose-actor");
     const disposedCall = await authorize(disposed);
     disposedCall.attempt.dispose();
-    expect(() => disposedCall.attempt.consumeToolsCallPermit(disposedCall.permit)).toThrowError(
-      expect.objectContaining({ code: "connection_generation_revoked" }),
-    );
+    await expect(disposedCall.attempt.consumeToolsCallPermit(disposedCall.permit)).rejects.toMatchObject({
+      code: "connection_generation_revoked",
+    });
 
     const revoked = buildFixture("revoke-actor");
     const revokedCall = await authorize(revoked);
     revoked.toolCallCurrent.revoked = true;
-    expect(() => revokedCall.attempt.consumeToolsCallPermit(revokedCall.permit)).toThrowError(
-      expect.objectContaining({ code: "connection_generation_revoked" }),
-    );
+    await expect(revokedCall.attempt.consumeToolsCallPermit(revokedCall.permit)).rejects.toMatchObject({
+      code: "connection_generation_revoked",
+    });
     revokedCall.attempt.dispose();
 
     const rotated = buildFixture("rotate-actor");
     const rotatedCall = await authorize(rotated);
     rotated.toolCallCurrent.rotationGenerationCurrent = false;
-    expect(() => rotatedCall.attempt.consumeToolsCallPermit(rotatedCall.permit)).toThrowError(
-      expect.objectContaining({ code: "connection_generation_revoked" }),
-    );
+    await expect(rotatedCall.attempt.consumeToolsCallPermit(rotatedCall.permit)).rejects.toMatchObject({
+      code: "connection_generation_revoked",
+    });
     rotatedCall.attempt.dispose();
 
     const expired = buildFixture("expire-actor");
     const expiredCall = await authorize(expired);
     now = Date.parse("2026-07-14T12:04:00.000Z");
-    expect(() => expiredCall.attempt.consumeToolsCallPermit(expiredCall.permit)).toThrowError(
-      expect.objectContaining({ code: "resolved_connection_expired" }),
-    );
+    await expect(expiredCall.attempt.consumeToolsCallPermit(expiredCall.permit)).rejects.toMatchObject({
+      code: "resolved_connection_expired",
+    });
     expiredCall.attempt.dispose();
   });
 
@@ -584,23 +574,19 @@ describe("McpRequesterResolutionService two-stage authority seam", () => {
       service.resolveForProfileDiscovery(discoveryA.discoveryInput),
       service.resolveForProfileDiscovery(discoveryB.discoveryInput),
     ]);
-    const permitA = attemptA.authorizeToolsList();
-    const permitB = attemptB.authorizeToolsList();
-    expect(() => attemptA.consumeOperationPermit(permitB)).toThrowError(
-      expect.objectContaining({ code: "operation_denied" }),
-    );
-    expect(attemptB.consumeOperationPermit(permitB)).toBe(permitB);
+    const permitA = await attemptA.authorizeToolsList();
+    const permitB = await attemptB.authorizeToolsList();
+    await expect(attemptA.consumeOperationPermit(permitB)).rejects.toMatchObject({ code: "operation_denied" });
+    await expect(attemptB.consumeOperationPermit(permitB)).resolves.toBe(permitB);
     discoveryA.discoveryCurrent.rotationGenerationCurrent = false;
-    expect(() => attemptA.consumeOperationPermit(permitA)).toThrowError(
-      expect.objectContaining({ code: "connection_generation_revoked" }),
-    );
+    await expect(attemptA.consumeOperationPermit(permitA)).rejects.toMatchObject({
+      code: "connection_generation_revoked",
+    });
     discoveryA.discoveryCurrent.rotationGenerationCurrent = true;
-    expect(() => attemptA.consumeOperationPermit(permitA)).toThrowError(
-      expect.objectContaining({ code: "connection_generation_revoked" }),
-    );
-    expect(() => attemptA.authorizeInitialize()).toThrowError(
-      expect.objectContaining({ code: "connection_generation_revoked" }),
-    );
+    await expect(attemptA.consumeOperationPermit(permitA)).rejects.toMatchObject({
+      code: "connection_generation_revoked",
+    });
+    await expect(attemptA.authorizeInitialize()).rejects.toMatchObject({ code: "connection_generation_revoked" });
     attemptA.dispose();
     attemptB.dispose();
 
@@ -610,46 +596,46 @@ describe("McpRequesterResolutionService two-stage authority seam", () => {
       service.resolveForToolCall(revalidationA.toolCallInput),
       service.resolveForToolCall(revalidationB.toolCallInput),
     ]);
-    const revalidationPermitA = finalA.authorizeToolsListRevalidation();
-    const revalidationPermitB = finalB.authorizeToolsListRevalidation();
-    expect(() => finalA.consumeToolsListRevalidationPermit(revalidationPermitB)).toThrowError(
-      expect.objectContaining({ code: "operation_denied" }),
-    );
-    expect(finalB.consumeToolsListRevalidationPermit(revalidationPermitB)).toBe(revalidationPermitB);
+    const revalidationPermitA = await finalA.authorizeToolsListRevalidation();
+    const revalidationPermitB = await finalB.authorizeToolsListRevalidation();
+    await expect(finalA.consumeToolsListRevalidationPermit(revalidationPermitB)).rejects.toMatchObject({
+      code: "operation_denied",
+    });
+    await expect(finalB.consumeToolsListRevalidationPermit(revalidationPermitB)).resolves.toBe(revalidationPermitB);
     revalidationA.toolCallCurrent.revoked = true;
-    expect(() => finalA.consumeToolsListRevalidationPermit(revalidationPermitA)).toThrowError(
-      expect.objectContaining({ code: "connection_generation_revoked" }),
-    );
+    await expect(finalA.consumeToolsListRevalidationPermit(revalidationPermitA)).rejects.toMatchObject({
+      code: "connection_generation_revoked",
+    });
     revalidationA.toolCallCurrent.revoked = false;
-    expect(() => finalA.consumeToolsListRevalidationPermit(revalidationPermitA)).toThrowError(
-      expect.objectContaining({ code: "connection_generation_revoked" }),
-    );
-    expect(() => finalA.authorizeToolsListRevalidation()).toThrowError(
-      expect.objectContaining({ code: "connection_generation_revoked" }),
-    );
+    await expect(finalA.consumeToolsListRevalidationPermit(revalidationPermitA)).rejects.toMatchObject({
+      code: "connection_generation_revoked",
+    });
+    await expect(finalA.authorizeToolsListRevalidation()).rejects.toMatchObject({
+      code: "connection_generation_revoked",
+    });
     finalA.dispose();
     finalB.dispose();
 
     const expired = buildFixture("discovery-expired");
     const expiredAttempt = await service.resolveForProfileDiscovery(expired.discoveryInput);
-    const expiredPermit = expiredAttempt.authorizeInitialize();
+    const expiredPermit = await expiredAttempt.authorizeInitialize();
     now = Date.parse("2026-07-14T12:04:00.000Z");
-    expect(() => expiredAttempt.consumeOperationPermit(expiredPermit)).toThrowError(
-      expect.objectContaining({ code: "resolved_connection_expired" }),
-    );
+    await expect(expiredAttempt.consumeOperationPermit(expiredPermit)).rejects.toMatchObject({
+      code: "resolved_connection_expired",
+    });
     now = START;
-    expect(() => expiredAttempt.consumeOperationPermit(expiredPermit)).toThrowError(
-      expect.objectContaining({ code: "resolved_connection_expired" }),
-    );
+    await expect(expiredAttempt.consumeOperationPermit(expiredPermit)).rejects.toMatchObject({
+      code: "resolved_connection_expired",
+    });
     expiredAttempt.dispose();
 
     const disposed = buildFixture("revalidation-disposed");
     const disposedAttempt = await service.resolveForToolCall(disposed.toolCallInput);
-    const disposedPermit = disposedAttempt.authorizeToolsListRevalidation();
+    const disposedPermit = await disposedAttempt.authorizeToolsListRevalidation();
     disposedAttempt.dispose();
-    expect(() => disposedAttempt.consumeToolsListRevalidationPermit(disposedPermit)).toThrowError(
-      expect.objectContaining({ code: "connection_generation_revoked" }),
-    );
+    await expect(disposedAttempt.consumeToolsListRevalidationPermit(disposedPermit)).rejects.toMatchObject({
+      code: "connection_generation_revoked",
+    });
   });
 
   it("actively aborts an outstanding permit when its connection expires", async () => {
@@ -659,7 +645,7 @@ describe("McpRequesterResolutionService two-stage authority seam", () => {
     const fixture = buildFixture("expiry-timer");
     const attempt = await service.resolveForProfileDiscovery(fixture.discoveryInput);
     const capturedConnection = attempt.connection;
-    const permit = attempt.authorizeToolsList();
+    const permit = await attempt.authorizeToolsList();
 
     await vi.advanceTimersByTimeAsync(4 * 60_000);
 
@@ -669,9 +655,9 @@ describe("McpRequesterResolutionService two-stage authority seam", () => {
     expect(() => capturedConnection.url).toThrowError(
       expect.objectContaining({ code: "connection_generation_revoked" }),
     );
-    expect(() => attempt.consumeOperationPermit(permit)).toThrowError(
-      expect.objectContaining({ code: "resolved_connection_expired" }),
-    );
+    await expect(attempt.consumeOperationPermit(permit)).rejects.toMatchObject({
+      code: "resolved_connection_expired",
+    });
     vi.setSystemTime(START);
     const replay = await service.resolveForProfileDiscovery(fixture.discoveryInput);
     replay.dispose();
@@ -683,7 +669,7 @@ describe("McpRequesterResolutionService two-stage authority seam", () => {
     const fixture = buildFixture("revocation-cleanup", revocation.signal);
     const attempt = await service.resolveForProfileDiscovery(fixture.discoveryInput);
     const capturedConnection = attempt.connection;
-    attempt.authorizeInitialize();
+    await attempt.authorizeInitialize();
 
     revocation.abort();
 
@@ -742,42 +728,42 @@ describe("McpRequesterResolutionService two-stage authority seam", () => {
     const fixture = buildFixture();
     const attempt = await service.resolveForToolCall(fixture.toolCallInput);
     const changed = catalog("number");
-    const revalidation = attempt.authorizeToolsListRevalidation();
-    attempt.consumeToolsListRevalidationPermit(revalidation);
+    const revalidation = await attempt.authorizeToolsListRevalidation();
+    await attempt.consumeToolsListRevalidationPermit(revalidation);
 
-    expect(() =>
+    await expect(
       attempt.acceptFreshToolsListRevalidation({
         revalidationAttemptId: fixture.toolCallInput.requester.revalidationAttemptId,
         revalidationAttemptGeneration: fixture.toolCallInput.requester.revalidationAttemptGeneration,
         catalog: changed,
       }),
-    ).toThrowError(expect.objectContaining({ code: "schema_revalidation_drift" }));
+    ).rejects.toMatchObject({ code: "schema_revalidation_drift" });
     expect(attempt.isDisposed()).toBe(true);
-    expect(() =>
+    await expect(
       attempt.acceptFreshToolsListRevalidation({
         revalidationAttemptId: fixture.toolCallInput.requester.revalidationAttemptId,
         revalidationAttemptGeneration: fixture.toolCallInput.requester.revalidationAttemptGeneration,
         catalog: fixture.catalog,
       }),
-    ).toThrowError(expect.objectContaining({ code: "schema_revalidation_required" }));
+    ).rejects.toMatchObject({ code: "schema_revalidation_required" });
     expect(() => attempt.connection.url).toThrowError(
       expect.objectContaining({ code: "connection_generation_revoked" }),
     );
 
     const exactFixture = buildFixture("exact-revalidation");
     const exactAttempt = await service.resolveForToolCall(exactFixture.toolCallInput);
-    const exactPermit = exactAttempt.authorizeToolsListRevalidation();
-    exactAttempt.consumeToolsListRevalidationPermit(exactPermit);
+    const exactPermit = await exactAttempt.authorizeToolsListRevalidation();
+    await exactAttempt.consumeToolsListRevalidationPermit(exactPermit);
     const exact = {
       revalidationAttemptId: exactFixture.toolCallInput.requester.revalidationAttemptId,
       revalidationAttemptGeneration: exactFixture.toolCallInput.requester.revalidationAttemptGeneration,
       catalog: exactFixture.catalog,
     };
-    exactAttempt.acceptFreshToolsListRevalidation(exact);
-    expect(() => exactAttempt.acceptFreshToolsListRevalidation(exact)).toThrowError(
-      expect.objectContaining({ code: "schema_revalidation_drift" }),
-    );
-    expect(() => exactAttempt.authorizeToolsCall()).not.toThrow();
+    await exactAttempt.acceptFreshToolsListRevalidation(exact);
+    await expect(exactAttempt.acceptFreshToolsListRevalidation(exact)).rejects.toMatchObject({
+      code: "schema_revalidation_drift",
+    });
+    await expect(exactAttempt.authorizeToolsCall()).resolves.toBeDefined();
     exactAttempt.dispose();
   });
 
@@ -785,17 +771,15 @@ describe("McpRequesterResolutionService two-stage authority seam", () => {
     const service = new McpRequesterResolutionService(registryWith(), { now: () => START });
     const fixture = buildFixture();
     const attempt = await service.resolveForToolCall(fixture.toolCallInput);
-    const revalidation = attempt.authorizeToolsListRevalidation();
-    attempt.consumeToolsListRevalidationPermit(revalidation);
-    attempt.acceptFreshToolsListRevalidation({
+    const revalidation = await attempt.authorizeToolsListRevalidation();
+    await attempt.consumeToolsListRevalidationPermit(revalidation);
+    await attempt.acceptFreshToolsListRevalidation({
       revalidationAttemptId: fixture.toolCallInput.requester.revalidationAttemptId,
       revalidationAttemptGeneration: fixture.toolCallInput.requester.revalidationAttemptGeneration,
       catalog: fixture.catalog,
     });
     fixture.toolCallCurrent.finalEffectAttemptGeneration += 1;
-    expect(() => attempt.authorizeToolsCall()).toThrowError(
-      expect.objectContaining({ code: "resolver_binding_drift" }),
-    );
+    await expect(attempt.authorizeToolsCall()).rejects.toMatchObject({ code: "resolver_binding_drift" });
     expect(vi.mocked(fixture.toolCallInput.readCurrentState).mock.calls.length).toBeGreaterThan(7);
     attempt.dispose();
   });
@@ -818,7 +802,7 @@ describe("McpRequesterResolutionService two-stage authority seam", () => {
     expect(scrubbedByB).toContain("secret-operator-a");
     expect(scrubbedByB).not.toContain("secret-operator-b");
     attemptA.dispose();
-    expect(() => attemptB.assertCurrent()).not.toThrow();
+    await expect(attemptB.assertCurrent()).resolves.toBeUndefined();
     attemptB.dispose();
   });
 
@@ -921,17 +905,13 @@ describe("McpRequesterResolutionService two-stage authority seam", () => {
     const revoked = buildFixture("revoked-state-actor");
     const revokedAttempt = await service.resolveForProfileDiscovery(revoked.discoveryInput);
     revoked.discoveryCurrent.revoked = true;
-    expect(() => revokedAttempt.assertCurrent()).toThrowError(
-      expect.objectContaining({ code: "connection_generation_revoked" }),
-    );
+    await expect(revokedAttempt.assertCurrent()).rejects.toMatchObject({ code: "connection_generation_revoked" });
     revokedAttempt.dispose();
 
     const rotated = buildFixture("rotated-state-actor");
     const rotatedAttempt = await service.resolveForToolCall(rotated.toolCallInput);
     rotated.toolCallCurrent.rotationGenerationCurrent = false;
-    expect(() => rotatedAttempt.assertCurrent()).toThrowError(
-      expect.objectContaining({ code: "connection_generation_revoked" }),
-    );
+    await expect(rotatedAttempt.assertCurrent()).rejects.toMatchObject({ code: "connection_generation_revoked" });
     expect(rotated.toolCallInput.readCurrentState).toHaveBeenLastCalledWith({
       connectionGeneration: 12,
       rotationGeneration: 2,
@@ -941,9 +921,7 @@ describe("McpRequesterResolutionService two-stage authority seam", () => {
     const expired = buildFixture("expired-state-actor");
     const expiredAttempt = await service.resolveForToolCall(expired.toolCallInput);
     now = Date.parse("2026-07-14T12:04:00.000Z");
-    expect(() => expiredAttempt.assertCurrent()).toThrowError(
-      expect.objectContaining({ code: "resolved_connection_expired" }),
-    );
+    await expect(expiredAttempt.assertCurrent()).rejects.toMatchObject({ code: "resolved_connection_expired" });
     expiredAttempt.dispose();
 
     const hostile = buildFixture("hostile-state-actor");
@@ -956,7 +934,7 @@ describe("McpRequesterResolutionService two-stage authority seam", () => {
         return "gateway.attacker";
       },
     });
-    hostile.toolCallInput.readCurrentState = vi.fn(() => value);
+    hostile.toolCallInput.readCurrentState = vi.fn(async () => value);
     await expect(service.resolveForToolCall(hostile.toolCallInput)).rejects.toMatchObject({
       code: "resolver_binding_drift",
     });

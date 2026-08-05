@@ -53,14 +53,14 @@ function createFakeAttempt(
       },
     } as unknown as McpRequesterScopedToolCallAttempt["connection"],
     signal: controller.signal,
-    assertCurrent(): void {
+    async assertCurrent(): Promise<void> {
       events.push("assertCurrent");
       if (controller.signal.aborted) {
         throw new McpRequesterResolutionError("connection_generation_revoked");
       }
       options.assertCurrent?.();
     },
-    authorizeToolsListRevalidation() {
+    async authorizeToolsListRevalidation() {
       events.push("authorizeRevalidation");
       return {
         stage: "tool_call_revalidation",
@@ -71,17 +71,17 @@ function createFakeAttempt(
         connectionGeneration: 1,
         expectedCatalogSha256: "b".repeat(64),
         expectedToolDefinitionSha256: "c".repeat(64),
-      } as unknown as ReturnType<McpRequesterScopedToolCallAttempt["authorizeToolsListRevalidation"]>;
+      } as unknown as Awaited<ReturnType<McpRequesterScopedToolCallAttempt["authorizeToolsListRevalidation"]>>;
     },
-    consumeToolsListRevalidationPermit(input) {
+    async consumeToolsListRevalidationPermit(input) {
       events.push("consumeRevalidation");
       return input;
     },
-    acceptFreshToolsListRevalidation(input) {
+    async acceptFreshToolsListRevalidation(input) {
       events.push("acceptRevalidation");
       options.acceptRevalidation?.(input);
     },
-    authorizeToolsCall() {
+    async authorizeToolsCall() {
       events.push("authorize");
       return {
         stage: "tool_call",
@@ -94,9 +94,9 @@ function createFakeAttempt(
         rawRemoteToolName: options.rawRemoteToolName ?? "remote_tool",
         canonicalToolName: "remote_tool",
         providerAlias: "mcp__scoped",
-      } as unknown as ReturnType<McpRequesterScopedToolCallAttempt["authorizeToolsCall"]>;
+      } as unknown as Awaited<ReturnType<McpRequesterScopedToolCallAttempt["authorizeToolsCall"]>>;
     },
-    consumeToolsCallPermit(input) {
+    async consumeToolsCallPermit(input) {
       events.push("consume");
       return input;
     },
@@ -135,7 +135,7 @@ function createFakeDiscoveryAttempt(
       operation,
       authoritySha256: "a".repeat(64),
       connectionGeneration: 1,
-    }) as unknown as ReturnType<McpRequesterScopedDiscoveryAttempt["authorizeInitialize"]>;
+    }) as unknown as Awaited<ReturnType<McpRequesterScopedDiscoveryAttempt["authorizeInitialize"]>>;
   return {
     events,
     disposed: () => disposed,
@@ -151,26 +151,26 @@ function createFakeDiscoveryAttempt(
       },
     } as unknown as McpRequesterScopedDiscoveryAttempt["connection"],
     signal: controller.signal,
-    assertCurrent(): void {
+    async assertCurrent(): Promise<void> {
       events.push("assertCurrent");
       if (controller.signal.aborted) {
         throw new McpRequesterResolutionError("connection_generation_revoked");
       }
       options.assertCurrent?.();
     },
-    authorizeInitialize() {
+    async authorizeInitialize() {
       events.push("authorize:initialize");
       return permit("initialize");
     },
-    authorizeInitializedNotification() {
+    async authorizeInitializedNotification() {
       events.push("authorize:initialized");
       return permit("notifications/initialized");
     },
-    authorizeToolsList() {
+    async authorizeToolsList() {
       events.push("authorize:tools/list");
       return permit("tools/list");
     },
-    consumeOperationPermit(input) {
+    async consumeOperationPermit(input) {
       events.push(`consume:${(input as { operation?: string }).operation ?? "unknown"}`);
       return input;
     },
@@ -312,6 +312,34 @@ describe("invokeRequesterScopedMcpToolCall (HX-415 runtime seam)", () => {
     // effect callback; the fourth (tools/call) happens after it.
     expect(timeline).toEqual(["effect@3"]);
     expect(order.slice(-2)).toEqual(["effectDispatch", "fetch:tools/call"]);
+  });
+
+  it("rechecks live authority after an asynchronous effect fence before writing tools/call bytes", async () => {
+    stubFetch({});
+    const attempt = createFakeAttempt();
+    const effectDispatch = vi.fn(async () => {
+      order.push("effectDispatch");
+      attempt.abortNow();
+    });
+
+    const result = await invokeRequesterScopedMcpToolCall({
+      attempt,
+      toolName: "mcp__scoped",
+      effectDispatch,
+      networkAllowlist: ALLOWLIST,
+      revalidate: defaultRevalidate,
+    });
+
+    expect(effectDispatch).toHaveBeenCalledTimes(1);
+    expect(captured.some((call) => call.method === "tools/call")).toBe(false);
+    expect(result).toMatchObject({
+      ok: false,
+      externalOutcome: "unknown_after_send",
+      manualReconciliationRequired: true,
+      failurePhase: "post_dispatch",
+      output: { requesterScoped: true, reasonCode: "connection_generation_revoked" },
+    });
+    expect(attempt.disposed()).toBe(true);
   });
 
   it("uses the resolved URL + headers as the sole auth material over an isolated dispatcher", async () => {

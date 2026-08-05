@@ -137,7 +137,7 @@ export interface BackgroundReviewServiceDeps {
     attribution: ModelUsageAttributionContext,
   ): Promise<ChatCompletionResponse>;
   /** Cheap-model defaults (mirrors the explainer judge-model resolution). */
-  resolveModelDefaults(): BackgroundReviewModelDefaults;
+  resolveModelDefaults(): Promise<BackgroundReviewModelDefaults>;
   /** Resolve the execution api-style so we can gate `response_format`/`temperature`. */
   resolveApiStyle(providerId?: string, model?: string): LlmApiStyle;
   now?: () => Date;
@@ -269,7 +269,7 @@ export class BackgroundReviewService {
     signal?: AbortSignal,
     usageLineage?: BackgroundReviewUsageLineage,
   ): Promise<string> {
-    const defaults = this.deps.resolveModelDefaults();
+    const defaults = await this.deps.resolveModelDefaults();
     const apiStyle = this.deps.resolveApiStyle(defaults.providerId, defaults.model);
     const request: ChatCompletionRequest = {
       providerId: defaults.providerId,

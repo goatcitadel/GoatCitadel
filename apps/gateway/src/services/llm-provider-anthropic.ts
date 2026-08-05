@@ -104,12 +104,12 @@ export const anthropicProviderAdapter: LlmProviderAdapter = {
         });
         observeProviderUsageWithTrustedEstimate(dispatched.usage, providerCompletion.usage, completion.usage);
         dispatched.usage?.observeNormalized({ effectiveModelId: completion.model });
-        const terminal = dispatched.usage?.succeed();
+        const terminal = await dispatched.usage?.succeed();
         const eventIds = [...(dispatched.priorModelUsageEventIds ?? [])];
         if (terminal) eventIds.push(terminal.eventId);
         return eventIds.length > 0 ? { ...completion, modelUsageEventIds: eventIds } : completion;
       } catch (error) {
-        dispatched.usage?.fail(error);
+        await dispatched.usage?.fail(error);
         throw error;
       }
     }
@@ -202,7 +202,7 @@ export const anthropicProviderAdapter: LlmProviderAdapter = {
           });
           observeProviderUsageWithTrustedEstimate(accounting, providerCompletion.usage, completion.usage);
           accounting?.observeNormalized({ effectiveModelId: completion.model });
-          accounting?.succeed();
+          await accounting?.succeed();
           terminal = true;
           yield withUsageEvent(completion, accounting, priorModelUsageEventIds);
           return;
@@ -229,7 +229,7 @@ export const anthropicProviderAdapter: LlmProviderAdapter = {
         let receivedMessageStart = false;
 
         for await (const event of streamJsonSseResponse(dispatched.response)) {
-          accounting?.renewLease();
+          await accounting?.renewLease();
           const eventType = typeof event.type === "string" ? event.type : "";
           if (eventType === "message_start" && isRecord(event.message)) {
             receivedMessageStart = true;
@@ -423,7 +423,7 @@ export const anthropicProviderAdapter: LlmProviderAdapter = {
               },
             );
             observeProviderUsageWithTrustedEstimate(accounting, normalizeAnthropicUsage(usage), finalChunk.usage);
-            accounting?.succeed();
+            await accounting?.succeed();
             terminal = true;
             emittedVisibleChunk = true;
             yield withUsageEvent(finalChunk, accounting, priorModelUsageEventIds);
@@ -432,11 +432,11 @@ export const anthropicProviderAdapter: LlmProviderAdapter = {
         if (!terminal) throw new Error("Anthropic stream ended before message_stop");
         return;
       } catch (error) {
-        accounting?.fail(error);
+        await accounting?.fail(error);
         terminal = true;
         throw error;
       } finally {
-        if (!terminal) accounting?.cancel(new Error("stream consumer cancelled"));
+        if (!terminal) await accounting?.cancel(new Error("stream consumer cancelled"));
       }
     }
   },

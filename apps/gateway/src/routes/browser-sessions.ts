@@ -48,7 +48,7 @@ export const browserSessionsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/browser-sessions", operatorOnly, async (request, reply) => {
     try {
       const query = listQuerySchema.parse(request.query);
-      return reply.send(fastify.gatewayRuntime.browserSessionRuntimeService.listSessions(query));
+      return reply.send(await fastify.gatewayRuntime.browserSessionRuntimeService.listSessions(query));
     } catch (error) {
       return sendBrowserSessionRouteError(reply, error, request.log);
     }
@@ -57,7 +57,7 @@ export const browserSessionsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.post("/api/v1/browser-sessions", operatorOnly, async (request, reply) => {
     try {
       const body = createSessionSchema.parse(request.body);
-      const session = fastify.gatewayRuntime.browserSessionRuntimeService.createSession({
+      const session = await fastify.gatewayRuntime.browserSessionRuntimeService.createSession({
         ...body,
         actorId: resolveActorId(request),
       });
@@ -70,7 +70,7 @@ export const browserSessionsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/browser-sessions/:sessionId", operatorOnly, async (request, reply) => {
     try {
       const { sessionId } = sessionParamsSchema.parse(request.params);
-      return reply.send(fastify.gatewayRuntime.browserSessionRuntimeService.getSession(sessionId));
+      return reply.send(await fastify.gatewayRuntime.browserSessionRuntimeService.getSession(sessionId));
     } catch (error) {
       return sendBrowserSessionRouteError(reply, error, request.log);
     }
@@ -79,7 +79,7 @@ export const browserSessionsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/browser-sessions/:sessionId/state", operatorOnly, async (request, reply) => {
     try {
       const { sessionId } = sessionParamsSchema.parse(request.params);
-      return reply.send(fastify.gatewayRuntime.browserSessionRuntimeService.getStateProjection(sessionId));
+      return reply.send(await fastify.gatewayRuntime.browserSessionRuntimeService.getStateProjection(sessionId));
     } catch (error) {
       return sendBrowserSessionRouteError(reply, error, request.log);
     }
@@ -89,7 +89,7 @@ export const browserSessionsRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       const { sessionId } = sessionParamsSchema.parse(request.params);
       return reply.send(
-        fastify.gatewayRuntime.browserSessionRuntimeService.closeSession(sessionId, resolveActorId(request)),
+        await fastify.gatewayRuntime.browserSessionRuntimeService.closeSession(sessionId, resolveActorId(request)),
       );
     } catch (error) {
       return sendBrowserSessionRouteError(reply, error, request.log);
@@ -103,7 +103,11 @@ export const browserSessionsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply
         .code(201)
         .send(
-          fastify.gatewayRuntime.browserSessionRuntimeService.createGrant(sessionId, body, resolveActorId(request)),
+          await fastify.gatewayRuntime.browserSessionRuntimeService.createGrant(
+            sessionId,
+            body,
+            resolveActorId(request),
+          ),
         );
     } catch (error) {
       return sendBrowserSessionRouteError(reply, error, request.log);
@@ -114,7 +118,7 @@ export const browserSessionsRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       const { sessionId } = sessionParamsSchema.parse(request.params);
       const query = grantQuerySchema.parse(request.query);
-      return reply.send(fastify.gatewayRuntime.browserSessionRuntimeService.listGrants(sessionId, query));
+      return reply.send(await fastify.gatewayRuntime.browserSessionRuntimeService.listGrants(sessionId, query));
     } catch (error) {
       return sendBrowserSessionRouteError(reply, error, request.log);
     }
@@ -124,7 +128,11 @@ export const browserSessionsRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       const { sessionId, grantId } = grantParamsSchema.parse(request.params);
       return reply.send(
-        fastify.gatewayRuntime.browserSessionRuntimeService.revokeGrant(sessionId, grantId, resolveActorId(request)),
+        await fastify.gatewayRuntime.browserSessionRuntimeService.revokeGrant(
+          sessionId,
+          grantId,
+          resolveActorId(request),
+        ),
       );
     } catch (error) {
       return sendBrowserSessionRouteError(reply, error, request.log);
@@ -135,7 +143,11 @@ export const browserSessionsRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       const { sessionId, grantId } = grantParamsSchema.parse(request.params);
       return reply.send(
-        fastify.gatewayRuntime.browserSessionRuntimeService.rotateGrant(sessionId, grantId, resolveActorId(request)),
+        await fastify.gatewayRuntime.browserSessionRuntimeService.rotateGrant(
+          sessionId,
+          grantId,
+          resolveActorId(request),
+        ),
       );
     } catch (error) {
       return sendBrowserSessionRouteError(reply, error, request.log);
@@ -146,7 +158,7 @@ export const browserSessionsRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       const { sessionId } = sessionParamsSchema.parse(request.params);
       const query = eventQuerySchema.parse(request.query);
-      return reply.send(fastify.gatewayRuntime.browserSessionRuntimeService.listEvents(sessionId, query.limit));
+      return reply.send(await fastify.gatewayRuntime.browserSessionRuntimeService.listEvents(sessionId, query.limit));
     } catch (error) {
       return sendBrowserSessionRouteError(reply, error, request.log);
     }

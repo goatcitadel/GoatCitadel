@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import {
   canonicalJsonString,
-  ConflictError,
   IMPROVEMENT_LIFECYCLE_APPROVAL_KIND,
   isGovernanceJourneyEventRecord,
   isImprovementLifecycleOperationKind,
@@ -12,7 +11,7 @@ import {
   type ImprovementLifecycleSettlementDisposition,
   type ImprovementLifecycleTargetKind,
 } from "@goatcitadel/contracts";
-import { ImprovementLifecycleOperationRepository, type DatabaseClient } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { isRecord } from "./companion-auth-helpers.js";
 
 /**
@@ -41,16 +40,6 @@ export const IMPROVEMENT_LIFECYCLE_OBSERVED_STATE_VERSION =
 
 // ── shared SQL-host adapter (P1/P2 pattern) ───────────────────────────
 
-interface ImprovementLifecycleSqlHost {
-  readonly dialect: "sqlite" | "postgres";
-  prepare(sql: string): {
-    get(...args: unknown[]): unknown;
-    all(...args: unknown[]): unknown[];
-    run(...args: unknown[]): unknown;
-  };
-  runImmediateTransaction?<T>(callback: () => T): T;
-}
-
 /**
  * Adapt the gateway SQL host to the storage `DatabaseClient` surface the P0
  * improvement operation repository needs. Only `prepare` and immediate
@@ -59,28 +48,9 @@ interface ImprovementLifecycleSqlHost {
  * worker's own settlement transaction.
  */
 export function createImprovementLifecycleOperationRepository(
-  host: ImprovementLifecycleSqlHost,
-): ImprovementLifecycleOperationRepository {
-  const runImmediateTransaction = host.runImmediateTransaction;
-  if (typeof runImmediateTransaction !== "function") {
-    throw new ConflictError({
-      code: "STATE_CONFLICT",
-      message: "Governed improvement lifecycle operations require transactional gateway storage.",
-    });
-  }
-  const client: DatabaseClient = {
-    dialect: host.dialect,
-    prepare: (sql: string) => host.prepare(sql) as ReturnType<DatabaseClient["prepare"]>,
-    exec: () => {
-      throw new Error("Governed improvement lifecycle adapter does not execute raw SQL scripts.");
-    },
-    close: () => {
-      throw new Error("Governed improvement lifecycle adapter does not own the database connection.");
-    },
-    transaction: <T>(_mode: "deferred" | "immediate" | "exclusive", callback: () => T): T =>
-      runImmediateTransaction.call(host, callback) as T,
-  };
-  return new ImprovementLifecycleOperationRepository(client);
+  storage: Pick<Storage, "improvementLifecycleOperations">,
+): Storage["improvementLifecycleOperations"] {
+  return storage.improvementLifecycleOperations;
 }
 
 // ── approval binding ──────────────────────────────────────────────────

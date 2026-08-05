@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage } from "@goatcitadel/storage";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
 import { clampInt } from "@goatcitadel/contracts";
 import { assertWritePathInJail } from "../sandbox/path-jail.js";
@@ -24,8 +24,8 @@ export interface FilesystemToolExecutorDeps {
     targetPath: string,
     request: ToolInvokeRequest,
     config: ToolPolicyConfig,
-    storage: Storage,
-  ) => void;
+    storage: AsyncStorage,
+  ) => Promise<void>;
 }
 
 export function isFilesystemToolName(toolName: string): boolean {
@@ -35,7 +35,7 @@ export function isFilesystemToolName(toolName: string): boolean {
 export async function executeFilesystemTool(
   request: ToolInvokeRequest,
   config: ToolPolicyConfig,
-  storage: Storage,
+  storage: AsyncStorage,
   deps: FilesystemToolExecutorDeps,
 ): Promise<Record<string, unknown>> {
   switch (request.toolName) {
@@ -69,12 +69,12 @@ export async function executeFilesystemTool(
 async function fsRead(
   request: ToolInvokeRequest,
   config: ToolPolicyConfig,
-  storage: Storage,
+  storage: AsyncStorage,
   deps: FilesystemToolExecutorDeps,
 ) {
   const args = request.args;
   const p = required(args.path, "path");
-  deps.assertReadPathAllowedForRequest(p, request, config, storage);
+  await deps.assertReadPathAllowedForRequest(p, request, config, storage);
   const content = await fs.readFile(path.resolve(p), "utf8");
   return { path: path.resolve(p), bytes: content.length, content };
 }
@@ -82,12 +82,12 @@ async function fsRead(
 async function fileReadRange(
   request: ToolInvokeRequest,
   config: ToolPolicyConfig,
-  storage: Storage,
+  storage: AsyncStorage,
   deps: FilesystemToolExecutorDeps,
 ) {
   const args = request.args;
   const p = required(args.path, "path");
-  deps.assertReadPathAllowedForRequest(p, request, config, storage);
+  await deps.assertReadPathAllowedForRequest(p, request, config, storage);
   const full = path.resolve(p);
   const content = await fs.readFile(full, "utf8");
   const lines = content.split(/\r?\n/);
@@ -106,7 +106,7 @@ async function fileReadRange(
 async function fileFind(
   request: ToolInvokeRequest,
   config: ToolPolicyConfig,
-  storage: Storage,
+  storage: AsyncStorage,
   deps: FilesystemToolExecutorDeps,
 ) {
   const args = request.args;
@@ -125,7 +125,7 @@ async function fileFind(
 async function codeSearch(
   request: ToolInvokeRequest,
   config: ToolPolicyConfig,
-  storage: Storage,
+  storage: AsyncStorage,
   deps: FilesystemToolExecutorDeps,
 ) {
   const args = request.args;
@@ -145,12 +145,12 @@ async function codeSearch(
 async function codeSearchFiles(
   request: ToolInvokeRequest,
   config: ToolPolicyConfig,
-  storage: Storage,
+  storage: AsyncStorage,
   deps: FilesystemToolExecutorDeps,
 ) {
   const args = request.args;
   const rootPath = required(args.path, "path");
-  deps.assertReadPathAllowedForRequest(rootPath, request, config, storage);
+  await deps.assertReadPathAllowedForRequest(rootPath, request, config, storage);
   const fullRoot = path.resolve(rootPath);
   const query = required(args.query, "query");
   const caseSensitive = asBoolean(args.caseSensitive, false);
@@ -241,12 +241,12 @@ function isNodeErrorWithCode(error: unknown, code: string): boolean {
 async function fsList(
   request: ToolInvokeRequest,
   config: ToolPolicyConfig,
-  storage: Storage,
+  storage: AsyncStorage,
   deps: FilesystemToolExecutorDeps,
 ) {
   const args = request.args;
   const p = asString(args.path) ?? ".";
-  deps.assertReadPathAllowedForRequest(p, request, config, storage);
+  await deps.assertReadPathAllowedForRequest(p, request, config, storage);
   const full = path.resolve(p);
   const items = await fs.readdir(full, { withFileTypes: true });
   return {
@@ -261,12 +261,12 @@ async function fsList(
 async function fsStat(
   request: ToolInvokeRequest,
   config: ToolPolicyConfig,
-  storage: Storage,
+  storage: AsyncStorage,
   deps: FilesystemToolExecutorDeps,
 ) {
   const args = request.args;
   const p = required(args.path, "path");
-  deps.assertReadPathAllowedForRequest(p, request, config, storage);
+  await deps.assertReadPathAllowedForRequest(p, request, config, storage);
   const full = path.resolve(p);
   const stat = await fs.stat(full);
   return {
@@ -281,13 +281,13 @@ async function fsStat(
 async function fsCopy(
   request: ToolInvokeRequest,
   config: ToolPolicyConfig,
-  storage: Storage,
+  storage: AsyncStorage,
   deps: FilesystemToolExecutorDeps,
 ) {
   const args = request.args;
   const from = required(args.from, "from");
   const to = required(args.to, "to");
-  deps.assertReadPathAllowedForRequest(from, request, config, storage);
+  await deps.assertReadPathAllowedForRequest(from, request, config, storage);
   assertWritePathInJail(to, config.sandbox.writeJailRoots);
   const fullTo = path.resolve(to);
   await fs.mkdir(path.dirname(fullTo), { recursive: true });
@@ -320,11 +320,11 @@ async function searchFileContents(input: {
   caseSensitive: boolean;
   limit: number;
   config: ToolPolicyConfig;
-  storage: Storage;
+  storage: AsyncStorage;
   deps: FilesystemToolExecutorDeps;
   codeOnly?: boolean;
 }): Promise<Record<string, unknown>> {
-  input.deps.assertReadPathAllowedForRequest(input.rootPath, input.request, input.config, input.storage);
+  await input.deps.assertReadPathAllowedForRequest(input.rootPath, input.request, input.config, input.storage);
   const fullRoot = path.resolve(input.rootPath);
   const normalizedPattern = input.caseSensitive ? input.pattern : input.pattern.toLowerCase();
   const matches: Array<{

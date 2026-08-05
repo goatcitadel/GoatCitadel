@@ -147,7 +147,7 @@ describe("ContinuationGateService", () => {
     });
   });
 
-  it("persists non-continue decisions as durable continuation checkpoints", () => {
+  it("persists non-continue decisions as durable continuation checkpoints", async () => {
     const createCheckpoint = vi.fn(() => ({ checkpointId: "checkpoint-1" }));
     const publishRealtime = vi.fn();
     const service = new ContinuationGateService({
@@ -162,7 +162,7 @@ describe("ContinuationGateService", () => {
       createdAt: "2026-05-04T01:00:00.000Z",
     });
 
-    const result = service.recordNonContinueCheckpoint({ runId: "run-1", decision });
+    const result = await service.recordNonContinueCheckpoint({ runId: "run-1", decision });
 
     expect(result).toEqual({ checkpointId: "checkpoint-1" });
     expect(createCheckpoint).toHaveBeenCalledWith({
@@ -178,7 +178,7 @@ describe("ContinuationGateService", () => {
     );
   });
 
-  it("does not persist clear continuation decisions", () => {
+  it("does not persist clear continuation decisions", async () => {
     const createCheckpoint = vi.fn();
     const publishRealtime = vi.fn();
     const service = new ContinuationGateService({
@@ -187,7 +187,7 @@ describe("ContinuationGateService", () => {
     });
     const decision = service.evaluate({ metrics: {} });
 
-    expect(service.recordNonContinueCheckpoint({ runId: "run-1", decision })).toBeUndefined();
+    await expect(service.recordNonContinueCheckpoint({ runId: "run-1", decision })).resolves.toBeUndefined();
     expect(createCheckpoint).not.toHaveBeenCalled();
     expect(publishRealtime).not.toHaveBeenCalled();
   });
@@ -240,7 +240,7 @@ describe("CapabilityPackService", () => {
     expect(preview.reviewRequired).toBe(true);
   });
 
-  it("records evidence when a capability pack is staged", () => {
+  it("records evidence when a capability pack is staged", async () => {
     const createEnvelope = vi.fn(() => ({
       envelopeId: "env-1",
       createdAt: "2026-05-04T00:00:00.000Z",
@@ -249,7 +249,7 @@ describe("CapabilityPackService", () => {
       evidenceEnvelopeService: { createEnvelope } as never,
     });
 
-    const result = service.installPack("memory-governance", { actorId: "operator" });
+    const result = await service.installPack("memory-governance", { actorId: "operator" });
 
     expect(result.evidenceEnvelopeId).toBe("env-1");
     expect(result.stagedAssets.every((item) => item.outcome !== "enabled")).toBe(true);

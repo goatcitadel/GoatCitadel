@@ -157,6 +157,7 @@
       "driver": "postgres",
       "postgres": {
         "mode": "bundled",
+        "asyncGatewayEnabled": true,
         "port": 5432,
         "database": "goatcitadel",
         "ssl": "prefer",
@@ -173,7 +174,8 @@
         "dataDir": "./data/postgres",
         "port": 45432,
         "autoStart": true,
-        "startTimeoutMs": 90000
+        "startTimeoutMs": 180000,
+        "stopTimeoutMs": 300000
       },
       "sqlite": {
         "cacheSizeKb": 65536,

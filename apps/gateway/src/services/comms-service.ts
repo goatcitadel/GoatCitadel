@@ -36,7 +36,7 @@ export interface CommsHost {
     record: ChatAttachmentRecord;
     bytes: Buffer;
   }>;
-  getIntegrationConnection(connectionId: string): IntegrationConnection;
+  getIntegrationConnection(connectionId: string): Promise<IntegrationConnection>;
   emitDiscordTyping(connection: IntegrationConnection, input: ChannelTypingInput): Promise<ChannelTypingResult>;
   emitTelegramTyping(connection: IntegrationConnection, input: ChannelTypingInput): Promise<ChannelTypingResult>;
   emitChannelActivity(
@@ -81,7 +81,7 @@ export async function commsSend(
   input: ChannelSendInput,
 ): Promise<ToolInvokeResult | Record<string, unknown>> {
   throwIfCommsAborted(input.signal);
-  const connection = host.getIntegrationConnection(input.connectionId);
+  const connection = await host.getIntegrationConnection(input.connectionId);
   const sanitized = sanitizeChannelOutboundMessage(input.message ?? "", {
     neutralizeMentions: shouldNeutralizeChannelMentions(connection.key),
     maxLength: connection.key === "discord" ? 2000 : undefined,
@@ -215,7 +215,7 @@ export async function commsUnsend(
 
 export async function commsTyping(host: CommsHost, input: ChannelTypingInput): Promise<ChannelTypingResult> {
   throwIfCommsAborted(input.signal);
-  const connection = host.getIntegrationConnection(input.connectionId);
+  const connection = await host.getIntegrationConnection(input.connectionId);
   if (connection.kind !== "channel") {
     throw new Error(`Integration connection ${input.connectionId} is not a channel connection.`);
   }
@@ -250,7 +250,7 @@ export async function commsTyping(host: CommsHost, input: ChannelTypingInput): P
 
 export async function commsActivity(host: CommsHost, input: ChannelActivityInput): Promise<ChannelActivityResult> {
   throwIfCommsAborted(input.signal);
-  const connection = host.getIntegrationConnection(input.connectionId);
+  const connection = await host.getIntegrationConnection(input.connectionId);
   if (connection.kind !== "channel") {
     throw new Error(`Integration connection ${input.connectionId} is not a channel connection.`);
   }
@@ -405,7 +405,7 @@ export async function commsGmailSend(
 ): Promise<ToolInvokeResult | Record<string, unknown>> {
   let connection: IntegrationConnection | undefined;
   try {
-    connection = host.getIntegrationConnection(input.connectionId);
+    connection = await host.getIntegrationConnection(input.connectionId);
   } catch {
     // Preserve today's fail-inside-executor behavior for unknown connection ids: fall
     // back to a generic catalog id and let invokeCommsTool surface the real error.
@@ -472,11 +472,11 @@ export async function commsGmailSend(
         // Any other failed deliveryStatus (degraded, retrying, manual_reconciliation_required,
         // or unclassified) means the provider call may have fired — the boundary must be
         // marked crossed before the ledger records this as an unknown external outcome.
-        claim.markExternalCallStarted();
+        await claim.markExternalCallStarted();
         throw new CommsGmailPreBoundaryResultError(record);
       }
 
-      claim.markExternalCallStarted();
+      await claim.markExternalCallStarted();
       return record;
     },
   });

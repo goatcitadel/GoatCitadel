@@ -129,6 +129,31 @@ describe("HeartbeatOccurrenceRepository SQLite", () => {
     db.close();
   });
 
+  it("creates and replays the exact admission through the callback-free worker boundary", () => {
+    const db = createDatabase({ dbPath: ":memory:" });
+    const fixture = seedHeartbeatSession(db, "worker-safe-claim");
+    const occurrences = new HeartbeatOccurrenceRepository(db);
+    const admissions = new SessionMutationAdmissionRepository(db);
+
+    const created = occurrences.claimWithAdmission(fixture.claimInput);
+    assert.equal(created.disposition, "created");
+    if (created.disposition !== "created") throw new Error("expected created occurrence");
+    const admission = admissions.require(created.occurrence.admissionId);
+    assert.equal(admission.requestSha256, created.occurrence.admissionRequestSha256);
+    assert.equal(admission.sessionIncarnationId, created.occurrence.sessionIncarnationId);
+    assert.equal(admission.turnId, created.occurrence.turnId);
+    assert.equal(admission.actorKind, "system");
+    assert.equal(admission.operation, HEARTBEAT_ADMISSION_OPERATION);
+
+    const replay = occurrences.claimWithAdmission(fixture.claimInput);
+    assert.equal(replay.disposition, "replayed");
+    if (replay.disposition !== "replayed") throw new Error("expected replayed occurrence");
+    assert.deepEqual(replay.occurrence, created.occurrence);
+    assert.equal(readCount(db, "chat_session_mutation_admissions"), 1);
+    assert.equal(readCount(db, "chat_heartbeat_occurrences"), 1);
+    db.close();
+  });
+
   it("requires exact child, profile, actor, and heartbeat occurrence payload bindings", () => {
     const db = createDatabase({ dbPath: ":memory:" });
     const fixture = createBoundHeartbeatFixture(db, "binding");

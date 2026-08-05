@@ -37,10 +37,10 @@ export interface ChatSupportRouteDependencies {
     listChatSessionLearnedMemory(
       sessionId: string,
       limit?: number,
-    ): {
+    ): Promise<{
       items: LearnedMemoryItemRecord[];
       conflicts: LearnedMemoryConflictRecord[];
-    };
+    }>;
     rebuildChatSessionLearnedMemory(sessionId: string): Promise<{
       rebuiltAt: string;
       items: LearnedMemoryItemRecord[];
@@ -50,22 +50,22 @@ export interface ChatSupportRouteDependencies {
       sessionId: string,
       itemId: string,
       input: LearnedMemoryUpdateInput,
-    ): LearnedMemoryItemRecord;
+    ): Promise<LearnedMemoryItemRecord>;
   };
   prefs: {
-    getChatSessionPrefs(sessionId: string): ChatSessionPrefsRecord;
-    updateChatSessionPrefs(sessionId: string, input: ChatSessionPrefsPatch): ChatSessionPrefsRecord;
+    getChatSessionPrefs(sessionId: string): Promise<ChatSessionPrefsRecord>;
+    updateChatSessionPrefs(sessionId: string, input: ChatSessionPrefsPatch): Promise<ChatSessionPrefsRecord>;
   };
   proactive: {
-    getChatSessionProactiveStatus(sessionId: string): {
+    getChatSessionProactiveStatus(sessionId: string): Promise<{
       policy: ProactivePolicy;
       idleSeconds: number;
       hasRunningTurn: boolean;
       pendingSuggestions: number;
       actionsLastHour: number;
       lastRun?: ProactiveRunRecord;
-    };
-    listChatSessionProactiveRuns(sessionId: string, limit?: number): ProactiveRunRecord[];
+    }>;
+    listChatSessionProactiveRuns(sessionId: string, limit?: number): Promise<ProactiveRunRecord[]>;
     triggerChatSessionProactive(
       sessionId: string,
       input?: {
@@ -89,16 +89,16 @@ export interface ChatSupportRouteDependencies {
         reflectionMode: ChatReflectionMode;
         expectedRevision: number;
       }>,
-    ): ProactivePolicy;
+    ): Promise<ProactivePolicy>;
   };
   research: {
     getChatResearchRun(
       sessionId: string,
       runId: string,
-    ): {
+    ): Promise<{
       run: ResearchRunRecord;
       sources: ResearchSourceRecord[];
-    };
+    }>;
     runChatResearch(
       sessionId: string,
       input: {
@@ -124,18 +124,18 @@ export interface ChatSupportRouteDependencies {
         turnId?: string;
         suggestion: ChatSpecialistCandidateSuggestionRecord;
       },
-    ): ChatSpecialistCandidateRecord;
+    ): Promise<ChatSpecialistCandidateRecord>;
     listChatSessionSpecialistCandidates(
       sessionId: string,
       limit?: number,
-    ): {
+    ): Promise<{
       items: ChatSpecialistCandidateRecord[];
-    };
+    }>;
     updateChatSessionSpecialistCandidate(
       sessionId: string,
       candidateId: string,
       input: ChatSpecialistCandidatePatchInput,
-    ): ChatSpecialistCandidateRecord;
+    ): Promise<ChatSpecialistCandidateRecord>;
   };
   steer: {
     submitChatSteerInstruction(sessionId: string, body: ChatSteerRequest): Promise<ChatSteerResponse>;

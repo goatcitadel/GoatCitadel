@@ -22,7 +22,7 @@ const slackOAuthRouteOptions = {
 export function registerSlackOAuthIntegrationRoutes(fastify: FastifyInstance): void {
   fastify.get("/api/v1/integrations/slack/oauth/status", slackOAuthRouteOptions, async (_request, reply) => {
     const start = buildSlackOAuthStart(readSlackOAuthConfig());
-    const allConnections: IntegrationConnection[] = fastify.services.integrations.listIntegrationConnections(
+    const allConnections: IntegrationConnection[] = await fastify.services.integrations.listIntegrationConnections(
       "channel",
       300,
     );
@@ -110,18 +110,18 @@ export function registerSlackOAuthIntegrationRoutes(fastify: FastifyInstance): v
       });
       const connectionInput = buildSlackOAuthConnectionInput(payload);
       const existingConnection = findExistingSlackOAuthConnection(
-        fastify.services.integrations.listIntegrationConnections("channel", 300),
+        await fastify.services.integrations.listIntegrationConnections("channel", 300),
         connectionInput.config,
       );
       const connection = existingConnection
-        ? fastify.services.integrations.updateIntegrationConnection(existingConnection.connectionId, {
+        ? await fastify.services.integrations.updateIntegrationConnection(existingConnection.connectionId, {
             label: connectionInput.label,
             enabled: true,
             status: "connected",
             lastError: undefined,
             config: mergeSlackOAuthConfig(existingConnection.config, connectionInput.config),
           })
-        : fastify.services.integrations.createIntegrationConnection(connectionInput);
+        : await fastify.services.integrations.createIntegrationConnection(connectionInput);
       const result = {
         connection: redactSlackOAuthConnection(connection),
         install: summarizeSlackOAuthInstall(connection),
@@ -141,11 +141,11 @@ export function registerSlackOAuthIntegrationRoutes(fastify: FastifyInstance): v
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      const current = fastify.services.integrations.getIntegrationConnection(parsed.data.connectionId);
+      const current = await fastify.services.integrations.getIntegrationConnection(parsed.data.connectionId);
       if (current.catalogId !== "channel.slack" || current.config.authMode !== "oauth") {
         return reply.code(400).send({ error: "Connection is not a Slack OAuth install." });
       }
-      const connection = fastify.services.integrations.updateIntegrationConnection(parsed.data.connectionId, {
+      const connection = await fastify.services.integrations.updateIntegrationConnection(parsed.data.connectionId, {
         enabled: false,
         status: "disconnected",
         lastError: undefined,
@@ -200,10 +200,13 @@ function mergeSlackOAuthConfig(
   };
 }
 
-function renderSlackOAuthSuccessPage(result: {
-  connection: IntegrationConnection;
-  install: ReturnType<typeof summarizeSlackOAuthInstall>;
-}, targetOrigin: string): string {
+function renderSlackOAuthSuccessPage(
+  result: {
+    connection: IntegrationConnection;
+    install: ReturnType<typeof summarizeSlackOAuthInstall>;
+  },
+  targetOrigin: string,
+): string {
   const payload = JSON.stringify({
     type: "goatcitadel.slackOAuth.connected",
     connectionId: result.connection.connectionId,

@@ -64,11 +64,11 @@ export class ExternalSourceScanServiceError extends Error {
 }
 
 export interface ExternalSourceConfigReadPort {
-  get(workspaceId: string, sourceId: string): ExternalSourceRecord;
+  get(workspaceId: string, sourceId: string): Promise<ExternalSourceRecord>;
 }
 
 export interface ExternalSourceScanWritePort {
-  seal(scan: ExternalSourceScanRecord, items: readonly ExternalSourceCatalogItem[]): ExternalSourceScanRecord;
+  seal(scan: ExternalSourceScanRecord, items: readonly ExternalSourceCatalogItem[]): Promise<ExternalSourceScanRecord>;
 }
 
 export interface ExternalSourceScanClock {
@@ -246,7 +246,7 @@ export class ExternalSourceScanService {
 
       let source: ExternalSourceRecord;
       try {
-        source = this.readSourceSnapshot(input.workspaceId, input.sourceId);
+        source = await this.readSourceSnapshot(input.workspaceId, input.sourceId);
       } catch (error) {
         if (input.signal.aborted) throw new ExternalSourceScanServiceError("cancelled");
         throw error;
@@ -307,7 +307,7 @@ export class ExternalSourceScanService {
 
       if (input.signal.aborted) throw new ExternalSourceScanServiceError("cancelled");
       if (timedOut || this.deadlineExpired(startedAtMs)) terminal = timeoutTerminal(terminal.examinedEntryCount);
-      this.assertCurrentSourceBinding(source, input.expectedConfigRevision);
+      await this.assertCurrentSourceBinding(source, input.expectedConfigRevision);
       if (input.signal.aborted) throw new ExternalSourceScanServiceError("cancelled");
       if (timedOut || this.deadlineExpired(startedAtMs)) terminal = timeoutTerminal(terminal.examinedEntryCount);
 
@@ -340,7 +340,7 @@ export class ExternalSourceScanService {
       const expectedScanCanonical = canonicalJsonString(scan);
       const expectedItemsCanonical = canonicalJsonString(terminal.items);
       try {
-        const stored = this.dependencies.scans.seal(scan, terminal.items);
+        const stored = await this.dependencies.scans.seal(scan, terminal.items);
         if (
           canonicalJsonString(scan) !== expectedScanCanonical ||
           canonicalJsonString(terminal.items) !== expectedItemsCanonical ||
@@ -389,17 +389,20 @@ export class ExternalSourceScanService {
     };
   }
 
-  private readSourceSnapshot(workspaceId: string, sourceId: string): ExternalSourceRecord {
+  private async readSourceSnapshot(workspaceId: string, sourceId: string): Promise<ExternalSourceRecord> {
     try {
-      return immutableSourceSnapshot(this.dependencies.configs.get(workspaceId, sourceId));
+      return immutableSourceSnapshot(await this.dependencies.configs.get(workspaceId, sourceId));
     } catch (error) {
       if (error instanceof ExternalSourceScanServiceError) throw error;
       throw new ExternalSourceScanServiceError("source_binding_invalid");
     }
   }
 
-  private assertCurrentSourceBinding(expected: ExternalSourceRecord, expectedConfigRevision: number): void {
-    const current = this.readSourceSnapshot(expected.workspaceId, expected.sourceId);
+  private async assertCurrentSourceBinding(
+    expected: ExternalSourceRecord,
+    expectedConfigRevision: number,
+  ): Promise<void> {
+    const current = await this.readSourceSnapshot(expected.workspaceId, expected.sourceId);
     if (current.status !== "active") throw new ExternalSourceScanServiceError("source_not_active");
     if (current.revision !== expectedConfigRevision) {
       throw new ExternalSourceScanServiceError("source_revision_conflict");

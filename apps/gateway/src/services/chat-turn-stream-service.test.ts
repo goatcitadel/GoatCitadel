@@ -24,6 +24,8 @@ vi.mock("./chat-turn-helpers.js", () => ({
   isIncompleteDelegatedTraceFailure: (failure: { failureClass?: string } | undefined) =>
     failure?.failureClass === "tool_run_budget_exceeded",
   isChatTurnCancelledError: isChatTurnCancelledErrorMock,
+  readDurableCancellation: () => undefined,
+  readDurableRecoveryInterruption: () => undefined,
   mergeExecutionPlanStepStatuses: (_steps: unknown, next: unknown) => next,
   patchChatTurnTraceIfStatus: (
     repository: {
@@ -99,7 +101,7 @@ function createTestStreamRegistration() {
 }
 
 describe("streamPreparedAgentChatTurn", () => {
-  it("collects child turn tool runs in delegation step order", () => {
+  it("collects child turn tool runs in delegation step order", async () => {
     const host = createHost();
     host.storage.chatDelegationSteps.listByRun = vi.fn(() => [
       { stepId: "step-1", childTurnId: "child-2" },
@@ -114,7 +116,7 @@ describe("streamPreparedAgentChatTurn", () => {
         ]),
     ) as never;
 
-    expect(collectOrchestrationToolRuns(host, "run-1").map((toolRun) => toolRun.toolRunId)).toEqual([
+    expect((await collectOrchestrationToolRuns(host, "run-1")).map((toolRun) => toolRun.toolRunId)).toEqual([
       "run-child-2",
       "run-child-1",
     ]);
@@ -2426,8 +2428,8 @@ function createHost(): ChatTurnStreamHost & {
     })),
     createHydratedChatTurnTrace: vi.fn((_turnId: string, nextTrace: ChatTurnTraceRecord) => nextTrace),
     steerService: new ChatSteerService(),
-    ingestEvent: vi.fn(async (_idempotencyKey, _payload, options?: { onCommit?: () => void }) => {
-      options?.onCommit?.();
+    ingestEvent: vi.fn(async (_idempotencyKey, _payload, options?: { onCommit?: () => unknown | Promise<unknown> }) => {
+      await options?.onCommit?.();
       return undefined;
     }),
     updateActiveLeafOrThrow: vi.fn(),

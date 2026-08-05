@@ -13,6 +13,7 @@ import {
   type ExternalSourceRecord,
 } from "@goatcitadel/contracts";
 import {
+  createSqliteAsyncStorage,
   Storage,
   buildExternalSourceKnowledgeDocumentBinding,
   computeExternalSourceArtifactSetSha256,
@@ -97,6 +98,7 @@ interface Harness {
 
 async function createHarness(): Promise<Harness> {
   const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
+  const asyncStorage = createSqliteAsyncStorage(storage);
   cleanups.push(() => storage.close());
   const artifactsDir = fs.mkdtempSync(path.join(os.tmpdir(), "gc-hx407-knowledge-effect-"));
   cleanups.push(() => fs.rmSync(artifactsDir, { recursive: true, force: true }));
@@ -313,6 +315,7 @@ async function createHarness(): Promise<Harness> {
     attachments: storage.externalSessionAttachments,
     sessions: { get: (sessionId) => storage.chatSessionMeta.get(sessionId) },
     artifacts,
+    runImmediateTransaction: (callback) => asyncStorage.runImmediateTransaction(callback),
     clock: { nowMs: () => clock.nowMs },
   });
   const service = new ExternalSourceKnowledgeEffectService({
@@ -321,7 +324,7 @@ async function createHarness(): Promise<Harness> {
     links: storage.externalSourceKnowledgeLinks,
     journeys: storage.governanceJourneyEvents,
     policy: { evaluateKnowledgeSnapshotApply: () => policy.decision },
-    runImmediateTransaction: (callback) => storage.runImmediateTransaction(callback),
+    runImmediateTransaction: (callback) => asyncStorage.runImmediateTransaction(callback),
     clock: { nowMs: () => clock.nowMs },
   });
   const countRows = () =>

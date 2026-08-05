@@ -25,7 +25,7 @@ export type AddonsRouteService = RouteService<AddonsRouteMethod>;
 export interface AddonsRoutePortDependencies {
   addonsService: AddonsService;
   slotService: AddonSlotService;
-  publishRealtime: (eventType: string, source: string, payload: Record<string, unknown>) => void;
+  publishRealtime: (eventType: string, source: string, payload: Record<string, unknown>) => Promise<unknown>;
   recordDevDiagnostic: (input: Parameters<GatewayDevDiagnosticsService["record"]>[0]) => void;
 }
 
@@ -48,7 +48,7 @@ export function createAddonsRoutePort(deps: AddonsRoutePortDependencies): Addons
         message: `Installed addon ${addonId}`,
         context: { status: result.status.status },
       });
-      deps.publishRealtime("addon_installed", "system", {
+      await deps.publishRealtime("addon_installed", "system", {
         addonId,
         status: result.status.status,
       });
@@ -56,7 +56,7 @@ export function createAddonsRoutePort(deps: AddonsRoutePortDependencies): Addons
     },
     disableAddon: async (addonId) => {
       const result = await deps.addonsService.disable(addonId);
-      deps.publishRealtime("addon_disabled", "system", {
+      await deps.publishRealtime("addon_disabled", "system", {
         addonId,
         status: result.status.status,
       });
@@ -64,7 +64,7 @@ export function createAddonsRoutePort(deps: AddonsRoutePortDependencies): Addons
     },
     enableAddon: async (addonId) => {
       const result = await deps.addonsService.enable(addonId);
-      deps.publishRealtime("addon_enabled", "system", {
+      await deps.publishRealtime("addon_enabled", "system", {
         addonId,
         status: result.status.status,
       });
@@ -88,7 +88,7 @@ export function createAddonsRoutePort(deps: AddonsRoutePortDependencies): Addons
           launchUrl: result.status.installed?.launchUrl ?? result.status.addon.launchUrl,
         },
       });
-      deps.publishRealtime("addon_runtime_changed", "system", {
+      await deps.publishRealtime("addon_runtime_changed", "system", {
         addonId,
         status: result.status.status,
       });
@@ -108,7 +108,7 @@ export function createAddonsRoutePort(deps: AddonsRoutePortDependencies): Addons
     listInstalledAddons: () => deps.addonsService.listInstalled(),
     stopAddon: async (addonId) => {
       const result = await deps.addonsService.stop(addonId);
-      deps.publishRealtime("addon_runtime_changed", "system", {
+      await deps.publishRealtime("addon_runtime_changed", "system", {
         addonId,
         status: result.status.status,
       });
@@ -116,12 +116,12 @@ export function createAddonsRoutePort(deps: AddonsRoutePortDependencies): Addons
     },
     uninstallAddon: async (addonId) => {
       const result = await deps.addonsService.uninstall(addonId);
-      deps.publishRealtime("addon_uninstalled", "system", { addonId });
+      await deps.publishRealtime("addon_uninstalled", "system", { addonId });
       return result;
     },
     updateAddon: async (addonId) => {
       const result = await deps.addonsService.update(addonId);
-      deps.publishRealtime("addon_updated", "system", {
+      await deps.publishRealtime("addon_updated", "system", {
         addonId,
         status: result.status.status,
       });

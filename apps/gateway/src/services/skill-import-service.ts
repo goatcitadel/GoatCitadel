@@ -48,7 +48,7 @@ import type {
   SkillSourceResultRecord,
   SkillSourceSearchRecord,
 } from "@goatcitadel/contracts";
-import type { SystemSettingsRepository } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 
 const IMPORT_HISTORY_KEY = "skill_import_history_v1";
 const MAX_IMPORT_HISTORY = 300;
@@ -841,7 +841,7 @@ const NATIVE_OVERLAP_HINTS: Record<
 export class SkillImportService {
   public constructor(
     private readonly rootDir: string,
-    private readonly systemSettings: SystemSettingsRepository,
+    private readonly systemSettings: Pick<Storage["systemSettings"], "get" | "set">,
   ) {}
 
   /**
@@ -977,7 +977,7 @@ export class SkillImportService {
     try {
       materialized = await this.materializeSkillSource(input);
       const validation = await this.validateMaterialized(materialized);
-      this.appendHistory({
+      await this.appendHistory({
         importId,
         action: "validate",
         outcome: validation.valid ? "accepted" : "rejected",
@@ -1003,7 +1003,7 @@ export class SkillImportService {
     } catch (error) {
       const sourceType = inferSourceType(input.sourceRef, input.sourceType);
       const sourceProvider = inferSourceProvider(input.sourceRef, input.sourceProvider);
-      this.appendHistory({
+      await this.appendHistory({
         importId,
         action: "validate",
         outcome: "failed",
@@ -1063,7 +1063,7 @@ export class SkillImportService {
       };
       const validation = await this.validateMaterialized(stagedMaterialized);
       if (!validation.valid) {
-        this.appendHistory({
+        await this.appendHistory({
           importId,
           action: "install",
           outcome: "rejected",
@@ -1087,7 +1087,7 @@ export class SkillImportService {
         throw new Error(`Skill import validation failed: ${validation.errors.join("; ")}`);
       }
       if (validation.riskLevel === "high" && !input.confirmHighRisk) {
-        this.appendHistory({
+        await this.appendHistory({
           importId,
           action: "install",
           outcome: "rejected",
@@ -1112,7 +1112,7 @@ export class SkillImportService {
       }
 
       const redirect = buildSkillHubRedirect(validation);
-      this.appendHistory({
+      await this.appendHistory({
         importId,
         action: "install",
         outcome: "accepted",
@@ -1143,7 +1143,7 @@ export class SkillImportService {
     } catch (error) {
       const sourceType = inferSourceType(input.sourceRef, input.sourceType);
       const sourceProvider = inferSourceProvider(input.sourceRef, input.sourceProvider);
-      this.appendHistory({
+      await this.appendHistory({
         importId,
         action: "install",
         outcome: "failed",
@@ -1169,14 +1169,14 @@ export class SkillImportService {
     }
   }
 
-  public listHistory(limit = 100): SkillImportHistoryRecord[] {
-    const rows = this.systemSettings.get<SkillImportHistoryRecord[]>(IMPORT_HISTORY_KEY)?.value ?? [];
+  public async listHistory(limit = 100): Promise<SkillImportHistoryRecord[]> {
+    const rows = (await this.systemSettings.get<SkillImportHistoryRecord[]>(IMPORT_HISTORY_KEY))?.value ?? [];
     return rows.slice(0, Math.max(1, Math.min(limit, 300)));
   }
 
-  private appendHistory(record: SkillImportHistoryRecord): void {
-    const rows = this.systemSettings.get<SkillImportHistoryRecord[]>(IMPORT_HISTORY_KEY)?.value ?? [];
-    this.systemSettings.set(IMPORT_HISTORY_KEY, [record, ...rows].slice(0, MAX_IMPORT_HISTORY));
+  private async appendHistory(record: SkillImportHistoryRecord): Promise<void> {
+    const rows = (await this.systemSettings.get<SkillImportHistoryRecord[]>(IMPORT_HISTORY_KEY))?.value ?? [];
+    await this.systemSettings.set(IMPORT_HISTORY_KEY, [record, ...rows].slice(0, MAX_IMPORT_HISTORY));
   }
 
   private async collectSourceCatalog(limit: number): Promise<{

@@ -3,15 +3,15 @@ import type { ModelComparisonRun, PromptPackRunRecord, PromptPackTestRecord } fr
 import { ModelComparisonService, type ModelComparisonRepositoryPort } from "./model-comparison-service.js";
 
 describe("ModelComparisonService", () => {
-  it("creates blind comparisons from prompt-pack tests with stable labels and queued placeholders", () => {
+  it("creates blind comparisons from prompt-pack tests with stable labels and queued placeholders", async () => {
     const service = new ModelComparisonService({
       repository: new InMemoryModelComparisonRepository(),
       clock: () => new Date("2026-06-05T12:00:00.000Z"),
       idFactory: idSequence("comparison-1"),
-      listPromptPackTests: () => [testRecord("test-a"), testRecord("test-b")],
+      listPromptPackTests: async () => [testRecord("test-a"), testRecord("test-b")],
     });
 
-    const run = service.createComparison({
+    const run = await service.createComparison({
       packId: "pack-1",
       allTests: true,
       candidates: [
@@ -39,16 +39,16 @@ describe("ModelComparisonService", () => {
     });
   });
 
-  it("selects requested prompt-pack tests and links latest matching prompt-pack runs", () => {
+  it("selects requested prompt-pack tests and links latest matching prompt-pack runs", async () => {
     const service = new ModelComparisonService({
       repository: new InMemoryModelComparisonRepository(),
       clock: () => new Date("2026-06-05T12:00:00.000Z"),
       idFactory: idSequence("comparison-1"),
-      listPromptPackTests: () => [testRecord("test-a"), testRecord("test-b"), testRecord("test-c")],
-      listPromptPackRunsByTest: (testId) => runsByTestId[testId] ?? [],
+      listPromptPackTests: async () => [testRecord("test-a"), testRecord("test-b"), testRecord("test-c")],
+      listPromptPackRunsByTest: async (testId) => runsByTestId[testId] ?? [],
     });
 
-    const run = service.createComparison({
+    const run = await service.createComparison({
       packId: "pack-1",
       testIds: ["test-b", "test-a", "test-b"],
       candidates: [
@@ -70,22 +70,22 @@ describe("ModelComparisonService", () => {
       (result) => result.testId === "test-b" && result.candidateId === run.candidates[1]?.candidateId,
     );
     expect(placeholder?.runId).toBeUndefined();
-    expect(service.getComparison(run.comparisonId).advisory).toMatchObject({
+    expect((await service.getComparison(run.comparisonId)).advisory).toMatchObject({
       responseCount: 1,
       missingResultCount: 3,
       recommendedNextAction: "run_prompt_pack",
     });
   });
 
-  it("persists judgments only for comparison tests and candidates", () => {
+  it("persists judgments only for comparison tests and candidates", async () => {
     const repository = new InMemoryModelComparisonRepository();
     const service = new ModelComparisonService({
       repository,
       clock: () => new Date("2026-06-05T12:00:00.000Z"),
       idFactory: idSequence("cmp", "judgment-1"),
-      listPromptPackTests: () => [testRecord("test-a")],
+      listPromptPackTests: async () => [testRecord("test-a")],
     });
-    const run = service.createComparison({
+    const run = await service.createComparison({
       packId: "pack-1",
       allTests: true,
       candidates: [
@@ -94,7 +94,7 @@ describe("ModelComparisonService", () => {
       ],
     });
 
-    const judgment = service.addJudgment(run.comparisonId, {
+    const judgment = await service.addJudgment(run.comparisonId, {
       testId: "test-a",
       winnerCandidateId: run.candidates[0]?.candidateId,
       scores: run.candidates.map((candidate) => ({ candidateId: candidate.candidateId, quality: 3 })),
@@ -102,7 +102,7 @@ describe("ModelComparisonService", () => {
     });
 
     expect(judgment.judgmentId).toBe("judgment-1");
-    expect(service.getComparison(run.comparisonId)).toMatchObject({
+    expect(await service.getComparison(run.comparisonId)).toMatchObject({
       judgments: [
         expect.objectContaining({
           judgmentId: judgment.judgmentId,
@@ -115,13 +115,13 @@ describe("ModelComparisonService", () => {
         recommendedNextAction: "run_prompt_pack",
       },
     });
-    expect(() =>
+    await expect(
       service.addJudgment(run.comparisonId, {
         testId: "missing-test",
         scores: [],
       }),
-    ).toThrow(/testId/);
-    expect(() =>
+    ).rejects.toThrow(/testId/);
+    await expect(
       service.addJudgment(run.comparisonId, {
         testId: "test-a",
         scores: [
@@ -129,7 +129,7 @@ describe("ModelComparisonService", () => {
           { candidateId: run.candidates[0]!.candidateId, quality: 3 },
         ],
       }),
-    ).toThrow(/duplicated/);
+    ).rejects.toThrow(/duplicated/);
   });
 });
 
@@ -152,12 +152,12 @@ const runsByTestId: Record<string, PromptPackRunRecord[]> = {
 class InMemoryModelComparisonRepository implements ModelComparisonRepositoryPort {
   private readonly runs = new Map<string, ModelComparisonRun>();
 
-  create(run: ModelComparisonRun): ModelComparisonRun {
+  async create(run: ModelComparisonRun): Promise<ModelComparisonRun> {
     this.runs.set(run.comparisonId, cloneRun(run));
-    return this.get(run.comparisonId);
+    return await this.get(run.comparisonId);
   }
 
-  get(comparisonId: string): ModelComparisonRun {
+  async get(comparisonId: string): Promise<ModelComparisonRun> {
     const run = this.runs.get(comparisonId);
     if (!run) {
       throw new Error("not found");
@@ -165,12 +165,12 @@ class InMemoryModelComparisonRepository implements ModelComparisonRepositoryPort
     return cloneRun(run);
   }
 
-  list(): ModelComparisonRun[] {
+  async list(): Promise<ModelComparisonRun[]> {
     return Array.from(this.runs.values()).map(cloneRun);
   }
 
-  addJudgment(comparisonId: string, judgment: ModelComparisonRun["judgments"][number]) {
-    const run = this.get(comparisonId);
+  async addJudgment(comparisonId: string, judgment: ModelComparisonRun["judgments"][number]) {
+    const run = await this.get(comparisonId);
     run.judgments.push(judgment);
     run.updatedAt = judgment.createdAt;
     this.runs.set(comparisonId, cloneRun(run));

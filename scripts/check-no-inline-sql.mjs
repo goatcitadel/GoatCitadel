@@ -5,12 +5,17 @@ const repoRoot = process.cwd();
 const servicesRoot = path.join(repoRoot, "apps", "gateway", "src", "services");
 const allowlist = new Set([
   "apps/gateway/src/services/backup-retention-service.ts",
+  "apps/gateway/src/services/chat-autonomous-turn-service.ts",
+  "apps/gateway/src/services/chat-generated-artifact-service.ts",
   "apps/gateway/src/services/database-cutover-service.ts",
+  "apps/gateway/src/services/durable-execution-service.ts",
+  "apps/gateway/src/services/gateway/chat-stream-runtime.ts",
   "apps/gateway/src/services/gateway-service.ts",
   "apps/gateway/src/services/improvement-service.ts",
   "apps/gateway/src/services/memory-item-helpers.ts",
   "apps/gateway/src/services/memory-lifecycle-service.ts",
   "apps/gateway/src/services/prompt-pack-service.ts",
+  "apps/gateway/src/services/settings-auth-service.ts",
   "apps/gateway/src/services/skill-state-service.ts",
   "apps/gateway/src/services/chat-proactive-service.ts",
   "apps/gateway/src/services/gateway/cron-automation-service.ts",

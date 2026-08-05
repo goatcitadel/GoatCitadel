@@ -59,30 +59,33 @@ export interface RemoteWorkerRegistryStore {
   listWorkerRegistry(
     registryWorkspaceId: string,
     options?: { limit?: number; cursor?: string },
-  ): ListRemoteWorkerRegistryResult;
-  findWorkerRegistryEntry(registryWorkspaceId: string, workerId: string): RemoteWorkerRegistryRecord | undefined;
+  ): Promise<ListRemoteWorkerRegistryResult>;
+  findWorkerRegistryEntry(
+    registryWorkspaceId: string,
+    workerId: string,
+  ): Promise<RemoteWorkerRegistryRecord | undefined>;
 }
 
 export interface RemoteWorkerAssignmentStore {
   listAssignmentAggregates(
     registryWorkspaceId: string,
     options?: ListRemoteWorkerAssignmentAggregatesOptions,
-  ): ListRemoteWorkerAssignmentAggregatesResult;
+  ): Promise<ListRemoteWorkerAssignmentAggregatesResult>;
   findAssignmentAggregate(
     registryWorkspaceId: string,
     assignmentId: string,
-  ): RemoteWorkerAssignmentAggregate | undefined;
+  ): Promise<RemoteWorkerAssignmentAggregate | undefined>;
   findCurrentGeneration(
     registryWorkspaceId: string,
     assignmentId: string,
-  ): RemoteWorkerAssignmentGenerationRecord | undefined;
+  ): Promise<RemoteWorkerAssignmentGenerationRecord | undefined>;
   listEventsAfter(
     registryWorkspaceId: string,
     assignmentId: string,
     assignmentGeneration: number,
     afterSequence?: number,
     limit?: number,
-  ): RemoteWorkerAssignmentEventRecord[];
+  ): Promise<RemoteWorkerAssignmentEventRecord[]>;
 }
 
 export interface ListRemoteWorkerAssignmentsInput {
@@ -131,12 +134,12 @@ export class RemoteWorkersRouteService {
     private readonly now: () => string = () => new Date().toISOString(),
   ) {}
 
-  public listRegistry(input: ListRemoteWorkerRegistryInput): RemoteWorkerRegistryPage {
+  public async listRegistry(input: ListRemoteWorkerRegistryInput): Promise<RemoteWorkerRegistryPage> {
     const workspaceId = inputIdentifier(input.workspaceId);
     const limit = inputLimit(input.limit);
     const cursor = input.cursor === undefined ? undefined : decodeRemoteWorkerRegistryCursor(input.cursor);
     if (cursor && cursor.workspaceId !== workspaceId) throw new RemoteWorkerRegistryInputError();
-    const stored = this.registry.listWorkerRegistry(workspaceId, {
+    const stored = await this.registry.listWorkerRegistry(workspaceId, {
       limit,
       ...(cursor ? { cursor: cursor.lastWorkerId } : {}),
     });
@@ -174,10 +177,10 @@ export class RemoteWorkersRouteService {
     });
   }
 
-  public getRegistryEntry(input: GetRemoteWorkerRegistryInput): RemoteWorkerRegistryDetail {
+  public async getRegistryEntry(input: GetRemoteWorkerRegistryInput): Promise<RemoteWorkerRegistryDetail> {
     const workspaceId = inputIdentifier(input.workspaceId);
     const workerId = inputIdentifier(input.workerId);
-    const stored = this.registry.findWorkerRegistryEntry(workspaceId, workerId);
+    const stored = await this.registry.findWorkerRegistryEntry(workspaceId, workerId);
     if (!stored) throw new NotFoundError({ entity: "remote worker registry entry", id: "unavailable" });
     if (stored.admission.workerId !== workerId) {
       throw new TypeError("Remote worker registry storage detail is inconsistent.");
@@ -193,7 +196,7 @@ export class RemoteWorkersRouteService {
     });
   }
 
-  public listAssignments(input: ListRemoteWorkerAssignmentsInput): RemoteWorkerAssignmentPage {
+  public async listAssignments(input: ListRemoteWorkerAssignmentsInput): Promise<RemoteWorkerAssignmentPage> {
     const workspaceId = inputIdentifier(input.workspaceId);
     const filters: RemoteWorkerAssignmentFilters = {
       ...(input.workerId === undefined ? {} : { workerId: inputIdentifier(input.workerId) }),
@@ -203,7 +206,7 @@ export class RemoteWorkersRouteService {
     const limit = inputLimit(input.limit, REMOTE_WORKER_ASSIGNMENT_DEFAULT_LIMIT, REMOTE_WORKER_ASSIGNMENT_MAX_LIMIT);
     const cursor = input.cursor === undefined ? undefined : decodeRemoteWorkerAssignmentCursor(input.cursor);
     if (cursor && !cursorMatchesQuery(cursor, workspaceId, filters)) throw new RemoteWorkerRegistryInputError();
-    const stored = this.assignments.listAssignmentAggregates(workspaceId, {
+    const stored = await this.assignments.listAssignmentAggregates(workspaceId, {
       ...(filters.workerId === undefined ? {} : { workerId: filters.workerId }),
       ...(filters.sessionId === undefined ? {} : { sessionId: filters.sessionId }),
       ...(filters.turnId === undefined ? {} : { turnId: filters.turnId }),
@@ -237,7 +240,9 @@ export class RemoteWorkersRouteService {
     });
   }
 
-  public getAssignmentEvents(input: GetRemoteWorkerAssignmentEventsInput): RemoteWorkerAssignmentEventPage {
+  public async getAssignmentEvents(
+    input: GetRemoteWorkerAssignmentEventsInput,
+  ): Promise<RemoteWorkerAssignmentEventPage> {
     const workspaceId = inputIdentifier(input.workspaceId);
     const assignmentId = inputIdentifier(input.assignmentId);
     const afterSequence = inputNonNegative(input.afterSequence, 0);
@@ -246,9 +251,9 @@ export class RemoteWorkersRouteService {
       REMOTE_WORKER_ASSIGNMENT_EVENT_DEFAULT_LIMIT,
       REMOTE_WORKER_ASSIGNMENT_EVENT_MAX_LIMIT,
     );
-    const generation = this.assignments.findCurrentGeneration(workspaceId, assignmentId);
+    const generation = await this.assignments.findCurrentGeneration(workspaceId, assignmentId);
     if (!generation) throw new NotFoundError({ entity: "remote worker assignment", id: "unavailable" });
-    const events = this.assignments.listEventsAfter(
+    const events = await this.assignments.listEventsAfter(
       workspaceId,
       assignmentId,
       generation.assignmentGeneration,
@@ -284,10 +289,10 @@ export class RemoteWorkersRouteService {
     });
   }
 
-  public getReconciliation(input: GetRemoteWorkerReconciliationInput): RemoteWorkerReconciliation {
+  public async getReconciliation(input: GetRemoteWorkerReconciliationInput): Promise<RemoteWorkerReconciliation> {
     const workspaceId = inputIdentifier(input.workspaceId);
     const workerId = inputIdentifier(input.workerId);
-    const worker = this.registry.findWorkerRegistryEntry(workspaceId, workerId);
+    const worker = await this.registry.findWorkerRegistryEntry(workspaceId, workerId);
     if (!worker) throw new NotFoundError({ entity: "remote worker registry entry", id: "unavailable" });
     const observedAt = this.now();
     const now = this.now();
@@ -297,7 +302,7 @@ export class RemoteWorkersRouteService {
     let cursor: ListRemoteWorkerAssignmentAggregatesOptions["cursor"];
     const seenCursors = new Set<string>();
     for (let pageNumber = 1; ; pageNumber += 1) {
-      const page = this.assignments.listAssignmentAggregates(workspaceId, {
+      const page = await this.assignments.listAssignmentAggregates(workspaceId, {
         workerId,
         limit: REMOTE_WORKER_ASSIGNMENT_MAX_LIMIT,
         ...(cursor === undefined ? {} : { cursor }),

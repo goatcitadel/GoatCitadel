@@ -93,32 +93,32 @@ describe("ChatCompactionBreakerActionService", () => {
         }),
       );
 
-      expect(
+      await expect(
         service.resolvePendingForceAction({
           sessionId: "session-1",
           sealedDimensionHash: "dimension-a",
           actorId: "token:raw-operator-secret",
         }),
-      ).toEqual({ actionId: action.actionId, actorHash: action.actorHash });
+      ).resolves.toEqual({ actionId: action.actionId, actorHash: action.actorHash });
       expect(isUseAuthorized).toHaveBeenCalledWith({
         action: expect.objectContaining({ actionId: action.actionId, status: "pending" }),
         observedAt: NOW.toISOString(),
       });
       isUseAuthorized.mockReturnValue(false);
-      expect(
+      await expect(
         service.resolvePendingForceAction({
           sessionId: "session-1",
           sealedDimensionHash: "dimension-a",
           actorId: "token:raw-operator-secret",
         }),
-      ).toBeUndefined();
-      expect(
+      ).resolves.toBeUndefined();
+      await expect(
         service.resolvePendingForceAction({
           sessionId: "session-1",
           sealedDimensionHash: "dimension-a",
           actorId: "token:other-operator",
         }),
-      ).toBeUndefined();
+      ).resolves.toBeUndefined();
     } finally {
       fixture.db.close();
     }
@@ -161,13 +161,13 @@ describe("ChatCompactionBreakerActionService", () => {
         status: "rejected",
         rejectionReason: "Approval evidence does not match the requested approval",
       });
-      expect(
+      await expect(
         service.resolvePendingForceAction({
           sessionId: "session-1",
           sealedDimensionHash: "dimension-a",
           actorId: "token:operator-1",
         }),
-      ).toBeUndefined();
+      ).resolves.toBeUndefined();
     } finally {
       fixture.db.close();
     }
@@ -307,7 +307,7 @@ describe("ChatCompactionBreakerActionService", () => {
     }
   });
 
-  it("revalidates current authorization before consuming a pending repair action", () => {
+  it("revalidates current authorization before consuming a pending repair action", async () => {
     const fixture = createFixture();
     try {
       const tripped = tripBreaker(fixture.repo, "session-1", "dimension-a");
@@ -346,7 +346,7 @@ describe("ChatCompactionBreakerActionService", () => {
         now: () => NOW,
       });
 
-      expect(() => service.repair({ sessionId: "session-1", actionId: action.actionId, actorId })).toThrow(
+      await expect(service.repair({ sessionId: "session-1", actionId: action.actionId, actorId })).rejects.toThrow(
         /no longer authorized/i,
       );
       expect(isUseAuthorized).toHaveBeenCalledWith({

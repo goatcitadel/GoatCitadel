@@ -85,7 +85,7 @@ export async function streamSessionControlEvents(
   // and is mapped to its typed HTTP status with no stream ever opened.
   let initialPage: ControlEventStreamPage;
   try {
-    initialPage = service.pageControlEventStream({
+    initialPage = await service.pageControlEventStream({
       actor: context.actor,
       sessionId: context.sessionId,
       afterCursor: clientCursor,
@@ -237,7 +237,7 @@ export async function streamSessionControlEvents(
     }
     let next: ControlEventStreamPage;
     try {
-      next = service.pageControlEventStream({
+      next = await service.pageControlEventStream({
         actor: context.actor,
         sessionId: context.sessionId,
         afterCursor: sentThrough,
@@ -263,7 +263,7 @@ export async function streamSessionControlEvents(
     }
     let page: ControlEventStreamPage;
     try {
-      page = service.pageControlEventStream({
+      page = await service.pageControlEventStream({
         actor: context.actor,
         sessionId: context.sessionId,
         afterCursor: sentThrough,

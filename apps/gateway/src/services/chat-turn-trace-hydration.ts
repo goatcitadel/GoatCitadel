@@ -6,7 +6,7 @@
  */
 
 import type { ChatMessageRecord, ChatTurnTraceRecord } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { buildSelectedPathTurnIds, resolveNewestLeafTurnId } from "./chat-thread-utils.js";
 
 type ChatTurnTraceHydrationStorage = Pick<
@@ -32,40 +32,42 @@ export interface LoadChatTurnSessionStateOptions extends ChatTurnTraceHydrationO
   isConversationTrace?: (trace: ChatTurnTraceRecord) => boolean;
 }
 
-export function createHydratedChatTurnTrace(
+export async function createHydratedChatTurnTrace(
   deps: ChatTurnTraceHydrationDependencies,
   turnId: string,
   trace: ChatTurnTraceRecord,
   options?: ChatTurnTraceHydrationOptions,
-): ChatTurnTraceRecord {
+): Promise<ChatTurnTraceRecord> {
   return {
     ...trace,
-    toolRuns: deps.storage.chatToolRuns.listByTurn(turnId),
+    toolRuns: await deps.storage.chatToolRuns.listByTurn(turnId),
     citations: trace.citations ?? [],
     ...(options?.includeDecisionTrace && deps.storage.runtimeDecisionTraces
-      ? { decisionTrace: deps.storage.runtimeDecisionTraces.list({ turnId, limit: 100 }) }
+      ? { decisionTrace: await deps.storage.runtimeDecisionTraces.list({ turnId, limit: 100 }) }
       : {}),
   };
 }
 
-export function listHydratedChatTurnTraces(
+export async function listHydratedChatTurnTraces(
   deps: ChatTurnTraceHydrationDependencies,
   sessionId: string,
   limit = 200,
   options?: ChatTurnTraceHydrationOptions,
-): ChatTurnTraceRecord[] {
-  const traces = deps.storage.chatTurnTraces.listBySession(sessionId, limit);
-  return hydrateChatTurnTraces(deps, traces, options);
+): Promise<ChatTurnTraceRecord[]> {
+  const traces = await deps.storage.chatTurnTraces.listBySession(sessionId, limit);
+  return await hydrateChatTurnTraces(deps, traces, options);
 }
 
-export function hydrateChatTurnTraces(
+export async function hydrateChatTurnTraces(
   deps: ChatTurnTraceHydrationDependencies,
   traces: ChatTurnTraceRecord[],
   options?: ChatTurnTraceHydrationOptions,
-): ChatTurnTraceRecord[] {
-  const toolRunsByTurnId = deps.storage.chatToolRuns.listByTurnIds(traces.map((trace) => trace.turnId));
-  const executionPlansById = loadExecutionPlansById(deps, traces);
-  const decisionTraceByTurnId = options?.includeDecisionTrace ? loadDecisionTraceByTurnId(deps, traces) : new Map();
+): Promise<ChatTurnTraceRecord[]> {
+  const toolRunsByTurnId = await deps.storage.chatToolRuns.listByTurnIds(traces.map((trace) => trace.turnId));
+  const executionPlansById = await loadExecutionPlansById(deps, traces);
+  const decisionTraceByTurnId = options?.includeDecisionTrace
+    ? await loadDecisionTraceByTurnId(deps, traces)
+    : new Map();
 
   return traces.map((trace) => ({
     ...trace,
@@ -77,30 +79,34 @@ export function hydrateChatTurnTraces(
   }));
 }
 
-function loadExecutionPlansById(
+async function loadExecutionPlansById(
   deps: ChatTurnTraceHydrationDependencies,
   traces: ChatTurnTraceRecord[],
-): Map<string, ReturnType<Storage["chatExecutionPlans"]["get"]>> {
+): Promise<Map<string, Awaited<ReturnType<Storage["chatExecutionPlans"]["get"]>>>> {
   const executionPlanIds = [
     ...new Set(traces.map((trace) => trace.executionPlanId).filter((item): item is string => Boolean(item))),
   ];
   return new Map(
-    executionPlanIds
-      .map((executionPlanId) => {
-        try {
-          return [executionPlanId, deps.storage.chatExecutionPlans.get(executionPlanId)] as const;
-        } catch {
-          return undefined;
-        }
-      })
-      .filter((entry): entry is readonly [string, ReturnType<Storage["chatExecutionPlans"]["get"]>] => Boolean(entry)),
+    (
+      await Promise.all(
+        executionPlanIds.map(async (executionPlanId) => {
+          try {
+            return [executionPlanId, await deps.storage.chatExecutionPlans.get(executionPlanId)] as const;
+          } catch {
+            return undefined;
+          }
+        }),
+      )
+    ).filter((entry): entry is readonly [string, Awaited<ReturnType<Storage["chatExecutionPlans"]["get"]>>] =>
+      Boolean(entry),
+    ),
   );
 }
 
-function loadDecisionTraceByTurnId(
+async function loadDecisionTraceByTurnId(
   deps: ChatTurnTraceHydrationDependencies,
   traces: ChatTurnTraceRecord[],
-): Map<string, NonNullable<ChatTurnTraceRecord["decisionTrace"]>> {
+): Promise<Map<string, NonNullable<ChatTurnTraceRecord["decisionTrace"]>>> {
   if (!deps.storage.runtimeDecisionTraces || traces.length === 0) {
     return new Map();
   }
@@ -108,7 +114,7 @@ function loadDecisionTraceByTurnId(
   if (!sessionId) {
     return new Map();
   }
-  const records = deps.storage.runtimeDecisionTraces.list({
+  const records = await deps.storage.runtimeDecisionTraces.list({
     sessionId,
     limit: Math.max(100, Math.min(traces.length * 40, 500)),
   });
@@ -140,12 +146,12 @@ export function buildChatTurnChildrenMap(traces: ChatTurnTraceRecord[]): Map<str
   return childrenByTurnId;
 }
 
-export function resolveChatActiveLeafTurnId(
+export async function resolveChatActiveLeafTurnId(
   deps: ChatTurnTraceHydrationDependencies,
   sessionId: string,
   traces: ChatTurnTraceRecord[],
-): string | undefined {
-  const branchState = deps.storage.chatSessionBranchState.get(sessionId);
+): Promise<string | undefined> {
+  const branchState = await deps.storage.chatSessionBranchState.get(sessionId);
   if (branchState && traces.some((trace) => trace.turnId === branchState.activeLeafTurnId)) {
     return branchState.activeLeafTurnId;
   }
@@ -175,7 +181,11 @@ export function resolveChatActiveLeafTurnId(
     ),
     buildChatTurnChildrenMap(traces),
   );
-  deps.storage.chatSessionBranchState.setActiveLeaf(sessionId, newestLeafTurnId, newest.finishedAt ?? newest.startedAt);
+  await deps.storage.chatSessionBranchState.setActiveLeaf(
+    sessionId,
+    newestLeafTurnId,
+    newest.finishedAt ?? newest.startedAt,
+  );
   return newestLeafTurnId;
 }
 
@@ -204,7 +214,7 @@ export async function loadChatTurnSessionState(
   activeLeafTurnId?: string;
 }> {
   await deps.ensureChatMessageProjection(sessionId);
-  const rawTraces = deps.storage.chatTurnTraces.listBySession(sessionId, 2_000);
+  const rawTraces = await deps.storage.chatTurnTraces.listBySession(sessionId, 2_000);
   const conversationTraces = options.isConversationTrace ? rawTraces.filter(options.isConversationTrace) : rawTraces;
   const turnLineageById = new Map(
     conversationTraces.map((trace) => [
@@ -216,22 +226,25 @@ export async function loadChatTurnSessionState(
     ]),
   );
   const branchStateBeforeResolution = options.isConversationTrace
-    ? deps.storage.chatSessionBranchState.get(sessionId)
+    ? await deps.storage.chatSessionBranchState.get(sessionId)
     : undefined;
   const conversationTurnIds = new Set(conversationTraces.map((trace) => trace.turnId));
-  const activeLeafTurnId = resolveChatActiveLeafTurnId(deps, sessionId, conversationTraces);
+  const activeLeafTurnId = await resolveChatActiveLeafTurnId(deps, sessionId, conversationTraces);
   if (
     options.isConversationTrace &&
     !activeLeafTurnId &&
     branchStateBeforeResolution &&
     !conversationTurnIds.has(branchStateBeforeResolution.activeLeafTurnId)
   ) {
-    deps.storage.chatSessionBranchState.clear(sessionId);
+    await deps.storage.chatSessionBranchState.clear(sessionId);
   }
   const selectedPathTurnIds = activeLeafTurnId ? buildSelectedPathTurnIds(turnLineageById, activeLeafTurnId) : [];
   const rawTraceById = new Map(rawTraces.map((trace) => [trace.turnId, trace]));
   const pathParentTurnIds = selectedPathTurnIds.map((turnId) => rawTraceById.get(turnId)?.parentTurnId);
-  const siblingTracesByParent = deps.storage.chatTurnTraces.listSiblingsByParentTurnIds(sessionId, pathParentTurnIds);
+  const siblingTracesByParent = await deps.storage.chatTurnTraces.listSiblingsByParentTurnIds(
+    sessionId,
+    pathParentTurnIds,
+  );
   const visibleTurnIds = new Set(selectedPathTurnIds);
   for (const siblings of siblingTracesByParent.values()) {
     for (const sibling of siblings) {
@@ -248,16 +261,18 @@ export async function loadChatTurnSessionState(
     .map((turnId) => rawTraceById.get(turnId))
     .filter((trace): trace is ChatTurnTraceRecord => Boolean(trace));
   const hydratedVisibleTracesById = new Map(
-    hydrateChatTurnTraces(deps, visibleRawTraces, {
-      includeDecisionTrace: options.includeDecisionTrace === true,
-    }).map((trace) => [trace.turnId, trace]),
+    (
+      await hydrateChatTurnTraces(deps, visibleRawTraces, {
+        includeDecisionTrace: options.includeDecisionTrace === true,
+      })
+    ).map((trace) => [trace.turnId, trace]),
   );
   const traces = rawTraces.map((trace) => hydratedVisibleTracesById.get(trace.turnId) ?? trace);
   const messageIds = visibleRawTraces.flatMap((trace) => [
     trace.userMessageId,
     ...(trace.assistantMessageId ? [trace.assistantMessageId] : []),
   ]);
-  const messagesById = deps.storage.chatMessages.listByMessageIds(messageIds);
+  const messagesById = await deps.storage.chatMessages.listByMessageIds(messageIds);
   const messages = [...messagesById.values()].sort((left, right) => {
     const leftTimestamp = Date.parse(left.timestamp) || 0;
     const rightTimestamp = Date.parse(right.timestamp) || 0;

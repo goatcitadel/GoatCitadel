@@ -24,14 +24,14 @@ export type MeshRouteService = RouteService<MeshRouteMethod>;
 
 export interface MeshRoutePortDependencies {
   meshService: MeshService;
-  publishRealtime: (eventType: string, source: string, payload: Record<string, unknown>) => void;
+  publishRealtime: (eventType: string, source: string, payload: Record<string, unknown>) => Promise<unknown>;
 }
 
 export function createMeshRoutePort(deps: MeshRoutePortDependencies): MeshRoutePort {
   return {
-    acquireMeshLease: (input) => {
-      const lease = deps.meshService.acquireLease(input);
-      deps.publishRealtime("system", "mesh", {
+    acquireMeshLease: async (input) => {
+      const lease = await deps.meshService.acquireLease(input);
+      await deps.publishRealtime("system", "mesh", {
         type: "mesh_lease_acquired",
         leaseKey: lease.leaseKey,
         holderNodeId: lease.holderNodeId,
@@ -40,9 +40,9 @@ export function createMeshRoutePort(deps: MeshRoutePortDependencies): MeshRouteP
       });
       return lease;
     },
-    claimMeshSessionOwner: (sessionId, input) => {
-      const owner = deps.meshService.claimSessionOwner(sessionId, input);
-      deps.publishRealtime("system", "mesh", {
+    claimMeshSessionOwner: async (sessionId, input) => {
+      const owner = await deps.meshService.claimSessionOwner(sessionId, input);
+      await deps.publishRealtime("system", "mesh", {
         type: "mesh_session_claimed",
         sessionId,
         ownerNodeId: owner.ownerNodeId,
@@ -53,9 +53,9 @@ export function createMeshRoutePort(deps: MeshRoutePortDependencies): MeshRouteP
     getMeshSessionOwner: (sessionId) => deps.meshService.getSessionOwner(sessionId),
     getMeshReadinessDiagnostics: () => deps.meshService.readinessDiagnostics(),
     getMeshStatus: () => deps.meshService.status(),
-    ingestMeshReplicationEvent: (input) => {
-      const event = deps.meshService.ingestReplicationEvent(input);
-      deps.publishRealtime("system", "mesh", {
+    ingestMeshReplicationEvent: async (input) => {
+      const event = await deps.meshService.ingestReplicationEvent(input);
+      await deps.publishRealtime("system", "mesh", {
         type: "mesh_replication_event",
         replicationId: event.replicationId,
         sourceNodeId: event.sourceNodeId,
@@ -69,9 +69,9 @@ export function createMeshRoutePort(deps: MeshRoutePortDependencies): MeshRouteP
     listMeshReplicationEvents: (limit, cursor) => deps.meshService.listReplicationEvents(limit, cursor),
     listMeshReplicationOffsets: (limit) => deps.meshService.listReplicationOffsets(limit),
     listMeshSessionOwners: (limit) => deps.meshService.listSessionOwners(limit),
-    meshJoin: (input) => {
-      const joined = deps.meshService.join(input);
-      deps.publishRealtime("system", "mesh", {
+    meshJoin: async (input) => {
+      const joined = await deps.meshService.join(input);
+      await deps.publishRealtime("system", "mesh", {
         type: "mesh_node_joined",
         nodeId: joined.node.nodeId,
         transport: joined.node.transport,
@@ -79,9 +79,9 @@ export function createMeshRoutePort(deps: MeshRoutePortDependencies): MeshRouteP
       });
       return joined;
     },
-    releaseMeshLease: (input) => {
-      const result = deps.meshService.releaseLease(input);
-      deps.publishRealtime("system", "mesh", {
+    releaseMeshLease: async (input) => {
+      const result = await deps.meshService.releaseLease(input);
+      await deps.publishRealtime("system", "mesh", {
         type: "mesh_lease_released",
         leaseKey: input.leaseKey,
         holderNodeId: input.holderNodeId,
@@ -90,9 +90,9 @@ export function createMeshRoutePort(deps: MeshRoutePortDependencies): MeshRouteP
       });
       return result;
     },
-    renewMeshLease: (input) => {
-      const lease = deps.meshService.renewLease(input);
-      deps.publishRealtime("system", "mesh", {
+    renewMeshLease: async (input) => {
+      const lease = await deps.meshService.renewLease(input);
+      await deps.publishRealtime("system", "mesh", {
         type: "mesh_lease_renewed",
         leaseKey: lease.leaseKey,
         holderNodeId: lease.holderNodeId,

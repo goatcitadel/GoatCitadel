@@ -3,41 +3,28 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayRuntimeConfig } from "./config.js";
 
 const mocks = vi.hoisted(() => {
-  class FakePostgresSyncDatabaseClient {
-    public close(): void {
-      mocks.closeCalls += 1;
-      if (mocks.closeError) {
-        throw mocks.closeError;
-      }
-    }
-  }
-
   class FakeStorage {
     public constructor(public readonly input: Record<string, unknown>) {
-      mocks.storageInputs.push(input);
-      if (mocks.storageError) {
-        throw mocks.storageError;
-      }
+      mocks.sqliteStorageInputs.push(input);
     }
   }
 
   return {
-    applyPostgresMigrationsSync: vi.fn(),
-    closeCalls: 0,
-    closeError: undefined as Error | undefined,
     connectionOptions: { database: "goatcitadel" },
+    createLocalAsyncStorage: vi.fn((storage: unknown) => ({ kind: "local", storage })),
+    createPostgresRemoteStorage: vi.fn((input: unknown) => ({ kind: "remote", input })),
+    createPostgresSyncCompatibilityStorage: vi.fn((input: unknown) => ({ kind: "sync-compat", input })),
     resolveGatewayPostgresConnectionOptions: vi.fn(),
-    storageError: undefined as Error | undefined,
-    storageInputs: [] as Array<Record<string, unknown>>,
-    FakePostgresSyncDatabaseClient,
+    sqliteStorageInputs: [] as Array<Record<string, unknown>>,
     FakeStorage,
   };
 });
 
 vi.mock("@goatcitadel/storage", () => ({
-  applyPostgresMigrationsSync: mocks.applyPostgresMigrationsSync,
-  PostgresSyncDatabaseClient: mocks.FakePostgresSyncDatabaseClient,
   Storage: mocks.FakeStorage,
+  createLocalAsyncStorage: mocks.createLocalAsyncStorage,
+  createPostgresRemoteStorage: mocks.createPostgresRemoteStorage,
+  createPostgresSyncCompatibilityStorage: mocks.createPostgresSyncCompatibilityStorage,
 }));
 
 vi.mock("./postgres-runtime-config.js", () => ({
@@ -46,70 +33,83 @@ vi.mock("./postgres-runtime-config.js", () => ({
 
 import { createGatewayStorage } from "./storage-factory.js";
 
-const config = {
+const postgresConfig = {
   rootDir: "C:\\goatcitadel-runtime",
+  dbPath: "C:\\goatcitadel-runtime\\data\\goatcitadel.db",
   assistant: {
     transcriptsDir: "data/transcripts",
     auditDir: "data/audit",
     database: {
       driver: "postgres",
-      postgres: { migrationsTable: "schema_migrations" },
+      sqlite: {},
+      postgres: { migrationsTable: "schema_migrations", asyncGatewayEnabled: true },
     },
   },
 } as GatewayRuntimeConfig;
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.applyPostgresMigrationsSync.mockReset();
-  mocks.closeCalls = 0;
-  mocks.closeError = undefined;
-  mocks.storageError = undefined;
-  mocks.storageInputs.length = 0;
+  mocks.sqliteStorageInputs.length = 0;
   mocks.resolveGatewayPostgresConnectionOptions.mockReturnValue(mocks.connectionOptions);
 });
 
 describe("createGatewayStorage", () => {
-  it("closes the Postgres worker and rethrows the original migration error", () => {
-    const migrationError = new Error("migration ledger mismatch");
-    mocks.applyPostgresMigrationsSync.mockImplementation(() => {
-      throw migrationError;
-    });
+  it("uses worker-owned async PostgreSQL storage by default", () => {
+    const storage = createGatewayStorage(postgresConfig);
 
-    expect(() => createGatewayStorage(config)).toThrow(migrationError);
-    expect(mocks.closeCalls).toBe(1);
-    expect(mocks.storageInputs).toEqual([]);
+    expect(storage).toMatchObject({ kind: "remote" });
+    expect(mocks.resolveGatewayPostgresConnectionOptions).toHaveBeenCalledWith(postgresConfig, {
+      applicationName: "goatcitadel-gateway-async",
+    });
+    expect(mocks.createPostgresRemoteStorage).toHaveBeenCalledWith({
+      connection: mocks.connectionOptions,
+      migrationsTable: "schema_migrations",
+      transcriptsDir: path.resolve(postgresConfig.rootDir, "data/transcripts"),
+      auditDir: path.resolve(postgresConfig.rootDir, "data/audit"),
+      startupWaitTimeoutMs: 180_000,
+    });
+    expect(mocks.createPostgresSyncCompatibilityStorage).not.toHaveBeenCalled();
+    expect(mocks.createLocalAsyncStorage).not.toHaveBeenCalled();
   });
 
-  it("does not let a cleanup error mask the original migration error", () => {
-    const migrationError = new Error("migration ledger mismatch");
-    mocks.closeError = new Error("worker close failed");
-    mocks.applyPostgresMigrationsSync.mockImplementation(() => {
-      throw migrationError;
-    });
+  it("keeps the explicit one-release PostgreSQL rollback path package-owned", () => {
+    const rollbackConfig = structuredClone(postgresConfig);
+    rollbackConfig.assistant.database.postgres.asyncGatewayEnabled = false;
+    const onWait = vi.fn();
 
-    expect(() => createGatewayStorage(config)).toThrow(migrationError);
-    expect(mocks.closeCalls).toBe(1);
+    const storage = createGatewayStorage(rollbackConfig, { onPostgresSyncWait: onWait });
+
+    expect(storage).toMatchObject({ kind: "local" });
+    expect(mocks.resolveGatewayPostgresConnectionOptions).toHaveBeenCalledWith(rollbackConfig, {
+      applicationName: "goatcitadel-gateway-sync-rollback",
+    });
+    expect(mocks.createPostgresSyncCompatibilityStorage).toHaveBeenCalledWith({
+      connection: mocks.connectionOptions,
+      migrationsTable: "schema_migrations",
+      transcriptsDir: path.resolve(rollbackConfig.rootDir, "data/transcripts"),
+      auditDir: path.resolve(rollbackConfig.rootDir, "data/audit"),
+      onWait,
+    });
+    expect(mocks.createPostgresRemoteStorage).not.toHaveBeenCalled();
+    expect(mocks.createLocalAsyncStorage).toHaveBeenCalledWith(expect.objectContaining({ kind: "sync-compat" }));
   });
 
-  it("closes the Postgres worker when Storage construction fails before ownership transfer", () => {
-    const storageError = new Error("storage construction failed");
-    mocks.storageError = storageError;
+  it("adapts SQLite storage to the same Promise-only boundary", () => {
+    const sqliteConfig = structuredClone(postgresConfig);
+    sqliteConfig.assistant.database.driver = "sqlite";
 
-    expect(() => createGatewayStorage(config)).toThrow(storageError);
-    expect(mocks.closeCalls).toBe(1);
-    expect(mocks.storageInputs).toHaveLength(1);
-  });
+    const storage = createGatewayStorage(sqliteConfig);
 
-  it("hands the live Postgres client to Storage without closing it after successful migrations", () => {
-    const storage = createGatewayStorage(config) as unknown as InstanceType<typeof mocks.FakeStorage>;
-
-    expect(storage).toBeInstanceOf(mocks.FakeStorage);
-    expect(mocks.closeCalls).toBe(0);
-    expect(mocks.storageInputs).toHaveLength(1);
-    expect(mocks.storageInputs[0]).toMatchObject({
-      db: expect.any(mocks.FakePostgresSyncDatabaseClient),
-      transcriptsDir: expect.stringContaining(path.join("data", "transcripts")),
-      auditDir: expect.stringContaining(path.join("data", "audit")),
-    });
+    expect(storage).toMatchObject({ kind: "local" });
+    expect(mocks.sqliteStorageInputs).toEqual([
+      {
+        dbPath: sqliteConfig.dbPath,
+        transcriptsDir: path.resolve(sqliteConfig.rootDir, "data/transcripts"),
+        auditDir: path.resolve(sqliteConfig.rootDir, "data/audit"),
+        tuning: sqliteConfig.assistant.database.sqlite,
+      },
+    ]);
+    expect(mocks.resolveGatewayPostgresConnectionOptions).not.toHaveBeenCalled();
+    expect(mocks.createPostgresRemoteStorage).not.toHaveBeenCalled();
   });
 });

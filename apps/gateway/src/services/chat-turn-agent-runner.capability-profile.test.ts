@@ -646,18 +646,20 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
         choices: [{ index: 0, message: { role: "assistant", content: "The delivery is unknown." } }],
       });
     const invokeTool = vi.fn();
-    const dispatchMeshCapabilityInvocation = vi.fn(async (_input: unknown, options: { executionFence: () => void }) => {
-      options.executionFence();
-      return {
-        invocationId: `mesh-invocation-${"b".repeat(48)}`,
-        disposition: "unknown" as const,
-        settled: true,
-        deliveryUncertain: true,
-        manualReconciliationRequired: true,
-        errorCode: "mesh_capability_dispatch_deadline_expired",
-        receipt: MESH_DISPATCH_RECEIPT,
-      };
-    });
+    const dispatchMeshCapabilityInvocation = vi.fn(
+      async (_input: unknown, options: { executionFence: () => Promise<void> }) => {
+        await options.executionFence();
+        return {
+          invocationId: `mesh-invocation-${"b".repeat(48)}`,
+          disposition: "unknown" as const,
+          settled: true,
+          deliveryUncertain: true,
+          manualReconciliationRequired: true,
+          errorCode: "mesh_capability_dispatch_deadline_expired",
+          receipt: MESH_DISPATCH_RECEIPT,
+        };
+      },
+    );
     const profile = buildProfile({ meshTool: true });
     const runner = new ChatTurnAgentRunner({
       storage: createProfileStorage(profile) as never,

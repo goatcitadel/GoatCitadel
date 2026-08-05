@@ -26,23 +26,23 @@ const MAX_BACKUP_ISSUE_CODES = 20;
 
 export interface RuntimeAuthorityProjectionDependencies {
   now?: () => Date;
-  listDurableRuns(limit: number): unknown[];
-  countDurableRuns(): number;
-  listRunningDurableRuns(limit: number): { items: unknown[]; total: number };
-  resolveDurableRunWorkspaceId(run: unknown): string | undefined;
-  listRealtimeEvents(limit: number): unknown[];
-  listApprovals(workspaceId: string, limit: number): unknown[];
+  listDurableRuns(limit: number): Promise<unknown[]>;
+  countDurableRuns(): Promise<number>;
+  listRunningDurableRuns(limit: number): Promise<{ items: unknown[]; total: number }>;
+  resolveDurableRunWorkspaceId(run: unknown): Promise<string | undefined>;
+  listRealtimeEvents(limit: number): Promise<unknown[]>;
+  listApprovals(workspaceId: string, limit: number): Promise<unknown[]>;
   listApprovalEffects(
     approvalIds: string[],
     limitPerApproval: number,
-  ): Array<{ approvalId: string; effects: unknown[]; total: number }>;
-  listMeshNodes(limit: number): unknown[];
-  listMeshLeases(limit: number): unknown[];
+  ): Promise<Array<{ approvalId: string; effects: unknown[]; total: number }>>;
+  listMeshNodes(limit: number): Promise<unknown[]>;
+  listMeshLeases(limit: number): Promise<unknown[]>;
   inspectLatestBackupTrust(): Promise<unknown>;
   getRuntimeIdentity(): unknown;
   getLocalRuntimeStatus(): unknown;
   getConfigGenerationHealth(): unknown;
-  listExternalSideEffects(workspaceId: string, limit: number): unknown[];
+  listExternalSideEffects(workspaceId: string, limit: number): Promise<unknown[]>;
 }
 
 type ReadResult<T> = { ok: true; value: T } | { ok: false; value: T };
@@ -74,13 +74,18 @@ export class RuntimeAuthorityProjectionService {
     const citadelScope = { kind: "citadel" } as const;
     const items: RuntimeAuthorityItem[] = [];
 
-    const runRead = readArraySafely(() => this.deps.listDurableRuns(MAX_DURABLE_RUN_SCAN), MAX_DURABLE_RUN_SCAN);
-    const runCountRead = readSafely(() => this.deps.countDurableRuns(), Number.NaN);
-    const runCandidates = runRead.value.map((raw) => ({
-      raw,
-      workspaceId: this.resolveRunWorkspaceId(raw),
-      normalized: normalizeDurableRun(raw),
-    }));
+    const runRead = await readArraySafelyAsync(
+      () => this.deps.listDurableRuns(MAX_DURABLE_RUN_SCAN),
+      MAX_DURABLE_RUN_SCAN,
+    );
+    const runCountRead = await readSafelyAsync(() => this.deps.countDurableRuns(), Number.NaN);
+    const runCandidates = await Promise.all(
+      runRead.value.map(async (raw) => ({
+        raw,
+        workspaceId: await this.resolveRunWorkspaceId(raw),
+        normalized: normalizeDurableRun(raw),
+      })),
+    );
     const unscopedRunCount = runCandidates.filter((candidate) => candidate.workspaceId === undefined).length;
     const scopedRunCandidates = runCandidates.filter((candidate) => candidate.workspaceId === workspaceId);
     const duplicateRunIds = duplicateIds(
@@ -103,7 +108,10 @@ export class RuntimeAuthorityProjectionService {
       runs.length < 5 &&
       ((runCountIsValid && runCountRead.value > runRead.value.length) ||
         (!runCountIsValid && runRead.value.length >= MAX_DURABLE_RUN_SCAN));
-    const realtimeRead = readArraySafely(() => this.deps.listRealtimeEvents(MAX_REALTIME_EVENTS), MAX_REALTIME_EVENTS);
+    const realtimeRead = await readArraySafelyAsync(
+      () => this.deps.listRealtimeEvents(MAX_REALTIME_EVENTS),
+      MAX_REALTIME_EVENTS,
+    );
     items.push(
       ...buildRunItems(
         runRead.ok,
@@ -116,14 +124,16 @@ export class RuntimeAuthorityProjectionService {
       ),
     );
 
-    const runningRead = readRunningRunsSafely(
+    const runningRead = await readRunningRunsSafelyAsync(
       () => this.deps.listRunningDurableRuns(MAX_DURABLE_RUN_SCAN),
       MAX_DURABLE_RUN_SCAN,
     );
-    const runningCandidates = runningRead.value.items.map((raw) => ({
-      workspaceId: this.resolveRunWorkspaceId(raw),
-      normalized: normalizeDurableRun(raw),
-    }));
+    const runningCandidates = await Promise.all(
+      runningRead.value.items.map(async (raw) => ({
+        workspaceId: await this.resolveRunWorkspaceId(raw),
+        normalized: normalizeDurableRun(raw),
+      })),
+    );
     const unscopedRunningCount = runningCandidates.filter((candidate) => candidate.workspaceId === undefined).length;
     const scopedRunningCandidates = runningCandidates.filter((candidate) => candidate.workspaceId === workspaceId);
     const duplicateRunningIds = duplicateIds(
@@ -157,11 +167,14 @@ export class RuntimeAuthorityProjectionService {
       ),
     );
 
-    const approvalRead = readArraySafely(() => this.deps.listApprovals(workspaceId, MAX_APPROVALS), MAX_APPROVALS);
-    items.push(...this.buildApprovalItems(approvalRead, workspaceScope));
+    const approvalRead = await readArraySafelyAsync(
+      () => this.deps.listApprovals(workspaceId, MAX_APPROVALS),
+      MAX_APPROVALS,
+    );
+    items.push(...(await this.buildApprovalItems(approvalRead, workspaceScope)));
 
-    const meshNodes = readArraySafely(() => this.deps.listMeshNodes(MAX_MESH_NODES), MAX_MESH_NODES);
-    const meshLeases = readArraySafely(() => this.deps.listMeshLeases(MAX_MESH_LEASES), MAX_MESH_LEASES);
+    const meshNodes = await readArraySafelyAsync(() => this.deps.listMeshNodes(MAX_MESH_NODES), MAX_MESH_NODES);
+    const meshLeases = await readArraySafelyAsync(() => this.deps.listMeshLeases(MAX_MESH_LEASES), MAX_MESH_LEASES);
     items.push(buildMeshWorkerItem(meshNodes, meshLeases, citadelScope, observedNow));
     const localRuntimeRead = readSafely(() => this.deps.getLocalRuntimeStatus(), undefined);
     items.push(buildLocalRuntimeItem(localRuntimeRead, citadelScope, observedNow));
@@ -175,7 +188,7 @@ export class RuntimeAuthorityProjectionService {
     const configRead = readSafely(() => this.deps.getConfigGenerationHealth(), undefined);
     items.push(...buildConfigItems(configRead, citadelScope, observedNow));
 
-    const sideEffectRead = readArraySafely(
+    const sideEffectRead = await readArraySafelyAsync(
       () => this.deps.listExternalSideEffects(workspaceId, MAX_EXTERNAL_SIDE_EFFECTS),
       MAX_EXTERNAL_SIDE_EFFECTS,
     );
@@ -189,15 +202,18 @@ export class RuntimeAuthorityProjectionService {
     };
   }
 
-  private resolveRunWorkspaceId(run: unknown): string | undefined {
+  private async resolveRunWorkspaceId(run: unknown): Promise<string | undefined> {
     try {
-      return validWorkspaceId(this.deps.resolveDurableRunWorkspaceId(run));
+      return validWorkspaceId(await this.deps.resolveDurableRunWorkspaceId(run));
     } catch {
       return undefined;
     }
   }
 
-  private buildApprovalItems(read: ReadResult<unknown[]>, scope: RuntimeAuthorityScope): RuntimeAuthorityItem[] {
+  private async buildApprovalItems(
+    read: ReadResult<unknown[]>,
+    scope: RuntimeAuthorityScope,
+  ): Promise<RuntimeAuthorityItem[]> {
     if (!read.ok) {
       return [
         unavailableItem({
@@ -249,7 +265,7 @@ export class RuntimeAuthorityProjectionService {
     }
 
     const visibleApprovals = approvals.slice(0, 5);
-    const effectsRead = readApprovalEffectBatchesSafely(() =>
+    const effectsRead = await readApprovalEffectBatchesSafelyAsync(() =>
       this.deps.listApprovalEffects(
         visibleApprovals.map((approval) => approval.approvalId),
         MAX_APPROVAL_EFFECTS,
@@ -1573,15 +1589,6 @@ function readSafely<T>(read: () => T, fallback: T): ReadResult<T> {
   }
 }
 
-function readArraySafely(read: () => unknown, maxLength: number): ReadResult<unknown[]> {
-  try {
-    const value = read();
-    return Array.isArray(value) && value.length <= maxLength ? { ok: true, value } : { ok: false, value: [] };
-  } catch {
-    return { ok: false, value: [] };
-  }
-}
-
 function readApprovalEffectBatchesSafely(
   read: () => unknown,
 ): ReadResult<Map<string, { effects: unknown[]; total: number }>> {
@@ -1651,6 +1658,32 @@ async function readSafelyAsync<T>(read: () => Promise<T>, fallback: T): Promise<
   } catch {
     return { ok: false, value: fallback };
   }
+}
+
+async function readArraySafelyAsync(read: () => Promise<unknown>, maxLength: number): Promise<ReadResult<unknown[]>> {
+  const result = await readSafelyAsync(read, undefined);
+  return result.ok && Array.isArray(result.value) && result.value.length <= maxLength
+    ? { ok: true, value: result.value }
+    : { ok: false, value: [] };
+}
+
+async function readRunningRunsSafelyAsync(
+  read: () => Promise<unknown>,
+  maxItems: number,
+): Promise<ReadResult<{ items: unknown[]; total: number }>> {
+  const result = await readSafelyAsync(read, undefined);
+  return result.ok
+    ? readRunningRunsSafely(() => result.value, maxItems)
+    : { ok: false, value: { items: [], total: 0 } };
+}
+
+async function readApprovalEffectBatchesSafelyAsync(
+  read: () => Promise<unknown>,
+): Promise<ReadResult<Map<string, { effects: unknown[]; total: number }>>> {
+  const result = await readSafelyAsync(read, undefined);
+  return result.ok
+    ? readApprovalEffectBatchesSafely(() => result.value)
+    : { ok: false, value: new Map<string, { effects: unknown[]; total: number }>() };
 }
 
 function scopeForWorkspace(workspaceId: string): RuntimeAuthorityScope {

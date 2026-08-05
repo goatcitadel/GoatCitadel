@@ -6,7 +6,7 @@ import {
   type ModelUsageDispatchReconciliation,
   type ModelUsageEventListQuery,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { createRouteService, type RoutePort, type RouteService } from "./route-service-factory.js";
 
 export const costsRouteMethods = [
@@ -40,9 +40,9 @@ export function createCostsRoutePort(deps: CostsRoutePortDependencies): CostsRou
         "Prefer cached connector diagnostics for dashboard refreshes under 60 seconds.",
       ],
     }),
-    listModelUsageEvents: (workspaceId: string, query: Omit<ModelUsageEventListQuery, "workspaceId">) => {
+    listModelUsageEvents: async (workspaceId: string, query: Omit<ModelUsageEventListQuery, "workspaceId">) => {
       try {
-        return deps.storage.modelUsageEvents.list({
+        return await deps.storage.modelUsageEvents.list({
           ...query,
           workspaceId: requireRouteText(workspaceId, "workspaceId"),
         });
@@ -59,7 +59,7 @@ export function createCostsRoutePort(deps: CostsRoutePortDependencies): CostsRou
       evidence: string;
       actorId: string;
     }) => {
-      const existing = requireWorkspaceModelUsageEvent(deps.storage, input.workspaceId, input.eventId);
+      const existing = await requireWorkspaceModelUsageEvent(deps.storage, input.workspaceId, input.eventId);
       if (existing.transportStatus !== "dispatch_unknown") {
         throw new ConflictError({
           message: "Only dispatch-unknown model usage attempts can be reconciled.",
@@ -76,7 +76,7 @@ export function createCostsRoutePort(deps: CostsRoutePortDependencies): CostsRou
       }
       let record;
       try {
-        record = deps.storage.modelUsageEvents.reconcileDispatchUnknown(existing.eventId, {
+        record = await deps.storage.modelUsageEvents.reconcileDispatchUnknown(existing.eventId, {
           reconciliation: input.reconciliation,
           evidence,
           reconciledBy: actorId,
@@ -107,10 +107,10 @@ export function createCostsRouteService(port: CostsRoutePort): CostsRouteService
   return createRouteService(port, costsRouteMethods);
 }
 
-function requireWorkspaceModelUsageEvent(storage: Storage, workspaceId: string, eventId: string) {
+async function requireWorkspaceModelUsageEvent(storage: Storage, workspaceId: string, eventId: string) {
   const normalizedWorkspaceId = requireRouteText(workspaceId, "workspaceId");
   const normalizedEventId = requireRouteText(eventId, "eventId");
-  const record = storage.modelUsageEvents.findByEventId(normalizedEventId);
+  const record = await storage.modelUsageEvents.findByEventId(normalizedEventId);
   if (!record || record.workspaceId !== normalizedWorkspaceId) {
     // Deliberately do not reveal whether the event exists in another workspace.
     throw new NotFoundError({ entity: "Model usage event", id: normalizedEventId });

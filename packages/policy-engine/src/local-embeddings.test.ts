@@ -316,7 +316,9 @@ describe("local embeddings canonical usage accounting seam", () => {
     abandonError?: Error;
     markDispatchUnknownError?: Error;
   }): {
-    prepare: ReturnType<typeof vi.fn<(request: EmbeddingUsageDispatchInput) => EmbeddingUsageDispatchReservation>>;
+    prepare: ReturnType<
+      typeof vi.fn<(request: EmbeddingUsageDispatchInput) => Promise<EmbeddingUsageDispatchReservation>>
+    >;
     reservation: EmbeddingUsageDispatchReservation;
     attempt: EmbeddingUsageAttempt;
   } {
@@ -325,17 +327,17 @@ describe("local embeddings canonical usage accounting seam", () => {
       eventId: "usage-event-1",
       observe: vi.fn(() => sequence?.push("observe")),
       observeNormalized: vi.fn(() => sequence?.push("observe-normalized")),
-      succeed: vi.fn(() => {
+      succeed: vi.fn(async () => {
         sequence?.push("succeed");
         if (input?.succeedError) throw input.succeedError;
         return { eventId: "usage-event-1" };
       }),
-      fail: vi.fn(() => {
+      fail: vi.fn(async () => {
         sequence?.push("fail");
         if (input?.failError) throw input.failError;
         return { eventId: "usage-event-1" };
       }),
-      cancel: vi.fn(() => {
+      cancel: vi.fn(async () => {
         sequence?.push("cancel");
         if (input?.cancelError) throw input.cancelError;
         return { eventId: "usage-event-1" };
@@ -343,21 +345,21 @@ describe("local embeddings canonical usage accounting seam", () => {
     };
     const reservation: EmbeddingUsageDispatchReservation = {
       eventId: "usage-event-1",
-      accept: vi.fn(() => {
+      accept: vi.fn(async () => {
         sequence?.push("accept");
         if (input?.acceptError) throw input.acceptError;
         return attempt;
       }),
-      abandon: vi.fn(() => {
+      abandon: vi.fn(async () => {
         sequence?.push("abandon");
         if (input?.abandonError) throw input.abandonError;
       }),
-      markDispatchUnknown: vi.fn(() => {
+      markDispatchUnknown: vi.fn(async () => {
         sequence?.push("dispatch-unknown");
         if (input?.markDispatchUnknownError) throw input.markDispatchUnknownError;
       }),
     };
-    const prepare = vi.fn((_request: EmbeddingUsageDispatchInput) => {
+    const prepare = vi.fn(async (_request: EmbeddingUsageDispatchInput) => {
       sequence?.push("prepare");
       return reservation;
     });
@@ -434,9 +436,7 @@ describe("local embeddings canonical usage accounting seam", () => {
         eventId: "usage-event-1",
       },
     );
-    harness.prepare.mockReturnValueOnce(harness.reservation).mockImplementationOnce(() => {
-      throw duplicate;
-    });
+    harness.prepare.mockResolvedValueOnce(harness.reservation).mockRejectedValueOnce(duplicate);
     const fetchMock = vi.fn(
       async () =>
         new Response(JSON.stringify({ data: [{ embedding: vector }] }), {

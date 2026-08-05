@@ -27,7 +27,7 @@ import {
   sealExternalSourceImportItem,
   sealExternalSourceImportPlan,
   sealExternalSourceImportSettlement,
-  type ExternalSourceImportRepository,
+  type AsyncStorage,
 } from "@goatcitadel/storage";
 import {
   ExternalSourceAdapterRegistryError,
@@ -94,28 +94,10 @@ interface ExternalSourceImportServiceIds {
 }
 
 interface ExternalSourceImportServiceDependencies {
-  configs: {
-    find(workspaceId: string, sourceId: string): ExternalSourceRecord | undefined;
-  };
-  scans: {
-    get(
-      workspaceId: string,
-      scanId: string,
-    ): {
-      workspaceId: string;
-      sourceId: string;
-      scanId: string;
-      configRevision: number;
-      configSha256: string;
-      manifestSha256: string;
-      adapterId: ExternalSourceRecord["adapterId"];
-      adapterVersion: string;
-      status: "sealed" | "blocked";
-    };
-    getItem(workspaceId: string, scanId: string, itemId: string): ExternalSourceCatalogItem;
-  };
+  configs: Pick<AsyncStorage["externalSourceConfigs"], "find">;
+  scans: Pick<AsyncStorage["externalSourceScans"], "get" | "getItem">;
   imports: Pick<
-    ExternalSourceImportRepository,
+    AsyncStorage["externalSourceImports"],
     | "claimIntent"
     | "createPlanWithJourney"
     | "findIntentByIdempotencyKey"
@@ -126,9 +108,7 @@ interface ExternalSourceImportServiceDependencies {
     | "listUnsettledIntents"
     | "settleWithJourney"
   >;
-  workspaces: {
-    find(workspaceId: string): { lifecycleStatus: string } | undefined;
-  };
+  workspaces: Pick<AsyncStorage["workspaces"], "find">;
   reader: ExternalSourceReaderPort;
   staging: Pick<ExternalSourcePlanStagingStore, "cleanupExpired" | "discard" | "read" | "stage">;
   artifacts: Pick<ExternalSourceArtifactStore, "publish" | "read">;
@@ -181,9 +161,9 @@ export class ExternalSourceImportService {
   ): Promise<ExternalSourceImportPlanResponse> {
     assertSignal(signal);
     const input = normalizeExternalSourceImportPlanInput(rawInput);
-    const source = this.requireOwnedSource(input.workspaceId, input.sourceId, actor, true, true);
+    const source = await this.requireOwnedSource(input.workspaceId, input.sourceId, actor, true, true);
     if (source.revision !== input.expectedRevision) throw new ExternalSourceImportServiceError("conflict");
-    const scan = this.readScan(input.workspaceId, input.scanId);
+    const scan = await this.readScan(input.workspaceId, input.scanId);
     if (
       scan.sourceId !== source.sourceId ||
       scan.status !== "sealed" ||
@@ -194,8 +174,8 @@ export class ExternalSourceImportService {
     ) {
       throw new ExternalSourceImportServiceError("conflict");
     }
-    const catalogItems = input.selectedItemIds.map((itemId) =>
-      this.readCatalogItem(input.workspaceId, input.scanId, itemId),
+    const catalogItems = await Promise.all(
+      input.selectedItemIds.map(async (itemId) => await this.readCatalogItem(input.workspaceId, input.scanId, itemId)),
     );
     if (
       catalogItems.some(
@@ -287,7 +267,7 @@ export class ExternalSourceImportService {
     try {
       await this.dependencies.staging.stage({ plan, items: stagedItems, signal });
       const journeyEvent = buildExternalSourceDryRunJourneyEvent({ plan, actorId: actor.actorId });
-      const stored = this.dependencies.imports.createPlanWithJourney(plan, journeyEvent).plan;
+      const stored = (await this.dependencies.imports.createPlanWithJourney(plan, journeyEvent)).plan;
       return {
         schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,
         plan: stored,
@@ -306,20 +286,20 @@ export class ExternalSourceImportService {
   ): Promise<ExternalSourceImportApplyResponse> {
     assertSignal(signal);
     const input = normalizeExternalSourceImportApplyInput(rawInput);
-    const plan = this.readPlan(input.workspaceId, input.planId);
+    const plan = await this.readPlan(input.workspaceId, input.planId);
     if (
       plan.planSha256 !== input.expectedPlanSha256 ||
       deriveExternalSourceImportIdempotencyKey(plan) !== input.idempotencyKey
     ) {
       throw new ExternalSourceImportServiceError("conflict");
     }
-    this.requireOwnedSource(plan.workspaceId, plan.sourceId, actor, false, false);
-    const replay = this.dependencies.imports.findIntentByIdempotencyKey(plan.workspaceId, input.idempotencyKey);
+    await this.requireOwnedSource(plan.workspaceId, plan.sourceId, actor, false, false);
+    const replay = await this.dependencies.imports.findIntentByIdempotencyKey(plan.workspaceId, input.idempotencyKey);
     if (replay) {
       await this.resumeIntent(replay, signal);
-      return { ...this.getDetail(replay.workspaceId, replay.importId), applyDisposition: "replayed" };
+      return { ...(await this.getDetail(replay.workspaceId, replay.importId)), applyDisposition: "replayed" };
     }
-    this.requireOwnedSource(plan.workspaceId, plan.sourceId, actor, true, true);
+    await this.requireOwnedSource(plan.workspaceId, plan.sourceId, actor, true, true);
     const admittedAt = toIso(this.clock.nowMs());
     const intent = sealExternalSourceImportIntent({
       schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,
@@ -340,31 +320,31 @@ export class ExternalSourceImportService {
     });
     let claimed: ExternalSourceImportIntent;
     try {
-      claimed = this.dependencies.imports.claimIntent(intent);
+      claimed = await this.dependencies.imports.claimIntent(intent);
     } catch (error) {
       throw normalizeImportFailure(error, signal, "conflict");
     }
     const created = claimed.importId === intent.importId;
     await this.resumeIntent(claimed, signal);
     return {
-      ...this.getDetail(claimed.workspaceId, claimed.importId),
+      ...(await this.getDetail(claimed.workspaceId, claimed.importId)),
       applyDisposition: created ? "created" : "replayed",
     };
   }
 
-  public get(
+  public async get(
     workspaceId: string,
     importId: string,
     actor: ExternalSourceRequestActor,
-  ): ExternalSourceImportDetailResponse {
-    const intent = this.readIntent(workspaceId, importId);
-    this.requireOwnedSource(intent.workspaceId, intent.sourceId, actor, false, false);
-    return this.getDetail(workspaceId, importId);
+  ): Promise<ExternalSourceImportDetailResponse> {
+    const intent = await this.readIntent(workspaceId, importId);
+    await this.requireOwnedSource(intent.workspaceId, intent.sourceId, actor, false, false);
+    return await this.getDetail(workspaceId, importId);
   }
 
   public async recover(signal: AbortSignal, limit = 100): Promise<ExternalSourceImportRecoverySummary> {
     assertSignal(signal);
-    const intents = this.dependencies.imports.listUnsettledIntents(limit);
+    const intents = await this.dependencies.imports.listUnsettledIntents(limit);
     const summary: ExternalSourceImportRecoverySummary = {
       examined: intents.length,
       applied: 0,
@@ -391,29 +371,31 @@ export class ExternalSourceImportService {
     intent: ExternalSourceImportIntent,
     signal: AbortSignal,
   ): Promise<ExternalSourceImportSettlement> {
-    const existing = this.dependencies.imports.findSettlement(intent.workspaceId, intent.importId);
+    const existing = await this.dependencies.imports.findSettlement(intent.workspaceId, intent.importId);
     if (existing) return existing;
-    const plan = this.readPlan(intent.workspaceId, intent.planId);
+    const plan = await this.readPlan(intent.workspaceId, intent.planId);
     let staged: ExternalSourceStagedLease;
     try {
       staged = await this.dependencies.staging.read({ plan, signal });
     } catch (error) {
       if (error instanceof ExternalSourcePlanStagingStoreError) {
         const terminal = stagingTerminal(error.code);
-        if (terminal) return this.settleTerminal(plan, intent, terminal.disposition, terminal.blockerCode);
+        if (terminal) return await this.settleTerminal(plan, intent, terminal.disposition, terminal.blockerCode);
       }
       throw normalizeImportFailure(error, signal, "staging_unavailable");
     }
     let catalogItems: ExternalSourceCatalogItem[];
     try {
-      catalogItems = plan.selectedItemIds.map((itemId) => this.readCatalogItem(plan.workspaceId, plan.scanId, itemId));
+      catalogItems = await Promise.all(
+        plan.selectedItemIds.map(async (itemId) => await this.readCatalogItem(plan.workspaceId, plan.scanId, itemId)),
+      );
       assertStagedBinding(plan, staged, catalogItems);
     } catch (error) {
       if (
         error instanceof ExternalSourceImportServiceError &&
         (error.code === "conflict" || error.code === "not_found")
       ) {
-        return this.settleTerminal(plan, intent, "manual_reconciliation", "staging_binding_conflict");
+        return await this.settleTerminal(plan, intent, "manual_reconciliation", "staging_binding_conflict");
       }
       throw error;
     }
@@ -433,7 +415,7 @@ export class ExternalSourceImportService {
           signal,
         });
         if (verified.byteCount !== stagedItem.normalizedByteCount) {
-          return this.settleTerminal(plan, intent, "manual_reconciliation", "artifact_rehash_mismatch");
+          return await this.settleTerminal(plan, intent, "manual_reconciliation", "artifact_rehash_mismatch");
         }
         importItems.push(
           sealExternalSourceImportItem({
@@ -460,7 +442,7 @@ export class ExternalSourceImportService {
         error instanceof ExternalSourceArtifactStoreError &&
         ["digest_mismatch", "invalid_address", "tampered", "unsafe_path"].includes(error.code)
       ) {
-        return this.settleTerminal(plan, intent, "manual_reconciliation", "artifact_integrity_failure");
+        return await this.settleTerminal(plan, intent, "manual_reconciliation", "artifact_integrity_failure");
       }
       throw normalizeImportFailure(error, signal, "artifact_failure");
     }
@@ -476,18 +458,18 @@ export class ExternalSourceImportService {
       { ...withoutResult(settlement), journeyEventId: journeyEvent.eventId },
       importItems,
     );
-    const stored = this.persistSettlement(finalSettlement, importItems, journeyEvent);
+    const stored = await this.persistSettlement(finalSettlement, importItems, journeyEvent);
     await this.dependencies.staging.discard(plan.stagingLeaseId).catch(() => undefined);
     return stored;
   }
 
-  private settleTerminal(
+  private async settleTerminal(
     plan: ExternalSourceImportPlan,
     intent: ExternalSourceImportIntent,
     disposition: "blocked" | "manual_reconciliation",
     blockerCode: string,
-  ): ExternalSourceImportSettlement {
-    const existing = this.dependencies.imports.findSettlement(intent.workspaceId, intent.importId);
+  ): Promise<ExternalSourceImportSettlement> {
+    const existing = await this.dependencies.imports.findSettlement(intent.workspaceId, intent.importId);
     if (existing) return existing;
     const settlement = this.buildSettlement({
       intent,
@@ -501,19 +483,19 @@ export class ExternalSourceImportService {
       { ...withoutResult(settlement), journeyEventId: journeyEvent.eventId },
       [],
     );
-    return this.persistSettlement(finalSettlement, [], journeyEvent);
+    return await this.persistSettlement(finalSettlement, [], journeyEvent);
   }
 
-  private persistSettlement(
+  private async persistSettlement(
     settlement: ExternalSourceImportSettlement,
     items: readonly ExternalSourceImportItem[],
     journeyEvent: ReturnType<typeof buildExternalSourceSettlementJourneyEvent>,
-  ): ExternalSourceImportSettlement {
+  ): Promise<ExternalSourceImportSettlement> {
     try {
-      return this.dependencies.imports.settleWithJourney(settlement, items, journeyEvent).settlement;
+      return (await this.dependencies.imports.settleWithJourney(settlement, items, journeyEvent)).settlement;
     } catch (error) {
       if (hasCode(error, "STATE_CONFLICT") || hasCode(error, "WRITE_CONFLICT")) {
-        const concurrent = this.dependencies.imports.findSettlement(settlement.workspaceId, settlement.importId);
+        const concurrent = await this.dependencies.imports.findSettlement(settlement.workspaceId, settlement.importId);
         if (concurrent) return concurrent;
       }
       throw error;
@@ -556,31 +538,31 @@ export class ExternalSourceImportService {
     return toIso(Math.max(admittedAtMs, nowMs));
   }
 
-  private getDetail(workspaceId: string, importId: string): ExternalSourceImportDetailResponse {
-    const intent = this.readIntent(workspaceId, importId);
-    const settlement = this.dependencies.imports.findSettlement(workspaceId, importId);
+  private async getDetail(workspaceId: string, importId: string): Promise<ExternalSourceImportDetailResponse> {
+    const intent = await this.readIntent(workspaceId, importId);
+    const settlement = await this.dependencies.imports.findSettlement(workspaceId, importId);
     return {
       schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,
-      plan: this.readPlan(workspaceId, intent.planId),
+      plan: await this.readPlan(workspaceId, intent.planId),
       intent,
-      items: this.dependencies.imports.listItems(workspaceId, importId),
+      items: await this.dependencies.imports.listItems(workspaceId, importId),
       ...(settlement ? { settlement } : {}),
     };
   }
 
-  private requireOwnedSource(
+  private async requireOwnedSource(
     workspaceId: string,
     sourceId: string,
     actor: ExternalSourceRequestActor,
     requireActiveSource: boolean,
     requireActiveWorkspace: boolean,
-  ): ExternalSourceRecord {
+  ): Promise<ExternalSourceRecord> {
     assertActor(actor);
-    const workspace = this.dependencies.workspaces.find(workspaceId);
+    const workspace = await this.dependencies.workspaces.find(workspaceId);
     if (!workspace || (requireActiveWorkspace && workspace.lifecycleStatus !== "active")) {
       throw new ExternalSourceImportServiceError("not_found");
     }
-    const source = this.dependencies.configs.find(workspaceId, sourceId);
+    const source = await this.dependencies.configs.find(workspaceId, sourceId);
     if (
       !source ||
       source.ownerActorId !== actor.actorId ||
@@ -595,33 +577,37 @@ export class ExternalSourceImportService {
     return source;
   }
 
-  private readScan(workspaceId: string, scanId: string) {
+  private async readScan(workspaceId: string, scanId: string) {
     try {
-      return this.dependencies.scans.get(workspaceId, scanId);
+      return await this.dependencies.scans.get(workspaceId, scanId);
     } catch (error) {
       throw normalizeImportFailure(error, undefined, "not_found");
     }
   }
 
-  private readCatalogItem(workspaceId: string, scanId: string, itemId: string): ExternalSourceCatalogItem {
+  private async readCatalogItem(
+    workspaceId: string,
+    scanId: string,
+    itemId: string,
+  ): Promise<ExternalSourceCatalogItem> {
     try {
-      return this.dependencies.scans.getItem(workspaceId, scanId, itemId);
+      return await this.dependencies.scans.getItem(workspaceId, scanId, itemId);
     } catch (error) {
       throw normalizeImportFailure(error, undefined, "not_found");
     }
   }
 
-  private readPlan(workspaceId: string, planId: string): ExternalSourceImportPlan {
+  private async readPlan(workspaceId: string, planId: string): Promise<ExternalSourceImportPlan> {
     try {
-      return this.dependencies.imports.getPlan(workspaceId, planId);
+      return await this.dependencies.imports.getPlan(workspaceId, planId);
     } catch (error) {
       throw normalizeImportFailure(error, undefined, "not_found");
     }
   }
 
-  private readIntent(workspaceId: string, importId: string): ExternalSourceImportIntent {
+  private async readIntent(workspaceId: string, importId: string): Promise<ExternalSourceImportIntent> {
     try {
-      return this.dependencies.imports.getIntent(workspaceId, importId);
+      return await this.dependencies.imports.getIntent(workspaceId, importId);
     } catch (error) {
       throw normalizeImportFailure(error, undefined, "not_found");
     }

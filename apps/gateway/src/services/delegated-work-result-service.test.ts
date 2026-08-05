@@ -64,7 +64,7 @@ describe("delegated filesystem scope expansion", () => {
     ).toThrow(/duplicate/i);
   });
 
-  it("applies only a scope-hash-bound approved effect and retains approval lineage", () => {
+  it("applies only a scope-hash-bound approved effect and retains approval lineage", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "gc-scope-"));
     roots.push(root);
     fs.mkdirSync(path.join(root, "src"));
@@ -131,8 +131,8 @@ describe("delegated filesystem scope expansion", () => {
     );
     expect(claimed?.effectId).toBe(pending.effectId);
     if (!claimed) throw new Error("Expected scope approval effect claim.");
-    (
-      service as unknown as { handleDelegationScopeExpansionApply(effect: typeof claimed): void }
+    await (
+      service as unknown as { handleDelegationScopeExpansionApply(effect: typeof claimed): Promise<void> }
     ).handleDelegationScopeExpansionApply(claimed);
     const step = storage.chatDelegationSteps.get("step-1");
     expect(step.status).toBe("running");
@@ -142,7 +142,7 @@ describe("delegated filesystem scope expansion", () => {
     storage.close();
   });
 
-  it("blocks a stale approval when the current dispatch scope hash changed", () => {
+  it("blocks a stale approval when the current dispatch scope hash changed", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "gc-scope-"));
     roots.push(root);
     fs.mkdirSync(path.join(root, "src"));
@@ -212,8 +212,8 @@ describe("delegated filesystem scope expansion", () => {
       new Date(Date.now() + 60_000).toISOString(),
     );
     if (!claimed) throw new Error("Expected stale scope approval effect claim.");
-    (
-      service as unknown as { handleDelegationScopeExpansionApply(effect: typeof claimed): void }
+    await (
+      service as unknown as { handleDelegationScopeExpansionApply(effect: typeof claimed): Promise<void> }
     ).handleDelegationScopeExpansionApply(claimed);
     const step = storage.chatDelegationSteps.get("step-stale");
     expect(step.status).toBe("failed");

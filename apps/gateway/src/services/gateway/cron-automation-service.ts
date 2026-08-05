@@ -16,7 +16,7 @@ import {
 } from "@goatcitadel/contracts";
 import type { EvidenceEnvelopeCreateRequest } from "../evidence-envelope-service.js";
 import type { CronSpecMutationOwner } from "../cron-config-generation-owner.js";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import {
   SharedHostAdmissionClosedError,
   type SharedHostLifecycleAdmissionPort,
@@ -159,15 +159,15 @@ export interface CronSettlementRecoverySummary {
 export interface CronAutomationServiceDeps {
   storage: Storage;
   specOwner: CronSpecMutationOwner;
-  publishRealtime: (eventType: string, source: string, payload?: Record<string, unknown>) => void;
-  requireFeatureEnabled: (flag: "cronReviewQueueV1Enabled") => void;
-  isFeatureEnabled: (flag: "cronReviewQueueV1Enabled" | "cronEvidenceV1Enabled") => boolean;
+  publishRealtime: (eventType: string, source: string, payload?: Record<string, unknown>) => Promise<unknown>;
+  requireFeatureEnabled: (flag: "cronReviewQueueV1Enabled") => Promise<void>;
+  isFeatureEnabled: (flag: "cronReviewQueueV1Enabled" | "cronEvidenceV1Enabled") => Promise<boolean>;
   /**
    * Records a signed evidence envelope for a completed/failed cron run.
    * Optional and best-effort: envelope failure must never fail the run
    * (the gateway wiring wraps createEnvelope in a diagnostic try/catch).
    */
-  recordEvidenceEnvelope?: (input: EvidenceEnvelopeCreateRequest) => { envelopeId: string } | undefined;
+  recordEvidenceEnvelope?: (input: EvidenceEnvelopeCreateRequest) => Promise<{ envelopeId: string } | undefined>;
   sharedHostLifecycle?: SharedHostLifecycleAdmissionPort;
   runHandlers: {
     task: (
@@ -197,13 +197,13 @@ export class CronAutomationService {
 
   public constructor(private readonly deps: CronAutomationServiceDeps) {}
 
-  public listCronJobs(): CronJobRecord[] {
-    return this.deps.storage.cronJobs.list();
+  public async listCronJobs(): Promise<CronJobRecord[]> {
+    return await this.deps.storage.cronJobs.list();
   }
 
-  public getCronJob(jobId: string): CronJobRecord {
+  public async getCronJob(jobId: string): Promise<CronJobRecord> {
     const normalizedJobId = normalizeCronJobId(jobId);
-    const job = this.deps.storage.cronJobs.get(normalizedJobId);
+    const job = await this.deps.storage.cronJobs.get(normalizedJobId);
     if (!job) {
       throw new Error(`Cron job not found: ${normalizedJobId}`);
     }
@@ -223,7 +223,7 @@ export class CronAutomationService {
     contextFrom?: string;
   }): Promise<CronJobRecord> {
     const jobId = normalizeCronJobId(input.jobId);
-    if (this.deps.storage.cronJobs.get(jobId)) {
+    if (await this.deps.storage.cronJobs.get(jobId)) {
       throw new Error(`Cron job already exists: ${jobId}`);
     }
     const action = normalizeCronJobAction(input.action);
@@ -249,7 +249,7 @@ export class CronAutomationService {
     const saved = await this.deps.specOwner.createSpec(job, {
       nextRunAt: job.nextRunAt ?? null,
     });
-    this.deps.publishRealtime("system", "cron", {
+    await this.deps.publishRealtime("system", "cron", {
       type: "cron_job_created",
       jobId: saved.jobId,
       name: saved.name,
@@ -275,7 +275,7 @@ export class CronAutomationService {
     },
     expectedRevision: number,
   ): Promise<CronJobRecord> {
-    const current = this.getCronJob(jobId);
+    const current = await this.getCronJob(jobId);
     const action = input.action !== undefined ? normalizeCronJobAction(input.action) : current.action;
     assertCronActionMutationAllowed(action, "update", current, input);
     const updated: CronJobRecord = {
@@ -302,7 +302,7 @@ export class CronAutomationService {
     const saved = await this.deps.specOwner.updateSpec(updated, expectedRevision, {
       nextRunAt: updated.nextRunAt ?? null,
     });
-    this.deps.publishRealtime("system", "cron", {
+    await this.deps.publishRealtime("system", "cron", {
       type: "cron_job_updated",
       jobId: saved.jobId,
       name: saved.name,
@@ -313,8 +313,8 @@ export class CronAutomationService {
     return saved;
   }
 
-  public setCronJobEnabled(jobId: string, enabled: boolean, expectedRevision: number): Promise<CronJobRecord> {
-    return this.updateCronJob(jobId, { enabled }, expectedRevision);
+  public async setCronJobEnabled(jobId: string, enabled: boolean, expectedRevision: number): Promise<CronJobRecord> {
+    return await this.updateCronJob(jobId, { enabled }, expectedRevision);
   }
 
   public async deleteCronJob(jobId: string, expectedRevision: number): Promise<{ deleted: boolean; jobId: string }> {
@@ -324,7 +324,7 @@ export class CronAutomationService {
     }
     const deleted = await this.deps.specOwner.deleteSpec(normalizedJobId, expectedRevision);
     if (deleted) {
-      this.deps.publishRealtime("system", "cron", {
+      await this.deps.publishRealtime("system", "cron", {
         type: "cron_job_deleted",
         jobId: normalizedJobId,
       });
@@ -337,7 +337,7 @@ export class CronAutomationService {
 
   public async runCronJobNow(jobId: string, options: CronRunOptions = {}): Promise<CronRunResult> {
     const normalizedJobId = normalizeCronJobId(jobId);
-    const job = this.getCronJob(normalizedJobId);
+    const job = await this.getCronJob(normalizedJobId);
     const force = options.force === true;
     if (!force && !job.enabled) {
       throw new Error(`Cron job is paused: ${normalizedJobId}`);
@@ -357,19 +357,19 @@ export class CronAutomationService {
     }
     try {
       if (job.action === "agent_turn") {
-        return this.runCanonicalAgentTurnCronJob(job, options);
+        return await this.runCanonicalAgentTurnCronJob(job, options);
       }
-      const canonical = this.beginCanonicalInlineCronRun(job, options);
+      const canonical = await this.beginCanonicalInlineCronRun(job, options);
       if (canonical.outcome === "existing") return canonical.result;
       const { runId, token } = canonical;
       let runSummary: Record<string, unknown> = { result: "ok" };
       let watchdogReviewRecorded = false;
       try {
         if (job.action === "task") {
-          const context = this.resolveCronJobContext(job);
+          const context = await this.resolveCronJobContext(job);
           const taskResult = await this.deps.runHandlers.task(job, context);
           const finishedAt = new Date().toISOString();
-          const saved = this.recordCronRunSuccess(job, runId, finishedAt);
+          const saved = await this.recordCronRunSuccess(job, runId, finishedAt);
           runSummary = {
             ...runSummary,
             action: job.action,
@@ -379,7 +379,7 @@ export class CronAutomationService {
             force,
             reason: options.reason,
           };
-          this.deps.publishRealtime("cron_job_run", "cron", {
+          await this.deps.publishRealtime("cron_job_run", "cron", {
             type: "scheduled_task_created",
             jobId: saved.jobId,
             taskId: taskResult?.taskId,
@@ -390,7 +390,7 @@ export class CronAutomationService {
         } else if (job.action === "watchdog") {
           const watchdogResult = await this.deps.runHandlers.watchdog(job);
           const finishedAt = new Date().toISOString();
-          const saved = this.recordCronRunSuccess(job, runId, finishedAt);
+          const saved = await this.recordCronRunSuccess(job, runId, finishedAt);
           runSummary = {
             ...runSummary,
             action: job.action,
@@ -402,7 +402,7 @@ export class CronAutomationService {
             reason: options.reason,
           };
           if (watchdogResult.status !== "ok") {
-            this.deps.publishRealtime("cron_job_run", "cron", {
+            await this.deps.publishRealtime("cron_job_run", "cron", {
               type: "watchdog_check_attention_required",
               jobId: saved.jobId,
               name: saved.name,
@@ -412,10 +412,10 @@ export class CronAutomationService {
               force,
             });
             if (
-              this.deps.isFeatureEnabled("cronReviewQueueV1Enabled") &&
+              (await this.deps.isFeatureEnabled("cronReviewQueueV1Enabled")) &&
               shouldRecordWatchdogReview(job, watchdogResult)
             ) {
-              this.recordCronReviewItem({
+              await this.recordCronReviewItem({
                 jobId: normalizedJobId,
                 runId,
                 severity: watchdogResult.status === "error" ? "high" : "medium",
@@ -439,37 +439,37 @@ export class CronAutomationService {
         } else if (job.action === "improvement") {
           await this.deps.runHandlers.improvement();
           const finishedAt = new Date().toISOString();
-          const saved = this.recordCronRunSuccess(job, runId, finishedAt);
+          const saved = await this.recordCronRunSuccess(job, runId, finishedAt);
           runSummary = { ...runSummary, action: job.action, nextRunAt: saved.nextRunAt, force, reason: options.reason };
         } else if (job.action === "backup") {
           await this.deps.runHandlers.backup();
           const finishedAt = new Date().toISOString();
-          const saved = this.recordCronRunSuccess(job, runId, finishedAt);
+          const saved = await this.recordCronRunSuccess(job, runId, finishedAt);
           runSummary = { ...runSummary, action: job.action, nextRunAt: saved.nextRunAt, force, reason: options.reason };
         } else if (job.action === "memory_flush") {
           await this.deps.runHandlers.memoryFlush();
           const finishedAt = new Date().toISOString();
-          const saved = this.recordCronRunSuccess(job, runId, finishedAt);
+          const saved = await this.recordCronRunSuccess(job, runId, finishedAt);
           runSummary = { ...runSummary, action: job.action, nextRunAt: saved.nextRunAt, force, reason: options.reason };
         } else if (job.action === "memory_consolidation") {
           await this.deps.runHandlers.memoryConsolidation();
           const finishedAt = new Date().toISOString();
-          const saved = this.recordCronRunSuccess(job, runId, finishedAt);
+          const saved = await this.recordCronRunSuccess(job, runId, finishedAt);
           runSummary = { ...runSummary, action: job.action, nextRunAt: saved.nextRunAt, force, reason: options.reason };
         } else if (job.action === "cost_report") {
           await this.deps.runHandlers.costReport();
           const finishedAt = new Date().toISOString();
-          const saved = this.recordCronRunSuccess(job, runId, finishedAt);
+          const saved = await this.recordCronRunSuccess(job, runId, finishedAt);
           runSummary = { ...runSummary, action: job.action, nextRunAt: saved.nextRunAt, force, reason: options.reason };
         } else if (job.action === "update_review") {
           await this.deps.runHandlers.updateReview();
           const finishedAt = new Date().toISOString();
-          const saved = this.recordCronRunSuccess(job, runId, finishedAt);
+          const saved = await this.recordCronRunSuccess(job, runId, finishedAt);
           runSummary = { ...runSummary, action: job.action, nextRunAt: saved.nextRunAt, force, reason: options.reason };
         } else if (job.action === "curator") {
           await this.deps.runHandlers.curator();
           const finishedAt = new Date().toISOString();
-          const saved = this.recordCronRunSuccess(job, runId, finishedAt);
+          const saved = await this.recordCronRunSuccess(job, runId, finishedAt);
           runSummary = {
             ...runSummary,
             action: job.action,
@@ -483,8 +483,8 @@ export class CronAutomationService {
             normalizedJobId,
             runId,
             runHandler: this.deps.runHandlers.noAgent,
-            mergeCronJobRuntimeTelemetry: (runtimeJobId, patch, updatedAt) =>
-              this.deps.storage.cronJobs.mergeRuntimeTelemetry(runtimeJobId, patch, updatedAt),
+            mergeCronJobRuntimeTelemetry: async (runtimeJobId, patch, updatedAt) =>
+              await this.deps.storage.cronJobs.mergeRuntimeTelemetry(runtimeJobId, patch, updatedAt),
             publishRealtime: this.deps.publishRealtime,
             computeNextCronRunAt,
           });
@@ -493,13 +493,13 @@ export class CronAutomationService {
           throw new Error(`Cron job has no runnable handler: ${normalizedJobId}`);
         }
         if (
-          this.deps.isFeatureEnabled("cronReviewQueueV1Enabled") &&
+          (await this.deps.isFeatureEnabled("cronReviewQueueV1Enabled")) &&
           job.action !== "watchdog" &&
           !watchdogReviewRecorded
         ) {
           const warning = readCronReviewWarning(runSummary);
           if (warning) {
-            this.recordCronReviewItem({
+            await this.recordCronReviewItem({
               jobId: normalizedJobId,
               runId,
               severity: "medium",
@@ -515,11 +515,11 @@ export class CronAutomationService {
           }
         }
         if (
-          this.deps.isFeatureEnabled("cronReviewQueueV1Enabled") &&
+          (await this.deps.isFeatureEnabled("cronReviewQueueV1Enabled")) &&
           job.action !== "watchdog" &&
           !watchdogReviewRecorded
         ) {
-          this.recordCronReviewItem({
+          await this.recordCronReviewItem({
             jobId: normalizedJobId,
             runId,
             severity: "low",
@@ -531,14 +531,14 @@ export class CronAutomationService {
             diff: { type: "manual_run", changed: false },
           });
         }
-        const evidenceEnvelopeId = this.finalizeCronRunEvidenceOnSuccess(normalizedJobId, runId, runSummary);
-        const terminal = this.deps.storage.cronRuns.terminalize(token, {
+        const evidenceEnvelopeId = await this.finalizeCronRunEvidenceOnSuccess(normalizedJobId, runId, runSummary);
+        const terminal = await this.deps.storage.cronRuns.terminalize(token, {
           status: "completed",
           outcome: { result: "ok", action: job.action },
           ...(evidenceEnvelopeId ? { evidenceEnvelopeId } : {}),
         });
         if (!terminal) throw new Error(`Canonical cron run ${runId} lost ownership before success settlement.`);
-        const childRun = this.resolveCronChildRunSummary(runSummary);
+        const childRun = await this.resolveCronChildRunSummary(runSummary);
         return {
           jobId: normalizedJobId,
           runId,
@@ -547,11 +547,11 @@ export class CronAutomationService {
           ...childRun,
         };
       } catch (error) {
-        const latest = this.deps.storage.cronJobs.get(normalizedJobId) ?? job;
-        const failed = this.recordCronRunFailure(latest, runId, error, new Date(), options);
+        const latest = (await this.deps.storage.cronJobs.get(normalizedJobId)) ?? job;
+        const failed = await this.recordCronRunFailure(latest, runId, error, new Date(), options);
         const evidenceEnvelopeId =
           typeof failed.lastRunEvidenceEnvelopeId === "string" ? failed.lastRunEvidenceEnvelopeId : undefined;
-        const settled = this.deps.storage.cronRuns.terminalize(token, {
+        const settled = await this.deps.storage.cronRuns.terminalize(token, {
           status: "failed",
           failure: { message: normalizeCronFailureMessage(error) },
           ...(evidenceEnvelopeId ? { evidenceEnvelopeId } : {}),
@@ -566,19 +566,20 @@ export class CronAutomationService {
     }
   }
 
-  private beginCanonicalInlineCronRun(
+  private async beginCanonicalInlineCronRun(
     job: CronJobRecord,
     options: CronRunOptions,
-  ):
+  ): Promise<
     | { outcome: "admitted"; runId: string; token: CronRunExecutionToken }
-    | { outcome: "existing"; result: CronRunResult } {
+    | { outcome: "existing"; result: CronRunResult }
+  > {
     const requestedRunId = randomUUID();
     const trigger = options.force === true ? "forced" : options.reason === "scheduled_due" ? "scheduled_due" : "manual";
     const scheduledFor = normalizeCronOccurrenceTimestamp(options.scheduledFor ?? new Date().toISOString());
     const admissionKey =
       options.admissionKey?.trim() ||
       (trigger === "scheduled_due" ? `scheduled:${scheduledFor}` : `${trigger}:${requestedRunId}`);
-    const admission = this.deps.storage.cronRuns.beginAdmission({
+    const admission = await this.deps.storage.cronRuns.beginAdmission({
       runId: requestedRunId,
       jobId: job.jobId,
       admissionKey,
@@ -586,13 +587,13 @@ export class CronAutomationService {
       trigger,
     });
     if (admission.outcome === "blocked") {
-      return { outcome: "existing", result: this.toCanonicalCronRunResult(admission.activeRun) };
+      return { outcome: "existing", result: await this.toCanonicalCronRunResult(admission.activeRun) };
     }
     if (admission.outcome === "duplicate") {
-      return { outcome: "existing", result: this.toCanonicalCronRunResult(admission.run) };
+      return { outcome: "existing", result: await this.toCanonicalCronRunResult(admission.run) };
     }
     const token = toCronRunExecutionToken(admission.run);
-    const admitted = this.deps.storage.cronRuns.admitInlineExecution(token);
+    const admitted = await this.deps.storage.cronRuns.admitInlineExecution(token);
     if (!admitted) throw new Error(`Canonical cron run ${admission.run.runId} lost ownership before inline admission.`);
     return { outcome: "admitted", runId: admission.run.runId, token };
   }
@@ -604,7 +605,7 @@ export class CronAutomationService {
     const admissionKey =
       options.admissionKey?.trim() ||
       (trigger === "scheduled_due" ? `scheduled:${scheduledFor}` : `${trigger}:${requestedRunId}`);
-    const admission = this.deps.storage.cronRuns.beginAdmission({
+    const admission = await this.deps.storage.cronRuns.beginAdmission({
       runId: requestedRunId,
       jobId: job.jobId,
       admissionKey,
@@ -612,12 +613,12 @@ export class CronAutomationService {
       trigger,
     });
     if (admission.outcome === "blocked") {
-      return this.toCanonicalCronRunResult(admission.activeRun);
+      return await this.toCanonicalCronRunResult(admission.activeRun);
     }
     if (isCronRunTerminalStatus(admission.run.status)) {
-      return this.toCanonicalCronRunResult(admission.run);
+      return await this.toCanonicalCronRunResult(admission.run);
     }
-    return this.processCanonicalAgentTurnCronRun(admission.run);
+    return await this.processCanonicalAgentTurnCronRun(admission.run);
   }
 
   /**
@@ -647,14 +648,14 @@ export class CronAutomationService {
       return summary;
     }
     try {
-      const pending = cronRuns.listPendingSettlement(limit);
+      const pending = await cronRuns.listPendingSettlement(limit);
       for (const observed of pending) {
         summary.checkedCount += 1;
         const beforeStatus = observed.status;
         const beforePhase = observed.phase;
         try {
           if (observed.action !== "agent_turn") {
-            const reconciled = cronRuns.requireReconciliation(toCronRunExecutionToken(observed), {
+            const reconciled = await cronRuns.requireReconciliation(toCronRunExecutionToken(observed), {
               reason:
                 "Gateway restarted after canonical inline cron admission; the side-effect outcome is unknown and will not be replayed automatically.",
               error: "restart_after_inline_admission",
@@ -668,7 +669,7 @@ export class CronAutomationService {
             continue;
           }
           await this.processCanonicalAgentTurnCronRun(observed);
-          const current = this.deps.storage.cronRuns.get(observed.runId);
+          const current = await this.deps.storage.cronRuns.get(observed.runId);
           if (!current) {
             summary.staleCount += 1;
             continue;
@@ -694,7 +695,7 @@ export class CronAutomationService {
     }
   }
 
-  private processCanonicalAgentTurnCronRun(run: CronRunRecord): Promise<CronRunResult> {
+  private async processCanonicalAgentTurnCronRun(run: CronRunRecord): Promise<CronRunResult> {
     const existing = this.agentTurnAdmissionsInFlight.get(run.runId);
     if (existing) {
       return existing;
@@ -709,37 +710,37 @@ export class CronAutomationService {
   }
 
   private async processCanonicalAgentTurnCronRunOwned(observed: CronRunRecord): Promise<CronRunResult> {
-    const current = this.deps.storage.cronRuns.get(observed.runId);
+    const current = await this.deps.storage.cronRuns.get(observed.runId);
     if (!current) {
       throw new Error(`Canonical cron run disappeared before processing: ${observed.runId}`);
     }
     if (isCronRunTerminalStatus(current.status)) {
-      return this.toCanonicalCronRunResult(current);
+      return await this.toCanonicalCronRunResult(current);
     }
     if (current.action !== "agent_turn") {
       throw new Error(`Canonical cron run ${current.runId} is not an agent_turn occurrence.`);
     }
     if (current.status !== "admitting") {
-      return this.reconcileCanonicalAgentTurnChild(current);
+      return await this.reconcileCanonicalAgentTurnChild(current);
     }
 
     let job: CronJobRecord;
     try {
-      job = this.buildCanonicalAgentTurnSnapshotJob(current);
+      job = await this.buildCanonicalAgentTurnSnapshotJob(current);
     } catch (error) {
-      return this.settleCanonicalAgentTurnCronRun(current, "manual_reconciliation_required", {
+      return await this.settleCanonicalAgentTurnCronRun(current, "manual_reconciliation_required", {
         failureMessage: normalizeCronFailureMessage(error),
         reconciliationReason: "The admitted cron action snapshot is invalid and cannot be replayed safely.",
       });
     }
     const token = toCronRunExecutionToken(current);
     if (
-      !this.recordCanonicalCronPendingTelemetry(current, {
+      !(await this.recordCanonicalCronPendingTelemetry(current, {
         action: "agent_turn",
         runId: current.runId,
         status: "admitting",
         executionGeneration: current.executionGeneration,
-      })
+      }))
     ) {
       throw new Error(`Cron run ${current.runId} lost execution ownership before child launch.`);
     }
@@ -749,18 +750,18 @@ export class CronAutomationService {
       runId: current.runId,
       cronRun: token,
       runHandler: this.deps.runHandlers.agentTurn,
-      attachDeterministicChild: (executionToken, linkage, attachedAt) =>
-        this.deps.storage.cronRuns.attachDeterministicChild(executionToken, linkage, attachedAt),
+      attachDeterministicChild: async (executionToken, linkage, attachedAt) =>
+        await this.deps.storage.cronRuns.attachDeterministicChild(executionToken, linkage, attachedAt),
       publishRealtime: this.deps.publishRealtime,
     });
     if (admittedSummary.mode === "inbox") {
-      return this.settleCanonicalAgentTurnCronRun(current, "completed", { outcome: admittedSummary });
+      return await this.settleCanonicalAgentTurnCronRun(current, "completed", { outcome: admittedSummary });
     }
-    const attached = this.deps.storage.cronRuns.get(current.runId);
+    const attached = await this.deps.storage.cronRuns.get(current.runId);
     if (!attached || isCronRunTerminalStatus(attached.status)) {
-      return attached ? this.toCanonicalCronRunResult(attached) : this.toCanonicalCronRunResult(current);
+      return attached ? await this.toCanonicalCronRunResult(attached) : await this.toCanonicalCronRunResult(current);
     }
-    this.recordCanonicalCronPendingTelemetry(attached, admittedSummary);
+    await this.recordCanonicalCronPendingTelemetry(attached, admittedSummary);
     const reconciled = await this.reconcileCanonicalAgentTurnChild(attached);
     return {
       ...reconciled,
@@ -770,8 +771,8 @@ export class CronAutomationService {
     };
   }
 
-  private buildCanonicalAgentTurnSnapshotJob(run: CronRunRecord): CronJobRecord {
-    const liveJob = this.deps.storage.cronJobs.get(run.jobId);
+  private async buildCanonicalAgentTurnSnapshotJob(run: CronRunRecord): Promise<CronJobRecord> {
+    const liveJob = await this.deps.storage.cronJobs.get(run.jobId);
     if (!liveJob) {
       throw new Error(`Cron job ${run.jobId} no longer exists.`);
     }
@@ -788,30 +789,30 @@ export class CronAutomationService {
   }
 
   private async reconcileCanonicalAgentTurnChild(observed: CronRunRecord): Promise<CronRunResult> {
-    let current = this.deps.storage.cronRuns.get(observed.runId);
+    let current = await this.deps.storage.cronRuns.get(observed.runId);
     if (!current) {
       throw new Error(`Canonical cron run disappeared during settlement: ${observed.runId}`);
     }
     if (isCronRunTerminalStatus(current.status)) {
-      return this.toCanonicalCronRunResult(current);
+      return await this.toCanonicalCronRunResult(current);
     }
     const childRunId = current.childDurableRunId;
     if (!childRunId) {
-      return this.settleCanonicalAgentTurnCronRun(current, "manual_reconciliation_required", {
+      return await this.settleCanonicalAgentTurnCronRun(current, "manual_reconciliation_required", {
         failureMessage: "The admitted cron run has no deterministic durable child linkage.",
         reconciliationReason: "Durable child linkage is missing after cron admission.",
       });
     }
-    const child = this.readDurableRun(childRunId);
+    const child = await this.readDurableRun(childRunId);
     if (!child) {
-      return this.settleCanonicalAgentTurnCronRun(current, "manual_reconciliation_required", {
+      return await this.settleCanonicalAgentTurnCronRun(current, "manual_reconciliation_required", {
         failureMessage: `Durable child ${childRunId} is missing.`,
         reconciliationReason: "The linked durable Chat child cannot be found.",
       });
     }
     const ownershipError = validateCanonicalCronDurableChild(current, child);
     if (ownershipError) {
-      return this.settleCanonicalAgentTurnCronRun(current, "manual_reconciliation_required", {
+      return await this.settleCanonicalAgentTurnCronRun(current, "manual_reconciliation_required", {
         failureMessage: ownershipError,
         reconciliationReason: "The linked durable child is owned by a different cron admission.",
       });
@@ -824,14 +825,14 @@ export class CronAutomationService {
       child.status === "paused"
     ) {
       const targetStatus = child.status === "queued" ? "admitted" : child.status === "running" ? "running" : "waiting";
-      const advanced = this.deps.storage.cronRuns.advancePhase(toCronRunExecutionToken(current), {
+      const advanced = await this.deps.storage.cronRuns.advancePhase(toCronRunExecutionToken(current), {
         status: targetStatus,
         phase: current.phase,
       });
-      return this.toCanonicalCronRunResult(advanced ?? current);
+      return await this.toCanonicalCronRunResult(advanced ?? current);
     }
     if (child.status === "failed" || child.status === "cancelled" || child.status === "dead_lettered") {
-      return this.settleCanonicalAgentTurnCronRun(current, child.status, {
+      return await this.settleCanonicalAgentTurnCronRun(current, child.status, {
         failureMessage: child.lastError ?? `Durable Chat child settled as ${child.status}.`,
         outcome: buildCanonicalChildOutcome(current, child),
       });
@@ -839,16 +840,16 @@ export class CronAutomationService {
 
     const metadata = child.metadata ?? {};
     if (metadata.autonomousChatPostCommitPending || metadata.generalChatPostCommitPending) {
-      const advanced = this.deps.storage.cronRuns.advancePhase(toCronRunExecutionToken(current), {
+      const advanced = await this.deps.storage.cronRuns.advancePhase(toCronRunExecutionToken(current), {
         status: "running",
         phase: "autonomous_post_commit",
       });
-      return this.toCanonicalCronRunResult(advanced ?? current);
+      return await this.toCanonicalCronRunResult(advanced ?? current);
     }
     const autonomousPostCommit = readRecord(metadata.autonomousChatPostCommit);
     const delivery = readRecord(autonomousPostCommit?.delivery);
     if (delivery?.status === "skipped") {
-      return this.settleCanonicalAgentTurnCronRun(current, "completed", {
+      return await this.settleCanonicalAgentTurnCronRun(current, "completed", {
         outcome: {
           ...buildCanonicalChildOutcome(current, child),
           deliveryStatus: "skipped",
@@ -858,27 +859,27 @@ export class CronAutomationService {
     }
     const deliveryRunId = delivery?.status === "enqueued" ? readString(delivery.runId) : undefined;
     if (!deliveryRunId) {
-      return this.settleCanonicalAgentTurnCronRun(current, "manual_reconciliation_required", {
+      return await this.settleCanonicalAgentTurnCronRun(current, "manual_reconciliation_required", {
         failureMessage: "The completed Chat child has no canonical autonomous delivery receipt.",
         reconciliationReason: "Autonomous post-commit delivery truth is missing or malformed.",
       });
     }
     current =
-      this.deps.storage.cronRuns.advancePhase(toCronRunExecutionToken(current), {
+      (await this.deps.storage.cronRuns.advancePhase(toCronRunExecutionToken(current), {
         status: "running",
         phase: "delivery",
         linkage: { deliveryRunId },
-      }) ?? current;
-    const deliveryRun = this.readDurableRun(deliveryRunId);
+      })) ?? current;
+    const deliveryRun = await this.readDurableRun(deliveryRunId);
     if (!deliveryRun) {
-      return this.settleCanonicalAgentTurnCronRun(current, "manual_reconciliation_required", {
+      return await this.settleCanonicalAgentTurnCronRun(current, "manual_reconciliation_required", {
         failureMessage: `Delivery durable run ${deliveryRunId} is missing.`,
         reconciliationReason: "The autonomous delivery receipt references a missing durable run.",
       });
     }
     const deliveryOwnershipError = validateCanonicalCronDeliveryChild(child, deliveryRun);
     if (deliveryOwnershipError) {
-      return this.settleCanonicalAgentTurnCronRun(current, "manual_reconciliation_required", {
+      return await this.settleCanonicalAgentTurnCronRun(current, "manual_reconciliation_required", {
         failureMessage: deliveryOwnershipError,
         reconciliationReason: "The linked delivery durable run is owned by a different handoff.",
       });
@@ -891,14 +892,14 @@ export class CronAutomationService {
     ) {
       const targetStatus =
         deliveryRun.status === "queued" ? "admitted" : deliveryRun.status === "running" ? "running" : "waiting";
-      const advanced = this.deps.storage.cronRuns.advancePhase(toCronRunExecutionToken(current), {
+      const advanced = await this.deps.storage.cronRuns.advancePhase(toCronRunExecutionToken(current), {
         status: targetStatus,
         phase: "delivery",
       });
-      return this.toCanonicalCronRunResult(advanced ?? current);
+      return await this.toCanonicalCronRunResult(advanced ?? current);
     }
     if (deliveryRun.status === "completed") {
-      return this.settleCanonicalAgentTurnCronRun(current, "completed", {
+      return await this.settleCanonicalAgentTurnCronRun(current, "completed", {
         outcome: {
           ...buildCanonicalChildOutcome(current, child),
           deliveryRunId,
@@ -907,14 +908,17 @@ export class CronAutomationService {
       });
     }
     if (
-      hasAmbiguousExternalDeliveryOutcome(deliveryRun, this.deps.storage.durableRuns.listCheckpoints(deliveryRunId))
+      hasAmbiguousExternalDeliveryOutcome(
+        deliveryRun,
+        await this.deps.storage.durableRuns.listCheckpoints(deliveryRunId),
+      )
     ) {
-      return this.settleCanonicalAgentTurnCronRun(current, "manual_reconciliation_required", {
+      return await this.settleCanonicalAgentTurnCronRun(current, "manual_reconciliation_required", {
         failureMessage: deliveryRun.lastError ?? "Delivery may have crossed the external provider boundary.",
         reconciliationReason: "Delivery has an unknown external outcome and must not be retried automatically.",
       });
     }
-    return this.settleCanonicalAgentTurnCronRun(current, deliveryRun.status, {
+    return await this.settleCanonicalAgentTurnCronRun(current, deliveryRun.status, {
       failureMessage: deliveryRun.lastError ?? `Delivery child settled as ${deliveryRun.status}.`,
       outcome: {
         ...buildCanonicalChildOutcome(current, child),
@@ -924,7 +928,7 @@ export class CronAutomationService {
     });
   }
 
-  private settleCanonicalAgentTurnCronRun(
+  private async settleCanonicalAgentTurnCronRun(
     observed: CronRunRecord,
     status: CronRunTerminalStatus,
     details: {
@@ -932,25 +936,25 @@ export class CronAutomationService {
       failureMessage?: string;
       reconciliationReason?: string;
     } = {},
-  ): CronRunResult {
-    const current = this.deps.storage.cronRuns.get(observed.runId);
+  ): Promise<CronRunResult> {
+    const current = await this.deps.storage.cronRuns.get(observed.runId);
     if (!current) {
-      return this.toCanonicalCronRunResult(observed);
+      return await this.toCanonicalCronRunResult(observed);
     }
     if (isCronRunTerminalStatus(current.status)) {
-      return this.toCanonicalCronRunResult(current);
+      return await this.toCanonicalCronRunResult(current);
     }
     const token = toCronRunExecutionToken(current);
-    const fenced = this.deps.storage.cronRuns.advancePhase(token, {
+    const fenced = await this.deps.storage.cronRuns.advancePhase(token, {
       status: current.status,
       phase: current.phase,
     });
     if (!fenced) {
-      return this.toCanonicalCronRunResult(current);
+      return await this.toCanonicalCronRunResult(current);
     }
-    const job = this.deps.storage.cronJobs.get(current.jobId);
+    const job = await this.deps.storage.cronJobs.get(current.jobId);
     if (!job) {
-      return this.toCanonicalCronRunResult(current);
+      return await this.toCanonicalCronRunResult(current);
     }
     const settledAt = new Date().toISOString();
     const summary = details.outcome ?? {
@@ -960,7 +964,7 @@ export class CronAutomationService {
       childDurableRunId: current.childDurableRunId,
       deliveryRunId: current.deliveryRunId,
     };
-    const evidenceEnvelopeId = this.recordCronRunEvidence(
+    const evidenceEnvelopeId = await this.recordCronRunEvidence(
       job,
       current.runId,
       status === "completed" ? "ok" : "failed",
@@ -969,7 +973,7 @@ export class CronAutomationService {
         ? { summary }
         : { summary, failureMessage: details.failureMessage ?? `Cron run settled as ${status}.` },
     );
-    const terminal = this.deps.storage.cronRuns.terminalize(token, {
+    const terminal = await this.deps.storage.cronRuns.terminalize(token, {
       status,
       outcome: summary,
       ...(status === "completed"
@@ -985,12 +989,12 @@ export class CronAutomationService {
       now: settledAt,
     });
     if (!terminal) {
-      return this.toCanonicalCronRunResult(current);
+      return await this.toCanonicalCronRunResult(current);
     }
-    this.recordCanonicalCronTerminalTelemetry(job, terminal, summary, details.failureMessage, settledAt);
-    if (this.deps.isFeatureEnabled("cronReviewQueueV1Enabled")) {
+    await this.recordCanonicalCronTerminalTelemetry(job, terminal, summary, details.failureMessage, settledAt);
+    if (await this.deps.isFeatureEnabled("cronReviewQueueV1Enabled")) {
       const warning = readCronReviewWarning(summary);
-      this.recordCronReviewItem({
+      await this.recordCronReviewItem({
         jobId: terminal.jobId,
         runId: terminal.runId,
         severity: warning ? "medium" : "low",
@@ -1001,7 +1005,7 @@ export class CronAutomationService {
         diff: { type: warning ? "agent_turn_profile_warning" : "canonical_agent_turn_settlement", changed: false },
       });
     }
-    this.deps.publishRealtime("cron_job_run", "cron", {
+    await this.deps.publishRealtime("cron_job_run", "cron", {
       type: status === "completed" ? "cron_agent_turn_completed" : "cron_agent_turn_terminal",
       jobId: terminal.jobId,
       runId: terminal.runId,
@@ -1012,16 +1016,19 @@ export class CronAutomationService {
       evidenceEnvelopeId: terminal.evidenceEnvelopeId,
       reconciliationReason: terminal.reconciliationReason,
     });
-    return this.toCanonicalCronRunResult(terminal);
+    return await this.toCanonicalCronRunResult(terminal);
   }
 
-  private recordCanonicalCronPendingTelemetry(run: CronRunRecord, summary: Record<string, unknown>): boolean {
-    const job = this.deps.storage.cronJobs.get(run.jobId);
+  private async recordCanonicalCronPendingTelemetry(
+    run: CronRunRecord,
+    summary: Record<string, unknown>,
+  ): Promise<boolean> {
+    const job = await this.deps.storage.cronJobs.get(run.jobId);
     if (!job) {
       return false;
     }
     return Boolean(
-      this.deps.storage.cronJobs.mergeRuntimeTelemetryForExecutionGeneration(run.jobId, run.executionGeneration, {
+      await this.deps.storage.cronJobs.mergeRuntimeTelemetryForExecutionGeneration(run.jobId, run.executionGeneration, {
         lastRunAt: null,
         lastRunId: run.runId,
         lastRunStatus: null,
@@ -1032,16 +1039,16 @@ export class CronAutomationService {
     );
   }
 
-  private recordCanonicalCronTerminalTelemetry(
+  private async recordCanonicalCronTerminalTelemetry(
     job: CronJobRecord,
     run: CronRunRecord,
     summary: Record<string, unknown>,
     failureMessage: string | undefined,
     settledAt: string,
-  ): void {
+  ): Promise<void> {
     const succeeded = run.status === "completed";
     const failureCount = succeeded ? 0 : Math.max(0, job.failureCount ?? 0) + 1;
-    this.deps.storage.cronJobs.mergeRuntimeTelemetryForExecutionGeneration(
+    await this.deps.storage.cronJobs.mergeRuntimeTelemetryForExecutionGeneration(
       job.jobId,
       run.executionGeneration,
       {
@@ -1062,9 +1069,9 @@ export class CronAutomationService {
     );
   }
 
-  private readDurableRun(runId: string): DurableRunRecord | undefined {
+  private async readDurableRun(runId: string): Promise<DurableRunRecord | undefined> {
     try {
-      return this.deps.storage.durableRuns.getRun(runId);
+      return await this.deps.storage.durableRuns.getRun(runId);
     } catch (error) {
       if (error instanceof NotFoundError) {
         return undefined;
@@ -1073,14 +1080,16 @@ export class CronAutomationService {
     }
   }
 
-  private toCanonicalCronRunResult(run: CronRunRecord): CronRunResult {
+  private async toCanonicalCronRunResult(run: CronRunRecord): Promise<CronRunResult> {
     return {
       jobId: run.jobId,
       runId: run.runId,
       status: run.status === "completed" ? "ok" : "pending",
       ...(run.childDurableRunId ? { childDurableRunId: run.childDurableRunId } : {}),
       ...(run.childTurnId ? { childTurnId: run.childTurnId } : {}),
-      ...(run.childDurableRunId ? { childDurableStatus: this.readDurableRun(run.childDurableRunId)?.status } : {}),
+      ...(run.childDurableRunId
+        ? { childDurableStatus: (await this.readDurableRun(run.childDurableRunId))?.status }
+        : {}),
     };
   }
 
@@ -1098,11 +1107,11 @@ export class CronAutomationService {
       backoffCount: 0,
       items: [],
     };
-    const jobs = this.deps.storage.cronJobs
-      .list()
-      .filter(
-        (job) => isScheduledCronAction(job.action) && isCronActionEnabledForScheduledRun(job.action) && job.enabled,
-      );
+    const jobs = await (
+      await this.deps.storage.cronJobs.list()
+    ).filter(
+      (job) => isScheduledCronAction(job.action) && isCronActionEnabledForScheduledRun(job.action) && job.enabled,
+    );
     for (const job of jobs) {
       if (job.activeRunId) {
         continue;
@@ -1147,7 +1156,7 @@ export class CronAutomationService {
           summary.items.push({ jobId: job.jobId, status: "pending" });
           continue;
         }
-        const latest = this.deps.storage.cronJobs.get(job.jobId) ?? job;
+        const latest = (await this.deps.storage.cronJobs.get(job.jobId)) ?? job;
         summary.failedCount += 1;
         summary.items.push({
           jobId: job.jobId,
@@ -1162,17 +1171,17 @@ export class CronAutomationService {
     return summary;
   }
 
-  public findCronRunById(runId: string): CronRunSnapshot | undefined {
+  public async findCronRunById(runId: string): Promise<CronRunSnapshot | undefined> {
     const normalized = runId.trim();
     if (!normalized) {
       return undefined;
     }
-    const canonical = this.deps.storage.cronRuns?.get(normalized);
+    const canonical = await this.deps.storage.cronRuns?.get(normalized);
     if (canonical) {
-      const latestJobTelemetry = this.deps.storage.cronJobs.get(canonical.jobId);
+      const latestJobTelemetry = await this.deps.storage.cronJobs.get(canonical.jobId);
       const matchingTelemetry = latestJobTelemetry?.lastRunId === canonical.runId ? latestJobTelemetry : undefined;
       const childDurableStatus = canonical.childDurableRunId
-        ? this.readDurableRun(canonical.childDurableRunId)?.status
+        ? (await this.readDurableRun(canonical.childDurableRunId))?.status
         : undefined;
       const failureMessage = readString(canonical.failure?.message);
       return {
@@ -1215,12 +1224,12 @@ export class CronAutomationService {
         backoffUntil: matchingTelemetry?.backoffUntil,
       };
     }
-    const match = this.deps.storage.cronJobs.list().find((job) => job.lastRunId === normalized);
+    const match = await (await this.deps.storage.cronJobs.list()).find((job) => job.lastRunId === normalized);
     if (!match) {
       return undefined;
     }
     const summary = parseJsonRecord(match.lastRunOutput ?? "{}");
-    const childRun = this.resolveCronChildRunSummary(summary);
+    const childRun = await this.resolveCronChildRunSummary(summary);
     return {
       runId: normalized,
       jobId: match.jobId,
@@ -1235,19 +1244,19 @@ export class CronAutomationService {
     };
   }
 
-  private resolveCronChildRunSummary(summary: Record<string, unknown>): {
+  private async resolveCronChildRunSummary(summary: Record<string, unknown>): Promise<{
     childDurableRunId?: string;
     childDurableStatus?: string;
     childTurnId?: string;
     profilePosture?: string;
-  } {
+  }> {
     const childDurableRunId = readString(summary.childDurableRunId) ?? readString(summary.durableRunId);
     const childTurnId = readString(summary.childTurnId) ?? readString(summary.turnId);
     const profilePosture = readString(summary.profilePosture);
     let childDurableStatus: string | undefined;
     if (childDurableRunId) {
       try {
-        childDurableStatus = this.deps.storage.durableRuns.getRun(childDurableRunId)?.status;
+        childDurableStatus = (await this.deps.storage.durableRuns.getRun(childDurableRunId))?.status;
       } catch {
         childDurableStatus = undefined;
       }
@@ -1260,10 +1269,10 @@ export class CronAutomationService {
     };
   }
 
-  public listCronReviewQueue(limit = 200): CronReviewItem[] {
-    this.deps.requireFeatureEnabled("cronReviewQueueV1Enabled");
+  public async listCronReviewQueue(limit = 200): Promise<CronReviewItem[]> {
+    await this.deps.requireFeatureEnabled("cronReviewQueueV1Enabled");
     const safeLimit = Math.max(1, Math.min(1_000, Math.floor(limit)));
-    const rows = this.deps.storage.db
+    const rows = (await this.deps.storage.db
       .prepare(
         `
       SELECT item_id, job_id, run_id, severity, status, summary_json, diff_json, created_at, updated_at, resolved_at
@@ -1272,13 +1281,13 @@ export class CronAutomationService {
       LIMIT ?
     `,
       )
-      .all(safeLimit) as CronReviewRow[];
+      .all(safeLimit)) as CronReviewRow[];
     return rows.map((row) => mapCronReviewItemRow(row));
   }
 
-  public retryCronReviewQueueItem(itemId: string): CronReviewItem {
-    this.deps.requireFeatureEnabled("cronReviewQueueV1Enabled");
-    const existing = this.deps.storage.db
+  public async retryCronReviewQueueItem(itemId: string): Promise<CronReviewItem> {
+    await this.deps.requireFeatureEnabled("cronReviewQueueV1Enabled");
+    const existing = (await this.deps.storage.db
       .prepare(
         `
       SELECT item_id, job_id, run_id, severity, status, summary_json, diff_json, created_at, updated_at, resolved_at
@@ -1286,7 +1295,7 @@ export class CronAutomationService {
       WHERE item_id = ?
     `,
       )
-      .get(itemId) as CronReviewRow | undefined;
+      .get(itemId)) as CronReviewRow | undefined;
     if (!existing) {
       throw new Error(`Cron review item not found: ${itemId}`);
     }
@@ -1295,8 +1304,8 @@ export class CronAutomationService {
     const now = new Date().toISOString();
     // Raw "BEGIN IMMEDIATE" is sqlite-only syntax; the helper picks the
     // driver-appropriate transaction statements on Postgres deployments.
-    const updated = this.deps.storage.runImmediateTransaction(() => {
-      this.deps.storage.db
+    const updated = await this.deps.storage.runImmediateTransaction(async () => {
+      await this.deps.storage.db
         .prepare(
           `
         UPDATE cron_review_items
@@ -1312,7 +1321,7 @@ export class CronAutomationService {
           runId: retriedRunId,
           updatedAt: now,
         });
-      this.deps.storage.db
+      await this.deps.storage.db
         .prepare(
           `
         INSERT INTO cron_run_diffs (diff_id, run_id, previous_run_id, diff_json, created_at)
@@ -1326,7 +1335,7 @@ export class CronAutomationService {
           diffJson: JSON.stringify({ retried: true, previousRunId: existing.run_id }),
           createdAt: now,
         });
-      return this.deps.storage.db
+      return (await this.deps.storage.db
         .prepare(
           `
         SELECT item_id, job_id, run_id, severity, status, summary_json, diff_json, created_at, updated_at, resolved_at
@@ -1334,13 +1343,13 @@ export class CronAutomationService {
         WHERE item_id = ?
       `,
         )
-        .get(itemId) as CronReviewRow | undefined;
+        .get(itemId)) as CronReviewRow | undefined;
     });
     if (!updated) {
       throw new Error("Cron review item retry update failed.");
     }
     const mapped = mapCronReviewItemRow(updated);
-    this.deps.publishRealtime("system", "cron", {
+    await this.deps.publishRealtime("system", "cron", {
       type: "cron_review_item_retried",
       itemId,
       jobId: mapped.jobId,
@@ -1349,9 +1358,9 @@ export class CronAutomationService {
     return mapped;
   }
 
-  public getCronRunDiff(runId: string): CronRunDiff {
-    this.deps.requireFeatureEnabled("cronReviewQueueV1Enabled");
-    const row = this.deps.storage.db
+  public async getCronRunDiff(runId: string): Promise<CronRunDiff> {
+    await this.deps.requireFeatureEnabled("cronReviewQueueV1Enabled");
+    const row = (await this.deps.storage.db
       .prepare(
         `
       SELECT diff_id, run_id, previous_run_id, diff_json, created_at
@@ -1361,7 +1370,7 @@ export class CronAutomationService {
       LIMIT 1
     `,
       )
-      .get(runId) as CronRunDiffRow | undefined;
+      .get(runId)) as CronRunDiffRow | undefined;
     if (!row) {
       throw new Error(`Cron run diff not found for run ${runId}`);
     }
@@ -1374,8 +1383,8 @@ export class CronAutomationService {
     };
   }
 
-  private recordCronRunSuccess(job: CronJobRecord, runId: string, finishedAt: string): CronJobRecord {
-    const saved = this.deps.storage.cronJobs.mergeRuntimeTelemetry(
+  private async recordCronRunSuccess(job: CronJobRecord, runId: string, finishedAt: string): Promise<CronJobRecord> {
+    const saved = await this.deps.storage.cronJobs.mergeRuntimeTelemetry(
       job.jobId,
       {
         lastRunAt: finishedAt,
@@ -1399,21 +1408,21 @@ export class CronAutomationService {
    * The run summary is referenced by hash, not embedded, so envelope size
    * stays bounded and secrets in output never enter the evidence chain.
    */
-  private recordCronRunEvidence(
+  private async recordCronRunEvidence(
     job: CronJobRecord,
     runId: string,
     status: "ok" | "failed",
     finishedAtIso: string,
     details: { summary?: Record<string, unknown>; failureMessage?: string } = {},
-  ): string | undefined {
+  ): Promise<string | undefined> {
     const record = this.deps.recordEvidenceEnvelope;
-    if (!record || !this.deps.isFeatureEnabled("cronEvidenceV1Enabled")) {
+    if (!record || !(await this.deps.isFeatureEnabled("cronEvidenceV1Enabled"))) {
       return undefined;
     }
     const outputHash = details.summary
       ? createHash("sha256").update(JSON.stringify(details.summary), "utf8").digest("hex")
       : undefined;
-    const envelope = record({
+    const envelope = await record({
       eventKind: "cron_job_executed",
       runId,
       createdAt: finishedAtIso,
@@ -1436,24 +1445,24 @@ export class CronAutomationService {
    * outside recordCronRunSuccess). Best-effort by construction: the envelope
    * callback never throws (gateway wiring) and a missing job is a no-op.
    */
-  private finalizeCronRunEvidenceOnSuccess(
+  private async finalizeCronRunEvidenceOnSuccess(
     jobId: string,
     runId: string,
     summary: Record<string, unknown>,
-  ): string | undefined {
-    if (!this.deps.recordEvidenceEnvelope || !this.deps.isFeatureEnabled("cronEvidenceV1Enabled")) {
+  ): Promise<string | undefined> {
+    if (!this.deps.recordEvidenceEnvelope || !(await this.deps.isFeatureEnabled("cronEvidenceV1Enabled"))) {
       return undefined;
     }
-    const job = this.deps.storage.cronJobs.get(jobId);
+    const job = await this.deps.storage.cronJobs.get(jobId);
     if (!job) {
       return undefined;
     }
     const finishedAtIso = new Date().toISOString();
-    const envelopeId = this.recordCronRunEvidence(job, runId, "ok", finishedAtIso, { summary });
+    const envelopeId = await this.recordCronRunEvidence(job, runId, "ok", finishedAtIso, { summary });
     if (!envelopeId) {
       return undefined;
     }
-    this.deps.storage.cronJobs.mergeRuntimeTelemetry(
+    await this.deps.storage.cronJobs.mergeRuntimeTelemetry(
       job.jobId,
       { lastRunEvidenceEnvelopeId: envelopeId },
       finishedAtIso,
@@ -1461,21 +1470,21 @@ export class CronAutomationService {
     return envelopeId;
   }
 
-  private recordCronRunFailure(
+  private async recordCronRunFailure(
     job: CronJobRecord,
     runId: string,
     error: unknown,
     failedAt: Date,
     options: CronRunOptions,
-  ): CronJobRecord {
+  ): Promise<CronJobRecord> {
     const failedAtIso = failedAt.toISOString();
     const message = normalizeCronFailureMessage(error);
     const failureCount = Math.max(0, job.failureCount ?? 0) + 1;
     const backoffUntil = computeCronBackoffUntil(failedAt, failureCount);
-    const evidenceEnvelopeId = this.recordCronRunEvidence(job, runId, "failed", failedAtIso, {
+    const evidenceEnvelopeId = await this.recordCronRunEvidence(job, runId, "failed", failedAtIso, {
       failureMessage: message,
     });
-    const saved = this.deps.storage.cronJobs.mergeRuntimeTelemetry(
+    const saved = await this.deps.storage.cronJobs.mergeRuntimeTelemetry(
       job.jobId,
       {
         lastRunAt: failedAtIso,
@@ -1493,7 +1502,7 @@ export class CronAutomationService {
       },
       failedAtIso,
     );
-    this.deps.publishRealtime("cron_job_run", "cron", {
+    await this.deps.publishRealtime("cron_job_run", "cron", {
       type: "cron_job_run_failed",
       jobId: saved.jobId,
       name: saved.name,
@@ -1508,26 +1517,28 @@ export class CronAutomationService {
     return saved;
   }
 
-  private resolveCronJobContext(job: CronJobRecord): { contextFrom?: string; contextOutput?: string } | undefined {
+  private async resolveCronJobContext(
+    job: CronJobRecord,
+  ): Promise<{ contextFrom?: string; contextOutput?: string } | undefined> {
     if (!job.contextFrom) {
       return undefined;
     }
-    const upstream = this.deps.storage.cronJobs.get(job.contextFrom);
+    const upstream = await this.deps.storage.cronJobs.get(job.contextFrom);
     return {
       contextFrom: job.contextFrom,
       contextOutput: upstream?.lastRunOutput,
     };
   }
 
-  public recordCronReviewItem(input: {
+  public async recordCronReviewItem(input: {
     jobId: string;
     runId: string;
     severity: CronReviewItem["severity"];
     status: CronReviewItem["status"];
     summary: Record<string, unknown>;
     diff?: Record<string, unknown>;
-  }): void {
-    this.deps.storage.db
+  }): Promise<void> {
+    await this.deps.storage.db
       .prepare(
         `
       INSERT INTO cron_review_items (

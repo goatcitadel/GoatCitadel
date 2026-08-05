@@ -204,12 +204,12 @@ const DRAFT_PATTERN = /\b(?:draft|outline|brainstorm|explore|summari[sz]e|compar
 export class WorkPassportService {
   public constructor(private readonly operatorProfiles: OperatorProfileService) {}
 
-  public getBaseline(workspaceId: string): WorkPassportBaseline {
-    const profile = this.operatorProfiles.findOperatorProfile(workspaceId);
+  public async getBaseline(workspaceId: string): Promise<WorkPassportBaseline> {
+    const profile = await this.operatorProfiles.findOperatorProfile(workspaceId);
     return profile ? baselineFromProfile(profile) : { configured: false, primaryDomains: [] };
   }
 
-  public updateBaseline(input: WorkPassportBaselineUpdateInput): WorkPassportBaseline {
+  public async updateBaseline(input: WorkPassportBaselineUpdateInput): Promise<WorkPassportBaseline> {
     const roleLabel = input.roleLabel?.trim();
     const primaryDomains = [...new Set(input.primaryDomains)];
     const candidate: WorkPassportBaseline = {
@@ -218,7 +218,7 @@ export class WorkPassportService {
       primaryDomains,
     };
     assertWorkPassportBaseline(candidate);
-    const result = this.operatorProfiles.replaceOperatorManagedFacts(input.workspaceId, {
+    const result = await this.operatorProfiles.replaceOperatorManagedFacts(input.workspaceId, {
       sourceRefPrefix: SOURCE_PREFIX,
       facts: [
         ...(roleLabel ? [{ kind: "fact" as const, content: roleLabel, confidence: 1, sourceRef: ROLE_SOURCE }] : []),
@@ -236,8 +236,8 @@ export class WorkPassportService {
     return baselineFromProfile(result.record);
   }
 
-  public classify(workspaceId: string, content: string): WorkPassportRecord {
-    const baseline = this.getBaseline(workspaceId);
+  public async classify(workspaceId: string, content: string): Promise<WorkPassportRecord> {
+    const baseline = await this.getBaseline(workspaceId);
     const taskSignals = classifyDomains(content);
     const boundary = classifyBoundary(baseline, taskSignals);
     const sensitive = taskSignals.some((signal) => SENSITIVE_DOMAINS.has(signal.domain));

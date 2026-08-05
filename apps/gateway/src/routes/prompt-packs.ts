@@ -184,7 +184,7 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: body.error.flatten() });
     }
     try {
-      return reply.send(promptPacks.importPromptPack(body.data));
+      return reply.send(await promptPacks.importPromptPack(body.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -204,16 +204,16 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: query.error.flatten() });
     }
     return reply.send({
-      items: promptPacks.listPromptPacks(query.data.limit),
+      items: await promptPacks.listPromptPacks(query.data.limit),
     });
   });
 
   fastify.get("/api/v1/prompt-packs/builtins", async (_request, reply) => {
-    return reply.send(promptPacks.listSecurityEvalPacks());
+    return reply.send(await promptPacks.listSecurityEvalPacks());
   });
 
   fastify.get("/api/v1/prompt-packs/security-gates", async (_request, reply) => {
-    return reply.send(promptPacks.listSecurityQualityGates());
+    return reply.send(await promptPacks.listSecurityQualityGates());
   });
 
   fastify.post("/api/v1/prompt-packs/builtins/:packKey/import", async (request, reply) => {
@@ -222,7 +222,7 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(promptPacks.importBuiltinPromptPack(params.data.packKey));
+      return reply.send(await promptPacks.importBuiltinPromptPack(params.data.packKey));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -241,7 +241,7 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send({
-        items: promptPacks.listPromptPackTests(params.data.packId, query.data.limit),
+        items: await promptPacks.listPromptPackTests(params.data.packId, query.data.limit),
       });
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
@@ -280,7 +280,7 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(
-        promptPacks.scorePromptPackTest({
+        await promptPacks.scorePromptPackTest({
           packId: params.data.packId,
           testId: params.data.testId,
           runId: body.data.runId,
@@ -317,7 +317,7 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(
-        promptPacks.reviewPromptPackTest({
+        await promptPacks.reviewPromptPackTest({
           packId: params.data.packId,
           testId: params.data.testId,
           runId: body.data.runId,
@@ -343,7 +343,7 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send({
-        items: promptPacks.listPromptPackTestReviews(params.data.packId, params.data.testId),
+        items: await promptPacks.listPromptPackTestReviews(params.data.packId, params.data.testId),
       });
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -412,7 +412,7 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(promptPacks.getPromptPackReport(params.data.packId));
+      return reply.send(await promptPacks.getPromptPackReport(params.data.packId));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -436,7 +436,7 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
         providers: body.data.providers,
         ...(body.data.executionStyle ? { executionStyle: body.data.executionStyle } : {}),
       };
-      return reply.send(promptPacks.runPromptPackBenchmark(params.data.packId, benchmarkInput));
+      return reply.send(await promptPacks.runPromptPackBenchmark(params.data.packId, benchmarkInput));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -448,7 +448,7 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(promptPacks.getPromptPackBenchmarkStatus(params.data.benchmarkRunId));
+      return reply.send(await promptPacks.getPromptPackBenchmarkStatus(params.data.benchmarkRunId));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -460,7 +460,7 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(promptPacks.cancelPromptPackBenchmark(params.data.benchmarkRunId));
+      return reply.send(await promptPacks.cancelPromptPackBenchmark(params.data.benchmarkRunId));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -478,7 +478,7 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.code(201).send(promptPacks.createPromptRetuneCampaign(params.data.packId, body.data));
+      return reply.code(201).send(await promptPacks.createPromptRetuneCampaign(params.data.packId, body.data));
     } catch (error) {
       return reply.code(409).send({ error: (error as Error).message });
     }
@@ -490,7 +490,7 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(promptPacks.listPromptRetuneCampaigns(params.data.packId));
+      return reply.send(await promptPacks.listPromptRetuneCampaigns(params.data.packId));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -502,7 +502,7 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(promptPacks.getPromptRetuneCampaign(params.data.campaignId));
+      return reply.send(await promptPacks.getPromptRetuneCampaign(params.data.campaignId));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -514,7 +514,7 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(promptPacks.startPromptRetuneNoise(params.data.campaignId));
+      return reply.send(await promptPacks.startPromptRetuneNoise(params.data.campaignId));
     } catch (error) {
       return reply.code(409).send({ error: (error as Error).message });
     }
@@ -532,7 +532,7 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(promptPacks.startPromptRetuneCandidate(params.data.campaignId, body.data));
+      return reply.send(await promptPacks.startPromptRetuneCandidate(params.data.campaignId, body.data));
     } catch (error) {
       return reply.code(409).send({ error: (error as Error).message });
     }
@@ -553,7 +553,7 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
       }
       try {
         return reply.send(
-          promptPacks.setPromptRetunePassDisposition(params.data.campaignId, params.data.passId, body.data),
+          await promptPacks.setPromptRetunePassDisposition(params.data.campaignId, params.data.passId, body.data),
         );
       } catch (error) {
         return reply.code(409).send({ error: (error as Error).message });
@@ -567,7 +567,7 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(promptPacks.cancelPromptRetuneCampaign(params.data.campaignId));
+      return reply.send(await promptPacks.cancelPromptRetuneCampaign(params.data.campaignId));
     } catch (error) {
       return reply.code(409).send({ error: (error as Error).message });
     }
@@ -585,7 +585,7 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(promptPacks.runPromptPackReplayRegression(params.data.packId, body.data));
+      return reply.send(await promptPacks.runPromptPackReplayRegression(params.data.packId, body.data));
     } catch (error) {
       return reply.code(409).send({ error: (error as Error).message });
     }
@@ -597,7 +597,7 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(promptPacks.getPromptPackReplayRegressionStatus(params.data.runId));
+      return reply.send(await promptPacks.getPromptPackReplayRegressionStatus(params.data.runId));
     } catch (error) {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("not found");
@@ -611,7 +611,7 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(promptPacks.getPromptPackCapabilityTrends(params.data.packId));
+      return reply.send(await promptPacks.getPromptPackCapabilityTrends(params.data.packId));
     } catch (error) {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("not found");
@@ -631,7 +631,7 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(promptPacks.getPromptPackExport(params.data.packId, query.data.format));
+      return reply.send(await promptPacks.getPromptPackExport(params.data.packId, query.data.format));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -649,7 +649,7 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(promptPacks.exportPromptPack(params.data.packId, { format: body.data.format }));
+      return reply.send(await promptPacks.exportPromptPack(params.data.packId, { format: body.data.format }));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -675,11 +675,11 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
           packId: params.data.packId,
           deletedRuns: 0,
           deletedScores: 0,
-          export: promptPacks.getPromptPackExport(params.data.packId),
+          export: await promptPacks.getPromptPackExport(params.data.packId),
         });
       }
       return reply.send(
-        promptPacks.resetPromptPackRunsAndScores(params.data.packId, {
+        await promptPacks.resetPromptPackRunsAndScores(params.data.packId, {
           clearRuns,
           clearScores,
         }),

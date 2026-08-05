@@ -18,13 +18,13 @@ export interface ChatModelSuggestion {
 
 export async function listChatModelSuggestions(
   deps: {
-    getRuntime(): ChatModelSuggestionRuntime;
+    getRuntime(): Promise<ChatModelSuggestionRuntime>;
     listLlmModels(providerId?: string): Promise<Array<{ id: string }>>;
   },
   query: string,
   limit = 25,
 ): Promise<ChatModelSuggestion[]> {
-  const runtime = deps.getRuntime();
+  const runtime = await deps.getRuntime();
   const normalizedQuery = query.trim().toLowerCase();
   let activeProviderRemoteModels: string[] = [];
   if (runtime.activeProviderId) {

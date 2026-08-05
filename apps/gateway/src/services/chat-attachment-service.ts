@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import type { ChatAttachmentMediaType, ChatAttachmentRecord } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { assertExistingPathRealpathAllowed, assertWritePathInJail } from "@goatcitadel/policy-engine";
 import type { GatewayRuntimeConfig } from "../config.js";
 import {
@@ -16,7 +16,7 @@ export interface ChatAttachmentHost {
   readonly storage: Pick<Storage, "chatAttachments" | "chatProjects" | "chatSessionMeta" | "chatSessionProjects">;
   getSession(sessionId: string): unknown;
   normalizeWorkspaceId(workspaceId?: string): string;
-  publishRealtime(eventType: string, source: string, payload: Record<string, unknown>): void;
+  publishRealtime(eventType: string, source: string, payload: Record<string, unknown>): Promise<unknown>;
   createMediaJob(input: {
     type: "ocr" | "audio_transcribe" | "video_transcribe" | "analyze";
     sessionId: string;
@@ -35,7 +35,7 @@ export async function uploadChatAttachment(
   },
 ): Promise<ChatAttachmentRecord> {
   deps.getSession(input.sessionId);
-  const sessionMeta = deps.storage.chatSessionMeta.ensure(input.sessionId);
+  const sessionMeta = await deps.storage.chatSessionMeta.ensure(input.sessionId);
   const sessionWorkspaceId = deps.normalizeWorkspaceId(sessionMeta.workspaceId);
   const fileName = sanitizeAttachmentFileName(input.fileName);
   const mimeType = input.mimeType.trim() || "application/octet-stream";
@@ -50,9 +50,9 @@ export async function uploadChatAttachment(
 
   let projectId = input.projectId;
   if (!projectId) {
-    projectId = deps.storage.chatSessionProjects.get(input.sessionId)?.projectId;
+    projectId = (await deps.storage.chatSessionProjects.get(input.sessionId))?.projectId;
   }
-  const project = projectId ? deps.storage.chatProjects.get(projectId) : undefined;
+  const project = projectId ? await deps.storage.chatProjects.get(projectId) : undefined;
   if (project && deps.normalizeWorkspaceId(project.workspaceId) !== sessionWorkspaceId) {
     throw new Error("project workspace does not match session workspace");
   }
@@ -71,7 +71,7 @@ export async function uploadChatAttachment(
   const { extractStatus, extractPreview } = extractAttachmentPreview(bytes, mimeType, fileName);
   const mediaType = detectAttachmentMediaType(mimeType);
   const analysisStatus = inferAttachmentAnalysisStatus(mediaType, extractStatus);
-  const created = deps.storage.chatAttachments.create({
+  const created = await deps.storage.chatAttachments.create({
     attachmentId,
     sessionId: input.sessionId,
     workspaceId: sessionWorkspaceId,
@@ -101,7 +101,7 @@ export async function uploadChatAttachment(
       attachmentId,
     });
   }
-  deps.publishRealtime("chat_message", "chat", {
+  await deps.publishRealtime("chat_message", "chat", {
     type: "chat_attachment_uploaded",
     sessionId: input.sessionId,
     attachmentId,
@@ -111,8 +111,8 @@ export async function uploadChatAttachment(
   return created;
 }
 
-export function getChatAttachment(deps: ChatAttachmentHost, attachmentId: string): ChatAttachmentRecord {
-  return deps.storage.chatAttachments.get(attachmentId);
+export async function getChatAttachment(deps: ChatAttachmentHost, attachmentId: string): Promise<ChatAttachmentRecord> {
+  return await deps.storage.chatAttachments.get(attachmentId);
 }
 
 export async function readChatAttachmentContent(
@@ -124,7 +124,7 @@ export async function readChatAttachmentContent(
   fullPath: string;
   bytes: Buffer;
 }> {
-  const record = deps.storage.chatAttachments.get(attachmentId);
+  const record = await deps.storage.chatAttachments.get(attachmentId);
   const maxBytes = options.maxBytes;
   if (maxBytes !== undefined) {
     if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {

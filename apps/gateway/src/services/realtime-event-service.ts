@@ -4,7 +4,7 @@ import {
   type ApprovalObservabilityAttribution,
   type RealtimeEvent,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 
 export interface RealtimePublisher {
   publishRealtime(
@@ -12,7 +12,7 @@ export interface RealtimePublisher {
     source: string,
     payload: Record<string, unknown>,
     options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
-  ): RealtimeEvent;
+  ): Promise<RealtimeEvent>;
 }
 
 export interface RealtimeEventListener {
@@ -48,12 +48,12 @@ export class RealtimeEventService implements RealtimePublisher {
     this.events.setMaxListeners(0);
   }
 
-  public publishRealtime(
+  public async publishRealtime(
     eventType: string,
     source: string,
     payload: Record<string, unknown>,
     options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
-  ): RealtimeEvent {
+  ): Promise<RealtimeEvent> {
     if (requiresExplicitRealtimeMetadata(eventType, source) && !hasExplicitRealtimeMetadata(options)) {
       throw new Error(`Explicit realtime metadata is required for protected event ${source}:${eventType}.`);
     }
@@ -64,7 +64,7 @@ export class RealtimeEventService implements RealtimePublisher {
     const publicPayload = stripApprovalObservabilityRealtimeEnvelope(payload);
     const projectedPayload = redactStructuredSecrets(publicPayload).value;
     const persisted = deliveryEnvelope
-      ? this.deps.storage.realtimeEvents.appendIdempotent(
+      ? await this.deps.storage.realtimeEvents.appendIdempotent(
           eventType,
           source,
           projectedPayload,
@@ -72,7 +72,7 @@ export class RealtimeEventService implements RealtimePublisher {
           deliveryEnvelope,
         )
       : {
-          event: this.deps.storage.realtimeEvents.append(eventType, source, projectedPayload, options),
+          event: await this.deps.storage.realtimeEvents.append(eventType, source, projectedPayload, options),
           inserted: true,
         };
     const event = persisted.event;
@@ -120,16 +120,18 @@ export class RealtimeEventService implements RealtimePublisher {
     };
   }
 
-  public listRealtimeEvents(limit = 100, cursor?: string): RealtimeEvent[] {
-    return this.deps.storage.realtimeEvents.list(limit, cursor).map(projectRealtimeEventPayload);
+  public async listRealtimeEvents(limit = 100, cursor?: string): Promise<RealtimeEvent[]> {
+    return (await this.deps.storage.realtimeEvents.list(limit, cursor)).map(projectRealtimeEventPayload);
   }
 
-  public listRealtimeEventsAfterSequence(afterSequence: number, limit = 100): RealtimeEvent[] {
-    return this.deps.storage.realtimeEvents.listAfterSequence(afterSequence, limit).map(projectRealtimeEventPayload);
+  public async listRealtimeEventsAfterSequence(afterSequence: number, limit = 100): Promise<RealtimeEvent[]> {
+    return (await this.deps.storage.realtimeEvents.listAfterSequence(afterSequence, limit)).map(
+      projectRealtimeEventPayload,
+    );
   }
 
-  public getRealtimeEventSequenceBounds(): { oldestSequence?: number; newestSequence?: number } {
-    return this.deps.storage.realtimeEvents.getSequenceBounds();
+  public async getRealtimeEventSequenceBounds(): Promise<{ oldestSequence?: number; newestSequence?: number }> {
+    return await this.deps.storage.realtimeEvents.getSequenceBounds();
   }
 
   public openRealtimeStreamLease(input: {

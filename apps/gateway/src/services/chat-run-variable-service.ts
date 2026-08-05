@@ -7,16 +7,16 @@ import {
   type RunTemplateInvocation,
   type RunVariableSchema,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 
-export function resolveChatRunVariableRequest(
+export async function resolveChatRunVariableRequest(
   storage: Storage,
   sessionId: string,
   input: ChatSendMessageRequest,
-): ChatSendMessageRequest {
+): Promise<ChatSendMessageRequest> {
   const invocation = input.templateInvocation;
   if (!invocation) return input;
-  const owner = resolveOwner(storage, invocation);
+  const owner = await resolveOwner(storage, invocation);
   if (owner.revision !== invocation.ownerRevision) throw new TypeError("Template changed; reopen the variable form.");
   const validation = validateRunVariableBindings(owner.schema, invocation.values);
   if (validation.schemaHash !== invocation.schemaHash)
@@ -27,7 +27,7 @@ export function resolveChatRunVariableRequest(
   if (input.content !== resolvedInput) throw new TypeError("Resolved template preview is stale or forged.");
 
   const evidence = buildRunVariableEvidence(invocation, owner.schema, resolvedInput);
-  storage.chatSessionRunVariables.upsert({
+  await storage.chatSessionRunVariables.upsert({
     sessionId,
     ownerKind: invocation.ownerKind,
     ownerId: invocation.ownerId,
@@ -38,19 +38,19 @@ export function resolveChatRunVariableRequest(
   return { ...input, content: resolvedInput, runVariableEvidence: evidence };
 }
 
-function resolveOwner(
+async function resolveOwner(
   storage: Storage,
   invocation: RunTemplateInvocation,
-): { revision: string; schema: RunVariableSchema; template: string } {
+): Promise<{ revision: string; schema: RunVariableSchema; template: string }> {
   if (invocation.ownerKind === "prompt_pack") {
     if (!invocation.templateId) throw new TypeError("Prompt-pack template invocation requires a test id.");
-    const pack = storage.promptPacks.getPack(invocation.ownerId);
-    const test = storage.promptPacks.getTest(invocation.templateId);
+    const pack = await storage.promptPacks.getPack(invocation.ownerId);
+    const test = await storage.promptPacks.getTest(invocation.templateId);
     if (test.packId !== pack.packId) throw new TypeError("Prompt-pack template does not belong to its declared owner.");
     if (!pack.runVariableSchema) throw new TypeError("Prompt pack has no run-variable schema.");
     return { revision: pack.updatedAt, schema: pack.runVariableSchema, template: test.prompt };
   }
-  const agent = storage.agentProfiles.get(invocation.ownerId);
+  const agent = await storage.agentProfiles.get(invocation.ownerId);
   if (agent.lifecycleStatus !== "active") throw new TypeError("Agent preset is not active.");
   const schema = agent.presetDefaults?.runVariableSchema;
   const template = agent.presetDefaults?.promptFraming;

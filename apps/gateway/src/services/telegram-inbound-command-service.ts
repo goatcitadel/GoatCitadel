@@ -10,18 +10,18 @@ export const TELEGRAM_APPROVAL_CALLBACK_EVENT_TYPE = "telegram-approval-callback
 export interface TelegramInboundCommandHost {
   storage: {
     integrationConnections: {
-      get(connectionId: string): {
+      get(connectionId: string): Promise<{
         connectionId: string;
         label: string;
         enabled: boolean;
         status: "connected" | "disconnected" | "error" | "paused";
         config: Record<string, unknown>;
-      };
-      update(connectionId: string, input: IntegrationConnectionUpdateInput): unknown;
+      }>;
+      update(connectionId: string, input: IntegrationConnectionUpdateInput): Promise<unknown>;
     };
   };
-  getPersonalityCatalog(): PersonalityCatalogResponse;
-  hasRunningTurn(sessionId: string): boolean;
+  getPersonalityCatalog(): Promise<PersonalityCatalogResponse>;
+  hasRunningTurn(sessionId: string): Promise<boolean>;
   parseChatCommand(
     sessionId: string,
     commandText: string,
@@ -96,7 +96,7 @@ export async function executeTelegramInboundCommand(
     };
   }
 
-  const connection = host.storage.integrationConnections.get(input.connectionId);
+  const connection = await host.storage.integrationConnections.get(input.connectionId);
   const resolveSessionId = () =>
     resolveTelegramChannelSessionId(connection.config, {
       account: input.message.account,
@@ -111,10 +111,10 @@ export async function executeTelegramInboundCommand(
     actorId: input.message.actorId,
     actorDisplayName: input.message.displayName,
     content: input.message.content,
-    personalityCatalog: host.getPersonalityCatalog(),
-    isActiveRun: () => {
+    personalityCatalog: await host.getPersonalityCatalog(),
+    isActiveRun: async () => {
       const sessionId = resolveSessionId();
-      return sessionId ? host.hasRunningTurn(sessionId) : false;
+      return sessionId ? await host.hasRunningTurn(sessionId) : false;
     },
     runChatCommand: async (commandText) => {
       const sessionId = resolveSessionId();
@@ -146,7 +146,7 @@ export async function executeTelegramInboundCommand(
     return { resultText: "Command is not available on this Telegram route." };
   }
   if (result.configPatch) {
-    host.storage.integrationConnections.update(input.connectionId, {
+    await host.storage.integrationConnections.update(input.connectionId, {
       config: { ...connection.config, ...result.configPatch },
       lastSyncAt: new Date().toISOString(),
       lastError: null,

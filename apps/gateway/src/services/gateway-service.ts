@@ -31,10 +31,9 @@ import { listSkillExportTargets, renderSkillExportPreview, SkillsService } from 
 import {
   type PostCommitEligibility,
   type SessionMutationAdmissionRecord,
-  type Storage,
+  type AsyncStorage as Storage,
   type SessionAutonomyPrefsPatchInput,
   type SessionAutonomyPrefsRecord,
-  PersonalOpsStorageRepository,
 } from "@goatcitadel/storage";
 import {
   buildChatModePrefsPatch,
@@ -435,6 +434,7 @@ import {
   resolveDevDiagnosticsEnabled,
   resolveDevDiagnosticsVerbose,
 } from "../dev-diagnostics/service.js";
+import { PostgresStorageWaitMonitor } from "../postgres-storage-wait-monitor.js";
 import { serializePathWithinRoot } from "./security-utils.js";
 import { MediaVoiceService } from "./media-voice-service.js";
 import { ChannelVoiceInboundService } from "./channel-voice-inbound-service.js";
@@ -904,13 +904,14 @@ export interface McpRequesterScopedCompositionHost {
    */
   resolvers?: McpRequesterResolverRegistryInput;
   /** Live MCP server records (config owner); re-read on every state check. */
-  listMcpServers(): McpServerRecord[];
+  listMcpServers(): Promise<McpServerRecord[]>;
   /** Durable frozen capability-profile record (server-owned storage read); undefined when missing. */
-  getChatTurnCapabilityProfile(profileId: string): ChatTurnCapabilityProfileRecord | undefined;
+  getChatTurnCapabilityProfile(profileId: string): Promise<ChatTurnCapabilityProfileRecord | undefined>;
   /** Live auth-owner read for the authenticated actor (device/companion grant revocation). */
-  readAuthConnectionState(actor: { actorId: string; actorSource: McpRequesterScopeAuthActorSource }): {
-    revoked: boolean;
-  };
+  readAuthConnectionState(actor: {
+    actorId: string;
+    actorSource: McpRequesterScopeAuthActorSource;
+  }): Promise<{ revoked: boolean }>;
   getNetworkAllowlist(): readonly string[];
   /** Content-free diagnostics; receives ONLY fixed taxonomy reason codes, never endpoint/header/cause text. */
   recordDevDiagnostic(input: {
@@ -950,13 +951,13 @@ function isMcpRequesterScopeActorSourceValue(value: unknown): value is McpReques
  * incomplete resolver configuration. A server flipped to static/disabled
  * mid-flight therefore reads as drift on the next `assertCurrent`.
  */
-function readLiveRequesterScopedServerSnapshot(
+async function readLiveRequesterScopedServerSnapshot(
   host: Pick<McpRequesterScopedCompositionHost, "listMcpServers">,
   serverId: string,
-): McpRequesterScopedServerSnapshot | undefined {
+): Promise<McpRequesterScopedServerSnapshot | undefined> {
   let record: McpServerRecord | undefined;
   try {
-    record = host.listMcpServers().find((candidate) => candidate.serverId === serverId);
+    record = (await host.listMcpServers()).find((candidate) => candidate.serverId === serverId);
   } catch {
     return undefined;
   }
@@ -1006,16 +1007,16 @@ type RequesterScopedServerMatch = { kind: "none" } | { kind: "ambiguous" } | { k
  * MCP canonical names flow through the same hook. More than one match is
  * unresolvable and fails closed.
  */
-function matchRequesterScopedServerByCanonicalToolName(
+async function matchRequesterScopedServerByCanonicalToolName(
   host: Pick<McpRequesterScopedCompositionHost, "listMcpServers">,
   canonicalToolName: string,
-): RequesterScopedServerMatch {
+): Promise<RequesterScopedServerMatch> {
   if (!canonicalToolName.startsWith("mcp.")) {
     return { kind: "none" };
   }
   let matches: McpServerRecord[];
   try {
-    matches = host.listMcpServers().filter((record) => {
+    matches = (await host.listMcpServers()).filter((record) => {
       try {
         const prefix = `mcp.${record.serverId}.`;
         return (
@@ -1117,7 +1118,7 @@ export function composeMcpRequesterScopedRuntime(
   const resolveMcpRequesterResolutionBinding = async (
     hook: McpRequesterScopedProfileFreezeHookInput,
   ): Promise<McpRequesterResolutionBinding | undefined> => {
-    const match = matchRequesterScopedServerByCanonicalToolName(host, hook.canonicalToolName);
+    const match = await matchRequesterScopedServerByCanonicalToolName(host, hook.canonicalToolName);
     if (match.kind === "none") {
       // Static server (or no requester-scoped owner): the hook yields no
       // binding and static behavior stays byte-identical. No diagnostic.
@@ -1128,8 +1129,8 @@ export function composeMcpRequesterScopedRuntime(
       return undefined;
     }
     const serverId = match.serverId;
-    const readCurrentState = (): McpRequesterScopedFreezeCurrentState | undefined => {
-      const server = readLiveRequesterScopedServerSnapshot(host, serverId);
+    const readCurrentState = async (): Promise<McpRequesterScopedFreezeCurrentState | undefined> => {
+      const server = await readLiveRequesterScopedServerSnapshot(host, serverId);
       if (!server) {
         return undefined;
       }
@@ -1138,7 +1139,10 @@ export function composeMcpRequesterScopedRuntime(
       if (!hook.authActorId || !isMcpRequesterScopeActorSourceValue(hook.authActorSource)) {
         return undefined;
       }
-      const auth = host.readAuthConnectionState({ actorId: hook.authActorId, actorSource: hook.authActorSource });
+      const auth = await host.readAuthConnectionState({
+        actorId: hook.authActorId,
+        actorSource: hook.authActorSource,
+      });
       return {
         revoked: auth.revoked,
         actorId: hook.authActorId,
@@ -1178,7 +1182,7 @@ export function composeMcpRequesterScopedRuntime(
   };
 
   const requesterScopedMcpDispatch: RequesterScopedMcpDispatchPort = {
-    invoke: async (input: RequesterScopedMcpDispatchInput, options: { effectDispatch: () => void }) => {
+    invoke: async (input: RequesterScopedMcpDispatchInput, options: { effectDispatch: () => Promise<void> }) => {
       // Brand-assert the server-built turn context. A missing value (direct
       // route, approval replay, durable/connector callers) or a forged plain
       // object copied from any request DTO fails closed BEFORE any registry,
@@ -1190,15 +1194,15 @@ export function composeMcpRequesterScopedRuntime(
         return buildRequesterScopedPreDispatchFailure(input.toolName, "requester_context_missing");
       }
       const serverId = input.server.serverId;
-      const readCurrentState = (): McpRequesterScopedToolCallCurrentState | undefined => {
-        const server = readLiveRequesterScopedServerSnapshot(host, serverId);
+      const readCurrentState = async (): Promise<McpRequesterScopedToolCallCurrentState | undefined> => {
+        const server = await readLiveRequesterScopedServerSnapshot(host, serverId);
         if (!server) {
           return undefined;
         }
         // The DURABLE frozen profile record is the live owner for turn
         // identity and profile hashes: re-read it from server-owned storage on
         // every check so a deleted or replaced profile reads as drift.
-        const profile = host.getChatTurnCapabilityProfile(context.profileId);
+        const profile = await host.getChatTurnCapabilityProfile(context.profileId);
         if (!profile) {
           return undefined;
         }
@@ -1206,7 +1210,7 @@ export function composeMcpRequesterScopedRuntime(
         if (!identity.authActorId || !isMcpRequesterScopeActorSourceValue(identity.authActorSource)) {
           return undefined;
         }
-        const auth = host.readAuthConnectionState({
+        const auth = await host.readAuthConnectionState({
           actorId: identity.authActorId,
           actorSource: identity.authActorSource,
         });
@@ -1288,7 +1292,7 @@ export class GatewayService {
    * switch is read live so a dashboard flag flip needs no gateway restart.
    */
   public readonly subagentFanout = new SubagentFanoutRuntime({
-    isDisabled: () => this.isFeatureEnabled("subagentFanoutV1Disabled"),
+    isDisabled: async () => await this.isFeatureEnabled("subagentFanoutV1Disabled"),
   });
   private readonly researchService: ResearchService;
   private readonly obsidianVaultService: ObsidianVaultService;
@@ -1299,6 +1303,7 @@ export class GatewayService {
   private readonly addonsService: AddonsService;
   private readonly addonSlotService: AddonSlotService;
   private readonly devDiagnostics: GatewayDevDiagnosticsService;
+  private readonly postgresStorageWaitMonitor: PostgresStorageWaitMonitor;
   public readonly discordRuntimeService: DiscordRuntimeService;
   public readonly signalInboundRuntimeService: SignalInboundRuntimeService;
   private readonly chatProjectService: ChatProjectService;
@@ -1400,6 +1405,7 @@ export class GatewayService {
   private criticalInitComplete = false;
   private deferredInitPromise?: Promise<void>;
   private readonly sharedHostLifecycle: SharedHostLifecycleAdmissionPort;
+  private configGenerationBootstrapHydrationPending = false;
 
   public get gatewaySql() {
     return this.storage.gatewaySql;
@@ -1431,7 +1437,20 @@ export class GatewayService {
     this.sharedHostLifecycle = options.sharedHostLifecycle ?? new SharedHostLifecycleService({ enabled: false });
     this.config = applyDurableExecutionBaselineToConfig(inputConfig);
     const config = this.config;
-    this.storage = createGatewayStorage(config);
+    // Storage waits can occur during migrations, so both buffers must exist
+    // before storage construction begins.
+    this.devDiagnostics = new GatewayDevDiagnosticsService(
+      resolveDevDiagnosticsEnabled(),
+      undefined,
+      resolveDevDiagnosticsVerbose(),
+      resolveDevDiagnosticsBufferSize(process.env.GOATCITADEL_DEV_DIAGNOSTICS_GATEWAY_BUFFER),
+    );
+    this.postgresStorageWaitMonitor = new PostgresStorageWaitMonitor({
+      recordDiagnostic: (diagnostic) => this.devDiagnostics.record(diagnostic),
+    });
+    this.storage = createGatewayStorage(config, {
+      onPostgresSyncWait: (diagnostic) => this.postgresStorageWaitMonitor.observe(diagnostic),
+    });
     this.sessionControlRuntimeOwner = getSessionControlRuntimeOwner(this.storage);
     this.modelUsageAccounting = new ModelUsageAccountingService(
       this.storage.modelUsageEvents,
@@ -1441,9 +1460,9 @@ export class GatewayService {
     this.channelDeliveryRuntimeService = new ChannelDeliveryRuntimeService({
       repository: this.storage.commsDeliveries,
       sharedHostLifecycle: this.sharedHostLifecycle,
-      send: (input) => this.sendQueuedChannelDelivery(input),
-      onDeliverySent: (record) => this.markLinkedCommitmentDeliverySent(record),
-      onDeliveryFailed: (record) => this.markLinkedCommitmentDeliveryFailed(record),
+      send: async (input) => await this.sendQueuedChannelDelivery(input),
+      onDeliverySent: async (record) => await this.markLinkedCommitmentDeliverySent(record),
+      onDeliveryFailed: async (record) => await this.markLinkedCommitmentDeliveryFailed(record),
     });
     this.personalityCatalogService = new PersonalityCatalogService(this.storage.systemSettings);
     this.realtimeEventService = new RealtimeEventService({
@@ -1452,20 +1471,20 @@ export class GatewayService {
     });
     this.evidenceEnvelopeService = new EvidenceEnvelopeService({
       storage: this.storage,
-      publishRealtime: (eventType, source, payload) => {
-        this.publishRealtime(eventType, source, payload);
+      publishRealtime: async (eventType, source, payload) => {
+        await this.publishRealtime(eventType, source, payload);
       },
     });
     this.continuationGateService = new ContinuationGateService({
       storage: this.storage,
-      publishRealtime: (eventType, source, payload) => {
-        this.publishRealtime(eventType, source, payload);
+      publishRealtime: async (eventType, source, payload) => {
+        await this.publishRealtime(eventType, source, payload);
       },
     });
     this.capabilityPackService = new CapabilityPackService({
       evidenceEnvelopeService: this.evidenceEnvelopeService,
-      publishRealtime: (eventType, source, payload) => {
-        this.publishRealtime(eventType, source, payload);
+      publishRealtime: async (eventType, source, payload) => {
+        await this.publishRealtime(eventType, source, payload);
       },
     });
     this.memoryWriteGateService = new MemoryWriteGateService();
@@ -1473,18 +1492,11 @@ export class GatewayService {
     // always blocked) and the master autonomy switch for auto-apply.
     this.operatorProfileService = new OperatorProfileService({
       storage: this.storage,
-      isFeatureEnabled: (flag) => this.isFeatureEnabled(flag as keyof RuntimeSettings["features"]),
+      isFeatureEnabled: async (flag) => await this.isFeatureEnabled(flag as keyof RuntimeSettings["features"]),
       memoryWriteGate: this.memoryWriteGateService,
     });
     this.workPassportService = new WorkPassportService(this.operatorProfileService);
-    this.enforceDurableExecutionBaseline();
     this.onboardingMarkerPath = path.resolve(config.rootDir, config.assistant.dataDir, "onboarding-state.json");
-    this.devDiagnostics = new GatewayDevDiagnosticsService(
-      resolveDevDiagnosticsEnabled(),
-      undefined,
-      resolveDevDiagnosticsVerbose(),
-      resolveDevDiagnosticsBufferSize(process.env.GOATCITADEL_DEV_DIAGNOSTICS_GATEWAY_BUFFER),
-    );
     this.runtimeDecisionRecorder = new RuntimeDecisionRecorder({
       runtimeDecisionTraces: this.storage.runtimeDecisionTraces,
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
@@ -1501,7 +1513,8 @@ export class GatewayService {
       config,
       createBackup: (input) => this.backupRetentionService.createBackup(input),
       readSettingsRevision: () => this.readSettingsRevision(),
-      commitDatabaseDriver: (input) => this.commitDatabaseDriver(input),
+      getStorageWaitSnapshot: () => this.postgresStorageWaitMonitor.snapshot(),
+      commitDatabaseDriver: async (input) => await this.commitDatabaseDriver(input),
     });
     this.mediaVoiceService = new MediaVoiceService({
       gatewaySql: this.gatewaySql,
@@ -1509,15 +1522,15 @@ export class GatewayService {
       backgroundTasks: this.backgroundTasks,
       runBackgroundWork: (label, work) => this.tryRunWithSharedHostWork("worker", label, work),
       isClosing: () => this.closing,
-      publishRealtime: (eventType, source, payload) => {
-        this.publishRealtime(eventType, source, payload);
+      publishRealtime: async (eventType, source, payload) => {
+        await this.publishRealtime(eventType, source, payload);
       },
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
-      readChatAttachmentContent: (id) => this.readChatAttachmentContent(id),
+      readChatAttachmentContent: async (id) => await this.readChatAttachmentContent(id),
       getChatAttachment: (id) => this.getChatAttachment(id),
     });
     this.channelVoiceInboundService = new ChannelVoiceInboundService({
-      fetchWithTimeout: (url, init) => this.fetchWithDiagnosticsTimeout(url, init),
+      fetchWithTimeout: async (url, init) => await this.fetchWithDiagnosticsTimeout(url, init),
       transcribeVoice: (input) => this.mediaVoiceService.transcribeVoice(input),
       isConnectionUrlAllowlisted: (urlValue) => this.isConnectionUrlAllowlisted(urlValue),
       resolveConnectionSecret: (connectionConfig, directKey, envKey) =>
@@ -1530,26 +1543,28 @@ export class GatewayService {
       isClosing: () => this.closing,
       registerBackgroundTask: (task) => this.registerBackgroundTask(task),
       sharedHostLifecycle: this.sharedHostLifecycle,
-      getIntegrationConnection: (connectionId) => this.storage.integrationConnections.get(connectionId),
-      ingestChannelMessage: (channel, idempotencyKey, message) =>
-        this.ingestChannelMessage(channel, idempotencyKey, message),
-      setChatSessionBinding: (binding) => this.setChatSessionBinding(binding),
-      hasRunningTurn: (sessionId) => this.hasRunningTurn(sessionId),
-      respondToExistingChatMessage: (sessionId, eventId, options) =>
-        this.respondToExistingChatMessage(sessionId, eventId, options),
+      getIntegrationConnection: async (connectionId) => await this.storage.integrationConnections.get(connectionId),
+      ingestChannelMessage: async (channel, idempotencyKey, message) =>
+        await this.ingestChannelMessage(channel, idempotencyKey, message),
+      setChatSessionBinding: async (binding) => {
+        await this.setChatSessionBinding(binding);
+      },
+      hasRunningTurn: async (sessionId) => await this.hasRunningTurn(sessionId),
+      respondToExistingChatMessage: async (sessionId, eventId, options) =>
+        await this.respondToExistingChatMessage(sessionId, eventId, options),
       transcribeChannelVoice: (input) => this.channelVoiceInboundService.transcribe(input),
       executeInboundCommand: (input) =>
         input.channel === "telegram"
           ? executeTelegramInboundCommand(this, input)
           : discordRuntimeBridgeService.executeDiscordRuntimeInboundCommand(this, input),
       decideBotLoop: (input) => getInboundBotLoopGuard().decide(input),
-      emitChannelActivity: (input) => this.commsActivity(input),
+      emitChannelActivity: async (input) => await this.commsActivity(input),
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
     });
     this.browserSessionRuntimeService = new BrowserSessionRuntimeService({
       gatewaySql: this.gatewaySql,
-      publishRealtime: (eventType, source, payload) => {
-        this.publishRealtime(eventType, source, payload);
+      publishRealtime: async (eventType, source, payload) => {
+        await this.publishRealtime(eventType, source, payload);
       },
       describeState: describeBrowserSessionState,
     });
@@ -1563,17 +1578,17 @@ export class GatewayService {
     this.delegatedWorkResultService = new DelegatedWorkResultService({
       storage: this.storage,
       writeJailRoots: config.toolPolicy.sandbox.writeJailRoots,
-      isEnabled: () => this.isFeatureEnabled("delegationScopeExpansionV1Enabled"),
-      createApproval: (input) => this.createApproval(input),
-      appendAudit: (payload) => {
-        void this.storage.audit.append("approvals", payload);
+      isEnabled: async () => await this.isFeatureEnabled("delegationScopeExpansionV1Enabled"),
+      createApproval: async (input) => await this.createApproval(input),
+      appendAudit: async (payload) => {
+        void (await this.storage.audit.append("approvals", payload));
       },
     });
     this.policyEngine = new ToolPolicyEngine(config.toolPolicy, this.storage, undefined, {
       // Tool-policy approval creation must enter the canonical lifecycle. A
       // direct policy-engine storage write would omit the durable wait run and
       // retryable approval observability envelope.
-      createApproval: (input, onCreated, authority) => this.createApproval(input, onCreated, authority),
+      createApproval: async (input, onCreated, authority) => await this.createApproval(input, onCreated, authority),
       assertBrowserSessionAccess: (check) => this.browserSessionRuntimeService.assertAccess(check),
       resolveApprovalActionTokenSecret: (secretRef) => this.approvalRemoteTokenSecrets.resolve(secretRef),
       deleteApprovalActionTokenSecret: (secretRef) => this.approvalRemoteTokenSecrets.delete(secretRef),
@@ -1585,7 +1600,7 @@ export class GatewayService {
       // the pure policy-engine executor delegates it back here. The approval gate
       // and deny-wins still fire first in `engine.invoke`; this hook only runs
       // after the engine has authorized execution.
-      scheduleManage: (args, policyContext) => this.scheduleManage(args, policyContext),
+      scheduleManage: async (args, policyContext) => await this.scheduleManage(args, policyContext),
       // Model-callable `agent.fanout` (R3-8). Child-turn spawning is impure and
       // needs the active turn's prepared context, so the executor delegates the
       // authorized invoke back to the session registry the entry/stream turn
@@ -1593,8 +1608,8 @@ export class GatewayService {
       // audit fire first in `engine.invoke`.
       subagentFanout: (request) => this.subagentFanout.execute(request),
       getChatSessionStatus: (sessionId) => this.chatSessionStatusService.getModelProjection(sessionId),
-      requestNotification: (request, input) => this.requestNotificationFromTool(request.sessionId, input),
-      proposeDocumentPatch: (request, input) => this.proposeDocumentPatchFromTool(request, input),
+      requestNotification: async (request, input) => await this.requestNotificationFromTool(request.sessionId, input),
+      proposeDocumentPatch: async (request, input) => await this.proposeDocumentPatchFromTool(request, input),
       submitWorkResult: (request) => this.delegatedWorkResultService.execute(request),
       preparePresentationVisuals: (request) =>
         prepareApprovedPresentationVisuals({
@@ -1635,18 +1650,20 @@ export class GatewayService {
       reloadSkills: () => this.skillsService.reload(),
     });
     this.capabilityScopeResolver = new CapabilityScopeResolver({
-      listAssignmentsForScope: (scopeKind, scopeId) => this.storage.capabilityScope.listForScope(scopeKind, scopeId),
+      listAssignmentsForScope: async (scopeKind, scopeId) =>
+        await this.storage.capabilityScope.listForScope(scopeKind, scopeId),
       listAllSkillIds: () => this.skillsService.list().map((skill) => skill.skillId),
-      listAllIntegrationIds: () => this.storage.integrationConnections.list(undefined, 1000).map((c) => c.connectionId),
-      listAllMcpServerIds: () => this.listMcpServers().map((server) => server.serverId),
+      listAllIntegrationIds: async () =>
+        (await this.storage.integrationConnections.list(undefined, 1000)).map((c) => c.connectionId),
+      listAllMcpServerIds: async () => (await this.listMcpServers()).map((server) => server.serverId),
     });
     // HX-408 M1: the publication owner reads/writes only the durable mesh
     // capability storage, so it composes ahead of the capability system that
     // projects its catalog entries.
     this.meshCapabilityPublicationService = new MeshCapabilityPublicationService({
       storage: this.storage,
-      publishRealtime: (eventType, source, payload) => {
-        this.publishRealtime(eventType, source, payload);
+      publishRealtime: async (eventType, source, payload) => {
+        await this.publishRealtime(eventType, source, payload);
       },
     });
     // HX-408 M2: the governed activation owner composes over the publication
@@ -1654,48 +1671,48 @@ export class GatewayService {
     this.meshCapabilityActivationService = new MeshCapabilityActivationService({
       storage: this.storage,
       publication: this.meshCapabilityPublicationService,
-      publishRealtime: (eventType, source, payload) => {
-        this.publishRealtime(eventType, source, payload);
+      publishRealtime: async (eventType, source, payload) => {
+        await this.publishRealtime(eventType, source, payload);
       },
     });
     this.engineeringLearningService = new EngineeringLearningService({
       storage: this.storage,
       rootDir: config.rootDir,
-      isEnabled: () => this.isFeatureEnabled("engineeringLearningsV1Enabled"),
-      createApproval: (input) => this.createApproval(input),
-      resolveSourceRoot: (input) => this.resolveEngineeringLearningSourceRoot(input),
-      resolveProjectId: (sessionId) => this.storage.chatSessionProjects.get(sessionId)?.projectId,
-      appendAudit: (payload) => {
-        void this.storage.audit.append("approvals", payload);
+      isEnabled: async () => await this.isFeatureEnabled("engineeringLearningsV1Enabled"),
+      createApproval: async (input) => await this.createApproval(input),
+      resolveSourceRoot: async (input) => await this.resolveEngineeringLearningSourceRoot(input),
+      resolveProjectId: async (sessionId) => (await this.storage.chatSessionProjects.get(sessionId))?.projectId,
+      appendAudit: async (payload) => {
+        void (await this.storage.audit.append("approvals", payload));
       },
     });
     this.capabilitySystemService = new CapabilitySystemService({
       rootDir: config.rootDir,
       runtimeConfig: config.assistant.capabilities,
       storage: this.storage,
-      readFeatureFlags: () => this.readFeatureFlags(),
+      readFeatureFlags: async () => await this.readFeatureFlags(),
       listToolCatalog: () => this.listToolCatalog(),
       listMeshCapabilityCatalogEntries: () => this.meshCapabilityPublicationService.listCatalogEntries(),
       listLoadedSkills: () => this.skillsService.list(),
       readSkillStates: () => this.skillStateService.readSkillStates(),
-      invokeTool: (request) => this.invokeTool(request),
-      createApproval: (input) => this.createApproval(input),
-      resolveApproval: (approvalId, input) => this.resolveApproval(approvalId, input),
-      publishRealtime: (eventType, source, payload) => {
-        this.publishRealtime(eventType, source, payload);
+      invokeTool: async (request) => await this.invokeTool(request),
+      createApproval: async (input) => await this.createApproval(input),
+      resolveApproval: async (approvalId, input) => await this.resolveApproval(approvalId, input),
+      publishRealtime: async (eventType, source, payload) => {
+        await this.publishRealtime(eventType, source, payload);
       },
-      readPolicySnapshot: () => ({
+      readPolicySnapshot: async () => ({
         toolPolicy: this.config.toolPolicy,
-        features: this.readFeatureFlags(),
+        features: await this.readFeatureFlags(),
         runtimeExposure: this.buildRuntimeExposureSnapshot(),
       }),
-      resolvePolicyContext: (input) => this.resolveToolPolicyContext(input),
+      resolvePolicyContext: async (input) => await this.resolveToolPolicyContext(input),
       getChatSessionWorkbench: async (sessionId) => this.routeServices.chatSessions.getChatSessionWorkbench(sessionId),
       runChatSessionWorkbenchCommand: (sessionId, input) =>
         this.routeServices.chatSessions.runChatSessionWorkbenchCommand(sessionId, input),
       flushTranscriptOutbox: () => this.eventIngestService.flushPendingTranscriptOutbox(),
-      onVerifiedCodeModeRun: (response) => {
-        this.engineeringLearningService.proposeFromVerifiedCodeModeRun(response);
+      onVerifiedCodeModeRun: async (response) => {
+        await this.engineeringLearningService.proposeFromVerifiedCodeModeRun(response);
       },
     });
     this.skillLearningService = new SkillLearningService({
@@ -1709,7 +1726,8 @@ export class GatewayService {
     });
     this.taskLifecycleService = new TaskLifecycleService({
       storage: this.storage,
-      publishRealtime: (event, source, payload, options) => this.publishRealtime(event, source, payload, options),
+      publishRealtime: async (event, source, payload, options) =>
+        await this.publishRealtime(event, source, payload, options),
       pauseDurableRun: (runId, actorId) => this.pauseDurableRun(runId, actorId),
       cancelDurableRun: (runId, actorId) => this.cancelDurableRun(runId, actorId),
       recordAgenticDiagnosticSignal: (input) => this.improvementService.recordAgenticDiagnosticSignal(input),
@@ -1745,13 +1763,13 @@ export class GatewayService {
       runtimeCwd,
       releaseTrust: this.runtimeReleaseTrustService,
       structuredReviews: this.storage.structuredReviews,
-      requireFeatureEnabled: (flag) => this.requireFeatureEnabled(flag),
-      isFeatureEnabled: (flag) => this.isFeatureEnabled(flag),
+      requireFeatureEnabled: async (flag) => await this.requireFeatureEnabled(flag),
+      isFeatureEnabled: async (flag) => await this.isFeatureEnabled(flag),
       createAssemblyRun: (input) => this.assemblyService.createRun(input),
       getAssemblyRunDetail: (runId) => this.assemblyService.getRunDetail(runId),
       createCodeModeRun: (input) => this.capabilitySystemService.createCodeModeRun(input),
-      appendAudit: (payload) => {
-        void this.storage.audit.append("approvals", payload);
+      appendAudit: async (payload) => {
+        void (await this.storage.audit.append("approvals", payload));
       },
       taskLifecycleService: this.taskLifecycleService,
     });
@@ -1760,7 +1778,7 @@ export class GatewayService {
       config,
       orchestrationRuns: this.storage.orchestration,
       worktreeLeases: this.storage.orchestrationWorktreeLeases,
-      onLeaseLost: (event) => this.handleOrchestrationWorktreeLeaseLoss(event),
+      onLeaseLost: async (event) => await this.handleOrchestrationWorktreeLeaseLoss(event),
     });
     this.llmService = new LlmService(config.llm, process.env, {
       networkAllowlist: config.toolPolicy.sandbox.networkAllowlist,
@@ -1793,24 +1811,24 @@ export class GatewayService {
       normalizeWorkspaceId: (workspaceId) => this.normalizeWorkspaceId(workspaceId),
       dispatchNotificationEvent: (workspaceId, input) =>
         createNotificationRoutingServiceForGateway(this.getRouteCompositionPort()).dispatch(workspaceId, input),
-      publishRealtime: (eventType, source, payload, options) =>
-        this.publishRealtime(eventType, source, payload, options),
+      publishRealtime: async (eventType, source, payload, options) =>
+        await this.publishRealtime(eventType, source, payload, options),
     });
     this.assemblyService = new AssemblyService({
       storage: this.storage,
       rootDir: config.rootDir,
       createChatCompletion: bindAssemblyChatCompletion(this),
       runBackgroundWork: (label, work) => this.tryRunWithSharedHostWork("agent", label, work),
-      publishRealtime: (eventType, source, payload) => {
-        this.publishRealtime(eventType, source, payload);
+      publishRealtime: async (eventType, source, payload) => {
+        await this.publishRealtime(eventType, source, payload);
       },
     });
     this.memoryContextService = new MemoryContextService(
       this.storage,
       this.llmService,
       config,
-      (eventType, payload) => {
-        this.publishRealtime(eventType, "memory", payload);
+      async (eventType, payload) => {
+        await this.publishRealtime(eventType, "memory", payload);
       },
       (request) => this.acquireLocalEmbeddingLease(request),
       (input) => this.modelUsageAccounting.prepareDispatch(input),
@@ -1833,51 +1851,53 @@ export class GatewayService {
       storage: this.storage,
       transport: {
         localNodeId: () => this.meshService.getOptionsSnapshot().localNodeId,
-        appendEvent: (input) => this.meshService.ingestReplicationEvent(input),
+        appendEvent: async (input) => await this.meshService.ingestReplicationEvent(input),
       },
-      publishRealtime: (eventType, source, payload) => {
-        this.publishRealtime(eventType, source, payload);
+      publishRealtime: async (eventType, source, payload) => {
+        await this.publishRealtime(eventType, source, payload);
       },
     });
     this.npuSidecar = new NpuSidecarService({
       rootDir: config.rootDir,
       config: config.assistant.npu,
-      onEvent: (eventType, payload) => {
-        this.publishRealtime(eventType, "npu", payload);
+      onEvent: async (eventType, payload) => {
+        await this.publishRealtime(eventType, "npu", payload);
       },
     });
     this.llamaCppRuntime = new LlamaCppRuntimeService({
       rootDir: config.rootDir,
       config: config.assistant.llamaCpp,
-      onEvent: (eventType, payload) => {
-        this.publishRealtime(eventType, "llamacpp", payload);
+      onEvent: async (eventType, payload) => {
+        await this.publishRealtime(eventType, "llamacpp", payload);
       },
     });
     const canonicalConfigPath = path.join(config.rootDir, "config", "goatcitadel.json");
-    const initialUnifiedPayload = fsSync.existsSync(canonicalConfigPath)
-      ? undefined
-      : this.buildUnifiedConfigPayloadForRuntime(config, config.llm, this.readFeatureFlags());
+    this.configGenerationBootstrapHydrationPending = !fsSync.existsSync(canonicalConfigPath);
+    const initialUnifiedPayload = this.configGenerationBootstrapHydrationPending
+      ? this.buildUnifiedConfigPayloadFromRuntime(config, config.llm, config.assistant.features, { jobs: [] })
+      : undefined;
     this.configGenerationService = new ConfigGenerationService(config.rootDir, initialUnifiedPayload);
     this.cronConfigGenerationOwner = new CronConfigGenerationOwner(this.configGenerationService, this.storage);
     this.approvalExplainer = new ApprovalExplainerService(
       this.storage,
       this.llmService,
       config.assistant.approvalExplainer,
-      (payload) => {
-        this.publishRealtime("approval_explained", "approvals", { ...payload });
+      async (payload) => {
+        await this.publishRealtime("approval_explained", "approvals", { ...payload });
       },
     );
     this.turnRuntime = new GatewayTurnRuntime({
       storage: this.storage,
       listToolCatalog: () => this.listToolCatalog(),
       listCapabilityCatalog: (scope) => this.capabilitySystemService.listCatalog(scope),
-      createChatCompletion: (request, attribution) => this.createChatCompletion(request, attribution),
-      createChatCompletionStream: (request, attribution) => this.createChatCompletionStream(request, attribution),
+      createChatCompletion: async (request, attribution) => await this.createChatCompletion(request, attribution),
+      createChatCompletionStream: async (request, attribution) =>
+        await this.createChatCompletionStream(request, attribution),
       generateImage: (request, attribution) => this.llmService.generateImage(request, attribution),
-      invokeTool: (request, options) => this.invokeTool(request, options),
-      invokeToolWithEffectTruth: (request, options) => this.invokeTool(request, options),
+      invokeTool: async (request, options) => await this.invokeTool(request, options),
+      invokeToolWithEffectTruth: async (request, options) => await this.invokeTool(request, options),
       persistToolArtifact: (input) => chatToolArtifactService.persistChatToolArtifact(this, input),
-      evaluateToolAccess: (request) => this.evaluateToolAccess(request),
+      evaluateToolAccess: async (request) => await this.evaluateToolAccess(request),
       // HX-408 M2: the pre-dispatch drift gate re-verifies the frozen mesh
       // activation snapshot through the activation owner right before dispatch.
       resolveMeshCapabilityPreDispatchBlock: ({ workspaceId, binding }) =>
@@ -1886,22 +1906,22 @@ export class GatewayService {
       // the generation-fenced mesh invocation owner.
       dispatchMeshCapabilityInvocation: (input, options) =>
         this.meshCapabilityInvocationService.dispatch(input, options),
-      invokeMcpTool: (request, options) => this.invokeMcpTool(request, options),
+      invokeMcpTool: async (request, options) => await this.invokeMcpTool(request, options),
       listMcpBrowserFallbackTargets: () => this.listMcpBrowserFallbackTargets(),
-      recordRuntimeDecision: (input) => this.recordRuntimeDecision(input),
+      recordRuntimeDecision: async (input) => await this.recordRuntimeDecision(input),
       toolLoopDetection: this.config.toolPolicy.tools.loopDetection,
       safeWriteFallbackDir: path.resolve(config.rootDir, config.assistant.workspaceDir, "goatcitadel_out"),
-      chatThinkingStreamV1Enabled: () => this.isFeatureEnabled("chatThinkingStreamV1Enabled"),
-      attachedContextToolsV1Enabled: () => this.isFeatureEnabled("attachedContextToolsV1Enabled"),
-      parallelToolExecutionV1Disabled: () => this.isFeatureEnabled("parallelToolExecutionV1Disabled"),
-      subagentFanoutV1Disabled: () => this.isFeatureEnabled("subagentFanoutV1Disabled"),
-      delegationScopeExpansionV1Enabled: () => this.isFeatureEnabled("delegationScopeExpansionV1Enabled"),
+      chatThinkingStreamV1Enabled: async () => await this.isFeatureEnabled("chatThinkingStreamV1Enabled"),
+      attachedContextToolsV1Enabled: async () => await this.isFeatureEnabled("attachedContextToolsV1Enabled"),
+      parallelToolExecutionV1Disabled: async () => await this.isFeatureEnabled("parallelToolExecutionV1Disabled"),
+      subagentFanoutV1Disabled: async () => await this.isFeatureEnabled("subagentFanoutV1Disabled"),
+      delegationScopeExpansionV1Enabled: async () => await this.isFeatureEnabled("delegationScopeExpansionV1Enabled"),
     });
     this.researchService = new ResearchService({
       storage: this.storage,
-      invokeTool: (request) => this.invokeTool(request),
-      createChatCompletion: (request, attribution) => this.createChatCompletion(request, attribution),
-      resolveToolPolicyContext: (input) => this.resolveToolPolicyContext(input),
+      invokeTool: async (request) => await this.invokeTool(request),
+      createChatCompletion: async (request, attribution) => await this.createChatCompletion(request, attribution),
+      resolveToolPolicyContext: async (input) => await this.resolveToolPolicyContext(input),
     });
     this.obsidianVaultService = new ObsidianVaultService(this.storage.systemSettings);
     this.skillImportService = new SkillImportService(config.rootDir, this.storage.systemSettings);
@@ -1919,7 +1939,7 @@ export class GatewayService {
     this.addonSlotService = new AddonSlotService();
     this.addonsService = new AddonsService(config.rootDir, { slotService: this.addonSlotService });
     this.discordRuntimeService = new DiscordRuntimeService({
-      listConnections: () => this.storage.integrationConnections.list(undefined, 1000),
+      listConnections: async () => await this.storage.integrationConnections.list(undefined, 1000),
       findApprovedPairing: (connectionId, userId) => this.findApprovedDiscordPairing(connectionId, userId),
       ensurePendingPairing: (connectionId, userId, displayName) =>
         this.ensurePendingDiscordPairing(connectionId, userId, displayName),
@@ -1931,8 +1951,8 @@ export class GatewayService {
       listModelSuggestions: (query, limit) =>
         listChatModelSuggestions(
           {
-            getRuntime: () => this.getSettings().llm,
-            listLlmModels: (providerId) => this.listLlmModels(providerId),
+            getRuntime: async () => (await this.getSettings()).llm,
+            listLlmModels: async (providerId) => await this.listLlmModels(providerId),
           },
           query,
           limit,
@@ -1952,23 +1972,23 @@ export class GatewayService {
     // the bridge; it converts legacy inbound=true settings into operator-visible
     // blocked/deprecated evidence.
     this.signalInboundRuntimeService = new SignalInboundRuntimeService({
-      isEnabled: () => this.isFeatureEnabled("signalInboundV1Enabled"),
-      listConnections: () => this.storage.integrationConnections.list(undefined, 1000),
+      isEnabled: async () => await this.isFeatureEnabled("signalInboundV1Enabled"),
+      listConnections: async () => await this.storage.integrationConnections.list(undefined, 1000),
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
     });
     this.cronAutomationService = new CronAutomationService({
       storage: this.storage,
       specOwner: this.cronConfigGenerationOwner,
       sharedHostLifecycle: this.sharedHostLifecycle,
-      publishRealtime: (eventType, source, payload) => {
-        this.publishRealtime(eventType, source, payload ?? {});
+      publishRealtime: async (eventType, source, payload) => {
+        await this.publishRealtime(eventType, source, payload ?? {});
       },
-      requireFeatureEnabled: (flag) => this.requireFeatureEnabled(flag),
-      isFeatureEnabled: (flag) => this.isFeatureEnabled(flag),
-      recordEvidenceEnvelope: (input) => {
+      requireFeatureEnabled: async (flag) => await this.requireFeatureEnabled(flag),
+      isFeatureEnabled: async (flag) => await this.isFeatureEnabled(flag),
+      recordEvidenceEnvelope: async (input) => {
         // Best-effort: envelope failure must never fail the cron run.
         try {
-          return this.evidenceEnvelopeService.createEnvelope(input);
+          return await this.evidenceEnvelopeService.createEnvelope(input);
         } catch (error) {
           this.recordDevDiagnostic({
             level: "warn",
@@ -1985,10 +2005,10 @@ export class GatewayService {
       },
       runHandlers: {
         task: async (job, _context?) => {
-          const task = this.createCronInboxTask(job);
+          const task = await this.createCronInboxTask(job);
           return { taskId: task.taskId };
         },
-        agentTurn: (input) => this.runCronAgentTurn(input),
+        agentTurn: async (input) => await this.runCronAgentTurn(input),
         improvement: async () => {
           await this.improvementService.runWeeklyImprovementSchedulerIfDue({ force: true, recordCronState: false });
         },
@@ -2010,7 +2030,7 @@ export class GatewayService {
         curator: async () => {
           await this.curatorService.runCuratorWeeklyIfDue({ force: true, recordCronState: false });
         },
-        watchdog: async (job) => this.runCronWatchdog(job),
+        watchdog: async (job) => await this.runCronWatchdog(job),
         noAgent: (input) => runNoAgentCommand(input),
       },
     });
@@ -2028,8 +2048,8 @@ export class GatewayService {
       policyEngine: this.policyEngine,
       gatewaySql: this.storage.gatewaySql,
       publishRealtime,
-      requireFeatureEnabled: (flag: keyof RuntimeSettings["features"]) => this.requireFeatureEnabled(flag),
-      isFeatureEnabled: (flag: keyof RuntimeSettings["features"]) => this.isFeatureEnabled(flag),
+      requireFeatureEnabled: async (flag: keyof RuntimeSettings["features"]) => await this.requireFeatureEnabled(flag),
+      isFeatureEnabled: async (flag: keyof RuntimeSettings["features"]) => await this.isFeatureEnabled(flag),
       normalizeWorkspaceId: (workspaceId?: string) => this.normalizeWorkspaceId(workspaceId),
     };
     this.guidanceService = new GuidanceService(serviceCtx);
@@ -2040,7 +2060,7 @@ export class GatewayService {
         () => this.durableWorkflowRegistry,
       ),
       onRunFailed: async (run, message) => {
-        this.improvementService.recordDurableRunFailureSignal({
+        await this.improvementService.recordDurableRunFailureSignal({
           run,
           message,
         });
@@ -2049,8 +2069,8 @@ export class GatewayService {
         durableExecutionService.executeAutonomousChatPostCommit(this.buildDurableChatTurnWorkflowHost(), run, context),
       onGeneralChatPostCommit: (run, progress) =>
         durableExecutionService.executeGeneralChatPostCommit(this.buildDurableChatTurnWorkflowHost(), run, progress),
-      resolvePostCommitEligibility: (sessionId) => this.resolvePostCommitEligibility(sessionId),
-      evaluateContinuationGate: (run) => this.evaluateDurableContinuationGate(run),
+      resolvePostCommitEligibility: async (sessionId) => await this.resolvePostCommitEligibility(sessionId),
+      evaluateContinuationGate: async (run) => await this.evaluateDurableContinuationGate(run),
       recordEvidenceEnvelope: (input) => this.evidenceEnvelopeService.createEnvelope(input),
       taskLifecycle: createDurableTaskAutoBlockBridge(this.taskLifecycleService),
       sharedHostLifecycle: this.sharedHostLifecycle,
@@ -2058,8 +2078,8 @@ export class GatewayService {
     this.heartbeatOccurrenceService = new HeartbeatOccurrenceService({
       storage: this.storage,
       sessionControlRuntimeOwner: this.sessionControlRuntimeOwner,
-      canEnqueueHeartbeat: () =>
-        !this.isFeatureEnabled("autonomyV1Disabled") && this.isFeatureEnabled("durableKernelV1Enabled"),
+      canEnqueueHeartbeat: async () =>
+        !(await this.isFeatureEnabled("autonomyV1Disabled")) && (await this.isFeatureEnabled("durableKernelV1Enabled")),
       enqueuePreclaimedHeartbeat: async (input) => {
         const run = await enqueueAutonomousChatTurn(this.chatAutonomousTurnDeps(), {
           sessionId: input.occurrence.sessionId,
@@ -2077,7 +2097,7 @@ export class GatewayService {
         });
         return Boolean(run?.runId);
       },
-      getDurableRun: (runId) => this.storage.durableRuns.getRun(runId),
+      getDurableRun: async (runId) => await this.storage.durableRuns.getRun(runId),
       recoverDurableRun: async (runId) => {
         this.durableRunService.requestRunProcessing(runId);
         await this.durableRunService.reconcileAutonomousChatPostCommit(runId);
@@ -2117,35 +2137,35 @@ export class GatewayService {
     this.promptPackService = new PromptPackService(serviceCtx, {
       createChatSession: (input) => this.createChatSession(input),
       agentSendChatMessage: (sessionId, input) => this.chatTurnRuntime.agentSendChatMessage(sessionId, input),
-      createChatCompletion: (request, attribution) => this.createChatCompletion(request, attribution),
-      getPromptRunnerModelDefaults: () => this.getPromptRunnerModelDefaults(),
-      getPromptJudgeModelDefaults: () => this.getPromptJudgeModelDefaults(),
+      createChatCompletion: async (request, attribution) => await this.createChatCompletion(request, attribution),
+      getPromptRunnerModelDefaults: async () => await this.getPromptRunnerModelDefaults(),
+      getPromptJudgeModelDefaults: async () => await this.getPromptJudgeModelDefaults(),
       backgroundTasks: this.backgroundTasks,
       runBackgroundWork: (label, work) => this.tryRunWithSharedHostWork("agent", label, work),
-      recordImprovementBenchmarkSignal: (input) => {
-        this.improvementService.recordPromptLabBenchmarkCompletionSignal(input);
+      recordImprovementBenchmarkSignal: async (input) => {
+        await this.improvementService.recordPromptLabBenchmarkCompletionSignal(input);
       },
-      recordImprovementRegressionSignal: (input) => {
-        this.improvementService.recordPromptLabRegressionCompletionSignal(input);
+      recordImprovementRegressionSignal: async (input) => {
+        await this.improvementService.recordPromptLabRegressionCompletionSignal(input);
       },
-      appendAudit: (payload) => {
-        void this.storage.audit.append("approvals", payload);
+      appendAudit: async (payload) => {
+        void (await this.storage.audit.append("approvals", payload));
       },
     });
     this.chatProactiveService = new ChatProactiveService(serviceCtx, {
       listChatSessions: (query) => this.listChatSessions(query),
-      getSession: (sessionId) => this.getSession(sessionId),
-      hasRunningTurn: (sessionId) => this.hasRunningTurn(sessionId),
-      getSessionIdleSeconds: (sessionId) => this.getSessionIdleSeconds(sessionId),
-      listChatMessages: (sessionId, limit) => this.listChatMessages(sessionId, limit),
-      invokeTool: (request, options) => this.invokeTool(request, options),
-      resolveToolPolicyContext: (input) => this.resolveToolPolicyContext(input),
+      getSession: async (sessionId) => await this.getSession(sessionId),
+      hasRunningTurn: async (sessionId) => await this.hasRunningTurn(sessionId),
+      getSessionIdleSeconds: async (sessionId) => await this.getSessionIdleSeconds(sessionId),
+      listChatMessages: async (sessionId, limit) => await this.listChatMessages(sessionId, limit),
+      invokeTool: async (request, options) => await this.invokeTool(request, options),
+      resolveToolPolicyContext: async (input) => await this.resolveToolPolicyContext(input),
       detectDelegationRoles: (text) => detectDelegationRoles(text),
       createDurableRun: (input) => this.createDurableRun(input),
       requestDurableRunProcessing: (runId) => this.durableRunService.requestRunProcessing(runId),
       // P1-F5 de-novo origination: cheap read-only planner + eligibility guard.
-      createChatCompletion: (request, attribution) => this.createChatCompletion(request, attribution),
-      resolveModelDefaults: () => this.getPromptJudgeModelDefaults(),
+      createChatCompletion: async (request, attribution) => await this.createChatCompletion(request, attribution),
+      resolveModelDefaults: async () => await this.getPromptJudgeModelDefaults(),
       resolveApiStyle: (providerId, model) => this.llmService.resolveExecutionApiStyle(providerId, model),
       isProactiveDeNovoEligibleSession: (sessionId) =>
         isHeartbeatEligibleSession(this.chatAutonomousTurnDeps(), sessionId),
@@ -2158,11 +2178,17 @@ export class GatewayService {
     this.approvalEffectsService = new ApprovalEffectsService(serviceCtx, {
       backgroundTasks: this.backgroundTasks,
       sharedHostLifecycle: this.sharedHostLifecycle,
-      wakeDurableRun: (runId, event) => this.wakeDurableRun(runId, event),
+      // Approval wake effects own a larger transaction that also advances the
+      // linked Chat trace. Defer worker admission until that effect commits so
+      // Promise-native storage cannot let the worker observe the old waiting
+      // trace and re-park the newly queued run.
+      wakeDurableRun: (runId, event) => this.durableOperatorService.wakeRun(runId, event, { deferProcessing: true }),
       requestRunProcessing: (runId) => this.durableRunService.requestRunProcessing(runId),
       findProactiveDurableRunIdsForApproval: (approvalId) => this.findProactiveDurableRunIdsForApproval(approvalId),
-      executeCodeModePendingApproval: (approvalId, signal) => this.executeCodeModePendingApproval(approvalId, signal),
-      executeApprovedPendingAction: (approvalId, signal) => this.executeApprovedPendingAction(approvalId, signal),
+      executeCodeModePendingApproval: async (approvalId, signal) =>
+        await this.executeCodeModePendingApproval(approvalId, signal),
+      executeApprovedPendingAction: async (approvalId, signal) =>
+        await this.executeApprovedPendingAction(approvalId, signal),
       executeApprovedSkillHubLifecycleOperation: (operationId, approvalId, requestSha256, signal) =>
         this.skillHubLifecycleService.applyApprovedOperation({
           operationId,
@@ -2199,18 +2225,21 @@ export class GatewayService {
         this.improvementService.executeApprovedImprovementLifecycleMutation(input),
       executeApprovedEngineeringLearningLifecycle: (approvalId) =>
         this.engineeringLearningService.applyApprovedAction(approvalId),
-      enqueueAfterHooks: (input) => this.hooksService.enqueueAfterHooks(input),
-      resolveApprovalHookWorkspaceId: (payload) => this.resolveApprovalHookWorkspaceId(payload),
-      resolvePostCommitEligibility: (sessionId) => this.resolvePostCommitEligibility(sessionId),
-      recordDurableTimelineEvent: (runId, eventType, payload) =>
-        this.recordDurableTimelineEvent(runId, eventType, payload),
-      recordApprovalResolutionSignals: (approval) => {
-        this.improvementService.recordApprovalResolutionSignal(approval);
-        this.improvementService.handleActivationApprovalResolution(approval);
+      enqueueAfterHooks: async (input) => {
+        await this.hooksService.enqueueAfterHooks(input);
       },
-      materializeApprovalWaitRun: (approvalId) => {
-        this.approvalWaitRunService.primeApprovalLifecycle(approvalId);
-        const runId = this.storage.approvalWaitRuns.getRunId(approvalId);
+      resolveApprovalHookWorkspaceId: async (payload) => await this.resolveApprovalHookWorkspaceId(payload),
+      resolvePostCommitEligibility: async (sessionId) => await this.resolvePostCommitEligibility(sessionId),
+      recordDurableTimelineEvent: async (runId, eventType, payload) => {
+        await this.recordDurableTimelineEvent(runId, eventType, payload);
+      },
+      recordApprovalResolutionSignals: async (approval) => {
+        await this.improvementService.recordApprovalResolutionSignal(approval);
+        await this.improvementService.handleActivationApprovalResolution(approval);
+      },
+      materializeApprovalWaitRun: async (approvalId) => {
+        await this.approvalWaitRunService.primeApprovalLifecycle(approvalId);
+        const runId = await this.storage.approvalWaitRuns.getRunId(approvalId);
         return runId ? this.getDurableRun(runId) : undefined;
       },
       reconcileExpiredApprovals: (limit) => this.approvalRuntime.expirePendingApprovals(limit),
@@ -2235,9 +2264,9 @@ export class GatewayService {
           this.config.assistant.approvalExplainer.autoRejectDangerThreshold ??
           this.config.assistant.shellExplainerPolicy.autoRejectDangerThreshold,
       },
-      publishRealtime: (eventType, source, payload, options) =>
-        this.publishRealtime(eventType, source, payload, options),
-      requireConnectorRecord: (connectorId) => this.requireConnectorRecord(connectorId),
+      publishRealtime: async (eventType, source, payload, options) =>
+        await this.publishRealtime(eventType, source, payload, options),
+      requireConnectorRecord: async (connectorId) => await this.requireConnectorRecord(connectorId),
       consumeRemoteActionToken: (token, actionType, options) =>
         this.consumeRemoteActionToken(token, actionType, options),
       consumeRemoteActionTokenById: (tokenId, actionType, options) =>
@@ -2250,26 +2279,28 @@ export class GatewayService {
           input,
           context,
         ),
-      executeCodeModePendingApproval: (approvalId, signal) => this.executeCodeModePendingApproval(approvalId, signal),
-      resolveApprovalHookWorkspaceId: (payload) => this.resolveApprovalHookWorkspaceId(payload),
+      executeCodeModePendingApproval: async (approvalId, signal) =>
+        await this.executeCodeModePendingApproval(approvalId, signal),
+      resolveApprovalHookWorkspaceId: async (payload) => await this.resolveApprovalHookWorkspaceId(payload),
       scheduleApprovalExplanation: (approval) => this.scheduleApprovalExplanation(approval),
       findProactiveDurableRunIdsForApproval: (approvalId) => this.findProactiveDurableRunIdsForApproval(approvalId),
       wakeDurableRun: (runId, event) => this.wakeDurableRun(runId, event),
       enqueueApprovalObservabilityEffects: (approvalId, items) =>
-        this.approvalEffectsService.enqueueObservabilityEffects(approvalId, items),
+        this.approvalEffectsService.enqueueObservabilityEffects(approvalId, items, { deferProcessing: true }),
       enqueueApprovalWaitMaterialization: (approval) =>
-        this.approvalEffectsService.enqueueApprovalWaitMaterialization(approval),
-      enqueueApprovalResolutionEffects: (approval, input, options) =>
-        this.enqueueApprovalResolutionEffects(approval, input, options),
+        this.approvalEffectsService.enqueueApprovalWaitMaterialization(approval, { deferProcessing: true }),
+      enqueueApprovalResolutionEffects: async (approval, input, options) =>
+        await this.enqueueApprovalResolutionEffects(approval, input, options),
+      requestApprovalEffectProcessing: () => this.approvalEffectsService.requestEffectProcessing(),
       awaitApprovalResolutionEffects: (approvalId) => this.approvalEffectsService.awaitResolutionEffects(approvalId),
-      enqueueApprovalRemoteTokenDelivery: (approval, connector, tokenRecord) =>
-        this.enqueueApprovalRemoteTokenDelivery(approval, connector, tokenRecord),
+      enqueueApprovalRemoteTokenDelivery: async (approval, connector, tokenRecord) =>
+        await this.enqueueApprovalRemoteTokenDelivery(approval, connector, tokenRecord),
     });
     this.steerService = new ChatSteerService();
     this.chatCompactionBreakerActionService = createChatCompactionBreakerActionServiceForGateway({
       storage: this.storage,
       normalizeWorkspaceId: (workspaceId) => this.normalizeWorkspaceId(workspaceId),
-      createApproval: (input, authority) => this.createApproval(input, undefined, authority),
+      createApproval: async (input, authority) => await this.createApproval(input, undefined, authority),
     });
     this.chatTurnRuntime = new ChatTurnRuntimeService(this.buildChatTurnRuntimeHost());
     this.orchestrationPhaseExecutionService = new OrchestrationPhaseExecutionService({
@@ -2287,8 +2318,8 @@ export class GatewayService {
       storage: this.storage,
       gatewaySql: this.gatewaySql,
       taskLifecycleService: this.taskLifecycleService,
-      getSession: (sessionId) => this.getSession(sessionId),
-      listChatMessages: (sessionId, limit) => this.listChatMessages(sessionId, limit),
+      getSession: async (sessionId) => await this.getSession(sessionId),
+      listChatMessages: async (sessionId, limit) => await this.listChatMessages(sessionId, limit),
       normalizeWorkspaceId: (workspaceId) => this.normalizeWorkspaceId(workspaceId),
       ensureChatSessionModelDefaults: (sessionId, prefs) => this.ensureChatSessionModelDefaults(sessionId, prefs),
       createChatSession: (input) =>
@@ -2299,26 +2330,29 @@ export class GatewayService {
               input,
             )
           : this.createChatSession(input),
-      inheritDelegatedSessionToolGrants: (parentSessionId, childSessionId) =>
-        this.inheritDelegatedSessionToolGrants(parentSessionId, childSessionId),
-      ensureSessionInternalToolGrant: (sessionId, toolName, reason) =>
-        this.ensureSessionInternalToolGrant(sessionId, toolName, reason),
-      resolveDelegatedFilesystemScope: (parentSessionId, dispatchGeneration, current) =>
-        this.resolveDelegatedFilesystemScope(parentSessionId, dispatchGeneration, current),
+      inheritDelegatedSessionToolGrants: async (parentSessionId, childSessionId) =>
+        await this.inheritDelegatedSessionToolGrants(parentSessionId, childSessionId),
+      ensureSessionInternalToolGrant: async (sessionId, toolName, reason) =>
+        await this.ensureSessionInternalToolGrant(sessionId, toolName, reason),
+      resolveDelegatedFilesystemScope: async (parentSessionId, dispatchGeneration, current) =>
+        await this.resolveDelegatedFilesystemScope(parentSessionId, dispatchGeneration, current),
       updateChatSessionPrefs: (sessionId, input) => this.updateChatSessionPrefs(sessionId, input),
-      resolveToolPolicyContext: (input) => this.resolveToolPolicyContext(input),
+      resolveToolPolicyContext: async (input) => await this.resolveToolPolicyContext(input),
       agentSendChatMessage: (sessionId, input, options) =>
         this.chatTurnRuntime.agentSendChatMessage(sessionId, input, options),
       extractAndPersistLearnedMemory: (sessionId, content, source) =>
         this.extractAndPersistLearnedMemory(sessionId, content, source),
       scheduleChatMemoryContextPrewarm: (input) => this.scheduleChatMemoryContextPrewarm(input),
-      watchDurableChildRun: (input) => {
+      watchDurableChildRun: async (input) => {
         // Some compatibility callers use policyRunId as a non-durable scope
         // token. Only bind a watcher when both canonical durable runs exist.
-        if (!this.findDurableRunMaybe(input.parentRunId) || !this.findDurableRunMaybe(input.childRunId)) {
+        if (
+          !(await this.findDurableRunMaybe(input.parentRunId)) ||
+          !(await this.findDurableRunMaybe(input.childRunId))
+        ) {
           return;
         }
-        this.durableRunService.watchDurableChildRun(input);
+        await this.durableRunService.watchDurableChildRun(input);
       },
       subagentDefaults: {
         childTimeoutSeconds: subagentDefaults.childTimeoutSeconds,
@@ -2332,9 +2366,9 @@ export class GatewayService {
     this.mcpRequesterScopedRuntime = composeMcpRequesterScopedRuntime({
       ...(options.mcpRequesterResolvers ? { resolvers: options.mcpRequesterResolvers } : {}),
       listMcpServers: () => this.readMcpServers(),
-      getChatTurnCapabilityProfile: (profileId) => {
+      getChatTurnCapabilityProfile: async (profileId) => {
         try {
-          return this.storage.chatTurnCapabilityProfiles.get(profileId);
+          return await this.storage.chatTurnCapabilityProfiles.get(profileId);
         } catch {
           return undefined;
         }
@@ -2345,33 +2379,33 @@ export class GatewayService {
     });
     this.toolInvocationCoordinator = new ToolInvocationCoordinatorService({
       approvalInbox: this.storage.approvalInbox,
-      assertMcpServerInScope: (request) => this.assertMcpServerInCapabilityScope(request),
+      assertMcpServerInScope: async (request) => await this.assertMcpServerInCapabilityScope(request),
       durableTasks: {
-        listRuns: (limit) => this.storage.durableRuns.listRuns(limit),
-        getRun: (runId) => {
+        listRuns: async (limit) => await this.storage.durableRuns.listRuns(limit),
+        getRun: async (runId) => {
           try {
-            return this.storage.durableRuns.getRun(runId);
+            return await this.storage.durableRuns.getRun(runId);
           } catch {
             return undefined;
           }
         },
         cancelRun: (runId) => this.durableOperatorService.cancelRun(runId),
       },
-      respondToMcpElicitation: (input) =>
-        this.mcpElicitationService.respondToRequest(input.elicitationId, {
+      respondToMcpElicitation: async (input) =>
+        await this.mcpElicitationService.respondToRequest(input.elicitationId, {
           action: input.action,
           content: input.content,
           owner: input.owner,
         }),
-      listMcpElicitations: (filter) => this.mcpElicitationService.listRequests(filter),
+      listMcpElicitations: async (filter) => await this.mcpElicitationService.listRequests(filter),
       policyEngine: this.policyEngine,
       hooksService: this.hooksService,
-      normalizeToolInvokeRequest: (request) => {
+      normalizeToolInvokeRequest: async (request) => {
         const resolvedWorkspaceId =
           request.workspaceId ??
-          this.storage.chatSessionMeta.get(request.sessionId)?.workspaceId ??
+          (await this.storage.chatSessionMeta.get(request.sessionId))?.workspaceId ??
           DEFAULT_WORKSPACE_ID;
-        const normalizedRequest = this.enrichToolPolicyContext(
+        const normalizedRequest = await this.enrichToolPolicyContext(
           this.applyRuntimeBrowserBackendDefaults(
             this.resolveToolInvokeRequestPaths({
               ...request,
@@ -2382,12 +2416,12 @@ export class GatewayService {
               // when the workspace cannot be resolved, so the common case is unaffected.
               citadelId:
                 request.citadelId ??
-                this.storage.workspaces?.find(resolvedWorkspaceId)?.citadelId ??
+                (await this.storage.workspaces?.find(resolvedWorkspaceId))?.citadelId ??
                 DEFAULT_CITADEL_ID,
             }),
           ),
         );
-        this.delegatedWorkResultService.assertToolRequestWithinApprovedScope(normalizedRequest);
+        await this.delegatedWorkResultService.assertToolRequestWithinApprovedScope(normalizedRequest);
         return normalizedRequest;
       },
       isValidToolName: (name) => isValidToolName(name),
@@ -2395,8 +2429,8 @@ export class GatewayService {
         evaluateDeploymentProfileToolAccess(this.config.assistant.deploymentProfile, request.toolName, request.args, {
           operatorApproved: policyContextHasOperatorApproval(request.policyContext),
         }),
-      isFeatureEnabled: (flag) => this.isFeatureEnabled(flag),
-      resolveToolHookWorkspaceId: (request) => this.resolveToolHookWorkspaceId(request),
+      isFeatureEnabled: async (flag) => await this.isFeatureEnabled(flag),
+      resolveToolHookWorkspaceId: async (request) => await this.resolveToolHookWorkspaceId(request),
       resolveWorkspacePathBridgeBeforeExecution: this.workspacePathBridgeRuntime.executionResolver.resolve,
       resolveToolCallBeforeHookInterposition: (workspaceId) =>
         this.hooksService.getToolCallBeforeInterposition(workspaceId),
@@ -2414,9 +2448,9 @@ export class GatewayService {
             localOperatorOverrideId: request.policyContext?.localOperatorOverrideId ?? request.localOperatorOverrideId,
           }),
         ),
-      scheduleApprovalExplanationById: (approvalId) => this.scheduleApprovalExplanationById(approvalId),
-      publishRealtime: (eventType, source, payload, options) =>
-        this.publishRealtime(eventType, source, payload, options),
+      scheduleApprovalExplanationById: async (approvalId) => await this.scheduleApprovalExplanationById(approvalId),
+      publishRealtime: async (eventType, source, payload, options) =>
+        await this.publishRealtime(eventType, source, payload, options),
       requireMcpServer: (serverId) => this.requireMcpServer(serverId),
       listMcpTools: (serverId) => this.listMcpTools(serverId),
       matchesWildcard: (value, pattern) => wildcardMatch(value, pattern),
@@ -2439,11 +2473,11 @@ export class GatewayService {
         this.capabilitySystemService.evaluateAutonomousActivationGrant(input),
       recordAutonomousActivationGrantUse: (grantId, estimatedCostUsd) =>
         this.capabilitySystemService.recordAutonomousActivationGrantUse(grantId, estimatedCostUsd),
-      resolveApprovalWithRemoteTokenId: (input) => this.resolveApprovalWithRemoteTokenId(input),
+      resolveApprovalWithRemoteTokenId: async (input) => await this.resolveApprovalWithRemoteTokenId(input),
       applyMcpRedaction: (output, mode) => applyMcpRedaction(output, mode),
-      recordEvidenceEnvelope: (input) => {
+      recordEvidenceEnvelope: async (input) => {
         try {
-          this.evidenceEnvelopeService.createEnvelope(input);
+          await this.evidenceEnvelopeService.createEnvelope(input);
         } catch (error) {
           this.recordDevDiagnostic({
             level: "warn",
@@ -2461,28 +2495,29 @@ export class GatewayService {
       pluginToolOverrideService: this.pluginToolOverrideService,
     });
     this.runtimeLifecycleReadService = new RuntimeLifecycleReadService({
-      getApproval: (approvalId) => this.storage.approvals.get(approvalId),
-      getApprovalWaitRunId: (approvalId) => this.storage.approvalWaitRuns.getRunId(approvalId),
-      getDurableRun: (runId) => this.storage.durableRuns.getRun(runId),
-      findDurableRunMaybe: (runId) => this.findDurableRunMaybe(runId),
-      findTask: (taskId) => this.storage.tasks.find(taskId),
-      getTurnTrace: (turnId) => this.storage.chatTurnTraces.get(turnId),
+      getApproval: async (approvalId) => await this.storage.approvals.get(approvalId),
+      getApprovalWaitRunId: async (approvalId) => await this.storage.approvalWaitRuns.getRunId(approvalId),
+      getDurableRun: async (runId) => await this.storage.durableRuns.getRun(runId),
+      findDurableRunMaybe: async (runId) => await this.findDurableRunMaybe(runId),
+      findTask: async (taskId) => await this.storage.tasks.find(taskId),
+      getTurnTrace: async (turnId) => await this.storage.chatTurnTraces.get(turnId),
       listHydratedChatTurnTraces: (sessionId, limit) => this.listHydratedChatTurnTraces(sessionId, limit),
-      listChatExecutionPlans: (sessionId, limit) => this.storage.chatExecutionPlans.listBySession(sessionId, limit),
-      listChatDelegationRuns: (sessionId, limit) => {
-        this.storage.chatDelegationRuns.reconcileSupersededRunningRunsForSession(sessionId);
-        return this.storage.chatDelegationRuns.listBySession(sessionId, limit);
+      listChatExecutionPlans: async (sessionId, limit) =>
+        await this.storage.chatExecutionPlans.listBySession(sessionId, limit),
+      listChatDelegationRuns: async (sessionId, limit) => {
+        await this.storage.chatDelegationRuns.reconcileSupersededRunningRunsForSession(sessionId);
+        return await this.storage.chatDelegationRuns.listBySession(sessionId, limit);
       },
-      listChatDelegationSteps: (runId) => this.storage.chatDelegationSteps.listByRun(runId),
-      getSession: (sessionId) => this.getSession(sessionId),
-      getSessionSummary: (sessionId) => this.getSessionSummary(sessionId),
+      listChatDelegationSteps: async (runId) => await this.storage.chatDelegationSteps.listByRun(runId),
+      getSession: async (sessionId) => await this.getSession(sessionId),
+      getSessionSummary: async (sessionId) => await this.getSessionSummary(sessionId),
       listChatSessionProactiveRuns: (sessionId, limit) =>
         this.chatProactiveService.listChatSessionProactiveRuns(sessionId, limit),
       listApprovalEffects: (approvalId) => this.approvalEffectsService.listByApproval(approvalId),
-      listRuntimeDecisionTraces: (query) => this.storage.runtimeDecisionTraces.list(query),
+      listRuntimeDecisionTraces: async (query) => await this.storage.runtimeDecisionTraces.list(query),
     });
     this.improvementService = new ImprovementService(serviceCtx, {
-      createApproval: (input) => this.createApproval(input),
+      createApproval: async (input) => await this.createApproval(input),
       captureRepairPolicySnapshot: (targetKey) =>
         captureRepairPolicySnapshot(this.improvementSnapshotDeps(), targetKey),
       applyRepairPolicyCandidate: (targetKey, revisionRef) =>
@@ -2501,8 +2536,8 @@ export class GatewayService {
         applySkillRevisionCandidate(this.improvementSnapshotDeps(), targetKey, revisionRef),
       restoreSkillRevisionSnapshot: (snapshotRef) =>
         restoreSkillRevisionSnapshot(this.improvementSnapshotDeps(), snapshotRef),
-      createChatCompletion: (request, attribution) => this.createChatCompletion(request, attribution),
-      getPromptRunnerModelDefaults: () => this.getPromptRunnerModelDefaults(),
+      createChatCompletion: async (request, attribution) => await this.createChatCompletion(request, attribution),
+      getPromptRunnerModelDefaults: async () => await this.getPromptRunnerModelDefaults(),
       // P2-W3: report the runtime-effective tune values via the shared reader so
       // applied auto-tunes are audited against what the decision points will read.
       readEffectiveBlockerTemplateStrictness: () => readBlockerTemplateStrictness(this.storage.systemSettings),
@@ -2518,32 +2553,33 @@ export class GatewayService {
           targetKey: settingKey,
           restoreRef: { kind: "tune", tuneId },
         }),
-      readTranscriptOrEmpty: (sessionId) => this.readTranscriptOrEmpty(sessionId),
-      retryChatTurn: (sessionId, turnId, overrides) => this.retryChatTurnInScratchSession(sessionId, turnId, overrides),
+      readTranscriptOrEmpty: async (sessionId) => await this.readTranscriptOrEmpty(sessionId),
+      retryChatTurn: async (sessionId, turnId, overrides) =>
+        await this.retryChatTurnInScratchSession(sessionId, turnId, overrides),
       backgroundTasks: this.backgroundTasks,
       get closing() {
         return self.closing;
       },
     });
     this.curatorService = new CuratorService({
-      listSkills: () => this.listSkills(),
-      archiveSkill: (skillId, reason) => {
+      listSkills: async () => await this.listSkills(),
+      archiveSkill: async (skillId, reason) => {
         // HX-402 P2: curator archive is the fail-safe internal disable — it
         // runs under the module-private branded system authority and writes
         // the governed `system_disabled` event plus Journey evidence.
-        this.skillStateService.systemDisableSkill(skillId, reason);
-        const updated = this.listSkills().find((s) => s.skillId === skillId);
+        await this.skillStateService.systemDisableSkill(skillId, reason);
+        const updated = (await this.listSkills()).find((s) => s.skillId === skillId);
         if (!updated) throw new Error(`Skill ${skillId} not found after archiving`);
         return updated;
       },
-      pruneSkill: (skillId) => {
+      pruneSkill: async (skillId) => {
         // v1: mark with prune note. Actual file removal is a follow-up task.
-        this.skillStateService.systemDisableSkill(skillId, "curator:pruned");
+        await this.skillStateService.systemDisableSkill(skillId, "curator:pruned");
         return { filesRemoved: [] };
       },
       now: () => new Date(),
       writeReport: (report) => writeCuratorReport(report, { logsRoot: this.config.rootDir }),
-      publishRealtime: (topic, payload) => this.publishRealtime("system", topic, payload),
+      publishRealtime: async (topic, payload) => await this.publishRealtime("system", topic, payload),
       cycleDays: 7,
       storage: this.storage,
       cronSpecOwner: this.cronConfigGenerationOwner,
@@ -2553,8 +2589,8 @@ export class GatewayService {
       // disables (never hard-deletes); prune/file-removal stays operator-gated.
       idleSweep: {
         isWorkspaceIdle: () => !this.chatTurnExecutionRegistry.hasAnyActiveChatTurnExecution(),
-        isAutonomyEnabled: () => !this.isFeatureEnabled("autonomyV1Disabled"),
-        snapshotSkill: (skillId) => this.skillStateService.captureCuratorIdleSnapshot(skillId),
+        isAutonomyEnabled: async () => !(await this.isFeatureEnabled("autonomyV1Disabled")),
+        snapshotSkill: async (skillId) => await this.skillStateService.captureCuratorIdleSnapshot(skillId),
       },
     });
     // Cross-cutting kill-switch & rollback. Ties every subsystem's existing
@@ -2565,7 +2601,7 @@ export class GatewayService {
     // profile so all collaborators already exist.
     this.autonomyControlService = new AutonomyControlService({
       storage: this.storage,
-      isFeatureEnabled: (flag) => this.isFeatureEnabled(flag as keyof RuntimeSettings["features"]),
+      isFeatureEnabled: async (flag) => await this.isFeatureEnabled(flag as keyof RuntimeSettings["features"]),
       readSettingsRevision: () => this.readSettingsRevision(),
       setKillSwitch: async ({ disabled, expectedRevision }) => {
         await this.updateSettings({
@@ -2576,11 +2612,12 @@ export class GatewayService {
       restoreHandlers: {
         restoreSkillRevision: (snapshotRef) =>
           restoreSkillRevisionSnapshot(this.improvementSnapshotDeps(), snapshotRef as ImprovementRef),
-        restoreOperatorProfile: (priorSnapshot) =>
-          this.operatorProfileService.restoreOperatorProfileSnapshot(priorSnapshot as OperatorProfileRecord),
+        restoreOperatorProfile: async (priorSnapshot) => {
+          await this.operatorProfileService.restoreOperatorProfileSnapshot(priorSnapshot as OperatorProfileRecord);
+        },
         restoreCuratorArchive: (skillId) => this.restoreCuratorIdleSkillSnapshot(skillId),
-        revertTune: (tuneId) => {
-          this.improvementService.revertDecisionAutoTune(tuneId);
+        revertTune: async (tuneId) => {
+          await this.improvementService.revertDecisionAutoTune(tuneId);
         },
       },
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
@@ -2593,8 +2630,8 @@ export class GatewayService {
       getDurableRun: (runId) => this.getDurableRun(runId),
     });
     const chatPostCommitEffectAuthority: ChatPostCommitEffectAuthorityPort = {
-      predispatch: ({ authority, parentRunId, postCommitGenerationId, effect }) => {
-        const outcome = this.storage.sessionMutationAdmissions.assertPostCommitChildDispatchAuthority({
+      predispatch: async ({ authority, parentRunId, postCommitGenerationId, effect }) => {
+        const outcome = await this.storage.sessionMutationAdmissions.assertPostCommitChildDispatchAuthority({
           childAdmission: authority.child,
           parentRunId,
           postCommitGenerationId,
@@ -2607,8 +2644,8 @@ export class GatewayService {
         return outcome.disposition;
       },
       atomicStage: {
-        run: (input, callback) =>
-          this.storage.sessionMutationAdmissions.runPostCommitChildStage(
+        run: async (input, callback) =>
+          await this.storage.sessionMutationAdmissions.runPostCommitChildStage(
             {
               childAdmission: input.authority.child,
               parentRunId: input.parentRunId,
@@ -2627,14 +2664,15 @@ export class GatewayService {
     };
     const chatPostCommitRuntime = createChatPostCommitRuntime({
       storage: this.storage,
-      createChatCompletion: (request, attribution) => this.createChatCompletion(request, attribution),
-      resolveModelDefaults: () => this.getPromptJudgeModelDefaults(),
+      createChatCompletion: async (request, attribution) => await this.createChatCompletion(request, attribution),
+      resolveModelDefaults: async () => await this.getPromptJudgeModelDefaults(),
       resolveApiStyle: (providerId, model) => this.llmService.resolveExecutionApiStyle(providerId, model),
       effectAuthority: chatPostCommitEffectAuthority,
-      isAutonomyDisabled: () => this.isFeatureEnabled("autonomyV1Disabled"),
+      isAutonomyDisabled: async () => await this.isFeatureEnabled("autonomyV1Disabled"),
       publishRealtime,
-      recordDurableTimelineEvent: (runId, eventType, payload) =>
-        this.recordDurableTimelineEvent(runId, eventType, payload),
+      recordDurableTimelineEvent: async (runId, eventType, payload) => {
+        await this.recordDurableTimelineEvent(runId, eventType, payload);
+      },
       recordImprovementDurableRunCompletion: (run, state) => this.recordImprovementDurableRunCompletion(run, state),
     });
     this.commitmentClassifier = chatPostCommitRuntime.commitmentClassifier;
@@ -2647,9 +2685,10 @@ export class GatewayService {
         gatewaySql: this.gatewaySql,
         memoryQualityIssues: this.storage.memoryQualityIssues,
         tryParseJson: (raw, fallback) => this.tryParseJson(raw, fallback),
-        requireFeatureEnabled: (flag) => this.requireFeatureEnabled(flag as keyof RuntimeSettings["features"]),
-        publishRealtime: (channel, topic, payload) => {
-          this.publishRealtime(channel, topic, payload);
+        requireFeatureEnabled: async (flag) =>
+          await this.requireFeatureEnabled(flag as keyof RuntimeSettings["features"]),
+        publishRealtime: async (channel, topic, payload) => {
+          await this.publishRealtime(channel, topic, payload);
         },
       },
       // HX-402 P1: canonical approval-authority collaborators for the
@@ -2669,58 +2708,67 @@ export class GatewayService {
       evidence: this.evidenceEnvelopeService,
       acquireLocalEmbeddingLease: (request) => this.acquireLocalEmbeddingLease(request),
       prepareEmbeddingUsageDispatch: (input) => this.modelUsageAccounting.prepareDispatch(input),
-      resolveSessionWorkspaceId: (sessionId) => this.storage.chatSessionMeta.get(sessionId)?.workspaceId,
-      resolveLearnedMemoryPolicy: (sessionId) => {
-        if (this.isReplayScratchSession(sessionId)) {
+      resolveSessionWorkspaceId: async (sessionId) => (await this.storage.chatSessionMeta.get(sessionId))?.workspaceId,
+      resolveLearnedMemoryPolicy: async (sessionId) => {
+        if (await this.isReplayScratchSession(sessionId)) {
           return {
             allowWrite: false,
             reason: "replay_scratch" as const,
           };
         }
-        const prefs = this.storage.chatSessionPrefs.ensure(sessionId);
+        const prefs = await this.storage.chatSessionPrefs.ensure(sessionId);
         return {
           allowWrite: prefs.memoryMode !== "off",
           memoryMode: prefs.memoryMode,
           reason: prefs.memoryMode === "off" ? ("memory_mode_off" as const) : ("allowed" as const),
         };
       },
-      readTranscriptOrEmpty: (sessionId) => this.readTranscriptOrEmpty(sessionId),
+      readTranscriptOrEmpty: async (sessionId) => await this.readTranscriptOrEmpty(sessionId),
     });
     this.memoryConsolidationService = new MemoryConsolidationService({
-      isFeatureEnabled: (flag) => this.isFeatureEnabled(flag),
-      listCompletedTurnTracesSince: (sinceIso, limit) =>
-        this.storage.chatTurnTraces.listCompletedSince(sinceIso, limit),
-      readTranscriptOrEmpty: (sessionId) => this.readTranscriptOrEmpty(sessionId),
-      createChatCompletion: (request, attribution) => this.createChatCompletion(request, attribution),
+      isFeatureEnabled: async (flag) => await this.isFeatureEnabled(flag),
+      listCompletedTurnTracesSince: async (sinceIso, limit) =>
+        await this.storage.chatTurnTraces.listCompletedSince(sinceIso, limit),
+      readTranscriptOrEmpty: async (sessionId) => await this.readTranscriptOrEmpty(sessionId),
+      createChatCompletion: async (request, attribution) => await this.createChatCompletion(request, attribution),
       // Rides the prompt-runner chokepoint, so drafting automatically moves to
       // the cheap utility tier once utilityModelRoutingV1Enabled ships.
-      resolveModelDefaults: () => this.getPromptRunnerModelDefaults(),
+      resolveModelDefaults: async () => await this.getPromptRunnerModelDefaults(),
       proposeTraceMemoryCandidate: (input, actorId) =>
         this.memoryLifecycleService.proposeTraceMemoryCandidate(input, actorId),
-      listExistingInsightsForDedup: () => [
-        ...this.memoryLifecycleService
-          .listMemoryLearnings({ status: "all", limit: EXISTING_LEARNINGS_DEDUP_LIMIT })
-          .map((item) => item.insight),
-        ...this.memoryLifecycleService
-          .listTraceMemoryCandidates({ status: "proposed", limit: PENDING_CANDIDATES_DEDUP_LIMIT })
-          .map((item) => item.proposedInsight),
+      listExistingInsightsForDedup: async () => [
+        ...(
+          await this.memoryLifecycleService.listMemoryLearnings({
+            status: "all",
+            limit: EXISTING_LEARNINGS_DEDUP_LIMIT,
+          })
+        ).map((item) => item.insight),
+        ...(
+          await this.memoryLifecycleService.listTraceMemoryCandidates({
+            status: "proposed",
+            limit: PENDING_CANDIDATES_DEDUP_LIMIT,
+          })
+        ).map((item) => item.proposedInsight),
       ],
-      getWatermark: () => this.storage.systemSettings.get<string>(MEMORY_CONSOLIDATION_WATERMARK_SETTING_KEY)?.value,
-      setWatermark: (iso) => this.storage.systemSettings.set(MEMORY_CONSOLIDATION_WATERMARK_SETTING_KEY, iso),
-      publishRealtime: (eventType, source, payload) => this.publishRealtime(eventType, source, payload ?? {}),
+      getWatermark: async () =>
+        (await this.storage.systemSettings.get<string>(MEMORY_CONSOLIDATION_WATERMARK_SETTING_KEY))?.value,
+      setWatermark: async (iso) =>
+        await this.storage.systemSettings.set(MEMORY_CONSOLIDATION_WATERMARK_SETTING_KEY, iso),
+      publishRealtime: async (eventType, source, payload) =>
+        await this.publishRealtime(eventType, source, payload ?? {}),
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
     });
     this.durableOperatorService = new DurableOperatorService({
       durableRunService: this.durableRunService,
       memoryLifecycleService: this.memoryLifecycleService,
       hooksService: this.hooksService,
-      resolveDurableRunHookWorkspaceId: (run) => this.resolveDurableRunHookWorkspaceId(run),
+      resolveDurableRunHookWorkspaceId: async (run) => await this.resolveDurableRunHookWorkspaceId(run),
     });
     // Host callbacks are lazy closures, so fields assigned later in this constructor
     // (skillsService, autonomyControlService) are safe to reference here.
     this.skillStateService = new SkillStateService(
       {
-        gatewaySql: this.storage.gatewaySql,
+        storage: this.storage,
         systemSettings: this.storage.systemSettings,
         skillAggregateRevisions: this.storage.skillAggregateRevisions,
         // HX-402 P2: canonical approval-authority collaborators for the
@@ -2732,10 +2780,10 @@ export class GatewayService {
         },
       },
       {
-        listSkills: () => this.skillsService.list(),
+        listSkills: async () => this.skillsService.list(),
         recordAutonomousMutation: (input) => this.autonomyControlService.recordAutonomousMutation(input),
         recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
-        publishRealtime: (eventType, source, payload) => this.publishRealtime(eventType, source, payload),
+        publishRealtime: async (eventType, source, payload) => await this.publishRealtime(eventType, source, payload),
       },
     );
     this.mcpServerStore = new McpServerStore({ systemSettings: this.storage.systemSettings });
@@ -2744,11 +2792,12 @@ export class GatewayService {
         memoryMaintenance: {
           storage: this.storage,
           memoryLifecycleService: this.memoryLifecycleService,
-          publishRealtime: (eventType, source, payload, options) => {
-            this.publishRealtime(eventType, source, payload, options);
+          publishRealtime: async (eventType, source, payload, options) => {
+            await this.publishRealtime(eventType, source, payload, options);
           },
-          recordDurableTimelineEvent: (runId, eventType, payload) =>
-            this.recordDurableTimelineEvent(runId, eventType, payload),
+          recordDurableTimelineEvent: async (runId, eventType, payload) => {
+            await this.recordDurableTimelineEvent(runId, eventType, payload);
+          },
           recordImprovementDurableRunCompletion: (run, checkpointState) =>
             this.recordImprovementDurableRunCompletion(run, checkpointState),
         },
@@ -2757,41 +2806,45 @@ export class GatewayService {
         proactiveTick: {
           chatProactiveService: this.chatProactiveService,
           gatewaySql: this.gatewaySql,
-          isFeatureEnabled: (feature) => this.isFeatureEnabled(feature as keyof RuntimeSettings["features"]),
+          isFeatureEnabled: async (feature) =>
+            await this.isFeatureEnabled(feature as keyof RuntimeSettings["features"]),
           listChatSessionProactiveRuns: (sessionId, limit) =>
             this.chatProactiveService.listChatSessionProactiveRuns(sessionId, limit),
-          publishRealtime: (eventType, source, payload, options) => {
-            this.publishRealtime(eventType, source, payload, options);
+          publishRealtime: async (eventType, source, payload, options) => {
+            await this.publishRealtime(eventType, source, payload, options);
           },
         },
         approvalWait: {
           storage: this.storage,
-          publishRealtime: (eventType, source, payload, options) => {
-            this.publishRealtime(eventType, source, payload, options);
+          publishRealtime: async (eventType, source, payload, options) => {
+            await this.publishRealtime(eventType, source, payload, options);
           },
-          recordDurableTimelineEvent: (runId, eventType, payload) =>
-            this.recordDurableTimelineEvent(runId, eventType, payload),
+          recordDurableTimelineEvent: async (runId, eventType, payload) => {
+            await this.recordDurableTimelineEvent(runId, eventType, payload);
+          },
           recordImprovementDurableRunCompletion: (run, checkpointState) =>
             this.recordImprovementDurableRunCompletion(run, checkpointState),
         },
         connectorDelivery: {
           storage: this.storage,
-          requireConnectorRecord: (connectorId) => this.requireConnectorRecord(connectorId),
-          commsSend: (input) => this.commsSend(input),
-          commsReply: (input) => this.commsReply(input),
-          commsReact: (input) => this.commsReact(input),
-          commsUnsend: (input) => this.commsUnsend(input),
-          commsTyping: (input) => this.commsTyping(input),
-          commsActivity: (input) => this.commsActivity(input),
-          isFeatureEnabled: (feature) => this.isFeatureEnabled(feature as keyof RuntimeSettings["features"]),
-          invokeMcpTool: (input) => this.invokeMcpTool(input),
+          requireConnectorRecord: async (connectorId) => await this.requireConnectorRecord(connectorId),
+          commsSend: async (input) => await this.commsSend(input),
+          commsReply: async (input) => await this.commsReply(input),
+          commsReact: async (input) => await this.commsReact(input),
+          commsUnsend: async (input) => await this.commsUnsend(input),
+          commsTyping: async (input) => await this.commsTyping(input),
+          commsActivity: async (input) => await this.commsActivity(input),
+          isFeatureEnabled: async (feature) =>
+            await this.isFeatureEnabled(feature as keyof RuntimeSettings["features"]),
+          invokeMcpTool: async (input) => await this.invokeMcpTool(input),
           approvalRemoteTokenSecrets: this.approvalRemoteTokenSecrets,
-          resolveDurableRunHookWorkspaceId: (run) => this.resolveDurableRunHookWorkspaceId(run),
-          publishRealtime: (eventType, source, payload, options) => {
-            this.publishRealtime(eventType, source, payload, options);
+          resolveDurableRunHookWorkspaceId: async (run) => await this.resolveDurableRunHookWorkspaceId(run),
+          publishRealtime: async (eventType, source, payload, options) => {
+            await this.publishRealtime(eventType, source, payload, options);
           },
-          recordDurableTimelineEvent: (runId, eventType, payload) =>
-            this.recordDurableTimelineEvent(runId, eventType, payload),
+          recordDurableTimelineEvent: async (runId, eventType, payload) => {
+            await this.recordDurableTimelineEvent(runId, eventType, payload);
+          },
           recordImprovementDurableRunCompletion: (run, checkpointState) =>
             this.recordImprovementDurableRunCompletion(run, checkpointState),
         },
@@ -2800,28 +2853,30 @@ export class GatewayService {
           hooksService: this.hooksService,
           durableRunService: this.durableRunService,
           computeDurableRetryDelayMs: (current, attemptNo) => this.computeDurableRetryDelayMs(current, attemptNo),
-          publishRealtime: (eventType, source, payload, options) => {
-            this.publishRealtime(eventType, source, payload, options);
+          publishRealtime: async (eventType, source, payload, options) => {
+            await this.publishRealtime(eventType, source, payload, options);
           },
-          recordDurableTimelineEvent: (runId, eventType, payload) =>
-            this.recordDurableTimelineEvent(runId, eventType, payload),
+          recordDurableTimelineEvent: async (runId, eventType, payload) => {
+            await this.recordDurableTimelineEvent(runId, eventType, payload);
+          },
           recordImprovementDurableRunCompletion: (run, checkpointState) =>
             this.recordImprovementDurableRunCompletion(run, checkpointState),
         },
         externalSideEffectReplay: {
           storage: this.storage,
-          publishRealtime: (eventType, source, payload, options) => {
-            this.publishRealtime(eventType, source, payload, options);
+          publishRealtime: async (eventType, source, payload, options) => {
+            await this.publishRealtime(eventType, source, payload, options);
           },
-          recordDurableTimelineEvent: (runId, eventType, payload) =>
-            this.recordDurableTimelineEvent(runId, eventType, payload),
+          recordDurableTimelineEvent: async (runId, eventType, payload) => {
+            await this.recordDurableTimelineEvent(runId, eventType, payload);
+          },
           recordImprovementDurableRunCompletion: (run, checkpointState) =>
             this.recordImprovementDurableRunCompletion(run, checkpointState),
           // Kill switch: externalSideEffectReplayJobsV1Disabled (`*Disabled` ⇒
           // feature ON by default). Disabled ⇒ the hook returns undefined,
           // byte-identical to before this hook existed (job_unavailable).
-          buildExternalSideEffectReplayJob: (run, payload) =>
-            this.isFeatureEnabled("externalSideEffectReplayJobsV1Disabled")
+          buildExternalSideEffectReplayJob: async (run, payload) =>
+            (await this.isFeatureEnabled("externalSideEffectReplayJobsV1Disabled"))
               ? undefined
               : buildGatewayExternalSideEffectReplayJob(
                   buildIntegrationActionHostForGateway(this.getRouteCompositionPort()),
@@ -2832,23 +2887,26 @@ export class GatewayService {
         orchestration: {
           storage: this.storage,
           durableRunService: this.durableRunService,
-          publishRealtime: (eventType, source, payload, options) => {
-            this.publishRealtime(eventType, source, payload, options);
+          publishRealtime: async (eventType, source, payload, options) => {
+            await this.publishRealtime(eventType, source, payload, options);
           },
-          recordDurableTimelineEvent: (runId, eventType, payload) =>
-            this.recordDurableTimelineEvent(runId, eventType, payload),
+          recordDurableTimelineEvent: async (runId, eventType, payload) => {
+            await this.recordDurableTimelineEvent(runId, eventType, payload);
+          },
           recordImprovementDurableRunCompletion: (run, checkpointState) =>
             this.recordImprovementDurableRunCompletion(run, checkpointState),
-          executeDurableOrchestrationRun: (run, context) => this.executeDurableOrchestrationRun(run, context),
+          executeDurableOrchestrationRun: async (run, context) =>
+            await this.executeDurableOrchestrationRun(run, context),
         },
         curatorTick: {
           storage: this.storage,
           curatorService: this.curatorService,
-          publishRealtime: (eventType, source, payload, options) => {
-            this.publishRealtime(eventType, source, payload, options);
+          publishRealtime: async (eventType, source, payload, options) => {
+            await this.publishRealtime(eventType, source, payload, options);
           },
-          recordDurableTimelineEvent: (runId, eventType, payload) =>
-            this.recordDurableTimelineEvent(runId, eventType, payload),
+          recordDurableTimelineEvent: async (runId, eventType, payload) => {
+            await this.recordDurableTimelineEvent(runId, eventType, payload);
+          },
           recordImprovementDurableRunCompletion: (run, checkpointState) =>
             this.recordImprovementDurableRunCompletion(run, checkpointState),
         },
@@ -2856,33 +2914,33 @@ export class GatewayService {
     );
     this.routeCompositionPort = this.buildRouteCompositionPort();
     this.runtimeAuthorityProjectionService = new RuntimeAuthorityProjectionService({
-      listDurableRuns: (limit) => this.storage.durableRuns.listRuns(limit),
-      countDurableRuns: () => this.storage.durableRuns.countRuns(),
-      listRunningDurableRuns: (limit) => {
-        const total = Number(this.storage.durableRuns.statusCounts().running ?? 0);
-        const runIds = this.storage.durableRuns.listRunIdsByStatus("running", limit);
-        const runsById = this.storage.durableRuns.getRunsByIds(runIds);
+      listDurableRuns: async (limit) => await this.storage.durableRuns.listRuns(limit),
+      countDurableRuns: async () => await this.storage.durableRuns.countRuns(),
+      listRunningDurableRuns: async (limit) => {
+        const total = Number((await this.storage.durableRuns.statusCounts()).running ?? 0);
+        const runIds = await this.storage.durableRuns.listRunIdsByStatus("running", limit);
+        const runsById = await this.storage.durableRuns.getRunsByIds(runIds);
         return {
           items: runIds.map((runId) => runsById.get(runId)).filter((run): run is DurableRunRecord => Boolean(run)),
           total,
         };
       },
-      resolveDurableRunWorkspaceId: (run) => this.resolveDurableRunAuthorityWorkspaceId(run as DurableRunRecord),
-      listRealtimeEvents: (limit) => this.storage.realtimeEvents.list(limit),
-      listApprovals: (workspaceId, limit) => this.storage.approvals.list(undefined, limit, workspaceId),
-      listApprovalEffects: (approvalIds, limitPerApproval) =>
-        this.storage.approvalEffects.listByApprovalIds(approvalIds, limitPerApproval),
-      listMeshNodes: (limit) => this.storage.mesh.listNodes(limit),
-      listMeshLeases: (limit) => this.storage.mesh.listLeases(limit),
+      resolveDurableRunWorkspaceId: async (run) =>
+        await this.resolveDurableRunAuthorityWorkspaceId(run as DurableRunRecord),
+      listRealtimeEvents: async (limit) => await this.storage.realtimeEvents.list(limit),
+      listApprovals: async (workspaceId, limit) => await this.storage.approvals.list(undefined, limit, workspaceId),
+      listApprovalEffects: async (approvalIds, limitPerApproval) =>
+        await this.storage.approvalEffects.listByApprovalIds(approvalIds, limitPerApproval),
+      listMeshNodes: async (limit) => await this.storage.mesh.listNodes(limit),
+      listMeshLeases: async (limit) => await this.storage.mesh.listLeases(limit),
       inspectLatestBackupTrust: () => this.backupRetentionService.inspectLatestBackupTrust(),
       getRuntimeIdentity: () => this.reviewReadinessService.getRuntimeIdentity(),
       getLocalRuntimeStatus: () => this.llamaCppRuntime.getStatus(),
       getConfigGenerationHealth: () => this.configGenerationService.getHealthSnapshot(),
-      listExternalSideEffects: (workspaceId, limit) =>
-        this.storage.externalSideEffectRuns.listByWorkspace(workspaceId, limit),
+      listExternalSideEffects: async (workspaceId, limit) =>
+        await this.storage.externalSideEffectRuns.listByWorkspace(workspaceId, limit),
     });
     this.routeServices = this.buildRouteServices();
-    this.inboundChannelEventService.start();
   }
 
   private buildRouteCompositionPort() {
@@ -2922,10 +2980,10 @@ export class GatewayService {
     return {
       storage: this.storage,
       durableRunService: this.durableRunService,
-      getSession: (sessionId) => this.getSession(sessionId),
-      loadChatTurnSessionState: (sessionId, options) => this.loadChatTurnSessionState(sessionId, options),
-      publishRealtime: (eventType, source, payload, options) =>
-        this.publishRealtime(eventType, source, payload, options),
+      getSession: async (sessionId) => await this.getSession(sessionId),
+      loadChatTurnSessionState: async (sessionId, options) => await this.loadChatTurnSessionState(sessionId, options),
+      publishRealtime: async (eventType, source, payload, options) =>
+        await this.publishRealtime(eventType, source, payload, options),
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
     };
   }
@@ -2937,9 +2995,9 @@ export class GatewayService {
       onboardingMarkerPath: this.onboardingMarkerPath,
       getAuthRuntimeSettings: () => this.getAuthRuntimeSettings(),
       readSettingsRevision: () => this.readSettingsRevision(),
-      publishRealtime: (eventType, source, payload, options) =>
-        this.publishRealtime(eventType, source, payload, options),
-      updateSettings: (input) => this.updateSettings(input),
+      publishRealtime: async (eventType, source, payload, options) =>
+        await this.publishRealtime(eventType, source, payload, options),
+      updateSettings: async (input) => await this.updateSettings(input),
     } as Omit<onboardingStateService.OnboardingStateHost, "onboardingMarker">;
     Object.defineProperty(host, "onboardingMarker", {
       configurable: false,
@@ -2973,90 +3031,94 @@ export class GatewayService {
       buildChatOrchestrationSummary: (input) => this.buildChatOrchestrationSummary(input),
       assertTurnAdmissionWrite: (admission) => this.sessionControlRuntimeOwner.assertActiveTurnWrite(admission),
       buildDefaultChatPersonalityOverlay: () => this.buildDefaultChatPersonalityOverlay(),
-      buildLlmMessagesFromBranchPath: (sessionId, pathTurnIds, currentUserMessage, options, state) =>
-        this.buildLlmMessagesFromBranchPath(sessionId, pathTurnIds, currentUserMessage, options, state),
+      buildLlmMessagesFromBranchPath: async (sessionId, pathTurnIds, currentUserMessage, options, state) =>
+        await this.buildLlmMessagesFromBranchPath(sessionId, pathTurnIds, currentUserMessage, options, state),
       composeFrozenOperatorProfileDigest: (workspaceId) => this.composeFrozenOperatorProfileDigest(workspaceId),
       resolveBasePromptCapabilityCatalog: () => this.resolveBasePromptCapabilityCatalog(),
       closeActiveChatTurnStream: (turnId, registrationId) => this.closeActiveChatTurnStream(turnId, registrationId),
-      collectCapabilityUpgradeSuggestions: (input) => this.collectCapabilityUpgradeSuggestions(input),
+      collectCapabilityUpgradeSuggestions: async (input) => await this.collectCapabilityUpgradeSuggestions(input),
       collectSpecialistCandidateSuggestions: (input) => this.collectSpecialistCandidateSuggestions(input),
-      commsSend: (input) => this.commsSend(input),
+      commsSend: async (input) => await this.commsSend(input),
       completeActiveChatTurnStream: (turnId, registrationId) =>
         this.completeActiveChatTurnStream(turnId, registrationId),
-      createChatCompletion: (request, attribution) => this.createChatCompletion(request, attribution),
-      executeChatModelCouncil: (prepared, signal) => this.executeChatModelCouncil(prepared, signal),
+      createChatCompletion: async (request, attribution) => await this.createChatCompletion(request, attribution),
+      executeChatModelCouncil: async (prepared, signal) => await this.executeChatModelCouncil(prepared, signal),
       createChatSession: (input) => this.createChatSession(input),
       createHydratedChatTurnTrace: (turnId, trace) => this.createHydratedChatTurnTrace(turnId, trace),
       endActiveChatTurnExecution: (turnId, controller) => this.endActiveChatTurnExecution(turnId, controller),
       ensureChatSessionModelDefaults: (sessionId, prefs) => this.ensureChatSessionModelDefaults(sessionId, prefs),
-      ensureChatSessionRuntimeGrants: (sessionId) => this.ensureChatSessionRuntimeGrants(sessionId),
-      ensureSessionInternalToolGrant: (sessionId, toolName, reason) =>
-        this.ensureSessionInternalToolGrant(sessionId, toolName, reason),
+      ensureChatSessionRuntimeGrants: async (sessionId) => await this.ensureChatSessionRuntimeGrants(sessionId),
+      ensureSessionInternalToolGrant: async (sessionId, toolName, reason) =>
+        await this.ensureSessionInternalToolGrant(sessionId, toolName, reason),
       extractAndPersistLearnedMemory: (sessionId, content, source) =>
         this.extractAndPersistLearnedMemory(sessionId, content, source),
       finalizeDurableChatRun: (runId, prepared, trace, expectedLeaseOwnerId) =>
         this.finalizeDurableChatRun(runId, prepared, trace, expectedLeaseOwnerId),
       getActiveChatTurnExecution: (turnId) => this.getActiveChatTurnExecution(turnId),
       getActiveChatTurnStream: (turnId) => this.getActiveChatTurnStream(turnId),
-      getSession: (sessionId) => this.getSession(sessionId),
-      getSessionAutonomyPrefs: (sessionId) => this.getSessionAutonomyPrefs(sessionId),
-      inheritDelegatedSessionToolGrants: (sessionId, delegatedSessionId) =>
-        this.inheritDelegatedSessionToolGrants(sessionId, delegatedSessionId),
-      ingestEvent: (idempotencyKey, payload, options) => this.ingestEvent(idempotencyKey, payload, options),
-      onUserMessageCommitted: (sessionId, messageId) => {
-        if (this.isFeatureEnabled("chatTimersV1Enabled")) {
-          this.chatTimerService.cancelOnCommittedReply(sessionId, messageId);
+      getSession: async (sessionId) => await this.getSession(sessionId),
+      getSessionAutonomyPrefs: async (sessionId) => await this.getSessionAutonomyPrefs(sessionId),
+      inheritDelegatedSessionToolGrants: async (sessionId, delegatedSessionId) =>
+        await this.inheritDelegatedSessionToolGrants(sessionId, delegatedSessionId),
+      ingestEvent: async (idempotencyKey, payload, options) => await this.ingestEvent(idempotencyKey, payload, options),
+      onUserMessageCommitted: async (sessionId, messageId) => {
+        if (await this.isFeatureEnabled("chatTimersV1Enabled")) {
+          await this.chatTimerService.cancelOnCommittedReply(sessionId, messageId);
         }
       },
-      isFeatureEnabled: (flag) => this.isFeatureEnabled(flag as keyof RuntimeSettings["features"]),
-      isReplayScratchSession: (sessionId) => this.isReplayScratchSession(sessionId),
-      listLlmModels: (providerId) => this.listLlmModels(providerId),
-      loadChatTurnSessionState: (sessionId) => this.loadChatTurnSessionState(sessionId),
+      isFeatureEnabled: async (flag) => await this.isFeatureEnabled(flag as keyof RuntimeSettings["features"]),
+      isReplayScratchSession: async (sessionId) => await this.isReplayScratchSession(sessionId),
+      listLlmModels: async (providerId) => await this.listLlmModels(providerId),
+      loadChatTurnSessionState: async (sessionId) => await this.loadChatTurnSessionState(sessionId),
       markChatTurnCancelled: (sessionId, turnId, cancelledBy) =>
         this.markChatTurnCancelled(sessionId, turnId, cancelledBy),
       maybeAutoTitleChatSession: (sessionId, content) => this.maybeAutoTitleChatSession(sessionId, content),
       normalizeWorkspaceId: (workspaceId) => this.normalizeWorkspaceId(workspaceId),
-      patchSessionAutonomyPrefs: (sessionId, input) => this.patchSessionAutonomyPrefs(sessionId, input),
-      persistChatStreamChunk: (chunk, durableRunId, streamRegistration) => {
+      patchSessionAutonomyPrefs: async (sessionId, input) => await this.patchSessionAutonomyPrefs(sessionId, input),
+      persistChatStreamChunk: async (chunk, durableRunId, streamRegistration) => {
         if (!chunk.turnId) {
           throw new Error("Persistable chat stream chunk is missing a turn id.");
         }
-        this.persistChatStreamChunk(chunk as PersistableChatStreamChunk, durableRunId, streamRegistration);
+        await this.persistChatStreamChunk(chunk as PersistableChatStreamChunk, durableRunId, streamRegistration);
       },
       prepareAgentChatTurn: (sessionId, input, options) => this.prepareAgentChatTurn(sessionId, input, options),
-      recordRuntimeDecision: (input) => this.recordRuntimeDecision(input),
+      recordRuntimeDecision: async (input) => await this.recordRuntimeDecision(input),
       recoverDecisionCommittedHeartbeat: (identity) =>
         this.heartbeatOccurrenceService.recoverDecisionCommittedForOperatorPreemption(identity),
-      reconcileTerminalChatAdmission: (activeAdmission) => this.reconcileTerminalChatAdmission(activeAdmission),
-      publishRealtime: (channel, topic, payload, options) => this.publishRealtime(channel, topic, payload, options),
-      recordCapabilityGapFromTrace: (input) => this.recordCapabilityGapFromTrace(input),
+      reconcileTerminalChatAdmission: async (activeAdmission) =>
+        await this.reconcileTerminalChatAdmission(activeAdmission),
+      publishRealtime: async (channel, topic, payload, options) =>
+        await this.publishRealtime(channel, topic, payload, options),
+      recordCapabilityGapFromTrace: async (input) => await this.recordCapabilityGapFromTrace(input),
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
-      recordTurnCommitments: (input) => this.recordTurnCommitments(input),
+      recordTurnCommitments: async (input) => await this.recordTurnCommitments(input),
       registerActiveChatTurnStream: (sessionId, turnId, durableRunId, options) =>
         this.registerActiveChatTurnStream(sessionId, turnId, durableRunId, options),
-      requireChatTurnContext: (sessionId, turnId) => this.requireChatTurnContext(sessionId, turnId),
+      requireChatTurnContext: async (sessionId, turnId) => await this.requireChatTurnContext(sessionId, turnId),
       requireExecutedToolResult: (toolName, result) => this.requireExecutedToolResult(toolName, result),
       resolveFallbackTargets: (runtime, primaryProviderId, primaryModel) =>
         this.resolveFallbackTargets(runtime, primaryProviderId, primaryModel),
-      resolveCapabilityPreflight: (sessionId, input, route) => this.resolveCapabilityPreflight(sessionId, input, route),
+      resolveCapabilityPreflight: async (sessionId, input, route) =>
+        await this.resolveCapabilityPreflight(sessionId, input, route),
       resolveChatRoutedContextSources: (input) => this.resolveChatRoutedContextSources(input),
       resolvePreparedTurnOrchestration: (prepared) => this.resolvePreparedTurnOrchestration(prepared),
-      resolveToolPolicyContext: (input) => this.resolveToolPolicyContext(input),
-      resolveRuntimeGuidance: (workspaceId) => this.resolveRuntimeGuidance(workspaceId),
+      resolveToolPolicyContext: async (input) => await this.resolveToolPolicyContext(input),
+      resolveRuntimeGuidance: async (workspaceId) => await this.resolveRuntimeGuidance(workspaceId),
       resolveThreadKnowledgeContext: (sessionId, query) => this.resolveThreadKnowledgeContext(sessionId, query),
       routeFromSession: (session) => this.routeFromSession(session),
       scheduleChatMemoryContextPrewarm: (input) => this.scheduleChatMemoryContextPrewarm(input),
       scheduleMemoryMaintenancePostTurnEvaluation: (input) => this.scheduleMemoryMaintenancePostTurnEvaluation(input),
-      scheduleBackgroundReviewIfDue: (input) => this.scheduleBackgroundReviewIfDue(input),
+      scheduleBackgroundReviewIfDue: async (input) => await this.scheduleBackgroundReviewIfDue(input),
       steerService: this.steerService,
       subagentFanout: this.subagentFanout,
       streamPersistedChatTurnEvents: (sessionId, turnId, options) =>
         this.streamPersistedChatTurnEvents(sessionId, turnId, options),
-      triggerChatSessionProactive: (sessionId, input) => this.triggerChatSessionProactive(sessionId, input),
-      updateActiveLeafOrThrow: (sessionId, previousActiveTurnId, nextActiveTurnId) =>
-        this.updateActiveLeafOrThrow(sessionId, previousActiveTurnId, nextActiveTurnId),
+      triggerChatSessionProactive: async (sessionId, input) => await this.triggerChatSessionProactive(sessionId, input),
+      updateActiveLeafOrThrow: async (sessionId, previousActiveTurnId, nextActiveTurnId) =>
+        await this.updateActiveLeafOrThrow(sessionId, previousActiveTurnId, nextActiveTurnId),
       updateChatSessionPrefs: (sessionId, input) => this.updateChatSessionPrefs(sessionId, input),
-      withChatTurnWriteLease: (sessionId, operation, task) => this.withChatTurnWriteLease(sessionId, operation, task),
+      withChatTurnWriteLease: async (sessionId, operation, task) =>
+        await this.withChatTurnWriteLease(sessionId, operation, task),
       withChatTurnWriteLeaseStream: (sessionId, operation, factory) =>
         this.withChatTurnWriteLeaseStream(sessionId, operation, factory),
       withEphemeralStreamEnvelope: (stream, runId) => this.withEphemeralStreamEnvelope(stream, runId),
@@ -3066,14 +3128,15 @@ export class GatewayService {
         judge:
           process.env.GOATCITADEL_SURFACE_ROUTER_JUDGE_ENABLED === "1"
             ? buildSurfaceRouterJudge({
-                createChatCompletion: (request, attribution) => this.createChatCompletion(request, attribution),
-                resolveModelDefaults: () => this.getPromptJudgeModelDefaults(),
+                createChatCompletion: async (request, attribution) =>
+                  await this.createChatCompletion(request, attribution),
+                resolveModelDefaults: async () => await this.getPromptJudgeModelDefaults(),
               })
             : undefined,
       }),
-      readChatSessionMode: (sessionId: string) => this.storage.chatSessionPrefs.get(sessionId)?.mode,
-      persistChatSessionMode: (sessionId: string, mode: ChatMode) => {
-        this.updateChatSessionPrefs(sessionId, buildChatModePrefsPatch(mode));
+      readChatSessionMode: async (sessionId: string) => (await this.storage.chatSessionPrefs.get(sessionId))?.mode,
+      persistChatSessionMode: async (sessionId: string, mode: ChatMode) => {
+        await this.updateChatSessionPrefs(sessionId, buildChatModePrefsPatch(mode));
       },
       recordSurfaceRouteOverrideSignal: (input) => this.improvementService.recordSurfaceRouteOverrideSignal(input),
     } as Omit<ChatTurnRuntimeHost, "config">;
@@ -3103,9 +3166,9 @@ export class GatewayService {
       workspacePathBridge: this.workspacePathBridgeRuntime.service,
       opsSavedBoards: new OpsSavedBoardService(this.storage, {
         realtimeEpoch: this.opsSavedBoardRealtimeEpoch,
-        publishChange: (signal) => {
-          runWithIsolatedRequestAttribution({}, () => {
-            this.publishRealtime(
+        publishChange: async (signal) => {
+          await runWithIsolatedRequestAttribution({}, async () => {
+            await this.publishRealtime(
               "ops_saved_board_changed",
               "ops_saved_boards",
               { ...signal },
@@ -3163,12 +3226,12 @@ export class GatewayService {
       turnRuntime: this.turnRuntime,
       steerService: this.steerService,
       resolvePreparedTurnOrchestration: (prepared) => this.resolvePreparedTurnOrchestration(prepared),
-      createChatCompletion: (request, attribution) => this.createChatCompletion(request, attribution),
+      createChatCompletion: async (request, attribution) => await this.createChatCompletion(request, attribution),
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
       buildChatOrchestrationSummary: (input) => this.buildChatOrchestrationSummary(input),
       createChatSession: (input) => this.createChatSession(input),
-      inheritDelegatedSessionToolGrants: (sessionId, delegatedSessionId) =>
-        this.inheritDelegatedSessionToolGrants(sessionId, delegatedSessionId),
+      inheritDelegatedSessionToolGrants: async (sessionId, delegatedSessionId) =>
+        await this.inheritDelegatedSessionToolGrants(sessionId, delegatedSessionId),
       updateChatSessionPrefs: (sessionId, input) => this.updateChatSessionPrefs(sessionId, input),
       agentSendChatMessage: (sessionId, input) => this.chatTurnRuntime.agentSendChatMessage(sessionId, input),
       agentSendChatMessageStream: (sessionId, input, options) =>
@@ -3177,30 +3240,31 @@ export class GatewayService {
         this.beginActiveChatTurnExecution(sessionId, turnId, operation),
       endActiveChatTurnExecution: (turnId, controller) => this.endActiveChatTurnExecution(turnId, controller),
       getActiveChatTurnExecution: (turnId) => this.getActiveChatTurnExecution(turnId),
-      ingestEvent: (idempotencyKey, payload, options) => this.ingestEvent(idempotencyKey, payload, options),
-      updateActiveLeafOrThrow: (sessionId, previousActiveTurnId, nextActiveTurnId) =>
-        this.updateActiveLeafOrThrow(sessionId, previousActiveTurnId, nextActiveTurnId),
-      collectCapabilityUpgradeSuggestions: (input) => this.collectCapabilityUpgradeSuggestions(input),
+      ingestEvent: async (idempotencyKey, payload, options) => await this.ingestEvent(idempotencyKey, payload, options),
+      updateActiveLeafOrThrow: async (sessionId, previousActiveTurnId, nextActiveTurnId) =>
+        await this.updateActiveLeafOrThrow(sessionId, previousActiveTurnId, nextActiveTurnId),
+      collectCapabilityUpgradeSuggestions: async (input) => await this.collectCapabilityUpgradeSuggestions(input),
       collectSpecialistCandidateSuggestions: (input) => this.collectSpecialistCandidateSuggestions(input),
-      publishRealtime: (channel, topic, payload, options) => this.publishRealtime(channel, topic, payload, options),
+      publishRealtime: async (channel, topic, payload, options) =>
+        await this.publishRealtime(channel, topic, payload, options),
       hooksService: this.hooksService,
       extractAndPersistLearnedMemory: (sessionId, content, source) =>
         this.extractAndPersistLearnedMemory(sessionId, content, source),
-      recordTurnCommitments: (input) => this.recordTurnCommitments(input),
+      recordTurnCommitments: async (input) => await this.recordTurnCommitments(input),
       scheduleChatMemoryContextPrewarm: (input) => this.scheduleChatMemoryContextPrewarm(input),
       scheduleMemoryMaintenancePostTurnEvaluation: (input) => this.scheduleMemoryMaintenancePostTurnEvaluation(input),
-      scheduleBackgroundReviewIfDue: (input) => this.scheduleBackgroundReviewIfDue(input),
-      recordCapabilityGapFromTrace: (input) => this.recordCapabilityGapFromTrace(input),
+      scheduleBackgroundReviewIfDue: async (input) => await this.scheduleBackgroundReviewIfDue(input),
+      recordCapabilityGapFromTrace: async (input) => await this.recordCapabilityGapFromTrace(input),
       markChatTurnCancelled: (sessionId, turnId) => this.markChatTurnCancelled(sessionId, turnId),
-      isFeatureEnabled: (flag) => this.isFeatureEnabled(flag as keyof RuntimeSettings["features"]),
+      isFeatureEnabled: async (flag) => await this.isFeatureEnabled(flag as keyof RuntimeSettings["features"]),
       streamPersistedChatTurnEvents: (sessionId, turnId, options) =>
         this.streamPersistedChatTurnEvents(sessionId, turnId, options),
       withEphemeralStreamEnvelope: (stream, runId) => this.withEphemeralStreamEnvelope(stream, runId),
-      persistChatStreamChunk: (chunk, durableRunId, streamRegistration) => {
+      persistChatStreamChunk: async (chunk, durableRunId, streamRegistration) => {
         if (!chunk.turnId) {
           throw new Error("Persistable chat stream chunk is missing a turn id.");
         }
-        this.persistChatStreamChunk(chunk as PersistableChatStreamChunk, durableRunId, streamRegistration);
+        await this.persistChatStreamChunk(chunk as PersistableChatStreamChunk, durableRunId, streamRegistration);
       },
       createHydratedChatTurnTrace: (turnId, trace) => this.createHydratedChatTurnTrace(turnId, trace),
       finalizeDurableChatRun: (runId, prepared, trace, expectedLeaseOwnerId) =>
@@ -3213,13 +3277,13 @@ export class GatewayService {
         this.beginDurableChatRun(prepared, input, threadEventType, options),
       registerActiveChatTurnStream: (sessionId, turnId, durableRunId, options) =>
         this.registerActiveChatTurnStream(sessionId, turnId, durableRunId, options),
-      ensureSessionInternalToolGrant: (sessionId, toolName, reason) =>
-        this.ensureSessionInternalToolGrant(sessionId, toolName, reason),
+      ensureSessionInternalToolGrant: async (sessionId, toolName, reason) =>
+        await this.ensureSessionInternalToolGrant(sessionId, toolName, reason),
       requireExecutedToolResult: (toolName, result) => this.requireExecutedToolResult(toolName, result),
-      commsSend: (input) => this.commsSend(input),
+      commsSend: async (input) => await this.commsSend(input),
       prepareAgentChatTurn: (sessionId, input, options) => this.prepareAgentChatTurn(sessionId, input, options),
-      enqueueAutonomousChannelDelivery: (input) => this.enqueueAutonomousChannelDelivery(input),
-      cleanupSilentHeartbeatTurn: (input) => this.cleanupSilentHeartbeatTurn(input),
+      enqueueAutonomousChannelDelivery: async (input) => await this.enqueueAutonomousChannelDelivery(input),
+      cleanupSilentHeartbeatTurn: async (input) => await this.cleanupSilentHeartbeatTurn(input),
       reconcileAutonomousChatPostCommit: (runId) => this.durableRunService.reconcileAutonomousChatPostCommit(runId),
       reconcileGeneralChatPostCommit: (runId) => this.durableRunService.reconcileGeneralChatPostCommit(runId),
     };
@@ -3229,8 +3293,8 @@ export class GatewayService {
     this.devDiagnostics.record(input);
   }
 
-  public recordRuntimeDecision(input: RuntimeDecisionTraceAppendInput): void {
-    (this.runtimeDecisionRecorder as RuntimeDecisionRecorder | undefined)?.record(input);
+  public async recordRuntimeDecision(input: RuntimeDecisionTraceAppendInput): Promise<void> {
+    await (this.runtimeDecisionRecorder as RuntimeDecisionRecorder | undefined)?.record(input);
   }
 
   private buildApprovalDecisionScope(approval: ApprovalRequest): RuntimeDecisionTraceAppendInput["scope"] {
@@ -3278,16 +3342,27 @@ export class GatewayService {
     if (this.criticalInitComplete) {
       return;
     }
-    await traceInitStep("loadOnboardingMarker", () => this.loadOnboardingMarker());
-    await traceInitStep("applyStoredFeatureFlags", () => {
-      this.applyStartupFeatureFlags();
+    await traceInitStep("storage.waitUntilReady", async () => await this.storage.waitUntilReady());
+    if (this.configGenerationBootstrapHydrationPending) {
+      await traceInitStep("hydrateConfigGenerationBootstrap", async () => {
+        this.configGenerationService.hydrateUnpublishedBootstrapPayload(
+          await this.buildUnifiedConfigPayloadForRuntime(this.config, this.config.llm, await this.readFeatureFlags()),
+        );
+        this.configGenerationBootstrapHydrationPending = false;
+      });
+    }
+    await traceInitStep("enforceDurableExecutionBaseline", async () => await this.enforceDurableExecutionBaseline());
+    await traceInitStep("improvementService.initialize", async () => await this.improvementService.initialize());
+    await traceInitStep("loadOnboardingMarker", async () => await this.loadOnboardingMarker());
+    await traceInitStep("applyStoredFeatureFlags", async () => {
+      await this.applyStartupFeatureFlags();
     });
-    await traceInitStep("seedBuiltinAgentProfiles", () => {
-      this.storage.agentProfiles.seedBuiltins(BUILTIN_AGENT_PROFILES);
+    await traceInitStep("seedBuiltinAgentProfiles", async () => {
+      await this.storage.agentProfiles.seedBuiltins(BUILTIN_AGENT_PROFILES);
     });
     const skills = await traceInitStep("skillsService.reload", () => this.skillsService.reload());
-    await traceInitStep("ensureSkillStates", () => {
-      this.skillStateService.ensureSkillStates(skills.map((skill) => skill.skillId));
+    await traceInitStep("ensureSkillStates", async () => {
+      await this.skillStateService.ensureSkillStates(skills.map((skill) => skill.skillId));
     });
     this.criticalInitComplete = true;
   }
@@ -3312,6 +3387,7 @@ export class GatewayService {
     if (this.closing || signal?.aborted) {
       return;
     }
+    await this.inboundChannelEventService.start();
     // Release trust is a noncritical background proof. Readiness remains
     // fail-closed while cryptographic and installed-payload verification runs.
     this.runtimeReleaseTrustService.start();
@@ -3322,7 +3398,7 @@ export class GatewayService {
     // runtime owners have accepted the canonical generation.
     const rollbackIntent = this.configGenerationService.getRollbackRuntimeOwnerRecoveryIntent();
     if (rollbackIntent?.meshArtifact) {
-      this.meshService.restoreRuntimeArtifactsForRecovery(rollbackIntent.meshArtifact);
+      await this.meshService.restoreRuntimeArtifactsForRecovery(rollbackIntent.meshArtifact);
     }
     if (rollbackIntent?.providerSecretEffects?.length) {
       assertProviderSecretEffectsRestored(rollbackIntent.providerSecretEffects, {
@@ -3342,9 +3418,9 @@ export class GatewayService {
       });
     }
     if (this.configGenerationService.isRuntimeOwnerReconciliationPending()) {
-      this.cronConfigGenerationOwner.reconcileCommittedGeneration();
+      await this.cronConfigGenerationOwner.reconcileCommittedGeneration();
     }
-    this.meshService.init();
+    await this.meshService.init();
     await Promise.all([this.npuSidecar.init(), this.llamaCppRuntime.init()]);
     await this.configGenerationService.completeRuntimeOwnerReconciliation();
     // HX-407 C4: import recovery is part of the production composition (the
@@ -3369,7 +3445,7 @@ export class GatewayService {
         }
       }
     }
-    const closedLeaseCount = this.storage.realtimeStreamLeases.closeOpenForNode({
+    const closedLeaseCount = await this.storage.realtimeStreamLeases.closeOpenForNode({
       gatewayNodeId: this.config.assistant.mesh.nodeId,
       closeReason: "process_restart",
     });
@@ -3379,7 +3455,7 @@ export class GatewayService {
         closedLeaseCount,
       });
     }
-    const codeModeTranscriptRecovery = this.capabilitySystemService.reconcileCodeModeFinalTranscriptDeliveries();
+    const codeModeTranscriptRecovery = await this.capabilitySystemService.reconcileCodeModeFinalTranscriptDeliveries();
     if (codeModeTranscriptRecovery.errors.length > 0 || codeModeTranscriptRecovery.omittedErrors > 0) {
       log.warn("Code Mode final transcript recovery completed with errors", {
         checked: codeModeTranscriptRecovery.checked,
@@ -3402,13 +3478,13 @@ export class GatewayService {
         deliveryCount: restartedChannelDeliveries.length,
       });
     }
-    this.improvementService.markInterruptedDecisionReplayRuns();
+    await this.improvementService.markInterruptedDecisionReplayRuns();
     // One-time (marker-guarded) stamp of ambiguous legacy-open channel access
     // to an explicit open_legacy posture; behavior-preserving by design.
-    const legacyStamp = stampLegacyOpenChannelInboundAccess({
+    const legacyStamp = await stampLegacyOpenChannelInboundAccess({
       storage: this.storage,
-      publishRealtime: (eventType, source, payload, options) =>
-        this.publishRealtime(eventType, source, payload, options),
+      publishRealtime: async (eventType, source, payload, options) =>
+        await this.publishRealtime(eventType, source, payload, options),
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
       now: new Date().toISOString(),
     });
@@ -3419,7 +3495,7 @@ export class GatewayService {
     }
     await Promise.all([this.discordRuntimeService.sync(), this.cronConfigGenerationOwner.reconcileStartupGeneration()]);
     // Emits blocked/deprecated evidence for legacy Signal inbound settings.
-    this.syncSignalInboundRuntime();
+    await this.syncSignalInboundRuntime();
     await Promise.all([
       this.improvementService.ensureWeeklyImprovementCronJob(),
       this.curatorService.ensureCuratorWeeklyCronJob(),
@@ -3440,7 +3516,7 @@ export class GatewayService {
     if (heartbeatRecovery.scanned > 0) {
       log.info("recovered durable heartbeat occurrences after restart", { ...heartbeatRecovery });
     }
-    const expiredUnboundTurnAdmissionIds = cancelExpiredUnboundChatTurnAdmissionsOnBoot(
+    const expiredUnboundTurnAdmissionIds = await cancelExpiredUnboundChatTurnAdmissionsOnBoot(
       this.sessionControlRuntimeOwner,
       `gateway-startup:${randomUUID()}`,
     );
@@ -3458,7 +3534,7 @@ export class GatewayService {
     // Convert chat turns stranded by the previous process death into honest
     // retryable interrupted_by_restart failure traces before the durable worker
     // starts resuming runs (durable-owned turns are skipped and left to it).
-    if (!this.isFeatureEnabled("chatTurnInterruptionRecoveryV1Disabled")) {
+    if (!(await this.isFeatureEnabled("chatTurnInterruptionRecoveryV1Disabled"))) {
       await this.reconcileInterruptedChatTurnsOnBoot();
     }
     if (signal?.aborted) return;
@@ -3471,11 +3547,11 @@ export class GatewayService {
         errors: cronRecovery.errors,
       });
     }
-    if (!this.isFeatureEnabled("autonomyV1Disabled")) {
+    if (!(await this.isFeatureEnabled("autonomyV1Disabled"))) {
       // Recover autonomous runs that were parked while the kill switch was engaged
       // in a previous process lifetime and never woken before the restart.
       try {
-        this.durableRunService?.resumeRunsWaitingForAutonomyKillSwitch();
+        await this.durableRunService?.resumeRunsWaitingForAutonomyKillSwitch();
       } catch (error) {
         log.warn("Failed to resume autonomy-kill-switch-parked durable runs on startup", {
           error: error instanceof Error ? error.message : String(error),
@@ -3484,13 +3560,12 @@ export class GatewayService {
     }
     if (signal?.aborted) return;
     this.approvalEffectsService.startWorker();
-    this.resumeInterruptedMediaJobs();
-    this.resumeInterruptedPromptPackRuns();
+    await Promise.all([this.resumeInterruptedMediaJobs(), this.resumeInterruptedPromptPackRuns()]);
     // Pre-warm LLM model catalogs for configured providers in the background.
     this.scheduleProviderCatalogPrewarm();
 
     if (isVerboseLoggingEnabled()) {
-      log.info("feature flags", { flags: this.readFeatureFlags() });
+      log.info("feature flags", { flags: await this.readFeatureFlags() });
     } else {
       log.info("runtime ready");
     }
@@ -3504,10 +3579,10 @@ export class GatewayService {
    */
   private async reconcileInterruptedChatTurnsOnBoot(): Promise<void> {
     try {
-      const reconciled = reconcileInterruptedChatTurns({
+      const reconciled = await reconcileInterruptedChatTurns({
         storage: this.storage,
-        publishRealtime: (eventType, source, payload, options) =>
-          this.publishRealtime(eventType, source, payload, options),
+        publishRealtime: async (eventType, source, payload, options) =>
+          await this.publishRealtime(eventType, source, payload, options),
         recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
       });
       if (reconciled.interruptedTurnIds.length > 0 || reconciled.synthesizedTurnIds.length > 0) {
@@ -3570,16 +3645,16 @@ export class GatewayService {
     this.registerBackgroundTask(task);
   }
 
-  private resumeInterruptedPromptPackRuns(): void {
+  private async resumeInterruptedPromptPackRuns(): Promise<void> {
     // Every recovered benchmark acquires its own agent reservation inside
     // PromptPackService before it claims or invokes a model.
-    this.promptPackService.resumeInterruptedBenchmarkRuns();
+    await this.promptPackService.resumeInterruptedBenchmarkRuns();
   }
 
-  private resumeInterruptedMediaJobs(): void {
+  private async resumeInterruptedMediaJobs(): Promise<void> {
     // Each recovered media job is admitted independently before it transitions
     // from its durable queued/running state or invokes a processor.
-    this.mediaVoiceService.resumeInterruptedMediaJobs();
+    await this.mediaVoiceService.resumeInterruptedMediaJobs();
   }
 
   public async ingestEvent(
@@ -3595,7 +3670,7 @@ export class GatewayService {
       ...(options?.afterCommit ? { afterCommit: options.afterCommit } : {}),
     });
 
-    this.publishRealtime(
+    await this.publishRealtime(
       "session_event",
       "gateway",
       {
@@ -3625,8 +3700,8 @@ export class GatewayService {
     return result;
   }
 
-  public getSession(sessionId: string) {
-    return this.storage.sessions.getBySessionId(sessionId);
+  public async getSession(sessionId: string) {
+    return await this.storage.sessions.getBySessionId(sessionId);
   }
 
   public async listGlobalGuidance(): Promise<GuidanceDocumentRecord[]> {
@@ -3650,11 +3725,11 @@ export class GatewayService {
   }
 
   public async getTranscript(sessionId: string) {
-    return this.storage.transcripts.read(sessionId);
+    return await this.storage.transcripts.read(sessionId);
   }
 
   public async getSessionSummary(sessionId: string): Promise<SessionSummary> {
-    const session = this.getSession(sessionId);
+    const session = await this.getSession(sessionId);
     const events = await this.readTranscriptOrEmpty(sessionId);
     const latest = events.at(-1);
     const countsByType: Record<string, number> = {};
@@ -3697,33 +3772,39 @@ export class GatewayService {
     }));
   }
 
-  public listChatSessions(query: ChatSessionListQuery = {}): ChatSessionRecord[] {
-    return chatSessionService.listChatSessions(this.buildChatSessionDependencies(), query);
+  public async listChatSessions(query: ChatSessionListQuery = {}): Promise<ChatSessionRecord[]> {
+    return await chatSessionService.listChatSessions(this.buildChatSessionDependencies(), query);
   }
 
-  public searchChatSessions(query: ChatSessionSearchQuery): ChatSessionSearchResponse {
-    return chatSessionService.searchChatSessions(this.buildChatSessionDependencies(), query);
+  public async searchChatSessions(query: ChatSessionSearchQuery): Promise<ChatSessionSearchResponse> {
+    return await chatSessionService.searchChatSessions(this.buildChatSessionDependencies(), query);
   }
 
-  public createChatSession(input: ChatSessionCreateInput & { stableKey?: string } = {}): ChatSessionRecord {
+  public async createChatSession(
+    input: ChatSessionCreateInput & { stableKey?: string } = {},
+  ): Promise<ChatSessionRecord> {
     return input.stableKey
-      ? chatSessionService.ensureChatSessionWithStableKey(this.buildChatSessionDependencies(), input.stableKey, input)
-      : chatSessionService.createChatSession(this.buildChatSessionDependencies(), input);
+      ? await chatSessionService.ensureChatSessionWithStableKey(
+          this.buildChatSessionDependencies(),
+          input.stableKey,
+          input,
+        )
+      : await chatSessionService.createChatSession(this.buildChatSessionDependencies(), input);
   }
 
-  public updateChatSession(
+  public async updateChatSession(
     sessionId: string,
     input: { title?: string; folderId?: string; folderName?: string; tags?: string[] },
-  ): ChatSessionRecord {
-    return chatSessionService.updateChatSession(this.buildChatSessionDependencies(), sessionId, input);
+  ): Promise<ChatSessionRecord> {
+    return await chatSessionService.updateChatSession(this.buildChatSessionDependencies(), sessionId, input);
   }
 
-  public maybeAutoTitleChatSession(sessionId: string, content: string): void {
-    chatSessionService.maybeAutoTitleChatSession(this.buildChatSessionDependencies(), sessionId, content);
+  public async maybeAutoTitleChatSession(sessionId: string, content: string): Promise<void> {
+    await chatSessionService.maybeAutoTitleChatSession(this.buildChatSessionDependencies(), sessionId, content);
   }
 
-  private archiveChatSession(sessionId: string): ChatSessionRecord {
-    return chatSessionService.archiveChatSession(this.buildChatSessionDependencies(), sessionId);
+  private async archiveChatSession(sessionId: string): Promise<ChatSessionRecord> {
+    return await chatSessionService.archiveChatSession(this.buildChatSessionDependencies(), sessionId);
   }
 
   private async removeChatSessionStoredFile(storageRelPath: string): Promise<void> {
@@ -3759,31 +3840,37 @@ export class GatewayService {
       storage: this.storage,
       operatorSummaryCache: this.operatorSummaryCache,
       normalizeWorkspaceId: (workspaceId) => this.normalizeWorkspaceId(workspaceId),
-      ensureChatSessionRuntimeGrants: (sessionId) => this.ensureChatSessionRuntimeGrants(sessionId),
-      requireChatSession: (sessionId) => this.requireChatSession(sessionId),
-      getSession: (sessionId) => this.getSession(sessionId),
-      publishRealtime: (eventType, source, payload) => this.publishRealtime(eventType, source, payload),
+      ensureChatSessionRuntimeGrants: async (sessionId) => await this.ensureChatSessionRuntimeGrants(sessionId),
+      requireChatSession: async (sessionId) => await this.requireChatSession(sessionId),
+      getSession: async (sessionId) => await this.getSession(sessionId),
+      publishRealtime: async (eventType, source, payload) => {
+        await this.publishRealtime(eventType, source, payload);
+      },
       clearChatTurnWriteLease: (sessionId) => this.clearChatTurnWriteLease(sessionId),
-      removeChatSessionStoredFile: (storageRelPath) => this.removeChatSessionStoredFile(storageRelPath),
-      copyChatSessionStoredFile: (storageRelPath, copyId) => this.copyChatSessionStoredFile(storageRelPath, copyId),
+      removeChatSessionStoredFile: async (storageRelPath) => await this.removeChatSessionStoredFile(storageRelPath),
+      copyChatSessionStoredFile: async (storageRelPath, copyId) =>
+        await this.copyChatSessionStoredFile(storageRelPath, copyId),
       ensureChatSessionModelDefaults: (sessionId, prefs) => this.ensureChatSessionModelDefaults(sessionId, prefs),
-      hydrateChatPrefsWithAutonomy: (sessionId, prefs) => this.hydrateChatPrefsWithAutonomy(sessionId, prefs),
-      patchSessionAutonomyPrefs: (sessionId, patch) => this.patchSessionAutonomyPrefs(sessionId, patch),
+      hydrateChatPrefsWithAutonomy: async (sessionId, prefs) =>
+        await this.hydrateChatPrefsWithAutonomy(sessionId, prefs),
+      patchSessionAutonomyPrefs: async (sessionId, patch) => {
+        await this.patchSessionAutonomyPrefs(sessionId, patch);
+      },
     };
   }
 
-  public assignChatSessionProject(sessionId: string, projectId?: string): ChatSessionRecord {
-    return chatSessionService.assignChatSessionProject(this.buildChatSessionDependencies(), sessionId, projectId);
+  public async assignChatSessionProject(sessionId: string, projectId?: string): Promise<ChatSessionRecord> {
+    return await chatSessionService.assignChatSessionProject(this.buildChatSessionDependencies(), sessionId, projectId);
   }
 
-  public setChatSessionBinding(input: {
+  public async setChatSessionBinding(input: {
     sessionId: string;
     transport: "llm" | "integration";
     connectionId?: string;
     target?: string;
     writable?: boolean;
-  }): ChatSessionBindingRecord {
-    return chatSessionService.setChatSessionBinding(this.buildChatSessionDependencies(), input);
+  }): Promise<ChatSessionBindingRecord> {
+    return await chatSessionService.setChatSessionBinding(this.buildChatSessionDependencies(), input);
   }
 
   public async respondToExistingChatMessage(
@@ -3795,13 +3882,13 @@ export class GatewayService {
       inboundDurableIdentity?: InboundChannelDeterministicIdentity;
     } = {},
   ): Promise<ChatSendMessageResponse> {
-    return this.withChatTurnWriteLease(sessionId, "integration-reply", async () => {
+    return await this.withChatTurnWriteLease(sessionId, "integration-reply", async () => {
       await this.ensureChatMessageProjection(sessionId);
-      const userMessage = this.storage.chatMessages.get(userMessageId);
+      const userMessage = await this.storage.chatMessages.get(userMessageId);
       if (!userMessage || userMessage.sessionId !== sessionId || userMessage.role !== "user") {
         throw new Error("existing user message was not found in the requested session");
       }
-      const binding = this.storage.chatSessionBindings.get(sessionId);
+      const binding = await this.storage.chatSessionBindings.get(sessionId);
       if (!binding || binding.transport !== "integration" || !binding.connectionId || !binding.target) {
         throw new Error("session is not bound to a writable integration target");
       }
@@ -3837,13 +3924,15 @@ export class GatewayService {
           ? {
               durableRunId: inboundDurableIdentity.durableRunId,
               requireDurableExecution: true,
-              onChildDurableRunLaunched: inboundDurableIdentity.onDurableRunLaunched,
+              onChildDurableRunLaunched: async (runId) => {
+                inboundDurableIdentity.onDurableRunLaunched?.(runId);
+              },
             }
           : undefined,
       );
       const assistantContent = response.assistantMessage?.content?.trim();
       if (assistantContent) {
-        this.ensureSessionInternalToolGrant(sessionId, "channel.send", "system-integration-reply");
+        await this.ensureSessionInternalToolGrant(sessionId, "channel.send", "system-integration-reply");
         // B2b voice replies: synthesize first (hard-bounded inside the
         // service), then send text+audio together on the existing attachment
         // lane. The helper never throws, so a synthesis failure or timeout
@@ -3895,10 +3984,10 @@ export class GatewayService {
     wasVoiceInbound: boolean,
   ): Promise<ChannelAttachmentInput | undefined> {
     try {
-      if (!this.isFeatureEnabled("channelVoiceReplyV1Enabled")) {
+      if (!(await this.isFeatureEnabled("channelVoiceReplyV1Enabled"))) {
         return undefined;
       }
-      const connection = this.storage.integrationConnections.get(connectionId);
+      const connection = await this.storage.integrationConnections.get(connectionId);
       return await buildChannelVoiceReplyAttachment(
         {
           text,
@@ -3910,7 +3999,7 @@ export class GatewayService {
           wasVoiceInbound,
         },
         {
-          isChannelVoiceReplyEnabled: () => this.isFeatureEnabled("channelVoiceReplyV1Enabled"),
+          isChannelVoiceReplyEnabled: () => true,
           synthesizeSpeech: (input) => this.mediaVoiceService.synthesizeSpeech(input),
           recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
         },
@@ -3936,17 +4025,17 @@ export class GatewayService {
   }
 
   public async listChatMessages(sessionId: string, limit = 200, cursor?: string): Promise<ChatMessageRecord[]> {
-    this.getSession(sessionId);
+    await this.getSession(sessionId);
     const safeLimit = Math.max(1, Math.min(limit, 1000));
     try {
       await this.ensureChatMessageProjection(sessionId);
-      return this.storage.chatMessages.list(sessionId, safeLimit, cursor);
+      return await this.storage.chatMessages.list(sessionId, safeLimit, cursor);
     } catch (error) {
       log.warn("chat message projection unavailable, falling back to transcript scan", {
         sessionId,
         error: (error as Error).message,
       });
-      return this.listChatMessagesFromTranscript(sessionId, safeLimit, cursor);
+      return await this.listChatMessagesFromTranscript(sessionId, safeLimit, cursor);
     }
   }
 
@@ -3965,7 +4054,7 @@ export class GatewayService {
     return chatTurnTraceHydration.loadChatTurnSessionState(
       {
         storage: this.storage,
-        ensureChatMessageProjection: (targetSessionId) => this.ensureChatMessageProjection(targetSessionId),
+        ensureChatMessageProjection: async (targetSessionId) => await this.ensureChatMessageProjection(targetSessionId),
       },
       sessionId,
       options,
@@ -3976,12 +4065,15 @@ export class GatewayService {
     return createChatThreadKnowledgeDependenciesForGateway(this.getRouteCompositionPort());
   }
 
-  public getChatSessionPrefs(sessionId: string): ChatSessionPrefsRecord {
-    return chatSessionService.getChatSessionPrefs(this.buildChatSessionDependencies(), sessionId);
+  public async getChatSessionPrefs(sessionId: string): Promise<ChatSessionPrefsRecord> {
+    return await chatSessionService.getChatSessionPrefs(this.buildChatSessionDependencies(), sessionId);
   }
 
-  public updateChatSessionPrefs(sessionId: string, input: ChatSessionPrefsPatch): ChatSessionPrefsRecord {
-    return chatSessionService.updateChatSessionPrefs(this.buildChatSessionDependencies(), sessionId, input);
+  public async updateChatSessionPrefs(
+    sessionId: string,
+    input: ChatSessionPrefsPatch,
+  ): Promise<ChatSessionPrefsRecord> {
+    return await chatSessionService.updateChatSessionPrefs(this.buildChatSessionDependencies(), sessionId, input);
   }
 
   public ensureChatSessionModelDefaults(_sessionId: string, prefs: ChatSessionPrefsRecord): ChatSessionPrefsRecord {
@@ -4016,8 +4108,11 @@ export class GatewayService {
     };
   }
 
-  public hydrateChatPrefsWithAutonomy(sessionId: string, prefs: ChatSessionPrefsRecord): ChatSessionPrefsRecord {
-    const autonomy = this.getSessionAutonomyPrefs(sessionId);
+  public async hydrateChatPrefsWithAutonomy(
+    sessionId: string,
+    prefs: ChatSessionPrefsRecord,
+  ): Promise<ChatSessionPrefsRecord> {
+    const autonomy = await this.getSessionAutonomyPrefs(sessionId);
     return {
       ...prefs,
       proactiveMode: autonomy.proactiveMode,
@@ -4031,12 +4126,15 @@ export class GatewayService {
     };
   }
 
-  public getSessionAutonomyPrefs(sessionId: string): SessionAutonomyPrefs {
-    return this.storage.sessionAutonomyPrefs.ensure(sessionId);
+  public async getSessionAutonomyPrefs(sessionId: string): Promise<SessionAutonomyPrefs> {
+    return await this.storage.sessionAutonomyPrefs.ensure(sessionId);
   }
 
-  public patchSessionAutonomyPrefs(sessionId: string, input: SessionAutonomyPrefsPatchInput): SessionAutonomyPrefs {
-    return this.storage.sessionAutonomyPrefs.patch(sessionId, input);
+  public async patchSessionAutonomyPrefs(
+    sessionId: string,
+    input: SessionAutonomyPrefsPatchInput,
+  ): Promise<SessionAutonomyPrefs> {
+    return await this.storage.sessionAutonomyPrefs.patch(sessionId, input);
   }
 
   private toProactivePolicy(sessionId: string, prefs: SessionAutonomyPrefs): ProactivePolicy {
@@ -4100,7 +4198,7 @@ export class GatewayService {
     this.maintenanceScheduler = startBackgroundInterval({
       label: "maintenance scheduler",
       intervalMs: IMPROVEMENT_SCHEDULER_INTERVAL_MS,
-      task: () => this.runMaintenanceSchedulerTick(),
+      task: async () => await this.runMaintenanceSchedulerTick(),
       isClosing: () => this.closing,
       registerInflight: (task) => this.registerBackgroundTask(task),
       onError: (error) => log.error("maintenance scheduler tick failed", error),
@@ -4114,7 +4212,7 @@ export class GatewayService {
       intervalMs: CHAT_TIMER_SCHEDULER_INTERVAL_MS,
       bootDelayMs: 250,
       task: async () => {
-        if (!this.isFeatureEnabled("chatTimersV1Enabled")) return;
+        if (!(await this.isFeatureEnabled("chatTimersV1Enabled"))) return;
         await this.tryRunWithSharedHostWork("cron", "chat-timer-due-sweep", () => this.chatTimerService.runDue());
       },
       isClosing: () => this.closing,
@@ -4131,8 +4229,13 @@ export class GatewayService {
       {
         label: "skill curator idle janitor",
         run: () =>
-          this.tryRunWithSharedHostWork("cron", "curator-idle-janitor", () =>
-            this.runBestEffortMaintenance("curator_idle_sweep_failed", () => this.curatorService.maybeRunIdleCurator()),
+          this.tryRunWithSharedHostWork(
+            "cron",
+            "curator-idle-janitor",
+            async () =>
+              await this.runBestEffortMaintenance("curator_idle_sweep_failed", () =>
+                this.curatorService.maybeRunIdleCurator(),
+              ),
           ),
       },
       {
@@ -4149,15 +4252,24 @@ export class GatewayService {
       {
         label: "commitment sweep",
         run: () =>
-          this.tryRunWithSharedHostWork("agent", "commitment-sweep", () =>
-            this.runBestEffortMaintenance("commitment_sweep_failed", () => this.runCommitmentSweep()),
+          this.tryRunWithSharedHostWork(
+            "agent",
+            "commitment-sweep",
+            async () =>
+              await this.runBestEffortMaintenance(
+                "commitment_sweep_failed",
+                async () => await this.runCommitmentSweep(),
+              ),
           ),
       },
       {
         label: "heartbeat",
         run: () =>
-          this.tryRunWithSharedHostWork("agent", "heartbeat-sweep", () =>
-            this.runBestEffortMaintenance("heartbeat_failed", () => this.runHeartbeatSweep()),
+          this.tryRunWithSharedHostWork(
+            "agent",
+            "heartbeat-sweep",
+            async () =>
+              await this.runBestEffortMaintenance("heartbeat_failed", async () => await this.runHeartbeatSweep()),
           ),
       },
       {
@@ -4176,7 +4288,7 @@ export class GatewayService {
       },
       {
         label: "channel deliveries",
-        run: () => this.drainDueChannelDeliveries(),
+        run: async () => await this.drainDueChannelDeliveries(),
       },
     ];
     // Wrap each task in an async IIFE so a synchronous throw (e.g. a missing
@@ -4200,10 +4312,10 @@ export class GatewayService {
     }
   }
 
-  private handleOrchestrationWorktreeLeaseLoss(event: OrchestrationWorktreeLeaseLossEvent): void {
+  private async handleOrchestrationWorktreeLeaseLoss(event: OrchestrationWorktreeLeaseLossEvent): Promise<void> {
     let run: OrchestrationRun;
     try {
-      run = this.storage.orchestration.getRun(event.token.runId);
+      run = await this.storage.orchestration.getRun(event.token.runId);
     } catch (error) {
       log.warn("orchestration worktree lease loss could not load its canonical run", {
         runId: event.token.runId,
@@ -4224,7 +4336,7 @@ export class GatewayService {
     if (!event.fencedRun && ["queued", "running", "paused"].includes(run.status)) {
       try {
         run =
-          this.storage.orchestration.fenceWorktreeLease({
+          (await this.storage.orchestration.fenceWorktreeLease({
             runId: event.token.runId,
             worktreePath: event.token.worktreePath,
             worktreeLeaseOwnerId: event.token.ownerId,
@@ -4233,7 +4345,7 @@ export class GatewayService {
             lastError:
               `Orchestration worktree lease lost (${event.reason}) for owner ${event.token.ownerId} ` +
               `generation ${event.token.generation}.`,
-          }) ?? run;
+          })) ?? run;
       } catch (error) {
         log.error("orchestration worktree lease loss could not persist its canonical fence", {
           runId: event.token.runId,
@@ -4246,7 +4358,7 @@ export class GatewayService {
 
     if (run.durableRunId) {
       try {
-        this.durableRunService.cancelDurableRun(run.durableRunId, "worktree-lease-fence");
+        await this.durableRunService.cancelDurableRun(run.durableRunId, "worktree-lease-fence");
       } catch (error) {
         log.warn("orchestration worktree lease fence could not cancel its linked durable run", {
           runId: event.token.runId,
@@ -4256,7 +4368,7 @@ export class GatewayService {
       }
     }
     try {
-      this.storage.orchestration.appendRunEvent(event.token.runId, "run.worktree_lease_lost", {
+      await this.storage.orchestration.appendRunEvent(event.token.runId, "run.worktree_lease_lost", {
         ownerId: event.token.ownerId,
         generation: event.token.generation,
         worktreePath: event.token.worktreePath,
@@ -4285,8 +4397,10 @@ export class GatewayService {
       intervalMs: ORCHESTRATION_WORKTREE_REAP_INTERVAL_MS,
       bootDelayMs: ORCHESTRATION_WORKTREE_REAP_BOOT_DELAY_MS,
       task: async () => {
-        await this.tryRunWithSharedHostWork("worker", "orchestration-worktree-reaper", () =>
-          this.runOrchestrationWorktreeReapTick(),
+        await this.tryRunWithSharedHostWork(
+          "worker",
+          "orchestration-worktree-reaper",
+          async () => await this.runOrchestrationWorktreeReapTick(),
         );
       },
       isClosing: () => this.closing,
@@ -4318,13 +4432,13 @@ export class GatewayService {
     let result: CronWatchdogRunResult;
     switch (checkId) {
       case "durable_dead_letters":
-        result = this.runDurableDeadLetterWatchdog();
+        result = await this.runDurableDeadLetterWatchdog();
         break;
       case "channel_delivery_queue":
-        result = this.runChannelDeliveryQueueWatchdog();
+        result = await this.runChannelDeliveryQueueWatchdog();
         break;
       case "mcp_posture":
-        result = this.runMcpPostureWatchdog();
+        result = await this.runMcpPostureWatchdog();
         break;
       case "runtime_health":
       default:
@@ -4363,8 +4477,8 @@ export class GatewayService {
     };
   }
 
-  private runDurableDeadLetterWatchdog(): CronWatchdogRunResult {
-    const unresolved = this.storage.durableRuns.listDeadLetters(1000).filter((item) => !item.resolvedAt);
+  private async runDurableDeadLetterWatchdog(): Promise<CronWatchdogRunResult> {
+    const unresolved = (await this.storage.durableRuns.listDeadLetters(1000)).filter((item) => !item.resolvedAt);
     return {
       status: unresolved.length > 0 ? "warning" : "ok",
       checkId: "durable_dead_letters",
@@ -4379,8 +4493,8 @@ export class GatewayService {
     };
   }
 
-  private runChannelDeliveryQueueWatchdog(): CronWatchdogRunResult {
-    const deliveries = this.listChannelDeliveryRuntime();
+  private async runChannelDeliveryQueueWatchdog(): Promise<CronWatchdogRunResult> {
+    const deliveries = await this.listChannelDeliveryRuntime();
     const blocked = deliveries.filter(
       (item) =>
         item.deliveryStatus === "blocked" ||
@@ -4407,8 +4521,8 @@ export class GatewayService {
     };
   }
 
-  private runMcpPostureWatchdog(): CronWatchdogRunResult {
-    const enabledServers = this.readMcpServers().filter((server) => server.enabled);
+  private async runMcpPostureWatchdog(): Promise<CronWatchdogRunResult> {
+    const enabledServers = (await this.readMcpServers()).filter((server) => server.enabled);
     const hardIssues = enabledServers.filter(
       (server) => server.status === "error" || server.trustTier === "quarantined",
     );
@@ -4436,15 +4550,13 @@ export class GatewayService {
   }
 
   private async notifyWatchdogHomeChannel(job: CronJobRecord, result: CronWatchdogRunResult): Promise<void> {
-    const connection = this.storage.integrationConnections
-      .list(undefined, 1000)
-      .find(
-        (item) =>
-          item.enabled &&
-          item.kind === "channel" &&
-          typeof item.config.defaultChannelId === "string" &&
-          item.config.defaultChannelId.trim().length > 0,
-      );
+    const connection = (await this.storage.integrationConnections.list(undefined, 1000)).find(
+      (item) =>
+        item.enabled &&
+        item.kind === "channel" &&
+        typeof item.config.defaultChannelId === "string" &&
+        item.config.defaultChannelId.trim().length > 0,
+    );
     const target = typeof connection?.config.defaultChannelId === "string" ? connection.config.defaultChannelId : "";
     if (!connection || !target) {
       return;
@@ -4485,7 +4597,7 @@ export class GatewayService {
    * advances for eligible turns. The review is a tracked background task that can
    * never throw out of the turn path.
    */
-  public scheduleBackgroundReviewIfDue(input: {
+  public async scheduleBackgroundReviewIfDue(input: {
     sessionId: string;
     workspaceId: string;
     turnId: string;
@@ -4494,7 +4606,7 @@ export class GatewayService {
     delegatedChild: boolean;
     /** True when the completed turn is itself an autonomous self-wake (skip). */
     autonomous?: boolean;
-  }): void {
+  }): Promise<void> {
     // Skip delegated children (mirror the memory-maintenance sibling) and a closing gateway.
     if (this.closing || input.delegatedChild) {
       return;
@@ -4506,15 +4618,15 @@ export class GatewayService {
       return;
     }
     // Master autonomy kill switch: halts the entire self-improvement loop.
-    const autonomyEnabled = !this.isFeatureEnabled("autonomyV1Disabled");
+    const autonomyEnabled = !(await this.isFeatureEnabled("autonomyV1Disabled"));
     if (!autonomyEnabled) {
       return;
     }
     // Eval-integrity / non-human / replay-scratch guard (mirror recordTurnCommitments).
-    const origin = this.storage.chatSessionMeta.get(input.sessionId)?.origin;
+    const origin = (await this.storage.chatSessionMeta.get(input.sessionId))?.origin;
     const evalIntegrityTurn = origin === "prompt_pack";
     const humanSession =
-      origin !== "system" && origin !== "prompt_pack" && !this.isReplayScratchSession(input.sessionId);
+      origin !== "system" && origin !== "prompt_pack" && !(await this.isReplayScratchSession(input.sessionId));
     if (evalIntegrityTurn || !humanSession) {
       return;
     }
@@ -4522,7 +4634,7 @@ export class GatewayService {
     const task = this.tryRunWithSharedHostWork("worker", "background-review", async () => {
       // Counter mutation is part of the admitted unit: a rejected/deferred
       // review must not consume its canonical cadence window.
-      if (!this.advanceBackgroundReviewCounter()) return undefined;
+      if (!(await this.advanceBackgroundReviewCounter())) return undefined;
       return this.backgroundReviewService.runBackgroundReview({
         sessionId: input.sessionId,
         sourceTurnId: input.turnId,
@@ -4535,9 +4647,9 @@ export class GatewayService {
         turnSucceeded: true,
       });
     })
-      .then((result) => {
+      .then(async (result) => {
         if (result?.ran && result.summaryMarker) {
-          this.publishRealtime("self_improvement_review", "system", {
+          await this.publishRealtime("self_improvement_review", "system", {
             type: "background_review",
             sessionId: input.sessionId,
             workspaceId: input.workspaceId,
@@ -4563,15 +4675,16 @@ export class GatewayService {
    * persist the bumped counter and return `false`. Best-effort: a storage error
    * never blocks or crashes the turn path (returns `false`).
    */
-  private advanceBackgroundReviewCounter(): boolean {
+  private async advanceBackgroundReviewCounter(): Promise<boolean> {
     try {
-      const current = this.storage.systemSettings.get<number>(BACKGROUND_REVIEW_TURNS_SINCE_SETTING_KEY)?.value ?? 0;
+      const current =
+        (await this.storage.systemSettings.get<number>(BACKGROUND_REVIEW_TURNS_SINCE_SETTING_KEY))?.value ?? 0;
       const next = (typeof current === "number" && Number.isFinite(current) ? current : 0) + 1;
       if (next >= BACKGROUND_REVIEW_TURN_INTERVAL) {
-        this.storage.systemSettings.set(BACKGROUND_REVIEW_TURNS_SINCE_SETTING_KEY, 0);
+        await this.storage.systemSettings.set(BACKGROUND_REVIEW_TURNS_SINCE_SETTING_KEY, 0);
         return true;
       }
-      this.storage.systemSettings.set(BACKGROUND_REVIEW_TURNS_SINCE_SETTING_KEY, next);
+      await this.storage.systemSettings.set(BACKGROUND_REVIEW_TURNS_SINCE_SETTING_KEY, next);
       return false;
     } catch (error) {
       log.warn("background review counter advance failed", {
@@ -4590,20 +4703,21 @@ export class GatewayService {
     if (this.closing || !input.prompt.trim() || typeof prewarmContext !== "function") {
       return;
     }
-    const task = this.tryRunWithSharedHostWork("worker", "memory-context-prewarm", () =>
-      prewarmContext({
+    const task = this.tryRunWithSharedHostWork("worker", "memory-context-prewarm", async () => {
+      const workspaceId = (await this.storage?.chatSessionMeta?.get(input.sessionId))?.workspaceId ?? "default";
+      await prewarmContext({
         scope: "chat",
         sessionId: input.sessionId,
         // Finding 1: scope prewarm memory-item collection to the session's workspace.
         // Optional-chained: some facade/test compositions invoke this method without a
         // full storage (mirrors the guard in memory-context-service); prod always has it.
-        workspaceId: this.storage?.chatSessionMeta?.get(input.sessionId)?.workspaceId ?? "default",
+        workspaceId,
         prompt: input.prompt,
         relationScope: input.relationScope,
-        workspace: this.resolveMemoryWorkspaceRelativeDir(undefined, input.sessionId),
+        workspace: await this.resolveMemoryWorkspaceRelativeDir(undefined, input.sessionId),
         forceRefresh: true,
-      }),
-    )
+      });
+    })
       .then(() => undefined)
       .catch((error) => {
         log.error("chat memory prewarm failed", error);
@@ -4615,12 +4729,13 @@ export class GatewayService {
     return {
       storage: this.storage,
       rootDir: this.config.rootDir,
-      isFeatureEnabled: (flag) => this.isFeatureEnabled(flag),
-      publishRealtime: (eventType, source, payload) => this.publishRealtime(eventType, source, payload ?? {}),
+      isFeatureEnabled: async (flag) => await this.isFeatureEnabled(flag),
+      publishRealtime: async (eventType, source, payload) =>
+        await this.publishRealtime(eventType, source, payload ?? {}),
       evidenceEnvelopeService: this.evidenceEnvelopeService,
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
-      createBackup: (input) => this.createBackup(input),
-      pruneRetention: (options) => this.pruneRetention(options),
+      createBackup: async (input) => await this.createBackup(input),
+      pruneRetention: async (options) => await this.pruneRetention(options),
       runMemoryConsolidation: () => this.memoryConsolidationService.runConsolidation(),
       memoryLifecycle: this.memoryLifecycleService,
       recordCronReviewItem: (input) => this.cronAutomationService.recordCronReviewItem(input),
@@ -4647,8 +4762,8 @@ export class GatewayService {
     await runUpdateReviewSchedulerIfDue(this.systemCronSchedulerDeps(), options);
   }
 
-  public hasRunningTurn(sessionId: string): boolean {
-    const latest = this.storage.chatTurnTraces.listBySession(sessionId, 1)[0];
+  public async hasRunningTurn(sessionId: string): Promise<boolean> {
+    const latest = (await this.storage.chatTurnTraces.listBySession(sessionId, 1))[0];
     if (latest && isChatTurnActiveStatus(latest.status)) {
       return true;
     }
@@ -4683,9 +4798,9 @@ export class GatewayService {
     error?: string;
     trace?: ChatTurnTraceRecord;
   }> {
-    const trace = this.storage.chatTurnTraces
-      .listBySession(sessionId, 25)
-      .find((candidate) => isChatTurnActiveStatus(candidate.status));
+    const trace = (await this.storage.chatTurnTraces.listBySession(sessionId, 25)).find((candidate) =>
+      isChatTurnActiveStatus(candidate.status),
+    );
     const activeStream = trace ? undefined : this.findLatestActiveChatTurnStreamForSession(sessionId);
     if (!trace && !activeStream) {
       return {
@@ -4695,12 +4810,12 @@ export class GatewayService {
     }
     const turnId = trace?.turnId ?? activeStream!.turnId;
     const initialDurableRunId = trace?.durable?.runId ?? activeStream?.runId;
-    const initialDurableStatus = this.readDurableRunStatus(initialDurableRunId);
+    const initialDurableStatus = await this.readDurableRunStatus(initialDurableRunId);
 
     try {
       const result = await this.chatTurnRuntime.cancelChatTurn(sessionId, turnId, cancelledBy);
       const durableRunId = result.trace.durable?.runId ?? initialDurableRunId;
-      const finalDurableStatus = this.readDurableRunStatus(durableRunId);
+      const finalDurableStatus = await this.readDurableRunStatus(durableRunId);
       const durableCancelled =
         durableRunId === undefined
           ? undefined
@@ -4742,12 +4857,12 @@ export class GatewayService {
       .at(0);
   }
 
-  private readDurableRunStatus(runId: string | undefined): DurableRunStatus | undefined {
+  private async readDurableRunStatus(runId: string | undefined): Promise<DurableRunStatus | undefined> {
     if (!runId) {
       return undefined;
     }
     try {
-      return this.storage.durableRuns.getRun(runId).status;
+      return (await this.storage.durableRuns.getRun(runId)).status;
     } catch {
       return undefined;
     }
@@ -4769,7 +4884,7 @@ export class GatewayService {
         storage: this.storage,
         chatTurnExecutionRegistry: this.chatTurnExecutionRegistry,
         createHydratedChatTurnTrace: (turnId, trace) => this.createHydratedChatTurnTrace(turnId, trace),
-        beforeDeliverTerminalChatStreamEvent: (input) => this.beforeDeliverTerminalChatStreamEvent(input),
+        beforeDeliverTerminalChatStreamEvent: async (input) => await this.beforeDeliverTerminalChatStreamEvent(input),
         persistChatStreamChunk: (chunk, runId, streamRegistration) =>
           this.persistChatStreamChunk(chunk, runId, streamRegistration),
         initialLastChatStreamPurgeAt: typeof legacyInitialPurgeAt === "number" ? legacyInitialPurgeAt : undefined,
@@ -4846,13 +4961,13 @@ export class GatewayService {
     }
   }
 
-  public registerActiveChatTurnStream(
+  public async registerActiveChatTurnStream(
     sessionId: string,
     turnId: string,
     runId?: string,
     options?: import("./chat-turn-runtime-collaborators.js").ChatTurnStreamRegistrationOptions,
-  ): ActiveChatTurnStreamExecution {
-    return this.getChatStreamRuntime().registerActiveChatTurnStream(sessionId, turnId, runId, options);
+  ): Promise<ActiveChatTurnStreamExecution> {
+    return await this.getChatStreamRuntime().registerActiveChatTurnStream(sessionId, turnId, runId, options);
   }
 
   public getActiveChatTurnStream(turnId: string): ActiveChatTurnStreamExecution | undefined {
@@ -4867,22 +4982,22 @@ export class GatewayService {
     return this.getChatStreamRuntime().closeActiveChatTurnStream(turnId, registrationId);
   }
 
-  public persistChatStreamChunk(
+  public async persistChatStreamChunk(
     chunk: PersistableChatStreamChunk,
     runId?: string,
     streamRegistration?: ActiveChatTurnStreamExecution,
-  ): ChatStreamChunk {
+  ): Promise<ChatStreamChunk> {
     const runtime = this.getChatStreamRuntime();
     this.syncLegacyChatStreamPurgeState(runtime);
-    const persisted = runtime.persistChatStreamChunk(chunk, runId, streamRegistration);
+    const persisted = await runtime.persistChatStreamChunk(chunk, runId, streamRegistration);
     this.writeBackLegacyChatStreamPurgeState(runtime);
     return persisted;
   }
 
-  private purgeExpiredChatStreamEventsIfNeeded(): void {
+  private async purgeExpiredChatStreamEventsIfNeeded(): Promise<void> {
     const runtime = this.getChatStreamRuntime();
     this.syncLegacyChatStreamPurgeState(runtime);
-    runtime.purgeExpiredChatStreamEventsIfNeeded();
+    await runtime.purgeExpiredChatStreamEventsIfNeeded();
     this.writeBackLegacyChatStreamPurgeState(runtime);
   }
 
@@ -4907,8 +5022,11 @@ export class GatewayService {
     return this.getChatStreamRuntime().waitForChatStreamEvent(turnId, timeoutMs, signal);
   }
 
-  private isDurableTurnStillStreaming(turnId: string, options?: { includeInterrupts?: boolean }): boolean {
-    return this.getChatStreamRuntime().isDurableTurnStillStreaming(turnId, options);
+  private async isDurableTurnStillStreaming(
+    turnId: string,
+    options?: { includeInterrupts?: boolean },
+  ): Promise<boolean> {
+    return await this.getChatStreamRuntime().isDurableTurnStillStreaming(turnId, options);
   }
 
   public async *withEphemeralStreamEnvelope(
@@ -4922,24 +5040,29 @@ export class GatewayService {
     yield* this.getChatStreamRuntime().streamTurnStateFallback(sessionId, turnId);
   }
 
-  public createHydratedChatTurnTrace(
+  public async createHydratedChatTurnTrace(
     turnId: string,
     trace: ChatTurnTraceRecord,
     options?: chatTurnTraceHydration.ChatTurnTraceHydrationOptions,
-  ): ChatTurnTraceRecord {
-    return chatTurnTraceHydration.createHydratedChatTurnTrace(this, turnId, trace, options);
+  ): Promise<ChatTurnTraceRecord> {
+    return await chatTurnTraceHydration.createHydratedChatTurnTrace(this, turnId, trace, options);
   }
 
-  public markChatTurnCancelled(sessionId: string, turnId: string, cancelledBy?: string): ChatTurnTraceRecord {
-    return markChatTurnCancelled(
+  public async markChatTurnCancelled(
+    sessionId: string,
+    turnId: string,
+    cancelledBy?: string,
+  ): Promise<ChatTurnTraceRecord> {
+    return await markChatTurnCancelled(
       {
         storage: this.storage,
         getActiveChatTurnStream: (targetTurnId) => this.getActiveChatTurnStream(targetTurnId),
         parseDurableChatTurnPayload: (run) => this.parseDurableChatTurnPayload(run),
-        createHydratedChatTurnTrace: (targetTurnId, trace) => this.createHydratedChatTurnTrace(targetTurnId, trace),
+        createHydratedChatTurnTrace: async (targetTurnId, trace) =>
+          await this.createHydratedChatTurnTrace(targetTurnId, trace),
         recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
-        publishRealtime: (eventType, source, payload, options) =>
-          this.publishRealtime(eventType, source, payload, options),
+        publishRealtime: async (eventType, source, payload, options) =>
+          await this.publishRealtime(eventType, source, payload, options),
       },
       sessionId,
       turnId,
@@ -4947,8 +5070,8 @@ export class GatewayService {
     );
   }
 
-  private getSessionIdleSeconds(sessionId: string): number {
-    const session = this.getSession(sessionId);
+  private async getSessionIdleSeconds(sessionId: string): Promise<number> {
+    const session = await this.getSession(sessionId);
     const lastActivity = Date.parse(session.lastActivityAt);
     if (!Number.isFinite(lastActivity)) {
       return 0;
@@ -4978,14 +5101,14 @@ export class GatewayService {
     return latestUser?.content ?? "";
   }
 
-  public collectSpecialistCandidateSuggestions(input: {
+  public async collectSpecialistCandidateSuggestions(input: {
     sessionId: string;
     mode: ChatMode;
     content: string;
     capabilitySuggestions: ChatCapabilityUpgradeSuggestion[];
     trace: ChatTurnTraceRecord;
-  }): ChatSpecialistCandidateSuggestionRecord[] {
-    return collectSpecialistCandidateSuggestions(
+  }): Promise<ChatSpecialistCandidateSuggestionRecord[]> {
+    return await collectSpecialistCandidateSuggestions(
       {
         chatSpecialistCandidates: this.storage.chatSpecialistCandidates,
         chatSessionMeta: this.storage.chatSessionMeta,
@@ -4996,7 +5119,7 @@ export class GatewayService {
     );
   }
 
-  public extractAndPersistLearnedMemory(
+  public async extractAndPersistLearnedMemory(
     sessionId: string,
     content: string,
     source: {
@@ -5004,8 +5127,8 @@ export class GatewayService {
       sourceRef: string;
       trace?: Pick<ChatTurnTraceRecord, "status" | "toolRuns">;
     },
-  ): void {
-    return this.memoryLifecycleService.extractLearnedMemory(sessionId, content, source);
+  ): Promise<void> {
+    await this.memoryLifecycleService.extractLearnedMemory(sessionId, content, source);
   }
 
   /**
@@ -5014,15 +5137,15 @@ export class GatewayService {
    * runs the cheap hidden classifier as a tracked background task. Never throws
    * into the calling turn; classifier failures are swallowed inside the service.
    */
-  public recordTurnCommitments(input: {
+  public async recordTurnCommitments(input: {
     sessionId: string;
     workspaceId: string;
     userText: string;
     assistantText: string;
     /** True when the completed turn is itself an autonomous self-wake (skip). */
     autonomous?: boolean;
-  }): void {
-    const autonomyEnabled = !this.isFeatureEnabled("autonomyV1Disabled");
+  }): Promise<void> {
+    const autonomyEnabled = !(await this.isFeatureEnabled("autonomyV1Disabled"));
     if (!autonomyEnabled) {
       return;
     }
@@ -5032,10 +5155,10 @@ export class GatewayService {
     if (input.autonomous) {
       return;
     }
-    const origin = this.storage.chatSessionMeta.get(input.sessionId)?.origin;
+    const origin = (await this.storage.chatSessionMeta.get(input.sessionId))?.origin;
     const evalIntegrityTurn = origin === "prompt_pack";
     const humanSession =
-      origin !== "system" && origin !== "prompt_pack" && !this.isReplayScratchSession(input.sessionId);
+      origin !== "system" && origin !== "prompt_pack" && !(await this.isReplayScratchSession(input.sessionId));
     if (evalIntegrityTurn || !humanSession) {
       return;
     }
@@ -5060,22 +5183,22 @@ export class GatewayService {
     this.registerBackgroundTask(task);
   }
 
-  public listChatSessionLearnedMemory(
+  public async listChatSessionLearnedMemory(
     sessionId: string,
     limit = 200,
-  ): {
+  ): Promise<{
     items: LearnedMemoryItemRecord[];
     conflicts: LearnedMemoryConflictRecord[];
-  } {
-    return this.memoryLifecycleService.listSessionLearnedMemory(sessionId, limit);
+  }> {
+    return await this.memoryLifecycleService.listSessionLearnedMemory(sessionId, limit);
   }
 
-  public updateChatSessionLearnedMemory(
+  public async updateChatSessionLearnedMemory(
     sessionId: string,
     itemId: string,
     input: LearnedMemoryUpdateInput,
-  ): LearnedMemoryItemRecord {
-    return this.memoryLifecycleService.updateSessionLearnedMemory(sessionId, itemId, input);
+  ): Promise<LearnedMemoryItemRecord> {
+    return await this.memoryLifecycleService.updateSessionLearnedMemory(sessionId, itemId, input);
   }
 
   /**
@@ -5083,8 +5206,8 @@ export class GatewayService {
    * (= keep existing selection) unless utilityModelRoutingV1Enabled is on and
    * the configured utility provider has a usable key.
    */
-  private getUtilityModelOverride(): { providerId: string; model: string } | undefined {
-    if (this.readFeatureFlags().utilityModelRoutingV1Enabled !== true) {
+  private async getUtilityModelOverride(): Promise<{ providerId: string; model: string } | undefined> {
+    if ((await this.readFeatureFlags()).utilityModelRoutingV1Enabled !== true) {
       return undefined;
     }
     const runtime = this.llmService.getRuntimeConfig({ useCache: true });
@@ -5106,8 +5229,8 @@ export class GatewayService {
     });
   }
 
-  private getPromptRunnerModelDefaults(): { providerId?: string; model?: string } {
-    const utilityOverride = this.getUtilityModelOverride();
+  private async getPromptRunnerModelDefaults(): Promise<{ providerId?: string; model?: string }> {
+    const utilityOverride = await this.getUtilityModelOverride();
     if (utilityOverride) {
       return utilityOverride;
     }
@@ -5143,8 +5266,8 @@ export class GatewayService {
     };
   }
 
-  private getPromptJudgeModelDefaults(): { providerId?: string; model?: string } {
-    const utilityOverride = this.getUtilityModelOverride();
+  private async getPromptJudgeModelDefaults(): Promise<{ providerId?: string; model?: string }> {
+    const utilityOverride = await this.getUtilityModelOverride();
     if (utilityOverride) {
       return utilityOverride;
     }
@@ -5189,13 +5312,13 @@ export class GatewayService {
     };
   }
 
-  public ensureChatSessionRuntimeGrants(sessionId: string): void {
-    const active = this.listActiveToolGrants("session", sessionId);
-    const workspaceId = this.storage.chatSessionMeta.get(sessionId)?.workspaceId ?? DEFAULT_WORKSPACE_ID;
+  public async ensureChatSessionRuntimeGrants(sessionId: string): Promise<void> {
+    const active = await this.listActiveToolGrants("session", sessionId);
+    const workspaceId = (await this.storage.chatSessionMeta.get(sessionId))?.workspaceId ?? DEFAULT_WORKSPACE_ID;
     const inheritedDeny = [
-      ...this.listActiveToolGrants("global", "global"),
-      ...this.listActiveToolGrants("agent", "assistant"),
-      ...this.listActiveToolGrants("workspace", workspaceId),
+      ...(await this.listActiveToolGrants("global", "global")),
+      ...(await this.listActiveToolGrants("agent", "assistant")),
+      ...(await this.listActiveToolGrants("workspace", workspaceId)),
     ].filter((grant) => grant.decision === "deny");
     for (const toolName of CHAT_SESSION_AUTO_ALLOW_TOOLS) {
       const deniedByInheritedScope = inheritedDeny.some((grant) => grantPatternMatches(grant.toolPattern, toolName));
@@ -5214,7 +5337,7 @@ export class GatewayService {
       if (hasAllow) {
         continue;
       }
-      this.createToolGrant({
+      await this.createToolGrant({
         toolPattern: toolName,
         decision: "allow",
         scope: "session",
@@ -5225,16 +5348,16 @@ export class GatewayService {
     }
   }
 
-  public inheritDelegatedSessionToolGrants(parentSessionId: string, childSessionId: string): void {
+  public async inheritDelegatedSessionToolGrants(parentSessionId: string, childSessionId: string): Promise<void> {
     const inheritedGrants = buildDelegatedSessionToolGrantCopies({
       parentSessionId,
       childSessionId,
-      parentGrants: this.listActiveToolGrants("session", parentSessionId),
-      childGrants: this.listActiveToolGrants("session", childSessionId),
+      parentGrants: await this.listActiveToolGrants("session", parentSessionId),
+      childGrants: await this.listActiveToolGrants("session", childSessionId),
     });
 
     for (const grantInput of inheritedGrants) {
-      this.createToolGrant(grantInput);
+      await this.createToolGrant(grantInput);
     }
   }
 
@@ -5243,7 +5366,16 @@ export class GatewayService {
     commandText: string,
     options?: chatCommandService.ChatCommandOptions,
   ): Promise<chatCommandService.ChatCommandResult> {
-    return chatCommandService.parseChatCommand(createChatCommandDependencies(this), sessionId, commandText, options);
+    return chatCommandService.parseChatCommand(
+      createChatCommandDependencies(this, {
+        getSettings: async () => await this.getSettings(),
+        listMemoryItems: async (input) => await this.listMemoryItems(input),
+        normalizeWorkspaceId: async (workspaceId) => this.normalizeWorkspaceId(workspaceId),
+      }),
+      sessionId,
+      commandText,
+      options,
+    );
   }
 
   public learnSkillFromLatestTurn(input: Parameters<SkillLearningService["learnFromLatestTurn"]>[0]) {
@@ -5275,9 +5407,9 @@ export class GatewayService {
       surface?: PermissionSurface;
     },
   ): Promise<ResearchSummaryRecord> {
-    this.getSession(sessionId);
-    this.ensureChatSessionRuntimeGrants(sessionId);
-    const workspaceId = this.storage.chatSessionMeta.get(sessionId)?.workspaceId ?? DEFAULT_WORKSPACE_ID;
+    await this.getSession(sessionId);
+    await this.ensureChatSessionRuntimeGrants(sessionId);
+    const workspaceId = (await this.storage.chatSessionMeta.get(sessionId))?.workspaceId ?? DEFAULT_WORKSPACE_ID;
     return this.researchService.run({
       sessionId,
       query: input.query,
@@ -5327,7 +5459,7 @@ export class GatewayService {
     return this.chatProactiveService.triggerChatSessionProactive(sessionId, input);
   }
 
-  public updateChatSessionProactivePolicy(
+  public async updateChatSessionProactivePolicy(
     sessionId: string,
     input: Partial<{
       proactiveMode: ChatProactiveMode;
@@ -5339,39 +5471,36 @@ export class GatewayService {
       retrievalMode: ChatRetrievalMode;
       reflectionMode: ChatReflectionMode;
     }>,
-  ): ProactivePolicy {
-    return this.chatProactiveService.updateChatSessionProactivePolicy(sessionId, input);
+  ): Promise<ProactivePolicy> {
+    return await this.chatProactiveService.updateChatSessionProactivePolicy(sessionId, input);
   }
 
   // triggerChatSessionProactive body removed (moved to ChatProactiveService)
 
   // (triggerChatSessionProactive body removed - moved to ChatProactiveService)
 
-  public createChatSessionSpecialistCandidate(
+  public async createChatSessionSpecialistCandidate(
     sessionId: string,
     input: {
       turnId?: string;
       suggestion: ChatSpecialistCandidateSuggestionRecord;
     },
-  ): ChatSpecialistCandidateRecord {
-    this.getSession(sessionId);
-    const session = this.requireChatSession(sessionId);
+  ): Promise<ChatSpecialistCandidateRecord> {
+    await this.getSession(sessionId);
+    const session = await this.requireChatSession(sessionId);
     const normalizedFingerprint = normalizeSpecialistCandidateFingerprint({
       title: input.suggestion.title,
       role: input.suggestion.role,
     });
-    const existing = this.storage.chatSpecialistCandidates
-      .listBySession(sessionId, 200)
-      .find(
-        (candidate) =>
-          candidate.status !== "retired" &&
-          normalizeSpecialistCandidateFingerprint(candidate) === normalizedFingerprint,
-      );
+    const existing = (await this.storage.chatSpecialistCandidates.listBySession(sessionId, 200)).find(
+      (candidate) =>
+        candidate.status !== "retired" && normalizeSpecialistCandidateFingerprint(candidate) === normalizedFingerprint,
+    );
     const trace = input.turnId
-      ? this.storage.chatTurnTraces.listBySession(sessionId, 2000).find((item) => item.turnId === input.turnId)
+      ? (await this.storage.chatTurnTraces.listBySession(sessionId, 2000)).find((item) => item.turnId === input.turnId)
       : undefined;
     if (existing) {
-      return this.storage.chatSpecialistCandidates.patch(existing.candidateId, {
+      return await this.storage.chatSpecialistCandidates.patch(existing.candidateId, {
         summary: input.suggestion.summary,
         reason: input.suggestion.reason,
         confidence: Math.max(existing.confidence, input.suggestion.confidence),
@@ -5402,7 +5531,7 @@ export class GatewayService {
       routingHints: input.suggestion.routingHints,
       evidence: input.suggestion.evidence,
     };
-    return this.storage.chatSpecialistCandidates.create(sessionId, createInput);
+    return await this.storage.chatSpecialistCandidates.create(sessionId, createInput);
   }
 
   public async suggestChatDelegation(
@@ -5436,14 +5565,14 @@ export class GatewayService {
     return {
       storage: this.storage,
       skillMutation: this.skillMutationService,
-      isFeatureEnabled: (flag) => this.isFeatureEnabled(flag),
+      isFeatureEnabled: async (flag) => await this.isFeatureEnabled(flag),
       // Lazy: autonomy-control is constructed after improvement-service.
       recordAutonomousMutation: (input) => this.autonomyControlService.recordAutonomousMutation(input),
     };
   }
 
-  private evaluateDurableContinuationGate(run: DurableRunRecord) {
-    const checkpoints = this.storage.durableRuns.listCheckpoints(run.runId, 2_000);
+  private async evaluateDurableContinuationGate(run: DurableRunRecord) {
+    const checkpoints = await this.storage.durableRuns.listCheckpoints(run.runId, 2_000);
     let stepsSinceCheckpoint = 0;
     for (let index = checkpoints.length - 1; index >= 0; index -= 1) {
       if (checkpoints[index]?.checkpointKind === "continuation_gate") {
@@ -5460,83 +5589,89 @@ export class GatewayService {
     });
   }
 
-  public getDurableDiagnostics(): DurableDiagnosticsResponse {
-    return this.durableOperatorService.getDiagnostics();
+  public async getDurableDiagnostics(): Promise<DurableDiagnosticsResponse> {
+    return await this.durableOperatorService.getDiagnostics();
   }
 
-  public listDurableRuns(limit = 50): DurableRunRecord[] {
-    return this.durableOperatorService.listRuns(limit);
+  public async listDurableRuns(limit = 50): Promise<DurableRunRecord[]> {
+    return await this.durableOperatorService.listRuns(limit);
   }
 
-  public listDurableDeadLetters(limit = 50): DurableDeadLetterRecord[] {
-    return this.durableOperatorService.listDeadLetters(limit);
+  public async listDurableDeadLetters(limit = 50): Promise<DurableDeadLetterRecord[]> {
+    return await this.durableOperatorService.listDeadLetters(limit);
   }
 
-  public listDurableRunCheckpoints(runId: string, limit = 200): DurableCheckpointRecord[] {
-    return this.durableOperatorService.listRunCheckpoints(runId, limit);
+  public async listDurableRunCheckpoints(runId: string, limit = 200): Promise<DurableCheckpointRecord[]> {
+    return await this.durableOperatorService.listRunCheckpoints(runId, limit);
   }
 
-  public createDurableRun(input: DurableRunCreateRequest): DurableRunRecord {
-    return this.durableOperatorService.createRun(input);
+  public async createDurableRun(input: DurableRunCreateRequest): Promise<DurableRunRecord> {
+    return await this.durableOperatorService.createRun(input);
   }
 
-  public getDurableRun(runId: string): DurableRunRecord {
-    return this.durableOperatorService.getRun(runId);
+  public async getDurableRun(runId: string): Promise<DurableRunRecord> {
+    return await this.durableOperatorService.getRun(runId);
   }
 
-  public listDurableRunTimeline(runId: string, limit = 300): DurableRunTimelineEvent[] {
-    return this.durableOperatorService.listRunTimeline(runId, limit);
+  public async listDurableRunTimeline(runId: string, limit = 300): Promise<DurableRunTimelineEvent[]> {
+    return await this.durableOperatorService.listRunTimeline(runId, limit);
   }
 
-  /** @internal */ public watchDurableChildRun(input: DurableChildWatcherCreateRequest): DurableChildWatcherRecord {
-    return this.durableRunService.watchDurableChildRun(input);
+  /** @internal */ public async watchDurableChildRun(
+    input: DurableChildWatcherCreateRequest,
+  ): Promise<DurableChildWatcherRecord> {
+    return await this.durableRunService.watchDurableChildRun(input);
   }
 
-  public pauseDurableRun(runId: string, actorId = "operator"): DurableRunRecord {
-    return this.durableOperatorService.pauseRun(runId, actorId);
+  public async pauseDurableRun(runId: string, actorId = "operator"): Promise<DurableRunRecord> {
+    return await this.durableOperatorService.pauseRun(runId, actorId);
   }
 
-  public resumeDurableRun(runId: string, actorId = "operator"): DurableRunRecord {
-    return this.durableOperatorService.resumeRun(runId, actorId);
+  public async resumeDurableRun(runId: string, actorId = "operator"): Promise<DurableRunRecord> {
+    return await this.durableOperatorService.resumeRun(runId, actorId);
   }
 
-  public cancelDurableRun(runId: string, actorId = "operator"): DurableRunRecord {
-    return this.durableOperatorService.cancelRun(runId, actorId);
+  public async cancelDurableRun(runId: string, actorId = "operator"): Promise<DurableRunRecord> {
+    return await this.durableOperatorService.cancelRun(runId, actorId);
   }
 
-  public retryDurableRun(runId: string, reason = "manual_retry", actorId = "operator"): DurableRunRecord {
-    return this.durableOperatorService.retryRun(runId, reason, actorId);
+  public async retryDurableRun(
+    runId: string,
+    reason = "manual_retry",
+    actorId = "operator",
+  ): Promise<DurableRunRecord> {
+    return await this.durableOperatorService.retryRun(runId, reason, actorId);
   }
 
-  public getMemoryMaintenanceStatus(workspaceId?: string): MemoryMaintenanceStatusRecord {
-    return this.memoryLifecycleService.getMaintenanceStatus(workspaceId);
+  public async getMemoryMaintenanceStatus(workspaceId?: string): Promise<MemoryMaintenanceStatusRecord> {
+    return await this.memoryLifecycleService.getMaintenanceStatus(workspaceId);
   }
 
-  public runMemoryMaintenanceNow(input: MemoryMaintenanceRunNowInput): MemoryMaintenanceRunRecord {
-    return this.memoryLifecycleService.runMaintenanceNow(input);
+  public async runMemoryMaintenanceNow(input: MemoryMaintenanceRunNowInput): Promise<MemoryMaintenanceRunRecord> {
+    return await this.memoryLifecycleService.runMaintenanceNow(input);
   }
 
-  public wakeDurableRun(
+  public async wakeDurableRun(
     runId: string,
     event: {
       eventKey: string;
       payload?: Record<string, unknown>;
       correlationId?: string;
     },
-  ): DurableWakeResult {
-    return this.durableOperatorService.wakeRun(runId, event);
+  ): Promise<DurableWakeResult> {
+    return await this.durableOperatorService.wakeRun(runId, event);
   }
 
   /** @internal */ public reconcileGeneralChatPostCommit(runId: string): Promise<boolean> {
     return this.durableRunService.reconcileGeneralChatPostCommit(runId);
   }
 
-  public recoverDurableDeadLetter(
+  public async recoverDurableDeadLetter(
     entryId: string,
     actorId = "operator",
     options?: { maxAttempts?: number },
-  ): DurableRunRecord {
-    return this.durableOperatorService.recoverDeadLetter(entryId, actorId, options);
+  ): Promise<DurableRunRecord> {
+    return await this.durableOperatorService.recoverDeadLetter(entryId, actorId, options);
   }
 
   private isDurableFoundationEnabled(): boolean {
@@ -5635,13 +5770,13 @@ export class GatewayService {
     this.chatTurnExecutionRegistry.clearSessionWriteLease(sessionId);
   }
 
-  public updateActiveLeafOrThrow(
+  public async updateActiveLeafOrThrow(
     sessionId: string,
     expectedActiveLeafTurnId: string | undefined,
     nextActiveLeafTurnId: string,
     now = new Date().toISOString(),
-  ): void {
-    const updated = this.storage.chatSessionBranchState.setActiveLeafIfCurrent(
+  ): Promise<void> {
+    const updated = await this.storage.chatSessionBranchState.setActiveLeafIfCurrent(
       sessionId,
       expectedActiveLeafTurnId,
       nextActiveLeafTurnId,
@@ -5650,7 +5785,7 @@ export class GatewayService {
     if (updated) {
       return;
     }
-    const current = this.storage.chatSessionBranchState.get(sessionId)?.activeLeafTurnId;
+    const current = (await this.storage.chatSessionBranchState.get(sessionId))?.activeLeafTurnId;
     log.warn("chat turn branch-state conflict", {
       sessionId,
       expectedActiveLeafTurnId,
@@ -5686,8 +5821,8 @@ export class GatewayService {
     return chatTurnPrepService.prepareAgentChatTurn(this, sessionId, input, options);
   }
 
-  public assertTurnAdmissionWrite(admission: import("./chat-turn-types.js").ActiveTurnAdmission): void {
-    this.sessionControlRuntimeOwner.assertActiveTurnWrite(admission);
+  public async assertTurnAdmissionWrite(admission: import("./chat-turn-types.js").ActiveTurnAdmission): Promise<void> {
+    await this.sessionControlRuntimeOwner.assertActiveTurnWrite(admission);
   }
 
   public resolvePendingCompactionBreakerForceAction(
@@ -5712,7 +5847,7 @@ export class GatewayService {
         storage: this.storage,
         listCapabilityCatalog: (scope) => this.capabilitySystemService.listCatalog(scope),
         resolveToolSchema: (runnerInput) => this.turnRuntime.resolveCapabilityToolSchema(runnerInput),
-        resolveToolPolicyContext: (policyInput) => this.resolveToolPolicyContext(policyInput),
+        resolveToolPolicyContext: async (policyInput) => await this.resolveToolPolicyContext(policyInput),
         resolveToolRuntimeOwnerBinding: (toolName) =>
           this.pluginToolOverrideService.resolveRuntimeOwnerBinding(toolName),
         // HX-415 (slice 7d): supply the composed freeze hook. The profile
@@ -5739,12 +5874,12 @@ export class GatewayService {
           return { configured: Boolean(provider.hasApiKey), local };
         },
         classifyWorkPassport: (workspaceId, content) => this.workPassportService.classify(workspaceId, content),
-        resolveActivatedSkills: ({ content, trustedSkills }) =>
+        resolveActivatedSkills: async ({ content, trustedSkills }) =>
           buildGovernedActivatedSkillReceipts({
             content,
-            decision: this.resolveSkillActivationForRuntime({ text: content }, false),
+            decision: await this.resolveSkillActivationForRuntime({ text: content }, false),
             trustedSkills,
-            lifecycleRows: this.storage.skillLifecycle.list(),
+            lifecycleRows: await this.storage.skillLifecycle.list(),
           }),
       },
       {
@@ -5807,8 +5942,8 @@ export class GatewayService {
         },
         getActiveMemoryItem: (itemId, workspaceId, options) =>
           this.memoryLifecycleService.getActiveMemoryItemForRoutedContext(itemId, workspaceId, options),
-        getPersonalNote: (noteId) => new PersonalOpsStorageRepository(this.storage.db).getNote(noteId),
-        getGeneratedArtifact: (artifactId) => this.storage.chatGeneratedArtifacts.get(artifactId),
+        getPersonalNote: async (noteId) => await this.storage.personalOps.getNote(noteId),
+        getGeneratedArtifact: async (artifactId) => await this.storage.chatGeneratedArtifacts.get(artifactId),
         // HX-407 C4: the governed exact-byte read for live read_only_external
         // attachments. Absent when the external-source chat composition is not
         // live, in which case external refs fail closed in the resolver.
@@ -5829,11 +5964,13 @@ export class GatewayService {
     );
   }
 
-  public resolveActivatedSkillInstructions(profile: ChatTurnCapabilityProfileRecord): string | undefined {
+  public async resolveActivatedSkillInstructions(
+    profile: ChatTurnCapabilityProfileRecord,
+  ): Promise<string | undefined> {
     return renderGovernedActivatedSkillInstructions({
       profile,
       loadedSkills: this.skillsService.list(),
-      lifecycleRows: this.storage.skillLifecycle.list(),
+      lifecycleRows: await this.storage.skillLifecycle.list(),
     });
   }
 
@@ -5875,10 +6012,10 @@ export class GatewayService {
     });
   }
 
-  public loadChatTurnCapabilityProfile(
+  public async loadChatTurnCapabilityProfile(
     input: Parameters<NonNullable<chatTurnPrepService.ChatTurnPrepHost["loadChatTurnCapabilityProfile"]>>[0],
   ) {
-    const profile = this.storage.chatTurnCapabilityProfiles.get(input.profileId);
+    const profile = await this.storage.chatTurnCapabilityProfiles.get(input.profileId);
     if (
       profile.hashes.profileHash !== input.profileHash ||
       profile.identity.sessionId !== input.sessionId ||
@@ -5900,13 +6037,13 @@ export class GatewayService {
     if (!content) {
       throw new ValidationError({ code: "FIELD_REQUIRED", field: "content" });
     }
-    const session = this.getSession(sessionId);
-    const sessionMeta = this.storage.chatSessionMeta.ensure(sessionId);
+    const session = await this.getSession(sessionId);
+    const sessionMeta = await this.storage.chatSessionMeta.ensure(sessionId);
     const workspaceId = this.normalizeWorkspaceId(sessionMeta.workspaceId);
-    const citadelId = this.storage.workspaces.find(workspaceId)?.citadelId ?? DEFAULT_CITADEL_ID;
-    const currentPrefs = this.storage.chatSessionPrefs.ensure(sessionId);
+    const citadelId = (await this.storage.workspaces.find(workspaceId))?.citadelId ?? DEFAULT_CITADEL_ID;
+    const currentPrefs = await this.storage.chatSessionPrefs.ensure(sessionId);
     const prefs = buildPreviewPrefs(currentPrefs, input);
-    const currentAutonomy = this.getSessionAutonomyPrefs(sessionId);
+    const currentAutonomy = await this.getSessionAutonomyPrefs(sessionId);
     const autonomy = {
       ...currentAutonomy,
       ...(input.prefsOverride?.retrievalMode ? { retrievalMode: input.prefsOverride.retrievalMode } : {}),
@@ -5961,8 +6098,8 @@ export class GatewayService {
       },
       state,
     );
-    const resolveProfile = (historyMessages: ChatCompletionRequest["messages"]) =>
-      this.resolveChatTurnCapabilityProfile({
+    const resolveProfile = async (historyMessages: ChatCompletionRequest["messages"]) =>
+      await this.resolveChatTurnCapabilityProfile({
         sessionId,
         turnId: preflightTurnId,
         workspaceId,
@@ -6026,11 +6163,11 @@ export class GatewayService {
     return chatTurnPrepService.resolvePreparedTurnOrchestration(this, prepared);
   }
 
-  private applyApprovedSpecialistsToPlan(
+  private async applyApprovedSpecialistsToPlan(
     prepared: chatTurnPrepService.PreparedAgentChatTurn,
     plan: ReturnType<typeof buildOrchestrationPlan>,
-  ): ReturnType<typeof buildOrchestrationPlan> {
-    return chatTurnPrepService.applyApprovedSpecialistsToPlan(this, prepared, plan);
+  ): Promise<ReturnType<typeof buildOrchestrationPlan>> {
+    return await chatTurnPrepService.applyApprovedSpecialistsToPlan(this, prepared, plan);
   }
 
   private generatePreparedExecutionPlanDraft(
@@ -6062,8 +6199,8 @@ export class GatewayService {
     return chatTurnPrepService.buildChatOrchestrationSummary(input);
   }
 
-  private collectOrchestrationToolRuns(runId: string): ChatToolRunRecord[] {
-    return chatTurnStreamService.collectOrchestrationToolRuns(this, runId);
+  private async collectOrchestrationToolRuns(runId: string): Promise<ChatToolRunRecord[]> {
+    return await chatTurnStreamService.collectOrchestrationToolRuns(this, runId);
   }
 
   private async executePreparedModeOrchestration(
@@ -6124,10 +6261,10 @@ export class GatewayService {
     );
   }
 
-  public executeChatModelCouncil(
+  public async executeChatModelCouncil(
     prepared: chatTurnPrepService.PreparedAgentChatTurn,
     signal?: AbortSignal,
-  ): ReturnType<AssemblyService["executeChatModelCouncil"]> {
+  ): Promise<Awaited<ReturnType<AssemblyService["executeChatModelCouncil"]>>> {
     const capabilityProfile = prepared.capabilityProfile;
     const primaryProviderId = capabilityProfile?.selection.effectiveProviderId;
     const primaryModel = capabilityProfile?.selection.effectiveModel;
@@ -6172,7 +6309,7 @@ export class GatewayService {
       })
       .filter((candidate): candidate is NonNullable<typeof candidate> => Boolean(candidate))
       .sort((left, right) => `${left.providerId}:${left.model}`.localeCompare(`${right.providerId}:${right.model}`));
-    return this.runWithSharedHostWork("agent", "assembly-model-council", (lifecycleSignal) =>
+    return await this.runWithSharedHostWork("agent", "assembly-model-council", (lifecycleSignal) =>
       this.assemblyService.executeChatModelCouncil({
         turnId: prepared.turnId,
         sessionId: prepared.session.sessionId,
@@ -6194,7 +6331,7 @@ export class GatewayService {
   ): Promise<ChatSendMessageResponse> {
     return this.chatTurnRuntime.agentSendChatMessage(
       sessionId,
-      this.resolveChatRunVariableInput(sessionId, input),
+      await this.resolveChatRunVariableInput(sessionId, input),
       options,
     );
   }
@@ -6209,14 +6346,17 @@ export class GatewayService {
   ): AsyncGenerator<ChatStreamChunk> {
     yield* this.chatTurnRuntime.agentSendChatMessageStream(
       sessionId,
-      this.resolveChatRunVariableInput(sessionId, input),
+      await this.resolveChatRunVariableInput(sessionId, input),
       options,
     );
   }
 
-  public resolveChatRunVariableInput(sessionId: string, input: ChatSendMessageRequest): ChatSendMessageRequest {
+  public async resolveChatRunVariableInput(
+    sessionId: string,
+    input: ChatSendMessageRequest,
+  ): Promise<ChatSendMessageRequest> {
     if (!input.templateInvocation) return input;
-    if (!this.isFeatureEnabled("typedRunVariablesV1Enabled")) {
+    if (!(await this.isFeatureEnabled("typedRunVariablesV1Enabled"))) {
       throw new NotFoundError({ entity: "Typed run-variable invocation", id: input.templateInvocation.ownerId });
     }
     return resolveChatRunVariableRequest(this.storage, sessionId, input);
@@ -6227,7 +6367,7 @@ export class GatewayService {
     sourceTurnId: string,
     overrides: Partial<ChatSendMessageRequest> = {},
   ): Promise<ChatSendMessageResponse> {
-    const sourceBinding = this.storage.chatSessionBindings.get(sourceSessionId);
+    const sourceBinding = await this.storage.chatSessionBindings.get(sourceSessionId);
     if (sourceBinding?.transport && sourceBinding.transport !== "llm") {
       throw new ReplayExecutionSkippedError(
         "GoatCitadel skipped actual replay because the source session uses integration transport and retrying it would trigger external side effects.",
@@ -6243,7 +6383,7 @@ export class GatewayService {
       return await this.chatTurnRuntime.retryChatTurn(scratch.sessionId, scratch.sourceTurnId, overrides);
     } finally {
       try {
-        this.archiveChatSession(scratch.sessionId);
+        await this.archiveChatSession(scratch.sessionId);
       } catch (error) {
         log.warn("failed to archive replay scratch session", {
           sourceSessionId,
@@ -6259,24 +6399,24 @@ export class GatewayService {
     sourceSessionId: string,
     sourceTurnId: string,
   ): Promise<{ sessionId: string; sourceTurnId: string }> {
-    const sourceSession = this.requireChatSession(sourceSessionId);
-    const sourceMeta = this.storage.chatSessionMeta.ensure(
+    const sourceSession = await this.requireChatSession(sourceSessionId);
+    const sourceMeta = await this.storage.chatSessionMeta.ensure(
       sourceSessionId,
       undefined,
       sourceSession.workspaceId ?? DEFAULT_WORKSPACE_ID,
     );
-    const sourcePrefs = this.storage.chatSessionPrefs.ensure(sourceSessionId);
-    const sourceAutonomy = this.storage.sessionAutonomyPrefs.ensure(sourceSessionId);
-    const sourceProjectId = this.storage.chatSessionProjects.get(sourceSessionId)?.projectId;
+    const sourcePrefs = await this.storage.chatSessionPrefs.ensure(sourceSessionId);
+    const sourceAutonomy = await this.storage.sessionAutonomyPrefs.ensure(sourceSessionId);
+    const sourceProjectId = (await this.storage.chatSessionProjects.get(sourceSessionId))?.projectId;
     const sourceState = await this.loadChatTurnSessionState(sourceSessionId);
-    const scratchSession = this.createChatSession({
+    const scratchSession = await this.createChatSession({
       workspaceId: this.normalizeWorkspaceId(sourceMeta.workspaceId),
       projectId: sourceProjectId,
       mode: sourcePrefs.mode,
       title: `${REPLAY_SCRATCH_SESSION_TITLE_PREFIX} ${sourceSession.title?.trim() || sourceTurnId.slice(0, 8)}`,
     });
 
-    this.storage.chatSessionPrefs.patch(scratchSession.sessionId, {
+    await this.storage.chatSessionPrefs.patch(scratchSession.sessionId, {
       mode: sourcePrefs.mode,
       planningMode: sourcePrefs.planningMode,
       providerId: sourcePrefs.providerId,
@@ -6296,7 +6436,7 @@ export class GatewayService {
       orchestrationParallelism: sourcePrefs.orchestrationParallelism,
       codeAutoApply: sourcePrefs.codeAutoApply,
     });
-    this.storage.sessionAutonomyPrefs.patch(scratchSession.sessionId, {
+    await this.storage.sessionAutonomyPrefs.patch(scratchSession.sessionId, {
       proactiveMode: sourceAutonomy.proactiveMode,
       maxActionsPerHour: sourceAutonomy.maxActionsPerHour,
       maxActionsPerTurn: sourceAutonomy.maxActionsPerTurn,
@@ -6304,27 +6444,27 @@ export class GatewayService {
       retrievalMode: sourceAutonomy.retrievalMode,
       reflectionMode: sourceAutonomy.reflectionMode,
     });
-    this.inheritDelegatedSessionToolGrants(sourceSessionId, scratchSession.sessionId);
+    await this.inheritDelegatedSessionToolGrants(sourceSessionId, scratchSession.sessionId);
 
-    const cloned = this.cloneChatTurnPathIntoSession({
+    const cloned = await this.cloneChatTurnPathIntoSession({
       sourceSessionId,
       sourceTurnId,
       targetSessionId: scratchSession.sessionId,
       sourceState,
     });
-    this.storage.chatSessionBranchState.setActiveLeaf(scratchSession.sessionId, cloned.sourceTurnId);
+    await this.storage.chatSessionBranchState.setActiveLeaf(scratchSession.sessionId, cloned.sourceTurnId);
     return {
       sessionId: scratchSession.sessionId,
       sourceTurnId: cloned.sourceTurnId,
     };
   }
 
-  private cloneChatTurnPathIntoSession(input: {
+  private async cloneChatTurnPathIntoSession(input: {
     sourceSessionId: string;
     sourceTurnId: string;
     targetSessionId: string;
     sourceState: Awaited<ReturnType<GatewayService["loadChatTurnSessionState"]>>;
-  }): { sourceTurnId: string } {
+  }): Promise<{ sourceTurnId: string }> {
     const pathTurnIds = buildSelectedPathTurnIds(input.sourceState.turnLineageById, input.sourceTurnId);
     if (pathTurnIds.length === 0) {
       throw new Error(`Chat turn ${input.sourceTurnId} not found in session ${input.sourceSessionId}`);
@@ -6398,9 +6538,9 @@ export class GatewayService {
       });
     }
 
-    this.storage.chatMessages.upsertMany(messageCopies);
+    await this.storage.chatMessages.upsertMany(messageCopies);
     for (const traceCopy of traceCopies) {
-      this.storage.chatTurnTraces.create(traceCopy);
+      await this.storage.chatTurnTraces.create(traceCopy);
     }
 
     const clonedSourceTurnId = turnIdMap.get(input.sourceTurnId);
@@ -6420,21 +6560,23 @@ export class GatewayService {
       ...input,
       deps: {
         listToolCatalog: () => this.listToolCatalog(),
-        evaluateToolAccess: (request) => this.evaluateToolAccess(request),
-        listSkills: () => this.listSkills(),
-        resolveSkillActivation: (request) => this.resolveSkillActivation(request),
-        listSkillSources: (query, limit) => this.listSkillSources(query, limit),
-        lookupSkillSources: (queryOrUrl, limit) => this.lookupSkillSources(queryOrUrl, limit),
-        listMcpTemplates: () => this.listMcpTemplates(),
-        listMcpTemplateDiscovery: () => {
+        evaluateToolAccess: async (request) => await this.evaluateToolAccess(request),
+        listSkills: async () => await this.listSkills(),
+        resolveSkillActivation: async (request) => await this.resolveSkillActivation(request),
+        listSkillSources: async (query, limit) => await this.listSkillSources(query, limit),
+        lookupSkillSources: async (queryOrUrl, limit) => await this.lookupSkillSources(queryOrUrl, limit),
+        listMcpTemplates: async () => await this.listMcpTemplates(),
+        listMcpTemplateDiscovery: async () => {
           try {
-            return mcpDiagnosticsService.listMcpTemplateDiscovery({
-              requireFeatureEnabled: (flag) => this.requireFeatureEnabled(flag as keyof RuntimeSettings["features"]),
+            return await mcpDiagnosticsService.listMcpTemplateDiscovery({
+              requireFeatureEnabled: async (flag) =>
+                await this.requireFeatureEnabled(flag as keyof RuntimeSettings["features"]),
               listMcpTemplates: () => this.listMcpTemplates(),
               requireMcpServer: (serverId) => this.requireMcpServer(serverId),
               pickConnectorDiagnosticAction: (checks) =>
                 connectorDiagnosticsHelpers.pickConnectorDiagnosticAction(checks),
-              recordConnectorHealthRun: (report) => connectorDiagnosticsHelpers.recordConnectorHealthRun(this, report),
+              recordConnectorHealthRun: async (report) =>
+                await connectorDiagnosticsHelpers.recordConnectorHealthRun(this, report),
             });
           } catch {
             return [];
@@ -6444,13 +6586,13 @@ export class GatewayService {
     });
   }
 
-  public recordCapabilityGapFromTrace(input: {
+  public async recordCapabilityGapFromTrace(input: {
     sessionId: string;
     turnId: string;
     content: string;
     trace: ChatTurnTraceRecord;
-  }): void {
-    if (this.isReplayScratchSession(input.sessionId)) {
+  }): Promise<void> {
+    if (await this.isReplayScratchSession(input.sessionId)) {
       return;
     }
     const suggestions = input.trace.capabilityUpgradeSuggestions ?? [];
@@ -6469,7 +6611,7 @@ export class GatewayService {
     }
 
     try {
-      this.improvementService.recordCapabilityGapEvent({
+      await this.improvementService.recordCapabilityGapEvent({
         sessionId: input.sessionId,
         turnId: input.turnId,
         causeClass: classified.causeClass,
@@ -6488,7 +6630,7 @@ export class GatewayService {
         recoveryOptions: classified.recoveryOptions,
       });
       if (toolRun?.toolName && failureClass) {
-        this.improvementService.recordFocusedToolFailureSignal({
+        await this.improvementService.recordFocusedToolFailureSignal({
           workspaceId: input.trace.guidance?.workspaceId,
           sessionId: input.sessionId,
           turnId: input.turnId,
@@ -6525,11 +6667,11 @@ export class GatewayService {
     );
   }
 
-  private shouldUseDurableExecution(
+  private async shouldUseDurableExecution(
     prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
     input: ChatSendMessageRequest,
-  ): boolean {
-    return chatTurnDispatchService.shouldUseDurableExecution(this, prepared, input);
+  ): Promise<boolean> {
+    return await chatTurnDispatchService.shouldUseDurableExecution(this, prepared, input);
   }
 
   private parseDurableChatTurnPayload(run: DurableRunRecord): DurableChatTurnExecutionPayload | undefined {
@@ -6560,7 +6702,7 @@ export class GatewayService {
     return this.memoryLifecycleService.parseMaintenanceWorkflowPayload(run);
   }
 
-  public resolveDurableRunHookWorkspaceId(run: DurableRunRecord): string {
+  public async resolveDurableRunHookWorkspaceId(run: DurableRunRecord): Promise<string> {
     if (run.workflowKey === "memory.maintenance") {
       const payload = this.parseMemoryMaintenanceWorkflowPayload(run);
       if (payload?.workspaceId) {
@@ -6589,8 +6731,8 @@ export class GatewayService {
       const approvalId = typeof payload?.payload?.approvalId === "string" ? payload.payload.approvalId.trim() : "";
       if (approvalId) {
         try {
-          const approval = this.storage.approvals.get(approvalId);
-          return this.resolveApprovalHookWorkspaceId({
+          const approval = await this.storage.approvals.get(approvalId);
+          return await this.resolveApprovalHookWorkspaceId({
             approvalId: approval.approvalId,
             ...(approval.payload ?? {}),
           });
@@ -6604,8 +6746,8 @@ export class GatewayService {
       const payload = this.parseApprovalWaitWorkflowPayload(run);
       if (payload) {
         try {
-          const approval = this.storage.approvals.get(payload.approvalId);
-          return this.resolveApprovalHookWorkspaceId({
+          const approval = await this.storage.approvals.get(payload.approvalId);
+          return await this.resolveApprovalHookWorkspaceId({
             approvalId: approval.approvalId,
             ...(approval.payload ?? {}),
           });
@@ -6618,7 +6760,7 @@ export class GatewayService {
     if (run.workflowKey === "chat.turn.execute") {
       const payload = this.parseDurableChatTurnPayload(run);
       if (payload?.sessionId) {
-        const meta = this.storage.chatSessionMeta.get(payload.sessionId);
+        const meta = await this.storage.chatSessionMeta.get(payload.sessionId);
         if (meta?.workspaceId) {
           return this.normalizeWorkspaceId(meta.workspaceId);
         }
@@ -6627,7 +6769,7 @@ export class GatewayService {
     if (run.workflowKey === "proactive.tick") {
       const payload = this.parseProactiveTickWorkflowPayload(run);
       if (payload?.sessionId) {
-        const meta = this.storage.chatSessionMeta.get(payload.sessionId);
+        const meta = await this.storage.chatSessionMeta.get(payload.sessionId);
         if (meta?.workspaceId) {
           return this.normalizeWorkspaceId(meta.workspaceId);
         }
@@ -6646,7 +6788,7 @@ export class GatewayService {
    * Strict workspace resolver for trust projections. Unlike hook execution,
    * this path never inherits the legacy default-workspace fallback.
    */
-  public resolveDurableRunAuthorityWorkspaceId(run: DurableRunRecord): string | undefined {
+  public async resolveDurableRunAuthorityWorkspaceId(run: DurableRunRecord): Promise<string | undefined> {
     const normalizeExplicitWorkspace = (value: unknown): string | undefined => {
       if (typeof value !== "string" || !value.trim()) return undefined;
       try {
@@ -6655,19 +6797,19 @@ export class GatewayService {
         return undefined;
       }
     };
-    const resolveSessionWorkspace = (sessionId: unknown): string | undefined => {
+    const resolveSessionWorkspace = async (sessionId: unknown): Promise<string | undefined> => {
       if (typeof sessionId !== "string" || !sessionId.trim()) return undefined;
-      return normalizeExplicitWorkspace(this.storage.chatSessionMeta.get(sessionId.trim())?.workspaceId);
+      return normalizeExplicitWorkspace((await this.storage.chatSessionMeta.get(sessionId.trim()))?.workspaceId);
     };
-    const resolveApprovalWorkspace = (approvalId: unknown): string | undefined => {
+    const resolveApprovalWorkspace = async (approvalId: unknown): Promise<string | undefined> => {
       if (typeof approvalId !== "string" || !approvalId.trim()) return undefined;
       try {
-        const approval = this.storage.approvals.get(approvalId.trim());
+        const approval = await this.storage.approvals.get(approvalId.trim());
         const linkageWorkspace = normalizeExplicitWorkspace(approval.linkage?.workspaceId);
         if (linkageWorkspace) return linkageWorkspace;
         const payloadWorkspace = normalizeExplicitWorkspace(approval.payload?.workspaceId);
         if (payloadWorkspace) return payloadWorkspace;
-        return resolveSessionWorkspace(approval.linkage?.sessionId ?? approval.payload?.sessionId);
+        return await resolveSessionWorkspace(approval.linkage?.sessionId ?? approval.payload?.sessionId);
       } catch {
         return undefined;
       }
@@ -6688,19 +6830,19 @@ export class GatewayService {
         return normalizeExplicitWorkspace(explicitWorkspace);
       }
       const approvalId = typeof payload?.payload?.approvalId === "string" ? payload.payload.approvalId.trim() : "";
-      return resolveApprovalWorkspace(approvalId);
+      return await resolveApprovalWorkspace(approvalId);
     }
     if (run.workflowKey === "approval.wait") {
       const payload = this.parseApprovalWaitWorkflowPayload(run);
-      return resolveApprovalWorkspace(payload?.approvalId);
+      return await resolveApprovalWorkspace(payload?.approvalId);
     }
     if (run.workflowKey === "chat.turn.execute") {
       const payload = this.parseDurableChatTurnPayload(run);
-      return resolveSessionWorkspace(payload?.sessionId);
+      return await resolveSessionWorkspace(payload?.sessionId);
     }
     if (run.workflowKey === "proactive.tick") {
       const payload = this.parseProactiveTickWorkflowPayload(run);
-      return resolveSessionWorkspace(payload?.sessionId);
+      return await resolveSessionWorkspace(payload?.sessionId);
     }
     if (run.workflowKey === "orchestration.plan.execute") {
       const payload = this.parseOrchestrationWorkflowPayload(run);
@@ -6772,10 +6914,10 @@ export class GatewayService {
    * `task` handler and the `agent_turn` autonomy-disabled / inertInboxFallback
    * path so the fallback behavior stays byte-identical to today's `task` cron.
    */
-  private createCronInboxTask(job: CronJobRecord, options: { taskId?: string } = {}): TaskRecord {
+  private async createCronInboxTask(job: CronJobRecord, options: { taskId?: string } = {}): Promise<TaskRecord> {
     const deterministicTaskId = options.taskId?.trim();
     if (deterministicTaskId) {
-      const existing = this.storage.tasks.find(deterministicTaskId);
+      const existing = await this.storage.tasks.find(deterministicTaskId);
       if (existing) {
         if (existing.createdBy !== "scheduler" || !existing.description?.includes(`Cron job: ${job.jobId}`)) {
           throw new ConflictError({
@@ -6815,23 +6957,23 @@ export class GatewayService {
     return {
       storage: this.storage,
       cron: this.cronAutomationService,
-      isFeatureEnabled: (flag) => this.isFeatureEnabled(flag),
-      createCronInboxTask: (job, options) => this.createCronInboxTask(job, options),
-      getSessionAutonomyPrefs: (sessionId) => this.getSessionAutonomyPrefs(sessionId),
-      patchSessionAutonomyPrefs: (sessionId, patch) => {
-        this.patchSessionAutonomyPrefs(sessionId, patch);
+      isFeatureEnabled: async (flag) => await this.isFeatureEnabled(flag),
+      createCronInboxTask: async (job, options) => await this.createCronInboxTask(job, options),
+      getSessionAutonomyPrefs: async (sessionId) => await this.getSessionAutonomyPrefs(sessionId),
+      patchSessionAutonomyPrefs: async (sessionId, patch) => {
+        await this.patchSessionAutonomyPrefs(sessionId, patch);
       },
       listChatSessions: (query) => this.listChatSessions(query),
-      getSessionIdleSeconds: (sessionId) => this.getSessionIdleSeconds(sessionId),
-      hasRunningTurn: (sessionId) => this.hasRunningTurn(sessionId),
+      getSessionIdleSeconds: async (sessionId) => await this.getSessionIdleSeconds(sessionId),
+      hasRunningTurn: async (sessionId) => await this.hasRunningTurn(sessionId),
       claimAndEnqueueHeartbeat: (input) => this.heartbeatOccurrenceService.claimAndEnqueue(input),
-      isReplayScratchSession: (sessionId) => this.isReplayScratchSession(sessionId),
-      getSession: (sessionId) => this.getSession(sessionId),
+      isReplayScratchSession: async (sessionId) => await this.isReplayScratchSession(sessionId),
+      getSession: async (sessionId) => await this.getSession(sessionId),
       normalizeWorkspaceId: (workspaceId) => this.normalizeWorkspaceId(workspaceId),
-      ensureChatSessionRuntimeGrants: (sessionId) => {
-        this.ensureChatSessionRuntimeGrants(sessionId);
+      ensureChatSessionRuntimeGrants: async (sessionId) => {
+        await this.ensureChatSessionRuntimeGrants(sessionId);
       },
-      listConnectorRecords: (kind) => this.listConnectorRecords(kind),
+      listConnectorRecords: async (kind) => await this.listConnectorRecords(kind),
       listToolCatalog: () => this.listToolCatalog(),
       registerSyntheticPermissionProfile: (profile) => this.registerSyntheticPermissionProfile(profile),
       sessionControlRuntimeOwner: this.sessionControlRuntimeOwner,
@@ -6841,15 +6983,18 @@ export class GatewayService {
           this.createDurableChatTurnPayload(prepared, request, "chat_thread_turn_appended", durableRunId),
         ),
       createDurableRun: (input) => this.durableRunService.createDurableRun(input, { publishRealtime: false }),
-      getDurableRun: (runId) => this.storage.durableRuns.getRun(runId),
-      persistChatStreamChunk: (chunk, runId) => this.persistChatStreamChunk(chunk, runId),
-      onDurableRunCommitted: (run) =>
-        this.publishRealtime("system", "durable", {
+      getDurableRun: async (runId) => await this.storage.durableRuns.getRun(runId),
+      persistChatStreamChunk: async (chunk, runId) => {
+        await this.persistChatStreamChunk(chunk, runId);
+      },
+      onDurableRunCommitted: async (run) => {
+        await this.publishRealtime("system", "durable", {
           type: "durable_run_created",
           runId: run.runId,
           workflowKey: run.workflowKey,
           status: run.status,
-        }),
+        });
+      },
       requestDurableRunProcessing: (runId) => this.requestDurableRunProcessing(runId),
     };
   }
@@ -6965,53 +7110,56 @@ export class GatewayService {
     return scheduleManage(this.chatAutonomousTurnDeps(), args, policyContext);
   }
 
-  public beginDurableChatRun(
+  public async beginDurableChatRun(
     prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
     input: ChatSendMessageRequest,
     threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
     options?: { mutationLifecycle?: import("./chat-turn-types.js").ChatStreamMutationLifecycle; runId?: string },
-  ): DurableRunRecord | undefined {
-    return chatDurableRunService.beginDurableChatRun(
+  ): Promise<DurableRunRecord | undefined> {
+    return await chatDurableRunService.beginDurableChatRun(
       {
-        shouldUseDurableExecution: this.shouldUseDurableExecution(prepared, input),
-        runImmediateTransaction: (callback) => this.storage.runImmediateTransaction(callback),
+        shouldUseDurableExecution: await this.shouldUseDurableExecution(prepared, input),
+        runImmediateTransaction: async (callback) => await this.storage.runImmediateTransaction(callback),
         createDurableRun: (runInput) => this.durableRunService.createDurableRun(runInput, { publishRealtime: false }),
         buildDurablePayloadRecord: (preparedTurn, request, eventType, durableRunId) =>
           durableChatTurnPayloadToRecord(
             this.createDurableChatTurnPayload(preparedTurn, request, eventType, durableRunId),
           ),
-        persistChatStreamChunk: (chunk, durableRunId) => this.persistChatStreamChunk(chunk, durableRunId),
+        persistChatStreamChunk: async (chunk, durableRunId) => {
+          await this.persistChatStreamChunk(chunk, durableRunId);
+        },
         chatTurnTraces: this.storage.chatTurnTraces,
         capabilityCatalogSnapshots: this.storage.capabilityCatalogSnapshots,
         chatTurnCapabilityProfiles: this.storage.chatTurnCapabilityProfiles,
         sessionMutationAdmissions: this.storage.sessionMutationAdmissions,
         routedContextSnapshots: this.storage.routedContextSnapshots,
         skillLifecycle: this.storage.skillLifecycle,
-        assertTurnAdmissionWrite: (preparedTurn) => {
+        assertTurnAdmissionWrite: async (preparedTurn) => {
           if (!preparedTurn.turnAdmission) {
             throw new Error(`Durable Chat turn ${preparedTurn.turnId} has no mutation admission to assert.`);
           }
-          this.sessionControlRuntimeOwner.assertActiveTurnWrite(preparedTurn.turnAdmission);
+          await this.sessionControlRuntimeOwner.assertActiveTurnWrite(preparedTurn.turnAdmission);
         },
-        bindTurnAdmissionToDurableRun: (preparedTurn, durableRunId) => {
+        bindTurnAdmissionToDurableRun: async (preparedTurn, durableRunId) => {
           if (!preparedTurn.turnAdmission) {
             throw new Error(`Durable Chat turn ${preparedTurn.turnId} has no mutation admission to bind.`);
           }
-          this.sessionControlRuntimeOwner.bindDurableRun(preparedTurn.turnAdmission, durableRunId);
+          await this.sessionControlRuntimeOwner.bindDurableRun(preparedTurn.turnAdmission, durableRunId);
         },
-        activatePreparedBranch: (preparedTurn) =>
-          this.updateActiveLeafOrThrow(
+        activatePreparedBranch: async (preparedTurn) =>
+          await this.updateActiveLeafOrThrow(
             preparedTurn.session.sessionId,
             preparedTurn.branchSelectionBaseTurnId,
             preparedTurn.turnId,
           ),
-        onDurableRunCommitted: (run) =>
-          this.publishRealtime("system", "durable", {
+        onDurableRunCommitted: async (run) => {
+          await this.publishRealtime("system", "durable", {
             type: "durable_run_created",
             runId: run.runId,
             workflowKey: run.workflowKey,
             status: run.status,
-          }),
+          });
+        },
         requestDurableRunProcessing: (runId) => this.durableRunService.requestRunProcessing(runId),
       },
       prepared,
@@ -7021,33 +7169,34 @@ export class GatewayService {
     );
   }
 
-  private resolvePostCommitEligibility(sessionId: string): PostCommitEligibility {
-    const origin = this.storage.chatSessionMeta.get(sessionId)?.origin;
+  private async resolvePostCommitEligibility(sessionId: string): Promise<PostCommitEligibility> {
+    const origin = (await this.storage.chatSessionMeta.get(sessionId))?.origin;
     return {
       version: 1,
-      autonomyEnabledAtParentSettlement: !this.isFeatureEnabled("autonomyV1Disabled"),
+      autonomyEnabledAtParentSettlement: !(await this.isFeatureEnabled("autonomyV1Disabled")),
       evalIntegrityTurn: origin === "prompt_pack",
-      humanSession: origin !== "system" && origin !== "prompt_pack" && !this.isReplayScratchSession(sessionId),
+      humanSession: origin !== "system" && origin !== "prompt_pack" && !(await this.isReplayScratchSession(sessionId)),
     };
   }
 
-  public finalizeDurableChatRun(
+  public async finalizeDurableChatRun(
     runId: string,
     prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
     trace: ChatTurnTraceRecord,
     expectedLeaseOwnerId?: string,
-  ): void {
-    chatDurableRunService.finalizeDurableChatRun(
+  ): Promise<void> {
+    await chatDurableRunService.finalizeDurableChatRun(
       {
-        runImmediateTransaction: (callback) => this.storage.runImmediateTransaction(callback),
+        runImmediateTransaction: async (callback) => await this.storage.runImmediateTransaction(callback),
         durableRuns: this.storage.durableRuns,
         chatToolRuns: this.storage.chatToolRuns,
         chatToolArtifacts: this.storage.chatToolArtifacts,
         chatMessages: this.storage.chatMessages,
-        recordDurableTimelineEvent: (durableRunId, eventType, payload) =>
-          this.recordDurableTimelineEvent(durableRunId, eventType, payload),
+        recordDurableTimelineEvent: async (durableRunId, eventType, payload) => {
+          await this.recordDurableTimelineEvent(durableRunId, eventType, payload);
+        },
         chatTurnTraces: this.storage.chatTurnTraces,
-        resolvePostCommitEligibility: (sessionId) => this.resolvePostCommitEligibility(sessionId),
+        resolvePostCommitEligibility: async (sessionId) => await this.resolvePostCommitEligibility(sessionId),
       },
       runId,
       prepared,
@@ -7087,8 +7236,8 @@ export class GatewayService {
     prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
     threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
     resolvedOrchestration?: PreparedChatExecutionPlanResolution,
-  ): void {
-    chatTurnDispatchService.launchPreparedAgentChatTurnStream(
+  ): Promise<string | undefined> {
+    return chatTurnDispatchService.launchPreparedAgentChatTurnStream(
       this,
       sessionId,
       input,
@@ -7132,8 +7281,8 @@ export class GatewayService {
     );
   }
 
-  private getChatAttachment(attachmentId: string): ChatAttachmentRecord {
-    return chatAttachmentService.getChatAttachment(this.buildChatAttachmentHost(), attachmentId);
+  private async getChatAttachment(attachmentId: string): Promise<ChatAttachmentRecord> {
+    return await chatAttachmentService.getChatAttachment(this.buildChatAttachmentHost(), attachmentId);
   }
 
   private async readChatAttachmentContent(attachmentId: string): Promise<{
@@ -7148,9 +7297,9 @@ export class GatewayService {
     return {
       config: this.config,
       storage: this.storage,
-      getSession: (sessionId) => this.getSession(sessionId),
+      getSession: async (sessionId) => await this.getSession(sessionId),
       normalizeWorkspaceId: (workspaceId) => this.normalizeWorkspaceId(workspaceId),
-      publishRealtime: (eventType, source, payload) => this.publishRealtime(eventType, source, payload),
+      publishRealtime: async (eventType, source, payload) => await this.publishRealtime(eventType, source, payload),
       createMediaJob: (input) => this.mediaVoiceService.createMediaJob(input),
     };
   }
@@ -7167,12 +7316,12 @@ export class GatewayService {
     return this.backupRetentionService.verifyBackup(input);
   }
 
-  public getRetentionPolicy(): RetentionPolicy {
-    return this.backupRetentionService.getRetentionPolicy();
+  public async getRetentionPolicy(): Promise<RetentionPolicy> {
+    return await this.backupRetentionService.getRetentionPolicy();
   }
 
-  public updateRetentionPolicy(input: Partial<RetentionPolicy>): RetentionPolicy {
-    return this.backupRetentionService.updateRetentionPolicy(input);
+  public async updateRetentionPolicy(input: Partial<RetentionPolicy>): Promise<RetentionPolicy> {
+    return await this.backupRetentionService.updateRetentionPolicy(input);
   }
 
   public async pruneRetention(options: { dryRun?: boolean } = {}): Promise<RetentionPruneResult> {
@@ -7193,15 +7342,15 @@ export class GatewayService {
       expectedRevision: input.expectedRevision,
       requireExpectedRevision: true,
       previousRuntime: previousDriver,
-      buildCandidate: () => {
+      buildCandidate: async () => {
         const candidateConfig = structuredClone(this.config);
         candidateConfig.assistant.database.driver = input.driver;
         return {
           runtime: input.driver,
-          payload: this.buildUnifiedConfigPayloadForRuntime(
+          payload: await this.buildUnifiedConfigPayloadForRuntime(
             candidateConfig,
             this.llmService.exportConfigFile(),
-            this.readFeatureFlags(),
+            await this.readFeatureFlags(),
           ),
         };
       },
@@ -7231,12 +7380,12 @@ export class GatewayService {
     signal?: AbortSignal,
   ): Promise<ToolInvokeResult | undefined> {
     try {
-      this.refreshApprovedPendingToolPolicyContext(approvalId);
+      await this.refreshApprovedPendingToolPolicyContext(approvalId);
     } catch (error) {
       const reason = error instanceof Error ? error.message : "Approved action policy context could not be refreshed.";
-      this.storage.runImmediateTransaction(() => {
-        this.storage.pendingApprovalActions.markResolved(approvalId, "failed", { reason });
-        this.storage.approvalEvents.append({
+      await this.storage.runImmediateTransaction(async () => {
+        await this.storage.pendingApprovalActions.markResolved(approvalId, "failed", { reason });
+        await this.storage.approvalEvents.append({
           approvalId,
           eventType: "approved_action_executed",
           actorId: "system",
@@ -7245,12 +7394,12 @@ export class GatewayService {
       });
       return undefined;
     }
-    const pending = this.storage.pendingApprovalActions.find(approvalId);
+    const pending = await this.storage.pendingApprovalActions.find(approvalId);
     if (pending?.actionType === "integration.dry_run_commit") {
-      return this.executeApprovedIntegrationDryRunCommit(approvalId, pending);
+      return await this.executeApprovedIntegrationDryRunCommit(approvalId, pending);
     }
     if (isApprovedExternalRuntimePendingAction(pending)) {
-      return this.executeApprovedExternalRuntimePendingAction(approvalId, pending, signal);
+      return await this.executeApprovedExternalRuntimePendingAction(approvalId, pending, signal);
     }
     return this.policyEngine.executeApprovedAction(approvalId, signal);
   }
@@ -7272,13 +7421,13 @@ export class GatewayService {
     const connectionId = readRecordString(request, "connectionId");
     const actionId = readRecordString(request, "actionId");
     const invokeRequest = isRecord(request.invokeRequest) ? request.invokeRequest : {};
-    const finish = (result: ToolInvokeResult): ToolInvokeResult => {
-      this.storage.pendingApprovalActions.markResolved(
+    const finish = async (result: ToolInvokeResult): Promise<ToolInvokeResult> => {
+      await this.storage.pendingApprovalActions.markResolved(
         approvalId,
         result.outcome === "executed" ? "executed" : "failed",
         toolInvokeResultRecord(result),
       );
-      this.storage.approvalEvents.append({
+      await this.storage.approvalEvents.append({
         approvalId,
         eventType: "approved_action_executed",
         actorId: "system",
@@ -7303,11 +7452,11 @@ export class GatewayService {
     }
     let approvedBy = "operator";
     try {
-      approvedBy = this.storage.approvals.get(approvalId).resolvedBy ?? "operator";
+      approvedBy = (await this.storage.approvals.get(approvalId)).resolvedBy ?? "operator";
     } catch {
       // Keep the fallback actor; the commit still verifies against the approved hash.
     }
-    approveDryRun(this.storage.dryRunCommits, dryRunId, {
+    await approveDryRun(this.storage.dryRunCommits, dryRunId, {
       approvedBy,
       approvedAt: new Date().toISOString(),
     });
@@ -7364,7 +7513,7 @@ export class GatewayService {
             ...options,
             ...(beforeExecute ? { beforeExecute } : {}),
           }),
-        enrichMcpInvokePolicyContext: (input) => this.enrichMcpInvokePolicyContext(input),
+        enrichMcpInvokePolicyContext: async (input) => await this.enrichMcpInvokePolicyContext(input),
         invokeApprovedMcpRuntime: (input, markStarted) =>
           this.toolInvocationCoordinator.invokeApprovedMcpRuntime(input, markStarted),
         invokeApprovedExternalRuntimeTool: (request, markStarted, options) =>
@@ -7376,8 +7525,8 @@ export class GatewayService {
     );
   }
 
-  private refreshApprovedPendingToolPolicyContext(approvalId: string): void {
-    const pending = this.storage.pendingApprovalActions.find(approvalId);
+  private async refreshApprovedPendingToolPolicyContext(approvalId: string): Promise<void> {
+    const pending = await this.storage.pendingApprovalActions.find(approvalId);
     if (!pending || pending.actionType !== "tool.invoke" || pending.resolutionStatus !== "pending") {
       return;
     }
@@ -7387,7 +7536,7 @@ export class GatewayService {
     const workspaceId =
       readRecordString(request, "workspaceId") ??
       readRecordString(existing, "workspaceId") ??
-      (sessionId ? this.storage.chatSessionMeta.get(sessionId)?.workspaceId : undefined) ??
+      (sessionId ? (await this.storage.chatSessionMeta.get(sessionId))?.workspaceId : undefined) ??
       DEFAULT_WORKSPACE_ID;
     const consentContext = isRecord(request.consentContext) ? request.consentContext : {};
     const operatorId =
@@ -7395,7 +7544,7 @@ export class GatewayService {
       readRecordString(consentContext, "operatorId") ??
       readRecordString(existing, "authActorId") ??
       "system";
-    const resolved = this.resolveToolPolicyContext({
+    const resolved = await this.resolveToolPolicyContext({
       operatorId,
       authActorId: readRecordString(existing, "authActorId"),
       authActorSource: readAuthActorSource(existing.authActorSource),
@@ -7409,7 +7558,7 @@ export class GatewayService {
       localOperatorOverrideId:
         readRecordString(request, "localOperatorOverrideId") ?? readRecordString(existing, "localOperatorOverrideId"),
     });
-    this.storage.pendingApprovalActions.upsertPending({
+    await this.storage.pendingApprovalActions.upsertPending({
       approvalId,
       actionType: pending.actionType,
       request: {
@@ -7503,9 +7652,13 @@ export class GatewayService {
   }
 
   public listToolCatalog(): ToolCatalogEntry[] {
+    // Startup reconciliation and updateFeatureFlags keep the in-memory config
+    // projection current. Catalog reads must stay synchronous because they are
+    // used during policy planning, so never reach into storage from this path.
+    const documentEditingEnabled = this.config.assistant.features.documentEditingV1Enabled === true;
     return this.policyEngine
       .listCatalog()
-      .filter((tool) => tool.toolName !== "document.propose_patch" || this.isFeatureEnabled("documentEditingV1Enabled"))
+      .filter((tool) => tool.toolName !== "document.propose_patch" || documentEditingEnabled)
       .map((tool) => ({
         ...tool,
         // The policy registry is the Gateway-owned built-in registry. Recompute
@@ -7521,13 +7674,15 @@ export class GatewayService {
       }));
   }
 
-  public evaluateToolAccess(input: ToolAccessEvaluateRequest): ToolAccessEvaluateResponse {
+  public async evaluateToolAccess(input: ToolAccessEvaluateRequest): Promise<ToolAccessEvaluateResponse> {
     const workspaceId = this.normalizeWorkspaceId(
-      input.workspaceId ?? this.storage.chatSessionMeta.get(input.sessionId)?.workspaceId ?? DEFAULT_WORKSPACE_ID,
+      input.workspaceId ??
+        (await this.storage.chatSessionMeta.get(input.sessionId))?.workspaceId ??
+        DEFAULT_WORKSPACE_ID,
     );
-    const citadelId = input.citadelId ?? this.storage.workspaces?.find(workspaceId)?.citadelId;
+    const citadelId = input.citadelId ?? (await this.storage.workspaces?.find(workspaceId))?.citadelId;
     return this.policyEngine.evaluateAccess(
-      this.enrichToolPolicyContext(
+      await this.enrichToolPolicyContext(
         this.applyRuntimeBrowserBackendDefaults(
           this.resolveToolRequestPathsForSession({
             ...input,
@@ -7539,11 +7694,13 @@ export class GatewayService {
     );
   }
 
-  private enrichToolPolicyContext<TRequest extends ToolInvokeRequest | ToolAccessEvaluateRequest>(
+  private async enrichToolPolicyContext<TRequest extends ToolInvokeRequest | ToolAccessEvaluateRequest>(
     input: TRequest,
-  ): TRequest {
+  ): Promise<TRequest> {
     const workspaceId =
-      input.workspaceId ?? this.storage.chatSessionMeta.get(input.sessionId)?.workspaceId ?? DEFAULT_WORKSPACE_ID;
+      input.workspaceId ??
+      (await this.storage.chatSessionMeta.get(input.sessionId))?.workspaceId ??
+      DEFAULT_WORKSPACE_ID;
     const existing = input.policyContext;
     if (existing?.permissionProfile) {
       this.assertResolvedToolPolicyContextAllowed(existing);
@@ -7564,7 +7721,7 @@ export class GatewayService {
       ("consentContext" in input ? input.consentContext?.operatorId : undefined) ??
       existing?.authActorId ??
       "system";
-    const resolved = this.resolveToolPolicyContext({
+    const resolved = await this.resolveToolPolicyContext({
       operatorId,
       authActorId: existing?.authActorId,
       authActorSource: existing?.authActorSource,
@@ -7583,7 +7740,7 @@ export class GatewayService {
     };
   }
 
-  public resolveToolPolicyContext(input: {
+  public async resolveToolPolicyContext(input: {
     operatorId?: string;
     authActorId?: string;
     authActorSource?: ToolPolicyActorContext["authActorSource"];
@@ -7594,14 +7751,14 @@ export class GatewayService {
     surface?: PermissionSurface;
     permissionProfileId?: string;
     localOperatorOverrideId?: string;
-  }): ToolPolicyActorContext {
+  }): Promise<ToolPolicyActorContext> {
     if (this.config.assistant.deploymentProfile === "remote_hardened" && input.localOperatorOverrideId) {
       throw new ConflictError({
         message: "Local Operator Override is unavailable in remote_hardened deployment profile.",
       });
     }
     this.pruneSyntheticPermissionProfiles();
-    const requestedPermissionProfileId = this.resolveCallerSelectablePermissionProfileId(input);
+    const requestedPermissionProfileId = await this.resolveCallerSelectablePermissionProfileId(input);
     const syntheticProfiles = this.getSyntheticPermissionProfileMap();
     const syntheticPermissionProfile = requestedPermissionProfileId
       ? syntheticProfiles?.get(requestedPermissionProfileId)
@@ -7627,7 +7784,7 @@ export class GatewayService {
         : "safe";
     const resolved = syntheticPermissionProfile
       ? { permissionProfile: syntheticPermissionProfile, localOperatorOverride: undefined }
-      : this.storage.permissionProfiles.resolveContext({
+      : await this.storage.permissionProfiles.resolveContext({
           operatorId: input.operatorId,
           workspaceId: input.workspaceId,
           sessionId: input.sessionId,
@@ -7663,13 +7820,13 @@ export class GatewayService {
     };
   }
 
-  private resolveCallerSelectablePermissionProfileId(input: {
+  private async resolveCallerSelectablePermissionProfileId(input: {
     operatorId?: string;
     authActorId?: string;
     authActorSource?: ToolPolicyActorContext["authActorSource"];
     workspaceId?: string;
     permissionProfileId?: string;
-  }): string | undefined {
+  }): Promise<string | undefined> {
     const profileId = input.permissionProfileId?.trim();
     if (!profileId) {
       return undefined;
@@ -7684,7 +7841,9 @@ export class GatewayService {
     const readProfile = this.storage.permissionProfiles.getProfile;
     const profile =
       synthetic ??
-      (typeof readProfile === "function" ? readProfile.call(this.storage.permissionProfiles, profileId) : undefined);
+      (typeof readProfile === "function"
+        ? await readProfile.call(this.storage.permissionProfiles, profileId)
+        : undefined);
     if (!profile) {
       throw new ConflictError({
         message: `Permission profile ${profileId} is not selectable for the requested operator/workspace scope.`,
@@ -7728,20 +7887,20 @@ export class GatewayService {
     };
   }
 
-  public listPermissionProfiles(includeArchived = false): PermissionProfileRecord[] {
-    return this.storage.permissionProfiles.listProfiles(includeArchived);
+  public async listPermissionProfiles(includeArchived = false): Promise<PermissionProfileRecord[]> {
+    return await this.storage.permissionProfiles.listProfiles(includeArchived);
   }
 
-  public createPermissionProfile(input: PermissionProfileCreateInput): PermissionProfileRecord {
+  public async createPermissionProfile(input: PermissionProfileCreateInput): Promise<PermissionProfileRecord> {
     this.assertPermissionProfileApprovalModeAllowed(input.approvalMode);
     let profile!: PermissionProfileRecord;
-    this.storage.gatewaySql.runImmediateTransaction(() => {
-      profile = this.storage.permissionProfiles.createProfile(input);
+    await this.storage.gatewaySql.runImmediateTransaction(async () => {
+      profile = await this.storage.permissionProfiles.createProfile(input);
       if (profile.defaultForSurfaces?.length) {
-        this.reconcilePermissionProfileDefaultActivations(profile);
+        await this.reconcilePermissionProfileDefaultActivations(profile);
       }
     });
-    this.publishToolConfigurationRealtimeSafely("permission_profile_created", {
+    await this.publishToolConfigurationRealtimeSafely("permission_profile_created", {
       profileId: profile.profileId,
       label: profile.label,
       approvalMode: profile.approvalMode,
@@ -7751,20 +7910,23 @@ export class GatewayService {
     return profile;
   }
 
-  public updatePermissionProfile(profileId: string, input: PermissionProfileUpdateInput): PermissionProfileRecord {
-    const existing = this.storage.permissionProfiles.getProfile(profileId);
+  public async updatePermissionProfile(
+    profileId: string,
+    input: PermissionProfileUpdateInput,
+  ): Promise<PermissionProfileRecord> {
+    const existing = await this.storage.permissionProfiles.getProfile(profileId);
     if (!canMutatePermissionProfile(existing, input.updatedBy)) {
       throw new ConflictError({ message: `Permission profile ${profileId} is not editable by this operator.` });
     }
     this.assertPermissionProfileApprovalModeAllowed(input.approvalMode ?? existing.approvalMode);
     let profile!: PermissionProfileRecord;
-    this.storage.gatewaySql.runImmediateTransaction(() => {
-      profile = this.storage.permissionProfiles.updateProfile(profileId, input);
+    await this.storage.gatewaySql.runImmediateTransaction(async () => {
+      profile = await this.storage.permissionProfiles.updateProfile(profileId, input);
       if (input.defaultForSurfaces !== undefined) {
-        this.reconcilePermissionProfileDefaultActivations(profile);
+        await this.reconcilePermissionProfileDefaultActivations(profile);
       }
     });
-    this.publishToolConfigurationRealtimeSafely("permission_profile_updated", {
+    await this.publishToolConfigurationRealtimeSafely("permission_profile_updated", {
       profileId: profile.profileId,
       label: profile.label,
       approvalMode: profile.approvalMode,
@@ -7772,19 +7934,19 @@ export class GatewayService {
     return profile;
   }
 
-  private reconcilePermissionProfileDefaultActivations(profile: PermissionProfileRecord): void {
+  private async reconcilePermissionProfileDefaultActivations(profile: PermissionProfileRecord): Promise<void> {
     if (profile.scope === "global") {
       return;
     }
     const operatorId = profile.scope === "operator" ? profile.createdBy : undefined;
     const workspaceId = profile.scope === "workspace" ? profile.scopeRef : undefined;
-    this.storage.permissionProfiles.deactivateProfileActivations({
+    await this.storage.permissionProfiles.deactivateProfileActivations({
       profileId: profile.profileId,
       operatorId,
       workspaceId,
     });
     for (const surface of profile.defaultForSurfaces ?? []) {
-      this.storage.permissionProfiles.activateProfile({
+      await this.storage.permissionProfiles.activateProfile({
         profileId: profile.profileId,
         operatorId,
         workspaceId,
@@ -7794,31 +7956,34 @@ export class GatewayService {
     }
   }
 
-  public archivePermissionProfile(profileId: string, archivedBy: string): boolean {
+  public async archivePermissionProfile(profileId: string, archivedBy: string): Promise<boolean> {
     if (!archivedBy.trim()) {
       throw new ValidationError({ code: "FIELD_REQUIRED", field: "archivedBy" });
     }
-    const existing = this.storage.permissionProfiles.getProfile(profileId);
+    const existing = await this.storage.permissionProfiles.getProfile(profileId);
     if (!canMutatePermissionProfile(existing, archivedBy)) {
       return false;
     }
-    const archived = this.storage.permissionProfiles.archiveProfile(profileId);
+    const archived = await this.storage.permissionProfiles.archiveProfile(profileId);
     if (archived) {
-      this.publishToolConfigurationRealtimeSafely("permission_profile_archived", { profileId });
+      await this.publishToolConfigurationRealtimeSafely("permission_profile_archived", { profileId });
     }
     return archived;
   }
 
-  public activatePermissionProfile(input: PermissionProfileActivationInput): PermissionProfileActivationRecord {
-    const profile = this.storage.permissionProfiles.getProfile(input.profileId);
+  public async activatePermissionProfile(
+    input: PermissionProfileActivationInput,
+  ): Promise<PermissionProfileActivationRecord> {
+    const profile = await this.storage.permissionProfiles.getProfile(input.profileId);
     this.assertPermissionProfileApprovalModeAllowed(profile.approvalMode);
-    const activation = this.storage.gatewaySql.runImmediateTransaction(() =>
-      this.storage.permissionProfiles.activateProfile({
-        ...input,
-        operatorId: profile.scope === "workspace" ? undefined : input.operatorId,
-      }),
+    const activation = await this.storage.gatewaySql.runImmediateTransaction(
+      async () =>
+        await this.storage.permissionProfiles.activateProfile({
+          ...input,
+          operatorId: profile.scope === "workspace" ? undefined : input.operatorId,
+        }),
     );
-    this.publishToolConfigurationRealtimeSafely("permission_profile_activated", {
+    await this.publishToolConfigurationRealtimeSafely("permission_profile_activated", {
       profileId: activation.profileId,
       operatorId: activation.operatorId,
       workspaceId: activation.workspaceId,
@@ -7828,22 +7993,24 @@ export class GatewayService {
     return activation;
   }
 
-  public listActiveLocalOperatorOverrides(operatorId?: string): LocalOperatorOverrideRecord[] {
-    return this.storage.permissionProfiles
-      .listActiveLocalOperatorOverrides()
-      .filter((override) => !operatorId || override.operatorId === operatorId);
+  public async listActiveLocalOperatorOverrides(operatorId?: string): Promise<LocalOperatorOverrideRecord[]> {
+    return (await this.storage.permissionProfiles.listActiveLocalOperatorOverrides()).filter(
+      (override) => !operatorId || override.operatorId === operatorId,
+    );
   }
 
-  public createLocalOperatorOverride(input: LocalOperatorOverrideCreateInput): LocalOperatorOverrideRecord {
+  public async createLocalOperatorOverride(
+    input: LocalOperatorOverrideCreateInput,
+  ): Promise<LocalOperatorOverrideRecord> {
     if (this.config.assistant.deploymentProfile === "remote_hardened") {
       throw new ConflictError({
         message: "Local Operator Override is unavailable in remote_hardened deployment profile.",
       });
     }
-    const override = this.storage.gatewaySql.runImmediateTransaction(() =>
-      this.storage.permissionProfiles.createLocalOperatorOverride(input),
+    const override = await this.storage.gatewaySql.runImmediateTransaction(
+      async () => await this.storage.permissionProfiles.createLocalOperatorOverride(input),
     );
-    this.publishToolConfigurationRealtimeSafely("local_operator_override_started", {
+    await this.publishToolConfigurationRealtimeSafely("local_operator_override_started", {
       overrideId: override.overrideId,
       operatorId: override.operatorId,
       scope: override.scope,
@@ -7853,13 +8020,16 @@ export class GatewayService {
     return override;
   }
 
-  public revokeLocalOperatorOverride(overrideId: string, revokedBy: string): LocalOperatorOverrideRecord | undefined {
+  public async revokeLocalOperatorOverride(
+    overrideId: string,
+    revokedBy: string,
+  ): Promise<LocalOperatorOverrideRecord | undefined> {
     if (!revokedBy.trim()) {
       throw new ValidationError({ code: "FIELD_REQUIRED", field: "revokedBy" });
     }
     let existing: LocalOperatorOverrideRecord;
     try {
-      existing = this.storage.permissionProfiles.getLocalOperatorOverride(overrideId);
+      existing = await this.storage.permissionProfiles.getLocalOperatorOverride(overrideId);
     } catch {
       return undefined;
     }
@@ -7867,16 +8037,20 @@ export class GatewayService {
       return undefined;
     }
     let record: LocalOperatorOverrideRecord | undefined;
-    this.storage.gatewaySql.runImmediateTransaction(() => {
-      const revoked = this.storage.permissionProfiles.revokeLocalOperatorOverride(overrideId, undefined, revokedBy);
+    await this.storage.gatewaySql.runImmediateTransaction(async () => {
+      const revoked = await this.storage.permissionProfiles.revokeLocalOperatorOverride(
+        overrideId,
+        undefined,
+        revokedBy,
+      );
       if (revoked) {
-        record = this.storage.permissionProfiles.getLocalOperatorOverride(overrideId);
+        record = await this.storage.permissionProfiles.getLocalOperatorOverride(overrideId);
       }
     });
     if (!record) {
       return undefined;
     }
-    this.publishToolConfigurationRealtimeSafely("local_operator_override_revoked", {
+    await this.publishToolConfigurationRealtimeSafely("local_operator_override_revoked", {
       overrideId,
       revokedBy: record.revokedBy,
       revokedAt: record.revokedAt,
@@ -7885,9 +8059,12 @@ export class GatewayService {
     return record;
   }
 
-  private publishToolConfigurationRealtimeSafely(eventType: string, payload: Record<string, unknown>): void {
+  private async publishToolConfigurationRealtimeSafely(
+    eventType: string,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
     try {
-      this.publishRealtime(eventType, "tools", payload);
+      await this.publishRealtime(eventType, "tools", payload);
     } catch (error) {
       try {
         this.recordDevDiagnostic({
@@ -7909,23 +8086,23 @@ export class GatewayService {
     }
   }
 
-  public listToolGrants(scope?: ToolGrantScope, scopeRef?: string, limit = 200): ToolGrantRecord[] {
-    return this.approvalRuntime.listToolGrants(scope, scopeRef, limit);
+  public async listToolGrants(scope?: ToolGrantScope, scopeRef?: string, limit = 200): Promise<ToolGrantRecord[]> {
+    return await this.approvalRuntime.listToolGrants(scope, scopeRef, limit);
   }
 
-  private listActiveToolGrants(scope?: ToolGrantScope, scopeRef?: string): ToolGrantRecord[] {
-    return this.storage.toolGrants.listActive(scope, scopeRef);
+  private async listActiveToolGrants(scope?: ToolGrantScope, scopeRef?: string): Promise<ToolGrantRecord[]> {
+    return await this.storage.toolGrants.listActive(scope, scopeRef);
   }
 
-  public createToolGrant(input: ToolGrantCreateInput): ToolGrantRecord {
-    return this.approvalRuntime.createToolGrant(input);
+  public async createToolGrant(input: ToolGrantCreateInput): Promise<ToolGrantRecord> {
+    return await this.approvalRuntime.createToolGrant(input);
   }
 
-  public revokeToolGrant(grantId: string, revokedBy: string): boolean {
+  public async revokeToolGrant(grantId: string, revokedBy: string): Promise<boolean> {
     if (!revokedBy.trim()) {
       throw new ValidationError({ code: "FIELD_REQUIRED", field: "revokedBy" });
     }
-    return this.approvalRuntime.revokeToolGrant(grantId, revokedBy);
+    return await this.approvalRuntime.revokeToolGrant(grantId, revokedBy);
   }
 
   public async createApproval(
@@ -7936,7 +8113,7 @@ export class GatewayService {
     const approval = authority
       ? await this.approvalRuntime.createApproval(input, onCreated, authority)
       : await this.approvalRuntime.createApproval(input, onCreated);
-    this.recordRuntimeDecision({
+    await this.recordRuntimeDecision({
       kind: "approval_requested",
       scope: this.buildApprovalDecisionScope(approval),
       selected: `Requested ${approval.kind} approval`,
@@ -7974,15 +8151,15 @@ export class GatewayService {
     return approval;
   }
 
-  public createApprovalRemoteActionToken(
+  public async createApprovalRemoteActionToken(
     approvalId: string,
     input: {
       connectorId: string;
       issuedBy?: string;
       expiresInMs?: number;
     },
-  ): RemoteApprovalActionTokenIssueResult {
-    return this.approvalRuntime.createApprovalRemoteActionToken(approvalId, input);
+  ): Promise<RemoteApprovalActionTokenIssueResult> {
+    return await this.approvalRuntime.createApprovalRemoteActionToken(approvalId, input);
   }
 
   public async resolveApprovalWithRemoteToken(input: {
@@ -8007,25 +8184,29 @@ export class GatewayService {
     return this.approvalRuntime.resolveApprovalWithRemoteTokenId(input);
   }
 
-  public listApprovals(status?: ApprovalRequest["status"], limit = 100, workspaceId?: string): ApprovalRequest[] {
-    return this.approvalRuntime.listApprovals(status, limit, workspaceId);
+  public async listApprovals(
+    status?: ApprovalRequest["status"],
+    limit = 100,
+    workspaceId?: string,
+  ): Promise<ApprovalRequest[]> {
+    return await this.approvalRuntime.listApprovals(status, limit, workspaceId);
   }
 
   public async resolveApprovalsBulk(input: ApprovalBulkResolveInput): Promise<ApprovalBulkResolveResult> {
     return this.approvalRuntime.resolveApprovalsBulk(input);
   }
 
-  public getApprovalReplay(approvalId: string, replayedBy = "operator"): ApprovalReplayResult {
-    return this.approvalRuntime.getApprovalReplay(approvalId, replayedBy);
+  public async getApprovalReplay(approvalId: string, replayedBy = "operator"): Promise<ApprovalReplayResult> {
+    return await this.approvalRuntime.getApprovalReplay(approvalId, replayedBy);
   }
 
-  /** @internal */ public findProactiveDurableRunIdsForApproval(approvalId: string): string[] {
-    return this.chatProactiveService.findDurableRunIdsForApproval(approvalId);
+  /** @internal */ public async findProactiveDurableRunIdsForApproval(approvalId: string): Promise<string[]> {
+    return await this.chatProactiveService.findDurableRunIdsForApproval(approvalId);
   }
 
-  private findDurableRunMaybe(runId: string): DurableRunRecord | undefined {
+  private async findDurableRunMaybe(runId: string): Promise<DurableRunRecord | undefined> {
     try {
-      return this.storage.durableRuns.getRun(runId);
+      return await this.storage.durableRuns.getRun(runId);
     } catch (error) {
       if (error instanceof NotFoundError) {
         return undefined;
@@ -8038,11 +8219,13 @@ export class GatewayService {
     return this.approvalRuntime.resolveApproval(approvalId, input);
   }
 
-  /** @internal */ public ensureApprovalWaitDurableRun(approval: ApprovalRequest): DurableRunRecord | undefined {
-    return this.approvalWaitRunService.ensureApprovalWaitDurableRun(approval);
+  /** @internal */ public async ensureApprovalWaitDurableRun(
+    approval: ApprovalRequest,
+  ): Promise<DurableRunRecord | undefined> {
+    return await this.approvalWaitRunService.ensureApprovalWaitDurableRun(approval);
   }
 
-  /** @internal */ public enqueueApprovalRemoteTokenDelivery(
+  /** @internal */ public async enqueueApprovalRemoteTokenDelivery(
     approval: ApprovalRequest,
     connector: ConnectorRecord,
     tokenRecord: {
@@ -8050,15 +8233,15 @@ export class GatewayService {
       tokenId: string;
       expiresAt: string;
     },
-  ): DurableRunRecord | undefined {
-    if (!this.isFeatureEnabled("durableKernelV1Enabled")) {
+  ): Promise<DurableRunRecord | undefined> {
+    if (!(await this.isFeatureEnabled("durableKernelV1Enabled"))) {
       return undefined;
     }
-    return enqueueApprovalRemoteTokenConnectorDelivery(
+    return await enqueueApprovalRemoteTokenConnectorDelivery(
       {
         tokenSecrets: this.approvalRemoteTokenSecrets,
         requestAttribution: this.getCurrentRequestAttribution(),
-        createDurableRun: (input) => this.createDurableRun(input),
+        createDurableRun: async (input) => await this.createDurableRun(input),
       },
       { approval, connector, tokenRecord },
     );
@@ -8073,18 +8256,18 @@ export class GatewayService {
    * to the turn). Carries `system-cron`-class governance so the channel send is
    * attributed to the autonomous actor.
    */
-  /** @internal */ public enqueueAutonomousChannelDelivery(
+  /** @internal */ public async enqueueAutonomousChannelDelivery(
     input: durableExecutionService.AutonomousChannelDeliveryRequest,
-  ): string | undefined {
+  ): Promise<string | undefined> {
     const deliveryRunId = `autonomous-delivery:${input.runId}`;
-    const existing = this.findAutonomousChannelDeliveryRun(deliveryRunId, input.runId);
+    const existing = await this.findAutonomousChannelDeliveryRun(deliveryRunId, input.runId);
     if (existing) {
       return existing.runId;
     }
-    if (!this.isFeatureEnabled("durableKernelV1Enabled")) {
+    if (!(await this.isFeatureEnabled("durableKernelV1Enabled"))) {
       return undefined;
     }
-    if (this.isFeatureEnabled("autonomyV1Disabled")) {
+    if (await this.isFeatureEnabled("autonomyV1Disabled")) {
       return undefined;
     }
     const message = input.assistantText.trim();
@@ -8092,7 +8275,7 @@ export class GatewayService {
       return undefined;
     }
     const channelKey = input.deliveryChannel.channelKey.trim();
-    const connector = this.listConnectorRecords("integration_connection").find(
+    const connector = (await this.listConnectorRecords("integration_connection")).find(
       (item) => item.status === "active" && item.metadata?.key === channelKey,
     );
     if (!connector) {
@@ -8107,7 +8290,7 @@ export class GatewayService {
       return undefined;
     }
     const operatorId = input.systemActorId ?? "system-cron";
-    const workspaceId = this.storage.chatSessionMeta.get(input.sessionId)?.workspaceId ?? DEFAULT_WORKSPACE_ID;
+    const workspaceId = (await this.storage.chatSessionMeta.get(input.sessionId))?.workspaceId ?? DEFAULT_WORKSPACE_ID;
     const createInput: DurableRunCreateRequest = {
       runId: deliveryRunId,
       workflowKey: "connector.delivery",
@@ -8138,9 +8321,9 @@ export class GatewayService {
     };
     let run: DurableRunRecord;
     try {
-      run = this.createDurableRun(createInput);
+      run = await this.createDurableRun(createInput);
     } catch (error) {
-      const raced = this.findAutonomousChannelDeliveryRun(deliveryRunId, input.runId);
+      const raced = await this.findAutonomousChannelDeliveryRun(deliveryRunId, input.runId);
       if (!raced) {
         throw error;
       }
@@ -8149,10 +8332,13 @@ export class GatewayService {
     return run.runId;
   }
 
-  private findAutonomousChannelDeliveryRun(deliveryRunId: string, sourceRunId: string): DurableRunRecord | undefined {
+  private async findAutonomousChannelDeliveryRun(
+    deliveryRunId: string,
+    sourceRunId: string,
+  ): Promise<DurableRunRecord | undefined> {
     let existing: DurableRunRecord;
     try {
-      existing = this.storage.durableRuns.getRun(deliveryRunId);
+      existing = await this.storage.durableRuns.getRun(deliveryRunId);
     } catch (error) {
       if (error instanceof NotFoundError) {
         return undefined;
@@ -8180,21 +8366,32 @@ export class GatewayService {
    * truth so retryable storage failures remain pending while an advanced branch
    * becomes operator-visible manual reconciliation instead of being rewound.
    */
-  /** @internal */ public cleanupSilentHeartbeatTurn(
+  /** @internal */ public async cleanupSilentHeartbeatTurn(
     input: durableExecutionService.SilentHeartbeatCleanupRequest,
-  ): durableExecutionService.SilentHeartbeatCleanupResult {
+  ): Promise<durableExecutionService.SilentHeartbeatCleanupResult> {
     let removed = false;
     let resolution: durableExecutionService.SilentHeartbeatCleanupResult = { status: "already_completed" };
     try {
       const messageIds = [input.userMessageId, input.assistantMessageId].filter(
         (id): id is string => typeof id === "string" && id.trim().length > 0,
       );
-      this.storage.runImmediateTransaction(() => {
-        const activeLeafTurnId = this.storage.chatSessionBranchState.get(input.sessionId)?.activeLeafTurnId;
-        const hasMessages = messageIds.some((messageId) => Boolean(this.storage.chatMessages.get(messageId)));
+      await this.storage.runImmediateTransaction(async () => {
+        const activeLeafTurnId = (await this.storage.chatSessionBranchState.get(input.sessionId))?.activeLeafTurnId;
+        let hasMessages = false;
+        for (const messageId of messageIds) {
+          try {
+            await this.storage.chatMessages.get(messageId);
+            hasMessages = true;
+            break;
+          } catch (error) {
+            if (!(error instanceof NotFoundError)) {
+              throw error;
+            }
+          }
+        }
         let hasTrace = true;
         try {
-          this.storage.chatTurnTraces.get(input.turnId);
+          await this.storage.chatTurnTraces.get(input.turnId);
         } catch (error) {
           if (error instanceof NotFoundError) {
             hasTrace = false;
@@ -8214,10 +8411,10 @@ export class GatewayService {
           };
           return;
         }
-        this.storage.chatMessages.deleteByMessageIds(input.sessionId, messageIds);
-        this.storage.chatTurnTraces.deleteByTurnIds(input.sessionId, [input.turnId]);
+        await this.storage.chatMessages.deleteByMessageIds(input.sessionId, messageIds);
+        await this.storage.chatTurnTraces.deleteByTurnIds(input.sessionId, [input.turnId]);
         if (input.parentTurnId) {
-          const reverted = this.storage.chatSessionBranchState.setActiveLeafIfCurrent(
+          const reverted = await this.storage.chatSessionBranchState.setActiveLeafIfCurrent(
             input.sessionId,
             input.turnId,
             input.parentTurnId,
@@ -8227,7 +8424,7 @@ export class GatewayService {
             throw new Error(`Silent heartbeat ${input.turnId} lost active-leaf ownership during cleanup.`);
           }
         } else {
-          this.storage.chatSessionBranchState.clear(input.sessionId);
+          await this.storage.chatSessionBranchState.clear(input.sessionId);
         }
         removed = true;
         resolution = { status: "completed" };
@@ -8251,7 +8448,7 @@ export class GatewayService {
       return resolution;
     }
     try {
-      this.publishRealtime(
+      await this.publishRealtime(
         "chat_thread_updated",
         "chat",
         {
@@ -8307,13 +8504,16 @@ export class GatewayService {
     return this.approvalWaitRunService.buildApprovalRealtimeLinks(approval);
   }
 
-  /** @internal */ public enqueueApprovalResolutionEffects(
+  /** @internal */ public async enqueueApprovalResolutionEffects(
     approval: ApprovalRequest,
     input: ApprovalResolveInput,
     options?: import("./approval-resolution-effects-service.js").ApprovalResolutionEffectEnqueueOptions,
-  ): ApprovalEffectRecord[] {
-    const effects = this.approvalEffectsService.enqueueResolutionEffects(approval, input, options);
-    this.recordRuntimeDecision({
+  ): Promise<ApprovalEffectRecord[]> {
+    const effects = await this.approvalEffectsService.enqueueResolutionEffects(approval, input, {
+      ...options,
+      deferProcessing: true,
+    });
+    await this.recordRuntimeDecision({
       kind: "approval_resolved",
       scope: this.buildApprovalDecisionScope(approval),
       selected: `Approval ${input.decision}`,
@@ -8343,7 +8543,7 @@ export class GatewayService {
         effect.effectKind === "linked_chat_turn_wake",
     );
     if (resumeEffects.length > 0) {
-      this.recordRuntimeDecision({
+      await this.recordRuntimeDecision({
         kind: "runtime_resumed",
         scope: this.buildApprovalDecisionScope(approval),
         selected: "Queued approval resume effects",
@@ -8375,21 +8575,21 @@ export class GatewayService {
     return effects;
   }
 
-  /** @internal */ public primeApprovalLifecycle(
+  /** @internal */ public async primeApprovalLifecycle(
     approvalId: string,
     linkage?: ApprovalRequest["linkage"],
-  ): ApprovalRequest {
-    return this.approvalWaitRunService.primeApprovalLifecycle(approvalId, linkage);
+  ): Promise<ApprovalRequest> {
+    return await this.approvalWaitRunService.primeApprovalLifecycle(approvalId, linkage);
   }
 
-  /** @internal */ public requireConnectorRecord(connectorId: string): ConnectorRecord {
+  /** @internal */ public async requireConnectorRecord(connectorId: string): Promise<ConnectorRecord> {
     const normalizedConnectorId = connectorId.trim();
     if (!normalizedConnectorId) {
       throw new ValidationError({
         message: "connectorId is required.",
       });
     }
-    const connector = this.listConnectorRecords().find((item) => item.connectorId === normalizedConnectorId);
+    const connector = (await this.listConnectorRecords()).find((item) => item.connectorId === normalizedConnectorId);
     if (!connector) {
       throw new NotFoundError({
         entity: "Connector",
@@ -8399,43 +8599,43 @@ export class GatewayService {
     return connector;
   }
 
-  /** @internal */ public consumeRemoteActionToken(
+  /** @internal */ public async consumeRemoteActionToken(
     token: string,
     expectedActionType: RemoteActionTokenRecord["actionType"],
     options?: approvalRemoteTokenService.RemoteActionTokenClaimOptions,
-  ): RemoteActionTokenRecord {
+  ): Promise<RemoteActionTokenRecord> {
     return options
-      ? approvalRemoteTokenService.consumeRemoteActionToken(this, token, expectedActionType, options)
-      : approvalRemoteTokenService.consumeRemoteActionToken(this, token, expectedActionType);
+      ? await approvalRemoteTokenService.consumeRemoteActionToken(this, token, expectedActionType, options)
+      : await approvalRemoteTokenService.consumeRemoteActionToken(this, token, expectedActionType);
   }
 
-  public findRemoteActionTokenId(token: string): string | undefined {
+  public async findRemoteActionTokenId(token: string): Promise<string | undefined> {
     const normalized = token.trim();
     if (!normalized) {
       return undefined;
     }
-    return this.storage.remoteActionTokens.findByTokenHash(hashSensitiveToken(normalized))?.tokenId;
+    return (await this.storage.remoteActionTokens.findByTokenHash(hashSensitiveToken(normalized)))?.tokenId;
   }
 
-  /** @internal */ public consumeRemoteActionTokenById(
+  /** @internal */ public async consumeRemoteActionTokenById(
     tokenId: string,
     expectedActionType: RemoteActionTokenRecord["actionType"],
     options?: approvalRemoteTokenService.RemoteActionTokenClaimOptions,
-  ): RemoteActionTokenRecord {
+  ): Promise<RemoteActionTokenRecord> {
     return options
-      ? approvalRemoteTokenService.consumeRemoteActionTokenById(this, tokenId, expectedActionType, options)
-      : approvalRemoteTokenService.consumeRemoteActionTokenById(this, tokenId, expectedActionType);
+      ? await approvalRemoteTokenService.consumeRemoteActionTokenById(this, tokenId, expectedActionType, options)
+      : await approvalRemoteTokenService.consumeRemoteActionTokenById(this, tokenId, expectedActionType);
   }
 
-  public listSkills(): SkillListItem[] {
-    this.skillStateService.ensureSkillStates(this.skillsService.list().map((skill) => skill.skillId));
-    return this.capabilitySystemService.listSkills();
+  public async listSkills(): Promise<SkillListItem[]> {
+    await this.skillStateService.ensureSkillStates(this.skillsService.list().map((skill) => skill.skillId));
+    return await this.capabilitySystemService.listSkills();
   }
 
-  public createCapabilityProposal(
+  public async createCapabilityProposal(
     input: Parameters<CapabilitySystemService["createProposal"]>[0],
-  ): CapabilityProposalRecord {
-    return this.capabilitySystemService.createProposal(input);
+  ): Promise<CapabilityProposalRecord> {
+    return await this.capabilitySystemService.createProposal(input);
   }
 
   /**
@@ -8445,9 +8645,9 @@ export class GatewayService {
    * grounding; deny-wins enforcement stays inline at tool-call time). Best-effort:
    * returns an empty toolset rather than throwing on the turn-prep critical path.
    */
-  public resolveBasePromptCapabilityCatalog(): BaseAgentPromptToolset {
+  public async resolveBasePromptCapabilityCatalog(): Promise<BaseAgentPromptToolset> {
     try {
-      const catalog = this.capabilitySystemService.listCatalog("callable");
+      const catalog = await this.capabilitySystemService.listCatalog("callable");
       const toolNames: string[] = [];
       const skills: BaseAgentPromptSkill[] = [];
       for (const entry of catalog) {
@@ -8493,9 +8693,9 @@ export class GatewayService {
 
   public async reloadSkills(): Promise<SkillListItem[]> {
     const loaded = await this.skillsService.reload();
-    this.skillStateService.ensureSkillStates(loaded.map((skill) => skill.skillId));
-    this.capabilitySystemService.ensureSkillLifecycleBackfill();
-    return this.listSkills();
+    await this.skillStateService.ensureSkillStates(loaded.map((skill) => skill.skillId));
+    await this.capabilitySystemService.ensureSkillLifecycleBackfill();
+    return await this.listSkills();
   }
 
   public listSkillExportTargets(): SkillExportTargetProfile[] {
@@ -8506,9 +8706,9 @@ export class GatewayService {
     return renderSkillExportPreview(input, this.skillsService.list());
   }
 
-  public packageSkillExport(input: SkillExportRequest): SkillExportPackageResponse {
+  public async packageSkillExport(input: SkillExportRequest): Promise<SkillExportPackageResponse> {
     const preview = this.previewSkillExport(input);
-    const envelope = this.evidenceEnvelopeService.createEnvelope({
+    const envelope = await this.evidenceEnvelopeService.createEnvelope({
       eventKind: "skill_export",
       metadata: {
         target: preview.target,
@@ -8531,40 +8731,40 @@ export class GatewayService {
     return this.capabilitySystemService.executeApprovedCodeModeRun(approvalId, signal);
   }
 
-  public getSkillActivationPolicy(): SkillActivationPolicy {
-    return this.skillStateService.getActivationPolicy();
+  public async getSkillActivationPolicy(): Promise<SkillActivationPolicy> {
+    return await this.skillStateService.getActivationPolicy();
   }
 
   // HX-402 P2: the operator skill mutation surface is approval-first. These
   // gateway members keep their composition-pinned names and arities but now
   // request one canonical `skill.lifecycle` approval and never mutate; the
   // recovered `skill_lifecycle_apply` effect is the sole executor.
-  public updateSkillActivationPolicy(
+  public async updateSkillActivationPolicy(
     input: Partial<Omit<SkillActivationPolicy, "revision">>,
     authority: ActivationPolicyMutationAuthorityInput,
-  ): ActivationPolicyMutationOutcome {
-    return this.skillStateService.requestActivationPolicyApproval(input, authority);
+  ): Promise<ActivationPolicyMutationOutcome> {
+    return await this.skillStateService.requestActivationPolicyApproval(input, authority);
   }
 
-  public setSkillState(
+  public async setSkillState(
     skillId: string,
     state: SkillRuntimeState,
     note?: string,
     authority?: SkillStateMutationAuthorityInput,
-  ): SkillStateMutationOutcome {
+  ): Promise<SkillStateMutationOutcome> {
     const resolved = authority ?? {
-      expectedRevision: this.storage.skillAggregateRevisions.ensure("runtime_skill", skillId).revision,
+      expectedRevision: (await this.storage.skillAggregateRevisions.ensure("runtime_skill", skillId)).revision,
     };
     return this.skillStateService.requestSkillStateApproval(skillId, state, note, resolved);
   }
 
-  public bulkSetSkillState(
+  public async bulkSetSkillState(
     skillIds: string[],
     state: SkillRuntimeState,
     note: string | undefined,
     authority: SkillStateBulkMutationAuthorityInput,
-  ): SkillStateBulkMutationOutcome {
-    return this.skillStateService.requestSkillStateBulkApproval(skillIds, state, note, authority);
+  ): Promise<SkillStateBulkMutationOutcome> {
+    return await this.skillStateService.requestSkillStateBulkApproval(skillIds, state, note, authority);
   }
 
   /**
@@ -8572,23 +8772,23 @@ export class GatewayService {
    * Returns false when no snapshot exists for the skill. Used by the global
    * autonomous-rollback path.
    */
-  public restoreCuratorIdleSkillSnapshot(skillId: string): boolean {
-    return this.skillStateService.restoreCuratorIdleSnapshot(skillId);
+  public async restoreCuratorIdleSkillSnapshot(skillId: string): Promise<boolean> {
+    return await this.skillStateService.restoreCuratorIdleSnapshot(skillId);
   }
 
-  public resolveSkillActivation(input: SkillResolveInput) {
-    return this.resolveSkillActivationForRuntime(input, true);
+  public async resolveSkillActivation(input: SkillResolveInput) {
+    return await this.resolveSkillActivationForRuntime(input, true);
   }
 
-  private resolveSkillActivationForRuntime(input: SkillResolveInput, recordUsage: boolean) {
-    const policy = this.getSkillActivationPolicy();
+  private async resolveSkillActivationForRuntime(input: SkillResolveInput, recordUsage: boolean) {
+    const policy = await this.getSkillActivationPolicy();
     const base = resolveCallableSkillActivation({
       request: input,
       loadedSkills: this.skillsService.list(),
-      inspectableCatalog: this.capabilitySystemService.listCatalog("inspectable"),
-      callableCatalog: this.capabilitySystemService.listCatalog("callable"),
+      inspectableCatalog: await this.capabilitySystemService.listCatalog("inspectable"),
+      callableCatalog: await this.capabilitySystemService.listCatalog("callable"),
     });
-    const stateMap = this.skillStateService.readSkillStates();
+    const stateMap = await this.skillStateService.readSkillStates();
     const selected: Array<
       SkillListItem & {
         confidence: number;
@@ -8635,7 +8835,8 @@ export class GatewayService {
       selected.push({
         ...skill,
         revision:
-          stateRecord?.revision ?? this.storage.skillAggregateRevisions.ensure("runtime_skill", skill.skillId).revision,
+          stateRecord?.revision ??
+          (await this.storage.skillAggregateRevisions.ensure("runtime_skill", skill.skillId)).revision,
         state,
         confidence,
         requiresConfirmation,
@@ -8643,7 +8844,7 @@ export class GatewayService {
     }
 
     if (recordUsage) {
-      this.skillStateService.recordSkillUsage(selected.map((skill) => skill.skillId));
+      await this.skillStateService.recordSkillUsage(selected.map((skill) => skill.skillId));
     }
 
     return {
@@ -8657,15 +8858,15 @@ export class GatewayService {
     return this.memoryLifecycleService.listMemoryFiles(relativeDir);
   }
 
-  /** @internal */ public persistContextManifestForCompletionRequest(input: {
+  /** @internal */ public async persistContextManifestForCompletionRequest(input: {
     request: ChatCompletionRequest;
     memoryContext?: MemoryContextPack;
     memoryContextPlacement?: MemoryContextPlacement;
-  }): void {
-    persistContextManifestForCompletionRequest({ contextManifests: this.storage.contextManifests }, input);
+  }): Promise<void> {
+    await persistContextManifestForCompletionRequest({ contextManifests: this.storage.contextManifests }, input);
   }
 
-  public listMemoryItems(
+  public async listMemoryItems(
     input: {
       namespace?: string;
       workspaceId?: string;
@@ -8673,13 +8874,15 @@ export class GatewayService {
       query?: string;
       limit?: number;
     } = {},
-  ): MemoryItemRecord[] {
-    return this.memoryLifecycleService.listMemoryItems(input);
+  ): Promise<MemoryItemRecord[]> {
+    return await this.memoryLifecycleService.listMemoryItems(input);
   }
 
-  public getSettings(): RuntimeSettings {
+  public async getSettings(): Promise<RuntimeSettings> {
     this.configGenerationService.assertRuntimeReadsReady();
-    return settingsAuthService.getSettings(createSettingsRuntimeDependenciesForGateway(this.getRouteCompositionPort()));
+    return await settingsAuthService.getSettings(
+      createSettingsRuntimeDependenciesForGateway(this.getRouteCompositionPort()),
+    );
   }
 
   public readSettingsRevision(): number {
@@ -8692,11 +8895,11 @@ export class GatewayService {
   }
 
   public async saveProviderSecret(input: SaveProviderSecretInput): Promise<ProviderSecretMutationResponse> {
-    return this.commitProviderSecretMutation({ ...input, operation: "set" });
+    return await this.commitProviderSecretMutation({ ...input, operation: "set" });
   }
 
   public async deleteProviderSecret(input: DeleteProviderSecretInput): Promise<ProviderSecretMutationResponse> {
-    return this.commitProviderSecretMutation({ ...input, operation: "delete" });
+    return await this.commitProviderSecretMutation({ ...input, operation: "delete" });
   }
 
   private async commitProviderSecretMutation(
@@ -8721,7 +8924,7 @@ export class GatewayService {
         llm: this.llmService.exportConfigFile(),
         runtimeLlm: previousRuntimeLlm,
       },
-      buildCandidate: () => {
+      buildCandidate: async () => {
         const prepared = prepareProviderSecretMutation({
           operation: input.operation,
           providerId: input.providerId,
@@ -8751,7 +8954,7 @@ export class GatewayService {
         config.llm = structuredClone(llm);
         return {
           runtime: { config, llm, runtimeLlm, prepared },
-          payload: this.buildUnifiedConfigPayloadForRuntime(config, llm, this.readFeatureFlags()),
+          payload: await this.buildUnifiedConfigPayloadForRuntime(config, llm, await this.readFeatureFlags()),
         };
       },
       captureRuntimeOwnerRecoveryIntent: (candidate) => ({
@@ -8825,11 +9028,11 @@ export class GatewayService {
    * first use), then returns the cached, byte-stable-per-revision digest. Cheap:
    * no model call on the hot path. Best-effort — a failure must not break a turn.
    */
-  public composeFrozenOperatorProfileDigest(workspaceId: string): string | undefined {
+  public async composeFrozenOperatorProfileDigest(workspaceId: string): Promise<string | undefined> {
     try {
       const normalizedWorkspaceId = this.normalizeWorkspaceId(workspaceId);
-      this.operatorProfileService.ensureOperatorProfile(normalizedWorkspaceId);
-      return this.operatorProfileService.composeFrozenProfileDigest(normalizedWorkspaceId);
+      await this.operatorProfileService.ensureOperatorProfile(normalizedWorkspaceId);
+      return await this.operatorProfileService.composeFrozenProfileDigest(normalizedWorkspaceId);
     } catch {
       return undefined;
     }
@@ -8845,9 +9048,9 @@ export class GatewayService {
     };
     const previousRuntime: settingsAuthService.SettingsConfigCandidate = {
       config: structuredClone(this.config),
-      features: structuredClone(this.readFeatureFlags()),
+      features: structuredClone(await this.readFeatureFlags()),
       llm: this.llmService.exportConfigFile(),
-      settings: this.getSettings(),
+      settings: await this.getSettings(),
       input: structuredClone(input),
     };
 
@@ -8856,8 +9059,8 @@ export class GatewayService {
       expectedRevision: input.expectedRevision,
       requireExpectedRevision: true,
       previousRuntime,
-      buildCandidate: () => {
-        const candidate = settingsAuthService.buildSettingsCandidate(deps, input);
+      buildCandidate: async () => {
+        const candidate = await settingsAuthService.buildSettingsCandidate(deps, input);
         if (candidate.input.llamaCpp) {
           // This executes before staging or a durable transaction decision.
           // Process identity cannot change under active request leases because
@@ -8866,14 +9069,14 @@ export class GatewayService {
         }
         return {
           runtime: candidate,
-          payload: this.buildUnifiedConfigPayloadForRuntime(candidate.config, candidate.llm, candidate.features),
+          payload: await this.buildUnifiedConfigPayloadForRuntime(candidate.config, candidate.llm, candidate.features),
         };
       },
-      captureRuntimeOwnerRecoveryIntent: (candidate) => ({
+      captureRuntimeOwnerRecoveryIntent: async (candidate) => ({
         version: 1,
         ...(candidate.input.mesh
           ? {
-              meshArtifact: this.storage.mesh.snapshotRuntimeArtifacts(
+              meshArtifact: await this.storage.mesh.snapshotRuntimeArtifacts(
                 candidate.config.assistant.mesh.nodeId,
                 process.env[candidate.config.assistant.mesh.security.joinTokenEnv],
               ),
@@ -8894,10 +9097,10 @@ export class GatewayService {
         await rollback.rollback();
       },
     });
-    if (didDisengageAutonomyKillSwitch(previousRuntime.features, this.readFeatureFlags())) {
-      this.resumeRunsAfterAutonomyKillSwitchDisengaged();
+    if (didDisengageAutonomyKillSwitch(previousRuntime.features, await this.readFeatureFlags())) {
+      await this.resumeRunsAfterAutonomyKillSwitchDisengaged();
     }
-    return this.getSettings();
+    return await this.getSettings();
   }
 
   /** @internal Transactional owner-apply seam used by config-generation proof. */
@@ -8909,7 +9112,7 @@ export class GatewayService {
     const input = candidate.input;
     const compensations: Array<() => void | Promise<void>> = [];
     const previousConfig = structuredClone(this.config);
-    const previousFeatures = structuredClone(this.readFeatureFlags());
+    const previousFeatures = structuredClone(await this.readFeatureFlags());
     let rolledBack = false;
     const rollback = async (): Promise<void> => {
       if (rolledBack) {
@@ -8979,7 +9182,7 @@ export class GatewayService {
     }
 
     if (input.mesh) {
-      const meshReplacement = this.meshService.replaceOptionsReversibly({
+      const meshReplacement = await this.meshService.replaceOptionsReversibly({
         enabled: candidate.config.assistant.mesh.enabled,
         mode: candidate.config.assistant.mesh.mode,
         localNodeId: candidate.config.assistant.mesh.nodeId,
@@ -9020,10 +9223,10 @@ export class GatewayService {
     // Feature publication is last because it is durable and can wake parked
     // autonomous runs. No later owner step is allowed to fail after it.
     if (input.features) {
-      compensations.push(() => {
-        this.updateFeatureFlags(previousFeatures, { resumeParkedRuns: false });
+      compensations.push(async () => {
+        await this.updateFeatureFlags(previousFeatures, { resumeParkedRuns: false });
       });
-      this.updateFeatureFlags(candidate.features, { resumeParkedRuns: false });
+      await this.updateFeatureFlags(candidate.features, { resumeParkedRuns: false });
     }
     return rollbackReceipt;
   }
@@ -9138,8 +9341,8 @@ export class GatewayService {
     );
   }
 
-  public validateCompanionAccessToken(token: string): CompanionAccessValidationResult | undefined {
-    return settingsAuthService.validateCompanionAccessToken(
+  public async validateCompanionAccessToken(token: string): Promise<CompanionAccessValidationResult | undefined> {
+    return await settingsAuthService.validateCompanionAccessToken(
       createSettingsAuthRuntimeDependenciesForGateway(this.getRouteCompositionPort()),
       token,
     );
@@ -9156,15 +9359,15 @@ export class GatewayService {
    * modeled here (route auth already gates each request). An unreadable auth
    * owner fails closed as revoked.
    */
-  private readMcpRequesterAuthConnectionState(actor: {
+  private async readMcpRequesterAuthConnectionState(actor: {
     actorId: string;
     actorSource: McpRequesterScopeAuthActorSource;
-  }): { revoked: boolean } {
+  }): Promise<{ revoked: boolean }> {
     if (actor.actorSource !== "device" && actor.actorSource !== "companion") {
       return { revoked: false };
     }
     try {
-      const grants = settingsAuthService.listDeviceAccessGrants(
+      const grants = await settingsAuthService.listDeviceAccessGrants(
         createSettingsAuthRuntimeDependenciesForGateway(this.getRouteCompositionPort()),
       );
       const grant = grants.find((candidate) => candidate.actorId === actor.actorId);
@@ -9177,7 +9380,7 @@ export class GatewayService {
     }
   }
 
-  public verifyCompanionRequestSignature(input: {
+  public async verifyCompanionRequestSignature(input: {
     sessionId: string;
     method: string;
     path: string;
@@ -9185,8 +9388,8 @@ export class GatewayService {
     nonce: string;
     signature: string;
     body: unknown;
-  }): void {
-    return settingsAuthService.verifyCompanionRequestSignature(
+  }): Promise<void> {
+    await settingsAuthService.verifyCompanionRequestSignature(
       createSettingsAuthRuntimeDependenciesForGateway(this.getRouteCompositionPort()),
       input,
     );
@@ -9196,12 +9399,12 @@ export class GatewayService {
     return this.skillImportService.listSources(query, limit);
   }
 
-  private listConnectorRecords(connectorType?: ConnectorType): ConnectorRecord[] {
+  private async listConnectorRecords(connectorType?: ConnectorType): Promise<ConnectorRecord[]> {
     return filterConnectorRecords(
       buildGatewayConnectorRecords({
-        integrationConnections: this.storage.integrationConnections.list(undefined, 1000),
-        mcpServers: this.readMcpServers(),
-        mcpTools: this.readMcpTools(),
+        integrationConnections: await this.storage.integrationConnections.list(undefined, 1000),
+        mcpServers: await this.readMcpServers(),
+        mcpTools: await this.readMcpTools(),
       }),
       connectorType,
     );
@@ -9211,8 +9414,8 @@ export class GatewayService {
     return this.skillImportService.lookupSources(queryOrUrl, limit);
   }
 
-  public listSkillImportHistory(limit = 100): SkillImportHistoryRecord[] {
-    return this.skillImportService.listHistory(limit);
+  public async listSkillImportHistory(limit = 100): Promise<SkillImportHistoryRecord[]> {
+    return await this.skillImportService.listHistory(limit);
   }
 
   public async validateSkillImport(input: {
@@ -9221,8 +9424,8 @@ export class GatewayService {
     sourceProvider?: SkillSourceProvider;
   }): Promise<SkillImportValidationResult> {
     const validation = await this.skillImportService.validateImport(input);
-    this.skillStateService.recordSkillImportEvent(validation, "import_validated");
-    this.publishRealtime("system", "skills", {
+    await this.skillStateService.recordSkillImportEvent(validation, "import_validated");
+    await this.publishRealtime("system", "skills", {
       type: "skill_import_validated",
       sourceProvider: validation.candidate.sourceProvider,
       sourceRef: validation.candidate.sourceRef,
@@ -9255,8 +9458,8 @@ export class GatewayService {
     confirmHighRisk?: boolean;
   }): Promise<SkillImportRedirectResult> {
     const redirected = await this.skillImportService.installImport(input);
-    this.skillStateService.recordSkillImportEvent(redirected.validation, "import_redirected");
-    this.publishRealtime("system", "skills", {
+    await this.skillStateService.recordSkillImportEvent(redirected.validation, "import_redirected");
+    await this.publishRealtime("system", "skills", {
       type: "skill_import_redirected",
       sourceProvider: redirected.validation.candidate.sourceProvider,
       sourceRef: redirected.validation.candidate.sourceRef,
@@ -9267,8 +9470,8 @@ export class GatewayService {
     return redirected;
   }
 
-  public listMcpServers(): McpServerRecord[] {
-    return this.readMcpServers();
+  public async listMcpServers(): Promise<McpServerRecord[]> {
+    return await this.readMcpServers();
   }
 
   /**
@@ -9278,43 +9481,53 @@ export class GatewayService {
    * never an endpoint, header, URL component, actor/channel identifier,
    * resolver cause text, or secret-derived hash.
    */
-  public listMcpRequesterScopePostures(): McpRequesterScopePosture[] {
+  public async listMcpRequesterScopePostures(): Promise<McpRequesterScopePosture[]> {
+    const servers = await this.readMcpServers();
     return mcpDiagnosticsService.listMcpRequesterScopePostures({
-      listMcpServers: () => this.readMcpServers(),
+      listMcpServers: () => servers,
       requesterScopeDiagnostics: this.mcpRequesterScopedRuntime.requesterScopeDiagnostics,
     });
   }
 
-  public listMcpTemplates(): Array<McpServerTemplateRecord & { installed: boolean }> {
-    const byTemplateId = new Map(this.readMcpServers().map((server) => [server.label.toLowerCase(), server]));
+  public async listMcpTemplates(): Promise<Array<McpServerTemplateRecord & { installed: boolean }>> {
+    const byTemplateId = new Map((await this.readMcpServers()).map((server) => [server.label.toLowerCase(), server]));
     return MCP_SERVER_TEMPLATES.filter(isVisibleMcpTemplateRecord).map((template) => ({
       ...template,
       installed: byTemplateId.has(template.label.toLowerCase()),
     }));
   }
 
-  public createMcpServer(input: McpServerCreateInput): McpServerRecord {
-    return mcpServerAdminService.createMcpServer(this, input);
+  public async createMcpServer(input: McpServerCreateInput): Promise<McpServerRecord> {
+    return await mcpServerAdminService.createMcpServer(this, input);
   }
 
   public async connectMcpServer(serverId: string): Promise<McpServerRecord> {
     return mcpServerAdminService.connectMcpServer(this, serverId);
   }
 
-  public disconnectMcpServer(serverId: string): McpServerRecord {
-    return mcpServerAdminService.disconnectMcpServer(this, serverId);
+  public async disconnectMcpServer(serverId: string): Promise<McpServerRecord> {
+    return await mcpServerAdminService.disconnectMcpServer(this, serverId);
   }
 
-  public listMcpTools(serverId: string): McpToolRecord[] {
-    this.requireMcpServer(serverId);
-    return this.readMcpTools()
+  public async listMcpTools(serverId: string): Promise<McpToolRecord[]> {
+    await this.requireMcpServer(serverId);
+    return (await this.readMcpTools())
       .filter((item) => item.serverId === serverId)
       .sort((left, right) => left.toolName.localeCompare(right.toolName));
   }
 
-  public listMcpBrowserFallbackTargets(): ReturnType<typeof collectMcpBrowserFallbackTargets> {
-    return collectMcpBrowserFallbackTargets(this.readMcpServers(), this.readMcpTools(), (serverId, toolName) =>
-      this.isMcpToolApproved(serverId, toolName),
+  public async listMcpBrowserFallbackTargets(): Promise<ReturnType<typeof collectMcpBrowserFallbackTargets>> {
+    const [servers, tools] = await Promise.all([this.readMcpServers(), this.readMcpTools()]);
+    const approvals = new Set<string>();
+    await Promise.all(
+      tools.map(async (tool) => {
+        if (await this.isMcpToolApproved(tool.serverId, tool.toolName)) {
+          approvals.add(`${tool.serverId}\u0000${tool.toolName}`);
+        }
+      }),
+    );
+    return collectMcpBrowserFallbackTargets(servers, tools, (serverId, toolName) =>
+      approvals.has(`${serverId}\u0000${toolName}`),
     );
   }
 
@@ -9325,10 +9538,10 @@ export class GatewayService {
     // Capability-scope enforcement happens at the coordinator's executeMcpRuntime choke point
     // (via host.assertMcpServerInScope), which also covers the model approval-replay path and
     // internal servers. Enrich here so the gate sees the resolved workspaceId.
-    return this.toolInvocationCoordinator.invokeMcpTool(this.enrichMcpInvokePolicyContext(input), options);
+    return this.toolInvocationCoordinator.invokeMcpTool(await this.enrichMcpInvokePolicyContext(input), options);
   }
 
-  private assertMcpServerInCapabilityScope(request: McpInvokeRequest): void {
+  private async assertMcpServerInCapabilityScope(request: McpInvokeRequest): Promise<void> {
     if (GATEWAY_OWNED_MCP_SERVER_IDS.has(request.serverId)) {
       return;
     }
@@ -9340,8 +9553,8 @@ export class GatewayService {
       });
     }
     const workspaceId = request.workspaceId ?? DEFAULT_WORKSPACE_ID;
-    const citadelId = this.storage.workspaces?.find(workspaceId)?.citadelId ?? DEFAULT_CITADEL_ID;
-    const effective = this.capabilityScopeResolver.resolve(citadelId, workspaceId).mcpServers;
+    const citadelId = (await this.storage.workspaces?.find(workspaceId))?.citadelId ?? DEFAULT_CITADEL_ID;
+    const effective = (await this.capabilityScopeResolver.resolve(citadelId, workspaceId)).mcpServers;
     if (!isCapabilityAllowed(effective, request.serverId)) {
       throw new PolicyViolationError({
         code: "POLICY_BLOCKED",
@@ -9351,10 +9564,10 @@ export class GatewayService {
     }
   }
 
-  private enrichMcpInvokePolicyContext(input: McpInvokeRequest): McpInvokeRequest {
+  private async enrichMcpInvokePolicyContext(input: McpInvokeRequest): Promise<McpInvokeRequest> {
     const sessionId = input.sessionId?.trim() || `mcp:${input.serverId}`;
     const workspaceId =
-      input.workspaceId ?? this.storage.chatSessionMeta.get(sessionId)?.workspaceId ?? DEFAULT_WORKSPACE_ID;
+      input.workspaceId ?? (await this.storage.chatSessionMeta.get(sessionId))?.workspaceId ?? DEFAULT_WORKSPACE_ID;
     const existing = input.policyContext;
     if (existing?.permissionProfile) {
       this.assertResolvedToolPolicyContextAllowed(existing);
@@ -9373,7 +9586,7 @@ export class GatewayService {
       };
     }
     const operatorId = existing?.operatorId ?? input.consentContext?.operatorId ?? existing?.authActorId ?? "system";
-    const policyContext = this.resolveToolPolicyContext({
+    const policyContext = await this.resolveToolPolicyContext({
       operatorId,
       authActorId: existing?.authActorId,
       authActorSource: existing?.authActorSource,
@@ -9397,9 +9610,9 @@ export class GatewayService {
   }
 
   public async commsSend(input: ChannelSendInput): Promise<ToolInvokeResult | Record<string, unknown>> {
-    const connection = this.storage.integrationConnections.get(input.connectionId);
+    const connection = await this.storage.integrationConnections.get(input.connectionId);
     const idempotencyKey = buildChannelDeliveryIdempotencyKey(input, connection.key);
-    const queued = this.channelDeliveryRuntimeService.enqueue({
+    const queued = await this.channelDeliveryRuntimeService.enqueue({
       connectionId: input.connectionId,
       channelKey: connection.key,
       target: input.target,
@@ -9433,7 +9646,7 @@ export class GatewayService {
     if (!input.replyToMessageId?.trim()) {
       throw new Error("replyToMessageId is required for channel replies.");
     }
-    return this.commsSend(input);
+    return await this.commsSend(input);
   }
 
   async commsActivity(input: ChannelActivityInput): Promise<ChannelActivityResult> {
@@ -9441,7 +9654,7 @@ export class GatewayService {
   }
 
   public async emitChannelActivity(input: ChannelActivityInput): Promise<ChannelActivityResult> {
-    return this.commsActivity(input);
+    return await this.commsActivity(input);
   }
 
   public async commsReact(input: ChannelReactInput): Promise<ToolInvokeResult | Record<string, unknown>> {
@@ -9460,23 +9673,23 @@ export class GatewayService {
     return this.channelDeliveryRuntimeService.drainDue(limit);
   }
 
-  private markLinkedCommitmentDeliverySent(record: ChannelDeliveryRuntimeRecord): void {
+  private async markLinkedCommitmentDeliverySent(record: ChannelDeliveryRuntimeRecord): Promise<void> {
     if (!record.commitmentId) {
       return;
     }
-    this.storage.agentCommitments.markSent(record.commitmentId, record.updatedAt);
+    await this.storage.agentCommitments.markSent(record.commitmentId, record.updatedAt);
   }
 
-  private markLinkedCommitmentDeliveryFailed(record: ChannelDeliveryRuntimeRecord): void {
+  private async markLinkedCommitmentDeliveryFailed(record: ChannelDeliveryRuntimeRecord): Promise<void> {
     if (!record.commitmentId) {
       return;
     }
-    this.storage.agentCommitments.markDeliveryFailed(record.commitmentId);
+    await this.storage.agentCommitments.markDeliveryFailed(record.commitmentId);
   }
 
-  public listChannelDeliveryRuntime(): ChannelDeliveryRuntimeRecord[] {
+  public async listChannelDeliveryRuntime(): Promise<ChannelDeliveryRuntimeRecord[]> {
     const recordsById = new Map<string, ChannelDeliveryRuntimeRecord>();
-    for (const record of this.storage.commsDeliveries.list(undefined, 200)) {
+    for (const record of await this.storage.commsDeliveries.list(undefined, 200)) {
       recordsById.set(record.deliveryId, {
         deliveryId: record.deliveryId,
         connectionId: record.connectionId,
@@ -9570,7 +9783,7 @@ export class GatewayService {
     };
 
     const result = await this.ingestEvent(idempotencyKey, payload);
-    this.publishRealtime("system", "channels", {
+    await this.publishRealtime("system", "channels", {
       type: "channel_message_ingested",
       channel,
       eventId: payload.eventId,
@@ -9637,9 +9850,9 @@ export class GatewayService {
     yield* llmCompletionService.createChatCompletionStream(this, request, attribution);
   }
 
-  /** @internal */ public recordLlmRuntimeMeasurement(record: LlmRuntimeMeasurementRecord): void {
+  /** @internal */ public async recordLlmRuntimeMeasurement(record: LlmRuntimeMeasurementRecord): Promise<void> {
     try {
-      this.storage.llmRuntimeMeasurements.insert(record);
+      await this.storage.llmRuntimeMeasurements.insert(record);
     } catch (error) {
       const runtimeError = error instanceof Error ? error : new Error(String(error));
       this.recordDevDiagnostic({
@@ -9741,16 +9954,16 @@ export class GatewayService {
     );
   }
 
-  public getRun(runId: string, workspaceId?: string): OrchestrationRun {
-    return orchestrationLifecycleService.getRun(this, runId, workspaceId);
+  public async getRun(runId: string, workspaceId?: string): Promise<OrchestrationRun> {
+    return await orchestrationLifecycleService.getRun(this, runId, workspaceId);
   }
 
-  public listRunCheckpoints(runId: string, workspaceId?: string): OrchestrationCheckpoint[] {
-    return orchestrationLifecycleService.listRunCheckpoints(this, runId, workspaceId);
+  public async listRunCheckpoints(runId: string, workspaceId?: string): Promise<OrchestrationCheckpoint[]> {
+    return await orchestrationLifecycleService.listRunCheckpoints(this, runId, workspaceId);
   }
 
-  public getRunTrace(runId: string, workspaceId?: string): OrchestrationDecisionTrace {
-    return orchestrationLifecycleService.getRunTrace(this, runId, workspaceId);
+  public async getRunTrace(runId: string, workspaceId?: string): Promise<OrchestrationDecisionTrace> {
+    return await orchestrationLifecycleService.getRunTrace(this, runId, workspaceId);
   }
 
   private getOrchestrationLifecycleRuntimeDeps(): orchestrationLifecycleService.OrchestrationLifecycleRuntimeDeps {
@@ -9760,11 +9973,11 @@ export class GatewayService {
     };
   }
 
-  /** @internal */ public requestDurableRunProcessing(runId: string): void {
+  /** @internal */ public async requestDurableRunProcessing(runId: string): Promise<void> {
     this.durableRunService.requestRunProcessing(runId);
   }
 
-  /** @internal */ public updateDurableRunState(input: {
+  /** @internal */ public async updateDurableRunState(input: {
     runId: string;
     status?: DurableRunRecord["status"];
     metadata?: Record<string, unknown>;
@@ -9774,8 +9987,8 @@ export class GatewayService {
     clearFinishedAt?: boolean;
     clearLease?: boolean;
     expectedLeaseOwnerId?: string;
-  }): DurableRunRecord {
-    return this.durableRunService.updateRunState(input);
+  }): Promise<DurableRunRecord> {
+    return await this.durableRunService.updateRunState(input);
   }
 
   /** @internal */ public async executeDurableOrchestrationRun(
@@ -9790,9 +10003,10 @@ export class GatewayService {
     );
   }
 
-  private enforceDurableExecutionBaseline(): void {
-    const stored =
-      this.storage.systemSettings.get<Partial<RuntimeSettings["features"]>>(FEATURE_FLAGS_SETTING_KEY)?.value;
+  private async enforceDurableExecutionBaseline(): Promise<void> {
+    const stored = (
+      await this.storage.systemSettings.get<Partial<RuntimeSettings["features"]>>(FEATURE_FLAGS_SETTING_KEY)
+    )?.value;
     const driftedFields = computeDurableBaselineDrift({
       durable: this.config.assistant.durable,
       configuredFeatureFlag: this.config.assistant.features.durableKernelV1Enabled,
@@ -9805,36 +10019,36 @@ export class GatewayService {
     }
   }
 
-  public isFeatureEnabled(flag: keyof RuntimeSettings["features"]): boolean {
-    return this.readFeatureFlags()[flag] === true;
+  public async isFeatureEnabled(flag: keyof RuntimeSettings["features"]): Promise<boolean> {
+    return (await this.readFeatureFlags())[flag] === true;
   }
 
-  public requireFeatureEnabled(flag: keyof RuntimeSettings["features"]): void {
-    if (!this.isFeatureEnabled(flag)) {
+  public async requireFeatureEnabled(flag: keyof RuntimeSettings["features"]): Promise<void> {
+    if (!(await this.isFeatureEnabled(flag))) {
       throw new ConflictError({ message: `Feature flag ${flag} is disabled.`, details: { flag } });
     }
   }
 
-  public updateFeatureFlags(
+  public async updateFeatureFlags(
     patch: Partial<RuntimeSettings["features"]>,
     options: { resumeParkedRuns?: boolean } = {},
-  ): RuntimeSettings["features"] {
+  ): Promise<RuntimeSettings["features"]> {
     if (patch.durableKernelV1Enabled === false) {
       throw new ValidationError({
         message: "features.durableKernelV1Enabled is a shipped baseline runtime setting and cannot be disabled.",
       });
     }
-    const current = this.readFeatureFlags();
+    const current = await this.readFeatureFlags();
     const next = buildUpdatedFeatureFlags(current, patch);
     const autonomyKillSwitchDisengaged = didDisengageAutonomyKillSwitch(current, next);
-    this.storage.systemSettings.set(FEATURE_FLAGS_SETTING_KEY, next);
+    await this.storage.systemSettings.set(FEATURE_FLAGS_SETTING_KEY, next);
     this.config.assistant.features = { ...next };
     // Prime the read cache so the new flags are visible immediately (Finding 6);
     // this is the sole writer, so no invalidation race with the TTL path.
     this.featureFlagsCache = next;
     this.featureFlagsCacheAtMs = Date.now();
     if (patch.signalInboundV1Enabled !== undefined) {
-      this.signalInboundRuntimeService?.sync();
+      await this.signalInboundRuntimeService?.sync();
     }
     if (autonomyKillSwitchDisengaged && options.resumeParkedRuns !== false) {
       // Runs parked while the kill switch was engaged wait on a per-run event that
@@ -9842,7 +10056,7 @@ export class GatewayService {
       // Best-effort — the flag write above already succeeded and must not be undone
       // by a resume failure.
       try {
-        this.durableRunService?.resumeRunsWaitingForAutonomyKillSwitch();
+        await this.durableRunService?.resumeRunsWaitingForAutonomyKillSwitch();
       } catch (error) {
         log.warn("Failed to resume autonomy-kill-switch-parked durable runs", {
           error: error instanceof Error ? error.message : String(error),
@@ -9852,9 +10066,9 @@ export class GatewayService {
     return next;
   }
 
-  private resumeRunsAfterAutonomyKillSwitchDisengaged(): void {
+  private async resumeRunsAfterAutonomyKillSwitchDisengaged(): Promise<void> {
     try {
-      this.durableRunService?.resumeRunsWaitingForAutonomyKillSwitch();
+      await this.durableRunService?.resumeRunsWaitingForAutonomyKillSwitch();
     } catch (error) {
       log.warn("Failed to resume autonomy-kill-switch-parked durable runs", {
         error: error instanceof Error ? error.message : String(error),
@@ -9862,13 +10076,13 @@ export class GatewayService {
     }
   }
 
-  private applyStoredFeatureFlags(): void {
-    this.config.assistant.features = this.readFeatureFlags();
+  private async applyStoredFeatureFlags(): Promise<void> {
+    this.config.assistant.features = await this.readFeatureFlags();
   }
 
-  private applyStartupFeatureFlags(): void {
+  private async applyStartupFeatureFlags(): Promise<void> {
     if (!this.configGenerationService.isRuntimeOwnerReconciliationPending()) {
-      this.applyStoredFeatureFlags();
+      await this.applyStoredFeatureFlags();
       return;
     }
 
@@ -9877,19 +10091,20 @@ export class GatewayService {
     // projection without waking parked autonomy runs; deferred startup clears
     // the durable decision before any scheduler/worker is started.
     const canonicalFeatures = structuredClone(this.config.assistant.features);
-    this.storage.systemSettings.set(FEATURE_FLAGS_SETTING_KEY, canonicalFeatures);
+    await this.storage.systemSettings.set(FEATURE_FLAGS_SETTING_KEY, canonicalFeatures);
     this.config.assistant.features = canonicalFeatures;
     this.featureFlagsCache = canonicalFeatures;
     this.featureFlagsCacheAtMs = Date.now();
   }
 
-  /** @internal */ public readFeatureFlags(): RuntimeSettings["features"] {
+  /** @internal */ public async readFeatureFlags(): Promise<RuntimeSettings["features"]> {
     const nowMs = Date.now();
     if (this.featureFlagsCache && nowMs - this.featureFlagsCacheAtMs < FEATURE_FLAGS_CACHE_TTL_MS) {
       return this.featureFlagsCache;
     }
-    const stored =
-      this.storage.systemSettings.get<Partial<RuntimeSettings["features"]>>(FEATURE_FLAGS_SETTING_KEY)?.value;
+    const stored = (
+      await this.storage.systemSettings.get<Partial<RuntimeSettings["features"]>>(FEATURE_FLAGS_SETTING_KEY)
+    )?.value;
     const fromConfig = this.config.assistant.features;
     const resolved = resolveGatewayFeatureFlags(stored, fromConfig);
     this.featureFlagsCache = resolved;
@@ -9905,20 +10120,20 @@ export class GatewayService {
     return this.durableRunService.computeDurableRetryDelayMs(current, attemptNo);
   }
 
-  /** @internal */ public recordDurableTimelineEvent(
+  /** @internal */ public async recordDurableTimelineEvent(
     runId: string,
     eventType: DurableRunTimelineEvent["eventType"],
     payload?: Record<string, unknown>,
     stepKey?: string,
-  ): DurableRunTimelineEvent {
-    return this.durableRunService.recordDurableTimelineEvent(runId, eventType, payload, stepKey);
+  ): Promise<DurableRunTimelineEvent> {
+    return await this.durableRunService.recordDurableTimelineEvent(runId, eventType, payload, stepKey);
   }
 
-  /** @internal */ public recordImprovementDurableRunCompletion(
+  /** @internal */ public async recordImprovementDurableRunCompletion(
     run: DurableRunRecord,
     checkpointState: Record<string, unknown>,
-  ): void {
-    this.improvementService.recordDurableRunCompletionSignal({
+  ): Promise<void> {
+    await this.improvementService.recordDurableRunCompletionSignal({
       run,
       checkpointState,
     });
@@ -9942,9 +10157,9 @@ export class GatewayService {
     }
   }
 
-  public syncSignalInboundRuntime(): void {
+  public async syncSignalInboundRuntime(): Promise<void> {
     try {
-      this.signalInboundRuntimeService.sync();
+      await this.signalInboundRuntimeService.sync();
     } catch (error) {
       this.recordDevDiagnostic({
         level: "warn",
@@ -10026,45 +10241,48 @@ export class GatewayService {
     return process.env[envName];
   }
 
-  public readDiscordPairings(): DiscordPairingRecord[] {
-    return this.storage.systemSettings.get<DiscordPairingRecord[]>(DISCORD_PAIRINGS_SETTING_KEY)?.value ?? [];
+  public async readDiscordPairings(): Promise<DiscordPairingRecord[]> {
+    return (await this.storage.systemSettings.get<DiscordPairingRecord[]>(DISCORD_PAIRINGS_SETTING_KEY))?.value ?? [];
   }
 
-  public writeDiscordPairings(records: DiscordPairingRecord[]): void {
-    this.storage.systemSettings.set(DISCORD_PAIRINGS_SETTING_KEY, records);
+  public async writeDiscordPairings(records: DiscordPairingRecord[]): Promise<void> {
+    await this.storage.systemSettings.set(DISCORD_PAIRINGS_SETTING_KEY, records);
   }
 
-  private findApprovedDiscordPairing(connectionId: string, userId: string): DiscordPairingRecord | undefined {
-    return discordPairingHelpers.findApprovedDiscordPairing(this, connectionId, userId);
+  private async findApprovedDiscordPairing(
+    connectionId: string,
+    userId: string,
+  ): Promise<DiscordPairingRecord | undefined> {
+    return await discordPairingHelpers.findApprovedDiscordPairing(this, connectionId, userId);
   }
 
-  private ensurePendingDiscordPairing(
+  private async ensurePendingDiscordPairing(
     connectionId: string,
     userId: string,
     displayName?: string,
-  ): DiscordPairingRecord {
-    return discordPairingHelpers.ensurePendingDiscordPairing(this, connectionId, userId, displayName);
+  ): Promise<DiscordPairingRecord> {
+    return await discordPairingHelpers.ensurePendingDiscordPairing(this, connectionId, userId, displayName);
   }
 
-  private touchDiscordPairing(pairingId: string): void {
-    return discordPairingHelpers.touchDiscordPairing(this, pairingId);
+  private async touchDiscordPairing(pairingId: string): Promise<void> {
+    await discordPairingHelpers.touchDiscordPairing(this, pairingId);
   }
 
-  /** @internal */ public resolveDiscordInboundRoute(input: {
+  /** @internal */ public async resolveDiscordInboundRoute(input: {
     connectionId: string;
     target: string;
     peer?: string;
     room?: string;
     threadId?: string;
-  }): {
+  }): Promise<{
     peer?: string;
     room?: string;
     threadId?: string;
-  } {
-    return discordRuntimeBridgeService.resolveDiscordInboundRoute(this, input);
+  }> {
+    return await discordRuntimeBridgeService.resolveDiscordInboundRoute(this, input);
   }
 
-  /** @internal */ public startNewDiscordRouteSession(input: {
+  /** @internal */ public async startNewDiscordRouteSession(input: {
     connectionId: string;
     target: string;
     displayName?: string;
@@ -10072,8 +10290,8 @@ export class GatewayService {
     room?: string;
     threadId?: string;
     title?: string;
-  }): ChatSessionRecord {
-    return discordRuntimeBridgeService.startNewDiscordRouteSession(this, input);
+  }): Promise<ChatSessionRecord> {
+    return await discordRuntimeBridgeService.startNewDiscordRouteSession(this, input);
   }
 
   public isConnectionUrlAllowlisted(urlValue: string): boolean {
@@ -10108,23 +10326,23 @@ export class GatewayService {
     return connectionUrlHelpers.tryParseJson(raw, fallback);
   }
 
-  /** @internal */ public readMcpServers(): McpServerRecord[] {
-    return this.mcpServerStore.readServers();
+  /** @internal */ public async readMcpServers(): Promise<McpServerRecord[]> {
+    return await this.mcpServerStore.readServers();
   }
 
-  /** @internal */ public writeMcpServers(servers: McpServerRecord[]): void {
-    this.mcpServerStore.writeServers(servers);
+  /** @internal */ public async writeMcpServers(servers: McpServerRecord[]): Promise<void> {
+    await this.mcpServerStore.writeServers(servers);
   }
 
-  /** @internal */ public requireMcpServer(serverId: string): McpServerRecord {
-    return this.mcpServerStore.requireServer(serverId);
+  /** @internal */ public async requireMcpServer(serverId: string): Promise<McpServerRecord> {
+    return await this.mcpServerStore.requireServer(serverId);
   }
 
-  /** @internal */ public patchMcpServerState(
+  /** @internal */ public async patchMcpServerState(
     serverId: string,
     patch: Partial<Pick<McpServerRecord, "status" | "lastConnectedAt" | "lastError">>,
-  ): McpServerRecord {
-    return this.mcpServerStore.patchServerState(serverId, patch);
+  ): Promise<McpServerRecord> {
+    return await this.mcpServerStore.patchServerState(serverId, patch);
   }
 
   /** @internal */ public async resolveConnectedMcpTools(
@@ -10143,24 +10361,24 @@ export class GatewayService {
     );
   }
 
-  /** @internal */ public readMcpTools(): McpToolRecord[] {
-    return this.mcpServerStore.readTools();
+  /** @internal */ public async readMcpTools(): Promise<McpToolRecord[]> {
+    return await this.mcpServerStore.readTools();
   }
 
-  /** @internal */ public writeMcpTools(tools: McpToolRecord[]): void {
-    this.mcpServerStore.writeTools(tools);
+  /** @internal */ public async writeMcpTools(tools: McpToolRecord[]): Promise<void> {
+    await this.mcpServerStore.writeTools(tools);
   }
 
-  /** @internal */ public readMcpAuthState(): Record<string, McpAuthStateRecord> {
-    return this.mcpServerStore.readAuthState();
+  /** @internal */ public async readMcpAuthState(): Promise<Record<string, McpAuthStateRecord>> {
+    return await this.mcpServerStore.readAuthState();
   }
 
-  /** @internal */ public writeMcpAuthState(state: Record<string, McpAuthStateRecord>): void {
-    this.mcpServerStore.writeAuthState(state);
+  /** @internal */ public async writeMcpAuthState(state: Record<string, McpAuthStateRecord>): Promise<void> {
+    await this.mcpServerStore.writeAuthState(state);
   }
 
-  private isMcpToolApproved(serverId: string, toolName: string): boolean {
-    return this.mcpServerStore.isToolApproved(serverId, toolName);
+  private async isMcpToolApproved(serverId: string, toolName: string): Promise<boolean> {
+    return await this.mcpServerStore.isToolApproved(serverId, toolName);
   }
 
   public async close(): Promise<void> {
@@ -10168,7 +10386,7 @@ export class GatewayService {
     await this.runtimeReleaseTrustService.close();
     this.chatProactiveService.stopScheduler();
     this.improvementService.stopScheduler();
-    this.durableRunService.stopWorker();
+    await this.durableRunService.stopWorker();
     this.approvalEffectsService.stopWorker();
     this.inboundChannelEventService.close();
     this.chatTurnExecutionRegistry?.close("Gateway service is closing.");
@@ -10196,7 +10414,7 @@ export class GatewayService {
     await this.assemblyService.close();
     await this.npuSidecar.close();
     await this.llamaCppRuntime.close();
-    this.storage.close();
+    await this.storage.close();
   }
 
   /**
@@ -10233,7 +10451,7 @@ export class GatewayService {
   ): Promise<ToolInvokeResult | Record<string, unknown>> {
     const result = await this.invokeTool(request);
     if (result.outcome === "executed") {
-      this.publishRealtime("system", "tools", {
+      await this.publishRealtime("system", "tools", {
         type: realtimeType,
         toolName: request.toolName,
         sessionId: request.sessionId,
@@ -10246,16 +10464,16 @@ export class GatewayService {
     return result;
   }
 
-  /** @internal */ public resolveDelegatedFilesystemScope(
+  /** @internal */ public async resolveDelegatedFilesystemScope(
     parentSessionId: string,
     dispatchMarker: string,
     current?: ChatDelegationStepRecord["scopeControl"],
-  ): ChatDelegationStepRecord["scopeControl"] | undefined {
-    if (!this.isFeatureEnabled("delegationScopeExpansionV1Enabled")) {
+  ): Promise<ChatDelegationStepRecord["scopeControl"] | undefined> {
+    if (!(await this.isFeatureEnabled("delegationScopeExpansionV1Enabled"))) {
       return undefined;
     }
-    const projectId = this.storage.chatSessionProjects.get(parentSessionId)?.projectId;
-    const project = projectId ? this.storage.chatProjects.find(projectId) : undefined;
+    const projectId = (await this.storage.chatSessionProjects.get(parentSessionId))?.projectId;
+    const project = projectId ? await this.storage.chatProjects.find(projectId) : undefined;
     if (!project) {
       return undefined;
     }
@@ -10269,7 +10487,7 @@ export class GatewayService {
       }).trim(),
     );
     const sourceScope = path.relative(sourceRepoRoot, projectPath).replaceAll("\\", "/") || ".";
-    const workbench = this.storage.chatSessionWorkbench.get(parentSessionId);
+    const workbench = await this.storage.chatSessionWorkbench.get(parentSessionId);
     const worktreePath =
       workbench?.worktreeStatus === "ready" && workbench.worktreePath && workbench.worktreePath !== "[outside-root]"
         ? path.resolve(this.config.rootDir, workbench.worktreePath.replace(/^\.\//, ""))
@@ -10286,12 +10504,12 @@ export class GatewayService {
     });
   }
 
-  /** @internal */ public resolveEngineeringLearningSourceRoot(input: {
+  /** @internal */ public async resolveEngineeringLearningSourceRoot(input: {
     sessionId?: string;
     projectId?: string;
-  }): string | undefined {
+  }): Promise<string | undefined> {
     if (input.sessionId) {
-      const workbench = this.storage.chatSessionWorkbench.get(input.sessionId);
+      const workbench = await this.storage.chatSessionWorkbench.get(input.sessionId);
       if (
         workbench?.worktreeStatus === "ready" &&
         workbench.worktreePath &&
@@ -10303,8 +10521,8 @@ export class GatewayService {
     }
     const projectId =
       input.projectId ??
-      (input.sessionId ? this.storage.chatSessionProjects.get(input.sessionId)?.projectId : undefined);
-    const project = projectId ? this.storage.chatProjects.find(projectId) : undefined;
+      (input.sessionId ? (await this.storage.chatSessionProjects.get(input.sessionId))?.projectId : undefined);
+    const project = projectId ? await this.storage.chatProjects.find(projectId) : undefined;
     if (!project) return undefined;
     const workspaceRoot = path.resolve(this.config.rootDir, this.config.assistant.workspaceDir);
     const projectPath = fsSync.realpathSync(path.resolve(workspaceRoot, project.workspacePath));
@@ -10321,20 +10539,24 @@ export class GatewayService {
     }
   }
 
-  /** @internal */ public ensureSessionInternalToolGrant(sessionId: string, toolName: string, createdBy: string): void {
-    const sessionGrants = this.listActiveToolGrants("session", sessionId);
-    const workspaceId = this.storage.chatSessionMeta.get(sessionId)?.workspaceId ?? DEFAULT_WORKSPACE_ID;
+  /** @internal */ public async ensureSessionInternalToolGrant(
+    sessionId: string,
+    toolName: string,
+    createdBy: string,
+  ): Promise<void> {
+    const sessionGrants = await this.listActiveToolGrants("session", sessionId);
+    const workspaceId = (await this.storage.chatSessionMeta.get(sessionId))?.workspaceId ?? DEFAULT_WORKSPACE_ID;
     const inheritedGrants = [
-      ...this.listActiveToolGrants("global", "global"),
-      ...this.listActiveToolGrants("agent", "assistant"),
-      ...this.listActiveToolGrants("workspace", workspaceId),
+      ...(await this.listActiveToolGrants("global", "global")),
+      ...(await this.listActiveToolGrants("agent", "assistant")),
+      ...(await this.listActiveToolGrants("workspace", workspaceId)),
     ];
     const activeGrants = [...sessionGrants, ...inheritedGrants];
     const hasActiveDeny = activeGrants.some(
       (grant) => grant.decision === "deny" && grantPatternMatches(grant.toolPattern, toolName),
     );
     if (hasActiveDeny) {
-      this.publishRealtime("system", "tools", {
+      await this.publishRealtime("system", "tools", {
         type: "internal_tool_grant_blocked",
         sessionId,
         toolName,
@@ -10349,7 +10571,7 @@ export class GatewayService {
     if (hasActiveAllow) {
       return;
     }
-    const grant = this.storage.toolGrants.createTtlForDuration(
+    const grant = await this.storage.toolGrants.createTtlForDuration(
       {
         toolPattern: toolName,
         decision: "allow",
@@ -10359,7 +10581,7 @@ export class GatewayService {
       },
       INTERNAL_TOOL_GRANT_TTL_MS,
     );
-    this.publishRealtime("system", "tools", {
+    await this.publishRealtime("system", "tools", {
       type: "internal_tool_grant_created",
       sessionId,
       toolName,
@@ -10394,32 +10616,32 @@ export class GatewayService {
     return outcome === "executed" || outcome === "blocked" || outcome === "approval_required" || outcome === "failed";
   }
 
-  public publishRealtime(
+  public async publishRealtime(
     eventType: string,
     source: string,
     payload: Record<string, unknown>,
     options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
-  ): RealtimeEvent {
-    const event = this.realtimeEventService.publishRealtime(eventType, source, payload, options);
-    this.maybeRouteCanonicalNotification(event);
+  ): Promise<RealtimeEvent> {
+    const event = await this.realtimeEventService.publishRealtime(eventType, source, payload, options);
+    await this.maybeRouteCanonicalNotification(event);
     return event;
   }
 
-  private maybeRouteCanonicalNotification(event: RealtimeEvent): void {
+  private async maybeRouteCanonicalNotification(event: RealtimeEvent): Promise<void> {
     // Partial host facades used by pure composition/coverage tests do not own
     // runtime settings or notification repositories. Production Storage always
     // provides both; fail closed before consulting a feature gate otherwise.
     if (!(this.storage as Partial<Storage>).systemSettings || !(this.storage as Partial<Storage>).notificationRouting) {
       return;
     }
-    if (event.source === "notifications" || !this.isFeatureEnabled("notificationRoutingV1Enabled")) return;
+    if (event.source === "notifications" || !(await this.isFeatureEnabled("notificationRoutingV1Enabled"))) return;
     const services = Reflect.get(this, "routeServices") as GatewayRouteServices | undefined;
     if (!services) return;
-    const notification = this.projectNotificationEvent(event);
+    const notification = await this.projectNotificationEvent(event);
     if (!notification) return;
-    const hasMatchingRule = this.storage.notificationRouting
-      .listRules(notification.workspaceId)
-      .some((rule) => rule.lifecycleState === "active" && rule.eventTypes.includes(notification.input.eventType));
+    const hasMatchingRule = (await this.storage.notificationRouting.listRules(notification.workspaceId)).some(
+      (rule) => rule.lifecycleState === "active" && rule.eventTypes.includes(notification.input.eventType),
+    );
     if (!hasMatchingRule) return;
     void services.integrations
       .dispatchNotificationEvent(notification.workspaceId, notification.input)
@@ -10434,12 +10656,13 @@ export class GatewayService {
       });
   }
 
-  private projectNotificationEvent(event: RealtimeEvent):
+  private async projectNotificationEvent(event: RealtimeEvent): Promise<
     | {
         workspaceId: string;
         input: Omit<NotifyRequest, "targetIds"> & { source: string; eventId: string };
       }
-    | undefined {
+    | undefined
+  > {
     const type = typeof event.payload.type === "string" ? event.payload.type : "";
     if (event.eventType === "chat_thread_updated" && type === "chat_thread_turn_appended") {
       const sessionId = typeof event.payload.sessionId === "string" ? event.payload.sessionId : undefined;
@@ -10447,7 +10670,7 @@ export class GatewayService {
       if (!sessionId || !turnId) return undefined;
       let trace: ChatTurnTraceRecord;
       try {
-        trace = this.storage.chatTurnTraces.get(turnId);
+        trace = await this.storage.chatTurnTraces.get(turnId);
       } catch {
         return undefined;
       }
@@ -10472,7 +10695,7 @@ export class GatewayService {
         "turn.completed": "Chat turn completed",
       } as const;
       return {
-        workspaceId: this.storage.chatSessionMeta.get(sessionId)?.workspaceId ?? DEFAULT_WORKSPACE_ID,
+        workspaceId: (await this.storage.chatSessionMeta.get(sessionId))?.workspaceId ?? DEFAULT_WORKSPACE_ID,
         input: {
           eventId: `notification:${event.eventId}`,
           eventType,
@@ -10481,7 +10704,7 @@ export class GatewayService {
           title: titleByType[eventType],
           message:
             trace.failure?.message ??
-            this.storage.chatSessionMeta.get(sessionId)?.title ??
+            (await this.storage.chatSessionMeta.get(sessionId))?.title ??
             "A GoatCitadel Chat turn changed state.",
           source: "chat.turn",
         },
@@ -10494,10 +10717,12 @@ export class GatewayService {
       const status = typeof event.payload.status === "string" ? event.payload.status : "failed";
       const eventType = status === "completed" ? "scheduled_turn.completed" : "scheduled_turn.failed";
       const jobId = typeof event.payload.jobId === "string" ? event.payload.jobId : undefined;
-      const sessionId = jobId ? this.storage.cronJobs.get(jobId)?.actionConfig?.agentTurn?.sessionId : undefined;
+      const sessionId = jobId
+        ? (await this.storage.cronJobs.get(jobId))?.actionConfig?.agentTurn?.sessionId
+        : undefined;
       return {
         workspaceId: sessionId
-          ? (this.storage.chatSessionMeta.get(sessionId)?.workspaceId ?? DEFAULT_WORKSPACE_ID)
+          ? ((await this.storage.chatSessionMeta.get(sessionId))?.workspaceId ?? DEFAULT_WORKSPACE_ID)
           : DEFAULT_WORKSPACE_ID,
         input: {
           eventId: `notification:${event.eventId}`,
@@ -10513,8 +10738,8 @@ export class GatewayService {
   }
 
   private async requestNotificationFromTool(sessionId: string, input: NotifyRequest): Promise<Record<string, unknown>> {
-    this.requireFeatureEnabled("notificationRoutingV1Enabled");
-    const workspaceId = this.storage.chatSessionMeta.get(sessionId)?.workspaceId ?? DEFAULT_WORKSPACE_ID;
+    await this.requireFeatureEnabled("notificationRoutingV1Enabled");
+    const workspaceId = (await this.storage.chatSessionMeta.get(sessionId))?.workspaceId ?? DEFAULT_WORKSPACE_ID;
     const result = await this.routeServices.integrations.requestNotification(workspaceId, {
       ...input,
       sessionId,
@@ -10530,12 +10755,12 @@ export class GatewayService {
     request: ToolInvokeRequest,
     input: DocumentPatchProposalToolInput,
   ): Promise<Record<string, unknown>> {
-    this.requireFeatureEnabled("documentEditingV1Enabled");
+    await this.requireFeatureEnabled("documentEditingV1Enabled");
     const turnId = request.turnId?.trim();
     if (!turnId) throw new ValidationError({ message: "Document patch proposals require an active Chat turn." });
-    const session = this.requireChatSession(request.sessionId);
+    const session = await this.requireChatSession(request.sessionId);
     const workspaceId = session.workspaceId ?? DEFAULT_WORKSPACE_ID;
-    const proposal = this.routeServices.chatSessions.createAssistantDocumentPatchProposal(input, {
+    const proposal = await this.routeServices.chatSessions.createAssistantDocumentPatchProposal(input, {
       workspaceId,
       sessionId: session.sessionId,
       turnId,
@@ -10556,10 +10781,10 @@ export class GatewayService {
     };
   }
 
-  /** @internal */ public createCheckpoint(
+  /** @internal */ public async createCheckpoint(
     input: Omit<OrchestrationCheckpoint, "checkpointId" | "createdAt" | "gitRef">,
-  ): OrchestrationCheckpoint {
-    return this.storage.orchestration.createCheckpoint({
+  ): Promise<OrchestrationCheckpoint> {
+    return await this.storage.orchestration.createCheckpoint({
       ...input,
       gitRef: this.getGitHead(),
     });
@@ -10577,11 +10802,11 @@ export class GatewayService {
 
     const task = this.tryRunWithSharedHostWork("agent", `approval-explanation:${approval.approvalId}`, () =>
       this.approvalExplainer.explainApproval(approval),
-    ).catch((error) => {
+    ).catch(async (error) => {
       if (this.closing) {
         return;
       }
-      this.publishRealtime(
+      await this.publishRealtime(
         "system",
         "approvals",
         {
@@ -10600,20 +10825,23 @@ export class GatewayService {
     trackBackgroundTask(this.backgroundTasks, task);
   }
 
-  /** @internal */ public scheduleApprovalExplanationById(approvalId: string): void {
+  /** @internal */ public async scheduleApprovalExplanationById(approvalId: string): Promise<void> {
     if (this.closing) {
       return;
     }
     let approval: ApprovalRequest;
     try {
-      approval = this.storage.approvals.get(approvalId);
+      approval = await this.storage.approvals.get(approvalId);
     } catch {
       return;
     }
     this.scheduleApprovalExplanation(approval);
   }
 
-  /** @internal */ public scheduleOrchestrationMemoryContext(plan: OrchestrationPlan, run: OrchestrationRun): void {
+  /** @internal */ public async scheduleOrchestrationMemoryContext(
+    plan: OrchestrationPlan,
+    run: OrchestrationRun,
+  ): Promise<void> {
     if (this.closing || !run.currentPhaseId) {
       return;
     }
@@ -10642,9 +10870,9 @@ export class GatewayService {
         forceRefresh: true,
       }),
     )
-      .then((pack) => {
+      .then(async (pack) => {
         if (!pack) return;
-        this.publishRealtime(
+        await this.publishRealtime(
           "memory_qmd_generated",
           "orchestration",
           {
@@ -10662,8 +10890,8 @@ export class GatewayService {
           },
         );
       })
-      .catch((error) => {
-        this.publishRealtime(
+      .catch(async (error) => {
+        await this.publishRealtime(
           "memory_qmd_failed",
           "orchestration",
           {
@@ -10700,7 +10928,7 @@ export class GatewayService {
       return;
     }
     this.chatMessageProjectionBackfillAttempted.add(sessionId);
-    if (this.storage.chatMessages.countBySession(sessionId) > 0) {
+    if ((await this.storage.chatMessages.countBySession(sessionId)) > 0) {
       return;
     }
     const events = await this.readTranscriptOrEmpty(sessionId);
@@ -10711,7 +10939,7 @@ export class GatewayService {
     if (projected.length === 0) {
       return;
     }
-    this.storage.chatMessages.upsertMany(projected);
+    await this.storage.chatMessages.upsertMany(projected);
   }
 
   private async listChatMessagesFromTranscript(
@@ -10749,7 +10977,10 @@ export class GatewayService {
     return workspaceId === DEFAULT_WORKSPACE_ID ? "memory" : `workspaces/${workspaceId}/memory`;
   }
 
-  /** @internal */ public resolveMemoryWorkspaceRelativeDir(explicitWorkspace?: string, sessionId?: string): string {
+  /** @internal */ public async resolveMemoryWorkspaceRelativeDir(
+    explicitWorkspace?: string,
+    sessionId?: string,
+  ): Promise<string> {
     const explicit = explicitWorkspace?.trim();
     if (explicit) {
       return explicit;
@@ -10758,19 +10989,19 @@ export class GatewayService {
     if (!sessionKey) {
       return "memory";
     }
-    const meta = this.storage.chatSessionMeta.get(sessionKey);
+    const meta = await this.storage.chatSessionMeta.get(sessionKey);
     const workspaceId = this.normalizeWorkspaceId(meta?.workspaceId ?? DEFAULT_WORKSPACE_ID);
     return this.getWorkspaceMemoryRelativeDir(workspaceId);
   }
 
-  /** @internal */ public resolveChatCompletionHookWorkspaceId(request: ChatCompletionRequest): string {
+  /** @internal */ public async resolveChatCompletionHookWorkspaceId(request: ChatCompletionRequest): Promise<string> {
     const explicitWorkspace = request.memory?.workspace?.trim();
     if (explicitWorkspace) {
       return this.normalizeWorkspaceId(explicitWorkspace);
     }
     const sessionId = request.memory?.sessionId?.trim();
     if (sessionId) {
-      const meta = this.storage.chatSessionMeta.get(sessionId);
+      const meta = await this.storage.chatSessionMeta.get(sessionId);
       if (meta?.workspaceId) {
         return this.normalizeWorkspaceId(meta.workspaceId);
       }
@@ -10778,22 +11009,22 @@ export class GatewayService {
     return DEFAULT_WORKSPACE_ID;
   }
 
-  private resolveToolHookWorkspaceId(request: ToolInvokeRequest): string {
+  private async resolveToolHookWorkspaceId(request: ToolInvokeRequest): Promise<string> {
     if (request.workspaceId?.trim()) {
       return this.normalizeWorkspaceId(request.workspaceId);
     }
-    const meta = this.storage.chatSessionMeta.get(request.sessionId);
+    const meta = await this.storage.chatSessionMeta.get(request.sessionId);
     return this.normalizeWorkspaceId(meta?.workspaceId ?? DEFAULT_WORKSPACE_ID);
   }
 
-  /** @internal */ public resolveApprovalHookWorkspaceId(payload?: Record<string, unknown>): string {
+  /** @internal */ public async resolveApprovalHookWorkspaceId(payload?: Record<string, unknown>): Promise<string> {
     const fromPayload = typeof payload?.workspaceId === "string" ? payload.workspaceId.trim() : "";
     if (fromPayload) {
       return this.normalizeWorkspaceId(fromPayload);
     }
     const sessionId = typeof payload?.sessionId === "string" ? payload.sessionId.trim() : "";
     if (sessionId) {
-      const meta = this.storage.chatSessionMeta.get(sessionId);
+      const meta = await this.storage.chatSessionMeta.get(sessionId);
       if (meta?.workspaceId) {
         return this.normalizeWorkspaceId(meta.workspaceId);
       }
@@ -10805,24 +11036,23 @@ export class GatewayService {
     return this.guidanceService.resolveRuntimeGuidance(workspaceId);
   }
 
-  /** @internal */ public requireChatSession(sessionId: string): ChatSessionRecord {
-    const session = this.getSession(sessionId);
-    const projectLink = this.storage.chatSessionProjects.get(sessionId);
-    const project = projectLink ? this.storage.chatProjects.find(projectLink.projectId) : undefined;
-    const prefs = this.storage.chatSessionPrefs.get(sessionId);
-    const generatedArtifacts = this.storage.chatGeneratedArtifacts
-      .listBySession(sessionId, 12)
+  /** @internal */ public async requireChatSession(sessionId: string): Promise<ChatSessionRecord> {
+    const session = await this.getSession(sessionId);
+    const projectLink = await this.storage.chatSessionProjects.get(sessionId);
+    const project = projectLink ? await this.storage.chatProjects.find(projectLink.projectId) : undefined;
+    const prefs = await this.storage.chatSessionPrefs.get(sessionId);
+    const generatedArtifacts = (await this.storage.chatGeneratedArtifacts.listBySession(sessionId, 12))
       .slice(0, 6)
       .map(chatGeneratedArtifactService.buildGeneratedArtifactReference);
-    const meta = this.storage.chatSessionMeta.get(sessionId);
+    const meta = await this.storage.chatSessionMeta.get(sessionId);
     if (!meta) {
       throw new NotFoundError({ entity: "Canonical Chat session metadata", id: sessionId });
     }
     return toChatSessionRecord(session, { ...meta, mode: prefs?.mode ?? "chat" }, project, { generatedArtifacts });
   }
 
-  /** @internal */ public isReplayScratchSession(sessionId: string): boolean {
-    const title = this.storage.chatSessionMeta.get(sessionId)?.title?.trim();
+  /** @internal */ public async isReplayScratchSession(sessionId: string): Promise<boolean> {
+    const title = (await this.storage.chatSessionMeta.get(sessionId))?.title?.trim();
     return Boolean(title && title.startsWith(REPLAY_SCRATCH_SESSION_TITLE_PREFIX));
   }
 
@@ -10885,16 +11115,19 @@ export class GatewayService {
     );
   }
 
-  private listHydratedChatTurnTraces(
+  private async listHydratedChatTurnTraces(
     sessionId: string,
     limit = 200,
     options?: chatTurnTraceHydration.ChatTurnTraceHydrationOptions,
-  ): ChatTurnTraceRecord[] {
-    return chatTurnTraceHydration.listHydratedChatTurnTraces(this, sessionId, limit, options);
+  ): Promise<ChatTurnTraceRecord[]> {
+    return await chatTurnTraceHydration.listHydratedChatTurnTraces(this, sessionId, limit, options);
   }
 
-  private resolveChatActiveLeafTurnId(sessionId: string, traces: ChatTurnTraceRecord[]): string | undefined {
-    return chatTurnTraceHydration.resolveChatActiveLeafTurnId(this, sessionId, traces);
+  private async resolveChatActiveLeafTurnId(
+    sessionId: string,
+    traces: ChatTurnTraceRecord[],
+  ): Promise<string | undefined> {
+    return await chatTurnTraceHydration.resolveChatActiveLeafTurnId(this, sessionId, traces);
   }
 
   private buildChatTurnChildrenMap(traces: ChatTurnTraceRecord[]): Map<string, string[]> {
@@ -10938,12 +11171,12 @@ export class GatewayService {
     return chatTurnUserMessage.buildUserMessagePrompt(message);
   }
 
-  private resolveMessageAttachments(message: ChatMessageRecord): ChatAttachmentRecord[] {
-    return chatTurnUserMessage.resolveMessageAttachments(this.buildChatTurnUserMessageDependencies(), message);
+  private async resolveMessageAttachments(message: ChatMessageRecord): Promise<ChatAttachmentRecord[]> {
+    return await chatTurnUserMessage.resolveMessageAttachments(this.buildChatTurnUserMessageDependencies(), message);
   }
 
-  private buildAttachmentPromptContext(input: unknown, supportsVision = false): string | undefined {
-    return chatTurnUserMessage.buildAttachmentPromptContext(
+  private async buildAttachmentPromptContext(input: unknown, supportsVision = false): Promise<string | undefined> {
+    return await chatTurnUserMessage.buildAttachmentPromptContext(
       this.buildChatTurnUserMessageDependencies(),
       input,
       supportsVision,
@@ -10966,7 +11199,7 @@ export class GatewayService {
   private buildChatTurnUserMessageDependencies(): chatTurnUserMessage.ChatTurnUserMessageDependencies {
     return {
       storage: this.storage,
-      readChatAttachmentContent: (attachmentId) => this.readChatAttachmentContent(attachmentId),
+      readChatAttachmentContent: async (attachmentId) => await this.readChatAttachmentContent(attachmentId),
     };
   }
 
@@ -10974,8 +11207,8 @@ export class GatewayService {
     return {
       storage: this.storage,
       llmService: this.llmService,
-      readTranscriptOrEmpty: (sessionId) => this.readTranscriptOrEmpty(sessionId),
-      loadChatTurnSessionState: (sessionId) => this.loadChatTurnSessionState(sessionId),
+      readTranscriptOrEmpty: async (sessionId) => await this.readTranscriptOrEmpty(sessionId),
+      loadChatTurnSessionState: async (sessionId) => await this.loadChatTurnSessionState(sessionId),
       buildUserMessageContent: (message, supportsVision) => this.buildUserMessageContent(message, supportsVision),
       getModelTokenMultiplier: (providerId, model) => this.llmService.getModelTokenMultiplier(providerId, model),
     };
@@ -11040,14 +11273,23 @@ export class GatewayService {
     return cronJobConfigHelpers.ensureUpdateReviewCronJob(this);
   }
 
-  private buildUnifiedConfigPayloadForRuntime(
+  private async buildUnifiedConfigPayloadForRuntime(
     runtimeConfig: GatewayRuntimeConfig,
     llmConfig: ReturnType<LlmService["exportConfigFile"]>,
     features: RuntimeSettings["features"],
-  ): CompleteUnifiedConfigPayload {
+  ): Promise<CompleteUnifiedConfigPayload> {
     const cronJobs = {
-      jobs: this.storage.cronJobs.list().map(projectCanonicalCronSpec),
+      jobs: (await this.storage.cronJobs.list()).map(projectCanonicalCronSpec),
     };
+    return this.buildUnifiedConfigPayloadFromRuntime(runtimeConfig, llmConfig, features, cronJobs);
+  }
+
+  private buildUnifiedConfigPayloadFromRuntime(
+    runtimeConfig: GatewayRuntimeConfig,
+    llmConfig: ReturnType<LlmService["exportConfigFile"]>,
+    features: RuntimeSettings["features"],
+    cronJobs: { jobs: ReturnType<typeof projectCanonicalCronSpec>[] },
+  ): CompleteUnifiedConfigPayload {
     const assistantPayload = {
       environment: runtimeConfig.assistant.environment,
       deploymentProfile: runtimeConfig.assistant.deploymentProfile,

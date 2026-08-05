@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ToolPolicyConfig } from "@goatcitadel/contracts";
-import { Storage } from "@goatcitadel/storage";
+import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import { ToolExecutionPreconditionError, ToolPolicyEngine } from "./engine.js";
 
 const tempRoots: string[] = [];
@@ -41,7 +41,8 @@ describe("ToolPolicyEngine execution fence", () => {
         requireApprovalForRiskyShell: true,
       },
     };
-    const engine = new ToolPolicyEngine(policy, storage);
+    const asyncStorage = createSqliteAsyncStorage(storage);
+    const engine = new ToolPolicyEngine(policy, asyncStorage);
     const lostLease = new Error("durable worker lease was taken over");
     lostLease.name = "DurableWorkerInterruptionError";
     const beforeExecute = vi.fn(() => {
@@ -64,7 +65,7 @@ describe("ToolPolicyEngine execution fence", () => {
       expect(beforeExecute).toHaveBeenCalledTimes(1);
       await expect(fs.access(destination)).rejects.toThrow();
     } finally {
-      storage.close();
+      await asyncStorage.close();
     }
   });
 
@@ -82,7 +83,8 @@ describe("ToolPolicyEngine execution fence", () => {
       transcriptsDir: path.join(root, "transcripts"),
       auditDir: path.join(root, "audit"),
     });
-    const engine = new ToolPolicyEngine(createPolicy(root), storage);
+    const asyncStorage = createSqliteAsyncStorage(storage);
+    const engine = new ToolPolicyEngine(createPolicy(root), asyncStorage);
     const boundaries: unknown[] = [];
 
     try {
@@ -111,7 +113,7 @@ describe("ToolPolicyEngine execution fence", () => {
       });
       expect(boundaries).toEqual([{ toolName, cwd: root }]);
     } finally {
-      storage.close();
+      await asyncStorage.close();
     }
   });
 
@@ -123,7 +125,8 @@ describe("ToolPolicyEngine execution fence", () => {
       transcriptsDir: path.join(root, "transcripts"),
       auditDir: path.join(root, "audit"),
     });
-    const engine = new ToolPolicyEngine(createPolicy(root), storage);
+    const asyncStorage = createSqliteAsyncStorage(storage);
+    const engine = new ToolPolicyEngine(createPolicy(root), asyncStorage);
     const leaseError = new Error("durable worker lease was taken over");
     leaseError.name = "DurableWorkerInterruptionError";
 
@@ -140,7 +143,7 @@ describe("ToolPolicyEngine execution fence", () => {
         ),
       ).rejects.toBe(leaseError);
     } finally {
-      storage.close();
+      await asyncStorage.close();
     }
   });
 });

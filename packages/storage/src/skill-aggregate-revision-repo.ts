@@ -102,6 +102,103 @@ export class SkillAggregateRevisionRepository {
   }
 
   /**
+   * Callback-free primitive for Promise-based storage owners. Callers must
+   * invoke this inside the same owned transaction as the first domain write.
+   */
+  public createInitialRevisionFence(
+    aggregateKind: SkillAggregateKind,
+    aggregateId: string,
+    now = new Date().toISOString(),
+  ): SkillAggregateRevisionRecord {
+    const key = normalizeKey({ aggregateKind, aggregateId });
+    const normalizedNow = normalizeTimestamp(now);
+    const inserted = this.ensureStmt.run({
+      aggregateKind: key.aggregateKind,
+      aggregateId: key.aggregateId,
+      createdAt: normalizedNow,
+      updatedAt: normalizedNow,
+    });
+    if (inserted.changes === 0) {
+      const current = this.requireNormalized(key);
+      throw new ConflictError({
+        code: "WRITE_CONFLICT",
+        message: `${key.aggregateKind} ${key.aggregateId} already exists at revision ${current.revision}`,
+        details: {
+          resourceKind: key.aggregateKind,
+          resourceId: key.aggregateId,
+          expectedState: "absent",
+          currentRevision: current.revision,
+        },
+      });
+    }
+    return this.requireNormalized(key);
+  }
+
+  /**
+   * Callback-free CAS fence for Promise-based storage owners. Callers must keep
+   * the returned fence and their domain mutation in one owned transaction.
+   */
+  public fenceExpectedRevision(
+    aggregateKind: SkillAggregateKind,
+    aggregateId: string,
+    expectedRevision: number,
+    now = new Date().toISOString(),
+  ): SkillAggregateRevisionRecord {
+    const key = normalizeKey({ aggregateKind, aggregateId });
+    const normalizedExpectedRevision = normalizeExpectedRevision(expectedRevision);
+    this.ensureNormalized(key, normalizeTimestamp(now));
+    this.fence(key, normalizedExpectedRevision);
+    return this.requireNormalized(key);
+  }
+
+  /** Advance a previously fenced revision inside the same owned transaction. */
+  public advanceExpectedRevision(
+    aggregateKind: SkillAggregateKind,
+    aggregateId: string,
+    expectedRevision: number,
+    now = new Date().toISOString(),
+  ): SkillAggregateRevisionRecord {
+    const key = normalizeKey({ aggregateKind, aggregateId });
+    const normalizedExpectedRevision = normalizeExpectedRevision(expectedRevision);
+    this.bump(key, normalizedExpectedRevision, normalizeTimestamp(now));
+    return this.requireNormalized(key);
+  }
+
+  /** Fence multiple aggregates in canonical order inside an owned transaction. */
+  public fenceExpectedRevisions(
+    expectations: readonly SkillAggregateRevisionExpectation[],
+    now = new Date().toISOString(),
+  ): SkillAggregateRevisionRecord[] {
+    const normalizedExpectations = normalizeExpectations(expectations);
+    const normalizedNow = normalizeTimestamp(now);
+    return normalizedExpectations.map((expectation) =>
+      this.fenceExpectedRevision(
+        expectation.aggregateKind,
+        expectation.aggregateId,
+        expectation.expectedRevision,
+        normalizedNow,
+      ),
+    );
+  }
+
+  /** Advance canonically ordered fences inside the transaction that owns them. */
+  public advanceExpectedRevisions(
+    expectations: readonly SkillAggregateRevisionExpectation[],
+    now = new Date().toISOString(),
+  ): SkillAggregateRevisionRecord[] {
+    const normalizedExpectations = normalizeExpectations(expectations);
+    const normalizedNow = normalizeTimestamp(now);
+    return normalizedExpectations.map((expectation) =>
+      this.advanceExpectedRevision(
+        expectation.aggregateKind,
+        expectation.aggregateId,
+        expectation.expectedRevision,
+        normalizedNow,
+      ),
+    );
+  }
+
+  /**
    * Creates a new aggregate at revision one in the same transaction as its
    * first domain mutation. The mutation is fenced by the revision insert, so
    * concurrent creators cannot both commit as revision one.
@@ -116,25 +213,7 @@ export class SkillAggregateRevisionRepository {
     const normalizedNow = normalizeTimestamp(now);
 
     return this.db.transaction("immediate", () => {
-      const inserted = this.ensureStmt.run({
-        aggregateKind: key.aggregateKind,
-        aggregateId: key.aggregateId,
-        createdAt: normalizedNow,
-        updatedAt: normalizedNow,
-      });
-      if (inserted.changes === 0) {
-        const current = this.requireNormalized(key);
-        throw new ConflictError({
-          code: "WRITE_CONFLICT",
-          message: `${key.aggregateKind} ${key.aggregateId} already exists at revision ${current.revision}`,
-          details: {
-            resourceKind: key.aggregateKind,
-            resourceId: key.aggregateId,
-            expectedState: "absent",
-            currentRevision: current.revision,
-          },
-        });
-      }
+      this.createInitialRevisionFence(key.aggregateKind, key.aggregateId, normalizedNow);
 
       const result = mutation();
       assertSynchronousTransactionResult(result);
@@ -158,16 +237,20 @@ export class SkillAggregateRevisionRepository {
     const normalizedNow = normalizeTimestamp(now);
 
     return this.db.transaction("immediate", () => {
-      this.ensureNormalized(key, normalizedNow);
-      this.fence(key, normalizedExpectedRevision);
+      this.fenceExpectedRevision(key.aggregateKind, key.aggregateId, normalizedExpectedRevision, normalizedNow);
       const result = mutation();
       assertSynchronousTransactionResult(result);
       validateMutationResult(result);
       if (!result.changed) {
         return { ...result, revision: normalizedExpectedRevision };
       }
-      this.bump(key, normalizedExpectedRevision, normalizedNow);
-      return { ...result, revision: normalizedExpectedRevision + 1 };
+      const advanced = this.advanceExpectedRevision(
+        key.aggregateKind,
+        key.aggregateId,
+        normalizedExpectedRevision,
+        normalizedNow,
+      );
+      return { ...result, revision: advanced.revision };
     });
   }
 

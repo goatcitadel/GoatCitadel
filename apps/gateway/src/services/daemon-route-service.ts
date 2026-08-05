@@ -19,8 +19,8 @@ interface DaemonControlHandoff {
 }
 
 interface DaemonSystemSettings {
-  get<T>(key: string): { value: T } | undefined;
-  set<T>(key: string, value: T): void;
+  get<T>(key: string): Promise<{ value: T } | undefined>;
+  set<T>(key: string, value: T): Promise<unknown>;
 }
 
 interface DaemonRuntimeProbe {
@@ -76,15 +76,17 @@ export interface DaemonStatus {
 export class DaemonRouteService {
   public constructor(private readonly daemon: DaemonRoutePort) {}
 
-  public getDaemonStatus(): DaemonStatus {
+  public async getDaemonStatus(): Promise<DaemonStatus> {
     const runtime = resolveRuntimeProbe(this.daemon.runtime);
-    const state = this.daemon.systemSettings.get<{
-      state: "running" | "stopped";
-      lastCommandAt?: string;
-      pid?: number;
-      lastPid?: number;
-      port?: number;
-    }>("daemon_state_v1")?.value;
+    const state = (
+      await this.daemon.systemSettings.get<{
+        state: "running" | "stopped";
+        lastCommandAt?: string;
+        pid?: number;
+        lastPid?: number;
+        port?: number;
+      }>("daemon_state_v1")
+    )?.value;
     const diagnostics = buildDaemonRuntimeDiagnostics(state, runtime);
     const repairActions = buildDaemonRepairActions(diagnostics, runtime);
     return {
@@ -105,53 +107,53 @@ export class DaemonRouteService {
     };
   }
 
-  public daemonStart(): { accepted: boolean; reason: string; status: DaemonStatus } {
+  public async daemonStart(): Promise<{ accepted: boolean; reason: string; status: DaemonStatus }> {
     const now = new Date().toISOString();
-    this.appendDaemonLog("warn", {
+    await this.appendDaemonLog("warn", {
       at: now,
       message: "Rejected Mission Control daemon start request because no process manager integration is available.",
     });
     return {
       accepted: false,
       reason: "Mission Control cannot start the gateway process directly on this host" + ".",
-      status: this.getDaemonStatus(),
+      status: await this.getDaemonStatus(),
     };
   }
 
-  public daemonStop(): { accepted: boolean; reason: string; status: DaemonStatus } {
+  public async daemonStop(): Promise<{ accepted: boolean; reason: string; status: DaemonStatus }> {
     const now = new Date().toISOString();
-    this.appendDaemonLog("warn", {
+    await this.appendDaemonLog("warn", {
       at: now,
       message: "Rejected Mission Control daemon stop request because no process manager integration is available.",
     });
     return {
       accepted: false,
       reason: "Mission Control cannot stop the gateway process directly on this host" + ".",
-      status: this.getDaemonStatus(),
+      status: await this.getDaemonStatus(),
     };
   }
 
-  public daemonRestart(): { accepted: boolean; reason: string; status: DaemonStatus } {
+  public async daemonRestart(): Promise<{ accepted: boolean; reason: string; status: DaemonStatus }> {
     const now = new Date().toISOString();
-    this.appendDaemonLog("warn", {
+    await this.appendDaemonLog("warn", {
       at: now,
       message: "Rejected Mission Control daemon restart request because no process manager integration is available.",
     });
     return {
       accepted: false,
       reason: "Mission Control cannot restart the gateway process directly on this host" + ".",
-      status: this.getDaemonStatus(),
+      status: await this.getDaemonStatus(),
     };
   }
 
-  public listDaemonLogs(tail = 200): DaemonLogRecord[] {
-    const rows = this.daemon.systemSettings.get<DaemonLogRecord[]>(DAEMON_LOG_TAIL_SETTING_KEY)?.value ?? [];
+  public async listDaemonLogs(tail = 200): Promise<DaemonLogRecord[]> {
+    const rows = (await this.daemon.systemSettings.get<DaemonLogRecord[]>(DAEMON_LOG_TAIL_SETTING_KEY))?.value ?? [];
     const bounded = Math.max(1, Math.min(2000, Math.floor(tail)));
     return rows.slice(-bounded);
   }
 
-  private appendDaemonLog(eventType: string, payload: Record<string, unknown>): void {
-    const current = this.daemon.systemSettings.get<DaemonLogRecord[]>(DAEMON_LOG_TAIL_SETTING_KEY)?.value ?? [];
+  private async appendDaemonLog(eventType: string, payload: Record<string, unknown>): Promise<void> {
+    const current = (await this.daemon.systemSettings.get<DaemonLogRecord[]>(DAEMON_LOG_TAIL_SETTING_KEY))?.value ?? [];
     const level: DaemonLogRecord["level"] = eventType === "error" ? "error" : eventType === "warn" ? "warn" : "info";
     const next = [
       ...current,
@@ -161,7 +163,7 @@ export class DaemonRouteService {
         message: `${eventType}: ${JSON.stringify(payload)}`,
       },
     ].slice(-400);
-    this.daemon.systemSettings.set(DAEMON_LOG_TAIL_SETTING_KEY, next);
+    await this.daemon.systemSettings.set(DAEMON_LOG_TAIL_SETTING_KEY, next);
   }
 }
 

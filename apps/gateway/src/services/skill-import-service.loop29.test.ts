@@ -30,7 +30,7 @@ describe("SkillImportService loop 29 runtime behavior", () => {
       }),
     ).rejects.toThrow(/Local source path is not a directory/);
 
-    expect(service.listHistory(1)).toEqual([
+    expect(await service.listHistory(1)).toEqual([
       expect.objectContaining({
         action: "validate",
         outcome: "failed",
@@ -93,7 +93,7 @@ describe("SkillImportService loop 29 runtime behavior", () => {
     });
     expect(forcedAttempt.disposition).toBe("redirected_to_skill_hub");
     expect(fs.existsSync(path.join(rootDir, "skills", "extra"))).toBe(false);
-    expect(service.listHistory(3)).toEqual(
+    expect(await service.listHistory(3)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           action: "install",
@@ -104,7 +104,7 @@ describe("SkillImportService loop 29 runtime behavior", () => {
       ]),
     );
     // No legacy competing lifecycle claim: no installedPath detail exists.
-    for (const record of service.listHistory(10)) {
+    for (const record of await service.listHistory(10)) {
       expect(record.details?.installedPath).toBeUndefined();
     }
   });

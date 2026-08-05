@@ -12,7 +12,7 @@ describe("ResearchService policy context", () => {
       auditEventId: "audit-1",
       result: { results: [] },
     }));
-    const resolveToolPolicyContext = vi.fn((input) => ({
+    const resolveToolPolicyContext = vi.fn(async (input) => ({
       ...input,
       permissionProfileId: "profile-1",
       localOperatorOverrideId: "override-1",
@@ -35,6 +35,7 @@ describe("ResearchService policy context", () => {
       storage: {
         researchRuns: { create, patch },
         researchSources: { replaceForRun },
+        chatSessionMeta: { get: vi.fn(async () => ({ workspaceId: "workspace-1" })) },
       } as never,
       invokeTool,
       createChatCompletion: vi.fn(async () => ({

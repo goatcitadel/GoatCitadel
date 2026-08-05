@@ -45,7 +45,7 @@ function singleRunDataPort(runId: string): EvidenceReceiptDataPort {
 }
 
 async function makeApp(service: {
-  buildEvidenceReceipt: (runId: string) => EvidenceReceipt;
+  buildEvidenceReceipt: (runId: string) => EvidenceReceipt | Promise<EvidenceReceipt>;
   verifyEvidenceReceipt: (receipt: unknown) => { valid: boolean; reasons: string[] };
 }): Promise<FastifyInstance> {
   const app = Fastify();
@@ -170,7 +170,7 @@ describe("evidence-receipts routes", () => {
   it("POST /api/v1/evidence-receipts/verify validates an untampered receipt", async () => {
     const service = buildService(singleRunDataPort("run-1"));
     app = await makeApp(service);
-    const receipt = service.buildEvidenceReceipt("run-1");
+    const receipt = await service.buildEvidenceReceipt("run-1");
 
     const response = await app.inject({
       method: "POST",
@@ -185,7 +185,7 @@ describe("evidence-receipts routes", () => {
   it("verify returns valid:false with reasons for a tampered receipt", async () => {
     const service = buildService(singleRunDataPort("run-1"));
     app = await makeApp(service);
-    const receipt = service.buildEvidenceReceipt("run-1");
+    const receipt = await service.buildEvidenceReceipt("run-1");
     const tampered: EvidenceReceipt = {
       ...receipt,
       manifest: { ...receipt.manifest, runId: "different-run" },

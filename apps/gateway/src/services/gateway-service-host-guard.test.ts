@@ -506,13 +506,13 @@ describe("gateway service host guard", () => {
     const createApprovalMethod = normalizeSourceForGuard(extractPublicMethodSource(gatewayService, "createApproval"));
 
     expect(normalizedGatewayService).toMatch(
-      /new ToolPolicyEngine\(config\.toolPolicy, this\.storage, undefined, \{[\s\S]{0,700}createApproval: \(input, onCreated, authority\) => this\.createApproval\(input, onCreated, authority\)/,
+      /new ToolPolicyEngine\(config\.toolPolicy, this\.storage, undefined, \{[\s\S]{0,700}createApproval: async \(input, onCreated, authority\) => await this\.createApproval\(input, onCreated, authority\)/,
     );
     expect(createApprovalMethod).toMatch(
       /const approval = authority \? await this\.approvalRuntime\.createApproval\(input, onCreated, authority\) : await this\.approvalRuntime\.createApproval\(input, onCreated\)/,
     );
     expect(gatewayService).toMatch(
-      /new CapabilitySystemService\(\{[\s\S]{0,800}resolveApproval: \(approvalId, input\) => this\.resolveApproval\(approvalId, input\)/,
+      /new CapabilitySystemService\(\{[\s\S]{0,800}resolveApproval: async \(approvalId, input\) => await this\.resolveApproval\(approvalId, input\)/,
     );
   }, 15_000);
 });

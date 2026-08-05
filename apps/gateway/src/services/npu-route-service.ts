@@ -15,7 +15,7 @@ export type NpuRouteService = RouteService<NpuRouteMethod>;
 
 export interface NpuRoutePortDependencies {
   npuSidecar: NpuSidecarService;
-  publishRealtime: (eventType: string, source: string, payload: Record<string, unknown>) => void;
+  publishRealtime: (eventType: string, source: string, payload: Record<string, unknown>) => Promise<unknown>;
 }
 
 export function createNpuRoutePort(deps: NpuRoutePortDependencies): NpuRoutePort {
@@ -24,7 +24,7 @@ export function createNpuRoutePort(deps: NpuRoutePortDependencies): NpuRoutePort
     listNpuModels: () => deps.npuSidecar.listModels(),
     refreshNpuRuntime: async () => {
       const status = await deps.npuSidecar.refresh();
-      deps.publishRealtime("system", "npu", {
+      await deps.publishRealtime("system", "npu", {
         type: "npu_refreshed",
         status,
       });
@@ -32,7 +32,7 @@ export function createNpuRoutePort(deps: NpuRoutePortDependencies): NpuRoutePort
     },
     startNpuRuntime: async () => {
       const status = await deps.npuSidecar.start("api");
-      deps.publishRealtime("system", "npu", {
+      await deps.publishRealtime("system", "npu", {
         type: "npu_started",
         status,
       });
@@ -40,7 +40,7 @@ export function createNpuRoutePort(deps: NpuRoutePortDependencies): NpuRoutePort
     },
     stopNpuRuntime: async () => {
       const status = await deps.npuSidecar.stop("api");
-      deps.publishRealtime("system", "npu", {
+      await deps.publishRealtime("system", "npu", {
         type: "npu_stopped",
         status,
       });

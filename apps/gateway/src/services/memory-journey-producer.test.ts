@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConflictError, type MemoryItemRecord, type MemoryLifecyclePatch } from "@goatcitadel/contracts";
-import { Storage } from "@goatcitadel/storage";
+import { Storage, createLocalAsyncStorage } from "@goatcitadel/storage";
 import {
   buildMemoryItemApprovalStateMaterial,
   buildMemoryItemsApprovalStateMaterial,
@@ -21,7 +21,7 @@ afterEach(() => {
 });
 
 describe("approved memory lifecycle Journey producer", () => {
-  it("atomically writes content-free history and Journey evidence and exactly replays an approved patch", () => {
+  it("atomically writes content-free history and Journey evidence and exactly replays an approved patch", async () => {
     const harness = createHarness("patch-replay");
     insertMemoryItem(harness, {
       itemId: "memory-patch-1",
@@ -61,7 +61,7 @@ describe("approved memory lifecycle Journey producer", () => {
     ).toBe(binding.requestSha256);
     const approval = approveMemoryMutation(harness, binding);
 
-    const updated = harness.service.patchMemoryItem(current.itemId, patch, harness.actorId, {
+    const updated = await harness.service.patchMemoryItem(current.itemId, patch, harness.actorId, {
       approvalId: approval.approvalId,
     });
 
@@ -152,7 +152,7 @@ describe("approved memory lifecycle Journey producer", () => {
 
     harness.publishRealtime.mockClear();
     expect(
-      harness.service.patchMemoryItem(current.itemId, patch, harness.actorId, {
+      await harness.service.patchMemoryItem(current.itemId, patch, harness.actorId, {
         approvalId: approval.approvalId,
       }),
     ).toEqual(updated);
@@ -160,16 +160,16 @@ describe("approved memory lifecycle Journey producer", () => {
     expect(listMemoryJourneyRows(harness)).toHaveLength(1);
     expect(harness.publishRealtime).not.toHaveBeenCalled();
 
-    expect(() =>
+    await expect(
       harness.service.patchMemoryItem(current.itemId, { ...patch, title: "Different request" }, harness.actorId, {
         approvalId: approval.approvalId,
       }),
-    ).toThrow(ConflictError);
+    ).rejects.toThrow(ConflictError);
     expect(readMemoryItem(harness, current.itemId)).toEqual(updated);
     expect(listMemoryHistory(harness)).toEqual(history);
   });
 
-  it("snapshots raw patch data once so approval hashing and mutation bytes cannot diverge", () => {
+  it("snapshots raw patch data once so approval hashing and mutation bytes cannot diverge", async () => {
     const harness = createHarness("patch-snapshot");
     insertMemoryItem(harness, { itemId: "memory-patch-snapshot" });
     const current = readMemoryItem(harness, "memory-patch-snapshot");
@@ -195,7 +195,7 @@ describe("approved memory lifecycle Journey producer", () => {
       },
     });
 
-    const updated = harness.service.patchMemoryItem(current.itemId, accessorPatch, harness.actorId, {
+    const updated = await harness.service.patchMemoryItem(current.itemId, accessorPatch, harness.actorId, {
       approvalId: approval.approvalId,
     });
 
@@ -204,7 +204,7 @@ describe("approved memory lifecycle Journey producer", () => {
     expect(listMemoryHistory(harness)).toHaveLength(1);
   });
 
-  it("settles an approved same-value patch as a repeatable no-op without evidence or realtime theater", () => {
+  it("settles an approved same-value patch as a repeatable no-op without evidence or realtime theater", async () => {
     const harness = createHarness("patch-no-op");
     insertMemoryItem(harness, { itemId: "memory-patch-no-op", title: "Already canonical" });
     const current = readMemoryItem(harness, "memory-patch-no-op");
@@ -223,7 +223,7 @@ describe("approved memory lifecycle Journey producer", () => {
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
       expect(
-        harness.service.patchMemoryItem(current.itemId, patch, harness.actorId, {
+        await harness.service.patchMemoryItem(current.itemId, patch, harness.actorId, {
           approvalId: approval.approvalId,
         }),
       ).toEqual(current);
@@ -233,7 +233,7 @@ describe("approved memory lifecycle Journey producer", () => {
     expect(harness.publishRealtime).not.toHaveBeenCalled();
   });
 
-  it("rejects semantically equal but byte-different immutable history evidence on replay", () => {
+  it("rejects semantically equal but byte-different immutable history evidence on replay", async () => {
     const harness = createHarness("exact-bytes-history");
     insertMemoryItem(harness, { itemId: "memory-exact-bytes-history" });
     const current = readMemoryItem(harness, "memory-exact-bytes-history");
@@ -249,7 +249,7 @@ describe("approved memory lifecycle Journey producer", () => {
       expectedState: buildMemoryItemApprovalStateMaterial(current),
     });
     const approval = approveMemoryMutation(harness, binding);
-    const updated = harness.service.patchMemoryItem(current.itemId, patch, harness.actorId, {
+    const updated = await harness.service.patchMemoryItem(current.itemId, patch, harness.actorId, {
       approvalId: approval.approvalId,
     });
     const history = listMemoryHistory(harness)[0]!;
@@ -261,16 +261,16 @@ describe("approved memory lifecycle Journey producer", () => {
       });
 
     harness.publishRealtime.mockClear();
-    expect(() =>
+    await expect(
       harness.service.patchMemoryItem(current.itemId, patch, harness.actorId, {
         approvalId: approval.approvalId,
       }),
-    ).toThrow(ConflictError);
+    ).rejects.toThrow(ConflictError);
     expect(readMemoryItem(harness, current.itemId)).toEqual(updated);
     expect(harness.publishRealtime).not.toHaveBeenCalled();
   });
 
-  it("rejects pending, wrong-actor, wrong-workspace, and stale-state authority without mutation", () => {
+  it("rejects pending, wrong-actor, wrong-workspace, and stale-state authority without mutation", async () => {
     const harness = createHarness("authority-rejections");
     insertMemoryItem(harness, { itemId: "memory-authority-1" });
     const current = readMemoryItem(harness, "memory-authority-1");
@@ -296,39 +296,39 @@ describe("approved memory lifecycle Journey producer", () => {
         turnId: harness.turnId,
       },
     });
-    expect(() =>
+    await expect(
       harness.service.patchMemoryItem(current.itemId, patch, harness.actorId, {
         approvalId: pending.approvalId,
       }),
-    ).toThrow(ConflictError);
+    ).rejects.toThrow(ConflictError);
 
     const resolved = harness.storage.approvals.resolve(pending.approvalId, {
       decision: "approve",
       resolvedBy: harness.actorId,
     });
-    expect(() =>
+    await expect(
       harness.service.patchMemoryItem(current.itemId, patch, "different-operator", {
         approvalId: resolved.approvalId,
       }),
-    ).toThrow(ConflictError);
+    ).rejects.toThrow(ConflictError);
 
     const wrongWorkspaceApproval = approveMemoryMutation(harness, binding, {
       workspaceId: "workspace-foreign",
     });
-    expect(() =>
+    await expect(
       harness.service.patchMemoryItem(current.itemId, patch, harness.actorId, {
         approvalId: wrongWorkspaceApproval.approvalId,
       }),
-    ).toThrow(ConflictError);
+    ).rejects.toThrow(ConflictError);
 
     const wrongSessionApproval = approveMemoryMutation(harness, binding, {
       sessionId: "session-foreign",
     });
-    expect(() =>
+    await expect(
       harness.service.patchMemoryItem(current.itemId, patch, harness.actorId, {
         approvalId: wrongSessionApproval.approvalId,
       }),
-    ).toThrow(ConflictError);
+    ).rejects.toThrow(ConflictError);
 
     const lateResolvedApproval = approveMemoryMutation(harness, binding);
     harness.storage.gatewaySql
@@ -337,11 +337,11 @@ describe("approved memory lifecycle Journey producer", () => {
         approvalId: lateResolvedApproval.approvalId,
         expiresAt: new Date(Date.parse(lateResolvedApproval.resolvedAt!) - 1).toISOString(),
       });
-    expect(() =>
+    await expect(
       harness.service.patchMemoryItem(current.itemId, patch, harness.actorId, {
         approvalId: lateResolvedApproval.approvalId,
       }),
-    ).toThrow(ConflictError);
+    ).rejects.toThrow(ConflictError);
 
     const boundaryResolvedApproval = approveMemoryMutation(harness, binding);
     harness.storage.gatewaySql
@@ -350,11 +350,11 @@ describe("approved memory lifecycle Journey producer", () => {
         approvalId: boundaryResolvedApproval.approvalId,
         expiresAt: boundaryResolvedApproval.resolvedAt,
       });
-    expect(() =>
+    await expect(
       harness.service.patchMemoryItem(current.itemId, patch, harness.actorId, {
         approvalId: boundaryResolvedApproval.approvalId,
       }),
-    ).toThrow(ConflictError);
+    ).rejects.toThrow(ConflictError);
 
     const wrongKindPending = harness.storage.approvals.create({
       kind: "memory.lifecycle.other",
@@ -380,11 +380,11 @@ describe("approved memory lifecycle Journey producer", () => {
       approveMemoryMutation(harness, mismatchedBinding),
     );
     for (const approvalId of [wrongKindApproval.approvalId, ...mismatchedApprovals.map((entry) => entry.approvalId)]) {
-      expect(() =>
+      await expect(
         harness.service.patchMemoryItem(current.itemId, patch, harness.actorId, {
           approvalId,
         }),
-      ).toThrow(ConflictError);
+      ).rejects.toThrow(ConflictError);
     }
 
     const staleBinding = buildMemoryLifecycleApprovalBinding({
@@ -401,11 +401,11 @@ describe("approved memory lifecycle Journey producer", () => {
       },
     });
     const staleApproval = approveMemoryMutation(harness, staleBinding);
-    expect(() =>
+    await expect(
       harness.service.patchMemoryItem(current.itemId, patch, harness.actorId, {
         approvalId: staleApproval.approvalId,
       }),
-    ).toThrow(ConflictError);
+    ).rejects.toThrow(ConflictError);
 
     expect(readMemoryItem(harness, current.itemId)).toEqual(current);
     expect(listMemoryHistory(harness)).toEqual([]);
@@ -413,7 +413,7 @@ describe("approved memory lifecycle Journey producer", () => {
     expect(harness.publishRealtime).not.toHaveBeenCalled();
   });
 
-  it("uses a PostgreSQL row lock and canonical stored actor when resolving approval authority", () => {
+  it("uses a PostgreSQL row lock and canonical stored actor when resolving approval authority", async () => {
     const binding = buildMemoryLifecycleApprovalBinding({
       workspaceId: "workspace-lock",
       sessionId: "session-lock",
@@ -425,7 +425,7 @@ describe("approved memory lifecycle Journey producer", () => {
       expectedState: { version: 1 },
     });
     const prepare = vi.fn((_sql: string) => ({
-      get: vi.fn(() => ({
+      get: vi.fn(async () => ({
         approval_id: "approval-lock",
         kind: "memory.lifecycle",
         status: "approved",
@@ -442,7 +442,7 @@ describe("approved memory lifecycle Journey producer", () => {
       run: vi.fn(),
     }));
 
-    const authority = resolveApprovedMemoryMutation(
+    const authority = await resolveApprovedMemoryMutation(
       { dialect: "postgres", prepare },
       {
         context: { approvalId: "approval-lock" },
@@ -459,7 +459,7 @@ describe("approved memory lifecycle Journey producer", () => {
     expect(authority.actorId).toBe("operator-from-storage");
   });
 
-  it("records a TTL refresh when the override stays constant but the expiry changes", () => {
+  it("records a TTL refresh when the override stays constant but the expiry changes", async () => {
     const harness = createHarness("ttl-refresh");
     insertMemoryItem(harness, { itemId: "memory-ttl-refresh" });
     harness.storage.gatewaySql
@@ -483,7 +483,7 @@ describe("approved memory lifecycle Journey producer", () => {
     });
     const approval = approveMemoryMutation(harness, binding);
 
-    const updated = harness.service.patchMemoryItem(current.itemId, patch, harness.actorId, {
+    const updated = await harness.service.patchMemoryItem(current.itemId, patch, harness.actorId, {
       approvalId: approval.approvalId,
     });
 
@@ -495,7 +495,7 @@ describe("approved memory lifecycle Journey producer", () => {
     expect(journey.summary.fieldCodes).toEqual(["expires_at"]);
   });
 
-  it("rolls the item and history back when immutable Journey evidence conflicts", () => {
+  it("rolls the item and history back when immutable Journey evidence conflicts", async () => {
     const harness = createHarness("journey-conflict");
     insertMemoryItem(harness, { itemId: "memory-conflict-1" });
     const current = readMemoryItem(harness, "memory-conflict-1");
@@ -544,18 +544,18 @@ describe("approved memory lifecycle Journey producer", () => {
       recordedAt: approval.resolvedAt!,
     });
 
-    expect(() =>
+    await expect(
       harness.service.patchMemoryItem(current.itemId, patch, harness.actorId, {
         approvalId: approval.approvalId,
       }),
-    ).toThrow(ConflictError);
+    ).rejects.toThrow(ConflictError);
     expect(readMemoryItem(harness, current.itemId)).toEqual(current);
     expect(listMemoryHistory(harness)).toEqual([]);
     expect(listMemoryJourneyRows(harness)).toHaveLength(1);
     expect(harness.publishRealtime).not.toHaveBeenCalled();
   });
 
-  it("atomically forgets an approved item batch and settles exact recovery replay", () => {
+  it("atomically forgets an approved item batch and settles exact recovery replay", async () => {
     const harness = createHarness("forget-batch");
     insertMemoryItem(harness, {
       itemId: "memory-forget-a",
@@ -583,7 +583,7 @@ describe("approved memory lifecycle Journey producer", () => {
     const onCommit = vi.fn();
     const afterCommit = vi.fn();
 
-    const result = harness.service.forgetMemory(
+    const result = await harness.service.forgetMemory(
       {
         itemIds: [...itemIds].reverse(),
         workspaceId: harness.workspaceId,
@@ -629,7 +629,7 @@ describe("approved memory lifecycle Journey producer", () => {
 
     harness.publishRealtime.mockClear();
     expect(
-      harness.service.forgetMemory(
+      await harness.service.forgetMemory(
         {
           itemIds,
           workspaceId: harness.workspaceId,
@@ -650,7 +650,7 @@ describe("approved memory lifecycle Journey producer", () => {
     expect(harness.publishRealtime).not.toHaveBeenCalled();
   });
 
-  it("rolls every item, history row, hook, and new Journey row back when a later batch event conflicts", () => {
+  it("rolls every item, history row, hook, and new Journey row back when a later batch event conflicts", async () => {
     const harness = createHarness("forget-batch-rollback");
     const itemIds = ["memory-forget-rollback-a", "memory-forget-rollback-b"];
     for (const itemId of itemIds) insertMemoryItem(harness, { itemId });
@@ -702,7 +702,7 @@ describe("approved memory lifecycle Journey producer", () => {
     const onCommit = vi.fn();
     const afterCommit = vi.fn();
 
-    expect(() =>
+    await expect(
       harness.service.forgetMemory(
         {
           itemIds,
@@ -716,7 +716,7 @@ describe("approved memory lifecycle Journey producer", () => {
           afterCommit,
         },
       ),
-    ).toThrow(ConflictError);
+    ).rejects.toThrow(ConflictError);
 
     expect(itemIds.map((itemId) => readMemoryItem(harness, itemId).status)).toEqual(["active", "active"]);
     expect(listMemoryHistory(harness)).toEqual([]);
@@ -726,7 +726,7 @@ describe("approved memory lifecycle Journey producer", () => {
     expect(harness.publishRealtime).not.toHaveBeenCalled();
   });
 
-  it("rejects lossy forget normalization before consulting or consuming approved authority", () => {
+  it("rejects lossy forget normalization before consulting or consuming approved authority", async () => {
     const harness = createHarness("forget-canonical-input");
     const itemId = "memory-forget-canonical";
     insertMemoryItem(harness, { itemId });
@@ -752,11 +752,11 @@ describe("approved memory lifecycle Journey producer", () => {
     ];
 
     for (const input of attempts) {
-      expect(() =>
+      await expect(
         harness.service.forgetMemory(input, {
           approvedMutation: { approvalId: approval.approvalId },
         }),
-      ).toThrow();
+      ).rejects.toThrow();
     }
 
     expect(readMemoryItem(harness, itemId)).toEqual(current);
@@ -783,17 +783,18 @@ function createHarness(label: string): Harness {
     transcriptsDir: path.join(root, "transcripts"),
     auditDir: path.join(root, "audit"),
   });
+  const asyncStorage = createLocalAsyncStorage(storage);
   cleanups.push(() => {
     storage.close();
     fs.rmSync(root, { recursive: true, force: true });
   });
-  const publishRealtime = vi.fn();
+  const publishRealtime = vi.fn(async () => undefined);
   const service = new MemoryLifecycleService({
     context: {} as never,
     learned: {} as never,
     maintenance: {} as never,
     admin: {
-      gatewaySql: storage.gatewaySql,
+      gatewaySql: asyncStorage.gatewaySql,
       tryParseJson: <T>(raw: string | null | undefined, fallback: T): T => {
         try {
           return raw ? (JSON.parse(raw) as T) : fallback;
@@ -801,11 +802,11 @@ function createHarness(label: string): Harness {
           return fallback;
         }
       },
-      memoryQualityIssues: storage.memoryQualityIssues,
+      memoryQualityIssues: asyncStorage.memoryQualityIssues,
       requireFeatureEnabled: vi.fn(),
       publishRealtime,
     },
-    resolveLearnedMemoryPolicy: vi.fn(() => ({ allowWrite: true, reason: "allowed" })),
+    resolveLearnedMemoryPolicy: vi.fn(async () => ({ allowWrite: true, reason: "allowed" })),
     readTranscriptOrEmpty: vi.fn(async () => []),
   });
   return {
@@ -851,10 +852,6 @@ function insertMemoryItem(
 }
 
 function readMemoryItem(harness: Harness, itemId: string): MemoryItemRecord {
-  const item = harness.service.getActiveMemoryItemForRoutedContext(itemId, harness.workspaceId, {
-    nowIso: "2026-07-14T00:00:00.000Z",
-  });
-  if (item) return item;
   const row = harness.storage.gatewaySql
     .prepare(
       `SELECT item_id, namespace, title, content, metadata_json, pinned, ttl_override_seconds,

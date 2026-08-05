@@ -12,16 +12,16 @@ import type {
 import { ValidationError } from "@goatcitadel/contracts";
 
 export interface ModelComparisonRepositoryPort {
-  create(run: ModelComparisonRun): ModelComparisonRun;
-  get(comparisonId: string): ModelComparisonRun;
-  list(limit?: number): ModelComparisonRun[];
-  addJudgment(comparisonId: string, judgment: ModelComparisonJudgment): ModelComparisonJudgment;
+  create(run: ModelComparisonRun): Promise<ModelComparisonRun>;
+  get(comparisonId: string): Promise<ModelComparisonRun>;
+  list(limit?: number): Promise<ModelComparisonRun[]>;
+  addJudgment(comparisonId: string, judgment: ModelComparisonJudgment): Promise<ModelComparisonJudgment>;
 }
 
 export interface ModelComparisonServiceDependencies {
   repository: ModelComparisonRepositoryPort;
-  listPromptPackTests: (packId: string, limit?: number) => PromptPackTestRecord[];
-  listPromptPackRunsByTest?: (testId: string, limit?: number) => PromptPackRunRecord[];
+  listPromptPackTests: (packId: string, limit?: number) => Promise<PromptPackTestRecord[]>;
+  listPromptPackRunsByTest?: (testId: string, limit?: number) => Promise<PromptPackRunRecord[]>;
   clock?: () => Date;
   idFactory?: () => string;
 }
@@ -29,13 +29,13 @@ export interface ModelComparisonServiceDependencies {
 export class ModelComparisonService {
   public constructor(private readonly deps: ModelComparisonServiceDependencies) {}
 
-  public createComparison(input: ModelComparisonCreateRequest): ModelComparisonRun {
+  public async createComparison(input: ModelComparisonCreateRequest): Promise<ModelComparisonRun> {
     if (input.candidates.length < 2) {
       throw new ValidationError({ field: "candidates", message: "At least two model candidates are required." });
     }
     const now = this.nowIso();
     const comparisonId = this.deps.idFactory?.() ?? randomUUID();
-    const selectedTests = this.resolvePromptPackTests(input);
+    const selectedTests = await this.resolvePromptPackTests(input);
     const testIds = selectedTests.map((test) => test.testId);
     const candidates = assignBlindLabels(input.candidates).map((candidate, index) => ({
       candidateId: `${comparisonId}:candidate:${index + 1}`,
@@ -50,24 +50,24 @@ export class ModelComparisonService {
       title: input.title?.trim() || `Blind model comparison for ${input.packId}`,
       candidates,
       testIds,
-      results: this.buildResultPlaceholders(comparisonId, input.packId, selectedTests, candidates),
+      results: await this.buildResultPlaceholders(comparisonId, input.packId, selectedTests, candidates),
       judgments: [],
       createdAt: now,
       updatedAt: now,
     };
-    return this.withAdvisory(this.deps.repository.create(run));
+    return this.withAdvisory(await this.deps.repository.create(run));
   }
 
-  public listComparisons(limit = 50): { items: ModelComparisonRun[] } {
-    return { items: this.deps.repository.list(limit).map((run) => this.withAdvisory(run)) };
+  public async listComparisons(limit = 50): Promise<{ items: ModelComparisonRun[] }> {
+    return { items: (await this.deps.repository.list(limit)).map((run) => this.withAdvisory(run)) };
   }
 
-  public getComparison(comparisonId: string): ModelComparisonRun {
-    return this.withAdvisory(this.deps.repository.get(comparisonId));
+  public async getComparison(comparisonId: string): Promise<ModelComparisonRun> {
+    return this.withAdvisory(await this.deps.repository.get(comparisonId));
   }
 
-  public addJudgment(comparisonId: string, input: ModelComparisonJudgeRequest): ModelComparisonJudgment {
-    const run = this.deps.repository.get(comparisonId);
+  public async addJudgment(comparisonId: string, input: ModelComparisonJudgeRequest): Promise<ModelComparisonJudgment> {
+    const run = await this.deps.repository.get(comparisonId);
     const candidateIds = new Set(run.candidates.map((candidate) => candidate.candidateId));
     if (!run.testIds.includes(input.testId)) {
       throw new ValidationError({ field: "testId", message: "Judgment testId is not part of the comparison." });
@@ -100,12 +100,12 @@ export class ModelComparisonService {
       reviewerId: input.reviewerId?.trim() || undefined,
       createdAt: this.nowIso(),
     };
-    return this.deps.repository.addJudgment(comparisonId, judgment);
+    return await this.deps.repository.addJudgment(comparisonId, judgment);
   }
 
-  private resolvePromptPackTests(input: ModelComparisonCreateRequest): PromptPackTestRecord[] {
+  private async resolvePromptPackTests(input: ModelComparisonCreateRequest): Promise<PromptPackTestRecord[]> {
     const direct = [...new Set((input.testIds ?? []).map((testId) => testId.trim()).filter(Boolean))];
-    const tests = this.deps.listPromptPackTests(input.packId, 2000);
+    const tests = await this.deps.listPromptPackTests(input.packId, 2000);
     if (input.allTests) {
       if (tests.length > 0) {
         return tests.slice(0, 200);
@@ -134,25 +134,28 @@ export class ModelComparisonService {
     });
   }
 
-  private buildResultPlaceholders(
+  private async buildResultPlaceholders(
     comparisonId: string,
     packId: string,
     tests: PromptPackTestRecord[],
     candidates: ModelComparisonRun["candidates"],
-  ): ModelComparisonPromptResult[] {
-    return tests.flatMap((test) => {
-      const runs = this.deps.listPromptPackRunsByTest?.(test.testId, 1000) ?? [];
-      return candidates.map((candidate) => {
-        const linkedRun = runs.find(
-          (run) =>
-            run.packId === packId &&
-            run.testId === test.testId &&
-            run.providerId === candidate.providerId &&
-            run.model === candidate.model,
-        );
-        return buildResultPlaceholder(comparisonId, test.testId, candidate.candidateId, linkedRun);
-      });
-    });
+  ): Promise<ModelComparisonPromptResult[]> {
+    const resultGroups = await Promise.all(
+      tests.map(async (test) => {
+        const runs = (await this.deps.listPromptPackRunsByTest?.(test.testId, 1000)) ?? [];
+        return candidates.map((candidate) => {
+          const linkedRun = runs.find(
+            (run) =>
+              run.packId === packId &&
+              run.testId === test.testId &&
+              run.providerId === candidate.providerId &&
+              run.model === candidate.model,
+          );
+          return buildResultPlaceholder(comparisonId, test.testId, candidate.candidateId, linkedRun);
+        });
+      }),
+    );
+    return resultGroups.flat();
   }
 
   private nowIso(): string {

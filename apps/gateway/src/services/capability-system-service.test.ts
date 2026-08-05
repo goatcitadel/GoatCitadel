@@ -30,17 +30,17 @@ import type {
   TranscriptEvent,
 } from "@goatcitadel/contracts";
 import { ConflictError } from "@goatcitadel/contracts";
-import { Storage } from "@goatcitadel/storage";
+import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import { CapabilitySystemService, __internal } from "./capability-system-service.js";
 import type { CapabilityRuntimeConfig } from "../config.js";
 
 const tempRoots: string[] = [];
-const storageCleanups: Array<() => void> = [];
+const storageCleanups: Array<() => void | Promise<void>> = [];
 const digestPinnedRunnerImage =
   "ghcr.io/goatcitadel/code-mode-runner@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 afterEach(async () => {
-  for (const cleanup of storageCleanups.splice(0).reverse()) cleanup();
+  for (const cleanup of storageCleanups.splice(0).reverse()) await cleanup();
   await Promise.all(
     tempRoots.splice(0).map(async (root) => {
       await fs.rm(root, { recursive: true, force: true });
@@ -90,7 +90,7 @@ describe("CapabilitySystemService", () => {
     ];
     const harness = await createHarness({ loadedSkills });
 
-    harness.service.listSkills();
+    await harness.service.listSkills();
 
     expect(harness.storage.skillLifecycle.find("valid-import")?.provenance?.commitSha).toBe(validCommitSha);
     expect(harness.storage.skillLifecycle.find("invalid-import")?.provenance?.commitSha).toBeUndefined();
@@ -127,8 +127,8 @@ describe("CapabilitySystemService", () => {
       },
     });
 
-    const first = harness.service.reconcileCodeModeFinalTranscriptDeliveries();
-    const second = harness.service.reconcileCodeModeFinalTranscriptDeliveries();
+    const first = await harness.service.reconcileCodeModeFinalTranscriptDeliveries();
+    const second = await harness.service.reconcileCodeModeFinalTranscriptDeliveries();
 
     expect(first).toMatchObject({ checked: 1, enqueued: 1, errors: [] });
     expect(second).toMatchObject({ checked: 0, enqueued: 0, errors: [] });
@@ -174,7 +174,7 @@ describe("CapabilitySystemService", () => {
       });
     }
 
-    const recovered = harness.service.reconcileCodeModeFinalTranscriptDeliveries(100);
+    const recovered = await harness.service.reconcileCodeModeFinalTranscriptDeliveries(100);
 
     expect(recovered.checked).toBe(501);
     expect(recovered.enqueued).toBe(500);
@@ -213,7 +213,7 @@ describe("CapabilitySystemService", () => {
       });
     }
 
-    const recovered = harness.service.reconcileCodeModeFinalTranscriptDeliveries(100);
+    const recovered = await harness.service.reconcileCodeModeFinalTranscriptDeliveries(100);
 
     expect(recovered.checked).toBe(501);
     expect(recovered.enqueued).toBe(0);
@@ -289,7 +289,7 @@ describe("CapabilitySystemService", () => {
     vi.spyOn(harness.storage, "runImmediateTransaction").mockImplementation(() => {
       throw new Error("synthetic transcript transaction failure");
     });
-    harness.publishRealtime.mockImplementation((eventType: string) => {
+    harness.publishRealtime.mockImplementation(async (eventType: string) => {
       if (eventType === "code_mode_transcript_delivery_deferred") {
         throw new Error("synthetic diagnostic sink failure");
       }
@@ -519,7 +519,7 @@ describe("CapabilitySystemService", () => {
 
   it("records matching autonomous Code Mode grants before opening the approval", async () => {
     const harness = await createHarness();
-    const grant = harness.service.createAutonomousActivationGrant({
+    const grant = await harness.service.createAutonomousActivationGrant({
       workspaceId: "workspace-1",
       surfaces: ["code"],
       maxRiskLevel: "danger",
@@ -547,7 +547,7 @@ describe("CapabilitySystemService", () => {
       matchedGrantId: grant.grantId,
       riskLevel: "danger",
     });
-    expect(harness.service.listAutonomousActivationGrants(true)[0]).toMatchObject({
+    expect((await harness.service.listAutonomousActivationGrants(true))[0]).toMatchObject({
       grantId: grant.grantId,
       usedActivations: 1,
       usedBudgetUsd: 0.25,
@@ -599,7 +599,7 @@ describe("CapabilitySystemService", () => {
       sessionId: "session-a",
       workspaceId: "workspace-a",
     });
-    const comparison = harness.service.compareCodeModeRuns(current.runId, baseline.runId, {
+    const comparison = await harness.service.compareCodeModeRuns(current.runId, baseline.runId, {
       sessionId: "session-a",
       workspaceId: "workspace-a",
     });
@@ -844,7 +844,7 @@ describe("CapabilitySystemService", () => {
       },
     });
 
-    const response = harness.service.listCodeModeExecutionBackends();
+    const response = await harness.service.listCodeModeExecutionBackends();
 
     expect(response).toMatchObject({
       readOnly: true,
@@ -888,7 +888,7 @@ describe("CapabilitySystemService", () => {
       },
     });
 
-    const response = harness.service.listCodeModeExecutionBackends();
+    const response = await harness.service.listCodeModeExecutionBackends();
 
     expect(response).toMatchObject({
       defaultBackendId: "trusted-code-host",
@@ -1471,7 +1471,7 @@ describe("CapabilitySystemService", () => {
       language: "typescript",
       source: "return { shouldNotDispatch: true };",
     });
-    harness.publishRealtime.mockImplementation((eventType: string) => {
+    harness.publishRealtime.mockImplementation(async (eventType: string) => {
       if (eventType === "code_mode_execution_boundary_crossed") {
         throw new Error("synthetic boundary notification failure");
       }
@@ -2241,7 +2241,7 @@ describe("CapabilitySystemService", () => {
       }),
     );
 
-    const proposal = harness.service.createProposal({
+    const proposal = await harness.service.createProposal({
       proposalKind: "skill",
       title: "Promote candidate-demo",
       summary: "Review the generated candidate",
@@ -2249,7 +2249,7 @@ describe("CapabilitySystemService", () => {
       candidateId: "candidate-demo",
     });
 
-    const initialDetail = harness.service.getCandidateDetail("candidate-demo");
+    const initialDetail = await harness.service.getCandidateDetail("candidate-demo");
     expect(initialDetail).toMatchObject({
       candidateId: "candidate-demo",
       revision: 1,
@@ -2260,7 +2260,7 @@ describe("CapabilitySystemService", () => {
     // HX-402 P2 (coverage-preserving remodel): promote/rollback/revoke are
     // approval-first — each verb requests one canonical capability.lifecycle
     // approval and only the recovered effect executes the transition.
-    const executeApproved = (pending: { approvalId: string }) => {
+    const executeApproved = async (pending: { approvalId: string }) => {
       harness.storage.approvals.resolve(pending.approvalId, {
         decision: "approve",
         resolvedBy: "operator-resolver",
@@ -2268,7 +2268,11 @@ describe("CapabilitySystemService", () => {
       return harness.service.executeApprovedCapabilityLifecycleMutation({ approvalId: pending.approvalId });
     };
 
-    const promoteRequest = harness.service.promoteCandidate("candidate-demo", initialDetail.revision, "version-b");
+    const promoteRequest = await harness.service.promoteCandidate(
+      "candidate-demo",
+      initialDetail.revision,
+      "version-b",
+    );
     if (!promoteRequest.pendingApproval) throw new Error("expected pending promote approval");
     expect(promoteRequest.pendingApproval).toMatchObject({
       kind: "capability.lifecycle",
@@ -2277,18 +2281,18 @@ describe("CapabilitySystemService", () => {
       status: "pending",
     });
     // No mutation before approval: the reviewed detail is unchanged.
-    expect(harness.service.getCandidateDetail("candidate-demo")).toMatchObject({
+    expect(await harness.service.getCandidateDetail("candidate-demo")).toMatchObject({
       revision: 1,
       activationBlocked: true,
     });
-    const promoted = executeApproved(promoteRequest.pendingApproval);
+    const promoted = await executeApproved(promoteRequest.pendingApproval);
     expect(promoted.revision).toBe(2);
     expect(promoted.detail.activeVersion?.versionId).toBe("version-b");
     expect(promoted.detail.activationBlocked).toBe(false);
 
     let staleWrite: unknown;
     try {
-      harness.service.promoteCandidate("candidate-demo", initialDetail.revision, "version-a");
+      await harness.service.promoteCandidate("candidate-demo", initialDetail.revision, "version-a");
     } catch (error) {
       staleWrite = error;
     }
@@ -2299,24 +2303,24 @@ describe("CapabilitySystemService", () => {
     });
 
     // Byte-identical target state is a pure no-op: no approval row is minted.
-    const noOp = harness.service.promoteCandidate("candidate-demo", promoted.revision, "version-b");
+    const noOp = await harness.service.promoteCandidate("candidate-demo", promoted.revision, "version-b");
     expect(noOp.pendingApproval).toBeNull();
     expect(noOp).toMatchObject({
       noMutationRequired: true,
       detail: expect.objectContaining({ revision: promoted.revision }),
     });
 
-    const rollbackRequest = harness.service.rollbackCandidate("candidate-demo", "version-a", promoted.revision);
+    const rollbackRequest = await harness.service.rollbackCandidate("candidate-demo", "version-a", promoted.revision);
     if (!rollbackRequest.pendingApproval) throw new Error("expected pending rollback approval");
     expect(rollbackRequest.pendingApproval.action).toBe("candidate_rolled_back");
-    const rolledBack = executeApproved(rollbackRequest.pendingApproval);
+    const rolledBack = await executeApproved(rollbackRequest.pendingApproval);
     expect(rolledBack.revision).toBe(3);
     expect(rolledBack.detail.activeVersion?.versionId).toBe("version-a");
 
-    const revokeRequest = harness.service.revokeCandidate("candidate-demo", rolledBack.revision, "version-a");
+    const revokeRequest = await harness.service.revokeCandidate("candidate-demo", rolledBack.revision, "version-a");
     if (!revokeRequest.pendingApproval) throw new Error("expected pending revoke approval");
     expect(revokeRequest.pendingApproval.action).toBe("candidate_revoked");
-    const revoked = executeApproved(revokeRequest.pendingApproval);
+    const revoked = await executeApproved(revokeRequest.pendingApproval);
     expect(revoked.revision).toBe(4);
     expect(revoked.detail.activationBlocked).toBe(true);
 
@@ -2331,7 +2335,7 @@ describe("CapabilitySystemService", () => {
       "proposal_created",
     ]);
 
-    const proposalDetail = harness.service.getProposalDetail(proposal.proposalId);
+    const proposalDetail = await harness.service.getProposalDetail(proposal.proposalId);
     expect(proposalDetail).toMatchObject({
       proposal: expect.objectContaining({ proposalId: proposal.proposalId }),
       candidate: expect.objectContaining({ candidateId: "candidate-demo" }),
@@ -2384,7 +2388,7 @@ describe("CapabilitySystemService", () => {
     ];
     const harness = await createHarness({ meshCatalogEntries: meshEntries });
 
-    const inspectable = harness.service.listCatalog("inspectable");
+    const inspectable = await harness.service.listCatalog("inspectable");
     const meshInspectable = inspectable.filter((entry) => entry.category === "mesh_published");
     expect(meshInspectable.map((entry) => entry.capabilityId)).toEqual([
       "mesh:node-a:tool:project.status",
@@ -2393,24 +2397,26 @@ describe("CapabilitySystemService", () => {
     ]);
     expect(meshInspectable[0]?.mesh?.status).toBe("review_required");
 
-    const callable = harness.service.listCatalog("callable");
+    const callable = await harness.service.listCatalog("callable");
     expect(callable.filter((entry) => entry.kind === "mesh_skill")).toEqual([]);
     expect(callable.filter((entry) => entry.category === "mesh_published").map((entry) => entry.capabilityId)).toEqual([
       "mesh:node-a:tool:project.active",
     ]);
     // Mesh entries never satisfy the local-tool filters that feed tool schema
     // resolution and code-mode wrappers.
-    const snapshot = harness.service.freezeCatalogSnapshot();
+    const snapshot = await harness.service.freezeCatalogSnapshot();
     expect(
       snapshot.callableEntries.some((entry) => entry.kind === "tool" && entry.capabilityId.startsWith("mesh:")),
     ).toBe(false);
-    const directory = harness.service.getCompactToolDirectorySnapshot();
+    const directory = await harness.service.getCompactToolDirectorySnapshot();
     expect(directory.tools.some((tool) => tool.capabilityId.startsWith("mesh:"))).toBe(false);
   });
 
   it("keeps the catalog unchanged when no mesh projection producer is composed", async () => {
     const harness = await createHarness();
-    expect(harness.service.listCatalog("inspectable").some((entry) => entry.category === "mesh_published")).toBe(false);
+    expect(
+      (await harness.service.listCatalog("inspectable")).some((entry) => entry.category === "mesh_published"),
+    ).toBe(false);
   });
 
   it("lists catalog snapshots, runs, proposals, and inline approval queue items", async () => {
@@ -2418,13 +2424,13 @@ describe("CapabilitySystemService", () => {
       toolCatalog: [createTool("tool.safe_read"), createTool("tool.write", { readOnly: false })],
     });
 
-    expect(harness.service.listCatalog("callable").map((entry) => entry.capabilityId)).toEqual([
+    expect((await harness.service.listCatalog("callable")).map((entry) => entry.capabilityId)).toEqual([
       "tool:tool.safe_read",
       "tool:tool.write",
     ]);
 
-    const snapshot = harness.service.freezeCatalogSnapshot();
-    expect(harness.service.getCatalogSnapshot(snapshot.snapshotId)).toBe(snapshot);
+    const snapshot = await harness.service.freezeCatalogSnapshot();
+    expect(await harness.service.getCatalogSnapshot(snapshot.snapshotId)).toBe(snapshot);
     expect(snapshot.callableEntries.map((entry) => entry.toolName)).toEqual(["tool.safe_read", "tool.write"]);
 
     const runRecord: CodeModeRunRecord = {
@@ -2457,16 +2463,16 @@ describe("CapabilitySystemService", () => {
       createdAt: "2026-04-10T00:00:00.000Z",
     };
     harness.storage.codeModeRuns.upsert(runRecord);
-    expect(harness.service.listCodeModeRuns(5)).toEqual([runRecord]);
-    expect(harness.service.getCodeModeRun("code-run-list")).toBe(runRecord);
+    expect(await harness.service.listCodeModeRuns(5)).toEqual([runRecord]);
+    expect(await harness.service.getCodeModeRun("code-run-list")).toBe(runRecord);
 
-    const proposal = harness.service.createProposal({
+    const proposal = await harness.service.createProposal({
       proposalKind: "skill",
       title: "Review generated skill",
       summary: "Promote once validated",
       payload: { runId: "code-run-list" },
     });
-    expect(harness.service.listProposals(10)).toEqual([proposal]);
+    expect(await harness.service.listProposals(10)).toEqual([proposal]);
 
     const liveApproval: ApprovalRequest = {
       approvalId: "approval-live",
@@ -2537,7 +2543,7 @@ describe("CapabilitySystemService", () => {
       },
     ] as never);
 
-    const pendingApprovals = harness.service.listChatPendingApprovals("session-1");
+    const pendingApprovals = await harness.service.listChatPendingApprovals("session-1");
     expect(pendingApprovals).toEqual([
       expect.objectContaining({
         approvalId: "approval-live",
@@ -2586,14 +2592,14 @@ describe("CapabilitySystemService", () => {
         }),
       ],
     });
-    harness.service.createProposal({
+    await harness.service.createProposal({
       proposalKind: "tool",
       title: "Unactivated tool",
       summary: "Inspectable proposal only",
       payload: {},
     });
 
-    const compact = harness.service.getCompactToolDirectorySnapshot(60_000);
+    const compact = await harness.service.getCompactToolDirectorySnapshot(60_000);
     const schema = harness.service.getToolSchema("tool.safe_read");
 
     expect(compact).toMatchObject({
@@ -2742,7 +2748,7 @@ describe("CapabilitySystemService", () => {
       },
     ] as never);
 
-    expect(harness.service.listChatPendingApprovals("parent-session")).toEqual([
+    expect(await harness.service.listChatPendingApprovals("parent-session")).toEqual([
       expect.objectContaining({
         approvalId: "approval-child",
         sessionId: "child-session",
@@ -2779,14 +2785,14 @@ describe("CapabilitySystemService", () => {
       pending.expiresAt = "2020-01-01T00:00:00.000Z";
     }
 
-    expect(harness.service.listCodeModeRuns({ sessionId: "session-code", limit: 5 })).toEqual([
+    expect(await harness.service.listCodeModeRuns({ sessionId: "session-code", limit: 5 })).toEqual([
       expect.objectContaining({
         runId: run.runId,
         status: "expired",
         error: "Code Mode approval expired before execution",
       }),
     ]);
-    expect(harness.service.getCodeModeRun(run.runId)).toMatchObject({
+    expect(await harness.service.getCodeModeRun(run.runId)).toMatchObject({
       status: "expired",
       error: "Code Mode approval expired before execution",
     });
@@ -2899,7 +2905,7 @@ describe("CapabilitySystemService", () => {
     });
     vi.spyOn(harness.storage.pendingApprovalActions, "find").mockReturnValue(undefined);
 
-    expect(harness.service.getCodeModeRun(run.runId)).toMatchObject({
+    expect(await harness.service.getCodeModeRun(run.runId)).toMatchObject({
       status: "rejected",
       error: "Code Mode approval was rejected before the pending action could be recovered.",
       errorCode: "approval_rejected_pending_action_missing",
@@ -2950,7 +2956,7 @@ describe("CapabilitySystemService", () => {
     vi.spyOn(harness.storage.pendingApprovalActions, "find").mockReturnValue(undefined);
 
     expect(
-      harness.service.listCodeModeRuns({
+      await harness.service.listCodeModeRuns({
         sessionId: "session-code",
         status: "failed",
         limit: 5,
@@ -2986,7 +2992,7 @@ describe("CapabilitySystemService", () => {
     vi.spyOn(harness.storage.pendingApprovalActions, "find").mockReturnValue(undefined);
 
     expect(
-      harness.service.listCodeModeRuns({
+      await harness.service.listCodeModeRuns({
         sessionId: "session-code",
         status: "rejected",
         limit: 5,
@@ -3021,7 +3027,7 @@ describe("CapabilitySystemService", () => {
     });
     vi.spyOn(harness.storage.pendingApprovalActions, "find").mockReturnValue(undefined);
 
-    expect(harness.service.getCodeModeRun(run.runId)).toMatchObject({
+    expect(await harness.service.getCodeModeRun(run.runId)).toMatchObject({
       status: "rejected",
       error: "Code Mode approval was edited, but Code Mode runs are immutable and cannot execute safely.",
       errorCode: "approval_edited_pending_action_missing",
@@ -3074,14 +3080,14 @@ describe("CapabilitySystemService", () => {
     }
 
     expect(
-      harness.service.listCodeModeRuns({
+      await harness.service.listCodeModeRuns({
         sessionId: "session-code",
         status: "approval_pending",
         limit: 5,
       }),
     ).toEqual([]);
     expect(
-      harness.service.listCodeModeRuns({
+      await harness.service.listCodeModeRuns({
         sessionId: "session-code",
         status: "expired",
         limit: 5,
@@ -3125,7 +3131,7 @@ describe("CapabilitySystemService", () => {
       pending.expiresAt = "2020-01-01T00:00:00.000Z";
     }
 
-    expect(() => harness.service.getCodeModeRunInScope(run.runId, { workspaceId: "default" })).toThrow(
+    await expect(harness.service.getCodeModeRunInScope(run.runId, { workspaceId: "default" })).rejects.toThrow(
       /code mode run/i,
     );
 
@@ -3181,7 +3187,7 @@ describe("CapabilitySystemService", () => {
     }
 
     expect(
-      harness.service.listCodeModeRuns({
+      await harness.service.listCodeModeRuns({
         sessionId: "session-code",
         status: "expired",
         limit: 5,
@@ -4431,12 +4437,12 @@ describe("CapabilitySystemService", () => {
     });
     harness.storage.codeModeRuns.upsert({ ...run, approvalId: undefined });
 
-    expect(harness.service.getCodeModeRun(run.runId)).toMatchObject({
+    expect(await harness.service.getCodeModeRun(run.runId)).toMatchObject({
       runId: run.runId,
       originSurface: "code",
       approvalId: undefined,
     });
-    expect(harness.service.listCodeModeRuns({ sessionId: "session-code", limit: 5 })).toEqual([
+    expect(await harness.service.listCodeModeRuns({ sessionId: "session-code", limit: 5 })).toEqual([
       expect.objectContaining({
         runId: run.runId,
         originSurface: "code",
@@ -4666,7 +4672,7 @@ describe("CapabilitySystemService", () => {
       originatingRunId: run.runId,
       lifecycleState: "candidate",
     });
-    const candidateDetail = harness.service.getCandidateDetail(candidates[0]!.candidateId);
+    const candidateDetail = await harness.service.getCandidateDetail(candidates[0]!.candidateId);
     expect(candidateDetail.revision).toBe(1);
     expect(harness.publishRealtime).toHaveBeenCalledWith(
       "candidate_skill_staged",
@@ -4716,14 +4722,14 @@ describe("CapabilitySystemService", () => {
       harness.storage.skillAggregateRevisions.get("candidate_skill", "candidate-revision-rollback"),
     ).toBeUndefined();
     expect(
-      harness.service
-        .listCatalog("inspectable")
-        .some((entry) => entry.kind === "candidate_skill" && entry.candidateId === "candidate-revision-rollback"),
+      (await harness.service.listCatalog("inspectable")).some(
+        (entry) => entry.kind === "candidate_skill" && entry.candidateId === "candidate-revision-rollback",
+      ),
     ).toBe(false);
     expect(
-      harness.service
-        .listCatalog("callable")
-        .some((entry) => entry.kind === "candidate_skill" && entry.candidateId === "candidate-revision-rollback"),
+      (await harness.service.listCatalog("callable")).some(
+        (entry) => entry.kind === "candidate_skill" && entry.candidateId === "candidate-revision-rollback",
+      ),
     ).toBe(false);
 
     const failedRun = harness.storage.codeModeRuns.get(run.runId);
@@ -4760,7 +4766,7 @@ describe("CapabilitySystemService", () => {
     await fs.writeFile(instructionPath, orphanInstruction, "utf8");
     await stageCandidateBundle.call(harness.service, failedRun, source, wrapperManifest, input);
     expect(harness.storage.candidateSkillVersions.list(10)).toHaveLength(1);
-    expect(harness.service.getCandidateDetail("candidate-revision-rollback").revision).toBe(1);
+    expect((await harness.service.getCandidateDetail("candidate-revision-rollback")).revision).toBe(1);
   });
 
   it("treats an exact Code Mode candidate stage replay as an immutable no-op", async () => {
@@ -4799,7 +4805,7 @@ describe("CapabilitySystemService", () => {
     await stageCandidateBundle.call(harness.service, completedRun, source, wrapperManifest, input);
 
     expect(harness.storage.candidateSkillVersions.list(10)).toHaveLength(1);
-    expect(harness.service.getCandidateDetail("candidate-exact-replay").revision).toBe(1);
+    expect((await harness.service.getCandidateDetail("candidate-exact-replay")).revision).toBe(1);
     expect(
       harness.publishRealtime.mock.calls.filter(([eventType]) => eventType === "candidate_skill_staged"),
     ).toHaveLength(stagedEventsBeforeReplay);
@@ -4830,7 +4836,7 @@ describe("CapabilitySystemService", () => {
     });
     await harness.service.executeApprovedCodeModeRun("approval-1");
 
-    const detail = harness.service.getCandidateDetail(candidateId);
+    const detail = await harness.service.getCandidateDetail(candidateId);
     expect(detail.revision).toBe(2);
     expect(detail.versions).toHaveLength(2);
     expect(new Set(detail.versions.map((version) => version.originatingRunId))).toEqual(
@@ -5094,36 +5100,36 @@ describe("CapabilitySystemService governed lifecycle (HX-402 P2)", () => {
   it("denial and expiry are zero-delta; unknown and foreign approvals are terminal", async () => {
     const harness = await createHarness();
     await seedCandidate(harness);
-    const detail = harness.service.getCandidateDetail("candidate-gov");
-    const request = harness.service.promoteCandidate("candidate-gov", detail.revision, "version-b");
+    const detail = await harness.service.getCandidateDetail("candidate-gov");
+    const request = await harness.service.promoteCandidate("candidate-gov", detail.revision, "version-b");
     if (!request.pendingApproval) throw new Error("expected pending approval");
 
     // Pending approvals never execute.
-    expect(() =>
+    await expect(
       harness.service.executeApprovedCapabilityLifecycleMutation({ approvalId: request.pendingApproval!.approvalId }),
-    ).toThrow(/missing, foreign, malformed, or not approved/);
+    ).rejects.toThrow(/missing, foreign, malformed, or not approved/);
 
     harness.storage.approvals.resolve(request.pendingApproval.approvalId, {
       decision: "reject",
       resolvedBy: "operator-resolver",
     });
-    expect(() =>
+    await expect(
       harness.service.executeApprovedCapabilityLifecycleMutation({ approvalId: request.pendingApproval!.approvalId }),
-    ).toThrow(/missing, foreign, malformed, or not approved/);
+    ).rejects.toThrow(/missing, foreign, malformed, or not approved/);
     // Zero delta: no lifecycle state changed, no governed claim was minted.
-    expect(harness.service.getCandidateDetail("candidate-gov").revision).toBe(detail.revision);
+    expect((await harness.service.getCandidateDetail("candidate-gov")).revision).toBe(detail.revision);
     expect(countGoverned(harness)).toBe(0);
-    expect(() =>
+    await expect(
       harness.service.executeApprovedCapabilityLifecycleMutation({ approvalId: "capability-missing" }),
-    ).toThrow(/missing, foreign, malformed, or not approved/);
+    ).rejects.toThrow(/missing, foreign, malformed, or not approved/);
   });
 
   it("replays the original approval identity for byte-exact requests and converges effect replays", async () => {
     const harness = await createHarness();
     await seedCandidate(harness);
-    const detail = harness.service.getCandidateDetail("candidate-gov");
-    const first = harness.service.promoteCandidate("candidate-gov", detail.revision, "version-b");
-    const replayed = harness.service.promoteCandidate("candidate-gov", detail.revision, "version-b");
+    const detail = await harness.service.getCandidateDetail("candidate-gov");
+    const first = await harness.service.promoteCandidate("candidate-gov", detail.revision, "version-b");
+    const replayed = await harness.service.promoteCandidate("candidate-gov", detail.revision, "version-b");
     if (!first.pendingApproval || !replayed.pendingApproval) throw new Error("expected pending approvals");
     expect(replayed.pendingApproval.approvalId).toBe(first.pendingApproval.approvalId);
     expect(replayed.pendingApproval.replayed).toBe(true);
@@ -5132,39 +5138,39 @@ describe("CapabilitySystemService governed lifecycle (HX-402 P2)", () => {
       decision: "approve",
       resolvedBy: "operator-resolver",
     });
-    const applied = harness.service.executeApprovedCapabilityLifecycleMutation({
+    const applied = await harness.service.executeApprovedCapabilityLifecycleMutation({
       approvalId: first.pendingApproval.approvalId,
     });
     expect(applied.changedVersionIds).toEqual(["version-b"]);
     // Exact effect replay converges on committed evidence without re-mutating.
-    const replayApply = harness.service.executeApprovedCapabilityLifecycleMutation({
+    const replayApply = await harness.service.executeApprovedCapabilityLifecycleMutation({
       approvalId: first.pendingApproval.approvalId,
     });
     expect(replayApply.candidateId).toBe("candidate-gov");
     expect(countGoverned(harness)).toBe(1);
-    expect(harness.service.getCandidateDetail("candidate-gov").revision).toBe(applied.revision);
+    expect((await harness.service.getCandidateDetail("candidate-gov")).revision).toBe(applied.revision);
   });
 
   it("conflicts terminally when the candidate version set drifts from the reviewed material", async () => {
     const harness = await createHarness();
     await seedCandidate(harness);
-    const detail = harness.service.getCandidateDetail("candidate-gov");
-    const request = harness.service.promoteCandidate("candidate-gov", detail.revision, "version-b");
+    const detail = await harness.service.getCandidateDetail("candidate-gov");
+    const request = await harness.service.promoteCandidate("candidate-gov", detail.revision, "version-b");
     if (!request.pendingApproval) throw new Error("expected pending approval");
     harness.storage.approvals.resolve(request.pendingApproval.approvalId, {
       decision: "approve",
       resolvedBy: "operator-resolver",
     });
     // Drift the reviewed version set through the branded fail-safe revoke.
-    harness.service.systemRevokeCandidate("candidate-gov", "integrity_quarantine");
-    expect(() =>
+    await harness.service.systemRevokeCandidate("candidate-gov", "integrity_quarantine");
+    await expect(
       harness.service.executeApprovedCapabilityLifecycleMutation({ approvalId: request.pendingApproval!.approvalId }),
-    ).toThrow(/drifted from the exact reviewed material/);
+    ).rejects.toThrow(/drifted from the exact reviewed material/);
   });
 
   it("commits review-only proposals with source and Journey in one transaction and keeps them non-callable", async () => {
     const harness = await createHarness();
-    const proposal = harness.service.createProposal(
+    const proposal = await harness.service.createProposal(
       {
         proposalKind: "skill",
         title: "Review-only proposal",
@@ -5186,9 +5192,9 @@ describe("CapabilitySystemService governed lifecycle (HX-402 P2)", () => {
     expect(Number(governed!.approvalRequired)).toBe(0);
     // Non-callable pin: proposals never reach the callable catalog.
     expect(
-      harness.service
-        .listCatalog("callable")
-        .some((entry) => entry.skillId === proposal.proposalId || entry.toolName === proposal.proposalId),
+      (await harness.service.listCatalog("callable")).some(
+        (entry) => entry.skillId === proposal.proposalId || entry.toolName === proposal.proposalId,
+      ),
     ).toBe(false);
     const journeyRow = harness.storage.gatewaySql
       .prepare(
@@ -5207,12 +5213,12 @@ describe("CapabilitySystemService governed lifecycle (HX-402 P2)", () => {
     const spy = vi.spyOn(harness.storage.capabilityProposalEvents, "append").mockImplementationOnce(() => {
       throw new Error("simulated proposal-source outage");
     });
-    expect(() =>
+    await expect(
       harness.service.createProposal(
         { proposalKind: "skill", title: "Atomic proposal", summary: "Must roll back", payload: {} },
         "operator-one",
       ),
-    ).toThrow(/simulated proposal-source outage/);
+    ).rejects.toThrow(/simulated proposal-source outage/);
     spy.mockRestore();
     expect(harness.storage.capabilityProposals.list(10).length).toBe(before);
     expect(countGoverned(harness)).toBe(0);
@@ -5221,9 +5227,9 @@ describe("CapabilitySystemService governed lifecycle (HX-402 P2)", () => {
   it("fail-safe system revoke writes canonical state, governed system event, and Journey without approval", async () => {
     const harness = await createHarness();
     await seedCandidate(harness);
-    const revoked = harness.service.systemRevokeCandidate("candidate-gov", "integrity_quarantine");
+    const revoked = await harness.service.systemRevokeCandidate("candidate-gov", "integrity_quarantine");
     expect(revoked.changedVersionIds).toEqual(["version-a", "version-b"]);
-    expect(harness.service.getCandidateDetail("candidate-gov").activationBlocked).toBe(true);
+    expect((await harness.service.getCandidateDetail("candidate-gov")).activationBlocked).toBe(true);
     const governed = harness.storage.gatewaySql
       .prepare(
         `SELECT operation, actor_type AS actorType, approval_id AS approvalId FROM governed_lifecycle_events WHERE domain = 'capability_state'`,
@@ -5233,7 +5239,7 @@ describe("CapabilitySystemService governed lifecycle (HX-402 P2)", () => {
       expect.objectContaining({ operation: "system_revoked", actorType: "system", approvalId: null }),
     ]);
     // Idempotent repeat is a no-op with no second governed claim.
-    const repeat = harness.service.systemRevokeCandidate("candidate-gov", "integrity_quarantine");
+    const repeat = await harness.service.systemRevokeCandidate("candidate-gov", "integrity_quarantine");
     expect(repeat.changedVersionIds).toEqual([]);
     expect(countGoverned(harness)).toBe(1);
   });
@@ -5268,7 +5274,7 @@ async function createHarness(input?: {
   tempRoots.push(rootDir);
   const approvals = new Map<string, ApprovalRequest>();
   const storage = createFakeStorage(approvals);
-  const publishRealtime = vi.fn();
+  const publishRealtime = vi.fn(async () => undefined);
   const invokeTool = vi.fn(
     input?.invokeTool ??
       (async (): Promise<ToolInvokeResult> => ({
@@ -5340,21 +5346,23 @@ async function createHarness(input?: {
       },
     },
     storage: storage as never,
-    readFeatureFlags: () => ({
+    readFeatureFlags: async () => ({
       codeModeV1Enabled: true,
     }),
     listToolCatalog: () => input?.toolCatalog ?? [createTool("tool.safe_read")],
     ...(input?.meshCatalogEntries === undefined
       ? {}
-      : { listMeshCapabilityCatalogEntries: () => input.meshCatalogEntries as CapabilityCatalogEntry[] }),
+      : { listMeshCapabilityCatalogEntries: async () => input.meshCatalogEntries as CapabilityCatalogEntry[] }),
     listLoadedSkills: () => input?.loadedSkills ?? [],
-    readSkillStates: () => new Map(),
+    readSkillStates: async () => new Map(),
     invokeTool,
     createApproval,
     resolveApproval,
     publishRealtime,
-    readPolicySnapshot: () => ({ mode: "test" }),
-    resolvePolicyContext: input?.resolvePolicyContext,
+    readPolicySnapshot: async () => ({ mode: "test" }),
+    resolvePolicyContext: input?.resolvePolicyContext
+      ? async (request) => await input.resolvePolicyContext!(request)
+      : undefined,
     resolveSandboxMetadata: input?.resolveSandboxMetadata,
     spawnCodeModeChild: input?.spawnCodeModeChild,
   });
@@ -5441,7 +5449,8 @@ function createFakeStorage(approvalsById = new Map<string, ApprovalRequest>()) {
   // proposal evidence run against the trigger-protected schema, while
   // unrelated collaborators stay lightweight fakes.
   const realStorage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
-  storageCleanups.push(() => realStorage.close());
+  const asyncRealStorage = createSqliteAsyncStorage(realStorage);
+  storageCleanups.push(async () => await asyncRealStorage.close());
   const snapshots = new Map<string, CapabilityCatalogSnapshotRecord>();
   const codeModeRuns = new Map<string, CodeModeRunRecord>();
   const runtimeDecisionRecords: RuntimeDecisionTraceRecord[] = [];
@@ -5542,6 +5551,55 @@ function createFakeStorage(approvalsById = new Map<string, ApprovalRequest>()) {
         skillAggregateRevisions.set(key, revision);
         return { aggregateKind, aggregateId, revision, createdAt: now, updatedAt: now };
       },
+      createInitialRevisionFence(aggregateKind: string, aggregateId: string, now = "2026-04-10T00:00:00.000Z") {
+        const key = `${aggregateKind}\u0000${aggregateId}`;
+        const currentRevision = skillAggregateRevisions.get(key);
+        if (currentRevision !== undefined) {
+          throw new ConflictError({
+            code: "WRITE_CONFLICT",
+            message: `${aggregateKind} ${aggregateId} already exists at revision ${currentRevision}`,
+          });
+        }
+        skillAggregateRevisions.set(key, 1);
+        return { aggregateKind, aggregateId, revision: 1, createdAt: now, updatedAt: now };
+      },
+      fenceExpectedRevision(
+        aggregateKind: string,
+        aggregateId: string,
+        expectedRevision: number,
+        now = "2026-04-10T00:00:00.000Z",
+      ) {
+        const key = `${aggregateKind}\u0000${aggregateId}`;
+        const currentRevision = skillAggregateRevisions.get(key) ?? 1;
+        skillAggregateRevisions.set(key, currentRevision);
+        if (currentRevision !== expectedRevision) {
+          throw new ConflictError({
+            code: "WRITE_CONFLICT",
+            message: `${aggregateKind} ${aggregateId} changed since revision ${expectedRevision}`,
+            details: { expectedRevision, currentRevision },
+          });
+        }
+        return { aggregateKind, aggregateId, revision: currentRevision, createdAt: now, updatedAt: now };
+      },
+      advanceExpectedRevision(
+        aggregateKind: string,
+        aggregateId: string,
+        expectedRevision: number,
+        now = "2026-04-10T00:00:00.000Z",
+      ) {
+        const key = `${aggregateKind}\u0000${aggregateId}`;
+        const currentRevision = skillAggregateRevisions.get(key);
+        if (currentRevision !== expectedRevision) {
+          throw new ConflictError({
+            code: "WRITE_CONFLICT",
+            message: `${aggregateKind} ${aggregateId} changed since revision ${expectedRevision}`,
+            details: { expectedRevision, currentRevision },
+          });
+        }
+        const revision = expectedRevision + 1;
+        skillAggregateRevisions.set(key, revision);
+        return { aggregateKind, aggregateId, revision, createdAt: now, updatedAt: now };
+      },
       runWithRevision<T>(
         aggregateKind: string,
         aggregateId: string,
@@ -5636,8 +5694,22 @@ function createFakeStorage(approvalsById = new Map<string, ApprovalRequest>()) {
     // down this literal rather than realStorage.approvalEvents — see the comment
     // on that stub before wiring it to real storage.
     governanceJourneyEvents: realStorage.governanceJourneyEvents,
+    governedLifecycleEvents: asyncRealStorage.governedLifecycleEvents,
+    db: asyncRealStorage.db,
     gatewaySql: realStorage.gatewaySql,
-    runImmediateTransaction: <T>(callback: () => T): T => realStorage.runImmediateTransaction(callback),
+    runImmediateTransaction: async <T>(callback: () => T | Promise<T>): Promise<Awaited<T>> => {
+      const candidateSnapshot = new Map(candidateVersions);
+      const revisionSnapshot = new Map(skillAggregateRevisions);
+      try {
+        return await asyncRealStorage.runImmediateTransaction(callback);
+      } catch (error) {
+        candidateVersions.clear();
+        for (const [key, value] of candidateSnapshot) candidateVersions.set(key, value);
+        skillAggregateRevisions.clear();
+        for (const [key, value] of revisionSnapshot) skillAggregateRevisions.set(key, value);
+        throw error;
+      }
+    },
     codeModeRuns: {
       upsert(record: CodeModeRunRecord) {
         codeModeRuns.set(record.runId, record);

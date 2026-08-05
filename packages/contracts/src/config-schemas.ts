@@ -600,6 +600,7 @@ export const AssistantConfigInputSchema = z
         postgres: z
           .object({
             mode: z.enum(["bundled", "managed"]).optional(),
+            asyncGatewayEnabled: z.boolean().optional(),
             connectionString: z.string().optional(),
             connectionStringEnv: z.string().optional(),
             host: z.string().optional(),
@@ -630,6 +631,7 @@ export const AssistantConfigInputSchema = z
             binDir: z.string().optional(),
             autoStart: z.boolean().optional(),
             startTimeoutMs: z.number().optional(),
+            stopTimeoutMs: z.number().optional(),
           })
           .passthrough()
           .optional(),

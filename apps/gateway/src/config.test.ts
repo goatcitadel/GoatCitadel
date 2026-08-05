@@ -257,4 +257,30 @@ describe("loadGatewayConfig", () => {
       expect(config.assistant.database.bundledPostgres.binDir).toBe("/opt/postgres/bin");
     });
   });
+
+  describe("GOATCITADEL_POSTGRES_ASYNC_GATEWAY_ENABLED override", () => {
+    const ENV_KEY = "GOATCITADEL_POSTGRES_ASYNC_GATEWAY_ENABLED";
+    let previous: string | undefined;
+
+    afterEach(() => {
+      if (previous === undefined) {
+        delete process.env[ENV_KEY];
+      } else {
+        process.env[ENV_KEY] = previous;
+      }
+    });
+
+    it("defaults the async Gateway path on and accepts an explicit rollback override", async () => {
+      const first = await createConfigFixture();
+      previous = process.env[ENV_KEY];
+      delete process.env[ENV_KEY];
+      expect((await loadGatewayConfig(first.rootDir)).assistant.database.postgres.asyncGatewayEnabled ?? false).toBe(
+        true,
+      );
+
+      const second = await createConfigFixture();
+      process.env[ENV_KEY] = "false";
+      expect((await loadGatewayConfig(second.rootDir)).assistant.database.postgres.asyncGatewayEnabled).toBe(false);
+    });
+  });
 });

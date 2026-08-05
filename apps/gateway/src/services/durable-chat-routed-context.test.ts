@@ -35,8 +35,8 @@ beforeEach(() => {
 });
 
 describe("durable Chat routed-context binding", () => {
-  it("atomically rebinds the snapshot to the stable run profile and persists only id/hash references", () => {
-    const fixture = admitRoutedTurn();
+  it("atomically rebinds the snapshot to the stable run profile and persists only id/hash references", async () => {
+    const fixture = await admitRoutedTurn();
     const payloadText = JSON.stringify(fixture.run.payload);
     const traceText = JSON.stringify(fixture.trace);
 
@@ -90,28 +90,28 @@ describe("durable Chat routed-context binding", () => {
     ]);
   });
 
-  it("rejects live refs without a frozen snapshot and refuses snapshot reuse for a different turn", () => {
+  it("rejects live refs without a frozen snapshot and refuses snapshot reuse for a different turn", async () => {
     const missing = buildPrepared();
     delete (missing as PreparedAgentChatTurn & { routedContextSnapshot?: unknown }).routedContextSnapshot;
     const createDurableRun = vi.fn();
-    expect(() =>
+    await expect(
       beginDurableChatRun(minimalBeginDeps(createDurableRun), missing, routedRequest(), "chat_thread_turn_appended", {
         runId: "run-missing",
       }),
-    ).toThrow(/cannot persist live routed-context references/u);
+    ).rejects.toThrow(/cannot persist live routed-context references/u);
     expect(createDurableRun).not.toHaveBeenCalled();
 
     const reused = buildPrepared();
     reused.turnId = "turn-retry-new";
-    expect(() =>
+    await expect(
       beginDurableChatRun(minimalBeginDeps(createDurableRun), reused, routedRequest(), "chat_thread_turn_retried", {
         runId: "run-retry-new",
       }),
-    ).toThrow(/mismatched routed-context snapshot/u);
+    ).rejects.toThrow(/mismatched routed-context snapshot/u);
     expect(createDurableRun).not.toHaveBeenCalled();
   });
 
-  it("keeps the exact historical payload object for turns without routed context", () => {
+  it("keeps the exact historical payload object for turns without routed context", async () => {
     const prepared = buildPrepared();
     delete (prepared as PreparedAgentChatTurn & { routedContextSnapshot?: unknown }).routedContextSnapshot;
     delete prepared.capabilityProfile;
@@ -127,7 +127,7 @@ describe("durable Chat routed-context binding", () => {
       request: { content: "No routed context." },
     };
     let persistedPayload: Record<string, unknown> | undefined;
-    beginDurableChatRun(
+    await beginDurableChatRun(
       {
         shouldUseDurableExecution: true,
         createDurableRun: (input) => {
@@ -146,9 +146,9 @@ describe("durable Chat routed-context binding", () => {
     expect(persistedPayload).toBe(historicalPayload);
   });
 
-  it("fails closed instead of running routed context through the non-durable compatibility path", () => {
+  it("fails closed instead of running routed context through the non-durable compatibility path", async () => {
     const prepared = buildPrepared();
-    expect(() =>
+    await expect(
       beginDurableChatRun(
         {
           shouldUseDurableExecution: false,
@@ -161,11 +161,11 @@ describe("durable Chat routed-context binding", () => {
         routedRequest(),
         "chat_thread_turn_appended",
       ),
-    ).toThrow(/cannot execute routed context without durable admission/u);
+    ).rejects.toThrow(/cannot execute routed context without durable admission/u);
   });
 
   it("loads the same frozen snapshot on continuation and injects its exact system block once", async () => {
-    const fixture = admitRoutedTurn();
+    const fixture = await admitRoutedTurn();
     const run = { ...fixture.run, status: "running" as const, attemptCount: 1, leaseOwnerId: "worker-1" };
     const preparedTurns: PreparedAgentChatTurn[] = [];
     const prepareAgentChatTurn = vi.fn(async (_sessionId: string, request: ChatSendMessageRequest) => {
@@ -213,7 +213,7 @@ describe("durable Chat routed-context binding", () => {
   it.each(["missing", "corrupt", "hash-mismatch", "trace-mismatch"] as const)(
     "fails a %s frozen snapshot before prep or provider dispatch",
     async (failure) => {
-      const fixture = admitRoutedTurn();
+      const fixture = await admitRoutedTurn();
       const run =
         failure === "hash-mismatch"
           ? {
@@ -253,8 +253,8 @@ describe("durable Chat routed-context binding", () => {
     },
   );
 
-  it("rejects raw refs and incomplete snapshot references in parsed durable payloads", () => {
-    const fixture = admitRoutedTurn();
+  it("rejects raw refs and incomplete snapshot references in parsed durable payloads", async () => {
+    const fixture = await admitRoutedTurn();
     const base = fixture.run.payload;
     expect(
       parseDurableChatTurnPayload({
@@ -283,7 +283,7 @@ describe("durable Chat routed-context binding", () => {
   });
 });
 
-function admitRoutedTurn() {
+async function admitRoutedTurn() {
   const prepared = buildPrepared();
   // HX-411: a capability-profile-bearing prepared turn now carries an immutable
   // turn-write admission; beginDurableChatRun binds the profile to it.
@@ -315,9 +315,9 @@ function admitRoutedTurn() {
   let trace!: ChatTurnTraceRecord;
   const deps: ChatDurableRunBeginDeps = {
     shouldUseDurableExecution: true,
-    runImmediateTransaction: (callback) => {
+    runImmediateTransaction: async (callback) => {
       events.push("tx:start");
-      const value = callback();
+      const value = await callback();
       events.push("tx:commit");
       return value;
     },
@@ -396,9 +396,9 @@ function admitRoutedTurn() {
     persistChatStreamChunk: () => events.push("stream"),
     requestDurableRunProcessing: () => events.push("process"),
   };
-  const run = beginDurableChatRun(deps, prepared, routedRequest(), "chat_thread_turn_appended", {
+  const run = (await beginDurableChatRun(deps, prepared, routedRequest(), "chat_thread_turn_appended", {
     runId: "run-routed-1",
-  })!;
+  }))!;
   return {
     run,
     trace,
@@ -645,7 +645,7 @@ function routedRequest(): ChatSendMessageRequest {
 function minimalBeginDeps(createDurableRun: ReturnType<typeof vi.fn>): ChatDurableRunBeginDeps {
   return {
     shouldUseDurableExecution: true,
-    runImmediateTransaction: (callback) => callback(),
+    runImmediateTransaction: async (callback) => await callback(),
     createDurableRun,
     buildDurablePayloadRecord: () => ({}),
     persistChatStreamChunk: vi.fn(),

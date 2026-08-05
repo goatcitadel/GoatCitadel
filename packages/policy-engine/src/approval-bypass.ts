@@ -1,37 +1,37 @@
 import type { ToolAccessEvaluateRequest, ToolInvokeRequest } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage } from "@goatcitadel/storage";
 import { resolveToolTrustLevel } from "./tool-security.js";
 
 const DEFAULT_APPROVAL_TTL_MS = 15 * 60_000;
 const APPROVAL_REASON_RE = /^approval:([A-Za-z0-9_-]+)$/;
 
-export function hasVerifiedApprovalBypass(
+export async function hasVerifiedApprovalBypass(
   request: ToolAccessEvaluateRequest | ToolInvokeRequest,
-  storage: Storage,
-): boolean {
-  return getVerifiedApprovalBypassId(request, storage) !== undefined;
+  storage: AsyncStorage,
+): Promise<boolean> {
+  return (await getVerifiedApprovalBypassId(request, storage)) !== undefined;
 }
 
-export function getVerifiedApprovalBypassId(
+export async function getVerifiedApprovalBypassId(
   request: ToolAccessEvaluateRequest | ToolInvokeRequest,
-  storage: Storage,
-): string | undefined {
+  storage: AsyncStorage,
+): Promise<string | undefined> {
   const approvalId = extractApprovalId(request);
   if (!approvalId) {
     return undefined;
   }
-  const pendingActions = storage.pendingApprovalActions as Storage["pendingApprovalActions"] & {
-    findFreshPending?: Storage["pendingApprovalActions"]["findFreshPending"];
+  const pendingActions = storage.pendingApprovalActions as AsyncStorage["pendingApprovalActions"] & {
+    findFreshPending?: AsyncStorage["pendingApprovalActions"]["findFreshPending"];
   };
   if (typeof pendingActions.findFreshPending !== "function") {
     return undefined;
   }
-  const pending = pendingActions.findFreshPending(approvalId, DEFAULT_APPROVAL_TTL_MS);
+  const pending = await pendingActions.findFreshPending(approvalId, DEFAULT_APPROVAL_TTL_MS);
   if (!pending || pending.actionType !== "tool.invoke" || pending.resolutionStatus !== "pending") {
     return undefined;
   }
   try {
-    const approval = storage.approvals.get(approvalId);
+    const approval = await storage.approvals.get(approvalId);
     if (approval.status !== "approved") {
       return undefined;
     }

@@ -51,7 +51,16 @@ export class TuiLiveFeed {
     }
     this.running = true;
     this.abortController = new AbortController();
-    void this.runLoop(this.abortController.signal);
+    const signal = this.abortController.signal;
+    void this.runLoop(signal).catch((error: unknown) => {
+      if (signal.aborted) {
+        return;
+      }
+      this.lastErrorMessage = describeLiveFeedError(error);
+      this.running = false;
+      this.abortController = null;
+      this.setState("offline");
+    });
   }
 
   public stop(): void {
@@ -124,7 +133,9 @@ export class TuiLiveFeed {
       reader.releaseLock();
     }
     if (buffer.trim()) {
-      throw new Error(`Realtime event stream ended before a complete SSE event was received: ${previewSseText(buffer)}`);
+      throw new Error(
+        `Realtime event stream ended before a complete SSE event was received: ${previewSseText(buffer)}`,
+      );
     }
   }
 
@@ -179,9 +190,7 @@ export class TuiLiveFeed {
   }
 
   private isDuplicateEvent(event: RealtimeEvent): boolean {
-    const key = event.eventId
-      ? `id:${event.eventId}`
-      : `${event.timestamp}:${event.eventType}:${event.source}`;
+    const key = event.eventId ? `id:${event.eventId}` : `${event.timestamp}:${event.eventType}:${event.source}`;
     if (this.seenEventKeys.has(key)) {
       return true;
     }

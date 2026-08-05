@@ -1,5 +1,5 @@
 import type { McpServerRecord, McpToolRecord } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { McpAuthStateRecord } from "./mcp-server-admin-service.js";
 import { MCP_APPROVAL_INBOX_URL, createInternalMcpApprovalInboxTools } from "./mcp-approval-inbox.js";
 import { MCP_DURABLE_TASKS_URL, createInternalMcpDurableTasksTools } from "./mcp-durable-tasks.js";
@@ -33,9 +33,12 @@ export interface McpServerStoreCtx {
 export class McpServerStore {
   constructor(private readonly ctx: McpServerStoreCtx) {}
 
-  readServers(): McpServerRecord[] {
-    const stored = this.ctx.systemSettings.get<McpServerRecord[]>(MCP_SERVERS_SETTING_KEY)?.value;
-    const authRows = this.readAuthState();
+  async readServers(): Promise<McpServerRecord[]> {
+    const [setting, authRows] = await Promise.all([
+      this.ctx.systemSettings.get<McpServerRecord[]>(MCP_SERVERS_SETTING_KEY),
+      this.readAuthState(),
+    ]);
+    const stored = setting?.value;
     const persisted = Array.isArray(stored) ? stored : [];
     const callerOwned = persisted
       .filter((item): item is McpServerRecord => Boolean(item?.serverId))
@@ -51,8 +54,8 @@ export class McpServerStore {
     return [...buildGatewayOwnedInternalMcpServers(authRows), ...callerOwned];
   }
 
-  writeServers(servers: McpServerRecord[]): void {
-    this.ctx.systemSettings.set(
+  async writeServers(servers: McpServerRecord[]): Promise<void> {
+    await this.ctx.systemSettings.set(
       MCP_SERVERS_SETTING_KEY,
       servers
         .filter(
@@ -66,24 +69,24 @@ export class McpServerStore {
     );
   }
 
-  requireServer(serverId: string): McpServerRecord {
-    const server = this.readServers().find((item) => item.serverId === serverId);
+  async requireServer(serverId: string): Promise<McpServerRecord> {
+    const server = (await this.readServers()).find((item) => item.serverId === serverId);
     if (!server) {
       throw new Error(`Unknown MCP server: ${serverId}`);
     }
     return server;
   }
 
-  patchServerState(
+  async patchServerState(
     serverId: string,
     patch: Partial<Pick<McpServerRecord, "status" | "lastConnectedAt" | "lastError">>,
-  ): McpServerRecord {
+  ): Promise<McpServerRecord> {
     const now = new Date().toISOString();
     const hasStatus = Object.prototype.hasOwnProperty.call(patch, "status");
     const hasLastConnectedAt = Object.prototype.hasOwnProperty.call(patch, "lastConnectedAt");
     const hasLastError = Object.prototype.hasOwnProperty.call(patch, "lastError");
     let updated: McpServerRecord | undefined;
-    const servers = this.readServers().map((item) => {
+    const servers = (await this.readServers()).map((item) => {
       if (item.serverId !== serverId) {
         return item;
       }
@@ -99,12 +102,12 @@ export class McpServerStore {
     if (!updated) {
       throw new Error(`Unknown MCP server: ${serverId}`);
     }
-    this.writeServers(servers);
+    await this.writeServers(servers);
     return updated;
   }
 
-  readTools(): McpToolRecord[] {
-    const stored = this.ctx.systemSettings.get<McpToolRecord[]>(MCP_TOOLS_SETTING_KEY)?.value;
+  async readTools(): Promise<McpToolRecord[]> {
+    const stored = (await this.ctx.systemSettings.get<McpToolRecord[]>(MCP_TOOLS_SETTING_KEY))?.value;
     const persisted = Array.isArray(stored) ? stored : [];
     const callerOwned = persisted.filter(
       (item): item is McpToolRecord =>
@@ -113,27 +116,29 @@ export class McpServerStore {
     return [...buildGatewayOwnedInternalMcpTools(), ...callerOwned];
   }
 
-  writeTools(tools: McpToolRecord[]): void {
-    this.ctx.systemSettings.set(
+  async writeTools(tools: McpToolRecord[]): Promise<void> {
+    await this.ctx.systemSettings.set(
       MCP_TOOLS_SETTING_KEY,
       tools.filter((tool) => !GATEWAY_OWNED_MCP_SERVER_IDS.has(tool.serverId)),
     );
   }
 
-  readAuthState(): Record<string, McpAuthStateRecord> {
-    return this.ctx.systemSettings.get<Record<string, McpAuthStateRecord>>("mcp_auth_state_v1")?.value ?? {};
+  async readAuthState(): Promise<Record<string, McpAuthStateRecord>> {
+    return (await this.ctx.systemSettings.get<Record<string, McpAuthStateRecord>>("mcp_auth_state_v1"))?.value ?? {};
   }
 
-  writeAuthState(state: Record<string, McpAuthStateRecord>): void {
-    this.ctx.systemSettings.set("mcp_auth_state_v1", state);
+  async writeAuthState(state: Record<string, McpAuthStateRecord>): Promise<void> {
+    await this.ctx.systemSettings.set("mcp_auth_state_v1", state);
   }
 
-  readFirstApprovals(): Record<string, string[]> {
-    return this.ctx.systemSettings.get<Record<string, string[]>>(MCP_TOOL_FIRST_APPROVAL_SETTING_KEY)?.value ?? {};
+  async readFirstApprovals(): Promise<Record<string, string[]>> {
+    return (
+      (await this.ctx.systemSettings.get<Record<string, string[]>>(MCP_TOOL_FIRST_APPROVAL_SETTING_KEY))?.value ?? {}
+    );
   }
 
-  isToolApproved(serverId: string, toolName: string): boolean {
-    const approved = this.readFirstApprovals();
+  async isToolApproved(serverId: string, toolName: string): Promise<boolean> {
+    const approved = await this.readFirstApprovals();
     return approved[serverId]?.includes(toolName) ?? false;
   }
 }

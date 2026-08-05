@@ -47,10 +47,10 @@ interface HarnessOverrides {
   duplicateThreshold?: number;
 }
 
-function runSweep(skills: SkillListItem[], overrides: HarnessOverrides = {}) {
+async function runSweep(skills: SkillListItem[], overrides: HarnessOverrides = {}) {
   const snapshots: string[] = [];
   const archived: Array<{ skillId: string; reason: string }> = [];
-  const result = planCuratorIdleSweep({
+  const result = await planCuratorIdleSweep({
     listSkills: () => skills,
     now: () => NOW,
     runId: "curator-idle-test",
@@ -107,7 +107,7 @@ describe("nameTitleSimilarity", () => {
 });
 
 describe("planCuratorIdleSweep — scope", () => {
-  it("only considers self_generated skills (ignores built-in/optional)", () => {
+  it("only considers self_generated skills (ignores built-in/optional)", async () => {
     const skills = [
       makeSkill({ name: "stale-self", usageCount: 0, lastUsedAt: undefined }),
       makeSkill({
@@ -125,50 +125,48 @@ describe("planCuratorIdleSweep — scope", () => {
         capabilityCategory: "optional",
       }),
     ];
-    const { result, archived } = runSweep(skills);
+    const { result, archived } = await runSweep(skills);
     expect(result.scannedSelfGenerated).toBe(1);
     expect(archived.map((a) => a.skillId)).toEqual(["skill-stale-self"]);
   });
 });
 
 describe("planCuratorIdleSweep — immunity", () => {
-  it("never archives pinned self-generated skills", () => {
+  it("never archives pinned self-generated skills", async () => {
     const skills = [makeSkill({ name: "pinned-self", usageCount: 0, lastUsedAt: undefined, pinned: true })];
-    const { result, archived, snapshots } = runSweep(skills);
+    const { result, archived, snapshots } = await runSweep(skills);
     expect(result.immuneCount).toBe(1);
     expect(archived).toEqual([]);
     expect(snapshots).toEqual([]);
     expect(result.archives).toEqual([]);
   });
 
-  it("never archives bundled-source skills even if tagged self_generated", () => {
-    const skills = [
-      makeSkill({ name: "bundled-self", usageCount: 0, lastUsedAt: undefined, source: "bundled" }),
-    ];
-    const { result, archived } = runSweep(skills);
+  it("never archives bundled-source skills even if tagged self_generated", async () => {
+    const skills = [makeSkill({ name: "bundled-self", usageCount: 0, lastUsedAt: undefined, source: "bundled" })];
+    const { result, archived } = await runSweep(skills);
     expect(result.immuneCount).toBe(1);
     expect(archived).toEqual([]);
   });
 });
 
 describe("planCuratorIdleSweep — stale archive (reuses curator rubric)", () => {
-  it("archives an unused (never-used) self-generated skill under autonomy, snapshotting first", () => {
+  it("archives an unused (never-used) self-generated skill under autonomy, snapshotting first", async () => {
     const skills = [makeSkill({ name: "ghost", usageCount: 0, lastUsedAt: undefined })];
-    const { result, archived, snapshots } = runSweep(skills, { autoApply: true });
+    const { result, archived, snapshots } = await runSweep(skills, { autoApply: true });
     expect(snapshots).toEqual(["skill-ghost"]);
     expect(archived).toEqual([{ skillId: "skill-ghost", reason: "curator:archived idle_self_generated_stale" }]);
     expect(result.archives).toHaveLength(1);
     expect(result.archives[0]).toMatchObject({ skillId: "skill-ghost", applied: true });
   });
 
-  it("keeps a healthy, recently-used self-generated skill", () => {
+  it("keeps a healthy, recently-used self-generated skill", async () => {
     const skills = [makeSkill({ name: "active", usageCount: 80, lastUsedAt: "2026-06-14T00:00:00Z" })];
-    const { result, archived } = runSweep(skills);
+    const { result, archived } = await runSweep(skills);
     expect(archived).toEqual([]);
     expect(result.archives).toEqual([]);
   });
 
-  it("does not re-archive an already curator-archived skill", () => {
+  it("does not re-archive an already curator-archived skill", async () => {
     const skills = [
       makeSkill({
         name: "ghost",
@@ -178,15 +176,15 @@ describe("planCuratorIdleSweep — stale archive (reuses curator rubric)", () =>
         note: "curator:archived idle_self_generated_stale",
       }),
     ];
-    const { archived } = runSweep(skills);
+    const { archived } = await runSweep(skills);
     expect(archived).toEqual([]);
   });
 });
 
 describe("planCuratorIdleSweep — autonomy gating", () => {
-  it("flag-off (autoApply=false) ⇒ proposals only, no snapshot/archive callbacks fire", () => {
+  it("flag-off (autoApply=false) ⇒ proposals only, no snapshot/archive callbacks fire", async () => {
     const skills = [makeSkill({ name: "ghost", usageCount: 0, lastUsedAt: undefined })];
-    const { result, archived, snapshots } = runSweep(skills, { autoApply: false });
+    const { result, archived, snapshots } = await runSweep(skills, { autoApply: false });
     expect(snapshots).toEqual([]);
     expect(archived).toEqual([]);
     expect(result.autoApplied).toBe(false);
@@ -196,41 +194,48 @@ describe("planCuratorIdleSweep — autonomy gating", () => {
 });
 
 describe("planCuratorIdleSweep — near-duplicate detection", () => {
-  it("proposes a merge for near-duplicate self-generated skills (never hard-deletes)", () => {
+  it("proposes a merge for near-duplicate self-generated skills (never hard-deletes)", async () => {
     const skills = [
-      makeSkill({ skillId: "s-keep", name: "weekly status report", usageCount: 40, lastUsedAt: "2026-06-14T00:00:00Z" }),
+      makeSkill({
+        skillId: "s-keep",
+        name: "weekly status report",
+        usageCount: 40,
+        lastUsedAt: "2026-06-14T00:00:00Z",
+      }),
       makeSkill({ skillId: "s-dup", name: "weekly status report", usageCount: 3, lastUsedAt: "2026-06-10T00:00:00Z" }),
     ];
-    const { result, archived } = runSweep(skills, { autoApply: true });
+    const { result, archived } = await runSweep(skills, { autoApply: true });
     expect(result.merges).toHaveLength(1);
     // Higher-usage survives; lower-usage duplicate is the one archived (disabled).
     expect(result.merges[0]).toMatchObject({ keepSkillId: "s-keep", archiveSkillId: "s-dup", applied: true });
-    expect(archived).toEqual([{ skillId: "s-dup", reason: "curator:archived idle_self_generated_duplicate of s-keep" }]);
+    expect(archived).toEqual([
+      { skillId: "s-dup", reason: "curator:archived idle_self_generated_duplicate of s-keep" },
+    ]);
   });
 
-  it("flag-off ⇒ merge proposed but not applied", () => {
+  it("flag-off ⇒ merge proposed but not applied", async () => {
     const skills = [
       makeSkill({ skillId: "s-keep", name: "deploy helper", usageCount: 40, lastUsedAt: "2026-06-14T00:00:00Z" }),
       makeSkill({ skillId: "s-dup", name: "deploy helper", usageCount: 30, lastUsedAt: "2026-06-14T00:00:00Z" }),
     ];
-    const { result, archived } = runSweep(skills, { autoApply: false, similarity: () => 0.9 });
+    const { result, archived } = await runSweep(skills, { autoApply: false, similarity: () => 0.9 });
     expect(result.merges).toHaveLength(1);
     expect(result.merges[0]?.applied).toBe(false);
     expect(archived).toEqual([]);
   });
 
-  it("does not double-archive: a stale duplicate is archived once (in pass 1)", () => {
+  it("does not double-archive: a stale duplicate is archived once (in pass 1)", async () => {
     const skills = [
       makeSkill({ skillId: "s-keep", name: "deploy helper", usageCount: 40, lastUsedAt: "2026-06-14T00:00:00Z" }),
       // identical name but unused/stale ⇒ archived as stale in pass 1, excluded from merges
       makeSkill({ skillId: "s-dup", name: "deploy helper", usageCount: 0, lastUsedAt: undefined }),
     ];
-    const { archived, result } = runSweep(skills);
+    const { archived, result } = await runSweep(skills);
     expect(archived).toEqual([{ skillId: "s-dup", reason: "curator:archived idle_self_generated_stale" }]);
     expect(result.merges).toEqual([]);
   });
 
-  it("does not propose a merge for a pinned duplicate (immune skills excluded)", () => {
+  it("does not propose a merge for a pinned duplicate (immune skills excluded)", async () => {
     const skills = [
       makeSkill({ skillId: "s-keep", name: "deploy helper", usageCount: 40, lastUsedAt: "2026-06-14T00:00:00Z" }),
       makeSkill({
@@ -241,27 +246,31 @@ describe("planCuratorIdleSweep — near-duplicate detection", () => {
         pinned: true,
       }),
     ];
-    const { result, archived } = runSweep(skills);
+    const { result, archived } = await runSweep(skills);
     expect(result.merges).toEqual([]);
     expect(archived).toEqual([]);
   });
 
-  it("respects an injected similarity override (e.g. pseudo-embedding cosine)", () => {
+  it("respects an injected similarity override (e.g. pseudo-embedding cosine)", async () => {
     const skills = [
       makeSkill({ skillId: "s-a", name: "alpha", usageCount: 40, lastUsedAt: "2026-06-14T00:00:00Z" }),
       makeSkill({ skillId: "s-b", name: "completely-different", usageCount: 30, lastUsedAt: "2026-06-14T00:00:00Z" }),
     ];
     // Name overlap is 0, but the injected similarity forces a duplicate.
-    const { result } = runSweep(skills, { autoApply: false, similarity: () => 0.95 });
+    const { result } = await runSweep(skills, { autoApply: false, similarity: () => 0.95 });
     expect(result.merges).toHaveLength(1);
     expect(result.merges[0]).toMatchObject({ keepSkillId: "s-a", archiveSkillId: "s-b" });
   });
 });
 
 describe("planCuratorIdleSweep — empty/degenerate", () => {
-  it("returns an empty result when there are no self-generated skills", () => {
-    const { result, archived, snapshots } = runSweep([
-      makeSkill({ name: "builtin", lifecycle: makeLifecycle({ category: "built_in" }), capabilityCategory: "built_in" }),
+  it("returns an empty result when there are no self-generated skills", async () => {
+    const { result, archived, snapshots } = await runSweep([
+      makeSkill({
+        name: "builtin",
+        lifecycle: makeLifecycle({ category: "built_in" }),
+        capabilityCategory: "built_in",
+      }),
     ]);
     expect(result.scannedSelfGenerated).toBe(0);
     expect(result.archives).toEqual([]);

@@ -12,7 +12,7 @@ import type {
   MobilePushRegistrationResponse,
   MobileRevocationRequest,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { createRouteService, type RoutePort, type RouteService } from "./route-service-factory.js";
 
 export const mobileRouteMethods = [
@@ -40,7 +40,7 @@ export interface MobileRouteActorContext {
 
 export interface MobileRoutePortDependencies {
   storage: Pick<Storage, "audit">;
-  publishRealtime: (eventType: string, source: string, payload: Record<string, unknown>) => void;
+  publishRealtime: (eventType: string, source: string, payload: Record<string, unknown>) => Promise<unknown>;
 }
 
 interface MobileAuditListInput {
@@ -135,7 +135,7 @@ export function createMobileRoutePort(deps: MobileRoutePortDependencies): Mobile
         capabilities,
         ...actor,
       });
-      deps.publishRealtime("mobile_capability_heartbeat", "mobile", {
+      await deps.publishRealtime("mobile_capability_heartbeat", "mobile", {
         observedAt,
         capabilityCount: capabilities.length,
         capabilityIds: capabilities.map((capability) => capability.capabilityId),
@@ -161,7 +161,7 @@ export function createMobileRoutePort(deps: MobileRoutePortDependencies): Mobile
           ...actor,
         });
       }
-      deps.publishRealtime("mobile_context_audit_recorded", "mobile", {
+      await deps.publishRealtime("mobile_context_audit_recorded", "mobile", {
         accepted: contextEventIds.length,
         contextEventIds,
         capabilityIds: acceptedContexts.map((context) => context.capabilityId),
@@ -188,7 +188,7 @@ export function createMobileRoutePort(deps: MobileRoutePortDependencies): Mobile
         appVersion: input.appVersion,
         ...actor,
       });
-      deps.publishRealtime("mobile_push_registration_updated", "mobile", {
+      await deps.publishRealtime("mobile_push_registration_updated", "mobile", {
         registrationId,
         enabled: input.enabled,
         provider: input.provider,
@@ -206,7 +206,7 @@ export function createMobileRoutePort(deps: MobileRoutePortDependencies): Mobile
         capabilityIds: input.capabilityIds ?? [],
         ...actor,
       });
-      deps.publishRealtime("mobile_capabilities_revoked", "mobile", {
+      await deps.publishRealtime("mobile_capabilities_revoked", "mobile", {
         revokedAt,
         reason: input.reason,
         capabilityIds: input.capabilityIds ?? [],

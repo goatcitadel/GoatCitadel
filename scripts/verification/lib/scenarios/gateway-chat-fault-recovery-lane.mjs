@@ -595,8 +595,11 @@ async function runRecordedStep(input) {
   let execution;
   try {
     execution = await input.execute({ correlationId: input.correlationId });
-    const diagnostics = await fetchStepDiagnostics(input.stack.gatewayUrl, input.correlationId, execution.sessionId);
-    const diagnostic = selectProviderFailureDiagnostic(diagnostics);
+    const requiresProviderFailureDiagnostic = typeof input.assertDiagnostics === "function";
+    const diagnostics = await fetchStepDiagnostics(input.stack.gatewayUrl, input.correlationId, execution.sessionId, {
+      requireProviderFailureDiagnostic: requiresProviderFailureDiagnostic,
+    });
+    const diagnostic = requiresProviderFailureDiagnostic ? selectProviderFailureDiagnostic(diagnostics) : undefined;
     input.assertDiagnostics?.({ diagnostic, diagnostics, execution });
     const dispatchCount = input.stub.dispatchPlanDispatches() - dispatchStart;
     if (dispatchCount !== input.expectedDispatches) {
@@ -942,16 +945,36 @@ function projectStreamChunk(chunk) {
   };
 }
 
-async function fetchStepDiagnostics(gatewayUrl, correlationId, sessionId) {
-  const correlated = await requestJson(
-    gatewayUrl,
-    `/api/v1/dev/verification/diagnostics-snapshot?correlationId=${encodeURIComponent(correlationId)}&limit=500`,
-  );
-  assertResponseOk(correlated, "fault-step diagnostics snapshot");
-  const items = Array.isArray(correlated.body?.items) ? correlated.body.items : [];
-  if (items.length > 0) return items;
-  const all = await fetchDiagnostics(gatewayUrl);
-  return all.filter((event) => event.sessionId === sessionId || event.context?.sessionId === sessionId);
+async function fetchStepDiagnostics(gatewayUrl, correlationId, sessionId, options = {}) {
+  const requireProviderFailureDiagnostic = options.requireProviderFailureDiagnostic === true;
+  const deadline = Date.now() + (requireProviderFailureDiagnostic ? 2_000 : 0);
+  let observed = [];
+
+  while (true) {
+    const correlated = await requestJson(
+      gatewayUrl,
+      `/api/v1/dev/verification/diagnostics-snapshot?correlationId=${encodeURIComponent(correlationId)}&limit=500`,
+    );
+    assertResponseOk(correlated, "fault-step diagnostics snapshot");
+    const correlatedItems = Array.isArray(correlated.body?.items) ? correlated.body.items : [];
+    if (!requireProviderFailureDiagnostic) return correlatedItems;
+
+    const all = await fetchDiagnostics(gatewayUrl);
+    const sessionItems = all.filter((event) => event.sessionId === sessionId || event.context?.sessionId === sessionId);
+    observed = mergeDiagnosticItems(correlatedItems, sessionItems);
+    if (selectProviderFailureDiagnostic(observed) || Date.now() >= deadline) return observed;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
+function mergeDiagnosticItems(primary, fallback) {
+  const seen = new Set();
+  return [...primary, ...fallback].filter((event) => {
+    const key = normalizeText(event?.id) ?? JSON.stringify(event);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 async function fetchDiagnostics(gatewayUrl) {
@@ -1076,11 +1099,23 @@ function projectGatewayDiagnostics(diagnostics, steps) {
         failureClass: normalizeText(event.context?.failureClass) ?? null,
         retryCooldownExhausted:
           typeof event.context?.retryCooldownExhausted === "boolean" ? event.context.retryCooldownExhausted : null,
+        operationKind: normalizeText(event.context?.operationKind) ?? null,
+        transactionPosture: normalizeText(event.context?.transactionPosture) ?? null,
+        sessionPosture: normalizeText(event.context?.sessionPosture) ?? null,
+        storageWaitOutcome: normalizeText(event.context?.outcome) ?? null,
+        storageWaitDurationMs:
+          readFiniteNumber(event.durationMs) ?? readFiniteNumber(event.context?.durationMs) ?? null,
+        storageWaitRollingCount: readFiniteNumber(event.context?.rollingCount) ?? null,
+        storageWaitRollingP95Ms: readFiniteNumber(event.context?.rollingP95Ms) ?? null,
+        storageWaitRollingMaxMs: readFiniteNumber(event.context?.rollingMaxMs) ?? null,
+        idleWatchdogDisabled:
+          typeof event.context?.idleWatchdogDisabled === "boolean" ? event.context.idleWatchdogDisabled : null,
+        idleTimeoutMs: readFiniteNumber(event.context?.idleTimeoutMs) ?? null,
       },
     }));
 }
 
-async function configureVerificationAssistant(runtimeRoot) {
+export async function configureVerificationAssistant(runtimeRoot) {
   const configDir = path.join(runtimeRoot, "config");
   const target = path.join(configDir, "assistant.config.json");
   const source = path.join(configDir, "assistant.config.example.json");
@@ -1093,6 +1128,25 @@ async function configureVerificationAssistant(runtimeRoot) {
   }
   config.streamIdleTimeoutMs = STREAM_IDLE_TIMEOUT_MS;
   await fs.writeFile(target, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+
+  // The unified config is authoritative when it is newer than the split
+  // mirror. Keep both representations aligned or startup config sync will
+  // legitimately overwrite the fixture's five-second watchdog with the
+  // production default before the proof begins.
+  const unifiedTarget = path.join(configDir, "goatcitadel.json");
+  const unifiedSource = path.join(configDir, "goatcitadel.example.json");
+  let unified;
+  try {
+    unified = JSON.parse(await fs.readFile(unifiedTarget, "utf8"));
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+    unified = JSON.parse(await fs.readFile(unifiedSource, "utf8"));
+  }
+  if (!unified.assistant || typeof unified.assistant !== "object" || Array.isArray(unified.assistant)) {
+    throw new Error("verification unified config is missing the assistant section");
+  }
+  unified.assistant.streamIdleTimeoutMs = STREAM_IDLE_TIMEOUT_MS;
+  await fs.writeFile(unifiedTarget, `${JSON.stringify(unified, null, 2)}\n`, "utf8");
 }
 
 async function ensureOnboardingComplete(gatewayUrl) {

@@ -6,7 +6,7 @@ declare module "fastify" {
     mutationCommitted: boolean;
     mutationIdempotencyOutcome?: "pending" | "committed" | "failed_before_commit" | null;
     /** Request-local bridge to the claimed persistent mutation row. Never serialize this callback. */
-    mutationIdempotencyCommit?: (() => void) | null;
+    mutationIdempotencyCommit?: (() => Promise<void>) | null;
     mutationIdempotencyState?: {
       method: string;
       routePath: string;

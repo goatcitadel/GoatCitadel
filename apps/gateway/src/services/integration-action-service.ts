@@ -36,10 +36,10 @@ import {
 export interface IntegrationActionHost {
   storage: {
     integrationConnections: {
-      get(connectionId: string): IntegrationConnection;
+      get(connectionId: string): Promise<IntegrationConnection | undefined>;
     };
     /** Canonical transaction owner required by durable external-side-effect replay. */
-    runImmediateTransaction?<T>(work: () => T): T;
+    runImmediateTransaction?<T>(work: () => T | Promise<T>): Promise<Awaited<T>>;
     /**
      * Optional Citadel Ward inputs (workspaces + citadels). Hosts that omit
      * them (narrow test hosts) skip ward evaluation entirely — identical to
@@ -51,7 +51,7 @@ export interface IntegrationActionHost {
   fetchWithDiagnosticsTimeout(url: string, init?: RequestInit): Promise<Response>;
   readConnectionConfigValue(config: Record<string, unknown>, key: string): string | undefined;
   resolveConnectionSecret(config: Record<string, unknown>, directKey: string, envKey: string): string | undefined;
-  publishRealtime(scope: string, channel: string, payload: Record<string, unknown>): void;
+  publishRealtime(scope: string, channel: string, payload: Record<string, unknown>): Promise<unknown>;
   evidenceEnvelopeService?: Pick<EvidenceEnvelopeService, "createEnvelope">;
   mutationStore?: MutationIdempotencyStore;
   sideEffectRunStore?: ExternalSideEffectRunStore;
@@ -75,7 +75,7 @@ export async function invokeIntegrationConnectionAction(
   request: IntegrationActionInvokeInput = {},
   options: IntegrationActionInvokeOptions = {},
 ): Promise<IntegrationActionInvokeResult> {
-  const connection = host.storage.integrationConnections.get(connectionId);
+  const connection = await host.storage.integrationConnections.get(connectionId);
   if (!connection) {
     throw new Error(`Unknown integration connection: ${connectionId}`);
   }
@@ -92,7 +92,7 @@ export async function invokeIntegrationConnectionAction(
   // blocked here — before any provider work, including reads. deny wins even
   // over an approved dry-run commit replay.
   const wardAction = buildIntegrationWardAction(connection.catalogId, actionId);
-  const wardResolution = resolveWardEffectForExternalAction({
+  const wardResolution = await resolveWardEffectForExternalAction({
     storage: host.storage,
     workspaceId: connection.workspaceId,
     action: wardAction,
@@ -140,9 +140,9 @@ export async function invokeIntegrationConnectionAction(
       checkedAt,
     };
   }
-  result = recordExternalWritebackEnvelope(host, connection, action, result, request, checkedAt);
+  result = await recordExternalWritebackEnvelope(host, connection, action, result, request, checkedAt);
 
-  host.publishRealtime("system", "integrations", {
+  await host.publishRealtime("system", "integrations", {
     type: "integration_operator_action_completed",
     connectionId,
     catalogId: connection.catalogId,
@@ -218,13 +218,14 @@ async function invokeLocalBridgeAction(
         },
       );
     }
-    const replayRun = await runWardGatedExternalSideEffect(
+    const replayRun = await runWardGatedExternalSideEffect<IntegrationActionInvokeResult>(
       host,
       ward,
       {
         mutationStore: host.mutationStore,
         sideEffectRunStore: host.sideEffectRunStore,
-        runClaimTransaction: (work) => host.storage.runImmediateTransaction!(work),
+        runClaimTransaction: async <T>(work: () => T | Promise<T>): Promise<Awaited<T>> =>
+          await host.storage.runImmediateTransaction!(work),
         requireMutationClaimOwnership: true,
         requireDurableBoundaryRecord: true,
         boundary: "integration_local_bridge_action",
@@ -248,7 +249,7 @@ async function invokeLocalBridgeAction(
           actionId: action.actionId,
         },
         execute: async (claim) => {
-          claim.markExternalCallStarted();
+          await claim.markExternalCallStarted();
           const result = await executeBridge();
           if (result.status === "failed") {
             throw new Error(result.message);
@@ -406,7 +407,7 @@ export function buildActivepiecesTriggerWebhookRunInput(
         ...(flowId ? { flowId } : {}),
       },
       execute: async (claim) => {
-        claim.markExternalCallStarted();
+        await claim.markExternalCallStarted();
         const response = await host.fetchWithDiagnosticsTimeout(target, {
           method: "POST",
           headers: {
@@ -582,7 +583,7 @@ async function invokeTrelloAction(
           name,
         },
         execute: async (claim) => {
-          claim.markExternalCallStarted();
+          await claim.markExternalCallStarted();
           const response = await host.fetchWithDiagnosticsTimeout(url.toString(), { method: "POST" });
           const parsed = await parseResponse(response);
           if (!response.ok) {
@@ -725,7 +726,7 @@ async function invokeGmailAction(
           subject,
         },
         execute: async (claim) => {
-          claim.markExternalCallStarted();
+          await claim.markExternalCallStarted();
           const response = await host.fetchWithDiagnosticsTimeout(gmailSendUrl, {
             method: "POST",
             headers: {
@@ -814,18 +815,18 @@ function failed(
   };
 }
 
-function recordExternalWritebackEnvelope(
+async function recordExternalWritebackEnvelope(
   host: IntegrationActionHost,
   connection: IntegrationConnection,
   action: IntegrationOperatorAction,
   result: IntegrationActionInvokeResult,
   request: IntegrationActionInvokeInput,
   checkedAt: string,
-): IntegrationActionInvokeResult {
+): Promise<IntegrationActionInvokeResult> {
   if (!isExternalSideEffectAction(connection, action)) {
     return result;
   }
-  const durableWriteback = recordAuditOnlyExternalSideEffectIntent({
+  const durableWriteback = await recordAuditOnlyExternalSideEffectIntent({
     evidenceEnvelopeService: host.evidenceEnvelopeService,
     boundary: "integration_operator_action",
     connectionId: connection.connectionId,

@@ -14,7 +14,7 @@ import { filterConnectorRecords } from "./connector-registry.js";
 const ENROLLMENT_CHALLENGE_TTL_MS = 10 * 60 * 1000;
 
 export interface ConnectorsRoutePort {
-  listConnectorRecords(connectorType?: ConnectorType): ConnectorRecord[];
+  listConnectorRecords(connectorType?: ConnectorType): Promise<ConnectorRecord[]>;
 }
 
 export class ConnectorsRouteService {
@@ -22,8 +22,8 @@ export class ConnectorsRouteService {
 
   public constructor(private readonly port: ConnectorsRoutePort) {}
 
-  public listConnectorRecords(connectorType?: ConnectorType): ConnectorRecord[] {
-    const projected = [...this.port.listConnectorRecords(), ...this.listEnrollmentConnectorRecords()];
+  public async listConnectorRecords(connectorType?: ConnectorType): Promise<ConnectorRecord[]> {
+    const projected = [...(await this.port.listConnectorRecords()), ...this.listEnrollmentConnectorRecords()];
     return filterConnectorRecords(projected, connectorType);
   }
 

@@ -364,6 +364,7 @@ describe("HX-407 external source scan service", () => {
       signal: caller.signal,
     });
 
+    await reader.started;
     caller.abort();
     await expect(pending).rejects.toMatchObject<Partial<ExternalSourceScanServiceError>>({ code: "cancelled" });
     expect(reader.observedSignal?.aborted).toBe(true);
@@ -716,10 +717,15 @@ class OutOfOrderFailureReader extends FakeReader {
 }
 
 class NeverSettlingReader implements ExternalSourceReaderPort {
+  private resolveStarted!: () => void;
+  public readonly started = new Promise<void>((resolve) => {
+    this.resolveStarted = resolve;
+  });
   public observedSignal: AbortSignal | undefined;
 
   public enumerate(input: { signal: AbortSignal }): Promise<ExternalSourceEnumeration> {
     this.observedSignal = input.signal;
+    this.resolveStarted();
     return new Promise<ExternalSourceEnumeration>(() => undefined);
   }
 

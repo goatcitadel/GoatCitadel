@@ -100,8 +100,8 @@ function createA2AGrpcHandlers(
         eventJson: result.events.map((event) => JSON.stringify(projectA2AExternalValue(event))),
       };
     }),
-    getTask: unary(a2a, lifecycle, (peer, request: A2AGrpcTaskRequest) => ({
-      json: JSON.stringify(projectA2AExternalValue(a2a.getGrpcTask(peer, taskRequestParams(request)))),
+    getTask: unary(a2a, lifecycle, async (peer, request: A2AGrpcTaskRequest) => ({
+      json: JSON.stringify(projectA2AExternalValue(await a2a.getGrpcTask(peer, taskRequestParams(request)))),
     })),
     cancelTask: unary(a2a, lifecycle, async (peer, request: A2AGrpcTaskRequest) => ({
       json: JSON.stringify(projectA2AExternalValue(await a2a.cancelGrpcTask(peer, taskRequestParams(request)))),
@@ -113,7 +113,7 @@ function createA2AGrpcHandlers(
       try {
         reservation = reserveGrpcWork(lifecycle, "agent", "a2a-grpc-stream");
         const peer = authenticateGrpcPeer(a2a, call.metadata);
-        const result = a2a.getGrpcTaskEvents(peer, taskEventsRequestParams(call.request));
+        const result = await a2a.getGrpcTaskEvents(peer, taskEventsRequestParams(call.request));
         for (const event of result.events) {
           call.write({ json: JSON.stringify(projectA2AExternalValue(event)) });
         }
@@ -129,25 +129,25 @@ function createA2AGrpcHandlers(
         projectA2AExternalValue(await a2a.setGrpcTaskPushNotificationConfig(peer, parseJsonRequest(request))),
       ),
     })),
-    getTaskPushNotificationConfig: unary(a2a, lifecycle, (peer, request: A2AGrpcTaskRequest) => ({
+    getTaskPushNotificationConfig: unary(a2a, lifecycle, async (peer, request: A2AGrpcTaskRequest) => ({
       json: JSON.stringify(
-        projectA2AExternalValue(a2a.getGrpcTaskPushNotificationConfig(peer, taskRequestParams(request))),
+        projectA2AExternalValue(await a2a.getGrpcTaskPushNotificationConfig(peer, taskRequestParams(request))),
       ),
     })),
-    listTaskPushNotificationConfig: unary(a2a, lifecycle, (peer, request: A2AGrpcJsonRequest) => ({
+    listTaskPushNotificationConfig: unary(a2a, lifecycle, async (peer, request: A2AGrpcJsonRequest) => ({
       json: JSON.stringify(
-        projectA2AExternalValue(a2a.listGrpcTaskPushNotificationConfigs(peer, parseJsonRequest(request))),
+        projectA2AExternalValue(await a2a.listGrpcTaskPushNotificationConfigs(peer, parseJsonRequest(request))),
       ),
     })),
-    deleteTaskPushNotificationConfig: unary(a2a, lifecycle, (peer, request: A2AGrpcTaskRequest) => ({
+    deleteTaskPushNotificationConfig: unary(a2a, lifecycle, async (peer, request: A2AGrpcTaskRequest) => ({
       json: JSON.stringify(
-        projectA2AExternalValue(a2a.deleteGrpcTaskPushNotificationConfig(peer, taskRequestParams(request))),
+        projectA2AExternalValue(await a2a.deleteGrpcTaskPushNotificationConfig(peer, taskRequestParams(request))),
       ),
     })),
-    getAuthenticatedExtendedCard: unary(a2a, lifecycle, (peer) => ({
+    getAuthenticatedExtendedCard: unary(a2a, lifecycle, async (peer) => ({
       json: JSON.stringify(
         projectA2AExternalValue(
-          a2a.getGrpcAuthenticatedExtendedAgentCard(peer, { checkedAt: new Date().toISOString() }),
+          await a2a.getGrpcAuthenticatedExtendedAgentCard(peer, { checkedAt: new Date().toISOString() }),
         ),
       ),
     })),
@@ -160,9 +160,9 @@ function unary<TRequest, TResponse>(
   handler: (peer: A2APeerAuthResult, request: TRequest) => Promise<TResponse> | TResponse,
 ): grpc.handleUnaryCall<TRequest, TResponse> {
   return (call, callback) => {
+    let reservation: SharedHostWorkReservation | undefined;
+    let replied = false;
     void (async () => {
-      let reservation: SharedHostWorkReservation | undefined;
-      let replied = false;
       try {
         reservation = reserveGrpcWork(lifecycle, "agent", "a2a-grpc-unary");
         const onDrainAbort = () => {
@@ -186,7 +186,16 @@ function unary<TRequest, TResponse>(
       } finally {
         reservation?.release();
       }
-    })();
+    })().catch((error: unknown) => {
+      if (replied) return;
+      replied = true;
+      try {
+        callback(toGrpcError(error));
+      } catch (callbackError) {
+        void callbackError;
+        // The gRPC callback is the terminal request boundary; it has no later rejection observer.
+      }
+    });
   };
 }
 

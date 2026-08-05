@@ -88,7 +88,7 @@ function createHost(input?: {
 }
 
 describe("chat-route-resolution", () => {
-  it("normalizes a foreign model onto the selected provider default", () => {
+  it("normalizes a foreign model onto the selected provider default", async () => {
     const host = createHost({
       sessionPrefs: {
         providerId: "openai",
@@ -96,7 +96,7 @@ describe("chat-route-resolution", () => {
       },
     });
 
-    const result = resolveChatRouteDescriptor(host as never, "session-1", {
+    const result = await resolveChatRouteDescriptor(host as never, "session-1", {
       action: "send",
       prefsOverride: {
         providerId: "openai",
@@ -111,7 +111,7 @@ describe("chat-route-resolution", () => {
     expect(result.normalizationReason).toContain("Model changed from claude-sonnet-4-6 to gpt-5.4-mini");
   });
 
-  it("predicts local-to-cloud fallback when the global route can cross boundaries", () => {
+  it("predicts local-to-cloud fallback when the global route can cross boundaries", async () => {
     const host = createHost({
       runtime: {
         activeProviderId: "ollama",
@@ -120,7 +120,7 @@ describe("chat-route-resolution", () => {
       fallbacks: [{ providerId: "openai", model: "gpt-5.4-mini" }],
     });
 
-    const result = resolveChatRouteDescriptor(host as never, "session-1", {
+    const result = await resolveChatRouteDescriptor(host as never, "session-1", {
       action: "send",
     });
 
@@ -202,9 +202,9 @@ describe("chat-route-resolution", () => {
     expect(host.requireChatTurnContext).toHaveBeenCalledWith("session-1", "turn-1");
   });
 
-  it("blocks missing, unknown, unauthenticated, and model-less provider routes before dispatch", () => {
+  it("blocks missing, unknown, unauthenticated, and model-less provider routes before dispatch", async () => {
     expect(
-      resolveChatRouteDescriptor(
+      await resolveChatRouteDescriptor(
         createHost({
           sessionPrefs: { providerId: undefined, model: undefined },
           runtime: {
@@ -224,7 +224,7 @@ describe("chat-route-resolution", () => {
     );
 
     expect(
-      resolveChatRouteDescriptor(createHost() as never, "session-1", {
+      await resolveChatRouteDescriptor(createHost() as never, "session-1", {
         action: "send",
         providerId: "missing-provider",
       }),
@@ -237,7 +237,7 @@ describe("chat-route-resolution", () => {
     );
 
     expect(
-      resolveChatRouteDescriptor(
+      await resolveChatRouteDescriptor(
         createHost({
           runtime: {
             activeProviderId: "anthropic",
@@ -264,7 +264,7 @@ describe("chat-route-resolution", () => {
     );
 
     expect(
-      resolveChatRouteDescriptor(
+      await resolveChatRouteDescriptor(
         createHost({
           sessionPrefs: { providerId: "openai", model: "claude-sonnet-4-6" },
           runtime: {
@@ -291,8 +291,8 @@ describe("chat-route-resolution", () => {
     );
   });
 
-  it("keeps a supported shared bare GPT model on the explicitly selected OpenAI Codex provider", () => {
-    const route = resolveChatRouteDescriptor(
+  it("keeps a supported shared bare GPT model on the explicitly selected OpenAI Codex provider", async () => {
+    const route = await resolveChatRouteDescriptor(
       createHost({
         runtime: {
           activeProviderId: "openai-codex",
@@ -321,8 +321,8 @@ describe("chat-route-resolution", () => {
     );
   });
 
-  it("normalizes google model ids and reports fallback boundary direction", () => {
-    const google = resolveChatRouteDescriptor(
+  it("normalizes google model ids and reports fallback boundary direction", async () => {
+    const google = await resolveChatRouteDescriptor(
       createHost({
         runtime: {
           activeProviderId: "google",
@@ -343,7 +343,7 @@ describe("chat-route-resolution", () => {
     );
     expect(google.effectiveModel).toBe("models/gemini-2.5-pro");
 
-    const googlePrefixed = resolveChatRouteDescriptor(
+    const googlePrefixed = await resolveChatRouteDescriptor(
       createHost({
         runtime: {
           activeProviderId: "google",
@@ -364,7 +364,7 @@ describe("chat-route-resolution", () => {
     );
     expect(googlePrefixed.effectiveModel).toBe("models/gemini-2.5-flash");
 
-    const googleNonGemini = resolveChatRouteDescriptor(
+    const googleNonGemini = await resolveChatRouteDescriptor(
       createHost({
         runtime: {
           activeProviderId: "google",
@@ -385,7 +385,7 @@ describe("chat-route-resolution", () => {
     );
     expect(googleNonGemini.effectiveModel).toBe("text-bison");
 
-    const providerDefaultWhenInactive = resolveChatRouteDescriptor(
+    const providerDefaultWhenInactive = await resolveChatRouteDescriptor(
       createHost({
         sessionPrefs: { providerId: "anthropic" },
         runtime: {
@@ -414,7 +414,7 @@ describe("chat-route-resolution", () => {
     );
     expect(providerDefaultWhenInactive.effectiveModel).toBe("claude-sonnet-4-6");
 
-    const missingModel = resolveChatRouteDescriptor(
+    const missingModel = await resolveChatRouteDescriptor(
       createHost({
         runtime: {
           activeProviderId: "openai",
@@ -434,7 +434,7 @@ describe("chat-route-resolution", () => {
     );
     expect(missingModel.blockedReason).toBe("No model is configured for OpenAI. Select a model first.");
 
-    const sameBoundary = resolveChatRouteDescriptor(
+    const sameBoundary = await resolveChatRouteDescriptor(
       createHost({
         runtime: {
           activeProviderId: "openai",
@@ -469,7 +469,7 @@ describe("chat-route-resolution", () => {
       }),
     );
 
-    const cloudToLocal = resolveChatRouteDescriptor(
+    const cloudToLocal = await resolveChatRouteDescriptor(
       createHost({
         runtime: {
           activeProviderId: "openai",

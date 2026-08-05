@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ConflictError } from "@goatcitadel/contracts";
-import { Storage, type CronJobSpecInput } from "@goatcitadel/storage";
+import { createSqliteAsyncStorage, Storage, type CronJobSpecInput } from "@goatcitadel/storage";
 import {
   ConfigGenerationApplyError,
   ConfigGenerationService,
@@ -29,7 +29,7 @@ describe("CronConfigGenerationOwner", () => {
     const storage = createStorage(root);
     storage.cronJobs.createSpec(job);
     const config = new ConfigGenerationService(root);
-    const owner = new CronConfigGenerationOwner(config, storage);
+    const owner = new CronConfigGenerationOwner(config, createSqliteAsyncStorage(storage));
 
     const first = owner.updateSpec({ ...job, name: "First writer" }, 1);
     const stale = owner.updateSpec({ ...job, name: "Stale writer" }, 1);
@@ -53,7 +53,7 @@ describe("CronConfigGenerationOwner", () => {
     const storage = createStorage(root);
     storage.cronJobs.createSpec(job);
     const config = new ConfigGenerationService(root);
-    const owner = new CronConfigGenerationOwner(config, storage);
+    const owner = new CronConfigGenerationOwner(config, createSqliteAsyncStorage(storage));
 
     const settings = config.commit({
       requireExpectedRevision: false,
@@ -83,7 +83,7 @@ describe("CronConfigGenerationOwner", () => {
     const storage = createStorage(root);
     storage.cronJobs.createSpec(job);
     const config = new ConfigGenerationService(root);
-    const owner = new CronConfigGenerationOwner(config, storage);
+    const owner = new CronConfigGenerationOwner(config, createSqliteAsyncStorage(storage));
 
     await expect(owner.updateSpec(job, 1)).resolves.toMatchObject({ revision: 1 });
     expect(config.getRevision()).toBe(1);
@@ -103,7 +103,7 @@ describe("CronConfigGenerationOwner", () => {
     const storage = createStorage(root);
     storage.cronJobs.createSpec(job);
     const config = new ConfigGenerationService(root);
-    const owner = new CronConfigGenerationOwner(config, storage);
+    const owner = new CronConfigGenerationOwner(config, createSqliteAsyncStorage(storage));
 
     const beforeConfigRevision = config.getRevision();
     const beforeResourceRevision = storage.cronJobs.get(job.jobId)!.revision;
@@ -139,7 +139,7 @@ describe("CronConfigGenerationOwner", () => {
     });
     const before = storage.cronJobs.get(job.jobId);
     const config = new ConfigGenerationService(root);
-    const owner = new CronConfigGenerationOwner(config, storage, {
+    const owner = new CronConfigGenerationOwner(config, createSqliteAsyncStorage(storage), {
       afterStorageMutation: () => {
         throw new Error("injected cron owner failure");
       },
@@ -163,7 +163,7 @@ describe("CronConfigGenerationOwner", () => {
         storage.cronJobs.updateSpecWithRevision(job.jobId, { name: "Concurrent resource winner" }, 1);
       },
     });
-    const owner = new CronConfigGenerationOwner(config, storage);
+    const owner = new CronConfigGenerationOwner(config, createSqliteAsyncStorage(storage));
 
     await expect(owner.updateSpec({ ...job, name: "Staged loser" }, 1)).rejects.toMatchObject({
       name: ConflictError.name,
@@ -187,7 +187,7 @@ describe("CronConfigGenerationOwner", () => {
         }
       },
     });
-    const owner = new CronConfigGenerationOwner(config, storage);
+    const owner = new CronConfigGenerationOwner(config, createSqliteAsyncStorage(storage));
 
     await expect(owner.updateSpec({ ...job, name: "Canonical wins" }, 1)).resolves.toMatchObject({
       name: "Canonical wins",
@@ -217,7 +217,7 @@ describe("CronConfigGenerationOwner", () => {
         throw new Error("simulated hard crash");
       },
     });
-    const crashingOwner = new CronConfigGenerationOwner(crashingConfig, storage);
+    const crashingOwner = new CronConfigGenerationOwner(crashingConfig, createSqliteAsyncStorage(storage));
 
     await expect(crashingOwner.updateSpec({ ...job, name: "Durable decision" }, 1)).rejects.toThrow(
       "simulated hard crash",
@@ -226,8 +226,8 @@ describe("CronConfigGenerationOwner", () => {
     await expect(recoverLastGoodConfigGeneration(root)).resolves.toMatchObject({ recovered: false, revision: 2 });
 
     const recoveredConfig = new ConfigGenerationService(root);
-    const recoveredOwner = new CronConfigGenerationOwner(recoveredConfig, storage);
-    const first = recoveredOwner.reconcileCommittedGeneration()[0]!;
+    const recoveredOwner = new CronConfigGenerationOwner(recoveredConfig, createSqliteAsyncStorage(storage));
+    const first = (await recoveredOwner.reconcileCommittedGeneration())[0]!;
     expect(first).toMatchObject({
       name: "Durable decision",
       revision: 2,
@@ -235,7 +235,7 @@ describe("CronConfigGenerationOwner", () => {
       lastRunOutput: "keep me",
       failureCount: 4,
     });
-    const second = recoveredOwner.reconcileCommittedGeneration()[0]!;
+    const second = (await recoveredOwner.reconcileCommittedGeneration())[0]!;
     expect(second).toEqual(first);
     await recoveredConfig.completeRuntimeOwnerReconciliation();
     expect(recoveredConfig.isRuntimeOwnerReconciliationPending()).toBe(false);
@@ -255,17 +255,17 @@ describe("CronConfigGenerationOwner", () => {
         throw new Error("simulated delete crash");
       },
     });
-    const crashingOwner = new CronConfigGenerationOwner(crashingConfig, storage);
+    const crashingOwner = new CronConfigGenerationOwner(crashingConfig, createSqliteAsyncStorage(storage));
 
     await expect(crashingOwner.deleteSpec(job.jobId, 1)).rejects.toThrow("simulated delete crash");
     expect(storage.cronJobs.get(job.jobId)).toBeDefined();
     await recoverLastGoodConfigGeneration(root);
 
     const recoveredConfig = new ConfigGenerationService(root);
-    const recoveredOwner = new CronConfigGenerationOwner(recoveredConfig, storage);
-    expect(recoveredOwner.reconcileCommittedGeneration()).toEqual([]);
+    const recoveredOwner = new CronConfigGenerationOwner(recoveredConfig, createSqliteAsyncStorage(storage));
+    expect(await recoveredOwner.reconcileCommittedGeneration()).toEqual([]);
     expect(storage.cronJobs.get(job.jobId)).toBeUndefined();
-    expect(recoveredOwner.reconcileCommittedGeneration()).toEqual([]);
+    expect(await recoveredOwner.reconcileCommittedGeneration()).toEqual([]);
     await recoveredConfig.completeRuntimeOwnerReconciliation();
   });
 
@@ -286,7 +286,7 @@ describe("CronConfigGenerationOwner", () => {
       lastRunStatus: "ok",
     });
     const config = new ConfigGenerationService(root);
-    const owner = new CronConfigGenerationOwner(config, storage);
+    const owner = new CronConfigGenerationOwner(config, createSqliteAsyncStorage(storage));
 
     await owner.reconcileStartupGeneration();
     expect(config.getRevision()).toBe(2);

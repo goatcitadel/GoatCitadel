@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApprovalCreateInput, ApprovalRequest, LoadedSkill, ToolCatalogEntry } from "@goatcitadel/contracts";
-import { Storage } from "@goatcitadel/storage";
+import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import { CapabilitySystemService } from "./capability-system-service.js";
 import { ImprovementService, type ImprovementServiceCallbacks } from "./improvement-service.js";
 import {
@@ -39,10 +39,11 @@ afterEach(() => {
 });
 
 describe("Loop 8 gateway service coverage", () => {
-  it("applies settings owners without bypassing the canonical config generation", () => {
+  it("applies settings owners without bypassing the canonical config generation", async () => {
     const deps = buildSettingsHost();
+    expect((await getSettings(deps)).deploymentProfile).toBe("local_dev");
 
-    const updated = updateSettings(deps, {
+    const updated = await updateSettings(deps, {
       deploymentProfile: "trusted_local",
       toolApprovalMode: "bypass",
       budgetMode: "power",
@@ -298,7 +299,7 @@ describe("Loop 8 gateway service coverage", () => {
     const service = new CapabilitySystemService({
       rootDir,
       runtimeConfig: createCapabilityRuntimeConfig(),
-      storage,
+      storage: createSqliteAsyncStorage(storage),
       readFeatureFlags: () => ({ codeModeV1Enabled: false }),
       listToolCatalog: () => [createTool("tool.inspect", { codeModeAllowed: true })],
       listLoadedSkills: () => [
@@ -313,7 +314,7 @@ describe("Loop 8 gateway service coverage", () => {
       readPolicySnapshot: () => ({ profile: "loop8" }),
     });
 
-    const skills = service.listSkills();
+    const skills = await service.listSkills();
     expect(skills).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -353,14 +354,14 @@ describe("Loop 8 gateway service coverage", () => {
       }),
     });
 
-    const proposal = service.createProposal({
+    const proposal = await service.createProposal({
       proposalKind: "skill",
       title: "Review imported skill",
       summary: "Keep this visible until activation.",
       payload: { skillId: "skill-extra" },
     });
-    const inspectable = service.listCatalog("inspectable");
-    const callable = service.listCatalog("callable");
+    const inspectable = await service.listCatalog("inspectable");
+    const callable = await service.listCatalog("callable");
 
     expect(inspectable).toEqual(
       expect.arrayContaining([
@@ -454,7 +455,7 @@ describe("Loop 8 gateway service coverage", () => {
       }),
     ).rejects.toThrow(/Failed to fetch hosted skill bundle/);
 
-    expect(service.listHistory(5)).toEqual([
+    expect(await service.listHistory(5)).toEqual([
       expect.objectContaining({
         action: "validate",
         outcome: "failed",
@@ -480,7 +481,7 @@ describe("Loop 8 gateway service coverage", () => {
     ]);
   });
 
-  it("summarizes prompt-pack benchmark rows and emits replay regression improvement signals", () => {
+  it("summarizes prompt-pack benchmark rows and emits replay regression improvement signals", async () => {
     const rootDir = createTempRoot("goat-loop8-prompt-pack-");
     const storage = createStorage(rootDir);
     const recordImprovementRegressionSignal = vi.fn();
@@ -595,7 +596,7 @@ describe("Loop 8 gateway service coverage", () => {
       failureSignal: "No assistant output available for model judging.",
     });
 
-    const benchmark = service.getPromptPackBenchmarkStatus("bench-loop8");
+    const benchmark = await service.getPromptPackBenchmarkStatus("bench-loop8");
     expect(benchmark.progress).toEqual({ totalItems: 2, completedItems: 2 });
     expect(benchmark.modelSummaries).toEqual([
       expect.objectContaining({
@@ -617,11 +618,11 @@ describe("Loop 8 gateway service coverage", () => {
       }),
     ]);
 
-    const { regressionRunId } = service.runPromptPackReplayRegression(seeded.pack.packId, {
+    const { regressionRunId } = await service.runPromptPackReplayRegression(seeded.pack.packId, {
       testCodes: [test.code],
       baselineRef: "2026-05-13T23:59:59.000Z",
     });
-    const regression = service.getPromptPackReplayRegressionStatus(regressionRunId);
+    const regression = await service.getPromptPackReplayRegressionStatus(regressionRunId);
 
     expect(regression.run).toMatchObject({
       status: "completed",
@@ -647,9 +648,9 @@ describe("Loop 8 gateway service coverage", () => {
     );
   });
 
-  it("writes improvement benchmark signals idempotently and honors disabled ledger paths", () => {
+  it("writes improvement benchmark signals idempotently and honors disabled ledger paths", async () => {
     const harness = createImprovementHarness({ ledgerEnabled: true });
-    const first = harness.service.recordPromptLabBenchmarkCompletionSignal({
+    const first = await harness.service.recordPromptLabBenchmarkCompletionSignal({
       benchmarkRunId: "bench-loop8",
       packId: "pack-loop8",
       providerId: "openai",
@@ -659,7 +660,7 @@ describe("Loop 8 gateway service coverage", () => {
       runFailures: 2,
       failureSignal: "No assistant output available for model judging.",
     });
-    const second = harness.service.recordPromptLabBenchmarkCompletionSignal({
+    const second = await harness.service.recordPromptLabBenchmarkCompletionSignal({
       benchmarkRunId: "bench-loop8",
       packId: "pack-loop8",
       providerId: "openai",
@@ -692,18 +693,18 @@ describe("Loop 8 gateway service coverage", () => {
         }),
       ],
     });
-    expect(harness.service.listImprovementSignals(10, "prompt-lab")).toHaveLength(1);
+    expect(await harness.service.listImprovementSignals(10, "prompt-lab")).toHaveLength(1);
 
     const disabled = createImprovementHarness({ ledgerEnabled: false });
     expect(
-      disabled.service.recordPromptLabBenchmarkCompletionSignal({
+      await disabled.service.recordPromptLabBenchmarkCompletionSignal({
         benchmarkRunId: "bench-disabled",
         packId: "pack-loop8",
         providerId: "openai",
         model: "gpt-4.1-mini",
       }),
     ).toBeUndefined();
-    expect(disabled.service.listImprovementSignals(10)).toHaveLength(0);
+    expect(await disabled.service.listImprovementSignals(10)).toHaveLength(0);
   }, 15_000);
 
   it("enforces memory lifecycle file jails and learned-memory write gate evidence", async () => {
@@ -768,7 +769,7 @@ describe("Loop 8 gateway service coverage", () => {
       }),
     ]);
 
-    service.extractLearnedMemory("session-loop8", "Remember my api_key is sk-secret-token-1234567890.", {
+    await service.extractLearnedMemory("session-loop8", "Remember my api_key is sk-secret-token-1234567890.", {
       role: "assistant",
       sourceRef: "turn-loop8",
     });
@@ -967,7 +968,6 @@ function buildSettingsHost(): SettingsRuntimeDependencies {
     persistBudgetsConfig: vi.fn(),
     persistAssistantConfig: vi.fn(),
   };
-  expect(getSettings(deps).deploymentProfile).toBe("local_dev");
   return deps;
 }
 
@@ -1095,7 +1095,7 @@ function createPromptPackHarness(
   const backgroundTasks = new Set<Promise<void>>();
   const service = new PromptPackService(
     {
-      storage,
+      storage: createSqliteAsyncStorage(storage),
       gatewaySql: storage.gatewaySql,
       config: {
         assistant: {
@@ -1173,8 +1173,9 @@ function insertBenchmarkItem(
 function createImprovementHarness(input: { ledgerEnabled: boolean }) {
   const rootDir = createTempRoot("goat-loop8-improvement-");
   const storage = createStorage(rootDir);
+  const asyncStorage = createSqliteAsyncStorage(storage);
   const ctx: ServiceContext = {
-    storage,
+    storage: asyncStorage,
     config: {} as never,
     llmService: {} as never,
     policyEngine: {} as never,
@@ -1185,7 +1186,7 @@ function createImprovementHarness(input: { ledgerEnabled: boolean }) {
     normalizeWorkspaceId: (workspaceId?: string) => workspaceId?.trim() || "default",
   };
   const callbacks: ImprovementServiceCallbacks = {
-    createApproval: async (approvalInput) => storage.approvals.create(approvalInput),
+    createApproval: async (approvalInput) => await asyncStorage.approvals.create(approvalInput),
     captureRepairPolicySnapshot: (targetKey) => ({
       refType: "repair_policy_snapshot",
       refId: `repair-${targetKey}`,
@@ -1206,9 +1207,9 @@ function createImprovementHarness(input: { ledgerEnabled: boolean }) {
     restoreRoutingPolicySnapshot: () => undefined,
     createChatCompletion: async () => ({ id: "mock", choices: [] }) as never,
     getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-4.1-mini" }),
-    readEffectiveBlockerTemplateStrictness: () => readBlockerTemplateStrictness(storage.systemSettings),
-    readEffectiveRetryRepairThreshold: () => readRetryRepairThreshold(storage.systemSettings),
-    readEffectiveLiveIntentThreshold: () => readLiveIntentThreshold(storage.systemSettings),
+    readEffectiveBlockerTemplateStrictness: () => readBlockerTemplateStrictness(asyncStorage.systemSettings),
+    readEffectiveRetryRepairThreshold: () => readRetryRepairThreshold(asyncStorage.systemSettings),
+    readEffectiveLiveIntentThreshold: () => readLiveIntentThreshold(asyncStorage.systemSettings),
     readTranscriptOrEmpty: async () => [],
     retryChatTurn: async () => ({ sessionId: "session-loop8", turnId: "turn-loop8" }) as never,
     backgroundTasks: new Set<Promise<void>>(),

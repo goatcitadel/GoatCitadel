@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { ToolGrantConstraints, ToolGrantRecord, ToolGrantScope } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 
 export type PromptPackGrantStorage = Pick<Storage, "toolGrants" | "chatSessionMeta">;
 
@@ -10,20 +10,20 @@ export function resolvePromptPackWorkspaceRoot(rootDir: string, workspaceDir: st
     : path.resolve(rootDir, workspaceDir);
 }
 
-export function listActivePromptPackToolGrants(
+export async function listActivePromptPackToolGrants(
   storage: PromptPackGrantStorage,
   scope: ToolGrantScope,
   scopeRef: string,
-): ToolGrantRecord[] {
+): Promise<ToolGrantRecord[]> {
   return storage.toolGrants.listActive(scope, scopeRef);
 }
 
-export function listActivePromptPackWorkspaceGrants(
+export async function listActivePromptPackWorkspaceGrants(
   storage: PromptPackGrantStorage,
   sessionId: string,
   defaultWorkspaceId: string,
-): ToolGrantRecord[] {
-  const workspaceId = storage.chatSessionMeta?.get(sessionId)?.workspaceId ?? defaultWorkspaceId;
+): Promise<ToolGrantRecord[]> {
+  const workspaceId = (await storage.chatSessionMeta?.get(sessionId))?.workspaceId ?? defaultWorkspaceId;
   return listActivePromptPackToolGrants(storage, "workspace", workspaceId);
 }
 

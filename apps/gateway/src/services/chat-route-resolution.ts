@@ -9,7 +9,7 @@ import {
   type ChatSessionPrefsRecord,
 } from "@goatcitadel/contracts";
 import { createHash } from "node:crypto";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { LlmService } from "./llm-service.js";
 import { splitChatPrefsPatch, shouldAllowCrossProviderFallback } from "./chat-session-utils.js";
 
@@ -181,12 +181,12 @@ function classifyRuntime(provider: RuntimeProvider | undefined): RoutingPrefligh
   return isLikelyLocalProviderUrl(provider.baseUrl) ? "local" : "cloud";
 }
 
-export function resolveChatRouteDescriptor(
+export async function resolveChatRouteDescriptor(
   deps: ChatRouteResolutionDependencies,
   sessionId: string,
   input: RoutingPreflightRequest,
-): ResolvedChatRouteDescriptor {
-  const sessionPrefs = deps.storage.chatSessionPrefs.ensure(sessionId);
+): Promise<ResolvedChatRouteDescriptor> {
+  const sessionPrefs = await deps.storage.chatSessionPrefs.ensure(sessionId);
   const previewPrefs = buildPreviewPrefs(sessionPrefs, input);
   const runtime = deps.llmService.getRuntimeConfig({
     includeKeychainForActiveProvider: true,
@@ -314,7 +314,7 @@ export async function preflightChatRoute(
     await deps.requireChatTurnContext(sessionId, input.turnId);
   }
 
-  const descriptor = resolveChatRouteDescriptor(deps, sessionId, input);
+  const descriptor = await resolveChatRouteDescriptor(deps, sessionId, input);
   let runtimeReachability: RoutingPreflightResult["runtimeReachability"] = "not_checked";
   let blockedReason = descriptor.blockedReason;
 

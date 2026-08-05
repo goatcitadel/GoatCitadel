@@ -297,9 +297,14 @@ export class DefaultSigstoreVerificationPort implements SigstoreVerificationPort
       () => undefined,
     );
     this.abandonedCleanupTasks.add(tracked);
-    void tracked.then(() => {
-      this.abandonedCleanupTasks.delete(tracked);
-    });
+    void tracked.then(
+      () => {
+        this.abandonedCleanupTasks.delete(tracked);
+      },
+      () => {
+        this.abandonedCleanupTasks.delete(tracked);
+      },
+    );
     this.registerBackgroundTask?.(tracked);
   }
 }

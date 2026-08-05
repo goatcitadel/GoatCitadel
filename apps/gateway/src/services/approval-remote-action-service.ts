@@ -17,7 +17,7 @@ import {
   type RemoteActionTokenRecord,
   ValidationError,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { hashSensitiveToken } from "./device-access-helpers.js";
 import { withApprovalFollowUp } from "./approval-follow-up.js";
 import { buildRemoteTokenConsumedObservabilityEffect } from "./approval-observability.js";
@@ -42,17 +42,17 @@ export interface ApprovalRemoteActionContext {
     | "remoteActionTokens"
     | "runImmediateTransaction"
   >;
-  requireConnectorRecord(connectorId: string): ConnectorRecord;
+  requireConnectorRecord(connectorId: string): Promise<ConnectorRecord>;
   consumeRemoteActionToken(
     token: string,
     actionType: RemoteActionTokenRecord["actionType"],
     options?: { claimFingerprint?: string; expectedConnectorId?: string },
-  ): RemoteActionTokenRecord;
+  ): Promise<RemoteActionTokenRecord>;
   consumeRemoteActionTokenById(
     tokenId: string,
     actionType: RemoteActionTokenRecord["actionType"],
     options?: { claimFingerprint?: string; expectedConnectorId?: string },
-  ): RemoteActionTokenRecord;
+  ): Promise<RemoteActionTokenRecord>;
   resolveApproval(
     approvalId: string,
     input: ApprovalResolveInput,
@@ -61,15 +61,15 @@ export interface ApprovalRemoteActionContext {
   enqueueApprovalObservabilityEffects(
     approvalId: string,
     items: readonly ApprovalObservabilityEffectInput[],
-  ): ApprovalEffectRecord[];
+  ): Promise<ApprovalEffectRecord[]>;
   enqueueApprovalRemoteTokenDelivery(
     approval: ApprovalRequest,
     connector: ConnectorRecord,
     tokenRecord: { token: string; tokenId: string; expiresAt: string },
-  ): { runId?: string } | undefined;
+  ): Promise<{ runId?: string } | undefined>;
 }
 
-export function createApprovalRemoteActionToken(
+export async function createApprovalRemoteActionToken(
   context: ApprovalRemoteActionContext,
   approvalId: string,
   input: {
@@ -77,18 +77,18 @@ export function createApprovalRemoteActionToken(
     issuedBy?: string;
     expiresInMs?: number;
   },
-): RemoteApprovalActionTokenIssueResult {
-  const approval = context.storage.approvals.get(approvalId);
+): Promise<RemoteApprovalActionTokenIssueResult> {
+  const approval = await context.storage.approvals.get(approvalId);
   assertApprovalPending(approval);
-  const connector = context.requireConnectorRecord(input.connectorId);
+  const connector = await context.requireConnectorRecord(input.connectorId);
   const expiresInMs = clampInt(input.expiresInMs ?? 15 * 60_000, 15 * 60_000, 60_000, 24 * 60 * 60_000);
   const token = `grat_${randomBytes(32).toString("base64url")}`;
   let created!: RemoteActionTokenRecord;
   let deliveryApproval!: ApprovalRequest;
-  context.storage.runImmediateTransaction(() => {
-    deliveryApproval = context.storage.approvals.lockPendingForUpdate(approvalId);
-    assertApprovalIssuable(context, deliveryApproval);
-    created = context.storage.remoteActionTokens.createWithTtl({
+  await context.storage.runImmediateTransaction(async () => {
+    deliveryApproval = await context.storage.approvals.lockPendingForUpdate(approvalId);
+    await assertApprovalIssuable(context, deliveryApproval);
+    created = await context.storage.remoteActionTokens.createWithTtl({
       tokenHash: hashSensitiveToken(token),
       actionType: "approval.resolve",
       approvalId,
@@ -96,7 +96,7 @@ export function createApprovalRemoteActionToken(
       mutation: { approvalId },
       expiresInMs,
     });
-    context.enqueueApprovalObservabilityEffects(approvalId, [
+    await context.enqueueApprovalObservabilityEffects(approvalId, [
       {
         operationId: `approval.remote_token.create.audit:${created.tokenId}`,
         delivery: {
@@ -136,9 +136,9 @@ export function createApprovalRemoteActionToken(
         },
       },
     ]);
-    deliveryApproval = context.storage.approvals.lockPendingForUpdate(approvalId);
-    assertApprovalIssuable(context, deliveryApproval);
-    if (!context.storage.remoteActionTokens.findPendingFresh(created.tokenId)) {
+    deliveryApproval = await context.storage.approvals.lockPendingForUpdate(approvalId);
+    await assertApprovalIssuable(context, deliveryApproval);
+    if (!(await context.storage.remoteActionTokens.findPendingFresh(created.tokenId))) {
       throw new ValidationError({
         message: `Remote action token for approval ${approvalId} expired before issuance committed.`,
       });
@@ -149,11 +149,11 @@ export function createApprovalRemoteActionToken(
     ...created,
     approvalId,
     token,
-    ...enqueueRemoteTokenDelivery(context, deliveryApproval, connector, {
+    ...(await enqueueRemoteTokenDelivery(context, deliveryApproval, connector, {
       token,
       tokenId: created.tokenId,
       expiresAt: created.expiresAt,
-    }),
+    })),
   };
 }
 
@@ -179,8 +179,8 @@ export async function resolveApprovalWithConsumedRemoteToken(
     });
   }
   const resolvedBy = input.resolvedBy?.trim() || `connector:${tokenRecord.connectorId}`;
-  context.storage.runImmediateTransaction(() => {
-    context.enqueueApprovalObservabilityEffects(approvalId, [
+  await context.storage.runImmediateTransaction(async () => {
+    await context.enqueueApprovalObservabilityEffects(approvalId, [
       buildRemoteTokenConsumedObservabilityEffect(
         approvalId,
         {
@@ -194,7 +194,7 @@ export async function resolveApprovalWithConsumedRemoteToken(
       ),
     ]);
   });
-  const current = context.storage.approvals.get(approvalId);
+  const current = await context.storage.approvals.get(approvalId);
   if (current.status !== "pending") {
     if (current.linkage?.tokenId !== tokenRecord.tokenId || current.linkage.connectorId !== tokenRecord.connectorId) {
       throw new ConflictError({
@@ -238,7 +238,7 @@ export async function resolveApprovalWithRemoteToken(
     resolvedBy?: string;
   },
 ): Promise<ApprovalResolveResult> {
-  const tokenRecord = context.consumeRemoteActionToken(input.token, "approval.resolve", {
+  const tokenRecord = await context.consumeRemoteActionToken(input.token, "approval.resolve", {
     claimFingerprint: buildRemoteApprovalClaimFingerprint(input),
     expectedConnectorId: input.connectorId,
   });
@@ -260,7 +260,7 @@ export async function resolveApprovalWithRemoteTokenId(
   if (!connectorId) {
     throw new ValidationError({ message: "Opaque remote action token resolution requires a connector binding." });
   }
-  const tokenRecord = context.consumeRemoteActionTokenById(input.tokenId, "approval.resolve", {
+  const tokenRecord = await context.consumeRemoteActionTokenById(input.tokenId, "approval.resolve", {
     claimFingerprint: buildRemoteApprovalClaimFingerprint(input),
     expectedConnectorId: connectorId,
   });
@@ -275,23 +275,23 @@ function assertApprovalPending(approval: ApprovalRequest): void {
   }
 }
 
-function assertApprovalIssuable(context: ApprovalRemoteActionContext, approval: ApprovalRequest): void {
+async function assertApprovalIssuable(context: ApprovalRemoteActionContext, approval: ApprovalRequest): Promise<void> {
   assertApprovalPending(approval);
-  if (context.storage.approvals.isExpiredPendingAtDatabaseNow(approval.approvalId)) {
+  if (await context.storage.approvals.isExpiredPendingAtDatabaseNow(approval.approvalId)) {
     throw new ValidationError({
       message: `Approval ${approval.approvalId} has expired and can no longer issue a remote action token.`,
     });
   }
 }
 
-function enqueueRemoteTokenDelivery(
+async function enqueueRemoteTokenDelivery(
   context: ApprovalRemoteActionContext,
   approval: ApprovalRequest,
   connector: ConnectorRecord,
   tokenRecord: { token: string; tokenId: string; expiresAt: string },
-): Pick<RemoteApprovalActionTokenIssueResult, "deliveryStatus" | "deliveryRunId" | "deliveryError"> {
+): Promise<Pick<RemoteApprovalActionTokenIssueResult, "deliveryStatus" | "deliveryRunId" | "deliveryError">> {
   try {
-    const deliveryRun = context.enqueueApprovalRemoteTokenDelivery(approval, connector, tokenRecord);
+    const deliveryRun = await context.enqueueApprovalRemoteTokenDelivery(approval, connector, tokenRecord);
     if (!deliveryRun) {
       return { deliveryStatus: "not_configured" };
     }
@@ -307,11 +307,11 @@ function enqueueRemoteTokenDelivery(
   }
 }
 
-function buildApprovalResolveResult(
+async function buildApprovalResolveResult(
   context: ApprovalRemoteActionContext,
   current: ApprovalRequest,
-): ApprovalResolveResult {
-  const replay = readApprovalReplay(context.storage, current);
+): Promise<ApprovalResolveResult> {
+  const replay = await readApprovalReplay(context.storage, current);
   const effects = replay.effects;
   const resolutionEffects = deriveApprovalResolutionEffectsResult(effects);
   const approval = withApprovalFollowUp(current, effects);

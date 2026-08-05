@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Storage } from "@goatcitadel/storage";
+import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import type { ChatMessageRecord, ChatTurnTraceCreateInput } from "@goatcitadel/contracts";
 import { TOOL_EFFECT_CLASSIFICATION_VERSION } from "@goatcitadel/contracts";
 import {
@@ -54,8 +54,8 @@ function buildDeps(storage: Storage): ChatTurnInterruptionRecoveryDeps & {
   recordDevDiagnostic: ReturnType<typeof vi.fn>;
 } {
   return {
-    storage,
-    publishRealtime: vi.fn(),
+    storage: createSqliteAsyncStorage(storage),
+    publishRealtime: vi.fn(async () => undefined),
     recordDevDiagnostic: vi.fn(),
     now: () => "2026-07-07T20:00:00.000Z",
   };
@@ -122,13 +122,13 @@ function activeTrace(overrides: Partial<ChatTurnTraceCreateInput> = {}): ChatTur
 }
 
 describe("reconcileInterruptedChatTurns", () => {
-  it("fails a stranded running trace with an interrupted_by_restart failure", () => {
+  it("fails a stranded running trace with an interrupted_by_restart failure", async () => {
     const storage = createStorage();
     storage.chatMessages.upsert(userMessage());
     storage.chatTurnTraces.create(activeTrace());
     const deps = buildDeps(storage);
 
-    const result = reconcileInterruptedChatTurns(deps);
+    const result = await reconcileInterruptedChatTurns(deps);
 
     expect(result.interruptedTurnIds).toEqual(["turn-active"]);
     expect(result.synthesizedTurnIds).toEqual([]);
@@ -154,7 +154,7 @@ describe("reconcileInterruptedChatTurns", () => {
     );
   });
 
-  it("clears stale pendingUserInput when failing a waiting_for_user_input trace", () => {
+  it("clears stale pendingUserInput when failing a waiting_for_user_input trace", async () => {
     const storage = createStorage();
     storage.chatMessages.upsert(userMessage());
     storage.chatTurnTraces.create({
@@ -167,24 +167,24 @@ describe("reconcileInterruptedChatTurns", () => {
     });
     const deps = buildDeps(storage);
 
-    reconcileInterruptedChatTurns(deps);
+    await reconcileInterruptedChatTurns(deps);
 
     const trace = storage.chatTurnTraces.get("turn-active");
     expect(trace.status).toBe("failed");
     expect(trace.pendingUserInput).toBeUndefined();
   });
 
-  it("is a no-op when run a second time after a reconciling boot", () => {
+  it("is a no-op when run a second time after a reconciling boot", async () => {
     const storage = createStorage();
     storage.chatMessages.upsert(userMessage());
     storage.chatTurnTraces.create(activeTrace());
     storage.chatMessages.upsert(userMessage({ sessionId: "session-orphan", messageId: "msg-orphan" }));
-    const first = reconcileInterruptedChatTurns(buildDeps(storage));
+    const first = await reconcileInterruptedChatTurns(buildDeps(storage));
     expect(first.interruptedTurnIds).toHaveLength(1);
     expect(first.synthesizedTurnIds).toHaveLength(1);
 
     const secondDeps = buildDeps(storage);
-    const second = reconcileInterruptedChatTurns(secondDeps);
+    const second = await reconcileInterruptedChatTurns(secondDeps);
 
     expect(second.interruptedTurnIds).toEqual([]);
     expect(second.synthesizedTurnIds).toEqual([]);
@@ -192,7 +192,7 @@ describe("reconcileInterruptedChatTurns", () => {
     expect(secondDeps.publishRealtime).not.toHaveBeenCalled();
   });
 
-  it("skips active traces owned by a live durable run (durable boot recovery owns them)", () => {
+  it("skips active traces owned by a live durable run (durable boot recovery owns them)", async () => {
     const storage = createStorage();
     const run = storage.durableRuns.createRun({
       workflowKey: "chat.turn.execute",
@@ -205,14 +205,14 @@ describe("reconcileInterruptedChatTurns", () => {
     });
     const deps = buildDeps(storage);
 
-    const result = reconcileInterruptedChatTurns(deps);
+    const result = await reconcileInterruptedChatTurns(deps);
 
     expect(result.interruptedTurnIds).toEqual([]);
     expect(result.skippedDurableOwnedTurnIds).toEqual(["turn-active"]);
     expect(storage.chatTurnTraces.get("turn-active").status).toBe("running");
   });
 
-  it("fails an active trace whose durable run already reached a terminal status", () => {
+  it("fails an active trace whose durable run already reached a terminal status", async () => {
     const storage = createStorage();
     const run = storage.durableRuns.createRun({
       workflowKey: "chat.turn.execute",
@@ -226,13 +226,13 @@ describe("reconcileInterruptedChatTurns", () => {
     });
     const deps = buildDeps(storage);
 
-    const result = reconcileInterruptedChatTurns(deps);
+    const result = await reconcileInterruptedChatTurns(deps);
 
     expect(result.interruptedTurnIds).toEqual(["turn-active"]);
     expect(storage.chatTurnTraces.get("turn-active").status).toBe("failed");
   });
 
-  it("preserves retained deltas as an interrupted partial prefix and enqueues them exactly once", () => {
+  it("preserves retained deltas as an interrupted partial prefix and enqueues them exactly once", async () => {
     const storage = createStorage();
     seedSession(storage);
     storage.chatMessages.upsert(userMessage());
@@ -251,7 +251,7 @@ describe("reconcileInterruptedChatTurns", () => {
       delta: "completed prefix",
     });
 
-    const first = reconcileInterruptedChatTurns(buildDeps(storage));
+    const first = await reconcileInterruptedChatTurns(buildDeps(storage));
 
     expect(first.preservedPartialTurnIds).toEqual(["turn-active"]);
     expect(first.restoredFinalTurnIds).toEqual([]);
@@ -269,9 +269,9 @@ describe("reconcileInterruptedChatTurns", () => {
       message: { messageId: "msg-assistant", content: "completed prefix" },
     });
 
-    const second = reconcileInterruptedChatTurns(buildDeps(storage));
+    const second = await reconcileInterruptedChatTurns(buildDeps(storage));
     expect(second.transcriptEventsEnqueued).toBe(0);
-    const third = reconcileInterruptedChatTurns(buildDeps(storage));
+    const third = await reconcileInterruptedChatTurns(buildDeps(storage));
     expect(third.transcriptEventsEnqueued).toBe(0);
     expect(storage.transcriptOutbox.listPending(10)).toHaveLength(1);
     expect(storage.chatTurnTraces.get("turn-active")).toMatchObject({
@@ -283,7 +283,7 @@ describe("reconcileInterruptedChatTurns", () => {
     });
   });
 
-  it("preserves an exact durable prefix while keeping the authority-compatible terminal failed trace", () => {
+  it("preserves an exact durable prefix while keeping the authority-compatible terminal failed trace", async () => {
     const storage = createStorage();
     seedSession(storage);
     const created = storage.durableRuns.createRun({ workflowKey: "chat.turn.execute", status: "running" });
@@ -319,7 +319,7 @@ describe("reconcileInterruptedChatTurns", () => {
       created.runId,
     );
 
-    const result = reconcileInterruptedDurableChatTurn(buildDeps(storage), {
+    const result = await reconcileInterruptedDurableChatTurn(buildDeps(storage), {
       runId: created.runId,
       turnId: "turn-active",
     });
@@ -341,7 +341,7 @@ describe("reconcileInterruptedChatTurns", () => {
     });
   });
 
-  it("bounds a recovered prefix on complete UTF-8 code points", () => {
+  it("bounds a recovered prefix on complete UTF-8 code points", async () => {
     const storage = createStorage();
     seedSession(storage);
     storage.chatMessages.upsert(userMessage());
@@ -354,7 +354,7 @@ describe("reconcileInterruptedChatTurns", () => {
       delta: "😀".repeat(40_000),
     });
 
-    reconcileInterruptedChatTurns(buildDeps(storage));
+    await reconcileInterruptedChatTurns(buildDeps(storage));
 
     const content = storage.chatMessages.get("msg-assistant")!.content;
     expect(Buffer.byteLength(content, "utf8")).toBeLessThanOrEqual(128 * 1024);
@@ -362,7 +362,7 @@ describe("reconcileInterruptedChatTurns", () => {
     expect(content).not.toContain("�");
   });
 
-  it("does not downgrade persisted recovery when realtime diagnostics fail", () => {
+  it("does not downgrade persisted recovery when realtime diagnostics fail", async () => {
     const storage = createStorage();
     seedSession(storage);
     storage.chatMessages.upsert(userMessage());
@@ -375,11 +375,9 @@ describe("reconcileInterruptedChatTurns", () => {
       delta: "durably recovered prefix",
     });
     const deps = buildDeps(storage);
-    deps.publishRealtime.mockImplementation(() => {
-      throw new Error("observer failure sk-proj-1234567890abcdefghijklmnopqrstuvwxyz");
-    });
+    deps.publishRealtime.mockRejectedValue(new Error("observer failure sk-proj-1234567890abcdefghijklmnopqrstuvwxyz"));
 
-    const result = reconcileInterruptedChatTurns(deps);
+    const result = await reconcileInterruptedChatTurns(deps);
 
     expect(result.preservedPartialTurnIds).toEqual(["turn-active"]);
     expect(result.interruptedTurnIds).toEqual([]);
@@ -396,7 +394,7 @@ describe("reconcileInterruptedChatTurns", () => {
     );
   });
 
-  it("isolates a failed recovery write so later turns still reconcile", () => {
+  it("isolates a failed recovery write so later turns still reconcile", async () => {
     const storage = createStorage();
     seedSession(storage, "session-a");
     seedSession(storage, "session-b");
@@ -433,29 +431,30 @@ describe("reconcileInterruptedChatTurns", () => {
       { sessionId: "session-b", turnId: "turn-b", eventSuffix: "b" },
     );
     const deps = buildDeps(storage);
+    const asyncStorage = deps.storage;
     const realSessions = storage.sessions;
     deps.storage = {
-      chatTurnTraces: storage.chatTurnTraces,
-      chatToolRuns: storage.chatToolRuns,
-      chatTurnRecovery: storage.chatTurnRecovery,
-      chatSessionPrefs: storage.chatSessionPrefs,
-      chatSessionBranchState: storage.chatSessionBranchState,
-      chatMessages: storage.chatMessages,
-      chatStreamEvents: storage.chatStreamEvents,
+      chatTurnTraces: asyncStorage.chatTurnTraces,
+      chatToolRuns: asyncStorage.chatToolRuns,
+      chatTurnRecovery: asyncStorage.chatTurnRecovery,
+      chatSessionPrefs: asyncStorage.chatSessionPrefs,
+      chatSessionBranchState: asyncStorage.chatSessionBranchState,
+      chatMessages: asyncStorage.chatMessages,
+      chatStreamEvents: asyncStorage.chatStreamEvents,
       sessions: {
-        getBySessionId(sessionId: string) {
+        async getBySessionId(sessionId: string) {
           if (sessionId === "session-a") {
             throw new Error("synthetic session lookup failure sk-proj-1234567890abcdefghijklmnopqrstuvwxyz");
           }
           return realSessions.getBySessionId(sessionId);
         },
-      } as Storage["sessions"],
-      transcriptOutbox: storage.transcriptOutbox,
-      durableRuns: storage.durableRuns,
-      runImmediateTransaction: storage.runImmediateTransaction.bind(storage),
-    };
+      } as ChatTurnInterruptionRecoveryDeps["storage"]["sessions"],
+      transcriptOutbox: asyncStorage.transcriptOutbox,
+      durableRuns: asyncStorage.durableRuns,
+      runImmediateTransaction: asyncStorage.runImmediateTransaction,
+    } as ChatTurnInterruptionRecoveryDeps["storage"];
 
-    const result = reconcileInterruptedChatTurns(deps);
+    const result = await reconcileInterruptedChatTurns(deps);
 
     expect(result.interruptedTurnIds).toContain("turn-a");
     expect(result.preservedPartialTurnIds).toEqual(["turn-b"]);
@@ -469,7 +468,7 @@ describe("reconcileInterruptedChatTurns", () => {
     );
   });
 
-  it("does not promote a retained message_done projection without durable terminal-output proof", () => {
+  it("does not promote a retained message_done projection without durable terminal-output proof", async () => {
     const storage = createStorage();
     seedSession(storage);
     storage.chatMessages.upsert(userMessage());
@@ -482,7 +481,7 @@ describe("reconcileInterruptedChatTurns", () => {
       content: "projected final text",
     });
 
-    const result = reconcileInterruptedChatTurns(buildDeps(storage));
+    const result = await reconcileInterruptedChatTurns(buildDeps(storage));
 
     expect(result.preservedPartialTurnIds).toEqual(["turn-active"]);
     expect(result.restoredFinalTurnIds).toEqual([]);
@@ -492,7 +491,7 @@ describe("reconcileInterruptedChatTurns", () => {
     });
   });
 
-  it("restores message_done only when its durable owner committed the same terminal output", () => {
+  it("restores message_done only when its durable owner committed the same terminal output", async () => {
     const storage = createStorage();
     seedSession(storage);
     const run = storage.durableRuns.createRun({ workflowKey: "chat.turn.execute", status: "running" });
@@ -520,7 +519,7 @@ describe("reconcileInterruptedChatTurns", () => {
       run.runId,
     );
 
-    const result = reconcileInterruptedChatTurns(buildDeps(storage));
+    const result = await reconcileInterruptedChatTurns(buildDeps(storage));
 
     expect(result.restoredFinalTurnIds).toEqual(["turn-active"]);
     expect(result.preservedPartialTurnIds).toEqual([]);
@@ -531,7 +530,7 @@ describe("reconcileInterruptedChatTurns", () => {
     expect(storage.chatMessages.get("msg-assistant")?.content).toBe("authoritative final text");
   });
 
-  it("finds authoritative message_done after more than twenty thousand retained deltas", () => {
+  it("finds authoritative message_done after more than twenty thousand retained deltas", async () => {
     const storage = createStorage();
     seedSession(storage);
     const run = storage.durableRuns.createRun({ workflowKey: "chat.turn.execute", status: "running" });
@@ -563,7 +562,7 @@ describe("reconcileInterruptedChatTurns", () => {
       );
     });
 
-    const result = reconcileInterruptedChatTurns(buildDeps(storage));
+    const result = await reconcileInterruptedChatTurns(buildDeps(storage));
 
     expect(result.restoredFinalTurnIds).toEqual(["turn-active"]);
     expect(storage.chatTurnTraces.get("turn-active")).toMatchObject({
@@ -573,7 +572,7 @@ describe("reconcileInterruptedChatTurns", () => {
     expect(storage.chatMessages.get("msg-assistant-late")?.content).toBe("late authoritative final");
   }, 30_000);
 
-  it("drains active traces beyond one page without retrying a failing first row", () => {
+  it("drains active traces beyond one page without retrying a failing first row", async () => {
     const storage = createStorage();
     for (let index = 0; index < 501; index += 1) {
       storage.chatTurnTraces.create(
@@ -593,7 +592,7 @@ describe("reconcileInterruptedChatTurns", () => {
     });
     const deps = buildDeps(storage);
 
-    const result = reconcileInterruptedChatTurns(deps);
+    const result = await reconcileInterruptedChatTurns(deps);
 
     expect(result.interruptedTurnIds).toHaveLength(500);
     expect(storage.chatTurnTraces.get("turn-page-000").status).toBe("running");
@@ -603,7 +602,7 @@ describe("reconcileInterruptedChatTurns", () => {
     );
   });
 
-  it("synthesizes a failed trace for an orphaned latest user message and advances the branch leaf", () => {
+  it("synthesizes a failed trace for an orphaned latest user message and advances the branch leaf", async () => {
     const storage = createStorage();
     // A completed prior turn holds the active leaf, mirroring a crash right
     // after the next user message persisted but before its trace was created.
@@ -621,7 +620,7 @@ describe("reconcileInterruptedChatTurns", () => {
     storage.chatMessages.upsert(userMessage({ messageId: "msg-orphan" }));
     const deps = buildDeps(storage);
 
-    const result = reconcileInterruptedChatTurns(deps);
+    const result = await reconcileInterruptedChatTurns(deps);
 
     expect(result.interruptedTurnIds).toEqual([]);
     expect(result.synthesizedTurnIds).toHaveLength(1);
@@ -642,43 +641,47 @@ describe("reconcileInterruptedChatTurns", () => {
     expect(storage.chatSessionBranchState.get("session-a")?.activeLeafTurnId).toBe(turnId);
   });
 
-  it("drains orphaned user messages beyond one page and isolates a failing first orphan", { timeout: 60_000 }, () => {
-    const storage = createStorage();
-    for (let index = 0; index < 501; index += 1) {
-      const suffix = index.toString().padStart(3, "0");
-      storage.chatMessages.upsert(
-        userMessage({
-          sessionId: `session-orphan-page-${suffix}`,
-          messageId: `msg-orphan-page-${suffix}`,
-          timestamp: new Date(Date.parse("2026-07-07T19:00:00.000Z") + index).toISOString(),
+  it(
+    "drains orphaned user messages beyond one page and isolates a failing first orphan",
+    { timeout: 60_000 },
+    async () => {
+      const storage = createStorage();
+      for (let index = 0; index < 501; index += 1) {
+        const suffix = index.toString().padStart(3, "0");
+        storage.chatMessages.upsert(
+          userMessage({
+            sessionId: `session-orphan-page-${suffix}`,
+            messageId: `msg-orphan-page-${suffix}`,
+            timestamp: new Date(Date.parse("2026-07-07T19:00:00.000Z") + index).toISOString(),
+          }),
+        );
+      }
+      const originalCreate = storage.chatTurnTraces.create.bind(storage.chatTurnTraces);
+      vi.spyOn(storage.chatTurnTraces, "create").mockImplementation((input) => {
+        if (input.userMessageId === "msg-orphan-page-000") {
+          throw new Error("first orphan cannot be synthesized");
+        }
+        return originalCreate(input);
+      });
+      const deps = buildDeps(storage);
+
+      const result = await reconcileInterruptedChatTurns(deps);
+
+      expect(result.synthesizedTurnIds).toHaveLength(500);
+      expect(storage.chatTurnRecovery.listOrphanedLatestUserMessages(1)[0]?.messageId).toBe("msg-orphan-page-000");
+      expect(
+        storage.chatTurnTraces.listBySession("session-orphan-page-500").some((trace) => trace.status === "failed"),
+      ).toBe(true);
+      expect(deps.recordDevDiagnostic).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: "chat.turn.orphan_interruption_recovery_failed",
+          sessionId: "session-orphan-page-000",
         }),
       );
-    }
-    const originalCreate = storage.chatTurnTraces.create.bind(storage.chatTurnTraces);
-    vi.spyOn(storage.chatTurnTraces, "create").mockImplementation((input) => {
-      if (input.userMessageId === "msg-orphan-page-000") {
-        throw new Error("first orphan cannot be synthesized");
-      }
-      return originalCreate(input);
-    });
-    const deps = buildDeps(storage);
+    },
+  );
 
-    const result = reconcileInterruptedChatTurns(deps);
-
-    expect(result.synthesizedTurnIds).toHaveLength(500);
-    expect(storage.chatTurnRecovery.listOrphanedLatestUserMessages(1)[0]?.messageId).toBe("msg-orphan-page-000");
-    expect(
-      storage.chatTurnTraces.listBySession("session-orphan-page-500").some((trace) => trace.status === "failed"),
-    ).toBe(true);
-    expect(deps.recordDevDiagnostic).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: "chat.turn.orphan_interruption_recovery_failed",
-        sessionId: "session-orphan-page-000",
-      }),
-    );
-  });
-
-  it("redacts and UTF-8 bounds oversized interruption and orphan diagnostics", () => {
+  it("redacts and UTF-8 bounds oversized interruption and orphan diagnostics", async () => {
     const storage = createStorage();
     storage.chatMessages.upsert(userMessage({ messageId: "msg-diagnostic-active" }));
     storage.chatTurnTraces.create(
@@ -709,7 +712,7 @@ describe("reconcileInterruptedChatTurns", () => {
     });
     const deps = buildDeps(storage);
 
-    reconcileInterruptedChatTurns(deps);
+    await reconcileInterruptedChatTurns(deps);
 
     for (const event of [
       "chat.turn.interruption_recovery_persistence_failed",
@@ -725,7 +728,7 @@ describe("reconcileInterruptedChatTurns", () => {
     }
   });
 
-  it("adopts session prefs for a synthesized trace when they exist", () => {
+  it("adopts session prefs for a synthesized trace when they exist", async () => {
     const storage = createStorage();
     storage.chatSessionLifecycles.initialize({
       workspaceId: "default",
@@ -739,7 +742,7 @@ describe("reconcileInterruptedChatTurns", () => {
     storage.chatMessages.upsert(userMessage({ sessionId: "session-b", messageId: "msg-orphan-b" }));
     const deps = buildDeps(storage);
 
-    const result = reconcileInterruptedChatTurns(deps);
+    const result = await reconcileInterruptedChatTurns(deps);
 
     const trace = storage.chatTurnTraces.get(result.synthesizedTurnIds[0]!);
     expect(trace.mode).toBe("chat");
@@ -748,7 +751,7 @@ describe("reconcileInterruptedChatTurns", () => {
     expect(storage.chatSessionBranchState.get("session-b")?.activeLeafTurnId).toBe(trace.turnId);
   });
 
-  it("is a no-op on a healthy database", () => {
+  it("is a no-op on a healthy database", async () => {
     const storage = createStorage();
     storage.chatMessages.upsert(userMessage({ messageId: "msg-done", timestamp: "2026-07-07T18:00:00.000Z" }));
     storage.chatTurnTraces.create({
@@ -770,7 +773,7 @@ describe("reconcileInterruptedChatTurns", () => {
     );
     const deps = buildDeps(storage);
 
-    const result = reconcileInterruptedChatTurns(deps);
+    const result = await reconcileInterruptedChatTurns(deps);
 
     expect(result.interruptedTurnIds).toEqual([]);
     expect(result.synthesizedTurnIds).toEqual([]);
@@ -778,7 +781,7 @@ describe("reconcileInterruptedChatTurns", () => {
     expect(deps.publishRealtime).not.toHaveBeenCalled();
   });
 
-  it("settles a crash before the dispatch boundary as no effect without replay", () => {
+  it("settles a crash before the dispatch boundary as no effect without replay", async () => {
     const storage = createStorage();
     storage.chatMessages.upsert(userMessage());
     storage.chatTurnTraces.create(activeTrace());
@@ -801,7 +804,7 @@ describe("reconcileInterruptedChatTurns", () => {
     });
     const createSpy = vi.spyOn(storage.chatToolRuns, "create");
 
-    const result = reconcileInterruptedChatTurns(buildDeps(storage));
+    const result = await reconcileInterruptedChatTurns(buildDeps(storage));
 
     expect(result.reconciledToolRunIds).toEqual(["tool-before-dispatch"]);
     expect(result.unknownEffectToolRunIds).toEqual([]);
@@ -817,7 +820,7 @@ describe("reconcileInterruptedChatTurns", () => {
     });
   });
 
-  it("settles a crash after a possible dispatch as unknown and suppresses replay", () => {
+  it("settles a crash after a possible dispatch as unknown and suppresses replay", async () => {
     const storage = createStorage();
     storage.chatMessages.upsert(userMessage());
     storage.chatTurnTraces.create(activeTrace());
@@ -840,7 +843,7 @@ describe("reconcileInterruptedChatTurns", () => {
     });
     const createSpy = vi.spyOn(storage.chatToolRuns, "create");
 
-    const result = reconcileInterruptedChatTurns(buildDeps(storage));
+    const result = await reconcileInterruptedChatTurns(buildDeps(storage));
 
     expect(result.reconciledToolRunIds).toEqual(["tool-after-dispatch"]);
     expect(result.unknownEffectToolRunIds).toEqual(["tool-after-dispatch"]);
@@ -856,7 +859,7 @@ describe("reconcileInterruptedChatTurns", () => {
     });
   });
 
-  it("keeps a trusted built-in safe read at no effect across an interrupted executor", () => {
+  it("keeps a trusted built-in safe read at no effect across an interrupted executor", async () => {
     const storage = createStorage();
     storage.chatMessages.upsert(userMessage());
     storage.chatTurnTraces.create(activeTrace());
@@ -878,7 +881,7 @@ describe("reconcileInterruptedChatTurns", () => {
       startedAt: "2026-07-07T19:46:21.000Z",
     });
 
-    const result = reconcileInterruptedChatTurns(buildDeps(storage));
+    const result = await reconcileInterruptedChatTurns(buildDeps(storage));
 
     expect(result.unknownEffectToolRunIds).toEqual([]);
     expect(storage.chatToolRuns.get("tool-safe-read")).toMatchObject({

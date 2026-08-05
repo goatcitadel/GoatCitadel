@@ -28,6 +28,56 @@ import {
 } from "./mcp-requester-resolution-service.js";
 
 describe("ChatTurnAgentRunner browser fallback behavior", () => {
+  it("reuses deterministic pre-search evidence only for the same normalized query", async () => {
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(namedToolCallCompletion("browser.search", { query: "  GATEWAY   reliability  " }))
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [{ index: 0, message: { role: "assistant", content: "Grounded reliability summary." } }],
+      });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-pre-search-reuse",
+      result: {
+        results: [
+          {
+            title: "Gateway reliability",
+            url: "https://example.com/gateway-reliability",
+            snippet: "Bounded evidence",
+          },
+        ],
+      },
+    });
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const content = "Please do research on gateway reliability.";
+    const result = await orchestrator.run({
+      sessionId: "sess-pre-search-reuse",
+      turnId: randomUUID(),
+      userMessageId: "msg-pre-search-reuse",
+      content,
+      mode: "chat",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "off",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content }],
+    });
+
+    expect(invokeTool).toHaveBeenCalledTimes(1);
+    expect(createChatCompletion).toHaveBeenCalledTimes(2);
+    expect(result.assistantContent).toContain("Grounded reliability summary");
+  });
+
   it("continues Cowork from checkpoint-window evidence when maxToolLoops is exhausted", async () => {
     const createChatCompletion = vi
       .fn<() => Promise<ChatCompletionResponse>>()
@@ -7690,7 +7740,7 @@ describe("ChatTurnAgentRunner browser fallback behavior", () => {
     expect(result.turnTrace.status).toBe("cancelled");
   });
 
-  it("promotes a recovered no-tool failure back to completed", async () => {
+  it("keeps a no-tool provider interruption terminal instead of repairing completion", async () => {
     const createChatCompletion = vi
       .fn<() => Promise<ChatCompletionResponse>>()
       .mockRejectedValueOnce(new Error("socket hang up"))
@@ -7735,14 +7785,14 @@ describe("ChatTurnAgentRunner browser fallback behavior", () => {
       ],
     });
 
-    expect(result.assistantContent).toContain(
+    expect(result.assistantContent).toContain("interrupted before the turn could finish");
+    expect(result.assistantContent).not.toContain(
       "Adopt event sourcing only if auditability and replay are first-order billing requirements",
     );
-    expect(result.assistantContent).not.toContain("This turn failed before completion.");
-    expect(result.turnTrace.status).toBe("completed");
+    expect(result.turnTrace.status).toBe("failed");
     expect(result.turnTrace.failure).toMatchObject({ failureClass: "network_interrupted", message: "socket hang up" });
-    expect(result.turnTrace.completion).toMatchObject({ status: "complete", repaired: true });
-    expect(createChatCompletion).toHaveBeenCalledTimes(2);
+    expect(result.turnTrace.completion).toMatchObject({ status: "interrupted", repaired: false });
+    expect(createChatCompletion).toHaveBeenCalledTimes(1);
   });
 
   it("repairs hallucinated continuation references in standalone no-tool answers", async () => {

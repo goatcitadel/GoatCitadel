@@ -39,24 +39,24 @@ describe("engineering learning lifecycle", () => {
       resolution: "Added the invariant and a focused test.",
       prevention: "Run the focused proof before changing this path.",
     };
-    const first = service.propose(input);
-    const duplicate = service.propose(input);
+    const first = await service.propose(input);
+    const duplicate = await service.propose(input);
     expect(duplicate.learningId).toBe(first.learningId);
     expect(first.status).toBe("proposed");
     expect(first.fileEvidence[0]?.sha256).toHaveLength(64);
     expect(first.verificationEvidence[0]).toContain("[REDACTED]");
     expect(first.verificationEvidence[0]).not.toContain("qwerty1234");
-    expect(service.retrieveContext({ workspaceId: "default", paths: ["src/fix.ts"] }).items).toEqual([]);
+    expect((await service.retrieveContext({ workspaceId: "default", paths: ["src/fix.ts"] })).items).toEqual([]);
     const approval = await service.requestAction(first.learningId, { action: "activate" });
-    expect(service.retrieveContext({ workspaceId: "default", paths: ["src/fix.ts"] }).items).toEqual([]);
+    expect((await service.retrieveContext({ workspaceId: "default", paths: ["src/fix.ts"] })).items).toEqual([]);
     storage.approvals.resolve(approval.approvalId, { decision: "approve", resolvedBy: "operator-1" });
-    expect(service.applyApprovedAction(approval.approvalId).status).toBe("active");
-    expect(service.retrieveContext({ workspaceId: "default", paths: ["src/fix.ts"] }).citations[0]).toEqual(
+    expect((await service.applyApprovedAction(approval.approvalId)).status).toBe("active");
+    expect((await service.retrieveContext({ workspaceId: "default", paths: ["src/fix.ts"] })).citations[0]).toEqual(
       expect.objectContaining({ learningId: first.learningId, sourceRunId: "code-run-1" }),
     );
   });
 
-  it("marks proposals stale when recorded source evidence changes", () => {
+  it("marks proposals stale when recorded source evidence changes", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "gc-learning-"));
     const storage = new Storage({ dbPath: ":memory:", transcriptsDir: root, auditDir: root });
     cleanups.push(
@@ -71,7 +71,7 @@ describe("engineering learning lifecycle", () => {
       createApproval: async () => ({ approvalId: "approval-1" }) as never,
       resolveSourceRoot: () => root,
     });
-    const record = service.propose({
+    const record = await service.propose({
       workspaceId: "default",
       source: { runId: "code-run-2" },
       disposition: "completed",
@@ -84,7 +84,7 @@ describe("engineering learning lifecycle", () => {
       prevention: "Recheck hashes on read.",
     });
     fs.writeFileSync(path.join(root, "fix.ts"), "after\n", "utf8");
-    const stale = service.get(record.learningId);
+    const stale = await service.get(record.learningId);
     expect(stale.status).toBe("stale");
     expect(stale.staleReasons).toContain("source_changed:fix.ts");
   });
@@ -104,7 +104,7 @@ describe("engineering learning lifecycle", () => {
       createApproval: async (input) => storage.approvals.create(input),
       resolveSourceRoot: () => root,
     });
-    const learning = service.propose({
+    const learning = await service.propose({
       workspaceId: "default",
       source: { runId: "code-run-stale-approval" },
       disposition: "completed",
@@ -120,11 +120,11 @@ describe("engineering learning lifecycle", () => {
     fs.writeFileSync(path.join(root, "fix.ts"), "after\n", "utf8");
     storage.approvals.resolve(approval.approvalId, { decision: "approve", resolvedBy: "operator-1" });
 
-    expect(() => service.applyApprovedAction(approval.approvalId)).toThrow(/changed after approval|stale/i);
-    expect(service.get(learning.learningId).status).toBe("stale");
+    await expect(service.applyApprovedAction(approval.approvalId)).rejects.toThrow(/changed after approval|stale/i);
+    expect((await service.get(learning.learningId)).status).toBe("stale");
   });
 
-  it("rejects ineligible work before persistence", () => {
+  it("rejects ineligible work before persistence", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "gc-learning-"));
     const storage = new Storage({ dbPath: ":memory:", transcriptsDir: root, auditDir: root });
     cleanups.push(
@@ -138,7 +138,7 @@ describe("engineering learning lifecycle", () => {
       createApproval: async () => ({ approvalId: "approval-1" }) as never,
       resolveSourceRoot: () => root,
     });
-    expect(() =>
+    await expect(
       service.propose({
         workspaceId: "default",
         source: { runId: "failed-run" },
@@ -152,6 +152,6 @@ describe("engineering learning lifecycle", () => {
         resolution: "r",
         prevention: "p",
       }),
-    ).toThrow(/verified evidence/i);
+    ).rejects.toThrow(/verified evidence/i);
   });
 });

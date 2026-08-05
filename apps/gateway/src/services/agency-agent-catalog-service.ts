@@ -4,7 +4,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { promisify } from "node:util";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { parseRichAgentMarkdown } from "@goatcitadel/skills";
 import type {
   AgencyCatalogImportResponse,
@@ -58,9 +58,10 @@ export async function importAgencyCatalog(input: {
   const ref = input.ref?.trim() || DEFAULT_AGENCY_REF;
   const now = input.now ?? new Date().toISOString();
   const existingEntries = new Map(
-    input.storage.importedAgentCatalog
-      .list({ workspaceId: input.workspaceId, limit: 5000 })
-      .map((entry) => [entry.entryId, entry]),
+    (await input.storage.importedAgentCatalog.list({ workspaceId: input.workspaceId, limit: 5000 })).map((entry) => [
+      entry.entryId,
+      entry,
+    ]),
   );
   const source = await materializeAgencySource(repoUrl, ref);
   try {
@@ -73,7 +74,7 @@ export async function importAgencyCatalog(input: {
       importedAt: now,
       existingEntries,
     });
-    input.storage.importedAgentCatalog.upsertMany(records);
+    await input.storage.importedAgentCatalog.upsertMany(records);
 
     const parseCounts: Record<RichAgentParseSupportStatus, number> = {
       supported: 0,

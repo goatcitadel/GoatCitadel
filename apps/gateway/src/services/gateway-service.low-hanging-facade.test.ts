@@ -10,7 +10,12 @@ import { NotFoundError } from "@goatcitadel/contracts";
 
 function createGatewayHarness() {
   const gateway = Object.create(GatewayService.prototype) as GatewayService & Record<string, any>;
-  gateway.config = { assistant: { deploymentProfile: "local_dev" } };
+  gateway.config = {
+    assistant: {
+      deploymentProfile: "local_dev",
+      features: { documentEditingV1Enabled: false },
+    },
+  };
   gateway.runtimeDecisionRecorder = { record: vi.fn() };
   return gateway;
 }
@@ -32,12 +37,12 @@ describe("GatewayService low-hanging facade delegation", () => {
       }
       events.push(event);
     });
-    const runImmediateTransaction = vi.fn(<T>(work: () => T): T => {
+    const runImmediateTransaction = vi.fn(async <T>(work: () => T | Promise<T>): Promise<T> => {
       const previousResolutionStatus = resolutionStatus;
       const previousResult = result;
       const previousEventCount = events.length;
       try {
-        return work();
+        return await work();
       } catch (error) {
         resolutionStatus = previousResolutionStatus;
         result = previousResult;
@@ -171,7 +176,7 @@ describe("GatewayService low-hanging facade delegation", () => {
     },
   );
 
-  it("uses one deterministic durable child for autonomous delivery retries and create races", () => {
+  it("uses one deterministic durable child for autonomous delivery retries and create races", async () => {
     const gateway = createGatewayHarness();
     const runs = new Map<string, any>();
     let autonomyDisabled = false;
@@ -217,10 +222,10 @@ describe("GatewayService low-hanging facade delegation", () => {
       deliveryChannel: { channelKey: "telegram", target: "42" },
     };
 
-    expect(GatewayService.prototype.enqueueAutonomousChannelDelivery.call(gateway, input)).toBe(
+    await expect(GatewayService.prototype.enqueueAutonomousChannelDelivery.call(gateway, input)).resolves.toBe(
       "autonomous-delivery:source-run-1",
     );
-    expect(GatewayService.prototype.enqueueAutonomousChannelDelivery.call(gateway, input)).toBe(
+    await expect(GatewayService.prototype.enqueueAutonomousChannelDelivery.call(gateway, input)).resolves.toBe(
       "autonomous-delivery:source-run-1",
     );
     expect(createDurableRun).toHaveBeenCalledTimes(1);
@@ -230,7 +235,7 @@ describe("GatewayService low-hanging facade delegation", () => {
 
     autonomyDisabled = true;
     connectors = [];
-    expect(GatewayService.prototype.enqueueAutonomousChannelDelivery.call(gateway, input)).toBe(
+    await expect(GatewayService.prototype.enqueueAutonomousChannelDelivery.call(gateway, input)).resolves.toBe(
       "autonomous-delivery:source-run-1",
     );
     expect(createDurableRun).toHaveBeenCalledTimes(1);
@@ -255,12 +260,12 @@ describe("GatewayService low-hanging facade delegation", () => {
       });
       throw new Error("simulated concurrent unique-key winner");
     });
-    expect(GatewayService.prototype.enqueueAutonomousChannelDelivery.call(gateway, input)).toBe(
+    await expect(GatewayService.prototype.enqueueAutonomousChannelDelivery.call(gateway, input)).resolves.toBe(
       "autonomous-delivery:source-run-1",
     );
   });
 
-  it("does not rewind a newer Chat branch while retrying silent-heartbeat cleanup", () => {
+  it("does not rewind a newer Chat branch while retrying silent-heartbeat cleanup", async () => {
     const gateway = createGatewayHarness();
     const deleteMessages = vi.fn();
     const deleteTraces = vi.fn();
@@ -278,7 +283,7 @@ describe("GatewayService low-hanging facade delegation", () => {
     gateway.recordDevDiagnostic = vi.fn();
     gateway.publishRealtime = vi.fn();
 
-    expect(
+    await expect(
       GatewayService.prototype.cleanupSilentHeartbeatTurn.call(gateway, {
         sessionId: "session-1",
         turnId: "turn-heartbeat",
@@ -286,13 +291,13 @@ describe("GatewayService low-hanging facade delegation", () => {
         assistantMessageId: "assistant-heartbeat",
         parentTurnId: "turn-parent",
       }),
-    ).toMatchObject({ status: "manual_reconciliation", reason: expect.stringContaining("turn-newer") });
+    ).resolves.toMatchObject({ status: "manual_reconciliation", reason: expect.stringContaining("turn-newer") });
     expect(deleteMessages).not.toHaveBeenCalled();
     expect(deleteTraces).not.toHaveBeenCalled();
     expect(setActiveLeafIfCurrent).not.toHaveBeenCalled();
   });
 
-  it("treats realtime failure after canonical heartbeat cleanup as committed", () => {
+  it("treats realtime failure after canonical heartbeat cleanup as committed", async () => {
     const gateway = createGatewayHarness();
     const setActiveLeafIfCurrent = vi.fn(() => true);
     gateway.storage = {
@@ -310,7 +315,7 @@ describe("GatewayService low-hanging facade delegation", () => {
       throw new Error("retained stream unavailable");
     });
 
-    expect(
+    await expect(
       GatewayService.prototype.cleanupSilentHeartbeatTurn.call(gateway, {
         sessionId: "session-1",
         turnId: "turn-heartbeat",
@@ -318,7 +323,7 @@ describe("GatewayService low-hanging facade delegation", () => {
         assistantMessageId: "assistant-heartbeat",
         parentTurnId: "turn-parent",
       }),
-    ).toEqual({ status: "completed" });
+    ).resolves.toEqual({ status: "completed" });
     expect(setActiveLeafIfCurrent).toHaveBeenCalledWith(
       "session-1",
       "turn-heartbeat",
@@ -330,7 +335,7 @@ describe("GatewayService low-hanging facade delegation", () => {
     );
   });
 
-  it("treats absent heartbeat artifacts as already cleaned after a newer leaf advances", () => {
+  it("treats absent heartbeat artifacts as already cleaned after a newer leaf advances", async () => {
     const gateway = createGatewayHarness();
     let activeLeafTurnId: string | undefined = "turn-heartbeat";
     let messagesPresent = true;
@@ -356,7 +361,12 @@ describe("GatewayService low-hanging facade delegation", () => {
         }),
       },
       chatMessages: {
-        get: vi.fn(() => (messagesPresent ? { content: "silent" } : undefined)),
+        get: vi.fn(() => {
+          if (!messagesPresent) {
+            throw new NotFoundError({ entity: "Chat message", id: "user-heartbeat" });
+          }
+          return { content: "silent" };
+        }),
         deleteByMessageIds: deleteMessages,
       },
       chatTurnTraces: {
@@ -377,9 +387,11 @@ describe("GatewayService low-hanging facade delegation", () => {
       parentTurnId: "turn-parent",
     };
 
-    expect(GatewayService.prototype.cleanupSilentHeartbeatTurn.call(gateway, input)).toEqual({ status: "completed" });
+    await expect(GatewayService.prototype.cleanupSilentHeartbeatTurn.call(gateway, input)).resolves.toEqual({
+      status: "completed",
+    });
     activeLeafTurnId = "turn-newer";
-    expect(GatewayService.prototype.cleanupSilentHeartbeatTurn.call(gateway, input)).toEqual({
+    await expect(GatewayService.prototype.cleanupSilentHeartbeatTurn.call(gateway, input)).resolves.toEqual({
       status: "already_completed",
     });
     expect(deleteMessages).toHaveBeenCalledTimes(1);
@@ -458,7 +470,9 @@ describe("GatewayService low-hanging facade delegation", () => {
       ensurePromptPackLoaded: vi.fn(async () => ({ packId: "pack-1" })),
     };
 
-    expect(GatewayService.prototype.getSession.call(gateway, "session-1")).toEqual({ sessionId: "session-1" });
+    await expect(GatewayService.prototype.getSession.call(gateway, "session-1")).resolves.toEqual({
+      sessionId: "session-1",
+    });
     await expect(GatewayService.prototype.listGlobalGuidance.call(gateway)).resolves.toEqual([{ scope: "global" }]);
     await expect(GatewayService.prototype.listWorkspaceGuidance.call(gateway, "workspace-1")).resolves.toEqual([
       { workspaceId: "workspace-1" },
@@ -475,7 +489,7 @@ describe("GatewayService low-hanging facade delegation", () => {
       content: "workspace",
     });
 
-    GatewayService.prototype.extractAndPersistLearnedMemory.call(gateway, "session-1", "remember this", {
+    await GatewayService.prototype.extractAndPersistLearnedMemory.call(gateway, "session-1", "remember this", {
       role: "user",
       sourceRef: "message-1",
     });
@@ -483,20 +497,22 @@ describe("GatewayService low-hanging facade delegation", () => {
       role: "user",
       sourceRef: "message-1",
     });
-    expect(GatewayService.prototype.listChatSessionLearnedMemory.call(gateway, "session-1")).toEqual({
+    await expect(GatewayService.prototype.listChatSessionLearnedMemory.call(gateway, "session-1")).resolves.toEqual({
       items: ["memory"],
       conflicts: [],
     });
-    expect(
+    await expect(
       GatewayService.prototype.updateChatSessionLearnedMemory.call(gateway, "session-1", "memory-1", {
         status: "rejected",
       }),
-    ).toEqual({ itemId: "memory-1", input: { status: "rejected" } });
-    expect(GatewayService.prototype.getMemoryMaintenanceStatus.call(gateway, "workspace-1")).toEqual({
+    ).resolves.toEqual({ itemId: "memory-1", input: { status: "rejected" } });
+    await expect(GatewayService.prototype.getMemoryMaintenanceStatus.call(gateway, "workspace-1")).resolves.toEqual({
       workspaceId: "workspace-1",
       status: "idle",
     });
-    expect(GatewayService.prototype.runMemoryMaintenanceNow.call(gateway, { workspaceId: "workspace-1" })).toEqual({
+    await expect(
+      GatewayService.prototype.runMemoryMaintenanceNow.call(gateway, { workspaceId: "workspace-1" }),
+    ).resolves.toEqual({
       input: { workspaceId: "workspace-1" },
       status: "completed",
     });
@@ -562,46 +578,48 @@ describe("GatewayService low-hanging facade delegation", () => {
       verify: vi.fn(async (input: unknown) => ({ input, verified: true })),
     };
 
-    expect(GatewayService.prototype.getDurableDiagnostics.call(gateway)).toEqual({ status: "ok" });
-    expect(GatewayService.prototype.listDurableRuns.call(gateway)).toEqual([{ limit: 50 }]);
-    expect(GatewayService.prototype.listDurableDeadLetters.call(gateway, 5)).toEqual([{ limit: 5 }]);
-    expect(GatewayService.prototype.listDurableRunCheckpoints.call(gateway, "run-1")).toEqual([
+    await expect(GatewayService.prototype.getDurableDiagnostics.call(gateway)).resolves.toEqual({ status: "ok" });
+    await expect(GatewayService.prototype.listDurableRuns.call(gateway)).resolves.toEqual([{ limit: 50 }]);
+    await expect(GatewayService.prototype.listDurableDeadLetters.call(gateway, 5)).resolves.toEqual([{ limit: 5 }]);
+    await expect(GatewayService.prototype.listDurableRunCheckpoints.call(gateway, "run-1")).resolves.toEqual([
       { runId: "run-1", limit: 200 },
     ]);
-    expect(GatewayService.prototype.createDurableRun.call(gateway, { workflow: "chat" })).toEqual({
+    await expect(GatewayService.prototype.createDurableRun.call(gateway, { workflow: "chat" })).resolves.toEqual({
       input: { workflow: "chat" },
     });
-    expect(GatewayService.prototype.getDurableRun.call(gateway, "run-1")).toEqual({ runId: "run-1" });
-    expect(GatewayService.prototype.listDurableRunTimeline.call(gateway, "run-1")).toEqual([
+    await expect(GatewayService.prototype.getDurableRun.call(gateway, "run-1")).resolves.toEqual({ runId: "run-1" });
+    await expect(GatewayService.prototype.listDurableRunTimeline.call(gateway, "run-1")).resolves.toEqual([
       { runId: "run-1", limit: 300 },
     ]);
-    expect(GatewayService.prototype.pauseDurableRun.call(gateway, "run-1")).toEqual({
+    await expect(GatewayService.prototype.pauseDurableRun.call(gateway, "run-1")).resolves.toEqual({
       runId: "run-1",
       actorId: "operator",
       action: "pause",
     });
-    expect(GatewayService.prototype.resumeDurableRun.call(gateway, "run-1", "tester")).toEqual({
+    await expect(GatewayService.prototype.resumeDurableRun.call(gateway, "run-1", "tester")).resolves.toEqual({
       runId: "run-1",
       actorId: "tester",
       action: "resume",
     });
-    expect(GatewayService.prototype.cancelDurableRun.call(gateway, "run-1")).toEqual({
+    await expect(GatewayService.prototype.cancelDurableRun.call(gateway, "run-1")).resolves.toEqual({
       runId: "run-1",
       actorId: "operator",
       action: "cancel",
     });
-    expect(GatewayService.prototype.retryDurableRun.call(gateway, "run-1")).toEqual({
+    await expect(GatewayService.prototype.retryDurableRun.call(gateway, "run-1")).resolves.toEqual({
       runId: "run-1",
       reason: "manual_retry",
       actorId: "operator",
     });
-    expect(GatewayService.prototype.wakeDurableRun.call(gateway, "run-1", { eventKey: "manual" })).toEqual({
+    await expect(
+      GatewayService.prototype.wakeDurableRun.call(gateway, "run-1", { eventKey: "manual" }),
+    ).resolves.toEqual({
       runId: "run-1",
       event: { eventKey: "manual" },
     });
-    expect(
+    await expect(
       GatewayService.prototype.recoverDurableDeadLetter.call(gateway, "dead-1", "tester", { maxAttempts: 2 }),
-    ).toEqual({
+    ).resolves.toEqual({
       entryId: "dead-1",
       actorId: "tester",
       options: { maxAttempts: 2 },
@@ -616,8 +634,8 @@ describe("GatewayService low-hanging facade delegation", () => {
       input: { filePath: "backup.zip" },
       valid: true,
     });
-    expect(GatewayService.prototype.getRetentionPolicy.call(gateway)).toEqual({ keepDaily: 7 });
-    expect(GatewayService.prototype.updateRetentionPolicy.call(gateway, { keepDaily: 3 })).toEqual({
+    await expect(GatewayService.prototype.getRetentionPolicy.call(gateway)).resolves.toEqual({ keepDaily: 7 });
+    await expect(GatewayService.prototype.updateRetentionPolicy.call(gateway, { keepDaily: 3 })).resolves.toEqual({
       input: { keepDaily: 3 },
     });
     await expect(GatewayService.prototype.pruneRetention.call(gateway)).resolves.toEqual({ options: {} });
@@ -692,13 +710,13 @@ describe("GatewayService low-hanging facade delegation", () => {
         },
       },
     ]);
-    expect(
+    await expect(
       GatewayService.prototype.evaluateToolAccess.call(gateway, {
         toolName: "browser.search",
         agentId: "agent-1",
         sessionId: "session-1",
       }),
-    ).toEqual({
+    ).resolves.toEqual({
       input: {
         toolName: "browser.search",
         agentId: "agent-1",
@@ -709,14 +727,14 @@ describe("GatewayService low-hanging facade delegation", () => {
       allowed: true,
     });
     expect(gateway.storage.chatSessionMeta.get).toHaveBeenCalledWith("session-1");
-    expect(
+    await expect(
       GatewayService.prototype.evaluateToolAccess.call(gateway, {
         toolName: "browser.search",
         agentId: "agent-1",
         sessionId: "session-1",
         workspaceId: "workspace-explicit",
       }),
-    ).toEqual({
+    ).resolves.toEqual({
       input: {
         toolName: "browser.search",
         agentId: "agent-1",
@@ -727,10 +745,10 @@ describe("GatewayService low-hanging facade delegation", () => {
       allowed: true,
     });
 
-    expect(GatewayService.prototype.listToolGrants.call(gateway, "session", "session-1", 10)).toEqual([
+    await expect(GatewayService.prototype.listToolGrants.call(gateway, "session", "session-1", 10)).resolves.toEqual([
       { scope: "session", scopeRef: "session-1", limit: 10 },
     ]);
-    expect(
+    await expect(
       GatewayService.prototype.createToolGrant.call(gateway, {
         toolPattern: "browser.*",
         decision: "allow",
@@ -738,7 +756,7 @@ describe("GatewayService low-hanging facade delegation", () => {
         scopeRef: "session-1",
         createdBy: "tester",
       }),
-    ).toEqual({
+    ).resolves.toEqual({
       input: {
         toolPattern: "browser.*",
         decision: "allow",
@@ -748,7 +766,7 @@ describe("GatewayService low-hanging facade delegation", () => {
       },
       grantId: "grant-1",
     });
-    expect(GatewayService.prototype.revokeToolGrant.call(gateway, "grant-1", "tester")).toBe(true);
+    await expect(GatewayService.prototype.revokeToolGrant.call(gateway, "grant-1", "tester")).resolves.toBe(true);
 
     await expect(
       GatewayService.prototype.createApproval.call(gateway, {
@@ -766,12 +784,12 @@ describe("GatewayService low-hanging facade delegation", () => {
       },
       approvalId: "approval-1",
     });
-    expect(
+    await expect(
       GatewayService.prototype.createApprovalRemoteActionToken.call(gateway, "approval-1", {
         connectorId: "connector-1",
         issuedBy: "tester",
       }),
-    ).toEqual({
+    ).resolves.toEqual({
       approvalId: "approval-1",
       input: { connectorId: "connector-1", issuedBy: "tester" },
     });
@@ -807,7 +825,7 @@ describe("GatewayService low-hanging facade delegation", () => {
       },
       source: "token-id",
     });
-    expect(GatewayService.prototype.listApprovals.call(gateway, "pending", 3)).toEqual([
+    await expect(GatewayService.prototype.listApprovals.call(gateway, "pending", 3)).resolves.toEqual([
       { status: "pending", limit: 3 },
     ]);
     await expect(
@@ -819,7 +837,7 @@ describe("GatewayService low-hanging facade delegation", () => {
       input: { decision: "approve", resolvedBy: "tester" },
       resolved: 2,
     });
-    expect(GatewayService.prototype.getApprovalReplay.call(gateway, "approval-1")).toEqual({
+    await expect(GatewayService.prototype.getApprovalReplay.call(gateway, "approval-1")).resolves.toEqual({
       approvalId: "approval-1",
       replayedBy: "operator",
     });
@@ -843,10 +861,12 @@ describe("GatewayService low-hanging facade delegation", () => {
       options: { resolvedBy: "tester" },
     });
 
-    expect(GatewayService.prototype.findProactiveDurableRunIdsForApproval.call(gateway, "approval-1")).toEqual([
-      "durable:approval-1",
-    ]);
-    expect(GatewayService.prototype.ensureApprovalWaitDurableRun.call(gateway, { approvalId: "approval-1" })).toEqual({
+    await expect(
+      GatewayService.prototype.findProactiveDurableRunIdsForApproval.call(gateway, "approval-1"),
+    ).resolves.toEqual(["durable:approval-1"]);
+    await expect(
+      GatewayService.prototype.ensureApprovalWaitDurableRun.call(gateway, { approvalId: "approval-1" }),
+    ).resolves.toEqual({
       approval: { approvalId: "approval-1" },
     });
     expect(GatewayService.prototype.buildApprovalLinkage.call(gateway, { runId: "run-1" })).toEqual({
@@ -855,25 +875,27 @@ describe("GatewayService low-hanging facade delegation", () => {
     expect(GatewayService.prototype.buildApprovalRealtimeLinks.call(gateway, { approvalId: "approval-1" })).toEqual({
       approvalId: "approval-1",
     });
-    expect(
+    await expect(
       GatewayService.prototype.enqueueApprovalResolutionEffects.call(
         gateway,
         { approvalId: "approval-1" },
         { decision: "approve", resolvedBy: "tester" },
       ),
-    ).toEqual([
+    ).resolves.toEqual([
       {
         approval: { approvalId: "approval-1" },
         input: { decision: "approve", resolvedBy: "tester" },
       },
     ]);
-    expect(GatewayService.prototype.primeApprovalLifecycle.call(gateway, "approval-1", { runId: "run-1" })).toEqual({
+    await expect(
+      GatewayService.prototype.primeApprovalLifecycle.call(gateway, "approval-1", { runId: "run-1" }),
+    ).resolves.toEqual({
       approvalId: "approval-1",
       linkage: { runId: "run-1" },
     });
   });
 
-  it("reconciles custom permission profile default surfaces into activations", () => {
+  it("reconciles custom permission profile default surfaces into activations", async () => {
     const gateway = createGatewayHarness();
     const baseProfile = {
       profileId: "profile-review",
@@ -909,7 +931,7 @@ describe("GatewayService low-hanging facade delegation", () => {
     };
     gateway.publishRealtime = vi.fn();
 
-    GatewayService.prototype.createPermissionProfile.call(gateway, {
+    await GatewayService.prototype.createPermissionProfile.call(gateway, {
       label: "Review",
       scope: "workspace",
       scopeRef: "workspace-a",
@@ -931,7 +953,7 @@ describe("GatewayService low-hanging facade delegation", () => {
     );
 
     activateProfile.mockClear();
-    GatewayService.prototype.updatePermissionProfile.call(gateway, "profile-review", {
+    await GatewayService.prototype.updatePermissionProfile.call(gateway, "profile-review", {
       updatedBy: "operator-a",
       defaultForSurfaces: ["chat"],
     });
@@ -941,7 +963,7 @@ describe("GatewayService low-hanging facade delegation", () => {
     );
   });
 
-  it("resolves custom permission profile defaults after create and update", () => {
+  it("resolves custom permission profile defaults after create and update", async () => {
     const gateway = createGatewayHarness();
     const fallbackProfile = {
       profileId: "safe",
@@ -1002,7 +1024,7 @@ describe("GatewayService low-hanging facade delegation", () => {
     };
     gateway.publishRealtime = vi.fn();
 
-    GatewayService.prototype.createPermissionProfile.call(gateway, {
+    await GatewayService.prototype.createPermissionProfile.call(gateway, {
       label: "Review",
       scope: "workspace",
       scopeRef: "workspace-a",
@@ -1010,42 +1032,42 @@ describe("GatewayService low-hanging facade delegation", () => {
       defaultForSurfaces: ["code", "cowork"],
       createdBy: "operator-a",
     });
-    expect(
+    await expect(
       GatewayService.prototype.resolveToolPolicyContext.call(gateway, {
         operatorId: "operator-a",
         workspaceId: "workspace-a",
         surface: "code",
-      }).permissionProfileId,
-    ).toBe("profile-review");
-    expect(
+      }),
+    ).resolves.toMatchObject({ permissionProfileId: "profile-review" });
+    await expect(
       GatewayService.prototype.resolveToolPolicyContext.call(gateway, {
         operatorId: "operator-a",
         workspaceId: "workspace-a",
         surface: "chat",
-      }).permissionProfileId,
-    ).toBe("safe");
+      }),
+    ).resolves.toMatchObject({ permissionProfileId: "safe" });
 
-    GatewayService.prototype.updatePermissionProfile.call(gateway, "profile-review", {
+    await GatewayService.prototype.updatePermissionProfile.call(gateway, "profile-review", {
       updatedBy: "operator-a",
       defaultForSurfaces: ["chat"],
     });
-    expect(
+    await expect(
       GatewayService.prototype.resolveToolPolicyContext.call(gateway, {
         operatorId: "operator-a",
         workspaceId: "workspace-a",
         surface: "code",
-      }).permissionProfileId,
-    ).toBe("safe");
-    expect(
+      }),
+    ).resolves.toMatchObject({ permissionProfileId: "safe" });
+    await expect(
       GatewayService.prototype.resolveToolPolicyContext.call(gateway, {
         operatorId: "operator-a",
         workspaceId: "workspace-a",
         surface: "chat",
-      }).permissionProfileId,
-    ).toBe("profile-review");
+      }),
+    ).resolves.toMatchObject({ permissionProfileId: "profile-review" });
   });
 
-  it("classifies tool configuration projection failures as committed mutations", () => {
+  it("classifies tool configuration projection failures as committed mutations", async () => {
     const gateway = createGatewayHarness();
     const profile = {
       profileId: "profile-review",
@@ -1129,7 +1151,7 @@ describe("GatewayService low-hanging facade delegation", () => {
       () => GatewayService.prototype.revokeLocalOperatorOverride.call(gateway, override.overrideId, "operator-a"),
     ];
 
-    expect(mutations.map((mutate) => mutate())).toEqual([
+    expect(await Promise.all(mutations.map((mutate) => mutate()))).toEqual([
       profile,
       profile,
       true,
@@ -1140,7 +1162,7 @@ describe("GatewayService low-hanging facade delegation", () => {
     expect(gateway.publishRealtime).toHaveBeenCalledTimes(6);
   });
 
-  it("rejects bypass permission profile mutation and activation in remote hardened mode", () => {
+  it("rejects bypass permission profile mutation and activation in remote hardened mode", async () => {
     const gateway = createGatewayHarness();
     gateway.publishRealtime = vi.fn();
     gateway.config.assistant.deploymentProfile = "remote_hardened";
@@ -1182,50 +1204,50 @@ describe("GatewayService low-hanging facade delegation", () => {
       },
     };
 
-    expect(() =>
+    await expect(
       GatewayService.prototype.createPermissionProfile.call(gateway, {
         label: "Bypass",
         scope: "operator",
         approvalMode: "bypass",
         createdBy: "operator-a",
       }),
-    ).toThrow(/Bypass permission profiles are unavailable/);
+    ).rejects.toThrow(/Bypass permission profiles are unavailable/);
     expect(createProfile).not.toHaveBeenCalled();
 
-    expect(() =>
+    await expect(
       GatewayService.prototype.updatePermissionProfile.call(gateway, "profile-safe", {
         updatedBy: "operator-a",
         approvalMode: "bypass",
       }),
-    ).toThrow(/Bypass permission profiles are unavailable/);
+    ).rejects.toThrow(/Bypass permission profiles are unavailable/);
     expect(updateProfile).not.toHaveBeenCalled();
 
-    expect(() =>
+    await expect(
       GatewayService.prototype.updatePermissionProfile.call(gateway, "profile-bypass", {
         updatedBy: "operator-a",
         label: "Still bypass",
       }),
-    ).toThrow(/Bypass permission profiles are unavailable/);
+    ).rejects.toThrow(/Bypass permission profiles are unavailable/);
     expect(updateProfile).not.toHaveBeenCalled();
 
-    expect(
+    await expect(
       GatewayService.prototype.updatePermissionProfile.call(gateway, "profile-bypass", {
         updatedBy: "operator-a",
         approvalMode: "approve_risky",
       }),
-    ).toMatchObject({
+    ).resolves.toMatchObject({
       profileId: "profile-bypass",
       approvalMode: "approve_risky",
     });
     expect(updateProfile).toHaveBeenCalledTimes(1);
 
-    expect(() =>
+    await expect(
       GatewayService.prototype.activatePermissionProfile.call(gateway, {
         profileId: "profile-bypass",
         operatorId: "operator-a",
         createdBy: "operator-a",
       }),
-    ).toThrow(/Bypass permission profiles are unavailable/);
+    ).rejects.toThrow(/Bypass permission profiles are unavailable/);
     expect(activateProfile).not.toHaveBeenCalled();
 
     const resolvedBypassContext = {
@@ -1233,10 +1255,10 @@ describe("GatewayService low-hanging facade delegation", () => {
       permissionProfile: bypassProfile,
       approvedCodeModeRunId: "code-run-1",
     };
-    expect(() =>
+    await expect(
       (
         GatewayService.prototype as unknown as {
-          enrichToolPolicyContext: (input: unknown) => unknown;
+          enrichToolPolicyContext: (input: unknown) => Promise<unknown>;
         }
       ).enrichToolPolicyContext.call(gateway, {
         toolName: "fs.write",
@@ -1245,11 +1267,11 @@ describe("GatewayService low-hanging facade delegation", () => {
         sessionId: "session-1",
         policyContext: resolvedBypassContext,
       }),
-    ).toThrow(/Bypass permission profiles are unavailable/);
-    expect(() =>
+    ).rejects.toThrow(/Bypass permission profiles are unavailable/);
+    await expect(
       (
         GatewayService.prototype as unknown as {
-          enrichMcpInvokePolicyContext: (input: unknown) => unknown;
+          enrichMcpInvokePolicyContext: (input: unknown) => Promise<unknown>;
         }
       ).enrichMcpInvokePolicyContext.call(gateway, {
         serverId: "mcp-1",
@@ -1262,7 +1284,7 @@ describe("GatewayService low-hanging facade delegation", () => {
           localOperatorOverrideId: "override-1",
         },
       }),
-    ).toThrow(/Local Operator Override is unavailable/);
+    ).rejects.toThrow(/Local Operator Override is unavailable/);
   });
 
   it("queues channel sends and merges persisted and runtime delivery status", async () => {
@@ -1399,7 +1421,7 @@ describe("GatewayService low-hanging facade delegation", () => {
       { deliveryId: "drained:7" },
     ]);
 
-    expect(GatewayService.prototype.listChannelDeliveryRuntime.call(gateway)).toEqual([
+    await expect(GatewayService.prototype.listChannelDeliveryRuntime.call(gateway)).resolves.toEqual([
       {
         deliveryId: "runtime-overlap",
         connectionId: "conn-1",
@@ -1701,9 +1723,12 @@ describe("GatewayService low-hanging facade delegation", () => {
       {
         durableRunId: "durable-inbound",
         requireDurableExecution: true,
-        onChildDurableRunLaunched: onDurableRunLaunched,
+        onChildDurableRunLaunched: expect.any(Function),
       },
     );
+    const durableExecutionOptions = gateway.consumePreparedAgentChatTurn.mock.calls[0]?.[5];
+    await durableExecutionOptions.onChildDurableRunLaunched("durable-child-1");
+    expect(onDurableRunLaunched).toHaveBeenCalledWith("durable-child-1");
     expect(gateway.commsSend).toHaveBeenCalledWith(
       expect.objectContaining({
         idempotencyKey: "delivery-key-inbound",
@@ -1880,7 +1905,7 @@ describe("GatewayService low-hanging facade delegation", () => {
     expect(state.activeLeafTurnId).toBe("turn-child");
   });
 
-  it("normalizes chat session model defaults and hydrates autonomy preferences", () => {
+  it("normalizes chat session model defaults and hydrates autonomy preferences", async () => {
     const gateway = createGatewayHarness();
     const originalPrefs = {
       sessionId: "session-1",
@@ -1968,12 +1993,12 @@ describe("GatewayService low-hanging facade delegation", () => {
     // bypass the session aggregate revision/CAS owner.
     expect(gateway.storage.chatSessionPrefs.patch).not.toHaveBeenCalled();
 
-    expect(
+    await expect(
       GatewayService.prototype.hydrateChatPrefsWithAutonomy.call(gateway, "session-1", {
         providerId: "openai",
         model: "gpt-5.4-mini",
       }),
-    ).toEqual({
+    ).resolves.toEqual({
       providerId: "openai",
       model: "gpt-5.4-mini",
       proactiveMode: "review",
@@ -1985,15 +2010,15 @@ describe("GatewayService low-hanging facade delegation", () => {
       retrievalMode: "workspace",
       reflectionMode: "after_turn",
     });
-    expect(GatewayService.prototype.getSessionAutonomyPrefs.call(gateway, "session-1")).toMatchObject({
+    await expect(GatewayService.prototype.getSessionAutonomyPrefs.call(gateway, "session-1")).resolves.toMatchObject({
       sessionId: "session-1",
       proactiveMode: "review",
     });
-    expect(
+    await expect(
       GatewayService.prototype.patchSessionAutonomyPrefs.call(gateway, "session-1", {
         proactiveMode: "off",
       }),
-    ).toEqual({
+    ).resolves.toEqual({
       sessionId: "session-1",
       input: { proactiveMode: "off" },
     });

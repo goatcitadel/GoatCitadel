@@ -17,7 +17,11 @@ import {
   type SkillPermissionEnvelopeV1,
   type SkillUpstreamAuditDetails,
 } from "@goatcitadel/contracts";
-import type { SkillHubSnapshotCreateInput, SkillHubSnapshotRecord, Storage } from "@goatcitadel/storage";
+import type {
+  SkillHubSnapshotCreateInput,
+  SkillHubSnapshotRecord,
+  AsyncStorage as Storage,
+} from "@goatcitadel/storage";
 import { parseSkillMarkdown } from "@goatcitadel/skills";
 import { SKILL_BUNDLE_MANIFEST_FILENAME } from "./skill-bundle-manifest.js";
 import { SkillHubArtifactStore } from "./skill-hub-artifact-store.js";
@@ -141,15 +145,16 @@ export class SkillHubReviewService {
           if (prepared.contentTreeSha256 !== published.manifest.treeSha256) {
             rejectReview("CONTENT_INTEGRITY_MISMATCH", "CAS bytes differ from the exact production review result.");
           }
-          const persisted = this.options.storage.runImmediateTransaction(() =>
-            this.persistPreparedReview({
-              workspaceId,
-              actorId,
-              idempotencyKey,
-              identity,
-              prepared,
-              artifact: published,
-            }),
+          const persisted = await this.options.storage.runImmediateTransaction(
+            async () =>
+              await this.persistPreparedReview({
+                workspaceId,
+                actorId,
+                idempotencyKey,
+                identity,
+                prepared,
+                artifact: published,
+              }),
           );
           await this.assertArtifactBytes(persisted.artifact);
           return persisted;
@@ -169,11 +174,11 @@ export class SkillHubReviewService {
     const actorId = normalizeIdentity(input.actorId, "actor ID", 256);
     const sourceSnapshotId = normalizeIdentity(input.snapshotId, "snapshot ID", 256);
     const idempotencyKey = normalizeIdempotencyKey(input.idempotencyKey);
-    const original = this.options.storage.skillHubSnapshots.find(sourceSnapshotId);
+    const original = await this.options.storage.skillHubSnapshots.find(sourceSnapshotId);
     if (!original || original.workspaceId !== workspaceId) {
       throw new NotFoundError({ entity: "Skill Hub retained snapshot", id: sourceSnapshotId });
     }
-    const originalArtifact = this.options.storage.skillHubArtifacts.findBySnapshot(workspaceId, sourceSnapshotId);
+    const originalArtifact = await this.options.storage.skillHubArtifacts.findBySnapshot(workspaceId, sourceSnapshotId);
     if (!originalArtifact || !(await this.verifyArtifact(originalArtifact))) {
       throw new ConflictError({
         code: "STATE_CONFLICT",
@@ -182,16 +187,16 @@ export class SkillHubReviewService {
     }
 
     const identity = persistIdentity("rollback-review", workspaceId, idempotencyKey);
-    const persisted = this.options.storage.runImmediateTransaction(() => {
-      const existing = this.options.storage.skillHubSnapshots.find(identity.snapshotId);
+    const persisted = await this.options.storage.runImmediateTransaction(async () => {
+      const existing = await this.options.storage.skillHubSnapshots.find(identity.snapshotId);
       if (existing) {
         assertRollbackReplay(existing, original);
-        return this.loadReplay(existing, identity);
+        return await this.loadReplay(existing, identity);
       }
-      const prior = this.latestSnapshot(original.workspaceId, original.canonicalSourceKey);
+      const prior = await this.latestSnapshot(original.workspaceId, original.canonicalSourceKey);
       const permissionEnvelope = original.permissionEnvelope as unknown as SkillPermissionEnvelopeV1;
       const createdAt = nextTimestamp(this.now(), prior?.createdAt);
-      const snapshot = this.options.storage.skillHubSnapshots.create({
+      const snapshot = await this.options.storage.skillHubSnapshots.create({
         snapshotId: identity.snapshotId,
         workspaceId,
         operation: "rollback_check",
@@ -219,14 +224,14 @@ export class SkillHubReviewService {
         blockerCodes: original.blockerCodes,
         createdAt,
       });
-      const artifact = this.options.storage.skillHubArtifacts.create({
+      const artifact = await this.options.storage.skillHubArtifacts.create({
         ...originalArtifact,
         artifactId: identity.artifactId,
         snapshotId: snapshot.snapshotId,
         createdAt,
       });
       this.options.beforeJourneyPersistence?.(snapshot.snapshotId);
-      const journeyEvent = this.createJourney({
+      const journeyEvent = await this.createJourney({
         identity,
         snapshot,
         artifact,
@@ -241,20 +246,20 @@ export class SkillHubReviewService {
     return persisted;
   }
 
-  private persistPreparedReview(input: {
+  private async persistPreparedReview(input: {
     workspaceId: string;
     actorId: string;
     idempotencyKey: string;
     identity: PersistIdentity;
     prepared: PreparedReview;
     artifact: Awaited<ReturnType<SkillHubArtifactStore["publishFromDirectory"]>>;
-  }): SkillHubReviewResult {
-    const existing = this.options.storage.skillHubSnapshots.find(input.identity.snapshotId);
+  }): Promise<SkillHubReviewResult> {
+    const existing = await this.options.storage.skillHubSnapshots.find(input.identity.snapshotId);
     if (existing) {
       assertSourceReplay(existing, input.prepared);
-      return this.loadReplay(existing, input.identity);
+      return await this.loadReplay(existing, input.identity);
     }
-    const prior = this.latestSnapshot(input.workspaceId, input.prepared.canonicalSourceKey);
+    const prior = await this.latestSnapshot(input.workspaceId, input.prepared.canonicalSourceKey);
     const createdAt = nextTimestamp(this.now(), prior?.createdAt);
     const snapshotInput: SkillHubSnapshotCreateInput = {
       snapshotId: input.identity.snapshotId,
@@ -280,8 +285,8 @@ export class SkillHubReviewService {
       blockerCodes: input.prepared.blockerCodes,
       createdAt,
     };
-    const snapshot = this.options.storage.skillHubSnapshots.create(snapshotInput);
-    const artifact = this.options.storage.skillHubArtifacts.create({
+    const snapshot = await this.options.storage.skillHubSnapshots.create(snapshotInput);
+    const artifact = await this.options.storage.skillHubArtifacts.create({
       artifactId: input.identity.artifactId,
       workspaceId: input.workspaceId,
       snapshotId: snapshot.snapshotId,
@@ -294,7 +299,7 @@ export class SkillHubReviewService {
       createdAt,
     });
     this.options.beforeJourneyPersistence?.(snapshot.snapshotId);
-    const journeyEvent = this.createJourney({
+    const journeyEvent = await this.createJourney({
       identity: input.identity,
       snapshot,
       artifact,
@@ -305,7 +310,7 @@ export class SkillHubReviewService {
     return result(snapshot, artifact, journeyEvent, false);
   }
 
-  private createJourney(input: {
+  private async createJourney(input: {
     identity: PersistIdentity;
     snapshot: SkillHubSnapshotRecord;
     artifact: SkillHubSnapshotArtifactRecord;
@@ -313,9 +318,9 @@ export class SkillHubReviewService {
     action: "upstream_review_captured" | "rollback_review_prepared";
     operationIdempotencyKey: string;
     rollbackFromSnapshotId?: string;
-  }): GovernanceJourneyEventRecord {
+  }): Promise<GovernanceJourneyEventRecord> {
     const timestamp = input.snapshot.createdAt;
-    return this.options.storage.governanceJourneyEvents.create({
+    return await this.options.storage.governanceJourneyEvents.create({
       schemaVersion: "goatcitadel.journey-event.v1",
       eventId: input.identity.journeyEventId,
       idempotencyKey: input.identity.journeyIdempotencyKey,
@@ -356,9 +361,12 @@ export class SkillHubReviewService {
     });
   }
 
-  private loadReplay(snapshot: SkillHubSnapshotRecord, identity: PersistIdentity): SkillHubReviewResult {
-    const artifact = this.options.storage.skillHubArtifacts.findBySnapshot(snapshot.workspaceId, snapshot.snapshotId);
-    const journeyEvent = this.options.storage.governanceJourneyEvents.findByIdempotencyKey(
+  private async loadReplay(snapshot: SkillHubSnapshotRecord, identity: PersistIdentity): Promise<SkillHubReviewResult> {
+    const artifact = await this.options.storage.skillHubArtifacts.findBySnapshot(
+      snapshot.workspaceId,
+      snapshot.snapshotId,
+    );
+    const journeyEvent = await this.options.storage.governanceJourneyEvents.findByIdempotencyKey(
       identity.journeyIdempotencyKey,
     );
     if (!artifact || artifact.artifactId !== identity.artifactId || !journeyEvent) {
@@ -370,8 +378,11 @@ export class SkillHubReviewService {
     return result(snapshot, artifact, journeyEvent, true);
   }
 
-  private latestSnapshot(workspaceId: string, canonicalSourceKey: string): SkillHubSnapshotRecord | undefined {
-    return this.options.storage.skillHubSnapshots.listBySource(workspaceId, canonicalSourceKey, 1)[0];
+  private async latestSnapshot(
+    workspaceId: string,
+    canonicalSourceKey: string,
+  ): Promise<SkillHubSnapshotRecord | undefined> {
+    return (await this.options.storage.skillHubSnapshots.listBySource(workspaceId, canonicalSourceKey, 1))[0];
   }
 
   private async assertArtifactBytes(artifact: SkillHubSnapshotArtifactRecord): Promise<void> {

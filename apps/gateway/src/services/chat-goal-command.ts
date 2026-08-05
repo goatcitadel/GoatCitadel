@@ -21,12 +21,12 @@ export interface ChatGoalCommandDependencies {
     sessionId: string,
     content: string,
     source: { role: "user" | "assistant"; sourceRef: string },
-  ): void;
-  getSession(sessionId: string): unknown;
+  ): Promise<void>;
+  getSession(sessionId: string): Promise<unknown>;
   listChatSessionLearnedMemory(
     sessionId: string,
     limit?: number,
-  ): { items: LearnedMemoryItemRecord[]; conflicts: unknown[] };
+  ): Promise<{ items: LearnedMemoryItemRecord[]; conflicts: unknown[] }>;
   runChatDelegation(
     sessionId: string,
     input: {
@@ -54,7 +54,7 @@ export interface ChatGoalCommandDependencies {
     sessionId: string,
     itemId: string,
     input: { status?: "active" | "superseded" | "disabled"; content?: string; confidence?: number },
-  ): LearnedMemoryItemRecord;
+  ): Promise<LearnedMemoryItemRecord>;
 }
 
 type GoalCommandAction = "status" | "pause" | "resume" | "clear" | "run";
@@ -107,19 +107,21 @@ export async function handleGoalCommand(
 ): Promise<{ ok: boolean; message: string }> {
   const parsedGoal = parseGoalCommandArgs(args);
   if (parsedGoal.action === "status") {
+    const learnedMemory = await deps.listChatSessionLearnedMemory(sessionId, 200);
     return {
       ok: true,
-      message: formatGoalMemoryList(deps.listChatSessionLearnedMemory(sessionId, 200).items),
+      message: formatGoalMemoryList(learnedMemory.items),
     };
   }
   if (parsedGoal.action === "pause" || parsedGoal.action === "clear") {
-    const goals = listGoalMemoryItems(deps.listChatSessionLearnedMemory(sessionId, 200).items);
+    const learnedMemory = await deps.listChatSessionLearnedMemory(sessionId, 200);
+    const goals = listGoalMemoryItems(learnedMemory.items);
     const targets =
       parsedGoal.action === "pause"
         ? goals.filter((item) => item.status === "active" || item.status === "conflict")
         : goals.filter((item) => item.status !== "disabled");
     for (const item of targets) {
-      deps.updateChatSessionLearnedMemory(sessionId, item.itemId, { status: "disabled" });
+      await deps.updateChatSessionLearnedMemory(sessionId, item.itemId, { status: "disabled" });
     }
     return {
       ok: true,
@@ -140,13 +142,12 @@ export async function handleGoalCommand(
     };
   }
   if (parsedGoal.action === "resume") {
-    const paused = listGoalMemoryItems(deps.listChatSessionLearnedMemory(sessionId, 200).items).find(
-      (item) => item.status === "disabled",
-    );
+    const learnedMemory = await deps.listChatSessionLearnedMemory(sessionId, 200);
+    const paused = listGoalMemoryItems(learnedMemory.items).find((item) => item.status === "disabled");
     if (!paused) {
       return { ok: false, message: "No paused session goal found to resume." };
     }
-    deps.updateChatSessionLearnedMemory(sessionId, paused.itemId, { status: "active" });
+    await deps.updateChatSessionLearnedMemory(sessionId, paused.itemId, { status: "active" });
     const storedGoal = parseStoredGoalMemory(paused.content);
     objective = storedGoal.objective;
     loopOptions = storedGoal.options ?? { ...LEGACY_RESUME_GOAL_OPTIONS, surfaceMode: parsedGoal.options.surfaceMode };
@@ -183,7 +184,7 @@ async function runGoalLoop(
   runtimeOptions: { persistGoalMemory?: boolean; policyContext?: ChatGoalCommandPolicyContext } = {},
 ): Promise<GoalLoopResult> {
   if (runtimeOptions.persistGoalMemory !== false) {
-    deps.extractAndPersistLearnedMemory(sessionId, serializeGoalMemory(objective, options), {
+    await deps.extractAndPersistLearnedMemory(sessionId, serializeGoalMemory(objective, options), {
       role: "user",
       sourceRef: "chat-command:/goal",
     });
@@ -258,7 +259,7 @@ async function runGoalLoop(
       );
     }
 
-    const iterationCostUsd = estimateDelegationRunCostUsd(deps, response.steps, seenChildSessions);
+    const iterationCostUsd = await estimateDelegationRunCostUsd(deps, response.steps, seenChildSessions);
     totalCostUsd += iterationCostUsd;
     const qaStep = [...response.steps].reverse().find((step) => step.role === "qa");
     latestOutput = qaStep?.output ?? response.stitchedOutput ?? latestOutput;
@@ -412,18 +413,18 @@ function parseGoalVerifierVerdict(output?: string): { status: GoalLoopIteration[
   return { status: "unknown", reason: "Verifier did not emit GOAL_STATUS." };
 }
 
-function estimateDelegationRunCostUsd(
+async function estimateDelegationRunCostUsd(
   deps: ChatGoalCommandDependencies,
   steps: ChatDelegationStepRecord[],
   seenChildSessions: Set<string>,
-): number {
+): Promise<number> {
   let cost = 0;
   for (const step of steps) {
     if (!step.childSessionId || seenChildSessions.has(step.childSessionId)) {
       continue;
     }
     seenChildSessions.add(step.childSessionId);
-    const session = deps.getSession(step.childSessionId) as { costUsdTotal?: unknown } | undefined;
+    const session = (await deps.getSession(step.childSessionId)) as { costUsdTotal?: unknown } | undefined;
     if (typeof session?.costUsdTotal === "number" && Number.isFinite(session.costUsdTotal)) {
       cost += Math.max(0, session.costUsdTotal);
     }

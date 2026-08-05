@@ -2,10 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { WorkflowRecipeService } from "./workflow-recipe-service.js";
 
 describe("WorkflowRecipeService", () => {
-  it("parses YAML recipes into existing orchestration plans", () => {
+  it("parses YAML recipes into existing orchestration plans", async () => {
     const service = createService();
 
-    const preview = service.previewRecipe({
+    const preview = await service.previewRecipe({
       source: `
 name: Weekly business review
 goal: Summarize this week and recommend next actions.
@@ -41,10 +41,10 @@ limits:
     expect(preview.estimatedLimits).toMatchObject({ maxIterations: 2, maxRuntimeMinutes: 20, maxCostUsd: 1.5 });
   });
 
-  it("rejects unknown top-level keys and arbitrary Python-style tools", () => {
+  it("rejects unknown top-level keys and arbitrary Python-style tools", async () => {
     const service = createService();
 
-    expect(() =>
+    await expect(
       service.previewRecipe({
         recipe: {
           name: "Bad",
@@ -55,9 +55,9 @@ limits:
           steps: [{ title: "Do it", agent: "a", prompt: "Run it" }],
         },
       }),
-    ).toThrow(/Unknown recipe top-level key/);
+    ).rejects.toThrow(/Unknown recipe top-level key/);
 
-    expect(() =>
+    await expect(
       service.previewRecipe({
         recipe: {
           name: "Bad tool",
@@ -68,7 +68,7 @@ limits:
           steps: [{ title: "Do it", agent: "a", prompt: "Run it" }],
         },
       }),
-    ).toThrow(/arbitrary Python/);
+    ).rejects.toThrow(/arbitrary Python/);
   });
 
   it("creates plans through the existing orchestration lifecycle", async () => {
@@ -97,11 +97,11 @@ limits:
     expect(response.warnings.join(" ")).toContain("orchestration plan only");
   });
 
-  it("drafts advisory automation recipes without creating cron jobs or runs", () => {
+  it("drafts advisory automation recipes without creating cron jobs or runs", async () => {
     const createOrchestrationPlan = vi.fn();
     const service = createService(createOrchestrationPlan);
 
-    const draft = service.draftAutomationRecipe({
+    const draft = await service.draftAutomationRecipe({
       taskDescription: "Review ClawHub skills for native GoatCitadel overlap",
       trigger: "When a source list changes",
       frequency: "weekly",
@@ -137,11 +137,11 @@ limits:
     );
   });
 
-  it("exports Activepieces webhook templates as read-only planning artifacts", () => {
+  it("exports Activepieces webhook templates as read-only planning artifacts", async () => {
     const createOrchestrationPlan = vi.fn();
     const service = createService(createOrchestrationPlan);
 
-    const exported = service.exportActivepiecesTemplate(
+    const exported = await service.exportActivepiecesTemplate(
       {
         flowName: "GoatCitadel provider spend review",
         webhookPath: "/goatcitadel/provider-spend-review",
@@ -207,10 +207,10 @@ limits:
     expect(exported.warnings.join(" ")).toContain("does not create a flow or trigger a webhook");
   });
 
-  it("blocks Activepieces template import readiness when the exported step graph is invalid", () => {
+  it("blocks Activepieces template import readiness when the exported step graph is invalid", async () => {
     const service = createService();
 
-    const exported = service.exportActivepiecesTemplate({
+    const exported = await service.exportActivepiecesTemplate({
       recipe: {
         name: "Broken dependency review",
         goal: "Show invalid template graph evidence.",
@@ -255,11 +255,11 @@ limits:
     });
   });
 
-  it("exports n8n templates as disabled read-only planning artifacts", () => {
+  it("exports n8n templates as disabled read-only planning artifacts", async () => {
     const createOrchestrationPlan = vi.fn();
     const service = createService(createOrchestrationPlan);
 
-    const exported = service.exportN8nTemplate(
+    const exported = await service.exportN8nTemplate(
       {
         workflowName: "GoatCitadel provider spend review",
         webhookPath: "goatcitadel/provider-spend-review",
@@ -320,7 +320,7 @@ limits:
 
 function createService(createOrchestrationPlan = vi.fn()) {
   return new WorkflowRecipeService({
-    listSkills: () => [
+    listSkills: async () => [
       {
         skillId: "research",
         name: "Research",

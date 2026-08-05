@@ -16,11 +16,11 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import type { ToolGrantRecord, ToolPolicyConfig } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage, Storage } from "@goatcitadel/storage";
 import { ToolPolicyEngine } from "./engine.js";
 import { matchesAnyToolPattern, matchesToolPattern } from "./tool-patterns.js";
 
-function createStorageStub(): Storage {
+function createStorageStub(): Storage & AsyncStorage {
   const toolGrants = {
     list: vi.fn(() => [] as ReturnType<Storage["toolGrants"]["list"]>),
     listActive: vi.fn(() => [] as ReturnType<Storage["toolGrants"]["listActive"]>),
@@ -54,7 +54,7 @@ function createStorageStub(): Storage {
     db: {
       prepare: vi.fn(() => ({ run: vi.fn() })),
     },
-  } as unknown as Storage;
+  } as unknown as Storage & AsyncStorage;
 }
 
 /** A `danger: ["*"]` profile in `approve_risky` mode: every tool is in-profile, but any
@@ -89,8 +89,8 @@ function grant(
 
 /** Wire repository-active rows into the policy stub. Grant lifecycle predicates belong
  *  to ToolGrantRepository tests; this suite owns policy matching and precedence. */
-function withActiveGrants(storage: Storage, grants: ToolGrantRecord[]): void {
-  vi.mocked(storage.toolGrants.listActive).mockImplementation((scope?: string, scopeRef?: string) =>
+function withActiveGrants(storage: Storage & AsyncStorage, grants: ToolGrantRecord[]): void {
+  vi.mocked(storage.toolGrants.listActive).mockImplementation(async (scope?: string, scopeRef?: string) =>
     grants.filter((g) => g.scope === scope && g.scopeRef === scopeRef),
   );
 }
@@ -102,13 +102,13 @@ const baseRequest = {
 } as const;
 
 describe("matchesToolPattern (grant/allowlist pattern parsing)", () => {
-  it("matches an exact tool name and rejects near-misses", () => {
+  it("matches an exact tool name and rejects near-misses", async () => {
     expect(matchesToolPattern("fs.read", "fs.read")).toBe(true);
     expect(matchesToolPattern("fs.read", "fs.readme")).toBe(false);
     expect(matchesToolPattern("fs.read", "fs.write")).toBe(false);
   });
 
-  it("treats `*` alone as a catch-all but a dotted glob as a namespace prefix", () => {
+  it("treats `*` alone as a catch-all but a dotted glob as a namespace prefix", async () => {
     expect(matchesToolPattern("*", "anything.at.all")).toBe(true);
     expect(matchesToolPattern("git.*", "git.commit")).toBe(true);
     expect(matchesToolPattern("git.*", "git.branch.create")).toBe(true);
@@ -117,13 +117,13 @@ describe("matchesToolPattern (grant/allowlist pattern parsing)", () => {
     expect(matchesToolPattern("git.*", "fs.read")).toBe(false);
   });
 
-  it("supports mid-string and multi-segment wildcards", () => {
+  it("supports mid-string and multi-segment wildcards", async () => {
     expect(matchesToolPattern("browser.*.get", "browser.cookies.get")).toBe(true);
     expect(matchesToolPattern("browser.*.get", "browser.storage.get")).toBe(true);
     expect(matchesToolPattern("browser.*.get", "browser.cookies.set")).toBe(false);
   });
 
-  it("treats regex metacharacters in the pattern literally, not as regex", () => {
+  it("treats regex metacharacters in the pattern literally, not as regex", async () => {
     // `.` is a literal dot here — it must not match an arbitrary character.
     expect(matchesToolPattern("fs.read", "fsXread")).toBe(false);
     // A `+` in the pattern is literal; it only matches a literal `+`.
@@ -132,7 +132,7 @@ describe("matchesToolPattern (grant/allowlist pattern parsing)", () => {
     expect(matchesToolPattern("a(b)", "a(b)")).toBe(true);
   });
 
-  it("rejects empty, whitespace-only, and over-long patterns or tool names", () => {
+  it("rejects empty, whitespace-only, and over-long patterns or tool names", async () => {
     expect(matchesToolPattern("", "fs.read")).toBe(false);
     expect(matchesToolPattern("   ", "fs.read")).toBe(false);
     expect(matchesToolPattern("fs.read", "")).toBe(false);
@@ -141,7 +141,7 @@ describe("matchesToolPattern (grant/allowlist pattern parsing)", () => {
     expect(matchesToolPattern("*", tooLong)).toBe(false);
   });
 
-  it("matchesAnyToolPattern returns true when any allowlist entry matches", () => {
+  it("matchesAnyToolPattern returns true when any allowlist entry matches", async () => {
     expect(matchesAnyToolPattern(["fs.read", "git.*"], "git.commit")).toBe(true);
     expect(matchesAnyToolPattern(["fs.read", "git.*"], "shell.exec")).toBe(false);
     expect(matchesAnyToolPattern([], "fs.read")).toBe(false);
@@ -149,24 +149,32 @@ describe("matchesToolPattern (grant/allowlist pattern parsing)", () => {
 });
 
 describe("declared tool-grant parsing", () => {
-  it("honours an allow-grant whose glob pattern covers the requested tool", () => {
+  it("honours an allow-grant whose glob pattern covers the requested tool", async () => {
     const storage = createStorageStub();
     withActiveGrants(storage, [grant({ grantId: "grant-fs-glob", toolPattern: "fs.*", decision: "allow" })]);
     const engine = new ToolPolicyEngine(baseConfig, storage);
 
-    const evaluation = engine.evaluateAccess({ ...baseRequest, toolName: "fs.write", args: { path: "./workspace/x" } });
+    const evaluation = await engine.evaluateAccess({
+      ...baseRequest,
+      toolName: "fs.write",
+      args: { path: "./workspace/x" },
+    });
 
     expect(evaluation.allowed).toBe(true);
     expect(evaluation.matchedGrantId).toBe("grant-fs-glob");
   });
 
-  it("ignores a grant whose pattern does not cover the requested tool", () => {
+  it("ignores a grant whose pattern does not cover the requested tool", async () => {
     const storage = createStorageStub();
     // A grant for `git.*` must not satisfy an `fs.write` request.
     withActiveGrants(storage, [grant({ grantId: "grant-git", toolPattern: "git.*", decision: "allow" })]);
     const engine = new ToolPolicyEngine(baseConfig, storage);
 
-    const evaluation = engine.evaluateAccess({ ...baseRequest, toolName: "fs.write", args: { path: "./workspace/x" } });
+    const evaluation = await engine.evaluateAccess({
+      ...baseRequest,
+      toolName: "fs.write",
+      args: { path: "./workspace/x" },
+    });
 
     // Still in-profile (danger:["*"]) so allowed, but with NO matching grant → approval is
     // required because the non-grant danger path falls back to approve_risky.
@@ -174,7 +182,7 @@ describe("declared tool-grant parsing", () => {
     expect(evaluation.requiresApproval).toBe(true);
   });
 
-  it("blocks an allow-grant whose constraints reject the request (host out of allowlist)", () => {
+  it("blocks an allow-grant whose constraints reject the request (host out of allowlist)", async () => {
     const storage = createStorageStub();
     withActiveGrants(storage, [
       grant({
@@ -189,7 +197,7 @@ describe("declared tool-grant parsing", () => {
       storage,
     );
 
-    const evaluation = engine.evaluateAccess({
+    const evaluation = await engine.evaluateAccess({
       ...baseRequest,
       toolName: "http.get",
       args: { url: "https://blocked.example/data" },
@@ -202,7 +210,7 @@ describe("declared tool-grant parsing", () => {
 });
 
 describe("allow-vs-block precedence (multiple matching rules)", () => {
-  it("deny-wins when an allow and a deny grant match at the same scope", () => {
+  it("deny-wins when an allow and a deny grant match at the same scope", async () => {
     const storage = createStorageStub();
     withActiveGrants(storage, [
       grant({ grantId: "grant-allow", toolPattern: "shell.exec", decision: "allow" }),
@@ -210,14 +218,18 @@ describe("allow-vs-block precedence (multiple matching rules)", () => {
     ]);
     const engine = new ToolPolicyEngine(baseConfig, storage);
 
-    const evaluation = engine.evaluateAccess({ ...baseRequest, toolName: "shell.exec", args: { command: "rm x" } });
+    const evaluation = await engine.evaluateAccess({
+      ...baseRequest,
+      toolName: "shell.exec",
+      args: { command: "rm x" },
+    });
 
     expect(evaluation.allowed).toBe(false);
     expect(evaluation.reasonCodes).toEqual(["grant_deny"]);
     expect(evaluation.matchedGrantId).toBe("grant-deny");
   });
 
-  it("deny-wins is order-independent (deny listed before the allow still blocks)", () => {
+  it("deny-wins is order-independent (deny listed before the allow still blocks)", async () => {
     const storage = createStorageStub();
     withActiveGrants(storage, [
       grant({ grantId: "grant-deny-first", toolPattern: "shell.*", decision: "deny" }),
@@ -225,13 +237,17 @@ describe("allow-vs-block precedence (multiple matching rules)", () => {
     ]);
     const engine = new ToolPolicyEngine(baseConfig, storage);
 
-    const evaluation = engine.evaluateAccess({ ...baseRequest, toolName: "shell.exec", args: { command: "rm x" } });
+    const evaluation = await engine.evaluateAccess({
+      ...baseRequest,
+      toolName: "shell.exec",
+      args: { command: "rm x" },
+    });
 
     expect(evaluation.allowed).toBe(false);
     expect(evaluation.matchedGrantId).toBe("grant-deny-first");
   });
 
-  it("a broad deny grant beats a more-specific allow grant across different scopes", () => {
+  it("a broad deny grant beats a more-specific allow grant across different scopes", async () => {
     const storage = createStorageStub();
     // Allow scoped tightly to the task; deny scoped broadly to the workspace. Deny must win
     // regardless of specificity — there is no "most-specific allow overrides deny".
@@ -247,7 +263,7 @@ describe("allow-vs-block precedence (multiple matching rules)", () => {
     ]);
     const engine = new ToolPolicyEngine(baseConfig, storage);
 
-    const evaluation = engine.evaluateAccess({
+    const evaluation = await engine.evaluateAccess({
       ...baseRequest,
       taskId: "task-1",
       toolName: "fs.delete",
@@ -259,27 +275,31 @@ describe("allow-vs-block precedence (multiple matching rules)", () => {
     expect(evaluation.matchedGrantId).toBe("workspace-deny");
   });
 
-  it("the static `deny` config blocks a tool even though the profile is `*`", () => {
+  it("the static `deny` config blocks a tool even though the profile is `*`", async () => {
     const storage = createStorageStub();
     const engine = new ToolPolicyEngine(
       { ...baseConfig, tools: { ...baseConfig.tools, deny: ["shell.exec"] } },
       storage,
     );
 
-    const evaluation = engine.evaluateAccess({ ...baseRequest, toolName: "shell.exec", args: { command: "echo hi" } });
+    const evaluation = await engine.evaluateAccess({
+      ...baseRequest,
+      toolName: "shell.exec",
+      args: { command: "echo hi" },
+    });
 
     expect(evaluation.allowed).toBe(false);
     expect(evaluation.reasonCodes).toContain("policy_deny");
   });
 
-  it("a `deny` config glob blocks the whole namespace ahead of any allow-grant", () => {
+  it("a `deny` config glob blocks the whole namespace ahead of any allow-grant", async () => {
     const storage = createStorageStub();
     // Even with a live allow-grant for the exact tool, the config-level deny glob wins:
     // the deny-set is checked before grants are resolved.
     withActiveGrants(storage, [grant({ grantId: "grant-allow", toolPattern: "git.commit", decision: "allow" })]);
     const engine = new ToolPolicyEngine({ ...baseConfig, tools: { ...baseConfig.tools, deny: ["git.*"] } }, storage);
 
-    const evaluation = engine.evaluateAccess({ ...baseRequest, toolName: "git.commit", args: {} });
+    const evaluation = await engine.evaluateAccess({ ...baseRequest, toolName: "git.commit", args: {} });
 
     expect(evaluation.allowed).toBe(false);
     expect(evaluation.reasonCodes).toContain("policy_deny");
@@ -287,19 +307,19 @@ describe("allow-vs-block precedence (multiple matching rules)", () => {
     expect(evaluation.matchedGrantId).toBeUndefined();
   });
 
-  it("a matching allow-grant suppresses the approval a bare danger tool would otherwise need", () => {
+  it("a matching allow-grant suppresses the approval a bare danger tool would otherwise need", async () => {
     const storage = createStorageStub();
     withActiveGrants(storage, [grant({ grantId: "grant-allow-commit", toolPattern: "git.commit", decision: "allow" })]);
     const engine = new ToolPolicyEngine(baseConfig, storage);
 
-    const granted = engine.evaluateAccess({ ...baseRequest, toolName: "git.commit", args: {} });
+    const granted = await engine.evaluateAccess({ ...baseRequest, toolName: "git.commit", args: {} });
     expect(granted.allowed).toBe(true);
     expect(granted.matchedGrantId).toBe("grant-allow-commit");
 
     // Control: the same danger tool WITHOUT a grant requires approval under approve_risky.
     const ungranted = createStorageStub();
     const ungrantedEngine = new ToolPolicyEngine(baseConfig, ungranted);
-    const ungrantedEval = ungrantedEngine.evaluateAccess({ ...baseRequest, toolName: "git.commit", args: {} });
+    const ungrantedEval = await ungrantedEngine.evaluateAccess({ ...baseRequest, toolName: "git.commit", args: {} });
     expect(ungrantedEval.requiresApproval).toBe(true);
     expect(ungrantedEval.matchedGrantId).toBeUndefined();
   });

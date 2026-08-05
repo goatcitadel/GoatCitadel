@@ -74,7 +74,7 @@ export const personalOpsRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       const lifecycleStatus = parsed.data.lifecycleStatus ?? (parsed.data.includeArchived === true ? "all" : "active");
       return reply.send(
-        getPersonalOpsRouteService(fastify).listNotes({
+        await getPersonalOpsRouteService(fastify).listNotes({
           workspaceId: parsed.data.workspaceId,
           lifecycleStatus,
         }),
@@ -92,7 +92,7 @@ export const personalOpsRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply
         .code(201)
-        .send(getPersonalOpsRouteService(fastify).createNote(parsed.data, readWorkspaceAccess(request)));
+        .send(await getPersonalOpsRouteService(fastify).createNote(parsed.data, readWorkspaceAccess(request)));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -111,7 +111,11 @@ export const personalOpsRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(
-        getPersonalOpsRouteService(fastify).updateNote(params.data.noteId, body.data, readWorkspaceAccess(request)),
+        await getPersonalOpsRouteService(fastify).updateNote(
+          params.data.noteId,
+          body.data,
+          readWorkspaceAccess(request),
+        ),
       );
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -123,7 +127,7 @@ export const personalOpsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
     try {
       return reply.send(
-        getPersonalOpsRouteService(fastify).listNoteRevisions(params.data.noteId, readWorkspaceAccess(request)),
+        await getPersonalOpsRouteService(fastify).listNoteRevisions(params.data.noteId, readWorkspaceAccess(request)),
       );
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -143,7 +147,7 @@ export const personalOpsRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(
-        getPersonalOpsRouteService(fastify).archiveNote(params.data.noteId, readWorkspaceAccess(request)),
+        await getPersonalOpsRouteService(fastify).archiveNote(params.data.noteId, readWorkspaceAccess(request)),
       );
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -158,7 +162,7 @@ export const personalOpsRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       const status = parsed.data.status ?? (parsed.data.includeCompleted === true ? "all" : "scheduled");
       return reply.send(
-        getPersonalOpsRouteService(fastify).listReminders({
+        await getPersonalOpsRouteService(fastify).listReminders({
           workspaceId: parsed.data.workspaceId,
           status,
         }),
@@ -176,7 +180,7 @@ export const personalOpsRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply
         .code(201)
-        .send(getPersonalOpsRouteService(fastify).createReminder(parsed.data, readWorkspaceAccess(request)));
+        .send(await getPersonalOpsRouteService(fastify).createReminder(parsed.data, readWorkspaceAccess(request)));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -195,7 +199,10 @@ export const personalOpsRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(
-        getPersonalOpsRouteService(fastify).completeReminder(params.data.reminderId, readWorkspaceAccess(request)),
+        await getPersonalOpsRouteService(fastify).completeReminder(
+          params.data.reminderId,
+          readWorkspaceAccess(request),
+        ),
       );
     } catch (error) {
       return sendRouteError(reply, error, request.log);

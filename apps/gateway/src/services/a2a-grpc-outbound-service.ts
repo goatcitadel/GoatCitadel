@@ -7,7 +7,7 @@ import type {
   WardEffect,
 } from "@goatcitadel/contracts";
 import { fetchAllowlisted } from "@goatcitadel/policy-engine";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { A2AGrpcClientPort } from "./a2a-grpc-client.js";
 import { projectA2AJsonRpcResponseForExternal } from "./a2a-public-projection.js";
@@ -55,7 +55,7 @@ export async function sendOutboundGrpc(input: {
     output: { peerId: peer.peerId, method: request.method, transport: "GRPC" },
     execute: async (claim) => {
       const discovered = await discoverOutboundGrpcUrl(peer, checkedAt, deps);
-      claim.markExternalCallStarted();
+      await claim.markExternalCallStarted();
       return projectA2AJsonRpcResponseForExternal(
         await deps.grpcClient.call({
           grpcUrl: discovered.grpcUrl,
@@ -143,7 +143,7 @@ async function discoverOutboundGrpcUrl(
       (item) => item.protocolBinding === "GRPC" && item.enabled !== false && item.url,
     );
     if (grpc?.url) {
-      recordOutboundGrpcDiscovery(peer, grpc.url, checkedAt, "agent_card", deps);
+      await recordOutboundGrpcDiscovery(peer, grpc.url, checkedAt, "agent_card", deps);
       return { grpcUrl: grpc.url };
     }
   } catch (error) {
@@ -151,7 +151,7 @@ async function discoverOutboundGrpcUrl(
   }
 
   if (peer.grpcUrl?.trim()) {
-    recordOutboundGrpcDiscovery(peer, peer.grpcUrl, checkedAt, "configured_fallback", deps);
+    await recordOutboundGrpcDiscovery(peer, peer.grpcUrl, checkedAt, "configured_fallback", deps);
     return { grpcUrl: peer.grpcUrl.trim() };
   }
   throw new Error(
@@ -161,14 +161,14 @@ async function discoverOutboundGrpcUrl(
   );
 }
 
-function recordOutboundGrpcDiscovery(
+async function recordOutboundGrpcDiscovery(
   peer: A2AOutboundPeer,
   grpcUrl: string,
   checkedAt: string,
   source: "agent_card" | "configured_fallback",
   deps: A2AOutboundGrpcDependencies,
-): void {
-  deps.evidenceEnvelopeService?.createEnvelope({
+): Promise<void> {
+  await deps.evidenceEnvelopeService?.createEnvelope({
     eventKind: "external_writeback",
     metadata: {
       boundary: "a2a_grpc_discovery",

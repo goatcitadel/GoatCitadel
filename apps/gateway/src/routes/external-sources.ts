@@ -189,7 +189,7 @@ export const externalSourceRoutes: FastifyPluginAsync<ExternalSourceRoutesOption
     const query = workspaceQuerySchema.safeParse(request.query);
     if (!query.success) return reply.code(400).send({ error: "Invalid external source list query." });
     try {
-      return reply.send(options.service.list(query.data.workspaceId, actor));
+      return reply.send(await options.service.list(query.data.workspaceId, actor));
     } catch (error) {
       return sendExternalSourceError(error, request, reply);
     }
@@ -204,7 +204,7 @@ export const externalSourceRoutes: FastifyPluginAsync<ExternalSourceRoutesOption
       return reply.code(400).send({ error: "Invalid external source detail query." });
     }
     try {
-      return reply.send(options.service.get(query.data.workspaceId, params.data.sourceId, actor));
+      return reply.send(await options.service.get(query.data.workspaceId, params.data.sourceId, actor));
     } catch (error) {
       return sendExternalSourceError(error, request, reply);
     }
@@ -279,7 +279,7 @@ export const externalSourceRoutes: FastifyPluginAsync<ExternalSourceRoutesOption
       return reply.code(400).send({ error: "Invalid external source catalog query." });
     }
     try {
-      return reply.send(options.service.listCatalog(params.data.sourceId, input, actor));
+      return reply.send(await options.service.listCatalog(params.data.sourceId, input, actor));
     } catch (error) {
       return sendExternalSourceError(error, request, reply);
     }
@@ -343,7 +343,7 @@ export const externalSourceRoutes: FastifyPluginAsync<ExternalSourceRoutesOption
       return reply.code(400).send({ error: "Invalid external source import detail query." });
     }
     try {
-      return reply.send(options.service.getImport(query.data.workspaceId, params.data.importId, actor));
+      return reply.send(await options.service.getImport(query.data.workspaceId, params.data.importId, actor));
     } catch (error) {
       return sendExternalSourceError(error, request, reply);
     }
@@ -375,7 +375,7 @@ export const externalSourceRoutes: FastifyPluginAsync<ExternalSourceRoutesOption
       return reply.code(400).send({ error: "Invalid external attachment list query." });
     }
     try {
-      return reply.send(options.service.listSessionAttachments(input, actor));
+      return reply.send(await options.service.listSessionAttachments(input, actor));
     } catch (error) {
       return sendExternalSourceError(error, request, reply);
     }

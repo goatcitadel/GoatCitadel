@@ -112,7 +112,7 @@ describe("SessionControlService", () => {
     ).toBe(false);
   });
 
-  it("admits against the observed immutable meta/control evidence and returns the frozen identity", () => {
+  it("admits against the observed immutable meta/control evidence and returns the frozen identity", async () => {
     const materialSha256 = computeChatTurnAdmissionMaterialSha256(BASE_REQUEST);
     const admission = record({ materialSha256 });
     const storage = {
@@ -127,7 +127,7 @@ describe("SessionControlService", () => {
     };
     const service = new SessionControlService(storage as unknown as Storage);
 
-    const active = service.admitOperatorChatTurn({
+    const active = await service.admitOperatorChatTurn({
       sessionId: "session-1",
       turnId: "turn-1",
       request: BASE_REQUEST,
@@ -169,7 +169,7 @@ describe("SessionControlService", () => {
     });
   });
 
-  it("uses the atomic heartbeat-preemption admission only for an exact server-authenticated operator context", () => {
+  it("uses the atomic heartbeat-preemption admission only for an exact server-authenticated operator context", async () => {
     const request = {
       ...BASE_REQUEST,
       operatorId: "operator-1",
@@ -196,7 +196,7 @@ describe("SessionControlService", () => {
     };
     const service = new SessionControlService(storage as unknown as Storage);
 
-    const active = service.admitOperatorChatTurn({
+    const active = await service.admitOperatorChatTurn({
       sessionId: "session-1",
       turnId: "turn-1",
       request,
@@ -233,7 +233,7 @@ describe("SessionControlService", () => {
     });
   });
 
-  it("rejects a forged authenticated-operator option before either admission path can mutate storage", () => {
+  it("rejects a forged authenticated-operator option before either admission path can mutate storage", async () => {
     const storage = {
       chatSessionMeta: { get: vi.fn() },
       sessionControls: { getControl: vi.fn(), resolveMutationAuthority: vi.fn() },
@@ -244,7 +244,7 @@ describe("SessionControlService", () => {
     };
     const service = new SessionControlService(storage as unknown as Storage);
 
-    expect(() =>
+    await expect(
       service.admitOperatorChatTurn({
         sessionId: "session-1",
         turnId: "turn-1",
@@ -264,13 +264,13 @@ describe("SessionControlService", () => {
           authActorSource: "loopback",
         } as unknown as AuthenticatedOperatorAdmissionContext,
       }),
-    ).toThrow(/does not match the server-stamped Chat request/u);
+    ).rejects.toThrow(/does not match the server-stamped Chat request/u);
     expect(storage.chatSessionMeta.get).not.toHaveBeenCalled();
     expect(storage.sessionMutationAdmissions.preemptHeartbeatAndAdmitOperatorTurn).not.toHaveBeenCalled();
     expect(storage.sessionMutationAdmissions.admit).not.toHaveBeenCalled();
   });
 
-  it("surfaces an exact no-admission recovery signal for a decision-committed heartbeat", () => {
+  it("surfaces an exact no-admission recovery signal for a decision-committed heartbeat", async () => {
     const request = {
       ...BASE_REQUEST,
       operatorId: "operator-1",
@@ -303,7 +303,7 @@ describe("SessionControlService", () => {
 
     let observed: unknown;
     try {
-      service.admitOperatorChatTurn({
+      await service.admitOperatorChatTurn({
         sessionId: "session-1",
         turnId: "operator-turn-1",
         request,
@@ -333,7 +333,7 @@ describe("SessionControlService", () => {
     expect(storage.sessionMutationAdmissions.admit).not.toHaveBeenCalled();
   });
 
-  it("surfaces a structured no-mutation outcome when the active turn is not a heartbeat", () => {
+  it("surfaces a structured no-mutation outcome when the active turn is not a heartbeat", async () => {
     const request = {
       ...BASE_REQUEST,
       operatorId: "operator-1",
@@ -362,7 +362,7 @@ describe("SessionControlService", () => {
 
     let observed: unknown;
     try {
-      service.admitOperatorChatTurn({
+      await service.admitOperatorChatTurn({
         sessionId: "session-1",
         turnId: "operator-turn-1",
         request,
@@ -391,7 +391,7 @@ describe("SessionControlService", () => {
     );
   });
 
-  it("re-reads canonical authority and retries once after a preemption race", () => {
+  it("re-reads canonical authority and retries once after a preemption race", async () => {
     const request = {
       ...BASE_REQUEST,
       operatorId: "operator-1",
@@ -436,7 +436,7 @@ describe("SessionControlService", () => {
     const service = new SessionControlService(storage as unknown as Storage);
 
     expect(
-      service.admitOperatorChatTurn({
+      await service.admitOperatorChatTurn({
         sessionId: "session-1",
         turnId: "operator-turn-1",
         request,
@@ -454,7 +454,7 @@ describe("SessionControlService", () => {
     expect(preemptHeartbeatAndAdmitOperatorTurn).toHaveBeenCalledTimes(2);
   });
 
-  it("replays the same authenticated admission after committed heartbeat preemption advances control to N+1", () => {
+  it("replays the same authenticated admission after committed heartbeat preemption advances control to N+1", async () => {
     const request = {
       ...BASE_REQUEST,
       operatorId: "operator-1",
@@ -510,8 +510,8 @@ describe("SessionControlService", () => {
       }),
     };
 
-    const created = service.admitOperatorChatTurn(input);
-    const replayed = service.admitOperatorChatTurn(input);
+    const created = await service.admitOperatorChatTurn(input);
+    const replayed = await service.admitOperatorChatTurn(input);
 
     expect(created).toEqual(replayed);
     expect(created.identity.controllerGeneration).toBe(4);
@@ -523,15 +523,15 @@ describe("SessionControlService", () => {
       2,
       expect.objectContaining({ expectedControllerGeneration: 4, materialSha256 }),
     );
-    expect(() =>
+    await expect(
       service.admitOperatorChatTurn({
         ...input,
         request: { ...request, content: "drifted replay" },
       }),
-    ).toThrow(/replay conflicts/u);
+    ).rejects.toThrow(/replay conflicts/u);
   });
 
-  it("freezes a system producer independently from spoofable request actor fields", () => {
+  it("freezes a system producer independently from spoofable request actor fields", async () => {
     const materialSha256 = computeChatTurnAdmissionMaterialSha256(BASE_REQUEST);
     const admission = record({ materialSha256, actorKind: "system", actorId: "system:integration:webhook-1" });
     const storage = {
@@ -546,7 +546,7 @@ describe("SessionControlService", () => {
     };
     const service = new SessionControlService(storage as unknown as Storage);
 
-    const active = service.admitChatTurn({
+    const active = await service.admitChatTurn({
       sessionId: "session-1",
       turnId: "turn-1",
       request: {
@@ -576,7 +576,7 @@ describe("SessionControlService", () => {
     });
   });
 
-  it("uses the raw authenticated companion session id and rejects projected auth actor ids", () => {
+  it("uses the raw authenticated companion session id and rejects projected auth actor ids", async () => {
     const materialSha256 = computeChatTurnAdmissionMaterialSha256(BASE_REQUEST);
     const admission = record({ materialSha256, actorKind: "external_companion", actorId: "companion-session-1" });
     const storage = {
@@ -602,7 +602,7 @@ describe("SessionControlService", () => {
       expectedGeneration: 3,
     };
 
-    const active = service.admitChatTurn({
+    const active = await service.admitChatTurn({
       sessionId: "session-1",
       turnId: "turn-1",
       request: {
@@ -628,7 +628,7 @@ describe("SessionControlService", () => {
       actorId: "companion-session-1",
     });
 
-    expect(() =>
+    await expect(
       service.admitChatTurn({
         sessionId: "session-1",
         turnId: "turn-2",
@@ -638,7 +638,7 @@ describe("SessionControlService", () => {
         idempotencyKey: "admit-turn-2",
         correlationId: "correlation-2",
       }),
-    ).toThrow("raw authenticated companion session id");
+    ).rejects.toThrow("raw authenticated companion session id");
   });
 
   it("changes the digest for every execution-relevant field while excluding transport signal, actor projection, and routed-context refs", () => {
@@ -696,7 +696,7 @@ describe("SessionControlService", () => {
     ).toBe(baseline);
   });
 
-  it("admits the exact synchronous storage-owned heartbeat callback without a second authority derivation", () => {
+  it("hydrates the exact storage-owned heartbeat admission without a second authority derivation", async () => {
     const plan = buildHeartbeatOccurrencePlan({
       workspaceId: "workspace-1",
       sessionId: "session-1",
@@ -720,17 +720,27 @@ describe("SessionControlService", () => {
         resolveMutationAuthority: vi.fn(),
       },
       sessionMutationAdmissions: {
-        admit: vi.fn(() => ({ disposition: "created", admission })),
+        previewAdmissionIdentity: vi.fn(() => ({
+          admissionId: admission.admissionId,
+          requestSha256: admission.requestSha256,
+          sessionIncarnationId: admission.sessionIncarnationId,
+        })),
+        require: vi.fn(() => admission),
       },
     };
     const service = new SessionControlService(storage as unknown as Storage);
 
-    const admitted = service.admitSystemHeartbeatOccurrence({
+    const admitted = await service.admitSystemHeartbeatOccurrence({
       occurrenceRequest,
       request: plan.request,
     });
 
-    expect(storage.sessionMutationAdmissions.admit).toHaveBeenCalledWith(occurrenceRequest.admissionInput);
+    const { expectedSessionIncarnationId, ...previewInput } = occurrenceRequest.admissionInput;
+    expect(storage.sessionMutationAdmissions.previewAdmissionIdentity).toHaveBeenCalledWith({
+      ...previewInput,
+      sessionIncarnationId: expectedSessionIncarnationId,
+    });
+    expect(storage.sessionMutationAdmissions.require).toHaveBeenCalledWith(admission.admissionId);
     expect(storage.sessionControls.getControl).not.toHaveBeenCalled();
     expect(storage.sessionControls.resolveMutationAuthority).not.toHaveBeenCalled();
     expect(admitted.admission.requestActor).toEqual({ actorKind: "system", actorId: "system-heartbeat" });
@@ -746,7 +756,7 @@ describe("SessionControlService", () => {
     expect(admitted.record).toBe(admission);
   });
 
-  it("fails closed before heartbeat admission when callback actor, child, or request bytes drift", () => {
+  it("fails closed before heartbeat admission when callback actor, child, or request bytes drift", async () => {
     const plan = buildHeartbeatOccurrencePlan({
       workspaceId: "workspace-1",
       sessionId: "session-1",
@@ -761,13 +771,13 @@ describe("SessionControlService", () => {
       sessionMutationAdmissions: { admit },
     } as unknown as Storage);
 
-    expect(() => service.admitSystemHeartbeatOccurrence({ occurrenceRequest, request: plan.request })).toThrow(
+    await expect(service.admitSystemHeartbeatOccurrence({ occurrenceRequest, request: plan.request })).rejects.toThrow(
       /canonical request/u,
     );
     expect(admit).not.toHaveBeenCalled();
   });
 
-  it("reclaims only the complete occurrence-linked heartbeat lease identity", () => {
+  it("reclaims only the complete occurrence-linked heartbeat lease identity", async () => {
     const plan = buildHeartbeatOccurrencePlan({
       workspaceId: "workspace-1",
       sessionId: "session-1",
@@ -798,7 +808,7 @@ describe("SessionControlService", () => {
       },
     } as unknown as Storage);
 
-    const recovered = service.recoverSystemHeartbeatOccurrence({ occurrence, request: plan.request });
+    const recovered = await service.recoverSystemHeartbeatOccurrence({ occurrence, request: plan.request });
 
     expect(recovered.disposition).toBe("reclaimed");
     if (recovered.disposition === "reclaimed") {
@@ -825,7 +835,7 @@ describe("SessionControlService", () => {
 
   // Request-lease renewal is reached only from the runtime owner's heartbeat
   // interval, which no route may arm, so nothing else drives these branches.
-  it("renews the request lease in place against the presented claim and advances the stored revision", () => {
+  it("renews the request lease in place against the presented claim and advances the stored revision", async () => {
     const materialSha256 = computeChatTurnAdmissionMaterialSha256(BASE_REQUEST);
     // The presented claim is the live admission's own claim object, which the
     // renewal then mutates in place — snapshot it at call time or the recorded
@@ -847,7 +857,7 @@ describe("SessionControlService", () => {
       },
     };
     const service = new SessionControlService(storage as unknown as Storage);
-    const active = service.admitOperatorChatTurn({
+    const active = await service.admitOperatorChatTurn({
       sessionId: "session-1",
       turnId: "turn-1",
       request: BASE_REQUEST,
@@ -858,7 +868,7 @@ describe("SessionControlService", () => {
     });
     const claim = active.requestClaim;
 
-    const renewed = service.renewRequestLease(active);
+    const renewed = await service.renewRequestLease(active);
 
     expect(renewTurnWriteRequestLease).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -877,7 +887,7 @@ describe("SessionControlService", () => {
     expect(active.requestClaim).toEqual({ runtimeOwnerId: "runtime-1", leaseRevision: 2 });
   });
 
-  it("fails closed when a lease renewal or turn write is attempted without an exclusive request claim", () => {
+  it("fails closed when a lease renewal or turn write is attempted without an exclusive request claim", async () => {
     const renewTurnWriteRequestLease = vi.fn();
     const assertActiveTurnWrite = vi.fn();
     const service = new SessionControlService({
@@ -904,14 +914,14 @@ describe("SessionControlService", () => {
 
     // A durable claim has superseded the request lease — renewing it would
     // resurrect a second writer for the same turn.
-    expect(() => service.renewRequestLease(durableOnly)).toThrow(ConflictError);
-    expect(() => service.renewRequestLease(claimless)).toThrow(ConflictError);
-    expect(() => service.assertActiveTurnWrite(claimless)).toThrow(ConflictError);
+    await expect(service.renewRequestLease(durableOnly)).rejects.toThrow(ConflictError);
+    await expect(service.renewRequestLease(claimless)).rejects.toThrow(ConflictError);
+    await expect(service.assertActiveTurnWrite(claimless)).rejects.toThrow(ConflictError);
     expect(renewTurnWriteRequestLease).not.toHaveBeenCalled();
     expect(assertActiveTurnWrite).not.toHaveBeenCalled();
   });
 
-  it("denies the session event read to a send-only external controller but allows it once read is delegated", () => {
+  it("denies the session event read to a send-only external controller but allows it once read is delegated", async () => {
     const companion = {
       actorKind: "external_companion" as const,
       companionSessionId: "companion-session-1",
@@ -937,17 +947,17 @@ describe("SessionControlService", () => {
     const sendOnly = buildService(["send"]);
     let denied: unknown;
     try {
-      sendOnly.listEvents({ actor: companion, sessionId: "session-1" });
+      await sendOnly.listEvents({ actor: companion, sessionId: "session-1" });
     } catch (error) {
       denied = (error as ConflictError & { details?: { sessionControlCode?: string } }).details?.sessionControlCode;
     }
     expect(denied).toBe("SESSION_CONTROL_CAPABILITY_DENIED");
 
     const withRead = buildService(["send", "read"]);
-    expect(withRead.listEvents({ actor: companion, sessionId: "session-1" })).toEqual([]);
+    expect(await withRead.listEvents({ actor: companion, sessionId: "session-1" })).toEqual([]);
   });
 
-  it("authorizeExternalSessionRead is the single gate: admits bound+read, bypasses operators, and fails closed", () => {
+  it("authorizeExternalSessionRead is the single gate: admits bound+read, bypasses operators, and fails closed", async () => {
     const companion = {
       actorKind: "external_companion" as const,
       companionSessionId: "companion-session-1",
@@ -972,9 +982,9 @@ describe("SessionControlService", () => {
       boundExternalController: { companionSessionId: "companion-session-1", clientInstanceId: "client-instance-1" },
       ...overrides,
     });
-    const deniedCode = (fn: () => void): string | undefined => {
+    const deniedCode = async (fn: () => Promise<void>): Promise<string | undefined> => {
       try {
-        fn();
+        await fn();
       } catch (error) {
         return (error as ConflictError & { details?: { sessionControlCode?: string } }).details?.sessionControlCode;
       }
@@ -983,13 +993,13 @@ describe("SessionControlService", () => {
 
     // ALLOW: bound controller with delegated read.
     const allow = buildService(() => boundControl(["send", "read"]));
-    expect(() =>
+    await expect(
       allow.service.authorizeExternalSessionRead({ actor: companion, sessionId: "session-1" }),
-    ).not.toThrow();
+    ).resolves.toBeUndefined();
 
     // OPERATOR bypass: no storage read, no throw.
     const operator = buildService(() => boundControl(["send", "read"]));
-    operator.service.authorizeExternalSessionRead({
+    await operator.service.authorizeExternalSessionRead({
       actor: { actorKind: "operator", actorId: "op-1" },
       sessionId: "s",
     });
@@ -997,43 +1007,50 @@ describe("SessionControlService", () => {
 
     // DENY 1 — send-only capability.
     expect(
-      deniedCode(() =>
-        buildService(() => boundControl(["send"])).service.authorizeExternalSessionRead({
-          actor: companion,
-          sessionId: "session-1",
-        }),
+      await deniedCode(
+        async () =>
+          await buildService(() => boundControl(["send"])).service.authorizeExternalSessionRead({
+            actor: companion,
+            sessionId: "session-1",
+          }),
       ),
     ).toBe("SESSION_CONTROL_CAPABILITY_DENIED");
 
     // DENY 2 — non-controller (operator owns the session).
     expect(
-      deniedCode(() =>
-        buildService(() => ({ ownerKind: "operator", generation: 1 })).service.authorizeExternalSessionRead({
-          actor: companion,
-          sessionId: "session-1",
-        }),
+      await deniedCode(
+        async () =>
+          await buildService(() => ({ ownerKind: "operator", generation: 1 })).service.authorizeExternalSessionRead({
+            actor: companion,
+            sessionId: "session-1",
+          }),
       ),
     ).toBe("SESSION_CONTROL_CAPABILITY_DENIED");
 
     // DENY 3 — wrong companion session bound.
     expect(
-      deniedCode(() =>
-        buildService(() =>
-          boundControl(["send", "read"], {
-            boundExternalController: { companionSessionId: "other-companion", clientInstanceId: "client-instance-1" },
-          }),
-        ).service.authorizeExternalSessionRead({ actor: companion, sessionId: "session-1" }),
+      await deniedCode(
+        async () =>
+          await buildService(() =>
+            boundControl(["send", "read"], {
+              boundExternalController: { companionSessionId: "other-companion", clientInstanceId: "client-instance-1" },
+            }),
+          ).service.authorizeExternalSessionRead({ actor: companion, sessionId: "session-1" }),
       ),
     ).toBe("SESSION_CONTROL_CAPABILITY_DENIED");
 
     // DENY 4 — cross-session / different bound client instance.
     expect(
-      deniedCode(() =>
-        buildService(() =>
-          boundControl(["send", "read"], {
-            boundExternalController: { companionSessionId: "companion-session-1", clientInstanceId: "other-instance" },
-          }),
-        ).service.authorizeExternalSessionRead({ actor: companion, sessionId: "session-1" }),
+      await deniedCode(
+        async () =>
+          await buildService(() =>
+            boundControl(["send", "read"], {
+              boundExternalController: {
+                companionSessionId: "companion-session-1",
+                clientInstanceId: "other-instance",
+              },
+            }),
+          ).service.authorizeExternalSessionRead({ actor: companion, sessionId: "session-1" }),
       ),
     ).toBe("SESSION_CONTROL_CAPABILITY_DENIED");
 
@@ -1043,9 +1060,9 @@ describe("SessionControlService", () => {
       chatSessionMeta: { get: vi.fn(() => undefined) },
       sessionControls: { getControl: unknownGetControl },
     } as unknown as Storage);
-    expect(() => unknownService.authorizeExternalSessionRead({ actor: companion, sessionId: "missing" })).toThrow(
-      NotFoundError,
-    );
+    await expect(
+      unknownService.authorizeExternalSessionRead({ actor: companion, sessionId: "missing" }),
+    ).rejects.toThrow(NotFoundError);
     expect(unknownGetControl).not.toHaveBeenCalled();
   });
 });
@@ -1107,7 +1124,7 @@ describe("SessionControlService.pageControlEventStream", () => {
     return { service, listEventsAfterSequence, getEventSequenceBounds, getControl };
   };
 
-  it("uses event_sequence as the cursor, exposes honest bounds, and carries the current generation for a bound reader with read", () => {
+  it("uses event_sequence as the cursor, exposes honest bounds, and carries the current generation for a bound reader with read", async () => {
     const { service, listEventsAfterSequence } = buildService({
       control: () => boundControl(["send", "read"], { generation: 5 }),
       rows: [
@@ -1117,7 +1134,7 @@ describe("SessionControlService.pageControlEventStream", () => {
       ],
       bounds: { oldestSequence: 1, newestSequence: 3 },
     });
-    const page = service.pageControlEventStream({ actor: companion, sessionId: "session-1" });
+    const page = await service.pageControlEventStream({ actor: companion, sessionId: "session-1" });
     expect(page.events.map((envelope) => envelope.cursor)).toEqual([1, 2, 3]);
     expect(page.events.map((envelope) => envelope.event.eventId)).toEqual(["sce-1", "sce-2", "sce-3"]);
     expect(page.oldestSequence).toBe(1);
@@ -1129,13 +1146,13 @@ describe("SessionControlService.pageControlEventStream", () => {
     expect(listEventsAfterSequence).toHaveBeenCalledWith("workspace-1", "session-1", 0, SESSION_CONTROL_MAX_LIST_ITEMS);
   });
 
-  it("pages FORWARD past 200 from the client cursor and sets truncated when more remain (H1)", () => {
+  it("pages FORWARD past 200 from the client cursor and sets truncated when more remain (H1)", async () => {
     const { service } = buildService({
       control: () => boundControl(["send", "read"]),
       rows: [streamRow(199), streamRow(200), streamRow(201), streamRow(202)],
       bounds: { oldestSequence: 1, newestSequence: 260 },
     });
-    const page = service.pageControlEventStream({
+    const page = await service.pageControlEventStream({
       actor: companion,
       sessionId: "session-1",
       afterCursor: 200,
@@ -1148,13 +1165,13 @@ describe("SessionControlService.pageControlEventStream", () => {
     expect(page.truncated).toBe(true);
   });
 
-  it("clears truncated once the page reaches the newest sequence even at the limit", () => {
+  it("clears truncated once the page reaches the newest sequence even at the limit", async () => {
     const { service } = buildService({
       control: () => boundControl(["send", "read"]),
       rows: [streamRow(259), streamRow(260)],
       bounds: { oldestSequence: 1, newestSequence: 260 },
     });
-    const page = service.pageControlEventStream({
+    const page = await service.pageControlEventStream({
       actor: companion,
       sessionId: "session-1",
       afterCursor: 258,
@@ -1164,14 +1181,14 @@ describe("SessionControlService.pageControlEventStream", () => {
     expect(page.truncated).toBe(false);
   });
 
-  it("fails closed for a send-only controller before any event is read (revoked/unbound readers cannot page)", () => {
+  it("fails closed for a send-only controller before any event is read (revoked/unbound readers cannot page)", async () => {
     const { service, listEventsAfterSequence, getEventSequenceBounds } = buildService({
       control: () => boundControl(["send"]),
       rows: [streamRow(1)],
     });
     let code: string | undefined;
     try {
-      service.pageControlEventStream({ actor: companion, sessionId: "session-1" });
+      await service.pageControlEventStream({ actor: companion, sessionId: "session-1" });
     } catch (error) {
       code = (error as ConflictError & { details?: { sessionControlCode?: string } }).details?.sessionControlCode;
     }
@@ -1180,7 +1197,7 @@ describe("SessionControlService.pageControlEventStream", () => {
     expect(getEventSequenceBounds).not.toHaveBeenCalled();
   });
 
-  it("admits an operator without a control-binding check and surfaces the current owner/generation, content-free", () => {
+  it("admits an operator without a control-binding check and surfaces the current owner/generation, content-free", async () => {
     const { service } = buildService({
       control: () => ({ ownerKind: "operator", leaseState: "operator_active", generation: 7 }),
       rows: [
@@ -1188,7 +1205,7 @@ describe("SessionControlService.pageControlEventStream", () => {
       ],
       bounds: { oldestSequence: 1, newestSequence: 5 },
     });
-    const page = service.pageControlEventStream({
+    const page = await service.pageControlEventStream({
       actor: { actorKind: "operator", actorId: "op-1" },
       sessionId: "session-1",
     });

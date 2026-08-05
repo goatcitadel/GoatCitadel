@@ -9,11 +9,11 @@ import {
 } from "./chat-turn-trace-hydration.js";
 
 describe("chat turn trace hydration", () => {
-  it("hydrates a single trace with persisted tool runs and default citations", () => {
+  it("hydrates a single trace with persisted tool runs and default citations", async () => {
     const storage = createStorage();
     const trace = createTrace({ citations: undefined });
 
-    const hydrated = createHydratedChatTurnTrace({ storage }, "turn-1", trace);
+    const hydrated = await createHydratedChatTurnTrace({ storage }, "turn-1", trace);
 
     expect(storage.chatToolRuns.listByTurn).toHaveBeenCalledWith("turn-1");
     expect(hydrated).toEqual(
@@ -25,7 +25,7 @@ describe("chat turn trace hydration", () => {
     );
   });
 
-  it("hydrates trace lists with ordered tool runs and skips missing execution plans", () => {
+  it("hydrates trace lists with ordered tool runs and skips missing execution plans", async () => {
     const storage = createStorage({
       traces: [
         createTrace({ turnId: "turn-1", executionPlanId: "plan-1", citations: undefined }),
@@ -40,7 +40,7 @@ describe("chat turn trace hydration", () => {
       return { planId, steps: [{ stepId: "step-1" }] };
     }) as never;
 
-    const hydrated = listHydratedChatTurnTraces({ storage }, "session-1", 3);
+    const hydrated = await listHydratedChatTurnTraces({ storage }, "session-1", 3);
 
     expect(storage.chatTurnTraces.listBySession).toHaveBeenCalledWith("session-1", 3);
     expect(storage.chatToolRuns.listByTurnIds).toHaveBeenCalledWith(["turn-1", "turn-2", "turn-3"]);
@@ -65,7 +65,7 @@ describe("chat turn trace hydration", () => {
     ]);
   });
 
-  it("only hydrates decision trace records when explicitly requested", () => {
+  it("only hydrates decision trace records when explicitly requested", async () => {
     const storage = createStorage({
       traces: [createTrace({ turnId: "turn-1" }), createTrace({ turnId: "turn-2" })],
     });
@@ -85,8 +85,8 @@ describe("chat turn trace hydration", () => {
       ]),
     } as never;
 
-    const defaultHydrated = listHydratedChatTurnTraces({ storage }, "session-1", 2);
-    const explicitHydrated = listHydratedChatTurnTraces({ storage }, "session-1", 2, {
+    const defaultHydrated = await listHydratedChatTurnTraces({ storage }, "session-1", 2);
+    const explicitHydrated = await listHydratedChatTurnTraces({ storage }, "session-1", 2, {
       includeDecisionTrace: true,
     });
 
@@ -95,7 +95,7 @@ describe("chat turn trace hydration", () => {
     expect(storage.runtimeDecisionTraces.list).toHaveBeenCalledWith({ sessionId: "session-1", limit: 100 });
   });
 
-  it("builds child turn maps and reuses persisted active leaves", () => {
+  it("builds child turn maps and reuses persisted active leaves", async () => {
     const storage = createStorage();
     const traces = [
       createTrace({ turnId: "root", parentTurnId: undefined }),
@@ -114,11 +114,11 @@ describe("chat turn trace hydration", () => {
         ["child-a", ["grandchild"]],
       ]),
     );
-    expect(resolveChatActiveLeafTurnId({ storage }, "session-1", traces)).toBe("child-b");
+    expect(await resolveChatActiveLeafTurnId({ storage }, "session-1", traces)).toBe("child-b");
     expect(storage.chatSessionBranchState.setActiveLeaf).not.toHaveBeenCalled();
   });
 
-  it("resolves and persists the newest leaf when branch state is absent or stale", () => {
+  it("resolves and persists the newest leaf when branch state is absent or stale", async () => {
     const storage = createStorage();
     storage.chatSessionBranchState.get = vi.fn(() => ({
       sessionId: "session-1",
@@ -148,7 +148,7 @@ describe("chat turn trace hydration", () => {
       }),
     ];
 
-    expect(resolveChatActiveLeafTurnId({ storage }, "session-1", traces)).toBe("new-leaf");
+    expect(await resolveChatActiveLeafTurnId({ storage }, "session-1", traces)).toBe("new-leaf");
     expect(storage.chatSessionBranchState.setActiveLeaf).toHaveBeenCalledWith(
       "session-1",
       "new-leaf",
@@ -156,7 +156,7 @@ describe("chat turn trace hydration", () => {
     );
   });
 
-  it("uses turn id ordering as the active-leaf tie breaker for equal start times", () => {
+  it("uses turn id ordering as the active-leaf tie breaker for equal start times", async () => {
     const storage = createStorage();
     const traces = [
       createTrace({
@@ -171,7 +171,7 @@ describe("chat turn trace hydration", () => {
       }),
     ];
 
-    expect(resolveChatActiveLeafTurnId({ storage }, "session-1", traces)).toBe("turn-b");
+    expect(await resolveChatActiveLeafTurnId({ storage }, "session-1", traces)).toBe("turn-b");
     expect(storage.chatSessionBranchState.setActiveLeaf).toHaveBeenCalledWith(
       "session-1",
       "turn-b",
@@ -190,10 +190,10 @@ describe("chat turn trace hydration", () => {
     expect(buildChatTurnChildrenMap(traces)).toEqual(new Map([["root", ["child"]]]));
   });
 
-  it("returns undefined when there are no traces to hydrate into an active leaf", () => {
+  it("returns undefined when there are no traces to hydrate into an active leaf", async () => {
     const storage = createStorage();
 
-    expect(resolveChatActiveLeafTurnId({ storage }, "session-1", [])).toBeUndefined();
+    expect(await resolveChatActiveLeafTurnId({ storage }, "session-1", [])).toBeUndefined();
     expect(storage.chatSessionBranchState.setActiveLeaf).not.toHaveBeenCalled();
   });
 

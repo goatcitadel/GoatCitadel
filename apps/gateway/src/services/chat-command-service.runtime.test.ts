@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { Storage } from "@goatcitadel/storage";
+import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import { describe, expect, it, vi } from "vitest";
 import { listChatCommandCatalog, parseChatCommand, type ChatCommandDependencies } from "./chat-command-service.js";
 import { SkillLearningService, type SkillLearningResult } from "./skill-learning-service.js";
@@ -55,30 +55,30 @@ function createDeps(): ChatCommandDependencies {
   return {
     storage: {
       chatSessionMeta: {
-        ensure: vi.fn(() => ({ workspaceId: "default" })),
+        ensure: vi.fn(async () => ({ workspaceId: "default" })),
       },
       chatSessionProjects: {
-        get: vi.fn(() => ({ projectId: "proj-1" })),
+        get: vi.fn(async () => ({ projectId: "proj-1" })),
       },
     },
-    getSession: vi.fn(() => ({ sessionId: "session-1" })),
-    getChatSessionPrefs: vi.fn(() => prefs),
-    updateChatSessionPrefs: vi.fn((_sessionId: string, patch: Record<string, unknown>) => {
+    getSession: vi.fn(async () => ({ sessionId: "session-1" })),
+    getChatSessionPrefs: vi.fn(async () => prefs),
+    updateChatSessionPrefs: vi.fn(async (_sessionId: string, patch: Record<string, unknown>) => {
       prefs = { ...prefs, ...patch };
       return prefs;
     }),
-    updateChatSessionProactivePolicy: vi.fn((_sessionId: string, patch: Record<string, unknown>) => {
+    updateChatSessionProactivePolicy: vi.fn(async (_sessionId: string, patch: Record<string, unknown>) => {
       prefs = { ...prefs, ...patch };
       return { mode: (patch.proactiveMode ?? prefs.proactiveMode) as never };
     }),
-    createChatSession: vi.fn(() => ({
+    createChatSession: vi.fn(async () => ({
       sessionId: "session-new",
       title: "Next",
       workspaceId: "default",
     })),
-    assignChatSessionProject: vi.fn((_sessionId: string, projectId?: string) => ({ projectId })),
-    normalizeWorkspaceId: vi.fn((workspaceId?: string) => workspaceId ?? "default"),
-    getMemoryMaintenanceStatus: vi.fn(() => ({
+    assignChatSessionProject: vi.fn(async (_sessionId: string, projectId?: string) => ({ projectId })),
+    normalizeWorkspaceId: vi.fn(async (workspaceId?: string) => workspaceId ?? "default"),
+    getMemoryMaintenanceStatus: vi.fn(async () => ({
       policy: {
         enabled: true,
         runMode: "incremental",
@@ -92,8 +92,8 @@ function createDeps(): ChatCommandDependencies {
       lastRun: { status: "completed", updatedAt: "2026-05-14T00:00:00.000Z" },
       nextDueAt: "2026-05-15T16:30:00.000Z",
     })),
-    getSettings: vi.fn(() => ({ llm: { activeProviderId: "primary", activeModel: "primary-model" } })),
-    runMemoryMaintenanceNow: vi.fn(() => ({ runId: "dream-1" })),
+    getSettings: vi.fn(async () => ({ llm: { activeProviderId: "primary", activeModel: "primary-model" } })),
+    runMemoryMaintenanceNow: vi.fn(async () => ({ runId: "dream-1" })),
     undoChatTurns: vi.fn(async (_sessionId: string, count: number) => ({
       undoneCount: count,
       requestedCount: count,
@@ -111,12 +111,12 @@ function createDeps(): ChatCommandDependencies {
     })),
     scorePromptPackLatestRunByCode: vi.fn(async () => ({ overrideVerdict: "pass" })),
     runPromptPackFromChat: vi.fn(async () => [{ testCode: "TEST-001" }]),
-    listSkills: vi.fn(() => [{ skillId: "skill-a", state: "enabled", note: "ready" }]),
-    listChatSessions: vi.fn(() => []),
-    listMemoryItems: vi.fn(() => []),
+    listSkills: vi.fn(async () => [{ skillId: "skill-a", state: "enabled", note: "ready" }]),
+    listChatSessions: vi.fn(async () => []),
+    listMemoryItems: vi.fn(async () => []),
     // HX-402 P2: approval-first — the command surface receives a pending
     // skill.lifecycle approval envelope, never a mutated record.
-    setSkillState: vi.fn((skillId: string, state: string) => ({
+    setSkillState: vi.fn(async (skillId: string, state: string) => ({
       pendingApproval: {
         approvalId: `approval-${skillId}-${state}`,
         status: "pending",
@@ -156,8 +156,8 @@ function createDeps(): ChatCommandDependencies {
         eligible: true,
       },
     })),
-    listMcpServers: vi.fn(() => [{ serverId: "mcp-1", label: "Browser", status: "disconnected", enabled: true }]),
-    listMcpTemplates: vi.fn(() => [
+    listMcpServers: vi.fn(async () => [{ serverId: "mcp-1", label: "Browser", status: "disconnected", enabled: true }]),
+    listMcpTemplates: vi.fn(async () => [
       {
         templateId: "browser",
         label: "Browser",
@@ -168,10 +168,10 @@ function createDeps(): ChatCommandDependencies {
       },
     ]),
     connectMcpServer: vi.fn(async (serverId: string) => ({ serverId, status: "connected" })),
-    disconnectMcpServer: vi.fn((serverId: string) => ({ serverId, status: "disconnected" })),
-    createMcpServer: vi.fn((input) => ({ serverId: "mcp-new", status: "disconnected", ...input })),
+    disconnectMcpServer: vi.fn(async (serverId: string) => ({ serverId, status: "disconnected" })),
+    createMcpServer: vi.fn(async (input) => ({ serverId: "mcp-new", status: "disconnected", ...input })),
     learnSkillFromLatestTurn: vi.fn(async () => learningResult()),
-    createSkillLearningHistoryDryRun: vi.fn(() => ({
+    createSkillLearningHistoryDryRun: vi.fn(async () => ({
       reviewOutcome: "pending_selection",
       workspaceId: "default",
       sessionId: "session-1",
@@ -211,15 +211,47 @@ function createDeps(): ChatCommandDependencies {
       }),
     ),
     resolveChatToolApproval: vi.fn(async () => ({})),
-    getPersonalityCatalog: vi.fn(() => ({ defaultPersonalityId: "default", items: [] })),
-    setDefaultPersonality: vi.fn(),
-    extractAndPersistLearnedMemory: vi.fn(),
-    listChatSessionLearnedMemory: vi.fn(() => ({ items: [], conflicts: [] })),
-    updateChatSessionLearnedMemory: vi.fn(),
+    getPersonalityCatalog: vi.fn(async () => ({ defaultPersonalityId: "default", items: [] })),
+    setDefaultPersonality: vi.fn(async () => ({ defaultPersonalityId: "default", items: [] })),
+    extractAndPersistLearnedMemory: vi.fn(async () => undefined),
+    listChatSessionLearnedMemory: vi.fn(async () => ({ items: [], conflicts: [] })),
+    updateChatSessionLearnedMemory: vi.fn(async () => undefined as never),
   } as unknown as ChatCommandDependencies;
 }
 
 describe("chat command runtime dispatch", () => {
+  it("awaits asynchronous command dependencies before returning rendered state", async () => {
+    const deps = createDeps();
+    let releaseUpdate!: () => void;
+    let markStarted!: () => void;
+    const updateGate = new Promise<void>((resolve) => {
+      releaseUpdate = resolve;
+    });
+    const updateStarted = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    vi.mocked(deps.updateChatSessionPrefs).mockImplementation(async (_sessionId, patch) => {
+      markStarted();
+      await updateGate;
+      return {
+        ...(await deps.getChatSessionPrefs("session-1")),
+        ...patch,
+      };
+    });
+
+    let settled = false;
+    const resultPromise = parseChatCommand(deps, "session-1", "/mode").then((result) => {
+      settled = true;
+      return result;
+    });
+    await updateStarted;
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    releaseUpdate();
+    await expect(resultPromise).resolves.toMatchObject({ ok: true, prefs: { mode: "chat" } });
+  });
+
   it("lists every runtime preference command that the parser accepts", () => {
     const commands = new Set(listChatCommandCatalog().map((item) => item.command));
 
@@ -382,7 +414,7 @@ describe("chat command runtime dispatch", () => {
       const service = new SkillLearningService({
         rootDir: root,
         candidateRoot: "data/candidates",
-        storage,
+        storage: createSqliteAsyncStorage(storage),
         readEffectiveConfigRevision: () => 1,
         now: () => "2026-07-14T02:00:02.000Z",
       });
@@ -499,7 +531,7 @@ describe("chat command runtime dispatch", () => {
 
   it("uses channel /memory as lookup while preserving chat memory mode commands", async () => {
     const deps = createDeps();
-    vi.mocked(deps.listChatSessionLearnedMemory).mockReturnValue({
+    vi.mocked(deps.listChatSessionLearnedMemory).mockResolvedValue({
       conflicts: [],
       items: [
         {
@@ -539,7 +571,7 @@ describe("chat command runtime dispatch", () => {
 
   it("renders compact channel recall results from scoped session search", async () => {
     const deps = createDeps();
-    vi.mocked(deps.listChatSessions).mockReturnValue([
+    vi.mocked(deps.listChatSessions).mockResolvedValue([
       {
         sessionId: "session-1",
         sessionKey: "discord:conn-1:room-1",

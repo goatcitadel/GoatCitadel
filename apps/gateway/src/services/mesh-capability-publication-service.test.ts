@@ -11,6 +11,7 @@ import {
   Storage,
   buildMeshCapabilityActivationApprovalPayload,
   computeMeshCapabilityDescriptorSha256,
+  createSqliteAsyncStorage,
   type ActivateMeshCapabilityInput,
 } from "@goatcitadel/storage";
 import {
@@ -138,10 +139,14 @@ function submissionEntry(
   };
 }
 
-function authenticate(service: MeshCapabilityPublicationService, token: string, fingerprint?: string) {
-  const result = service.authenticateNodeRequest({ headers: nodeHeaders(token, fingerprint) });
+async function authenticate(service: MeshCapabilityPublicationService, token: string, fingerprint?: string) {
+  const result = await service.authenticateNodeRequest({ headers: nodeHeaders(token, fingerprint) });
   expect(result).toHaveProperty("identity");
   return (result as { identity: MeshCapabilityAuthenticatedNodeIdentity }).identity;
+}
+
+function createService(storage: Storage): MeshCapabilityPublicationService {
+  return new MeshCapabilityPublicationService({ storage: createSqliteAsyncStorage(storage) });
 }
 
 function approveActivation(storage: Storage, input: ActivateMeshCapabilityInput): void {
@@ -166,29 +171,33 @@ function approveActivation(storage: Storage, input: ActivateMeshCapabilityInput)
 }
 
 describe("MeshCapabilityPublicationService node authentication", () => {
-  it("resolves the identity tuple from the durable admission authority only", () => {
+  it("resolves the identity tuple from the durable admission authority only", async () => {
     const storage = createStorage();
     admitNode(storage, { nodeId: "node-a", token: "join-node-a" });
-    const service = new MeshCapabilityPublicationService({ storage });
+    const service = createService(storage);
 
-    expect(service.authenticateNodeRequest({ headers: {} })).toMatchObject({
+    await expect(service.authenticateNodeRequest({ headers: {} })).resolves.toMatchObject({
       statusCode: 401,
       reason: "mesh_node_token_required",
     });
-    expect(service.authenticateNodeRequest({ headers: nodeHeaders("wrong-token", "sha256:node-a") })).toMatchObject({
+    await expect(
+      service.authenticateNodeRequest({ headers: nodeHeaders("wrong-token", "sha256:node-a") }),
+    ).resolves.toMatchObject({
       statusCode: 403,
       reason: "mesh_node_unknown_or_revoked",
     });
-    expect(service.authenticateNodeRequest({ headers: nodeHeaders("join-node-a") })).toMatchObject({
+    await expect(service.authenticateNodeRequest({ headers: nodeHeaders("join-node-a") })).resolves.toMatchObject({
       statusCode: 403,
       reason: "mesh_node_certificate_mismatch",
     });
-    expect(service.authenticateNodeRequest({ headers: nodeHeaders("join-node-a", "sha256:forged") })).toMatchObject({
+    await expect(
+      service.authenticateNodeRequest({ headers: nodeHeaders("join-node-a", "sha256:forged") }),
+    ).resolves.toMatchObject({
       statusCode: 403,
       reason: "mesh_node_certificate_mismatch",
     });
 
-    const identity = authenticate(service, "join-node-a", "sha256:node-a");
+    const identity = await authenticate(service, "join-node-a", "sha256:node-a");
     expect(identity).toEqual({
       workspaceId: "default",
       nodeId: "node-a",
@@ -198,7 +207,7 @@ describe("MeshCapabilityPublicationService node authentication", () => {
     });
   });
 
-  it("rejects superseded and revoked admission credentials", () => {
+  it("rejects superseded and revoked admission credentials", async () => {
     const storage = createStorage();
     admitNode(storage, { nodeId: "node-a", token: "join-node-a-1" });
     storage.meshCapabilityNodeAdmissions.revoke({
@@ -209,33 +218,37 @@ describe("MeshCapabilityPublicationService node authentication", () => {
       revokedByActorId: "operator-a",
       idempotencyKey: "revoke:node-a:1",
     });
-    const service = new MeshCapabilityPublicationService({ storage });
-    expect(service.authenticateNodeRequest({ headers: nodeHeaders("join-node-a-1", "sha256:node-a") })).toMatchObject({
+    const service = createService(storage);
+    await expect(
+      service.authenticateNodeRequest({ headers: nodeHeaders("join-node-a-1", "sha256:node-a") }),
+    ).resolves.toMatchObject({
       statusCode: 403,
       reason: "mesh_node_unknown_or_revoked",
     });
 
     admitNode(storage, { nodeId: "node-a", token: "join-node-a-2", expectedAdmissionGeneration: 1 });
-    expect(service.authenticateNodeRequest({ headers: nodeHeaders("join-node-a-1", "sha256:node-a") })).toMatchObject({
+    await expect(
+      service.authenticateNodeRequest({ headers: nodeHeaders("join-node-a-1", "sha256:node-a") }),
+    ).resolves.toMatchObject({
       statusCode: 403,
       reason: "mesh_node_unknown_or_revoked",
     });
-    expect(authenticate(service, "join-node-a-2", "sha256:node-a").admissionGeneration).toBe(2);
+    expect((await authenticate(service, "join-node-a-2", "sha256:node-a")).admissionGeneration).toBe(2);
   });
 });
 
 describe("MeshCapabilityPublicationService manifest publication", () => {
-  it("publishes a validated manifest with server-derived identity, replays same bytes, and conflicts on drift", () => {
+  it("publishes a validated manifest with server-derived identity, replays same bytes, and conflicts on drift", async () => {
     const storage = createStorage();
     admitNode(storage, { nodeId: "node-a", token: "join-node-a" });
-    const service = new MeshCapabilityPublicationService({ storage });
-    const identity = authenticate(service, "join-node-a", "sha256:node-a");
+    const service = createService(storage);
+    const identity = await authenticate(service, "join-node-a", "sha256:node-a");
 
     const submission = {
       publicationKey: "publication-1",
       entries: [submissionEntry("skill", "project.guide"), submissionEntry("tool", "project.status")],
     };
-    const receipt = service.publishCapabilityManifest(identity, submission);
+    const receipt = await service.publishCapabilityManifest(identity, submission);
     expect(receipt.replayed).toBe(false);
     expect(receipt.manifest.workspaceId).toBe("default");
     expect(receipt.manifest.nodeId).toBe("node-a");
@@ -250,85 +263,85 @@ describe("MeshCapabilityPublicationService manifest publication", () => {
       "skill_descriptor_never_callable",
     );
 
-    const replay = service.publishCapabilityManifest(identity, submission);
+    const replay = await service.publishCapabilityManifest(identity, submission);
     expect(replay.replayed).toBe(true);
     expect(replay.manifest.manifestSha256).toBe(receipt.manifest.manifestSha256);
     expect(storage.meshCapabilityPublications.findCurrentPublisher("default", "node-a")?.publisherGeneration).toBe(1);
 
-    expect(() =>
+    await expect(
       service.publishCapabilityManifest(identity, {
         publicationKey: "publication-1",
         entries: [submissionEntry("tool", "project.changed")],
       }),
-    ).toThrow(/different request bytes/);
+    ).rejects.toThrow(/different request bytes/);
   });
 
-  it("fails malformed submissions closed before any publisher-binding write", () => {
+  it("fails malformed submissions closed before any publisher-binding write", async () => {
     const storage = createStorage();
     admitNode(storage, { nodeId: "node-a", token: "join-node-a" });
-    const service = new MeshCapabilityPublicationService({ storage });
-    const identity = authenticate(service, "join-node-a", "sha256:node-a");
+    const service = createService(storage);
+    const identity = await authenticate(service, "join-node-a", "sha256:node-a");
 
     const tampered = submissionEntry("tool", "project.status");
     tampered.descriptorSha256 = "0".repeat(64);
-    expect(() =>
+    await expect(
       service.publishCapabilityManifest(identity, { publicationKey: "p-digest", entries: [tampered] }),
-    ).toThrow(/digest does not match/);
+    ).rejects.toThrow(/digest does not match/);
 
     const unknownField = descriptorOf("tool") as unknown as Record<string, unknown>;
     unknownField.extraField = "surprise";
-    expect(() =>
+    await expect(
       service.publishCapabilityManifest(identity, {
         publicationKey: "p-unknown",
         entries: [submissionEntry("tool", "project.status", unknownField)],
       }),
-    ).toThrow(/unknown field/);
+    ).rejects.toThrow(/unknown field/);
 
     const smuggledUrl = descriptorOf("tool") as unknown as Record<string, unknown>;
     smuggledUrl.inputSchema = { type: "object", endpoint: "https://bypass.example" };
-    expect(() =>
+    await expect(
       service.publishCapabilityManifest(identity, {
         publicationKey: "p-url",
         entries: [submissionEntry("tool", "project.status", smuggledUrl)],
       }),
-    ).toThrow(/direct transport or credential field/);
+    ).rejects.toThrow(/direct transport or credential field/);
 
     const smuggledCredential = descriptorOf("tool") as unknown as Record<string, unknown>;
     smuggledCredential.description = "authorization: bearer AAAAAAAAAAAAAAAA";
-    expect(() =>
+    await expect(
       service.publishCapabilityManifest(identity, {
         publicationKey: "p-credential",
         entries: [submissionEntry("tool", "project.status", smuggledCredential)],
       }),
-    ).toThrow(/credential material/);
+    ).rejects.toThrow(/credential material/);
 
-    expect(() =>
+    await expect(
       service.publishCapabilityManifest(identity, {
         publicationKey: "p-duplicate",
         entries: [submissionEntry("tool", "project.status"), submissionEntry("tool", "project.status")],
       }),
-    ).toThrow(/duplicate entry/);
+    ).rejects.toThrow(/duplicate entry/);
 
-    expect(() => service.publishCapabilityManifest(identity, { publicationKey: "p-empty", entries: [] })).toThrow(
-      /between 1 and 128/,
-    );
+    await expect(
+      service.publishCapabilityManifest(identity, { publicationKey: "p-empty", entries: [] }),
+    ).rejects.toThrow(/between 1 and 128/);
 
     // Every failure above happened before the first durable publisher write.
     expect(storage.meshCapabilityPublications.findCurrentPublisher("default", "node-a")).toBeUndefined();
     expect(storage.mesh.listLeases(10)).toEqual([]);
   });
 
-  it("keeps one publisher generation across publishes and supersedes manifests within it", () => {
+  it("keeps one publisher generation across publishes and supersedes manifests within it", async () => {
     const storage = createStorage();
     admitNode(storage, { nodeId: "node-a", token: "join-node-a" });
-    const service = new MeshCapabilityPublicationService({ storage });
-    const identity = authenticate(service, "join-node-a", "sha256:node-a");
+    const service = createService(storage);
+    const identity = await authenticate(service, "join-node-a", "sha256:node-a");
 
-    const first = service.publishCapabilityManifest(identity, {
+    const first = await service.publishCapabilityManifest(identity, {
       publicationKey: "publication-1",
       entries: [submissionEntry("tool", "project.status")],
     });
-    const second = service.publishCapabilityManifest(identity, {
+    const second = await service.publishCapabilityManifest(identity, {
       publicationKey: "publication-2",
       supersedesManifestSha256: first.manifest.manifestSha256,
       entries: [submissionEntry("tool", "project.status"), submissionEntry("skill", "project.guide")],
@@ -336,7 +349,7 @@ describe("MeshCapabilityPublicationService manifest publication", () => {
     expect(second.manifest.publisherGeneration).toBe(1);
     expect(second.manifest.supersedesManifestSha256).toBe(first.manifest.manifestSha256);
 
-    const inspection = service.listPublicationInspection("default");
+    const inspection = await service.listPublicationInspection("default");
     const firstView = inspection.manifests.find((view) => view.manifestSha256 === first.manifest.manifestSha256);
     const secondView = inspection.manifests.find((view) => view.manifestSha256 === second.manifest.manifestSha256);
     expect(firstView?.supersededByManifestSha256).toBe(second.manifest.manifestSha256);
@@ -345,13 +358,13 @@ describe("MeshCapabilityPublicationService manifest publication", () => {
     expect(secondView?.entries.map((entry) => entry.status)).toEqual(["review_required", "review_required"]);
   });
 
-  it("registers a new publisher generation after terminal health instead of resuming the old one", () => {
+  it("registers a new publisher generation after terminal health instead of resuming the old one", async () => {
     const storage = createStorage();
     admitNode(storage, { nodeId: "node-a", token: "join-node-a" });
-    const service = new MeshCapabilityPublicationService({ storage });
-    const identity = authenticate(service, "join-node-a", "sha256:node-a");
+    const service = createService(storage);
+    const identity = await authenticate(service, "join-node-a", "sha256:node-a");
 
-    const first = service.publishCapabilityManifest(identity, {
+    const first = await service.publishCapabilityManifest(identity, {
       publicationKey: "publication-1",
       entries: [submissionEntry("tool", "project.status")],
     });
@@ -367,13 +380,13 @@ describe("MeshCapabilityPublicationService manifest publication", () => {
       tlsFingerprint: publisher.tlsFingerprint,
     });
 
-    const reconnected = service.publishCapabilityManifest(identity, {
+    const reconnected = await service.publishCapabilityManifest(identity, {
       publicationKey: "publication-reconnected",
       entries: [submissionEntry("tool", "project.status")],
     });
     expect(reconnected.manifest.publisherGeneration).toBe(2);
 
-    const inspection = service.listPublicationInspection("default");
+    const inspection = await service.listPublicationInspection("default");
     const oldView = inspection.manifests.find((view) => view.manifestSha256 === first.manifest.manifestSha256);
     expect(oldView?.entries[0]?.status).toBe("superseded");
     expect(oldView?.entries[0]?.reasons).toContain("publisher_generation_superseded");
@@ -381,36 +394,36 @@ describe("MeshCapabilityPublicationService manifest publication", () => {
     expect(newView?.entries[0]?.status).toBe("review_required");
   });
 
-  it("rejects publication while another holder owns the publication lease", () => {
+  it("rejects publication while another holder owns the publication lease", async () => {
     const storage = createStorage();
     admitNode(storage, { nodeId: "node-a", token: "join-node-a" });
-    const service = new MeshCapabilityPublicationService({ storage });
-    const identity = authenticate(service, "join-node-a", "sha256:node-a");
+    const service = createService(storage);
+    const identity = await authenticate(service, "join-node-a", "sha256:node-a");
     storage.mesh.acquireLease("mesh-capability-publication:default:node-a", "node-other", 3_600);
 
-    expect(() =>
+    await expect(
       service.publishCapabilityManifest(identity, {
         publicationKey: "publication-1",
         entries: [submissionEntry("tool", "project.status")],
       }),
-    ).toThrow(/currently held/);
+    ).rejects.toThrow(/currently held/);
   });
 });
 
 describe("MeshCapabilityPublicationService projections", () => {
-  it("projects offline statuses for node disconnect and lease expiry, and revoked for admission revocation", () => {
+  it("projects offline statuses for node disconnect and lease expiry, and revoked for admission revocation", async () => {
     const storage = createStorage();
     admitNode(storage, { nodeId: "node-a", token: "join-node-a" });
-    const service = new MeshCapabilityPublicationService({ storage });
-    const identity = authenticate(service, "join-node-a", "sha256:node-a");
-    service.publishCapabilityManifest(identity, {
+    const service = createService(storage);
+    const identity = await authenticate(service, "join-node-a", "sha256:node-a");
+    await service.publishCapabilityManifest(identity, {
       publicationKey: "publication-1",
       entries: [submissionEntry("tool", "project.status")],
     });
 
     const node = storage.mesh.getNode("node-a");
     storage.mesh.upsertNode({ ...node, status: "offline" });
-    let entry = service.listPublicationInspection("default").manifests[0]!.entries[0]!;
+    let entry = (await service.listPublicationInspection("default")).manifests[0]!.entries[0]!;
     expect(entry.status).toBe("offline");
     expect(entry.reasons).toContain("node_disconnected");
     storage.mesh.upsertNode(node);
@@ -418,7 +431,7 @@ describe("MeshCapabilityPublicationService projections", () => {
     storage.db
       .prepare("UPDATE mesh_leases SET expires_at = ? WHERE lease_key = ?")
       .run("2000-01-01T00:00:00.000Z", "mesh-capability-publication:default:node-a");
-    entry = service.listPublicationInspection("default").manifests[0]!.entries[0]!;
+    entry = (await service.listPublicationInspection("default")).manifests[0]!.entries[0]!;
     expect(entry.status).toBe("offline");
     expect(entry.reasons).toContain("publication_lease_expired");
 
@@ -433,7 +446,7 @@ describe("MeshCapabilityPublicationService projections", () => {
       publicationLeaseExpiresAt: publisher.publicationLeaseExpiresAt,
       tlsFingerprint: publisher.tlsFingerprint,
     });
-    entry = service.listPublicationInspection("default").manifests[0]!.entries[0]!;
+    entry = (await service.listPublicationInspection("default")).manifests[0]!.entries[0]!;
     expect(entry.status).toBe("offline");
     expect(entry.reasons).toContain("publisher_health_offline");
 
@@ -445,72 +458,72 @@ describe("MeshCapabilityPublicationService projections", () => {
       revokedByActorId: "operator-a",
       idempotencyKey: "revoke:node-a:1",
     });
-    entry = service.listPublicationInspection("default").manifests[0]!.entries[0]!;
+    entry = (await service.listPublicationInspection("default")).manifests[0]!.entries[0]!;
     expect(entry.status).toBe("revoked");
     expect(entry.reasons).toContain("node_admission_revoked");
   });
 
-  it("keeps workspaces isolated even when publication keys and derived IDs collide", () => {
+  it("keeps workspaces isolated even when publication keys and derived IDs collide", async () => {
     const storage = createStorage();
     const beta = storage.workspaces.create({ name: "Beta", slug: "beta-workspace" });
     admitNode(storage, { nodeId: "node-a", token: "join-default" });
     admitNode(storage, { workspaceId: beta.workspaceId, nodeId: "node-a", token: "join-beta" });
-    const service = new MeshCapabilityPublicationService({ storage });
+    const service = createService(storage);
 
-    const defaultIdentity = authenticate(service, "join-default", "sha256:node-a");
-    const betaIdentity = authenticate(service, "join-beta", "sha256:node-a");
+    const defaultIdentity = await authenticate(service, "join-default", "sha256:node-a");
+    const betaIdentity = await authenticate(service, "join-beta", "sha256:node-a");
     expect(betaIdentity.workspaceId).toBe(beta.workspaceId);
 
     const submission = {
       publicationKey: "publication-shared-key",
       entries: [submissionEntry("tool", "project.status")],
     };
-    const defaultReceipt = service.publishCapabilityManifest(defaultIdentity, submission);
-    const betaReceipt = service.publishCapabilityManifest(betaIdentity, submission);
+    const defaultReceipt = await service.publishCapabilityManifest(defaultIdentity, submission);
+    const betaReceipt = await service.publishCapabilityManifest(betaIdentity, submission);
     expect(defaultReceipt.replayed).toBe(false);
     expect(betaReceipt.replayed).toBe(false);
     expect(betaReceipt.manifest.workspaceId).toBe(beta.workspaceId);
     expect(betaReceipt.manifest.entries[0]?.capabilityId).toBe(defaultReceipt.manifest.entries[0]?.capabilityId);
 
-    const defaultInspection = service.listPublicationInspection("default");
-    const betaInspection = service.listPublicationInspection(beta.workspaceId);
+    const defaultInspection = await service.listPublicationInspection("default");
+    const betaInspection = await service.listPublicationInspection(beta.workspaceId);
     expect(defaultInspection.manifests.map((view) => view.manifestSha256)).toEqual([
       defaultReceipt.manifest.manifestSha256,
     ]);
     expect(betaInspection.manifests.map((view) => view.manifestSha256)).toEqual([betaReceipt.manifest.manifestSha256]);
-    expect(service.listOwnPublications(defaultIdentity).manifests).toHaveLength(1);
-    expect(service.listCatalogEntries("default")).toHaveLength(1);
-    expect(service.listCatalogEntries(beta.workspaceId)).toHaveLength(1);
+    expect((await service.listOwnPublications(defaultIdentity)).manifests).toHaveLength(1);
+    expect(await service.listCatalogEntries("default")).toHaveLength(1);
+    expect(await service.listCatalogEntries(beta.workspaceId)).toHaveLength(1);
   });
 
-  it("lists the node's own publications only", () => {
+  it("lists the node's own publications only", async () => {
     const storage = createStorage();
     admitNode(storage, { nodeId: "node-a", token: "join-node-a" });
     admitNode(storage, { nodeId: "node-b", token: "join-node-b" });
-    const service = new MeshCapabilityPublicationService({ storage });
-    const identityA = authenticate(service, "join-node-a", "sha256:node-a");
-    const identityB = authenticate(service, "join-node-b", "sha256:node-b");
-    service.publishCapabilityManifest(identityA, {
+    const service = createService(storage);
+    const identityA = await authenticate(service, "join-node-a", "sha256:node-a");
+    const identityB = await authenticate(service, "join-node-b", "sha256:node-b");
+    await service.publishCapabilityManifest(identityA, {
       publicationKey: "publication-a",
       entries: [submissionEntry("tool", "project.status")],
     });
-    service.publishCapabilityManifest(identityB, {
+    await service.publishCapabilityManifest(identityB, {
       publicationKey: "publication-b",
       entries: [submissionEntry("tool", "project.status")],
     });
 
-    const own = service.listOwnPublications(identityA);
+    const own = await service.listOwnPublications(identityA);
     expect(own.manifests).toHaveLength(1);
     expect(own.manifests[0]?.publicationKey).toBe("publication-a");
     expect(own.manifests[0]?.entries[0]?.nodeId).toBe("node-a");
   });
 
-  it("projects an empty callable catalog without activations and never marks skills callable", () => {
+  it("projects an empty callable catalog without activations and never marks skills callable", async () => {
     const storage = createStorage();
     admitNode(storage, { nodeId: "node-a", token: "join-node-a" });
-    const service = new MeshCapabilityPublicationService({ storage });
-    const identity = authenticate(service, "join-node-a", "sha256:node-a");
-    const receipt = service.publishCapabilityManifest(identity, {
+    const service = createService(storage);
+    const identity = await authenticate(service, "join-node-a", "sha256:node-a");
+    const receipt = await service.publishCapabilityManifest(identity, {
       publicationKey: "publication-1",
       entries: [
         submissionEntry("skill", "project.guide"),
@@ -519,7 +532,7 @@ describe("MeshCapabilityPublicationService projections", () => {
       ],
     });
 
-    const catalog = service.listCatalogEntries("default");
+    const catalog = await service.listCatalogEntries("default");
     expect(catalog).toHaveLength(3);
     expect(catalog.every((entry) => entry.callable === false)).toBe(true);
     expect(catalog.every((entry) => entry.category === "mesh_published")).toBe(true);
@@ -570,7 +583,7 @@ describe("MeshCapabilityPublicationService projections", () => {
     approveActivation(storage, activation);
     storage.meshCapabilityPublications.activate(activation);
 
-    const activatedCatalog = service.listCatalogEntries("default");
+    const activatedCatalog = await service.listCatalogEntries("default");
     const activatedTool = activatedCatalog.find((entry) => entry.kind === "mesh_tool");
     const skillEntry = activatedCatalog.find((entry) => entry.kind === "mesh_skill");
     expect(activatedTool?.callable).toBe(true);

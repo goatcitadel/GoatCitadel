@@ -13,7 +13,7 @@
  */
 
 import { type RemoteActionTokenRecord, ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { ApprovalRemoteTokenSecretService } from "./approval-remote-token-secret.js";
 import { hashSensitiveToken } from "./device-access-helpers.js";
 
@@ -39,19 +39,19 @@ export interface RemoteActionTokenClaimOptions {
  * token is present, resolvable, bound to `expectedActionType`, unexpired, and
  * still pending, then atomically marks it consumed.
  */
-export function consumeRemoteActionToken(
+export async function consumeRemoteActionToken(
   host: ApprovalRemoteTokenHost,
   token: string,
   expectedActionType: RemoteActionTokenRecord["actionType"],
   options?: RemoteActionTokenClaimOptions,
-): RemoteActionTokenRecord {
+): Promise<RemoteActionTokenRecord> {
   const normalizedToken = token.trim();
   if (!normalizedToken) {
     throw new ValidationError({
       message: "Remote action token is required.",
     });
   }
-  const current = host.storage.remoteActionTokens.findByTokenHash(hashSensitiveToken(normalizedToken));
+  const current = await host.storage.remoteActionTokens.findByTokenHash(hashSensitiveToken(normalizedToken));
   if (!current) {
     throw new NotFoundError({
       entity: "Remote action token",
@@ -66,28 +66,28 @@ export function consumeRemoteActionToken(
  * {@link consumeRemoteActionToken}, but resolves the record by id rather than by
  * hashing a raw token value.
  */
-export function consumeRemoteActionTokenById(
+export async function consumeRemoteActionTokenById(
   host: ApprovalRemoteTokenHost,
   tokenId: string,
   expectedActionType: RemoteActionTokenRecord["actionType"],
   options?: RemoteActionTokenClaimOptions,
-): RemoteActionTokenRecord {
+): Promise<RemoteActionTokenRecord> {
   const normalizedTokenId = tokenId.trim();
   if (!normalizedTokenId) {
     throw new ValidationError({
       message: "Remote action token id is required.",
     });
   }
-  const current = host.storage.remoteActionTokens.get(normalizedTokenId);
+  const current = await host.storage.remoteActionTokens.get(normalizedTokenId);
   return consumeResolvedRemoteActionToken(host, current, expectedActionType, options);
 }
 
-function consumeResolvedRemoteActionToken(
+async function consumeResolvedRemoteActionToken(
   host: ApprovalRemoteTokenHost,
   current: RemoteActionTokenRecord,
   expectedActionType: RemoteActionTokenRecord["actionType"],
   options: RemoteActionTokenClaimOptions | undefined,
-): RemoteActionTokenRecord {
+): Promise<RemoteActionTokenRecord> {
   if (current.actionType !== expectedActionType) {
     throw new ConflictError({
       message: `Remote action token is bound to ${current.actionType}, not ${expectedActionType}.`,
@@ -132,18 +132,18 @@ function consumeResolvedRemoteActionToken(
     });
   }
 
-  const consumed = host.storage.remoteActionTokens.consumePending(current.tokenId, {
+  const consumed = await host.storage.remoteActionTokens.consumePending(current.tokenId, {
     consumedAt,
     consumedBy,
   });
   if (!consumed) {
-    expireTokenAfterLostBoundaryRace(host, current.tokenId);
+    await expireTokenAfterLostBoundaryRace(host, current.tokenId);
     throwConsumedTokenConflict();
   }
   return consumed;
 }
 
-function resolveClaimResult(
+async function resolveClaimResult(
   host: ApprovalRemoteTokenHost,
   tokenId: string,
   input: {
@@ -151,8 +151,8 @@ function resolveClaimResult(
     consumedBy: string;
     claimFingerprint: string;
   },
-): RemoteActionTokenRecord {
-  const result = host.storage.remoteActionTokens.claimPending(tokenId, input);
+): Promise<RemoteActionTokenRecord> {
+  const result = await host.storage.remoteActionTokens.claimPending(tokenId, input);
   if ((result.outcome === "claimed" || result.outcome === "resumed") && result.record) {
     return result.record;
   }
@@ -165,19 +165,22 @@ function resolveClaimResult(
     throwExpiredTokenConflict();
   }
   if (result.record?.state === "pending") {
-    expireTokenAfterLostBoundaryRace(host, tokenId);
+    await expireTokenAfterLostBoundaryRace(host, tokenId);
   }
   throwConsumedTokenConflict();
 }
 
-function expireTokenAfterLostBoundaryRace(host: ApprovalRemoteTokenHost, tokenId: string): void {
-  const latest = expirePendingTokenAfterSecretCleanup(host, tokenId);
+async function expireTokenAfterLostBoundaryRace(host: ApprovalRemoteTokenHost, tokenId: string): Promise<void> {
+  const latest = await expirePendingTokenAfterSecretCleanup(host, tokenId);
   if (latest.state === "expired") {
     throwExpiredTokenConflict();
   }
 }
 
-function expirePendingTokenAfterSecretCleanup(host: ApprovalRemoteTokenHost, tokenId: string): RemoteActionTokenRecord {
+async function expirePendingTokenAfterSecretCleanup(
+  host: ApprovalRemoteTokenHost,
+  tokenId: string,
+): Promise<RemoteActionTokenRecord> {
   host.approvalRemoteTokenSecrets?.deleteById(tokenId);
   return host.storage.remoteActionTokens.expirePendingIfExpired(tokenId);
 }

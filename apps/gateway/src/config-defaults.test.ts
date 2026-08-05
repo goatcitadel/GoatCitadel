@@ -26,7 +26,11 @@ describe("shipped config defaults", () => {
           fallbackToNative?: boolean;
         };
       };
-      database?: { driver?: string; bundledPostgres?: { startTimeoutMs?: number } };
+      database?: {
+        driver?: string;
+        postgres?: { asyncGatewayEnabled?: boolean };
+        bundledPostgres?: { startTimeoutMs?: number; stopTimeoutMs?: number };
+      };
     };
     const unified = JSON.parse(unifiedRaw) as {
       assistant?: {
@@ -41,7 +45,11 @@ describe("shipped config defaults", () => {
             fallbackToNative?: boolean;
           };
         };
-        database?: { driver?: string; bundledPostgres?: { startTimeoutMs?: number } };
+        database?: {
+          driver?: string;
+          postgres?: { asyncGatewayEnabled?: boolean };
+          bundledPostgres?: { startTimeoutMs?: number; stopTimeoutMs?: number };
+        };
       };
       llm?: { activeProviderId?: string; activeModel?: string };
       toolPolicy?: unknown;
@@ -52,8 +60,9 @@ describe("shipped config defaults", () => {
 
     expect(assistant.auth?.mode ?? "none").toBe("none");
     expect(assistant.database?.driver ?? "").toBe("postgres");
-    expect(assistant.database?.bundledPostgres?.startTimeoutMs ?? 0).toBeGreaterThanOrEqual(90_000);
-    expect(assistant.database?.bundledPostgres?.startTimeoutMs ?? 0).toBeLessThanOrEqual(120_000);
+    expect(assistant.database?.postgres?.asyncGatewayEnabled ?? false).toBe(true);
+    expect(assistant.database?.bundledPostgres?.startTimeoutMs).toBe(180_000);
+    expect(assistant.database?.bundledPostgres?.stopTimeoutMs).toBe(300_000);
     expect(assistant.web?.firecrawl?.enabled ?? false).toBe(true);
     expect(assistant.web?.firecrawl?.baseUrl ?? "").toBe("http://127.0.0.1:3002");
     expect(assistant.web?.firecrawl?.apiKeyEnv ?? "").toBe("FIRECRAWL_API_KEY");
@@ -62,8 +71,9 @@ describe("shipped config defaults", () => {
     expect(assistant.capabilities?.codeModeDockerBackend?.requireDigestPin ?? false).toBe(true);
     expect(unified.assistant?.auth?.mode ?? "none").toBe("none");
     expect(unified.assistant?.database?.driver ?? "").toBe("postgres");
-    expect(unified.assistant?.database?.bundledPostgres?.startTimeoutMs ?? 0).toBeGreaterThanOrEqual(90_000);
-    expect(unified.assistant?.database?.bundledPostgres?.startTimeoutMs ?? 0).toBeLessThanOrEqual(120_000);
+    expect(unified.assistant?.database?.postgres?.asyncGatewayEnabled ?? false).toBe(true);
+    expect(unified.assistant?.database?.bundledPostgres?.startTimeoutMs).toBe(180_000);
+    expect(unified.assistant?.database?.bundledPostgres?.stopTimeoutMs).toBe(300_000);
     expect(unified.assistant?.web?.firecrawl?.enabled ?? false).toBe(true);
     expect(unified.assistant?.web?.firecrawl?.apiKeyEnv ?? "").toBe("FIRECRAWL_API_KEY");
     expect(unified.assistant?.web?.firecrawl?.defaultReadBackend ?? "").toBe("firecrawl");

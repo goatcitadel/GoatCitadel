@@ -480,7 +480,7 @@ describe("MemoryMaintenanceService due evaluation", () => {
     const harness = createHarness();
     harness.changedSessionCounts.set("default", 3);
 
-    harness.service.patchPolicy("default", {
+    await harness.service.patchPolicy("default", {
       enabled: true,
       runMode: "scheduled",
       timingStrategy: "fixed",
@@ -503,7 +503,7 @@ describe("MemoryMaintenanceService due evaluation", () => {
 
     await harness.service.runDueEvaluation();
 
-    const runs = harness.memoryMaintenance.listRuns("default");
+    const runs = await harness.memoryMaintenance.listRuns("default");
     expect(runs).toHaveLength(1);
     expect(runs[0]).toMatchObject({
       workspaceId: "default",
@@ -525,10 +525,10 @@ describe("MemoryMaintenanceService due evaluation", () => {
     );
 
     await harness.service.runDueEvaluation();
-    expect(harness.memoryMaintenance.listRuns("default")).toHaveLength(1);
+    expect(await harness.memoryMaintenance.listRuns("default")).toHaveLength(1);
   });
 
-  it("queues a hybrid_due Dream run without live publication inside a fenced post-turn transaction", () => {
+  it("queues a hybrid_due Dream run without live publication inside a fenced post-turn transaction", async () => {
     const harness = createHarness();
     harness.changedSessionCounts.set("default", 4);
     harness.sessionMeta.set("sess-root", {
@@ -541,7 +541,7 @@ describe("MemoryMaintenanceService due evaluation", () => {
       writable: true,
     });
 
-    harness.service.patchPolicy("default", {
+    await harness.service.patchPolicy("default", {
       enabled: true,
       runMode: "hybrid",
       timingStrategy: "recommendation_first",
@@ -561,9 +561,9 @@ describe("MemoryMaintenanceService due evaluation", () => {
     });
 
     const createDurableRun = vi.spyOn(harness.callbacks, "createDurableRun");
-    const result = harness.service.noteSuccessfulRootTurnSync("sess-root");
+    const result = await harness.service.noteSuccessfulRootTurnSync("sess-root");
 
-    const runs = harness.memoryMaintenance.listRuns("default");
+    const runs = await harness.memoryMaintenance.listRuns("default");
     expect(runs).toHaveLength(1);
     expect(runs[0]?.triggerSource).toBe("hybrid_due");
     expect(result).toMatchObject({
@@ -588,7 +588,7 @@ describe("MemoryMaintenanceService due evaluation", () => {
       writable: true,
     });
 
-    harness.service.patchPolicy("default", {
+    await harness.service.patchPolicy("default", {
       enabled: true,
       runMode: "scheduled",
       timingStrategy: "fixed",
@@ -609,10 +609,10 @@ describe("MemoryMaintenanceService due evaluation", () => {
 
     await harness.service.noteSuccessfulRootTurn("sess-root");
 
-    expect(harness.memoryMaintenance.listRuns("default")).toHaveLength(0);
+    expect(await harness.memoryMaintenance.listRuns("default")).toHaveLength(0);
   });
 
-  it("normalizes workspace read APIs while refreshing state and preserving queued records", () => {
+  it("normalizes workspace read APIs while refreshing state and preserving queued records", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-02T10:10:00.000Z"));
 
@@ -620,7 +620,7 @@ describe("MemoryMaintenanceService due evaluation", () => {
       const harness = createHarness();
       harness.changedSessionCounts.set("workspace-a", 4);
 
-      const policy = harness.service.getPolicy(" workspace-a ");
+      const policy = await harness.service.getPolicy(" workspace-a ");
       expect(policy).toMatchObject({
         workspaceId: "workspace-a",
         enabled: false,
@@ -628,7 +628,7 @@ describe("MemoryMaintenanceService due evaluation", () => {
         executionTarget: "local",
       });
 
-      const queuedRun = harness.service.runNow({
+      const queuedRun = await harness.service.runNow({
         workspaceId: "workspace-a",
         triggerSource: "manual",
       });
@@ -644,13 +644,13 @@ describe("MemoryMaintenanceService due evaluation", () => {
         updatedAt: "2026-04-02T10:09:00.000Z",
       });
 
-      expect(harness.service.listRuns("workspace-a", 5)).toEqual([queuedRun]);
+      expect(await harness.service.listRuns("workspace-a", 5)).toEqual([queuedRun]);
       expect(harness.memoryMaintenance.requireState("workspace-a")).toMatchObject({
         workspaceId: "workspace-a",
         activeRunId: queuedRun.runId,
         changedSessionCount: 4,
       });
-      expect(harness.service.listRecommendations(" workspace-a ", 5)).toEqual([recommendation]);
+      expect(await harness.service.listRecommendations(" workspace-a ", 5)).toEqual([recommendation]);
     } finally {
       vi.useRealTimers();
     }
@@ -661,7 +661,7 @@ describe("MemoryMaintenanceService due evaluation", () => {
     const harness = createHarness();
     harness.changedSessionCounts.set("default", 2);
 
-    harness.service.patchPolicy("default", {
+    await harness.service.patchPolicy("default", {
       enabled: true,
       runMode: "scheduled",
       timingStrategy: "fixed",
@@ -681,11 +681,11 @@ describe("MemoryMaintenanceService due evaluation", () => {
       updatedAt: "2026-04-01T00:00:00.000Z",
     });
 
-    expect(harness.service.getStatus("default").nextDueAt).toBe("2026-04-03T06:00:00.000Z");
+    expect((await harness.service.getStatus("default")).nextDueAt).toBe("2026-04-03T06:00:00.000Z");
 
     await harness.service.runDueEvaluation();
 
-    const runs = harness.memoryMaintenance.listRuns("default");
+    const runs = await harness.memoryMaintenance.listRuns("default");
     expect(runs).toHaveLength(1);
     expect(runs[0]?.triggerSource).toBe("scheduled");
   }, 30_000);
@@ -748,7 +748,7 @@ describe("MemoryMaintenanceService durable execution", () => {
         ]),
       );
 
-      harness.service.patchPolicy("default", {
+      await harness.service.patchPolicy("default", {
         enabled: true,
         runMode: "manual",
         timingStrategy: "recommendation_first",
@@ -759,7 +759,7 @@ describe("MemoryMaintenanceService durable execution", () => {
         model: "qwen3",
       });
 
-      const queuedRun = harness.service.runNow({
+      const queuedRun = await harness.service.runNow({
         workspaceId: "default",
         triggerSource: "manual",
       });
@@ -784,7 +784,7 @@ describe("MemoryMaintenanceService durable execution", () => {
       expect(prompt).toContain("## Retained Tool Artifact artifact-1");
       expect(prompt).toContain("Source Catalog");
 
-      const provenance = harness.service.getRunProvenance(queuedRun.runId);
+      const provenance = await harness.service.getRunProvenance(queuedRun.runId);
       expect(provenance.sources.map((source) => source.sourceRef).sort()).toEqual([
         "artifact-1",
         "mem-1",
@@ -865,7 +865,7 @@ describe("MemoryMaintenanceService durable execution", () => {
           updatedAt: "2026-04-01T06:30:00.000Z",
         }),
       );
-      harness.service.patchPolicy("workspace-a", {
+      await harness.service.patchPolicy("workspace-a", {
         enabled: true,
         runMode: "manual",
         timingStrategy: "recommendation_first",
@@ -880,7 +880,7 @@ describe("MemoryMaintenanceService durable execution", () => {
         harness.memoryMaintenance.listActiveMemoryItems(200, "workspace-a").map((item) => item.itemId),
       ).not.toContain("mem-padded-canonical-a");
 
-      const queuedRun = harness.service.runNow({ workspaceId: "workspace-a", triggerSource: "manual" });
+      const queuedRun = await harness.service.runNow({ workspaceId: "workspace-a", triggerSource: "manual" });
       const result = await harness.service.executeDurableRun(harness.callbacks.getDurableRun(queuedRun.durableRunId!));
 
       expect(result.status).toBe("completed");
@@ -889,9 +889,8 @@ describe("MemoryMaintenanceService durable execution", () => {
         workspaceId: "workspace-a",
       });
       expect(
-        harness.service
-          .getRunProvenance(queuedRun.runId)
-          .sources.filter((source) => source.sourceKind === "memory_item")
+        (await harness.service.getRunProvenance(queuedRun.runId)).sources
+          .filter((source) => source.sourceKind === "memory_item")
           .map((source) => source.sourceRef)
           .sort(),
       ).toEqual(["mem-global", "mem-target-a"]);
@@ -912,7 +911,7 @@ describe("MemoryMaintenanceService durable execution", () => {
     try {
       const harness = createHarness();
       harness.chatCompletions.mockResolvedValueOnce(completionWithContent(""));
-      harness.service.patchPolicy("default", {
+      await harness.service.patchPolicy("default", {
         enabled: true,
         runMode: "manual",
         timingStrategy: "recommendation_first",
@@ -921,7 +920,7 @@ describe("MemoryMaintenanceService durable execution", () => {
         minChangedSessions: 1,
       });
 
-      const queuedRun = harness.service.runNow({
+      const queuedRun = await harness.service.runNow({
         workspaceId: "default",
         triggerSource: "manual",
       });
@@ -945,7 +944,7 @@ describe("MemoryMaintenanceService durable execution", () => {
         "Automatic consolidation fallback was used for workspace default because the model returned no markdown output.",
       );
       expect(latestMarkdown).toContain("## References\n- none");
-      expect(harness.service.getRunProvenance(queuedRun.runId).sources).toEqual([]);
+      expect((await harness.service.getRunProvenance(queuedRun.runId)).sources).toEqual([]);
     } finally {
       vi.useRealTimers();
     }
@@ -954,7 +953,7 @@ describe("MemoryMaintenanceService durable execution", () => {
   it("skips unavailable local model execution and queues an execution-target recommendation", async () => {
     const harness = createHarness();
     harness.listModels.mockResolvedValueOnce([{ id: "other-model", name: "other-model" }]);
-    harness.service.patchPolicy("default", {
+    await harness.service.patchPolicy("default", {
       enabled: true,
       runMode: "manual",
       timingStrategy: "recommendation_first",
@@ -967,7 +966,7 @@ describe("MemoryMaintenanceService durable execution", () => {
       unavailableModelPolicy: "skip",
     });
 
-    const queuedRun = harness.service.runNow({
+    const queuedRun = await harness.service.runNow({
       workspaceId: "default",
       triggerSource: "manual",
     });
@@ -988,7 +987,7 @@ describe("MemoryMaintenanceService durable execution", () => {
       changedArtifactCount: 0,
     });
     expect(harness.memoryMaintenance.requireState("default").activeRunId).toBeUndefined();
-    expect(harness.memoryMaintenance.listRecommendations("default")).toEqual([
+    expect(await harness.memoryMaintenance.listRecommendations("default")).toEqual([
       expect.objectContaining({
         kind: "execution_target_adjustment",
         status: "queued",
@@ -1001,7 +1000,7 @@ describe("MemoryMaintenanceService durable execution", () => {
 
   it("marks current durable-backed runs as failed for non-abort execution errors", async () => {
     const harness = createHarness();
-    harness.service.patchPolicy("default", {
+    await harness.service.patchPolicy("default", {
       enabled: true,
       runMode: "manual",
       timingStrategy: "recommendation_first",
@@ -1012,7 +1011,7 @@ describe("MemoryMaintenanceService durable execution", () => {
       model: "qwen3",
     });
 
-    const queuedRun = harness.service.runNow({
+    const queuedRun = await harness.service.runNow({
       workspaceId: "default",
       triggerSource: "manual",
     });
@@ -1032,7 +1031,7 @@ describe("MemoryMaintenanceService durable execution", () => {
 
   it("does not finalize a durable-backed run as failed when execution aborts", async () => {
     const harness = createHarness();
-    harness.service.patchPolicy("default", {
+    await harness.service.patchPolicy("default", {
       enabled: true,
       runMode: "manual",
       timingStrategy: "recommendation_first",
@@ -1043,7 +1042,7 @@ describe("MemoryMaintenanceService durable execution", () => {
       model: "qwen3",
     });
 
-    const queuedRun = harness.service.runNow({
+    const queuedRun = await harness.service.runNow({
       workspaceId: "default",
       triggerSource: "manual",
     });
@@ -1066,9 +1065,9 @@ describe("MemoryMaintenanceService durable execution", () => {
     expect(harness.memoryMaintenance.requireState("default").activeRunId).toBe(queuedRun.runId);
   });
 
-  it("normalizes durable workflow payloads and ignores malformed durable records", () => {
+  it("normalizes durable workflow payloads and ignores malformed durable records", async () => {
     const harness = createHarness();
-    const queuedRun = harness.service.runNow({
+    const queuedRun = await harness.service.runNow({
       workspaceId: " workspace-a ",
       triggerSource: "manual",
     });
@@ -1105,15 +1104,15 @@ describe("MemoryMaintenanceService durable execution", () => {
     ).toBeUndefined();
   });
 
-  it("syncs queued, running, failed, dead-lettered, and cancelled durable statuses into maintenance state", () => {
+  it("syncs queued, running, failed, dead-lettered, and cancelled durable statuses into maintenance state", async () => {
     const harness = createHarness();
-    const queuedRun = harness.service.runNow({
+    const queuedRun = await harness.service.runNow({
       workspaceId: "default",
       triggerSource: "manual",
     });
     const durableRun = harness.callbacks.getDurableRun(queuedRun.durableRunId!);
 
-    harness.service.syncFromDurableRun({
+    await harness.service.syncFromDurableRun({
       ...durableRun,
       status: "running",
       startedAt: "2026-04-02T13:00:00.000Z",
@@ -1126,7 +1125,7 @@ describe("MemoryMaintenanceService durable execution", () => {
     });
     expect(harness.memoryMaintenance.requireState("default").activeRunId).toBe(queuedRun.runId);
 
-    harness.service.syncFromDurableRun({
+    await harness.service.syncFromDurableRun({
       ...durableRun,
       status: "failed",
       lastError: "durable failed",
@@ -1139,12 +1138,12 @@ describe("MemoryMaintenanceService durable execution", () => {
     });
     expect(harness.memoryMaintenance.requireState("default").activeRunId).toBeUndefined();
 
-    const deadLetteredRun = harness.service.runNow({
+    const deadLetteredRun = await harness.service.runNow({
       workspaceId: "default",
       triggerSource: "manual",
     });
     const durableDeadLetteredRun = harness.callbacks.getDurableRun(deadLetteredRun.durableRunId!);
-    harness.service.syncFromDurableRun({
+    await harness.service.syncFromDurableRun({
       ...durableDeadLetteredRun,
       status: "dead_lettered",
       updatedAt: "2026-04-02T13:02:00.000Z",
@@ -1154,12 +1153,12 @@ describe("MemoryMaintenanceService durable execution", () => {
       error: "Memory maintenance durable run failed.",
     });
 
-    const cancelledRun = harness.service.runNow({
+    const cancelledRun = await harness.service.runNow({
       workspaceId: "default",
       triggerSource: "manual",
     });
     const durableCancelledRun = harness.callbacks.getDurableRun(cancelledRun.durableRunId!);
-    harness.service.syncFromDurableRun({
+    await harness.service.syncFromDurableRun({
       ...durableCancelledRun,
       status: "cancelled",
       lastError: "operator cancelled",
@@ -1172,15 +1171,15 @@ describe("MemoryMaintenanceService durable execution", () => {
     expect(harness.memoryMaintenance.requireState("default").activeRunId).toBeUndefined();
   });
 
-  it("ignores non-memory durable runs, missing maintenance records, and cancelled already-finalized runs", () => {
+  it("ignores non-memory durable runs, missing maintenance records, and cancelled already-finalized runs", async () => {
     const harness = createHarness();
-    const queuedRun = harness.service.runNow({
+    const queuedRun = await harness.service.runNow({
       workspaceId: "default",
       triggerSource: "manual",
     });
     const durableRun = harness.callbacks.getDurableRun(queuedRun.durableRunId!);
 
-    harness.service.syncFromDurableRun({
+    await harness.service.syncFromDurableRun({
       ...durableRun,
       workflowKey: "other.workflow",
       status: "failed",
@@ -1188,7 +1187,7 @@ describe("MemoryMaintenanceService durable execution", () => {
     } as DurableRunRecord);
     expect(harness.memoryMaintenance.getRun(queuedRun.runId).status).toBe("queued");
 
-    harness.service.syncFromDurableRun({
+    await harness.service.syncFromDurableRun({
       ...durableRun,
       payload: {
         ...(durableRun.payload as Record<string, unknown>),
@@ -1204,7 +1203,7 @@ describe("MemoryMaintenanceService durable execution", () => {
       status: "completed",
       finishedAt: "2026-04-02T13:04:00.000Z",
     });
-    harness.service.syncFromDurableRun({
+    await harness.service.syncFromDurableRun({
       ...durableRun,
       status: "cancelled",
       lastError: "late cancel",
@@ -1215,13 +1214,13 @@ describe("MemoryMaintenanceService durable execution", () => {
 });
 
 describe("MemoryMaintenanceService recommendations", () => {
-  it("accepts a queued recommendation by patching policy and marking it applied", () => {
+  it("accepts a queued recommendation by patching policy and marking it applied", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-02T12:00:00.000Z"));
 
     try {
       const harness = createHarness();
-      harness.service.patchPolicy("default", {
+      await harness.service.patchPolicy("default", {
         enabled: true,
         runMode: "hybrid",
         timingStrategy: "recommendation_first",
@@ -1242,7 +1241,7 @@ describe("MemoryMaintenanceService recommendations", () => {
         updatedAt: "2026-04-02T11:00:00.000Z",
       });
 
-      const result = harness.service.acceptRecommendation(recommendation.recommendationId);
+      const result = await harness.service.acceptRecommendation(recommendation.recommendationId);
 
       expect(result.policy.minChangedSessions).toBe(3);
       expect(result.recommendation).toMatchObject({
@@ -1255,9 +1254,9 @@ describe("MemoryMaintenanceService recommendations", () => {
     }
   });
 
-  it("rejects a queued recommendation without mutating the policy", () => {
+  it("rejects a queued recommendation without mutating the policy", async () => {
     const harness = createHarness();
-    harness.service.patchPolicy("default", {
+    await harness.service.patchPolicy("default", {
       enabled: true,
       runMode: "hybrid",
       timingStrategy: "recommendation_first",
@@ -1277,7 +1276,7 @@ describe("MemoryMaintenanceService recommendations", () => {
       updatedAt: "2026-04-02T11:00:00.000Z",
     });
 
-    const rejected = harness.service.rejectRecommendation(recommendation.recommendationId);
+    const rejected = await harness.service.rejectRecommendation(recommendation.recommendationId);
 
     expect(rejected).toMatchObject({
       recommendationId: recommendation.recommendationId,

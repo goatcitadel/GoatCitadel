@@ -9,6 +9,7 @@ interface ArtifactIntentInput {
   content: string;
   sessionId: string;
   historyMessages?: ChatCompletionRequest["messages"];
+  sourceText?: string;
 }
 
 export interface PresentationContentQualityReport {
@@ -237,6 +238,7 @@ export function buildSyntheticDocumentCreateArgs(
   safeWriteFallbackDir?: string,
 ): Record<string, unknown> {
   const task = extractPrimaryUserTaskContent(input.content) ?? input.content;
+  const sourceText = input.sourceText?.trim() || task;
   const title = inferDocumentTitle(task);
   const format = inferDocumentFormat(task);
   const path =
@@ -251,8 +253,8 @@ export function buildSyntheticDocumentCreateArgs(
     path: path ?? buildSafeWritePath(`document.${documentFormatExtension(format)}`, safeWriteFallbackDir),
     format,
     title,
-    body: `Generated document for: ${task.trim().replace(/\s+/g, " ").slice(0, 500)}`,
-    sections: buildSyntheticDocumentSections(task),
+    body: sourceText.slice(0, 18_000),
+    sections: buildSyntheticDocumentSections(sourceText),
     design: inferDocumentDesignRequest(format),
   };
 }
@@ -378,11 +380,13 @@ function buildPresentationBrief(input: ArtifactIntentInput): PresentationBrief {
     .filter((content) => content && normalizePresentationText(content) !== normalizePresentationText(input.content))
     .slice(-5)
     .join("\n");
-  const contextDependent = PRESENTATION_CONTEXT_REFERENCE.test(input.content);
+  const explicitSourceText = input.sourceText?.trim();
+  const contextDependent = Boolean(explicitSourceText) || PRESENTATION_CONTEXT_REFERENCE.test(input.content);
   const sourceText = (
-    contextDependent
+    explicitSourceText ||
+    (contextDependent
       ? assistantSources.join("\n\n") || priorUserText
-      : (extractPrimaryUserTaskContent(input.content) ?? input.content)
+      : (extractPrimaryUserTaskContent(input.content) ?? input.content))
   ).slice(-18_000);
   const title = inferGroundedPresentationTitle(priorUserText, sourceText, input.content);
   const sections = parsePresentationSections(sourceText).map((section, index) =>

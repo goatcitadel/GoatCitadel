@@ -6,7 +6,7 @@ import type {
   TaskDeliverableRecord,
   TaskRecord,
 } from "@goatcitadel/contracts";
-import { Storage } from "@goatcitadel/storage";
+import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import { A2AGrpcClient, type A2AGrpcClientPort } from "./a2a-grpc-client.js";
 import { startA2AGrpcServer, type A2AGrpcServerHandle } from "./a2a-grpc-server.js";
 import { A2AJsonRpcServiceError } from "./a2a-json-rpc-error.js";
@@ -446,6 +446,7 @@ describe("A2A gRPC transport", () => {
       transcriptsDir: ".",
       auditDir: ".",
     });
+    const asyncStorage = createSqliteAsyncStorage(storage);
     let task: TaskRecord = {
       taskId: "task-1",
       workspaceId: "default",
@@ -518,14 +519,18 @@ describe("A2A gRPC transport", () => {
     } as never;
     const service = new A2ARouteService({
       config,
-      storage,
+      storage: asyncStorage,
       tasks,
-      createChatSession: vi.fn((input) => {
-        storage!.chatSessionMeta.ensure("session-1", "2026-06-01T00:00:00.000Z", input.workspaceId ?? "default");
+      createChatSession: vi.fn(async (input) => {
+        await asyncStorage.chatSessionMeta.ensure(
+          "session-1",
+          "2026-06-01T00:00:00.000Z",
+          input.workspaceId ?? "default",
+        );
         return { sessionId: "session-1" };
       }),
       chatTurnRuntime,
-      mutationIdempotencyStore: storage.mutationIdempotency,
+      mutationIdempotencyStore: asyncStorage.mutationIdempotency,
       grpcClient: options.grpcClient,
     });
     return { config, service, storage, tasks, chatTurnRuntime };

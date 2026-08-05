@@ -46,22 +46,22 @@ function harness(statuses: Array<"delivered" | "failed" | "unknown_after_send"> 
 describe("NotificationRoutingService", () => {
   it("can restrict a canonical event to one operator-authored rule id", async () => {
     const { service, deliver } = harness(["delivered", "delivered"]);
-    const firstTarget = service.createTarget("workspace-1", {
+    const firstTarget = await service.createTarget("workspace-1", {
       label: "First",
       kind: "https_webhook",
       webhookUrlSecretRef: "keychain:goatcitadel:notification-webhook:first",
     });
-    const secondTarget = service.createTarget("workspace-1", {
+    const secondTarget = await service.createTarget("workspace-1", {
       label: "Second",
       kind: "https_webhook",
       webhookUrlSecretRef: "keychain:goatcitadel:notification-webhook:second",
     });
-    const selected = service.createRule("workspace-1", {
+    const selected = await service.createRule("workspace-1", {
       label: "Selected timer rule",
       eventTypes: ["timer.due"],
       targetIds: [firstTarget.targetId],
     });
-    service.createRule("workspace-1", {
+    await service.createRule("workspace-1", {
       label: "Other timer rule",
       eventTypes: ["timer.due"],
       targetIds: [secondTarget.targetId],
@@ -82,18 +82,18 @@ describe("NotificationRoutingService", () => {
 
   it("filters rules, suppresses when present, and treats expired presence as away", async () => {
     const { service, deliver, advance } = harness();
-    const target = service.createTarget("workspace-1", {
+    const target = await service.createTarget("workspace-1", {
       label: "Ops webhook",
       kind: "https_webhook",
       webhookUrlSecretRef: "keychain:goatcitadel:notification-webhook:ops",
     });
-    service.createRule("workspace-1", {
+    await service.createRule("workspace-1", {
       label: "Failures away",
       eventTypes: ["turn.failed"],
       targetIds: [target.targetId],
       deliveryPolicy: "when_away",
     });
-    service.upsertPresence({ workspaceId: "workspace-1", clientId: "client-1", focused: true, visible: true });
+    await service.upsertPresence({ workspaceId: "workspace-1", clientId: "client-1", focused: true, visible: true });
 
     const suppressed = await service.dispatch("workspace-1", {
       eventId: "event-present",
@@ -119,18 +119,18 @@ describe("NotificationRoutingService", () => {
 
   it("rejects cross-workspace and model-selected target injection", async () => {
     const { service } = harness();
-    const target = service.createTarget("workspace-1", {
+    const target = await service.createTarget("workspace-1", {
       label: "Workspace one",
       kind: "https_webhook",
       webhookUrlSecretRef: "keychain:goatcitadel:notification-webhook:one",
     });
-    expect(() =>
+    await expect(
       service.createRule("workspace-2", {
         label: "Forged",
         eventTypes: ["turn.failed"],
         targetIds: [target.targetId],
       }),
-    ).toThrow(/another workspace/i);
+    ).rejects.toThrow(/another workspace/i);
     await expect(
       service.request("workspace-1", {
         eventType: "durable.attention_required",
@@ -143,17 +143,17 @@ describe("NotificationRoutingService", () => {
 
   it("keeps partial and unknown-after-send delivery truth visible and idempotent", async () => {
     const { service, deliver } = harness(["delivered", "unknown_after_send"]);
-    const first = service.createTarget("workspace-1", {
+    const first = await service.createTarget("workspace-1", {
       label: "First",
       kind: "https_webhook",
       webhookUrlSecretRef: "keychain:goatcitadel:notification-webhook:first",
     });
-    const second = service.createTarget("workspace-1", {
+    const second = await service.createTarget("workspace-1", {
       label: "Second",
       kind: "https_webhook",
       webhookUrlSecretRef: "keychain:goatcitadel:notification-webhook:second",
     });
-    service.createRule("workspace-1", {
+    await service.createRule("workspace-1", {
       label: "Both",
       eventTypes: ["turn.completed"],
       targetIds: [first.targetId, second.targetId],
@@ -176,14 +176,16 @@ describe("NotificationRoutingService", () => {
 
   it("summarizes mixed success and failure as partially delivered", async () => {
     const { service } = harness(["delivered", "failed"]);
-    const targets = ["first", "second"].map((label) =>
-      service.createTarget("workspace-1", {
-        label,
-        kind: "https_webhook",
-        webhookUrlSecretRef: `keychain:goatcitadel:notification-webhook:${label}`,
-      }),
+    const targets = await Promise.all(
+      ["first", "second"].map((label) =>
+        service.createTarget("workspace-1", {
+          label,
+          kind: "https_webhook",
+          webhookUrlSecretRef: `keychain:goatcitadel:notification-webhook:${label}`,
+        }),
+      ),
     );
-    service.createRule("workspace-1", {
+    await service.createRule("workspace-1", {
       label: "Mixed",
       eventTypes: ["turn.failed"],
       targetIds: targets.map((target) => target.targetId),

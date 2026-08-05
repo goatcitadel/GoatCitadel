@@ -36,7 +36,7 @@ import {
   type RecentCrossProjectSession,
   type SessionMeta,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import {
   buildChatSessionUpdatedPayload,
   deriveChatSessionTitleFromContent,
@@ -55,25 +55,31 @@ export interface ChatSessionDependencies {
     invalidate(): void;
   };
   normalizeWorkspaceId(workspaceId?: string): string;
-  ensureChatSessionRuntimeGrants(sessionId: string): void;
-  requireChatSession(sessionId: string): ChatSessionRecord;
-  getSession(sessionId: string): SessionMeta;
-  publishRealtime(eventType: string, source: string, payload: Record<string, unknown>): void;
+  ensureChatSessionRuntimeGrants(sessionId: string): Promise<void>;
+  requireChatSession(sessionId: string): Promise<ChatSessionRecord>;
+  getSession(sessionId: string): Promise<SessionMeta>;
+  publishRealtime(eventType: string, source: string, payload: Record<string, unknown>): Promise<void>;
   clearChatTurnWriteLease(sessionId: string): void;
   removeChatSessionStoredFile(storageRelPath: string): Promise<void>;
   copyChatSessionStoredFile(storageRelPath: string, copyId: string): Promise<string>;
   ensureChatSessionModelDefaults(sessionId: string, prefs: ChatSessionPrefsRecord): ChatSessionPrefsRecord;
-  hydrateChatPrefsWithAutonomy(sessionId: string, prefs: ChatSessionPrefsRecord): ChatSessionPrefsRecord;
-  patchSessionAutonomyPrefs(sessionId: string, patch: ReturnType<typeof splitChatPrefsPatch>["autonomyPatch"]): void;
+  hydrateChatPrefsWithAutonomy(sessionId: string, prefs: ChatSessionPrefsRecord): Promise<ChatSessionPrefsRecord>;
+  patchSessionAutonomyPrefs(
+    sessionId: string,
+    patch: ReturnType<typeof splitChatPrefsPatch>["autonomyPatch"],
+  ): Promise<unknown>;
 }
 
-export function listChatSessions(deps: ChatSessionDependencies, query: ChatSessionListQuery = {}): ChatSessionRecord[] {
+export async function listChatSessions(
+  deps: ChatSessionDependencies,
+  query: ChatSessionListQuery = {},
+): Promise<ChatSessionRecord[]> {
   const workspaceId = deps.normalizeWorkspaceId(query.workspaceId);
   const scope = query.scope ?? "all";
   const view = query.view ?? "active";
   const includeHidden = query.includeHidden ?? false;
   const limit = Math.max(1, Math.min(1000, Math.floor(query.limit ?? 200)));
-  const candidates = deps.storage.chatSessionLists.listCandidates({
+  const candidates = await deps.storage.chatSessionLists.listCandidates({
     workspaceId,
     scope,
     view,
@@ -88,17 +94,22 @@ export function listChatSessions(deps: ChatSessionDependencies, query: ChatSessi
   });
   const sessionIds = candidates.slice(0, limit).map((candidate) => candidate.sessionId);
   const candidateOrderBySessionId = new Map(sessionIds.map((sessionId, index) => [sessionId, index]));
-  const sessionsById = deps.storage.sessions.listBySessionIds(sessionIds);
-  const projects = deps.storage.chatProjects.list("all", 2000, workspaceId);
+  const sessionsById = await deps.storage.sessions.listBySessionIds(sessionIds);
+  const projects = await deps.storage.chatProjects.list("all", 2000, workspaceId);
   const projectById = new Map(projects.map((project) => [project.projectId, project]));
-  const metaBySessionId = deps.storage.chatSessionMeta.listBySessionIds(sessionIds);
-  const prefsBySessionId = deps.storage.chatSessionPrefs.listBySessionIds(sessionIds);
-  const projectLinkBySessionId = deps.storage.chatSessionProjects.listBySessionIds(sessionIds);
-  const generatedArtifactsBySessionId = deps.storage.chatGeneratedArtifacts.listBySessionIds(sessionIds);
+  const metaBySessionId = await deps.storage.chatSessionMeta.listBySessionIds(sessionIds);
+  const prefsBySessionId = await deps.storage.chatSessionPrefs.listBySessionIds(sessionIds);
+  const projectLinkBySessionId = await deps.storage.chatSessionProjects.listBySessionIds(sessionIds);
+  const generatedArtifactsBySessionId = await deps.storage.chatGeneratedArtifacts.listBySessionIds(sessionIds);
   const forkRelationshipsBySessionId = new Map(
-    sessionIds.map((sessionId) => [sessionId, deps.storage.chatSessionForks.listRelationships(sessionId, workspaceId)]),
+    await Promise.all(
+      sessionIds.map(
+        async (sessionId) =>
+          [sessionId, await deps.storage.chatSessionForks.listRelationships(sessionId, workspaceId)] as const,
+      ),
+    ),
   );
-  const delegationParentBySessionId = deps.storage.chatDelegationSteps.listParentsByChildSessionIds(
+  const delegationParentBySessionId = await deps.storage.chatDelegationSteps.listParentsByChildSessionIds(
     sessionIds,
     workspaceId,
   );
@@ -160,7 +171,7 @@ export function listChatSessions(deps: ChatSessionDependencies, query: ChatSessi
   }
 
   const searchHitsBySessionId = query.q?.trim()
-    ? buildSessionSearchHits(
+    ? await buildSessionSearchHits(
         deps,
         workspaceId,
         records.map((record) => record.sessionId),
@@ -230,7 +241,7 @@ export async function forkChatSessionFromTurn(
   input: ChatSessionForkRequest,
   actorId: string,
 ): Promise<ChatSessionForkResponse> {
-  const source = deps.requireChatSession(sessionId);
+  const source = await deps.requireChatSession(sessionId);
   const workspaceId = deps.normalizeWorkspaceId(source.workspaceId);
   if (input.expectedRevision !== undefined && source.revision !== input.expectedRevision) {
     throw new ConflictError({
@@ -238,7 +249,7 @@ export async function forkChatSessionFromTurn(
       message: `Chat session revision changed from ${input.expectedRevision} to ${source.revision}.`,
     });
   }
-  const traces = deps.storage.chatTurnTraces.listBySession(sessionId, 10_000);
+  const traces = await deps.storage.chatTurnTraces.listBySession(sessionId, 10_000);
   const traceById = new Map(traces.map((trace) => [trace.turnId, trace]));
   const selected = traceById.get(turnId);
   if (!selected || selected.sessionId !== sessionId) {
@@ -257,10 +268,10 @@ export async function forkChatSessionFromTurn(
     }
   }
 
-  const sourceMessages = deps.storage.chatMessages.listByMessageIds(
+  const sourceMessages = await deps.storage.chatMessages.listByMessageIds(
     path.flatMap((trace) => [trace.userMessageId, trace.assistantMessageId].filter((id): id is string => Boolean(id))),
   );
-  const sourceAttachments = deps.storage.chatAttachments.listByIds(
+  const sourceAttachments = await deps.storage.chatAttachments.listByIds(
     [
       ...new Set(
         [...sourceMessages.values()].flatMap((message) => message.attachments?.map((item) => item.attachmentId) ?? []),
@@ -277,7 +288,7 @@ export async function forkChatSessionFromTurn(
 
   const createdAt = new Date().toISOString();
   const title = input.title?.trim() || `Fork of ${source.title?.trim() || "Chat"}`;
-  const created = createChatSession(deps, { workspaceId, title, mode: "chat", origin: "operator" });
+  const created = await createChatSession(deps, { workspaceId, title, mode: "chat", origin: "operator" });
   const forkId = `fork_${randomUUID()}`;
   const turnIdMap = new Map(path.map((trace) => [trace.turnId, `turn_${randomUUID()}`]));
   const messageIdMap = new Map<string, string>();
@@ -289,8 +300,8 @@ export async function forkChatSessionFromTurn(
   const turnMappings: ChatSessionForkManifest["turnMappings"] = [];
   const artifactCopies: ChatSessionForkManifest["artifactCopies"] = [];
 
-  deps.storage.runImmediateTransaction(() => {
-    const sourcePrefs = deps.storage.chatSessionPrefs.get(sessionId);
+  await deps.storage.runImmediateTransaction(async () => {
+    const sourcePrefs = await deps.storage.chatSessionPrefs.get(sessionId);
     if (sourcePrefs) {
       const {
         sessionId: _sessionId,
@@ -299,28 +310,28 @@ export async function forkChatSessionFromTurn(
         updatedAt: _updatedAt,
         ...prefs
       } = sourcePrefs;
-      deps.storage.chatSessionPrefs.patch(created.sessionId, prefs, createdAt);
+      await deps.storage.chatSessionPrefs.patch(created.sessionId, prefs, createdAt);
     }
-    const sourceProject = deps.storage.chatSessionProjects.get(sessionId);
+    const sourceProject = await deps.storage.chatSessionProjects.get(sessionId);
     if (sourceProject) {
-      deps.storage.chatSessionProjects.assign(created.sessionId, sourceProject.projectId, createdAt);
+      await deps.storage.chatSessionProjects.assign(created.sessionId, sourceProject.projectId, createdAt);
     }
     for (const { attachment, storageRelPath } of copiedAttachmentStorage) {
       const copiedAttachmentId = attachmentIdMap.get(attachment.attachmentId)!;
-      deps.storage.chatAttachments.create(
+      await deps.storage.chatAttachments.create(
         { ...attachment, attachmentId: copiedAttachmentId, sessionId: created.sessionId, storageRelPath },
         attachment.createdAt,
       );
     }
     for (const trace of path) {
       const copiedTurnId = turnIdMap.get(trace.turnId)!;
-      const copyMessage = (sourceMessageId: string | undefined): string | undefined => {
+      const copyMessage = async (sourceMessageId: string | undefined): Promise<string | undefined> => {
         if (!sourceMessageId) return undefined;
         const message = sourceMessages.get(sourceMessageId);
         if (!message) return undefined;
         const copiedMessageId = `msg_${randomUUID()}`;
         messageIdMap.set(sourceMessageId, copiedMessageId);
-        deps.storage.chatMessages.upsert({
+        await deps.storage.chatMessages.upsert({
           ...message,
           messageId: copiedMessageId,
           sessionId: created.sessionId,
@@ -339,9 +350,9 @@ export async function forkChatSessionFromTurn(
         });
         return copiedMessageId;
       };
-      const copiedUserMessageId = copyMessage(trace.userMessageId);
+      const copiedUserMessageId = await copyMessage(trace.userMessageId);
       if (!copiedUserMessageId) throw new Error(`Fork source user message ${trace.userMessageId} is missing.`);
-      const copiedAssistantMessageId = copyMessage(trace.assistantMessageId);
+      const copiedAssistantMessageId = await copyMessage(trace.assistantMessageId);
       const sourceTraceHash = traceHashes.get(trace.turnId)!;
       const importedRouting = {
         ...trace.routing,
@@ -352,12 +363,12 @@ export async function forkChatSessionFromTurn(
           importedAt: createdAt,
           durableRunId: trace.durable?.runId,
           toolRunHashes: trace.toolRuns.map((run) => sha256(stableJson(run))),
-          approvalHashes: deps.storage.chatInlineApprovals
-            .listByTurn(trace.turnId)
-            .map((approval) => sha256(stableJson(approval))),
+          approvalHashes: (await deps.storage.chatInlineApprovals.listByTurn(trace.turnId)).map((approval) =>
+            sha256(stableJson(approval)),
+          ),
         },
       };
-      const copied = deps.storage.chatTurnTraces.create({
+      const copied = await deps.storage.chatTurnTraces.create({
         turnId: copiedTurnId,
         sessionId: created.sessionId,
         userMessageId: copiedUserMessageId,
@@ -391,13 +402,13 @@ export async function forkChatSessionFromTurn(
         sourceTraceHash,
         copiedTraceHash: sha256(stableJson(copied)),
       });
-      const sourceArtifacts = deps.storage.chatGeneratedArtifacts.listByTurn(trace.turnId, 100);
+      const sourceArtifacts = await deps.storage.chatGeneratedArtifacts.listByTurn(trace.turnId, 100);
       const artifactIdMap = new Map<string, string>();
       for (const artifact of sourceArtifacts.sort((a, b) => a.version - b.version)) {
         const copiedArtifactId = `artifact_${randomUUID()}`;
         artifactIdMap.set(artifact.artifactId, copiedArtifactId);
         const contentHash = artifact.contentHash ?? sha256(artifact.content);
-        deps.storage.chatGeneratedArtifacts.create({
+        await deps.storage.chatGeneratedArtifacts.create({
           ...artifact,
           artifactId: copiedArtifactId,
           sessionId: created.sessionId,
@@ -416,11 +427,15 @@ export async function forkChatSessionFromTurn(
         });
       }
     }
-    deps.storage.chatSessionBranchState.setActiveLeaf(created.sessionId, turnIdMap.get(turnId)!, createdAt);
-    const contextSnapshotHashes = path.flatMap((trace) => {
-      const snapshot = deps.storage.routedContextSnapshots.findByTurn(trace.turnId);
-      return snapshot ? [snapshot.snapshotHash] : [];
-    });
+    await deps.storage.chatSessionBranchState.setActiveLeaf(created.sessionId, turnIdMap.get(turnId)!, createdAt);
+    const contextSnapshotHashes = (
+      await Promise.all(
+        path.map(async (trace) => {
+          const snapshot = await deps.storage.routedContextSnapshots.findByTurn(trace.turnId);
+          return snapshot ? [snapshot.snapshotHash] : [];
+        }),
+      )
+    ).flat();
     const manifest: ChatSessionForkManifest = {
       manifestVersion: CHAT_SESSION_FORK_MANIFEST_VERSION,
       forkId,
@@ -442,15 +457,15 @@ export async function forkChatSessionFromTurn(
       createdByActorId: actorId,
       createdAt,
     };
-    deps.storage.chatSessionForks.create(manifest);
+    await deps.storage.chatSessionForks.create(manifest);
   });
   deps.operatorSummaryCache.invalidate();
-  const manifest = deps.storage.chatSessionForks.get(forkId);
+  const manifest = await deps.storage.chatSessionForks.get(forkId);
   const session = {
-    ...deps.requireChatSession(created.sessionId),
-    forkRelationships: deps.storage.chatSessionForks.listRelationships(created.sessionId, workspaceId),
+    ...(await deps.requireChatSession(created.sessionId)),
+    forkRelationships: await deps.storage.chatSessionForks.listRelationships(created.sessionId, workspaceId),
   };
-  deps.publishRealtime("chat_session_forked", "gateway", {
+  await deps.publishRealtime("chat_session_forked", "gateway", {
     forkId,
     sourceSessionId: sessionId,
     newSessionId: created.sessionId,
@@ -460,10 +475,10 @@ export async function forkChatSessionFromTurn(
 }
 
 function buildForkPath(
-  traceById: Map<string, ReturnType<Storage["chatTurnTraces"]["get"]>>,
+  traceById: Map<string, Awaited<ReturnType<Storage["chatTurnTraces"]["get"]>>>,
   turnId: string,
-): ReturnType<Storage["chatTurnTraces"]["get"]>[] {
-  const path: ReturnType<Storage["chatTurnTraces"]["get"]>[] = [];
+): Awaited<ReturnType<Storage["chatTurnTraces"]["get"]>>[] {
+  const path: Awaited<ReturnType<Storage["chatTurnTraces"]["get"]>>[] = [];
   const visited = new Set<string>();
   let cursor: string | undefined = turnId;
   while (cursor) {
@@ -493,10 +508,10 @@ function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-export function searchChatSessions(
+export async function searchChatSessions(
   deps: ChatSessionDependencies,
   input: ChatSessionSearchQuery,
-): ChatSessionSearchResponse {
+): Promise<ChatSessionSearchResponse> {
   const query = input.query.trim();
   if (!query) {
     throw new Error("query is required for session search");
@@ -509,7 +524,7 @@ export function searchChatSessions(
     1,
     Math.min(mode === "browse" ? 200 : mode === "scroll" ? 100 : 50, Math.floor(input.limit ?? 20)),
   );
-  const candidates = listChatSessions(deps, {
+  const candidates = await listChatSessions(deps, {
     workspaceId: input.workspaceId,
     scope: "all",
     view: input.view ?? "all",
@@ -552,33 +567,33 @@ export function searchChatSessions(
   };
 }
 
-export function createChatSession(
+export async function createChatSession(
   deps: ChatSessionDependencies,
   input: ChatSessionCreateInput = {},
-): ChatSessionRecord {
+): Promise<ChatSessionRecord> {
   const peer = `chat_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
-  return upsertChatSessionForPeer(deps, peer, input);
+  return await upsertChatSessionForPeer(deps, peer, input);
 }
 
 /** Internal orchestration seam: the same stable key always resolves to one upserted child session. */
-export function ensureChatSessionWithStableKey(
+export async function ensureChatSessionWithStableKey(
   deps: ChatSessionDependencies,
   stableKey: string,
   input: ChatSessionCreateInput = {},
-): ChatSessionRecord {
+): Promise<ChatSessionRecord> {
   const normalizedStableKey = stableKey.trim();
   if (!normalizedStableKey) {
     throw new Error("stable chat session key is required");
   }
   const peer = `chat_${createHash("sha256").update(`stable:${normalizedStableKey}`).digest("hex").slice(0, 24)}`;
-  return upsertChatSessionForPeer(deps, peer, input);
+  return await upsertChatSessionForPeer(deps, peer, input);
 }
 
-function upsertChatSessionForPeer(
+async function upsertChatSessionForPeer(
   deps: ChatSessionDependencies,
   peer: string,
   input: ChatSessionCreateInput,
-): ChatSessionRecord {
+): Promise<ChatSessionRecord> {
   const workspaceId = deps.normalizeWorkspaceId(input.workspaceId);
   const route = {
     channel: "mission",
@@ -591,12 +606,12 @@ function upsertChatSessionForPeer(
     sessionId: `sess_${createHash("sha256").update(`${route.channel}:${route.account}:${route.peer}`).digest("hex").slice(0, 24)}`,
   };
   const now = new Date().toISOString();
-  deps.storage.runImmediateTransaction(() => {
-    const existingMeta = deps.storage.chatSessionMeta.get(resolution.sessionId);
+  await deps.storage.runImmediateTransaction(async () => {
+    const existingMeta = await deps.storage.chatSessionMeta.get(resolution.sessionId);
     if (existingMeta && deps.normalizeWorkspaceId(existingMeta.workspaceId) !== workspaceId) {
       throw new Error("stable chat session key already belongs to another workspace");
     }
-    deps.storage.sessions.upsert({
+    await deps.storage.sessions.upsert({
       sessionId: resolution.sessionId,
       sessionKey: resolution.sessionKey,
       kind: resolution.kind,
@@ -605,9 +620,9 @@ function upsertChatSessionForPeer(
       displayName: input.title?.trim() || undefined,
       timestamp: now,
     });
-    deps.storage.chatSessionMeta.ensure(resolution.sessionId, now, workspaceId);
-    deps.storage.chatSessionPrefs.ensure(resolution.sessionId, now);
-    deps.storage.chatSessionMeta.patch(
+    await deps.storage.chatSessionMeta.ensure(resolution.sessionId, now, workspaceId);
+    await deps.storage.chatSessionPrefs.ensure(resolution.sessionId, now);
+    await deps.storage.chatSessionMeta.patch(
       resolution.sessionId,
       {
         workspaceId,
@@ -620,7 +635,7 @@ function upsertChatSessionForPeer(
       },
       now,
     );
-    deps.storage.chatSessionBindings.upsert(
+    await deps.storage.chatSessionBindings.upsert(
       {
         sessionId: resolution.sessionId,
         workspaceId,
@@ -630,23 +645,23 @@ function upsertChatSessionForPeer(
       now,
     );
     if (input.projectId) {
-      const project = deps.storage.chatProjects.get(input.projectId);
+      const project = await deps.storage.chatProjects.get(input.projectId);
       if (deps.normalizeWorkspaceId(project.workspaceId) !== workspaceId) {
         throw new Error("project workspace does not match requested session workspace");
       }
-      deps.storage.chatSessionProjects.assign(resolution.sessionId, input.projectId, now);
+      await deps.storage.chatSessionProjects.assign(resolution.sessionId, input.projectId, now);
     }
   });
-  deps.ensureChatSessionRuntimeGrants(resolution.sessionId);
+  await deps.ensureChatSessionRuntimeGrants(resolution.sessionId);
   deps.operatorSummaryCache.invalidate();
   if (input.mode) {
-    updateChatSessionPrefs(deps, resolution.sessionId, buildChatModePrefsPatch(input.mode));
+    await updateChatSessionPrefs(deps, resolution.sessionId, buildChatModePrefsPatch(input.mode));
   }
-  const created = deps.requireChatSession(resolution.sessionId);
+  const created = await deps.requireChatSession(resolution.sessionId);
   if (!created) {
     throw new Error(`Failed to create chat session ${resolution.sessionId}`);
   }
-  deps.publishRealtime("chat_session_updated", "chat", {
+  await deps.publishRealtime("chat_session_updated", "chat", {
     type: "chat_session_created",
     sessionId: created.sessionId,
     sessionKey: created.sessionKey,
@@ -654,17 +669,17 @@ function upsertChatSessionForPeer(
   return created;
 }
 
-export function getChatSideChat(
+export async function getChatSideChat(
   deps: ChatSessionDependencies,
   parentSessionId: string,
-): { item: ChatSideChatRecord | null; childSession?: ChatSessionRecord } {
-  const parent = deps.requireChatSession(parentSessionId);
+): Promise<{ item: ChatSideChatRecord | null; childSession?: ChatSessionRecord }> {
+  const parent = await deps.requireChatSession(parentSessionId);
   const parentWorkspaceId = deps.normalizeWorkspaceId(parent.workspaceId);
-  const item = deps.storage.chatSideChats.getByParentSession(parent.sessionId);
+  const item = await deps.storage.chatSideChats.getByParentSession(parent.sessionId);
   if (!item || deps.normalizeWorkspaceId(item.workspaceId) !== parentWorkspaceId) {
     return { item: null };
   }
-  const childSession = deps.requireChatSession(item.childSessionId);
+  const childSession = await deps.requireChatSession(item.childSessionId);
   if (deps.normalizeWorkspaceId(childSession.workspaceId) !== parentWorkspaceId) {
     throw new Error("Side chat child workspace does not match parent session workspace.");
   }
@@ -674,16 +689,16 @@ export function getChatSideChat(
   };
 }
 
-export function createChatSideChat(
+export async function createChatSideChat(
   deps: ChatSessionDependencies,
   parentSessionId: string,
   input: { createdFromSurface?: ChatSessionRecord["mode"]; sourceTurnId?: string } = {},
-): { item: ChatSideChatRecord; childSession: ChatSessionRecord } {
-  const parent = deps.requireChatSession(parentSessionId);
+): Promise<{ item: ChatSideChatRecord; childSession: ChatSessionRecord }> {
+  const parent = await deps.requireChatSession(parentSessionId);
   const parentWorkspaceId = deps.normalizeWorkspaceId(parent.workspaceId);
-  const existing = deps.storage.chatSideChats.getByParentSession(parent.sessionId);
+  const existing = await deps.storage.chatSideChats.getByParentSession(parent.sessionId);
   if (existing && deps.normalizeWorkspaceId(existing.workspaceId) === parentWorkspaceId) {
-    const existingChildSession = deps.requireChatSession(existing.childSessionId);
+    const existingChildSession = await deps.requireChatSession(existing.childSessionId);
     if (deps.normalizeWorkspaceId(existingChildSession.workspaceId) !== parentWorkspaceId) {
       throw new Error("Side chat child workspace does not match parent session workspace.");
     }
@@ -694,7 +709,7 @@ export function createChatSideChat(
   }
 
   const parentTitle = parent.title?.trim() || `Chat ${parent.sessionId.slice(-6)}`;
-  const childSession = createChatSession(deps, {
+  const childSession = await createChatSession(deps, {
     workspaceId: parentWorkspaceId,
     projectId: parent.projectId,
     title: `Side chat - ${trimTitleForSideChat(parentTitle)}`,
@@ -703,7 +718,7 @@ export function createChatSideChat(
     includeInHistory: false,
   });
   const now = new Date().toISOString();
-  const item = deps.storage.chatSideChats.upsert(
+  const item = await deps.storage.chatSideChats.upsert(
     {
       sideChatId: `btw_${randomUUID().replaceAll("-", "").slice(0, 18)}`,
       parentSessionId: parent.sessionId,
@@ -715,7 +730,7 @@ export function createChatSideChat(
     now,
   );
   deps.operatorSummaryCache.invalidate();
-  deps.publishRealtime("chat_session_updated", "chat", {
+  await deps.publishRealtime("chat_session_updated", "chat", {
     type: "chat_side_chat_created",
     sessionId: parent.sessionId,
     sideChatId: item.sideChatId,
@@ -724,16 +739,16 @@ export function createChatSideChat(
   return { item, childSession };
 }
 
-export function updateChatSession(
+export async function updateChatSession(
   deps: ChatSessionDependencies,
   sessionId: string,
   input: { title?: string; folderId?: string; folderName?: string; tags?: string[] },
   expectedRevision?: number,
-): ChatSessionRecord {
-  deps.getSession(sessionId);
-  const current = deps.requireChatSession(sessionId);
+): Promise<ChatSessionRecord> {
+  await deps.getSession(sessionId);
+  const current = await deps.requireChatSession(sessionId);
   const reconciled = preserveChatSessionSecretsForPublicUpdate(current, input);
-  deps.storage.chatSessionMeta.patchWithRevision(
+  await deps.storage.chatSessionMeta.patchWithRevision(
     sessionId,
     {
       title: reconciled.title,
@@ -743,8 +758,8 @@ export function updateChatSession(
     },
     expectedRevision ?? current.revision,
   );
-  const updated = deps.requireChatSession(sessionId);
-  deps.publishRealtime("chat_session_title_updated", "chat", {
+  const updated = await deps.requireChatSession(sessionId);
+  await deps.publishRealtime("chat_session_title_updated", "chat", {
     type: "chat_session_title_updated",
     sessionId: updated.sessionId,
     title: updated.title,
@@ -755,8 +770,12 @@ export function updateChatSession(
   return updated;
 }
 
-export function maybeAutoTitleChatSession(deps: ChatSessionDependencies, sessionId: string, content: string): void {
-  const meta = deps.storage.chatSessionMeta.ensure(sessionId);
+export async function maybeAutoTitleChatSession(
+  deps: ChatSessionDependencies,
+  sessionId: string,
+  content: string,
+): Promise<void> {
+  const meta = await deps.storage.chatSessionMeta.ensure(sessionId);
   if (meta.title?.trim()) {
     return;
   }
@@ -765,7 +784,7 @@ export function maybeAutoTitleChatSession(deps: ChatSessionDependencies, session
     return;
   }
   try {
-    deps.storage.chatSessionMeta.patchWithRevision(sessionId, { title: derivedTitle }, meta.revision);
+    await deps.storage.chatSessionMeta.patchWithRevision(sessionId, { title: derivedTitle }, meta.revision);
   } catch (error) {
     if (error instanceof ConflictError) {
       // A newer operator/runtime writer won after the untitled snapshot was
@@ -774,36 +793,48 @@ export function maybeAutoTitleChatSession(deps: ChatSessionDependencies, session
     }
     throw error;
   }
-  deps.publishRealtime("chat_session_title_updated", "chat", {
+  await deps.publishRealtime("chat_session_title_updated", "chat", {
     type: "chat_session_title_updated",
     sessionId,
     title: derivedTitle,
   });
 }
 
-export function pinChatSession(
+export async function pinChatSession(
   deps: ChatSessionDependencies,
   sessionId: string,
   expectedRevision?: number,
-): ChatSessionRecord {
-  deps.getSession(sessionId);
-  const current = deps.requireChatSession(sessionId);
-  deps.storage.chatSessionMeta.patchWithRevision(sessionId, { pinned: true }, expectedRevision ?? current.revision);
-  const updated = deps.requireChatSession(sessionId);
-  deps.publishRealtime("chat_session_updated", "chat", buildChatSessionUpdatedPayload("chat_session_pinned", updated));
+): Promise<ChatSessionRecord> {
+  await deps.getSession(sessionId);
+  const current = await deps.requireChatSession(sessionId);
+  await deps.storage.chatSessionMeta.patchWithRevision(
+    sessionId,
+    { pinned: true },
+    expectedRevision ?? current.revision,
+  );
+  const updated = await deps.requireChatSession(sessionId);
+  await deps.publishRealtime(
+    "chat_session_updated",
+    "chat",
+    buildChatSessionUpdatedPayload("chat_session_pinned", updated),
+  );
   return updated;
 }
 
-export function unpinChatSession(
+export async function unpinChatSession(
   deps: ChatSessionDependencies,
   sessionId: string,
   expectedRevision?: number,
-): ChatSessionRecord {
-  deps.getSession(sessionId);
-  const current = deps.requireChatSession(sessionId);
-  deps.storage.chatSessionMeta.patchWithRevision(sessionId, { pinned: false }, expectedRevision ?? current.revision);
-  const updated = deps.requireChatSession(sessionId);
-  deps.publishRealtime(
+): Promise<ChatSessionRecord> {
+  await deps.getSession(sessionId);
+  const current = await deps.requireChatSession(sessionId);
+  await deps.storage.chatSessionMeta.patchWithRevision(
+    sessionId,
+    { pinned: false },
+    expectedRevision ?? current.revision,
+  );
+  const updated = await deps.requireChatSession(sessionId);
+  await deps.publishRealtime(
     "chat_session_updated",
     "chat",
     buildChatSessionUpdatedPayload("chat_session_unpinned", updated),
@@ -811,14 +842,14 @@ export function unpinChatSession(
   return updated;
 }
 
-export function archiveChatSession(
+export async function archiveChatSession(
   deps: ChatSessionDependencies,
   sessionId: string,
   expectedRevision?: number,
-): ChatSessionRecord {
-  deps.getSession(sessionId);
-  const current = deps.requireChatSession(sessionId);
-  deps.storage.chatSessionMeta.patchWithRevision(
+): Promise<ChatSessionRecord> {
+  await deps.getSession(sessionId);
+  const current = await deps.requireChatSession(sessionId);
+  await deps.storage.chatSessionMeta.patchWithRevision(
     sessionId,
     {
       lifecycleStatus: "archived",
@@ -826,8 +857,8 @@ export function archiveChatSession(
     },
     expectedRevision ?? current.revision,
   );
-  const updated = deps.requireChatSession(sessionId);
-  deps.publishRealtime(
+  const updated = await deps.requireChatSession(sessionId);
+  await deps.publishRealtime(
     "chat_session_updated",
     "chat",
     buildChatSessionUpdatedPayload("chat_session_archived", updated),
@@ -835,14 +866,14 @@ export function archiveChatSession(
   return updated;
 }
 
-export function restoreChatSession(
+export async function restoreChatSession(
   deps: ChatSessionDependencies,
   sessionId: string,
   expectedRevision?: number,
-): ChatSessionRecord {
-  deps.getSession(sessionId);
-  const current = deps.requireChatSession(sessionId);
-  deps.storage.chatSessionMeta.patchWithRevision(
+): Promise<ChatSessionRecord> {
+  await deps.getSession(sessionId);
+  const current = await deps.requireChatSession(sessionId);
+  await deps.storage.chatSessionMeta.patchWithRevision(
     sessionId,
     {
       lifecycleStatus: "active",
@@ -850,8 +881,8 @@ export function restoreChatSession(
     },
     expectedRevision ?? current.revision,
   );
-  const updated = deps.requireChatSession(sessionId);
-  deps.publishRealtime(
+  const updated = await deps.requireChatSession(sessionId);
+  await deps.publishRealtime(
     "chat_session_updated",
     "chat",
     buildChatSessionUpdatedPayload("chat_session_restored", updated),
@@ -866,16 +897,16 @@ export async function deleteChatSession(
 ): Promise<{ deleted: boolean; sessionId: string }> {
   let currentWithoutExpectedRevision: ChatSessionRecord | undefined;
   if (expectedRevision === undefined) {
-    deps.getSession(sessionId);
-    currentWithoutExpectedRevision = deps.requireChatSession(sessionId);
+    await deps.getSession(sessionId);
+    currentWithoutExpectedRevision = await deps.requireChatSession(sessionId);
   }
   const rootRevision = expectedRevision ?? currentWithoutExpectedRevision!.revision;
   const idempotencyKey = `lifecycle:delete:${sessionId}:${rootRevision}`;
   const correlationId = `chat-session-delete:${sessionId}:${rootRevision}`;
-  let deletionResults: ReturnType<Storage["deleteChatSessionTreeWithRevision"]>;
+  let deletionResults: Awaited<ReturnType<Storage["deleteChatSessionTreeWithRevision"]>>;
   if (expectedRevision !== undefined) {
     try {
-      deletionResults = deps.storage.replayChatSessionTreeDeletion({
+      deletionResults = await deps.storage.replayChatSessionTreeDeletion({
         rootSessionId: sessionId,
         expectedRootRevision: rootRevision,
         actorId: "operator",
@@ -886,9 +917,9 @@ export async function deleteChatSession(
       const liveReplayConflict =
         error instanceof ConflictError && error.details?.sessionLifecycleCode === "CHAT_SESSION_DELETE_REPLAY_LIVE";
       if (!liveReplayConflict) throw error;
-      const currentMeta = deps.storage.chatSessionMeta.get(sessionId);
+      const currentMeta = await deps.storage.chatSessionMeta.get(sessionId);
       if (!currentMeta) throw error;
-      deletionResults = deps.storage.deleteChatSessionTreeWithRevision({
+      deletionResults = await deps.storage.deleteChatSessionTreeWithRevision({
         workspaceId: deps.normalizeWorkspaceId(currentMeta.workspaceId),
         rootSessionId: sessionId,
         expectedRootRevision: rootRevision,
@@ -898,7 +929,7 @@ export async function deleteChatSession(
       });
     }
   } else {
-    deletionResults = deps.storage.deleteChatSessionTreeWithRevision({
+    deletionResults = await deps.storage.deleteChatSessionTreeWithRevision({
       workspaceId: deps.normalizeWorkspaceId(currentWithoutExpectedRevision!.workspaceId),
       rootSessionId: sessionId,
       expectedRootRevision: rootRevision,
@@ -912,7 +943,7 @@ export async function deleteChatSession(
   }
   deps.operatorSummaryCache.invalidate();
   const cleanupResults = await Promise.allSettled([
-    ...deletionResults.map((deleted) => deps.storage.transcripts.delete(deleted.sessionId)),
+    ...deletionResults.map(async (deleted) => await deps.storage.transcripts.delete(deleted.sessionId)),
     ...deletionResults.flatMap((deleted) =>
       deleted.cleanupRelPaths.map((storageRelPath) => deps.removeChatSessionStoredFile(storageRelPath)),
     ),
@@ -925,7 +956,7 @@ export async function deleteChatSession(
       });
     }
   }
-  deps.publishRealtime("chat_session_deleted", "chat", {
+  await deps.publishRealtime("chat_session_deleted", "chat", {
     type: "chat_session_deleted",
     sessionId,
     mode: "hard",
@@ -950,7 +981,7 @@ export async function archiveChatSessionsBulk(
 ): Promise<ChatSessionBulkArchiveResult> {
   const workspaceId = deps.normalizeWorkspaceId(input.workspaceId);
   const scope = input.scope ?? "mission";
-  const candidates = listChatSessions(deps, {
+  const candidates = await listChatSessions(deps, {
     workspaceId,
     scope,
     view: "active",
@@ -962,7 +993,7 @@ export async function archiveChatSessionsBulk(
 
   for (const session of candidates) {
     try {
-      const archived = archiveChatSession(deps, session.sessionId, session.revision);
+      const archived = await archiveChatSession(deps, session.sessionId, session.revision);
       archivedSessionIds.push(archived.sessionId);
     } catch (error) {
       failures.push({
@@ -984,44 +1015,44 @@ export async function archiveChatSessionsBulk(
   };
 }
 
-export function assignChatSessionProject(
+export async function assignChatSessionProject(
   deps: ChatSessionDependencies,
   sessionId: string,
   projectId?: string,
   expectedRevision?: number,
-): ChatSessionRecord {
-  deps.getSession(sessionId);
-  const meta = deps.storage.chatSessionMeta.ensure(sessionId);
+): Promise<ChatSessionRecord> {
+  await deps.getSession(sessionId);
+  const meta = await deps.storage.chatSessionMeta.ensure(sessionId);
   const workspaceId = deps.normalizeWorkspaceId(meta.workspaceId);
   if (projectId) {
-    const project = deps.storage.chatProjects.get(projectId);
+    const project = await deps.storage.chatProjects.get(projectId);
     if (deps.normalizeWorkspaceId(project.workspaceId) !== workspaceId) {
       throw new Error("project workspace does not match session workspace");
     }
   }
-  deps.storage.runImmediateTransaction(() => {
+  await deps.storage.runImmediateTransaction(async () => {
     let changed: boolean;
     if (projectId) {
-      const assignment = deps.storage.chatSessionProjects.assignWithRevision(
+      const assignment = await deps.storage.chatSessionProjects.assignWithRevision(
         sessionId,
         projectId,
         expectedRevision ?? meta.revision,
       );
       changed = assignment.revision !== (expectedRevision ?? meta.revision);
     } else {
-      const unassignment = deps.storage.chatSessionProjects.unassignWithRevision(
+      const unassignment = await deps.storage.chatSessionProjects.unassignWithRevision(
         sessionId,
         expectedRevision ?? meta.revision,
       );
       changed = unassignment.unassigned;
     }
     if (changed) {
-      deps.storage.chatGeneratedArtifacts.updateProjectForSession(sessionId, projectId);
-      resetWorkbenchForProjectChange(deps, sessionId, projectId);
+      await deps.storage.chatGeneratedArtifacts.updateProjectForSession(sessionId, projectId);
+      await resetWorkbenchForProjectChange(deps, sessionId, projectId);
     }
   });
-  const updated = deps.requireChatSession(sessionId);
-  deps.publishRealtime(
+  const updated = await deps.requireChatSession(sessionId);
+  await deps.publishRealtime(
     "chat_session_updated",
     "chat",
     buildChatSessionUpdatedPayload(
@@ -1032,8 +1063,12 @@ export function assignChatSessionProject(
   return updated;
 }
 
-function resetWorkbenchForProjectChange(deps: ChatSessionDependencies, sessionId: string, projectId?: string): void {
-  deps.storage.chatSessionWorkbench.patch(sessionId, {
+async function resetWorkbenchForProjectChange(
+  deps: ChatSessionDependencies,
+  sessionId: string,
+  projectId?: string,
+): Promise<void> {
+  await deps.storage.chatSessionWorkbench.patch(sessionId, {
     projectId: projectId ?? "",
     baseRef: "",
     worktreePath: "",
@@ -1046,15 +1081,15 @@ function resetWorkbenchForProjectChange(deps: ChatSessionDependencies, sessionId
   });
 }
 
-export function getChatSessionBinding(
+export async function getChatSessionBinding(
   deps: ChatSessionDependencies,
   sessionId: string,
-): ChatSessionBindingRecord | undefined {
-  deps.getSession(sessionId);
-  return deps.storage.chatSessionBindings.get(sessionId);
+): Promise<ChatSessionBindingRecord | undefined> {
+  await deps.getSession(sessionId);
+  return await deps.storage.chatSessionBindings.get(sessionId);
 }
 
-export function setChatSessionBinding(
+export async function setChatSessionBinding(
   deps: ChatSessionDependencies,
   input: {
     sessionId: string;
@@ -1063,16 +1098,16 @@ export function setChatSessionBinding(
     target?: string;
     writable?: boolean;
   },
-): ChatSessionBindingRecord {
-  deps.getSession(input.sessionId);
-  const sessionMeta = deps.storage.chatSessionMeta.ensure(input.sessionId);
+): Promise<ChatSessionBindingRecord> {
+  await deps.getSession(input.sessionId);
+  const sessionMeta = await deps.storage.chatSessionMeta.ensure(input.sessionId);
   if (input.transport === "integration") {
     if (!input.connectionId?.trim() || !input.target?.trim()) {
       throw new Error("connectionId and target are required for integration transport");
     }
-    deps.storage.integrationConnections.get(input.connectionId);
+    await deps.storage.integrationConnections.get(input.connectionId);
   }
-  const binding = deps.storage.chatSessionBindings.upsert({
+  const binding = await deps.storage.chatSessionBindings.upsert({
     sessionId: input.sessionId,
     workspaceId: deps.normalizeWorkspaceId(sessionMeta.workspaceId),
     transport: input.transport,
@@ -1080,7 +1115,7 @@ export function setChatSessionBinding(
     target: input.target?.trim() || undefined,
     writable: input.writable,
   });
-  deps.publishRealtime("chat_session_updated", "chat", {
+  await deps.publishRealtime("chat_session_updated", "chat", {
     type: "chat_session_binding_updated",
     sessionId: input.sessionId,
     transport: binding.transport,
@@ -1088,60 +1123,110 @@ export function setChatSessionBinding(
   return binding;
 }
 
-export function getChatSessionPrefs(deps: ChatSessionDependencies, sessionId: string): ChatSessionPrefsRecord {
-  deps.getSession(sessionId);
-  const prefs = deps.ensureChatSessionModelDefaults(sessionId, deps.storage.chatSessionPrefs.ensure(sessionId));
-  return deps.hydrateChatPrefsWithAutonomy(sessionId, prefs);
+export async function getChatSessionPrefs(
+  deps: ChatSessionDependencies,
+  sessionId: string,
+): Promise<ChatSessionPrefsRecord> {
+  await deps.getSession(sessionId);
+  const prefs = deps.ensureChatSessionModelDefaults(sessionId, await deps.storage.chatSessionPrefs.ensure(sessionId));
+  return await deps.hydrateChatPrefsWithAutonomy(sessionId, prefs);
 }
 
-export function updateChatSessionPrefs(
+export async function updateChatSessionPrefs(
   deps: ChatSessionDependencies,
   sessionId: string,
   input: ChatSessionPrefsPatch,
   expectedRevision?: number,
-): ChatSessionPrefsRecord {
-  deps.getSession(sessionId);
+): Promise<ChatSessionPrefsRecord> {
+  await deps.getSession(sessionId);
   const { expectedRevision: inputExpectedRevision, ...prefsInput } = input;
   const normalizedInput = applyChatModePresetToPatch(prefsInput);
   const { basePatch, autonomyPatch } = splitChatPrefsPatch(normalizedInput);
-  const currentRevision = deps.storage.chatSessionRevisions.ensure(sessionId).revision;
-  const result = deps.storage.chatSessionRevisions.runWithRevision(
-    sessionId,
-    expectedRevision ?? inputExpectedRevision ?? currentRevision,
-    () => {
-      let baseResult = deps.storage.chatSessionPrefs.patchWithinAggregate(
+  const currentRevision = (await deps.storage.chatSessionRevisions.ensure(sessionId)).revision;
+  const resolvedExpectedRevision = expectedRevision ?? inputExpectedRevision ?? currentRevision;
+  const result = await deps.storage.runImmediateTransaction(async () => {
+    if (!Number.isSafeInteger(resolvedExpectedRevision) || resolvedExpectedRevision < 1) {
+      throw new ConflictError({
+        code: "WRITE_CONFLICT",
+        message: `chat_session ${sessionId} has an invalid expected revision.`,
+      });
+    }
+    const fenced = await deps.storage.db
+      .prepare(
+        `UPDATE chat_session_meta
+         SET revision = revision
+         WHERE session_id = @sessionId
+           AND revision = @expectedRevision`,
+      )
+      .run({ sessionId, expectedRevision: resolvedExpectedRevision });
+    if (fenced.changes === 0) {
+      const current = await deps.storage.chatSessionRevisions.ensure(sessionId);
+      throw new ConflictError({
+        code: "WRITE_CONFLICT",
+        message: `chat_session ${sessionId} changed since revision ${resolvedExpectedRevision}`,
+        details: {
+          resourceKind: "chat_session",
+          resourceId: sessionId,
+          expectedRevision: resolvedExpectedRevision,
+          currentRevision: current.revision,
+        },
+      });
+    }
+    const now = new Date().toISOString();
+    let baseResult = await deps.storage.chatSessionPrefs.patchWithinAggregate(
+      sessionId,
+      basePatch,
+      resolvedExpectedRevision,
+      now,
+    );
+    const normalizedBase = deps.ensureChatSessionModelDefaults(sessionId, baseResult.value);
+    if (normalizedBase.model !== baseResult.value.model) {
+      const normalizedResult = await deps.storage.chatSessionPrefs.patchWithinAggregate(
         sessionId,
-        basePatch,
-        expectedRevision ?? inputExpectedRevision ?? currentRevision,
+        { model: normalizedBase.model },
+        resolvedExpectedRevision,
+        now,
       );
-      const normalizedBase = deps.ensureChatSessionModelDefaults(sessionId, baseResult.value);
-      if (normalizedBase.model !== baseResult.value.model) {
-        const normalizedResult = deps.storage.chatSessionPrefs.patchWithinAggregate(
-          sessionId,
-          { model: normalizedBase.model },
-          expectedRevision ?? inputExpectedRevision ?? currentRevision,
-        );
-        baseResult = {
-          value: normalizedResult.value,
-          changed: baseResult.changed || normalizedResult.changed,
-        };
-      }
-      const autonomyResult = deps.storage.sessionAutonomyPrefs.patchWithinAggregate(
-        sessionId,
-        autonomyPatch,
-        expectedRevision ?? inputExpectedRevision ?? currentRevision,
-      );
-      return {
-        value: baseResult.value,
-        changed: baseResult.changed || autonomyResult.changed,
+      baseResult = {
+        value: normalizedResult.value,
+        changed: baseResult.changed || normalizedResult.changed,
       };
-    },
-  );
+    }
+    const autonomyResult = await deps.storage.sessionAutonomyPrefs.patchWithinAggregate(
+      sessionId,
+      autonomyPatch,
+      resolvedExpectedRevision,
+      now,
+    );
+    const changed = baseResult.changed || autonomyResult.changed;
+    if (changed) {
+      const bumped = await deps.storage.db
+        .prepare(
+          `UPDATE chat_session_meta
+           SET revision = revision + 1,
+               updated_at = @updatedAt
+           WHERE session_id = @sessionId
+             AND revision = @expectedRevision`,
+        )
+        .run({ sessionId, expectedRevision: resolvedExpectedRevision, updatedAt: now });
+      if (bumped.changes === 0) {
+        throw new ConflictError({
+          code: "WRITE_CONFLICT",
+          message: `chat_session ${sessionId} changed since revision ${resolvedExpectedRevision}`,
+        });
+      }
+    }
+    return {
+      value: baseResult.value,
+      changed,
+      revision: changed ? resolvedExpectedRevision + 1 : resolvedExpectedRevision,
+    };
+  });
   const hydrated = {
-    ...deps.hydrateChatPrefsWithAutonomy(sessionId, result.value),
+    ...(await deps.hydrateChatPrefsWithAutonomy(sessionId, result.value)),
     revision: result.revision,
   };
-  deps.publishRealtime("chat_session_updated", "chat", {
+  await deps.publishRealtime("chat_session_updated", "chat", {
     type: "chat_session_prefs_updated",
     sessionId,
     prefs: hydrated,
@@ -1149,19 +1234,19 @@ export function updateChatSessionPrefs(
   return hydrated;
 }
 
-function buildSessionSearchHits(
+async function buildSessionSearchHits(
   deps: ChatSessionDependencies,
   workspaceId: string,
   sessionIds: string[],
   query: string,
   limit = 160,
   includeHidden = false,
-): Map<string, ChatSessionSearchHitRecord[]> {
+): Promise<Map<string, ChatSessionSearchHitRecord[]>> {
   if (!query.trim() || sessionIds.length === 0) {
     return new Map();
   }
   const allowedSessionIds = new Set(sessionIds);
-  const rows = deps.storage.chatMessages.searchMessages(query, {
+  const rows = await deps.storage.chatMessages.searchMessages(query, {
     workspaceId,
     includeHidden,
     limit: Math.max(1, Math.min(50, limit)),
@@ -1203,7 +1288,7 @@ function buildSessionSearchHits(
     if (grouped.has(sessionId)) {
       continue;
     }
-    for (const row of deps.storage.chatMessages.searchMessages(query, {
+    for (const row of await deps.storage.chatMessages.searchMessages(query, {
       workspaceId,
       sessionId,
       includeHidden,
@@ -1295,14 +1380,14 @@ const CROSS_PROJECT_RECENTS_MAX_LIMIT = 20;
  * turnCount is omitted for v1 — the storage layer does not denormalize it,
  * and computing it per session would require N additional queries.
  */
-export function listRecentCrossProjectSessions(
+export async function listRecentCrossProjectSessions(
   deps: ChatSessionDependencies,
   input: { workspaceId: string; limit: number },
-): RecentCrossProjectSession[] {
+): Promise<RecentCrossProjectSession[]> {
   const limit = Math.max(1, Math.min(CROSS_PROJECT_RECENTS_MAX_LIMIT, input.limit));
   const fetchLimit = Math.max(20, limit * 3);
 
-  const candidates = listChatSessions(deps, {
+  const candidates = await listChatSessions(deps, {
     workspaceId: input.workspaceId,
     scope: "all",
     view: "active",

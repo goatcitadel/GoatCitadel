@@ -263,13 +263,14 @@ function createAutoScoreService(input: {
 function createHeartbeatService(input: { benchmarkRow: Record<string, unknown> }): PromptPackService {
   return new PromptPackService(
     {
-      storage: {},
-      gatewaySql: {
-        prepare: (sql: string) => ({
-          get: () => (sql.includes("SELECT") ? input.benchmarkRow : undefined),
-          run: () => ({ changes: 0 }),
-          all: () => [],
-        }),
+      storage: {
+        db: {
+          prepare: async (sql: string) => ({
+            get: async () => (sql.includes("SELECT") ? input.benchmarkRow : undefined),
+            run: async () => ({ changes: 0 }),
+            all: async () => [],
+          }),
+        },
       },
       config: {
         assistant: {

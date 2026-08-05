@@ -38,15 +38,15 @@ import { normalizePromptTestCode, clampPromptScore } from "./prompt-pack-service
 export interface ChatCommandDependencies {
   readonly storage: {
     chatSessionMeta: {
-      ensure(sessionId: string): { workspaceId?: string };
+      ensure(sessionId: string): Promise<{ workspaceId?: string }>;
     };
     chatSessionProjects: {
-      get(sessionId: string): { projectId: string } | undefined;
+      get(sessionId: string): Promise<{ projectId: string } | undefined>;
     };
   };
-  assignChatSessionProject(sessionId: string, projectId?: string): { projectId?: string };
+  assignChatSessionProject(sessionId: string, projectId?: string): Promise<{ projectId?: string }>;
   connectMcpServer(serverId: string): Promise<McpServerRecord>;
-  createChatSession(input: { workspaceId?: string; title?: string; projectId?: string }): ChatSessionRecord;
+  createChatSession(input: { workspaceId?: string; title?: string; projectId?: string }): Promise<ChatSessionRecord>;
   createMcpServer(input: {
     label: string;
     transport: McpServerRecord["transport"];
@@ -59,7 +59,7 @@ export interface ChatCommandDependencies {
     trustTier?: McpServerRecord["trustTier"];
     costTier?: McpServerRecord["costTier"];
     policy?: McpServerRecord["policy"];
-  }): McpServerRecord;
+  }): Promise<McpServerRecord>;
   learnSkillFromLatestTurn(input: {
     sessionId: string;
     correction: string;
@@ -70,7 +70,7 @@ export interface ChatCommandDependencies {
     sessionId: string;
     actor: { actorId?: string; authActorSource?: ToolPolicyActorContext["authActorSource"] };
     cursor?: string;
-  }): SkillLearningHistoryPage;
+  }): Promise<SkillLearningHistoryPage>;
   applySkillLearningHistorySelection(input: {
     sessionId: string;
     selectionToken: string;
@@ -78,9 +78,9 @@ export interface ChatCommandDependencies {
     actor: { actorId?: string; authActorSource?: ToolPolicyActorContext["authActorSource"] };
     idempotencyKey?: string;
   }): Promise<SkillLearningResult>;
-  disconnectMcpServer(serverId: string): McpServerRecord;
-  getChatSessionPrefs(sessionId: string): ChatSessionPrefsRecord;
-  getMemoryMaintenanceStatus(workspaceId: string): {
+  disconnectMcpServer(serverId: string): Promise<McpServerRecord>;
+  getChatSessionPrefs(sessionId: string): Promise<ChatSessionPrefsRecord>;
+  getMemoryMaintenanceStatus(workspaceId: string): Promise<{
     policy: {
       enabled: boolean;
       runMode: string;
@@ -95,20 +95,20 @@ export interface ChatCommandDependencies {
     state: { changedSessionCount: number };
     lastRun?: { status: string; updatedAt: string };
     nextDueAt?: string;
-  };
-  getSession(sessionId: string): unknown;
-  getSettings(): {
+  }>;
+  getSession(sessionId: string): Promise<unknown>;
+  getSettings(): Promise<{
     llm: {
       activeProviderId?: string;
       activeModel?: string;
     };
-  };
-  getPersonalityCatalog(): PersonalityCatalogResponse;
+  }>;
+  getPersonalityCatalog(): Promise<PersonalityCatalogResponse>;
   extractAndPersistLearnedMemory(
     sessionId: string,
     content: string,
     source: { role: "user" | "assistant"; sourceRef: string },
-  ): void;
+  ): Promise<void>;
   /**
    * HX-402 P2: the legacy executable install is retired; this resolves to a
    * structured redirect into the governed Skill Hub review surface and never
@@ -127,18 +127,18 @@ export interface ChatCommandDependencies {
   listChatSessionLearnedMemory(
     sessionId: string,
     limit?: number,
-  ): { items: LearnedMemoryItemRecord[]; conflicts: LearnedMemoryConflictRecord[] };
-  listChatSessions(query?: ChatSessionListQuery): ChatSessionRecord[];
+  ): Promise<{ items: LearnedMemoryItemRecord[]; conflicts: LearnedMemoryConflictRecord[] }>;
+  listChatSessions(query?: ChatSessionListQuery): Promise<ChatSessionRecord[]>;
   listMemoryItems(input?: {
     namespace?: string;
     workspaceId?: string;
     status?: MemoryItemRecord["status"] | "all";
     query?: string;
     limit?: number;
-  }): MemoryItemRecord[];
-  listMcpServers(): McpServerRecord[];
-  listMcpTemplates(): Array<McpServerTemplateRecord & { installed: boolean }>;
-  listSkills(): Array<{ skillId: string; state: string; note?: string }>;
+  }): Promise<MemoryItemRecord[]>;
+  listMcpServers(): Promise<McpServerRecord[]>;
+  listMcpTemplates(): Promise<Array<McpServerTemplateRecord & { installed: boolean }>>;
+  listSkills(): Promise<Array<{ skillId: string; state: string; note?: string }>>;
   listSkillSources(
     query: string,
     limit: number,
@@ -174,7 +174,7 @@ export interface ChatCommandDependencies {
       installHint?: string;
     }>;
   }>;
-  normalizeWorkspaceId(workspaceId?: string): string;
+  normalizeWorkspaceId(workspaceId?: string): Promise<string>;
   resolveChatToolApproval(
     sessionId: string,
     approvalId: string,
@@ -219,7 +219,7 @@ export interface ChatCommandDependencies {
       surface?: ToolPolicyActorContext["surface"];
     },
   ): Promise<ResearchSummaryRecord>;
-  runMemoryMaintenanceNow(input: { workspaceId: string; triggerSource: "manual" }): { runId: string };
+  runMemoryMaintenanceNow(input: { workspaceId: string; triggerSource: "manual" }): Promise<{ runId: string }>;
   undoChatTurns(
     sessionId: string,
     count: number,
@@ -250,17 +250,21 @@ export interface ChatCommandDependencies {
     skillId: string,
     state: "enabled" | "sleep" | "disabled",
     reason: string,
-  ):
+  ): Promise<
     | { pendingApproval: { approvalId: string; status: string } }
-    | { pendingApproval: null; noMutationRequired: true; skillState: { skillId: string; state: string } };
-  setDefaultPersonality(id: string): PersonalityCatalogResponse;
-  updateChatSessionPrefs(sessionId: string, patch: Record<string, unknown>): ChatSessionPrefsRecord;
-  updateChatSessionProactivePolicy(sessionId: string, patch: Record<string, unknown>): { mode: ChatProactiveMode };
+    | { pendingApproval: null; noMutationRequired: true; skillState: { skillId: string; state: string } }
+  >;
+  setDefaultPersonality(id: string): Promise<PersonalityCatalogResponse>;
+  updateChatSessionPrefs(sessionId: string, patch: Record<string, unknown>): Promise<ChatSessionPrefsRecord>;
+  updateChatSessionProactivePolicy(
+    sessionId: string,
+    patch: Record<string, unknown>,
+  ): Promise<{ mode: ChatProactiveMode }>;
   updateChatSessionLearnedMemory(
     sessionId: string,
     itemId: string,
     input: { status?: "active" | "superseded" | "disabled"; content?: string; confidence?: number },
-  ): LearnedMemoryItemRecord;
+  ): Promise<LearnedMemoryItemRecord>;
   validateSkillImport(input: { sourceRef: string; sourceType?: SkillImportSourceType }): Promise<{
     valid: boolean;
     errors: string[];
@@ -475,7 +479,7 @@ export async function parseChatCommand(
   commandText: string,
   options?: ChatCommandOptions,
 ): Promise<ChatCommandResult> {
-  deps.getSession(sessionId);
+  await deps.getSession(sessionId);
   const parsed = parseSlashCommand(commandText);
   if (!parsed) {
     return {
@@ -510,12 +514,15 @@ export async function parseChatCommand(
   }
 
   if (command === "/new") {
-    const sourcePrefs = deps.getChatSessionPrefs(sessionId);
-    const sourceProjectId = deps.storage.chatSessionProjects.get(sessionId)?.projectId;
-    const session = deps.createChatSession({
-      workspaceId: deps.storage.chatSessionMeta.ensure(sessionId).workspaceId,
+    const [sourcePrefs, sourceProject, sourceMeta] = await Promise.all([
+      deps.getChatSessionPrefs(sessionId),
+      deps.storage.chatSessionProjects.get(sessionId),
+      deps.storage.chatSessionMeta.ensure(sessionId),
+    ]);
+    const session = await deps.createChatSession({
+      workspaceId: sourceMeta.workspaceId,
       title: args.join(" ").trim() || undefined,
-      projectId: sourceProjectId,
+      projectId: sourceProject?.projectId,
     });
     const {
       sessionId: _sourceSessionId,
@@ -523,7 +530,7 @@ export async function parseChatCommand(
       updatedAt: _sourceUpdatedAt,
       ...prefsPatch
     } = sourcePrefs;
-    const prefs = deps.updateChatSessionPrefs(session.sessionId, prefsPatch);
+    const prefs = await deps.updateChatSessionPrefs(session.sessionId, prefsPatch);
     return {
       ok: true,
       command,
@@ -537,7 +544,7 @@ export async function parseChatCommand(
   }
 
   if (command === "/mode") {
-    const prefs = deps.updateChatSessionPrefs(sessionId, { mode: "chat" });
+    const prefs = await deps.updateChatSessionPrefs(sessionId, { mode: "chat" });
     return {
       ok: true,
       command,
@@ -551,7 +558,7 @@ export async function parseChatCommand(
   if (command === "/plan") {
     const next = (args[0] ?? "").toLowerCase();
     if (!next) {
-      const prefs = deps.getChatSessionPrefs(sessionId);
+      const prefs = await deps.getChatSessionPrefs(sessionId);
       return {
         ok: true,
         command,
@@ -563,7 +570,7 @@ export async function parseChatCommand(
     if (next !== "on" && next !== "off") {
       return { ok: false, command, args, message: "Usage: /plan [on|off]" };
     }
-    const prefs = deps.updateChatSessionPrefs(sessionId, {
+    const prefs = await deps.updateChatSessionPrefs(sessionId, {
       planningMode: next === "on" ? "advisory" : "off",
     });
     return {
@@ -580,7 +587,7 @@ export async function parseChatCommand(
     if (!target) {
       return { ok: false, command, args, message: "Usage: /model <model-id|provider-id/model-id>" };
     }
-    const prefs = deps.updateChatSessionPrefs(sessionId, {
+    const prefs = await deps.updateChatSessionPrefs(sessionId, {
       providerId: target.providerId,
       model: target.model,
     });
@@ -593,7 +600,7 @@ export async function parseChatCommand(
     if (!["auto", "off", "quick", "deep"].includes(webMode)) {
       return { ok: false, command, args, message: "Usage: /web auto|off|quick|deep" };
     }
-    const prefs = deps.updateChatSessionPrefs(sessionId, { webMode });
+    const prefs = await deps.updateChatSessionPrefs(sessionId, { webMode });
     return { ok: true, command, args, prefs, message: `Web mode set to ${prefs.webMode}.` };
   }
 
@@ -605,7 +612,7 @@ export async function parseChatCommand(
       }
       return { ok: false, command, args, message: "Usage: /memory auto|on|off" };
     }
-    const prefs = deps.updateChatSessionPrefs(sessionId, { memoryMode });
+    const prefs = await deps.updateChatSessionPrefs(sessionId, { memoryMode });
     return { ok: true, command, args, prefs, message: `Memory mode set to ${prefs.memoryMode}.` };
   }
 
@@ -660,7 +667,7 @@ export async function parseChatCommand(
 
   if (command === "/personality") {
     const requested = args.join(" ").trim();
-    const catalog = deps.getPersonalityCatalog();
+    const catalog = await deps.getPersonalityCatalog();
     if (!requested) {
       const active = getPersonalityPreset(catalog.defaultPersonalityId, catalog.items);
       return {
@@ -686,7 +693,7 @@ export async function parseChatCommand(
         message: `Unknown personality "${requested}". Use /personality to list available presets.`,
       };
     }
-    const updated = deps.setDefaultPersonality(normalized);
+    const updated = await deps.setDefaultPersonality(normalized);
     const active = getPersonalityPreset(updated.defaultPersonalityId, updated.items);
     return {
       ok: true,
@@ -700,10 +707,11 @@ export async function parseChatCommand(
   }
 
   if (command === "/dream") {
-    const workspaceId = deps.normalizeWorkspaceId(deps.storage.chatSessionMeta.ensure(sessionId).workspaceId);
+    const sessionMeta = await deps.storage.chatSessionMeta.ensure(sessionId);
+    const workspaceId = await deps.normalizeWorkspaceId(sessionMeta.workspaceId);
     const subcommand = (args[0] ?? "").toLowerCase();
     if (!subcommand) {
-      const run = deps.runMemoryMaintenanceNow({ workspaceId, triggerSource: "manual" });
+      const run = await deps.runMemoryMaintenanceNow({ workspaceId, triggerSource: "manual" });
       return {
         ok: true,
         command,
@@ -712,9 +720,9 @@ export async function parseChatCommand(
       };
     }
     if (subcommand === "status") {
-      const status = deps.getMemoryMaintenanceStatus(workspaceId);
-      const providerId = status.policy.providerId ?? deps.getSettings().llm.activeProviderId;
-      const model = status.policy.model ?? deps.getSettings().llm.activeModel;
+      const [status, settings] = await Promise.all([deps.getMemoryMaintenanceStatus(workspaceId), deps.getSettings()]);
+      const providerId = status.policy.providerId ?? settings.llm.activeProviderId;
+      const model = status.policy.model ?? settings.llm.activeModel;
       const providerMode = status.policy.providerId || status.policy.model ? "pinned" : "active default";
       const scheduleSummary = status.policy.schedule
         ? `${status.policy.schedule.frequency} ${String(status.policy.schedule.hour).padStart(2, "0")}:${String(status.policy.schedule.minute).padStart(2, "0")} ${status.policy.timeZone}`
@@ -775,7 +783,7 @@ export async function parseChatCommand(
     if (!["off", "minimal", "standard", "extended", "deep", "max", "ultra"].includes(thinkingLevel)) {
       return { ok: false, command, args, message: "Usage: /think off|minimal|standard|extended|deep|max|ultra" };
     }
-    const prefs = deps.updateChatSessionPrefs(sessionId, { thinkingLevel });
+    const prefs = await deps.updateChatSessionPrefs(sessionId, { thinkingLevel });
     return { ok: true, command, args, prefs, message: `Thinking level set to ${prefs.thinkingLevel}.` };
   }
 
@@ -784,7 +792,7 @@ export async function parseChatCommand(
     if (!["standard", "fast"].includes(speedMode)) {
       return { ok: false, command, args, message: "Usage: /speed standard|fast" };
     }
-    const prefs = deps.updateChatSessionPrefs(sessionId, { speedMode });
+    const prefs = await deps.updateChatSessionPrefs(sessionId, { speedMode });
     return { ok: true, command, args, prefs, message: `Speed mode set to ${prefs.speedMode}.` };
   }
 
@@ -793,7 +801,7 @@ export async function parseChatCommand(
     if (!["off", "ask_when_useful", "auto_when_useful"].includes(subagentPolicy)) {
       return { ok: false, command, args, message: "Usage: /subagents off|ask_when_useful|auto_when_useful" };
     }
-    const prefs = deps.updateChatSessionPrefs(sessionId, { subagentPolicy });
+    const prefs = await deps.updateChatSessionPrefs(sessionId, { subagentPolicy });
     return { ok: true, command, args, prefs, message: `Subagent policy set to ${prefs.subagentPolicy}.` };
   }
 
@@ -802,7 +810,7 @@ export async function parseChatCommand(
     if (!["safe_auto", "manual"].includes(toolAutonomy)) {
       return { ok: false, command, args, message: "Usage: /tool safe_auto|manual" };
     }
-    const prefs = deps.updateChatSessionPrefs(sessionId, { toolAutonomy });
+    const prefs = await deps.updateChatSessionPrefs(sessionId, { toolAutonomy });
     return { ok: true, command, args, prefs, message: `Tool autonomy set to ${prefs.toolAutonomy}.` };
   }
 
@@ -811,8 +819,8 @@ export async function parseChatCommand(
     if (!["off", "suggest", "auto_safe", "auto_full"].includes(proactiveMode)) {
       return { ok: false, command, args, message: "Usage: /proactive off|suggest|auto_safe|auto_full" };
     }
-    const policy = deps.updateChatSessionProactivePolicy(sessionId, { proactiveMode });
-    const prefs = deps.getChatSessionPrefs(sessionId);
+    const policy = await deps.updateChatSessionProactivePolicy(sessionId, { proactiveMode });
+    const prefs = await deps.getChatSessionPrefs(sessionId);
     return {
       ok: true,
       command,
@@ -827,8 +835,8 @@ export async function parseChatCommand(
     if (!["standard", "layered"].includes(retrievalMode)) {
       return { ok: false, command, args, message: "Usage: /retrieval standard|layered" };
     }
-    deps.updateChatSessionProactivePolicy(sessionId, { retrievalMode });
-    const prefs = deps.getChatSessionPrefs(sessionId);
+    await deps.updateChatSessionProactivePolicy(sessionId, { retrievalMode });
+    const prefs = await deps.getChatSessionPrefs(sessionId);
     return {
       ok: true,
       command,
@@ -843,8 +851,8 @@ export async function parseChatCommand(
     if (!["off", "on"].includes(reflectionMode)) {
       return { ok: false, command, args, message: "Usage: /reflect off|on" };
     }
-    deps.updateChatSessionProactivePolicy(sessionId, { reflectionMode });
-    const prefs = deps.getChatSessionPrefs(sessionId);
+    await deps.updateChatSessionProactivePolicy(sessionId, { reflectionMode });
+    const prefs = await deps.getChatSessionPrefs(sessionId);
     return {
       ok: true,
       command,
@@ -876,7 +884,7 @@ export async function parseChatCommand(
       };
     }
     if ((args[0] ?? "").toLowerCase() === "history" && args.length <= 2) {
-      const learningHistory = deps.createSkillLearningHistoryDryRun({
+      const learningHistory = await deps.createSkillLearningHistoryDryRun({
         sessionId,
         actor,
         cursor: args[1],
@@ -1033,7 +1041,7 @@ export async function parseChatCommand(
   }
 
   if (command === "/skills") {
-    const skills = deps.listSkills();
+    const skills = await deps.listSkills();
     if (skills.length === 0) {
       return { ok: true, command, args, message: "No installed skills found." };
     }
@@ -1058,7 +1066,7 @@ export async function parseChatCommand(
       const state = action === "enable" ? "enabled" : action === "sleep" ? "sleep" : "disabled";
       // HX-402 P2: skill state changes are approval-first — the command
       // requests one canonical skill.lifecycle approval and never mutates.
-      const outcome = deps.setSkillState(skillId, state, `Requested from chat command ${commandText.trim()}`);
+      const outcome = await deps.setSkillState(skillId, state, `Requested from chat command ${commandText.trim()}`);
       if (!outcome.pendingApproval) {
         const skillState = "skillState" in outcome ? outcome.skillState : undefined;
         return {
@@ -1220,7 +1228,7 @@ export async function parseChatCommand(
   if (command === "/mcp") {
     const action = (args[0] ?? "").toLowerCase();
     if (!action) {
-      const servers = deps.listMcpServers();
+      const servers = await deps.listMcpServers();
       if (servers.length === 0) {
         return { ok: true, command, args, message: "No MCP servers configured." };
       }
@@ -1243,7 +1251,8 @@ export async function parseChatCommand(
       }
       let updated: McpServerRecord;
       try {
-        updated = action === "connect" ? await deps.connectMcpServer(serverId) : deps.disconnectMcpServer(serverId);
+        updated =
+          action === "connect" ? await deps.connectMcpServer(serverId) : await deps.disconnectMcpServer(serverId);
       } catch (error) {
         return {
           ok: false,
@@ -1261,7 +1270,7 @@ export async function parseChatCommand(
     }
     if (action === "templates") {
       const query = args.slice(1).join(" ").trim().toLowerCase();
-      const templates = deps.listMcpTemplates().filter((template) => {
+      const templates = (await deps.listMcpTemplates()).filter((template) => {
         if (!query) {
           return true;
         }
@@ -1291,13 +1300,13 @@ export async function parseChatCommand(
       if (!templateId) {
         return { ok: false, command, args, message: "Usage: /mcp add-template <templateId>" };
       }
-      const template = deps.listMcpTemplates().find((item) => item.templateId.toLowerCase() === templateId);
+      const template = (await deps.listMcpTemplates()).find((item) => item.templateId.toLowerCase() === templateId);
       if (!template) {
         return { ok: false, command, args, message: `Unknown MCP template ${templateId}.` };
       }
-      const existing = deps
-        .listMcpServers()
-        .find((server) => server.label.toLowerCase() === template.label.toLowerCase());
+      const existing = (await deps.listMcpServers()).find(
+        (server) => server.label.toLowerCase() === template.label.toLowerCase(),
+      );
       if (existing) {
         return {
           ok: true,
@@ -1306,7 +1315,7 @@ export async function parseChatCommand(
           message: `MCP template ${template.templateId} already exists as ${existing.serverId}.`,
         };
       }
-      const created = deps.createMcpServer({
+      const created = await deps.createMcpServer({
         label: template.label,
         transport: template.transport,
         command: template.command,
@@ -1337,7 +1346,7 @@ export async function parseChatCommand(
 
   if (command === "/project") {
     const nextProject = args.join(" ").trim();
-    const updated = deps.assignChatSessionProject(
+    const updated = await deps.assignChatSessionProject(
       sessionId,
       !nextProject || nextProject === "none" ? undefined : nextProject,
     );
@@ -1430,13 +1439,13 @@ type ChannelLookupResult = {
   updatedAt?: string;
 };
 
-function renderChannelLookupCommand(
+async function renderChannelLookupCommand(
   deps: ChatCommandDependencies,
   sessionId: string,
   command: string,
   args: string[],
   options: ChatCommandOptions,
-): ChatCommandResult {
+): Promise<ChatCommandResult> {
   const query = args.join(" ").trim();
   if (!query) {
     return {
@@ -1446,12 +1455,11 @@ function renderChannelLookupCommand(
       message: `Usage: ${command} <query>`,
     };
   }
-  const workspaceId = deps.normalizeWorkspaceId(
-    options.channelContext?.workspaceId ?? deps.storage.chatSessionMeta.ensure(sessionId).workspaceId,
-  );
-  const memoryResults = command === "/recall" ? [] : searchChannelMemory(deps, sessionId, workspaceId, query);
+  const sessionMeta = await deps.storage.chatSessionMeta.ensure(sessionId);
+  const workspaceId = await deps.normalizeWorkspaceId(options.channelContext?.workspaceId ?? sessionMeta.workspaceId);
+  const memoryResults = command === "/recall" ? [] : await searchChannelMemory(deps, sessionId, workspaceId, query);
   const recallResults =
-    command === "/memory" ? [] : searchChannelSessions(deps, sessionId, workspaceId, query, options);
+    command === "/memory" ? [] : await searchChannelSessions(deps, sessionId, workspaceId, query, options);
   const results = [...memoryResults, ...recallResults].slice(0, 5);
   const actorCopy = options.channelContext?.actorId
     ? ` requester ${options.channelContext.actorId}`
@@ -1477,16 +1485,16 @@ function renderChannelLookupCommand(
   };
 }
 
-function searchChannelMemory(
+async function searchChannelMemory(
   deps: ChatCommandDependencies,
   sessionId: string,
   workspaceId: string,
   query: string,
-): ChannelLookupResult[] {
+): Promise<ChannelLookupResult[]> {
   const lowerQuery = query.toLowerCase();
-  const learned = deps
-    .listChatSessionLearnedMemory(sessionId, 50)
-    .items.filter((item) => item.status === "active" && item.content.toLowerCase().includes(lowerQuery))
+  const learnedMemory = await deps.listChatSessionLearnedMemory(sessionId, 50);
+  const learned = learnedMemory.items
+    .filter((item) => item.status === "active" && item.content.toLowerCase().includes(lowerQuery))
     .map((item) => ({
       source: "memory" as const,
       id: item.itemId,
@@ -1496,7 +1504,7 @@ function searchChannelMemory(
     }));
   let lifecycle: ChannelLookupResult[];
   try {
-    lifecycle = deps.listMemoryItems({ workspaceId, status: "active", query, limit: 5 }).map((item) => ({
+    lifecycle = (await deps.listMemoryItems({ workspaceId, status: "active", query, limit: 5 })).map((item) => ({
       source: "memory" as const,
       id: item.itemId,
       label: item.title || item.namespace,
@@ -1509,17 +1517,16 @@ function searchChannelMemory(
   return dedupeLookupResults([...learned, ...lifecycle]).slice(0, 5);
 }
 
-function searchChannelSessions(
+async function searchChannelSessions(
   deps: ChatCommandDependencies,
   sessionId: string,
   workspaceId: string,
   query: string,
   options: ChatCommandOptions,
-): ChannelLookupResult[] {
+): Promise<ChannelLookupResult[]> {
   const channel = options.channelContext?.platform;
   const account = options.channelContext?.account;
-  return deps
-    .listChatSessions({ workspaceId, q: query, limit: 20, includeHidden: false })
+  return (await deps.listChatSessions({ workspaceId, q: query, limit: 20, includeHidden: false }))
     .filter((session) => {
       if (session.sessionId === sessionId) {
         return true;

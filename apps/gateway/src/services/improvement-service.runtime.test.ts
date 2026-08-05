@@ -2,7 +2,7 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Storage } from "@goatcitadel/storage";
+import { createLocalAsyncStorage, Storage } from "@goatcitadel/storage";
 import type { ImprovementRef } from "@goatcitadel/contracts";
 import { ImprovementService, type ImprovementServiceCallbacks } from "./improvement-service.js";
 import {
@@ -34,8 +34,8 @@ afterEach(() => {
 });
 
 describe("ImprovementService runtime coverage", () => {
-  it("applies and reverts low-risk decision auto-tunes while rejecting unsafe states", () => {
-    const harness = createHarness();
+  it("applies and reverts low-risk decision auto-tunes while rejecting unsafe states", async () => {
+    const harness = await createHarness();
     insertDecisionReplayRun(harness, "run-autotune");
     insertDecisionAutoTune(harness, {
       tuneId: "tune-low-risk",
@@ -59,21 +59,21 @@ describe("ImprovementService runtime coverage", () => {
       snapshot: { settingKey: "routing.weight.failed", previousValue: 0 },
     });
 
-    expect(harness.service.approveDecisionAutoTune("tune-low-risk").status).toBe("applied");
+    expect((await harness.service.approveDecisionAutoTune("tune-low-risk")).status).toBe("applied");
     expect(harness.storage.systemSettings.get<number>("routing.weight.provider_balance")?.value).toBe(0.72);
-    expect(harness.service.approveDecisionAutoTune("tune-low-risk").status).toBe("applied");
-    expect(harness.service.revertDecisionAutoTune("tune-low-risk").status).toBe("reverted");
+    expect((await harness.service.approveDecisionAutoTune("tune-low-risk")).status).toBe("applied");
+    expect((await harness.service.revertDecisionAutoTune("tune-low-risk")).status).toBe("reverted");
     expect(harness.storage.systemSettings.get<number>("routing.weight.provider_balance")?.value).toBe(0.5);
 
     expect(harness.published.some((event) => event.eventType === "improvement_autotune_applied")).toBe(true);
     expect(harness.published.some((event) => event.eventType === "improvement_autotune_reverted")).toBe(true);
-    expect(() => harness.service.approveDecisionAutoTune("tune-medium-risk")).toThrow(/manual code review/);
-    expect(() => harness.service.approveDecisionAutoTune("tune-failed")).toThrow(/cannot be approved/);
-    expect(() => harness.service.revertDecisionAutoTune("tune-medium-risk")).toThrow(/cannot be reverted/);
+    await expect(harness.service.approveDecisionAutoTune("tune-medium-risk")).rejects.toThrow(/manual code review/);
+    await expect(harness.service.approveDecisionAutoTune("tune-failed")).rejects.toThrow(/cannot be approved/);
+    await expect(harness.service.revertDecisionAutoTune("tune-medium-risk")).rejects.toThrow(/cannot be reverted/);
   });
 
-  it("closes the loop: applying a wired tune records the runtime-effective value and revert restores the prior value (P2-W3)", () => {
-    const harness = createHarness();
+  it("closes the loop: applying a wired tune records the runtime-effective value and revert restores the prior value (P2-W3)", async () => {
+    const harness = await createHarness();
     insertDecisionReplayRun(harness, "run-autotune");
     // The live-intent tune the weekly tuner produces: raise from 0.6 -> 0.65.
     insertDecisionAutoTune(harness, {
@@ -84,7 +84,7 @@ describe("ImprovementService runtime coverage", () => {
       snapshot: { settingKey: "improvement_tune_live_intent_threshold_v1", previousValue: 0.6 },
     });
 
-    const applied = harness.service.approveDecisionAutoTune("tune-live-intent");
+    const applied = await harness.service.approveDecisionAutoTune("tune-live-intent");
     expect(applied.status).toBe("applied");
     // The raw setting was written...
     expect(harness.storage.systemSettings.get<number>("improvement_tune_live_intent_threshold_v1")?.value).toBe(0.65);
@@ -102,13 +102,13 @@ describe("ImprovementService runtime coverage", () => {
     ).toBe(true);
 
     // Revert restores the prior value through the snapshot rail.
-    const reverted = harness.service.revertDecisionAutoTune("tune-live-intent");
+    const reverted = await harness.service.revertDecisionAutoTune("tune-live-intent");
     expect(reverted.status).toBe("reverted");
     expect(harness.storage.systemSettings.get<number>("improvement_tune_live_intent_threshold_v1")?.value).toBe(0.6);
   });
 
-  it("revert clears a wired tune key that had no prior value back to unset (P2-W3)", () => {
-    const harness = createHarness();
+  it("revert clears a wired tune key that had no prior value back to unset (P2-W3)", async () => {
+    const harness = await createHarness();
     insertDecisionReplayRun(harness, "run-autotune");
     // Retry-threshold tune with NO previousValue snapshot field => unset before.
     insertDecisionAutoTune(harness, {
@@ -119,17 +119,17 @@ describe("ImprovementService runtime coverage", () => {
       snapshot: { settingKey: "improvement_tune_retry_threshold_v1" },
     });
 
-    harness.service.approveDecisionAutoTune("tune-retry");
+    await harness.service.approveDecisionAutoTune("tune-retry");
     expect(harness.storage.systemSettings.get<number>("improvement_tune_retry_threshold_v1")?.value).toBe(0);
     // Effective value falls back to the safe default (1) once reverted to unset.
-    const reverted = harness.service.revertDecisionAutoTune("tune-retry");
+    const reverted = await harness.service.revertDecisionAutoTune("tune-retry");
     expect(reverted.status).toBe("reverted");
     // previousValue was undefined => the key is set to null (unset).
     expect(harness.storage.systemSettings.get<number>("improvement_tune_retry_threshold_v1")?.value ?? null).toBe(null);
   });
 
-  it("never auto-applies medium/high-risk tunes (safety invariant)", () => {
-    const harness = createHarness();
+  it("never auto-applies medium/high-risk tunes (safety invariant)", async () => {
+    const harness = await createHarness();
     insertDecisionReplayRun(harness, "run-autotune");
     insertDecisionAutoTune(harness, {
       tuneId: "tune-high-blocker",
@@ -139,15 +139,15 @@ describe("ImprovementService runtime coverage", () => {
       snapshot: { settingKey: "improvement_tune_blocker_template_v1", previousValue: 1 },
     });
     // Operator approval is refused for non-low risk...
-    expect(() => harness.service.approveDecisionAutoTune("tune-high-blocker")).toThrow(/manual code review/);
+    await expect(harness.service.approveDecisionAutoTune("tune-high-blocker")).rejects.toThrow(/manual code review/);
     // ...and the underlying setting was never written.
     expect(harness.storage.systemSettings.get<number>("improvement_tune_blocker_template_v1")).toBeUndefined();
   });
 
-  it("creates replay override drafts and exposes completed diff summaries against the storage schema", () => {
-    const harness = createHarness();
+  it("creates replay override drafts and exposes completed diff summaries against the storage schema", async () => {
+    const harness = await createHarness();
 
-    const draft = harness.service.createReplayOverrideDraft("source-run-1", [
+    const draft = await harness.service.createReplayOverrideDraft("source-run-1", [
       {
         stepKey: "  route-step  ",
         overrideKind: "policy_decision",
@@ -159,14 +159,14 @@ describe("ImprovementService runtime coverage", () => {
         override: { prompt: "ignored" },
       },
     ]);
-    const completed = harness.service.executeReplayOverride("source-run-1", [
+    const completed = await harness.service.executeReplayOverride("source-run-1", [
       {
         stepKey: "tool-step",
         overrideKind: "tool_output",
         override: { stdout: "deterministic fake output" },
       },
     ]);
-    const summary = harness.service.getReplayDiffSummary(completed.replayRunId);
+    const summary = await harness.service.getReplayDiffSummary(completed.replayRunId);
 
     expect(draft.status).toBe("draft");
     expect(draft.overrides.map((override) => override.stepKey)).toEqual(["route-step"]);
@@ -178,13 +178,13 @@ describe("ImprovementService runtime coverage", () => {
         (event) => event.eventType === "system" && event.payload.type === "replay_override_completed",
       ),
     ).toBe(true);
-    expect(() => harness.service.getReplayDiffSummary("missing-replay")).toThrow(/not found/);
+    await expect(harness.service.getReplayDiffSummary("missing-replay")).rejects.toThrow(/not found/);
   });
 
-  it("deduplicates capability gaps and validates repair candidates through runtime storage", () => {
-    const harness = createHarness();
+  it("deduplicates capability gaps and validates repair candidates through runtime storage", async () => {
+    const harness = await createHarness();
 
-    const first = harness.service.recordCapabilityGapEvent({
+    const first = await harness.service.recordCapabilityGapEvent({
       sessionId: "sess-gap",
       causeClass: "tool_exists_but_not_in_profile",
       requestedTool: "web.search",
@@ -194,7 +194,7 @@ describe("ImprovementService runtime coverage", () => {
       recoveryOptions: ["switch_tool_profile", "retry_once", "invalid-option" as never],
       confidence: 0.4,
     });
-    const second = harness.service.recordCapabilityGapEvent({
+    const second = await harness.service.recordCapabilityGapEvent({
       sessionId: "sess-gap",
       causeClass: "tool_exists_but_not_in_profile",
       requestedTool: "web.search",
@@ -210,9 +210,9 @@ describe("ImprovementService runtime coverage", () => {
     expect(second.repeatCount).toBe(2);
     expect(second.confidence).toBe(0.8);
     expect(second.repairCandidateId).toBeDefined();
-    expect(harness.service.listCapabilityGapEvents(10).map((event) => event.eventId)).toContain(second.eventId);
+    expect((await harness.service.listCapabilityGapEvents(10)).map((event) => event.eventId)).toContain(second.eventId);
 
-    const [candidate] = harness.service.listRepairCandidates(10);
+    const [candidate] = await harness.service.listRepairCandidates(10);
     expect(candidate).toBeDefined();
     expect(candidate).toMatchObject({
       causeClass: "tool_exists_but_not_in_profile",
@@ -222,7 +222,7 @@ describe("ImprovementService runtime coverage", () => {
     expect(candidate?.suggestedPatch).toContain("web.search");
 
     expect(
-      harness.service.updateRepairCandidateValidation(candidate!.candidateId, {
+      await harness.service.updateRepairCandidateValidation(candidate!.candidateId, {
         status: "unexpected" as never,
         summary: "invalid statuses normalize",
       }),
@@ -231,7 +231,7 @@ describe("ImprovementService runtime coverage", () => {
       validationSummary: "invalid statuses normalize",
     });
     expect(
-      harness.service.updateRepairCandidateValidation(candidate!.candidateId, {
+      await harness.service.updateRepairCandidateValidation(candidate!.candidateId, {
         status: "passed",
         summary: "validated by replay",
       }),
@@ -239,15 +239,15 @@ describe("ImprovementService runtime coverage", () => {
       validationStatus: "passed",
       validationSummary: "validated by replay",
     });
-    expect(() =>
+    await expect(
       harness.service.updateRepairCandidateValidation("missing-candidate", {
         status: "passed",
       }),
-    ).toThrow(/Repair candidate not found/);
+    ).rejects.toThrow(/Repair candidate not found/);
   });
 
   it("recovers interrupted replay runs and reads prompt-lab improvement signals", async () => {
-    const harness = createHarness();
+    const harness = await createHarness();
 
     harness.service.startScheduler();
     harness.service.startScheduler();
@@ -278,8 +278,8 @@ describe("ImprovementService runtime coverage", () => {
       )
       .run();
 
-    harness.service.markInterruptedDecisionReplayRuns();
-    const [run] = harness.service.listDecisionReplayRuns(5);
+    await harness.service.markInterruptedDecisionReplayRuns();
+    const [run] = await harness.service.listDecisionReplayRuns(5);
     expect(run).toMatchObject({
       runId: "run-interrupted",
       status: "failed",
@@ -289,7 +289,7 @@ describe("ImprovementService runtime coverage", () => {
       true,
     );
 
-    const signal = harness.service.recordPromptLabRegressionCompletionSignal({
+    const signal = await harness.service.recordPromptLabRegressionCompletionSignal({
       regressionRunId: "regression-signal-read",
       packId: "pack-routing",
       capability: "provider-balance",
@@ -299,16 +299,20 @@ describe("ImprovementService runtime coverage", () => {
     });
 
     expect(signal).toBeDefined();
-    expect(harness.service.getImprovementSignal(signal!.signalId).signalId).toBe(signal!.signalId);
+    expect((await harness.service.getImprovementSignal(signal!.signalId)).signalId).toBe(signal!.signalId);
     expect(
-      harness.service.listImprovementSignals(10, "prompt-lab").some((item) => item.signalId === signal!.signalId),
+      (await harness.service.listImprovementSignals(10, "prompt-lab")).some(
+        (item) => item.signalId === signal!.signalId,
+      ),
     ).toBe(true);
-    expect(harness.service.listImprovementCandidates(10, "prompt-lab").length).toBeGreaterThanOrEqual(1);
-    expect(() => harness.service.getImprovementSignal("missing-signal")).toThrow(/Improvement signal not found/);
+    expect((await harness.service.listImprovementCandidates(10, "prompt-lab")).length).toBeGreaterThanOrEqual(1);
+    await expect(harness.service.getImprovementSignal("missing-signal")).rejects.toThrow(
+      /Improvement signal not found/,
+    );
   });
 
-  it("enriches weekly reports with routing gaps, strategy tags, proposals, and specialists", () => {
-    const harness = createHarness();
+  it("enriches weekly reports with routing gaps, strategy tags, proposals, and specialists", async () => {
+    const harness = await createHarness();
     const runId = "run-report-enrichment";
     const reportId = "report-enrichment";
     const createdAt = "2026-05-10T03:00:00.000Z";
@@ -330,7 +334,7 @@ describe("ImprovementService runtime coverage", () => {
       createdAt,
     };
 
-    harness.service.recordCapabilityGapEvent({
+    await harness.service.recordCapabilityGapEvent({
       sessionId: "sess-gap-report",
       causeClass: "tool_exists_but_not_in_profile",
       requestedTool: "browser.search",
@@ -383,7 +387,7 @@ describe("ImprovementService runtime coverage", () => {
         createdAt,
       });
 
-    const report = harness.service.getImprovementReport(reportId);
+    const report = await harness.service.getImprovementReport(reportId);
 
     expect(report.routingGapSummary?.totalEvents).toBe(1);
     expect(report.routingGapSummary?.topRequestedTools).toEqual(["browser.search"]);
@@ -396,13 +400,13 @@ describe("ImprovementService runtime coverage", () => {
     expect(report.proposalDrafts?.some((item) => item.kind === "routing_rule")).toBe(true);
     expect(report.proposalDrafts?.some((item) => item.kind === "playbook")).toBe(true);
     expect(report.strategyTags?.some((item) => item.tag === "repair")).toBe(true);
-    expect(harness.service.listImprovementReports(10)[0]?.reportId).toBe(reportId);
-    expect(harness.service.getDecisionReplayRun(runId).report?.reportId).toBe(reportId);
-    expect(() => harness.service.getImprovementReport("missing-report")).toThrow(/not found/);
+    expect((await harness.service.listImprovementReports(10))[0]?.reportId).toBe(reportId);
+    expect((await harness.service.getDecisionReplayRun(runId)).report?.reportId).toBe(reportId);
+    await expect(harness.service.getImprovementReport("missing-report")).rejects.toThrow(/not found/);
   });
 
-  it("records agentic diagnostics as idempotent governed improvement evidence", () => {
-    const harness = createHarness();
+  it("records agentic diagnostics as idempotent governed improvement evidence", async () => {
+    const harness = await createHarness();
     const task = harness.storage.tasks.create({
       workspaceId: "default",
       title: "Agentic run with timeout",
@@ -428,8 +432,8 @@ describe("ImprovementService runtime coverage", () => {
       createdAt: "2026-05-05T12:00:00.000Z",
     } as const;
 
-    const signal = harness.service.recordAgenticDiagnosticSignal({ task, diagnostic });
-    const replay = harness.service.recordAgenticDiagnosticSignal({ task, diagnostic });
+    const signal = await harness.service.recordAgenticDiagnosticSignal({ task, diagnostic });
+    const replay = await harness.service.recordAgenticDiagnosticSignal({ task, diagnostic });
 
     expect(signal).toBeDefined();
     expect(replay?.signalId).toBe(signal?.signalId);
@@ -456,9 +460,9 @@ describe("ImprovementService runtime coverage", () => {
   });
 
   it("persists agentic bridge proposals as review-first candidates without applying mutations", async () => {
-    const harness = createHarness();
+    const harness = await createHarness();
 
-    const [result] = harness.service.recordAgenticImprovementProposals(
+    const [result] = await harness.service.recordAgenticImprovementProposals(
       {
         missingCapabilities: [
           {
@@ -489,7 +493,7 @@ describe("ImprovementService runtime coverage", () => {
     });
     expect(result?.signal.metadata?.mutationApplied).toBe(false);
 
-    const detail = harness.service.getImprovementCandidateDetail(result!.candidate!.candidateId);
+    const detail = await harness.service.getImprovementCandidateDetail(result!.candidate!.candidateId);
     expect(detail.currentRevision?.candidateRef.metadata?.mutationApplied).toBe(false);
     expect(
       (detail.currentRevision?.candidateRef.metadata?.proposedChange as { mutationApplied?: boolean } | undefined)
@@ -503,7 +507,7 @@ describe("ImprovementService runtime coverage", () => {
   });
 });
 
-function createHarness(): Harness {
+async function createHarness(): Promise<Harness> {
   const rootDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "gc-improvement-runtime-"));
   const transcriptsDir = path.join(rootDir, "transcripts");
   const auditDir = path.join(rootDir, "audit");
@@ -519,7 +523,7 @@ function createHarness(): Harness {
   const repairPolicies: Record<string, unknown> = {};
   const routingPolicies: Record<string, unknown> = {};
   const ctx: ServiceContext = {
-    storage,
+    storage: createLocalAsyncStorage(storage),
     cronSpecOwner: {
       reconcileSpec: async (cronSpec) => storage.cronJobs.reconcileSpec(cronSpec),
     },
@@ -527,7 +531,7 @@ function createHarness(): Harness {
     llmService: {} as never,
     policyEngine: {} as never,
     gatewaySql: storage.gatewaySql,
-    publishRealtime: (eventType, source, payload) => {
+    publishRealtime: async (eventType, source, payload) => {
       published.push({ eventType, source, payload });
     },
     requireFeatureEnabled: () => undefined,
@@ -586,6 +590,7 @@ function createHarness(): Harness {
   } as unknown as ImprovementServiceCallbacks;
 
   const service = new ImprovementService(ctx, callbacks);
+  await service.initialize();
   const harness = { rootDir, storage, service, callbacks, routingPolicies, repairPolicies, published };
   harnesses.push(harness);
   return harness;

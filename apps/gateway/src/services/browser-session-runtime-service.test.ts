@@ -10,16 +10,16 @@ describe("BrowserSessionRuntimeService", () => {
     db = undefined;
   });
 
-  it("creates local sessions, enforces scoped grants, and records events", () => {
+  it("creates local sessions, enforces scoped grants, and records events", async () => {
     db = new DatabaseSync(":memory:");
     const service = new BrowserSessionRuntimeService({ gatewaySql: db });
-    const session = service.createSession({ actorId: "operator", label: "Review browser" });
+    const session = await service.createSession({ actorId: "operator", label: "Review browser" });
 
-    expect(() =>
+    await expect(
       service.assertAccess({ sessionId: session.sessionId, actorId: "agent", requiredScope: "read" }),
-    ).toThrow(/does not grant read access/i);
+    ).rejects.toThrow(/does not grant read access/i);
 
-    const grant = service.createGrant(
+    const grant = await service.createGrant(
       session.sessionId,
       {
         actorId: "agent",
@@ -30,9 +30,9 @@ describe("BrowserSessionRuntimeService", () => {
     );
 
     expect(grant.allowedHosts).toEqual(["example.com"]);
-    expect(service.listGrants(session.sessionId, { status: "active" })).toHaveLength(1);
-    expect(service.listGrants(session.sessionId, { status: "revoked" })).toHaveLength(0);
-    expect(() =>
+    await expect(service.listGrants(session.sessionId, { status: "active" })).resolves.toHaveLength(1);
+    await expect(service.listGrants(session.sessionId, { status: "revoked" })).resolves.toHaveLength(0);
+    await expect(
       service.assertAccess({
         sessionId: session.sessionId,
         actorId: "agent",
@@ -41,24 +41,23 @@ describe("BrowserSessionRuntimeService", () => {
         toolName: "browser.navigate",
         runId: "run-browser-1",
       }),
-    ).not.toThrow();
-    expect(() =>
+    ).resolves.toBeUndefined();
+    await expect(
       service.assertAccess({
         sessionId: session.sessionId,
         actorId: "agent",
         requiredScope: "interact",
         host: "example.com",
       }),
-    ).toThrow(/does not grant interact access/i);
-    service.revokeGrant(session.sessionId, grant.grantId, "operator");
-    expect(service.listGrants(session.sessionId, { status: "active" })).toHaveLength(0);
-    expect(service.listGrants(session.sessionId, { status: "revoked" })).toHaveLength(1);
-    const grantCreatedEvent = service
-      .listEvents(session.sessionId)
-      .find((event) => event.eventType === "grant_created" && event.payload.grantId === grant.grantId);
-    const toolAccessEvent = service
-      .listEvents(session.sessionId)
-      .find((event) => event.eventType === "tool_access_granted");
+    ).rejects.toThrow(/does not grant interact access/i);
+    await service.revokeGrant(session.sessionId, grant.grantId, "operator");
+    await expect(service.listGrants(session.sessionId, { status: "active" })).resolves.toHaveLength(0);
+    await expect(service.listGrants(session.sessionId, { status: "revoked" })).resolves.toHaveLength(1);
+    const events = await service.listEvents(session.sessionId);
+    const grantCreatedEvent = events.find(
+      (event) => event.eventType === "grant_created" && event.payload.grantId === grant.grantId,
+    );
+    const toolAccessEvent = events.find((event) => event.eventType === "tool_access_granted");
     expect(grantCreatedEvent).toMatchObject({
       actorId: "operator",
       payload: {
@@ -76,16 +75,16 @@ describe("BrowserSessionRuntimeService", () => {
     });
   });
 
-  it("revokes active grants when a session closes", () => {
+  it("revokes active grants when a session closes", async () => {
     db = new DatabaseSync(":memory:");
     const service = new BrowserSessionRuntimeService({ gatewaySql: db });
-    const session = service.createSession({ actorId: "operator" });
-    service.createGrant(session.sessionId, { actorId: "agent", scopes: ["admin"] });
+    const session = await service.createSession({ actorId: "operator" });
+    await service.createGrant(session.sessionId, { actorId: "agent", scopes: ["admin"] });
 
-    service.closeSession(session.sessionId, "operator");
+    await service.closeSession(session.sessionId, "operator");
 
-    expect(service.getSession(session.sessionId)).toMatchObject({ status: "closed" });
-    expect(() =>
+    await expect(service.getSession(session.sessionId)).resolves.toMatchObject({ status: "closed" });
+    await expect(
       service.assertAccess({
         sessionId: session.sessionId,
         actorId: "agent",
@@ -93,8 +92,8 @@ describe("BrowserSessionRuntimeService", () => {
         toolName: "browser.extract",
         runId: "run-closed-browser",
       }),
-    ).toThrow(/closed/i);
-    expect(service.listEvents(session.sessionId)).toEqual(
+    ).rejects.toThrow(/closed/i);
+    expect(await service.listEvents(session.sessionId)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           eventType: "tool_guard_blocked",
@@ -109,7 +108,7 @@ describe("BrowserSessionRuntimeService", () => {
     );
   });
 
-  it("projects volatile browser state without exposing stored values", () => {
+  it("projects volatile browser state without exposing stored values", async () => {
     db = new DatabaseSync(":memory:");
     const service = new BrowserSessionRuntimeService({
       gatewaySql: db,
@@ -131,9 +130,13 @@ describe("BrowserSessionRuntimeService", () => {
         },
       }),
     });
-    const session = service.createSession({ actorId: "operator", label: "State browser" });
-    service.createGrant(session.sessionId, { actorId: "agent", scopes: ["state"], allowedHosts: ["example.com"] });
-    service.assertAccess({
+    const session = await service.createSession({ actorId: "operator", label: "State browser" });
+    await service.createGrant(session.sessionId, {
+      actorId: "agent",
+      scopes: ["state"],
+      allowedHosts: ["example.com"],
+    });
+    await service.assertAccess({
       sessionId: session.sessionId,
       actorId: "agent",
       requiredScope: "state",
@@ -142,7 +145,7 @@ describe("BrowserSessionRuntimeService", () => {
       runId: "run-state",
     });
 
-    const projection = service.getStateProjection(session.sessionId);
+    const projection = await service.getStateProjection(session.sessionId);
 
     expect(projection.session).toMatchObject({ sessionId: session.sessionId, label: "State browser" });
     expect(projection.state).toMatchObject({
@@ -166,12 +169,12 @@ describe("BrowserSessionRuntimeService", () => {
     expect(JSON.stringify(projection)).not.toContain("secret");
   });
 
-  it("returns an explicit unavailable state when volatile state is absent", () => {
+  it("returns an explicit unavailable state when volatile state is absent", async () => {
     db = new DatabaseSync(":memory:");
     const service = new BrowserSessionRuntimeService({ gatewaySql: db });
-    const session = service.createSession({ actorId: "operator" });
+    const session = await service.createSession({ actorId: "operator" });
 
-    expect(service.getStateProjection(session.sessionId).state).toMatchObject({
+    expect((await service.getStateProjection(session.sessionId)).state).toMatchObject({
       availability: "not_available",
       valuesHidden: true,
       cookies: { count: 0, domains: [] },

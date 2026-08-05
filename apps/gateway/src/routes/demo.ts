@@ -71,9 +71,9 @@ async function bootstrapDemo(fastify: FastifyInstance): Promise<DemoBootstrapRes
   };
   const notes: string[] = [];
 
-  let workspace = findDemoWorkspace(fastify);
+  let workspace = await findDemoWorkspace(fastify);
   if (!workspace) {
-    workspace = fastify.services.workspaces.createWorkspace({
+    workspace = await fastify.services.workspaces.createWorkspace({
       name: DEMO_WORKSPACE_NAME,
       description: "Safe local demo workspace for exploring GoatCitadel without provider or channel credentials.",
       slug: DEMO_WORKSPACE_SLUG,
@@ -88,34 +88,31 @@ async function bootstrapDemo(fastify: FastifyInstance): Promise<DemoBootstrapRes
     });
     created.workspace = true;
   } else if (workspace.lifecycleStatus === "archived") {
-    workspace = fastify.services.workspaces.restoreWorkspace(
-      workspace.workspaceId,
-      workspace.revision,
-    ) as WorkspaceRecord;
+    workspace = await fastify.services.workspaces.restoreWorkspace(workspace.workspaceId, workspace.revision);
     notes.push("Restored the existing archived demo workspace.");
   }
   if (!workspace) {
     throw new Error("Demo workspace could not be created.");
   }
 
-  let project = findDemoProject(fastify, workspace.workspaceId);
+  let project = await findDemoProject(fastify, workspace.workspaceId);
   if (!project) {
-    project = fastify.services.chatProjects.createChatProject({
+    project = await fastify.services.chatProjects.createChatProject({
       workspaceId: workspace.workspaceId,
       name: DEMO_PROJECT_NAME,
       description: "A sample project for conversation, agentic planning, and governed code-capability work in Chat.",
       workspacePath: DEMO_PROJECT_PATH,
       color: "#14b8a6",
-    }) as ChatProjectRecord;
+    });
     created.project = true;
   }
   if (!project) {
     throw new Error("Demo project could not be created.");
   }
 
-  const chatSession = ensureDemoSession(fastify, workspace.workspaceId, project.projectId, created);
+  const chatSession = await ensureDemoSession(fastify, workspace.workspaceId, project.projectId, created);
 
-  const coworkTask = ensureDemoTask(fastify, workspace.workspaceId, {
+  const coworkTask = await ensureDemoTask(fastify, workspace.workspaceId, {
     title: "Demo agentic mission: launch readiness",
     description:
       "Use Chat to decompose a launch task, expose blockers, and keep approvals and evidence visible to the operator.",
@@ -124,7 +121,7 @@ async function bootstrapDemo(fastify: FastifyInstance): Promise<DemoBootstrapRes
   });
   if (coworkTask.created) {
     created.coworkTask = true;
-    fastify.services.tasks.appendTaskActivity(coworkTask.task.taskId, {
+    await fastify.services.tasks.appendTaskActivity(coworkTask.task.taskId, {
       activityType: "comment",
       agentId: "demo",
       message: "Demo task created to show agentic planning, blockers, and deliverables in Chat.",
@@ -139,7 +136,7 @@ async function bootstrapDemo(fastify: FastifyInstance): Promise<DemoBootstrapRes
     );
   }
 
-  const codeTask = ensureDemoTask(fastify, workspace.workspaceId, {
+  const codeTask = await ensureDemoTask(fastify, workspace.workspaceId, {
     title: "Demo code-capability mission: validate a small change",
     description: "Use Chat to inspect a patch, run targeted validation, export a diff, and hand off risk notes.",
     status: "inbox",
@@ -147,7 +144,7 @@ async function bootstrapDemo(fastify: FastifyInstance): Promise<DemoBootstrapRes
   });
   if (codeTask.created) {
     created.codeTask = true;
-    fastify.services.tasks.appendTaskDeliverable(codeTask.task.taskId, {
+    await fastify.services.tasks.appendTaskDeliverable(codeTask.task.taskId, {
       deliverableType: "url",
       title: "White paper",
       path: "docs/goatcitadel-whitepaper.html",
@@ -157,7 +154,7 @@ async function bootstrapDemo(fastify: FastifyInstance): Promise<DemoBootstrapRes
 
   const memorySeed = MEMORY_SEEDS[0]!;
   try {
-    const existingMemory = fastify.services.memory.listItems({
+    const existingMemory = await fastify.services.memory.listItems({
       namespace: memorySeed.namespace,
       query: memorySeed.title,
       status: "active",
@@ -202,7 +199,7 @@ async function bootstrapDemo(fastify: FastifyInstance): Promise<DemoBootstrapRes
 }
 
 async function readDemoState(fastify: FastifyInstance): Promise<DemoBootstrapStateResponse> {
-  const workspace = findDemoWorkspace(fastify);
+  const workspace = await findDemoWorkspace(fastify);
   if (!workspace || workspace.lifecycleStatus === "archived") {
     return {
       status: "not_started",
@@ -214,9 +211,9 @@ async function readDemoState(fastify: FastifyInstance): Promise<DemoBootstrapSta
       notes: ["Demo workspace has not been created yet."],
     };
   }
-  const project = findDemoProject(fastify, workspace.workspaceId);
-  const demoSessions = (fastify.services.chatSessions
-    .listChatSessions({
+  const project = await findDemoProject(fastify, workspace.workspaceId);
+  const demoSessions = (
+    await fastify.services.chatSessions.listChatSessions({
       workspaceId: workspace.workspaceId,
       projectId: project?.projectId,
       tag: DEMO_TAG,
@@ -224,12 +221,12 @@ async function readDemoState(fastify: FastifyInstance): Promise<DemoBootstrapSta
       includeHidden: true,
       limit: 20,
     })
-    .filter((item: ChatSessionRecord) => item.mode === "chat") ?? []) as ChatSessionRecord[];
+  ).filter((item: ChatSessionRecord) => item.mode === "chat") as ChatSessionRecord[];
   const canonicalSession = demoSessions.find((item) => item.title === DEMO_CHAT_TITLE) ?? demoSessions[0];
   const sessions = canonicalSession ? [canonicalSession] : [];
-  const tasks = (fastify.services.tasks
-    .listTasks(100, undefined, undefined, "all", workspace.workspaceId)
-    .filter((item: TaskRecord) => item.title.startsWith("Demo ")) ?? []) as TaskRecord[];
+  const tasks = (
+    await fastify.services.tasks.listTasks(100, undefined, undefined, "all", workspace.workspaceId)
+  ).filter((item: TaskRecord) => item.title.startsWith("Demo ")) as TaskRecord[];
   return {
     status: project && sessions.length >= 1 && tasks.length >= 2 ? "ready" : "partial",
     workspace: pickWorkspace(workspace),
@@ -245,45 +242,41 @@ async function readDemoState(fastify: FastifyInstance): Promise<DemoBootstrapSta
   };
 }
 
-function findDemoWorkspace(fastify: FastifyInstance): WorkspaceRecord | undefined {
-  return fastify.services.workspaces
-    .listWorkspaces("all", 500)
-    .find((item: WorkspaceRecord) => item.slug === DEMO_WORKSPACE_SLUG || item.name === DEMO_WORKSPACE_NAME) as
-    | WorkspaceRecord
-    | undefined;
+async function findDemoWorkspace(fastify: FastifyInstance): Promise<WorkspaceRecord | undefined> {
+  return (await fastify.services.workspaces.listWorkspaces("all", 500)).find(
+    (item: WorkspaceRecord) => item.slug === DEMO_WORKSPACE_SLUG || item.name === DEMO_WORKSPACE_NAME,
+  );
 }
 
-function findDemoProject(fastify: FastifyInstance, workspaceId: string): ChatProjectRecord | undefined {
-  return fastify.services.chatProjects
-    .listChatProjects("all", 300, workspaceId)
-    .find((item: ChatProjectRecord) => item.name === DEMO_PROJECT_NAME || item.workspacePath === DEMO_PROJECT_PATH) as
-    | ChatProjectRecord
-    | undefined;
+async function findDemoProject(fastify: FastifyInstance, workspaceId: string): Promise<ChatProjectRecord | undefined> {
+  return (await fastify.services.chatProjects.listChatProjects("all", 300, workspaceId)).find(
+    (item: ChatProjectRecord) => item.name === DEMO_PROJECT_NAME || item.workspacePath === DEMO_PROJECT_PATH,
+  );
 }
 
-function ensureDemoSession(
+async function ensureDemoSession(
   fastify: FastifyInstance,
   workspaceId: string,
   projectId: string,
   created: DemoBootstrapResponse["created"],
-): ChatSessionRecord {
-  const existingSessions = fastify.services.chatSessions.listChatSessions({
+): Promise<ChatSessionRecord> {
+  const existingSessions = await fastify.services.chatSessions.listChatSessions({
     workspaceId,
     projectId,
     tag: DEMO_TAG,
     view: "all",
     includeHidden: true,
     limit: 30,
-  }) as ChatSessionRecord[];
+  });
   const existing =
-    existingSessions.find((item) => item.mode === "chat" && item.title === DEMO_CHAT_TITLE) ??
-    existingSessions.find((item) => item.mode === "chat");
+    existingSessions.find((item: ChatSessionRecord) => item.mode === "chat" && item.title === DEMO_CHAT_TITLE) ??
+    existingSessions.find((item: ChatSessionRecord) => item.mode === "chat");
   if (existing) {
     return existing as ChatSessionRecord;
   }
 
   created.chatSession = true;
-  return fastify.services.chatSessions.createChatSession({
+  return await fastify.services.chatSessions.createChatSession({
     workspaceId,
     projectId,
     mode: "chat",
@@ -291,10 +284,10 @@ function ensureDemoSession(
     includeInHistory: true,
     title: DEMO_CHAT_TITLE,
     tags: [DEMO_TAG],
-  }) as ChatSessionRecord;
+  });
 }
 
-function ensureDemoTask(
+async function ensureDemoTask(
   fastify: FastifyInstance,
   workspaceId: string,
   input: {
@@ -303,22 +296,22 @@ function ensureDemoTask(
     status: TaskRecord["status"];
     priority: TaskRecord["priority"];
   },
-): { task: TaskRecord; created: boolean } {
-  const existing = fastify.services.tasks
-    .listTasks(100, undefined, undefined, "all", workspaceId)
-    .find((item: TaskRecord) => item.title === input.title) as TaskRecord | undefined;
+): Promise<{ task: TaskRecord; created: boolean }> {
+  const existing = (await fastify.services.tasks.listTasks(100, undefined, undefined, "all", workspaceId)).find(
+    (item: TaskRecord) => item.title === input.title,
+  );
   if (existing) {
     return { task: existing as TaskRecord, created: false };
   }
   return {
-    task: fastify.services.tasks.createTask({
+    task: await fastify.services.tasks.createTask({
       workspaceId,
       title: input.title,
       description: input.description,
       status: input.status,
       priority: input.priority,
       createdBy: "demo-bootstrap",
-    }) as TaskRecord,
+    }),
     created: true,
   };
 }
@@ -334,7 +327,7 @@ async function ensureFirstRunGovernedJob(
     return { task, created: false, durableBacked: true };
   }
 
-  const existingApproval = findFirstRunDemoApproval(fastify, task.taskId);
+  const existingApproval = await findFirstRunDemoApproval(fastify, task.taskId);
   const approval =
     existingApproval ??
     (await fastify.services.approvals.createApproval({
@@ -364,7 +357,7 @@ async function ensureFirstRunGovernedJob(
     }));
   const durableRunId = approval.linkage?.durableRunId ?? approval.linkage?.runId;
   if (!durableRunId) {
-    fastify.services.tasks.appendTaskActivity(task.taskId, {
+    await fastify.services.tasks.appendTaskActivity(task.taskId, {
       activityType: "control",
       agentId: "demo-bootstrap",
       message:
@@ -380,7 +373,7 @@ async function ensureFirstRunGovernedJob(
 
   const agenticStatus = mapDemoApprovalStatusToAgenticStatus(approval.status);
   const taskStatus = mapDemoApprovalStatusToTaskStatus(approval.status);
-  const updated = fastify.services.tasks.updateTask(task.taskId, {
+  const updated = await fastify.services.tasks.updateTask(task.taskId, {
     status: taskStatus,
     agenticContext: {
       ...(task.agenticContext ?? {}),
@@ -395,7 +388,7 @@ async function ensureFirstRunGovernedJob(
       diagnostics: task.agenticContext?.diagnostics ?? [],
     },
   });
-  fastify.services.tasks.appendTaskActivity(task.taskId, {
+  await fastify.services.tasks.appendTaskActivity(task.taskId, {
     activityType: "control",
     agentId: "demo-bootstrap",
     message: getDemoApprovalActivityMessage(approval.status),
@@ -408,18 +401,19 @@ async function ensureFirstRunGovernedJob(
     },
   });
 
-  return { task: updated as TaskRecord, created: !existingApproval, durableBacked: true };
+  return { task: updated, created: !existingApproval, durableBacked: true };
 }
 
-function findFirstRunDemoApproval(fastify: FastifyInstance, taskId: string): ApprovalRequest | undefined {
-  return fastify.services.approvals
-    .listApprovals(undefined, 500)
-    .find(
-      (approval) =>
-        approval.kind === "demo.first_run" &&
-        approval.linkage?.taskId === taskId &&
-        approval.linkage?.actionType === "demo.first_run",
-    );
+async function findFirstRunDemoApproval(
+  fastify: FastifyInstance,
+  taskId: string,
+): Promise<ApprovalRequest | undefined> {
+  return (await fastify.services.approvals.listApprovals(undefined, 500)).find(
+    (approval) =>
+      approval.kind === "demo.first_run" &&
+      approval.linkage?.taskId === taskId &&
+      approval.linkage?.actionType === "demo.first_run",
+  );
 }
 
 function mapDemoApprovalStatusToAgenticStatus(status: ApprovalRequest["status"]) {

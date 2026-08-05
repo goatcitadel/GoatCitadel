@@ -2,7 +2,7 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Storage } from "@goatcitadel/storage";
+import { createLocalAsyncStorage, Storage } from "@goatcitadel/storage";
 import type { ImprovementRef, RealtimeEvent } from "@goatcitadel/contracts";
 import {
   ImprovementService,
@@ -38,8 +38,8 @@ afterEach(() => {
 });
 
 describe("ImprovementService recordSurfaceRouteOverrideSignal", () => {
-  it("persists a surface-route override as a human negative signal with the expected shape", () => {
-    const harness = createHarness();
+  it("persists a surface-route override as a human negative signal with the expected shape", async () => {
+    const harness = await createHarness();
 
     const input: SurfaceRouteOverrideSignalInput = {
       citadelId: "personal",
@@ -52,7 +52,7 @@ describe("ImprovementService recordSurfaceRouteOverrideSignal", () => {
       promptFeatureHash: "abc123",
     };
 
-    harness.service.recordSurfaceRouteOverrideSignal(input);
+    await harness.service.recordSurfaceRouteOverrideSignal(input);
 
     // Read the signal back by listing all signals in the DB
     const row = harness.storage.gatewaySql
@@ -70,10 +70,10 @@ describe("ImprovementService recordSurfaceRouteOverrideSignal", () => {
     expect(fingerprint).toContain("chat");
   });
 
-  it("returns void and does not throw on a valid input", () => {
-    const harness = createHarness();
+  it("returns void and does not throw on a valid input", async () => {
+    const harness = await createHarness();
 
-    const result = harness.service.recordSurfaceRouteOverrideSignal({
+    const result = await harness.service.recordSurfaceRouteOverrideSignal({
       citadelId: "personal",
       workspaceId: "default",
       sessionId: "s2",
@@ -89,8 +89,8 @@ describe("ImprovementService recordSurfaceRouteOverrideSignal", () => {
 });
 
 describe("ImprovementService listSurfaceRouteOverrideExemplars", () => {
-  it("returns only exemplars for the requested citadel", () => {
-    const harness = createHarness();
+  it("returns only exemplars for the requested citadel", async () => {
+    const harness = await createHarness();
 
     const alphaBase: Omit<
       SurfaceRouteOverrideSignalInput,
@@ -108,7 +108,7 @@ describe("ImprovementService listSurfaceRouteOverrideExemplars", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2026-07-05T00:00:00.000Z"));
-      harness.service.recordSurfaceRouteOverrideSignal({
+      await harness.service.recordSurfaceRouteOverrideSignal({
         ...alphaBase,
         sessionId: "s-alpha-1",
         turnId: "t-alpha-1",
@@ -117,7 +117,7 @@ describe("ImprovementService listSurfaceRouteOverrideExemplars", () => {
         promptFeatureHash: "h1",
       });
       vi.setSystemTime(new Date("2026-07-05T00:00:00.050Z"));
-      harness.service.recordSurfaceRouteOverrideSignal({
+      await harness.service.recordSurfaceRouteOverrideSignal({
         ...alphaBase,
         sessionId: "s-alpha-2",
         turnId: "t-alpha-2",
@@ -126,7 +126,7 @@ describe("ImprovementService listSurfaceRouteOverrideExemplars", () => {
         promptFeatureHash: "h2",
       });
       vi.setSystemTime(new Date("2026-07-05T00:00:00.100Z"));
-      harness.service.recordSurfaceRouteOverrideSignal({
+      await harness.service.recordSurfaceRouteOverrideSignal({
         citadelId: "beta",
         workspaceId: "default",
         sessionId: "s-beta-1",
@@ -140,7 +140,7 @@ describe("ImprovementService listSurfaceRouteOverrideExemplars", () => {
       vi.useRealTimers();
     }
 
-    const exemplars: SurfaceRouteOverrideExemplar[] = harness.service.listSurfaceRouteOverrideExemplars("alpha");
+    const exemplars: SurfaceRouteOverrideExemplar[] = await harness.service.listSurfaceRouteOverrideExemplars("alpha");
 
     expect(exemplars).toHaveLength(2);
     // Most recent first — cowork→code was recorded last
@@ -156,10 +156,10 @@ describe("ImprovementService listSurfaceRouteOverrideExemplars", () => {
     expect(hasBeta).toBe(false);
   });
 
-  it("respects the limit parameter", () => {
+  it("respects the limit parameter", async () => {
     vi.useFakeTimers();
     try {
-      const harness = createHarness();
+      const harness = await createHarness();
 
       const base: Omit<
         SurfaceRouteOverrideSignalInput,
@@ -171,7 +171,7 @@ describe("ImprovementService listSurfaceRouteOverrideExemplars", () => {
       };
 
       vi.setSystemTime(new Date("2025-01-01T00:00:00.000Z"));
-      harness.service.recordSurfaceRouteOverrideSignal({
+      await harness.service.recordSurfaceRouteOverrideSignal({
         ...base,
         sessionId: "s1",
         turnId: "t1",
@@ -181,7 +181,7 @@ describe("ImprovementService listSurfaceRouteOverrideExemplars", () => {
       });
 
       vi.setSystemTime(new Date("2025-01-01T00:00:01.000Z"));
-      harness.service.recordSurfaceRouteOverrideSignal({
+      await harness.service.recordSurfaceRouteOverrideSignal({
         ...base,
         sessionId: "s2",
         turnId: "t2",
@@ -190,7 +190,7 @@ describe("ImprovementService listSurfaceRouteOverrideExemplars", () => {
         promptFeatureHash: "h2",
       });
 
-      const limited = harness.service.listSurfaceRouteOverrideExemplars("alpha", 1);
+      const limited = await harness.service.listSurfaceRouteOverrideExemplars("alpha", 1);
       expect(limited).toHaveLength(1);
       expect(limited[0]).toMatchObject({ fromMode: "cowork", toMode: "code" });
     } finally {
@@ -198,16 +198,16 @@ describe("ImprovementService listSurfaceRouteOverrideExemplars", () => {
     }
   });
 
-  it("returns an empty array when no signals exist for the citadel", () => {
-    const harness = createHarness();
-    const exemplars = harness.service.listSurfaceRouteOverrideExemplars("nonexistent");
+  it("returns an empty array when no signals exist for the citadel", async () => {
+    const harness = await createHarness();
+    const exemplars = await harness.service.listSurfaceRouteOverrideExemplars("nonexistent");
     expect(exemplars).toEqual([]);
   });
 });
 
 describe("ImprovementService surface_route_override synthesizes routing_policy candidate", () => {
-  it("synthesizes a routing_policy candidate after threshold-meeting override signals", () => {
-    const harness = createHarness();
+  it("synthesizes a routing_policy candidate after threshold-meeting override signals", async () => {
+    const harness = await createHarness();
 
     const base = {
       citadelId: "alpha",
@@ -219,10 +219,10 @@ describe("ImprovementService surface_route_override synthesizes routing_policy c
     };
 
     // Two signals with the same fingerprint satisfy requiredCount=2 (low-volume workspace)
-    harness.service.recordSurfaceRouteOverrideSignal({ ...base, sessionId: "s1", turnId: "t1" });
-    harness.service.recordSurfaceRouteOverrideSignal({ ...base, sessionId: "s2", turnId: "t2" });
+    await harness.service.recordSurfaceRouteOverrideSignal({ ...base, sessionId: "s1", turnId: "t1" });
+    await harness.service.recordSurfaceRouteOverrideSignal({ ...base, sessionId: "s2", turnId: "t2" });
 
-    const candidates = harness.service.listImprovementCandidates(100, "default");
+    const candidates = await harness.service.listImprovementCandidates(100, "default");
     const routingCandidate = candidates.find((c) => c.kind === "routing_policy");
 
     expect(routingCandidate).toBeDefined();
@@ -253,7 +253,7 @@ interface GovernedHarness extends Harness {
   };
 }
 
-function createGovernedHarness(): GovernedHarness {
+async function createGovernedHarness(): Promise<GovernedHarness> {
   const rootDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "gc-improvement-governed-"));
   const transcriptsDir = path.join(rootDir, "transcripts");
   const auditDir = path.join(rootDir, "audit");
@@ -278,9 +278,9 @@ function createGovernedHarness(): GovernedHarness {
     behavior: { applyMode: "target", restoreMode: "snapshot" } as GovernedHarness["behavior"],
   };
   const ctx: ImprovementServiceContext = {
-    storage,
+    storage: createLocalAsyncStorage(storage),
     gatewaySql: storage.gatewaySql,
-    publishRealtime: (channel, topic, payload, realtimeOptions) => {
+    publishRealtime: async (channel, topic, payload, realtimeOptions) => {
       published.push({ channel, topic, payload, options: realtimeOptions });
     },
     requireFeatureEnabled: () => undefined,
@@ -357,12 +357,13 @@ function createGovernedHarness(): GovernedHarness {
 
   harness.callbacks = callbacks;
   harness.service = new ImprovementService(ctx, callbacks);
+  await harness.service.initialize();
   harnesses.push(harness);
   return harness;
 }
 
-function createReadyRoutingCandidate(harness: GovernedHarness, suffix = "1") {
-  harness.service.recordPromptLabRegressionCompletionSignal({
+async function createReadyRoutingCandidate(harness: GovernedHarness, suffix = "1") {
+  await harness.service.recordPromptLabRegressionCompletionSignal({
     regressionRunId: `regression-governed-${suffix}`,
     packId: "pack-routing",
     capability: suffix === "1" ? "provider-balance" : `provider-balance-${suffix}`,
@@ -370,9 +371,9 @@ function createReadyRoutingCandidate(harness: GovernedHarness, suffix = "1") {
     passDelta: -0.2,
     latencyDeltaMs: 35,
   });
-  const candidate = harness.service
-    .listImprovementCandidates(50, "prompt-lab")
-    .find((item) => item.kind === "routing_policy" && item.status === "ready_for_approval");
+  const candidate = (await harness.service.listImprovementCandidates(50, "prompt-lab")).find(
+    (item) => item.kind === "routing_policy" && item.status === "ready_for_approval",
+  );
   expect(candidate).toBeDefined();
   return candidate!;
 }
@@ -385,23 +386,28 @@ function approve(harness: GovernedHarness, approvalId: string, resolvedBy = "res
   });
 }
 
-function requestActivation(harness: GovernedHarness, candidateId: string): ImprovementLifecyclePendingApproval {
-  const outcome = harness.service.requestImprovementActivationApproval(candidateId, { requesterId: "operator-7" });
+async function requestActivation(
+  harness: GovernedHarness,
+  candidateId: string,
+): Promise<ImprovementLifecyclePendingApproval> {
+  const outcome = await harness.service.requestImprovementActivationApproval(candidateId, {
+    requesterId: "operator-7",
+  });
   return outcome.pendingApproval;
 }
 
-function executeApproved(harness: GovernedHarness, approvalId: string) {
-  return harness.service.executeApprovedImprovementLifecycleMutation({ workspaceId: "prompt-lab", approvalId });
+async function executeApproved(harness: GovernedHarness, approvalId: string) {
+  return await harness.service.executeApprovedImprovementLifecycleMutation({ workspaceId: "prompt-lab", approvalId });
 }
 
 async function waitForLeaseExpiry(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 450));
 }
 
-function activateApplied(harness: GovernedHarness, candidateId: string) {
-  const pending = requestActivation(harness, candidateId);
+async function activateApplied(harness: GovernedHarness, candidateId: string) {
+  const pending = await requestActivation(harness, candidateId);
   approve(harness, pending.approvalId);
-  const applied = executeApproved(harness, pending.approvalId);
+  const applied = await executeApproved(harness, pending.approvalId);
   expect(applied.disposition).toBe("applied");
   expect(applied.activationId).toBeDefined();
   return { pending, applied };
@@ -415,25 +421,25 @@ function countRows(harness: GovernedHarness, table: string, where = "1=1", param
 }
 
 describe("HX-402 P3 governed improvement activation", () => {
-  it("activation request is approval-first: it never mutates and byte-exact replays converge on one approval", () => {
-    const harness = createGovernedHarness();
-    const candidate = createReadyRoutingCandidate(harness);
+  it("activation request is approval-first: it never mutates and byte-exact replays converge on one approval", async () => {
+    const harness = await createGovernedHarness();
+    const candidate = await createReadyRoutingCandidate(harness);
 
-    const first = requestActivation(harness, candidate.candidateId);
+    const first = await requestActivation(harness, candidate.candidateId);
     expect(first.kind).toBe("improvement.lifecycle");
     expect(first.operationKind).toBe("activate");
     expect(first.replayed).toBe(false);
     // Nothing mutated: no external policy write, no activation row, no candidate transition.
     expect(harness.policies).toEqual({});
     expect(countRows(harness, "improvement_activations")).toBe(0);
-    expect(harness.service.listImprovementCandidates(50, "prompt-lab")[0]?.status).toBe("ready_for_approval");
+    expect((await harness.service.listImprovementCandidates(50, "prompt-lab"))[0]?.status).toBe("ready_for_approval");
     // Requester Journey evidence committed with the approval.
     const evidence = harness.storage.governanceJourneyEvents.findByIdempotencyKey(
       `improvement:lifecycle:request:${first.approvalId}`,
     );
     expect(evidence).toMatchObject({ actorId: "operator-7", approvalId: first.approvalId });
 
-    const replay = requestActivation(harness, candidate.candidateId);
+    const replay = await requestActivation(harness, candidate.candidateId);
     expect(replay.approvalId).toBe(first.approvalId);
     expect(replay.replayed).toBe(true);
     expect(
@@ -443,13 +449,13 @@ describe("HX-402 P3 governed improvement activation", () => {
     ).toBe(1);
   });
 
-  it("the recovered effect creates the durable intent and settles activation state, settlement, signal, and Journey together", () => {
-    const harness = createGovernedHarness();
-    const candidate = createReadyRoutingCandidate(harness);
-    const pending = requestActivation(harness, candidate.candidateId);
+  it("the recovered effect creates the durable intent and settles activation state, settlement, signal, and Journey together", async () => {
+    const harness = await createGovernedHarness();
+    const candidate = await createReadyRoutingCandidate(harness);
+    const pending = await requestActivation(harness, candidate.candidateId);
     approve(harness, pending.approvalId);
 
-    const applied = executeApproved(harness, pending.approvalId);
+    const applied = await executeApproved(harness, pending.approvalId);
 
     expect(applied).toMatchObject({ disposition: "applied", operationKind: "activate", replayed: false });
     expect(harness.applyCalls).toBe(1);
@@ -460,9 +466,9 @@ describe("HX-402 P3 governed improvement activation", () => {
       countRows(harness, "improvement_lifecycle_operation_settlements", "operation_id = ?", [applied.operationId]),
     ).toBe(1);
     // Canonical activation row + candidate transition committed.
-    const activation = harness.service.getImprovementActivation(applied.activationId!);
+    const activation = await harness.service.getImprovementActivation(applied.activationId!);
     expect(activation).toMatchObject({ status: "active", watchStatus: "watching", approvalId: pending.approvalId });
-    expect(harness.service.listImprovementCandidates(50, "prompt-lab")[0]?.status).toBe("approved");
+    expect((await harness.service.listImprovementCandidates(50, "prompt-lab"))[0]?.status).toBe("approved");
     // Canonical signal + Journey settlement evidence.
     expect(countRows(harness, "improvement_signals", "signal_kind = 'activation_applied'")).toBe(1);
     expect(
@@ -472,19 +478,19 @@ describe("HX-402 P3 governed improvement activation", () => {
     ).toMatchObject({ action: "activate_applied", actorType: "approval_effect" });
 
     // Exact replay converges with zero re-mutation and zero duplicate callbacks.
-    const replay = executeApproved(harness, pending.approvalId);
+    const replay = await executeApproved(harness, pending.approvalId);
     expect(replay).toMatchObject({ disposition: "applied", replayed: true, settlementId: applied.settlementId });
     expect(harness.applyCalls).toBe(1);
   });
 
-  it("refuses stale/original approval reuse: pause and rollback demand their own fresh approvals", () => {
-    const harness = createGovernedHarness();
-    const candidate = createReadyRoutingCandidate(harness);
-    const { pending, applied } = activateApplied(harness, candidate.candidateId);
+  it("refuses stale/original approval reuse: pause and rollback demand their own fresh approvals", async () => {
+    const harness = await createGovernedHarness();
+    const candidate = await createReadyRoutingCandidate(harness);
+    const { pending, applied } = await activateApplied(harness, candidate.candidateId);
 
     // A pause request NEVER rides the activation approval: it commits a fresh
     // deterministic approval with its own identity.
-    const pauseOutcome = harness.service.requestImprovementPauseApproval(applied.activationId!, {
+    const pauseOutcome = await harness.service.requestImprovementPauseApproval(applied.activationId!, {
       requesterId: "operator-7",
     });
     expect(pauseOutcome.pendingApproval).not.toBeNull();
@@ -492,13 +498,13 @@ describe("HX-402 P3 governed improvement activation", () => {
     expect(pausePending.approvalId).not.toBe(pending.approvalId);
     expect(pausePending.operationKind).toBe("pause");
     // The activation is untouched until the fresh approval's effect runs.
-    expect(harness.service.getImprovementActivation(applied.activationId!).status).toBe("active");
+    expect((await harness.service.getImprovementActivation(applied.activationId!)).status).toBe("active");
 
     // Re-executing the ORIGINAL activation approval converges on the original
     // settlement — it can never morph into the later mutation.
-    const replay = executeApproved(harness, pending.approvalId);
+    const replay = await executeApproved(harness, pending.approvalId);
     expect(replay).toMatchObject({ operationKind: "activate", replayed: true });
-    expect(harness.service.getImprovementActivation(applied.activationId!).status).toBe("active");
+    expect((await harness.service.getImprovementActivation(applied.activationId!)).status).toBe("active");
 
     // A LEGACY improvement_activation approval (the stale pre-P3 kind) is not
     // executable by the governed effect at all.
@@ -509,29 +515,29 @@ describe("HX-402 P3 governed improvement activation", () => {
       preview: {},
     });
     approve(harness, legacy.approvalId);
-    expect(() => executeApproved(harness, legacy.approvalId)).toThrowError(ImprovementLifecycleApplyError);
+    await expect(executeApproved(harness, legacy.approvalId)).rejects.toThrowError(ImprovementLifecycleApplyError);
     try {
-      executeApproved(harness, legacy.approvalId);
+      await executeApproved(harness, legacy.approvalId);
     } catch (error) {
       expect((error as ImprovementLifecycleApplyError).code).toBe("improvement_lifecycle_approval_not_executable");
     }
 
     // The fresh pause approval executes through the full ladder.
     approve(harness, pausePending.approvalId);
-    const paused = executeApproved(harness, pausePending.approvalId);
+    const paused = await executeApproved(harness, pausePending.approvalId);
     expect(paused).toMatchObject({ disposition: "applied", operationKind: "pause" });
-    expect(harness.service.getImprovementActivation(applied.activationId!).status).toBe("paused");
+    expect((await harness.service.getImprovementActivation(applied.activationId!)).status).toBe("paused");
     expect(harness.policies[candidate.targetKey]).toBeUndefined();
     expect(harness.restoreCalls).toBe(1);
   });
 
-  it("rejects an unresolved, expired, or evidence-less approval fail-closed", () => {
-    const harness = createGovernedHarness();
-    const candidate = createReadyRoutingCandidate(harness);
-    const pending = requestActivation(harness, candidate.candidateId);
+  it("rejects an unresolved, expired, or evidence-less approval fail-closed", async () => {
+    const harness = await createGovernedHarness();
+    const candidate = await createReadyRoutingCandidate(harness);
+    const pending = await requestActivation(harness, candidate.candidateId);
 
     // Pending (unresolved) approval is not executable.
-    expect(() => executeApproved(harness, pending.approvalId)).toThrowError(
+    await expect(executeApproved(harness, pending.approvalId)).rejects.toThrowError(
       new ImprovementLifecycleApplyError("improvement_lifecycle_approval_not_executable"),
     );
 
@@ -541,7 +547,7 @@ describe("HX-402 P3 governed improvement activation", () => {
       .prepare("UPDATE approvals SET expires_at = '2000-01-01T00:00:00.000Z' WHERE approval_id = ?")
       .run(pending.approvalId);
     try {
-      executeApproved(harness, pending.approvalId);
+      await executeApproved(harness, pending.approvalId);
       expect.unreachable("expired approval must be refused");
     } catch (error) {
       expect((error as ImprovementLifecycleApplyError).code).toBe("improvement_lifecycle_approval_expired");
@@ -550,17 +556,17 @@ describe("HX-402 P3 governed improvement activation", () => {
     expect(harness.policies).toEqual({});
   });
 
-  it("aborts truthfully on reviewed-state drift without executing the external callback", () => {
-    const harness = createGovernedHarness();
-    const candidate = createReadyRoutingCandidate(harness);
-    const pending = requestActivation(harness, candidate.candidateId);
+  it("aborts truthfully on reviewed-state drift without executing the external callback", async () => {
+    const harness = await createGovernedHarness();
+    const candidate = await createReadyRoutingCandidate(harness);
+    const pending = await requestActivation(harness, candidate.candidateId);
     approve(harness, pending.approvalId);
     // The reviewed candidate drifts AFTER approval.
     harness.storage.gatewaySql
       .prepare("UPDATE improvement_candidates SET status = 'rejected' WHERE candidate_id = ?")
       .run(candidate.candidateId);
 
-    const aborted = executeApproved(harness, pending.approvalId);
+    const aborted = await executeApproved(harness, pending.approvalId);
 
     expect(aborted.disposition).toBe("aborted");
     expect(harness.applyCalls).toBe(0);
@@ -574,18 +580,21 @@ describe("HX-402 P3 governed improvement activation", () => {
     expect(settlement.disposition).toBe("aborted");
     expect(JSON.parse(settlement.result_json)).toMatchObject({ reasonCode: "state_drift" });
     // The abort is immutable truth: re-execution replays it byte-identically.
-    expect(executeApproved(harness, pending.approvalId)).toMatchObject({ disposition: "aborted", replayed: true });
+    expect(await executeApproved(harness, pending.approvalId)).toMatchObject({
+      disposition: "aborted",
+      replayed: true,
+    });
   });
 
-  it("aborts truthfully on external pre-state drift without executing the callback", () => {
-    const harness = createGovernedHarness();
-    const candidate = createReadyRoutingCandidate(harness);
-    const pending = requestActivation(harness, candidate.candidateId);
+  it("aborts truthfully on external pre-state drift without executing the callback", async () => {
+    const harness = await createGovernedHarness();
+    const candidate = await createReadyRoutingCandidate(harness);
+    const pending = await requestActivation(harness, candidate.candidateId);
     approve(harness, pending.approvalId);
     // A foreign writer changed the external policy after review.
     harness.policies[candidate.targetKey] = { foreign: true };
 
-    const aborted = executeApproved(harness, pending.approvalId);
+    const aborted = await executeApproved(harness, pending.approvalId);
 
     expect(aborted.disposition).toBe("aborted");
     expect(harness.applyCalls).toBe(0);
@@ -610,13 +619,13 @@ describe("HX-402 P3 crash recovery resumes from the durable intent", () => {
 
   for (const { boundary, callbackRunsBeforeCrash } of boundaries) {
     it(`crash at ${boundary}: no partial state persists and recovery converges without duplicate callbacks`, async () => {
-      const harness = createGovernedHarness();
-      const candidate = createReadyRoutingCandidate(harness);
-      const pending = requestActivation(harness, candidate.candidateId);
+      const harness = await createGovernedHarness();
+      const candidate = await createReadyRoutingCandidate(harness);
+      const pending = await requestActivation(harness, candidate.candidateId);
       approve(harness, pending.approvalId);
 
       harness.behavior.crashAt = boundary;
-      expect(() => executeApproved(harness, pending.approvalId)).toThrow(/injected crash/u);
+      await expect(executeApproved(harness, pending.approvalId)).rejects.toThrow(/injected crash/u);
       expect(harness.applyCalls).toBe(callbackRunsBeforeCrash);
 
       // The durable intent survives; NOTHING else settled or partially applied:
@@ -632,55 +641,57 @@ describe("HX-402 P3 crash recovery resumes from the durable intent", () => {
       ).toBeUndefined();
 
       await waitForLeaseExpiry();
-      const recovered = executeApproved(harness, pending.approvalId);
+      const recovered = await executeApproved(harness, pending.approvalId);
       expect(recovered.disposition).toBe("applied");
       // The non-idempotent callback ran EXACTLY once across crash + recovery.
       expect(harness.applyCalls).toBe(1);
       expect(harness.policies[candidate.targetKey]).toMatchObject({ strategy: "route_rebalance" });
-      expect(harness.service.getImprovementActivation(recovered.activationId!).status).toBe("active");
+      expect((await harness.service.getImprovementActivation(recovered.activationId!)).status).toBe("active");
       expect(countRows(harness, "improvement_lifecycle_operation_settlements")).toBe(1);
       expect(countRows(harness, "improvement_signals", "signal_kind = 'activation_applied'")).toBe(1);
     });
   }
 
   it("recovers a pause crash after its restore callback without re-restoring", async () => {
-    const harness = createGovernedHarness();
-    const candidate = createReadyRoutingCandidate(harness);
-    const { applied } = activateApplied(harness, candidate.candidateId);
-    const pausePending = harness.service.requestImprovementPauseApproval(applied.activationId!, {
-      requesterId: "operator-7",
-    }).pendingApproval!;
+    const harness = await createGovernedHarness();
+    const candidate = await createReadyRoutingCandidate(harness);
+    const { applied } = await activateApplied(harness, candidate.candidateId);
+    const pausePending = (
+      await harness.service.requestImprovementPauseApproval(applied.activationId!, {
+        requesterId: "operator-7",
+      })
+    ).pendingApproval!;
     approve(harness, pausePending.approvalId);
 
     harness.behavior.crashAt = "improvement_lifecycle_before_journey";
-    expect(() => executeApproved(harness, pausePending.approvalId)).toThrow(/injected crash/u);
+    await expect(executeApproved(harness, pausePending.approvalId)).rejects.toThrow(/injected crash/u);
     expect(harness.restoreCalls).toBe(1);
     // Rollback of the settlement transaction left the row active (no partial flip).
-    expect(harness.service.getImprovementActivation(applied.activationId!).status).toBe("active");
+    expect((await harness.service.getImprovementActivation(applied.activationId!)).status).toBe("active");
 
     await waitForLeaseExpiry();
-    const recovered = executeApproved(harness, pausePending.approvalId);
+    const recovered = await executeApproved(harness, pausePending.approvalId);
     expect(recovered).toMatchObject({ disposition: "applied", operationKind: "pause" });
     // Recovery re-INSPECTED instead of re-executing the restore callback.
     expect(harness.restoreCalls).toBe(1);
-    expect(harness.service.getImprovementActivation(applied.activationId!).status).toBe("paused");
+    expect((await harness.service.getImprovementActivation(applied.activationId!)).status).toBe("paused");
   });
 
   it("two competing workers resolve to exactly one claim winner", async () => {
-    const harness = createGovernedHarness();
-    const candidate = createReadyRoutingCandidate(harness);
-    const pending = requestActivation(harness, candidate.candidateId);
+    const harness = await createGovernedHarness();
+    const candidate = await createReadyRoutingCandidate(harness);
+    const pending = await requestActivation(harness, candidate.candidateId);
     approve(harness, pending.approvalId);
 
     // Worker A crashes mid-flight holding a live lease.
     harness.behavior.crashAt = "improvement_lifecycle_after_callback";
-    expect(() => executeApproved(harness, pending.approvalId)).toThrow(/injected crash/u);
+    await expect(executeApproved(harness, pending.approvalId)).rejects.toThrow(/injected crash/u);
     // Worker B races in while the lease is live and loses the claim.
-    expect(() => executeApproved(harness, pending.approvalId)).toThrow(/fenced|one-winner/u);
+    await expect(executeApproved(harness, pending.approvalId)).rejects.toThrow(/fenced|one-winner/u);
     expect(harness.applyCalls).toBe(1);
     // After the database-clock lease expires, the next claimant wins generation 2 and converges.
     await waitForLeaseExpiry();
-    const recovered = executeApproved(harness, pending.approvalId);
+    const recovered = await executeApproved(harness, pending.approvalId);
     expect(recovered.disposition).toBe("applied");
     expect(harness.applyCalls).toBe(1);
     const claims = harness.storage.gatewaySql
@@ -693,37 +704,37 @@ describe("HX-402 P3 crash recovery resumes from the durable intent", () => {
 });
 
 describe("HX-402 P3 zero false applied/rolled_back claims", () => {
-  it("callback wrote the wrong external state: settlement records the truthful mismatch, never applied", () => {
-    const harness = createGovernedHarness();
-    const candidate = createReadyRoutingCandidate(harness);
-    const pending = requestActivation(harness, candidate.candidateId);
+  it("callback wrote the wrong external state: settlement records the truthful mismatch, never applied", async () => {
+    const harness = await createGovernedHarness();
+    const candidate = await createReadyRoutingCandidate(harness);
+    const pending = await requestActivation(harness, candidate.candidateId);
     approve(harness, pending.approvalId);
     harness.behavior.applyMode = "wrong";
 
-    const failed = executeApproved(harness, pending.approvalId);
+    const failed = await executeApproved(harness, pending.approvalId);
 
     expect(failed.disposition).toBe("failed");
     expect(harness.applyCalls).toBe(1);
     // The canonical activation row records the failure; the candidate is NOT approved.
-    expect(harness.service.getImprovementActivation(failed.activationId!)).toMatchObject({
+    expect(await harness.service.getImprovementActivation(failed.activationId!)).toMatchObject({
       status: "failed",
       failureReason: "external_state_diverged",
     });
-    expect(harness.service.listImprovementCandidates(50, "prompt-lab")[0]?.status).toBe("ready_for_approval");
+    expect((await harness.service.listImprovementCandidates(50, "prompt-lab"))[0]?.status).toBe("ready_for_approval");
     const settlement = harness.storage.gatewaySql
       .prepare("SELECT disposition FROM improvement_lifecycle_operation_settlements WHERE operation_id = ?")
       .get(failed.operationId) as { disposition: string };
     expect(settlement.disposition).toBe("failed");
   });
 
-  it("callback threw without mutating: settlement is failed with the observed pre-state, never applied", () => {
-    const harness = createGovernedHarness();
-    const candidate = createReadyRoutingCandidate(harness);
-    const pending = requestActivation(harness, candidate.candidateId);
+  it("callback threw without mutating: settlement is failed with the observed pre-state, never applied", async () => {
+    const harness = await createGovernedHarness();
+    const candidate = await createReadyRoutingCandidate(harness);
+    const pending = await requestActivation(harness, candidate.candidateId);
     approve(harness, pending.approvalId);
     harness.behavior.applyMode = "throw";
 
-    const failed = executeApproved(harness, pending.approvalId);
+    const failed = await executeApproved(harness, pending.approvalId);
 
     expect(failed.disposition).toBe("failed");
     expect(harness.policies).toEqual({});
@@ -733,36 +744,38 @@ describe("HX-402 P3 zero false applied/rolled_back claims", () => {
     expect(JSON.parse(settlement.result_json)).toMatchObject({ reasonCode: "activation_callback_failed" });
   });
 
-  it("callback threw AFTER mutating to the exact target: re-inspection honestly settles applied", () => {
-    const harness = createGovernedHarness();
-    const candidate = createReadyRoutingCandidate(harness);
-    const pending = requestActivation(harness, candidate.candidateId);
+  it("callback threw AFTER mutating to the exact target: re-inspection honestly settles applied", async () => {
+    const harness = await createGovernedHarness();
+    const candidate = await createReadyRoutingCandidate(harness);
+    const pending = await requestActivation(harness, candidate.candidateId);
     approve(harness, pending.approvalId);
     harness.behavior.applyMode = "throw_after_write";
 
-    const applied = executeApproved(harness, pending.approvalId);
+    const applied = await executeApproved(harness, pending.approvalId);
 
     expect(applied.disposition).toBe("applied");
     expect(harness.policies[candidate.targetKey]).toMatchObject({ strategy: "route_rebalance" });
-    expect(harness.service.getImprovementActivation(applied.activationId!).status).toBe("active");
+    expect((await harness.service.getImprovementActivation(applied.activationId!)).status).toBe("active");
   });
 
-  it("failed compensation: rollback whose restore diverges records failed and never claims rolled_back", () => {
-    const harness = createGovernedHarness();
-    const candidate = createReadyRoutingCandidate(harness);
-    const { applied } = activateApplied(harness, candidate.candidateId);
-    const rollbackPending = harness.service.requestImprovementRollbackApproval(applied.activationId!, {
-      requesterId: "operator-7",
-    }).pendingApproval!;
+  it("failed compensation: rollback whose restore diverges records failed and never claims rolled_back", async () => {
+    const harness = await createGovernedHarness();
+    const candidate = await createReadyRoutingCandidate(harness);
+    const { applied } = await activateApplied(harness, candidate.candidateId);
+    const rollbackPending = (
+      await harness.service.requestImprovementRollbackApproval(applied.activationId!, {
+        requesterId: "operator-7",
+      })
+    ).pendingApproval!;
     approve(harness, rollbackPending.approvalId);
     harness.behavior.restoreMode = "wrong";
 
-    const failed = executeApproved(harness, rollbackPending.approvalId);
+    const failed = await executeApproved(harness, rollbackPending.approvalId);
 
     expect(failed).toMatchObject({ disposition: "failed", operationKind: "rollback" });
     expect(harness.restoreCalls).toBe(1);
     // No rolled_back claim anywhere: not on the row, not in the settlement.
-    expect(harness.service.getImprovementActivation(applied.activationId!).status).toBe("active");
+    expect((await harness.service.getImprovementActivation(applied.activationId!)).status).toBe("active");
     const settlement = harness.storage.gatewaySql
       .prepare(
         "SELECT disposition, result_json FROM improvement_lifecycle_operation_settlements WHERE operation_id = ?",
@@ -773,38 +786,42 @@ describe("HX-402 P3 zero false applied/rolled_back claims", () => {
     expect(countRows(harness, "improvement_signals", "signal_kind = 'activation_rolled_back'")).toBe(0);
   });
 
-  it("rollback restore that threw without restoring settles failed; a truthful retry cannot exist for the settled operation", () => {
-    const harness = createGovernedHarness();
-    const candidate = createReadyRoutingCandidate(harness);
-    const { applied } = activateApplied(harness, candidate.candidateId);
-    const rollbackPending = harness.service.requestImprovementRollbackApproval(applied.activationId!, {
-      requesterId: "operator-7",
-    }).pendingApproval!;
+  it("rollback restore that threw without restoring settles failed; a truthful retry cannot exist for the settled operation", async () => {
+    const harness = await createGovernedHarness();
+    const candidate = await createReadyRoutingCandidate(harness);
+    const { applied } = await activateApplied(harness, candidate.candidateId);
+    const rollbackPending = (
+      await harness.service.requestImprovementRollbackApproval(applied.activationId!, {
+        requesterId: "operator-7",
+      })
+    ).pendingApproval!;
     approve(harness, rollbackPending.approvalId);
     harness.behavior.restoreMode = "throw";
 
-    const failed = executeApproved(harness, rollbackPending.approvalId);
+    const failed = await executeApproved(harness, rollbackPending.approvalId);
     expect(failed).toMatchObject({ disposition: "failed", operationKind: "rollback" });
-    expect(harness.service.getImprovementActivation(applied.activationId!).status).toBe("active");
+    expect((await harness.service.getImprovementActivation(applied.activationId!)).status).toBe("active");
     // The immutable settlement is the recovery truth: replays converge on failed.
-    expect(executeApproved(harness, rollbackPending.approvalId)).toMatchObject({
+    expect(await executeApproved(harness, rollbackPending.approvalId)).toMatchObject({
       disposition: "failed",
       replayed: true,
     });
     expect(harness.restoreCalls).toBe(1);
   });
 
-  it("pause of an already-paused activation is a pure no-op envelope", () => {
-    const harness = createGovernedHarness();
-    const candidate = createReadyRoutingCandidate(harness);
-    const { applied } = activateApplied(harness, candidate.candidateId);
-    const pausePending = harness.service.requestImprovementPauseApproval(applied.activationId!, {
-      requesterId: "operator-7",
-    }).pendingApproval!;
+  it("pause of an already-paused activation is a pure no-op envelope", async () => {
+    const harness = await createGovernedHarness();
+    const candidate = await createReadyRoutingCandidate(harness);
+    const { applied } = await activateApplied(harness, candidate.candidateId);
+    const pausePending = (
+      await harness.service.requestImprovementPauseApproval(applied.activationId!, {
+        requesterId: "operator-7",
+      })
+    ).pendingApproval!;
     approve(harness, pausePending.approvalId);
-    executeApproved(harness, pausePending.approvalId);
+    await executeApproved(harness, pausePending.approvalId);
 
-    const outcome = harness.service.requestImprovementPauseApproval(applied.activationId!, {
+    const outcome = await harness.service.requestImprovementPauseApproval(applied.activationId!, {
       requesterId: "operator-7",
     });
     expect(outcome.pendingApproval).toBeNull();
@@ -822,7 +839,7 @@ function deriveOperationIdForApproval(harness: GovernedHarness, approvalId: stri
   return row?.operation_id ?? "missing-operation";
 }
 
-function createHarness(): Harness {
+async function createHarness(): Promise<Harness> {
   const rootDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "gc-improvement-surface-router-"));
   const transcriptsDir = path.join(rootDir, "transcripts");
   const auditDir = path.join(rootDir, "audit");
@@ -841,9 +858,9 @@ function createHarness(): Harness {
     published,
   };
   const ctx: ImprovementServiceContext = {
-    storage,
+    storage: createLocalAsyncStorage(storage),
     gatewaySql: storage.gatewaySql,
-    publishRealtime: (channel, topic, payload, realtimeOptions) => {
+    publishRealtime: async (channel, topic, payload, realtimeOptions) => {
       published.push({ channel, topic, payload, options: realtimeOptions });
     },
     requireFeatureEnabled: () => undefined,
@@ -867,6 +884,7 @@ function createHarness(): Harness {
   } as unknown as ImprovementServiceCallbacks;
 
   harness.service = new ImprovementService(ctx, callbacks);
+  await harness.service.initialize();
   harnesses.push(harness);
   return harness;
 }

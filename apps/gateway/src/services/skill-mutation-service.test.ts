@@ -33,7 +33,13 @@ function createHarness(): Harness {
   fsSync.mkdirSync(transcriptsDir, { recursive: true });
   fsSync.mkdirSync(auditDir, { recursive: true });
   const storage = new Storage({ dbPath: path.join(rootDir, "gateway.sqlite"), transcriptsDir, auditDir });
-  const service = new SkillMutationService({ rootDir, skillLifecycle: storage.skillLifecycle });
+  const service = new SkillMutationService({
+    rootDir,
+    skillLifecycle: {
+      find: async (skillId) => storage.skillLifecycle.find(skillId),
+      upsert: async (input) => storage.skillLifecycle.upsert(input),
+    },
+  });
   const harness: Harness = { rootDir, storage, service };
   harnesses.push(harness);
   return harness;
@@ -44,8 +50,8 @@ function createMemoryLifecycleStore(): SkillMutationLifecycleStore & { rows: Map
   const rows = new Map<string, SkillLifecycleRecord>();
   return {
     rows,
-    find: (skillId) => rows.get(skillId),
-    upsert: (input) => {
+    find: async (skillId) => rows.get(skillId),
+    upsert: async (input) => {
       rows.set(input.skillId, input);
       return input;
     },
@@ -144,14 +150,14 @@ describe("SkillMutationService", () => {
     const result = await harness.service.draftSkillMutation({ skillMarkdown: buildSkillMarkdown("Body") });
     expect(isSkillCallable(result.lifecycle, "enabled")).toBe(false);
 
-    const promoted = harness.service.promoteSelfAuthoredSkill(result.skillId);
+    const promoted = await harness.service.promoteSelfAuthoredSkill(result.skillId);
     expect(promoted.lifecycleState).toBe("approved");
     // SAFETY INVARIANT: only after the recorded promotion does the chokepoint
     // report the skill as callable.
     expect(isSkillCallable(promoted, "enabled")).toBe(true);
   });
 
-  it("refuses to promote a non-self-authored skill", () => {
+  it("refuses to promote a non-self-authored skill", async () => {
     const harness = createHarness();
     harness.storage.skillLifecycle.upsert({
       skillId: "imported-thing",
@@ -161,16 +167,16 @@ describe("SkillMutationService", () => {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });
-    expect(() => harness.service.promoteSelfAuthoredSkill("imported-thing")).toThrow(/non-self-authored/i);
+    await expect(harness.service.promoteSelfAuthoredSkill("imported-thing")).rejects.toThrow(/non-self-authored/i);
   });
 
   it("reverts a brand-new authored skill: removes the file and tombstones the lifecycle", async () => {
     const harness = createHarness();
     const result = await harness.service.draftSkillMutation({ skillMarkdown: buildSkillMarkdown("Body") });
-    harness.service.promoteSelfAuthoredSkill(result.skillId);
+    await harness.service.promoteSelfAuthoredSkill(result.skillId);
     expect(fsSync.existsSync(result.skillFilePath)).toBe(true);
 
-    harness.service.restoreSnapshotSync(result.snapshot);
+    await harness.service.restoreSnapshotSync(result.snapshot);
 
     expect(fsSync.existsSync(result.skillFilePath)).toBe(false);
     const reverted = harness.storage.skillLifecycle.find(result.skillId);
@@ -194,7 +200,7 @@ describe("SkillMutationService", () => {
       capturedAt: new Date().toISOString(),
     } as unknown as Parameters<typeof harness.service.restoreSnapshotSync>[0];
 
-    expect(() => harness.service.restoreSnapshotSync(malformed)).toThrow(/invalid \(empty\) skillId/i);
+    await expect(harness.service.restoreSnapshotSync(malformed)).rejects.toThrow(/invalid \(empty\) skillId/i);
     await expect(harness.service.restoreSnapshot(malformed)).rejects.toThrow(/invalid \(empty\) skillId/i);
 
     // The jail root and the real skill are untouched.
@@ -209,7 +215,7 @@ describe("SkillMutationService", () => {
       existed: false,
       capturedAt: new Date().toISOString(),
     } as unknown as Parameters<typeof harness.service.restoreSnapshotSync>[0];
-    expect(() => harness.service.restoreSnapshotSync(malformed)).toThrow(/invalid \(empty\) skillId/i);
+    await expect(harness.service.restoreSnapshotSync(malformed)).rejects.toThrow(/invalid \(empty\) skillId/i);
   });
 
   it("reverts an overwrite back to the prior SKILL.md bytes and lifecycle", async () => {
@@ -217,7 +223,7 @@ describe("SkillMutationService", () => {
     const first = await harness.service.draftSkillMutation({
       skillMarkdown: buildSkillMarkdown("Original body content."),
     });
-    harness.service.promoteSelfAuthoredSkill(first.skillId);
+    await harness.service.promoteSelfAuthoredSkill(first.skillId);
 
     const second = await harness.service.draftSkillMutation({
       skillMarkdown: buildSkillMarkdown("Replacement body content."),
@@ -225,7 +231,7 @@ describe("SkillMutationService", () => {
     expect(second.snapshot.existed).toBe(true);
     expect(fsSync.readFileSync(second.skillFilePath, "utf8")).toContain("Replacement body content.");
 
-    harness.service.restoreSnapshotSync(second.snapshot);
+    await harness.service.restoreSnapshotSync(second.snapshot);
 
     expect(fsSync.readFileSync(second.skillFilePath, "utf8")).toContain("Original body content.");
     const restored = harness.storage.skillLifecycle.find(first.skillId);
@@ -243,7 +249,7 @@ describe("SkillMutationService", () => {
       sourceTurnId: "turn-replay",
       skillMarkdown: buildSkillMarkdown("Original durable candidate."),
     });
-    harness.service.promoteSelfAuthoredSkill(first.skillId);
+    await harness.service.promoteSelfAuthoredSkill(first.skillId);
 
     const replay = await harness.service.draftSkillMutation({
       skillId,
@@ -296,7 +302,7 @@ describe("SkillMutationService", () => {
     expect(fsSync.existsSync(path.join(skillDir, "source.json"))).toBe(false);
   });
 
-  it("rolls back the synchronous public path when its companion write fails", () => {
+  it("rolls back the synchronous-files compatibility path when its companion write fails", async () => {
     const harness = createHarness();
     const writeFileSync = fsSync.writeFileSync.bind(fsSync);
     let writeCount = 0;
@@ -308,9 +314,9 @@ describe("SkillMutationService", () => {
       return writeFileSync(file, data, options);
     });
 
-    expect(() =>
+    await expect(
       harness.service.applySkillMutationSync({ skillMarkdown: buildSkillMarkdown("Sync rollback.") }),
-    ).toThrow("simulated sync source.json failure");
+    ).rejects.toThrow("simulated sync source.json failure");
 
     writeSpy.mockRestore();
     const skillDir = path.join(harness.service.selfSkillsRoot, "self-authored-helper");
@@ -342,34 +348,34 @@ describe("SkillMutationService", () => {
     expect((failure as AggregateError).errors).toHaveLength(2);
   });
 
-  it("creates or verifies a persisted durable plan without overwriting conflicting files", () => {
+  it("creates or verifies a persisted durable plan without overwriting conflicting files", async () => {
     const harness = createHarness();
-    const prepared = harness.service.prepareDurableSkillMutation({
+    const prepared = await harness.service.prepareDurableSkillMutation({
       skillId: "background-review-plan",
       evaluationRunId: "effect-plan-1",
       sourceTurnId: "turn-plan-1",
       skillMarkdown: buildSkillMarkdown("Persisted exact plan.", "background-review-plan"),
     });
 
-    harness.service.applyPreparedSkillMutationFilesSync(prepared);
+    await harness.service.applyPreparedSkillMutationFilesSync(prepared);
     expect(harness.storage.skillLifecycle.find(prepared.skillId)).toBeUndefined();
-    harness.service.applyPreparedSkillMutationFilesSync(prepared);
+    await harness.service.applyPreparedSkillMutationFilesSync(prepared);
 
     const skillFilePath = path.join(harness.service.selfSkillsRoot, prepared.skillId, "SKILL.md");
     const sourceJsonPath = path.join(harness.service.selfSkillsRoot, prepared.skillId, "source.json");
     fsSync.rmSync(sourceJsonPath);
-    harness.service.applyPreparedSkillMutationFilesSync(prepared);
+    await harness.service.applyPreparedSkillMutationFilesSync(prepared);
     expect(JSON.parse(fsSync.readFileSync(sourceJsonPath, "utf8"))).toMatchObject({
       evaluationRunId: "effect-plan-1",
     });
 
     fsSync.writeFileSync(skillFilePath, buildSkillMarkdown("Operator edit.", "background-review-plan"), "utf8");
-    expect(() => harness.service.applyPreparedSkillMutationFilesSync(prepared)).toThrow(/conflict/i);
+    await expect(harness.service.applyPreparedSkillMutationFilesSync(prepared)).rejects.toThrow(/conflict/i);
     expect(fsSync.readFileSync(skillFilePath, "utf8")).toContain("Operator edit.");
     expect(harness.storage.skillLifecycle.find(prepared.skillId)).toBeUndefined();
   });
 
-  it("bounds existing source.json snapshots before reading rollback bytes", () => {
+  it("bounds existing source.json snapshots before reading rollback bytes", async () => {
     const harness = createHarness();
     const skillDir = path.join(harness.service.selfSkillsRoot, "oversized-provenance");
     fsSync.mkdirSync(skillDir, { recursive: true });
@@ -378,14 +384,14 @@ describe("SkillMutationService", () => {
     fsSync.writeFileSync(sourceJsonPath, "");
     fsSync.truncateSync(sourceJsonPath, SKILL_CONTENT_INTEGRITY_LIMITS.maxSourceManifestBytes + 1);
 
-    expect(() => harness.service.captureSnapshotFor({ skillId: "oversized-provenance" })).toThrow(
+    await expect(harness.service.captureSnapshotFor({ skillId: "oversized-provenance" })).rejects.toThrow(
       `exceeds ${SKILL_CONTENT_INTEGRITY_LIMITS.maxSourceManifestBytes} bytes`,
     );
   });
 
-  it("does not publish a partial durable artifact when the exclusive write creates then throws", () => {
+  it("does not publish a partial durable artifact when the exclusive write creates then throws", async () => {
     const harness = createHarness();
-    const prepared = harness.service.prepareDurableSkillMutation({
+    const prepared = await harness.service.prepareDurableSkillMutation({
       skillId: "background-review-partial",
       evaluationRunId: "effect-plan-partial",
       skillMarkdown: buildSkillMarkdown("Complete planned bytes.", "background-review-partial"),
@@ -401,7 +407,9 @@ describe("SkillMutationService", () => {
       return writeFileSync(file, data, options);
     });
 
-    expect(() => harness.service.applyPreparedSkillMutationFilesSync(prepared)).toThrow("simulated create-then-throw");
+    await expect(harness.service.applyPreparedSkillMutationFilesSync(prepared)).rejects.toThrow(
+      "simulated create-then-throw",
+    );
 
     writeSpy.mockRestore();
     const skillDir = path.join(harness.service.selfSkillsRoot, prepared.skillId);
@@ -410,9 +418,9 @@ describe("SkillMutationService", () => {
     expect(fsSync.existsSync(skillDir) ? fsSync.readdirSync(skillDir) : []).toEqual([]);
   });
 
-  it("keeps the exact published target valid when post-link temp cleanup fails", () => {
+  it("keeps the exact published target valid when post-link temp cleanup fails", async () => {
     const harness = createHarness();
-    const prepared = harness.service.prepareDurableSkillMutation({
+    const prepared = await harness.service.prepareDurableSkillMutation({
       skillId: "background-review-temp-cleanup",
       evaluationRunId: "effect-temp-cleanup",
       skillMarkdown: buildSkillMarkdown("Published before cleanup.", "background-review-temp-cleanup"),
@@ -427,7 +435,7 @@ describe("SkillMutationService", () => {
       return rmSync(target, options);
     });
 
-    expect(() => harness.service.applyPreparedSkillMutationFilesSync(prepared)).not.toThrow();
+    await expect(harness.service.applyPreparedSkillMutationFilesSync(prepared)).resolves.toBeUndefined();
 
     rmSpy.mockRestore();
     const skillFilePath = path.join(harness.service.selfSkillsRoot, prepared.skillId, "SKILL.md");

@@ -58,7 +58,7 @@ import {
   type ApprovalCreateAuthority,
   type ToolPolicyEngine,
 } from "@goatcitadel/policy-engine";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 
 export class ApprovalExpiredAfterCommitError extends ValidationError {
   public readonly mutationCommitted = true;
@@ -71,16 +71,25 @@ export class ApprovalExpiredAfterCommitError extends ValidationError {
   }
 }
 
-export type ApprovalCreateCommitHook = (approval: ApprovalRequest) =>
+type ApprovalCreateCommitExtension =
   | readonly ApprovalObservabilityEffectInput[]
   | {
-      finalize(finalApproval: ApprovalRequest): readonly ApprovalObservabilityEffectInput[] | undefined;
+      finalize(
+        finalApproval: ApprovalRequest,
+      ):
+        | readonly ApprovalObservabilityEffectInput[]
+        | Promise<readonly ApprovalObservabilityEffectInput[] | undefined>
+        | undefined;
     }
   | undefined;
 
+export type ApprovalCreateCommitHook = (
+  approval: ApprovalRequest,
+) => ApprovalCreateCommitExtension | Promise<ApprovalCreateCommitExtension>;
+
 function isApprovalCreateCommitFinalizer(
-  value: ReturnType<ApprovalCreateCommitHook>,
-): value is { finalize(finalApproval: ApprovalRequest): readonly ApprovalObservabilityEffectInput[] | undefined } {
+  value: Awaited<ReturnType<ApprovalCreateCommitHook>>,
+): value is Exclude<ApprovalCreateCommitExtension, readonly ApprovalObservabilityEffectInput[] | undefined> {
   return Boolean(value && typeof value === "object" && "finalize" in value);
 }
 
@@ -130,7 +139,7 @@ export interface ApprovalLifecycleHost {
     source: string,
     payload: Record<string, unknown>,
     options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
-  ): RealtimeEvent;
+  ): Promise<unknown>;
 
   // ── approval-specific gateway methods ──────────────────────────────
   resolveApproval(
@@ -144,23 +153,24 @@ export interface ApprovalLifecycleHost {
     context?: ApprovalResolutionContext,
   ): Promise<ApprovalResolveResult>;
   executeCodeModePendingApproval(approvalId: string, signal?: AbortSignal): Promise<ToolInvokeResult | undefined>;
-  resolveApprovalHookWorkspaceId(payload: Record<string, unknown>): string;
+  resolveApprovalHookWorkspaceId(payload: Record<string, unknown>): Promise<string>;
   scheduleApprovalExplanation(approval: ApprovalRequest): void;
-  findProactiveDurableRunIdsForApproval(approvalId: string): string[];
+  findProactiveDurableRunIdsForApproval(approvalId: string): Promise<string[]>;
   wakeDurableRun(
     runId: string,
     event: { eventKey: string; payload?: Record<string, unknown>; correlationId?: string },
-  ): DurableWakeResult;
+  ): Promise<DurableWakeResult>;
   enqueueApprovalObservabilityEffects(
     approvalId: string,
     items: readonly ApprovalObservabilityEffectInput[],
-  ): ApprovalEffectRecord[];
-  enqueueApprovalWaitMaterialization(approval: ApprovalRequest): ApprovalEffectRecord | undefined;
+  ): Promise<ApprovalEffectRecord[]>;
+  enqueueApprovalWaitMaterialization(approval: ApprovalRequest): Promise<ApprovalEffectRecord | undefined>;
   enqueueApprovalResolutionEffects(
     approval: ApprovalRequest,
     input: ApprovalResolveInput,
     options?: ApprovalResolutionEffectEnqueueOptions,
-  ): ApprovalEffectRecord[];
+  ): Promise<ApprovalEffectRecord[]>;
+  requestApprovalEffectProcessing(): void;
   awaitApprovalResolutionEffects(approvalId: string): Promise<ApprovalEffectRecord[]>;
 }
 
@@ -190,17 +200,17 @@ export interface MeshCapabilityActivationApprovalCommitResult {
  * canonical creation event. It deliberately performs none of the generic
  * approval lifecycle enrichment, hook, wait-run, or pending-action work.
  */
-export function commitMeshCapabilityActivationApproval(
+export async function commitMeshCapabilityActivationApproval(
   host: MeshCapabilityActivationApprovalLifecycleHost,
   input: MeshCapabilityActivationApprovalCommitInput,
-): MeshCapabilityActivationApprovalCommitResult {
+): Promise<MeshCapabilityActivationApprovalCommitResult> {
   assertMeshCapabilityActivationApprovalPayload(input.payload);
   assertExactMeshActivationApprovalPreview(input.preview, input.payload);
   assertExactMeshActivationApprovalLinkage(input.linkage, input.payload.workspaceId);
 
   let result!: MeshCapabilityActivationApprovalCommitResult;
-  host.storage.runImmediateTransaction(() => {
-    const stored = host.storage.approvals.createDeterministicDetachedWithTtlDuration(
+  await host.storage.runImmediateTransaction(async () => {
+    const stored = await host.storage.approvals.createDeterministicDetachedWithTtlDuration(
       {
         approvalId: input.approvalId,
         kind: MESH_CAPABILITY_ACTIVATION_APPROVAL_KIND,
@@ -211,7 +221,7 @@ export function commitMeshCapabilityActivationApproval(
       },
       MESH_CAPABILITY_ACTIVATION_APPROVAL_TTL_MS,
     );
-    const existingEvents = host.storage.approvalEvents.listByApprovalId(stored.approval.approvalId);
+    const existingEvents = await host.storage.approvalEvents.listByApprovalId(stored.approval.approvalId);
     if (stored.created) {
       if (existingEvents.length !== 0) {
         throw new ConflictError({
@@ -219,7 +229,7 @@ export function commitMeshCapabilityActivationApproval(
           message: `Approval ${stored.approval.approvalId} has inconsistent creation evidence.`,
         });
       }
-      host.storage.approvalEvents.append({
+      await host.storage.approvalEvents.append({
         approvalId: stored.approval.approvalId,
         eventType: "created",
         actorId: "system",
@@ -316,19 +326,22 @@ function assertExactKeys(value: unknown, expectedKeys: readonly string[], field:
   }
 }
 
-export function listToolGrants(
+export async function listToolGrants(
   host: ApprovalLifecycleHost,
   scope?: ToolGrantScope,
   scopeRef?: string,
   limit = 200,
-): ToolGrantRecord[] {
+): Promise<ToolGrantRecord[]> {
   return host.policyEngine.listGrants(scope, scopeRef, limit);
 }
 
-export function createToolGrant(host: ApprovalLifecycleHost, input: ToolGrantCreateInput): ToolGrantRecord {
-  const grant = host.policyEngine.createGrant(input);
+export async function createToolGrant(
+  host: ApprovalLifecycleHost,
+  input: ToolGrantCreateInput,
+): Promise<ToolGrantRecord> {
+  const grant = await host.policyEngine.createGrant(input);
   try {
-    host.publishRealtime("system", "tools", {
+    await host.publishRealtime("system", "tools", {
       type: "tool_grant_created",
       grantId: grant.grantId,
       toolPattern: grant.toolPattern,
@@ -344,14 +357,18 @@ export function createToolGrant(host: ApprovalLifecycleHost, input: ToolGrantCre
   return grant;
 }
 
-export function revokeToolGrant(host: ApprovalLifecycleHost, grantId: string, revokedBy: string): boolean {
+export async function revokeToolGrant(
+  host: ApprovalLifecycleHost,
+  grantId: string,
+  revokedBy: string,
+): Promise<boolean> {
   if (!revokedBy.trim()) {
     throw new ValidationError({ code: "FIELD_REQUIRED", field: "revokedBy" });
   }
-  const revoked = host.policyEngine.revokeGrant(grantId, revokedBy);
+  const revoked = await host.policyEngine.revokeGrant(grantId, revokedBy);
   if (revoked) {
     try {
-      host.publishRealtime("system", "tools", {
+      await host.publishRealtime("system", "tools", {
         type: "tool_grant_revoked",
         grantId,
         revokedBy,
@@ -364,20 +381,21 @@ export function revokeToolGrant(host: ApprovalLifecycleHost, grantId: string, re
   return revoked;
 }
 
-export function listApprovals(
+export async function listApprovals(
   host: ApprovalLifecycleHost,
   status?: ApprovalRequest["status"],
   limit = 100,
   workspaceId?: string,
-): ApprovalRequest[] {
-  return host.storage.approvals
-    .list(status, limit, workspaceId)
-    .map((approval) =>
-      withApprovalFollowUp(approval, host.storage.approvalEffects.listByApproval(approval.approvalId)),
-    );
+): Promise<ApprovalRequest[]> {
+  const approvals = await host.storage.approvals.list(status, limit, workspaceId);
+  return Promise.all(
+    approvals.map(async (approval) =>
+      withApprovalFollowUp(approval, await host.storage.approvalEffects.listByApproval(approval.approvalId)),
+    ),
+  );
 }
 
-export function listApprovalsPage(
+export async function listApprovalsPage(
   host: ApprovalLifecycleHost,
   input: {
     status?: ApprovalRequest["status"];
@@ -385,11 +403,13 @@ export function listApprovalsPage(
     cursor?: string;
     workspaceId?: string;
   },
-): ApprovalListResponse {
-  const page = host.storage.approvals.listPage(input);
+): Promise<ApprovalListResponse> {
+  const page = await host.storage.approvals.listPage(input);
   return {
-    items: page.items.map((approval) =>
-      withApprovalFollowUp(approval, host.storage.approvalEffects.listByApproval(approval.approvalId)),
+    items: await Promise.all(
+      page.items.map(async (approval) =>
+        withApprovalFollowUp(approval, await host.storage.approvalEffects.listByApproval(approval.approvalId)),
+      ),
     ),
     nextCursor: page.nextCursor,
   };
@@ -405,14 +425,18 @@ interface ApprovalExpirationOutcome {
   committed: boolean;
 }
 
-export function expirePendingApprovals(host: ApprovalLifecycleHost, limit = 100): number {
+export async function expirePendingApprovals(host: ApprovalLifecycleHost, limit = 100): Promise<number> {
   const boundedLimit = Number.isFinite(limit) ? Math.max(1, Math.min(Math.floor(limit), 500)) : 100;
-  const candidates = host.storage.approvals.listExpiredPending(undefined, boundedLimit, DEVICE_ACCESS_APPROVAL_KIND);
+  const candidates = await host.storage.approvals.listExpiredPending(
+    undefined,
+    boundedLimit,
+    DEVICE_ACCESS_APPROVAL_KIND,
+  );
   let committed = 0;
   let firstFailure: { error: unknown } | undefined;
   for (const approval of candidates) {
     try {
-      if (reconcileExpiredApproval(host, approval).committed) {
+      if ((await reconcileExpiredApproval(host, approval)).committed) {
         committed += 1;
       }
     } catch (error) {
@@ -425,30 +449,32 @@ export function expirePendingApprovals(host: ApprovalLifecycleHost, limit = 100)
   return committed;
 }
 
-function reconcileExpiredApproval(
+async function reconcileExpiredApproval(
   host: ApprovalLifecycleHost,
   approval: ApprovalRequest,
   context?: Pick<ApprovalExpirationContext, "requestedDecision">,
-): ApprovalExpirationOutcome {
+): Promise<ApprovalExpirationOutcome> {
   const approvals = host.storage.approvals;
-  if (approval.status !== "pending" || !approvals.isExpiredPendingAtDatabaseNow(approval.approvalId)) {
+  if (approval.status !== "pending" || !(await approvals.isExpiredPendingAtDatabaseNow(approval.approvalId))) {
     return { approval, committed: false };
   }
 
   let outcome!: ApprovalExpirationOutcome;
   try {
-    host.storage.runImmediateTransaction(() => {
-      const current = approvals.get(approval.approvalId);
-      if (current.status !== "pending" || !approvals.isExpiredPendingAtDatabaseNow(current.approvalId)) {
+    await host.storage.runImmediateTransaction(async () => {
+      const current = await approvals.get(approval.approvalId);
+      if (current.status !== "pending" || !(await approvals.isExpiredPendingAtDatabaseNow(current.approvalId))) {
         outcome = { approval: current, committed: false };
         return;
       }
       const reason = `Approval ${approval.approvalId} expired before operator resolution.`;
       outcome = {
-        approval: commitExpiredApprovalResolution(host, current, {
-          requestedDecision: context?.requestedDecision,
-          reason,
-        }).approval,
+        approval: (
+          await commitExpiredApprovalResolution(host, current, {
+            requestedDecision: context?.requestedDecision,
+            reason,
+          })
+        ).approval,
         committed: true,
       };
     });
@@ -456,7 +482,7 @@ function reconcileExpiredApproval(
     if (!(error instanceof ConflictError)) {
       throw error;
     }
-    const latest = approvals.get(approval.approvalId);
+    const latest = await approvals.get(approval.approvalId);
     if (latest.status === "pending") {
       throw error;
     }
@@ -465,16 +491,16 @@ function reconcileExpiredApproval(
   return outcome;
 }
 
-export function getApprovalReplay(
+export async function getApprovalReplay(
   host: ApprovalLifecycleHost,
   approvalId: string,
   replayedBy = "operator",
-): ApprovalReplayResult {
-  const storedApproval = host.storage.approvals.get(approvalId);
-  const effects = host.storage.approvalEffects.listByApproval(approvalId);
+): Promise<ApprovalReplayResult> {
+  const storedApproval = await host.storage.approvals.get(approvalId);
+  const effects = await host.storage.approvalEffects.listByApproval(approvalId);
   const approval = withApprovalFollowUp(storedApproval, effects);
 
-  host.storage.approvalEvents.append({
+  await host.storage.approvalEvents.append({
     approvalId,
     eventType: "replayed",
     actorId: replayedBy,
@@ -485,9 +511,9 @@ export function getApprovalReplay(
 
   return {
     approval,
-    events: host.storage.approvalEvents.listByApprovalId(approvalId),
-    pendingAction: host.storage.pendingApprovalActions.find(approvalId),
-    durableRunId: host.storage.approvalWaitRuns.getRunId(approvalId),
+    events: await host.storage.approvalEvents.listByApprovalId(approvalId),
+    pendingAction: await host.storage.pendingApprovalActions.find(approvalId),
+    durableRunId: await host.storage.approvalWaitRuns.getRunId(approvalId),
     effects,
   };
 }
@@ -497,7 +523,7 @@ export async function resolveApprovalsBulk(
   input: ApprovalBulkResolveInput,
 ): Promise<ApprovalBulkResolveResult> {
   const statusFilter = input.status ?? "pending";
-  const items = host.storage.approvals.list(statusFilter, 10_000);
+  const items = await host.storage.approvals.list(statusFilter, 10_000);
   const results: ApprovalBulkResolveResult["items"] = [];
 
   for (const approval of items) {
@@ -516,7 +542,7 @@ export async function resolveApprovalsBulk(
       if (error instanceof ConflictError) {
         let status: ApprovalRequest["status"] | undefined;
         try {
-          status = host.storage.approvals.get(approval.approvalId).status;
+          status = (await host.storage.approvals.get(approval.approvalId)).status;
         } catch {
           status = undefined;
         }
@@ -557,7 +583,7 @@ export async function createApproval(
   onCreated?: ApprovalCreateCommitHook,
   authority?: ApprovalCreateAuthority,
 ): Promise<ApprovalRequest> {
-  const approvalHookWorkspaceId = host.resolveApprovalHookWorkspaceId({
+  const approvalHookWorkspaceId = await host.resolveApprovalHookWorkspaceId({
     ...(input.payload ?? {}),
     workspaceId:
       typeof input.linkage?.workspaceId === "string" && input.linkage.workspaceId.trim()
@@ -658,16 +684,16 @@ export async function createApproval(
   const transactionalCreateInput = approvalLinkage ? { ...createInput, linkage: approvalLinkage } : createInput;
 
   let approval!: ApprovalRequest;
-  host.storage.runImmediateTransaction(() => {
+  await host.storage.runImmediateTransaction(async () => {
     approval =
       authority?.ttlMs !== undefined
-        ? host.storage.approvals.createWithTtlDuration(transactionalCreateInput, authority.ttlMs)
-        : host.storage.approvals.create(transactionalCreateInput);
+        ? await host.storage.approvals.createWithTtlDuration(transactionalCreateInput, authority.ttlMs)
+        : await host.storage.approvals.create(transactionalCreateInput);
     if (policyOutcome.explanations.length > 0) {
-      host.storage.approvals.setShellExplanations(approval.approvalId, policyOutcome.explanations);
-      approval = host.storage.approvals.get(approval.approvalId);
+      await host.storage.approvals.setShellExplanations(approval.approvalId, policyOutcome.explanations);
+      approval = await host.storage.approvals.get(approval.approvalId);
     }
-    host.storage.approvalEvents.append({
+    await host.storage.approvalEvents.append({
       approvalId: approval.approvalId,
       eventType: "created",
       actorId: "system",
@@ -679,19 +705,19 @@ export async function createApproval(
     });
 
     if (!policyOutcome.autoReject) {
-      approval = host.approvalWaitRunService.reserveApprovalWaitRun(approval);
-      host.enqueueApprovalWaitMaterialization(approval);
+      approval = await host.approvalWaitRunService.reserveApprovalWaitRun(approval);
+      await host.enqueueApprovalWaitMaterialization(approval);
     }
 
-    const creationExtension = onCreated?.(approval);
+    const creationExtension = await onCreated?.(approval);
     const immediateExtensionObservability = Array.isArray(creationExtension) ? creationExtension : [];
-    host.enqueueApprovalObservabilityEffects(approval.approvalId, [
+    await host.enqueueApprovalObservabilityEffects(approval.approvalId, [
       ...buildApprovalCreatedObservabilityEffects(approval),
       ...immediateExtensionObservability,
     ]);
 
     if (policyOutcome.autoReject) {
-      const resolution = commitStandardApprovalResolution(host, approval.approvalId, {
+      const resolution = await commitStandardApprovalResolution(host, approval.approvalId, {
         decision: "reject",
         resolvedBy: "system",
         resolutionNote: policyOutcome.autoRejectReason ?? "Auto-rejected by shell danger policy.",
@@ -699,20 +725,21 @@ export async function createApproval(
       approval = resolution.approval;
     }
     if (isApprovalCreateCommitFinalizer(creationExtension)) {
-      const finalizedObservability = creationExtension.finalize(approval) ?? [];
+      const finalizedObservability = (await creationExtension.finalize(approval)) ?? [];
       if (finalizedObservability.length > 0) {
-        host.enqueueApprovalObservabilityEffects(approval.approvalId, finalizedObservability);
+        await host.enqueueApprovalObservabilityEffects(approval.approvalId, finalizedObservability);
       }
     }
   });
+  host.requestApprovalEffectProcessing();
 
   if (!policyOutcome.autoReject) {
     try {
-      approval = host.approvalWaitRunService.primeApprovalLifecycle(approval.approvalId, approvalLinkage);
+      approval = await host.approvalWaitRunService.primeApprovalLifecycle(approval.approvalId, approvalLinkage);
     } catch {
       // The approval and its observability envelope are already committed.
       // Durable wait-run priming is recoverable and must not revive creation.
-      approval = host.storage.approvals.get(approval.approvalId);
+      approval = await host.storage.approvals.get(approval.approvalId);
     }
     try {
       host.scheduleApprovalExplanation(approval);
@@ -732,7 +759,7 @@ export async function resolveApproval(
   context?: ApprovalResolutionContext,
 ): Promise<ApprovalResolveResult> {
   const storage = host.storage;
-  const initial = storage.approvals.get(approvalId);
+  const initial = await storage.approvals.get(approvalId);
   if (initial.status !== "pending") {
     throw new ConflictError({
       message: `Approval ${approvalId} is already resolved`,
@@ -744,20 +771,20 @@ export async function resolveApproval(
   let result: ApprovalResolveResult | undefined;
   let expiredMutationCommitted = false;
   try {
-    storage.runImmediateTransaction(() => {
-      const current = storage.approvals.get(approvalId);
+    await storage.runImmediateTransaction(async () => {
+      const current = await storage.approvals.get(approvalId);
       if (current.status !== "pending") {
         throw new ConflictError({
           message: `Approval ${approvalId} is already resolved`,
         });
       }
       if (context?.remoteToken) {
-        storage.approvals.mergeLinkage(approvalId, {
+        await storage.approvals.mergeLinkage(approvalId, {
           connectorId: context.remoteToken.connectorId,
           tokenId: context.remoteToken.tokenId,
         });
       }
-      result = commitStandardApprovalResolution(host, approvalId, input);
+      result = await commitStandardApprovalResolution(host, approvalId, input);
     });
   } catch (error) {
     if (!isApprovalExpiryConflict(error, approvalId)) {
@@ -766,7 +793,7 @@ export async function resolveApproval(
     // The database rejected an operator decision at its own expiry boundary.
     // Reconcile that still-pending request as an explicit system rejection.
     result = undefined;
-    const expiration = reconcileExpiredApproval(host, storage.approvals.get(approvalId), {
+    const expiration = await reconcileExpiredApproval(host, await storage.approvals.get(approvalId), {
       requestedDecision: input.decision,
     });
     if (!expiration.committed) {
@@ -784,15 +811,16 @@ export async function resolveApproval(
       message: `Approval ${approvalId} has expired and can no longer be resolved.`,
     });
   }
+  host.requestApprovalEffectProcessing();
   try {
     const settledEffects = await host.awaitApprovalResolutionEffects(approvalId);
-    return buildApprovalResolveResult(storage, storage.approvals.get(approvalId), settledEffects);
+    return buildApprovalResolveResult(storage, await storage.approvals.get(approvalId), settledEffects);
   } catch (error) {
     // Canonical resolution is already committed. A bounded read-after-commit
     // settlement failure must leave the durable follow-up pending instead of
     // turning committed success into a retryable API mutation.
     try {
-      host.publishRealtime("approval_effect_settlement_failed", "approvals", {
+      await host.publishRealtime("approval_effect_settlement_failed", "approvals", {
         approvalId,
         error: error instanceof Error ? error.message : String(error),
       });
@@ -812,11 +840,11 @@ function isApprovalExpiryConflict(error: unknown, approvalId: string): error is 
   );
 }
 
-function commitExpiredApprovalResolution(
+async function commitExpiredApprovalResolution(
   host: ApprovalLifecycleHost,
   approval: ApprovalRequest,
   expiration: ApprovalExpirationContext,
-): ApprovalResolveResult {
+): Promise<ApprovalResolveResult> {
   const input: ApprovalResolveInput = {
     decision: "reject",
     resolvedBy: APPROVAL_EXPIRY_ACTOR_ID,
@@ -828,7 +856,7 @@ function commitExpiredApprovalResolution(
   });
 }
 
-function commitStandardApprovalResolution(
+async function commitStandardApprovalResolution(
   host: ApprovalLifecycleHost,
   approvalId: string,
   input: ApprovalResolveInput,
@@ -836,9 +864,9 @@ function commitStandardApprovalResolution(
     allowExpired?: boolean;
     expiration?: ApprovalExpirationContext;
   } = {},
-): ApprovalResolveResult {
+): Promise<ApprovalResolveResult> {
   const storage = host.storage;
-  const current = storage.approvals.get(approvalId);
+  const current = await storage.approvals.get(approvalId);
   if (current.status !== "pending") {
     throw new ConflictError({
       message: `Approval ${approvalId} is already resolved`,
@@ -861,15 +889,15 @@ function commitStandardApprovalResolution(
     });
   }
 
-  const pendingAction = storage.pendingApprovalActions.find(approvalId);
-  const approval = storage.approvals.resolve(
+  const pendingAction = await storage.pendingApprovalActions.find(approvalId);
+  const approval = await storage.approvals.resolve(
     approvalId,
     input,
     options.allowExpired ? { allowExpired: true } : undefined,
   );
-  const expiredRemoteTokenCount = storage.remoteActionTokens.expirePendingByApprovalId(approvalId);
+  const expiredRemoteTokenCount = await storage.remoteActionTokens.expirePendingByApprovalId(approvalId);
 
-  const resolutionEvent = storage.approvalEvents.append({
+  const resolutionEvent = await storage.approvalEvents.append({
     approvalId,
     eventType: "resolved",
     actorId: input.resolvedBy,
@@ -889,12 +917,12 @@ function commitStandardApprovalResolution(
     },
   });
 
-  recordApprovalResolutionJourney(storage, approval, input, resolutionEvent, options.expiration);
+  await recordApprovalResolutionJourney(storage, approval, input, resolutionEvent, options.expiration);
 
-  markChatInlineApprovalResolved(host, approval, input);
+  await markChatInlineApprovalResolved(host, approval, input);
 
   if (options.expiration && pendingAction?.resolutionStatus === "pending") {
-    const terminalizedCodeModeRun = markCodeModeRunTerminalForPendingApproval(
+    const terminalizedCodeModeRun = await markCodeModeRunTerminalForPendingApproval(
       host,
       approval,
       pendingAction,
@@ -907,13 +935,13 @@ function commitStandardApprovalResolution(
       },
     );
     if (!terminalizedCodeModeRun) {
-      storage.pendingApprovalActions.markResolved(approvalId, "rejected", {
+      await storage.pendingApprovalActions.markResolved(approvalId, "rejected", {
         decision: "reject",
         expired: true,
         requestedDecision: options.expiration.requestedDecision,
         reason: options.expiration.reason,
       });
-      storage.approvalEvents.append({
+      await storage.approvalEvents.append({
         approvalId,
         eventType: "pending_action_refused",
         actorId: APPROVAL_EXPIRY_ACTOR_ID,
@@ -927,7 +955,7 @@ function commitStandardApprovalResolution(
       });
     }
   } else if (input.decision !== "approve" && pendingAction && pendingAction.resolutionStatus === "pending") {
-    const terminalizedCodeModeRun = markCodeModeRunTerminalForPendingApproval(
+    const terminalizedCodeModeRun = await markCodeModeRunTerminalForPendingApproval(
       host,
       approval,
       pendingAction,
@@ -937,7 +965,7 @@ function commitStandardApprovalResolution(
         reason: `Approval ${approvalId} resolved with ${input.decision}.`,
       },
     );
-    storage.pendingApprovalActions.markResolved(approvalId, "rejected", {
+    await storage.pendingApprovalActions.markResolved(approvalId, "rejected", {
       decision: input.decision,
       ...(terminalizedCodeModeRun?.runId ? { runId: terminalizedCodeModeRun.runId } : {}),
       ...(terminalizedCodeModeRun?.pendingRunId !== undefined
@@ -947,26 +975,26 @@ function commitStandardApprovalResolution(
   }
 
   if (options.allowExpired) {
-    host.enqueueApprovalResolutionEffects(approval, input, { allowExpired: true });
+    await host.enqueueApprovalResolutionEffects(approval, input, { allowExpired: true });
   } else {
-    host.enqueueApprovalResolutionEffects(approval, input);
+    await host.enqueueApprovalResolutionEffects(approval, input);
   }
-  host.enqueueApprovalObservabilityEffects(
+  await host.enqueueApprovalObservabilityEffects(
     approval.approvalId,
     buildApprovalResolutionObservabilityEffects(approval, input),
   );
 
-  const effects = storage.approvalEffects.listByApproval(approvalId);
-  return buildApprovalResolveResult(storage, approval, effects);
+  const effects = await storage.approvalEffects.listByApproval(approvalId);
+  return await buildApprovalResolveResult(storage, approval, effects);
 }
 
-function recordApprovalResolutionJourney(
+async function recordApprovalResolutionJourney(
   storage: ApprovalLifecycleHost["storage"],
   approval: ApprovalRequest,
   input: ApprovalResolveInput,
   sourceEvent: ApprovalReplayEvent,
   expiration?: ApprovalExpirationContext,
-): void {
+): Promise<void> {
   const workspaceId = asJourneyIdentifier(approval.linkage?.workspaceId);
   if (!workspaceId) {
     // Legacy approval paths can lack workspace ownership. Never relabel those
@@ -991,7 +1019,7 @@ function recordApprovalResolutionJourney(
     )
     .digest("hex");
 
-  storage.governanceJourneyEvents.create({
+  await storage.governanceJourneyEvents.create({
     schemaVersion: "goatcitadel.journey-event.v1",
     eventId,
     idempotencyKey: `approval:lifecycle:${sourceEvent.eventId}`,
@@ -1044,17 +1072,17 @@ function isSystemActor(actorId: string): boolean {
   return actorId === "system" || actorId.startsWith("system:");
 }
 
-function markChatInlineApprovalResolved(
+async function markChatInlineApprovalResolved(
   host: ApprovalLifecycleHost,
   approval: ApprovalRequest,
   input: ApprovalResolveInput,
-): void {
-  const inlineApproval = host.storage.chatInlineApprovals.get(approval.approvalId);
+): Promise<void> {
+  const inlineApproval = await host.storage.chatInlineApprovals.get(approval.approvalId);
   if (!inlineApproval || inlineApproval.status !== "pending") {
     return;
   }
   const approved = input.decision === "approve" || input.decision === "edit";
-  host.storage.chatInlineApprovals.upsert({
+  await host.storage.chatInlineApprovals.upsert({
     approvalId: inlineApproval.approvalId,
     sessionId: inlineApproval.sessionId,
     turnId: inlineApproval.turnId,
@@ -1100,18 +1128,18 @@ export async function resolveChatToolApproval(
   resumedTurnId?: string;
   resumedRunId?: string;
 }> {
-  const approval = host.storage.approvals.get(approvalId);
+  const approval = await host.storage.approvals.get(approvalId);
   const approvalSessionId = typeof approval.payload.sessionId === "string" ? approval.payload.sessionId : undefined;
   if (approvalSessionId && approvalSessionId !== sessionId) {
     throw new Error(`Approval ${approvalId} does not belong to session ${sessionId}.`);
   }
-  const existingInlineApproval = host.storage.chatInlineApprovals.get(approvalId);
+  const existingInlineApproval = await host.storage.chatInlineApprovals.get(approvalId);
   if (existingInlineApproval && existingInlineApproval.sessionId !== sessionId) {
     throw new Error(`Approval ${approvalId} does not belong to session ${sessionId}.`);
   }
-  const turn = host.storage.chatToolRuns
-    .listBySession(sessionId, 2000)
-    .find((toolRun) => toolRun.approvalId === approvalId);
+  const turn = (await host.storage.chatToolRuns.listBySession(sessionId, 2000)).find(
+    (toolRun) => toolRun.approvalId === approvalId,
+  );
   const turnId = turn?.turnId ?? existingInlineApproval?.turnId;
   if (!turnId) {
     throw new Error(`Approval ${approvalId} is not attached to session ${sessionId}.`);
@@ -1157,8 +1185,8 @@ export async function resolveChatToolApproval(
         scope: persistentGrantScope,
         scopeRefs:
           persistentGrantScope === "workspace"
-            ? [resolveChatApprovalWorkspaceScopeRef(host, resolution.approval, sessionId)]
-            : resolveChatApprovalSessionGrantScopeRefs(host, resolution.approval, sessionId),
+            ? [await resolveChatApprovalWorkspaceScopeRef(host, resolution.approval, sessionId)]
+            : await resolveChatApprovalSessionGrantScopeRefs(host, resolution.approval, sessionId),
       };
     } catch (error) {
       grantError = error instanceof Error ? error.message : String(error);
@@ -1168,8 +1196,14 @@ export async function resolveChatToolApproval(
     for (const scopeRef of persistentGrantRequest.scopeRefs) {
       try {
         const nextGrant =
-          findExistingGrant(host, persistentGrantRequest.scope, scopeRef, toolPattern, officialSearchAllowedHosts) ??
-          createToolGrant(host, {
+          (await findExistingGrant(
+            host,
+            persistentGrantRequest.scope,
+            scopeRef,
+            toolPattern,
+            officialSearchAllowedHosts,
+          )) ??
+          (await createToolGrant(host, {
             toolPattern,
             decision: "allow",
             scope: persistentGrantRequest.scope,
@@ -1177,10 +1211,10 @@ export async function resolveChatToolApproval(
             grantType: "persistent",
             createdBy: resolvedBy,
             ...(officialSearchAllowedHosts ? { constraints: { allowedHosts: officialSearchAllowedHosts } } : {}),
-          });
+          }));
         grant ??= nextGrant;
       } catch (error) {
-        const recoveredGrant = findExistingGrant(
+        const recoveredGrant = await findExistingGrant(
           host,
           persistentGrantRequest.scope,
           scopeRef,
@@ -1198,7 +1232,7 @@ export async function resolveChatToolApproval(
   }
   const resume = resolution.resolutionEffects?.chatTurnResume ?? { resumed: false as const };
   try {
-    host.storage.chatInlineApprovals.upsert({
+    await host.storage.chatInlineApprovals.upsert({
       approvalId,
       sessionId,
       turnId,
@@ -1246,20 +1280,20 @@ function buildChatApprovalResolutionNote(
   return "Approved from chat inline control.";
 }
 
-function resolveChatApprovalSessionGrantScopeRefs(
+async function resolveChatApprovalSessionGrantScopeRefs(
   host: ApprovalLifecycleHost,
   approval: ApprovalRequest,
   sessionId: string,
-): string[] {
+): Promise<string[]> {
   const scopeRefs = new Set<string>([sessionId]);
   const workspaceId =
     typeof approval.linkage?.workspaceId === "string" && approval.linkage.workspaceId.trim()
       ? approval.linkage.workspaceId.trim()
       : undefined;
   try {
-    const parent = host.storage.chatDelegationSteps
-      ?.listParentsByChildSessionIds([sessionId], workspaceId)
-      .get(sessionId);
+    const parent = (
+      await host.storage.chatDelegationSteps?.listParentsByChildSessionIds([sessionId], workspaceId)
+    )?.get(sessionId);
     if (parent?.parentSessionId?.trim()) {
       scopeRefs.add(parent.parentSessionId.trim());
     }
@@ -1269,17 +1303,17 @@ function resolveChatApprovalSessionGrantScopeRefs(
   return [...scopeRefs];
 }
 
-function resolveChatApprovalWorkspaceScopeRef(
+async function resolveChatApprovalWorkspaceScopeRef(
   host: ApprovalLifecycleHost,
   approval: ApprovalRequest,
   sessionId: string,
-): string {
+): Promise<string> {
   const payload = approval.payload ?? {};
   const linkageWorkspaceId =
     typeof approval.linkage?.workspaceId === "string" && approval.linkage.workspaceId.trim()
       ? approval.linkage.workspaceId.trim()
       : undefined;
-  const metaWorkspaceId = host.storage.chatSessionMeta.get(sessionId)?.workspaceId?.trim();
+  const metaWorkspaceId = (await host.storage.chatSessionMeta.get(sessionId))?.workspaceId?.trim();
   const workspaceId =
     linkageWorkspaceId ??
     (typeof payload.workspaceId === "string" && payload.workspaceId.trim() ? payload.workspaceId.trim() : undefined) ??
@@ -1287,29 +1321,27 @@ function resolveChatApprovalWorkspaceScopeRef(
   if (!workspaceId) {
     throw new Error(`Approval ${approval.approvalId} is not linked to a workspace.`);
   }
-  return host.resolveApprovalHookWorkspaceId({
+  return await host.resolveApprovalHookWorkspaceId({
     ...(payload as Record<string, unknown>),
     workspaceId,
     sessionId,
   });
 }
 
-function findExistingGrant(
+async function findExistingGrant(
   host: ApprovalLifecycleHost,
   scope: "session" | "workspace",
   scopeRef: string,
   toolPattern: string,
   exactAllowedHosts?: string[],
-): ToolGrantRecord | undefined {
-  return host.policyEngine
-    .listActiveGrants(scope, scopeRef, 500)
-    .find(
-      (grant) =>
-        grant.decision === "allow" &&
-        grant.toolPattern === toolPattern &&
-        (exactAllowedHosts === undefined ||
-          haveSameExactHostSet(grant.constraints?.allowedHosts ?? [], exactAllowedHosts)),
-    );
+): Promise<ToolGrantRecord | undefined> {
+  return (await host.policyEngine.listActiveGrants(scope, scopeRef, 500)).find(
+    (grant) =>
+      grant.decision === "allow" &&
+      grant.toolPattern === toolPattern &&
+      (exactAllowedHosts === undefined ||
+        haveSameExactHostSet(grant.constraints?.allowedHosts ?? [], exactAllowedHosts)),
+  );
 }
 
 function resolveOfficialSearchApprovalGrantHosts(approval: ApprovalRequest, toolPattern: string): string[] | undefined {

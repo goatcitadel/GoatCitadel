@@ -115,7 +115,7 @@ describe("Gateway settings owner transaction", () => {
     expect(owners.llamaCppRuntime.restoreLifecycleSnapshot).toHaveBeenLastCalledWith(previousLifecycle);
   });
 
-  it("builds and validates a candidate without mutating live owners, persistence, or config", () => {
+  it("builds and validates a candidate without mutating live owners, persistence, or config", async () => {
     const unified = JSON.parse(
       fs.readFileSync(path.resolve(process.cwd(), "../../config/goatcitadel.example.json"), "utf8"),
     ) as Record<string, any>;
@@ -148,7 +148,7 @@ describe("Gateway settings owner transaction", () => {
     };
     const features = structuredClone(config.assistant.features);
 
-    const candidate = buildSettingsCandidate(
+    const candidate = await buildSettingsCandidate(
       {
         config: config as never,
         llmService,
@@ -165,7 +165,7 @@ describe("Gateway settings owner transaction", () => {
           start: ownerSpies.llamaStart,
           stop: ownerSpies.llamaStop,
         },
-        readFeatureFlags: () => structuredClone(features),
+        readFeatureFlags: async () => structuredClone(features),
         readSettingsRevision: () => 9,
         updateFeatureFlags: ownerSpies.featureUpdate,
         assertDeploymentProfileUpdate: () => undefined,
@@ -236,7 +236,7 @@ describe("Gateway settings owner transaction", () => {
     expect(generation.getRevision()).toBe(3);
   });
 
-  it("replaces stale feature system_settings exactly during committed forward recovery without waking autonomy", () => {
+  it("replaces stale feature system_settings exactly during committed forward recovery without waking autonomy", async () => {
     const { initialConfig } = buildHarness();
     const canonicalFeatures = {
       ...structuredClone(initialConfig.assistant.features),
@@ -247,7 +247,7 @@ describe("Gateway settings owner transaction", () => {
       autonomyV1Disabled: true,
       replayRegressionV1Enabled: !canonicalFeatures.replayRegressionV1Enabled,
     };
-    const set = vi.fn();
+    const set = vi.fn(async () => undefined);
     const resumeRunsWaitingForAutonomyKillSwitch = vi.fn();
     const runtime = {
       config: { assistant: { features: structuredClone(canonicalFeatures) } },
@@ -258,9 +258,9 @@ describe("Gateway settings owner transaction", () => {
       durableRunService: { resumeRunsWaitingForAutonomyKillSwitch },
     };
 
-    (
+    await (
       GatewayService.prototype as unknown as {
-        applyStartupFeatureFlags(this: typeof runtime): void;
+        applyStartupFeatureFlags(this: typeof runtime): Promise<void>;
       }
     ).applyStartupFeatureFlags.call(runtime);
 
@@ -332,7 +332,7 @@ describe("Gateway settings owner transaction", () => {
       }),
     ).rejects.toBeInstanceOf(ConfigGenerationApplyError);
 
-    expect(runtime.readFeatureFlags().autonomyV1Disabled).toBe(true);
+    expect((await runtime.readFeatureFlags()).autonomyV1Disabled).toBe(true);
     expect(runtime.config.assistant.features.autonomyV1Disabled).toBe(true);
     expect((generation.getActivePayload().assistant.features as Record<string, boolean>).autonomyV1Disabled).toBe(true);
     expect(generation.getHealthSnapshot()).toMatchObject({ revision: 3, transactionState: "idle" });
@@ -440,7 +440,7 @@ async function buildAutonomySettingsGatewayHarness(
   let features = structuredClone(config.assistant.features) as Record<string, boolean>;
   let injectedFailureUsed = false;
   const updateFeatureFlags = vi.fn(
-    (patch: Partial<Record<string, boolean>>, _options: { resumeParkedRuns?: boolean } = {}) => {
+    async (patch: Partial<Record<string, boolean>>, _options: { resumeParkedRuns?: boolean } = {}) => {
       if (options.failFeatureApply && !injectedFailureUsed && patch.autonomyV1Disabled === false) {
         injectedFailureUsed = true;
         throw new Error("injected autonomy feature owner failure");
@@ -484,10 +484,10 @@ async function buildAutonomySettingsGatewayHarness(
       restoreLifecycleSnapshot: vi.fn(async () => stoppedStatus),
     },
     storage: {
-      mesh: { snapshotRuntimeArtifacts: vi.fn() },
-      cronJobs: { list: vi.fn(() => structuredClone(payload.cronJobs.jobs ?? [])) },
+      mesh: { snapshotRuntimeArtifacts: vi.fn(async () => undefined) },
+      cronJobs: { list: vi.fn(async () => structuredClone(payload.cronJobs.jobs ?? [])) },
     },
-    readFeatureFlags: () => structuredClone(features),
+    readFeatureFlags: async () => structuredClone(features),
     updateFeatureFlags,
     assertDeploymentProfileUpdate: () => undefined,
     assertFirecrawlRuntimeUpdate: () => undefined,
@@ -495,7 +495,7 @@ async function buildAutonomySettingsGatewayHarness(
   };
   runtime.getRouteCompositionPort = () => runtime;
   runtime.readSettingsRevision = () => GatewayService.prototype.readSettingsRevision.call(runtime as GatewayService);
-  runtime.getSettings = () => GatewayService.prototype.getSettings.call(runtime as GatewayService);
+  runtime.getSettings = async () => await GatewayService.prototype.getSettings.call(runtime as GatewayService);
   runtime.updateSettings = (input: unknown) =>
     GatewayService.prototype.updateSettings.call(runtime as GatewayService, input as never);
   runtime.applySettingsRuntimeCandidate = (
@@ -510,20 +510,36 @@ async function buildAutonomySettingsGatewayHarness(
       reason,
     );
   runtime.serializeRootPath = (value: string) => value;
-  runtime.buildUnifiedConfigPayloadForRuntime = (
+  runtime.buildUnifiedConfigPayloadForRuntime = async (
     candidateConfig: unknown,
     candidateLlm: CompleteUnifiedConfigPayload["llm"],
     candidateFeatures: Record<string, boolean>,
   ) =>
-    (
+    await (
       GatewayService.prototype as unknown as {
         buildUnifiedConfigPayloadForRuntime(
           config: unknown,
           llm: CompleteUnifiedConfigPayload["llm"],
           features: Record<string, boolean>,
-        ): CompleteUnifiedConfigPayload;
+        ): Promise<CompleteUnifiedConfigPayload>;
       }
     ).buildUnifiedConfigPayloadForRuntime.call(runtime, candidateConfig, candidateLlm, candidateFeatures);
+  runtime.buildUnifiedConfigPayloadFromRuntime = (
+    candidateConfig: unknown,
+    candidateLlm: CompleteUnifiedConfigPayload["llm"],
+    candidateFeatures: Record<string, boolean>,
+    cronJobs: CompleteUnifiedConfigPayload["cronJobs"],
+  ) =>
+    (
+      GatewayService.prototype as unknown as {
+        buildUnifiedConfigPayloadFromRuntime(
+          config: unknown,
+          llm: CompleteUnifiedConfigPayload["llm"],
+          features: Record<string, boolean>,
+          cronJobs: CompleteUnifiedConfigPayload["cronJobs"],
+        ): CompleteUnifiedConfigPayload;
+      }
+    ).buildUnifiedConfigPayloadFromRuntime.call(runtime, candidateConfig, candidateLlm, candidateFeatures, cronJobs);
 
   return { runtime, generation, updateFeatureFlags, resumeParkedRuns, root };
 }
@@ -595,14 +611,14 @@ function buildHarness() {
     stop: vi.fn(async () => ({})),
     restoreLifecycleSnapshot: vi.fn(async () => ({})),
   };
-  const updateFeatureFlags = vi.fn((features) => features);
+  const updateFeatureFlags = vi.fn(async (features) => features);
   const runtime = {
     config: structuredClone(initialConfig),
     llmService,
     meshService,
     npuSidecar,
     llamaCppRuntime,
-    readFeatureFlags: vi.fn(() => structuredClone(initialFeatures)),
+    readFeatureFlags: vi.fn(async () => structuredClone(initialFeatures)),
     updateFeatureFlags,
   };
   const candidate: SettingsConfigCandidate = {

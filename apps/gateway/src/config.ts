@@ -385,6 +385,7 @@ export interface PostgresPoolConfig {
 
 export interface PostgresRuntimeConfig {
   mode: PostgresRuntimeMode;
+  asyncGatewayEnabled?: boolean;
   connectionString?: string;
   connectionStringEnv?: string;
   host?: string;
@@ -405,6 +406,7 @@ export interface BundledPostgresConfig {
   binDir?: string;
   autoStart: boolean;
   startTimeoutMs: number;
+  stopTimeoutMs: number;
 }
 
 export interface DatabaseRuntimeConfig {
@@ -833,6 +835,10 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
   if (postgresMode === "bundled" || postgresMode === "managed") {
     assistant.database.postgres.mode = postgresMode;
   }
+  const postgresAsyncGatewayEnabled = parseBooleanEnv(process.env.GOATCITADEL_POSTGRES_ASYNC_GATEWAY_ENABLED);
+  if (postgresAsyncGatewayEnabled !== undefined) {
+    assistant.database.postgres.asyncGatewayEnabled = postgresAsyncGatewayEnabled;
+  }
   const postgresConnectionString = process.env.GOATCITADEL_POSTGRES_CONNECTION_STRING?.trim();
   if (postgresConnectionString) {
     assistant.database.postgres.connectionString = postgresConnectionString;
@@ -938,7 +944,16 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
       bundledPostgresStartTimeoutMs,
       assistant.database.bundledPostgres.startTimeoutMs,
       1_000,
-      120_000,
+      300_000,
+    );
+  }
+  const bundledPostgresStopTimeoutMs = parseIntEnv(process.env.GOATCITADEL_BUNDLED_POSTGRES_SHUTDOWN_TIMEOUT_MS);
+  if (bundledPostgresStopTimeoutMs !== undefined) {
+    assistant.database.bundledPostgres.stopTimeoutMs = clampInt(
+      bundledPostgresStopTimeoutMs,
+      assistant.database.bundledPostgres.stopTimeoutMs,
+      30_000,
+      600_000,
     );
   }
   const firecrawlEnabled = parseBooleanEnv(process.env.GOATCITADEL_FIRECRAWL_ENABLED);
@@ -1277,6 +1292,7 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       driver: databaseInput.driver ?? "postgres",
       postgres: {
         mode: postgresInput.mode ?? "bundled",
+        asyncGatewayEnabled: postgresInput.asyncGatewayEnabled ?? true,
         connectionString: postgresInput.connectionString,
         connectionStringEnv: postgresInput.connectionStringEnv,
         host: postgresInput.host,
@@ -1302,7 +1318,8 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
         // machine needs no Docker. Docker stays as the fallback backend.
         binDir: bundledPostgresInput.binDir ?? AUTO_NATIVE_BIN_DIR,
         autoStart: bundledPostgresInput.autoStart ?? true,
-        startTimeoutMs: clampInt(bundledPostgresInput.startTimeoutMs, 90_000, 1_000, 120_000),
+        startTimeoutMs: clampInt(bundledPostgresInput.startTimeoutMs, 180_000, 1_000, 300_000),
+        stopTimeoutMs: clampInt(bundledPostgresInput.stopTimeoutMs, 300_000, 30_000, 600_000),
       },
       sqlite,
     },

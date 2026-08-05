@@ -38,7 +38,7 @@ export const connectorsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send({
-      items: fastify.services.connectors.listConnectorRecords(parsed.data.connectorType),
+      items: await fastify.services.connectors.listConnectorRecords(parsed.data.connectorType),
     });
   });
 

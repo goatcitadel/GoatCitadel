@@ -40,7 +40,7 @@ import {
   buildMeshCapabilityActivationDiffs,
   computeMeshCapabilityActivationRequestSha256,
   type ActivateMeshCapabilityInput,
-  type Storage,
+  type AsyncStorage as Storage,
 } from "@goatcitadel/storage";
 import {
   createMeshCapabilityActivationApproval,
@@ -128,14 +128,18 @@ export interface MeshCapabilityActivationServiceOptions {
   storage: Storage;
   publication: Pick<MeshCapabilityPublicationService, "listPublicationInspection">;
   now?: () => Date;
-  publishRealtime?: (eventType: string, source: string, payload: Record<string, unknown>) => void;
+  publishRealtime?: (eventType: string, source: string, payload: Record<string, unknown>) => Promise<unknown>;
 }
 
 export class MeshCapabilityActivationService {
   private readonly storage: Storage;
   private readonly publication: Pick<MeshCapabilityPublicationService, "listPublicationInspection">;
   private readonly now: () => Date;
-  private readonly publishRealtime?: (eventType: string, source: string, payload: Record<string, unknown>) => void;
+  private readonly publishRealtime?: (
+    eventType: string,
+    source: string,
+    payload: Record<string, unknown>,
+  ) => Promise<unknown>;
 
   public constructor(options: MeshCapabilityActivationServiceOptions) {
     this.storage = options.storage;
@@ -155,18 +159,20 @@ export class MeshCapabilityActivationService {
    * at request time; the storage guard re-checks everything again inside the
    * approved activation transaction.
    */
-  public requestActivation(input: MeshCapabilityActivationRequestInput): MeshCapabilityActivationRequestResult {
-    const { entry, manifest } = this.resolveExactEntry(input);
+  public async requestActivation(
+    input: MeshCapabilityActivationRequestInput,
+  ): Promise<MeshCapabilityActivationRequestResult> {
+    const { entry, manifest } = await this.resolveExactEntry(input);
     if (entry.kind === "skill") {
       // Staging an inactive candidate needs the exact content bytes, which
       // remain on the remote node until the M3 dispatch runtime exists.
       throw new MeshCapabilityActivationServiceError("mesh_capability_skill_staging_deferred");
     }
-    this.assertEntryActivatable(input.workspaceId, manifest.manifestSha256, entry.entrySha256);
-    const liveBinding = this.resolveLivePublisherBinding(input.workspaceId, manifest.nodeId, {
+    await this.assertEntryActivatable(input.workspaceId, manifest.manifestSha256, entry.entrySha256);
+    const liveBinding = await this.resolveLivePublisherBinding(input.workspaceId, manifest.nodeId, {
       publisherGeneration: manifest.publisherGeneration,
     });
-    const prior = this.resolvePriorActivation(input.workspaceId, entry.capabilityId);
+    const prior = await this.resolvePriorActivation(input.workspaceId, entry.capabilityId);
     const diffs = buildMeshCapabilityActivationDiffs({
       currentEntry: entry,
       ...(prior === undefined ? {} : { prior }),
@@ -207,12 +213,12 @@ export class MeshCapabilityActivationService {
       ...(input.turnId === undefined ? {} : { turnId: input.turnId }),
       idempotencyKey: activationIdempotencyKey(activationId),
     };
-    let committed!: ReturnType<typeof createMeshCapabilityActivationApproval>;
-    this.storage.runImmediateTransaction(() => {
-      committed = createMeshCapabilityActivationApproval({ storage: this.storage }, activationInput);
+    let committed!: Awaited<ReturnType<typeof createMeshCapabilityActivationApproval>>;
+    await this.storage.runImmediateTransaction(async () => {
+      committed = await createMeshCapabilityActivationApproval({ storage: this.storage }, activationInput);
       // Request Journey evidence commits atomically with the approval row and
       // is the durable requester-identity record the approved apply recovers.
-      this.storage.governanceJourneyEvents.create(
+      await this.storage.governanceJourneyEvents.create(
         buildActivationRequestJourneyEvent({
           approval: committed.approval,
           activationInput: committed.activationInput,
@@ -221,7 +227,7 @@ export class MeshCapabilityActivationService {
       );
     });
     if (!committed.replayed) {
-      this.publishRealtime?.("mesh_capability_activation_requested", "mesh", {
+      await this.publishRealtime?.("mesh_capability_activation_requested", "mesh", {
         workspaceId: input.workspaceId,
         capabilityId: entry.capabilityId,
         activationId,
@@ -249,30 +255,30 @@ export class MeshCapabilityActivationService {
    * zero writes. The storage `activate()` guard then re-verifies the exact
    * binding, approval, health, lease, and caps inside its own transaction.
    */
-  public executeApprovedActivation(input: {
+  public async executeApprovedActivation(input: {
     workspaceId: string;
     approvalId: string;
-  }): MeshCapabilityActivationApplyResult {
-    const approval = this.requireExecutableApproval(input.workspaceId, input.approvalId);
+  }): Promise<MeshCapabilityActivationApplyResult> {
+    const approval = await this.requireExecutableApproval(input.workspaceId, input.approvalId);
     const payload = approval.payload as unknown as MeshCapabilityActivationApprovalPayload;
     // Exact replay converges on the already-applied immutable row before any
     // live-state rebuild: post-apply publisher churn must never fail a retry
     // of an activation that already exists.
-    const existing = this.findActivation(input.workspaceId, payload.activationId);
+    const existing = await this.findActivation(input.workspaceId, payload.activationId);
     if (existing) {
       if (existing.requestSha256 !== payload.requestSha256 || existing.approvalId !== approval.approvalId) {
         throw new MeshCapabilityActivationServiceError("mesh_capability_activation_conflict");
       }
       return { activation: existing, replayed: true };
     }
-    const actorId = this.recoverRequestActorId(approval.approvalId);
-    const rebuilt = this.rebuildActivationInput(payload, approval, actorId);
+    const actorId = await this.recoverRequestActorId(approval.approvalId);
+    const rebuilt = await this.rebuildActivationInput(payload, approval, actorId);
     if (computeMeshCapabilityActivationRequestSha256(rebuilt) !== payload.requestSha256) {
       throw new MeshCapabilityActivationServiceError("mesh_capability_activation_state_drift");
     }
     let activation: MeshCapabilityActivationRecord;
     try {
-      activation = this.storage.meshCapabilityPublications.activate(rebuilt);
+      activation = await this.storage.meshCapabilityPublications.activate(rebuilt);
     } catch (error) {
       if (error instanceof MeshCapabilityActivationServiceError) throw error;
       // Deterministic guard/constraint violations (the storage activation
@@ -286,7 +292,7 @@ export class MeshCapabilityActivationService {
       }
       throw error;
     }
-    this.publishRealtime?.("mesh_capability_activation_applied", "mesh", {
+    await this.publishRealtime?.("mesh_capability_activation_applied", "mesh", {
       workspaceId: activation.workspaceId,
       capabilityId: activation.capabilityId,
       activationId: activation.activationId,
@@ -297,17 +303,19 @@ export class MeshCapabilityActivationService {
   }
 
   /** Operator revoke: terminal, replay-converging, removes callability immediately. */
-  public revokeActivation(input: MeshCapabilityActivationRevokeInput): MeshCapabilityActivationRevokeResult {
+  public async revokeActivation(
+    input: MeshCapabilityActivationRevokeInput,
+  ): Promise<MeshCapabilityActivationRevokeResult> {
     let activation: MeshCapabilityActivationRecord;
     try {
-      activation = this.storage.meshCapabilityPublications.getActivation(input.workspaceId, input.activationId);
+      activation = await this.storage.meshCapabilityPublications.getActivation(input.workspaceId, input.activationId);
     } catch (error) {
       if (error instanceof NotFoundError) {
         throw new MeshCapabilityActivationServiceError("mesh_capability_activation_not_found");
       }
       throw error;
     }
-    const existing = this.storage.meshCapabilityPublications.findActivationRevocation(
+    const existing = await this.storage.meshCapabilityPublications.findActivationRevocation(
       input.workspaceId,
       input.activationId,
     );
@@ -316,7 +324,7 @@ export class MeshCapabilityActivationService {
     }
     let revocation: MeshCapabilityActivationRevocationRecord;
     try {
-      revocation = this.storage.meshCapabilityPublications.revoke({
+      revocation = await this.storage.meshCapabilityPublications.revoke({
         workspaceId: input.workspaceId,
         activationId: input.activationId,
         reason: input.reason,
@@ -329,7 +337,7 @@ export class MeshCapabilityActivationService {
       }
       throw new MeshCapabilityActivationServiceError("mesh_capability_activation_conflict");
     }
-    this.publishRealtime?.("mesh_capability_activation_revoked", "mesh", {
+    await this.publishRealtime?.("mesh_capability_activation_revoked", "mesh", {
       workspaceId: input.workspaceId,
       capabilityId: activation.capabilityId,
       activationId: input.activationId,
@@ -345,16 +353,16 @@ export class MeshCapabilityActivationService {
    * unless the workspace's currently-callable activation binds this exact
    * entry (capability, entry digest, manifest digest, publisher generation).
    */
-  public resolveProfileBinding(input: {
+  public async resolveProfileBinding(input: {
     workspaceId: string;
     capabilityId: string;
     entrySha256: string;
     manifestSha256: string;
     publisherGeneration: number;
-  }): ChatTurnCapabilityToolMeshPublicationBinding | undefined {
-    const activation = this.storage.meshCapabilityPublications
-      .listCallableActivations(input.workspaceId)
-      .find((candidate) => candidate.capabilityId === input.capabilityId);
+  }): Promise<ChatTurnCapabilityToolMeshPublicationBinding | undefined> {
+    const activation = (await this.storage.meshCapabilityPublications.listCallableActivations(input.workspaceId)).find(
+      (candidate) => candidate.capabilityId === input.capabilityId,
+    );
     if (
       !activation ||
       activation.entrySha256 !== input.entrySha256 ||
@@ -388,13 +396,13 @@ export class MeshCapabilityActivationService {
    * is composed yet, so a still-valid binding remains fail-closed. M3 slots
    * the real dispatch behind the valid branch of this exact gate.
    */
-  public resolvePreDispatchBlock(
+  public async resolvePreDispatchBlock(
     workspaceId: string,
     binding: ChatTurnCapabilityToolMeshPublicationBinding,
-  ): "mesh_capability_binding_drift" | "mesh_capability_dispatch_unready" {
-    const activation = this.storage.meshCapabilityPublications
-      .listCallableActivations(workspaceId)
-      .find((candidate) => candidate.activationId === binding.activationId);
+  ): Promise<"mesh_capability_binding_drift" | "mesh_capability_dispatch_unready"> {
+    const activation = (await this.storage.meshCapabilityPublications.listCallableActivations(workspaceId)).find(
+      (candidate) => candidate.activationId === binding.activationId,
+    );
     if (
       !activation ||
       activation.nodeId !== binding.nodeId ||
@@ -412,13 +420,13 @@ export class MeshCapabilityActivationService {
     return "mesh_capability_dispatch_unready";
   }
 
-  private resolveExactEntry(input: MeshCapabilityActivationRequestInput): {
+  private async resolveExactEntry(input: MeshCapabilityActivationRequestInput): Promise<{
     entry: MeshCapabilityManifestEntry;
     manifest: { nodeId: string; publisherGeneration: number; manifestSha256: string };
-  } {
-    const record = this.storage.meshCapabilityPublications
-      .listManifestRecords(input.workspaceId)
-      .find((candidate) => candidate.manifest.manifestSha256 === input.manifestSha256);
+  }> {
+    const record = (await this.storage.meshCapabilityPublications.listManifestRecords(input.workspaceId)).find(
+      (candidate) => candidate.manifest.manifestSha256 === input.manifestSha256,
+    );
     if (!record) {
       throw new MeshCapabilityActivationServiceError("mesh_capability_manifest_not_found");
     }
@@ -442,8 +450,12 @@ export class MeshCapabilityActivationService {
    * or `active`. Superseded, offline, suspect, revoked, or blocked entries
    * fail closed with one coarse reason.
    */
-  private assertEntryActivatable(workspaceId: string, manifestSha256: string, entrySha256: string): void {
-    const inspection = this.publication.listPublicationInspection(workspaceId);
+  private async assertEntryActivatable(
+    workspaceId: string,
+    manifestSha256: string,
+    entrySha256: string,
+  ): Promise<void> {
+    const inspection = await this.publication.listPublicationInspection(workspaceId);
     const manifestView = inspection.manifests.find((candidate) => candidate.manifestSha256 === manifestSha256);
     const projection = manifestView?.entries.find((candidate) => candidate.entrySha256 === entrySha256);
     if (!projection || !ACTIVATABLE_PROJECTION_STATUSES.has(projection.status)) {
@@ -451,19 +463,19 @@ export class MeshCapabilityActivationService {
     }
   }
 
-  private resolveLivePublisherBinding(
+  private async resolveLivePublisherBinding(
     workspaceId: string,
     nodeId: string,
     expected: { publisherGeneration: number },
-  ): { healthGeneration: number; publicationLeaseFencingToken: number } {
+  ): Promise<{ healthGeneration: number; publicationLeaseFencingToken: number }> {
     const publications = this.storage.meshCapabilityPublications;
-    const publisher = publications.findCurrentPublisher(workspaceId, nodeId);
+    const publisher = await publications.findCurrentPublisher(workspaceId, nodeId);
     if (!publisher || publisher.publisherGeneration !== expected.publisherGeneration) {
       throw new MeshCapabilityActivationServiceError("mesh_capability_publisher_not_activatable");
     }
     let health;
     try {
-      health = publications.getPublisherHealth(workspaceId, nodeId, publisher.publisherGeneration);
+      health = await publications.getPublisherHealth(workspaceId, nodeId, publisher.publisherGeneration);
     } catch (error) {
       if (error instanceof NotFoundError) {
         throw new MeshCapabilityActivationServiceError("mesh_capability_publisher_not_activatable");
@@ -479,17 +491,22 @@ export class MeshCapabilityActivationService {
     };
   }
 
-  private resolvePriorActivation(
+  private async resolvePriorActivation(
     workspaceId: string,
     capabilityId: string,
-  ): { activation: MeshCapabilityActivationRecord; entry: MeshCapabilityManifestEntry } | undefined {
-    const prior = this.storage.meshCapabilityPublications.findLatestActivation(workspaceId, capabilityId);
+  ): Promise<{ activation: MeshCapabilityActivationRecord; entry: MeshCapabilityManifestEntry } | undefined> {
+    const prior = await this.storage.meshCapabilityPublications.findLatestActivation(workspaceId, capabilityId);
     if (!prior) return undefined;
     let priorEntry: MeshCapabilityManifestEntry | undefined;
     try {
-      priorEntry = this.storage.meshCapabilityPublications
-        .getManifest(workspaceId, prior.nodeId, prior.publisherGeneration, prior.manifestSha256)
-        .entries.find((candidate) => candidate.capabilityId === capabilityId);
+      priorEntry = (
+        await this.storage.meshCapabilityPublications.getManifest(
+          workspaceId,
+          prior.nodeId,
+          prior.publisherGeneration,
+          prior.manifestSha256,
+        )
+      ).entries.find((candidate) => candidate.capabilityId === capabilityId);
     } catch (error) {
       if (!(error instanceof NotFoundError)) throw error;
     }
@@ -499,10 +516,10 @@ export class MeshCapabilityActivationService {
     return { activation: prior, entry: priorEntry };
   }
 
-  private requireExecutableApproval(workspaceId: string, approvalId: string): ApprovalRequest {
+  private async requireExecutableApproval(workspaceId: string, approvalId: string): Promise<ApprovalRequest> {
     let approval: ApprovalRequest;
     try {
-      approval = this.storage.approvals.get(approvalId);
+      approval = await this.storage.approvals.get(approvalId);
     } catch (error) {
       if (error instanceof NotFoundError) {
         throw new MeshCapabilityActivationServiceError("mesh_capability_approval_not_executable");
@@ -533,8 +550,8 @@ export class MeshCapabilityActivationService {
     return approval;
   }
 
-  private recoverRequestActorId(approvalId: string): string {
-    const evidence = this.storage.governanceJourneyEvents.findByIdempotencyKey(
+  private async recoverRequestActorId(approvalId: string): Promise<string> {
+    const evidence = await this.storage.governanceJourneyEvents.findByIdempotencyKey(
       activationRequestJourneyIdempotencyKey(approvalId),
     );
     if (!evidence || evidence.approvalId !== approvalId || !evidence.actorId) {
@@ -543,15 +560,15 @@ export class MeshCapabilityActivationService {
     return evidence.actorId;
   }
 
-  private rebuildActivationInput(
+  private async rebuildActivationInput(
     payload: MeshCapabilityActivationApprovalPayload,
     approval: ApprovalRequest,
     actorId: string,
-  ): ActivateMeshCapabilityInput {
+  ): Promise<ActivateMeshCapabilityInput> {
     let entry: MeshCapabilityManifestEntry;
     let manifest: { nodeId: string; publisherGeneration: number; manifestSha256: string };
     try {
-      ({ entry, manifest } = this.resolveExactEntry({
+      ({ entry, manifest } = await this.resolveExactEntry({
         workspaceId: payload.workspaceId,
         capabilityId: payload.capabilityId,
         manifestSha256: payload.manifestSha256,
@@ -574,10 +591,10 @@ export class MeshCapabilityActivationService {
     let liveBinding: { healthGeneration: number; publicationLeaseFencingToken: number };
     let prior: { activation: MeshCapabilityActivationRecord; entry: MeshCapabilityManifestEntry } | undefined;
     try {
-      liveBinding = this.resolveLivePublisherBinding(payload.workspaceId, manifest.nodeId, {
+      liveBinding = await this.resolveLivePublisherBinding(payload.workspaceId, manifest.nodeId, {
         publisherGeneration: manifest.publisherGeneration,
       });
-      prior = this.resolvePriorActivation(payload.workspaceId, payload.capabilityId);
+      prior = await this.resolvePriorActivation(payload.workspaceId, payload.capabilityId);
     } catch (error) {
       if (error instanceof MeshCapabilityActivationServiceError) {
         throw new MeshCapabilityActivationServiceError("mesh_capability_activation_state_drift");
@@ -591,7 +608,7 @@ export class MeshCapabilityActivationService {
       if (replayed.activationId !== payload.activationId) {
         throw new MeshCapabilityActivationServiceError("mesh_capability_activation_state_drift");
       }
-      prior = this.resolvePriorForReplay(payload.workspaceId, payload.capabilityId, replayed);
+      prior = await this.resolvePriorForReplay(payload.workspaceId, payload.capabilityId, replayed);
     }
     const diffs = buildMeshCapabilityActivationDiffs({
       currentEntry: entry,
@@ -623,34 +640,42 @@ export class MeshCapabilityActivationService {
     };
   }
 
-  private resolvePriorForReplay(
+  private async resolvePriorForReplay(
     workspaceId: string,
     capabilityId: string,
     replayed: MeshCapabilityActivationRecord,
-  ): { activation: MeshCapabilityActivationRecord; entry: MeshCapabilityManifestEntry } | undefined {
+  ): Promise<{ activation: MeshCapabilityActivationRecord; entry: MeshCapabilityManifestEntry } | undefined> {
     const priorActivationId = replayed.permissionDiff.priorActivationId;
     if (!priorActivationId) return undefined;
     let activation: MeshCapabilityActivationRecord;
     try {
-      activation = this.storage.meshCapabilityPublications.getActivation(workspaceId, priorActivationId);
+      activation = await this.storage.meshCapabilityPublications.getActivation(workspaceId, priorActivationId);
     } catch (error) {
       if (error instanceof NotFoundError) {
         throw new MeshCapabilityActivationServiceError("mesh_capability_activation_state_drift");
       }
       throw error;
     }
-    const entry = this.storage.meshCapabilityPublications
-      .getManifest(workspaceId, activation.nodeId, activation.publisherGeneration, activation.manifestSha256)
-      .entries.find((candidate) => candidate.capabilityId === capabilityId);
+    const entry = (
+      await this.storage.meshCapabilityPublications.getManifest(
+        workspaceId,
+        activation.nodeId,
+        activation.publisherGeneration,
+        activation.manifestSha256,
+      )
+    ).entries.find((candidate) => candidate.capabilityId === capabilityId);
     if (!entry || entry.entrySha256 !== activation.entrySha256) {
       throw new MeshCapabilityActivationServiceError("mesh_capability_activation_state_drift");
     }
     return { activation, entry };
   }
 
-  private findActivation(workspaceId: string, activationId: string): MeshCapabilityActivationRecord | undefined {
+  private async findActivation(
+    workspaceId: string,
+    activationId: string,
+  ): Promise<MeshCapabilityActivationRecord | undefined> {
     try {
-      return this.storage.meshCapabilityPublications.getActivation(workspaceId, activationId);
+      return await this.storage.meshCapabilityPublications.getActivation(workspaceId, activationId);
     } catch (error) {
       if (error instanceof NotFoundError) return undefined;
       throw error;

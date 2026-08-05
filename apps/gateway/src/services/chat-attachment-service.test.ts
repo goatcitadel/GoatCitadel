@@ -112,7 +112,7 @@ describe("chat-attachment-service", () => {
       mimeType: "text/markdown",
       bytesBase64: bytes.toString("base64"),
     });
-    const hydrated = getChatAttachment(host, uploaded.attachmentId);
+    const hydrated = await getChatAttachment(host, uploaded.attachmentId);
     const content = await readChatAttachmentContent(host, uploaded.attachmentId);
 
     expect(uploaded).toEqual(

@@ -4,7 +4,7 @@ import type {
   PersonalityPresetCategory,
   PersonalityPresetMutationInput,
 } from "@goatcitadel/contracts";
-import type { SystemSettingsRepository } from "@goatcitadel/storage";
+import type { AsyncStorage } from "@goatcitadel/storage";
 
 type PersonalityDefinition = Omit<PersonalityPreset, "visibility" | "builtin" | "soulFile" | "safetyNotes"> & {
   safetyNotes?: string[];
@@ -509,10 +509,10 @@ export function buildPersonalityOverlay(
 }
 
 export class PersonalityCatalogService {
-  public constructor(private readonly systemSettings: SystemSettingsRepository) {}
+  public constructor(private readonly systemSettings: Pick<AsyncStorage["systemSettings"], "get" | "set">) {}
 
-  public getCatalog(): PersonalityCatalogResponse {
-    const stored = this.readStoredCatalog();
+  public async getCatalog(): Promise<PersonalityCatalogResponse> {
+    const stored = await this.readStoredCatalog();
     const customPresets = this.normalizeCustomPresets(stored.customPresets);
     const items = [
       ...BUILTIN_PERSONALITY_PRESETS.map((preset) => this.applyBuiltinOverride(preset, stored.builtinOverrides)),
@@ -524,33 +524,33 @@ export class PersonalityCatalogService {
     return { items, defaultPersonalityId };
   }
 
-  public getDefaultPersonalityId(): string {
-    return this.getCatalog().defaultPersonalityId;
+  public async getDefaultPersonalityId(): Promise<string> {
+    return (await this.getCatalog()).defaultPersonalityId;
   }
 
-  public buildDefaultChatPersonalityOverlay(): string | undefined {
-    const catalog = this.getCatalog();
+  public async buildDefaultChatPersonalityOverlay(): Promise<string | undefined> {
+    const catalog = await this.getCatalog();
     return buildPersonalityOverlay(catalog.defaultPersonalityId, catalog.items);
   }
 
-  public setDefaultPersonality(id: string | undefined): PersonalityCatalogResponse {
+  public async setDefaultPersonality(id: string | undefined): Promise<PersonalityCatalogResponse> {
     const nextDefault = normalizePersonalityId(id);
-    const current = this.getCatalog();
+    const current = await this.getCatalog();
     if (!current.items.some((item) => item.id === nextDefault)) {
       throw new Error(`Unknown personality: ${id ?? ""}`);
     }
-    const stored = this.readStoredCatalog();
-    this.writeStoredCatalog({
+    const stored = await this.readStoredCatalog();
+    await this.writeStoredCatalog({
       ...stored,
       defaultPersonalityId: nextDefault,
     });
-    return this.getCatalog();
+    return await this.getCatalog();
   }
 
-  public createPersonality(input: PersonalityPresetMutationInput): PersonalityCatalogResponse {
+  public async createPersonality(input: PersonalityPresetMutationInput): Promise<PersonalityCatalogResponse> {
     const now = new Date().toISOString();
-    const stored = this.readStoredCatalog();
-    const catalog = this.getCatalog();
+    const stored = await this.readStoredCatalog();
+    const catalog = await this.getCatalog();
     const id = normalizePersonalityId(input.id ?? input.label);
     if (id === "default") {
       throw new Error("Custom personality id cannot be default.");
@@ -563,23 +563,26 @@ export class PersonalityCatalogService {
       id,
       updatedAt: now,
     });
-    this.writeStoredCatalog({
+    await this.writeStoredCatalog({
       ...stored,
       customPresets: [...this.normalizeStoredCustomList(stored.customPresets), custom],
     });
-    return this.getCatalog();
+    return await this.getCatalog();
   }
 
-  public updatePersonality(id: string, input: PersonalityPresetMutationInput): PersonalityCatalogResponse {
+  public async updatePersonality(
+    id: string,
+    input: PersonalityPresetMutationInput,
+  ): Promise<PersonalityCatalogResponse> {
     const normalizedId = normalizePersonalityId(id);
     if (normalizedId === "default") {
       throw new Error("The default no-overlay personality cannot be edited.");
     }
     const now = new Date().toISOString();
-    const stored = this.readStoredCatalog();
+    const stored = await this.readStoredCatalog();
     const builtin = PRESETS_BY_ID.get(normalizedId);
     if (builtin) {
-      this.writeStoredCatalog({
+      await this.writeStoredCatalog({
         ...stored,
         builtinOverrides: {
           ...(stored.builtinOverrides ?? {}),
@@ -592,7 +595,7 @@ export class PersonalityCatalogService {
           }),
         },
       });
-      return this.getCatalog();
+      return await this.getCatalog();
     }
 
     const customPresets = this.normalizeStoredCustomList(stored.customPresets);
@@ -612,39 +615,39 @@ export class PersonalityCatalogService {
       id: nextId,
       updatedAt: now,
     });
-    this.writeStoredCatalog({
+    await this.writeStoredCatalog({
       ...stored,
       customPresets,
       defaultPersonalityId: stored.defaultPersonalityId === normalizedId ? nextId : stored.defaultPersonalityId,
     });
-    return this.getCatalog();
+    return await this.getCatalog();
   }
 
-  public deletePersonality(id: string): PersonalityCatalogResponse {
+  public async deletePersonality(id: string): Promise<PersonalityCatalogResponse> {
     const normalizedId = normalizePersonalityId(id);
     if (normalizedId === "default") {
       throw new Error("The default no-overlay personality cannot be removed.");
     }
-    const stored = this.readStoredCatalog();
+    const stored = await this.readStoredCatalog();
     if (PRESETS_BY_ID.has(normalizedId)) {
       const { [normalizedId]: _removed, ...builtinOverrides } = stored.builtinOverrides ?? {};
-      this.writeStoredCatalog({
+      await this.writeStoredCatalog({
         ...stored,
         builtinOverrides,
         defaultPersonalityId: stored.defaultPersonalityId === normalizedId ? "default" : stored.defaultPersonalityId,
       });
-      return this.getCatalog();
+      return await this.getCatalog();
     }
     const customPresets = this.normalizeStoredCustomList(stored.customPresets);
     if (!customPresets.some((item) => item.id === normalizedId)) {
       throw new Error(`Unknown personality: ${id}`);
     }
-    this.writeStoredCatalog({
+    await this.writeStoredCatalog({
       ...stored,
       customPresets: customPresets.filter((item) => item.id !== normalizedId),
       defaultPersonalityId: stored.defaultPersonalityId === normalizedId ? "default" : stored.defaultPersonalityId,
     });
-    return this.getCatalog();
+    return await this.getCatalog();
   }
 
   private applyBuiltinOverride(
@@ -723,8 +726,8 @@ export class PersonalityCatalogService {
     };
   }
 
-  private readStoredCatalog(): StoredPersonalityCatalog {
-    const raw = this.systemSettings.get<StoredPersonalityCatalog>(PERSONALITY_CATALOG_SETTINGS_KEY)?.value;
+  private async readStoredCatalog(): Promise<StoredPersonalityCatalog> {
+    const raw = (await this.systemSettings.get<StoredPersonalityCatalog>(PERSONALITY_CATALOG_SETTINGS_KEY))?.value;
     if (!isRecord(raw)) {
       return {};
     }
@@ -744,8 +747,8 @@ export class PersonalityCatalogService {
     };
   }
 
-  private writeStoredCatalog(next: StoredPersonalityCatalog): void {
-    this.systemSettings.set(PERSONALITY_CATALOG_SETTINGS_KEY, next);
+  private async writeStoredCatalog(next: StoredPersonalityCatalog): Promise<void> {
+    await this.systemSettings.set(PERSONALITY_CATALOG_SETTINGS_KEY, next);
   }
 }
 

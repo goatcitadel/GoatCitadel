@@ -37,7 +37,7 @@ import type {
   RealtimeEvent,
   TranscriptEvent,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { buildChatTurnRealtimeOptions } from "./chat-turn-realtime.js";
 
 export const INTERRUPTED_BY_RESTART_MESSAGE =
@@ -63,7 +63,7 @@ export interface ChatTurnInterruptionRecoveryDeps {
     source: string,
     payload: Record<string, unknown>,
     options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
-  ): unknown;
+  ): Promise<unknown>;
   recordDevDiagnostic(input: {
     level: "info" | "warn";
     category: "chat";
@@ -101,15 +101,15 @@ const RECOVERY_PAGE_SIZE = 500;
 const RECOVERY_DIAGNOSTIC_LIMIT_BYTES = 2 * 1024;
 const RECOVERY_DIAGNOSTIC_TRUNCATION_MARKER = "...[truncated]";
 
-export function reconcileInterruptedChatTurns(
+export async function reconcileInterruptedChatTurns(
   deps: ChatTurnInterruptionRecoveryDeps,
-): ChatTurnInterruptionRecoveryResult {
+): Promise<ChatTurnInterruptionRecoveryResult> {
   const now = deps.now ? deps.now() : new Date().toISOString();
   const result = createInterruptionRecoveryResult();
 
   let activeCursor: { startedAt: string; turnId: string } | undefined;
   while (true) {
-    const page = deps.storage.chatTurnTraces.listActivePage({
+    const page = await deps.storage.chatTurnTraces.listActivePage({
       afterStartedAt: activeCursor?.startedAt,
       afterTurnId: activeCursor?.turnId,
       limit: RECOVERY_PAGE_SIZE,
@@ -118,7 +118,7 @@ export function reconcileInterruptedChatTurns(
       break;
     }
     for (const trace of page) {
-      reconcileActiveInterruptedTrace(deps, trace, now, result);
+      await reconcileActiveInterruptedTrace(deps, trace, now, result);
     }
     const last = page.at(-1)!;
     activeCursor = { startedAt: last.startedAt, turnId: last.turnId };
@@ -127,7 +127,7 @@ export function reconcileInterruptedChatTurns(
     }
   }
 
-  reconcileOrphanedUserMessages(deps, now, result);
+  await reconcileOrphanedUserMessages(deps, now, result);
 
   return result;
 }
@@ -138,14 +138,14 @@ export function reconcileInterruptedChatTurns(
  * second process-wide scan and prevents a shared host from touching unrelated
  * active turns while still reusing the canonical prefix/transcript repair.
  */
-export function reconcileInterruptedDurableChatTurn(
+export async function reconcileInterruptedDurableChatTurn(
   deps: ChatTurnInterruptionRecoveryDeps,
   input: { runId: string; turnId: string },
-): ChatTurnInterruptionRecoveryResult {
+): Promise<ChatTurnInterruptionRecoveryResult> {
   const result = createInterruptionRecoveryResult();
   let trace: ChatTurnTraceRecord;
   try {
-    trace = deps.storage.chatTurnTraces.get(input.turnId);
+    trace = await deps.storage.chatTurnTraces.get(input.turnId);
   } catch (error) {
     if (error instanceof NotFoundError) {
       return result;
@@ -158,7 +158,7 @@ export function reconcileInterruptedDurableChatTurn(
   ) {
     return result;
   }
-  reconcileActiveInterruptedTrace(deps, trace, deps.now ? deps.now() : new Date().toISOString(), result, {
+  await reconcileActiveInterruptedTrace(deps, trace, deps.now ? deps.now() : new Date().toISOString(), result, {
     durableTerminalFailure: true,
   });
   return result;
@@ -177,22 +177,22 @@ function createInterruptionRecoveryResult(): ChatTurnInterruptionRecoveryResult 
   };
 }
 
-function reconcileActiveInterruptedTrace(
+async function reconcileActiveInterruptedTrace(
   deps: ChatTurnInterruptionRecoveryDeps,
   trace: ChatTurnTraceRecord,
   now: string,
   result: ChatTurnInterruptionRecoveryResult,
   options: { durableTerminalFailure?: boolean } = {},
-): void {
+): Promise<void> {
   try {
-    if (isOwnedByLiveDurableRun(deps, trace)) {
+    if (await isOwnedByLiveDurableRun(deps, trace)) {
       result.skippedDurableOwnedTurnIds.push(trace.turnId);
       return;
     }
-    reconcileDanglingToolRuns(deps, trace, now, result);
-    const recoveredSource = resolveRecoveredAssistantSource(deps.storage, trace);
+    await reconcileDanglingToolRuns(deps, trace, now, result);
+    const recoveredSource = await resolveRecoveredAssistantSource(deps.storage, trace);
     if (recoveredSource) {
-      const enqueued = persistRecoveredAssistantSource(
+      const enqueued = await persistRecoveredAssistantSource(
         deps,
         trace,
         recoveredSource,
@@ -205,7 +205,7 @@ function reconcileActiveInterruptedTrace(
       } else {
         result.preservedPartialTurnIds.push(trace.turnId);
       }
-      announceInterruptedTurn(
+      await announceInterruptedTurn(
         deps,
         trace.sessionId,
         trace.turnId,
@@ -226,7 +226,7 @@ function reconcileActiveInterruptedTrace(
     recordInterruptionRecoveryFailure(deps, trace, error, "recovered assistant output");
   }
   try {
-    deps.storage.chatTurnTraces.patch(trace.turnId, {
+    await deps.storage.chatTurnTraces.patch(trace.turnId, {
       status: "failed",
       failure: buildInterruptedByRestartFailure(),
       completion: {
@@ -240,7 +240,7 @@ function reconcileActiveInterruptedTrace(
       finishedAt: now,
     });
     result.interruptedTurnIds.push(trace.turnId);
-    announceInterruptedTurn(deps, trace.sessionId, trace.turnId, "chat.turn.interrupted_by_restart", {
+    await announceInterruptedTurn(deps, trace.sessionId, trace.turnId, "chat.turn.interrupted_by_restart", {
       previousStatus: trace.status,
     });
   } catch (error) {
@@ -264,19 +264,19 @@ function recordInterruptionRecoveryFailure(
   });
 }
 
-function reconcileDanglingToolRuns(
+async function reconcileDanglingToolRuns(
   deps: ChatTurnInterruptionRecoveryDeps,
   trace: ChatTurnTraceRecord,
   now: string,
   result: ChatTurnInterruptionRecoveryResult,
-): void {
-  const dangling = deps.storage.chatToolRuns
-    .listByTurn(trace.turnId)
-    .filter((toolRun) => toolRun.status === "started" && !toolRun.finishedAt);
+): Promise<void> {
+  const dangling = (await deps.storage.chatToolRuns.listByTurn(trace.turnId)).filter(
+    (toolRun) => toolRun.status === "started" && !toolRun.finishedAt,
+  );
   for (const toolRun of dangling) {
     try {
       if (toolRun.effectOutcomeKind === "concrete" && toolRun.effectEvidence?.refs.length) {
-        deps.storage.chatToolRuns.patch(toolRun.toolRunId, {
+        await deps.storage.chatToolRuns.patch(toolRun.toolRunId, {
           status: "failed",
           error: INTERRUPTED_BY_RESTART_MESSAGE,
           failureGuidance:
@@ -292,7 +292,7 @@ function reconcileDanglingToolRuns(
           potential: toolRun.effectPotential ?? "unknown",
           phase,
         });
-        deps.storage.chatToolRuns.patch(toolRun.toolRunId, {
+        await deps.storage.chatToolRuns.patch(toolRun.toolRunId, {
           status: "failed",
           effectPotential: toolRun.effectPotential ?? "unknown",
           effectDisposition: settlement.disposition ?? null,
@@ -324,14 +324,14 @@ function reconcileDanglingToolRuns(
   }
 }
 
-function reconcileOrphanedUserMessages(
+async function reconcileOrphanedUserMessages(
   deps: ChatTurnInterruptionRecoveryDeps,
   now: string,
   result: ChatTurnInterruptionRecoveryResult,
-): void {
+): Promise<void> {
   let cursor: { timestamp: string; messageId: string } | undefined;
   while (true) {
-    const page = deps.storage.chatTurnRecovery.listOrphanedLatestUserMessagesPage({
+    const page = await deps.storage.chatTurnRecovery.listOrphanedLatestUserMessagesPage({
       afterTimestamp: cursor?.timestamp,
       afterMessageId: cursor?.messageId,
       limit: RECOVERY_PAGE_SIZE,
@@ -341,9 +341,9 @@ function reconcileOrphanedUserMessages(
     }
     for (const orphan of page) {
       try {
-        const turnId = synthesizeInterruptedTrace(deps, orphan, now);
+        const turnId = await synthesizeInterruptedTrace(deps, orphan, now);
         result.synthesizedTurnIds.push(turnId);
-        announceInterruptedTurn(deps, orphan.sessionId, turnId, "chat.turn.interrupted_by_restart_synthesized", {
+        await announceInterruptedTurn(deps, orphan.sessionId, turnId, "chat.turn.interrupted_by_restart_synthesized", {
           userMessageId: orphan.messageId,
         });
       } catch (error) {
@@ -379,11 +379,13 @@ interface RecoveredAssistantSource {
   sourceIncomplete?: boolean;
 }
 
-function resolveRecoveredAssistantSource(
+async function resolveRecoveredAssistantSource(
   storage: ChatTurnInterruptionRecoveryDeps["storage"],
   trace: ChatTurnTraceRecord,
-): RecoveredAssistantSource | undefined {
-  const existingMessage = trace.assistantMessageId ? storage.chatMessages.get(trace.assistantMessageId) : undefined;
+): Promise<RecoveredAssistantSource | undefined> {
+  const existingMessage = trace.assistantMessageId
+    ? await storage.chatMessages.get(trace.assistantMessageId)
+    : undefined;
   if (existingMessage?.role === "assistant" && existingMessage.content.trim()) {
     const wasRecoveredPartial =
       trace.status === "partial" &&
@@ -410,7 +412,7 @@ function resolveRecoveredAssistantSource(
   let afterSequence = 0;
   let expectedSequence: number | undefined;
   while (true) {
-    const page = storage.chatStreamEvents.listByTurn(trace.turnId, afterSequence, 5_000);
+    const page = await storage.chatStreamEvents.listByTurn(trace.turnId, afterSequence, 5_000);
     if (page.length === 0) {
       break;
     }
@@ -463,7 +465,7 @@ function resolveRecoveredAssistantSource(
   }
 
   if (messageId && finalContent?.trim()) {
-    const durableFinalSource = hasAuthoritativeDurableFinalOutput(storage, trace, finalContent);
+    const durableFinalSource = await hasAuthoritativeDurableFinalOutput(storage, trace, finalContent);
     return {
       messageId,
       content: boundRecoveredContent(finalContent),
@@ -500,18 +502,18 @@ function resolveRecoveredAssistantSource(
  * durable owner independently committed the same terminal output. Otherwise
  * the content is retained as an explicitly interrupted prefix.
  */
-function hasAuthoritativeDurableFinalOutput(
+async function hasAuthoritativeDurableFinalOutput(
   storage: ChatTurnInterruptionRecoveryDeps["storage"],
   trace: ChatTurnTraceRecord,
   content: string,
-): boolean {
+): Promise<boolean> {
   const runId = trace.durable?.runId;
   if (!runId) {
     return false;
   }
   let run: DurableRunRecord;
   try {
-    run = storage.durableRuns.getRun(runId);
+    run = await storage.durableRuns.getRun(runId);
   } catch (error) {
     if (error instanceof NotFoundError) {
       return false;
@@ -525,14 +527,14 @@ function hasAuthoritativeDurableFinalOutput(
   return typeof finalOutput === "string" && finalOutput === content;
 }
 
-function persistRecoveredAssistantSource(
+async function persistRecoveredAssistantSource(
   deps: ChatTurnInterruptionRecoveryDeps,
   trace: ChatTurnTraceRecord,
   source: RecoveredAssistantSource,
   now: string,
   interruptedStatus: "partial" | "failed" = "partial",
-): boolean {
-  const session = deps.storage.sessions.getBySessionId(trace.sessionId);
+): Promise<boolean> {
+  const session = await deps.storage.sessions.getBySessionId(trace.sessionId);
   const message: ChatMessageRecord = {
     messageId: source.messageId,
     sessionId: trace.sessionId,
@@ -554,11 +556,11 @@ function persistRecoveredAssistantSource(
     actorId: "assistant",
     payload: { message },
   };
-  const wasAlreadyQueued = Boolean(deps.storage.transcriptOutbox.get(source.messageId));
-  deps.storage.runImmediateTransaction(() => {
-    deps.storage.chatMessages.upsert(message, now);
-    deps.storage.transcriptOutbox.enqueue(transcriptEvent, now);
-    deps.storage.chatTurnTraces.patch(trace.turnId, {
+  const wasAlreadyQueued = Boolean(await deps.storage.transcriptOutbox.get(source.messageId));
+  await deps.storage.runImmediateTransaction(async () => {
+    await deps.storage.chatMessages.upsert(message, now);
+    await deps.storage.transcriptOutbox.enqueue(transcriptEvent, now);
+    await deps.storage.chatTurnTraces.patch(trace.turnId, {
       assistantMessageId: source.messageId,
       status: source.final ? "completed" : interruptedStatus,
       failure: source.final ? undefined : buildInterruptedByRestartFailure(true),
@@ -649,14 +651,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isOwnedByLiveDurableRun(deps: ChatTurnInterruptionRecoveryDeps, trace: ChatTurnTraceRecord): boolean {
+async function isOwnedByLiveDurableRun(
+  deps: ChatTurnInterruptionRecoveryDeps,
+  trace: ChatTurnTraceRecord,
+): Promise<boolean> {
   const runId = trace.durable?.runId;
   if (!runId) {
     return false;
   }
   let run: DurableRunRecord;
   try {
-    run = deps.storage.durableRuns.getRun(runId);
+    run = await deps.storage.durableRuns.getRun(runId);
   } catch (error) {
     if (error instanceof NotFoundError) {
       return false;
@@ -684,16 +689,16 @@ function buildInterruptedByRestartFailure(hasCompletedPrefix = false): ChatTurnF
  * appended under the session's current active leaf so the thread renders it
  * where the vanished turn would have appeared.
  */
-function synthesizeInterruptedTrace(
+async function synthesizeInterruptedTrace(
   deps: ChatTurnInterruptionRecoveryDeps,
   orphan: { sessionId: string; messageId: string; timestamp: string },
   now: string,
-): string {
-  const prefs = deps.storage.chatSessionPrefs.get(orphan.sessionId);
-  const parentTurnId = deps.storage.chatSessionBranchState.get(orphan.sessionId)?.activeLeafTurnId;
+): Promise<string> {
+  const prefs = await deps.storage.chatSessionPrefs.get(orphan.sessionId);
+  const parentTurnId = (await deps.storage.chatSessionBranchState.get(orphan.sessionId))?.activeLeafTurnId;
   const mode: ChatMode = prefs?.mode ?? "chat";
   const turnId = randomUUID();
-  deps.storage.chatTurnTraces.create({
+  await deps.storage.chatTurnTraces.create({
     turnId,
     sessionId: orphan.sessionId,
     userMessageId: orphan.messageId,
@@ -719,17 +724,17 @@ function synthesizeInterruptedTrace(
   // Best-effort leaf advance so the interrupted turn sits on the selected
   // path. The compare-and-set only wins when the leaf still points at the
   // parent we appended under; on conflict the trace still exists as a branch.
-  deps.storage.chatSessionBranchState.setActiveLeafIfCurrent(orphan.sessionId, parentTurnId, turnId, now);
+  await deps.storage.chatSessionBranchState.setActiveLeafIfCurrent(orphan.sessionId, parentTurnId, turnId, now);
   return turnId;
 }
 
-function announceInterruptedTurn(
+async function announceInterruptedTurn(
   deps: ChatTurnInterruptionRecoveryDeps,
   sessionId: string,
   turnId: string,
   event: string,
   context: Record<string, unknown>,
-): void {
+): Promise<void> {
   recordDevDiagnosticSafely(deps, {
     level: "warn",
     category: "chat",
@@ -740,7 +745,7 @@ function announceInterruptedTurn(
     context,
   });
   try {
-    deps.publishRealtime(
+    await deps.publishRealtime(
       "chat_thread_updated",
       "chat",
       {

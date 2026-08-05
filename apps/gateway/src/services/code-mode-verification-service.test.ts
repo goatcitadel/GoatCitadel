@@ -74,7 +74,7 @@ describe("CodeModeVerificationService", () => {
     const verified = await service.verifyRun(fixture.run, "git_diff_check", "operator-a");
 
     fs.appendFileSync(path.join(fixture.worktree, "index.ts"), "export const changed = true;\n");
-    const worktreeStale = service.refreshRun(verified.run);
+    const worktreeStale = await service.refreshRun(verified.run);
     expect(worktreeStale.verification?.status).toBe("stale");
     expect(worktreeStale.verification?.reason).toContain("verification_subject_drift");
 
@@ -82,7 +82,7 @@ describe("CodeModeVerificationService", () => {
     const service2 = fixture2.service(async () => commandResponse("passed", 0));
     const verified2 = await service2.verifyRun(fixture2.run, "git_diff_check", "operator-a");
     fs.writeFileSync(fixture2.sourcePath, "tampered source", "utf8");
-    const artifactStale = service2.refreshRun(verified2.run);
+    const artifactStale = await service2.refreshRun(verified2.run);
     expect(artifactStale.verification?.status).toBe("stale");
     expect(artifactStale.verification?.reason).toContain("artifact_source_drift");
     expect(fixture2.storage.codeModeRuns.listVerificationEvidence("run-a")[0]?.commandName).toBe(
@@ -98,7 +98,7 @@ describe("CodeModeVerificationService", () => {
       .prepare("UPDATE code_mode_runs SET verification_evidence_id = 'missing-proof' WHERE run_id = 'run-a'")
       .run();
 
-    const stale = service.refreshRun(fixture.storage.codeModeRuns.get(verified.run.runId));
+    const stale = await service.refreshRun(fixture.storage.codeModeRuns.get(verified.run.runId));
 
     expect(stale.verification?.status).toBe("stale");
     expect(stale.verification?.reason).toBe("verification_evidence_missing_or_mismatched");

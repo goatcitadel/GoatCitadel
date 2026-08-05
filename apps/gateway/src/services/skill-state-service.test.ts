@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NotFoundError } from "@goatcitadel/contracts";
-import { Storage } from "@goatcitadel/storage";
+import { Storage, createSqliteAsyncStorage } from "@goatcitadel/storage";
 import {
   SkillStateService,
   type SkillStateMutationPendingOutcome,
@@ -25,6 +25,7 @@ interface Harness {
 
 function createHarness(options?: { skills?: string[]; withoutAuthority?: boolean }): Harness {
   const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
+  const asyncStorage = createSqliteAsyncStorage(storage);
   cleanups.push(() => storage.close());
   const publishRealtime = vi.fn();
   const host: SkillStateServiceHost = {
@@ -35,16 +36,16 @@ function createHarness(options?: { skills?: string[]; withoutAuthority?: boolean
   };
   const service = new SkillStateService(
     {
-      gatewaySql: storage.gatewaySql,
-      systemSettings: storage.systemSettings,
-      skillAggregateRevisions: storage.skillAggregateRevisions,
+      storage: asyncStorage,
+      systemSettings: asyncStorage.systemSettings,
+      skillAggregateRevisions: asyncStorage.skillAggregateRevisions,
       ...(options?.withoutAuthority
         ? {}
         : {
             approvalAuthority: {
-              approvals: storage.approvals,
-              approvalEvents: storage.approvalEvents,
-              governanceJourneyEvents: storage.governanceJourneyEvents,
+              approvals: asyncStorage.approvals,
+              approvalEvents: asyncStorage.approvalEvents,
+              governanceJourneyEvents: asyncStorage.governanceJourneyEvents,
             },
           }),
     },
@@ -85,14 +86,14 @@ function readGovernedEvent(
     | undefined;
 }
 
-function requestPending(
+async function requestPending(
   harness: Harness,
   skillId: string,
   state: "enabled" | "sleep" | "disabled",
   note?: string,
-): SkillStateMutationPendingOutcome {
+): Promise<SkillStateMutationPendingOutcome> {
   const revision = harness.storage.skillAggregateRevisions.ensure("runtime_skill", skillId).revision;
-  const outcome = harness.service.requestSkillStateApproval(skillId, state, note, {
+  const outcome = await harness.service.requestSkillStateApproval(skillId, state, note, {
     expectedRevision: revision,
     requesterId: harness.requesterId,
   });
@@ -101,19 +102,19 @@ function requestPending(
 }
 
 describe("skill state substrate (reads, defaults, usage metadata)", () => {
-  it("ensures default rows, reads decorated states, and records usage", () => {
+  it("ensures default rows, reads decorated states, and records usage", async () => {
     const harness = createHarness();
-    harness.service.ensureSkillStates(["skill-alpha", "skill-alpha", "skill-beta"]);
-    const states = harness.service.readSkillStates();
+    await harness.service.ensureSkillStates(["skill-alpha", "skill-alpha", "skill-beta"]);
+    const states = await harness.service.readSkillStates();
     expect(states.get("skill-alpha")).toMatchObject({ state: "enabled", revision: 1 });
     expect(states.get("skill-beta")).toMatchObject({ state: "enabled" });
-    harness.service.recordSkillUsage(["skill-alpha", " ", "skill-alpha"]);
-    expect(harness.service.readSkillStates().get("skill-alpha")).toMatchObject({ usageCount: 1 });
+    await harness.service.recordSkillUsage(["skill-alpha", " ", "skill-alpha"]);
+    expect((await harness.service.readSkillStates()).get("skill-alpha")).toMatchObject({ usageCount: 1 });
   });
 
-  it("returns the default activation policy with a canonical revision", () => {
+  it("returns the default activation policy with a canonical revision", async () => {
     const harness = createHarness();
-    expect(harness.service.getActivationPolicy()).toMatchObject({
+    expect(await harness.service.getActivationPolicy()).toMatchObject({
       revision: 1,
       guardedAutoThreshold: 0.72,
       requireFirstUseConfirmation: true,
@@ -127,11 +128,11 @@ describe("skill state substrate (reads, defaults, usage metadata)", () => {
 // request -> approve -> recovered effect -> governed evidence, with the P0
 // governed lifecycle owner as the immutable backstop.
 describe("approval-first skill state mutations", () => {
-  it("requests approval with zero pre-approval mutation and deterministic replayed identity", () => {
+  it("requests approval with zero pre-approval mutation and deterministic replayed identity", async () => {
     const harness = createHarness();
-    harness.service.ensureSkillStates(["skill-alpha"]);
+    await harness.service.ensureSkillStates(["skill-alpha"]);
 
-    const envelope = requestPending(harness, "skill-alpha", "disabled", "Pause for review");
+    const envelope = await requestPending(harness, "skill-alpha", "disabled", "Pause for review");
     expect(envelope.pendingApproval).toMatchObject({
       kind: "skill.lifecycle",
       action: "skill_state_set",
@@ -146,7 +147,7 @@ describe("approval-first skill state mutations", () => {
     );
 
     // Byte-exact replay converges on the original approval identity.
-    const replay = requestPending(harness, "skill-alpha", "disabled", "Pause for review");
+    const replay = await requestPending(harness, "skill-alpha", "disabled", "Pause for review");
     expect(replay.pendingApproval.approvalId).toBe(envelope.pendingApproval.approvalId);
     expect(replay.pendingApproval.replayed).toBe(true);
 
@@ -169,11 +170,11 @@ describe("approval-first skill state mutations", () => {
     );
   });
 
-  it("treats a byte-identical current state as a pure no-op with no approval row", () => {
+  it("treats a byte-identical current state as a pure no-op with no approval row", async () => {
     const harness = createHarness();
-    harness.service.ensureSkillStates(["skill-alpha"]);
+    await harness.service.ensureSkillStates(["skill-alpha"]);
     const revision = harness.storage.skillAggregateRevisions.ensure("runtime_skill", "skill-alpha").revision;
-    const outcome = harness.service.requestSkillStateApproval("skill-alpha", "enabled", undefined, {
+    const outcome = await harness.service.requestSkillStateApproval("skill-alpha", "enabled", undefined, {
       expectedRevision: revision,
       requesterId: harness.requesterId,
     });
@@ -183,54 +184,54 @@ describe("approval-first skill state mutations", () => {
     expect(countRows(harness, "governed_lifecycle_events")).toBe(0);
   });
 
-  it("rejects unknown skills, stale revisions, and pinned skills at request time", () => {
+  it("rejects unknown skills, stale revisions, and pinned skills at request time", async () => {
     const harness = createHarness();
-    harness.service.ensureSkillStates(["skill-alpha"]);
-    expect(() =>
+    await harness.service.ensureSkillStates(["skill-alpha"]);
+    await expect(
       harness.service.requestSkillStateApproval("skill-missing", "disabled", undefined, {
         expectedRevision: 1,
       }),
-    ).toThrow(NotFoundError);
-    expect(() =>
+    ).rejects.toThrow(NotFoundError);
+    await expect(
       harness.service.requestSkillStateApproval("skill-alpha", "disabled", undefined, {
         expectedRevision: 99,
       }),
-    ).toThrow(/changed since revision/);
+    ).rejects.toThrow(/changed since revision/);
     harness.storage.systemSettings.set("skill_state_metadata_v1", { "skill-alpha": { pinned: true } });
-    expect(() =>
+    await expect(
       harness.service.requestSkillStateApproval("skill-alpha", "disabled", undefined, {
         expectedRevision: harness.storage.skillAggregateRevisions.ensure("runtime_skill", "skill-alpha").revision,
       }),
-    ).toThrow(/Pinned skill/);
+    ).rejects.toThrow(/Pinned skill/);
   });
 
-  it("fails closed without the canonical approval authority host", () => {
+  it("fails closed without the canonical approval authority host", async () => {
     const harness = createHarness({ withoutAuthority: true });
-    harness.service.ensureSkillStates(["skill-alpha"]);
-    expect(() =>
+    await harness.service.ensureSkillStates(["skill-alpha"]);
+    await expect(
       harness.service.requestSkillStateApproval("skill-alpha", "disabled", undefined, { expectedRevision: 1 }),
-    ).toThrow(/approval authority host/);
-    expect(() => harness.service.executeApprovedSkillLifecycleMutation({ approvalId: "missing" })).toThrow(
+    ).rejects.toThrow(/approval authority host/);
+    await expect(harness.service.executeApprovedSkillLifecycleMutation({ approvalId: "missing" })).rejects.toThrow(
       /approval authority host/,
     );
   });
 
-  it("executes an approved transition through the recovered effect and writes coupled governed evidence", () => {
+  it("executes an approved transition through the recovered effect and writes coupled governed evidence", async () => {
     const harness = createHarness();
-    harness.service.ensureSkillStates(["skill-alpha"]);
-    const envelope = requestPending(harness, "skill-alpha", "sleep", "Quiet hours");
+    await harness.service.ensureSkillStates(["skill-alpha"]);
+    const envelope = await requestPending(harness, "skill-alpha", "sleep", "Quiet hours");
 
     // The executor refuses to run before the approval resolves.
-    expect(() =>
+    await expect(
       harness.service.executeApprovedSkillLifecycleMutation({ approvalId: envelope.pendingApproval.approvalId }),
-    ).toThrow(SkillLifecycleApplyError);
+    ).rejects.toThrow(SkillLifecycleApplyError);
     expect(readSkillRow(harness, "skill-alpha")).toMatchObject({ state: "enabled" });
 
     harness.storage.approvals.resolve(envelope.pendingApproval.approvalId, {
       decision: "approve",
       resolvedBy: harness.resolverId,
     });
-    const applied = harness.service.executeApprovedSkillLifecycleMutation({
+    const applied = await harness.service.executeApprovedSkillLifecycleMutation({
       approvalId: envelope.pendingApproval.approvalId,
     });
     expect(applied).toMatchObject({
@@ -264,7 +265,7 @@ describe("approval-first skill state mutations", () => {
     expect(harness.storage.skillAggregateRevisions.ensure("runtime_skill", "skill-alpha").revision).toBe(2);
 
     // Exact effect replay converges on the committed evidence without double-mutating.
-    const replay = harness.service.executeApprovedSkillLifecycleMutation({
+    const replay = await harness.service.executeApprovedSkillLifecycleMutation({
       approvalId: envelope.pendingApproval.approvalId,
     });
     expect(replay).toMatchObject({ disposition: "applied", changedCount: 1 });
@@ -272,49 +273,49 @@ describe("approval-first skill state mutations", () => {
     expect(countRows(harness, "governed_lifecycle_events")).toBe(1);
   });
 
-  it("denial and expiry are zero-delta and terminal", () => {
+  it("denial and expiry are zero-delta and terminal", async () => {
     const harness = createHarness();
-    harness.service.ensureSkillStates(["skill-alpha"]);
-    const denied = requestPending(harness, "skill-alpha", "disabled");
+    await harness.service.ensureSkillStates(["skill-alpha"]);
+    const denied = await requestPending(harness, "skill-alpha", "disabled");
     harness.storage.approvals.resolve(denied.pendingApproval.approvalId, {
       decision: "reject",
       resolvedBy: harness.resolverId,
     });
-    expect(() =>
+    await expect(
       harness.service.executeApprovedSkillLifecycleMutation({ approvalId: denied.pendingApproval.approvalId }),
-    ).toThrow(/missing, foreign, malformed, or not approved/);
+    ).rejects.toThrow(/missing, foreign, malformed, or not approved/);
     expect(readSkillRow(harness, "skill-alpha")).toMatchObject({ state: "enabled" });
     expect(countRows(harness, "governed_lifecycle_events")).toBe(0);
 
     // Unknown approvals are equally terminal.
-    expect(() => harness.service.executeApprovedSkillLifecycleMutation({ approvalId: "missing" })).toThrow(
+    await expect(harness.service.executeApprovedSkillLifecycleMutation({ approvalId: "missing" })).rejects.toThrow(
       SkillLifecycleApplyError,
     );
   });
 
-  it("conflicts terminally when canonical state drifts from the exact reviewed material", () => {
+  it("conflicts terminally when canonical state drifts from the exact reviewed material", async () => {
     const harness = createHarness();
-    harness.service.ensureSkillStates(["skill-alpha"]);
-    const envelope = requestPending(harness, "skill-alpha", "disabled", "Reviewed against enabled");
+    await harness.service.ensureSkillStates(["skill-alpha"]);
+    const envelope = await requestPending(harness, "skill-alpha", "disabled", "Reviewed against enabled");
     harness.storage.approvals.resolve(envelope.pendingApproval.approvalId, {
       decision: "approve",
       resolvedBy: harness.resolverId,
     });
     // Drift the canonical state through the branded system path.
-    harness.service.systemDisableSkill("skill-alpha", "failsafe drift");
-    expect(() =>
+    await harness.service.systemDisableSkill("skill-alpha", "failsafe drift");
+    await expect(
       harness.service.executeApprovedSkillLifecycleMutation({ approvalId: envelope.pendingApproval.approvalId }),
-    ).toThrow(/drifted from the exact reviewed material/);
+    ).rejects.toThrow(/drifted from the exact reviewed material/);
   });
 
-  it("applies an approved bulk transition atomically with per-skill governed evidence", () => {
+  it("applies an approved bulk transition atomically with per-skill governed evidence", async () => {
     const harness = createHarness();
-    harness.service.ensureSkillStates(["skill-alpha", "skill-beta"]);
+    await harness.service.ensureSkillStates(["skill-alpha", "skill-beta"]);
     const revisions = {
       "skill-alpha": harness.storage.skillAggregateRevisions.ensure("runtime_skill", "skill-alpha").revision,
       "skill-beta": harness.storage.skillAggregateRevisions.ensure("runtime_skill", "skill-beta").revision,
     };
-    const outcome = harness.service.requestSkillStateBulkApproval(
+    const outcome = await harness.service.requestSkillStateBulkApproval(
       ["skill-beta", "skill-alpha"],
       "disabled",
       "Bulk pause",
@@ -328,7 +329,7 @@ describe("approval-first skill state mutations", () => {
       decision: "approve",
       resolvedBy: harness.resolverId,
     });
-    const applied = harness.service.executeApprovedSkillLifecycleMutation({
+    const applied = await harness.service.executeApprovedSkillLifecycleMutation({
       approvalId: outcome.pendingApproval.approvalId,
     });
     expect(applied).toMatchObject({ disposition: "applied", changedCount: 2 });
@@ -339,18 +340,18 @@ describe("approval-first skill state mutations", () => {
     ).toMatchObject({ operation: "disabled" });
   });
 
-  it("converges effect replays of a mixed bulk whose no-op members never mint governed events", () => {
+  it("converges effect replays of a mixed bulk whose no-op members never mint governed events", async () => {
     const harness = createHarness();
-    harness.service.ensureSkillStates(["skill-alpha", "skill-beta"]);
+    await harness.service.ensureSkillStates(["skill-alpha", "skill-beta"]);
     // skill-beta is ALREADY at the exact target state+note, so the bulk
     // approval binds it as a no-op member that will never mint a governed
     // event; skill-alpha is the only changing member.
-    harness.service.systemDisableSkill("skill-beta", "Bulk pause");
+    await harness.service.systemDisableSkill("skill-beta", "Bulk pause");
     const revisions = {
       "skill-alpha": harness.storage.skillAggregateRevisions.ensure("runtime_skill", "skill-alpha").revision,
       "skill-beta": harness.storage.skillAggregateRevisions.ensure("runtime_skill", "skill-beta").revision,
     };
-    const outcome = harness.service.requestSkillStateBulkApproval(
+    const outcome = await harness.service.requestSkillStateBulkApproval(
       ["skill-alpha", "skill-beta"],
       "disabled",
       "Bulk pause",
@@ -363,7 +364,7 @@ describe("approval-first skill state mutations", () => {
       decision: "approve",
       resolvedBy: harness.resolverId,
     });
-    const applied = harness.service.executeApprovedSkillLifecycleMutation({
+    const applied = await harness.service.executeApprovedSkillLifecycleMutation({
       approvalId: outcome.pendingApproval.approvalId,
     });
     expect(applied).toMatchObject({ disposition: "applied", changedCount: 1 });
@@ -379,7 +380,7 @@ describe("approval-first skill state mutations", () => {
     // Crash-recovery replay (lost completion lease, deferral after commit):
     // the effect re-executes and MUST converge on the committed evidence —
     // never terminally fail as false state drift — with an honest count.
-    const replay = harness.service.executeApprovedSkillLifecycleMutation({
+    const replay = await harness.service.executeApprovedSkillLifecycleMutation({
       approvalId: outcome.pendingApproval.approvalId,
     });
     expect(replay).toMatchObject({ disposition: "applied", changedCount: 1 });
@@ -396,33 +397,33 @@ describe("approval-first skill state mutations", () => {
     expect(Number(approvalScoped.count)).toBe(1);
   });
 
-  it("validates bulk revision maps exactly", () => {
+  it("validates bulk revision maps exactly", async () => {
     const harness = createHarness();
-    harness.service.ensureSkillStates(["skill-alpha", "skill-beta"]);
-    expect(() =>
+    await harness.service.ensureSkillStates(["skill-alpha", "skill-beta"]);
+    await expect(
       harness.service.requestSkillStateBulkApproval(["skill-alpha"], "disabled", undefined, {
         expectedRevisionsBySkillId: {},
       }),
-    ).toThrow(/expectedRevisionsBySkillId.skill-alpha/);
-    expect(() =>
+    ).rejects.toThrow(/expectedRevisionsBySkillId.skill-alpha/);
+    await expect(
       harness.service.requestSkillStateBulkApproval(["skill-alpha"], "disabled", undefined, {
         expectedRevisionsBySkillId: { "skill-alpha": 1, "skill-ghost": 1 },
       }),
-    ).toThrow(/Unexpected skill revision entries/);
+    ).rejects.toThrow(/Unexpected skill revision entries/);
   });
 });
 
 describe("approval-first activation policy", () => {
-  it("requests, approves, and applies a policy update with governed evidence; unchanged patches are no-ops", () => {
+  it("requests, approves, and applies a policy update with governed evidence; unchanged patches are no-ops", async () => {
     const harness = createHarness();
-    const noOp = harness.service.requestActivationPolicyApproval(
+    const noOp = await harness.service.requestActivationPolicyApproval(
       { guardedAutoThreshold: 0.72 },
       { expectedRevision: 1, requesterId: harness.requesterId },
     );
     expect(noOp.pendingApproval).toBeNull();
     expect(countRows(harness, "approvals")).toBe(0);
 
-    const outcome = harness.service.requestActivationPolicyApproval(
+    const outcome = await harness.service.requestActivationPolicyApproval(
       { guardedAutoThreshold: 0.9 },
       { expectedRevision: 1, requesterId: harness.requesterId },
     );
@@ -432,40 +433,40 @@ describe("approval-first activation policy", () => {
       subjectKind: "skill_activation_policy",
     });
     // Policy unchanged before approval.
-    expect(harness.service.getActivationPolicy()).toMatchObject({ guardedAutoThreshold: 0.72 });
+    expect(await harness.service.getActivationPolicy()).toMatchObject({ guardedAutoThreshold: 0.72 });
 
     harness.storage.approvals.resolve(outcome.pendingApproval.approvalId, {
       decision: "approve",
       resolvedBy: harness.resolverId,
     });
-    const applied = harness.service.executeApprovedSkillLifecycleMutation({
+    const applied = await harness.service.executeApprovedSkillLifecycleMutation({
       approvalId: outcome.pendingApproval.approvalId,
     });
     expect(applied).toMatchObject({ disposition: "applied", action: "activation_policy_updated" });
-    expect(harness.service.getActivationPolicy()).toMatchObject({ guardedAutoThreshold: 0.9, revision: 2 });
+    expect(await harness.service.getActivationPolicy()).toMatchObject({ guardedAutoThreshold: 0.9, revision: 2 });
     expect(
       readGovernedEvent(harness, `skill-lifecycle:${outcome.pendingApproval.approvalId}:activation-policy`),
     ).toMatchObject({ operation: "activation_policy_updated" });
 
     // Replay converges.
     expect(
-      harness.service.executeApprovedSkillLifecycleMutation({ approvalId: outcome.pendingApproval.approvalId }),
+      await harness.service.executeApprovedSkillLifecycleMutation({ approvalId: outcome.pendingApproval.approvalId }),
     ).toMatchObject({ disposition: "applied" });
   });
 
-  it("conflicts on stale policy revisions at request time", () => {
+  it("conflicts on stale policy revisions at request time", async () => {
     const harness = createHarness();
-    expect(() =>
+    await expect(
       harness.service.requestActivationPolicyApproval({ guardedAutoThreshold: 0.5 }, { expectedRevision: 7 }),
-    ).toThrow(/changed since revision/);
+    ).rejects.toThrow(/changed since revision/);
   });
 });
 
 describe("branded fail-safe system disable", () => {
-  it("disables with canonical row, activation event, governed system event, and Journey in one transaction", () => {
+  it("disables with canonical row, activation event, governed system event, and Journey in one transaction", async () => {
     const harness = createHarness();
-    harness.service.ensureSkillStates(["skill-alpha"]);
-    const record = harness.service.systemDisableSkill("skill-alpha", "curator:idle-archive");
+    await harness.service.ensureSkillStates(["skill-alpha"]);
+    const record = await harness.service.systemDisableSkill("skill-alpha", "curator:idle-archive");
     expect(record).toMatchObject({ skillId: "skill-alpha", state: "disabled", note: "curator:idle-archive" });
     const governedRows = harness.storage.gatewaySql
       .prepare(`SELECT operation, actor_type AS actorType FROM governed_lifecycle_events WHERE domain = 'skill_state'`)
@@ -478,52 +479,55 @@ describe("branded fail-safe system disable", () => {
     expect(Number(journeyRows.count)).toBe(1);
 
     // Idempotent repeat: no second governed claim.
-    harness.service.systemDisableSkill("skill-alpha", "curator:idle-archive");
+    await harness.service.systemDisableSkill("skill-alpha", "curator:idle-archive");
     expect(countRows(harness, "governed_lifecycle_events")).toBe(1);
   });
 
-  it("rejects unknown skills", () => {
+  it("rejects unknown skills", async () => {
     const harness = createHarness();
-    expect(() => harness.service.systemDisableSkill("skill-ghost", "reason")).toThrow(NotFoundError);
+    await expect(harness.service.systemDisableSkill("skill-ghost", "reason")).rejects.toThrow(NotFoundError);
   });
 });
 
 describe("curator idle snapshot capture/restore", () => {
-  it("captures a snapshot and restores the prior state under system authority with Journey evidence", () => {
+  it("captures a snapshot and restores the prior state under system authority with Journey evidence", async () => {
     const harness = createHarness();
-    harness.service.ensureSkillStates(["skill-alpha"]);
-    harness.service.captureCuratorIdleSnapshot("skill-alpha");
+    await harness.service.ensureSkillStates(["skill-alpha"]);
+    await harness.service.captureCuratorIdleSnapshot("skill-alpha");
     expect(harness.host.recordAutonomousMutation).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "curator_archive", targetKey: "skill-alpha" }),
     );
-    harness.service.systemDisableSkill("skill-alpha", "curator:idle-archive");
+    await harness.service.systemDisableSkill("skill-alpha", "curator:idle-archive");
     expect(readSkillRow(harness, "skill-alpha")).toMatchObject({ state: "disabled" });
 
-    expect(harness.service.restoreCuratorIdleSnapshot("skill-alpha")).toBe(true);
+    expect(await harness.service.restoreCuratorIdleSnapshot("skill-alpha")).toBe(true);
     expect(readSkillRow(harness, "skill-alpha")).toMatchObject({ state: "enabled" });
     const restoreJourney = harness.storage.gatewaySql
       .prepare(`SELECT COUNT(*) AS count FROM governance_journey_events WHERE action = 'system_restored'`)
       .get() as { count: number };
     expect(Number(restoreJourney.count)).toBe(1);
-    expect(harness.service.restoreCuratorIdleSnapshot("skill-ghost")).toBe(false);
+    expect(await harness.service.restoreCuratorIdleSnapshot("skill-ghost")).toBe(false);
   });
 
-  it("swallows snapshot capture failures with a diagnostic", () => {
+  it("swallows snapshot capture failures with a diagnostic", async () => {
     const harness = createHarness();
+    const asyncStorage = createSqliteAsyncStorage(harness.storage);
     const failing = new SkillStateService(
       {
-        gatewaySql: {
-          ...harness.storage.gatewaySql,
-          prepare: () => {
-            throw new Error("db down");
-          },
-        } as never,
-        systemSettings: harness.storage.systemSettings,
-        skillAggregateRevisions: harness.storage.skillAggregateRevisions,
+        storage: {
+          ...asyncStorage,
+          db: {
+            prepare: () => {
+              throw new Error("db down");
+            },
+          } as never,
+        },
+        systemSettings: asyncStorage.systemSettings,
+        skillAggregateRevisions: asyncStorage.skillAggregateRevisions,
       },
       harness.host,
     );
-    failing.captureCuratorIdleSnapshot("skill-alpha");
+    await failing.captureCuratorIdleSnapshot("skill-alpha");
     expect(harness.host.recordDevDiagnostic).toHaveBeenCalledWith(
       expect.objectContaining({ event: "curator_idle_snapshot_failed" }),
     );
@@ -531,7 +535,7 @@ describe("curator idle snapshot capture/restore", () => {
 });
 
 describe("import events", () => {
-  it("records validated and redirected import lifecycle events", () => {
+  it("records validated and redirected import lifecycle events", async () => {
     const harness = createHarness();
     const validation = {
       candidate: {
@@ -547,8 +551,8 @@ describe("import events", () => {
       warnings: [],
       errors: [],
     } as never;
-    harness.service.recordSkillImportEvent(validation, "import_validated");
-    harness.service.recordSkillImportEvent(validation, "import_redirected");
+    await harness.service.recordSkillImportEvent(validation, "import_validated");
+    await harness.service.recordSkillImportEvent(validation, "import_redirected");
     const rows = harness.storage.gatewaySql
       .prepare(`SELECT event_type AS eventType FROM skill_activation_events ORDER BY event_type`)
       .all() as Array<{ eventType: string }>;
@@ -565,9 +569,9 @@ describe("retired direct mutation surface", () => {
     expect(surface.updateActivationPolicy).toBeUndefined();
   });
 
-  it("rejects a forged approval whose payload identity does not re-derive", () => {
+  it("rejects a forged approval whose payload identity does not re-derive", async () => {
     const harness = createHarness();
-    harness.service.ensureSkillStates(["skill-alpha"]);
+    await harness.service.ensureSkillStates(["skill-alpha"]);
     const foreign = harness.storage.approvals.createDeterministicDetachedWithTtlDuration(
       {
         approvalId: "11111111-2222-3333-4444-555555555555",
@@ -582,9 +586,9 @@ describe("retired direct mutation surface", () => {
       decision: "approve",
       resolvedBy: harness.resolverId,
     });
-    expect(() =>
+    await expect(
       harness.service.executeApprovedSkillLifecycleMutation({ approvalId: foreign.approval.approvalId }),
-    ).toThrow(/missing, foreign, malformed, or not approved/);
+    ).rejects.toThrow(/missing, foreign, malformed, or not approved/);
     expect(countRows(harness, "governed_lifecycle_events")).toBe(0);
   });
 });

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage, Storage } from "@goatcitadel/storage";
 
 // shell.exec executes through a manual spawn (so process trees can be killed on
 // timeout/abort). Provide a controllable fake child whose stdout/stderr/exit are
@@ -475,7 +475,7 @@ describe("tool executor edge coverage", () => {
         ]),
         listChunksByDocument,
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const memory = await executeTool(request("memory.read", { namespace: "user", query: "alpha" }), config, storage);
     expect(memory).toMatchObject({ namespace: "user", query: "alpha" });
@@ -543,7 +543,7 @@ describe("tool executor edge coverage", () => {
       toolGrants: {
         listActive,
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     try {
       const result = await executeTool(
@@ -1037,15 +1037,19 @@ function request(toolName: string, args: Record<string, unknown>): ToolInvokeReq
   };
 }
 
-function storageStub(): Storage {
+function storageStub(): Storage & AsyncStorage {
   return {
     pendingApprovalActions: {
       find: vi.fn(() => undefined),
     },
-  } as unknown as Storage;
+  } as unknown as Storage & AsyncStorage;
 }
 
-function commsStorage(connection: { connectionId: string; key: string; config: Record<string, unknown> }): Storage {
+function commsStorage(connection: {
+  connectionId: string;
+  key: string;
+  config: Record<string, unknown>;
+}): Storage & AsyncStorage {
   return {
     integrationConnections: {
       get: vi.fn(() => connection),
@@ -1062,10 +1066,10 @@ function commsStorage(connection: { connectionId: string; key: string; config: R
       markSent: vi.fn(),
       markFailed: vi.fn(),
     },
-  } as unknown as Storage;
+  } as unknown as Storage & AsyncStorage;
 }
 
-function knowledgeStorage(): Storage {
+function knowledgeStorage(): Storage & AsyncStorage {
   const documents: Array<Record<string, unknown>> = [];
   const chunksByDocId = new Map<string, Array<Record<string, unknown>>>();
   let documentSeq = 0;
@@ -1111,7 +1115,7 @@ function knowledgeStorage(): Storage {
       }),
       updateChunkEmbedding: vi.fn(),
     },
-  } as unknown as Storage;
+  } as unknown as Storage & AsyncStorage;
 }
 
 function grantRecord(grantId: string, options: { allowedPaths: string[] }) {

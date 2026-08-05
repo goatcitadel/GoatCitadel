@@ -134,7 +134,7 @@ describe("WorkspacePathBridgeRuntime", () => {
       callable: true,
       canonicalHostPath: "/app/workspace/external-codex",
     });
-    expect(runtime.service.inspect("workspace-1", "external-source-binding-1").snapshotSha256).toBe(
+    expect((await runtime.service.inspect("workspace-1", "external-source-binding-1")).snapshotSha256).toBe(
       snapshot.snapshotSha256,
     );
   });

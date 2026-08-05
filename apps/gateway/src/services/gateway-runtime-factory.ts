@@ -40,8 +40,10 @@ export interface GatewayAuthValidationPort {
   getOnboardingStartupState(): { completed?: boolean };
   validateDeviceAccessToken(
     token: string,
-  ): { actorId: string; deviceId: string; grantId: string; principalPurpose: CompanionPrincipalPurpose } | undefined;
-  validateCompanionAccessToken(token: string):
+  ): Promise<
+    { actorId: string; deviceId: string; grantId: string; principalPurpose: CompanionPrincipalPurpose } | undefined
+  >;
+  validateCompanionAccessToken(token: string): Promise<
     | {
         actorId: string;
         deviceId: string;
@@ -49,7 +51,8 @@ export interface GatewayAuthValidationPort {
         sessionId: string;
         principalPurpose: CompanionPrincipalPurpose;
       }
-    | undefined;
+    | undefined
+  >;
   verifyCompanionRequestSignature(input: unknown): unknown;
 }
 
@@ -57,7 +60,7 @@ export type GatewayRuntimeInstance = GatewayRuntimePort & GatewayAuthValidationP
 
 export interface GatewayAdminPort extends GatewayRuntimePort, GatewayAuthValidationPort {
   createBackup(input: { name?: string; outputPath?: string }): Promise<unknown>;
-  findCronRunById(runId: string): CronRunSnapshot | undefined;
+  findCronRunById(runId: string): Promise<CronRunSnapshot | undefined>;
   getAuthCredentialPlan(): unknown;
   getLlmConfig(): LlmRuntimeConfig;
   getRetentionPolicy(): unknown;

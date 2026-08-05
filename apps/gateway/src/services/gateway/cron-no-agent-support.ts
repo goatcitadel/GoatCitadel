@@ -104,8 +104,8 @@ export async function runNoAgentCronJob(input: {
     jobId: string,
     patch: CronJobRuntimeTelemetryPatch,
     updatedAt: string,
-  ) => CronJobRecord;
-  publishRealtime: (eventType: string, source: string, payload?: Record<string, unknown>) => void;
+  ) => CronJobRecord | Promise<CronJobRecord>;
+  publishRealtime: (eventType: string, source: string, payload?: Record<string, unknown>) => Promise<unknown>;
   computeNextCronRunAt: (schedule: string, from: Date, endAt?: string) => string | undefined;
 }): Promise<Record<string, unknown>> {
   assertExperimentalNoAgentCronEnabled();
@@ -122,7 +122,7 @@ export async function runNoAgentCronJob(input: {
   const finishedAt = new Date().toISOString();
   const stdoutTrimmed = runResult.stdout.replace(/\r?\n$/, "");
   const hasOutput = stdoutTrimmed.length > 0;
-  const saved = input.mergeCronJobRuntimeTelemetry(
+  const saved = await input.mergeCronJobRuntimeTelemetry(
     input.job.jobId,
     {
       lastRunAt: finishedAt,
@@ -138,7 +138,7 @@ export async function runNoAgentCronJob(input: {
     finishedAt,
   );
   if (hasOutput) {
-    input.publishRealtime("cron_job_run", "cron", {
+    await input.publishRealtime("cron_job_run", "cron", {
       type: "cron_no_agent_output",
       jobId: saved.jobId,
       runId: input.runId,

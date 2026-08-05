@@ -66,19 +66,19 @@ function createGatewayHarness(options?: { storedFeatures?: Partial<ReturnType<ty
 }
 
 describe("GatewayService durable feature flags", () => {
-  it("reports the durable kernel enabled even when config and stored flags drift false", () => {
+  it("reports the durable kernel enabled even when config and stored flags drift false", async () => {
     const { gateway } = createGatewayHarness({
       storedFeatures: {
         durableKernelV1Enabled: false,
       },
     });
 
-    const flags = GatewayService.prototype.readFeatureFlags.call(gateway);
+    const flags = await GatewayService.prototype.readFeatureFlags.call(gateway);
 
     expect(flags.durableKernelV1Enabled).toBe(true);
   });
 
-  it("preserves stored durable baseline drift evidence without mutating config or settings", () => {
+  it("preserves stored durable baseline drift evidence without mutating config or settings", async () => {
     const { gateway, systemSettings } = createGatewayHarness({
       storedFeatures: {
         durableKernelV1Enabled: false,
@@ -86,8 +86,8 @@ describe("GatewayService durable feature flags", () => {
       },
     });
 
-    (
-      GatewayService.prototype as unknown as { enforceDurableExecutionBaseline(this: typeof gateway): void }
+    await (
+      GatewayService.prototype as unknown as { enforceDurableExecutionBaseline(this: typeof gateway): Promise<void> }
     ).enforceDurableExecutionBaseline.call(gateway);
 
     expect(gateway.config.assistant.durable.enabled).toBe(false);
@@ -97,16 +97,16 @@ describe("GatewayService durable feature flags", () => {
     expect(systemSettings.set).not.toHaveBeenCalled();
   });
 
-  it("rejects attempts to disable the durable kernel while preserving unrelated feature updates", () => {
+  it("rejects attempts to disable the durable kernel while preserving unrelated feature updates", async () => {
     const { gateway, systemSettings } = createGatewayHarness();
 
-    expect(() =>
+    await expect(
       GatewayService.prototype.updateFeatureFlags.call(gateway, {
         durableKernelV1Enabled: false,
       }),
-    ).toThrow(/cannot be disabled/i);
+    ).rejects.toThrow(/cannot be disabled/i);
 
-    const next = GatewayService.prototype.updateFeatureFlags.call(gateway, {
+    const next = await GatewayService.prototype.updateFeatureFlags.call(gateway, {
       replayRegressionV1Enabled: true,
     });
 
@@ -121,21 +121,21 @@ describe("GatewayService durable feature flags", () => {
     );
   });
 
-  it("throws a typed conflict when a feature-gated runtime path is disabled", () => {
+  it("throws a typed conflict when a feature-gated runtime path is disabled", async () => {
     const { gateway } = createGatewayHarness();
 
-    expect(() => GatewayService.prototype.requireFeatureEnabled.call(gateway, "memoryLifecycleAdminV1Enabled")).toThrow(
-      ConflictError,
-    );
+    await expect(
+      GatewayService.prototype.requireFeatureEnabled.call(gateway, "memoryLifecycleAdminV1Enabled"),
+    ).rejects.toThrow(ConflictError);
   });
 
   describe("autonomy master kill switch (autonomyV1Disabled)", () => {
-    it("defaults to autonomy ON when neither config nor stored flags set the kill switch", () => {
+    it("defaults to autonomy ON when neither config nor stored flags set the kill switch", async () => {
       // Neither createFeatureFlags() nor storedFeatures set autonomyV1Disabled.
       const { gateway } = createGatewayHarness();
 
-      const flags = GatewayService.prototype.readFeatureFlags.call(gateway);
-      const killSwitchEngaged = GatewayService.prototype.isFeatureEnabled.call(gateway, "autonomyV1Disabled");
+      const flags = await GatewayService.prototype.readFeatureFlags.call(gateway);
+      const killSwitchEngaged = await GatewayService.prototype.isFeatureEnabled.call(gateway, "autonomyV1Disabled");
 
       expect(flags.autonomyV1Disabled).toBeFalsy();
       expect(killSwitchEngaged).toBe(false);
@@ -143,58 +143,62 @@ describe("GatewayService durable feature flags", () => {
       expect(!killSwitchEngaged).toBe(true);
     });
 
-    it("halts autonomy when the kill switch is set true via config", () => {
+    it("halts autonomy when the kill switch is set true via config", async () => {
       const { gateway } = createGatewayHarness();
       gateway.config.assistant.features = {
         ...gateway.config.assistant.features,
         autonomyV1Disabled: true,
       } as never;
 
-      const killSwitchEngaged = GatewayService.prototype.isFeatureEnabled.call(gateway, "autonomyV1Disabled");
+      const killSwitchEngaged = await GatewayService.prototype.isFeatureEnabled.call(gateway, "autonomyV1Disabled");
 
       expect(killSwitchEngaged).toBe(true);
       expect(!killSwitchEngaged).toBe(false);
     });
 
-    it("halts autonomy when the kill switch is set true via stored settings (overrides config-off)", () => {
+    it("halts autonomy when the kill switch is set true via stored settings (overrides config-off)", async () => {
       const { gateway } = createGatewayHarness({
         storedFeatures: { autonomyV1Disabled: true } as never,
       });
 
-      const killSwitchEngaged = GatewayService.prototype.isFeatureEnabled.call(gateway, "autonomyV1Disabled");
+      const killSwitchEngaged = await GatewayService.prototype.isFeatureEnabled.call(gateway, "autonomyV1Disabled");
 
       expect(killSwitchEngaged).toBe(true);
     });
 
-    it("persists the kill switch through updateFeatureFlags (engage then disengage)", () => {
+    it("persists the kill switch through updateFeatureFlags (engage then disengage)", async () => {
       const { gateway, systemSettings } = createGatewayHarness();
 
-      const engaged = GatewayService.prototype.updateFeatureFlags.call(gateway, { autonomyV1Disabled: true });
+      const engaged = await GatewayService.prototype.updateFeatureFlags.call(gateway, { autonomyV1Disabled: true });
       expect(engaged.autonomyV1Disabled).toBe(true);
       expect(systemSettings.set).toHaveBeenLastCalledWith(
         "feature_flags_v1",
         expect.objectContaining({ autonomyV1Disabled: true }),
       );
 
-      const disengaged = GatewayService.prototype.updateFeatureFlags.call(gateway, { autonomyV1Disabled: false });
+      const disengaged = await GatewayService.prototype.updateFeatureFlags.call(gateway, {
+        autonomyV1Disabled: false,
+      });
       expect(disengaged.autonomyV1Disabled).toBe(false);
     });
 
-    it("does not wipe a stored kill switch when updateFeatureFlags touches unrelated flags", () => {
+    it("does not wipe a stored kill switch when updateFeatureFlags touches unrelated flags", async () => {
       // Regression: updateFeatureFlags does a full set(... next), so an omitted
       // optional flag (autonomyV1Disabled) would silently reset a stored value.
       const { gateway } = createGatewayHarness({
         storedFeatures: { autonomyV1Disabled: true } as never,
       });
 
-      const next = GatewayService.prototype.updateFeatureFlags.call(gateway, { replayRegressionV1Enabled: true });
+      const next = await GatewayService.prototype.updateFeatureFlags.call(gateway, {
+        replayRegressionV1Enabled: true,
+      });
 
       expect(next.autonomyV1Disabled).toBe(true);
       expect(next.replayRegressionV1Enabled).toBe(true);
     });
   });
 
-  it("drains expired unpinned memory across multiple flush batches", () => {
+  it("drains expired unpinned memory across multiple flush batches", async () => {
     const nowIso = "2026-04-24T00:00:00.000Z";
     const forgottenItems = Array.from({ length: 1200 }, (_, index) => ({
       itemId: `memory-${index}`,
@@ -223,7 +227,7 @@ describe("GatewayService durable feature flags", () => {
       memoryLifecycle: { forgetExpiredActiveMemoryItems, inspectExpiredActiveMemoryLedger },
     } as unknown as MemoryFlushDeps;
 
-    const result = forgetExpiredMemoryItemsForFlush(deps, nowIso);
+    const result = await forgetExpiredMemoryItemsForFlush(deps, nowIso);
 
     expect(forgetExpiredActiveMemoryItems).toHaveBeenCalledTimes(3);
     expect(forgetExpiredActiveMemoryItems).toHaveBeenNthCalledWith(1, { nowIso, limit: 500 });
@@ -236,7 +240,7 @@ describe("GatewayService durable feature flags", () => {
     });
   });
 
-  it("reports a truncated expired-memory backlog when the flush safety cap is reached", () => {
+  it("reports a truncated expired-memory backlog when the flush safety cap is reached", async () => {
     const nowIso = "2026-04-24T00:00:00.000Z";
     const forgetExpiredActiveMemoryItems = vi.fn(() => ({
       totalCount: 0,
@@ -258,7 +262,7 @@ describe("GatewayService durable feature flags", () => {
       memoryLifecycle: { forgetExpiredActiveMemoryItems, inspectExpiredActiveMemoryLedger },
     } as unknown as MemoryFlushDeps;
 
-    const result = forgetExpiredMemoryItemsForFlush(deps, nowIso);
+    const result = await forgetExpiredMemoryItemsForFlush(deps, nowIso);
 
     expect(forgetExpiredActiveMemoryItems).toHaveBeenCalledTimes(20);
     expect(result).toMatchObject({
@@ -269,7 +273,7 @@ describe("GatewayService durable feature flags", () => {
     });
   });
 
-  it("inspects expired memory without forgetting when auto-forget is disabled", () => {
+  it("inspects expired memory without forgetting when auto-forget is disabled", async () => {
     const nowIso = "2026-04-24T00:00:00.000Z";
     const forgetExpiredActiveMemoryItems = vi.fn();
     const inspectExpiredActiveMemoryLedger = vi.fn(() => ({
@@ -282,7 +286,7 @@ describe("GatewayService durable feature flags", () => {
       memoryLifecycle: { forgetExpiredActiveMemoryItems, inspectExpiredActiveMemoryLedger },
     } as unknown as MemoryFlushDeps;
 
-    const result = inspectExpiredMemoryItemsForFlush(deps, nowIso);
+    const result = await inspectExpiredMemoryItemsForFlush(deps, nowIso);
 
     expect(forgetExpiredActiveMemoryItems).not.toHaveBeenCalled();
     expect(result).toMatchObject({

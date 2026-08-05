@@ -25,7 +25,7 @@ export const capabilityScopeRoutes: FastifyPluginAsync = async (fastify) => {
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
     if (!query.success) return reply.code(400).send({ error: query.error.flatten() });
     try {
-      return reply.send(svc.getView("citadel", params.data.citadelId, query.data.type));
+      return reply.send(await svc.getView("citadel", params.data.citadelId, query.data.type));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -37,7 +37,7 @@ export const capabilityScopeRoutes: FastifyPluginAsync = async (fastify) => {
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
     if (!body.success) return reply.code(400).send({ error: body.error.flatten() });
     try {
-      return reply.send(svc.updateScope("citadel", params.data.citadelId, body.data));
+      return reply.send(await svc.updateScope("citadel", params.data.citadelId, body.data));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -49,7 +49,7 @@ export const capabilityScopeRoutes: FastifyPluginAsync = async (fastify) => {
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
     if (!query.success) return reply.code(400).send({ error: query.error.flatten() });
     try {
-      return reply.send(svc.resetScope("citadel", params.data.citadelId, query.data.type));
+      return reply.send(await svc.resetScope("citadel", params.data.citadelId, query.data.type));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -63,7 +63,7 @@ export const capabilityScopeRoutes: FastifyPluginAsync = async (fastify) => {
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
     if (!query.success) return reply.code(400).send({ error: query.error.flatten() });
     try {
-      return reply.send(svc.getView("workspace", params.data.workspaceId, query.data.type));
+      return reply.send(await svc.getView("workspace", params.data.workspaceId, query.data.type));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -75,7 +75,7 @@ export const capabilityScopeRoutes: FastifyPluginAsync = async (fastify) => {
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
     if (!body.success) return reply.code(400).send({ error: body.error.flatten() });
     try {
-      return reply.send(svc.updateScope("workspace", params.data.workspaceId, body.data));
+      return reply.send(await svc.updateScope("workspace", params.data.workspaceId, body.data));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -87,7 +87,7 @@ export const capabilityScopeRoutes: FastifyPluginAsync = async (fastify) => {
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
     if (!query.success) return reply.code(400).send({ error: query.error.flatten() });
     try {
-      return reply.send(svc.resetScope("workspace", params.data.workspaceId, query.data.type));
+      return reply.send(await svc.resetScope("workspace", params.data.workspaceId, query.data.type));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }

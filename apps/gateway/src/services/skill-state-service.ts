@@ -16,7 +16,7 @@ import {
   ValidationError,
   type GovernanceJourneyEventRecord,
 } from "@goatcitadel/contracts";
-import type { GovernedLifecycleEventRepository, Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import {
   buildSkillLifecycleApprovalBinding,
   buildSkillLifecycleApprovalPayload,
@@ -33,6 +33,7 @@ import {
   persistSkillSystemDisableEvidence,
   skillLifecycleRequestJourneyIdempotencyKey,
   SkillLifecycleApplyError,
+  type AsyncGovernedLifecycleEventRepository,
   type SkillGovernanceSystemAuthority,
   type SkillLifecycleApprovalAction,
   type SkillLifecycleApprovalBindingV1,
@@ -69,9 +70,9 @@ export interface SkillLifecycleApprovalAuthorityHost {
         linkage?: Record<string, unknown>;
       },
       ttlMs: number,
-    ): { approval: ApprovalRequest; created: boolean };
+    ): Promise<{ approval: ApprovalRequest; created: boolean }>;
     /** Throws NotFoundError when the approval does not exist. */
-    get(approvalId: string): ApprovalRequest;
+    get(approvalId: string): Promise<ApprovalRequest>;
   };
   approvalEvents: {
     append(input: {
@@ -80,16 +81,16 @@ export interface SkillLifecycleApprovalAuthorityHost {
       actorId: string;
       timestamp: string;
       payload: Record<string, unknown>;
-    }): unknown;
+    }): Promise<unknown>;
   };
   governanceJourneyEvents: {
-    create(record: GovernanceJourneyEventRecord): GovernanceJourneyEventRecord;
-    findByIdempotencyKey(idempotencyKey: string): GovernanceJourneyEventRecord | undefined;
+    create(record: GovernanceJourneyEventRecord): Promise<GovernanceJourneyEventRecord>;
+    findByIdempotencyKey(idempotencyKey: string): Promise<GovernanceJourneyEventRecord | undefined>;
   };
 }
 
 export interface SkillStateServiceCtx {
-  gatewaySql: Storage["gatewaySql"];
+  storage: Pick<Storage, "db" | "governanceJourneyEvents" | "governedLifecycleEvents" | "runImmediateTransaction">;
   systemSettings: Pick<Storage["systemSettings"], "get" | "set">;
   skillAggregateRevisions: Storage["skillAggregateRevisions"];
   approvalAuthority?: SkillLifecycleApprovalAuthorityHost;
@@ -101,7 +102,7 @@ export interface SkillStateServiceCtx {
  */
 export interface SkillStateServiceHost {
   /** Known skills for the state-mutation existence check. */
-  listSkills(): Array<{ skillId: string }>;
+  listSkills(): Promise<Array<{ skillId: string }>>;
   /** Unified autonomous-mutation audit (curator idle-archive snapshots). */
   recordAutonomousMutation(input: {
     kind: "curator_archive";
@@ -116,7 +117,7 @@ export interface SkillStateServiceHost {
     context?: Record<string, unknown>;
   }): void;
   /** Realtime fanout for approval-request and applied-mutation envelopes. */
-  publishRealtime?(eventType: string, source: string, payload: Record<string, unknown>): void;
+  publishRealtime?(eventType: string, source: string, payload: Record<string, unknown>): Promise<unknown>;
 }
 
 /** Route-facing authority input for one approval-first skill-state request. */
@@ -217,7 +218,7 @@ interface ActivationPolicyMutationV1 {
  * internal disable runs only under the module-private branded system authority.
  */
 export class SkillStateService {
-  private governedLifecycleRepository?: GovernedLifecycleEventRepository;
+  private governedLifecycleRepository?: AsyncGovernedLifecycleEventRepository;
   private systemAuthority?: SkillGovernanceSystemAuthority;
 
   constructor(
@@ -225,8 +226,8 @@ export class SkillStateService {
     private readonly host: SkillStateServiceHost,
   ) {}
 
-  private getGovernedLifecycleRepository(): GovernedLifecycleEventRepository {
-    this.governedLifecycleRepository ??= createSkillGovernedLifecycleRepository(this.ctx.gatewaySql);
+  private getGovernedLifecycleRepository(): AsyncGovernedLifecycleEventRepository {
+    this.governedLifecycleRepository ??= createSkillGovernedLifecycleRepository(this.ctx.storage);
     return this.governedLifecycleRepository;
   }
 
@@ -246,21 +247,23 @@ export class SkillStateService {
     return authority;
   }
 
-  readSkillStates(): Map<string, SkillStateRecord> {
-    const rows = this.readPersistedSkillStates();
-    const metadata = this.readSkillStateMetadata();
+  async readSkillStates(): Promise<Map<string, SkillStateRecord>> {
+    const rows = await this.readPersistedSkillStates();
+    const metadata = await this.readSkillStateMetadata();
 
     return new Map(
-      [...rows.values()].map((row) => {
-        const revision = this.ctx.skillAggregateRevisions.ensure("runtime_skill", row.skillId).revision;
-        return [row.skillId, this.decorateSkillState(row, revision, metadata)] as const;
-      }),
+      await Promise.all(
+        [...rows.values()].map(async (row) => {
+          const revision = (await this.ctx.skillAggregateRevisions.ensure("runtime_skill", row.skillId)).revision;
+          return [row.skillId, this.decorateSkillState(row, revision, metadata)] as const;
+        }),
+      ),
     );
   }
 
-  private readPersistedSkillStates(): Map<string, PersistedSkillState> {
+  private async readPersistedSkillStates(): Promise<Map<string, PersistedSkillState>> {
     const rows = toPersistedSkillStateRows(
-      this.ctx.gatewaySql
+      await this.ctx.storage.db
         .prepare(
           `
       SELECT skill_id AS skillId, state, note, updated_at AS updatedAt, first_auto_approved_at AS firstAutoApprovedAt
@@ -272,22 +275,22 @@ export class SkillStateService {
     return new Map(rows.map((row) => [row.skillId, row]));
   }
 
-  ensureSkillStates(skillIds: string[]): void {
+  async ensureSkillStates(skillIds: string[]): Promise<void> {
     const unique = [...new Set(skillIds)];
     const now = new Date().toISOString();
-    const insert = this.ctx.gatewaySql.prepare(`
+    const insert = this.ctx.storage.db.prepare(`
       INSERT INTO skill_state (skill_id, state, note, updated_at, first_auto_approved_at)
       VALUES (@skillId, @state, @note, @updatedAt, NULL)
       ON CONFLICT (skill_id) DO NOTHING
     `);
     for (const skillId of unique) {
-      insert.run({
+      await insert.run({
         skillId,
         state: "enabled",
         note: null,
         updatedAt: now,
       });
-      this.ctx.skillAggregateRevisions.ensure("runtime_skill", skillId, now);
+      await this.ctx.skillAggregateRevisions.ensure("runtime_skill", skillId, now);
     }
   }
 
@@ -300,26 +303,26 @@ export class SkillStateService {
    * later execute the transition. A byte-identical current state is a pure
    * no-op: no approval row, no evidence, no mutation.
    */
-  requestSkillStateApproval(
+  async requestSkillStateApproval(
     skillId: string,
     state: SkillRuntimeState,
     note: string | undefined,
     authority: SkillStateMutationAuthorityInput,
-  ): SkillStateMutationOutcome {
-    const knownSkill = this.host.listSkills().find((skill) => skill.skillId === skillId);
+  ): Promise<SkillStateMutationOutcome> {
+    const knownSkill = (await this.host.listSkills()).find((skill) => skill.skillId === skillId);
     if (!knownSkill) {
       throw new NotFoundError({ entity: "skill", id: skillId });
     }
     const normalizedNote = normalizeSkillStateNote(note);
-    const currentRevision = this.ctx.skillAggregateRevisions.ensure("runtime_skill", skillId).revision;
+    const currentRevision = (await this.ctx.skillAggregateRevisions.ensure("runtime_skill", skillId)).revision;
     assertCurrentRevision("runtime_skill", skillId, authority.expectedRevision, currentRevision);
-    const currentState = this.readPersistedSkillStates().get(skillId);
-    this.assertSkillStateMutationAllowed(skillId, state, currentState);
+    const currentState = (await this.readPersistedSkillStates()).get(skillId);
+    await this.assertSkillStateMutationAllowed(skillId, state, currentState);
     if (currentState && currentState.state === state && currentState.note === normalizedNote) {
       return {
         pendingApproval: null,
         noMutationRequired: true,
-        skillState: this.decorateSkillState(currentState, currentRevision, this.readSkillStateMetadata()),
+        skillState: this.decorateSkillState(currentState, currentRevision, await this.readSkillStateMetadata()),
       };
     }
     const mutation: SkillStateSetMutationV1 = { skillId, state, note: normalizedNote ?? null };
@@ -330,7 +333,7 @@ export class SkillStateService {
       mutation,
       expectedState: buildSkillStateStateMaterial(currentState, currentRevision),
     });
-    const pendingApproval = this.commitSkillLifecycleApproval({
+    const pendingApproval = await this.commitSkillLifecycleApproval({
       binding,
       requesterId: normalizeRequesterId(authority.requesterId),
       mutation,
@@ -352,14 +355,14 @@ export class SkillStateService {
    * sorted skill set, the target state, and every reviewed per-skill state;
    * the recovered effect applies every transition in one transaction or none.
    */
-  requestSkillStateBulkApproval(
+  async requestSkillStateBulkApproval(
     skillIds: string[],
     state: SkillRuntimeState,
     note: string | undefined,
     authority: SkillStateBulkMutationAuthorityInput,
-  ): SkillStateBulkMutationOutcome {
+  ): Promise<SkillStateBulkMutationOutcome> {
     const uniqueIds = [...new Set(skillIds)].sort(compareCodeUnits);
-    const knownSkillIds = new Set(this.host.listSkills().map((skill) => skill.skillId));
+    const knownSkillIds = new Set((await this.host.listSkills()).map((skill) => skill.skillId));
     for (const skillId of uniqueIds) {
       if (!knownSkillIds.has(skillId)) {
         throw new NotFoundError({ entity: "skill", id: skillId });
@@ -383,20 +386,20 @@ export class SkillStateService {
     }
 
     const normalizedNote = normalizeSkillStateNote(note);
-    const currentStates = this.readPersistedSkillStates();
+    const currentStates = await this.readPersistedSkillStates();
     const revisions = new Map<string, number>();
     for (const skillId of uniqueIds) {
-      const currentRevision = this.ctx.skillAggregateRevisions.ensure("runtime_skill", skillId).revision;
+      const currentRevision = (await this.ctx.skillAggregateRevisions.ensure("runtime_skill", skillId)).revision;
       assertCurrentRevision("runtime_skill", skillId, authority.expectedRevisionsBySkillId[skillId]!, currentRevision);
       revisions.set(skillId, currentRevision);
-      this.assertSkillStateMutationAllowed(skillId, state, currentStates.get(skillId));
+      await this.assertSkillStateMutationAllowed(skillId, state, currentStates.get(skillId));
     }
     const changedIds = uniqueIds.filter((skillId) => {
       const current = currentStates.get(skillId);
       return !(current && current.state === state && current.note === normalizedNote);
     });
     if (changedIds.length === 0) {
-      const metadata = this.readSkillStateMetadata();
+      const metadata = await this.readSkillStateMetadata();
       return {
         pendingApproval: null,
         noMutationRequired: true,
@@ -412,7 +415,7 @@ export class SkillStateService {
       mutation,
       expectedState: buildSkillStatesStateMaterial(uniqueIds, currentStates, revisions),
     });
-    const pendingApproval = this.commitSkillLifecycleApproval({
+    const pendingApproval = await this.commitSkillLifecycleApproval({
       binding,
       requesterId: normalizeRequesterId(authority.requesterId),
       mutation,
@@ -430,13 +433,12 @@ export class SkillStateService {
   }
 
   /** Request one approved activation-policy update; unchanged values are a pure no-op. */
-  requestActivationPolicyApproval(
+  async requestActivationPolicyApproval(
     input: SkillActivationPolicyPatch,
     authority: ActivationPolicyMutationAuthorityInput,
-  ): ActivationPolicyMutationOutcome {
-    const currentRevision = this.ctx.skillAggregateRevisions.ensure(
-      "activation_policy",
-      SKILL_ACTIVATION_POLICY_AGGREGATE_ID,
+  ): Promise<ActivationPolicyMutationOutcome> {
+    const currentRevision = (
+      await this.ctx.skillAggregateRevisions.ensure("activation_policy", SKILL_ACTIVATION_POLICY_AGGREGATE_ID)
     ).revision;
     assertCurrentRevision(
       "activation_policy",
@@ -444,7 +446,7 @@ export class SkillStateService {
       authority.expectedRevision,
       currentRevision,
     );
-    const current = this.readActivationPolicyValue();
+    const current = await this.readActivationPolicyValue();
     const next: Omit<SkillActivationPolicy, "revision"> = {
       guardedAutoThreshold: clamp01(input.guardedAutoThreshold ?? current.guardedAutoThreshold),
       requireFirstUseConfirmation: input.requireFirstUseConfirmation ?? current.requireFirstUseConfirmation,
@@ -474,7 +476,7 @@ export class SkillStateService {
       mutation,
       expectedState: buildActivationPolicyStateMaterial(current, currentRevision),
     });
-    const pendingApproval = this.commitSkillLifecycleApproval({
+    const pendingApproval = await this.commitSkillLifecycleApproval({
       binding,
       requesterId: normalizeRequesterId(authority.requesterId),
       mutation,
@@ -489,13 +491,13 @@ export class SkillStateService {
     return { pendingApproval };
   }
 
-  private commitSkillLifecycleApproval(input: {
+  private async commitSkillLifecycleApproval(input: {
     binding: SkillLifecycleApprovalBindingV1;
     requesterId: string;
     mutation: unknown;
     skillIds: string[];
     preview: Record<string, unknown>;
-  }): SkillLifecyclePendingApproval {
+  }): Promise<SkillLifecyclePendingApproval> {
     const authority = this.requireApprovalAuthority();
     const approvalId = deriveSkillLifecycleApprovalId(input.binding);
     const payload = buildSkillLifecycleApprovalPayload({
@@ -503,8 +505,8 @@ export class SkillStateService {
       requesterId: input.requesterId,
       mutation: input.mutation,
     });
-    const committed = this.ctx.gatewaySql.runImmediateTransaction(() => {
-      const stored = authority.approvals.createDeterministicDetachedWithTtlDuration(
+    const committed = await this.ctx.storage.runImmediateTransaction(async () => {
+      const stored = await authority.approvals.createDeterministicDetachedWithTtlDuration(
         {
           approvalId,
           kind: SKILL_LIFECYCLE_APPROVAL_KIND,
@@ -515,7 +517,7 @@ export class SkillStateService {
         SKILL_LIFECYCLE_APPROVAL_TTL_MS,
       );
       if (stored.created) {
-        authority.approvalEvents.append({
+        await authority.approvalEvents.append({
           approvalId,
           eventType: "created",
           actorId: "system",
@@ -526,7 +528,7 @@ export class SkillStateService {
             status: stored.approval.status,
           },
         });
-        authority.governanceJourneyEvents.create(
+        await authority.governanceJourneyEvents.create(
           buildSkillLifecycleRequestJourneyEvent({
             approval: stored.approval,
             binding: input.binding,
@@ -540,11 +542,11 @@ export class SkillStateService {
         // identical mutation conflicts in the approvals owner because the
         // requester is payload material. A missing evidence row self-heals so
         // the recovered effect can never execute without requester evidence.
-        const evidence = authority.governanceJourneyEvents.findByIdempotencyKey(
+        const evidence = await authority.governanceJourneyEvents.findByIdempotencyKey(
           skillLifecycleRequestJourneyIdempotencyKey(approvalId),
         );
         if (!evidence) {
-          authority.governanceJourneyEvents.create(
+          await authority.governanceJourneyEvents.create(
             buildSkillLifecycleRequestJourneyEvent({
               approval: stored.approval,
               binding: input.binding,
@@ -557,7 +559,7 @@ export class SkillStateService {
       return stored;
     });
     if (committed.created) {
-      this.host.publishRealtime?.("skill_mutation_approval_requested", "skills", {
+      await this.host.publishRealtime?.("skill_mutation_approval_requested", "skills", {
         approvalId,
         action: input.binding.action,
         subjectKind: input.binding.subjectKind,
@@ -595,11 +597,11 @@ export class SkillStateService {
    * {@link SkillLifecycleApplyError}; infrastructure errors propagate raw so
    * the approval-effect worker defers the effect for bounded retry.
    */
-  executeApprovedSkillLifecycleMutation(input: { approvalId: string }): SkillLifecycleApplyResult {
+  async executeApprovedSkillLifecycleMutation(input: { approvalId: string }): Promise<SkillLifecycleApplyResult> {
     const authority = this.requireApprovalAuthority();
     let approval: ApprovalRequest;
     try {
-      approval = authority.approvals.get(input.approvalId);
+      approval = await authority.approvals.get(input.approvalId);
     } catch (error) {
       if (error instanceof NotFoundError) {
         throw new SkillLifecycleApplyError("skill_lifecycle_approval_not_executable");
@@ -621,7 +623,7 @@ export class SkillStateService {
     if (approval.expiresAt && Date.parse(approval.expiresAt) <= Date.now()) {
       throw new SkillLifecycleApplyError("skill_lifecycle_approval_expired");
     }
-    const evidence = authority.governanceJourneyEvents.findByIdempotencyKey(
+    const evidence = await authority.governanceJourneyEvents.findByIdempotencyKey(
       skillLifecycleRequestJourneyIdempotencyKey(approval.approvalId),
     );
     if (!evidence || evidence.approvalId !== approval.approvalId || evidence.actorId !== envelope.requesterId) {
@@ -651,7 +653,7 @@ export class SkillStateService {
         if (!mutation || mutation.skillId !== binding.subjectId) {
           throw new SkillLifecycleApplyError("skill_lifecycle_approval_not_executable");
         }
-        return this.applyApprovedSkillStates(
+        return await this.applyApprovedSkillStates(
           binding,
           applyAuthority,
           [mutation.skillId],
@@ -664,13 +666,19 @@ export class SkillStateService {
         if (!mutation) {
           throw new SkillLifecycleApplyError("skill_lifecycle_approval_not_executable");
         }
-        return this.applyApprovedSkillStates(binding, applyAuthority, mutation.skillIds, mutation.state, mutation.note);
+        return await this.applyApprovedSkillStates(
+          binding,
+          applyAuthority,
+          mutation.skillIds,
+          mutation.state,
+          mutation.note,
+        );
       }
       const mutation = parseActivationPolicyMutation(envelope.mutation);
       if (!mutation) {
         throw new SkillLifecycleApplyError("skill_lifecycle_approval_not_executable");
       }
-      return this.applyApprovedActivationPolicy(binding, applyAuthority, mutation);
+      return await this.applyApprovedActivationPolicy(binding, applyAuthority, mutation);
     } catch (error) {
       if (error instanceof SkillLifecycleApplyError) throw error;
       if (error instanceof ConflictError || error instanceof NotFoundError || error instanceof ValidationError) {
@@ -680,7 +688,7 @@ export class SkillStateService {
     }
   }
 
-  private applyApprovedSkillStates(
+  private async applyApprovedSkillStates(
     binding: SkillLifecycleApprovalBindingV1,
     applyAuthority: {
       approvalId: string;
@@ -693,10 +701,10 @@ export class SkillStateService {
     skillIds: string[],
     state: SkillRuntimeState,
     note: string | null,
-  ): SkillLifecycleApplyResult {
+  ): Promise<SkillLifecycleApplyResult> {
     const repository = this.getGovernedLifecycleRepository();
     const normalizedNote = note ?? undefined;
-    return this.ctx.gatewaySql.runImmediateTransaction(() => {
+    return await this.ctx.storage.runImmediateTransaction(async () => {
       // Exact-replay convergence: every governed event for one approval
       // commits in a single transaction, so ANY existing event proves the
       // mutation committed — partial existence is impossible. Bulk approvals
@@ -704,7 +712,11 @@ export class SkillStateService {
       // would falsely read a committed mixed bulk as state drift on effect
       // re-execution; the honest changedCount is the committed event count.
       const governedEventIds = skillIds.map((skillId) => `skill-lifecycle:${applyAuthority.approvalId}:${skillId}`);
-      const committedEventIds = governedEventIds.filter((eventId) => repository.find(eventId) !== undefined);
+      const committedEventIds = (
+        await Promise.all(
+          governedEventIds.map(async (eventId) => ((await repository.find(eventId)) ? eventId : undefined)),
+        )
+      ).filter((eventId): eventId is string => eventId !== undefined);
       if (committedEventIds.length > 0) {
         return {
           disposition: "applied" as const,
@@ -715,10 +727,10 @@ export class SkillStateService {
           changedCount: committedEventIds.length,
         };
       }
-      const currentStates = this.readPersistedSkillStates();
+      const currentStates = await this.readPersistedSkillStates();
       const revisions = new Map<string, number>();
       for (const skillId of skillIds) {
-        revisions.set(skillId, this.ctx.skillAggregateRevisions.ensure("runtime_skill", skillId).revision);
+        revisions.set(skillId, (await this.ctx.skillAggregateRevisions.ensure("runtime_skill", skillId)).revision);
       }
       const currentMaterial =
         binding.subjectKind === "skill"
@@ -729,49 +741,52 @@ export class SkillStateService {
       }
       for (const skillId of skillIds) {
         try {
-          this.assertSkillStateMutationAllowed(skillId, state, currentStates.get(skillId));
+          await this.assertSkillStateMutationAllowed(skillId, state, currentStates.get(skillId));
         } catch {
           throw new SkillLifecycleApplyError("skill_lifecycle_policy_blocked");
         }
       }
       let changedCount = 0;
-      skillIds.forEach((skillId, index) => {
+      for (const [index, skillId] of skillIds.entries()) {
         const currentState = currentStates.get(skillId);
         if (currentState && currentState.state === state && currentState.note === normalizedNote) {
-          return;
+          continue;
         }
-        this.ctx.skillAggregateRevisions.runWithRevision(
+        await this.ctx.skillAggregateRevisions.fenceExpectedRevision(
           "runtime_skill",
           skillId,
           revisions.get(skillId)!,
-          () => {
-            this.persistSkillState(skillId, state, normalizedNote, currentState, applyAuthority.occurredAt);
-            const activationEventId = this.recordSkillStateEvent(
-              skillId,
-              state,
-              normalizedNote,
-              applyAuthority.occurredAt,
-              {
-                approvalId: applyAuthority.approvalId,
-                eventId: `skill-activation:${applyAuthority.approvalId}:${skillId}`,
-              },
-            );
-            persistApprovedSkillStateEvidence(repository, {
-              authority: applyAuthority,
-              skillId,
-              state,
-              ...(normalizedNote === undefined ? {} : { noteSha256: sha256Text(normalizedNote) }),
-              activationEventId,
-              ...(binding.subjectKind === "skill_batch" ? { batchOperationIndex: index } : {}),
-            });
-            return { value: undefined, changed: true };
+          applyAuthority.occurredAt,
+        );
+        await this.persistSkillState(skillId, state, normalizedNote, currentState, applyAuthority.occurredAt);
+        const activationEventId = await this.recordSkillStateEvent(
+          skillId,
+          state,
+          normalizedNote,
+          applyAuthority.occurredAt,
+          {
+            approvalId: applyAuthority.approvalId,
+            eventId: `skill-activation:${applyAuthority.approvalId}:${skillId}`,
           },
+        );
+        await persistApprovedSkillStateEvidence(repository, {
+          authority: applyAuthority,
+          skillId,
+          state,
+          ...(normalizedNote === undefined ? {} : { noteSha256: sha256Text(normalizedNote) }),
+          activationEventId,
+          ...(binding.subjectKind === "skill_batch" ? { batchOperationIndex: index } : {}),
+        });
+        await this.ctx.skillAggregateRevisions.advanceExpectedRevision(
+          "runtime_skill",
+          skillId,
+          revisions.get(skillId)!,
           applyAuthority.occurredAt,
         );
         changedCount += 1;
-      });
+      }
       if (changedCount > 0) {
-        this.host.publishRealtime?.("skill_state_mutation_applied", "skills", {
+        await this.host.publishRealtime?.("skill_state_mutation_applied", "skills", {
           approvalId: applyAuthority.approvalId,
           state,
           skillIds: [...skillIds],
@@ -789,7 +804,7 @@ export class SkillStateService {
     });
   }
 
-  private applyApprovedActivationPolicy(
+  private async applyApprovedActivationPolicy(
     binding: SkillLifecycleApprovalBindingV1,
     applyAuthority: {
       approvalId: string;
@@ -800,11 +815,11 @@ export class SkillStateService {
       expectedStateSha256: string;
     },
     mutation: ActivationPolicyMutationV1,
-  ): SkillLifecycleApplyResult {
+  ): Promise<SkillLifecycleApplyResult> {
     const repository = this.getGovernedLifecycleRepository();
-    return this.ctx.gatewaySql.runImmediateTransaction(() => {
+    return await this.ctx.storage.runImmediateTransaction(async () => {
       const governedEventId = `skill-lifecycle:${applyAuthority.approvalId}:activation-policy`;
-      if (repository.find(governedEventId) !== undefined) {
+      if ((await repository.find(governedEventId)) !== undefined) {
         return {
           disposition: "applied" as const,
           action: binding.action,
@@ -814,11 +829,10 @@ export class SkillStateService {
           changedCount: 1,
         };
       }
-      const currentRevision = this.ctx.skillAggregateRevisions.ensure(
-        "activation_policy",
-        SKILL_ACTIVATION_POLICY_AGGREGATE_ID,
+      const currentRevision = (
+        await this.ctx.skillAggregateRevisions.ensure("activation_policy", SKILL_ACTIVATION_POLICY_AGGREGATE_ID)
       ).revision;
-      const current = this.readActivationPolicyValue();
+      const current = await this.readActivationPolicyValue();
       if (
         buildSkillLifecycleStateSha256(buildActivationPolicyStateMaterial(current, currentRevision)) !==
         binding.expectedStateSha256
@@ -842,34 +856,37 @@ export class SkillStateService {
           changedCount: 0,
         };
       }
-      this.ctx.skillAggregateRevisions.runWithRevision(
+      await this.ctx.skillAggregateRevisions.fenceExpectedRevision(
         "activation_policy",
         SKILL_ACTIVATION_POLICY_AGGREGATE_ID,
         currentRevision,
-        () => {
-          this.ctx.systemSettings.set(SKILL_ACTIVATION_POLICY_SETTING_KEY, next);
-          const activationEventId = this.recordSkillStateEvent(
-            "skill-activation-policy:global",
-            undefined,
-            undefined,
-            applyAuthority.occurredAt,
-            {
-              approvalId: applyAuthority.approvalId,
-              eventId: `skill-activation:${applyAuthority.approvalId}:activation-policy`,
-              eventType: "activation_policy_updated",
-              payload: next,
-            },
-          );
-          persistApprovedActivationPolicyEvidence(repository, {
-            authority: applyAuthority,
-            policy: next,
-            activationEventId,
-          });
-          return { value: undefined, changed: true };
-        },
         applyAuthority.occurredAt,
       );
-      this.host.publishRealtime?.("skill_activation_policy_updated", "skills", {
+      await this.ctx.systemSettings.set(SKILL_ACTIVATION_POLICY_SETTING_KEY, next);
+      const activationEventId = await this.recordSkillStateEvent(
+        "skill-activation-policy:global",
+        undefined,
+        undefined,
+        applyAuthority.occurredAt,
+        {
+          approvalId: applyAuthority.approvalId,
+          eventId: `skill-activation:${applyAuthority.approvalId}:activation-policy`,
+          eventType: "activation_policy_updated",
+          payload: next,
+        },
+      );
+      await persistApprovedActivationPolicyEvidence(repository, {
+        authority: applyAuthority,
+        policy: next,
+        activationEventId,
+      });
+      await this.ctx.skillAggregateRevisions.advanceExpectedRevision(
+        "activation_policy",
+        SKILL_ACTIVATION_POLICY_AGGREGATE_ID,
+        currentRevision,
+        applyAuthority.occurredAt,
+      );
+      await this.host.publishRealtime?.("skill_activation_policy_updated", "skills", {
         approvalId: applyAuthority.approvalId,
         guardedAutoThreshold: next.guardedAutoThreshold,
         requireFirstUseConfirmation: next.requireFirstUseConfirmation,
@@ -895,8 +912,8 @@ export class SkillStateService {
    * `system_disabled` event, and Journey — in one immediate transaction. Route
    * inputs can never mint the authority object this path verifies.
    */
-  systemDisableSkill(skillId: string, reason: string | undefined): SkillStateRecord {
-    const knownSkill = this.host.listSkills().find((skill) => skill.skillId === skillId);
+  async systemDisableSkill(skillId: string, reason: string | undefined): Promise<SkillStateRecord> {
+    const knownSkill = (await this.host.listSkills()).find((skill) => skill.skillId === skillId);
     if (!knownSkill) {
       throw new NotFoundError({ entity: "skill", id: skillId });
     }
@@ -904,45 +921,43 @@ export class SkillStateService {
     const repository = this.getGovernedLifecycleRepository();
     const normalizedNote = normalizeSkillStateNote(reason);
     const now = new Date().toISOString();
-    const applied = this.ctx.gatewaySql.runImmediateTransaction(() => {
-      const currentRevision = this.ctx.skillAggregateRevisions.ensure("runtime_skill", skillId).revision;
-      const currentState = this.readPersistedSkillStates().get(skillId);
+    const applied = await this.ctx.storage.runImmediateTransaction(async () => {
+      const currentRevision = (await this.ctx.skillAggregateRevisions.ensure("runtime_skill", skillId)).revision;
+      const currentState = (await this.readPersistedSkillStates()).get(skillId);
       if (currentState && currentState.state === "disabled" && currentState.note === normalizedNote) {
         return { row: currentState, revision: currentRevision };
       }
-      const result = this.ctx.skillAggregateRevisions.runWithRevision(
+      await this.ctx.skillAggregateRevisions.fenceExpectedRevision("runtime_skill", skillId, currentRevision, now);
+      const next = await this.persistSkillState(skillId, "disabled", normalizedNote, currentState, now);
+      const activationEventId = await this.recordSkillStateEvent(skillId, "disabled", normalizedNote, now, {
+        systemAuthority: "skill_governance",
+      });
+      await persistSkillSystemDisableEvidence(repository, {
+        authority,
+        skillId,
+        reasonCode: (normalizedNote ?? "system_disable").slice(0, 128),
+        activationEventId,
+        occurredAt: now,
+      });
+      const revision = await this.ctx.skillAggregateRevisions.advanceExpectedRevision(
         "runtime_skill",
         skillId,
         currentRevision,
-        () => {
-          const next = this.persistSkillState(skillId, "disabled", normalizedNote, currentState, now);
-          const activationEventId = this.recordSkillStateEvent(skillId, "disabled", normalizedNote, now, {
-            systemAuthority: "skill_governance",
-          });
-          persistSkillSystemDisableEvidence(repository, {
-            authority,
-            skillId,
-            reasonCode: (normalizedNote ?? "system_disable").slice(0, 128),
-            activationEventId,
-            occurredAt: now,
-          });
-          return { value: next, changed: true };
-        },
         now,
       );
-      return { row: result.value, revision: result.revision };
+      return { row: next, revision: revision.revision };
     });
-    return this.decorateSkillState(applied.row, applied.revision, this.readSkillStateMetadata());
+    return this.decorateSkillState(applied.row, applied.revision, await this.readSkillStateMetadata());
   }
 
-  private persistSkillState(
+  private async persistSkillState(
     skillId: string,
     state: SkillRuntimeState,
     note: string | undefined,
     current: PersistedSkillState | undefined,
     now: string,
-  ): PersistedSkillState {
-    this.ctx.gatewaySql
+  ): Promise<PersistedSkillState> {
+    await this.ctx.storage.db
       .prepare(
         `
       INSERT INTO skill_state (skill_id, state, note, updated_at, first_auto_approved_at)
@@ -969,7 +984,7 @@ export class SkillStateService {
     };
   }
 
-  private recordSkillStateEvent(
+  private async recordSkillStateEvent(
     skillId: string,
     state: SkillRuntimeState | undefined,
     note: string | undefined,
@@ -981,9 +996,9 @@ export class SkillStateService {
       systemAuthority?: string;
       payload?: Record<string, unknown>;
     },
-  ): string {
+  ): Promise<string> {
     const eventId = options?.eventId ?? randomUUID();
-    this.ctx.gatewaySql
+    await this.ctx.storage.db
       .prepare(
         `
       INSERT INTO skill_activation_events (
@@ -1010,12 +1025,12 @@ export class SkillStateService {
     return eventId;
   }
 
-  private assertSkillStateMutationAllowed(
+  private async assertSkillStateMutationAllowed(
     skillId: string,
     state: SkillRuntimeState,
     currentState: PersistedSkillState | undefined,
-  ): void {
-    const pinned = this.readSkillStateMetadata()[skillId]?.pinned === true;
+  ): Promise<void> {
+    const pinned = (await this.readSkillStateMetadata())[skillId]?.pinned === true;
     if (pinned && currentState?.state !== state) {
       throw new ConflictError({
         message: `Pinned skill ${skillId} cannot be changed directly; create a skill mutation proposal first.`,
@@ -1037,12 +1052,12 @@ export class SkillStateService {
     };
   }
 
-  recordSkillUsage(skillIds: string[]): void {
+  async recordSkillUsage(skillIds: string[]): Promise<void> {
     const uniqueSkillIds = [...new Set(skillIds.filter((skillId) => skillId.trim().length > 0))];
     if (uniqueSkillIds.length === 0) {
       return;
     }
-    const metadata = this.readSkillStateMetadata();
+    const metadata = await this.readSkillStateMetadata();
     const now = new Date().toISOString();
     for (const skillId of uniqueSkillIds) {
       const current = metadata[skillId] ?? {};
@@ -1052,20 +1067,19 @@ export class SkillStateService {
         lastUsedAt: now,
       };
     }
-    this.ctx.systemSettings.set(SKILL_STATE_METADATA_SETTING_KEY, metadata);
+    await this.ctx.systemSettings.set(SKILL_STATE_METADATA_SETTING_KEY, metadata);
   }
 
-  getActivationPolicy(): SkillActivationPolicy {
-    const revision = this.ctx.skillAggregateRevisions.ensure(
-      "activation_policy",
-      SKILL_ACTIVATION_POLICY_AGGREGATE_ID,
+  async getActivationPolicy(): Promise<SkillActivationPolicy> {
+    const revision = (
+      await this.ctx.skillAggregateRevisions.ensure("activation_policy", SKILL_ACTIVATION_POLICY_AGGREGATE_ID)
     ).revision;
-    return { revision, ...this.readActivationPolicyValue() };
+    return { revision, ...(await this.readActivationPolicyValue()) };
   }
 
-  private readActivationPolicyValue(): Omit<SkillActivationPolicy, "revision"> {
-    const stored = this.ctx.systemSettings.get<Partial<SkillActivationPolicy>>(
-      SKILL_ACTIVATION_POLICY_SETTING_KEY,
+  private async readActivationPolicyValue(): Promise<Omit<SkillActivationPolicy, "revision">> {
+    const stored = (
+      await this.ctx.systemSettings.get<Partial<SkillActivationPolicy>>(SKILL_ACTIVATION_POLICY_SETTING_KEY)
     )?.value;
     if (!stored) {
       return { ...DEFAULT_SKILL_ACTIVATION_POLICY };
@@ -1088,10 +1102,10 @@ export class SkillStateService {
    * swallows errors. The archive is reversible regardless — a curator-archived
    * skill is a `disabled` row re-enableable from the snapshot.
    */
-  captureCuratorIdleSnapshot(skillId: string): void {
+  async captureCuratorIdleSnapshot(skillId: string): Promise<void> {
     try {
-      const prior = this.readSkillStates().get(skillId);
-      this.ctx.systemSettings.set(curatorIdleSnapshotKey(skillId), {
+      const prior = (await this.readSkillStates()).get(skillId);
+      await this.ctx.systemSettings.set(curatorIdleSnapshotKey(skillId), {
         skillId,
         priorState: prior?.state ?? "enabled",
         priorNote: prior?.note,
@@ -1124,13 +1138,15 @@ export class SkillStateService {
    * writes the canonical row, its activation-event source row, and Journey
    * restore evidence — without ever minting approval-requiring governed claims.
    */
-  restoreCuratorIdleSnapshot(skillId: string): boolean {
-    const snapshot = this.ctx.systemSettings.get<{
-      skillId: string;
-      priorState: SkillRuntimeState;
-      priorNote?: string;
-      priorPinned?: boolean;
-    }>(curatorIdleSnapshotKey(skillId))?.value;
+  async restoreCuratorIdleSnapshot(skillId: string): Promise<boolean> {
+    const snapshot = (
+      await this.ctx.systemSettings.get<{
+        skillId: string;
+        priorState: SkillRuntimeState;
+        priorNote?: string;
+        priorPinned?: boolean;
+      }>(curatorIdleSnapshotKey(skillId))
+    )?.value;
     if (!snapshot || snapshot.skillId !== skillId) {
       return false;
     }
@@ -1146,71 +1162,64 @@ export class SkillStateService {
     }
     const normalizedNote = normalizeSkillStateNote(snapshot.priorNote);
     const now = new Date().toISOString();
-    this.ctx.gatewaySql.runImmediateTransaction(() => {
-      const currentRevision = this.ctx.skillAggregateRevisions.ensure("runtime_skill", skillId).revision;
-      const currentState = this.readPersistedSkillStates().get(skillId);
+    await this.ctx.storage.runImmediateTransaction(async () => {
+      const currentRevision = (await this.ctx.skillAggregateRevisions.ensure("runtime_skill", skillId)).revision;
+      const currentState = (await this.readPersistedSkillStates()).get(skillId);
       if (currentState && currentState.state === snapshot.priorState && currentState.note === normalizedNote) {
         return;
       }
-      this.ctx.skillAggregateRevisions.runWithRevision(
-        "runtime_skill",
-        skillId,
-        currentRevision,
-        () => {
-          this.persistSkillState(skillId, snapshot.priorState, normalizedNote, currentState, now);
-          const activationEventId = this.recordSkillStateEvent(skillId, snapshot.priorState, normalizedNote, now, {
-            systemAuthority: "skill_governance",
-          });
-          const journeyEvent: GovernanceJourneyEventRecord = {
-            schemaVersion: "goatcitadel.journey-event.v1",
-            eventId: `skill:journey:system-restore:${activationEventId}`,
-            idempotencyKey: `skill:lifecycle:system-restore:${activationEventId}`,
-            scopeKind: "global",
-            eventType: "skill_state_lifecycle",
-            subjectKind: "skill",
-            subjectId: skillId,
-            action: "system_restored",
-            actorId: authority.actorId,
-            actorType: "system",
-            sourceKind: "skill_activation_event",
-            sourceId: activationEventId,
-            trustDisposition: "system_skill_failsafe",
-            poisoningStatus: "clean",
-            evidenceRefs: [],
-            provenance: {
-              sourceRequired: true,
-              approvalRequired: false,
-              systemAuthority: "skill_governance",
-              restoreOf: "curator_idle_archive",
-            },
-            summary: {
-              state: snapshot.priorState,
-              skillMutationObserved: true,
-              journeyMutationAuthority: false,
-              callable: false,
-              directPromotion: false,
-            },
-            occurredAt: now,
-            recordedAt: now,
-          };
-          journeyHost.create(journeyEvent);
-          return { value: undefined, changed: true };
+      await this.ctx.skillAggregateRevisions.fenceExpectedRevision("runtime_skill", skillId, currentRevision, now);
+      await this.persistSkillState(skillId, snapshot.priorState, normalizedNote, currentState, now);
+      const activationEventId = await this.recordSkillStateEvent(skillId, snapshot.priorState, normalizedNote, now, {
+        systemAuthority: "skill_governance",
+      });
+      const journeyEvent: GovernanceJourneyEventRecord = {
+        schemaVersion: "goatcitadel.journey-event.v1",
+        eventId: `skill:journey:system-restore:${activationEventId}`,
+        idempotencyKey: `skill:lifecycle:system-restore:${activationEventId}`,
+        scopeKind: "global",
+        eventType: "skill_state_lifecycle",
+        subjectKind: "skill",
+        subjectId: skillId,
+        action: "system_restored",
+        actorId: authority.actorId,
+        actorType: "system",
+        sourceKind: "skill_activation_event",
+        sourceId: activationEventId,
+        trustDisposition: "system_skill_failsafe",
+        poisoningStatus: "clean",
+        evidenceRefs: [],
+        provenance: {
+          sourceRequired: true,
+          approvalRequired: false,
+          systemAuthority: "skill_governance",
+          restoreOf: "curator_idle_archive",
         },
-        now,
-      );
+        summary: {
+          state: snapshot.priorState,
+          skillMutationObserved: true,
+          journeyMutationAuthority: false,
+          callable: false,
+          directPromotion: false,
+        },
+        occurredAt: now,
+        recordedAt: now,
+      };
+      await journeyHost.create(journeyEvent);
+      await this.ctx.skillAggregateRevisions.advanceExpectedRevision("runtime_skill", skillId, currentRevision, now);
     });
     return true;
   }
 
-  recordSkillImportEvent(
+  async recordSkillImportEvent(
     validation: SkillImportValidationResult,
     eventType: "import_validated" | "import_installed" | "import_redirected",
-  ): void {
+  ): Promise<void> {
     const now = new Date().toISOString();
     const skillId = validation.inferredSkillId
       ? `import:${validation.inferredSkillId}`
       : `import:${createHash("sha1").update(validation.candidate.canonicalKey).digest("hex").slice(0, 12)}`;
-    this.ctx.gatewaySql
+    await this.ctx.storage.db
       .prepare(
         `
       INSERT INTO skill_activation_events (
@@ -1239,10 +1248,14 @@ export class SkillStateService {
       });
   }
 
-  private readSkillStateMetadata(): Record<string, { pinned?: boolean; usageCount?: number; lastUsedAt?: string }> {
-    const value = this.ctx.systemSettings.get<
-      Record<string, { pinned?: boolean; usageCount?: number; lastUsedAt?: string }>
-    >(SKILL_STATE_METADATA_SETTING_KEY)?.value;
+  private async readSkillStateMetadata(): Promise<
+    Record<string, { pinned?: boolean; usageCount?: number; lastUsedAt?: string }>
+  > {
+    const value = (
+      await this.ctx.systemSettings.get<Record<string, { pinned?: boolean; usageCount?: number; lastUsedAt?: string }>>(
+        SKILL_STATE_METADATA_SETTING_KEY,
+      )
+    )?.value;
     if (!value || typeof value !== "object") {
       return {};
     }

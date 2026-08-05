@@ -108,6 +108,20 @@ describe("model-router decision service", () => {
     }
   });
 
+  it("routes explicit non-current research to governed web tools without claiming freshness", () => {
+    const decision = routeWithModelRouter({
+      prompt: "Please do some research on funny jokes and put together a PowerPoint presentation on it.",
+    });
+
+    expect(decision).toMatchObject({
+      route: "research",
+      selectedEngine: "web_research",
+      requiresTools: true,
+      requiresFreshness: false,
+      reasons: expect.arrayContaining(["external research requested"]),
+    });
+  });
+
   it("never bypasses orchestration for tool, vision, image, confirmation, reasoning, or attachment turns", () => {
     const blockedInputs = [
       { prompt: "what is in this screenshot" },

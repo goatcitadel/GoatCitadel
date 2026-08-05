@@ -11,6 +11,7 @@ import {
 } from "@goatcitadel/contracts";
 import {
   Storage,
+  createSqliteAsyncStorage,
   computeExternalSourceArtifactSetSha256,
   computeExternalSourceNormalizedSetSha256,
   computeExternalSourceRawSetSha256,
@@ -292,7 +293,7 @@ async function createHarness(): Promise<Harness> {
   const sessionMeta = storage.chatSessionMeta.ensure(SESSION_ID, TS, WORKSPACE_ID);
   const sessionIncarnationId = sessionMeta.lifecycleIntentId ?? `legacy-session-incarnation:${SESSION_ID}`;
 
-  const service = createExternalSourceRouteService(storage, stubPathVerifier, managedRootDir);
+  const service = createExternalSourceRouteService(createSqliteAsyncStorage(storage), stubPathVerifier, managedRootDir);
   const countRows = (table: string) =>
     Number((storage.db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count);
   return {
@@ -327,7 +328,10 @@ describe("HX-407 C4 external source route-service composition", { timeout: 120_0
     const harness = await createHarness();
     expect(harness.service.supportsChatAttachments()).toBe(true);
 
-    const empty = harness.service.listSessionAttachments({ workspaceId: WORKSPACE_ID, sessionId: SESSION_ID }, ACTOR);
+    const empty = await harness.service.listSessionAttachments(
+      { workspaceId: WORKSPACE_ID, sessionId: SESSION_ID },
+      ACTOR,
+    );
     expect(empty.items).toEqual([]);
     // The durable reload surface carries the exact incarnation the mutation
     // contracts demand — the C4b client consumes this value.
@@ -345,7 +349,10 @@ describe("HX-407 C4 external source route-service composition", { timeout: 120_0
       normalizedArtifactSha256: harness.artifactShas[0],
     });
 
-    const listed = harness.service.listSessionAttachments({ workspaceId: WORKSPACE_ID, sessionId: SESSION_ID }, ACTOR);
+    const listed = await harness.service.listSessionAttachments(
+      { workspaceId: WORKSPACE_ID, sessionId: SESSION_ID },
+      ACTOR,
+    );
     expect(listed.items).toHaveLength(1);
     expect(JSON.stringify(listed)).not.toContain("lobster-matrix-7f3a");
 
@@ -519,7 +526,7 @@ describe("HX-407 C4 external source route-service composition", { timeout: 120_0
   it("keeps the chat composition dark when the managed root is not composed", () => {
     const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
     cleanups.push(() => storage.close());
-    const service = createExternalSourceRouteService(storage, stubPathVerifier);
+    const service = createExternalSourceRouteService(createSqliteAsyncStorage(storage), stubPathVerifier);
     expect(service.supportsChatAttachments()).toBe(false);
     expect(() => service.listSessionAttachments({ workspaceId: WORKSPACE_ID, sessionId: SESSION_ID }, ACTOR)).toThrow(
       /not composed/u,

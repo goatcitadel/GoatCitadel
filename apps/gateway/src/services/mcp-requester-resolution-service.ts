@@ -71,14 +71,14 @@ export interface McpToolCallCurrentStateCheck {
 export interface McpProfileDiscoveryResolutionServiceInput extends ResolutionSignals {
   requester: McpProfileDiscoveryAuthority;
   server: McpRequesterScopedServerSnapshot;
-  readCurrentState(check: McpProfileDiscoveryCurrentStateCheck): McpProfileDiscoveryCurrentState;
+  readCurrentState(check: McpProfileDiscoveryCurrentStateCheck): Promise<McpProfileDiscoveryCurrentState>;
 }
 
 export interface McpToolCallResolutionServiceInput extends ResolutionSignals {
   requester: McpToolCallAuthority;
   server: McpRequesterScopedServerSnapshot;
   binding: McpRequesterResolutionBinding;
-  readCurrentState(check: McpToolCallCurrentStateCheck): McpToolCallCurrentState;
+  readCurrentState(check: McpToolCallCurrentStateCheck): Promise<McpToolCallCurrentState>;
 }
 
 export interface McpEphemeralResolvedConnection {
@@ -209,11 +209,11 @@ export interface McpProfileDiscoveryResolutionAttempt {
   readonly attemptId: string;
   readonly connection: McpEphemeralResolvedConnection;
   readonly signal: AbortSignal;
-  authorizeInitialize(): McpProfileDiscoveryOperationPermit;
-  authorizeInitializedNotification(): McpProfileDiscoveryOperationPermit;
-  authorizeToolsList(): McpProfileDiscoveryOperationPermit;
-  consumeOperationPermit(input: McpProfileDiscoveryOperationPermit): McpProfileDiscoveryOperationPermit;
-  assertCurrent(): void;
+  authorizeInitialize(): Promise<McpProfileDiscoveryOperationPermit>;
+  authorizeInitializedNotification(): Promise<McpProfileDiscoveryOperationPermit>;
+  authorizeToolsList(): Promise<McpProfileDiscoveryOperationPermit>;
+  consumeOperationPermit(input: McpProfileDiscoveryOperationPermit): Promise<McpProfileDiscoveryOperationPermit>;
+  assertCurrent(): Promise<void>;
   scrubText(input: string): string;
   scrubDiagnostic(input: unknown): unknown;
   dispose(): void;
@@ -232,12 +232,12 @@ export interface McpToolCallResolutionAttempt {
   readonly attemptId: string;
   readonly connection: McpEphemeralResolvedConnection;
   readonly signal: AbortSignal;
-  authorizeToolsListRevalidation(): McpToolCallRevalidationPermit;
-  consumeToolsListRevalidationPermit(input: McpToolCallRevalidationPermit): McpToolCallRevalidationPermit;
-  acceptFreshToolsListRevalidation(input: McpFreshToolsListRevalidationInput): void;
-  authorizeToolsCall(): McpToolCallOperationPermit;
-  consumeToolsCallPermit(input: McpToolCallOperationPermit): McpToolCallOperationPermit;
-  assertCurrent(): void;
+  authorizeToolsListRevalidation(): Promise<McpToolCallRevalidationPermit>;
+  consumeToolsListRevalidationPermit(input: McpToolCallRevalidationPermit): Promise<McpToolCallRevalidationPermit>;
+  acceptFreshToolsListRevalidation(input: McpFreshToolsListRevalidationInput): Promise<void>;
+  authorizeToolsCall(): Promise<McpToolCallOperationPermit>;
+  consumeToolsCallPermit(input: McpToolCallOperationPermit): Promise<McpToolCallOperationPermit>;
+  assertCurrent(): Promise<void>;
   scrubText(input: string): string;
   scrubDiagnostic(input: unknown): unknown;
   dispose(): void;
@@ -293,7 +293,7 @@ class ResolutionLease {
   readonly #connection: McpEphemeralResolvedConnectionValue;
   readonly #guard: McpResolutionSecretGuard;
   readonly #abort: ResolutionAbortLatch;
-  readonly #assertCurrentState: (connectionGeneration?: number, rotationGeneration?: number) => void;
+  readonly #assertCurrentState: (connectionGeneration?: number, rotationGeneration?: number) => Promise<void>;
   readonly #now: () => number;
   readonly #onDispose: () => void;
   readonly #expiryTimer: ReturnType<typeof setTimeout>;
@@ -304,7 +304,7 @@ class ResolutionLease {
     connection: McpEphemeralResolvedConnectionValue;
     guard: McpResolutionSecretGuard;
     abort: ResolutionAbortLatch;
-    assertCurrentState(connectionGeneration?: number, rotationGeneration?: number): void;
+    assertCurrentState(connectionGeneration?: number, rotationGeneration?: number): Promise<void>;
     now: () => number;
     onDispose(): void;
   }) {
@@ -338,7 +338,7 @@ class ResolutionLease {
     return this.#abort.signal;
   }
 
-  public assertCurrent(): void {
+  public async assertCurrent(): Promise<void> {
     this.#abort.throwIfAborted();
     this.#assertNotDisposed();
     if (this.#now() >= this.#connection.expiresAtMs) {
@@ -346,7 +346,7 @@ class ResolutionLease {
       this.#abort.throwIfAborted();
     }
     try {
-      this.#assertCurrentState(this.#connection.connectionGeneration, this.#connection.rotationGeneration);
+      await this.#assertCurrentState(this.#connection.connectionGeneration, this.#connection.rotationGeneration);
     } catch (error) {
       this.#abort.abort(error instanceof McpRequesterResolutionError ? error.code : "connection_generation_revoked");
       this.#abort.throwIfAborted();
@@ -402,6 +402,7 @@ class McpProfileDiscoveryResolutionAttemptValue implements McpProfileDiscoveryRe
   readonly #lease: ResolutionLease;
   readonly #abortListener: () => void;
   readonly #authorizedOperations = new Set<McpProfileDiscoveryOperation>();
+  readonly #pendingOperations = new Set<McpProfileDiscoveryOperation>();
   readonly #issuedPermits = new Map<McpProfileDiscoveryOperation, McpProfileDiscoveryOperationPermit>();
 
   public constructor(requester: McpProfileDiscoveryAuthority, lease: ResolutionLease) {
@@ -421,18 +422,20 @@ class McpProfileDiscoveryResolutionAttemptValue implements McpProfileDiscoveryRe
   public get signal(): AbortSignal {
     return this.#lease.signal;
   }
-  public authorizeInitialize(): McpProfileDiscoveryOperationPermit {
+  public authorizeInitialize(): Promise<McpProfileDiscoveryOperationPermit> {
     return this.#permit("initialize");
   }
-  public authorizeInitializedNotification(): McpProfileDiscoveryOperationPermit {
+  public authorizeInitializedNotification(): Promise<McpProfileDiscoveryOperationPermit> {
     return this.#permit("notifications/initialized");
   }
-  public authorizeToolsList(): McpProfileDiscoveryOperationPermit {
+  public authorizeToolsList(): Promise<McpProfileDiscoveryOperationPermit> {
     return this.#permit("tools/list");
   }
-  public consumeOperationPermit(input: McpProfileDiscoveryOperationPermit): McpProfileDiscoveryOperationPermit {
+  public async consumeOperationPermit(
+    input: McpProfileDiscoveryOperationPermit,
+  ): Promise<McpProfileDiscoveryOperationPermit> {
     try {
-      this.#lease.assertCurrent();
+      await this.#lease.assertCurrent();
     } catch (error) {
       this.#revokeIssuedPermits();
       throw error;
@@ -446,9 +449,9 @@ class McpProfileDiscoveryResolutionAttemptValue implements McpProfileDiscoveryRe
     this.#issuedPermits.delete(issued[0]);
     return input;
   }
-  public assertCurrent(): void {
+  public async assertCurrent(): Promise<void> {
     try {
-      this.#lease.assertCurrent();
+      await this.#lease.assertCurrent();
     } catch (error) {
       this.#revokeIssuedPermits();
       throw error;
@@ -472,13 +475,17 @@ class McpProfileDiscoveryResolutionAttemptValue implements McpProfileDiscoveryRe
     throw new McpRequesterResolutionError("secret_guard_failed");
   }
 
-  #permit(operation: McpProfileDiscoveryOperation): McpProfileDiscoveryOperationPermit {
+  async #permit(operation: McpProfileDiscoveryOperation): Promise<McpProfileDiscoveryOperationPermit> {
+    if (this.#pendingOperations.has(operation)) throw new McpRequesterResolutionError("operation_denied");
+    this.#pendingOperations.add(operation);
     try {
-      this.#lease.assertCurrent();
+      await this.#lease.assertCurrent();
     } catch (error) {
+      this.#pendingOperations.delete(operation);
       this.#revokeIssuedPermits();
       throw error;
     }
+    this.#pendingOperations.delete(operation);
     if (this.#authorizedOperations.has(operation)) throw new McpRequesterResolutionError("operation_denied");
     const permit = new ProfileDiscoveryOperationPermitValue({
       stage: "profile_discovery",
@@ -506,10 +513,12 @@ class McpToolCallResolutionAttemptValue implements McpToolCallResolutionAttempt 
   readonly #lease: ResolutionLease;
   readonly #abortListener: () => void;
   #revalidationAuthorized = false;
+  #revalidationAuthorizationPending = false;
   #issuedRevalidationPermit: McpToolCallRevalidationPermit | undefined;
   #revalidationDispatched = false;
   #revalidated = false;
   #callAuthorized = false;
+  #callAuthorizationPending = false;
   #issuedCallPermit: McpToolCallOperationPermit | undefined;
 
   public constructor(requester: McpToolCallAuthority, lease: ResolutionLease) {
@@ -529,16 +538,18 @@ class McpToolCallResolutionAttemptValue implements McpToolCallResolutionAttempt 
   public get signal(): AbortSignal {
     return this.#lease.signal;
   }
-  public authorizeToolsListRevalidation(): McpToolCallRevalidationPermit {
+  public async authorizeToolsListRevalidation(): Promise<McpToolCallRevalidationPermit> {
+    if (this.#revalidationAuthorizationPending) throw new McpRequesterResolutionError("operation_denied");
+    this.#revalidationAuthorizationPending = true;
     try {
-      this.#lease.assertCurrent();
+      await this.#lease.assertCurrent();
     } catch (error) {
+      this.#revalidationAuthorizationPending = false;
       this.#revokeIssuedPermits();
       throw error;
     }
-    if (this.#revalidationAuthorized) {
-      throw new McpRequesterResolutionError("operation_denied");
-    }
+    this.#revalidationAuthorizationPending = false;
+    if (this.#revalidationAuthorized) throw new McpRequesterResolutionError("operation_denied");
     const permit = new ToolCallRevalidationPermitValue({
       stage: "tool_call_revalidation",
       operation: "tools/list",
@@ -556,9 +567,11 @@ class McpToolCallResolutionAttemptValue implements McpToolCallResolutionAttempt 
     this.#issuedRevalidationPermit = permit;
     return permit;
   }
-  public consumeToolsListRevalidationPermit(input: McpToolCallRevalidationPermit): McpToolCallRevalidationPermit {
+  public async consumeToolsListRevalidationPermit(
+    input: McpToolCallRevalidationPermit,
+  ): Promise<McpToolCallRevalidationPermit> {
     try {
-      this.#lease.assertCurrent();
+      await this.#lease.assertCurrent();
     } catch (error) {
       this.#revokeIssuedPermits();
       throw error;
@@ -570,12 +583,12 @@ class McpToolCallResolutionAttemptValue implements McpToolCallResolutionAttempt 
     this.#revalidationDispatched = true;
     return input;
   }
-  public acceptFreshToolsListRevalidation(input: McpFreshToolsListRevalidationInput): void {
+  public async acceptFreshToolsListRevalidation(input: McpFreshToolsListRevalidationInput): Promise<void> {
     if (this.#revalidated) throw new McpRequesterResolutionError("schema_revalidation_drift");
     if (!this.#revalidationDispatched) throw new McpRequesterResolutionError("schema_revalidation_required");
     this.#revalidationDispatched = false;
     try {
-      this.#assertCurrentAndRevokePermitsOnFailure();
+      await this.#assertCurrentAndRevokePermitsOnFailure();
       const value = snapshotExactDataRecord(input, [
         "catalog",
         "revalidationAttemptGeneration",
@@ -607,15 +620,23 @@ class McpToolCallResolutionAttemptValue implements McpToolCallResolutionAttempt 
       ) {
         throw new McpRequesterResolutionError("schema_revalidation_drift");
       }
-      this.#assertCurrentAndRevokePermitsOnFailure();
+      await this.#assertCurrentAndRevokePermitsOnFailure();
       this.#revalidated = true;
     } catch (error) {
       this.dispose();
       throw error;
     }
   }
-  public authorizeToolsCall(): McpToolCallOperationPermit {
-    this.#assertCurrentAndRevokePermitsOnFailure();
+  public async authorizeToolsCall(): Promise<McpToolCallOperationPermit> {
+    if (this.#callAuthorizationPending) throw new McpRequesterResolutionError("operation_denied");
+    this.#callAuthorizationPending = true;
+    try {
+      await this.#assertCurrentAndRevokePermitsOnFailure();
+    } catch (error) {
+      this.#callAuthorizationPending = false;
+      throw error;
+    }
+    this.#callAuthorizationPending = false;
     if (!this.#revalidated) throw new McpRequesterResolutionError("schema_revalidation_required");
     if (this.#callAuthorized) throw new McpRequesterResolutionError("operation_denied");
     const permit = new ToolCallOperationPermitValue({
@@ -637,9 +658,9 @@ class McpToolCallResolutionAttemptValue implements McpToolCallResolutionAttempt 
     this.#issuedCallPermit = permit;
     return permit;
   }
-  public consumeToolsCallPermit(input: McpToolCallOperationPermit): McpToolCallOperationPermit {
+  public async consumeToolsCallPermit(input: McpToolCallOperationPermit): Promise<McpToolCallOperationPermit> {
     try {
-      this.#lease.assertCurrent();
+      await this.#lease.assertCurrent();
     } catch (error) {
       this.#revokeIssuedPermits();
       throw error;
@@ -650,8 +671,8 @@ class McpToolCallResolutionAttemptValue implements McpToolCallResolutionAttempt 
     this.#issuedCallPermit = undefined;
     return input;
   }
-  public assertCurrent(): void {
-    this.#assertCurrentAndRevokePermitsOnFailure();
+  public async assertCurrent(): Promise<void> {
+    await this.#assertCurrentAndRevokePermitsOnFailure();
   }
   public scrubText(input: string): string {
     return this.#lease.scrubText(input);
@@ -685,9 +706,9 @@ class McpToolCallResolutionAttemptValue implements McpToolCallResolutionAttempt 
     }
   }
 
-  #assertCurrentAndRevokePermitsOnFailure(): void {
+  async #assertCurrentAndRevokePermitsOnFailure(): Promise<void> {
     try {
-      this.#lease.assertCurrent();
+      await this.#lease.assertCurrent();
     } catch (error) {
       this.#revokeIssuedPermits();
       throw error;
@@ -757,14 +778,14 @@ export class McpRequesterResolutionService {
     const input = freezeProfileDiscoveryInput(rawInput);
     assertMcpProfileDiscoveryAuthority(input.requester);
     assertDiscoveryServerBindings(input.requester, input.server);
-    const assertCurrent = (connectionGeneration?: number, rotationGeneration?: number): void =>
+    const assertCurrent = (connectionGeneration?: number, rotationGeneration?: number): Promise<void> =>
       assertProfileDiscoveryCurrentState(
         input.requester,
         input.readCurrentState,
         connectionGeneration,
         rotationGeneration,
       );
-    assertCurrent();
+    await assertCurrent();
     const resolver = this.#registry.resolveProfileDiscoveryExact(
       input.requester.resolverId,
       input.requester.resolverVersion,
@@ -795,9 +816,9 @@ export class McpRequesterResolutionService {
     const input = freezeToolCallInput(rawInput);
     assertMcpToolCallAuthority(input.requester);
     assertFinalServerAndBinding(input.requester, input.server, input.binding);
-    const assertCurrent = (connectionGeneration?: number, rotationGeneration?: number): void =>
+    const assertCurrent = (connectionGeneration?: number, rotationGeneration?: number): Promise<void> =>
       assertToolCallCurrentState(input.requester, input.readCurrentState, connectionGeneration, rotationGeneration);
-    assertCurrent();
+    await assertCurrent();
     const resolver = this.#registry.resolveToolCallExact(
       input.requester.resolverId,
       input.requester.resolverVersion,
@@ -839,7 +860,7 @@ export class McpRequesterResolutionService {
   async #resolveConnection(input: {
     server: McpRequesterScopedServerSnapshot;
     signals: ResolutionSignals;
-    assertCurrent(connectionGeneration?: number, rotationGeneration?: number): void;
+    assertCurrent(connectionGeneration?: number, rotationGeneration?: number): Promise<void>;
     resolve(signal: AbortSignal): Promise<McpEphemeralResolvedConnectionCandidate>;
     onDispose(): void;
   }): Promise<ResolutionLease> {
@@ -849,21 +870,21 @@ export class McpRequesterResolutionService {
     const timer = setTimeout(() => abort.abort("resolver_timeout"), MCP_REQUESTER_RESOLUTION_TIMEOUT_MS);
     try {
       abort.throwIfAborted();
-      input.assertCurrent();
+      await input.assertCurrent();
       const result = await awaitResolverResult(
         Promise.resolve().then(() => input.resolve(abort.signal)),
         abort,
       );
       clearTimeout(timer);
       abort.throwIfAborted();
-      input.assertCurrent();
+      await input.assertCurrent();
       const candidate = readMcpEphemeralResolvedConnectionCandidate(result);
       const validated = validateMcpEphemeralResolvedConnection(
         candidate,
         input.server.requesterResolution.transportPolicy,
         this.#now(),
       );
-      input.assertCurrent(validated.connectionGeneration, validated.rotationGeneration);
+      await input.assertCurrent(validated.connectionGeneration, validated.rotationGeneration);
       guard = createMcpResolutionSecretGuard({ url: validated.url, headers: validated.headers });
       connection = new McpEphemeralResolvedConnectionValue(validated);
       const lease = new ResolutionLease({
@@ -874,7 +895,7 @@ export class McpRequesterResolutionService {
         now: this.#now,
         onDispose: input.onDispose,
       });
-      lease.assertCurrent();
+      await lease.assertCurrent();
       return lease;
     } catch (error) {
       clearTimeout(timer);
@@ -1069,13 +1090,13 @@ function assertFinalServerAndBinding(
   }
 }
 
-function assertProfileDiscoveryCurrentState(
+async function assertProfileDiscoveryCurrentState(
   expected: McpProfileDiscoveryAuthority,
   readCurrentState: McpProfileDiscoveryResolutionServiceInput["readCurrentState"],
   connectionGeneration?: number,
   rotationGeneration?: number,
-): void {
-  const current = readCurrentStateExact(
+): Promise<void> {
+  const current = await readCurrentStateExact(
     readCurrentState,
     connectionGeneration,
     rotationGeneration,
@@ -1114,13 +1135,13 @@ function assertProfileDiscoveryCurrentState(
   );
 }
 
-function assertToolCallCurrentState(
+async function assertToolCallCurrentState(
   expected: McpToolCallAuthority,
   readCurrentState: McpToolCallResolutionServiceInput["readCurrentState"],
   connectionGeneration?: number,
   rotationGeneration?: number,
-): void {
-  const current = readCurrentStateExact(
+): Promise<void> {
+  const current = await readCurrentStateExact(
     readCurrentState,
     connectionGeneration,
     rotationGeneration,
@@ -1179,15 +1200,15 @@ function assertToolCallCurrentState(
   );
 }
 
-function readCurrentStateExact<TCheck>(
-  reader: (check: TCheck) => unknown,
+async function readCurrentStateExact<TCheck>(
+  reader: (check: TCheck) => Promise<unknown>,
   connectionGeneration: number | undefined,
   rotationGeneration: number | undefined,
   keys: readonly string[],
-): Readonly<Record<string, unknown>> {
+): Promise<Readonly<Record<string, unknown>>> {
   try {
     return snapshotExactDataRecord(
-      reader(
+      await reader(
         (connectionGeneration === undefined
           ? {}
           : {
@@ -1792,7 +1813,9 @@ export interface McpRequesterScopedProfileFreezeInput {
   outcomes: Pick<McpProfileDiscoveryOutcomeRegistry, "recordProfileDiscoveryOutcome">;
   scanner: McpRequesterDiscoverySecretScanner;
   networkAllowlist: readonly string[];
-  readCurrentState(check: McpProfileDiscoveryCurrentStateCheck): McpRequesterScopedFreezeCurrentState | undefined;
+  readCurrentState(
+    check: McpProfileDiscoveryCurrentStateCheck,
+  ): Promise<McpRequesterScopedFreezeCurrentState | undefined>;
   /** Deliverable-4A transport driver (`discoverRequesterScopedMcpTools`), injected so this seam owns no transport. */
   discoverTools(input: McpRequesterScopedDiscoveryRuntimeInput): Promise<McpRequesterScopedDiscoveryResult>;
   /** Crypto-random attempt-id source (composition-owned). */
@@ -1911,7 +1934,7 @@ export async function resolveRequesterScopedBindingForProfileFreeze(
   let attempt: McpProfileDiscoveryResolutionAttempt | undefined;
   let attemptOpen = true;
   try {
-    const initial = snapshotFreezeCurrentState(input.readCurrentState({}));
+    const initial = snapshotFreezeCurrentState(await input.readCurrentState({}));
     if (!initial) {
       // Static-mode server or missing resolver configuration: not a failure —
       // the hook simply yields no requester binding and static behavior wins.
@@ -1936,8 +1959,10 @@ export async function resolveRequesterScopedBindingForProfileFreeze(
       discoveryAttemptId,
       discoveryAttemptGeneration: 1,
     });
-    const readCurrentState = (check: McpProfileDiscoveryCurrentStateCheck): McpProfileDiscoveryCurrentState => {
-      const live = snapshotFreezeCurrentState(input.readCurrentState(check));
+    const readCurrentState = async (
+      check: McpProfileDiscoveryCurrentStateCheck,
+    ): Promise<McpProfileDiscoveryCurrentState> => {
+      const live = snapshotFreezeCurrentState(await input.readCurrentState(check));
       if (!live) throw new McpRequesterResolutionError("server_not_callable");
       return {
         revoked: live.revoked,
@@ -2320,14 +2345,14 @@ export interface McpRequesterScopedToolCallDispatchInput {
   shutdownSignal?: AbortSignal;
   revocationSignal?: AbortSignal;
   /** HX-305 effect fence; fired ONLY by the runtime at the tools/call write. */
-  effectDispatch(): void;
+  effectDispatch(): Promise<void>;
   service: Pick<McpRequesterResolutionService, "resolveForToolCall">;
   outcomes: Pick<McpProfileDiscoveryOutcomeRegistry, "loadProfileDiscoveryOutcome">;
   scanner: McpRequesterDiscoverySecretScanner;
   networkAllowlist: readonly string[];
   /** Deliverable-4B runtime driver (`invokeRequesterScopedMcpToolCall`), injected so this seam owns no transport. */
   invokeToolCall(input: McpRequesterScopedToolCallRuntimeInput): Promise<McpRuntimeInvocationResult>;
-  readCurrentState(check: McpToolCallCurrentStateCheck): McpRequesterScopedToolCallCurrentState | undefined;
+  readCurrentState(check: McpToolCallCurrentStateCheck): Promise<McpRequesterScopedToolCallCurrentState | undefined>;
   createAttemptId(): string;
   now?(): number;
 }
@@ -2357,7 +2382,7 @@ export async function dispatchRequesterScopedToolCall(
     if (!outcome) {
       return buildRequesterScopedPreDispatchFailure(input.toolName, "requester_context_missing");
     }
-    const live = snapshotToolCallCurrentState(input.readCurrentState({}));
+    const live = snapshotToolCallCurrentState(await input.readCurrentState({}));
     if (!live) {
       return buildRequesterScopedPreDispatchFailure(input.toolName, "server_not_callable");
     }
@@ -2426,8 +2451,8 @@ export async function dispatchRequesterScopedToolCall(
       },
     });
     let effectAttemptOpen = true;
-    const readCurrentState = (check: McpToolCallCurrentStateCheck): McpToolCallCurrentState => {
-      const current = snapshotToolCallCurrentState(input.readCurrentState(check));
+    const readCurrentState = async (check: McpToolCallCurrentStateCheck): Promise<McpToolCallCurrentState> => {
+      const current = snapshotToolCallCurrentState(await input.readCurrentState(check));
       if (!current) throw new McpRequesterResolutionError("server_not_callable");
       // The outcome registry IS the process-local current state for the frozen
       // discovery artifacts: re-load on every check so eviction or overwrite by

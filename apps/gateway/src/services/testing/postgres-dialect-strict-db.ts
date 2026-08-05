@@ -11,6 +11,11 @@ import { createDatabase, type DatabaseClient } from "@goatcitadel/storage";
  */
 export function createPostgresDialectStrictDb(rootDir: string): DatabaseClient {
   const inner = createDatabase({ dbPath: path.join(rootDir, "backing.sqlite") });
+  const compatibilityTransactions = inner as DatabaseClient & {
+    beginCompatibilityTransaction(transactionId: string, mode: "deferred" | "immediate" | "exclusive"): void;
+    commitCompatibilityTransaction(transactionId: string): void;
+    rollbackCompatibilityTransaction(transactionId: string): void;
+  };
   return {
     dialect: "postgres",
     // Lazy prepare: some repositories eagerly prepare postgres-flavored SQL in
@@ -36,6 +41,10 @@ export function createPostgresDialectStrictDb(rootDir: string): DatabaseClient {
       };
     },
     exec: (sql) => {
+      if (/^\s*(?:SAVEPOINT|RELEASE\s+SAVEPOINT|ROLLBACK\s+TO\s+SAVEPOINT)\s+gc_async_storage_\d+\s*$/iu.test(sql)) {
+        inner.exec(sql);
+        return;
+      }
       const leadingKeyword =
         sql
           .trim()
@@ -52,5 +61,14 @@ export function createPostgresDialectStrictDb(rootDir: string): DatabaseClient {
     },
     close: () => inner.close(),
     transaction: (mode, callback) => inner.transaction(mode, callback),
-  };
+    // Preserve the internal controls used by the Promise-native local storage
+    // adapter. They delegate to the SQLite backing client while the facade's
+    // public exec() guard continues to reject dialect-unsafe transaction SQL.
+    beginCompatibilityTransaction: (transactionId: string, mode: "deferred" | "immediate" | "exclusive") =>
+      compatibilityTransactions.beginCompatibilityTransaction(transactionId, mode),
+    commitCompatibilityTransaction: (transactionId: string) =>
+      compatibilityTransactions.commitCompatibilityTransaction(transactionId),
+    rollbackCompatibilityTransaction: (transactionId: string) =>
+      compatibilityTransactions.rollbackCompatibilityTransaction(transactionId),
+  } as DatabaseClient;
 }

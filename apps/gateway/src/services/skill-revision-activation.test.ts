@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Storage } from "@goatcitadel/storage";
+import { createLocalAsyncStorage, Storage } from "@goatcitadel/storage";
 import type { ImprovementCandidateRevisionRecord, ImprovementRef } from "@goatcitadel/contracts";
 import {
   ImprovementService,
@@ -41,14 +41,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function createHarness(): Harness {
+async function createHarness(): Promise<Harness> {
   const rootDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "gc-skill-revision-act-"));
   const transcriptsDir = path.join(rootDir, "transcripts");
   const auditDir = path.join(rootDir, "audit");
   fsSync.mkdirSync(transcriptsDir, { recursive: true });
   fsSync.mkdirSync(auditDir, { recursive: true });
   const storage = new Storage({ dbPath: path.join(rootDir, "gateway.sqlite"), transcriptsDir, auditDir });
-  const mutation = new SkillMutationService({ rootDir, skillLifecycle: storage.skillLifecycle });
+  const mutation = new SkillMutationService({
+    rootDir,
+    skillLifecycle: {
+      find: async (skillId) => storage.skillLifecycle.find(skillId),
+      upsert: async (input) => storage.skillLifecycle.upsert(input),
+    },
+  });
 
   let autonomyDisabled = false;
   // Mirror the gateway's unified autonomy-audit append: it happens ONLY inside
@@ -80,9 +86,9 @@ function createHarness(): Harness {
     captureRoutingPolicySnapshot: vi.fn(),
     applyRoutingPolicyCandidate: vi.fn(),
     restoreRoutingPolicySnapshot: vi.fn(),
-    captureSkillRevisionSnapshot: vi.fn((targetKey: string, ref: ImprovementRef): ImprovementRef => {
+    captureSkillRevisionSnapshot: vi.fn(async (targetKey: string, ref: ImprovementRef): Promise<ImprovementRef> => {
       const { skillId, skillMarkdown } = readRef(targetKey, ref);
-      const snapshot = mutation.captureSnapshotFor({ skillId, skillMarkdown });
+      const snapshot = await mutation.captureSnapshotFor({ skillId, skillMarkdown });
       return {
         refType: "skill_revision_snapshot",
         refId: snapshot.skillId,
@@ -90,14 +96,14 @@ function createHarness(): Harness {
         metadata: { targetKey, skillId: snapshot.skillId, snapshot: snapshot as unknown as Record<string, unknown> },
       };
     }),
-    applySkillRevisionCandidate: vi.fn((targetKey: string, ref: ImprovementRef): ImprovementRef => {
+    applySkillRevisionCandidate: vi.fn(async (targetKey: string, ref: ImprovementRef): Promise<ImprovementRef> => {
       const { skillId, skillMarkdown, evaluationRunId } = readRef(targetKey, ref);
       if (!skillMarkdown) {
         throw new Error("missing skill content");
       }
-      const result = mutation.applySkillMutationSync({ skillMarkdown, skillId, evaluationRunId });
+      const result = await mutation.applySkillMutationSync({ skillMarkdown, skillId, evaluationRunId });
       const autonomyEnabled = !autonomyDisabled;
-      const lifecycle = autonomyEnabled ? mutation.promoteSelfAuthoredSkill(result.skillId) : result.lifecycle;
+      const lifecycle = autonomyEnabled ? await mutation.promoteSelfAuthoredSkill(result.skillId) : result.lifecycle;
       // Gateway-faithful: audit append happens AFTER the successful write/promote,
       // so a throwing apply (above) can never leave a phantom ledger entry.
       auditEntries.push({ kind: "skill_revision", targetKey: result.skillId });
@@ -113,13 +119,13 @@ function createHarness(): Harness {
         },
       };
     }),
-    restoreSkillRevisionSnapshot: vi.fn((ref: ImprovementRef): void => {
+    restoreSkillRevisionSnapshot: vi.fn(async (ref: ImprovementRef): Promise<void> => {
       const metadata = isRecord(ref.metadata) ? ref.metadata : {};
       const snapshot = metadata.snapshot;
       if (!isRecord(snapshot)) {
         throw new Error("missing snapshot");
       }
-      mutation.restoreSnapshotSync(snapshot as never);
+      await mutation.restoreSnapshotSync(snapshot as never);
     }),
     createChatCompletion: vi.fn(),
     getPromptRunnerModelDefaults: () => ({ providerId: "mock", model: "mock-model" }),
@@ -130,15 +136,16 @@ function createHarness(): Harness {
   } as unknown as ImprovementServiceCallbacks;
 
   const ctx: ImprovementServiceContext = {
-    storage,
+    storage: createLocalAsyncStorage(storage),
     gatewaySql: storage.gatewaySql,
-    publishRealtime: () => undefined,
+    publishRealtime: async () => undefined,
     requireFeatureEnabled: () => undefined,
     isFeatureEnabled: () => true,
     normalizeWorkspaceId: (workspaceId?: string) => workspaceId?.trim() || "default",
   };
 
   const service = new ImprovementService(ctx, callbacks);
+  await service.initialize();
   const harness: Harness = {
     rootDir,
     storage,
@@ -194,12 +201,12 @@ interface ActivationInternals {
     kind: "skill_revision",
     targetKey: string,
     revision: ImprovementCandidateRevisionRecord,
-  ): ImprovementRef;
+  ): Promise<ImprovementRef>;
   applyActivationChange(
     kind: "skill_revision",
     targetKey: string,
     revision: ImprovementCandidateRevisionRecord,
-  ): ImprovementRef;
+  ): Promise<ImprovementRef>;
 }
 
 function internals(service: ImprovementService): ActivationInternals {
@@ -209,12 +216,12 @@ function internals(service: ImprovementService): ActivationInternals {
 describe("skill_revision activation wiring", () => {
   const targetKey = "skill:self-authored-helper";
 
-  it("applyActivationChange routes skill_revision to the governed write and stays non-callable when autonomy is off", () => {
-    const harness = createHarness();
+  it("applyActivationChange routes skill_revision to the governed write and stays non-callable when autonomy is off", async () => {
+    const harness = await createHarness();
     harness.setAutonomyDisabled(true);
     const revision = buildRevision(buildSkillMarkdown("Summarize the notes."));
 
-    const target = internals(harness.service).applyActivationChange("skill_revision", targetKey, revision);
+    const target = await internals(harness.service).applyActivationChange("skill_revision", targetKey, revision);
 
     expect(harness.callbacks.applySkillRevisionCandidate).toHaveBeenCalledTimes(1);
     expect(target.refType).toBe("skill_revision_config");
@@ -226,12 +233,12 @@ describe("skill_revision activation wiring", () => {
     expect(lifecycle ? isSkillCallable(lifecycle, "enabled") : true).toBe(false);
   });
 
-  it("auto-promotes to a callable approved state only under master autonomy", () => {
-    const harness = createHarness();
+  it("auto-promotes to a callable approved state only under master autonomy", async () => {
+    const harness = await createHarness();
     harness.setAutonomyDisabled(false);
     const revision = buildRevision(buildSkillMarkdown("Summarize the notes."));
 
-    internals(harness.service).applyActivationChange("skill_revision", targetKey, revision);
+    await internals(harness.service).applyActivationChange("skill_revision", targetKey, revision);
 
     const lifecycle = harness.storage.skillLifecycle.find("self-authored-helper");
     expect(lifecycle?.lifecycleState).toBe("approved");
@@ -240,22 +247,26 @@ describe("skill_revision activation wiring", () => {
     expect(lifecycle ? isSkillCallable(lifecycle, "enabled") : false).toBe(true);
   });
 
-  it("captureActivationSnapshot + restore reverts the authored file and lifecycle", () => {
-    const harness = createHarness();
+  it("captureActivationSnapshot + restore reverts the authored file and lifecycle", async () => {
+    const harness = await createHarness();
     harness.setAutonomyDisabled(false);
     const revision = buildRevision(buildSkillMarkdown("Summarize the notes."));
 
-    const snapshotRef = internals(harness.service).captureActivationSnapshot("skill_revision", targetKey, revision);
+    const snapshotRef = await internals(harness.service).captureActivationSnapshot(
+      "skill_revision",
+      targetKey,
+      revision,
+    );
     expect(harness.callbacks.captureSkillRevisionSnapshot).toHaveBeenCalledTimes(1);
     expect(snapshotRef.refType).toBe("skill_revision_snapshot");
 
-    internals(harness.service).applyActivationChange("skill_revision", targetKey, revision);
+    await internals(harness.service).applyActivationChange("skill_revision", targetKey, revision);
     const skillFile = path.join(harness.mutation.selfSkillsRoot, "self-authored-helper", "SKILL.md");
     expect(fsSync.existsSync(skillFile)).toBe(true);
     expect(harness.storage.skillLifecycle.find("self-authored-helper")?.lifecycleState).toBe("approved");
 
     // Restore through the same snapshot ref refType the restore branch matches on.
-    harness.callbacks.restoreSkillRevisionSnapshot(snapshotRef);
+    await harness.callbacks.restoreSkillRevisionSnapshot(snapshotRef);
 
     expect(fsSync.existsSync(skillFile)).toBe(false);
     const reverted = harness.storage.skillLifecycle.find("self-authored-helper");
@@ -264,8 +275,8 @@ describe("skill_revision activation wiring", () => {
     expect(reverted ? isSkillCallable(reverted, "enabled") : false).toBe(false);
   });
 
-  it("fails closed when the revision carries no skill content", () => {
-    const harness = createHarness();
+  it("fails closed when the revision carries no skill content", async () => {
+    const harness = await createHarness();
     const candidateRef: ImprovementRef = {
       refType: "skill_evaluation_run",
       refId: "skill_revision:skill:self-authored-helper",
@@ -280,29 +291,29 @@ describe("skill_revision activation wiring", () => {
       createdByActorId: "system",
       createdByActorType: "system",
     };
-    expect(() => internals(harness.service).applyActivationChange("skill_revision", targetKey, revision)).toThrow(
-      /missing skill content/i,
-    );
+    await expect(
+      internals(harness.service).applyActivationChange("skill_revision", targetKey, revision),
+    ).rejects.toThrow(/missing skill content/i);
   });
 
   // Finding 3: the autonomy-audit entry must be appended only AFTER the apply
   // writes, never at capture/proposal time, so a never-applied or throwing
   // activation cannot leave a phantom entry that revertAutonomousChangesSince
   // would later "restore".
-  it("does NOT record an autonomy-audit entry at capture (proposal) time", () => {
-    const harness = createHarness();
+  it("does NOT record an autonomy-audit entry at capture (proposal) time", async () => {
+    const harness = await createHarness();
     harness.setAutonomyDisabled(false);
     const revision = buildRevision(buildSkillMarkdown("Summarize the notes."));
 
-    internals(harness.service).captureActivationSnapshot("skill_revision", targetKey, revision);
+    await internals(harness.service).captureActivationSnapshot("skill_revision", targetKey, revision);
 
     // Snapshot captured, but nothing applied yet → no ledger entry.
     expect(harness.callbacks.captureSkillRevisionSnapshot).toHaveBeenCalledTimes(1);
     expect(harness.auditEntries).toHaveLength(0);
   });
 
-  it("does NOT record an autonomy-audit entry when the apply throws (no phantom entry)", () => {
-    const harness = createHarness();
+  it("does NOT record an autonomy-audit entry when the apply throws (no phantom entry)", async () => {
+    const harness = await createHarness();
     const candidateRef: ImprovementRef = {
       refType: "skill_evaluation_run",
       refId: "skill_revision:skill:self-authored-helper",
@@ -319,23 +330,23 @@ describe("skill_revision activation wiring", () => {
     };
 
     // Capture first (as the activation flow does), then a throwing apply.
-    internals(harness.service).captureActivationSnapshot("skill_revision", targetKey, revision);
-    expect(() => internals(harness.service).applyActivationChange("skill_revision", targetKey, revision)).toThrow(
-      /missing skill content/i,
-    );
+    await internals(harness.service).captureActivationSnapshot("skill_revision", targetKey, revision);
+    await expect(
+      internals(harness.service).applyActivationChange("skill_revision", targetKey, revision),
+    ).rejects.toThrow(/missing skill content/i);
 
     expect(harness.auditEntries).toHaveLength(0);
   });
 
-  it("records exactly one autonomy-audit entry after a successful apply", () => {
-    const harness = createHarness();
+  it("records exactly one autonomy-audit entry after a successful apply", async () => {
+    const harness = await createHarness();
     harness.setAutonomyDisabled(false);
     const revision = buildRevision(buildSkillMarkdown("Summarize the notes."));
 
-    internals(harness.service).captureActivationSnapshot("skill_revision", targetKey, revision);
+    await internals(harness.service).captureActivationSnapshot("skill_revision", targetKey, revision);
     expect(harness.auditEntries).toHaveLength(0);
 
-    internals(harness.service).applyActivationChange("skill_revision", targetKey, revision);
+    await internals(harness.service).applyActivationChange("skill_revision", targetKey, revision);
 
     expect(harness.auditEntries).toEqual([{ kind: "skill_revision", targetKey: "self-authored-helper" }]);
   });

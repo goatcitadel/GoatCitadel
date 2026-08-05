@@ -91,33 +91,39 @@ describe("gateway route service facades", () => {
     const mcp = {
       completeMcpOAuth: fn(async (serverId: string, code: string, state?: string) => ({ serverId, code, state })),
       connectMcpServer: fn(async (serverId: string) => ({ serverId, status: "connected" })),
-      createMcpServer: fn((input: unknown) => ({ serverId: "server-1", input })),
-      deleteMcpServer: fn((serverId: string) => ({ serverId, deleted: true })),
-      disconnectMcpServer: fn((serverId: string) => ({ serverId, status: "disconnected" })),
+      createMcpServer: fn(async (input: unknown) => ({ serverId: "server-1", input })),
+      deleteMcpServer: fn(async (serverId: string) => ({ serverId, deleted: true })),
+      disconnectMcpServer: fn(async (serverId: string) => ({ serverId, status: "disconnected" })),
       invokeMcpTool: fn(async (input: unknown) => ({ ok: true, input })),
-      listMcpServers: fn(() => [{ serverId: "server-1" }]),
-      listMcpTemplateDiscovery: fn(() => [{ templateId: "template-1" }]),
-      listMcpTemplates: fn(() => [{ serverId: "template-1", installed: false }]),
-      listMcpTools: fn((serverId: string) => [{ serverId, toolName: "tool-1" }]),
-      runMcpServerHealthCheck: fn((serverId: string) => ({ serverId, status: "ok" })),
-      startMcpOAuth: fn((serverId: string) => ({ serverId, authorizationUrl: "https://example.test" })),
-      updateMcpServer: fn((serverId: string, input: unknown) => ({ serverId, input })),
-      updateMcpServerPolicy: fn((serverId: string, policy: unknown) => ({ serverId, policy })),
+      listMcpServers: fn(async () => [{ serverId: "server-1" }]),
+      listMcpTemplateDiscovery: fn(async () => [{ templateId: "template-1" }]),
+      listMcpTemplates: fn(async () => [{ serverId: "template-1", installed: false }]),
+      listMcpTools: fn(async (serverId: string) => [{ serverId, toolName: "tool-1" }]),
+      runMcpServerHealthCheck: fn(async (serverId: string) => ({ serverId, status: "ok" })),
+      startMcpOAuth: fn(async (serverId: string) => ({ serverId, authorizationUrl: "https://example.test" })),
+      updateMcpServer: fn(async (serverId: string, input: unknown) => ({ serverId, input })),
+      updateMcpServerPolicy: fn(async (serverId: string, policy: unknown) => ({ serverId, policy })),
     };
     const service = new McpRouteService(mcp as never);
 
-    expect(service.listMcpServers()).toEqual([{ serverId: "server-1" }]);
-    expect(service.listMcpTemplates()).toEqual([{ serverId: "template-1", installed: false }]);
-    expect(service.listMcpTemplateDiscovery()).toEqual([{ templateId: "template-1" }]);
-    expect(service.createMcpServer({ label: "Local" })).toEqual({ serverId: "server-1", input: { label: "Local" } });
-    expect(service.updateMcpServer("server-1", { label: "Renamed" })).toEqual({
+    await expect(service.listMcpServers()).resolves.toEqual([{ serverId: "server-1" }]);
+    await expect(service.listMcpTemplates()).resolves.toEqual([{ serverId: "template-1", installed: false }]);
+    await expect(service.listMcpTemplateDiscovery()).resolves.toEqual([{ templateId: "template-1" }]);
+    await expect(service.createMcpServer({ label: "Local" })).resolves.toEqual({
+      serverId: "server-1",
+      input: { label: "Local" },
+    });
+    await expect(service.updateMcpServer("server-1", { label: "Renamed" })).resolves.toEqual({
       serverId: "server-1",
       input: { label: "Renamed" },
     });
-    expect(service.deleteMcpServer("server-1")).toEqual({ serverId: "server-1", deleted: true });
+    await expect(service.deleteMcpServer("server-1")).resolves.toEqual({ serverId: "server-1", deleted: true });
     await expect(service.connectMcpServer("server-1")).resolves.toEqual({ serverId: "server-1", status: "connected" });
-    expect(service.disconnectMcpServer("server-1")).toEqual({ serverId: "server-1", status: "disconnected" });
-    expect(service.startMcpOAuth("server-1")).toEqual({
+    await expect(service.disconnectMcpServer("server-1")).resolves.toEqual({
+      serverId: "server-1",
+      status: "disconnected",
+    });
+    await expect(service.startMcpOAuth("server-1")).resolves.toEqual({
       serverId: "server-1",
       authorizationUrl: "https://example.test",
     });
@@ -126,19 +132,19 @@ describe("gateway route service facades", () => {
       code: "code",
       state: "state",
     });
-    expect(service.listMcpTools("server-1")).toEqual([{ serverId: "server-1", toolName: "tool-1" }]);
+    await expect(service.listMcpTools("server-1")).resolves.toEqual([{ serverId: "server-1", toolName: "tool-1" }]);
     await expect(service.invokeMcpTool({ serverId: "server-1", toolName: "tool-1" } as never)).resolves.toEqual({
       ok: true,
       input: { serverId: "server-1", toolName: "tool-1" },
     });
-    expect(service.updateMcpServerPolicy("server-1", { grants: [] })).toEqual({
+    await expect(service.updateMcpServerPolicy("server-1", { grants: [] })).resolves.toEqual({
       serverId: "server-1",
       policy: { grants: [] },
     });
-    expect(service.runMcpServerHealthCheck("server-1")).toEqual({ serverId: "server-1", status: "ok" });
+    await expect(service.runMcpServerHealthCheck("server-1")).resolves.toEqual({ serverId: "server-1", status: "ok" });
   });
 
-  it("reconciles redacted MCP public updates before calling the raw admin port", () => {
+  it("reconciles redacted MCP public updates before calling the raw admin port", async () => {
     const rawServer = {
       serverId: "server-secret",
       label: "Secret server",
@@ -162,22 +168,22 @@ describe("gateway route service facades", () => {
       createdAt: "2026-07-09T12:00:00.000Z",
       updatedAt: "2026-07-09T12:00:00.000Z",
     } as const;
-    const updateMcpServer = vi.fn((_serverId: string, input: Record<string, unknown>) => ({
+    const updateMcpServer = vi.fn(async (_serverId: string, input: Record<string, unknown>) => ({
       ...rawServer,
       ...input,
     }));
-    const updateMcpServerPolicy = vi.fn((_serverId: string, policy: Record<string, unknown>) => ({
+    const updateMcpServerPolicy = vi.fn(async (_serverId: string, policy: Record<string, unknown>) => ({
       ...rawServer,
       policy: { ...rawServer.policy, ...policy },
     }));
     const service = new McpRouteService({
-      listMcpServers: vi.fn(() => [rawServer]),
+      listMcpServers: vi.fn(async () => [rawServer]),
       updateMcpServer,
       updateMcpServerPolicy,
     } as never);
-    const projected = service.listMcpServers()[0]!;
+    const projected = (await service.listMcpServers())[0]!;
 
-    service.updateMcpServer(rawServer.serverId, {
+    await service.updateMcpServer(rawServer.serverId, {
       label: "Renamed server",
       args: projected.args?.map((entry) => (entry === "3000" ? "4000" : entry)),
       url: projected.url?.replace("mode=safe", "mode=fast"),
@@ -193,7 +199,7 @@ describe("gateway route service facades", () => {
     );
     expect(rawServer.args[2]).toBe("short-pass");
 
-    service.updateMcpServerPolicy(rawServer.serverId, {
+    await service.updateMcpServerPolicy(rawServer.serverId, {
       ...projected.policy,
       redactionMode: "basic",
     });
@@ -248,15 +254,21 @@ describe("gateway route service facades", () => {
     });
     const service = createWorkspacesRouteService(port);
 
-    expect(service.createWorkspace({ name: "Ops" } as never)).toMatchObject({ workspaceId: "workspace-1" });
-    expect(service.archiveWorkspace("workspace-1", 2)).toMatchObject({ workspaceId: "normalized:workspace-1" });
-    expect(service.restoreWorkspace("workspace-1", 3)).toMatchObject({ workspaceId: "normalized:workspace-1" });
-    expect(service.updateWorkspace("workspace-1", { name: "Ops 2" } as never, 4)).toMatchObject({
+    await expect(service.createWorkspace({ name: "Ops" } as never)).resolves.toMatchObject({
+      workspaceId: "workspace-1",
+    });
+    await expect(service.archiveWorkspace("workspace-1", 2)).resolves.toMatchObject({
+      workspaceId: "normalized:workspace-1",
+    });
+    await expect(service.restoreWorkspace("workspace-1", 3)).resolves.toMatchObject({
+      workspaceId: "normalized:workspace-1",
+    });
+    await expect(service.updateWorkspace("workspace-1", { name: "Ops 2" } as never, 4)).resolves.toMatchObject({
       workspaceId: "normalized:workspace-1",
       name: "Ops 2",
     });
-    expect(service.getWorkspace("workspace-1")).toMatchObject({ workspaceId: "normalized:workspace-1" });
-    expect(service.listWorkspaces(undefined, undefined)).toEqual([{ view: "active", limit: 200 }]);
+    await expect(service.getWorkspace("workspace-1")).resolves.toMatchObject({ workspaceId: "normalized:workspace-1" });
+    expect(await service.listWorkspaces(undefined, undefined)).toEqual([{ view: "active", limit: 200 }]);
     await expect(service.listGlobalGuidance()).resolves.toEqual([{ docType: "agents", content: "global" }]);
     await expect(service.listWorkspaceGuidance("workspace-1")).resolves.toEqual({
       workspaceId: "workspace-1",
@@ -361,8 +373,10 @@ describe("gateway route service facades", () => {
     });
 
     const workspaces = createWorkspacesRoutePortForGateway(gateway as never);
-    expect(workspaces.createWorkspace({ name: "Ops" } as never)).toMatchObject({ workspaceId: "workspace-1" });
-    expect(workspaces.archiveWorkspace(" workspace-1 ", 9)).toEqual({
+    await expect(workspaces.createWorkspace({ name: "Ops" } as never)).resolves.toMatchObject({
+      workspaceId: "workspace-1",
+    });
+    await expect(workspaces.archiveWorkspace(" workspace-1 ", 9)).resolves.toEqual({
       workspaceId: "workspace-1",
       expectedRevision: 9,
     });

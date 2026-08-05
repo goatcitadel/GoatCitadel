@@ -963,6 +963,7 @@ function createDeps() {
     },
     operatorSummaryCache: {
       get: vi.fn((loader: () => unknown) => loader()),
+      getAsync: vi.fn(async (loader: () => Promise<unknown>) => await loader()),
     },
     promptPackService: {
       listPromptPacks: vi.fn(() => [{ packId: "pack-1", name: "Quality pack", testCount: 2 }]),

@@ -43,7 +43,7 @@ import { canonicalJsonString } from "@goatcitadel/contracts";
 import type { AssemblyParticipantModel, AssemblyStage } from "@goatcitadel/contracts";
 import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
 import { estimateTokensFromText } from "@goatcitadel/memory-core";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { resolveAnthropicEffort, resolveAnthropicMaxTokensForVisibleOutput } from "./anthropic-reasoning-budget.js";
 import { trackBackgroundTask } from "./background-scheduler.js";
 import { resolveChatReasoningEffort } from "./chat-reasoning-controls.js";
@@ -82,7 +82,7 @@ interface AssemblyServiceOptions {
     request: ChatCompletionRequest,
     attribution: ModelUsageAttributionContext,
   ) => Promise<ChatCompletionResponse>;
-  publishRealtime: (eventType: string, source: string, payload: Record<string, unknown>) => void;
+  publishRealtime: (eventType: string, source: string, payload: Record<string, unknown>) => Promise<unknown>;
   runBackgroundWork?: <T>(label: string, work: (signal: AbortSignal) => Promise<T>) => Promise<T | undefined>;
 }
 
@@ -406,79 +406,85 @@ export class ConvergenceScorer {
 export class ReputationTracker {
   public constructor(private readonly storage: Storage) {}
 
-  public recordRunOutcome(input: {
+  public async recordRunOutcome(input: {
     run: AssemblyRunRecord;
     proposals: ModelProposal[];
     peerReviews: PeerReview[];
     adversarialReviews: AdversarialReview[];
     result: AssemblyResult;
-  }): ModelReputation[] {
-    const existing = this.storage.assembly.listReputations(500);
-    const updates = input.run.settings.participantModels.map((participant) => {
-      const modelRef = participantModelRef(participant);
-      const current = existing.find((item) => item.modelRef === modelRef) ?? createEmptyReputation(participant);
-      const proposals = input.proposals.filter((proposal) => proposal.authorModelRef === modelRef);
-      const reviews = input.peerReviews.filter(
-        (review) => review.blindedReviewerToken === blindedReviewerToken(modelRef),
-      );
-      const adversarialReviews = input.adversarialReviews.filter(
-        (review) => review.blindedReviewerToken === blindedReviewerToken(modelRef),
-      );
-      const sampleCount = current.sampleCount + 1;
-      const next: ModelReputation = {
-        ...current,
-        accuracy: averageInto(current.accuracy, average(proposals.map((proposal) => proposal.confidence)), sampleCount),
-        reasoningStrength: averageInto(
-          current.reasoningStrength,
-          average(reviews.map((review) => review.scores.reasoningStrength)),
+  }): Promise<ModelReputation[]> {
+    const existing = await this.storage.assembly.listReputations(500);
+    const updates = await Promise.all(
+      input.run.settings.participantModels.map(async (participant) => {
+        const modelRef = participantModelRef(participant);
+        const current = existing.find((item) => item.modelRef === modelRef) ?? createEmptyReputation(participant);
+        const proposals = input.proposals.filter((proposal) => proposal.authorModelRef === modelRef);
+        const reviews = input.peerReviews.filter(
+          (review) => review.blindedReviewerToken === blindedReviewerToken(modelRef),
+        );
+        const adversarialReviews = input.adversarialReviews.filter(
+          (review) => review.blindedReviewerToken === blindedReviewerToken(modelRef),
+        );
+        const sampleCount = current.sampleCount + 1;
+        const next: ModelReputation = {
+          ...current,
+          accuracy: averageInto(
+            current.accuracy,
+            average(proposals.map((proposal) => proposal.confidence)),
+            sampleCount,
+          ),
+          reasoningStrength: averageInto(
+            current.reasoningStrength,
+            average(reviews.map((review) => review.scores.reasoningStrength)),
+            sampleCount,
+          ),
+          critiqueQuality: averageInto(
+            current.critiqueQuality,
+            average(reviews.map((review) => weightedReviewScore(review))),
+            sampleCount,
+          ),
+          consensusLeadership: averageInto(
+            current.consensusLeadership,
+            input.result.modelContributionSummary.some(
+              (item) => item.modelRef === modelRef && item.contributionRole === "synthesis",
+            )
+              ? 1
+              : 0.5,
+            sampleCount,
+          ),
+          stability: averageInto(current.stability, clamp01(1 - (input.run.usage?.costUsd ?? 0)), sampleCount),
+          adversarialUsefulness: averageInto(
+            current.adversarialUsefulness,
+            this.adversarialUsefulnessScore(adversarialReviews),
+            sampleCount,
+          ),
           sampleCount,
-        ),
-        critiqueQuality: averageInto(
-          current.critiqueQuality,
-          average(reviews.map((review) => weightedReviewScore(review))),
-          sampleCount,
-        ),
-        consensusLeadership: averageInto(
-          current.consensusLeadership,
-          input.result.modelContributionSummary.some(
-            (item) => item.modelRef === modelRef && item.contributionRole === "synthesis",
-          )
-            ? 1
-            : 0.5,
-          sampleCount,
-        ),
-        stability: averageInto(current.stability, clamp01(1 - (input.run.usage?.costUsd ?? 0)), sampleCount),
-        adversarialUsefulness: averageInto(
-          current.adversarialUsefulness,
-          this.adversarialUsefulnessScore(adversarialReviews),
-          sampleCount,
-        ),
-        sampleCount,
-        updatedAt: new Date().toISOString(),
-      };
-      next.overall = average([
-        next.accuracy,
-        next.reasoningStrength,
-        next.critiqueQuality,
-        next.consensusLeadership,
-        next.stability,
-        next.adversarialUsefulness,
-      ]);
-      next.byDomain = {
-        ...next.byDomain,
-        [input.run.problem.domain]: {
-          accuracy: next.accuracy,
-          reasoningStrength: next.reasoningStrength,
-          critiqueQuality: next.critiqueQuality,
-          consensusLeadership: next.consensusLeadership,
-          stability: next.stability,
-          adversarialUsefulness: next.adversarialUsefulness,
-          sampleCount,
-        },
-      };
-      this.storage.assembly.upsertReputation(next);
-      return next;
-    });
+          updatedAt: new Date().toISOString(),
+        };
+        next.overall = average([
+          next.accuracy,
+          next.reasoningStrength,
+          next.critiqueQuality,
+          next.consensusLeadership,
+          next.stability,
+          next.adversarialUsefulness,
+        ]);
+        next.byDomain = {
+          ...next.byDomain,
+          [input.run.problem.domain]: {
+            accuracy: next.accuracy,
+            reasoningStrength: next.reasoningStrength,
+            critiqueQuality: next.critiqueQuality,
+            consensusLeadership: next.consensusLeadership,
+            stability: next.stability,
+            adversarialUsefulness: next.adversarialUsefulness,
+            sampleCount,
+          },
+        };
+        await this.storage.assembly.upsertReputation(next);
+        return next;
+      }),
+    );
     return updates;
   }
 
@@ -493,11 +499,11 @@ export class ReputationTracker {
     };
   }
 
-  public selectReviewersByReputation(
+  public async selectReviewersByReputation(
     participants: AssemblyParticipantModel[],
     settings: AdversarialSettings,
-  ): AssemblyParticipantModel[] {
-    const reputations = this.storage.assembly.listReputations(500);
+  ): Promise<AssemblyParticipantModel[]> {
+    const reputations = await this.storage.assembly.listReputations(500);
     const reviewerCount = Math.max(1, Math.min(settings.reviewerCount, participants.length));
     return [...participants]
       .sort((left, right) => {
@@ -674,8 +680,8 @@ export class AssemblyOrchestrator {
       createdAt: now,
       updatedAt: now,
     };
-    this.storage.assembly.createRun(run);
-    this.publishRealtime("assembly_run_created", "assembly", {
+    await this.storage.assembly.createRun(run);
+    await this.publishRealtime("assembly_run_created", "assembly", {
       runId,
       title: run.title,
       workspaceId: run.workspaceId,
@@ -839,8 +845,8 @@ export class AssemblyOrchestrator {
       artifactType: "result",
       payload: result,
     });
-    this.storage.assembly.saveArtifacts([resultArtifact]);
-    this.storage.assembly.saveRound({
+    await this.storage.assembly.saveArtifacts([resultArtifact]);
+    await this.storage.assembly.saveRound({
       roundId: `${_run.runId}:${_run.currentRoundIndex}:${synthesisStage}`,
       runId: _run.runId,
       roundIndex: _run.currentRoundIndex,
@@ -851,21 +857,21 @@ export class AssemblyOrchestrator {
       startedAt: resultArtifact.createdAt,
       finishedAt: resultArtifact.createdAt,
     });
-    const reputations = this.reputationTracker.recordRunOutcome({
+    const reputations = await this.reputationTracker.recordRunOutcome({
       run: _run,
       proposals: _state.proposals,
       peerReviews: _state.peerReviews,
       adversarialReviews: _state.adversarialReviews,
       result,
     });
-    const next = this.storage.assembly.updateRun(_run.runId, {
+    const next = await this.storage.assembly.updateRun(_run.runId, {
       status: "completed",
       currentStage: "completed",
       result,
       finishedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });
-    this.publishRealtime("assembly_run_completed", "assembly", {
+    await this.publishRealtime("assembly_run_completed", "assembly", {
       runId: _run.runId,
       resultArtifactId: resultArtifact.artifactId,
       minorityReport: Boolean(result.minorityReport),
@@ -959,7 +965,7 @@ export class AssemblyOrchestrator {
         });
       }),
     );
-    return this.persistStage(run, roundIndex, stage, artifacts);
+    return await this.persistStage(run, roundIndex, stage, artifacts);
   }
 
   private async createPeerReviewStage(
@@ -1016,7 +1022,7 @@ export class AssemblyOrchestrator {
         });
       }),
     );
-    return this.persistStage(run, roundIndex, stage, artifacts);
+    return await this.persistStage(run, roundIndex, stage, artifacts);
   }
 
   private async createAdversarialStage(
@@ -1029,7 +1035,7 @@ export class AssemblyOrchestrator {
     const selected = this.adversarialEngine.selectAdversaries(
       run.settings.participantModels,
       run.adversarialSettings,
-      this.storage.assembly.listReputations(100),
+      await this.storage.assembly.listReputations(100),
     );
     const artifacts = await Promise.all(
       proposals.flatMap((proposal, index) => {
@@ -1088,7 +1094,7 @@ export class AssemblyOrchestrator {
     const dedupedReviews = this.adversarialEngine.dedupeObjections(
       artifacts.map((artifact) => artifact.payload as AdversarialReview),
     );
-    return this.persistStage(
+    return await this.persistStage(
       run,
       roundIndex,
       "A3_adversarial_challenge",
@@ -1133,7 +1139,7 @@ export class AssemblyOrchestrator {
           blindedAuthorToken: proposal.blindedAuthorToken,
         }),
       );
-      return this.persistStage(run, roundIndex, stage, revised);
+      return await this.persistStage(run, roundIndex, stage, revised);
     }
     const adversarialReviews = adversarialArtifacts.map((artifact) => artifact.payload as AdversarialReview);
     const defenses = proposals.map((proposal) =>
@@ -1147,7 +1153,7 @@ export class AssemblyOrchestrator {
         blindedAuthorToken: proposal.blindedAuthorToken,
       }),
     );
-    return this.persistStage(run, roundIndex, stage, defenses);
+    return await this.persistStage(run, roundIndex, stage, defenses);
   }
 
   private async createConvergenceStage(
@@ -1184,7 +1190,7 @@ export class AssemblyOrchestrator {
       artifactType: "convergence_score",
       payload: convergence,
     });
-    return this.persistStage(run, roundIndex, stage, [artifact], {
+    return await this.persistStage(run, roundIndex, stage, [artifact], {
       convergenceSnapshot: convergence,
       stopCheck: this.shouldStop(
         run,
@@ -1203,13 +1209,13 @@ export class AssemblyOrchestrator {
     });
   }
 
-  private persistStage(
+  private async persistStage(
     run: AssemblyRunRecord,
     roundIndex: number,
     stage: AssemblyStage,
     artifacts: AssemblyArtifactRecord[],
     extras?: Pick<AssemblyRound, "convergenceSnapshot" | "stopCheck">,
-  ): StageArtifacts {
+  ): Promise<StageArtifacts> {
     const startedAt = new Date().toISOString();
     const round: AssemblyRound = {
       roundId: `${run.runId}:${roundIndex}:${stage}`,
@@ -1224,14 +1230,14 @@ export class AssemblyOrchestrator {
       startedAt,
       finishedAt: startedAt,
     };
-    this.storage.assembly.saveRound(round);
-    this.storage.assembly.saveArtifacts(artifacts);
-    this.storage.assembly.updateRun(run.runId, {
+    await this.storage.assembly.saveRound(round);
+    await this.storage.assembly.saveArtifacts(artifacts);
+    await this.storage.assembly.updateRun(run.runId, {
       currentStage: stage,
       currentRoundIndex: roundIndex,
       updatedAt: startedAt,
     });
-    this.publishRealtime("assembly_stage_completed", "assembly", {
+    await this.publishRealtime("assembly_stage_completed", "assembly", {
       runId: run.runId,
       roundIndex,
       stage,
@@ -1272,26 +1278,26 @@ export class AssemblyService {
     let workSignal: AbortSignal | undefined;
     const task = (
       this.options.runBackgroundWork
-        ? this.options.runBackgroundWork(`assembly-run:${run.runId}`, (signal) => {
+        ? this.options.runBackgroundWork(`assembly-run:${run.runId}`, async (signal) => {
             workSignal = signal;
-            return this.executeRun(run.runId, signal);
+            return await this.executeRun(run.runId, signal);
           })
         : this.executeRun(run.runId)
-    ).catch((error) => {
+    ).catch(async (error) => {
       if (workSignal?.aborted) {
-        this.options.publishRealtime("assembly_run_parked", "assembly", {
+        await this.options.publishRealtime("assembly_run_parked", "assembly", {
           runId: run.runId,
           reason: "shared_host_drain",
         });
         return;
       }
-      this.options.storage.assembly.updateRun(run.runId, {
+      await this.options.storage.assembly.updateRun(run.runId, {
         status: "failed",
         error: (error as Error).message,
         finishedAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       });
-      this.options.publishRealtime("assembly_run_failed", "assembly", {
+      await this.options.publishRealtime("assembly_run_failed", "assembly", {
         runId: run.runId,
         error: (error as Error).message,
       });
@@ -1300,24 +1306,24 @@ export class AssemblyService {
     return run;
   }
 
-  public listRuns(limit = 50): AssemblyRunRecord[] {
-    return this.options.storage.assembly.listRuns(limit);
+  public async listRuns(limit = 50): Promise<AssemblyRunRecord[]> {
+    return await this.options.storage.assembly.listRuns(limit);
   }
 
-  public getRunDetail(runId: string): AssemblyRunDetailResponse {
-    const run = this.options.storage.assembly.getRun(runId);
-    const artifacts = this.options.storage.assembly.listArtifacts(runId);
+  public async getRunDetail(runId: string): Promise<AssemblyRunDetailResponse> {
+    const run = await this.options.storage.assembly.getRun(runId);
+    const artifacts = await this.options.storage.assembly.listArtifacts(runId);
     let projectedRun = run;
     if (run.runKind === "chat_model_council") {
-      validateCouncilRounds(run, this.options.storage.assembly.listRounds(runId));
-      projectedRun = projectCouncilRunWithReconstructedEvidence(this.options.storage, run, artifacts);
+      validateCouncilRounds(run, await this.options.storage.assembly.listRounds(runId));
+      projectedRun = await projectCouncilRunWithReconstructedEvidence(this.options.storage, run, artifacts);
       if (run.status === "completed") {
-        buildCompletedModelCouncilResult(this.options.storage, run);
+        await buildCompletedModelCouncilResult(this.options.storage, run);
       }
     }
     return {
       run: projectedRun,
-      rounds: this.options.storage.assembly.listRounds(runId),
+      rounds: await this.options.storage.assembly.listRounds(runId),
       artifacts:
         run.runKind === "chat_model_council"
           ? artifacts.map((artifact) => {
@@ -1343,8 +1349,8 @@ export class AssemblyService {
     return new ModelCouncilExecutor(this.options).execute(input);
   }
 
-  public listReputations(limit = 50): ModelReputation[] {
-    return this.options.storage.assembly.listReputations(limit);
+  public async listReputations(limit = 50): Promise<ModelReputation[]> {
+    return await this.options.storage.assembly.listReputations(limit);
   }
 
   public async close(): Promise<void> {
@@ -1357,7 +1363,7 @@ export class AssemblyService {
 
   private async executeRun(runId: string, signal?: AbortSignal): Promise<void> {
     throwIfAssemblyRunAborted(signal, runId);
-    let run = this.options.storage.assembly.updateRun(runId, {
+    let run = await this.options.storage.assembly.updateRun(runId, {
       status: "running",
       startedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -1375,8 +1381,8 @@ export class AssemblyService {
       artifactType: "problem",
       payload: run.problem,
     });
-    this.options.storage.assembly.saveArtifacts([problemArtifact]);
-    this.options.storage.assembly.saveRound({
+    await this.options.storage.assembly.saveArtifacts([problemArtifact]);
+    await this.options.storage.assembly.saveRound({
       roundId: `${run.runId}:0:${run.currentStage}`,
       runId: run.runId,
       roundIndex: 0,
@@ -1387,14 +1393,14 @@ export class AssemblyService {
       startedAt: problemArtifact.createdAt,
       finishedAt: problemArtifact.createdAt,
     });
-    this.options.publishRealtime("assembly_stage_completed", "assembly", {
+    await this.options.publishRealtime("assembly_stage_completed", "assembly", {
       runId: run.runId,
       stage: run.currentStage,
       artifactId: problemArtifact.artifactId,
     });
     for (let roundIndex = 1; roundIndex <= run.settings.maxRounds; roundIndex += 1) {
       throwIfAssemblyRunAborted(signal, runId);
-      run = this.options.storage.assembly.getRun(runId);
+      run = await this.options.storage.assembly.getRun(runId);
       const nextState = await this.orchestrator.runRound(run, roundIndex, state);
       throwIfAssemblyRunAborted(signal, runId);
       state.proposals = nextState.proposals;
@@ -1402,16 +1408,15 @@ export class AssemblyService {
       state.adversarialReviews = nextState.adversarialReviews;
       state.defenses = nextState.defenses;
       state.convergence = nextState.convergence;
-      run = this.options.storage.assembly.getRun(runId);
-      const convergenceHistory = this.options.storage.assembly
-        .listArtifacts(runId, "convergence_score")
+      run = await this.options.storage.assembly.getRun(runId);
+      const convergenceHistory = (await this.options.storage.assembly.listArtifacts(runId, "convergence_score"))
         .map((item) => item.payload)
         .filter(
           (item): item is ConvergenceScore => typeof item === "object" && item !== null && "compositeScore" in item,
         );
       const stopCheck = this.orchestrator.shouldStop(run, state, convergenceHistory);
       if (stopCheck.shouldStop) {
-        this.options.storage.assembly.updateRun(runId, {
+        await this.options.storage.assembly.updateRun(runId, {
           stopReason: stopCheck.reason,
           updatedAt: new Date().toISOString(),
         });
@@ -1419,7 +1424,7 @@ export class AssemblyService {
       }
     }
     throwIfAssemblyRunAborted(signal, runId);
-    await this.orchestrator.finalize(this.options.storage.assembly.getRun(runId), state);
+    await this.orchestrator.finalize(await this.options.storage.assembly.getRun(runId), state);
   }
 }
 
@@ -1628,51 +1633,51 @@ class ModelCouncilExecutor {
   public constructor(private readonly options: AssemblyServiceOptions) {}
 
   public async execute(input: ExecuteChatModelCouncilInput): Promise<ModelCouncilExecutionResult> {
-    assertPersistedRoutedContextSnapshot(this.options.storage, input);
-    let run = this.options.storage.assembly.findCouncilRunByTurn(input.turnId);
+    await assertPersistedRoutedContextSnapshot(this.options.storage, input);
+    let run = await this.options.storage.assembly.findCouncilRunByTurn(input.turnId);
     if (!run) {
       const resolution = buildModelCouncilResolution(input);
-      run = this.createChatModelCouncilRun(input, resolution);
+      run = await this.createChatModelCouncilRun(input, resolution);
     } else {
       assertExistingModelCouncilResolution(run, input);
-      validateCouncilRounds(run, this.options.storage.assembly.listRounds(run.runId));
-      projectCouncilRunWithReconstructedEvidence(
+      validateCouncilRounds(run, await this.options.storage.assembly.listRounds(run.runId));
+      await projectCouncilRunWithReconstructedEvidence(
         this.options.storage,
         run,
-        this.options.storage.assembly.listArtifacts(run.runId),
+        await this.options.storage.assembly.listArtifacts(run.runId),
       );
       if (run.status === "completed") {
-        return buildCompletedModelCouncilResult(this.options.storage, run);
+        return await buildCompletedModelCouncilResult(this.options.storage, run);
       }
-      assertLegacyCouncilReasoningRecoverySafe(this.options.storage, run, input);
+      await assertLegacyCouncilReasoningRecoverySafe(this.options.storage, run, input);
     }
     const leaseOwnerId = `model-council:${randomUUID()}`;
     const now = new Date().toISOString();
-    const claimed = this.options.storage.assembly.claimCouncilRun({
+    const claimed = await this.options.storage.assembly.claimCouncilRun({
       runId: run.runId,
       leaseOwnerId,
       now,
       leaseExpiresAt: new Date(Date.now() + MODEL_COUNCIL_LEASE_TTL_MS).toISOString(),
     });
     if (!claimed) {
-      const current = this.options.storage.assembly.getRun(run.runId);
+      const current = await this.options.storage.assembly.getRun(run.runId);
       if (current.status === "completed") {
-        return buildCompletedModelCouncilResult(this.options.storage, current);
+        return await buildCompletedModelCouncilResult(this.options.storage, current);
       }
       throw new Error(`Model council ${run.runId} is owned by another unexpired Assembly lease.`);
     }
     try {
       return await this.resumeChatModelCouncil(claimed, input, leaseOwnerId);
     } catch (error) {
-      this.failChatModelCouncil(claimed.runId, leaseOwnerId, error);
+      await this.failChatModelCouncil(claimed.runId, leaseOwnerId, error);
       throw error;
     }
   }
 
-  private createChatModelCouncilRun(
+  private async createChatModelCouncilRun(
     input: ExecuteChatModelCouncilInput,
     resolution: ModelCouncilResolution,
-  ): AssemblyRunRecord {
+  ): Promise<AssemblyRunRecord> {
     const runId = randomUUID();
     const now = new Date().toISOString();
     const participants = resolution.participants.map((participant) => ({
@@ -1687,7 +1692,7 @@ class ModelCouncilExecutor {
     if (!synthesisParticipant) {
       throw new Error(`Model council ${runId} has no immutable synthesis participant.`);
     }
-    return this.options.storage.assembly.createRun({
+    return await this.options.storage.assembly.createRun({
       runId,
       runKind: "chat_model_council",
       sourceTurnId: input.turnId,
@@ -1760,52 +1765,52 @@ class ModelCouncilExecutor {
       assertCouncilLease(run, leaseOwnerId);
       switch (run.currentStage) {
         case "C0_resolve": {
-          this.saveCouncilRound(run, leaseOwnerId, "C0_resolve", 0, []);
-          run = this.advanceCouncilStage(run, leaseOwnerId, "C1_participate", 1);
+          await this.saveCouncilRound(run, leaseOwnerId, "C0_resolve", 0, []);
+          run = await this.advanceCouncilStage(run, leaseOwnerId, "C1_participate", 1);
           break;
         }
         case "C1_participate": {
           const completed = await this.executeCouncilParticipantStage(run, input, leaseOwnerId);
           run = completed.run;
-          this.saveCouncilRound(
+          await this.saveCouncilRound(
             run,
             leaseOwnerId,
             "C1_participate",
             1,
             completed.artifacts.map((artifact) => artifact.artifactId),
           );
-          run = this.advanceCouncilStage(run, leaseOwnerId, "C2_assemble", 2, {
+          run = await this.advanceCouncilStage(run, leaseOwnerId, "C2_assemble", 2, {
             councilEvidence: completed.evidence,
           });
           break;
         }
         case "C2_assemble": {
-          const participantArtifacts = getCouncilParticipantArtifacts(this.options.storage, run);
+          const participantArtifacts = await getCouncilParticipantArtifacts(this.options.storage, run);
           const resolution = requireModelCouncilResolution(run);
           if (participantArtifacts.length !== resolution.participants.length) {
             throw new Error(`Model council ${run.runId} cannot assemble an incomplete participant set.`);
           }
-          const attempts = reconstructCouncilAttempts(this.options.storage, run, participantArtifacts);
+          const attempts = await reconstructCouncilAttempts(this.options.storage, run, participantArtifacts);
           const evidence = buildModelCouncilEvidence(run, participantArtifacts, attempts);
-          this.saveCouncilRound(
+          await this.saveCouncilRound(
             run,
             leaseOwnerId,
             "C2_assemble",
             2,
             participantArtifacts.map((artifact) => artifact.artifactId),
           );
-          run = this.advanceCouncilStage(run, leaseOwnerId, "C3_synthesize", 3, { councilEvidence: evidence });
+          run = await this.advanceCouncilStage(run, leaseOwnerId, "C3_synthesize", 3, { councilEvidence: evidence });
           break;
         }
         case "C3_synthesize": {
           const completed = await this.executeCouncilSynthesisStage(run, input, leaseOwnerId);
-          return buildCompletedModelCouncilResult(this.options.storage, completed);
+          return await buildCompletedModelCouncilResult(this.options.storage, completed);
         }
         default:
           throw new Error(`Model council ${run.runId} cannot recover from Assembly stage ${run.currentStage}.`);
       }
     }
-    return buildCompletedModelCouncilResult(this.options.storage, run);
+    return await buildCompletedModelCouncilResult(this.options.storage, run);
   }
 
   private async executeCouncilParticipantStage(
@@ -1820,17 +1825,17 @@ class ModelCouncilExecutor {
     const resolution = requireModelCouncilResolution(run);
     let ownedRun = run;
     const byParticipant = new Map(
-      getCouncilParticipantArtifacts(this.options.storage, run).map((artifact) => [
+      (await getCouncilParticipantArtifacts(this.options.storage, run)).map((artifact) => [
         (artifact.payload as ModelCouncilParticipantArtifact).attempt.participantId,
         artifact,
       ]),
     );
-    const attempts = reconstructCouncilAttempts(this.options.storage, run, [...byParticipant.values()]);
+    const attempts = await reconstructCouncilAttempts(this.options.storage, run, [...byParticipant.values()]);
     for (const participant of resolution.participants) {
       if (byParticipant.has(participant.participantId)) {
         continue;
       }
-      assertPriorCouncilAttemptsRetrySafe(
+      await assertPriorCouncilAttemptsRetrySafe(
         this.options.storage,
         run,
         "C1_participate",
@@ -1872,7 +1877,7 @@ class ModelCouncilExecutor {
         if (!responseText) {
           throw new Error(`Model council participant ${participant.participantId} returned empty output.`);
         }
-        const attempt = reconcileCouncilAttemptWithHx306(
+        const attempt = await reconcileCouncilAttemptWithHx306(
           this.options.storage,
           run,
           participant,
@@ -1890,7 +1895,7 @@ class ModelCouncilExecutor {
           createdAt: new Date().toISOString(),
         };
         assertCouncilLease(ownedRun, leaseOwnerId);
-        this.options.storage.assembly.saveCouncilArtifactsExact([artifact]);
+        await this.options.storage.assembly.saveCouncilArtifactsExact([artifact]);
         byParticipant.set(participant.participantId, artifact);
         upsertCouncilAttempt(attempts, attempt);
       } catch (error) {
@@ -1902,10 +1907,10 @@ class ModelCouncilExecutor {
           observedResponse,
         );
         const failedAttempt = providerInvocationStarted
-          ? reconcileCouncilAttemptWithHx306(this.options.storage, run, participant, failedAttemptDraft)
+          ? await reconcileCouncilAttemptWithHx306(this.options.storage, run, participant, failedAttemptDraft)
           : failedAttemptDraft;
         upsertCouncilAttempt(attempts, failedAttempt);
-        this.persistFailedCouncilAttempt(run.runId, leaseOwnerId, failedAttempt);
+        await this.persistFailedCouncilAttempt(run.runId, leaseOwnerId, failedAttempt);
         throw error;
       }
     }
@@ -1926,15 +1931,15 @@ class ModelCouncilExecutor {
     if (!synthesisParticipant) {
       throw new Error(`Model council ${run.runId} lost its immutable synthesis participant.`);
     }
-    const participantArtifacts = getCouncilParticipantArtifacts(this.options.storage, run);
+    const participantArtifacts = await getCouncilParticipantArtifacts(this.options.storage, run);
     if (participantArtifacts.length !== resolution.participants.length) {
       throw new Error(`Model council ${run.runId} cannot synthesize an incomplete participant set.`);
     }
-    const existing = getCouncilSynthesisArtifact(this.options.storage, run);
+    const existing = await getCouncilSynthesisArtifact(this.options.storage, run);
     let synthesisArtifact = existing;
     if (!synthesisArtifact) {
-      const priorAttempts = reconstructCouncilAttempts(this.options.storage, ownedRun, participantArtifacts);
-      assertPriorCouncilAttemptsRetrySafe(
+      const priorAttempts = await reconstructCouncilAttempts(this.options.storage, ownedRun, participantArtifacts);
+      await assertPriorCouncilAttemptsRetrySafe(
         this.options.storage,
         run,
         "C3_synthesize",
@@ -2001,7 +2006,7 @@ class ModelCouncilExecutor {
         if (!answer) {
           throw new Error(`Model council ${run.runId} synthesis returned empty output.`);
         }
-        const attempt = reconcileCouncilAttemptWithHx306(
+        const attempt = await reconcileCouncilAttemptWithHx306(
           this.options.storage,
           run,
           synthesisParticipant,
@@ -2018,7 +2023,7 @@ class ModelCouncilExecutor {
           createdAt: new Date().toISOString(),
         };
         assertCouncilLease(ownedRun, leaseOwnerId);
-        this.options.storage.assembly.saveCouncilArtifactsExact([synthesisArtifact]);
+        await this.options.storage.assembly.saveCouncilArtifactsExact([synthesisArtifact]);
       } catch (error) {
         const failedAttemptDraft = buildFailedCouncilAttempt(
           attemptId,
@@ -2028,14 +2033,14 @@ class ModelCouncilExecutor {
           observedResponse,
         );
         const failedAttempt = providerInvocationStarted
-          ? reconcileCouncilAttemptWithHx306(this.options.storage, run, synthesisParticipant, failedAttemptDraft)
+          ? await reconcileCouncilAttemptWithHx306(this.options.storage, run, synthesisParticipant, failedAttemptDraft)
           : failedAttemptDraft;
-        this.persistFailedCouncilAttempt(run.runId, leaseOwnerId, failedAttempt);
+        await this.persistFailedCouncilAttempt(run.runId, leaseOwnerId, failedAttempt);
         throw error;
       }
     }
     const synthesisPayload = synthesisArtifact.payload as ModelCouncilSynthesisArtifact;
-    const attempts = reconstructCouncilAttempts(
+    const attempts = await reconstructCouncilAttempts(
       this.options.storage,
       ownedRun,
       participantArtifacts,
@@ -2071,8 +2076,8 @@ class ModelCouncilExecutor {
       finalUsage: usage,
       createdAt: new Date().toISOString(),
     };
-    this.saveCouncilRound(ownedRun, leaseOwnerId, "C3_synthesize", 3, [synthesisArtifact.artifactId]);
-    return this.advanceCouncilStage(ownedRun, leaseOwnerId, "completed", 3, {
+    await this.saveCouncilRound(ownedRun, leaseOwnerId, "C3_synthesize", 3, [synthesisArtifact.artifactId]);
+    return await this.advanceCouncilStage(ownedRun, leaseOwnerId, "completed", 3, {
       status: "completed",
       result,
       usage,
@@ -2081,7 +2086,7 @@ class ModelCouncilExecutor {
     });
   }
 
-  private saveCouncilRound(
+  private async saveCouncilRound(
     run: AssemblyRunRecord,
     leaseOwnerId: string,
     stage: AssemblyStage,
@@ -2093,16 +2098,16 @@ class ModelCouncilExecutor {
       (participant) => participant.participantId,
     );
     const roundId = `${run.runId}:council:${stage}`;
-    const existing = this.options.storage.assembly
-      .listRounds(run.runId)
-      .find((candidate) => candidate.roundId === roundId);
+    const existing = (await this.options.storage.assembly.listRounds(run.runId)).find(
+      (candidate) => candidate.roundId === roundId,
+    );
     if (existing) {
       validateCouncilRound(run, existing, stage, roundIndex, participantIds, artifactIds);
-      this.options.storage.assembly.saveCouncilRoundExact(existing);
+      await this.options.storage.assembly.saveCouncilRoundExact(existing);
       return;
     }
     const now = new Date().toISOString();
-    this.options.storage.assembly.saveCouncilRoundExact({
+    await this.options.storage.assembly.saveCouncilRoundExact({
       roundId,
       runId: run.runId,
       roundIndex,
@@ -2115,10 +2120,10 @@ class ModelCouncilExecutor {
     });
   }
 
-  private renewCouncilLease(run: AssemblyRunRecord, leaseOwnerId: string): AssemblyRunRecord {
+  private async renewCouncilLease(run: AssemblyRunRecord, leaseOwnerId: string): Promise<AssemblyRunRecord> {
     assertCouncilLease(run, leaseOwnerId);
     const now = new Date().toISOString();
-    const renewed = this.options.storage.assembly.renewCouncilRunLease({
+    const renewed = await this.options.storage.assembly.renewCouncilRunLease({
       runId: run.runId,
       expectedGeneration: run.generation ?? 0,
       expectedStage: run.currentStage,
@@ -2137,14 +2142,14 @@ class ModelCouncilExecutor {
     leaseOwnerId: string,
     invoke: () => Promise<T>,
   ): Promise<{ run: AssemblyRunRecord; value: T }> {
-    let ownedRun = this.renewCouncilLease(run, leaseOwnerId);
+    let ownedRun = await this.renewCouncilLease(run, leaseOwnerId);
     let heartbeatError: unknown;
-    const timer = setInterval(() => {
+    const timer = setInterval(async () => {
       if (heartbeatError) {
         return;
       }
       try {
-        ownedRun = this.renewCouncilLease(ownedRun, leaseOwnerId);
+        ownedRun = await this.renewCouncilLease(ownedRun, leaseOwnerId);
       } catch (error) {
         heartbeatError = error;
       }
@@ -2157,37 +2162,42 @@ class ModelCouncilExecutor {
       }
       // This post-call CAS is the ownership assertion immediately before any
       // immutable artifact or round write.
-      ownedRun = this.renewCouncilLease(ownedRun, leaseOwnerId);
+      ownedRun = await this.renewCouncilLease(ownedRun, leaseOwnerId);
       return { run: ownedRun, value };
     } finally {
       clearInterval(timer);
     }
   }
 
-  private persistFailedCouncilAttempt(
+  private async persistFailedCouncilAttempt(
     runId: string,
     leaseOwnerId: string,
     failedAttempt: ModelCouncilAttemptEvidence,
-  ): void {
-    const current = this.options.storage.assembly.getRun(runId);
+  ): Promise<void> {
+    const current = await this.options.storage.assembly.getRun(runId);
     if (current.leaseOwnerId !== leaseOwnerId || current.status !== "running") {
       return;
     }
     assertCouncilLease(current, leaseOwnerId);
-    const participantArtifacts = getCouncilParticipantArtifacts(this.options.storage, current);
-    const synthesisArtifact = getCouncilSynthesisArtifact(this.options.storage, current);
-    const attempts = reconstructCouncilAttempts(this.options.storage, current, participantArtifacts, synthesisArtifact);
+    const participantArtifacts = await getCouncilParticipantArtifacts(this.options.storage, current);
+    const synthesisArtifact = await getCouncilSynthesisArtifact(this.options.storage, current);
+    const attempts = await reconstructCouncilAttempts(
+      this.options.storage,
+      current,
+      participantArtifacts,
+      synthesisArtifact,
+    );
     upsertCouncilAttempt(attempts, failedAttempt);
     const evidence = buildModelCouncilEvidence(current, participantArtifacts, attempts);
     if (synthesisArtifact) {
       evidence.canonicalAnswerHash = digest((synthesisArtifact.payload as ModelCouncilSynthesisArtifact).answer);
     }
-    this.advanceCouncilStage(current, leaseOwnerId, current.currentStage, current.currentRoundIndex, {
+    await this.advanceCouncilStage(current, leaseOwnerId, current.currentStage, current.currentRoundIndex, {
       councilEvidence: evidence,
     });
   }
 
-  private advanceCouncilStage(
+  private async advanceCouncilStage(
     run: AssemblyRunRecord,
     leaseOwnerId: string,
     nextStage: AssemblyStage,
@@ -2200,9 +2210,9 @@ class ModelCouncilExecutor {
       councilEvidence?: ModelCouncilEvidence;
       finishedAt?: string;
     } = {},
-  ): AssemblyRunRecord {
+  ): Promise<AssemblyRunRecord> {
     const updatedAt = new Date().toISOString();
-    const advanced = this.options.storage.assembly.advanceCouncilRun({
+    const advanced = await this.options.storage.assembly.advanceCouncilRun({
       runId: run.runId,
       expectedGeneration: run.generation ?? 0,
       expectedStage: run.currentStage,
@@ -2224,13 +2234,13 @@ class ModelCouncilExecutor {
     return advanced;
   }
 
-  private failChatModelCouncil(runId: string, leaseOwnerId: string, error: unknown): void {
-    const run = this.options.storage.assembly.getRun(runId);
+  private async failChatModelCouncil(runId: string, leaseOwnerId: string, error: unknown): Promise<void> {
+    const run = await this.options.storage.assembly.getRun(runId);
     if (run.status === "completed" || run.leaseOwnerId !== leaseOwnerId) {
       return;
     }
     const updatedAt = new Date().toISOString();
-    this.options.storage.assembly.advanceCouncilRun({
+    await this.options.storage.assembly.advanceCouncilRun({
       runId,
       expectedGeneration: run.generation ?? 0,
       expectedStage: run.currentStage,
@@ -2444,11 +2454,14 @@ function assertModelCouncilInputScope(input: ExecuteChatModelCouncilInput): void
   }
 }
 
-function assertPersistedRoutedContextSnapshot(storage: Storage, input: ExecuteChatModelCouncilInput): void {
+async function assertPersistedRoutedContextSnapshot(
+  storage: Storage,
+  input: ExecuteChatModelCouncilInput,
+): Promise<void> {
   if (!input.routedContextSnapshot) {
     return;
   }
-  const persisted = storage.routedContextSnapshots.get(input.routedContextSnapshot.snapshotId);
+  const persisted = await storage.routedContextSnapshots.get(input.routedContextSnapshot.snapshotId);
   if (canonicalJsonString(persisted) !== canonicalJsonString(input.routedContextSnapshot)) {
     throw new Error("Model council routed-context snapshot differs from immutable HX-307 storage truth.");
   }
@@ -2546,11 +2559,11 @@ function dedupeCouncilCandidates(candidates: ModelCouncilProviderCandidate[]): M
   return output;
 }
 
-function assertLegacyCouncilReasoningRecoverySafe(
+async function assertLegacyCouncilReasoningRecoverySafe(
   storage: Storage,
   run: AssemblyRunRecord,
   input: ExecuteChatModelCouncilInput,
-): void {
+): Promise<void> {
   const resolution = requireModelCouncilResolution(run);
   const synthesisParticipant = resolution.participants.find(
     (participant) => participant.participantId === resolution.synthesisParticipantId,
@@ -2558,7 +2571,7 @@ function assertLegacyCouncilReasoningRecoverySafe(
   if (
     synthesisParticipant?.apiStyle === undefined &&
     resolveChatReasoningEffort(input.capabilityProfile.selection.thinkingLevel ?? "standard") !== "none" &&
-    !getCouncilSynthesisArtifact(storage, run)
+    !(await getCouncilSynthesisArtifact(storage, run))
   ) {
     throw new Error(
       `Model council ${run.runId} predates the immutable provider-style/reasoning binding and cannot resume ` +
@@ -2815,12 +2828,18 @@ function validateCouncilRound(
   }
 }
 
-function getCouncilParticipantArtifacts(storage: Storage, run: AssemblyRunRecord): AssemblyArtifactRecord[] {
-  return validateCouncilArtifactSet(run, storage.assembly.listArtifacts(run.runId)).participants;
+async function getCouncilParticipantArtifacts(
+  storage: Storage,
+  run: AssemblyRunRecord,
+): Promise<AssemblyArtifactRecord[]> {
+  return validateCouncilArtifactSet(run, await storage.assembly.listArtifacts(run.runId)).participants;
 }
 
-function getCouncilSynthesisArtifact(storage: Storage, run: AssemblyRunRecord): AssemblyArtifactRecord | undefined {
-  return validateCouncilArtifactSet(run, storage.assembly.listArtifacts(run.runId)).synthesis;
+async function getCouncilSynthesisArtifact(
+  storage: Storage,
+  run: AssemblyRunRecord,
+): Promise<AssemblyArtifactRecord | undefined> {
+  return validateCouncilArtifactSet(run, await storage.assembly.listArtifacts(run.runId)).synthesis;
 }
 
 function validateCouncilArtifactSet(
@@ -3012,12 +3031,12 @@ function buildFailedCouncilAttempt(
   };
 }
 
-function reconstructCouncilAttempts(
+async function reconstructCouncilAttempts(
   storage: Storage,
   run: AssemblyRunRecord,
   participantArtifacts: AssemblyArtifactRecord[],
   synthesisArtifact?: AssemblyArtifactRecord,
-): ModelCouncilAttemptEvidence[] {
+): Promise<ModelCouncilAttemptEvidence[]> {
   const attempts: ModelCouncilAttemptEvidence[] = [];
   const persistedAttempts = run.councilEvidence?.attempts ?? [];
   const seenPersisted = new Set<string>();
@@ -3049,18 +3068,18 @@ function reconstructCouncilAttempts(
   }
   const ordered = attempts.sort((left, right) => left.attemptId.localeCompare(right.attemptId));
   validateCouncilAttemptSequences(run, ordered, participantArtifacts, synthesisArtifact);
-  validateCouncilAttemptsAgainstHx306(storage, run, ordered);
+  await validateCouncilAttemptsAgainstHx306(storage, run, ordered);
   return ordered;
 }
 
-function projectCouncilRunWithReconstructedEvidence(
+async function projectCouncilRunWithReconstructedEvidence(
   storage: Storage,
   run: AssemblyRunRecord,
   artifacts: AssemblyArtifactRecord[],
-): AssemblyRunRecord {
+): Promise<AssemblyRunRecord> {
   const resolution = requireModelCouncilResolution(run);
   const artifactSet = validateCouncilArtifactSet(run, artifacts);
-  const attempts = reconstructCouncilAttempts(storage, run, artifactSet.participants, artifactSet.synthesis);
+  const attempts = await reconstructCouncilAttempts(storage, run, artifactSet.participants, artifactSet.synthesis);
   const reconstructedCanonicalAnswerHash = artifactSet.synthesis
     ? digest((artifactSet.synthesis.payload as ModelCouncilSynthesisArtifact).answer)
     : undefined;
@@ -3177,7 +3196,10 @@ function extractAuthoritativeUsageEventIds(error: unknown): string[] {
   return [...new Set(eventIds)];
 }
 
-function listCouncilModelUsageEvents(storage: Storage, runId: string): ModelUsageEventRecord[] | undefined {
+async function listCouncilModelUsageEvents(
+  storage: Storage,
+  runId: string,
+): Promise<ModelUsageEventRecord[] | undefined> {
   const repository = storage.modelUsageEvents as Storage["modelUsageEvents"] | undefined;
   if (!repository || typeof repository.list !== "function") {
     // Narrow unit hosts predating HX-306 do not own its repository. Production
@@ -3187,7 +3209,7 @@ function listCouncilModelUsageEvents(storage: Storage, runId: string): ModelUsag
   const events: ModelUsageEventRecord[] = [];
   let cursor: string | undefined;
   for (let page = 0; page < 10; page += 1) {
-    const response = repository.list({ assemblyRunId: runId, limit: 200, ...(cursor ? { cursor } : {}) });
+    const response = await repository.list({ assemblyRunId: runId, limit: 200, ...(cursor ? { cursor } : {}) });
     events.push(...response.items);
     cursor = response.nextCursor;
     if (!cursor) {
@@ -3197,13 +3219,13 @@ function listCouncilModelUsageEvents(storage: Storage, runId: string): ModelUsag
   throw new Error(`Model council ${runId} exceeded the bounded HX-306 reconciliation window.`);
 }
 
-function reconcileCouncilAttemptWithHx306(
+async function reconcileCouncilAttemptWithHx306(
   storage: Storage,
   run: AssemblyRunRecord,
   participant: ModelCouncilParticipantResolution,
   attempt: ModelCouncilAttemptEvidence,
-): ModelCouncilAttemptEvidence {
-  const allEvents = listCouncilModelUsageEvents(storage, run.runId);
+): Promise<ModelCouncilAttemptEvidence> {
+  const allEvents = await listCouncilModelUsageEvents(storage, run.runId);
   if (!allEvents) {
     return attempt;
   }
@@ -3270,31 +3292,31 @@ function reconcileCouncilAttemptWithHx306(
   };
 }
 
-function validateCouncilAttemptsAgainstHx306(
+async function validateCouncilAttemptsAgainstHx306(
   storage: Storage,
   run: AssemblyRunRecord,
   attempts: ModelCouncilAttemptEvidence[],
-): void {
+): Promise<void> {
   const resolution = requireModelCouncilResolution(run);
   for (const attempt of attempts) {
     const participant = resolution.participants.find((candidate) => candidate.participantId === attempt.participantId);
     if (!participant) {
       throw new Error(`Model council attempt ${attempt.attemptId} has no immutable participant route.`);
     }
-    const reconciled = reconcileCouncilAttemptWithHx306(storage, run, participant, attempt);
+    const reconciled = await reconcileCouncilAttemptWithHx306(storage, run, participant, attempt);
     if (canonicalJsonString(reconciled) !== canonicalJsonString(attempt)) {
       throw new Error(`Model council attempt ${attempt.attemptId} differs from canonical HX-306 accounting truth.`);
     }
   }
 }
 
-function assertPriorCouncilAttemptsRetrySafe(
+async function assertPriorCouncilAttemptsRetrySafe(
   storage: Storage,
   run: AssemblyRunRecord,
   stage: ModelCouncilAttemptEvidence["stage"],
   participantId: string,
   attempts: ModelCouncilAttemptEvidence[],
-): void {
+): Promise<void> {
   const repository = storage.modelUsageEvents as Storage["modelUsageEvents"] | undefined;
   if (!repository || typeof repository.findByEventId !== "function") {
     return;
@@ -3304,7 +3326,7 @@ function assertPriorCouncilAttemptsRetrySafe(
       candidate.stage === stage && candidate.participantId === participantId && candidate.status === "failed",
   )) {
     for (const eventId of attempt.modelUsageEventIds) {
-      const event = repository.findByEventId(eventId);
+      const event = await repository.findByEventId(eventId);
       if (!event || event.operationId !== attempt.attemptId || event.assemblyRunId !== run.runId) {
         throw new Error(`Model council attempt ${attempt.attemptId} lost canonical HX-306 retry evidence.`);
       }
@@ -3417,19 +3439,22 @@ function sumCouncilUsage(attempts: ModelCouncilAttemptEvidence[]): AssemblyUsage
   };
 }
 
-function buildCompletedModelCouncilResult(storage: Storage, run: AssemblyRunRecord): ModelCouncilExecutionResult {
+async function buildCompletedModelCouncilResult(
+  storage: Storage,
+  run: AssemblyRunRecord,
+): Promise<ModelCouncilExecutionResult> {
   const result = run.result;
   const evidence = run.councilEvidence;
   if (run.status !== "completed" || run.currentStage !== "completed" || !result?.recommendation || !evidence) {
     throw new Error(`Model council ${run.runId} has no canonical completed result.`);
   }
-  const artifactSet = validateCouncilArtifactSet(run, storage.assembly.listArtifacts(run.runId));
+  const artifactSet = validateCouncilArtifactSet(run, await storage.assembly.listArtifacts(run.runId));
   const resolution = requireModelCouncilResolution(run);
   if (artifactSet.participants.length !== resolution.participants.length || !artifactSet.synthesis) {
     throw new Error(`Model council ${run.runId} completed without its full immutable artifact set.`);
   }
   const synthesisPayload = artifactSet.synthesis.payload as ModelCouncilSynthesisArtifact;
-  const attempts = reconstructCouncilAttempts(storage, run, artifactSet.participants, artifactSet.synthesis);
+  const attempts = await reconstructCouncilAttempts(storage, run, artifactSet.participants, artifactSet.synthesis);
   const expectedCanonicalAnswerHash = digest(synthesisPayload.answer);
   if (
     result.runId !== run.runId ||
@@ -3862,7 +3887,7 @@ async function writeAssemblyExports(
     detail: "Assembly report written to markdown artifact.",
   });
   if (requested.has("task")) {
-    const task = storage.tasks.create({
+    const task = await storage.tasks.create({
       workspaceId: run.workspaceId,
       title: `[Assembly] ${run.title}`,
       description: markdown.slice(0, 4_000),
@@ -3870,12 +3895,12 @@ async function writeAssemblyExports(
       priority: "normal",
       createdBy: "assembly",
     });
-    storage.taskActivities.append(task.taskId, {
+    await storage.taskActivities.append(task.taskId, {
       activityType: "comment",
       message: "Assembly exported this result into a task.",
       agentId: "assembly",
     });
-    storage.taskDeliverables.append(task.taskId, {
+    await storage.taskDeliverables.append(task.taskId, {
       deliverableType: "artifact",
       title: "Assembly markdown report",
       path: relPath,
@@ -3891,7 +3916,7 @@ async function writeAssemblyExports(
     exports.push({ target: "task", status: "not_requested" });
   }
   if (requested.has("chat") && run.sourceSessionId) {
-    storage.chatMessages.upsert({
+    await storage.chatMessages.upsert({
       messageId: randomUUID(),
       sessionId: run.sourceSessionId,
       role: "assistant",

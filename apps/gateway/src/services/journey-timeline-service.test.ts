@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { GovernanceJourneyEventRecord } from "@goatcitadel/contracts";
-import { Storage } from "@goatcitadel/storage";
+import { Storage, createSqliteAsyncStorage } from "@goatcitadel/storage";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   JourneyTimelineService,
@@ -54,7 +54,7 @@ describe("JourneyTimelineService HX-402", () => {
       }),
     );
 
-    const first = service.listTimeline({ workspaceId: "workspace-1", limit: 1 });
+    const first = await service.listTimeline({ workspaceId: "workspace-1", limit: 1 });
     expect(first).toMatchObject({
       readOnly: true,
       mutationSemantics: "none",
@@ -70,7 +70,7 @@ describe("JourneyTimelineService HX-402", () => {
     expect(first.items[0]?.eventFingerprint).toMatch(/^[a-f0-9]{64}$/u);
     expect(first.nextCursor).toBeTruthy();
 
-    const second = service.listTimeline({ workspaceId: "workspace-1", limit: 1, cursor: first.nextCursor });
+    const second = await service.listTimeline({ workspaceId: "workspace-1", limit: 1, cursor: first.nextCursor });
     expect(second.items).toMatchObject([
       {
         eventId: "event-older",
@@ -85,7 +85,7 @@ describe("JourneyTimelineService HX-402", () => {
     ]);
     expect(second.nextCursor).toBeUndefined();
 
-    const replay = service.listTimeline({ workspaceId: "workspace-1", limit: 1 });
+    const replay = await service.listTimeline({ workspaceId: "workspace-1", limit: 1 });
     expect(replay.items[0]?.eventFingerprint).toBe(first.items[0]?.eventFingerprint);
   });
 
@@ -131,7 +131,7 @@ describe("JourneyTimelineService HX-402", () => {
       }),
     );
 
-    const page = service.listTimeline({ workspaceId: "workspace-1" });
+    const page = await service.listTimeline({ workspaceId: "workspace-1" });
     expect(page.items[0]?.recurrence).toEqual({
       evidenceFingerprint: FINGERPRINT,
       observationCount: 3,
@@ -172,7 +172,7 @@ describe("JourneyTimelineService HX-402", () => {
       }),
     );
 
-    const page = service.listTimeline({ workspaceId: "workspace-1" });
+    const page = await service.listTimeline({ workspaceId: "workspace-1" });
     expect(page.items.find((item) => item.eventId === "event-candidate-only")?.evidence).toMatchObject({
       sourceLinked: false,
       approvalLinked: false,
@@ -209,7 +209,7 @@ describe("JourneyTimelineService HX-402", () => {
       }),
     );
 
-    const item = service.listTimeline({ workspaceId: "workspace-1" }).items[0];
+    const item = (await service.listTimeline({ workspaceId: "workspace-1" })).items[0];
     expect(item?.category).toBe("provenance");
     expect(item?.evidence).toMatchObject({
       sourceLinked: true,
@@ -234,7 +234,7 @@ describe("JourneyTimelineService HX-402", () => {
         }),
       );
     }
-    const page = service.listTimeline({ workspaceId: "workspace-1", limit: 1 });
+    const page = await service.listTimeline({ workspaceId: "workspace-1", limit: 1 });
     expect(page.items[0]?.recurrence).toMatchObject({
       observationCount: 500,
       distinctSessionCount: 500,
@@ -265,7 +265,7 @@ describe("JourneyTimelineService HX-402", () => {
       }),
     );
 
-    const page = service.listTimeline({ workspaceId: "workspace-1" });
+    const page = await service.listTimeline({ workspaceId: "workspace-1" });
     expect(page.items.map((item) => [item.eventId, item.evidence.health, item.evidence.trustContribution])).toEqual([
       ["event-foreign", "foreign_scope", "blocked"],
       ["event-conflict", "conflicting", "blocked"],
@@ -301,8 +301,8 @@ describe("JourneyTimelineService HX-402", () => {
       }),
     );
 
-    expect(service.listTimeline({ workspaceId: "workspace-1" }).items).toEqual([]);
-    const included = service.listTimeline({ workspaceId: "workspace-1", includeGlobal: true });
+    expect((await service.listTimeline({ workspaceId: "workspace-1" })).items).toEqual([]);
+    const included = await service.listTimeline({ workspaceId: "workspace-1", includeGlobal: true });
     expect(included.items.map((item) => [item.eventId, item.evidence.health])).toEqual([
       ["event-global-foreign", "foreign_scope"],
       ["event-global-clean", "complete"],
@@ -322,7 +322,7 @@ describe("JourneyTimelineService HX-402", () => {
       }),
     );
 
-    expect(service.listTimeline({ workspaceId: "workspace-1" }).items[0]?.evidence).toMatchObject({
+    expect((await service.listTimeline({ workspaceId: "workspace-1" })).items[0]?.evidence).toMatchObject({
       health: "requirements_undeclared",
       requirementsDeclared: false,
       requiresSource: true,
@@ -342,18 +342,18 @@ describe("JourneyTimelineService HX-402", () => {
         recordedAt: "2026-07-13T02:00:00.000Z",
       }),
     );
-    const first = service.listTimeline({ workspaceId: "workspace-1", limit: 1 });
-    expect(() => service.listTimeline({ workspaceId: "workspace-2", limit: 1, cursor: first.nextCursor })).toThrow(
-      /does not match/u,
-    );
-    expect(() =>
+    const first = await service.listTimeline({ workspaceId: "workspace-1", limit: 1 });
+    await expect(
+      service.listTimeline({ workspaceId: "workspace-2", limit: 1, cursor: first.nextCursor }),
+    ).rejects.toThrow(/does not match/u);
+    await expect(
       service.listTimeline({
         workspaceId: "workspace-1",
         limit: 1,
         eventTypes: ["memory_lifecycle"],
         cursor: first.nextCursor,
       }),
-    ).toThrow(/does not match/u);
+    ).rejects.toThrow(/does not match/u);
     expect(() => decodeJourneyTimelineCursor("not-canonical+base64")).toThrow(/malformed/u);
   });
 
@@ -378,7 +378,10 @@ async function createHarness(): Promise<{ storage: Storage; service: JourneyTime
     auditDir: path.join(root, "audit"),
   });
   created.push({ root, storage });
-  return { storage, service: new JourneyTimelineService(storage.governanceJourneyEvents) };
+  return {
+    storage,
+    service: new JourneyTimelineService(createSqliteAsyncStorage(storage).governanceJourneyEvents),
+  };
 }
 
 function event(overrides: Partial<GovernanceJourneyEventRecord> = {}): GovernanceJourneyEventRecord {

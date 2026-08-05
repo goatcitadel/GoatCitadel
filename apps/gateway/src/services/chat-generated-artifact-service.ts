@@ -8,14 +8,14 @@ import type {
   ChatThreadTurnRecord,
 } from "@goatcitadel/contracts";
 import { redactStructuredSecrets, ValidationError } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 
 export interface ChatGeneratedArtifactDependencies {
   readonly storage: Pick<Storage, "chatGeneratedArtifacts" | "chatTurnTraces" | "gatewaySql">;
-  requireChatSession(sessionId: string): ChatSessionRecord;
+  requireChatSession(sessionId: string): Promise<ChatSessionRecord>;
 }
 
-export function listChatGeneratedArtifacts(
+export async function listChatGeneratedArtifacts(
   deps: ChatGeneratedArtifactDependencies,
   input: {
     sessionId?: string;
@@ -25,12 +25,12 @@ export function listChatGeneratedArtifacts(
     kind?: ChatGeneratedArtifactKind;
     limit?: number;
   } = {},
-): ChatGeneratedArtifactRecord[] {
+): Promise<ChatGeneratedArtifactRecord[]> {
   if (input.sessionId?.trim()) {
-    deps.requireChatSession(input.sessionId.trim());
-    return deps.storage.chatGeneratedArtifacts.listBySession(input.sessionId.trim(), input.limit ?? 300);
+    await deps.requireChatSession(input.sessionId.trim());
+    return await deps.storage.chatGeneratedArtifacts.listBySession(input.sessionId.trim(), input.limit ?? 300);
   }
-  return deps.storage.chatGeneratedArtifacts.listVisible({
+  return await deps.storage.chatGeneratedArtifacts.listVisible({
     workspaceId: input.workspaceId?.trim() || undefined,
     projectId: input.projectId?.trim() || undefined,
     sourceSurface: input.sourceSurface,
@@ -39,11 +39,11 @@ export function listChatGeneratedArtifacts(
   });
 }
 
-export function getChatGeneratedArtifact(
+export async function getChatGeneratedArtifact(
   deps: ChatGeneratedArtifactDependencies,
   artifactId: string,
   options: { workspaceId: string },
-): ChatGeneratedArtifactRecord {
+): Promise<ChatGeneratedArtifactRecord> {
   const normalizedArtifactId = artifactId.trim();
   if (!normalizedArtifactId) {
     throw new ValidationError({ code: "FIELD_REQUIRED", field: "artifactId" });
@@ -52,22 +52,22 @@ export function getChatGeneratedArtifact(
   if (!workspaceId) {
     throw new ValidationError({ code: "FIELD_REQUIRED", field: "workspaceId" });
   }
-  const artifact = deps.storage.chatGeneratedArtifacts.get(normalizedArtifactId);
-  const session = deps.requireChatSession(artifact.sessionId);
+  const artifact = await deps.storage.chatGeneratedArtifacts.get(normalizedArtifactId);
+  const session = await deps.requireChatSession(artifact.sessionId);
   if (session.workspaceId !== workspaceId) {
     throw new ValidationError({ message: "Artifact does not belong to the requested workspace." });
   }
   return artifact;
 }
 
-export function createChatGeneratedArtifactFromTurn(
+export async function createChatGeneratedArtifactFromTurn(
   deps: ChatGeneratedArtifactDependencies,
   input: {
     sessionId: string;
     turnId: string;
     supersedeLatest?: boolean;
   },
-): ChatGeneratedArtifactRecord {
+): Promise<ChatGeneratedArtifactRecord> {
   const sessionId = input.sessionId.trim();
   const turnId = input.turnId.trim();
   if (!sessionId) {
@@ -76,8 +76,8 @@ export function createChatGeneratedArtifactFromTurn(
   if (!turnId) {
     throw new ValidationError({ code: "FIELD_REQUIRED", field: "turnId" });
   }
-  const session = deps.requireChatSession(sessionId);
-  const trace = deps.storage.chatTurnTraces.get(turnId);
+  const session = await deps.requireChatSession(sessionId);
+  const trace = await deps.storage.chatTurnTraces.get(turnId);
   if (trace.sessionId !== sessionId) {
     throw new ValidationError({ message: `Turn ${turnId} does not belong to session ${sessionId}.` });
   }
@@ -85,12 +85,12 @@ export function createChatGeneratedArtifactFromTurn(
     throw new ValidationError({ message: "Artifacts can only be created from assistant turns." });
   }
   const sourceSurface = trace.mode;
-  const turnArtifacts = deps.storage.chatGeneratedArtifacts.listByTurn(turnId, 50);
+  const turnArtifacts = await deps.storage.chatGeneratedArtifacts.listByTurn(turnId, 50);
   const latestSameTurnArtifact = turnArtifacts[0];
   if (!input.supersedeLatest && latestSameTurnArtifact) {
     return latestSameTurnArtifact;
   }
-  const assistantText = resolveAssistantTextFromTrace(deps, turnId);
+  const assistantText = await resolveAssistantTextFromTrace(deps, turnId);
   const inferred = inferGeneratedArtifactFromAssistantText(assistantText);
   if (
     input.supersedeLatest &&
@@ -115,7 +115,7 @@ export function createChatGeneratedArtifactFromTurn(
     : buildStableGeneratedArtifactId(turnId, inferred.kind, inferred.contentHash, inferred.sourceBlockIndex);
   const expectedSupersedesArtifactId = input.supersedeLatest ? latestSameTurnArtifact?.artifactId : undefined;
   try {
-    return deps.storage.chatGeneratedArtifacts.create({
+    return await deps.storage.chatGeneratedArtifacts.create({
       artifactId,
       sessionId,
       workspaceId: session.workspaceId,
@@ -137,7 +137,7 @@ export function createChatGeneratedArtifactFromTurn(
     });
   } catch (error) {
     try {
-      const currentArtifact = deps.storage.chatGeneratedArtifacts.get(artifactId);
+      const currentArtifact = await deps.storage.chatGeneratedArtifacts.get(artifactId);
       if (
         currentArtifact.turnId === turnId &&
         currentArtifact.kind === inferred.kind &&
@@ -183,15 +183,16 @@ export function attachGeneratedArtifactsToThreadTurns(
   }));
 }
 
-function resolveAssistantTextFromTrace(deps: ChatGeneratedArtifactDependencies, turnId: string): string {
-  const trace = deps.storage.chatTurnTraces.get(turnId);
+async function resolveAssistantTextFromTrace(deps: ChatGeneratedArtifactDependencies, turnId: string): Promise<string> {
+  const trace = await deps.storage.chatTurnTraces.get(turnId);
   const assistantMessageId = trace.assistantMessageId?.trim();
   if (!assistantMessageId) {
     throw new ValidationError({ message: "Assistant output is missing for this turn." });
   }
-  const result = deps.storage.gatewaySql
-    .prepare("SELECT content FROM chat_messages WHERE message_id = ? LIMIT 1")
-    .get(assistantMessageId) as { content?: string } | undefined;
+  const statement = await deps.storage.gatewaySql.prepare(
+    "SELECT content FROM chat_messages WHERE message_id = ? LIMIT 1",
+  );
+  const result = await statement.get<{ content?: string }>(assistantMessageId);
   const content = typeof result?.content === "string" ? result.content.trim() : "";
   if (!content) {
     throw new ValidationError({ message: "Assistant output is empty for this turn." });

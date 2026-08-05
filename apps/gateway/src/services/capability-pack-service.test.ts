@@ -28,18 +28,18 @@ describe("CapabilityPackService portable packs", () => {
     );
   });
 
-  it("records evidence when a portable local pack is staged", () => {
-    const createEnvelope = vi.fn(() => ({
+  it("records evidence when a portable local pack is staged", async () => {
+    const createEnvelope = vi.fn(async () => ({
       envelopeId: "env-local-pack",
       createdAt: "2026-05-31T00:00:00.000Z",
     }));
-    const publishRealtime = vi.fn();
+    const publishRealtime = vi.fn(async () => undefined);
     const service = new CapabilityPackService({
       evidenceEnvelopeService: { createEnvelope } as never,
       publishRealtime,
     });
 
-    const result = service.installLocalPack({
+    const result = await service.installLocalPack({
       actorId: "operator:test",
       manifest: localPackManifest(),
     });
@@ -69,7 +69,7 @@ describe("CapabilityPackService portable packs", () => {
     );
   });
 
-  it("lists staged pack records from install evidence without activating assets", () => {
+  it("lists staged pack records from install evidence without activating assets", async () => {
     const envelope = capabilityPackEnvelope({
       envelopeId: "env-local-pack",
       createdAt: "2026-05-31T00:00:00.000Z",
@@ -89,11 +89,11 @@ describe("CapabilityPackService portable packs", () => {
     const service = new CapabilityPackService({
       evidenceEnvelopeService: {
         createEnvelope: vi.fn(),
-        listEnvelopes: vi.fn(() => [envelope]),
+        listEnvelopes: vi.fn(async () => [envelope]),
       },
     });
 
-    expect(service.listStagedPacks()).toEqual([
+    expect(await service.listStagedPacks()).toEqual([
       expect.objectContaining({
         packId: "local-review-pack",
         status: "staged_for_review",
@@ -105,7 +105,7 @@ describe("CapabilityPackService portable packs", () => {
     ]);
   });
 
-  it("records operator-reviewed materialization evidence without changing callable state", () => {
+  it("records operator-reviewed materialization evidence without changing callable state", async () => {
     const manifest = {
       ...localPackManifest(),
       assets: [
@@ -139,20 +139,20 @@ describe("CapabilityPackService portable packs", () => {
         manifest,
       },
     });
-    const createEnvelope = vi.fn(() => ({
+    const createEnvelope = vi.fn(async () => ({
       envelopeId: "env-materialized",
       createdAt: "2026-05-31T00:01:00.000Z",
     }));
-    const publishRealtime = vi.fn();
+    const publishRealtime = vi.fn(async () => undefined);
     const service = new CapabilityPackService({
       evidenceEnvelopeService: {
         createEnvelope,
-        listEnvelopes: vi.fn(() => [sourceEnvelope]),
+        listEnvelopes: vi.fn(async () => [sourceEnvelope]),
       },
       publishRealtime,
     });
 
-    const result = service.materializeStagedPack("env-local-pack", {
+    const result = await service.materializeStagedPack("env-local-pack", {
       actorId: "operator:reviewer",
       confirmReview: true,
       assetIds: ["skill:triage", "preset:gate"],
@@ -213,7 +213,7 @@ describe("CapabilityPackService portable packs", () => {
     );
   });
 
-  it("attaches the latest materialization summary to staged pack records", () => {
+  it("attaches the latest materialization summary to staged pack records", async () => {
     const sourceEnvelope = capabilityPackEnvelope({
       envelopeId: "env-local-pack",
       createdAt: "2026-05-31T00:00:00.000Z",
@@ -233,7 +233,7 @@ describe("CapabilityPackService portable packs", () => {
     const service = new CapabilityPackService({
       evidenceEnvelopeService: {
         createEnvelope: vi.fn(),
-        listEnvelopes: vi.fn(() => [
+        listEnvelopes: vi.fn(async () => [
           sourceEnvelope,
           capabilityPackEnvelope({
             envelopeId: "env-materialized",
@@ -251,7 +251,7 @@ describe("CapabilityPackService portable packs", () => {
       },
     });
 
-    expect(service.listStagedPacks()).toEqual([
+    expect(await service.listStagedPacks()).toEqual([
       expect.objectContaining({
         evidenceEnvelopeId: "env-local-pack",
         latestMaterialization: {
@@ -265,7 +265,7 @@ describe("CapabilityPackService portable packs", () => {
     ]);
   });
 
-  it("fails closed when materialization review or asset identity is invalid", () => {
+  it("fails closed when materialization review or asset identity is invalid", async () => {
     const sourceEnvelope = capabilityPackEnvelope({
       envelopeId: "env-local-pack",
       metadata: {
@@ -284,29 +284,29 @@ describe("CapabilityPackService portable packs", () => {
     const service = new CapabilityPackService({
       evidenceEnvelopeService: {
         createEnvelope: vi.fn(),
-        listEnvelopes: vi.fn(() => [sourceEnvelope]),
+        listEnvelopes: vi.fn(async () => [sourceEnvelope]),
       },
     });
 
-    expect(() =>
+    await expect(
       service.materializeStagedPack("env-local-pack", {
         confirmReview: false,
       }),
-    ).toThrow("requires explicit operator review confirmation");
-    expect(() =>
+    ).rejects.toThrow("requires explicit operator review confirmation");
+    await expect(
       service.materializeStagedPack("env-local-pack", {
         confirmReview: true,
         assetIds: ["missing"],
       }),
-    ).toThrow("requested unknown assets: missing");
+    ).rejects.toThrow("requested unknown assets: missing");
   });
 
-  it("exports staged local manifests as read-only portable evidence", () => {
+  it("exports staged local manifests as read-only portable evidence", async () => {
     const manifest = localPackManifest();
     const service = new CapabilityPackService({
       evidenceEnvelopeService: {
         createEnvelope: vi.fn(),
-        listEnvelopes: vi.fn(() => [
+        listEnvelopes: vi.fn(async () => [
           capabilityPackEnvelope({
             envelopeId: "env-export",
             metadata: {
@@ -328,7 +328,7 @@ describe("CapabilityPackService portable packs", () => {
       },
     });
 
-    expect(service.exportPack(manifest.packId)).toMatchObject({
+    expect(await service.exportPack(manifest.packId)).toMatchObject({
       readOnly: true,
       mutationSemantics: "none",
       manifest: expect.objectContaining({ packId: manifest.packId }),
@@ -340,15 +340,15 @@ describe("CapabilityPackService portable packs", () => {
     });
   });
 
-  it("exports bundled manifests without claiming staged evidence", () => {
+  it("exports bundled manifests without claiming staged evidence", async () => {
     const service = new CapabilityPackService({
       evidenceEnvelopeService: {
         createEnvelope: vi.fn(),
-        listEnvelopes: vi.fn(() => []),
+        listEnvelopes: vi.fn(async () => []),
       },
     });
 
-    expect(service.exportPack("cowork-reliability")).toMatchObject({
+    expect(await service.exportPack("cowork-reliability")).toMatchObject({
       readOnly: true,
       mutationSemantics: "none",
       manifest: expect.objectContaining({ packId: "cowork-reliability" }),

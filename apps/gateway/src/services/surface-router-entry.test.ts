@@ -74,23 +74,23 @@ function makeOverrideHost(overrides: Record<string, unknown> = {}) {
 }
 
 describe("recordModeOverrideIfChanged", () => {
-  it("records + persists when explicit mode differs from persisted", () => {
+  it("records + persists when explicit mode differs from persisted", async () => {
     const host = makeOverrideHost();
-    recordModeOverrideIfChanged(host as never, "s1", { content: "actually just chat", mode: "chat" });
+    await recordModeOverrideIfChanged(host as never, "s1", { content: "actually just chat", mode: "chat" });
     expect(host.persistChatSessionMode).toHaveBeenCalledWith("s1", "chat");
     expect(host.recordSurfaceRouteOverrideSignal).not.toHaveBeenCalled();
   });
 
-  it("repairs a sticky legacy turn without recording an override signal", () => {
+  it("repairs a sticky legacy turn without recording an override signal", async () => {
     const host = makeOverrideHost();
-    recordModeOverrideIfChanged(host as never, "s1", { content: "keep going", mode: "code" });
+    await recordModeOverrideIfChanged(host as never, "s1", { content: "keep going", mode: "code" });
     expect(host.persistChatSessionMode).toHaveBeenCalledWith("s1", "chat");
     expect(host.recordSurfaceRouteOverrideSignal).not.toHaveBeenCalled();
   });
 
-  it("does nothing on the first turn (no persisted mode)", () => {
+  it("does nothing on the first turn (no persisted mode)", async () => {
     const host = makeOverrideHost({ readChatSessionMode: vi.fn(() => undefined) });
-    recordModeOverrideIfChanged(host as never, "s1", { content: "x", mode: "code" });
+    await recordModeOverrideIfChanged(host as never, "s1", { content: "x", mode: "code" });
     expect(host.recordSurfaceRouteOverrideSignal).not.toHaveBeenCalled();
   });
 });

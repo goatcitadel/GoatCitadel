@@ -236,7 +236,7 @@ describe("cron run evidence envelopes", () => {
     expect(typeof (input.metadata as Record<string, unknown>).outputHash).toBe("string");
 
     expect(cronJobs.get("daily-task")?.lastRunEvidenceEnvelopeId).toBe("env-cron_job_executed");
-    expect(service.findCronRunById(result.runId)?.evidenceEnvelopeId).toBe("env-cron_job_executed");
+    expect((await service.findCronRunById(result.runId))?.evidenceEnvelopeId).toBe("env-cron_job_executed");
   });
 
   it("does not mint success evidence while an agent_turn child is only admitted", async () => {
@@ -276,7 +276,7 @@ describe("cron run evidence envelopes", () => {
 
     expect(recordEvidenceEnvelope).not.toHaveBeenCalled();
     expect(cronJobs.get("quiet-task")?.lastRunEvidenceEnvelopeId).toBeUndefined();
-    expect(service.findCronRunById(result.runId)?.evidenceEnvelopeId).toBeUndefined();
+    expect((await service.findCronRunById(result.runId))?.evidenceEnvelopeId).toBeUndefined();
   });
 
   it("never fails the run when the envelope callback reports failure", async () => {

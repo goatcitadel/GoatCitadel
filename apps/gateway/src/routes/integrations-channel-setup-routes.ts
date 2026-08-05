@@ -23,7 +23,7 @@ export function registerChannelSetupIntegrationRoutes(fastify: FastifyInstance):
     }
     return reply.send({
       items: projectChannelSetupDraftsForPublicResponse(
-        fastify.services.channelSetup.listChannelSetupDrafts(parsed.data),
+        await fastify.services.channelSetup.listChannelSetupDrafts(parsed.data),
       ),
     });
   });
@@ -52,7 +52,7 @@ export function registerChannelSetupIntegrationRoutes(fastify: FastifyInstance):
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      const created = fastify.services.channelSetup.createChannelSetupDraft(parsed.data);
+      const created = await fastify.services.channelSetup.createChannelSetupDraft(parsed.data);
       return reply.code(201).send(projectChannelSetupDraftForPublicResponse(created));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -71,7 +71,7 @@ export function registerChannelSetupIntegrationRoutes(fastify: FastifyInstance):
       });
     }
     try {
-      const updated = fastify.services.channelSetup.updateChannelSetupDraft(params.data.draftId, parsed.data);
+      const updated = await fastify.services.channelSetup.updateChannelSetupDraft(params.data.draftId, parsed.data);
       return reply.send(projectChannelSetupDraftForPublicResponse(updated));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -84,7 +84,7 @@ export function registerChannelSetupIntegrationRoutes(fastify: FastifyInstance):
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      const result = fastify.services.channelSetup.validateChannelSetupDraft(params.data.draftId);
+      const result = await fastify.services.channelSetup.validateChannelSetupDraft(params.data.draftId);
       return reply.send(projectChannelSetupValidationResultForPublicResponse(result));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
@@ -123,7 +123,7 @@ export function registerChannelSetupIntegrationRoutes(fastify: FastifyInstance):
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      const created = fastify.services.channelSetup.createChannelSetupRepairDraft(params.data.connectionId);
+      const created = await fastify.services.channelSetup.createChannelSetupRepairDraft(params.data.connectionId);
       return reply.code(201).send(projectChannelSetupDraftForPublicResponse(created));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -136,7 +136,7 @@ export function registerChannelSetupIntegrationRoutes(fastify: FastifyInstance):
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      const created = fastify.services.channelSetup.createChannelSetupRotateSecretDraft(params.data.connectionId);
+      const created = await fastify.services.channelSetup.createChannelSetupRotateSecretDraft(params.data.connectionId);
       return reply.code(201).send(projectChannelSetupDraftForPublicResponse(created));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });

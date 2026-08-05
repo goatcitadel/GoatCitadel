@@ -11,13 +11,13 @@ import {
 import { parseDurableChatTurnPayload } from "./durable-execution-service.js";
 
 describe("DevVerificationRouteService durable Chat waits", () => {
-  it("seeds an admitted checkpoint-anchored user-input wait that resumes canonically", () => {
+  it("seeds an admitted checkpoint-anchored user-input wait that resumes canonically", async () => {
     const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
     try {
       const service = new DevVerificationRouteService({ storage } as never);
       const now = "2026-07-30T00:00:00.000Z";
       const promptId = "prompt-verification-1";
-      const seeded = service.seedDurableChatWait({
+      const seeded = await service.seedDurableChatWait({
         workspaceId: "workspace-verification",
         sessionId: "session-verification",
         turnId: "turn-verification",
@@ -112,7 +112,7 @@ describe("DevVerificationRouteService durable Chat waits", () => {
 });
 
 describe("DevVerificationRouteService Chat attachment evidence", () => {
-  it("seeds one idempotent local URL source plus rendered citation and tool truth", () => {
+  it("seeds one idempotent local URL source plus rendered citation and tool truth", async () => {
     const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
     try {
       const now = "2026-07-30T02:00:00.000Z";
@@ -156,8 +156,8 @@ describe("DevVerificationRouteService Chat attachment evidence", () => {
       storage.chatSessionBranchState.setActiveLeaf(sessionId, turnId, now);
 
       const service = new DevVerificationRouteService({ storage } as never);
-      const first = service.seedChatAttachmentEvidence({ workspaceId, sessionId, now });
-      const second = service.seedChatAttachmentEvidence({ workspaceId, sessionId, now });
+      const first = await service.seedChatAttachmentEvidence({ workspaceId, sessionId, now });
+      const second = await service.seedChatAttachmentEvidence({ workspaceId, sessionId, now });
 
       expect(second).toEqual(first);
       expect(storage.chatTurnTraces.get(turnId).citations).toEqual([
@@ -195,7 +195,7 @@ describe("DevVerificationRouteService Chat attachment evidence", () => {
     }
   });
 
-  it("fails closed for a foreign workspace or incomplete active turn", () => {
+  it("fails closed for a foreign workspace or incomplete active turn", async () => {
     const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
     try {
       const now = "2026-07-30T02:00:00.000Z";
@@ -223,12 +223,12 @@ describe("DevVerificationRouteService Chat attachment evidence", () => {
       storage.chatSessionBranchState.setActiveLeaf("session-1", "turn-1", now);
       const service = new DevVerificationRouteService({ storage } as never);
 
-      expect(() =>
+      await expect(
         service.seedChatAttachmentEvidence({ workspaceId: "workspace-foreign", sessionId: "session-1", now }),
-      ).toThrow(/exact session\/workspace match/u);
-      expect(() =>
+      ).rejects.toThrow(/exact session\/workspace match/u);
+      await expect(
         service.seedChatAttachmentEvidence({ workspaceId: "workspace-1", sessionId: "session-1", now }),
-      ).toThrow(/must be completed/u);
+      ).rejects.toThrow(/must be completed/u);
     } finally {
       storage.close();
     }

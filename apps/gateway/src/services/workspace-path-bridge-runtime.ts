@@ -15,7 +15,7 @@ import {
   type WorkspacePathBridgeResolveRequest,
   type WorkspacePathBridgeSnapshotRecord,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { resolveWorkspacePathBridgeRuntimeConfig } from "./workspace-path-bridge-config.js";
 import {
   derivePosixProjectBindingVerificationId,
@@ -38,8 +38,8 @@ export interface WorkspacePathBridgeInspectionService {
     request: WorkspacePathBridgeResolveRequest,
     options?: { signal?: AbortSignal; allowedRoots?: readonly string[] },
   ): Promise<WorkspacePathBridgeSnapshotRecord>;
-  inspect(workspaceId: string, snapshotId: string): WorkspacePathBridgeSnapshotRecord;
-  list(workspaceId: string, limit?: number): WorkspacePathBridgeSnapshotRecord[];
+  inspect(workspaceId: string, snapshotId: string): Promise<WorkspacePathBridgeSnapshotRecord>;
+  list(workspaceId: string, limit?: number): Promise<WorkspacePathBridgeSnapshotRecord[]>;
 }
 
 const SHA256 = /^[a-f0-9]{64}$/u;
@@ -85,7 +85,7 @@ export class WorkspacePathBridgeRuntime {
     // makes registration — not just tool execution — work off Windows.
     const bridgeDependencies = {
       repository: options.storage.workspacePathBridgeSnapshots,
-      allowedRootsForWorkspace: (workspaceId: string) => this.resolveAllowedRootsForWorkspace(workspaceId),
+      allowedRootsForWorkspace: async (workspaceId: string) => await this.resolveAllowedRootsForWorkspace(workspaceId),
       ...(options.realpath ? { realpath: options.realpath } : {}),
       ...(options.stat ? { stat: options.stat } : {}),
       ...(options.lstat ? { lstat: options.lstat } : {}),
@@ -104,7 +104,7 @@ export class WorkspacePathBridgeRuntime {
       workspaceDir: options.workspaceDir,
       writeJailRoots: options.writeJailRoots,
       hostPlatform: this.hostPlatform,
-      resolveSessionBinding: (sessionId) => this.resolveSessionBinding(sessionId),
+      resolveSessionBinding: async (sessionId) => await this.resolveSessionBinding(sessionId),
       ...(options.realpath ? { realpath: options.realpath } : {}),
       ...(options.stat ? { stat: options.stat } : {}),
       ...(options.lstat ? { lstat: options.lstat } : {}),
@@ -130,7 +130,7 @@ export class WorkspacePathBridgeRuntime {
    * other tool arguments never select a path source, project, or Git identity.
    */
   public async resolveSessionBinding(sessionId: string): Promise<WorkspacePathBridgeSessionBinding | undefined> {
-    const initial = this.readCanonicalSessionState(sessionId);
+    const initial = await this.readCanonicalSessionState(sessionId);
     if (!initial) {
       return undefined;
     }
@@ -148,7 +148,7 @@ export class WorkspacePathBridgeRuntime {
     }
 
     if (this.hostPlatform === "posix") {
-      const current = this.readCanonicalSessionState(sessionId);
+      const current = await this.readCanonicalSessionState(sessionId);
       if (!current?.project || !sameCanonicalSessionState(initial, current)) return undefined;
       return {
         workspaceId: initial.workspaceId,
@@ -185,7 +185,7 @@ export class WorkspacePathBridgeRuntime {
 
     // A project/session CAS that lands while Git is inspected invalidates this
     // attempt. A new project revision receives a new deterministic binding id.
-    const current = this.readCanonicalSessionState(sessionId);
+    const current = await this.readCanonicalSessionState(sessionId);
     if (!current?.project || !sameCanonicalSessionState(initial, current)) {
       return undefined;
     }
@@ -206,8 +206,8 @@ export class WorkspacePathBridgeRuntime {
     };
   }
 
-  private readCanonicalSessionState(sessionId: string): CanonicalSessionState | undefined {
-    const meta = this.options.storage.chatSessionMeta.get(sessionId);
+  private async readCanonicalSessionState(sessionId: string): Promise<CanonicalSessionState | undefined> {
+    const meta = await this.options.storage.chatSessionMeta.get(sessionId);
     if (
       !meta ||
       meta.lifecycleStatus !== "active" ||
@@ -217,15 +217,15 @@ export class WorkspacePathBridgeRuntime {
     ) {
       return undefined;
     }
-    const workspace = this.options.storage.workspaces.find(meta.workspaceId);
+    const workspace = await this.options.storage.workspaces.find(meta.workspaceId);
     if (!workspace || workspace.lifecycleStatus !== "active") {
       return undefined;
     }
-    const assignment = this.options.storage.chatSessionProjects.get(sessionId);
+    const assignment = await this.options.storage.chatSessionProjects.get(sessionId);
     if (!assignment) {
       return { sessionRevision: meta.revision, workspaceId: meta.workspaceId };
     }
-    const project = this.options.storage.chatProjects.find(assignment.projectId);
+    const project = await this.options.storage.chatProjects.find(assignment.projectId);
     if (
       !project ||
       project.lifecycleStatus !== "active" ||
@@ -247,8 +247,8 @@ export class WorkspacePathBridgeRuntime {
     };
   }
 
-  private resolveAllowedRootsForWorkspace(workspaceId: string): readonly string[] {
-    const workspace = this.options.storage.workspaces.find(workspaceId);
+  private async resolveAllowedRootsForWorkspace(workspaceId: string): Promise<readonly string[]> {
+    const workspace = await this.options.storage.workspaces.find(workspaceId);
     if (!workspace || workspace.lifecycleStatus !== "active") {
       return [];
     }

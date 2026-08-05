@@ -250,13 +250,13 @@ export interface BackfillResult {
 
 export interface BackfillStorage {
   readonly approvals: {
-    list(status?: ApprovalRequest["status"], limit?: number): readonly ApprovalRequest[];
-    setShellExplanations(approvalId: string, explanations: readonly ShellCommandExplanation[]): boolean;
+    list(status?: ApprovalRequest["status"], limit?: number): Promise<readonly ApprovalRequest[]>;
+    setShellExplanations(approvalId: string, explanations: readonly ShellCommandExplanation[]): Promise<boolean>;
   };
 }
 
-export function backfillMissingShellExplanations(storage: BackfillStorage, limit = 500): BackfillResult {
-  const pending = storage.approvals.list("pending", limit);
+export async function backfillMissingShellExplanations(storage: BackfillStorage, limit = 500): Promise<BackfillResult> {
+  const pending = await storage.approvals.list("pending", limit);
   let backfilled = 0;
   for (const approval of pending) {
     if (approval.shellExplanations && approval.shellExplanations.length > 0) {
@@ -267,7 +267,7 @@ export function backfillMissingShellExplanations(storage: BackfillStorage, limit
       continue;
     }
     const explanations = explainCommandsForApproval(commands);
-    storage.approvals.setShellExplanations(approval.approvalId, explanations);
+    await storage.approvals.setShellExplanations(approval.approvalId, explanations);
     backfilled++;
   }
   return { scanned: pending.length, backfilled };

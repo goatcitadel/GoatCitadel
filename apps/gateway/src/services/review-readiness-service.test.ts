@@ -32,7 +32,7 @@ describe("ReviewReadinessService", () => {
     }
   });
 
-  it("imports review findings idempotently into task records", () => {
+  it("imports review findings idempotently into task records", async () => {
     const tasks: TaskRecord[] = [];
     const activities: TaskActivityCreateInput[] = [];
     const deliverables: TaskDeliverableCreateInput[] = [];
@@ -87,7 +87,7 @@ describe("ReviewReadinessService", () => {
       },
     });
 
-    const first = service.importFindings({
+    const first = await service.importFindings({
       actorId: "reviewer",
       findings: [
         {
@@ -100,7 +100,7 @@ describe("ReviewReadinessService", () => {
         },
       ],
     });
-    const second = service.importFindings({
+    const second = await service.importFindings({
       actorId: "reviewer",
       findings: [
         {
@@ -123,7 +123,7 @@ describe("ReviewReadinessService", () => {
     expect(deliverables).toHaveLength(2);
   });
 
-  it("recognizes skill catalog proof nested inside the fast verification manifest", () => {
+  it("recognizes skill catalog proof nested inside the fast verification manifest", async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "goat-review-readiness-"));
     tempDirs.push(rootDir);
     const artifactDir = path.join(rootDir, "artifacts", "verification", "2026-05-27T00-00-00Z-fast");
@@ -147,14 +147,14 @@ describe("ReviewReadinessService", () => {
       } as never,
     });
 
-    const readiness = service.getReadiness();
+    const readiness = await service.getReadiness();
     expect(readiness.lanes.find((lane) => lane.lane === "skills-catalog")).toMatchObject({
       status: "current",
       artifactRef: path.join("artifacts", "verification", "2026-05-27T00-00-00Z-fast"),
     });
   });
 
-  it("projects release artifact proof rows from release-certificate.json when present", () => {
+  it("projects release artifact proof rows from release-certificate.json when present", async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "goat-review-readiness-"));
     tempDirs.push(rootDir);
     const releaseDir = path.join(rootDir, "artifacts", "release");
@@ -182,7 +182,7 @@ describe("ReviewReadinessService", () => {
       } as never,
     });
 
-    const releaseProof = service.getReadiness().releaseProof;
+    const releaseProof = (await service.getReadiness()).releaseProof;
     expect(releaseProof).toMatchObject({
       sourceCertificate: "release-certificate.json",
       exactShaStatus: "exact",
@@ -514,7 +514,7 @@ describe("ReviewReadinessService", () => {
     expect(release.reasonCodes).toContain("runtime_payload_integrity_unverified");
   });
 
-  it("keeps renamed .sig and .pem assets display-only and never treats filenames as trust proof", () => {
+  it("keeps renamed .sig and .pem assets display-only and never treats filenames as trust proof", async () => {
     const rootDir = makeIdentityRoot(tempDirs);
     const certificate = validCertificate();
     certificate.releaseAssets[0].signature = "self-declared-signature";
@@ -541,7 +541,7 @@ describe("ReviewReadinessService", () => {
       REPORTED_SIGNATURE_CONTENT,
     );
 
-    const readiness = createIdentityService(rootDir, { NODE_ENV: "production" }).getReadiness();
+    const readiness = await createIdentityService(rootDir, { NODE_ENV: "production" }).getReadiness();
     expect(
       readiness.releaseProof?.artifacts.find((artifact) => artifact.name === "GoatCitadel-1.0.0-windows-x64.exe")
         ?.signatureStatus,
@@ -913,7 +913,7 @@ describe("ReviewReadinessService", () => {
     );
   });
 
-  it("redacts and bounds certificate-controlled caveats and artifact fields", () => {
+  it("redacts and bounds certificate-controlled caveats and artifact fields", async () => {
     const rootDir = makeIdentityRoot(tempDirs);
     const certificate = validCertificate();
     certificate.acceptedFailures = [
@@ -922,7 +922,7 @@ describe("ReviewReadinessService", () => {
     certificate.releaseAssets[0].name = `C:\\Users\\private\\${"artifact-".repeat(40)}.zip`;
     writeCertificate(rootDir, certificate);
 
-    const readiness = createIdentityService(rootDir, { NODE_ENV: "production" }).getReadiness();
+    const readiness = await createIdentityService(rootDir, { NODE_ENV: "production" }).getReadiness();
     expect(readiness.runtimeIdentity.release.verified).toBe(false);
     expect(readiness.runtimeIdentity.release.acceptedFailures[0]?.length).toBeLessThanOrEqual(240);
     expect(readiness.runtimeIdentity.release.acceptedFailures[0]).not.toContain("ghp_");

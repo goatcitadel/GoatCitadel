@@ -1,4 +1,4 @@
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { GeneralChatPostCommitDurableEffectExecutionInput } from "./chat-durable-run-service.js";
 import type { GeneralChatPostCommitEffectExecutionContext } from "./durable-execution-service.js";
 import {
@@ -37,7 +37,7 @@ export interface ChatPostCommitPredispatchAuthorityInput {
 
 /** D2-owned implementation port; D3 deliberately knows no storage admission API. */
 export interface ChatPostCommitEffectAuthorityPort {
-  predispatch(input: ChatPostCommitPredispatchAuthorityInput): ChatPostCommitAuthorityDecision;
+  predispatch(input: ChatPostCommitPredispatchAuthorityInput): Promise<ChatPostCommitAuthorityDecision>;
   atomicStage: ChatPostCommitAtomicStageAuthorityPort;
 }
 
@@ -45,8 +45,8 @@ interface ChatPostCommitEffectServiceBaseDeps {
   readonly storage: ChatPostCommitEffectStoragePort;
   readonly commitmentClassifier: CommitmentClassifierService;
   readonly backgroundReview: BackgroundReviewService;
-  isAutonomyDisabled(): boolean;
-  publishRealtime(eventType: string, source: string, payload: Record<string, unknown>): void;
+  isAutonomyDisabled(): Promise<boolean>;
+  publishRealtime(eventType: string, source: string, payload: Record<string, unknown>): Promise<unknown>;
 }
 
 export type ChatPostCommitEffectServiceDeps = ChatPostCommitEffectServiceBaseDeps &
@@ -102,7 +102,7 @@ export class ChatPostCommitEffectService {
         result = await this.executeBackgroundReview(input, context);
         break;
       case "memory_maintenance":
-        result = this.executeMemoryMaintenance(input, context);
+        result = await this.executeMemoryMaintenance(input, context);
         break;
       default: {
         const exhaustive: never = input;
@@ -125,17 +125,17 @@ export class ChatPostCommitEffectService {
     context: GeneralChatPostCommitEffectExecutionContext,
   ): Promise<Record<string, unknown>> {
     const identity = this.stageIdentity(context, "commitments", "commitments_write");
-    const existing = readGeneralChatPostCommitStage(this.deps.storage, identity);
+    const existing = await readGeneralChatPostCommitStage(this.deps.storage, identity);
     if (existing) {
       return readGeneralChatPostCommitStageResult(existing);
     }
-    const predispatch = this.resolvePredispatch(context, "commitments");
+    const predispatch = await this.resolvePredispatch(context, "commitments");
     if (predispatch === "late_blocked") {
-      return this.commitLateBlocked(identity, context);
+      return await this.commitLateBlocked(identity, context);
     }
-    const eligibility = this.resolveEligibleHumanTurn(input);
+    const eligibility = await this.resolveEligibleHumanTurn(input);
     if (!eligibility.eligible) {
-      return this.commitResult(identity, context, eligibility.result);
+      return await this.commitResult(identity, context, eligibility.result);
     }
 
     const classifications = await this.deps.commitmentClassifier.classifyTurnForCommitments({
@@ -148,28 +148,30 @@ export class ChatPostCommitEffectService {
     });
     context.signal?.throwIfAborted();
     return readGeneralChatPostCommitStageResult(
-      commitGeneralChatPostCommitStage(
-        this.deps.storage,
-        identity,
-        () => {
-          const persisted = this.deps.commitmentClassifier.persistTurnCommitments(
-            {
-              sessionId: input.sessionId,
-              workspaceId: input.workspaceId,
-              userText: input.userText,
-              assistantText: input.assistantText,
-              ...eligibility.guards,
-              ...(context.signal ? { signal: context.signal } : {}),
-            },
-            classifications,
-            { strict: true },
-          );
-          return {
-            value: persisted,
-            result: { status: "classified", persistedCount: persisted.length },
-          };
-        },
-        this.stageCommitOptions(context, true),
+      (
+        await commitGeneralChatPostCommitStage(
+          this.deps.storage,
+          identity,
+          async () => {
+            const persisted = await this.deps.commitmentClassifier.persistTurnCommitments(
+              {
+                sessionId: input.sessionId,
+                workspaceId: input.workspaceId,
+                userText: input.userText,
+                assistantText: input.assistantText,
+                ...eligibility.guards,
+                ...(context.signal ? { signal: context.signal } : {}),
+              },
+              classifications,
+              { strict: true },
+            );
+            return {
+              value: persisted,
+              result: { status: "classified", persistedCount: persisted.length },
+            };
+          },
+          this.stageCommitOptions(context, true),
+        )
       ).receipt,
     );
   }
@@ -179,46 +181,50 @@ export class ChatPostCommitEffectService {
     context: GeneralChatPostCommitEffectExecutionContext,
   ): Promise<Record<string, unknown>> {
     const evidenceIdentity = this.stageIdentity(context, "background_review", "background_evidence");
-    const existingEvidence = readGeneralChatPostCommitStage(this.deps.storage, evidenceIdentity);
+    const existingEvidence = await readGeneralChatPostCommitStage(this.deps.storage, evidenceIdentity);
     if (existingEvidence) {
-      return readGeneralChatPostCommitStageResult(existingEvidence);
+      const result = readGeneralChatPostCommitStageResult(existingEvidence);
+      await this.publishBackgroundReviewEvidenceIfRecorded(input, context, result, existingEvidence.completedAt);
+      return result;
     }
     const counterIdentity = this.stageIdentity(context, "background_review", "background_counter");
-    const existingCounter = readGeneralChatPostCommitStage(this.deps.storage, counterIdentity);
+    const existingCounter = await readGeneralChatPostCommitStage(this.deps.storage, counterIdentity);
     // A late nonterminal guard cancels the child admission. Its content-free
     // receipt is therefore the terminal effect result; never attempt a second
     // evidence-stage settlement against that already-closed admission.
     if (existingCounter?.disposition === "late_blocked") {
       return readGeneralChatPostCommitStageResult(existingCounter);
     }
-    const predispatch = this.resolvePredispatch(context, "background_review");
+    const predispatch = await this.resolvePredispatch(context, "background_review");
     if (predispatch === "late_blocked") {
-      return this.commitLateBlocked(evidenceIdentity, context);
+      return await this.commitLateBlocked(evidenceIdentity, context);
     }
-    const eligibility = this.resolveEligibleHumanTurn(input);
+    const eligibility = await this.resolveEligibleHumanTurn(input);
     if (!eligibility.eligible) {
-      return this.commitResult(evidenceIdentity, context, eligibility.result);
+      return await this.commitResult(evidenceIdentity, context, eligibility.result);
     }
     if (input.delegatedChild) {
-      return this.commitResult(evidenceIdentity, context, { status: "skipped", reason: "delegated_child" });
+      return await this.commitResult(evidenceIdentity, context, { status: "skipped", reason: "delegated_child" });
     }
 
     const counter =
       existingCounter ??
-      commitGeneralChatPostCommitStage(
-        this.deps.storage,
-        counterIdentity,
-        () => {
-          const due = this.advanceBackgroundReviewCounter();
-          return { value: due, result: { due } };
-        },
-        this.stageCommitOptions(context, false),
+      (
+        await commitGeneralChatPostCommitStage(
+          this.deps.storage,
+          counterIdentity,
+          async () => {
+            const due = await this.advanceBackgroundReviewCounter();
+            return { value: due, result: { due } };
+          },
+          this.stageCommitOptions(context, false),
+        )
       ).receipt;
     if (counter.disposition === "late_blocked") {
       return readGeneralChatPostCommitStageResult(counter);
     }
     if (counter.result.due !== true) {
-      return this.commitResult(evidenceIdentity, context, { status: "skipped", reason: "counter_not_due" });
+      return await this.commitResult(evidenceIdentity, context, { status: "skipped", reason: "counter_not_due" });
     }
 
     const lineage = {
@@ -244,59 +250,43 @@ export class ChatPostCommitEffectService {
 
     const memoryEvidenceFingerprints = buildBackgroundReviewMemoryEvidenceFingerprints(facts);
     const skillEvidenceFingerprint = buildBackgroundReviewSkillEvidenceFingerprint(suggestion);
-    const result = readGeneralChatPostCommitStageResult(
-      commitGeneralChatPostCommitStage(
-        this.deps.storage,
-        evidenceIdentity,
-        () => ({
-          value: undefined,
-          result: {
-            status: "evidence_recorded",
-            memoryFactCount: memoryEvidenceFingerprints.length,
-            memoryEvidenceFingerprints,
-            skillProposed: Boolean(skillEvidenceFingerprint),
-            ...(skillEvidenceFingerprint ? { skillEvidenceFingerprint } : {}),
-            promotionDisposition: "governed_review_required",
-          },
-        }),
-        this.stageCommitOptions(context, true),
-      ).receipt,
-    );
-    if (result.status === "evidence_recorded") {
-      this.publishIdempotent(
-        "self_improvement_review",
-        "system",
-        {
-          type: "background_review_evidence",
-          sessionId: input.sessionId,
-          workspaceId: input.workspaceId,
-          memoryFactCount: readNumber(result.memoryFactCount),
-          skillProposed: result.skillProposed === true,
+    const evidenceCommit = await commitGeneralChatPostCommitStage(
+      this.deps.storage,
+      evidenceIdentity,
+      async () => ({
+        value: undefined,
+        result: {
+          status: "evidence_recorded",
+          memoryFactCount: memoryEvidenceFingerprints.length,
+          memoryEvidenceFingerprints,
+          skillProposed: Boolean(skillEvidenceFingerprint),
+          ...(skillEvidenceFingerprint ? { skillEvidenceFingerprint } : {}),
           promotionDisposition: "governed_review_required",
         },
-        `${context.effectRunId}:background-review-evidence`,
-        new Date().toISOString(),
-      );
-    }
+      }),
+      this.stageCommitOptions(context, true),
+    );
+    const result = readGeneralChatPostCommitStageResult(evidenceCommit.receipt);
+    await this.publishBackgroundReviewEvidenceIfRecorded(input, context, result, evidenceCommit.receipt.completedAt);
     return result;
   }
 
-  private executeMemoryMaintenance(
+  private async executeMemoryMaintenance(
     input: Extract<GeneralChatPostCommitDurableEffectExecutionInput, { effect: "memory_maintenance" }>,
     context: GeneralChatPostCommitEffectExecutionContext,
-  ): Record<string, unknown> {
+  ): Promise<Record<string, unknown>> {
     const identity = this.stageIdentity(context, "memory_maintenance", "memory_maintenance_evaluation");
-    const existing = readGeneralChatPostCommitStage(this.deps.storage, identity);
+    const existing = await readGeneralChatPostCommitStage(this.deps.storage, identity);
     if (existing) {
       return readGeneralChatPostCommitStageResult(existing);
     }
-    const predispatch = this.resolvePredispatch(context, "memory_maintenance");
+    const predispatch = await this.resolvePredispatch(context, "memory_maintenance");
     if (predispatch === "late_blocked") {
-      return this.commitLateBlocked(identity, context);
+      return await this.commitLateBlocked(identity, context);
     }
-    const eligibility = this.resolveEligibleHumanTurn({ ...input, autonomous: false });
+    const eligibility = await this.resolveEligibleHumanTurn({ ...input, autonomous: false });
     if (!eligibility.eligible) {
-      return this.commitResult(identity, context, eligibility.result);
+      return await this.commitResult(identity, context, eligibility.result);
     }
     const result = input.delegatedChild
       ? { status: "skipped", reason: "delegated_child" }
@@ -305,12 +295,12 @@ export class ChatPostCommitEffectService {
           reason: "governed_memory_promotion_not_implemented",
           enqueueDisposition: "not_enqueued",
         };
-    return this.commitResult(identity, context, result);
+    return await this.commitResult(identity, context, result);
   }
 
-  private resolveEligibleHumanTurn(
+  private async resolveEligibleHumanTurn(
     input: EligibilityAwareEffectInput | (EligibilityAwareEffectInput & { autonomous: boolean }),
-  ): HumanTurnEligibility {
+  ): Promise<HumanTurnEligibility> {
     const frozen = readFrozenEligibility(input.postCommitEligibility);
     if (!frozen) {
       return { eligible: false, result: { status: "skipped", reason: "frozen_eligibility_invalid" } };
@@ -318,7 +308,7 @@ export class ChatPostCommitEffectService {
     if ("autonomous" in input && input.autonomous) {
       return { eligible: false, result: { status: "skipped", reason: "autonomous_turn" } };
     }
-    if (!frozen.autonomyEnabledAtParentSettlement || this.deps.isAutonomyDisabled()) {
+    if (!frozen.autonomyEnabledAtParentSettlement || (await this.deps.isAutonomyDisabled())) {
       return { eligible: false, result: { status: "skipped", reason: "autonomy_disabled" } };
     }
     if (frozen.evalIntegrityTurn || !frozen.humanSession) {
@@ -333,22 +323,24 @@ export class ChatPostCommitEffectService {
     };
   }
 
-  private advanceBackgroundReviewCounter(): boolean {
-    return this.deps.storage.systemSettings.advanceCyclicCounter(
-      BACKGROUND_REVIEW_TURNS_SINCE_SETTING_KEY,
-      BACKGROUND_REVIEW_TURN_INTERVAL,
+  private async advanceBackgroundReviewCounter(): Promise<boolean> {
+    return (
+      await this.deps.storage.systemSettings.advanceCyclicCounter(
+        BACKGROUND_REVIEW_TURNS_SINCE_SETTING_KEY,
+        BACKGROUND_REVIEW_TURN_INTERVAL,
+      )
     ).due;
   }
 
-  private resolvePredispatch(
+  private async resolvePredispatch(
     context: GeneralChatPostCommitEffectExecutionContext,
     effect: GeneralChatPostCommitCanonicalEffect,
-  ): ChatPostCommitAuthorityDecision {
+  ): Promise<ChatPostCommitAuthorityDecision> {
     const authority = this.resolveAuthority(context);
     if (!authority) {
       return "allowed";
     }
-    const decision = this.deps.effectAuthority!.predispatch({
+    const decision = await this.deps.effectAuthority!.predispatch({
       authority,
       parentRunId: context.parentRunId,
       postCommitGenerationId: context.generationId,
@@ -360,33 +352,37 @@ export class ChatPostCommitEffectService {
     return decision;
   }
 
-  private commitResult(
+  private async commitResult(
     identity: GeneralChatPostCommitStageIdentity,
     context: GeneralChatPostCommitEffectExecutionContext,
     result: Record<string, unknown>,
-  ): Record<string, unknown> {
+  ): Promise<Record<string, unknown>> {
     return readGeneralChatPostCommitStageResult(
-      commitGeneralChatPostCommitStage(
-        this.deps.storage,
-        identity,
-        () => ({ value: undefined, result }),
-        this.stageCommitOptions(context, true),
+      (
+        await commitGeneralChatPostCommitStage(
+          this.deps.storage,
+          identity,
+          async () => ({ value: undefined, result }),
+          this.stageCommitOptions(context, true),
+        )
       ).receipt,
     );
   }
 
-  private commitLateBlocked(
+  private async commitLateBlocked(
     identity: GeneralChatPostCommitStageIdentity,
     context: GeneralChatPostCommitEffectExecutionContext,
-  ): Record<string, unknown> {
+  ): Promise<Record<string, unknown>> {
     return readGeneralChatPostCommitStageResult(
-      commitGeneralChatPostCommitStage(
-        this.deps.storage,
-        identity,
-        () => {
-          throw new Error("late-blocked Chat post-commit stages must never apply domain content");
-        },
-        { ...this.stageCommitOptions(context, true), forcedDisposition: "late_blocked" },
+      (
+        await commitGeneralChatPostCommitStage(
+          this.deps.storage,
+          identity,
+          async () => {
+            throw new Error("late-blocked Chat post-commit stages must never apply domain content");
+          },
+          { ...this.stageCommitOptions(context, true), forcedDisposition: "late_blocked" },
+        )
       ).receipt,
     );
   }
@@ -405,9 +401,9 @@ export class ChatPostCommitEffectService {
             port: this.deps.effectAuthority!.atomicStage,
             terminal,
           },
-          denyOnlyBlocked: () => this.deps.isAutonomyDisabled(),
+          denyOnlyBlocked: async () => await this.deps.isAutonomyDisabled(),
         }
-      : { denyOnlyBlocked: () => this.deps.isAutonomyDisabled() };
+      : { denyOnlyBlocked: async () => await this.deps.isAutonomyDisabled() };
   }
 
   private resolveAuthority(
@@ -511,17 +507,42 @@ export class ChatPostCommitEffectService {
     };
   }
 
-  private publishIdempotent(
+  private async publishIdempotent(
     eventType: string,
     source: string,
     payload: Record<string, unknown>,
     deliveryId: string,
     occurredAt: string,
-  ): void {
-    this.deps.publishRealtime(eventType, source, {
+  ): Promise<void> {
+    await this.deps.publishRealtime(eventType, source, {
       ...payload,
       [IDEMPOTENT_REALTIME_ENVELOPE_KEY]: { deliveryId, occurredAt },
     });
+  }
+
+  private async publishBackgroundReviewEvidenceIfRecorded(
+    input: Extract<GeneralChatPostCommitDurableEffectExecutionInput, { effect: "background_review" }>,
+    context: GeneralChatPostCommitEffectExecutionContext,
+    result: Record<string, unknown>,
+    occurredAt: string,
+  ): Promise<void> {
+    if (result.status !== "evidence_recorded") {
+      return;
+    }
+    await this.publishIdempotent(
+      "self_improvement_review",
+      "system",
+      {
+        type: "background_review_evidence",
+        sessionId: input.sessionId,
+        workspaceId: input.workspaceId,
+        memoryFactCount: readNumber(result.memoryFactCount),
+        skillProposed: result.skillProposed === true,
+        promotionDisposition: "governed_review_required",
+      },
+      `${context.effectRunId}:background-review-evidence`,
+      occurredAt,
+    );
   }
 }
 

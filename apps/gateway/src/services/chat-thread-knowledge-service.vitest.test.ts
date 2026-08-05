@@ -156,8 +156,8 @@ describe("chat-thread-knowledge-service vitest coverage", () => {
       updatedAt: "2026-05-14T00:00:00.000Z",
     });
 
-    expect(listChatThreadKnowledgeAttachments(host, ` ${session.sessionId} `)).toHaveLength(1);
-    expect(() => listChatThreadKnowledgeAttachments(host, "   ")).toThrow(/sessionId|FIELD_REQUIRED/);
+    await expect(listChatThreadKnowledgeAttachments(host, ` ${session.sessionId} `)).resolves.toHaveLength(1);
+    await expect(listChatThreadKnowledgeAttachments(host, "   ")).rejects.toThrow(/sessionId|FIELD_REQUIRED/);
   });
 
   it("attaches text files as full-text knowledge using decoded file bytes before extracted previews", async () => {
@@ -387,10 +387,10 @@ describe("chat-thread-knowledge-service vitest coverage", () => {
       updatedAt: "2026-05-14T00:00:00.000Z",
     });
 
-    expect(() => removeChatThreadKnowledgeAttachment(host, otherSession.sessionId, "knowledge-owned")).toThrow(
+    await expect(removeChatThreadKnowledgeAttachment(host, otherSession.sessionId, "knowledge-owned")).rejects.toThrow(
       /does not belong/,
     );
-    expect(removeChatThreadKnowledgeAttachment(host, session.sessionId, "knowledge-owned")).toEqual({
+    await expect(removeChatThreadKnowledgeAttachment(host, session.sessionId, "knowledge-owned")).resolves.toEqual({
       deleted: true,
       attachmentId: "knowledge-owned",
     });

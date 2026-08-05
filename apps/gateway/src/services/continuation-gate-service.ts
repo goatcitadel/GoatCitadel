@@ -1,5 +1,5 @@
 import type { ContinuationGateDecision, ContinuationGateMetrics } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 
 export interface ContinuationGateEvaluateInput {
   metrics: Partial<ContinuationGateMetrics>;
@@ -17,7 +17,7 @@ export interface ContinuationGateRecordInput {
 
 export interface ContinuationGateServiceDependencies {
   storage: Storage;
-  publishRealtime?: (eventType: string, source: string, payload: Record<string, unknown>) => void;
+  publishRealtime?: (eventType: string, source: string, payload: Record<string, unknown>) => Promise<unknown>;
 }
 
 export class ContinuationGateService {
@@ -73,11 +73,13 @@ export class ContinuationGateService {
     };
   }
 
-  public recordNonContinueCheckpoint(input: ContinuationGateRecordInput): { checkpointId: string } | undefined {
+  public async recordNonContinueCheckpoint(
+    input: ContinuationGateRecordInput,
+  ): Promise<{ checkpointId: string } | undefined> {
     if (input.decision.decision === "continue") {
       return undefined;
     }
-    const checkpoint = this.deps.storage.durableRuns.createCheckpoint({
+    const checkpoint = await this.deps.storage.durableRuns.createCheckpoint({
       runId: input.runId,
       checkpointKind: "continuation_gate",
       state: {
@@ -85,7 +87,7 @@ export class ContinuationGateService {
       },
       createdAt: input.decision.createdAt,
     });
-    this.deps.publishRealtime?.("continuation_gate_checkpoint", "cowork", {
+    await this.deps.publishRealtime?.("continuation_gate_checkpoint", "cowork", {
       runId: input.runId,
       checkpointId: checkpoint.checkpointId,
       decision: input.decision.decision,

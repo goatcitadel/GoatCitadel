@@ -1471,6 +1471,24 @@ export interface ChatTurnTraceRecord {
     effectiveModel?: string;
     effectiveApiStyle?: import("./llm.js").LlmApiStyle;
     liveDataIntent?: boolean;
+    executionBudget?: {
+      profile:
+        | "quick_web"
+        | "quick"
+        | "off"
+        | "live_data"
+        | "deep"
+        | "cowork_research_list"
+        | "research_artifact"
+        | "default";
+      promotionReason?: "explicit_research_artifact";
+      turnBudgetMs: number;
+      completionTimeoutMs: number;
+      maxToolLoops: number;
+      maxToolRunsPerTurn: number;
+      searchMaxResults: number;
+      maxTokens?: number;
+    };
     primaryProviderId?: string;
     primaryModel?: string;
     primaryApiStyle?: import("./llm.js").LlmApiStyle;

@@ -40,11 +40,11 @@ export interface AuthAdminRoutePort {
   getCompanionSessionInfo(sessionId: string): unknown;
   getCompanionSessionRecord(sessionId: string): unknown;
   getDeviceAccessRequestStatus(requestId: string, secret: string): unknown;
-  getRetentionPolicy(): RetentionPolicy;
+  getRetentionPolicy(): Promise<RetentionPolicy>;
   listBackups(limit: number): Promise<BackupManifestRecord[]>;
   listCompanionAuditEvents(input?: CompanionAuditListOptions): unknown;
   listCompanionSessions(input?: CompanionSessionListOptions): unknown;
-  listDeviceAccessGrants(): DeviceAccessGrantContractRecord[];
+  listDeviceAccessGrants(): Promise<DeviceAccessGrantContractRecord[]>;
   pruneRetention(input: { dryRun?: boolean }): Promise<RetentionPruneResult>;
   resolveGatewayInstallToken(input: unknown): unknown;
   revokeCompanionSession(sessionId: string, actorId: string, options?: { correlationId?: string }): unknown;
@@ -55,7 +55,7 @@ export interface AuthAdminRoutePort {
   ): Promise<DeviceAccessGrantContractRecord>;
   rotateCompanionSession(input: CompanionSessionRefreshInput): unknown;
   runDatabaseCutover(input: DatabaseCutoverRequest): Promise<DatabaseCutoverResponse>;
-  updateRetentionPolicy(patch: Partial<RetentionPolicy>): RetentionPolicy;
+  updateRetentionPolicy(patch: Partial<RetentionPolicy>): Promise<RetentionPolicy>;
   verifyBackup(input: unknown): unknown;
   verifyDatabaseCutover(input: unknown): unknown;
 }

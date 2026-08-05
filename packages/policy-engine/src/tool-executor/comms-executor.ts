@@ -3,7 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import type { ChannelDeliveryStatus, ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
 import { clampInt, coerceRetryAfterMs, sanitizeChannelOutboundMessage } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage } from "@goatcitadel/storage";
 import { assertHostAllowed, fetchAllowlistedOnce, redactUrlForError } from "../sandbox/network-guard.js";
 import { assertSafeRedirectTransition, isHttpRequestSafeToRetry } from "../sandbox/http-request-policy.js";
 import { sanitizeForAudit } from "../tool-security.js";
@@ -24,14 +24,14 @@ const commsRequestBoundaryContext = new AsyncLocalStorage<{
 interface ApprovalActionSecretRuntime {
   resolveApprovalActionTokenSecret?: (secretRef: string) => string;
   deleteApprovalActionTokenSecret?: (secretRef: string) => void;
-  isApprovalActionConnectorReady?: (connectionId: string) => boolean;
+  isApprovalActionConnectorReady?: (connectionId: string) => Promise<boolean>;
   beforeExternalSideEffect?: () => void;
 }
 
 export async function executeCommsTool(
   request: ToolInvokeRequest,
   config: ToolPolicyConfig,
-  storage: Storage,
+  storage: AsyncStorage,
   grantAllowlist?: string[],
   approvalActionSecrets: ApprovalActionSecretRuntime = {},
 ): Promise<Record<string, unknown>> {
@@ -49,7 +49,7 @@ export async function executeCommsTool(
 async function executeCommsToolWithBoundaryTracking(
   request: ToolInvokeRequest,
   config: ToolPolicyConfig,
-  storage: Storage,
+  storage: AsyncStorage,
   grantAllowlist?: string[],
   approvalActionSecrets: ApprovalActionSecretRuntime = {},
 ): Promise<Record<string, unknown>> {
@@ -57,12 +57,12 @@ async function executeCommsToolWithBoundaryTracking(
   const args = request.args;
   assertNoRawRemoteApprovalBearer(args);
   const connectionId = required(args.connectionId, "connectionId");
-  const connection = storage.integrationConnections.get(connectionId);
+  const connection = await storage.integrationConnections.get(connectionId);
   const connectionConfig = record(connection.config);
   const target =
     asString(args.target) ?? resolveDefaultChannelTarget(connection.key, connectionConfig) ?? connection.key;
   const message = asString(args.message) ?? "";
-  const queued = storage.commsDeliveries.createQueued({
+  const queued = await storage.commsDeliveries.createQueued({
     connectionId,
     channelKey: connection.key,
     target,
@@ -76,15 +76,15 @@ async function executeCommsToolWithBoundaryTracking(
     assertIntegrationConnectionAvailable(connection);
     if (toolName === "gmail.read") {
       const records = await gmailRead(connectionConfig, args, config.sandbox.networkAllowlist, grantAllowlist);
-      storage.commsDeliveries.markSent(queued.deliveryId, "gmail-read");
+      await storage.commsDeliveries.markSent(queued.deliveryId, "gmail-read");
       return { ...queued, status: "sent", deliveryStatus: "sent", providerMessageId: "gmail-read", records };
     }
     if (toolName === "calendar.list") {
       const records = await calendarList(connectionConfig, args, config.sandbox.networkAllowlist, grantAllowlist);
-      storage.commsDeliveries.markSent(queued.deliveryId, "calendar-list");
+      await storage.commsDeliveries.markSent(queued.deliveryId, "calendar-list");
       return { ...queued, status: "sent", deliveryStatus: "sent", providerMessageId: "calendar-list", records };
     }
-    const providerRequest = hydrateProtectedApprovalActionAtProviderBoundary(
+    const providerRequest = await hydrateProtectedApprovalActionAtProviderBoundary(
       request,
       connection.connectionId,
       connection.key,
@@ -102,7 +102,7 @@ async function executeCommsToolWithBoundaryTracking(
       target,
       message,
     );
-    storage.commsDeliveries.markSent(queued.deliveryId, providerMessageId);
+    await storage.commsDeliveries.markSent(queued.deliveryId, providerMessageId);
     deleteApprovalActionTokenBestEffort(approvalActionSecrets, protectedApprovalTokenRef);
     return {
       ...queued,
@@ -139,7 +139,7 @@ async function executeCommsToolWithBoundaryTracking(
     }
     try {
       if (providerMessageId) {
-        storage.commsDeliveries.markFailed(
+        await storage.commsDeliveries.markFailed(
           queued.deliveryId,
           errorMessage,
           new Date().toISOString(),
@@ -148,7 +148,12 @@ async function executeCommsToolWithBoundaryTracking(
           providerMessageId,
         );
       } else {
-        storage.commsDeliveries.markFailed(queued.deliveryId, errorMessage, new Date().toISOString(), deliveryStatus);
+        await storage.commsDeliveries.markFailed(
+          queued.deliveryId,
+          errorMessage,
+          new Date().toISOString(),
+          deliveryStatus,
+        );
       }
     } catch (persistenceError) {
       const detail = persistenceError instanceof Error ? persistenceError.message : String(persistenceError);
@@ -166,13 +171,13 @@ async function executeCommsToolWithBoundaryTracking(
   }
 }
 
-function hydrateProtectedApprovalActionAtProviderBoundary(
+async function hydrateProtectedApprovalActionAtProviderBoundary(
   request: ToolInvokeRequest,
   connectionId: string,
   connectionKey: string,
-  storage: Storage,
+  storage: AsyncStorage,
   runtime: ApprovalActionSecretRuntime,
-): { args: Record<string, unknown>; secretRef?: string } {
+): Promise<{ args: Record<string, unknown>; secretRef?: string }> {
   const templateValue = request.args.interactiveActionTemplate;
   if (templateValue === undefined) {
     assertNoRawRemoteApprovalBearer(request.args);
@@ -209,10 +214,10 @@ function hydrateProtectedApprovalActionAtProviderBoundary(
   ) {
     throw new Error("blocked: Protected approval action template is invalid or mismatched.");
   }
-  if (runtime.isApprovalActionConnectorReady?.(connectionId) !== true) {
+  if ((await runtime.isApprovalActionConnectorReady?.(connectionId)) !== true) {
     throw new Error("blocked: Authenticated Telegram approval callback ingress is not currently ready.");
   }
-  const tokenRecord = storage.remoteActionTokens.get(tokenId);
+  const tokenRecord = await storage.remoteActionTokens.get(tokenId);
   if (
     tokenRecord.actionType !== "approval.resolve" ||
     tokenRecord.connectorId !== `integration:${connectionId}` ||

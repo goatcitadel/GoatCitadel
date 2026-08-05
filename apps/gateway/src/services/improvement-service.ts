@@ -19,7 +19,7 @@ import {
   type TaskRecord,
 } from "@goatcitadel/contracts";
 import { logger } from "@goatcitadel/gateway-core";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { CronSpecMutationOwner } from "./cron-config-generation-owner.js";
 import { assertNoAssembledPromptInjection } from "./assembled-prompt-injection-guard.js";
 import { trackBackgroundTask } from "./background-scheduler.js";
@@ -212,19 +212,26 @@ const IMPROVEMENT_SIGNAL_EVIDENCE_REF_LIMIT = 8;
 export interface ImprovementServiceContext {
   readonly storage: Pick<
     Storage,
-    "approvals" | "approvalEvents" | "chatTurnTraces" | "cronJobs" | "governanceJourneyEvents" | "systemSettings"
+    | "approvals"
+    | "approvalEvents"
+    | "chatTurnTraces"
+    | "cronJobs"
+    | "db"
+    | "governanceJourneyEvents"
+    | "improvementLifecycleOperations"
+    | "runImmediateTransaction"
+    | "systemSettings"
   >;
   readonly cronSpecOwner?: Pick<CronSpecMutationOwner, "reconcileSpec">;
-  readonly gatewaySql: Storage["gatewaySql"];
-  isFeatureEnabled(flag: keyof RuntimeSettings["features"]): boolean;
-  requireFeatureEnabled(flag: keyof RuntimeSettings["features"]): void;
+  isFeatureEnabled(flag: keyof RuntimeSettings["features"]): Promise<boolean>;
+  requireFeatureEnabled(flag: keyof RuntimeSettings["features"]): Promise<void>;
   normalizeWorkspaceId(workspaceId?: string): string;
   publishRealtime(
     channel: string,
     topic: string,
     payload: Record<string, unknown>,
     options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
-  ): void;
+  ): Promise<unknown>;
 }
 const IMPROVEMENT_SUPPRESSION_MS = 7 * 24 * 60 * 60 * 1000;
 const IMPROVEMENT_WATCH_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -407,36 +414,34 @@ export interface SurfaceRouteOverrideExemplar {
  */
 export interface ImprovementServiceCallbacks {
   createApproval(input: ApprovalCreateInput): Promise<ApprovalRequest>;
-  captureRepairPolicySnapshot(targetKey: string): ImprovementRef;
-  applyRepairPolicyCandidate(targetKey: string, revisionRef: ImprovementRef): ImprovementRef;
-  restoreRepairPolicySnapshot(snapshotRef: ImprovementRef): void;
-  captureRoutingPolicySnapshot(targetKey: string): ImprovementRef;
-  applyRoutingPolicyCandidate(targetKey: string, revisionRef: ImprovementRef): ImprovementRef;
-  restoreRoutingPolicySnapshot(snapshotRef: ImprovementRef): void;
+  captureRepairPolicySnapshot(targetKey: string): Promise<ImprovementRef>;
+  applyRepairPolicyCandidate(targetKey: string, revisionRef: ImprovementRef): Promise<ImprovementRef>;
+  restoreRepairPolicySnapshot(snapshotRef: ImprovementRef): Promise<void>;
+  captureRoutingPolicySnapshot(targetKey: string): Promise<ImprovementRef>;
+  applyRoutingPolicyCandidate(targetKey: string, revisionRef: ImprovementRef): Promise<ImprovementRef>;
+  restoreRoutingPolicySnapshot(snapshotRef: ImprovementRef): Promise<void>;
   // S2 — skill self-authoring. The gateway delegates these to SkillMutationService.
   // applySkillRevisionCandidate writes the authored SKILL.md, records the
   // candidate lifecycle, and (only under master autonomy) promotes it to a
   // callable `approved` state via this recorded activation. isSkillCallable is
   // never bypassed; promotion is reversible by restoreSkillRevisionSnapshot.
-  // These are synchronous to fit the activation state machine (the policy
-  // callbacks above are sync); the gateway delegate uses synchronous fs.
-  captureSkillRevisionSnapshot(targetKey: string, revisionRef: ImprovementRef): ImprovementRef;
-  applySkillRevisionCandidate(targetKey: string, revisionRef: ImprovementRef): ImprovementRef;
-  restoreSkillRevisionSnapshot(snapshotRef: ImprovementRef): void;
+  captureSkillRevisionSnapshot(targetKey: string, revisionRef: ImprovementRef): Promise<ImprovementRef>;
+  applySkillRevisionCandidate(targetKey: string, revisionRef: ImprovementRef): Promise<ImprovementRef>;
+  restoreSkillRevisionSnapshot(snapshotRef: ImprovementRef): Promise<void>;
   createChatCompletion(
     request: ChatCompletionRequest,
     attribution: ModelUsageAttributionContext,
   ): Promise<ChatCompletionResponse>;
-  getPromptRunnerModelDefaults(): { providerId?: string; model?: string };
+  getPromptRunnerModelDefaults(): Promise<{ providerId?: string; model?: string }>;
   // P2-W3 — close the improvement loop. These getters report the *effective*
   // value the runtime decision points will read for each tuned setting, using
   // the same translation the readers use (improvement-tune-reads.ts). The tuner
   // is storage-only: it writes the raw setting, then records the effective value
   // these return on the applied auto-tune so the loop is auditable and every
   // written key is demonstrably read at its decision point.
-  readEffectiveBlockerTemplateStrictness(): number;
-  readEffectiveRetryRepairThreshold(): number;
-  readEffectiveLiveIntentThreshold(): number;
+  readEffectiveBlockerTemplateStrictness(): Promise<number>;
+  readEffectiveRetryRepairThreshold(): Promise<number>;
+  readEffectiveLiveIntentThreshold(): Promise<number>;
   // Cross-cutting kill-switch & rollback. Fired after an auto-tune is applied so
   // the gateway can append a unified autonomy-audit entry. The tune row already
   // holds its own rollback snapshot, so the restoreRef is just the tuneId; revert
@@ -536,14 +541,16 @@ export class ImprovementService {
   // statement on every call during improvement passes; each query has at most a
   // couple of static variants (workspace-filtered vs unfiltered), so caching by
   // SQL text compiles each variant exactly once while preserving query semantics.
-  private readonly preparedCache = new Map<string, ReturnType<ImprovementServiceContext["gatewaySql"]["prepare"]>>();
+  private readonly preparedCache = new Map<string, ReturnType<ImprovementServiceContext["storage"]["db"]["prepare"]>>();
 
   constructor(
     private readonly ctx: ImprovementServiceContext,
     private readonly callbacks: ImprovementServiceCallbacks,
-  ) {
-    this.ensureCapabilityGapTables();
-    this.ensureImprovementLedgerTables();
+  ) {}
+
+  public async initialize(): Promise<void> {
+    await this.ensureCapabilityGapTables();
+    await this.ensureImprovementLedgerTables();
   }
 
   /**
@@ -551,12 +558,12 @@ export class ImprovementService {
    * first use. Callers must pass a stable SQL string (no per-call interpolation
    * of values — use bound `@params`) so the cache key space stays bounded.
    */
-  private prepareCached(sql: string): ReturnType<ImprovementServiceContext["gatewaySql"]["prepare"]> {
+  private prepareCached(sql: string): ReturnType<ImprovementServiceContext["storage"]["db"]["prepare"]> {
     const cached = this.preparedCache.get(sql);
     if (cached) {
       return cached;
     }
-    const stmt = this.ctx.gatewaySql.prepare(sql);
+    const stmt = this.ctx.storage.db.prepare(sql);
     this.preparedCache.set(sql, stmt);
     return stmt;
   }
@@ -568,10 +575,10 @@ export class ImprovementService {
       return;
     }
     this.scheduler = setInterval(() => {
-      const task = this.runSchedulerTick().catch((error) => {
+      const task = this.runSchedulerTick().catch(async (error) => {
         log.error("scheduler tick failed", { error: error instanceof Error ? error.message : String(error) });
         try {
-          this.ctx.publishRealtime("system", "improvement", {
+          await this.ctx.publishRealtime("system", "improvement", {
             type: "improvement_scheduler_error",
             message: error instanceof Error ? error.message : String(error),
           });
@@ -599,8 +606,8 @@ export class ImprovementService {
     if (this.callbacks.closing) {
       return;
     }
-    this.reconcilePendingActivationApprovals();
-    this.reconcileActiveWatchWindows();
+    await this.reconcilePendingActivationApprovals();
+    await this.reconcileActiveWatchWindows();
     await this.runWeeklyImprovementSchedulerIfDue();
   }
 
@@ -609,7 +616,7 @@ export class ImprovementService {
   async runWeeklyImprovementSchedulerIfDue(
     options: { force?: boolean; recordCronState?: boolean } = {},
   ): Promise<void> {
-    const job = this.ctx.storage.cronJobs.get(IMPROVEMENT_WEEKLY_JOB_ID);
+    const job = await this.ctx.storage.cronJobs.get(IMPROVEMENT_WEEKLY_JOB_ID);
     if (!job?.enabled) {
       return;
     }
@@ -622,7 +629,8 @@ export class ImprovementService {
       }
     }
     const weekKey = toWeekKeyForTimezone(now, IMPROVEMENT_WEEKLY_TIME_ZONE);
-    const lastWeekKey = this.ctx.storage.systemSettings.get<string>(IMPROVEMENT_WEEKLY_DEDUP_SETTING_KEY)?.value;
+    const lastWeekKey = (await this.ctx.storage.systemSettings.get<string>(IMPROVEMENT_WEEKLY_DEDUP_SETTING_KEY))
+      ?.value;
     if (!options.force && lastWeekKey === weekKey) {
       return;
     }
@@ -630,10 +638,10 @@ export class ImprovementService {
       triggerMode: options.force ? "manual" : "scheduled",
       sampleSize: IMPROVEMENT_WEEKLY_SAMPLE_SIZE,
     });
-    this.ctx.storage.systemSettings.set(IMPROVEMENT_WEEKLY_DEDUP_SETTING_KEY, weekKey);
+    await this.ctx.storage.systemSettings.set(IMPROVEMENT_WEEKLY_DEDUP_SETTING_KEY, weekKey);
     const finishedAt = new Date().toISOString();
     if (options.recordCronState !== false) {
-      this.ctx.storage.cronJobs.mergeRuntimeTelemetry(
+      await this.ctx.storage.cronJobs.mergeRuntimeTelemetry(
         job.jobId,
         {
           lastRunAt: finishedAt,
@@ -648,7 +656,7 @@ export class ImprovementService {
     if (!this.ctx.cronSpecOwner) {
       throw new Error("Cron spec owner is required to reconcile the weekly improvement job.");
     }
-    const existing = this.ctx.storage.cronJobs.get(IMPROVEMENT_WEEKLY_JOB_ID);
+    const existing = await this.ctx.storage.cronJobs.get(IMPROVEMENT_WEEKLY_JOB_ID);
     await this.ctx.cronSpecOwner.reconcileSpec({
       jobId: IMPROVEMENT_WEEKLY_JOB_ID,
       name: "Self-Improvement Weekly Replay",
@@ -670,8 +678,8 @@ export class ImprovementService {
     });
   }
 
-  markInterruptedDecisionReplayRuns(): void {
-    const running = this.ctx.gatewaySql
+  async markInterruptedDecisionReplayRuns(): Promise<void> {
+    const running = (await this.ctx.storage.db
       .prepare(
         `
       SELECT run_id
@@ -679,12 +687,12 @@ export class ImprovementService {
       WHERE status = 'running'
     `,
       )
-      .all() as Array<{ run_id: string }>;
+      .all()) as Array<{ run_id: string }>;
     if (running.length === 0) {
       return;
     }
     const finishedAt = new Date().toISOString();
-    this.ctx.gatewaySql
+    await this.ctx.storage.db
       .prepare(
         `
       UPDATE decision_replay_runs
@@ -695,15 +703,15 @@ export class ImprovementService {
     `,
       )
       .run({ finishedAt });
-    this.ctx.publishRealtime("system", "improvement", {
+    await this.ctx.publishRealtime("system", "improvement", {
       type: "improvement_replay_interrupted_runs_recovered",
       recoveredCount: running.length,
       finishedAt,
     });
   }
 
-  listImprovementReports(limit = 24): WeeklyImprovementReportRecord[] {
-    const rows = this.ctx.gatewaySql
+  async listImprovementReports(limit = 24): Promise<WeeklyImprovementReportRecord[]> {
+    const rows = (await this.ctx.storage.db
       .prepare(
         `
       SELECT *
@@ -712,7 +720,7 @@ export class ImprovementService {
       LIMIT ?
     `,
       )
-      .all(Math.max(1, Math.min(limit, 260))) as Array<{
+      .all(Math.max(1, Math.min(limit, 260)))) as Array<{
       report_id: string;
       run_id: string;
       week_start: string;
@@ -725,11 +733,13 @@ export class ImprovementService {
       previous_report_id: string | null;
       created_at: string;
     }>;
-    return rows.map((row) => this.enrichWeeklyImprovementReport(mapImprovementReportRow(row)));
+    return await Promise.all(
+      rows.map(async (row) => await this.enrichWeeklyImprovementReport(mapImprovementReportRow(row))),
+    );
   }
 
-  listDecisionReplayRuns(limit = 24): DecisionReplayRunRecord[] {
-    const rows = this.ctx.gatewaySql
+  async listDecisionReplayRuns(limit = 24): Promise<DecisionReplayRunRecord[]> {
+    const rows = (await this.ctx.storage.db
       .prepare(
         `
       SELECT *
@@ -738,7 +748,7 @@ export class ImprovementService {
       LIMIT ?
     `,
       )
-      .all(Math.max(1, Math.min(limit, 300))) as Array<{
+      .all(Math.max(1, Math.min(limit, 300)))) as Array<{
       run_id: string;
       trigger_mode: "scheduled" | "manual";
       sample_size: number;
@@ -757,10 +767,10 @@ export class ImprovementService {
     return rows.map((row) => mapDecisionReplayRunRow(row));
   }
 
-  listCapabilityGapEvents(limit = 100): CapabilityGapEventRecord[] {
-    this.ensureCapabilityGapTables();
+  async listCapabilityGapEvents(limit = 100): Promise<CapabilityGapEventRecord[]> {
+    await this.ensureCapabilityGapTables();
     const rows = toCapabilityGapEventRows(
-      this.ctx.gatewaySql
+      await this.ctx.storage.db
         .prepare(
           `
       SELECT *
@@ -774,10 +784,10 @@ export class ImprovementService {
     return rows.map((row) => mapCapabilityGapEventRow(row));
   }
 
-  listRepairCandidates(limit = 60): RepairCandidateRecord[] {
-    this.ensureCapabilityGapTables();
+  async listRepairCandidates(limit = 60): Promise<RepairCandidateRecord[]> {
+    await this.ensureCapabilityGapTables();
     const rows = toRepairCandidateRows(
-      this.ctx.gatewaySql
+      await this.ctx.storage.db
         .prepare(
           `
       SELECT *
@@ -791,13 +801,13 @@ export class ImprovementService {
     return rows.map((row) => mapRepairCandidateRow(row));
   }
 
-  updateRepairCandidateValidation(
+  async updateRepairCandidateValidation(
     candidateId: string,
     input: RepairCandidateValidationUpdateInput,
-  ): RepairCandidateRecord {
-    this.ensureCapabilityGapTables();
+  ): Promise<RepairCandidateRecord> {
+    await this.ensureCapabilityGapTables();
     const existing = toRepairCandidateRow(
-      this.ctx.gatewaySql
+      await this.ctx.storage.db
         .prepare(
           `
       SELECT *
@@ -814,7 +824,7 @@ export class ImprovementService {
     const now = new Date().toISOString();
     const normalizedStatus = REPAIR_VALIDATION_STATUSES.has(input.status) ? input.status : "not_started";
     const normalizedSummary = input.summary?.trim() || null;
-    this.ctx.gatewaySql
+    await this.ctx.storage.db
       .prepare(
         `
       UPDATE repair_candidates
@@ -831,7 +841,7 @@ export class ImprovementService {
         candidateId,
       });
     const row = toRepairCandidateRow(
-      this.ctx.gatewaySql
+      await this.ctx.storage.db
         .prepare(
           `
       SELECT *
@@ -847,8 +857,8 @@ export class ImprovementService {
     return mapRepairCandidateRow(row);
   }
 
-  listImprovementSignals(limit = 100, workspaceId?: string): ImprovementSignalRecord[] {
-    this.ensureImprovementLedgerTables();
+  async listImprovementSignals(limit = 100, workspaceId?: string): Promise<ImprovementSignalRecord[]> {
+    await this.ensureImprovementLedgerTables();
     const normalizedWorkspaceId = workspaceId?.trim();
     const sql = normalizedWorkspaceId
       ? `
@@ -866,21 +876,21 @@ export class ImprovementService {
         `;
     const rows = toImprovementSignalRows(
       normalizedWorkspaceId
-        ? this.prepareCached(sql).all({
+        ? await this.prepareCached(sql).all({
             workspaceId: normalizedWorkspaceId,
             limit: Math.max(1, Math.min(limit, 500)),
           })
-        : this.prepareCached(sql).all({
+        : await this.prepareCached(sql).all({
             limit: Math.max(1, Math.min(limit, 500)),
           }),
     );
     return rows.map((row) => mapImprovementSignalRow(row));
   }
 
-  getImprovementSignal(signalId: string): ImprovementSignalRecord {
-    this.ensureImprovementLedgerTables();
+  async getImprovementSignal(signalId: string): Promise<ImprovementSignalRecord> {
+    await this.ensureImprovementLedgerTables();
     const row = toImprovementSignalRow(
-      this.ctx.gatewaySql
+      await this.ctx.storage.db
         .prepare(
           `
         SELECT *
@@ -897,8 +907,8 @@ export class ImprovementService {
     return mapImprovementSignalRow(row);
   }
 
-  listImprovementCandidates(limit = 100, workspaceId?: string): ImprovementCandidateRecord[] {
-    this.ensureImprovementLedgerTables();
+  async listImprovementCandidates(limit = 100, workspaceId?: string): Promise<ImprovementCandidateRecord[]> {
+    await this.ensureImprovementLedgerTables();
     const normalizedWorkspaceId = workspaceId?.trim();
     const sql = normalizedWorkspaceId
       ? `
@@ -916,66 +926,70 @@ export class ImprovementService {
         `;
     const rows = toImprovementCandidateRows(
       normalizedWorkspaceId
-        ? this.prepareCached(sql).all({
+        ? await this.prepareCached(sql).all({
             workspaceId: normalizedWorkspaceId,
             limit: Math.max(1, Math.min(limit, 300)),
           })
-        : this.prepareCached(sql).all({
+        : await this.prepareCached(sql).all({
             limit: Math.max(1, Math.min(limit, 300)),
           }),
     );
-    return rows.map((row) => this.reconcileActivationWatchStatus(mapImprovementCandidateRow(row)));
+    return await Promise.all(
+      rows.map(async (row) => await this.reconcileActivationWatchStatus(mapImprovementCandidateRow(row))),
+    );
   }
 
-  getImprovementCandidateDetail(candidateId: string): ImprovementCandidateDetailResponse {
-    this.ensureImprovementLedgerTables();
-    const candidate = this.readImprovementCandidate(candidateId);
-    const latestActivation = this.readLatestActivation(candidateId);
-    const reconciledActivation = latestActivation ? this.maybeAdvanceActivation(latestActivation) : undefined;
-    const supportingSignals = this.listSignalsForCandidate(candidateId);
+  async getImprovementCandidateDetail(candidateId: string): Promise<ImprovementCandidateDetailResponse> {
+    await this.ensureImprovementLedgerTables();
+    const candidate = await this.readImprovementCandidate(candidateId);
+    const latestActivation = await this.readLatestActivation(candidateId);
+    const reconciledActivation = latestActivation ? await this.maybeAdvanceActivation(latestActivation) : undefined;
+    const supportingSignals = await this.listSignalsForCandidate(candidateId);
     return {
       candidate,
-      currentRevision: this.readCurrentRevision(candidateId),
+      currentRevision: await this.readCurrentRevision(candidateId),
       supportingSignals,
-      latestEvaluation: this.readLatestEvaluation(candidateId),
+      latestEvaluation: await this.readLatestEvaluation(candidateId),
       latestActivation: reconciledActivation,
-      attemptManifestSummary: this.normalizeAttemptManifests(supportingSignals),
+      attemptManifestSummary: await this.normalizeAttemptManifests(supportingSignals),
     };
   }
 
-  listCuratorReviewItems(input: { limit?: number; workspaceId?: string } = {}): CuratorReviewResponse {
-    this.ensureImprovementLedgerTables();
-    const candidates = this.listImprovementCandidates(input.limit ?? 100, input.workspaceId).filter((candidate) =>
-      this.isCuratorCandidate(candidate),
+  async listCuratorReviewItems(input: { limit?: number; workspaceId?: string } = {}): Promise<CuratorReviewResponse> {
+    await this.ensureImprovementLedgerTables();
+    const candidates = (await this.listImprovementCandidates(input.limit ?? 100, input.workspaceId)).filter(
+      (candidate) => this.isCuratorCandidate(candidate),
     );
     return {
       generatedAt: new Date().toISOString(),
-      items: candidates.map((candidate) =>
-        this.buildCuratorReviewItem(this.getImprovementCandidateDetail(candidate.candidateId)),
+      items: await Promise.all(
+        candidates.map(async (candidate) =>
+          this.buildCuratorReviewItem(await this.getImprovementCandidateDetail(candidate.candidateId)),
+        ),
       ),
     };
   }
 
-  getCuratorReviewItem(candidateId: string): CuratorReviewItem {
-    this.ensureImprovementLedgerTables();
-    return this.buildCuratorReviewItem(this.getImprovementCandidateDetail(candidateId));
+  async getCuratorReviewItem(candidateId: string): Promise<CuratorReviewItem> {
+    await this.ensureImprovementLedgerTables();
+    return this.buildCuratorReviewItem(await this.getImprovementCandidateDetail(candidateId));
   }
 
-  validateImprovementCandidate(
+  async validateImprovementCandidate(
     candidateId: string,
     input: ImprovementCandidateLifecycleInput = {},
-  ): ImprovementCandidateLifecycleResult {
-    this.ensureImprovementLedgerTables();
+  ): Promise<ImprovementCandidateLifecycleResult> {
+    await this.ensureImprovementLedgerTables();
     const actorId = input.actorId?.trim() || "operator";
-    const candidate = this.readImprovementCandidate(candidateId);
-    const revision = this.readCurrentRevision(candidateId);
+    const candidate = await this.readImprovementCandidate(candidateId);
+    const revision = await this.readCurrentRevision(candidateId);
     if (!revision) {
       throw new Error(`Candidate ${candidateId} is missing a current revision.`);
     }
     this.assertCandidateNotCorruptOrQuarantined(candidate, revision);
-    this.queueCandidateEvaluation(candidateId);
-    const review = this.getCuratorReviewItem(candidateId);
-    this.emitLifecycleAuditSignal("candidate_validated", {
+    await this.queueCandidateEvaluation(candidateId);
+    const review = await this.getCuratorReviewItem(candidateId);
+    await this.emitLifecycleAuditSignal("candidate_validated", {
       candidateId,
       actorId,
       workspaceId: review.candidate.workspaceId,
@@ -992,15 +1006,15 @@ export class ImprovementService {
     };
   }
 
-  approveImprovementCandidate(
+  async approveImprovementCandidate(
     candidateId: string,
     input: ImprovementCandidateLifecycleInput = {},
-  ): ImprovementCandidateLifecycleResult {
-    this.ensureImprovementLedgerTables();
+  ): Promise<ImprovementCandidateLifecycleResult> {
+    await this.ensureImprovementLedgerTables();
     const actorId = input.actorId?.trim() || "operator";
-    const candidate = this.readImprovementCandidate(candidateId);
-    const revision = this.readCurrentRevision(candidateId);
-    const evaluation = this.readLatestEvaluation(candidateId);
+    const candidate = await this.readImprovementCandidate(candidateId);
+    const revision = await this.readCurrentRevision(candidateId);
+    const evaluation = await this.readLatestEvaluation(candidateId);
     if (
       !revision ||
       !evaluation ||
@@ -1010,9 +1024,9 @@ export class ImprovementService {
       throw new Error(`Candidate ${candidateId} must pass validation before approval.`);
     }
     this.assertCandidateNotCorruptOrQuarantined(candidate, revision);
-    this.updateCandidateStatus(candidateId, "approved", actorId, "operator");
-    const review = this.getCuratorReviewItem(candidateId);
-    this.emitLifecycleAuditSignal("candidate_approved", {
+    await this.updateCandidateStatus(candidateId, "approved", actorId, "operator");
+    const review = await this.getCuratorReviewItem(candidateId);
+    await this.emitLifecycleAuditSignal("candidate_approved", {
       candidateId,
       actorId,
       workspaceId: review.candidate.workspaceId,
@@ -1029,20 +1043,20 @@ export class ImprovementService {
     };
   }
 
-  rejectImprovementCandidate(
+  async rejectImprovementCandidate(
     candidateId: string,
     input: ImprovementCandidateLifecycleInput = {},
-  ): ImprovementCandidateLifecycleResult {
-    this.ensureImprovementLedgerTables();
+  ): Promise<ImprovementCandidateLifecycleResult> {
+    await this.ensureImprovementLedgerTables();
     const actorId = input.actorId?.trim() || "operator";
-    this.ctx.gatewaySql.runImmediateTransaction(() => {
-      this.lockCandidateForLifecycleMutation(candidateId);
-      this.assertCandidateHasNoAppliedActivation(candidateId);
-      this.updateCandidateStatus(candidateId, "rejected", actorId, "operator");
-      this.clearCandidateSuppression(candidateId, actorId, "operator");
+    await this.ctx.storage.runImmediateTransaction(async () => {
+      await this.lockCandidateForLifecycleMutation(candidateId);
+      await this.assertCandidateHasNoAppliedActivation(candidateId);
+      await this.updateCandidateStatus(candidateId, "rejected", actorId, "operator");
+      await this.clearCandidateSuppression(candidateId, actorId, "operator");
     });
-    const review = this.getCuratorReviewItem(candidateId);
-    this.emitLifecycleAuditSignal("candidate_rejected", {
+    const review = await this.getCuratorReviewItem(candidateId);
+    await this.emitLifecycleAuditSignal("candidate_rejected", {
       candidateId,
       actorId,
       workspaceId: review.candidate.workspaceId,
@@ -1059,24 +1073,24 @@ export class ImprovementService {
     };
   }
 
-  snoozeImprovementCandidate(
+  async snoozeImprovementCandidate(
     candidateId: string,
     input: ImprovementCandidateLifecycleInput = {},
-  ): ImprovementCandidateLifecycleResult {
-    this.ensureImprovementLedgerTables();
+  ): Promise<ImprovementCandidateLifecycleResult> {
+    await this.ensureImprovementLedgerTables();
     const actorId = input.actorId?.trim() || "operator";
     const snoozeUntil =
       input.snoozeUntil && Number.isFinite(Date.parse(input.snoozeUntil))
         ? new Date(input.snoozeUntil).toISOString()
         : new Date(Date.now() + IMPROVEMENT_SUPPRESSION_MS).toISOString();
-    this.ctx.gatewaySql.runImmediateTransaction(() => {
-      this.lockCandidateForLifecycleMutation(candidateId);
-      this.assertCandidateHasNoAppliedActivation(candidateId);
-      this.updateCandidateStatus(candidateId, "rejected", actorId, "operator");
-      this.setCandidateSuppression(candidateId, snoozeUntil, actorId, "operator");
+    await this.ctx.storage.runImmediateTransaction(async () => {
+      await this.lockCandidateForLifecycleMutation(candidateId);
+      await this.assertCandidateHasNoAppliedActivation(candidateId);
+      await this.updateCandidateStatus(candidateId, "rejected", actorId, "operator");
+      await this.setCandidateSuppression(candidateId, snoozeUntil, actorId, "operator");
     });
-    const review = this.getCuratorReviewItem(candidateId);
-    this.emitLifecycleAuditSignal("candidate_snoozed", {
+    const review = await this.getCuratorReviewItem(candidateId);
+    await this.emitLifecycleAuditSignal("candidate_snoozed", {
       candidateId,
       actorId,
       workspaceId: review.candidate.workspaceId,
@@ -1098,10 +1112,10 @@ export class ImprovementService {
     candidateId: string,
     input: ImprovementCandidateLifecycleInput = {},
   ): Promise<ImprovementCandidateLifecycleResult> {
-    this.ensureImprovementLedgerTables();
+    await this.ensureImprovementLedgerTables();
     const actorId = input.actorId?.trim() || "operator";
-    const candidate = this.readImprovementCandidate(candidateId);
-    const revision = this.readCurrentRevision(candidateId);
+    const candidate = await this.readImprovementCandidate(candidateId);
+    const revision = await this.readCurrentRevision(candidateId);
     if (!revision) {
       throw new Error(`Candidate ${candidateId} is missing a current revision.`);
     }
@@ -1114,8 +1128,8 @@ export class ImprovementService {
     // HX-402 P3: the operator surface is approval-first through the governed
     // `improvement.lifecycle` rail — the request never mutates, and only the
     // recovered approval effect may later create the durable intent and apply.
-    const { pendingApproval } = this.requestImprovementActivationApproval(candidateId, { requesterId: actorId });
-    const review = this.getCuratorReviewItem(candidateId);
+    const { pendingApproval } = await this.requestImprovementActivationApproval(candidateId, { requesterId: actorId });
+    const review = await this.getCuratorReviewItem(candidateId);
     return {
       action: "activate",
       status: "approval_pending",
@@ -1125,13 +1139,13 @@ export class ImprovementService {
     };
   }
 
-  promoteImprovementCandidate(
+  async promoteImprovementCandidate(
     candidateId: string,
     input: ImprovementCandidateLifecycleInput = {},
-  ): ImprovementCandidateLifecycleResult {
-    this.ensureImprovementLedgerTables();
-    const candidate = this.readImprovementCandidate(candidateId);
-    const revision = this.readCurrentRevision(candidateId);
+  ): Promise<ImprovementCandidateLifecycleResult> {
+    await this.ensureImprovementLedgerTables();
+    const candidate = await this.readImprovementCandidate(candidateId);
+    const revision = await this.readCurrentRevision(candidateId);
     if (!revision) {
       throw new Error(`Candidate ${candidateId} is missing a current revision.`);
     }
@@ -1139,20 +1153,20 @@ export class ImprovementService {
     throw new Error("Promotion is review-only until a capability proposal approval applies the mutation.");
   }
 
-  getImprovementActivation(activationId: string): ImprovementActivationRecord {
-    this.ensureImprovementLedgerTables();
-    return this.maybeAdvanceActivation(this.readImprovementActivation(activationId));
+  async getImprovementActivation(activationId: string): Promise<ImprovementActivationRecord> {
+    await this.ensureImprovementLedgerTables();
+    return await this.maybeAdvanceActivation(await this.readImprovementActivation(activationId));
   }
 
-  recordDurableRunCompletionSignal(input: {
+  async recordDurableRunCompletionSignal(input: {
     run: DurableRunRecord;
     checkpointState?: Record<string, unknown>;
-  }): ImprovementSignalRecord | undefined {
-    if (!this.ctx.isFeatureEnabled("improvementLedgerV1Enabled")) {
+  }): Promise<ImprovementSignalRecord | undefined> {
+    if (!(await this.ctx.isFeatureEnabled("improvementLedgerV1Enabled"))) {
       return undefined;
     }
     const workspaceId = this.resolveWorkspaceIdFromDurableRun(input.run, input.checkpointState);
-    return this.recordImprovementSignal({
+    return await this.recordImprovementSignal({
       sourceService: "durable-run-service",
       sourceType: "durable_run",
       sourceId: input.run.runId,
@@ -1183,15 +1197,15 @@ export class ImprovementService {
     });
   }
 
-  recordDurableRunFailureSignal(input: {
+  async recordDurableRunFailureSignal(input: {
     run: DurableRunRecord;
     message: string;
-  }): ImprovementSignalRecord | undefined {
-    if (!this.ctx.isFeatureEnabled("improvementLedgerV1Enabled")) {
+  }): Promise<ImprovementSignalRecord | undefined> {
+    if (!(await this.ctx.isFeatureEnabled("improvementLedgerV1Enabled"))) {
       return undefined;
     }
     const workspaceId = this.resolveWorkspaceIdFromDurableRun(input.run);
-    return this.recordImprovementSignal({
+    return await this.recordImprovementSignal({
       sourceService: "durable-run-service",
       sourceType: "durable_run",
       sourceId: input.run.runId,
@@ -1223,17 +1237,17 @@ export class ImprovementService {
     });
   }
 
-  recordAgenticDiagnosticSignal(input: {
+  async recordAgenticDiagnosticSignal(input: {
     task: TaskRecord;
     diagnostic: AgenticDiagnosticSignal;
-  }): ImprovementSignalRecord | undefined {
-    if (!this.ctx.isFeatureEnabled("improvementLedgerV1Enabled")) {
+  }): Promise<ImprovementSignalRecord | undefined> {
+    if (!(await this.ctx.isFeatureEnabled("improvementLedgerV1Enabled"))) {
       return undefined;
     }
     const workspaceId = this.ctx.normalizeWorkspaceId(input.task.workspaceId);
     const context = input.task.agenticContext;
     const sourceEventId = `${input.task.taskId}:${input.diagnostic.signalId}`;
-    return this.recordImprovementSignal({
+    return await this.recordImprovementSignal({
       sourceService: "task-lifecycle-service",
       sourceType: "agentic_diagnostic",
       sourceId: input.diagnostic.signalId,
@@ -1288,21 +1302,23 @@ export class ImprovementService {
     });
   }
 
-  recordAgenticImprovementProposals(
+  async recordAgenticImprovementProposals(
     input: AgenticImprovementBridgeInput,
     options: { workspaceId?: string } = {},
-  ): AgenticImprovementProposalIngestionResult[] {
-    if (!this.ctx.isFeatureEnabled("improvementLedgerV1Enabled")) {
+  ): Promise<AgenticImprovementProposalIngestionResult[]> {
+    if (!(await this.ctx.isFeatureEnabled("improvementLedgerV1Enabled"))) {
       return [];
     }
     const workspaceId = this.ctx.normalizeWorkspaceId(options.workspaceId);
     const bridge = new AgenticImprovementBridgeService();
-    return bridge
-      .buildProposalSummaries(input)
-      .map((proposal) => this.recordAgenticImprovementProposal(proposal, workspaceId));
+    return await Promise.all(
+      bridge
+        .buildProposalSummaries(input)
+        .map(async (proposal) => await this.recordAgenticImprovementProposal(proposal, workspaceId)),
+    );
   }
 
-  recordFocusedToolFailureSignal(input: {
+  async recordFocusedToolFailureSignal(input: {
     workspaceId?: string;
     sessionId: string;
     turnId?: string;
@@ -1313,12 +1329,12 @@ export class ImprovementService {
     failureClass: string;
     operationPhase: string;
     policyReason?: string;
-  }): ImprovementSignalRecord | undefined {
-    if (!this.ctx.isFeatureEnabled("improvementLedgerV1Enabled")) {
+  }): Promise<ImprovementSignalRecord | undefined> {
+    if (!(await this.ctx.isFeatureEnabled("improvementLedgerV1Enabled"))) {
       return undefined;
     }
     const workspaceId = this.ctx.normalizeWorkspaceId(input.workspaceId);
-    return this.recordImprovementSignal({
+    return await this.recordImprovementSignal({
       sourceService: "chat-runtime",
       sourceType: "tool_provider_failure",
       sourceId: input.turnId?.trim() || input.durableRunId?.trim() || input.sessionId,
@@ -1382,11 +1398,11 @@ export class ImprovementService {
     });
   }
 
-  recordApprovalResolutionSignal(approval: ApprovalRequest): ImprovementSignalRecord | undefined {
-    if (!this.ctx.isFeatureEnabled("improvementLedgerV1Enabled")) {
+  async recordApprovalResolutionSignal(approval: ApprovalRequest): Promise<ImprovementSignalRecord | undefined> {
+    if (!(await this.ctx.isFeatureEnabled("improvementLedgerV1Enabled"))) {
       return undefined;
     }
-    return this.recordImprovementSignal({
+    return await this.recordImprovementSignal({
       sourceService: "gatehouse",
       sourceType: "approval",
       sourceId: approval.approvalId,
@@ -1424,9 +1440,9 @@ export class ImprovementService {
     });
   }
 
-  public recordSurfaceRouteOverrideSignal(input: SurfaceRouteOverrideSignalInput): void {
+  public async recordSurfaceRouteOverrideSignal(input: SurfaceRouteOverrideSignalInput): Promise<void> {
     const fingerprint = `surface_route_override:${input.citadelId}:${input.fromMode}->${input.toMode}:${input.promptFeatureHash}`;
-    this.recordImprovementSignal({
+    await this.recordImprovementSignal({
       sourceService: "surface-router",
       sourceType: "surface_route_override",
       sourceId: input.sessionId,
@@ -1449,9 +1465,12 @@ export class ImprovementService {
     });
   }
 
-  public listSurfaceRouteOverrideExemplars(citadelId: string, limit = 8): SurfaceRouteOverrideExemplar[] {
+  public async listSurfaceRouteOverrideExemplars(
+    citadelId: string,
+    limit = 8,
+  ): Promise<SurfaceRouteOverrideExemplar[]> {
     const exemplars: SurfaceRouteOverrideExemplar[] = [];
-    for (const signal of this.listImprovementSignals(500)) {
+    for (const signal of await this.listImprovementSignals(500)) {
       if (exemplars.length >= limit) {
         break;
       }
@@ -1472,7 +1491,7 @@ export class ImprovementService {
     return exemplars;
   }
 
-  recordPromptLabBenchmarkCompletionSignal(input: {
+  async recordPromptLabBenchmarkCompletionSignal(input: {
     benchmarkRunId: string;
     packId: string;
     providerId: string;
@@ -1481,8 +1500,8 @@ export class ImprovementService {
     passRate?: number;
     runFailures?: number;
     failureSignal?: string;
-  }): ImprovementSignalRecord | undefined {
-    if (!this.ctx.isFeatureEnabled("improvementLedgerV1Enabled")) {
+  }): Promise<ImprovementSignalRecord | undefined> {
+    if (!(await this.ctx.isFeatureEnabled("improvementLedgerV1Enabled"))) {
       return undefined;
     }
     const workspaceId = this.ctx.normalizeWorkspaceId("prompt-lab");
@@ -1490,7 +1509,7 @@ export class ImprovementService {
     const causeClass = input.runFailures && input.runFailures > 0 ? "benchmark_failures" : "benchmark_score";
     const outcome: ImprovementSignalOutcome =
       (input.runFailures ?? 0) > 0 || (input.passRate ?? 1) < 0.8 ? "negative" : "positive";
-    return this.recordImprovementSignal({
+    return await this.recordImprovementSignal({
       sourceService: "prompt-pack-service",
       sourceType: "prompt_pack_benchmark",
       sourceId: input.benchmarkRunId,
@@ -1529,7 +1548,7 @@ export class ImprovementService {
     });
   }
 
-  recordPromptLabRegressionCompletionSignal(input: {
+  async recordPromptLabRegressionCompletionSignal(input: {
     regressionRunId: string;
     packId: string;
     baselineRef?: string;
@@ -1537,14 +1556,14 @@ export class ImprovementService {
     passDelta: number;
     latencyDeltaMs: number;
     capability: string;
-  }): ImprovementSignalRecord | undefined {
-    if (!this.ctx.isFeatureEnabled("improvementLedgerV1Enabled")) {
+  }): Promise<ImprovementSignalRecord | undefined> {
+    if (!(await this.ctx.isFeatureEnabled("improvementLedgerV1Enabled"))) {
       return undefined;
     }
     const workspaceId = this.ctx.normalizeWorkspaceId("prompt-lab");
     const targetKey = `${input.packId}:${input.capability}`;
     const negative = input.scoreDelta < 0 || input.passDelta < 0;
-    return this.recordImprovementSignal({
+    return await this.recordImprovementSignal({
       sourceService: "prompt-pack-service",
       sourceType: "prompt_pack_regression",
       sourceId: input.regressionRunId,
@@ -1581,7 +1600,7 @@ export class ImprovementService {
     });
   }
 
-  recordSkillEvaluationSignal(input: {
+  async recordSkillEvaluationSignal(input: {
     skillId: string;
     skillName: string;
     runId: string;
@@ -1590,13 +1609,13 @@ export class ImprovementService {
     passRate: number;
     improvementDelta: number;
     summary: string;
-  }): { signal?: ImprovementSignalRecord; candidate?: ImprovementCandidateRecord } | undefined {
-    if (!this.ctx.isFeatureEnabled("improvementLedgerV1Enabled")) {
+  }): Promise<{ signal?: ImprovementSignalRecord; candidate?: ImprovementCandidateRecord } | undefined> {
+    if (!(await this.ctx.isFeatureEnabled("improvementLedgerV1Enabled"))) {
       return undefined;
     }
     const workspaceId = this.ctx.normalizeWorkspaceId(undefined);
     const targetKey = `skill:${input.skillId}`;
-    const signal = this.recordImprovementSignal({
+    const signal = await this.recordImprovementSignal({
       sourceService: "skill_evaluation",
       sourceType: "skill_evaluation_run",
       sourceId: input.runId,
@@ -1641,7 +1660,7 @@ export class ImprovementService {
       return undefined;
     }
     const candidate = toImprovementCandidateRow(
-      this.ctx.gatewaySql
+      await this.ctx.storage.db
         .prepare(
           `
           SELECT *
@@ -1665,14 +1684,14 @@ export class ImprovementService {
   }
 
   async requestImprovementActivation(candidateId: string, actorId = "operator"): Promise<ImprovementActivationRecord> {
-    this.ctx.requireFeatureEnabled("improvementActivationV1Enabled");
-    this.ensureImprovementLedgerTables();
-    const candidate = this.readImprovementCandidate(candidateId);
+    await this.ctx.requireFeatureEnabled("improvementActivationV1Enabled");
+    await this.ensureImprovementLedgerTables();
+    const candidate = await this.readImprovementCandidate(candidateId);
     if (candidate.kind === "skill_revision") {
       throw new Error("Skill revision candidates activate through capability proposals, not direct ledger activation.");
     }
-    const revision = this.readCurrentRevision(candidateId);
-    const evaluation = this.readLatestEvaluation(candidateId);
+    const revision = await this.readCurrentRevision(candidateId);
+    const evaluation = await this.readLatestEvaluation(candidateId);
     if (!revision || !evaluation) {
       throw new Error(`Candidate ${candidateId} is missing a current revision or evaluation.`);
     }
@@ -1680,11 +1699,11 @@ export class ImprovementService {
       throw new Error(`Candidate ${candidateId} is not ready for activation approval.`);
     }
     if (candidate.currentRevisionId !== evaluation.revisionId || revision.changeHash !== evaluation.changeHash) {
-      this.updateCandidateStatus(candidateId, "evaluating", actorId, "operator");
+      await this.updateCandidateStatus(candidateId, "evaluating", actorId, "operator");
       throw new Error(`Candidate ${candidateId} drifted since evaluation and must be re-evaluated.`);
     }
     const activationTarget = this.buildActivationTargetRef(candidate, revision);
-    const preActivationSnapshot = this.captureActivationSnapshot(candidate.kind, candidate.targetKey, revision);
+    const preActivationSnapshot = await this.captureActivationSnapshot(candidate.kind, candidate.targetKey, revision);
     const approval = await this.callbacks.createApproval({
       kind: "improvement_activation",
       riskLevel: candidate.kind === "routing_policy" ? "caution" : "safe",
@@ -1711,7 +1730,7 @@ export class ImprovementService {
     });
     const now = new Date().toISOString();
     const activationId = randomUUID();
-    this.ctx.gatewaySql
+    await this.ctx.storage.db
       .prepare(
         `
         INSERT INTO improvement_activations (
@@ -1741,9 +1760,9 @@ export class ImprovementService {
         requestedByActorId: actorId,
         requestedByActorType: "operator",
       });
-    this.updateCandidateStatus(candidateId, "approval_pending", actorId, "operator");
-    const activation = this.readImprovementActivation(activationId);
-    this.emitLifecycleAuditSignal("activation_requested", {
+    await this.updateCandidateStatus(candidateId, "approval_pending", actorId, "operator");
+    const activation = await this.readImprovementActivation(activationId);
+    await this.emitLifecycleAuditSignal("activation_requested", {
       candidateId,
       revisionId: revision.revisionId,
       activationId,
@@ -1757,21 +1776,23 @@ export class ImprovementService {
     return activation;
   }
 
-  handleActivationApprovalResolution(approval: ApprovalRequest): ImprovementActivationRecord | undefined {
+  async handleActivationApprovalResolution(
+    approval: ApprovalRequest,
+  ): Promise<ImprovementActivationRecord | undefined> {
     if (
-      !this.ctx.isFeatureEnabled("improvementActivationV1Enabled") ||
+      !(await this.ctx.isFeatureEnabled("improvementActivationV1Enabled")) ||
       approval.kind !== "improvement_activation" ||
       approval.status === "pending"
     ) {
       return undefined;
     }
-    this.ensureImprovementLedgerTables();
-    const activation = this.readLatestActivationByApprovalId(approval.approvalId);
+    await this.ensureImprovementLedgerTables();
+    const activation = await this.readLatestActivationByApprovalId(approval.approvalId);
     if (!activation) {
       return undefined;
     }
     if (activation.status === "active" || activation.watchStartedAt) {
-      this.emitActivationAppliedAuditOrThrow(activation, approval);
+      await this.emitActivationAppliedAuditOrThrow(activation, approval);
     }
     if (activation.status === "active") {
       return activation;
@@ -1781,14 +1802,14 @@ export class ImprovementService {
     }
 
     const pendingActivation = activation;
-    const candidate = this.readImprovementCandidate(pendingActivation.candidateId);
-    const revision = this.readCurrentRevision(candidate.candidateId);
-    const evaluation = this.readLatestEvaluation(candidate.candidateId);
+    const candidate = await this.readImprovementCandidate(pendingActivation.candidateId);
+    const revision = await this.readCurrentRevision(candidate.candidateId);
+    const evaluation = await this.readLatestEvaluation(candidate.candidateId);
     const actorId = approval.resolvedBy ?? "approval";
 
     if (approval.status === "rejected" || approval.status === "edited") {
-      this.applyCandidateSuppression(candidate.candidateId);
-      return this.markActivationFailed(pendingActivation.activationId, `approval_${approval.status}`, {
+      await this.applyCandidateSuppression(candidate.candidateId);
+      return await this.markActivationFailed(pendingActivation.activationId, `approval_${approval.status}`, {
         approvalId: approval.approvalId,
         actorId,
         actorType: "approval",
@@ -1802,7 +1823,7 @@ export class ImprovementService {
     }
 
     if (!this.isPendingActivationCandidateEligible(candidate)) {
-      return this.markActivationFailed(pendingActivation.activationId, "candidate_no_longer_eligible", {
+      return await this.markActivationFailed(pendingActivation.activationId, "candidate_no_longer_eligible", {
         approvalId: approval.approvalId,
         actorId,
         actorType: "approval",
@@ -1824,8 +1845,8 @@ export class ImprovementService {
       evaluation.changeHash !== revision.changeHash ||
       pendingActivation.appliedChangeHash !== revision.changeHash;
     if (drifted) {
-      this.updateCandidateStatus(candidate.candidateId, "evaluating", actorId, "approval");
-      return this.markActivationFailed(pendingActivation.activationId, "candidate_drift", {
+      await this.updateCandidateStatus(candidate.candidateId, "evaluating", actorId, "approval");
+      return await this.markActivationFailed(pendingActivation.activationId, "candidate_drift", {
         approvalId: approval.approvalId,
         actorId,
         actorType: "approval",
@@ -1839,7 +1860,7 @@ export class ImprovementService {
     }
 
     try {
-      return this.applyApprovedActivation(pendingActivation, approval);
+      return await this.applyApprovedActivation(pendingActivation, approval);
     } catch (error) {
       if (
         error instanceof ImprovementActivationCompensationError ||
@@ -1848,7 +1869,7 @@ export class ImprovementService {
       ) {
         throw error;
       }
-      return this.markActivationFailed(
+      return await this.markActivationFailed(
         pendingActivation.activationId,
         error instanceof Error ? error.message : String(error),
         {
@@ -1866,28 +1887,31 @@ export class ImprovementService {
     }
   }
 
-  pauseImprovementActivation(activationId: string, actorId = "operator"): ImprovementActivationRecord {
-    this.ctx.requireFeatureEnabled("improvementActivationV1Enabled");
-    this.ensureImprovementLedgerTables();
-    const activation = this.maybeAdvanceActivation(this.readImprovementActivation(activationId));
+  async pauseImprovementActivation(activationId: string, actorId = "operator"): Promise<ImprovementActivationRecord> {
+    await this.ctx.requireFeatureEnabled("improvementActivationV1Enabled");
+    await this.ensureImprovementLedgerTables();
+    const activation = await this.maybeAdvanceActivation(await this.readImprovementActivation(activationId));
     if (activation.status !== "active" || !activation.watchStartedAt) {
       throw new Error(`Activation ${activationId} must be active before it can be paused.`);
     }
-    return this.restoreActivationSnapshot(activation, "paused", actorId, "operator");
+    return await this.restoreActivationSnapshot(activation, "paused", actorId, "operator");
   }
 
-  rollbackImprovementActivation(activationId: string, actorId = "operator"): ImprovementActivationRecord {
-    this.ctx.requireFeatureEnabled("improvementActivationV1Enabled");
-    this.ensureImprovementLedgerTables();
-    const activation = this.maybeAdvanceActivation(this.readImprovementActivation(activationId));
+  async rollbackImprovementActivation(
+    activationId: string,
+    actorId = "operator",
+  ): Promise<ImprovementActivationRecord> {
+    await this.ctx.requireFeatureEnabled("improvementActivationV1Enabled");
+    await this.ensureImprovementLedgerTables();
+    const activation = await this.maybeAdvanceActivation(await this.readImprovementActivation(activationId));
     if (
       !activation.watchStartedAt ||
       (activation.status !== "active" && activation.status !== "paused" && activation.status !== "failed")
     ) {
       throw new Error(`Activation ${activationId} must have been applied before it can be rolled back.`);
     }
-    const restored = this.restoreActivationSnapshot(activation, "rolled_back", actorId, "operator");
-    this.applyCandidateSuppression(restored.candidateId);
+    const restored = await this.restoreActivationSnapshot(activation, "rolled_back", actorId, "operator");
+    await this.applyCandidateSuppression(restored.candidateId);
     return restored;
   }
 
@@ -1906,7 +1930,7 @@ export class ImprovementService {
   // a non-idempotent callback blindly.
 
   private getImprovementLifecycleRepository(): ReturnType<typeof createImprovementLifecycleOperationRepository> {
-    this.improvementLifecycleRepository ??= createImprovementLifecycleOperationRepository(this.ctx.gatewaySql);
+    this.improvementLifecycleRepository ??= createImprovementLifecycleOperationRepository(this.ctx.storage);
     return this.improvementLifecycleRepository;
   }
 
@@ -1916,18 +1940,18 @@ export class ImprovementService {
    * state and the exact external pre/target policy state into the approval,
    * and returns the pending `improvement.lifecycle` approval envelope.
    */
-  requestImprovementActivationApproval(
+  async requestImprovementActivationApproval(
     candidateId: string,
     authority: ImprovementLifecycleAuthorityInput = {},
-  ): ImprovementLifecyclePendingOutcome {
-    this.ctx.requireFeatureEnabled("improvementActivationV1Enabled");
-    this.ensureImprovementLedgerTables();
-    const candidate = this.readImprovementCandidate(candidateId);
+  ): Promise<ImprovementLifecyclePendingOutcome> {
+    await this.ctx.requireFeatureEnabled("improvementActivationV1Enabled");
+    await this.ensureImprovementLedgerTables();
+    const candidate = await this.readImprovementCandidate(candidateId);
     if (candidate.kind === "skill_revision") {
       throw new Error("Skill revision candidates activate through capability proposals, not direct ledger activation.");
     }
-    const revision = this.readCurrentRevision(candidateId);
-    const evaluation = this.readLatestEvaluation(candidateId);
+    const revision = await this.readCurrentRevision(candidateId);
+    const evaluation = await this.readLatestEvaluation(candidateId);
     if (!revision || !evaluation) {
       throw new Error(`Candidate ${candidateId} is missing a current revision or evaluation.`);
     }
@@ -1937,10 +1961,10 @@ export class ImprovementService {
     if (candidate.currentRevisionId !== evaluation.revisionId || revision.changeHash !== evaluation.changeHash) {
       throw new Error(`Candidate ${candidateId} drifted since evaluation and must be re-evaluated.`);
     }
-    this.assertCandidateHasNoAppliedActivation(candidateId);
+    await this.assertCandidateHasNoAppliedActivation(candidateId);
     const kind: "repair_policy" | "routing_policy" =
       candidate.kind === "repair_policy" ? "repair_policy" : "routing_policy";
-    const preState = this.captureImprovementExternalState(kind, candidate.targetKey);
+    const preState = await this.captureImprovementExternalState(kind, candidate.targetKey);
     const targetState: ImprovementExternalStateMaterial = {
       hadValue: true,
       value: deriveActivationTargetValue(revision.candidateRef),
@@ -1960,9 +1984,9 @@ export class ImprovementService {
       targetKind: "improvement_candidate",
       targetId: candidateId,
       mutation,
-      expectedState: this.buildActivateReviewedStateMaterial(candidate, revision, evaluation),
+      expectedState: await this.buildActivateReviewedStateMaterial(candidate, revision, evaluation),
     });
-    const pendingApproval = this.commitImprovementLifecycleApproval({
+    const pendingApproval = await this.commitImprovementLifecycleApproval({
       binding,
       riskLevel: candidate.kind === "routing_policy" ? "caution" : "safe",
       requesterId: normalizeImprovementRequesterId(authority.requesterId),
@@ -1981,19 +2005,19 @@ export class ImprovementService {
   }
 
   /** Request one approved pause; an already-paused activation is a pure no-op. */
-  requestImprovementPauseApproval(
+  async requestImprovementPauseApproval(
     activationId: string,
     authority: ImprovementLifecycleAuthorityInput = {},
-  ): ImprovementLifecycleRequestOutcome {
-    return this.requestImprovementRestoreApproval(activationId, "pause", authority);
+  ): Promise<ImprovementLifecycleRequestOutcome> {
+    return await this.requestImprovementRestoreApproval(activationId, "pause", authority);
   }
 
   /** Request one approved rollback; an already-rolled-back activation is a pure no-op. */
-  requestImprovementRollbackApproval(
+  async requestImprovementRollbackApproval(
     activationId: string,
     authority: ImprovementLifecycleAuthorityInput = {},
-  ): ImprovementLifecycleRequestOutcome {
-    return this.requestImprovementRestoreApproval(activationId, "rollback", authority);
+  ): Promise<ImprovementLifecycleRequestOutcome> {
+    return await this.requestImprovementRestoreApproval(activationId, "rollback", authority);
   }
 
   /**
@@ -2002,14 +2026,14 @@ export class ImprovementService {
    * row state plus the exact external pre/target policy state; the recovered
    * effect refuses anything else.
    */
-  private requestImprovementRestoreApproval(
+  private async requestImprovementRestoreApproval(
     activationId: string,
     operationKind: "pause" | "rollback",
     authority: ImprovementLifecycleAuthorityInput,
-  ): ImprovementLifecycleRequestOutcome {
-    this.ctx.requireFeatureEnabled("improvementActivationV1Enabled");
-    this.ensureImprovementLedgerTables();
-    const activation = this.maybeAdvanceActivation(this.readImprovementActivation(activationId));
+  ): Promise<ImprovementLifecycleRequestOutcome> {
+    await this.ctx.requireFeatureEnabled("improvementActivationV1Enabled");
+    await this.ensureImprovementLedgerTables();
+    const activation = await this.maybeAdvanceActivation(await this.readImprovementActivation(activationId));
     if (operationKind === "pause") {
       if (activation.status === "paused") {
         return { pendingApproval: null, noMutationRequired: true, activation };
@@ -2028,7 +2052,7 @@ export class ImprovementService {
         throw new Error(`Activation ${activationId} must have been applied before it can be rolled back.`);
       }
     }
-    const candidate = this.readImprovementCandidate(activation.candidateId);
+    const candidate = await this.readImprovementCandidate(activation.candidateId);
     if (candidate.kind === "skill_revision" || activation.preActivationSnapshot.refType === "skill_revision_snapshot") {
       throw new ConflictError({
         code: "STATE_CONFLICT",
@@ -2038,7 +2062,7 @@ export class ImprovementService {
     }
     const kind: "repair_policy" | "routing_policy" =
       candidate.kind === "repair_policy" ? "repair_policy" : "routing_policy";
-    const preState = this.captureImprovementExternalState(kind, candidate.targetKey);
+    const preState = await this.captureImprovementExternalState(kind, candidate.targetKey);
     const targetState = snapshotRefToExternalState(activation.preActivationSnapshot);
     const mutation: ImprovementPauseRollbackMutationV1 = { activationId, preState, targetState };
     const binding = buildImprovementLifecycleApprovalBinding({
@@ -2049,7 +2073,7 @@ export class ImprovementService {
       mutation,
       expectedState: buildRestoreReviewedStateMaterial(activation),
     });
-    const pendingApproval = this.commitImprovementLifecycleApproval({
+    const pendingApproval = await this.commitImprovementLifecycleApproval({
       binding,
       riskLevel: "caution",
       requesterId: normalizeImprovementRequesterId(authority.requesterId),
@@ -2066,21 +2090,21 @@ export class ImprovementService {
     return { pendingApproval };
   }
 
-  private commitImprovementLifecycleApproval(input: {
+  private async commitImprovementLifecycleApproval(input: {
     binding: ImprovementLifecycleApprovalBindingV1;
     riskLevel: "safe" | "caution" | "danger";
     requesterId: string;
     mutation: unknown;
     preview: Record<string, unknown>;
-  }): ImprovementLifecyclePendingApproval {
+  }): Promise<ImprovementLifecyclePendingApproval> {
     const approvalId = deriveImprovementLifecycleApprovalId(input.binding);
     const payload = buildImprovementLifecycleApprovalPayload({
       binding: input.binding,
       requesterId: input.requesterId,
       mutation: input.mutation,
     });
-    const committed = this.ctx.gatewaySql.runImmediateTransaction(() => {
-      const stored = this.ctx.storage.approvals.createDeterministicDetachedWithTtlDuration(
+    const committed = await this.ctx.storage.runImmediateTransaction(async () => {
+      const stored = await this.ctx.storage.approvals.createDeterministicDetachedWithTtlDuration(
         {
           approvalId,
           kind: IMPROVEMENT_LIFECYCLE_APPROVAL_KIND,
@@ -2092,7 +2116,7 @@ export class ImprovementService {
         IMPROVEMENT_LIFECYCLE_APPROVAL_TTL_MS,
       );
       if (stored.created) {
-        this.ctx.storage.approvalEvents.append({
+        await this.ctx.storage.approvalEvents.append({
           approvalId,
           eventType: "created",
           actorId: "system",
@@ -2103,7 +2127,7 @@ export class ImprovementService {
             status: stored.approval.status,
           },
         });
-        this.ctx.storage.governanceJourneyEvents.create(
+        await this.ctx.storage.governanceJourneyEvents.create(
           buildImprovementLifecycleRequestJourneyEvent({
             approval: stored.approval,
             binding: input.binding,
@@ -2116,11 +2140,11 @@ export class ImprovementService {
         // identical mutation conflicts in the approvals owner because the
         // requester is payload material. A missing evidence row self-heals so
         // the recovered effect can never execute without requester evidence.
-        const evidence = this.ctx.storage.governanceJourneyEvents.findByIdempotencyKey(
+        const evidence = await this.ctx.storage.governanceJourneyEvents.findByIdempotencyKey(
           improvementLifecycleRequestJourneyIdempotencyKey(approvalId),
         );
         if (!evidence) {
-          this.ctx.storage.governanceJourneyEvents.create(
+          await this.ctx.storage.governanceJourneyEvents.create(
             buildImprovementLifecycleRequestJourneyEvent({
               approval: stored.approval,
               binding: input.binding,
@@ -2132,7 +2156,7 @@ export class ImprovementService {
       return stored;
     });
     if (committed.created) {
-      this.ctx.publishRealtime("improvement_mutation_approval_requested", "improvement", {
+      await this.ctx.publishRealtime("improvement_mutation_approval_requested", "improvement", {
         approvalId,
         operationKind: input.binding.operationKind,
         targetKind: input.binding.targetKind,
@@ -2168,17 +2192,17 @@ export class ImprovementService {
    * effect worker defers for bounded retry and recovery resumes from the
    * durable intent.
    */
-  executeApprovedImprovementLifecycleMutation(input: {
+  async executeApprovedImprovementLifecycleMutation(input: {
     workspaceId: string;
     approvalId: string;
-  }): ImprovementLifecycleApplyResult {
-    if (!this.ctx.isFeatureEnabled("improvementActivationV1Enabled")) {
+  }): Promise<ImprovementLifecycleApplyResult> {
+    if (!(await this.ctx.isFeatureEnabled("improvementActivationV1Enabled"))) {
       throw new ImprovementLifecycleApplyError("improvement_lifecycle_approval_not_executable");
     }
-    this.ensureImprovementLedgerTables();
+    await this.ensureImprovementLedgerTables();
     let approval: ApprovalRequest;
     try {
-      approval = this.ctx.storage.approvals.get(input.approvalId);
+      approval = await this.ctx.storage.approvals.get(input.approvalId);
     } catch (error) {
       if (isNotFoundLikeError(error)) {
         throw new ImprovementLifecycleApplyError("improvement_lifecycle_approval_not_executable");
@@ -2205,7 +2229,7 @@ export class ImprovementService {
     if (approval.expiresAt && Date.parse(approval.expiresAt) <= Date.now()) {
       throw new ImprovementLifecycleApplyError("improvement_lifecycle_approval_expired");
     }
-    const evidence = this.ctx.storage.governanceJourneyEvents.findByIdempotencyKey(
+    const evidence = await this.ctx.storage.governanceJourneyEvents.findByIdempotencyKey(
       improvementLifecycleRequestJourneyIdempotencyKey(approval.approvalId),
     );
     if (!evidence || evidence.approvalId !== approval.approvalId || evidence.actorId !== envelope.requesterId) {
@@ -2244,14 +2268,14 @@ export class ImprovementService {
       requestSha256: computeImprovementLifecycleRequestSha256(intentBase),
     };
     try {
-      repository.createIntent(intent);
+      await repository.createIntent(intent);
     } catch (error) {
       if (error instanceof ConflictError) {
         throw new ImprovementLifecycleApplyError("improvement_lifecycle_apply_conflict");
       }
       throw error;
     }
-    const settled = repository.findSettlementByOperationId(operationId);
+    const settled = await repository.findSettlementByOperationId(operationId);
     if (settled) {
       return mapSettlementToApplyResult(settled, binding, true);
     }
@@ -2263,7 +2287,7 @@ export class ImprovementService {
       5,
       this.callbacks.improvementLifecycleClaimLeaseMs ?? IMPROVEMENT_LIFECYCLE_CLAIM_LEASE_MS,
     );
-    const claim = repository.claim({
+    const claim = await repository.claim({
       operationId,
       workerId: `improvement-lifecycle-worker:${randomUUID()}`,
       claimedAt: new Date(claimedAtMs).toISOString(),
@@ -2274,7 +2298,7 @@ export class ImprovementService {
       if (!mutation || mutation.candidateId !== binding.targetId) {
         throw new ImprovementLifecycleApplyError("improvement_lifecycle_approval_not_executable");
       }
-      return this.runGovernedActivate({
+      return await this.runGovernedActivate({
         approval,
         binding,
         mutation,
@@ -2287,7 +2311,7 @@ export class ImprovementService {
     if (!mutation || mutation.activationId !== binding.targetId) {
       throw new ImprovementLifecycleApplyError("improvement_lifecycle_approval_not_executable");
     }
-    return this.runGovernedRestore({
+    return await this.runGovernedRestore({
       approval,
       binding,
       mutation,
@@ -2298,28 +2322,29 @@ export class ImprovementService {
   }
 
   /** Governed activate worker: claim held; revalidate, callback, re-inspect, settle. */
-  private runGovernedActivate(input: {
+  private async runGovernedActivate(input: {
     approval: ApprovalRequest;
     binding: ImprovementLifecycleApprovalBindingV1;
     mutation: NonNullable<ReturnType<typeof parseImprovementActivateMutation>>;
     intent: ImprovementLifecycleOperationRecord;
     claimGeneration: number;
     requesterId: string;
-  }): ImprovementLifecycleApplyResult {
+  }): Promise<ImprovementLifecycleApplyResult> {
     const { approval, binding, mutation, intent, claimGeneration, requesterId } = input;
     const resolvedBy = approval.resolvedBy ?? "approval";
     let candidate: ImprovementCandidateRecord | undefined;
     try {
-      candidate = this.readImprovementCandidate(mutation.candidateId);
+      candidate = await this.readImprovementCandidate(mutation.candidateId);
     } catch {
       candidate = undefined;
     }
-    const revision = candidate ? this.readCurrentRevision(candidate.candidateId) : undefined;
-    const evaluation = candidate ? this.readLatestEvaluation(candidate.candidateId) : undefined;
+    const revision = candidate ? await this.readCurrentRevision(candidate.candidateId) : undefined;
+    const evaluation = candidate ? await this.readLatestEvaluation(candidate.candidateId) : undefined;
     const stateOk =
-      buildImprovementLifecycleStateSha256(this.buildActivateReviewedStateMaterial(candidate, revision, evaluation)) ===
-      binding.expectedStateSha256;
-    const observedPre = this.captureImprovementExternalState(mutation.kind, mutation.targetKey);
+      buildImprovementLifecycleStateSha256(
+        await this.buildActivateReviewedStateMaterial(candidate, revision, evaluation),
+      ) === binding.expectedStateSha256;
+    const observedPre = await this.captureImprovementExternalState(mutation.kind, mutation.targetKey);
     const observedPreHash = computeImprovementLifecycleObservedStateSha256(observedPre);
     const approvedPreHash = computeImprovementLifecycleObservedStateSha256(mutation.preState);
     const targetHash = computeImprovementLifecycleObservedStateSha256(mutation.targetState);
@@ -2341,14 +2366,14 @@ export class ImprovementService {
     // Do NOT re-execute the non-idempotent callback; settle `applied` from the
     // durable matches_intent observation and commit the database half now.
     if (stateOk && observedPreHash === targetHash) {
-      const inspection = this.recordGovernedInspection(
+      const inspection = await this.recordGovernedInspection(
         intent,
         claimGeneration,
         "pre",
         observedPreHash,
         "matches_intent",
       );
-      return this.settleGovernedImprovementOperation({
+      return await this.settleGovernedImprovementOperation({
         binding,
         intent,
         claimGeneration,
@@ -2357,8 +2382,8 @@ export class ImprovementService {
         inspection,
         disposition: "applied",
         activationId,
-        applyStateChange: () =>
-          this.applyGovernedActivationRows({
+        applyStateChange: async () =>
+          await this.applyGovernedActivationRows({
             approval,
             binding,
             mutation,
@@ -2377,14 +2402,14 @@ export class ImprovementService {
       // The reviewed database state or the external pre-state drifted from
       // what the approval bound: refuse WITHOUT executing the callback and
       // settle the truthful abort.
-      const inspection = this.recordGovernedInspection(
+      const inspection = await this.recordGovernedInspection(
         intent,
         claimGeneration,
         "pre",
         observedPreHash,
         observedPreHash === targetHash ? "matches_intent" : "diverged",
       );
-      return this.settleGovernedImprovementOperation({
+      return await this.settleGovernedImprovementOperation({
         binding,
         intent,
         claimGeneration,
@@ -2406,25 +2431,25 @@ export class ImprovementService {
 
     // Exact pre-state confirmed: record the durable attempt marker, execute
     // the external callback once, then conclude ONLY from re-inspection.
-    this.recordGovernedInspection(intent, claimGeneration, "pre", observedPreHash, "diverged");
+    await this.recordGovernedInspection(intent, claimGeneration, "pre", observedPreHash, "diverged");
     this.callbacks.improvementLifecycleCrashSeam?.("improvement_lifecycle_before_callback");
     let callbackError: unknown;
     try {
       if (mutation.kind === "repair_policy") {
-        this.callbacks.applyRepairPolicyCandidate(mutation.targetKey, revision!.candidateRef);
+        await this.callbacks.applyRepairPolicyCandidate(mutation.targetKey, revision!.candidateRef);
       } else {
-        this.callbacks.applyRoutingPolicyCandidate(mutation.targetKey, revision!.candidateRef);
+        await this.callbacks.applyRoutingPolicyCandidate(mutation.targetKey, revision!.candidateRef);
       }
     } catch (error) {
       callbackError = error;
     }
     this.callbacks.improvementLifecycleCrashSeam?.("improvement_lifecycle_after_callback");
-    const observedPost = this.captureImprovementExternalState(mutation.kind, mutation.targetKey);
+    const observedPost = await this.captureImprovementExternalState(mutation.kind, mutation.targetKey);
     const observedPostHash = computeImprovementLifecycleObservedStateSha256(observedPost);
     const matches = observedPostHash === targetHash;
     this.callbacks.improvementLifecycleCrashSeam?.("improvement_lifecycle_after_inspection");
     if (matches) {
-      return this.settleGovernedImprovementOperation({
+      return await this.settleGovernedImprovementOperation({
         binding,
         intent,
         claimGeneration,
@@ -2438,8 +2463,8 @@ export class ImprovementService {
         },
         disposition: "applied",
         activationId,
-        applyStateChange: () =>
-          this.applyGovernedActivationRows({
+        applyStateChange: async () =>
+          await this.applyGovernedActivationRows({
             approval,
             binding,
             mutation,
@@ -2456,7 +2481,7 @@ export class ImprovementService {
     // The callback ran (or threw) and exact re-inspection does NOT show the
     // intended state: record the truthful mismatch. No false `applied` claim.
     const reasonCode = callbackError ? "activation_callback_failed" : "external_state_diverged";
-    return this.settleGovernedImprovementOperation({
+    return await this.settleGovernedImprovementOperation({
       binding,
       intent,
       claimGeneration,
@@ -2471,8 +2496,8 @@ export class ImprovementService {
       disposition: "failed",
       reasonCode,
       activationId,
-      applyStateChange: () =>
-        this.applyGovernedActivationRows({
+      applyStateChange: async () =>
+        await this.applyGovernedActivationRows({
           approval,
           binding,
           mutation,
@@ -2495,23 +2520,23 @@ export class ImprovementService {
   }
 
   /** Governed pause/rollback worker: restore the pre-activation snapshot under fresh approval. */
-  private runGovernedRestore(input: {
+  private async runGovernedRestore(input: {
     approval: ApprovalRequest;
     binding: ImprovementLifecycleApprovalBindingV1;
     mutation: ImprovementPauseRollbackMutationV1;
     intent: ImprovementLifecycleOperationRecord;
     claimGeneration: number;
     requesterId: string;
-  }): ImprovementLifecycleApplyResult {
+  }): Promise<ImprovementLifecycleApplyResult> {
     const { approval, binding, mutation, intent, claimGeneration, requesterId } = input;
     const resolvedBy = approval.resolvedBy ?? "approval";
     let activation: ImprovementActivationRecord;
     try {
-      activation = this.readImprovementActivation(mutation.activationId);
+      activation = await this.readImprovementActivation(mutation.activationId);
     } catch {
       throw new ImprovementLifecycleApplyError("improvement_lifecycle_apply_conflict");
     }
-    const candidate = this.readImprovementCandidate(activation.candidateId);
+    const candidate = await this.readImprovementCandidate(activation.candidateId);
     const kind: "repair_policy" | "routing_policy" =
       candidate.kind === "repair_policy" ? "repair_policy" : "routing_policy";
     if (candidate.kind === "skill_revision" || activation.preActivationSnapshot.refType === "skill_revision_snapshot") {
@@ -2529,7 +2554,7 @@ export class ImprovementService {
     const stateOk =
       buildImprovementLifecycleStateSha256(buildRestoreReviewedStateMaterial(activation)) ===
       binding.expectedStateSha256;
-    const observedPre = this.captureImprovementExternalState(kind, candidate.targetKey);
+    const observedPre = await this.captureImprovementExternalState(kind, candidate.targetKey);
     const observedPreHash = computeImprovementLifecycleObservedStateSha256(observedPre);
     const approvedPreHash = computeImprovementLifecycleObservedStateSha256(mutation.preState);
     const restoredStatus = binding.operationKind === "pause" ? ("paused" as const) : ("rolled_back" as const);
@@ -2549,14 +2574,14 @@ export class ImprovementService {
     if (stateOk && observedPreHash === targetHash) {
       // Crash recovery convergence: the snapshot restore already reached the
       // external system; commit the database half without a second restore.
-      const inspection = this.recordGovernedInspection(
+      const inspection = await this.recordGovernedInspection(
         intent,
         claimGeneration,
         "pre",
         observedPreHash,
         "matches_intent",
       );
-      return this.settleGovernedImprovementOperation({
+      return await this.settleGovernedImprovementOperation({
         binding,
         intent,
         claimGeneration,
@@ -2565,7 +2590,7 @@ export class ImprovementService {
         inspection,
         disposition: "applied",
         activationId: activation.activationId,
-        applyStateChange: () => this.applyGovernedRestoreRows(activation, restoredStatus, resolvedBy),
+        applyStateChange: async () => await this.applyGovernedRestoreRows(activation, restoredStatus, resolvedBy),
         signalKind: signalKindApplied,
         signalInput: {
           ...signalBase,
@@ -2576,14 +2601,14 @@ export class ImprovementService {
     }
 
     if (!stateOk || observedPreHash !== approvedPreHash) {
-      const inspection = this.recordGovernedInspection(
+      const inspection = await this.recordGovernedInspection(
         intent,
         claimGeneration,
         "pre",
         observedPreHash,
         observedPreHash === targetHash ? "matches_intent" : "diverged",
       );
-      return this.settleGovernedImprovementOperation({
+      return await this.settleGovernedImprovementOperation({
         binding,
         intent,
         claimGeneration,
@@ -2603,25 +2628,25 @@ export class ImprovementService {
       });
     }
 
-    this.recordGovernedInspection(intent, claimGeneration, "pre", observedPreHash, "diverged");
+    await this.recordGovernedInspection(intent, claimGeneration, "pre", observedPreHash, "diverged");
     this.callbacks.improvementLifecycleCrashSeam?.("improvement_lifecycle_before_callback");
     let callbackError: unknown;
     try {
       if (kind === "repair_policy") {
-        this.callbacks.restoreRepairPolicySnapshot(activation.preActivationSnapshot);
+        await this.callbacks.restoreRepairPolicySnapshot(activation.preActivationSnapshot);
       } else {
-        this.callbacks.restoreRoutingPolicySnapshot(activation.preActivationSnapshot);
+        await this.callbacks.restoreRoutingPolicySnapshot(activation.preActivationSnapshot);
       }
     } catch (error) {
       callbackError = error;
     }
     this.callbacks.improvementLifecycleCrashSeam?.("improvement_lifecycle_after_callback");
-    const observedPost = this.captureImprovementExternalState(kind, candidate.targetKey);
+    const observedPost = await this.captureImprovementExternalState(kind, candidate.targetKey);
     const observedPostHash = computeImprovementLifecycleObservedStateSha256(observedPost);
     const matches = observedPostHash === targetHash;
     this.callbacks.improvementLifecycleCrashSeam?.("improvement_lifecycle_after_inspection");
     if (matches) {
-      return this.settleGovernedImprovementOperation({
+      return await this.settleGovernedImprovementOperation({
         binding,
         intent,
         claimGeneration,
@@ -2635,7 +2660,7 @@ export class ImprovementService {
         },
         disposition: "applied",
         activationId: activation.activationId,
-        applyStateChange: () => this.applyGovernedRestoreRows(activation, restoredStatus, resolvedBy),
+        applyStateChange: async () => await this.applyGovernedRestoreRows(activation, restoredStatus, resolvedBy),
         signalKind: signalKindApplied,
         signalInput: {
           ...signalBase,
@@ -2649,7 +2674,7 @@ export class ImprovementService {
     // matches_intent inspection. Record the truthful failed settlement and
     // leave the activation row un-flipped.
     const reasonCode = callbackError ? "restore_callback_failed" : "external_state_diverged";
-    return this.settleGovernedImprovementOperation({
+    return await this.settleGovernedImprovementOperation({
       binding,
       intent,
       claimGeneration,
@@ -2675,15 +2700,20 @@ export class ImprovementService {
   }
 
   /** Record one durable observation for the CURRENT claim (the attempt marker / abort citation). */
-  private recordGovernedInspection(
+  private async recordGovernedInspection(
     intent: ImprovementLifecycleOperationRecord,
     claimGeneration: number,
     phase: "pre" | "post",
     observedStateSha256: string,
     disposition: "matches_intent" | "diverged",
-  ): { inspectionId: string; observedStateSha256: string; disposition: "matches_intent" | "diverged"; recorded: true } {
+  ): Promise<{
+    inspectionId: string;
+    observedStateSha256: string;
+    disposition: "matches_intent" | "diverged";
+    recorded: true;
+  }> {
     const inspectionId = deriveImprovementLifecycleInspectionId(intent.operationId, claimGeneration, phase);
-    this.getImprovementLifecycleRepository().recordInspection({
+    await this.getImprovementLifecycleRepository().recordInspection({
       inspectionId,
       operationId: intent.operationId,
       claimGeneration,
@@ -2701,7 +2731,7 @@ export class ImprovementService {
    * evidence. Any member failing rolls back every member, so recovery resumes
    * from the durable intent with zero partial state.
    */
-  private settleGovernedImprovementOperation(input: {
+  private async settleGovernedImprovementOperation(input: {
     binding: ImprovementLifecycleApprovalBindingV1;
     intent: ImprovementLifecycleOperationRecord;
     claimGeneration: number;
@@ -2719,7 +2749,7 @@ export class ImprovementService {
     applyStateChange?: () => void;
     signalKind: "activation_applied" | "activation_paused" | "activation_rolled_back" | "activation_failed";
     signalInput: Parameters<ImprovementService["emitLifecycleAuditSignal"]>[1];
-  }): ImprovementLifecycleApplyResult {
+  }): Promise<ImprovementLifecycleApplyResult> {
     const { binding, intent, claimGeneration, inspection } = input;
     const repository = this.getImprovementLifecycleRepository();
     const settlementId = deriveImprovementLifecycleSettlementId(intent.operationId);
@@ -2745,9 +2775,9 @@ export class ImprovementService {
       resultSha256,
       settledAt,
     };
-    this.ctx.gatewaySql.runImmediateTransaction(() => {
+    await this.ctx.storage.runImmediateTransaction(async () => {
       if (!inspection.recorded) {
-        repository.recordInspection({
+        await repository.recordInspection({
           inspectionId: inspection.inspectionId,
           operationId: intent.operationId,
           claimGeneration,
@@ -2757,11 +2787,11 @@ export class ImprovementService {
         });
       }
       input.applyStateChange?.();
-      repository.settle(settlement);
+      await repository.settle(settlement);
       this.callbacks.improvementLifecycleCrashSeam?.("improvement_lifecycle_before_signal");
-      this.emitLifecycleAuditSignal(input.signalKind, input.signalInput);
+      await this.emitLifecycleAuditSignal(input.signalKind, input.signalInput);
       this.callbacks.improvementLifecycleCrashSeam?.("improvement_lifecycle_before_journey");
-      this.ctx.storage.governanceJourneyEvents.create(
+      await this.ctx.storage.governanceJourneyEvents.create(
         buildImprovementLifecycleSettlementJourneyEvent({
           binding,
           approvalId: intent.approvalId,
@@ -2793,7 +2823,7 @@ export class ImprovementService {
   }
 
   /** Governed activate DB half: the activation row plus the candidate transition. */
-  private applyGovernedActivationRows(input: {
+  private async applyGovernedActivationRows(input: {
     approval: ApprovalRequest;
     binding: ImprovementLifecycleApprovalBindingV1;
     mutation: NonNullable<ReturnType<typeof parseImprovementActivateMutation>>;
@@ -2803,10 +2833,10 @@ export class ImprovementService {
     requesterId: string;
     status: "active" | "failed";
     failureReason?: string;
-  }): void {
+  }): Promise<void> {
     const now = new Date().toISOString();
     const activationTarget = this.buildActivationTargetRef(input.candidate, input.revision);
-    const inserted = this.ctx.gatewaySql
+    const inserted = await this.ctx.storage.db
       .prepare(
         `
         INSERT INTO improvement_activations (
@@ -2852,7 +2882,7 @@ export class ImprovementService {
       throw new Error(`Governed activation ${input.activationId} could not persist its canonical row.`);
     }
     if (input.status === "active") {
-      this.updateCandidateStatus(
+      await this.updateCandidateStatus(
         input.candidate.candidateId,
         "approved",
         input.approval.resolvedBy ?? "approval",
@@ -2862,13 +2892,13 @@ export class ImprovementService {
   }
 
   /** Governed pause/rollback DB half: flip the activation row under its verified prior status. */
-  private applyGovernedRestoreRows(
+  private async applyGovernedRestoreRows(
     activation: ImprovementActivationRecord,
     status: "paused" | "rolled_back",
     actorId: string,
-  ): void {
+  ): Promise<void> {
     const now = new Date().toISOString();
-    const flipped = this.ctx.gatewaySql
+    const flipped = await this.ctx.storage.db
       .prepare(
         `
         UPDATE improvement_activations
@@ -2898,37 +2928,37 @@ export class ImprovementService {
       throw new Error(`Governed activation ${activation.activationId} lost its ${activation.status}-state claim.`);
     }
     if (status === "rolled_back") {
-      this.applyCandidateSuppression(activation.candidateId);
+      await this.applyCandidateSuppression(activation.candidateId);
     }
   }
 
   /** The exact reviewed DATABASE state for one governed activate request/apply. */
-  private buildActivateReviewedStateMaterial(
+  private async buildActivateReviewedStateMaterial(
     candidate: ImprovementCandidateRecord | undefined,
     revision: ImprovementCandidateRevisionRecord | undefined,
     evaluation: ImprovementEvaluationRecord | undefined,
-  ): Record<string, unknown> {
-    const latestActivation = candidate ? this.readLatestActivation(candidate.candidateId) : undefined;
+  ): Promise<Record<string, unknown>> {
+    const latestActivation = candidate ? await this.readLatestActivation(candidate.candidateId) : undefined;
     return buildImprovementActivateReviewedStateMaterial(candidate, revision, evaluation, latestActivation);
   }
 
-  private captureImprovementExternalState(
+  private async captureImprovementExternalState(
     kind: "repair_policy" | "routing_policy",
     targetKey: string,
-  ): ImprovementExternalStateMaterial {
+  ): Promise<ImprovementExternalStateMaterial> {
     const ref =
       kind === "repair_policy"
-        ? this.callbacks.captureRepairPolicySnapshot(targetKey)
-        : this.callbacks.captureRoutingPolicySnapshot(targetKey);
+        ? await this.callbacks.captureRepairPolicySnapshot(targetKey)
+        : await this.callbacks.captureRoutingPolicySnapshot(targetKey);
     return snapshotRefToExternalState(ref);
   }
 
-  private recordImprovementSignal(input: ImprovementSignalInput): ImprovementSignalRecord | undefined {
-    this.ensureImprovementLedgerTables();
+  private async recordImprovementSignal(input: ImprovementSignalInput): Promise<ImprovementSignalRecord | undefined> {
+    await this.ensureImprovementLedgerTables();
     const evidenceRefs = normalizeEvidenceRefs(input.evidenceRefs);
     const metadata = clampMetadataBytes(input.metadata);
     const existing = toImprovementSignalRow(
-      this.ctx.gatewaySql
+      await this.ctx.storage.db
         .prepare(
           `
           SELECT *
@@ -2948,7 +2978,7 @@ export class ImprovementService {
     }
     const now = new Date().toISOString();
     const signalId = randomUUID();
-    this.ctx.gatewaySql
+    await this.ctx.storage.db
       .prepare(
         `
         INSERT INTO improvement_signals (
@@ -2998,19 +3028,19 @@ export class ImprovementService {
         metadataJson: metadata ? JSON.stringify(metadata) : null,
         createdAt: now,
       });
-    const signal = this.getImprovementSignal(signalId);
-    this.applySignalToWatchWindows(signal);
-    this.maybeSynthesizeCandidate(signal);
+    const signal = await this.getImprovementSignal(signalId);
+    await this.applySignalToWatchWindows(signal);
+    await this.maybeSynthesizeCandidate(signal);
     return signal;
   }
 
-  private recordAgenticImprovementProposal(
+  private async recordAgenticImprovementProposal(
     proposal: AgenticImprovementBridgeProposal,
     workspaceId: string,
-  ): AgenticImprovementProposalIngestionResult {
+  ): Promise<AgenticImprovementProposalIngestionResult> {
     const kind = determineAgenticProposalCandidateKind(proposal);
     const targetKey = buildAgenticProposalTargetKey(proposal, kind);
-    const signal = this.recordImprovementSignal({
+    const signal = await this.recordImprovementSignal({
       sourceService: "agentic-improvement-bridge",
       sourceType: "agentic_improvement_proposal",
       sourceId: proposal.proposalId,
@@ -3053,14 +3083,14 @@ export class ImprovementService {
       },
     });
     if (signal) {
-      this.maybeSynthesizeCandidate(signal);
+      await this.maybeSynthesizeCandidate(signal);
     }
-    const candidate = signal ? this.readOpenImprovementCandidateBySignal(signal, kind) : undefined;
+    const candidate = signal ? await this.readOpenImprovementCandidateBySignal(signal, kind) : undefined;
     return { proposal, signal, candidate };
   }
 
-  recordCapabilityGapEvent(input: CapabilityGapEventUpsertInput): CapabilityGapEventRecord {
-    this.ensureCapabilityGapTables();
+  async recordCapabilityGapEvent(input: CapabilityGapEventUpsertInput): Promise<CapabilityGapEventRecord> {
+    await this.ensureCapabilityGapTables();
     const now = new Date().toISOString();
     const normalizedCauseClass = CAPABILITY_GAP_CAUSE_CLASSES.has(input.causeClass)
       ? input.causeClass
@@ -3074,7 +3104,7 @@ export class ImprovementService {
       providerId: input.providerId,
     });
     const existing = toCapabilityGapEventRow(
-      this.ctx.gatewaySql
+      await this.ctx.storage.db
         .prepare(
           `
       SELECT *
@@ -3089,7 +3119,7 @@ export class ImprovementService {
     const repeatCount = (existing?.repeat_count ?? 0) + 1;
     const recoveryOptionsJson = JSON.stringify(normalizedRecoveryOptions);
 
-    this.ctx.gatewaySql
+    await this.ctx.storage.db
       .prepare(
         `
       INSERT INTO capability_gap_events (
@@ -3199,7 +3229,7 @@ export class ImprovementService {
 
     const candidate =
       repeatCount >= 2
-        ? this.upsertRepairCandidate({
+        ? await this.upsertRepairCandidate({
             causeClass: normalizedCauseClass,
             requestedTool: input.requestedTool,
             toolProfile: input.toolProfile,
@@ -3210,7 +3240,7 @@ export class ImprovementService {
           })
         : undefined;
     if (candidate) {
-      this.ctx.gatewaySql
+      await this.ctx.storage.db
         .prepare(
           `
         UPDATE capability_gap_events
@@ -3222,7 +3252,7 @@ export class ImprovementService {
         .run(candidate.candidateId, now, eventId);
     }
     const row = toCapabilityGapEventRow(
-      this.ctx.gatewaySql
+      await this.ctx.storage.db
         .prepare(
           `
       SELECT *
@@ -3238,8 +3268,8 @@ export class ImprovementService {
     return mapCapabilityGapEventRow(row);
   }
 
-  getImprovementReport(reportId: string): WeeklyImprovementReportRecord {
-    const row = this.ctx.gatewaySql
+  async getImprovementReport(reportId: string): Promise<WeeklyImprovementReportRecord> {
+    const row = (await this.ctx.storage.db
       .prepare(
         `
       SELECT *
@@ -3247,7 +3277,7 @@ export class ImprovementService {
       WHERE report_id = ?
     `,
       )
-      .get(reportId) as
+      .get(reportId)) as
       | {
           report_id: string;
           run_id: string;
@@ -3265,26 +3295,28 @@ export class ImprovementService {
     if (!row) {
       throw new Error(`Improvement report ${reportId} not found`);
     }
-    return this.enrichWeeklyImprovementReport(mapImprovementReportRow(row));
+    return await this.enrichWeeklyImprovementReport(mapImprovementReportRow(row));
   }
 
-  getDecisionReplayRun(runId: string): {
+  async getDecisionReplayRun(runId: string): Promise<{
     run: DecisionReplayRunRecord;
     items: DecisionReplayItemRecord[];
     findings: DecisionReplayFindingRecord[];
     autoTunes: DecisionAutoTuneRecord[];
     report?: WeeklyImprovementReportRecord;
-  } {
-    const run = this.readDecisionReplayRun(runId);
-    const items = this.listDecisionReplayItems(runId, 1500);
-    const findings = this.listDecisionReplayFindings(runId, 300);
-    const autoTunes = this.listDecisionAutoTunes(runId, 300);
-    const report = run.reportId ? this.getImprovementReport(run.reportId) : undefined;
+  }> {
+    const run = await this.readDecisionReplayRun(runId);
+    const items = await this.listDecisionReplayItems(runId, 1500);
+    const findings = await this.listDecisionReplayFindings(runId, 300);
+    const autoTunes = await this.listDecisionAutoTunes(runId, 300);
+    const report = run.reportId ? await this.getImprovementReport(run.reportId) : undefined;
     return { run, items, findings, autoTunes, report };
   }
 
-  private enrichWeeklyImprovementReport(report: WeeklyImprovementReportRecord): WeeklyImprovementReportRecord {
-    const routingGapSummary = this.buildWeeklyRoutingGapSummary(report.weekStart, report.weekEnd);
+  private async enrichWeeklyImprovementReport(
+    report: WeeklyImprovementReportRecord,
+  ): Promise<WeeklyImprovementReportRecord> {
+    const routingGapSummary = await this.buildWeeklyRoutingGapSummary(report.weekStart, report.weekEnd);
     const specialistCandidateSuggestions = this.buildWeeklySpecialistSuggestions(report, routingGapSummary);
     const strategyTags = this.buildWeeklyStrategyTags(report, routingGapSummary, specialistCandidateSuggestions);
     const proposalDrafts = this.buildWeeklyProposalDrafts(report, routingGapSummary, specialistCandidateSuggestions);
@@ -3297,12 +3329,12 @@ export class ImprovementService {
     };
   }
 
-  private buildWeeklyRoutingGapSummary(
+  private async buildWeeklyRoutingGapSummary(
     weekStart: string,
     weekEnd: string,
-  ): WeeklyImprovementReportRecord["routingGapSummary"] {
-    this.ensureCapabilityGapTables();
-    const rows = this.ctx.gatewaySql
+  ): Promise<WeeklyImprovementReportRecord["routingGapSummary"]> {
+    await this.ensureCapabilityGapTables();
+    const rows = (await this.ctx.storage.db
       .prepare(
         `
       SELECT cause_class, requested_tool, COUNT(*) AS event_count
@@ -3313,7 +3345,7 @@ export class ImprovementService {
       LIMIT 24
     `,
       )
-      .all({ weekStart, weekEnd }) as Array<{
+      .all({ weekStart, weekEnd })) as Array<{
       cause_class: string;
       requested_tool: string | null;
       event_count: number;
@@ -3548,14 +3580,14 @@ export class ImprovementService {
     run: DecisionReplayRunRecord;
     report?: WeeklyImprovementReportRecord;
   }> {
-    return this.runDecisionReplayAudit({
+    return await this.runDecisionReplayAudit({
       triggerMode: "manual",
       sampleSize: clampInt(input.sampleSize, IMPROVEMENT_WEEKLY_SAMPLE_SIZE, 50, 2000),
     });
   }
 
-  approveDecisionAutoTune(tuneId: string): DecisionAutoTuneRecord {
-    const tune = this.readDecisionAutoTune(tuneId);
+  async approveDecisionAutoTune(tuneId: string): Promise<DecisionAutoTuneRecord> {
+    const tune = await this.readDecisionAutoTune(tuneId);
     if (tune.status === "applied") {
       return tune;
     }
@@ -3565,11 +3597,11 @@ export class ImprovementService {
     if (tune.riskLevel !== "low") {
       throw new Error(`Auto-tune ${tuneId} is ${tune.riskLevel} risk and requires manual code review.`);
     }
-    return this.applyDecisionAutoTune(tuneId, "manual");
+    return await this.applyDecisionAutoTune(tuneId, "manual");
   }
 
-  revertDecisionAutoTune(tuneId: string): DecisionAutoTuneRecord {
-    const tune = this.readDecisionAutoTune(tuneId);
+  async revertDecisionAutoTune(tuneId: string): Promise<DecisionAutoTuneRecord> {
+    const tune = await this.readDecisionAutoTune(tuneId);
     if (tune.status !== "applied") {
       throw new Error(`Auto-tune ${tuneId} is ${tune.status} and cannot be reverted.`);
     }
@@ -3580,12 +3612,12 @@ export class ImprovementService {
     }
     const previousValue = snapshot.previousValue;
     if (previousValue === undefined) {
-      this.ctx.storage.systemSettings.set(settingKey, null);
+      await this.ctx.storage.systemSettings.set(settingKey, null);
     } else {
-      this.ctx.storage.systemSettings.set(settingKey, previousValue);
+      await this.ctx.storage.systemSettings.set(settingKey, previousValue);
     }
     const revertedAt = new Date().toISOString();
-    this.ctx.gatewaySql
+    await this.ctx.storage.db
       .prepare(
         `
       UPDATE decision_autotunes
@@ -3601,24 +3633,24 @@ export class ImprovementService {
           restoredSetting: settingKey,
         }),
       });
-    this.ctx.publishRealtime("improvement_autotune_reverted", "improvement", {
+    await this.ctx.publishRealtime("improvement_autotune_reverted", "improvement", {
       tuneId,
       settingKey,
       revertedAt,
     });
-    return this.readDecisionAutoTune(tuneId);
+    return await this.readDecisionAutoTune(tuneId);
   }
 
-  createReplayOverrideDraft(
+  async createReplayOverrideDraft(
     sourceRunId: string,
     overrides: ReplayOverrideStep[] = [],
     _links?: { capabilityGapEventId?: string; repairCandidateId?: string },
-  ): ReplayOverrideDraft {
-    this.ctx.requireFeatureEnabled("replayOverridesV1Enabled");
+  ): Promise<ReplayOverrideDraft> {
+    await this.ctx.requireFeatureEnabled("replayOverridesV1Enabled");
     const now = new Date().toISOString();
     const replayRunId = randomUUID();
     const normalized = this.normalizeReplayOverrides(overrides);
-    this.ctx.gatewaySql
+    await this.ctx.storage.db
       .prepare(
         `
       INSERT INTO replay_override_runs (
@@ -3637,7 +3669,7 @@ export class ImprovementService {
         }),
         startedAt: now,
       });
-    this.replaceReplayOverrideSteps(replayRunId, normalized);
+    await this.replaceReplayOverrideSteps(replayRunId, normalized);
     return {
       replayRunId,
       sourceRunId,
@@ -3648,14 +3680,14 @@ export class ImprovementService {
     };
   }
 
-  executeReplayOverride(
+  async executeReplayOverride(
     sourceRunId: string,
     overrides: ReplayOverrideStep[] = [],
     links?: { capabilityGapEventId?: string; repairCandidateId?: string },
-  ): ReplayOverrideDraft {
-    this.ctx.requireFeatureEnabled("replayOverridesV1Enabled");
-    const draft = this.createReplayOverrideDraft(sourceRunId, overrides, links);
-    this.ctx.gatewaySql
+  ): Promise<ReplayOverrideDraft> {
+    await this.ctx.requireFeatureEnabled("replayOverridesV1Enabled");
+    const draft = await this.createReplayOverrideDraft(sourceRunId, overrides, links);
+    await this.ctx.storage.db
       .prepare(
         `
       UPDATE replay_override_runs
@@ -3669,7 +3701,7 @@ export class ImprovementService {
 
     const summary = this.computeReplayDiffSummary(sourceRunId, draft.replayRunId, draft.overrides);
     const finishedAt = new Date().toISOString();
-    this.ctx.gatewaySql
+    await this.ctx.storage.db
       .prepare(
         `
       UPDATE replay_override_runs
@@ -3684,7 +3716,7 @@ export class ImprovementService {
         diffJson: JSON.stringify(summary),
         finishedAt,
       });
-    this.ctx.publishRealtime("system", "improvement", {
+    await this.ctx.publishRealtime("system", "improvement", {
       type: "replay_override_completed",
       replayRunId: draft.replayRunId,
       sourceRunId,
@@ -3697,9 +3729,9 @@ export class ImprovementService {
     };
   }
 
-  getReplayDiffSummary(replayRunId: string): ReplayDiffSummary {
-    this.ctx.requireFeatureEnabled("replayOverridesV1Enabled");
-    const row = this.ctx.gatewaySql
+  async getReplayDiffSummary(replayRunId: string): Promise<ReplayDiffSummary> {
+    await this.ctx.requireFeatureEnabled("replayOverridesV1Enabled");
+    const row = (await this.ctx.storage.db
       .prepare(
         `
       SELECT replay_run_id, source_run_id, status, diff_json, started_at, finished_at
@@ -3707,7 +3739,7 @@ export class ImprovementService {
       WHERE replay_run_id = ?
     `,
       )
-      .get(replayRunId) as
+      .get(replayRunId)) as
       | {
           replay_run_id: string;
           source_run_id: string;
@@ -3751,15 +3783,15 @@ export class ImprovementService {
     return normalized;
   }
 
-  private replaceReplayOverrideSteps(replayRunId: string, overrides: ReplayOverrideStep[]): void {
-    this.ctx.gatewaySql.prepare("DELETE FROM replay_override_steps WHERE replay_run_id = ?").run(replayRunId);
-    const insert = this.ctx.gatewaySql.prepare(`
+  private async replaceReplayOverrideSteps(replayRunId: string, overrides: ReplayOverrideStep[]): Promise<void> {
+    await this.ctx.storage.db.prepare("DELETE FROM replay_override_steps WHERE replay_run_id = ?").run(replayRunId);
+    const insert = this.ctx.storage.db.prepare(`
       INSERT INTO replay_override_steps (step_id, replay_run_id, step_key, override_kind, override_json, created_at)
       VALUES (@stepId, @replayRunId, @stepKey, @overrideKind, @overrideJson, @createdAt)
     `);
     const now = new Date().toISOString();
     for (const override of overrides) {
-      insert.run({
+      await insert.run({
         stepId: randomUUID(),
         replayRunId,
         stepKey: override.stepKey,
@@ -3787,7 +3819,7 @@ export class ImprovementService {
     };
   }
 
-  private upsertRepairCandidate(input: {
+  private async upsertRepairCandidate(input: {
     causeClass: CapabilityGapCauseClass;
     requestedTool?: string;
     toolProfile?: string;
@@ -3795,10 +3827,10 @@ export class ImprovementService {
     configArea?: string;
     confidence: number;
     eventCount: number;
-  }): RepairCandidateRecord {
+  }): Promise<RepairCandidateRecord> {
     const now = new Date().toISOString();
     const fingerprint = buildCapabilityGapFingerprint(input);
-    const existing = this.ctx.gatewaySql
+    const existing = (await this.ctx.storage.db
       .prepare(
         `
       SELECT *
@@ -3807,13 +3839,13 @@ export class ImprovementService {
       LIMIT 1
     `,
       )
-      .get(fingerprint) as RepairCandidateRow | undefined;
+      .get(fingerprint)) as RepairCandidateRow | undefined;
     const candidateId = existing?.candidate_id ?? randomUUID();
     const title = buildRepairCandidateTitle(input.causeClass, input.requestedTool);
     const summary = buildRepairCandidateSummary(input);
     const suggestedPatch = buildSuggestedRepairPatch(input);
 
-    this.ctx.gatewaySql
+    await this.ctx.storage.db
       .prepare(
         `
       INSERT INTO repair_candidates (
@@ -3894,7 +3926,7 @@ export class ImprovementService {
       });
 
     const row = toRepairCandidateRow(
-      this.ctx.gatewaySql
+      await this.ctx.storage.db
         .prepare(
           `
       SELECT *
@@ -3910,8 +3942,8 @@ export class ImprovementService {
     return mapRepairCandidateRow(row);
   }
 
-  private ensureImprovementLedgerTables(): void {
-    this.ctx.gatewaySql.exec(`
+  private async ensureImprovementLedgerTables(): Promise<void> {
+    await this.ctx.storage.db.exec(`
       CREATE TABLE IF NOT EXISTS improvement_signals (
         signal_id TEXT PRIMARY KEY,
         schema_version TEXT NOT NULL,
@@ -4066,9 +4098,9 @@ export class ImprovementService {
     return this.ctx.normalizeWorkspaceId(payloadWorkspaceId ?? metadataWorkspaceId ?? checkpointWorkspaceId);
   }
 
-  private readImprovementCandidate(candidateId: string): ImprovementCandidateRecord {
+  private async readImprovementCandidate(candidateId: string): Promise<ImprovementCandidateRecord> {
     const row = toImprovementCandidateRow(
-      this.ctx.gatewaySql
+      await this.ctx.storage.db
         .prepare(
           `
           SELECT *
@@ -4085,12 +4117,12 @@ export class ImprovementService {
     return mapImprovementCandidateRow(row);
   }
 
-  private readOpenImprovementCandidateBySignal(
+  private async readOpenImprovementCandidateBySignal(
     signal: ImprovementSignalRecord,
     kind: ImprovementCandidateKind,
-  ): ImprovementCandidateRecord | undefined {
+  ): Promise<ImprovementCandidateRecord | undefined> {
     const row = toImprovementCandidateRow(
-      this.ctx.gatewaySql
+      await this.ctx.storage.db
         .prepare(
           `
           SELECT *
@@ -4112,13 +4144,13 @@ export class ImprovementService {
     return row ? mapImprovementCandidateRow(row) : undefined;
   }
 
-  private readCurrentRevision(candidateId: string): ImprovementCandidateRevisionRecord | undefined {
-    const candidate = this.readImprovementCandidate(candidateId);
+  private async readCurrentRevision(candidateId: string): Promise<ImprovementCandidateRevisionRecord | undefined> {
+    const candidate = await this.readImprovementCandidate(candidateId);
     if (!candidate.currentRevisionId) {
       return undefined;
     }
     const row = toImprovementCandidateRevisionRow(
-      this.ctx.gatewaySql
+      await this.ctx.storage.db
         .prepare(
           `
           SELECT *
@@ -4132,9 +4164,9 @@ export class ImprovementService {
     return row ? mapImprovementCandidateRevisionRow(row) : undefined;
   }
 
-  private readLatestEvaluation(candidateId: string): ImprovementEvaluationRecord | undefined {
+  private async readLatestEvaluation(candidateId: string): Promise<ImprovementEvaluationRecord | undefined> {
     const row = toImprovementEvaluationRow(
-      this.ctx.gatewaySql
+      await this.ctx.storage.db
         .prepare(
           `
           SELECT *
@@ -4149,9 +4181,9 @@ export class ImprovementService {
     return row ? mapImprovementEvaluationRow(row) : undefined;
   }
 
-  private readImprovementActivation(activationId: string): ImprovementActivationRecord {
+  private async readImprovementActivation(activationId: string): Promise<ImprovementActivationRecord> {
     const row = toImprovementActivationRow(
-      this.ctx.gatewaySql
+      await this.ctx.storage.db
         .prepare(
           `
           SELECT *
@@ -4168,9 +4200,9 @@ export class ImprovementService {
     return mapImprovementActivationRow(row);
   }
 
-  private readLatestActivation(candidateId: string): ImprovementActivationRecord | undefined {
+  private async readLatestActivation(candidateId: string): Promise<ImprovementActivationRecord | undefined> {
     const row = toImprovementActivationRow(
-      this.ctx.gatewaySql
+      await this.ctx.storage.db
         .prepare(
           `
           SELECT *
@@ -4185,9 +4217,9 @@ export class ImprovementService {
     return row ? mapImprovementActivationRow(row) : undefined;
   }
 
-  private listSignalsForCandidate(candidateId: string): ImprovementSignalRecord[] {
+  private async listSignalsForCandidate(candidateId: string): Promise<ImprovementSignalRecord[]> {
     const rows = toImprovementSignalRows(
-      this.ctx.gatewaySql
+      await this.ctx.storage.db
         .prepare(
           `
           SELECT s.*
@@ -4202,7 +4234,7 @@ export class ImprovementService {
     return rows.map((row) => mapImprovementSignalRow(row));
   }
 
-  private maybeSynthesizeCandidate(signal: ImprovementSignalRecord): void {
+  private async maybeSynthesizeCandidate(signal: ImprovementSignalRecord): Promise<void> {
     if (signal.origin === "improvement_internal") {
       return;
     }
@@ -4211,7 +4243,7 @@ export class ImprovementService {
       return;
     }
     const suppressed = toImprovementCandidateRow(
-      this.ctx.gatewaySql
+      await this.ctx.storage.db
         .prepare(
           `
           SELECT *
@@ -4240,12 +4272,12 @@ export class ImprovementService {
       signal.signalKind === "agentic_improvement_proposal" ||
       (signal.signalClass === "evaluation" && signal.outcome === "negative" && signal.severity === "high") ||
       (signal.signalKind === "skill_revision_evaluated" && signal.outcome === "positive");
-    if (!shouldCreateImmediately && !this.isSynthesisThresholdMet(signal, kind)) {
+    if (!shouldCreateImmediately && !(await this.isSynthesisThresholdMet(signal, kind))) {
       return;
     }
 
     const open = toImprovementCandidateRow(
-      this.ctx.gatewaySql
+      await this.ctx.storage.db
         .prepare(
           `
           SELECT *
@@ -4269,7 +4301,7 @@ export class ImprovementService {
     if (!candidateId) {
       candidateId = randomUUID();
       const targetKey = this.deriveTargetKey(kind, signal);
-      this.ctx.gatewaySql
+      await this.ctx.storage.db
         .prepare(
           `
           INSERT INTO improvement_candidates (
@@ -4296,7 +4328,7 @@ export class ImprovementService {
           createdAt: now,
           updatedAt: now,
         });
-      this.emitLifecycleAuditSignal("candidate_created", {
+      await this.emitLifecycleAuditSignal("candidate_created", {
         candidateId,
         workspaceId: signal.workspaceId,
         fingerprint: signal.fingerprint,
@@ -4305,7 +4337,7 @@ export class ImprovementService {
       });
     }
 
-    this.ctx.gatewaySql
+    await this.ctx.storage.db
       .prepare(
         `
         INSERT OR IGNORE INTO improvement_candidate_signals (candidate_id, signal_id, created_at)
@@ -4318,7 +4350,7 @@ export class ImprovementService {
         createdAt: now,
       });
 
-    this.ctx.gatewaySql
+    await this.ctx.storage.db
       .prepare(
         `
         UPDATE improvement_candidates
@@ -4347,10 +4379,10 @@ export class ImprovementService {
         updatedAt: now,
       });
 
-    const candidate = this.readImprovementCandidate(candidateId);
+    const candidate = await this.readImprovementCandidate(candidateId);
     const revisionRef = this.buildCandidateRevisionRef(candidate, signal);
-    this.ensureCandidateRevision(candidate, revisionRef);
-    this.queueCandidateEvaluation(candidateId);
+    await this.ensureCandidateRevision(candidate, revisionRef);
+    await this.queueCandidateEvaluation(candidateId);
   }
 
   private determineCandidateKind(signal: ImprovementSignalRecord): ImprovementCandidateKind | undefined {
@@ -4546,15 +4578,20 @@ export class ImprovementService {
     };
   }
 
-  private ensureCandidateRevision(candidate: ImprovementCandidateRecord, candidateRef: ImprovementRef): void {
-    const currentRevision = candidate.currentRevisionId ? this.readCurrentRevision(candidate.candidateId) : undefined;
+  private async ensureCandidateRevision(
+    candidate: ImprovementCandidateRecord,
+    candidateRef: ImprovementRef,
+  ): Promise<void> {
+    const currentRevision = candidate.currentRevisionId
+      ? await this.readCurrentRevision(candidate.candidateId)
+      : undefined;
     const changeHash = hashJson(candidateRef);
     if (currentRevision?.changeHash === changeHash) {
       return;
     }
     const revisionId = randomUUID();
     const now = new Date().toISOString();
-    this.ctx.gatewaySql
+    await this.ctx.storage.db
       .prepare(
         `
         INSERT INTO improvement_candidate_revisions (
@@ -4573,7 +4610,7 @@ export class ImprovementService {
         changeHash,
         createdAt: now,
       });
-    this.ctx.gatewaySql
+    await this.ctx.storage.db
       .prepare(
         `
         UPDATE improvement_candidates
@@ -4589,7 +4626,7 @@ export class ImprovementService {
         updatedAt: now,
         candidateId: candidate.candidateId,
       });
-    this.emitLifecycleAuditSignal("revision_created", {
+    await this.emitLifecycleAuditSignal("revision_created", {
       candidateId: candidate.candidateId,
       revisionId,
       workspaceId: candidate.workspaceId,
@@ -4599,22 +4636,22 @@ export class ImprovementService {
     });
   }
 
-  private queueCandidateEvaluation(candidateId: string): void {
-    const candidate = this.readImprovementCandidate(candidateId);
-    const revision = this.readCurrentRevision(candidateId);
+  private async queueCandidateEvaluation(candidateId: string): Promise<void> {
+    const candidate = await this.readImprovementCandidate(candidateId);
+    const revision = await this.readCurrentRevision(candidateId);
     if (!revision) {
       return;
     }
-    const latest = this.readLatestEvaluation(candidateId);
+    const latest = await this.readLatestEvaluation(candidateId);
     if (latest?.revisionId === revision.revisionId && latest.status === "passed") {
       if (candidate.status === "proposed" || candidate.status === "evaluating") {
-        this.updateCandidateStatus(candidateId, "ready_for_approval", "system", "system");
+        await this.updateCandidateStatus(candidateId, "ready_for_approval", "system", "system");
       }
       return;
     }
     const now = new Date().toISOString();
-    this.updateCandidateStatus(candidateId, "evaluating", "system", "system");
-    const supportingSignals = this.listSignalsForCandidate(candidateId);
+    await this.updateCandidateStatus(candidateId, "evaluating", "system", "system");
+    const supportingSignals = await this.listSignalsForCandidate(candidateId);
     const evaluatorKind: ImprovementEvaluationKind =
       candidate.kind === "repair_policy"
         ? "repair_replay_validation"
@@ -4633,7 +4670,7 @@ export class ImprovementService {
       metrics.latencyDeltaMs = latestSignal.latencyDeltaMs;
     }
     const evaluationId = randomUUID();
-    this.ctx.gatewaySql
+    await this.ctx.storage.db
       .prepare(
         `
         INSERT INTO improvement_evaluations (
@@ -4682,8 +4719,8 @@ export class ImprovementService {
         createdAt: now,
         completedAt: now,
       });
-    this.updateCandidateStatus(candidateId, "ready_for_approval", "system", "system");
-    this.emitLifecycleAuditSignal("evaluation_passed", {
+    await this.updateCandidateStatus(candidateId, "ready_for_approval", "system", "system");
+    await this.emitLifecycleAuditSignal("evaluation_passed", {
       candidateId,
       revisionId: revision.revisionId,
       evaluationId,
@@ -4695,13 +4732,16 @@ export class ImprovementService {
     });
   }
 
-  private isSynthesisThresholdMet(signal: ImprovementSignalRecord, kind: ImprovementCandidateKind): boolean {
+  private async isSynthesisThresholdMet(
+    signal: ImprovementSignalRecord,
+    kind: ImprovementCandidateKind,
+  ): Promise<boolean> {
     const now = Date.now();
     const sevenDaysAgo = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString();
     const fourteenDaysAgo = new Date(now - 14 * 24 * 60 * 60 * 1000).toISOString();
     const sevenDayWorkspaceVolume = Number(
       (
-        this.ctx.gatewaySql
+        (await this.ctx.storage.db
           .prepare(
             `
             SELECT COUNT(*) AS count
@@ -4714,12 +4754,12 @@ export class ImprovementService {
           .get({
             workspaceId: signal.workspaceId,
             windowStart: sevenDaysAgo,
-          }) as { count: number } | undefined
+          })) as { count: number } | undefined
       )?.count ?? 0,
     );
     const fourteenDayWorkspaceVolume = Number(
       (
-        this.ctx.gatewaySql
+        (await this.ctx.storage.db
           .prepare(
             `
             SELECT COUNT(*) AS count
@@ -4732,7 +4772,7 @@ export class ImprovementService {
           .get({
             workspaceId: signal.workspaceId,
             windowStart: fourteenDaysAgo,
-          }) as { count: number } | undefined
+          })) as { count: number } | undefined
       )?.count ?? 0,
     );
     const targetWindowStart =
@@ -4740,7 +4780,7 @@ export class ImprovementService {
     const requiredCount = sevenDayWorkspaceVolume > 100 ? 5 : fourteenDayWorkspaceVolume < 20 ? 2 : 3;
     const count = Number(
       (
-        this.ctx.gatewaySql
+        (await this.ctx.storage.db
           .prepare(
             `
             SELECT COUNT(*) AS count
@@ -4755,7 +4795,7 @@ export class ImprovementService {
             workspaceId: signal.workspaceId,
             fingerprint: signal.fingerprint,
             windowStart: targetWindowStart,
-          }) as { count: number } | undefined
+          })) as { count: number } | undefined
       )?.count ?? 0,
     );
     return count >= requiredCount && IMPROVEMENT_CANDIDATE_KINDS.has(kind);
@@ -4891,13 +4931,13 @@ export class ImprovementService {
     }
   }
 
-  private updateCandidateStatus(
+  private async updateCandidateStatus(
     candidateId: string,
     status: ImprovementCandidateStatus,
     actorId: string,
     actorType: ImprovementActorType,
-  ): void {
-    this.ctx.gatewaySql
+  ): Promise<void> {
+    await this.ctx.storage.db
       .prepare(
         `
         UPDATE improvement_candidates
@@ -4917,8 +4957,12 @@ export class ImprovementService {
       });
   }
 
-  private clearCandidateSuppression(candidateId: string, actorId: string, actorType: ImprovementActorType): void {
-    this.ctx.gatewaySql
+  private async clearCandidateSuppression(
+    candidateId: string,
+    actorId: string,
+    actorType: ImprovementActorType,
+  ): Promise<void> {
+    await this.ctx.storage.db
       .prepare(
         `
         UPDATE improvement_candidates
@@ -4937,13 +4981,13 @@ export class ImprovementService {
       });
   }
 
-  private setCandidateSuppression(
+  private async setCandidateSuppression(
     candidateId: string,
     suppressionUntil: string,
     actorId: string,
     actorType: ImprovementActorType,
-  ): void {
-    this.ctx.gatewaySql
+  ): Promise<void> {
+    await this.ctx.storage.db
       .prepare(
         `
         UPDATE improvement_candidates
@@ -4963,8 +5007,8 @@ export class ImprovementService {
       });
   }
 
-  private applyCandidateSuppression(candidateId: string): void {
-    this.ctx.gatewaySql
+  private async applyCandidateSuppression(candidateId: string): Promise<void> {
+    await this.ctx.storage.db
       .prepare(
         `
         UPDATE improvement_candidates
@@ -5013,24 +5057,24 @@ export class ImprovementService {
     };
   }
 
-  private captureActivationSnapshot(
+  private async captureActivationSnapshot(
     kind: ImprovementCandidateKind,
     targetKey: string,
     revision: ImprovementCandidateRevisionRecord,
-  ): ImprovementRef {
+  ): Promise<ImprovementRef> {
     if (kind === "skill_revision") {
-      return this.callbacks.captureSkillRevisionSnapshot(targetKey, revision.candidateRef);
+      return await this.callbacks.captureSkillRevisionSnapshot(targetKey, revision.candidateRef);
     }
     return kind === "repair_policy"
-      ? this.callbacks.captureRepairPolicySnapshot(targetKey)
-      : this.callbacks.captureRoutingPolicySnapshot(targetKey);
+      ? await this.callbacks.captureRepairPolicySnapshot(targetKey)
+      : await this.callbacks.captureRoutingPolicySnapshot(targetKey);
   }
 
-  private maybeAdvanceActivation(activation: ImprovementActivationRecord): ImprovementActivationRecord {
+  private async maybeAdvanceActivation(activation: ImprovementActivationRecord): Promise<ImprovementActivationRecord> {
     if (activation.status === "pending") {
-      const approval = this.ctx.storage.approvals.get(activation.approvalId);
+      const approval = await this.ctx.storage.approvals.get(activation.approvalId);
       if (approval.status !== "pending") {
-        const resolved = this.handleActivationApprovalResolution(approval);
+        const resolved = await this.handleActivationApprovalResolution(approval);
         if (resolved) {
           return resolved;
         }
@@ -5042,18 +5086,18 @@ export class ImprovementService {
       activation.watchEndsAt &&
       Date.parse(activation.watchEndsAt) <= Date.now()
     ) {
-      return this.markActivationStable(activation.activationId);
+      return await this.markActivationStable(activation.activationId);
     }
     return activation;
   }
 
-  private applyApprovedActivation(
+  private async applyApprovedActivation(
     activation: ImprovementActivationRecord,
     approval: ApprovalRequest,
-  ): ImprovementActivationRecord {
-    const candidate = this.readImprovementCandidate(activation.candidateId);
-    const revision = this.readCurrentRevision(candidate.candidateId);
-    const evaluation = this.readLatestEvaluation(candidate.candidateId);
+  ): Promise<ImprovementActivationRecord> {
+    const candidate = await this.readImprovementCandidate(activation.candidateId);
+    const revision = await this.readCurrentRevision(candidate.candidateId);
+    const evaluation = await this.readLatestEvaluation(candidate.candidateId);
     if (
       !revision ||
       !evaluation ||
@@ -5063,14 +5107,19 @@ export class ImprovementService {
       evaluation.changeHash !== revision.changeHash ||
       activation.appliedChangeHash !== revision.changeHash
     ) {
-      this.updateCandidateStatus(candidate.candidateId, "evaluating", approval.resolvedBy ?? "approval", "approval");
+      await this.updateCandidateStatus(
+        candidate.candidateId,
+        "evaluating",
+        approval.resolvedBy ?? "approval",
+        "approval",
+      );
       throw new Error("candidate_drift");
     }
     const now = new Date().toISOString();
     let mutationApplied = false;
     try {
-      this.ctx.gatewaySql.runImmediateTransaction(() => {
-        const candidateClaim = this.ctx.gatewaySql
+      await this.ctx.storage.runImmediateTransaction(async () => {
+        const candidateClaim = await this.ctx.storage.db
           .prepare(
             `
             UPDATE improvement_candidates
@@ -5087,7 +5136,7 @@ export class ImprovementService {
         if (candidateClaim.changes !== 1) {
           throw new Error("candidate_no_longer_eligible");
         }
-        const claim = this.ctx.gatewaySql
+        const claim = await this.ctx.storage.db
           .prepare(
             `
             UPDATE improvement_activations
@@ -5103,9 +5152,9 @@ export class ImprovementService {
         if (claim.changes !== 1) {
           return;
         }
-        const claimedCandidate = this.readImprovementCandidate(activation.candidateId);
-        const claimedRevision = this.readCurrentRevision(claimedCandidate.candidateId);
-        const claimedEvaluation = this.readLatestEvaluation(claimedCandidate.candidateId);
+        const claimedCandidate = await this.readImprovementCandidate(activation.candidateId);
+        const claimedRevision = await this.readCurrentRevision(claimedCandidate.candidateId);
+        const claimedEvaluation = await this.readLatestEvaluation(claimedCandidate.candidateId);
         if (!this.isPendingActivationCandidateEligible(claimedCandidate)) {
           throw new Error("candidate_no_longer_eligible");
         }
@@ -5121,12 +5170,12 @@ export class ImprovementService {
           throw new Error("candidate_drift");
         }
         mutationApplied = true;
-        const activationTarget = this.applyActivationChange(
+        const activationTarget = await this.applyActivationChange(
           claimedCandidate.kind,
           claimedCandidate.targetKey,
           claimedRevision,
         );
-        const activated = this.ctx.gatewaySql
+        const activated = await this.ctx.storage.db
           .prepare(
             `
             UPDATE improvement_activations
@@ -5153,7 +5202,7 @@ export class ImprovementService {
         if (activated.changes !== 1) {
           throw new Error(`Activation ${activation.activationId} lost its pending-state claim before commit.`);
         }
-        this.updateCandidateStatus(
+        await this.updateCandidateStatus(
           claimedCandidate.candidateId,
           "approved",
           approval.resolvedBy ?? "approval",
@@ -5162,13 +5211,13 @@ export class ImprovementService {
       });
     } catch (error) {
       if (mutationApplied) {
-        this.compensateFailedActivationApply(activation, error);
+        await this.compensateFailedActivationApply(activation, error);
       }
       throw error;
     }
     let applied: ImprovementActivationRecord;
     try {
-      applied = this.readImprovementActivation(activation.activationId);
+      applied = await this.readImprovementActivation(activation.activationId);
     } catch (error) {
       if (!mutationApplied) {
         throw error;
@@ -5182,7 +5231,7 @@ export class ImprovementService {
     }
     if (!mutationApplied) {
       if (applied.status === "active") {
-        this.emitActivationAppliedAuditOrThrow(applied, approval);
+        await this.emitActivationAppliedAuditOrThrow(applied, approval);
         return applied;
       }
       if (applied.status !== "pending") {
@@ -5192,18 +5241,21 @@ export class ImprovementService {
         `Activation ${activation.activationId} could not acquire its pending-state claim.`,
       );
     }
-    this.emitActivationAppliedAuditOrThrow(applied, approval);
+    await this.emitActivationAppliedAuditOrThrow(applied, approval);
     return applied;
   }
 
-  private compensateFailedActivationApply(activation: ImprovementActivationRecord, failure: unknown): void {
+  private async compensateFailedActivationApply(
+    activation: ImprovementActivationRecord,
+    failure: unknown,
+  ): Promise<void> {
     try {
       if (activation.preActivationSnapshot.refType === "skill_revision_snapshot") {
-        this.callbacks.restoreSkillRevisionSnapshot(activation.preActivationSnapshot);
+        await this.callbacks.restoreSkillRevisionSnapshot(activation.preActivationSnapshot);
       } else if (activation.preActivationSnapshot.refType === "repair_policy_snapshot") {
-        this.callbacks.restoreRepairPolicySnapshot(activation.preActivationSnapshot);
+        await this.callbacks.restoreRepairPolicySnapshot(activation.preActivationSnapshot);
       } else {
-        this.callbacks.restoreRoutingPolicySnapshot(activation.preActivationSnapshot);
+        await this.callbacks.restoreRoutingPolicySnapshot(activation.preActivationSnapshot);
       }
     } catch (restoreError) {
       throw new ImprovementActivationCompensationError(
@@ -5215,9 +5267,12 @@ export class ImprovementService {
     }
   }
 
-  private emitActivationAppliedAudit(activation: ImprovementActivationRecord, approval: ApprovalRequest): void {
-    const candidate = this.readImprovementCandidate(activation.candidateId);
-    this.emitLifecycleAuditSignal("activation_applied", {
+  private async emitActivationAppliedAudit(
+    activation: ImprovementActivationRecord,
+    approval: ApprovalRequest,
+  ): Promise<void> {
+    const candidate = await this.readImprovementCandidate(activation.candidateId);
+    await this.emitLifecycleAuditSignal("activation_applied", {
       candidateId: candidate.candidateId,
       revisionId: activation.revisionId,
       activationId: activation.activationId,
@@ -5230,9 +5285,12 @@ export class ImprovementService {
     });
   }
 
-  private emitActivationAppliedAuditOrThrow(activation: ImprovementActivationRecord, approval: ApprovalRequest): void {
+  private async emitActivationAppliedAuditOrThrow(
+    activation: ImprovementActivationRecord,
+    approval: ApprovalRequest,
+  ): Promise<void> {
     try {
-      this.emitActivationAppliedAudit(activation, approval);
+      await this.emitActivationAppliedAudit(activation, approval);
     } catch (error) {
       throw new ImprovementActivationPostCommitError(
         `Activation ${activation.activationId} was applied but its lifecycle audit is still pending: ${
@@ -5251,8 +5309,8 @@ export class ImprovementService {
     return !Number.isFinite(suppressionUntil) || suppressionUntil <= Date.now();
   }
 
-  private lockCandidateForLifecycleMutation(candidateId: string): void {
-    const lock = this.ctx.gatewaySql
+  private async lockCandidateForLifecycleMutation(candidateId: string): Promise<void> {
+    const lock = await this.ctx.storage.db
       .prepare(
         `
         UPDATE improvement_candidates
@@ -5266,8 +5324,8 @@ export class ImprovementService {
     }
   }
 
-  private assertCandidateHasNoAppliedActivation(candidateId: string): void {
-    const activation = this.readLatestActivation(candidateId);
+  private async assertCandidateHasNoAppliedActivation(candidateId: string): Promise<void> {
+    const activation = await this.readLatestActivation(candidateId);
     if (activation?.watchStartedAt && activation.status !== "paused" && activation.status !== "rolled_back") {
       throw new Error(
         `Candidate ${candidateId} has an applied activation; pause or roll it back before rejection or snooze.`,
@@ -5275,39 +5333,39 @@ export class ImprovementService {
     }
   }
 
-  private applyActivationChange(
+  private async applyActivationChange(
     kind: ImprovementCandidateKind,
     targetKey: string,
     revision: ImprovementCandidateRevisionRecord,
-  ): ImprovementRef {
+  ): Promise<ImprovementRef> {
     if (kind === "skill_revision") {
       // Writes the authored SKILL.md, records the candidate lifecycle, and (only
       // under master autonomy) promotes it to a callable `approved` state via
       // this recorded, reversible activation. isSkillCallable is never bypassed.
-      return this.callbacks.applySkillRevisionCandidate(targetKey, revision.candidateRef);
+      return await this.callbacks.applySkillRevisionCandidate(targetKey, revision.candidateRef);
     }
     return kind === "repair_policy"
-      ? this.callbacks.applyRepairPolicyCandidate(targetKey, revision.candidateRef)
-      : this.callbacks.applyRoutingPolicyCandidate(targetKey, revision.candidateRef);
+      ? await this.callbacks.applyRepairPolicyCandidate(targetKey, revision.candidateRef)
+      : await this.callbacks.applyRoutingPolicyCandidate(targetKey, revision.candidateRef);
   }
 
-  private restoreActivationSnapshot(
+  private async restoreActivationSnapshot(
     activation: ImprovementActivationRecord,
     status: "paused" | "rolled_back",
     actorId: string,
     actorType: ImprovementActorType,
-  ): ImprovementActivationRecord {
-    const candidate = this.readImprovementCandidate(activation.candidateId);
+  ): Promise<ImprovementActivationRecord> {
+    const candidate = await this.readImprovementCandidate(activation.candidateId);
     try {
       if (activation.preActivationSnapshot.refType === "skill_revision_snapshot") {
-        this.callbacks.restoreSkillRevisionSnapshot(activation.preActivationSnapshot);
+        await this.callbacks.restoreSkillRevisionSnapshot(activation.preActivationSnapshot);
       } else if (activation.preActivationSnapshot.refType === "repair_policy_snapshot") {
-        this.callbacks.restoreRepairPolicySnapshot(activation.preActivationSnapshot);
+        await this.callbacks.restoreRepairPolicySnapshot(activation.preActivationSnapshot);
       } else {
-        this.callbacks.restoreRoutingPolicySnapshot(activation.preActivationSnapshot);
+        await this.callbacks.restoreRoutingPolicySnapshot(activation.preActivationSnapshot);
       }
     } catch (error) {
-      return this.markActivationFailed(
+      return await this.markActivationFailed(
         activation.activationId,
         error instanceof Error ? error.message : String(error),
         {
@@ -5320,7 +5378,7 @@ export class ImprovementService {
       );
     }
     const now = new Date().toISOString();
-    this.ctx.gatewaySql
+    await this.ctx.storage.db
       .prepare(
         `
         UPDATE improvement_activations
@@ -5345,8 +5403,8 @@ export class ImprovementService {
         timestamp: now,
         updatedAt: now,
       });
-    const restored = this.readImprovementActivation(activation.activationId);
-    this.emitLifecycleAuditSignal(status === "paused" ? "activation_paused" : "activation_rolled_back", {
+    const restored = await this.readImprovementActivation(activation.activationId);
+    await this.emitLifecycleAuditSignal(status === "paused" ? "activation_paused" : "activation_rolled_back", {
       candidateId: activation.candidateId,
       revisionId: activation.revisionId,
       activationId: activation.activationId,
@@ -5362,12 +5420,12 @@ export class ImprovementService {
     return restored;
   }
 
-  private applySignalToWatchWindows(signal: ImprovementSignalRecord): void {
+  private async applySignalToWatchWindows(signal: ImprovementSignalRecord): Promise<void> {
     if (signal.origin !== "runtime" && signal.origin !== "evaluation") {
       return;
     }
     const rows = toImprovementActivationRows(
-      this.ctx.gatewaySql
+      await this.ctx.storage.db
         .prepare(
           `
           SELECT a.*
@@ -5385,13 +5443,13 @@ export class ImprovementService {
     );
     for (const row of rows) {
       const activation = mapImprovementActivationRow(row);
-      const candidate = this.readImprovementCandidate(activation.candidateId);
+      const candidate = await this.readImprovementCandidate(activation.candidateId);
       if (candidate.fingerprint !== signal.fingerprint) {
         continue;
       }
       const watchSignalCount = activation.watchSignalCount + 1;
       const regressionCount = activation.regressionCount + (signal.outcome === "negative" ? 1 : 0);
-      this.ctx.gatewaySql
+      await this.ctx.storage.db
         .prepare(
           `
           UPDATE improvement_activations
@@ -5408,14 +5466,14 @@ export class ImprovementService {
           updatedAt: new Date().toISOString(),
         });
       if (signal.outcome === "negative" && activation.regressionCount === 0) {
-        const paused = this.restoreActivationSnapshot(
-          this.readImprovementActivation(activation.activationId),
+        const paused = await this.restoreActivationSnapshot(
+          await this.readImprovementActivation(activation.activationId),
           "paused",
           "system",
           "system",
         );
         if (paused.status !== "paused") {
-          this.ctx.publishRealtime("improvement_activation_pause_failed", "improvement", {
+          await this.ctx.publishRealtime("improvement_activation_pause_failed", "improvement", {
             activationId: activation.activationId,
             candidateId: activation.candidateId,
             signalId: signal.signalId,
@@ -5427,14 +5485,14 @@ export class ImprovementService {
         watchSignalCount >= activation.watchSignalTarget ||
         (activation.watchEndsAt && Date.parse(activation.watchEndsAt) <= Date.now())
       ) {
-        this.markActivationStable(activation.activationId);
+        await this.markActivationStable(activation.activationId);
       }
     }
   }
 
-  private reconcilePendingActivationApprovals(): void {
+  private async reconcilePendingActivationApprovals(): Promise<void> {
     const rows = toImprovementActivationRows(
-      this.ctx.gatewaySql
+      await this.ctx.storage.db
         .prepare(
           `
           SELECT *
@@ -5447,16 +5505,16 @@ export class ImprovementService {
     );
     for (const row of rows) {
       const activation = mapImprovementActivationRow(row);
-      const approval = this.ctx.storage.approvals.get(activation.approvalId);
+      const approval = await this.ctx.storage.approvals.get(activation.approvalId);
       if (approval.status !== "pending") {
-        this.handleActivationApprovalResolution(approval);
+        await this.handleActivationApprovalResolution(approval);
       }
     }
   }
 
-  private reconcileActiveWatchWindows(): void {
+  private async reconcileActiveWatchWindows(): Promise<void> {
     const rows = toImprovementActivationRows(
-      this.ctx.gatewaySql
+      await this.ctx.storage.db
         .prepare(
           `
           SELECT *
@@ -5474,14 +5532,14 @@ export class ImprovementService {
         activation.watchSignalCount >= activation.watchSignalTarget ||
         (activation.watchEndsAt && Date.parse(activation.watchEndsAt) <= Date.now())
       ) {
-        this.markActivationStable(activation.activationId);
+        await this.markActivationStable(activation.activationId);
       }
     }
   }
 
-  private readLatestActivationByApprovalId(approvalId: string): ImprovementActivationRecord | undefined {
+  private async readLatestActivationByApprovalId(approvalId: string): Promise<ImprovementActivationRecord | undefined> {
     const row = toImprovementActivationRow(
-      this.ctx.gatewaySql
+      await this.ctx.storage.db
         .prepare(
           `
           SELECT *
@@ -5496,8 +5554,8 @@ export class ImprovementService {
     return row ? mapImprovementActivationRow(row) : undefined;
   }
 
-  private markActivationStable(activationId: string): ImprovementActivationRecord {
-    this.ctx.gatewaySql
+  private async markActivationStable(activationId: string): Promise<ImprovementActivationRecord> {
+    await this.ctx.storage.db
       .prepare(
         `
         UPDATE improvement_activations
@@ -5514,8 +5572,8 @@ export class ImprovementService {
         stableAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       });
-    const stable = this.readImprovementActivation(activationId);
-    this.ctx.publishRealtime("improvement_activation_stable", "improvement", {
+    const stable = await this.readImprovementActivation(activationId);
+    await this.ctx.publishRealtime("improvement_activation_stable", "improvement", {
       activationId,
       candidateId: stable.candidateId,
       revisionId: stable.revisionId,
@@ -5526,7 +5584,7 @@ export class ImprovementService {
     return stable;
   }
 
-  private markActivationFailed(
+  private async markActivationFailed(
     activationId: string,
     failureReason: string,
     input: {
@@ -5540,8 +5598,8 @@ export class ImprovementService {
       actorType?: ImprovementActorType;
       expectedStatus?: ImprovementActivationRecord["status"];
     } = {},
-  ): ImprovementActivationRecord {
-    const transition = this.ctx.gatewaySql
+  ): Promise<ImprovementActivationRecord> {
+    const transition = await this.ctx.storage.db
       .prepare(
         `
         UPDATE improvement_activations
@@ -5562,14 +5620,14 @@ export class ImprovementService {
         expectedStatus: input.expectedStatus ?? null,
         updatedAt: new Date().toISOString(),
       });
-    const failed = this.readImprovementActivation(activationId);
+    const failed = await this.readImprovementActivation(activationId);
     if ((transition.changes ?? 0) !== 1) {
       return failed;
     }
     const candidate = input.candidateId
-      ? this.readImprovementCandidate(input.candidateId)
-      : this.readImprovementCandidate(failed.candidateId);
-    this.emitLifecycleAuditSignal("activation_failed", {
+      ? await this.readImprovementCandidate(input.candidateId)
+      : await this.readImprovementCandidate(failed.candidateId);
+    await this.emitLifecycleAuditSignal("activation_failed", {
       candidateId: candidate.candidateId,
       revisionId: input.revisionId ?? failed.revisionId,
       activationId,
@@ -5586,7 +5644,7 @@ export class ImprovementService {
     return failed;
   }
 
-  private emitLifecycleAuditSignal(
+  private async emitLifecycleAuditSignal(
     signalKind:
       | "candidate_created"
       | "candidate_validated"
@@ -5622,7 +5680,7 @@ export class ImprovementService {
       status?: string;
       watchStatus?: string;
     },
-  ): void {
+  ): Promise<void> {
     const evidenceRefs: ImprovementEvidenceRef[] = [];
     if (input.approvalId) {
       evidenceRefs.push({
@@ -5644,7 +5702,7 @@ export class ImprovementService {
     const lifecycleSignalKey = [signalKind, input.activationId, input.evaluationId, input.revisionId, input.candidateId]
       .filter(Boolean)
       .join(":");
-    const signal = this.recordImprovementSignal({
+    const signal = await this.recordImprovementSignal({
       sourceService: "improvement-service",
       sourceType: "lifecycle",
       sourceId: input.activationId ?? input.evaluationId ?? input.revisionId ?? input.candidateId ?? signalKind,
@@ -5673,7 +5731,7 @@ export class ImprovementService {
         watchStatus: input.watchStatus,
       },
     });
-    this.ctx.publishRealtime(`improvement_${signalKind}`, "improvement", {
+    await this.ctx.publishRealtime(`improvement_${signalKind}`, "improvement", {
       [IDEMPOTENT_REALTIME_ENVELOPE_KEY]: {
         deliveryId: `improvement-lifecycle:${signal?.signalId ?? lifecycleSignalKey}`,
         occurredAt: signal?.occurredAt ?? new Date().toISOString(),
@@ -5691,71 +5749,77 @@ export class ImprovementService {
     });
   }
 
-  private reconcileActivationWatchStatus(candidate: ImprovementCandidateRecord): ImprovementCandidateRecord {
-    const activation = this.readLatestActivation(candidate.candidateId);
+  private async reconcileActivationWatchStatus(
+    candidate: ImprovementCandidateRecord,
+  ): Promise<ImprovementCandidateRecord> {
+    const activation = await this.readLatestActivation(candidate.candidateId);
     if (activation) {
-      void this.maybeAdvanceActivation(activation);
+      await this.maybeAdvanceActivation(activation);
     }
-    return this.readImprovementCandidate(candidate.candidateId);
+    return await this.readImprovementCandidate(candidate.candidateId);
   }
 
-  private normalizeAttemptManifests(signals: ImprovementSignalRecord[]): ImprovementAttemptManifestSummary[] {
-    return signals.slice(0, 6).map((signal) => {
-      const metadata = safeJsonRecord(signal.metadata);
-      let providerId = asOptionalString(metadata.providerId);
-      let model = asOptionalString(metadata.model);
-      let outputSummary = asOptionalString(metadata.policyReason);
-      let toolSpans: ImprovementAttemptManifestSummary["toolSpans"] = signal.toolName
-        ? [{ toolName: signal.toolName, failureClass: asOptionalString(metadata.failureClass) }]
-        : undefined;
-      if (signal.turnId) {
-        try {
-          const trace = this.ctx.storage.chatTurnTraces.get(signal.turnId);
-          providerId = providerId ?? trace.routing.effectiveProviderId ?? trace.routing.primaryProviderId;
-          model = model ?? trace.model ?? trace.routing.effectiveModel;
-          outputSummary =
-            outputSummary ??
-            trace.failure?.message ??
-            trace.completion?.finishReason ??
-            `${trace.status} ${trace.turnId}`.trim();
-          toolSpans =
-            trace.toolRuns.length > 0
-              ? trace.toolRuns.map((toolRun) => ({
-                  toolName: toolRun.toolName,
-                  status: toolRun.status,
-                  failureClass: toolRun.error,
-                }))
-              : toolSpans;
-        } catch {
-          // best effort only
+  private async normalizeAttemptManifests(
+    signals: ImprovementSignalRecord[],
+  ): Promise<ImprovementAttemptManifestSummary[]> {
+    return await Promise.all(
+      signals.slice(0, 6).map(async (signal) => {
+        const metadata = safeJsonRecord(signal.metadata);
+        let providerId = asOptionalString(metadata.providerId);
+        let model = asOptionalString(metadata.model);
+        let outputSummary = asOptionalString(metadata.policyReason);
+        let toolSpans: ImprovementAttemptManifestSummary["toolSpans"] = signal.toolName
+          ? [{ toolName: signal.toolName, failureClass: asOptionalString(metadata.failureClass) }]
+          : undefined;
+        if (signal.turnId) {
+          try {
+            const trace = await this.ctx.storage.chatTurnTraces.get(signal.turnId);
+            providerId = providerId ?? trace.routing.effectiveProviderId ?? trace.routing.primaryProviderId;
+            model = model ?? trace.model ?? trace.routing.effectiveModel;
+            outputSummary =
+              outputSummary ??
+              trace.failure?.message ??
+              trace.completion?.finishReason ??
+              `${trace.status} ${trace.turnId}`.trim();
+            toolSpans =
+              trace.toolRuns.length > 0
+                ? trace.toolRuns.map((toolRun) => ({
+                    toolName: toolRun.toolName,
+                    status: toolRun.status,
+                    failureClass: toolRun.error,
+                  }))
+                : toolSpans;
+          } catch {
+            // best effort only
+          }
         }
-      }
-      return {
-        signalId: signal.signalId,
-        durableRunId: signal.durableRunId,
-        promptSnapshotHash: hashJson({
-          sessionId: signal.sessionId,
-          turnId: signal.turnId,
-        }),
-        providerId,
-        model,
-        toolSpans,
-        outputSummary,
-        replayRefs: signal.evidenceRefs.filter(
-          (ref: ImprovementEvidenceRef) =>
-            ref.refType === "decision_replay_run" ||
-            ref.refType === "prompt_pack_run" ||
-            ref.refType === "prompt_pack_benchmark",
-        ),
-        evalRefs: signal.evidenceRefs.filter(
-          (ref: ImprovementEvidenceRef) => ref.refType === "approval" || ref.refType === "artifact_manifest",
-        ),
-      };
-    });
+        return {
+          signalId: signal.signalId,
+          durableRunId: signal.durableRunId,
+          promptSnapshotHash: hashJson({
+            sessionId: signal.sessionId,
+            turnId: signal.turnId,
+          }),
+          providerId,
+          model,
+          toolSpans,
+          outputSummary,
+          replayRefs: signal.evidenceRefs.filter(
+            (ref: ImprovementEvidenceRef) =>
+              ref.refType === "decision_replay_run" ||
+              ref.refType === "prompt_pack_run" ||
+              ref.refType === "prompt_pack_benchmark",
+          ),
+          evalRefs: signal.evidenceRefs.filter(
+            (ref: ImprovementEvidenceRef) => ref.refType === "approval" || ref.refType === "artifact_manifest",
+          ),
+        };
+      }),
+    );
   }
 
-  private ensureCapabilityGapTables(): void {
-    this.ctx.gatewaySql.exec(`
+  private async ensureCapabilityGapTables(): Promise<void> {
+    await this.ctx.storage.db.exec(`
       CREATE TABLE IF NOT EXISTS capability_gap_events (
         event_id TEXT PRIMARY KEY,
         fingerprint TEXT NOT NULL,
@@ -5816,14 +5880,14 @@ export class ImprovementService {
     `);
   }
 
-  private readDecisionReplayRun(runId: string): DecisionReplayRunRecord {
-    const row = this.ctx.gatewaySql
+  private async readDecisionReplayRun(runId: string): Promise<DecisionReplayRunRecord> {
+    const row = (await this.ctx.storage.db
       .prepare(
         `
       SELECT * FROM decision_replay_runs WHERE run_id = ?
     `,
       )
-      .get(runId) as
+      .get(runId)) as
       | {
           run_id: string;
           trigger_mode: "scheduled" | "manual";
@@ -5847,15 +5911,15 @@ export class ImprovementService {
     return mapDecisionReplayRunRow(row);
   }
 
-  private listDecisionReplayItems(runId: string, limit = 500): DecisionReplayItemRecord[] {
-    const rows = this.ctx.gatewaySql
+  private async listDecisionReplayItems(runId: string, limit = 500): Promise<DecisionReplayItemRecord[]> {
+    const rows = (await this.ctx.storage.db
       .prepare(
         `
       SELECT * FROM decision_replay_items WHERE run_id = ?
       ORDER BY wrongness_probability DESC, occurred_at DESC LIMIT ?
     `,
       )
-      .all(runId, Math.max(1, Math.min(limit, 5000))) as Array<{
+      .all(runId, Math.max(1, Math.min(limit, 5000)))) as Array<{
       item_id: string;
       run_id: string;
       decision_type: "chat_turn" | "tool_run";
@@ -5905,15 +5969,15 @@ export class ImprovementService {
     }));
   }
 
-  private listDecisionReplayFindings(runId: string, limit = 100): DecisionReplayFindingRecord[] {
-    const rows = this.ctx.gatewaySql
+  private async listDecisionReplayFindings(runId: string, limit = 100): Promise<DecisionReplayFindingRecord[]> {
+    const rows = (await this.ctx.storage.db
       .prepare(
         `
       SELECT * FROM decision_replay_findings WHERE run_id = ?
       ORDER BY is_duplicate ASC, recurrence_count DESC, avg_wrongness DESC LIMIT ?
     `,
       )
-      .all(runId, Math.max(1, Math.min(limit, 1000))) as Array<{
+      .all(runId, Math.max(1, Math.min(limit, 1000)))) as Array<{
       finding_id: string;
       run_id: string;
       fingerprint: string;
@@ -5951,15 +6015,15 @@ export class ImprovementService {
     }));
   }
 
-  private listDecisionAutoTunes(runId: string, limit = 100): DecisionAutoTuneRecord[] {
-    const rows = this.ctx.gatewaySql
+  private async listDecisionAutoTunes(runId: string, limit = 100): Promise<DecisionAutoTuneRecord[]> {
+    const rows = (await this.ctx.storage.db
       .prepare(
         `
       SELECT * FROM decision_autotunes WHERE run_id = ?
       ORDER BY created_at DESC LIMIT ?
     `,
       )
-      .all(runId, Math.max(1, Math.min(limit, 1000))) as Array<{
+      .all(runId, Math.max(1, Math.min(limit, 1000)))) as Array<{
       tune_id: string;
       run_id: string;
       finding_id: string | null;
@@ -5977,14 +6041,14 @@ export class ImprovementService {
     return rows.map((row) => mapDecisionAutoTuneRow(row));
   }
 
-  private readDecisionAutoTune(tuneId: string): DecisionAutoTuneRecord {
-    const row = this.ctx.gatewaySql
+  private async readDecisionAutoTune(tuneId: string): Promise<DecisionAutoTuneRecord> {
+    const row = (await this.ctx.storage.db
       .prepare(
         `
       SELECT * FROM decision_autotunes WHERE tune_id = ?
     `,
       )
-      .get(tuneId) as
+      .get(tuneId)) as
       | {
           tune_id: string;
           run_id: string;
@@ -6013,21 +6077,21 @@ export class ImprovementService {
    * keys that have no wired decision point (so the audit record simply omits the
    * field rather than asserting a false "effective" value).
    */
-  private readEffectiveTuneValue(settingKey: string): number | undefined {
+  private async readEffectiveTuneValue(settingKey: string): Promise<number | undefined> {
     switch (settingKey) {
       case IMPROVEMENT_TUNE_KEY_BLOCKER_TEMPLATE:
-        return this.callbacks.readEffectiveBlockerTemplateStrictness();
+        return await this.callbacks.readEffectiveBlockerTemplateStrictness();
       case IMPROVEMENT_TUNE_KEY_RETRY_THRESHOLD:
-        return this.callbacks.readEffectiveRetryRepairThreshold();
+        return await this.callbacks.readEffectiveRetryRepairThreshold();
       case IMPROVEMENT_TUNE_KEY_LIVE_INTENT:
-        return this.callbacks.readEffectiveLiveIntentThreshold();
+        return await this.callbacks.readEffectiveLiveIntentThreshold();
       default:
         return undefined;
     }
   }
 
-  private applyDecisionAutoTune(tuneId: string, mode: "auto" | "manual"): DecisionAutoTuneRecord {
-    const tune = this.readDecisionAutoTune(tuneId);
+  private async applyDecisionAutoTune(tuneId: string, mode: "auto" | "manual"): Promise<DecisionAutoTuneRecord> {
+    const tune = await this.readDecisionAutoTune(tuneId);
     if (tune.riskLevel !== "low") {
       throw new Error(`Auto-tune ${tuneId} is ${tune.riskLevel} risk and cannot auto-apply.`);
     }
@@ -6036,14 +6100,14 @@ export class ImprovementService {
       throw new Error(`Auto-tune ${tuneId} is missing settingKey patch data.`);
     }
     const nextValue = tune.patch.nextValue;
-    this.ctx.storage.systemSettings.set(settingKey, nextValue);
+    await this.ctx.storage.systemSettings.set(settingKey, nextValue);
     const appliedAt = new Date().toISOString();
     // P2-W3: record the value the runtime decision point will now actually READ
     // for this setting, proving the loop is closed (written key ⇒ read key) and
     // making the applied tune auditable. `undefined` for keys without a wired
     // decision point (e.g. medium-risk routing weights, which never auto-apply).
-    const effectiveRuntimeValue = this.readEffectiveTuneValue(settingKey);
-    this.ctx.gatewaySql
+    const effectiveRuntimeValue = await this.readEffectiveTuneValue(settingKey);
+    await this.ctx.storage.db
       .prepare(
         `
       UPDATE decision_autotunes
@@ -6061,7 +6125,7 @@ export class ImprovementService {
           ...(effectiveRuntimeValue !== undefined ? { effectiveRuntimeValue } : {}),
         }),
       });
-    this.ctx.publishRealtime("improvement_autotune_applied", "improvement", {
+    await this.ctx.publishRealtime("improvement_autotune_applied", "improvement", {
       tuneId,
       settingKey,
       mode,
@@ -6075,7 +6139,7 @@ export class ImprovementService {
     } catch {
       // Best-effort audit append must never break the tune apply.
     }
-    return this.readDecisionAutoTune(tuneId);
+    return await this.readDecisionAutoTune(tuneId);
   }
 
   private async runDecisionReplayAudit(input: { triggerMode: "scheduled" | "manual"; sampleSize: number }): Promise<{
@@ -6086,7 +6150,7 @@ export class ImprovementService {
     const windowEnd = startedAt.toISOString();
     const windowStart = new Date(startedAt.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
     const runId = randomUUID();
-    this.ctx.gatewaySql
+    await this.ctx.storage.db
       .prepare(
         `
       INSERT INTO decision_replay_runs (
@@ -6106,7 +6170,7 @@ export class ImprovementService {
         windowEnd,
         startedAt: startedAt.toISOString(),
       });
-    this.ctx.publishRealtime("improvement_replay_started", "improvement", {
+    await this.ctx.publishRealtime("improvement_replay_started", "improvement", {
       runId,
       triggerMode: input.triggerMode,
       sampleSize: input.sampleSize,
@@ -6117,7 +6181,7 @@ export class ImprovementService {
     try {
       const candidates = await this.selectDecisionReplayCandidates(windowStart, windowEnd, input.sampleSize);
       const sample = sampleDecisionReplayCandidates(candidates, input.sampleSize);
-      this.ctx.gatewaySql
+      await this.ctx.storage.db
         .prepare(
           `
         UPDATE decision_replay_runs SET total_candidates = @totalCandidates WHERE run_id = @runId
@@ -6126,8 +6190,8 @@ export class ImprovementService {
         .run({ runId, totalCandidates: candidates.length });
 
       const scored = await this.scoreDecisionReplayCandidates(runId, sample, {
-        onProgress: (progress) => {
-          this.ctx.gatewaySql
+        onProgress: async (progress) => {
+          await this.ctx.storage.db
             .prepare(
               `
             UPDATE decision_replay_runs
@@ -6137,7 +6201,7 @@ export class ImprovementService {
             )
             .run({ runId, totalScored: progress.totalScored, modelJudgedCount: progress.modelJudgedCount });
           if (progress.totalScored % 20 === 0 || progress.totalScored === sample.length) {
-            this.ctx.publishRealtime("improvement_replay_progress", "improvement", {
+            await this.ctx.publishRealtime("improvement_replay_progress", "improvement", {
               runId,
               totalScored: progress.totalScored,
               totalCandidates: candidates.length,
@@ -6147,22 +6211,22 @@ export class ImprovementService {
         },
       });
       const items = scored.map((entry) => entry.item);
-      this.insertDecisionReplayItems(items);
+      await this.insertDecisionReplayItems(items);
       const findings = this.buildDecisionReplayFindings(runId, items);
-      const dedupedFindings = this.tagDuplicateDecisionReplayFindings(findings);
-      this.insertDecisionReplayFindings(dedupedFindings);
-      const plannedTunes = this.planDecisionAutoTunes(runId, dedupedFindings);
+      const dedupedFindings = await this.tagDuplicateDecisionReplayFindings(findings);
+      await this.insertDecisionReplayFindings(dedupedFindings);
+      const plannedTunes = await this.planDecisionAutoTunes(runId, dedupedFindings);
       const appliedAutoTunes: DecisionAutoTuneRecord[] = [];
       const queuedRecommendations: DecisionAutoTuneRecord[] = [];
       for (const planned of plannedTunes) {
-        this.insertDecisionAutoTune(planned);
+        await this.insertDecisionAutoTune(planned);
         if (planned.riskLevel === "low") {
-          appliedAutoTunes.push(this.applyDecisionAutoTune(planned.tuneId, "auto"));
+          appliedAutoTunes.push(await this.applyDecisionAutoTune(planned.tuneId, "auto"));
         } else {
           queuedRecommendations.push(planned);
         }
       }
-      const report = this.createWeeklyImprovementReport({
+      const report = await this.createWeeklyImprovementReport({
         runId,
         windowStart,
         windowEnd,
@@ -6171,7 +6235,7 @@ export class ImprovementService {
         appliedAutoTunes,
         queuedRecommendations,
       });
-      this.markDecisionReplayRunCompleted({
+      await this.markDecisionReplayRunCompleted({
         runId,
         reportId: report.reportId,
         totalCandidates: candidates.length,
@@ -6179,8 +6243,8 @@ export class ImprovementService {
         likelyWrongCount: items.filter((item) => item.label === "likely_wrong").length,
         modelJudgedCount: scored.filter((entry) => entry.judgeUsed).length,
       });
-      this.persistDecisionReplayDedup(dedupedFindings, report.reportId);
-      this.ctx.publishRealtime("improvement_replay_completed", "improvement", {
+      await this.persistDecisionReplayDedup(dedupedFindings, report.reportId);
+      await this.ctx.publishRealtime("improvement_replay_completed", "improvement", {
         runId,
         reportId: report.reportId,
         sampledDecisions: items.length,
@@ -6188,10 +6252,10 @@ export class ImprovementService {
         appliedAutoTunes: appliedAutoTunes.length,
         queuedRecommendations: queuedRecommendations.length,
       });
-      return { run: this.readDecisionReplayRun(runId), report };
+      return { run: await this.readDecisionReplayRun(runId), report };
     } catch (error) {
       const finishedAt = new Date().toISOString();
-      this.ctx.gatewaySql
+      await this.ctx.storage.db
         .prepare(
           `
         UPDATE decision_replay_runs
@@ -6200,10 +6264,17 @@ export class ImprovementService {
       `,
         )
         .run({ runId, errorText: (error as Error).message, finishedAt });
-      this.ctx.publishRealtime("improvement_replay_failed", "improvement", {
-        runId,
-        message: (error as Error).message,
-      });
+      try {
+        await this.ctx.publishRealtime("improvement_replay_failed", "improvement", {
+          runId,
+          message: (error as Error).message,
+        });
+      } catch (reportingError) {
+        log.error("decision replay failure realtime projection failed", {
+          runId,
+          error: reportingError instanceof Error ? reportingError.message : String(reportingError),
+        });
+      }
       throw error;
     }
   }
@@ -6217,7 +6288,7 @@ export class ImprovementService {
     sampleSize: number,
   ): Promise<DecisionReplayCandidate[]> {
     const fetchLimit = Math.max(1000, Math.min(sampleSize * 8, 6000));
-    const turnRows = this.ctx.gatewaySql
+    const turnRows = (await this.ctx.storage.db
       .prepare(
         `
       SELECT turn_id, session_id, user_message_id, assistant_message_id, status, mode, model,
@@ -6228,9 +6299,9 @@ export class ImprovementService {
       ORDER BY started_at DESC LIMIT @limit
     `,
       )
-      .all({ windowStart, windowEnd, limit: fetchLimit }) as Array<Record<string, unknown>>;
+      .all({ windowStart, windowEnd, limit: fetchLimit })) as Array<Record<string, unknown>>;
 
-    const toolRows = this.ctx.gatewaySql
+    const toolRows = (await this.ctx.storage.db
       .prepare(
         `
       SELECT tool_run_id, turn_id, session_id, tool_name, status, error, args_json, result_json, started_at
@@ -6239,7 +6310,7 @@ export class ImprovementService {
       ORDER BY started_at DESC LIMIT @limit
     `,
       )
-      .all({ windowStart, windowEnd, limit: fetchLimit }) as Array<Record<string, unknown>>;
+      .all({ windowStart, windowEnd, limit: fetchLimit })) as Array<Record<string, unknown>>;
 
     const turns: DecisionReplayCandidate[] = turnRows.map((row: Record<string, unknown>) => ({
       decisionType: "chat_turn" as const,
@@ -6403,7 +6474,7 @@ export class ImprovementService {
     excerpts: { inputExcerpt?: string; outputExcerpt?: string },
     ruleScores: DecisionReplayItemRuleScores,
   ): Promise<DecisionReplayItemModelScores | undefined> {
-    const defaults = this.callbacks.getPromptRunnerModelDefaults();
+    const defaults = await this.callbacks.getPromptRunnerModelDefaults();
     if (!defaults.providerId || !defaults.model) return undefined;
     const prompt = [
       "You are grading one agent decision replay item.",
@@ -6472,8 +6543,8 @@ export class ImprovementService {
     }
   }
 
-  private insertDecisionReplayItems(items: DecisionReplayItemRecord[]): void {
-    const insert = this.ctx.gatewaySql.prepare(`
+  private async insertDecisionReplayItems(items: DecisionReplayItemRecord[]): Promise<void> {
+    const insert = this.ctx.storage.db.prepare(`
       INSERT INTO decision_replay_items (
         item_id, run_id, decision_type, session_id, turn_id, tool_run_id, occurred_at,
         wrongness_probability, label, cause_class, cluster_key, rule_scores_json, model_scores_json,
@@ -6486,9 +6557,9 @@ export class ImprovementService {
     `);
     // Raw "BEGIN IMMEDIATE" is sqlite-only syntax; the helper picks the
     // driver-appropriate transaction statements on Postgres deployments.
-    this.ctx.gatewaySql.runImmediateTransaction(() => {
+    await this.ctx.storage.runImmediateTransaction(async () => {
       for (const item of items) {
-        insert.run({
+        await insert.run({
           itemId: item.itemId,
           runId: item.runId,
           decisionType: item.decisionType,
@@ -6560,17 +6631,21 @@ export class ImprovementService {
     );
   }
 
-  private tagDuplicateDecisionReplayFindings(findings: DecisionReplayFindingRecord[]): DecisionReplayFindingRecord[] {
+  private async tagDuplicateDecisionReplayFindings(
+    findings: DecisionReplayFindingRecord[],
+  ): Promise<DecisionReplayFindingRecord[]> {
     if (findings.length === 0) return findings;
-    const stmt = this.ctx.gatewaySql.prepare(`SELECT fingerprint FROM decision_replay_dedup WHERE fingerprint = ?`);
-    return findings.map((f) => {
-      const existing = stmt.get(f.fingerprint) as { fingerprint: string } | undefined;
-      return existing ? { ...f, isDuplicate: true, duplicateOfFingerprint: existing.fingerprint } : f;
-    });
+    const stmt = this.ctx.storage.db.prepare(`SELECT fingerprint FROM decision_replay_dedup WHERE fingerprint = ?`);
+    return await Promise.all(
+      findings.map(async (f) => {
+        const existing = await stmt.get<{ fingerprint: string }>(f.fingerprint);
+        return existing ? { ...f, isDuplicate: true, duplicateOfFingerprint: existing.fingerprint } : f;
+      }),
+    );
   }
 
-  private insertDecisionReplayFindings(findings: DecisionReplayFindingRecord[]): void {
-    const insert = this.ctx.gatewaySql.prepare(`
+  private async insertDecisionReplayFindings(findings: DecisionReplayFindingRecord[]): Promise<void> {
+    const insert = this.ctx.storage.db.prepare(`
       INSERT INTO decision_replay_findings (
         finding_id, run_id, fingerprint, cause_class, cluster_key, severity, recurrence_count,
         impacted_sessions, impacted_turns, avg_wrongness, title, summary, recommendation,
@@ -6583,9 +6658,9 @@ export class ImprovementService {
     `);
     // Raw "BEGIN IMMEDIATE" is sqlite-only syntax; the helper picks the
     // driver-appropriate transaction statements on Postgres deployments.
-    this.ctx.gatewaySql.runImmediateTransaction(() => {
+    await this.ctx.storage.runImmediateTransaction(async () => {
       for (const f of findings) {
-        insert.run({
+        await insert.run({
           findingId: f.findingId,
           runId: f.runId,
           fingerprint: f.fingerprint,
@@ -6607,12 +6682,16 @@ export class ImprovementService {
     });
   }
 
-  private planDecisionAutoTunes(runId: string, findings: DecisionReplayFindingRecord[]): DecisionAutoTuneRecord[] {
+  private async planDecisionAutoTunes(
+    runId: string,
+    findings: DecisionReplayFindingRecord[],
+  ): Promise<DecisionAutoTuneRecord[]> {
     const plans: DecisionAutoTuneRecord[] = [];
     for (const f of findings) {
       if (f.isDuplicate) continue;
       if (f.causeClass === "weak_blocker_explanation" && f.recurrenceCount >= 3) {
-        const current = this.ctx.storage.systemSettings.get<number>(IMPROVEMENT_TUNE_KEY_BLOCKER_TEMPLATE)?.value ?? 1;
+        const current =
+          (await this.ctx.storage.systemSettings.get<number>(IMPROVEMENT_TUNE_KEY_BLOCKER_TEMPLATE))?.value ?? 1;
         plans.push({
           tuneId: randomUUID(),
           runId,
@@ -6626,7 +6705,8 @@ export class ImprovementService {
           createdAt: new Date().toISOString(),
         });
       } else if (f.causeClass === "incomplete_retry_repair" && f.recurrenceCount >= 3) {
-        const current = this.ctx.storage.systemSettings.get<number>(IMPROVEMENT_TUNE_KEY_RETRY_THRESHOLD)?.value ?? 1;
+        const current =
+          (await this.ctx.storage.systemSettings.get<number>(IMPROVEMENT_TUNE_KEY_RETRY_THRESHOLD))?.value ?? 1;
         plans.push({
           tuneId: randomUUID(),
           runId,
@@ -6643,7 +6723,8 @@ export class ImprovementService {
         (f.causeClass === "retrieval_miss" || f.causeClass === "false_refusal_tone") &&
         f.recurrenceCount >= 3
       ) {
-        const current = this.ctx.storage.systemSettings.get<number>(IMPROVEMENT_TUNE_KEY_LIVE_INTENT)?.value ?? 0.6;
+        const current =
+          (await this.ctx.storage.systemSettings.get<number>(IMPROVEMENT_TUNE_KEY_LIVE_INTENT))?.value ?? 0.6;
         plans.push({
           tuneId: randomUUID(),
           runId,
@@ -6676,8 +6757,8 @@ export class ImprovementService {
     return plans.slice(0, 12);
   }
 
-  private insertDecisionAutoTune(tune: DecisionAutoTuneRecord): void {
-    this.ctx.gatewaySql
+  private async insertDecisionAutoTune(tune: DecisionAutoTuneRecord): Promise<void> {
+    await this.ctx.storage.db
       .prepare(
         `
       INSERT INTO decision_autotunes (
@@ -6705,7 +6786,7 @@ export class ImprovementService {
       });
   }
 
-  private createWeeklyImprovementReport(input: {
+  private async createWeeklyImprovementReport(input: {
     runId: string;
     windowStart: string;
     windowEnd: string;
@@ -6713,7 +6794,7 @@ export class ImprovementService {
     findings: DecisionReplayFindingRecord[];
     appliedAutoTunes: DecisionAutoTuneRecord[];
     queuedRecommendations: DecisionAutoTuneRecord[];
-  }): WeeklyImprovementReportRecord {
+  }): Promise<WeeklyImprovementReportRecord> {
     const currentCounts = new Map<DecisionReplayCauseClass, number>();
     for (const item of input.items) {
       if (item.label === "ok") continue;
@@ -6723,13 +6804,13 @@ export class ImprovementService {
       .sort((l, r) => r[1] - l[1])
       .slice(0, 6)
       .map(([causeClass, count]) => ({ causeClass, count }));
-    const previous = this.ctx.gatewaySql
+    const previous = (await this.ctx.storage.db
       .prepare(
         `
       SELECT * FROM improvement_reports ORDER BY week_end DESC, created_at DESC LIMIT 1
     `,
       )
-      .get() as { report_id: string; summary_json: string } | undefined;
+      .get()) as { report_id: string; summary_json: string } | undefined;
     const previousSummary = previous
       ? safeJsonParse<WeeklyImprovementReportRecord["summary"]>(previous.summary_json, {
           sampledDecisions: 0,
@@ -6769,7 +6850,7 @@ export class ImprovementService {
       previousReportId: previous?.report_id,
       createdAt: new Date().toISOString(),
     };
-    this.ctx.gatewaySql
+    await this.ctx.storage.db
       .prepare(
         `
       INSERT INTO improvement_reports (
@@ -6797,15 +6878,15 @@ export class ImprovementService {
     return report;
   }
 
-  private markDecisionReplayRunCompleted(input: {
+  private async markDecisionReplayRunCompleted(input: {
     runId: string;
     reportId: string;
     totalCandidates: number;
     totalScored: number;
     likelyWrongCount: number;
     modelJudgedCount: number;
-  }): void {
-    this.ctx.gatewaySql
+  }): Promise<void> {
+    await this.ctx.storage.db
       .prepare(
         `
       UPDATE decision_replay_runs SET
@@ -6819,8 +6900,8 @@ export class ImprovementService {
       .run({ ...input, finishedAt: new Date().toISOString() });
   }
 
-  private persistDecisionReplayDedup(findings: DecisionReplayFindingRecord[], reportId: string): void {
-    const upsert = this.ctx.gatewaySql.prepare(`
+  private async persistDecisionReplayDedup(findings: DecisionReplayFindingRecord[], reportId: string): Promise<void> {
+    const upsert = this.ctx.storage.db.prepare(`
       INSERT INTO decision_replay_dedup (fingerprint, last_seen_report_id, last_seen_at, occurrence_count, last_summary_hash)
       VALUES (@fingerprint, @reportId, @lastSeenAt, 1, @summaryHash)
       ON CONFLICT(fingerprint) DO UPDATE SET
@@ -6829,7 +6910,7 @@ export class ImprovementService {
         last_summary_hash = excluded.last_summary_hash
     `);
     for (const f of findings) {
-      upsert.run({
+      await upsert.run({
         fingerprint: f.fingerprint,
         reportId,
         lastSeenAt: new Date().toISOString(),

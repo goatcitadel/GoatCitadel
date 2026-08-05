@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage, Storage } from "@goatcitadel/storage";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
 
-function createStorageStub(): Storage {
+function createStorageStub(): Storage & AsyncStorage {
   return {
     approvals: {
       create: vi.fn(),
@@ -33,7 +33,7 @@ function createStorageStub(): Storage {
         run: vi.fn(),
       })),
     },
-  } as unknown as Storage;
+  } as unknown as Storage & AsyncStorage;
 }
 
 function createConfig(overrides: Partial<ToolPolicyConfig> = {}): ToolPolicyConfig {

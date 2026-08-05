@@ -10,15 +10,13 @@ export const evidenceReceiptsRouteMethods = ["buildEvidenceReceipt", "verifyEvid
 export type EvidenceReceiptsRouteMethod = (typeof evidenceReceiptsRouteMethods)[number];
 
 export interface EvidenceReceiptsRoutePort {
-  buildEvidenceReceipt(runId: string): EvidenceReceipt;
+  buildEvidenceReceipt(runId: string): Promise<EvidenceReceipt>;
   verifyEvidenceReceipt(receipt: unknown): EvidenceReceiptVerification;
 }
 
 export type EvidenceReceiptsRouteService = Readonly<EvidenceReceiptsRoutePort>;
 
-export function createEvidenceReceiptsRouteService(
-  deps: EvidenceReceiptServiceDeps,
-): EvidenceReceiptsRouteService {
+export function createEvidenceReceiptsRouteService(deps: EvidenceReceiptServiceDeps): EvidenceReceiptsRouteService {
   const service = new EvidenceReceiptService(deps);
   return Object.freeze({
     buildEvidenceReceipt: (runId: string) => service.buildEvidenceReceipt(runId),

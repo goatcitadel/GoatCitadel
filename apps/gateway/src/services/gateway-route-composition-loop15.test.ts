@@ -21,9 +21,9 @@ const mocks = vi.hoisted(() => ({
     deps,
     report,
   })),
-  completeMcpOAuth: vi.fn((deps: any, serverId: string, code: string, state?: string) => {
-    deps.readMcpAuthState();
-    deps.writeMcpAuthState({ [serverId]: { code, state } });
+  completeMcpOAuth: vi.fn(async (deps: any, serverId: string, code: string, state?: string) => {
+    await deps.readMcpAuthState();
+    await deps.writeMcpAuthState({ [serverId]: { code, state } });
     return {
       method: "completeMcpOAuth",
       deps,
@@ -32,34 +32,36 @@ const mocks = vi.hoisted(() => ({
       state,
     };
   }),
-  connectMcpServer: vi.fn((deps: any, serverId: string) => {
-    const server = deps.requireMcpServer(serverId);
-    deps.patchMcpServerState(serverId, { status: "connected" });
-    deps.resolveConnectedMcpTools(server, deps.readMcpTools());
+  connectMcpServer: vi.fn(async (deps: any, serverId: string) => {
+    const server = await deps.requireMcpServer(serverId);
+    await deps.patchMcpServerState(serverId, { status: "connected" });
+    await deps.resolveConnectedMcpTools(server, await deps.readMcpTools());
     deps.publishRealtime("mcp.connected", "mcp", { serverId });
     return { method: "connectMcpServer", deps, serverId };
   }),
-  createMcpServer: vi.fn((deps: any, input: unknown) => {
-    deps.writeMcpServers([...deps.readMcpServers(), input]);
+  createMcpServer: vi.fn(async (deps: any, input: unknown) => {
+    await deps.writeMcpServers([...(await deps.readMcpServers()), input]);
     return { method: "createMcpServer", deps, input };
   }),
-  deleteMcpServer: vi.fn((deps: unknown, serverId: string) => ({ method: "deleteMcpServer", deps, serverId })),
-  disconnectMcpServer: vi.fn((deps: any, serverId: string) => {
-    deps.writeMcpTools(deps.readMcpTools().filter((tool: { serverId?: string }) => tool.serverId !== serverId));
+  deleteMcpServer: vi.fn(async (deps: unknown, serverId: string) => ({ method: "deleteMcpServer", deps, serverId })),
+  disconnectMcpServer: vi.fn(async (deps: any, serverId: string) => {
+    await deps.writeMcpTools(
+      (await deps.readMcpTools()).filter((tool: { serverId?: string }) => tool.serverId !== serverId),
+    );
     return {
       method: "disconnectMcpServer",
       deps,
       serverId,
     };
   }),
-  startMcpOAuth: vi.fn((deps: unknown, serverId: string) => ({ method: "startMcpOAuth", deps, serverId })),
-  updateMcpServer: vi.fn((deps: unknown, serverId: string, input: unknown) => ({
+  startMcpOAuth: vi.fn(async (deps: unknown, serverId: string) => ({ method: "startMcpOAuth", deps, serverId })),
+  updateMcpServer: vi.fn(async (deps: unknown, serverId: string, input: unknown) => ({
     method: "updateMcpServer",
     deps,
     serverId,
     input,
   })),
-  updateMcpServerPolicy: vi.fn((deps: unknown, serverId: string, policy: unknown) => ({
+  updateMcpServerPolicy: vi.fn(async (deps: unknown, serverId: string, policy: unknown) => ({
     method: "updateMcpServerPolicy",
     deps,
     serverId,
@@ -91,7 +93,7 @@ const mocks = vi.hoisted(() => ({
     return {
       createSkillEvaluationProposal: (runId: string) => deps.createCapabilityProposal({ runId }),
       getSkillEvaluationRun: (runId: string) => ({ runId, storage: deps.storage }),
-      listSkillEvaluationRuns: (skillId: string) => [{ skillId, skills: deps.listSkills() }],
+      listSkillEvaluationRuns: async (skillId: string) => [{ skillId, skills: await deps.listSkills() }],
       previewSkillEvaluation: (skillId: string, input: unknown) => ({ skillId, input, preview: true }),
       runSkillEvaluation: (skillId: string, input: unknown) => {
         deps.recordSkillEvaluationSignal({ skillId, input });
@@ -252,14 +254,14 @@ function createGateway() {
     invokeAndUnwrap: fn((request: unknown, realtimeType?: string) => ({ request, realtimeType })),
     invokeTool: fn((input: unknown) => ({ input, tool: true })),
     isFeatureEnabled: fn((flag: string) => flag === "computerUseGuardrailsV1Enabled"),
-    listMcpServers: fn(() => [{ serverId: "server-1" }]),
-    listMcpTemplates: fn(() => [{ templateId: "template-1" }]),
-    listMcpTools: fn((serverId: string) => [{ serverId, toolName: "tool-1" }]),
+    listMcpServers: fn(async () => [{ serverId: "server-1" }]),
+    listMcpTemplates: fn(async () => [{ templateId: "template-1" }]),
+    listMcpTools: fn(async (serverId: string) => [{ serverId, toolName: "tool-1" }]),
     listSkillImportHistory: fn((limit?: number) => [{ limit }]),
     listSkillSources: fn((query?: string, limit?: number) => ({ query, limit, items: [] })),
     listSkills: fn(() => [{ skillId: "skill-1" }]),
     lookupSkillSources: fn((queryOrUrl: string, limit?: number) => ({ queryOrUrl, limit, items: [] })),
-    patchMcpServerState: fn((serverId: string, patch: unknown) => ({ serverId, patch })),
+    patchMcpServerState: fn(async (serverId: string, patch: unknown) => ({ serverId, patch })),
     persistLlmConfig: fn(() => undefined),
     deleteProviderSecret: fn(async (input: unknown) => ({ method: "deleteProviderSecret", input })),
     saveProviderSecret: fn(async (input: unknown) => ({ method: "saveProviderSecret", input })),
@@ -268,14 +270,14 @@ function createGateway() {
     ),
     readSettingsRevision: fn(() => 8),
     publishRealtime: fn((eventType: string, source: string, payload?: unknown) => ({ eventType, source, payload })),
-    readMcpAuthState: fn(() => ({ "server-1": { state: "connected" } })),
-    readMcpServers: fn(() => [{ serverId: "server-1" }]),
-    readMcpTools: fn(() => [{ serverId: "server-1", toolName: "tool-1" }]),
+    readMcpAuthState: fn(async () => ({ "server-1": { state: "connected" } })),
+    readMcpServers: fn(async () => [{ serverId: "server-1" }]),
+    readMcpTools: fn(async () => [{ serverId: "server-1", toolName: "tool-1" }]),
     recordDevDiagnostic: fn((input: unknown) => ({ input })),
     reloadSkills: fn(() => [{ skillId: "skill-1", reloaded: true }]),
     requireFeatureEnabled: fn((flag: string) => ({ flag })),
-    requireMcpServer: fn((serverId: string) => ({ serverId })),
-    resolveConnectedMcpTools: fn((server: unknown, existing: unknown) => ({ server, existing })),
+    requireMcpServer: fn(async (serverId: string) => ({ serverId })),
+    resolveConnectedMcpTools: fn(async (server: unknown, existing: unknown) => ({ server, existing })),
     resolveSkillActivation: fn((input: unknown) => ({ input, resolved: true })),
     setSkillState: fn((skillId: string, state: string, note: string | undefined, expectedRevision: number) => ({
       skillId,
@@ -294,9 +296,9 @@ function createGateway() {
     pruneCuratorSkill: fn((input: unknown) => ({ input, pruned: true })),
     listCuratorArchived: fn(() => ({ generatedAt: "2026-05-16T00:00:00Z", items: [] })),
     runCurator: fn(async (input: unknown) => ({ input, runId: "curator-run-1" })),
-    writeMcpAuthState: fn((state: unknown) => ({ state })),
-    writeMcpServers: fn((servers: unknown) => ({ servers })),
-    writeMcpTools: fn((tools: unknown) => ({ tools })),
+    writeMcpAuthState: fn(async (state: unknown) => ({ state })),
+    writeMcpServers: fn(async (servers: unknown) => ({ servers })),
+    writeMcpTools: fn(async (tools: unknown) => ({ tools })),
   };
 }
 
@@ -313,7 +315,7 @@ function createDatabaseStub() {
 }
 
 describe("route composition loop 15 delegates", () => {
-  it("propagates the config-generation read fence through settings and LLM route composition", () => {
+  it("propagates the config-generation read fence through settings and LLM route composition", async () => {
     const gateway = createGateway();
     const fence = new Error("settings generation is reconciling");
     gateway.readSettingsRevision.mockImplementation(() => {
@@ -324,7 +326,7 @@ describe("route composition loop 15 delegates", () => {
     const systemDeps = composeSystemRouteDependencies(gateway as never) as any;
     const toolsDeps = composeToolsMcpRouteDependencies(gateway as never) as any;
 
-    expect(() => systemDeps.settings.getSettings()).toThrow(fence);
+    await expect(systemDeps.settings.getSettings()).rejects.toThrow(fence);
     expect(() => systemDeps.settings.getAuthRuntimeSettings()).toThrow(fence);
     expect(() => toolsDeps.llm.getLlmConfigWithDetails()).toThrow(fence);
   });
@@ -349,9 +351,9 @@ describe("route composition loop 15 delegates", () => {
     expect(deps.media).toBe(gateway.mediaVoiceService);
     expect(deps.settings.createPersonality({ name: "Guide" })).toEqual({ input: { name: "Guide" } });
     expect(deps.settings.deletePersonality("guide")).toEqual({ id: "guide", deleted: true });
-    expect(deps.settings.getAuthRuntimeSettings()).toMatchObject({ method: "getAuthRuntimeSettings" });
+    expect(await deps.settings.getAuthRuntimeSettings()).toMatchObject({ method: "getAuthRuntimeSettings" });
     expect(deps.settings.getPersonalityCatalog()).toEqual([{ id: "default" }]);
-    expect(deps.settings.getSettings()).toMatchObject({ method: "getSettings" });
+    expect(await deps.settings.getSettings()).toMatchObject({ method: "getSettings" });
     expect(deps.settings.setDefaultPersonality("guide")).toEqual({ id: "guide" });
     expect(deps.settings.updatePersonality("guide", { tone: "direct" })).toEqual({
       id: "guide",
@@ -363,10 +365,10 @@ describe("route composition loop 15 delegates", () => {
     });
     expect(deps.tasks).toBe(gateway.taskLifecycleService);
     expect(deps.voice).toBe(gateway.mediaVoiceService);
-    expect(deps.workspaces.createWorkspace({ name: "Ops" })).toMatchObject({ method: "createWorkspace" });
+    expect(await deps.workspaces.createWorkspace({ name: "Ops" })).toMatchObject({ method: "createWorkspace" });
   });
 
-  it("wires memory, knowledge, capability, improvement, and skill route dependencies", () => {
+  it("wires memory, knowledge, capability, improvement, and skill route dependencies", async () => {
     const gateway = createGateway();
     const deps = composeMemoryKnowledgeRouteDependencies(gateway as never) as any;
 
@@ -394,15 +396,15 @@ describe("route composition loop 15 delegates", () => {
     expect(deps.curator.pruneCuratorSkill({ skillId: "skill-1", confirm: true })).toMatchObject({ pruned: true });
     expect(deps.curator.listCuratorArchived()).toMatchObject({ items: [] });
     expect(deps.evidence.listEnvelopes({ limit: 1 })).toEqual({ input: { limit: 1 }, items: [] });
-    expect(deps.improvement.audit.getSkillActivationPolicy()).toEqual({ defaultState: "enabled" });
-    expect(deps.improvement.audit.listCapabilityCatalog("chat")).toEqual([{ scope: "chat" }]);
-    expect(deps.improvement.audit.listCapabilityProposals(4)).toEqual([{ limit: 4 }]);
-    expect(deps.improvement.audit.listSkillImportHistory(5)).toEqual([{ limit: 5 }]);
-    expect(deps.improvement.audit.listSkills()).toEqual([{ skillId: "skill-1" }]);
+    expect(await deps.improvement.audit.getSkillActivationPolicy()).toEqual({ defaultState: "enabled" });
+    expect(await deps.improvement.audit.listCapabilityCatalog("chat")).toEqual([{ scope: "chat" }]);
+    expect(await deps.improvement.audit.listCapabilityProposals(4)).toEqual([{ limit: 4 }]);
+    expect(await deps.improvement.audit.listSkillImportHistory(5)).toEqual([{ limit: 5 }]);
+    expect(await deps.improvement.audit.listSkills()).toEqual([{ skillId: "skill-1" }]);
     expect(deps.improvement.improvement).toBe(gateway.improvementService);
     expect(deps.knowledge.knowledgeDocsIngest({ source: "doc" })).toMatchObject({ realtimeType: "knowledge" });
     expect(deps.memory).toBe(gateway.memoryLifecycleService);
-    expect(deps.skills.bulkSetSkillState(["skill-1"], "disabled", "test", { "skill-1": 3 })).toEqual([
+    expect(await deps.skills.bulkSetSkillState(["skill-1"], "disabled", "test", { "skill-1": 3 })).toEqual([
       {
         skillIds: ["skill-1"],
         state: "disabled",
@@ -410,45 +412,45 @@ describe("route composition loop 15 delegates", () => {
         expectedRevisionsBySkillId: { "skill-1": 3 },
       },
     ]);
-    expect(deps.skills.getSkillActivationPolicy()).toEqual({ defaultState: "enabled" });
-    expect(deps.skills.installSkillImport({ url: "https://example.test" })).toEqual({
+    expect(await deps.skills.getSkillActivationPolicy()).toEqual({ defaultState: "enabled" });
+    expect(await deps.skills.installSkillImport({ url: "https://example.test" })).toEqual({
       input: { url: "https://example.test" },
       installed: true,
     });
-    expect(deps.skills.listSkillEvaluationRuns("skill-1")).toEqual({
+    expect(await deps.skills.listSkillEvaluationRuns("skill-1")).toEqual({
       items: [{ skillId: "skill-1", skills: [{ skillId: "skill-1" }] }],
     });
-    expect(deps.skills.listSkillImportHistory(2)).toEqual([{ limit: 2 }]);
-    expect(deps.skills.listSkillSources("browser", 3)).toEqual({ query: "browser", limit: 3, items: [] });
-    expect(deps.skills.listSkills()).toEqual([{ skillId: "skill-1" }]);
-    expect(deps.skills.lookupSkillSources("browser", 4)).toEqual({ queryOrUrl: "browser", limit: 4, items: [] });
-    expect(deps.skills.previewSkillEvaluation("skill-1", { rubric: "strict" })).toEqual({
+    expect(await deps.skills.listSkillImportHistory(2)).toEqual([{ limit: 2 }]);
+    expect(await deps.skills.listSkillSources("browser", 3)).toEqual({ query: "browser", limit: 3, items: [] });
+    expect(await deps.skills.listSkills()).toEqual([{ skillId: "skill-1" }]);
+    expect(await deps.skills.lookupSkillSources("browser", 4)).toEqual({ queryOrUrl: "browser", limit: 4, items: [] });
+    expect(await deps.skills.previewSkillEvaluation("skill-1", { rubric: "strict" })).toEqual({
       run: { skillId: "skill-1", input: { rubric: "strict" }, preview: true },
     });
-    expect(deps.skills.runSkillEvaluation("skill-1", { rubric: "strict" })).toEqual({
+    expect(await deps.skills.runSkillEvaluation("skill-1", { rubric: "strict" })).toEqual({
       skillId: "skill-1",
       input: { rubric: "strict" },
       run: true,
     });
-    expect(deps.skills.getSkillEvaluationRun("run-1")).toMatchObject({ runId: "run-1" });
-    expect(deps.skills.createSkillEvaluationProposal("run-1")).toMatchObject({ proposalId: "proposal-1" });
-    expect(deps.skills.reloadSkills()).toEqual([{ skillId: "skill-1", reloaded: true }]);
-    expect(deps.skills.resolveSkillActivation({ skillId: "skill-1" })).toEqual({
+    expect(await deps.skills.getSkillEvaluationRun("run-1")).toMatchObject({ runId: "run-1" });
+    expect(await deps.skills.createSkillEvaluationProposal("run-1")).toMatchObject({ proposalId: "proposal-1" });
+    expect(await deps.skills.reloadSkills()).toEqual([{ skillId: "skill-1", reloaded: true }]);
+    expect(await deps.skills.resolveSkillActivation({ skillId: "skill-1" })).toEqual({
       input: { skillId: "skill-1" },
       resolved: true,
     });
-    expect(deps.skills.setSkillState("skill-1", "enabled", "ok", 3)).toEqual({
+    expect(await deps.skills.setSkillState("skill-1", "enabled", "ok", 3)).toEqual({
       skillId: "skill-1",
       state: "enabled",
       note: "ok",
       expectedRevision: 3,
     });
-    expect(deps.skills.updateSkillActivationPolicy({ defaultState: "disabled" }, 5)).toEqual({
+    expect(await deps.skills.updateSkillActivationPolicy({ defaultState: "disabled" }, 5)).toEqual({
       input: { defaultState: "disabled" },
       expectedRevision: 5,
       updated: true,
     });
-    expect(deps.skills.validateSkillImport({ url: "https://example.test" })).toEqual({
+    expect(await deps.skills.validateSkillImport({ url: "https://example.test" })).toEqual({
       input: { url: "https://example.test" },
       valid: true,
     });
@@ -493,23 +495,35 @@ describe("route composition loop 15 delegates", () => {
       llm: { activeProviderId: "openai" },
     });
 
-    expect(deps.mcp.completeMcpOAuth("server-1", "code", "state")).toMatchObject({ method: "completeMcpOAuth" });
-    expect(deps.mcp.connectMcpServer("server-1")).toMatchObject({ method: "connectMcpServer" });
-    expect(deps.mcp.createMcpServer({ label: "Server" })).toMatchObject({ method: "createMcpServer" });
-    expect(deps.mcp.deleteMcpServer("server-1")).toMatchObject({ method: "deleteMcpServer" });
-    expect(deps.mcp.disconnectMcpServer("server-1")).toMatchObject({ method: "disconnectMcpServer" });
+    await expect(deps.mcp.completeMcpOAuth("server-1", "code", "state")).resolves.toMatchObject({
+      method: "completeMcpOAuth",
+    });
+    await expect(deps.mcp.connectMcpServer("server-1")).resolves.toMatchObject({ method: "connectMcpServer" });
+    await expect(deps.mcp.createMcpServer({ label: "Server" })).resolves.toMatchObject({
+      method: "createMcpServer",
+    });
+    await expect(deps.mcp.deleteMcpServer("server-1")).resolves.toMatchObject({ method: "deleteMcpServer" });
+    await expect(deps.mcp.disconnectMcpServer("server-1")).resolves.toMatchObject({
+      method: "disconnectMcpServer",
+    });
     expect(deps.mcp.invokeMcpTool({ serverId: "server-1" })).toEqual({
       input: { serverId: "server-1" },
       mcp: true,
     });
-    expect(deps.mcp.listMcpServers()).toEqual([{ serverId: "server-1" }]);
-    expect(deps.mcp.listMcpTemplateDiscovery()).toMatchObject({ method: "listMcpTemplateDiscovery" });
-    expect(deps.mcp.listMcpTemplates()).toEqual([{ templateId: "template-1" }]);
-    expect(deps.mcp.listMcpTools("server-1")).toEqual([{ serverId: "server-1", toolName: "tool-1" }]);
-    expect(deps.mcp.runMcpServerHealthCheck("server-1")).toMatchObject({ method: "runMcpServerHealthCheck" });
-    expect(deps.mcp.startMcpOAuth("server-1")).toMatchObject({ method: "startMcpOAuth" });
-    expect(deps.mcp.updateMcpServer("server-1", { label: "new" })).toMatchObject({ method: "updateMcpServer" });
-    expect(deps.mcp.updateMcpServerPolicy("server-1", { allowed: true })).toMatchObject({
+    await expect(deps.mcp.listMcpServers()).resolves.toEqual([{ serverId: "server-1" }]);
+    await expect(deps.mcp.listMcpTemplateDiscovery()).resolves.toMatchObject({
+      method: "listMcpTemplateDiscovery",
+    });
+    await expect(deps.mcp.listMcpTemplates()).resolves.toEqual([{ templateId: "template-1" }]);
+    await expect(deps.mcp.listMcpTools("server-1")).resolves.toEqual([{ serverId: "server-1", toolName: "tool-1" }]);
+    await expect(deps.mcp.runMcpServerHealthCheck("server-1")).resolves.toMatchObject({
+      method: "runMcpServerHealthCheck",
+    });
+    await expect(deps.mcp.startMcpOAuth("server-1")).resolves.toMatchObject({ method: "startMcpOAuth" });
+    await expect(deps.mcp.updateMcpServer("server-1", { label: "new" })).resolves.toMatchObject({
+      method: "updateMcpServer",
+    });
+    await expect(deps.mcp.updateMcpServerPolicy("server-1", { allowed: true })).resolves.toMatchObject({
       method: "updateMcpServerPolicy",
     });
 
@@ -538,16 +552,20 @@ describe("route composition loop 15 delegates", () => {
       input: { scope: "session" },
       grantId: "grant-1",
     });
-    expect(deps.tools.evaluateToolAccess({ sessionId: "session-1", toolName: "browser.search" })).toMatchObject({
+    await expect(
+      deps.tools.evaluateToolAccess({ sessionId: "session-1", toolName: "browser.search" }),
+    ).resolves.toMatchObject({
       allowed: true,
       input: { sessionId: "session-1", toolName: "browser.search", workspaceId: "workspace-a" },
     });
-    expect(
+    await expect(
       deps.tools.evaluateToolAccess({ sessionId: "missing", toolName: "browser.search", workspaceId: "explicit" }),
-    ).toMatchObject({
+    ).resolves.toMatchObject({
       input: { sessionId: "missing", toolName: "browser.search", workspaceId: "explicit" },
     });
-    expect(deps.tools.evaluateToolAccess({ sessionId: "missing", toolName: "browser.search" })).toMatchObject({
+    await expect(
+      deps.tools.evaluateToolAccess({ sessionId: "missing", toolName: "browser.search" }),
+    ).resolves.toMatchObject({
       input: { sessionId: "missing", toolName: "browser.search", workspaceId: "default" },
     });
     expect(deps.tools.listToolCatalog()).toEqual([{ name: "browser.search" }]);

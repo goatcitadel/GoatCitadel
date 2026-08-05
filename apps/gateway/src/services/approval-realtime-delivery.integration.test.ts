@@ -52,9 +52,8 @@ describe("browser approval realtime delivery", () => {
       commsUnsend: vi.fn(),
       commsTyping: vi.fn(),
       invokeMcpTool: vi.fn(),
-      publishRealtime: (eventType, source, payload, options) => {
-        realtime.publishRealtime(eventType, source, payload, options);
-      },
+      publishRealtime: async (eventType, source, payload, options) =>
+        await realtime.publishRealtime(eventType, source, payload, options),
     });
 
     expect(publicListener).toHaveBeenCalledWith(
@@ -75,9 +74,9 @@ describe("browser approval realtime delivery", () => {
     );
     expect(rows).toHaveLength(1);
     expect(rows[0]?.payload.token).toBe("[REDACTED]");
-    expect(realtime.listRealtimeEvents()[0]?.payload.token).toBe("[REDACTED]");
+    expect((await realtime.listRealtimeEvents())[0]?.payload.token).toBe("[REDACTED]");
 
-    realtime.publishRealtime(
+    await realtime.publishRealtime(
       "approval_remote_action_ready",
       "approvals",
       {
@@ -102,7 +101,7 @@ describe("browser approval realtime delivery", () => {
       }),
     );
 
-    realtime.publishRealtime("generic_token_event", "tests", {
+    await realtime.publishRealtime("generic_token_event", "tests", {
       token: "must_not_cross_live_boundary",
       tokenId: "safe-token-id",
     });

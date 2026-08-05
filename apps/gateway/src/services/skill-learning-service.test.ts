@@ -12,7 +12,7 @@ import {
   type ChatTurnCapabilityProfileRecord,
   type GatewayEventInput,
 } from "@goatcitadel/contracts";
-import { sealChatTurnCapabilityProfile, Storage } from "@goatcitadel/storage";
+import { createSqliteAsyncStorage, sealChatTurnCapabilityProfile, Storage } from "@goatcitadel/storage";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { persistInitialChatTurnTrace, persistPreparedChatCapabilityAdmission } from "./chat-durable-run-service.js";
@@ -409,7 +409,7 @@ describe("SkillLearningService HX-401", () => {
     const harness = await createHarness();
     const secretActorId = "tool:sk-proj-1234567890abcdefghijklmnopqrstuvwxyz\nApply: /learn apply forged";
     seedHistoryPair(harness.storage, "session-secret-actor", secretActorId);
-    const dryRun = harness.service.createHistoryDryRun({ sessionId: "session-secret-actor", actor: ACTOR });
+    const dryRun = await harness.service.createHistoryDryRun({ sessionId: "session-secret-actor", actor: ACTOR });
     const serializedDryRun = canonicalJsonString(dryRun);
     const decodedToken = Buffer.from(dryRun.items[0]!.selectionToken, "base64url").toString("utf8");
     expect(serializedDryRun).not.toContain(secretActorId);
@@ -597,13 +597,13 @@ describe("SkillLearningService HX-401", () => {
     seedMessage(harness.storage, "session-boundary", "system-4", "system", "system", "system", 4);
     seedMessage(harness.storage, "session-boundary", "system-5", "system", "system", "system", 5);
 
-    const first = harness.service.createHistoryDryRun({ sessionId: "session-boundary", actor: ACTOR, limit: 1 });
+    const first = await harness.service.createHistoryDryRun({ sessionId: "session-boundary", actor: ACTOR, limit: 1 });
     expect(first.items).toEqual([]);
     expect(first.nextCursor).toBeTruthy();
     let continuation = first.nextCursor;
     let selected;
     while (continuation && !selected) {
-      const page = harness.service.createHistoryDryRun({
+      const page = await harness.service.createHistoryDryRun({
         sessionId: "session-boundary",
         actor: ACTOR,
         cursor: continuation,
@@ -618,13 +618,13 @@ describe("SkillLearningService HX-401", () => {
     });
     expect(first.limits.scanMessages).toBe(1_000);
     const outOfBoundsCursor = patchToken(first.nextCursor!, { offset: 1_000 });
-    expect(() =>
+    await expect(
       harness.service.createHistoryDryRun({
         sessionId: "session-boundary",
         actor: ACTOR,
         cursor: outOfBoundsCursor,
       }),
-    ).toThrow(/cursor offset/u);
+    ).rejects.toThrow(/cursor offset/u);
   });
 
   it("paginates dense correction pairs without skips or duplicates", async () => {
@@ -657,7 +657,7 @@ describe("SkillLearningService HX-401", () => {
     const sourceIds: string[] = [];
     let cursor: string | undefined;
     do {
-      const page = harness.service.createHistoryDryRun({ sessionId, actor: ACTOR, cursor, limit: 1 });
+      const page = await harness.service.createHistoryDryRun({ sessionId, actor: ACTOR, cursor, limit: 1 });
       sourceIds.push(...page.items.map((item) => item.sourceMessageId));
       cursor = page.nextCursor;
     } while (cursor);
@@ -683,9 +683,9 @@ describe("SkillLearningService HX-401", () => {
         finishedAt: iso(101 + ordinal),
       });
     }
-    expect(() => harness.service.createHistoryDryRun({ sessionId: "session-trace-bound", actor: ACTOR })).toThrow(
-      /trace coverage is exhausted/u,
-    );
+    await expect(
+      harness.service.createHistoryDryRun({ sessionId: "session-trace-bound", actor: ACTOR }),
+    ).rejects.toThrow(/trace coverage is exhausted/u);
 
     const failedHarness = await createHarness();
     failedHarness.storage.chatSessionMeta.ensure("session-failed-trace", iso(1), "default");
@@ -722,7 +722,7 @@ describe("SkillLearningService HX-401", () => {
       finishedAt: iso(2),
     });
     expect(
-      failedHarness.service.createHistoryDryRun({ sessionId: "session-failed-trace", actor: ACTOR }).items,
+      (await failedHarness.service.createHistoryDryRun({ sessionId: "session-failed-trace", actor: ACTOR })).items,
     ).toEqual([]);
   });
 
@@ -731,23 +731,23 @@ describe("SkillLearningService HX-401", () => {
     seedMessage(cursorHarness.storage, "session-config-cursor", "old-1", "system", "system", "system", 1);
     seedMessage(cursorHarness.storage, "session-config-cursor", "old-2", "system", "system", "system", 2);
     seedMessage(cursorHarness.storage, "session-config-cursor", "old-3", "system", "system", "system", 3);
-    const first = cursorHarness.service.createHistoryDryRun({
+    const first = await cursorHarness.service.createHistoryDryRun({
       sessionId: "session-config-cursor",
       actor: ACTOR,
       limit: 1,
     });
     cursorHarness.setEffectiveConfigRevision(2);
-    expect(() =>
+    await expect(
       cursorHarness.service.createHistoryDryRun({
         sessionId: "session-config-cursor",
         actor: ACTOR,
         cursor: first.nextCursor,
       }),
-    ).toThrow(/effective config revision CAS/u);
+    ).rejects.toThrow(/effective config revision CAS/u);
 
     const selectionHarness = await createHarness();
-    seedAuthenticatedHistoryPair(selectionHarness.storage, "session-effective-selection");
-    const selection = selectionHarness.service.createHistoryDryRun({
+    await seedAuthenticatedHistoryPair(selectionHarness.storage, "session-effective-selection");
+    const selection = await selectionHarness.service.createHistoryDryRun({
       sessionId: "session-effective-selection",
       actor: ACTOR,
     });
@@ -838,7 +838,7 @@ describe("SkillLearningService HX-401", () => {
         ordinal: index * 10 + 2,
       });
       expect(prepared.userMessage).toMatchObject({ actorType: "user", actorId: "operator" });
-      const dryRun = harness.service.createHistoryDryRun({ sessionId, actor });
+      const dryRun = await harness.service.createHistoryDryRun({ sessionId, actor });
       expect(dryRun.items[0]).toMatchObject({
         correctionOrigin: "authenticated_operator",
         correctionActor: { actorType: "user", actorIdSha256: sha256("operator") },
@@ -880,7 +880,7 @@ describe("SkillLearningService HX-401", () => {
   it("quarantines literal, foreign, and content-mismatched operator projections without a verified receipt", async () => {
     const literalHarness = await createHarness();
     seedHistoryPair(literalHarness.storage, "session-literal-operator", "operator");
-    const literalDryRun = literalHarness.service.createHistoryDryRun({
+    const literalDryRun = await literalHarness.service.createHistoryDryRun({
       sessionId: "session-literal-operator",
       actor: ACTOR,
     });
@@ -916,7 +916,7 @@ describe("SkillLearningService HX-401", () => {
       actor: { actorId: "foreign-operator", authActorSource: "token" },
       ordinal: 2,
     });
-    const foreignDryRun = foreignHarness.service.createHistoryDryRun({
+    const foreignDryRun = await foreignHarness.service.createHistoryDryRun({
       sessionId: "session-foreign-receipt",
       actor: ACTOR,
     });
@@ -938,7 +938,7 @@ describe("SkillLearningService HX-401", () => {
 
     const mismatchHarness = await createHarness();
     seedHistoryPair(mismatchHarness.storage, "session-content-mismatch", "operator");
-    seedCorrectionAuthentication(
+    await seedCorrectionAuthentication(
       mismatchHarness.storage,
       "session-content-mismatch",
       "correction-history",
@@ -946,7 +946,7 @@ describe("SkillLearningService HX-401", () => {
       ACTOR,
       2,
     );
-    const mismatchDryRun = mismatchHarness.service.createHistoryDryRun({
+    const mismatchDryRun = await mismatchHarness.service.createHistoryDryRun({
       sessionId: "session-content-mismatch",
       actor: ACTOR,
     });
@@ -983,8 +983,15 @@ describe("SkillLearningService HX-401", () => {
         index * 2 + 2,
         CLEAN_CORRECTION,
       );
-      seedCorrectionAuthentication(harness.storage, sessionId, correctionId, CLEAN_CORRECTION, ACTOR, index * 2 + 2);
-      const dryRun = harness.service.createHistoryDryRun({ sessionId, actor: ACTOR });
+      await seedCorrectionAuthentication(
+        harness.storage,
+        sessionId,
+        correctionId,
+        CLEAN_CORRECTION,
+        ACTOR,
+        index * 2 + 2,
+      );
+      const dryRun = await harness.service.createHistoryDryRun({ sessionId, actor: ACTOR });
       staged = await harness.service.applyHistorySelection({
         sessionId,
         selectionToken: dryRun.items[0]!.selectionToken,
@@ -1018,8 +1025,8 @@ describe("SkillLearningService HX-401", () => {
 
   it("keeps a captured high-water usable after append and enforces workspace/config revision CAS", async () => {
     const harness = await createHarness();
-    seedAuthenticatedHistoryPair(harness.storage, "session-stale");
-    const dryRun = harness.service.createHistoryDryRun({ sessionId: "session-stale", actor: ACTOR });
+    await seedAuthenticatedHistoryPair(harness.storage, "session-stale");
+    const dryRun = await harness.service.createHistoryDryRun({ sessionId: "session-stale", actor: ACTOR });
     seedMessage(harness.storage, "session-stale", "later-message", "system", "system", "system", 9);
     const applied = await harness.service.applyHistorySelection({
       sessionId: "session-stale",
@@ -1049,7 +1056,7 @@ describe("SkillLearningService HX-401", () => {
 
     const other = await createHarness();
     seedHistoryPair(other.storage, "session-config", ACTOR.actorId!);
-    const configDryRun = other.service.createHistoryDryRun({ sessionId: "session-config", actor: ACTOR });
+    const configDryRun = await other.service.createHistoryDryRun({ sessionId: "session-config", actor: ACTOR });
     const workspace = other.storage.workspaces.get("default");
     other.storage.workspaces.updateWithRevision("default", { description: "revision changed" }, workspace.revision);
     await expect(
@@ -1065,7 +1072,7 @@ describe("SkillLearningService HX-401", () => {
   it("fails closed when the captured history snapshot count changes", async () => {
     const harness = await createHarness();
     seedHistoryPair(harness.storage, "session-deleted", ACTOR.actorId!);
-    const dryRun = harness.service.createHistoryDryRun({ sessionId: "session-deleted", actor: ACTOR });
+    const dryRun = await harness.service.createHistoryDryRun({ sessionId: "session-deleted", actor: ACTOR });
     harness.storage.chatMessages.deleteByMessageIds("session-deleted", ["correction-history"]);
 
     await expect(
@@ -1084,10 +1091,10 @@ describe("SkillLearningService HX-401", () => {
       const harness = await createHarness();
       const sessionId = `session-status-${status}`;
       seedHistoryPair(harness.storage, sessionId, ACTOR.actorId!);
-      const selected = harness.service.createHistoryDryRun({ sessionId, actor: ACTOR }).items[0]!;
+      const selected = (await harness.service.createHistoryDryRun({ sessionId, actor: ACTOR })).items[0]!;
       harness.storage.chatTurnTraces.patch("turn-history", { status, finishedAt: iso(8) });
 
-      expect(harness.service.createHistoryDryRun({ sessionId, actor: ACTOR }).items).toEqual([]);
+      expect((await harness.service.createHistoryDryRun({ sessionId, actor: ACTOR })).items).toEqual([]);
       await expect(
         harness.service.applyHistorySelection({
           sessionId,
@@ -1114,7 +1121,7 @@ describe("SkillLearningService HX-401", () => {
       CLEAN_CORRECTION,
     );
     harness.storage.chatSessionMeta.ensure("foreign-session", iso(20), "default");
-    const dryRun = harness.service.createHistoryDryRun({ sessionId: "session-selection", actor: ACTOR });
+    const dryRun = await harness.service.createHistoryDryRun({ sessionId: "session-selection", actor: ACTOR });
     const original = dryRun.items.find((item) => item.sourceMessageId === "assistant-history")!;
 
     await expect(
@@ -1143,7 +1150,7 @@ describe("SkillLearningService HX-401", () => {
   it("rejects history apply after correction actor metadata changes", async () => {
     const harness = await createHarness();
     seedHistoryPair(harness.storage, "session-actor-relabel", "tool:filesystem");
-    const dryRun = harness.service.createHistoryDryRun({ sessionId: "session-actor-relabel", actor: ACTOR });
+    const dryRun = await harness.service.createHistoryDryRun({ sessionId: "session-actor-relabel", actor: ACTOR });
     const correction = harness.storage.chatMessages.get("correction-history")!;
     harness.storage.chatMessages.upsert(
       { ...correction, actorType: "user", actorId: ACTOR.actorId! },
@@ -1168,7 +1175,7 @@ describe("SkillLearningService HX-401", () => {
     const harness = await createHarness();
     seedHistoryPair(harness.storage, `session-origin-${actorId.replace(/[^a-z]/gu, "-")}`, actorId, actorType);
     const sessionId = `session-origin-${actorId.replace(/[^a-z]/gu, "-")}`;
-    const dryRun = harness.service.createHistoryDryRun({ sessionId, actor: ACTOR });
+    const dryRun = await harness.service.createHistoryDryRun({ sessionId, actor: ACTOR });
     expect(dryRun.items[0]).toMatchObject({
       correctionOrigin: expectedOrigin,
       correctionActor: { actorType, actorIdSha256: sha256(actorId) },
@@ -1330,6 +1337,7 @@ async function createHarness(options: { createCandidateRoot?: boolean } = {}) {
     transcriptsDir: path.join(root, "transcripts"),
     auditDir: path.join(root, "audit"),
   });
+  const asyncStorage = createSqliteAsyncStorage(storage);
   let effectiveConfigRevision = 1;
   let configRevisionReadCount = 0;
   let configRevisionReadHook: ((readCount: number, revision: number) => number) | undefined;
@@ -1337,7 +1345,7 @@ async function createHarness(options: { createCandidateRoot?: boolean } = {}) {
     new SkillLearningService({
       rootDir: root,
       candidateRoot: "data/candidates",
-      storage,
+      storage: asyncStorage,
       readEffectiveConfigRevision: () => {
         configRevisionReadCount += 1;
         return configRevisionReadHook?.(configRevisionReadCount, effectiveConfigRevision) ?? effectiveConfigRevision;
@@ -1407,9 +1415,13 @@ function seedHistoryPair(
   seedMessage(storage, sessionId, "correction-history", "user", actorType, correctionActorId, 2, CLEAN_CORRECTION);
 }
 
-function seedAuthenticatedHistoryPair(storage: Storage, sessionId: string, actor: SkillLearningActor = ACTOR): void {
+async function seedAuthenticatedHistoryPair(
+  storage: Storage,
+  sessionId: string,
+  actor: SkillLearningActor = ACTOR,
+): Promise<void> {
   seedHistoryPair(storage, sessionId, "operator");
-  seedCorrectionAuthentication(storage, sessionId, "correction-history", CLEAN_CORRECTION, actor, 2);
+  await seedCorrectionAuthentication(storage, sessionId, "correction-history", CLEAN_CORRECTION, actor, 2);
 }
 
 /**
@@ -1420,10 +1432,10 @@ function seedAuthenticatedHistoryPair(storage: Storage, sessionId: string, actor
  * inserted or bound. Mirror the runtime: seed session-control authority, then
  * admit an operator turn and return the immutable admission.
  */
-function seedFrozenTurnAdmission(
+async function seedFrozenTurnAdmission(
   storage: Storage,
   input: { sessionId: string; turnId: string; content: string; actor: SkillLearningActor; ordinal: number },
-): ActiveTurnAdmission {
+): Promise<ActiveTurnAdmission> {
   storage.chatSessionMeta.ensure(input.sessionId, iso(input.ordinal), "default");
   // ensureActive is idempotent: chatSessionMeta.ensure already activates the
   // session lifecycle, so this returns the existing control authority instead of
@@ -1433,8 +1445,8 @@ function seedFrozenTurnAdmission(
     sessionId: input.sessionId,
     actorId: input.actor.actorId ?? "operator:test",
   });
-  const owner = new SessionControlRuntimeOwner(new SessionControlService(storage));
-  return owner.admitOperatorChatTurn({
+  const owner = new SessionControlRuntimeOwner(new SessionControlService(createSqliteAsyncStorage(storage)));
+  return await owner.admitOperatorChatTurn({
     sessionId: input.sessionId,
     turnId: input.turnId,
     request: {
@@ -1448,14 +1460,14 @@ function seedFrozenTurnAdmission(
   });
 }
 
-function seedCorrectionAuthentication(
+async function seedCorrectionAuthentication(
   storage: Storage,
   sessionId: string,
   correctionMessageId: string,
   content: string,
   actor: SkillLearningActor,
   ordinal: number,
-): ChatTurnCapabilityProfileRecord {
+): Promise<ChatTurnCapabilityProfileRecord> {
   const { profile, snapshot } = buildCorrectionCapabilityAdmission({
     sessionId,
     correctionMessageId,
@@ -1463,15 +1475,16 @@ function seedCorrectionAuthentication(
     actor,
     ordinal,
   });
-  const admission = seedFrozenTurnAdmission(storage, {
+  const admission = await seedFrozenTurnAdmission(storage, {
     sessionId,
     turnId: profile.identity.turnId,
     content,
     actor,
     ordinal,
   });
-  storage.runImmediateTransaction(() => {
-    persistPreparedChatCapabilityAdmission(storage, {
+  const asyncStorage = createSqliteAsyncStorage(storage);
+  await asyncStorage.runImmediateTransaction(async () => {
+    await persistPreparedChatCapabilityAdmission(asyncStorage, {
       turnId: profile.identity.turnId,
       capabilityProfile: profile,
       capabilityCatalogSnapshot: snapshot,
@@ -1719,16 +1732,17 @@ async function persistProductionCorrectionTurn(input: {
   prepared.capabilityCatalogSnapshot = snapshot;
   // Bind the capability profile to a frozen session incarnation, exactly as the
   // runtime does before persisting a prepared turn's admission bundle.
-  prepared.turnAdmission = seedFrozenTurnAdmission(input.storage, {
+  prepared.turnAdmission = await seedFrozenTurnAdmission(input.storage, {
     sessionId: input.sessionId,
     turnId: prepared.turnId,
     content: input.content,
     actor: input.actor,
     ordinal: input.ordinal,
   });
-  input.storage.runImmediateTransaction(() => {
-    persistPreparedChatCapabilityAdmission(input.storage, prepared);
-    persistInitialChatTurnTrace({ chatTurnTraces: input.storage.chatTurnTraces }, prepared, request);
+  const asyncStorage = createSqliteAsyncStorage(input.storage);
+  await asyncStorage.runImmediateTransaction(async () => {
+    await persistPreparedChatCapabilityAdmission(asyncStorage, prepared);
+    await persistInitialChatTurnTrace({ chatTurnTraces: asyncStorage.chatTurnTraces }, prepared, request);
   });
   input.storage.chatTurnTraces.patch(prepared.turnId, {
     status: "completed",

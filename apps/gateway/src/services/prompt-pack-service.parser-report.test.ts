@@ -118,7 +118,7 @@ describe("prompt-pack parser, import, export, and reports", () => {
     }
   });
 
-  it("does not mark current-default autoscores stale when a legacy inherited-default row carried old policy metadata", () => {
+  it("does not mark current-default autoscores stale when a legacy inherited-default row carried old policy metadata", async () => {
     const rootDir = path.join(os.tmpdir(), `goatcitadel-prompt-pack-export-${randomUUID()}`);
     try {
       const pack = {
@@ -224,7 +224,7 @@ describe("prompt-pack parser, import, export, and reports", () => {
         },
       );
 
-      const exported = service.exportPromptPack(pack.packId);
+      const exported = await service.exportPromptPack(pack.packId);
       const markdown = fs.readFileSync(exported.path, "utf8");
 
       expect(markdown).toContain("Active scoring schema: `v3`");
@@ -235,7 +235,7 @@ describe("prompt-pack parser, import, export, and reports", () => {
     }
   });
 
-  it("creates immutable prompt-pack snapshots while preserving the latest export", () => {
+  it("creates immutable prompt-pack snapshots while preserving the latest export", async () => {
     const rootDir = path.join(os.tmpdir(), `goatcitadel-prompt-pack-snapshots-${randomUUID()}`);
     try {
       const pack = {
@@ -258,8 +258,8 @@ describe("prompt-pack parser, import, export, and reports", () => {
       };
       const service = createPromptPackExportService({ rootDir, pack, tests: [test], runs: [run] });
 
-      const first = service.exportPromptPack(pack.packId);
-      const second = service.exportPromptPack(pack.packId);
+      const first = await service.exportPromptPack(pack.packId);
+      const second = await service.exportPromptPack(pack.packId);
 
       expect(first.path).toMatch(/goatcitadel_prompt_pack_v5_overall-pack-snapshot-latest\.md$/);
       expect(fs.existsSync(first.path)).toBe(true);
@@ -275,7 +275,7 @@ describe("prompt-pack parser, import, export, and reports", () => {
     }
   });
 
-  it("exports prompt packs as Promptfoo-compatible read-only JSON without provider calls", () => {
+  it("exports prompt packs as Promptfoo-compatible read-only JSON without provider calls", async () => {
     const rootDir = path.join(os.tmpdir(), `goatcitadel-prompt-pack-promptfoo-${randomUUID()}`);
     try {
       const pack = {
@@ -288,7 +288,7 @@ describe("prompt-pack parser, import, export, and reports", () => {
       ];
       const service = createPromptPackExportService({ rootDir, pack, tests, runs: [] });
 
-      const exported = service.exportPromptPack(pack.packId, { format: "promptfoo" });
+      const exported = await service.exportPromptPack(pack.packId, { format: "promptfoo" });
       const payload = JSON.parse(fs.readFileSync(exported.path, "utf8"));
       const preview = service.previewPromptPackImport({
         content: JSON.stringify(payload),
@@ -456,7 +456,7 @@ describe("prompt-pack parser, import, export, and reports", () => {
     }
   });
 
-  it("keeps immutable snapshots when prompt-pack reset clears current runs", () => {
+  it("keeps immutable snapshots when prompt-pack reset clears current runs", async () => {
     const rootDir = path.join(os.tmpdir(), `goatcitadel-prompt-pack-reset-${randomUUID()}`);
     try {
       const pack = createPack("pack-reset-snapshot");
@@ -475,10 +475,10 @@ describe("prompt-pack parser, import, export, and reports", () => {
         trace: createTrace("sess-reset-snapshot"),
       };
       const service = createPromptPackExportService({ rootDir, pack, tests: [test], runs: [run] });
-      const exported = service.exportPromptPack(pack.packId);
+      const exported = await service.exportPromptPack(pack.packId);
       const snapshotPath = exported.latestSnapshotPath ?? "";
 
-      const reset = service.resetPromptPackRunsAndScores(pack.packId, { clearRuns: true, clearScores: true });
+      const reset = await service.resetPromptPackRunsAndScores(pack.packId, { clearRuns: true, clearScores: true });
 
       expect(fs.existsSync(exported.path)).toBe(false);
       expect(fs.existsSync(snapshotPath)).toBe(true);
@@ -916,7 +916,7 @@ describe("prompt-pack parser, import, export, and reports", () => {
     }
   });
 
-  it("projects bundled security red-team eval packs without running providers", () => {
+  it("projects bundled security red-team eval packs without running providers", async () => {
     const importedPack = {
       packId: "pack-security",
       name: "Security Red Team",
@@ -967,7 +967,7 @@ describe("prompt-pack parser, import, export, and reports", () => {
       },
     );
 
-    const projection = service.listSecurityEvalPacks();
+    const projection = await service.listSecurityEvalPacks();
     expect(projection.warnings.join(" ")).toContain("does not call providers");
     expect(projection.items[0]).toMatchObject({
       packKey: "security-red-team-v6",
@@ -987,7 +987,7 @@ describe("prompt-pack parser, import, export, and reports", () => {
     expect(projection.items[0]?.capabilityTargets.length).toBeGreaterThan(0);
     expect(projection.items[0]?.likelyFailureClasses.length).toBeGreaterThan(0);
 
-    const gates = service.listSecurityQualityGates();
+    const gates = await service.listSecurityQualityGates();
     expect(gates.items[0]).toMatchObject({
       gateId: "prompt-pack:security-red-team-v6:security-quality",
       packKey: "security-red-team-v6",
@@ -1010,7 +1010,7 @@ describe("prompt-pack parser, import, export, and reports", () => {
     expect(gates.items[0]?.blockers.join(" ")).toContain("Run the imported defensive security prompt-pack tests");
   });
 
-  it("keeps security quality gates not_run when only a scored subset has evidence", () => {
+  it("keeps security quality gates not_run when only a scored subset has evidence", async () => {
     const importedPack = {
       packId: "pack-security-partial",
       name: "Security Red Team",
@@ -1110,7 +1110,7 @@ describe("prompt-pack parser, import, export, and reports", () => {
       },
     );
 
-    const gates = service.listSecurityQualityGates();
+    const gates = await service.listSecurityQualityGates();
 
     expect(gates.items[0]).toMatchObject({
       status: "not_run",
@@ -1123,7 +1123,7 @@ describe("prompt-pack parser, import, export, and reports", () => {
     expect(gates.items[0]?.blockers.join(" ")).toContain("17 latest test run(s) are missing");
   });
 
-  it("recognizes the imported built-in security pack by canonical pack id and hyphenated source label", () => {
+  it("recognizes the imported built-in security pack by canonical pack id and hyphenated source label", async () => {
     const importedPack = {
       packId: "security-red-team-v6",
       name: "Defensive Security Evaluation",
@@ -1173,7 +1173,7 @@ describe("prompt-pack parser, import, export, and reports", () => {
       },
     );
 
-    const projection = service.listSecurityEvalPacks();
+    const projection = await service.listSecurityEvalPacks();
     expect(projection.items[0]).toMatchObject({
       packKey: "security-red-team-v6",
       status: "imported",
@@ -1181,7 +1181,7 @@ describe("prompt-pack parser, import, export, and reports", () => {
       blockers: [],
     });
 
-    const gates = service.listSecurityQualityGates();
+    const gates = await service.listSecurityQualityGates();
     expect(gates.items[0]).toMatchObject({
       status: "not_run",
       packId: "security-red-team-v6",
@@ -1194,7 +1194,7 @@ describe("prompt-pack parser, import, export, and reports", () => {
     );
   });
 
-  it("does not treat a spoofed canonical security pack id as imported release evidence", () => {
+  it("does not treat a spoofed canonical security pack id as imported release evidence", async () => {
     const spoofedPack = {
       packId: "security-red-team-v6",
       name: "Custom Operator Checks",
@@ -1238,14 +1238,14 @@ describe("prompt-pack parser, import, export, and reports", () => {
       },
     );
 
-    const projection = service.listSecurityEvalPacks();
+    const projection = await service.listSecurityEvalPacks();
     expect(projection.items[0]).toMatchObject({
       packKey: "security-red-team-v6",
       status: "available",
       importedPackId: undefined,
     });
 
-    const gates = service.listSecurityQualityGates();
+    const gates = await service.listSecurityQualityGates();
     expect(gates.items[0]).toMatchObject({
       status: "not_imported",
       evidence: {

@@ -4,12 +4,17 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { createDatabase } from "./sqlite.js";
+import { createSqliteAsyncStorage } from "./async-storage.js";
+import { Storage } from "./index.js";
 import { ModelComparisonRunRepository } from "./model-comparison-run-repo.js";
 
 const createdFiles: string[] = [];
+const createdStorages: Storage[] = [];
 
 afterEach(() => {
+  for (const storage of createdStorages.splice(0)) {
+    storage.close();
+  }
   for (const file of createdFiles.splice(0)) {
     try {
       fs.rmSync(file, { force: true });
@@ -24,14 +29,19 @@ afterEach(() => {
 function createRepo(): ModelComparisonRunRepository {
   const dbPath = path.join(os.tmpdir(), `goatcitadel-model-comparison-${randomUUID()}.db`);
   createdFiles.push(dbPath);
-  const db = createDatabase({ dbPath });
-  return new ModelComparisonRunRepository(db);
+  const storage = new Storage({
+    dbPath,
+    transcriptsDir: path.join(os.tmpdir(), `goatcitadel-model-comparison-transcripts-${randomUUID()}`),
+    auditDir: path.join(os.tmpdir(), `goatcitadel-model-comparison-audit-${randomUUID()}`),
+  });
+  createdStorages.push(storage);
+  return new ModelComparisonRunRepository(createSqliteAsyncStorage(storage).gatewaySql);
 }
 
 describe("ModelComparisonRunRepository", () => {
-  it("round-trips runs and preserves blind labels", () => {
+  it("round-trips runs and preserves blind labels", async () => {
     const repo = createRepo();
-    const run = repo.create({
+    const run = await repo.create({
       comparisonId: "cmp-1",
       packId: "pack-1",
       status: "queued",
@@ -66,13 +76,13 @@ describe("ModelComparisonRunRepository", () => {
       run.candidates.map((candidate) => candidate.blindLabel),
       ["A", "B", "C"],
     );
-    assert.equal(repo.get("cmp-1").results[0]?.runId, "run-1");
-    assert.equal(repo.list(10)[0]?.comparisonId, "cmp-1");
+    assert.equal((await repo.get("cmp-1")).results[0]?.runId, "run-1");
+    assert.equal((await repo.list(10))[0]?.comparisonId, "cmp-1");
   });
 
-  it("persists judgments without changing stored result placeholders", () => {
+  it("persists judgments without changing stored result placeholders", async () => {
     const repo = createRepo();
-    repo.create({
+    await repo.create({
       comparisonId: "cmp-judged",
       packId: "pack-1",
       status: "queued",
@@ -91,7 +101,7 @@ describe("ModelComparisonRunRepository", () => {
       updatedAt: "2026-06-05T12:00:00.000Z",
     });
 
-    const judgment = repo.addJudgment("cmp-judged", {
+    const judgment = await repo.addJudgment("cmp-judged", {
       judgmentId: "judgment-1",
       testId: "test-1",
       winnerCandidateId: "cmp-judged-b",
@@ -105,9 +115,9 @@ describe("ModelComparisonRunRepository", () => {
     });
 
     assert.equal(judgment.winnerCandidateId, "cmp-judged-b");
-    assert.equal(repo.get("cmp-judged").judgments[0]?.notes, "B was more complete.");
-    assert.equal(repo.get("cmp-judged").updatedAt, "2026-06-05T12:01:00.000Z");
-    assert.equal(repo.get("cmp-judged").results[0]?.responseText, "A answer");
-    assert.throws(() => repo.addJudgment("missing", judgment), /Model comparison missing not found/);
+    assert.equal((await repo.get("cmp-judged")).judgments[0]?.notes, "B was more complete.");
+    assert.equal((await repo.get("cmp-judged")).updatedAt, "2026-06-05T12:01:00.000Z");
+    assert.equal((await repo.get("cmp-judged")).results[0]?.responseText, "A answer");
+    await assert.rejects(() => repo.addJudgment("missing", judgment), /Model comparison missing not found/);
   });
 });

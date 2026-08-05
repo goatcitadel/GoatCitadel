@@ -11,7 +11,7 @@ import type { CronRunSnapshot } from "./services/gateway/cron-automation-service
 
 export interface CronCliPort {
   runCronJobNow(jobId: string): Promise<{ jobId: string; runId: string; status: "ok" | "pending" }>;
-  findCronRunById(runId: string): CronRunSnapshot | undefined;
+  findCronRunById(runId: string): Promise<CronRunSnapshot | undefined>;
 }
 
 export interface CronCliIo {
@@ -65,7 +65,7 @@ async function runRunCommand(args: string[], io: CronCliIo): Promise<void> {
 
   const startedAt = now();
   while (true) {
-    const found = io.port.findCronRunById(queued.runId);
+    const found = await io.port.findCronRunById(queued.runId);
     if (found && found.status !== "unknown") {
       io.write(JSON.stringify(found, null, 2));
       return;
@@ -82,7 +82,7 @@ async function runRunsCommand(args: string[], io: CronCliIo): Promise<void> {
   if (!runId) {
     throw new Error("cron runs requires --run-id <id>");
   }
-  const result = io.port.findCronRunById(runId);
+  const result = await io.port.findCronRunById(runId);
   if (!result) {
     throw new Error(`No cron run found for runId=${runId}`);
   }

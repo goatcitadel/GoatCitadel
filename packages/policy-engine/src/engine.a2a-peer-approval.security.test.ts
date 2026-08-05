@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ToolPolicyConfig } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage, Storage } from "@goatcitadel/storage";
 import { ToolPolicyEngine } from "./engine.js";
 
 // Regression coverage: an inbound A2A peer turn runs tool calls with
@@ -9,7 +9,7 @@ import { ToolPolicyEngine } from "./engine.js";
 // risky/danger tools. Approval (or an explicit scoped grant) is required regardless
 // of the operator's blanket bypass. The operator's own calls are unaffected.
 
-function createStorageStub(): Storage {
+function createStorageStub(): Storage & AsyncStorage {
   return {
     approvals: {
       create: vi.fn((input) => ({
@@ -38,7 +38,7 @@ function createStorageStub(): Storage {
       markResolved: vi.fn(),
     },
     db: { prepare: vi.fn(() => ({ run: vi.fn() })) },
-  } as unknown as Storage;
+  } as unknown as Storage & AsyncStorage;
 }
 
 function buildConfig(approvalMode: "approve_risky" | "bypass"): ToolPolicyConfig {
@@ -60,10 +60,10 @@ const DANGER_TOOL = "fs.write";
 const DANGER_ARGS = { path: "./workspace/out.txt", content: "x" };
 
 describe("A2A peer cannot ride operator bypass for danger tools", () => {
-  it("requires approval for an a2a_peer danger tool even when the operator runs bypass mode", () => {
+  it("requires approval for an a2a_peer danger tool even when the operator runs bypass mode", async () => {
     const engine = new ToolPolicyEngine(buildConfig("bypass"), createStorageStub());
 
-    const evaluation = engine.evaluateAccess({
+    const evaluation = await engine.evaluateAccess({
       toolName: DANGER_TOOL,
       args: DANGER_ARGS,
       agentId: "agent",
@@ -75,10 +75,10 @@ describe("A2A peer cannot ride operator bypass for danger tools", () => {
     expect(evaluation.requiresApproval).toBe(true);
   });
 
-  it("still auto-approves the operator's own danger tool under bypass mode (fix is scoped to peers)", () => {
+  it("still auto-approves the operator's own danger tool under bypass mode (fix is scoped to peers)", async () => {
     const engine = new ToolPolicyEngine(buildConfig("bypass"), createStorageStub());
 
-    const evaluation = engine.evaluateAccess({
+    const evaluation = await engine.evaluateAccess({
       toolName: DANGER_TOOL,
       args: DANGER_ARGS,
       agentId: "agent",
@@ -90,10 +90,10 @@ describe("A2A peer cannot ride operator bypass for danger tools", () => {
     expect(evaluation.requiresApproval).toBe(false);
   });
 
-  it("requires approval for an a2a_peer danger tool under the shipped approve_risky default", () => {
+  it("requires approval for an a2a_peer danger tool under the shipped approve_risky default", async () => {
     const engine = new ToolPolicyEngine(buildConfig("approve_risky"), createStorageStub());
 
-    const evaluation = engine.evaluateAccess({
+    const evaluation = await engine.evaluateAccess({
       toolName: DANGER_TOOL,
       args: DANGER_ARGS,
       agentId: "agent",

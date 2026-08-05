@@ -10,7 +10,7 @@ const storageSetActiveLeaf = vi.fn();
 const storageCostInsert = vi.fn();
 const storageCandidateFind = vi.fn();
 const storageCandidateUpsert = vi.fn((record: unknown) => record);
-const storageCandidateRevisionCreate = vi.fn((_kind: string, _id: string, mutation: () => unknown) => mutation());
+const storageCandidateRevisionCreate = vi.fn();
 const storageClose = vi.fn();
 
 vi.mock("@goatcitadel/storage", () => ({
@@ -50,7 +50,27 @@ vi.mock("@goatcitadel/storage", () => ({
 import { devVerificationRoutes } from "./dev-verification.js";
 
 function decorateDevVerification(app: FastifyInstance, methods: Record<string, unknown>) {
-  app.decorate("services", { devVerification: methods } as never);
+  app.decorate("services", {
+    devVerification: {
+      storage: {
+        waitUntilReady: vi.fn(async () => undefined),
+        chatMessages: { upsertMany: storageUpsertMany },
+        chatTurnTraces: { create: storageTurnCreate },
+        chatSessionBranchState: { setActiveLeaf: storageSetActiveLeaf },
+        costLedger: { insert: storageCostInsert },
+        candidateSkillVersions: {
+          find: storageCandidateFind,
+          upsert: storageCandidateUpsert,
+        },
+        skillAggregateRevisions: {
+          ensure: vi.fn(),
+          createInitialRevisionFence: storageCandidateRevisionCreate,
+        },
+        runImmediateTransaction: vi.fn(async (callback: () => unknown) => await callback()),
+      },
+      ...methods,
+    },
+  } as never);
 }
 
 describe("dev verification routes", () => {
@@ -210,7 +230,6 @@ describe("dev verification routes", () => {
     expect(storageCandidateRevisionCreate).toHaveBeenCalledWith(
       "candidate_skill",
       "usability-browser-candidate",
-      expect.any(Function),
       "2026-07-29T00:00:00.000Z",
     );
     expect(storageCandidateUpsert).toHaveBeenCalledWith(
@@ -221,7 +240,7 @@ describe("dev verification routes", () => {
         sourceKind: "manual",
       }),
     );
-    expect(storageClose).toHaveBeenCalledTimes(1);
+    expect(storageClose).not.toHaveBeenCalled();
   });
 
   it("seeds a deterministic chat approval resume scenario", async () => {

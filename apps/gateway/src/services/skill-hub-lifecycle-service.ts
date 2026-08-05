@@ -22,7 +22,7 @@ import {
 import {
   computeSkillHubOperationRequestSha256,
   computeSkillHubOperationResultSha256,
-  type Storage,
+  type AsyncStorage as Storage,
 } from "@goatcitadel/storage";
 import { parseSkillMarkdown } from "@goatcitadel/skills";
 import { SkillHubArtifactStore } from "./skill-hub-artifact-store.js";
@@ -140,17 +140,17 @@ export class SkillHubLifecycleService {
   }): Promise<SkillHubLifecycleApplyResult> {
     const signal = input.signal ?? new AbortController().signal;
     signal.throwIfAborted();
-    const intent = this.options.storage.skillHubOperations.getIntent(input.operationId);
+    const intent = await this.options.storage.skillHubOperations.getIntent(input.operationId);
     if (intent.approvalId !== input.approvalId || intent.requestSha256 !== input.requestSha256) {
       throw new ConflictError({ message: "Skill Hub lifecycle effect identity does not match its immutable intent." });
     }
     // Re-run parent validation against the exact current approval before any effect.
-    this.options.storage.skillHubOperations.createIntent(intent);
-    const approval = this.options.storage.approvals.get(intent.approvalId);
+    await this.options.storage.skillHubOperations.createIntent(intent);
+    const approval = await this.options.storage.approvals.get(intent.approvalId);
     if (approval.status !== "approved" || approval.kind !== SKILL_HUB_LIFECYCLE_APPROVAL_KIND) {
       throw new ConflictError({ message: "Skill Hub lifecycle approval is no longer executable." });
     }
-    const replay = this.options.storage.skillHubOperations.findSettlementByOperationId(input.operationId);
+    const replay = await this.options.storage.skillHubOperations.findSettlementByOperationId(input.operationId);
     if (replay) {
       if (intent.operationKind === "activate" && replay.disposition === "applied") {
         await this.cleanupProjectionScratch(input.operationId, signal);
@@ -159,8 +159,8 @@ export class SkillHubLifecycleService {
       return { settlement: replay, replayed: true };
     }
 
-    const snapshot = this.options.storage.skillHubSnapshots.get(intent.snapshotId);
-    const artifact = this.options.storage.skillHubArtifacts.findBySnapshot(intent.workspaceId, intent.snapshotId);
+    const snapshot = await this.options.storage.skillHubSnapshots.get(intent.snapshotId);
+    const artifact = await this.options.storage.skillHubArtifacts.findBySnapshot(intent.workspaceId, intent.snapshotId);
     if (
       !artifact ||
       snapshot.workspaceId !== intent.workspaceId ||
@@ -174,7 +174,7 @@ export class SkillHubLifecycleService {
     if (
       !(await this.options.artifactStore.verify({ bundleRelPath: artifact.bundleRelPath, manifest: artifact.manifest }))
     ) {
-      return this.settle(intent, artifact.artifactId, "blocked", UNKNOWN_TREE_SHA256, {
+      return await this.settle(intent, artifact.artifactId, "blocked", UNKNOWN_TREE_SHA256, {
         code: "artifact_tamper",
         boundaryCrossed: false,
       });
@@ -183,7 +183,7 @@ export class SkillHubLifecycleService {
       intent.operationKind !== "revoke" &&
       (snapshot.trustDisposition !== "candidate" || snapshot.blockerCodes.length > 0)
     ) {
-      return this.settle(intent, artifact.artifactId, "blocked", intent.contentTreeSha256, {
+      return await this.settle(intent, artifact.artifactId, "blocked", intent.contentTreeSha256, {
         code: "snapshot_trust_blocked",
         blockerCodes: snapshot.blockerCodes,
         trustDisposition: snapshot.trustDisposition,
@@ -204,10 +204,10 @@ export class SkillHubLifecycleService {
     const parsed = parseSkillMarkdown(skillMarkdown);
     assertSkillIdentity(intent.skillId, parsed.frontmatter.name);
     try {
-      this.assertExpectedRevisions(intent);
+      await this.assertExpectedRevisions(intent);
     } catch (error) {
       if (!isConflict(error)) throw error;
-      return this.settle(intent, artifact.artifactId, "blocked", intent.contentTreeSha256, {
+      return await this.settle(intent, artifact.artifactId, "blocked", intent.contentTreeSha256, {
         code: "stale_aggregate_revision",
         boundaryCrossed: false,
         error: error instanceof Error ? error.message : String(error),
@@ -222,19 +222,19 @@ export class SkillHubLifecycleService {
       intent.operationKind === "stage_rollback_candidate"
     ) {
       if (!(await this.artifactStillVerifies(artifact.bundleRelPath, artifact.manifest))) {
-        return this.settle(intent, artifact.artifactId, "blocked", UNKNOWN_TREE_SHA256, {
+        return await this.settle(intent, artifact.artifactId, "blocked", UNKNOWN_TREE_SHA256, {
           code: "artifact_tamper",
           boundaryCrossed: false,
         });
       }
       candidate = await this.buildInactiveCandidate(intent, snapshot, artifact, skillMarkdown, signal);
     } else {
-      candidate = this.requireBoundCandidate(intent);
+      candidate = await this.requireBoundCandidate(intent);
     }
 
     if (intent.operationKind === "activate") {
       if (!(await this.artifactStillVerifies(artifact.bundleRelPath, artifact.manifest))) {
-        return this.settle(intent, artifact.artifactId, "blocked", UNKNOWN_TREE_SHA256, {
+        return await this.settle(intent, artifact.artifactId, "blocked", UNKNOWN_TREE_SHA256, {
           code: "artifact_tamper",
           boundaryCrossed: false,
         });
@@ -244,7 +244,7 @@ export class SkillHubLifecycleService {
         runtimeProjected = projection.boundaryCrossed;
       } catch (error) {
         if (!(error instanceof AmbiguousSkillRuntimeProjectionError)) throw error;
-        return this.settle(intent, artifact.artifactId, "manual_reconciliation", UNKNOWN_TREE_SHA256, {
+        return await this.settle(intent, artifact.artifactId, "manual_reconciliation", UNKNOWN_TREE_SHA256, {
           code: "ambiguous_runtime_projection",
           boundaryCrossed: true,
           error: error.message,
@@ -252,14 +252,14 @@ export class SkillHubLifecycleService {
       }
       await this.options.afterRuntimeProjection?.(intent.operationId);
       if (!(await this.artifactStillVerifies(artifact.bundleRelPath, artifact.manifest))) {
-        return this.settle(intent, artifact.artifactId, "manual_reconciliation", UNKNOWN_TREE_SHA256, {
+        return await this.settle(intent, artifact.artifactId, "manual_reconciliation", UNKNOWN_TREE_SHA256, {
           code: "post_projection_artifact_tamper",
           boundaryCrossed: true,
         });
       }
     } else {
       if (!(await this.artifactStillVerifies(artifact.bundleRelPath, artifact.manifest))) {
-        return this.settle(intent, artifact.artifactId, "blocked", UNKNOWN_TREE_SHA256, {
+        return await this.settle(intent, artifact.artifactId, "blocked", UNKNOWN_TREE_SHA256, {
           code: "artifact_tamper",
           boundaryCrossed: false,
         });
@@ -268,7 +268,7 @@ export class SkillHubLifecycleService {
 
     signal.throwIfAborted();
     try {
-      const applied = this.applyCanonicalMutation(intent, candidate, artifact.artifactId, runtimeProjected);
+      const applied = await this.applyCanonicalMutation(intent, candidate, artifact.artifactId, runtimeProjected);
       if (intent.operationKind === "activate") {
         await this.cleanupProjectionScratch(intent.operationId, signal);
         await this.options.reloadSkills?.();
@@ -276,7 +276,7 @@ export class SkillHubLifecycleService {
       return applied;
     } catch (error) {
       if (runtimeProjected && isConflict(error)) {
-        return this.settle(intent, artifact.artifactId, "manual_reconciliation", intent.contentTreeSha256, {
+        return await this.settle(intent, artifact.artifactId, "manual_reconciliation", intent.contentTreeSha256, {
           code: "runtime_projected_canonical_conflict",
           boundaryCrossed: true,
           error: error instanceof Error ? error.message : String(error),
@@ -286,13 +286,13 @@ export class SkillHubLifecycleService {
     }
   }
 
-  private assertExpectedRevisions(intent: SkillHubOperationIntentRecord): void {
-    const candidateRevision = this.options.storage.skillAggregateRevisions.get(
+  private async assertExpectedRevisions(intent: SkillHubOperationIntentRecord): Promise<void> {
+    const candidateRevision = await this.options.storage.skillAggregateRevisions.get(
       "candidate_skill",
       intent.targetCandidateId!,
     );
-    const runtimeRevision = this.options.storage.skillAggregateRevisions.get("runtime_skill", intent.skillId);
-    if (intent.expectedRuntimeAbsent && this.options.storage.skillLifecycle.find(intent.skillId)) {
+    const runtimeRevision = await this.options.storage.skillAggregateRevisions.get("runtime_skill", intent.skillId);
+    if (intent.expectedRuntimeAbsent && (await this.options.storage.skillLifecycle.find(intent.skillId))) {
       throw new ConflictError({ message: "Skill Hub runtime lifecycle exists without its expected revision." });
     }
     assertRevisionExpectation(
@@ -309,8 +309,8 @@ export class SkillHubLifecycleService {
     );
   }
 
-  private requireBoundCandidate(intent: SkillHubOperationIntentRecord): CandidateSkillVersionRecord {
-    const candidate = this.options.storage.candidateSkillVersions.get(intent.targetVersionId!);
+  private async requireBoundCandidate(intent: SkillHubOperationIntentRecord): Promise<CandidateSkillVersionRecord> {
+    const candidate = await this.options.storage.candidateSkillVersions.get(intent.targetVersionId!);
     if (
       candidate.candidateId !== intent.targetCandidateId ||
       candidate.workspaceId !== intent.workspaceId ||
@@ -324,8 +324,8 @@ export class SkillHubLifecycleService {
 
   private async buildInactiveCandidate(
     intent: SkillHubOperationIntentRecord,
-    snapshot: ReturnType<Storage["skillHubSnapshots"]["get"]>,
-    artifact: ReturnType<Storage["skillHubArtifacts"]["get"]>,
+    snapshot: Awaited<ReturnType<Storage["skillHubSnapshots"]["get"]>>,
+    artifact: Awaited<ReturnType<Storage["skillHubArtifacts"]["get"]>>,
     skillMarkdown: string,
     signal: AbortSignal,
   ): Promise<CandidateSkillVersionRecord> {
@@ -391,57 +391,68 @@ export class SkillHubLifecycleService {
     };
   }
 
-  private applyCanonicalMutation(
+  private async applyCanonicalMutation(
     intent: SkillHubOperationIntentRecord,
     candidate: CandidateSkillVersionRecord,
     artifactId: string,
     runtimeProjected: boolean,
-  ): SkillHubLifecycleApplyResult {
-    return this.options.storage.runImmediateTransaction(() => {
-      const replay = this.options.storage.skillHubOperations.findSettlementByOperationId(intent.operationId);
+  ): Promise<SkillHubLifecycleApplyResult> {
+    return await this.options.storage.runImmediateTransaction(async () => {
+      const replay = await this.options.storage.skillHubOperations.findSettlementByOperationId(intent.operationId);
       if (replay) return { settlement: replay, replayed: true };
       const now = this.now();
       let candidateRevision: number | undefined;
       let runtimeRevision: number | undefined;
 
       if (intent.operationKind === "install_inactive") {
-        const mutation = this.options.storage.skillAggregateRevisions.createWithInitialRevision(
+        const revision = await this.options.storage.skillAggregateRevisions.createInitialRevisionFence(
           "candidate_skill",
           intent.targetCandidateId!,
-          () => ({ value: this.options.storage.candidateSkillVersions.upsert(candidate), changed: true }),
           now,
         );
-        candidateRevision = mutation.revision;
+        await this.options.storage.candidateSkillVersions.upsert(candidate);
+        candidateRevision = revision.revision;
       } else {
-        this.fenceExisting(intent, now);
+        await this.fenceExisting(intent, now);
         if (intent.operationKind === "stage_update_candidate" || intent.operationKind === "stage_rollback_candidate") {
-          candidateRevision = this.options.storage.skillAggregateRevisions.runWithRevision(
-            "candidate_skill",
-            intent.targetCandidateId!,
-            intent.expectedCandidateRevision!,
-            () => ({ value: this.options.storage.candidateSkillVersions.upsert(candidate), changed: true }),
-            now,
+          await this.options.storage.candidateSkillVersions.upsert(candidate);
+          candidateRevision = (
+            await this.options.storage.skillAggregateRevisions.advanceExpectedRevision(
+              "candidate_skill",
+              intent.targetCandidateId!,
+              intent.expectedCandidateRevision!,
+              now,
+            )
           ).revision;
           runtimeRevision = intent.expectedRuntimeRevision;
         } else if (intent.operationKind === "activate") {
-          candidateRevision = this.options.storage.skillAggregateRevisions.runWithRevision(
-            "candidate_skill",
-            intent.targetCandidateId!,
-            intent.expectedCandidateRevision!,
-            () => {
-              const current = this.options.storage.candidateSkillVersions.get(intent.targetVersionId!);
-              if (current.lifecycleState === "revoked") {
-                throw new ConflictError({ message: "Revoked Skill Hub candidates cannot be activated." });
-              }
-              this.options.storage.candidateSkillVersions.updateLifecycleState(
-                intent.targetVersionId!,
-                "approved",
-                now,
-              );
-              return { value: true, changed: current.lifecycleState !== "approved" };
-            },
+          const current = await this.options.storage.candidateSkillVersions.get(intent.targetVersionId!);
+          if (current.lifecycleState === "revoked") {
+            throw new ConflictError({ message: "Revoked Skill Hub candidates cannot be activated." });
+          }
+          const candidateChanged = current.lifecycleState !== "approved";
+          await this.options.storage.candidateSkillVersions.updateLifecycleState(
+            intent.targetVersionId!,
+            "approved",
             now,
-          ).revision;
+          );
+          candidateRevision = candidateChanged
+            ? (
+                await this.options.storage.skillAggregateRevisions.advanceExpectedRevision(
+                  "candidate_skill",
+                  intent.targetCandidateId!,
+                  intent.expectedCandidateRevision!,
+                  now,
+                )
+              ).revision
+            : intent.expectedCandidateRevision;
+          const snapshotArtifact = await this.options.storage.skillHubArtifacts.findBySnapshot(
+            intent.workspaceId,
+            intent.snapshotId,
+          );
+          if (!snapshotArtifact) {
+            throw new ConflictError({ message: "Skill Hub snapshot artifact is missing during activation." });
+          }
           const lifecycle = {
             skillId: intent.skillId,
             category: "community_imported" as const,
@@ -453,65 +464,74 @@ export class SkillHubLifecycleService {
               contentIntegrity: {
                 manifestVersion: "goatcitadel.skill-tree.v1" as const,
                 treeSha256: intent.contentTreeSha256,
-                fileCount: this.options.storage.skillHubArtifacts.findBySnapshot(intent.workspaceId, intent.snapshotId)!
-                  .fileCount,
-                totalBytes: this.options.storage.skillHubArtifacts.findBySnapshot(
-                  intent.workspaceId,
-                  intent.snapshotId,
-                )!.totalBytes,
+                fileCount: snapshotArtifact.fileCount,
+                totalBytes: snapshotArtifact.totalBytes,
                 verified: true,
               },
             },
-            createdAt: this.options.storage.skillLifecycle.find(intent.skillId)?.createdAt ?? now,
+            createdAt: (await this.options.storage.skillLifecycle.find(intent.skillId))?.createdAt ?? now,
             updatedAt: now,
           };
-          runtimeRevision = intent.expectedRuntimeAbsent
-            ? this.options.storage.skillAggregateRevisions.createWithInitialRevision(
-                "runtime_skill",
-                intent.skillId,
-                () => ({ value: this.options.storage.skillLifecycle.upsert(lifecycle), changed: true }),
-                now,
-              ).revision
-            : this.options.storage.skillAggregateRevisions.runWithRevision(
+          if (intent.expectedRuntimeAbsent) {
+            const runtimeFence = await this.options.storage.skillAggregateRevisions.createInitialRevisionFence(
+              "runtime_skill",
+              intent.skillId,
+              now,
+            );
+            await this.options.storage.skillLifecycle.upsert(lifecycle);
+            runtimeRevision = runtimeFence.revision;
+          } else {
+            await this.options.storage.skillLifecycle.upsert(lifecycle);
+            runtimeRevision = (
+              await this.options.storage.skillAggregateRevisions.advanceExpectedRevision(
                 "runtime_skill",
                 intent.skillId,
                 intent.expectedRuntimeRevision!,
-                () => ({ value: this.options.storage.skillLifecycle.upsert(lifecycle), changed: true }),
                 now,
-              ).revision;
+              )
+            ).revision;
+          }
         } else {
-          candidateRevision = this.options.storage.skillAggregateRevisions.runWithRevision(
-            "candidate_skill",
-            intent.targetCandidateId!,
-            intent.expectedCandidateRevision!,
-            () => {
-              const current = this.options.storage.candidateSkillVersions.get(intent.targetVersionId!);
-              this.options.storage.candidateSkillVersions.updateLifecycleState(intent.targetVersionId!, "revoked", now);
-              return { value: true, changed: current.lifecycleState !== "revoked" };
-            },
+          const currentCandidate = await this.options.storage.candidateSkillVersions.get(intent.targetVersionId!);
+          const candidateChanged = currentCandidate.lifecycleState !== "revoked";
+          await this.options.storage.candidateSkillVersions.updateLifecycleState(
+            intent.targetVersionId!,
+            "revoked",
             now,
-          ).revision;
-          runtimeRevision = this.options.storage.skillAggregateRevisions.runWithRevision(
-            "runtime_skill",
-            intent.skillId,
-            intent.expectedRuntimeRevision!,
-            () => {
-              const current = this.options.storage.skillLifecycle.get(intent.skillId);
-              this.options.storage.skillLifecycle.upsert({
-                ...current,
-                lifecycleState: "revoked",
-                trustLabel: "Revoked",
-                reviewWarning: "Revoked upstream skill is not callable.",
-                updatedAt: now,
-              });
-              return { value: true, changed: current.lifecycleState !== "revoked" };
-            },
-            now,
-          ).revision;
+          );
+          candidateRevision = candidateChanged
+            ? (
+                await this.options.storage.skillAggregateRevisions.advanceExpectedRevision(
+                  "candidate_skill",
+                  intent.targetCandidateId!,
+                  intent.expectedCandidateRevision!,
+                  now,
+                )
+              ).revision
+            : intent.expectedCandidateRevision;
+          const currentLifecycle = await this.options.storage.skillLifecycle.get(intent.skillId);
+          const runtimeChanged = currentLifecycle.lifecycleState !== "revoked";
+          await this.options.storage.skillLifecycle.upsert({
+            ...currentLifecycle,
+            lifecycleState: "revoked",
+            trustLabel: "Revoked",
+            reviewWarning: "Revoked upstream skill is not callable.",
+            updatedAt: now,
+          });
+          runtimeRevision = runtimeChanged
+            ? (
+                await this.options.storage.skillAggregateRevisions.advanceExpectedRevision(
+                  "runtime_skill",
+                  intent.skillId,
+                  intent.expectedRuntimeRevision!,
+                  now,
+                )
+              ).revision
+            : intent.expectedRuntimeRevision;
         }
       }
 
-      return this.settleInTransaction(intent, artifactId, "applied", intent.contentTreeSha256, {
+      return await this.settleInTransaction(intent, artifactId, "applied", intent.contentTreeSha256, {
         code: "applied",
         boundaryCrossed: runtimeProjected,
         candidateVersionId: intent.targetVersionId!,
@@ -523,52 +543,50 @@ export class SkillHubLifecycleService {
     });
   }
 
-  private fenceExisting(intent: SkillHubOperationIntentRecord, now: string): void {
-    this.options.storage.skillAggregateRevisions.runWithRevision(
+  private async fenceExisting(intent: SkillHubOperationIntentRecord, now: string): Promise<void> {
+    await this.options.storage.skillAggregateRevisions.fenceExpectedRevision(
       "candidate_skill",
       intent.targetCandidateId!,
       intent.expectedCandidateRevision!,
-      () => ({ value: undefined, changed: false }),
       now,
     );
     if (!intent.expectedRuntimeAbsent) {
-      this.options.storage.skillAggregateRevisions.runWithRevision(
+      await this.options.storage.skillAggregateRevisions.fenceExpectedRevision(
         "runtime_skill",
         intent.skillId,
         intent.expectedRuntimeRevision!,
-        () => ({ value: undefined, changed: false }),
         now,
       );
     }
   }
 
-  private settle(
+  private async settle(
     intent: SkillHubOperationIntentRecord,
     artifactId: string,
     disposition: SkillHubOperationSettlementDisposition,
     observedTreeSha256: string,
     result: Record<string, unknown>,
-  ): SkillHubLifecycleApplyResult {
-    return this.options.storage.runImmediateTransaction(() =>
-      this.settleInTransaction(intent, artifactId, disposition, observedTreeSha256, result),
+  ): Promise<SkillHubLifecycleApplyResult> {
+    return await this.options.storage.runImmediateTransaction(
+      async () => await this.settleInTransaction(intent, artifactId, disposition, observedTreeSha256, result),
     );
   }
 
-  private settleInTransaction(
+  private async settleInTransaction(
     intent: SkillHubOperationIntentRecord,
     artifactId: string,
     disposition: SkillHubOperationSettlementDisposition,
     observedTreeSha256: string,
     rawResult: Record<string, unknown>,
-  ): SkillHubLifecycleApplyResult {
-    const replay = this.options.storage.skillHubOperations.findSettlementByOperationId(intent.operationId);
+  ): Promise<SkillHubLifecycleApplyResult> {
+    const replay = await this.options.storage.skillHubOperations.findSettlementByOperationId(intent.operationId);
     if (replay) return { settlement: replay, replayed: true };
     const result = removeUndefined({ disposition, operationKind: intent.operationKind, ...rawResult });
     const resultSha256 = computeSkillHubOperationResultSha256(result);
     const now = this.now();
     const evidenceEnvelopeId = `skill-hub:evidence:${intent.operationId}`;
     const journeyEventId = `skill-hub:journey:${intent.operationId}`;
-    this.options.storage.evidenceEnvelopes.create({
+    await this.options.storage.evidenceEnvelopes.create({
       envelopeId: evidenceEnvelopeId,
       eventKind: SKILL_HUB_LIFECYCLE_EVIDENCE_EVENT_KIND,
       workspaceId: intent.workspaceId,
@@ -591,7 +609,7 @@ export class SkillHubLifecycleService {
       },
       createdAt: now,
     });
-    this.options.storage.governanceJourneyEvents.create({
+    await this.options.storage.governanceJourneyEvents.create({
       schemaVersion: "goatcitadel.journey-event.v1",
       eventId: journeyEventId,
       idempotencyKey: `skill-hub:lifecycle:${intent.operationId}`,
@@ -627,7 +645,7 @@ export class SkillHubLifecycleService {
       occurredAt: now,
       recordedAt: now,
     });
-    const settlement = this.options.storage.skillHubOperations.createSettlement({
+    const settlement = await this.options.storage.skillHubOperations.createSettlement({
       settlementId: `skill-hub:settlement:${intent.operationId}`,
       operationId: intent.operationId,
       workspaceId: intent.workspaceId,
@@ -650,8 +668,8 @@ export class SkillHubLifecycleService {
 
   private async projectRuntimeSkill(
     intent: SkillHubOperationIntentRecord,
-    snapshot: ReturnType<Storage["skillHubSnapshots"]["get"]>,
-    artifact: ReturnType<Storage["skillHubArtifacts"]["get"]>,
+    snapshot: Awaited<ReturnType<Storage["skillHubSnapshots"]["get"]>>,
+    artifact: Awaited<ReturnType<Storage["skillHubArtifacts"]["get"]>>,
     skillName: string,
     signal: AbortSignal,
   ): Promise<{ boundaryCrossed: boolean }> {

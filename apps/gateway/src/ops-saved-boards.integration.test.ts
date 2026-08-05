@@ -53,7 +53,7 @@ describe("ops saved boards production composition", { timeout: 90_000 }, () => {
       expect(authorized.headers.pragma).toBe("no-cache");
       expect(authorized.headers["x-goatcitadel-execution-authority"]).toBe("none");
 
-      const otherWorkspace = app.services.workspaces.createWorkspace({ name: "Other Ops Workspace" }) as {
+      const otherWorkspace = (await app.services.workspaces.createWorkspace({ name: "Other Ops Workspace" })) as {
         workspaceId: string;
       };
       const createPayload = {
@@ -200,8 +200,7 @@ describe("ops saved boards production composition", { timeout: 90_000 }, () => {
       expect(restoredResponse.statusCode).toBe(200);
       expect(restoredResponse.json()).toMatchObject({ status: "active", revision: 4 });
 
-      const boardEvents = app.services.realtimeEvents
-        .listRealtimeEvents(100)
+      const boardEvents = (await app.services.realtimeEvents.listRealtimeEvents(100))
         .filter((event) => event.eventType === "ops_saved_board_changed" && event.source === "ops_saved_boards")
         .sort((left, right) => left.sequence - right.sequence);
       const epoch = boardEvents[0]?.payload.epoch;

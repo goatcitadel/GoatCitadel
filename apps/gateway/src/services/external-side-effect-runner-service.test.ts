@@ -2,7 +2,12 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ExternalSideEffectBoundaryClaimLostError, Storage } from "@goatcitadel/storage";
+import {
+  createSqliteAsyncStorage,
+  ExternalSideEffectBoundaryClaimLostError,
+  Storage,
+  type AsyncStorage,
+} from "@goatcitadel/storage";
 import {
   claimIdempotentExternalSideEffect,
   deriveExternalSideEffectReversibility,
@@ -34,7 +39,7 @@ function createSideEffectRunStore(
   isStatusStale: ReturnType<typeof vi.fn>;
 } {
   return {
-    createOrGet: vi.fn((input, now) => ({
+    createOrGet: vi.fn(async (input, now) => ({
       runId: replayRunId,
       workspaceId: input.workspaceId ?? "default",
       boundary: input.boundary,
@@ -55,7 +60,7 @@ function createSideEffectRunStore(
       createdAt: now ?? "2026-05-31T00:00:00.000Z",
       updatedAt: now ?? "2026-05-31T00:00:00.000Z",
     })),
-    markExternalCallStarted: vi.fn((runId, _input, now) => ({
+    markExternalCallStarted: vi.fn(async (runId, _input, now) => ({
       runId,
       workspaceId: "default",
       boundary: "integration_operator_action",
@@ -71,7 +76,7 @@ function createSideEffectRunStore(
       createdAt: now ?? "2026-05-31T00:00:00.000Z",
       updatedAt: now ?? "2026-05-31T00:00:00.000Z",
     })),
-    markCompleted: vi.fn((runId, input, now) => ({
+    markCompleted: vi.fn(async (runId, input, now) => ({
       runId,
       workspaceId: "default",
       boundary: "integration_operator_action",
@@ -90,7 +95,7 @@ function createSideEffectRunStore(
       createdAt: now ?? "2026-05-31T00:00:00.000Z",
       updatedAt: now ?? "2026-05-31T00:00:00.000Z",
     })),
-    markFailure: vi.fn((runId, input, now) => ({
+    markFailure: vi.fn(async (runId, input, now) => ({
       runId,
       workspaceId: "default",
       boundary: "integration_operator_action",
@@ -107,7 +112,7 @@ function createSideEffectRunStore(
       createdAt: now ?? "2026-05-31T00:00:00.000Z",
       updatedAt: now ?? "2026-05-31T00:00:00.000Z",
     })),
-    markFailureIfStatus: vi.fn((runId, _expectedStatus, input, now) => ({
+    markFailureIfStatus: vi.fn(async (runId, _expectedStatus, input, now) => ({
       runId,
       workspaceId: "default",
       boundary: "integration_operator_action",
@@ -124,11 +129,11 @@ function createSideEffectRunStore(
       createdAt: now ?? "2026-05-31T00:00:00.000Z",
       updatedAt: now ?? "2026-05-31T00:00:00.000Z",
     })),
-    isStatusStale: vi.fn(() => statusStale),
+    isStatusStale: vi.fn(async () => statusStale),
   };
 }
 
-function sideEffectRun(overrides: Partial<ReturnType<ExternalSideEffectRunStore["createOrGet"]>> = {}) {
+function sideEffectRun(overrides: Partial<Awaited<ReturnType<ExternalSideEffectRunStore["createOrGet"]>>> = {}) {
   return {
     runId: "extfx-1",
     workspaceId: "default",
@@ -194,7 +199,7 @@ function createStatefulMutationIdempotencyStore(): {
   });
 
   return {
-    claim: vi.fn((input: FakeMutationClaimInput) => {
+    claim: vi.fn(async (input: FakeMutationClaimInput) => {
       const key = toKey(input);
       const existing = rows.get(key);
       if (!existing) {
@@ -215,14 +220,14 @@ function createStatefulMutationIdempotencyStore(): {
         record: toRecord(input, existing),
       };
     }),
-    markCompleted: vi.fn((input: FakeMutationClaimInput) => {
+    markCompleted: vi.fn(async (input: FakeMutationClaimInput) => {
       const key = toKey(input);
       const existing = rows.get(key);
       if (existing) {
         rows.set(key, { ...existing, status: "completed" });
       }
     }),
-    markFailed: vi.fn((input: FakeMutationClaimInput) => {
+    markFailed: vi.fn(async (input: FakeMutationClaimInput) => {
       const key = toKey(input);
       const existing = rows.get(key);
       if (existing) {
@@ -241,8 +246,8 @@ describe("external-side-effect-runner-service", () => {
     expect(source).not.toMatch(/createHmac\("sha256",\s*EXTERNAL_SIDE_EFFECT_DIGEST_DOMAIN_KEY\)/);
   });
 
-  it("records audit-only external side-effect intents with replay posture", () => {
-    const createEnvelope = vi.fn(() => ({
+  it("records audit-only external side-effect intents with replay posture", async () => {
+    const createEnvelope = vi.fn(async () => ({
       envelopeId: "envelope-1",
       eventKind: "external_writeback",
       contentHash: "hash-1",
@@ -254,7 +259,7 @@ describe("external-side-effect-runner-service", () => {
       createdAt: "2026-05-31T00:00:00.000Z",
     }));
 
-    const result = recordAuditOnlyExternalSideEffectIntent({
+    const result = await recordAuditOnlyExternalSideEffectIntent({
       evidenceEnvelopeService: { createEnvelope } as never,
       boundary: "integration_operator_action",
       connectionId: "conn-1",
@@ -337,8 +342,8 @@ describe("external-side-effect-runner-service", () => {
     });
   });
 
-  it("keeps intent posture explicit when evidence envelopes are unavailable", () => {
-    const result = recordAuditOnlyExternalSideEffectIntent({
+  it("keeps intent posture explicit when evidence envelopes are unavailable", async () => {
+    const result = await recordAuditOnlyExternalSideEffectIntent({
       boundary: "mcp_server_mode_preview",
       status: "blocked",
       message: "Server mode is preview only.",
@@ -355,7 +360,7 @@ describe("external-side-effect-runner-service", () => {
     });
   });
 
-  it("claims idempotent external side effects before the webhook boundary", () => {
+  it("claims idempotent external side effects before the webhook boundary", async () => {
     const claim = vi.fn(() => ({
       outcome: "claimed" as const,
       record: {
@@ -376,7 +381,7 @@ describe("external-side-effect-runner-service", () => {
       markFailed: vi.fn(),
     };
 
-    const result = claimIdempotentExternalSideEffect({
+    const result = await claimIdempotentExternalSideEffect({
       mutationStore,
       boundary: "integration_operator_action",
       catalogId: "automation.activepieces",
@@ -406,7 +411,7 @@ describe("external-side-effect-runner-service", () => {
       }),
     );
 
-    markIdempotentExternalSideEffectCompleted(mutationStore, result, "2026-05-31T00:00:01.000Z");
+    await markIdempotentExternalSideEffectCompleted(mutationStore, result, "2026-05-31T00:00:01.000Z");
     expect(markCompleted).toHaveBeenCalledWith(
       expect.objectContaining({
         idempotencyKey: "operator-key",
@@ -416,9 +421,9 @@ describe("external-side-effect-runner-service", () => {
     );
   });
 
-  it("records a durable side-effect run without persisting raw request payload values", () => {
+  it("records a durable side-effect run without persisting raw request payload values", async () => {
     const sideEffectRunStore = createSideEffectRunStore();
-    const result = claimIdempotentExternalSideEffect({
+    const result = await claimIdempotentExternalSideEffect({
       mutationStore: {
         claim: vi.fn(() => ({
           outcome: "claimed" as const,
@@ -466,8 +471,8 @@ describe("external-side-effect-runner-service", () => {
     expect(JSON.stringify(sideEffectRunStore.createOrGet.mock.calls[0]?.[0])).not.toContain("secret body");
   });
 
-  it("reports unavailable idempotency without claiming replay safety", () => {
-    const result = claimIdempotentExternalSideEffect({
+  it("reports unavailable idempotency without claiming replay safety", async () => {
+    const result = await claimIdempotentExternalSideEffect({
       boundary: "integration_operator_action",
       catalogId: "automation.activepieces",
       connectionId: "conn-1",
@@ -536,7 +541,7 @@ describe("external-side-effect-runner-service", () => {
     const mutationStore = createStatefulMutationIdempotencyStore();
     const sideEffectRunStore = createSideEffectRunStore();
     const firstExecute = vi.fn(async (claim: ExternalSideEffectExecutionContext) => {
-      claim.markExternalCallStarted();
+      await claim.markExternalCallStarted();
       return { output: { id: "card-1" } };
     });
 
@@ -590,7 +595,7 @@ describe("external-side-effect-runner-service", () => {
       releaseFirst = resolve;
     });
     const firstExecute = vi.fn(async (claim: ExternalSideEffectExecutionContext) => {
-      claim.markExternalCallStarted();
+      await claim.markExternalCallStarted();
       await firstCanFinish;
       return { output: { id: "card-1" } };
     });
@@ -727,7 +732,7 @@ describe("external-side-effect-runner-service", () => {
       label: "Trello card create",
       execute: async (claim) => {
         expect(claim.externalCallStarted).toBe(false);
-        claim.markExternalCallStarted();
+        await claim.markExternalCallStarted();
         expect(claim.externalCallStarted).toBe(true);
         return { output: { id: "card-1", name: "Durable card" } };
       },
@@ -780,7 +785,7 @@ describe("external-side-effect-runner-service", () => {
       payload: { message: "hello" },
       label: "Activepieces webhook trigger",
       execute: async (claim) => {
-        claim.markExternalCallStarted();
+        await claim.markExternalCallStarted();
         return {
           output: {
             workflowRunId: "run-123",
@@ -836,7 +841,7 @@ describe("external-side-effect-runner-service", () => {
       payload: { name: "Durable card" },
       label: "Trello card create",
       execute: async (claim) => {
-        claim.markExternalCallStarted();
+        await claim.markExternalCallStarted();
         throw new Error("provider failed");
       },
     });
@@ -936,7 +941,7 @@ describe("external-side-effect-runner-service", () => {
       payload: { message: "sent" },
       label: "Activepieces webhook trigger",
       execute: async (claim) => {
-        claim.markExternalCallStarted();
+        await claim.markExternalCallStarted();
         return { output: { workflowRunId: "run-1" } };
       },
     });
@@ -958,17 +963,19 @@ describe("external-side-effect-runner-service", () => {
   it("does not let non-strict completion readback failure downgrade a completed real SQLite run", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "goatcitadel-extfx-legacy-completed-"));
     realStorageTempRoots.push(root);
-    const storage = new Storage({
-      dbPath: ":memory:",
-      transcriptsDir: path.join(root, "transcripts"),
-      auditDir: path.join(root, "audit"),
-    });
+    const storage = createSqliteAsyncStorage(
+      new Storage({
+        dbPath: ":memory:",
+        transcriptsDir: path.join(root, "transcripts"),
+        auditDir: path.join(root, "audit"),
+      }),
+    );
     const sideEffectRunStore: ExternalSideEffectRunStore = {
       createOrGet: (input, now) => storage.externalSideEffectRuns.createOrGet(input, now),
       markExternalCallStarted: (runId, input, now) =>
         storage.externalSideEffectRuns.markExternalCallStarted(runId, input, now),
-      markCompleted: (runId, input, now) => {
-        storage.externalSideEffectRuns.markCompleted(runId, input, now);
+      markCompleted: async (runId, input, now) => {
+        await storage.externalSideEffectRuns.markCompleted(runId, input, now);
         throw new Error("completion readback failed after the row committed");
       },
       markFailure: (runId, input, now) => storage.externalSideEffectRuns.markFailure(runId, input, now),
@@ -988,19 +995,19 @@ describe("external-side-effect-runner-service", () => {
         payload: { message: "sent once" },
         label: "Legacy completion readback proof",
         execute: async (claim) => {
-          claim.markExternalCallStarted();
+          await claim.markExternalCallStarted();
           return { id: "provider-sent-once" };
         },
       });
 
       expect(result.status).toBe("executed");
-      expect(storage.externalSideEffectRuns.listByConnection("conn-legacy-completion")[0]).toMatchObject({
+      expect((await storage.externalSideEffectRuns.listByConnection("conn-legacy-completion"))[0]).toMatchObject({
         status: "completed",
         resumeState: "completed",
         externalReferenceId: "id:provider-sent-once",
       });
     } finally {
-      storage.close();
+      await storage.close();
     }
   });
 
@@ -1040,7 +1047,7 @@ describe("external-side-effect-runner-service", () => {
       payload: { message: "sent" },
       label: "Activepieces webhook trigger",
       execute: async (claim) => {
-        claim.markExternalCallStarted();
+        await claim.markExternalCallStarted();
         throw new Error("external system returned 502 after send");
       },
     });
@@ -1079,7 +1086,7 @@ describe("external-side-effect-runner-service", () => {
         label: "Durable connector delivery",
         requireDurableBoundaryRecord: true,
         execute: async (claim) => {
-          claim.markExternalCallStarted();
+          await claim.markExternalCallStarted();
           return provider();
         },
       }),
@@ -1128,7 +1135,7 @@ describe("external-side-effect-runner-service", () => {
       label: "Durable connector delivery",
       requireDurableBoundaryRecord: true,
       execute: async (claim) => {
-        claim.markExternalCallStarted();
+        await claim.markExternalCallStarted();
         return { ok: true };
       },
     });
@@ -1177,7 +1184,7 @@ describe("external-side-effect-runner-service", () => {
       label: "Durable connector delivery",
       requireDurableBoundaryRecord: true,
       execute: async (claim) => {
-        claim.markExternalCallStarted();
+        await claim.markExternalCallStarted();
         return provider();
       },
     });
@@ -1196,11 +1203,13 @@ describe("external-side-effect-runner-service", () => {
   it("keeps a real rolled-back boundary marker failure safely retryable before provider invocation", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "goatcitadel-extfx-boundary-rollback-"));
     realStorageTempRoots.push(root);
-    const storage = new Storage({
-      dbPath: ":memory:",
-      transcriptsDir: path.join(root, "transcripts"),
-      auditDir: path.join(root, "audit"),
-    });
+    const storage = createSqliteAsyncStorage(
+      new Storage({
+        dbPath: ":memory:",
+        transcriptsDir: path.join(root, "transcripts"),
+        auditDir: path.join(root, "audit"),
+      }),
+    );
     const sideEffectRunStore = new Proxy(storage.externalSideEffectRuns, {
       get(target, property, receiver) {
         if (property === "markExternalCallStarted") {
@@ -1218,7 +1227,7 @@ describe("external-side-effect-runner-service", () => {
       const result = await runIdempotentExternalSideEffect({
         mutationStore: storage.mutationIdempotency,
         sideEffectRunStore,
-        runClaimTransaction: <T>(work: () => T): T => storage.runImmediateTransaction(work),
+        runClaimTransaction: storage.runImmediateTransaction.bind(storage),
         boundary: "durable_connector_delivery",
         connectionId: "conn-boundary-rollback",
         actionId: "send-boundary-rollback",
@@ -1229,7 +1238,7 @@ describe("external-side-effect-runner-service", () => {
         requireMutationClaimOwnership: true,
         requireDurableBoundaryRecord: true,
         execute: async (claim) => {
-          claim.markExternalCallStarted();
+          await claim.markExternalCallStarted();
           return provider();
         },
       });
@@ -1239,28 +1248,30 @@ describe("external-side-effect-runner-service", () => {
         claim: { resumeState: "manual_retry_after_recorded_failure" },
       });
       expect(provider).not.toHaveBeenCalled();
-      expect(storage.externalSideEffectRuns.listByConnection("conn-boundary-rollback")[0]).toMatchObject({
+      expect((await storage.externalSideEffectRuns.listByConnection("conn-boundary-rollback"))[0]).toMatchObject({
         status: "failed_before_boundary",
         resumeState: "manual_retry_after_recorded_failure",
       });
     } finally {
-      storage.close();
+      await storage.close();
     }
   });
 
   it("blocks a payload-mismatched Ward preflight without stranding mutation ownership", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "goatcitadel-extfx-preflight-mismatch-"));
     realStorageTempRoots.push(root);
-    const storage = new Storage({
-      dbPath: ":memory:",
-      transcriptsDir: path.join(root, "transcripts"),
-      auditDir: path.join(root, "audit"),
-    });
+    const storage = createSqliteAsyncStorage(
+      new Storage({
+        dbPath: ":memory:",
+        transcriptsDir: path.join(root, "transcripts"),
+        auditDir: path.join(root, "audit"),
+      }),
+    );
     const provider = vi.fn(async () => ({ ok: true }));
     const base = {
       mutationStore: storage.mutationIdempotency,
       sideEffectRunStore: storage.externalSideEffectRuns,
-      runClaimTransaction: <T>(work: () => T): T => storage.runImmediateTransaction(work),
+      runClaimTransaction: storage.runImmediateTransaction.bind(storage),
       boundary: "integration_local_bridge_action",
       catalogId: "productivity.apple-notes",
       connectionId: "conn-preflight-mismatch",
@@ -1279,7 +1290,7 @@ describe("external-side-effect-runner-service", () => {
         payload: { title: "Payload A" },
         wardEffect: "require_dry_run",
         execute: async (claim) => {
-          claim.markExternalCallStarted();
+          await claim.markExternalCallStarted();
           return provider();
         },
       });
@@ -1287,9 +1298,11 @@ describe("external-side-effect-runner-service", () => {
         status: "blocked",
         blockedReason: "external_side_effect_dry_run_required",
       });
-      const preflight = storage.externalSideEffectRuns.listByConnection(base.connectionId, {
-        workspaceId: base.workspaceId,
-      })[0]!;
+      const preflight = (
+        await storage.externalSideEffectRuns.listByConnection(base.connectionId, {
+          workspaceId: base.workspaceId,
+        })
+      )[0]!;
       expect(preflight).toMatchObject({ status: "idempotency_unavailable", replayAttempt: "blocked" });
 
       const governed = await runIdempotentExternalSideEffect({
@@ -1297,7 +1310,7 @@ describe("external-side-effect-runner-service", () => {
         checkedAt: "2026-05-31T00:01:00.000Z",
         payload: { title: "Payload B" },
         execute: async (claim) => {
-          claim.markExternalCallStarted();
+          await claim.markExternalCallStarted();
           return provider();
         },
       });
@@ -1308,7 +1321,7 @@ describe("external-side-effect-runner-service", () => {
         claim: { replayOutcome: "payload_mismatch", resumeState: "payload_mismatch" },
       });
       expect(provider).not.toHaveBeenCalled();
-      expect(storage.externalSideEffectRuns.get(preflight.runId)).toMatchObject({
+      expect(await storage.externalSideEffectRuns.get(preflight.runId)).toMatchObject({
         status: "idempotency_unavailable",
         payloadHash: preflight.payloadHash,
       });
@@ -1318,38 +1331,40 @@ describe("external-side-effect-runner-service", () => {
         idempotencyKey: base.idempotencyKey,
         actorScope: base.connectionId,
       };
-      expect(storage.mutationIdempotency.get(mutationIdentity)).toBeUndefined();
+      expect(await storage.mutationIdempotency.get(mutationIdentity)).toBeUndefined();
 
       const approvedOriginal = await runIdempotentExternalSideEffect({
         ...base,
         checkedAt: "2026-05-31T00:02:00.000Z",
         payload: { title: "Payload A" },
         execute: async (claim) => {
-          claim.markExternalCallStarted();
+          await claim.markExternalCallStarted();
           return provider();
         },
       });
       expect(approvedOriginal.status).toBe("executed");
       expect(provider).toHaveBeenCalledTimes(1);
-      expect(storage.mutationIdempotency.get(mutationIdentity)).toMatchObject({ status: "completed" });
-      expect(storage.externalSideEffectRuns.get(preflight.runId)).toMatchObject({
+      expect(await storage.mutationIdempotency.get(mutationIdentity)).toMatchObject({ status: "completed" });
+      expect(await storage.externalSideEffectRuns.get(preflight.runId)).toMatchObject({
         status: "completed",
         replayOutcome: "claimed",
         resumeState: "completed",
       });
     } finally {
-      storage.close();
+      await storage.close();
     }
   });
 
   it("discards a non-transactional collision without poisoning the original preflight payload", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "goatcitadel-extfx-legacy-preflight-mismatch-"));
     realStorageTempRoots.push(root);
-    const storage = new Storage({
-      dbPath: ":memory:",
-      transcriptsDir: path.join(root, "transcripts"),
-      auditDir: path.join(root, "audit"),
-    });
+    const storage = createSqliteAsyncStorage(
+      new Storage({
+        dbPath: ":memory:",
+        transcriptsDir: path.join(root, "transcripts"),
+        auditDir: path.join(root, "audit"),
+      }),
+    );
     const provider = vi.fn(async () => ({ ok: true }));
     const base = {
       mutationStore: storage.mutationIdempotency,
@@ -1371,7 +1386,7 @@ describe("external-side-effect-runner-service", () => {
         payload: { subject: "Payload A" },
         wardEffect: "require_dry_run",
         execute: async (claim) => {
-          claim.markExternalCallStarted();
+          await claim.markExternalCallStarted();
           return provider();
         },
       });
@@ -1381,7 +1396,7 @@ describe("external-side-effect-runner-service", () => {
         checkedAt: "2026-05-31T00:01:00.000Z",
         payload: { subject: "Payload B" },
         execute: async (claim) => {
-          claim.markExternalCallStarted();
+          await claim.markExternalCallStarted();
           return provider();
         },
       });
@@ -1395,37 +1410,39 @@ describe("external-side-effect-runner-service", () => {
         idempotencyKey: base.idempotencyKey,
         actorScope: base.connectionId,
       };
-      expect(storage.mutationIdempotency.get(mutationIdentity)).toBeUndefined();
+      expect(await storage.mutationIdempotency.get(mutationIdentity)).toBeUndefined();
 
       const original = await runIdempotentExternalSideEffect({
         ...base,
         checkedAt: "2026-05-31T00:02:00.000Z",
         payload: { subject: "Payload A" },
         execute: async (claim) => {
-          claim.markExternalCallStarted();
+          await claim.markExternalCallStarted();
           return provider();
         },
       });
       expect(original.status).toBe("executed");
       expect(provider).toHaveBeenCalledTimes(1);
     } finally {
-      storage.close();
+      await storage.close();
     }
   });
 
   it("reconciles a same-payload completed durable row before crossing the boundary", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "goatcitadel-extfx-completed-reconcile-"));
     realStorageTempRoots.push(root);
-    const storage = new Storage({
-      dbPath: ":memory:",
-      transcriptsDir: path.join(root, "transcripts"),
-      auditDir: path.join(root, "audit"),
-    });
+    const storage = createSqliteAsyncStorage(
+      new Storage({
+        dbPath: ":memory:",
+        transcriptsDir: path.join(root, "transcripts"),
+        auditDir: path.join(root, "audit"),
+      }),
+    );
     const provider = vi.fn(async () => ({ ok: true }));
     const base = {
       mutationStore: storage.mutationIdempotency,
       sideEffectRunStore: storage.externalSideEffectRuns,
-      runClaimTransaction: <T>(work: () => T): T => storage.runImmediateTransaction(work),
+      runClaimTransaction: storage.runImmediateTransaction.bind(storage),
       boundary: "integration_local_bridge_action",
       catalogId: "productivity.apple-notes",
       connectionId: "conn-completed-reconcile",
@@ -1444,14 +1461,16 @@ describe("external-side-effect-runner-service", () => {
         ...base,
         wardEffect: "require_dry_run",
         execute: async (claim) => {
-          claim.markExternalCallStarted();
+          await claim.markExternalCallStarted();
           return provider();
         },
       });
-      const preflight = storage.externalSideEffectRuns.listByConnection(base.connectionId, {
-        workspaceId: base.workspaceId,
-      })[0]!;
-      storage.externalSideEffectRuns.createOrGet(
+      const preflight = (
+        await storage.externalSideEffectRuns.listByConnection(base.connectionId, {
+          workspaceId: base.workspaceId,
+        })
+      )[0]!;
+      await storage.externalSideEffectRuns.createOrGet(
         {
           workspaceId: base.workspaceId,
           boundary: base.boundary,
@@ -1468,15 +1487,19 @@ describe("external-side-effect-runner-service", () => {
         },
         "2026-05-31T00:00:01.000Z",
       );
-      storage.externalSideEffectRuns.markExternalCallStarted(preflight.runId, undefined, "2026-05-31T00:00:02.000Z");
-      storage.externalSideEffectRuns.markCompleted(
+      await storage.externalSideEffectRuns.markExternalCallStarted(
+        preflight.runId,
+        undefined,
+        "2026-05-31T00:00:02.000Z",
+      );
+      await storage.externalSideEffectRuns.markCompleted(
         preflight.runId,
         { replayOutcome: "claimed" },
         "2026-05-31T00:00:03.000Z",
       );
-      expect(storage.externalSideEffectRuns.get(preflight.runId)).toMatchObject({ status: "completed" });
+      expect(await storage.externalSideEffectRuns.get(preflight.runId)).toMatchObject({ status: "completed" });
       expect(
-        storage.externalSideEffectRuns.createOrGet(
+        await storage.externalSideEffectRuns.createOrGet(
           {
             workspaceId: base.workspaceId,
             boundary: base.boundary,
@@ -1495,7 +1518,7 @@ describe("external-side-effect-runner-service", () => {
         ),
       ).toMatchObject({ status: "completed" });
 
-      const reconciledClaim = claimIdempotentExternalSideEffect({
+      const reconciledClaim = await claimIdempotentExternalSideEffect({
         ...base,
         checkedAt: "2026-05-31T00:00:30.000Z",
       });
@@ -1505,7 +1528,7 @@ describe("external-side-effect-runner-service", () => {
         ...base,
         checkedAt: "2026-05-31T00:01:00.000Z",
         execute: async (claim) => {
-          claim.markExternalCallStarted();
+          await claim.markExternalCallStarted();
           return provider();
         },
       });
@@ -1516,13 +1539,13 @@ describe("external-side-effect-runner-service", () => {
         claim: { replayOutcome: "duplicate", resumeState: "completed" },
       });
       expect(provider).not.toHaveBeenCalled();
-      expect(storage.externalSideEffectRuns.get(preflight.runId)).toMatchObject({
+      expect(await storage.externalSideEffectRuns.get(preflight.runId)).toMatchObject({
         status: "completed",
         replayOutcome: "claimed",
         resumeState: "completed",
       });
       expect(
-        storage.mutationIdempotency.get({
+        await storage.mutationIdempotency.get({
           method: "POST",
           routePath: replay.claim.routePath,
           idempotencyKey: base.idempotencyKey,
@@ -1530,7 +1553,7 @@ describe("external-side-effect-runner-service", () => {
         }),
       ).toBeUndefined();
     } finally {
-      storage.close();
+      await storage.close();
     }
   });
 
@@ -1572,7 +1595,7 @@ describe("external-side-effect-runner-service", () => {
       label: "Approved external runtime action",
       requireDurableBoundaryRecord: true,
       execute: async (claim) => {
-        claim.markExternalCallStarted();
+        await claim.markExternalCallStarted();
         return provider();
       },
     });
@@ -1590,15 +1613,17 @@ describe("external-side-effect-runner-service", () => {
   it("does not report false completion after a strict claimant's mutation generation is stolen", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "goatcitadel-extfx-completed-winner-"));
     realStorageTempRoots.push(root);
-    const storage = new Storage({
-      dbPath: ":memory:",
-      transcriptsDir: path.join(root, "transcripts"),
-      auditDir: path.join(root, "audit"),
-    });
+    const storage = createSqliteAsyncStorage(
+      new Storage({
+        dbPath: ":memory:",
+        transcriptsDir: path.join(root, "transcripts"),
+        auditDir: path.join(root, "audit"),
+      }),
+    );
     const base = {
       mutationStore: storage.mutationIdempotency,
       sideEffectRunStore: storage.externalSideEffectRuns,
-      runClaimTransaction: <T>(work: () => T): T => storage.runImmediateTransaction(work),
+      runClaimTransaction: storage.runImmediateTransaction.bind(storage),
       boundary: "durable_connector_delivery",
       connectionId: "conn-completed-winner",
       actionId: "send-completed-winner",
@@ -1621,15 +1646,15 @@ describe("external-side-effect-runner-service", () => {
       const original = runIdempotentExternalSideEffect({
         ...base,
         execute: async (claim) => {
-          claim.markExternalCallStarted();
+          await claim.markExternalCallStarted();
           originalStarted();
           await originalGate;
           return { id: "provider-sent-once" };
         },
       });
       await originalStartedGate;
-      const run = storage.externalSideEffectRuns.listByConnection(base.connectionId)[0]!;
-      storage.mutationIdempotency.markFailed({
+      const run = (await storage.externalSideEffectRuns.listByConnection(base.connectionId))[0]!;
+      await storage.mutationIdempotency.markFailed({
         method: "POST",
         routePath: run.routePath,
         idempotencyKey: run.idempotencyKey,
@@ -1638,7 +1663,7 @@ describe("external-side-effect-runner-service", () => {
       });
 
       const retryExecute = vi.fn(async (claim: ExternalSideEffectExecutionContext) => {
-        claim.markExternalCallStarted();
+        await claim.markExternalCallStarted();
         return { id: "must-not-send" };
       });
       const retry = await runIdempotentExternalSideEffect({
@@ -1659,30 +1684,32 @@ describe("external-side-effect-runner-service", () => {
         claim: { resumeState: "manual_review_unknown_external_outcome" },
         error: { code: "EXTERNAL_SIDE_EFFECT_BOUNDARY_CLAIM_LOST" },
       });
-      expect(storage.externalSideEffectRuns.get(run.runId).status).toBe("unknown_external_outcome");
-      expect(storage.externalSideEffectRuns.get(run.runId)).toMatchObject({
+      expect((await storage.externalSideEffectRuns.get(run.runId)).status).toBe("unknown_external_outcome");
+      expect(await storage.externalSideEffectRuns.get(run.runId)).toMatchObject({
         status: "unknown_external_outcome",
         resumeState: "manual_review_unknown_external_outcome",
       });
     } finally {
-      storage.close();
+      await storage.close();
     }
   });
 
   it("records a genuine active strict-boundary failure with real SQLite CAS", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "goatcitadel-extfx-active-failure-"));
     realStorageTempRoots.push(root);
-    const storage = new Storage({
-      dbPath: ":memory:",
-      transcriptsDir: path.join(root, "transcripts"),
-      auditDir: path.join(root, "audit"),
-    });
+    const storage = createSqliteAsyncStorage(
+      new Storage({
+        dbPath: ":memory:",
+        transcriptsDir: path.join(root, "transcripts"),
+        auditDir: path.join(root, "audit"),
+      }),
+    );
 
     try {
       const result = await runIdempotentExternalSideEffect({
         mutationStore: storage.mutationIdempotency,
         sideEffectRunStore: storage.externalSideEffectRuns,
-        runClaimTransaction: <T>(work: () => T): T => storage.runImmediateTransaction(work),
+        runClaimTransaction: storage.runImmediateTransaction.bind(storage),
         boundary: "durable_connector_delivery",
         connectionId: "conn-active-failure",
         actionId: "send-active-failure",
@@ -1692,7 +1719,7 @@ describe("external-side-effect-runner-service", () => {
         label: "Active failure proof",
         requireDurableBoundaryRecord: true,
         execute: async (claim) => {
-          claim.markExternalCallStarted();
+          await claim.markExternalCallStarted();
           throw new Error("connection reset after provider dispatch");
         },
       });
@@ -1701,12 +1728,12 @@ describe("external-side-effect-runner-service", () => {
         status: "failed",
         claim: { resumeState: "manual_review_unknown_external_outcome" },
       });
-      expect(storage.externalSideEffectRuns.listByConnection("conn-active-failure")[0]).toMatchObject({
+      expect((await storage.externalSideEffectRuns.listByConnection("conn-active-failure"))[0]).toMatchObject({
         status: "unknown_external_outcome",
         resumeState: "manual_review_unknown_external_outcome",
       });
     } finally {
-      storage.close();
+      await storage.close();
     }
   });
 
@@ -1715,15 +1742,17 @@ describe("external-side-effect-runner-service", () => {
     realStorageTempRoots.push(root);
     const dbPath = path.join(root, "runtime.sqlite");
     const payload = { provider: "activepieces", message: "send once after restart" };
-    const seedStorage = new Storage({
-      dbPath,
-      transcriptsDir: path.join(root, "seed-transcripts"),
-      auditDir: path.join(root, "seed-audit"),
-    });
-    const seeded = claimIdempotentExternalSideEffect({
+    const seedStorage = createSqliteAsyncStorage(
+      new Storage({
+        dbPath,
+        transcriptsDir: path.join(root, "seed-transcripts"),
+        auditDir: path.join(root, "seed-audit"),
+      }),
+    );
+    const seeded = await claimIdempotentExternalSideEffect({
       mutationStore: seedStorage.mutationIdempotency,
       sideEffectRunStore: seedStorage.externalSideEffectRuns,
-      runClaimTransaction: <T>(work: () => T): T => seedStorage.runImmediateTransaction(work),
+      runClaimTransaction: seedStorage.runImmediateTransaction.bind(seedStorage),
       workspaceId: "workspace-replay",
       boundary: "integration_operator_action",
       catalogId: "automation.activepieces",
@@ -1736,7 +1765,7 @@ describe("external-side-effect-runner-service", () => {
     });
     expect(seeded.claimToken).toEqual(expect.any(String));
     expect(
-      seedStorage.mutationIdempotency.markFailed({
+      await seedStorage.mutationIdempotency.markFailed({
         method: "POST",
         routePath: seeded.routePath,
         idempotencyKey: seeded.idempotencyKey,
@@ -1746,7 +1775,7 @@ describe("external-side-effect-runner-service", () => {
       }),
     ).toBe(true);
     expect(
-      seedStorage.mutationIdempotency.claim({
+      await seedStorage.mutationIdempotency.claim({
         method: "POST",
         routePath: seeded.routePath,
         idempotencyKey: seeded.idempotencyKey,
@@ -1756,24 +1785,40 @@ describe("external-side-effect-runner-service", () => {
         leaseDurationMs: 1_000,
       }),
     ).toMatchObject({ outcome: "claimed" });
-    seedStorage.gatewaySql
+    await seedStorage.gatewaySql
       .prepare("UPDATE external_side_effect_runs SET updated_at = ? WHERE run_id = ?")
       .run("2020-01-01T00:00:00.000Z", seeded.sideEffectRunId!);
-    const staleRun = seedStorage.externalSideEffectRuns.get(seeded.sideEffectRunId!);
-    seedStorage.close();
+    const staleRun = await seedStorage.externalSideEffectRuns.get(seeded.sideEffectRunId!);
+    await seedStorage.close();
 
-    const workerA = new Storage({
-      dbPath,
-      transcriptsDir: path.join(root, "worker-a-transcripts"),
-      auditDir: path.join(root, "worker-a-audit"),
+    const workerA = createSqliteAsyncStorage(
+      new Storage({
+        dbPath,
+        transcriptsDir: path.join(root, "worker-a-transcripts"),
+        auditDir: path.join(root, "worker-a-audit"),
+      }),
+    );
+    const workerB = createSqliteAsyncStorage(
+      new Storage({
+        dbPath,
+        transcriptsDir: path.join(root, "worker-b-transcripts"),
+        auditDir: path.join(root, "worker-b-audit"),
+      }),
+    );
+    let releaseProvider!: () => void;
+    const providerGate = new Promise<void>((resolve) => {
+      releaseProvider = resolve;
     });
-    const workerB = new Storage({
-      dbPath,
-      transcriptsDir: path.join(root, "worker-b-transcripts"),
-      auditDir: path.join(root, "worker-b-audit"),
+    let providerStarted!: () => void;
+    const providerStartedGate = new Promise<void>((resolve) => {
+      providerStarted = resolve;
     });
-    const provider = vi.fn(async () => ({ output: { id: "provider-once" } }));
-    const buildWorker = (storage: Storage) =>
+    const provider = vi.fn(async () => {
+      providerStarted();
+      await providerGate;
+      return { output: { id: "provider-once" } };
+    });
+    const buildWorker = (storage: AsyncStorage) =>
       runReplaySafeExternalSideEffectWorker({
         runs: [staleRun],
         checkedAt: "2099-01-01T00:00:00.000Z",
@@ -1781,7 +1826,7 @@ describe("external-side-effect-runner-service", () => {
         buildJob: (run) => ({
           mutationStore: storage.mutationIdempotency,
           sideEffectRunStore: storage.externalSideEffectRuns,
-          runClaimTransaction: <T>(work: () => T): T => storage.runImmediateTransaction(work),
+          runClaimTransaction: storage.runImmediateTransaction.bind(storage),
           workspaceId: run.workspaceId,
           boundary: run.boundary,
           catalogId: run.catalogId,
@@ -1793,24 +1838,29 @@ describe("external-side-effect-runner-service", () => {
           payload,
           label: "Restarted Activepieces replay",
           execute: async (claim) => {
-            claim.markExternalCallStarted();
+            await claim.markExternalCallStarted();
             return provider();
           },
         }),
       });
 
+    let first: ReturnType<typeof buildWorker> | undefined;
     try {
-      const results = (await Promise.all([buildWorker(workerA), buildWorker(workerB)])).flat();
+      first = buildWorker(workerA);
+      await providerStartedGate;
+      const second = buildWorker(workerB);
+      releaseProvider();
+      const results = (await Promise.all([first, second])).flat();
 
       expect(results.map((result) => result.status).sort()).toEqual(["executed", "skipped"]);
       expect(provider).toHaveBeenCalledTimes(1);
-      expect(workerA.externalSideEffectRuns.get(staleRun.runId)).toMatchObject({
+      expect(await workerA.externalSideEffectRuns.get(staleRun.runId)).toMatchObject({
         status: "completed",
         resumeState: "completed",
         attemptCount: 1,
       });
       expect(
-        workerA.mutationIdempotency.get({
+        await workerA.mutationIdempotency.get({
           method: "POST",
           routePath: seeded.routePath,
           idempotencyKey: seeded.idempotencyKey,
@@ -1818,8 +1868,10 @@ describe("external-side-effect-runner-service", () => {
         }),
       ).toMatchObject({ status: "completed" });
     } finally {
-      workerA.close();
-      workerB.close();
+      releaseProvider();
+      await first?.catch(() => undefined);
+      await workerA.close();
+      await workerB.close();
     }
   });
 
@@ -1828,15 +1880,17 @@ describe("external-side-effect-runner-service", () => {
     realStorageTempRoots.push(root);
     const dbPath = path.join(root, "runtime.sqlite");
     const payload = { provider: "activepieces", message: "one provider call across an expired lease" };
-    const seedStorage = new Storage({
-      dbPath,
-      transcriptsDir: path.join(root, "seed-transcripts"),
-      auditDir: path.join(root, "seed-audit"),
-    });
-    const seeded = claimIdempotentExternalSideEffect({
+    const seedStorage = createSqliteAsyncStorage(
+      new Storage({
+        dbPath,
+        transcriptsDir: path.join(root, "seed-transcripts"),
+        auditDir: path.join(root, "seed-audit"),
+      }),
+    );
+    const seeded = await claimIdempotentExternalSideEffect({
       mutationStore: seedStorage.mutationIdempotency,
       sideEffectRunStore: seedStorage.externalSideEffectRuns,
-      runClaimTransaction: <T>(work: () => T): T => seedStorage.runImmediateTransaction(work),
+      runClaimTransaction: seedStorage.runImmediateTransaction.bind(seedStorage),
       workspaceId: "workspace-long-provider",
       boundary: "integration_operator_action",
       catalogId: "automation.activepieces",
@@ -1848,7 +1902,7 @@ describe("external-side-effect-runner-service", () => {
       payload,
     });
     expect(
-      seedStorage.mutationIdempotency.markFailed({
+      await seedStorage.mutationIdempotency.markFailed({
         method: "POST",
         routePath: seeded.routePath,
         idempotencyKey: seeded.idempotencyKey,
@@ -1857,22 +1911,26 @@ describe("external-side-effect-runner-service", () => {
         updatedAt: "2026-01-01T00:00:01.000Z",
       }),
     ).toBe(true);
-    seedStorage.gatewaySql
+    await seedStorage.gatewaySql
       .prepare("UPDATE external_side_effect_runs SET updated_at = ? WHERE run_id = ?")
       .run("2020-01-01T00:00:00.000Z", seeded.sideEffectRunId!);
-    const staleRun = seedStorage.externalSideEffectRuns.get(seeded.sideEffectRunId!);
-    seedStorage.close();
+    const staleRun = await seedStorage.externalSideEffectRuns.get(seeded.sideEffectRunId!);
+    await seedStorage.close();
 
-    const workerA = new Storage({
-      dbPath,
-      transcriptsDir: path.join(root, "worker-a-transcripts"),
-      auditDir: path.join(root, "worker-a-audit"),
-    });
-    const workerB = new Storage({
-      dbPath,
-      transcriptsDir: path.join(root, "worker-b-transcripts"),
-      auditDir: path.join(root, "worker-b-audit"),
-    });
+    const workerA = createSqliteAsyncStorage(
+      new Storage({
+        dbPath,
+        transcriptsDir: path.join(root, "worker-a-transcripts"),
+        auditDir: path.join(root, "worker-a-audit"),
+      }),
+    );
+    const workerB = createSqliteAsyncStorage(
+      new Storage({
+        dbPath,
+        transcriptsDir: path.join(root, "worker-b-transcripts"),
+        auditDir: path.join(root, "worker-b-audit"),
+      }),
+    );
     let releaseProviderA!: () => void;
     const providerAGate = new Promise<void>((resolve) => {
       releaseProviderA = resolve;
@@ -1887,7 +1945,7 @@ describe("external-side-effect-runner-service", () => {
       return { output: { id: "provider-a" } };
     });
     const providerB = vi.fn(async () => ({ output: { id: "provider-b-must-not-run" } }));
-    const buildWorker = (storage: Storage, provider: typeof providerA) =>
+    const buildWorker = (storage: AsyncStorage, provider: typeof providerA) =>
       runReplaySafeExternalSideEffectWorker({
         runs: [staleRun],
         checkedAt: "2099-01-01T00:00:00.000Z",
@@ -1895,7 +1953,7 @@ describe("external-side-effect-runner-service", () => {
         buildJob: (run) => ({
           mutationStore: storage.mutationIdempotency,
           sideEffectRunStore: storage.externalSideEffectRuns,
-          runClaimTransaction: <T>(work: () => T): T => storage.runImmediateTransaction(work),
+          runClaimTransaction: storage.runImmediateTransaction.bind(storage),
           workspaceId: run.workspaceId,
           boundary: run.boundary,
           catalogId: run.catalogId,
@@ -1907,7 +1965,7 @@ describe("external-side-effect-runner-service", () => {
           payload,
           label: "Long-running Activepieces replay",
           execute: async (claim) => {
-            claim.markExternalCallStarted();
+            await claim.markExternalCallStarted();
             return provider();
           },
         }),
@@ -1926,7 +1984,7 @@ describe("external-side-effect-runner-service", () => {
       expect([...firstResult, ...second].map((result) => result.status).sort()).toEqual(["executed", "skipped"]);
       expect(providerA).toHaveBeenCalledTimes(1);
       expect(providerB).not.toHaveBeenCalled();
-      expect(workerA.externalSideEffectRuns.get(staleRun.runId)).toMatchObject({
+      expect(await workerA.externalSideEffectRuns.get(staleRun.runId)).toMatchObject({
         status: "completed",
         resumeState: "completed",
         externalReferenceId: "id:provider-a",
@@ -1935,8 +1993,8 @@ describe("external-side-effect-runner-service", () => {
     } finally {
       releaseProviderA();
       await first?.catch(() => undefined);
-      workerA.close();
-      workerB.close();
+      await workerA.close();
+      await workerB.close();
     }
   });
 
@@ -1944,16 +2002,20 @@ describe("external-side-effect-runner-service", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "goatcitadel-extfx-losing-worker-"));
     realStorageTempRoots.push(root);
     const dbPath = path.join(root, "runtime.sqlite");
-    const originalStorage = new Storage({
-      dbPath,
-      transcriptsDir: path.join(root, "original-transcripts"),
-      auditDir: path.join(root, "original-audit"),
-    });
-    const replayStorage = new Storage({
-      dbPath,
-      transcriptsDir: path.join(root, "replay-transcripts"),
-      auditDir: path.join(root, "replay-audit"),
-    });
+    const originalStorage = createSqliteAsyncStorage(
+      new Storage({
+        dbPath,
+        transcriptsDir: path.join(root, "original-transcripts"),
+        auditDir: path.join(root, "original-audit"),
+      }),
+    );
+    const replayStorage = createSqliteAsyncStorage(
+      new Storage({
+        dbPath,
+        transcriptsDir: path.join(root, "replay-transcripts"),
+        auditDir: path.join(root, "replay-audit"),
+      }),
+    );
     const payload = { provider: "activepieces", message: "single owner" };
     const originalProvider = vi.fn(async () => ({ output: { id: "loser-must-not-send" } }));
     const replayProvider = vi.fn(async () => ({ output: { id: "replay-winner" } }));
@@ -1985,15 +2047,17 @@ describe("external-side-effect-runner-service", () => {
         execute: async (claim) => {
           originalEntered();
           await originalGate;
-          claim.markExternalCallStarted();
+          await claim.markExternalCallStarted();
           return originalProvider();
         },
       });
       await originalEnteredGate;
       await new Promise((resolve) => setTimeout(resolve, 20));
-      const staleRun = originalStorage.externalSideEffectRuns.listByConnection("conn-losing-worker", {
-        workspaceId: "workspace-replay",
-      })[0]!;
+      const staleRun = (
+        await originalStorage.externalSideEffectRuns.listByConnection("conn-losing-worker", {
+          workspaceId: "workspace-replay",
+        })
+      )[0]!;
 
       const replay = await runReplaySafeExternalSideEffectWorker({
         runs: [staleRun],
@@ -2002,7 +2066,7 @@ describe("external-side-effect-runner-service", () => {
         buildJob: (run) => ({
           mutationStore: replayStorage.mutationIdempotency,
           sideEffectRunStore: replayStorage.externalSideEffectRuns,
-          runClaimTransaction: <T>(work: () => T): T => replayStorage.runImmediateTransaction(work),
+          runClaimTransaction: replayStorage.runImmediateTransaction.bind(replayStorage),
           workspaceId: run.workspaceId,
           boundary: run.boundary,
           catalogId: run.catalogId,
@@ -2014,7 +2078,7 @@ describe("external-side-effect-runner-service", () => {
           payload,
           label: "Restarted Activepieces replay",
           execute: async (claim) => {
-            claim.markExternalCallStarted();
+            await claim.markExternalCallStarted();
             return replayProvider();
           },
         }),
@@ -2029,7 +2093,7 @@ describe("external-side-effect-runner-service", () => {
       });
       expect(originalProvider).not.toHaveBeenCalled();
       expect(replayProvider).toHaveBeenCalledTimes(1);
-      expect(replayStorage.externalSideEffectRuns.get(staleRun.runId)).toMatchObject({
+      expect(await replayStorage.externalSideEffectRuns.get(staleRun.runId)).toMatchObject({
         status: "completed",
         resumeState: "completed",
         externalReferenceId: "id:replay-winner",
@@ -2037,23 +2101,25 @@ describe("external-side-effect-runner-service", () => {
     } finally {
       releaseOriginal();
       await original?.catch(() => undefined);
-      originalStorage.close();
-      replayStorage.close();
+      await originalStorage.close();
+      await replayStorage.close();
     }
   });
 
   it("uses the database clock for replay leases when the app eligibility clock is skewed", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "goatcitadel-extfx-clock-skew-"));
     realStorageTempRoots.push(root);
-    const storage = new Storage({
-      dbPath: ":memory:",
-      transcriptsDir: path.join(root, "transcripts"),
-      auditDir: path.join(root, "audit"),
-    });
+    const storage = createSqliteAsyncStorage(
+      new Storage({
+        dbPath: ":memory:",
+        transcriptsDir: path.join(root, "transcripts"),
+        auditDir: path.join(root, "audit"),
+      }),
+    );
     const payload = { provider: "activepieces", message: "live owner" };
 
     try {
-      const liveClaim = claimIdempotentExternalSideEffect({
+      const liveClaim = await claimIdempotentExternalSideEffect({
         mutationStore: storage.mutationIdempotency,
         sideEffectRunStore: storage.externalSideEffectRuns,
         workspaceId: "workspace-clock",
@@ -2068,7 +2134,7 @@ describe("external-side-effect-runner-service", () => {
         payload,
       });
       const provider = vi.fn();
-      const run = storage.externalSideEffectRuns.get(liveClaim.sideEffectRunId!);
+      const run = await storage.externalSideEffectRuns.get(liveClaim.sideEffectRunId!);
 
       const replay = await runReplaySafeExternalSideEffectWorker({
         runs: [run],
@@ -2077,7 +2143,7 @@ describe("external-side-effect-runner-service", () => {
         buildJob: (candidate) => ({
           mutationStore: storage.mutationIdempotency,
           sideEffectRunStore: storage.externalSideEffectRuns,
-          runClaimTransaction: <T>(work: () => T): T => storage.runImmediateTransaction(work),
+          runClaimTransaction: storage.runImmediateTransaction.bind(storage),
           workspaceId: candidate.workspaceId,
           boundary: candidate.boundary,
           catalogId: candidate.catalogId,
@@ -2097,7 +2163,7 @@ describe("external-side-effect-runner-service", () => {
       ]);
       expect(provider).not.toHaveBeenCalled();
       expect(
-        storage.mutationIdempotency.get({
+        await storage.mutationIdempotency.get({
           method: "POST",
           routePath: liveClaim.routePath,
           idempotencyKey: liveClaim.idempotencyKey,
@@ -2105,22 +2171,24 @@ describe("external-side-effect-runner-service", () => {
         }),
       ).toMatchObject({ status: "pending", claimToken: liveClaim.claimToken });
     } finally {
-      storage.close();
+      await storage.close();
     }
   });
 
   it("uses database age before taking over a lease-less production claim under app clock skew", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "goatcitadel-extfx-lease-less-clock-skew-"));
     realStorageTempRoots.push(root);
-    const storage = new Storage({
-      dbPath: ":memory:",
-      transcriptsDir: path.join(root, "transcripts"),
-      auditDir: path.join(root, "audit"),
-    });
+    const storage = createSqliteAsyncStorage(
+      new Storage({
+        dbPath: ":memory:",
+        transcriptsDir: path.join(root, "transcripts"),
+        auditDir: path.join(root, "audit"),
+      }),
+    );
     const payload = { provider: "activepieces", flowId: "flow-1", payload: {} };
 
     try {
-      const liveClaim = claimIdempotentExternalSideEffect({
+      const liveClaim = await claimIdempotentExternalSideEffect({
         mutationStore: storage.mutationIdempotency,
         sideEffectRunStore: storage.externalSideEffectRuns,
         workspaceId: "workspace-clock",
@@ -2134,7 +2202,7 @@ describe("external-side-effect-runner-service", () => {
         payload,
       });
       const provider = vi.fn();
-      const run = storage.externalSideEffectRuns.get(liveClaim.sideEffectRunId!);
+      const run = await storage.externalSideEffectRuns.get(liveClaim.sideEffectRunId!);
 
       const replay = await runReplaySafeExternalSideEffectWorker({
         runs: [run],
@@ -2143,7 +2211,7 @@ describe("external-side-effect-runner-service", () => {
         buildJob: (candidate) => ({
           mutationStore: storage.mutationIdempotency,
           sideEffectRunStore: storage.externalSideEffectRuns,
-          runClaimTransaction: <T>(work: () => T): T => storage.runImmediateTransaction(work),
+          runClaimTransaction: storage.runImmediateTransaction.bind(storage),
           workspaceId: candidate.workspaceId,
           boundary: candidate.boundary,
           catalogId: candidate.catalogId,
@@ -2163,7 +2231,7 @@ describe("external-side-effect-runner-service", () => {
       ]);
       expect(provider).not.toHaveBeenCalled();
       expect(
-        storage.mutationIdempotency.get({
+        await storage.mutationIdempotency.get({
           method: "POST",
           routePath: liveClaim.routePath,
           idempotencyKey: liveClaim.idempotencyKey,
@@ -2171,12 +2239,12 @@ describe("external-side-effect-runner-service", () => {
         }),
       ).toMatchObject({ status: "pending", claimToken: liveClaim.claimToken });
     } finally {
-      storage.close();
+      await storage.close();
     }
   });
 
-  it("marks retries from failed idempotency claims as retry attempts", () => {
-    const result = claimIdempotentExternalSideEffect({
+  it("marks retries from failed idempotency claims as retry attempts", async () => {
+    const result = await claimIdempotentExternalSideEffect({
       mutationStore: {
         claim: vi.fn(() => ({
           outcome: "claimed" as const,
@@ -2218,7 +2286,7 @@ describe("external-side-effect-runner-service", () => {
     const markFailed = vi.fn(() => true);
     const markCompleted = vi.fn(() => true);
     const execute = vi.fn(async (claim) => {
-      claim.markExternalCallStarted();
+      await claim.markExternalCallStarted();
       return { output: { id: "flow-run-1" } };
     });
     const sideEffectRunStore = createSideEffectRunStore();
@@ -2317,7 +2385,7 @@ describe("external-side-effect-runner-service", () => {
 
   it("retries stale claimed-not-sent runs but leaves fresh claims alone", async () => {
     const execute = vi.fn(async (claim) => {
-      claim.markExternalCallStarted();
+      await claim.markExternalCallStarted();
       return { output: { id: "retry-1" } };
     });
     const mutationStore = {

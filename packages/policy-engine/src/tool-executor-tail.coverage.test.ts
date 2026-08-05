@@ -4,7 +4,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage, Storage } from "@goatcitadel/storage";
 import { executeTool } from "./tool-executor.js";
 
 const createdDirs: string[] = [];
@@ -47,7 +47,7 @@ function request(toolName: string, args: Record<string, unknown> = {}): ToolInvo
   };
 }
 
-function createKnowledgeStorage(): Storage {
+function createKnowledgeStorage(): Storage & AsyncStorage {
   const documents = [
     {
       docId: "doc-empty",
@@ -109,10 +109,10 @@ function createKnowledgeStorage(): Storage {
         },
       ),
     },
-  } as unknown as Storage;
+  } as unknown as Storage & AsyncStorage;
 }
 
-function createCommsStorage(connection: { key: string; config: Record<string, unknown> }): Storage {
+function createCommsStorage(connection: { key: string; config: Record<string, unknown> }): Storage & AsyncStorage {
   const queued = {
     deliveryId: "delivery-tail",
     connectionId: "connection-tail",
@@ -131,7 +131,7 @@ function createCommsStorage(connection: { key: string; config: Record<string, un
       markSent: vi.fn(),
       markFailed: vi.fn(),
     },
-  } as unknown as Storage;
+  } as unknown as Storage & AsyncStorage;
 }
 
 describe("tool executor tail coverage", () => {

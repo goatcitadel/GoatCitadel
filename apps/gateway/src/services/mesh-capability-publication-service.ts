@@ -53,7 +53,7 @@ import {
   computeMeshCapabilityDescriptorSha256,
   computeMeshCapabilityEntrySha256,
   computeMeshCapabilityManifestSha256,
-  type Storage,
+  type AsyncStorage as Storage,
 } from "@goatcitadel/storage";
 import { timingSafeStringEqual } from "./crypto-equals.js";
 
@@ -135,7 +135,7 @@ export interface MeshCapabilityPublicationServiceOptions {
   storage: Storage;
   now?: () => Date;
   leaseTtlSeconds?: number;
-  publishRealtime?: (eventType: string, source: string, payload: Record<string, unknown>) => void;
+  publishRealtime?: (eventType: string, source: string, payload: Record<string, unknown>) => Promise<unknown>;
 }
 
 interface NodeProjectionFacts {
@@ -167,7 +167,11 @@ export class MeshCapabilityPublicationService {
   private readonly storage: Storage;
   private readonly now: () => Date;
   private readonly leaseTtlSeconds: number;
-  private readonly publishRealtime?: (eventType: string, source: string, payload: Record<string, unknown>) => void;
+  private readonly publishRealtime?: (
+    eventType: string,
+    source: string,
+    payload: Record<string, unknown>,
+  ) => Promise<unknown>;
 
   public constructor(options: MeshCapabilityPublicationServiceOptions) {
     this.storage = options.storage;
@@ -184,9 +188,9 @@ export class MeshCapabilityPublicationService {
    * row must still be the node's current, unrevoked admission. Operator,
    * device, and companion credentials never satisfy this check.
    */
-  public authenticateNodeRequest(request: {
+  public async authenticateNodeRequest(request: {
     headers: Record<string, string | string[] | undefined>;
-  }): { identity: MeshCapabilityAuthenticatedNodeIdentity } | MeshCapabilityNodeAuthFailure {
+  }): Promise<{ identity: MeshCapabilityAuthenticatedNodeIdentity } | MeshCapabilityNodeAuthFailure> {
     const token = readBearerToken(request.headers.authorization);
     if (!token) {
       return {
@@ -196,11 +200,14 @@ export class MeshCapabilityPublicationService {
       };
     }
     const tokenSha256 = sha256Hex(token);
-    const admission = this.storage.meshCapabilityNodeAdmissions.findByJoinTokenSha256(tokenSha256);
+    const admission = await this.storage.meshCapabilityNodeAdmissions.findByJoinTokenSha256(tokenSha256);
     if (!admission) {
       return unknownOrRevoked();
     }
-    const current = this.storage.meshCapabilityNodeAdmissions.findCurrent(admission.workspaceId, admission.nodeId);
+    const current = await this.storage.meshCapabilityNodeAdmissions.findCurrent(
+      admission.workspaceId,
+      admission.nodeId,
+    );
     if (
       !current ||
       current.admissionGeneration !== admission.admissionGeneration ||
@@ -249,16 +256,16 @@ export class MeshCapabilityPublicationService {
    * server-resolved, and the immutable storage owner enforces replay,
    * conflict, cap, and supersession invariants.
    */
-  public publishCapabilityManifest(
+  public async publishCapabilityManifest(
     identity: MeshCapabilityAuthenticatedNodeIdentity,
     submission: MeshCapabilityManifestPublishSubmission,
-  ): MeshCapabilityManifestPublishReceipt {
+  ): Promise<MeshCapabilityManifestPublishReceipt> {
     const entries = this.buildManifestEntries(identity.nodeId, submission.entries);
-    const replay = this.resolvePublicationKeyReplay(identity, submission, entries);
+    const replay = await this.resolvePublicationKeyReplay(identity, submission, entries);
     if (replay) {
-      return { replayed: true, manifest: replay, entries: this.projectManifestEntries(replay) };
+      return { replayed: true, manifest: replay, entries: await this.projectManifestEntries(replay) };
     }
-    const binding = this.resolvePublisherBinding(identity);
+    const binding = await this.resolvePublisherBinding(identity);
     const unsigned = {
       schemaVersion: MESH_CAPABILITY_MANIFEST_SCHEMA_VERSION,
       workspaceId: identity.workspaceId,
@@ -278,8 +285,8 @@ export class MeshCapabilityPublicationService {
       manifestSha256: computeMeshCapabilityManifestSha256(unsigned),
     };
     assertMeshCapabilityManifest(manifest);
-    const stored = this.storage.meshCapabilityPublications.publishManifest(manifest);
-    this.publishRealtime?.("mesh_capability_manifest_published", "mesh", {
+    const stored = await this.storage.meshCapabilityPublications.publishManifest(manifest);
+    await this.publishRealtime?.("mesh_capability_manifest_published", "mesh", {
       workspaceId: stored.workspaceId,
       nodeId: stored.nodeId,
       publisherGeneration: stored.publisherGeneration,
@@ -287,24 +294,26 @@ export class MeshCapabilityPublicationService {
       publicationKey: stored.publicationKey,
       entryCount: stored.entries.length,
     });
-    return { replayed: false, manifest: stored, entries: this.projectManifestEntries(stored) };
+    return { replayed: false, manifest: stored, entries: await this.projectManifestEntries(stored) };
   }
 
   /** Lists the authenticated node's own immutable manifests with statuses. */
-  public listOwnPublications(identity: MeshCapabilityAuthenticatedNodeIdentity): MeshCapabilityOwnPublicationList {
+  public async listOwnPublications(
+    identity: MeshCapabilityAuthenticatedNodeIdentity,
+  ): Promise<MeshCapabilityOwnPublicationList> {
     return {
       workspaceId: identity.workspaceId,
       nodeId: identity.nodeId,
-      manifests: this.buildManifestViews(identity.workspaceId, identity.nodeId),
+      manifests: await this.buildManifestViews(identity.workspaceId, identity.nodeId),
     };
   }
 
   /** Operator-only, read-only inspection of a workspace's publications. */
-  public listPublicationInspection(workspaceId: string): MeshCapabilityPublicationInspection {
+  public async listPublicationInspection(workspaceId: string): Promise<MeshCapabilityPublicationInspection> {
     return {
       workspaceId,
       generatedAt: this.nowIso(),
-      manifests: this.buildManifestViews(workspaceId),
+      manifests: await this.buildManifestViews(workspaceId),
     };
   }
 
@@ -315,8 +324,8 @@ export class MeshCapabilityPublicationService {
    * revalidate right now, so it stays empty until governed activation (M2)
    * exists. Published skill descriptors never project as callable.
    */
-  public listCatalogEntries(workspaceId = DEFAULT_WORKSPACE_ID): CapabilityCatalogEntry[] {
-    const views = this.buildManifestViews(workspaceId);
+  public async listCatalogEntries(workspaceId = DEFAULT_WORKSPACE_ID): Promise<CapabilityCatalogEntry[]> {
+    const views = await this.buildManifestViews(workspaceId);
     const byCapabilityId = new Map<
       string,
       { projection: MeshCapabilityCatalogEntryProjection; title: string; summary: string }
@@ -330,7 +339,7 @@ export class MeshCapabilityPublicationService {
         if (existing && projection.status === "superseded") {
           continue;
         }
-        const descriptor = this.findDescriptor(workspaceId, view, projection);
+        const descriptor = await this.findDescriptor(workspaceId, view, projection);
         byCapabilityId.set(capabilityIdOf(projection), {
           projection,
           title: descriptor?.title ?? projection.localId,
@@ -345,13 +354,13 @@ export class MeshCapabilityPublicationService {
     );
   }
 
-  private findDescriptor(
+  private async findDescriptor(
     workspaceId: string,
     view: MeshCapabilityPublicationManifestView,
     projection: MeshCapabilityCatalogEntryProjection,
-  ): MeshCapabilityDescriptor | undefined {
+  ): Promise<MeshCapabilityDescriptor | undefined> {
     try {
-      const manifest = this.storage.meshCapabilityPublications.getManifest(
+      const manifest = await this.storage.meshCapabilityPublications.getManifest(
         workspaceId,
         projection.nodeId,
         projection.publisherGeneration,
@@ -363,67 +372,82 @@ export class MeshCapabilityPublicationService {
     }
   }
 
-  private buildManifestViews(workspaceId: string, nodeId?: string): MeshCapabilityPublicationManifestView[] {
-    const records = this.storage.meshCapabilityPublications.listManifestRecords(workspaceId, {
+  private async buildManifestViews(
+    workspaceId: string,
+    nodeId?: string,
+  ): Promise<MeshCapabilityPublicationManifestView[]> {
+    const records = await this.storage.meshCapabilityPublications.listManifestRecords(workspaceId, {
       ...(nodeId === undefined ? {} : { nodeId }),
     });
-    const callableIndex = this.buildCallableIndex(workspaceId);
+    const callableIndex = await this.buildCallableIndex(workspaceId);
     const facts = new Map<string, NodeProjectionFacts>();
     const activationFacts = emptyActivationFacts();
-    return records.map((record) => ({
-      publicationKey: record.manifest.publicationKey,
-      manifestSha256: record.manifest.manifestSha256,
-      admissionGeneration: record.manifest.admissionGeneration,
-      publisherGeneration: record.manifest.publisherGeneration,
-      createdAt: record.manifest.createdAt,
-      ...(record.manifest.supersedesManifestSha256 === undefined
-        ? {}
-        : { supersedesManifestSha256: record.manifest.supersedesManifestSha256 }),
-      ...(record.supersededByManifestSha256 === undefined
-        ? {}
-        : { supersededByManifestSha256: record.supersededByManifestSha256 }),
-      entries: record.manifest.entries.map((entry) =>
-        this.projectEntry(
-          record.manifest,
-          record.supersededByManifestSha256,
-          entry,
-          this.resolveNodeFacts(facts, workspaceId, record.manifest.nodeId),
-          callableIndex,
-          activationFacts,
+    return await Promise.all(
+      records.map(async (record) => ({
+        publicationKey: record.manifest.publicationKey,
+        manifestSha256: record.manifest.manifestSha256,
+        admissionGeneration: record.manifest.admissionGeneration,
+        publisherGeneration: record.manifest.publisherGeneration,
+        createdAt: record.manifest.createdAt,
+        ...(record.manifest.supersedesManifestSha256 === undefined
+          ? {}
+          : { supersedesManifestSha256: record.manifest.supersedesManifestSha256 }),
+        ...(record.supersededByManifestSha256 === undefined
+          ? {}
+          : { supersededByManifestSha256: record.supersededByManifestSha256 }),
+        entries: await Promise.all(
+          record.manifest.entries.map(
+            async (entry) =>
+              await this.projectEntry(
+                record.manifest,
+                record.supersededByManifestSha256,
+                entry,
+                await this.resolveNodeFacts(facts, workspaceId, record.manifest.nodeId),
+                callableIndex,
+                activationFacts,
+              ),
+          ),
         ),
-      ),
-    }));
+      })),
+    );
   }
 
-  private projectManifestEntries(manifest: MeshCapabilityManifest): MeshCapabilityCatalogEntryProjection[] {
-    const record = this.storage.meshCapabilityPublications
-      .listManifestRecords(manifest.workspaceId, { nodeId: manifest.nodeId })
-      .find((candidate) => candidate.manifest.manifestSha256 === manifest.manifestSha256);
+  private async projectManifestEntries(
+    manifest: MeshCapabilityManifest,
+  ): Promise<MeshCapabilityCatalogEntryProjection[]> {
+    const record = (
+      await this.storage.meshCapabilityPublications.listManifestRecords(manifest.workspaceId, {
+        nodeId: manifest.nodeId,
+      })
+    ).find((candidate) => candidate.manifest.manifestSha256 === manifest.manifestSha256);
     const facts = new Map<string, NodeProjectionFacts>();
-    const callableIndex = this.buildCallableIndex(manifest.workspaceId);
+    const callableIndex = await this.buildCallableIndex(manifest.workspaceId);
     const activationFacts = emptyActivationFacts();
-    return manifest.entries.map((entry) =>
-      this.projectEntry(
-        manifest,
-        record?.supersededByManifestSha256,
-        entry,
-        this.resolveNodeFacts(facts, manifest.workspaceId, manifest.nodeId),
-        callableIndex,
-        activationFacts,
+    return await Promise.all(
+      manifest.entries.map(
+        async (entry) =>
+          await this.projectEntry(
+            manifest,
+            record?.supersededByManifestSha256,
+            entry,
+            await this.resolveNodeFacts(facts, manifest.workspaceId, manifest.nodeId),
+            callableIndex,
+            activationFacts,
+          ),
       ),
     );
   }
 
-  private projectEntry(
+  private async projectEntry(
     manifest: MeshCapabilityManifest,
     supersededByManifestSha256: string | undefined,
     entry: MeshCapabilityManifestEntry,
     facts: NodeProjectionFacts,
     callableIndex: Map<string, MeshCapabilityActivationRecord>,
     activationFacts: ActivationProjectionFacts,
-  ): MeshCapabilityCatalogEntryProjection {
-    const activation = this.resolveEntryActivationProjection(manifest, entry, activationFacts);
-    const { status, reasons } = this.resolveEntryStatus(
+  ): Promise<MeshCapabilityCatalogEntryProjection> {
+    const activation = await this.resolveEntryActivationProjection(manifest, entry, activationFacts);
+    const { status, reasons } = await this.resolveEntryStatus(
       manifest,
       supersededByManifestSha256,
       entry,
@@ -452,15 +476,15 @@ export class MeshCapabilityPublicationService {
    * derived capability ID binds exactly this manifest/entry/generation; it is
    * evidence for the operator inspection surface, never callability truth.
    */
-  private resolveEntryActivationProjection(
+  private async resolveEntryActivationProjection(
     manifest: MeshCapabilityManifest,
     entry: MeshCapabilityManifestEntry,
     activationFacts: ActivationProjectionFacts,
-  ): MeshCapabilityCatalogEntryActivationProjection | undefined {
+  ): Promise<MeshCapabilityCatalogEntryActivationProjection | undefined> {
     if (!activationFacts.latestByCapabilityId.has(entry.capabilityId)) {
       activationFacts.latestByCapabilityId.set(
         entry.capabilityId,
-        this.storage.meshCapabilityPublications.findLatestActivation(manifest.workspaceId, entry.capabilityId),
+        await this.storage.meshCapabilityPublications.findLatestActivation(manifest.workspaceId, entry.capabilityId),
       );
     }
     const latest = activationFacts.latestByCapabilityId.get(entry.capabilityId);
@@ -475,8 +499,10 @@ export class MeshCapabilityPublicationService {
     if (!activationFacts.revokedByActivationId.has(latest.activationId)) {
       activationFacts.revokedByActivationId.set(
         latest.activationId,
-        this.storage.meshCapabilityPublications.findActivationRevocation(manifest.workspaceId, latest.activationId) !==
-          undefined,
+        (await this.storage.meshCapabilityPublications.findActivationRevocation(
+          manifest.workspaceId,
+          latest.activationId,
+        )) !== undefined,
       );
     }
     return {
@@ -487,17 +513,17 @@ export class MeshCapabilityPublicationService {
     };
   }
 
-  private resolveEntryStatus(
+  private async resolveEntryStatus(
     manifest: MeshCapabilityManifest,
     supersededByManifestSha256: string | undefined,
     entry: MeshCapabilityManifestEntry,
     facts: NodeProjectionFacts,
     callableIndex: Map<string, MeshCapabilityActivationRecord>,
     activationProjection?: MeshCapabilityCatalogEntryActivationProjection,
-  ): { status: MeshCapabilityCatalogEntryStatus; reasons: string[] } {
+  ): Promise<{ status: MeshCapabilityCatalogEntryStatus; reasons: string[] }> {
     if (
       !facts.currentAdmission ||
-      this.isAdmissionRevoked(manifest.workspaceId, manifest.nodeId, manifest.admissionGeneration, facts)
+      (await this.isAdmissionRevoked(manifest.workspaceId, manifest.nodeId, manifest.admissionGeneration, facts))
     ) {
       return { status: "revoked", reasons: ["node_admission_revoked"] };
     }
@@ -556,19 +582,19 @@ export class MeshCapabilityPublicationService {
     return { status: "review_required", reasons };
   }
 
-  private isAdmissionRevoked(
+  private async isAdmissionRevoked(
     workspaceId: string,
     nodeId: string,
     admissionGeneration: number,
     facts: NodeProjectionFacts,
-  ): boolean {
+  ): Promise<boolean> {
     const cached = facts.revokedAdmissionGenerations.get(admissionGeneration);
     if (cached !== undefined) {
       return cached;
     }
     let revoked = false;
     try {
-      this.storage.meshCapabilityNodeAdmissions.getRevocation(workspaceId, nodeId, admissionGeneration);
+      await this.storage.meshCapabilityNodeAdmissions.getRevocation(workspaceId, nodeId, admissionGeneration);
       revoked = true;
     } catch (error) {
       if (!(error instanceof NotFoundError)) {
@@ -579,18 +605,18 @@ export class MeshCapabilityPublicationService {
     return revoked;
   }
 
-  private resolveNodeFacts(
+  private async resolveNodeFacts(
     cache: Map<string, NodeProjectionFacts>,
     workspaceId: string,
     nodeId: string,
-  ): NodeProjectionFacts {
+  ): Promise<NodeProjectionFacts> {
     const existing = cache.get(nodeId);
     if (existing) {
       return existing;
     }
     const publications = this.storage.meshCapabilityPublications;
-    const currentAdmission = this.storage.meshCapabilityNodeAdmissions.findCurrent(workspaceId, nodeId);
-    const publisher = publications.findCurrentPublisher(workspaceId, nodeId);
+    const currentAdmission = await this.storage.meshCapabilityNodeAdmissions.findCurrent(workspaceId, nodeId);
+    const publisher = await publications.findCurrentPublisher(workspaceId, nodeId);
     const facts: NodeProjectionFacts = {
       ...(currentAdmission === undefined ? {} : { currentAdmission }),
       ...(publisher === undefined ? {} : { publisher }),
@@ -598,14 +624,14 @@ export class MeshCapabilityPublicationService {
     };
     if (publisher) {
       try {
-        facts.health = publications.getPublisherHealth(workspaceId, nodeId, publisher.publisherGeneration);
+        facts.health = await publications.getPublisherHealth(workspaceId, nodeId, publisher.publisherGeneration);
       } catch (error) {
         if (!(error instanceof NotFoundError)) throw error;
       }
-      facts.lease = this.tryGetLease(publisher.publicationLeaseKey);
+      facts.lease = await this.tryGetLease(publisher.publicationLeaseKey);
     }
     try {
-      facts.node = this.storage.mesh.getNode(nodeId);
+      facts.node = await this.storage.mesh.getNode(nodeId);
     } catch (error) {
       if (!(error instanceof NotFoundError)) throw error;
     }
@@ -613,9 +639,9 @@ export class MeshCapabilityPublicationService {
     return facts;
   }
 
-  private buildCallableIndex(workspaceId: string): Map<string, MeshCapabilityActivationRecord> {
+  private async buildCallableIndex(workspaceId: string): Promise<Map<string, MeshCapabilityActivationRecord>> {
     const index = new Map<string, MeshCapabilityActivationRecord>();
-    for (const activation of this.storage.meshCapabilityPublications.listCallableActivations(workspaceId)) {
+    for (const activation of await this.storage.meshCapabilityPublications.listCallableActivations(workspaceId)) {
       index.set(
         callableKey(
           activation.capabilityId,
@@ -696,12 +722,12 @@ export class MeshCapabilityPublicationService {
     return sorted;
   }
 
-  private resolvePublicationKeyReplay(
+  private async resolvePublicationKeyReplay(
     identity: MeshCapabilityAuthenticatedNodeIdentity,
     submission: MeshCapabilityManifestPublishSubmission,
     entries: MeshCapabilityManifestEntry[],
-  ): MeshCapabilityManifest | undefined {
-    const existing = this.storage.meshCapabilityPublications.getManifestByPublicationKey(
+  ): Promise<MeshCapabilityManifest | undefined> {
+    const existing = await this.storage.meshCapabilityPublications.getManifestByPublicationKey(
       identity.workspaceId,
       submission.publicationKey,
     );
@@ -721,22 +747,22 @@ export class MeshCapabilityPublicationService {
     return existing;
   }
 
-  private resolvePublisherBinding(identity: MeshCapabilityAuthenticatedNodeIdentity): {
+  private async resolvePublisherBinding(identity: MeshCapabilityAuthenticatedNodeIdentity): Promise<{
     publisher: MeshCapabilityPublisherGenerationRecord;
     health: MeshCapabilityPublisherHealthRecord;
-  } {
+  }> {
     const publications = this.storage.meshCapabilityPublications;
-    const current = publications.findCurrentPublisher(identity.workspaceId, identity.nodeId);
+    const current = await publications.findCurrentPublisher(identity.workspaceId, identity.nodeId);
     if (current) {
-      const reused = this.tryReuseCurrentGeneration(identity, current);
+      const reused = await this.tryReuseCurrentGeneration(identity, current);
       if (reused) {
         return reused;
       }
     }
     const nextGeneration = (current?.publisherGeneration ?? 0) + 1;
     const leaseKey = `${MESH_CAPABILITY_PUBLICATION_LEASE_PREFIX}:${identity.workspaceId}:${identity.nodeId}`;
-    const lease = this.storage.mesh.acquireLease(leaseKey, identity.nodeId, this.leaseTtlSeconds, this.nowIso());
-    const publisher = publications.registerPublisher({
+    const lease = await this.storage.mesh.acquireLease(leaseKey, identity.nodeId, this.leaseTtlSeconds, this.nowIso());
+    const publisher = await publications.registerPublisher({
       workspaceId: identity.workspaceId,
       nodeId: identity.nodeId,
       admissionGeneration: identity.admissionGeneration,
@@ -750,7 +776,7 @@ export class MeshCapabilityPublicationService {
     });
     return {
       publisher,
-      health: publications.getPublisherHealth(identity.workspaceId, identity.nodeId, nextGeneration),
+      health: await publications.getPublisherHealth(identity.workspaceId, identity.nodeId, nextGeneration),
     };
   }
 
@@ -761,10 +787,12 @@ export class MeshCapabilityPublicationService {
    * lost or re-fenced lease) falls through to a brand-new generation so a
    * reconnect can never resume a prior generation.
    */
-  private tryReuseCurrentGeneration(
+  private async tryReuseCurrentGeneration(
     identity: MeshCapabilityAuthenticatedNodeIdentity,
     current: MeshCapabilityPublisherGenerationRecord,
-  ): { publisher: MeshCapabilityPublisherGenerationRecord; health: MeshCapabilityPublisherHealthRecord } | undefined {
+  ): Promise<
+    { publisher: MeshCapabilityPublisherGenerationRecord; health: MeshCapabilityPublisherHealthRecord } | undefined
+  > {
     if (
       current.admissionGeneration !== identity.admissionGeneration ||
       current.mtlsRequired !== identity.mtlsRequired ||
@@ -774,7 +802,7 @@ export class MeshCapabilityPublicationService {
     }
     let health: MeshCapabilityPublisherHealthRecord;
     try {
-      health = this.storage.meshCapabilityPublications.getPublisherHealth(
+      health = await this.storage.meshCapabilityPublications.getPublisherHealth(
         identity.workspaceId,
         identity.nodeId,
         current.publisherGeneration,
@@ -786,7 +814,7 @@ export class MeshCapabilityPublicationService {
     if (health.status !== "online") {
       return undefined;
     }
-    const lease = this.tryGetLease(current.publicationLeaseKey);
+    const lease = await this.tryGetLease(current.publicationLeaseKey);
     if (
       !lease ||
       lease.holderNodeId !== identity.nodeId ||
@@ -797,18 +825,23 @@ export class MeshCapabilityPublicationService {
     const nowIso = this.nowIso();
     const extended =
       lease.expiresAt > nowIso
-        ? this.storage.mesh.renewLease(
+        ? await this.storage.mesh.renewLease(
             current.publicationLeaseKey,
             identity.nodeId,
             lease.fencingToken,
             this.leaseTtlSeconds,
             nowIso,
           )
-        : this.storage.mesh.acquireLease(current.publicationLeaseKey, identity.nodeId, this.leaseTtlSeconds, nowIso);
+        : await this.storage.mesh.acquireLease(
+            current.publicationLeaseKey,
+            identity.nodeId,
+            this.leaseTtlSeconds,
+            nowIso,
+          );
     if (extended.fencingToken !== current.publicationLeaseFencingToken) {
       return undefined;
     }
-    const refreshed = this.storage.meshCapabilityPublications.refreshPublisherLease({
+    const refreshed = await this.storage.meshCapabilityPublications.refreshPublisherLease({
       workspaceId: identity.workspaceId,
       nodeId: identity.nodeId,
       publisherGeneration: current.publisherGeneration,
@@ -819,9 +852,9 @@ export class MeshCapabilityPublicationService {
     return { publisher: current, health: refreshed };
   }
 
-  private tryGetLease(leaseKey: string): MeshLeaseRecord | undefined {
+  private async tryGetLease(leaseKey: string): Promise<MeshLeaseRecord | undefined> {
     try {
-      return this.storage.mesh.getLease(leaseKey);
+      return await this.storage.mesh.getLease(leaseKey);
     } catch (error) {
       if (error instanceof NotFoundError) return undefined;
       throw error;

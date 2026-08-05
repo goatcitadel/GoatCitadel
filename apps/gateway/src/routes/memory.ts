@@ -804,15 +804,15 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      const outcome = memory.requestForgetApproval(
+      const outcome = await memory.requestForgetApproval(
         {
           itemIds: [params.data.itemId],
           actionId: body.data.actionId,
           requesterId: resolveActorId(request),
         },
         {
-          onCommit: () => commitMutationIdempotencyAlongsideCanonicalWrite(request),
-          afterCommit: () => markMutationCommitted(request),
+          onCommit: async () => commitMutationIdempotencyAlongsideCanonicalWrite(request),
+          afterCommit: async () => markMutationCommitted(request),
         },
       );
       return reply.code(outcome.pendingApproval ? 202 : 200).send(outcome);
@@ -834,7 +834,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send({
-        items: memory.listItemHistory(params.data.itemId, query.data.limit),
+        items: await memory.listItemHistory(params.data.itemId, query.data.limit),
       });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -847,7 +847,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: body.error.flatten() });
     }
     try {
-      const outcome = memory.requestForgetApproval(
+      const outcome = await memory.requestForgetApproval(
         {
           itemIds: body.data.itemIds,
           namespace: body.data.namespace,
@@ -858,8 +858,8 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
           requesterId: resolveActorId(request),
         },
         {
-          onCommit: () => commitMutationIdempotencyAlongsideCanonicalWrite(request),
-          afterCommit: () => markMutationCommitted(request),
+          onCommit: async () => commitMutationIdempotencyAlongsideCanonicalWrite(request),
+          afterCommit: async () => markMutationCommitted(request),
         },
       );
       return reply.code(outcome.pendingApproval ? 202 : 200).send(outcome);

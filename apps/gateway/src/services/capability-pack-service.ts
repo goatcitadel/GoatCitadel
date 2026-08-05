@@ -25,7 +25,7 @@ export type CapabilityPackMaterializeInput = CapabilityPackMaterializeRequest;
 
 export interface CapabilityPackServiceDependencies {
   evidenceEnvelopeService: Pick<EvidenceEnvelopeService, "createEnvelope" | "listEnvelopes">;
-  publishRealtime?: (eventType: string, source: string, payload: Record<string, unknown>) => void;
+  publishRealtime?: (eventType: string, source: string, payload: Record<string, unknown>) => Promise<unknown>;
 }
 
 const BUNDLED_PACKS: CapabilityPackManifest[] = [
@@ -165,8 +165,8 @@ export class CapabilityPackService {
     return buildCapabilityPackPreview(normalizePortableCapabilityPackManifest(manifest));
   }
 
-  public listStagedPacks(limit = 100): CapabilityPackStagedRecord[] {
-    const envelopes = this.deps.evidenceEnvelopeService.listEnvelopes({
+  public async listStagedPacks(limit = 100): Promise<CapabilityPackStagedRecord[]> {
+    const envelopes = await this.deps.evidenceEnvelopeService.listEnvelopes({
       limit: Math.max(1, Math.min(500, Math.floor(limit))),
     });
     const materializationsBySource = buildLatestMaterializationIndex(envelopes);
@@ -177,12 +177,12 @@ export class CapabilityPackService {
       .sort((left, right) => right.stagedAt.localeCompare(left.stagedAt));
   }
 
-  public exportPack(packId: string): CapabilityPackExportResponse {
-    const staged = this.listStagedPacks(500).find((record) => record.packId === packId);
+  public async exportPack(packId: string): Promise<CapabilityPackExportResponse> {
+    const staged = (await this.listStagedPacks(500)).find((record) => record.packId === packId);
     const envelope = staged?.evidenceEnvelopeId
-      ? this.deps.evidenceEnvelopeService
-          .listEnvelopes({ limit: 500 })
-          .find((item) => item.envelopeId === staged.evidenceEnvelopeId)
+      ? (await this.deps.evidenceEnvelopeService.listEnvelopes({ limit: 500 })).find(
+          (item) => item.envelopeId === staged.evidenceEnvelopeId,
+        )
       : undefined;
     const manifest = readCapabilityPackManifestFromEnvelope(envelope) ?? this.requirePack(packId);
     return {
@@ -203,21 +203,24 @@ export class CapabilityPackService {
     };
   }
 
-  public installPack(packId: string, input: CapabilityPackInstallInput = {}): CapabilityPackInstallResult {
+  public async installPack(
+    packId: string,
+    input: CapabilityPackInstallInput = {},
+  ): Promise<CapabilityPackInstallResult> {
     const preview = this.previewPack(packId);
     return this.stagePreview(preview, input);
   }
 
-  public installLocalPack(input: LocalCapabilityPackInput): CapabilityPackInstallResult {
+  public async installLocalPack(input: LocalCapabilityPackInput): Promise<CapabilityPackInstallResult> {
     const preview = this.previewLocalPack(input.manifest);
     return this.stagePreview(preview, input);
   }
 
-  public materializeStagedPack(
+  public async materializeStagedPack(
     sourceEvidenceEnvelopeId: string,
     input: CapabilityPackMaterializeInput,
-  ): CapabilityPackMaterializeResult {
-    const envelope = this.requireStagedEnvelope(sourceEvidenceEnvelopeId);
+  ): Promise<CapabilityPackMaterializeResult> {
+    const envelope = await this.requireStagedEnvelope(sourceEvidenceEnvelopeId);
     if (!input.confirmReview) {
       throw new Error("Capability pack materialization requires explicit operator review confirmation.");
     }
@@ -281,7 +284,7 @@ export class CapabilityPackService {
       };
     });
     const actorId = input.actorId?.trim() || "operator";
-    const envelopeResult = this.deps.evidenceEnvelopeService.createEnvelope({
+    const envelopeResult = await this.deps.evidenceEnvelopeService.createEnvelope({
       eventKind: "capability_pack_materialization",
       metadata: {
         packId: staged.packId,
@@ -308,7 +311,7 @@ export class CapabilityPackService {
       assets,
       limitations: [...CAPABILITY_PACK_MATERIALIZATION_LIMITATIONS],
     };
-    this.deps.publishRealtime?.("capability_pack_materialized", "settings", {
+    await this.deps.publishRealtime?.("capability_pack_materialized", "settings", {
       packId: staged.packId,
       actorId,
       sourceEvidenceEnvelopeId,
@@ -318,12 +321,12 @@ export class CapabilityPackService {
     return result;
   }
 
-  private stagePreview(
+  private async stagePreview(
     preview: CapabilityPackPreview,
     input: CapabilityPackInstallInput = {},
-  ): CapabilityPackInstallResult {
+  ): Promise<CapabilityPackInstallResult> {
     const actorId = input.actorId?.trim() || "operator";
-    const envelope = this.deps.evidenceEnvelopeService.createEnvelope({
+    const envelope = await this.deps.evidenceEnvelopeService.createEnvelope({
       eventKind: "capability_pack_install",
       metadata: {
         packId: preview.manifest.packId,
@@ -346,7 +349,7 @@ export class CapabilityPackService {
       stagedAssets: preview.installPlan,
       evidenceEnvelopeId: envelope.envelopeId,
     };
-    this.deps.publishRealtime?.("capability_pack_installed", "settings", {
+    await this.deps.publishRealtime?.("capability_pack_installed", "settings", {
       packId: preview.manifest.packId,
       actorId,
       evidenceEnvelopeId: envelope.envelopeId,
@@ -363,14 +366,14 @@ export class CapabilityPackService {
     return structuredClone(pack);
   }
 
-  private requireStagedEnvelope(sourceEvidenceEnvelopeId: string): EvidenceEnvelope {
+  private async requireStagedEnvelope(sourceEvidenceEnvelopeId: string): Promise<EvidenceEnvelope> {
     const envelopeId = sourceEvidenceEnvelopeId.trim();
     if (!envelopeId) {
       throw new Error("Capability pack staged evidence id is required.");
     }
-    const envelope = this.deps.evidenceEnvelopeService
-      .listEnvelopes({ limit: 500 })
-      .find((item) => item.envelopeId === envelopeId);
+    const envelope = (await this.deps.evidenceEnvelopeService.listEnvelopes({ limit: 500 })).find(
+      (item) => item.envelopeId === envelopeId,
+    );
     if (!envelope || envelope.eventKind !== "capability_pack_install") {
       throw new Error(`Unknown staged capability pack evidence: ${envelopeId}`);
     }

@@ -125,10 +125,9 @@ export function composeIntegrationChannelRouteDependencies(
     runIntegrationConnectionDiagnostics: (connectionId) =>
       integrationChannel.runIntegrationConnectionDiagnostics(connectionId),
   });
-  const listIntegrationCatalog = (kind?: IntegrationKind): IntegrationCatalogEntry[] => {
+  const listIntegrationCatalog = async (kind?: IntegrationKind): Promise<IntegrationCatalogEntry[]> => {
     const pluginIds = new Set(
-      integrationChannel
-        .listIntegrationPlugins()
+      (await integrationChannel.listIntegrationPlugins())
         .map((item) => item.pluginId.trim().toLowerCase())
         .filter((item) => item.length > 0),
     );
@@ -185,48 +184,48 @@ export function composeIntegrationChannelRouteDependencies(
     listIntegrationCatalog,
     listIntegrationConnections: (kind, limit) => integrationChannel.listIntegrationConnections(kind, limit),
     listIntegrationPlugins: () => integrationChannel.listIntegrationPlugins(),
-    listNotificationDeliveries: (workspaceId, limit) => {
-      gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
+    listNotificationDeliveries: async (workspaceId, limit) => {
+      await gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
       return notificationRouting.listDeliveries(workspaceId, limit);
     },
-    listNotificationRules: (workspaceId, includeArchived) => {
-      gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
+    listNotificationRules: async (workspaceId, includeArchived) => {
+      await gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
       return notificationRouting.listRules(workspaceId, includeArchived);
     },
-    listNotificationTargets: (workspaceId, includeArchived) => {
-      gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
+    listNotificationTargets: async (workspaceId, includeArchived) => {
+      await gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
       return notificationRouting.listTargets(workspaceId, includeArchived);
     },
-    createNotificationRule: (workspaceId, input) => {
-      gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
+    createNotificationRule: async (workspaceId, input) => {
+      await gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
       return notificationRouting.createRule(workspaceId, input);
     },
-    createNotificationTarget: (workspaceId, input) => {
-      gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
+    createNotificationTarget: async (workspaceId, input) => {
+      await gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
       return notificationRouting.createTarget(workspaceId, input);
     },
-    dispatchNotificationEvent: (workspaceId, input) => {
-      gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
+    dispatchNotificationEvent: async (workspaceId, input) => {
+      await gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
       return notificationRouting.dispatch(workspaceId, input);
     },
-    requestNotification: (workspaceId, input) => {
-      gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
+    requestNotification: async (workspaceId, input) => {
+      await gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
       return notificationRouting.request(workspaceId, input);
     },
-    sendTestNotification: (workspaceId, targetId) => {
-      gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
+    sendTestNotification: async (workspaceId, targetId) => {
+      await gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
       return notificationRouting.sendTest(workspaceId, targetId);
     },
-    updateNotificationRule: (workspaceId, ruleId, expectedRevision, input) => {
-      gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
+    updateNotificationRule: async (workspaceId, ruleId, expectedRevision, input) => {
+      await gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
       return notificationRouting.updateRule(workspaceId, ruleId, expectedRevision, input);
     },
-    updateNotificationTarget: (workspaceId, targetId, expectedRevision, input) => {
-      gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
+    updateNotificationTarget: async (workspaceId, targetId, expectedRevision, input) => {
+      await gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
       return notificationRouting.updateTarget(workspaceId, targetId, expectedRevision, input);
     },
-    upsertNotificationPresence: (input) => {
-      gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
+    upsertNotificationPresence: async (input) => {
+      await gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
       return notificationRouting.upsertPresence(input);
     },
     reconnectDiscordRuntime: (connectionId) => integrationChannel.reconnectDiscordRuntime(connectionId),
@@ -250,7 +249,7 @@ export function composeIntegrationChannelRouteDependencies(
     searchObsidianNotes: (query, limit) => gateway.obsidianVaultService.searchNotes(query, limit),
     testObsidianIntegration: async () => {
       const status = await gateway.obsidianVaultService.testConnection();
-      gateway.publishRealtime("system", "integrations", {
+      await gateway.publishRealtime("system", "integrations", {
         type: "obsidian_test_completed",
         enabled: status.enabled,
         vaultReachable: status.vaultReachable,
@@ -259,9 +258,9 @@ export function composeIntegrationChannelRouteDependencies(
       });
       return status;
     },
-    updateObsidianIntegrationConfig: (input) => {
-      const updated = gateway.obsidianVaultService.updateConfig(input);
-      gateway.publishRealtime("system", "integrations", {
+    updateObsidianIntegrationConfig: async (input) => {
+      const updated = await gateway.obsidianVaultService.updateConfig(input);
+      await gateway.publishRealtime("system", "integrations", {
         type: "obsidian_config_updated",
         enabled: updated.enabled,
         mode: updated.mode,
@@ -276,12 +275,12 @@ export function composeIntegrationChannelRouteDependencies(
     channelSetup,
     comms,
     connectors: {
-      listConnectorRecords: (connectorType) =>
+      listConnectorRecords: async (connectorType) =>
         filterConnectorRecords(
           buildGatewayConnectorRecords({
-            integrationConnections: gateway.storage.integrationConnections.list(undefined, 1000),
-            mcpServers: gateway.readMcpServers(),
-            mcpTools: gateway.readMcpTools(),
+            integrationConnections: await gateway.storage.integrationConnections.list(undefined, 1000),
+            mcpServers: await gateway.readMcpServers(),
+            mcpTools: await gateway.readMcpTools(),
           }),
           connectorType,
         ),
@@ -324,8 +323,9 @@ export function createNotificationRoutingServiceForGateway(
     normalizeWorkspaceId: (workspaceId) => gateway.normalizeWorkspaceId(workspaceId),
     getIntegrationConnection: (connectionId) => integrationChannel.getIntegrationConnection(connectionId),
     deliver: (target, event, idempotencyKey) => deliverNotificationForGateway(gateway, target, event, idempotencyKey),
-    publishRealtime: (eventType, source, payload, options) =>
-      gateway.publishRealtime(eventType, source, payload, options),
+    publishRealtime: async (eventType, source, payload, options) => {
+      await gateway.publishRealtime(eventType, source, payload, options);
+    },
   });
 }
 
@@ -349,7 +349,7 @@ async function deliverNotificationToChannel(
 ): Promise<NotificationDeliveryAdapterResult> {
   const connectionId = target.channelConnectionId;
   if (!connectionId) return { status: "failed", lastError: "Channel connection is unavailable." };
-  const connection = gateway.storage.integrationConnections.get(connectionId);
+  const connection = await gateway.storage.integrationConnections.get(connectionId);
   if (connection.workspaceId && connection.workspaceId !== event.workspaceId) {
     return { status: "failed", lastError: "Channel connection belongs to another workspace." };
   }
@@ -413,7 +413,7 @@ async function deliverNotificationToWebhook(
       payload: { eventId: event.eventId, eventType: event.eventType, targetId: target.targetId, attempt },
       label: "Notification webhook delivery",
       execute: async (claim) => {
-        claim.markExternalCallStarted();
+        await claim.markExternalCallStarted();
         const response = await gateway.fetchWithDiagnosticsTimeout(url.toString(), {
           method: "POST",
           redirect: "manual",
@@ -523,31 +523,41 @@ function createIntegrationChannelPortForGateway(
 ): IntegrationChannelServicePort {
   return {
     storage: gateway.storage,
-    publishRealtime: (eventType, source, payload, options) =>
-      gateway.publishRealtime(eventType, source, payload, options),
-    requireFeatureEnabled: (flag) => gateway.requireFeatureEnabled(flag),
-    isFeatureEnabled: (flag) => gateway.isFeatureEnabled(flag),
+    publishRealtime: async (eventType, source, payload, options) => {
+      await gateway.publishRealtime(eventType, source, payload, options);
+    },
+    requireFeatureEnabled: async (flag) => {
+      await gateway.requireFeatureEnabled(flag);
+    },
+    isFeatureEnabled: async (flag) => await gateway.isFeatureEnabled(flag),
     buildIntegrationConnectionChecks: (connection) =>
       integrationDiagnostics.buildIntegrationConnectionChecks(connection),
     runIntegrationConnectionLiveChecks: (connection, options) =>
       integrationDiagnostics.runIntegrationConnectionLiveChecks(connection, options),
     pickConnectorDiagnosticAction: (checks) => connectorDiagnosticsHelpers.pickConnectorDiagnosticAction(checks),
-    recordConnectorHealthRun: (report) =>
-      connectorDiagnosticsHelpers.recordConnectorHealthRun({ gatewaySql: gateway.storage.gatewaySql }, report),
+    recordConnectorHealthRun: async (report) => {
+      await connectorDiagnosticsHelpers.recordConnectorHealthRun({ gatewaySql: gateway.storage.gatewaySql }, report);
+    },
     syncDiscordRuntime: () => gateway.syncDiscordRuntime(),
-    syncSignalInboundRuntime: () => gateway.syncSignalInboundRuntime(),
+    syncSignalInboundRuntime: async () => {
+      await gateway.syncSignalInboundRuntime();
+    },
     getDiscordRuntimeStatus: (connectionId) => gateway.discordRuntimeService.getConnectionStatus(connectionId),
     getIntegrationConnection: (connectionId) => gateway.storage.integrationConnections.get(connectionId),
     assertDiscordConnection,
-    readDiscordPairings: () => gateway.readDiscordPairings(),
-    writeDiscordPairings: (records) => gateway.writeDiscordPairings(records),
+    readDiscordPairings: async () => gateway.readDiscordPairings(),
+    writeDiscordPairings: async (records) => {
+      await gateway.writeDiscordPairings(records);
+    },
     discordRuntimeService: gateway.discordRuntimeService,
     resolveConnectionSecret: (config, directKey, envKey) => gateway.resolveConnectionSecret(config, directKey, envKey),
     readConnectionConfigValue: (config, key) => gateway.readConnectionConfigValue(config, key),
     isConnectionUrlAllowlisted: (urlValue) => gateway.isConnectionUrlAllowlisted(urlValue),
     fetchWithDiagnosticsTimeout: (url, init) => gateway.fetchWithDiagnosticsTimeout(url, init),
-    readIntegrationPlugins: () => readIntegrationPlugins(gateway.storage),
-    writeIntegrationPlugins: (plugins) => writeIntegrationPlugins(gateway.storage, plugins),
+    readIntegrationPlugins: async () => await readIntegrationPlugins(gateway.storage),
+    writeIntegrationPlugins: async (plugins) => {
+      await writeIntegrationPlugins(gateway.storage, plugins);
+    },
   };
 }
 

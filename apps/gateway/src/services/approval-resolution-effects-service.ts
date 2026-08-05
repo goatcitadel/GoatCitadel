@@ -54,7 +54,7 @@ import {
   getRequestAttribution,
   runWithIsolatedRequestAttribution,
   type PostCommitEligibility,
-  type Storage,
+  type AsyncStorage as Storage,
 } from "@goatcitadel/storage";
 import {
   MeshCapabilityActivationServiceError,
@@ -131,6 +131,16 @@ export interface ApprovalResolutionEffectEnqueueOptions {
    * necessarily later than expiresAt.
    */
   allowExpired?: boolean;
+  /**
+   * Canonical approval writes enqueue effects inside their owning database
+   * transaction. The worker must not inherit that transaction context; the
+   * lifecycle owner starts it immediately after commit instead.
+   */
+  deferProcessing?: boolean;
+}
+
+interface ApprovalEffectEnqueueOptions {
+  deferProcessing?: boolean;
 }
 
 const APPROVAL_EFFECT_LEASE_TTL_MS = 15_000;
@@ -195,12 +205,12 @@ function buildApprovalTerminalCheckpointState(
   return checkpoint;
 }
 
-function requireExactApprovalChatParentAuthority(
+async function requireExactApprovalChatParentAuthority(
   storage: ApprovalEffectsServiceContext["storage"],
   run: DurableRunRecord,
   trace: ChatTurnTraceRecord | undefined,
   expectedTurnId: string,
-): { sessionId: string } {
+): Promise<{ sessionId: string }> {
   const payload =
     run.payload && typeof run.payload === "object" && !Array.isArray(run.payload)
       ? (run.payload as Record<string, unknown>)
@@ -238,7 +248,7 @@ function requireExactApprovalChatParentAuthority(
   ) {
     throw new Error(`Durable run ${run.runId} has no canonical Chat parent context for approval post-commit.`);
   }
-  const admission = storage.sessionMutationAdmissions.require(payload.admissionId);
+  const admission = await storage.sessionMutationAdmissions.require(payload.admissionId);
   const admittedRequest = reconstructAdmittedChatTurnRequest(request as never, payload.surfaceDerivation as never);
   if (
     admission.admissionKind !== "turn_write" ||
@@ -278,7 +288,7 @@ function requireExactApprovalChatParentAuthority(
   ) {
     throw new Error(`Durable run ${run.runId} has no exact waiting approval runtime authority.`);
   }
-  const checkpoint = storage.durableRuns.getLatestCheckpointByKind(run.runId, "run_waiting");
+  const checkpoint = await storage.durableRuns.getLatestCheckpointByKind(run.runId, "run_waiting");
   if (!checkpoint) {
     throw new Error(`Durable run ${run.runId} has no latest waiting approval authority checkpoint.`);
   }
@@ -341,9 +351,9 @@ export interface ApprovalEffectsServiceDeps {
   wakeDurableRun(
     runId: string,
     event: { eventKey: string; payload?: Record<string, unknown>; correlationId?: string },
-  ): DurableWakeResult;
+  ): Promise<DurableWakeResult>;
   requestRunProcessing(runId: string): void;
-  findProactiveDurableRunIdsForApproval(approvalId: string): string[];
+  findProactiveDurableRunIdsForApproval(approvalId: string): Promise<string[]>;
   executeCodeModePendingApproval(approvalId: string, signal?: AbortSignal): Promise<ToolInvokeResult | undefined>;
   executeApprovedPendingAction(approvalId: string, signal?: AbortSignal): Promise<ToolInvokeResult | undefined>;
   executeApprovedSkillHubLifecycleOperation?(
@@ -375,7 +385,7 @@ export interface ApprovalEffectsServiceDeps {
   executeApprovedMeshCapabilityActivation?(input: {
     workspaceId: string;
     approvalId: string;
-  }): MeshCapabilityActivationApplyResult;
+  }): Promise<MeshCapabilityActivationApplyResult>;
   /**
    * HX-402 P1: executes one approved `memory.lifecycle` mutation through the
    * memory lifecycle owner. The executor revalidates the exact approval
@@ -388,7 +398,7 @@ export interface ApprovalEffectsServiceDeps {
   executeApprovedMemoryLifecycleMutation?(input: {
     workspaceId: string;
     approvalId: string;
-  }): MemoryLifecycleApplyResult;
+  }): MemoryLifecycleApplyResult | Promise<MemoryLifecycleApplyResult>;
   /**
    * HX-402 P2: executes one approved `skill.lifecycle` mutation through the
    * skill-state owner. The executor revalidates the exact approval (kind,
@@ -398,13 +408,13 @@ export interface ApprovalEffectsServiceDeps {
    * the pinned policy, and writes the governed evidence pair inside the
    * canonical transaction.
    */
-  executeApprovedSkillLifecycleMutation?(input: { approvalId: string }): SkillLifecycleApplyResult;
+  executeApprovedSkillLifecycleMutation?(input: { approvalId: string }): Promise<SkillLifecycleApplyResult>;
   /**
    * HX-402 P2: executes one approved `capability.lifecycle` candidate
    * transition through the capability owner under the same revalidation
    * ladder.
    */
-  executeApprovedCapabilityLifecycleMutation?(input: { approvalId: string }): CandidateLifecycleActionResult;
+  executeApprovedCapabilityLifecycleMutation?(input: { approvalId: string }): Promise<CandidateLifecycleActionResult>;
   /**
    * HX-402 P3: executes one approved `improvement.lifecycle` mutation through
    * the improvement owner. The executor revalidates the exact approval (kind,
@@ -419,30 +429,30 @@ export interface ApprovalEffectsServiceDeps {
   executeApprovedImprovementLifecycleMutation?(input: {
     workspaceId: string;
     approvalId: string;
-  }): ImprovementLifecycleApplyResult;
-  executeApprovedEngineeringLearningLifecycle?(approvalId: string): {
+  }): Promise<ImprovementLifecycleApplyResult>;
+  executeApprovedEngineeringLearningLifecycle?(approvalId: string): Promise<{
     learningId: string;
     action: string;
     status: string;
-  };
+  }>;
   enqueueAfterHooks(input: {
     workspaceId: string;
     trigger: "approval.resolve.after" | "approval.response.after";
     entityType: "approval";
     entityId: string;
     payload: Record<string, unknown>;
-  }): void;
-  resolveApprovalHookWorkspaceId(payload: Record<string, unknown>): string;
-  resolvePostCommitEligibility?(sessionId: string): PostCommitEligibility;
+  }): Promise<void>;
+  resolveApprovalHookWorkspaceId(payload: Record<string, unknown>): Promise<string>;
+  resolvePostCommitEligibility?(sessionId: string): Promise<PostCommitEligibility>;
   recordDurableTimelineEvent?(
     runId: string,
     eventType: "run_completed" | "run_failed",
     payload?: Record<string, unknown>,
-  ): void;
-  recordApprovalResolutionSignals?(approval: ApprovalRequest): void;
-  materializeApprovalWaitRun?(approvalId: string): DurableRunRecord | undefined;
-  reconcileExpiredApprovals?(limit: number): number;
-  reconcileExpiredDeviceAccessRequests?(limit: number): Promise<number> | number;
+  ): Promise<void>;
+  recordApprovalResolutionSignals?(approval: ApprovalRequest): Promise<void>;
+  materializeApprovalWaitRun?(approvalId: string): Promise<DurableRunRecord | undefined>;
+  reconcileExpiredApprovals?(limit: number): Promise<number>;
+  reconcileExpiredDeviceAccessRequests?(limit: number): Promise<number>;
   readonly approvalRemoteTokenSecrets?: Pick<ApprovalRemoteTokenSecretService, "reconcileExpired" | "deleteById">;
 }
 
@@ -474,7 +484,7 @@ export interface ApprovalEffectsServiceContext {
     topic: string,
     payload: Record<string, unknown>,
     options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
-  ): void;
+  ): Promise<unknown>;
 }
 
 export class ApprovalEffectsService {
@@ -622,19 +632,19 @@ export class ApprovalEffectsService {
   }
 
   private publishWorkerFailure(lane: "action" | "observability", error: unknown): void {
-    try {
-      this.ctx.publishRealtime("approval_effect_worker_failed", "approvals", {
+    void this.ctx
+      .publishRealtime("approval_effect_worker_failed", "approvals", {
         lane,
         error: error instanceof Error ? error.message : String(error),
+      })
+      .catch((publishError) => {
+        void publishError;
+        // The durable effect row and its lease remain the recovery authority when
+        // the realtime diagnostic sink is unavailable too.
       });
-    } catch (diagnosticError) {
-      void diagnosticError;
-      // The durable effect row and its lease remain the recovery authority when
-      // the realtime diagnostic sink is unavailable too.
-    }
   }
 
-  public listByApproval(approvalId: string): ApprovalEffectRecord[] {
+  public async listByApproval(approvalId: string): Promise<ApprovalEffectRecord[]> {
     return this.ctx.storage.approvalEffects.listByApproval(approvalId);
   }
 
@@ -662,12 +672,13 @@ export class ApprovalEffectsService {
     return this.listByApproval(approvalId);
   }
 
-  public enqueueObservabilityEffects(
+  public async enqueueObservabilityEffects(
     approvalIdInput: string,
     items: readonly ApprovalObservabilityEffectInput[],
-  ): ApprovalEffectRecord[] {
+    options: ApprovalEffectEnqueueOptions = {},
+  ): Promise<ApprovalEffectRecord[]> {
     const approvalId = requireObservabilityIdentifier(approvalIdInput, "approvalId");
-    const effects = this.ctx.storage.approvalEffects.upsertObservabilityBatch({
+    const effects = await this.ctx.storage.approvalEffects.upsertObservabilityBatch({
       approvalId,
       occurredAt: new Date().toISOString(),
       attribution: captureApprovalObservabilityAttribution(),
@@ -676,17 +687,17 @@ export class ApprovalEffectsService {
         delivery: input.delivery,
       })),
     });
-    if (effects.length > 0) {
+    if (effects.length > 0 && !options.deferProcessing) {
       this.requestEffectProcessing();
     }
     return effects;
   }
 
-  public enqueueResolutionEffects(
+  public async enqueueResolutionEffects(
     approval: ApprovalRequest,
     input: ApprovalResolveInput,
     options: ApprovalResolutionEffectEnqueueOptions = {},
-  ): ApprovalEffectRecord[] {
+  ): Promise<ApprovalEffectRecord[]> {
     if (isExpiredApprovalRequest(approval) && !options.allowExpired) {
       return [];
     }
@@ -694,9 +705,9 @@ export class ApprovalEffectsService {
     const wakePayload = buildWakePayload(approval, input);
     if (approval.kind === "skill_hub.lifecycle" && input.decision === "approve") {
       const intent = materializeApprovedSkillHubIntent(approval);
-      this.ctx.storage.skillHubOperations.createIntent(intent);
+      await this.ctx.storage.skillHubOperations.createIntent(intent);
       enqueued.push(
-        this.ctx.storage.approvalEffects.upsert({
+        await this.ctx.storage.approvalEffects.upsert({
           approvalId: approval.approvalId,
           effectKind: "skill_hub_lifecycle_apply",
           targetKind: "skill_hub_operation",
@@ -710,31 +721,31 @@ export class ApprovalEffectsService {
       );
     }
     if (approval.kind === EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_APPROVAL_KIND && input.decision === "approve") {
-      enqueued.push(this.enqueueExternalSourceKnowledgeSnapshotApply(approval));
+      enqueued.push(await this.enqueueExternalSourceKnowledgeSnapshotApply(approval));
     }
     if (approval.kind === MESH_CAPABILITY_ACTIVATION_APPROVAL_KIND && input.decision === "approve") {
-      enqueued.push(this.enqueueMeshCapabilityActivationApply(approval));
+      enqueued.push(await this.enqueueMeshCapabilityActivationApply(approval));
     }
     if (approval.kind === MEMORY_LIFECYCLE_APPROVAL_KIND && input.decision === "approve") {
-      enqueued.push(this.enqueueMemoryLifecycleApply(approval));
+      enqueued.push(await this.enqueueMemoryLifecycleApply(approval));
     }
     if (approval.kind === SKILL_LIFECYCLE_APPROVAL_KIND && input.decision === "approve") {
-      enqueued.push(this.enqueueSkillLifecycleApply(approval));
+      enqueued.push(await this.enqueueSkillLifecycleApply(approval));
     }
     if (approval.kind === CAPABILITY_LIFECYCLE_APPROVAL_KIND && input.decision === "approve") {
-      enqueued.push(this.enqueueCapabilityLifecycleApply(approval));
+      enqueued.push(await this.enqueueCapabilityLifecycleApply(approval));
     }
     if (approval.kind === IMPROVEMENT_LIFECYCLE_APPROVAL_KIND && input.decision === "approve") {
-      enqueued.push(this.enqueueImprovementLifecycleApply(approval));
+      enqueued.push(await this.enqueueImprovementLifecycleApply(approval));
     }
     if (approval.kind === DELEGATION_SCOPE_EXPANSION_APPROVAL_KIND) {
-      enqueued.push(this.enqueueDelegationScopeExpansionApply(approval, input, options));
+      enqueued.push(await this.enqueueDelegationScopeExpansionApply(approval, input, options));
     }
     if (approval.kind === ENGINEERING_LEARNING_APPROVAL_KIND && input.decision === "approve") {
-      enqueued.push(this.enqueueEngineeringLearningLifecycleApply(approval));
+      enqueued.push(await this.enqueueEngineeringLearningLifecycleApply(approval));
     }
     enqueued.push(
-      this.ctx.storage.approvalEffects.upsert({
+      await this.ctx.storage.approvalEffects.upsert({
         approvalId: approval.approvalId,
         effectKind: "approval_resolution_signals",
         targetKind: "approval",
@@ -745,7 +756,7 @@ export class ApprovalEffectsService {
         },
       }),
     );
-    const pendingAction = this.ctx.storage.pendingApprovalActions.find(approval.approvalId);
+    const pendingAction = await this.ctx.storage.pendingApprovalActions.find(approval.approvalId);
     if (
       (input.decision === "approve" && pendingAction?.resolutionStatus === "pending") ||
       (approval.kind === "code_mode.run" &&
@@ -753,7 +764,7 @@ export class ApprovalEffectsService {
         !pendingAction)
     ) {
       enqueued.push(
-        this.ctx.storage.approvalEffects.upsert({
+        await this.ctx.storage.approvalEffects.upsert({
           approvalId: approval.approvalId,
           effectKind: "pending_action_execute",
           targetKind: "pending_action",
@@ -767,10 +778,10 @@ export class ApprovalEffectsService {
       );
     }
 
-    const approvalWaitRunId = this.ctx.storage.approvalWaitRuns.getRunId(approval.approvalId);
+    const approvalWaitRunId = await this.ctx.storage.approvalWaitRuns.getRunId(approval.approvalId);
     if (approvalWaitRunId) {
       enqueued.push(
-        this.ctx.storage.approvalEffects.upsert({
+        await this.ctx.storage.approvalEffects.upsert({
           approvalId: approval.approvalId,
           effectKind: "approval_wait_wake",
           targetKind: "durable_run",
@@ -780,9 +791,9 @@ export class ApprovalEffectsService {
       );
     }
 
-    for (const proactiveRunId of this.deps.findProactiveDurableRunIdsForApproval(approval.approvalId)) {
+    for (const proactiveRunId of await this.deps.findProactiveDurableRunIdsForApproval(approval.approvalId)) {
       enqueued.push(
-        this.ctx.storage.approvalEffects.upsert({
+        await this.ctx.storage.approvalEffects.upsert({
           approvalId: approval.approvalId,
           effectKind: "proactive_run_wake",
           targetKind: "durable_run",
@@ -792,10 +803,10 @@ export class ApprovalEffectsService {
       );
     }
 
-    const linkedTurn = this.resolveLinkedTurnWakeTarget(approval);
+    const linkedTurn = await this.resolveLinkedTurnWakeTarget(approval);
     if (linkedTurn) {
       enqueued.push(
-        this.ctx.storage.approvalEffects.upsert({
+        await this.ctx.storage.approvalEffects.upsert({
           approvalId: approval.approvalId,
           effectKind: "linked_chat_turn_wake",
           targetKind: "chat_turn",
@@ -809,9 +820,9 @@ export class ApprovalEffectsService {
       );
     }
 
-    for (const parentRun of this.resolveOrchestrationParentWakeTargets(approval)) {
+    for (const parentRun of await this.resolveOrchestrationParentWakeTargets(approval)) {
       enqueued.push(
-        this.ctx.storage.approvalEffects.upsert({
+        await this.ctx.storage.approvalEffects.upsert({
           approvalId: approval.approvalId,
           effectKind: "orchestration_parent_wake",
           targetKind: "durable_run",
@@ -826,9 +837,9 @@ export class ApprovalEffectsService {
       );
     }
 
-    for (const parentTurn of this.resolveDelegationParentWakeTargets(approval)) {
+    for (const parentTurn of await this.resolveDelegationParentWakeTargets(approval)) {
       enqueued.push(
-        this.ctx.storage.approvalEffects.upsert({
+        await this.ctx.storage.approvalEffects.upsert({
           approvalId: approval.approvalId,
           effectKind: "linked_chat_turn_wake",
           targetKind: "chat_turn",
@@ -844,16 +855,16 @@ export class ApprovalEffectsService {
       );
     }
     const remoteTokenTargets = new Map<string, { connectorId?: string }>();
-    for (const token of this.ctx.storage.remoteActionTokens?.listByApprovalId?.(approval.approvalId) ?? []) {
+    for (const token of (await this.ctx.storage.remoteActionTokens?.listByApprovalId?.(approval.approvalId)) ?? []) {
       remoteTokenTargets.set(token.tokenId, { connectorId: token.connectorId });
     }
     if (approval.linkage?.tokenId && !remoteTokenTargets.has(approval.linkage.tokenId)) {
       remoteTokenTargets.set(approval.linkage.tokenId, { connectorId: approval.linkage.connectorId });
     }
     for (const [tokenId, token] of remoteTokenTargets) {
-      const inboxItem = this.ctx.storage.approvalInbox.findByApprovalAndToken(approval.approvalId, tokenId);
+      const inboxItem = await this.ctx.storage.approvalInbox.findByApprovalAndToken(approval.approvalId, tokenId);
       enqueued.push(
-        this.ctx.storage.approvalEffects.upsert({
+        await this.ctx.storage.approvalEffects.upsert({
           approvalId: approval.approvalId,
           effectKind: "approval_inbox_follow_up",
           targetKind: "remote_token",
@@ -871,7 +882,7 @@ export class ApprovalEffectsService {
     }
 
     enqueued.push(
-      this.ctx.storage.approvalEffects.upsert({
+      await this.ctx.storage.approvalEffects.upsert({
         approvalId: approval.approvalId,
         effectKind: "approval_after_hooks",
         targetKind: "approval",
@@ -883,7 +894,7 @@ export class ApprovalEffectsService {
       }),
     );
 
-    if (enqueued.length > 0) {
+    if (enqueued.length > 0 && !options.deferProcessing) {
       this.requestEffectProcessing();
     }
     return enqueued;
@@ -900,7 +911,7 @@ export class ApprovalEffectsService {
    * payload assert. The payload is server-derived approval material; a
    * non-canonical payload fails the resolution loudly (fail closed).
    */
-  private enqueueExternalSourceKnowledgeSnapshotApply(approval: ApprovalRequest): ApprovalEffectRecord {
+  private async enqueueExternalSourceKnowledgeSnapshotApply(approval: ApprovalRequest): Promise<ApprovalEffectRecord> {
     const payload = approval.payload as unknown as ExternalSourceKnowledgeSnapshotApprovalPayload;
     assertExternalSourceKnowledgeSnapshotApprovalPayload(payload);
     const identities = deriveExternalSourceKnowledgeSnapshotMaterializedIdentities(payload);
@@ -937,7 +948,7 @@ export class ApprovalEffectsService {
    * activation guard re-verifies everything inside its own transaction, so a
    * replayed resolution converges instead of double-activating.
    */
-  private enqueueMeshCapabilityActivationApply(approval: ApprovalRequest): ApprovalEffectRecord {
+  private async enqueueMeshCapabilityActivationApply(approval: ApprovalRequest): Promise<ApprovalEffectRecord> {
     const payload = approval.payload as unknown as MeshCapabilityActivationApprovalPayload;
     assertMeshCapabilityActivationApprovalPayload(payload);
     return this.ctx.storage.approvalEffects.upsert({
@@ -967,7 +978,7 @@ export class ApprovalEffectsService {
    * executor and the approved producer revalidate everything again, so a
    * replayed resolution converges instead of double-mutating.
    */
-  private enqueueMemoryLifecycleApply(approval: ApprovalRequest): ApprovalEffectRecord {
+  private async enqueueMemoryLifecycleApply(approval: ApprovalRequest): Promise<ApprovalEffectRecord> {
     const binding = parseMemoryLifecycleApprovalBinding(
       (approval.payload as Record<string, unknown> | undefined)?.memoryLifecycle,
     );
@@ -1005,7 +1016,7 @@ export class ApprovalEffectsService {
    * executor revalidates everything again, so a replayed resolution converges
    * instead of double-mutating.
    */
-  private enqueueSkillLifecycleApply(approval: ApprovalRequest): ApprovalEffectRecord {
+  private async enqueueSkillLifecycleApply(approval: ApprovalRequest): Promise<ApprovalEffectRecord> {
     const binding = parseSkillLifecycleApprovalBinding(
       (approval.payload as Record<string, unknown> | undefined)?.skillLifecycle,
     );
@@ -1037,7 +1048,7 @@ export class ApprovalEffectsService {
   }
 
   /** HX-402 P2: enqueue the recovered `capability.lifecycle` candidate effect (same discipline). */
-  private enqueueCapabilityLifecycleApply(approval: ApprovalRequest): ApprovalEffectRecord {
+  private async enqueueCapabilityLifecycleApply(approval: ApprovalRequest): Promise<ApprovalEffectRecord> {
     const binding = parseCapabilityLifecycleApprovalBinding(
       (approval.payload as Record<string, unknown> | undefined)?.capabilityLifecycle,
     );
@@ -1075,7 +1086,7 @@ export class ApprovalEffectsService {
    * a replayed resolution converges on the immutable settlement instead of
    * double-executing the external callback.
    */
-  private enqueueImprovementLifecycleApply(approval: ApprovalRequest): ApprovalEffectRecord {
+  private async enqueueImprovementLifecycleApply(approval: ApprovalRequest): Promise<ApprovalEffectRecord> {
     const binding = parseImprovementLifecycleApprovalBinding(
       (approval.payload as Record<string, unknown> | undefined)?.improvementLifecycle,
     );
@@ -1106,11 +1117,11 @@ export class ApprovalEffectsService {
     });
   }
 
-  private enqueueDelegationScopeExpansionApply(
+  private async enqueueDelegationScopeExpansionApply(
     approval: ApprovalRequest,
     input: ApprovalResolveInput,
     options: ApprovalResolutionEffectEnqueueOptions,
-  ): ApprovalEffectRecord {
+  ): Promise<ApprovalEffectRecord> {
     const payload = approval.payload;
     const stepId = asOptionalString(payload.stepId);
     const dispatchGeneration = asOptionalString(payload.dispatchGeneration);
@@ -1138,7 +1149,7 @@ export class ApprovalEffectsService {
     });
   }
 
-  private enqueueEngineeringLearningLifecycleApply(approval: ApprovalRequest): ApprovalEffectRecord {
+  private async enqueueEngineeringLearningLifecycleApply(approval: ApprovalRequest): Promise<ApprovalEffectRecord> {
     const learningId = asOptionalString(approval.payload.learningId);
     const action = asOptionalString(approval.payload.action);
     const expectedProvenanceHash = asOptionalString(approval.payload.expectedProvenanceHash);
@@ -1157,12 +1168,15 @@ export class ApprovalEffectsService {
     });
   }
 
-  public enqueueApprovalWaitMaterialization(approval: ApprovalRequest): ApprovalEffectRecord | undefined {
+  public async enqueueApprovalWaitMaterialization(
+    approval: ApprovalRequest,
+    options: ApprovalEffectEnqueueOptions = {},
+  ): Promise<ApprovalEffectRecord | undefined> {
     const runId = asOptionalString(approval.linkage?.durableRunId);
     if (!runId) {
       return undefined;
     }
-    const effect = this.ctx.storage.approvalEffects.upsert({
+    const effect = await this.ctx.storage.approvalEffects.upsert({
       approvalId: approval.approvalId,
       effectKind: "approval_wait_materialize",
       targetKind: "durable_run",
@@ -1172,7 +1186,9 @@ export class ApprovalEffectsService {
         runId,
       },
     });
-    this.requestEffectProcessing();
+    if (!options.deferProcessing) {
+      this.requestEffectProcessing();
+    }
     return effect;
   }
 
@@ -1180,7 +1196,7 @@ export class ApprovalEffectsService {
     await this.reconcileExpiredApprovalsIfDue();
     while (true) {
       const now = new Date().toISOString();
-      const effect = this.ctx.storage.approvalEffects.claimNextPendingEffect(
+      const effect = await this.ctx.storage.approvalEffects.claimNextPendingEffect(
         this.workerId,
         now,
         new Date(Date.now() + APPROVAL_EFFECT_LEASE_TTL_MS).toISOString(),
@@ -1191,9 +1207,9 @@ export class ApprovalEffectsService {
       try {
         await this.executeWithLeaseHeartbeat(effect, (signal) => this.executeClaimedEffect(effect.effectId, signal));
       } catch (error) {
-        const current = this.ctx.storage.approvalEffects.get(effect.effectId);
+        const current = await this.ctx.storage.approvalEffects.get(effect.effectId);
         if (current.status === "running" && current.claimedBy === this.workerId) {
-          this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, current.version, {
+          await this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, current.version, {
             lastError: error instanceof Error ? error.message : "Approval effect execution failed.",
             result: {
               error: error instanceof Error ? error.message : "Approval effect execution failed.",
@@ -1218,7 +1234,7 @@ export class ApprovalEffectsService {
     this.lastExpirySweepAtMs = now;
     if (reconcile) {
       try {
-        reconcile(100);
+        await reconcile(100);
       } catch (error) {
         this.publishWorkerFailure("action", error);
       }
@@ -1250,7 +1266,7 @@ export class ApprovalEffectsService {
     }
     while (true) {
       const now = new Date().toISOString();
-      const effect = claim.call(
+      const effect = await claim.call(
         this.ctx.storage.approvalEffects,
         this.observabilityWorkerId,
         now,
@@ -1262,9 +1278,9 @@ export class ApprovalEffectsService {
       try {
         await this.executeWithLeaseHeartbeat(effect, (signal) => this.executeClaimedEffect(effect.effectId, signal));
       } catch (error) {
-        const current = this.ctx.storage.approvalEffects.get(effect.effectId);
+        const current = await this.ctx.storage.approvalEffects.get(effect.effectId);
         if (current.status === "running" && current.claimedBy === this.observabilityWorkerId) {
-          this.deferClaimedEffectForRetry(current, this.observabilityWorkerId, error, {
+          await this.deferClaimedEffectForRetry(current, this.observabilityWorkerId, error, {
             deliveryState: "retry_scheduled",
             deliveryKind: "unknown",
             operationId: asOptionalString(current.payload.operationId) ?? current.targetId,
@@ -1302,7 +1318,7 @@ export class ApprovalEffectsService {
       }
       let current: ApprovalEffectRecord;
       try {
-        current = this.ctx.storage.approvalEffects.get(effect.effectId);
+        current = await this.ctx.storage.approvalEffects.get(effect.effectId);
       } catch (error) {
         active = false;
         const failure = error instanceof Error ? error : new Error(String(error));
@@ -1323,7 +1339,7 @@ export class ApprovalEffectsService {
       }
       const now = new Date().toISOString();
       try {
-        const renewed = this.ctx.storage.approvalEffects.renewEffectLease(
+        const renewed = await this.ctx.storage.approvalEffects.renewEffectLease(
           current.effectId,
           workerId,
           current.version,
@@ -1358,9 +1374,9 @@ export class ApprovalEffectsService {
     }
   }
 
-  private isEffectStillClaimed(effectId: string): boolean {
+  private async isEffectStillClaimed(effectId: string): Promise<boolean> {
     try {
-      const current = this.ctx.storage.approvalEffects.get(effectId);
+      const current = await this.ctx.storage.approvalEffects.get(effectId);
       return current.status === "running" && current.claimedBy === this.workerIdForEffect(current);
     } catch {
       return false;
@@ -1368,7 +1384,7 @@ export class ApprovalEffectsService {
   }
 
   private async executeClaimedEffect(effectId: string, signal?: AbortSignal): Promise<void> {
-    const effect = this.ctx.storage.approvalEffects.get(effectId);
+    const effect = await this.ctx.storage.approvalEffects.get(effectId);
     switch (effect.effectKind) {
       case "approval_wait_materialize":
         await this.handleApprovalWaitMaterialization(effect);
@@ -1395,25 +1411,25 @@ export class ApprovalEffectsService {
         await this.handleExternalSourceKnowledgeSnapshotApply(effect, signal);
         return;
       case MESH_CAPABILITY_ACTIVATION_EFFECT_KIND:
-        this.handleMeshCapabilityActivationApply(effect);
+        await this.handleMeshCapabilityActivationApply(effect);
         return;
       case MEMORY_LIFECYCLE_EFFECT_KIND:
-        this.handleMemoryLifecycleApply(effect);
+        await this.handleMemoryLifecycleApply(effect);
         return;
       case SKILL_LIFECYCLE_EFFECT_KIND:
-        this.handleSkillLifecycleApply(effect);
+        await this.handleSkillLifecycleApply(effect);
         return;
       case CAPABILITY_LIFECYCLE_EFFECT_KIND:
-        this.handleCapabilityLifecycleApply(effect);
+        await this.handleCapabilityLifecycleApply(effect);
         return;
       case IMPROVEMENT_LIFECYCLE_EFFECT_KIND:
-        this.handleImprovementLifecycleApply(effect);
+        await this.handleImprovementLifecycleApply(effect);
         return;
       case DELEGATION_SCOPE_EXPANSION_EFFECT_KIND:
-        this.handleDelegationScopeExpansionApply(effect);
+        await this.handleDelegationScopeExpansionApply(effect);
         return;
       case ENGINEERING_LEARNING_EFFECT_KIND:
-        this.handleEngineeringLearningLifecycleApply(effect);
+        await this.handleEngineeringLearningLifecycleApply(effect);
         return;
       case "approval_inbox_follow_up":
         await this.handleApprovalInboxFollowUp(effect);
@@ -1428,12 +1444,17 @@ export class ApprovalEffectsService {
         await this.handleApprovalObservability(effect);
         return;
       default:
-        this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerIdForEffect(effect), effect.version, {
-          lastError: `Unsupported approval effect kind ${(effect as { effectKind: string }).effectKind}`,
-          result: {
-            unsupportedEffectKind: (effect as { effectKind: string }).effectKind,
+        await this.ctx.storage.approvalEffects.failEffect(
+          effect.effectId,
+          this.workerIdForEffect(effect),
+          effect.version,
+          {
+            lastError: `Unsupported approval effect kind ${(effect as { effectKind: string }).effectKind}`,
+            result: {
+              unsupportedEffectKind: (effect as { effectKind: string }).effectKind,
+            },
           },
-        });
+        );
     }
   }
 
@@ -1447,7 +1468,7 @@ export class ApprovalEffectsService {
     const approvalId = asOptionalString(effect.payload.approvalId);
     const requestSha256 = asOptionalString(effect.payload.requestSha256);
     if (!execute || !operationId || !approvalId || !requestSha256) {
-      this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+      await this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
         lastError: "Skill Hub lifecycle effect is missing its executor or immutable operation identity.",
         result: { operationId, approvalId, configured: Boolean(execute) },
       });
@@ -1455,8 +1476,8 @@ export class ApprovalEffectsService {
     }
     try {
       const applied = await execute(operationId, approvalId, requestSha256, signal);
-      if (!this.isEffectStillClaimed(effect.effectId)) return;
-      const completed = this.ctx.storage.approvalEffects.completeEffect(
+      if (!(await this.isEffectStillClaimed(effect.effectId))) return;
+      const completed = await this.ctx.storage.approvalEffects.completeEffect(
         effect.effectId,
         this.workerId,
         effect.version,
@@ -1472,8 +1493,8 @@ export class ApprovalEffectsService {
       );
       if (!completed) throw new Error(`Skill Hub lifecycle effect ${effect.effectId} lost its completion lease.`);
     } catch (error) {
-      if (!this.isEffectStillClaimed(effect.effectId)) return;
-      this.deferClaimedEffectForRetry(effect, this.workerId, error, {
+      if (!(await this.isEffectStillClaimed(effect.effectId))) return;
+      await this.deferClaimedEffectForRetry(effect, this.workerId, error, {
         deliveryState: "retry_scheduled",
         operationId,
         approvalId,
@@ -1497,7 +1518,7 @@ export class ApprovalEffectsService {
     const execute = this.deps.executeApprovedExternalSourceKnowledgeSnapshot;
     const workspaceId = asOptionalString(effect.payload.workspaceId);
     if (!execute || !workspaceId) {
-      this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+      await this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
         lastError: "External source knowledge-snapshot effect is missing its executor or workspace binding.",
         result: { workspaceId, configured: Boolean(execute) },
       });
@@ -1505,7 +1526,7 @@ export class ApprovalEffectsService {
     }
     let actor: ExternalSourceRequestActor | undefined;
     try {
-      const approval = this.ctx.storage.approvals.get(effect.approvalId);
+      const approval = await this.ctx.storage.approvals.get(effect.approvalId);
       const linkageActorId = asOptionalString(approval.linkage?.authActorId);
       const linkageActorSource = asOptionalString(approval.linkage?.authActorSource);
       if (
@@ -1518,7 +1539,7 @@ export class ApprovalEffectsService {
       actor = undefined;
     }
     if (!actor) {
-      this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+      await this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
         lastError: "External source knowledge-snapshot approval carries no authenticated operator linkage.",
         result: { approvalId: effect.approvalId },
       });
@@ -1526,8 +1547,8 @@ export class ApprovalEffectsService {
     }
     try {
       const applied = await execute({ workspaceId, approvalId: effect.approvalId }, actor, signal);
-      if (!this.isEffectStillClaimed(effect.effectId)) return;
-      const completed = this.ctx.storage.approvalEffects.completeEffect(
+      if (!(await this.isEffectStillClaimed(effect.effectId))) return;
+      const completed = await this.ctx.storage.approvalEffects.completeEffect(
         effect.effectId,
         this.workerId,
         effect.version,
@@ -1549,7 +1570,7 @@ export class ApprovalEffectsService {
         throw new Error(`External source knowledge-snapshot effect ${effect.effectId} lost its completion lease.`);
       }
     } catch (error) {
-      if (!this.isEffectStillClaimed(effect.effectId)) return;
+      if (!(await this.isEffectStillClaimed(effect.effectId))) return;
       // A deny-wins policy denial is the one governance outcome the C2 design
       // explicitly allows to heal (deny now, re-allow later ⇒ apply succeeds),
       // so it defers for bounded retry: the approval's own expiry converts a
@@ -1561,7 +1582,7 @@ export class ApprovalEffectsService {
         error.code !== "cancelled" &&
         error.code !== "policy_denied"
       ) {
-        this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+        await this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
           lastError: error.message,
           result: {
             errorCode: error.code,
@@ -1570,7 +1591,7 @@ export class ApprovalEffectsService {
         });
         return;
       }
-      this.deferClaimedEffectForRetry(effect, this.workerId, error, {
+      await this.deferClaimedEffectForRetry(effect, this.workerId, error, {
         deliveryState: "retry_scheduled",
         approvalId: effect.approvalId,
         ...(error instanceof ExternalSourceKnowledgeEffectServiceError
@@ -1587,20 +1608,20 @@ export class ApprovalEffectsService {
    * with its content-free code; only unexpected infrastructure errors defer
    * for bounded retry. Replays converge on the immutable activation row.
    */
-  private handleMeshCapabilityActivationApply(effect: ApprovalEffectRecord): void {
+  private async handleMeshCapabilityActivationApply(effect: ApprovalEffectRecord): Promise<void> {
     const execute = this.deps.executeApprovedMeshCapabilityActivation;
     const workspaceId = asOptionalString(effect.payload.workspaceId);
     if (!execute || !workspaceId) {
-      this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+      await this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
         lastError: "Mesh capability activation effect is missing its executor or workspace binding.",
         result: { workspaceId, configured: Boolean(execute) },
       });
       return;
     }
     try {
-      const applied = execute({ workspaceId, approvalId: effect.approvalId });
-      if (!this.isEffectStillClaimed(effect.effectId)) return;
-      const completed = this.ctx.storage.approvalEffects.completeEffect(
+      const applied = await execute({ workspaceId, approvalId: effect.approvalId });
+      if (!(await this.isEffectStillClaimed(effect.effectId))) return;
+      const completed = await this.ctx.storage.approvalEffects.completeEffect(
         effect.effectId,
         this.workerId,
         effect.version,
@@ -1619,36 +1640,36 @@ export class ApprovalEffectsService {
         throw new Error(`Mesh capability activation effect ${effect.effectId} lost its completion lease.`);
       }
     } catch (error) {
-      if (!this.isEffectStillClaimed(effect.effectId)) return;
+      if (!(await this.isEffectStillClaimed(effect.effectId))) return;
       if (error instanceof MeshCapabilityActivationServiceError) {
-        this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+        await this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
           lastError: error.message,
           result: { errorCode: error.code },
         });
         return;
       }
-      this.deferClaimedEffectForRetry(effect, this.workerId, error, {
+      await this.deferClaimedEffectForRetry(effect, this.workerId, error, {
         deliveryState: "retry_scheduled",
         approvalId: effect.approvalId,
       });
     }
   }
 
-  private handleDelegationScopeExpansionApply(effect: ApprovalEffectRecord): void {
+  private async handleDelegationScopeExpansionApply(effect: ApprovalEffectRecord): Promise<void> {
     const stepId = asOptionalString(effect.payload.stepId);
     const expectedGeneration = asOptionalString(effect.payload.dispatchGeneration);
     const expectedScopeHash = asOptionalString(effect.payload.scopeHash);
     const requestedPaths = asStringArray(effect.payload.requestedPaths);
     const decision = asOptionalString(effect.payload.decision) as "approved" | "rejected" | "expired" | undefined;
     if (!stepId || !expectedGeneration || !expectedScopeHash || requestedPaths.length < 1 || !decision) {
-      this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+      await this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
         lastError: "Delegation scope-expansion effect is missing its immutable binding.",
         result: { stepId, decision },
       });
       return;
     }
     try {
-      const step = this.ctx.storage.chatDelegationSteps.get(stepId);
+      const step = await this.ctx.storage.chatDelegationSteps.get(stepId);
       const scope = step.scopeControl;
       const request = step.workResult?.scopeExpansion;
       const stale =
@@ -1661,7 +1682,7 @@ export class ApprovalEffectsService {
       const resolvedAt = new Date().toISOString();
       if (stale || decision !== "approved") {
         const terminalDecision = stale ? "rejected" : decision;
-        this.ctx.storage.chatDelegationSteps.patch(stepId, {
+        await this.ctx.storage.chatDelegationSteps.patch(stepId, {
           status: "failed",
           error: stale
             ? "Delegated scope expansion approval became stale before it could be applied."
@@ -1677,7 +1698,7 @@ export class ApprovalEffectsService {
             ...(request ? { scopeExpansion: { ...request, decision: terminalDecision, resolvedAt } } : {}),
           },
         });
-        const completed = this.ctx.storage.approvalEffects.completeEffect(
+        const completed = await this.ctx.storage.approvalEffects.completeEffect(
           effect.effectId,
           this.workerId,
           effect.version,
@@ -1697,21 +1718,21 @@ export class ApprovalEffectsService {
         }),
         updatedAt: resolvedAt,
       };
-      this.ctx.storage.chatDelegationSteps.patch(stepId, {
+      await this.ctx.storage.chatDelegationSteps.patch(stepId, {
         scopeControl: nextScope,
         workResult: {
           ...step.workResult!,
           scopeExpansion: { ...request, decision: "approved", resolvedAt },
         },
       });
-      const completed = this.ctx.storage.approvalEffects.completeEffect(
+      const completed = await this.ctx.storage.approvalEffects.completeEffect(
         effect.effectId,
         this.workerId,
         effect.version,
         { result: { applied: true, decision: "approved", stepId, scopeHash: nextScope.scopeHash, approvedPaths } },
       );
       if (!completed) throw new Error(`Delegation scope effect ${effect.effectId} lost its completion lease.`);
-      void this.ctx.storage.audit.append("approvals", {
+      await this.ctx.storage.audit.append("approvals", {
         event: "delegation.scope_expansion_resolved",
         approvalId: effect.approvalId,
         stepId,
@@ -1719,26 +1740,26 @@ export class ApprovalEffectsService {
         scopeHash: nextScope.scopeHash,
       });
     } catch (error) {
-      if (!this.isEffectStillClaimed(effect.effectId)) return;
-      this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+      if (!(await this.isEffectStillClaimed(effect.effectId))) return;
+      await this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
         lastError: error instanceof Error ? error.message : String(error),
         result: { stepId, decision },
       });
     }
   }
 
-  private handleEngineeringLearningLifecycleApply(effect: ApprovalEffectRecord): void {
+  private async handleEngineeringLearningLifecycleApply(effect: ApprovalEffectRecord): Promise<void> {
     const execute = this.deps.executeApprovedEngineeringLearningLifecycle;
     if (!execute) {
-      this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+      await this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
         lastError: "Engineering-learning lifecycle effect has no configured executor.",
         result: { configured: false },
       });
       return;
     }
     try {
-      const applied = execute(effect.approvalId);
-      const completed = this.ctx.storage.approvalEffects.completeEffect(
+      const applied = await execute(effect.approvalId);
+      const completed = await this.ctx.storage.approvalEffects.completeEffect(
         effect.effectId,
         this.workerId,
         effect.version,
@@ -1746,8 +1767,8 @@ export class ApprovalEffectsService {
       );
       if (!completed) throw new Error(`Engineering-learning effect ${effect.effectId} lost its completion lease.`);
     } catch (error) {
-      if (!this.isEffectStillClaimed(effect.effectId)) return;
-      this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+      if (!(await this.isEffectStillClaimed(effect.effectId))) return;
+      await this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
         lastError: error instanceof Error ? error.message : String(error),
         result: { learningId: effect.targetId },
       });
@@ -1762,20 +1783,20 @@ export class ApprovalEffectsService {
    * infrastructure errors defer for bounded retry. Replays converge on the
    * immutable history/Journey/governed-event evidence.
    */
-  private handleMemoryLifecycleApply(effect: ApprovalEffectRecord): void {
+  private async handleMemoryLifecycleApply(effect: ApprovalEffectRecord): Promise<void> {
     const execute = this.deps.executeApprovedMemoryLifecycleMutation;
     const workspaceId = asOptionalString(effect.payload.workspaceId);
     if (!execute || !workspaceId) {
-      this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+      await this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
         lastError: "Memory lifecycle effect is missing its executor or workspace binding.",
         result: { workspaceId, configured: Boolean(execute) },
       });
       return;
     }
     try {
-      const applied = execute({ workspaceId, approvalId: effect.approvalId });
-      if (!this.isEffectStillClaimed(effect.effectId)) return;
-      const completed = this.ctx.storage.approvalEffects.completeEffect(
+      const applied = await execute({ workspaceId, approvalId: effect.approvalId });
+      if (!(await this.isEffectStillClaimed(effect.effectId))) return;
+      const completed = await this.ctx.storage.approvalEffects.completeEffect(
         effect.effectId,
         this.workerId,
         effect.version,
@@ -1795,15 +1816,15 @@ export class ApprovalEffectsService {
         throw new Error(`Memory lifecycle effect ${effect.effectId} lost its completion lease.`);
       }
     } catch (error) {
-      if (!this.isEffectStillClaimed(effect.effectId)) return;
+      if (!(await this.isEffectStillClaimed(effect.effectId))) return;
       if (error instanceof MemoryLifecycleApplyError) {
-        this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+        await this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
           lastError: error.message,
           result: { errorCode: error.code },
         });
         return;
       }
-      this.deferClaimedEffectForRetry(effect, this.workerId, error, {
+      await this.deferClaimedEffectForRetry(effect, this.workerId, error, {
         deliveryState: "retry_scheduled",
         approvalId: effect.approvalId,
       });
@@ -1818,19 +1839,19 @@ export class ApprovalEffectsService {
    * infrastructure errors defer for bounded retry. Replays converge on the
    * immutable governed-event/Journey evidence (mesh-M2 worker split).
    */
-  private handleSkillLifecycleApply(effect: ApprovalEffectRecord): void {
+  private async handleSkillLifecycleApply(effect: ApprovalEffectRecord): Promise<void> {
     const execute = this.deps.executeApprovedSkillLifecycleMutation;
     if (!execute) {
-      this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+      await this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
         lastError: "Skill lifecycle effect is missing its executor.",
         result: { configured: false },
       });
       return;
     }
     try {
-      const applied = execute({ approvalId: effect.approvalId });
-      if (!this.isEffectStillClaimed(effect.effectId)) return;
-      const completed = this.ctx.storage.approvalEffects.completeEffect(
+      const applied = await execute({ approvalId: effect.approvalId });
+      if (!(await this.isEffectStillClaimed(effect.effectId))) return;
+      const completed = await this.ctx.storage.approvalEffects.completeEffect(
         effect.effectId,
         this.workerId,
         effect.version,
@@ -1849,15 +1870,15 @@ export class ApprovalEffectsService {
         throw new Error(`Skill lifecycle effect ${effect.effectId} lost its completion lease.`);
       }
     } catch (error) {
-      if (!this.isEffectStillClaimed(effect.effectId)) return;
+      if (!(await this.isEffectStillClaimed(effect.effectId))) return;
       if (error instanceof SkillLifecycleApplyError) {
-        this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+        await this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
           lastError: error.message,
           result: { errorCode: error.code },
         });
         return;
       }
-      this.deferClaimedEffectForRetry(effect, this.workerId, error, {
+      await this.deferClaimedEffectForRetry(effect, this.workerId, error, {
         deliveryState: "retry_scheduled",
         approvalId: effect.approvalId,
       });
@@ -1868,19 +1889,19 @@ export class ApprovalEffectsService {
    * HX-402 P2: execute one approved capability candidate transition under the
    * same terminal-vs-defer split.
    */
-  private handleCapabilityLifecycleApply(effect: ApprovalEffectRecord): void {
+  private async handleCapabilityLifecycleApply(effect: ApprovalEffectRecord): Promise<void> {
     const execute = this.deps.executeApprovedCapabilityLifecycleMutation;
     if (!execute) {
-      this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+      await this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
         lastError: "Capability lifecycle effect is missing its executor.",
         result: { configured: false },
       });
       return;
     }
     try {
-      const applied = execute({ approvalId: effect.approvalId });
-      if (!this.isEffectStillClaimed(effect.effectId)) return;
-      const completed = this.ctx.storage.approvalEffects.completeEffect(
+      const applied = await execute({ approvalId: effect.approvalId });
+      if (!(await this.isEffectStillClaimed(effect.effectId))) return;
+      const completed = await this.ctx.storage.approvalEffects.completeEffect(
         effect.effectId,
         this.workerId,
         effect.version,
@@ -1898,15 +1919,15 @@ export class ApprovalEffectsService {
         throw new Error(`Capability lifecycle effect ${effect.effectId} lost its completion lease.`);
       }
     } catch (error) {
-      if (!this.isEffectStillClaimed(effect.effectId)) return;
+      if (!(await this.isEffectStillClaimed(effect.effectId))) return;
       if (error instanceof CapabilityLifecycleApplyError) {
-        this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+        await this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
           lastError: error.message,
           result: { errorCode: error.code },
         });
         return;
       }
-      this.deferClaimedEffectForRetry(effect, this.workerId, error, {
+      await this.deferClaimedEffectForRetry(effect, this.workerId, error, {
         deliveryState: "retry_scheduled",
         approvalId: effect.approvalId,
       });
@@ -1923,20 +1944,20 @@ export class ApprovalEffectsService {
    * truthful `failed`/`aborted` dispositions, which complete the effect with
    * the settlement they honestly recorded.
    */
-  private handleImprovementLifecycleApply(effect: ApprovalEffectRecord): void {
+  private async handleImprovementLifecycleApply(effect: ApprovalEffectRecord): Promise<void> {
     const execute = this.deps.executeApprovedImprovementLifecycleMutation;
     const workspaceId = asOptionalString(effect.payload.workspaceId);
     if (!execute || !workspaceId) {
-      this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+      await this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
         lastError: "Improvement lifecycle effect is missing its executor or workspace binding.",
         result: { workspaceId, configured: Boolean(execute) },
       });
       return;
     }
     try {
-      const applied = execute({ workspaceId, approvalId: effect.approvalId });
-      if (!this.isEffectStillClaimed(effect.effectId)) return;
-      const completed = this.ctx.storage.approvalEffects.completeEffect(
+      const applied = await execute({ workspaceId, approvalId: effect.approvalId });
+      if (!(await this.isEffectStillClaimed(effect.effectId))) return;
+      const completed = await this.ctx.storage.approvalEffects.completeEffect(
         effect.effectId,
         this.workerId,
         effect.version,
@@ -1958,15 +1979,15 @@ export class ApprovalEffectsService {
         throw new Error(`Improvement lifecycle effect ${effect.effectId} lost its completion lease.`);
       }
     } catch (error) {
-      if (!this.isEffectStillClaimed(effect.effectId)) return;
+      if (!(await this.isEffectStillClaimed(effect.effectId))) return;
       if (error instanceof ImprovementLifecycleApplyError) {
-        this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+        await this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
           lastError: error.message,
           result: { errorCode: error.code },
         });
         return;
       }
-      this.deferClaimedEffectForRetry(effect, this.workerId, error, {
+      await this.deferClaimedEffectForRetry(effect, this.workerId, error, {
         deliveryState: "retry_scheduled",
         approvalId: effect.approvalId,
       });
@@ -1974,16 +1995,16 @@ export class ApprovalEffectsService {
   }
 
   private async handleWakeEffect(effect: ApprovalEffectRecord, resolveApprovalWait: boolean): Promise<void> {
-    if (resolveApprovalWait && this.deferApprovalWaitWakeUntilMaterialized(effect)) {
+    if (resolveApprovalWait && (await this.deferApprovalWaitWakeUntilMaterialized(effect))) {
       return;
     }
-    if (this.deferOrchestrationParentWakeUntilChildTerminal(effect)) {
+    if (await this.deferOrchestrationParentWakeUntilChildTerminal(effect)) {
       return;
     }
 
     const payload = effect.payload;
-    const wake = runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, () => {
-      const wakeResult = this.deps.wakeDurableRun(effect.targetId, {
+    const wake = await runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, async () => {
+      const wakeResult = await this.deps.wakeDurableRun(effect.targetId, {
         eventKey: "approval.resolved",
         correlationId: asOptionalString(payload.correlationId) ?? effect.approvalId,
         payload: asRecord(payload.payload),
@@ -1993,28 +2014,28 @@ export class ApprovalEffectsService {
         (wakeResult.outcome === "woke" ||
           buildRecoveredWakeResult(wakeResult, buildWakeResultRecord(wakeResult, effect)))
       ) {
-        this.ctx.storage.approvalWaitRuns.markResolved(effect.approvalId, new Date().toISOString());
+        await this.ctx.storage.approvalWaitRuns.markResolved(effect.approvalId, new Date().toISOString());
       }
       const wakeResultRecord = buildWakeResultRecord(wakeResult, effect);
       const recovered = buildRecoveredWakeResult(wakeResult, wakeResultRecord);
       const explicitNonWake = recovered
         ? undefined
-        : buildExplicitNonWakeResult(wakeResult, wakeResultRecord, this.buildAlreadyRunningWakeProof(effect));
+        : buildExplicitNonWakeResult(wakeResult, wakeResultRecord, await this.buildAlreadyRunningWakeProof(effect));
       const settled =
         wakeResult.outcome === "woke" || recovered
-          ? this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
+          ? await this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
               result: recovered ?? wakeResultRecord,
             })
           : explicitNonWake
-            ? this.ctx.storage.approvalEffects.skipEffect(effect.effectId, this.workerId, effect.version, {
+            ? await this.ctx.storage.approvalEffects.skipEffect(effect.effectId, this.workerId, effect.version, {
                 result: explicitNonWake,
               })
             : wakeResult.outcome === "failed"
-              ? this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+              ? await this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
                   lastError: wakeResult.detail ?? "Approval wake failed.",
                   result: wakeResultRecord,
                 })
-              : this.ctx.storage.approvalEffects.skipEffect(effect.effectId, this.workerId, effect.version, {
+              : await this.ctx.storage.approvalEffects.skipEffect(effect.effectId, this.workerId, effect.version, {
                   result: wakeResultRecord,
                 });
       if (!settled) {
@@ -2039,7 +2060,7 @@ export class ApprovalEffectsService {
       return;
     }
     if (explicitNonWakeResult) {
-      this.ctx.publishRealtime(
+      await this.ctx.publishRealtime(
         resolveApprovalWait ? "approval_wait_wake_skipped" : "approval_wake_skipped",
         "approvals",
         {
@@ -2063,7 +2084,7 @@ export class ApprovalEffectsService {
     if (result.outcome === "failed") {
       return;
     }
-    this.ctx.publishRealtime(
+    await this.ctx.publishRealtime(
       resolveApprovalWait ? "approval_wait_wake_skipped" : "approval_wake_skipped",
       "approvals",
       {
@@ -2090,12 +2111,12 @@ export class ApprovalEffectsService {
       if (!materialize) {
         throw new Error("Approval wait-run materialization is not configured.");
       }
-      runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, () => {
-        const run = materialize(effect.approvalId);
+      await runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, async () => {
+        const run = await materialize(effect.approvalId);
         if (!run || run.runId !== effect.targetId) {
           throw new Error(`Approval ${effect.approvalId} did not materialize reserved run ${effect.targetId}.`);
         }
-        const completed = this.ctx.storage.approvalEffects.completeEffect(
+        const completed = await this.ctx.storage.approvalEffects.completeEffect(
           effect.effectId,
           this.workerId,
           effect.version,
@@ -2113,7 +2134,7 @@ export class ApprovalEffectsService {
         }
       });
     } catch (error) {
-      this.deferClaimedEffectForRetry(
+      await this.deferClaimedEffectForRetry(
         effect,
         this.workerId,
         error,
@@ -2128,16 +2149,16 @@ export class ApprovalEffectsService {
     }
   }
 
-  private deferApprovalWaitWakeUntilMaterialized(effect: ApprovalEffectRecord): boolean {
+  private async deferApprovalWaitWakeUntilMaterialized(effect: ApprovalEffectRecord): Promise<boolean> {
     const durableRuns = (this.ctx.storage as Partial<Pick<Storage, "durableRuns">>).durableRuns;
     if (!durableRuns) {
       return false;
     }
     try {
-      durableRuns.getRun(effect.targetId);
+      await durableRuns.getRun(effect.targetId);
       return false;
     } catch (error) {
-      this.deferClaimedEffectForRetry(
+      await this.deferClaimedEffectForRetry(
         effect,
         this.workerId,
         error,
@@ -2153,7 +2174,7 @@ export class ApprovalEffectsService {
     }
   }
 
-  private deferOrchestrationParentWakeUntilChildTerminal(effect: ApprovalEffectRecord): boolean {
+  private async deferOrchestrationParentWakeUntilChildTerminal(effect: ApprovalEffectRecord): Promise<boolean> {
     if (effect.effectKind !== "orchestration_parent_wake") {
       return false;
     }
@@ -2167,7 +2188,7 @@ export class ApprovalEffectsService {
     }
     let childRun: { status?: string } | undefined;
     try {
-      childRun = durableRuns.getRun(childRunId) as { status?: string } | undefined;
+      childRun = (await durableRuns.getRun(childRunId)) as { status?: string } | undefined;
     } catch {
       return false;
     }
@@ -2178,7 +2199,7 @@ export class ApprovalEffectsService {
     this.deps.requestRunProcessing(childRunId);
     const now = new Date().toISOString();
     const retryAt = new Date(Date.now() + APPROVAL_EFFECT_CHILD_WAIT_RETRY_MS).toISOString();
-    const renewed = this.ctx.storage.approvalEffects.renewEffectLease(
+    const renewed = await this.ctx.storage.approvalEffects.renewEffectLease(
       effect.effectId,
       this.workerId,
       effect.version,
@@ -2188,7 +2209,7 @@ export class ApprovalEffectsService {
     if (!renewed) {
       throw new Error(`Approval effect ${effect.effectId} lease renewal lost ownership while waiting for child run.`);
     }
-    this.ctx.publishRealtime(
+    await this.ctx.publishRealtime(
       "approval_effect_deferred",
       "approvals",
       {
@@ -2216,7 +2237,7 @@ export class ApprovalEffectsService {
     const payload = effect.payload;
     const runId = asOptionalString(payload.runId);
     if (!runId) {
-      this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+      await this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
         lastError: "Linked chat turn wake effect is missing a durable run id.",
         result: {
           turnId: effect.targetId,
@@ -2224,8 +2245,8 @@ export class ApprovalEffectsService {
       });
       return;
     }
-    const wake = runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, () => {
-      const wakeResult = this.deps.wakeDurableRun(runId, {
+    const wake = await runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, async () => {
+      const wakeResult = await this.deps.wakeDurableRun(runId, {
         eventKey: "approval.resolved",
         correlationId: asOptionalString(payload.correlationId) ?? effect.approvalId,
         payload: asRecord(payload.payload),
@@ -2236,26 +2257,26 @@ export class ApprovalEffectsService {
       });
       const recovered = buildRecoveredWakeResult(wakeResult, wakeResultRecord);
       if (wakeResult.outcome === "woke" || recovered) {
-        this.markLinkedChatTurnResumed(effect.targetId, runId);
+        await this.markLinkedChatTurnResumed(effect.targetId, runId);
       }
       const explicitNonWake = recovered
         ? undefined
-        : buildExplicitNonWakeResult(wakeResult, wakeResultRecord, this.buildAlreadyRunningWakeProof(effect));
+        : buildExplicitNonWakeResult(wakeResult, wakeResultRecord, await this.buildAlreadyRunningWakeProof(effect));
       const settled =
         wakeResult.outcome === "woke" || recovered
-          ? this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
+          ? await this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
               result: recovered ?? wakeResultRecord,
             })
           : explicitNonWake
-            ? this.ctx.storage.approvalEffects.skipEffect(effect.effectId, this.workerId, effect.version, {
+            ? await this.ctx.storage.approvalEffects.skipEffect(effect.effectId, this.workerId, effect.version, {
                 result: explicitNonWake,
               })
             : wakeResult.outcome === "failed"
-              ? this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+              ? await this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
                   lastError: wakeResult.detail ?? "Linked chat turn wake failed.",
                   result: wakeResultRecord,
                 })
-              : this.ctx.storage.approvalEffects.skipEffect(effect.effectId, this.workerId, effect.version, {
+              : await this.ctx.storage.approvalEffects.skipEffect(effect.effectId, this.workerId, effect.version, {
                   result: wakeResultRecord,
                 });
       if (!settled) {
@@ -2287,8 +2308,8 @@ export class ApprovalEffectsService {
     }
   }
 
-  private markLinkedChatTurnResumed(turnId: string, runId: string): void {
-    const observed = this.ctx.storage.chatTurnTraces.get(turnId);
+  private async markLinkedChatTurnResumed(turnId: string, runId: string): Promise<void> {
+    const observed = await this.ctx.storage.chatTurnTraces.get(turnId);
     if (observed.turnId !== turnId || observed.durable?.runId !== runId) {
       throw new Error(`Linked Chat wake ${runId} does not match turn ${turnId}.`);
     }
@@ -2298,35 +2319,35 @@ export class ApprovalEffectsService {
     if (observed.status !== "waiting_for_approval") {
       throw new Error(`Linked Chat wake ${runId} cannot resume turn ${turnId} from ${observed.status}.`);
     }
-    const resumed = this.ctx.storage.chatTurnTraces.patchIfStatus(turnId, ["waiting_for_approval"], {
+    const resumed = await this.ctx.storage.chatTurnTraces.patchIfStatus(turnId, ["waiting_for_approval"], {
       status: "running",
     });
     if (resumed) {
       return;
     }
-    const canonical = this.ctx.storage.chatTurnTraces.get(turnId);
+    const canonical = await this.ctx.storage.chatTurnTraces.get(turnId);
     if (canonical.status !== "running" || canonical.durable?.runId !== runId) {
       throw new Error(`Linked Chat wake ${runId} lost the turn ${turnId} resume race.`);
     }
   }
 
   private async handlePendingActionExecute(effect: ApprovalEffectRecord, signal?: AbortSignal): Promise<void> {
-    const pendingAction = this.ctx.storage.pendingApprovalActions.find(effect.approvalId);
+    const pendingAction = await this.ctx.storage.pendingApprovalActions.find(effect.approvalId);
     if (!pendingAction || pendingAction.resolutionStatus === "executed") {
       const completionPendingAction = pendingAction;
       if (!pendingAction && effect.payload.actionType === "code_mode.run") {
         const recoveredAction = await this.deps.executeCodeModePendingApproval(effect.approvalId, signal);
-        if (!this.isEffectStillClaimed(effect.effectId)) {
+        if (!(await this.isEffectStillClaimed(effect.effectId))) {
           return;
         }
         if (recoveredAction?.outcome === "executed") {
-          this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
+          await this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
             result: toolInvokeResultToRecord(recoveredAction, "code_mode.run"),
           });
           return;
         }
         const failureRecord = toolInvokeResultToRecord(recoveredAction, "code_mode.run");
-        this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+        await this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
           lastError: recoveredAction?.policyReason ?? "Code Mode pending action could not be recovered.",
           result: failureRecord,
         });
@@ -2336,28 +2357,36 @@ export class ApprovalEffectsService {
         const storedExecutionFailure = readStoredApprovedActionExecutionFailure(pendingAction.result);
         let materializationAction = pendingAction;
         if (storedExecutionFailure && pendingAction.result) {
-          materializationAction = runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, () =>
-            this.ctx.storage.pendingApprovalActions.reclassifyExecutedAsFailed(
-              effect.approvalId,
-              pendingAction.result!,
-              pendingAction.result!,
-            ),
+          materializationAction = await runClaimedApprovalEffectTransaction(
+            this.ctx.storage,
+            effect,
+            this.workerId,
+            () =>
+              this.ctx.storage.pendingApprovalActions.reclassifyExecutedAsFailed(
+                effect.approvalId,
+                pendingAction.result!,
+                pendingAction.result!,
+              ),
           );
         }
         const materialized = storedExecutionFailure
-          ? this.materializeFailedChatApprovalOrDefer(
+          ? await this.materializeFailedChatApprovalOrDefer(
               effect,
               materializationAction,
               materializationAction.result,
               storedExecutionFailure,
             )
-          : this.materializeExecutedChatApprovalOrDefer(effect, materializationAction, materializationAction.result);
+          : await this.materializeExecutedChatApprovalOrDefer(
+              effect,
+              materializationAction,
+              materializationAction.result,
+            );
         if (!materialized) {
           return;
         }
         return;
       }
-      this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
+      await this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
         result: {
           actionType: completionPendingAction?.actionType,
           resolutionStatus: completionPendingAction?.resolutionStatus ?? "missing",
@@ -2370,18 +2399,18 @@ export class ApprovalEffectsService {
       const storedExecutionFailure = readStoredApprovedActionExecutionFailure(pendingAction.result);
       if (pendingAction.resolutionStatus === "failed" && storedExecutionFailure) {
         if (
-          !this.materializeFailedChatApprovalOrDefer(
+          !(await this.materializeFailedChatApprovalOrDefer(
             effect,
             pendingAction,
             pendingAction.result,
             storedExecutionFailure,
-          )
+          ))
         ) {
           return;
         }
         return;
       }
-      this.ctx.storage.approvalEffects.skipEffect(effect.effectId, this.workerId, effect.version, {
+      await this.ctx.storage.approvalEffects.skipEffect(effect.effectId, this.workerId, effect.version, {
         result: {
           actionType: pendingAction.actionType,
           resolutionStatus: pendingAction.resolutionStatus,
@@ -2397,11 +2426,11 @@ export class ApprovalEffectsService {
       executedAction = await this.deps.executeApprovedPendingAction(effect.approvalId, signal);
     }
 
-    if (!this.isEffectStillClaimed(effect.effectId)) {
+    if (!(await this.isEffectStillClaimed(effect.effectId))) {
       return;
     }
 
-    const refreshedPendingAction = this.ctx.storage.pendingApprovalActions.find(effect.approvalId);
+    const refreshedPendingAction = await this.ctx.storage.pendingApprovalActions.find(effect.approvalId);
     if (
       refreshedPendingAction &&
       refreshedPendingAction.resolutionStatus &&
@@ -2413,22 +2442,30 @@ export class ApprovalEffectsService {
         let materializationAction = refreshedPendingAction;
         if (storedExecutionFailure && refreshedPendingAction.result) {
           const actionRecord = toolInvokeResultToRecord(executedAction, refreshedPendingAction.actionType);
-          materializationAction = runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, () =>
-            this.ctx.storage.pendingApprovalActions.reclassifyExecutedAsFailed(
-              effect.approvalId,
-              refreshedPendingAction.result!,
-              actionRecord,
-            ),
+          materializationAction = await runClaimedApprovalEffectTransaction(
+            this.ctx.storage,
+            effect,
+            this.workerId,
+            () =>
+              this.ctx.storage.pendingApprovalActions.reclassifyExecutedAsFailed(
+                effect.approvalId,
+                refreshedPendingAction.result!,
+                actionRecord,
+              ),
           );
         }
         const materialized = storedExecutionFailure
-          ? this.materializeFailedChatApprovalOrDefer(
+          ? await this.materializeFailedChatApprovalOrDefer(
               effect,
               materializationAction,
               materializationAction.result,
               storedExecutionFailure,
             )
-          : this.materializeExecutedChatApprovalOrDefer(effect, materializationAction, materializationAction.result);
+          : await this.materializeExecutedChatApprovalOrDefer(
+              effect,
+              materializationAction,
+              materializationAction.result,
+            );
         if (!materialized) {
           return;
         }
@@ -2437,19 +2474,19 @@ export class ApprovalEffectsService {
         const storedExecutionFailure = readStoredApprovedActionExecutionFailure(refreshedPendingAction.result);
         if (storedExecutionFailure) {
           if (
-            !this.materializeFailedChatApprovalOrDefer(
+            !(await this.materializeFailedChatApprovalOrDefer(
               effect,
               refreshedPendingAction,
               refreshedPendingAction.result,
               storedExecutionFailure,
-            )
+            ))
           ) {
             return;
           }
           return;
         }
       }
-      this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
+      await this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
         result: {
           actionType: completionPendingAction.actionType,
           resolutionStatus: completionPendingAction.resolutionStatus,
@@ -2468,7 +2505,7 @@ export class ApprovalEffectsService {
           ? pendingAction.request.runId.trim()
           : undefined;
       const deferredReason = "Code Mode execution claim is still active; retry is scheduled.";
-      this.deferClaimedEffectForRetry(
+      await this.deferClaimedEffectForRetry(
         effect,
         this.workerId,
         new Error(deferredReason),
@@ -2483,7 +2520,7 @@ export class ApprovalEffectsService {
         APPROVAL_EFFECT_CODE_MODE_CLAIM_RETRY_MS,
       );
       try {
-        this.ctx.publishRealtime(
+        await this.ctx.publishRealtime(
           "approval_effect_deferred",
           "approvals",
           {
@@ -2515,11 +2552,11 @@ export class ApprovalEffectsService {
     if (executedAction?.outcome === "executed" && !executionFailure) {
       const actionRecord = toolInvokeResultToRecord(executedAction, pendingAction.actionType);
       if (!refreshedPendingAction || refreshedPendingAction.resolutionStatus === "pending") {
-        runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, () =>
+        await runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, () =>
           this.ctx.storage.pendingApprovalActions.markResolved(effect.approvalId, "executed", actionRecord),
         );
       }
-      if (!this.materializeExecutedChatApprovalOrDefer(effect, pendingAction, actionRecord)) {
+      if (!(await this.materializeExecutedChatApprovalOrDefer(effect, pendingAction, actionRecord))) {
         return;
       }
       return;
@@ -2528,11 +2565,11 @@ export class ApprovalEffectsService {
     if (executedAction && executionFailure) {
       const actionRecord = toolInvokeResultToRecord(executedAction, pendingAction.actionType);
       if (!refreshedPendingAction || refreshedPendingAction.resolutionStatus === "pending") {
-        runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, () =>
+        await runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, () =>
           this.ctx.storage.pendingApprovalActions.markResolved(effect.approvalId, "failed", actionRecord),
         );
       }
-      if (!this.materializeFailedChatApprovalOrDefer(effect, pendingAction, actionRecord, executionFailure)) {
+      if (!(await this.materializeFailedChatApprovalOrDefer(effect, pendingAction, actionRecord, executionFailure))) {
         return;
       }
       return;
@@ -2540,11 +2577,11 @@ export class ApprovalEffectsService {
 
     const failureRecord = toolInvokeResultToRecord(executedAction, pendingAction.actionType);
     if (!refreshedPendingAction || refreshedPendingAction.resolutionStatus === "pending") {
-      runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, () =>
+      await runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, () =>
         this.ctx.storage.pendingApprovalActions.markResolved(effect.approvalId, "failed", failureRecord),
       );
     }
-    this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+    await this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
       lastError: executedAction?.policyReason ?? "Approved action could not execute.",
       result: failureRecord,
     });
@@ -2559,17 +2596,17 @@ export class ApprovalEffectsService {
     let item;
     if (inboxItemId) {
       try {
-        item = this.ctx.storage.approvalInbox.get(inboxItemId);
+        item = await this.ctx.storage.approvalInbox.get(inboxItemId);
       } catch {
         item = undefined;
       }
     }
-    item ??= this.ctx.storage.approvalInbox.findByApprovalAndToken(effect.approvalId, effect.targetId);
+    item ??= await this.ctx.storage.approvalInbox.findByApprovalAndToken(effect.approvalId, effect.targetId);
     if (!item) {
-      if (!this.cleanupRemoteActionTokenSecretOrDefer(effect, "missing")) {
+      if (!(await this.cleanupRemoteActionTokenSecretOrDefer(effect, "missing"))) {
         return;
       }
-      this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
+      await this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
         result: {
           tokenId: effect.targetId,
           inboxItemId: undefined,
@@ -2578,7 +2615,7 @@ export class ApprovalEffectsService {
       });
       return;
     }
-    const updated = runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, () =>
+    const updated = await runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, () =>
       this.ctx.storage.approvalInbox.reconcileResolution(item.inboxItemId, {
         state,
         approvalStatus,
@@ -2587,7 +2624,7 @@ export class ApprovalEffectsService {
       }),
     );
     if (updated.state !== state || updated.approvalStatus !== approvalStatus) {
-      this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+      await this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
         lastError: `Approval inbox item ${updated.inboxItemId} is already ${updated.state}; expected ${state}.`,
         result: {
           inboxItemId: updated.inboxItemId,
@@ -2600,10 +2637,10 @@ export class ApprovalEffectsService {
       });
       return;
     }
-    if (!this.cleanupRemoteActionTokenSecretOrDefer(effect, updated.state)) {
+    if (!(await this.cleanupRemoteActionTokenSecretOrDefer(effect, updated.state))) {
       return;
     }
-    this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
+    await this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
       result: {
         inboxItemId: updated.inboxItemId,
         tokenId: effect.targetId,
@@ -2612,16 +2649,19 @@ export class ApprovalEffectsService {
     });
   }
 
-  private cleanupRemoteActionTokenSecretOrDefer(effect: ApprovalEffectRecord, inboxState: string): boolean {
+  private async cleanupRemoteActionTokenSecretOrDefer(
+    effect: ApprovalEffectRecord,
+    inboxState: string,
+  ): Promise<boolean> {
     const tokenSecrets = this.deps.approvalRemoteTokenSecrets;
     if (!tokenSecrets) {
       return true;
     }
     try {
-      tokenSecrets.deleteById(effect.targetId);
+      await tokenSecrets.deleteById(effect.targetId);
       return true;
     } catch (error) {
-      this.deferClaimedEffectForRetry(effect, this.workerId, error, {
+      await this.deferClaimedEffectForRetry(effect, this.workerId, error, {
         deliveryState: "secret_cleanup_retry_scheduled",
         tokenId: effect.targetId,
         inboxState,
@@ -2630,16 +2670,16 @@ export class ApprovalEffectsService {
     }
   }
 
-  private materializeExecutedChatApprovalOrDefer(
+  private async materializeExecutedChatApprovalOrDefer(
     effect: ApprovalEffectRecord,
     pendingAction: PendingApprovalAction,
     actionRecord: Record<string, unknown> | undefined,
-  ): boolean {
+  ): Promise<boolean> {
     try {
-      this.materializeExecutedChatApproval(effect, pendingAction, actionRecord);
+      await this.materializeExecutedChatApproval(effect, pendingAction, actionRecord);
       return true;
     } catch (error) {
-      this.deferClaimedEffectForRetry(effect, this.workerId, error, {
+      await this.deferClaimedEffectForRetry(effect, this.workerId, error, {
         deliveryState: "retry_scheduled",
         actionType: pendingAction.actionType,
         resolutionStatus: "executed",
@@ -2649,17 +2689,17 @@ export class ApprovalEffectsService {
     }
   }
 
-  private materializeExecutedChatApproval(
+  private async materializeExecutedChatApproval(
     effect: ApprovalEffectRecord,
     pendingAction: PendingApprovalAction,
     actionRecord: Record<string, unknown> | undefined,
-  ): void {
+  ): Promise<void> {
     const testFallbackProjections: ChatMaterializationProjection[] = [];
     let queuedDurableProjection = false;
     try {
-      runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, () => {
-        const completeMaterialization = () => {
-          const completed = this.ctx.storage.approvalEffects.completeEffect(
+      await runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, async () => {
+        const completeMaterialization = async () => {
+          const completed = await this.ctx.storage.approvalEffects.completeEffect(
             effect.effectId,
             this.workerId,
             effect.version,
@@ -2670,12 +2710,12 @@ export class ApprovalEffectsService {
           }
         };
         if (pendingAction.actionType !== "tool.invoke") {
-          completeMaterialization();
+          await completeMaterialization();
           return;
         }
-        const inlineApproval = this.ctx.storage.chatInlineApprovals.get(effect.approvalId);
+        const inlineApproval = await this.ctx.storage.chatInlineApprovals.get(effect.approvalId);
         if (!inlineApproval) {
-          completeMaterialization();
+          await completeMaterialization();
           return;
         }
         const now = new Date().toISOString();
@@ -2685,12 +2725,12 @@ export class ApprovalEffectsService {
           asOptionalString(inlineApproval.toolName) ??
           asOptionalString(actionRecord?.toolName) ??
           "tool.invoke";
-        const toolRun = this.ctx.storage.chatToolRuns
-          .listByTurn(inlineApproval.turnId)
-          .find((candidate) => candidate.approvalId === effect.approvalId);
+        const toolRun = (await this.ctx.storage.chatToolRuns.listByTurn(inlineApproval.turnId)).find(
+          (candidate) => candidate.approvalId === effect.approvalId,
+        );
         if (toolRun && toolRun.status !== "executed") {
           const settlement = buildToolEffectEvidence({ potential: "unknown", phase: "completed" });
-          this.ctx.storage.chatToolRuns.patch(toolRun.toolRunId, {
+          await this.ctx.storage.chatToolRuns.patch(toolRun.toolRunId, {
             status: "executed",
             effectPotential: "unknown",
             effectDisposition: settlement.disposition,
@@ -2702,7 +2742,7 @@ export class ApprovalEffectsService {
             finishedAt: now,
           });
         }
-        this.ctx.storage.chatInlineApprovals.upsert({
+        await this.ctx.storage.chatInlineApprovals.upsert({
           approvalId: inlineApproval.approvalId,
           sessionId: inlineApproval.sessionId,
           turnId: inlineApproval.turnId,
@@ -2719,14 +2759,14 @@ export class ApprovalEffectsService {
 
         let childTrace: ChatTurnTraceRecord;
         try {
-          childTrace = this.ctx.storage.chatTurnTraces.get(inlineApproval.turnId);
+          childTrace = await this.ctx.storage.chatTurnTraces.get(inlineApproval.turnId);
         } catch (error) {
           throw new Error(`Chat turn ${inlineApproval.turnId} is unavailable for approval materialization.`, {
             cause: error,
           });
         }
         const outputText = buildApprovedToolActionOutput(toolName, toolResult);
-        const childMaterialized = this.completeChatTurnFromApprovedAction({
+        const childMaterialized = await this.completeChatTurnFromApprovedAction({
           trace: childTrace,
           outputText,
           now,
@@ -2737,7 +2777,7 @@ export class ApprovalEffectsService {
           return;
         }
         queuedDurableProjection =
-          this.enqueueChatMaterializationProjection(
+          (await this.enqueueChatMaterializationProjection(
             effect,
             {
               operationId: `chat.approval.materialized:${effect.effectId}:${childMaterialized.turnId}`,
@@ -2761,8 +2801,8 @@ export class ApprovalEffectsService {
               },
             },
             testFallbackProjections,
-          ) || queuedDurableProjection;
-        const parentMaterialized = this.materializeDelegationParentsFromApprovedChild({
+          )) || queuedDurableProjection;
+        const parentMaterialized = await this.materializeDelegationParentsFromApprovedChild({
           childTrace,
           outputText,
           now,
@@ -2770,22 +2810,22 @@ export class ApprovalEffectsService {
         });
         if (parentMaterialized) {
           queuedDurableProjection =
-            this.enqueueDelegationParentMaterializationProjection(
+            (await this.enqueueDelegationParentMaterializationProjection(
               effect,
               parentMaterialized,
               now,
               testFallbackProjections,
-            ) || queuedDurableProjection;
+            )) || queuedDurableProjection;
         }
-        completeMaterialization();
+        await completeMaterialization();
       });
       if (queuedDurableProjection) {
         this.requestObservabilityEffectProcessing();
       }
-      this.publishTestFallbackProjections(testFallbackProjections);
+      await this.publishTestFallbackProjections(testFallbackProjections);
     } catch (error) {
       try {
-        this.ctx.publishRealtime(
+        await this.ctx.publishRealtime(
           "approval_effect_materialization_failed",
           "approvals",
           {
@@ -2809,17 +2849,17 @@ export class ApprovalEffectsService {
     }
   }
 
-  private materializeFailedChatApprovalOrDefer(
+  private async materializeFailedChatApprovalOrDefer(
     effect: ApprovalEffectRecord,
     pendingAction: PendingApprovalAction,
     actionRecord: Record<string, unknown> | undefined,
     failure: ToolDomainExecutionFailure,
-  ): boolean {
+  ): Promise<boolean> {
     try {
-      this.materializeFailedChatApproval(effect, pendingAction, actionRecord, failure);
+      await this.materializeFailedChatApproval(effect, pendingAction, actionRecord, failure);
       return true;
     } catch (error) {
-      this.deferClaimedEffectForRetry(effect, this.workerId, error, {
+      await this.deferClaimedEffectForRetry(effect, this.workerId, error, {
         deliveryState: "retry_scheduled",
         actionType: pendingAction.actionType,
         resolutionStatus: "failed",
@@ -2830,17 +2870,17 @@ export class ApprovalEffectsService {
     }
   }
 
-  private materializeFailedChatApproval(
+  private async materializeFailedChatApproval(
     effect: ApprovalEffectRecord,
     pendingAction: PendingApprovalAction,
     actionRecord: Record<string, unknown> | undefined,
     failure: ToolDomainExecutionFailure,
-  ): void {
+  ): Promise<void> {
     const testFallbackProjections: ChatMaterializationProjection[] = [];
     let queuedDurableProjection = false;
-    runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, () => {
-      const completeMaterialization = () => {
-        const completed = this.ctx.storage.approvalEffects.completeEffect(
+    await runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, async () => {
+      const completeMaterialization = async () => {
+        const completed = await this.ctx.storage.approvalEffects.completeEffect(
           effect.effectId,
           this.workerId,
           effect.version,
@@ -2851,12 +2891,12 @@ export class ApprovalEffectsService {
         }
       };
       if (pendingAction.actionType !== "tool.invoke") {
-        completeMaterialization();
+        await completeMaterialization();
         return;
       }
-      const inlineApproval = this.ctx.storage.chatInlineApprovals.get(effect.approvalId);
+      const inlineApproval = await this.ctx.storage.chatInlineApprovals.get(effect.approvalId);
       if (!inlineApproval) {
-        completeMaterialization();
+        await completeMaterialization();
         return;
       }
       const now = new Date().toISOString();
@@ -2868,14 +2908,14 @@ export class ApprovalEffectsService {
         "tool.invoke";
       let childTrace: ChatTurnTraceRecord;
       try {
-        childTrace = this.ctx.storage.chatTurnTraces.get(inlineApproval.turnId);
+        childTrace = await this.ctx.storage.chatTurnTraces.get(inlineApproval.turnId);
       } catch (error) {
         throw new Error(`Chat turn ${inlineApproval.turnId} is unavailable for failed approval materialization.`, {
           cause: error,
         });
       }
       const outputText = buildFailedApprovedToolActionOutput(toolName, toolResult, failure);
-      const childMaterialized = this.failChatTurnFromApprovedAction({
+      const childMaterialized = await this.failChatTurnFromApprovedAction({
         trace: childTrace,
         outputText,
         now,
@@ -2890,7 +2930,7 @@ export class ApprovalEffectsService {
         return;
       }
       queuedDurableProjection =
-        this.enqueueChatMaterializationProjection(
+        (await this.enqueueChatMaterializationProjection(
           effect,
           {
             operationId: `chat.approval.failed-materialized:${effect.effectId}:${childMaterialized.turnId}`,
@@ -2915,8 +2955,8 @@ export class ApprovalEffectsService {
             },
           },
           testFallbackProjections,
-        ) || queuedDurableProjection;
-      const parentMaterialized = this.materializeDelegationParentsFromFailedChild({
+        )) || queuedDurableProjection;
+      const parentMaterialized = await this.materializeDelegationParentsFromFailedChild({
         childTrace,
         outputText,
         now,
@@ -2925,22 +2965,22 @@ export class ApprovalEffectsService {
       });
       if (parentMaterialized) {
         queuedDurableProjection =
-          this.enqueueDelegationParentMaterializationProjection(
+          (await this.enqueueDelegationParentMaterializationProjection(
             effect,
             parentMaterialized,
             now,
             testFallbackProjections,
-          ) || queuedDurableProjection;
+          )) || queuedDurableProjection;
       }
-      completeMaterialization();
+      await completeMaterialization();
     });
     if (queuedDurableProjection) {
       this.requestObservabilityEffectProcessing();
     }
-    this.publishTestFallbackProjections(testFallbackProjections);
+    await this.publishTestFallbackProjections(testFallbackProjections);
   }
 
-  private failChatTurnFromApprovedAction(input: {
+  private async failChatTurnFromApprovedAction(input: {
     trace: ChatTurnTraceRecord;
     outputText: string;
     now: string;
@@ -2950,9 +2990,9 @@ export class ApprovalEffectsService {
     toolName: string;
     toolResult: Record<string, unknown>;
     resolvedBy: string;
-  }): ChatTurnTraceRecord | undefined {
-    const materializedTrace = runApprovalEffectTransaction(this.ctx.storage, () => {
-      const durableStatus = this.completeDurableRunIfPresent(input.trace.durable?.runId, {
+  }): Promise<ChatTurnTraceRecord | undefined> {
+    const materializedTrace = await runApprovalEffectTransaction(this.ctx.storage, async () => {
+      const durableStatus = await this.completeDurableRunIfPresent(input.trace.durable?.runId, {
         now: input.now,
         outputText: input.outputText,
         terminalStatus: "failed",
@@ -2976,7 +3016,7 @@ export class ApprovalEffectsService {
           `Durable Chat run ${input.trace.durable?.runId ?? "unknown"} is already ${durableStatus}; failed approval materialization cannot replace it.`,
         );
       }
-      const currentTrace = this.ctx.storage.chatTurnTraces.get(input.trace.turnId);
+      const currentTrace = await this.ctx.storage.chatTurnTraces.get(input.trace.turnId);
       if (isChatTurnTerminalStatus(currentTrace.status) && currentTrace.status !== "failed") {
         throw new Error(
           `Canonical Chat turn ${currentTrace.turnId} is already ${currentTrace.status}; failed approval materialization cannot replace it.`,
@@ -2985,20 +3025,20 @@ export class ApprovalEffectsService {
       if (
         durableStatus === "failed" &&
         currentTrace.status === "failed" &&
-        hasCanonicalAssistantMessage(this.ctx.storage, currentTrace)
+        (await hasCanonicalAssistantMessage(this.ctx.storage, currentTrace))
       ) {
         return currentTrace;
       }
-      const inlineApproval = this.ctx.storage.chatInlineApprovals.get(input.approvalId);
+      const inlineApproval = await this.ctx.storage.chatInlineApprovals.get(input.approvalId);
       if (!inlineApproval || inlineApproval.turnId !== currentTrace.turnId) {
         throw new Error(`Inline approval ${input.approvalId} no longer links to Chat turn ${currentTrace.turnId}.`);
       }
-      const toolRun = this.ctx.storage.chatToolRuns
-        .listByTurn(currentTrace.turnId)
-        .find((candidate) => candidate.approvalId === input.approvalId);
+      const toolRun = (await this.ctx.storage.chatToolRuns.listByTurn(currentTrace.turnId)).find(
+        (candidate) => candidate.approvalId === input.approvalId,
+      );
       if (toolRun && toolRun.status !== "failed") {
         const settlement = buildToolEffectEvidence({ potential: "unknown", phase: "dispatch_failed" });
-        this.ctx.storage.chatToolRuns.patch(toolRun.toolRunId, {
+        await this.ctx.storage.chatToolRuns.patch(toolRun.toolRunId, {
           status: "failed",
           effectPotential: "unknown",
           effectDisposition: settlement.disposition,
@@ -3011,7 +3051,7 @@ export class ApprovalEffectsService {
           finishedAt: input.now,
         });
       }
-      this.ctx.storage.chatInlineApprovals.upsert({
+      await this.ctx.storage.chatInlineApprovals.upsert({
         approvalId: inlineApproval.approvalId,
         sessionId: inlineApproval.sessionId,
         turnId: inlineApproval.turnId,
@@ -3026,7 +3066,7 @@ export class ApprovalEffectsService {
         resolvedAt: input.now,
       });
       const assistantMessageId = currentTrace.assistantMessageId ?? `assistant-approved-${currentTrace.turnId}`;
-      this.ctx.storage.chatMessages.upsert(
+      await this.ctx.storage.chatMessages.upsert(
         {
           messageId: assistantMessageId,
           sessionId: currentTrace.sessionId,
@@ -3038,7 +3078,7 @@ export class ApprovalEffectsService {
         },
         input.now,
       );
-      this.ctx.storage.chatTurnTraces.patch(currentTrace.turnId, {
+      await this.ctx.storage.chatTurnTraces.patch(currentTrace.turnId, {
         assistantMessageId,
         status: "failed",
         finishedAt: input.now,
@@ -3068,15 +3108,15 @@ export class ApprovalEffectsService {
     return materializedTrace;
   }
 
-  private completeChatTurnFromApprovedAction(input: {
+  private async completeChatTurnFromApprovedAction(input: {
     trace: ChatTurnTraceRecord;
     outputText: string;
     now: string;
     approvalId: string;
     actionRecord?: Record<string, unknown>;
-  }): ChatTurnTraceRecord | undefined {
-    const materializedTrace = runApprovalEffectTransaction(this.ctx.storage, () => {
-      const durableStatus = this.completeDurableRunIfPresent(input.trace.durable?.runId, {
+  }): Promise<ChatTurnTraceRecord | undefined> {
+    const materializedTrace = await runApprovalEffectTransaction(this.ctx.storage, async () => {
+      const durableStatus = await this.completeDurableRunIfPresent(input.trace.durable?.runId, {
         now: input.now,
         outputText: input.outputText,
         postCommit: {
@@ -3094,14 +3134,14 @@ export class ApprovalEffectsService {
       if (durableStatus && durableStatus !== "completed") {
         return undefined;
       }
-      const currentTrace = this.ctx.storage.chatTurnTraces.get(input.trace.turnId);
+      const currentTrace = await this.ctx.storage.chatTurnTraces.get(input.trace.turnId);
       if (isChatTurnTerminalStatus(currentTrace.status) && currentTrace.status !== "completed") {
         return undefined;
       }
       if (
         durableStatus === "completed" &&
         currentTrace.status === "completed" &&
-        hasCanonicalAssistantMessage(this.ctx.storage, currentTrace)
+        (await hasCanonicalAssistantMessage(this.ctx.storage, currentTrace))
       ) {
         return currentTrace;
       }
@@ -3115,7 +3155,7 @@ export class ApprovalEffectsService {
         content: input.outputText,
         timestamp: input.now,
       };
-      this.ctx.storage.chatMessages.upsert(message, input.now);
+      await this.ctx.storage.chatMessages.upsert(message, input.now);
       const durable = currentTrace.durable?.runId
         ? {
             ...currentTrace.durable,
@@ -3136,7 +3176,7 @@ export class ApprovalEffectsService {
         durable,
       };
       (tracePatch as unknown as { failure: null }).failure = null;
-      this.ctx.storage.chatTurnTraces.patch(currentTrace.turnId, tracePatch);
+      await this.ctx.storage.chatTurnTraces.patch(currentTrace.turnId, tracePatch);
       return currentTrace;
     });
     if (!materializedTrace) {
@@ -3145,7 +3185,7 @@ export class ApprovalEffectsService {
     return materializedTrace;
   }
 
-  private completeDurableRunIfPresent(
+  private async completeDurableRunIfPresent(
     runId: string | undefined,
     input: {
       now: string;
@@ -3155,13 +3195,13 @@ export class ApprovalEffectsService {
       terminalStatus?: "completed" | "failed";
       lastError?: string;
     },
-  ): DurableRunRecord["status"] | undefined {
+  ): Promise<DurableRunRecord["status"] | undefined> {
     if (!runId) {
       return undefined;
     }
     const terminalStatus = input.terminalStatus ?? "completed";
     const checkpointKind = terminalStatus === "failed" ? "run_failed" : "run_completed";
-    const run = this.ctx.storage.durableRuns.getRun(runId);
+    const run = await this.ctx.storage.durableRuns.getRun(runId);
     if (isTerminalDurableRunStatus(run.status) && run.status !== terminalStatus) {
       return run.status;
     }
@@ -3170,8 +3210,8 @@ export class ApprovalEffectsService {
     }
     let finalized = false;
     try {
-      runApprovalEffectTransaction(this.ctx.storage, () => {
-        const latest = lockApprovalMaterializationRun(this.ctx.storage, runId);
+      await runApprovalEffectTransaction(this.ctx.storage, async () => {
+        const latest = await lockApprovalMaterializationRun(this.ctx.storage, runId);
         if (latest.status !== "waiting" && latest.status !== terminalStatus) {
           return;
         }
@@ -3181,7 +3221,7 @@ export class ApprovalEffectsService {
           input.postCommit && approvalMaterializationReceiptMatches(existingReceipt, input.postCommit),
         );
         const linkedTrace = input.postCommit
-          ? lockApprovalMaterializationTrace(this.ctx.storage, input.postCommit.turnId)
+          ? await lockApprovalMaterializationTrace(this.ctx.storage, input.postCommit.turnId)
           : undefined;
         if (input.postCommit && linkedTrace) {
           if (linkedTrace.durable?.runId !== runId) {
@@ -3228,13 +3268,13 @@ export class ApprovalEffectsService {
         );
         if (input.postCommit && !matchingReceipt) {
           const generationId = randomUUID();
-          const parentPayload = requireExactApprovalChatParentAuthority(
+          const parentPayload = await requireExactApprovalChatParentAuthority(
             this.ctx.storage,
             latest,
             linkedTrace,
             input.postCommit.turnId,
           );
-          const postCommitEligibility = this.deps.resolvePostCommitEligibility?.(parentPayload.sessionId);
+          const postCommitEligibility = await this.deps.resolvePostCommitEligibility?.(parentPayload.sessionId);
           if (!postCommitEligibility) {
             throw new Error(`Durable run ${runId} cannot freeze approval post-commit eligibility.`);
           }
@@ -3283,7 +3323,7 @@ export class ApprovalEffectsService {
               : {}),
           };
         }
-        this.ctx.storage.durableRuns.updateRun({
+        await this.ctx.storage.durableRuns.updateRun({
           runId,
           status: terminalStatus,
           updatedAt: input.now,
@@ -3296,13 +3336,13 @@ export class ApprovalEffectsService {
           metadata,
         });
         if (transitioning) {
-          this.ctx.storage.durableRuns.createCheckpoint({
+          await this.ctx.storage.durableRuns.createCheckpoint({
             runId,
             checkpointKind,
             state: checkpointState,
             createdAt: input.now,
           });
-          this.deps.recordDurableTimelineEvent?.(runId, checkpointKind, checkpointState);
+          await this.deps.recordDurableTimelineEvent?.(runId, checkpointKind, checkpointState);
         }
         finalized = true;
       });
@@ -3310,7 +3350,7 @@ export class ApprovalEffectsService {
       if (!(error instanceof ConflictError)) {
         throw error;
       }
-      const latest = this.ctx.storage.durableRuns.getRun(runId);
+      const latest = await this.ctx.storage.durableRuns.getRun(runId);
       if (isTerminalDurableRunStatus(latest.status)) {
         if (latest.status === terminalStatus && input.postCommit) {
           const receipt = readApprovalMaterializedPostCommitReceipt(latest.metadata);
@@ -3326,25 +3366,27 @@ export class ApprovalEffectsService {
       }
       throw error;
     }
-    return finalized ? terminalStatus : this.ctx.storage.durableRuns.getRun(runId).status;
+    return finalized ? terminalStatus : (await this.ctx.storage.durableRuns.getRun(runId)).status;
   }
 
-  private materializeDelegationParentsFromApprovedChild(input: {
+  private async materializeDelegationParentsFromApprovedChild(input: {
     childTrace: ChatTurnTraceRecord;
     outputText: string;
     now: string;
     approvalId: string;
-  }): DelegationParentMaterialization | undefined {
-    const parents = this.ctx.storage.chatDelegationSteps.listParentsByChildSessionIds([input.childTrace.sessionId]);
+  }): Promise<DelegationParentMaterialization | undefined> {
+    const parents = await this.ctx.storage.chatDelegationSteps.listParentsByChildSessionIds([
+      input.childTrace.sessionId,
+    ]);
     const parent = parents.get(input.childTrace.sessionId);
     if (!parent) {
       return;
     }
-    if (!this.lockDelegationApprovalAggregate(parent.runId, parent.stepId)) {
+    if (!(await this.lockDelegationApprovalAggregate(parent.runId, parent.stepId))) {
       return;
     }
     const finishedAt = input.now;
-    const materialized = this.ctx.storage.chatDelegationSteps.materializeApprovalOutcome({
+    const materialized = await this.ctx.storage.chatDelegationSteps.materializeApprovalOutcome({
       stepId: parent.stepId,
       expectedChildSessionId: input.childTrace.sessionId,
       expectedChildTurnId: input.childTrace.turnId,
@@ -3358,25 +3400,27 @@ export class ApprovalEffectsService {
     if (materialized.outcome === "rejected") {
       return;
     }
-    return this.reconcileDelegationRun(parent.parentSessionId, parent.runId, input.now, input.approvalId);
+    return await this.reconcileDelegationRun(parent.parentSessionId, parent.runId, input.now, input.approvalId);
   }
 
-  private materializeDelegationParentsFromFailedChild(input: {
+  private async materializeDelegationParentsFromFailedChild(input: {
     childTrace: ChatTurnTraceRecord;
     outputText: string;
     now: string;
     approvalId: string;
     failure: ToolDomainExecutionFailure;
-  }): DelegationParentMaterialization | undefined {
-    const parents = this.ctx.storage.chatDelegationSteps.listParentsByChildSessionIds([input.childTrace.sessionId]);
+  }): Promise<DelegationParentMaterialization | undefined> {
+    const parents = await this.ctx.storage.chatDelegationSteps.listParentsByChildSessionIds([
+      input.childTrace.sessionId,
+    ]);
     const parent = parents.get(input.childTrace.sessionId);
     if (!parent) {
       return;
     }
-    if (!this.lockDelegationApprovalAggregate(parent.runId, parent.stepId)) {
+    if (!(await this.lockDelegationApprovalAggregate(parent.runId, parent.stepId))) {
       return;
     }
-    const materialized = this.ctx.storage.chatDelegationSteps.materializeApprovalOutcome({
+    const materialized = await this.ctx.storage.chatDelegationSteps.materializeApprovalOutcome({
       stepId: parent.stepId,
       expectedChildSessionId: input.childTrace.sessionId,
       expectedChildTurnId: input.childTrace.turnId,
@@ -3394,15 +3438,15 @@ export class ApprovalEffectsService {
     if (materialized.outcome === "rejected") {
       return;
     }
-    return this.reconcileDelegationRun(parent.parentSessionId, parent.runId, input.now, input.approvalId);
+    return await this.reconcileDelegationRun(parent.parentSessionId, parent.runId, input.now, input.approvalId);
   }
 
-  private lockDelegationApprovalAggregate(runId: string, stepId: string): boolean {
+  private async lockDelegationApprovalAggregate(runId: string, stepId: string): Promise<boolean> {
     try {
-      this.ctx.storage.chatDelegationRuns.getForUpdate(runId);
-      return this.ctx.storage.chatDelegationSteps
-        .listByRunForUpdate(runId)
-        .some((candidate) => candidate.stepId === stepId);
+      await this.ctx.storage.chatDelegationRuns.getForUpdate(runId);
+      return (await this.ctx.storage.chatDelegationSteps.listByRunForUpdate(runId)).some(
+        (candidate) => candidate.stepId === stepId,
+      );
     } catch (error) {
       if (error instanceof NotFoundError) {
         return false;
@@ -3411,22 +3455,22 @@ export class ApprovalEffectsService {
     }
   }
 
-  private reconcileDelegationRun(
+  private async reconcileDelegationRun(
     parentSessionId: string,
     runId: string,
     now: string,
     approvalId: string,
-  ): DelegationParentMaterialization | undefined {
+  ): Promise<DelegationParentMaterialization | undefined> {
     let run;
     try {
-      run = this.ctx.storage.chatDelegationRuns.getForUpdate(runId);
+      run = await this.ctx.storage.chatDelegationRuns.getForUpdate(runId);
     } catch (error) {
       if (error instanceof NotFoundError) {
         return;
       }
       throw error;
     }
-    const steps = this.ctx.storage.chatDelegationSteps.listByRunForUpdate(runId);
+    const steps = await this.ctx.storage.chatDelegationSteps.listByRunForUpdate(runId);
     if (steps.length === 0) {
       return;
     }
@@ -3434,7 +3478,7 @@ export class ApprovalEffectsService {
     const status = deriveDelegationRunStatus(steps);
     const finalSummary = summarizeText(stitchedOutput);
     const citations = dedupeCitations(steps.flatMap((step) => step.citations ?? []));
-    this.ctx.storage.chatDelegationRuns.patch(runId, {
+    await this.ctx.storage.chatDelegationRuns.patch(runId, {
       status,
       finalSummary,
       stitchedOutput,
@@ -3443,9 +3487,9 @@ export class ApprovalEffectsService {
     });
     if (run.executionPlanId) {
       try {
-        const plan = this.ctx.storage.chatExecutionPlans.get(run.executionPlanId);
+        const plan = await this.ctx.storage.chatExecutionPlans.get(run.executionPlanId);
         const nextSteps = reconcileExecutionPlanSteps(plan.steps, steps);
-        this.ctx.storage.chatExecutionPlans.patch(run.executionPlanId, {
+        await this.ctx.storage.chatExecutionPlans.patch(run.executionPlanId, {
           status: status === "running" ? "running" : status === "completed" ? "completed" : status,
           summary: finalSummary,
           steps: nextSteps,
@@ -3455,12 +3499,12 @@ export class ApprovalEffectsService {
         // The delegation run remains canonical if the optional execution-plan projection is missing.
       }
     }
-    const listedParentTrace = this.ctx.storage.chatTurnTraces
-      .listBySession(parentSessionId)
-      .find((trace) => trace.orchestration?.runId === runId);
+    const listedParentTrace = (await this.ctx.storage.chatTurnTraces.listBySession(parentSessionId)).find(
+      (trace) => trace.orchestration?.runId === runId,
+    );
     if (status === "running") {
       if (listedParentTrace && !isChatTurnTerminalStatus(listedParentTrace.status)) {
-        this.ctx.storage.chatTurnTraces.patch(listedParentTrace.turnId, {
+        await this.ctx.storage.chatTurnTraces.patch(listedParentTrace.turnId, {
           status: "running",
           orchestration: listedParentTrace.orchestration
             ? {
@@ -3490,11 +3534,11 @@ export class ApprovalEffectsService {
     if (!listedParentTrace) {
       return;
     }
-    const materializedParentTrace = runApprovalEffectTransaction(this.ctx.storage, () => {
+    const materializedParentTrace = await runApprovalEffectTransaction(this.ctx.storage, async () => {
       const parentStatus = status === "failed" ? "failed" : status === "partial" ? "partial" : "completed";
       const expectedParentDurableStatus = parentStatus === "failed" ? "failed" : "completed";
       const parentFailureMessage = steps.find((step) => step.status === "failed")?.error ?? "Delegated action failed.";
-      const committedParentDurableStatus = this.completeDurableRunIfPresent(listedParentTrace.durable?.runId, {
+      const committedParentDurableStatus = await this.completeDurableRunIfPresent(listedParentTrace.durable?.runId, {
         now,
         outputText: stitchedOutput,
         terminalStatus: expectedParentDurableStatus,
@@ -3515,19 +3559,19 @@ export class ApprovalEffectsService {
       if (committedParentDurableStatus && committedParentDurableStatus !== expectedParentDurableStatus) {
         return undefined;
       }
-      const parentTrace = this.ctx.storage.chatTurnTraces.get(listedParentTrace.turnId);
+      const parentTrace = await this.ctx.storage.chatTurnTraces.get(listedParentTrace.turnId);
       if (isChatTurnTerminalStatus(parentTrace.status) && parentTrace.status !== parentStatus) {
         return undefined;
       }
       if (
         committedParentDurableStatus === expectedParentDurableStatus &&
         parentTrace.status === parentStatus &&
-        hasCanonicalAssistantMessage(this.ctx.storage, parentTrace)
+        (await hasCanonicalAssistantMessage(this.ctx.storage, parentTrace))
       ) {
         return parentTrace;
       }
       const assistantMessageId = parentTrace.assistantMessageId ?? `assistant-approved-${parentTrace.turnId}`;
-      this.ctx.storage.chatMessages.upsert(
+      await this.ctx.storage.chatMessages.upsert(
         {
           messageId: assistantMessageId,
           sessionId: parentTrace.sessionId,
@@ -3587,7 +3631,7 @@ export class ApprovalEffectsService {
       } else {
         (parentTracePatch as unknown as { failure: null }).failure = null;
       }
-      this.ctx.storage.chatTurnTraces.patch(parentTrace.turnId, parentTracePatch);
+      await this.ctx.storage.chatTurnTraces.patch(parentTrace.turnId, parentTracePatch);
       return parentTrace;
     });
     if (!materializedParentTrace) {
@@ -3596,13 +3640,13 @@ export class ApprovalEffectsService {
     return { trace: materializedParentTrace, runId };
   }
 
-  private enqueueDelegationParentMaterializationProjection(
+  private async enqueueDelegationParentMaterializationProjection(
     effect: ApprovalEffectRecord,
     materialized: DelegationParentMaterialization,
     occurredAt: string,
     testFallbackProjections: ChatMaterializationProjection[],
-  ): boolean {
-    return this.enqueueChatMaterializationProjection(
+  ): Promise<boolean> {
+    return await this.enqueueChatMaterializationProjection(
       effect,
       {
         operationId: `chat.delegation.approval.materialized:${effect.effectId}:${materialized.runId}`,
@@ -3631,11 +3675,11 @@ export class ApprovalEffectsService {
     );
   }
 
-  private enqueueChatMaterializationProjection(
+  private async enqueueChatMaterializationProjection(
     effect: ApprovalEffectRecord,
     projection: ChatMaterializationProjection,
     testFallbackProjections: ChatMaterializationProjection[],
-  ): boolean {
+  ): Promise<boolean> {
     const approvalEffects = this.ctx.storage.approvalEffects as Storage["approvalEffects"] & {
       upsertObservabilityBatch?: Storage["approvalEffects"]["upsertObservabilityBatch"];
     };
@@ -3646,7 +3690,7 @@ export class ApprovalEffectsService {
       }
       throw new Error("Chat approval materialization is missing its durable realtime projection outbox");
     }
-    approvalEffects.upsertObservabilityBatch({
+    await approvalEffects.upsertObservabilityBatch({
       approvalId: effect.approvalId,
       occurredAt: projection.occurredAt,
       attribution: captureApprovalObservabilityAttribution(),
@@ -3666,7 +3710,7 @@ export class ApprovalEffectsService {
     return true;
   }
 
-  private publishTestFallbackProjections(projections: readonly ChatMaterializationProjection[]): void {
+  private async publishTestFallbackProjections(projections: readonly ChatMaterializationProjection[]): Promise<void> {
     if (projections.length === 0) {
       return;
     }
@@ -3674,17 +3718,17 @@ export class ApprovalEffectsService {
       throw new Error("Chat approval materialization projection fallback is test-only");
     }
     for (const projection of projections) {
-      this.ctx.publishRealtime("chat_thread_updated", "chat", projection.payload, projection.options);
+      await this.ctx.publishRealtime("chat_thread_updated", "chat", projection.payload, projection.options);
     }
   }
 
   private async handleApprovalAfterHooks(effect: ApprovalEffectRecord): Promise<void> {
     try {
-      const approval = this.ctx.storage.approvals.get(effect.approvalId);
+      const approval = await this.ctx.storage.approvals.get(effect.approvalId);
       const payload = effect.payload;
       const decision = asDecision(payload.decision);
       const resolvedBy = asOptionalString(payload.resolvedBy) ?? approval.resolvedBy ?? "system";
-      const workspaceId = this.deps.resolveApprovalHookWorkspaceId({
+      const workspaceId = await this.deps.resolveApprovalHookWorkspaceId({
         approvalId: approval.approvalId,
         ...(approval.payload ?? {}),
         workspaceId:
@@ -3696,7 +3740,7 @@ export class ApprovalEffectsService {
             ? approval.linkage.sessionId.trim()
             : approval.payload.sessionId,
       });
-      this.deps.enqueueAfterHooks({
+      await this.deps.enqueueAfterHooks({
         workspaceId,
         trigger: "approval.resolve.after",
         entityType: "approval",
@@ -3707,7 +3751,7 @@ export class ApprovalEffectsService {
           resolvedBy,
         },
       });
-      this.deps.enqueueAfterHooks({
+      await this.deps.enqueueAfterHooks({
         workspaceId,
         trigger: "approval.response.after",
         entityType: "approval",
@@ -3719,8 +3763,8 @@ export class ApprovalEffectsService {
           deliveryChannel: typeof payload.deliveryChannel === "string" ? payload.deliveryChannel : null,
         },
       });
-      runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, () => {
-        const completed = this.ctx.storage.approvalEffects.completeEffect(
+      await runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, async () => {
+        const completed = await this.ctx.storage.approvalEffects.completeEffect(
           effect.effectId,
           this.workerId,
           effect.version,
@@ -3736,7 +3780,7 @@ export class ApprovalEffectsService {
         }
       });
     } catch (error) {
-      this.deferClaimedEffectForRetry(effect, this.workerId, error, {
+      await this.deferClaimedEffectForRetry(effect, this.workerId, error, {
         deliveryState: "retry_scheduled",
         signalKind: "approval_after_hooks",
         approvalId: effect.approvalId,
@@ -3750,13 +3794,13 @@ export class ApprovalEffectsService {
       if (!recordSignals) {
         throw new Error("Approval resolution signal delivery is not configured.");
       }
-      const approval = this.ctx.storage.approvals.get(effect.approvalId);
+      const approval = await this.ctx.storage.approvals.get(effect.approvalId);
       // Improvement and activation owners can cross filesystem/process boundaries.
       // Let their own idempotency/compensation commit before terminalizing this
       // effect; a crash in between replays the deterministic owner on retry.
-      recordSignals(approval);
-      runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, () => {
-        const completed = this.ctx.storage.approvalEffects.completeEffect(
+      await recordSignals(approval);
+      await runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, async () => {
+        const completed = await this.ctx.storage.approvalEffects.completeEffect(
           effect.effectId,
           this.workerId,
           effect.version,
@@ -3773,7 +3817,7 @@ export class ApprovalEffectsService {
         }
       });
     } catch (error) {
-      this.deferClaimedEffectForRetry(effect, this.workerId, error, {
+      await this.deferClaimedEffectForRetry(effect, this.workerId, error, {
         deliveryState: "retry_scheduled",
         signalKind: "approval_resolution",
         approvalId: effect.approvalId,
@@ -3786,7 +3830,7 @@ export class ApprovalEffectsService {
     try {
       envelope = parseApprovalObservabilityEnvelope(effect.payload);
     } catch (error) {
-      this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.observabilityWorkerId, effect.version, {
+      await this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.observabilityWorkerId, effect.version, {
         lastError: error instanceof Error ? error.message : String(error),
         result: {
           deliveryState: "invalid_envelope",
@@ -3798,9 +3842,9 @@ export class ApprovalEffectsService {
     }
 
     if (envelope.predecessorDeliveryId) {
-      const predecessor = this.ctx.storage.approvalEffects.getByIdempotencyKey(envelope.predecessorDeliveryId);
+      const predecessor = await this.ctx.storage.approvalEffects.getByIdempotencyKey(envelope.predecessorDeliveryId);
       if (!predecessor || predecessor.status !== "completed") {
-        this.deferClaimedEffectForRetry(
+        await this.deferClaimedEffectForRetry(
           effect,
           this.observabilityWorkerId,
           new Error(`Approval observability predecessor ${envelope.predecessorDeliveryId} is not complete.`),
@@ -3826,7 +3870,7 @@ export class ApprovalEffectsService {
           attribution: envelope.attribution,
         });
       } else {
-        this.ctx.publishRealtime(
+        await this.ctx.publishRealtime(
           delivery.eventType,
           delivery.source,
           {
@@ -3840,7 +3884,7 @@ export class ApprovalEffectsService {
           delivery.options,
         );
       }
-      const completed = this.ctx.storage.approvalEffects.completeEffect(
+      const completed = await this.ctx.storage.approvalEffects.completeEffect(
         effect.effectId,
         this.observabilityWorkerId,
         effect.version,
@@ -3859,7 +3903,7 @@ export class ApprovalEffectsService {
         throw new Error(`Approval observability effect ${effect.effectId} lost its completion lease.`);
       }
     } catch (error) {
-      this.deferClaimedEffectForRetry(effect, this.observabilityWorkerId, error, {
+      await this.deferClaimedEffectForRetry(effect, this.observabilityWorkerId, error, {
         deliveryState: "retry_scheduled",
         deliveryKind: envelope.delivery.kind,
         deliveryId: envelope.deliveryId,
@@ -3868,13 +3912,13 @@ export class ApprovalEffectsService {
     }
   }
 
-  private deferClaimedEffectForRetry(
+  private async deferClaimedEffectForRetry(
     effect: ApprovalEffectRecord,
     workerId: string,
     error: unknown,
     result: Record<string, unknown>,
     retryDelayOverrideMs?: number,
-  ): ApprovalEffectRecord | undefined {
+  ): Promise<ApprovalEffectRecord | undefined> {
     const now = new Date();
     const retryDelayMs =
       retryDelayOverrideMs ??
@@ -3884,21 +3928,26 @@ export class ApprovalEffectsService {
       );
     const errorMessage = error instanceof Error ? error.message : String(error);
     const retryAt = new Date(now.getTime() + retryDelayMs).toISOString();
-    const deferred = this.ctx.storage.approvalEffects.deferEffectForRetry(effect.effectId, workerId, effect.version, {
-      lastError: errorMessage,
-      retryAt,
-      updatedAt: now.toISOString(),
-      result: {
-        ...result,
-        delivered: false,
-        attemptCount: effect.attemptCount,
-        error: errorMessage,
+    const deferred = await this.ctx.storage.approvalEffects.deferEffectForRetry(
+      effect.effectId,
+      workerId,
+      effect.version,
+      {
+        lastError: errorMessage,
         retryAt,
-        retryDelayMs,
+        updatedAt: now.toISOString(),
+        result: {
+          ...result,
+          delivered: false,
+          attemptCount: effect.attemptCount,
+          error: errorMessage,
+          retryAt,
+          retryDelayMs,
+        },
       },
-    });
+    );
     if (!deferred) {
-      const current = this.ctx.storage.approvalEffects.get(effect.effectId);
+      const current = await this.ctx.storage.approvalEffects.get(effect.effectId);
       if (current.status === "completed") {
         return current;
       }
@@ -3907,12 +3956,14 @@ export class ApprovalEffectsService {
     return deferred;
   }
 
-  private resolveLinkedTurnWakeTarget(approval: ApprovalRequest): { turnId: string; runId: string } | undefined {
+  private async resolveLinkedTurnWakeTarget(
+    approval: ApprovalRequest,
+  ): Promise<{ turnId: string; runId: string } | undefined> {
     const linkageTurnId =
       typeof approval.linkage?.turnId === "string" && approval.linkage.turnId.trim()
         ? approval.linkage.turnId.trim()
         : undefined;
-    const inlineApproval = this.ctx.storage.chatInlineApprovals.get(approval.approvalId);
+    const inlineApproval = await this.ctx.storage.chatInlineApprovals.get(approval.approvalId);
     const inlineTurnId = inlineApproval?.turnId;
     const turnId = linkageTurnId ?? inlineTurnId;
     if (!turnId) {
@@ -3924,7 +3975,7 @@ export class ApprovalEffectsService {
         : undefined;
     const expectedSessionId = linkageSessionId ?? inlineApproval?.sessionId;
     try {
-      const trace = this.ctx.storage.chatTurnTraces.get(turnId);
+      const trace = await this.ctx.storage.chatTurnTraces.get(turnId);
       if (expectedSessionId && trace.sessionId !== expectedSessionId) {
         return undefined;
       }
@@ -3938,9 +3989,9 @@ export class ApprovalEffectsService {
     }
   }
 
-  private resolveDelegationParentWakeTargets(
+  private async resolveDelegationParentWakeTargets(
     approval: ApprovalRequest,
-  ): Array<{ turnId: string; runId: string; childSessionId: string; delegationRunId: string }> {
+  ): Promise<Array<{ turnId: string; runId: string; childSessionId: string; delegationRunId: string }>> {
     const childSessionId =
       typeof approval.linkage?.sessionId === "string" && approval.linkage.sessionId.trim()
         ? approval.linkage.sessionId.trim()
@@ -3949,7 +4000,7 @@ export class ApprovalEffectsService {
       return [];
     }
     try {
-      const parentByChildSession = this.ctx.storage.chatDelegationSteps.listParentsByChildSessionIds(
+      const parentByChildSession = await this.ctx.storage.chatDelegationSteps.listParentsByChildSessionIds(
         [childSessionId],
         approval.linkage?.workspaceId,
       );
@@ -3957,8 +4008,7 @@ export class ApprovalEffectsService {
       if (!parent) {
         return [];
       }
-      return this.ctx.storage.chatTurnTraces
-        .listBySession(parent.parentSessionId)
+      return (await this.ctx.storage.chatTurnTraces.listBySession(parent.parentSessionId))
         .filter((trace) => trace.orchestration?.runId === parent.runId)
         .map((trace) => ({
           turnId: trace.turnId,
@@ -3972,9 +4022,9 @@ export class ApprovalEffectsService {
     }
   }
 
-  private resolveOrchestrationParentWakeTargets(
+  private async resolveOrchestrationParentWakeTargets(
     approval: ApprovalRequest,
-  ): Array<{ orchestrationRunId: string; durableRunId: string }> {
+  ): Promise<Array<{ orchestrationRunId: string; durableRunId: string }>> {
     const orchestrationRunId =
       typeof approval.linkage?.runId === "string" && approval.linkage.runId.trim()
         ? approval.linkage.runId.trim()
@@ -3983,7 +4033,7 @@ export class ApprovalEffectsService {
       return [];
     }
     try {
-      const run = this.ctx.storage.orchestration.getRun(orchestrationRunId);
+      const run = await this.ctx.storage.orchestration.getRun(orchestrationRunId);
       const approvalWorkspaceId = normalizeApprovalWorkspaceId(approval);
       if (approvalWorkspaceId !== normalizeOrchestrationRunWorkspaceId(run.workspaceId)) {
         return [];
@@ -4021,8 +4071,10 @@ export class ApprovalEffectsService {
     scheduleNext();
   }
 
-  private buildAlreadyRunningWakeProof(effect: ApprovalEffectRecord): Record<string, unknown> | undefined {
-    const pendingAction = this.ctx.storage.pendingApprovalActions?.find(effect.approvalId);
+  private async buildAlreadyRunningWakeProof(
+    effect: ApprovalEffectRecord,
+  ): Promise<Record<string, unknown> | undefined> {
+    const pendingAction = await this.ctx.storage.pendingApprovalActions?.find(effect.approvalId);
     const executedOutcome =
       typeof pendingAction?.result?.outcome === "string" ? pendingAction.result.outcome : undefined;
     if (pendingAction?.resolutionStatus === "executed" || executedOutcome === "executed") {
@@ -4034,7 +4086,7 @@ export class ApprovalEffectsService {
     }
 
     try {
-      const trace = this.ctx.storage.chatTurnTraces?.get(effect.targetId) as
+      const trace = (await this.ctx.storage.chatTurnTraces?.get(effect.targetId)) as
         | {
             assistantMessageId?: string;
             status?: string;
@@ -4061,88 +4113,95 @@ export class ApprovalEffectsService {
   }
 }
 
-function runApprovalEffectTransaction<T>(storage: ApprovalEffectsServiceContext["storage"], callback: () => T): T {
-  const transaction = (storage as { runImmediateTransaction?: <R>(work: () => R) => R }).runImmediateTransaction;
+async function runApprovalEffectTransaction<T>(
+  storage: ApprovalEffectsServiceContext["storage"],
+  callback: () => T | Promise<T>,
+): Promise<Awaited<T>> {
+  const transaction = (
+    storage as {
+      runImmediateTransaction?: <R>(work: () => R | Promise<R>) => Promise<Awaited<R>>;
+    }
+  ).runImmediateTransaction;
   if (transaction) {
-    return transaction.call(storage, callback) as T;
+    return (await transaction.call(storage, callback)) as Awaited<T>;
   }
   if (process.env.NODE_ENV === "test") {
-    return callback();
+    return await callback();
   }
   throw new Error("Approval effect durable completion is missing immediate transaction ownership");
 }
 
-function runClaimedApprovalEffectTransaction<T>(
+async function runClaimedApprovalEffectTransaction<T>(
   storage: ApprovalEffectsServiceContext["storage"],
   effect: ApprovalEffectRecord,
   workerId: string,
-  callback: () => T,
-): T {
-  return runApprovalEffectTransaction(storage, () => {
+  callback: () => T | Promise<T>,
+): Promise<Awaited<T>> {
+  return await runApprovalEffectTransaction(storage, async () => {
     const approvalEffects = storage.approvalEffects;
     const lockFreshClaim = approvalEffects?.lockFreshClaimForUpdate;
     if (typeof lockFreshClaim !== "function") {
       if (process.env.NODE_ENV === "test") {
-        return callback();
+        return await callback();
       }
       throw new Error("Approval effect materialization is missing its database claim lock");
     }
-    const locked = lockFreshClaim.call(approvalEffects, effect.effectId, workerId, effect.version);
+    const locked = await lockFreshClaim.call(approvalEffects, effect.effectId, workerId, effect.version);
     if (!locked) {
       throw new Error(`Approval effect ${effect.effectId} lost its materialization lease.`);
     }
-    return callback();
+    return await callback();
   });
 }
 
-function lockApprovalMaterializationRun(
+async function lockApprovalMaterializationRun(
   storage: ApprovalEffectsServiceContext["storage"],
   runId: string,
-): DurableRunRecord {
+): Promise<DurableRunRecord> {
   const durableRuns = storage.durableRuns as Storage["durableRuns"] & {
-    getRunForUpdate?: (currentRunId: string) => DurableRunRecord;
+    getRunForUpdate?: (currentRunId: string) => Promise<DurableRunRecord>;
   };
   if (typeof durableRuns.getRunForUpdate === "function") {
-    return durableRuns.getRunForUpdate(runId);
+    return await durableRuns.getRunForUpdate(runId);
   }
   if (process.env.NODE_ENV === "test") {
-    return durableRuns.getRun(runId);
+    return await durableRuns.getRun(runId);
   }
   throw new Error("Approval materialization is missing durable-run row-lock ownership");
 }
 
-function lockApprovalMaterializationTrace(
+async function lockApprovalMaterializationTrace(
   storage: ApprovalEffectsServiceContext["storage"],
   turnId: string,
-): ChatTurnTraceRecord | undefined {
+): Promise<ChatTurnTraceRecord | undefined> {
   const chatTurnTraces = storage.chatTurnTraces as
     | (Storage["chatTurnTraces"] & {
-        getForUpdate?: (currentTurnId: string) => ChatTurnTraceRecord;
+        getForUpdate?: (currentTurnId: string) => Promise<ChatTurnTraceRecord>;
       })
     | undefined;
   if (typeof chatTurnTraces?.getForUpdate === "function") {
-    return chatTurnTraces.getForUpdate(turnId);
+    return await chatTurnTraces.getForUpdate(turnId);
   }
   if (process.env.NODE_ENV === "test") {
-    return chatTurnTraces?.get(turnId);
+    return await chatTurnTraces?.get(turnId);
   }
   throw new Error("Approval materialization is missing Chat-turn row-lock ownership");
 }
 
-function hasCanonicalAssistantMessage(
+async function hasCanonicalAssistantMessage(
   storage: ApprovalEffectsServiceContext["storage"],
   trace: ChatTurnTraceRecord,
-): boolean {
+): Promise<boolean> {
   if (!trace.assistantMessageId) {
     return false;
   }
   const chatMessages = storage.chatMessages as Storage["chatMessages"] & {
-    get?: (messageId: string) => ChatMessageRecord | undefined;
+    get?: (messageId: string) => Promise<ChatMessageRecord | undefined>;
   };
   if (typeof chatMessages.get !== "function") {
     return false;
   }
-  const message = chatMessages.get(trace.assistantMessageId);
+  const message = await chatMessages.get(trace.assistantMessageId);
   return message?.role === "assistant" && message.sessionId === trace.sessionId;
 }
 

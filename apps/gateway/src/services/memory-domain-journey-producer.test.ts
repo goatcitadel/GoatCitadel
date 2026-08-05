@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { ConflictError } from "@goatcitadel/contracts";
-import { Storage } from "@goatcitadel/storage";
+import { Storage, createLocalAsyncStorage } from "@goatcitadel/storage";
 import { buildMemoryLifecycleApprovalBinding } from "./memory-journey-producer.js";
 import {
   buildMemoryLifecycleApprovalPayload,
@@ -151,9 +151,9 @@ describe("memory domain governed lifecycle producer", () => {
     expect(isMemoryMaintenanceSystemAuthority("system:memory-maintenance")).toBe(false);
   });
 
-  it("writes system expiry evidence only for the branded authority and keeps it immutable in the P0 owner", () => {
+  it("writes system expiry evidence only for the branded authority and keeps it immutable in the P0 owner", async () => {
     const storage = createStorage();
-    const repository = createMemoryGovernedLifecycleRepository(storage.gatewaySql);
+    const repository = createMemoryGovernedLifecycleRepository(createLocalAsyncStorage(storage).gatewaySql);
     const change = {
       changeId: "change-expiry-1",
       itemId: "item-expiry-1",
@@ -170,17 +170,17 @@ describe("memory domain governed lifecycle producer", () => {
     };
 
     const forged = { actorId: MEMORY_MAINTENANCE_SYSTEM_ACTOR_ID } as never;
-    expect(() =>
+    await expect(
       persistMemorySystemExpiryEvidence(repository, {
         authority: forged,
         change,
         item,
         occurredAt: change.createdAt,
       }),
-    ).toThrow(/module-private system authority/i);
+    ).rejects.toThrow(/module-private system authority/i);
 
     const authority = mintMemoryMaintenanceSystemAuthority();
-    const evidence = persistMemorySystemExpiryEvidence(repository, {
+    const evidence = await persistMemorySystemExpiryEvidence(repository, {
       authority,
       change,
       item,
@@ -204,7 +204,7 @@ describe("memory domain governed lifecycle producer", () => {
       trustDisposition: "system_memory_maintenance",
     });
     // Exact replay converges byte-identically.
-    const replay = persistMemorySystemExpiryEvidence(repository, {
+    const replay = await persistMemorySystemExpiryEvidence(repository, {
       authority,
       change,
       item,
@@ -223,7 +223,7 @@ describe("memory domain governed lifecycle producer", () => {
         .run({ eventId: evidence.event.eventId }),
     ).toThrow();
     // Global-scope expiry (no workspace) stays writable under system authority.
-    const globalEvidence = persistMemorySystemExpiryEvidence(repository, {
+    const globalEvidence = await persistMemorySystemExpiryEvidence(repository, {
       authority,
       change: { ...change, changeId: "change-expiry-global", itemId: "item-expiry-global" },
       item: { ...item, itemId: "item-expiry-global", workspaceId: undefined },

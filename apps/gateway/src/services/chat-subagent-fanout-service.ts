@@ -76,7 +76,7 @@ export interface SubagentFanoutDelegatedStepInput {
   localOperatorOverrideId?: string;
   policyContext?: ToolPolicyActorContext;
   fullWebAccess?: boolean;
-  canonicalWriteFence?: <T>(work: () => T) => T;
+  canonicalWriteFence?: <T>(work: () => T | Promise<T>) => Promise<Awaited<T>>;
 }
 
 export type SubagentFanoutRunDelegatedStep = (
@@ -102,7 +102,7 @@ export interface SubagentFanoutExecutorOptions {
   localOperatorOverrideId?: string;
   policyContext?: ToolPolicyActorContext;
   fullWebAccess?: boolean;
-  canonicalWriteFence?: <T>(work: () => T) => T;
+  canonicalWriteFence?: <T>(work: () => T | Promise<T>) => Promise<Awaited<T>>;
 }
 
 function truncateWithLimit(value: string, limit: number): string {
@@ -193,7 +193,7 @@ export function shouldRegisterSubagentFanoutExecutor(
 export class SubagentFanoutRuntime {
   private readonly executorsBySession = new Map<string, { token: symbol; executor: SubagentFanoutExecutor }>();
 
-  public constructor(private readonly options: { isDisabled?: () => boolean } = {}) {}
+  public constructor(private readonly options: { isDisabled?: () => boolean | Promise<boolean> } = {}) {}
 
   /**
    * Register the executor for a session's active turn. Returns a disposer that
@@ -213,7 +213,7 @@ export class SubagentFanoutRuntime {
   }
 
   public async execute(request: ToolInvokeRequest): Promise<Record<string, unknown>> {
-    if (this.options.isDisabled?.() === true) {
+    if ((await this.options.isDisabled?.()) === true) {
       throw new Error(`${SUBAGENT_FANOUT_TOOL_NAME} is disabled by the subagentFanoutV1Disabled kill switch.`);
     }
     const parsed = parseSubagentFanoutSubtasks(request.args ?? {});

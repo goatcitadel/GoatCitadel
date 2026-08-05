@@ -52,10 +52,10 @@ type DiscordSlashCommandEnvelope = Omit<DiscordInboundEnvelope, "content" | "sou
 };
 
 interface DiscordRuntimeCallbacks {
-  listConnections: () => IntegrationConnection[];
-  findApprovedPairing: (connectionId: string, userId: string) => DiscordPairingRecord | undefined;
-  ensurePendingPairing: (connectionId: string, userId: string, displayName?: string) => DiscordPairingRecord;
-  touchPairing: (pairingId: string) => void;
+  listConnections: () => Promise<IntegrationConnection[]>;
+  findApprovedPairing: (connectionId: string, userId: string) => Promise<DiscordPairingRecord | undefined>;
+  ensurePendingPairing: (connectionId: string, userId: string, displayName?: string) => Promise<DiscordPairingRecord>;
+  touchPairing: (pairingId: string) => Promise<void>;
   onInboundMessage: (input: DiscordInboundEnvelope) => Promise<void>;
   /** Commits the command envelope before the interaction is acknowledged. */
   acceptSlashCommand: (input: DiscordSlashCommandEnvelope) => Promise<{ inboundEventId: string }>;
@@ -110,8 +110,7 @@ export class DiscordRuntimeService {
 
   public async sync(): Promise<void> {
     if (this.closeState !== "open") return;
-    const gatewayConnections = this.callbacks
-      .listConnections()
+    const gatewayConnections = (await this.callbacks.listConnections())
       .filter((connection) => connection.kind === "channel" && connection.key === "discord" && connection.enabled)
       .filter((connection) => getDiscordRuntimeMode(connection.config) === "gateway");
     const nextGroups = new Map<string, IntegrationConnection[]>();
@@ -152,14 +151,21 @@ export class DiscordRuntimeService {
         existing.connectionIds = new Set(connections.map((connection) => connection.connectionId));
         this.updateStatusSnapshot(existing);
         if (existing.ready && existing.reconnectLoginEpoch === undefined) {
-          void this.scheduleApplicationCommandSync(existing, "existing-runtime");
+          void this.scheduleApplicationCommandSync(existing, "existing-runtime").catch((error: unknown) => {
+            log.warn("Detached Discord command sync rejected unexpectedly.", {
+              source: "existing-runtime",
+              error: getErrorMessage(error),
+            });
+          });
         }
         continue;
       }
       const runtime = this.createManagedRuntime(token, connections);
       this.runtimesByToken.set(token, runtime);
       this.updateStatusSnapshot(runtime);
-      void this.scheduleLogin(runtime);
+      void this.scheduleLogin(runtime).catch((error: unknown) => {
+        log.warn("Detached Discord login rejected unexpectedly.", { error: getErrorMessage(error) });
+      });
     }
 
     for (const connection of gatewayConnections) {
@@ -317,7 +323,12 @@ export class DiscordRuntimeService {
       // claimed this client, its persistent fence makes tracked authenticated
       // login settlement the sole readiness authority for every later epoch.
       if (runtime.callbackReadyFenceEpoch !== undefined) return;
-      void this.scheduleApplicationCommandSync(runtime, "client-ready", true);
+      void this.scheduleApplicationCommandSync(runtime, "client-ready", true).catch((error: unknown) => {
+        log.warn("Detached Discord command sync rejected unexpectedly.", {
+          source: "client-ready",
+          error: getErrorMessage(error),
+        });
+      });
     });
 
     client.on("messageCreate", (message: Message) => {
@@ -606,9 +617,9 @@ export class DiscordRuntimeService {
     if (!message.content.trim()) {
       return;
     }
-    const connections = this.callbacks
-      .listConnections()
-      .filter((connection) => runtime.connectionIds.has(connection.connectionId));
+    const connections = (await this.callbacks.listConnections()).filter((connection) =>
+      runtime.connectionIds.has(connection.connectionId),
+    );
     for (const connection of connections) {
       const handled = await this.tryHandleMessageForConnection(runtime, connection, message);
       if (handled) {
@@ -626,9 +637,9 @@ export class DiscordRuntimeService {
     if (!interaction.inGuild() && !interaction.channel?.isDMBased()) {
       return;
     }
-    const connections = this.callbacks
-      .listConnections()
-      .filter((connection) => runtime.connectionIds.has(connection.connectionId));
+    const connections = (await this.callbacks.listConnections()).filter((connection) =>
+      runtime.connectionIds.has(connection.connectionId),
+    );
     for (const connection of connections) {
       const handled = await this.tryHandleInteractionForConnection(runtime, connection, interaction);
       if (handled) {
@@ -667,9 +678,9 @@ export class DiscordRuntimeService {
       );
       return;
     }
-    const connections = this.callbacks
-      .listConnections()
-      .filter((connection) => runtime.connectionIds.has(connection.connectionId));
+    const connections = (await this.callbacks.listConnections()).filter((connection) =>
+      runtime.connectionIds.has(connection.connectionId),
+    );
     const allowed = connections.some((connection) => this.canHandleAutocompleteForConnection(connection, interaction));
     if (!allowed) {
       await interaction.respond([]).catch((error) =>
@@ -733,9 +744,9 @@ export class DiscordRuntimeService {
     this.assertRuntimeTaskActive(runtime, signal);
 
     const configuredGuildIds = new Set<string>();
-    const connections = this.callbacks
-      .listConnections()
-      .filter((connection) => runtime.connectionIds.has(connection.connectionId));
+    const connections = (await this.callbacks.listConnections()).filter((connection) =>
+      runtime.connectionIds.has(connection.connectionId),
+    );
     for (const connection of connections) {
       const guildRules = readGuildRuleMap(connection.config);
       for (const guildId of Object.keys(guildRules)) {
@@ -894,9 +905,9 @@ export class DiscordRuntimeService {
     if (dmPolicy === "disabled") {
       return false;
     }
-    const approved = this.callbacks.findApprovedPairing(connection.connectionId, message.author.id);
+    const approved = await this.callbacks.findApprovedPairing(connection.connectionId, message.author.id);
     if (approved) {
-      this.callbacks.touchPairing(approved.pairingId);
+      await this.callbacks.touchPairing(approved.pairingId);
       await this.handleAcceptedMessage(message, async () => {
         await this.callbacks.onInboundMessage({
           connectionId: connection.connectionId,
@@ -934,7 +945,7 @@ export class DiscordRuntimeService {
       });
       return true;
     }
-    const pending = this.callbacks.ensurePendingPairing(
+    const pending = await this.callbacks.ensurePendingPairing(
       connection.connectionId,
       message.author.id,
       message.author.globalName ?? message.author.displayName ?? message.author.username,
@@ -957,10 +968,10 @@ export class DiscordRuntimeService {
     if (dmPolicy === "disabled") {
       return false;
     }
-    const approved = this.callbacks.findApprovedPairing(connection.connectionId, interaction.user.id);
+    const approved = await this.callbacks.findApprovedPairing(connection.connectionId, interaction.user.id);
     const commandText = buildCommandTextFromInteraction(interaction);
     if (approved) {
-      this.callbacks.touchPairing(approved.pairingId);
+      await this.callbacks.touchPairing(approved.pairingId);
       await this.handleAcceptedCommand(interaction, {
         connectionId: connection.connectionId,
         target: interaction.channelId,
@@ -996,7 +1007,7 @@ export class DiscordRuntimeService {
       });
       return true;
     }
-    const pending = this.callbacks.ensurePendingPairing(
+    const pending = await this.callbacks.ensurePendingPairing(
       connection.connectionId,
       interaction.user.id,
       interaction.user.globalName ?? interaction.user.displayName ?? interaction.user.username,

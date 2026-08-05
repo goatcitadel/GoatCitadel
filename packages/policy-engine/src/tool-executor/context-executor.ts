@@ -14,7 +14,7 @@ import {
   type ChatRoutedContextToolSourceReceipt,
   type ToolInvokeRequest,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage } from "@goatcitadel/storage";
 import {
   currentEmbeddingProfile,
   generateEmbedding,
@@ -47,11 +47,11 @@ export function isRoutedContextToolName(toolName: string): toolName is ChatRoute
 
 export async function executeRoutedContextTool(
   request: ToolInvokeRequest,
-  storage: Storage,
+  storage: AsyncStorage,
   deps: RoutedContextExecutorDeps = {},
 ): Promise<Record<string, unknown>> {
   assertNoAuthorityOverrides(request.args);
-  const snapshot = resolveBoundSnapshot(request, storage);
+  const snapshot = await resolveBoundSnapshot(request, storage);
   const eligibleEntries = snapshot.entries.filter(isEligibleEntry);
   if (eligibleEntries.length === 0) {
     throw new Error("Attached-context tools are unavailable because this turn has no admitted snapshot text.");
@@ -77,10 +77,10 @@ export async function executeRoutedContextTool(
   }
 }
 
-export function listAvailableRoutedContextTools(
+export async function listAvailableRoutedContextTools(
   request: ToolInvokeRequest,
-  storage: Storage,
-): ChatRoutedContextToolName[] {
+  storage: AsyncStorage,
+): Promise<ChatRoutedContextToolName[]> {
   if (
     !request.turnId ||
     !request.workspaceId ||
@@ -90,19 +90,22 @@ export function listAvailableRoutedContextTools(
     return [];
   }
   try {
-    const snapshot = resolveBoundSnapshot(request, storage);
+    const snapshot = await resolveBoundSnapshot(request, storage);
     return snapshot.entries.some(isEligibleEntry) ? [...CHAT_ROUTED_CONTEXT_TOOL_NAMES] : [];
   } catch {
     return [];
   }
 }
 
-function resolveBoundSnapshot(request: ToolInvokeRequest, storage: Storage): ChatRoutedContextSnapshotRecord {
+async function resolveBoundSnapshot(
+  request: ToolInvokeRequest,
+  storage: AsyncStorage,
+): Promise<ChatRoutedContextSnapshotRecord> {
   const turnId = requireServerBinding(request.turnId, "turnId");
   const snapshotId = requireServerBinding(request.routedContextSnapshotId, "routedContextSnapshotId");
   const snapshotHash = requireServerBinding(request.routedContextSnapshotHash, "routedContextSnapshotHash");
   const workspaceId = requireServerBinding(request.workspaceId, "workspaceId");
-  const snapshot = storage.routedContextSnapshots.get(snapshotId);
+  const snapshot = await storage.routedContextSnapshots.get(snapshotId);
   if (
     snapshot.turnId !== turnId ||
     snapshot.sessionId !== request.sessionId ||
@@ -111,7 +114,7 @@ function resolveBoundSnapshot(request: ToolInvokeRequest, storage: Storage): Cha
   ) {
     throw new Error("Attached-context snapshot binding does not match the active server-authored turn scope.");
   }
-  const sessionWorkspaceId = storage.chatSessionMeta.get(request.sessionId)?.workspaceId;
+  const sessionWorkspaceId = (await storage.chatSessionMeta.get(request.sessionId))?.workspaceId;
   if (sessionWorkspaceId !== workspaceId) {
     throw new Error("Attached-context snapshot workspace does not match the active Chat session.");
   }

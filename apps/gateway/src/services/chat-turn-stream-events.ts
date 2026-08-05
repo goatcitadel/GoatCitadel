@@ -40,7 +40,7 @@ export async function observeBeforeAssistantMessageWrite(
   });
 }
 
-export function enqueueAgentEndHook(
+export async function enqueueAgentEndHook(
   host: ChatTurnStreamEventHost,
   input: {
     workspaceId: string;
@@ -56,8 +56,8 @@ export function enqueueAgentEndHook(
     model?: string;
     approvalId?: string;
   },
-): void {
-  runtimeLifecycleHookDispatcher.enqueueObserveHook(host.hooksService, {
+): Promise<void> {
+  await runtimeLifecycleHookDispatcher.enqueueObserveHook(host.hooksService, {
     workspaceId: input.workspaceId,
     trigger: "agent_end",
     entityType: "chat_turn",

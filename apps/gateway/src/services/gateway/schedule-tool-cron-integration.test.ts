@@ -37,7 +37,7 @@ describe("schedule.manage cron integration (P1-F2)", () => {
         prompt: "Summarize overnight updates.",
       }),
       policyContext: creatorCtx,
-      existingJobs: service.listCronJobs(),
+      existingJobs: await service.listCronJobs(),
     });
     const created = await service.createCronJob({
       jobId: "morning-briefing-abc12345",
@@ -60,8 +60,7 @@ describe("schedule.manage cron integration (P1-F2)", () => {
     expect(created.nextRunAt).toBeTruthy();
 
     // --- list (creator-scoped) ---
-    const listed = service
-      .listCronJobs()
+    const listed = (await service.listCronJobs())
       .filter((job) => job.action === "agent_turn")
       .filter((job) => job.actionConfig?.agentTurn?.createdBy?.operatorId === "op-1")
       .map((job) => summarizeScheduleJob(job));
@@ -71,7 +70,7 @@ describe("schedule.manage cron integration (P1-F2)", () => {
     // --- cancel ---
     const cancelled = await service.deleteCronJob("morning-briefing-abc12345", created.revision);
     expect(cancelled).toEqual({ deleted: true, jobId: "morning-briefing-abc12345" });
-    expect(service.listCronJobs()).toHaveLength(0);
+    expect(await service.listCronJobs()).toHaveLength(0);
   });
 
   it("preserves creator provenance through the real action-config normalizer", async () => {

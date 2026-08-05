@@ -11,17 +11,17 @@ import {
   type SkillLifecycleRecord,
 } from "@goatcitadel/contracts";
 import type {
+  AsyncStorage,
   SkillAggregateRevisionRecord,
   SkillHubSnapshotArtifactRecord,
   SkillHubSnapshotRecord,
-  Storage,
 } from "@goatcitadel/storage";
 import { SkillHubOperatorService } from "./skill-hub-operator-service.js";
 
 let historicalApprovalSequence = 0;
 
 describe("SkillHubOperatorService", () => {
-  it("lists workspace snapshots before candidates and exposes honest bounds, drift, audit, permissions, and guards", () => {
+  it("lists workspace snapshots before candidates and exposes honest bounds, drift, audit, permissions, and guards", async () => {
     const review = snapshot({ snapshotId: "snapshot-review", createdAt: "2026-07-14T00:03:00.000Z" });
     const blocked = snapshot({
       snapshotId: "snapshot-blocked",
@@ -40,7 +40,7 @@ describe("SkillHubOperatorService", () => {
     });
     const harness = createHarness({ snapshots: [review, blocked, hiddenSentinel] });
 
-    const result = harness.service.list({ workspaceId: "workspace-1", limit: 2 });
+    const result = await harness.service.list({ workspaceId: "workspace-1", limit: 2 });
 
     expect(result.page).toEqual({
       limit: 2,
@@ -70,7 +70,7 @@ describe("SkillHubOperatorService", () => {
     expect(harness.storage.skillHubSnapshots.listByWorkspace).toHaveBeenCalledWith("workspace-1", 3);
   });
 
-  it("counts only materialized non-active candidates as inactive and keeps active policy-blocked versions distinct", () => {
+  it("counts only materialized non-active candidates as inactive and keeps active policy-blocked versions distinct", async () => {
     const current = snapshot({ snapshotId: "snapshot-v1" });
     const exact = candidateVersion({
       versionId: "version-v1",
@@ -78,7 +78,7 @@ describe("SkillHubOperatorService", () => {
       sourceFingerprint: current.contentTreeSha256,
     });
     const inactiveHarness = createHarness({ snapshots: [current], candidates: [exact] });
-    const inactive = inactiveHarness.service.list({ workspaceId: "workspace-1" });
+    const inactive = await inactiveHarness.service.list({ workspaceId: "workspace-1" });
     expect(inactive.summary.inactive).toBe(1);
     expect(inactive.items[0]?.runtime).toMatchObject({
       activeVersion: false,
@@ -91,7 +91,7 @@ describe("SkillHubOperatorService", () => {
       candidates: [exact],
       lifecycle: activeLifecycle(current),
     });
-    const active = activeHarness.service.list({ workspaceId: "workspace-1" });
+    const active = await activeHarness.service.list({ workspaceId: "workspace-1" });
     expect(active.summary.inactive).toBe(0);
     expect(active.items[0]?.runtime).toMatchObject({
       activeVersion: true,
@@ -231,7 +231,7 @@ describe("SkillHubOperatorService", () => {
     });
     const harness = createHarness({ snapshots: [v2Snapshot, v1Snapshot], candidates: [v1] });
 
-    const listed = harness.service.list({ workspaceId: "workspace-1" });
+    const listed = await harness.service.list({ workspaceId: "workspace-1" });
     const updateItem = listed.items.find((item) => item.snapshotId === "snapshot-v2")!;
     expect(updateItem.actions.stage_update_candidate).toEqual({
       allowed: false,
@@ -285,7 +285,7 @@ describe("SkillHubOperatorService", () => {
     expect(first.reused).toBe(false);
     expect(second.reused).toBe(true);
     expect(second.approval.approvalId).toBe(first.approval.approvalId);
-    expect(harness.createApproval).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(harness.createApproval).toHaveBeenCalledTimes(1));
   });
 
   it("does not reuse a forged idempotency prefix whose immutable intent fingerprint changed", async () => {
@@ -339,7 +339,7 @@ describe("SkillHubOperatorService", () => {
       actorId: "operator-1",
     });
 
-    expect(harness.createApproval).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(harness.createApproval).toHaveBeenCalledTimes(1));
     releaseCreate();
     const results = await Promise.all([firstPending, secondPending]);
 
@@ -378,7 +378,7 @@ describe("SkillHubOperatorService", () => {
       approvals: [malformedMissingIdentity, malformedOptionalRevision, impossibleOrphanedTurn],
     });
 
-    const listed = harness.service.list({ workspaceId: "workspace-1" });
+    const listed = await harness.service.list({ workspaceId: "workspace-1" });
     expect(listed.items[0]?.approvals).toEqual({});
 
     const created = await harness.service.createApproval({
@@ -464,23 +464,23 @@ function createHarness(input: {
     return returnedApproval;
   });
   const storage = {
-    approvals: { list: vi.fn(() => approvals) },
+    approvals: { list: vi.fn(async () => approvals) },
     candidateSkillVersions: {
-      list: vi.fn(() => candidates),
-      find: vi.fn((versionId: string) => candidates.find((candidate) => candidate.versionId === versionId)),
-      listByCandidateId: vi.fn((candidateId: string) =>
+      list: vi.fn(async () => candidates),
+      find: vi.fn(async (versionId: string) => candidates.find((candidate) => candidate.versionId === versionId)),
+      listByCandidateId: vi.fn(async (candidateId: string) =>
         candidates.filter((candidate) => candidate.candidateId === candidateId),
       ),
     },
     skillHubSnapshots: {
-      listByWorkspace: vi.fn((_workspaceId: string, limit: number) => input.snapshots.slice(0, limit)),
-      get: vi.fn((snapshotId: string) => {
+      listByWorkspace: vi.fn(async (_workspaceId: string, limit: number) => input.snapshots.slice(0, limit)),
+      get: vi.fn(async (snapshotId: string) => {
         const found = input.snapshots.find((item) => item.snapshotId === snapshotId);
         if (!found) throw new Error(`missing snapshot ${snapshotId}`);
         return found;
       }),
-      find: vi.fn((snapshotId: string) => input.snapshots.find((item) => item.snapshotId === snapshotId)),
-      findSameVersionByteDrift: vi.fn((query: { declaredVersion?: string; contentTreeSha256: string }) =>
+      find: vi.fn(async (snapshotId: string) => input.snapshots.find((item) => item.snapshotId === snapshotId)),
+      findSameVersionByteDrift: vi.fn(async (query: { declaredVersion?: string; contentTreeSha256: string }) =>
         input.snapshots.find(
           (item) =>
             item.declaredVersion === query.declaredVersion && item.contentTreeSha256 !== query.contentTreeSha256,
@@ -488,15 +488,15 @@ function createHarness(input: {
       ),
     },
     skillHubArtifacts: {
-      findBySnapshot: vi.fn((_workspaceId: string, snapshotId: string) => {
+      findBySnapshot: vi.fn(async (_workspaceId: string, snapshotId: string) => {
         const found = input.snapshots.find((item) => item.snapshotId === snapshotId);
         return found ? artifact(found) : undefined;
       }),
     },
-    skillHubOperations: { findSettlementByOperationId: vi.fn(() => undefined) },
-    skillLifecycle: { find: vi.fn(() => input.lifecycle) },
+    skillHubOperations: { findSettlementByOperationId: vi.fn(async () => undefined) },
+    skillLifecycle: { find: vi.fn(async () => input.lifecycle) },
     skillAggregateRevisions: {
-      get: vi.fn((kind: "candidate_skill" | "runtime_skill", aggregateId: string) => {
+      get: vi.fn(async (kind: "candidate_skill" | "runtime_skill", aggregateId: string) => {
         if (kind === "candidate_skill" && candidates.some((candidate) => candidate.candidateId === aggregateId)) {
           return revision("candidate_skill", aggregateId, 3);
         }
@@ -507,7 +507,7 @@ function createHarness(input: {
       }),
     },
   } as unknown as Pick<
-    Storage,
+    AsyncStorage,
     | "approvals"
     | "candidateSkillVersions"
     | "skillHubSnapshots"
@@ -519,7 +519,7 @@ function createHarness(input: {
   const service = new SkillHubOperatorService({
     storage,
     createApproval,
-    listInspectableCatalog: () => (input.catalogEntry ? [input.catalogEntry] : []),
+    listInspectableCatalog: async () => (input.catalogEntry ? [input.catalogEntry] : []),
     now: () => "2026-07-14T01:00:00.000Z",
   });
   return { service, storage, approvals, createApproval };

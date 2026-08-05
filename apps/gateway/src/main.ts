@@ -91,11 +91,17 @@ async function runGateway(): Promise<void> {
   };
 
   process.on("SIGINT", () => {
-    void shutdown("SIGINT");
+    void shutdown("SIGINT").catch((error: unknown) => {
+      app.log.error(error, "gateway SIGINT shutdown handler failed");
+      process.exitCode = 1;
+    });
   });
 
   process.on("SIGTERM", () => {
-    void shutdown("SIGTERM");
+    void shutdown("SIGTERM").catch((error: unknown) => {
+      app.log.error(error, "gateway SIGTERM shutdown handler failed");
+      process.exitCode = 1;
+    });
   });
 
   try {

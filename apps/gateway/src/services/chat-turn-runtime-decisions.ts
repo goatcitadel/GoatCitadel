@@ -15,7 +15,7 @@ import {
 } from "./chat-turn-prep-service.js";
 import { executionProfileFromNormalizationProfile } from "./chat-turn-execution-profile.js";
 
-export function recordPreparedTurnDecisions(
+export async function recordPreparedTurnDecisions(
   host: ChatTurnPrepHost,
   prepared: PreparedAgentChatTurn,
   input: {
@@ -24,7 +24,7 @@ export function recordPreparedTurnDecisions(
     guidanceFileCount: number;
     threadKnowledgeCitationCount: number;
   },
-): void {
+): Promise<void> {
   if (!host.recordRuntimeDecision) {
     return;
   }
@@ -32,7 +32,7 @@ export function recordPreparedTurnDecisions(
   const webMode = prepared.normalized.webMode ?? prepared.prefs.webMode;
   const memoryMode = prepared.normalized.memoryMode ?? prepared.prefs.memoryMode;
   const executionProfile = executionProfileFromNormalizationProfile(prepared.normalized.normalizationProfile);
-  safeRecordRuntimeDecision(host, {
+  await safeRecordRuntimeDecision(host, {
     kind: "chat_turn_prepared",
     scope: {
       citadelId: prepared.citadelId,
@@ -81,7 +81,7 @@ export function recordPreparedTurnDecisions(
     ],
     evidenceRefs: [{ refType: "turn", refId: prepared.turnId }],
   });
-  safeRecordRuntimeDecision(host, {
+  await safeRecordRuntimeDecision(host, {
     kind: "memory_context",
     scope: {
       citadelId: prepared.citadelId,
@@ -111,9 +111,12 @@ export function recordPreparedTurnDecisions(
   });
 }
 
-function safeRecordRuntimeDecision(host: ChatTurnPrepHost, input: RuntimeDecisionTraceAppendInput): void {
+async function safeRecordRuntimeDecision(
+  host: ChatTurnPrepHost,
+  input: RuntimeDecisionTraceAppendInput,
+): Promise<void> {
   try {
-    host.recordRuntimeDecision?.(input);
+    await host.recordRuntimeDecision?.(input);
   } catch {
     // Best-effort decision tracing is non-fatal and must not block turn preparation.
   }

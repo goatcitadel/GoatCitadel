@@ -645,7 +645,7 @@ describe("SkillImportService validation", () => {
         expect.objectContaining({ declaredTool: "custom.external", disposition: "unmapped" }),
       ]),
     );
-    expect(service.listHistory(1)[0]?.details).toMatchObject({
+    expect((await service.listHistory(1))[0]?.details).toMatchObject({
       provenance: expect.objectContaining({ sourceRef: skillDir, nonCallableUntilActivated: true }),
       scriptDisposition: expect.objectContaining({ action: "blocked_until_activation" }),
     });
@@ -690,7 +690,7 @@ describe("SkillImportService validation", () => {
     });
     expect(result.candidate.compatibility).toEqual(result.compatibility);
     expect(result.warnings).toEqual(expect.arrayContaining(result.compatibility?.warnings ?? []));
-    expect(service.listHistory(1)[0]?.details).toMatchObject({
+    expect((await service.listHistory(1))[0]?.details).toMatchObject({
       compatibility: expect.objectContaining({
         callability: "review_only",
         sources: expect.arrayContaining(["agent_skills", "agents_md"]),
@@ -981,7 +981,7 @@ describe("SkillImportService validation", () => {
         }),
       }),
     });
-    expect(service.listHistory(1)[0]).toMatchObject({
+    expect((await service.listHistory(1))[0]).toMatchObject({
       action: "install",
       outcome: "accepted",
       details: expect.objectContaining({ disposition: "redirected_to_skill_hub" }),
@@ -1069,7 +1069,7 @@ describe("SkillImportService validation", () => {
 
     expect(copySpy).not.toHaveBeenCalled();
     expect(fs.existsSync(path.join(rootDir, "skills", "extra", "oversized-local-skill"))).toBe(false);
-    expect(service.listHistory(1)[0]).toMatchObject({
+    expect((await service.listHistory(1))[0]).toMatchObject({
       action: "install",
       outcome: "failed",
       details: { error: expect.stringContaining("exceeds") },
@@ -1105,7 +1105,7 @@ describe("SkillImportService validation", () => {
       }),
     ).rejects.toThrow(/High-risk skill import requires explicit confirmation/);
 
-    expect(service.listHistory(5)).toEqual([
+    expect(await service.listHistory(5)).toEqual([
       expect.objectContaining({
         action: "install",
         outcome: "failed",

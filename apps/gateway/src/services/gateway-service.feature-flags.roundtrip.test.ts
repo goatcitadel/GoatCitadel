@@ -71,15 +71,15 @@ function createFlagHarness(input: { configFeatures: FeatureFlagsConfig; stored?:
 }
 
 describe("GatewayService feature-flag round-trip", () => {
-  it("carries every FeatureFlagsConfig key through readFeatureFlags", () => {
+  it("carries every FeatureFlagsConfig key through readFeatureFlags", async () => {
     const harness = createFlagHarness({ configFeatures: { ...ALL_FLAGS_SET } });
-    const flags = GatewayService.prototype.readFeatureFlags.call(harness as never);
+    const flags = await GatewayService.prototype.readFeatureFlags.call(harness as never);
     for (const key of Object.keys(ALL_FLAGS_SET) as Array<keyof FeatureFlagsConfig>) {
       expect(flags[key], `readFeatureFlags dropped ${key}`).toBe(true);
     }
   });
 
-  it("prefers stored values for the round-3 kill switches", () => {
+  it("prefers stored values for the round-3 kill switches", async () => {
     const harness = createFlagHarness({
       configFeatures: {
         ...ALL_FLAGS_SET,
@@ -97,7 +97,7 @@ describe("GatewayService feature-flag round-trip", () => {
         subagentFanoutV1Disabled: true,
       },
     });
-    const flags = GatewayService.prototype.readFeatureFlags.call(harness as never);
+    const flags = await GatewayService.prototype.readFeatureFlags.call(harness as never);
     expect(flags.plannerFastPathV1Disabled).toBe(true);
     expect(flags.parallelToolExecutionV1Disabled).toBe(true);
     expect(flags.streamIdleWatchdogV1Disabled).toBe(true);
@@ -105,26 +105,26 @@ describe("GatewayService feature-flag round-trip", () => {
     expect(flags.subagentFanoutV1Disabled).toBe(true);
   });
 
-  it("persists the round-3 kill switches through updateFeatureFlags without wiping them", () => {
+  it("persists the round-3 kill switches through updateFeatureFlags without wiping them", async () => {
     const harness = createFlagHarness({ configFeatures: { ...ALL_FLAGS_SET, autonomyV1Disabled: false } });
-    const next = GatewayService.prototype.updateFeatureFlags.call(harness as never, {
+    const next = await GatewayService.prototype.updateFeatureFlags.call(harness as never, {
       streamIdleWatchdogV1Disabled: true,
     });
     expect(next.streamIdleWatchdogV1Disabled).toBe(true);
     // A later unrelated update must not wipe the previously-stored value.
-    const after = GatewayService.prototype.updateFeatureFlags.call(harness as never, {
+    const after = await GatewayService.prototype.updateFeatureFlags.call(harness as never, {
       autonomyV1Disabled: true,
     });
     expect(after.streamIdleWatchdogV1Disabled).toBe(true);
     expect(after.plannerFastPathV1Disabled).toBe(true);
   });
 
-  it("reconciles a deprecated Signal inbound flag change through the outbound-only diagnostic facade", () => {
+  it("reconciles a deprecated Signal inbound flag change through the outbound-only diagnostic facade", async () => {
     const harness = createFlagHarness({
       configFeatures: { ...ALL_FLAGS_SET, signalInboundV1Enabled: false },
     });
 
-    const next = GatewayService.prototype.updateFeatureFlags.call(harness as never, {
+    const next = await GatewayService.prototype.updateFeatureFlags.call(harness as never, {
       signalInboundV1Enabled: true,
     });
 
@@ -132,7 +132,7 @@ describe("GatewayService feature-flag round-trip", () => {
     expect(harness.syncSignalLegacySettings).toHaveBeenCalledTimes(1);
   });
 
-  it("memoizes resolved flags within the TTL: one settings read across many reads (Finding 6)", () => {
+  it("memoizes resolved flags within the TTL: one settings read across many reads (Finding 6)", async () => {
     const get = vi.fn(() => ({ value: {} as Partial<FeatureFlagsConfig> }));
     const harness = {
       storage: { systemSettings: { get } },
@@ -141,7 +141,7 @@ describe("GatewayService feature-flag round-trip", () => {
       featureFlagsCacheAtMs: 0,
     };
     for (let i = 0; i < 10; i += 1) {
-      GatewayService.prototype.readFeatureFlags.call(harness as never);
+      await GatewayService.prototype.readFeatureFlags.call(harness as never);
     }
     expect(get).toHaveBeenCalledTimes(1);
   });

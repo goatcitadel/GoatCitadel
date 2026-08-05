@@ -252,14 +252,10 @@ describe("improvement lifecycle apply error and adapter", () => {
     expect(error.message).toMatch(/drifted from the exact reviewed material/u);
   });
 
-  it("refuses a non-transactional SQL host", () => {
-    expect(() =>
-      createImprovementLifecycleOperationRepository({
-        dialect: "sqlite",
-        prepare: () => {
-          throw new Error("unused");
-        },
-      }),
-    ).toThrow(/transactional gateway storage/u);
+  it("uses the canonical Promise-native storage repository", () => {
+    const improvementLifecycleOperations = {} as never;
+    expect(createImprovementLifecycleOperationRepository({ improvementLifecycleOperations })).toBe(
+      improvementLifecycleOperations,
+    );
   });
 });

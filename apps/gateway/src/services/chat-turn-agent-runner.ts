@@ -69,11 +69,17 @@ import {
   verifyChatTurnCapabilityProfile,
   verifyChatTurnCapabilitySkillBindings,
   verifyCapabilityCatalogEntryUniqueness,
-  type Storage,
+  type AsyncStorage as Storage,
 } from "@goatcitadel/storage";
 import type { SystemHeartbeatTurnPrepPosture } from "./chat-turn-prep-service.js";
 import type { MeshCapabilityInvocationDispatchOutcome } from "./mesh-capability-invocation-service.js";
-import { EXPLICIT_WEB_PHRASES, hasLiveDataIntent, hasResearchListIntent } from "../orchestration/live-data-detect.js";
+import {
+  EXPLICIT_WEB_PHRASES,
+  extractExternalResearchSubject,
+  hasExternalResearchIntent,
+  hasLiveDataIntent,
+  hasResearchListIntent,
+} from "../orchestration/live-data-detect.js";
 import type { McpBrowserFallbackTarget } from "./mcp-runtime.js";
 import {
   buildMcpRequesterScopedTurnContextFromCapabilityProfile,
@@ -163,9 +169,9 @@ import {
 import { repairToolCalls, type ToolCallRepairFeedback } from "./chat-agent-tool-call-repair.js";
 import {
   IMPROVEMENT_TUNE_DEFAULTS,
-  readBlockerTemplateStrictness,
-  readRetryRepairThreshold,
+  IMPROVEMENT_TUNE_SETTING_KEYS,
   resolveBlockerTemplateStrictness,
+  resolveRetryRepairThreshold,
   shouldAttemptIncompleteCompletionRepair,
   shouldUseStrictBlockerTemplate,
 } from "./improvement-tune-reads.js";
@@ -551,7 +557,7 @@ export interface ChatTurnAgentRunnerInput {
   modelRouter?: ChatTurnTraceRecord["routing"]["modelRouter"];
   runVariableEvidence?: import("@goatcitadel/contracts").RunVariableEvidence;
   signal?: AbortSignal;
-  canonicalWriteFence?: <T>(work: () => T) => T;
+  canonicalWriteFence?: <T>(work: () => T | Promise<T>) => Promise<Awaited<T>>;
   /** Server-authored immutable upper bound for this governed turn. */
   capabilityProfile?: ChatTurnCapabilityProfileRecord;
   /** Exact validated server-only posture for a storage-admitted heartbeat occurrence. */
@@ -616,16 +622,16 @@ export function estimateFirstProviderRequestInputTokens(request: ChatCompletionR
   return Math.max(1, estimateTokensFromText(serialized) + structuralOverhead);
 }
 
-function toolSchemaFromCapabilityProfile(
+async function toolSchemaFromCapabilityProfile(
   input: ChatTurnAgentRunnerInput,
   profile: ChatTurnCapabilityProfileRecord,
   storage: Pick<Storage, "capabilityCatalogSnapshots" | "skillLifecycle">,
   liveCallableEntries?: CapabilityCatalogEntry[],
-): ResolvedChatTurnToolSchema {
+): Promise<ResolvedChatTurnToolSchema> {
   verifyChatTurnCapabilityProfile(profile);
-  const persistedCatalog = storage.capabilityCatalogSnapshots.get(profile.catalog.snapshotId);
+  const persistedCatalog = await storage.capabilityCatalogSnapshots.get(profile.catalog.snapshotId);
   verifyChatTurnCapabilityCatalogBinding(profile, persistedCatalog);
-  verifyChatTurnCapabilitySkillBindings(profile, storage.skillLifecycle.list());
+  verifyChatTurnCapabilitySkillBindings(profile, await storage.skillLifecycle.list());
   verifyCurrentCallableCatalogDoesNotNarrowProfile(profile, persistedCatalog, liveCallableEntries);
   if (profile.identity.sessionId !== input.sessionId || profile.identity.turnId !== input.turnId) {
     throw new Error("Capability profile identity does not match the executing Chat turn.");
@@ -756,7 +762,7 @@ export interface ChatTurnAgentRunnerDeps {
   storage: Storage;
   listToolCatalog: () => ToolCatalogEntry[];
   /** Live callable catalog used only to enforce stricter removals or drift. */
-  listCapabilityCatalog?: (scope: "callable") => CapabilityCatalogEntry[];
+  listCapabilityCatalog?: (scope: "callable") => Promise<CapabilityCatalogEntry[]>;
   createChatCompletion: (
     request: ChatCompletionRequest,
     attribution?: ModelUsageAttributionContext,
@@ -764,12 +770,15 @@ export interface ChatTurnAgentRunnerDeps {
   createChatCompletionStream?: (
     request: ChatCompletionRequest,
     attribution?: ModelUsageAttributionContext,
-  ) => AsyncGenerator<Record<string, unknown>>;
+  ) => Promise<AsyncGenerator<Record<string, unknown>>>;
   generateImage?: (
     request: ImageGenerationRequest,
     attribution?: ModelUsageAttributionContext,
   ) => Promise<ImageGenerationResponse>;
-  invokeTool: (request: ToolInvokeRequest, options?: { executionFence?: () => void }) => Promise<ToolInvokeResult>;
+  invokeTool: (
+    request: ToolInvokeRequest,
+    options?: { executionFence?: () => Promise<void> },
+  ) => Promise<ToolInvokeResult>;
   /**
    * Explicit capability seam for process-local effect correlation. Older
    * hosts and narrow test doubles may implement only `invokeTool`; in that
@@ -779,20 +788,20 @@ export interface ChatTurnAgentRunnerDeps {
   invokeToolWithEffectTruth?: (
     request: ToolInvokeRequest,
     options: {
-      executionFence: () => void;
-      auxiliaryEffectFence: () => void;
+      executionFence: () => Promise<void>;
+      auxiliaryEffectFence: () => Promise<void>;
       effectContext: ToolEffectInvocationContext;
       effectPotential: ToolEffectPotentialRecord;
       toolCallBeforeHookInterposition?: ToolCallBeforeHookInterpositionBinding;
       toolRuntimeOwner?: ChatTurnCapabilityToolRuntimeOwnerBinding;
-      onEffectPotentialEscalated: (potential: ToolEffectPotentialRecord) => void;
+      onEffectPotentialEscalated: (potential: ToolEffectPotentialRecord) => Promise<void>;
       onEffectReceipt: (receipt: ToolEffectReceiptEnvelope) => void;
     },
   ) => Promise<ToolInvokeResult>;
   invokeMcpTool?: (
     request: McpInvokeRequest,
     options?: {
-      executionFence?: () => void;
+      executionFence?: () => Promise<void>;
       /**
        * HX-415 app-private branded turn context. The runner originates it from
        * the frozen capability-profile record it already holds for the turn;
@@ -802,9 +811,9 @@ export interface ChatTurnAgentRunnerDeps {
       mcpRequesterTurnContext?: McpRequesterScopedTurnContextHandle;
     },
   ) => Promise<McpInvokeResponse>;
-  listMcpBrowserFallbackTargets?: () => McpBrowserFallbackTarget[];
+  listMcpBrowserFallbackTargets?: () => Promise<McpBrowserFallbackTarget[]>;
   /** Canonical operator decision projection for ordinary Chat tool runs. */
-  recordRuntimeDecision?: (input: RuntimeDecisionTraceAppendInput) => void;
+  recordRuntimeDecision?: (input: RuntimeDecisionTraceAppendInput) => Promise<void>;
   persistToolArtifact?: (input: {
     sessionId: string;
     turnId: string;
@@ -814,7 +823,7 @@ export interface ChatTurnAgentRunnerDeps {
     contentType?: string;
     snippet?: string;
     createdAt?: string;
-    canonicalWriteFence?: <T>(work: () => T) => T;
+    canonicalWriteFence?: <T>(work: () => T | Promise<T>) => Promise<Awaited<T>>;
   }) => Promise<{
     artifactId: string;
     storageRelPath: string;
@@ -833,12 +842,12 @@ export interface ChatTurnAgentRunnerDeps {
     localOperatorOverrideId?: string;
     surface?: ToolPolicyActorContext["surface"];
     policyContext?: ToolPolicyActorContext;
-  }) => {
+  }) => Promise<{
     allowed: boolean;
     requiresApproval: boolean;
     reasonCodes: string[];
     matchedGrantId?: string;
-  };
+  }>;
   /**
    * HX-408 M2 pre-dispatch drift gate for mesh-published callables. The
    * gateway composition re-verifies the frozen `meshPublication` snapshot
@@ -852,7 +861,7 @@ export interface ChatTurnAgentRunnerDeps {
   resolveMeshCapabilityPreDispatchBlock?: (input: {
     workspaceId: string;
     binding: ChatTurnCapabilityToolMeshPublicationBinding;
-  }) => "mesh_capability_binding_drift" | "mesh_capability_dispatch_unready";
+  }) => Promise<"mesh_capability_binding_drift" | "mesh_capability_dispatch_unready">;
   /**
    * HX-408 M3: the generation-fenced mesh dispatch runtime. Composed by the
    * gateway to `MeshCapabilityInvocationService.dispatch`. The runner routes
@@ -873,7 +882,7 @@ export interface ChatTurnAgentRunnerDeps {
       runId?: string;
       executionProfileSha256: string;
     },
-    options: { executionFence: () => void; signal?: AbortSignal },
+    options: { executionFence: () => Promise<void>; signal?: AbortSignal },
   ) => Promise<MeshCapabilityInvocationDispatchOutcome>;
   toolLoopDetection?: ToolLoopDetectionConfig;
   safeWriteFallbackDir?: string;
@@ -885,15 +894,15 @@ export interface ChatTurnAgentRunnerDeps {
    * (default) ⇒ this orchestrator never constructs a `thinking_delta` chunk —
    * byte-identical behavior to today.
    */
-  chatThinkingStreamV1Enabled?: () => boolean;
+  chatThinkingStreamV1Enabled?: () => Promise<boolean>;
   /**
    * Round-3 parallel tool-batch kill switch (`parallelToolExecutionV1Disabled`).
    * Read live like the thinking gate above. Absent or returning false (default)
    * ⇒ all-read-only multi-call batches may pre-execute concurrently; returning
    * true forces the historical strictly-serial path.
    */
-  parallelToolExecutionV1Disabled?: () => boolean;
-  attachedContextToolsV1Enabled?: () => boolean;
+  parallelToolExecutionV1Disabled?: () => Promise<boolean>;
+  attachedContextToolsV1Enabled?: () => Promise<boolean>;
   /**
    * R3-8 `agent.fanout` kill switch (`subagentFanoutV1Disabled`). Read live
    * like the gates above. Absent or returning false (default) ⇒ the spawn tool
@@ -902,9 +911,9 @@ export interface ChatTurnAgentRunnerDeps {
    * turn's tool schema (the policy-engine runtime hook fails closed as well, so
    * an in-flight call cannot slip through a mid-turn flag flip).
    */
-  subagentFanoutV1Disabled?: () => boolean;
+  subagentFanoutV1Disabled?: () => Promise<boolean>;
   /** Default-off delegated result/scope-expansion envelope exposure gate. */
-  delegationScopeExpansionV1Enabled?: () => boolean;
+  delegationScopeExpansionV1Enabled?: () => Promise<boolean>;
   /** Override only for deterministic liveness tests; production defaults to 5 seconds. */
   toolActivityHeartbeatMs?: number;
 }
@@ -990,7 +999,7 @@ export class ChatTurnAgentRunner {
       invokeMcpTool: deps.invokeMcpTool,
       listMcpBrowserFallbackTargets: deps.listMcpBrowserFallbackTargets,
       buildPolicyContext: buildTurnToolPolicyContext,
-      listPriorToolRuns: (turnId) => deps.storage.chatToolRuns.listByTurn(turnId),
+      listPriorToolRuns: async (turnId) => await deps.storage.chatToolRuns.listByTurn(turnId),
       selectRecentBrowserResultUrls,
     };
   }
@@ -1039,13 +1048,13 @@ export class ChatTurnAgentRunner {
         policyDecisions: [],
       };
     }
-    return this.buildToolSchema(input, intents);
+    return await this.buildToolSchema(input, intents);
   }
 
-  private filterSystemHeartbeatCapabilityToolSchema(
+  private async filterSystemHeartbeatCapabilityToolSchema(
     input: ChatTurnAgentRunnerInput,
     schema: ResolvedChatTurnToolSchema,
-  ): ResolvedChatTurnToolSchema {
+  ): Promise<ResolvedChatTurnToolSchema> {
     if (!isExactSystemHeartbeatRunnerPosture(input)) {
       return schema;
     }
@@ -1062,7 +1071,7 @@ export class ChatTurnAgentRunner {
         continue;
       }
       try {
-        const access = this.deps.evaluateToolAccess({
+        const access = await this.deps.evaluateToolAccess({
           toolName: canonicalName,
           sessionId: input.sessionId,
           agentId: "assistant",
@@ -1110,16 +1119,16 @@ export class ChatTurnAgentRunner {
     };
   }
 
-  private filterRoutedContextCapabilityToolSchema(
+  private async filterRoutedContextCapabilityToolSchema(
     input: ChatTurnAgentRunnerInput,
     schema: ResolvedChatTurnToolSchema,
-  ): ResolvedChatTurnToolSchema {
+  ): Promise<ResolvedChatTurnToolSchema> {
     const contextToolNames = new Set<string>(CHAT_ROUTED_CONTEXT_TOOL_NAMES);
     const binding = input.serverContextUsageAttribution;
-    let available = this.deps.attachedContextToolsV1Enabled?.() === true && Boolean(binding);
+    let available = (await this.deps.attachedContextToolsV1Enabled?.()) === true && Boolean(binding);
     if (available && binding) {
-      const snapshot = this.deps.storage.routedContextSnapshots.findByTurn(input.turnId);
-      const workspaceId = this.deps.storage.chatSessionMeta.get(input.sessionId)?.workspaceId;
+      const snapshot = await this.deps.storage.routedContextSnapshots.findByTurn(input.turnId);
+      const workspaceId = (await this.deps.storage.chatSessionMeta.get(input.sessionId))?.workspaceId;
       available = Boolean(
         snapshot &&
         workspaceId &&
@@ -1154,15 +1163,18 @@ export class ChatTurnAgentRunner {
     };
   }
 
-  private runCanonicalWrite<T>(input: Pick<ChatTurnAgentRunnerInput, "canonicalWriteFence">, work: () => T): T {
-    return input.canonicalWriteFence ? input.canonicalWriteFence(work) : work();
+  private async runCanonicalWrite<T>(
+    input: Pick<ChatTurnAgentRunnerInput, "canonicalWriteFence">,
+    work: () => T | Promise<T>,
+  ): Promise<Awaited<T>> {
+    return input.canonicalWriteFence ? await input.canonicalWriteFence(work) : await work();
   }
 
-  private assertExternalDispatch(input: Pick<ChatTurnAgentRunnerInput, "canonicalWriteFence">): void {
-    this.runCanonicalWrite(input, () => undefined);
+  private async assertExternalDispatch(input: Pick<ChatTurnAgentRunnerInput, "canonicalWriteFence">): Promise<void> {
+    await this.runCanonicalWrite(input, () => undefined);
   }
 
-  private invokeTurnTool(
+  private async invokeTurnTool(
     turnInput: ChatTurnAgentRunnerInput,
     request: ToolInvokeRequest,
     effectOptions?: {
@@ -1170,15 +1182,15 @@ export class ChatTurnAgentRunner {
       effectPotential: ToolEffectPotentialRecord;
       toolCallBeforeHookInterposition?: ToolCallBeforeHookInterpositionBinding;
       toolRuntimeOwner?: ChatTurnCapabilityToolRuntimeOwnerBinding;
-      onEffectPotentialEscalated: (potential: ToolEffectPotentialRecord) => void;
+      onEffectPotentialEscalated: (potential: ToolEffectPotentialRecord) => Promise<void>;
       onEffectReceipt: (receipt: ToolEffectReceiptEnvelope) => void;
-      onExecutorDispatch: () => void;
-      onAuxiliaryEffectDispatch: () => void;
+      onExecutorDispatch: () => Promise<void>;
+      onAuxiliaryEffectDispatch: () => Promise<void>;
     },
   ): Promise<ToolInvokeResult> {
     if (effectOptions && this.deps.invokeToolWithEffectTruth) {
-      const executionFence = (): void => {
-        effectOptions.onExecutorDispatch();
+      const executionFence = async (): Promise<void> => {
+        await effectOptions.onExecutorDispatch();
       };
       return this.deps.invokeToolWithEffectTruth(request, {
         executionFence,
@@ -1196,19 +1208,19 @@ export class ChatTurnAgentRunner {
       // begins or that the frozen built-in owner still executes. Escalate even
       // a planned safe read, then cross the conservative boundary before the
       // opaque call; its return status is never pre-dispatch evidence.
-      effectOptions.onEffectPotentialEscalated({
+      await effectOptions.onEffectPotentialEscalated({
         version: TOOL_EFFECT_CLASSIFICATION_VERSION,
         potential: "unknown",
         sourceKind: "unknown",
         reason: "descriptor_incomplete_or_untrusted",
       });
-      effectOptions.onExecutorDispatch();
+      await effectOptions.onExecutorDispatch();
     }
     if (!turnInput.canonicalWriteFence) {
       return this.deps.invokeTool(request);
     }
-    const executionFence = (): void => {
-      this.runCanonicalWrite(turnInput, () => undefined);
+    const executionFence = async (): Promise<void> => {
+      await this.runCanonicalWrite(turnInput, () => undefined);
     };
     return this.deps.invokeTool(request, { executionFence });
   }
@@ -1227,32 +1239,37 @@ export class ChatTurnAgentRunner {
     return profile ? buildMcpRequesterScopedTurnContextFromCapabilityProfile(profile) : undefined;
   }
 
-  private patchTurnTrace(
+  private async patchTurnTrace(
     input: Pick<ChatTurnAgentRunnerInput, "canonicalWriteFence">,
     turnId: string,
     patch: Parameters<Storage["chatTurnTraces"]["patch"]>[1],
-  ): ChatTurnTraceRecord {
-    return this.runCanonicalWrite(input, () =>
-      this.deps.storage.chatTurnTraces.patch(
-        turnId,
-        preserveRoutedContextTraceBinding(this.deps.storage, turnId, patch),
-      ),
+  ): Promise<ChatTurnTraceRecord> {
+    return await this.runCanonicalWrite(
+      input,
+      async () =>
+        await this.deps.storage.chatTurnTraces.patch(
+          turnId,
+          await preserveRoutedContextTraceBinding(this.deps.storage, turnId, patch),
+        ),
     );
   }
 
-  private createToolRun(
+  private async createToolRun(
     input: Pick<ChatTurnAgentRunnerInput, "canonicalWriteFence">,
     record: Parameters<Storage["chatToolRuns"]["create"]>[0],
-  ): ChatToolRunRecord {
-    return this.runCanonicalWrite(input, () => this.deps.storage.chatToolRuns.create(record));
+  ): Promise<ChatToolRunRecord> {
+    return await this.runCanonicalWrite(input, async () => await this.deps.storage.chatToolRuns.create(record));
   }
 
-  private patchToolRun(
+  private async patchToolRun(
     input: Pick<ChatTurnAgentRunnerInput, "canonicalWriteFence">,
     toolRunId: string,
     patch: Parameters<Storage["chatToolRuns"]["patch"]>[1],
-  ): ChatToolRunRecord {
-    return this.runCanonicalWrite(input, () => this.deps.storage.chatToolRuns.patch(toolRunId, patch));
+  ): Promise<ChatToolRunRecord> {
+    return await this.runCanonicalWrite(
+      input,
+      async () => await this.deps.storage.chatToolRuns.patch(toolRunId, patch),
+    );
   }
 
   private resolveToolEffectPotential(input: ChatTurnAgentRunnerInput, toolName: string): ToolEffectPotentialRecord {
@@ -1263,11 +1280,11 @@ export class ChatTurnAgentRunner {
     });
   }
 
-  private resolveToolEffectScope(input: ChatTurnAgentRunnerInput, turnId: string): ToolEffectScope {
+  private async resolveToolEffectScope(input: ChatTurnAgentRunnerInput, turnId: string): Promise<ToolEffectScope> {
     let workspaceId = input.capabilityProfile?.identity.workspaceId;
     if (!workspaceId) {
       try {
-        workspaceId = this.deps.storage.chatSessionMeta?.get(input.sessionId)?.workspaceId;
+        workspaceId = (await this.deps.storage.chatSessionMeta?.get(input.sessionId))?.workspaceId;
       } catch {
         workspaceId = undefined;
       }
@@ -1313,12 +1330,12 @@ export class ChatTurnAgentRunner {
     };
   }
 
-  private upsertInlineApproval(
+  private async upsertInlineApproval(
     input: Pick<ChatTurnAgentRunnerInput, "canonicalWriteFence">,
     record: Parameters<Storage["chatInlineApprovals"]["upsert"]>[0],
-  ): void {
-    this.runCanonicalWrite(input, () => {
-      this.deps.storage.chatInlineApprovals.upsert(record);
+  ): Promise<void> {
+    return await this.runCanonicalWrite(input, async () => {
+      await this.deps.storage.chatInlineApprovals.upsert(record);
     });
   }
 
@@ -1328,16 +1345,19 @@ export class ChatTurnAgentRunner {
    * the blocked-tool sites so a raised level produces more specific blocker
    * explanations. Safe default (1) keeps the historical text.
    */
-  private readBlockerStrictness(): number {
-    return readBlockerTemplateStrictness(this.deps.storage.systemSettings);
+  private async readBlockerStrictness(): Promise<number> {
+    const stored = await this.deps.storage.systemSettings.get<unknown>(IMPROVEMENT_TUNE_SETTING_KEYS.blockerTemplate);
+    return resolveBlockerTemplateStrictness(
+      typeof stored?.value === "number" ? stored.value : IMPROVEMENT_TUNE_DEFAULTS.blockerTemplate,
+    );
   }
 
-  private recordLocalBusinessResearchEvidenceRun(input: {
+  private async recordLocalBusinessResearchEvidenceRun(input: {
     turnInput: ChatTurnAgentRunnerInput;
     assistantContent: string;
     citations: ChatCitationRecord[];
     toolRuns: ChatToolRunRecord[];
-  }): void {
+  }): Promise<void> {
     if (input.turnInput.mode !== "cowork" || !buildLocalBusinessResearchPlan(input.turnInput.content)) {
       return;
     }
@@ -1350,7 +1370,7 @@ export class ChatTurnAgentRunner {
       return;
     }
     const now = new Date().toISOString();
-    const record = this.createToolRun(input.turnInput, {
+    const record = await this.createToolRun(input.turnInput, {
       toolRunId: randomUUID(),
       turnId: input.turnInput.turnId,
       sessionId: input.turnInput.sessionId,
@@ -1376,7 +1396,7 @@ export class ChatTurnAgentRunner {
 
   public async run(input: ChatTurnAgentRunnerInput): Promise<ChatTurnAgentRunnerResult> {
     const events: ChatStreamChunkDraft[] = [];
-    for await (const chunk of this.runStream(input)) {
+    for await (const chunk of await this.runStream(input)) {
       if (chunk.type !== "tool_activity") {
         events.push(chunk);
       }
@@ -1414,11 +1434,10 @@ export class ChatTurnAgentRunner {
     const innerSignal = input.signal
       ? AbortSignal.any([input.signal, wrapperAbortController.signal])
       : wrapperAbortController.signal;
-    const stream = this.runStreamInternal({ ...input, signal: innerSignal });
+    const stream = await this.runStreamInternal({ ...input, signal: innerSignal });
     const heartbeatMs = normalizeToolActivityHeartbeatMs(this.deps.toolActivityHeartbeatMs);
     const preexistingStartedToolRunIds = new Set(
-      this.deps.storage.chatToolRuns
-        .listByTurn(input.turnId)
+      (await this.deps.storage.chatToolRuns.listByTurn(input.turnId))
         .filter((toolRun) => toolRun.status === "started")
         .map((toolRun) => toolRun.toolRunId),
     );
@@ -1433,9 +1452,9 @@ export class ChatTurnAgentRunner {
         const outcome = await pendingStep.wait(probeImmediately ? 0 : heartbeatMs, input.signal);
         if (outcome.kind === "tick") {
           probeImmediately = false;
-          const activeToolRuns = this.deps.storage.chatToolRuns
-            .listByTurn(input.turnId)
-            .filter((toolRun) => toolRun.status === "started" && !preexistingStartedToolRunIds.has(toolRun.toolRunId));
+          const activeToolRuns = (await this.deps.storage.chatToolRuns.listByTurn(input.turnId)).filter(
+            (toolRun) => toolRun.status === "started" && !preexistingStartedToolRunIds.has(toolRun.toolRunId),
+          );
           const activityAtMs = Date.now();
           for (const toolRun of activeToolRuns) {
             if (!announcedToolRunIds.has(toolRun.toolRunId)) {
@@ -1486,9 +1505,9 @@ export class ChatTurnAgentRunner {
       // the inner return here would also strand the wrapper and its consumer.
       // When there is no pending step, await cleanup so canonical accounting
       // faults from provider-stream return cannot be silently discarded.
-      const hasActiveOwnedToolRun = this.deps.storage.chatToolRuns
-        .listByTurn(input.turnId)
-        .some((toolRun) => toolRun.status === "started" && !preexistingStartedToolRunIds.has(toolRun.toolRunId));
+      const hasActiveOwnedToolRun = (await this.deps.storage.chatToolRuns.listByTurn(input.turnId)).some(
+        (toolRun) => toolRun.status === "started" && !preexistingStartedToolRunIds.has(toolRun.toolRunId),
+      );
       wrapperAbortController.abort(createAbortError("Chat stream consumer closed"));
       const cleanup = stream.return(undefined);
       if (!pendingStep) {
@@ -1610,36 +1629,64 @@ export class ChatTurnAgentRunner {
         detectDocumentArtifactIntent(input.content),
       missingLogPayload: detectMissingLogPayloadIntent(input.content),
     };
+    const executionBudget = resolveChatExecutionBudget({
+      mode: input.mode,
+      webMode: input.webMode,
+      thinkingLevel: input.thinkingLevel,
+      liveDataIntent: intents.webLookup,
+      researchListIntent: intents.researchList,
+      artifactIntent: intents.presentationArtifact || intents.documentArtifact,
+      promptLabExplicitTools: promptLabContract.explicitTools,
+      // Profile-only: pasted contract text in live chat must not double the
+      // turn budget the UI's responsiveness expectations are sized to.
+      promptLabHarness: normalizationProfile === "prompt_pack_harness",
+      providerId: input.providerId,
+      model: input.model,
+      executionProfile,
+    });
+    const executionBudgetTrace = {
+      profile: executionBudget.profile ?? "default",
+      ...(executionBudget.promotionReason ? { promotionReason: executionBudget.promotionReason } : {}),
+      turnBudgetMs: executionBudget.turnBudgetMs,
+      completionTimeoutMs: executionBudget.completionTimeoutMs,
+      maxToolLoops: executionBudget.maxToolLoops,
+      maxToolRunsPerTurn: executionBudget.maxToolRunsPerTurn,
+      searchMaxResults: executionBudget.searchMaxResults,
+      ...(executionBudget.maxTokens !== undefined ? { maxTokens: executionBudget.maxTokens } : {}),
+    } as const;
     const loopGuardState = initializeToolLoopGuardState(this.deps.toolLoopDetection);
-    const trace = this.runCanonicalWrite(input, () =>
-      createOrRefreshAgentStreamTrace(this.deps.storage, {
-        turnId: input.turnId,
-        sessionId: input.sessionId,
-        userMessageId: input.userMessageId,
-        parentTurnId: input.parentTurnId,
-        branchKind: input.branchKind ?? "append",
-        sourceTurnId: input.sourceTurnId,
-        status: "running",
-        mode: input.mode,
-        model: input.model,
-        webMode: input.webMode,
-        memoryMode: input.memoryMode,
-        thinkingLevel: input.thinkingLevel,
-        speedMode: input.speedMode ?? "standard",
-        subagentPolicy: input.subagentPolicy ?? "ask_when_useful",
-        effectiveToolAutonomy: input.toolAutonomy,
-        capabilitySnapshotId: input.capabilityProfile?.catalog.snapshotId,
-        capabilityProfileId: input.capabilityProfile?.profileId,
-        capabilityProfileHash: input.capabilityProfile?.hashes.profileHash,
-        routing: {
-          executionProfile,
-          liveDataIntent: intents.liveData,
-          ...(input.modelRouter ? { modelRouter: input.modelRouter } : {}),
-          ...(input.runVariableEvidence ? { runVariables: input.runVariableEvidence } : {}),
-        },
-        loopGuard: createLoopGuardTrace(loopGuardState),
-        startedAt: now,
-      }),
+    const trace = await this.runCanonicalWrite(
+      input,
+      async () =>
+        await createOrRefreshAgentStreamTrace(this.deps.storage, {
+          turnId: input.turnId,
+          sessionId: input.sessionId,
+          userMessageId: input.userMessageId,
+          parentTurnId: input.parentTurnId,
+          branchKind: input.branchKind ?? "append",
+          sourceTurnId: input.sourceTurnId,
+          status: "running",
+          mode: input.mode,
+          model: input.model,
+          webMode: input.webMode,
+          memoryMode: input.memoryMode,
+          thinkingLevel: input.thinkingLevel,
+          speedMode: input.speedMode ?? "standard",
+          subagentPolicy: input.subagentPolicy ?? "ask_when_useful",
+          effectiveToolAutonomy: input.toolAutonomy,
+          capabilitySnapshotId: input.capabilityProfile?.catalog.snapshotId,
+          capabilityProfileId: input.capabilityProfile?.profileId,
+          capabilityProfileHash: input.capabilityProfile?.hashes.profileHash,
+          routing: {
+            executionProfile,
+            liveDataIntent: intents.liveData,
+            executionBudget: executionBudgetTrace,
+            ...(input.modelRouter ? { modelRouter: input.modelRouter } : {}),
+            ...(input.runVariableEvidence ? { runVariables: input.runVariableEvidence } : {}),
+          },
+          loopGuard: createLoopGuardTrace(loopGuardState),
+          startedAt: now,
+        }),
     );
 
     yield {
@@ -1700,16 +1747,15 @@ export class ChatTurnAgentRunner {
         promptLabRepoInspectionAssist ||
         promptLabPrefetchFilePaths.length > 0);
     const desiredPromptLabConcreteReads = resolvePromptLabDesiredConcreteReadCount(promptLabTaskForInspection);
+    const liveCallableEntries =
+      input.capabilityProfile && this.deps.listCapabilityCatalog
+        ? await this.deps.listCapabilityCatalog("callable")
+        : undefined;
     const admittedToolSchema = input.capabilityProfile
-      ? toolSchemaFromCapabilityProfile(
-          input,
-          input.capabilityProfile,
-          this.deps.storage,
-          this.deps.listCapabilityCatalog?.("callable"),
-        )
+      ? await toolSchemaFromCapabilityProfile(input, input.capabilityProfile, this.deps.storage, liveCallableEntries)
       : await this.resolveCapabilityToolSchema(input);
-    const routedContextToolSchema = this.filterRoutedContextCapabilityToolSchema(input, admittedToolSchema);
-    const toolSchema = this.filterSystemHeartbeatCapabilityToolSchema(input, routedContextToolSchema);
+    const routedContextToolSchema = await this.filterRoutedContextCapabilityToolSchema(input, admittedToolSchema);
+    const toolSchema = await this.filterSystemHeartbeatCapabilityToolSchema(input, routedContextToolSchema);
     const catalogToolNames = this.deps.listToolCatalog().map((tool) => tool.toolName);
     const promptLabConcreteReadToolName = promptLabShouldInspectFilesForTurn
       ? resolvePromptLabConcreteReadToolName(toolSchema.canonicalToModel, catalogToolNames)
@@ -1744,6 +1790,7 @@ export class ChatTurnAgentRunner {
     let routingState: ChatTurnTraceRecord["routing"] = {
       executionProfile,
       liveDataIntent: intents.liveData,
+      executionBudget: executionBudgetTrace,
       primaryProviderId: input.providerId,
       primaryModel: input.model,
       effectiveProviderId: input.providerId,
@@ -1777,8 +1824,8 @@ export class ChatTurnAgentRunner {
     const usageCostSources = new Set<NonNullable<ChatStreamUsageRecord["costSource"]>>();
     const observedUsageMetrics = new Set<"inputTokens" | "outputTokens" | "cachedInputTokens" | "costUsd">();
     const canonicalUsageEventIds = new Set<string>();
-    const trustedUsageWorkspaceId = this.deps.storage.chatSessionMeta?.get(input.sessionId)?.workspaceId;
-    const workerUsageAttribution = resolveDelegatedWorkerUsageAttribution(this.deps.storage, input);
+    const trustedUsageWorkspaceId = (await this.deps.storage.chatSessionMeta?.get(input.sessionId))?.workspaceId;
+    const workerUsageAttribution = await resolveDelegatedWorkerUsageAttribution(this.deps.storage, input);
     const durableRunId = input.policyRunId ?? workerUsageAttribution?.delegationRunId;
     const completionUsageAttribution = (
       logicalCall: string,
@@ -1895,6 +1942,7 @@ export class ChatTurnAgentRunner {
     let circuitBreakerReason: string | undefined;
     let circuitBreakerFailureClass: ChatTurnFailureClass | undefined;
     let suppressIncompleteCompletionRepair = false;
+    let terminalProviderFailure = false;
     const toolFailureSignatureCounts = new Map<string, number>();
     let promptLabToolComplianceRetryIssued = false;
     let promptLabSynthesisOnly = false;
@@ -1919,20 +1967,6 @@ export class ChatTurnAgentRunner {
       }
     };
     const outputMessageId = input.outputMessageId ?? `assistant-${input.turnId}`;
-    const executionBudget = resolveChatExecutionBudget({
-      mode: input.mode,
-      webMode: input.webMode,
-      thinkingLevel: input.thinkingLevel,
-      liveDataIntent: intents.webLookup,
-      researchListIntent: intents.researchList,
-      promptLabExplicitTools: promptLabContract.explicitTools,
-      // Profile-only: pasted contract text in live chat must not double the
-      // turn budget the UI's responsiveness expectations are sized to.
-      promptLabHarness: normalizationProfile === "prompt_pack_harness",
-      providerId: input.providerId,
-      model: input.model,
-      executionProfile,
-    });
     let effectiveTurnBudgetMs = executionBudget.turnBudgetMs;
     let effectiveCompletionTimeoutMs = executionBudget.completionTimeoutMs;
     let turnBudgetDeadline = createTurnBudgetDeadline(effectiveTurnBudgetMs);
@@ -1992,7 +2026,7 @@ export class ChatTurnAgentRunner {
       });
       if (accessCheckPath) {
         throwIfChatTurnCancelled(input);
-        this.patchTurnTrace(input, input.turnId, {
+        await this.patchTurnTrace(input, input.turnId, {
           status: "waiting_for_tool",
         });
         ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
@@ -2039,7 +2073,7 @@ export class ChatTurnAgentRunner {
             reason: "Approval required by policy.",
             expiresAt: syntheticRun.approvalExpiresAt,
           };
-          this.upsertInlineApproval(input, {
+          await this.upsertInlineApproval(input, {
             approvalId: syntheticRun.record.approvalId,
             sessionId: input.sessionId,
             turnId: input.turnId,
@@ -2104,7 +2138,7 @@ export class ChatTurnAgentRunner {
     ) {
       const memoryQuery = inferMemoryQueryFromPrompt(input.content) ?? "planning preferences travel scheduling";
       throwIfChatTurnCancelled(input);
-      this.patchTurnTrace(input, input.turnId, {
+      await this.patchTurnTrace(input, input.turnId, {
         status: "waiting_for_tool",
       });
       ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
@@ -2170,7 +2204,7 @@ export class ChatTurnAgentRunner {
       toolRunCount === 0
     ) {
       throwIfChatTurnCancelled(input);
-      this.patchTurnTrace(input, input.turnId, {
+      await this.patchTurnTrace(input, input.turnId, {
         status: "waiting_for_tool",
       });
       ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
@@ -2235,7 +2269,7 @@ export class ChatTurnAgentRunner {
             break;
           }
           throwIfChatTurnCancelled(input);
-          this.patchTurnTrace(input, input.turnId, {
+          await this.patchTurnTrace(input, input.turnId, {
             status: "waiting_for_tool",
           });
           ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
@@ -2319,7 +2353,7 @@ export class ChatTurnAgentRunner {
               reason: "Approval required by policy.",
               expiresAt: syntheticRun.approvalExpiresAt,
             };
-            this.upsertInlineApproval(input, {
+            await this.upsertInlineApproval(input, {
               approvalId: syntheticRun.record.approvalId,
               sessionId: input.sessionId,
               turnId: input.turnId,
@@ -2346,7 +2380,7 @@ export class ChatTurnAgentRunner {
                 break;
               }
               throwIfChatTurnCancelled(input);
-              this.patchTurnTrace(input, input.turnId, {
+              await this.patchTurnTrace(input, input.turnId, {
                 status: "waiting_for_tool",
               });
               ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
@@ -2429,7 +2463,7 @@ export class ChatTurnAgentRunner {
                   reason: "Approval required by policy.",
                   expiresAt: fileReadRun.approvalExpiresAt,
                 };
-                this.upsertInlineApproval(input, {
+                await this.upsertInlineApproval(input, {
                   approvalId: fileReadRun.record.approvalId,
                   sessionId: input.sessionId,
                   turnId: input.turnId,
@@ -2486,7 +2520,7 @@ export class ChatTurnAgentRunner {
               break promptLabSearchLoop;
             }
             throwIfChatTurnCancelled(input);
-            this.patchTurnTrace(input, input.turnId, {
+            await this.patchTurnTrace(input, input.turnId, {
               status: "waiting_for_tool",
             });
             ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
@@ -2543,7 +2577,7 @@ export class ChatTurnAgentRunner {
             ) {
               promptLabSearchPathMissing = true;
               const fallbackSearchArgs = buildPromptLabSearchArgs(searchToolName, ".", query);
-              this.patchTurnTrace(input, input.turnId, {
+              await this.patchTurnTrace(input, input.turnId, {
                 status: "waiting_for_tool",
               });
               ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
@@ -2605,7 +2639,7 @@ export class ChatTurnAgentRunner {
                 reason: "Approval required by policy.",
                 expiresAt: effectiveSearchRun.approvalExpiresAt,
               };
-              this.upsertInlineApproval(input, {
+              await this.upsertInlineApproval(input, {
                 approvalId: effectiveSearchRun.record.approvalId,
                 sessionId: input.sessionId,
                 turnId: input.turnId,
@@ -2633,7 +2667,7 @@ export class ChatTurnAgentRunner {
                   break;
                 }
                 throwIfChatTurnCancelled(input);
-                this.patchTurnTrace(input, input.turnId, {
+                await this.patchTurnTrace(input, input.turnId, {
                   status: "waiting_for_tool",
                 });
                 ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
@@ -2716,7 +2750,7 @@ export class ChatTurnAgentRunner {
                     reason: "Approval required by policy.",
                     expiresAt: fileReadRun.approvalExpiresAt,
                   };
-                  this.upsertInlineApproval(input, {
+                  await this.upsertInlineApproval(input, {
                     approvalId: fileReadRun.record.approvalId,
                     sessionId: input.sessionId,
                     turnId: input.turnId,
@@ -2754,7 +2788,7 @@ export class ChatTurnAgentRunner {
           inferQueryFromPrompt(promptLabTaskForInspection) ?? deriveLiveDataQuery(promptLabTaskForInspection);
         if (promptLabSearchQuery.trim().length > 0) {
           throwIfChatTurnCancelled(input);
-          this.patchTurnTrace(input, input.turnId, {
+          await this.patchTurnTrace(input, input.turnId, {
             status: "waiting_for_tool",
           });
           ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
@@ -2839,7 +2873,7 @@ export class ChatTurnAgentRunner {
       const quickWebQuery = inferQueryFromPrompt(input.content) ?? deriveLiveDataQuery(input.content);
       if (quickWebQuery.trim().length > 0) {
         throwIfChatTurnCancelled(input);
-        this.patchTurnTrace(input, input.turnId, {
+        await this.patchTurnTrace(input, input.turnId, {
           status: "waiting_for_tool",
         });
         ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
@@ -2903,7 +2937,7 @@ export class ChatTurnAgentRunner {
     // Deterministic live-time helper for simple queries.
     if (!assistantContent && intents.time && canUseTimeTool && !promptLabContract.toolUseSuppressed) {
       throwIfChatTurnCancelled(input);
-      this.patchTurnTrace(input, input.turnId, {
+      await this.patchTurnTrace(input, input.turnId, {
         status: "waiting_for_tool",
       });
       ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
@@ -2980,7 +3014,7 @@ export class ChatTurnAgentRunner {
           reason: "Approval required by policy.",
           expiresAt: syntheticRun.approvalExpiresAt,
         };
-        this.upsertInlineApproval(input, {
+        await this.upsertInlineApproval(input, {
           approvalId: syntheticRun.record.approvalId,
           sessionId: input.sessionId,
           turnId: input.turnId,
@@ -3002,7 +3036,7 @@ export class ChatTurnAgentRunner {
       !quickWebProfile &&
       input.toolAutonomy !== "manual" &&
       input.webMode !== "off" &&
-      intents.liveData &&
+      intents.webLookup &&
       !promptLabContract.toolUseSuppressed &&
       !(promptLabHarnessTurn && promptLabContract.explicitTools && input.mode === "chat") &&
       (!localFileIntent || promptLabCoworkPromptSpecificWebLookup) &&
@@ -3011,7 +3045,7 @@ export class ChatTurnAgentRunner {
       toolRunCount < executionBudget.maxToolRunsPerTurn
     ) {
       throwIfChatTurnCancelled(input);
-      this.patchTurnTrace(input, input.turnId, {
+      await this.patchTurnTrace(input, input.turnId, {
         status: "waiting_for_tool",
       });
       ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
@@ -3020,9 +3054,12 @@ export class ChatTurnAgentRunner {
         : input.content;
       const derivedLiveDataQuery = deriveLiveDataQuery(liveDataQuerySourceContent);
       const inferredLiveDataQuery = inferQueryFromPrompt(liveDataQuerySourceContent);
-      const liveDataQuery = shouldPreferInferredLiveDataQuery(inferredLiveDataQuery, derivedLiveDataQuery)
-        ? (inferredLiveDataQuery ?? derivedLiveDataQuery)
-        : derivedLiveDataQuery;
+      const explicitResearchSubject = extractExternalResearchSubject(liveDataQuerySourceContent);
+      const liveDataQuery =
+        explicitResearchSubject ??
+        (shouldPreferInferredLiveDataQuery(inferredLiveDataQuery, derivedLiveDataQuery)
+          ? (inferredLiveDataQuery ?? derivedLiveDataQuery)
+          : derivedLiveDataQuery);
       const syntheticRun = await this.executeToolCall({
         input,
         turnId: input.turnId,
@@ -3169,7 +3206,7 @@ export class ChatTurnAgentRunner {
                 reason: "Approval required by policy.",
                 expiresAt: navigateRun.approvalExpiresAt,
               };
-              this.upsertInlineApproval(input, {
+              await this.upsertInlineApproval(input, {
                 approvalId: navigateRun.record.approvalId,
                 sessionId: input.sessionId,
                 turnId: input.turnId,
@@ -3209,7 +3246,7 @@ export class ChatTurnAgentRunner {
           reason: "Approval required by policy.",
           expiresAt: syntheticRun.approvalExpiresAt,
         };
-        this.upsertInlineApproval(input, {
+        await this.upsertInlineApproval(input, {
           approvalId: syntheticRun.record.approvalId,
           sessionId: input.sessionId,
           turnId: input.turnId,
@@ -3232,7 +3269,7 @@ export class ChatTurnAgentRunner {
       try {
         for (let loop = 0; loop < executionBudget.maxToolLoops; loop += 1) {
           throwIfChatTurnCancelled(input);
-          this.patchTurnTrace(input, input.turnId, {
+          await this.patchTurnTrace(input, input.turnId, {
             status: "running",
           });
           const loopTrace: ChatTurnTraceRecord = {
@@ -3242,7 +3279,7 @@ export class ChatTurnAgentRunner {
               fallbackReason: `loop ${loop + 1}/${executionBudget.maxToolLoops}, tool_runs=${toolRunCount}`,
             },
             loopGuard: createLoopGuardTrace(loopGuardState),
-            toolRuns: this.deps.storage.chatToolRuns.listByTurn(input.turnId),
+            toolRuns: await this.deps.storage.chatToolRuns.listByTurn(input.turnId),
             citations: [...citations],
           };
           yield {
@@ -3327,14 +3364,15 @@ export class ChatTurnAgentRunner {
               try {
                 const aggregate = createCompletionStreamAggregate();
                 streamWasFirstProviderRequest = beginProviderRequest(completionRequest);
-                this.assertExternalDispatch(input);
-                for await (const rawChunk of this.deps.createChatCompletionStream(
+                await this.assertExternalDispatch(input);
+                const providerStream = await this.deps.createChatCompletionStream(
                   {
                     ...completionRequest,
                     stream: true,
                   },
                   completionUsageAttribution(`loop:${loop}:stream`, loop === 0 ? "chat_initial" : "chat_tool_loop"),
-                )) {
+                );
+                for await (const rawChunk of providerStream) {
                   // Any provider-emitted frame can carry semantic state (for
                   // example, a tool-call delta). Once observed, replaying the
                   // request on another transport can duplicate that state even
@@ -3421,7 +3459,7 @@ export class ChatTurnAgentRunner {
                         ),
                       };
                 beginProviderRequest(fallbackRequest);
-                this.assertExternalDispatch(input);
+                await this.assertExternalDispatch(input);
                 completion = await this.deps.createChatCompletion(
                   fallbackRequest,
                   completionUsageAttribution(
@@ -3432,7 +3470,7 @@ export class ChatTurnAgentRunner {
               }
             } else {
               completedFirstProviderRequest = beginProviderRequest(completionRequest);
-              this.assertExternalDispatch(input);
+              await this.assertExternalDispatch(input);
               completion = await this.deps.createChatCompletion(
                 completionRequest,
                 completionUsageAttribution(`loop:${loop}`, loop === 0 ? "chat_initial" : "chat_tool_loop"),
@@ -3494,7 +3532,7 @@ export class ChatTurnAgentRunner {
           // this pass's visible output continues below. SAFETY INVARIANT: the
           // reasoning text below is never written into assistantContent or any
           // persisted message content — only into this standalone chunk.
-          if (this.deps.chatThinkingStreamV1Enabled?.()) {
+          if (await this.deps.chatThinkingStreamV1Enabled?.()) {
             const reasoningText = extractReasoningText(message);
             if (reasoningText) {
               yield {
@@ -3855,11 +3893,12 @@ export class ChatTurnAgentRunner {
           let shortCircuitedOnBudget = false;
           let retryPromptLabSynthesisOnly = false;
           let coworkToolRunBudgetCheckpoint = false;
+          const parallelToolExecutionDisabled = (await this.deps.parallelToolExecutionV1Disabled?.()) === true;
           const parallelBatchDecision = decideToolBatchParallelism({
             toolNames: toolCalls.map((call) => call.toolName),
             toolCallIds: toolCalls.map((call) => call.id),
             readOnlyNames: listReadOnlyBuiltinToolNames(),
-            disabledByFlag: this.deps.parallelToolExecutionV1Disabled?.() === true,
+            disabledByFlag: parallelToolExecutionDisabled,
             remainingToolBudget: executionBudget.maxToolRunsPerTurn - toolRunCount,
             maxParallel: MAX_PARALLEL_TOOL_CALLS,
           });
@@ -3868,13 +3907,13 @@ export class ChatTurnAgentRunner {
           // (approve_all, outside-roots grants) can approval-gate even
           // registry-safe read-only tools. The serial loop is the single
           // place that pauses on the first approval, so route there.
-          const batchAccessApprovalFree = (): boolean => {
+          const batchAccessApprovalFree = async (): Promise<boolean> => {
             if (!this.deps.evaluateToolAccess) {
               return false;
             }
             try {
-              return toolCalls.every((call) => {
-                const access = this.deps.evaluateToolAccess!({
+              for (const call of toolCalls) {
+                const access = await this.deps.evaluateToolAccess({
                   toolName: call.toolName,
                   sessionId: input.sessionId,
                   agentId: "assistant",
@@ -3886,8 +3925,11 @@ export class ChatTurnAgentRunner {
                   surface: input.mode,
                   policyContext: buildTurnToolPolicyContext(input),
                 });
-                return access.allowed && !access.requiresApproval;
-              });
+                if (!access.allowed || access.requiresApproval) {
+                  return false;
+                }
+              }
+              return true;
             } catch {
               // Fail safe: an evaluator error means we cannot prove the batch
               // is approval-free, so keep it on the serial path.
@@ -3907,10 +3949,10 @@ export class ChatTurnAgentRunner {
               Math.max(
                 ...toolCalls.map((call) => minimumRemainingBudgetForToolStart(call.toolName, executionBudget)),
               ) &&
-            batchAccessApprovalFree()
+            (await batchAccessApprovalFree())
           ) {
             throwIfChatTurnCancelled(input);
-            this.patchTurnTrace(input, input.turnId, {
+            await this.patchTurnTrace(input, input.turnId, {
               status: "waiting_for_tool",
             });
             // Residual divergence (review I3, narrowed by the access preflight
@@ -3944,6 +3986,35 @@ export class ChatTurnAgentRunner {
           }
           for (const toolCall of toolCalls) {
             throwIfChatTurnCancelled(input);
+            const reusableSearchRun =
+              toolCall.toolName === "browser.search"
+                ? [...toolRuns]
+                    .reverse()
+                    .find(
+                      (run) =>
+                        run.toolName === "browser.search" &&
+                        run.status === "executed" &&
+                        run.result !== undefined &&
+                        normalizeSearchReuseQuery(run.args?.query) !== undefined &&
+                        (normalizeSearchReuseQuery(run.args?.query) ===
+                          normalizeSearchReuseQuery(toolCall.args.query) ||
+                          (typeof toolCall.args.query === "string" &&
+                            looksLikeContinuationSearchPrompt(toolCall.args.query))),
+                    )
+                : undefined;
+            if (reusableSearchRun) {
+              // Research/web turns are deterministically searched before the
+              // first provider synthesis. If the provider immediately asks to
+              // search again, satisfy that tool-call id from the frozen search
+              // evidence instead of spending a duplicate network/tool run.
+              answeredToolCallIds.add(toolCall.id);
+              conversationMessages.push({
+                role: "tool",
+                tool_call_id: toolCall.id,
+                content: serializeToolResultForModel(reusableSearchRun.result),
+              } as ChatCompletionMessage);
+              continue;
+            }
             const toolRunBudgetCost = toolRunBudgetCostForToolCall(toolCall.toolName, toolCall.args);
             if (toolRunCount + toolRunBudgetCost > executionBudget.maxToolRunsPerTurn) {
               if (coworkCheckpointContinuation) {
@@ -4001,7 +4072,7 @@ export class ChatTurnAgentRunner {
             const loopGuardEvent = detectToolLoopRisk(loopGuardState, toolCall.toolName, toolCall.args);
             if (loopGuardEvent) {
               loopGuardState.events.push(loopGuardEvent);
-              this.patchTurnTrace(input, input.turnId, {
+              await this.patchTurnTrace(input, input.turnId, {
                 loopGuard: createLoopGuardTrace(loopGuardState),
               });
               yield {
@@ -4015,7 +4086,7 @@ export class ChatTurnAgentRunner {
                     fallbackReason: loopGuardEvent.message,
                   },
                   loopGuard: createLoopGuardTrace(loopGuardState),
-                  toolRuns: this.deps.storage.chatToolRuns.listByTurn(input.turnId),
+                  toolRuns: await this.deps.storage.chatToolRuns.listByTurn(input.turnId),
                   citations: [...citations],
                 },
               };
@@ -4055,7 +4126,7 @@ export class ChatTurnAgentRunner {
                 shortCircuitedOnBudget = true;
                 break;
               }
-              this.patchTurnTrace(input, input.turnId, {
+              await this.patchTurnTrace(input, input.turnId, {
                 status: "waiting_for_tool",
               });
             }
@@ -4143,7 +4214,7 @@ export class ChatTurnAgentRunner {
                 reason: "Approval required by policy.",
                 expiresAt: executed.approvalExpiresAt,
               };
-              this.upsertInlineApproval(input, {
+              await this.upsertInlineApproval(input, {
                 approvalId: executed.record.approvalId,
                 sessionId: input.sessionId,
                 turnId: input.turnId,
@@ -4301,7 +4372,7 @@ export class ChatTurnAgentRunner {
               ...routingState,
               fallbackReason: checkpointReason,
             };
-            this.patchTurnTrace(input, input.turnId, {
+            await this.patchTurnTrace(input, input.turnId, {
               status: "running",
               routing: routingState,
               loopGuard: createLoopGuardTrace(loopGuardState),
@@ -4314,7 +4385,7 @@ export class ChatTurnAgentRunner {
                 ...trace,
                 routing: routingState,
                 loopGuard: createLoopGuardTrace(loopGuardState),
-                toolRuns: this.deps.storage.chatToolRuns.listByTurn(input.turnId),
+                toolRuns: await this.deps.storage.chatToolRuns.listByTurn(input.turnId),
                 citations: [...citations],
               },
             };
@@ -4388,10 +4459,11 @@ export class ChatTurnAgentRunner {
             error,
             toolRuns,
           });
+          terminalProviderFailure = true;
           const quickWebCanRecoverFromSearch =
             quickWebProfile && failureClass === "provider_timeout" && hasExecutedToolRun(toolRuns, "browser.search");
           if (quickWebCanRecoverFromSearch) {
-            finalStatus = "completed";
+            finalStatus = "failed";
             assistantContent = buildTurnBudgetExceededFallbackMessage({
               turnInput: input,
               toolRuns: projectToolRunsForModel(toolRuns),
@@ -4426,6 +4498,10 @@ export class ChatTurnAgentRunner {
               ...completionState,
               status: "interrupted",
             };
+            // Provider failures are terminal for this turn. A generic repair
+            // pass would dispatch the provider again and could incorrectly
+            // convert a timeout into a repaired completion or artifact write.
+            suppressIncompleteCompletionRepair = true;
             assistantContent = buildUserSafeFailureMessage(finalFailure);
             yield {
               type: "error",
@@ -4438,10 +4514,32 @@ export class ChatTurnAgentRunner {
       }
     }
 
+    if (terminalProviderFailure) {
+      // A provider transport/timeout failure is terminal even when bounded
+      // search evidence is available. Preserve evidence for diagnosis, but do
+      // not let any downstream artifact or completion-repair path relabel the
+      // turn as successful.
+      finalStatus = "failed";
+      completionState = {
+        ...completionState,
+        status: "interrupted",
+        repaired: false,
+        repair: undefined,
+      };
+    }
+
+    const artifactFallbackSource = buildGroundedArtifactFallbackSource({
+      assistantContent,
+      historyMessages: input.historyMessages,
+      toolRuns,
+    });
+
     if (
       !approvalPayload &&
       !pendingUserInput &&
-      finalStatus !== "cancelled" &&
+      finalStatus === "completed" &&
+      !finalFailure &&
+      artifactFallbackSource !== undefined &&
       !promptLabEvalIntegrityTurn &&
       input.toolAutonomy !== "manual" &&
       intents.presentationArtifact &&
@@ -4459,8 +4557,11 @@ export class ChatTurnAgentRunner {
       // Visual generation is intentionally deferred to the authorized policy
       // executor hook. Approval persistence therefore contains only this deck
       // payload and never image bytes.
-      const rawArgs = buildSyntheticPresentationCreateArgs(input, this.deps.safeWriteFallbackDir);
-      this.patchTurnTrace(input, input.turnId, {
+      const rawArgs = buildSyntheticPresentationCreateArgs(
+        { ...input, sourceText: artifactFallbackSource },
+        this.deps.safeWriteFallbackDir,
+      );
+      await this.patchTurnTrace(input, input.turnId, {
         status: "waiting_for_tool",
       });
       const syntheticRun = await this.executeToolCall({
@@ -4503,7 +4604,7 @@ export class ChatTurnAgentRunner {
           reason: "Approval required by policy.",
           expiresAt: syntheticRun.approvalExpiresAt,
         };
-        this.upsertInlineApproval(input, {
+        await this.upsertInlineApproval(input, {
           approvalId: syntheticRun.record.approvalId,
           sessionId: input.sessionId,
           turnId: input.turnId,
@@ -4515,11 +4616,8 @@ export class ChatTurnAgentRunner {
       } else {
         const preRepairContent = assistantContent;
         assistantContent = mergePresentationArtifactDeliveryContent(assistantContent, syntheticRun.record);
-        if (assistantContent !== preRepairContent) {
+        if (syntheticRun.record.status === "executed" && assistantContent !== preRepairContent) {
           markCompletionRepair("degraded_answer_synthesis", "orchestrator", preRepairContent, assistantContent);
-        }
-        if (syntheticRun.record.status === "executed" && finalStatus === "failed") {
-          finalStatus = "completed";
         }
       }
     }
@@ -4527,7 +4625,9 @@ export class ChatTurnAgentRunner {
     if (
       !approvalPayload &&
       !pendingUserInput &&
-      finalStatus !== "cancelled" &&
+      finalStatus === "completed" &&
+      !finalFailure &&
+      artifactFallbackSource !== undefined &&
       !promptLabEvalIntegrityTurn &&
       input.toolAutonomy !== "manual" &&
       intents.documentArtifact &&
@@ -4536,8 +4636,11 @@ export class ChatTurnAgentRunner {
       toolRunCount < executionBudget.maxToolRunsPerTurn
     ) {
       throwIfChatTurnCancelled(input);
-      const rawArgs = buildSyntheticDocumentCreateArgs(input, this.deps.safeWriteFallbackDir);
-      this.patchTurnTrace(input, input.turnId, {
+      const rawArgs = buildSyntheticDocumentCreateArgs(
+        { ...input, sourceText: artifactFallbackSource },
+        this.deps.safeWriteFallbackDir,
+      );
+      await this.patchTurnTrace(input, input.turnId, {
         status: "waiting_for_tool",
       });
       const syntheticRun = await this.executeToolCall({
@@ -4580,7 +4683,7 @@ export class ChatTurnAgentRunner {
           reason: "Approval required by policy.",
           expiresAt: syntheticRun.approvalExpiresAt,
         };
-        this.upsertInlineApproval(input, {
+        await this.upsertInlineApproval(input, {
           approvalId: syntheticRun.record.approvalId,
           sessionId: input.sessionId,
           turnId: input.turnId,
@@ -4592,11 +4695,8 @@ export class ChatTurnAgentRunner {
       } else {
         const preRepairContent = assistantContent;
         assistantContent = mergeDocumentArtifactDeliveryContent(assistantContent, syntheticRun.record);
-        if (assistantContent !== preRepairContent) {
+        if (syntheticRun.record.status === "executed" && assistantContent !== preRepairContent) {
           markCompletionRepair("degraded_answer_synthesis", "orchestrator", preRepairContent, assistantContent);
-        }
-        if (syntheticRun.record.status === "executed" && finalStatus === "failed") {
-          finalStatus = "completed";
         }
       }
     }
@@ -4604,6 +4704,7 @@ export class ChatTurnAgentRunner {
     if (
       !approvalPayload &&
       !pendingUserInput &&
+      !terminalProviderFailure &&
       !quickWebProfile &&
       finalStatus !== "cancelled" &&
       toolRuns.length > 0 &&
@@ -4650,7 +4751,14 @@ export class ChatTurnAgentRunner {
     // provider response get one repair pass ("attempt one repair more often").
     // The live-viewer suppression guard is always respected (never overridden by
     // a tune) so we cannot double-render after partial output.
-    const incompleteRepairThreshold = readRetryRepairThreshold(this.deps.storage.systemSettings);
+    const storedRetryThreshold = await this.deps.storage.systemSettings.get<unknown>(
+      IMPROVEMENT_TUNE_SETTING_KEYS.retryThreshold,
+    );
+    const incompleteRepairThreshold = resolveRetryRepairThreshold(
+      typeof storedRetryThreshold?.value === "number"
+        ? storedRetryThreshold.value
+        : IMPROVEMENT_TUNE_DEFAULTS.retryThreshold,
+    );
     if (
       !approvalPayload &&
       !pendingUserInput &&
@@ -4688,7 +4796,13 @@ export class ChatTurnAgentRunner {
       }
     }
 
-    if (!approvalPayload && !pendingUserInput && finalStatus !== "cancelled" && assistantContent.trim().length === 0) {
+    if (
+      !approvalPayload &&
+      !pendingUserInput &&
+      !terminalProviderFailure &&
+      finalStatus !== "cancelled" &&
+      assistantContent.trim().length === 0
+    ) {
       const synthesizedFallback = await this.synthesizeToolOutcomeFallback({
         input,
         toolRuns,
@@ -4734,7 +4848,13 @@ export class ChatTurnAgentRunner {
     // evidence rewrites, citation appendices) was removed because it replaced
     // model output before scoring; see docs/superpowers/plans/
     // 2026-06-10-prompt-lab-harness-fix-plan.md.
-    if (!approvalPayload && finalStatus !== "cancelled" && input.mode === "cowork" && !promptLabEvalIntegrityTurn) {
+    if (
+      !approvalPayload &&
+      !terminalProviderFailure &&
+      finalStatus !== "cancelled" &&
+      input.mode === "cowork" &&
+      !promptLabEvalIntegrityTurn
+    ) {
       const repairedCoworkContent = normalizeCoworkRoleContractOutput({
         prompt: input.content,
         responseText: assistantContent,
@@ -4755,7 +4875,7 @@ export class ChatTurnAgentRunner {
     }
     // origin/main: record local-business research evidence on the pre-footer
     // answer (must run before the P0-B footer mutates assistantContent).
-    this.recordLocalBusinessResearchEvidenceRun({
+    await this.recordLocalBusinessResearchEvidenceRun({
       turnInput: input,
       assistantContent,
       citations,
@@ -4824,7 +4944,7 @@ export class ChatTurnAgentRunner {
     };
     const deferSystemHeartbeatTerminalCommit =
       finalStatus === "completed" && isExactSystemHeartbeatRunnerPosture(input);
-    const updatedTrace = this.patchTurnTrace(input, input.turnId, {
+    const updatedTrace = await this.patchTurnTrace(input, input.turnId, {
       ...(deferSystemHeartbeatTerminalCommit ? {} : { status: finalStatus }),
       model: assistantModel,
       citations,
@@ -4843,7 +4963,7 @@ export class ChatTurnAgentRunner {
     const hydratedTrace = {
       ...updatedTrace,
       citations,
-      toolRuns: this.deps.storage.chatToolRuns.listByTurn(input.turnId),
+      toolRuns: await this.deps.storage.chatToolRuns.listByTurn(input.turnId),
     };
 
     if (approvalPayload) {
@@ -4986,10 +5106,10 @@ export class ChatTurnAgentRunner {
     const webLookupIntent = intents.webLookup || [...explicitToolMentions].some((toolName) => isWebToolName(toolName));
     const promptLabHasExplicitToolFamily =
       promptLabContract.requiredNamedTools.length > 0 || promptLabContract.requiredToolFamilies.length > 0;
-    const recentToolRuns = this.deps.storage.chatToolRuns.listBySession(input.sessionId, 200);
-    const projectBound = Boolean(this.deps.storage.chatSessionProjects.get(input.sessionId)?.projectId);
+    const recentToolRuns = await this.deps.storage.chatToolRuns.listBySession(input.sessionId, 200);
+    const projectBound = Boolean((await this.deps.storage.chatSessionProjects.get(input.sessionId))?.projectId);
     const activePlan = this.deps.storage.chatExecutionPlans
-      ? selectActiveExecutionPlan(this.deps.storage.chatExecutionPlans.listBySession(input.sessionId, 20))
+      ? selectActiveExecutionPlan(await this.deps.storage.chatExecutionPlans.listBySession(input.sessionId, 20))
       : undefined;
     const suggestedTools = new Set(selectExecutionPlanSuggestedTools(activePlan));
     const failedCounts = buildRecentToolFailureCounts(recentToolRuns);
@@ -4999,6 +5119,11 @@ export class ChatTurnAgentRunner {
     const restrictedAutonomousProfile =
       input.permissionProfileId === SCHEDULED_TURN_PERMISSION_PROFILE_ID ||
       input.permissionProfileId === HEARTBEAT_PERMISSION_PROFILE_ID;
+    const [subagentFanoutDisabled, attachedContextToolsEnabled, delegationScopeExpansionEnabled] = await Promise.all([
+      this.deps.subagentFanoutV1Disabled?.() ?? Promise.resolve(false),
+      this.deps.attachedContextToolsV1Enabled?.() ?? Promise.resolve(false),
+      this.deps.delegationScopeExpansionV1Enabled?.() ?? Promise.resolve(false),
+    ]);
     // R3-8 `agent.fanout` exposure gate: only interactive Chat-normalized turns
     // whose session subagentPolicy explicitly allows automatic subagents may
     // see the spawn tool. `ask_when_useful` remains a suggestion/confirmation
@@ -5011,14 +5136,13 @@ export class ChatTurnAgentRunner {
       input.mode === "chat" &&
       input.subagentPolicy === "auto_when_useful" &&
       !restrictedAutonomousProfile &&
-      this.deps.subagentFanoutV1Disabled?.() !== true;
-    const routedContextToolsEligible =
-      input.routedContextRequested === true && this.deps.attachedContextToolsV1Enabled?.() === true;
+      !subagentFanoutDisabled;
+    const routedContextToolsEligible = input.routedContextRequested === true && attachedContextToolsEnabled;
     const delegatedWorkResultEligible =
       input.mode === "chat" &&
       Boolean(input.parentDelegationStepId?.trim()) &&
       !restrictedAutonomousProfile &&
-      this.deps.delegationScopeExpansionV1Enabled?.() === true;
+      delegationScopeExpansionEnabled;
     for (const tool of catalog) {
       if (quickWebProfile && !QUICK_WEB_ALLOWED_TOOL_NAMES.has(tool.toolName)) {
         continue;
@@ -5109,7 +5233,7 @@ export class ChatTurnAgentRunner {
         continue;
       }
       try {
-        const access = this.deps.evaluateToolAccess({
+        const access = await this.deps.evaluateToolAccess({
           toolName: tool.toolName,
           sessionId: input.sessionId,
           agentId: "assistant",
@@ -5255,10 +5379,10 @@ export class ChatTurnAgentRunner {
     return mapping.get(toolName) ?? toProviderToolFunctionName(toolName);
   }
 
-  private resolveCapabilityProfileInvocationDecision(
+  private async resolveCapabilityProfileInvocationDecision(
     input: ChatTurnAgentRunnerInput,
     tool: { toolName: string; args: Record<string, unknown> },
-  ): { blockedReason?: string; reasonCodes: string[] } {
+  ): Promise<{ blockedReason?: string; reasonCodes: string[] }> {
     if (!input.capabilityProfile) {
       return { reasonCodes: [] };
     }
@@ -5277,9 +5401,9 @@ export class ChatTurnAgentRunner {
         reasonCodes: ["policy_evaluation_unavailable"],
       };
     }
-    let current: ReturnType<NonNullable<ChatTurnAgentRunnerDeps["evaluateToolAccess"]>>;
+    let current: Awaited<ReturnType<NonNullable<ChatTurnAgentRunnerDeps["evaluateToolAccess"]>>>;
     try {
-      current = this.deps.evaluateToolAccess({
+      current = await this.deps.evaluateToolAccess({
         toolName: tool.toolName,
         sessionId: input.sessionId,
         agentId: "assistant",
@@ -5333,7 +5457,7 @@ export class ChatTurnAgentRunner {
     if (meshPublication) {
       const preDispatchGate = this.deps.resolveMeshCapabilityPreDispatchBlock;
       const block = preDispatchGate
-        ? preDispatchGate({
+        ? await preDispatchGate({
             workspaceId: input.capabilityProfile.identity.workspaceId,
             binding: meshPublication,
           })
@@ -5368,11 +5492,11 @@ export class ChatTurnAgentRunner {
     return { reasonCodes: [...current.reasonCodes] };
   }
 
-  private resolveCapabilityProfileInvocationBlock(
+  private async resolveCapabilityProfileInvocationBlock(
     input: ChatTurnAgentRunnerInput,
     tool: { toolName: string; args: Record<string, unknown> },
-  ): string | undefined {
-    return this.resolveCapabilityProfileInvocationDecision(input, tool).blockedReason;
+  ): Promise<string | undefined> {
+    return (await this.resolveCapabilityProfileInvocationDecision(input, tool)).blockedReason;
   }
 
   /**
@@ -5418,7 +5542,7 @@ export class ChatTurnAgentRunner {
     binding: ChatTurnCapabilityToolMeshPublicationBinding;
     getEffectPotential: () => ToolEffectPotentialRecord;
     hasExecutorDispatchStarted: () => boolean;
-    executionFence: () => void;
+    executionFence: () => Promise<void>;
     priorToolRuns?: ChatToolRunRecord[];
   }): Promise<{ record: ChatToolRunRecord; chunk?: ChatStreamChunkDraft }> {
     const dispatch = this.deps.dispatchMeshCapabilityInvocation;
@@ -5464,7 +5588,7 @@ export class ChatTurnAgentRunner {
         normalizationProfile: input.turnInput.normalizationProfile,
         priorToolRuns: input.priorToolRuns,
       });
-      const updated = this.patchToolRun(input.turnInput, input.toolRunId, {
+      const updated = await this.patchToolRun(input.turnInput, input.toolRunId, {
         status: "executed",
         ...this.buildToolEffectPatch({ potential: input.getEffectPotential(), phase: "completed" }),
         result: persisted,
@@ -5483,7 +5607,7 @@ export class ChatTurnAgentRunner {
     const errorCode = outcome.errorCode ?? `mesh_capability_invocation_${outcome.disposition}`;
     const error = `Mesh-published tool ${input.toolName} settled ${outcome.disposition} (${errorCode}).`;
     const dispatched = input.hasExecutorDispatchStarted();
-    const updated = this.patchToolRun(input.turnInput, input.toolRunId, {
+    const updated = await this.patchToolRun(input.turnInput, input.toolRunId, {
       status: "failed",
       ...this.buildToolEffectPatch({
         potential: input.getEffectPotential(),
@@ -5514,14 +5638,14 @@ export class ChatTurnAgentRunner {
     };
   }
 
-  private assertSystemHeartbeatToolInvocationAllowed(
+  private async assertSystemHeartbeatToolInvocationAllowed(
     input: ChatTurnAgentRunnerInput,
     tool: { toolName: string; args: Record<string, unknown> },
-  ): void {
+  ): Promise<void> {
     if (!isExactSystemHeartbeatRunnerPosture(input)) {
       return;
     }
-    if (this.resolveCapabilityProfileInvocationBlock(input, tool)) {
+    if (await this.resolveCapabilityProfileInvocationBlock(input, tool)) {
       throwSystemHeartbeatToolInvocationBlocked(tool.toolName);
     }
   }
@@ -5546,7 +5670,7 @@ export class ChatTurnAgentRunner {
       try {
         assertNoToolOutputInjection(res.record.result);
       } catch (error) {
-        const updated = this.patchToolRun(input.input, res.record.toolRunId, {
+        const updated = await this.patchToolRun(input.input, res.record.toolRunId, {
           status: "failed",
           // Post-processing rejected a result only after the executor had
           // completed. Keep trusted-safe and concrete receipts intact, but do
@@ -5578,11 +5702,14 @@ export class ChatTurnAgentRunner {
         }
       }
     }
-    this.recordOrdinaryChatToolDecision(input.input, res.record);
+    await this.recordOrdinaryChatToolDecision(input.input, res.record);
     return res;
   }
 
-  private recordOrdinaryChatToolDecision(input: ChatTurnAgentRunnerInput, toolRun: ChatToolRunRecord): void {
+  private async recordOrdinaryChatToolDecision(
+    input: ChatTurnAgentRunnerInput,
+    toolRun: ChatToolRunRecord,
+  ): Promise<void> {
     if (!this.deps.recordRuntimeDecision) return;
     const kind: RuntimeDecisionTraceAppendInput["kind"] = toolRun.reused
       ? "tool_reused"
@@ -5612,7 +5739,7 @@ export class ChatTurnAgentRunner {
             ? (toolRun.reuseReason ?? "A prior compatible tool result was reused.")
             : "Chat selected and settled this tool through the Gateway runtime."));
     try {
-      this.runCanonicalWrite(input, () =>
+      await this.runCanonicalWrite(input, () =>
         this.deps.recordRuntimeDecision?.({
           kind,
           scope: {
@@ -5697,11 +5824,11 @@ export class ChatTurnAgentRunner {
     // Heartbeat policy is re-evaluated before even creating a tool-run row.
     // This is deliberately independent from catalog filtering: policy can
     // narrow or gain an approval requirement after provider admission.
-    this.assertSystemHeartbeatToolInvocationAllowed(input.input, {
+    await this.assertSystemHeartbeatToolInvocationAllowed(input.input, {
       toolName: preflight.toolName,
       args: preflight.args,
     });
-    let capabilityProfileDecision = this.resolveCapabilityProfileInvocationDecision(input.input, {
+    let capabilityProfileDecision = await this.resolveCapabilityProfileInvocationDecision(input.input, {
       toolName: preflight.toolName,
       args: preflight.args,
     });
@@ -5732,7 +5859,7 @@ export class ChatTurnAgentRunner {
         normalizePathForComparison(originalPath) !== normalizePathForComparison(fallbackPath)
       ) {
         const fallbackArgs = { ...preflight.args, path: fallbackPath };
-        const fallbackDecision = this.resolveCapabilityProfileInvocationDecision(input.input, {
+        const fallbackDecision = await this.resolveCapabilityProfileInvocationDecision(input.input, {
           toolName: preflight.toolName,
           args: fallbackArgs,
         });
@@ -5765,8 +5892,8 @@ export class ChatTurnAgentRunner {
     const startedAt = new Date().toISOString();
     const toolRunId = randomUUID();
     let effectPotential = this.resolveToolEffectPotential(input.input, preflight.toolName);
-    const effectScope = this.resolveToolEffectScope(input.input, input.turnId);
-    const created = this.createToolRun(input.input, {
+    const effectScope = await this.resolveToolEffectScope(input.input, input.turnId);
+    const created = await this.createToolRun(input.input, {
       toolRunId,
       turnId: input.turnId,
       sessionId: input.input.sessionId,
@@ -5778,7 +5905,7 @@ export class ChatTurnAgentRunner {
     });
 
     if (preflight.blockedReason) {
-      const updated = this.patchToolRun(input.input, created.toolRunId, {
+      const updated = await this.patchToolRun(input.input, created.toolRunId, {
         status: "blocked",
         ...this.buildToolEffectPatch({ potential: effectPotential, phase: "pre_dispatch_blocked" }),
         error: preflight.blockedReason,
@@ -5787,7 +5914,7 @@ export class ChatTurnAgentRunner {
           status: "blocked",
           args: preflight.args,
           error: preflight.blockedReason,
-          blockerStrictness: this.readBlockerStrictness(),
+          blockerStrictness: await this.readBlockerStrictness(),
         }),
         finishedAt: new Date().toISOString(),
       });
@@ -5803,7 +5930,7 @@ export class ChatTurnAgentRunner {
     }
 
     if (preflight.failureReason) {
-      const updated = this.patchToolRun(input.input, created.toolRunId, {
+      const updated = await this.patchToolRun(input.input, created.toolRunId, {
         status: "failed",
         ...this.buildToolEffectPatch({ potential: effectPotential, phase: "pre_dispatch_blocked" }),
         error: preflight.failureReason,
@@ -5831,7 +5958,7 @@ export class ChatTurnAgentRunner {
       if (isExactSystemHeartbeatRunnerPosture(input.input)) {
         throwSystemHeartbeatToolInvocationBlocked(preflight.toolName);
       }
-      const updated = this.patchToolRun(input.input, created.toolRunId, {
+      const updated = await this.patchToolRun(input.input, created.toolRunId, {
         status: "blocked",
         ...this.buildToolEffectPatch({ potential: effectPotential, phase: "pre_dispatch_blocked" }),
         result: {
@@ -5854,7 +5981,7 @@ export class ChatTurnAgentRunner {
           status: "blocked",
           args: preflight.args,
           error: capabilityProfileBlock,
-          blockerStrictness: this.readBlockerStrictness(),
+          blockerStrictness: await this.readBlockerStrictness(),
         }),
         finishedAt: new Date().toISOString(),
       });
@@ -5889,7 +6016,7 @@ export class ChatTurnAgentRunner {
       input.priorToolRuns,
     );
     if (reusableResult) {
-      const updated = this.patchToolRun(input.input, created.toolRunId, {
+      const updated = await this.patchToolRun(input.input, created.toolRunId, {
         status: "executed",
         ...this.buildToolEffectPatch({ potential: effectPotential, phase: "reused" }),
         reused: true,
@@ -5938,7 +6065,7 @@ export class ChatTurnAgentRunner {
         ...annotationResult,
         localBusinessResearch: annotationResult,
       };
-      const updated = this.patchToolRun(input.input, created.toolRunId, {
+      const updated = await this.patchToolRun(input.input, created.toolRunId, {
         status: "executed",
         ...this.buildToolEffectPatch({ potential: effectPotential, phase: "completed" }),
         result: result as Record<string, unknown>,
@@ -5982,21 +6109,21 @@ export class ChatTurnAgentRunner {
     const captureEffectReceipt = (receipt: ToolEffectReceiptEnvelope): void => {
       if (effectReceipts.length < 8) effectReceipts.push(receipt);
     };
-    const markExecutorDispatchStarted = (): void => {
+    const markExecutorDispatchStarted = async (): Promise<void> => {
       if (executorDispatchStarted) return;
       // The durable effect transition is the execution fence. Persist it
       // before the in-memory flag changes and before control returns to the
       // runtime owner, so a write failure cannot admit an unrecorded effect.
-      this.patchToolRun(input.input, created.toolRunId, {
+      await this.patchToolRun(input.input, created.toolRunId, {
         ...this.buildToolEffectPatch({ potential: effectPotential, phase: "dispatch_started" }),
       });
       executorDispatchStarted = true;
     };
-    const markMainExecutorDispatchStarted = (): void => {
-      markExecutorDispatchStarted();
+    const markMainExecutorDispatchStarted = async (): Promise<void> => {
+      await markExecutorDispatchStarted();
       mainExecutorDispatchStarted = true;
     };
-    const escalateEffectPotential = (candidate: ToolEffectPotentialRecord): void => {
+    const escalateEffectPotential = async (candidate: ToolEffectPotentialRecord): Promise<void> => {
       const escalated =
         isToolEffectPotentialRecord(candidate) && candidate.potential === "unknown"
           ? candidate
@@ -6016,7 +6143,7 @@ export class ChatTurnAgentRunner {
       // Owner classification can change before execution. Persist the stronger
       // upper bound while retaining pre-dispatch evidence; the subsequent
       // execution fence is the only transition to dispatch_started.
-      this.patchToolRun(input.input, created.toolRunId, {
+      await this.patchToolRun(input.input, created.toolRunId, {
         ...this.buildToolEffectPatch({ potential: effectPotential, phase: "planned" }),
       });
     };
@@ -6050,7 +6177,7 @@ export class ChatTurnAgentRunner {
       // Central last-moment guard for serial, synthetic, and parallel calls.
       // The policy-engine's heartbeat ceiling guarantees that the following
       // invocation cannot materialize approval state after this check.
-      this.assertSystemHeartbeatToolInvocationAllowed(input.input, {
+      await this.assertSystemHeartbeatToolInvocationAllowed(input.input, {
         toolName: preflight.toolName,
         args: preflight.args,
       });
@@ -6128,7 +6255,7 @@ export class ChatTurnAgentRunner {
           onAuxiliaryEffectDispatch: markExecutorDispatchStarted,
         },
       );
-      const concreteEffectRefs = collectConcreteToolEffectRefs(
+      const concreteEffectRefs = await collectConcreteToolEffectRefs(
         this.deps.storage,
         effectReceipts,
         effectInvocationContext,
@@ -6161,7 +6288,7 @@ export class ChatTurnAgentRunner {
 
       if (result.outcome === "approval_required") {
         if (mainExecutorDispatchStarted) {
-          const updated = this.patchToolRun(input.input, created.toolRunId, {
+          const updated = await this.patchToolRun(input.input, created.toolRunId, {
             status: "failed",
             ...this.buildToolEffectPatch({ potential: effectPotential, phase: "dispatch_failed" }),
             result: persistedToolResult,
@@ -6181,9 +6308,9 @@ export class ChatTurnAgentRunner {
           };
         }
         const approvalExpiresAt = result.approvalId
-          ? this.resolveApprovalExpiresAt(result.approvalId, result.expiresAt)
+          ? await this.resolveApprovalExpiresAt(result.approvalId, result.expiresAt)
           : undefined;
-        const updated = this.patchToolRun(input.input, created.toolRunId, {
+        const updated = await this.patchToolRun(input.input, created.toolRunId, {
           status: "approval_required",
           ...this.buildToolEffectPatch({
             potential: effectPotential,
@@ -6232,12 +6359,16 @@ export class ChatTurnAgentRunner {
               originalPath: typeof preflight.args.path === "string" ? preflight.args.path : undefined,
               note: `Write path blocked by policy; wrote to fallback path ${writeFallback.fallbackPath}`,
             };
-            const updated = this.patchToolRun(input.input, created.toolRunId, {
+            const updated = await this.patchToolRun(input.input, created.toolRunId, {
               status: "executed",
               ...this.buildToolEffectPatch({
                 potential: effectPotential,
                 phase: "completed",
-                concreteRefs: collectConcreteToolEffectRefs(this.deps.storage, effectReceipts, effectInvocationContext),
+                concreteRefs: await collectConcreteToolEffectRefs(
+                  this.deps.storage,
+                  effectReceipts,
+                  effectInvocationContext,
+                ),
               }),
               result: fallbackPayload,
               finishedAt: new Date().toISOString(),
@@ -6255,7 +6386,7 @@ export class ChatTurnAgentRunner {
 
           if (writeFallback.result.outcome === "approval_required") {
             if (mainExecutorDispatchStarted) {
-              const updated = this.patchToolRun(input.input, created.toolRunId, {
+              const updated = await this.patchToolRun(input.input, created.toolRunId, {
                 status: "failed",
                 ...this.buildToolEffectPatch({ potential: effectPotential, phase: "dispatch_failed" }),
                 result: writeFallback.result.result,
@@ -6275,9 +6406,9 @@ export class ChatTurnAgentRunner {
               };
             }
             const approvalExpiresAt = writeFallback.result.approvalId
-              ? this.resolveApprovalExpiresAt(writeFallback.result.approvalId, writeFallback.result.expiresAt)
+              ? await this.resolveApprovalExpiresAt(writeFallback.result.approvalId, writeFallback.result.expiresAt)
               : undefined;
-            const updated = this.patchToolRun(input.input, created.toolRunId, {
+            const updated = await this.patchToolRun(input.input, created.toolRunId, {
               status: "approval_required",
               ...this.buildToolEffectPatch({
                 potential: effectPotential,
@@ -6310,7 +6441,7 @@ export class ChatTurnAgentRunner {
           ]
             .filter(Boolean)
             .join("; ");
-          const updated = this.patchToolRun(input.input, created.toolRunId, {
+          const updated = await this.patchToolRun(input.input, created.toolRunId, {
             status: executorDispatchStarted ? "failed" : "blocked",
             ...this.buildToolEffectPatch({
               potential: effectPotential,
@@ -6327,7 +6458,7 @@ export class ChatTurnAgentRunner {
                     args: preflight.args,
                     error: fallbackError,
                     result: writeFallback.result.result,
-                    blockerStrictness: this.readBlockerStrictness(),
+                    blockerStrictness: await this.readBlockerStrictness(),
                   }),
             finishedAt: new Date().toISOString(),
           });
@@ -6353,7 +6484,7 @@ export class ChatTurnAgentRunner {
           };
         }
 
-        const updated = this.patchToolRun(input.input, created.toolRunId, {
+        const updated = await this.patchToolRun(input.input, created.toolRunId, {
           status: executorDispatchStarted ? "failed" : "blocked",
           ...this.buildToolEffectPatch({
             potential: effectPotential,
@@ -6370,7 +6501,7 @@ export class ChatTurnAgentRunner {
                   args: preflight.args,
                   error: result.policyReason,
                   result: persistedToolResult,
-                  blockerStrictness: this.readBlockerStrictness(),
+                  blockerStrictness: await this.readBlockerStrictness(),
                 }),
           finishedAt: new Date().toISOString(),
         });
@@ -6414,7 +6545,7 @@ export class ChatTurnAgentRunner {
         }
       }
 
-      const updated = this.patchToolRun(input.input, created.toolRunId, {
+      const updated = await this.patchToolRun(input.input, created.toolRunId, {
         status: "executed",
         ...this.buildToolEffectPatch({
           potential: effectPotential,
@@ -6458,7 +6589,7 @@ export class ChatTurnAgentRunner {
           return recovered;
         }
       }
-      const updated = this.patchToolRun(input.input, created.toolRunId, {
+      const updated = await this.patchToolRun(input.input, created.toolRunId, {
         status: "failed",
         ...this.buildToolEffectPatch({
           potential: effectPotential,
@@ -6493,12 +6624,12 @@ export class ChatTurnAgentRunner {
     }
   }
 
-  private resolveApprovalExpiresAt(approvalId: string, fallback?: string): string | undefined {
+  private async resolveApprovalExpiresAt(approvalId: string, fallback?: string): Promise<string | undefined> {
     if (fallback) {
       return fallback;
     }
     try {
-      return this.deps.storage.approvals.get(approvalId).expiresAt;
+      return (await this.deps.storage.approvals.get(approvalId)).expiresAt;
     } catch {
       return undefined;
     }
@@ -6528,7 +6659,7 @@ export class ChatTurnAgentRunner {
     if (!content) {
       return compactToolResultForExecutionProfile(input.toolName, input.result, input.normalizationProfile);
     }
-    this.runCanonicalWrite(input.turnInput, () => undefined);
+    await this.runCanonicalWrite(input.turnInput, () => undefined);
     const persisted = await this.deps.persistToolArtifact({
       sessionId: input.sessionId,
       turnId: input.turnId,
@@ -6540,7 +6671,7 @@ export class ChatTurnAgentRunner {
       createdAt: new Date().toISOString(),
       ...(input.turnInput.canonicalWriteFence ? { canonicalWriteFence: input.turnInput.canonicalWriteFence } : {}),
     });
-    this.runCanonicalWrite(input.turnInput, () => undefined);
+    await this.runCanonicalWrite(input.turnInput, () => undefined);
     return compactToolResultForTurn(input.result, {
       artifactId: persisted.artifactId,
       storageRelPath: persisted.storageRelPath,
@@ -6647,9 +6778,9 @@ export class ChatTurnAgentRunner {
         toolName: input.toolName,
         result: annotatedAlternateBuiltinResult,
         normalizationProfile: input.turnInput.normalizationProfile,
-        priorToolRuns: this.deps.storage.chatToolRuns.listByTurn(input.turnId),
+        priorToolRuns: await this.deps.storage.chatToolRuns.listByTurn(input.turnId),
       });
-      const updated = this.patchToolRun(input.turnInput, input.created.toolRunId, {
+      const updated = await this.patchToolRun(input.turnInput, input.created.toolRunId, {
         status: "executed",
         ...this.buildToolEffectPatch({ potential: input.getEffectPotential(), phase: "completed" }),
         result: persistedAlternateBuiltinResult,
@@ -6697,9 +6828,9 @@ export class ChatTurnAgentRunner {
           toolName: input.toolName,
           result: annotatedFallbackResult,
           normalizationProfile: input.turnInput.normalizationProfile,
-          priorToolRuns: this.deps.storage.chatToolRuns.listByTurn(input.turnId),
+          priorToolRuns: await this.deps.storage.chatToolRuns.listByTurn(input.turnId),
         });
-        const updated = this.patchToolRun(input.turnInput, input.created.toolRunId, {
+        const updated = await this.patchToolRun(input.turnInput, input.created.toolRunId, {
           status: "executed",
           ...this.buildToolEffectPatch({ potential: input.getEffectPotential(), phase: "completed" }),
           result: persistedFallbackResult,
@@ -6733,9 +6864,9 @@ export class ChatTurnAgentRunner {
         toolName: input.toolName,
         result: annotatedNormalizedResult,
         normalizationProfile: input.turnInput.normalizationProfile,
-        priorToolRuns: this.deps.storage.chatToolRuns.listByTurn(input.turnId),
+        priorToolRuns: await this.deps.storage.chatToolRuns.listByTurn(input.turnId),
       });
-      const updated = this.patchToolRun(input.turnInput, input.created.toolRunId, {
+      const updated = await this.patchToolRun(input.turnInput, input.created.toolRunId, {
         status: "executed",
         ...this.buildToolEffectPatch({ potential: input.getEffectPotential(), phase: "completed" }),
         result: persistedNormalizedResult,
@@ -6774,9 +6905,9 @@ export class ChatTurnAgentRunner {
         toolName: input.toolName,
         result: annotatedNoResultsPayload,
         normalizationProfile: input.turnInput.normalizationProfile,
-        priorToolRuns: this.deps.storage.chatToolRuns.listByTurn(input.turnId),
+        priorToolRuns: await this.deps.storage.chatToolRuns.listByTurn(input.turnId),
       });
-      const updated = this.patchToolRun(input.turnInput, input.created.toolRunId, {
+      const updated = await this.patchToolRun(input.turnInput, input.created.toolRunId, {
         status: "executed",
         ...this.buildToolEffectPatch({ potential: input.getEffectPotential(), phase: "completed" }),
         result: persistedNoResultsPayload,
@@ -6826,9 +6957,9 @@ export class ChatTurnAgentRunner {
       toolName: input.toolName,
       result: annotatedFailureResult,
       normalizationProfile: input.turnInput.normalizationProfile,
-      priorToolRuns: this.deps.storage.chatToolRuns.listByTurn(input.turnId),
+      priorToolRuns: await this.deps.storage.chatToolRuns.listByTurn(input.turnId),
     });
-    const updated = this.patchToolRun(input.turnInput, input.created.toolRunId, {
+    const updated = await this.patchToolRun(input.turnInput, input.created.toolRunId, {
       status: "failed",
       ...this.buildToolEffectPatch({
         potential: input.getEffectPotential(),
@@ -7135,10 +7266,10 @@ export class ChatTurnAgentRunner {
     effectPotential: ToolEffectPotentialRecord;
     toolCallBeforeHookInterposition?: ToolCallBeforeHookInterpositionBinding;
     toolRuntimeOwner?: ChatTurnCapabilityToolRuntimeOwnerBinding;
-    onEffectPotentialEscalated: (potential: ToolEffectPotentialRecord) => void;
+    onEffectPotentialEscalated: (potential: ToolEffectPotentialRecord) => Promise<void>;
     captureEffectReceipt: (receipt: ToolEffectReceiptEnvelope) => void;
-    markExecutorDispatchStarted: () => void;
-    markAuxiliaryEffectDispatchStarted: () => void;
+    markExecutorDispatchStarted: () => Promise<void>;
+    markAuxiliaryEffectDispatchStarted: () => Promise<void>;
   }): Promise<
     | {
         result: ToolInvokeResult;
@@ -7243,7 +7374,7 @@ export class ChatTurnAgentRunner {
       : input.turnBudgetDeadline
         ? Math.min(FINAL_PASS_COMPLETION_TIMEOUT_MS, Math.max(3000, input.turnBudgetDeadline - Date.now()))
         : FINAL_PASS_COMPLETION_TIMEOUT_MS;
-    const synthesisUsageAttribution = this.buildTurnModelUsageAttribution(
+    const synthesisUsageAttribution = await this.buildTurnModelUsageAttribution(
       input.input,
       "final-synthesis",
       "chat_repair",
@@ -7252,7 +7383,7 @@ export class ChatTurnAgentRunner {
     let usage: ChatStreamUsageRecord | null = null;
     try {
       providerCalls += 1;
-      this.assertExternalDispatch(input.input);
+      await this.assertExternalDispatch(input.input);
       const completion = await this.deps.createChatCompletion(
         {
           providerId: input.input.providerId,
@@ -7345,13 +7476,17 @@ export class ChatTurnAgentRunner {
       ? Math.min(FINAL_PASS_COMPLETION_TIMEOUT_MS, Math.max(3000, input.turnBudgetDeadline - Date.now()))
       : FINAL_PASS_COMPLETION_TIMEOUT_MS;
     const toolSummary = summarizeToolRunsForSynthesis(projectToolRunsForModel(input.toolRuns), input.input.content);
-    const repairUsageAttribution = this.buildTurnModelUsageAttribution(input.input, "incomplete-repair", "chat_repair");
+    const repairUsageAttribution = await this.buildTurnModelUsageAttribution(
+      input.input,
+      "incomplete-repair",
+      "chat_repair",
+    );
     const ignoreDraft = looksLikeUserSafeFailureMessage(input.partialAssistantContent);
     let providerCalls = 0;
     let usage: ChatStreamUsageRecord | null = null;
     try {
       providerCalls += 1;
-      this.assertExternalDispatch(input.input);
+      await this.assertExternalDispatch(input.input);
       const completion = await this.deps.createChatCompletion(
         {
           providerId: input.input.providerId,
@@ -7424,12 +7559,12 @@ export class ChatTurnAgentRunner {
     }
   }
 
-  private buildTurnModelUsageAttribution(
+  private async buildTurnModelUsageAttribution(
     input: ChatTurnAgentRunnerInput,
     logicalCall: string,
     callKind: NonNullable<ModelUsageAttributionContext["callKind"]>,
-  ): ModelUsageAttributionContext {
-    const workerUsageAttribution = resolveDelegatedWorkerUsageAttribution(this.deps.storage, input);
+  ): Promise<ModelUsageAttributionContext> {
+    const workerUsageAttribution = await resolveDelegatedWorkerUsageAttribution(this.deps.storage, input);
     return {
       operationId: `chat-turn:${input.turnId}:${logicalCall}`,
       callKind:
@@ -7437,7 +7572,7 @@ export class ChatTurnAgentRunner {
           ? "delegation_worker"
           : callKind,
       ...buildChatTurnContextUsageAttribution(input),
-      workspaceId: this.deps.storage.chatSessionMeta?.get(input.sessionId)?.workspaceId,
+      workspaceId: (await this.deps.storage.chatSessionMeta?.get(input.sessionId))?.workspaceId,
       sessionId: input.sessionId,
       turnId: input.turnId,
       durableRunId: input.policyRunId ?? workerUsageAttribution?.delegationRunId,
@@ -7449,20 +7584,21 @@ export class ChatTurnAgentRunner {
   }
 }
 
-function resolveDelegatedWorkerUsageAttribution(
+async function resolveDelegatedWorkerUsageAttribution(
   storage: Pick<Storage, "chatDelegationSteps">,
   input: Pick<ChatTurnAgentRunnerInput, "parentDelegationStepId" | "sessionId">,
-):
+): Promise<
   | {
       agentId: string;
       workerId: string;
       delegationRunId: string;
       parentOperationId: string;
     }
-  | undefined {
+  | undefined
+> {
   const stepId = input.parentDelegationStepId?.trim();
   if (!stepId) return undefined;
-  const step = storage.chatDelegationSteps.get(stepId);
+  const step = await storage.chatDelegationSteps.get(stepId);
   if (step.childSessionId !== input.sessionId) {
     throw new Error(`Delegation step ${stepId} is not bound to child session ${input.sessionId}.`);
   }
@@ -8196,6 +8332,7 @@ function detectDirectUrlIntent(content: string): boolean {
 function detectWebLookupIntent(content: string, historyMessages: ChatCompletionRequest["messages"]): boolean {
   return (
     detectLiveDataIntent(content) ||
+    hasExternalResearchIntent(content) ||
     detectDirectUrlIntent(content) ||
     detectWebPageInteractionIntent(content) ||
     Boolean(derivePromptSpecificWebQuery(content)) ||
@@ -9856,6 +9993,10 @@ function inferQueryFromPrompt(userContent: string): string | undefined {
   if (normalizedInput.length < 3) {
     return undefined;
   }
+  const externalResearchSubject = extractExternalResearchSubject(normalizedInput);
+  if (externalResearchSubject) {
+    return externalResearchSubject;
+  }
   const localBusinessQuery = resolveLocalBusinessSearchQuery(userContent);
   if (localBusinessQuery) {
     return localBusinessQuery;
@@ -9905,6 +10046,12 @@ function inferQueryFromPrompt(userContent: string): string | undefined {
     return undefined;
   }
   return derived;
+}
+
+function normalizeSearchReuseQuery(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase().replace(/\s+/gu, " ");
+  return normalized || undefined;
 }
 
 function derivePromptSpecificWebQuery(content: string): string | undefined {
@@ -12432,8 +12579,45 @@ function looksLikeUserSafeFailureMessage(content: string): boolean {
     normalized.startsWith("the selected provider or integration needs valid auth") ||
     normalized.startsWith("this turn hit the current execution budget before a full pass finished.") ||
     normalized.startsWith("this turn is waiting for approval before it can continue.") ||
-    normalized.startsWith("this turn failed before completion.")
+    normalized.startsWith("this turn failed before completion.") ||
+    normalized.startsWith("i can't fetch web-backed information for that because web is set to off")
   );
+}
+
+function buildGroundedArtifactFallbackSource(input: {
+  assistantContent: string;
+  historyMessages: ChatCompletionRequest["messages"];
+  toolRuns: ChatToolRunRecord[];
+}): string | undefined {
+  const parts: string[] = [];
+  for (const message of input.historyMessages) {
+    if (message.role !== "assistant" || typeof message.content !== "string") continue;
+    const content = message.content.trim();
+    if (
+      content.length >= 180 &&
+      !looksLikeRecoverableAssistantFallbackContent(content) &&
+      !looksLikeUserSafeFailureMessage(content)
+    ) {
+      parts.push(content);
+    }
+  }
+  for (const run of input.toolRuns) {
+    if (run.status !== "executed" || !run.result || /^(?:presentations|documents)\.create$/u.test(run.toolName)) {
+      continue;
+    }
+    const serialized = JSON.stringify(run.result);
+    if (serialized.length >= 80) parts.push(serialized);
+  }
+  const current = input.assistantContent.trim();
+  if (
+    current.length >= 180 &&
+    !looksLikeRecoverableAssistantFallbackContent(current) &&
+    !looksLikeUserSafeFailureMessage(current)
+  ) {
+    parts.push(current);
+  }
+  const grounded = parts.join("\n\n").trim().slice(-18_000);
+  return grounded.length >= 180 ? grounded : undefined;
 }
 
 function looksLikeRecoverableAssistantFallbackContent(content: string): boolean {
@@ -14462,17 +14646,17 @@ function buildToolFailureFallbackMessage(userPrompt: string, toolRuns: ChatToolR
  * the `routing` object wholesale, so every replacement must carry an existing
  * receipt forward unless the patch itself provides one.
  */
-function preserveRoutedContextTraceBinding(
+async function preserveRoutedContextTraceBinding(
   storage: Pick<Storage, "chatTurnTraces">,
   turnId: string,
   patch: Parameters<Storage["chatTurnTraces"]["patch"]>[1],
-): Parameters<Storage["chatTurnTraces"]["patch"]>[1] {
+): Promise<Parameters<Storage["chatTurnTraces"]["patch"]>[1]> {
   if (!patch.routing || patch.routing.routedContext) {
     return patch;
   }
   let existingReceipt: ChatTurnTraceRecord["routing"]["routedContext"];
   try {
-    existingReceipt = storage.chatTurnTraces.get(turnId).routing.routedContext;
+    existingReceipt = (await storage.chatTurnTraces.get(turnId)).routing.routedContext;
   } catch (error) {
     if (error instanceof NotFoundError) {
       return patch;
@@ -14485,17 +14669,17 @@ function preserveRoutedContextTraceBinding(
   return { ...patch, routing: { ...patch.routing, routedContext: existingReceipt } };
 }
 
-function createOrRefreshAgentStreamTrace(
+async function createOrRefreshAgentStreamTrace(
   storage: Storage,
   input: Parameters<Storage["chatTurnTraces"]["create"]>[0],
-): ChatTurnTraceRecord {
+): Promise<ChatTurnTraceRecord> {
   try {
-    const existing = storage.chatTurnTraces.get(input.turnId);
+    const existing = await storage.chatTurnTraces.get(input.turnId);
     if (existing.status === "cancelled") {
       throw createAbortError("Chat turn cancelled.");
     }
     const existingReceipt = existing.routing.routedContext;
-    return storage.chatTurnTraces.patch(input.turnId, {
+    return await storage.chatTurnTraces.patch(input.turnId, {
       parentTurnId: input.parentTurnId,
       branchKind: input.branchKind,
       sourceTurnId: input.sourceTurnId,
@@ -14511,7 +14695,7 @@ function createOrRefreshAgentStreamTrace(
     });
   } catch (error) {
     if (error instanceof NotFoundError) {
-      return storage.chatTurnTraces.create(input);
+      return await storage.chatTurnTraces.create(input);
     }
     throw error;
   }
@@ -14552,11 +14736,11 @@ export function resolveToolEffectPotentialForInvocation(input: {
  * Resolve only out-of-band receipts whose canonical owner confirms a completed,
  * idempotency-correlated effect. Result payload fields are never inputs here.
  */
-export function collectConcreteToolEffectRefs(
+export async function collectConcreteToolEffectRefs(
   storage: Pick<Storage, "approvalEffects" | "externalSideEffectRuns" | "codeModeRuns" | "dryRunCommits">,
   receipts: readonly ToolEffectReceiptEnvelope[],
   context: ToolEffectInvocationContext,
-): ToolEffectEvidenceRef[] {
+): Promise<ToolEffectEvidenceRef[]> {
   const refs: ToolEffectEvidenceRef[] = [];
   for (const receipt of receipts.slice(0, 8)) {
     if (!isToolEffectReceiptCorrelated(receipt, context)) continue;
@@ -14566,7 +14750,7 @@ export function collectConcreteToolEffectRefs(
     }
     try {
       if (normalizedRef.owner === "approval_effect") {
-        const effect = storage.approvalEffects.get(normalizedRef.refId);
+        const effect = await storage.approvalEffects.get(normalizedRef.refId);
         const scopeMatches =
           (effect.targetKind === "chat_turn" && effect.targetId === context.turnId) ||
           (effect.targetKind === "durable_run" && Boolean(context.runId) && effect.targetId === context.runId);
@@ -14574,7 +14758,7 @@ export function collectConcreteToolEffectRefs(
           refs.push(normalizedRef);
         }
       } else if (normalizedRef.owner === "external_side_effect") {
-        const run = storage.externalSideEffectRuns.get(normalizedRef.refId);
+        const run = await storage.externalSideEffectRuns.get(normalizedRef.refId);
         if (
           run.status === "completed" &&
           Boolean(context.workspaceId) &&

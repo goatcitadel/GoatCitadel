@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { ConflictError } from "@goatcitadel/contracts";
-import { Storage } from "@goatcitadel/storage";
+import { Storage, createSqliteAsyncStorage } from "@goatcitadel/storage";
 import {
   buildCapabilityLifecycleApprovalBinding,
   buildCapabilityLifecycleApprovalPayload,
@@ -168,35 +168,35 @@ describe("governed skill/capability evidence writes", () => {
     expectedStateSha256: "d".repeat(64),
   };
 
-  it("writes approved skill-state evidence transactionally and converges exact replays", () => {
+  it("writes approved skill-state evidence transactionally and converges exact replays", async () => {
     const storage = createStorage();
-    const repository = createSkillGovernedLifecycleRepository(storage.gatewaySql);
+    const repository = createSkillGovernedLifecycleRepository(createSqliteAsyncStorage(storage));
     const input = {
       authority,
       skillId: "skill-alpha",
       state: "enabled" as const,
       activationEventId: "activation-1",
     };
-    const first = persistApprovedSkillStateEvidence(repository, input);
+    const first = await persistApprovedSkillStateEvidence(repository, input);
     expect(first.event.operation).toBe("enabled");
     expect(first.event.approvalId).toBe(authority.approvalId);
     expect(first.event.scopeKind).toBe("global");
     expect(first.journeyEvent.approvalId).toBe(authority.approvalId);
     expect(first.journeyEvent.summary.callable).toBe(false);
     // Exact replay converges on the original stored pair.
-    const replay = persistApprovedSkillStateEvidence(repository, input);
+    const replay = await persistApprovedSkillStateEvidence(repository, input);
     expect(replay.event.eventId).toBe(first.event.eventId);
     expect(replay.event.materialSha256).toBe(first.event.materialSha256);
     // The same identity with different material conflicts inside the owner.
-    expect(() => persistApprovedSkillStateEvidence(repository, { ...input, state: "sleep" as const })).toThrow(
+    await expect(persistApprovedSkillStateEvidence(repository, { ...input, state: "sleep" as const })).rejects.toThrow(
       ConflictError,
     );
   });
 
-  it("writes approved capability-candidate evidence with approval linkage", () => {
+  it("writes approved capability-candidate evidence with approval linkage", async () => {
     const storage = createStorage();
-    const repository = createSkillGovernedLifecycleRepository(storage.gatewaySql);
-    const stored = persistApprovedCapabilityCandidateEvidence(repository, {
+    const repository = createSkillGovernedLifecycleRepository(createSqliteAsyncStorage(storage));
+    const stored = await persistApprovedCapabilityCandidateEvidence(repository, {
       authority,
       candidateId: "candidate-1",
       action: "candidate_promoted",
@@ -209,10 +209,10 @@ describe("governed skill/capability evidence writes", () => {
     expect(stored.journeyEvent.subjectId).toBe("candidate-1");
   });
 
-  it("writes review-only proposal evidence as approval-free source-required governance", () => {
+  it("writes review-only proposal evidence as approval-free source-required governance", async () => {
     const storage = createStorage();
-    const repository = createSkillGovernedLifecycleRepository(storage.gatewaySql);
-    const stored = persistCapabilityProposalCreatedEvidence(repository, {
+    const repository = createSkillGovernedLifecycleRepository(createSqliteAsyncStorage(storage));
+    const stored = await persistCapabilityProposalCreatedEvidence(repository, {
       proposalId: "proposal-1",
       proposalKind: "skill",
       proposalEventId: "proposal-event-1",
@@ -245,11 +245,11 @@ describe("module-private fail-safe authority (brand-forgery matrix)", () => {
     expect(isSkillGovernanceSystemAuthority(null)).toBe(false);
   });
 
-  it("refuses fail-safe skill disable evidence for forged authorities and writes it for minted ones", () => {
+  it("refuses fail-safe skill disable evidence for forged authorities and writes it for minted ones", async () => {
     const storage = createStorage();
-    const repository = createSkillGovernedLifecycleRepository(storage.gatewaySql);
+    const repository = createSkillGovernedLifecycleRepository(createSqliteAsyncStorage(storage));
     const forged = { actorId: SKILL_GOVERNANCE_SYSTEM_ACTOR_ID, toJSON: () => undefined } as never;
-    expect(() =>
+    await expect(
       persistSkillSystemDisableEvidence(repository, {
         authority: forged,
         skillId: "skill-alpha",
@@ -257,9 +257,9 @@ describe("module-private fail-safe authority (brand-forgery matrix)", () => {
         activationEventId: "activation-2",
         occurredAt: "2026-07-23T00:00:00.000Z",
       }),
-    ).toThrow(ConflictError);
+    ).rejects.toThrow(ConflictError);
 
-    const stored = persistSkillSystemDisableEvidence(repository, {
+    const stored = await persistSkillSystemDisableEvidence(repository, {
       authority: mintSkillGovernanceSystemAuthority(),
       skillId: "skill-alpha",
       reasonCode: "curator_idle_archive",
@@ -272,10 +272,10 @@ describe("module-private fail-safe authority (brand-forgery matrix)", () => {
     expect(stored.journeyEvent.actorType).toBe("system");
   });
 
-  it("refuses fail-safe capability revoke evidence for forged authorities and requires versions", () => {
+  it("refuses fail-safe capability revoke evidence for forged authorities and requires versions", async () => {
     const storage = createStorage();
-    const repository = createSkillGovernedLifecycleRepository(storage.gatewaySql);
-    expect(() =>
+    const repository = createSkillGovernedLifecycleRepository(createSqliteAsyncStorage(storage));
+    await expect(
       persistCapabilitySystemRevokeEvidence(repository, {
         authority: { ...mintSkillGovernanceSystemAuthority() } as never,
         candidateId: "candidate-1",
@@ -283,8 +283,8 @@ describe("module-private fail-safe authority (brand-forgery matrix)", () => {
         reasonCode: "integrity_failure",
         occurredAt: "2026-07-23T00:00:00.000Z",
       }),
-    ).toThrow(ConflictError);
-    expect(() =>
+    ).rejects.toThrow(ConflictError);
+    await expect(
       persistCapabilitySystemRevokeEvidence(repository, {
         authority: mintSkillGovernanceSystemAuthority(),
         candidateId: "candidate-1",
@@ -292,9 +292,9 @@ describe("module-private fail-safe authority (brand-forgery matrix)", () => {
         reasonCode: "integrity_failure",
         occurredAt: "2026-07-23T00:00:00.000Z",
       }),
-    ).toThrow(ConflictError);
+    ).rejects.toThrow(ConflictError);
 
-    const stored = persistCapabilitySystemRevokeEvidence(repository, {
+    const stored = await persistCapabilitySystemRevokeEvidence(repository, {
       authority: mintSkillGovernanceSystemAuthority(),
       candidateId: "candidate-1",
       revokedVersionIds: ["v1", "v0"],

@@ -23,7 +23,7 @@
   width: 100%;
   text-align: start;
   padding: 0.75rem;
-  border: 1px solid var(--border, rgba(120, 120, 140, 0.28));
+  border: 1px solid var(--border, var(--border-default));
   border-radius: 0.6rem;
   background: var(--surface-1, transparent);
   cursor: pointer;
@@ -31,16 +31,16 @@
 }
 
 .mc-next-remote-workers__worker:hover {
-  border-color: var(--accent, #6b8afd);
+  border-color: var(--accent, var(--area-ops));
 }
 
 .mc-next-remote-workers__worker[aria-current="true"] {
-  border-color: var(--accent, #6b8afd);
-  box-shadow: inset 0 0 0 1px var(--accent, #6b8afd);
+  border-color: var(--accent, var(--area-ops));
+  box-shadow: inset 0 0 0 1px var(--accent, var(--area-ops));
 }
 
 .mc-next-remote-workers__worker:focus-visible {
-  outline: 2px solid var(--accent, #6b8afd);
+  outline: 2px solid var(--accent, var(--area-ops));
   outline-offset: 2px;
 }
 
@@ -61,11 +61,11 @@
   flex-wrap: wrap;
   gap: 0.35rem 0.75rem;
   font-size: var(--text-xs);
-  color: var(--text-2, #9aa0ac);
+  color: var(--text-2, var(--fg-muted));
 }
 
 .mc-next-remote-workers__section {
-  border: 1px solid var(--border, rgba(120, 120, 140, 0.28));
+  border: 1px solid var(--border, var(--border-default));
   border-radius: 0.6rem;
   padding: 0.9rem 1rem;
   display: flex;
@@ -85,7 +85,7 @@
   font-size: var(--text-2xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--text-2, #9aa0ac);
+  color: var(--text-2, var(--fg-muted));
 }
 
 .mc-next-remote-workers__truth[data-authority="unavailable"] {
@@ -102,7 +102,7 @@
 }
 
 .mc-next-remote-workers__fact-grid dt {
-  color: var(--text-2, #9aa0ac);
+  color: var(--text-2, var(--fg-muted));
 }
 
 .mc-next-remote-workers__fact-grid dd {
@@ -119,7 +119,7 @@
 }
 
 .mc-next-remote-workers__assignment {
-  border: 1px solid var(--border, rgba(120, 120, 140, 0.28));
+  border: 1px solid var(--border, var(--border-default));
   border-radius: 0.5rem;
   padding: 0.6rem 0.75rem;
   display: flex;
@@ -135,7 +135,7 @@
 }
 
 .mc-next-remote-workers__events {
-  border-top: 1px dashed var(--border, rgba(120, 120, 140, 0.28));
+  border-top: 1px dashed var(--border, var(--border-default));
   padding-top: 0.5rem;
   display: flex;
   flex-direction: column;
@@ -156,7 +156,7 @@
 }
 
 .mc-next-remote-workers__unavailable {
-  color: var(--text-2, #9aa0ac);
+  color: var(--text-2, var(--fg-muted));
   font-size: var(--text-xs);
   margin: 0;
 }

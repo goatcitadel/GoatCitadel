@@ -5,7 +5,7 @@ import type {
   CapabilityScopeView,
 } from "@goatcitadel/contracts";
 import { DEFAULT_CITADEL_ID } from "@goatcitadel/contracts";
-import type { CapabilityScopeRepository } from "@goatcitadel/storage";
+import type { AsyncStorage } from "@goatcitadel/storage";
 import type { CapabilityScopeResolver, EffectiveCapabilitySet } from "./capability-scope-resolver.js";
 
 export interface CapabilityRegistryEntry {
@@ -14,12 +14,12 @@ export interface CapabilityRegistryEntry {
 }
 
 export interface CapabilityScopeRouteServiceDeps {
-  repo: CapabilityScopeRepository;
+  repo: Pick<AsyncStorage["capabilityScope"], "list" | "replaceSet" | "clear">;
   resolver: CapabilityScopeResolver;
   /** Live registry entries (ref + label) per resource type. */
-  listRegistry: (resourceType: CapabilityResourceType) => CapabilityRegistryEntry[];
+  listRegistry: (resourceType: CapabilityResourceType) => Promise<CapabilityRegistryEntry[]>;
   /** Resolve a workspace's citadel id (mirrors turn-prep). */
-  resolveCitadelId: (workspaceId: string) => string;
+  resolveCitadelId: (workspaceId: string) => Promise<string>;
 }
 
 /** A workspace id guaranteed to have no assignment rows, so the resolver yields the
@@ -29,15 +29,15 @@ const NO_WORKSPACE = "__capability_scope_no_workspace__";
 export class CapabilityScopeRouteService {
   public constructor(private readonly deps: CapabilityScopeRouteServiceDeps) {}
 
-  public getView(
+  public async getView(
     scopeKind: CapabilityScopeKind,
     scopeId: string,
     resourceType: CapabilityResourceType,
-  ): CapabilityScopeView {
-    const rows = this.deps.repo.list(scopeKind, scopeId, resourceType);
+  ): Promise<CapabilityScopeView> {
+    const rows = await this.deps.repo.list(scopeKind, scopeId, resourceType);
     const mode = rows.length === 0 ? "inherit" : "curated";
-    const effective = this.effectiveFor(scopeKind, scopeId, resourceType);
-    const candidates = this.candidateEntries(scopeKind, scopeId, resourceType);
+    const effective = await this.effectiveFor(scopeKind, scopeId, resourceType);
+    const candidates = await this.candidateEntries(scopeKind, scopeId, resourceType);
     const items = candidates.map((entry) => ({
       resourceRef: entry.ref,
       label: entry.label,
@@ -67,27 +67,27 @@ export class CapabilityScopeRouteService {
     };
   }
 
-  public updateScope(
+  public async updateScope(
     scopeKind: CapabilityScopeKind,
     scopeId: string,
     input: CapabilityScopeUpdateInput,
-  ): CapabilityScopeView {
-    this.deps.repo.replaceSet(
+  ): Promise<CapabilityScopeView> {
+    await this.deps.repo.replaceSet(
       scopeKind,
       scopeId,
       input.resourceType,
       input.assignments.map((a) => ({ resourceRef: a.resourceRef, enabled: a.enabled })),
     );
-    return this.getView(scopeKind, scopeId, input.resourceType);
+    return await this.getView(scopeKind, scopeId, input.resourceType);
   }
 
-  public resetScope(
+  public async resetScope(
     scopeKind: CapabilityScopeKind,
     scopeId: string,
     resourceType: CapabilityResourceType,
-  ): CapabilityScopeView {
-    this.deps.repo.clear(scopeKind, scopeId, resourceType);
-    return this.getView(scopeKind, scopeId, resourceType);
+  ): Promise<CapabilityScopeView> {
+    await this.deps.repo.clear(scopeKind, scopeId, resourceType);
+    return await this.getView(scopeKind, scopeId, resourceType);
   }
 
   /**
@@ -95,46 +95,46 @@ export class CapabilityScopeRouteService {
    * Returns "ALL" when the workspace (and its citadel) have no skill assignments
    * configured — preserving the non-breaking default behavior.
    */
-  public resolveEffectiveSkills(workspaceId: string): EffectiveCapabilitySet {
-    const citadelId = this.deps.resolveCitadelId(workspaceId);
-    return this.resolveType(citadelId, workspaceId, "skill");
+  public async resolveEffectiveSkills(workspaceId: string): Promise<EffectiveCapabilitySet> {
+    const citadelId = await this.deps.resolveCitadelId(workspaceId);
+    return await this.resolveType(citadelId, workspaceId, "skill");
   }
 
   /** Candidate set: citadel scope draws from the global registry; workspace scope draws
    *  from the citadel-effective set (D4 — a workspace can only narrow its citadel). */
-  private candidateEntries(
+  private async candidateEntries(
     scopeKind: CapabilityScopeKind,
     scopeId: string,
     resourceType: CapabilityResourceType,
-  ): CapabilityRegistryEntry[] {
-    const registry = this.deps.listRegistry(resourceType);
+  ): Promise<CapabilityRegistryEntry[]> {
+    const registry = await this.deps.listRegistry(resourceType);
     if (scopeKind === "citadel") {
       return registry;
     }
-    const citadelId = this.deps.resolveCitadelId(scopeId);
+    const citadelId = await this.deps.resolveCitadelId(scopeId);
     // Citadel-effective = resolve with a workspace that has no rows (inherits citadel).
-    const citadelEffective = this.resolveType(citadelId, NO_WORKSPACE, resourceType);
+    const citadelEffective = await this.resolveType(citadelId, NO_WORKSPACE, resourceType);
     return citadelEffective === "ALL" ? registry : registry.filter((e) => citadelEffective.has(e.ref));
   }
 
-  private effectiveFor(
+  private async effectiveFor(
     scopeKind: CapabilityScopeKind,
     scopeId: string,
     resourceType: CapabilityResourceType,
-  ): EffectiveCapabilitySet {
+  ): Promise<EffectiveCapabilitySet> {
     if (scopeKind === "citadel") {
-      return this.resolveType(scopeId, NO_WORKSPACE, resourceType);
+      return await this.resolveType(scopeId, NO_WORKSPACE, resourceType);
     }
-    const citadelId = this.deps.resolveCitadelId(scopeId);
-    return this.resolveType(citadelId, scopeId, resourceType);
+    const citadelId = await this.deps.resolveCitadelId(scopeId);
+    return await this.resolveType(citadelId, scopeId, resourceType);
   }
 
-  private resolveType(
+  private async resolveType(
     citadelId: string,
     workspaceId: string,
     resourceType: CapabilityResourceType,
-  ): EffectiveCapabilitySet {
-    const resolved = this.deps.resolver.resolve(citadelId || DEFAULT_CITADEL_ID, workspaceId);
+  ): Promise<EffectiveCapabilitySet> {
+    const resolved = await this.deps.resolver.resolve(citadelId || DEFAULT_CITADEL_ID, workspaceId);
     return resourceType === "skill"
       ? resolved.skills
       : resourceType === "integration"

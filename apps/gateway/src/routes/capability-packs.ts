@@ -35,7 +35,7 @@ export const capabilityPacksRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.get("/api/v1/capability-packs/staged", operatorOnly, async (_request, reply) => {
-    return reply.send({ items: fastify.services.capabilityPacks.listStagedPacks() });
+    return reply.send({ items: await fastify.services.capabilityPacks.listStagedPacks() });
   });
 
   fastify.post(
@@ -59,7 +59,7 @@ export const capabilityPacksRoutes: FastifyPluginAsync = async (fastify) => {
             ? request.authActorId.trim()
             : undefined);
         return reply.send(
-          fastify.services.capabilityPacks.materializeStagedPack(params.data.evidenceEnvelopeId, {
+          await fastify.services.capabilityPacks.materializeStagedPack(params.data.evidenceEnvelopeId, {
             ...body.data,
             actorId,
           }),
@@ -102,7 +102,7 @@ export const capabilityPacksRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.capabilityPacks.exportPack(parsed.data.packId));
+      return reply.send(await fastify.services.capabilityPacks.exportPack(parsed.data.packId));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -120,7 +120,7 @@ export const capabilityPacksRoutes: FastifyPluginAsync = async (fastify) => {
           ? request.authActorId.trim()
           : undefined);
       return reply.code(201).send(
-        fastify.services.capabilityPacks.installLocalPack({
+        await fastify.services.capabilityPacks.installLocalPack({
           manifest: body.data.manifest as CapabilityPackManifest,
           actorId,
         }),
@@ -147,7 +147,7 @@ export const capabilityPacksRoutes: FastifyPluginAsync = async (fastify) => {
         (typeof request.authActorId === "string" && request.authActorId.trim()
           ? request.authActorId.trim()
           : undefined);
-      return reply.code(201).send(fastify.services.capabilityPacks.installPack(params.data.packId, { actorId }));
+      return reply.code(201).send(await fastify.services.capabilityPacks.installPack(params.data.packId, { actorId }));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }

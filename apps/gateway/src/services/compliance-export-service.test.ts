@@ -62,10 +62,10 @@ const TWO_RUNS: DurableRunRecord[] = [
 const WIDE_RANGE = { fromTs: "2026-06-01T00:00:00.000Z", toTs: "2026-06-30T00:00:00.000Z" };
 
 describe("ComplianceExportService.buildComplianceBundle", () => {
-  it("builds a signed bundle over the runs in range and verifies valid", () => {
+  it("builds a signed bundle over the runs in range and verifies valid", async () => {
     const service = buildService(TWO_RUNS);
 
-    const bundle = service.buildComplianceBundle(WIDE_RANGE);
+    const bundle = await service.buildComplianceBundle(WIDE_RANGE);
 
     expect(bundle.schemaVersion).toBe("1.0.0");
     expect(bundle.generatedAt).toBe(FIXED_NOW);
@@ -88,7 +88,7 @@ describe("ComplianceExportService.buildComplianceBundle", () => {
     ]);
   });
 
-  it("reuses the projected signed receipt manifest without exposing canonical secrets", () => {
+  it("reuses the projected signed receipt manifest without exposing canonical secrets", async () => {
     const rawLastError = "Provider failed with Authorization: Bearer compliance-error-secret";
     const rawExternalReference =
       "url:https://bundle-user:bundle-password@example.test/result?token=compliance-reference-secret";
@@ -124,7 +124,7 @@ describe("ComplianceExportService.buildComplianceBundle", () => {
       now: () => new Date(FIXED_NOW),
     });
 
-    const bundle = service.buildComplianceBundle({
+    const bundle = await service.buildComplianceBundle({
       ...WIDE_RANGE,
       workspaceId: "workspace-compliance",
     });
@@ -142,7 +142,7 @@ describe("ComplianceExportService.buildComplianceBundle", () => {
     expect(sideEffect.externalReferenceId).toBe(rawExternalReference);
   });
 
-  it("filters runs outside the requested time range", () => {
+  it("filters runs outside the requested time range", async () => {
     const runs: DurableRunRecord[] = [
       ...TWO_RUNS,
       makeRun({ runId: "run-old", createdAt: "2026-01-01T00:00:00.000Z", finishedAt: "2026-01-01T00:01:00.000Z" }),
@@ -150,12 +150,12 @@ describe("ComplianceExportService.buildComplianceBundle", () => {
     ];
     const service = buildService(runs);
 
-    const bundle = service.buildComplianceBundle(WIDE_RANGE);
+    const bundle = await service.buildComplianceBundle(WIDE_RANGE);
 
     expect(bundle.receipts.map((r) => r.manifest.runId).sort()).toEqual(["run-a", "run-b"]);
   });
 
-  it("filters by workspaceId via run correlation when requested", () => {
+  it("filters by workspaceId via run correlation when requested", async () => {
     const runs: DurableRunRecord[] = [
       makeRun({
         runId: "run-ws1",
@@ -170,14 +170,14 @@ describe("ComplianceExportService.buildComplianceBundle", () => {
     ];
     const service = buildService(runs);
 
-    const bundle = service.buildComplianceBundle({ ...WIDE_RANGE, workspaceId: "ws-1" });
+    const bundle = await service.buildComplianceBundle({ ...WIDE_RANGE, workspaceId: "ws-1" });
 
     expect(bundle.workspaceId).toBe("ws-1");
     expect(bundle.receipts.map((r) => r.manifest.runId)).toEqual(["run-ws1"]);
     expect(service.verifyComplianceBundle(bundle).valid).toBe(true);
   });
 
-  it("caps at `limit`, truncates, and keeps the newest receipts", () => {
+  it("caps at `limit`, truncates, and keeps the newest receipts", async () => {
     const runs: DurableRunRecord[] = [
       makeRun({ runId: "run-1", createdAt: "2026-06-10T00:00:00.000Z" }),
       makeRun({ runId: "run-2", createdAt: "2026-06-11T00:00:00.000Z" }),
@@ -185,7 +185,7 @@ describe("ComplianceExportService.buildComplianceBundle", () => {
     ];
     const service = buildService(runs);
 
-    const bundle = service.buildComplianceBundle({ ...WIDE_RANGE, limit: 2 });
+    const bundle = await service.buildComplianceBundle({ ...WIDE_RANGE, limit: 2 });
 
     expect(bundle.truncated).toBe(true);
     expect(bundle.receiptCount).toBe(2);
@@ -194,23 +194,23 @@ describe("ComplianceExportService.buildComplianceBundle", () => {
     expect(service.verifyComplianceBundle(bundle).valid).toBe(true);
   });
 
-  it("rejects an inverted range", () => {
+  it("rejects an inverted range", async () => {
     const service = buildService(TWO_RUNS);
-    expect(() =>
+    await expect(
       service.buildComplianceBundle({ fromTs: "2026-06-30T00:00:00.000Z", toTs: "2026-06-01T00:00:00.000Z" }),
-    ).toThrow(/fromTs must be less than or equal to toTs/);
+    ).rejects.toThrow(/fromTs must be less than or equal to toTs/);
   });
 
-  it("rejects a non-ISO timestamp", () => {
+  it("rejects a non-ISO timestamp", async () => {
     const service = buildService(TWO_RUNS);
-    expect(() => service.buildComplianceBundle({ fromTs: "not-a-date", toTs: WIDE_RANGE.toTs })).toThrow(
+    await expect(service.buildComplianceBundle({ fromTs: "not-a-date", toTs: WIDE_RANGE.toTs })).rejects.toThrow(
       /not a valid ISO-8601 timestamp/,
     );
   });
 
-  it("produces an empty but valid bundle when no runs are in range", () => {
+  it("produces an empty but valid bundle when no runs are in range", async () => {
     const service = buildService(TWO_RUNS);
-    const bundle = service.buildComplianceBundle({
+    const bundle = await service.buildComplianceBundle({
       fromTs: "2025-01-01T00:00:00.000Z",
       toTs: "2025-12-31T00:00:00.000Z",
     });
@@ -221,9 +221,9 @@ describe("ComplianceExportService.buildComplianceBundle", () => {
 });
 
 describe("verifyComplianceBundle tamper detection", () => {
-  it("flags a tampered receipt manifest: that receipt invalid AND a bundle reason", () => {
+  it("flags a tampered receipt manifest: that receipt invalid AND a bundle reason", async () => {
     const service = buildService(TWO_RUNS);
-    const bundle = service.buildComplianceBundle(WIDE_RANGE);
+    const bundle = await service.buildComplianceBundle(WIDE_RANGE);
 
     // Mutate one receipt's manifest WITHOUT re-signing it.
     const tampered: ComplianceBundle = {
@@ -242,9 +242,9 @@ describe("verifyComplianceBundle tamper detection", () => {
     expect(result.reasons.some((reason) => reason.includes(tamperedRunId))).toBe(true);
   });
 
-  it("flags a tampered bundle signature", () => {
+  it("flags a tampered bundle signature", async () => {
     const service = buildService(TWO_RUNS);
-    const bundle = service.buildComplianceBundle(WIDE_RANGE);
+    const bundle = await service.buildComplianceBundle(WIDE_RANGE);
 
     const flippedSignature = Buffer.from(bundle.bundleSignature, "base64");
     flippedSignature[0] ^= 0xff;
@@ -260,9 +260,9 @@ describe("verifyComplianceBundle tamper detection", () => {
     expect(result.perReceipt.every((entry) => entry.valid)).toBe(true);
   });
 
-  it("flags a removed receipt via bundleContentHash mismatch", () => {
+  it("flags a removed receipt via bundleContentHash mismatch", async () => {
     const service = buildService(TWO_RUNS);
-    const bundle = service.buildComplianceBundle(WIDE_RANGE);
+    const bundle = await service.buildComplianceBundle(WIDE_RANGE);
 
     const tampered: ComplianceBundle = {
       ...bundle,
@@ -274,9 +274,9 @@ describe("verifyComplianceBundle tamper detection", () => {
     expect(result.reasons.some((reason) => reason.includes("content hash mismatch"))).toBe(true);
   });
 
-  it("flags a reordered receipt list via bundleContentHash mismatch", () => {
+  it("flags a reordered receipt list via bundleContentHash mismatch", async () => {
     const service = buildService(TWO_RUNS);
-    const bundle = service.buildComplianceBundle(WIDE_RANGE);
+    const bundle = await service.buildComplianceBundle(WIDE_RANGE);
 
     const tampered: ComplianceBundle = {
       ...bundle,
@@ -288,13 +288,13 @@ describe("verifyComplianceBundle tamper detection", () => {
     expect(result.reasons.some((reason) => reason.includes("content hash mismatch"))).toBe(true);
   });
 
-  it("flags a swapped-in foreign receipt (different run) via bundleContentHash mismatch", () => {
+  it("flags a swapped-in foreign receipt (different run) via bundleContentHash mismatch", async () => {
     const service = buildService(TWO_RUNS);
-    const bundle = service.buildComplianceBundle(WIDE_RANGE);
+    const bundle = await service.buildComplianceBundle(WIDE_RANGE);
 
     // Build a separate, independently-valid receipt for a run NOT committed by this bundle.
     const otherService = buildService([makeRun({ runId: "run-foreign", createdAt: "2026-06-13T00:00:00.000Z" })]);
-    const foreignBundle = otherService.buildComplianceBundle(WIDE_RANGE);
+    const foreignBundle = await otherService.buildComplianceBundle(WIDE_RANGE);
     const foreignReceipt = foreignBundle.receipts[0];
 
     const tampered: ComplianceBundle = {
@@ -310,9 +310,9 @@ describe("verifyComplianceBundle tamper detection", () => {
     expect(result.reasons.some((reason) => reason.includes("content hash mismatch"))).toBe(true);
   });
 
-  it("flags a receiptCount that disagrees with the receipts present", () => {
+  it("flags a receiptCount that disagrees with the receipts present", async () => {
     const service = buildService(TWO_RUNS);
-    const bundle = service.buildComplianceBundle(WIDE_RANGE);
+    const bundle = await service.buildComplianceBundle(WIDE_RANGE);
 
     const tampered: ComplianceBundle = { ...bundle, receiptCount: 99 };
     const result = verifyComplianceBundle(tampered);

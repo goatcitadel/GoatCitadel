@@ -1173,15 +1173,20 @@ async function exerciseGatewayServiceMethods(app: FastifyInstance, seed: Exercis
       if (typeof method !== "function") {
         continue;
       }
+      const reflectedArity = method.length;
+      const arity =
+        typeof reflectedArity === "number" && Number.isSafeInteger(reflectedArity) && reflectedArity >= 0
+          ? reflectedArity
+          : 0;
 
       const candidates: unknown[][] = [];
       const special = specialArgs[methodName];
       if (special) {
         candidates.push(special);
       }
-      candidates.push(buildFallbackArgs(methodName, method.length));
-      candidates.push(Array.from({ length: method.length }, () => undefined));
-      candidates.push(Array.from({ length: method.length }, () => ({})));
+      candidates.push(buildFallbackArgs(methodName, arity));
+      candidates.push(Array.from({ length: arity }, () => undefined));
+      candidates.push(Array.from({ length: arity }, () => ({})));
 
       let succeeded = false;
       for (const args of candidates) {

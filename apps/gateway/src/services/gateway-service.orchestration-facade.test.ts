@@ -67,13 +67,13 @@ describe("GatewayService orchestration facade delegation", () => {
     await expect(
       GatewayService.prototype.approvePhase.call(gateway, "run-1", "phase-1", "operator", 0.25, "workspace-1"),
     ).resolves.toEqual({ runId: "run-approved" });
-    expect(GatewayService.prototype.getRun.call(gateway, "run-1", "workspace-1")).toEqual({
+    expect(await GatewayService.prototype.getRun.call(gateway, "run-1", "workspace-1")).toEqual({
       runId: "run-read",
     });
-    expect(GatewayService.prototype.listRunCheckpoints.call(gateway, "run-1", "workspace-1")).toEqual([
+    expect(await GatewayService.prototype.listRunCheckpoints.call(gateway, "run-1", "workspace-1")).toEqual([
       { checkpointId: "checkpoint-1" },
     ]);
-    expect(GatewayService.prototype.getRunTrace.call(gateway, "run-1", "workspace-1")).toEqual({
+    expect(await GatewayService.prototype.getRunTrace.call(gateway, "run-1", "workspace-1")).toEqual({
       run: { runId: "run-read" },
       decisions: [],
     });

@@ -26,8 +26,8 @@ import { assertSkillSourceManifestSize, readBoundedSkillSourceManifestTextSync }
 
 /** Lifecycle store surface this service needs. Matches `Storage["skillLifecycle"]`. */
 export interface SkillMutationLifecycleStore {
-  find(skillId: string): SkillLifecycleRecord | undefined;
-  upsert(input: SkillLifecycleRecord): SkillLifecycleRecord;
+  find(skillId: string): Promise<SkillLifecycleRecord | undefined>;
+  upsert(input: SkillLifecycleRecord): Promise<SkillLifecycleRecord>;
 }
 
 export interface SkillMutationServiceOptions {
@@ -163,10 +163,9 @@ export class SkillMutationService {
     return this.applySkillMutation(input);
   }
 
-  /** Synchronous replay-aware variant used by existing synchronous activation callers. */
-  public draftSkillMutationSync(input: DraftSkillMutationInput): SkillMutationResult {
-    const replay = this.readCommittedDraftReplaySync(input);
-    return replay ?? this.applySkillMutationSync(input);
+  /** Compatibility alias retained for one release; persistence is Promise-native. */
+  public async draftSkillMutationSync(input: DraftSkillMutationInput): Promise<SkillMutationResult> {
+    return await this.draftSkillMutation(input);
   }
 
   /**
@@ -174,13 +173,13 @@ export class SkillMutationService {
    * either the filesystem or lifecycle store. The target must be unused before
    * this plan is persisted; only the persisted plan may later create it.
    */
-  public prepareDurableSkillMutation(input: DraftSkillMutationInput): PreparedSkillMutationPlan {
+  public async prepareDurableSkillMutation(input: DraftSkillMutationInput): Promise<PreparedSkillMutationPlan> {
     const evaluationRunId = input.evaluationRunId?.trim();
     const requestedSkillId = input.skillId?.trim();
     if (!evaluationRunId || !requestedSkillId) {
       throw new Error("Durable skill mutation requires deterministic skillId and evaluationRunId values.");
     }
-    const planned = this.planMutation({ ...input, skillId: requestedSkillId, evaluationRunId });
+    const planned = await this.planMutation({ ...input, skillId: requestedSkillId, evaluationRunId });
     if (
       planned.result.snapshot.existed ||
       planned.result.snapshot.priorSourceJson !== undefined ||
@@ -206,9 +205,9 @@ export class SkillMutationService {
    * Existing exact bytes are a replay; missing companion bytes are repaired;
    * any different bytes or foreign lifecycle ownership fail closed.
    */
-  public applyPreparedSkillMutationFilesSync(prepared: PreparedSkillMutationPlan): void {
+  public async applyPreparedSkillMutationFilesSync(prepared: PreparedSkillMutationPlan): Promise<void> {
     const plan = this.materializePreparedSkillMutation(prepared);
-    this.assertPreparedLifecycleCompatible(plan);
+    await this.assertPreparedLifecycleCompatible(plan);
     fsSync.mkdirSync(plan.skillDir, { recursive: true });
     const createdPaths: string[] = [];
     try {
@@ -231,12 +230,12 @@ export class SkillMutationService {
    * Commit only database lifecycle state for an already-materialized durable
    * plan. Callers wrap this with the child stage receipt transaction.
    */
-  public commitPreparedSkillMutation(prepared: PreparedSkillMutationPlan): SkillMutationResult {
+  public async commitPreparedSkillMutation(prepared: PreparedSkillMutationPlan): Promise<SkillMutationResult> {
     const plan = this.materializePreparedSkillMutation(prepared);
     assertExactPreparedArtifact(plan.skillFilePath, prepared.skillMarkdown, prepared.evaluationRunId);
     assertExactPreparedArtifact(plan.sourceJsonPath, plan.sourceJson, prepared.evaluationRunId);
-    const existing = this.assertPreparedLifecycleCompatible(plan);
-    const lifecycle = existing ?? this.skillLifecycle.upsert(plan.lifecycle);
+    const existing = await this.assertPreparedLifecycleCompatible(plan);
+    const lifecycle = existing ?? (await this.skillLifecycle.upsert(plan.lifecycle));
     return {
       skillId: prepared.skillId,
       skillDir: plan.skillDir,
@@ -250,7 +249,7 @@ export class SkillMutationService {
   }
 
   private async readCommittedDraftReplay(input: DraftSkillMutationInput): Promise<SkillMutationResult | undefined> {
-    const replay = this.resolveCommittedDraftReplay(input);
+    const replay = await this.resolveCommittedDraftReplay(input);
     if (!replay) {
       return undefined;
     }
@@ -262,26 +261,10 @@ export class SkillMutationService {
         cause: error,
       });
     }
-    return this.buildCommittedDraftReplay(input, replay, committedMarkdown);
+    return await this.buildCommittedDraftReplay(input, replay, committedMarkdown);
   }
 
-  private readCommittedDraftReplaySync(input: DraftSkillMutationInput): SkillMutationResult | undefined {
-    const replay = this.resolveCommittedDraftReplay(input);
-    if (!replay) {
-      return undefined;
-    }
-    let committedMarkdown: string;
-    try {
-      committedMarkdown = fsSync.readFileSync(replay.skillFilePath, "utf8");
-    } catch (error) {
-      throw new Error(`Committed replay identity ${input.evaluationRunId} is missing its skill artifact.`, {
-        cause: error,
-      });
-    }
-    return this.buildCommittedDraftReplay(input, replay, committedMarkdown);
-  }
-
-  private resolveCommittedDraftReplay(input: DraftSkillMutationInput):
+  private async resolveCommittedDraftReplay(input: DraftSkillMutationInput): Promise<
     | {
         skillId: string;
         skillDir: string;
@@ -289,12 +272,13 @@ export class SkillMutationService {
         sourceJsonPath: string;
         existing: SkillLifecycleRecord;
       }
-    | undefined {
+    | undefined
+  > {
     if (!input.evaluationRunId?.trim() || !input.skillId?.trim()) {
       return undefined;
     }
     const skillId = normalizeSkillId(input.skillId);
-    const existing = this.skillLifecycle.find(skillId);
+    const existing = await this.skillLifecycle.find(skillId);
     if (existing?.provenance?.sourceRef !== input.evaluationRunId) {
       return undefined;
     }
@@ -305,11 +289,11 @@ export class SkillMutationService {
     return { skillId, skillDir, skillFilePath, sourceJsonPath, existing };
   }
 
-  private buildCommittedDraftReplay(
+  private async buildCommittedDraftReplay(
     input: DraftSkillMutationInput,
-    replay: NonNullable<ReturnType<SkillMutationService["resolveCommittedDraftReplay"]>>,
+    replay: NonNullable<Awaited<ReturnType<SkillMutationService["resolveCommittedDraftReplay"]>>>,
     committedMarkdown: string,
-  ): SkillMutationResult {
+  ): Promise<SkillMutationResult> {
     const validation = validateSkillContent({ skillMarkdown: committedMarkdown });
     if (!validation.valid) {
       throw new Error(
@@ -321,7 +305,7 @@ export class SkillMutationService {
       skillDir: replay.skillDir,
       skillFilePath: replay.skillFilePath,
       lifecycle: replay.existing,
-      snapshot: this.captureSnapshot(replay.skillId, replay.skillFilePath, replay.sourceJsonPath),
+      snapshot: await this.captureSnapshot(replay.skillId, replay.skillFilePath, replay.sourceJsonPath),
       validation,
       changeHash: createHash("sha256").update(committedMarkdown, "utf8").digest("hex"),
       replayed: true,
@@ -333,12 +317,12 @@ export class SkillMutationService {
    * source.json → lifecycle upsert (candidate, self_generated) → snapshot.
    */
   public async applySkillMutation(input: DraftSkillMutationInput): Promise<SkillMutationResult> {
-    const plan = this.planMutation(input);
+    const plan = await this.planMutation(input);
     try {
       await fs.mkdir(plan.skillDir, { recursive: true });
       await fs.writeFile(plan.skillFilePath, input.skillMarkdown, "utf8");
       await fs.writeFile(plan.sourceJsonPath, plan.sourceJson, "utf8");
-      const stored = this.skillLifecycle.upsert(plan.lifecycle);
+      const stored = await this.skillLifecycle.upsert(plan.lifecycle);
       return { ...plan.result, lifecycle: stored };
     } catch (error) {
       const rollbackErrors = await this.rollbackFailedMutation(plan);
@@ -354,16 +338,16 @@ export class SkillMutationService {
    * activation path (improvement-service `applyActivationChange`), which is a
    * synchronous state machine.
    */
-  public applySkillMutationSync(input: DraftSkillMutationInput): SkillMutationResult {
-    const plan = this.planMutation(input);
+  public async applySkillMutationSync(input: DraftSkillMutationInput): Promise<SkillMutationResult> {
+    const plan = await this.planMutation(input);
     try {
       fsSync.mkdirSync(plan.skillDir, { recursive: true });
       fsSync.writeFileSync(plan.skillFilePath, input.skillMarkdown, "utf8");
       fsSync.writeFileSync(plan.sourceJsonPath, plan.sourceJson, "utf8");
-      const stored = this.skillLifecycle.upsert(plan.lifecycle);
+      const stored = await this.skillLifecycle.upsert(plan.lifecycle);
       return { ...plan.result, lifecycle: stored };
     } catch (error) {
-      const rollbackErrors = this.rollbackFailedMutationSync(plan);
+      const rollbackErrors = await this.rollbackFailedMutation(plan);
       if (rollbackErrors.length > 0) {
         throw buildSkillMutationRollbackError(error, rollbackErrors);
       }
@@ -375,10 +359,10 @@ export class SkillMutationService {
    * Capture a pre-mutation snapshot without writing. Used by the activation path
    * to record the rollback point before the candidate is applied.
    */
-  public captureSnapshotFor(input: { skillId?: string; skillMarkdown?: string }): SkillMutationSnapshot {
+  public async captureSnapshotFor(input: { skillId?: string; skillMarkdown?: string }): Promise<SkillMutationSnapshot> {
     const skillId = this.resolveSkillIdForSnapshot(input);
     const skillDir = this.resolveSkillDir(skillId);
-    return this.captureSnapshot(skillId, path.join(skillDir, "SKILL.md"), path.join(skillDir, "source.json"));
+    return await this.captureSnapshot(skillId, path.join(skillDir, "SKILL.md"), path.join(skillDir, "source.json"));
   }
 
   private materializePreparedSkillMutation(prepared: PreparedSkillMutationPlan): MaterializedPreparedSkillMutation {
@@ -446,8 +430,10 @@ export class SkillMutationService {
     };
   }
 
-  private assertPreparedLifecycleCompatible(plan: MaterializedPreparedSkillMutation): SkillLifecycleRecord | undefined {
-    const existing = this.skillLifecycle.find(plan.plan.skillId);
+  private async assertPreparedLifecycleCompatible(
+    plan: MaterializedPreparedSkillMutation,
+  ): Promise<SkillLifecycleRecord | undefined> {
+    const existing = await this.skillLifecycle.find(plan.plan.skillId);
     if (!existing) {
       return undefined;
     }
@@ -470,39 +456,24 @@ export class SkillMutationService {
       errors.push(error);
     }
     try {
-      this.restoreFailedMutationLifecycle(plan);
+      await this.restoreFailedMutationLifecycle(plan);
     } catch (error) {
       errors.push(error);
     }
     return errors;
   }
 
-  private rollbackFailedMutationSync(plan: SkillMutationWritePlan): unknown[] {
-    const errors: unknown[] = [];
-    try {
-      restoreMutationFilesSync(plan, plan.result.snapshot);
-    } catch (error) {
-      errors.push(error);
-    }
-    try {
-      this.restoreFailedMutationLifecycle(plan);
-    } catch (error) {
-      errors.push(error);
-    }
-    return errors;
-  }
-
-  private restoreFailedMutationLifecycle(plan: SkillMutationWritePlan): void {
+  private async restoreFailedMutationLifecycle(plan: SkillMutationWritePlan): Promise<void> {
     const prior = plan.result.snapshot.priorLifecycle;
     if (prior) {
-      this.skillLifecycle.upsert(prior);
+      await this.skillLifecycle.upsert(prior);
       return;
     }
-    const current = this.skillLifecycle.find(plan.skillId);
+    const current = await this.skillLifecycle.find(plan.skillId);
     if (!current || current.provenance?.sourceRef !== plan.lifecycle.provenance?.sourceRef) {
       return;
     }
-    this.skillLifecycle.upsert({
+    await this.skillLifecycle.upsert({
       ...current,
       lifecycleState: "revoked",
       trustLabel: "Self-authored (incomplete mutation)",
@@ -512,7 +483,7 @@ export class SkillMutationService {
   }
 
   /** Validate, jail-resolve, and assemble all write artifacts without touching disk. */
-  private planMutation(input: DraftSkillMutationInput): SkillMutationWritePlan {
+  private async planMutation(input: DraftSkillMutationInput): Promise<SkillMutationWritePlan> {
     const validation = this.validateDraft(input);
     const skillId = this.resolveSkillId(input, validation);
     const skillDir = this.resolveSkillDir(skillId);
@@ -523,7 +494,7 @@ export class SkillMutationService {
     assertWritePathInJail(skillFilePath, [this.selfSkillsRoot]);
     assertWritePathInJail(sourceJsonPath, [this.selfSkillsRoot]);
 
-    const snapshot = this.captureSnapshot(skillId, skillFilePath, sourceJsonPath);
+    const snapshot = await this.captureSnapshot(skillId, skillFilePath, sourceJsonPath);
     const authoredAt = this.now().toISOString();
     const provenance: SkillMutationProvenance = {
       source: "self_generated",
@@ -572,8 +543,8 @@ export class SkillMutationService {
    * Intended to be invoked ONLY by the governed activation path under master
    * autonomy. Returns the updated lifecycle row.
    */
-  public promoteSelfAuthoredSkill(skillId: string): SkillLifecycleRecord {
-    const existing = this.skillLifecycle.find(skillId);
+  public async promoteSelfAuthoredSkill(skillId: string): Promise<SkillLifecycleRecord> {
+    const existing = await this.skillLifecycle.find(skillId);
     if (!existing) {
       throw new Error(`Cannot promote unknown self-authored skill: ${skillId}`);
     }
@@ -583,7 +554,7 @@ export class SkillMutationService {
     if (existing.lifecycleState === "approved" || existing.lifecycleState === "trusted") {
       return existing;
     }
-    return this.skillLifecycle.upsert({
+    return await this.skillLifecycle.upsert({
       ...existing,
       lifecycleState: "approved",
       trustLabel: "Self-authored (approved)",
@@ -610,7 +581,7 @@ export class SkillMutationService {
         await fs.writeFile(sourceJsonPath, snapshot.priorSourceJson, "utf8");
       }
       if (snapshot.priorLifecycle) {
-        this.skillLifecycle.upsert(snapshot.priorLifecycle);
+        await this.skillLifecycle.upsert(snapshot.priorLifecycle);
       }
       return;
     }
@@ -619,9 +590,9 @@ export class SkillMutationService {
     // tombstone the lifecycle row to non-callable so it can never execute.
     assertWritePathInJail(skillDir, [this.selfSkillsRoot]);
     await fs.rm(skillDir, { recursive: true, force: true });
-    const current = this.skillLifecycle.find(snapshot.skillId);
+    const current = await this.skillLifecycle.find(snapshot.skillId);
     if (current) {
-      this.skillLifecycle.upsert({
+      await this.skillLifecycle.upsert({
         ...current,
         lifecycleState: "revoked",
         trustLabel: "Self-authored (reverted)",
@@ -631,41 +602,9 @@ export class SkillMutationService {
     }
   }
 
-  /** Synchronous variant of {@link restoreSnapshot} for the activation path. */
-  public restoreSnapshotSync(snapshot: SkillMutationSnapshot): void {
-    assertValidSnapshotSkillId(snapshot);
-    const skillDir = this.resolveSkillDir(snapshot.skillId);
-    const skillFilePath = path.join(skillDir, "SKILL.md");
-    const sourceJsonPath = path.join(skillDir, "source.json");
-
-    if (snapshot.existed) {
-      fsSync.mkdirSync(skillDir, { recursive: true });
-      assertWritePathInJail(skillFilePath, [this.selfSkillsRoot]);
-      if (snapshot.priorSkillMarkdown !== undefined) {
-        fsSync.writeFileSync(skillFilePath, snapshot.priorSkillMarkdown, "utf8");
-      }
-      if (snapshot.priorSourceJson !== undefined) {
-        assertWritePathInJail(sourceJsonPath, [this.selfSkillsRoot]);
-        fsSync.writeFileSync(sourceJsonPath, snapshot.priorSourceJson, "utf8");
-      }
-      if (snapshot.priorLifecycle) {
-        this.skillLifecycle.upsert(snapshot.priorLifecycle);
-      }
-      return;
-    }
-
-    assertWritePathInJail(skillDir, [this.selfSkillsRoot]);
-    fsSync.rmSync(skillDir, { recursive: true, force: true });
-    const current = this.skillLifecycle.find(snapshot.skillId);
-    if (current) {
-      this.skillLifecycle.upsert({
-        ...current,
-        lifecycleState: "revoked",
-        trustLabel: "Self-authored (reverted)",
-        reviewWarning: "Self-authored skill reverted by rollback; file removed.",
-        updatedAt: this.now().toISOString(),
-      });
-    }
+  /** Compatibility alias retained for one release; persistence is Promise-native. */
+  public async restoreSnapshotSync(snapshot: SkillMutationSnapshot): Promise<void> {
+    await this.restoreSnapshot(snapshot);
   }
 
   private resolveSkillIdForSnapshot(input: { skillId?: string; skillMarkdown?: string }): string {
@@ -681,7 +620,11 @@ export class SkillMutationService {
     throw new Error("Cannot resolve skill id for snapshot (provide skillId or a parseable skillMarkdown).");
   }
 
-  private captureSnapshot(skillId: string, skillFilePath: string, sourceJsonPath: string): SkillMutationSnapshot {
+  private async captureSnapshot(
+    skillId: string,
+    skillFilePath: string,
+    sourceJsonPath: string,
+  ): Promise<SkillMutationSnapshot> {
     const existed = fsSync.existsSync(skillFilePath);
     return {
       skillId,
@@ -691,7 +634,7 @@ export class SkillMutationService {
       priorSourceJson: fsSync.existsSync(sourceJsonPath)
         ? readBoundedSkillSourceManifestTextSync(sourceJsonPath)
         : undefined,
-      priorLifecycle: this.skillLifecycle.find(skillId),
+      priorLifecycle: await this.skillLifecycle.find(skillId),
       capturedAt: this.now().toISOString(),
     };
   }
@@ -841,27 +784,6 @@ async function restoreMutationFiles(plan: SkillMutationWritePlan, snapshot: Skil
       if (!isNodeErrorCode(error, "ENOENT") && !isNodeErrorCode(error, "ENOTEMPTY")) {
         throw error;
       }
-    }
-  }
-}
-
-function restoreMutationFilesSync(plan: SkillMutationWritePlan, snapshot: SkillMutationSnapshot): void {
-  fsSync.mkdirSync(plan.skillDir, { recursive: true });
-  if (snapshot.priorSkillMarkdown !== undefined) {
-    fsSync.writeFileSync(plan.skillFilePath, snapshot.priorSkillMarkdown, "utf8");
-  } else {
-    fsSync.rmSync(plan.skillFilePath, { force: true });
-  }
-  if (snapshot.priorSourceJson !== undefined) {
-    fsSync.writeFileSync(plan.sourceJsonPath, snapshot.priorSourceJson, "utf8");
-  } else {
-    fsSync.rmSync(plan.sourceJsonPath, { force: true });
-  }
-  if (!snapshot.existed && snapshot.priorSourceJson === undefined) {
-    const errors: unknown[] = [];
-    tryRemoveEmptyDirectorySync(plan.skillDir, errors);
-    if (errors.length > 0) {
-      throw errors[0];
     }
   }
 }

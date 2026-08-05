@@ -183,7 +183,7 @@ describe("idempotencyHeaderPlugin", () => {
       }
       await app.register(idempotencyHeaderPlugin, { mutationStore: storage.mutationIdempotency });
       app.post(routePath, async (request) => {
-        commitMutationIdempotencyAlongsideCanonicalWrite(request);
+        await commitMutationIdempotencyAlongsideCanonicalWrite(request);
         return { ok: true };
       });
 
@@ -214,7 +214,7 @@ describe("idempotencyHeaderPlugin", () => {
     const built = await buildApp((fastify) => {
       fastify.post("/api/v1/chat/sessions/:sessionId/messages", async (request) => {
         attempts += 1;
-        commitMutationIdempotencyAlongsideCanonicalWrite(request);
+        await commitMutationIdempotencyAlongsideCanonicalWrite(request);
         statusAtCanonicalWriteBoundary = storeRef.current?.getStatus({
           method: "POST",
           routePath: "/api/v1/chat/sessions/:sessionId/messages",
@@ -269,7 +269,7 @@ describe("idempotencyHeaderPlugin", () => {
       let writesAfterFence = 0;
       const built = await buildApp((fastify) => {
         fastify.post(routePath, async (request) => {
-          commitMutationIdempotencyAlongsideCanonicalWrite(request);
+          await commitMutationIdempotencyAlongsideCanonicalWrite(request);
           writesAfterFence += 1;
           return { ok: true };
         });

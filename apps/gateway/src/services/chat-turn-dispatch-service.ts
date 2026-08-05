@@ -18,7 +18,7 @@ import type {
   ChatStreamChunkDraft,
   ChatTurnTraceRecord,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import {
   ChatTurnCancelledError,
   dedupeChatCitations,
@@ -59,7 +59,11 @@ export interface ChatTurnDispatchHost
     ChatTurnStreamLifecycleControl {
   readonly storage: chatTurnStreamService.ChatTurnStreamHost["storage"] &
     Pick<Storage, "durableRuns" | "runImmediateTransaction" | "sessionMutationAdmissions">;
-  updateActiveLeafOrThrow(sessionId: string, previousActiveTurnId: string | undefined, nextActiveTurnId: string): void;
+  updateActiveLeafOrThrow(
+    sessionId: string,
+    previousActiveTurnId: string | undefined,
+    nextActiveTurnId: string,
+  ): Promise<void>;
 }
 
 export interface IntegrationDeliveryEvidence {
@@ -86,22 +90,22 @@ export class IntegrationDeliveryPostCommitError extends Error {
   }
 }
 
-export function isDurableExecutionEnabled(host: ChatTurnDispatchHost): boolean {
+export async function isDurableExecutionEnabled(host: ChatTurnDispatchHost): Promise<boolean> {
   return (
     host.config.assistant.durable.enabled &&
     host.config.assistant.durable.executionEnabled &&
-    host.isFeatureEnabled("durableKernelV1Enabled")
+    (await host.isFeatureEnabled("durableKernelV1Enabled"))
   );
 }
 
-export function shouldUseDurableExecution(
+export async function shouldUseDurableExecution(
   host: ChatTurnDispatchHost,
   prepared: PreparedAgentChatTurn,
   input: ChatSendMessageRequest,
   requireDurableExecution = false,
-): boolean {
+): Promise<boolean> {
   const carriesRoutedContext = chatTurnCarriesRoutedContext(prepared, input);
-  if (!isDurableExecutionEnabled(host)) {
+  if (!(await isDurableExecutionEnabled(host))) {
     if (carriesRoutedContext) {
       throw new Error("Routed Chat context requires durable execution to be enabled.");
     }
@@ -181,10 +185,10 @@ export async function consumePreparedAgentChatTurn(
   let assistantMessage: ChatMessageRecord | undefined;
   let trace: ChatTurnTraceRecord | undefined;
   let citations: ChatCitationRecord[] = [];
-  const useDurableExecution = shouldUseDurableExecution(host, prepared, input, options?.requireDurableExecution);
+  const useDurableExecution = await shouldUseDurableExecution(host, prepared, input, options?.requireDurableExecution);
   let launchedDurableRunId: string | undefined;
   if (useDurableExecution) {
-    launchedDurableRunId = launchPreparedAgentChatTurnStream(
+    launchedDurableRunId = await launchPreparedAgentChatTurnStream(
       host,
       sessionId,
       input,
@@ -194,13 +198,13 @@ export async function consumePreparedAgentChatTurn(
       options,
     );
   } else {
-    options?.assertDispatchOwnership?.();
-    const admit = () => {
-      persistPreparedChatCapabilityAdmission(host.storage, prepared);
-      persistInitialChatTurnTrace({ chatTurnTraces: host.storage.chatTurnTraces }, prepared, input);
-      activatePreparedAlternativeBranch(host, prepared);
+    await options?.assertDispatchOwnership?.();
+    const admit = async () => {
+      await persistPreparedChatCapabilityAdmission(host.storage, prepared);
+      await persistInitialChatTurnTrace({ chatTurnTraces: host.storage.chatTurnTraces }, prepared, input);
+      await activatePreparedAlternativeBranch(host, prepared);
     };
-    host.storage.runImmediateTransaction(admit);
+    await host.storage.runImmediateTransaction(admit);
     options?.mutationLifecycle?.markCommitted();
   }
   // Wire the external abort signal to both the in-process turn controller
@@ -276,11 +280,9 @@ function bindConsumeAbortToTurn(
     // parent's local controller abort below still ensures this caller
     // returns control to its parent.
     if (durableRunId && host.cancelDurableChatRun) {
-      try {
-        host.cancelDurableChatRun(durableRunId, "abort_signal");
-      } catch {
-        // best effort: cancel API may reject if the run already terminated
-      }
+      void host.cancelDurableChatRun(durableRunId, "abort_signal").catch(() => {
+        // Best effort: the run may already have terminated.
+      });
     }
     // Abort the in-process controller registered by `beginActiveChatTurnExecution`
     // so `streamPreparedAgentChatTurn` and the orchestration's nested calls
@@ -342,14 +344,14 @@ export async function executePreparedAgentChatTurnBackground(
                 ...rawChunk.trace,
                 durable: {
                   runId: durableRunId,
-                  status: host.storage.durableRuns.getRun(durableRunId).status,
+                  status: (await host.storage.durableRuns.getRun(durableRunId)).status,
                   checkpointKind: rawChunk.trace.durable?.checkpointKind ?? "run_started",
                 },
               },
             }
           : rawChunk;
       if (isPersistableChatStreamChunk(chunk)) {
-        host.persistChatStreamChunk(chunk, durableRunId, options.streamRegistration);
+        await host.persistChatStreamChunk(chunk, durableRunId, options.streamRegistration);
       }
     }
   } catch (error) {
@@ -390,9 +392,9 @@ export async function executePreparedAgentChatTurnBackground(
             accountingErrorName: accountingError.name,
           },
         });
-        let accountingFailureResult: ReturnType<typeof tryPatchChatTurnTraceIfStatus> | undefined;
+        let accountingFailureResult: Awaited<ReturnType<typeof tryPatchChatTurnTraceIfStatus>> | undefined;
         try {
-          const currentTrace = host.storage.chatTurnTraces.get(prepared.turnId);
+          const currentTrace = await host.storage.chatTurnTraces.get(prepared.turnId);
           const accountingFailurePatch: Partial<ChatTurnTraceRecord> = {
             status: "failed",
             finishedAt: new Date().toISOString(),
@@ -418,7 +420,7 @@ export async function executePreparedAgentChatTurnBackground(
             ...currentTrace,
             ...accountingFailurePatch,
           } as ChatTurnTraceRecord;
-          accountingFailureResult = tryPatchChatTurnTraceIfStatus(
+          accountingFailureResult = await tryPatchChatTurnTraceIfStatus(
             host.storage.chatTurnTraces,
             prepared.turnId,
             CHAT_TURN_ACTIVE_STATUSES,
@@ -433,19 +435,19 @@ export async function executePreparedAgentChatTurnBackground(
           }
         }
         if (accountingFailureResult?.patched) {
-          host.persistChatStreamChunk(
+          await host.persistChatStreamChunk(
             {
               type: "trace_update",
               sessionId,
               turnId: prepared.turnId,
-              trace: host.createHydratedChatTurnTrace(prepared.turnId, accountingFailureResult.trace),
+              trace: await host.createHydratedChatTurnTrace(prepared.turnId, accountingFailureResult.trace),
             },
             durableRunId,
             options.streamRegistration,
           );
         }
         if (!accountingFailureResult || accountingFailureResult.patched) {
-          host.persistChatStreamChunk(
+          await host.persistChatStreamChunk(
             {
               type: "error",
               sessionId,
@@ -466,10 +468,10 @@ export async function executePreparedAgentChatTurnBackground(
     if (cancellation) {
       preserveForDurableRecovery = true;
       options.streamRegistration.requireActive(prepared.turnId);
-      let cancellationResult: ReturnType<typeof tryPatchChatTurnTraceIfStatus> | undefined;
+      let cancellationResult: Awaited<ReturnType<typeof tryPatchChatTurnTraceIfStatus>> | undefined;
       try {
-        const currentTrace = host.storage.chatTurnTraces.get(prepared.turnId);
-        cancellationResult = tryPatchChatTurnTraceIfStatus(
+        const currentTrace = await host.storage.chatTurnTraces.get(prepared.turnId);
+        cancellationResult = await tryPatchChatTurnTraceIfStatus(
           host.storage.chatTurnTraces,
           prepared.turnId,
           CHAT_TURN_ACTIVE_STATUSES,
@@ -498,12 +500,12 @@ export async function executePreparedAgentChatTurnBackground(
         }
       }
       if (cancellationResult?.patched) {
-        host.persistChatStreamChunk(
+        await host.persistChatStreamChunk(
           {
             type: "trace_update",
             sessionId,
             turnId: prepared.turnId,
-            trace: host.createHydratedChatTurnTrace(prepared.turnId, cancellationResult.trace),
+            trace: await host.createHydratedChatTurnTrace(prepared.turnId, cancellationResult.trace),
           },
           durableRunId,
           options.streamRegistration,
@@ -513,8 +515,8 @@ export async function executePreparedAgentChatTurnBackground(
     }
     if (isExactSystemHeartbeatApprovalBlock(prepared, durableRunId, error)) {
       options.streamRegistration.requireActive(prepared.turnId);
-      const currentTrace = host.storage.chatTurnTraces.get(prepared.turnId);
-      tryPatchChatTurnTraceIfStatus(host.storage.chatTurnTraces, prepared.turnId, CHAT_TURN_ACTIVE_STATUSES, {
+      const currentTrace = await host.storage.chatTurnTraces.get(prepared.turnId);
+      await tryPatchChatTurnTraceIfStatus(host.storage.chatTurnTraces, prepared.turnId, CHAT_TURN_ACTIVE_STATUSES, {
         status: "failed",
         finishedAt: new Date().toISOString(),
         failure: {
@@ -559,10 +561,10 @@ export async function executePreparedAgentChatTurnBackground(
         durableRunId,
       },
     });
-    let failureResult: ReturnType<typeof tryPatchChatTurnTraceIfStatus> | undefined;
+    let failureResult: Awaited<ReturnType<typeof tryPatchChatTurnTraceIfStatus>> | undefined;
     try {
-      const currentTrace = host.storage.chatTurnTraces.get(prepared.turnId);
-      failureResult = tryPatchChatTurnTraceIfStatus(
+      const currentTrace = await host.storage.chatTurnTraces.get(prepared.turnId);
+      failureResult = await tryPatchChatTurnTraceIfStatus(
         host.storage.chatTurnTraces,
         prepared.turnId,
         CHAT_TURN_ACTIVE_STATUSES,
@@ -588,19 +590,19 @@ export async function executePreparedAgentChatTurnBackground(
       }
     }
     if (failureResult?.patched) {
-      host.persistChatStreamChunk(
+      await host.persistChatStreamChunk(
         {
           type: "trace_update",
           sessionId,
           turnId: prepared.turnId,
-          trace: host.createHydratedChatTurnTrace(prepared.turnId, failureResult.trace),
+          trace: await host.createHydratedChatTurnTrace(prepared.turnId, failureResult.trace),
         },
         durableRunId,
         options.streamRegistration,
       );
     }
     if (!failureResult || failureResult.patched) {
-      host.persistChatStreamChunk(
+      await host.persistChatStreamChunk(
         {
           type: "error",
           sessionId,
@@ -618,7 +620,7 @@ export async function executePreparedAgentChatTurnBackground(
         let finalTrace = authoritativeAccountingFinalTrace;
         if (!finalTrace) {
           try {
-            const storedFinalTrace = host.storage.chatTurnTraces.get(prepared.turnId);
+            const storedFinalTrace = await host.storage.chatTurnTraces.get(prepared.turnId);
             finalTrace = authoritativeAccountingFault
               ? ({
                   ...storedFinalTrace,
@@ -649,7 +651,7 @@ export async function executePreparedAgentChatTurnBackground(
         }
         if (durableRunId && finalTrace && !preserveForDurableRecovery) {
           try {
-            host.finalizeDurableChatRun(durableRunId, prepared, finalTrace, options.durableLeaseOwnerId);
+            await host.finalizeDurableChatRun(durableRunId, prepared, finalTrace, options.durableLeaseOwnerId);
           } catch (error) {
             finalizationFailure = { error };
           }
@@ -703,9 +705,9 @@ export function buildDurableChatCanonicalWriteFence(
   },
 ): chatTurnStreamService.ChatTurnCanonicalWriteFence | undefined {
   const admission = prepared.turnAdmission;
-  const assertActiveAdmission = (): void => {
+  const assertActiveAdmission = async (): Promise<void> => {
     try {
-      host.sessionControlRuntimeOwner.assertActiveTurnWrite(admission!);
+      await host.sessionControlRuntimeOwner.assertActiveTurnWrite(admission!);
     } catch (error) {
       if (
         durableRunId &&
@@ -728,11 +730,11 @@ export function buildDurableChatCanonicalWriteFence(
     if (!admission) {
       return undefined;
     }
-    return <T>(work: () => T): T =>
-      host.storage.runImmediateTransaction(() => {
-        assertActiveAdmission();
-        const result = work();
-        assertActiveAdmission();
+    return async <T>(work: () => T | Promise<T>): Promise<Awaited<T>> =>
+      await host.storage.runImmediateTransaction(async () => {
+        await assertActiveAdmission();
+        const result = await work();
+        await assertActiveAdmission();
         return result;
       });
   }
@@ -743,14 +745,14 @@ export function buildDurableChatCanonicalWriteFence(
     throw new Error(`Durable Chat turn ${prepared.turnId} has no active stream registration.`);
   }
   const expectedLeaseOwnerId = options.durableLeaseOwnerId?.trim();
-  return <T>(work: () => T): T => {
+  return async <T>(work: () => T | Promise<T>): Promise<Awaited<T>> => {
     options.streamRegistration!.requireActive(prepared.turnId);
-    return host.storage.runImmediateTransaction(() => {
-      const requireFreshLease = () => {
+    return await host.storage.runImmediateTransaction(async () => {
+      const requireFreshLease = async () => {
         options.streamRegistration!.requireActive(prepared.turnId);
         if (
           !expectedLeaseOwnerId ||
-          !host.storage.durableRuns.lockFreshActiveLeaseForUpdate(durableRunId, expectedLeaseOwnerId)
+          !(await host.storage.durableRuns.lockFreshActiveLeaseForUpdate(durableRunId, expectedLeaseOwnerId))
         ) {
           throw new DurableWorkerInterruptionError(
             "lease_lost",
@@ -759,17 +761,17 @@ export function buildDurableChatCanonicalWriteFence(
           );
         }
       };
-      assertActiveAdmission();
-      requireFreshLease();
-      const result = work();
-      assertActiveAdmission();
-      requireFreshLease();
+      await assertActiveAdmission();
+      await requireFreshLease();
+      const result = await work();
+      await assertActiveAdmission();
+      await requireFreshLease();
       return result;
     });
   };
 }
 
-export function launchPreparedAgentChatTurnStream(
+export async function launchPreparedAgentChatTurnStream(
   host: ChatTurnDispatchHost,
   sessionId: string,
   input: ChatSendMessageRequest,
@@ -777,15 +779,15 @@ export function launchPreparedAgentChatTurnStream(
   threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
   resolvedOrchestration?: PreparedChatExecutionPlanResolution,
   options?: PreparedAgentChatTurnDispatchOptions,
-): string | undefined {
+): Promise<string | undefined> {
   const backgroundTasks = host.backgroundTasks;
-  const durableRequested = shouldUseDurableExecution(host, prepared, input, options?.requireDurableExecution);
-  options?.assertDispatchOwnership?.();
-  const durableRun = host.beginDurableChatRun(prepared, input, threadEventType, {
+  const durableRequested = await shouldUseDurableExecution(host, prepared, input, options?.requireDurableExecution);
+  await options?.assertDispatchOwnership?.();
+  const durableRun = await host.beginDurableChatRun(prepared, input, threadEventType, {
     mutationLifecycle: options?.mutationLifecycle,
     runId: options?.durableRunId,
   });
-  const streamRegistration = host.registerActiveChatTurnStream(sessionId, prepared.turnId, durableRun?.runId, {
+  const streamRegistration = await host.registerActiveChatTurnStream(sessionId, prepared.turnId, durableRun?.runId, {
     ...(durableRun ? { reservation: true } : {}),
   });
   const admissionWriteFence = buildDurableChatCanonicalWriteFence(host, prepared, durableRun?.runId, {
@@ -811,32 +813,34 @@ export function launchPreparedAgentChatTurnStream(
     },
   });
   if (!durableRun && !durableRequested) {
-    const admit = () => {
-      persistPreparedChatCapabilityAdmission(host.storage, prepared);
-      persistInitialChatTurnTrace({ chatTurnTraces: host.storage.chatTurnTraces }, prepared, input);
-      activatePreparedAlternativeBranch(host, prepared);
+    const admit = async () => {
+      await persistPreparedChatCapabilityAdmission(host.storage, prepared);
+      await persistInitialChatTurnTrace({ chatTurnTraces: host.storage.chatTurnTraces }, prepared, input);
+      await activatePreparedAlternativeBranch(host, prepared);
     };
     if (admissionWriteFence) {
-      admissionWriteFence(admit);
+      await admissionWriteFence(admit);
     } else if (typeof host.storage.runImmediateTransaction === "function") {
-      host.storage.runImmediateTransaction(admit);
+      await host.storage.runImmediateTransaction(admit);
     } else {
       if (prepared.capabilityProfile) {
         throw new Error("Chat capability admission requires a storage transaction boundary.");
       }
-      admit();
+      await admit();
     }
     options?.mutationLifecycle?.markCommitted();
   }
   if (durableRun) {
-    options?.onChildDurableRunLaunched?.(durableRun.runId);
+    await options?.onChildDurableRunLaunched?.(durableRun.runId);
     return durableRun.runId;
   }
   if (durableRequested) {
     if (
       admissionWriteFence
-        ? admissionWriteFence(() => persistDurableUnavailableFailure(host, sessionId, prepared, streamRegistration))
-        : persistDurableUnavailableFailure(host, sessionId, prepared, streamRegistration)
+        ? await admissionWriteFence(
+            async () => await persistDurableUnavailableFailure(host, sessionId, prepared, streamRegistration),
+          )
+        : await persistDurableUnavailableFailure(host, sessionId, prepared, streamRegistration)
     ) {
       options?.mutationLifecycle?.markCommitted();
     }
@@ -859,12 +863,12 @@ export function launchPreparedAgentChatTurnStream(
   return undefined;
 }
 
-function persistDurableUnavailableFailure(
+async function persistDurableUnavailableFailure(
   host: ChatTurnDispatchHost,
   sessionId: string,
   prepared: PreparedAgentChatTurn,
   streamRegistration: ActiveChatTurnStreamExecution,
-): boolean {
+): Promise<boolean> {
   let mutationCommitted = false;
   try {
     recordChatDispatchDiagnosticSafely(host, {
@@ -890,14 +894,14 @@ function persistDurableUnavailableFailure(
     });
     let currentTrace: ChatTurnTraceRecord;
     try {
-      currentTrace = host.storage.chatTurnTraces.get(prepared.turnId);
+      currentTrace = await host.storage.chatTurnTraces.get(prepared.turnId);
     } catch (error) {
       if (!(error instanceof NotFoundError)) {
         throw error;
       }
       return false;
     }
-    const failureResult = tryPatchChatTurnTraceIfStatus(
+    const failureResult = await tryPatchChatTurnTraceIfStatus(
       host.storage.chatTurnTraces,
       prepared.turnId,
       CHAT_TURN_ACTIVE_STATUSES,
@@ -919,17 +923,17 @@ function persistDurableUnavailableFailure(
     );
     if (failureResult.patched) {
       mutationCommitted = true;
-      host.persistChatStreamChunk(
+      await host.persistChatStreamChunk(
         {
           type: "trace_update",
           sessionId,
           turnId: prepared.turnId,
-          trace: host.createHydratedChatTurnTrace(prepared.turnId, failureResult.trace),
+          trace: await host.createHydratedChatTurnTrace(prepared.turnId, failureResult.trace),
         },
         undefined,
         streamRegistration,
       );
-      host.persistChatStreamChunk(
+      await host.persistChatStreamChunk(
         {
           type: "error",
           sessionId,
@@ -965,11 +969,12 @@ export async function sendPreparedIntegrationChatTurn(
   let deliveryEvidence: IntegrationDeliveryEvidence = {};
   let traceCreated = false;
   const canonicalWriteFence = buildDurableChatCanonicalWriteFence(host, prepared, undefined, {});
-  const fencedWrite = <T>(work: () => T): T => (canonicalWriteFence ? canonicalWriteFence(work) : work());
+  const fencedWrite = async <T>(work: () => T | Promise<T>): Promise<Awaited<T>> =>
+    canonicalWriteFence ? await canonicalWriteFence(work) : await work();
   try {
-    const admit = () => {
-      persistPreparedChatCapabilityAdmission(storage, prepared);
-      storage.chatTurnTraces.create({
+    const admit = async () => {
+      await persistPreparedChatCapabilityAdmission(storage, prepared);
+      await storage.chatTurnTraces.create({
         turnId: prepared.turnId,
         sessionId,
         userMessageId: prepared.userEventId,
@@ -998,29 +1003,31 @@ export async function sendPreparedIntegrationChatTurn(
         },
         startedAt,
       });
-      activatePreparedAlternativeBranch(host, prepared);
+      await activatePreparedAlternativeBranch(host, prepared);
     };
     if (canonicalWriteFence) {
-      canonicalWriteFence(admit);
+      await canonicalWriteFence(admit);
     } else if (typeof storage.runImmediateTransaction === "function") {
-      storage.runImmediateTransaction(admit);
+      await storage.runImmediateTransaction(admit);
     } else {
       if (prepared.capabilityProfile) {
         throw new Error("Chat capability admission requires a storage transaction boundary.");
       }
-      admit();
+      await admit();
     }
     traceCreated = true;
     options?.mutationLifecycle?.markCommitted();
-    assertIntegrationCompletionWritable(host, prepared.turnId, controller.signal, deliveryCommitted);
+    await assertIntegrationCompletionWritable(host, prepared.turnId, controller.signal, deliveryCommitted);
     if (!binding.connectionId || !binding.target) {
       throw new Error("Integration binding is missing connectionId or target");
     }
     if (!binding.writable) {
       throw new Error("Session binding is not writable");
     }
-    fencedWrite(() => host.ensureSessionInternalToolGrant(sessionId, "channel.send", "system-integration-compose"));
-    fencedWrite(() => undefined);
+    await fencedWrite(() =>
+      host.ensureSessionInternalToolGrant(sessionId, "channel.send", "system-integration-compose"),
+    );
+    await fencedWrite(() => undefined);
     const deliveryResult = host.requireExecutedToolResult(
       "channel.send",
       await host.commsSend({
@@ -1043,7 +1050,7 @@ export async function sendPreparedIntegrationChatTurn(
     );
     deliveryEvidence = readIntegrationDeliveryEvidence(deliveryResult);
     deliveryCommitted = true;
-    assertIntegrationCompletionWritable(host, prepared.turnId, controller.signal, deliveryCommitted);
+    await assertIntegrationCompletionWritable(host, prepared.turnId, controller.signal, deliveryCommitted);
     const assistantContent = `Delivered via integration ${binding.connectionId} to ${binding.target}.`;
     const assistantMessageId = prepared.assistantMessageId;
     const completionPatch: Parameters<Storage["chatTurnTraces"]["patch"]>[1] = {
@@ -1084,14 +1091,14 @@ export async function sendPreparedIntegrationChatTurn(
         },
       },
       {
-        onCommit: () => {
-          trace = fencedWrite(() =>
+        onCommit: async () => {
+          trace = await fencedWrite(() =>
             patchChatTurnTraceIfStatus(storage.chatTurnTraces, prepared.turnId, ["running"], completionPatch),
           );
         },
       },
     );
-    trace ??= fencedWrite(() =>
+    trace ??= await fencedWrite(() =>
       patchChatTurnTraceIfStatus(storage.chatTurnTraces, prepared.turnId, ["running", "completed"], completionPatch),
     );
     const assistantMessage: ChatMessageRecord = {
@@ -1108,8 +1115,8 @@ export async function sendPreparedIntegrationChatTurn(
       toolRuns: [],
       citations: [],
     };
-    fencedWrite(() => host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, prepared.turnId));
-    host.publishRealtime(
+    await fencedWrite(() => host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, prepared.turnId));
+    await host.publishRealtime(
       "chat_thread_updated",
       "chat",
       {
@@ -1136,13 +1143,13 @@ export async function sendPreparedIntegrationChatTurn(
     }
     let currentTrace: ChatTurnTraceRecord | undefined;
     try {
-      currentTrace = storage.chatTurnTraces.get(prepared.turnId);
+      currentTrace = await storage.chatTurnTraces.get(prepared.turnId);
     } catch {
       currentTrace = undefined;
     }
     if (controller.signal.aborted || currentTrace?.status === "cancelled") {
       if (currentTrace?.status !== "cancelled") {
-        host.markChatTurnCancelled(sessionId, prepared.turnId);
+        await host.markChatTurnCancelled(sessionId, prepared.turnId);
       }
       if (deliveryCommitted) {
         throw new IntegrationDeliveryPostCommitError(prepared.turnId, deliveryEvidence, error);
@@ -1151,7 +1158,7 @@ export async function sendPreparedIntegrationChatTurn(
     }
     if (deliveryCommitted) {
       try {
-        tryPatchChatTurnTraceIfStatus(storage.chatTurnTraces, prepared.turnId, CHAT_TURN_ACTIVE_STATUSES, {
+        await tryPatchChatTurnTraceIfStatus(storage.chatTurnTraces, prepared.turnId, CHAT_TURN_ACTIVE_STATUSES, {
           status: "failed",
           finishedAt: new Date().toISOString(),
           failure: {
@@ -1208,7 +1215,7 @@ export async function sendPreparedIntegrationChatTurn(
       });
       throw new IntegrationDeliveryPostCommitError(prepared.turnId, deliveryEvidence, error);
     }
-    fencedWrite(() =>
+    await fencedWrite(() =>
       tryPatchChatTurnTraceIfStatus(storage.chatTurnTraces, prepared.turnId, CHAT_TURN_ACTIVE_STATUSES, {
         status: "failed",
         finishedAt: new Date().toISOString(),
@@ -1238,11 +1245,14 @@ export async function sendPreparedIntegrationChatTurn(
   }
 }
 
-function activatePreparedAlternativeBranch(host: ChatTurnDispatchHost, prepared: PreparedAgentChatTurn): void {
+async function activatePreparedAlternativeBranch(
+  host: ChatTurnDispatchHost,
+  prepared: PreparedAgentChatTurn,
+): Promise<void> {
   if (prepared.branchKind !== "retry" && prepared.branchKind !== "edit") {
     return;
   }
-  host.updateActiveLeafOrThrow(prepared.session.sessionId, prepared.branchSelectionBaseTurnId, prepared.turnId);
+  await host.updateActiveLeafOrThrow(prepared.session.sessionId, prepared.branchSelectionBaseTurnId, prepared.turnId);
 }
 
 function recordChatDispatchDiagnosticSafely(
@@ -1288,15 +1298,15 @@ function bindAbortSignalToController(
   return () => externalSignal.removeEventListener("abort", abort);
 }
 
-function assertIntegrationCompletionWritable(
+async function assertIntegrationCompletionWritable(
   host: Pick<ChatTurnDispatchHost, "storage">,
   turnId: string,
   signal: AbortSignal,
   deliveryCommitted: boolean,
-): void {
+): Promise<void> {
   let status: ChatTurnTraceRecord["status"] | undefined;
   try {
-    status = host.storage.chatTurnTraces.get(turnId).status;
+    status = (await host.storage.chatTurnTraces.get(turnId)).status;
   } catch {
     status = undefined;
   }

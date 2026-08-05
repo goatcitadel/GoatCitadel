@@ -8,7 +8,12 @@ import type {
   PendingApprovalAction,
 } from "@goatcitadel/contracts";
 import { ConflictError, canonicalJsonString } from "@goatcitadel/contracts";
-import { getRequestAttribution, runWithRequestAttribution, Storage } from "@goatcitadel/storage";
+import {
+  createSqliteAsyncStorage,
+  getRequestAttribution,
+  runWithRequestAttribution,
+  Storage,
+} from "@goatcitadel/storage";
 import { describe, expect, it, vi } from "vitest";
 import {
   ApprovalEffectsService,
@@ -172,7 +177,7 @@ describe("approval-resolution-effects-service", () => {
     expect(requestRunProcessing).toHaveBeenCalledWith("durable-resumed");
   });
 
-  it("captures attribution and delegates observability allocation to the atomic repository batch", () => {
+  it("captures attribution and delegates observability allocation to the atomic repository batch", async () => {
     const effect = createEffect({
       effectId: "observability-effect-1",
       approvalId: "approval-1",
@@ -203,7 +208,7 @@ describe("approval-resolution-effects-service", () => {
     );
     service.requestEffectProcessing = requestEffectProcessing;
 
-    const [first] = runWithRequestAttribution({ actorId: "operator-first", traceId: "trace-first" }, () =>
+    const [first] = await runWithRequestAttribution({ actorId: "operator-first", traceId: "trace-first" }, () =>
       service.enqueueObservabilityEffects("approval-1", [
         {
           operationId: "approval-resolved-audit-v1",
@@ -215,7 +220,7 @@ describe("approval-resolution-effects-service", () => {
         },
       ]),
     );
-    const [duplicate] = runWithRequestAttribution({ actorId: "operator-retry", traceId: "trace-retry" }, () =>
+    const [duplicate] = await runWithRequestAttribution({ actorId: "operator-retry", traceId: "trace-retry" }, () =>
       service.enqueueObservabilityEffects("approval-1", [
         {
           operationId: "approval-resolved-audit-v1",
@@ -347,7 +352,7 @@ describe("approval-resolution-effects-service", () => {
     );
     service.requestEffectProcessing = vi.fn();
 
-    service.enqueueObservabilityEffects("approval-ordered", [
+    await service.enqueueObservabilityEffects("approval-ordered", [
       {
         operationId: "approval.create.audit",
         delivery: { kind: "audit", stream: "approvals", payload: { event: "approval.create" } },
@@ -357,7 +362,7 @@ describe("approval-resolution-effects-service", () => {
         delivery: { kind: "realtime", eventType: "approval_created", source: "approvals", payload: {} },
       },
     ]);
-    service.enqueueObservabilityEffects("approval-ordered", [
+    await service.enqueueObservabilityEffects("approval-ordered", [
       {
         operationId: "approval.resolve.audit",
         delivery: { kind: "audit", stream: "approvals", payload: { event: "approval.resolve" } },
@@ -760,7 +765,7 @@ describe("approval-resolution-effects-service", () => {
     service.stopWorker();
   });
 
-  it("enqueues the canonical approval effect set from current linkage", () => {
+  it("enqueues the canonical approval effect set without starting the worker before commit", async () => {
     const upsert = vi.fn((input: Record<string, unknown>) => ({
       effectId: String(input.targetId),
       approvalId: String(input.approvalId),
@@ -815,8 +820,9 @@ describe("approval-resolution-effects-service", () => {
       enqueueAfterHooks: vi.fn(),
       resolveApprovalHookWorkspaceId: vi.fn(() => "workspace-1"),
     });
+    const requestEffectProcessing = vi.spyOn(service, "requestEffectProcessing");
 
-    service.enqueueResolutionEffects(
+    await service.enqueueResolutionEffects(
       {
         approvalId: "approval-1",
         kind: "shell.exec",
@@ -838,6 +844,7 @@ describe("approval-resolution-effects-service", () => {
         decision: "approve",
         resolvedBy: "operator",
       },
+      { deferProcessing: true },
     );
 
     expect(upsert.mock.calls.map(([input]) => input.effectKind)).toEqual([
@@ -849,9 +856,10 @@ describe("approval-resolution-effects-service", () => {
       "approval_inbox_follow_up",
       "approval_after_hooks",
     ]);
+    expect(requestEffectProcessing).not.toHaveBeenCalled();
   });
 
-  it("enqueues an expired inbox follow-up for every remote token bound to the approval", () => {
+  it("enqueues an expired inbox follow-up for every remote token bound to the approval", async () => {
     const upsert = vi.fn((input: Record<string, unknown>) =>
       createEffect({
         effectId: String(input.targetId),
@@ -907,7 +915,7 @@ describe("approval-resolution-effects-service", () => {
       createApprovalEffectDeps(),
     );
 
-    service.enqueueResolutionEffects(
+    await service.enqueueResolutionEffects(
       {
         approvalId: "approval-1",
         kind: "shell.exec",
@@ -1090,7 +1098,7 @@ describe("approval-resolution-effects-service", () => {
     expect(deferEffectForRetry).toHaveBeenCalledOnce();
   });
 
-  it("does not wake a linked turn when the turn trace belongs to another session", () => {
+  it("does not wake a linked turn when the turn trace belongs to another session", async () => {
     const upsert = vi.fn((input: Record<string, unknown>) => ({
       effectId: String(input.targetId),
       approvalId: String(input.approvalId),
@@ -1138,7 +1146,7 @@ describe("approval-resolution-effects-service", () => {
       },
     );
 
-    service.enqueueResolutionEffects(
+    await service.enqueueResolutionEffects(
       {
         approvalId: "approval-1",
         kind: "code_mode.run",
@@ -1169,7 +1177,7 @@ describe("approval-resolution-effects-service", () => {
     ]);
   });
 
-  it("enqueues Code Mode recovery effects when the pending action row is missing", () => {
+  it("enqueues Code Mode recovery effects when the pending action row is missing", async () => {
     const upsert = vi.fn((input: Record<string, unknown>) => ({
       effectId: String(input.targetId),
       approvalId: String(input.approvalId),
@@ -1211,7 +1219,7 @@ describe("approval-resolution-effects-service", () => {
       },
     );
 
-    service.enqueueResolutionEffects(
+    await service.enqueueResolutionEffects(
       {
         approvalId: "approval-code-1",
         kind: "code_mode.run",
@@ -1244,7 +1252,7 @@ describe("approval-resolution-effects-service", () => {
     );
   });
 
-  it("wakes the child delegated turn and parent orchestration when a child subagent approval resolves", () => {
+  it("wakes the child delegated turn and parent orchestration when a child subagent approval resolves", async () => {
     const upsert = vi.fn((input: Record<string, unknown>) => ({
       effectId: String(input.targetId),
       approvalId: String(input.approvalId),
@@ -1321,7 +1329,7 @@ describe("approval-resolution-effects-service", () => {
       resolveApprovalHookWorkspaceId: vi.fn(() => "workspace-1"),
     });
 
-    service.enqueueResolutionEffects(
+    await service.enqueueResolutionEffects(
       {
         approvalId: "approval-1",
         kind: "shell.exec",
@@ -1537,7 +1545,7 @@ describe("approval-resolution-effects-service", () => {
     );
   });
 
-  it("does not enqueue orchestration parent wakes across approval workspace boundaries", () => {
+  it("does not enqueue orchestration parent wakes across approval workspace boundaries", async () => {
     const upsert = vi.fn((input: Record<string, unknown>) => ({
       effectId: String(input.targetId),
       approvalId: String(input.approvalId),
@@ -1589,7 +1597,7 @@ describe("approval-resolution-effects-service", () => {
       resolveApprovalHookWorkspaceId: vi.fn(() => "workspace-1"),
     });
 
-    service.enqueueResolutionEffects(
+    await service.enqueueResolutionEffects(
       {
         approvalId: "approval-1",
         kind: "shell.exec",
@@ -1615,7 +1623,7 @@ describe("approval-resolution-effects-service", () => {
     expect(upsert.mock.calls.map(([input]) => input.effectKind)).not.toContain("orchestration_parent_wake");
   });
 
-  it("skips enqueueing all effects for expired approvals", () => {
+  it("skips enqueueing all effects for expired approvals", async () => {
     const upsert = vi.fn();
     const service = new ApprovalEffectsService(
       {
@@ -1641,7 +1649,7 @@ describe("approval-resolution-effects-service", () => {
       },
     );
 
-    const result = service.enqueueResolutionEffects(
+    const result = await service.enqueueResolutionEffects(
       {
         approvalId: "approval-1",
         kind: "shell.exec",
@@ -1665,7 +1673,7 @@ describe("approval-resolution-effects-service", () => {
     expect(upsert).not.toHaveBeenCalled();
   });
 
-  it("enqueues Code Mode execution when approval resolved before expiry even if effects run later", () => {
+  it("enqueues Code Mode execution when approval resolved before expiry even if effects run later", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-11T00:06:00.000Z"));
     try {
@@ -1716,7 +1724,7 @@ describe("approval-resolution-effects-service", () => {
         },
       );
 
-      const result = service.enqueueResolutionEffects(
+      const result = await service.enqueueResolutionEffects(
         {
           approvalId: "approval-1",
           kind: "code_mode.run",
@@ -2164,11 +2172,11 @@ describe("approval-resolution-effects-service", () => {
             currentEffect: ApprovalEffectRecord,
             currentAction: typeof pendingAction,
             result: Record<string, unknown> | undefined,
-          ): void;
+          ): Promise<void>;
         },
         "materializeExecutedChatApproval",
       )
-      .mockImplementationOnce(() => {
+      .mockImplementationOnce(async () => {
         throw new Error("chat projection unavailable");
       });
 
@@ -2188,7 +2196,7 @@ describe("approval-resolution-effects-service", () => {
     );
     expect(completeEffect).not.toHaveBeenCalled();
 
-    materialize.mockImplementation(() => {
+    materialize.mockImplementation(async () => {
       completeEffect(effect.effectId, "worker", effect.version, { result: pendingAction.result });
     });
     await (
@@ -2206,7 +2214,7 @@ describe("approval-resolution-effects-service", () => {
     );
   });
 
-  it("defers Chat approval materialization when the linked durable run cannot be read", () => {
+  it("defers Chat approval materialization when the linked durable run cannot be read", async () => {
     const effect = createEffect({
       effectKind: "pending_action_execute",
       targetKind: "pending_action",
@@ -2271,13 +2279,13 @@ describe("approval-resolution-effects-service", () => {
       createApprovalEffectDeps(),
     );
 
-    const materialized = (
+    const materialized = await (
       service as unknown as {
         materializeExecutedChatApprovalOrDefer(
           currentEffect: ApprovalEffectRecord,
           currentAction: PendingApprovalAction,
           result: Record<string, unknown> | undefined,
-        ): boolean;
+        ): Promise<boolean>;
       }
     ).materializeExecutedChatApprovalOrDefer(effect, pendingAction, {
       outcome: "executed",
@@ -2305,7 +2313,7 @@ describe("approval-resolution-effects-service", () => {
     );
   });
 
-  it("defers Chat approval materialization when the trace cannot be reloaded inside the transaction", () => {
+  it("defers Chat approval materialization when the trace cannot be reloaded inside the transaction", async () => {
     const effect = createEffect({
       effectKind: "pending_action_execute",
       targetKind: "pending_action",
@@ -2370,13 +2378,13 @@ describe("approval-resolution-effects-service", () => {
       createApprovalEffectDeps(),
     );
 
-    const materialized = (
+    const materialized = await (
       service as unknown as {
         materializeExecutedChatApprovalOrDefer(
           currentEffect: ApprovalEffectRecord,
           currentAction: PendingApprovalAction,
           result: Record<string, unknown> | undefined,
-        ): boolean;
+        ): Promise<boolean>;
       }
     ).materializeExecutedChatApprovalOrDefer(effect, pendingAction, {
       outcome: "executed",
@@ -2398,7 +2406,7 @@ describe("approval-resolution-effects-service", () => {
     );
   });
 
-  it("rolls back durable completion and assistant materialization when the child trace patch fails", () => {
+  it("rolls back durable completion and assistant materialization when the child trace patch fails", async () => {
     const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
     const now = "2026-04-11T00:00:00.000Z";
     const runId = "durable-child-atomic";
@@ -2426,7 +2434,7 @@ describe("approval-resolution-effects-service", () => {
     });
     const publishRealtime = vi.fn();
     const service = new ApprovalEffectsService(
-      { storage, publishRealtime } as unknown as ServiceContext,
+      { storage: createSqliteAsyncStorage(storage), publishRealtime } as unknown as ServiceContext,
       createApprovalEffectDeps(),
     );
     const tracePatch = vi.spyOn(storage.chatTurnTraces, "patch").mockImplementationOnce(() => {
@@ -2434,7 +2442,7 @@ describe("approval-resolution-effects-service", () => {
     });
 
     try {
-      expect(() =>
+      await expect(
         (
           service as unknown as {
             completeChatTurnFromApprovedAction(input: {
@@ -2443,7 +2451,7 @@ describe("approval-resolution-effects-service", () => {
               now: string;
               approvalId: string;
               actionRecord?: Record<string, unknown>;
-            }): boolean;
+            }): Promise<boolean>;
           }
         ).completeChatTurnFromApprovedAction({
           trace,
@@ -2451,7 +2459,7 @@ describe("approval-resolution-effects-service", () => {
           now,
           approvalId: "approval-1",
         }),
-      ).toThrow("child trace patch unavailable");
+      ).rejects.toThrow("child trace patch unavailable");
 
       expect(storage.durableRuns.getRun(runId).status).toBe("waiting");
       expect(storage.durableRuns.listCheckpoints(runId)).toEqual([
@@ -2470,7 +2478,7 @@ describe("approval-resolution-effects-service", () => {
     }
   });
 
-  it("materializes manual-reconciliation approval truth as failed Chat and durable state", () => {
+  it("materializes manual-reconciliation approval truth as failed Chat and durable state", async () => {
     const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
     const now = "2026-04-11T00:00:00.000Z";
     const runId = "durable-approved-unknown";
@@ -2590,7 +2598,7 @@ describe("approval-resolution-effects-service", () => {
     });
     const publishRealtime = vi.fn();
     const service = new ApprovalEffectsService(
-      { storage, publishRealtime } as unknown as ServiceContext,
+      { storage: createSqliteAsyncStorage(storage), publishRealtime } as unknown as ServiceContext,
       createApprovalEffectDeps(),
     );
     const pendingEffect = storage.approvalEffects.upsert({
@@ -2608,14 +2616,14 @@ describe("approval-resolution-effects-service", () => {
     expect(claimedEffect?.effectId).toBe(pendingEffect.effectId);
 
     try {
-      (
+      await (
         service as unknown as {
           materializeFailedChatApproval(
             effect: ApprovalEffectRecord,
             pendingAction: PendingApprovalAction,
             actionRecord: Record<string, unknown>,
             failure: { message: string; kind: "manual_reconciliation"; manualReconciliationRequired: true },
-          ): void;
+          ): Promise<void>;
         }
       ).materializeFailedChatApproval(
         claimedEffect!,
@@ -2692,7 +2700,7 @@ describe("approval-resolution-effects-service", () => {
     }
   });
 
-  it("does not partially rewrite tool approval state when terminal Chat completion wins", () => {
+  it("does not partially rewrite tool approval state when terminal Chat completion wins", async () => {
     const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
     const now = "2026-04-11T00:00:00.000Z";
     const runId = "durable-terminal-before-failure";
@@ -2758,7 +2766,7 @@ describe("approval-resolution-effects-service", () => {
       startedAt: now,
     });
     const service = new ApprovalEffectsService(
-      { storage, publishRealtime: vi.fn() } as unknown as ServiceContext,
+      { storage: createSqliteAsyncStorage(storage), publishRealtime: vi.fn() } as unknown as ServiceContext,
       createApprovalEffectDeps(),
     );
     const pendingEffect = storage.approvalEffects.upsert({
@@ -2776,7 +2784,7 @@ describe("approval-resolution-effects-service", () => {
     expect(claimedEffect?.effectId).toBe(pendingEffect.effectId);
 
     try {
-      expect(() =>
+      await expect(
         (
           service as unknown as {
             materializeFailedChatApproval(
@@ -2784,7 +2792,7 @@ describe("approval-resolution-effects-service", () => {
               pendingAction: PendingApprovalAction,
               actionRecord: Record<string, unknown>,
               failure: { message: string; kind: "failed"; manualReconciliationRequired: false },
-            ): void;
+            ): Promise<void>;
           }
         ).materializeFailedChatApproval(
           claimedEffect!,
@@ -2802,7 +2810,7 @@ describe("approval-resolution-effects-service", () => {
             manualReconciliationRequired: false,
           },
         ),
-      ).toThrow(/already completed/i);
+      ).rejects.toThrow(/already completed/i);
 
       expect(storage.chatToolRuns.listByTurn(turnId)[0]).toMatchObject({
         status: "approval_required",
@@ -2817,7 +2825,7 @@ describe("approval-resolution-effects-service", () => {
     }
   });
 
-  it("rolls back durable completion and assistant materialization when the parent trace patch fails", () => {
+  it("rolls back durable completion and assistant materialization when the parent trace patch fails", async () => {
     const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
     const now = "2026-04-11T00:00:00.000Z";
     const runId = "durable-parent-atomic";
@@ -2903,18 +2911,23 @@ describe("approval-resolution-effects-service", () => {
     });
     const publishRealtime = vi.fn();
     const service = new ApprovalEffectsService(
-      { storage, publishRealtime } as unknown as ServiceContext,
+      { storage: createSqliteAsyncStorage(storage), publishRealtime } as unknown as ServiceContext,
       createApprovalEffectDeps(),
     );
 
     try {
-      expect(() =>
+      await expect(
         (
           service as unknown as {
-            reconcileDelegationRun(parentSessionId: string, currentRunId: string, at: string, approvalId: string): void;
+            reconcileDelegationRun(
+              parentSessionId: string,
+              currentRunId: string,
+              at: string,
+              approvalId: string,
+            ): Promise<void>;
           }
         ).reconcileDelegationRun("parent-session-atomic", delegationRunId, now, "approval-1"),
-      ).toThrow("parent trace patch unavailable");
+      ).rejects.toThrow("parent trace patch unavailable");
 
       expect(storage.durableRuns.getRun(runId).status).toBe("waiting");
       expect(storage.durableRuns.listCheckpoints(runId)).toEqual([
@@ -2936,7 +2949,7 @@ describe("approval-resolution-effects-service", () => {
     }
   });
 
-  it("keeps a delegation parent resumable until every persisted dependency-plan step is terminal", () => {
+  it("keeps a delegation parent resumable until every persisted dependency-plan step is terminal", async () => {
     const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
     const now = "2026-04-11T00:00:00.000Z";
     const runId = "durable-parent-fanin";
@@ -3020,18 +3033,23 @@ describe("approval-resolution-effects-service", () => {
     });
     const publishRealtime = vi.fn();
     const service = new ApprovalEffectsService(
-      { storage, publishRealtime } as unknown as ServiceContext,
+      { storage: createSqliteAsyncStorage(storage), publishRealtime } as unknown as ServiceContext,
       createApprovalEffectDeps(),
     );
     const reconcile = () =>
       (
         service as unknown as {
-          reconcileDelegationRun(parentSessionId: string, currentRunId: string, at: string, approvalId: string): void;
+          reconcileDelegationRun(
+            parentSessionId: string,
+            currentRunId: string,
+            at: string,
+            approvalId: string,
+          ): Promise<void>;
         }
       ).reconcileDelegationRun("parent-session-fanin", delegationRunId, now, "approval-fanin");
 
     try {
-      reconcile();
+      await reconcile();
 
       expect(storage.chatDelegationRuns.get(delegationRunId)).toMatchObject({ status: "running" });
       expect(storage.durableRuns.getRun(runId).status).toBe("waiting");
@@ -3053,7 +3071,7 @@ describe("approval-resolution-effects-service", () => {
         summary: "QA complete",
         finishedAt: now,
       });
-      reconcile();
+      await reconcile();
 
       expect(storage.chatDelegationRuns.get(delegationRunId)).toMatchObject({ status: "completed" });
       expect(storage.durableRuns.getRun(runId).status).toBe("completed");
@@ -3066,7 +3084,7 @@ describe("approval-resolution-effects-service", () => {
     }
   });
 
-  it("refuses to seize a receipt-less completed durable run during approval materialization", () => {
+  it("refuses to seize a receipt-less completed durable run during approval materialization", async () => {
     const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
     const now = "2026-04-11T00:00:00.000Z";
     const runId = "durable-already-completed";
@@ -3112,12 +3130,12 @@ describe("approval-resolution-effects-service", () => {
       finishedAt: now,
     });
     const service = new ApprovalEffectsService(
-      { storage, publishRealtime: vi.fn() } as unknown as ServiceContext,
+      { storage: createSqliteAsyncStorage(storage), publishRealtime: vi.fn() } as unknown as ServiceContext,
       createApprovalEffectDeps(),
     );
 
     try {
-      expect(() =>
+      await expect(
         (
           service as unknown as {
             completeChatTurnFromApprovedAction(input: {
@@ -3126,7 +3144,7 @@ describe("approval-resolution-effects-service", () => {
               now: string;
               approvalId: string;
               actionRecord?: Record<string, unknown>;
-            }): boolean;
+            }): Promise<boolean>;
           }
         ).completeChatTurnFromApprovedAction({
           trace,
@@ -3135,7 +3153,7 @@ describe("approval-resolution-effects-service", () => {
           approvalId: "approval-late",
           actionRecord: { result: { ok: true } },
         }),
-      ).toThrow(/completed without an approval materialization receipt/i);
+      ).rejects.toThrow(/completed without an approval materialization receipt/i);
 
       expect(storage.durableRuns.getRun(runId)).toMatchObject({
         status: "completed",
@@ -3158,7 +3176,7 @@ describe("approval-resolution-effects-service", () => {
     }
   });
 
-  it("rolls back approval completion when cancellation wins after the caller snapshot", () => {
+  it("rolls back approval completion when cancellation wins after the caller snapshot", async () => {
     const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
     const now = "2026-04-11T00:00:00.000Z";
     const runId = "durable-cancelled-after-snapshot";
@@ -3191,12 +3209,12 @@ describe("approval-resolution-effects-service", () => {
     });
     const publishRealtime = vi.fn();
     const service = new ApprovalEffectsService(
-      { storage, publishRealtime } as unknown as ServiceContext,
+      { storage: createSqliteAsyncStorage(storage), publishRealtime } as unknown as ServiceContext,
       createApprovalEffectDeps(),
     );
 
     try {
-      expect(() =>
+      await expect(
         (
           service as unknown as {
             completeChatTurnFromApprovedAction(input: {
@@ -3205,7 +3223,7 @@ describe("approval-resolution-effects-service", () => {
               now: string;
               approvalId: string;
               actionRecord?: Record<string, unknown>;
-            }): boolean;
+            }): Promise<boolean>;
           }
         ).completeChatTurnFromApprovedAction({
           trace: staleWaitingTrace,
@@ -3213,7 +3231,7 @@ describe("approval-resolution-effects-service", () => {
           now: "2026-04-11T00:00:02.000Z",
           approvalId: "approval-cancelled",
         }),
-      ).toThrow(/canonical Chat turn .* is already cancelled/i);
+      ).rejects.toThrow(/canonical Chat turn .* is already cancelled/i);
 
       expect(storage.durableRuns.getRun(runId)).toMatchObject({
         status: "waiting",
@@ -3233,7 +3251,7 @@ describe("approval-resolution-effects-service", () => {
     }
   });
 
-  it("preserves enriched canonical assistant truth on a same-receipt replay without publishing inside the transaction", () => {
+  it("preserves enriched canonical assistant truth on a same-receipt replay without publishing inside the transaction", async () => {
     const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
     const now = "2026-04-11T00:00:00.000Z";
     const replayAt = "2026-04-11T00:00:02.000Z";
@@ -3263,7 +3281,7 @@ describe("approval-resolution-effects-service", () => {
     });
     const publishRealtime = vi.fn();
     const service = new ApprovalEffectsService(
-      { storage, publishRealtime } as unknown as ServiceContext,
+      { storage: createSqliteAsyncStorage(storage), publishRealtime } as unknown as ServiceContext,
       createApprovalEffectDeps(),
     );
     const complete = (at: string) =>
@@ -3275,7 +3293,7 @@ describe("approval-resolution-effects-service", () => {
             now: string;
             approvalId: string;
             actionRecord?: Record<string, unknown>;
-          }): ChatTurnTraceRecord | undefined;
+          }): Promise<ChatTurnTraceRecord | undefined>;
         }
       ).completeChatTurnFromApprovedAction({
         trace: waitingTrace,
@@ -3286,7 +3304,7 @@ describe("approval-resolution-effects-service", () => {
       });
 
     try {
-      expect(complete(now)).toMatchObject({ turnId, status: "waiting_for_approval" });
+      expect(await complete(now)).toMatchObject({ turnId, status: "waiting_for_approval" });
       const committedTrace = storage.chatTurnTraces.get(turnId);
       const assistantMessageId = committedTrace.assistantMessageId!;
       storage.chatMessages.upsert({
@@ -3303,7 +3321,7 @@ describe("approval-resolution-effects-service", () => {
         costUsd: 0.0123,
       });
 
-      expect(complete(replayAt)).toMatchObject({ turnId, status: "completed" });
+      expect(await complete(replayAt)).toMatchObject({ turnId, status: "completed" });
 
       expect(storage.chatMessages.get(assistantMessageId)).toMatchObject({
         content: "approved output",
@@ -3323,7 +3341,7 @@ describe("approval-resolution-effects-service", () => {
     }
   });
 
-  it("does not seize a running durable run during approval materialization", () => {
+  it("does not seize a running durable run during approval materialization", async () => {
     const runningRun = {
       runId: "durable-cancel-race",
       status: "running",
@@ -3359,25 +3377,25 @@ describe("approval-resolution-effects-service", () => {
       },
     );
 
-    expect(() =>
+    await expect(
       (
         service as unknown as {
           completeDurableRunIfPresent(
             runId: string,
             input: { now: string; outputText: string; checkpointState: Record<string, unknown> },
-          ): void;
+          ): Promise<void>;
         }
       ).completeDurableRunIfPresent("durable-cancel-race", {
         now: "2026-04-11T00:00:00.000Z",
         outputText: "done",
         checkpointState: { status: "completed" },
       }),
-    ).not.toThrow();
+    ).resolves.toBe("running");
     expect(updateRun).not.toHaveBeenCalled();
     expect(createCheckpoint).not.toHaveBeenCalled();
   });
 
-  it("records completion and installs a fresh approved-turn post-commit generation atomically", () => {
+  it("records completion and installs a fresh approved-turn post-commit generation atomically", async () => {
     const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
     const now = "2026-04-11T00:00:00.000Z";
     const runId = "durable-waiting";
@@ -3408,10 +3426,13 @@ describe("approval-resolution-effects-service", () => {
     const updateRun = vi.spyOn(storage.durableRuns, "updateRun");
     const createCheckpoint = vi.spyOn(storage.durableRuns, "createCheckpoint");
     const recordDurableTimelineEvent = vi.fn();
-    const service = new ApprovalEffectsService({ storage, publishRealtime: vi.fn() } as unknown as ServiceContext, {
-      ...createApprovalEffectDeps(),
-      recordDurableTimelineEvent,
-    });
+    const service = new ApprovalEffectsService(
+      { storage: createSqliteAsyncStorage(storage), publishRealtime: vi.fn() } as unknown as ServiceContext,
+      {
+        ...createApprovalEffectDeps(),
+        recordDurableTimelineEvent,
+      },
+    );
     const complete = (at: string) =>
       (
         service as unknown as {
@@ -3423,7 +3444,7 @@ describe("approval-resolution-effects-service", () => {
               checkpointState: Record<string, unknown>;
               postCommit: { approvalId: string; turnId: string; traceStatus: ChatTurnTraceRecord["status"] };
             },
-          ): string | undefined;
+          ): Promise<string | undefined>;
         }
       ).completeDurableRunIfPresent(runId, {
         now: at,
@@ -3433,7 +3454,7 @@ describe("approval-resolution-effects-service", () => {
       });
 
     try {
-      expect(complete(now)).toBe("completed");
+      expect(await complete(now)).toBe("completed");
       const completed = storage.durableRuns.getRun(runId);
       const waitingGeneration = `waiting-generation:${runId}`;
       expect(completed).toMatchObject({
@@ -3487,7 +3508,7 @@ describe("approval-resolution-effects-service", () => {
         }),
       );
 
-      expect(complete("2026-04-11T00:00:01.000Z")).toBe("completed");
+      expect(await complete("2026-04-11T00:00:01.000Z")).toBe("completed");
       expect(updateRun).toHaveBeenCalledTimes(1);
       expect(createCheckpoint).toHaveBeenCalledTimes(1);
       expect(recordDurableTimelineEvent).toHaveBeenCalledTimes(1);
@@ -3496,7 +3517,7 @@ describe("approval-resolution-effects-service", () => {
     }
   });
 
-  it("converges retries from two child approvals on one delegation-parent materialization identity", () => {
+  it("converges retries from two child approvals on one delegation-parent materialization identity", async () => {
     const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
     const now = "2026-04-11T00:00:00.000Z";
     const runId = "durable-parent-two-approvals";
@@ -3524,7 +3545,7 @@ describe("approval-resolution-effects-service", () => {
       startedAt: now,
     });
     const service = new ApprovalEffectsService(
-      { storage, publishRealtime: vi.fn() } as unknown as ServiceContext,
+      { storage: createSqliteAsyncStorage(storage), publishRealtime: vi.fn() } as unknown as ServiceContext,
       createApprovalEffectDeps(),
     );
     const completeParent = (approvalId: string, identity: string) =>
@@ -3543,7 +3564,7 @@ describe("approval-resolution-effects-service", () => {
                 materializationKey: string;
               };
             },
-          ): string | undefined;
+          ): Promise<string | undefined>;
         }
       ).completeDurableRunIfPresent(runId, {
         now,
@@ -3553,7 +3574,7 @@ describe("approval-resolution-effects-service", () => {
       });
 
     try {
-      expect(completeParent("approval-child-b", materializationKey)).toBe("completed");
+      expect(await completeParent("approval-child-b", materializationKey)).toBe("completed");
       storage.chatTurnTraces.patch(turnId, {
         status: "completed",
         durable: { runId, status: "completed", checkpointKind: "run_completed" },
@@ -3562,7 +3583,7 @@ describe("approval-resolution-effects-service", () => {
       });
       const completed = storage.durableRuns.getRun(runId);
 
-      expect(() => completeParent("approval-child-a", materializationKey)).not.toThrow();
+      await expect(completeParent("approval-child-a", materializationKey)).resolves.toBe("completed");
 
       expect(storage.durableRuns.getRun(runId)).toMatchObject({
         version: completed.version,
@@ -3579,7 +3600,7 @@ describe("approval-resolution-effects-service", () => {
     }
   });
 
-  it("rejects the same approval provenance for a different delegation-parent aggregate", () => {
+  it("rejects the same approval provenance for a different delegation-parent aggregate", async () => {
     const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
     const now = "2026-04-11T00:00:00.000Z";
     const runId = "durable-parent-identity-boundary";
@@ -3607,7 +3628,7 @@ describe("approval-resolution-effects-service", () => {
       startedAt: now,
     });
     const service = new ApprovalEffectsService(
-      { storage, publishRealtime: vi.fn() } as unknown as ServiceContext,
+      { storage: createSqliteAsyncStorage(storage), publishRealtime: vi.fn() } as unknown as ServiceContext,
       createApprovalEffectDeps(),
     );
     const completeParent = (identity: string) =>
@@ -3626,7 +3647,7 @@ describe("approval-resolution-effects-service", () => {
                 materializationKey: string;
               };
             },
-          ): string | undefined;
+          ): Promise<string | undefined>;
         }
       ).completeDurableRunIfPresent(runId, {
         now,
@@ -3641,7 +3662,7 @@ describe("approval-resolution-effects-service", () => {
       });
 
     try {
-      expect(completeParent(materializationKey)).toBe("completed");
+      expect(await completeParent(materializationKey)).toBe("completed");
       storage.chatTurnTraces.patch(turnId, {
         status: "completed",
         durable: { runId, status: "completed", checkpointKind: "run_completed" },
@@ -3649,15 +3670,15 @@ describe("approval-resolution-effects-service", () => {
         finishedAt: now,
       });
 
-      expect(() => completeParent("delegation:delegation-unrelated:parent:turn-parent-identity-boundary")).toThrow(
-        /different materialization identity/i,
-      );
+      await expect(
+        completeParent("delegation:delegation-unrelated:parent:turn-parent-identity-boundary"),
+      ).rejects.toThrow(/different materialization identity/i);
     } finally {
       storage.close();
     }
   });
 
-  it("fails closed when a competing approval wins the durable completion conflict", () => {
+  it("fails closed when a competing approval wins the durable completion conflict", async () => {
     const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
     const now = "2026-04-11T00:00:00.000Z";
     const runId = "durable-conflict";
@@ -3713,12 +3734,12 @@ describe("approval-resolution-effects-service", () => {
       });
     });
     const service = new ApprovalEffectsService(
-      { storage, publishRealtime: vi.fn() } as unknown as ServiceContext,
+      { storage: createSqliteAsyncStorage(storage), publishRealtime: vi.fn() } as unknown as ServiceContext,
       createApprovalEffectDeps(),
     );
 
     try {
-      expect(() =>
+      await expect(
         (
           service as unknown as {
             completeDurableRunIfPresent(
@@ -3729,7 +3750,7 @@ describe("approval-resolution-effects-service", () => {
                 checkpointState: Record<string, unknown>;
                 postCommit: { approvalId: string; turnId: string; traceStatus: ChatTurnTraceRecord["status"] };
               },
-            ): string | undefined;
+            ): Promise<string | undefined>;
           }
         ).completeDurableRunIfPresent(runId, {
           now,
@@ -3737,13 +3758,13 @@ describe("approval-resolution-effects-service", () => {
           checkpointState: { status: "completed" },
           postCommit: { approvalId: "approval-1", turnId, traceStatus: "completed" },
         }),
-      ).toThrow(/already materialized by approval approval-other/i);
+      ).rejects.toThrow(/already materialized by approval approval-other/i);
     } finally {
       storage.close();
     }
   });
 
-  it("leaves running Chat and delegation truth untouched until the durable run parks", () => {
+  it("leaves running Chat and delegation truth untouched until the durable run parks", async () => {
     const effect = createEffect({
       effectKind: "pending_action_execute",
       targetKind: "pending_action",
@@ -3846,7 +3867,7 @@ describe("approval-resolution-effects-service", () => {
       },
     );
 
-    expect(() =>
+    await expect(
       (
         service as unknown as {
           materializeExecutedChatApproval(
@@ -3859,7 +3880,7 @@ describe("approval-resolution-effects-service", () => {
               resolutionStatus: string;
             },
             result: Record<string, unknown>,
-          ): void;
+          ): Promise<void>;
         }
       ).materializeExecutedChatApproval(
         effect,
@@ -3872,7 +3893,7 @@ describe("approval-resolution-effects-service", () => {
         },
         { outcome: "executed", result: { ok: true } },
       ),
-    ).not.toThrow();
+    ).resolves.toBeUndefined();
 
     expect(updateRun).not.toHaveBeenCalled();
     expect(trace.status).toBe("waiting_for_approval");
@@ -3883,7 +3904,7 @@ describe("approval-resolution-effects-service", () => {
   });
 
   it("emits explicit retained-stream metadata when an approval wait wake is skipped", async () => {
-    const publishRealtime = vi.fn();
+    const publishRealtime = vi.fn(async () => undefined);
     const skipEffect = vi.fn(() => ({ status: "skipped" as const }));
     const service = new ApprovalEffectsService(
       {
@@ -3996,7 +4017,7 @@ describe("approval-resolution-effects-service", () => {
       throw new Error("device expiry sweep failed");
     });
     const reconcileExpiredRemoteActionTokens = vi.fn(() => 3);
-    const publishRealtime = vi.fn();
+    const publishRealtime = vi.fn(async () => undefined);
     const service = new ApprovalEffectsService(
       {
         storage: {
@@ -4371,6 +4392,7 @@ describe("approval-resolution-effects-service", () => {
 
   it("lets a restarted worker reclaim and complete a deferred Code Mode effect after the retry lease", async () => {
     const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
+    const asyncStorage = createSqliteAsyncStorage(storage);
     const approval = storage.approvals.create({
       kind: "code_mode.run",
       riskLevel: "danger",
@@ -4390,10 +4412,13 @@ describe("approval-resolution-effects-service", () => {
       payload: { actionType: "code_mode.run" },
     });
     const firstExecution = vi.fn(async () => undefined);
-    const firstWorker = new ApprovalEffectsService({ storage, publishRealtime: vi.fn() } as unknown as ServiceContext, {
-      ...createApprovalEffectDeps(),
-      executeCodeModePendingApproval: firstExecution,
-    });
+    const firstWorker = new ApprovalEffectsService(
+      { storage: asyncStorage, publishRealtime: vi.fn() } as unknown as ServiceContext,
+      {
+        ...createApprovalEffectDeps(),
+        executeCodeModePendingApproval: firstExecution,
+      },
+    );
 
     try {
       await (
@@ -4425,7 +4450,7 @@ describe("approval-resolution-effects-service", () => {
         result: { runId: "code-run-restart-1", status: "completed" },
       }));
       const restartedWorker = new ApprovalEffectsService(
-        { storage, publishRealtime: vi.fn() } as unknown as ServiceContext,
+        { storage: asyncStorage, publishRealtime: vi.fn() } as unknown as ServiceContext,
         {
           ...createApprovalEffectDeps(),
           executeCodeModePendingApproval: restartedExecution,
@@ -4556,11 +4581,11 @@ describe("approval-resolution-effects-service", () => {
       const materializeFailed = vi
         .spyOn(
           service as unknown as {
-            materializeFailedChatApprovalOrDefer: (...args: unknown[]) => boolean;
+            materializeFailedChatApprovalOrDefer: (...args: unknown[]) => Promise<boolean>;
           },
           "materializeFailedChatApprovalOrDefer",
         )
-        .mockImplementation(() => {
+        .mockImplementation(async () => {
           completeEffect(effect.effectId, "worker", effect.version, { result: {} });
           return true;
         });
@@ -4633,11 +4658,11 @@ describe("approval-resolution-effects-service", () => {
     const materializeFailed = vi
       .spyOn(
         service as unknown as {
-          materializeFailedChatApprovalOrDefer: (...args: unknown[]) => boolean;
+          materializeFailedChatApprovalOrDefer: (...args: unknown[]) => Promise<boolean>;
         },
         "materializeFailedChatApprovalOrDefer",
       )
-      .mockImplementation(() => {
+      .mockImplementation(async () => {
         completeEffect(effect.effectId, "worker", effect.version, { result: {} });
         return true;
       });
@@ -4709,11 +4734,11 @@ describe("approval-resolution-effects-service", () => {
     const materializeFailed = vi
       .spyOn(
         service as unknown as {
-          materializeFailedChatApprovalOrDefer: (...args: unknown[]) => boolean;
+          materializeFailedChatApprovalOrDefer: (...args: unknown[]) => Promise<boolean>;
         },
         "materializeFailedChatApprovalOrDefer",
       )
-      .mockImplementation(() => {
+      .mockImplementation(async () => {
         completeEffect(effect.effectId, "worker", effect.version, { result: {} });
         return true;
       });
@@ -4801,11 +4826,11 @@ describe("approval-resolution-effects-service", () => {
     const materializeFailed = vi
       .spyOn(
         service as unknown as {
-          materializeFailedChatApprovalOrDefer: (...args: unknown[]) => boolean;
+          materializeFailedChatApprovalOrDefer: (...args: unknown[]) => Promise<boolean>;
         },
         "materializeFailedChatApprovalOrDefer",
       )
-      .mockImplementation(() => {
+      .mockImplementation(async () => {
         completeEffect(effect.effectId, "worker", effect.version, {
           result: { resolutionStatus: "failed" },
         });
@@ -4888,11 +4913,11 @@ describe("approval-resolution-effects-service", () => {
     const materializeFailed = vi
       .spyOn(
         service as unknown as {
-          materializeFailedChatApprovalOrDefer: (...args: unknown[]) => boolean;
+          materializeFailedChatApprovalOrDefer: (...args: unknown[]) => Promise<boolean>;
         },
         "materializeFailedChatApprovalOrDefer",
       )
-      .mockImplementation(() => {
+      .mockImplementation(async () => {
         completeEffect(effect.effectId, "worker", effect.version, { result: {} });
         return true;
       });
@@ -5301,7 +5326,7 @@ describe("approval-resolution-effects-service", () => {
     );
   });
 
-  it("does not resurrect a cancelled delegation step from a late approved-child materialization", () => {
+  it("does not resurrect a cancelled delegation step from a late approved-child materialization", async () => {
     const cancelledStep: ChatDelegationStepRecord = {
       stepId: "step-cancelled-winner",
       runId: "run-cancelled-winner",
@@ -5346,14 +5371,14 @@ describe("approval-resolution-effects-service", () => {
       createApprovalEffectDeps(),
     );
 
-    const materialized = (
+    const materialized = await (
       service as unknown as {
         materializeDelegationParentsFromApprovedChild(input: {
           childTrace: ChatTurnTraceRecord;
           outputText: string;
           now: string;
           approvalId: string;
-        }): unknown;
+        }): Promise<unknown>;
       }
     ).materializeDelegationParentsFromApprovedChild({
       childTrace: createWaitingChildTrace("child-cancelled-winner", "turn-cancelled-winner"),
@@ -5376,7 +5401,7 @@ describe("approval-resolution-effects-service", () => {
     expect(cancelledStep.status).toBe("cancelled");
   });
 
-  it("does not fail a replacement child from a stale approved-child failure", () => {
+  it("does not fail a replacement child from a stale approved-child failure", async () => {
     const replacementStep: ChatDelegationStepRecord = {
       stepId: "step-replacement-child",
       runId: "run-replacement-child",
@@ -5419,7 +5444,7 @@ describe("approval-resolution-effects-service", () => {
       createApprovalEffectDeps(),
     );
 
-    const materialized = (
+    const materialized = await (
       service as unknown as {
         materializeDelegationParentsFromFailedChild(input: {
           childTrace: ChatTurnTraceRecord;
@@ -5430,7 +5455,7 @@ describe("approval-resolution-effects-service", () => {
             kind: "failed";
             message: string;
           };
-        }): unknown;
+        }): Promise<unknown>;
       }
     ).materializeDelegationParentsFromFailedChild({
       childTrace: createWaitingChildTrace("stale-session", "stale-turn"),
@@ -5455,7 +5480,7 @@ describe("approval-resolution-effects-service", () => {
     expect(replacementStep.childTurnId).toBe("replacement-turn");
   });
 
-  it("locks the delegation parent and stable step set before an approval outcome CAS", () => {
+  it("locks the delegation parent and stable step set before an approval outcome CAS", async () => {
     const lockOrder: string[] = [];
     let step: ChatDelegationStepRecord = {
       stepId: "step-lock-order",
@@ -5520,14 +5545,14 @@ describe("approval-resolution-effects-service", () => {
       createApprovalEffectDeps(),
     );
 
-    (
+    await (
       service as unknown as {
         materializeDelegationParentsFromApprovedChild(input: {
           childTrace: ChatTurnTraceRecord;
           outputText: string;
           now: string;
           approvalId: string;
-        }): unknown;
+        }): Promise<unknown>;
       }
     ).materializeDelegationParentsFromApprovedChild({
       childTrace: createWaitingChildTrace("child-lock-order", "turn-lock-order"),
@@ -6080,13 +6105,16 @@ describe("approval-resolution-effects-service", () => {
       const identities = deriveExternalSourceKnowledgeSnapshotMaterializedIdentities(payload);
       const executor = vi.fn(async () => buildExternalKnowledgeApplyResult(payload, identities));
       const backgroundTasks = new Set<Promise<void>>();
-      const service = new ApprovalEffectsService({ storage, publishRealtime: vi.fn() } as unknown as ServiceContext, {
-        ...createApprovalEffectDeps(),
-        backgroundTasks,
-        executeApprovedExternalSourceKnowledgeSnapshot: executor,
-      });
+      const service = new ApprovalEffectsService(
+        { storage: createSqliteAsyncStorage(storage), publishRealtime: vi.fn() } as unknown as ServiceContext,
+        {
+          ...createApprovalEffectDeps(),
+          backgroundTasks,
+          executeApprovedExternalSourceKnowledgeSnapshot: executor,
+        },
+      );
 
-      const enqueued = service.enqueueResolutionEffects(approval, {
+      const enqueued = await service.enqueueResolutionEffects(approval, {
         decision: "approve",
         resolvedBy: "operator-1",
       });
@@ -6136,7 +6164,10 @@ describe("approval-resolution-effects-service", () => {
 
       // A replayed resolution converges on the completed row: same effect id,
       // still completed, no second row, no re-execution.
-      const replayed = service.enqueueResolutionEffects(approval, { decision: "approve", resolvedBy: "operator-1" });
+      const replayed = await service.enqueueResolutionEffects(approval, {
+        decision: "approve",
+        resolvedBy: "operator-1",
+      });
       const replayedApply = replayed.find((effect) => effect.effectKind === "external_source_knowledge_snapshot_apply");
       expect(replayedApply).toMatchObject({ effectId: applyEffect!.effectId, status: "completed" });
       const rowCount = storage.db
@@ -6161,12 +6192,18 @@ describe("approval-resolution-effects-service", () => {
         throw new ExternalSourceKnowledgeEffectServiceError("approval_expired");
       });
       const backgroundTasks = new Set<Promise<void>>();
-      const service = new ApprovalEffectsService({ storage, publishRealtime: vi.fn() } as unknown as ServiceContext, {
-        ...createApprovalEffectDeps(),
-        backgroundTasks,
-        executeApprovedExternalSourceKnowledgeSnapshot: executor,
+      const service = new ApprovalEffectsService(
+        { storage: createSqliteAsyncStorage(storage), publishRealtime: vi.fn() } as unknown as ServiceContext,
+        {
+          ...createApprovalEffectDeps(),
+          backgroundTasks,
+          executeApprovedExternalSourceKnowledgeSnapshot: executor,
+        },
+      );
+      const enqueued = await service.enqueueResolutionEffects(approval, {
+        decision: "approve",
+        resolvedBy: "operator-1",
       });
-      const enqueued = service.enqueueResolutionEffects(approval, { decision: "approve", resolvedBy: "operator-1" });
       const applyEffect = enqueued.find((effect) => effect.effectKind === "external_source_knowledge_snapshot_apply");
       service.startWorker();
       await vi.waitFor(() => expect(executor).toHaveBeenCalledOnce());
@@ -6191,12 +6228,18 @@ describe("approval-resolution-effects-service", () => {
         throw new ExternalSourceKnowledgeEffectServiceError("policy_denied", "ward_deny");
       });
       const backgroundTasks = new Set<Promise<void>>();
-      const service = new ApprovalEffectsService({ storage, publishRealtime: vi.fn() } as unknown as ServiceContext, {
-        ...createApprovalEffectDeps(),
-        backgroundTasks,
-        executeApprovedExternalSourceKnowledgeSnapshot: executor,
+      const service = new ApprovalEffectsService(
+        { storage: createSqliteAsyncStorage(storage), publishRealtime: vi.fn() } as unknown as ServiceContext,
+        {
+          ...createApprovalEffectDeps(),
+          backgroundTasks,
+          executeApprovedExternalSourceKnowledgeSnapshot: executor,
+        },
+      );
+      const enqueued = await service.enqueueResolutionEffects(approval, {
+        decision: "approve",
+        resolvedBy: "operator-1",
       });
-      const enqueued = service.enqueueResolutionEffects(approval, { decision: "approve", resolvedBy: "operator-1" });
       const applyEffect = enqueued.find((effect) => effect.effectKind === "external_source_knowledge_snapshot_apply");
       service.startWorker();
       await vi.waitFor(() => expect(executor).toHaveBeenCalledOnce());
@@ -6219,16 +6262,19 @@ describe("approval-resolution-effects-service", () => {
     }
   });
 
-  it("enqueues no external knowledge-snapshot effect for a rejected approval", () => {
+  it("enqueues no external knowledge-snapshot effect for a rejected approval", async () => {
     const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
     try {
       const { approvalId } = createExternalKnowledgeSnapshotApprovalRow(storage);
       const rejected = storage.approvals.resolve(approvalId, { decision: "reject", resolvedBy: "operator-1" });
       const service = new ApprovalEffectsService(
-        { storage, publishRealtime: vi.fn() } as unknown as ServiceContext,
+        { storage: createSqliteAsyncStorage(storage), publishRealtime: vi.fn() } as unknown as ServiceContext,
         createApprovalEffectDeps(),
       );
-      const enqueued = service.enqueueResolutionEffects(rejected, { decision: "reject", resolvedBy: "operator-1" });
+      const enqueued = await service.enqueueResolutionEffects(rejected, {
+        decision: "reject",
+        resolvedBy: "operator-1",
+      });
       expect(enqueued.some((effect) => effect.effectKind === "external_source_knowledge_snapshot_apply")).toBe(false);
       const rowCount = storage.db
         .prepare("SELECT COUNT(*) AS count FROM approval_effects WHERE effect_kind = ?")

@@ -16,7 +16,11 @@ import {
   type SkillHubSnapshotArtifactRecord,
   type SkillLifecycleRecord,
 } from "@goatcitadel/contracts";
-import type { SkillAggregateRevisionRecord, SkillHubSnapshotRecord, Storage } from "@goatcitadel/storage";
+import type {
+  SkillAggregateRevisionRecord,
+  SkillHubSnapshotRecord,
+  AsyncStorage as Storage,
+} from "@goatcitadel/storage";
 import { buildSkillHubLifecycleApprovalInput } from "./skill-hub-lifecycle-service.js";
 
 export const SKILL_HUB_OPERATOR_SCHEMA_VERSION = "goatcitadel.skill-hub-operator.v1" as const;
@@ -165,7 +169,7 @@ type SkillHubOperatorStorage = Pick<
 export interface SkillHubOperatorServiceOptions {
   storage: SkillHubOperatorStorage;
   createApproval(input: ApprovalCreateInput): Promise<ApprovalRequest>;
-  listInspectableCatalog(): CapabilityCatalogEntry[];
+  listInspectableCatalog(): Promise<CapabilityCatalogEntry[]>;
   now?: () => string;
 }
 
@@ -228,14 +232,16 @@ export class SkillHubOperatorService {
     this.now = options.now ?? (() => new Date().toISOString());
   }
 
-  public list(input: { workspaceId: string; limit?: number }): SkillHubOperatorListResponse {
+  public async list(input: { workspaceId: string; limit?: number }): Promise<SkillHubOperatorListResponse> {
     const workspaceId = normalizeRequired(input.workspaceId, "workspace ID", 256);
     const limit = normalizeLimit(input.limit);
-    const snapshotsWithSentinel = this.options.storage.skillHubSnapshots.listByWorkspace(workspaceId, limit + 1);
+    const snapshotsWithSentinel = await this.options.storage.skillHubSnapshots.listByWorkspace(workspaceId, limit + 1);
     const truncated = snapshotsWithSentinel.length > limit;
     const snapshots = snapshotsWithSentinel.slice(0, limit);
-    const inventory = this.loadInventory(workspaceId);
-    const items = snapshots.map((snapshot) => this.project(this.contextFor(snapshot, inventory)));
+    const inventory = await this.loadInventory(workspaceId);
+    const items = await Promise.all(
+      snapshots.map(async (snapshot) => this.project(await this.contextFor(snapshot, inventory))),
+    );
     const pendingApprovalIds = new Set(
       items.flatMap((item) =>
         Object.values(item.approvals)
@@ -272,11 +278,11 @@ export class SkillHubOperatorService {
     const workspaceId = normalizeRequired(input.workspaceId, "workspace ID", 256);
     const snapshotId = normalizeRequired(input.snapshotId, "snapshot ID", 256);
     const actorId = normalizeRequired(input.actorId, "actor ID", 256);
-    const snapshot = this.options.storage.skillHubSnapshots.find(snapshotId);
+    const snapshot = await this.options.storage.skillHubSnapshots.find(snapshotId);
     if (!snapshot || snapshot.workspaceId !== workspaceId) {
       throw new NotFoundError({ entity: "Skill Hub snapshot", id: snapshotId });
     }
-    const context = this.contextFor(snapshot, this.loadInventory(workspaceId));
+    const context = await this.contextFor(snapshot, await this.loadInventory(workspaceId));
     const plan = this.plan(input.operationKind, context);
     if (!plan.guard.allowed || !context.skillId || !plan.targetCandidateId || !plan.targetVersionId) {
       throw new ConflictError({
@@ -309,11 +315,11 @@ export class SkillHubOperatorService {
       turnId,
     } satisfies Omit<SkillHubOperationIntentTemplate, "operationId" | "idempotencyKey" | "createdAt">;
     const fingerprint = operationFingerprint(intentBase);
-    const existing = this.findReusableApproval(workspaceId, fingerprint);
+    const existing = await this.findReusableApproval(workspaceId, fingerprint);
     if (existing) {
       return {
         schemaVersion: SKILL_HUB_OPERATOR_SCHEMA_VERSION,
-        approval: this.summarizeApproval(existing),
+        approval: await this.summarizeApproval(existing),
         reused: true,
         operatorMessage: "An equivalent governed approval is already active; no duplicate mutation was created.",
       };
@@ -323,30 +329,31 @@ export class SkillHubOperatorService {
       const approval = await inFlight;
       return {
         schemaVersion: SKILL_HUB_OPERATOR_SCHEMA_VERSION,
-        approval: this.summarizeApproval(approval),
+        approval: await this.summarizeApproval(approval),
         reused: true,
         operatorMessage: "An equivalent governed approval is already active; no duplicate mutation was created.",
       };
     }
-    const attempt = this.nextAttempt(workspaceId, fingerprint);
-    const operationId = `skill-hub-op-${fingerprint.slice(0, 32)}-${attempt}`;
-    const intent: SkillHubOperationIntentTemplate = {
-      ...intentBase,
-      operationId,
-      idempotencyKey: `skill-hub:lifecycle:${fingerprint}:${attempt}`,
-      createdAt: this.now(),
-    };
-    const approvalInput = buildSkillHubLifecycleApprovalInput(intent);
-    const pendingApproval = this.options.createApproval(approvalInput).then((approval) => {
+    const pendingApproval = (async () => {
+      const attempt = await this.nextAttempt(workspaceId, fingerprint);
+      const operationId = `skill-hub-op-${fingerprint.slice(0, 32)}-${attempt}`;
+      const intent: SkillHubOperationIntentTemplate = {
+        ...intentBase,
+        operationId,
+        idempotencyKey: `skill-hub:lifecycle:${fingerprint}:${attempt}`,
+        createdAt: this.now(),
+      };
+      const approvalInput = buildSkillHubLifecycleApprovalInput(intent);
+      const approval = await this.options.createApproval(approvalInput);
       assertCreatedApprovalMatchesIntent(approval, approvalInput);
       return approval;
-    });
+    })();
     this.inFlightApprovalsByFingerprint.set(fingerprint, pendingApproval);
     try {
       const approval = await pendingApproval;
       return {
         schemaVersion: SKILL_HUB_OPERATOR_SCHEMA_VERSION,
-        approval: this.summarizeApproval(approval),
+        approval: await this.summarizeApproval(approval),
         reused: false,
         operatorMessage: "Approval created. Candidate and runtime state remain unchanged until the effect settles.",
       };
@@ -357,8 +364,8 @@ export class SkillHubOperatorService {
     }
   }
 
-  private loadInventory(workspaceId: string): OperatorInventory {
-    const rawCandidates = this.options.storage.candidateSkillVersions.list(500);
+  private async loadInventory(workspaceId: string): Promise<OperatorInventory> {
+    const rawCandidates = await this.options.storage.candidateSkillVersions.list(500);
     const candidates = rawCandidates.filter(
       (candidate) =>
         candidate.sourceKind === "upstream_hub" &&
@@ -368,12 +375,11 @@ export class SkillHubOperatorService {
     );
     const candidateSnapshots = new Map<string, SkillHubSnapshotRecord>();
     for (const candidate of candidates) {
-      const snapshot = this.options.storage.skillHubSnapshots.find(candidate.upstreamSnapshotId!);
+      const snapshot = await this.options.storage.skillHubSnapshots.find(candidate.upstreamSnapshotId!);
       if (snapshot?.workspaceId === workspaceId) candidateSnapshots.set(candidate.versionId, snapshot);
     }
     const catalogBySkillId = new Map(
-      this.options
-        .listInspectableCatalog()
+      (await this.options.listInspectableCatalog())
         .filter((entry) => entry.kind === "skill" && entry.skillId)
         .map((entry) => [entry.skillId!, entry]),
     );
@@ -383,12 +389,12 @@ export class SkillHubOperatorService {
       candidateSnapshots,
       candidateInventoryTruncated: rawCandidates.length >= 500,
       catalogBySkillId,
-      approvalsBySnapshot: this.latestApprovalsBySnapshot(workspaceId),
+      approvalsBySnapshot: await this.latestApprovalsBySnapshot(workspaceId),
     };
   }
 
-  private contextFor(snapshot: SkillHubSnapshotRecord, inventory: OperatorInventory): SnapshotContext {
-    const deterministicVersion = this.options.storage.candidateSkillVersions.find(versionIdForSnapshot(snapshot));
+  private async contextFor(snapshot: SkillHubSnapshotRecord, inventory: OperatorInventory): Promise<SnapshotContext> {
+    const deterministicVersion = await this.options.storage.candidateSkillVersions.find(versionIdForSnapshot(snapshot));
     const candidates = uniqueCandidates([
       ...inventory.candidates,
       ...(deterministicVersion &&
@@ -397,18 +403,20 @@ export class SkillHubOperatorService {
         ? [deterministicVersion]
         : []),
     ]);
-    const candidatesWithSources = candidates
-      .map((candidate) => ({
-        candidate,
-        snapshot:
-          inventory.candidateSnapshots.get(candidate.versionId) ??
-          (candidate.upstreamSnapshotId
-            ? this.options.storage.skillHubSnapshots.find(candidate.upstreamSnapshotId)
-            : undefined),
-      }))
-      .filter((item): item is { candidate: CandidateSkillVersionRecord; snapshot: SkillHubSnapshotRecord } =>
-        Boolean(item.snapshot?.workspaceId === inventory.workspaceId),
-      );
+    const candidatesWithSources = (
+      await Promise.all(
+        candidates.map(async (candidate) => ({
+          candidate,
+          snapshot:
+            inventory.candidateSnapshots.get(candidate.versionId) ??
+            (candidate.upstreamSnapshotId
+              ? await this.options.storage.skillHubSnapshots.find(candidate.upstreamSnapshotId)
+              : undefined),
+        })),
+      )
+    ).filter((item): item is { candidate: CandidateSkillVersionRecord; snapshot: SkillHubSnapshotRecord } =>
+      Boolean(item.snapshot?.workspaceId === inventory.workspaceId),
+    );
     const sourceCandidates = candidatesWithSources
       .filter((item) => item.snapshot.canonicalSourceKey === snapshot.canonicalSourceKey)
       .map((item) => item.candidate);
@@ -417,14 +425,12 @@ export class SkillHubOperatorService {
     const lineageCandidates = lineageCandidateId
       ? uniqueCandidates([
           ...sourceCandidates,
-          ...this.options.storage.candidateSkillVersions
-            .listByCandidateId(lineageCandidateId, 500)
-            .filter(
-              (candidate) =>
-                candidate.sourceKind === "upstream_hub" &&
-                candidate.workspaceId === inventory.workspaceId &&
-                candidate.upstreamSnapshotId,
-            ),
+          ...(await this.options.storage.candidateSkillVersions.listByCandidateId(lineageCandidateId, 500)).filter(
+            (candidate) =>
+              candidate.sourceKind === "upstream_hub" &&
+              candidate.workspaceId === inventory.workspaceId &&
+              candidate.upstreamSnapshotId,
+          ),
         ])
       : sourceCandidates;
     const exactCandidates = lineageCandidates
@@ -440,7 +446,7 @@ export class SkillHubOperatorService {
     const candidateTitles = [...new Set(lineageCandidates.map((candidate) => candidate.title))];
     const skillId =
       candidateTitles.length === 1 ? skillIdForName(candidateTitles[0]!) : resolveSnapshotSkillId(snapshot);
-    const runtimeLifecycle = skillId ? this.options.storage.skillLifecycle.find(skillId) : undefined;
+    const runtimeLifecycle = skillId ? await this.options.storage.skillLifecycle.find(skillId) : undefined;
     const activeCandidate = runtimeLifecycle?.provenance?.sourceRef
       ? lineageCandidates.find(
           (candidate) =>
@@ -450,10 +456,10 @@ export class SkillHubOperatorService {
       : undefined;
     const referenceCandidate = activeCandidate ?? latestCandidate;
     const referenceSnapshot = referenceCandidate?.upstreamSnapshotId
-      ? this.options.storage.skillHubSnapshots.find(referenceCandidate.upstreamSnapshotId)
+      ? await this.options.storage.skillHubSnapshots.find(referenceCandidate.upstreamSnapshotId)
       : undefined;
     const candidateRevision = lineageCandidateId
-      ? this.options.storage.skillAggregateRevisions.get("candidate_skill", lineageCandidateId)
+      ? await this.options.storage.skillAggregateRevisions.get("candidate_skill", lineageCandidateId)
       : undefined;
     const targetCandidateId = lineageCandidateId ?? candidateIdForSource(snapshot);
     const activeVersion = Boolean(
@@ -465,16 +471,16 @@ export class SkillHubOperatorService {
     return {
       snapshot,
       priorSnapshot: snapshot.priorSnapshotId
-        ? this.options.storage.skillHubSnapshots.find(snapshot.priorSnapshotId)
+        ? await this.options.storage.skillHubSnapshots.find(snapshot.priorSnapshotId)
         : undefined,
-      driftSnapshot: this.options.storage.skillHubSnapshots.findSameVersionByteDrift({
+      driftSnapshot: await this.options.storage.skillHubSnapshots.findSameVersionByteDrift({
         workspaceId: snapshot.workspaceId,
         canonicalSourceKey: snapshot.canonicalSourceKey,
         declaredVersion: snapshot.declaredVersion,
         resolvedVersion: snapshot.resolvedVersion,
         contentTreeSha256: snapshot.contentTreeSha256,
       }),
-      artifact: this.options.storage.skillHubArtifacts.findBySnapshot(snapshot.workspaceId, snapshot.snapshotId),
+      artifact: await this.options.storage.skillHubArtifacts.findBySnapshot(snapshot.workspaceId, snapshot.snapshotId),
       skillId,
       exactCandidate,
       sourceCandidates: lineageCandidates,
@@ -484,9 +490,14 @@ export class SkillHubOperatorService {
       activeCandidate,
       referenceSnapshot,
       candidateRevision,
-      targetCandidateRevision: this.options.storage.skillAggregateRevisions.get("candidate_skill", targetCandidateId),
+      targetCandidateRevision: await this.options.storage.skillAggregateRevisions.get(
+        "candidate_skill",
+        targetCandidateId,
+      ),
       runtimeLifecycle,
-      runtimeRevision: skillId ? this.options.storage.skillAggregateRevisions.get("runtime_skill", skillId) : undefined,
+      runtimeRevision: skillId
+        ? await this.options.storage.skillAggregateRevisions.get("runtime_skill", skillId)
+        : undefined,
       catalogEntry: skillId ? inventory.catalogBySkillId.get(skillId) : undefined,
       activeVersion,
       candidateInventoryTruncated: inventory.candidateInventoryTruncated,
@@ -674,26 +685,26 @@ export class SkillHubOperatorService {
     };
   }
 
-  private latestApprovalsBySnapshot(
+  private async latestApprovalsBySnapshot(
     workspaceId: string,
-  ): Map<string, Partial<Record<SkillHubOperatorAction, SkillHubOperatorApprovalSummary>>> {
+  ): Promise<Map<string, Partial<Record<SkillHubOperatorAction, SkillHubOperatorApprovalSummary>>>> {
     const result = new Map<string, Partial<Record<SkillHubOperatorAction, SkillHubOperatorApprovalSummary>>>();
-    for (const approval of this.options.storage.approvals.list(undefined, 500, workspaceId)) {
+    for (const approval of await this.options.storage.approvals.list(undefined, 500, workspaceId)) {
       const intent = readOperatorIntent(approval);
       if (!intent) continue;
       const existing = result.get(intent.snapshotId) ?? {};
       if (!existing[intent.operationKind]) {
-        existing[intent.operationKind] = this.summarizeApproval(approval);
+        existing[intent.operationKind] = await this.summarizeApproval(approval);
         result.set(intent.snapshotId, existing);
       }
     }
     return result;
   }
 
-  private summarizeApproval(approval: ApprovalRequest): SkillHubOperatorApprovalSummary {
+  private async summarizeApproval(approval: ApprovalRequest): Promise<SkillHubOperatorApprovalSummary> {
     const intent = readOperatorIntent(approval);
     if (!intent) throw new TypeError(`Approval ${approval.approvalId} is not a Skill Hub operator action.`);
-    const settlement = this.options.storage.skillHubOperations.findSettlementByOperationId(intent.operationId);
+    const settlement = await this.options.storage.skillHubOperations.findSettlementByOperationId(intent.operationId);
     return {
       approvalId: approval.approvalId,
       operationId: intent.operationId,
@@ -714,8 +725,8 @@ export class SkillHubOperatorService {
     };
   }
 
-  private findReusableApproval(workspaceId: string, fingerprint: string): ApprovalRequest | undefined {
-    return this.options.storage.approvals.list(undefined, 500, workspaceId).find((approval) => {
+  private async findReusableApproval(workspaceId: string, fingerprint: string): Promise<ApprovalRequest | undefined> {
+    return (await this.options.storage.approvals.list(undefined, 500, workspaceId)).find((approval) => {
       const intent = readOperatorIntent(approval);
       return Boolean(
         intent &&
@@ -725,8 +736,8 @@ export class SkillHubOperatorService {
     });
   }
 
-  private nextAttempt(workspaceId: string, fingerprint: string): number {
-    const attempts = this.options.storage.approvals.list(undefined, 500, workspaceId).flatMap((approval) => {
+  private async nextAttempt(workspaceId: string, fingerprint: string): Promise<number> {
+    const attempts = (await this.options.storage.approvals.list(undefined, 500, workspaceId)).flatMap((approval) => {
       const intent = readOperatorIntent(approval);
       return intent && operationFingerprintForIntent(intent) === fingerprint ? [operationAttempt(intent)] : [];
     });

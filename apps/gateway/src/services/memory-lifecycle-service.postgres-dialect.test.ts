@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MemoryBatchMutationOperation } from "@goatcitadel/contracts";
-import { AuditLog, Storage, TranscriptLog, type DatabaseClient } from "@goatcitadel/storage";
+import { AuditLog, Storage, TranscriptLog, createLocalAsyncStorage, type DatabaseClient } from "@goatcitadel/storage";
 import {
   buildMemoryItemsApprovalStateMaterial,
   buildMemoryLifecycleApprovalBinding,
@@ -131,13 +131,14 @@ function createHarness(options: { wrapDb?: (baseDb: DatabaseClient) => DatabaseC
     transcripts: new TranscriptLog(transcriptsDir),
     audit: new AuditLog(auditDir),
   });
+  const asyncStorage = createLocalAsyncStorage(storage);
 
   const service = new MemoryLifecycleService({
     context: {} as never,
     learned: {} as never,
     maintenance: {} as never,
     admin: {
-      gatewaySql: storage.gatewaySql,
+      gatewaySql: asyncStorage.gatewaySql,
       memoryQualityIssues: {} as never,
       tryParseJson: (raw: string | null | undefined, fallback: unknown) => {
         try {
@@ -150,9 +151,9 @@ function createHarness(options: { wrapDb?: (baseDb: DatabaseClient) => DatabaseC
       publishRealtime: vi.fn(),
     } as never,
     approvalAuthority: {
-      approvals: storage.approvals,
-      approvalEvents: storage.approvalEvents,
-      governanceJourneyEvents: storage.governanceJourneyEvents,
+      approvals: asyncStorage.approvals,
+      approvalEvents: asyncStorage.approvalEvents,
+      governanceJourneyEvents: asyncStorage.governanceJourneyEvents,
     },
     resolveLearnedMemoryPolicy: vi.fn(() => ({ allowWrite: true, reason: "allowed" as const })),
     readTranscriptOrEmpty: vi.fn(async () => []),
@@ -234,7 +235,7 @@ function seedApprovedBatchApproval(
 }
 
 describe("MemoryLifecycleService.batchMutateMemoryItems on the postgres dialect", () => {
-  it("completes an atomic memory batch mutation through runImmediateTransaction without raw transaction SQL", () => {
+  it("completes an atomic memory batch mutation through runImmediateTransaction without raw transaction SQL", async () => {
     const harness = createHarness();
     seedMemoryItem(harness.db, { itemId: "item-1", title: "Original item 1", content: "Original content 1" });
     seedMemoryItem(harness.db, { itemId: "item-2", title: "Original item 2", content: "Original content 2" });
@@ -257,7 +258,7 @@ describe("MemoryLifecycleService.batchMutateMemoryItems on the postgres dialect"
     const approved = seedApprovedBatchApproval(harness, batchInput);
     const execSpy = vi.spyOn(harness.db, "exec");
 
-    const response = harness.service.batchMutateMemoryItems(batchInput, "operator-1", approved);
+    const response = await harness.service.batchMutateMemoryItems(batchInput, "operator-1", approved);
 
     expect(response).toMatchObject({
       status: "applied",
@@ -269,8 +270,10 @@ describe("MemoryLifecycleService.batchMutateMemoryItems on the postgres dialect"
     // exec() (the way the real Postgres driver would reject sqlite-only BEGIN
     // IMMEDIATE syntax). Assert directly that none of those calls happened,
     // proving the batch went through db.transaction("immediate", ...) only.
-    const rawTransactionControlCalls = execSpy.mock.calls.filter(([sql]) =>
-      /^\s*(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE|PRAGMA|END)\b/i.test(sql),
+    const rawTransactionControlCalls = execSpy.mock.calls.filter(
+      ([sql]) =>
+        /^\s*(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE|PRAGMA|END)\b/i.test(sql) &&
+        !/^\s*(?:SAVEPOINT|RELEASE\s+SAVEPOINT|ROLLBACK\s+TO\s+SAVEPOINT)\s+gc_async_storage_\d+\s*$/iu.test(sql),
     );
     expect(rawTransactionControlCalls).toHaveLength(0);
 
@@ -285,7 +288,7 @@ describe("MemoryLifecycleService.batchMutateMemoryItems on the postgres dialect"
     expect(countMemoryChangeHistoryRows(harness.db)).toBe(2);
   });
 
-  it("rolls back every batch mutation on a real transactional failure", () => {
+  it("rolls back every batch mutation on a real transactional failure", async () => {
     let updateCallCount = 0;
     let midTransactionItem1Title: string | undefined;
     let midTransactionCallNumber: number | undefined;
@@ -335,7 +338,7 @@ describe("MemoryLifecycleService.batchMutateMemoryItems on the postgres dialect"
     const item1Snapshot = readMemoryItemRow(harness.db, "item-1");
     const item2Snapshot = readMemoryItemRow(harness.db, "item-2");
 
-    expect(() => harness.service.batchMutateMemoryItems(rollbackInput, "operator-1", approved)).toThrow(
+    await expect(harness.service.batchMutateMemoryItems(rollbackInput, "operator-1", approved)).rejects.toThrow(
       "Simulated real transactional update failure",
     );
 

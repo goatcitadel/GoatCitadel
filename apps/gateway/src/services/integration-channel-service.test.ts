@@ -98,10 +98,10 @@ function createDeps(): IntegrationChannelPort {
 }
 
 describe("integration-channel-service inbound access defaults", () => {
-  it("keeps repository and runtime connection configs raw for secret resolution", () => {
+  it("keeps repository and runtime connection configs raw for secret resolution", async () => {
     const deps = createDeps();
 
-    const connection = createIntegrationConnection(deps, {
+    const connection = await createIntegrationConnection(deps, {
       catalogId: "channel.slack",
       label: "Slack",
       config: {
@@ -116,17 +116,17 @@ describe("integration-channel-service inbound access defaults", () => {
       webhookUrl: "https://hooks.example.test/events?token=hook-short",
       botTokenEnv: "SLACK_BOT_TOKEN",
     });
-    expect(deps.storage.integrationConnections.get(connection.connectionId).config).toMatchObject({
+    expect((await deps.storage.integrationConnections.get(connection.connectionId)).config).toMatchObject({
       botToken: "bot-short",
       webhookUrl: "https://hooks.example.test/events?token=hook-short",
       botTokenEnv: "SLACK_BOT_TOKEN",
     });
   });
 
-  it("defaults new generic webhook channel connections to allowlist mode", () => {
+  it("defaults new generic webhook channel connections to allowlist mode", async () => {
     const deps = createDeps();
 
-    const connection = createIntegrationConnection(deps, {
+    const connection = await createIntegrationConnection(deps, {
       catalogId: "channel.slack",
       label: "Slack",
       config: {
@@ -142,10 +142,10 @@ describe("integration-channel-service inbound access defaults", () => {
     });
   });
 
-  it("preserves explicit legacy-open mode when an operator chooses it", () => {
+  it("preserves explicit legacy-open mode when an operator chooses it", async () => {
     const deps = createDeps();
 
-    const connection = createIntegrationConnection(deps, {
+    const connection = await createIntegrationConnection(deps, {
       catalogId: "channel.line",
       label: "LINE",
       config: {
@@ -157,10 +157,10 @@ describe("integration-channel-service inbound access defaults", () => {
     expect(connection.config.inboundAccessMode).toBe("open_legacy");
   });
 
-  it("defaults new Telegram and Discord connections to allowlist (deny unknown senders)", () => {
+  it("defaults new Telegram and Discord connections to allowlist (deny unknown senders)", async () => {
     const deps = createDeps();
 
-    const telegram = createIntegrationConnection(deps, {
+    const telegram = await createIntegrationConnection(deps, {
       catalogId: "channel.telegram",
       label: "Telegram",
       config: {
@@ -168,7 +168,7 @@ describe("integration-channel-service inbound access defaults", () => {
         webhookSecretEnv: "TELEGRAM_WEBHOOK_SECRET",
       },
     });
-    const discord = createIntegrationConnection(deps, {
+    const discord = await createIntegrationConnection(deps, {
       catalogId: "channel.discord",
       label: "Discord",
       config: {
@@ -193,15 +193,15 @@ describe("integration-channel-service inbound access defaults", () => {
     });
   });
 
-  it("keeps outbound-only and local channels open (tui, ntfy do not get an allowlist)", () => {
+  it("keeps outbound-only and local channels open (tui, ntfy do not get an allowlist)", async () => {
     const deps = createDeps();
 
-    const tui = createIntegrationConnection(deps, {
+    const tui = await createIntegrationConnection(deps, {
       catalogId: "channel.tui",
       label: "Terminal",
       config: {},
     });
-    const ntfy = createIntegrationConnection(deps, {
+    const ntfy = await createIntegrationConnection(deps, {
       catalogId: "channel.ntfy",
       label: "ntfy",
       config: {
@@ -214,10 +214,10 @@ describe("integration-channel-service inbound access defaults", () => {
     expect(ntfy.config.inboundAccessMode).toBeUndefined();
   });
 
-  it("lets an operator pick an explicit open ('allow all') posture for an inbound channel", () => {
+  it("lets an operator pick an explicit open ('allow all') posture for an inbound channel", async () => {
     const deps = createDeps();
 
-    const discord = createIntegrationConnection(deps, {
+    const discord = await createIntegrationConnection(deps, {
       catalogId: "channel.discord",
       label: "Discord",
       config: {
@@ -235,12 +235,12 @@ describe("integration-channel-service inbound access defaults", () => {
     });
   });
 
-  it("does not retroactively lock out a legacy connection persisted without a mode", () => {
+  it("does not retroactively lock out a legacy connection persisted without a mode", async () => {
     const deps = createDeps();
 
     // Simulate a pre-existing connection that predates default-safe inbound
     // access: no inboundAccessMode was ever stamped on it.
-    const legacy = deps.storage.integrationConnections.create({
+    const legacy = await deps.storage.integrationConnections.create({
       catalogId: "channel.slack",
       kind: "channel",
       key: "slack",
@@ -251,7 +251,7 @@ describe("integration-channel-service inbound access defaults", () => {
 
     // Replacing its config (without choosing a mode) must NOT silently flip it
     // to a denying allowlist — it stays legacy-open with a migration warning.
-    const updated = updateIntegrationConnection(deps, legacy.connectionId, {
+    const updated = await updateIntegrationConnection(deps, legacy.connectionId, {
       config: { botTokenEnv: "SLACK_BOT_TOKEN_V2" },
     });
     expect(updated.config.inboundAccessMode).toBeUndefined();
@@ -262,9 +262,9 @@ describe("integration-channel-service inbound access defaults", () => {
     });
   });
 
-  it("preserves an existing inbound access mode when replacing connection config", () => {
+  it("preserves an existing inbound access mode when replacing connection config", async () => {
     const deps = createDeps();
-    const connection = createIntegrationConnection(deps, {
+    const connection = await createIntegrationConnection(deps, {
       catalogId: "channel.whatsapp",
       label: "WhatsApp",
       config: {
@@ -273,7 +273,7 @@ describe("integration-channel-service inbound access defaults", () => {
       },
     });
 
-    const updated = updateIntegrationConnection(deps, connection.connectionId, {
+    const updated = await updateIntegrationConnection(deps, connection.connectionId, {
       config: {
         accessTokenEnv: "WHATSAPP_TOKEN_V2",
       },
@@ -287,10 +287,10 @@ describe("integration-channel-service inbound access defaults", () => {
 });
 
 describe("integration-channel-service runtime status", () => {
-  it("fails closed when a Signal connection retains the deprecated inbound toggle", () => {
+  it("fails closed when a Signal connection retains the deprecated inbound toggle", async () => {
     const deps = createDeps();
     deps.isFeatureEnabled = vi.fn((flag) => flag !== "signalInboundV1Enabled");
-    const connection = createIntegrationConnection(deps, {
+    const connection = await createIntegrationConnection(deps, {
       catalogId: "channel.signal",
       label: "Signal",
       config: {
@@ -299,12 +299,12 @@ describe("integration-channel-service runtime status", () => {
         inboundEnabled: " TRUE ",
       },
     });
-    updateIntegrationConnection(deps, connection.connectionId, {
+    await updateIntegrationConnection(deps, connection.connectionId, {
       status: "connected",
       lastSyncAt: "2026-07-05T12:00:00.000Z",
     });
 
-    const status = getIntegrationConnectionChannelRuntimeStatus(deps, connection.connectionId);
+    const status = await getIntegrationConnectionChannelRuntimeStatus(deps, connection.connectionId);
 
     expect(status.ready).toBe(false);
     expect(status.inboundModes).toEqual(["none"]);
@@ -323,10 +323,10 @@ describe("integration-channel-service runtime status", () => {
     );
   });
 
-  it("fails closed when the deprecated global Signal inbound flag is enabled", () => {
+  it("fails closed when the deprecated global Signal inbound flag is enabled", async () => {
     const deps = createDeps();
     deps.isFeatureEnabled = vi.fn((flag) => flag === "signalInboundV1Enabled");
-    const connection = createIntegrationConnection(deps, {
+    const connection = await createIntegrationConnection(deps, {
       catalogId: "channel.signal",
       label: "Signal",
       config: {
@@ -334,12 +334,12 @@ describe("integration-channel-service runtime status", () => {
         defaultRecipient: "+15550002222",
       },
     });
-    updateIntegrationConnection(deps, connection.connectionId, {
+    await updateIntegrationConnection(deps, connection.connectionId, {
       status: "connected",
       lastSyncAt: "2026-07-05T12:00:00.000Z",
     });
 
-    const status = getIntegrationConnectionChannelRuntimeStatus(deps, connection.connectionId);
+    const status = await getIntegrationConnectionChannelRuntimeStatus(deps, connection.connectionId);
 
     expect(status).toMatchObject({
       ready: false,
@@ -357,10 +357,10 @@ describe("integration-channel-service runtime status", () => {
     });
   });
 
-  it("keeps a clean outbound-only Signal connection ready", () => {
+  it("keeps a clean outbound-only Signal connection ready", async () => {
     const deps = createDeps();
     deps.isFeatureEnabled = vi.fn(() => false);
-    const connection = createIntegrationConnection(deps, {
+    const connection = await createIntegrationConnection(deps, {
       catalogId: "channel.signal",
       label: "Signal",
       config: {
@@ -368,12 +368,12 @@ describe("integration-channel-service runtime status", () => {
         defaultRecipient: "+15550003333",
       },
     });
-    updateIntegrationConnection(deps, connection.connectionId, {
+    await updateIntegrationConnection(deps, connection.connectionId, {
       status: "connected",
       lastSyncAt: "2026-07-05T12:00:00.000Z",
     });
 
-    const status = getIntegrationConnectionChannelRuntimeStatus(deps, connection.connectionId);
+    const status = await getIntegrationConnectionChannelRuntimeStatus(deps, connection.connectionId);
 
     expect(status.ready).toBe(true);
     expect(status.inboundModes).toEqual(["none"]);

@@ -18,7 +18,7 @@ import type {
   ExternalSourceUpdateInput,
   EXTERNAL_SOURCE_SCHEMA_VERSION,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { resolveWardEffectForExternalAction, type CitadelWardGateStorage } from "./citadel-ward-gate.js";
 import { ExternalSourceArtifactStore } from "./external-source-artifact-store.js";
 import {
@@ -66,8 +66,8 @@ export interface ExternalSourceRoutePort {
     actor: ExternalSourceRequestActor,
     signal: AbortSignal,
   ): Promise<ExternalSourceDetailResponse>;
-  list(workspaceId: string, actor: ExternalSourceRequestActor): ExternalSourceListResponse;
-  get(workspaceId: string, sourceId: string, actor: ExternalSourceRequestActor): ExternalSourceDetailResponse;
+  list(workspaceId: string, actor: ExternalSourceRequestActor): Promise<ExternalSourceListResponse>;
+  get(workspaceId: string, sourceId: string, actor: ExternalSourceRequestActor): Promise<ExternalSourceDetailResponse>;
   update(
     sourceId: string,
     input: ExternalSourceUpdateInput,
@@ -83,7 +83,7 @@ export interface ExternalSourceRoutePort {
     sourceId: string,
     input: ExternalSourceCatalogListInput,
     actor: ExternalSourceRequestActor,
-  ): ExternalSourcePage;
+  ): Promise<ExternalSourcePage>;
   createImportPlan(
     input: ExternalSourceImportPlanInput,
     actor: ExternalSourceRequestActor,
@@ -98,9 +98,12 @@ export interface ExternalSourceRoutePort {
     workspaceId: string,
     importId: string,
     actor: ExternalSourceRequestActor,
-  ): ExternalSourceImportDetailResponse;
+  ): Promise<ExternalSourceImportDetailResponse>;
   recoverImports(signal: AbortSignal, limit?: number): Promise<ExternalSourceImportRecoverySummary>;
-  listSessionAttachments(input: unknown, actor: ExternalSourceRequestActor): ExternalSessionAttachmentListResponse;
+  listSessionAttachments(
+    input: unknown,
+    actor: ExternalSourceRequestActor,
+  ): Promise<ExternalSessionAttachmentListResponse>;
   attachToSession(
     input: unknown,
     actor: ExternalSourceRequestActor,
@@ -139,11 +142,15 @@ export class ExternalSourceRouteService implements ExternalSourceRoutePort {
     return this.service.create(input, actor, signal);
   }
 
-  public list(workspaceId: string, actor: ExternalSourceRequestActor): ExternalSourceListResponse {
+  public list(workspaceId: string, actor: ExternalSourceRequestActor): Promise<ExternalSourceListResponse> {
     return this.service.list(workspaceId, actor);
   }
 
-  public get(workspaceId: string, sourceId: string, actor: ExternalSourceRequestActor): ExternalSourceDetailResponse {
+  public get(
+    workspaceId: string,
+    sourceId: string,
+    actor: ExternalSourceRequestActor,
+  ): Promise<ExternalSourceDetailResponse> {
     return this.service.get(workspaceId, sourceId, actor);
   }
 
@@ -168,7 +175,7 @@ export class ExternalSourceRouteService implements ExternalSourceRoutePort {
     sourceId: string,
     input: ExternalSourceCatalogListInput,
     actor: ExternalSourceRequestActor,
-  ): ExternalSourcePage {
+  ): Promise<ExternalSourcePage> {
     return this.service.listCatalog(sourceId, input, actor);
   }
 
@@ -192,7 +199,7 @@ export class ExternalSourceRouteService implements ExternalSourceRoutePort {
     workspaceId: string,
     importId: string,
     actor: ExternalSourceRequestActor,
-  ): ExternalSourceImportDetailResponse {
+  ): Promise<ExternalSourceImportDetailResponse> {
     return this.requireImports().get(workspaceId, importId, actor);
   }
 
@@ -208,7 +215,7 @@ export class ExternalSourceRouteService implements ExternalSourceRoutePort {
   public listSessionAttachments(
     input: unknown,
     actor: ExternalSourceRequestActor,
-  ): ExternalSessionAttachmentListResponse {
+  ): Promise<ExternalSessionAttachmentListResponse> {
     return this.requireChat().attachments.list(input, actor);
   }
 
@@ -328,11 +335,11 @@ function buildKnowledgeSnapshotWardPolicy(storage: CitadelWardGateStorage): {
   evaluateKnowledgeSnapshotApply(context: {
     workspaceId: string;
     sourceId: string;
-  }): ExternalSourceKnowledgeSnapshotPolicyDecision;
+  }): Promise<ExternalSourceKnowledgeSnapshotPolicyDecision>;
 } {
   return {
-    evaluateKnowledgeSnapshotApply(context) {
-      const outcome = resolveWardEffectForExternalAction({
+    async evaluateKnowledgeSnapshotApply(context) {
+      const outcome = await resolveWardEffectForExternalAction({
         storage,
         workspaceId: context.workspaceId,
         action: buildExternalSourceKnowledgeSnapshotWardAction(context.sourceId),
@@ -413,22 +420,24 @@ function buildChatComposition(
     scans: storage.externalSourceScans,
     imports: storage.externalSourceImports,
     attachments: externalSessionAttachments,
-    sessions: { get: (sessionId) => chatSessionMeta.get(sessionId) },
+    sessions: { get: async (sessionId) => await chatSessionMeta.get(sessionId) },
     artifacts,
+    runImmediateTransaction: async <T>(callback: () => T | Promise<T>): Promise<Awaited<T>> =>
+      await runImmediateTransaction(callback),
   });
   const knowledge = new ExternalSourceKnowledgeEffectService({
     requests: attachments,
     approvals: {
-      get: (approvalId) => approvals.get(approvalId),
+      get: async (approvalId) => await approvals.get(approvalId),
       // Composition-owned inbox visibility: the deterministic detached
       // approval appends the standard `created` approval event exactly once
       // (mirroring the mesh capability-activation precedent) inside the C2
       // request transaction; exact replays observe `created: false` and append
       // nothing. C2 itself stays byte-identical.
-      createDeterministicDetachedWithTtlDuration: (input, ttlMs) => {
-        const stored = approvals.createDeterministicDetachedWithTtlDuration(input, ttlMs);
+      createDeterministicDetachedWithTtlDuration: async (input, ttlMs) => {
+        const stored = await approvals.createDeterministicDetachedWithTtlDuration(input, ttlMs);
         if (stored.created) {
-          approvalEvents.append({
+          await approvalEvents.append({
             approvalId: stored.approval.approvalId,
             eventType: "created",
             actorId: "system",
@@ -449,7 +458,8 @@ function buildChatComposition(
       workspaces: storage.workspaces,
       citadels: storage.citadels,
     }),
-    runImmediateTransaction: <T>(callback: () => T): T => runImmediateTransaction.call(storage, callback) as T,
+    runImmediateTransaction: async <T>(callback: () => T | Promise<T>): Promise<Awaited<T>> =>
+      await runImmediateTransaction(callback),
   });
   return { attachments, knowledge };
 }

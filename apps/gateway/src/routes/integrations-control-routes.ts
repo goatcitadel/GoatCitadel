@@ -60,7 +60,7 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send({ items: fastify.services.integrations.listIntegrationCatalog(parsed.data.kind) });
+    return reply.send({ items: await fastify.services.integrations.listIntegrationCatalog(parsed.data.kind) });
   });
 
   fastify.get("/api/v1/integrations/catalog/:catalogId/form-schema", async (request, reply) => {
@@ -69,7 +69,7 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.integrations.getIntegrationFormSchema(params.data.catalogId));
+      return reply.send(await fastify.services.integrations.getIntegrationFormSchema(params.data.catalogId));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -82,7 +82,7 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
     }
     return reply.send({
       items: projectIntegrationConnectionsForPublicResponse(
-        fastify.services.integrations.listIntegrationConnections(parsed.data.kind, parsed.data.limit),
+        await fastify.services.integrations.listIntegrationConnections(parsed.data.kind, parsed.data.limit),
       ),
     });
   });
@@ -92,7 +92,7 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    const items = fastify.services.integrations.listExternalSideEffectRuns(parsed.data);
+    const items = await fastify.services.integrations.listExternalSideEffectRuns(parsed.data);
     return reply.send({
       items: projectExternalSideEffectRunsForPublicResponse(items),
       summary: buildExternalSideEffectHealthSummary(items),
@@ -101,7 +101,7 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
 
   fastify.get("/api/v1/integrations/external-connectors/sources", async (_request, reply) => {
     return reply.send({
-      items: fastify.services.integrations.listExternalConnectorSources(),
+      items: await fastify.services.integrations.listExternalConnectorSources(),
     });
   });
 
@@ -111,7 +111,7 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send({
-      items: fastify.services.integrations.listExternalConnectorServices(parsed.data),
+      items: await fastify.services.integrations.listExternalConnectorServices(parsed.data),
     });
   });
 
@@ -128,7 +128,7 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
     }
     try {
       return reply.send(
-        fastify.services.integrations.getExternalConnectorService(
+        await fastify.services.integrations.getExternalConnectorService(
           params.data.sourceId,
           params.data.serviceId,
           query.data.workspaceId,
@@ -154,7 +154,7 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
       }
       try {
         return reply.send(
-          fastify.services.integrations.getExternalConnectorAction(
+          await fastify.services.integrations.getExternalConnectorAction(
             params.data.sourceId,
             params.data.serviceId,
             params.data.actionId,
@@ -183,7 +183,7 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
       }
       try {
         return reply.send(
-          fastify.services.integrations.updateExternalConnectorReviewState(
+          await fastify.services.integrations.updateExternalConnectorReviewState(
             {
               sourceId: params.data.sourceId,
               serviceId: params.data.serviceId,
@@ -213,7 +213,7 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
       }
       try {
         return reply.send(
-          fastify.services.integrations.updateExternalConnectorReviewState(
+          await fastify.services.integrations.updateExternalConnectorReviewState(
             {
               sourceId: params.data.sourceId,
               serviceId: params.data.serviceId,
@@ -246,7 +246,7 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
         return reply
           .code(201)
           .send(
-            fastify.services.integrations.stageExternalConnectorAction(
+            await fastify.services.integrations.stageExternalConnectorAction(
               params.data.sourceId,
               params.data.serviceId,
               params.data.actionId,
@@ -265,7 +265,7 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      const created = fastify.services.integrations.createIntegrationConnection(parsed.data);
+      const created = await fastify.services.integrations.createIntegrationConnection(parsed.data);
       return reply.code(201).send(projectIntegrationConnectionForPublicResponse(created));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -288,10 +288,10 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
         parsed.data.config === undefined
           ? parsed.data
           : preserveIntegrationConnectionSecretsForPublicUpdate(
-              fastify.services.integrations.getIntegrationConnection(params.data.connectionId),
+              await fastify.services.integrations.getIntegrationConnection(params.data.connectionId),
               parsed.data,
             );
-      const updated = fastify.services.integrations.updateIntegrationConnection(params.data.connectionId, update);
+      const updated = await fastify.services.integrations.updateIntegrationConnection(params.data.connectionId, update);
       return reply.send(projectIntegrationConnectionForPublicResponse(updated));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -303,7 +303,7 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
     if (!params.success) {
       return reply.code(400).send({ error: params.error.flatten() });
     }
-    const deleted = fastify.services.integrations.deleteIntegrationConnection(params.data.connectionId);
+    const deleted = await fastify.services.integrations.deleteIntegrationConnection(params.data.connectionId);
     return reply.send({ deleted });
   });
 
@@ -352,7 +352,7 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
       }
       try {
         return reply.send(
-          projectPublicSecretValue(fastify.services.integrations.listDiscordPairings(params.data.connectionId)),
+          projectPublicSecretValue(await fastify.services.integrations.listDiscordPairings(params.data.connectionId)),
         );
       } catch (error) {
         const message = (error as Error).message;
@@ -372,7 +372,7 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
       try {
         return reply.send(
           projectPublicSecretValue(
-            fastify.services.integrations.approveDiscordPairing(params.data.connectionId, params.data.pairingId),
+            await fastify.services.integrations.approveDiscordPairing(params.data.connectionId, params.data.pairingId),
           ),
         );
       } catch (error) {
@@ -393,7 +393,7 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
       try {
         return reply.send(
           projectPublicSecretValue(
-            fastify.services.integrations.revokeDiscordPairing(params.data.connectionId, params.data.pairingId),
+            await fastify.services.integrations.revokeDiscordPairing(params.data.connectionId, params.data.pairingId),
           ),
         );
       } catch (error) {
@@ -421,7 +421,7 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
   fastify.get("/api/v1/integrations/plugins", async (_request, reply) => {
     return reply.send(
       projectPublicSecretValue({
-        items: fastify.services.integrations.listIntegrationPlugins(),
+        items: await fastify.services.integrations.listIntegrationPlugins(),
       }),
     );
   });
@@ -434,7 +434,7 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
     try {
       return reply
         .code(201)
-        .send(projectPublicSecretValue(fastify.services.integrations.installIntegrationPlugin(parsed.data)));
+        .send(projectPublicSecretValue(await fastify.services.integrations.installIntegrationPlugin(parsed.data)));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -447,7 +447,9 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
     }
     try {
       return reply.send(
-        projectPublicSecretValue(fastify.services.integrations.setIntegrationPluginEnabled(params.data.pluginId, true)),
+        projectPublicSecretValue(
+          await fastify.services.integrations.setIntegrationPluginEnabled(params.data.pluginId, true),
+        ),
       );
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
@@ -462,7 +464,7 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
     try {
       return reply.send(
         projectPublicSecretValue(
-          fastify.services.integrations.setIntegrationPluginEnabled(params.data.pluginId, false),
+          await fastify.services.integrations.setIntegrationPluginEnabled(params.data.pluginId, false),
         ),
       );
     } catch (error) {

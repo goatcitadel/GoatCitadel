@@ -35,7 +35,7 @@ import type {
   AutonomyRevertSummary,
 } from "@goatcitadel/contracts";
 import { AUTONOMY_AUDIT_KINDS, redactStructuredSecrets } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 
 type AutonomyControlStorage = Pick<Storage, "autonomyAudit">;
 
@@ -55,21 +55,21 @@ export interface AutonomyControlDiagnostic {
  */
 export interface AutonomyRestoreHandlers {
   /** skill_revision → SkillMutationService restore via the activation snapshot ref. */
-  restoreSkillRevision(snapshotRef: unknown): void;
+  restoreSkillRevision(snapshotRef: unknown): void | Promise<void>;
   /** operator_profile / memory → OperatorProfileService.restoreOperatorProfileSnapshot. */
-  restoreOperatorProfile(priorSnapshot: unknown): void;
+  restoreOperatorProfile(priorSnapshot: unknown): void | Promise<void>;
   /** curator_archive → GatewayService.restoreCuratorIdleSkillSnapshot(skillId). */
-  restoreCuratorArchive(skillId: string): boolean;
+  restoreCuratorArchive(skillId: string): boolean | Promise<boolean>;
   /** tune → ImprovementService.revertDecisionAutoTune(tuneId). */
-  revertTune(tuneId: string): void;
+  revertTune(tuneId: string): void | Promise<void>;
 }
 
 export interface AutonomyControlServiceDeps {
   storage: AutonomyControlStorage;
   /** Reads the master kill switch (`autonomyV1Disabled`). */
-  isFeatureEnabled(flag: string): boolean;
+  isFeatureEnabled(flag: string): boolean | Promise<boolean>;
   /** Reads the canonical settings generation revision. */
-  readSettingsRevision(): number;
+  readSettingsRevision(): number | Promise<number>;
   /** Sets the master kill switch through the config-generation transaction. */
   setKillSwitch(input: { disabled: boolean; expectedRevision: number }): Promise<void>;
   /** Per-subsystem restore callbacks. */
@@ -92,8 +92,8 @@ const DEFAULT_RECENT_LIMIT = 20;
 
 export class AutonomyControlService {
   private readonly storage: AutonomyControlStorage;
-  private readonly isFeatureEnabled: (flag: string) => boolean;
-  private readonly readSettingsRevision: () => number;
+  private readonly isFeatureEnabled: (flag: string) => boolean | Promise<boolean>;
+  private readonly readSettingsRevision: () => number | Promise<number>;
   private readonly setKillSwitchFlag: (input: { disabled: boolean; expectedRevision: number }) => Promise<void>;
   private readonly handlers: AutonomyRestoreHandlers;
   private readonly recordDevDiagnostic: (input: AutonomyControlDiagnostic) => void;
@@ -114,9 +114,9 @@ export class AutonomyControlService {
    * swallowed (logged) so the mutation it describes is never broken. Returns the
    * stored entry, or `undefined` if the append failed.
    */
-  public recordAutonomousMutation(input: AutonomyAuditAppendInput): AutonomyAuditEntry | undefined {
+  public async recordAutonomousMutation(input: AutonomyAuditAppendInput): Promise<AutonomyAuditEntry | undefined> {
     try {
-      return this.storage.autonomyAudit.append(input, this.now());
+      return await this.storage.autonomyAudit.append(input, this.now());
     } catch (error) {
       this.recordDevDiagnostic({
         level: "warn",
@@ -130,20 +130,20 @@ export class AutonomyControlService {
   }
 
   /** Master kill-switch state + recent-audit summary. */
-  public getStatus(recentLimit = DEFAULT_RECENT_LIMIT): AutonomyControlStatus {
-    const killSwitchEngaged = this.isFeatureEnabled("autonomyV1Disabled");
+  public async getStatus(recentLimit = DEFAULT_RECENT_LIMIT): Promise<AutonomyControlStatus> {
+    const killSwitchEngaged = await this.isFeatureEnabled("autonomyV1Disabled");
     return {
-      revision: this.readSettingsRevision(),
+      revision: await this.readSettingsRevision(),
       killSwitchEngaged,
       autonomyEnabled: !killSwitchEngaged,
-      audit: this.buildAuditSummary(recentLimit),
+      audit: await this.buildAuditSummary(recentLimit),
     };
   }
 
   /** Engage/disengage the master kill switch (`autonomyV1Disabled`). */
   public async setKillSwitch(disabled: boolean, expectedRevision: number): Promise<AutonomyControlStatus> {
     await this.setKillSwitchFlag({ disabled, expectedRevision });
-    return this.getStatus();
+    return await this.getStatus();
   }
 
   /**
@@ -153,10 +153,10 @@ export class AutonomyControlService {
    * restored entries are marked reverted (idempotent on re-run). Returns a
    * summary.
    */
-  public revertAutonomousChangesSince(
+  public async revertAutonomousChangesSince(
     sinceIso: string,
     opts: RevertAutonomousChangesOptions = {},
-  ): AutonomyRevertSummary {
+  ): Promise<AutonomyRevertSummary> {
     const kindFilter = opts.kinds && opts.kinds.length > 0 ? new Set(opts.kinds) : undefined;
     const hasLimit = typeof opts.limit === "number" && opts.limit >= 0;
     // Push the cap into SQL only when there is no kind filter — with a filter the
@@ -166,8 +166,8 @@ export class AutonomyControlService {
     // the caller's limit.
     let candidates =
       hasLimit && !kindFilter
-        ? this.storage.autonomyAudit.listUnrevertedSince(sinceIso, Math.floor(opts.limit as number))
-        : this.storage.autonomyAudit.listUnrevertedSince(sinceIso);
+        ? await this.storage.autonomyAudit.listUnrevertedSince(sinceIso, Math.floor(opts.limit as number))
+        : await this.storage.autonomyAudit.listUnrevertedSince(sinceIso);
     if (kindFilter) {
       candidates = candidates.filter((entry) => kindFilter.has(entry.kind));
     }
@@ -177,7 +177,7 @@ export class AutonomyControlService {
 
     const results: AutonomyRevertEntryResult[] = [];
     for (const entry of candidates) {
-      results.push(this.revertOne(entry));
+      results.push(await this.revertOne(entry));
     }
 
     const reverted = results.filter((r) => r.status === "reverted").length;
@@ -194,18 +194,18 @@ export class AutonomyControlService {
   }
 
   /** Restore a single entry with per-entry failure isolation. */
-  private revertOne(entry: AutonomyAuditEntry): AutonomyRevertEntryResult {
+  private async revertOne(entry: AutonomyAuditEntry): Promise<AutonomyRevertEntryResult> {
     const base = { auditId: entry.auditId, kind: entry.kind, targetKey: entry.targetKey };
     // Claim the entry BEFORE dispatching the restore. `markReverted` is an atomic
     // `... AND reverted = 0` update that returns false if the row was already
     // reverted (e.g. a concurrent revert pass), so claiming first guarantees the
     // restore callback runs at most once per entry — no double-dispatch races.
-    const claimed = this.storage.autonomyAudit.markReverted(entry.auditId, this.now());
+    const claimed = await this.storage.autonomyAudit.markReverted(entry.auditId, this.now());
     if (!claimed) {
       return { ...base, status: "skipped" };
     }
     try {
-      const applied = this.dispatchRestore(entry.restoreRef);
+      const applied = await this.dispatchRestore(entry.restoreRef);
       if (!applied) {
         // The subsystem reported nothing to restore (e.g. snapshot already gone).
         // The entry is already marked reverted (claimed above) so it does not
@@ -216,7 +216,7 @@ export class AutonomyControlService {
     } catch (error) {
       // The restore threw: roll back the claim so the entry stays UN-reverted and
       // a later pass can retry it (the claim only existed to guard the dispatch).
-      this.storage.autonomyAudit.unmarkReverted(entry.auditId);
+      await this.storage.autonomyAudit.unmarkReverted(entry.auditId);
       const message = describeError(error);
       this.recordDevDiagnostic({
         level: "warn",
@@ -234,27 +234,30 @@ export class AutonomyControlService {
    * applied, false when there was nothing to restore (callbacks that cannot
    * report that return true). Throws are surfaced to {@link revertOne}.
    */
-  private dispatchRestore(ref: AutonomyAuditRestoreRef): boolean {
+  private async dispatchRestore(ref: AutonomyAuditRestoreRef): Promise<boolean> {
     switch (ref.kind) {
       case "skill_revision":
-        this.handlers.restoreSkillRevision(ref.snapshotRef);
+        await this.handlers.restoreSkillRevision(ref.snapshotRef);
         return true;
       case "operator_profile":
       case "memory":
-        this.handlers.restoreOperatorProfile(ref.priorSnapshot);
+        await this.handlers.restoreOperatorProfile(ref.priorSnapshot);
         return true;
       case "curator_archive":
-        return this.handlers.restoreCuratorArchive(ref.skillId);
+        return await this.handlers.restoreCuratorArchive(ref.skillId);
       case "tune":
-        this.handlers.revertTune(ref.tuneId);
+        await this.handlers.revertTune(ref.tuneId);
         return true;
       default:
         return assertNever(ref);
     }
   }
 
-  private buildAuditSummary(recentLimit: number): AutonomyAuditSummary {
-    const counts = this.storage.autonomyAudit.countByKind();
+  private async buildAuditSummary(recentLimit: number): Promise<AutonomyAuditSummary> {
+    const [counts, recent] = await Promise.all([
+      this.storage.autonomyAudit.countByKind(),
+      this.storage.autonomyAudit.listRecent(recentLimit),
+    ]);
     const byKind = AUTONOMY_AUDIT_KINDS.map((kind) => {
       const found = counts.find((c) => c.kind === kind);
       return { kind, total: found?.total ?? 0, reverted: found?.reverted ?? 0 };
@@ -265,7 +268,7 @@ export class AutonomyControlService {
       totalEntries,
       unrevertedEntries: totalEntries - revertedEntries,
       byKind,
-      recent: this.storage.autonomyAudit.listRecent(recentLimit).map((entry) => redactStructuredSecrets(entry).value),
+      recent: recent.map((entry) => redactStructuredSecrets(entry).value),
     };
   }
 }

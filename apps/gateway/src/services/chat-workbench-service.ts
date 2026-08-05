@@ -31,7 +31,7 @@ import {
   type CodeDiagnostic,
   type CodeModeRunRecord,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { WorktreeManager } from "@goatcitadel/orchestration";
 import {
   assertExistingPathRealpathAllowed,
@@ -61,22 +61,22 @@ type ChatWorkbenchStorage = Pick<
 export interface ChatWorkbenchDependencies {
   readonly config: GatewayRuntimeConfig;
   readonly storage: ChatWorkbenchStorage;
-  requireChatSession(sessionId: string): void;
-  listCodeModeRuns?(options: { limit?: number; sessionId?: string }): CodeModeRunRecord[];
+  requireChatSession(sessionId: string): Promise<unknown>;
+  listCodeModeRuns?(options: { limit?: number; sessionId?: string }): Promise<CodeModeRunRecord[]>;
   publishRealtime(
     channel: string,
     topic: string,
     payload: Record<string, unknown>,
     options?: Pick<import("@goatcitadel/contracts").RealtimeEvent, "eventClass" | "eventAuthority" | "links">,
-  ): void;
+  ): Promise<unknown>;
 }
 
 export async function getChatSessionWorkbench(
   deps: ChatWorkbenchDependencies,
   sessionId: string,
 ): Promise<ChatSessionWorkbenchRecord> {
-  deps.requireChatSession(sessionId);
-  return syncWorkbenchState(deps, sessionId);
+  await deps.requireChatSession(sessionId);
+  return await syncWorkbenchState(deps, sessionId);
 }
 
 export async function createChatSessionWorkbenchWorktree(
@@ -84,9 +84,9 @@ export async function createChatSessionWorkbenchWorktree(
   sessionId: string,
   input: { baseRef?: string } = {},
 ): Promise<ChatSessionWorkbenchRecord> {
-  deps.requireChatSession(sessionId);
-  const context = resolveProjectContext(deps, sessionId, true);
-  const current = syncWorkbenchState(deps, sessionId);
+  await deps.requireChatSession(sessionId);
+  const context = await resolveProjectContext(deps, sessionId, true);
+  const current = await syncWorkbenchState(deps, sessionId);
   const baseRef = input.baseRef?.trim() || current.baseRef || "HEAD";
   const worktreesRoot = path.resolve(deps.config.rootDir, deps.config.assistant.worktreesDir);
   const targetPath = path.resolve(worktreesRoot, sessionId);
@@ -109,13 +109,13 @@ export async function createChatSessionWorkbenchWorktree(
     await manager.create(sessionId, baseRef);
   }
 
-  const updated = deps.storage.chatSessionWorkbench.patch(sessionId, {
+  const updated = await deps.storage.chatSessionWorkbench.patch(sessionId, {
     projectId: context.project.projectId,
     baseRef,
     worktreePath: targetPath,
     worktreeStatus: "ready",
   });
-  deps.publishRealtime("chat_workbench_updated", "chat", {
+  await deps.publishRealtime("chat_workbench_updated", "chat", {
     type: "chat_workbench_worktree_created",
     sessionId,
     projectId: context.project.projectId,
@@ -129,9 +129,9 @@ export async function getChatSessionWorkbenchTree(
   deps: ChatWorkbenchDependencies,
   sessionId: string,
 ): Promise<ChatSessionWorkbenchTreeResponse> {
-  deps.requireChatSession(sessionId);
-  const state = syncWorkbenchState(deps, sessionId);
-  const context = resolveWorkbenchContext(deps, sessionId, state, true);
+  await deps.requireChatSession(sessionId);
+  const state = await syncWorkbenchState(deps, sessionId);
+  const context = await resolveWorkbenchContext(deps, sessionId, state, true);
   const changedFiles = listChangedFiles(context.worktreePath, context.repoScopePath);
   const entries: ChatSessionWorkbenchTreeEntry[] = [];
   await walkWorkbenchTree(context.projectRoot, context.projectRoot, entries, changedFiles, MAX_TREE_ITEMS);
@@ -148,10 +148,10 @@ export async function getChatSessionWorkbenchFile(
   sessionId: string,
   relativePath: string,
 ): Promise<ChatSessionWorkbenchFileResponse> {
-  deps.requireChatSession(sessionId);
-  const state = syncWorkbenchState(deps, sessionId);
-  const context = resolveWorkbenchContext(deps, sessionId, state, true);
-  return buildWorkbenchFileResponse(deps, sessionId, context, relativePath);
+  await deps.requireChatSession(sessionId);
+  const state = await syncWorkbenchState(deps, sessionId);
+  const context = await resolveWorkbenchContext(deps, sessionId, state, true);
+  return await buildWorkbenchFileResponse(deps, sessionId, context, relativePath);
 }
 
 export async function saveChatSessionWorkbenchFile(
@@ -159,9 +159,9 @@ export async function saveChatSessionWorkbenchFile(
   sessionId: string,
   input: ChatSessionWorkbenchSaveFileRequest,
 ): Promise<ChatSessionWorkbenchFileResponse> {
-  deps.requireChatSession(sessionId);
-  const state = syncWorkbenchState(deps, sessionId);
-  const context = resolveWorkbenchContext(deps, sessionId, state, true);
+  await deps.requireChatSession(sessionId);
+  const state = await syncWorkbenchState(deps, sessionId);
+  const context = await resolveWorkbenchContext(deps, sessionId, state, true);
   const normalized = normalizeWorkbenchRelativePath(input.path);
   const targetPath = path.resolve(context.projectRoot, normalized);
   assertPathInsideRoot(targetPath, context.projectRoot, "workbench file");
@@ -221,7 +221,7 @@ export async function saveChatSessionWorkbenchFile(
 
   const response = await buildWorkbenchFileResponse(deps, sessionId, context, normalized);
   const diagnostics = buildWorkbenchDiagnostics(validation, [normalized]);
-  deps.publishRealtime(
+  await deps.publishRealtime(
     "chat_workbench_updated",
     "chat",
     {
@@ -252,9 +252,9 @@ export async function runChatSessionWorkbenchFileOperation(
   sessionId: string,
   input: ChatSessionWorkbenchFileOperationRequest,
 ): Promise<ChatSessionWorkbenchFileOperationResponse> {
-  deps.requireChatSession(sessionId);
-  const state = syncWorkbenchState(deps, sessionId);
-  const context = resolveWorkbenchContext(deps, sessionId, state, true);
+  await deps.requireChatSession(sessionId);
+  const state = await syncWorkbenchState(deps, sessionId);
+  const context = await resolveWorkbenchContext(deps, sessionId, state, true);
   assertWorkbenchMutationScope(deps, context);
 
   const operation = input.operation;
@@ -289,7 +289,7 @@ export async function runChatSessionWorkbenchFileOperation(
 
   const changedFiles = listChangedFiles(context.worktreePath, context.repoScopePath);
   const validation = await runWorkbenchPostWriteValidation(deps, sessionId, context, changedFiles);
-  const updated = deps.storage.chatSessionWorkbench.patch(sessionId, {
+  const updated = await deps.storage.chatSessionWorkbench.patch(sessionId, {
     projectId: context.project.projectId,
     activeFilePath,
   });
@@ -298,7 +298,7 @@ export async function runChatSessionWorkbenchFileOperation(
   const output = buildWorkbenchOperationOutput(hydrated, message, new Date().toISOString(), validation);
   const diagnostics = output.diagnostics ?? [];
 
-  deps.publishRealtime(
+  await deps.publishRealtime(
     "chat_workbench_updated",
     "chat",
     {
@@ -337,9 +337,9 @@ export async function getChatSessionWorkbenchFileDiff(
   sessionId: string,
   relativePath: string,
 ): Promise<ChatSessionWorkbenchFileDiffResponse> {
-  deps.requireChatSession(sessionId);
-  const state = syncWorkbenchState(deps, sessionId);
-  const context = resolveWorkbenchContext(deps, sessionId, state, true);
+  await deps.requireChatSession(sessionId);
+  const state = await syncWorkbenchState(deps, sessionId);
+  const context = await resolveWorkbenchContext(deps, sessionId, state, true);
   const file = await buildWorkbenchFileResponse(deps, sessionId, context, relativePath);
   const repoScopedFilePath = toRepoScopedFilePath(context.repoScopePath, file.path);
   const originalContent = file.changed
@@ -360,9 +360,9 @@ export async function getChatSessionWorkbenchDiff(
   deps: ChatWorkbenchDependencies,
   sessionId: string,
 ): Promise<ChatSessionWorkbenchDiffResponse> {
-  deps.requireChatSession(sessionId);
-  const state = syncWorkbenchState(deps, sessionId);
-  const context = resolveWorkbenchContext(deps, sessionId, state, true);
+  await deps.requireChatSession(sessionId);
+  const state = await syncWorkbenchState(deps, sessionId);
+  const context = await resolveWorkbenchContext(deps, sessionId, state, true);
   const changedFiles = listChangedFiles(context.worktreePath, context.repoScopePath);
   const numstatRaw = runGit(context.worktreePath, ["diff", "--numstat", "--", context.repoScopePath]);
   let additions = 0;
@@ -376,7 +376,7 @@ export async function getChatSessionWorkbenchDiff(
     deletions += Number.parseInt(deletedRaw, 10) || 0;
   }
   const diff = runGit(context.worktreePath, ["diff", "--", context.repoScopePath]);
-  const nextState = deps.storage.chatSessionWorkbench.patch(sessionId, {
+  const nextState = await deps.storage.chatSessionWorkbench.patch(sessionId, {
     projectId: context.project.projectId,
     diffArtifactId: `workbench-diff:${sessionId}`,
   });
@@ -398,9 +398,9 @@ export async function runChatSessionWorkbenchCommand(
   sessionId: string,
   input: ChatSessionWorkbenchCommandRunRequest,
 ): Promise<ChatSessionWorkbenchCommandRunResponse> {
-  deps.requireChatSession(sessionId);
-  const state = syncWorkbenchState(deps, sessionId);
-  const context = resolveWorkbenchContext(deps, sessionId, state, true);
+  await deps.requireChatSession(sessionId);
+  const state = await syncWorkbenchState(deps, sessionId);
+  const context = await resolveWorkbenchContext(deps, sessionId, state, true);
   assertExistingPathRealpathAllowed(
     context.projectRoot,
     deps.config.toolPolicy.sandbox.writeJailRoots,
@@ -416,12 +416,12 @@ export async function runChatSessionWorkbenchCommand(
   const startedAt = new Date().toISOString();
   const startedAtMs = Date.now();
 
-  deps.storage.chatSessionWorkbench.patch(sessionId, {
+  await deps.storage.chatSessionWorkbench.patch(sessionId, {
     projectId: context.project.projectId,
     outputArtifactId: commandRunId,
     validationStatus: "pending",
   });
-  deps.publishRealtime(
+  await deps.publishRealtime(
     "chat_workbench_updated",
     "chat",
     {
@@ -450,7 +450,7 @@ export async function runChatSessionWorkbenchCommand(
   const durationMs = Date.now() - startedAtMs;
   const status = result.timedOut ? "timed_out" : result.exitCode === 0 ? "passed" : "failed";
   const validationStatus = status === "passed" ? "passed" : "failed";
-  const finalState = deps.storage.chatSessionWorkbench.patch(sessionId, {
+  const finalState = await deps.storage.chatSessionWorkbench.patch(sessionId, {
     projectId: context.project.projectId,
     outputArtifactId: commandRunId,
     validationStatus,
@@ -488,7 +488,7 @@ export async function runChatSessionWorkbenchCommand(
   };
   const diagnostics = buildWorkbenchCommandDiagnostics(run);
 
-  deps.publishRealtime(
+  await deps.publishRealtime(
     "chat_workbench_updated",
     "chat",
     {
@@ -535,9 +535,9 @@ export async function applyChatSessionWorkbenchPatch(
   sessionId: string,
   input: ChatSessionWorkbenchPatchApplyRequest,
 ): Promise<ChatSessionWorkbenchPatchApplyResponse> {
-  deps.requireChatSession(sessionId);
-  const state = syncWorkbenchState(deps, sessionId);
-  const context = resolveWorkbenchContext(deps, sessionId, state, true);
+  await deps.requireChatSession(sessionId);
+  const state = await syncWorkbenchState(deps, sessionId);
+  const context = await resolveWorkbenchContext(deps, sessionId, state, true);
   assertWorkbenchMutationScope(deps, context);
   const patch = normalizeWorkbenchPatch(input.patch);
   const patchPaths = extractPatchPaths(patch);
@@ -553,7 +553,7 @@ export async function applyChatSessionWorkbenchPatch(
       : undefined;
   const validationStatus =
     applyResult.exitCode !== 0 ? "failed" : validation ? mapWorkbenchValidationState(validation) : "passed";
-  const finalState = deps.storage.chatSessionWorkbench.patch(sessionId, {
+  const finalState = await deps.storage.chatSessionWorkbench.patch(sessionId, {
     projectId: context.project.projectId,
     diffArtifactId: artifactId,
     validationStatus,
@@ -572,7 +572,7 @@ export async function applyChatSessionWorkbenchPatch(
     validation,
   );
   const diagnostics = output.diagnostics ?? [];
-  deps.publishRealtime(
+  await deps.publishRealtime(
     "chat_workbench_updated",
     "chat",
     {
@@ -612,9 +612,9 @@ export async function exportChatSessionWorkbenchPatch(
   deps: ChatWorkbenchDependencies,
   sessionId: string,
 ): Promise<ChatSessionWorkbenchPatchExportResponse> {
-  deps.requireChatSession(sessionId);
-  const state = syncWorkbenchState(deps, sessionId);
-  const context = resolveWorkbenchContext(deps, sessionId, state, true);
+  await deps.requireChatSession(sessionId);
+  const state = await syncWorkbenchState(deps, sessionId);
+  const context = await resolveWorkbenchContext(deps, sessionId, state, true);
   assertWorkbenchMutationScope(deps, context);
   const diff = await getChatSessionWorkbenchDiff(deps, sessionId);
   return {
@@ -631,9 +631,9 @@ export async function revertChatSessionWorkbenchFile(
   sessionId: string,
   input: ChatSessionWorkbenchRevertFileRequest,
 ): Promise<ChatSessionWorkbenchRevertResponse> {
-  deps.requireChatSession(sessionId);
-  const state = syncWorkbenchState(deps, sessionId);
-  const context = resolveWorkbenchContext(deps, sessionId, state, true);
+  await deps.requireChatSession(sessionId);
+  const state = await syncWorkbenchState(deps, sessionId);
+  const context = await resolveWorkbenchContext(deps, sessionId, state, true);
   assertWorkbenchMutationScope(deps, context);
   const normalized = normalizeWorkbenchRelativePath(input.path);
   const targetPath = path.resolve(context.projectRoot, normalized);
@@ -647,7 +647,7 @@ export async function revertChatSessionWorkbenchFile(
     runGit(context.worktreePath, ["restore", "--source=HEAD", "--staged", "--worktree", "--", repoScopedPath]);
   }
   const changedFiles = listChangedFiles(context.worktreePath, context.repoScopePath);
-  const finalState = deps.storage.chatSessionWorkbench.patch(sessionId, {
+  const finalState = await deps.storage.chatSessionWorkbench.patch(sessionId, {
     projectId: context.project.projectId,
     validationStatus: "idle",
   });
@@ -657,7 +657,7 @@ export async function revertChatSessionWorkbenchFile(
     `Reverted ${normalized}${wasUntracked ? " by removing the untracked file." : "."}`,
     new Date().toISOString(),
   );
-  publishWorkbenchRevert(deps, sessionId, context.project.projectId, [normalized], changedFiles);
+  await publishWorkbenchRevert(deps, sessionId, context.project.projectId, [normalized], changedFiles);
   return {
     state: hydrated,
     revertedFiles: [normalized],
@@ -670,9 +670,9 @@ export async function revertChatSessionWorkbenchChanges(
   deps: ChatWorkbenchDependencies,
   sessionId: string,
 ): Promise<ChatSessionWorkbenchRevertResponse> {
-  deps.requireChatSession(sessionId);
-  const state = syncWorkbenchState(deps, sessionId);
-  const context = resolveWorkbenchContext(deps, sessionId, state, true);
+  await deps.requireChatSession(sessionId);
+  const state = await syncWorkbenchState(deps, sessionId);
+  const context = await resolveWorkbenchContext(deps, sessionId, state, true);
   assertWorkbenchMutationScope(deps, context);
   const before = listChangedFiles(context.worktreePath, context.repoScopePath);
   runGit(context.worktreePath, ["restore", "--source=HEAD", "--staged", "--worktree", "--", context.repoScopePath]);
@@ -685,7 +685,7 @@ export async function revertChatSessionWorkbenchChanges(
     await fs.rm(targetPath, { recursive: true, force: true });
   }
   const changedFiles = listChangedFiles(context.worktreePath, context.repoScopePath);
-  const finalState = deps.storage.chatSessionWorkbench.patch(sessionId, {
+  const finalState = await deps.storage.chatSessionWorkbench.patch(sessionId, {
     projectId: context.project.projectId,
     diffArtifactId: undefined,
     validationStatus: "idle",
@@ -696,7 +696,7 @@ export async function revertChatSessionWorkbenchChanges(
     before.length === 0 ? "No workbench changes needed to be reverted." : `Reverted ${before.length} file change(s).`,
     new Date().toISOString(),
   );
-  publishWorkbenchRevert(deps, sessionId, context.project.projectId, before, changedFiles);
+  await publishWorkbenchRevert(deps, sessionId, context.project.projectId, before, changedFiles);
   return {
     state: hydrated,
     revertedFiles: before,
@@ -709,17 +709,14 @@ export async function getChatSessionWorkbenchOutput(
   deps: ChatWorkbenchDependencies,
   sessionId: string,
 ): Promise<ChatSessionWorkbenchOutputResponse> {
-  deps.requireChatSession(sessionId);
-  const state = syncWorkbenchState(deps, sessionId);
-  const projectId = deps.storage.chatSessionProjects.get(sessionId)?.projectId;
+  await deps.requireChatSession(sessionId);
+  const state = await syncWorkbenchState(deps, sessionId);
+  const projectId = (await deps.storage.chatSessionProjects.get(sessionId))?.projectId;
   const codeModeRuns =
-    deps.listCodeModeRuns?.({ sessionId, limit: 8 }) ??
+    (await deps.listCodeModeRuns?.({ sessionId, limit: 8 })) ??
     (typeof deps.storage.codeModeRuns.listFiltered === "function"
-      ? deps.storage.codeModeRuns.listFiltered({ sessionId, limit: 8 })
-      : deps.storage.codeModeRuns
-          .list(500)
-          .filter((run) => run.sessionId === sessionId)
-          .slice(0, 8));
+      ? await deps.storage.codeModeRuns.listFiltered({ sessionId, limit: 8 })
+      : (await deps.storage.codeModeRuns.list(500)).filter((run) => run.sessionId === sessionId).slice(0, 8));
   const helperRuns = codeModeRuns.slice(0, 8).map((run) => ({
     runId: run.runId,
     turnId: run.turnId,
@@ -750,7 +747,7 @@ export async function getChatSessionWorkbenchOutput(
             return body ? `${header}\n${body}` : header;
           })
           .join("\n\n");
-  const nextState = deps.storage.chatSessionWorkbench.patch(sessionId, {
+  const nextState = await deps.storage.chatSessionWorkbench.patch(sessionId, {
     projectId,
     outputArtifactId: latest ? `code-mode-run:${latest.runId}` : undefined,
     validationStatus,
@@ -771,13 +768,16 @@ export async function getChatSessionWorkbenchOutput(
   };
 }
 
-function syncWorkbenchState(deps: ChatWorkbenchDependencies, sessionId: string): ChatSessionWorkbenchRecord {
-  const projectId = deps.storage.chatSessionProjects.get(sessionId)?.projectId;
-  const current = deps.storage.chatSessionWorkbench.ensure(sessionId);
+async function syncWorkbenchState(
+  deps: ChatWorkbenchDependencies,
+  sessionId: string,
+): Promise<ChatSessionWorkbenchRecord> {
+  const projectId = (await deps.storage.chatSessionProjects.get(sessionId))?.projectId;
+  const current = await deps.storage.chatSessionWorkbench.ensure(sessionId);
   const nextStatus = resolveWorkbenchPathStatus(current.worktreePath);
   const detectedPackageManager =
-    current.packageManager === undefined ? detectProjectPackageManager(deps, projectId) : undefined;
-  const patched = deps.storage.chatSessionWorkbench.patch(sessionId, {
+    current.packageManager === undefined ? await detectProjectPackageManager(deps, projectId) : undefined;
+  const patched = await deps.storage.chatSessionWorkbench.patch(sessionId, {
     projectId,
     worktreeStatus: nextStatus,
     packageManager: detectedPackageManager,
@@ -805,16 +805,16 @@ export function detectPackageManagerFromRoot(root: string): ChatSessionWorkbench
   return undefined;
 }
 
-function detectProjectPackageManager(
+async function detectProjectPackageManager(
   deps: ChatWorkbenchDependencies,
   projectId: string | undefined,
-): ChatSessionWorkbenchPackageManager | undefined {
+): Promise<ChatSessionWorkbenchPackageManager | undefined> {
   if (!projectId) {
     return undefined;
   }
   let project: { workspacePath: string } | undefined;
   try {
-    project = deps.storage.chatProjects.get(projectId);
+    project = await deps.storage.chatProjects.get(projectId);
   } catch {
     return undefined;
   }
@@ -847,7 +847,7 @@ async function buildWorkbenchFileResponse(
     relativePath,
   );
   const changedFiles = new Set(listChangedFiles(context.worktreePath, context.repoScopePath));
-  const nextState = deps.storage.chatSessionWorkbench.patch(sessionId, {
+  const nextState = await deps.storage.chatSessionWorkbench.patch(sessionId, {
     projectId: context.project.projectId,
     activeFilePath: normalized,
   });
@@ -1140,15 +1140,15 @@ async function runWorkbenchPostWriteValidation(
       "No changed files were detected after the write.",
       startedAt,
     );
-    persistWorkbenchValidationResult(deps, sessionId, context.project.projectId, validation);
-    publishWorkbenchValidationResult(deps, sessionId, context.project.projectId, validation);
+    await persistWorkbenchValidationResult(deps, sessionId, context.project.projectId, validation);
+    await publishWorkbenchValidationResult(deps, sessionId, context.project.projectId, validation);
     return validation;
   }
 
   const jsonValidation = await validateChangedJsonFiles(context.projectRoot, distinctChangedFiles, startedAt);
   if (jsonValidation.status === "failed") {
-    persistWorkbenchValidationResult(deps, sessionId, context.project.projectId, jsonValidation);
-    publishWorkbenchValidationResult(deps, sessionId, context.project.projectId, jsonValidation);
+    await persistWorkbenchValidationResult(deps, sessionId, context.project.projectId, jsonValidation);
+    await publishWorkbenchValidationResult(deps, sessionId, context.project.projectId, jsonValidation);
     return jsonValidation;
   }
 
@@ -1158,8 +1158,8 @@ async function runWorkbenchPostWriteValidation(
       "No Git metadata is available for the workbench, so git diff --check could not run.",
       startedAt,
     );
-    persistWorkbenchValidationResult(deps, sessionId, context.project.projectId, validation);
-    publishWorkbenchValidationResult(deps, sessionId, context.project.projectId, validation);
+    await persistWorkbenchValidationResult(deps, sessionId, context.project.projectId, validation);
+    await publishWorkbenchValidationResult(deps, sessionId, context.project.projectId, validation);
     return validation;
   }
 
@@ -1182,8 +1182,8 @@ async function runWorkbenchPostWriteValidation(
     stderrPreview,
     reason: result.timedOut ? "Validation timed out before completion." : result.spawnError,
   };
-  persistWorkbenchValidationResult(deps, sessionId, context.project.projectId, validation);
-  publishWorkbenchValidationResult(deps, sessionId, context.project.projectId, validation);
+  await persistWorkbenchValidationResult(deps, sessionId, context.project.projectId, validation);
+  await publishWorkbenchValidationResult(deps, sessionId, context.project.projectId, validation);
   return validation;
 }
 
@@ -1234,26 +1234,26 @@ function buildSkippedWorkbenchValidation(
   };
 }
 
-function persistWorkbenchValidationResult(
+async function persistWorkbenchValidationResult(
   deps: ChatWorkbenchDependencies,
   sessionId: string,
   projectId: string,
   validation: ChatSessionWorkbenchValidationResult,
-): void {
-  deps.storage.chatSessionWorkbench.patch(sessionId, {
+): Promise<void> {
+  await deps.storage.chatSessionWorkbench.patch(sessionId, {
     projectId,
     validationStatus: mapWorkbenchValidationState(validation),
   });
 }
 
-function publishWorkbenchValidationResult(
+async function publishWorkbenchValidationResult(
   deps: ChatWorkbenchDependencies,
   sessionId: string,
   projectId: string,
   validation: ChatSessionWorkbenchValidationResult,
-): void {
+): Promise<void> {
   const diagnostics = buildWorkbenchDiagnostics(validation);
-  deps.publishRealtime(
+  await deps.publishRealtime(
     "chat_workbench_updated",
     "chat",
     {
@@ -1302,14 +1302,14 @@ function formatCommandOutput(
   return sections.join("\n\n");
 }
 
-function publishWorkbenchRevert(
+async function publishWorkbenchRevert(
   deps: ChatWorkbenchDependencies,
   sessionId: string,
   projectId: string,
   revertedFiles: string[],
   changedFiles: string[],
-): void {
-  deps.publishRealtime(
+): Promise<void> {
+  await deps.publishRealtime(
     "chat_workbench_updated",
     "chat",
     {
@@ -1328,19 +1328,19 @@ function publishWorkbenchRevert(
   );
 }
 
-function resolveWorkbenchContext(
+async function resolveWorkbenchContext(
   deps: ChatWorkbenchDependencies,
   sessionId: string,
   state: ChatSessionWorkbenchRecord,
   requireWorktree: boolean,
-): {
+): Promise<{
   project: { projectId: string; workspacePath: string };
   projectRoot: string;
   worktreePath: string;
   repoScopePath: string;
-} {
-  const project = resolveProjectContext(deps, sessionId, true).project;
-  const projectContext = resolveProjectContext(deps, sessionId, true);
+}> {
+  const project = (await resolveProjectContext(deps, sessionId, true)).project;
+  const projectContext = await resolveProjectContext(deps, sessionId, true);
   const worktreePath = state.worktreePath ? deserializeWorkbenchPath(deps, state.worktreePath) : undefined;
   if (!worktreePath || state.worktreeStatus !== "ready") {
     if (requireWorktree) {
@@ -1360,23 +1360,23 @@ function resolveWorkbenchContext(
   };
 }
 
-function resolveProjectContext(
+async function resolveProjectContext(
   deps: ChatWorkbenchDependencies,
   sessionId: string,
   required: boolean,
-): {
+): Promise<{
   project: { projectId: string; workspacePath: string };
   repoRoot: string;
   kind: "workspace_subpath" | "standalone_repo";
-} {
-  const projectId = deps.storage.chatSessionProjects.get(sessionId)?.projectId;
+}> {
+  const projectId = (await deps.storage.chatSessionProjects.get(sessionId))?.projectId;
   if (!projectId) {
     if (required) {
       throw new ValidationError({ message: "Bind a project before using the workbench." });
     }
     throw new ValidationError({ message: "Project context is unavailable." });
   }
-  const project = deps.storage.chatProjects.get(projectId);
+  const project = await deps.storage.chatProjects.get(projectId);
   const workspaceRoot = path.resolve(deps.config.rootDir, deps.config.assistant.workspaceDir);
   const absoluteProjectPath = path.resolve(workspaceRoot, project.workspacePath);
   const standaloneRepoRoot = isStandaloneProjectRepoRoot(workspaceRoot, absoluteProjectPath)

@@ -15,7 +15,7 @@ import type {
   MeshSessionOwnerRecord,
   MeshStatus,
 } from "@goatcitadel/contracts";
-import type { MeshRuntimeArtifactSnapshot, Storage } from "@goatcitadel/storage";
+import type { AsyncStorage, MeshRuntimeArtifactSnapshot } from "@goatcitadel/storage";
 
 export interface MeshRuntimeOptions {
   enabled: boolean;
@@ -30,14 +30,14 @@ export interface MeshRuntimeOptions {
 }
 
 export interface MeshRuntimeOptionsReplacement {
-  rollback(): void;
+  rollback(): Promise<void>;
 }
 
 export class MeshService {
   private options: MeshRuntimeOptions;
 
   public constructor(
-    private readonly storage: Storage,
+    private readonly storage: AsyncStorage,
     options: MeshRuntimeOptions,
   ) {
     this.options = {
@@ -48,8 +48,8 @@ export class MeshService {
     };
   }
 
-  public init(): void {
-    this.persistOptionsAtomically(this.options);
+  public async init(): Promise<void> {
+    await this.persistOptionsAtomically(this.options);
   }
 
   public getOptionsSnapshot(): MeshRuntimeOptions {
@@ -61,9 +61,9 @@ export class MeshService {
    * commit together. A failed node/token write leaves the prior in-memory
    * options active and the database transaction rolls back both writes.
    */
-  public replaceOptions(input: MeshRuntimeOptions): MeshRuntimeOptions {
+  public async replaceOptions(input: MeshRuntimeOptions): Promise<MeshRuntimeOptions> {
     const next = normalizeMeshRuntimeOptions(input, this.options);
-    this.persistOptionsAtomically(next);
+    await this.persistOptionsAtomically(next);
     this.options = next;
     return this.getOptionsSnapshot();
   }
@@ -73,13 +73,13 @@ export class MeshService {
    * Unlike a second replaceOptions(previous) call, rollback restores overwritten
    * timestamps/token state and deletes candidate-only node/token rows.
    */
-  public replaceOptionsReversibly(input: MeshRuntimeOptions): MeshRuntimeOptionsReplacement {
+  public async replaceOptionsReversibly(input: MeshRuntimeOptions): Promise<MeshRuntimeOptionsReplacement> {
     const previous = this.getOptionsSnapshot();
     const next = normalizeMeshRuntimeOptions(input, this.options);
     let artifacts: MeshRuntimeArtifactSnapshot | undefined;
-    this.runAtomically(() => {
-      artifacts = this.storage.mesh.snapshotRuntimeArtifacts(next.localNodeId, next.joinToken);
-      this.persistOptionsRows(next);
+    await this.runAtomically(async () => {
+      artifacts = await this.storage.mesh.snapshotRuntimeArtifacts(next.localNodeId, next.joinToken);
+      await this.persistOptionsRows(next);
     });
     if (!artifacts) {
       throw new Error("Mesh runtime artifact snapshot was not captured");
@@ -87,9 +87,9 @@ export class MeshService {
     this.options = next;
 
     return {
-      rollback: () => {
-        this.runAtomically(() => {
-          this.storage.mesh.restoreRuntimeArtifacts(artifacts as MeshRuntimeArtifactSnapshot);
+      rollback: async () => {
+        await this.runAtomically(async () => {
+          await this.storage.mesh.restoreRuntimeArtifacts(artifacts as MeshRuntimeArtifactSnapshot);
         });
         this.options = previous;
       },
@@ -101,19 +101,19 @@ export class MeshService {
    * generation journal. This is intentionally idempotent so startup can repeat
    * it after another hard crash before clearing the journal marker.
    */
-  public restoreRuntimeArtifactsForRecovery(snapshot: MeshRuntimeArtifactSnapshot): void {
-    this.runAtomically(() => {
-      this.storage.mesh.restoreRuntimeArtifacts(snapshot);
+  public async restoreRuntimeArtifactsForRecovery(snapshot: MeshRuntimeArtifactSnapshot): Promise<void> {
+    await this.runAtomically(async () => {
+      await this.storage.mesh.restoreRuntimeArtifacts(snapshot);
     });
   }
 
-  private persistOptionsAtomically(options: MeshRuntimeOptions): void {
-    this.runAtomically(() => this.persistOptionsRows(options));
+  private async persistOptionsAtomically(options: MeshRuntimeOptions): Promise<void> {
+    await this.runAtomically(() => this.persistOptionsRows(options));
   }
 
-  private persistOptionsRows(options: MeshRuntimeOptions): void {
+  private async persistOptionsRows(options: MeshRuntimeOptions): Promise<void> {
     const now = new Date().toISOString();
-    this.storage.mesh.upsertNode({
+    await this.storage.mesh.upsertNode({
       nodeId: options.localNodeId,
       label: options.localNodeLabel,
       advertiseAddress: options.advertiseAddress,
@@ -126,21 +126,21 @@ export class MeshService {
 
     if (options.joinToken?.trim()) {
       const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-      this.storage.mesh.issueJoinToken(options.joinToken.trim(), expiresAt);
+      await this.storage.mesh.issueJoinToken(options.joinToken.trim(), expiresAt);
     }
   }
 
-  private runAtomically<T>(write: () => T): T {
-    return this.storage.db.transaction("immediate", write);
+  private runAtomically<T>(write: () => Promise<T>): Promise<T> {
+    return this.storage.db.transaction("immediate", async () => write());
   }
 
-  public status(): MeshStatus {
+  public status(): Promise<MeshStatus> {
     return this.storage.mesh.buildStatus(this.options.enabled, this.options.mode, this.options.localNodeId);
   }
 
-  public readinessDiagnostics(): MeshReadinessDiagnostics {
-    const statusSnapshot = this.status();
-    const checks = this.buildReadinessChecks(statusSnapshot);
+  public async readinessDiagnostics(): Promise<MeshReadinessDiagnostics> {
+    const statusSnapshot = await this.status();
+    const checks = await this.buildReadinessChecks(statusSnapshot);
     const blockers = checks.filter((check) => check.status === "fail").map((check) => check.message);
     return {
       generatedAt: new Date().toISOString(),
@@ -152,14 +152,14 @@ export class MeshService {
     };
   }
 
-  public updateOptions(input: Partial<MeshRuntimeOptions>): void {
-    this.replaceOptions({
+  public async updateOptions(input: Partial<MeshRuntimeOptions>): Promise<void> {
+    await this.replaceOptions({
       ...this.options,
       ...input,
     });
   }
 
-  public join(request: MeshJoinRequest): MeshJoinResult {
+  public async join(request: MeshJoinRequest): Promise<MeshJoinResult> {
     if (!this.options.enabled) {
       throw new Error("Mesh is disabled");
     }
@@ -167,18 +167,18 @@ export class MeshService {
       throw new Error("Mesh join requires tlsFingerprint");
     }
 
-    const node = this.storage.mesh.join(request);
+    const node = await this.storage.mesh.join(request);
     return {
       accepted: true,
       node,
     };
   }
 
-  public listNodes(limit = 200): MeshNodeRecord[] {
+  public listNodes(limit = 200): Promise<MeshNodeRecord[]> {
     return this.storage.mesh.listNodes(limit);
   }
 
-  public acquireLease(request: MeshLeaseAcquireRequest): MeshLeaseRecord {
+  public acquireLease(request: MeshLeaseAcquireRequest): Promise<MeshLeaseRecord> {
     return this.storage.mesh.acquireLease(
       request.leaseKey,
       request.holderNodeId,
@@ -186,7 +186,7 @@ export class MeshService {
     );
   }
 
-  public renewLease(request: MeshLeaseRenewRequest): MeshLeaseRecord {
+  public renewLease(request: MeshLeaseRenewRequest): Promise<MeshLeaseRecord> {
     return this.storage.mesh.renewLease(
       request.leaseKey,
       request.holderNodeId,
@@ -195,33 +195,33 @@ export class MeshService {
     );
   }
 
-  public releaseLease(request: MeshLeaseReleaseRequest): { released: boolean } {
+  public async releaseLease(request: MeshLeaseReleaseRequest): Promise<{ released: boolean }> {
     return {
-      released: this.storage.mesh.releaseLease(request.leaseKey, request.holderNodeId, request.fencingToken),
+      released: await this.storage.mesh.releaseLease(request.leaseKey, request.holderNodeId, request.fencingToken),
     };
   }
 
-  public claimSessionOwner(sessionId: string, request: MeshSessionClaimRequest): MeshSessionOwnerRecord {
+  public claimSessionOwner(sessionId: string, request: MeshSessionClaimRequest): Promise<MeshSessionOwnerRecord> {
     return this.storage.mesh.claimSessionOwner(sessionId, request);
   }
 
-  public getSessionOwner(sessionId: string): MeshSessionOwnerRecord {
+  public getSessionOwner(sessionId: string): Promise<MeshSessionOwnerRecord> {
     return this.storage.mesh.getSessionOwner(sessionId);
   }
 
-  public listSessionOwners(limit = 500): MeshSessionOwnerRecord[] {
+  public listSessionOwners(limit = 500): Promise<MeshSessionOwnerRecord[]> {
     return this.storage.mesh.listSessionOwners(limit);
   }
 
-  public listLeases(limit = 200): MeshLeaseRecord[] {
+  public listLeases(limit = 200): Promise<MeshLeaseRecord[]> {
     return this.storage.mesh.listLeases(limit);
   }
 
-  public ingestReplicationEvent(input: MeshReplicationIngestRequest): MeshReplicationRecord {
+  public ingestReplicationEvent(input: MeshReplicationIngestRequest): Promise<MeshReplicationRecord> {
     return this.storage.mesh.appendReplicationEvent(input);
   }
 
-  public listReplicationEvents(limit = 200, cursor?: string): MeshReplicationRecord[] {
+  public listReplicationEvents(limit = 200, cursor?: string): Promise<MeshReplicationRecord[]> {
     return this.storage.mesh.listReplicationEvents(limit, cursor);
   }
 
@@ -229,20 +229,22 @@ export class MeshService {
     consumerNodeId: string,
     sourceNodeId: string,
     lastReplicationId?: string,
-  ): MeshReplicationOffset {
+  ): Promise<MeshReplicationOffset> {
     return this.storage.mesh.setReplicationOffset(consumerNodeId, sourceNodeId, lastReplicationId);
   }
 
-  public listReplicationOffsets(limit = 500): MeshReplicationOffset[] {
+  public listReplicationOffsets(limit = 500): Promise<MeshReplicationOffset[]> {
     return this.storage.mesh.listReplicationOffsets(limit);
   }
 
-  private buildReadinessChecks(statusSnapshot: MeshStatus): MeshReadinessCheck[] {
-    const nodes = this.listNodes(20);
-    const leases = this.listLeases(20);
-    const owners = this.listSessionOwners(20);
-    const events = this.listReplicationEvents(20);
-    const offsets = this.listReplicationOffsets(20);
+  private async buildReadinessChecks(statusSnapshot: MeshStatus): Promise<MeshReadinessCheck[]> {
+    const [nodes, leases, owners, events, offsets] = await Promise.all([
+      this.listNodes(20),
+      this.listLeases(20),
+      this.listSessionOwners(20),
+      this.listReplicationEvents(20),
+      this.listReplicationOffsets(20),
+    ]);
     if (!this.options.enabled) {
       return [
         {

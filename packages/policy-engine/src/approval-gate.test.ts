@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ApprovalCreateInput, ApprovalRequest } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage } from "@goatcitadel/storage";
 import { ApprovalGate } from "./approval-gate.js";
 
 function buildInput(overrides: Partial<ApprovalCreateInput> = {}): ApprovalCreateInput {
@@ -13,9 +13,13 @@ function buildInput(overrides: Partial<ApprovalCreateInput> = {}): ApprovalCreat
   };
 }
 
-function createStorage(): { storage: Storage; create: ReturnType<typeof vi.fn>; append: ReturnType<typeof vi.fn> } {
+function createStorage(): {
+  storage: AsyncStorage;
+  create: ReturnType<typeof vi.fn>;
+  append: ReturnType<typeof vi.fn>;
+} {
   const create = vi.fn(
-    (input: ApprovalCreateInput): ApprovalRequest => ({
+    async (input: ApprovalCreateInput): Promise<ApprovalRequest> => ({
       approvalId: "apr-1",
       kind: input.kind,
       riskLevel: input.riskLevel,
@@ -27,19 +31,22 @@ function createStorage(): { storage: Storage; create: ReturnType<typeof vi.fn>; 
     }),
   );
   const append = vi.fn(async () => undefined);
-  const createWithTtlDuration = vi.fn((input: ApprovalCreateInput, ttlMs: number) => {
+  const createWithTtlDuration = vi.fn(async (input: ApprovalCreateInput, ttlMs: number) => {
     if (!Number.isFinite(ttlMs) || ttlMs <= 0) {
       throw new Error("ttlMs must be a positive duration");
     }
     return {
-      ...create(input),
+      ...(await create(input)),
       expiresAt: new Date(Date.parse("2026-06-13T00:00:00.000Z") + ttlMs).toISOString(),
     };
   });
   const storage = {
+    runImmediateTransaction: vi.fn(
+      async <T>(operation: () => T | Promise<T>): Promise<Awaited<T>> => await operation(),
+    ),
     approvals: { create, createWithTtlDuration },
     audit: { append },
-  } as unknown as Storage;
+  } as unknown as AsyncStorage;
   return { storage, create, append };
 }
 

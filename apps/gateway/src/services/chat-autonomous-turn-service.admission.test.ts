@@ -5,7 +5,12 @@ import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { canonicalJsonString, NotFoundError } from "@goatcitadel/contracts";
 import type { CronJobRecord, DurableRunRecord } from "@goatcitadel/contracts";
-import { sealChatTurnCapabilityProfile, Storage, type SessionAutonomyPrefsRecord } from "@goatcitadel/storage";
+import {
+  createSqliteAsyncStorage,
+  sealChatTurnCapabilityProfile,
+  Storage,
+  type SessionAutonomyPrefsRecord,
+} from "@goatcitadel/storage";
 import {
   buildCronChatAdmissionIdentity,
   buildCronInboxTaskId,
@@ -287,6 +292,7 @@ function createRealAutonomousReplayHarness(token: typeof CRON_TOKEN) {
     transcriptsDir: path.join(root, "transcripts"),
     auditDir: path.join(root, "audit"),
   });
+  const asyncStorage = createSqliteAsyncStorage(storage);
   const identity = buildCronChatAdmissionIdentity(token);
   const input = deterministicInput(identity);
   storage.chatSessionLifecycles.initialize({
@@ -296,11 +302,11 @@ function createRealAutonomousReplayHarness(token: typeof CRON_TOKEN) {
     idempotencyKey: `lifecycle:init:${input.sessionId}`,
     correlationId: `lifecycle:init:${input.sessionId}`,
   });
-  const owner = new SessionControlRuntimeOwner(new SessionControlService(storage));
+  const owner = new SessionControlRuntimeOwner(new SessionControlService(asyncStorage));
   const publishRealtime = vi.fn();
   const service = new DurableRunService(
     {
-      storage,
+      storage: asyncStorage,
       config: {
         assistant: { durable: { enabled: true, workflowTimeoutMs: 30_000 }, mesh: { nodeId: "test-node" } },
       },
@@ -411,7 +417,7 @@ function createRealAutonomousReplayHarness(token: typeof CRON_TOKEN) {
   );
   const deps = {
     ...buildDeps().deps,
-    storage,
+    storage: asyncStorage,
     sessionControlRuntimeOwner: owner,
     prepareAgentChatTurn,
     buildDurableChatTurnPayloadRecord: (
@@ -481,10 +487,10 @@ function claimRealAutonomousRun(storage: Storage, runId: string): DurableRunReco
   return claimed;
 }
 
-function finalizeRealAutonomousRun(
+async function finalizeRealAutonomousRun(
   harness: ReturnType<typeof createRealAutonomousReplayHarness>,
   status: "waiting_for_approval" | "completed" | "partial" | "failed" | "cancelled",
-): void {
+): Promise<void> {
   const claimed = claimRealAutonomousRun(harness.storage, harness.identity.durableRunId);
   if (status === "completed" || status === "partial") {
     harness.storage.chatMessages.upsert({
@@ -511,15 +517,16 @@ function finalizeRealAutonomousRun(
       : {}),
   });
   const trace = harness.storage.chatTurnTraces.get(harness.identity.turnId);
-  finalizeDurableChatRun(
+  const asyncStorage = createSqliteAsyncStorage(harness.storage);
+  await finalizeDurableChatRun(
     {
-      runImmediateTransaction: (callback) => harness.storage.runImmediateTransaction(callback),
-      durableRuns: harness.storage.durableRuns,
-      chatToolRuns: harness.storage.chatToolRuns,
-      chatToolArtifacts: harness.storage.chatToolArtifacts,
-      chatMessages: harness.storage.chatMessages,
+      runImmediateTransaction: asyncStorage.runImmediateTransaction,
+      durableRuns: asyncStorage.durableRuns,
+      chatToolRuns: asyncStorage.chatToolRuns,
+      chatToolArtifacts: asyncStorage.chatToolArtifacts,
+      chatMessages: asyncStorage.chatMessages,
       recordDurableTimelineEvent: vi.fn(),
-      chatTurnTraces: harness.storage.chatTurnTraces,
+      chatTurnTraces: asyncStorage.chatTurnTraces,
       resolvePostCommitEligibility: () => ({
         version: 1,
         autonomyEnabledAtParentSettlement: true,
@@ -708,7 +715,7 @@ describe("deterministic autonomous Chat child admission", () => {
     });
     try {
       const first = await enqueueAutonomousChatTurn(harness.deps, harness.input);
-      finalizeRealAutonomousRun(harness, "waiting_for_approval");
+      await finalizeRealAutonomousRun(harness, "waiting_for_approval");
       expect(harness.storage.durableRuns.getRun(harness.identity.durableRunId)).toMatchObject({
         status: "waiting",
         metadata: {
@@ -776,7 +783,7 @@ describe("deterministic autonomous Chat child admission", () => {
     });
     try {
       const first = await enqueueAutonomousChatTurn(harness.deps, harness.input);
-      finalizeRealAutonomousRun(harness, "completed");
+      await finalizeRealAutonomousRun(harness, "completed");
       const pendingTerminal = harness.storage.durableRuns.getRun(harness.identity.durableRunId);
       expect(
         harness.storage.sessionMutationAdmissions.require(
@@ -864,7 +871,7 @@ describe("deterministic autonomous Chat child admission", () => {
     });
     try {
       const first = await enqueueAutonomousChatTurn(harness.deps, harness.input);
-      finalizeRealAutonomousRun(harness, "partial");
+      await finalizeRealAutonomousRun(harness, "partial");
 
       expect(await enqueueAutonomousChatTurn(harness.deps, harness.input)).toEqual(first);
       const run = harness.storage.durableRuns.getRun(harness.identity.durableRunId);
@@ -892,7 +899,7 @@ describe("deterministic autonomous Chat child admission", () => {
     });
     try {
       await enqueueAutonomousChatTurn(waitingHarness.deps, waitingHarness.input);
-      finalizeRealAutonomousRun(waitingHarness, "waiting_for_approval");
+      await finalizeRealAutonomousRun(waitingHarness, "waiting_for_approval");
       const waiting = waitingHarness.storage.durableRuns.getRun(waitingHarness.identity.durableRunId);
       const waitingAuthority = waiting.metadata?.[CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY] as {
         material: { postCommitGenerationId: string; transitionAt: string };
@@ -973,7 +980,7 @@ describe("deterministic autonomous Chat child admission", () => {
     });
     try {
       await enqueueAutonomousChatTurn(completedHarness.deps, completedHarness.input);
-      finalizeRealAutonomousRun(completedHarness, "completed");
+      await finalizeRealAutonomousRun(completedHarness, "completed");
       const pending = completedHarness.storage.durableRuns.getRun(completedHarness.identity.durableRunId);
 
       let runSpy = vi.spyOn(completedHarness.service, "getDurableRun").mockReturnValue({
@@ -1034,7 +1041,7 @@ describe("deterministic autonomous Chat child admission", () => {
     });
     try {
       const first = await enqueueAutonomousChatTurn(harness.deps, harness.input);
-      finalizeRealAutonomousRun(harness, "failed");
+      await finalizeRealAutonomousRun(harness, "failed");
       const failed = harness.storage.durableRuns.getRun(harness.identity.durableRunId);
       const priorAuthority = failed.metadata?.[CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY] as {
         material: { postCommitEligibility: Record<string, unknown> };
@@ -1233,7 +1240,7 @@ describe("deterministic autonomous Chat child admission", () => {
       });
       try {
         const first = await enqueueAutonomousChatTurn(harness.deps, harness.input);
-        finalizeRealAutonomousRun(harness, status);
+        await finalizeRealAutonomousRun(harness, status);
         expect(await enqueueAutonomousChatTurn(harness.deps, harness.input)).toEqual(first);
         expect(harness.requestDurableRunProcessing).toHaveBeenCalledTimes(2);
         const reconciled = await harness.service.reconcileGeneralChatPostCommit(harness.identity.durableRunId);
@@ -1359,8 +1366,9 @@ describe("deterministic autonomous Chat child admission", () => {
       auditDir: path.join(root, "audit"),
     });
     try {
+      const asyncStorage = createSqliteAsyncStorage(storage);
       const durableRunService = new DurableRunService({
-        storage,
+        storage: asyncStorage,
         requireFeatureEnabled: vi.fn(),
         publishRealtime: vi.fn(),
       } as unknown as ServiceContext);
@@ -1369,7 +1377,7 @@ describe("deterministic autonomous Chat child admission", () => {
       );
       const base = buildDeps({
         storage: {
-          chatTurnTraces: storage.chatTurnTraces,
+          chatTurnTraces: asyncStorage.chatTurnTraces,
         } as ChatAutonomousTurnDeps["storage"],
         createDurableRun,
       });
@@ -1381,7 +1389,7 @@ describe("deterministic autonomous Chat child admission", () => {
       expect(replay).toEqual(first);
       expect(storage.durableRuns.listRuns(20).filter((run) => run.runId === identity.durableRunId)).toHaveLength(1);
       expect(storage.durableRuns.listCheckpoints(identity.durableRunId)).toHaveLength(1);
-      expect(() =>
+      await expect(
         durableRunService.createDurableRun(
           {
             ...createDurableRun.mock.calls[0]![0],
@@ -1392,7 +1400,7 @@ describe("deterministic autonomous Chat child admission", () => {
           },
           { publishRealtime: false },
         ),
-      ).toThrow(/different immutable workflow payload/);
+      ).rejects.toThrow(/different immutable workflow payload/);
     } finally {
       storage.close();
       fs.rmSync(root, { recursive: true, force: true });
@@ -1636,6 +1644,7 @@ describe("deterministic autonomous Chat child admission", () => {
       auditDir: path.join(root, "audit"),
     });
     try {
+      const asyncStorage = createSqliteAsyncStorage(storage);
       for (const sessionId of ["session-cron", "session-live", "session-bound"]) {
         storage.chatSessionLifecycles.initialize({
           workspaceId: "default",
@@ -1645,7 +1654,7 @@ describe("deterministic autonomous Chat child admission", () => {
           correlationId: `lifecycle:init:${sessionId}`,
         });
       }
-      const owner = new SessionControlRuntimeOwner(new SessionControlService(storage));
+      const owner = new SessionControlRuntimeOwner(new SessionControlService(asyncStorage));
       const identity = buildCronChatAdmissionIdentity(CRON_TOKEN);
       const input = deterministicInput(identity);
       const request = buildAutonomousRequestForTest(input);
@@ -1659,14 +1668,14 @@ describe("deterministic autonomous Chat child admission", () => {
         correlationId: input.runId,
       };
 
-      const first = owner.admitSystemChatTurn(admissionInput);
-      const liveReplay = new SessionControlRuntimeOwner(new SessionControlService(storage)).admitSystemChatTurn(
-        admissionInput,
-      );
+      const first = await owner.admitSystemChatTurn(admissionInput);
+      const liveReplay = await new SessionControlRuntimeOwner(
+        new SessionControlService(asyncStorage),
+      ).admitSystemChatTurn(admissionInput);
       expect(liveReplay.identity.admissionId).toBe(first.identity.admissionId);
       expect(liveReplay.requestClaim).toEqual(first.requestClaim);
 
-      const live = owner.admitSystemChatTurn({
+      const live = await owner.admitSystemChatTurn({
         ...admissionInput,
         sessionId: "session-live",
         turnId: "turn-live",
@@ -1674,7 +1683,7 @@ describe("deterministic autonomous Chat child admission", () => {
         idempotencyKey: "chat-turn:autonomous:live",
         correlationId: "live",
       });
-      const bound = owner.admitSystemChatTurn({
+      const bound = await owner.admitSystemChatTurn({
         ...admissionInput,
         sessionId: "session-bound",
         turnId: "turn-bound",
@@ -1714,7 +1723,7 @@ describe("deterministic autonomous Chat child admission", () => {
         },
         metadata: {},
       });
-      owner.bindDurableRun(bound, boundRunId);
+      await owner.bindDurableRun(bound, boundRunId);
 
       // Fixture-only clock aging: production owns this timestamp through the
       // database clock and immutable update guard. Drop the guard only long
@@ -1729,17 +1738,17 @@ describe("deterministic autonomous Chat child admission", () => {
         )
         .run({ expiredAdmissionId: first.identity.admissionId, boundAdmissionId: bound.identity.admissionId });
 
-      expect(cancelExpiredUnboundChatTurnAdmissionsOnBoot(owner, "gateway-startup:real-storage-1")).toEqual([
+      expect(await cancelExpiredUnboundChatTurnAdmissionsOnBoot(owner, "gateway-startup:real-storage-1")).toEqual([
         first.identity.admissionId,
       ]);
       const terminal = storage.sessionMutationAdmissions.require(first.identity.admissionId);
       expect(terminal).toMatchObject({ status: "cancelled", terminalAuthorityKind: "expired_recovery" });
       expect(storage.sessionMutationAdmissions.require(live.identity.admissionId).status).toBe("active");
       expect(storage.sessionMutationAdmissions.require(bound.identity.admissionId).status).toBe("active");
-      expect(cancelExpiredUnboundChatTurnAdmissionsOnBoot(owner, "gateway-startup:real-storage-2")).toEqual([]);
+      expect(await cancelExpiredUnboundChatTurnAdmissionsOnBoot(owner, "gateway-startup:real-storage-2")).toEqual([]);
 
       const harness = buildDeps({
-        storage: storage as unknown as ChatAutonomousTurnDeps["storage"],
+        storage: asyncStorage,
         sessionControlRuntimeOwner: owner,
       });
       await expect(enqueueAutonomousChatTurn(harness.deps, input)).rejects.toThrow(/already terminal/);

@@ -12,7 +12,6 @@ import type {
   McpToolRecord,
 } from "@goatcitadel/contracts";
 import { ConflictError, ValidationError } from "@goatcitadel/contracts";
-import type { ApprovalInboxRepository } from "@goatcitadel/storage";
 import { projectMcpPublicValue } from "./mcp-public-projection.js";
 
 export const MCP_APPROVAL_DELIVERY_TOOL_NAME = "goatcitadel.approval.remote_action_ready";
@@ -33,7 +32,7 @@ export type RespondToMcpElicitation = (input: {
   action: McpElicitationResponseAction;
   content?: Record<string, unknown>;
   owner?: McpElicitationOwnerMetadata;
-}) => McpElicitationRequest;
+}) => Promise<McpElicitationRequest>;
 
 /** Dependency that lists server-initiated MCP elicitations awaiting an operator response. */
 export type ListMcpElicitations = (filter: {
@@ -41,7 +40,7 @@ export type ListMcpElicitations = (filter: {
   serverId?: string;
   sessionId?: string;
   owner?: McpElicitationOwnerMetadata;
-}) => McpElicitationRequest[];
+}) => Promise<McpElicitationRequest[]>;
 
 /** Rate limiter: max resolve attempts per server per window. */
 const RESOLVE_RATE_LIMIT_MAX = 10;
@@ -63,10 +62,37 @@ function checkResolveRateLimit(serverId: string): void {
   }
 }
 
-type ApprovalInboxPort = Pick<
-  ApprovalInboxRepository,
-  "receiveMcpApprovalDelivery" | "listByReceiver" | "get" | "markResolved"
->;
+export interface ApprovalInboxPort {
+  receiveMcpApprovalDelivery(input: {
+    connectorId: string;
+    receiverId: string;
+    approvalId: string;
+    tokenId: string;
+    token?: string;
+    approvalKind: string;
+    riskLevel: ApprovalRequest["riskLevel"];
+    approvalStatus: ApprovalRequest["status"];
+    preview: Record<string, unknown>;
+    expiresAt: string;
+    receivedAt?: string;
+  }): Promise<ApprovalInboxItemRecord>;
+  listByReceiver(
+    receiverKind: "mcp",
+    receiverId: string,
+    input?: { state?: ApprovalInboxItemState; limit?: number },
+  ): Promise<ApprovalInboxItemRecord[]>;
+  get(inboxItemId: string): Promise<ApprovalInboxItemRecord>;
+  markResolved(
+    inboxItemId: string,
+    input: {
+      state: Exclude<ApprovalInboxItemState, "pending">;
+      approvalStatus: ApprovalRequest["status"];
+      resolvedAt?: string;
+      resolvedBy?: string;
+      lastError?: string;
+    },
+  ): Promise<ApprovalInboxItemRecord>;
+}
 
 export function isInternalMcpApprovalInboxServer(server: Pick<McpServerRecord, "url">): boolean {
   return server.url?.trim().toLowerCase() === MCP_APPROVAL_INBOX_URL;
@@ -193,7 +219,7 @@ export async function handleInternalMcpApprovalInboxInvoke(
         return {
           ok: true,
           output: {
-            item: deps.approvalInbox.receiveMcpApprovalDelivery(
+            item: await deps.approvalInbox.receiveMcpApprovalDelivery(
               parseDeliveryEnvelope(server.serverId, input.arguments),
             ),
           },
@@ -203,7 +229,7 @@ export async function handleInternalMcpApprovalInboxInvoke(
         return {
           ok: true,
           output: {
-            items: deps.approvalInbox.listByReceiver("mcp", server.serverId, parseListArgs(input.arguments)),
+            items: await deps.approvalInbox.listByReceiver("mcp", server.serverId, parseListArgs(input.arguments)),
           },
         };
 
@@ -223,7 +249,7 @@ export async function handleInternalMcpApprovalInboxInvoke(
         return {
           ok: true,
           output: {
-            items: deps.listMcpElicitations({
+            items: await deps.listMcpElicitations({
               ...parseElicitationListArgs(input.arguments),
               owner: resolveElicitationInvokeOwner(input),
             }),
@@ -239,7 +265,7 @@ export async function handleInternalMcpApprovalInboxInvoke(
         return {
           ok: true,
           output: {
-            elicitation: deps.respondToMcpElicitation({
+            elicitation: await deps.respondToMcpElicitation({
               ...args,
               owner,
             }),
@@ -385,7 +411,7 @@ async function resolveInboxItem(
   const inboxItemId = requireNonEmptyString(args?.inboxItemId, "inboxItemId");
   const decision = requireEnumValue(args?.decision, ["approve", "reject", "edit"], "decision");
   const resolvedBy = `mcp:${serverId}`;
-  const item = deps.approvalInbox.get(inboxItemId);
+  const item = await deps.approvalInbox.get(inboxItemId);
   if (item.receiverId !== serverId || item.receiverKind !== "mcp") {
     throw new ConflictError({
       message: `Approval inbox item ${inboxItemId} is not assigned to MCP server ${serverId}.`,
@@ -406,7 +432,7 @@ async function resolveInboxItem(
       resolutionNote: optionalString(args?.resolutionNote),
     });
     return {
-      item: deps.approvalInbox.get(inboxItemId),
+      item: await deps.approvalInbox.get(inboxItemId),
       // The inbox item intentionally retains its tokenId and already-redacted one-time
       // token marker. Only the resolved approval is projected for the remote caller.
       approval: projectMcpPublicValue(result.approval),
@@ -414,11 +440,11 @@ async function resolveInboxItem(
   } catch (error) {
     if (shouldDeferInboxTerminalization(error)) {
       return {
-        item: deps.approvalInbox.get(inboxItemId),
+        item: await deps.approvalInbox.get(inboxItemId),
       };
     }
     const currentState = Date.parse(item.expiresAt) <= Date.now() ? "expired" : "failed";
-    const updated = deps.approvalInbox.markResolved(inboxItemId, {
+    const updated = await deps.approvalInbox.markResolved(inboxItemId, {
       state: currentState,
       approvalStatus: item.approvalStatus,
       resolvedAt: new Date().toISOString(),

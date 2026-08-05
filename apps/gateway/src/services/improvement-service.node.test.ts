@@ -4,7 +4,7 @@ import { afterEach, describe, it } from "node:test";
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Storage } from "@goatcitadel/storage";
+import { createLocalAsyncStorage, Storage } from "@goatcitadel/storage";
 import type { ApprovalResolveInput, ImprovementRef } from "@goatcitadel/contracts";
 import { ImprovementService, type ImprovementServiceCallbacks } from "./improvement-service.js";
 import {
@@ -44,15 +44,15 @@ afterEach(() => {
 
 describe("ImprovementService ledger lifecycle", () => {
   it("applies a pending activation immediately when approval resolves approved", async () => {
-    const harness = createHarness();
-    const candidate = createRoutingCandidate(harness.service);
+    const harness = await createHarness();
+    const candidate = await createRoutingCandidate(harness.service);
     const activation = await harness.service.requestImprovementActivation(candidate.candidateId, "operator-1");
 
     const approval = resolveApproval(harness, activation.approvalId, {
       decision: "approve",
       resolvedBy: "operator-1",
     });
-    const applied = harness.service.handleActivationApprovalResolution(approval);
+    const applied = await harness.service.handleActivationApprovalResolution(approval);
 
     assert.equal(applied?.status, "active");
     assert.equal(applied?.watchStatus, "watching");
@@ -60,16 +60,16 @@ describe("ImprovementService ledger lifecycle", () => {
   });
 
   it("rejects pending activations through approval resolution and suppresses the fingerprint", async () => {
-    const harness = createHarness();
-    const candidate = createRoutingCandidate(harness.service);
+    const harness = await createHarness();
+    const candidate = await createRoutingCandidate(harness.service);
     const activation = await harness.service.requestImprovementActivation(candidate.candidateId, "operator-1");
 
     const approval = resolveApproval(harness, activation.approvalId, {
       decision: "reject",
       resolvedBy: "operator-1",
     });
-    const failed = harness.service.handleActivationApprovalResolution(approval);
-    const detail = harness.service.getImprovementCandidateDetail(candidate.candidateId);
+    const failed = await harness.service.handleActivationApprovalResolution(approval);
+    const detail = await harness.service.getImprovementCandidateDetail(candidate.candidateId);
 
     assert.equal(failed?.status, "failed");
     assert.equal(detail.candidate.status, "rejected");
@@ -77,10 +77,10 @@ describe("ImprovementService ledger lifecycle", () => {
   });
 
   it("fails a drifted activation instead of applying the stale revision", async () => {
-    const harness = createHarness();
-    const candidate = createRoutingCandidate(harness.service);
+    const harness = await createHarness();
+    const candidate = await createRoutingCandidate(harness.service);
     const activation = await harness.service.requestImprovementActivation(candidate.candidateId, "operator-1");
-    const detail = harness.service.getImprovementCandidateDetail(candidate.candidateId);
+    const detail = await harness.service.getImprovementCandidateDetail(candidate.candidateId);
     const currentRevision = detail.currentRevision;
     assert.ok(currentRevision);
 
@@ -133,8 +133,8 @@ describe("ImprovementService ledger lifecycle", () => {
       decision: "approve",
       resolvedBy: "operator-1",
     });
-    const failed = harness.service.handleActivationApprovalResolution(approval);
-    const updated = harness.service.getImprovementCandidateDetail(candidate.candidateId);
+    const failed = await harness.service.handleActivationApprovalResolution(approval);
+    const updated = await harness.service.getImprovementCandidateDetail(candidate.candidateId);
 
     assert.equal(failed?.status, "failed");
     assert.equal(updated.candidate.status, "evaluating");
@@ -142,17 +142,17 @@ describe("ImprovementService ledger lifecycle", () => {
   });
 
   it("marks an activation stable after 20 qualifying watch-window signals", async () => {
-    const harness = createHarness();
-    const candidate = createRoutingCandidate(harness.service);
+    const harness = await createHarness();
+    const candidate = await createRoutingCandidate(harness.service);
     const activation = await harness.service.requestImprovementActivation(candidate.candidateId, "operator-1");
     const approval = resolveApproval(harness, activation.approvalId, {
       decision: "approve",
       resolvedBy: "operator-1",
     });
-    harness.service.handleActivationApprovalResolution(approval);
+    await harness.service.handleActivationApprovalResolution(approval);
 
     for (let index = 0; index < 20; index += 1) {
-      harness.service.recordPromptLabRegressionCompletionSignal({
+      await harness.service.recordPromptLabRegressionCompletionSignal({
         regressionRunId: `regression-neutral-${index}`,
         packId: "pack-routing",
         capability: "provider-balance",
@@ -162,20 +162,20 @@ describe("ImprovementService ledger lifecycle", () => {
       });
     }
 
-    const stable = harness.service.getImprovementActivation(activation.activationId);
+    const stable = await harness.service.getImprovementActivation(activation.activationId);
     assert.equal(stable.watchStatus, "stable");
     assert.equal(stable.watchSignalCount, 20);
   });
 
   it("reconciles active watch windows to stable after the watch deadline expires", async () => {
-    const harness = createHarness();
-    const candidate = createRoutingCandidate(harness.service);
+    const harness = await createHarness();
+    const candidate = await createRoutingCandidate(harness.service);
     const activation = await harness.service.requestImprovementActivation(candidate.candidateId, "operator-1");
     const approval = resolveApproval(harness, activation.approvalId, {
       decision: "approve",
       resolvedBy: "operator-1",
     });
-    harness.service.handleActivationApprovalResolution(approval);
+    await harness.service.handleActivationApprovalResolution(approval);
     harness.storage.gatewaySql
       .prepare(
         `
@@ -191,22 +191,22 @@ describe("ImprovementService ledger lifecycle", () => {
 
     (harness.service as unknown as { reconcileActiveWatchWindows: () => void }).reconcileActiveWatchWindows();
 
-    const stable = harness.service.getImprovementActivation(activation.activationId);
+    const stable = await harness.service.getImprovementActivation(activation.activationId);
     assert.equal(stable.watchStatus, "stable");
   });
 
   it("fails the activation when the first watch-window regression cannot restore the snapshot", async () => {
-    const harness = createHarness();
-    const candidate = createRoutingCandidate(harness.service);
+    const harness = await createHarness();
+    const candidate = await createRoutingCandidate(harness.service);
     const activation = await harness.service.requestImprovementActivation(candidate.candidateId, "operator-1");
     const approval = resolveApproval(harness, activation.approvalId, {
       decision: "approve",
       resolvedBy: "operator-1",
     });
-    harness.service.handleActivationApprovalResolution(approval);
+    await harness.service.handleActivationApprovalResolution(approval);
     harness.state.failRoutingRestore = true;
 
-    harness.service.recordPromptLabRegressionCompletionSignal({
+    await harness.service.recordPromptLabRegressionCompletionSignal({
       regressionRunId: "regression-negative-1",
       packId: "pack-routing",
       capability: "provider-balance",
@@ -215,7 +215,7 @@ describe("ImprovementService ledger lifecycle", () => {
       latencyDeltaMs: 42,
     });
 
-    const failed = harness.service.getImprovementActivation(activation.activationId);
+    const failed = await harness.service.getImprovementActivation(activation.activationId);
     assert.equal(failed.status, "failed");
     assert.equal(
       harness.published.some((event) => event.eventType === "improvement_activation_pause_failed"),
@@ -223,8 +223,8 @@ describe("ImprovementService ledger lifecycle", () => {
     );
   });
 
-  it("never synthesizes candidates from improvement_internal audit signals", () => {
-    const harness = createHarness();
+  it("never synthesizes candidates from improvement_internal audit signals", async () => {
+    const harness = await createHarness();
     (
       harness.service as unknown as {
         recordImprovementSignal: (input: Record<string, unknown>) => unknown;
@@ -244,12 +244,12 @@ describe("ImprovementService ledger lifecycle", () => {
       evidenceRefs: [],
     });
 
-    assert.equal(harness.service.listImprovementCandidates(20).length, 0);
+    assert.equal((await harness.service.listImprovementCandidates(20)).length, 0);
   });
 
   it("records skill revision candidates as proposal-gated ledger evidence", async () => {
-    const harness = createHarness();
-    const result = harness.service.recordSkillEvaluationSignal({
+    const harness = await createHarness();
+    const result = await harness.service.recordSkillEvaluationSignal({
       skillId: "planning",
       skillName: "Planning",
       runId: "skill-eval-1",
@@ -262,7 +262,7 @@ describe("ImprovementService ledger lifecycle", () => {
     assert.ok(result?.signal);
     assert.ok(result.candidate);
     assert.equal(result.candidate.kind, "skill_revision");
-    const detail = harness.service.getImprovementCandidateDetail(result.candidate.candidateId);
+    const detail = await harness.service.getImprovementCandidateDetail(result.candidate.candidateId);
     assert.equal(detail.candidate.status, "ready_for_approval");
     assert.equal(detail.latestEvaluation?.evaluatorKind, "skill_eval_scorecard");
     assert.equal(detail.currentRevision?.candidateRef.refType, "skill_evaluation_run");
@@ -272,8 +272,8 @@ describe("ImprovementService ledger lifecycle", () => {
     );
   });
 
-  it("records agentic diagnostics as idempotent review-first improvement signals", () => {
-    const harness = createHarness();
+  it("records agentic diagnostics as idempotent review-first improvement signals", async () => {
+    const harness = await createHarness();
     const task = harness.storage.tasks.create({
       workspaceId: "default",
       title: "Agentic run with timeout",
@@ -299,8 +299,8 @@ describe("ImprovementService ledger lifecycle", () => {
       createdAt: "2026-05-05T12:00:00.000Z",
     } as const;
 
-    const signal = harness.service.recordAgenticDiagnosticSignal({ task, diagnostic });
-    const replay = harness.service.recordAgenticDiagnosticSignal({ task, diagnostic });
+    const signal = await harness.service.recordAgenticDiagnosticSignal({ task, diagnostic });
+    const replay = await harness.service.recordAgenticDiagnosticSignal({ task, diagnostic });
 
     assert.ok(signal);
     assert.ok(replay);
@@ -322,9 +322,9 @@ describe("ImprovementService ledger lifecycle", () => {
   });
 
   it("persists agentic bridge proposals as governed candidates with mutationApplied=false", async () => {
-    const harness = createHarness();
+    const harness = await createHarness();
 
-    const [result] = harness.service.recordAgenticImprovementProposals(
+    const [result] = await harness.service.recordAgenticImprovementProposals(
       {
         missingCapabilities: [
           {
@@ -352,7 +352,7 @@ describe("ImprovementService ledger lifecycle", () => {
     assert.equal(result.signal.signalKind, "agentic_improvement_proposal");
     assert.equal(result.signal.metadata?.mutationApplied, false);
 
-    const detail = harness.service.getImprovementCandidateDetail(result.candidate.candidateId);
+    const detail = await harness.service.getImprovementCandidateDetail(result.candidate.candidateId);
     assert.equal(detail.currentRevision?.candidateRef.metadata?.mutationApplied, false);
     assert.equal(
       (detail.currentRevision?.candidateRef.metadata?.proposedChange as { mutationApplied?: boolean } | undefined)
@@ -367,9 +367,9 @@ describe("ImprovementService ledger lifecycle", () => {
   });
 
   it("keeps review-first skill drift proposals from mutating through direct activation", async () => {
-    const harness = createHarness();
+    const harness = await createHarness();
 
-    const [result] = harness.service.recordAgenticImprovementProposals({
+    const [result] = await harness.service.recordAgenticImprovementProposals({
       skillDrifts: [
         {
           skillId: "safe-self-improvement",
@@ -384,7 +384,7 @@ describe("ImprovementService ledger lifecycle", () => {
 
     assert.ok(result?.candidate);
     assert.equal(result.candidate.kind, "skill_revision");
-    const detail = harness.service.getImprovementCandidateDetail(result.candidate.candidateId);
+    const detail = await harness.service.getImprovementCandidateDetail(result.candidate.candidateId);
     assert.equal(detail.currentRevision?.candidateRef.metadata?.mutationApplied, false);
     await assert.rejects(
       () => harness.service.requestImprovementActivation(result.candidate!.candidateId, "operator-1"),
@@ -392,10 +392,10 @@ describe("ImprovementService ledger lifecycle", () => {
     );
   });
 
-  it("deduplicates capability gaps and promotes repeated gaps into repair candidates", () => {
-    const harness = createHarness();
+  it("deduplicates capability gaps and promotes repeated gaps into repair candidates", async () => {
+    const harness = await createHarness();
 
-    const first = harness.service.recordCapabilityGapEvent({
+    const first = await harness.service.recordCapabilityGapEvent({
       sessionId: "sess-gap",
       causeClass: "tool_exists_but_not_in_profile",
       requestedTool: "web.search",
@@ -405,7 +405,7 @@ describe("ImprovementService ledger lifecycle", () => {
       recoveryOptions: ["switch_tool_profile", "retry_once", "invalid-option" as never],
       confidence: 0.4,
     });
-    const second = harness.service.recordCapabilityGapEvent({
+    const second = await harness.service.recordCapabilityGapEvent({
       sessionId: "sess-gap",
       causeClass: "tool_exists_but_not_in_profile",
       requestedTool: "web.search",
@@ -422,21 +422,21 @@ describe("ImprovementService ledger lifecycle", () => {
     assert.equal(second.confidence, 0.8);
     assert.equal(second.repairCandidateId !== undefined, true);
 
-    const [candidate] = harness.service.listRepairCandidates(10);
+    const [candidate] = await harness.service.listRepairCandidates(10);
     assert.ok(candidate);
     assert.equal(candidate.causeClass, "tool_exists_but_not_in_profile");
     assert.equal(candidate.eventCount, 2);
     assert.equal(candidate.validationStatus, "not_started");
     assert.equal(candidate.suggestedPatch?.includes("web.search"), true);
 
-    const invalidStatus = harness.service.updateRepairCandidateValidation(candidate.candidateId, {
+    const invalidStatus = await harness.service.updateRepairCandidateValidation(candidate.candidateId, {
       status: "unexpected" as never,
       summary: "invalid statuses normalize",
     });
     assert.equal(invalidStatus.validationStatus, "not_started");
     assert.equal(invalidStatus.validationSummary, "invalid statuses normalize");
 
-    const passed = harness.service.updateRepairCandidateValidation(candidate.candidateId, {
+    const passed = await harness.service.updateRepairCandidateValidation(candidate.candidateId, {
       status: "passed",
       summary: "validated by replay",
     });
@@ -445,7 +445,7 @@ describe("ImprovementService ledger lifecycle", () => {
   });
 
   it("exposes scheduler, replay-run, and signal read paths without mutating disabled jobs", async () => {
-    const harness = createHarness();
+    const harness = await createHarness();
 
     harness.service.startScheduler();
     harness.service.startScheduler();
@@ -477,8 +477,8 @@ describe("ImprovementService ledger lifecycle", () => {
       )
       .run({ startedAt });
 
-    harness.service.markInterruptedDecisionReplayRuns();
-    const [run] = harness.service.listDecisionReplayRuns(5);
+    await harness.service.markInterruptedDecisionReplayRuns();
+    const [run] = await harness.service.listDecisionReplayRuns(5);
 
     assert.equal(run.runId, "run-interrupted");
     assert.equal(run.status, "failed");
@@ -488,7 +488,7 @@ describe("ImprovementService ledger lifecycle", () => {
       true,
     );
 
-    const signal = harness.service.recordPromptLabRegressionCompletionSignal({
+    const signal = await harness.service.recordPromptLabRegressionCompletionSignal({
       regressionRunId: "regression-signal-read",
       packId: "pack-routing",
       capability: "provider-balance",
@@ -498,17 +498,19 @@ describe("ImprovementService ledger lifecycle", () => {
     });
     assert.ok(signal);
 
-    assert.equal(harness.service.getImprovementSignal(signal.signalId).signalId, signal.signalId);
+    assert.equal((await harness.service.getImprovementSignal(signal.signalId)).signalId, signal.signalId);
     assert.equal(
-      harness.service.listImprovementSignals(10, "prompt-lab").some((item) => item.signalId === signal.signalId),
+      (await harness.service.listImprovementSignals(10, "prompt-lab")).some(
+        (item) => item.signalId === signal.signalId,
+      ),
       true,
     );
-    assert.equal(harness.service.listImprovementCandidates(10, "prompt-lab").length >= 1, true);
-    assert.throws(() => harness.service.getImprovementSignal("missing-signal"), /Improvement signal not found/);
+    assert.equal((await harness.service.listImprovementCandidates(10, "prompt-lab")).length >= 1, true);
+    await assert.rejects(harness.service.getImprovementSignal("missing-signal"), /Improvement signal not found/);
   });
 
-  it("enriches weekly reports with routing gaps, strategy tags, proposals, and specialists", () => {
-    const harness = createHarness();
+  it("enriches weekly reports with routing gaps, strategy tags, proposals, and specialists", async () => {
+    const harness = await createHarness();
     const runId = "run-report-enrichment";
     const reportId = "report-enrichment";
     const createdAt = "2026-05-10T03:00:00.000Z";
@@ -530,7 +532,7 @@ describe("ImprovementService ledger lifecycle", () => {
       createdAt,
     };
 
-    harness.service.recordCapabilityGapEvent({
+    await harness.service.recordCapabilityGapEvent({
       sessionId: "sess-gap-report",
       causeClass: "tool_exists_but_not_in_profile",
       requestedTool: "browser.search",
@@ -583,7 +585,7 @@ describe("ImprovementService ledger lifecycle", () => {
         createdAt,
       });
 
-    const report = harness.service.getImprovementReport(reportId);
+    const report = await harness.service.getImprovementReport(reportId);
 
     assert.equal(report.routingGapSummary?.totalEvents, 1);
     assert.deepEqual(report.routingGapSummary?.topRequestedTools, ["browser.search"]);
@@ -607,29 +609,32 @@ describe("ImprovementService ledger lifecycle", () => {
       report.strategyTags?.some((item) => item.tag === "repair"),
       true,
     );
-    assert.equal(harness.service.listImprovementReports(10)[0]?.reportId, reportId);
-    assert.equal(harness.service.getDecisionReplayRun(runId).report?.reportId, reportId);
-    assert.throws(() => harness.service.getImprovementReport("missing-report"), /not found/);
+    assert.equal((await harness.service.listImprovementReports(10))[0]?.reportId, reportId);
+    assert.equal((await harness.service.getDecisionReplayRun(runId)).report?.reportId, reportId);
+    await assert.rejects(harness.service.getImprovementReport("missing-report"), /not found/);
   });
 
   it("routes curator lifecycle actions through review-first state transitions", async () => {
-    const harness = createHarness();
-    const candidate = createRoutingCandidate(harness.service);
+    const harness = await createHarness();
+    const candidate = await createRoutingCandidate(harness.service);
 
-    const validated = harness.service.validateImprovementCandidate(candidate.candidateId, {
+    const validated = await harness.service.validateImprovementCandidate(candidate.candidateId, {
       actorId: "qa-operator",
       reason: "ready for approval",
     });
     assert.equal(validated.status, "validated");
     assert.equal(validated.mutationApplied, false);
 
-    const approved = harness.service.approveImprovementCandidate(candidate.candidateId, {
+    const approved = await harness.service.approveImprovementCandidate(candidate.candidateId, {
       actorId: "qa-operator",
       reason: "evaluation passed",
     });
     assert.equal(approved.status, "approved");
 
-    assert.throws(() => harness.service.promoteImprovementCandidate(candidate.candidateId), /Promotion is review-only/);
+    await assert.rejects(
+      harness.service.promoteImprovementCandidate(candidate.candidateId),
+      /Promotion is review-only/,
+    );
 
     const activated = await harness.service.activateImprovementCandidate(candidate.candidateId, {
       actorId: "qa-operator",
@@ -637,29 +642,29 @@ describe("ImprovementService ledger lifecycle", () => {
     assert.equal(activated.status, "approval_pending");
     assert.ok(activated.approvalId);
 
-    const rejectCandidate = createRoutingCandidate(harness.service, "reject");
-    const rejected = harness.service.rejectImprovementCandidate(rejectCandidate.candidateId, {
+    const rejectCandidate = await createRoutingCandidate(harness.service, "reject");
+    const rejected = await harness.service.rejectImprovementCandidate(rejectCandidate.candidateId, {
       actorId: "qa-operator",
       reason: "not useful",
     });
     assert.equal(rejected.status, "rejected");
 
-    const snoozeCandidate = createRoutingCandidate(harness.service, "snooze");
-    const snoozed = harness.service.snoozeImprovementCandidate(snoozeCandidate.candidateId, {
+    const snoozeCandidate = await createRoutingCandidate(harness.service, "snooze");
+    const snoozed = await harness.service.snoozeImprovementCandidate(snoozeCandidate.candidateId, {
       actorId: "qa-operator",
       reason: "wait for more evidence",
     });
     assert.equal(snoozed.status, "snoozed");
     assert.ok(snoozed.review.candidate.suppressionUntil);
     assert.equal(
-      harness.service.getCuratorReviewItem(snoozeCandidate.candidateId).candidate.candidateId,
+      (await harness.service.getCuratorReviewItem(snoozeCandidate.candidateId)).candidate.candidateId,
       snoozeCandidate.candidateId,
     );
   });
 
   it("runs manual replay against persisted traces with model judge scores and report events", async () => {
     const chatCompletionRequests: unknown[] = [];
-    const harness = createHarness({
+    const harness = await createHarness({
       createChatCompletion: async (request) => {
         chatCompletionRequests.push(request);
         return {
@@ -731,7 +736,7 @@ describe("ImprovementService ledger lifecycle", () => {
       });
 
     const result = await harness.service.runImprovementReplayManually({ sampleSize: 5 });
-    const detail = harness.service.getDecisionReplayRun(result.run.runId);
+    const detail = await harness.service.getDecisionReplayRun(result.run.runId);
 
     assert.equal(detail.run.status, "completed");
     assert.equal(detail.run.totalCandidates, 2);
@@ -770,7 +775,7 @@ describe("ImprovementService ledger lifecycle", () => {
   });
 
   it("persists failed replay status and emits failure events when replay scoring crashes", async () => {
-    const harness = createHarness({
+    const harness = await createHarness({
       readTranscriptOrEmpty: async () => {
         throw new Error("transcript store offline");
       },
@@ -796,7 +801,7 @@ describe("ImprovementService ledger lifecycle", () => {
       () => harness.service.runImprovementReplayManually({ sampleSize: 1 }),
       /transcript store offline/,
     );
-    const [failedRun] = harness.service.listDecisionReplayRuns(1);
+    const [failedRun] = await harness.service.listDecisionReplayRuns(1);
 
     assert.ok(failedRun);
     assert.equal(failedRun.status, "failed");
@@ -813,7 +818,7 @@ describe("ImprovementService ledger lifecycle", () => {
   });
 });
 
-function createHarness(callbackOverrides: Partial<ImprovementServiceCallbacks> = {}): Harness {
+async function createHarness(callbackOverrides: Partial<ImprovementServiceCallbacks> = {}): Promise<Harness> {
   const rootDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "gc-improvement-ledger-"));
   const transcriptsDir = path.join(rootDir, "transcripts");
   const auditDir = path.join(rootDir, "audit");
@@ -834,7 +839,7 @@ function createHarness(callbackOverrides: Partial<ImprovementServiceCallbacks> =
   };
 
   const ctx: ServiceContext = {
-    storage,
+    storage: createLocalAsyncStorage(storage),
     cronSpecOwner: {
       reconcileSpec: async (cronSpec) => storage.cronJobs.reconcileSpec(cronSpec),
     },
@@ -842,7 +847,7 @@ function createHarness(callbackOverrides: Partial<ImprovementServiceCallbacks> =
     llmService: {} as never,
     policyEngine: {} as never,
     gatewaySql: storage.gatewaySql,
-    publishRealtime: (eventType, source, payload) => {
+    publishRealtime: async (eventType, source, payload) => {
       published.push({ eventType, source, payload });
     },
     requireFeatureEnabled: () => undefined,
@@ -885,6 +890,7 @@ function createHarness(callbackOverrides: Partial<ImprovementServiceCallbacks> =
   };
 
   const service = new ImprovementService(ctx, callbacks);
+  await service.initialize();
   const harness: Harness = {
     rootDir,
     storage,
@@ -898,8 +904,8 @@ function createHarness(callbackOverrides: Partial<ImprovementServiceCallbacks> =
   return harness;
 }
 
-function createRoutingCandidate(service: ImprovementService, suffix = "1") {
-  service.recordPromptLabRegressionCompletionSignal({
+async function createRoutingCandidate(service: ImprovementService, suffix = "1") {
+  await service.recordPromptLabRegressionCompletionSignal({
     regressionRunId: `regression-seed-${suffix}`,
     packId: "pack-routing",
     capability: suffix === "1" ? "provider-balance" : `provider-balance-${suffix}`,
@@ -907,7 +913,7 @@ function createRoutingCandidate(service: ImprovementService, suffix = "1") {
     passDelta: -0.2,
     latencyDeltaMs: 35,
   });
-  const [candidate] = service.listImprovementCandidates(10);
+  const [candidate] = await service.listImprovementCandidates(10);
   assert.ok(candidate);
   return candidate;
 }

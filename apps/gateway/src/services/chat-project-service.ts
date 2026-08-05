@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import type { ChatProjectRecord, RealtimeEvent } from "@goatcitadel/contracts";
 import { ValidationError, type ChatProjectImportResult } from "@goatcitadel/contracts";
 import { assertExistingPathRealpathAllowed } from "@goatcitadel/policy-engine";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
 
 const execFileAsync = promisify(execFile);
@@ -20,7 +20,7 @@ export interface ChatProjectServiceContext {
     topic: string,
     payload: Record<string, unknown>,
     options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
-  ): void;
+  ): Promise<unknown>;
 }
 
 /**
@@ -30,26 +30,26 @@ export interface ChatProjectServiceContext {
 export class ChatProjectService {
   constructor(private readonly ctx: ChatProjectServiceContext) {}
 
-  listChatProjects(
+  async listChatProjects(
     view: "active" | "archived" | "all" = "active",
     limit = 300,
     workspaceId?: string,
-  ): ChatProjectRecord[] {
-    return this.ctx.storage.chatProjects.list(view, limit, this.ctx.normalizeWorkspaceId(workspaceId));
+  ): Promise<ChatProjectRecord[]> {
+    return await this.ctx.storage.chatProjects.list(view, limit, this.ctx.normalizeWorkspaceId(workspaceId));
   }
 
-  createChatProject(input: {
+  async createChatProject(input: {
     workspaceId?: string;
     name: string;
     description?: string;
     workspacePath: string;
     color?: string;
-  }): ChatProjectRecord {
-    const created = this.ctx.storage.chatProjects.create({
+  }): Promise<ChatProjectRecord> {
+    const created = await this.ctx.storage.chatProjects.create({
       ...input,
       workspaceId: this.ctx.normalizeWorkspaceId(input.workspaceId),
     });
-    this.ctx.publishRealtime("system", "chat", {
+    await this.ctx.publishRealtime("system", "chat", {
       type: "chat_project_created",
       projectId: created.projectId,
       name: created.name,
@@ -107,12 +107,12 @@ export class ChatProjectService {
     }
 
     const relativeWorkspacePath = normalizeWorkspaceRelativePath(workspaceRoot, materializedAbsolutePath);
-    const existing = this.ctx.storage.chatProjects
-      .list("all", 1000, workspaceId)
-      .find((project) => project.workspacePath === relativeWorkspacePath);
+    const existing = (await this.ctx.storage.chatProjects.list("all", 1000, workspaceId)).find(
+      (project) => project.workspacePath === relativeWorkspacePath,
+    );
 
     const project = existing
-      ? this.ctx.storage.chatProjects.updateWithRevision(
+      ? await this.ctx.storage.chatProjects.updateWithRevision(
           existing.projectId,
           {
             workspaceId,
@@ -121,7 +121,7 @@ export class ChatProjectService {
           },
           existing.revision,
         )
-      : this.ctx.storage.chatProjects.create({
+      : await this.ctx.storage.chatProjects.create({
           workspaceId,
           name: desiredName,
           workspacePath: relativeWorkspacePath,
@@ -131,7 +131,7 @@ export class ChatProjectService {
               : `Imported from ${input.sourcePath?.trim()}`,
         });
 
-    this.ctx.publishRealtime("system", "chat", {
+    await this.ctx.publishRealtime("system", "chat", {
       type: "chat_project_imported",
       projectId: project.projectId,
       name: project.name,
@@ -149,7 +149,7 @@ export class ChatProjectService {
     };
   }
 
-  updateChatProject(
+  async updateChatProject(
     projectId: string,
     input: {
       workspaceId?: string;
@@ -159,8 +159,8 @@ export class ChatProjectService {
       color?: string;
     },
     expectedRevision: number,
-  ): ChatProjectRecord {
-    const updated = this.ctx.storage.chatProjects.updateWithRevision(
+  ): Promise<ChatProjectRecord> {
+    const updated = await this.ctx.storage.chatProjects.updateWithRevision(
       projectId,
       {
         ...input,
@@ -168,7 +168,7 @@ export class ChatProjectService {
       },
       expectedRevision,
     );
-    this.ctx.publishRealtime("system", "chat", {
+    await this.ctx.publishRealtime("system", "chat", {
       type: "chat_project_updated",
       projectId: updated.projectId,
       name: updated.name,
@@ -177,28 +177,28 @@ export class ChatProjectService {
     return updated;
   }
 
-  archiveChatProject(projectId: string, expectedRevision: number): ChatProjectRecord {
-    const archived = this.ctx.storage.chatProjects.archiveWithRevision(projectId, expectedRevision);
-    this.ctx.publishRealtime("system", "chat", {
+  async archiveChatProject(projectId: string, expectedRevision: number): Promise<ChatProjectRecord> {
+    const archived = await this.ctx.storage.chatProjects.archiveWithRevision(projectId, expectedRevision);
+    await this.ctx.publishRealtime("system", "chat", {
       type: "chat_project_archived",
       projectId: archived.projectId,
     });
     return archived;
   }
 
-  restoreChatProject(projectId: string, expectedRevision: number): ChatProjectRecord {
-    const restored = this.ctx.storage.chatProjects.restoreWithRevision(projectId, expectedRevision);
-    this.ctx.publishRealtime("system", "chat", {
+  async restoreChatProject(projectId: string, expectedRevision: number): Promise<ChatProjectRecord> {
+    const restored = await this.ctx.storage.chatProjects.restoreWithRevision(projectId, expectedRevision);
+    await this.ctx.publishRealtime("system", "chat", {
       type: "chat_project_restored",
       projectId: restored.projectId,
     });
     return restored;
   }
 
-  hardDeleteChatProject(projectId: string, expectedRevision: number): boolean {
-    const deleted = this.ctx.storage.chatProjects.hardDeleteWithRevision(projectId, expectedRevision);
+  async hardDeleteChatProject(projectId: string, expectedRevision: number): Promise<boolean> {
+    const deleted = await this.ctx.storage.chatProjects.hardDeleteWithRevision(projectId, expectedRevision);
     if (deleted) {
-      this.ctx.publishRealtime("system", "chat", {
+      await this.ctx.publishRealtime("system", "chat", {
         type: "chat_project_deleted",
         projectId,
       });

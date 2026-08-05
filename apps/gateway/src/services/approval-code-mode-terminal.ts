@@ -1,13 +1,13 @@
 import type { ApprovalRequest } from "@goatcitadel/contracts";
 import type { ApprovalLifecycleHost } from "./approval-lifecycle-service.js";
 
-export function markCodeModeRunTerminalForPendingApproval(
+export async function markCodeModeRunTerminalForPendingApproval(
   host: ApprovalLifecycleHost,
   approval: ApprovalRequest,
-  pendingAction: ReturnType<ApprovalLifecycleHost["storage"]["pendingApprovalActions"]["find"]>,
+  pendingAction: Awaited<ReturnType<ApprovalLifecycleHost["storage"]["pendingApprovalActions"]["find"]>>,
   status: "rejected" | "expired",
   details: Record<string, unknown>,
-): { runId?: string; pendingRunId?: string | null } | undefined {
+): Promise<{ runId?: string; pendingRunId?: string | null } | undefined> {
   if (!pendingAction || pendingAction.actionType !== "code_mode.run" || pendingAction.resolutionStatus !== "pending") {
     return undefined;
   }
@@ -23,7 +23,7 @@ export function markCodeModeRunTerminalForPendingApproval(
       pendingRunId: null,
     });
   }
-  const existing = host.storage.codeModeRuns.find(runId);
+  const existing = await host.storage.codeModeRuns.find(runId);
   if (!existing || existing.status !== "approval_pending") {
     if (status !== "expired") {
       return undefined;
@@ -47,7 +47,7 @@ export function markCodeModeRunTerminalForPendingApproval(
   }
   const finishedAt = new Date().toISOString();
   const pendingRunIdDetail = pendingRunId === runId ? undefined : { pendingRunId: pendingRunId ?? null };
-  host.storage.codeModeRuns.upsert({
+  await host.storage.codeModeRuns.upsert({
     ...existing,
     status,
     error: typeof details.reason === "string" ? details.reason : undefined,
@@ -59,13 +59,13 @@ export function markCodeModeRunTerminalForPendingApproval(
     finishedAt,
   });
   if (status === "expired") {
-    host.storage.pendingApprovalActions.markResolved(pendingAction.approvalId, "failed", {
+    await host.storage.pendingApprovalActions.markResolved(pendingAction.approvalId, "failed", {
       ...details,
       status,
       runId,
       ...(pendingRunIdDetail ?? {}),
     });
-    appendCodeModePendingActionRefused(host, approval, {
+    await appendCodeModePendingActionRefused(host, approval, {
       ...details,
       actionType: "code_mode.run",
       runId,
@@ -75,7 +75,7 @@ export function markCodeModeRunTerminalForPendingApproval(
       pendingExpiresAt: pendingAction.expiresAt,
       ...(pendingRunIdDetail ?? {}),
     });
-    enqueueCodeModeExpirationRealtime(host, approval, {
+    await enqueueCodeModeExpirationRealtime(host, approval, {
       runId,
       approvalId: approval.approvalId,
       status,
@@ -93,13 +93,13 @@ export function markCodeModeRunTerminalForPendingApproval(
   };
 }
 
-function markExpiredCodeModePendingActionWithoutRunUpdate(
+async function markExpiredCodeModePendingActionWithoutRunUpdate(
   host: ApprovalLifecycleHost,
   approval: ApprovalRequest,
-  pendingAction: ReturnType<ApprovalLifecycleHost["storage"]["pendingApprovalActions"]["find"]>,
+  pendingAction: Awaited<ReturnType<ApprovalLifecycleHost["storage"]["pendingApprovalActions"]["find"]>>,
   details: Record<string, unknown>,
   skipDetails: { errorCode: string; runId?: string; pendingRunId?: string | null; actualApprovalId?: string },
-): { runId?: string; pendingRunId?: string | null } | undefined {
+): Promise<{ runId?: string; pendingRunId?: string | null } | undefined> {
   if (!pendingAction || pendingAction.actionType !== "code_mode.run" || pendingAction.resolutionStatus !== "pending") {
     return undefined;
   }
@@ -112,15 +112,15 @@ function markExpiredCodeModePendingActionWithoutRunUpdate(
     ...(skipDetails.pendingRunId !== undefined ? { pendingRunId: skipDetails.pendingRunId } : {}),
     ...(skipDetails.actualApprovalId ? { actualApprovalId: skipDetails.actualApprovalId } : {}),
   };
-  host.storage.pendingApprovalActions.markResolved(pendingAction.approvalId, "failed", payload);
-  appendCodeModePendingActionRefused(host, approval, {
+  await host.storage.pendingApprovalActions.markResolved(pendingAction.approvalId, "failed", payload);
+  await appendCodeModePendingActionRefused(host, approval, {
     ...payload,
     actionType: "code_mode.run",
     approvalStatus: approval.status,
     approvalExpiresAt: approval.expiresAt,
     pendingExpiresAt: pendingAction.expiresAt,
   });
-  enqueueCodeModeExpirationRealtime(host, approval, {
+  await enqueueCodeModeExpirationRealtime(host, approval, {
     approvalId: approval.approvalId,
     status: "expired",
     error: typeof details.reason === "string" ? details.reason : "Code Mode approval expired before execution.",
@@ -134,12 +134,12 @@ function markExpiredCodeModePendingActionWithoutRunUpdate(
   };
 }
 
-function appendCodeModePendingActionRefused(
+async function appendCodeModePendingActionRefused(
   host: ApprovalLifecycleHost,
   approval: ApprovalRequest,
   payload: Record<string, unknown>,
-): void {
-  host.storage.approvalEvents.append({
+): Promise<void> {
+  await host.storage.approvalEvents.append({
     approvalId: approval.approvalId,
     eventType: "pending_action_refused",
     actorId: "system",
@@ -147,14 +147,14 @@ function appendCodeModePendingActionRefused(
   });
 }
 
-function enqueueCodeModeExpirationRealtime(
+async function enqueueCodeModeExpirationRealtime(
   host: ApprovalLifecycleHost,
   approval: ApprovalRequest,
   payload: Record<string, unknown>,
-): void {
+): Promise<void> {
   const runId = readStringValue(payload.runId);
   const errorCode = readStringValue(payload.errorCode);
-  host.enqueueApprovalObservabilityEffects(approval.approvalId, [
+  await host.enqueueApprovalObservabilityEffects(approval.approvalId, [
     {
       operationId: `code_mode.expired.realtime:${runId ?? errorCode ?? "approval"}`,
       delivery: {

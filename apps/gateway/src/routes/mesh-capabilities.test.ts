@@ -6,7 +6,12 @@ import {
   canonicalJsonString,
   type MeshCapabilityDescriptor,
 } from "@goatcitadel/contracts";
-import { Storage, computeMeshCapabilityDescriptorSha256 } from "@goatcitadel/storage";
+import {
+  Storage,
+  computeMeshCapabilityDescriptorSha256,
+  createSqliteAsyncStorage,
+  type AsyncStorage,
+} from "@goatcitadel/storage";
 import { authPlugin } from "../plugins/auth.js";
 import { MeshCapabilityActivationService } from "../services/mesh-capability-activation-service.js";
 import { MeshCapabilityInvocationService } from "../services/mesh-capability-invocation-service.js";
@@ -63,15 +68,41 @@ function admitNode(storage: Storage, nodeId: string, token: string): void {
   });
 }
 
+async function admitNodeAsync(storage: AsyncStorage, nodeId: string, token: string): Promise<void> {
+  const now = new Date().toISOString();
+  await storage.mesh.upsertNode({
+    nodeId,
+    transport: "lan",
+    status: "online",
+    capabilities: [],
+    tlsFingerprint: `sha256:${nodeId}`,
+    joinedAt: now,
+    lastSeenAt: now,
+  });
+  await storage.mesh.issueJoinToken(token, "2099-01-01T00:00:00.000Z");
+  expect(await storage.mesh.consumeJoinToken(token, nodeId, now)).toBe(true);
+  await storage.meshCapabilityNodeAdmissions.admit({
+    workspaceId: "default",
+    nodeId,
+    expectedAdmissionGeneration: 0,
+    joinTokenSha256: createHash("sha256").update(token).digest("hex"),
+    mtlsRequired: true,
+    tlsFingerprint: `sha256:${nodeId}`,
+    admittedByActorId: "operator-a",
+    idempotencyKey: `admit:${nodeId}`,
+  });
+}
+
 async function buildHarness(authMode: "token" | "none" = "token"): Promise<{
   app: FastifyInstance;
-  storage: Storage;
+  storage: AsyncStorage;
   service: MeshCapabilityPublicationService;
   activation: MeshCapabilityActivationService;
   invocation: MeshCapabilityInvocationService;
 }> {
-  const storage = createStorage();
-  admitNode(storage, "node-a", NODE_TOKEN);
+  const rawStorage = createStorage();
+  admitNode(rawStorage, "node-a", NODE_TOKEN);
+  const storage = createSqliteAsyncStorage(rawStorage);
   const service = new MeshCapabilityPublicationService({ storage });
   const activation = new MeshCapabilityActivationService({ storage, publication: service });
   const invocation = new MeshCapabilityInvocationService({
@@ -378,11 +409,14 @@ describe("mesh capability publication routes", () => {
       requestedBody.approval.approvalId,
     );
 
-    storage.approvals.resolve(requestedBody.approval.approvalId, {
+    await storage.approvals.resolve(requestedBody.approval.approvalId, {
       decision: "approve",
       resolvedBy: "operator-approver",
     });
-    activation.executeApprovedActivation({ workspaceId: "default", approvalId: requestedBody.approval.approvalId });
+    await activation.executeApprovedActivation({
+      workspaceId: "default",
+      approvalId: requestedBody.approval.approvalId,
+    });
 
     const inspection = await app.inject({
       method: "GET",
@@ -409,7 +443,7 @@ describe("mesh capability publication routes", () => {
     expect(revoked.statusCode).toBe(200);
     expect((revoked.json() as { replayed: boolean }).replayed).toBe(false);
     // Callability flips before the next read.
-    expect(storage.meshCapabilityPublications.listCallableActivations("default")).toHaveLength(0);
+    expect(await storage.meshCapabilityPublications.listCallableActivations("default")).toHaveLength(0);
     const revokedAgain = await app.inject({
       method: "POST",
       url: `/api/v1/mesh/capabilities/activations/${requestedBody.activationId}/revoke`,
@@ -599,18 +633,18 @@ describe("mesh capability invocation routes (M3)", () => {
       }
     ).manifest;
     const entry = manifest.entries[0]!;
-    const requested = harness.activation.requestActivation({
+    const requested = await harness.activation.requestActivation({
       workspaceId: "default",
       capabilityId: entry.capabilityId,
       manifestSha256: manifest.manifestSha256,
       entrySha256: entry.entrySha256,
       actorId: "operator-a",
     });
-    harness.storage.approvals.resolve(requested.approval.approvalId, {
+    await harness.storage.approvals.resolve(requested.approval.approvalId, {
       decision: "approve",
       resolvedBy: "operator-approver",
     });
-    const applied = harness.activation.executeApprovedActivation({
+    const applied = await harness.activation.executeApprovedActivation({
       workspaceId: "default",
       approvalId: requested.approval.approvalId,
     });
@@ -641,9 +675,9 @@ describe("mesh capability invocation routes (M3)", () => {
       {},
     );
     await new Promise((resolve) => setTimeout(resolve, 25));
-    const invocationId = harness.storage.mesh
-      .listReplicationEvents(50)
-      .find((event) => event.eventType === "mesh_capability_invocation_dispatch")!.payload.invocationId as string;
+    const invocationId = (await harness.storage.mesh.listReplicationEvents(50)).find(
+      (event) => event.eventType === "mesh_capability_invocation_dispatch",
+    )!.payload.invocationId as string;
     return {
       invocationId,
       args,
@@ -752,7 +786,7 @@ describe("mesh capability invocation routes (M3)", () => {
 
   it("rejects operator credentials, foreign nodes, anonymous callers, and malformed bodies", async () => {
     const harness = await buildHarness();
-    admitNode(harness.storage, "node-b", "join-node-b");
+    await admitNodeAsync(harness.storage, "node-b", "join-node-b");
     const { invocationId, generation, dispatchPromise } = await dispatchInvocation(harness);
     const payload = settlementPayload(invocationId, generation, { status: "ok" });
 

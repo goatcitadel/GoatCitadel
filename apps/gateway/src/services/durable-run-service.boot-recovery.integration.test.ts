@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Storage } from "@goatcitadel/storage";
+import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import { DurableRunService } from "./durable-run-service.js";
 import type { ServiceContext } from "./service-context.js";
 
@@ -40,6 +40,7 @@ describe("DurableRunService boot recovery integration", () => {
 
     const storage = new Storage({ dbPath, transcriptsDir, auditDir });
     openStorages.push(storage);
+    const asyncStorage = createSqliteAsyncStorage(storage);
 
     // 1) Seed an interrupted durable run with an expired lease
     const interrupted = storage.durableRuns.createRun({
@@ -75,7 +76,7 @@ describe("DurableRunService boot recovery integration", () => {
     // 4) Build a ServiceContext pointing to the real storage
     const infoLogs: Array<{ data: unknown; msg: string }> = [];
     const ctx = {
-      storage,
+      storage: asyncStorage,
       config: {
         assistant: {
           durable: {
@@ -91,7 +92,7 @@ describe("DurableRunService boot recovery integration", () => {
       requireFeatureEnabled: () => {},
       isFeatureEnabled: () => true,
       normalizeWorkspaceId: (workspaceId?: string) => workspaceId ?? "default",
-      gatewaySql: storage.gatewaySql,
+      gatewaySql: asyncStorage.gatewaySql,
       llmService: {},
       policyEngine: {},
       logger: {
@@ -109,8 +110,8 @@ describe("DurableRunService boot recovery integration", () => {
       backgroundTasks: new Set(),
       workflowRegistry: {
         executeWorkflow: vi.fn(async (run) => {
-          const current = storage.durableRuns.getRun(run.runId);
-          storage.durableRuns.updateRun({
+          const current = await asyncStorage.durableRuns.getRun(run.runId);
+          await asyncStorage.durableRuns.updateRun({
             runId: run.runId,
             status: "completed",
             finishedAt: new Date().toISOString(),
@@ -129,7 +130,7 @@ describe("DurableRunService boot recovery integration", () => {
     // 7) Poll until lastBootRecovery is populated (boot recovery completes asynchronously)
     const deadline = Date.now() + 5_000;
     while (Date.now() < deadline) {
-      if (service.getDurableDiagnostics().lastBootRecovery) {
+      if ((await service.getDurableDiagnostics()).lastBootRecovery) {
         break;
       }
       await new Promise((resolve) => setTimeout(resolve, 25));
@@ -144,7 +145,7 @@ describe("DurableRunService boot recovery integration", () => {
     const resumeLog = infoLogs.find((entry) => entry.msg.includes("resumed after restart"));
     expect(resumeLog, "expected info log containing 'resumed after restart'").toBeDefined();
 
-    const diag = service.getDurableDiagnostics();
+    const diag = await service.getDurableDiagnostics();
     expect(diag.lastBootRecovery?.resumedCount).toBe(1);
     expect(diag.lastBootRecovery?.prunedOrphanCheckpoints).toBeGreaterThanOrEqual(1);
 

@@ -23,7 +23,7 @@ import {
   isDurableRunStatus,
   isChatTurnWaitingStatus,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { buildLocalBusinessResearchAnnotationFromEvidence } from "./local-business-research-service.js";
 
 const DEFAULT_WORKSPACE_ID = "default";
@@ -54,7 +54,7 @@ export class CoworkAgenticProjectionService {
     return Boolean(this.storage.chatDelegationRuns && this.storage.chatDelegationSteps);
   }
 
-  public listAgenticRuns(input: CoworkAgenticProjectionListInput = {}): AgenticRunListItem[] {
+  public async listAgenticRuns(input: CoworkAgenticProjectionListInput = {}): Promise<AgenticRunListItem[]> {
     if (!this.storage.chatDelegationRuns?.listRecent || !this.shouldProjectSurface(input.surface)) {
       return [];
     }
@@ -62,22 +62,23 @@ export class CoworkAgenticProjectionService {
       return [];
     }
     const workspaceId = normalizeWorkspaceId(input.workspaceId);
-    const runs = this.storage.chatDelegationRuns.listRecent({
+    const runs = await this.storage.chatDelegationRuns.listRecent({
       workspaceId,
       sessionId: input.sessionId,
       limit: Math.max(1, Math.min(input.limit ?? 100, 500)),
     });
     const parentTurnIds = runs.map((run) => parseTurnIdFromChatOrchestrationTaskId(run.taskId));
-    const traceMap = readOptional(() => this.storage.chatTurnTraces.getByTurnIds(parentTurnIds)) ?? new Map();
+    const traceMap = (await readOptional(() => this.storage.chatTurnTraces.getByTurnIds(parentTurnIds))) ?? new Map();
     const durableRunIds = [...traceMap.values()].map((trace) => trace.durable?.runId);
-    const durableMap = readOptional(() => this.storage.durableRuns.getRunsByIds(durableRunIds)) ?? new Map();
-    const toolRunMap = readOptional(() => this.storage.chatToolRuns?.listByTurnIds([...traceMap.keys()])) ?? new Map();
-    const ctx = new ProjectionReadContext(this.storage, traceMap, durableMap, toolRunMap);
+    const durableMap = (await readOptional(() => this.storage.durableRuns.getRunsByIds(durableRunIds))) ?? new Map();
+    const toolRunMap =
+      (await readOptional(() => this.storage.chatToolRuns?.listByTurnIds([...traceMap.keys()]))) ?? new Map();
+    const ctx = new ProjectionReadContext(traceMap, durableMap, toolRunMap);
     const items: AgenticRunListItem[] = [];
     for (const run of runs) {
-      const initialSteps = readOptional(() => this.storage.chatDelegationSteps?.listByRun(run.runId)) ?? [];
-      const runCtx = initialSteps.length > 0 ? this.buildReadContext(run, initialSteps) : ctx;
-      const surface = this.resolveRunSurface(run, runCtx);
+      const initialSteps = (await readOptional(() => this.storage.chatDelegationSteps?.listByRun(run.runId))) ?? [];
+      const runCtx = initialSteps.length > 0 ? await this.buildReadContext(run, initialSteps) : ctx;
+      const surface = await this.resolveRunSurface(run, runCtx);
       if (input.surface && surface !== input.surface) {
         continue;
       }
@@ -113,21 +114,24 @@ export class CoworkAgenticProjectionService {
     return items;
   }
 
-  public getAgenticRunTree(runId: string, options?: { workspaceId?: string }): AgenticRunTreeResponse | undefined {
+  public async getAgenticRunTree(
+    runId: string,
+    options?: { workspaceId?: string },
+  ): Promise<AgenticRunTreeResponse | undefined> {
     if (!this.storage.chatDelegationRuns || !this.storage.chatDelegationSteps) {
       return undefined;
     }
-    const run = readOptional(() => this.storage.chatDelegationRuns!.get(runId));
+    const run = await readOptional(() => this.storage.chatDelegationRuns!.get(runId));
     if (!run) {
       return undefined;
     }
 
     // Bulk-fetch every related row ONCE so neither workspace resolution, reconciliation,
     // nor projection re-issues per-step trace/durable/tool-run queries.
-    const initialSteps = readOptional(() => this.storage.chatDelegationSteps!.listByRun(runId)) ?? [];
-    const ctx = this.buildReadContext(run, initialSteps);
+    const initialSteps = (await readOptional(() => this.storage.chatDelegationSteps!.listByRun(runId))) ?? [];
+    const ctx = await this.buildReadContext(run, initialSteps);
 
-    const ownerWorkspaceId = this.resolveRunWorkspaceId(run, initialSteps, ctx);
+    const ownerWorkspaceId = await this.resolveRunWorkspaceId(run, initialSteps, ctx);
     if (!ownerWorkspaceId) {
       return undefined;
     }
@@ -293,8 +297,8 @@ export class CoworkAgenticProjectionService {
     return !surface || surface === "cowork";
   }
 
-  private resolveRunSurface(run: ChatDelegationRunRecord, ctx: ProjectionReadContext): ChatMode {
-    const plan = readOptional(() =>
+  private async resolveRunSurface(run: ChatDelegationRunRecord, ctx: ProjectionReadContext): Promise<ChatMode> {
+    const plan = await readOptional(() =>
       run.executionPlanId && this.storage.chatExecutionPlans
         ? this.storage.chatExecutionPlans.get(run.executionPlanId)
         : undefined,
@@ -306,24 +310,24 @@ export class CoworkAgenticProjectionService {
     return trace?.mode ?? "cowork";
   }
 
-  private resolveRunWorkspaceId(
+  private async resolveRunWorkspaceId(
     run: ChatDelegationRunRecord,
     steps: ChatDelegationStepRecord[],
     ctx: ProjectionReadContext,
-  ): string | undefined {
-    const sessionWorkspaceId = this.resolveSessionWorkspaceId(run.sessionId);
+  ): Promise<string | undefined> {
+    const sessionWorkspaceId = await this.resolveSessionWorkspaceId(run.sessionId);
     if (sessionWorkspaceId) {
       return sessionWorkspaceId;
     }
 
-    const taskWorkspaceId = normalizeOptionalWorkspaceId(this.storage.tasks?.find(run.taskId)?.workspaceId);
+    const taskWorkspaceId = normalizeOptionalWorkspaceId((await this.storage.tasks?.find(run.taskId))?.workspaceId);
     if (taskWorkspaceId) {
       return taskWorkspaceId;
     }
 
     const parentTurnId = parseTurnIdFromChatOrchestrationTaskId(run.taskId);
     const parentTrace = this.resolveParentTurnTrace(run, ctx);
-    const parentTraceWorkspaceId = this.resolveTraceWorkspaceId(parentTrace, {
+    const parentTraceWorkspaceId = await this.resolveTraceWorkspaceId(parentTrace, {
       sessionId: run.sessionId,
       turnId: parentTurnId,
     });
@@ -343,13 +347,13 @@ export class CoworkAgenticProjectionService {
 
     const linkedWorkspaceIds = new Set<string>();
     for (const step of steps) {
-      const childSessionWorkspaceId = this.resolveSessionWorkspaceId(step.childSessionId);
+      const childSessionWorkspaceId = await this.resolveSessionWorkspaceId(step.childSessionId);
       if (childSessionWorkspaceId) {
         linkedWorkspaceIds.add(childSessionWorkspaceId);
       }
 
       const childTrace = ctx.getTrace(step.childTurnId);
-      const childTraceWorkspaceId = this.resolveTraceWorkspaceId(childTrace, {
+      const childTraceWorkspaceId = await this.resolveTraceWorkspaceId(childTrace, {
         sessionId: step.childSessionId,
         turnId: step.childTurnId,
       });
@@ -368,17 +372,17 @@ export class CoworkAgenticProjectionService {
     return linkedWorkspaceIds.size === 1 ? [...linkedWorkspaceIds][0] : undefined;
   }
 
-  private resolveSessionWorkspaceId(sessionId: string | undefined): string | undefined {
+  private async resolveSessionWorkspaceId(sessionId: string | undefined): Promise<string | undefined> {
     if (!sessionId) {
       return undefined;
     }
-    return normalizeOptionalWorkspaceId(this.storage.chatSessionMeta?.get(sessionId)?.workspaceId);
+    return normalizeOptionalWorkspaceId((await this.storage.chatSessionMeta?.get(sessionId))?.workspaceId);
   }
 
-  private resolveTraceWorkspaceId(
+  private async resolveTraceWorkspaceId(
     trace: ChatTurnTraceRecord | undefined,
     expected: { sessionId?: string; turnId?: string },
-  ): string | undefined {
+  ): Promise<string | undefined> {
     if (!trace) {
       return undefined;
     }
@@ -390,7 +394,10 @@ export class CoworkAgenticProjectionService {
     if (expectedTurnId && trace.turnId !== expectedTurnId) {
       return undefined;
     }
-    return normalizeOptionalWorkspaceId(trace.guidance?.workspaceId) ?? this.resolveSessionWorkspaceId(trace.sessionId);
+    return (
+      normalizeOptionalWorkspaceId(trace.guidance?.workspaceId) ??
+      (await this.resolveSessionWorkspaceId(trace.sessionId))
+    );
   }
 
   private resolveParentTurnTrace(
@@ -629,23 +636,27 @@ export class CoworkAgenticProjectionService {
     return ctx.getToolRuns(trace.turnId);
   }
 
-  private buildReadContext(run: ChatDelegationRunRecord, steps: ChatDelegationStepRecord[]): ProjectionReadContext {
+  private async buildReadContext(
+    run: ChatDelegationRunRecord,
+    steps: ChatDelegationStepRecord[],
+  ): Promise<ProjectionReadContext> {
     const turnIds: Array<string | undefined> = [parseTurnIdFromChatOrchestrationTaskId(run.taskId)];
     const durableRunIds: Array<string | undefined> = [];
     for (const step of steps) {
       turnIds.push(step.childTurnId);
       durableRunIds.push(step.durableRunId);
     }
-    const traceMap = readOptional(() => this.storage.chatTurnTraces.getByTurnIds(turnIds)) ?? new Map();
+    const traceMap = (await readOptional(() => this.storage.chatTurnTraces.getByTurnIds(turnIds))) ?? new Map();
     // The parent durable run is linked through the parent trace, which is only known once traces load.
     for (const trace of traceMap.values()) {
       if (trace.durable?.runId) {
         durableRunIds.push(trace.durable.runId);
       }
     }
-    const durableMap = readOptional(() => this.storage.durableRuns.getRunsByIds(durableRunIds)) ?? new Map();
-    const toolRunMap = readOptional(() => this.storage.chatToolRuns?.listByTurnIds([...traceMap.keys()])) ?? new Map();
-    return new ProjectionReadContext(this.storage, traceMap, durableMap, toolRunMap);
+    const durableMap = (await readOptional(() => this.storage.durableRuns.getRunsByIds(durableRunIds))) ?? new Map();
+    const toolRunMap =
+      (await readOptional(() => this.storage.chatToolRuns?.listByTurnIds([...traceMap.keys()]))) ?? new Map();
+    return new ProjectionReadContext(traceMap, durableMap, toolRunMap);
   }
 }
 
@@ -654,7 +665,6 @@ class ProjectionReadContext {
   private readonly toolRunCache = new Map<string, ChatToolRunRecord[]>();
 
   public constructor(
-    private readonly storage: CoworkAgenticProjectionStorage,
     private readonly traceMap: Map<string, ChatTurnTraceRecord>,
     private readonly durableMap: Map<string, DurableRunRecord> = new Map(),
     preloadedToolRuns?: Map<string, ChatToolRunRecord[]>,
@@ -690,9 +700,7 @@ class ProjectionReadContext {
     if (cached) {
       return cached;
     }
-    const records = readOptional(() => this.storage.chatToolRuns?.listByTurn(turnId)) ?? [];
-    this.toolRunCache.set(turnId, records);
-    return records;
+    return [];
   }
 }
 
@@ -1273,9 +1281,9 @@ function readRecordString(payload: Record<string, unknown>, key: string): string
   return typeof value === "string" ? value : undefined;
 }
 
-function readOptional<T>(read: () => T | undefined): T | undefined {
+async function readOptional<T>(read: () => T | undefined | Promise<T | undefined>): Promise<T | undefined> {
   try {
-    return read();
+    return await read();
   } catch (error) {
     if (error instanceof NotFoundError || /not found/i.test(error instanceof Error ? error.message : String(error))) {
       return undefined;

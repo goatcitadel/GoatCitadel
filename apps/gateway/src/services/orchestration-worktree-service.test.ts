@@ -317,7 +317,7 @@ describe("OrchestrationWorktreeService", () => {
     });
     vi.useFakeTimers();
     try {
-      expect(() => restarted.ensureLeaseForExecution(runs.getRun("run-restart"))).toThrow(
+      await expect(restarted.ensureLeaseForExecution(runs.getRun("run-restart"))).rejects.toThrow(
         "remains owned by owner-before-restart generation 1",
       );
       expect(runs.getRun("run-restart")).toMatchObject({
@@ -326,7 +326,7 @@ describe("OrchestrationWorktreeService", () => {
       });
 
       nowMs = Date.parse("2026-04-12T00:00:00.200Z");
-      const adopted = restarted.ensureLeaseForExecution(runs.getRun("run-restart"));
+      const adopted = await restarted.ensureLeaseForExecution(runs.getRun("run-restart"));
       expect(adopted).toMatchObject({
         worktreeLeaseOwnerId: "owner-after-restart",
         worktreeLeaseGeneration: 2,
@@ -338,7 +338,7 @@ describe("OrchestrationWorktreeService", () => {
       });
 
       nowMs = Date.parse("2026-04-12T00:00:00.230Z");
-      vi.advanceTimersByTime(30);
+      await vi.advanceTimersByTimeAsync(30);
       expect(leases.get(worktreePath)).toMatchObject({
         ownerId: "owner-after-restart",
         generation: 2,
@@ -399,7 +399,7 @@ describe("OrchestrationWorktreeService", () => {
 
       for (let tick = 0; tick < 10; tick += 1) {
         nowMs += 30;
-        vi.advanceTimersByTime(30);
+        await vi.advanceTimersByTimeAsync(30);
       }
 
       const current = leases.get(worktreePath);
@@ -428,7 +428,7 @@ describe("OrchestrationWorktreeService", () => {
       const renewCountBeforeClose = renewRunLease.mock.calls.length;
       service.close();
       nowMs += 300;
-      vi.advanceTimersByTime(300);
+      await vi.advanceTimersByTimeAsync(300);
       expect(renewRunLease).toHaveBeenCalledTimes(renewCountBeforeClose);
     } finally {
       service?.close();
@@ -507,7 +507,7 @@ describe("OrchestrationWorktreeService", () => {
 
       const renewSpy = vi.spyOn(leases, "renew");
       nowMs += 20;
-      vi.advanceTimersByTime(30);
+      await vi.advanceTimersByTimeAsync(30);
       expect(renewSpy).toHaveBeenCalledTimes(1);
       expect(fenceWorktreeLease).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -525,7 +525,7 @@ describe("OrchestrationWorktreeService", () => {
         }),
       );
       nowMs += 300;
-      vi.advanceTimersByTime(300);
+      await vi.advanceTimersByTimeAsync(300);
       expect(renewSpy).toHaveBeenCalledTimes(1);
 
       await expect(

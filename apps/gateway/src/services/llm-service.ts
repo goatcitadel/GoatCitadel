@@ -1038,7 +1038,7 @@ export class LlmService {
     const requestedOutputTokenCap = outputCapField
       ? (input.outputCapRecovery?.requestedOutputTokenCap ?? outputCapField.value)
       : undefined;
-    const reservation = this.modelUsageAccounting?.prepareDispatch({
+    const reservation = await this.modelUsageAccounting?.prepareDispatch({
       source: "llm_service",
       attribution: input.attribution,
       requestedProviderId: input.requestedProviderId,
@@ -1078,17 +1078,17 @@ export class LlmService {
     try {
       pending = fetch(input.target.url, requestInit);
     } catch (error) {
-      reservation?.abandon();
+      await reservation?.abandon();
       rethrowIfProviderNetworkBlocked(error);
       throw error;
     }
     let usage: ModelUsageAttemptHandle | undefined;
     try {
-      usage = reservation?.accept();
+      usage = await reservation?.accept();
     } catch (cause) {
       dispatchAbort.abort();
       void pending.catch(() => undefined);
-      reservation?.markDispatchUnknown();
+      await reservation?.markDispatchUnknown();
       const error = new ModelUsageDispatchUncertainError(
         "Provider dispatch outcome is uncertain; same-generation retry is blocked pending reconciliation",
         { eventId: reservation?.eventId, cause },
@@ -1136,7 +1136,7 @@ export class LlmService {
       );
     } catch (error) {
       if (error instanceof ModelUsageSettlementError) throw error;
-      usage?.fail(error);
+      await usage?.fail(error);
       rethrowIfProviderNetworkBlocked(error);
       throw error;
     }
@@ -1177,7 +1177,7 @@ export class LlmService {
       providerId: input.resolved.provider.providerId,
       model: input.model,
     });
-    input.dispatched.usage?.fail(outputCapError);
+    await input.dispatched.usage?.fail(outputCapError);
     const retryPayload = {
       ...input.dispatched.effectivePayload,
       [outputCapField.field]: decision.effectiveOutputTokenCap,
@@ -1239,7 +1239,7 @@ export class LlmService {
       redirect: "manual",
       dispatcher: input.target.dispatcher,
     };
-    const reservation = this.modelUsageAccounting?.prepareDispatch({
+    const reservation = await this.modelUsageAccounting?.prepareDispatch({
       source: "llm_service",
       attribution: input.attribution,
       requestedProviderId: input.requestedProviderId,
@@ -1255,17 +1255,17 @@ export class LlmService {
     try {
       pending = fetch(input.target.url, requestInit);
     } catch (error) {
-      reservation?.abandon();
+      await reservation?.abandon();
       rethrowIfProviderNetworkBlocked(error);
       throw error;
     }
     let usage: ModelUsageAttemptHandle | undefined;
     try {
-      usage = reservation?.accept();
+      usage = await reservation?.accept();
     } catch (cause) {
       dispatchAbort.abort();
       void pending.catch(() => undefined);
-      reservation?.markDispatchUnknown();
+      await reservation?.markDispatchUnknown();
       const error = new ModelUsageDispatchUncertainError(
         "Provider dispatch outcome is uncertain; same-generation retry is blocked pending reconciliation",
         { eventId: reservation?.eventId, cause },
@@ -1276,7 +1276,7 @@ export class LlmService {
       return { response: await pending, usage };
     } catch (error) {
       if (error instanceof ModelUsageSettlementError) throw error;
-      usage?.fail(error);
+      await usage?.fail(error);
       rethrowIfProviderNetworkBlocked(error);
       throw error;
     }
@@ -1409,7 +1409,7 @@ export class LlmService {
           model,
           operation,
         });
-        const terminal = dispatched.usage?.succeed();
+        const terminal = await dispatched.usage?.succeed();
         const withUsage = terminal ? { ...imageResponse, modelUsageEventIds: [terminal.eventId] } : imageResponse;
         return attachImageGenerationEvidence(withUsage, request, {
           providerId: resolved.provider.providerId,
@@ -1419,7 +1419,7 @@ export class LlmService {
         });
       } catch (error) {
         if (error instanceof ModelUsageSettlementError) throw error;
-        dispatched.usage?.fail(error);
+        await dispatched.usage?.fail(error);
         throw error;
       }
     }
@@ -1470,7 +1470,7 @@ export class LlmService {
         model,
         operation,
       });
-      const terminal = dispatched.usage?.succeed();
+      const terminal = await dispatched.usage?.succeed();
       const withUsage = terminal ? { ...imageResponse, modelUsageEventIds: [terminal.eventId] } : imageResponse;
       return attachImageGenerationEvidence(withUsage, request, {
         providerId: resolved.provider.providerId,
@@ -1480,7 +1480,7 @@ export class LlmService {
       });
     } catch (error) {
       if (error instanceof ModelUsageSettlementError) throw error;
-      dispatched.usage?.fail(error);
+      await dispatched.usage?.fail(error);
       throw error;
     }
   }
@@ -1552,7 +1552,7 @@ export class LlmService {
           providerId: resolved.provider.providerId,
           model,
         });
-        dispatched.usage?.succeed();
+        await dispatched.usage?.succeed();
       } catch (error) {
         if (error instanceof ModelUsageSettlementError) throw error;
         const surfacedError = normalizeOpenAICodexImageResponseError(error);
@@ -1560,7 +1560,7 @@ export class LlmService {
           providerId: resolved.provider.providerId,
           model,
         });
-        dispatched.usage?.fail(surfacedError);
+        await dispatched.usage?.fail(surfacedError);
         throw surfacedError;
       }
     }
@@ -1776,7 +1776,7 @@ export class LlmService {
               errorText,
             ),
           );
-          dispatched.usage?.fail(metadataError);
+          await dispatched.usage?.fail(metadataError);
           const retryParentEventId = dispatched.usage?.eventId;
           const fallbackPayload = { ...dispatched.effectivePayload };
           delete fallbackPayload.metadata;
@@ -1834,11 +1834,11 @@ export class LlmService {
       });
       observeProviderUsageWithTrustedEstimate(dispatched.usage, providerCompletion.usage, completion.usage);
       dispatched.usage?.observeNormalized({ effectiveModelId: completion.model });
-      dispatched.usage?.succeed();
+      await dispatched.usage?.succeed();
       return eventIds.length > 0 ? { ...completion, modelUsageEventIds: eventIds } : completion;
     } catch (error) {
       if (error instanceof ModelUsageSettlementError) throw error;
-      dispatched.usage?.fail(error);
+      await dispatched.usage?.fail(error);
       throw error;
     }
   }
@@ -1919,7 +1919,7 @@ export class LlmService {
                 errorText,
               ),
             );
-            dispatched.usage?.fail(metadataError);
+            await dispatched.usage?.fail(metadataError);
             const retryParentEventId = dispatched.usage?.eventId;
             const fallbackPayload = { ...dispatched.effectivePayload };
             delete fallbackPayload.metadata;
@@ -1971,7 +1971,7 @@ export class LlmService {
             providerTerminal = true;
           },
         })) {
-          dispatched.usage?.renewLease();
+          await dispatched.usage?.renewLease();
           const providerErrorText = readOpenAiCompatibleStreamErrorText(event);
           if (providerErrorText) {
             const failure = attachProviderUsageEvidence(createProviderStreamError(providerErrorText), event);
@@ -2014,7 +2014,7 @@ export class LlmService {
           yield attachStreamUsageEvents(chunk, eventIds);
         }
         if (!providerTerminal) throw new Error("Chat completion stream ended before a terminal marker");
-        dispatched.usage?.succeed();
+        await dispatched.usage?.succeed();
         terminal = true;
         return;
       } catch (error) {
@@ -2022,11 +2022,11 @@ export class LlmService {
           terminal = true;
           throw error;
         }
-        dispatched.usage?.fail(error);
+        await dispatched.usage?.fail(error);
         terminal = true;
         throw error;
       } finally {
-        if (!terminal) dispatched.usage?.cancel(new Error("stream consumer cancelled"));
+        if (!terminal) await dispatched.usage?.cancel(new Error("stream consumer cancelled"));
       }
     }
   }
@@ -2143,7 +2143,7 @@ export class LlmService {
         });
         observeProviderUsageWithTrustedEstimate(dispatched.usage, rawCompletion.usage, completion.usage);
         dispatched.usage?.observeNormalized({ effectiveModelId: completion.model });
-        const terminal = dispatched.usage?.succeed();
+        const terminal = await dispatched.usage?.succeed();
         const eventIds = [...(dispatched.priorModelUsageEventIds ?? [])];
         if (terminal) eventIds.push(terminal.eventId);
         return eventIds.length > 0 ? { ...completion, modelUsageEventIds: eventIds } : completion;
@@ -2153,7 +2153,7 @@ export class LlmService {
           providerId: resolved.provider.providerId,
           model,
         });
-        dispatched.usage?.fail(error);
+        await dispatched.usage?.fail(error);
         throw error;
       }
     }
@@ -2245,7 +2245,7 @@ export class LlmService {
           });
           observeProviderUsageWithTrustedEstimate(accounting, providerCompletion.usage, completion.usage);
           accounting?.observeNormalized({ effectiveModelId: completion.model });
-          accounting?.succeed();
+          await accounting?.succeed();
           terminal = true;
           yield attachStreamUsageEvents(completion as Record<string, unknown>, eventIds);
           return;
@@ -2270,7 +2270,7 @@ export class LlmService {
         };
 
         for await (const event of streamJsonSseResponse(dispatched.response, { forceSse: shouldParseAsSse })) {
-          accounting?.renewLease();
+          await accounting?.renewLease();
           const eventType = typeof event.type === "string" ? event.type : "";
           if (eventType === "response.output_text.delta") {
             emittedVisibleChunk = true;
@@ -2389,7 +2389,7 @@ export class LlmService {
           }
         }
         if (!providerTerminal) throw new Error("Responses stream ended before response.completed");
-        accounting?.succeed();
+        await accounting?.succeed();
         terminal = true;
         return;
       } catch (error) {
@@ -2401,11 +2401,11 @@ export class LlmService {
           providerId: resolved.provider.providerId,
           model,
         });
-        accounting?.fail(error);
+        await accounting?.fail(error);
         terminal = true;
         throw error;
       } finally {
-        if (!terminal) accounting?.cancel(new Error("stream consumer cancelled"));
+        if (!terminal) await accounting?.cancel(new Error("stream consumer cancelled"));
       }
     }
   }

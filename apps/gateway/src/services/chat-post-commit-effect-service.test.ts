@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CommitmentClassification } from "@goatcitadel/contracts";
-import { Storage } from "@goatcitadel/storage";
+import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import type { BackgroundReviewService } from "./background-review-service.js";
 import {
   ChatPostCommitEffectService,
@@ -352,6 +352,28 @@ describe("ChatPostCommitEffectService D3 authority and safe disposition", () => 
     expect(metadataText).not.toContain("PreparedSkillMutationPlan");
   });
 
+  it("retries idempotent retained evidence after an asynchronous publication failure", async () => {
+    const storage = createStorage();
+    seedEffectRun(storage, "effect-background-realtime-retry", "background_review", "worker-current");
+    storage.systemSettings.set("background_review_turns_since_v1", 4);
+    const publishRealtime = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("retained realtime unavailable"))
+      .mockResolvedValue(undefined);
+    const service = createService(storage, {
+      authority: authorityHarness([], { readDurableRunVersion: (runId) => storage.durableRuns.getRun(runId).version })
+        .port,
+      publishRealtime,
+    });
+    const execution = context("effect-background-realtime-retry", "worker-current");
+
+    await expect(service.execute(backgroundInput(), execution)).rejects.toThrow("retained realtime unavailable");
+    await expect(service.execute(backgroundInput(), execution)).resolves.toMatchObject({ status: "evidence_recorded" });
+
+    expect(publishRealtime).toHaveBeenCalledTimes(2);
+    expect(publishRealtime.mock.calls[0]?.[2]).toEqual(publishRealtime.mock.calls[1]?.[2]);
+  });
+
   it("replays an allowed background counter without re-guarding and terminalizes only the evidence stage", async () => {
     const storage = createStorage();
     seedEffectRun(storage, "effect-background-counter-replay", "background_review", "worker-current");
@@ -533,12 +555,13 @@ function createService(
     commitmentClassifier?: CommitmentClassifierService;
     backgroundReview?: BackgroundReviewService;
     isAutonomyDisabled?: () => boolean;
+    publishRealtime?: ChatPostCommitEffectServiceDeps["publishRealtime"];
     legacyMemoryMaintenance?: ReturnType<typeof vi.fn>;
     legacyRunRequest?: ReturnType<typeof vi.fn>;
   } = {},
 ): ChatPostCommitEffectService {
   const deps = {
-    storage,
+    storage: createSqliteAsyncStorage(storage),
     commitmentClassifier:
       overrides.commitmentClassifier ??
       ({
@@ -553,9 +576,9 @@ function createService(
       } as unknown as BackgroundReviewService),
     ...(overrides.authority ? { effectAuthority: overrides.authority } : {}),
     ...(!overrides.authority ? { allowUnfencedForTests: true as const } : {}),
-    isAutonomyDisabled: overrides.isAutonomyDisabled ?? (() => false),
+    isAutonomyDisabled: async () => overrides.isAutonomyDisabled?.() ?? false,
     isReplayScratchSession: () => false,
-    publishRealtime: vi.fn(),
+    publishRealtime: overrides.publishRealtime ?? vi.fn(async () => undefined),
     // Deliberately unsupported legacy dependencies: tests prove the service never calls them.
     memoryMaintenance: { noteSuccessfulRootTurnSync: overrides.legacyMemoryMaintenance },
     requestDurableRunProcessing: overrides.legacyRunRequest,
@@ -574,15 +597,15 @@ function authorityHarness(
     readDurableRunVersion?: (runId: string) => number;
   } = {},
 ) {
-  const predispatch = vi.fn(() => {
+  const predispatch = vi.fn(async () => {
     events.push("predispatch");
     return decisions.predispatch ?? "allowed";
   });
   const atomicStage: ChatPostCommitAtomicStageAuthorityPort = {
-    run<_TValue>(input, callback) {
+    async run<_TValue>(input, callback) {
       events.push("guard");
       const authorityDisposition = decisions.atomic ?? "allowed";
-      const callbackResult = callback({
+      const callbackResult = await callback({
         disposition: authorityDisposition,
         admission: { admissionId: "active-child-admission" },
         durableRunVersion: decisions.readDurableRunVersion?.(input.childRunId) ?? 1,

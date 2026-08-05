@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { ChatSendMessageRequest } from "@goatcitadel/contracts";
-import type { SessionMutationAdmissionRecord, Storage } from "@goatcitadel/storage";
+import type { SessionMutationAdmissionRecord, AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { HeartbeatOccurrenceAdmissionRequest, HeartbeatOccurrenceRecord } from "@goatcitadel/storage";
 import type {
   ActiveTurnAdmission,
@@ -65,8 +65,8 @@ const INERT_REQUEST_LEASE_HEARTBEAT: TurnAdmissionHeartbeatHandle = Object.freez
 export class SessionControlRuntimeOwner {
   public constructor(private readonly service: SessionControlService) {}
 
-  public admitOperatorChatTurn(input: AdmitRuntimeOwnedChatTurnInput): ActiveTurnAdmission {
-    return this.service.admitOperatorChatTurn({
+  public async admitOperatorChatTurn(input: AdmitRuntimeOwnedChatTurnInput): Promise<ActiveTurnAdmission> {
+    return await this.service.admitOperatorChatTurn({
       ...input,
       runtimeOwnerId: `chat-turn-request:${randomUUID()}`,
     });
@@ -89,7 +89,7 @@ export class SessionControlRuntimeOwner {
       runtimeOwnerId: `chat-turn-request:${randomUUID()}`,
     });
     try {
-      return this.service.admitOperatorChatTurn(ownedInput);
+      return await this.service.admitOperatorChatTurn(ownedInput);
     } catch (error) {
       if (error instanceof DecisionCommittedHeartbeatAdmissionError) {
         await recover(error.recovery);
@@ -106,7 +106,7 @@ export class SessionControlRuntimeOwner {
       }
     }
     try {
-      return this.service.admitOperatorChatTurn(ownedInput);
+      return await this.service.admitOperatorChatTurn(ownedInput);
     } catch (error) {
       if (error instanceof DecisionCommittedHeartbeatAdmissionError) {
         throw new DecisionCommittedHeartbeatAdmissionError(error.recovery);
@@ -115,8 +115,8 @@ export class SessionControlRuntimeOwner {
     }
   }
 
-  public admitChatTurn(input: AdmitRuntimeOwnedActorChatTurnInput): ActiveTurnAdmission {
-    return this.service.admitChatTurn({
+  public async admitChatTurn(input: AdmitRuntimeOwnedActorChatTurnInput): Promise<ActiveTurnAdmission> {
+    return await this.service.admitChatTurn({
       ...input,
       runtimeOwnerId: `chat-turn-request:${randomUUID()}`,
     });
@@ -127,14 +127,14 @@ export class SessionControlRuntimeOwner {
    * A process crash can therefore replay the same still-live lease, while an
    * unrelated request can never claim it by choosing a fresh runtime UUID.
    */
-  public admitSystemChatTurn(input: AdmitRuntimeOwnedSystemChatTurnInput): ActiveTurnAdmission {
+  public async admitSystemChatTurn(input: AdmitRuntimeOwnedSystemChatTurnInput): Promise<ActiveTurnAdmission> {
     const occurrenceId = input.occurrenceId.trim();
     if (!occurrenceId) throw new Error("System Chat turn admission requires an occurrence identity.");
     const runtimeOwnerId = `chat-turn-system:${createHash("sha256")
       .update(`${input.sessionId}\0${input.turnId}\0${occurrenceId}`)
       .digest("hex")}`;
     const { systemActorId, ...admissionInput } = input;
-    return this.service.admitChatTurn({
+    return await this.service.admitChatTurn({
       ...admissionInput,
       runtimeOwnerId,
       actor: { actorKind: "system", actorId: systemActorId },
@@ -170,7 +170,7 @@ export class SessionControlRuntimeOwner {
 
     let stopped = false;
     let failure: unknown;
-    const timer = setInterval(() => {
+    const timer = setInterval(async () => {
       if (stopped || failure) return;
       // Defence in depth only: unreachable while the pre-arm checks above hold. A
       // heartbeat must never be able to crash the host process, so stop cleanly
@@ -181,7 +181,7 @@ export class SessionControlRuntimeOwner {
         return;
       }
       try {
-        this.service.renewRequestLease(admission);
+        await this.service.renewRequestLease(admission);
       } catch (error) {
         failure = error;
         onFailure?.(error);
@@ -200,12 +200,12 @@ export class SessionControlRuntimeOwner {
     };
   }
 
-  public renewRequestLease(admission: ActiveTurnAdmission): ActiveTurnAdmission {
-    return this.service.renewRequestLease(admission);
+  public async renewRequestLease(admission: ActiveTurnAdmission): Promise<ActiveTurnAdmission> {
+    return await this.service.renewRequestLease(admission);
   }
 
-  public bindDurableRun(admission: ActiveTurnAdmission, durableRunId: string): void {
-    this.service.bindDurableRun(admission, durableRunId);
+  public async bindDurableRun(admission: ActiveTurnAdmission, durableRunId: string): Promise<void> {
+    await this.service.bindDurableRun(admission, durableRunId);
   }
 
   public withDurableClaim(
@@ -226,18 +226,18 @@ export class SessionControlRuntimeOwner {
     };
   }
 
-  public assertActiveTurnWrite(admission: ActiveTurnAdmission): void {
-    this.service.assertActiveTurnWrite(admission);
+  public async assertActiveTurnWrite(admission: ActiveTurnAdmission): Promise<void> {
+    await this.service.assertActiveTurnWrite(admission);
   }
 
-  public closeTurnWrite(input: Parameters<SessionControlService["closeTurnWrite"]>[0]): void {
-    this.service.closeTurnWrite(input);
+  public async closeTurnWrite(input: Parameters<SessionControlService["closeTurnWrite"]>[0]): Promise<void> {
+    await this.service.closeTurnWrite(input);
   }
 
-  public cancelExpiredUnboundTurnAdmissions(
+  public async cancelExpiredUnboundTurnAdmissions(
     input: Parameters<SessionControlService["cancelExpiredUnboundTurnAdmissions"]>[0],
-  ): string[] {
-    return this.service.cancelExpiredUnboundTurnAdmissions(input);
+  ): Promise<string[]> {
+    return await this.service.cancelExpiredUnboundTurnAdmissions(input);
   }
 
   // ---------------------------------------------------------------------------
@@ -334,14 +334,14 @@ export function getSessionControlRuntimeOwner(storage: Storage): SessionControlR
   return created;
 }
 
-export function cancelExpiredUnboundChatTurnAdmissionsOnBoot(
+export async function cancelExpiredUnboundChatTurnAdmissionsOnBoot(
   owner: Pick<SessionControlRuntimeOwner, "cancelExpiredUnboundTurnAdmissions">,
   correlationId: string,
-): string[] {
+): Promise<string[]> {
   const cancelled: string[] = [];
   const limit = 100;
   for (;;) {
-    const batch = owner.cancelExpiredUnboundTurnAdmissions({
+    const batch = await owner.cancelExpiredUnboundTurnAdmissions({
       actorId: "system:gateway-startup",
       idempotencyKeyPrefix: "gateway-startup:expired-unbound-chat-turn",
       correlationId,

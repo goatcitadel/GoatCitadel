@@ -69,27 +69,27 @@ describe("HX-407 external source lifecycle service", () => {
     ]);
     expect(JSON.stringify(created)).toContain(ROOT);
 
-    const list = harness.service.list("workspace-1", ACTOR);
+    const list = await harness.service.list("workspace-1", ACTOR);
     const serialized = JSON.stringify(list);
     expect(list.items).toHaveLength(1);
     expect(serialized).not.toContain(ROOT);
     expect(serialized).not.toContain(ACTOR.actorId);
     expect(serialized).not.toContain("snapshot-1");
-    expect(harness.service.list("workspace-1", OTHER_ACTOR).items).toEqual([]);
-    expect(() => harness.service.get("workspace-1", created.source.sourceId, OTHER_ACTOR)).toThrow(
+    expect((await harness.service.list("workspace-1", OTHER_ACTOR)).items).toEqual([]);
+    await expect(harness.service.get("workspace-1", created.source.sourceId, OTHER_ACTOR)).rejects.toThrow(
       expect.objectContaining<Partial<ExternalSourceServiceError>>({ code: "not_found" }),
     );
-    expect(harness.service.list("workspace-1", { actorId: ACTOR.actorId, source: "basic" }).items).toEqual([]);
+    expect((await harness.service.list("workspace-1", { actorId: ACTOR.actorId, source: "basic" })).items).toEqual([]);
   });
 
-  it("applies the list cap after exact actor ownership filtering", () => {
+  it("applies the list cap after exact actor ownership filtering", async () => {
     const harness = createHarness();
     harness.configs.records.push(
       ...Array.from({ length: 100 }, (_, index) => sourceStub(`foreign-${index}`, "disabled", OTHER_ACTOR)),
       sourceStub("owned-after-foreign-page", "disabled", ACTOR),
     );
 
-    expect(harness.service.list("workspace-1", ACTOR).items.map((item) => item.sourceId)).toEqual([
+    expect((await harness.service.list("workspace-1", ACTOR)).items.map((item) => item.sourceId)).toEqual([
       "owned-after-foreign-page",
     ]);
   });
@@ -241,10 +241,10 @@ describe("HX-407 external source lifecycle service", () => {
       cursor: "opaque-cursor",
       limit: 25,
     };
-    const page = harness.service.listCatalog(created.source.sourceId, input, ACTOR);
+    const page = await harness.service.listCatalog(created.source.sourceId, input, ACTOR);
     expect(page).toEqual(harness.scans.page);
     expect(harness.scans.pageInputs).toEqual([{ ...input, sourceId: created.source.sourceId }]);
-    expect(() => harness.service.listCatalog(created.source.sourceId, input, OTHER_ACTOR)).toThrow(
+    await expect(harness.service.listCatalog(created.source.sourceId, input, OTHER_ACTOR)).rejects.toThrow(
       expect.objectContaining<Partial<ExternalSourceServiceError>>({ code: "not_found" }),
     );
   });
@@ -302,25 +302,25 @@ describe("HX-407 external source lifecycle service", () => {
     const harness = createHarness();
     const created = await harness.service.create(createInput(), ACTOR, liveSignal());
     harness.configs.throwOnFind = true;
-    expect(() => harness.service.get("workspace-1", created.source.sourceId, ACTOR)).toThrow(
+    await expect(harness.service.get("workspace-1", created.source.sourceId, ACTOR)).rejects.toThrow(
       expect.objectContaining<Partial<ExternalSourceServiceError>>({ code: "repository_failure" }),
     );
     harness.configs.throwOnFind = false;
     harness.scans.throwOnPage = true;
-    expect(() =>
+    await expect(
       harness.service.listCatalog(created.source.sourceId, { workspaceId: "workspace-1", scanId: "scan-1" }, ACTOR),
-    ).toThrow(expect.objectContaining<Partial<ExternalSourceServiceError>>({ code: "repository_failure" }));
+    ).rejects.toThrow(expect.objectContaining<Partial<ExternalSourceServiceError>>({ code: "repository_failure" }));
     harness.scans.throwOnPage = false;
     harness.scans.pageFailure = new TypeError("synthetic corrupt row shape");
-    expect(() =>
+    await expect(
       harness.service.listCatalog(created.source.sourceId, { workspaceId: "workspace-1", scanId: "scan-1" }, ACTOR),
-    ).toThrow(expect.objectContaining<Partial<ExternalSourceServiceError>>({ code: "repository_failure" }));
+    ).rejects.toThrow(expect.objectContaining<Partial<ExternalSourceServiceError>>({ code: "repository_failure" }));
     harness.scans.pageFailure = Object.assign(new TypeError("synthetic invalid cursor"), {
       code: "INVALID_EXTERNAL_SOURCE_CURSOR",
     });
-    expect(() =>
+    await expect(
       harness.service.listCatalog(created.source.sourceId, { workspaceId: "workspace-1", scanId: "scan-1" }, ACTOR),
-    ).toThrow(expect.objectContaining<Partial<ExternalSourceServiceError>>({ code: "invalid_cursor" }));
+    ).rejects.toThrow(expect.objectContaining<Partial<ExternalSourceServiceError>>({ code: "invalid_cursor" }));
   });
 
   it("validates the request actor before parsing any service-level input", async () => {

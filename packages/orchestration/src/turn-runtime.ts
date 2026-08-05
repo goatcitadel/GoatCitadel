@@ -48,7 +48,7 @@ export interface TurnRuntimeRequest {
   outputMessageId?: string;
   modelRouter?: ChatTurnTraceRecord["routing"]["modelRouter"];
   signal?: AbortSignal;
-  canonicalWriteFence?: <T>(work: () => T) => T;
+  canonicalWriteFence?: <T>(work: () => T | Promise<T>) => Promise<Awaited<T>>;
   /** Immutable server-owned capability upper bound for this admitted Chat turn. */
   capabilityProfile?: ChatTurnCapabilityProfileRecord;
   /** Original admitted content when a durable continuation adds answered-prompt context. */

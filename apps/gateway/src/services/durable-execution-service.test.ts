@@ -104,12 +104,12 @@ function createConnectorDeliveryLedger(options?: {
   let mutationRecord: Record<string, string> | undefined;
   let sideEffectRecord: ExternalSideEffectRunRecord | undefined;
   return {
-    runImmediateTransaction: <T>(work: () => T): T => {
+    runImmediateTransaction: async <T>(work: () => T | Promise<T>): Promise<T> => {
       const mutationStatusSnapshot = mutationStatus;
       const mutationRecordSnapshot = mutationRecord ? { ...mutationRecord } : undefined;
       const sideEffectRecordSnapshot = sideEffectRecord ? { ...sideEffectRecord } : undefined;
       try {
-        return work();
+        return await work();
       } catch (error) {
         mutationStatus = mutationStatusSnapshot;
         mutationRecord = mutationRecordSnapshot;
@@ -463,7 +463,7 @@ describe("durable Chat post-commit effect workflow", () => {
       return { status: "evaluated" };
     });
     const storage = {
-      runImmediateTransaction: <T>(work: () => T): T => work(),
+      runImmediateTransaction: async <T>(work: () => T | Promise<T>): Promise<T> => await work(),
       durableRuns: {
         getRun: vi.fn((runId: string) => (runId === parentRunId ? parent : child)),
         updateRun: vi.fn((input: { status: DurableRunRecord["status"]; updatedAt: string }) => {
@@ -730,7 +730,7 @@ describe("durable-execution-service orchestration workflow", () => {
     const run = buildRunWithPayload("missing.workflow", { version: "missing.v1" });
 
     await expect(registry.executeWorkflow(run)).rejects.toThrow("Unsupported durable workflow: missing.workflow");
-    expect(registry.isWorkflowRecoverable(run)).toEqual({
+    expect(await registry.isWorkflowRecoverable(run)).toEqual({
       recoverable: false,
       reason: "Unsupported durable workflow: missing.workflow",
     });
@@ -745,7 +745,7 @@ describe("durable-execution-service orchestration workflow", () => {
     const markWorkflowUnrecoverable = vi.fn(async () => undefined);
     const registry = createDeferredDurableWorkflowExecutorRegistry(() => ({
       executeWorkflow: vi.fn(async () => undefined),
-      isWorkflowRecoverable: vi.fn(() => ({ recoverable: true })),
+      isWorkflowRecoverable: vi.fn(async () => ({ recoverable: true })),
       markWorkflowUnrecoverable,
     }));
     const run = buildRun();
@@ -933,7 +933,7 @@ describe("durable-execution-service orchestration workflow", () => {
       buildExternalSideEffectReplayJob: vi.fn((candidate) => ({
         mutationStore,
         sideEffectRunStore,
-        runClaimTransaction: (work) => work(),
+        runClaimTransaction: async (work) => await work(),
         boundary: candidate.boundary,
         catalogId: candidate.catalogId,
         connectionId: candidate.connectionId,
@@ -944,7 +944,7 @@ describe("durable-execution-service orchestration workflow", () => {
         payload: { replay: true },
         label: "Activepieces replay",
         execute: vi.fn(async (claim) => {
-          claim.markExternalCallStarted();
+          await claim.markExternalCallStarted();
           return { replayed: true };
         }),
       })),
@@ -1155,7 +1155,7 @@ describe("durable-execution-service orchestration workflow", () => {
     const integrationActionHost = {
       storage: {
         integrationConnections: { get: vi.fn(() => connection) },
-        runImmediateTransaction: (work: () => unknown) => work(),
+        runImmediateTransaction: async (work: () => unknown | Promise<unknown>) => await work(),
       },
       fetchWithDiagnosticsTimeout: fetchMock,
       readConnectionConfigValue: (config: Record<string, unknown>, key: string) => {
@@ -1368,10 +1368,13 @@ describe("durable-execution-service orchestration workflow", () => {
     const transactionOwnedHost = createApprovalWaitHost(run, "approved");
     const transactionState = { calls: 0 };
     Object.assign(transactionOwnedHost.storage, {
-      runImmediateTransaction(this: typeof transactionOwnedHost.storage, callback: () => unknown) {
+      async runImmediateTransaction(
+        this: typeof transactionOwnedHost.storage,
+        callback: () => unknown | Promise<unknown>,
+      ) {
         expect(this).toBe(transactionOwnedHost.storage);
         transactionState.calls += 1;
-        return callback();
+        return await callback();
       },
     });
     await executeDurableApprovalWaitRun(transactionOwnedHost as never, run);
@@ -1509,7 +1512,7 @@ describe("durable-execution-service orchestration workflow", () => {
 
   it("executes connector delivery runs with retained domain links", async () => {
     vi.mocked(dispatchConnectorDelivery).mockImplementation(async (_connector, _payload, deps) => {
-      deps.markExternalCallStarted?.();
+      await deps.markExternalCallStarted?.();
       return {
         capabilityId: "comms.send",
         dispatchKind: "send",
@@ -1645,7 +1648,7 @@ describe("durable-execution-service orchestration workflow", () => {
     });
     const harness = createConnectorDeliveryRecoveryHarness(run, providerCall);
     vi.mocked(dispatchConnectorDelivery).mockImplementation(async (_connector, _payload, deps) => {
-      deps.markExternalCallStarted?.();
+      await deps.markExternalCallStarted?.();
       const result = await deps.commsSend({} as never);
       return {
         capabilityId: "outbound_messages",
@@ -1661,7 +1664,7 @@ describe("durable-execution-service orchestration workflow", () => {
       status: "unknown_external_outcome",
       resumeState: "manual_review_unknown_external_outcome",
     });
-    expect(isDurableWorkflowRecoverable(harness.host as never, run)).toEqual({
+    expect(await isDurableWorkflowRecoverable(harness.host as never, run)).toEqual({
       recoverable: false,
       reason: expect.stringMatching(/automatic replay is blocked.*manual reconciliation is required/i),
     });
@@ -1691,7 +1694,7 @@ describe("durable-execution-service orchestration workflow", () => {
       .mockResolvedValueOnce({ status: "sent", deliveryStatus: "sent", providerMessageId: "provider-message-2" });
     const harness = createConnectorDeliveryRecoveryHarness(run, providerCall);
     vi.mocked(dispatchConnectorDelivery).mockImplementation(async (_connector, _payload, deps) => {
-      deps.markExternalCallStarted?.();
+      await deps.markExternalCallStarted?.();
       const result = await deps.commsSend({} as never);
       return {
         capabilityId: "outbound_messages",
@@ -1707,7 +1710,7 @@ describe("durable-execution-service orchestration workflow", () => {
       status: "failed_before_boundary",
       resumeState: "manual_retry_after_recorded_failure",
     });
-    expect(isDurableWorkflowRecoverable(harness.host as never, run)).toEqual({ recoverable: true });
+    expect(await isDurableWorkflowRecoverable(harness.host as never, run)).toEqual({ recoverable: true });
 
     const recoveredRun = { ...run, version: run.version + 1, leaseOwnerId: "recovered-safe-retry-lease" };
     harness.setCurrentRun(recoveredRun);
@@ -1752,7 +1755,7 @@ describe("durable-execution-service orchestration workflow", () => {
       );
       const harness = createConnectorDeliveryRecoveryHarness(run, vi.fn(), ledger);
 
-      expect(isDurableWorkflowRecoverable(harness.host as never, run)).toEqual({
+      expect(await isDurableWorkflowRecoverable(harness.host as never, run)).toEqual({
         recoverable: false,
         reason: expect.stringMatching(/manual reconciliation is required/i),
       });
@@ -1792,7 +1795,7 @@ describe("durable-execution-service orchestration workflow", () => {
 
   it("preserves approval delivery lineage from real remote-token connector payloads", async () => {
     vi.mocked(dispatchConnectorDelivery).mockImplementation(async (_connector, _payload, deps) => {
-      deps.markExternalCallStarted?.();
+      await deps.markExternalCallStarted?.();
       return {
         capabilityId: "outbound_messages",
         dispatchKind: "integration_channel_send",
@@ -1929,7 +1932,7 @@ describe("durable-execution-service orchestration workflow", () => {
     const createCheckpoint = vi.fn();
     const deleteApprovalRemoteActionTokenSecret = vi.fn();
     vi.mocked(dispatchConnectorDelivery).mockImplementation(async (_connector, _payload, deps) => {
-      deps.markExternalCallStarted?.();
+      await deps.markExternalCallStarted?.();
       return {
         capabilityId: "outbound_messages",
         dispatchKind: "integration_channel_send",
@@ -2018,7 +2021,7 @@ describe("durable-execution-service orchestration workflow", () => {
     const createCheckpoint = vi.fn();
     const deleteApprovalRemoteActionTokenSecret = vi.fn();
     vi.mocked(dispatchConnectorDelivery).mockImplementation(async (_connector, _payload, deps) => {
-      deps.markExternalCallStarted?.();
+      await deps.markExternalCallStarted?.();
       return {
         capabilityId: "interactive_actions",
         dispatchKind: "browser_realtime",
@@ -2109,7 +2112,7 @@ describe("durable-execution-service orchestration workflow", () => {
     const resolve = vi.fn(() => rawToken);
     const deleteSecret = vi.fn();
     vi.mocked(dispatchConnectorDelivery).mockImplementation(async (_connector, _payload, deps) => {
-      deps.markExternalCallStarted?.();
+      await deps.markExternalCallStarted?.();
       return {
         capabilityId: "interactive_actions",
         dispatchKind: "browser_realtime",
@@ -2187,7 +2190,7 @@ describe("durable-execution-service orchestration workflow", () => {
       initialSideEffectStatus: "completed",
     });
     vi.mocked(dispatchConnectorDelivery).mockImplementation(async (_connector, _payload, deps) => {
-      deps.markExternalCallStarted?.();
+      await deps.markExternalCallStarted?.();
       return { capabilityId: "outbound_messages", dispatchKind: "integration_channel_send" } as never;
     });
     const host = {
@@ -2235,7 +2238,7 @@ describe("durable-execution-service orchestration workflow", () => {
     });
     let currentRun: DurableRunRecord = run;
     vi.mocked(dispatchConnectorDelivery).mockImplementation(async (_connector, _payload, deps) => {
-      deps.markExternalCallStarted?.();
+      await deps.markExternalCallStarted?.();
       return { capabilityId: "outbound_messages", dispatchKind: "integration_channel_send" } as never;
     });
     const updateRun = vi.fn((input: Record<string, unknown>) => {
@@ -2250,7 +2253,7 @@ describe("durable-execution-service orchestration workflow", () => {
         durableRuns: { getRun: vi.fn(() => currentRun), updateRun, createCheckpoint: vi.fn() },
       },
       recordDurableTimelineEvent: vi.fn(),
-      publishRealtime: vi.fn(() => {
+      publishRealtime: vi.fn(async () => {
         throw new Error("retained stream unavailable");
       }),
       resolveDurableRunHookWorkspaceId: vi.fn(() => "default"),
@@ -2281,7 +2284,7 @@ describe("durable-execution-service orchestration workflow", () => {
     const expirePendingAtOrBefore = vi.fn(() => ({ state: "expired" }));
     const deleteApprovalRemoteActionTokenSecret = vi.fn();
     const requireConnectorRecord = vi.fn();
-    const publishRealtime = vi.fn(() => {
+    const publishRealtime = vi.fn(async () => {
       throw new Error("retained stream unavailable");
     });
     const host = {
@@ -2351,7 +2354,7 @@ describe("durable-execution-service orchestration workflow", () => {
       expiresAt: payload.approvalAction.expiresAt,
     }));
     vi.mocked(dispatchConnectorDelivery).mockImplementation(async (_connector, _payload, deps) => {
-      deps.markExternalCallStarted?.();
+      await deps.markExternalCallStarted?.();
       return { capabilityId: "outbound_messages", dispatchKind: "integration_channel_send" } as never;
     });
     const host = {
@@ -2515,7 +2518,7 @@ describe("durable-execution-service orchestration workflow", () => {
       expect.objectContaining({ state: expect.objectContaining({ secretCleanupPending: true }) }),
     );
 
-    expect(tokenSecrets.reconcileExpired()).toBe(1);
+    expect(await tokenSecrets.reconcileExpired()).toBe(1);
     expect(secretPresent).toBe(false);
     expect(tokenState).toBe("expired");
     expect(deleteSecret).toHaveBeenCalledTimes(2);
@@ -2961,7 +2964,7 @@ describe("durable-execution-service orchestration workflow", () => {
     expect(executePreparedAgentChatTurnBackground).not.toHaveBeenCalled();
   });
 
-  it("reconciles the canonical general Chat post-commit consumers from persisted truth", () => {
+  it("reconciles the canonical general Chat post-commit consumers from persisted truth", async () => {
     const run = {
       ...buildRunWithPayload("chat.turn.execute", {
         version: "chat.turn.execute.v1",
@@ -3030,14 +3033,14 @@ describe("durable-execution-service orchestration workflow", () => {
       publishRealtime: vi.fn(),
     };
 
-    expect(() => executeGeneralChatPostCommit(host as never, run)).toThrow(/canonical durable progress owner/);
+    await expect(executeGeneralChatPostCommit(host as never, run)).rejects.toThrow(/canonical durable progress owner/);
     expect(host.recordCapabilityGapFromTrace).not.toHaveBeenCalled();
     expect(host.extractAndPersistLearnedMemory).not.toHaveBeenCalled();
     expect(host.recordTurnCommitments).not.toHaveBeenCalled();
     expect(host.scheduleBackgroundReviewIfDue).not.toHaveBeenCalled();
     expect(host.scheduleMemoryMaintenancePostTurnEvaluation).not.toHaveBeenCalled();
 
-    expect(() =>
+    await expect(
       executeGeneralChatPostCommit(host as never, run, {
         generationId: "generation-stale-wait",
         requestedAt: "2026-07-11T00:00:00.000Z",
@@ -3047,21 +3050,21 @@ describe("durable-execution-service orchestration workflow", () => {
         publishEffect: vi.fn(),
         enqueueDurableEffect: vi.fn(),
       }),
-    ).toThrow(/targets waiting_for_approval, but the canonical trace is completed/);
+    ).rejects.toThrow(/targets waiting_for_approval, but the canonical trace is completed/);
     expect(host.recordCapabilityGapFromTrace).not.toHaveBeenCalled();
 
-    const enqueueDurableEffect = vi.fn((input: { effect: string }) => `durable-child-${input.effect}`);
-    const result = executeGeneralChatPostCommit(host as never, run, {
+    const enqueueDurableEffect = vi.fn(async (input: { effect: string }) => `durable-child-${input.effect}`);
+    const result = await executeGeneralChatPostCommit(host as never, run, {
       generationId: "generation-post-commit",
       requestedAt: "2026-07-11T00:00:00.000Z",
       targetTraceStatus: "completed",
       completedEffects: [],
-      runEffect: vi.fn((_effect, callback) => {
-        callback();
+      runEffect: vi.fn(async (_effect, callback) => {
+        await callback();
         return true;
       }),
-      publishEffect: vi.fn((_effect, callback) => {
-        callback();
+      publishEffect: vi.fn(async (_effect, callback) => {
+        await callback();
         return true;
       }),
       enqueueDurableEffect,
@@ -3108,7 +3111,7 @@ describe("durable-execution-service orchestration workflow", () => {
     },
   ])(
     "publishes one deterministic content-free Chat invalidation only when a system heartbeat notify decision is $notify",
-    ({ rawOutput, notify }) => {
+    async ({ rawOutput, notify }) => {
       const base = buildExactSystemHeartbeatRun();
       const payload = parseDurableChatTurnPayload(base)!;
       const decision = buildHeartbeatDecisionReceipt({
@@ -3166,8 +3169,8 @@ describe("durable-execution-service orchestration workflow", () => {
         scheduleChatMemoryContextPrewarm: vi.fn(),
         publishRealtime,
       };
-      const publishEffect = vi.fn((_effect, callback: () => void) => {
-        callback();
+      const publishEffect = vi.fn(async (_effect, callback: () => void | Promise<void>) => {
+        await callback();
         return true;
       });
       const progress = {
@@ -3175,16 +3178,16 @@ describe("durable-execution-service orchestration workflow", () => {
         requestedAt: "2026-07-11T00:00:00.000Z",
         targetTraceStatus: "completed" as const,
         completedEffects: [],
-        runEffect: vi.fn((_effect, callback: () => void) => {
-          callback();
+        runEffect: vi.fn(async (_effect, callback: () => void | Promise<void>) => {
+          await callback();
           return true;
         }),
         publishEffect,
         enqueueDurableEffect: vi.fn(),
       };
 
-      const first = executeGeneralChatPostCommit(host as never, run, progress);
-      const second = executeGeneralChatPostCommit(host as never, run, progress);
+      const first = await executeGeneralChatPostCommit(host as never, run, progress);
+      const second = await executeGeneralChatPostCommit(host as never, run, progress);
 
       if (!notify) {
         expect(first.realtime).toBe("not_applicable");
@@ -3234,7 +3237,7 @@ describe("durable-execution-service orchestration workflow", () => {
 
   it.each(["failed", "cancelled"] as const)(
     "reconciles a %s Chat trace without assistant output as agent-end only",
-    (status) => {
+    async (status) => {
       const run = {
         ...buildRunWithPayload("chat.turn.execute", {
           version: "chat.turn.execute.v1",
@@ -3293,7 +3296,7 @@ describe("durable-execution-service orchestration workflow", () => {
         publishRealtime: vi.fn(),
       };
 
-      const result = executeGeneralChatPostCommit(
+      const result = await executeGeneralChatPostCommit(
         host as never,
         run,
         buildTestPostCommitProgress(status, `generation-${status}`),
@@ -3324,7 +3327,7 @@ describe("durable-execution-service orchestration workflow", () => {
 
   it.each(["failed", "cancelled"] as const)(
     "does not treat the payload assistant fallback as %s transcript evidence",
-    (status) => {
+    async (status) => {
       const run = {
         ...buildRunWithPayload("chat.turn.execute", {
           version: "chat.turn.execute.v1",
@@ -3393,7 +3396,7 @@ describe("durable-execution-service orchestration workflow", () => {
         publishRealtime: vi.fn(),
       };
 
-      const result = executeGeneralChatPostCommit(
+      const result = await executeGeneralChatPostCommit(
         host as never,
         run,
         buildTestPostCommitProgress(status, `generation-fallback-${status}`),
@@ -3410,7 +3413,7 @@ describe("durable-execution-service orchestration workflow", () => {
     },
   );
 
-  it("reconciles an approval wait with capability, realtime, and status-hook parity only", () => {
+  it("reconciles an approval wait with capability, realtime, and status-hook parity only", async () => {
     const run = {
       ...buildRunWithPayload("chat.turn.execute", {
         version: "chat.turn.execute.v1",
@@ -3477,7 +3480,7 @@ describe("durable-execution-service orchestration workflow", () => {
       publishRealtime: vi.fn(),
     };
 
-    const result = executeGeneralChatPostCommit(
+    const result = await executeGeneralChatPostCommit(
       host as never,
       run,
       buildTestPostCommitProgress("waiting_for_approval", "generation-wait-post-commit"),
@@ -3543,7 +3546,7 @@ describe("durable-execution-service orchestration workflow", () => {
     const persistChatStreamChunk = vi.fn();
     const host = {
       storage: {
-        runImmediateTransaction: (callback: () => unknown) => callback(),
+        runImmediateTransaction: async (callback: () => unknown | Promise<unknown>) => await callback(),
         chatMessages: {
           get: vi.fn(() => ({
             messageId: "user-1",
@@ -3662,7 +3665,7 @@ describe("durable-execution-service orchestration workflow", () => {
     const persistChatStreamChunk = vi.fn();
     const host = {
       storage: {
-        runImmediateTransaction: (callback: () => unknown) => callback(),
+        runImmediateTransaction: async (callback: () => unknown | Promise<unknown>) => await callback(),
         chatTurnTraces: {
           get: vi.fn(() => completedTrace),
           getForUpdate: vi.fn(() => completedTrace),
@@ -3716,9 +3719,9 @@ describe("durable-execution-service orchestration workflow", () => {
       const persistChatStreamChunk = vi.fn();
       const host = {
         storage: {
-          runImmediateTransaction: (callback: () => unknown) => {
+          runImmediateTransaction: async (callback: () => unknown | Promise<unknown>) => {
             insideTransaction = true;
-            return callback();
+            return await callback();
           },
           chatTurnTraces: {
             get: vi.fn(() => (insideTransaction ? reboundTrace : staleTrace)),
@@ -3769,7 +3772,7 @@ describe("durable-execution-service orchestration workflow", () => {
       const persistChatStreamChunk = vi.fn();
       const host = {
         storage: {
-          runImmediateTransaction: (callback: () => unknown) => callback(),
+          runImmediateTransaction: async (callback: () => unknown | Promise<unknown>) => await callback(),
           chatTurnTraces: {
             get: vi.fn(() => foreignTrace),
             getForUpdate: vi.fn(() => foreignTrace),
@@ -3986,7 +3989,7 @@ describe("durable-execution-service orchestration workflow", () => {
     );
   });
 
-  it("classifies durable chat turn recoverability through the execution-host wrapper", () => {
+  it("classifies durable chat turn recoverability through the execution-host wrapper", async () => {
     const messages: {
       assistant?: {
         messageId: string;
@@ -4036,7 +4039,7 @@ describe("durable-execution-service orchestration workflow", () => {
       request: { content: "continue" },
     });
 
-    expect(isDurableWorkflowRecoverable(host as never, run)).toEqual({ recoverable: true });
+    expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual({ recoverable: true });
 
     host.storage.chatTurnTraces.get.mockReturnValueOnce({
       turnId: "turn-1",
@@ -4045,7 +4048,7 @@ describe("durable-execution-service orchestration workflow", () => {
       assistantMessageId: "assistant-1",
       status: "running",
     });
-    expect(isDurableWorkflowRecoverable(host as never, run)).toEqual({ recoverable: true });
+    expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual({ recoverable: true });
 
     host.storage.chatTurnTraces.get.mockReturnValueOnce({
       turnId: "turn-1",
@@ -4066,7 +4069,7 @@ describe("durable-execution-service orchestration workflow", () => {
         createdAt: "2026-07-30T00:00:00.000Z",
       },
     ]);
-    expect(isDurableWorkflowRecoverable(host as never, run)).toEqual({
+    expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual({
       recoverable: false,
       reason: "Durable Chat output was emitted before interruption and cannot be safely replayed.",
     });
@@ -4090,7 +4093,7 @@ describe("durable-execution-service orchestration workflow", () => {
         createdAt: "2026-07-30T00:00:00.000Z",
       },
     ]);
-    expect(isDurableWorkflowRecoverable(host as never, run)).toEqual({
+    expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual({
       recoverable: false,
       reason: "Durable Chat output was emitted before interruption and cannot be safely replayed.",
     });
@@ -4114,7 +4117,7 @@ describe("durable-execution-service orchestration workflow", () => {
         createdAt: "2026-07-30T00:00:00.000Z",
       },
     ]);
-    expect(isDurableWorkflowRecoverable(host as never, run)).toEqual({
+    expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual({
       recoverable: false,
       reason: "Durable Chat output was emitted before interruption and cannot be safely replayed.",
     });
@@ -4131,7 +4134,7 @@ describe("durable-execution-service orchestration workflow", () => {
       sessionId: "session-1",
       role: "assistant",
     };
-    expect(isDurableWorkflowRecoverable(host as never, run)).toEqual({
+    expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual({
       recoverable: false,
       reason: "Assistant output was persisted while the Chat turn trace was still active.",
     });
@@ -4143,7 +4146,7 @@ describe("durable-execution-service orchestration workflow", () => {
       assistantMessageId: "assistant-1",
       status: "completed",
     });
-    expect(isDurableWorkflowRecoverable(host as never, run)).toEqual({ recoverable: true });
+    expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual({ recoverable: true });
 
     host.storage.chatTurnTraces.get.mockReturnValueOnce({
       turnId: "turn-1",
@@ -4152,7 +4155,7 @@ describe("durable-execution-service orchestration workflow", () => {
       assistantMessageId: "assistant-other",
       status: "completed",
     });
-    expect(isDurableWorkflowRecoverable(host as never, run)).toEqual({
+    expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual({
       recoverable: false,
       reason: "Persisted assistant output does not match the durable Chat run linkage.",
     });
@@ -4165,13 +4168,13 @@ describe("durable-execution-service orchestration workflow", () => {
       status: "running",
     });
     host.storage.chatToolRuns.listByTurn.mockReturnValueOnce([{ toolRunId: "tool-1" }]);
-    expect(isDurableWorkflowRecoverable(host as never, run)).toEqual({
+    expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual({
       recoverable: false,
       reason: "Durable chat run was interrupted after tool execution began and cannot be safely replayed.",
     });
   });
 
-  it("requires canonical semantic evidence before recovering a persisted Chat wait", () => {
+  it("requires canonical semantic evidence before recovering a persisted Chat wait", async () => {
     const run = buildRunWithPayload("chat.turn.execute", {
       version: "chat.turn.execute.v1",
       sessionId: "session-resting",
@@ -4220,22 +4223,22 @@ describe("durable-execution-service orchestration workflow", () => {
       },
     };
 
-    expect(isDurableWorkflowRecoverable(host as never, run)).toEqual({ recoverable: true });
+    expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual({ recoverable: true });
 
     toolRuns = [{ ...toolRuns[0]!, turnId: "turn-other" }];
-    expect(isDurableWorkflowRecoverable(host as never, run)).toEqual({
+    expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual({
       recoverable: false,
       reason: "Durable Chat trace turn-resting lacks canonical evidence for waiting_for_approval.",
     });
 
     toolRuns = [{ ...toolRuns[0]!, turnId: "turn-resting", sessionId: "session-other" }];
-    expect(isDurableWorkflowRecoverable(host as never, run)).toEqual({
+    expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual({
       recoverable: false,
       reason: "Durable Chat trace turn-resting lacks canonical evidence for waiting_for_approval.",
     });
 
     toolRuns = [];
-    expect(isDurableWorkflowRecoverable(host as never, run)).toEqual({
+    expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual({
       recoverable: false,
       reason: "Durable Chat trace turn-resting lacks canonical evidence for waiting_for_approval.",
     });
@@ -4250,10 +4253,10 @@ describe("durable-execution-service orchestration workflow", () => {
         question: "Which target should I use?",
       },
     };
-    expect(isDurableWorkflowRecoverable(host as never, run)).toEqual({ recoverable: true });
+    expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual({ recoverable: true });
 
     trace = { ...trace, pendingUserInput: undefined };
-    expect(isDurableWorkflowRecoverable(host as never, run)).toEqual({
+    expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual({
       recoverable: false,
       reason: "Durable Chat trace turn-resting lacks canonical evidence for waiting_for_user_input.",
     });
@@ -4269,28 +4272,28 @@ describe("durable-execution-service orchestration workflow", () => {
         startedAt: "2026-07-11T00:00:00.000Z",
       },
     ];
-    expect(isDurableWorkflowRecoverable(host as never, run)).toEqual({ recoverable: true });
+    expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual({ recoverable: true });
 
     toolRuns = [{ ...toolRuns[0]!, turnId: "turn-other" }];
-    expect(isDurableWorkflowRecoverable(host as never, run)).toEqual({
+    expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual({
       recoverable: false,
       reason: "Durable Chat trace turn-resting lacks canonical evidence for waiting_for_tool.",
     });
 
     toolRuns = [{ ...toolRuns[0]!, turnId: "turn-resting", sessionId: "session-other" }];
-    expect(isDurableWorkflowRecoverable(host as never, run)).toEqual({
+    expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual({
       recoverable: false,
       reason: "Durable Chat trace turn-resting lacks canonical evidence for waiting_for_tool.",
     });
 
     toolRuns = [];
-    expect(isDurableWorkflowRecoverable(host as never, run)).toEqual({
+    expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual({
       recoverable: false,
       reason: "Durable Chat trace turn-resting lacks canonical evidence for waiting_for_tool.",
     });
 
     trace = { ...trace, status: "failed" };
-    expect(isDurableWorkflowRecoverable(host as never, run)).toEqual({ recoverable: true });
+    expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual({ recoverable: true });
   });
 
   it("merges answered user-input prompts into resumed chat content", () => {
@@ -4589,12 +4592,12 @@ function createExactSystemHeartbeatRuntimeHarness(run: DurableRunRecord) {
   let messages = new Map<string, Record<string, unknown>>();
   let failRunUpdateOnce = false;
   let authoritySuperseded = false;
-  const runImmediateTransaction = <T>(work: () => T): T => {
+  const runImmediateTransaction = async <T>(work: () => T | Promise<T>): Promise<T> => {
     const runSnapshot = structuredClone(currentRun);
     const traceSnapshot = structuredClone(trace);
     const messageSnapshot = new Map([...messages].map(([key, value]) => [key, structuredClone(value)] as const));
     try {
-      return work();
+      return await work();
     } catch (error) {
       currentRun = runSnapshot;
       trace = traceSnapshot;
@@ -4780,7 +4783,7 @@ describe("exact system-heartbeat durable runtime", () => {
       .mockReset()
       .mockImplementation(async (dispatchHost) => {
         await dispatchHost.hooksService.runInlineHooks({} as never);
-        dispatchHost.persistChatStreamChunk(
+        await dispatchHost.persistChatStreamChunk(
           {
             type: "delta",
             sessionId: harness.payload.sessionId,
@@ -4799,8 +4802,8 @@ describe("exact system-heartbeat durable runtime", () => {
             message: { role: "assistant", content: rawOutput },
           } as never,
           {
-            onCommit: () => {
-              dispatchHost.storage.chatTurnTraces.patch(harness.payload.turnId, {
+            onCommit: async () => {
+              await dispatchHost.storage.chatTurnTraces.patch(harness.payload.turnId, {
                 assistantMessageId: harness.payload.assistantMessageId,
                 status: "completed",
                 ...(completion ? { completion } : {}),
@@ -4847,7 +4850,7 @@ describe("exact system-heartbeat durable runtime", () => {
       .mockReset()
       .mockImplementation(async (dispatchHost) => {
         for (const delta of deltas) {
-          dispatchHost.persistChatStreamChunk(
+          await dispatchHost.persistChatStreamChunk(
             {
               type: "delta",
               sessionId: harness.payload.sessionId,
@@ -5018,7 +5021,7 @@ describe("exact system-heartbeat durable runtime", () => {
 
   it.each(['{"notify":false}', '{"notify":true,"message":"Disk pressure high"}'])(
     "never routes exact heartbeat decision output through autonomous delivery or legacy cleanup",
-    (rawOutput) => {
+    async (rawOutput) => {
       const run = buildExactSystemHeartbeatRun();
       const decision = buildHeartbeatDecisionReceipt({
         occurrenceId: "heartbeat-occurrence-1",
@@ -5035,8 +5038,8 @@ describe("exact system-heartbeat durable runtime", () => {
           autonomousChatPostCommitPending: { version: 1, requestedAt: "2026-07-15T20:00:00.000Z" },
         },
       } satisfies DurableRunRecord;
-      const enqueue = vi.fn(() => "delivery-run-forbidden");
-      const cleanup = vi.fn(() => ({ status: "completed" as const }));
+      const enqueue = vi.fn(async () => "delivery-run-forbidden");
+      const cleanup = vi.fn(async () => ({ status: "completed" as const }));
       const host = {
         storage: {
           durableRuns: { getRun: vi.fn(() => completedRun) },
@@ -5047,7 +5050,7 @@ describe("exact system-heartbeat durable runtime", () => {
         cleanupSilentHeartbeatTurn: cleanup,
       };
 
-      expect(executeAutonomousChatPostCommit(host as never, completedRun)).toEqual({
+      expect(await executeAutonomousChatPostCommit(host as never, completedRun)).toEqual({
         delivery: { status: "skipped", reason: "system_heartbeat_inline_output" },
         heartbeatCleanup: { status: "not_required" },
       });
@@ -5113,15 +5116,15 @@ function buildTestPostCommitProgress(targetTraceStatus: ChatTurnTraceRecord["sta
     requestedAt: "2026-07-11T00:00:00.000Z",
     targetTraceStatus,
     completedEffects: [],
-    runEffect: vi.fn((_effect, callback: () => void) => {
-      callback();
+    runEffect: vi.fn(async (_effect, callback: () => void | Promise<void>) => {
+      await callback();
       return true;
     }),
-    publishEffect: vi.fn((_effect, callback: () => void) => {
-      callback();
+    publishEffect: vi.fn(async (_effect, callback: () => void | Promise<void>) => {
+      await callback();
       return true;
     }),
-    enqueueDurableEffect: vi.fn((input: { effect: string }) => `durable-child-${input.effect}`),
+    enqueueDurableEffect: vi.fn(async (input: { effect: string }) => `durable-child-${input.effect}`),
   };
 }
 
@@ -5171,7 +5174,7 @@ describe("maybeCleanupSilentHeartbeatTurn", () => {
   function buildHeartbeatHost(
     assistantContent: string,
     currentRun: DurableRunRecord,
-    cleanup = vi.fn(() => ({ status: "completed" as const })),
+    cleanup = vi.fn(async () => ({ status: "completed" as const })),
   ) {
     return {
       storage: {
@@ -5183,7 +5186,7 @@ describe("maybeCleanupSilentHeartbeatTurn", () => {
     };
   }
 
-  function heartbeatRun(content: string, cleanup = vi.fn(() => ({ status: "completed" as const }))) {
+  function heartbeatRun(content: string, cleanup = vi.fn(async () => ({ status: "completed" as const }))) {
     const run = {
       ...buildRunWithPayload("chat.turn.execute", heartbeatPayload),
       status: "completed" as const,
@@ -5205,10 +5208,10 @@ describe("maybeCleanupSilentHeartbeatTurn", () => {
     };
   }
 
-  it("prunes a silent (notify:false) heartbeat turn from the transcript", () => {
+  it("prunes a silent (notify:false) heartbeat turn from the transcript", async () => {
     const { run, host, cleanup } = heartbeatRun('{"notify": false}');
 
-    maybeCleanupSilentHeartbeatTurn(host as never, run, heartbeatPayload);
+    await maybeCleanupSilentHeartbeatTurn(host as never, run, heartbeatPayload);
 
     expect(cleanup).toHaveBeenCalledWith({
       sessionId: "session-hb",
@@ -5219,20 +5222,20 @@ describe("maybeCleanupSilentHeartbeatTurn", () => {
     });
   });
 
-  it("prunes a heartbeat turn that produced empty output", () => {
+  it("prunes a heartbeat turn that produced empty output", async () => {
     const { run, host, cleanup } = heartbeatRun("   ");
-    maybeCleanupSilentHeartbeatTurn(host as never, run, heartbeatPayload);
+    await maybeCleanupSilentHeartbeatTurn(host as never, run, heartbeatPayload);
     expect(cleanup).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps a notifying heartbeat turn visible (no cleanup)", () => {
+  it("keeps a notifying heartbeat turn visible (no cleanup)", async () => {
     const { run, host, cleanup } = heartbeatRun('{"notify": true, "message": "Reminder: standup in 5"}');
-    maybeCleanupSilentHeartbeatTurn(host as never, run, heartbeatPayload);
+    await maybeCleanupSilentHeartbeatTurn(host as never, run, heartbeatPayload);
     expect(cleanup).not.toHaveBeenCalled();
   });
 
-  it("is a no-op for non-heartbeat autonomous turns (e.g. scheduled/cron)", () => {
-    const cleanup = vi.fn(() => ({ status: "completed" as const }));
+  it("is a no-op for non-heartbeat autonomous turns (e.g. scheduled/cron)", async () => {
+    const cleanup = vi.fn(async () => ({ status: "completed" as const }));
     const run = {
       ...buildRunWithPayload("chat.turn.execute", heartbeatPayload),
       status: "completed" as const,
@@ -5241,7 +5244,7 @@ describe("maybeCleanupSilentHeartbeatTurn", () => {
         autonomousChatPostCommitPending: { version: 1, requestedAt: "2026-04-10T00:00:00.000Z" },
       },
     };
-    maybeCleanupSilentHeartbeatTurn(
+    await maybeCleanupSilentHeartbeatTurn(
       buildHeartbeatHost('{"notify": false}', run, cleanup) as never,
       run,
       heartbeatPayload,
@@ -5249,10 +5252,10 @@ describe("maybeCleanupSilentHeartbeatTurn", () => {
     expect(cleanup).not.toHaveBeenCalled();
   });
 
-  it("is a no-op for non-autonomous (human) turns", () => {
-    const cleanup = vi.fn(() => ({ status: "completed" as const }));
+  it("is a no-op for non-autonomous (human) turns", async () => {
+    const cleanup = vi.fn(async () => ({ status: "completed" as const }));
     const run = { ...buildRunWithPayload("chat.turn.execute", heartbeatPayload), status: "completed" as const };
-    maybeCleanupSilentHeartbeatTurn(
+    await maybeCleanupSilentHeartbeatTurn(
       buildHeartbeatHost('{"notify": false}', run, cleanup) as never,
       run,
       heartbeatPayload,
@@ -5275,7 +5278,7 @@ describe("maybeEnqueueAutonomousDelivery", () => {
 
   function buildDeliveryHost(
     assistantContent: string,
-    enqueue = vi.fn(() => "delivery-run-1"),
+    enqueue = vi.fn(async () => "delivery-run-1"),
     options: {
       traceStatus?: "completed" | "failed" | "cancelled" | "partial";
       runStatus?: DurableRunRecord["status"];
@@ -5304,8 +5307,8 @@ describe("maybeEnqueueAutonomousDelivery", () => {
     };
   }
 
-  it("enqueues channel delivery for an autonomous turn with assistant output", () => {
-    const enqueue = vi.fn(() => "delivery-run-1");
+  it("enqueues channel delivery for an autonomous turn with assistant output", async () => {
+    const enqueue = vi.fn(async () => "delivery-run-1");
     const run = {
       ...buildRunWithPayload("chat.turn.execute", chatTurnPayload),
       status: "completed" as const,
@@ -5323,7 +5326,7 @@ describe("maybeEnqueueAutonomousDelivery", () => {
     };
     const host = buildDeliveryHost("Overnight summary ready.", enqueue, { currentRun: run });
 
-    const result = maybeEnqueueAutonomousDelivery(host as never, run, chatTurnPayload);
+    const result = await maybeEnqueueAutonomousDelivery(host as never, run, chatTurnPayload);
 
     expect(result).toBe("delivery-run-1");
     expect(enqueue).toHaveBeenCalledWith(
@@ -5338,8 +5341,8 @@ describe("maybeEnqueueAutonomousDelivery", () => {
     );
   });
 
-  it("still delegates delivery reconciliation while the autonomy kill switch is engaged", () => {
-    const enqueue = vi.fn(() => "delivery-run-1");
+  it("still delegates delivery reconciliation while the autonomy kill switch is engaged", async () => {
+    const enqueue = vi.fn(async () => "delivery-run-1");
     const run = {
       ...buildRunWithPayload("chat.turn.execute", chatTurnPayload),
       status: "completed" as const,
@@ -5358,21 +5361,21 @@ describe("maybeEnqueueAutonomousDelivery", () => {
       isFeatureEnabled: vi.fn((feature: string) => feature === "autonomyV1Disabled"),
     };
 
-    expect(maybeEnqueueAutonomousDelivery(host as never, run, chatTurnPayload)).toBe("delivery-run-1");
+    expect(await maybeEnqueueAutonomousDelivery(host as never, run, chatTurnPayload)).toBe("delivery-run-1");
     expect(enqueue).toHaveBeenCalledTimes(1);
   });
 
-  it("is a no-op for non-autonomous turns", () => {
-    const enqueue = vi.fn(() => "delivery-run-1");
+  it("is a no-op for non-autonomous turns", async () => {
+    const enqueue = vi.fn(async () => "delivery-run-1");
     const run = { ...buildRunWithPayload("chat.turn.execute", chatTurnPayload), status: "completed" as const };
     const host = buildDeliveryHost("ignored", enqueue, { currentRun: run });
 
-    expect(maybeEnqueueAutonomousDelivery(host as never, run, chatTurnPayload)).toBeUndefined();
+    expect(await maybeEnqueueAutonomousDelivery(host as never, run, chatTurnPayload)).toBeUndefined();
     expect(enqueue).not.toHaveBeenCalled();
   });
 
-  it("suppresses delivery for on_notify turns that do not signal notify", () => {
-    const enqueue = vi.fn(() => "delivery-run-1");
+  it("suppresses delivery for on_notify turns that do not signal notify", async () => {
+    const enqueue = vi.fn(async () => "delivery-run-1");
     const run = {
       ...buildRunWithPayload("chat.turn.execute", chatTurnPayload),
       status: "completed" as const,
@@ -5388,12 +5391,12 @@ describe("maybeEnqueueAutonomousDelivery", () => {
     };
     const host = buildDeliveryHost("Nothing actionable overnight.", enqueue, { currentRun: run });
 
-    expect(maybeEnqueueAutonomousDelivery(host as never, run, chatTurnPayload)).toBeUndefined();
+    expect(await maybeEnqueueAutonomousDelivery(host as never, run, chatTurnPayload)).toBeUndefined();
     expect(enqueue).not.toHaveBeenCalled();
   });
 
-  it("delivers on_notify turns that emit a notify signal", () => {
-    const enqueue = vi.fn(() => "delivery-run-2");
+  it("delivers on_notify turns that emit a notify signal", async () => {
+    const enqueue = vi.fn(async () => "delivery-run-2");
     const run = {
       ...buildRunWithPayload("chat.turn.execute", chatTurnPayload),
       status: "completed" as const,
@@ -5409,12 +5412,12 @@ describe("maybeEnqueueAutonomousDelivery", () => {
     };
     const host = buildDeliveryHost('Urgent: disk full. {"notify": true}', enqueue, { currentRun: run });
 
-    expect(maybeEnqueueAutonomousDelivery(host as never, run, chatTurnPayload)).toBe("delivery-run-2");
+    expect(await maybeEnqueueAutonomousDelivery(host as never, run, chatTurnPayload)).toBe("delivery-run-2");
     expect(enqueue).toHaveBeenCalledTimes(1);
   });
 
-  it("uses completed parent truth despite a missing/stale trace and rejects failed parent runs", () => {
-    const failedTraceEnqueue = vi.fn(() => "delivery-run-failed-trace");
+  it("uses completed parent truth despite a missing/stale trace and rejects failed parent runs", async () => {
+    const failedTraceEnqueue = vi.fn(async () => "delivery-run-failed-trace");
     const failedTraceRun = {
       ...buildRunWithPayload("chat.turn.execute", chatTurnPayload),
       status: "completed" as const,
@@ -5433,14 +5436,14 @@ describe("maybeEnqueueAutonomousDelivery", () => {
       currentRun: failedTraceRun,
     });
 
-    expect(maybeEnqueueAutonomousDelivery(failedTraceHost as never, failedTraceRun, chatTurnPayload)).toBe(
+    expect(await maybeEnqueueAutonomousDelivery(failedTraceHost as never, failedTraceRun, chatTurnPayload)).toBe(
       "delivery-run-failed-trace",
     );
     expect(failedTraceEnqueue).toHaveBeenCalledWith(
       expect.objectContaining({ assistantText: "Canonical completed answer." }),
     );
 
-    const failedRunEnqueue = vi.fn(() => "delivery-run-failed-run");
+    const failedRunEnqueue = vi.fn(async () => "delivery-run-failed-run");
     const failedRun = {
       ...buildRunWithPayload("chat.turn.execute", chatTurnPayload),
       status: "failed" as const,
@@ -5457,12 +5460,12 @@ describe("maybeEnqueueAutonomousDelivery", () => {
       currentRun: failedRun,
     });
 
-    expect(maybeEnqueueAutonomousDelivery(failedRunHost as never, failedRun, chatTurnPayload)).toBeUndefined();
+    expect(await maybeEnqueueAutonomousDelivery(failedRunHost as never, failedRun, chatTurnPayload)).toBeUndefined();
     expect(failedRunEnqueue).not.toHaveBeenCalled();
   });
 
-  it("does not enqueue from a stale worker while the parent is still running under another lease", () => {
-    const enqueue = vi.fn(() => "delivery-run-stale");
+  it("does not enqueue from a stale worker while the parent is still running under another lease", async () => {
+    const enqueue = vi.fn(async () => "delivery-run-stale");
     const run = {
       ...buildRunWithPayload("chat.turn.execute", chatTurnPayload),
       status: "running" as const,
@@ -5479,12 +5482,12 @@ describe("maybeEnqueueAutonomousDelivery", () => {
     };
     const host = buildDeliveryHost("Stale worker output", enqueue, { currentRun: run });
 
-    expect(maybeEnqueueAutonomousDelivery(host as never, run, chatTurnPayload)).toBeUndefined();
+    expect(await maybeEnqueueAutonomousDelivery(host as never, run, chatTurnPayload)).toBeUndefined();
     expect(enqueue).not.toHaveBeenCalled();
   });
 
-  it("returns explicit durable delivery and cleanup resolution truth", () => {
-    const enqueue = vi.fn(() => "autonomous-delivery:run-chat.turn.execute");
+  it("returns explicit durable delivery and cleanup resolution truth", async () => {
+    const enqueue = vi.fn(async () => "autonomous-delivery:run-chat.turn.execute");
     const run = {
       ...buildRunWithPayload("chat.turn.execute", chatTurnPayload),
       status: "completed" as const,
@@ -5500,14 +5503,14 @@ describe("maybeEnqueueAutonomousDelivery", () => {
     };
     const host = buildDeliveryHost("deleted transcript output", enqueue, { currentRun: run });
 
-    expect(executeAutonomousChatPostCommit(host as never, run)).toEqual({
+    expect(await executeAutonomousChatPostCommit(host as never, run)).toEqual({
       delivery: { status: "enqueued", runId: "autonomous-delivery:run-chat.turn.execute" },
       heartbeatCleanup: { status: "not_required" },
     });
     expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({ assistantText: "Overnight summary ready." }));
   });
 
-  it("records manual reconciliation instead of retrying cleanup across an advanced branch", () => {
+  it("records manual reconciliation instead of retrying cleanup across an advanced branch", async () => {
     const run = {
       ...buildRunWithPayload("chat.turn.execute", chatTurnPayload),
       status: "completed" as const,
@@ -5517,7 +5520,7 @@ describe("maybeEnqueueAutonomousDelivery", () => {
         autonomousChatPostCommitPending: { version: 1, requestedAt: "2026-04-10T00:00:00.000Z" },
       },
     };
-    const cleanup = vi.fn(() => ({
+    const cleanup = vi.fn(async () => ({
       status: "manual_reconciliation" as const,
       reason: "active leaf advanced to turn-newer",
     }));
@@ -5526,7 +5529,7 @@ describe("maybeEnqueueAutonomousDelivery", () => {
       cleanupSilentHeartbeatTurn: cleanup,
     };
 
-    expect(executeAutonomousChatPostCommit(host as never, run)).toEqual({
+    expect(await executeAutonomousChatPostCommit(host as never, run)).toEqual({
       delivery: { status: "skipped", reason: "delivery_not_configured" },
       heartbeatCleanup: {
         status: "manual_reconciliation",

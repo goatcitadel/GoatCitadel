@@ -22,7 +22,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { evaluateWards, HEARTBEAT_PERMISSION_PROFILE_ID, HEARTBEAT_RESTRICTED_PROFILE } from "@goatcitadel/contracts";
 import type { CitadelWardRecord, WardEffect } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage } from "@goatcitadel/storage";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { ApprovalGate, type ApprovalCreateAuthority, type ApprovalCreateCommitPort } from "./approval-gate.js";
@@ -284,7 +284,7 @@ export class ToolPolicyEngine {
 
   public constructor(
     private readonly config: ToolPolicyConfig,
-    private readonly storage: Storage,
+    private readonly storage: AsyncStorage,
     registry?: ToolRegistry,
     private readonly runtimeHooks: ToolPolicyEngineRuntimeHooks = {},
   ) {
@@ -296,28 +296,28 @@ export class ToolPolicyEngine {
     return this.registry.toCatalog();
   }
 
-  public listGrants(scope?: ToolGrantScope, scopeRef?: string, limit = 200): ToolGrantRecord[] {
+  public listGrants(scope?: ToolGrantScope, scopeRef?: string, limit = 200): Promise<ToolGrantRecord[]> {
     return this.storage.toolGrants.list(scope, scopeRef, limit);
   }
 
-  public listActiveGrants(scope?: ToolGrantScope, scopeRef?: string, limit = 200): ToolGrantRecord[] {
-    return this.storage.toolGrants.listActive(scope, scopeRef).slice(0, limit);
+  public async listActiveGrants(scope?: ToolGrantScope, scopeRef?: string, limit = 200): Promise<ToolGrantRecord[]> {
+    return (await this.storage.toolGrants.listActive(scope, scopeRef)).slice(0, limit);
   }
 
-  public createGrant(input: ToolGrantCreateInput): ToolGrantRecord {
+  public createGrant(input: ToolGrantCreateInput): Promise<ToolGrantRecord> {
     return this.storage.toolGrants.create(input);
   }
 
-  public revokeGrant(grantId: string, revokedBy: string): boolean {
+  public revokeGrant(grantId: string, revokedBy: string): Promise<boolean> {
     if (!revokedBy.trim()) {
       throw new Error("revokedBy is required to revoke a tool grant");
     }
     return this.storage.toolGrants.revoke(grantId, undefined, revokedBy);
   }
 
-  public evaluateAccess(input: ToolAccessEvaluateRequest): ToolAccessEvaluateResponse {
-    const evaluation = this.evaluateAccessInternal(input);
-    this.storage.toolAccessDecisions.record({
+  public async evaluateAccess(input: ToolAccessEvaluateRequest): Promise<ToolAccessEvaluateResponse> {
+    const evaluation = await this.evaluateAccessInternal(input);
+    await this.storage.toolAccessDecisions.record({
       toolName: input.toolName,
       agentId: input.agentId,
       sessionId: input.sessionId,
@@ -350,7 +350,7 @@ export class ToolPolicyEngine {
   public async invoke(request: ToolInvokeRequest, options: ToolPolicyInvokeOptions = {}): Promise<ToolInvokeResult> {
     const pendingActionRequest = toPendingApprovalRequestRecord(request);
     assertNoRawRemoteApprovalBearer(pendingActionRequest);
-    const directApprovalBypassId = getVerifiedApprovalBypassId(request, this.storage);
+    const directApprovalBypassId = await getVerifiedApprovalBypassId(request, this.storage);
     if (directApprovalBypassId) {
       const result = await this.executeApprovedAction(directApprovalBypassId, request.signal, {
         ...(request.externalRuntime === true ? { deferResolution: true } : {}),
@@ -367,9 +367,9 @@ export class ToolPolicyEngine {
     const toolDef = this.registry.get(request.toolName);
     const capabilityPolicy = deriveToolCapabilityPolicy(request.toolName, toolDef);
     const internalCall = buildInternalToolCall(request, capabilityPolicy, startedAt);
-    const evaluation = this.evaluateAccessInternal(request);
+    const evaluation = await this.evaluateAccessInternal(request);
 
-    this.storage.toolAccessDecisions.record({
+    await this.storage.toolAccessDecisions.record({
       toolName: request.toolName,
       agentId: request.agentId,
       sessionId: request.sessionId,
@@ -451,7 +451,7 @@ export class ToolPolicyEngine {
           preview: this.buildApprovalPreview(request),
           linkage: buildToolApprovalLinkage(request, evaluation),
         },
-        (createdApproval) => {
+        async (createdApproval) => {
           if (!isDeepStrictEqual(createdApproval.payload, request.args)) {
             throw new Error(
               "approval.create.before cannot mutate executable tool arguments; reject and submit a new tool request instead.",
@@ -460,14 +460,14 @@ export class ToolPolicyEngine {
           if (!createdApproval.expiresAt) {
             throw new Error("Database-owned approval creation did not return an expiry timestamp.");
           }
-          this.storage.pendingApprovalActions.upsertPending({
+          await this.storage.pendingApprovalActions.upsertPending({
             approvalId: createdApproval.approvalId,
             actionType: "tool.invoke",
             request: pendingActionRequest,
             expiresAt: createdApproval.expiresAt,
           });
 
-          this.storage.approvalEvents.append({
+          await this.storage.approvalEvents.append({
             approvalId: createdApproval.approvalId,
             eventType: "pending_action_registered",
             actorId: request.agentId,
@@ -482,13 +482,13 @@ export class ToolPolicyEngine {
           });
 
           return {
-            finalize: (finalApproval): readonly ApprovalObservabilityEffectInput[] => {
+            finalize: async (finalApproval): Promise<readonly ApprovalObservabilityEffectInput[]> => {
               invocationOutcome = finalApproval.status === "rejected" ? "blocked" : "approval_required";
               invocationPolicyReason =
                 finalApproval.status === "rejected"
                   ? `approval auto-rejected: ${finalApproval.resolutionNote ?? "approval policy rejected the request"}`
                   : evaluation.policyReason;
-              invocationAuditPayload = this.recordInvocationRow(
+              invocationAuditPayload = await this.recordInvocationRow(
                 auditEventId,
                 request,
                 invocationOutcome,
@@ -688,14 +688,14 @@ export class ToolPolicyEngine {
       externalSideEffect?: ToolPolicyInvokeOptions["externalSideEffect"];
     },
   ): Promise<ToolInvokeResult | undefined> {
-    const pending = this.storage.pendingApprovalActions.find(approvalId);
+    const pending = await this.storage.pendingApprovalActions.find(approvalId);
     if (!pending || pending.resolutionStatus !== "pending") {
       return undefined;
     }
 
     if (pending.actionType !== "tool.invoke") {
       if (options?.deferResolution !== true) {
-        this.storage.pendingApprovalActions.markResolved(approvalId, "failed", {
+        await this.storage.pendingApprovalActions.markResolved(approvalId, "failed", {
           error: `unsupported pending action type ${pending.actionType}`,
         });
       }
@@ -713,12 +713,12 @@ export class ToolPolicyEngine {
         reason: `approval:${approvalId}`,
       },
     };
-    if (!hasVerifiedApprovalBypass(approvedRequest, this.storage)) {
+    if (!(await hasVerifiedApprovalBypass(approvedRequest, this.storage))) {
       const reason = "pending approval action is expired, resolved, or no longer matches the stored request";
       if (options?.deferResolution !== true) {
-        this.storage.runImmediateTransaction(() => {
-          this.storage.pendingApprovalActions.markResolved(approvalId, "failed", { reason });
-          this.storage.approvalEvents.append({
+        await this.storage.runImmediateTransaction(async () => {
+          await this.storage.pendingApprovalActions.markResolved(approvalId, "failed", { reason });
+          await this.storage.approvalEvents.append({
             approvalId,
             eventType: "approved_action_executed",
             actorId: "system",
@@ -741,9 +741,9 @@ export class ToolPolicyEngine {
     const approvedToolDef = this.registry.get(executionRequest.toolName);
     const approvedCapabilityPolicy = deriveToolCapabilityPolicy(executionRequest.toolName, approvedToolDef);
     const internalCall = buildInternalToolCall(executionRequest, approvedCapabilityPolicy, startedAt);
-    const evaluation = this.evaluateAccessInternal(executionRequest);
+    const evaluation = await this.evaluateAccessInternal(executionRequest);
 
-    this.storage.toolAccessDecisions.record({
+    await this.storage.toolAccessDecisions.record({
       toolName: executionRequest.toolName,
       agentId: executionRequest.agentId,
       sessionId: executionRequest.sessionId,
@@ -778,9 +778,9 @@ export class ToolPolicyEngine {
         {
           ...(options?.deferResolution !== true
             ? {
-                commitAlongsideBlock: () => {
-                  this.storage.pendingApprovalActions.markResolved(approvalId, "failed", { reason });
-                  this.storage.approvalEvents.append({
+                commitAlongsideBlock: async () => {
+                  await this.storage.pendingApprovalActions.markResolved(approvalId, "failed", { reason });
+                  await this.storage.approvalEvents.append({
                     approvalId,
                     eventType: "approved_action_executed",
                     actorId: "system",
@@ -836,7 +836,7 @@ export class ToolPolicyEngine {
     );
 
     if (options?.deferResolution !== true) {
-      this.storage.pendingApprovalActions.markResolved(
+      await this.storage.pendingApprovalActions.markResolved(
         approvalId,
         result.outcome === "executed" ? "executed" : "failed",
         {
@@ -847,7 +847,7 @@ export class ToolPolicyEngine {
         },
       );
 
-      this.storage.approvalEvents.append({
+      await this.storage.approvalEvents.append({
         approvalId,
         eventType: "approved_action_executed",
         actorId: "system",
@@ -863,7 +863,7 @@ export class ToolPolicyEngine {
     return result;
   }
 
-  private evaluateAccessInternal(request: ToolAccessEvaluateRequest): AccessEvaluation {
+  private async evaluateAccessInternal(request: ToolAccessEvaluateRequest): Promise<AccessEvaluation> {
     const toolDef = this.registry.get(request.toolName);
     const capabilityPolicy = deriveToolCapabilityPolicy(request.toolName, toolDef);
     const riskLevel = toolDef?.riskLevel ?? "caution";
@@ -914,7 +914,7 @@ export class ToolPolicyEngine {
 
     // Citadel Wards (deny-wins) gate the request before grants.
     const rawWardEffect = effectiveCitadelId
-      ? this.evaluateCitadelWards(effectiveCitadelId, request.toolName)
+      ? await this.evaluateCitadelWards(effectiveCitadelId, request.toolName)
       : undefined;
     // The matched effect surfaced to callers: `evaluateWards` returns "allow" on
     // no-match, so collapse both "allow" and absence to `undefined`. Set ONLY when
@@ -934,7 +934,7 @@ export class ToolPolicyEngine {
     }
     const wardRequiresApproval = rawWardEffect === "require_approval";
 
-    const grantDecision = this.resolveGrantDecision(request, toolDef);
+    const grantDecision = await this.resolveGrantDecision(request, toolDef);
     if (grantDecision?.decision === "deny") {
       return withWard({
         allowed: false,
@@ -955,7 +955,7 @@ export class ToolPolicyEngine {
         ? (grantDecision.allowGrants ?? [grantDecision.grant])
         : undefined;
 
-    const structuralError = this.validateStructuralSafety(request, policy, allowGrants);
+    const structuralError = await this.validateStructuralSafety(request, policy, allowGrants);
     if (structuralError) {
       return withWard(withPolicy(deny(riskLevel, "structural_safety_block", structuralError)));
     }
@@ -995,16 +995,21 @@ export class ToolPolicyEngine {
     let requiresApproval =
       wardRequiresApproval ||
       (!hasAllowGrant && (policy.approvalMode === "approve_all" || Boolean(toolDef?.requiresApproval)));
-    const outsideRootsReadRequiresApproval = this.requiresApprovalForOutsideRootsRead(request, policy, allowGrants);
+    const outsideRootsReadRequiresApproval = await this.requiresApprovalForOutsideRootsRead(
+      request,
+      policy,
+      allowGrants,
+    );
 
     if (
       riskLevel === "danger" &&
       grantDecision?.decision === "allow" &&
       isMutationTool(toolDef) &&
-      this.isFirstMutationInScope(
+      (await this.isFirstMutationInScope(
         request,
-        this.resolveEffectiveAllowGrant(request, policy, grantDecision.grant, allowGrants) ?? grantDecision.grant,
-      )
+        (await this.resolveEffectiveAllowGrant(request, policy, grantDecision.grant, allowGrants)) ??
+          grantDecision.grant,
+      ))
     ) {
       requiresApproval = true;
     }
@@ -1099,7 +1104,8 @@ export class ToolPolicyEngine {
     const effectiveAllowGrant = officialSearchRequest
       ? officialSearchConsentGrant
       : grantDecision?.decision === "allow"
-        ? (this.resolveEffectiveAllowGrant(request, policy, grantDecision.grant, allowGrants) ?? grantDecision.grant)
+        ? ((await this.resolveEffectiveAllowGrant(request, policy, grantDecision.grant, allowGrants)) ??
+          grantDecision.grant)
         : undefined;
 
     return withWard({
@@ -1252,29 +1258,29 @@ export class ToolPolicyEngine {
    * `citadel_wards` table directly (preserving the rich WardEffects) rather than
    * mirroring Wards into tool-grants (which would be lossy to allow/deny).
    */
-  private evaluateCitadelWards(citadelId: string, action: string): WardEffect | undefined {
-    const citadelRepo = this.storage.citadels as { listWards?: (id: string) => CitadelWardRecord[] } | undefined;
+  private async evaluateCitadelWards(citadelId: string, action: string): Promise<WardEffect | undefined> {
+    const citadelRepo = this.storage.citadels as unknown as
+      | { listWards?: (id: string) => Promise<CitadelWardRecord[]> }
+      | undefined;
     if (!citadelRepo?.listWards) {
       return undefined;
     }
-    return evaluateWards(citadelRepo.listWards(citadelId), action);
+    return evaluateWards(await citadelRepo.listWards(citadelId), action);
   }
 
-  private resolveGrantDecision(
+  private async resolveGrantDecision(
     request: ToolAccessEvaluateRequest,
     toolDef?: ToolDefinition,
-  ): GrantDecision | undefined {
+  ): Promise<GrantDecision | undefined> {
     const scoped = buildScopeCandidates(request);
     const matchingGrants: ToolGrantRecord[] = [];
     for (const candidate of scoped) {
-      const grants = this.storage.toolGrants
-        .listActive(candidate.scope, candidate.scopeRef)
-        .filter(
-          (grant) =>
-            grant.scope === candidate.scope &&
-            grant.scopeRef === candidate.scopeRef &&
-            matchesToolPattern(grant.toolPattern, request.toolName),
-        );
+      const grants = (await this.storage.toolGrants.listActive(candidate.scope, candidate.scopeRef)).filter(
+        (grant) =>
+          grant.scope === candidate.scope &&
+          grant.scopeRef === candidate.scopeRef &&
+          matchesToolPattern(grant.toolPattern, request.toolName),
+      );
 
       if (grants.length === 0) {
         continue;
@@ -1298,7 +1304,7 @@ export class ToolPolicyEngine {
       if (grant.decision !== "allow") {
         continue;
       }
-      const constraintsError = this.applyGrantConstraints(request, grant, toolDef);
+      const constraintsError = await this.applyGrantConstraints(request, grant, toolDef);
       if (!constraintsError) {
         allowedGrants.push(grant);
         continue;
@@ -1327,11 +1333,11 @@ export class ToolPolicyEngine {
     return undefined;
   }
 
-  private applyGrantConstraints(
+  private async applyGrantConstraints(
     request: ToolAccessEvaluateRequest,
     grant: ToolGrantRecord,
     toolDef?: ToolDefinition,
-  ): string | undefined {
+  ): Promise<string | undefined> {
     const constraints = grant.constraints;
     if (!constraints) {
       return undefined;
@@ -1342,7 +1348,7 @@ export class ToolPolicyEngine {
     }
 
     if (typeof constraints.maxCallsPerHour === "number") {
-      const count = this.storage.toolAccessDecisions.countToolCallsInLastHourInScope({
+      const count = await this.storage.toolAccessDecisions.countToolCallsInLastHourInScope({
         toolName: request.toolName,
         scope: grant.scope,
         agentId: request.agentId,
@@ -1356,7 +1362,7 @@ export class ToolPolicyEngine {
     }
 
     if (typeof constraints.maxWritesPerHour === "number" && isMutationTool(toolDef)) {
-      const count = this.storage.toolAccessDecisions.countWritesInLastHourInScope({
+      const count = await this.storage.toolAccessDecisions.countWritesInLastHourInScope({
         scope: grant.scope,
         agentId: request.agentId,
         sessionId: request.sessionId,
@@ -1375,7 +1381,7 @@ export class ToolPolicyEngine {
       if (request.toolName === "docs.ingest" && docsIngestSourceType !== "url") {
         return "grant host constraints require a URL docs.ingest source";
       }
-      const candidates = extractGrantHostCandidates(request, this.storage);
+      const candidates = await extractGrantHostCandidates(request, this.storage);
       if (candidates.length === 0 && request.toolName === "browser.search") {
         return HOST_CONSTRAINED_BROWSER_SEARCH_GRANT_INAPPLICABLE;
       }
@@ -1429,26 +1435,26 @@ export class ToolPolicyEngine {
     return undefined;
   }
 
-  private isFirstMutationInScope(request: ToolAccessEvaluateRequest, grant: ToolGrantRecord): boolean {
+  private async isFirstMutationInScope(request: ToolAccessEvaluateRequest, grant: ToolGrantRecord): Promise<boolean> {
     return (
-      this.storage.toolAccessDecisions.countToolCallsInLastHourInScope({
+      (await this.storage.toolAccessDecisions.countToolCallsInLastHourInScope({
         toolName: request.toolName,
         scope: grant.scope,
         agentId: request.agentId,
         sessionId: request.sessionId,
         workspaceId: request.workspaceId,
         taskId: request.taskId,
-      }) === 0
+      })) === 0
     );
   }
 
-  private validateStructuralSafety(
+  private async validateStructuralSafety(
     request: ToolAccessEvaluateRequest,
     policy?: EffectiveToolPolicy,
     allowGrants?: ToolGrantRecord[],
-  ): string | undefined {
+  ): Promise<string | undefined> {
     try {
-      const readPathError = this.validateReadPaths(
+      const readPathError = await this.validateReadPaths(
         request,
         policy ?? resolveEffectivePolicy(this.config, request.agentId),
         allowGrants,
@@ -1514,11 +1520,11 @@ export class ToolPolicyEngine {
     return undefined;
   }
 
-  private validateReadPaths(
+  private async validateReadPaths(
     request: ToolAccessEvaluateRequest,
     policy: EffectiveToolPolicy,
     allowGrants?: ToolGrantRecord[],
-  ): string | undefined {
+  ): Promise<string | undefined> {
     const readAccessMode = this.getReadAccessMode(policy);
     for (const target of extractReadPathCandidates(request)) {
       const access = resolveReadPathAccess(
@@ -1532,7 +1538,7 @@ export class ToolPolicyEngine {
       if (readAccessMode === "full_disk") {
         continue;
       }
-      if (readAccessMode === "approval_required" && this.hasApprovalBypass(request)) {
+      if (readAccessMode === "approval_required" && (await this.hasApprovalBypass(request))) {
         continue;
       }
       if (this.anyGrantAllowsReadPath(allowGrants, access.resolvedPath)) {
@@ -1546,15 +1552,15 @@ export class ToolPolicyEngine {
     return undefined;
   }
 
-  private requiresApprovalForOutsideRootsRead(
+  private async requiresApprovalForOutsideRootsRead(
     request: ToolAccessEvaluateRequest,
     policy: EffectiveToolPolicy,
     allowGrants?: ToolGrantRecord[],
-  ): boolean {
+  ): Promise<boolean> {
     if (this.getReadAccessMode(policy) !== "approval_required") {
       return false;
     }
-    if (this.hasApprovalBypass(request)) {
+    if (await this.hasApprovalBypass(request)) {
       return false;
     }
     for (const target of extractReadPathCandidates(request)) {
@@ -1570,7 +1576,7 @@ export class ToolPolicyEngine {
     return false;
   }
 
-  private hasApprovalBypass(request: ToolAccessEvaluateRequest): boolean {
+  private hasApprovalBypass(request: ToolAccessEvaluateRequest): Promise<boolean> {
     return hasVerifiedApprovalBypass(request, this.storage);
   }
 
@@ -1586,13 +1592,13 @@ export class ToolPolicyEngine {
     return grants?.some((grant) => this.grantAllowsReadPath(grant, resolvedPath)) ?? false;
   }
 
-  private resolveEffectiveAllowGrant(
+  private async resolveEffectiveAllowGrant(
     request: ToolAccessEvaluateRequest,
     policy: EffectiveToolPolicy,
     fallback: ToolGrantRecord | undefined,
     allowGrants?: ToolGrantRecord[],
-  ): ToolGrantRecord | undefined {
-    return this.resolveGrantForOutsideRootsRead(request, policy, allowGrants) ?? fallback;
+  ): Promise<ToolGrantRecord | undefined> {
+    return (await this.resolveGrantForOutsideRootsRead(request, policy, allowGrants)) ?? fallback;
   }
 
   private resolveOfficialSearchConsentGrant(
@@ -1620,15 +1626,15 @@ export class ToolPolicyEngine {
     });
   }
 
-  private resolveGrantForOutsideRootsRead(
+  private async resolveGrantForOutsideRootsRead(
     request: ToolAccessEvaluateRequest,
     policy: EffectiveToolPolicy,
     allowGrants?: ToolGrantRecord[],
-  ): ToolGrantRecord | undefined {
+  ): Promise<ToolGrantRecord | undefined> {
     if (!allowGrants?.length || this.getReadAccessMode(policy) === "full_disk") {
       return undefined;
     }
-    if (this.getReadAccessMode(policy) === "approval_required" && this.hasApprovalBypass(request)) {
+    if (this.getReadAccessMode(policy) === "approval_required" && (await this.hasApprovalBypass(request))) {
       return undefined;
     }
     for (const target of extractReadPathCandidates(request)) {
@@ -1698,7 +1704,7 @@ export class ToolPolicyEngine {
     options: ToolPolicyInvokeOptions = {},
   ): Promise<ToolInvokeResult> {
     const executionRequest = withExecutionGrantContext(request, evaluation);
-    if (grantIdToConsume && !this.storage.toolGrants.consumeOne(grantIdToConsume)) {
+    if (grantIdToConsume && !(await this.storage.toolGrants.consumeOne(grantIdToConsume))) {
       const reason = "blocked: one-time tool grant is no longer available";
       await this.recordBlocked(auditEventId, request, reason, {
         matchedGrantId: matchedGrantId ?? grantIdToConsume,
@@ -1960,7 +1966,7 @@ export class ToolPolicyEngine {
     reason: string,
     details: Record<string, unknown>,
     options?: {
-      commitAlongsideBlock?: () => void;
+      commitAlongsideBlock?: () => void | Promise<void>;
       tolerateAuditDeliveryFailure?: boolean;
     },
   ): Promise<void> {
@@ -1970,8 +1976,8 @@ export class ToolPolicyEngine {
     const localOperatorOverrideId = readNonEmptyString(details.localOperatorOverrideId);
     const approvalMode = readApprovalMode(details.approvalMode);
     const reasonCodes = readReasonCodes(details.reasonCodes);
-    const insertBlock = () => {
-      this.storage.db
+    const insertBlock = async () => {
+      await this.storage.db
         .prepare(
           `
       INSERT INTO policy_blocks (
@@ -1998,12 +2004,12 @@ export class ToolPolicyEngine {
         );
     };
     if (options?.commitAlongsideBlock) {
-      this.storage.runImmediateTransaction(() => {
-        insertBlock();
-        options.commitAlongsideBlock?.();
+      await this.storage.runImmediateTransaction(async () => {
+        await insertBlock();
+        await options.commitAlongsideBlock?.();
       });
     } else {
-      insertBlock();
+      await insertBlock();
     }
 
     try {
@@ -2040,7 +2046,7 @@ export class ToolPolicyEngine {
     approvalId?: string,
     evaluation?: AccessEvaluation,
   ): Promise<void> {
-    const auditPayload = this.recordInvocationRow(
+    const auditPayload = await this.recordInvocationRow(
       auditEventId,
       request,
       outcome,
@@ -2052,7 +2058,7 @@ export class ToolPolicyEngine {
     await this.storage.audit.append("tool_invocations", auditPayload);
   }
 
-  private recordInvocationRow(
+  private async recordInvocationRow(
     auditEventId: string,
     request: ToolInvokeRequest,
     outcome: "executed" | "approval_required" | "blocked",
@@ -2060,11 +2066,11 @@ export class ToolPolicyEngine {
     result?: Record<string, unknown>,
     approvalId?: string,
     evaluation?: AccessEvaluation,
-  ): Record<string, unknown> {
+  ): Promise<Record<string, unknown>> {
     const now = new Date().toISOString();
     const sanitizedArgs = sanitizeForModel(request.args);
     const sanitizedResult = result ? sanitizeForModel(result) : undefined;
-    this.storage.db
+    await this.storage.db
       .prepare(
         `
       INSERT INTO tool_invocations (
@@ -2119,7 +2125,7 @@ export class ToolPolicyEngine {
     request: ToolInvokeRequest,
     evaluation?: AccessEvaluation,
   ): Promise<void> {
-    const accessEvaluation = evaluation ?? this.evaluateAccessInternal(request);
+    const accessEvaluation = evaluation ?? (await this.evaluateAccessInternal(request));
     if (hasFullWebAccess(request)) {
       await this.recordFullWebAccessNetworkUseIfNeeded(auditEventId, request, accessEvaluation);
       return;
@@ -2430,10 +2436,10 @@ function extractHostCandidates(args?: Record<string, unknown>): string[] {
 // attachment-walking behaviour without standing up an engine instance.
 export const extractHostCandidatesForTests = extractHostCandidates;
 
-function extractGrantHostCandidates(
+async function extractGrantHostCandidates(
   request: Pick<ToolAccessEvaluateRequest, "toolName" | "args">,
-  storage?: Storage,
-): string[] {
+  storage?: AsyncStorage,
+): Promise<string[]> {
   const candidates = extractHostCandidates(request.args);
   const args = request.args;
   if (request.toolName === "browser.search") {
@@ -2445,21 +2451,21 @@ function extractGrantHostCandidates(
     candidates.push(...extractHostCandidates({ url: args.source }));
   }
   candidates.push(
-    ...resolveFixedOutboundHostsForTool(request.toolName, resolveIntegrationConnectionKey(request, storage)),
+    ...resolveFixedOutboundHostsForTool(request.toolName, await resolveIntegrationConnectionKey(request, storage)),
   );
   return [...new Set(candidates)];
 }
 
-function resolveIntegrationConnectionKey(
+async function resolveIntegrationConnectionKey(
   request: Pick<ToolAccessEvaluateRequest, "args">,
-  storage?: Storage,
-): string | undefined {
+  storage?: AsyncStorage,
+): Promise<string | undefined> {
   const connectionId = request.args?.connectionId;
   if (typeof connectionId !== "string" || !connectionId.trim()) {
     return undefined;
   }
   try {
-    return storage?.integrationConnections?.get(connectionId.trim())?.key;
+    return (await storage?.integrationConnections?.get(connectionId.trim()))?.key;
   } catch {
     return undefined;
   }

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { Storage } from "@goatcitadel/storage";
+import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import { ChatSessionStatusService } from "./chat-session-status-service.js";
 
 const cleanups: Array<() => void> = [];
@@ -26,7 +26,7 @@ function harness() {
   storage.chatSessionPrefs.ensure("session-1", "2026-07-27T00:00:00.000Z");
   storage.chatSessionPrefs.patch("session-1", { providerId: "openai", model: "gpt-status" });
   const service = new ChatSessionStatusService({
-    storage,
+    storage: createSqliteAsyncStorage(storage),
     getModelContextWindow: () => 128_000,
     getRuntimeIdentity: () => ({
       schemaVersion: 1,
@@ -52,7 +52,7 @@ function harness() {
 }
 
 describe("ChatSessionStatusService", () => {
-  it("aggregates trace, attention, context, usage, and unavailable evidence without inventing health", () => {
+  it("aggregates trace, attention, context, usage, and unavailable evidence without inventing health", async () => {
     const { storage, service } = harness();
     storage.chatTurnTraces.create({
       turnId: "turn-1",
@@ -82,7 +82,7 @@ describe("ChatSessionStatusService", () => {
       linkage: { sessionId: "session-1", turnId: "turn-1", workspaceId: "workspace-1" },
     });
 
-    const status = service.getOperatorStatus("session-1");
+    const status = await service.getOperatorStatus("session-1");
 
     expect(status.model).toEqual({
       availability: "available",
@@ -103,9 +103,9 @@ describe("ChatSessionStatusService", () => {
     expect(status.usage).toMatchObject({ availability: "available", value: { attemptCount: 0 } });
   });
 
-  it("returns a smaller model-safe projection without workspace or attention identifiers", () => {
+  it("returns a smaller model-safe projection without workspace or attention identifiers", async () => {
     const { service } = harness();
-    const projection = service.getModelProjection("session-1");
+    const projection = await service.getModelProjection("session-1");
     const serialized = JSON.stringify(projection);
     expect(serialized).not.toContain("workspace-1");
     expect(projection.context).toMatchObject({ availability: "available", value: { contextWindowTokens: 128_000 } });
@@ -115,8 +115,8 @@ describe("ChatSessionStatusService", () => {
     });
   });
 
-  it("denies unknown sessions", () => {
+  it("denies unknown sessions", async () => {
     const { service } = harness();
-    expect(() => service.getOperatorStatus("missing")).toThrow("Chat session missing not found");
+    await expect(service.getOperatorStatus("missing")).rejects.toThrow("Chat session missing not found");
   });
 });

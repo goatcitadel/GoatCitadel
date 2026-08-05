@@ -37,7 +37,7 @@ describe("HooksService", () => {
       },
     });
 
-    const low = service.createWorkspaceHook({
+    const low = await service.createWorkspaceHook({
       workspaceId,
       label: "low",
       trigger: "llm.model.select.before",
@@ -50,7 +50,7 @@ describe("HooksService", () => {
         },
       },
     });
-    const high = service.createWorkspaceHook({
+    const high = await service.createWorkspaceHook({
       workspaceId,
       label: "high",
       trigger: "llm.model.select.before",
@@ -113,14 +113,14 @@ describe("HooksService", () => {
         return new Response(JSON.stringify({}), { status: 200 });
       },
     });
-    service.createWorkspaceHook({
+    await service.createWorkspaceHook({
       workspaceId,
       label: "effect boundary",
       trigger: "tool.call.before",
       mode: "observe",
       action: { type: "webhook", webhook: { url: "https://hooks.example.test/effect-boundary" } },
     });
-    const expectedInterposition = service.getToolCallBeforeInterposition(workspaceId);
+    const expectedInterposition = await service.getToolCallBeforeInterposition(workspaceId);
 
     const result = await service.runInlineHooks({
       workspaceId,
@@ -129,7 +129,9 @@ describe("HooksService", () => {
       entityId: "tool-effect-boundary",
       payload: { toolName: "time.now" },
       expectedInterposition,
-      beforeExternalDispatch: () => events.push("fence"),
+      beforeExternalDispatch: async () => {
+        events.push("fence");
+      },
     });
 
     expect(result.runs).toHaveLength(1);
@@ -138,17 +140,17 @@ describe("HooksService", () => {
 
   it("rejects exact-list interposition drift before a tool hook webhook", async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({}), { status: 200 }));
-    const beforeExternalDispatch = vi.fn();
+    const beforeExternalDispatch = vi.fn(async () => undefined);
     const { service, workspaceId } = createHarness({ fetchImpl });
-    const hook = service.createWorkspaceHook({
+    const hook = await service.createWorkspaceHook({
       workspaceId,
       label: "sealed hook",
       trigger: "tool.call.before",
       mode: "observe",
       action: { type: "webhook", webhook: { url: "https://hooks.example.test/original" } },
     });
-    const expectedInterposition = service.getToolCallBeforeInterposition(workspaceId);
-    service.updateWorkspaceHook(workspaceId, hook.hookId, {
+    const expectedInterposition = await service.getToolCallBeforeInterposition(workspaceId);
+    await service.updateWorkspaceHook(workspaceId, hook.hookId, {
       action: { type: "webhook", webhook: { url: "https://hooks.example.test/replaced" } },
     });
 
@@ -167,22 +169,22 @@ describe("HooksService", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it("rejects after-hook action drift before the auxiliary fence or durable enqueue", () => {
-    const beforeExternalDispatch = vi.fn();
+  it("rejects after-hook action drift before the auxiliary fence or durable enqueue", async () => {
+    const beforeExternalDispatch = vi.fn(async () => undefined);
     const { service, workspaceId } = createHarness();
-    const hook = service.createWorkspaceHook({
+    const hook = await service.createWorkspaceHook({
       workspaceId,
       label: "sealed after hook",
       trigger: "tool.call.after",
       mode: "observe",
       action: { type: "webhook", webhook: { url: "https://hooks.example.test/original-after" } },
     });
-    const expectedInterposition = service.getToolCallBeforeInterposition(workspaceId);
-    service.updateWorkspaceHook(workspaceId, hook.hookId, {
+    const expectedInterposition = await service.getToolCallBeforeInterposition(workspaceId);
+    await service.updateWorkspaceHook(workspaceId, hook.hookId, {
       action: { type: "webhook", webhook: { url: "https://hooks.example.test/replaced-after" } },
     });
 
-    expect(() =>
+    await expect(
       service.enqueueAfterHooks({
         workspaceId,
         trigger: "tool.call.after",
@@ -192,23 +194,23 @@ describe("HooksService", () => {
         expectedInterposition,
         beforeExternalDispatch,
       }),
-    ).toThrow(/interposition binding drifted/i);
+    ).rejects.toThrow(/interposition binding drifted/i);
     expect(beforeExternalDispatch).not.toHaveBeenCalled();
   });
 
-  it("crosses the auxiliary effect fence before materializing an admitted after hook", () => {
+  it("crosses the auxiliary effect fence before materializing an admitted after hook", async () => {
     const { service, workspaceId } = createHarness();
-    service.createWorkspaceHook({
+    await service.createWorkspaceHook({
       workspaceId,
       label: "admitted after hook",
       trigger: "tool.call.after",
       mode: "observe",
       action: { type: "webhook", webhook: { url: "https://hooks.example.test/admitted-after" } },
     });
-    const expectedInterposition = service.getToolCallBeforeInterposition(workspaceId);
-    const beforeExternalDispatch = vi.fn();
+    const expectedInterposition = await service.getToolCallBeforeInterposition(workspaceId);
+    const beforeExternalDispatch = vi.fn(async () => undefined);
 
-    const runs = service.enqueueAfterHooks({
+    const runs = await service.enqueueAfterHooks({
       workspaceId,
       trigger: "tool.call.after",
       entityType: "tool_call",
@@ -241,7 +243,7 @@ describe("HooksService", () => {
         }),
     });
 
-    service.createWorkspaceHook({
+    await service.createWorkspaceHook({
       workspaceId,
       label: "timeout",
       trigger: "tool.call.before",
@@ -284,7 +286,7 @@ describe("HooksService", () => {
       },
     });
 
-    service.createWorkspaceHook({
+    await service.createWorkspaceHook({
       workspaceId,
       label: "fail-closed",
       trigger: "llm.request.before",
@@ -337,7 +339,7 @@ describe("HooksService", () => {
       },
     });
 
-    harness.service.createWorkspaceHook({
+    await harness.service.createWorkspaceHook({
       workspaceId: harness.workspaceId,
       label: "recursive",
       trigger: "tool.call.before",
@@ -375,7 +377,7 @@ describe("HooksService", () => {
       fetchImpl,
     });
 
-    service.createWorkspaceHook({
+    await service.createWorkspaceHook({
       workspaceId,
       label: "after",
       trigger: "tool.call.after",
@@ -389,7 +391,7 @@ describe("HooksService", () => {
       },
     });
 
-    const queued = service.enqueueAfterHooks({
+    const queued = await service.enqueueAfterHooks({
       workspaceId,
       trigger: "tool.call.after",
       entityType: "tool_call",
@@ -416,7 +418,7 @@ describe("HooksService", () => {
   it("does not re-execute a dead-lettered hook delivery", async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({}), { status: 200 }));
     const { service, workspaceId } = createHarness({ fetchImpl });
-    service.createWorkspaceHook({
+    await service.createWorkspaceHook({
       workspaceId,
       label: "after-dead-letter",
       trigger: "tool.call.after",
@@ -426,23 +428,25 @@ describe("HooksService", () => {
         webhook: { url: "https://hooks.example.test/dead-letter" },
       },
     });
-    const queued = service.enqueueAfterHooks({
-      workspaceId,
-      trigger: "tool.call.after",
-      entityType: "tool_call",
-      entityId: "tool-dead-letter",
-      payload: { toolName: "shell.exec", outcome: "failed" },
-    })[0]!;
-    const deadLettered = service.markHookRunDeadLettered(queued.runId, "retry budget exhausted");
+    const queued = (
+      await service.enqueueAfterHooks({
+        workspaceId,
+        trigger: "tool.call.after",
+        entityType: "tool_call",
+        entityId: "tool-dead-letter",
+        payload: { toolName: "shell.exec", outcome: "failed" },
+      })
+    )[0]!;
+    const deadLettered = await service.markHookRunDeadLettered(queued.runId, "retry budget exhausted");
 
     await expect(service.executeHookDelivery(deadLettered.runId, 99)).resolves.toEqual(deadLettered);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it("deduplicates repeated after-hook enqueue requests for the same hook/entity pair", () => {
+  it("deduplicates repeated after-hook enqueue requests for the same hook/entity pair", async () => {
     const { service, workspaceId, requestedRunIds } = createHarness();
 
-    service.createWorkspaceHook({
+    await service.createWorkspaceHook({
       workspaceId,
       label: "after-dedupe",
       trigger: "tool.call.after",
@@ -455,7 +459,7 @@ describe("HooksService", () => {
       },
     });
 
-    const first = service.enqueueAfterHooks({
+    const first = await service.enqueueAfterHooks({
       workspaceId,
       trigger: "tool.call.after",
       entityType: "tool_call",
@@ -464,7 +468,7 @@ describe("HooksService", () => {
         toolName: "shell.exec",
       },
     });
-    const second = service.enqueueAfterHooks({
+    const second = await service.enqueueAfterHooks({
       workspaceId,
       trigger: "tool.call.after",
       entityType: "tool_call",
@@ -481,9 +485,9 @@ describe("HooksService", () => {
     expect(requestedRunIds).toEqual([first[0]?.durableRunId, first[0]?.durableRunId]);
   });
 
-  it("repairs a queued unlinked after-hook with one deterministic durable child", () => {
+  it("repairs a queued unlinked after-hook with one deterministic durable child", async () => {
     const { service, workspaceId, requestedRunIds, hookRuns, durableRuns } = createHarness();
-    const hook = service.createWorkspaceHook({
+    const hook = await service.createWorkspaceHook({
       workspaceId,
       label: "after-gap-repair",
       trigger: "tool.call.after",
@@ -507,14 +511,14 @@ describe("HooksService", () => {
       updatedAt: "2026-03-26T00:00:00.000Z",
     });
 
-    const first = service.enqueueAfterHooks({
+    const first = await service.enqueueAfterHooks({
       workspaceId,
       trigger: "tool.call.after",
       entityType: "tool_call",
       entityId: "tool-gap-repair",
       payload: { toolName: "shell.exec" },
     });
-    const takeoverRetry = service.enqueueAfterHooks({
+    const takeoverRetry = await service.enqueueAfterHooks({
       workspaceId,
       trigger: "tool.call.after",
       entityType: "tool_call",
@@ -533,9 +537,9 @@ describe("HooksService", () => {
     expect(requestedRunIds).toEqual([stableRunId, stableRunId]);
   });
 
-  it("rolls back hook and deterministic durable creation when attachment fails, then retries cleanly", () => {
+  it("rolls back hook and deterministic durable creation when attachment fails, then retries cleanly", async () => {
     const { service, workspaceId, hookRuns, durableRuns } = createHarness({ failAttachOnce: true });
-    service.createWorkspaceHook({
+    await service.createWorkspaceHook({
       workspaceId,
       label: "after-attach-rollback",
       trigger: "tool.call.after",
@@ -550,19 +554,19 @@ describe("HooksService", () => {
       payload: { toolName: "shell.exec" },
     };
 
-    expect(() => service.enqueueAfterHooks(input)).toThrow("synthetic attach failure");
+    await expect(service.enqueueAfterHooks(input)).rejects.toThrow("synthetic attach failure");
     expect(hookRuns.size).toBe(0);
     expect(durableRuns.size).toBe(0);
 
-    const [repaired] = service.enqueueAfterHooks(input);
+    const [repaired] = await service.enqueueAfterHooks(input);
     expect(repaired?.durableRunId).toBe(`hook-delivery-${repaired?.runId}`);
     expect(hookRuns.size).toBe(1);
     expect(durableRuns.size).toBe(1);
   });
 
-  it("fails closed instead of adopting a foreign or corrupt durable hook linkage", () => {
+  it("fails closed instead of adopting a foreign or corrupt durable hook linkage", async () => {
     const { service, workspaceId, requestedRunIds, hookRuns, durableRuns } = createHarness();
-    const hook = service.createWorkspaceHook({
+    const hook = await service.createWorkspaceHook({
       workspaceId,
       label: "after-link-fence",
       trigger: "tool.call.after",
@@ -587,7 +591,7 @@ describe("HooksService", () => {
       });
     };
     seed("hookrun-foreign", "tool-foreign", "durable-foreign");
-    expect(() =>
+    await expect(
       service.enqueueAfterHooks({
         workspaceId,
         trigger: "tool.call.after",
@@ -595,7 +599,7 @@ describe("HooksService", () => {
         entityId: "tool-foreign",
         payload: {},
       }),
-    ).toThrow(/foreign durable linkage/);
+    ).rejects.toThrow(/foreign durable linkage/);
 
     const corruptHookRunId = "hookrun-corrupt";
     const stableRunId = `hook-delivery-${corruptHookRunId}`;
@@ -611,7 +615,7 @@ describe("HooksService", () => {
       createdAt: "2026-03-26T00:00:00.000Z",
       updatedAt: "2026-03-26T00:00:00.000Z",
     });
-    expect(() =>
+    await expect(
       service.enqueueAfterHooks({
         workspaceId,
         trigger: "tool.call.after",
@@ -619,14 +623,14 @@ describe("HooksService", () => {
         entityId: "tool-corrupt",
         payload: {},
       }),
-    ).toThrow(/does not match hook delivery owner/);
+    ).rejects.toThrow(/does not match hook delivery owner/);
     expect(requestedRunIds).toEqual([]);
   });
 
-  it("deduplicates agent-end retries per semantic status without suppressing pause-to-complete progression", () => {
+  it("deduplicates agent-end retries per semantic status without suppressing pause-to-complete progression", async () => {
     const { service, workspaceId, requestedRunIds } = createHarness();
 
-    service.createWorkspaceHook({
+    await service.createWorkspaceHook({
       workspaceId,
       label: "agent-end-lifecycle",
       trigger: "agent_end",
@@ -639,8 +643,8 @@ describe("HooksService", () => {
       },
     });
 
-    const enqueue = (status: "waiting_for_approval" | "completed") =>
-      service.enqueueAfterHooks({
+    const enqueue = async (status: "waiting_for_approval" | "completed") =>
+      await service.enqueueAfterHooks({
         workspaceId,
         trigger: "agent_end",
         entityType: "chat_turn",
@@ -649,10 +653,10 @@ describe("HooksService", () => {
         payload: { status },
       });
 
-    const waiting = enqueue("waiting_for_approval");
-    const waitingRetry = enqueue("waiting_for_approval");
-    const completed = enqueue("completed");
-    const completedRetry = enqueue("completed");
+    const waiting = await enqueue("waiting_for_approval");
+    const waitingRetry = await enqueue("waiting_for_approval");
+    const completed = await enqueue("completed");
+    const completedRetry = await enqueue("completed");
 
     expect(waitingRetry[0]?.runId).toBe(waiting[0]?.runId);
     expect(completedRetry[0]?.runId).toBe(completed[0]?.runId);
@@ -688,7 +692,7 @@ describe("HooksService", () => {
     });
     const { service, workspaceId } = createHarness({ fetchImpl });
 
-    service.createWorkspaceHook({
+    await service.createWorkspaceHook({
       workspaceId,
       label: "agent-end-overlap",
       trigger: "agent_end",
@@ -698,17 +702,19 @@ describe("HooksService", () => {
         webhook: { url: "https://hooks.example.test/agent-end-overlap" },
       },
     });
-    const enqueue = (status: "waiting_for_approval" | "completed") =>
-      service.enqueueAfterHooks({
-        workspaceId,
-        trigger: "agent_end",
-        entityType: "chat_turn",
-        entityId: "turn-agent-end-overlap",
-        idempotencyDiscriminator: status,
-        payload: { status },
-      })[0]!;
-    const waiting = enqueue("waiting_for_approval");
-    const completed = enqueue("completed");
+    const enqueue = async (status: "waiting_for_approval" | "completed") =>
+      (
+        await service.enqueueAfterHooks({
+          workspaceId,
+          trigger: "agent_end",
+          entityType: "chat_turn",
+          entityId: "turn-agent-end-overlap",
+          idempotencyDiscriminator: status,
+          payload: { status },
+        })
+      )[0]!;
+    const waiting = await enqueue("waiting_for_approval");
+    const completed = await enqueue("completed");
 
     const waitingDelivery = service.executeHookDelivery(waiting.runId, 1);
     await waitingStarted;
@@ -723,14 +729,20 @@ describe("HooksService", () => {
 
   it("aborts durable hook delivery without dead-lettering the hook run", async () => {
     const controller = new AbortController();
+    let markDeliveryStarted!: () => void;
+    const deliveryStarted = new Promise<void>((resolve) => {
+      markDeliveryStarted = resolve;
+    });
     const { service, workspaceId } = createHarness({
-      fetchImpl: (_url, init) =>
-        new Promise<Response>((_resolve, reject) => {
+      fetchImpl: (_url, init) => {
+        markDeliveryStarted();
+        return new Promise<Response>((_resolve, reject) => {
           init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
-        }),
+        });
+      },
     });
 
-    service.createWorkspaceHook({
+    await service.createWorkspaceHook({
       workspaceId,
       label: "after-abort",
       trigger: "tool.call.after",
@@ -743,7 +755,7 @@ describe("HooksService", () => {
       },
     });
 
-    const queued = service.enqueueAfterHooks({
+    const queued = await service.enqueueAfterHooks({
       workspaceId,
       trigger: "tool.call.after",
       entityType: "tool_call",
@@ -754,10 +766,11 @@ describe("HooksService", () => {
     });
 
     const runPromise = service.executeHookDelivery(queued[0]!.runId, 1, { signal: controller.signal });
+    await deliveryStarted;
     controller.abort(new Error("lease lost"));
 
     await expect(runPromise).rejects.toThrow("lease lost");
-    expect(service.listWorkspaceHookRuns(workspaceId)[0]?.status).toBe("running");
+    expect((await service.listWorkspaceHookRuns(workspaceId))[0]?.status).toBe("running");
   });
 
   it("keeps a delivered hook completed when realtime projection fails", async () => {
@@ -770,14 +783,14 @@ describe("HooksService", () => {
         }
       },
     });
-    service.createWorkspaceHook({
+    await service.createWorkspaceHook({
       workspaceId,
       label: "after-commit-truth",
       trigger: "tool.call.after",
       mode: "observe",
       action: { type: "webhook", webhook: { url: "https://hooks.example.test/after-commit-truth" } },
     });
-    const [queued] = service.enqueueAfterHooks({
+    const [queued] = await service.enqueueAfterHooks({
       workspaceId,
       trigger: "tool.call.after",
       entityType: "tool_call",
@@ -787,7 +800,7 @@ describe("HooksService", () => {
 
     await expect(service.executeHookDelivery(queued!.runId, 1)).resolves.toMatchObject({ status: "completed" });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect(service.listWorkspaceHookRuns(workspaceId)[0]?.status).toBe("completed");
+    expect((await service.listWorkspaceHookRuns(workspaceId))[0]?.status).toBe("completed");
   });
 
   it("records returned webhook success despite a late lease abort", async () => {
@@ -797,14 +810,14 @@ describe("HooksService", () => {
       return new Response(JSON.stringify({}), { status: 200 });
     });
     const { service, workspaceId } = createHarness({ fetchImpl });
-    service.createWorkspaceHook({
+    await service.createWorkspaceHook({
       workspaceId,
       label: "after-late-abort",
       trigger: "tool.call.after",
       mode: "observe",
       action: { type: "webhook", webhook: { url: "https://hooks.example.test/after-late-abort" } },
     });
-    const [queued] = service.enqueueAfterHooks({
+    const [queued] = await service.enqueueAfterHooks({
       workspaceId,
       trigger: "tool.call.after",
       entityType: "tool_call",
@@ -818,10 +831,10 @@ describe("HooksService", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects hook creation for unknown workspaces even in observe mode", () => {
+  it("rejects hook creation for unknown workspaces even in observe mode", async () => {
     const { service } = createHarness();
 
-    expect(() =>
+    await expect(
       service.createWorkspaceHook({
         workspaceId: "missing-workspace",
         label: "observe",
@@ -834,15 +847,15 @@ describe("HooksService", () => {
           },
         },
       }),
-    ).toThrow(/Unknown workspace/);
+    ).rejects.toThrow(/Unknown workspace/);
   });
 
-  it("skips after-hook delivery when the durable kernel is disabled", () => {
+  it("skips after-hook delivery when the durable kernel is disabled", async () => {
     const { service, workspaceId, requestedRunIds } = createHarness({
       durableKernelEnabled: false,
     });
 
-    service.createWorkspaceHook({
+    await service.createWorkspaceHook({
       workspaceId,
       label: "after-disabled",
       trigger: "tool.call.after",
@@ -855,7 +868,7 @@ describe("HooksService", () => {
       },
     });
 
-    const queued = service.enqueueAfterHooks({
+    const queued = await service.enqueueAfterHooks({
       workspaceId,
       trigger: "tool.call.after",
       entityType: "tool_call",
@@ -872,11 +885,11 @@ describe("HooksService", () => {
     expect(requestedRunIds).toEqual([]);
   });
 
-  it("accepts gateway.dispatch.before for intercept mode hooks", () => {
+  it("accepts gateway.dispatch.before for intercept mode hooks", async () => {
     const { service, workspaceId } = createHarness({
       workspacePrefs: { hooks: { allowInterceptingHooks: true } },
     });
-    const created = service.createWorkspaceHook({
+    const created = await service.createWorkspaceHook({
       workspaceId,
       label: "dispatch-veto",
       trigger: "gateway.dispatch.before",
@@ -887,11 +900,11 @@ describe("HooksService", () => {
     expect(created.mode).toBe("intercept");
   });
 
-  it("rejects gateway.dispatch.before for mutate mode hooks", () => {
+  it("rejects gateway.dispatch.before for mutate mode hooks", async () => {
     const { service, workspaceId } = createHarness({
       workspacePrefs: { hooks: { allowMutatingHooks: true, allowInterceptingHooks: true } },
     });
-    expect(() =>
+    await expect(
       service.createWorkspaceHook({
         workspaceId,
         label: "dispatch-mutate",
@@ -899,14 +912,14 @@ describe("HooksService", () => {
         mode: "mutate",
         action: { type: "webhook", webhook: { url: "https://hooks.example.test/dispatch-mutate" } },
       }),
-    ).toThrow(/does not support mutate hooks/i);
+    ).rejects.toThrow(/does not support mutate hooks/i);
   });
 
-  it("accepts approval.request.before for intercept mode hooks", () => {
+  it("accepts approval.request.before for intercept mode hooks", async () => {
     const { service, workspaceId } = createHarness({
       workspacePrefs: { hooks: { allowInterceptingHooks: true } },
     });
-    const created = service.createWorkspaceHook({
+    const created = await service.createWorkspaceHook({
       workspaceId,
       label: "approval-request-veto",
       trigger: "approval.request.before",
@@ -917,11 +930,11 @@ describe("HooksService", () => {
     expect(created.mode).toBe("intercept");
   });
 
-  it("rejects approval.request.before for mutate mode hooks", () => {
+  it("rejects approval.request.before for mutate mode hooks", async () => {
     const { service, workspaceId } = createHarness({
       workspacePrefs: { hooks: { allowMutatingHooks: true, allowInterceptingHooks: true } },
     });
-    expect(() =>
+    await expect(
       service.createWorkspaceHook({
         workspaceId,
         label: "approval-request-mutate",
@@ -929,10 +942,10 @@ describe("HooksService", () => {
         mode: "mutate",
         action: { type: "webhook", webhook: { url: "https://hooks.example.test/approval-request-mutate" } },
       }),
-    ).toThrow(/does not support mutate hooks/i);
+    ).rejects.toThrow(/does not support mutate hooks/i);
   });
 
-  it("keeps runtime lifecycle triggers observe-only and phases them correctly", () => {
+  it("keeps runtime lifecycle triggers observe-only and phases them correctly", async () => {
     const { service, workspaceId } = createHarness({
       workspacePrefs: {
         hooks: {
@@ -943,7 +956,7 @@ describe("HooksService", () => {
 
     expect(deriveHookPhase("before_prompt_build")).toBe("before");
     expect(deriveHookPhase("agent_end")).toBe("after");
-    expect(() =>
+    await expect(
       service.createWorkspaceHook({
         workspaceId,
         label: "agent-end-mutate",
@@ -956,12 +969,12 @@ describe("HooksService", () => {
           },
         },
       }),
-    ).toThrow(/observe hooks/i);
+    ).rejects.toThrow(/observe hooks/i);
   });
 
-  it("reconciles public hook actions without changing the internal raw update contract", () => {
+  it("reconciles public hook actions without changing the internal raw update contract", async () => {
     const { service, workspaceId } = createHarness();
-    const created = service.createWorkspaceHook({
+    const created = await service.createWorkspaceHook({
       workspaceId,
       label: "credentialed hook",
       trigger: "tool.call.after",
@@ -975,7 +988,7 @@ describe("HooksService", () => {
       },
     });
 
-    const publicUpdate = service.updateWorkspaceHookFromPublicProjection(workspaceId, created.hookId, {
+    const publicUpdate = await service.updateWorkspaceHookFromPublicProjection(workspaceId, created.hookId, {
       label: "credentialed hook renamed",
       action: projectHookRecordForPublicResponse(created).action,
     });
@@ -984,9 +997,9 @@ describe("HooksService", () => {
       url: "https://hooks.example.test/events?token=hook-short&mode=events",
       secret: "signing-short",
     });
-    expect(service.listWorkspaceHooks(workspaceId)[0]?.action.webhook).toEqual(publicUpdate.action.webhook);
+    expect((await service.listWorkspaceHooks(workspaceId))[0]?.action.webhook).toEqual(publicUpdate.action.webhook);
 
-    const blockedTransplant = service.updateWorkspaceHookFromPublicProjection(workspaceId, created.hookId, {
+    const blockedTransplant = await service.updateWorkspaceHookFromPublicProjection(workspaceId, created.hookId, {
       action: {
         type: "webhook",
         webhook: {
@@ -997,7 +1010,7 @@ describe("HooksService", () => {
     expect(blockedTransplant.action.webhook.url).toBe("https://hooks.example.test/events?token=hook-short&mode=events");
     expect(blockedTransplant.action.webhook.secret).toBe("signing-short");
 
-    const internalUpdate = service.updateWorkspaceHook(workspaceId, created.hookId, {
+    const internalUpdate = await service.updateWorkspaceHook(workspaceId, created.hookId, {
       action: {
         type: "webhook",
         webhook: {
@@ -1040,11 +1053,11 @@ function createHarness(input?: {
   let remainingAttachFailures = input?.failAttachOnce ? 1 : 0;
 
   const storage = {
-    runImmediateTransaction: <T>(callback: () => T): T => {
+    runImmediateTransaction: async <T>(callback: () => T | Promise<T>): Promise<Awaited<T>> => {
       const hookRunSnapshot = new Map(hookRuns);
       const durableRunSnapshot = new Map(durableRuns);
       try {
-        return callback();
+        return await callback();
       } catch (error) {
         hookRuns.clear();
         durableRuns.clear();

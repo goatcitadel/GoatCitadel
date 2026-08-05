@@ -166,9 +166,9 @@ describe("EvidenceReceiptService", () => {
     });
   });
 
-  it("builds a signed receipt that assembles lineage, approval effects, side effects, and artifacts", () => {
+  it("builds a signed receipt that assembles lineage, approval effects, side effects, and artifacts", async () => {
     const { runId, approvalId } = seedFullRun(storage);
-    const receipt = service.buildEvidenceReceipt(runId);
+    const receipt = await service.buildEvidenceReceipt(runId);
 
     expect(receipt.manifest.schemaVersion).toBe("1.0.0");
     expect(receipt.manifest.runId).toBe(runId);
@@ -204,18 +204,18 @@ describe("EvidenceReceiptService", () => {
     expect(receipt.manifest.sideEffects[0]?.payloadHash).toBe("payload-hash-1");
   });
 
-  it("verifies an untampered receipt as valid", () => {
+  it("verifies an untampered receipt as valid", async () => {
     const { runId } = seedFullRun(storage);
-    const receipt = service.buildEvidenceReceipt(runId);
+    const receipt = await service.buildEvidenceReceipt(runId);
 
     const result = service.verifyEvidenceReceipt(receipt);
     expect(result.valid).toBe(true);
     expect(result.reasons).toEqual([]);
   });
 
-  it("verifies offline — a JSON round-trip of the receipt still validates", () => {
+  it("verifies offline — a JSON round-trip of the receipt still validates", async () => {
     const { runId } = seedFullRun(storage);
-    const receipt = service.buildEvidenceReceipt(runId);
+    const receipt = await service.buildEvidenceReceipt(runId);
 
     // No service/storage involved: pure function on the serialized receipt.
     const roundTripped = JSON.parse(JSON.stringify(receipt)) as EvidenceReceipt;
@@ -223,9 +223,9 @@ describe("EvidenceReceiptService", () => {
     expect(result.valid).toBe(true);
   });
 
-  it("fails verification when any manifest field is tampered", () => {
+  it("fails verification when any manifest field is tampered", async () => {
     const { runId } = seedFullRun(storage);
-    const receipt = service.buildEvidenceReceipt(runId);
+    const receipt = await service.buildEvidenceReceipt(runId);
 
     const tampered: EvidenceReceipt = {
       ...receipt,
@@ -241,9 +241,9 @@ describe("EvidenceReceiptService", () => {
     expect(result.reasons.some((r) => r.includes("Content hash mismatch"))).toBe(true);
   });
 
-  it("fails verification even when an attacker recomputes a matching contentHash (signature is the moat)", () => {
+  it("fails verification even when an attacker recomputes a matching contentHash (signature is the moat)", async () => {
     const { runId } = seedFullRun(storage);
-    const receipt = service.buildEvidenceReceipt(runId);
+    const receipt = await service.buildEvidenceReceipt(runId);
 
     // Attacker tampers the manifest AND recomputes a self-consistent contentHash. The signature was
     // made over the *original* canonical bytes with the host's private key, which the attacker does
@@ -259,9 +259,9 @@ describe("EvidenceReceiptService", () => {
     expect(result.reasons.some((r) => r.includes("Content hash mismatch"))).toBe(false);
   });
 
-  it("fails verification when an artifact hash is swapped (the core tamper case)", () => {
+  it("fails verification when an artifact hash is swapped (the core tamper case)", async () => {
     const { runId } = seedFullRun(storage);
-    const receipt = service.buildEvidenceReceipt(runId);
+    const receipt = await service.buildEvidenceReceipt(runId);
 
     const tampered: EvidenceReceipt = {
       ...receipt,
@@ -277,9 +277,9 @@ describe("EvidenceReceiptService", () => {
     expect(result.valid).toBe(false);
   });
 
-  it("fails verification when the signature is tampered", () => {
+  it("fails verification when the signature is tampered", async () => {
     const { runId } = seedFullRun(storage);
-    const receipt = service.buildEvidenceReceipt(runId);
+    const receipt = await service.buildEvidenceReceipt(runId);
 
     // Flip the signature: re-sign nothing, just corrupt the base64 payload deterministically.
     const corruptedSignature = Buffer.from(
@@ -292,9 +292,9 @@ describe("EvidenceReceiptService", () => {
     expect(result.reasons.some((r) => r.toLowerCase().includes("signature"))).toBe(true);
   });
 
-  it("fails verification when the public key is replaced with an attacker key", () => {
+  it("fails verification when the public key is replaced with an attacker key", async () => {
     const { runId } = seedFullRun(storage);
-    const receipt = service.buildEvidenceReceipt(runId);
+    const receipt = await service.buildEvidenceReceipt(runId);
 
     // A different in-memory provider yields a different keypair; substituting its public key must fail
     // because the signature was made with the original private key.
@@ -311,14 +311,14 @@ describe("EvidenceReceiptService", () => {
     expect(verifyEvidenceReceipt({}).reasons.length).toBeGreaterThan(0);
   });
 
-  it("documents missing lineage sources in manifest notes", () => {
+  it("documents missing lineage sources in manifest notes", async () => {
     // Bare run: no code mode run, no approval, no workspace.
     const run = storage.durableRuns.createRun({
       workflowKey: "bare.workflow",
       status: "running",
       now: "2026-06-18T00:00:00.000Z",
     });
-    const receipt = service.buildEvidenceReceipt(run.runId);
+    const receipt = await service.buildEvidenceReceipt(run.runId);
 
     expect(receipt.manifest.lineage.outcome).toBe("in_progress");
     expect(receipt.manifest.artifacts).toEqual([]);
@@ -330,8 +330,8 @@ describe("EvidenceReceiptService", () => {
     expect(service.verifyEvidenceReceipt(receipt).valid).toBe(true);
   });
 
-  it("throws NotFound when the run does not exist", () => {
-    expect(() => service.buildEvidenceReceipt("does-not-exist")).toThrow();
+  it("throws NotFound when the run does not exist", async () => {
+    await expect(service.buildEvidenceReceipt("does-not-exist")).rejects.toThrow();
   });
 });
 
@@ -355,7 +355,7 @@ describe("canonical JSON", () => {
     expect(canonicalJsonString(nested)).toBe('{"a":{"x":1,"y":2},"z":{"a":1,"b":2}}');
   });
 
-  it("produces an identical content hash for receipts built from differently-ordered manifests", () => {
+  it("produces an identical content hash for receipts built from differently-ordered manifests", async () => {
     const storage2 = createStorage();
     const svc = new EvidenceReceiptService({
       data: dataPortFor(storage2),
@@ -363,7 +363,7 @@ describe("canonical JSON", () => {
       now: () => new Date("2026-06-18T12:00:00.000Z"),
     });
     const { runId } = seedFullRun(storage2);
-    const receipt = svc.buildEvidenceReceipt(runId);
+    const receipt = await svc.buildEvidenceReceipt(runId);
 
     // Rebuild the manifest with keys shuffled, then re-canonicalize: the hash input is identical.
     const shuffled = JSON.parse(JSON.stringify(receipt.manifest));

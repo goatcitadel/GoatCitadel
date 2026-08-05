@@ -143,19 +143,21 @@ export function composeRuntimeAdminRouteDependencies(
     capabilityScope: {
       repo: gateway.storage.capabilityScope,
       resolver: gateway.capabilityScopeResolver,
-      listRegistry: (type) => {
+      listRegistry: async (type) => {
         if (type === "skill") {
-          return gateway.listSkills().map((s) => ({ ref: s.skillId, label: s.name }));
+          return (await gateway.listSkills()).map((s) => ({ ref: s.skillId, label: s.name }));
         }
         if (type === "integration") {
-          return gateway.storage.integrationConnections
-            .list(undefined, 1000)
-            .map((c) => ({ ref: c.connectionId, label: c.label }));
+          return (await gateway.storage.integrationConnections.list(undefined, 1000)).map((c) => ({
+            ref: c.connectionId,
+            label: c.label,
+          }));
         }
         // mcp_server
-        return gateway.listMcpServers().map((s) => ({ ref: s.serverId, label: s.label }));
+        return (await gateway.listMcpServers()).map((s) => ({ ref: s.serverId, label: s.label }));
       },
-      resolveCitadelId: (workspaceId) => gateway.storage.workspaces?.find(workspaceId)?.citadelId ?? DEFAULT_CITADEL_ID,
+      resolveCitadelId: async (workspaceId) =>
+        (await gateway.storage.workspaces?.find(workspaceId))?.citadelId ?? DEFAULT_CITADEL_ID,
     },
     citadels: gateway.storage.citadels,
     masonInterpret: async (prompt, attribution): Promise<string> => {
@@ -292,7 +294,7 @@ export function composeRuntimeAdminRouteDependencies(
       publishRealtime: (eventType, source, payload) => gateway.publishRealtime(eventType, source, payload),
     }),
     modelComparisons: new ModelComparisonService({
-      repository: new ModelComparisonRunRepository(gateway.storage.db),
+      repository: new ModelComparisonRunRepository(gateway.storage.gatewaySql),
       listPromptPackTests: (packId, limit) => gateway.promptPackService.listPromptPackTests(packId, limit),
       listPromptPackRunsByTest: (testId, limit) => gateway.storage.promptPackRuns.listByTest(testId, limit),
     }),
@@ -304,8 +306,8 @@ export function composeRuntimeAdminRouteDependencies(
       bootstrapOnboarding: (input) => onboardingStateService.bootstrapOnboarding(onboardingStateHost, input),
       getOnboardingStartupState: () => onboardingStateService.getOnboardingStartupState(onboardingStateHost),
       getOnboardingState: () => onboardingStateService.getOnboardingState(onboardingStateHost),
-      markOnboardingComplete: (completedBy) =>
-        onboardingStateService.markOnboardingComplete(onboardingStateHost, completedBy),
+      markOnboardingComplete: async (completedBy) =>
+        await onboardingStateService.markOnboardingComplete(onboardingStateHost, completedBy),
     },
     orchestration: {
       createOrchestrationPlan: (plan, policyContext) => gateway.createOrchestrationPlan(plan, policyContext),

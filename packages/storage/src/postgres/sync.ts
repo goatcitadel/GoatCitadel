@@ -10,11 +10,45 @@ import {
 } from "../db.js";
 import type { PostgresConnectionOptions } from "./client.js";
 import type { PostgresWorkerRequest, PostgresWorkerResponse, SerializedWorkerError } from "./protocol.js";
+import { isRecord, translateSqlForPostgres } from "./sql-translation.js";
 
 const DEFAULT_SYNC_TIMEOUT_MS = 60_000;
+const MIN_SYNC_TIMEOUT_MS = 1_000;
+const MAX_SYNC_TIMEOUT_MS = 300_000;
 
 export interface PostgresPinnedSessionControls {
   destroyOnRelease(): void;
+}
+
+/**
+ * Transaction controls reserved for a worker-owned compatibility boundary.
+ * The Gateway main thread must never call these methods directly.
+ */
+export interface PostgresWorkerCompatibilityTransactionControls {
+  begin(transactionId: string, mode: DbTransactionMode): void;
+  commit(transactionId: string): void;
+  rollback(transactionId: string): void;
+}
+
+export type PostgresSyncWaitOutcome = "completed" | "failed" | "timed_out";
+
+export interface PostgresSyncWaitDiagnostic {
+  operationKind: string;
+  transactionPosture: "none" | "active";
+  sessionPosture: "none" | "pinned";
+  outcome: PostgresSyncWaitOutcome;
+  durationMs: number;
+}
+
+export interface PostgresSyncDatabaseClientObservability {
+  onWait?: (diagnostic: PostgresSyncWaitDiagnostic) => void;
+  now?: () => number;
+  /**
+   * Compatibility wait ceiling. Gateway runtime callers retain the bounded
+   * default; startup migration owners may opt into the longer readiness
+   * window because no HTTP event loop is serving yet.
+   */
+  waitTimeoutMs?: number;
 }
 
 export class PostgresSyncDatabaseClient implements DatabaseClient {
@@ -27,7 +61,10 @@ export class PostgresSyncDatabaseClient implements DatabaseClient {
   private fatalError?: Error;
   private closed = false;
 
-  public constructor(private readonly options: PostgresConnectionOptions) {
+  public constructor(
+    private readonly options: PostgresConnectionOptions,
+    private readonly observability: PostgresSyncDatabaseClientObservability = {},
+  ) {
     const workerUrl = resolveWorkerUrl();
     const workerExecArgv = resolveWorkerExecArgv(workerUrl);
     this.worker = new Worker(workerUrl, {
@@ -125,6 +162,42 @@ export class PostgresSyncDatabaseClient implements DatabaseClient {
     }
   }
 
+  /** @internal Worker-owned compatibility use only. */
+  public beginCompatibilityTransaction(transactionId: string, mode: DbTransactionMode): void {
+    if (this.activeTransactionId) {
+      throw new Error("A compatibility transaction is already active.");
+    }
+    this.requestSync({
+      kind: "tx_begin",
+      txId: transactionId,
+      mode,
+      sessionId: this.activeSessionId,
+    });
+    this.activeTransactionId = transactionId;
+  }
+
+  /** @internal Worker-owned compatibility use only. */
+  public commitCompatibilityTransaction(transactionId: string): void {
+    this.assertCompatibilityTransaction(transactionId);
+    try {
+      this.requestSync({ kind: "tx_commit", txId: transactionId });
+    } finally {
+      this.activeTransactionId = undefined;
+      this.nestedTransactionDepth = 0;
+    }
+  }
+
+  /** @internal Worker-owned compatibility use only. */
+  public rollbackCompatibilityTransaction(transactionId: string): void {
+    this.assertCompatibilityTransaction(transactionId);
+    try {
+      this.requestSync({ kind: "tx_rollback", txId: transactionId });
+    } finally {
+      this.activeTransactionId = undefined;
+      this.nestedTransactionDepth = 0;
+    }
+  }
+
   public withPinnedSession<T>(callback: (controls: PostgresPinnedSessionControls) => T): T {
     if (this.activeSessionId || this.activeTransactionId) {
       throw new Error("Postgres pinned sessions cannot be nested or opened inside a transaction.");
@@ -188,6 +261,12 @@ export class PostgresSyncDatabaseClient implements DatabaseClient {
     void this.worker.terminate();
   }
 
+  private assertCompatibilityTransaction(transactionId: string): void {
+    if (!this.activeTransactionId || this.activeTransactionId !== transactionId) {
+      throw new Error(`Compatibility transaction ${transactionId} is not active.`);
+    }
+  }
+
   public executeRun(sql: string, params: unknown[]): DbRunResult {
     return this.requestSync({
       kind: "query",
@@ -232,22 +311,45 @@ export class PostgresSyncDatabaseClient implements DatabaseClient {
     const signal = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
     const state = new Int32Array(signal);
     const { port1, port2 } = new MessageChannel();
+    const startedAt = this.observability?.now?.() ?? performance.now();
+    let outcome: PostgresSyncWaitOutcome = "failed";
     this.worker.postMessage({ request, port: port2, signal }, [port2]);
-    const waitResult = Atomics.wait(state, 0, 0, DEFAULT_SYNC_TIMEOUT_MS);
+    const waitResult = Atomics.wait(state, 0, 0, resolveSyncWaitTimeoutMs(this.observability?.waitTimeoutMs));
     const received = receiveMessageOnPort(port1);
     port1.close();
 
     if (waitResult === "timed-out") {
+      outcome = "timed_out";
+      this.observeWait(request, startedAt, outcome);
       throw new Error(`Timed out waiting for Postgres response (${request.kind}).`);
     }
     const response = received?.message as PostgresWorkerResponse | undefined;
     if (!response) {
+      this.observeWait(request, startedAt, outcome);
       throw this.fatalError ?? new Error("Postgres sync worker did not return a response.");
     }
     if (!response.ok) {
+      this.observeWait(request, startedAt, outcome);
       throw deserializeWorkerError(response.error);
     }
+    outcome = "completed";
+    this.observeWait(request, startedAt, outcome);
     return response.result;
+  }
+
+  private observeWait(request: PostgresWorkerRequest, startedAt: number, outcome: PostgresSyncWaitOutcome): void {
+    const finishedAt = this.observability?.now?.() ?? performance.now();
+    try {
+      this.observability?.onWait?.({
+        operationKind: request.kind === "query" ? `query:${request.mode}` : request.kind,
+        transactionPosture: ("txId" in request && request.txId) || this.activeTransactionId ? "active" : "none",
+        sessionPosture: ("sessionId" in request && request.sessionId) || this.activeSessionId ? "pinned" : "none",
+        outcome,
+        durationMs: Math.max(0, finishedAt - startedAt),
+      });
+    } catch {
+      // Diagnostics are best-effort and must never affect storage semantics.
+    }
   }
 }
 
@@ -258,54 +360,19 @@ class PostgresStatementAdapter implements DbStatement {
   ) {}
 
   public run(...params: unknown[]): DbRunResult {
-    const translated = translateSql(this.originalSql, params);
+    const translated = translateSqlForPostgres(this.originalSql, params);
     return this.client.executeRun(translated.sql, translated.params);
   }
 
   public get<T = unknown>(...params: unknown[]): T | undefined {
-    const translated = translateSql(this.originalSql, params);
+    const translated = translateSqlForPostgres(this.originalSql, params);
     return this.client.executeGet<T>(translated.sql, translated.params);
   }
 
   public all<T = unknown>(...params: unknown[]): T[] {
-    const translated = translateSql(this.originalSql, params);
+    const translated = translateSqlForPostgres(this.originalSql, params);
     return this.client.executeAll<T>(translated.sql, translated.params);
   }
-}
-
-function translateSql(sql: string, params: unknown[]): { sql: string; params: unknown[] } {
-  // Prepared statements without bound values are also used for generated
-  // migration SQL. Preserve their text verbatim: PostgreSQL regular
-  // expressions can legitimately contain `?` (for example, a negative
-  // lookahead), and treating that character as a SQLite-style placeholder
-  // silently changes the regex inside the quoted SQL literal.
-  if (params.length === 0) {
-    return { sql, params };
-  }
-  const namedMatch = /@([a-zA-Z_][a-zA-Z0-9_]*)/.test(sql);
-  if (namedMatch) {
-    const first = params[0];
-    const record = isRecord(first) ? first : {};
-    const values: unknown[] = [];
-    let index = 0;
-    return {
-      sql: sql.replace(/@([a-zA-Z_][a-zA-Z0-9_]*)/g, (_match, name) => {
-        index += 1;
-        values.push(record[name]);
-        return `$${index}`;
-      }),
-      params: values,
-    };
-  }
-
-  let index = 0;
-  return {
-    sql: sql.replace(/\?/g, () => {
-      index += 1;
-      return `$${index}`;
-    }),
-    params,
-  };
 }
 
 function resolveWorkerUrl(current = new URL(import.meta.url), fileExists = fileUrlExists): URL {
@@ -361,19 +428,23 @@ function deserializeWorkerError(error: SerializedWorkerError): Error {
   return next;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function isCloseTimeoutError(error: unknown): boolean {
   return error instanceof Error && error.message === "Timed out waiting for Postgres response (close).";
 }
 
+function resolveSyncWaitTimeoutMs(configured: number | undefined): number {
+  if (typeof configured !== "number" || !Number.isFinite(configured)) {
+    return DEFAULT_SYNC_TIMEOUT_MS;
+  }
+  return Math.max(MIN_SYNC_TIMEOUT_MS, Math.min(MAX_SYNC_TIMEOUT_MS, Math.floor(configured)));
+}
+
 export const __postgresSyncInternals = {
-  translateSql,
+  translateSql: translateSqlForPostgres,
   resolveWorkerUrl,
   resolveWorkerExecArgv,
   deserializeWorkerError,
   isRecord,
   isCloseTimeoutError,
+  resolveSyncWaitTimeoutMs,
 };

@@ -23,14 +23,14 @@ describe("Loop 19 route service delegate tails", () => {
   it("keeps approval route calls as thin delegates without reshaping arguments", async () => {
     const approvals = {
       createApproval: vi.fn(async (input: unknown) => ({ method: "createApproval", input })),
-      listApprovals: vi.fn((status?: string, limit?: number) => ({ method: "listApprovals", status, limit })),
+      listApprovals: vi.fn(async (status?: string, limit?: number) => ({ method: "listApprovals", status, limit })),
       resolveApprovalsBulk: vi.fn(async (input: unknown) => ({ method: "resolveApprovalsBulk", input })),
       resolveApproval: vi.fn(async (approvalId: string, input: unknown) => ({
         method: "resolveApproval",
         approvalId,
         input,
       })),
-      createApprovalRemoteActionToken: vi.fn((approvalId: string, input: unknown) => ({
+      createApprovalRemoteActionToken: vi.fn(async (approvalId: string, input: unknown) => ({
         method: "createApprovalRemoteActionToken",
         approvalId,
         input,
@@ -39,7 +39,7 @@ describe("Loop 19 route service delegate tails", () => {
         method: "resolveApprovalWithRemoteToken",
         input,
       })),
-      getApprovalReplay: vi.fn((approvalId: string, replayedBy?: string) => ({
+      getApprovalReplay: vi.fn(async (approvalId: string, replayedBy?: string) => ({
         method: "getApprovalReplay",
         approvalId,
         replayedBy,
@@ -51,7 +51,7 @@ describe("Loop 19 route service delegate tails", () => {
       method: "createApproval",
       input: { reason: "review" },
     });
-    expect(service.listApprovals("pending" as never, 7)).toEqual({
+    await expect(service.listApprovals("pending" as never, 7)).resolves.toEqual({
       method: "listApprovals",
       status: "pending",
       limit: 7,
@@ -65,7 +65,7 @@ describe("Loop 19 route service delegate tails", () => {
       approvalId: "approval-1",
       input: { decision: "approved" },
     });
-    expect(service.createApprovalRemoteActionToken("approval-1", { ttlSeconds: 60 } as never)).toEqual({
+    await expect(service.createApprovalRemoteActionToken("approval-1", { ttlSeconds: 60 } as never)).resolves.toEqual({
       method: "createApprovalRemoteActionToken",
       approvalId: "approval-1",
       input: { ttlSeconds: 60 },
@@ -80,7 +80,7 @@ describe("Loop 19 route service delegate tails", () => {
       method: "resolveApprovalWithRemoteToken",
       input: { token: "remote-token", connectorId: "browser:mission-control", decision: "approve" },
     });
-    expect(service.getApprovalReplay("approval-1", "operator")).toEqual({
+    await expect(service.getApprovalReplay("approval-1", "operator")).resolves.toEqual({
       method: "getApprovalReplay",
       approvalId: "approval-1",
       replayedBy: "operator",
@@ -96,15 +96,15 @@ describe("Loop 19 route service delegate tails", () => {
       createApproval: vi.fn(async (input: unknown) => ({ approvalId: "approval-1", input })),
       createChatCompletion: vi.fn(async (input: unknown) => ({ id: "completion-1", input })),
       createChatCompletionStream: vi.fn(() => stream()),
-      createChatSession: vi.fn((input: unknown) => ({ sessionId: "session-1", input })),
-      createWorkspace: vi.fn((input: unknown) => ({ workspaceId: "workspace-1", input })),
+      createChatSession: vi.fn(async (input: unknown) => ({ sessionId: "session-1", input })),
+      createWorkspace: vi.fn(async (input: unknown) => ({ workspaceId: "workspace-1", input })),
       getLlmConfig: vi.fn(() => ({ activeProviderId: "openai" })),
       getProviderSecretStatus: vi.fn((providerId: string) => ({ providerId, hasSecret: true, source: "env" })),
-      getRealtimeEventSequenceBounds: vi.fn(() => ({ oldestSequence: 1, newestSequence: 9 })),
+      getRealtimeEventSequenceBounds: vi.fn(async () => ({ oldestSequence: 1, newestSequence: 9 })),
       isDevDiagnosticsEnabled: vi.fn(() => true),
       listDevDiagnostics: vi.fn((input?: unknown) => ({ items: [], input })),
       publishRealtime: vi.fn(
-        (eventType: string, source: string, payload: Record<string, unknown>, options?: unknown) => ({
+        async (eventType: string, source: string, payload: Record<string, unknown>, options?: unknown) => ({
           eventType,
           source,
           payload,
@@ -124,18 +124,24 @@ describe("Loop 19 route service delegate tails", () => {
     await expect(service.createChatCompletionStream({ messages: [] } as never).next()).resolves.toMatchObject({
       value: { type: "delta", delta: "ok" },
     });
-    expect(service.createChatSession({ title: "Verify" } as never)).toMatchObject({ sessionId: "session-1" });
-    expect(service.createWorkspace({ name: "Workspace" } as never)).toMatchObject({ workspaceId: "workspace-1" });
+    await expect(service.createChatSession({ title: "Verify" } as never)).resolves.toMatchObject({
+      sessionId: "session-1",
+    });
+    await expect(service.createWorkspace({ name: "Workspace" } as never)).resolves.toMatchObject({
+      workspaceId: "workspace-1",
+    });
     expect(service.getLlmConfig()).toEqual({ activeProviderId: "openai" });
     expect(service.getProviderSecretStatus("openai")).toEqual({
       providerId: "openai",
       hasSecret: true,
       source: "env",
     });
-    expect(service.getRealtimeEventSequenceBounds()).toEqual({ oldestSequence: 1, newestSequence: 9 });
+    await expect(service.getRealtimeEventSequenceBounds()).resolves.toEqual({ oldestSequence: 1, newestSequence: 9 });
     expect(service.isDevDiagnosticsEnabled()).toBe(true);
     expect(service.listDevDiagnostics({ limit: 3 } as never)).toEqual({ items: [], input: { limit: 3 } });
-    expect(service.publishRealtime("dev.verification", "test", { ok: true }, { correlationId: "corr-1" })).toEqual({
+    await expect(
+      service.publishRealtime("dev.verification", "test", { ok: true }, { correlationId: "corr-1" }),
+    ).resolves.toEqual({
       eventType: "dev.verification",
       source: "test",
       payload: { ok: true },
@@ -145,44 +151,59 @@ describe("Loop 19 route service delegate tails", () => {
 
   it("delegates every cron scheduler wrapper and preserves dry-run/runtime posture arguments", async () => {
     const cronAutomationService = {
-      listCronJobs: vi.fn(() => [{ jobId: "job-1" }]),
-      getCronJob: vi.fn((jobId: string) => ({ jobId })),
-      createCronJob: vi.fn((input: unknown) => ({ created: input })),
-      updateCronJob: vi.fn((jobId: string, input: unknown, expectedRevision: number) => ({
+      listCronJobs: vi.fn(async () => [{ jobId: "job-1" }]),
+      getCronJob: vi.fn(async (jobId: string) => ({ jobId })),
+      createCronJob: vi.fn(async (input: unknown) => ({ created: input })),
+      updateCronJob: vi.fn(async (jobId: string, input: unknown, expectedRevision: number) => ({
         jobId,
         updated: input,
         expectedRevision,
       })),
-      setCronJobEnabled: vi.fn((jobId: string, enabled: boolean, expectedRevision: number) => ({
+      setCronJobEnabled: vi.fn(async (jobId: string, enabled: boolean, expectedRevision: number) => ({
         jobId,
         enabled,
         expectedRevision,
       })),
-      deleteCronJob: vi.fn((jobId: string, expectedRevision: number) => ({ deleted: true, jobId, expectedRevision })),
+      deleteCronJob: vi.fn(async (jobId: string, expectedRevision: number) => ({
+        deleted: true,
+        jobId,
+        expectedRevision,
+      })),
       runCronJobNow: vi.fn(async (jobId: string) => ({ jobId, status: "ok" as const })),
-      listCronReviewQueue: vi.fn((limit: number) => [{ itemId: "review-1", limit }]),
-      retryCronReviewQueueItem: vi.fn((itemId: string) => ({ itemId, retried: true })),
-      getCronRunDiff: vi.fn((runId: string) => ({ runId, dryRun: true })),
+      listCronReviewQueue: vi.fn(async (limit: number) => [{ itemId: "review-1", limit }]),
+      retryCronReviewQueueItem: vi.fn(async (itemId: string) => ({ itemId, retried: true })),
+      getCronRunDiff: vi.fn(async (runId: string) => ({ runId, dryRun: true })),
     };
     const host = { cronAutomationService } as never;
 
-    expect(listCronJobs(host)).toEqual([{ jobId: "job-1" }]);
-    expect(getCronJob(host, "job-1")).toEqual({ jobId: "job-1" });
-    expect(createCronJob(host, { jobId: "job-2", name: "Job", schedule: "0 * * * *" })).toEqual({
+    await expect(listCronJobs(host)).resolves.toEqual([{ jobId: "job-1" }]);
+    await expect(getCronJob(host, "job-1")).resolves.toEqual({ jobId: "job-1" });
+    await expect(createCronJob(host, { jobId: "job-2", name: "Job", schedule: "0 * * * *" })).resolves.toEqual({
       created: { jobId: "job-2", name: "Job", schedule: "0 * * * *" },
     });
-    expect(updateCronJob(host, "job-2", { enabled: false, endAt: null }, 4)).toEqual({
+    await expect(updateCronJob(host, "job-2", { enabled: false, endAt: null }, 4)).resolves.toEqual({
       jobId: "job-2",
       updated: { enabled: false, endAt: null },
       expectedRevision: 4,
     });
-    expect(setCronJobEnabled(host, "job-2", true, 5)).toEqual({ jobId: "job-2", enabled: true, expectedRevision: 5 });
-    expect(deleteCronJob(host, "job-2", 6)).toEqual({ deleted: true, jobId: "job-2", expectedRevision: 6 });
+    await expect(setCronJobEnabled(host, "job-2", true, 5)).resolves.toEqual({
+      jobId: "job-2",
+      enabled: true,
+      expectedRevision: 5,
+    });
+    await expect(deleteCronJob(host, "job-2", 6)).resolves.toEqual({
+      deleted: true,
+      jobId: "job-2",
+      expectedRevision: 6,
+    });
     await expect(runCronJobNow(host, "job-2")).resolves.toEqual({ jobId: "job-2", status: "ok" });
-    expect(listCronReviewQueue(host)).toEqual([{ itemId: "review-1", limit: 200 }]);
-    expect(listCronReviewQueue(host, 5)).toEqual([{ itemId: "review-1", limit: 5 }]);
-    expect(retryCronReviewQueueItem(host, "review-1")).toEqual({ itemId: "review-1", retried: true });
-    expect(getCronRunDiff(host, "run-1")).toEqual({ runId: "run-1", dryRun: true });
+    await expect(listCronReviewQueue(host)).resolves.toEqual([{ itemId: "review-1", limit: 200 }]);
+    await expect(listCronReviewQueue(host, 5)).resolves.toEqual([{ itemId: "review-1", limit: 5 }]);
+    await expect(retryCronReviewQueueItem(host, "review-1")).resolves.toEqual({
+      itemId: "review-1",
+      retried: true,
+    });
+    await expect(getCronRunDiff(host, "run-1")).resolves.toEqual({ runId: "run-1", dryRun: true });
   });
 });
 

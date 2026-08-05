@@ -98,6 +98,19 @@ export interface ExternalSourceKnowledgeSnapshotMaterializationInput {
   buildJourneyEvents: (link: ExternalSourceKnowledgeLinkRecord, chunkCount: number) => GovernanceJourneyEventRecord[];
 }
 
+/**
+ * Worker-safe form of the approved-snapshot materialization request. Policy is
+ * evaluated and Journey events are derived by the caller while the owning
+ * async transaction is open, so no function values cross the worker boundary.
+ */
+export type ExternalSourceKnowledgeSnapshotResolvedMaterializationInput = Omit<
+  ExternalSourceKnowledgeSnapshotMaterializationInput,
+  "evaluatePolicy" | "buildJourneyEvents"
+> & {
+  policyDecision: ExternalSourceKnowledgeSnapshotPolicyDecision;
+  journeyEvents: readonly GovernanceJourneyEventRecord[];
+};
+
 export interface ExternalSourceKnowledgeSnapshotMaterializationResult {
   link: ExternalSourceKnowledgeLinkRecord;
   disposition: "created" | "replayed";
@@ -283,6 +296,29 @@ export class ExternalSessionAttachmentRepository {
     journeyEvent: GovernanceJourneyEventRecord;
     disposition: "created" | "replayed";
   } {
+    return this.attachWithJourneyInternal(input, buildJourneyEvent);
+  }
+
+  /** Worker-safe attach form whose already-derived Journey event carries no callback. */
+  public attachWithJourneyResolved(
+    input: ExternalSessionAttachmentRecord,
+    journeyEvent: GovernanceJourneyEventRecord,
+  ): {
+    attachment: ExternalSessionAttachmentRecord;
+    journeyEvent: GovernanceJourneyEventRecord;
+    disposition: "created" | "replayed";
+  } {
+    return this.attachWithJourneyInternal(input, () => journeyEvent);
+  }
+
+  private attachWithJourneyInternal(
+    input: ExternalSessionAttachmentRecord,
+    buildJourneyEvent: (attachment: ExternalSessionAttachmentRecord) => GovernanceJourneyEventRecord,
+  ): {
+    attachment: ExternalSessionAttachmentRecord;
+    journeyEvent: GovernanceJourneyEventRecord;
+    disposition: "created" | "replayed";
+  } {
     assertExternalSessionAttachment(input);
     if (input.status !== "attached" || input.revision !== 1) {
       throw new ConflictError({
@@ -316,6 +352,31 @@ export class ExternalSessionAttachmentRepository {
    * binding replays the stored terminal record without appending recurrence.
    */
   public detachCasWithJourney(
+    input: ExternalSessionAttachmentRecord,
+    expectedRevision: number,
+    buildJourneyEvent: (attachment: ExternalSessionAttachmentRecord) => GovernanceJourneyEventRecord,
+  ): {
+    attachment: ExternalSessionAttachmentRecord;
+    journeyEvent: GovernanceJourneyEventRecord;
+    disposition: "detached" | "replayed";
+  } {
+    return this.detachCasWithJourneyInternal(input, expectedRevision, buildJourneyEvent);
+  }
+
+  /** Worker-safe detach form whose already-derived Journey event carries no callback. */
+  public detachCasWithJourneyResolved(
+    input: ExternalSessionAttachmentRecord,
+    expectedRevision: number,
+    journeyEvent: GovernanceJourneyEventRecord,
+  ): {
+    attachment: ExternalSessionAttachmentRecord;
+    journeyEvent: GovernanceJourneyEventRecord;
+    disposition: "detached" | "replayed";
+  } {
+    return this.detachCasWithJourneyInternal(input, expectedRevision, () => journeyEvent);
+  }
+
+  private detachCasWithJourneyInternal(
     input: ExternalSessionAttachmentRecord,
     expectedRevision: number,
     buildJourneyEvent: (attachment: ExternalSessionAttachmentRecord) => GovernanceJourneyEventRecord,
@@ -532,6 +593,23 @@ export class ExternalSourceKnowledgeLinkRepository {
    * path.
    */
   public materializeApprovedSnapshotWithJourney(
+    input: ExternalSourceKnowledgeSnapshotMaterializationInput,
+  ): ExternalSourceKnowledgeSnapshotMaterializationResult {
+    return this.materializeApprovedSnapshotWithJourneyInternal(input);
+  }
+
+  /** Callback-free equivalent used by the asynchronous Gateway storage boundary. */
+  public materializeApprovedSnapshotWithJourneyResolved(
+    input: ExternalSourceKnowledgeSnapshotResolvedMaterializationInput,
+  ): ExternalSourceKnowledgeSnapshotMaterializationResult {
+    return this.materializeApprovedSnapshotWithJourneyInternal({
+      ...input,
+      evaluatePolicy: () => input.policyDecision,
+      buildJourneyEvents: () => [...input.journeyEvents],
+    });
+  }
+
+  private materializeApprovedSnapshotWithJourneyInternal(
     input: ExternalSourceKnowledgeSnapshotMaterializationInput,
   ): ExternalSourceKnowledgeSnapshotMaterializationResult {
     verifyExternalSourceKnowledgeLink(input.link);

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { ConflictError, NotFoundError } from "@goatcitadel/contracts";
-import { PersonalOpsStorageRepository, Storage } from "@goatcitadel/storage";
+import { createSqliteAsyncStorage, PersonalOpsStorageRepository, Storage } from "@goatcitadel/storage";
 import { DocumentEditingService } from "./document-editing-service.js";
 
 const roots: string[] = [];
@@ -26,7 +26,7 @@ async function harness() {
   });
   openStorage.push(storage);
   const service = new DocumentEditingService({
-    storage,
+    storage: createSqliteAsyncStorage(storage),
     requireChatSession: (sessionId) => ({ sessionId, workspaceId: "workspace-1" }),
   });
   return { storage, service, notes: new PersonalOpsStorageRepository(storage.db) };
@@ -36,7 +36,7 @@ describe("DocumentEditingService", () => {
   it("applies note proposals through optimistic revisions and immutable history", async () => {
     const { service, notes } = await harness();
     const note = notes.createNote({ workspaceId: "workspace-1", title: "Plan", body: "before" });
-    const proposal = service.createProposal(
+    const proposal = await service.createProposal(
       {
         workspaceId: "workspace-1",
         sessionId: "session-1",
@@ -48,7 +48,7 @@ describe("DocumentEditingService", () => {
       "operator-1",
     );
 
-    const applied = service.applyProposal(proposal.proposalId, "workspace-1", "operator-1");
+    const applied = await service.applyProposal(proposal.proposalId, "workspace-1", "operator-1");
     assert.equal(applied.state, "applied");
     assert.equal(notes.getNote(note.noteId).body, "after");
     assert.equal(notes.getNote(note.noteId).revision, 2);
@@ -62,7 +62,7 @@ describe("DocumentEditingService", () => {
   it("retains a stale proposal as conflicted instead of overwriting the note", async () => {
     const { service, notes, storage } = await harness();
     const note = notes.createNote({ workspaceId: "workspace-1", title: "Plan", body: "base" });
-    const proposal = service.createProposal(
+    const proposal = await service.createProposal(
       {
         workspaceId: "workspace-1",
         targetKind: "personal_note",
@@ -73,7 +73,7 @@ describe("DocumentEditingService", () => {
       "operator-1",
     );
     notes.updateNote(note.noteId, { body: "newer", expectedRevision: 1 });
-    assert.throws(() => service.applyProposal(proposal.proposalId, "workspace-1", "operator-1"), ConflictError);
+    await assert.rejects(service.applyProposal(proposal.proposalId, "workspace-1", "operator-1"), ConflictError);
     assert.equal(storage.documentPatchProposals.get(proposal.proposalId).state, "conflicted");
     assert.equal(notes.getNote(note.noteId).body, "newer");
   });
@@ -90,7 +90,7 @@ describe("DocumentEditingService", () => {
       memoryMode: "off",
       thinkingLevel: "standard",
     });
-    const proposal = service.createAssistantProposal(
+    const proposal = await service.createAssistantProposal(
       {
         targetKind: "personal_note",
         targetId: note.noteId,
@@ -102,12 +102,11 @@ describe("DocumentEditingService", () => {
     assert.equal(proposal.authorKind, "assistant");
     assert.equal(proposal.turnId, "turn-1");
     assert.equal(proposal.sessionId, "session-1");
-    assert.throws(
-      () =>
-        service.createAssistantProposal(
-          { targetKind: "personal_note", targetId: note.noteId, baseRevision: 1, proposedContent: "forged" },
-          { workspaceId: "workspace-1", sessionId: "session-other", turnId: "turn-1", authorId: "assistant" },
-        ),
+    await assert.rejects(
+      service.createAssistantProposal(
+        { targetKind: "personal_note", targetId: note.noteId, baseRevision: 1, proposedContent: "forged" },
+        { workspaceId: "workspace-1", sessionId: "session-other", turnId: "turn-1", authorId: "assistant" },
+      ),
       NotFoundError,
     );
   });
@@ -130,7 +129,7 @@ describe("DocumentEditingService", () => {
       createdAt: now,
       updatedAt: now,
     });
-    const next = service.createArtifactVersion(base.artifactId, {
+    const next = await service.createArtifactVersion(base.artifactId, {
       workspaceId: "workspace-1",
       baseContentHash: base.contentHash!,
       content: "# After",
@@ -138,22 +137,20 @@ describe("DocumentEditingService", () => {
     assert.equal(next.version, 2);
     assert.equal(next.supersedesArtifactId, base.artifactId);
     assert.notEqual(next.contentHash, base.contentHash);
-    assert.throws(
-      () =>
-        service.createArtifactVersion(base.artifactId, {
-          workspaceId: "workspace-1",
-          baseContentHash: base.contentHash!,
-          content: "branch",
-        }),
+    await assert.rejects(
+      service.createArtifactVersion(base.artifactId, {
+        workspaceId: "workspace-1",
+        baseContentHash: base.contentHash!,
+        content: "branch",
+      }),
       ConflictError,
     );
-    assert.throws(
-      () =>
-        service.createArtifactVersion(next.artifactId, {
-          workspaceId: "workspace-2",
-          baseContentHash: next.contentHash!,
-          content: "foreign",
-        }),
+    await assert.rejects(
+      service.createArtifactVersion(next.artifactId, {
+        workspaceId: "workspace-2",
+        baseContentHash: next.contentHash!,
+        content: "foreign",
+      }),
       NotFoundError,
     );
   });

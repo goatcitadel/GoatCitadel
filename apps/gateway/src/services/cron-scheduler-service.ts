@@ -10,11 +10,11 @@ export interface CronSchedulerHost {
   readonly cronAutomationService: CronAutomationService;
 }
 
-export function listCronJobs(host: CronSchedulerHost): CronJobRecord[] {
+export async function listCronJobs(host: CronSchedulerHost): Promise<CronJobRecord[]> {
   return host.cronAutomationService.listCronJobs();
 }
 
-export function getCronJob(host: CronSchedulerHost, jobId: string): CronJobRecord {
+export async function getCronJob(host: CronSchedulerHost, jobId: string): Promise<CronJobRecord> {
   return host.cronAutomationService.getCronJob(jobId);
 }
 
@@ -79,18 +79,18 @@ export async function runCronJobNow(
   return host.cronAutomationService.runCronJobNow(jobId);
 }
 
-export function findCronRunById(host: CronSchedulerHost, runId: string): CronRunSnapshot | undefined {
+export async function findCronRunById(host: CronSchedulerHost, runId: string): Promise<CronRunSnapshot | undefined> {
   return host.cronAutomationService.findCronRunById(runId);
 }
 
-export function listCronReviewQueue(host: CronSchedulerHost, limit = 200): CronReviewItem[] {
+export async function listCronReviewQueue(host: CronSchedulerHost, limit = 200): Promise<CronReviewItem[]> {
   return host.cronAutomationService.listCronReviewQueue(limit);
 }
 
-export function retryCronReviewQueueItem(host: CronSchedulerHost, itemId: string): CronReviewItem {
+export async function retryCronReviewQueueItem(host: CronSchedulerHost, itemId: string): Promise<CronReviewItem> {
   return host.cronAutomationService.retryCronReviewQueueItem(itemId);
 }
 
-export function getCronRunDiff(host: CronSchedulerHost, runId: string): CronRunDiff {
+export async function getCronRunDiff(host: CronSchedulerHost, runId: string): Promise<CronRunDiff> {
   return host.cronAutomationService.getCronRunDiff(runId);
 }

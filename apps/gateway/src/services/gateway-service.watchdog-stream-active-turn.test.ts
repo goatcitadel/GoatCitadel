@@ -162,7 +162,7 @@ describe("GatewayService watchdog facade behavior", () => {
     });
 
     gateway.listChannelDeliveryRuntime = vi.fn(() => []);
-    expect((GatewayService.prototype as any).runChannelDeliveryQueueWatchdog.call(gateway)).toMatchObject({
+    expect(await (GatewayService.prototype as any).runChannelDeliveryQueueWatchdog.call(gateway)).toMatchObject({
       status: "ok",
       summary: "Channel delivery queue is clear.",
       details: {
@@ -173,7 +173,7 @@ describe("GatewayService watchdog facade behavior", () => {
     });
 
     gateway.listChannelDeliveryRuntime = vi.fn(() => [{ deliveryId: "retry-1", deliveryStatus: "retrying" }]);
-    expect((GatewayService.prototype as any).runChannelDeliveryQueueWatchdog.call(gateway)).toMatchObject({
+    expect(await (GatewayService.prototype as any).runChannelDeliveryQueueWatchdog.call(gateway)).toMatchObject({
       status: "warning",
       details: {
         retryingCount: 1,
@@ -187,7 +187,7 @@ describe("GatewayService watchdog facade behavior", () => {
       { deliveryId: "degraded-1", deliveryStatus: "degraded" },
       { deliveryId: "retry-1", deliveryStatus: "retrying" },
     ]);
-    expect((GatewayService.prototype as any).runChannelDeliveryQueueWatchdog.call(gateway)).toMatchObject({
+    expect(await (GatewayService.prototype as any).runChannelDeliveryQueueWatchdog.call(gateway)).toMatchObject({
       status: "error",
       details: {
         blockedCount: 3,
@@ -199,7 +199,7 @@ describe("GatewayService watchdog facade behavior", () => {
     gateway.readMcpServers = vi.fn(() => [
       { serverId: "healthy", enabled: true, status: "connected", trustTier: "trusted", transport: "stdio" },
     ]);
-    expect((GatewayService.prototype as any).runMcpPostureWatchdog.call(gateway)).toMatchObject({
+    expect(await (GatewayService.prototype as any).runMcpPostureWatchdog.call(gateway)).toMatchObject({
       status: "ok",
       summary: "MCP posture is healthy for enabled servers.",
       details: {
@@ -228,7 +228,7 @@ describe("GatewayService watchdog facade behavior", () => {
         url: "",
       },
     ]);
-    expect((GatewayService.prototype as any).runMcpPostureWatchdog.call(gateway)).toMatchObject({
+    expect(await (GatewayService.prototype as any).runMcpPostureWatchdog.call(gateway)).toMatchObject({
       status: "warning",
       details: {
         softIssueServerIds: ["needs-url", "oauth-needs-url"],
@@ -241,7 +241,7 @@ describe("GatewayService watchdog facade behavior", () => {
       { serverId: "stale", enabled: true, status: "disconnected", trustTier: "restricted", transport: "sse", url: "" },
       { serverId: "disabled", enabled: false, status: "error", trustTier: "quarantined", transport: "stdio" },
     ]);
-    expect((GatewayService.prototype as any).runMcpPostureWatchdog.call(gateway)).toMatchObject({
+    expect(await (GatewayService.prototype as any).runMcpPostureWatchdog.call(gateway)).toMatchObject({
       status: "error",
       details: {
         enabledCount: 3,
@@ -382,14 +382,14 @@ describe("GatewayService maintenance scheduler facade behavior", () => {
       autonomous: false,
     };
 
-    GatewayService.prototype.scheduleBackgroundReviewIfDue.call(gateway, {
+    await GatewayService.prototype.scheduleBackgroundReviewIfDue.call(gateway, {
       ...baseInput,
       turnId: "turn-child",
       delegatedChild: true,
     });
     expect(runBackgroundReview).not.toHaveBeenCalled();
 
-    GatewayService.prototype.scheduleBackgroundReviewIfDue.call(gateway, {
+    await GatewayService.prototype.scheduleBackgroundReviewIfDue.call(gateway, {
       ...baseInput,
       turnId: "turn-current",
       delegatedChild: false,
@@ -405,7 +405,7 @@ describe("GatewayService maintenance scheduler facade behavior", () => {
 });
 
 describe("GatewayService active-turn cancellation facade behavior", () => {
-  it("reports running turns and forwards execution registry operations", () => {
+  it("reports running turns and forwards execution registry operations", async () => {
     const gateway = createGatewayHarness({
       storage: {
         chatTurnTraces: {
@@ -423,12 +423,12 @@ describe("GatewayService active-turn cancellation facade behavior", () => {
       chatTurnExecutionRegistry: new ChatTurnExecutionRegistry(),
     });
 
-    expect(GatewayService.prototype.hasRunningTurn.call(gateway, "session-1")).toBe(false);
-    expect(GatewayService.prototype.hasRunningTurn.call(gateway, "session-1")).toBe(true);
-    expect(GatewayService.prototype.hasRunningTurn.call(gateway, "session-1")).toBe(false);
+    expect(await GatewayService.prototype.hasRunningTurn.call(gateway, "session-1")).toBe(false);
+    expect(await GatewayService.prototype.hasRunningTurn.call(gateway, "session-1")).toBe(true);
+    expect(await GatewayService.prototype.hasRunningTurn.call(gateway, "session-1")).toBe(false);
 
-    GatewayService.prototype.registerActiveChatTurnStream.call(gateway, "session-1", "turn-stream", "run-stream");
-    expect(GatewayService.prototype.hasRunningTurn.call(gateway, "session-1")).toBe(true);
+    await GatewayService.prototype.registerActiveChatTurnStream.call(gateway, "session-1", "turn-stream", "run-stream");
+    expect(await GatewayService.prototype.hasRunningTurn.call(gateway, "session-1")).toBe(true);
 
     const controller = GatewayService.prototype.beginActiveChatTurnExecution.call(
       gateway,
@@ -546,7 +546,7 @@ describe("GatewayService active-turn cancellation facade behavior", () => {
         cancelChatTurn,
       },
     });
-    GatewayService.prototype.registerActiveChatTurnStream.call(gateway, "session-1", "turn-stream", "run-stream");
+    await GatewayService.prototype.registerActiveChatTurnStream.call(gateway, "session-1", "turn-stream", "run-stream");
 
     await expect(
       GatewayService.prototype.cancelLatestActiveChatTurnForSession.call(gateway, "session-1", "tester"),
@@ -600,7 +600,7 @@ describe("GatewayService active-turn cancellation facade behavior", () => {
 });
 
 describe("GatewayService retained stream facade behavior", () => {
-  it("registers active streams, persists ordered chunks, and purges stale stream events", () => {
+  it("registers active streams, persists ordered chunks, and purges stale stream events", async () => {
     const append = vi.fn();
     const purgeBefore = vi.fn();
     const gateway = createGatewayHarness({
@@ -615,9 +615,15 @@ describe("GatewayService retained stream facade behavior", () => {
       },
     });
 
-    const active = GatewayService.prototype.registerActiveChatTurnStream.call(gateway, "session-1", "turn-1", "run-1", {
-      continuation: false,
-    });
+    const active = await GatewayService.prototype.registerActiveChatTurnStream.call(
+      gateway,
+      "session-1",
+      "turn-1",
+      "run-1",
+      {
+        continuation: false,
+      },
+    );
     expect(active).toMatchObject({
       sessionId: "session-1",
       turnId: "turn-1",
@@ -626,7 +632,7 @@ describe("GatewayService retained stream facade behavior", () => {
       completed: false,
     });
 
-    const persisted = GatewayService.prototype.persistChatStreamChunk.call(
+    const persisted = await GatewayService.prototype.persistChatStreamChunk.call(
       gateway,
       {
         type: "delta",
@@ -658,8 +664,13 @@ describe("GatewayService retained stream facade behavior", () => {
     );
     expect(purgeBefore).not.toHaveBeenCalled();
 
-    const resumed = GatewayService.prototype.registerActiveChatTurnStream.call(gateway, "session-1", "turn-1", "run-1");
-    expect(() =>
+    const resumed = await GatewayService.prototype.registerActiveChatTurnStream.call(
+      gateway,
+      "session-1",
+      "turn-1",
+      "run-1",
+    );
+    await expect(
       GatewayService.prototype.persistChatStreamChunk.call(
         gateway,
         {
@@ -670,7 +681,7 @@ describe("GatewayService retained stream facade behavior", () => {
         "run-1",
         active,
       ),
-    ).toThrow(ChatTurnStreamRegistrationMismatchError);
+    ).rejects.toBeInstanceOf(ChatTurnStreamRegistrationMismatchError);
     expect(append).toHaveBeenCalledTimes(1);
 
     GatewayService.prototype.completeActiveChatTurnStream.call(gateway, "turn-1", active.registrationId);
@@ -681,7 +692,7 @@ describe("GatewayService retained stream facade behavior", () => {
     expect((gateway.chatTurnExecutionRegistry as ChatTurnExecutionRegistry).getActiveStream("turn-1")).toBeUndefined();
 
     gateway.lastChatStreamPurgeAt = 0;
-    GatewayService.prototype.persistChatStreamChunk.call(gateway, {
+    await GatewayService.prototype.persistChatStreamChunk.call(gateway, {
       type: "delta",
       sessionId: "session-1",
       turnId: "turn-2",
@@ -690,7 +701,7 @@ describe("GatewayService retained stream facade behavior", () => {
     expect(purgeBefore).toHaveBeenCalledWith(expect.stringMatching(/T.*Z$/));
   });
 
-  it("marks active durable streams cancelled even when the trace row is not visible yet", () => {
+  it("marks active durable streams cancelled even when the trace row is not visible yet", async () => {
     // The stream-cancellation recovery path rebuilds a running trace from the
     // durable run payload via parseDurableChatTurnPayload, which now requires a
     // fully-admitted chat.turn.execute.v2 record (session incarnation + matching
@@ -789,8 +800,8 @@ describe("GatewayService retained stream facade behavior", () => {
         },
       },
     });
-    GatewayService.prototype.registerActiveChatTurnStream.call(gateway, "session-1", "turn-1", "run-1");
-    const trace = GatewayService.prototype.markChatTurnCancelled.call(gateway, "session-1", "turn-1", "tester");
+    await GatewayService.prototype.registerActiveChatTurnStream.call(gateway, "session-1", "turn-1", "run-1");
+    const trace = await GatewayService.prototype.markChatTurnCancelled.call(gateway, "session-1", "turn-1", "tester");
 
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -960,7 +971,7 @@ describe("GatewayService retained stream facade behavior", () => {
     ]);
   });
 
-  it("uses SQL stream events and trace fallback to decide whether durable streaming is still pending", () => {
+  it("uses SQL stream events and trace fallback to decide whether durable streaming is still pending", async () => {
     let sqlRunId: string | null = "run-sql";
     const durableRuns = {
       getRun: vi.fn((runId: string) => ({
@@ -986,21 +997,21 @@ describe("GatewayService retained stream facade behavior", () => {
       },
     });
 
-    expect((GatewayService.prototype as any).isDurableTurnStillStreaming.call(gateway, "turn-1")).toBe(true);
+    expect(await (GatewayService.prototype as any).isDurableTurnStillStreaming.call(gateway, "turn-1")).toBe(true);
 
     sqlRunId = null;
-    expect((GatewayService.prototype as any).isDurableTurnStillStreaming.call(gateway, "turn-1")).toBe(false);
+    expect(await (GatewayService.prototype as any).isDurableTurnStillStreaming.call(gateway, "turn-1")).toBe(false);
     expect(durableRuns.getRun).toHaveBeenLastCalledWith("run-trace");
 
     gateway.storage.durableRuns.getRun = vi.fn(() => {
       throw new Error("missing run");
     });
-    expect((GatewayService.prototype as any).isDurableTurnStillStreaming.call(gateway, "turn-1")).toBe(false);
+    expect(await (GatewayService.prototype as any).isDurableTurnStillStreaming.call(gateway, "turn-1")).toBe(false);
 
     gateway.storage.chatTurnTraces.get = vi.fn(() => {
       throw new Error("missing trace");
     });
-    expect((GatewayService.prototype as any).isDurableTurnStillStreaming.call(gateway, "turn-1")).toBe(false);
+    expect(await (GatewayService.prototype as any).isDurableTurnStillStreaming.call(gateway, "turn-1")).toBe(false);
   });
 });
 
@@ -1076,7 +1087,7 @@ describe("GatewayService live-tail stream notification (P0-#1)", () => {
       await Promise.resolve();
       expect(resolved).toBe(false);
 
-      GatewayService.prototype.persistChatStreamChunk.call(
+      await GatewayService.prototype.persistChatStreamChunk.call(
         gateway,
         { type: "delta", sessionId: "session-1", turnId: "turn-1", delta: "hi" },
         "run-1",

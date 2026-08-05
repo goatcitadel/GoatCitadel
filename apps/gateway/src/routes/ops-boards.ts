@@ -82,12 +82,12 @@ const statusBodyBoundary = z
   .strict();
 
 export interface OpsSavedBoardRouteService {
-  list(workspaceId: string, includeArchived?: boolean): OpsSavedBoardRecord[];
-  get(workspaceId: string, boardId: string): OpsSavedBoardRecord;
-  create(input: OpsSavedBoardCreateInput, actorId: string): OpsSavedBoardRecord;
-  update(boardId: string, input: OpsSavedBoardUpdateInput, actorId: string): OpsSavedBoardRecord;
-  archive(boardId: string, input: OpsSavedBoardStatusInput, actorId: string): OpsSavedBoardRecord;
-  restore(boardId: string, input: OpsSavedBoardStatusInput, actorId: string): OpsSavedBoardRecord;
+  list(workspaceId: string, includeArchived?: boolean): Promise<OpsSavedBoardRecord[]>;
+  get(workspaceId: string, boardId: string): Promise<OpsSavedBoardRecord>;
+  create(input: OpsSavedBoardCreateInput, actorId: string): Promise<OpsSavedBoardRecord>;
+  update(boardId: string, input: OpsSavedBoardUpdateInput, actorId: string): Promise<OpsSavedBoardRecord>;
+  archive(boardId: string, input: OpsSavedBoardStatusInput, actorId: string): Promise<OpsSavedBoardRecord>;
+  restore(boardId: string, input: OpsSavedBoardStatusInput, actorId: string): Promise<OpsSavedBoardRecord>;
 }
 
 export interface OpsSavedBoardRoutesOptions {
@@ -116,7 +116,7 @@ export const opsSavedBoardRoutes: FastifyPluginAsync<OpsSavedBoardRoutesOptions>
     try {
       return reply.send({
         workspaceId: query.data.workspaceId,
-        items: options.service.list(query.data.workspaceId, query.data.includeArchived),
+        items: await options.service.list(query.data.workspaceId, query.data.includeArchived),
       });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -130,7 +130,7 @@ export const opsSavedBoardRoutes: FastifyPluginAsync<OpsSavedBoardRoutesOptions>
       return reply.code(400).send({ error: "Invalid ops saved board inspection query." });
     }
     try {
-      return reply.send(options.service.get(query.data.workspaceId, params.data.boardId));
+      return reply.send(await options.service.get(query.data.workspaceId, params.data.boardId));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -142,7 +142,7 @@ export const opsSavedBoardRoutes: FastifyPluginAsync<OpsSavedBoardRoutesOptions>
     const actorId = resolveAuthenticatedOperator(request, reply);
     if (!actorId) return reply;
     try {
-      const record = options.service.create(body, actorId);
+      const record = await options.service.create(body, actorId);
       reply.header(
         "Location",
         `/api/v1/ops/boards/${encodeURIComponent(record.boardId)}?workspaceId=${encodeURIComponent(record.workspaceId)}`,
@@ -162,7 +162,7 @@ export const opsSavedBoardRoutes: FastifyPluginAsync<OpsSavedBoardRoutesOptions>
     const actorId = resolveAuthenticatedOperator(request, reply);
     if (!actorId) return reply;
     try {
-      return reply.send(options.service.update(params.data.boardId, body, actorId));
+      return reply.send(await options.service.update(params.data.boardId, body, actorId));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -181,7 +181,7 @@ export const opsSavedBoardRoutes: FastifyPluginAsync<OpsSavedBoardRoutesOptions>
       const actorId = resolveAuthenticatedOperator(request, reply);
       if (!actorId) return reply;
       try {
-        return reply.send(options.service[operation](params.data.boardId, body, actorId));
+        return reply.send(await options.service[operation](params.data.boardId, body, actorId));
       } catch (error) {
         return sendRouteError(reply, error, request.log);
       }

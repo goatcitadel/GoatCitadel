@@ -50,8 +50,8 @@ export interface SkillsRoutePort {
     state: SkillRuntimeState,
     note: string | undefined,
     authority: SkillStateBulkMutationAuthorityInput,
-  ): SkillStateBulkMutationOutcome;
-  getSkillActivationPolicy(): SkillActivationPolicy;
+  ): Promise<SkillStateBulkMutationOutcome>;
+  getSkillActivationPolicy(): Promise<SkillActivationPolicy>;
   installSkillImport(input: {
     sourceRef: string;
     sourceType?: SkillImportValidationResult["candidate"]["sourceType"];
@@ -67,30 +67,33 @@ export interface SkillsRoutePort {
     input: SkillHubRollbackReviewInput,
   ): ReturnType<SkillHubReviewService["prepareRollbackReview"]>;
   reviewSkillHubSource(input: SkillHubSourceReviewInput): ReturnType<SkillHubReviewService["reviewSource"]>;
-  listSkillImportHistory(limit?: number): SkillImportHistoryRecord[];
-  listSkillEvaluationRuns(skillId: string): SkillEvaluationListResponse;
+  listSkillImportHistory(limit?: number): Promise<SkillImportHistoryRecord[]>;
+  listSkillEvaluationRuns(skillId: string): Promise<SkillEvaluationListResponse>;
   listSkillExportTargets(): SkillExportTargetProfile[];
   listSkillSources(query?: string, limit?: number): Promise<SkillSourceListResponse>;
-  listSkills(effectiveSkills?: EffectiveCapabilitySet): SkillListItem[];
+  listSkills(effectiveSkills?: EffectiveCapabilitySet): Promise<SkillListItem[]>;
   lookupSkillSources(queryOrUrl: string, limit?: number): Promise<SkillSourceLookupResponse>;
-  previewSkillEvaluation(skillId: string, input: SkillEvaluationPreviewRequest): SkillEvaluationPreviewResponse;
+  previewSkillEvaluation(
+    skillId: string,
+    input: SkillEvaluationPreviewRequest,
+  ): Promise<SkillEvaluationPreviewResponse>;
   previewSkillExport(input: SkillExportRequest): SkillExportPreviewResponse;
-  packageSkillExport(input: SkillExportRequest): SkillExportPackageResponse;
-  runSkillEvaluation(skillId: string, input: SkillEvaluationRunRequest): SkillEvaluationRunResponse;
-  getSkillEvaluationRun(runId: string): SkillEvaluationRunRecord;
-  createSkillEvaluationProposal(runId: string): SkillEvaluationProposalResponse;
+  packageSkillExport(input: SkillExportRequest): Promise<SkillExportPackageResponse>;
+  runSkillEvaluation(skillId: string, input: SkillEvaluationRunRequest): Promise<SkillEvaluationRunResponse>;
+  getSkillEvaluationRun(runId: string): Promise<SkillEvaluationRunRecord>;
+  createSkillEvaluationProposal(runId: string): Promise<SkillEvaluationProposalResponse>;
   reloadSkills(): Promise<SkillListItem[]>;
-  resolveSkillActivation(input: SkillResolveInput): SkillActivationDecision;
+  resolveSkillActivation(input: SkillResolveInput): Promise<SkillActivationDecision>;
   setSkillState(
     skillId: string,
     state: SkillRuntimeState,
     note: string | undefined,
     authority: SkillStateMutationAuthorityInput,
-  ): SkillStateMutationOutcome;
+  ): Promise<SkillStateMutationOutcome>;
   updateSkillActivationPolicy(
     input: Partial<Omit<SkillActivationPolicy, "revision">>,
     authority: ActivationPolicyMutationAuthorityInput,
-  ): ActivationPolicyMutationOutcome;
+  ): Promise<ActivationPolicyMutationOutcome>;
   validateSkillImport(input: {
     sourceRef: string;
     sourceType?: SkillImportValidationResult["candidate"]["sourceType"];

@@ -10,19 +10,19 @@ import {
 } from "@goatcitadel/contracts";
 
 export interface OpsSavedBoardRepositoryPort {
-  listByWorkspace(workspaceId: string, includeArchived?: boolean): OpsSavedBoardRecord[];
-  get(workspaceId: string, boardId: string): OpsSavedBoardRecord;
+  listByWorkspace(workspaceId: string, includeArchived?: boolean): Promise<OpsSavedBoardRecord[]>;
+  get(workspaceId: string, boardId: string): Promise<OpsSavedBoardRecord>;
   createWithOutcome(
     input: OpsSavedBoardCreateInput,
     actorId: string,
-  ): { record: OpsSavedBoardRecord; inserted: boolean };
-  update(boardId: string, input: OpsSavedBoardUpdateInput, actorId: string): OpsSavedBoardRecord;
-  archive(boardId: string, input: OpsSavedBoardStatusInput, actorId: string): OpsSavedBoardRecord;
-  restore(boardId: string, input: OpsSavedBoardStatusInput, actorId: string): OpsSavedBoardRecord;
+  ): Promise<{ record: OpsSavedBoardRecord; inserted: boolean }>;
+  update(boardId: string, input: OpsSavedBoardUpdateInput, actorId: string): Promise<OpsSavedBoardRecord>;
+  archive(boardId: string, input: OpsSavedBoardStatusInput, actorId: string): Promise<OpsSavedBoardRecord>;
+  restore(boardId: string, input: OpsSavedBoardStatusInput, actorId: string): Promise<OpsSavedBoardRecord>;
 }
 
 export interface OpsSavedBoardWorkspacePort {
-  get(workspaceId: string): { workspaceId: string };
+  get(workspaceId: string): Promise<{ workspaceId: string }>;
 }
 
 export interface OpsSavedBoardServiceStoragePort {
@@ -67,68 +67,76 @@ export class OpsSavedBoardService {
     }
   }
 
-  public list(workspaceId: string, includeArchived = false): OpsSavedBoardRecord[] {
+  public async list(workspaceId: string, includeArchived = false): Promise<OpsSavedBoardRecord[]> {
     const normalizedWorkspaceId = normalizeIdentifier(workspaceId, "workspaceId");
-    this.requireWorkspace(normalizedWorkspaceId);
-    return this.storage.opsSavedBoards.listByWorkspace(normalizedWorkspaceId, includeArchived);
+    await this.requireWorkspace(normalizedWorkspaceId);
+    return await this.storage.opsSavedBoards.listByWorkspace(normalizedWorkspaceId, includeArchived);
   }
 
-  public get(workspaceId: string, boardId: string): OpsSavedBoardRecord {
+  public async get(workspaceId: string, boardId: string): Promise<OpsSavedBoardRecord> {
     const normalizedWorkspaceId = normalizeIdentifier(workspaceId, "workspaceId");
     const normalizedBoardId = normalizeIdentifier(boardId, "boardId");
-    this.requireWorkspace(normalizedWorkspaceId, normalizedBoardId);
-    return this.runBoardScoped(normalizedBoardId, () =>
+    await this.requireWorkspace(normalizedWorkspaceId, normalizedBoardId);
+    return await this.runBoardScoped(normalizedBoardId, () =>
       this.storage.opsSavedBoards.get(normalizedWorkspaceId, normalizedBoardId),
     );
   }
 
-  public create(input: OpsSavedBoardCreateInput, actorId: string): OpsSavedBoardRecord {
+  public async create(input: OpsSavedBoardCreateInput, actorId: string): Promise<OpsSavedBoardRecord> {
     const normalized = normalizeOpsSavedBoardCreateInput(input);
     const normalizedActorId = normalizeIdentifier(actorId, "actorId");
-    this.requireWorkspace(normalized.workspaceId);
-    const outcome = this.storage.opsSavedBoards.createWithOutcome(normalized, normalizedActorId);
-    if (outcome.inserted) this.publishChange("create", outcome.record);
+    await this.requireWorkspace(normalized.workspaceId);
+    const outcome = await this.storage.opsSavedBoards.createWithOutcome(normalized, normalizedActorId);
+    if (outcome.inserted) await this.publishChange("create", outcome.record);
     return outcome.record;
   }
 
-  public update(boardId: string, input: OpsSavedBoardUpdateInput, actorId: string): OpsSavedBoardRecord {
+  public async update(boardId: string, input: OpsSavedBoardUpdateInput, actorId: string): Promise<OpsSavedBoardRecord> {
     const normalizedBoardId = normalizeIdentifier(boardId, "boardId");
     const normalized = normalizeOpsSavedBoardUpdateInput(input);
     const normalizedActorId = normalizeIdentifier(actorId, "actorId");
-    this.requireWorkspace(normalized.workspaceId, normalizedBoardId);
-    const record = this.runBoardScoped(normalizedBoardId, () =>
+    await this.requireWorkspace(normalized.workspaceId, normalizedBoardId);
+    const record = await this.runBoardScoped(normalizedBoardId, () =>
       this.storage.opsSavedBoards.update(normalizedBoardId, normalized, normalizedActorId),
     );
-    this.publishChange("update", record);
+    await this.publishChange("update", record);
     return record;
   }
 
-  public archive(boardId: string, input: OpsSavedBoardStatusInput, actorId: string): OpsSavedBoardRecord {
-    return this.transition("archive", boardId, input, actorId);
+  public async archive(
+    boardId: string,
+    input: OpsSavedBoardStatusInput,
+    actorId: string,
+  ): Promise<OpsSavedBoardRecord> {
+    return await this.transition("archive", boardId, input, actorId);
   }
 
-  public restore(boardId: string, input: OpsSavedBoardStatusInput, actorId: string): OpsSavedBoardRecord {
-    return this.transition("restore", boardId, input, actorId);
+  public async restore(
+    boardId: string,
+    input: OpsSavedBoardStatusInput,
+    actorId: string,
+  ): Promise<OpsSavedBoardRecord> {
+    return await this.transition("restore", boardId, input, actorId);
   }
 
-  private transition(
+  private async transition(
     operation: "archive" | "restore",
     boardId: string,
     input: OpsSavedBoardStatusInput,
     actorId: string,
-  ): OpsSavedBoardRecord {
+  ): Promise<OpsSavedBoardRecord> {
     const normalizedBoardId = normalizeIdentifier(boardId, "boardId");
     const normalized = normalizeOpsSavedBoardStatusInput(input);
     const normalizedActorId = normalizeIdentifier(actorId, "actorId");
-    this.requireWorkspace(normalized.workspaceId, normalizedBoardId);
-    const record = this.runBoardScoped(normalizedBoardId, () =>
+    await this.requireWorkspace(normalized.workspaceId, normalizedBoardId);
+    const record = await this.runBoardScoped(normalizedBoardId, () =>
       this.storage.opsSavedBoards[operation](normalizedBoardId, normalized, normalizedActorId),
     );
-    this.publishChange(operation, record);
+    await this.publishChange(operation, record);
     return record;
   }
 
-  private publishChange(operation: OpsSavedBoardChangeOperation, record: OpsSavedBoardRecord): void {
+  private async publishChange(operation: OpsSavedBoardChangeOperation, record: OpsSavedBoardRecord): Promise<void> {
     const signal: OpsSavedBoardChangeSignal = Object.freeze({
       workspaceId: record.workspaceId,
       boardId: record.boardId,
@@ -137,12 +145,9 @@ export class OpsSavedBoardService {
       operation,
     });
     try {
-      const result = this.options.publishChange(signal);
-      if (isPromiseLike(result)) {
-        void Promise.resolve(result).catch((error: unknown) => this.reportPublicationFailure(error, signal));
-      }
+      await this.options.publishChange(signal);
     } catch (error) {
-      this.reportPublicationFailure(error, signal);
+      await this.reportPublicationFailure(error, signal);
     }
   }
 
@@ -156,9 +161,9 @@ export class OpsSavedBoardService {
     }
   }
 
-  private requireWorkspace(workspaceId: string, boardId?: string): void {
+  private async requireWorkspace(workspaceId: string, boardId?: string): Promise<void> {
     try {
-      const workspace = this.storage.workspaces.get(workspaceId);
+      const workspace = await this.storage.workspaces.get(workspaceId);
       if (!workspace || workspace.workspaceId !== workspaceId) {
         throw new NotFoundError({ entity: "Workspace", id: workspaceId });
       }
@@ -170,9 +175,9 @@ export class OpsSavedBoardService {
     }
   }
 
-  private runBoardScoped<T>(boardId: string, operation: () => T): T {
+  private async runBoardScoped<T>(boardId: string, operation: () => Promise<T>): Promise<T> {
     try {
-      return operation();
+      return await operation();
     } catch (error) {
       if (error instanceof NotFoundError) throw boardNotFound(boardId);
       throw error;

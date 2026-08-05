@@ -1,13 +1,16 @@
 import { randomUUID } from "node:crypto";
 import type { ConnectorDiagnosticReport } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 
 export interface ConnectorDiagnosticsHost {
   readonly gatewaySql: Storage["gatewaySql"];
 }
 
-export function recordConnectorHealthRun(host: ConnectorDiagnosticsHost, report: ConnectorDiagnosticReport): void {
-  host.gatewaySql
+export async function recordConnectorHealthRun(
+  host: ConnectorDiagnosticsHost,
+  report: ConnectorDiagnosticReport,
+): Promise<void> {
+  await host.gatewaySql
     .prepare(
       `
       INSERT INTO connector_health_runs (

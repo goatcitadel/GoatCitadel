@@ -7,7 +7,7 @@ import {
   type InboundChannelEventClaimToken,
   type InboundChannelEventRecord,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { ChannelVoiceInboundRequest, ChannelVoiceTranscriptionResult } from "./channel-voice-inbound-service.js";
 import {
   VOICE_TRANSCRIPT_CONTENT_PREFIX,
@@ -56,12 +56,12 @@ export interface InboundChannelEventServiceDeps {
   isClosing: () => boolean;
   registerBackgroundTask: (task: Promise<void>) => void;
   sharedHostLifecycle?: SharedHostLifecycleAdmissionPort;
-  getIntegrationConnection: (connectionId: string) => {
+  getIntegrationConnection: (connectionId: string) => Promise<{
     key: string;
     enabled?: boolean;
     status?: "connected" | "disconnected" | "error" | "paused";
     config: Record<string, unknown>;
-  };
+  }>;
   ingestChannelMessage: (
     channel: string,
     idempotencyKey: string,
@@ -76,8 +76,8 @@ export interface InboundChannelEventServiceDeps {
     connectionId: string;
     target?: string;
     writable: boolean;
-  }) => void;
-  hasRunningTurn: (sessionId: string) => boolean;
+  }) => Promise<void>;
+  hasRunningTurn: (sessionId: string) => Promise<boolean>;
   respondToExistingChatMessage: (
     sessionId: string,
     eventId: string,
@@ -147,8 +147,8 @@ export class InboundChannelEventService {
     this.ownerId = deps.ownerId?.trim() || `inbound-worker-${randomUUID()}`;
   }
 
-  public start(): void {
-    this.requestDrain();
+  public async start(): Promise<void> {
+    await this.requestDrain();
   }
 
   public close(): void {
@@ -198,9 +198,9 @@ export class InboundChannelEventService {
         },
       };
     });
-    const results = this.deps.storage.inboundChannelEvents.acceptMany(prepared.map((item) => item.acceptance));
+    const results = await this.deps.storage.inboundChannelEvents.acceptMany(prepared.map((item) => item.acceptance));
     if (results.some((result) => !isTerminal(result.event.status))) {
-      this.requestDrain();
+      await this.requestDrain();
     }
     return results.map((result, index) => ({
       accepted: true,
@@ -231,7 +231,7 @@ export class InboundChannelEventService {
     );
     const deadline = Date.now() + timeoutMs;
     while (true) {
-      const event = this.deps.storage.inboundChannelEvents.get(normalizedEventId);
+      const event = await this.deps.storage.inboundChannelEvents.get(normalizedEventId);
       if (!event) {
         throw new Error(`Inbound channel command event was not found: ${normalizedEventId}`);
       }
@@ -282,9 +282,9 @@ export class InboundChannelEventService {
     if (this.closed || this.deps.isClosing()) {
       return;
     }
-    this.deps.storage.inboundChannelEvents.recoverExpiredClaims({ limit });
+    await this.deps.storage.inboundChannelEvents.recoverExpiredClaims({ limit });
     while (!this.closed && !this.deps.isClosing() && !signal?.aborted) {
-      const claims = this.deps.storage.inboundChannelEvents.claimDue({
+      const claims = await this.deps.storage.inboundChannelEvents.claimDue({
         ownerId: this.ownerId,
         leaseDurationMs: CLAIM_LEASE_MS,
         limit,
@@ -292,14 +292,14 @@ export class InboundChannelEventService {
       if (claims.length === 0) {
         return;
       }
-      await Promise.all(claims.map((claim) => this.processClaimSafely(claim)));
+      await Promise.all(claims.map(async (claim) => await this.processClaimSafely(claim)));
       if (claims.length < limit) {
         return;
       }
     }
   }
 
-  private requestDrain(delayMs = 0): void {
+  private async requestDrain(delayMs = 0): Promise<void> {
     if (this.closed || this.deps.isClosing()) {
       return;
     }
@@ -307,9 +307,9 @@ export class InboundChannelEventService {
       if (this.retryTimer) {
         return;
       }
-      this.retryTimer = setTimeout(() => {
+      this.retryTimer = setTimeout(async () => {
         this.retryTimer = undefined;
-        this.requestDrain();
+        await this.requestDrain();
       }, delayMs);
       this.retryTimer.unref();
       return;
@@ -320,16 +320,16 @@ export class InboundChannelEventService {
     }
     this.drainRequested = false;
     const task = this.drain()
-      .catch((error) => {
+      .catch(async (error) => {
         this.diagnostic("error", "channel.inbound_drain_failed", "Durable inbound channel drain failed.", {
           error: normalizeError(error),
         });
-        this.requestDrain(1_000);
+        await this.requestDrain(1_000);
       })
-      .finally(() => {
+      .finally(async () => {
         this.drainPromise = undefined;
         if (this.drainRequested) {
-          this.requestDrain();
+          await this.requestDrain();
         }
       });
     this.drainPromise = task;
@@ -348,7 +348,7 @@ export class InboundChannelEventService {
         });
         return;
       }
-      const current = this.deps.storage.inboundChannelEvents.get(claim.eventId);
+      const current = await this.deps.storage.inboundChannelEvents.get(claim.eventId);
       if (!claimStillMatches(current, claim)) {
         return;
       }
@@ -356,7 +356,7 @@ export class InboundChannelEventService {
       if (current.status === "command_execution_started" || isAmbiguousPostCommitError(error)) {
         this.requireTransition(
           claim,
-          this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
+          await this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
             status: "manual_reconciliation_required",
             lastError: message,
             reconciliationReason:
@@ -368,7 +368,7 @@ export class InboundChannelEventService {
       } else if (current.attemptCount >= MAX_ATTEMPTS) {
         this.requireTransition(
           claim,
-          this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
+          await this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
             status: "failed",
             lastError: message,
           }),
@@ -378,13 +378,13 @@ export class InboundChannelEventService {
         const nextAttemptAt = new Date(Date.now() + delayMs).toISOString();
         this.requireTransition(
           claim,
-          this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
+          await this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
             status: "retry_wait",
             nextAttemptAt,
             lastError: message,
           }),
         );
-        this.requestDrain(delayMs);
+        await this.requestDrain(delayMs);
       }
       this.diagnostic("warn", "channel.inbound_processing_failed", "Durable inbound channel processing failed.", {
         inboundEventId: claim.eventId,
@@ -399,11 +399,11 @@ export class InboundChannelEventService {
 
   private async processClaim(claim: InboundChannelEventClaim, assertCurrent: () => void): Promise<void> {
     const payload = parseStoredPayload(claim.event);
-    const connection = this.deps.getIntegrationConnection(claim.event.connectionId);
+    const connection = await this.deps.getIntegrationConnection(claim.event.connectionId);
     if (connection.enabled === false || (connection.status !== undefined && connection.status !== "connected")) {
       this.requireTransition(
         claim,
-        this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
+        await this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
           status: "suppressed",
           lastError: "Connection was disabled after durable acceptance.",
         }),
@@ -422,7 +422,7 @@ export class InboundChannelEventService {
     assertCurrent();
     this.requireTransition(
       claim,
-      this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
+      await this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
         status: "message_recorded",
         linkage: {
           sessionId: ingestResult.session.sessionId,
@@ -432,7 +432,7 @@ export class InboundChannelEventService {
         },
       }),
     );
-    this.deps.setChatSessionBinding({
+    await this.deps.setChatSessionBinding({
       sessionId: ingestResult.session.sessionId,
       transport: "integration",
       connectionId: claim.event.connectionId,
@@ -443,7 +443,7 @@ export class InboundChannelEventService {
     if (claim.event.dispatchKind === "record_only") {
       this.requireTransition(
         claim,
-        this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
+        await this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
           status: "completed",
           linkage: { sessionId: ingestResult.session.sessionId, messageId },
         }),
@@ -455,7 +455,7 @@ export class InboundChannelEventService {
       const operationKey = claim.event.idempotencyKey;
       this.requireTransition(
         claim,
-        this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
+        await this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
           status: "command_execution_started",
           linkage: {
             sessionId: ingestResult.session.sessionId,
@@ -477,7 +477,7 @@ export class InboundChannelEventService {
       assertCurrent();
       this.requireTransition(
         claim,
-        this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
+        await this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
           status: "completed",
           linkage: {
             sessionId: ingestResult.session.sessionId,
@@ -490,11 +490,11 @@ export class InboundChannelEventService {
       return;
     }
 
-    const guard = this.resolveBotLoopDecision(claim, payload);
+    const guard = await this.resolveBotLoopDecision(claim, payload);
     if (guard.action === "suppress") {
       this.requireTransition(
         claim,
-        this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
+        await this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
           status: "suppressed",
           lastError: guard.reason,
           linkage: { sessionId: ingestResult.session.sessionId, messageId },
@@ -503,29 +503,29 @@ export class InboundChannelEventService {
       return;
     }
 
-    if (this.deps.hasRunningTurn(ingestResult.session.sessionId)) {
+    if (await this.deps.hasRunningTurn(ingestResult.session.sessionId)) {
       const delayMs = 1_000;
       this.requireTransition(
         claim,
-        this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
+        await this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
           status: "retry_wait",
           nextAttemptAt: new Date(Date.now() + delayMs).toISOString(),
           lastError: "Session already has an active turn; retained for ordered retry.",
           linkage: { sessionId: ingestResult.session.sessionId, messageId },
         }),
       );
-      this.requestDrain(delayMs);
+      await this.requestDrain(delayMs);
       return;
     }
 
     await this.emitActivity(claim, payload, ingestResult.session.sessionId, "seen");
     await this.emitActivity(claim, payload, ingestResult.session.sessionId, "thinking");
     const identity = buildDeterministicIdentity(claim.event.eventId, messageId);
-    identity.onDurableRunLaunched = (runId) => {
+    identity.onDurableRunLaunched = async (runId) => {
       assertCurrent();
       this.requireTransition(
         claim,
-        this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
+        await this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
           status: "turn_admitted",
           linkage: {
             sessionId: ingestResult.session.sessionId,
@@ -537,11 +537,11 @@ export class InboundChannelEventService {
         }),
       );
     };
-    identity.onDeliveryEnqueued = (evidence) => {
+    identity.onDeliveryEnqueued = async (evidence) => {
       assertCurrent();
       this.requireTransition(
         claim,
-        this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
+        await this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
           status: "reply_enqueued",
           linkage: {
             deliveryId: evidence.deliveryId,
@@ -559,7 +559,7 @@ export class InboundChannelEventService {
     if (response.trace?.status === "waiting_for_approval") {
       this.requireTransition(
         claim,
-        this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
+        await this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
           status: "waiting",
           linkage: {
             sessionId: ingestResult.session.sessionId,
@@ -573,12 +573,12 @@ export class InboundChannelEventService {
       // The durable Chat run owns approval wake-up. Keep a lease-backed retry
       // as the crash/restart safety net so this ingress row cannot remain
       // indefinitely stranded if that wake-up is lost.
-      this.requestDrain(CLAIM_LEASE_MS + 50);
+      await this.requestDrain(CLAIM_LEASE_MS + 50);
       return;
     }
     this.requireTransition(
       claim,
-      this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
+      await this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
         status: "completed",
         linkage: {
           sessionId: ingestResult.session.sessionId,
@@ -598,8 +598,11 @@ export class InboundChannelEventService {
     );
   }
 
-  private resolveBotLoopDecision(claim: InboundChannelEventClaim, payload: StoredInboundPayload): BotLoopGuardDecision {
-    const evaluation = this.deps.storage.inboundChannelEvents.beginBotLoopEvaluation(claim);
+  private async resolveBotLoopDecision(
+    claim: InboundChannelEventClaim,
+    payload: StoredInboundPayload,
+  ): Promise<BotLoopGuardDecision> {
+    const evaluation = await this.deps.storage.inboundChannelEvents.beginBotLoopEvaluation(claim);
     if (!evaluation) {
       throw new InboundChannelClaimLostError(claim.eventId);
     }
@@ -619,7 +622,7 @@ export class InboundChannelEventService {
       // whether the guard mutated its in-memory bucket. Fail open for this one
       // already-accepted event and persist that recovery decision without
       // charging the guard a second time.
-      const recovered = this.deps.storage.inboundChannelEvents.completeBotLoopEvaluation(claim, {
+      const recovered = await this.deps.storage.inboundChannelEvents.completeBotLoopEvaluation(claim, {
         decision: "allow",
         reason: "recovered_incomplete_evaluation",
       });
@@ -640,7 +643,7 @@ export class InboundChannelEventService {
       participantA: payload.message.actorId,
       participantB: claim.event.connectionId,
     });
-    const completed = this.deps.storage.inboundChannelEvents.completeBotLoopEvaluation(claim, {
+    const completed = await this.deps.storage.inboundChannelEvents.completeBotLoopEvaluation(claim, {
       decision: guard.action,
       reason: guard.action === "suppress" ? guard.reason : undefined,
     });
@@ -683,11 +686,11 @@ export class InboundChannelEventService {
     stop: () => void;
   } {
     let current = true;
-    const timer = setInterval(() => {
+    const timer = setInterval(async () => {
       if (!current || this.closed || this.deps.isClosing()) {
         return;
       }
-      const renewed = this.deps.storage.inboundChannelEvents.renew(claim, {
+      const renewed = await this.deps.storage.inboundChannelEvents.renew(claim, {
         leaseDurationMs: CLAIM_LEASE_MS,
       });
       if (!renewed) {

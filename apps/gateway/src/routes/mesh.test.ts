@@ -215,7 +215,7 @@ function buildApp(mesh: Record<string, unknown>): FastifyInstance {
 function createMeshService(overrides: Record<string, unknown> = {}) {
   return {
     getMeshStatus: vi.fn(() => ({ status: "online" })),
-    listMeshNodes: vi.fn(() => [{ nodeId: "node-1" }]),
+    listMeshNodes: vi.fn(async () => [{ nodeId: "node-1" }]),
     meshJoin: vi.fn(() => ({ nodeId: "node-2", joined: true })),
     acquireMeshLease: vi.fn(() => ({ leaseKey: "lease-1", fencingToken: 1 })),
     renewMeshLease: vi.fn(() => ({ leaseKey: "lease-1", fencingToken: 2 })),

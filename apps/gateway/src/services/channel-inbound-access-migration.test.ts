@@ -56,7 +56,7 @@ function createHarness(connections: IntegrationConnection[], settings: Record<st
 }
 
 describe("stampLegacyOpenChannelInboundAccess", () => {
-  it("stamps exactly the ambiguous class and leaves every other posture untouched", () => {
+  it("stamps exactly the ambiguous class and leaves every other posture untouched", async () => {
     const target = connection({ connectionId: "conn-legacy" });
     const openByDesign = connection({ connectionId: "conn-tui", key: "tui" });
     const nonChannel = connection({ connectionId: "conn-service", kind: "service" as never });
@@ -73,7 +73,7 @@ describe("stampLegacyOpenChannelInboundAccess", () => {
       sendersSet,
     ]);
 
-    const result = stampLegacyOpenChannelInboundAccess(deps);
+    const result = await stampLegacyOpenChannelInboundAccess(deps);
 
     expect(result).toEqual({ ranNow: true, stampedConnectionIds: ["conn-legacy"] });
     expect([...updated.keys()]).toEqual(["conn-legacy"]);
@@ -105,13 +105,13 @@ describe("stampLegacyOpenChannelInboundAccess", () => {
     expect(decision.legacyWarning).toBeTruthy();
   });
 
-  it("is a no-op on the second run via the done-marker", () => {
+  it("is a no-op on the second run via the done-marker", async () => {
     const target = connection({ connectionId: "conn-legacy" });
     const { deps, updated } = createHarness([target], {
       [LEGACY_OPEN_STAMP_SETTING_KEY]: { completedAt: NOW, stampedConnectionIds: ["conn-legacy"] },
     });
 
-    const result = stampLegacyOpenChannelInboundAccess(deps);
+    const result = await stampLegacyOpenChannelInboundAccess(deps);
 
     expect(result).toEqual({ ranNow: false, stampedConnectionIds: [] });
     expect(updated.size).toBe(0);
@@ -119,19 +119,19 @@ describe("stampLegacyOpenChannelInboundAccess", () => {
     expect(deps.storage.systemSettings.set).not.toHaveBeenCalled();
   });
 
-  it("emits no notification when nothing needed stamping, but still sets the marker", () => {
+  it("emits no notification when nothing needed stamping, but still sets the marker", async () => {
     const { deps, settingsMap } = createHarness([
       connection({ connectionId: "conn-allowlist", config: { inboundAccessMode: "allowlist" } }),
     ]);
 
-    const result = stampLegacyOpenChannelInboundAccess(deps);
+    const result = await stampLegacyOpenChannelInboundAccess(deps);
 
     expect(result).toEqual({ ranNow: true, stampedConnectionIds: [] });
     expect(deps.publishRealtime).not.toHaveBeenCalled();
     expect(settingsMap.get(LEGACY_OPEN_STAMP_SETTING_KEY)).toMatchObject({ completedAt: NOW });
   });
 
-  it("stops without the done-marker when a write fails, so the next boot retries", () => {
+  it("stops without the done-marker when a write fails, so the next boot retries", async () => {
     const first = connection({ connectionId: "conn-a" });
     const second = connection({ connectionId: "conn-b" });
     const { deps, settingsMap } = createHarness([first, second]);
@@ -139,7 +139,7 @@ describe("stampLegacyOpenChannelInboundAccess", () => {
       throw new Error("db locked");
     });
 
-    const result = stampLegacyOpenChannelInboundAccess(deps);
+    const result = await stampLegacyOpenChannelInboundAccess(deps);
 
     expect(result.ranNow).toBe(true);
     expect(result.stampedConnectionIds).toEqual([]);

@@ -31,12 +31,12 @@ import {
 } from "./chat-durable-runtime-authority.js";
 
 describe("chat-durable-run-service", () => {
-  it("reads terminal output only from the immutable prepared assistant message and preserves exact text", () => {
+  it("reads terminal output only from the immutable prepared assistant message and preserves exact text", async () => {
     const prepared = createPreparedTurn();
     const trace = createTrace({ status: "completed", assistantMessageId: "assistant-1" });
     const state = createFinalizeState();
     state.deps.chatMessages = {
-      get: () => ({
+      get: async () => ({
         messageId: "assistant-1",
         sessionId: "session-1",
         role: "assistant",
@@ -47,21 +47,21 @@ describe("chat-durable-run-service", () => {
       }),
     };
 
-    expect(readCanonicalDurableChatTerminalOutput(state.deps, prepared, trace)).toEqual({
+    await expect(readCanonicalDurableChatTerminalOutput(state.deps, prepared, trace)).resolves.toEqual({
       assistantMessageId: "assistant-1",
       outputText: "  Exact stored\noutput.  ",
       outputSummary: "Exact stored output.",
     });
-    expect(() =>
+    await expect(
       readCanonicalDurableChatTerminalOutput(
         state.deps,
         prepared,
         createTrace({ status: "completed", assistantMessageId: "assistant-drift" }),
       ),
-    ).toThrow("different assistant message");
+    ).rejects.toThrow("different assistant message");
   });
 
-  it("rejects terminal assistant records with the wrong session, role, or actor type", () => {
+  it("rejects terminal assistant records with the wrong session, role, or actor type", async () => {
     const prepared = createPreparedTurn();
     const trace = createTrace({ status: "completed", assistantMessageId: "assistant-1" });
     const state = createFinalizeState();
@@ -71,7 +71,7 @@ describe("chat-durable-run-service", () => {
       { sessionId: "session-1", role: "assistant", actorType: "system" },
     ] as const) {
       state.deps.chatMessages = {
-        get: () => ({
+        get: async () => ({
           messageId: "assistant-1",
           ...invalid,
           actorId: "assistant",
@@ -79,24 +79,26 @@ describe("chat-durable-run-service", () => {
           timestamp: "2026-04-10T00:00:03.000Z",
         }),
       };
-      expect(() => readCanonicalDurableChatTerminalOutput(state.deps, prepared, trace)).toThrow(
+      await expect(readCanonicalDurableChatTerminalOutput(state.deps, prepared, trace)).rejects.toThrow(
         "invalid canonical linkage",
       );
     }
   });
 
-  it("creates and schedules a durable chat run", () => {
-    const prepared = createPreparedTurn({ turnAdmission: undefined });
+  it("creates and schedules a durable chat run", async () => {
+    const prepared = createPreparedTurn();
     const input = createSendRequest();
     const streamChunks: Array<{ chunk: ChatStreamChunkDraft; durableRunId?: string }> = [];
     const requestedRunIds: string[] = [];
     const createInputs: DurableRunCreateRequest[] = [];
+    const admissionEvents: string[] = [];
     const run = createRun("run-1", "queued");
 
-    const created = beginDurableChatRun(
+    const created = await beginDurableChatRun(
       {
         shouldUseDurableExecution: true,
-        createDurableRun: (createInput) => {
+        runImmediateTransaction: async (work) => await work(),
+        createDurableRun: async (createInput) => {
           createInputs.push(createInput);
           return run;
         },
@@ -104,7 +106,21 @@ describe("chat-durable-run-service", () => {
           requestContent: request.content,
           threadEventType,
         }),
-        persistChatStreamChunk: (chunk, durableRunId) => streamChunks.push({ chunk, durableRunId }),
+        assertTurnAdmissionWrite: (selected) => {
+          expect(selected).toBe(prepared);
+          admissionEvents.push("admission:asserted");
+        },
+        bindTurnAdmissionToDurableRun: async (selected, durableRunId) => {
+          expect(selected).toBe(prepared);
+          expect(durableRunId).toBe("run-1");
+          admissionEvents.push("admission:binding");
+          await Promise.resolve();
+          admissionEvents.push("admission:bound");
+        },
+        persistChatStreamChunk: async (chunk, durableRunId) => {
+          admissionEvents.push("stream:persisted");
+          streamChunks.push({ chunk, durableRunId });
+        },
         requestDurableRunProcessing: (runId) => requestedRunIds.push(runId),
       },
       prepared,
@@ -143,12 +159,13 @@ describe("chat-durable-run-service", () => {
         durableRunId: "run-1",
       },
     ]);
+    expect(admissionEvents).toEqual(["admission:asserted", "admission:binding", "admission:bound", "stream:persisted"]);
     expect(requestedRunIds).toEqual(["run-1"]);
   });
 
   it.each(["retry", "edit"] as const)(
     "atomically selects an earlier %s sibling branch before durable provider scheduling",
-    (branchKind) => {
+    async (branchKind) => {
       const events: string[] = [];
       const prepared = createPreparedTurn({
         turnAdmission: undefined,
@@ -161,31 +178,33 @@ describe("chat-durable-run-service", () => {
       });
       const run = createRun(`run-${branchKind}`, "queued");
 
-      beginDurableChatRun(
+      await beginDurableChatRun(
         {
           shouldUseDurableExecution: true,
-          runImmediateTransaction: (work) => {
+          runImmediateTransaction: async (work) => {
             events.push("transaction:start");
-            const result = work();
+            const result = await work();
             events.push("transaction:commit");
             return result;
           },
-          createDurableRun: () => {
+          createDurableRun: async () => {
             events.push("run");
             return run;
           },
           buildDurablePayloadRecord: () => ({}),
-          persistChatStreamChunk: () => events.push("message_start"),
+          persistChatStreamChunk: async () => {
+            events.push("message_start");
+          },
           chatTurnTraces: {
-            get: () => {
+            get: async () => {
               throw new NotFoundError({ entity: "chat turn trace", id: prepared.turnId });
             },
-            create: (input) => {
+            create: async (input) => {
               events.push("trace");
               return input as ChatTurnTraceRecord;
             },
           },
-          activatePreparedBranch: (selected) => {
+          activatePreparedBranch: async (selected) => {
             events.push("branch");
             expect(selected).toMatchObject({
               branchKind,
@@ -214,8 +233,8 @@ describe("chat-durable-run-service", () => {
     },
   );
 
-  it("fails a stale retry branch before stream publication or provider scheduling", () => {
-    const persistChatStreamChunk = vi.fn();
+  it("fails a stale retry branch before stream publication or provider scheduling", async () => {
+    const persistChatStreamChunk = vi.fn(async () => undefined);
     const requestDurableRunProcessing = vi.fn();
     const prepared = createPreparedTurn({
       turnAdmission: undefined,
@@ -225,15 +244,15 @@ describe("chat-durable-run-service", () => {
       branchSelectionBaseTurnId: "turn-stale-leaf",
     });
 
-    expect(() =>
+    await expect(
       beginDurableChatRun(
         {
           shouldUseDurableExecution: true,
-          runImmediateTransaction: (work) => work(),
-          createDurableRun: () => createRun("run-stale-retry", "queued"),
+          runImmediateTransaction: async (work) => await work(),
+          createDurableRun: async () => createRun("run-stale-retry", "queued"),
           buildDurablePayloadRecord: () => ({}),
           persistChatStreamChunk,
-          activatePreparedBranch: () => {
+          activatePreparedBranch: async () => {
             throw new Error("active leaf changed before retry branch admission");
           },
           requestDurableRunProcessing,
@@ -243,25 +262,25 @@ describe("chat-durable-run-service", () => {
         "chat_thread_turn_retried",
         { runId: "run-stale-retry" },
       ),
-    ).toThrow(/active leaf changed before retry branch admission/i);
+    ).rejects.toThrow(/active leaf changed before retry branch admission/i);
     expect(persistChatStreamChunk).not.toHaveBeenCalled();
     expect(requestDurableRunProcessing).not.toHaveBeenCalled();
   });
 
-  it("skips durable run creation when the flow stays synchronous", () => {
+  it("skips durable run creation when the flow stays synchronous", async () => {
     const prepared = createPreparedTurn();
     const input = createSendRequest();
     let created = false;
 
-    const run = beginDurableChatRun(
+    const run = await beginDurableChatRun(
       {
         shouldUseDurableExecution: false,
-        createDurableRun: () => {
+        createDurableRun: async () => {
           created = true;
           return createRun("run-unexpected", "queued");
         },
         buildDurablePayloadRecord: () => ({}),
-        persistChatStreamChunk: () => undefined,
+        persistChatStreamChunk: async () => undefined,
         requestDurableRunProcessing: () => undefined,
       },
       prepared,
@@ -273,19 +292,19 @@ describe("chat-durable-run-service", () => {
     expect(created).toBe(false);
   });
 
-  it("signals durable commit before a pre-yield stream persistence failure escapes", () => {
+  it("signals durable commit before a pre-yield stream persistence failure escapes", async () => {
     const markCommitted = vi.fn();
 
-    expect(() =>
+    await expect(
       beginDurableChatRun(
         {
           shouldUseDurableExecution: true,
-          createDurableRun: () => createRun("run-commit-signal", "queued"),
+          createDurableRun: async () => createRun("run-commit-signal", "queued"),
           buildDurablePayloadRecord: () => ({}),
-          persistChatStreamChunk: () => {
+          persistChatStreamChunk: async () => {
             throw new Error("stream chunk persistence unavailable");
           },
-          activatePreparedBranch: vi.fn(),
+          activatePreparedBranch: vi.fn(async () => undefined),
           requestDurableRunProcessing: vi.fn(),
         },
         createPreparedTurn({ turnAdmission: undefined }),
@@ -293,12 +312,12 @@ describe("chat-durable-run-service", () => {
         "chat_thread_turn_retried",
         { mutationLifecycle: { markCommitted } },
       ),
-    ).toThrow("stream chunk persistence unavailable");
+    ).rejects.toThrow("stream chunk persistence unavailable");
 
     expect(markCommitted).toHaveBeenCalledTimes(1);
   });
 
-  it("marks waiting traces as durable waiting checkpoints", () => {
+  it("marks waiting traces as durable waiting checkpoints", async () => {
     const prepared = createPreparedTurn();
     const trace = createTrace({
       status: "waiting_for_approval",
@@ -311,7 +330,7 @@ describe("chat-durable-run-service", () => {
     });
     const state = createFinalizeState();
 
-    finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace);
+    await finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace);
 
     expect(state.runs.get("run-waiting")?.status).toBe("waiting");
     expect(state.runs.get("run-waiting")?.finishedAt).toBeUndefined();
@@ -346,7 +365,7 @@ describe("chat-durable-run-service", () => {
     ]);
   });
 
-  it("replays waiting turns only from their exact latest seal and checkpoint", () => {
+  it("replays waiting turns only from their exact latest seal and checkpoint", async () => {
     const prepared = createPreparedTurn();
     const trace = createTrace({
       status: "waiting_for_approval",
@@ -357,13 +376,13 @@ describe("chat-durable-run-service", () => {
       },
     });
     const state = createFinalizeState();
-    finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace);
+    await finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace);
     const stored = state.runs.get("run-waiting");
     const checkpointCount = state.checkpoints.length;
     const timelineCount = state.timelineEvents.length;
     state.tracePatches.length = 0;
 
-    finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace);
+    await finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace);
 
     expect(state.runs.get("run-waiting")).toEqual(stored);
     expect(state.checkpoints).toHaveLength(checkpointCount);
@@ -376,16 +395,16 @@ describe("chat-durable-run-service", () => {
     ]);
 
     state.checkpoints.length = 0;
-    expect(() => finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace)).toThrow(
+    await expect(finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace)).rejects.toThrow(
       "no exact latest waiting authority checkpoint",
     );
   });
 
-  it("accepts an exactly settled waiting finalizer and rejects stale output evidence", () => {
+  it("accepts an exactly settled waiting finalizer and rejects stale output evidence", async () => {
     const prepared = createPreparedTurn();
     const trace = createTrace({ status: "waiting_for_tool" });
     const state = createFinalizeState();
-    finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace);
+    await finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace);
     const run = state.runs.get("run-waiting")!;
     const pending = run.metadata?.generalChatPostCommitPending as Record<string, unknown>;
     const metadata = { ...(run.metadata ?? {}) };
@@ -393,19 +412,19 @@ describe("chat-durable-run-service", () => {
     metadata.generalChatPostCommit = buildFinalGeneralSettlement(pending, "2026-04-10T00:00:04.000Z");
     state.runs.set("run-waiting", { ...run, metadata });
 
-    expect(() => finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace)).not.toThrow();
+    await expect(finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace)).resolves.toBeUndefined();
 
     const settled = state.runs.get("run-waiting")!;
     state.runs.set("run-waiting", {
       ...settled,
       metadata: { ...(settled.metadata ?? {}), outputText: "stale terminal output" },
     });
-    expect(() => finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace)).toThrow(
+    await expect(finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace)).rejects.toThrow(
       "stale output evidence for a waiting replay",
     );
   });
 
-  it("marks user-input waits as durable waiting checkpoints", () => {
+  it("marks user-input waits as durable waiting checkpoints", async () => {
     const prepared = createPreparedTurn();
     const trace = createTrace({
       status: "waiting_for_user_input",
@@ -418,7 +437,7 @@ describe("chat-durable-run-service", () => {
     });
     const state = createFinalizeState();
 
-    finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace);
+    await finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace);
 
     expect(state.runs.get("run-waiting")?.status).toBe("waiting");
     expect(state.checkpoints).toEqual([
@@ -434,7 +453,7 @@ describe("chat-durable-run-service", () => {
     ]);
   });
 
-  it("marks tool waits as durable waiting checkpoints", () => {
+  it("marks tool waits as durable waiting checkpoints", async () => {
     const prepared = createPreparedTurn();
     const trace = createTrace({
       status: "waiting_for_tool",
@@ -447,7 +466,7 @@ describe("chat-durable-run-service", () => {
     });
     const state = createFinalizeState();
 
-    finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace);
+    await finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace);
 
     expect(state.runs.get("run-waiting")?.status).toBe("waiting");
     expect(state.runs.get("run-waiting")?.finishedAt).toBeUndefined();
@@ -464,7 +483,7 @@ describe("chat-durable-run-service", () => {
     ]);
   });
 
-  it("parks approval waits with an approval.resolved waitForEvent keyed to the pending approval", () => {
+  it("parks approval waits with an approval.resolved waitForEvent keyed to the pending approval", async () => {
     const prepared = createPreparedTurn();
     const trace = createTrace({
       status: "waiting_for_approval",
@@ -497,7 +516,7 @@ describe("chat-durable-run-service", () => {
       },
     });
 
-    finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace);
+    await finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace);
 
     expect(state.runs.get("run-waiting")?.metadata).toMatchObject({
       surface: "chat",
@@ -510,7 +529,7 @@ describe("chat-durable-run-service", () => {
     });
   });
 
-  it("parks user-input waits with a chat.user_input.resolved waitForEvent keyed to the pending prompt", () => {
+  it("parks user-input waits with a chat.user_input.resolved waitForEvent keyed to the pending prompt", async () => {
     const prepared = createPreparedTurn();
     const trace = createTrace({
       status: "waiting_for_user_input",
@@ -530,7 +549,7 @@ describe("chat-durable-run-service", () => {
     });
     const state = createFinalizeState();
 
-    finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace);
+    await finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace);
 
     expect(state.runs.get("run-waiting")?.metadata).toMatchObject({
       waitForEvent: {
@@ -540,7 +559,7 @@ describe("chat-durable-run-service", () => {
     });
   });
 
-  it("parks tool waits with an eventKey-only waitForEvent (no known wake correlation)", () => {
+  it("parks tool waits with an eventKey-only waitForEvent (no known wake correlation)", async () => {
     const prepared = createPreparedTurn();
     const trace = createTrace({
       status: "waiting_for_tool",
@@ -553,7 +572,7 @@ describe("chat-durable-run-service", () => {
     });
     const state = createFinalizeState();
 
-    finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace);
+    await finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace);
 
     const waitForEvent = (state.runs.get("run-waiting")?.metadata as { waitForEvent?: Record<string, unknown> })
       ?.waitForEvent;
@@ -561,7 +580,7 @@ describe("chat-durable-run-service", () => {
     expect(waitForEvent).not.toHaveProperty("correlationId");
   });
 
-  it("falls back to a runId-scoped waitForEvent when an approval wait lacks a resolvable approvalId", () => {
+  it("falls back to a runId-scoped waitForEvent when an approval wait lacks a resolvable approvalId", async () => {
     const prepared = createPreparedTurn();
     const trace = createTrace({
       status: "waiting_for_approval",
@@ -577,7 +596,7 @@ describe("chat-durable-run-service", () => {
     });
     const state = createFinalizeState();
 
-    finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace);
+    await finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace);
 
     const waitForEvent = (state.runs.get("run-waiting")?.metadata as { waitForEvent?: Record<string, unknown> })
       ?.waitForEvent;
@@ -585,14 +604,14 @@ describe("chat-durable-run-service", () => {
     expect(waitForEvent).not.toHaveProperty("correlationId");
   });
 
-  it("marks cancelled traces as durable cancellation checkpoints", () => {
+  it("marks cancelled traces as durable cancellation checkpoints", async () => {
     const prepared = createPreparedTurn();
     const trace = createTrace({
       status: "cancelled",
     });
     const state = createFinalizeState();
 
-    finalizeDurableChatRun(state.deps, "run-cancelled", prepared, trace);
+    await finalizeDurableChatRun(state.deps, "run-cancelled", prepared, trace);
 
     expect(state.runs.get("run-cancelled")?.status).toBe("cancelled");
     expect(state.runs.get("run-cancelled")?.finishedAt).toBeDefined();
@@ -625,19 +644,19 @@ describe("chat-durable-run-service", () => {
     ]);
   });
 
-  it("does not duplicate durable cancellation checkpoints after an operator cancel already settled the run", () => {
+  it("does not duplicate durable cancellation checkpoints after an operator cancel already settled the run", async () => {
     const prepared = createPreparedTurn();
     const trace = createTrace({
       status: "cancelled",
     });
     const state = createFinalizeState();
-    finalizeDurableChatRun(state.deps, "run-cancelled", prepared, trace);
+    await finalizeDurableChatRun(state.deps, "run-cancelled", prepared, trace);
     const settled = state.runs.get("run-cancelled");
     const checkpointCount = state.checkpoints.length;
     const timelineCount = state.timelineEvents.length;
     state.tracePatches.length = 0;
 
-    finalizeDurableChatRun(state.deps, "run-cancelled", prepared, trace);
+    await finalizeDurableChatRun(state.deps, "run-cancelled", prepared, trace);
 
     expect(state.runs.get("run-cancelled")).toEqual(settled);
     expect(state.checkpoints).toHaveLength(checkpointCount);
@@ -656,7 +675,7 @@ describe("chat-durable-run-service", () => {
     ]);
   });
 
-  it("does not let late completed traces overwrite an operator-cancelled durable run", () => {
+  it("does not let late completed traces overwrite an operator-cancelled durable run", async () => {
     const prepared = createPreparedTurn();
     const trace = createTrace({
       status: "completed",
@@ -667,13 +686,13 @@ describe("chat-durable-run-service", () => {
       },
     });
     const state = createFinalizeState();
-    finalizeDurableChatRun(state.deps, "run-cancelled", prepared, createTrace({ status: "cancelled" }));
+    await finalizeDurableChatRun(state.deps, "run-cancelled", prepared, createTrace({ status: "cancelled" }));
     const settled = state.runs.get("run-cancelled");
     const checkpointCount = state.checkpoints.length;
     const timelineCount = state.timelineEvents.length;
     state.tracePatches.length = 0;
 
-    expect(() => finalizeDurableChatRun(state.deps, "run-cancelled", prepared, trace)).toThrow(
+    await expect(finalizeDurableChatRun(state.deps, "run-cancelled", prepared, trace)).rejects.toThrow(
       "no exact terminal replay authority",
     );
 
@@ -683,7 +702,7 @@ describe("chat-durable-run-service", () => {
     expect(state.tracePatches).toEqual([]);
   });
 
-  it("does not let late traces rewrite already-terminal durable runs", () => {
+  it("does not let late traces rewrite already-terminal durable runs", async () => {
     const prepared = createPreparedTurn();
     const trace = createTrace({
       status: "waiting_for_approval",
@@ -695,13 +714,13 @@ describe("chat-durable-run-service", () => {
     });
     const state = createFinalizeState();
     state.runs.set("run-terminal", createRun("run-terminal", "running"));
-    finalizeDurableChatRun(state.deps, "run-terminal", prepared, createTrace({ status: "completed" }));
+    await finalizeDurableChatRun(state.deps, "run-terminal", prepared, createTrace({ status: "completed" }));
     const settled = state.runs.get("run-terminal");
     const checkpointCount = state.checkpoints.length;
     const timelineCount = state.timelineEvents.length;
     state.tracePatches.length = 0;
 
-    expect(() => finalizeDurableChatRun(state.deps, "run-terminal", prepared, trace)).toThrow(
+    await expect(finalizeDurableChatRun(state.deps, "run-terminal", prepared, trace)).rejects.toThrow(
       "no exact terminal replay authority",
     );
 
@@ -711,7 +730,7 @@ describe("chat-durable-run-service", () => {
     expect(state.tracePatches).toEqual([]);
   });
 
-  it("quarantines a waiting run that moved out of running without exact replay authority", () => {
+  it("quarantines a waiting run that moved out of running without exact replay authority", async () => {
     const prepared = createPreparedTurn();
     const trace = createTrace({
       status: "completed",
@@ -733,7 +752,7 @@ describe("chat-durable-run-service", () => {
       },
     });
 
-    expect(() => finalizeDurableChatRun(state.deps, "run-late-waiting", prepared, trace)).toThrow(
+    await expect(finalizeDurableChatRun(state.deps, "run-late-waiting", prepared, trace)).rejects.toThrow(
       "no exact waiting replay authority",
     );
 
@@ -746,7 +765,7 @@ describe("chat-durable-run-service", () => {
     expect(state.tracePatches).toEqual([]);
   });
 
-  it("does not finalize after the database reports that the expected lease expired", () => {
+  it("does not finalize after the database reports that the expected lease expired", async () => {
     const prepared = createPreparedTurn();
     const trace = createTrace({ status: "completed" });
     const state = createFinalizeState();
@@ -756,10 +775,10 @@ describe("chat-durable-run-service", () => {
       leaseHeartbeatAt: "2026-04-10T00:00:00.000Z",
       leaseExpiresAt: "2999-04-10T00:05:00.000Z",
     });
-    const lockFreshActiveLeaseForUpdate = vi.fn(() => undefined);
+    const lockFreshActiveLeaseForUpdate = vi.fn(async () => undefined);
     Object.assign(state.deps.durableRuns, { lockFreshActiveLeaseForUpdate });
 
-    finalizeDurableChatRun(state.deps, "run-complete", prepared, trace, "worker-a");
+    await finalizeDurableChatRun(state.deps, "run-complete", prepared, trace, "worker-a");
 
     expect(lockFreshActiveLeaseForUpdate).toHaveBeenCalledWith("run-complete", "worker-a");
     expect(state.runs.get("run-complete")?.status).toBe("running");
@@ -768,7 +787,7 @@ describe("chat-durable-run-service", () => {
     expect(state.tracePatches).toEqual([]);
   });
 
-  it("records completed checkpoints with tool and artifact summaries", () => {
+  it("records completed checkpoints with tool and artifact summaries", async () => {
     const prepared = createPreparedTurn({ content: "Ship the patch" });
     const trace = createTrace({
       status: "completed",
@@ -801,7 +820,7 @@ describe("chat-durable-run-service", () => {
       ],
     });
 
-    finalizeDurableChatRun(state.deps, "run-complete", prepared, trace);
+    await finalizeDurableChatRun(state.deps, "run-complete", prepared, trace);
 
     expect(state.runs.get("run-complete")?.status).toBe("completed");
     expect(state.runs.get("run-complete")?.lastError).toBeUndefined();
@@ -866,7 +885,7 @@ describe("chat-durable-run-service", () => {
     ]);
   });
 
-  it("does not infer autonomous finalizer authority from descriptive autonomous metadata", () => {
+  it("does not infer autonomous finalizer authority from descriptive autonomous metadata", async () => {
     const prepared = createPreparedTurn();
     const trace = createTrace({ status: "completed" });
     const state = createFinalizeState();
@@ -883,7 +902,7 @@ describe("chat-durable-run-service", () => {
       },
     });
 
-    finalizeDurableChatRun(state.deps, "run-complete", prepared, trace);
+    await finalizeDurableChatRun(state.deps, "run-complete", prepared, trace);
 
     expect(state.runs.get("run-complete")).toMatchObject({
       status: "completed",
@@ -895,18 +914,18 @@ describe("chat-durable-run-service", () => {
     expect(state.runs.get("run-complete")?.metadata).not.toHaveProperty("autonomousChatPostCommitPending");
   });
 
-  it("rolls back every finalization projection when a late transaction write fails", () => {
+  it("rolls back every finalization projection when a late transaction write fails", async () => {
     const prepared = createPreparedTurn();
     const trace = createTrace({ status: "completed" });
     const state = createFinalizeState();
     const before = state.runs.get("run-complete");
     const patchTrace = state.deps.chatTurnTraces.patch;
-    state.deps.chatTurnTraces.patch = (turnId, patch) => {
-      patchTrace(turnId, patch);
+    state.deps.chatTurnTraces.patch = async (turnId, patch) => {
+      await patchTrace(turnId, patch);
       throw new Error("injected trace commit failure");
     };
 
-    expect(() => finalizeDurableChatRun(state.deps, "run-complete", prepared, trace)).toThrow(
+    await expect(finalizeDurableChatRun(state.deps, "run-complete", prepared, trace)).rejects.toThrow(
       "injected trace commit failure",
     );
 
@@ -916,7 +935,7 @@ describe("chat-durable-run-service", () => {
     expect(state.tracePatches).toEqual([]);
 
     state.deps.chatTurnTraces.patch = patchTrace;
-    finalizeDurableChatRun(state.deps, "run-complete", prepared, trace);
+    await finalizeDurableChatRun(state.deps, "run-complete", prepared, trace);
 
     expect(state.runs.get("run-complete")?.status).toBe("completed");
     expect(state.checkpoints).toHaveLength(1);
@@ -924,7 +943,7 @@ describe("chat-durable-run-service", () => {
     expect(state.tracePatches).toHaveLength(1);
   });
 
-  it("does not create autonomous post-commit work for failed or human Chat finalization", () => {
+  it("does not create autonomous post-commit work for failed or human Chat finalization", async () => {
     const prepared = createPreparedTurn();
     const failed = createFinalizeState();
     failed.runs.set("run-complete", {
@@ -934,16 +953,16 @@ describe("chat-durable-run-service", () => {
         autonomous: { kind: "scheduled" },
       },
     });
-    finalizeDurableChatRun(failed.deps, "run-complete", prepared, createTrace({ status: "failed" }));
+    await finalizeDurableChatRun(failed.deps, "run-complete", prepared, createTrace({ status: "failed" }));
 
     const human = createFinalizeState();
-    finalizeDurableChatRun(human.deps, "run-complete", prepared, createTrace({ status: "completed" }));
+    await finalizeDurableChatRun(human.deps, "run-complete", prepared, createTrace({ status: "completed" }));
 
     expect(failed.runs.get("run-complete")?.metadata).not.toHaveProperty("autonomousChatPostCommitPending");
     expect(human.runs.get("run-complete")?.metadata).not.toHaveProperty("autonomousChatPostCommitPending");
   });
 
-  it("records completed checkpoints when older traces do not include completion metadata", () => {
+  it("records completed checkpoints when older traces do not include completion metadata", async () => {
     const prepared = createPreparedTurn({ content: "Run the agentic smoke" });
     const trace = createTrace({
       status: "completed",
@@ -951,7 +970,7 @@ describe("chat-durable-run-service", () => {
     });
     const state = createFinalizeState();
 
-    finalizeDurableChatRun(state.deps, "run-complete", prepared, trace);
+    await finalizeDurableChatRun(state.deps, "run-complete", prepared, trace);
 
     expect(state.runs.get("run-complete")?.status).toBe("completed");
     expect(state.checkpoints).toEqual([
@@ -977,7 +996,7 @@ describe("chat-durable-run-service", () => {
     ]);
   });
 
-  it("records failed checkpoints when completion metadata is explicitly incomplete", () => {
+  it("records failed checkpoints when completion metadata is explicitly incomplete", async () => {
     const prepared = createPreparedTurn({ content: "Run the agentic smoke" });
     const trace = createTrace({
       status: "completed",
@@ -989,7 +1008,7 @@ describe("chat-durable-run-service", () => {
     });
     const state = createFinalizeState();
 
-    finalizeDurableChatRun(state.deps, "run-complete", prepared, trace);
+    await finalizeDurableChatRun(state.deps, "run-complete", prepared, trace);
 
     expect(state.runs.get("run-complete")?.status).toBe("failed");
     expect(state.checkpoints).toEqual([
@@ -1006,7 +1025,7 @@ describe("chat-durable-run-service", () => {
     expect(state.runs.get("run-complete")?.metadata).not.toHaveProperty("outputText");
   });
 
-  it("quarantines legacy and unadmitted v2 runs without creating terminal or autonomous evidence", () => {
+  it("quarantines legacy and unadmitted v2 runs without creating terminal or autonomous evidence", async () => {
     const trace = createTrace({ status: "completed" });
     const legacy = createFinalizeState();
     legacy.runs.set("run-complete", {
@@ -1019,7 +1038,7 @@ describe("chat-durable-run-service", () => {
     });
     const legacyBefore = structuredClone(legacy.runs.get("run-complete"));
 
-    expect(() => finalizeDurableChatRun(legacy.deps, "run-complete", createPreparedTurn(), trace)).toThrow(
+    await expect(finalizeDurableChatRun(legacy.deps, "run-complete", createPreparedTurn(), trace)).rejects.toThrow(
       "quarantined from finalization",
     );
     expect(legacy.runs.get("run-complete")).toEqual(legacyBefore);
@@ -1030,26 +1049,26 @@ describe("chat-durable-run-service", () => {
 
     const unadmitted = createFinalizeState();
     const unadmittedBefore = structuredClone(unadmitted.runs.get("run-complete"));
-    expect(() =>
+    await expect(
       finalizeDurableChatRun(unadmitted.deps, "run-complete", createPreparedTurn({ turnAdmission: undefined }), trace),
-    ).toThrow("no exact admitted finalize context");
+    ).rejects.toThrow("no exact admitted finalize context");
     expect(unadmitted.runs.get("run-complete")).toEqual(unadmittedBefore);
     expect(unadmitted.checkpoints).toEqual([]);
     expect(unadmitted.timelineEvents).toEqual([]);
     expect(unadmitted.tracePatches).toEqual([]);
   });
 
-  it("accepts an exact terminal replay while general post-commit remains pending", () => {
+  it("accepts an exact terminal replay while general post-commit remains pending", async () => {
     const prepared = createPreparedTurn();
     const trace = createTrace({ status: "completed" });
     const state = createFinalizeState();
-    finalizeDurableChatRun(state.deps, "run-complete", prepared, trace);
+    await finalizeDurableChatRun(state.deps, "run-complete", prepared, trace);
     const settled = state.runs.get("run-complete");
     const checkpointCount = state.checkpoints.length;
     const timelineCount = state.timelineEvents.length;
     state.tracePatches.length = 0;
 
-    finalizeDurableChatRun(state.deps, "run-complete", prepared, trace);
+    await finalizeDurableChatRun(state.deps, "run-complete", prepared, trace);
 
     expect(state.runs.get("run-complete")).toEqual(settled);
     expect(state.checkpoints).toHaveLength(checkpointCount);
@@ -1064,33 +1083,33 @@ describe("chat-durable-run-service", () => {
     ]);
   });
 
-  it("rejects terminal replay when the latest checkpoint or general finalizer evidence is missing", () => {
+  it("rejects terminal replay when the latest checkpoint or general finalizer evidence is missing", async () => {
     const prepared = createPreparedTurn();
     const trace = createTrace({ status: "completed" });
 
     const missingCheckpoint = createFinalizeState();
-    finalizeDurableChatRun(missingCheckpoint.deps, "run-complete", prepared, trace);
+    await finalizeDurableChatRun(missingCheckpoint.deps, "run-complete", prepared, trace);
     missingCheckpoint.checkpoints.length = 0;
-    expect(() => finalizeDurableChatRun(missingCheckpoint.deps, "run-complete", prepared, trace)).toThrow(
+    await expect(finalizeDurableChatRun(missingCheckpoint.deps, "run-complete", prepared, trace)).rejects.toThrow(
       "no exact latest terminal authority checkpoint",
     );
 
     const missingFinalizer = createFinalizeState();
-    finalizeDurableChatRun(missingFinalizer.deps, "run-complete", prepared, trace);
+    await finalizeDurableChatRun(missingFinalizer.deps, "run-complete", prepared, trace);
     const run = missingFinalizer.runs.get("run-complete")!;
     const metadata = { ...(run.metadata ?? {}) };
     delete metadata.generalChatPostCommitPending;
     missingFinalizer.runs.set("run-complete", { ...run, metadata });
-    expect(() => finalizeDurableChatRun(missingFinalizer.deps, "run-complete", prepared, trace)).toThrow(
+    await expect(finalizeDurableChatRun(missingFinalizer.deps, "run-complete", prepared, trace)).rejects.toThrow(
       "general finalizer drifted from terminal authority",
     );
   });
 
-  it("rejects a handoff before the pending general finalizer settles", () => {
+  it("rejects a handoff before the pending general finalizer settles", async () => {
     const prepared = createPreparedTurn();
     const trace = createTrace({ status: "completed" });
     const state = createFinalizeState();
-    finalizeDurableChatRun(state.deps, "run-complete", prepared, trace);
+    await finalizeDurableChatRun(state.deps, "run-complete", prepared, trace);
     const run = state.runs.get("run-complete")!;
     const pending = run.metadata?.generalChatPostCommitPending as Record<string, unknown>;
     state.runs.set("run-complete", {
@@ -1106,16 +1125,16 @@ describe("chat-durable-run-service", () => {
       },
     });
 
-    expect(() => finalizeDurableChatRun(state.deps, "run-complete", prepared, trace)).toThrow(
+    await expect(finalizeDurableChatRun(state.deps, "run-complete", prepared, trace)).rejects.toThrow(
       "committed a handoff before finalizers settled",
     );
   });
 
-  it("accepts the exact all-settled general finalizer and admission handoff", () => {
+  it("accepts the exact all-settled general finalizer and admission handoff", async () => {
     const prepared = createPreparedTurn();
     const trace = createTrace({ status: "completed" });
     const state = createFinalizeState();
-    finalizeDurableChatRun(state.deps, "run-complete", prepared, trace);
+    await finalizeDurableChatRun(state.deps, "run-complete", prepared, trace);
     const run = state.runs.get("run-complete")!;
     const pending = run.metadata?.generalChatPostCommitPending as Record<string, unknown>;
     const metadata = { ...(run.metadata ?? {}) };
@@ -1132,18 +1151,18 @@ describe("chat-durable-run-service", () => {
     const timelineCount = state.timelineEvents.length;
     state.tracePatches.length = 0;
 
-    finalizeDurableChatRun(state.deps, "run-complete", prepared, trace);
+    await finalizeDurableChatRun(state.deps, "run-complete", prepared, trace);
 
     expect(state.checkpoints).toHaveLength(checkpointCount);
     expect(state.timelineEvents).toHaveLength(timelineCount);
     expect(state.tracePatches).toHaveLength(1);
   });
 
-  it("accepts a linked-to-general pending prefix but rejects an out-of-order general settlement", () => {
+  it("accepts a linked-to-general pending prefix but rejects an out-of-order general settlement", async () => {
     const prepared = createPreparedTurn();
     const trace = createTrace({ status: "failed" });
     const state = createFinalizeState();
-    finalizeDurableChatRun(state.deps, "run-complete", prepared, trace);
+    await finalizeDurableChatRun(state.deps, "run-complete", prepared, trace);
     const run = state.runs.get("run-complete")!;
     const checkpoint = state.checkpoints[0]!;
     const pending = run.metadata?.generalChatPostCommitPending as Record<string, unknown>;
@@ -1174,25 +1193,25 @@ describe("chat-durable-run-service", () => {
     checkpoint.state = withChatTurnRuntimeAuthorityCheckpoint(checkpoint.state, authority);
     state.tracePatches.length = 0;
 
-    expect(() => finalizeDurableChatRun(state.deps, "run-complete", prepared, trace)).not.toThrow();
+    await expect(finalizeDurableChatRun(state.deps, "run-complete", prepared, trace)).resolves.toBeUndefined();
 
     const pendingPrefixRun = state.runs.get("run-complete")!;
     const outOfOrderMetadata = { ...(pendingPrefixRun.metadata ?? {}) };
     delete outOfOrderMetadata.generalChatPostCommitPending;
     outOfOrderMetadata.generalChatPostCommit = buildFinalGeneralSettlement(pending, "2026-04-10T00:00:04.000Z");
     state.runs.set("run-complete", { ...pendingPrefixRun, metadata: outOfOrderMetadata });
-    expect(() => finalizeDurableChatRun(state.deps, "run-complete", prepared, trace)).toThrow(
+    await expect(finalizeDurableChatRun(state.deps, "run-complete", prepared, trace)).rejects.toThrow(
       "settled finalizers out of canonical order",
     );
   });
 
-  it("finalizes and replays an exact silent system heartbeat without visible output or raw timeline disclosure", () => {
+  it("finalizes and replays an exact silent system heartbeat without visible output or raw timeline disclosure", async () => {
     const rawOutput = '{"notify":false}';
     const fixture = createHeartbeatFinalizeFixture(rawOutput);
     const state = createFinalizeState();
     state.runs.set(fixture.run.runId, fixture.run);
 
-    finalizeDurableChatRun(state.deps, fixture.run.runId, fixture.prepared, fixture.trace);
+    await finalizeDurableChatRun(state.deps, fixture.run.runId, fixture.prepared, fixture.trace);
 
     const completed = state.runs.get(fixture.run.runId)!;
     expect(completed).toMatchObject({ status: "completed" });
@@ -1231,7 +1250,7 @@ describe("chat-durable-run-service", () => {
     const checkpointCount = state.checkpoints.length;
     const timelineCount = state.timelineEvents.length;
     state.tracePatches.length = 0;
-    finalizeDurableChatRun(state.deps, fixture.run.runId, fixture.prepared, fixture.trace);
+    await finalizeDurableChatRun(state.deps, fixture.run.runId, fixture.prepared, fixture.trace);
     expect(state.checkpoints).toHaveLength(checkpointCount);
     expect(state.timelineEvents).toHaveLength(timelineCount);
     expect(state.tracePatches).toEqual([
@@ -1248,13 +1267,13 @@ describe("chat-durable-run-service", () => {
     ]);
   });
 
-  it("finalizes a notifying system heartbeat only from its exact normalized system message", () => {
+  it("finalizes a notifying system heartbeat only from its exact normalized system message", async () => {
     const rawOutput = '{"notify":true,"message":"  Check the backup now.  "}';
     const fixture = createHeartbeatFinalizeFixture(rawOutput);
     const state = createFinalizeState();
     state.runs.set(fixture.run.runId, fixture.run);
     state.deps.chatMessages = {
-      get: (messageId) =>
+      get: async (messageId) =>
         messageId === fixture.prepared.assistantMessageId
           ? {
               messageId,
@@ -1268,7 +1287,7 @@ describe("chat-durable-run-service", () => {
           : undefined,
     };
 
-    finalizeDurableChatRun(state.deps, fixture.run.runId, fixture.prepared, fixture.trace);
+    await finalizeDurableChatRun(state.deps, fixture.run.runId, fixture.prepared, fixture.trace);
 
     const completed = state.runs.get(fixture.run.runId)!;
     expect(completed.metadata).toMatchObject({
@@ -1302,21 +1321,21 @@ describe("chat-durable-run-service", () => {
     ["missing", undefined],
     ["repaired", { status: "complete" as const, repaired: true }],
     ["extra-key", { status: "complete" as const, repaired: false, finishReason: "stop" }],
-  ])("rejects %s heartbeat completion evidence before finalization", (_case, completion) => {
+  ])("rejects %s heartbeat completion evidence before finalization", async (_case, completion) => {
     const fixture = createHeartbeatFinalizeFixture('{"notify":false}');
     const state = createFinalizeState();
     state.runs.set(fixture.run.runId, fixture.run);
 
-    expect(() =>
+    await expect(
       finalizeDurableChatRun(state.deps, fixture.run.runId, fixture.prepared, { ...fixture.trace, completion }),
-    ).toThrow(/partial, repaired, or incomplete decision/);
+    ).rejects.toThrow(/partial, repaired, or incomplete decision/);
 
     expect(state.runs.get(fixture.run.runId)).toMatchObject({ status: "running" });
     expect(state.checkpoints).toHaveLength(0);
     expect(state.timelineEvents).toHaveLength(0);
   });
 
-  it("terminally blocks a system heartbeat approval wait without decision or output evidence", () => {
+  it("terminally blocks a system heartbeat approval wait without decision or output evidence", async () => {
     const fixture = createHeartbeatFinalizeFixture(undefined);
     const state = createFinalizeState();
     state.runs.set(fixture.run.runId, fixture.run);
@@ -1326,7 +1345,7 @@ describe("chat-durable-run-service", () => {
       completion: { status: "interrupted" as const, repaired: false },
     };
 
-    finalizeDurableChatRun(state.deps, fixture.run.runId, fixture.prepared, approvalTrace);
+    await finalizeDurableChatRun(state.deps, fixture.run.runId, fixture.prepared, approvalTrace);
 
     const failed = state.runs.get(fixture.run.runId)!;
     expect(failed).toMatchObject({
@@ -1660,13 +1679,13 @@ function createFinalizeState(options?: {
   }> = [];
   const tracePatches: Array<{ turnId: string; patch: Record<string, unknown> }> = [];
   const deps: ChatDurableRunFinalizeDeps = {
-    runImmediateTransaction: (callback) => {
+    runImmediateTransaction: async (callback) => {
       const runSnapshot = new Map(runs);
       const checkpointSnapshot = [...checkpoints];
       const timelineSnapshot = [...timelineEvents];
       const tracePatchSnapshot = [...tracePatches];
       try {
-        return callback();
+        return await callback();
       } catch (error) {
         runs.clear();
         for (const [runId, run] of runSnapshot) {
@@ -1679,19 +1698,19 @@ function createFinalizeState(options?: {
       }
     },
     durableRuns: {
-      getRun: (runId) => {
+      getRun: async (runId) => {
         const current = runs.get(runId);
         if (!current) {
           throw new Error(`Unknown run ${runId}`);
         }
         return current;
       },
-      updateRun: (input) => updateRun(runs, input.runId, input),
-      getLatestCheckpointByKind: (runId, checkpointKind) =>
+      updateRun: async (input) => updateRun(runs, input.runId, input),
+      getLatestCheckpointByKind: async (runId, checkpointKind) =>
         [...checkpoints]
           .reverse()
           .find((checkpoint) => checkpoint.runId === runId && checkpoint.checkpointKind === checkpointKind),
-      createCheckpoint: (input) => {
+      createCheckpoint: async (input) => {
         const record: DurableCheckpointRecord = {
           checkpointId: `checkpoint-${checkpoints.length + 1}`,
           runId: input.runId,
@@ -1704,13 +1723,13 @@ function createFinalizeState(options?: {
       },
     },
     chatToolRuns: {
-      listByTurn: () => options?.toolRuns ?? [],
+      listByTurn: async () => options?.toolRuns ?? [],
     },
     chatToolArtifacts: {
-      listByTurn: () => options?.artifacts ?? [],
+      listByTurn: async () => options?.artifacts ?? [],
     },
     chatMessages: {
-      get: (messageId) =>
+      get: async (messageId) =>
         messageId === "assistant-1"
           ? {
               messageId,
@@ -1723,19 +1742,19 @@ function createFinalizeState(options?: {
             }
           : undefined,
     },
-    resolvePostCommitEligibility: () => ({
+    resolvePostCommitEligibility: async () => ({
       version: 1,
       autonomyEnabledAtParentSettlement: true,
       evalIntegrityTurn: false,
       humanSession: true,
     }),
-    recordDurableTimelineEvent: (runId, eventType, payload) => {
+    recordDurableTimelineEvent: async (runId, eventType, payload) => {
       timelineEvents.push({ runId, eventType, payload });
     },
     chatTurnTraces: {
-      patch: (turnId, patch) => {
+      patch: async (turnId, patch) => {
         tracePatches.push({ turnId, patch: patch as Record<string, unknown> });
-        return { turnId } as unknown as ReturnType<ChatDurableRunFinalizeDeps["chatTurnTraces"]["patch"]>;
+        return { turnId } as unknown as Awaited<ReturnType<ChatDurableRunFinalizeDeps["chatTurnTraces"]["patch"]>>;
       },
     },
   };

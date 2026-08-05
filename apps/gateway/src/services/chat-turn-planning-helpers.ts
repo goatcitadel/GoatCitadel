@@ -14,7 +14,7 @@ import type {
   ChatWebMode,
 } from "@goatcitadel/contracts";
 import { chatModeAllowsDynamicTeamGrowth } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { OrchestrationPlan as ModeOrchestrationPlan, OrchestrationRole } from "../orchestration/types.js";
 import { suggestImportedCatalogEntries } from "./agency-agent-catalog-service.js";
 import {
@@ -827,7 +827,7 @@ export interface CollectSpecialistCandidateSuggestionsDeps {
  * nothing else matched. Deduped against existing non-retired candidates and
  * capped at three. Extracted from GatewayService (B3a).
  */
-export function collectSpecialistCandidateSuggestions(
+export async function collectSpecialistCandidateSuggestions(
   deps: CollectSpecialistCandidateSuggestionsDeps,
   input: {
     sessionId: string;
@@ -836,11 +836,11 @@ export function collectSpecialistCandidateSuggestions(
     capabilitySuggestions: ChatCapabilityUpgradeSuggestion[];
     trace: ChatTurnTraceRecord;
   },
-): ChatSpecialistCandidateSuggestionRecord[] {
+): Promise<ChatSpecialistCandidateSuggestionRecord[]> {
   if (!chatModeAllowsDynamicTeamGrowth(input.mode)) {
     return [];
   }
-  const existingCandidates = deps.chatSpecialistCandidates.listBySession(input.sessionId, 200);
+  const existingCandidates = await deps.chatSpecialistCandidates.listBySession(input.sessionId, 200);
   const seen = new Set<string>(
     existingCandidates
       .filter((candidate) => candidate.status !== "retired")
@@ -866,9 +866,11 @@ export function collectSpecialistCandidateSuggestions(
     );
   }
 
-  const sessionWorkspaceId = deps.normalizeWorkspaceId(deps.chatSessionMeta.ensure(input.sessionId).workspaceId);
+  const sessionWorkspaceId = deps.normalizeWorkspaceId(
+    (await deps.chatSessionMeta.ensure(input.sessionId)).workspaceId,
+  );
   for (const suggestion of suggestImportedCatalogEntries({
-    entries: deps.importedAgentCatalog.list({
+    entries: await deps.importedAgentCatalog.list({
       workspaceId: sessionWorkspaceId,
       limit: 500,
     }),

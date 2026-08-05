@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { Storage } from "@goatcitadel/storage";
+import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import type { ChatSessionRecord } from "@goatcitadel/contracts";
 import {
   createChatSession,
@@ -23,25 +23,28 @@ describe("forkChatSessionFromTurn", () => {
       transcriptsDir: path.join(root, "transcripts"),
       auditDir: path.join(root, "audit"),
     });
+    const asyncStorage = createSqliteAsyncStorage(storage);
     const deps = {} as ChatSessionDependencies;
-    const requireSession = (sessionId: string): ChatSessionRecord => {
-      const record = listChatSessions(deps, {
-        workspaceId: "workspace-1",
-        view: "all",
-        includeHidden: true,
-        limit: 100,
-      }).find((session) => session.sessionId === sessionId);
+    const requireSession = async (sessionId: string): Promise<ChatSessionRecord> => {
+      const record = (
+        await listChatSessions(deps, {
+          workspaceId: "workspace-1",
+          view: "all",
+          includeHidden: true,
+          limit: 100,
+        })
+      ).find((session) => session.sessionId === sessionId);
       if (!record) throw new Error(`missing session ${sessionId}`);
       return record;
     };
     Object.assign(deps, {
-      storage,
+      storage: asyncStorage,
       operatorSummaryCache: { invalidate() {} },
       normalizeWorkspaceId: (value) => value?.trim() || "workspace-1",
       ensureChatSessionRuntimeGrants() {},
       requireChatSession: requireSession,
-      getSession: (sessionId) => storage.sessions.getBySessionId(sessionId),
-      publishRealtime() {},
+      getSession: (sessionId) => asyncStorage.sessions.getBySessionId(sessionId),
+      async publishRealtime() {},
       clearChatTurnWriteLease() {},
       removeChatSessionStoredFile: async () => undefined,
       copyChatSessionStoredFile: async (storageRelPath, copyId) => {
@@ -54,7 +57,7 @@ describe("forkChatSessionFromTurn", () => {
       hydrateChatPrefsWithAutonomy: (_sessionId, prefs) => prefs,
       patchSessionAutonomyPrefs() {},
     });
-    const source = createChatSession(deps, { workspaceId: "workspace-1", title: "Source" });
+    const source = await createChatSession(deps, { workspaceId: "workspace-1", title: "Source" });
     await fs.writeFile(path.join(root, "attachment.txt"), "frozen bytes", "utf8");
     storage.chatAttachments.create({
       attachmentId: "attachment-1",
@@ -107,7 +110,7 @@ describe("forkChatSessionFromTurn", () => {
       deps,
       source.sessionId,
       "turn-1",
-      { expectedRevision: requireSession(source.sessionId).revision },
+      { expectedRevision: (await requireSession(source.sessionId)).revision },
       "operator",
     );
     const copiedTrace = storage.chatTurnTraces.listBySession(result.session.sessionId)[0]!;
@@ -131,18 +134,19 @@ describe("forkChatSessionFromTurn", () => {
       transcriptsDir: path.join(os.tmpdir(), "gc-chat-fork-active-transcripts"),
       auditDir: path.join(os.tmpdir(), "gc-chat-fork-active-audit"),
     });
+    const asyncStorage = createSqliteAsyncStorage(storage);
     const deps = {} as ChatSessionDependencies;
     Object.assign(deps, {
-      storage,
+      storage: asyncStorage,
       operatorSummaryCache: { invalidate() {} },
       normalizeWorkspaceId: (value) => value?.trim() || "workspace-1",
       ensureChatSessionRuntimeGrants() {},
-      requireChatSession: (sessionId) =>
-        listChatSessions(deps, { workspaceId: "workspace-1", view: "all", includeHidden: true }).find(
+      requireChatSession: async (sessionId) =>
+        (await listChatSessions(deps, { workspaceId: "workspace-1", view: "all", includeHidden: true })).find(
           (item) => item.sessionId === sessionId,
         )!,
-      getSession: (sessionId) => storage.sessions.getBySessionId(sessionId),
-      publishRealtime() {},
+      getSession: (sessionId) => asyncStorage.sessions.getBySessionId(sessionId),
+      async publishRealtime() {},
       clearChatTurnWriteLease() {},
       removeChatSessionStoredFile: async () => undefined,
       copyChatSessionStoredFile: async (value) => value,
@@ -150,7 +154,7 @@ describe("forkChatSessionFromTurn", () => {
       hydrateChatPrefsWithAutonomy: (_sessionId, prefs) => prefs,
       patchSessionAutonomyPrefs() {},
     });
-    const source = createChatSession(deps, { workspaceId: "workspace-1" });
+    const source = await createChatSession(deps, { workspaceId: "workspace-1" });
     storage.chatMessages.upsert({
       messageId: "user-active",
       sessionId: source.sessionId,

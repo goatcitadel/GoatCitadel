@@ -13,7 +13,9 @@ export async function emitChannelActivityImpl(
     typing: boolean;
   },
 ): Promise<ChannelActivityEffectResult[]> {
-  const effects: ChannelActivityEffectResult[] = [publishChannelActivitySignal(deps, connection, input, options.emoji)];
+  const effects: ChannelActivityEffectResult[] = [
+    await publishChannelActivitySignal(deps, connection, input, options.emoji),
+  ];
 
   const staleReactions =
     input.phase === "clear"
@@ -38,13 +40,13 @@ export async function emitChannelActivityImpl(
   return effects;
 }
 
-function publishChannelActivitySignal(
+async function publishChannelActivitySignal(
   deps: IntegrationChannelPort,
   connection: IntegrationConnection,
   input: ChannelActivityInput,
   emoji: string | undefined,
-): ChannelActivityEffectResult {
-  deps.publishRealtime(
+): Promise<ChannelActivityEffectResult> {
+  await deps.publishRealtime(
     "channel_activity_updated",
     "channels",
     {

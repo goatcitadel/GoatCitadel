@@ -71,7 +71,7 @@ function createTrace(
 }
 
 describe("CoworkAgenticProjectionService", () => {
-  it("projects a Cowork orchestration run tree and reconciles stale durable state", () => {
+  it("projects a Cowork orchestration run tree and reconciles stale durable state", async () => {
     const { storage, service } = createHarness();
     storage.chatSessionMeta.ensure("parent-session", "2026-06-22T00:00:00.000Z", "default");
     storage.chatSessionMeta.ensure("child-session", "2026-06-22T00:00:00.000Z", "default");
@@ -125,7 +125,7 @@ describe("CoworkAgenticProjectionService", () => {
       startedAt: "2026-06-22T00:01:00.000Z",
     });
 
-    const tree = service.getAgenticRunTree("orch-91303", { workspaceId: "default" });
+    const tree = await service.getAgenticRunTree("orch-91303", { workspaceId: "default" });
 
     expect(tree).toBeDefined();
     expect(tree?.nodes).toEqual(
@@ -148,7 +148,7 @@ describe("CoworkAgenticProjectionService", () => {
     expect(tree?.controls.every((control) => control.enabled === false)).toBe(true);
   });
 
-  it("hydrates durable status drift diagnostics in the run list without per-run reads", () => {
+  it("hydrates durable status drift diagnostics in the run list without per-run reads", async () => {
     const { storage, service } = createHarness();
     storage.chatSessionMeta.ensure("parent-session", "2026-06-22T00:00:00.000Z", "default");
     storage.durableRuns.createRun({
@@ -178,7 +178,7 @@ describe("CoworkAgenticProjectionService", () => {
     const getRunsByIds = vi.spyOn(storage.durableRuns, "getRunsByIds");
     const getRun = vi.spyOn(storage.durableRuns, "getRun");
 
-    const items = service.listAgenticRuns({ workspaceId: "default" });
+    const items = await service.listAgenticRuns({ workspaceId: "default" });
 
     expect(items[0]?.diagnostics).toEqual(
       expect.arrayContaining([
@@ -189,7 +189,7 @@ describe("CoworkAgenticProjectionService", () => {
     expect(getRun).not.toHaveBeenCalled();
   });
 
-  it("does not fake parent-filtered child runs until delegation parent links are persisted", () => {
+  it("does not fake parent-filtered child runs until delegation parent links are persisted", async () => {
     const { storage, service } = createHarness();
     storage.chatSessionMeta.ensure("parent-session", "2026-06-22T00:00:00.000Z", "default");
     storage.chatDelegationRuns.create({
@@ -203,10 +203,10 @@ describe("CoworkAgenticProjectionService", () => {
       startedAt: "2026-06-22T00:00:00.000Z",
     });
 
-    expect(service.listAgenticRuns({ workspaceId: "default", parentRunId: "orch-parent" })).toEqual([]);
+    expect(await service.listAgenticRuns({ workspaceId: "default", parentRunId: "orch-parent" })).toEqual([]);
   });
 
-  it("projects approval-gated Cowork runs as settled operator gates instead of active running work", () => {
+  it("projects approval-gated Cowork runs as settled operator gates instead of active running work", async () => {
     const { storage, service } = createHarness();
     storage.chatSessionMeta.ensure("parent-session", "2026-06-22T00:00:00.000Z", "default");
     storage.chatSessionMeta.ensure("child-session", "2026-06-22T00:00:00.000Z", "default");
@@ -279,7 +279,7 @@ describe("CoworkAgenticProjectionService", () => {
       startedAt: "2026-06-22T00:01:00.000Z",
     });
 
-    const tree = service.getAgenticRunTree("orch-approval-gate", { workspaceId: "default" });
+    const tree = await service.getAgenticRunTree("orch-approval-gate", { workspaceId: "default" });
 
     expect(tree?.nodes).toEqual(
       expect.arrayContaining([
@@ -298,7 +298,7 @@ describe("CoworkAgenticProjectionService", () => {
     expect(storage.chatDelegationSteps.get("orch-approval-gate:reviewer").status).toBe("pending");
   });
 
-  it("does not reconcile waiting child handoff text as completed when durable linkage is absent", () => {
+  it("does not reconcile waiting child handoff text as completed when durable linkage is absent", async () => {
     const { storage, service } = createHarness();
     storage.chatSessionMeta.ensure("parent-session", "2026-06-22T00:00:00.000Z", "default");
     storage.chatSessionMeta.ensure("child-session", "2026-06-22T00:00:00.000Z", "default");
@@ -333,7 +333,7 @@ describe("CoworkAgenticProjectionService", () => {
       startedAt: "2026-06-22T00:01:00.000Z",
     });
 
-    const tree = service.getAgenticRunTree("orch-wait-no-durable", { workspaceId: "default" });
+    const tree = await service.getAgenticRunTree("orch-wait-no-durable", { workspaceId: "default" });
 
     expect(tree?.nodes).toEqual(
       expect.arrayContaining([
@@ -345,7 +345,7 @@ describe("CoworkAgenticProjectionService", () => {
     expect(storage.chatDelegationRuns.get("orch-wait-no-durable").status).toBe("running");
   });
 
-  it("does not let terminal child traces override nonterminal durable child state", () => {
+  it("does not let terminal child traces override nonterminal durable child state", async () => {
     const { storage, service } = createHarness();
     storage.chatSessionMeta.ensure("parent-session", "2026-06-22T00:00:00.000Z", "default");
     storage.chatSessionMeta.ensure("child-session", "2026-06-22T00:00:00.000Z", "default");
@@ -390,7 +390,7 @@ describe("CoworkAgenticProjectionService", () => {
       startedAt: "2026-06-22T00:01:00.000Z",
     });
 
-    const tree = service.getAgenticRunTree("orch-durable-dominates", { workspaceId: "default" });
+    const tree = await service.getAgenticRunTree("orch-durable-dominates", { workspaceId: "default" });
 
     expect(tree?.nodes).toEqual(
       expect.arrayContaining([
@@ -403,7 +403,7 @@ describe("CoworkAgenticProjectionService", () => {
     expect(storage.chatDelegationRuns.get("orch-durable-dominates").status).toBe("running");
   });
 
-  it("does not surface planner-only local-business candidate diagnostics before worker discovery runs", () => {
+  it("does not surface planner-only local-business candidate diagnostics before worker discovery runs", async () => {
     const { storage, service } = createHarness();
     storage.chatSessionMeta.ensure("parent-session", "2026-06-22T00:00:00.000Z", "default");
     storage.chatSessionMeta.ensure("planner-session", "2026-06-22T00:00:00.000Z", "default");
@@ -468,14 +468,14 @@ describe("CoworkAgenticProjectionService", () => {
       startedAt: "2026-06-22T00:00:40.000Z",
     });
 
-    const tree = service.getAgenticRunTree("orch-planner-only", { workspaceId: "default" });
+    const tree = await service.getAgenticRunTree("orch-planner-only", { workspaceId: "default" });
 
     expect(tree?.diagnostics).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ code: "candidate_discovery_incomplete" })]),
     );
   });
 
-  it("reconciles missing durable rows from output or stale worker evidence", () => {
+  it("reconciles missing durable rows from output or stale worker evidence", async () => {
     const { storage, service } = createHarness();
     storage.chatSessionMeta.ensure("parent-session", "2026-06-22T00:00:00.000Z", "default");
     createTrace(storage, { turnId: "parent-turn", sessionId: "parent-session" });
@@ -507,7 +507,7 @@ describe("CoworkAgenticProjectionService", () => {
       startedAt: "2026-06-20T00:01:00.000Z",
     });
 
-    const tree = service.getAgenticRunTree("orch-missing-durable", { workspaceId: "default" });
+    const tree = await service.getAgenticRunTree("orch-missing-durable", { workspaceId: "default" });
 
     expect(tree?.diagnostics).toEqual(
       expect.arrayContaining([
@@ -523,7 +523,7 @@ describe("CoworkAgenticProjectionService", () => {
     );
   });
 
-  it("does not attach orphaned delegation runs to arbitrary requested workspaces", () => {
+  it("does not attach orphaned delegation runs to arbitrary requested workspaces", async () => {
     const { storage, service } = createHarness();
     storage.durableRuns.createRun({
       runId: "durable-orphan-child",
@@ -552,13 +552,13 @@ describe("CoworkAgenticProjectionService", () => {
       startedAt: "2026-06-22T00:01:00.000Z",
     });
 
-    expect(service.getAgenticRunTree("orch-orphan", { workspaceId: "workspace-a" })).toBeUndefined();
-    expect(service.getAgenticRunTree("orch-orphan", { workspaceId: "default" })).toBeUndefined();
+    expect(await service.getAgenticRunTree("orch-orphan", { workspaceId: "workspace-a" })).toBeUndefined();
+    expect(await service.getAgenticRunTree("orch-orphan", { workspaceId: "default" })).toBeUndefined();
     expect(storage.chatDelegationSteps.get("orch-orphan:researcher").status).toBe("running");
     expect(storage.chatDelegationRuns.get("orch-orphan").status).toBe("running");
   });
 
-  it("rejects workspace mismatches before stale child reconciliation", () => {
+  it("rejects workspace mismatches before stale child reconciliation", async () => {
     const { storage, service } = createHarness();
     storage.chatSessionMeta.ensure("parent-session", "2026-06-22T00:00:00.000Z", "workspace-a");
     storage.chatSessionMeta.ensure("child-session", "2026-06-22T00:00:00.000Z", "workspace-a");
@@ -594,10 +594,10 @@ describe("CoworkAgenticProjectionService", () => {
       startedAt: "2026-06-22T00:01:00.000Z",
     });
 
-    expect(service.getAgenticRunTree("orch-workspace-a", { workspaceId: "workspace-b" })).toBeUndefined();
+    expect(await service.getAgenticRunTree("orch-workspace-a", { workspaceId: "workspace-b" })).toBeUndefined();
     expect(storage.chatDelegationSteps.get("orch-workspace-a:researcher").status).toBe("running");
 
-    const tree = service.getAgenticRunTree("orch-workspace-a", { workspaceId: "workspace-a" });
+    const tree = await service.getAgenticRunTree("orch-workspace-a", { workspaceId: "workspace-a" });
 
     expect(tree).toMatchObject({ runId: "orch-workspace-a", boardId: "cowork:workspace-a" });
     expect(tree?.nodes).toEqual(
@@ -609,7 +609,7 @@ describe("CoworkAgenticProjectionService", () => {
     expect(storage.chatDelegationRuns.get("orch-workspace-a").status).toBe("running");
   });
 
-  it("preserves explicitly default-owned projected run trees", () => {
+  it("preserves explicitly default-owned projected run trees", async () => {
     const { storage, service } = createHarness();
     storage.chatSessionMeta.ensure("parent-session", "2026-06-22T00:00:00.000Z", "default");
     createTrace(storage, {
@@ -629,14 +629,14 @@ describe("CoworkAgenticProjectionService", () => {
       finishedAt: "2026-06-22T00:01:00.000Z",
     });
 
-    expect(service.getAgenticRunTree("orch-default")).toMatchObject({
+    expect(await service.getAgenticRunTree("orch-default")).toMatchObject({
       runId: "orch-default",
       boardId: "cowork:default",
     });
-    expect(service.getAgenticRunTree("orch-default", { workspaceId: "workspace-a" })).toBeUndefined();
+    expect(await service.getAgenticRunTree("orch-default", { workspaceId: "workspace-a" })).toBeUndefined();
   });
 
-  it("accepts durable payload workspace proof when session metadata is missing", () => {
+  it("accepts durable payload workspace proof when session metadata is missing", async () => {
     const { storage, service } = createHarness();
     storage.durableRuns.createRun({
       runId: "durable-parent-proof",
@@ -670,14 +670,14 @@ describe("CoworkAgenticProjectionService", () => {
       finishedAt: "2026-06-22T00:01:00.000Z",
     });
 
-    expect(service.getAgenticRunTree("orch-durable-proof", { workspaceId: "workspace-b" })).toBeUndefined();
-    expect(service.getAgenticRunTree("orch-durable-proof", { workspaceId: "workspace-a" })).toMatchObject({
+    expect(await service.getAgenticRunTree("orch-durable-proof", { workspaceId: "workspace-b" })).toBeUndefined();
+    expect(await service.getAgenticRunTree("orch-durable-proof", { workspaceId: "workspace-a" })).toMatchObject({
       runId: "orch-durable-proof",
       boardId: "cowork:workspace-a",
     });
   });
 
-  it("projects partial Cowork handoffs with output as checkpointing instead of completed", () => {
+  it("projects partial Cowork handoffs with output as checkpointing instead of completed", async () => {
     const { storage, service } = createHarness();
     storage.chatSessionMeta.ensure("parent-session", "2026-06-22T00:00:00.000Z", "default");
     createTrace(storage, {
@@ -698,7 +698,7 @@ describe("CoworkAgenticProjectionService", () => {
       finishedAt: "2026-06-22T00:01:00.000Z",
     });
 
-    const tree = service.getAgenticRunTree("orch-partial-checkpoint", { workspaceId: "default" });
+    const tree = await service.getAgenticRunTree("orch-partial-checkpoint", { workspaceId: "default" });
 
     expect(tree?.nodes).toEqual(
       expect.arrayContaining([expect.objectContaining({ id: "run:orch-partial-checkpoint", status: "checkpointing" })]),
@@ -706,7 +706,7 @@ describe("CoworkAgenticProjectionService", () => {
     expect(tree?.controls.find((control) => control.action === "retry")?.enabled).toBe(true);
   });
 
-  it("projects blocked Cowork handoffs with research diagnostics from trace, handoff, and local-business metadata", () => {
+  it("projects blocked Cowork handoffs with research diagnostics from trace, handoff, and local-business metadata", async () => {
     const { storage, service } = createHarness();
     storage.chatSessionMeta.ensure("parent-session", "2026-06-22T00:00:00.000Z", "default");
     storage.chatSessionMeta.ensure("child-session", "2026-06-22T00:00:00.000Z", "default");
@@ -790,7 +790,7 @@ describe("CoworkAgenticProjectionService", () => {
       finishedAt: "2026-06-22T00:02:00.000Z",
     });
 
-    const tree = service.getAgenticRunTree("orch-checkpointed", { workspaceId: "default" });
+    const tree = await service.getAgenticRunTree("orch-checkpointed", { workspaceId: "default" });
 
     expect(tree?.nodes).toEqual(
       expect.arrayContaining([
@@ -837,7 +837,7 @@ describe("CoworkAgenticProjectionService", () => {
     expect(tree?.controls.find((control) => control.action === "retry")?.enabled).toBe(true);
   });
 
-  it("projects local-business annotations from completed delegated handoff output and citations", () => {
+  it("projects local-business annotations from completed delegated handoff output and citations", async () => {
     const { storage, service } = createHarness();
     storage.chatSessionMeta.ensure("parent-session", "2026-06-22T00:00:00.000Z", "default");
     createTrace(storage, {
@@ -883,7 +883,7 @@ describe("CoworkAgenticProjectionService", () => {
       finishedAt: "2026-06-22T00:01:00.000Z",
     });
 
-    const tree = service.getAgenticRunTree("orch-handoff-research", { workspaceId: "default" });
+    const tree = await service.getAgenticRunTree("orch-handoff-research", { workspaceId: "default" });
     const workerNode = tree?.nodes.find((node) => node.id === "subagent:orch-handoff-research:worker");
 
     expect(workerNode?.metadata).toMatchObject({
@@ -904,7 +904,7 @@ describe("CoworkAgenticProjectionService", () => {
     });
   });
 
-  it("bulk-fetches per-run traces and durable runs instead of fanning out per step", () => {
+  it("bulk-fetches per-run traces and durable runs instead of fanning out per step", async () => {
     const { storage, service } = createHarness();
     storage.chatSessionMeta.ensure("parent-session", "2026-06-22T00:00:00.000Z", "default");
     storage.chatSessionMeta.ensure("child-session-1", "2026-06-22T00:00:00.000Z", "default");
@@ -981,7 +981,7 @@ describe("CoworkAgenticProjectionService", () => {
     const durableGetRun = vi.spyOn(storage.durableRuns, "getRun");
     const listByRun = vi.spyOn(storage.chatDelegationSteps, "listByRun");
 
-    const tree = service.getAgenticRunTree("orch-bulk", { workspaceId: "default" });
+    const tree = await service.getAgenticRunTree("orch-bulk", { workspaceId: "default" });
 
     expect(tree?.nodes).toEqual(
       expect.arrayContaining([
@@ -1004,7 +1004,7 @@ describe("CoworkAgenticProjectionService", () => {
     expect(listByRun).toHaveBeenCalledTimes(1);
   });
 
-  it("performs zero reconciliation writes on an already-settled run GET", () => {
+  it("performs zero reconciliation writes on an already-settled run GET", async () => {
     const { storage, service } = createHarness();
     storage.chatSessionMeta.ensure("parent-session", "2026-06-22T00:00:00.000Z", "default");
     storage.chatSessionMeta.ensure("child-session", "2026-06-22T00:00:00.000Z", "default");
@@ -1052,7 +1052,7 @@ describe("CoworkAgenticProjectionService", () => {
     const stepPatch = vi.spyOn(storage.chatDelegationSteps, "patch");
     const tracePatch = vi.spyOn(storage.chatTurnTraces, "patch");
 
-    const tree = service.getAgenticRunTree("orch-settled", { workspaceId: "default" });
+    const tree = await service.getAgenticRunTree("orch-settled", { workspaceId: "default" });
 
     expect(tree?.nodes).toEqual(
       expect.arrayContaining([expect.objectContaining({ id: "run:orch-settled", status: "completed" })]),
@@ -1062,7 +1062,7 @@ describe("CoworkAgenticProjectionService", () => {
     expect(tracePatch).not.toHaveBeenCalled();
   });
 
-  it("projects completion without mutating an orchestrator-set final summary during reads", () => {
+  it("projects completion without mutating an orchestrator-set final summary during reads", async () => {
     const { storage, service } = createHarness();
     storage.chatSessionMeta.ensure("parent-session", "2026-06-22T00:00:00.000Z", "default");
     storage.chatSessionMeta.ensure("child-session", "2026-06-22T00:00:00.000Z", "default");
@@ -1098,7 +1098,7 @@ describe("CoworkAgenticProjectionService", () => {
       startedAt: "2026-06-22T00:01:00.000Z",
     });
 
-    const tree = service.getAgenticRunTree("orch-summary-guard", { workspaceId: "default" });
+    const tree = await service.getAgenticRunTree("orch-summary-guard", { workspaceId: "default" });
 
     // The tree projects completion, but the GET does not mutate stored run state or authored summary.
     const storedRun = storage.chatDelegationRuns.get("orch-summary-guard");

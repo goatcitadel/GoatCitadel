@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import * as XLSX from "@e965/xlsx";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage, Storage } from "@goatcitadel/storage";
 import { Document, Packer, Paragraph } from "docx";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ingestDocumentViaBackend, searchIngestedContext } from "./ingestion-backends.js";
@@ -201,7 +201,7 @@ describe("ingestion backend coverage", () => {
     expect(result.document.text).toBe("Hello world");
   });
 
-  it("search skips orphaned chunks and non-matching text", () => {
+  it("search skips orphaned chunks and non-matching text", async () => {
     const storage = createKnowledgeStorage([
       {
         docId: "doc-1",
@@ -221,7 +221,7 @@ describe("ingestion backend coverage", () => {
     storage.knowledge.appendChunks("missing-doc", [{ content: "needle in orphan", embedding: [] }]);
     storage.knowledge.appendChunks("doc-1", [{ content: "plain unrelated text", embedding: [] }]);
 
-    const result = searchIngestedContext({
+    const result = await searchIngestedContext({
       storage,
       query: "needle",
     });
@@ -232,7 +232,7 @@ describe("ingestion backend coverage", () => {
       items: [],
     });
 
-    expect(searchIngestedContext({ storage, namespace: "research", query: "   " })).toEqual({
+    await expect(searchIngestedContext({ storage, namespace: "research", query: "   " })).resolves.toEqual({
       namespace: "research",
       query: "   ",
       items: [],
@@ -853,7 +853,7 @@ describe("ingestion backend coverage", () => {
     }
   });
 
-  it("scores cached native documents with missing ingestion metadata and sparse embeddings", () => {
+  it("scores cached native documents with missing ingestion metadata and sparse embeddings", async () => {
     const storage = createKnowledgeStorage([
       {
         docId: "doc-native-default",
@@ -868,7 +868,7 @@ describe("ingestion backend coverage", () => {
       { content: "alpha beta", embedding: [1, undefined, 0.5] as unknown as number[] },
     ]);
 
-    const result = searchIngestedContext({
+    const result = await searchIngestedContext({
       storage,
       namespace: "research",
       query: "alpha",
@@ -953,13 +953,13 @@ describe("ingestion backend coverage", () => {
       networkAllowlist: ["example.com"],
       sourceAllowlist: ["example.com"],
     });
-    const search = searchIngestedContext({
+    const search = await searchIngestedContext({
       storage,
       namespace: "web",
       query: "untrusted",
     });
     const engine = new ToolPolicyEngine(createPolicyConfig(), createPolicyStorage());
-    const evaluation = engine.evaluateAccess({
+    const evaluation = await engine.evaluateAccess({
       toolName: "shell.exec",
       args: { command: "echo hello" },
       agentId: "agent-1",
@@ -978,7 +978,7 @@ describe("ingestion backend coverage", () => {
     expect(evaluation.reasonCodes).toContain("untrusted_source_privileged_tool_block");
   });
 
-  it("preserves external snapshot attribution and rejects stored trust promotion during retrieval", () => {
+  it("preserves external snapshot attribution and rejects stored trust promotion during retrieval", async () => {
     const storedTrustLevels = [
       "trusted_operator",
       "trusted_workspace",
@@ -1006,13 +1006,13 @@ describe("ingestion backend coverage", () => {
       ]);
     }
 
-    const search = searchIngestedContext({
+    const search = await searchIngestedContext({
       storage,
       namespace: "workspace/workspace-1/external-source-snapshots",
       query: "external snapshot",
     });
     const engine = new ToolPolicyEngine(createPolicyConfig(), createPolicyStorage());
-    const evaluation = engine.evaluateAccess({
+    const evaluation = await engine.evaluateAccess({
       toolName: "shell.exec",
       args: { command: "echo hello" },
       agentId: "agent-1",
@@ -1098,20 +1098,20 @@ describe("ingestion backend coverage", () => {
       storage,
       fetchUrl,
     });
-    const search = searchIngestedContext({
+    const search = await searchIngestedContext({
       storage,
       namespace: "web",
       query: "unsafe",
     });
     const engine = new ToolPolicyEngine(createPolicyConfig(), createPolicyStorage());
-    const shellEvaluation = engine.evaluateAccess({
+    const shellEvaluation = await engine.evaluateAccess({
       toolName: "shell.exec",
       args: { command: "echo hello" },
       agentId: "agent-1",
       sessionId: "session-1",
       sourceAttribution: search.items.map((item) => item.attribution),
     });
-    const writeEvaluation = engine.evaluateAccess({
+    const writeEvaluation = await engine.evaluateAccess({
       toolName: "fs.write",
       args: { path: "./workspace/output.txt", content: "hello" },
       agentId: "agent-1",
@@ -1176,13 +1176,13 @@ describe("ingestion backend coverage", () => {
       storage,
       fetchUrl: vi.fn(),
     });
-    const search = searchIngestedContext({
+    const search = await searchIngestedContext({
       storage,
       namespace: "web",
       query: "legacy unsafe",
     });
     const engine = new ToolPolicyEngine(createPolicyConfig(), createPolicyStorage());
-    const evaluation = engine.evaluateAccess({
+    const evaluation = await engine.evaluateAccess({
       toolName: "shell.exec",
       args: { command: "echo hello" },
       agentId: "agent-1",
@@ -1308,7 +1308,7 @@ function createRequestWithoutTrust(args: Record<string, unknown>): ToolInvokeReq
   return request;
 }
 
-function createKnowledgeStorage(seedDocuments: Array<Record<string, unknown>> = []): Storage {
+function createKnowledgeStorage(seedDocuments: Array<Record<string, unknown>> = []): Storage & AsyncStorage {
   const documents = [...seedDocuments];
   const chunksByDocId = new Map<string, Array<Record<string, unknown>>>();
   let documentSeq = documents.length;
@@ -1357,7 +1357,7 @@ function createKnowledgeStorage(seedDocuments: Array<Record<string, unknown>> = 
         return matchingDocIds.flatMap((docId) => chunksByDocId.get(docId) ?? []);
       }),
     },
-  } as unknown as Storage;
+  } as unknown as Storage & AsyncStorage;
 }
 
 function createPdfBuffer(text: string): Buffer {
@@ -1407,7 +1407,7 @@ function createPolicyConfig() {
   return config;
 }
 
-function createPolicyStorage(): Storage {
+function createPolicyStorage(): Storage & AsyncStorage {
   return {
     toolGrants: {
       list: vi.fn(() => []),
@@ -1421,5 +1421,5 @@ function createPolicyStorage(): Storage {
     pendingApprovalActions: {
       find: vi.fn(() => undefined),
     },
-  } as unknown as Storage;
+  } as unknown as Storage & AsyncStorage;
 }

@@ -236,6 +236,7 @@ describe("route service facades", () => {
       "approvePhase",
       "createOrchestrationPlan",
       "createPlanFromRecipe",
+      "draftAutomationRecipe",
       "exportActivepiecesTemplate",
       "exportN8nTemplate",
       "getRun",
@@ -252,7 +253,7 @@ describe("route service facades", () => {
       method: "createOrchestrationPlan",
       args: [{ planId: "plan-1" }],
     });
-    expect(service.previewRecipe({ recipeId: "recipe-1" } as never)).toEqual({
+    await expect(service.previewRecipe({ recipeId: "recipe-1" } as never)).resolves.toEqual({
       method: "previewRecipe",
       args: [{ recipeId: "recipe-1" }],
     });
@@ -260,11 +261,15 @@ describe("route service facades", () => {
       method: "createPlanFromRecipe",
       args: [{ recipeId: "recipe-1" }],
     });
-    expect(service.exportActivepiecesTemplate({ recipeId: "recipe-1" } as never)).toEqual({
+    await expect(service.draftAutomationRecipe({ taskDescription: "Draft it" })).resolves.toEqual({
+      method: "draftAutomationRecipe",
+      args: [{ taskDescription: "Draft it" }],
+    });
+    await expect(service.exportActivepiecesTemplate({ recipeId: "recipe-1" } as never)).resolves.toEqual({
       method: "exportActivepiecesTemplate",
       args: [{ recipeId: "recipe-1" }],
     });
-    expect(service.exportN8nTemplate({ recipeId: "recipe-1" } as never)).toEqual({
+    await expect(service.exportN8nTemplate({ recipeId: "recipe-1" } as never)).resolves.toEqual({
       method: "exportN8nTemplate",
       args: [{ recipeId: "recipe-1" }],
     });
@@ -277,19 +282,19 @@ describe("route service facades", () => {
       method: "approvePhase",
       args: ["run-1", "phase-1", "operator", 1.25, "workspace-1"],
     });
-    expect(service.getRun("run-1", "workspace-1")).toEqual({
+    await expect(service.getRun("run-1", "workspace-1")).resolves.toEqual({
       method: "getRun",
       args: ["run-1", "workspace-1"],
     });
-    expect(service.listRunCheckpoints("run-1")).toEqual({
+    await expect(service.listRunCheckpoints("run-1")).resolves.toEqual({
       method: "listRunCheckpoints",
       args: ["run-1", undefined],
     });
-    expect(service.getRunTrace("run-1", "workspace-1")).toEqual({
+    await expect(service.getRunTrace("run-1", "workspace-1")).resolves.toEqual({
       method: "getRunTrace",
       args: ["run-1", "workspace-1"],
     });
-    expect(service.listRunContexts("run-1")).toEqual({
+    await expect(service.listRunContexts("run-1")).resolves.toEqual({
       method: "listRunContexts",
       args: ["run-1"],
     });

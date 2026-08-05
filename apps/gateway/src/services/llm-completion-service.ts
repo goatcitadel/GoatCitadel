@@ -91,7 +91,7 @@ export async function createChatCompletion(
   const withContext = memoryContextInsertion?.request ?? request;
   const memoryContextPlacement = memoryContextInsertion?.placement;
 
-  const chatHookWorkspaceId = host.resolveChatCompletionHookWorkspaceId(request);
+  const chatHookWorkspaceId = await host.resolveChatCompletionHookWorkspaceId(request);
   const chatHookEntityId = request.memory?.sessionId?.trim() || randomUUID();
   let hookableRequest = withContext;
 
@@ -188,7 +188,7 @@ export async function createChatCompletion(
   if (llmRequestHook.patch) {
     hookableRequest = applyLlmRequestHookPatch(hookableRequest, llmRequestHook.patch);
   }
-  host.persistContextManifestForCompletionRequest({
+  await host.persistContextManifestForCompletionRequest({
     request: hookableRequest,
     memoryContext,
     memoryContextPlacement,
@@ -564,7 +564,7 @@ export async function createChatCompletion(
     response,
   });
 
-  host.publishRealtime("system", "llm", {
+  await host.publishRealtime("system", "llm", {
     type: "chat_completion",
     providerId: routing.effectiveProviderId ?? primaryProviderId,
     model: routing.effectiveModel ?? primaryModel,
@@ -589,7 +589,7 @@ export async function createChatCompletion(
     };
   }
   response.routing = routing;
-  runtimeLifecycleHookDispatcher.enqueueObserveHook(host.hooksService, {
+  await runtimeLifecycleHookDispatcher.enqueueObserveHook(host.hooksService, {
     workspaceId: chatHookWorkspaceId,
     trigger: "llm_output",
     entityType: "chat_completion",
@@ -607,7 +607,7 @@ export async function createChatCompletion(
       messageCount: hookableRequest.messages.length,
     },
   });
-  host.hooksService.enqueueAfterHooks({
+  await host.hooksService.enqueueAfterHooks({
     workspaceId: chatHookWorkspaceId,
     trigger: "llm.response.after",
     entityType: "chat_completion",
@@ -633,7 +633,9 @@ export async function* createChatCompletionStream(
   attributionInput: ModelUsageAttributionContext = {},
 ): AsyncGenerator<Record<string, unknown>> {
   const completionStartedAt = Date.now();
-  const chatHookWorkspaceId = host.resolveChatCompletionHookWorkspaceId(request);
+  const idleWatchdogDisabled = host.config.assistant.features?.streamIdleWatchdogV1Disabled === true;
+  const idleTimeoutMs = resolveStreamIdleTimeoutMs(host.config.assistant.streamIdleTimeoutMs);
+  const chatHookWorkspaceId = await host.resolveChatCompletionHookWorkspaceId(request);
   const chatHookEntityId = request.memory?.sessionId?.trim() || randomUUID();
   const memoryInput = request.memory;
   const useMemoryContext = shouldUseChatCompletionMemoryContext(host, memoryInput);
@@ -651,6 +653,8 @@ export async function* createChatCompletionStream(
     context: {
       messageCount: request.messages.length,
       stream: true,
+      idleWatchdogDisabled,
+      idleTimeoutMs,
     },
   });
   const memoryContext = await composeChatCompletionMemoryContext(host, request, memoryInput);
@@ -689,7 +693,7 @@ export async function* createChatCompletionStream(
   if (dispatchHook.blockedBy) {
     throw new Error(dispatchHook.blockedBy.reason);
   }
-  host.persistContextManifestForCompletionRequest({
+  await host.persistContextManifestForCompletionRequest({
     request: withContext,
     memoryContext,
     memoryContextPlacement,
@@ -754,7 +758,7 @@ export async function* createChatCompletionStream(
     providers: runtime.providers,
   });
 
-  const shouldBufferForTransform = host.hooksService.hasMutateHook(chatHookWorkspaceId, "transform_llm_output");
+  const shouldBufferForTransform = await host.hooksService.hasMutateHook(chatHookWorkspaceId, "transform_llm_output");
   const bufferedChunks: Array<Record<string, unknown>> = [];
   const telemetryChunks: Array<Record<string, unknown>> = [];
   const canonicalUsageEventIds = new Set<string>();
@@ -764,8 +768,6 @@ export async function* createChatCompletionStream(
     normalizeToolProtocolRetryRequest(withContext, TOOL_PROTOCOL_RETRY_MINIMAL_THINKING),
   ];
   const completionDeadline = createChatCompletionDeadline(withContext.timeoutMs);
-  const idleWatchdogDisabled = host.config.assistant.features?.streamIdleWatchdogV1Disabled === true;
-  const idleTimeoutMs = resolveStreamIdleTimeoutMs(host.config.assistant.streamIdleTimeoutMs);
   let streamed = false;
   let streamFailedAfterEmit = false;
   let lastError: Error | undefined;
@@ -1317,7 +1319,7 @@ export async function* createChatCompletionStream(
     "completed",
   );
 
-  host.publishRealtime("system", "llm", {
+  await host.publishRealtime("system", "llm", {
     type: "chat_completion_stream",
     providerId: routing.effectiveProviderId ?? primaryProviderId,
     model: routing.effectiveModel ?? primaryModel,
@@ -1330,7 +1332,7 @@ export async function* createChatCompletionStream(
     fallbackModel: routing.fallbackModel,
     fallbackReason: routing.fallbackReason,
   });
-  runtimeLifecycleHookDispatcher.enqueueObserveHook(host.hooksService, {
+  await runtimeLifecycleHookDispatcher.enqueueObserveHook(host.hooksService, {
     workspaceId: chatHookWorkspaceId,
     trigger: "llm_output",
     entityType: "chat_completion",

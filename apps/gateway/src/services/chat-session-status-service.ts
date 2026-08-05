@@ -10,7 +10,7 @@ import type {
   RuntimeBuildIdentity,
 } from "@goatcitadel/contracts";
 import { CHAT_SESSION_STATUS_VERSION, NotFoundError } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 
 const ACTIVE_TURN_STATUSES = [
   "queued",
@@ -30,26 +30,30 @@ export interface ChatSessionStatusServiceDependencies {
 export class ChatSessionStatusService {
   public constructor(private readonly dependencies: ChatSessionStatusServiceDependencies) {}
 
-  public getOperatorStatus(sessionId: string): ChatSessionStatusResponse {
-    const session = this.dependencies.storage.chatSessionMeta.get(sessionId);
+  public async getOperatorStatus(sessionId: string): Promise<ChatSessionStatusResponse> {
+    const session = await this.dependencies.storage.chatSessionMeta.get(sessionId);
     if (!session) {
       throw new NotFoundError({ entity: "Chat session", id: sessionId });
     }
 
-    const traces = this.dependencies.storage.chatTurnTraces.listBySession(sessionId, 1_000);
+    const traces = await this.dependencies.storage.chatTurnTraces.listBySession(sessionId, 1_000);
     const latestTrace = traces[0];
-    const prefs = this.dependencies.storage.chatSessionPrefs.get(sessionId);
+    const prefs = await this.dependencies.storage.chatSessionPrefs.get(sessionId);
     const model = this.resolveModel(latestTrace, prefs);
     const latestSnapshot = latestTrace
-      ? this.dependencies.storage.routedContextSnapshots.findByTurn(latestTrace.turnId)
+      ? await this.dependencies.storage.routedContextSnapshots.findByTurn(latestTrace.turnId)
       : undefined;
-    const attachments = this.dependencies.storage.chatAttachments.listBySession(sessionId, 200, session.workspaceId);
+    const attachments = await this.dependencies.storage.chatAttachments.listBySession(
+      sessionId,
+      200,
+      session.workspaceId,
+    );
     const context = this.resolveContext(model, latestSnapshot, attachments.length);
     const capabilityProfile = latestTrace
-      ? this.dependencies.storage.chatTurnCapabilityProfiles.findByTurn(latestTrace.turnId)
+      ? await this.dependencies.storage.chatTurnCapabilityProfiles.findByTurn(latestTrace.turnId)
       : undefined;
     const capabilities = this.resolveCapabilities(latestTrace?.turnId, capabilityProfile, latestSnapshot);
-    const pendingApprovals = this.resolvePendingApprovals(sessionId, session.workspaceId);
+    const pendingApprovals = await this.resolvePendingApprovals(sessionId, session.workspaceId);
     const pendingUserInputs = traces
       .filter((trace) => trace.status === "waiting_for_user_input" && trace.pendingUserInput)
       .map((trace) => ({
@@ -59,9 +63,16 @@ export class ChatSessionStatusService {
         title: trace.pendingUserInput!.title,
         question: trace.pendingUserInput!.question,
       }));
-    const delegationRuns = this.dependencies.storage.chatDelegationRuns.listBySession(sessionId, 100);
+    const delegationRuns = await this.dependencies.storage.chatDelegationRuns.listBySession(sessionId, 100);
+    const delegationStepsByRunId = new Map(
+      await Promise.all(
+        delegationRuns.map(
+          async (run) => [run.runId, await this.dependencies.storage.chatDelegationSteps.listByRun(run.runId)] as const,
+        ),
+      ),
+    );
     const orchestrationRuns = delegationRuns.map((run) => {
-      const steps = this.dependencies.storage.chatDelegationSteps.listByRun(run.runId);
+      const steps = delegationStepsByRunId.get(run.runId) ?? [];
       return {
         runId: run.runId,
         status: run.status,
@@ -74,10 +85,10 @@ export class ChatSessionStatusService {
     const durableRunIds = [
       ...traces.map((trace) => trace.durable?.runId),
       ...delegationRuns.flatMap((run) =>
-        this.dependencies.storage.chatDelegationSteps.listByRun(run.runId).map((step) => step.durableRunId),
+        (delegationStepsByRunId.get(run.runId) ?? []).map((step) => step.durableRunId),
       ),
     ];
-    const durableRunsById = this.dependencies.storage.durableRuns.getRunsByIds(durableRunIds);
+    const durableRunsById = await this.dependencies.storage.durableRuns.getRunsByIds(durableRunIds);
     const durableRuns = [...durableRunsById.values()].map((run) => ({
       runId: run.runId,
       status: run.status,
@@ -85,7 +96,7 @@ export class ChatSessionStatusService {
       recoveryState: run.recoveryState ?? "none",
       ...(run.recoverySummary ? { recoverySummary: run.recoverySummary } : {}),
     }));
-    const usageSummary = this.dependencies.storage.modelUsageEvents.list({ sessionId, limit: 200 }).summary;
+    const usageSummary = (await this.dependencies.storage.modelUsageEvents.list({ sessionId, limit: 200 })).summary;
     const usage: ChatSessionStatusUsage = {
       attemptCount: usageSummary.attemptCount,
       inputTokens: {
@@ -129,8 +140,8 @@ export class ChatSessionStatusService {
     };
   }
 
-  public getModelProjection(sessionId: string): ChatSessionStatusModelProjection {
-    const status = this.getOperatorStatus(sessionId);
+  public async getModelProjection(sessionId: string): Promise<ChatSessionStatusModelProjection> {
+    const status = await this.getOperatorStatus(sessionId);
     return {
       schemaVersion: status.schemaVersion,
       sessionId: status.sessionId,
@@ -182,8 +193,8 @@ export class ChatSessionStatusService {
   }
 
   private resolveModel(
-    latestTrace: ReturnType<Storage["chatTurnTraces"]["listBySession"]>[number] | undefined,
-    prefs: ReturnType<Storage["chatSessionPrefs"]["get"]>,
+    latestTrace: Awaited<ReturnType<Storage["chatTurnTraces"]["listBySession"]>>[number] | undefined,
+    prefs: Awaited<ReturnType<Storage["chatSessionPrefs"]["get"]>>,
   ): ChatSessionStatusSection<ChatSessionStatusModel> {
     const traceProvider = latestTrace?.routing.effectiveProviderId;
     const traceModel = latestTrace?.routing.effectiveModel ?? latestTrace?.model;
@@ -198,7 +209,7 @@ export class ChatSessionStatusService {
 
   private resolveContext(
     model: ChatSessionStatusSection<ChatSessionStatusModel>,
-    snapshot: ReturnType<Storage["routedContextSnapshots"]["findByTurn"]>,
+    snapshot: Awaited<ReturnType<Storage["routedContextSnapshots"]["findByTurn"]>>,
     attachmentCount: number,
   ): ChatSessionStatusSection<ChatSessionStatusContext> {
     if (snapshot) {
@@ -233,8 +244,8 @@ export class ChatSessionStatusService {
 
   private resolveCapabilities(
     turnId: string | undefined,
-    profile: ReturnType<Storage["chatTurnCapabilityProfiles"]["findByTurn"]>,
-    snapshot: ReturnType<Storage["routedContextSnapshots"]["findByTurn"]>,
+    profile: Awaited<ReturnType<Storage["chatTurnCapabilityProfiles"]["findByTurn"]>>,
+    snapshot: Awaited<ReturnType<Storage["routedContextSnapshots"]["findByTurn"]>>,
   ): ChatSessionStatusSection<ChatSessionStatusCapabilities> {
     if (!turnId || !profile) {
       return unavailable("No persisted capability profile is available for the latest turn.");
@@ -260,9 +271,8 @@ export class ChatSessionStatusService {
     });
   }
 
-  private resolvePendingApprovals(sessionId: string, workspaceId: string) {
-    const canonical = this.dependencies.storage.approvals
-      .list("pending", 500, workspaceId)
+  private async resolvePendingApprovals(sessionId: string, workspaceId: string) {
+    const canonical = (await this.dependencies.storage.approvals.list("pending", 500, workspaceId))
       .filter((approval) => approval.linkage?.sessionId === sessionId)
       .map((approval) => ({
         approvalId: approval.approvalId,
@@ -272,8 +282,7 @@ export class ChatSessionStatusService {
         createdAt: approval.createdAt,
       }));
     const seen = new Set(canonical.map((approval) => approval.approvalId));
-    const inline = this.dependencies.storage.chatInlineApprovals
-      .listBySession(sessionId)
+    const inline = (await this.dependencies.storage.chatInlineApprovals.listBySession(sessionId))
       .filter((approval) => approval.status === "pending" && !seen.has(approval.approvalId))
       .map((approval) => ({
         approvalId: approval.approvalId,

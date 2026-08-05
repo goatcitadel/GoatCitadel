@@ -9,7 +9,7 @@ import type {
   ChatCompactionBreakerRepairResponse,
 } from "@goatcitadel/contracts";
 import { ConflictError, NotFoundError } from "@goatcitadel/contracts";
-import type { ChatConversationSummaryRepository } from "@goatcitadel/storage";
+import type { AsyncStorage } from "@goatcitadel/storage";
 
 const DEFAULT_ACTION_TTL_SECONDS = 120;
 export const CHAT_COMPACTION_BREAKER_MIN_ACTION_TTL_SECONDS = 30;
@@ -19,7 +19,7 @@ const MAX_RECOVERY_REASON_LENGTH = 512;
 export const CHAT_COMPACTION_BREAKER_APPROVAL_SCHEMA_VERSION = "chat_compaction_breaker_approval.v1" as const;
 
 type ActionRepository = Pick<
-  ChatConversationSummaryRepository,
+  AsyncStorage["chatConversationSummaries"],
   | "getCompactionBreaker"
   | "createCompactionBreakerAction"
   | "getCompactionBreakerAction"
@@ -76,8 +76,8 @@ export interface ChatCompactionBreakerActionServiceDependencies {
   governance: ChatCompactionBreakerGovernancePort;
   audit: ChatCompactionBreakerAuditPort;
   approvals: ChatCompactionBreakerApprovalPort;
-  resolveSessionWorkspaceId(sessionId: string): string;
-  isUseAuthorized(input: { action: ChatCompactionBreakerActionRecord; observedAt: string }): boolean;
+  resolveSessionWorkspaceId(sessionId: string): Promise<string>;
+  isUseAuthorized(input: { action: ChatCompactionBreakerActionRecord; observedAt: string }): Promise<boolean>;
   now?: () => Date;
   createActionId?: () => string;
 }
@@ -97,7 +97,7 @@ export class ChatCompactionBreakerActionService {
     request: ChatCompactionBreakerActionCreateRequest;
   }): Promise<ChatCompactionBreakerActionRecord> {
     const actorHash = hashActorId(input.actorId);
-    this.requireRecoveryBreakerState(input.sessionId, input.request);
+    await this.requireRecoveryBreakerState(input.sessionId, input.request);
     const actionId = this.createActionId();
     const createdAt = this.now().toISOString();
     const ttlSeconds = normalizeActionTtl(input.request.expiresInSeconds);
@@ -193,7 +193,7 @@ export class ChatCompactionBreakerActionService {
       rejectionReason: rejectionReason ?? null,
       receiptId: auditReceipt.receiptId,
     });
-    return this.dependencies.repository.createCompactionBreakerAction({
+    return await this.dependencies.repository.createCompactionBreakerAction({
       actionId,
       sessionId: input.sessionId,
       dimensionHash: input.request.dimensionHash,
@@ -218,8 +218,8 @@ export class ChatCompactionBreakerActionService {
     request: ChatCompactionBreakerApprovalCreateRequest;
   }): Promise<ChatCompactionBreakerApprovalCreateResponse> {
     const actorHash = hashActorId(input.actorId);
-    this.requireRecoveryBreakerState(input.sessionId, input.request);
-    const workspaceId = this.dependencies.resolveSessionWorkspaceId(input.sessionId);
+    await this.requireRecoveryBreakerState(input.sessionId, input.request);
+    const workspaceId = await this.dependencies.resolveSessionWorkspaceId(input.sessionId);
     const reason = normalizeRecoveryReason(input.request.reason);
     const ttlSeconds = normalizeActionTtl(input.request.expiresInSeconds);
     const ttlMs = ttlSeconds * 1_000;
@@ -273,29 +273,36 @@ export class ChatCompactionBreakerActionService {
     return { approval, approvalBindingHash };
   }
 
-  public inspectAction(input: {
+  public async inspectAction(input: {
     sessionId: string;
     actionId: string;
     actorId: string;
-  }): ChatCompactionBreakerActionRecord {
-    const action = this.dependencies.repository.getCompactionBreakerAction(input.actionId, this.now().toISOString());
+  }): Promise<ChatCompactionBreakerActionRecord> {
+    const action = await this.dependencies.repository.getCompactionBreakerAction(
+      input.actionId,
+      this.now().toISOString(),
+    );
     assertActorBoundAction(action, input.sessionId, hashActorId(input.actorId));
     return action;
   }
 
-  public repair(input: { sessionId: string; actionId: string; actorId: string }): ChatCompactionBreakerRepairResponse {
-    const action = this.inspectAction(input);
+  public async repair(input: {
+    sessionId: string;
+    actionId: string;
+    actorId: string;
+  }): Promise<ChatCompactionBreakerRepairResponse> {
+    const action = await this.inspectAction(input);
     if (action.actionKind !== "repair" || action.status !== "pending") {
       throw new ConflictError({ code: "STATE_CONFLICT", message: "A pending repair action is required" });
     }
     const consumedAt = this.now().toISOString();
-    if (!this.dependencies.isUseAuthorized({ action, observedAt: consumedAt })) {
+    if (!(await this.dependencies.isUseAuthorized({ action, observedAt: consumedAt }))) {
       throw new ConflictError({
         code: "STATE_CONFLICT",
         message: "The pending repair action is no longer authorized by current policy and approval state",
       });
     }
-    return this.dependencies.repository.consumeCompactionBreakerRepairAction({
+    return await this.dependencies.repository.consumeCompactionBreakerRepairAction({
       actionId: action.actionId,
       sessionId: action.sessionId,
       dimensionHash: action.dimensionHash,
@@ -309,29 +316,29 @@ export class ChatCompactionBreakerActionService {
    * compaction dimension sealing. The returned reference is server-derived;
    * no client actor hash or force boolean crosses the route boundary.
    */
-  public resolvePendingForceAction(input: {
+  public async resolvePendingForceAction(input: {
     sessionId: string;
     sealedDimensionHash: string;
     actorId: string;
-  }): { actionId: string; actorHash: string } | undefined {
+  }): Promise<{ actionId: string; actorHash: string } | undefined> {
     const actorHash = hashActorId(input.actorId);
     const observedAt = this.now().toISOString();
-    const action = this.dependencies.repository.findPendingCompactionBreakerForceAction({
+    const action = await this.dependencies.repository.findPendingCompactionBreakerForceAction({
       sessionId: input.sessionId,
       dimensionHash: input.sealedDimensionHash,
       actorHash,
       observedAt,
     });
-    return action && this.dependencies.isUseAuthorized({ action, observedAt })
+    return action && (await this.dependencies.isUseAuthorized({ action, observedAt }))
       ? { actionId: action.actionId, actorHash }
       : undefined;
   }
 
-  private requireRecoveryBreakerState(
+  private async requireRecoveryBreakerState(
     sessionId: string,
     request: Pick<ChatCompactionBreakerActionCreateRequest, "dimensionHash" | "actionKind" | "expectedBreakerRevision">,
-  ): void {
-    const breaker = this.dependencies.repository.getCompactionBreaker(sessionId, request.dimensionHash);
+  ): Promise<void> {
+    const breaker = await this.dependencies.repository.getCompactionBreaker(sessionId, request.dimensionHash);
     if (!breaker) {
       throw new NotFoundError({
         entity: "Chat compaction breaker",

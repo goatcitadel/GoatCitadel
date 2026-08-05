@@ -159,7 +159,7 @@ describe("GatewayService Discord parity seams", () => {
     expect(typing).toEqual(result);
   });
 
-  it("merges Discord runtime metadata into channel runtime status without advertising presence as an action", () => {
+  it("merges Discord runtime metadata into channel runtime status without advertising presence as an action", async () => {
     const { gateway } = createGatewayHarness();
     const connection = createDiscordConnection({
       lastSyncAt: "2026-03-31T00:05:00.000Z",
@@ -176,11 +176,11 @@ describe("GatewayService Discord parity seams", () => {
       lastInboundAt: "2026-03-31T00:07:00.000Z",
       lastReconnectAt: "2026-03-31T00:08:00.000Z",
     };
-    gateway.storage.integrationConnections.get.mockReturnValue(connection);
+    gateway.storage.integrationConnections.get.mockResolvedValue(connection);
     gateway.discordRuntimeService.getConnectionStatus.mockReturnValue(runtime);
     const integrationChannel = createIntegrationChannelServiceForGateway(gateway);
 
-    const status = integrationChannel.getIntegrationConnectionChannelRuntimeStatus(connection.connectionId);
+    const status = await integrationChannel.getIntegrationConnectionChannelRuntimeStatus(connection.connectionId);
 
     expect(status.ready).toBe(true);
     expect(status.runtimePolicy).toMatchObject({
@@ -199,11 +199,11 @@ describe("GatewayService Discord parity seams", () => {
     expect(status.lastReadyAt).toBe("2026-03-31T00:06:00.000Z");
     expect(status.lastInboundAt).toBe("2026-03-31T00:07:00.000Z");
     expect(
-      integrationChannel.getIntegrationConnectionChannelCapabilities(connection.connectionId).supportedActions,
+      (await integrationChannel.getIntegrationConnectionChannelCapabilities(connection.connectionId)).supportedActions,
     ).not.toContain("channel.presence");
   });
 
-  it("lists, approves, and revokes Discord pairings through the service layer", () => {
+  it("lists, approves, and revokes Discord pairings through the service layer", async () => {
     const { gateway, settings } = createGatewayHarness();
     const connection = createDiscordConnection();
     const approvedExisting = createPairing({
@@ -219,34 +219,34 @@ describe("GatewayService Discord parity seams", () => {
       updatedAt: "2026-03-31T00:02:00.000Z",
     });
     settings.set("discord_pairings_v1", [approvedExisting, pending]);
-    gateway.storage.integrationConnections.get.mockReturnValue(connection);
+    gateway.storage.integrationConnections.get.mockResolvedValue(connection);
     gateway.discordRuntimeService.getConnectionStatus.mockReturnValue(undefined);
     const integrationChannel = createIntegrationChannelServiceForGateway(gateway);
 
-    const listed = integrationChannel.listDiscordPairings(connection.connectionId);
+    const listed = await integrationChannel.listDiscordPairings(connection.connectionId);
     expect((listed.items as DiscordPairingRecord[]).map((item: DiscordPairingRecord) => item.pairingId)).toEqual([
       "pairing-new",
       "pairing-old",
     ]);
 
-    const approved = integrationChannel.approveDiscordPairing(connection.connectionId, "pairing-new");
+    const approved = await integrationChannel.approveDiscordPairing(connection.connectionId, "pairing-new");
     expect(approved.status).toBe("approved");
     const storedAfterApprove = settings.get("discord_pairings_v1") as DiscordPairingRecord[];
     expect(storedAfterApprove.find((item) => item.pairingId === "pairing-new")?.status).toBe("approved");
     expect(storedAfterApprove.find((item) => item.pairingId === "pairing-old")?.status).toBe("revoked");
 
-    const revoked = integrationChannel.revokeDiscordPairing(connection.connectionId, "pairing-new");
+    const revoked = await integrationChannel.revokeDiscordPairing(connection.connectionId, "pairing-new");
     expect(revoked.status).toBe("revoked");
     const storedAfterRevoke = settings.get("discord_pairings_v1") as DiscordPairingRecord[];
     expect(storedAfterRevoke.find((item) => item.pairingId === "pairing-new")?.status).toBe("revoked");
   });
 
-  it("persists a Discord route session and rewrites future inbound thread ids onto that logical session", () => {
+  it("persists a Discord route session and rewrites future inbound thread ids onto that logical session", async () => {
     const { gateway, settings } = createGatewayHarness();
     let ensureCalls = 0;
-    gateway.requireChatSession = vi.fn((sessionId: string) => ({ sessionId }));
+    gateway.requireChatSession = vi.fn(async (sessionId: string) => ({ sessionId }));
     gateway.updateChatSession = vi.fn();
-    gateway.storage.sessions.upsert.mockImplementation(({ sessionId: _sessionId }: { sessionId: string }) => {
+    gateway.storage.sessions.upsert.mockImplementation(async ({ sessionId: _sessionId }: { sessionId: string }) => {
       ensureCalls += 1;
       if (ensureCalls === 1) {
         return { sessionId: "session-source" };
@@ -254,7 +254,7 @@ describe("GatewayService Discord parity seams", () => {
       return { sessionId: "session-new" };
     });
 
-    const created = gateway.startNewDiscordRouteSession({
+    const created = await gateway.startNewDiscordRouteSession({
       connectionId: "11111111-1111-1111-1111-111111111111",
       target: "dm_1",
       displayName: "Goat User",
@@ -276,7 +276,7 @@ describe("GatewayService Discord parity seams", () => {
     );
     expect(gateway.updateChatSession).toHaveBeenCalledWith(created.sessionId, { title: "Fresh Discord Session" });
 
-    const resolved = gateway.resolveDiscordInboundRoute({
+    const resolved = await gateway.resolveDiscordInboundRoute({
       connectionId: "11111111-1111-1111-1111-111111111111",
       target: "dm_1",
       room: "dm_1",

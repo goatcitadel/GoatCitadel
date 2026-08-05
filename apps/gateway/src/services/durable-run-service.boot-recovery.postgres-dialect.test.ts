@@ -2,7 +2,15 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AuditLog, createDatabase, Storage, TranscriptLog, type DatabaseClient } from "@goatcitadel/storage";
+import {
+  AuditLog,
+  createDatabase,
+  createLocalAsyncStorage,
+  Storage,
+  TranscriptLog,
+  type DatabaseClient,
+  type DbTransactionMode,
+} from "@goatcitadel/storage";
 import { DurableRunService } from "./durable-run-service.js";
 import type { ServiceContext } from "./service-context.js";
 
@@ -39,13 +47,14 @@ interface Harness {
   rootDir: string;
   storage: Storage;
   service: DurableRunService;
+  infoLogs: Array<{ data: unknown; msg: string }>;
 }
 
 const harnesses: Harness[] = [];
 
-afterEach(() => {
+afterEach(async () => {
   for (const harness of harnesses.splice(0)) {
-    harness.service.stopWorker();
+    await harness.service.stopWorker();
     harness.storage.close();
     fsSync.rmSync(harness.rootDir, { recursive: true, force: true });
   }
@@ -60,8 +69,16 @@ afterEach(() => {
  * sqlite, so the full boot-recovery path runs; only dialect-unsafe raw exec
  * calls blow up.
  */
-function createPostgresDialectStrictDb(rootDir: string): DatabaseClient {
-  const inner = createDatabase({ dbPath: path.join(rootDir, "backing.sqlite") });
+interface CompatibilityTransactionDatabaseClient extends DatabaseClient {
+  beginCompatibilityTransaction(transactionId: string, mode: DbTransactionMode): void;
+  commitCompatibilityTransaction(transactionId: string): void;
+  rollbackCompatibilityTransaction(transactionId: string): void;
+}
+
+function createPostgresDialectStrictDb(rootDir: string): CompatibilityTransactionDatabaseClient {
+  const inner = createDatabase({
+    dbPath: path.join(rootDir, "backing.sqlite"),
+  }) as CompatibilityTransactionDatabaseClient;
   return {
     dialect: "postgres",
     prepare: (sql) => {
@@ -90,6 +107,11 @@ function createPostgresDialectStrictDb(rootDir: string): DatabaseClient {
     },
     close: () => inner.close(),
     transaction: (mode, callback) => inner.transaction(mode, callback),
+    // The Promise adapter owns these driver-level hooks. Delegating them to
+    // the backing client preserves the facade's raw exec guard above.
+    beginCompatibilityTransaction: (transactionId, mode) => inner.beginCompatibilityTransaction(transactionId, mode),
+    commitCompatibilityTransaction: (transactionId) => inner.commitCompatibilityTransaction(transactionId),
+    rollbackCompatibilityTransaction: (transactionId) => inner.rollbackCompatibilityTransaction(transactionId),
   };
 }
 
@@ -102,6 +124,69 @@ function createPostgresDialectStrictDb(rootDir: string): DatabaseClient {
  * raw sqlite transaction control on the Postgres code path.
  */
 function translateBootRecoveryPostgresSqlForSqlite(sql: string): string {
+  if (
+    sql.includes("WITH database_clock AS MATERIALIZED") &&
+    sql.includes("SET status = 'running'") &&
+    sql.includes("@leaseDurationMs")
+  ) {
+    return `
+      WITH database_clock AS (
+        SELECT julianday('now') AS now_instant
+      )
+      UPDATE durable_runs
+      SET status = 'running',
+          started_at = COALESCE(started_at, strftime('%Y-%m-%dT%H:%M:%fZ', (SELECT now_instant FROM database_clock))),
+          finished_at = NULL,
+          last_error = NULL,
+          lease_owner_id = @workerId,
+          lease_heartbeat_at = strftime('%Y-%m-%dT%H:%M:%fZ', (SELECT now_instant FROM database_clock)),
+          lease_expires_at = strftime(
+            '%Y-%m-%dT%H:%M:%fZ',
+            (SELECT now_instant FROM database_clock) + (CAST(@leaseDurationMs AS REAL) / 86400000.0)
+          ),
+          version = version + 1,
+          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', (SELECT now_instant FROM database_clock))
+      WHERE run_id = @runId
+        AND status = 'queued'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM durable_retries AS retry
+          WHERE retry.run_id = durable_runs.run_id
+            AND retry.attempt_no = (
+              SELECT MAX(latest.attempt_no)
+              FROM durable_retries AS latest
+              WHERE latest.run_id = durable_runs.run_id
+            )
+            AND retry.next_retry_at IS NOT NULL
+            AND julianday(retry.next_retry_at) > (SELECT now_instant FROM database_clock)
+        )
+    `;
+  }
+  if (
+    sql.includes("WITH database_clock AS MATERIALIZED") &&
+    sql.includes("SET lease_heartbeat_at") &&
+    sql.includes("target.lease_owner_id = @workerId") &&
+    sql.includes("@leaseDurationMs")
+  ) {
+    return `
+      WITH database_clock AS (
+        SELECT julianday('now') AS now_instant
+      )
+      UPDATE durable_runs
+      SET lease_heartbeat_at = strftime('%Y-%m-%dT%H:%M:%fZ', (SELECT now_instant FROM database_clock)),
+          lease_expires_at = strftime(
+            '%Y-%m-%dT%H:%M:%fZ',
+            (SELECT now_instant FROM database_clock) + (CAST(@leaseDurationMs AS REAL) / 86400000.0)
+          ),
+          version = version + 1,
+          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', (SELECT now_instant FROM database_clock))
+      WHERE run_id = @runId
+        AND status = 'running'
+        AND lease_owner_id = @workerId
+        AND lease_expires_at IS NOT NULL
+        AND julianday(lease_expires_at) > (SELECT now_instant FROM database_clock)
+    `;
+  }
   return sql
     .replace(/\bFOR UPDATE(?:\s+SKIP LOCKED)?\b/giu, "")
     .replace(/gc_try_parse_timestamptz\(([^)]+)\)\s*<=\s*clock_timestamp\(\)/giu, "julianday($1) <= julianday('now')")
@@ -125,10 +210,11 @@ function createHarness(): Harness {
     transcripts: new TranscriptLog(transcriptsDir),
     audit: new AuditLog(auditDir),
   });
+  const asyncStorage = createLocalAsyncStorage(storage);
 
   const infoLogs: Array<{ data: unknown; msg: string }> = [];
   const ctx = {
-    storage,
+    storage: asyncStorage,
     config: {
       assistant: {
         durable: {
@@ -144,14 +230,14 @@ function createHarness(): Harness {
     requireFeatureEnabled: () => {},
     isFeatureEnabled: () => true,
     normalizeWorkspaceId: (workspaceId?: string) => workspaceId ?? "default",
-    gatewaySql: storage.gatewaySql,
+    gatewaySql: asyncStorage.gatewaySql,
     llmService: {},
     policyEngine: {},
     logger: {
       info: (data: unknown, msg: string) => infoLogs.push({ data, msg }),
       debug: () => {},
-      warn: () => {},
-      error: () => {},
+      warn: (data: unknown, msg: string) => infoLogs.push({ data, msg }),
+      error: (data: unknown, msg: string) => infoLogs.push({ data, msg }),
     },
   } as unknown as ServiceContext;
 
@@ -162,8 +248,8 @@ function createHarness(): Harness {
       // drainQueuedRuns sees status=running and marks it failed (mirrors the
       // sqlite integration test's mock workflow registry).
       executeWorkflow: vi.fn(async (run) => {
-        const current = storage.durableRuns.getRun(run.runId);
-        storage.durableRuns.updateRun({
+        const current = await asyncStorage.durableRuns.getRun(run.runId);
+        await asyncStorage.durableRuns.updateRun({
           runId: run.runId,
           status: "completed",
           finishedAt: new Date().toISOString(),
@@ -176,9 +262,7 @@ function createHarness(): Harness {
     },
   });
 
-  const harness = { rootDir, storage, service, infoLogs } as Harness & {
-    infoLogs: Array<{ data: unknown; msg: string }>;
-  };
+  const harness = { rootDir, storage, service, infoLogs };
   harnesses.push(harness);
   return harness;
 }
@@ -235,31 +319,34 @@ describe("DurableRunService boot recovery on the postgres dialect", () => {
     // asynchronously), same polling approach as the sqlite integration test.
     const deadline = Date.now() + 5_000;
     while (Date.now() < deadline) {
-      if (service.getDurableDiagnostics().lastBootRecovery) {
+      if ((await service.getDurableDiagnostics()).lastBootRecovery) {
         break;
       }
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
 
-    const diag = service.getDurableDiagnostics();
+    const diag = await service.getDurableDiagnostics();
     expect(diag.lastBootRecovery, "expected boot recovery to complete without throwing").toBeDefined();
-    expect(diag.lastBootRecovery?.resumedCount).toBe(1);
+    expect(diag.lastBootRecovery?.resumedCount, JSON.stringify(harness.infoLogs)).toBe(1);
 
     // The interrupted run was reclaimed from stale "running" + expired
     // lease. Boot recovery sets it to "queued", then the poll loop
     // immediately picks it up and the mock workflow completes it. Accept
     // either "queued" or "completed" as evidence of successful reclaim (same
     // dialect-agnostic outcome assertion as the sqlite test).
-    const reclaimed = storage.durableRuns.getRun(interrupted.runId);
-    expect(["queued", "completed"]).toContain(reclaimed.status);
+    let reclaimed = storage.durableRuns.getRun(interrupted.runId);
+    const completionDeadline = Date.now() + 5_000;
+    while (reclaimed.status === "running" && Date.now() < completionDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      reclaimed = storage.durableRuns.getRun(interrupted.runId);
+    }
+    expect(["queued", "completed"], JSON.stringify(harness.infoLogs)).toContain(reclaimed.status);
 
     // Dialect-agnostic recovery-log assertion mirrored from the sqlite test.
-    const resumeLog = (harness as unknown as { infoLogs: Array<{ msg: string }> }).infoLogs.find((entry) =>
-      entry.msg.includes("resumed after restart"),
-    );
+    const resumeLog = harness.infoLogs.find((entry) => entry.msg.includes("resumed after restart"));
     expect(resumeLog, "expected info log containing 'resumed after restart'").toBeDefined();
 
-    service.stopWorker();
+    await service.stopWorker();
   }, 30_000);
 
   it("never routes durable-run mutations through raw sqlite-only exec (BEGIN/COMMIT/ROLLBACK/PRAGMA)", async () => {

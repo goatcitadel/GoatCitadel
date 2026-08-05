@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { ConflictError } from "@goatcitadel/contracts";
-import { Storage } from "@goatcitadel/storage";
+import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import {
   archiveChatSession,
   archiveChatSessionsBulk,
@@ -48,15 +48,16 @@ function createStorage(): { storage: Storage; cleanup: () => void } {
 }
 
 function createDeps(storage: Storage): ChatSessionDependencies {
+  const asyncStorage = createSqliteAsyncStorage(storage);
   const deps = {
-    storage,
+    storage: asyncStorage,
     operatorSummaryCache: {
       invalidate: vi.fn(),
     },
     normalizeWorkspaceId: (workspaceId?: string) => workspaceId ?? "default",
     ensureChatSessionRuntimeGrants: vi.fn(),
     requireChatSession: vi.fn() as never,
-    getSession: (sessionId: string) => storage.sessions.getBySessionId(sessionId),
+    getSession: (sessionId: string) => asyncStorage.sessions.getBySessionId(sessionId),
     publishRealtime: vi.fn(),
     clearChatTurnWriteLease: vi.fn(),
     removeChatSessionStoredFile: vi.fn(),
@@ -64,15 +65,17 @@ function createDeps(storage: Storage): ChatSessionDependencies {
     hydrateChatPrefsWithAutonomy: (_sessionId, prefs) => prefs,
     patchSessionAutonomyPrefs: vi.fn(),
   };
-  deps.requireChatSession = vi.fn((sessionId: string) => {
+  deps.requireChatSession = vi.fn(async (sessionId: string) => {
     const workspaceId = storage.chatSessionMeta.get(sessionId)?.workspaceId ?? "default";
-    const session = listChatSessions(deps, {
-      workspaceId,
-      scope: "all",
-      view: "all",
-      includeHidden: true,
-      limit: 1000,
-    }).find((record) => record.sessionId === sessionId);
+    const session = (
+      await listChatSessions(deps, {
+        workspaceId,
+        scope: "all",
+        view: "all",
+        includeHidden: true,
+        limit: 1000,
+      })
+    ).find((record) => record.sessionId === sessionId);
     if (!session) {
       throw new Error(`Session ${sessionId} not found`);
     }
@@ -87,16 +90,19 @@ describe("chat session service", () => {
     try {
       const deps = createDeps(storage);
 
-      const metaSession = createChatSession(deps, { workspaceId: "default", title: "Original" });
-      const clientAMeta = deps.requireChatSession(metaSession.sessionId);
-      const clientBMeta = deps.requireChatSession(metaSession.sessionId);
-      const renamed = updateChatSession(deps, metaSession.sessionId, { title: "Client A" }, clientAMeta.revision);
+      const metaSession = await createChatSession(deps, { workspaceId: "default", title: "Original" });
+      const clientAMeta = await deps.requireChatSession(metaSession.sessionId);
+      const clientBMeta = await deps.requireChatSession(metaSession.sessionId);
+      const renamed = await updateChatSession(deps, metaSession.sessionId, { title: "Client A" }, clientAMeta.revision);
       expect(renamed.revision).toBe(clientAMeta.revision + 1);
-      expect(() => pinChatSession(deps, metaSession.sessionId, clientBMeta.revision)).toThrow(ConflictError);
-      expect(deps.requireChatSession(metaSession.sessionId)).toMatchObject({ title: "Client A", pinned: false });
+      await expect(pinChatSession(deps, metaSession.sessionId, clientBMeta.revision)).rejects.toThrow(ConflictError);
+      await expect(deps.requireChatSession(metaSession.sessionId)).resolves.toMatchObject({
+        title: "Client A",
+        pinned: false,
+      });
 
-      const prefsBefore = getChatSessionPrefs(deps, metaSession.sessionId);
-      const prefsUpdated = updateChatSessionPrefs(
+      const prefsBefore = await getChatSessionPrefs(deps, metaSession.sessionId);
+      const prefsUpdated = await updateChatSessionPrefs(
         deps,
         metaSession.sessionId,
         {
@@ -108,15 +114,15 @@ describe("chat session service", () => {
         prefsBefore.revision,
       );
       expect(prefsUpdated.revision).toBe(prefsBefore.revision + 1);
-      expect(() =>
+      await expect(
         updateChatSessionPrefs(
           deps,
           metaSession.sessionId,
           { model: "gpt-4.1", reflectionMode: "on" },
           prefsBefore.revision,
         ),
-      ).toThrow(ConflictError);
-      expect(getChatSessionPrefs(deps, metaSession.sessionId)).toMatchObject({
+      ).rejects.toThrow(ConflictError);
+      await expect(getChatSessionPrefs(deps, metaSession.sessionId)).resolves.toMatchObject({
         revision: prefsUpdated.revision,
         model: "gpt-5",
       });
@@ -126,7 +132,7 @@ describe("chat session service", () => {
         maxActionsPerTurn: 4,
       });
 
-      const projectSession = createChatSession(deps, { workspaceId: "default", title: "Project race" });
+      const projectSession = await createChatSession(deps, { workspaceId: "default", title: "Project race" });
       const project = storage.chatProjects.create({
         workspaceId: "default",
         name: "Atomic project",
@@ -145,19 +151,19 @@ describe("chat session service", () => {
         createdAt: NOW,
         updatedAt: NOW,
       });
-      const projectRevision = deps.requireChatSession(projectSession.sessionId).revision;
+      const projectRevision = (await deps.requireChatSession(projectSession.sessionId)).revision;
       const workbenchPatch = vi.spyOn(storage.chatSessionWorkbench, "patch").mockImplementationOnce(() => {
         throw new Error("workbench reset failed");
       });
-      expect(() =>
+      await expect(
         assignChatSessionProject(deps, projectSession.sessionId, project.projectId, projectRevision),
-      ).toThrow("workbench reset failed");
+      ).rejects.toThrow("workbench reset failed");
       workbenchPatch.mockRestore();
       expect(storage.chatSessionProjects.get(projectSession.sessionId)).toBeUndefined();
       expect(storage.chatGeneratedArtifacts.get("artifact-project-race").projectId).toBeUndefined();
       expect(storage.chatSessionRevisions.get(projectSession.sessionId)?.revision).toBe(projectRevision);
 
-      const goalSession = createChatSession(deps, { workspaceId: "default", title: "Goal race" });
+      const goalSession = await createChatSession(deps, { workspaceId: "default", title: "Goal race" });
       const goalSnapshot = storage.chatSessionMeta.ensure(goalSession.sessionId);
       const goal = await handleChatGoalSetRequest({
         sessionId: goalSession.sessionId,
@@ -189,9 +195,9 @@ describe("chat session service", () => {
         ),
       ).toThrow(ConflictError);
 
-      const deleteSessionRecord = createChatSession(deps, { workspaceId: "default", title: "Delete race" });
-      const deleteSnapshot = deps.requireChatSession(deleteSessionRecord.sessionId);
-      updateChatSession(deps, deleteSessionRecord.sessionId, { title: "Newer title" }, deleteSnapshot.revision);
+      const deleteSessionRecord = await createChatSession(deps, { workspaceId: "default", title: "Delete race" });
+      const deleteSnapshot = await deps.requireChatSession(deleteSessionRecord.sessionId);
+      await updateChatSession(deps, deleteSessionRecord.sessionId, { title: "Newer title" }, deleteSnapshot.revision);
       await expect(
         deleteChatSession(deps, deleteSessionRecord.sessionId, deleteSnapshot.revision),
       ).rejects.toBeInstanceOf(ConflictError);
@@ -203,11 +209,11 @@ describe("chat session service", () => {
     }
   });
 
-  it("lets a newer operator title win an auto-title race", () => {
+  it("lets a newer operator title win an auto-title race", async () => {
     const { storage, cleanup } = createStorage();
     try {
       const deps = createDeps(storage);
-      const session = createChatSession(deps, { workspaceId: "default" });
+      const session = await createChatSession(deps, { workspaceId: "default" });
       const originalPatchWithRevision = storage.chatSessionMeta.patchWithRevision.bind(storage.chatSessionMeta);
       vi.spyOn(storage.chatSessionMeta, "patchWithRevision").mockImplementationOnce(
         (sessionId, patch, expectedRevision, now) => {
@@ -216,28 +222,28 @@ describe("chat session service", () => {
         },
       );
 
-      expect(() => maybeAutoTitleChatSession(deps, session.sessionId, "Generated title")).not.toThrow();
+      await expect(maybeAutoTitleChatSession(deps, session.sessionId, "Generated title")).resolves.toBeUndefined();
       expect(storage.chatSessionMeta.get(session.sessionId)?.title).toBe("Operator title");
     } finally {
       cleanup();
     }
   });
 
-  it("upserts one deterministic internal session for a stable orchestration key", () => {
+  it("upserts one deterministic internal session for a stable orchestration key", async () => {
     const { storage, cleanup } = createStorage();
     try {
       const deps = createDeps(storage);
-      const first = ensureChatSessionWithStableKey(deps, "delegation-run-a:step-a", {
+      const first = await ensureChatSessionWithStableKey(deps, "delegation-run-a:step-a", {
         workspaceId: "default",
         title: "Delegate - Coder",
         mode: "chat",
       });
-      const second = ensureChatSessionWithStableKey(deps, "delegation-run-a:step-a", {
+      const second = await ensureChatSessionWithStableKey(deps, "delegation-run-a:step-a", {
         workspaceId: "default",
         title: "Delegate - Coder",
         mode: "chat",
       });
-      const other = ensureChatSessionWithStableKey(deps, "delegation-run-a:step-b", {
+      const other = await ensureChatSessionWithStableKey(deps, "delegation-run-a:step-b", {
         workspaceId: "default",
         title: "Delegate - QA",
         mode: "chat",
@@ -246,15 +252,15 @@ describe("chat session service", () => {
       expect(second.sessionId).toBe(first.sessionId);
       expect(other.sessionId).not.toBe(first.sessionId);
       expect(first.sessionKey).toMatch(/^mission:operator:chat_[0-9a-f]{24}$/u);
-      expect(listChatSessions(deps, { workspaceId: "default", includeHidden: true })).toHaveLength(2);
+      await expect(listChatSessions(deps, { workspaceId: "default", includeHidden: true })).resolves.toHaveLength(2);
       expect(deps.ensureChatSessionRuntimeGrants).toHaveBeenCalledTimes(3);
-      expect(() =>
+      await expect(
         ensureChatSessionWithStableKey(deps, "delegation-run-a:step-a", {
           workspaceId: "other-workspace",
           title: "Must not move",
           mode: "chat",
         }),
-      ).toThrow("stable chat session key already belongs to another workspace");
+      ).rejects.toThrow("stable chat session key already belongs to another workspace");
       expect(storage.chatSessionMeta.get(first.sessionId)?.workspaceId).toBe("default");
       expect(storage.chatSessionMeta.get(first.sessionId)?.title).toBe("Delegate - Coder");
     } finally {
@@ -262,11 +268,11 @@ describe("chat session service", () => {
     }
   });
 
-  it("does not persist public projection markers during editable session round trips", () => {
+  it("does not persist public projection markers during editable session round trips", async () => {
     const { storage, cleanup } = createStorage();
     try {
       const deps = createDeps(storage);
-      const created = createChatSession(deps, {
+      const created = await createChatSession(deps, {
         workspaceId: "default",
         title: "Deploy password=title-secret prod",
         folderId: "safe-folder-id",
@@ -279,7 +285,7 @@ describe("chat session service", () => {
       expect(JSON.stringify(displayed)).not.toContain("folder-secret");
       expect(JSON.stringify(displayed)).not.toContain("tag-secret");
 
-      const updated = updateChatSession(deps, created.sessionId, {
+      const updated = await updateChatSession(deps, created.sessionId, {
         title: displayed.title,
         folderName: displayed.folderName,
         tags: displayed.tags,
@@ -290,14 +296,14 @@ describe("chat session service", () => {
       expect(updated.tags).toEqual(["Bearer tag-secret prod", "keep"]);
       expect(JSON.stringify(storage.chatSessionMeta.get(created.sessionId))).not.toContain("[REDACTED]");
 
-      expect(() =>
+      await expect(
         updateChatSession(deps, created.sessionId, {
           tags: [displayed.tags?.[1] ?? "", displayed.tags?.[0] ?? ""],
         }),
-      ).toThrow("Projected session tags with hidden values cannot be reordered or resized.");
+      ).rejects.toThrow("Projected session tags with hidden values cannot be reordered or resized.");
       expect(storage.chatSessionMeta.get(created.sessionId)?.tags).toEqual(["Bearer tag-secret prod", "keep"]);
 
-      const surroundingTextEdited = updateChatSession(deps, created.sessionId, {
+      const surroundingTextEdited = await updateChatSession(deps, created.sessionId, {
         title: displayed.title?.replace("prod", "staging"),
         folderName: displayed.folderName?.replace("prod", "staging"),
         tags: [displayed.tags?.[0]?.replace("prod", "staging") ?? "", "changed"],
@@ -306,7 +312,7 @@ describe("chat session service", () => {
       expect(surroundingTextEdited.folderName).toBe("password=folder-secret staging");
       expect(surroundingTextEdited.tags).toEqual(["Bearer tag-secret staging", "changed"]);
 
-      const safelyEdited = updateChatSession(deps, created.sessionId, {
+      const safelyEdited = await updateChatSession(deps, created.sessionId, {
         title: "Safe replacement",
         folderName: displayed.folderName,
       });
@@ -317,18 +323,18 @@ describe("chat session service", () => {
     }
   });
 
-  it("round-trips case-normalized public markers without deleting hidden session metadata", () => {
+  it("round-trips case-normalized public markers without deleting hidden session metadata", async () => {
     const { storage, cleanup } = createStorage();
     try {
       const deps = createDeps(storage);
-      const created = createChatSession(deps, {
+      const created = await createChatSession(deps, {
         workspaceId: "default",
         title: "apiKey=first-secret alpha; password=second-secret beta",
         tags: ["Bearer tag-secret prod", "password=other-secret stage"],
       });
       const displayed = projectChatSessionForPublic(created);
 
-      const updated = updateChatSession(deps, created.sessionId, {
+      const updated = await updateChatSession(deps, created.sessionId, {
         title: displayed.title?.replaceAll("[REDACTED]", "[redacted]"),
         tags: displayed.tags?.map((tag) => tag.replaceAll("[REDACTED]", "[redacted]")),
       });
@@ -341,18 +347,18 @@ describe("chat session service", () => {
     }
   });
 
-  it("allows anchored partial replacement while preserving untouched hidden slots", () => {
+  it("allows anchored partial replacement while preserving untouched hidden slots", async () => {
     const { storage, cleanup } = createStorage();
     try {
       const deps = createDeps(storage);
-      const created = createChatSession(deps, {
+      const created = await createChatSession(deps, {
         workspaceId: "default",
         title: "apiKey=first-secret alpha; password=second-secret beta",
         tags: ["Bearer first-tag prod", "password=second-tag stage"],
       });
       const displayed = projectChatSessionForPublic(created);
 
-      const updated = updateChatSession(deps, created.sessionId, {
+      const updated = await updateChatSession(deps, created.sessionId, {
         title: "apiKey=replacement-key alpha; password=[REDACTED] beta",
         tags: ["replacement-tag", displayed.tags?.[1] ?? ""],
       });
@@ -364,11 +370,11 @@ describe("chat session service", () => {
     }
   });
 
-  it("restores URL query secrets only when their public URL identity stays bound", () => {
+  it("restores URL query secrets only when their public URL identity stays bound", async () => {
     const { storage, cleanup } = createStorage();
     try {
       const deps = createDeps(storage);
-      const created = createChatSession(deps, {
+      const created = await createChatSession(deps, {
         workspaceId: "default",
         title: "https://old.example/path?token=title-secret&mode=sync",
         tags: ["Bearer tag-secret"],
@@ -377,14 +383,14 @@ describe("chat session service", () => {
       const moved = new URL(displayed.title ?? "");
       moved.hostname = "new.example";
 
-      expect(() => updateChatSession(deps, created.sessionId, { title: moved.toString() })).toThrow(
+      await expect(updateChatSession(deps, created.sessionId, { title: moved.toString() })).rejects.toThrow(
         "Projected session URL metadata cannot move or encode a hidden credential slot.",
       );
-      expect(() =>
+      await expect(
         updateChatSession(deps, created.sessionId, {
           tags: [displayed.tags?.[0]?.replace("[REDACTED]", "%5BREDACTED%5D") ?? ""],
         }),
-      ).toThrow("Projected session URL metadata cannot move or encode a hidden credential slot.");
+      ).rejects.toThrow("Projected session URL metadata cannot move or encode a hidden credential slot.");
       expect(storage.chatSessionMeta.get(created.sessionId)?.title).toBe(
         "https://old.example/path?token=title-secret&mode=sync",
       );
@@ -392,7 +398,7 @@ describe("chat session service", () => {
 
       const edited = new URL(displayed.title ?? "");
       edited.searchParams.set("mode", "async");
-      const updated = updateChatSession(deps, created.sessionId, { title: edited.toString() });
+      const updated = await updateChatSession(deps, created.sessionId, { title: edited.toString() });
 
       expect(updated.title).toBe("https://old.example/path?token=title-secret&mode=async");
       expect(updated.title).not.toContain("%5BREDACTED%5D");
@@ -401,21 +407,21 @@ describe("chat session service", () => {
     }
   });
 
-  it("rejects reordering multiple marker-bearing session tags", () => {
+  it("rejects reordering multiple marker-bearing session tags", async () => {
     const { storage, cleanup } = createStorage();
     try {
       const deps = createDeps(storage);
-      const created = createChatSession(deps, {
+      const created = await createChatSession(deps, {
         workspaceId: "default",
         tags: ["Bearer first-secret prod", "Bearer second-secret staging"],
       });
       const displayed = projectChatSessionForPublic(created);
 
-      expect(() =>
+      await expect(
         updateChatSession(deps, created.sessionId, {
           tags: [displayed.tags?.[1] ?? "", displayed.tags?.[0] ?? ""],
         }),
-      ).toThrow("Projected session tags with hidden values cannot be reordered or resized.");
+      ).rejects.toThrow("Projected session tags with hidden values cannot be reordered or resized.");
       expect(storage.chatSessionMeta.get(created.sessionId)?.tags).toEqual([
         "Bearer first-secret prod",
         "Bearer second-secret staging",
@@ -425,11 +431,11 @@ describe("chat session service", () => {
     }
   });
 
-  it("rejects ambiguous reordering of repeated scalar metadata secret slots", () => {
+  it("rejects ambiguous reordering of repeated scalar metadata secret slots", async () => {
     const { storage, cleanup } = createStorage();
     try {
       const deps = createDeps(storage);
-      const created = createChatSession(deps, {
+      const created = await createChatSession(deps, {
         workspaceId: "default",
         title: "password=title-first alpha; password=title-second beta",
         folderName: "Bearer folder-first alpha; Bearer folder-second beta",
@@ -438,30 +444,34 @@ describe("chat session service", () => {
 
       expect(displayed.title).toBe("password=[REDACTED] alpha; password=[REDACTED] beta");
       expect(displayed.folderName).toBe("Bearer [REDACTED] alpha; Bearer [REDACTED] beta");
-      const roundTripped = updateChatSession(deps, created.sessionId, {
+      const roundTripped = await updateChatSession(deps, created.sessionId, {
         title: displayed.title,
         folderName: displayed.folderName,
       });
       expect(roundTripped.title).toBe("password=title-first alpha; password=title-second beta");
       expect(roundTripped.folderName).toBe("Bearer folder-first alpha; Bearer folder-second beta");
-      expect(() =>
+      await expect(
         updateChatSession(deps, created.sessionId, {
           title: "password=[REDACTED] beta; password=[REDACTED] alpha",
         }),
-      ).toThrow("Projected session metadata with repeated credential slots cannot be reordered or edited in place.");
+      ).rejects.toThrow(
+        "Projected session metadata with repeated credential slots cannot be reordered or edited in place.",
+      );
       expect(storage.chatSessionMeta.get(created.sessionId)?.title).toBe(
         "password=title-first alpha; password=title-second beta",
       );
-      expect(() =>
+      await expect(
         updateChatSession(deps, created.sessionId, {
           folderName: "Bearer [REDACTED] beta; Bearer [REDACTED] alpha",
         }),
-      ).toThrow("Projected session metadata with repeated credential slots cannot be reordered or edited in place.");
+      ).rejects.toThrow(
+        "Projected session metadata with repeated credential slots cannot be reordered or edited in place.",
+      );
       expect(storage.chatSessionMeta.get(created.sessionId)?.folderName).toBe(
         "Bearer folder-first alpha; Bearer folder-second beta",
       );
 
-      const replaced = updateChatSession(deps, created.sessionId, {
+      const replaced = await updateChatSession(deps, created.sessionId, {
         title: "Safe replacement title",
         folderName: "Safe replacement folder",
       });
@@ -472,7 +482,7 @@ describe("chat session service", () => {
     }
   });
 
-  it("creates one hidden durable side chat per parent session", () => {
+  it("creates one hidden durable side chat per parent session", async () => {
     const { storage, cleanup } = createStorage();
     try {
       const deps = createDeps(storage);
@@ -481,14 +491,14 @@ describe("chat session service", () => {
         name: "Launch Project",
         workspacePath: "apps/gateway",
       });
-      const parent = createChatSession(deps, {
+      const parent = await createChatSession(deps, {
         workspaceId: "default",
         projectId: project.projectId,
         title: "Parent Launch Room",
         mode: "cowork",
       });
 
-      const created = createChatSideChat(deps, parent.sessionId, {
+      const created = await createChatSideChat(deps, parent.sessionId, {
         createdFromSurface: "code",
         sourceTurnId: "turn-1",
       });
@@ -507,18 +517,20 @@ describe("chat session service", () => {
         projectId: project.projectId,
       });
       expect(
-        listChatSessions(deps, {
-          workspaceId: "default",
-          scope: "all",
-          view: "active",
-          includeHidden: false,
-        }).map((session) => session.sessionId),
+        (
+          await listChatSessions(deps, {
+            workspaceId: "default",
+            scope: "all",
+            view: "active",
+            includeHidden: false,
+          })
+        ).map((session) => session.sessionId),
       ).not.toContain(created.childSession.sessionId);
 
-      const reused = createChatSideChat(deps, parent.sessionId, { createdFromSurface: "chat" });
+      const reused = await createChatSideChat(deps, parent.sessionId, { createdFromSurface: "chat" });
       expect(reused.item.sideChatId).toBe(created.item.sideChatId);
       expect(reused.childSession.sessionId).toBe(created.childSession.sessionId);
-      expect(getChatSideChat(deps, parent.sessionId)).toMatchObject({
+      await expect(getChatSideChat(deps, parent.sessionId)).resolves.toMatchObject({
         item: { sideChatId: created.item.sideChatId },
         childSession: { sessionId: created.childSession.sessionId },
       });
@@ -536,12 +548,12 @@ describe("chat session service", () => {
     }
   });
 
-  it("creates, updates, titles, pins, archives, restores, and patches prefs with realtime evidence", () => {
+  it("creates, updates, titles, pins, archives, restores, and patches prefs with realtime evidence", async () => {
     const { storage, cleanup } = createStorage();
     try {
       const deps = createDeps(storage);
 
-      const created = createChatSession(deps, {
+      const created = await createChatSession(deps, {
         workspaceId: "default",
         title: "  Launch Room  ",
         includeInHistory: false,
@@ -561,7 +573,7 @@ describe("chat session service", () => {
       expect(deps.ensureChatSessionRuntimeGrants).toHaveBeenCalledWith(created.sessionId);
       expect(deps.operatorSummaryCache.invalidate).toHaveBeenCalled();
 
-      const renamed = updateChatSession(deps, created.sessionId, {
+      const renamed = await updateChatSession(deps, created.sessionId, {
         title: "Launch Review",
         folderId: "reviews",
         folderName: "Reviews",
@@ -574,33 +586,35 @@ describe("chat session service", () => {
         tags: ["qa"],
       });
       expect(
-        listChatSessions(deps, {
-          workspaceId: "default",
-          scope: "all",
-          view: "all",
-          includeHidden: true,
-          folderId: "reviews",
-          tag: "QA",
-        }).map((record) => record.sessionId),
+        (
+          await listChatSessions(deps, {
+            workspaceId: "default",
+            scope: "all",
+            view: "all",
+            includeHidden: true,
+            folderId: "reviews",
+            tag: "QA",
+          })
+        ).map((record) => record.sessionId),
       ).toEqual([created.sessionId]);
 
-      maybeAutoTitleChatSession(deps, created.sessionId, "This should not replace the explicit title");
+      await maybeAutoTitleChatSession(deps, created.sessionId, "This should not replace the explicit title");
       expect(storage.chatSessionMeta.get(created.sessionId)?.title).toBe("Launch Review");
 
-      const untitled = createChatSession(deps, { workspaceId: "default" });
-      maybeAutoTitleChatSession(deps, untitled.sessionId, "\n\n# Root cause writeup\nDetails");
+      const untitled = await createChatSession(deps, { workspaceId: "default" });
+      await maybeAutoTitleChatSession(deps, untitled.sessionId, "\n\n# Root cause writeup\nDetails");
       expect(storage.chatSessionMeta.get(untitled.sessionId)?.title).toBe("Root cause writeup");
-      const blankTitle = createChatSession(deps, { workspaceId: "default" });
-      maybeAutoTitleChatSession(deps, blankTitle.sessionId, "\n\n#   \n>   ");
+      const blankTitle = await createChatSession(deps, { workspaceId: "default" });
+      await maybeAutoTitleChatSession(deps, blankTitle.sessionId, "\n\n#   \n>   ");
       expect(storage.chatSessionMeta.get(blankTitle.sessionId)?.title).toBeUndefined();
 
-      expect(pinChatSession(deps, created.sessionId).pinned).toBe(true);
-      expect(unpinChatSession(deps, created.sessionId).pinned).toBe(false);
-      expect(archiveChatSession(deps, created.sessionId).lifecycleStatus).toBe("archived");
-      expect(restoreChatSession(deps, created.sessionId).lifecycleStatus).toBe("active");
+      expect((await pinChatSession(deps, created.sessionId)).pinned).toBe(true);
+      expect((await unpinChatSession(deps, created.sessionId)).pinned).toBe(false);
+      expect((await archiveChatSession(deps, created.sessionId)).lifecycleStatus).toBe("archived");
+      expect((await restoreChatSession(deps, created.sessionId)).lifecycleStatus).toBe("active");
 
       const prefsRevisionBefore = storage.chatSessionRevisions.get(created.sessionId)?.revision;
-      const prefs = updateChatSessionPrefs(deps, created.sessionId, {
+      const prefs = await updateChatSessionPrefs(deps, created.sessionId, {
         mode: "code",
         providerId: "openai",
         model: "gpt-5",
@@ -617,7 +631,7 @@ describe("chat session service", () => {
         providerId: "openai",
         model: "gpt-5",
       });
-      expect(getChatSessionPrefs(deps, created.sessionId)).toMatchObject({
+      await expect(getChatSessionPrefs(deps, created.sessionId)).resolves.toMatchObject({
         mode: "chat",
         providerId: "openai",
         model: "gpt-5",
@@ -643,11 +657,11 @@ describe("chat session service", () => {
     }
   });
 
-  it("assigns projects, resets stale workbench state, and validates session bindings", () => {
+  it("assigns projects, resets stale workbench state, and validates session bindings", async () => {
     const { storage, cleanup } = createStorage();
     try {
       const deps = createDeps(storage);
-      const session = createChatSession(deps, { workspaceId: "default", title: "Code Room" });
+      const session = await createChatSession(deps, { workspaceId: "default", title: "Code Room" });
       const project = storage.chatProjects.create({
         workspaceId: "default",
         name: "Gateway",
@@ -658,27 +672,29 @@ describe("chat session service", () => {
         name: "Other",
         workspacePath: "other",
       });
-      const createdWithProject = createChatSession(deps, {
+      const createdWithProject = await createChatSession(deps, {
         workspaceId: "default",
         title: "Project at birth",
         projectId: project.projectId,
       });
       expect(createdWithProject.projectId).toBe(project.projectId);
       expect(
-        listChatSessions(deps, {
-          workspaceId: "default",
-          scope: "all",
-          view: "all",
-          projectId: project.projectId,
-        }).map((record) => record.sessionId),
+        (
+          await listChatSessions(deps, {
+            workspaceId: "default",
+            scope: "all",
+            view: "all",
+            projectId: project.projectId,
+          })
+        ).map((record) => record.sessionId),
       ).toContain(createdWithProject.sessionId);
-      expect(() =>
+      await expect(
         createChatSession(deps, {
           workspaceId: "default",
           title: "Wrong project",
           projectId: otherWorkspaceProject.projectId,
         }),
-      ).toThrow("project workspace does not match requested session workspace");
+      ).rejects.toThrow("project workspace does not match requested session workspace");
       storage.chatSessionWorkbench.patch(session.sessionId, {
         baseRef: "main",
         worktreePath: "tmp/worktree",
@@ -702,7 +718,7 @@ describe("chat session service", () => {
         updatedAt: NOW,
       });
 
-      const assigned = assignChatSessionProject(deps, session.sessionId, project.projectId);
+      const assigned = await assignChatSessionProject(deps, session.sessionId, project.projectId);
 
       expect(assigned.projectId).toBe(project.projectId);
       expect(storage.chatGeneratedArtifacts.get("artifact-before-project").projectId).toBe(project.projectId);
@@ -712,24 +728,24 @@ describe("chat session service", () => {
         validationStatus: "idle",
       });
       expect(storage.chatSessionWorkbench.get(session.sessionId)?.baseRef).toBeUndefined();
-      expect(() => assignChatSessionProject(deps, session.sessionId, otherWorkspaceProject.projectId)).toThrow(
+      await expect(assignChatSessionProject(deps, session.sessionId, otherWorkspaceProject.projectId)).rejects.toThrow(
         "project workspace does not match session workspace",
       );
 
-      const unassigned = assignChatSessionProject(deps, session.sessionId);
+      const unassigned = await assignChatSessionProject(deps, session.sessionId);
       expect(unassigned.projectId).toBeUndefined();
       expect(storage.chatGeneratedArtifacts.get("artifact-before-project").projectId).toBeUndefined();
       expect(storage.chatSessionWorkbench.get(session.sessionId)?.projectId).toBeUndefined();
 
-      expect(getChatSessionBinding(deps, session.sessionId)).toMatchObject({ transport: "llm" });
-      expect(() =>
+      await expect(getChatSessionBinding(deps, session.sessionId)).resolves.toMatchObject({ transport: "llm" });
+      await expect(
         setChatSessionBinding(deps, {
           sessionId: session.sessionId,
           transport: "integration",
         }),
-      ).toThrow("connectionId and target are required");
+      ).rejects.toThrow("connectionId and target are required");
 
-      const llmBinding = setChatSessionBinding(deps, {
+      const llmBinding = await setChatSessionBinding(deps, {
         sessionId: session.sessionId,
         transport: "llm",
         target: "  local  ",
@@ -747,7 +763,7 @@ describe("chat session service", () => {
         label: "Ops Slack",
         config: {},
       });
-      expect(
+      await expect(
         setChatSessionBinding(deps, {
           sessionId: session.sessionId,
           transport: "integration",
@@ -755,7 +771,7 @@ describe("chat session service", () => {
           target: "  #ops  ",
           writable: true,
         }),
-      ).toMatchObject({
+      ).resolves.toMatchObject({
         transport: "integration",
         connectionId: connection.connectionId,
         target: "#ops",
@@ -779,9 +795,9 @@ describe("chat session service", () => {
     const { storage, cleanup } = createStorage();
     try {
       const deps = createDeps(storage);
-      const keep = createChatSession(deps, { workspaceId: "default", title: "Keep" });
-      const fail = createChatSession(deps, { workspaceId: "default", title: "Fail" });
-      createChatSession(deps, { workspaceId: "default", title: "Hidden", includeInHistory: false });
+      const keep = await createChatSession(deps, { workspaceId: "default", title: "Keep" });
+      const fail = await createChatSession(deps, { workspaceId: "default", title: "Fail" });
+      await createChatSession(deps, { workspaceId: "default", title: "Hidden", includeInHistory: false });
       const originalGetSession = deps.getSession;
       deps.getSession = vi.fn((sessionId: string) => {
         if (sessionId === fail.sessionId) {
@@ -813,7 +829,7 @@ describe("chat session service", () => {
     const { storage, cleanup } = createStorage();
     try {
       const deps = createDeps(storage);
-      const session = createChatSession(deps, { workspaceId: "default", title: "Delete me" });
+      const session = await createChatSession(deps, { workspaceId: "default", title: "Delete me" });
       const deleteSpy = vi.spyOn(storage, "deleteChatSessionTreeWithRevision").mockReturnValue([
         {
           sessionId: session.sessionId,
@@ -856,7 +872,7 @@ describe("chat session service", () => {
     try {
       const deps = createDeps(storage);
       deps.getSession = vi.fn(deps.getSession);
-      const session = createChatSession(deps, { workspaceId: "default", title: "Delete replay" });
+      const session = await createChatSession(deps, { workspaceId: "default", title: "Delete replay" });
       const expectedRevision = session.revision;
 
       await expect(deleteChatSession(deps, session.sessionId, expectedRevision)).resolves.toEqual({
@@ -905,21 +921,21 @@ describe("chat session service", () => {
     }
   });
 
-  it("searches metadata and message content with scored snippets", () => {
+  it("searches metadata and message content with scored snippets", async () => {
     const { storage, cleanup } = createStorage();
     try {
       const deps = createDeps(storage);
-      const searchSession = createChatSession(deps, {
+      const searchSession = await createChatSession(deps, {
         workspaceId: "default",
         title: "Diagnostics",
         tags: ["routing"],
       });
-      const metadataSession = createChatSession(deps, {
+      const metadataSession = await createChatSession(deps, {
         workspaceId: "default",
         title: "Infra Notebook",
         tags: ["ops"],
       });
-      const ignoredSession = createChatSession(deps, {
+      const ignoredSession = await createChatSession(deps, {
         workspaceId: "default",
         title: "Design",
       });
@@ -962,7 +978,7 @@ describe("chat session service", () => {
         },
       ]);
 
-      const contentMatches = listChatSessions(deps, {
+      const contentMatches = await listChatSessions(deps, {
         workspaceId: "default",
         scope: "all",
         view: "all",
@@ -977,7 +993,7 @@ describe("chat session service", () => {
         matchedText: "preflight",
       });
 
-      const metadataMatches = listChatSessions(deps, {
+      const metadataMatches = await listChatSessions(deps, {
         workspaceId: "default",
         scope: "all",
         view: "all",
@@ -986,7 +1002,7 @@ describe("chat session service", () => {
       expect(metadataMatches.map((record) => record.sessionId)).toEqual([metadataSession.sessionId]);
       expect(metadataMatches[0]?.searchHits).toEqual([]);
 
-      const noLlmSearch = searchChatSessions(deps, {
+      const noLlmSearch = await searchChatSessions(deps, {
         query: "preflight",
         mode: "discovery",
         workspaceId: "default",
@@ -1015,7 +1031,7 @@ describe("chat session service", () => {
     }
   });
 
-  it("includes delegation parent metadata for delegated child sessions", () => {
+  it("includes delegation parent metadata for delegated child sessions", async () => {
     const { storage, cleanup } = createStorage();
     try {
       storage.sessions.upsert({
@@ -1064,7 +1080,7 @@ describe("chat session service", () => {
         startedAt: "2026-05-03T16:01:00.000Z",
       });
 
-      const records = listChatSessions(createDeps(storage), {
+      const records = await listChatSessions(createDeps(storage), {
         scope: "all",
         view: "all",
         workspaceId: "default",
@@ -1084,7 +1100,7 @@ describe("chat session service", () => {
     }
   });
 
-  it("does not reclassify other-workspace or missing-meta sessions into the requested workspace", () => {
+  it("does not reclassify other-workspace or missing-meta sessions into the requested workspace", async () => {
     const { storage, cleanup } = createStorage();
     try {
       storage.sessions.upsert({
@@ -1117,7 +1133,7 @@ describe("chat session service", () => {
       storage.chatSessionMeta.ensure("default-session", NOW, "default");
       storage.chatSessionMeta.ensure("other-session", NOW, "other");
 
-      const records = listChatSessions(createDeps(storage), {
+      const records = await listChatSessions(createDeps(storage), {
         scope: "all",
         view: "all",
         workspaceId: "default",
@@ -1131,7 +1147,7 @@ describe("chat session service", () => {
     }
   });
 
-  it("continues paginating after an older pinned session without dropping newer unpinned sessions", () => {
+  it("continues paginating after an older pinned session without dropping newer unpinned sessions", async () => {
     const { storage, cleanup } = createStorage();
     try {
       storage.sessions.upsert({
@@ -1168,7 +1184,7 @@ describe("chat session service", () => {
       storage.chatSessionMeta.patch("session-pinned", { pinned: true }, "2026-05-03T13:01:00.000Z");
 
       const deps = createDeps(storage);
-      const first = listChatSessions(deps, {
+      const first = await listChatSessions(deps, {
         scope: "all",
         view: "all",
         includeHidden: true,
@@ -1177,7 +1193,7 @@ describe("chat session service", () => {
       });
       expect(first.map((record) => record.sessionId)).toEqual(["session-pinned"]);
 
-      const second = listChatSessions(deps, {
+      const second = await listChatSessions(deps, {
         scope: "all",
         view: "all",
         includeHidden: true,
@@ -1191,7 +1207,7 @@ describe("chat session service", () => {
     }
   });
 
-  it("uses caller limits and batch prefs lookup for unfiltered session lists", () => {
+  it("uses caller limits and batch prefs lookup for unfiltered session lists", async () => {
     const { storage, cleanup } = createStorage();
     try {
       for (let index = 0; index < 5; index += 1) {
@@ -1215,7 +1231,7 @@ describe("chat session service", () => {
       const generatedArtifactsSpy = vi.spyOn(storage.chatGeneratedArtifacts, "listBySessionIds");
       const delegationParentsSpy = vi.spyOn(storage.chatDelegationSteps, "listParentsByChildSessionIds");
 
-      const records = listChatSessions(createDeps(storage), {
+      const records = await listChatSessions(createDeps(storage), {
         scope: "all",
         view: "all",
         includeHidden: true,

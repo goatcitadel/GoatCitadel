@@ -145,8 +145,8 @@ export async function runAgentTurnCronJob(input: {
     token: CronRunExecutionToken,
     linkage: CronRunLinkage,
     attachedAt: string,
-  ) => CronRunRecord | undefined;
-  publishRealtime: (eventType: string, source: string, payload?: Record<string, unknown>) => void;
+  ) => CronRunRecord | undefined | Promise<CronRunRecord | undefined>;
+  publishRealtime: (eventType: string, source: string, payload?: Record<string, unknown>) => Promise<unknown>;
 }): Promise<Record<string, unknown>> {
   if (
     input.cronRun.runId !== input.runId ||
@@ -170,7 +170,7 @@ export async function runAgentTurnCronJob(input: {
   let attached: CronRunRecord | undefined;
   if (outcome.mode === "agent_turn") {
     const linkage = requireDeterministicAgentTurnLinkage(input.cronRun, outcome);
-    attached = input.attachDeterministicChild(input.cronRun, linkage, attachedAt);
+    attached = await input.attachDeterministicChild(input.cronRun, linkage, attachedAt);
     if (!attached) {
       throw new Error(
         `Cron run ${input.cronRun.runId} lost execution ownership before deterministic child attachment.`,
@@ -193,7 +193,7 @@ export async function runAgentTurnCronJob(input: {
     ...(outcome.profilePosture ? { profilePosture: outcome.profilePosture } : {}),
     ...(outcome.profileWarning ? { profileWarning: outcome.profileWarning, cronReviewWarning: true } : {}),
   };
-  input.publishRealtime("cron_job_run", "cron", {
+  await input.publishRealtime("cron_job_run", "cron", {
     type: outcome.mode === "agent_turn" ? "cron_agent_turn_admitted" : "scheduled_task_created",
     jobId: input.job.jobId,
     name: input.job.name,

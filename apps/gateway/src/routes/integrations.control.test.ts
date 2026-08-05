@@ -40,8 +40,8 @@ describe("integrations control routes", () => {
 
   it("projects list and create connection responses without mutating raw service records", async () => {
     const rawConnection = createSecretBearingConnection(connectionId);
-    const listIntegrationConnections = vi.fn(() => [rawConnection]);
-    const createIntegrationConnection = vi.fn((input: { config?: Record<string, unknown> }) => ({
+    const listIntegrationConnections = vi.fn(async () => [rawConnection]);
+    const createIntegrationConnection = vi.fn(async (input: { config?: Record<string, unknown> }) => ({
       ...rawConnection,
       config: input.config ?? {},
     }));

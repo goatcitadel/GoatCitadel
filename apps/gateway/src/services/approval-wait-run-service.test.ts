@@ -56,11 +56,11 @@ describe("ApprovalWaitRunService", () => {
     });
   });
 
-  it("creates and links a durable approval wait run outside GatewayService", () => {
+  it("creates and links a durable approval wait run outside GatewayService", async () => {
     const harness = createHarness();
     const approval = createApproval();
 
-    const run = harness.service.ensureApprovalWaitDurableRun(approval);
+    const run = await harness.service.ensureApprovalWaitDurableRun(approval);
 
     expect(run?.runId).toBe("run-1");
     expect(harness.createdRuns).toHaveLength(1);
@@ -78,18 +78,18 @@ describe("ApprovalWaitRunService", () => {
     expect(harness.approvalWaitRuns.getRunId("approval-1")).toBe("run-1");
   });
 
-  it("creates the durable run with the transactionally reserved run id", () => {
+  it("creates the durable run with the transactionally reserved run id", async () => {
     const harness = createHarness();
-    const reserved = harness.service.reserveApprovalWaitRun(createApproval());
+    const reserved = await harness.service.reserveApprovalWaitRun(createApproval());
 
-    const run = harness.service.ensureApprovalWaitDurableRun(reserved);
+    const run = await harness.service.ensureApprovalWaitDurableRun(reserved);
 
     expect(reserved.linkage?.durableRunId).toBeTruthy();
     expect(run?.runId).toBe(reserved.linkage?.durableRunId);
     expect(harness.createdRuns[0]).toMatchObject({ runId: reserved.linkage?.durableRunId });
   });
 
-  it("primes approval lifecycle by attaching linkage and durable run id", () => {
+  it("primes approval lifecycle by attaching linkage and durable run id", async () => {
     const harness = createHarness({
       attribution: {
         correlationId: "corr-2",
@@ -97,7 +97,7 @@ describe("ApprovalWaitRunService", () => {
       },
     });
 
-    const approval = harness.service.primeApprovalLifecycle("approval-1", {
+    const approval = await harness.service.primeApprovalLifecycle("approval-1", {
       sessionId: "session-1",
       workspaceId: "workspace-1",
     });
@@ -124,15 +124,15 @@ function createHarness(
       approvals,
       approvalWaitRuns,
     },
-    isFeatureEnabled: vi.fn((flag: string) => flag === "durableKernelV1Enabled"),
-    publishRealtime: vi.fn(),
+    isFeatureEnabled: vi.fn(async (flag: string) => flag === "durableKernelV1Enabled"),
+    publishRealtime: vi.fn(async () => undefined),
   } as unknown as ServiceContext;
   const service = new ApprovalWaitRunService(ctx, {
-    createDurableRun: (input) => {
+    createDurableRun: async (input) => {
       createdRuns.push(input);
       return createDurableRunRecord(input.runId ?? `run-${createdRuns.length}`);
     },
-    getDurableRun: (runId) => {
+    getDurableRun: async (runId) => {
       if (!createdRuns.some((input) => input.runId === runId)) {
         throw new NotFoundError({ entity: "Durable run", id: runId });
       }

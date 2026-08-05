@@ -45,45 +45,45 @@ describe("improvement-tune-reads: key/name contract", () => {
 });
 
 describe("improvement-tune-reads: safe defaults preserve current behaviour", () => {
-  it("returns the safe default when the store is undefined", () => {
-    expect(readBlockerTemplateStrictness(undefined)).toBe(1);
-    expect(readRetryRepairThreshold(undefined)).toBe(1);
-    expect(readLiveIntentThreshold(undefined)).toBe(0.6);
+  it("returns the safe default when the store is undefined", async () => {
+    await expect(readBlockerTemplateStrictness(undefined)).resolves.toBe(1);
+    await expect(readRetryRepairThreshold(undefined)).resolves.toBe(1);
+    await expect(readLiveIntentThreshold(undefined)).resolves.toBe(0.6);
   });
 
-  it("returns the safe default when the key is unset", () => {
+  it("returns the safe default when the key is unset", async () => {
     const settings = settingsWith({});
-    expect(readBlockerTemplateStrictness(settings)).toBe(1);
-    expect(readRetryRepairThreshold(settings)).toBe(1);
-    expect(readLiveIntentThreshold(settings)).toBe(0.6);
+    await expect(readBlockerTemplateStrictness(settings)).resolves.toBe(1);
+    await expect(readRetryRepairThreshold(settings)).resolves.toBe(1);
+    await expect(readLiveIntentThreshold(settings)).resolves.toBe(0.6);
   });
 
-  it("ignores non-numeric / non-finite stored values and falls back to the default", () => {
+  it("ignores non-numeric / non-finite stored values and falls back to the default", async () => {
     const settings = settingsWith({
       [IMPROVEMENT_TUNE_SETTING_KEYS.blockerTemplate]: "loud",
       [IMPROVEMENT_TUNE_SETTING_KEYS.retryThreshold]: null,
       [IMPROVEMENT_TUNE_SETTING_KEYS.liveIntentThreshold]: Number.NaN,
     });
-    expect(readBlockerTemplateStrictness(settings)).toBe(1);
-    expect(readRetryRepairThreshold(settings)).toBe(1);
-    expect(readLiveIntentThreshold(settings)).toBe(0.6);
+    await expect(readBlockerTemplateStrictness(settings)).resolves.toBe(1);
+    await expect(readRetryRepairThreshold(settings)).resolves.toBe(1);
+    await expect(readLiveIntentThreshold(settings)).resolves.toBe(0.6);
   });
 });
 
 describe("improvement-tune-reads: reads the tuned value", () => {
-  it("reads an applied blocker-template strictness", () => {
+  it("reads an applied blocker-template strictness", async () => {
     const settings = settingsWith({ [IMPROVEMENT_TUNE_SETTING_KEYS.blockerTemplate]: 4 });
-    expect(readBlockerTemplateStrictness(settings)).toBe(4);
+    await expect(readBlockerTemplateStrictness(settings)).resolves.toBe(4);
   });
 
-  it("reads an applied (lowered) retry threshold", () => {
+  it("reads an applied (lowered) retry threshold", async () => {
     const settings = settingsWith({ [IMPROVEMENT_TUNE_SETTING_KEYS.retryThreshold]: 0 });
-    expect(readRetryRepairThreshold(settings)).toBe(0);
+    await expect(readRetryRepairThreshold(settings)).resolves.toBe(0);
   });
 
-  it("reads an applied (raised) live-intent threshold", () => {
+  it("reads an applied (raised) live-intent threshold", async () => {
     const settings = settingsWith({ [IMPROVEMENT_TUNE_SETTING_KEYS.liveIntentThreshold]: 0.85 });
-    expect(readLiveIntentThreshold(settings)).toBe(0.85);
+    await expect(readLiveIntentThreshold(settings)).resolves.toBe(0.85);
   });
 });
 

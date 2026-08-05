@@ -1,4 +1,3 @@
-import { PersonalOpsStorageRepository } from "@goatcitadel/storage";
 import { createAddonsRoutePort } from "./addons-route-service.js";
 import { createCostsRoutePort } from "./costs-route-service.js";
 import { createPersonalOpsRouteService } from "./personal-ops-route-service.js";
@@ -60,9 +59,7 @@ export function composeSystemRouteDependencies(
       storage: gateway.storage,
     }),
     media: gateway.mediaVoiceService,
-    personalOps: createPersonalOpsRouteService(
-      new PersonalOpsService(new PersonalOpsStorageRepository(gateway.storage.db)),
-    ),
+    personalOps: createPersonalOpsRouteService(new PersonalOpsService(gateway.storage.personalOps)),
     settings: {
       createPersonality: (input) => gateway.personalityCatalogService.createPersonality(input),
       deletePersonality: (id) => gateway.personalityCatalogService.deletePersonality(id),
@@ -71,7 +68,7 @@ export function composeSystemRouteDependencies(
         return settingsAuthService.getAuthRuntimeSettings(settingsRuntimeDeps);
       },
       getPersonalityCatalog: () => gateway.personalityCatalogService.getCatalog(),
-      getSettings: () => settingsAuthService.getSettings(settingsRuntimeDeps),
+      getSettings: async () => await settingsAuthService.getSettings(settingsRuntimeDeps),
       setDefaultPersonality: (id) => gateway.personalityCatalogService.setDefaultPersonality(id),
       updatePersonality: (id, input) => gateway.personalityCatalogService.updatePersonality(id, input),
       updateSettings: (input) => gateway.updateSettings(input),

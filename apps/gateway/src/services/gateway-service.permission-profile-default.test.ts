@@ -79,13 +79,13 @@ function createGatewayHarness(config: {
 }
 
 describe("GatewayService resolveToolPolicyContext default permission profile", () => {
-  it("defaults a local + bypass operator to trusted_local_power (honors approvalMode)", () => {
+  it("defaults a local + bypass operator to trusted_local_power (honors approvalMode)", async () => {
     const { gateway, resolveContext } = createGatewayHarness({
       deploymentProfile: "local_dev",
       approvalMode: "bypass",
     });
 
-    const context = gateway.resolveToolPolicyContext({ surface: "cowork" });
+    const context = await gateway.resolveToolPolicyContext({ surface: "cowork" });
 
     expect(resolveContext).toHaveBeenCalledTimes(1);
     expect(resolveContext.mock.calls[0][0].defaultProfileId).toBe("trusted_local_power");
@@ -93,7 +93,7 @@ describe("GatewayService resolveToolPolicyContext default permission profile", (
     expect(context.permissionProfile.approvalMode).toBe("bypass");
   });
 
-  it("keeps the restrictive 'safe' default on remote_hardened even when approvalMode is bypass", () => {
+  it("keeps the restrictive 'safe' default on remote_hardened even when approvalMode is bypass", async () => {
     const { gateway, resolveContext } = createGatewayHarness({
       deploymentProfile: "remote_hardened",
       approvalMode: "bypass",
@@ -101,71 +101,71 @@ describe("GatewayService resolveToolPolicyContext default permission profile", (
 
     // Must not throw: the default stays "safe" (approve_all), so the existing
     // remote_hardened bypass guard is never tripped by our own default.
-    const context = gateway.resolveToolPolicyContext({ surface: "cowork" });
+    const context = await gateway.resolveToolPolicyContext({ surface: "cowork" });
 
     expect(resolveContext.mock.calls[0][0].defaultProfileId).toBe("safe");
     expect(context.permissionProfileId).toBe("safe");
   });
 
-  it("keeps the 'safe' default for a local operator who did not opt into bypass", () => {
+  it("keeps the 'safe' default for a local operator who did not opt into bypass", async () => {
     const { gateway, resolveContext } = createGatewayHarness({
       deploymentProfile: "local_dev",
       approvalMode: "approve_risky",
     });
 
-    gateway.resolveToolPolicyContext({ surface: "cowork" });
+    await gateway.resolveToolPolicyContext({ surface: "cowork" });
 
     expect(resolveContext.mock.calls[0][0].defaultProfileId).toBe("safe");
   });
 
-  it("also defaults the trusted_local deployment profile to trusted_local_power under bypass", () => {
+  it("also defaults the trusted_local deployment profile to trusted_local_power under bypass", async () => {
     const { gateway, resolveContext } = createGatewayHarness({
       deploymentProfile: "trusted_local",
       approvalMode: "bypass",
     });
 
-    gateway.resolveToolPolicyContext({ surface: "cowork" });
+    await gateway.resolveToolPolicyContext({ surface: "cowork" });
 
     // The condition is "non-hardened + bypass", so trusted_local must behave like
     // local_dev here — guards against a future narrowing to only local_dev.
     expect(resolveContext.mock.calls[0][0].defaultProfileId).toBe("trusted_local_power");
   });
 
-  it("keeps the 'safe' default for a local operator on approve_all", () => {
+  it("keeps the 'safe' default for a local operator on approve_all", async () => {
     const { gateway, resolveContext } = createGatewayHarness({
       deploymentProfile: "local_dev",
       approvalMode: "approve_all",
     });
 
-    gateway.resolveToolPolicyContext({ surface: "cowork" });
+    await gateway.resolveToolPolicyContext({ surface: "cowork" });
 
     expect(resolveContext.mock.calls[0][0].defaultProfileId).toBe("safe");
   });
 
-  it("rejects explicit request selection of the powerful global trusted profile", () => {
+  it("rejects explicit request selection of the powerful global trusted profile", async () => {
     const { gateway, resolveContext } = createGatewayHarness({
       deploymentProfile: "local_dev",
       approvalMode: "approve_all",
     });
 
-    expect(() =>
+    await expect(
       gateway.resolveToolPolicyContext({
         operatorId: "operator-1",
         workspaceId: "workspace-1",
         surface: "tools",
         permissionProfileId: "trusted_local_power",
       }),
-    ).toThrow(/cannot be selected directly by request/i);
+    ).rejects.toThrow(/cannot be selected directly by request/i);
     expect(resolveContext).not.toHaveBeenCalled();
   });
 
-  it("allows explicit scoped custom profiles only for their owner scope", () => {
+  it("allows explicit scoped custom profiles only for their owner scope", async () => {
     const { gateway, resolveContext } = createGatewayHarness({
       deploymentProfile: "local_dev",
       approvalMode: "approve_all",
     });
 
-    gateway.resolveToolPolicyContext({
+    await gateway.resolveToolPolicyContext({
       operatorId: "operator-1",
       workspaceId: "workspace-1",
       surface: "tools",
@@ -173,23 +173,23 @@ describe("GatewayService resolveToolPolicyContext default permission profile", (
     });
 
     expect(resolveContext.mock.calls[0][0].profileId).toBe("operator-profile");
-    expect(() =>
+    await expect(
       gateway.resolveToolPolicyContext({
         operatorId: "operator-2",
         workspaceId: "workspace-1",
         surface: "tools",
         permissionProfileId: "operator-profile",
       }),
-    ).toThrow(/not selectable/i);
+    ).rejects.toThrow(/not selectable/i);
   });
 
-  it("allows system-owned restricted autonomous profiles without making them user-selectable", () => {
+  it("allows system-owned restricted autonomous profiles without making them user-selectable", async () => {
     const { gateway, resolveContext } = createGatewayHarness({
       deploymentProfile: "local_dev",
       approvalMode: "approve_all",
     });
 
-    gateway.resolveToolPolicyContext({
+    await gateway.resolveToolPolicyContext({
       operatorId: "system-cron",
       authActorId: "system-cron",
       authActorSource: "none",
@@ -199,7 +199,7 @@ describe("GatewayService resolveToolPolicyContext default permission profile", (
     });
 
     expect(resolveContext.mock.calls[0][0].profileId).toBe(SCHEDULED_TURN_PERMISSION_PROFILE_ID);
-    expect(() =>
+    await expect(
       gateway.resolveToolPolicyContext({
         operatorId: "operator-1",
         authActorId: "operator-1",
@@ -208,6 +208,6 @@ describe("GatewayService resolveToolPolicyContext default permission profile", (
         surface: "tools",
         permissionProfileId: HEARTBEAT_PERMISSION_PROFILE_ID,
       }),
-    ).toThrow(/cannot be selected directly by request/i);
+    ).rejects.toThrow(/cannot be selected directly by request/i);
   });
 });

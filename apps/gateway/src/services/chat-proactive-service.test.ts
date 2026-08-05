@@ -242,7 +242,7 @@ describe("ChatProactiveService", () => {
     expect(harness.state.durableRuns.size).toBe(1);
   });
 
-  it("finds approval-linked durable runs in latest-started order without duplicate ids", () => {
+  it("finds approval-linked durable runs in latest-started order without duplicate ids", async () => {
     const { service, state } = createHarness();
     state.proactiveRuns.set(
       "run-old",
@@ -281,10 +281,10 @@ describe("ChatProactiveService", () => {
       }),
     );
 
-    expect(service.findDurableRunIdsForApproval("approval-1")).toEqual(["durable-new", "durable-old"]);
+    expect(await service.findDurableRunIdsForApproval("approval-1")).toEqual(["durable-new", "durable-old"]);
   });
 
-  it("patchProactiveRun performs the read-modify-write atomically (no lost update on concurrent resume)", () => {
+  it("patchProactiveRun performs the read-modify-write atomically (no lost update on concurrent resume)", async () => {
     const harness = createHarness();
     const { service, state } = harness;
     state.proactiveRuns.set(
@@ -299,25 +299,21 @@ describe("ChatProactiveService", () => {
 
     const patch = (
       service as unknown as {
-        patchProactiveRun: (runId: string, patch: Partial<ProactiveRunRecord>) => ProactiveRunRecord;
+        patchProactiveRun: (runId: string, patch: Partial<ProactiveRunRecord>) => Promise<ProactiveRunRecord>;
       }
     ).patchProactiveRun.bind(service);
 
     // Both the read and the write of patchProactiveRun must run inside a single
     // immediate transaction so a concurrent resolution cannot read the same row,
     // merge, and clobber the other writer's field updates.
-    const txSpy = vi.spyOn(
-      (service as unknown as { ctx: { gatewaySql: { runImmediateTransaction: <T>(cb: () => T) => T } } }).ctx
-        .gatewaySql,
-      "runImmediateTransaction",
-    );
+    const txSpy = vi.spyOn(harness.storage, "runImmediateTransaction");
 
     // Models the documented interleave: the durable tick re-queue path links a
     // fresh durable run id, while the approval-resume path clears the approval
     // and flips status back to running. Each writes a DIFFERENT field on the
     // same run; after both, BOTH updates must survive.
-    patch("run-race", { linkedDurableRunId: "durable-new" });
-    patch("run-race", { status: "running", approvalId: undefined });
+    await patch("run-race", { linkedDurableRunId: "durable-new" });
+    await patch("run-race", { status: "running", approvalId: undefined });
 
     expect(txSpy).toHaveBeenCalledTimes(2);
 
@@ -327,7 +323,7 @@ describe("ChatProactiveService", () => {
     expect(row.approval_id).toBeNull(); // second writer cleared the approval
   });
 
-  it("preserves same-owner metadata written before the waiting transaction locks the durable run", () => {
+  it("preserves same-owner metadata written before the waiting transaction locks the durable run", async () => {
     const harness = createHarness();
     const runId = "durable-waiting-metadata-race";
     const claimed: DurableRunRecord = {
@@ -370,13 +366,13 @@ describe("ChatProactiveService", () => {
     };
     const lockFreshActiveLeaseForUpdate = vi.spyOn(harness.storage.durableRuns, "lockFreshActiveLeaseForUpdate");
 
-    const updated = (
+    const updated = await (
       harness.service as unknown as {
         markDurableRunWaiting(
           run: DurableRunRecord,
           waitForEvent: { eventKey: string; correlationId?: string; payload?: Record<string, unknown> },
           statePatch: Record<string, unknown>,
-        ): DurableRunRecord;
+        ): Promise<DurableRunRecord>;
       }
     ).markDurableRunWaiting(
       claimed,
@@ -408,7 +404,7 @@ describe("ChatProactiveService", () => {
     });
   });
 
-  it("uses the database-clock lease lock for proactive state updates and completion", () => {
+  it("uses the database-clock lease lock for proactive state updates and completion", async () => {
     const harness = createHarness();
     const runId = "durable-proactive-fresh-lease";
     const claimed: DurableRunRecord = {
@@ -429,12 +425,12 @@ describe("ChatProactiveService", () => {
     harness.state.durableRuns.set(runId, claimed);
     const lockFreshActiveLeaseForUpdate = vi.spyOn(harness.storage.durableRuns, "lockFreshActiveLeaseForUpdate");
     const service = harness.service as unknown as {
-      updateProactiveDurableRunState(run: DurableRunRecord, patch: Record<string, unknown>): DurableRunRecord;
-      completeDurableRun(run: DurableRunRecord, checkpointState: Record<string, unknown>): void;
+      updateProactiveDurableRunState(run: DurableRunRecord, patch: Record<string, unknown>): Promise<DurableRunRecord>;
+      completeDurableRun(run: DurableRunRecord, checkpointState: Record<string, unknown>): Promise<void>;
     };
 
-    const updated = service.updateProactiveDurableRunState(claimed, { phase: "executing" });
-    service.completeDurableRun(updated, { proactiveRunId: "proactive-fresh" });
+    const updated = await service.updateProactiveDurableRunState(claimed, { phase: "executing" });
+    await service.completeDurableRun(updated, { proactiveRunId: "proactive-fresh" });
 
     expect(lockFreshActiveLeaseForUpdate).toHaveBeenNthCalledWith(1, runId, "worker-fresh");
     expect(lockFreshActiveLeaseForUpdate).toHaveBeenNthCalledWith(2, runId, "worker-fresh");
@@ -589,7 +585,7 @@ describe("ChatProactiveService", () => {
       });
 
       vi.setSystemTime(new Date("2026-04-04T19:00:05.000Z"));
-      const approvalWaitRun = durableRunService.createDurableRun({
+      const approvalWaitRun = await durableRunService.createDurableRun({
         workflowKey: "approval.wait",
         payload: {
           version: "approval.wait.v1",
@@ -614,12 +610,12 @@ describe("ChatProactiveService", () => {
         result: { ok: true, resumed: true },
       });
       harness.storage.approvals.resolve(approvalId, { decision: "approve", resolvedBy: "operator-1" });
-      durableRunService.wakeDurableRun(approvalWaitRun.runId, {
+      await durableRunService.wakeDurableRun(approvalWaitRun.runId, {
         eventKey: "approval.resolved",
         correlationId: approvalId,
         payload: { approvalId },
       });
-      durableRunService.wakeDurableRun(parentRunId, {
+      await durableRunService.wakeDurableRun(parentRunId, {
         eventKey: "approval.resolved",
         correlationId: approvalId,
         payload: { approvalId },
@@ -637,8 +633,8 @@ describe("ChatProactiveService", () => {
 
       const completedRun = readRun(state, started.runId);
       const completedActions = actionsForRun(state, started.runId);
-      const parentTimeline = durableRunService.listDurableRunTimeline(parentRunId);
-      const childTimeline = durableRunService.listDurableRunTimeline(approvalWaitRun.runId);
+      const parentTimeline = await durableRunService.listDurableRunTimeline(parentRunId);
+      const childTimeline = await durableRunService.listDurableRunTimeline(approvalWaitRun.runId);
 
       expect(completedRun.status).toBe("executed");
       expect(completedRun.stopReason).toBe("completed");
@@ -854,7 +850,7 @@ describe("ChatProactiveService", () => {
       result: { ok: true },
     } satisfies ToolInvokeResult);
     harness.callbacks.invokeTool = async (request, options) => {
-      options?.externalSideEffect?.markStarted();
+      await options?.externalSideEffect?.markStarted();
       return invokeTool(request);
     };
 
@@ -906,8 +902,8 @@ describe("ChatProactiveService", () => {
     ).insertProactiveAction(action);
     const lockFreshActiveLeaseForUpdate = vi.spyOn(harness.storage.durableRuns, "lockFreshActiveLeaseForUpdate");
     harness.callbacks.invokeTool = vi.fn(async (_request, options) => {
-      options?.executionFence?.();
-      options?.externalSideEffect?.markNotRequired();
+      await options?.executionFence?.();
+      await options?.externalSideEffect?.markNotRequired();
       return {
         outcome: "executed",
         policyReason: "allowed",
@@ -988,7 +984,7 @@ describe("ChatProactiveService", () => {
     const harness = createHarness();
     const invokeTool = vi.fn(
       async (_request: ToolInvokeRequest, options?: Parameters<ChatProactiveServiceCallbacks["invokeTool"]>[1]) => {
-        options?.externalSideEffect?.markNotRequired();
+        await options?.externalSideEffect?.markNotRequired();
         return {
           outcome: "executed",
           policyReason: "allowed",
@@ -1060,7 +1056,7 @@ describe("ChatProactiveService", () => {
         _request: ToolInvokeRequest,
         options?: Parameters<ChatProactiveServiceCallbacks["invokeTool"]>[1],
       ): Promise<ToolInvokeResult> => {
-        options?.externalSideEffect?.markStarted();
+        await options?.externalSideEffect?.markStarted();
         return {
           outcome: "executed",
           policyReason: "execution outcome unknown: provider call failed after dispatch",
@@ -1213,7 +1209,7 @@ describe("ChatProactiveService", () => {
         }),
     );
     harness.callbacks.invokeTool = async (request, options) => {
-      options?.externalSideEffect?.markStarted();
+      await options?.externalSideEffect?.markStarted();
       return invokeTool(request);
     };
 
@@ -1269,7 +1265,7 @@ describe("ChatProactiveService", () => {
     });
     invokeTool.mockRejectedValueOnce(new Error("tool runtime unavailable"));
     harness.callbacks.invokeTool = async (request, options) => {
-      options?.externalSideEffect?.markStarted();
+      await options?.externalSideEffect?.markStarted();
       return invokeTool(request);
     };
 
@@ -1426,7 +1422,7 @@ describe("ChatProactiveService", () => {
 
     const completed = readRun(state, started.runId);
     const actions = actionsForRun(state, started.runId);
-    const status = service.getChatSessionProactiveStatus(state.session.sessionId);
+    const status = await service.getChatSessionProactiveStatus(state.session.sessionId);
     expect(completed).toMatchObject({
       status: "suggested",
       linkedTaskId: undefined,
@@ -1529,7 +1525,7 @@ describe("ChatProactiveService", () => {
     );
   });
 
-  it("reports proactive status and publishes policy updates from autonomy prefs", () => {
+  it("reports proactive status and publishes policy updates from autonomy prefs", async () => {
     const harness = createHarness();
     const { service, state, publishRealtime } = harness;
     state.proactiveRuns.set(
@@ -1567,7 +1563,7 @@ describe("ChatProactiveService", () => {
       created_at: new Date().toISOString(),
     });
 
-    const status = service.getChatSessionProactiveStatus(state.session.sessionId);
+    const status = await service.getChatSessionProactiveStatus(state.session.sessionId);
     expect(status).toEqual(
       expect.objectContaining({
         policy: expect.objectContaining({
@@ -1589,7 +1585,7 @@ describe("ChatProactiveService", () => {
       }),
     );
 
-    const updated = service.updateChatSessionProactivePolicy(state.session.sessionId, {
+    const updated = await service.updateChatSessionProactivePolicy(state.session.sessionId, {
       proactiveMode: "suggest",
       autonomyBudget: {
         maxActionsPerHour: 3,
@@ -1709,24 +1705,24 @@ function createHarness(options?: {
   const backgroundTasks = new Set<Promise<void>>();
   const invokeTool = vi.fn();
   const callbacks: ChatProactiveServiceCallbacks = {
-    listChatSessions: () => [{ sessionId: session.sessionId, lastActivityAt: session.lastActivityAt }],
-    getSession: (sessionId) => {
+    listChatSessions: async () => [{ sessionId: session.sessionId, lastActivityAt: session.lastActivityAt }],
+    getSession: async (sessionId) => {
       if (sessionId !== session.sessionId) throw new Error(`Unknown session ${sessionId}`);
       return session;
     },
-    hasRunningTurn: () => false,
-    getSessionIdleSeconds: () => 600,
+    hasRunningTurn: async () => false,
+    getSessionIdleSeconds: async () => 600,
     listChatMessages: async (sessionId) => state.messages.get(sessionId) ?? [],
     invokeTool: async (request, options) => {
       const result = await invokeTool(request);
       if (result?.outcome === "executed") {
-        options?.externalSideEffect?.markStarted();
+        await options?.externalSideEffect?.markStarted();
       }
       return result;
     },
     detectDelegationRoles: () => [],
-    createDurableRun: (input) => {
-      const created = durableRunService.createDurableRun(input);
+    createDurableRun: async (input) => {
+      const created = await durableRunService.createDurableRun(input);
       const claimed = {
         ...created,
         status: "running" as const,
@@ -1773,6 +1769,10 @@ function createStorage(state: HarnessState) {
   const mutationKey = (input: { routePath: string; idempotencyKey: string; actorScope?: string }) =>
     `${input.routePath}:${input.idempotencyKey}:${input.actorScope ?? ""}`;
   return {
+    db: {
+      dialect: "sqlite" as const,
+      prepare: (sql: string) => createStatement(sql, state),
+    },
     runImmediateTransaction: <T>(callback: () => T): T => callback(),
     mutationIdempotency: {
       claim: (input: {

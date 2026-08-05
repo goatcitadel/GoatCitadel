@@ -1,9 +1,10 @@
+/* eslint-disable max-lines -- Bundled PostgreSQL lifecycle, ownership, recovery, and cross-platform process policy stay centralized in this runtime owner. */
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { PostgresDatabaseClient } from "@goatcitadel/storage";
 import { isBootTrackerVerbose, setBootCheckpoint } from "./boot-tracker.js";
 import type { GatewayRuntimeConfig } from "./config.js";
@@ -35,6 +36,11 @@ const NATIVE_BACKEND_MARKER_FILENAME = ".goatcitadel-native-bundled-postgres";
 // initialised) — the password file is still resolved and passed in the
 // connection string but trust auth ignores it harmlessly.
 const BUNDLED_POSTGRES_PASSWORD_FILE = "data/secrets/postgres-bundled-password";
+
+interface AwaitedProcessResult {
+  stdout: string;
+  stderr: string;
+}
 
 export function bundledPostgresPasswordFilePath(config: GatewayRuntimeConfig): string {
   return path.resolve(config.rootDir, BUNDLED_POSTGRES_PASSWORD_FILE);
@@ -331,7 +337,7 @@ async function tryStartNativeBundledPostgres(
   // lives inside the cluster directory, crash recovery can hit sharing
   // violations while syncing the data directory if indexing, antivirus, or
   // backup software touches that file mid-startup.
-  const logFile = path.resolve(config.rootDir, config.assistant.dataDir, "logs", "goatcitadel-postgres.log");
+  const logFile = bundledPostgresLogFilePath(config);
   await fs.mkdir(path.dirname(logFile), { recursive: true });
   // Calling `pg_ctl start` on Windows against a data directory whose
   // postmaster.pid points to a live process causes pg_ctl to block for
@@ -409,13 +415,16 @@ async function tryStartNativeBundledPostgres(
   return {
     strategy: "native",
     stop: async () => {
+      const stopTimeoutMs = config.assistant.database.bundledPostgres.stopTimeoutMs;
+      const stopTimeoutSeconds = Math.ceil(stopTimeoutMs / 1_000);
       try {
-        execFileSync(commands.pgCtl, ["-D", dataDir, "-w", "stop", "-m", "fast"], {
-          encoding: "utf8",
-          stdio: ["ignore", "pipe", "pipe"],
-        });
-      } catch {
-        // Ignore stop failures during shutdown.
+        await execFileAwaited(
+          commands.pgCtl,
+          ["-D", dataDir, "-w", "-t", String(stopTimeoutSeconds), "stop", "-m", "fast"],
+          stopTimeoutMs + 10_000,
+        );
+      } catch (error) {
+        throw reportBundledPostgresStopFailure("native", error);
       }
     },
   };
@@ -451,16 +460,7 @@ async function tryStartDockerBundledPostgres(
     });
     return {
       strategy: "docker",
-      stop: async () => {
-        try {
-          execFileSync("docker", ["stop", containerName], {
-            encoding: "utf8",
-            stdio: ["ignore", "pipe", "pipe"],
-          });
-        } catch {
-          // Ignore stop failures during shutdown.
-        }
-      },
+      stop: () => stopDockerBundledPostgres(config, containerName),
     };
   }
 
@@ -532,16 +532,7 @@ async function tryStartDockerBundledPostgres(
 
   return {
     strategy: "docker",
-    stop: async () => {
-      try {
-        execFileSync("docker", ["stop", containerName], {
-          encoding: "utf8",
-          stdio: ["ignore", "pipe", "pipe"],
-        });
-      } catch {
-        // Ignore stop failures during shutdown.
-      }
-    },
+    stop: () => stopDockerBundledPostgres(config, containerName),
   };
 }
 
@@ -581,11 +572,112 @@ async function waitForBundledPostgres(config: GatewayRuntimeConfig): Promise<voi
     await wait(READY_POLL_MS);
   }
 
+  const diagnostics = await collectBundledPostgresStartupDiagnostics(config);
   throw new Error(
     `Bundled Postgres did not become reachable within ${timeoutMs}ms.${
       lastProbeDetail ? ` Last probe: ${lastProbeDetail}.` : ""
-    }`,
+    }${diagnostics ? `\n\n${diagnostics}` : ""}`,
   );
+}
+
+async function stopDockerBundledPostgres(config: GatewayRuntimeConfig, containerName: string): Promise<void> {
+  const stopTimeoutMs = config.assistant.database.bundledPostgres.stopTimeoutMs;
+  const stopTimeoutSeconds = Math.ceil(stopTimeoutMs / 1_000);
+  try {
+    await execFileAwaited(
+      "docker",
+      ["stop", "--time", String(stopTimeoutSeconds), containerName],
+      stopTimeoutMs + 10_000,
+    );
+  } catch (error) {
+    throw reportBundledPostgresStopFailure("docker", error);
+  }
+}
+
+function reportBundledPostgresStopFailure(strategy: "native" | "docker", error: unknown): Error {
+  const failure = new Error(`Bundled Postgres ${strategy} shutdown failed. ${extractProcessErrorDetail(error)}`, {
+    cause: error,
+  });
+  process.stderr.write(`[bundled-pg] ${failure.message}\n`);
+  return failure;
+}
+
+function execFileAwaited(command: string, args: string[], timeoutMs: number): Promise<AwaitedProcessResult> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      command,
+      args,
+      {
+        encoding: "utf8",
+        timeout: timeoutMs,
+        windowsHide: true,
+      },
+      (error, stdout, stderr) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve({ stdout: String(stdout ?? ""), stderr: String(stderr ?? "") });
+      },
+    );
+  });
+}
+
+function bundledPostgresLogFilePath(config: GatewayRuntimeConfig): string {
+  return path.resolve(config.rootDir, config.assistant.dataDir, "logs", "goatcitadel-postgres.log");
+}
+
+async function collectBundledPostgresStartupDiagnostics(config: GatewayRuntimeConfig): Promise<string | undefined> {
+  const nativeLogTail = await readLogTail(bundledPostgresLogFilePath(config), 100);
+  const dockerLogTail = await readDockerLogTail(config);
+  const recoveryState = inferBundledPostgresRecoveryState(
+    config,
+    [nativeLogTail, dockerLogTail].filter(Boolean).join("\n"),
+  );
+  const parts = [`Recovery state: ${recoveryState}.`];
+  if (nativeLogTail) {
+    parts.push(`Last 100 native PostgreSQL log lines:\n${nativeLogTail}`);
+  }
+  if (dockerLogTail) {
+    parts.push(`Last 100 Docker/PostgreSQL log lines:\n${dockerLogTail}`);
+  }
+  if (!nativeLogTail && !dockerLogTail) {
+    parts.push("No bundled PostgreSQL log output was available.");
+  }
+  return parts.join("\n\n");
+}
+
+async function readDockerLogTail(config: GatewayRuntimeConfig): Promise<string | undefined> {
+  try {
+    const result = await execFileAwaited(
+      "docker",
+      ["logs", "--tail", "100", buildBundledDockerContainerName(config.rootDir)],
+      10_000,
+    );
+    return [result.stdout, result.stderr].filter(Boolean).join("\n").trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function inferBundledPostgresRecoveryState(config: GatewayRuntimeConfig, logText: string): string {
+  const normalized = logText.toLowerCase();
+  if (/database system is ready to accept connections/u.test(normalized)) {
+    return "ready reported but readiness probe failed";
+  }
+  if (
+    /redo starts|redo done|recovery|database system was interrupted|not yet accepting connections/u.test(normalized)
+  ) {
+    return "recovery in progress or required";
+  }
+  const dataDir = path.resolve(config.rootDir, config.assistant.database.bundledPostgres.dataDir);
+  if (readLivePostmasterPid(dataDir) !== undefined) {
+    return "postmaster running but readiness probe failed";
+  }
+  if (bundledClusterIsInitialized(dataDir)) {
+    return "cluster initialized; recovery state unknown";
+  }
+  return "cluster not initialized or state unknown";
 }
 
 async function ensureDatabaseExists(config: GatewayRuntimeConfig): Promise<void> {

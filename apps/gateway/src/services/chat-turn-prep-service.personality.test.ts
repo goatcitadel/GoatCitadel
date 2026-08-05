@@ -87,6 +87,9 @@ function createHost(
       workspaces: {
         find: vi.fn(() => undefined),
       },
+      systemSettings: {
+        get: vi.fn(() => undefined),
+      },
     },
     llmService: {
       getRuntimeConfig: vi.fn(() => ({ providers: [] })),
@@ -1180,7 +1183,7 @@ describe("prepareAgentChatTurn personality overlay", () => {
     expect(prepared.conversationMessages).toEqual([prepared.userMessage]);
   });
 
-  it("leaves dynamic Cowork plans unchanged when no fresh specialist matches", () => {
+  it("leaves dynamic Cowork plans unchanged when no fresh specialist matches", async () => {
     const harness = createHost("cowork");
     const plan = createPlan({
       steps: [createStep({ stepId: "research", role: "researcher", objective: "Research release evidence" })],
@@ -1194,7 +1197,7 @@ describe("prepareAgentChatTurn personality overlay", () => {
       prefs: createPrefs("cowork"),
     };
 
-    expect(applyApprovedSpecialistsToPlan(harness.host, prepared as never, plan as never)).toBe(plan);
+    expect(await applyApprovedSpecialistsToPlan(harness.host, prepared as never, plan as never)).toBe(plan);
 
     vi.mocked(harness.host.storage.chatSpecialistCandidates.listAutoRoutable).mockReturnValue([
       {
@@ -1217,10 +1220,10 @@ describe("prepareAgentChatTurn personality overlay", () => {
       },
     ]);
 
-    expect(applyApprovedSpecialistsToPlan(harness.host, prepared as never, plan as never)).toBe(plan);
+    expect(await applyApprovedSpecialistsToPlan(harness.host, prepared as never, plan as never)).toBe(plan);
   });
 
-  it("injects approved fresh specialists into matching dynamic Cowork steps", () => {
+  it("injects approved fresh specialists into matching dynamic Cowork steps", async () => {
     vi.setSystemTime(new Date("2026-05-04T00:00:00.000Z"));
     const harness = createHost("cowork");
     vi.mocked(harness.host.storage.chatSpecialistCandidates.listAutoRoutable).mockReturnValue([
@@ -1314,7 +1317,7 @@ describe("prepareAgentChatTurn personality overlay", () => {
       prefs: createPrefs("cowork"),
     };
 
-    const updated = applyApprovedSpecialistsToPlan(harness.host, prepared as never, plan as never);
+    const updated = await applyApprovedSpecialistsToPlan(harness.host, prepared as never, plan as never);
 
     expect(updated.routeDecision.specialistCandidates).toEqual([
       expect.objectContaining({
@@ -1788,7 +1791,7 @@ describe("prepareAgentChatTurn personality overlay", () => {
         templatePlan as never,
         false,
       );
-      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(0);
       expect(capturedSignal).toBeInstanceOf(AbortSignal);
       expect(capturedSignal?.aborted).toBe(false);
       await vi.advanceTimersByTimeAsync(5_000);

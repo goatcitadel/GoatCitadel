@@ -76,10 +76,10 @@ function createService(input: {
         },
       },
       storage: storage as never,
-      readFeatureFlags: () => ({ codeModeV1Enabled: input.featureEnabled ?? true }),
+      readFeatureFlags: async () => ({ codeModeV1Enabled: input.featureEnabled ?? true }),
       listToolCatalog: () => [],
       listLoadedSkills: () => input.skills ?? [],
-      readSkillStates: () => input.skillStates ?? new Map(),
+      readSkillStates: async () => input.skillStates ?? new Map(),
       invokeTool: vi.fn(
         async (): Promise<ToolInvokeResult> => ({
           outcome: "executed",
@@ -90,8 +90,8 @@ function createService(input: {
       ),
       createApproval,
       resolveApproval: vi.fn(),
-      publishRealtime: vi.fn(),
-      readPolicySnapshot: () => ({ mode: "test" }),
+      publishRealtime: vi.fn(async () => undefined),
+      readPolicySnapshot: async () => ({ mode: "test" }),
     }),
     storage,
     createApproval,
@@ -144,7 +144,7 @@ describe("CapabilitySystemService loop32 defaults and diagnostics", () => {
     ]);
     const harness = createService({ rootDir, skills, skillStates: states });
 
-    const listed = harness.service.listSkills();
+    const listed = await harness.service.listSkills();
 
     expect(listed).toEqual([
       expect.objectContaining({
@@ -169,10 +169,10 @@ describe("CapabilitySystemService loop32 defaults and diagnostics", () => {
       lifecycleState: "candidate",
       provenance: { source: "extra" },
     });
-    expect(harness.service.listCatalog("inspectable")).toEqual(
+    expect(await harness.service.listCatalog("inspectable")).toEqual(
       expect.arrayContaining([expect.objectContaining({ capabilityId: "skill:skill-extra", callable: false })]),
     );
-    expect(harness.service.listCatalog("callable")).not.toEqual(
+    expect(await harness.service.listCatalog("callable")).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ capabilityId: "skill:skill-extra" })]),
     );
   });
@@ -198,7 +198,7 @@ describe("CapabilitySystemService loop32 defaults and diagnostics", () => {
       };
       const first = createService({ rootDir, skills: [skill] });
 
-      expect(first.service.listSkills()[0]).toMatchObject({
+      expect((await first.service.listSkills())[0]).toMatchObject({
         lifecycleState: "trusted",
         callable: true,
         lifecycle: {
@@ -214,18 +214,18 @@ describe("CapabilitySystemService loop32 defaults and diagnostics", () => {
       });
       const persisted = [...first.skillLifecycle.values()];
       const restarted = createService({ rootDir, skills: [skill], skillLifecycleRecords: persisted });
-      expect(restarted.service.listCatalog("callable")).toEqual([
+      expect(await restarted.service.listCatalog("callable")).toEqual([
         expect.objectContaining({ capabilityId: `skill:${source}:exact-skill`, callable: true }),
       ]);
 
       await fs.writeFile(skillPath, "Drifted version one.\n");
-      expect(restarted.service.listSkills()[0]).toMatchObject({
+      expect((await restarted.service.listSkills())[0]).toMatchObject({
         lifecycleState: "candidate",
         callable: false,
         trustLabel: "Exact-byte review required",
         reviewWarning: expect.stringContaining("changed after its trusted exact-byte lifecycle binding"),
       });
-      expect(restarted.service.listCatalog("callable")).toEqual([]);
+      expect(await restarted.service.listCatalog("callable")).toEqual([]);
     },
   );
 
@@ -266,7 +266,7 @@ describe("CapabilitySystemService loop32 defaults and diagnostics", () => {
     ];
     const harness = createService({ rootDir, skills });
 
-    const listed = harness.service.listSkills();
+    const listed = await harness.service.listSkills();
 
     expect(listed).toEqual([
       expect.objectContaining({
@@ -292,7 +292,7 @@ describe("CapabilitySystemService loop32 defaults and diagnostics", () => {
         },
       },
     });
-    expect(harness.service.listCatalog("callable")).toEqual([]);
+    expect(await harness.service.listCatalog("callable")).toEqual([]);
   });
 
   it("honors durable governed activation only for its exact verified tree", async () => {
@@ -349,7 +349,7 @@ describe("CapabilitySystemService loop32 defaults and diagnostics", () => {
       ],
     });
 
-    expect(harness.service.listSkills()).toEqual([
+    expect(await harness.service.listSkills()).toEqual([
       expect.objectContaining({
         skillId: "skill-governed-extra",
         lifecycleState: "approved",
@@ -358,7 +358,7 @@ describe("CapabilitySystemService loop32 defaults and diagnostics", () => {
         reviewWarning: undefined,
       }),
     ]);
-    expect(harness.service.listCatalog("callable")).toEqual([
+    expect(await harness.service.listCatalog("callable")).toEqual([
       expect.objectContaining({ capabilityId: "skill:skill-governed-extra", callable: true }),
     ]);
 
@@ -372,7 +372,7 @@ describe("CapabilitySystemService loop32 defaults and diagnostics", () => {
         provenance: { contentIntegrity },
       }),
     );
-    expect(harness.service.listSkills()).toEqual([
+    expect(await harness.service.listSkills()).toEqual([
       expect.objectContaining({
         skillId: "skill-governed-extra",
         lifecycleState: "approved",
@@ -438,7 +438,7 @@ describe("CapabilitySystemService loop32 defaults and diagnostics", () => {
       ],
     });
 
-    expect(harness.service.listSkills()).toEqual([
+    expect(await harness.service.listSkills()).toEqual([
       expect.objectContaining({
         skillId: "skill-revoked-extra",
         lifecycleState: "revoked",
@@ -446,15 +446,15 @@ describe("CapabilitySystemService loop32 defaults and diagnostics", () => {
         reviewWarning: "Revoked upstream skill is not callable.",
       }),
     ]);
-    expect(harness.service.listCatalog("inspectable")).toEqual([
+    expect(await harness.service.listCatalog("inspectable")).toEqual([
       expect.objectContaining({ capabilityId: "skill:skill-revoked-extra", callable: false }),
     ]);
-    expect(harness.service.listCatalog("callable")).toEqual([]);
+    expect(await harness.service.listCatalog("callable")).toEqual([]);
 
     await fs.writeFile(path.join(extraSkillDir, "SKILL.md"), "Changed after revocation\n");
-    expect(harness.service.listSkills()[0]).toMatchObject({ lifecycleState: "revoked", callable: false });
+    expect((await harness.service.listSkills())[0]).toMatchObject({ lifecycleState: "revoked", callable: false });
     expect(harness.skillLifecycle.get("skill-revoked-extra")?.lifecycleState).toBe("revoked");
-    expect(harness.service.listCatalog("callable")).toEqual([]);
+    expect(await harness.service.listCatalog("callable")).toEqual([]);
   });
 
   it("keeps legacy activation evidence non-callable when exact-byte provenance is missing", async () => {
@@ -491,7 +491,7 @@ describe("CapabilitySystemService loop32 defaults and diagnostics", () => {
       ],
     });
 
-    expect(harness.service.listSkills()).toEqual([
+    expect(await harness.service.listSkills()).toEqual([
       expect.objectContaining({
         skillId: "skill-legacy-extra",
         lifecycleState: "candidate",
@@ -499,7 +499,7 @@ describe("CapabilitySystemService loop32 defaults and diagnostics", () => {
         reviewWarning: expect.stringContaining("missing exact-byte provenance"),
       }),
     ]);
-    expect(harness.service.listCatalog("callable")).toEqual([]);
+    expect(await harness.service.listCatalog("callable")).toEqual([]);
   });
 
   it("revokes callable projection when installed bytes drift after activation", async () => {
@@ -560,7 +560,7 @@ describe("CapabilitySystemService loop32 defaults and diagnostics", () => {
       ],
     });
 
-    expect(harness.service.listSkills()).toEqual([
+    expect(await harness.service.listSkills()).toEqual([
       expect.objectContaining({
         skillId: "skill-drifted-extra",
         lifecycleState: "approved",
@@ -569,7 +569,7 @@ describe("CapabilitySystemService loop32 defaults and diagnostics", () => {
     ]);
     await fs.truncate(path.join(extraSkillDir, "SKILL.md"), SKILL_CONTENT_INTEGRITY_LIMITS.maxFileBytes + 1);
 
-    expect(harness.service.listSkills()).toEqual([
+    expect(await harness.service.listSkills()).toEqual([
       expect.objectContaining({
         skillId: "skill-drifted-extra",
         lifecycleState: "candidate",
@@ -582,7 +582,7 @@ describe("CapabilitySystemService loop32 defaults and diagnostics", () => {
         }),
       }),
     ]);
-    expect(harness.service.listCatalog("callable")).toEqual([]);
+    expect(await harness.service.listCatalog("callable")).toEqual([]);
     expect(harness.skillLifecycle.get("skill-drifted-extra")).toMatchObject({
       lifecycleState: "candidate",
       provenance: { contentIntegrity: { verified: false } },
@@ -635,7 +635,7 @@ describe("CapabilitySystemService loop32 defaults and diagnostics", () => {
       ],
     });
 
-    expect(harness.service.listSkills()).toEqual([
+    expect(await harness.service.listSkills()).toEqual([
       expect.objectContaining({
         skillId: "skill-oversized-manifest",
         lifecycleState: "candidate",
@@ -643,7 +643,7 @@ describe("CapabilitySystemService loop32 defaults and diagnostics", () => {
         reviewWarning: expect.stringContaining("does not match its validated exact-byte provenance"),
       }),
     ]);
-    expect(harness.service.listCatalog("callable")).toEqual([]);
+    expect(await harness.service.listCatalog("callable")).toEqual([]);
   });
 
   it("probes the warm runtime verifier at the legal tree maximum without caching stale bytes", async () => {
@@ -719,7 +719,7 @@ describe("CapabilitySystemService loop32 defaults and diagnostics", () => {
     });
 
     const firstRuntimeStartedAt = performance.now();
-    expect(harness.service.listSkills()[0]).toMatchObject({ lifecycleState: "approved", callable: true });
+    expect((await harness.service.listSkills())[0]).toMatchObject({ lifecycleState: "approved", callable: true });
     const firstRuntimeVerificationMs = performance.now() - firstRuntimeStartedAt;
     let timerObserved = false;
     let timerDelayMs = 0;
@@ -732,14 +732,14 @@ describe("CapabilitySystemService loop32 defaults and diagnostics", () => {
       }, 0);
     });
     const verificationStartedAt = performance.now();
-    const warmResult = harness.service.listSkills();
+    const warmResult = await harness.service.listSkills();
     const warmVerificationMs = performance.now() - verificationStartedAt;
     expect(warmResult[0]).toMatchObject({ lifecycleState: "approved", callable: true });
     expect(timerObserved).toBe(false);
     await timer;
 
     await fs.writeFile(path.join(extraSkillDir, "payload-001.bin"), Buffer.alloc(bytesPerFile, 0x62));
-    expect(harness.service.listSkills()[0]).toMatchObject({ lifecycleState: "candidate", callable: false });
+    expect((await harness.service.listSkills())[0]).toMatchObject({ lifecycleState: "candidate", callable: false });
     console.info(
       `[skill-integrity-runtime-probe] files=${contentIntegrity.fileCount} bytes=${contentIntegrity.totalBytes} firstRuntimeSyncMs=${firstRuntimeVerificationMs.toFixed(2)} warmSyncMs=${warmVerificationMs.toFixed(2)} timerDelayMs=${timerDelayMs.toFixed(2)} timerRanDuringSync=false staleMutationCallable=false`,
     );

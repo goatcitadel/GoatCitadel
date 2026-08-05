@@ -64,9 +64,11 @@ export function composeChatRouteDependencies(
     operatorSummaryCache: gateway.operatorSummaryCache,
     normalizeWorkspaceId: (workspaceId) => gateway.normalizeWorkspaceId(workspaceId),
     ensureChatSessionRuntimeGrants: (sessionId) => gateway.ensureChatSessionRuntimeGrants(sessionId),
-    requireChatSession: (sessionId) => gateway.requireChatSession(sessionId),
+    requireChatSession: async (sessionId) => gateway.requireChatSession(sessionId),
     getSession: (sessionId) => gateway.getSession(sessionId),
-    publishRealtime: (eventType, source, payload) => gateway.publishRealtime(eventType, source, payload),
+    publishRealtime: async (eventType, source, payload) => {
+      await gateway.publishRealtime(eventType, source, payload);
+    },
     clearChatTurnWriteLease: (sessionId) => gateway.clearChatTurnWriteLease(sessionId),
     removeChatSessionStoredFile: async (storageRelPath) => {
       const normalized = storageRelPath.trim();
@@ -104,20 +106,20 @@ export function composeChatRouteDependencies(
   };
   const ChatGeneratedArtifactDependencies: chatGeneratedArtifactService.ChatGeneratedArtifactDependencies = {
     storage: gateway.storage,
-    requireChatSession: (sessionId) => gateway.requireChatSession(sessionId),
+    requireChatSession: async (sessionId) => await gateway.requireChatSession(sessionId),
   };
   let documentEditing: DocumentEditingService | undefined;
   const getDocumentEditing = (): DocumentEditingService => {
     documentEditing ??= new DocumentEditingService({
       storage: gateway.storage,
-      requireChatSession: (sessionId) => gateway.requireChatSession(sessionId),
+      requireChatSession: async (sessionId) => await gateway.requireChatSession(sessionId),
     });
     return documentEditing;
   };
   const ChatWorkbenchDependencies: chatWorkbenchService.ChatWorkbenchDependencies = {
     config: gateway.config,
     storage: gateway.storage,
-    requireChatSession: (sessionId) => gateway.requireChatSession(sessionId),
+    requireChatSession: async (sessionId) => await gateway.requireChatSession(sessionId),
     listCodeModeRuns: (options) => gateway.capabilitySystemService.listCodeModeRuns(options),
     publishRealtime: (channel, topic, payload, options) => gateway.publishRealtime(channel, topic, payload, options),
   };
@@ -132,9 +134,9 @@ export function composeChatRouteDependencies(
   const chatSessions: GatewayRouteServiceDependencies["chatSessions"] = {
     archiveChatSession: (sessionId, expectedRevision) =>
       chatSessionService.archiveChatSession(ChatSessionDependencies, sessionId, expectedRevision),
-    archiveChatSessionsBulk: (input) => {
+    archiveChatSessionsBulk: async (input) => {
       const { citadelId, ...sessionInput } = input ?? {};
-      const scope = resolveChatRuntimeScope(gateway, {
+      const scope = await resolveChatRuntimeScope(gateway, {
         citadelId,
         workspaceId: sessionInput.workspaceId,
       });
@@ -151,20 +153,20 @@ export function composeChatRouteDependencies(
       chatThreadKnowledgeService.attachChatThreadKnowledgeAttachment(ChatThreadKnowledgeDependencies, sessionId, input),
     createChatGeneratedArtifactFromTurn: (input) =>
       chatGeneratedArtifactService.createChatGeneratedArtifactFromTurn(ChatGeneratedArtifactDependencies, input),
-    createChatGeneratedArtifactVersion: (artifactId, input) => {
-      gateway.requireFeatureEnabled("documentEditingV1Enabled");
+    createChatGeneratedArtifactVersion: async (artifactId, input) => {
+      await gateway.requireFeatureEnabled("documentEditingV1Enabled");
       return getDocumentEditing().createArtifactVersion(artifactId, input);
     },
-    createDocumentPatchProposal: (input, actorId) => {
-      gateway.requireFeatureEnabled("documentEditingV1Enabled");
+    createDocumentPatchProposal: async (input, actorId) => {
+      await gateway.requireFeatureEnabled("documentEditingV1Enabled");
       return getDocumentEditing().createProposal(input, actorId);
     },
-    createAssistantDocumentPatchProposal: (input, binding) => {
-      gateway.requireFeatureEnabled("documentEditingV1Enabled");
+    createAssistantDocumentPatchProposal: async (input, binding) => {
+      await gateway.requireFeatureEnabled("documentEditingV1Enabled");
       return getDocumentEditing().createAssistantProposal(input, binding);
     },
-    applyDocumentPatchProposal: (proposalId, workspaceId, actorId) => {
-      gateway.requireFeatureEnabled("documentEditingV1Enabled");
+    applyDocumentPatchProposal: async (proposalId, workspaceId, actorId) => {
+      await gateway.requireFeatureEnabled("documentEditingV1Enabled");
       return getDocumentEditing().applyProposal(proposalId, workspaceId, actorId);
     },
     createChatSideChat: (sessionId, input) =>
@@ -175,9 +177,9 @@ export function composeChatRouteDependencies(
       }
       return gateway.chatTimerService.create(sessionId, input, actorId);
     },
-    createChatSession: (input) => {
+    createChatSession: async (input) => {
       const { citadelId, ...sessionInput } = input ?? {};
-      const scope = resolveChatRuntimeScope(gateway, {
+      const scope = await resolveChatRuntimeScope(gateway, {
         citadelId,
         workspaceId: sessionInput.workspaceId,
         projectId: sessionInput.projectId,
@@ -199,8 +201,8 @@ export function composeChatRouteDependencies(
       chatSessionService.deleteChatSession(ChatSessionDependencies, sessionId, expectedRevision),
     exportChatSessionWorkbenchPatch: (sessionId) =>
       chatWorkbenchService.exportChatSessionWorkbenchPatch(ChatWorkbenchDependencies, sessionId),
-    getChatGeneratedArtifact: (artifactId, options) => {
-      const scope = resolveChatRuntimeScope(gateway, {
+    getChatGeneratedArtifact: async (artifactId, options) => {
+      const scope = await resolveChatRuntimeScope(gateway, {
         citadelId: options?.citadelId,
         workspaceId: options?.workspaceId,
       });
@@ -228,9 +230,9 @@ export function composeChatRouteDependencies(
     getChatSessionWorkbenchTree: (sessionId) =>
       chatWorkbenchService.getChatSessionWorkbenchTree(ChatWorkbenchDependencies, sessionId),
     getChatSideChat: (sessionId) => chatSessionService.getChatSideChat(ChatSessionDependencies, sessionId),
-    listChatGeneratedArtifacts: (input) => {
+    listChatGeneratedArtifacts: async (input) => {
       const { citadelId, ...artifactInput } = input ?? {};
-      const scope = resolveChatRuntimeScope(gateway, {
+      const scope = await resolveChatRuntimeScope(gateway, {
         citadelId,
         sessionId: artifactInput.sessionId,
         workspaceId: artifactInput.workspaceId,
@@ -241,13 +243,13 @@ export function composeChatRouteDependencies(
         workspaceId: scope.workspaceId,
       });
     },
-    listDocumentPatchProposals: (input) => {
-      gateway.requireFeatureEnabled("documentEditingV1Enabled");
+    listDocumentPatchProposals: async (input) => {
+      await gateway.requireFeatureEnabled("documentEditingV1Enabled");
       return getDocumentEditing().listProposals(input);
     },
-    listChatSessions: (query) => {
+    listChatSessions: async (query) => {
       const { citadelId, ...sessionQuery } = query ?? {};
-      const scope = resolveChatRuntimeScope(gateway, {
+      const scope = await resolveChatRuntimeScope(gateway, {
         citadelId,
         workspaceId: sessionQuery.workspaceId,
         projectId: sessionQuery.projectId,
@@ -265,9 +267,9 @@ export function composeChatRouteDependencies(
     },
     listChatThreadKnowledgeAttachments: (sessionId) =>
       chatThreadKnowledgeService.listChatThreadKnowledgeAttachments(ChatThreadKnowledgeDependencies, sessionId),
-    listRecentCrossProjectSessions: (input) => {
+    listRecentCrossProjectSessions: async (input) => {
       const { citadelId, ...sessionInput } = input;
-      const scope = resolveChatRuntimeScope(gateway, {
+      const scope = await resolveChatRuntimeScope(gateway, {
         citadelId,
         workspaceId: sessionInput.workspaceId,
       });
@@ -284,8 +286,8 @@ export function composeChatRouteDependencies(
         sessionId,
         attachmentId,
       ),
-    rejectDocumentPatchProposal: (proposalId, workspaceId, actorId) => {
-      gateway.requireFeatureEnabled("documentEditingV1Enabled");
+    rejectDocumentPatchProposal: async (proposalId, workspaceId, actorId) => {
+      await gateway.requireFeatureEnabled("documentEditingV1Enabled");
       return getDocumentEditing().rejectProposal(proposalId, workspaceId, actorId);
     },
     restoreChatSession: (sessionId, expectedRevision) =>
@@ -300,9 +302,9 @@ export function composeChatRouteDependencies(
       chatWorkbenchService.runChatSessionWorkbenchFileOperation(ChatWorkbenchDependencies, sessionId, input),
     saveChatSessionWorkbenchFile: (sessionId, input) =>
       chatWorkbenchService.saveChatSessionWorkbenchFile(ChatWorkbenchDependencies, sessionId, input),
-    searchChatSessions: (input) => {
+    searchChatSessions: async (input) => {
       const { citadelId, ...searchInput } = input;
-      const scope = resolveChatRuntimeScope(gateway, {
+      const scope = await resolveChatRuntimeScope(gateway, {
         citadelId,
         workspaceId: searchInput.workspaceId,
       });
@@ -325,15 +327,15 @@ export function composeChatRouteDependencies(
   };
   const chatDelegate: GatewayRouteServiceDependencies["chatDelegate"] = {
     acceptChatDelegation: (sessionId, input) => gateway.acceptChatDelegation(sessionId, input),
-    getChatDelegationRun: (sessionId, runId) => {
-      gateway.storage.chatDelegationRuns.reconcileSupersededRunningRunsForSession?.(sessionId);
-      const run = gateway.storage.chatDelegationRuns.get(runId);
+    getChatDelegationRun: async (sessionId, runId) => {
+      await gateway.storage.chatDelegationRuns.reconcileSupersededRunningRunsForSession?.(sessionId);
+      const run = await gateway.storage.chatDelegationRuns.get(runId);
       if (run.sessionId !== sessionId) {
         throw new NotFoundError(`Delegation run ${runId} not found for session ${sessionId}`);
       }
       return {
         run,
-        steps: gateway.storage.chatDelegationSteps.listByRun(runId),
+        steps: await gateway.storage.chatDelegationSteps.listByRun(runId),
       };
     },
     runChatDelegation: (sessionId, input) => gateway.runChatDelegation(sessionId, input),
@@ -348,10 +350,10 @@ export function composeChatRouteDependencies(
       gateway.approvalRuntime.resolveChatToolApproval(sessionId, approvalId, decision, options),
   };
   const chatMessages: GatewayRouteServiceDependencies["chatMessages"] = {
-    agentSendChatMessage: (sessionId, input, authenticatedOperator, externalCompanion) =>
-      gateway.chatTurnRuntime.agentSendChatMessage(
+    agentSendChatMessage: async (sessionId, input, authenticatedOperator, externalCompanion) =>
+      await gateway.chatTurnRuntime.agentSendChatMessage(
         sessionId,
-        gateway.resolveChatRunVariableInput(sessionId, input),
+        await gateway.resolveChatRunVariableInput(sessionId, input),
         authenticatedOperator || externalCompanion
           ? {
               ...(authenticatedOperator ? { authenticatedOperator } : {}),
@@ -359,24 +361,25 @@ export function composeChatRouteDependencies(
             }
           : undefined,
       ),
-    agentSendChatMessageStream: (
+    agentSendChatMessageStream: async function* (
       sessionId,
       input,
       signal?: AbortSignal,
       mutationLifecycle?: ChatStreamMutationLifecycle,
       authenticatedOperator?,
       externalCompanion?,
-    ) =>
-      gateway.chatTurnRuntime.agentSendChatMessageStream(
+    ) {
+      yield* gateway.chatTurnRuntime.agentSendChatMessageStream(
         sessionId,
-        gateway.resolveChatRunVariableInput(sessionId, input),
+        await gateway.resolveChatRunVariableInput(sessionId, input),
         {
           abortSignal: signal,
           ...(mutationLifecycle ? { mutationLifecycle } : {}),
           ...(authenticatedOperator ? { authenticatedOperator } : {}),
           ...(externalCompanion ? { externalCompanion } : {}),
         },
-      ),
+      );
+    },
     answerChatUserInputPrompt: (sessionId, turnId, promptId, input, responder) =>
       chatMessageRouteRuntime.answerChatUserInputPrompt(
         chatMessageRouteRuntimeHost,
@@ -415,94 +418,98 @@ export function composeChatRouteDependencies(
       turnId: string,
       options?: { workspaceId?: string; operatorId?: string },
     ) => {
-      const trace = gateway.storage.chatTurnTraces.get(turnId);
-      if (trace.sessionId !== sessionId) {
-        throw new NotFoundError({ entity: "Chat turn", id: turnId });
-      }
-      const sessionMeta = gateway.storage.chatSessionMeta.get(sessionId);
-      if (!sessionMeta) {
-        throw new NotFoundError({ entity: "Chat session", id: sessionId });
-      }
-      const workspaceId = gateway.normalizeWorkspaceId(sessionMeta.workspaceId);
-      if (options?.workspaceId && gateway.normalizeWorkspaceId(options.workspaceId) !== workspaceId) {
-        throw new NotFoundError({ entity: "Chat turn capability profile", id: turnId });
-      }
-      // Authorize against narrow indexed columns before loading profile_json,
-      // which contains full provider definitions and source provenance.
-      const scope = gateway.storage.chatTurnCapabilityProfiles.findScopeByTurn(turnId);
-      if (!scope) {
-        return { state: "legacy_missing" as const };
-      }
-      if (
-        scope.turnId !== turnId ||
-        scope.sessionId !== sessionId ||
-        scope.workspaceId !== workspaceId ||
-        (trace.capabilityProfileId !== undefined && trace.capabilityProfileId !== scope.profileId) ||
-        (trace.capabilityProfileHash !== undefined && trace.capabilityProfileHash !== scope.profileHash)
-      ) {
-        throw new NotFoundError({ entity: "Chat turn capability profile", id: turnId });
-      }
-      const actorId = options?.operatorId?.trim();
-      const boundActorIds = [scope.operatorId, scope.authActorId].filter((value): value is string => Boolean(value));
-      if (boundActorIds.length > 0 && (!actorId || !boundActorIds.includes(actorId))) {
-        throw new NotFoundError({ entity: "Chat turn capability profile", id: turnId });
-      }
-      const envelope = gateway.storage.chatTurnCapabilityProfiles.inspectByTurn(turnId);
-      if (envelope.state !== "available" || !envelope.profile) {
-        return envelope;
-      }
-      const profile = envelope.profile;
-      if (
-        profile.profileId !== scope.profileId ||
-        profile.hashes.profileHash !== scope.profileHash ||
-        profile.identity.turnId !== scope.turnId ||
-        profile.identity.sessionId !== scope.sessionId ||
-        profile.identity.workspaceId !== scope.workspaceId
-      ) {
-        throw new NotFoundError({ entity: "Chat turn capability profile", id: turnId });
-      }
-      const snapshot = gateway.storage.routedContextSnapshots.findByTurn(turnId);
-      if (!snapshot) {
-        return envelope;
-      }
-      if (
-        snapshot.turnId !== turnId ||
-        snapshot.sessionId !== sessionId ||
-        snapshot.workspaceId !== workspaceId ||
-        snapshot.capabilityProfileId !== profile.profileId ||
-        snapshot.capabilityProfileHash !== profile.hashes.profileHash
-      ) {
-        throw new NotFoundError({ entity: "Chat routed context snapshot", id: turnId });
-      }
-      const traceBinding = trace.routing.routedContext;
-      if (
-        !traceBinding ||
-        traceBinding.snapshotId !== snapshot.snapshotId ||
-        traceBinding.snapshotHash !== snapshot.snapshotHash ||
-        traceBinding.sourceRequestHash !== snapshot.sourceRequestHash ||
-        traceBinding.contentHash !== snapshot.contentHash
-      ) {
-        throw new NotFoundError({ entity: "Chat routed context snapshot", id: turnId });
-      }
-      const routedContext = gateway.storage.routedContextSnapshots.inspectByTurn(turnId);
-      if (
-        !routedContext ||
-        routedContext.snapshotId !== snapshot.snapshotId ||
-        routedContext.snapshotHash !== snapshot.snapshotHash
-      ) {
-        throw new NotFoundError({ entity: "Chat routed context snapshot", id: turnId });
-      }
-      const contextToolNames = new Set<string>(CHAT_ROUTED_CONTEXT_TOOL_NAMES);
-      const snapshotHasEligibleText = (snapshot.entries ?? []).some(
-        (entry) =>
-          (entry.disposition === "included" || entry.disposition === "truncated") &&
-          entry.admittedBytes > 0 &&
-          entry.admittedText.length > 0,
-      );
-      const availableContextTools = snapshotHasEligibleText
-        ? profile.selection.tools.map((tool) => tool.canonicalName).filter((toolName) => contextToolNames.has(toolName))
-        : [];
-      return { ...envelope, routedContext, availableContextTools };
+      return (async () => {
+        const trace = await gateway.storage.chatTurnTraces.get(turnId);
+        if (trace.sessionId !== sessionId) {
+          throw new NotFoundError({ entity: "Chat turn", id: turnId });
+        }
+        const sessionMeta = await gateway.storage.chatSessionMeta.get(sessionId);
+        if (!sessionMeta) {
+          throw new NotFoundError({ entity: "Chat session", id: sessionId });
+        }
+        const workspaceId = gateway.normalizeWorkspaceId(sessionMeta.workspaceId);
+        if (options?.workspaceId && gateway.normalizeWorkspaceId(options.workspaceId) !== workspaceId) {
+          throw new NotFoundError({ entity: "Chat turn capability profile", id: turnId });
+        }
+        // Authorize against narrow indexed columns before loading profile_json,
+        // which contains full provider definitions and source provenance.
+        const scope = await gateway.storage.chatTurnCapabilityProfiles.findScopeByTurn(turnId);
+        if (!scope) {
+          return { state: "legacy_missing" as const };
+        }
+        if (
+          scope.turnId !== turnId ||
+          scope.sessionId !== sessionId ||
+          scope.workspaceId !== workspaceId ||
+          (trace.capabilityProfileId !== undefined && trace.capabilityProfileId !== scope.profileId) ||
+          (trace.capabilityProfileHash !== undefined && trace.capabilityProfileHash !== scope.profileHash)
+        ) {
+          throw new NotFoundError({ entity: "Chat turn capability profile", id: turnId });
+        }
+        const actorId = options?.operatorId?.trim();
+        const boundActorIds = [scope.operatorId, scope.authActorId].filter((value): value is string => Boolean(value));
+        if (boundActorIds.length > 0 && (!actorId || !boundActorIds.includes(actorId))) {
+          throw new NotFoundError({ entity: "Chat turn capability profile", id: turnId });
+        }
+        const envelope = await gateway.storage.chatTurnCapabilityProfiles.inspectByTurn(turnId);
+        if (envelope.state !== "available" || !envelope.profile) {
+          return envelope;
+        }
+        const profile = envelope.profile;
+        if (
+          profile.profileId !== scope.profileId ||
+          profile.hashes.profileHash !== scope.profileHash ||
+          profile.identity.turnId !== scope.turnId ||
+          profile.identity.sessionId !== scope.sessionId ||
+          profile.identity.workspaceId !== scope.workspaceId
+        ) {
+          throw new NotFoundError({ entity: "Chat turn capability profile", id: turnId });
+        }
+        const snapshot = await gateway.storage.routedContextSnapshots.findByTurn(turnId);
+        if (!snapshot) {
+          return envelope;
+        }
+        if (
+          snapshot.turnId !== turnId ||
+          snapshot.sessionId !== sessionId ||
+          snapshot.workspaceId !== workspaceId ||
+          snapshot.capabilityProfileId !== profile.profileId ||
+          snapshot.capabilityProfileHash !== profile.hashes.profileHash
+        ) {
+          throw new NotFoundError({ entity: "Chat routed context snapshot", id: turnId });
+        }
+        const traceBinding = trace.routing.routedContext;
+        if (
+          !traceBinding ||
+          traceBinding.snapshotId !== snapshot.snapshotId ||
+          traceBinding.snapshotHash !== snapshot.snapshotHash ||
+          traceBinding.sourceRequestHash !== snapshot.sourceRequestHash ||
+          traceBinding.contentHash !== snapshot.contentHash
+        ) {
+          throw new NotFoundError({ entity: "Chat routed context snapshot", id: turnId });
+        }
+        const routedContext = await gateway.storage.routedContextSnapshots.inspectByTurn(turnId);
+        if (
+          !routedContext ||
+          routedContext.snapshotId !== snapshot.snapshotId ||
+          routedContext.snapshotHash !== snapshot.snapshotHash
+        ) {
+          throw new NotFoundError({ entity: "Chat routed context snapshot", id: turnId });
+        }
+        const contextToolNames = new Set<string>(CHAT_ROUTED_CONTEXT_TOOL_NAMES);
+        const snapshotHasEligibleText = (snapshot.entries ?? []).some(
+          (entry) =>
+            (entry.disposition === "included" || entry.disposition === "truncated") &&
+            entry.admittedBytes > 0 &&
+            entry.admittedText.length > 0,
+        );
+        const availableContextTools = snapshotHasEligibleText
+          ? profile.selection.tools
+              .map((tool) => tool.canonicalName)
+              .filter((toolName) => contextToolNames.has(toolName))
+          : [];
+        return { ...envelope, routedContext, availableContextTools };
+      })();
     },
     getTurnContextManifestForSession: (sessionId, turnId) =>
       chatMessageRouteRuntime.getTurnContextManifestForSession(chatMessageRouteRuntimeHost, sessionId, turnId),
@@ -574,9 +581,9 @@ export function composeChatRouteDependencies(
     chatProjects: {
       archiveChatProject: (projectId, expectedRevision) =>
         gateway.chatProjectService.archiveChatProject(projectId, expectedRevision),
-      createChatProject: (input) => {
+      createChatProject: async (input) => {
         const { citadelId, ...projectInput } = input;
-        const scope = resolveChatRuntimeScope(gateway, {
+        const scope = await resolveChatRuntimeScope(gateway, {
           citadelId,
           workspaceId: projectInput.workspaceId,
         });
@@ -584,23 +591,23 @@ export function composeChatRouteDependencies(
       },
       hardDeleteChatProject: (projectId, expectedRevision) =>
         gateway.chatProjectService.hardDeleteChatProject(projectId, expectedRevision),
-      importChatProject: (input) => {
+      importChatProject: async (input) => {
         const { citadelId, ...projectInput } = input;
-        const scope = resolveChatRuntimeScope(gateway, {
+        const scope = await resolveChatRuntimeScope(gateway, {
           citadelId,
           workspaceId: projectInput.workspaceId,
         });
         return gateway.chatProjectService.importChatProject({ ...projectInput, workspaceId: scope.workspaceId });
       },
-      listChatProjects: (view, limit, workspaceId, citadelId) => {
-        const scope = resolveChatRuntimeScope(gateway, { citadelId, workspaceId });
+      listChatProjects: async (view, limit, workspaceId, citadelId) => {
+        const scope = await resolveChatRuntimeScope(gateway, { citadelId, workspaceId });
         return gateway.chatProjectService.listChatProjects(view, limit, scope.workspaceId);
       },
       restoreChatProject: (projectId, expectedRevision) =>
         gateway.chatProjectService.restoreChatProject(projectId, expectedRevision),
-      updateChatProject: (projectId, input, expectedRevision) => {
+      updateChatProject: async (projectId, input, expectedRevision) => {
         const { citadelId, ...projectInput } = input;
-        const scope = resolveChatRuntimeScope(gateway, {
+        const scope = await resolveChatRuntimeScope(gateway, {
           citadelId,
           projectId,
           workspaceId: projectInput.workspaceId,
@@ -623,11 +630,11 @@ export function composeChatRouteDependencies(
           gateway.parseChatCommand(sessionId, commandText, options),
       },
       learnedMemory: {
-        listChatSessionLearnedMemory: (sessionId, limit) =>
+        listChatSessionLearnedMemory: async (sessionId, limit) =>
           gateway.memoryLifecycleService.listSessionLearnedMemory(sessionId, limit),
         rebuildChatSessionLearnedMemory: (sessionId) =>
           gateway.memoryLifecycleService.rebuildSessionLearnedMemory(sessionId),
-        updateChatSessionLearnedMemory: (sessionId, itemId, input) =>
+        updateChatSessionLearnedMemory: async (sessionId, itemId, input) =>
           gateway.memoryLifecycleService.updateSessionLearnedMemory(sessionId, itemId, input),
       },
       prefs: {
@@ -645,25 +652,25 @@ export function composeChatRouteDependencies(
           gateway.chatProactiveService.updateChatSessionProactivePolicy(sessionId, input),
       },
       research: {
-        getChatResearchRun: (sessionId, runId) => gateway.researchService.getRun(sessionId, runId),
+        getChatResearchRun: async (sessionId, runId) => gateway.researchService.getRun(sessionId, runId),
         runChatResearch: (sessionId, input) => gateway.runChatResearch(sessionId, input),
       },
       specialists: {
         createChatSessionSpecialistCandidate: (sessionId, input) =>
           gateway.createChatSessionSpecialistCandidate(sessionId, input),
-        listChatSessionSpecialistCandidates: (sessionId, limit = 200) => {
-          gateway.getSession(sessionId);
+        listChatSessionSpecialistCandidates: async (sessionId, limit = 200) => {
+          await gateway.getSession(sessionId);
           return {
-            items: gateway.storage.chatSpecialistCandidates.listBySession(sessionId, limit),
+            items: await gateway.storage.chatSpecialistCandidates.listBySession(sessionId, limit),
           };
         },
-        updateChatSessionSpecialistCandidate: (sessionId, candidateId, input) => {
-          gateway.getSession(sessionId);
-          const current = gateway.storage.chatSpecialistCandidates.get(candidateId);
+        updateChatSessionSpecialistCandidate: async (sessionId, candidateId, input) => {
+          await gateway.getSession(sessionId);
+          const current = await gateway.storage.chatSpecialistCandidates.get(candidateId);
           if (current.sessionId !== sessionId) {
             throw new Error("Specialist candidate does not belong to this session.");
           }
-          return gateway.storage.chatSpecialistCandidates.patch(candidateId, input);
+          return await gateway.storage.chatSpecialistCandidates.patch(candidateId, input);
         },
       },
       steer: {
@@ -683,11 +690,11 @@ export function composeChatRouteDependencies(
   };
 }
 
-function resolveChatRuntimeScope(
+async function resolveChatRuntimeScope(
   gateway: GatewayRouteCompositionPort,
   source: Parameters<typeof resolveEffectiveRuntimeScopeFromStorage>[1],
-) {
-  return resolveEffectiveRuntimeScopeFromStorage(
+): Promise<Awaited<ReturnType<typeof resolveEffectiveRuntimeScopeFromStorage>>> {
+  return await resolveEffectiveRuntimeScopeFromStorage(
     {
       storage: gateway.storage,
       normalizeWorkspaceId: (workspaceId) => gateway.normalizeWorkspaceId(workspaceId),

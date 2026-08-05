@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage, Storage } from "@goatcitadel/storage";
 import type { EmbeddingUsageDispatchInput, LocalEmbeddingLeaseRequest } from "./local-embeddings.js";
 import { executeTool } from "./tool-executor.js";
 
@@ -305,7 +305,7 @@ function createEmbeddingAccountingHarness(options: { failSettlement?: boolean } 
   return { inputs, attempts, prepare };
 }
 
-function createKnowledgeStorage(): Storage {
+function createKnowledgeStorage(): Storage & AsyncStorage {
   const documents: Array<Record<string, unknown>> = [];
   const chunksByDocId = new Map<string, Array<Record<string, unknown>>>();
   let documentSeq = 0;
@@ -364,5 +364,5 @@ function createKnowledgeStorage(): Storage {
         },
       ),
     },
-  } as unknown as Storage;
+  } as unknown as Storage & AsyncStorage;
 }

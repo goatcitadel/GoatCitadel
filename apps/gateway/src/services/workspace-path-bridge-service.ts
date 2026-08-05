@@ -93,8 +93,17 @@ export class NodeWorkspacePathBridgeProcessRunner implements WorkspacePathBridge
   }
 }
 
+type WorkspacePathBridgeRepositoryPort = {
+  [Key in keyof Pick<WorkspacePathBridgeSnapshotRepository, "create" | "find" | "get" | "listByWorkspace">]: Pick<
+    WorkspacePathBridgeSnapshotRepository,
+    Key
+  >[Key] extends (...args: infer Args) => infer Result
+    ? (...args: Args) => Result | Promise<Result>
+    : never;
+};
+
 export interface WorkspacePathBridgeServiceOptions {
-  repository: Pick<WorkspacePathBridgeSnapshotRepository, "create" | "find" | "get" | "listByWorkspace">;
+  repository: WorkspacePathBridgeRepositoryPort;
   allowedRootsForWorkspace: (workspaceId: string) => readonly string[] | Promise<readonly string[]>;
   runner?: WorkspacePathBridgeProcessRunner;
   realpath?: (input: string) => Promise<string>;
@@ -235,7 +244,7 @@ export class WorkspacePathBridgeService {
       }
       throwIfAborted(options.signal);
 
-      return this.persist({
+      return await this.persist({
         request,
         requestHash,
         inputPathHash,
@@ -248,7 +257,7 @@ export class WorkspacePathBridgeService {
       if (!failure) {
         throw error;
       }
-      return this.persist({
+      return await this.persist({
         request,
         requestHash,
         inputPathHash,
@@ -260,22 +269,22 @@ export class WorkspacePathBridgeService {
     }
   }
 
-  public inspect(workspaceId: string, snapshotId: string): WorkspacePathBridgeSnapshotRecord {
+  public async inspect(workspaceId: string, snapshotId: string): Promise<WorkspacePathBridgeSnapshotRecord> {
     validateIdentifier(workspaceId, "workspaceId", 256);
     validateIdentifier(snapshotId, "snapshotId", 256);
-    const snapshot = this.repository.get(snapshotId);
+    const snapshot = await this.repository.get(snapshotId);
     if (snapshot.workspaceId !== workspaceId) {
       throw new Error("Workspace path bridge snapshot is outside the requested workspace.");
     }
     return snapshot;
   }
 
-  public list(workspaceId: string, limit = 50): WorkspacePathBridgeSnapshotRecord[] {
+  public async list(workspaceId: string, limit = 50): Promise<WorkspacePathBridgeSnapshotRecord[]> {
     validateIdentifier(workspaceId, "workspaceId", 256);
-    return this.repository.listByWorkspace(workspaceId, limit);
+    return await this.repository.listByWorkspace(workspaceId, limit);
   }
 
-  private persist(input: {
+  private async persist(input: {
     request: WorkspacePathBridgeResolveRequest;
     requestHash: string;
     inputPathHash: string;
@@ -283,8 +292,8 @@ export class WorkspacePathBridgeService {
     progress: BridgeProgress;
     status: "verified" | "blocked" | "unavailable";
     reasonCode?: WorkspacePathBridgeReasonCode;
-  }): WorkspacePathBridgeSnapshotRecord {
-    const existing = this.repository.find(input.request.verificationId);
+  }): Promise<WorkspacePathBridgeSnapshotRecord> {
+    const existing = await this.repository.find(input.request.verificationId);
     const snapshot = sealWorkspacePathBridgeSnapshot({
       schemaVersion: WORKSPACE_PATH_BRIDGE_SNAPSHOT_VERSION,
       snapshotId: input.request.verificationId,
@@ -313,7 +322,7 @@ export class WorkspacePathBridgeService {
       }
       return existing;
     }
-    return this.repository.create(snapshot);
+    return await this.repository.create(snapshot);
   }
 
   private async canonicalizeRoots(configuredRoots: readonly string[]): Promise<CanonicalRoot[]> {

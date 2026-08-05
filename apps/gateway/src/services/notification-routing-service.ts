@@ -13,7 +13,7 @@ import {
   type NotificationTargetInput,
   type NotifyRequest,
 } from "@goatcitadel/contracts";
-import type { NotificationRoutingRepository } from "@goatcitadel/storage";
+import type { AsyncStorage } from "@goatcitadel/storage";
 
 const MAX_PRESENCE_LEASE_MS = 90_000;
 const MAX_LABEL_LENGTH = 120;
@@ -28,9 +28,9 @@ export interface NotificationDeliveryAdapterResult {
 }
 
 export interface NotificationRoutingServiceDependencies {
-  repository: NotificationRoutingRepository;
+  repository: AsyncStorage["notificationRouting"];
   normalizeWorkspaceId(workspaceId?: string): string;
-  getIntegrationConnection(connectionId: string): IntegrationConnection;
+  getIntegrationConnection(connectionId: string): Promise<IntegrationConnection>;
   deliver(
     target: NotificationTarget,
     event: NotificationEventRecord,
@@ -41,7 +41,7 @@ export interface NotificationRoutingServiceDependencies {
     source: string,
     payload: Record<string, unknown>,
     options?: { eventClass?: "domain_fact" | "operational_signal" | "ui_notification" },
-  ): void;
+  ): Promise<void>;
   now?: () => Date;
   randomId?: () => string;
 }
@@ -55,52 +55,55 @@ export class NotificationRoutingService {
     this.randomId = deps.randomId ?? randomUUID;
   }
 
-  public listTargets(workspaceId?: string, includeArchived = false): NotificationTarget[] {
-    return this.deps.repository.listTargets(this.workspace(workspaceId), includeArchived);
+  public async listTargets(workspaceId?: string, includeArchived = false): Promise<NotificationTarget[]> {
+    return await this.deps.repository.listTargets(this.workspace(workspaceId), includeArchived);
   }
 
-  public createTarget(workspaceId: string | undefined, input: NotificationTargetInput): NotificationTarget {
+  public async createTarget(
+    workspaceId: string | undefined,
+    input: NotificationTargetInput,
+  ): Promise<NotificationTarget> {
     const normalizedWorkspaceId = this.workspace(workspaceId);
-    const validated = this.validateTarget(normalizedWorkspaceId, input);
-    return this.deps.repository.createTarget(this.randomId(), normalizedWorkspaceId, validated, this.isoNow());
+    const validated = await this.validateTarget(normalizedWorkspaceId, input);
+    return await this.deps.repository.createTarget(this.randomId(), normalizedWorkspaceId, validated, this.isoNow());
   }
 
-  public updateTarget(
+  public async updateTarget(
     workspaceId: string | undefined,
     targetId: string,
     expectedRevision: number,
     input: NotificationTargetInput,
-  ): NotificationTarget {
+  ): Promise<NotificationTarget> {
     const normalizedWorkspaceId = this.workspace(workspaceId);
-    this.assertTargetWorkspace(targetId, normalizedWorkspaceId);
-    const validated = this.validateTarget(normalizedWorkspaceId, input);
-    return this.deps.repository.updateTarget(targetId, expectedRevision, validated, this.isoNow());
+    await this.assertTargetWorkspace(targetId, normalizedWorkspaceId);
+    const validated = await this.validateTarget(normalizedWorkspaceId, input);
+    return await this.deps.repository.updateTarget(targetId, expectedRevision, validated, this.isoNow());
   }
 
-  public listRules(workspaceId?: string, includeArchived = false): NotificationRule[] {
-    return this.deps.repository.listRules(this.workspace(workspaceId), includeArchived);
+  public async listRules(workspaceId?: string, includeArchived = false): Promise<NotificationRule[]> {
+    return await this.deps.repository.listRules(this.workspace(workspaceId), includeArchived);
   }
 
-  public createRule(workspaceId: string | undefined, input: NotificationRuleInput): NotificationRule {
+  public async createRule(workspaceId: string | undefined, input: NotificationRuleInput): Promise<NotificationRule> {
     const normalizedWorkspaceId = this.workspace(workspaceId);
-    const validated = this.validateRule(normalizedWorkspaceId, input);
-    return this.deps.repository.createRule(this.randomId(), normalizedWorkspaceId, validated, this.isoNow());
+    const validated = await this.validateRule(normalizedWorkspaceId, input);
+    return await this.deps.repository.createRule(this.randomId(), normalizedWorkspaceId, validated, this.isoNow());
   }
 
-  public updateRule(
+  public async updateRule(
     workspaceId: string | undefined,
     ruleId: string,
     expectedRevision: number,
     input: NotificationRuleInput,
-  ): NotificationRule {
+  ): Promise<NotificationRule> {
     const normalizedWorkspaceId = this.workspace(workspaceId);
-    const existing = this.deps.repository.getRule(ruleId);
+    const existing = await this.deps.repository.getRule(ruleId);
     assertWorkspace(existing.workspaceId, normalizedWorkspaceId, "notification rule");
-    const validated = this.validateRule(normalizedWorkspaceId, input);
-    return this.deps.repository.updateRule(ruleId, expectedRevision, validated, this.isoNow());
+    const validated = await this.validateRule(normalizedWorkspaceId, input);
+    return await this.deps.repository.updateRule(ruleId, expectedRevision, validated, this.isoNow());
   }
 
-  public upsertPresence(input: {
+  public async upsertPresence(input: {
     workspaceId?: string;
     leaseId?: string;
     clientId: string;
@@ -108,7 +111,7 @@ export class NotificationRoutingService {
     focused: boolean;
     visible: boolean;
     ttlMs?: number;
-  }): NotificationClientPresenceLease {
+  }): Promise<NotificationClientPresenceLease> {
     const now = this.now();
     const ttlMs = Math.max(5_000, Math.min(MAX_PRESENCE_LEASE_MS, input.ttlMs ?? MAX_PRESENCE_LEASE_MS));
     const lease: NotificationClientPresenceLease = {
@@ -121,20 +124,20 @@ export class NotificationRoutingService {
       expiresAt: new Date(now.getTime() + ttlMs).toISOString(),
       updatedAt: now.toISOString(),
     };
-    return this.deps.repository.upsertPresence(lease);
+    return await this.deps.repository.upsertPresence(lease);
   }
 
-  public listDeliveries(workspaceId?: string, limit?: number): NotificationDeliveryRecord[] {
-    return this.deps.repository.listDeliveries(this.workspace(workspaceId), limit);
+  public async listDeliveries(workspaceId?: string, limit?: number): Promise<NotificationDeliveryRecord[]> {
+    return await this.deps.repository.listDeliveries(this.workspace(workspaceId), limit);
   }
 
   public async sendTest(workspaceId: string | undefined, targetId: string): Promise<NotificationDispatchResult> {
     const normalizedWorkspaceId = this.workspace(workspaceId);
-    const target = this.assertTargetWorkspace(targetId, normalizedWorkspaceId);
+    const target = await this.assertTargetWorkspace(targetId, normalizedWorkspaceId);
     if (target.lifecycleState !== "active") {
       throw validationError("Target must be active before a test can be sent.", "targetId");
     }
-    const event = this.recordEvent(normalizedWorkspaceId, {
+    const event = await this.recordEvent(normalizedWorkspaceId, {
       eventType: "durable.attention_required",
       title: "Test notification",
       message: "GoatCitadel notification routing is connected.",
@@ -160,27 +163,30 @@ export class NotificationRoutingService {
   ): Promise<NotificationDispatchResult> {
     const normalizedWorkspaceId = this.workspace(workspaceId);
     validateEvent(input);
-    const event = this.recordEvent(normalizedWorkspaceId, input);
+    const event = await this.recordEvent(normalizedWorkspaceId, input);
 
-    this.deps.publishRealtime("notification_event", "notifications", { ...event }, { eventClass: "ui_notification" });
+    await this.deps.publishRealtime(
+      "notification_event",
+      "notifications",
+      { ...event },
+      { eventClass: "ui_notification" },
+    );
 
     const deliveries: NotificationDeliveryRecord[] = [];
-    const rules = this.deps.repository
-      .listRules(normalizedWorkspaceId)
-      .filter(
-        (rule) =>
-          rule.lifecycleState === "active" &&
-          rule.eventTypes.includes(event.eventType) &&
-          (!input.ruleId || rule.ruleId === input.ruleId),
-      );
-    const isPresent = this.deps.repository.hasActivePresence(normalizedWorkspaceId, this.isoNow());
+    const rules = (await this.deps.repository.listRules(normalizedWorkspaceId)).filter(
+      (rule) =>
+        rule.lifecycleState === "active" &&
+        rule.eventTypes.includes(event.eventType) &&
+        (!input.ruleId || rule.ruleId === input.ruleId),
+    );
+    const isPresent = await this.deps.repository.hasActivePresence(normalizedWorkspaceId, this.isoNow());
 
     for (const rule of rules) {
       for (const targetId of rule.targetIds) {
-        const target = this.assertTargetWorkspace(targetId, normalizedWorkspaceId);
+        const target = await this.assertTargetWorkspace(targetId, normalizedWorkspaceId);
         if (target.lifecycleState !== "active") continue;
         if (rule.deliveryPolicy === "when_away" && isPresent) {
-          deliveries.push(this.recordSuppressedDelivery(event, rule.ruleId, target.targetId));
+          deliveries.push(await this.recordSuppressedDelivery(event, rule.ruleId, target.targetId));
           continue;
         }
         deliveries.push(await this.deliverForRule(event, target, rule.ruleId));
@@ -197,7 +203,7 @@ export class NotificationRoutingService {
   ): Promise<NotificationDeliveryRecord> {
     const idempotencyKey = `notification:${event.eventId}:${ruleId}:${target.targetId}`;
     const now = this.isoNow();
-    const delivery = this.deps.repository.createDelivery({
+    const delivery = await this.deps.repository.createDelivery({
       deliveryId: this.randomId(),
       eventId: event.eventId,
       ruleId,
@@ -213,34 +219,34 @@ export class NotificationRoutingService {
 
     try {
       const outcome = await this.deps.deliver(target, event, idempotencyKey);
-      const updated = this.deps.repository.patchDelivery(delivery.deliveryId, {
+      const updated = await this.deps.repository.patchDelivery(delivery.deliveryId, {
         status: outcome.status,
         attemptCount: outcome.attemptCount ?? 1,
         updatedAt: this.isoNow(),
         ...(outcome.lastError ? { lastError: sanitizeFailure(outcome.lastError) } : {}),
         ...(outcome.externalSideEffectRunId ? { externalSideEffectRunId: outcome.externalSideEffectRunId } : {}),
       });
-      this.publishDelivery(updated);
+      await this.publishDelivery(updated);
       return updated;
     } catch (error) {
-      const updated = this.deps.repository.patchDelivery(delivery.deliveryId, {
+      const updated = await this.deps.repository.patchDelivery(delivery.deliveryId, {
         status: "failed",
         attemptCount: 1,
         lastError: sanitizeFailure(error instanceof Error ? error.message : "Notification delivery failed."),
         updatedAt: this.isoNow(),
       });
-      this.publishDelivery(updated);
+      await this.publishDelivery(updated);
       return updated;
     }
   }
 
-  private recordSuppressedDelivery(
+  private async recordSuppressedDelivery(
     event: NotificationEventRecord,
     ruleId: string,
     targetId: string,
-  ): NotificationDeliveryRecord {
+  ): Promise<NotificationDeliveryRecord> {
     const now = this.isoNow();
-    return this.deps.repository.createDelivery({
+    return await this.deps.repository.createDelivery({
       deliveryId: this.randomId(),
       eventId: event.eventId,
       ruleId,
@@ -254,10 +260,10 @@ export class NotificationRoutingService {
     });
   }
 
-  private recordEvent(
+  private async recordEvent(
     workspaceId: string,
     input: Omit<NotifyRequest, "targetIds"> & { source: string; eventId?: string },
-  ): NotificationEventRecord {
+  ): Promise<NotificationEventRecord> {
     const event: NotificationEventRecord = {
       eventId: input.eventId ?? this.randomId(),
       workspaceId,
@@ -269,14 +275,14 @@ export class NotificationRoutingService {
       source: requireOpaqueId(input.source, "source"),
       createdAt: this.isoNow(),
     };
-    return this.deps.repository.createEvent(event);
+    return await this.deps.repository.createEvent(event);
   }
 
-  private validateTarget(workspaceId: string, input: NotificationTargetInput): NotificationTargetInput {
+  private async validateTarget(workspaceId: string, input: NotificationTargetInput): Promise<NotificationTargetInput> {
     const label = requireBoundedText(input.label, "label", MAX_LABEL_LENGTH);
     if (input.kind === "channel_connection") {
       const connectionId = requireOpaqueId(input.channelConnectionId, "channelConnectionId");
-      const connection = this.deps.getIntegrationConnection(connectionId);
+      const connection = await this.deps.getIntegrationConnection(connectionId);
       if (connection.kind !== "channel" || connection.enabled !== true) {
         throw validationError(
           "Notification target must reference an enabled channel connection.",
@@ -307,14 +313,14 @@ export class NotificationRoutingService {
     };
   }
 
-  private validateRule(workspaceId: string, input: NotificationRuleInput): NotificationRuleInput {
+  private async validateRule(workspaceId: string, input: NotificationRuleInput): Promise<NotificationRuleInput> {
     const eventTypes = [...new Set(input.eventTypes)];
     if (!eventTypes.length || eventTypes.some((eventType) => !NOTIFICATION_EVENT_TYPES.includes(eventType))) {
       throw validationError("Notification rule must contain supported event types.", "eventTypes");
     }
     const targetIds = [...new Set(input.targetIds.map((targetId) => requireOpaqueId(targetId, "targetIds")))];
     if (!targetIds.length) throw validationError("Notification rule must contain at least one target.", "targetIds");
-    for (const targetId of targetIds) this.assertTargetWorkspace(targetId, workspaceId);
+    for (const targetId of targetIds) await this.assertTargetWorkspace(targetId, workspaceId);
     return {
       label: requireBoundedText(input.label, "label", MAX_LABEL_LENGTH),
       eventTypes,
@@ -324,14 +330,14 @@ export class NotificationRoutingService {
     };
   }
 
-  private assertTargetWorkspace(targetId: string, workspaceId: string): NotificationTarget {
-    const target = this.deps.repository.getTarget(requireOpaqueId(targetId, "targetId"));
+  private async assertTargetWorkspace(targetId: string, workspaceId: string): Promise<NotificationTarget> {
+    const target = await this.deps.repository.getTarget(requireOpaqueId(targetId, "targetId"));
     assertWorkspace(target.workspaceId, workspaceId, "notification target");
     return target;
   }
 
-  private publishDelivery(delivery: NotificationDeliveryRecord): void {
-    this.deps.publishRealtime("notification_delivery", "notifications", {
+  private async publishDelivery(delivery: NotificationDeliveryRecord): Promise<void> {
+    await this.deps.publishRealtime("notification_delivery", "notifications", {
       deliveryId: delivery.deliveryId,
       eventId: delivery.eventId,
       targetId: delivery.targetId,

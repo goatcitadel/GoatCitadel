@@ -15,7 +15,7 @@ import {
 } from "./channel-setup-test-cache.js";
 
 export interface ChannelSetupHost {
-  getIntegrationConnection(connectionId: string): IntegrationConnection;
+  getIntegrationConnection(connectionId: string): Promise<IntegrationConnection>;
 }
 
 export function buildDefaultChannelSetupDraft(definition: ChannelSetupDefinition): Record<string, unknown> {
@@ -49,18 +49,18 @@ export function buildChannelSetupValidationResult(
   };
 }
 
-export function buildEphemeralChannelConnection(
+export async function buildEphemeralChannelConnection(
   host: ChannelSetupHost,
   draft: ChannelSetupDraft,
   secretFieldKeys?: string[],
-): IntegrationConnection {
+): Promise<IntegrationConnection> {
   const runtime = requireChannelSetupDefinition(draft.catalogId);
   const catalog = INTEGRATION_CATALOG.find((entry) => entry.catalogId === draft.catalogId);
   if (!catalog) {
     throw new Error(`Unknown integration catalog id: ${draft.catalogId}`);
   }
   const nextConfig = runtime.normalize(draft);
-  const currentConfig = draft.connectionId ? host.getIntegrationConnection(draft.connectionId).config : {};
+  const currentConfig = draft.connectionId ? (await host.getIntegrationConnection(draft.connectionId)).config : {};
   const preservedSecrets = Object.fromEntries(
     (secretFieldKeys ?? runtime.definition.adapter.secretFieldKeys)
       .filter((key) => nextConfig[key] === undefined && currentConfig[key] !== undefined)
@@ -84,13 +84,13 @@ export function buildEphemeralChannelConnection(
   };
 }
 
-export function getReusableChannelSetupTestResult(
+export async function getReusableChannelSetupTestResult(
   host: ChannelSetupHost,
   cache: Map<string, ChannelSetupRecentTestCacheEntry>,
   draft: ChannelSetupDraft,
-): ChannelSetupTestResult | undefined {
+): Promise<ChannelSetupTestResult | undefined> {
   const runtime = requireChannelSetupDefinition(draft.catalogId);
-  const connection = buildEphemeralChannelConnection(host, draft, runtime.definition.adapter.secretFieldKeys);
+  const connection = await buildEphemeralChannelConnection(host, draft, runtime.definition.adapter.secretFieldKeys);
   return resolveReusableChannelSetupTestResult({
     cache,
     draft,

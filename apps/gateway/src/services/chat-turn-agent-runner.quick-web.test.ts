@@ -96,7 +96,7 @@ describe("ChatTurnAgentRunner quick_web profile", () => {
     expect(result.turnTrace.toolRuns.map((run) => run.toolName)).toEqual(["browser.search"]);
   });
 
-  it("falls back to bounded search evidence when quick synthesis times out", async () => {
+  it("retains bounded search evidence without repairing a quick synthesis timeout", async () => {
     const createChatCompletion = vi.fn(async (): Promise<ChatCompletionResponse> => {
       throw new Error("provider timeout");
     });
@@ -144,7 +144,7 @@ describe("ChatTurnAgentRunner quick_web profile", () => {
     expect(result.assistantContent).toContain("strongest relevant points");
     expect(result.assistantContent).toContain("Use soy sparingly");
     expect(result.assistantContent).toContain("https://example.test/sushi");
-    expect(result.turnTrace.status).toBe("completed");
+    expect(result.turnTrace.status).toBe("failed");
     expect(result.turnTrace.failure).toEqual(
       expect.objectContaining({
         failureClass: "provider_timeout",

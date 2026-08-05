@@ -3,7 +3,7 @@ import { NotFoundError, type ChatTurnTraceRecord } from "@goatcitadel/contracts"
 import { markChatTurnCancelled, type ChatTurnCancellationDeps } from "./chat-turn-cancellation.js";
 
 describe("markChatTurnCancelled terminal ownership", () => {
-  it("preserves a completion that wins between the cancellation read and compare-and-set", () => {
+  it("preserves a completion that wins between the cancellation read and compare-and-set", async () => {
     let trace = createTrace("running");
     const deps = createDeps({
       get: vi.fn(() => trace),
@@ -13,14 +13,14 @@ describe("markChatTurnCancelled terminal ownership", () => {
       }),
     });
 
-    const result = markChatTurnCancelled(deps, "session-1", "turn-1", "operator");
+    const result = await markChatTurnCancelled(deps, "session-1", "turn-1", "operator");
 
     expect(result.status).toBe("completed");
     expect(deps.recordDevDiagnostic).not.toHaveBeenCalled();
     expect(deps.publishRealtime).not.toHaveBeenCalled();
   });
 
-  it("retries when another active-state transition wins before cancellation", () => {
+  it("retries when another active-state transition wins before cancellation", async () => {
     let trace = createTrace("running");
     let attempts = 0;
     const patchIfStatus = vi.fn(
@@ -39,7 +39,7 @@ describe("markChatTurnCancelled terminal ownership", () => {
       patchIfStatus,
     });
 
-    const result = markChatTurnCancelled(deps, "session-1", "turn-1", "operator");
+    const result = await markChatTurnCancelled(deps, "session-1", "turn-1", "operator");
 
     expect(result.status).toBe("cancelled");
     expect(patchIfStatus).toHaveBeenCalledTimes(2);
@@ -47,7 +47,7 @@ describe("markChatTurnCancelled terminal ownership", () => {
     expect(deps.publishRealtime).toHaveBeenCalledTimes(1);
   });
 
-  it("preserves the admitted assistant identity when reconstructing a missing active trace", () => {
+  it("preserves the admitted assistant identity when reconstructing a missing active trace", async () => {
     const createdTrace = createTrace("running");
     const create = vi.fn(() => createdTrace);
     const patchIfStatus = vi.fn(
@@ -91,7 +91,7 @@ describe("markChatTurnCancelled terminal ownership", () => {
       publishRealtime: vi.fn(() => ({}) as never),
     };
 
-    expect(markChatTurnCancelled(deps, "session-1", "turn-1", "operator").status).toBe("cancelled");
+    expect((await markChatTurnCancelled(deps, "session-1", "turn-1", "operator")).status).toBe("cancelled");
     expect(create).toHaveBeenCalledWith(expect.objectContaining({ assistantMessageId: "assistant-1" }));
   });
 });

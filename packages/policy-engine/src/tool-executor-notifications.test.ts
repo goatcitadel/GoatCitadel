@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage, Storage } from "@goatcitadel/storage";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
 import { executeTool } from "./tool-executor.js";
 
@@ -52,6 +52,6 @@ function config(): ToolPolicyConfig {
   };
 }
 
-function storage(): Storage {
-  return { toolGrants: { listActiveBySession: vi.fn(() => []) } } as unknown as Storage;
+function storage(): Storage & AsyncStorage {
+  return { toolGrants: { listActiveBySession: vi.fn(() => []) } } as unknown as Storage & AsyncStorage;
 }

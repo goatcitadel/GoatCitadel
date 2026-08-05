@@ -177,18 +177,18 @@ export function resolveSendAdmissionArgs(
  * future session-scoped stream. Returns `true` (and sends the mapped error) when
  * the read is denied; the route handler then returns without reading content.
  */
-export function rejectExternalTranscriptRead(
+export async function rejectExternalTranscriptRead(
   fastify: FastifyInstance,
   request: FastifyRequest,
   reply: FastifyReply,
   sessionId: string,
-): boolean {
+): Promise<boolean> {
   if (!isSessionControlCompanionRequest(request)) {
     return false;
   }
   try {
     const actor = resolveSessionControlCompanionActor(request);
-    fastify.services.sessionControl.authorizeExternalSessionRead({ actor, sessionId });
+    await fastify.services.sessionControl.authorizeExternalSessionRead({ actor, sessionId });
     return false;
   } catch (error) {
     sendRouteError(reply, error, request.log);

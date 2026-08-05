@@ -24,7 +24,7 @@ export const complianceRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(compliance.buildComplianceBundle(parsed.data));
+      return reply.send(await compliance.buildComplianceBundle(parsed.data));
     } catch (error) {
       const httpStatus = readHttpStatus(error);
       if (httpStatus) {
@@ -49,11 +49,7 @@ export const complianceRoutes: FastifyPluginAsync = async (fastify) => {
 };
 
 function isInputValidationError(error: Error): boolean {
-  return (
-    error.message.includes("fromTs") ||
-    error.message.includes("toTs") ||
-    error.message.includes("ISO-8601")
-  );
+  return error.message.includes("fromTs") || error.message.includes("toTs") || error.message.includes("ISO-8601");
 }
 
 function readHttpStatus(error: unknown): number | undefined {

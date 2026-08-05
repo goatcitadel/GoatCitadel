@@ -153,7 +153,7 @@ function createHost(): ChannelSetupHost & {
 describe("channel-setup-service contract behavior", () => {
   it("blocks live testing for invalid drafts without probing connectors", async () => {
     const host = createHost();
-    const draft = createChannelSetupDraft(host, {
+    const draft = await createChannelSetupDraft(host, {
       catalogId: "channel.discord",
       lifecycleMode: "create",
     });
@@ -170,7 +170,7 @@ describe("channel-setup-service contract behavior", () => {
 
   it("finalizes a valid draft into a connected integration and clears draft state", async () => {
     const host = createHost();
-    const created = createChannelSetupDraft(host, {
+    const created = await createChannelSetupDraft(host, {
       catalogId: "channel.discord",
       lifecycleMode: "create",
     });
@@ -213,7 +213,7 @@ describe("channel-setup-service contract behavior", () => {
         },
       ],
     }));
-    const created = createChannelSetupDraft(host, {
+    const created = await createChannelSetupDraft(host, {
       catalogId: "channel.ntfy",
       lifecycleMode: "create",
     });
@@ -241,9 +241,9 @@ describe("channel-setup-service contract behavior", () => {
     });
   });
 
-  it("reconciles public draft placeholders while leaving the internal raw update path unchanged", () => {
+  it("reconciles public draft placeholders while leaving the internal raw update path unchanged", async () => {
     const host = createHost();
-    const created = createChannelSetupDraft(host, {
+    const created = await createChannelSetupDraft(host, {
       catalogId: "channel.slack",
       lifecycleMode: "repair",
     });
@@ -265,7 +265,7 @@ describe("channel-setup-service contract behavior", () => {
       },
     });
 
-    const updated = updateChannelSetupDraft(
+    const updated = await updateChannelSetupDraft(
       host,
       created.draftId,
       {
@@ -289,7 +289,7 @@ describe("channel-setup-service contract behavior", () => {
       DATABASE_PASSWORD: "db-short",
     });
 
-    const internal = updateChannelSetupDraft(host, created.draftId, {
+    const internal = await updateChannelSetupDraft(host, created.draftId, {
       draft: {
         botToken: "replacement-short",
       },

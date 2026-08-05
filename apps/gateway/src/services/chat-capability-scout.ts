@@ -16,20 +16,20 @@ import type {
 
 interface CapabilityScoutDeps {
   listToolCatalog(): ToolCatalogEntry[];
-  evaluateToolAccess(input: ToolAccessEvaluateRequest): ToolAccessEvaluateResponse;
-  listSkills(): SkillListItem[];
-  resolveSkillActivation(input: SkillResolveInput): {
+  evaluateToolAccess(input: ToolAccessEvaluateRequest): Promise<ToolAccessEvaluateResponse>;
+  listSkills(): Promise<SkillListItem[]>;
+  resolveSkillActivation(input: SkillResolveInput): Promise<{
     suppressed: Array<{
       skill: string;
       state: "enabled" | "sleep" | "disabled";
       confidence: number;
       reason: string;
     }>;
-  };
+  }>;
   listSkillSources(query?: string, limit?: number): Promise<SkillSourceListResponse>;
   lookupSkillSources(queryOrUrl: string, limit?: number): Promise<SkillSourceLookupResponse>;
-  listMcpTemplates(): Array<McpServerTemplateRecord & { installed: boolean }>;
-  listMcpTemplateDiscovery(): McpTemplateDiscoveryResult[];
+  listMcpTemplates(): Promise<Array<McpServerTemplateRecord & { installed: boolean }>>;
+  listMcpTemplateDiscovery(): Promise<McpTemplateDiscoveryResult[]>;
 }
 
 interface CapabilityScoutInput {
@@ -109,8 +109,11 @@ export async function scoutCapabilityUpgradeSuggestions(
 
   const ranked: RankedSuggestion[] = [];
   let discoveryFailed = false;
-  const skills = input.deps.listSkills();
-  const suppressed = input.deps.resolveSkillActivation({ text: input.content }).suppressed;
+  const [skills, activation] = await Promise.all([
+    input.deps.listSkills(),
+    input.deps.resolveSkillActivation({ text: input.content }),
+  ]);
+  const suppressed = activation.suppressed;
 
   for (const item of suppressed) {
     const skill = skills.find((candidate) => normalize(candidate.name) === normalize(item.skill));
@@ -149,7 +152,7 @@ export async function scoutCapabilityUpgradeSuggestions(
   for (const tool of rankToolMatches(input.content, input.deps.listToolCatalog()).slice(0, 4)) {
     let access: ToolAccessEvaluateResponse;
     try {
-      access = input.deps.evaluateToolAccess({
+      access = await input.deps.evaluateToolAccess({
         toolName: tool.toolName,
         sessionId: input.sessionId,
         agentId: "assistant",
@@ -228,8 +231,11 @@ export async function scoutCapabilityUpgradeSuggestions(
   }
 
   try {
-    const templateById = new Map(input.deps.listMcpTemplates().map((template) => [template.templateId, template]));
-    const discovery = input.deps.listMcpTemplateDiscovery();
+    const [templates, discovery] = await Promise.all([
+      input.deps.listMcpTemplates(),
+      input.deps.listMcpTemplateDiscovery(),
+    ]);
+    const templateById = new Map(templates.map((template) => [template.templateId, template]));
     for (const item of discovery) {
       const template = templateById.get(item.templateId);
       if (!template || item.installed) {

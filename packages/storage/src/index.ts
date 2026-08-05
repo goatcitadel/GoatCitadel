@@ -2,6 +2,8 @@ import type { ChatAttachmentRecord } from "@goatcitadel/contracts";
 import { ValidationError } from "@goatcitadel/contracts";
 import { createDatabase, type SqliteOptions } from "./sqlite.js";
 import type { DatabaseClient, DatabaseOnlineBackupOptions } from "./db.js";
+export * from "./async-db.js";
+export * from "./async-storage.js";
 import { SessionRepository } from "./session-repo.js";
 import { IdempotencyRepository } from "./idempotency-repo.js";
 import { MutationIdempotencyRepository } from "./mutation-idempotency-repo.js";
@@ -203,6 +205,9 @@ import { DryRunCommitRepository } from "./dry-run-commit-repo.js";
 import { A2ATaskBindingRepository } from "./a2a-task-binding-repo.js";
 import { A2ATaskPushConfigRepository } from "./a2a-task-push-config-repo.js";
 import { RuntimeDecisionTraceRepository } from "./runtime-decision-trace-repo.js";
+import { PersonalOpsStorageRepository } from "./personal-ops-repo.js";
+import { GovernedLifecycleEventRepository } from "./governed-lifecycle-event-repo.js";
+import { ImprovementLifecycleOperationRepository } from "./improvement-lifecycle-operation-repo.js";
 export {
   PersonalOpsInMemoryRepository,
   PersonalOpsStorageRepository,
@@ -364,6 +369,8 @@ export class Storage {
   public readonly skillLearningEvidence: SkillLearningEvidenceRepository;
   public readonly candidateSkillEvidenceLinks: CandidateSkillEvidenceLinkRepository;
   public readonly governanceJourneyEvents: GovernanceJourneyEventRepository;
+  public readonly governedLifecycleEvents: GovernedLifecycleEventRepository;
+  public readonly improvementLifecycleOperations: ImprovementLifecycleOperationRepository;
   public readonly workspacePathBridgeSnapshots: WorkspacePathBridgeSnapshotRepository;
   public readonly externalSourceConfigs: ExternalSourceConfigRepository;
   public readonly externalSourceScans: ExternalSourceScanRepository;
@@ -384,6 +391,7 @@ export class Storage {
   public readonly a2aTaskBindings: A2ATaskBindingRepository;
   public readonly a2aTaskPushConfigs: A2ATaskPushConfigRepository;
   public readonly runtimeDecisionTraces: RuntimeDecisionTraceRepository;
+  public readonly personalOps: PersonalOpsStorageRepository;
   public readonly stateValidationQuarantine: StateValidationQuarantineRepository;
 
   public constructor(options: StorageOptions) {
@@ -522,6 +530,8 @@ export class Storage {
     this.skillLearningEvidence = new SkillLearningEvidenceRepository(this.db);
     this.candidateSkillEvidenceLinks = new CandidateSkillEvidenceLinkRepository(this.db);
     this.governanceJourneyEvents = new GovernanceJourneyEventRepository(this.db);
+    this.governedLifecycleEvents = new GovernedLifecycleEventRepository(this.db);
+    this.improvementLifecycleOperations = new ImprovementLifecycleOperationRepository(this.db);
     this.workspacePathBridgeSnapshots = new WorkspacePathBridgeSnapshotRepository(this.db);
     this.externalSourceConfigs = new ExternalSourceConfigRepository(this.db);
     this.externalSourceScans = new ExternalSourceScanRepository(this.db);
@@ -542,6 +552,7 @@ export class Storage {
     this.a2aTaskBindings = new A2ATaskBindingRepository(this.db);
     this.a2aTaskPushConfigs = new A2ATaskPushConfigRepository(this.db);
     this.runtimeDecisionTraces = new RuntimeDecisionTraceRepository(this.db);
+    this.personalOps = new PersonalOpsStorageRepository(this.db);
     const modelUsageRecoverySweepIntervalMs = Math.max(
       10,
       Math.floor(options.modelUsageRecoverySweepIntervalMs ?? 60_000),

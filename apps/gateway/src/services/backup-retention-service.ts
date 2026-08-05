@@ -14,7 +14,7 @@ import type {
   RetentionPruneResult,
 } from "@goatcitadel/contracts";
 import { clampInt } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { buildBundledDockerContainerName } from "../bundled-postgres-runtime.js";
 import { isWindowsEquivalentBackupPath, verifyBackupAtPath } from "./gateway/backup-verify.js";
 import type { GatewayRuntimeConfig } from "../config.js";
@@ -275,23 +275,23 @@ export class BackupRetentionService {
 
   // ── Retention ────────────────────────────────────────────────────────
 
-  public getRetentionPolicy(): RetentionPolicy {
-    const stored = this.storage.systemSettings.get<RetentionPolicy>(RETENTION_SETTINGS_KEY)?.value;
+  public async getRetentionPolicy(): Promise<RetentionPolicy> {
+    const stored = (await this.storage.systemSettings.get<RetentionPolicy>(RETENTION_SETTINGS_KEY))?.value;
     return normalizeRetentionPolicy(stored ?? DEFAULT_RETENTION_POLICY);
   }
 
-  public updateRetentionPolicy(input: Partial<RetentionPolicy>): RetentionPolicy {
-    const current = this.getRetentionPolicy();
+  public async updateRetentionPolicy(input: Partial<RetentionPolicy>): Promise<RetentionPolicy> {
+    const current = await this.getRetentionPolicy();
     const merged = normalizeRetentionPolicy({
       ...current,
       ...input,
     });
-    this.storage.systemSettings.set(RETENTION_SETTINGS_KEY, merged);
+    await this.storage.systemSettings.set(RETENTION_SETTINGS_KEY, merged);
     return merged;
   }
 
   public async pruneRetention(options: { dryRun?: boolean } = {}): Promise<RetentionPruneResult> {
-    const policy = this.getRetentionPolicy();
+    const policy = await this.getRetentionPolicy();
     const dryRun = options.dryRun ?? true;
     const startedAt = new Date().toISOString();
     let removedTranscriptFiles = 0;
@@ -299,12 +299,12 @@ export class BackupRetentionService {
     let reclaimedBytes = 0;
 
     const realtimeCutoff = new Date(Date.now() - policy.realtimeEventsDays * 24 * 60 * 60 * 1000).toISOString();
-    const realtimeCountRow = this.gatewaySql
+    const realtimeCountRow = (await this.gatewaySql
       .prepare("SELECT COUNT(*) AS count FROM realtime_events WHERE created_at < ?")
-      .get(realtimeCutoff) as { count: number } | undefined;
+      .get(realtimeCutoff)) as { count: number } | undefined;
     const removedRealtimeEvents = Number(realtimeCountRow?.count ?? 0);
     if (!dryRun && removedRealtimeEvents > 0) {
-      this.storage.realtimeEvents.pruneOlderThan(realtimeCutoff);
+      await this.storage.realtimeEvents.pruneOlderThan(realtimeCutoff);
     }
 
     const backupDir = this.getBackupDirectory();

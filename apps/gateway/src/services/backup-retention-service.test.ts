@@ -380,7 +380,9 @@ describe("BackupRetentionService", () => {
     await setAge(oldTranscript, 20);
     await setAge(oldAudit, 20);
 
-    expect(service.updateRetentionPolicy({ realtimeEventsDays: 9999, backupsKeep: -5, transcriptsDays: 0 })).toEqual({
+    await expect(
+      service.updateRetentionPolicy({ realtimeEventsDays: 9999, backupsKeep: -5, transcriptsDays: 0 }),
+    ).resolves.toEqual({
       realtimeEventsDays: 365,
       backupsKeep: 1,
       transcriptsDays: 1,

@@ -54,13 +54,13 @@ interface ExternalConnectorReviewStateStore {
     workspaceId?: string;
     sourceId?: ExternalConnectorSourceId;
     serviceId?: string;
-  }): ExternalConnectorReviewStateRecord[];
+  }): Promise<ExternalConnectorReviewStateRecord[]>;
   find(input: {
     workspaceId?: string;
     sourceId: ExternalConnectorSourceId;
     serviceId: string;
     actionId?: string;
-  }): ExternalConnectorReviewStateRecord | undefined;
+  }): Promise<ExternalConnectorReviewStateRecord | undefined>;
   upsert(
     lookup: {
       workspaceId?: string;
@@ -69,7 +69,7 @@ interface ExternalConnectorReviewStateStore {
       actionId?: string;
     },
     patch: ExternalConnectorReviewStatePatchInput,
-  ): ExternalConnectorReviewStateRecord;
+  ): Promise<ExternalConnectorReviewStateRecord>;
 }
 
 export interface ExternalConnectorCatalogServiceOptions {
@@ -81,7 +81,7 @@ export interface ExternalConnectorCatalogServiceOptions {
     payload: Record<string, unknown>;
     candidateId?: string;
     activationTargetId?: string;
-  }): CapabilityProposalRecord;
+  }): Promise<CapabilityProposalRecord>;
 }
 
 const catalog = MSCR_CONNECTOR_CATALOG as unknown as GeneratedCatalog;
@@ -93,9 +93,9 @@ export class ExternalConnectorCatalogService {
     return [catalog.source];
   }
 
-  public listServices(query: ExternalConnectorServiceListQuery = {}): ExternalConnectorServiceSummary[] {
+  public async listServices(query: ExternalConnectorServiceListQuery = {}): Promise<ExternalConnectorServiceSummary[]> {
     const workspaceId = normalizeWorkspaceId(query.workspaceId);
-    const states = this.buildReviewStateMap(workspaceId);
+    const states = await this.buildReviewStateMap(workspaceId);
     const search = query.search?.trim().toLowerCase();
     const status = query.status && query.status !== "all" ? query.status : undefined;
     const limit = clampLimit(query.limit, catalog.services.length);
@@ -113,24 +113,24 @@ export class ExternalConnectorCatalogService {
       .slice(0, limit);
   }
 
-  public getService(
+  public async getService(
     sourceId: ExternalConnectorSourceId,
     serviceId: string,
     workspaceId?: string,
-  ): ExternalConnectorServiceDetail {
+  ): Promise<ExternalConnectorServiceDetail> {
     this.requireSource(sourceId);
     const service = requireService(serviceId);
-    const states = this.buildReviewStateMap(normalizeWorkspaceId(workspaceId), service.serviceId);
+    const states = await this.buildReviewStateMap(normalizeWorkspaceId(workspaceId), service.serviceId);
     return projectService(service, states, true);
   }
 
-  public getAction(
+  public async getAction(
     sourceId: ExternalConnectorSourceId,
     serviceId: string,
     actionId: string,
     workspaceId?: string,
-  ): ExternalConnectorActionSummary {
-    const service = this.getService(sourceId, serviceId, workspaceId);
+  ): Promise<ExternalConnectorActionSummary> {
+    const service = await this.getService(sourceId, serviceId, workspaceId);
     const action = service.actions.find((item) => item.actionId === actionId);
     if (!action) {
       throw new Error(`Unknown external connector action: ${sourceId}/${serviceId}/${actionId}`);
@@ -138,20 +138,20 @@ export class ExternalConnectorCatalogService {
     return action;
   }
 
-  public updateReviewState(
+  public async updateReviewState(
     lookup: {
       sourceId: ExternalConnectorSourceId;
       serviceId: string;
       actionId?: string;
     },
     patch: ExternalConnectorReviewStatePatchInput,
-  ): ExternalConnectorReviewStateRecord {
+  ): Promise<ExternalConnectorReviewStateRecord> {
     this.requireSource(lookup.sourceId);
     const service = requireService(lookup.serviceId);
     if (lookup.actionId && !service.actions.some((action) => action.actionId === lookup.actionId)) {
       throw new Error(`Unknown external connector action: ${lookup.sourceId}/${lookup.serviceId}/${lookup.actionId}`);
     }
-    return this.options.reviewStates.upsert(
+    return await this.options.reviewStates.upsert(
       {
         workspaceId: normalizeWorkspaceId(patch.workspaceId),
         sourceId: lookup.sourceId,
@@ -162,14 +162,14 @@ export class ExternalConnectorCatalogService {
     );
   }
 
-  public stageAction(
+  public async stageAction(
     lookup: {
       sourceId: ExternalConnectorSourceId;
       serviceId: string;
       actionId: string;
     },
     input: ExternalConnectorStageActionInput = {},
-  ): ExternalConnectorStageActionResult {
+  ): Promise<ExternalConnectorStageActionResult> {
     this.requireSource(lookup.sourceId);
     const service = requireService(lookup.serviceId);
     const action = service.actions.find((item) => item.actionId === lookup.actionId);
@@ -177,7 +177,7 @@ export class ExternalConnectorCatalogService {
       throw new Error(`Unknown external connector action: ${lookup.sourceId}/${lookup.serviceId}/${lookup.actionId}`);
     }
     const workspaceId = normalizeWorkspaceId(input.workspaceId);
-    const proposal = this.options.createCapabilityProposal({
+    const proposal = await this.options.createCapabilityProposal({
       proposalKind: "tool",
       title: `Review MSCR connector: ${service.label} / ${action.label}`,
       summary:
@@ -215,7 +215,7 @@ export class ExternalConnectorCatalogService {
         ],
       },
     });
-    const state = this.options.reviewStates.upsert(
+    const state = await this.options.reviewStates.upsert(
       {
         workspaceId,
         sourceId: SOURCE_ID,
@@ -231,7 +231,7 @@ export class ExternalConnectorCatalogService {
       },
     );
     return {
-      action: this.getAction(SOURCE_ID, service.serviceId, action.actionId, workspaceId),
+      action: await this.getAction(SOURCE_ID, service.serviceId, action.actionId, workspaceId),
       state,
       proposal,
       message: "External connector action staged as a capability proposal. It remains non-callable.",
@@ -274,11 +274,11 @@ export class ExternalConnectorCatalogService {
     }
   }
 
-  private buildReviewStateMap(
+  private async buildReviewStateMap(
     workspaceId: string,
     serviceId?: string,
-  ): Map<string, ExternalConnectorReviewStateRecord> {
-    const states = this.options.reviewStates.list({ workspaceId, sourceId: SOURCE_ID, serviceId });
+  ): Promise<Map<string, ExternalConnectorReviewStateRecord>> {
+    const states = await this.options.reviewStates.list({ workspaceId, sourceId: SOURCE_ID, serviceId });
     return new Map(states.map((state) => [reviewStateKey(state.serviceId, state.actionId), state]));
   }
 }

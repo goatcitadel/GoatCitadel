@@ -12,7 +12,7 @@ import type {
   ImportedAgentCatalogRecord,
   ImportedAgentCatalogStatePatchInput,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { buildCatalogSpecialistSuggestion, importAgencyCatalog } from "./agency-agent-catalog-service.js";
 import { extractSpecialistObjectiveKeywords } from "./chat-turn-planning-helpers.js";
 import { createRouteService, type RoutePort, type RouteService } from "./route-service-factory.js";
@@ -39,23 +39,23 @@ export type AgentsRouteService = RouteService<AgentsRouteMethod>;
 export interface AgentsRoutePortDependencies {
   storage: Storage;
   normalizeWorkspaceId: (workspaceId?: string) => string;
-  getSession: (sessionId: string) => unknown;
-  getChatSessionPrefs: (sessionId: string) => { mode: ChatMode };
+  getSession: (sessionId: string) => unknown | Promise<unknown>;
+  getChatSessionPrefs: (sessionId: string) => { mode: ChatMode } | Promise<{ mode: ChatMode }>;
   createChatSessionSpecialistCandidate: (
     sessionId: string,
     input: {
       turnId?: string;
       suggestion: ChatSpecialistCandidateSuggestionRecord;
     },
-  ) => ChatSpecialistCandidateRecord;
-  publishRealtime: (eventType: string, source: string, payload?: Record<string, unknown>) => void;
-  requireTypedRunVariables: () => void;
+  ) => ChatSpecialistCandidateRecord | Promise<ChatSpecialistCandidateRecord>;
+  publishRealtime: (eventType: string, source: string, payload?: Record<string, unknown>) => Promise<unknown>;
+  requireTypedRunVariables: () => void | Promise<void>;
 }
 
 export function createAgentsRoutePort(deps: AgentsRoutePortDependencies): AgentsRoutePort {
-  const getAgent = (agentId: string): AgentProfileRecord => {
-    const profile = deps.storage.agentProfiles.get(agentId);
-    const runtime = buildAgentRuntimeRollups(deps.storage, [profile]).get(profile.roleId);
+  const getAgent = async (agentId: string): Promise<AgentProfileRecord> => {
+    const profile = await deps.storage.agentProfiles.get(agentId);
+    const runtime = (await buildAgentRuntimeRollups(deps.storage, [profile])).get(profile.roleId);
     const activeSessions = runtime?.activeSessions ?? 0;
     return {
       ...profile,
@@ -67,39 +67,41 @@ export function createAgentsRoutePort(deps: AgentsRoutePortDependencies): Agents
   };
 
   return {
-    activateImportedAgentCatalogEntryForSession: (
+    activateImportedAgentCatalogEntryForSession: async (
       sessionId: string,
       entryId: string,
-    ): {
+    ): Promise<{
       catalogEntry: ImportedAgentCatalogRecord;
       specialist: ChatSpecialistCandidateRecord;
-    } => {
-      deps.getSession(sessionId);
-      const sessionWorkspaceId = deps.normalizeWorkspaceId(deps.storage.chatSessionMeta.ensure(sessionId).workspaceId);
-      const entry = deps.storage.importedAgentCatalog.get(entryId);
+    }> => {
+      await deps.getSession(sessionId);
+      const sessionWorkspaceId = deps.normalizeWorkspaceId(
+        (await deps.storage.chatSessionMeta.ensure(sessionId)).workspaceId,
+      );
+      const entry = await deps.storage.importedAgentCatalog.get(entryId);
       if (entry.workspaceId !== sessionWorkspaceId) {
         throw new Error("Imported catalog entry belongs to a different workspace.");
       }
 
-      const prefs = deps.getChatSessionPrefs(sessionId);
-      const draft = deps.createChatSessionSpecialistCandidate(sessionId, {
+      const prefs = await deps.getChatSessionPrefs(sessionId);
+      const draft = await deps.createChatSessionSpecialistCandidate(sessionId, {
         suggestion: buildCatalogSpecialistSuggestion(
           entry,
           prefs.mode,
           extractSpecialistObjectiveKeywords(entry.definition.frontmatter.description),
         ),
       });
-      const specialist = deps.storage.chatSpecialistCandidates.patch(draft.candidateId, {
+      const specialist = await deps.storage.chatSpecialistCandidates.patch(draft.candidateId, {
         status: "active",
         routingMode: "manual_only",
       });
       const catalogEntry =
         entry.state === "active"
           ? entry
-          : deps.storage.importedAgentCatalog.patchState(entryId, {
+          : await deps.storage.importedAgentCatalog.patchState(entryId, {
               state: "active",
             });
-      deps.publishRealtime("system", "agents", {
+      await deps.publishRealtime("system", "agents", {
         type: "imported_agent_catalog_activated",
         entryId,
         workspaceId: catalogEntry.workspaceId,
@@ -111,10 +113,10 @@ export function createAgentsRoutePort(deps: AgentsRoutePortDependencies): Agents
         specialist,
       };
     },
-    archiveAgentProfile: (agentId: string, input: AgentProfileArchiveInput): AgentProfileRecord => {
-      const archived = deps.storage.agentProfiles.archive(agentId, input);
-      const agent = getAgent(archived.agentId);
-      deps.publishRealtime("system", "agents", {
+    archiveAgentProfile: async (agentId: string, input: AgentProfileArchiveInput): Promise<AgentProfileRecord> => {
+      const archived = await deps.storage.agentProfiles.archive(agentId, input);
+      const agent = await getAgent(archived.agentId);
+      await deps.publishRealtime("system", "agents", {
         type: "agent_profile_archived",
         agentId: agent.agentId,
         roleId: agent.roleId,
@@ -122,11 +124,11 @@ export function createAgentsRoutePort(deps: AgentsRoutePortDependencies): Agents
       });
       return agent;
     },
-    createAgentProfile: (input: AgentProfileCreateInput): AgentProfileRecord => {
-      if (input.presetDefaults?.runVariableSchema) deps.requireTypedRunVariables();
-      const created = deps.storage.agentProfiles.create(input);
-      const agent = getAgent(created.agentId);
-      deps.publishRealtime("system", "agents", {
+    createAgentProfile: async (input: AgentProfileCreateInput): Promise<AgentProfileRecord> => {
+      if (input.presetDefaults?.runVariableSchema) await deps.requireTypedRunVariables();
+      const created = await deps.storage.agentProfiles.create(input);
+      const agent = await getAgent(created.agentId);
+      await deps.publishRealtime("system", "agents", {
         type: "agent_profile_created",
         agentId: agent.agentId,
         roleId: agent.roleId,
@@ -136,12 +138,12 @@ export function createAgentsRoutePort(deps: AgentsRoutePortDependencies): Agents
       return agent;
     },
     getAgent,
-    getImportedAgentCatalogEntry: (entryId: string): ImportedAgentCatalogRecord =>
+    getImportedAgentCatalogEntry: async (entryId: string): Promise<ImportedAgentCatalogRecord> =>
       deps.storage.importedAgentCatalog.get(entryId),
-    hardDeleteAgentProfile: (agentId: string): boolean => {
-      const deleted = deps.storage.agentProfiles.hardDelete(agentId);
+    hardDeleteAgentProfile: async (agentId: string): Promise<boolean> => {
+      const deleted = await deps.storage.agentProfiles.hardDelete(agentId);
       if (deleted) {
-        deps.publishRealtime("system", "agents", {
+        await deps.publishRealtime("system", "agents", {
           type: "agent_profile_deleted",
           agentId,
         });
@@ -156,7 +158,7 @@ export function createAgentsRoutePort(deps: AgentsRoutePortDependencies): Agents
         repoUrl: input.repoUrl,
         ref: input.ref,
       });
-      deps.publishRealtime("system", "agents", {
+      await deps.publishRealtime("system", "agents", {
         type: "imported_agent_catalog_imported",
         workspaceId,
         importedCount: imported.importedCount,
@@ -165,9 +167,9 @@ export function createAgentsRoutePort(deps: AgentsRoutePortDependencies): Agents
       });
       return imported;
     },
-    listAgents: (view = "active", limit = 500): AgentProfileRecord[] => {
-      const profiles = deps.storage.agentProfiles.list(view, limit);
-      const runtime = buildAgentRuntimeRollups(deps.storage, profiles);
+    listAgents: async (view = "active", limit = 500): Promise<AgentProfileRecord[]> => {
+      const profiles = await deps.storage.agentProfiles.list(view, limit);
+      const runtime = await buildAgentRuntimeRollups(deps.storage, profiles);
 
       const merged = profiles.map((profile) => {
         const runtimeStats = runtime.get(profile.roleId);
@@ -198,29 +200,29 @@ export function createAgentsRoutePort(deps: AgentsRoutePortDependencies): Agents
         return left.name.localeCompare(right.name);
       });
     },
-    listImportedAgentCatalog: (
+    listImportedAgentCatalog: async (
       input: ImportedAgentCatalogListInput = {},
-    ): {
+    ): Promise<{
       workspaceId: string;
       divisions: string[];
       items: ImportedAgentCatalogRecord[];
-    } => {
+    }> => {
       const workspaceId = deps.normalizeWorkspaceId(input.workspaceId);
       return {
         workspaceId,
-        divisions: deps.storage.importedAgentCatalog.listDivisions(workspaceId),
-        items: deps.storage.importedAgentCatalog.list({
+        divisions: await deps.storage.importedAgentCatalog.listDivisions(workspaceId),
+        items: await deps.storage.importedAgentCatalog.list({
           ...input,
           workspaceId,
         }),
       };
     },
-    patchImportedAgentCatalogEntryState: (
+    patchImportedAgentCatalogEntryState: async (
       entryId: string,
       input: ImportedAgentCatalogStatePatchInput,
-    ): ImportedAgentCatalogRecord => {
-      const updated = deps.storage.importedAgentCatalog.patchState(entryId, input);
-      deps.publishRealtime("system", "agents", {
+    ): Promise<ImportedAgentCatalogRecord> => {
+      const updated = await deps.storage.importedAgentCatalog.patchState(entryId, input);
+      await deps.publishRealtime("system", "agents", {
         type: "imported_agent_catalog_updated",
         entryId: updated.entryId,
         workspaceId: updated.workspaceId,
@@ -228,21 +230,21 @@ export function createAgentsRoutePort(deps: AgentsRoutePortDependencies): Agents
       });
       return updated;
     },
-    restoreAgentProfile: (agentId: string): AgentProfileRecord => {
-      const restored = deps.storage.agentProfiles.restore(agentId);
-      const agent = getAgent(restored.agentId);
-      deps.publishRealtime("system", "agents", {
+    restoreAgentProfile: async (agentId: string): Promise<AgentProfileRecord> => {
+      const restored = await deps.storage.agentProfiles.restore(agentId);
+      const agent = await getAgent(restored.agentId);
+      await deps.publishRealtime("system", "agents", {
         type: "agent_profile_restored",
         agentId: agent.agentId,
         roleId: agent.roleId,
       });
       return agent;
     },
-    updateAgentProfile: (agentId: string, input: AgentProfileUpdateInput): AgentProfileRecord => {
-      if (input.presetDefaults?.runVariableSchema) deps.requireTypedRunVariables();
-      const updated = deps.storage.agentProfiles.update(agentId, input);
-      const agent = getAgent(updated.agentId);
-      deps.publishRealtime("system", "agents", {
+    updateAgentProfile: async (agentId: string, input: AgentProfileUpdateInput): Promise<AgentProfileRecord> => {
+      if (input.presetDefaults?.runVariableSchema) await deps.requireTypedRunVariables();
+      const updated = await deps.storage.agentProfiles.update(agentId, input);
+      const agent = await getAgent(updated.agentId);
+      await deps.publishRealtime("system", "agents", {
         type: "agent_profile_updated",
         agentId: agent.agentId,
         roleId: agent.roleId,
@@ -257,10 +259,10 @@ export function createAgentsRouteService(port: AgentsRoutePort): AgentsRouteServ
   return createRouteService(port, agentsRouteMethods);
 }
 
-function buildAgentRuntimeRollups(
+async function buildAgentRuntimeRollups(
   storage: Pick<Storage, "taskSubagents">,
   profiles: Pick<AgentProfileRecord, "roleId" | "name" | "aliases">[],
-): Map<string, { sessionCount: number; activeSessions: number; lastUpdatedAt?: string }> {
+): Promise<Map<string, { sessionCount: number; activeSessions: number; lastUpdatedAt?: string }>> {
   const byRoleId = new Map<string, { sessionCount: number; activeSessions: number; lastUpdatedAt?: string }>();
   const lookup = new Map<string, string>();
 
@@ -281,7 +283,7 @@ function buildAgentRuntimeRollups(
     }
   }
 
-  const sessions = storage.taskSubagents.listAll(5000);
+  const sessions = await storage.taskSubagents.listAll(5000);
   for (const session of sessions) {
     const roleId = inferSessionRoleId(session.agentName, session.agentSessionId, lookup);
     if (!roleId) {

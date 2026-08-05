@@ -63,22 +63,22 @@ const CONSOLIDATION_SYSTEM_PROMPT = [
 export interface MemoryConsolidationDeps {
   isFeatureEnabled: (
     flag: "memoryConsolidationV1Enabled" | "autonomyV1Disabled" | "memoryLifecycleAdminV1Enabled",
-  ) => boolean;
-  listCompletedTurnTracesSince: (sinceIso: string, limit: number) => ChatTurnTraceRecord[];
+  ) => Promise<boolean>;
+  listCompletedTurnTracesSince: (sinceIso: string, limit: number) => Promise<ChatTurnTraceRecord[]>;
   readTranscriptOrEmpty: (sessionId: string) => Promise<TranscriptEvent[]>;
   createChatCompletion: (
     request: ChatCompletionRequest,
     attribution: ModelUsageAttributionContext,
   ) => Promise<ChatCompletionResponse>;
-  resolveModelDefaults: () => { providerId?: string; model?: string };
+  resolveModelDefaults: () => Promise<{ providerId?: string; model?: string }>;
   proposeTraceMemoryCandidate: (
     input: TraceMemoryCandidateInput,
     actorId: string,
   ) => Promise<TraceMemoryCandidateRecord>;
-  listExistingInsightsForDedup: () => string[];
-  getWatermark: () => string | undefined;
-  setWatermark: (iso: string) => void;
-  publishRealtime: (eventType: string, source: string, payload?: Record<string, unknown>) => void;
+  listExistingInsightsForDedup: () => Promise<string[]>;
+  getWatermark: () => Promise<string | undefined>;
+  setWatermark: (iso: string) => Promise<unknown>;
+  publishRealtime: (eventType: string, source: string, payload?: Record<string, unknown>) => Promise<unknown>;
   recordDevDiagnostic?: (input: {
     level: "info" | "warn";
     category: string;
@@ -126,19 +126,20 @@ export class MemoryConsolidationService {
     // memoryLifecycleAdminV1Enabled guards proposeTraceMemoryCandidate itself;
     // treating it as a hard prerequisite keeps this job from throwing mid-run.
     if (
-      !this.deps.isFeatureEnabled("memoryConsolidationV1Enabled") ||
-      !this.deps.isFeatureEnabled("memoryLifecycleAdminV1Enabled")
+      !(await this.deps.isFeatureEnabled("memoryConsolidationV1Enabled")) ||
+      !(await this.deps.isFeatureEnabled("memoryLifecycleAdminV1Enabled"))
     ) {
       return { status: "disabled", ...empty };
     }
-    if (this.deps.isFeatureEnabled("autonomyV1Disabled")) {
+    if (await this.deps.isFeatureEnabled("autonomyV1Disabled")) {
       return { status: "skipped_kill_switch", ...empty };
     }
 
     const now = this.deps.now?.() ?? new Date();
     const watermark =
-      this.deps.getWatermark() ?? new Date(now.getTime() - DEFAULT_LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString();
-    const traces = this.deps.listCompletedTurnTracesSince(watermark, MAX_TRACES_PER_RUN);
+      (await this.deps.getWatermark()) ??
+      new Date(now.getTime() - DEFAULT_LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString();
+    const traces = await this.deps.listCompletedTurnTracesSince(watermark, MAX_TRACES_PER_RUN);
     const qualifying = traces.filter((trace) => isQualifyingTrace(trace));
     const sessions = pickSessions(qualifying, MAX_SESSIONS_PER_RUN);
 
@@ -150,12 +151,12 @@ export class MemoryConsolidationService {
       watermark,
     };
 
-    const seenInsights = this.deps.listExistingInsightsForDedup().map(tokenizeInsight);
+    const seenInsights = (await this.deps.listExistingInsightsForDedup()).map(tokenizeInsight);
     const processedSessionIds = new Set<string>();
     for (const session of sessions) {
       // The autonomy kill switch may flip mid-run; re-check before every
       // session so an engaged switch halts further proposals immediately.
-      if (this.deps.isFeatureEnabled("autonomyV1Disabled")) {
+      if (await this.deps.isFeatureEnabled("autonomyV1Disabled")) {
         summary.status = "skipped_kill_switch";
         break;
       }
@@ -214,13 +215,13 @@ export class MemoryConsolidationService {
       sessions.length === 0 || summary.sessionsFailed < summary.sessionsSampled || summary.status !== "completed";
     if (summary.status === "completed" && madeProgress && traces.length > 0) {
       const nextWatermark = computeProcessedTraceWatermark(traces, processedSessionIds, watermark);
-      this.deps.setWatermark(nextWatermark);
+      await this.deps.setWatermark(nextWatermark);
       summary.nextWatermark = nextWatermark;
     } else if (summary.status === "completed" && traces.length === 0) {
       summary.nextWatermark = watermark;
     }
 
-    this.deps.publishRealtime("system", "memory", {
+    await this.deps.publishRealtime("system", "memory", {
       type: "memory_consolidation_run",
       ...summary,
     });
@@ -237,7 +238,7 @@ export class MemoryConsolidationService {
     if (digest.length < MIN_DIGEST_CHARS) {
       return [];
     }
-    const defaults = this.deps.resolveModelDefaults();
+    const defaults = await this.deps.resolveModelDefaults();
     const completion = await this.deps.createChatCompletion(
       {
         providerId: defaults.providerId,

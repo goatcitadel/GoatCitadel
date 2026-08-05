@@ -270,9 +270,7 @@ export function createPromptPackExportService(input: {
           listByPack: () => [],
           deleteByPack: () => 0,
         },
-      },
-      gatewaySql: {
-        runImmediateTransaction: (fn: () => void) => fn(),
+        runImmediateTransaction: async (fn: () => void | Promise<void>) => await fn(),
       },
       config: {
         rootDir: input.rootDir,
@@ -290,8 +288,8 @@ export function createPromptPackExportService(input: {
       createChatSession: vi.fn(),
       agentSendChatMessage: vi.fn(),
       createChatCompletion: vi.fn(),
-      getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
-      getPromptJudgeModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+      getPromptRunnerModelDefaults: async () => ({ providerId: "openai", model: "gpt-5.4" }),
+      getPromptJudgeModelDefaults: async () => ({ providerId: "openai", model: "gpt-5.4" }),
       backgroundTasks: new Set(),
     },
   );

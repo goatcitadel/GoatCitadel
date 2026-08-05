@@ -191,7 +191,7 @@ describe("GatewayService loop32 runtime facade behavior", () => {
     ).toThrow("web.firecrawl.baseUrl must be present in the outbound allowlist");
   });
 
-  it("projects cron specifications into unified config without runtime telemetry", () => {
+  it("projects cron specifications into unified config without runtime telemetry", async () => {
     const gateway = createGatewayHarness();
     const runtimeConfig = createRuntimeConfig("F:/tmp/gc-loop32") as never;
     const source = JSON.parse(
@@ -199,7 +199,7 @@ describe("GatewayService loop32 runtime facade behavior", () => {
     ) as Record<string, any>;
     gateway.storage = {
       cronJobs: {
-        list: vi.fn(() => [
+        list: vi.fn(async () => [
           {
             jobId: "operator-hourly",
             revision: 7,
@@ -221,7 +221,7 @@ describe("GatewayService loop32 runtime facade behavior", () => {
     };
     gateway.serializeRootPath = vi.fn((value: string) => value);
 
-    const payload = (GatewayService.prototype as any).buildUnifiedConfigPayloadForRuntime.call(
+    const payload = await (GatewayService.prototype as any).buildUnifiedConfigPayloadForRuntime.call(
       gateway,
       runtimeConfig,
       source.llm,

@@ -1,10 +1,4 @@
-import {
-  createHash,
-  createPublicKey,
-  sign as cryptoSign,
-  verify as cryptoVerify,
-  type KeyObject,
-} from "node:crypto";
+import { createHash, createPublicKey, sign as cryptoSign, verify as cryptoVerify, type KeyObject } from "node:crypto";
 import type { DurableRunRecord } from "@goatcitadel/contracts";
 import {
   EvidenceReceiptService,
@@ -79,7 +73,7 @@ export const COMPLIANCE_BUNDLE_SOURCE_SCAN_LIMIT = 5000;
  * first); the service does range + workspace filtering itself.
  */
 export interface ComplianceExportDataPort extends EvidenceReceiptDataPort {
-  listDurableRunsForExport(scanLimit: number): DurableRunRecord[];
+  listDurableRunsForExport(scanLimit: number): Promise<DurableRunRecord[]>;
 }
 
 export interface ComplianceExportServiceDeps extends Omit<EvidenceReceiptServiceDeps, "data"> {
@@ -154,12 +148,12 @@ export class ComplianceExportService {
    * List runs in [fromTs, toTs] (optionally workspace-scoped), build a B1 Evidence Receipt for each,
    * and assemble a signed, offline-verifiable bundle committing to exactly those receipts.
    */
-  public buildComplianceBundle(input: BuildComplianceBundleInput): ComplianceBundle {
+  public async buildComplianceBundle(input: BuildComplianceBundleInput): Promise<ComplianceBundle> {
     const range = normalizeRange(input.fromTs, input.toTs);
     const workspaceId = normalizeWorkspaceId(input.workspaceId);
     const limit = clampLimit(input.limit);
 
-    const runs = this.data.listDurableRunsForExport(COMPLIANCE_BUNDLE_SOURCE_SCAN_LIMIT);
+    const runs = await this.data.listDurableRunsForExport(COMPLIANCE_BUNDLE_SOURCE_SCAN_LIMIT);
     const matched = runs
       .filter((run) => runMatchesWorkspace(run, workspaceId))
       .filter((run) => runMatchesRange(run, range))
@@ -169,7 +163,9 @@ export class ComplianceExportService {
     const truncated = matched.length > limit;
     const selected = truncated ? matched.slice(0, limit) : matched;
 
-    const receipts = selected.map((run) => this.receiptService.buildEvidenceReceipt(run.runId));
+    const receipts = await Promise.all(
+      selected.map(async (run) => await this.receiptService.buildEvidenceReceipt(run.runId)),
+    );
 
     const keyPair = this.signingKeys.getSigningKeyPair();
     const commitments = receipts.map(toReceiptCommitment);
@@ -215,15 +211,8 @@ export function verifyComplianceBundle(bundle: unknown): ComplianceBundleVerific
     return { valid: false, reasons: ["Bundle is not an object."], perReceipt };
   }
 
-  const {
-    receipts,
-    bundleContentHash,
-    bundleSignature,
-    publicKey,
-    signatureAlgorithm,
-    hashAlgorithm,
-    receiptCount,
-  } = bundle as Partial<ComplianceBundle>;
+  const { receipts, bundleContentHash, bundleSignature, publicKey, signatureAlgorithm, hashAlgorithm, receiptCount } =
+    bundle as Partial<ComplianceBundle>;
 
   if (!Array.isArray(receipts)) {
     reasons.push("Bundle is missing a receipts array.");

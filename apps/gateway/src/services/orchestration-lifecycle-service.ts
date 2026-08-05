@@ -32,7 +32,7 @@ import {
   ValidationError,
 } from "@goatcitadel/contracts";
 import type { OrchestrationEngine } from "@goatcitadel/orchestration";
-import type { OrchestrationCheckpoint, Storage } from "@goatcitadel/storage";
+import type { OrchestrationCheckpoint, AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { DurableWorkflowExecutionContext } from "./durable-execution-service.js";
 import {
   applyOrchestrationPhaseHookPatch,
@@ -101,7 +101,7 @@ export interface OrchestrationLifecycleRuntimeDeps {
       run: OrchestrationRun;
       reason: "completed" | "failed" | "stopped_by_limit" | "cancelled";
     }): Promise<void>;
-    ensureLeaseForExecution(run: OrchestrationRun): OrchestrationRun;
+    ensureLeaseForExecution(run: OrchestrationRun): Promise<OrchestrationRun>;
   };
   readonly phaseExecutor: {
     execute(input: {
@@ -111,7 +111,7 @@ export interface OrchestrationLifecycleRuntimeDeps {
       durableRun: DurableRunRecord;
       policyContext?: OrchestrationRunPolicyContext;
       signal?: AbortSignal;
-      onChildDispatched?: (dispatch: OrchestrationPhaseChildDispatch) => void;
+      onChildDispatched?: (dispatch: OrchestrationPhaseChildDispatch) => Promise<void>;
     }): Promise<OrchestrationPhaseExecutionResult>;
   };
 }
@@ -128,27 +128,27 @@ export interface OrchestrationLifecycleHost {
     };
   };
   readonly storage: {
-    runImmediateTransaction<T>(callback: () => T): T;
+    runImmediateTransaction<T>(callback: () => T | Promise<T>): Promise<Awaited<T>>;
     durableRuns: Pick<Storage["durableRuns"], "lockFreshActiveLeaseForUpdate">;
     orchestration: {
-      upsertPlan(plan: OrchestrationPlan, workspaceId?: string): void;
-      getPlan(planId: string, workspaceId?: string): OrchestrationPlan;
-      createRun(run: OrchestrationRun): OrchestrationRun;
-      findLatestRunByPlan(planId: string): OrchestrationRun | undefined;
-      findActiveRunByPlan(planId: string, workspaceId?: string): OrchestrationRun | undefined;
-      updateRun(run: OrchestrationRun): OrchestrationRun;
+      upsertPlan(plan: OrchestrationPlan, workspaceId?: string): Promise<void>;
+      getPlan(planId: string, workspaceId?: string): Promise<OrchestrationPlan>;
+      createRun(run: OrchestrationRun): Promise<OrchestrationRun>;
+      findLatestRunByPlan(planId: string): Promise<OrchestrationRun | undefined>;
+      findActiveRunByPlan(planId: string, workspaceId?: string): Promise<OrchestrationRun | undefined>;
+      updateRun(run: OrchestrationRun): Promise<OrchestrationRun>;
       updateRunIfCurrentState(
         run: OrchestrationRun,
         expected: Pick<OrchestrationRun, "status" | "executionState">,
-      ): OrchestrationRun | undefined;
-      appendRunEvent(runId: string, event: string, payload: Record<string, unknown>): void;
-      listCheckpoints(runId: string): OrchestrationCheckpoint[];
-      listRunEvents?(runId: string): OrchestrationRunEventRecord[];
-      getRun(runId: string): OrchestrationRun;
+      ): Promise<OrchestrationRun | undefined>;
+      appendRunEvent(runId: string, event: string, payload: Record<string, unknown>): Promise<void>;
+      listCheckpoints(runId: string): Promise<OrchestrationCheckpoint[]>;
+      listRunEvents?(runId: string): Promise<OrchestrationRunEventRecord[]>;
+      getRun(runId: string): Promise<OrchestrationRun>;
     };
     runtimeDecisionTraces?: {
-      append(input: RuntimeDecisionTraceAppendInput): RuntimeDecisionTraceRecord;
-      list(query: RuntimeDecisionTraceQuery): RuntimeDecisionTraceRecord[];
+      append(input: RuntimeDecisionTraceAppendInput): Promise<RuntimeDecisionTraceRecord>;
+      list(query: RuntimeDecisionTraceQuery): Promise<RuntimeDecisionTraceRecord[]>;
     };
   };
   readonly orchestrationEngine: Pick<
@@ -171,24 +171,24 @@ export interface OrchestrationLifecycleHost {
       entityType: string;
       entityId: string;
       payload: Record<string, unknown>;
-    }): void;
+    }): Promise<unknown>;
   };
   createCheckpoint(
     input: Omit<OrchestrationCheckpoint, "checkpointId" | "createdAt" | "gitRef">,
-  ): OrchestrationCheckpoint;
+  ): Promise<OrchestrationCheckpoint>;
   publishRealtime(
     channel: string,
     topic: string,
     payload: Record<string, unknown>,
     options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
-  ): void;
-  scheduleOrchestrationMemoryContext(plan: OrchestrationPlan, run: OrchestrationRun): void;
-  createDurableRun(input: DurableRunCreateRequest): DurableRunRecord;
-  getDurableRun(runId: string): DurableRunRecord;
-  requestDurableRunProcessing(runId: string): void;
-  pauseDurableRun(runId: string, actorId?: string): DurableRunRecord;
-  resumeDurableRun(runId: string, actorId?: string): DurableRunRecord;
-  cancelDurableRun(runId: string, actorId?: string): DurableRunRecord;
+  ): Promise<unknown>;
+  scheduleOrchestrationMemoryContext(plan: OrchestrationPlan, run: OrchestrationRun): Promise<unknown>;
+  createDurableRun(input: DurableRunCreateRequest): Promise<DurableRunRecord>;
+  getDurableRun(runId: string): Promise<DurableRunRecord>;
+  requestDurableRunProcessing(runId: string): Promise<unknown>;
+  pauseDurableRun(runId: string, actorId?: string): Promise<DurableRunRecord>;
+  resumeDurableRun(runId: string, actorId?: string): Promise<DurableRunRecord>;
+  cancelDurableRun(runId: string, actorId?: string): Promise<DurableRunRecord>;
   updateDurableRunState(input: {
     runId: string;
     status?: DurableRunRecord["status"];
@@ -199,13 +199,13 @@ export interface OrchestrationLifecycleHost {
     clearFinishedAt?: boolean;
     clearLease?: boolean;
     expectedLeaseOwnerId?: string;
-  }): DurableRunRecord;
+  }): Promise<DurableRunRecord>;
   recordDurableTimelineEvent(
     runId: string,
     eventType: DurableRunTimelineEvent["eventType"],
     payload?: Record<string, unknown>,
-  ): void;
-  watchDurableChildRun?(input: DurableChildWatcherCreateRequest): unknown;
+  ): Promise<unknown>;
+  watchDurableChildRun?(input: DurableChildWatcherCreateRequest): Promise<unknown>;
 }
 
 async function releaseOrchestrationWorktreeIfAvailable(
@@ -217,7 +217,7 @@ async function releaseOrchestrationWorktreeIfAvailable(
   try {
     await runtime.worktrees.release({ run, reason });
   } catch (error) {
-    persistRunEvent(host, run, "run.worktree_cleanup_failed", {
+    await persistRunEvent(host, run, "run.worktree_cleanup_failed", {
       reason,
       worktreePath: run.worktreePath,
       error: error instanceof Error ? error.message : String(error),
@@ -274,12 +274,12 @@ function requireDurableExecutionLeaseOwner(run: DurableRunRecord): string {
   return leaseOwnerId;
 }
 
-function lockFreshDurableExecutionLease(
+async function lockFreshDurableExecutionLease(
   host: OrchestrationLifecycleHost,
   runId: string,
   expectedLeaseOwnerId: string,
-): DurableRunRecord {
-  const locked = host.storage.durableRuns.lockFreshActiveLeaseForUpdate(runId, expectedLeaseOwnerId);
+): Promise<DurableRunRecord> {
+  const locked = await host.storage.durableRuns.lockFreshActiveLeaseForUpdate(runId, expectedLeaseOwnerId);
   if (!locked) {
     const error = new Error(`Durable orchestration run ${runId} lost its execution lease before commit.`);
     error.name = "DurableWorkerInterruptionError";
@@ -306,15 +306,15 @@ function readOrchestrationWorktreeExecutionFence(
   return { worktreePath, ownerId, generation: generation! };
 }
 
-function assertFreshOrchestrationWorktreeExecutionFence(
+async function assertFreshOrchestrationWorktreeExecutionFence(
   host: OrchestrationLifecycleHost,
   runId: string,
   expected: OrchestrationWorktreeExecutionFence | undefined,
-): void {
+): Promise<void> {
   if (!expected) {
     return;
   }
-  const current = host.storage.orchestration.getRun(runId);
+  const current = await host.storage.orchestration.getRun(runId);
   if (
     current.worktreeStatus === "ready" &&
     current.worktreePath === expected.worktreePath &&
@@ -342,15 +342,17 @@ async function markOrchestrationRunCancelled(
     return run;
   }
   const storage = host.storage;
-  const commitRunCandidate = (candidate: OrchestrationRun): { run: OrchestrationRun; transitioned: boolean } => {
-    const updated = storage.orchestration.updateRunIfCurrentState(candidate, {
+  const commitRunCandidate = async (
+    candidate: OrchestrationRun,
+  ): Promise<{ run: OrchestrationRun; transitioned: boolean }> => {
+    const updated = await storage.orchestration.updateRunIfCurrentState(candidate, {
       status: run.status,
       executionState: run.executionState,
     });
     if (updated) {
       return { run: updated, transitioned: true };
     }
-    const current = storage.orchestration.getRun(run.runId);
+    const current = await storage.orchestration.getRun(run.runId);
     if (isOrchestrationRunTerminal(current)) {
       return { run: current, transitioned: false };
     }
@@ -395,12 +397,12 @@ async function markOrchestrationRunCancelled(
       pendingCostIncrementUsd: undefined,
     };
     let terminal!: { run: OrchestrationRun; transitioned: boolean };
-    storage.runImmediateTransaction(() => {
-      terminal = commitRunCandidate(winner);
+    await storage.runImmediateTransaction(async () => {
+      terminal = await commitRunCandidate(winner);
       if (!terminal.transitioned) {
         return;
       }
-      persistCheckpoint(
+      await persistCheckpoint(
         host,
         plan,
         terminal.run,
@@ -426,20 +428,20 @@ async function markOrchestrationRunCancelled(
         : winnerStatus === "completed"
           ? "run.completed"
           : "run.failed";
-    persistRunEvent(host, terminal.run, event, {
+    await persistRunEvent(host, terminal.run, event, {
       actorId,
       requestedCancellationReason: reason,
       durableTerminalStatus: linked.status,
       terminalWinner: "durable_run",
     });
-    publishRunRealtime(host, plan, terminal.run, {
+    await publishRunRealtime(host, plan, terminal.run, {
       event: event.replace("run.", "run_"),
       ...(winnerStatus === "failed" ? { error: terminal.run.lastError } : {}),
     });
     await releaseOrchestrationWorktreeIfAvailable(runtime, host, terminal.run, winnerStatus);
     return terminal.run;
   };
-  const linkedDurable = run.durableRunId ? host.getDurableRun(run.durableRunId) : undefined;
+  const linkedDurable = run.durableRunId ? await host.getDurableRun(run.durableRunId) : undefined;
   if (linkedDurable && isDurableRunTerminal(linkedDurable) && linkedDurable.status !== "cancelled") {
     return commitLinkedDurableTerminalWinner(linkedDurable);
   }
@@ -453,8 +455,8 @@ async function markOrchestrationRunCancelled(
     pendingApprovedBy: undefined,
     pendingCostIncrementUsd: undefined,
   };
-  const persistCancellationCheckpoint = (cancelled: OrchestrationRun): void => {
-    persistCheckpoint(
+  const persistCancellationCheckpoint = async (cancelled: OrchestrationRun): Promise<void> => {
+    await persistCheckpoint(
       host,
       plan,
       cancelled,
@@ -467,59 +469,59 @@ async function markOrchestrationRunCancelled(
   };
   let cancellation!: { run: OrchestrationRun; transitioned: boolean };
   if (!linkedDurable || linkedDurable.status === "cancelled") {
-    storage.runImmediateTransaction(() => {
-      cancellation = commitRunCandidate(cancellationCandidate);
+    await storage.runImmediateTransaction(async () => {
+      cancellation = await commitRunCandidate(cancellationCandidate);
       if (!cancellation.transitioned) {
         return;
       }
       if (linkedDurable && cancellation.run.durableRunId) {
-        host.updateDurableRunState({
+        await host.updateDurableRunState({
           runId: cancellation.run.durableRunId,
           metadata: buildDurableMetadata(plan, cancellation.run, {
             lifecycleState: "cancelled",
           }),
         });
-        host.recordDurableTimelineEvent(cancellation.run.durableRunId, "run_cancelled", {
+        await host.recordDurableTimelineEvent(cancellation.run.durableRunId, "run_cancelled", {
           actorId,
           reason,
           orchestrationRunId: cancellation.run.runId,
         });
       }
-      persistCancellationCheckpoint(cancellation.run);
+      await persistCancellationCheckpoint(cancellation.run);
     });
   } else {
     try {
-      host.cancelDurableRun(linkedDurable.runId, actorId);
+      await host.cancelDurableRun(linkedDurable.runId, actorId);
     } catch (error) {
-      const raced = host.getDurableRun(linkedDurable.runId);
+      const raced = await host.getDurableRun(linkedDurable.runId);
       if (isDurableRunTerminal(raced) && raced.status !== "cancelled") {
         return commitLinkedDurableTerminalWinner(raced);
       }
       throw error;
     }
-    storage.runImmediateTransaction(() => {
-      cancellation = commitRunCandidate(cancellationCandidate);
+    await storage.runImmediateTransaction(async () => {
+      cancellation = await commitRunCandidate(cancellationCandidate);
       if (!cancellation.transitioned || !cancellation.run.durableRunId) {
         return;
       }
-      host.updateDurableRunState({
+      await host.updateDurableRunState({
         runId: cancellation.run.durableRunId,
         metadata: buildDurableMetadata(plan, cancellation.run, {
           lifecycleState: "cancelled",
         }),
       });
-      persistCancellationCheckpoint(cancellation.run);
+      await persistCancellationCheckpoint(cancellation.run);
     });
   }
   if (!cancellation.transitioned) {
     return cancellation.run;
   }
   const cancelled = cancellation.run;
-  persistRunEvent(host, cancelled, "run.cancelled", {
+  await persistRunEvent(host, cancelled, "run.cancelled", {
     actorId,
     reason,
   });
-  publishRunRealtime(host, plan, cancelled, {
+  await publishRunRealtime(host, plan, cancelled, {
     event: "run_cancelled",
     error: reason,
   });
@@ -527,14 +529,14 @@ async function markOrchestrationRunCancelled(
   return cancelled;
 }
 
-function persistCheckpoint(
+async function persistCheckpoint(
   host: OrchestrationLifecycleHost,
   plan: OrchestrationPlan,
   run: OrchestrationRun,
   checkpointKind: OrchestrationCheckpoint["checkpointKind"],
   details: Record<string, unknown>,
-): void {
-  const checkpoint = host.createCheckpoint({
+): Promise<void> {
+  const checkpoint = await host.createCheckpoint({
     runId: run.runId,
     planId: plan.planId,
     waveId: run.currentWaveId,
@@ -542,7 +544,7 @@ function persistCheckpoint(
     checkpointKind,
     details,
   });
-  appendOrchestrationRuntimeDecision(host, {
+  await appendOrchestrationRuntimeDecision(host, {
     kind: "durable_checkpoint",
     scope: buildOrchestrationDecisionScope(run, plan.planId, run.currentPhaseId),
     selected: `Recorded orchestration checkpoint ${checkpointKind}`,
@@ -569,19 +571,19 @@ function persistCheckpoint(
   });
 }
 
-function persistRunEvent(
+async function persistRunEvent(
   host: OrchestrationLifecycleHost,
   run: OrchestrationRun,
   event: string,
   payload: Record<string, unknown>,
-): void {
-  host.storage.orchestration.appendRunEvent(run.runId, event, payload);
+): Promise<void> {
+  await host.storage.orchestration.appendRunEvent(run.runId, event, payload);
   const kind = mapRunEventRuntimeDecisionKind(event);
   if (!kind) {
     return;
   }
   const phaseId = asString(payload.phaseId) ?? run.currentPhaseId;
-  appendOrchestrationRuntimeDecision(host, {
+  await appendOrchestrationRuntimeDecision(host, {
     kind,
     scope: buildOrchestrationDecisionScope(run, run.planId, phaseId),
     selected: summarizeRunEventSelection(event, run),
@@ -619,12 +621,12 @@ function persistRunEvent(
   });
 }
 
-function appendOrchestrationRuntimeDecision(
+async function appendOrchestrationRuntimeDecision(
   host: OrchestrationLifecycleHost,
   input: RuntimeDecisionTraceAppendInput,
-): void {
+): Promise<void> {
   try {
-    host.storage.runtimeDecisionTraces?.append(input);
+    await host.storage.runtimeDecisionTraces?.append(input);
   } catch {
     // Best-effort decision traces are non-fatal; orchestration lifecycle mutations remain authoritative.
   }
@@ -716,7 +718,7 @@ function summarizeRunEventRuntimeRationale(event: string, payload: Record<string
   }
 }
 
-function persistPolicyGateEvent(
+async function persistPolicyGateEvent(
   host: OrchestrationLifecycleHost,
   run: OrchestrationRun,
   input: {
@@ -730,11 +732,11 @@ function persistPolicyGateEvent(
     patch?: Record<string, unknown>;
     approvalRequired?: boolean;
   },
-): void {
+): Promise<void> {
   // Evidence writing is best-effort: a failure here must never alter the gate's own
   // allow/block/approval outcome (e.g. mask the hook's blocked reason thrown by the caller).
   try {
-    persistRunEvent(host, run, "policy.checked", {
+    await persistRunEvent(host, run, "policy.checked", {
       gate: input.gate,
       trigger: input.trigger,
       entityType: input.entityType,
@@ -750,7 +752,7 @@ function persistPolicyGateEvent(
   }
 }
 
-function publishRunRealtime(
+async function publishRunRealtime(
   host: OrchestrationLifecycleHost,
   plan: OrchestrationPlan,
   run: OrchestrationRun,
@@ -761,8 +763,8 @@ function publishRunRealtime(
     nextPhaseId?: string;
     error?: string;
   },
-): void {
-  publishOrchestrationRealtime(host, {
+): Promise<void> {
+  await publishOrchestrationRealtime(host, {
     runId: run.runId,
     planId: plan.planId,
     durableRunId: run.durableRunId,
@@ -788,7 +790,7 @@ async function allocateOrchestrationOwnership(
   run: OrchestrationRun,
 ): Promise<OrchestrationRun> {
   const workspaceId = run.workspaceId ?? DEFAULT_WORKSPACE_ID;
-  const durable = host.createDurableRun({
+  const durable = await host.createDurableRun({
     workflowKey: "orchestration.plan.execute",
     payload: {
       version: "orchestration.plan.execute.v1",
@@ -806,8 +808,8 @@ async function allocateOrchestrationOwnership(
       lifecycleState: "linked",
     }),
   });
-  host.pauseDurableRun(durable.runId, "orchestration");
-  let linked = host.storage.orchestration.updateRun({
+  await host.pauseDurableRun(durable.runId, "orchestration");
+  let linked = await host.storage.orchestration.updateRun({
     ...run,
     workspaceId,
     durableRunId: durable.runId,
@@ -816,7 +818,7 @@ async function allocateOrchestrationOwnership(
     worktreeBaseRef: run.worktreeBaseRef ?? DEFAULT_WORKTREE_BASE_REF,
   });
 
-  persistCheckpoint(
+  await persistCheckpoint(
     host,
     plan,
     linked,
@@ -825,11 +827,11 @@ async function allocateOrchestrationOwnership(
       workflowKey: "orchestration.plan.execute",
     }),
   );
-  persistRunEvent(host, linked, "run.durable_linked", {
+  await persistRunEvent(host, linked, "run.durable_linked", {
     durableRunId: durable.runId,
     workspaceId,
   });
-  publishRunRealtime(host, plan, linked, { event: "durable_run_linked" });
+  await publishRunRealtime(host, plan, linked, { event: "durable_run_linked" });
 
   try {
     const worktree = await runtime.worktrees.allocate({
@@ -837,7 +839,7 @@ async function allocateOrchestrationOwnership(
       workspaceId,
       baseRef: linked.worktreeBaseRef ?? DEFAULT_WORKTREE_BASE_REF,
     });
-    linked = host.storage.orchestration.updateRun({
+    linked = await host.storage.orchestration.updateRun({
       ...linked,
       worktreePath: worktree.worktreePath,
       worktreeStatus: worktree.worktreeStatus,
@@ -847,14 +849,20 @@ async function allocateOrchestrationOwnership(
       worktreeLeaseExpiresAt: worktree.worktreeLeaseExpiresAt,
       executionState: "worktree_ready",
     });
-    host.updateDurableRunState({
+    await host.updateDurableRunState({
       runId: durable.runId,
       metadata: buildDurableMetadata(plan, linked, {
         lifecycleState: "worktree_ready",
       }),
     });
-    persistCheckpoint(host, plan, linked, "worktree_allocated", buildCheckpointDetails(plan, linked, durable.runId));
-    persistRunEvent(host, linked, "run.worktree_allocated", {
+    await persistCheckpoint(
+      host,
+      plan,
+      linked,
+      "worktree_allocated",
+      buildCheckpointDetails(plan, linked, durable.runId),
+    );
+    await persistRunEvent(host, linked, "run.worktree_allocated", {
       worktreePath: linked.worktreePath,
       worktreeStatus: linked.worktreeStatus,
       worktreeBaseRef: linked.worktreeBaseRef,
@@ -862,13 +870,13 @@ async function allocateOrchestrationOwnership(
       worktreeLeaseGeneration: linked.worktreeLeaseGeneration,
       worktreeLeaseExpiresAt: linked.worktreeLeaseExpiresAt,
     });
-    publishRunRealtime(host, plan, linked, { event: "worktree_allocated" });
+    await publishRunRealtime(host, plan, linked, { event: "worktree_allocated" });
     return linked;
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to allocate orchestration worktree.";
     let failed!: OrchestrationRun;
-    host.storage.runImmediateTransaction(() => {
-      failed = host.storage.orchestration.updateRun({
+    await host.storage.runImmediateTransaction(async () => {
+      failed = await host.storage.orchestration.updateRun({
         ...linked,
         status: "failed",
         executionState: "failed",
@@ -876,7 +884,7 @@ async function allocateOrchestrationOwnership(
         lastError: message,
         endedAt: new Date().toISOString(),
       });
-      host.updateDurableRunState({
+      await host.updateDurableRunState({
         runId: durable.runId,
         status: "failed",
         metadata: buildDurableMetadata(plan, failed, {
@@ -885,11 +893,11 @@ async function allocateOrchestrationOwnership(
         lastError: message,
         finishedAt: failed.endedAt,
       });
-      host.recordDurableTimelineEvent(durable.runId, "run_failed", {
+      await host.recordDurableTimelineEvent(durable.runId, "run_failed", {
         reason: message,
         phase: "worktree_allocation",
       });
-      persistCheckpoint(
+      await persistCheckpoint(
         host,
         plan,
         failed,
@@ -899,11 +907,11 @@ async function allocateOrchestrationOwnership(
         }),
       );
     });
-    persistRunEvent(host, failed, "run.failed", {
+    await persistRunEvent(host, failed, "run.failed", {
       error: message,
       phase: "worktree_allocation",
     });
-    publishRunRealtime(host, plan, failed, { event: "run_failed", error: message });
+    await publishRunRealtime(host, plan, failed, { event: "run_failed", error: message });
     return failed;
   }
 }
@@ -914,32 +922,32 @@ async function allocateOrchestrationOwnership(
  * ORCH-001: two concurrent starts for the same plan/workspace can both observe
  * "no active run" and each insert a run, producing duplicate worktrees and
  * doubled cost. To close that race, the active-run re-check and the run-row
- * insert are performed together inside a single synchronous IMMEDIATE
- * transaction. The transaction callback must stay synchronous and side-effect
- * free with respect to the filesystem / git / durable worker — worktree
- * allocation and durable-run setup happen OUTSIDE the transaction.
+ * insert are performed together inside a single awaited IMMEDIATE transaction.
+ * The callback may await database operations but remains side-effect free with
+ * respect to the filesystem, git, and durable worker — worktree allocation and
+ * durable-run setup happen OUTSIDE the transaction.
  *
  * Returns `{ created: false }` with the pre-existing active run when the guard
  * detects a concurrently (or previously) created run, so callers can behave
  * idempotently instead of duplicating work.
  */
-function createOrchestrationRunRecord(
+async function createOrchestrationRunRecord(
   host: OrchestrationLifecycleHost,
   plan: OrchestrationPlan,
   workspaceId: string,
   policyContext: OrchestrationRunPolicyContext,
-): { created: boolean; run: OrchestrationRun } {
+): Promise<{ created: boolean; run: OrchestrationRun }> {
   // `upsertPlan` is idempotent on (planId, workspaceId) and `engine.createRun`
   // is a pure computation, so both can run outside the transaction.
-  host.storage.orchestration.upsertPlan(plan, workspaceId);
+  await host.storage.orchestration.upsertPlan(plan, workspaceId);
   const candidate = host.orchestrationEngine.createRun(plan);
 
-  return host.storage.runImmediateTransaction(() => {
-    const existing = host.storage.orchestration.findActiveRunByPlan(plan.planId, workspaceId);
+  return await host.storage.runImmediateTransaction(async () => {
+    const existing = await host.storage.orchestration.findActiveRunByPlan(plan.planId, workspaceId);
     if (existing) {
       return { created: false, run: existing };
     }
-    const persisted = host.storage.orchestration.createRun({
+    const persisted = await host.storage.orchestration.createRun({
       ...candidate,
       ...policyContext,
       workspaceId,
@@ -958,7 +966,7 @@ export async function createOrchestrationPlan(
   policyContext: OrchestrationRunPolicyContext = {},
 ): Promise<OrchestrationRun> {
   const workspaceId = normalizeRouteWorkspaceId(policyContext.workspaceId);
-  const { created, run } = createOrchestrationRunRecord(host, plan, workspaceId, policyContext);
+  const { created, run } = await createOrchestrationRunRecord(host, plan, workspaceId, policyContext);
   if (!created) {
     // A run for this plan/workspace is already active; return it idempotently
     // rather than allocating a second worktree / durable run.
@@ -975,14 +983,14 @@ export async function runOrchestrationPlan(
   policyContext: OrchestrationRunPolicyContext = {},
 ): Promise<OrchestrationRun> {
   const workspaceId = normalizeRouteWorkspaceId(policyContext.workspaceId);
-  const plan = host.storage.orchestration.getPlan(planId, workspaceId);
+  const plan = await host.storage.orchestration.getPlan(planId, workspaceId);
   host.orchestrationEngine.validate(plan);
-  const activeRun = host.storage.orchestration.findActiveRunByPlan(planId, workspaceId);
+  const activeRun = await host.storage.orchestration.findActiveRunByPlan(planId, workspaceId);
   if (activeRun) {
     return resumeExistingActiveRun(host, plan, activeRun);
   }
 
-  const { created, run } = createOrchestrationRunRecord(host, plan, workspaceId, policyContext);
+  const { created, run } = await createOrchestrationRunRecord(host, plan, workspaceId, policyContext);
   if (!created) {
     // Lost the create race to a concurrent start: adopt the active run the
     // winner inserted instead of queueing a second durable run.
@@ -1008,14 +1016,14 @@ async function finishOrchestrationRunCreation(
   plan: OrchestrationPlan,
   run: OrchestrationRun,
 ): Promise<OrchestrationRun> {
-  persistCheckpoint(host, plan, run, "run_created", buildCheckpointDetails(plan, run));
-  persistRunEvent(host, run, "run.created", {
+  await persistCheckpoint(host, plan, run, "run_created", buildCheckpointDetails(plan, run));
+  await persistRunEvent(host, run, "run.created", {
     status: run.status,
     executionState: run.executionState,
   });
-  publishRunRealtime(host, plan, run, { event: "run_created" });
+  await publishRunRealtime(host, plan, run, { event: "run_created" });
 
-  return allocateOrchestrationOwnership(host, runtime, plan, run);
+  return await allocateOrchestrationOwnership(host, runtime, plan, run);
 }
 
 /**
@@ -1024,16 +1032,16 @@ async function finishOrchestrationRunCreation(
  * return the active run unchanged. Shared by the fast-path active check and the
  * concurrent-create loser path so both behave identically.
  */
-function resumeExistingActiveRun(
+async function resumeExistingActiveRun(
   host: OrchestrationLifecycleHost,
   plan: OrchestrationPlan,
   activeRun: OrchestrationRun,
-): OrchestrationRun | Promise<OrchestrationRun> {
+): Promise<OrchestrationRun> {
   if (activeRun.durableRunId && activeRun.executionState === "queued") {
-    host.requestDurableRunProcessing(activeRun.durableRunId);
+    await host.requestDurableRunProcessing(activeRun.durableRunId);
   }
   if (activeRun.durableRunId && activeRun.executionState === "worktree_ready") {
-    return queueOrchestrationRun(host, plan, activeRun);
+    return await queueOrchestrationRun(host, plan, activeRun);
   }
   return activeRun;
 }
@@ -1062,7 +1070,7 @@ async function queueOrchestrationRun(
       ...next,
     }),
   });
-  persistPolicyGateEvent(host, run, {
+  await persistPolicyGateEvent(host, run, {
     gate: "pre_input",
     trigger: "orchestration.run.before",
     entityType: "orchestration_run",
@@ -1084,33 +1092,33 @@ async function queueOrchestrationRun(
       ...(runBeforeHook.patch.maxCostUsd !== undefined ? { maxCostUsd: runBeforeHook.patch.maxCostUsd } : {}),
     };
     host.orchestrationEngine.validate(plan);
-    host.storage.orchestration.upsertPlan(plan, run.workspaceId ?? DEFAULT_WORKSPACE_ID);
+    await host.storage.orchestration.upsertPlan(plan, run.workspaceId ?? DEFAULT_WORKSPACE_ID);
   }
 
-  const queued = host.storage.orchestration.updateRun({
+  const queued = await host.storage.orchestration.updateRun({
     ...run,
     executionState: "queued",
   });
-  host.resumeDurableRun(queued.durableRunId!, "orchestration");
-  host.updateDurableRunState({
+  await host.resumeDurableRun(queued.durableRunId!, "orchestration");
+  await host.updateDurableRunState({
     runId: queued.durableRunId!,
     metadata: buildDurableMetadata(plan, queued, {
       lifecycleState: "queued",
     }),
   });
-  persistCheckpoint(host, plan, queued, "run_queued", buildCheckpointDetails(plan, queued));
-  persistRunEvent(host, queued, "run.queued", {
+  await persistCheckpoint(host, plan, queued, "run_queued", buildCheckpointDetails(plan, queued));
+  await persistRunEvent(host, queued, "run.queued", {
     durableRunId: queued.durableRunId,
     worktreePath: queued.worktreePath,
   });
-  publishRunRealtime(host, plan, queued, { event: "run_queued" });
+  await publishRunRealtime(host, plan, queued, { event: "run_queued" });
 
   if (host.config.assistant.memory.enabled && host.config.assistant.memory.qmd.applyToOrchestration) {
-    host.scheduleOrchestrationMemoryContext(plan, queued);
+    await host.scheduleOrchestrationMemoryContext(plan, queued);
   }
 
   if (queued.durableRunId) {
-    host.requestDurableRunProcessing(queued.durableRunId);
+    await host.requestDurableRunProcessing(queued.durableRunId);
   }
 
   return queued;
@@ -1124,8 +1132,8 @@ export async function approvePhase(
   costIncrementUsd = 0,
   workspaceId?: string,
 ): Promise<{ run: OrchestrationRun; checkpoints: OrchestrationCheckpoint[] }> {
-  const run = assertRunWorkspaceAccess(host.storage.orchestration.getRun(runId), workspaceId);
-  let plan = host.storage.orchestration.getPlan(run.planId, run.workspaceId ?? DEFAULT_WORKSPACE_ID);
+  const run = assertRunWorkspaceAccess(await host.storage.orchestration.getRun(runId), workspaceId);
+  let plan = await host.storage.orchestration.getPlan(run.planId, run.workspaceId ?? DEFAULT_WORKSPACE_ID);
   host.orchestrationEngine.validate(plan);
   const currentPhase = findPhaseInPlan(plan, phaseId);
 
@@ -1158,7 +1166,7 @@ export async function approvePhase(
       ...next,
     }),
   });
-  persistPolicyGateEvent(host, run, {
+  await persistPolicyGateEvent(host, run, {
     gate: "pre_phase",
     trigger: "orchestration.phase.before",
     entityType: "orchestration_phase",
@@ -1179,7 +1187,7 @@ export async function approvePhase(
     if (plan.mode !== "hitl" && !patchedPhase.requiresApproval) {
       throw new Error(`Phase ${phaseId} is not approval-gated for run ${runId}`);
     }
-    host.storage.orchestration.upsertPlan(plan, run.workspaceId ?? DEFAULT_WORKSPACE_ID);
+    await host.storage.orchestration.upsertPlan(plan, run.workspaceId ?? DEFAULT_WORKSPACE_ID);
   }
 
   const nextRun: OrchestrationRun = {
@@ -1190,7 +1198,7 @@ export async function approvePhase(
     pendingApprovedBy: approvedBy,
     pendingCostIncrementUsd: costIncrementUsd,
   };
-  const persisted = host.storage.orchestration.updateRunIfCurrentState(nextRun, {
+  const persisted = await host.storage.orchestration.updateRunIfCurrentState(nextRun, {
     status: run.status,
     executionState: run.executionState,
   });
@@ -1203,7 +1211,7 @@ export async function approvePhase(
   }
 
   if (persisted.durableRunId) {
-    host.updateDurableRunState({
+    await host.updateDurableRunState({
       runId: persisted.durableRunId,
       metadata: buildDurableMetadata(plan, persisted, {
         lifecycleState: "resume_requested",
@@ -1211,7 +1219,7 @@ export async function approvePhase(
     });
   }
 
-  persistCheckpoint(
+  await persistCheckpoint(
     host,
     plan,
     persisted,
@@ -1220,12 +1228,12 @@ export async function approvePhase(
       approvedBy,
     }),
   );
-  persistRunEvent(host, persisted, "phase.approved", {
+  await persistRunEvent(host, persisted, "phase.approved", {
     approvedBy,
     phaseId,
     resumeRequested: true,
   });
-  persistPolicyGateEvent(host, persisted, {
+  await persistPolicyGateEvent(host, persisted, {
     gate: "pre_output",
     trigger: "orchestration.phase.after",
     entityType: "orchestration_phase",
@@ -1234,9 +1242,9 @@ export async function approvePhase(
     phaseId,
     approvalRequired: true,
   });
-  publishRunRealtime(host, plan, persisted, { event: "phase_approved", approvedBy });
+  await publishRunRealtime(host, plan, persisted, { event: "phase_approved", approvedBy });
 
-  host.hooksService.enqueueAfterHooks({
+  await host.hooksService.enqueueAfterHooks({
     workspaceId: persisted.workspaceId ?? DEFAULT_WORKSPACE_ID,
     trigger: "orchestration.phase.after",
     entityType: "orchestration_phase",
@@ -1254,13 +1262,13 @@ export async function approvePhase(
   });
 
   if (persisted.durableRunId) {
-    host.resumeDurableRun(persisted.durableRunId, "orchestration");
-    host.requestDurableRunProcessing(persisted.durableRunId);
+    await host.resumeDurableRun(persisted.durableRunId, "orchestration");
+    await host.requestDurableRunProcessing(persisted.durableRunId);
   }
 
   return {
     run: persisted,
-    checkpoints: host.storage.orchestration.listCheckpoints(runId),
+    checkpoints: await host.storage.orchestration.listCheckpoints(runId),
   };
 }
 
@@ -1271,13 +1279,13 @@ export async function cancelOrchestrationRun(
   actorId = "operator",
   workspaceId?: string,
 ): Promise<{ run: OrchestrationRun; checkpoints: OrchestrationCheckpoint[] }> {
-  const run = assertRunWorkspaceAccess(host.storage.orchestration.getRun(runId), workspaceId);
-  const plan = host.storage.orchestration.getPlan(run.planId, run.workspaceId ?? DEFAULT_WORKSPACE_ID);
+  const run = assertRunWorkspaceAccess(await host.storage.orchestration.getRun(runId), workspaceId);
+  const plan = await host.storage.orchestration.getPlan(run.planId, run.workspaceId ?? DEFAULT_WORKSPACE_ID);
   host.orchestrationEngine.validate(plan);
   const cancelled = await markOrchestrationRunCancelled(host, runtime, plan, run, actorId, `cancelled by ${actorId}`);
   return {
     run: cancelled,
-    checkpoints: host.storage.orchestration.listCheckpoints(runId),
+    checkpoints: await host.storage.orchestration.listCheckpoints(runId),
   };
 }
 
@@ -1293,7 +1301,7 @@ export async function executeDurableOrchestrationRun(
   if (!payload) {
     const malformedWorkspacePayload = readMalformedWorkspacePayload(durableRun);
     if (malformedWorkspacePayload) {
-      const run = host.storage.orchestration.getRun(malformedWorkspacePayload.orchestrationRunId);
+      const run = await host.storage.orchestration.getRun(malformedWorkspacePayload.orchestrationRunId);
       if (run.durableRunId !== durableRun.runId) {
         throw new Error(`Orchestration run ${run.runId} is not linked to durable run ${durableRun.runId}.`);
       }
@@ -1312,7 +1320,7 @@ export async function executeDurableOrchestrationRun(
     }
     throw new Error("Durable orchestration payload is invalid or incomplete.");
   }
-  let run = host.storage.orchestration.getRun(payload.orchestrationRunId);
+  let run = await host.storage.orchestration.getRun(payload.orchestrationRunId);
   if (run.durableRunId !== durableRun.runId) {
     throw new Error(`Orchestration run ${run.runId} is not linked to durable run ${durableRun.runId}.`);
   }
@@ -1348,9 +1356,9 @@ export async function executeDurableOrchestrationRun(
       error: mismatchError,
     });
   }
-  const plan = host.storage.orchestration.getPlan(payload.planId, runWorkspaceId);
+  const plan = await host.storage.orchestration.getPlan(payload.planId, runWorkspaceId);
   host.orchestrationEngine.validate(plan);
-  run = runtime.worktrees.ensureLeaseForExecution(run);
+  run = await runtime.worktrees.ensureLeaseForExecution(run);
   const worktreeExecutionFence = readOrchestrationWorktreeExecutionFence(run);
   const policyContext: OrchestrationRunPolicyContext = {
     operatorId: payload.operatorId ?? run.operatorId,
@@ -1360,17 +1368,17 @@ export async function executeDurableOrchestrationRun(
     localOperatorOverrideId: payload.localOperatorOverrideId ?? run.localOperatorOverrideId,
   };
 
-  const recordUpdate = (
+  const recordUpdate = async (
     next: OrchestrationRun,
     checkpointKind?: OrchestrationCheckpoint["checkpointKind"],
     checkpointExtras: Record<string, unknown> = {},
     commitOptions: OrchestrationDurableCommitOptions = {},
-  ): void => {
+  ): Promise<void> => {
     let committedRun!: OrchestrationRun;
-    host.storage.runImmediateTransaction(() => {
-      lockFreshDurableExecutionLease(host, durableRun.runId, expectedLeaseOwnerId);
-      assertFreshOrchestrationWorktreeExecutionFence(host, run.runId, worktreeExecutionFence);
-      host.updateDurableRunState({
+    await host.storage.runImmediateTransaction(async () => {
+      await lockFreshDurableExecutionLease(host, durableRun.runId, expectedLeaseOwnerId);
+      await assertFreshOrchestrationWorktreeExecutionFence(host, run.runId, worktreeExecutionFence);
+      await host.updateDurableRunState({
         runId: durableRun.runId,
         metadata: commitOptions.durableMetadata ?? {
           ...buildDurableMetadata(plan, next),
@@ -1379,9 +1387,9 @@ export async function executeDurableOrchestrationRun(
         expectedLeaseOwnerId,
         ...(commitOptions.durableState ?? {}),
       });
-      committedRun = host.storage.orchestration.updateRun(next);
+      committedRun = await host.storage.orchestration.updateRun(next);
       if (checkpointKind) {
-        persistCheckpoint(
+        await persistCheckpoint(
           host,
           plan,
           committedRun,
@@ -1390,7 +1398,7 @@ export async function executeDurableOrchestrationRun(
         );
       }
       if (commitOptions.durableTimeline) {
-        host.recordDurableTimelineEvent(
+        await host.recordDurableTimelineEvent(
           durableRun.runId,
           commitOptions.durableTimeline.eventType,
           commitOptions.durableTimeline.payload,
@@ -1415,7 +1423,7 @@ export async function executeDurableOrchestrationRun(
       pendingCostIncrementUsd: undefined,
       lastError: undefined,
     };
-    recordUpdate(
+    await recordUpdate(
       resumedRun,
       "run_resumed",
       {},
@@ -1429,11 +1437,11 @@ export async function executeDurableOrchestrationRun(
         },
       },
     );
-    persistRunEvent(host, run, "run.resumed", {
+    await persistRunEvent(host, run, "run.resumed", {
       phaseId: run.currentPhaseId,
       waveId: run.currentWaveId,
     });
-    publishRunRealtime(host, plan, run, { event: "run_resumed" });
+    await publishRunRealtime(host, plan, run, { event: "run_resumed" });
   } else if (run.status === "running" && run.currentPhaseId) {
     const resumedFrom = run.executionState;
     // A phase that was already dispatched (approval wait OR an ordinary
@@ -1463,7 +1471,7 @@ export async function executeDurableOrchestrationRun(
           error: unlinkedChildError,
         });
       }
-      const childRun = getDurableRunIfAvailable(host, childRunId);
+      const childRun = await getDurableRunIfAvailable(host, childRunId);
       if (!childRun) {
         const missingChildError = `Child durable run ${childRunId} is missing; refusing to duplicate orchestration phase ${run.currentPhaseId}.`;
         return failResumeWithoutChildLinkage({
@@ -1481,7 +1489,7 @@ export async function executeDurableOrchestrationRun(
         });
       }
       if (!isDurableRunTerminal(childRun)) {
-        recordUpdate(
+        await recordUpdate(
           { ...run },
           undefined,
           {},
@@ -1504,8 +1512,8 @@ export async function executeDurableOrchestrationRun(
             },
           },
         );
-        host.requestDurableRunProcessing(childRunId);
-        persistRunEvent(host, run, "run.waiting_for_child", {
+        await host.requestDurableRunProcessing(childRunId);
+        await persistRunEvent(host, run, "run.waiting_for_child", {
           phaseId: run.currentPhaseId,
           waveId: run.currentWaveId,
           childRunId,
@@ -1527,7 +1535,7 @@ export async function executeDurableOrchestrationRun(
       executionState: "running",
       lastError: undefined,
     };
-    recordUpdate(
+    await recordUpdate(
       resumedRun,
       resumedFromChild ? "run_resumed" : undefined,
       {
@@ -1547,12 +1555,12 @@ export async function executeDurableOrchestrationRun(
         : {},
     );
     if (resumedFromChild) {
-      persistRunEvent(host, run, "run.resumed", {
+      await persistRunEvent(host, run, "run.resumed", {
         phaseId: run.currentPhaseId,
         waveId: run.currentWaveId,
         resumedFrom: "child_phase_wait",
       });
-      publishRunRealtime(host, plan, run, { event: "run_resumed" });
+      await publishRunRealtime(host, plan, run, { event: "run_resumed" });
     }
   } else {
     const startedRun: OrchestrationRun = {
@@ -1560,7 +1568,7 @@ export async function executeDurableOrchestrationRun(
       executionState: "running",
       lastError: undefined,
     };
-    recordUpdate(
+    await recordUpdate(
       startedRun,
       "run_started",
       {},
@@ -1574,11 +1582,11 @@ export async function executeDurableOrchestrationRun(
         },
       },
     );
-    persistRunEvent(host, run, "run.started", {
+    await persistRunEvent(host, run, "run.started", {
       phaseId: run.currentPhaseId,
       waveId: run.currentWaveId,
     });
-    publishRunRealtime(host, plan, run, { event: "run_started" });
+    await publishRunRealtime(host, plan, run, { event: "run_started" });
   }
 
   while (run.status === "running" && run.currentPhaseId) {
@@ -1603,13 +1611,13 @@ export async function executeDurableOrchestrationRun(
     const previousWaveId = run.currentWaveId;
     const previousPhaseId = run.currentPhaseId;
     const phase = findPhaseInPlan(plan, previousPhaseId);
-    persistRunEvent(host, run, "phase.started", {
+    await persistRunEvent(host, run, "phase.started", {
       phaseId: previousPhaseId,
       waveId: previousWaveId,
       ownerAgentId: phase.ownerAgentId,
       specPath: phase.specPath,
     });
-    publishRunRealtime(host, plan, run, {
+    await publishRunRealtime(host, plan, run, {
       event: "phase_started",
     });
 
@@ -1626,7 +1634,8 @@ export async function executeDurableOrchestrationRun(
           durableRun,
           policyContext,
           signal: context?.signal,
-          onChildDispatched: (dispatch) => persistDispatchedChildPhase(host, plan, run, durableRun, dispatch),
+          onChildDispatched: async (dispatch) =>
+            await persistDispatchedChildPhase(host, plan, run, durableRun, dispatch),
         });
       }
       throwIfWorkflowAborted(context);
@@ -1696,7 +1705,7 @@ export async function executeDurableOrchestrationRun(
       prompt: execution.prompt,
       error: unsupportedWaitError ?? execution.error,
     };
-    persistRunEvent(
+    await persistRunEvent(
       host,
       run,
       executionStatus === "failed"
@@ -1714,7 +1723,7 @@ export async function executeDurableOrchestrationRun(
             correlationId: execution.approvalId,
           }
         : undefined;
-      recordUpdate(
+      await recordUpdate(
         {
           ...run,
           status: waitForEvent ? "running" : "paused",
@@ -1754,11 +1763,11 @@ export async function executeDurableOrchestrationRun(
             }
           : {},
       );
-      publishRunRealtime(host, plan, run, {
+      await publishRunRealtime(host, plan, run, {
         event: "phase_waiting",
       });
       if (waitForEvent) {
-        persistRunEvent(host, run, "run.paused_for_approval", {
+        await persistRunEvent(host, run, "run.paused_for_approval", {
           phaseId: run.currentPhaseId,
           waveId: run.currentWaveId,
           waitForEvent,
@@ -1767,7 +1776,7 @@ export async function executeDurableOrchestrationRun(
           childRunId: execution.childRunId,
           approvalId: execution.approvalId,
         });
-        publishRunRealtime(host, plan, run, { event: "run_paused_for_approval" });
+        await publishRunRealtime(host, plan, run, { event: "run_paused_for_approval" });
         return {
           outcome: "paused",
           checkpointState: buildCheckpointDetails(plan, run, durableRun.runId, {
@@ -1781,7 +1790,7 @@ export async function executeDurableOrchestrationRun(
 
     if (executionStatus === "failed") {
       const phaseError = unsupportedWaitError ?? execution.error ?? `Phase ${previousPhaseId} failed.`;
-      recordUpdate(
+      await recordUpdate(
         {
           ...run,
           status: "failed",
@@ -1803,7 +1812,7 @@ export async function executeDurableOrchestrationRun(
           },
         },
       );
-      publishRunRealtime(host, plan, run, {
+      await publishRunRealtime(host, plan, run, {
         event: "run_failed",
         error: phaseError,
       });
@@ -1816,7 +1825,7 @@ export async function executeDurableOrchestrationRun(
       };
     }
 
-    recordUpdate(
+    await recordUpdate(
       {
         ...host.orchestrationEngine.advancePhase(plan, run, previousPhaseId, {
           costIncrementUsd: execution.costUsd ?? 0,
@@ -1828,20 +1837,20 @@ export async function executeDurableOrchestrationRun(
         executedPhase: executionPayload,
       },
     );
-    persistRunEvent(host, run, "phase.advanced", {
+    await persistRunEvent(host, run, "phase.advanced", {
       phaseId: previousPhaseId,
       nextPhaseId: run.currentPhaseId,
       nextWaveId: run.currentWaveId,
       costIncrementUsd: execution.costUsd ?? 0,
       totalCostUsd: run.totalCostUsd,
     });
-    publishRunRealtime(host, plan, run, {
+    await publishRunRealtime(host, plan, run, {
       event: "phase_executed",
       nextWaveId: run.currentWaveId,
       nextPhaseId: run.currentPhaseId,
     });
     if (previousWaveId !== run.currentWaveId && run.currentWaveId) {
-      persistCheckpoint(
+      await persistCheckpoint(
         host,
         plan,
         run,
@@ -1855,7 +1864,7 @@ export async function executeDurableOrchestrationRun(
   }
 
   if (run.status === "paused") {
-    recordUpdate(
+    await recordUpdate(
       {
         ...run,
         executionState: "paused_for_approval",
@@ -1879,11 +1888,11 @@ export async function executeDurableOrchestrationRun(
         },
       },
     );
-    persistRunEvent(host, run, "run.paused_for_approval", {
+    await persistRunEvent(host, run, "run.paused_for_approval", {
       phaseId: run.currentPhaseId,
       waveId: run.currentWaveId,
     });
-    publishRunRealtime(host, plan, run, { event: "run_paused_for_approval" });
+    await publishRunRealtime(host, plan, run, { event: "run_paused_for_approval" });
     return {
       outcome: "paused",
       checkpointState: buildCheckpointDetails(plan, run, durableRun.runId),
@@ -1891,19 +1900,19 @@ export async function executeDurableOrchestrationRun(
   }
 
   const terminalExecutionState = run.status === "stopped_by_limit" ? "stopped_by_limit" : "completed";
-  recordUpdate(
+  await recordUpdate(
     {
       ...run,
       executionState: terminalExecutionState,
     },
     run.status === "stopped_by_limit" ? "run_stopped" : "run_completed",
   );
-  persistRunEvent(host, run, run.status === "stopped_by_limit" ? "run.stopped" : "run.completed", {
+  await persistRunEvent(host, run, run.status === "stopped_by_limit" ? "run.stopped" : "run.completed", {
     totalIterations: run.totalIterations,
     totalCostUsd: run.totalCostUsd,
     ...(run.status === "stopped_by_limit" ? { stopReason: run.stopReason ?? "plan_limit" } : {}),
   });
-  publishRunRealtime(host, plan, run, {
+  await publishRunRealtime(host, plan, run, {
     event: run.status === "stopped_by_limit" ? "run_stopped" : "run_completed",
   });
   await releaseOrchestrationWorktreeIfAvailable(
@@ -1961,13 +1970,13 @@ function readRecoverableChildPhase(
  * lifecycle metadata write (phase advance / wait / failure) because those
  * rebuild metadata from `buildDurableMetadata` without it.
  */
-function persistDispatchedChildPhase(
+async function persistDispatchedChildPhase(
   host: OrchestrationLifecycleHost,
   plan: OrchestrationPlan,
   run: OrchestrationRun,
   durableRun: DurableRunRecord,
   dispatch: OrchestrationPhaseChildDispatch,
-): void {
+): Promise<void> {
   if (dispatch.phaseId !== run.currentPhaseId) {
     return;
   }
@@ -1980,9 +1989,9 @@ function persistDispatchedChildPhase(
     ...(dispatch.childRunId ? { childRunId: dispatch.childRunId } : {}),
   };
   const expectedLeaseOwnerId = requireDurableExecutionLeaseOwner(durableRun);
-  host.storage.runImmediateTransaction(() => {
-    lockFreshDurableExecutionLease(host, durableRun.runId, expectedLeaseOwnerId);
-    host.updateDurableRunState({
+  await host.storage.runImmediateTransaction(async () => {
+    await lockFreshDurableExecutionLease(host, durableRun.runId, expectedLeaseOwnerId);
+    await host.updateDurableRunState({
       runId: durableRun.runId,
       expectedLeaseOwnerId,
       metadata: {
@@ -1990,15 +1999,15 @@ function persistDispatchedChildPhase(
         dispatchedPhase,
       },
     });
-    persistRunEvent(host, run, "phase.child_dispatched", {
+    await persistRunEvent(host, run, "phase.child_dispatched", {
       phaseId: dispatch.phaseId,
       waveId: run.currentWaveId,
       childSessionId: dispatch.childSessionId,
       childTurnId: dispatch.childTurnId,
       childRunId: dispatch.childRunId,
     });
-    if (dispatch.childRunId) {
-      host.watchDurableChildRun?.({
+    if (dispatch.childRunId && host.watchDurableChildRun) {
+      await host.watchDurableChildRun({
         watcherId: `orchestration-child:${durableRun.runId}:${dispatch.phaseId}`,
         parentRunId: durableRun.runId,
         childRunId: dispatch.childRunId,
@@ -2032,7 +2041,7 @@ async function failResumeWithoutChildLinkage(input: {
     checkpointKind?: OrchestrationCheckpoint["checkpointKind"],
     checkpointExtras?: Record<string, unknown>,
     commitOptions?: OrchestrationDurableCommitOptions,
-  ) => void;
+  ) => Promise<void>;
   phaseId: string;
   payload: Record<string, unknown>;
   error: string;
@@ -2055,7 +2064,7 @@ async function failResumeWithoutChildLinkage(input: {
     endedAt: new Date().toISOString(),
     lastError: input.error,
   };
-  input.recordUpdate(
+  await input.recordUpdate(
     failedRun,
     "run_failed",
     { failedPhase },
@@ -2072,13 +2081,13 @@ async function failResumeWithoutChildLinkage(input: {
       },
     },
   );
-  persistRunEvent(host, failedRun, input.runEvent ?? "run.child_dispatch_unrecoverable", {
+  await persistRunEvent(host, failedRun, input.runEvent ?? "run.child_dispatch_unrecoverable", {
     phaseId: input.phaseId,
     waveId: failedRun.currentWaveId,
     childRunId,
     error: input.error,
   });
-  publishRunRealtime(host, plan, failedRun, {
+  await publishRunRealtime(host, plan, failedRun, {
     event: "run_failed",
     error: input.error,
   });
@@ -2130,9 +2139,12 @@ function describeMalformedWorkspaceId(value: unknown): string {
   }
 }
 
-function getDurableRunIfAvailable(host: OrchestrationLifecycleHost, runId: string): DurableRunRecord | undefined {
+async function getDurableRunIfAvailable(
+  host: OrchestrationLifecycleHost,
+  runId: string,
+): Promise<DurableRunRecord | undefined> {
   try {
-    return host.getDurableRun(runId);
+    return await host.getDurableRun(runId);
   } catch (error) {
     if (!(error instanceof NotFoundError)) {
       throw error;
@@ -2153,20 +2165,20 @@ async function failDurableOrchestrationWorkspaceMismatch(input: {
 }): Promise<OrchestrationExecutionResult> {
   const expectedLeaseOwnerId = requireDurableExecutionLeaseOwner(input.durableRun);
   let failed!: OrchestrationRun;
-  input.host.storage.runImmediateTransaction(() => {
-    lockFreshDurableExecutionLease(input.host, input.durableRun.runId, expectedLeaseOwnerId);
-    input.host.updateDurableRunState({
+  await input.host.storage.runImmediateTransaction(async () => {
+    await lockFreshDurableExecutionLease(input.host, input.durableRun.runId, expectedLeaseOwnerId);
+    await input.host.updateDurableRunState({
       runId: input.durableRun.runId,
       expectedLeaseOwnerId,
     });
-    failed = input.host.storage.orchestration.updateRun({
+    failed = await input.host.storage.orchestration.updateRun({
       ...input.run,
       status: "failed",
       executionState: "failed",
       endedAt: new Date().toISOString(),
       lastError: input.error,
     });
-    persistRunEvent(input.host, failed, "run.workspace_mismatch", {
+    await persistRunEvent(input.host, failed, "run.workspace_mismatch", {
       durableRunId: input.durableRun.runId,
       payloadWorkspaceId: input.payloadWorkspaceId,
       runWorkspaceId: input.runWorkspaceId,
@@ -2271,40 +2283,45 @@ function findPhaseInPlan(plan: OrchestrationPlan, phaseId: string) {
   throw new Error(`Phase ${phaseId} not found in plan ${plan.planId}`);
 }
 
-export function getRun(host: OrchestrationLifecycleHost, runId: string, workspaceId?: string): OrchestrationRun {
-  return assertRunWorkspaceAccess(host.storage.orchestration.getRun(runId), workspaceId);
-}
-
-export function listRunCheckpoints(
+export async function getRun(
   host: OrchestrationLifecycleHost,
   runId: string,
   workspaceId?: string,
-): OrchestrationCheckpoint[] {
-  assertRunWorkspaceAccess(host.storage.orchestration.getRun(runId), workspaceId);
-  return host.storage.orchestration.listCheckpoints(runId);
+): Promise<OrchestrationRun> {
+  return assertRunWorkspaceAccess(await host.storage.orchestration.getRun(runId), workspaceId);
 }
 
-export function getRunTrace(
+export async function listRunCheckpoints(
   host: OrchestrationLifecycleHost,
   runId: string,
   workspaceId?: string,
-): OrchestrationDecisionTrace {
-  const run = assertRunWorkspaceAccess(host.storage.orchestration.getRun(runId), workspaceId);
+): Promise<OrchestrationCheckpoint[]> {
+  assertRunWorkspaceAccess(await host.storage.orchestration.getRun(runId), workspaceId);
+  return await host.storage.orchestration.listCheckpoints(runId);
+}
+
+export async function getRunTrace(
+  host: OrchestrationLifecycleHost,
+  runId: string,
+  workspaceId?: string,
+): Promise<OrchestrationDecisionTrace> {
+  const run = assertRunWorkspaceAccess(await host.storage.orchestration.getRun(runId), workspaceId);
   const sanitizedRun = projectOrchestrationPublicValue(run) as OrchestrationRun;
-  const checkpoints = host.storage.orchestration.listCheckpoints(runId).map((checkpoint) => ({
+  const checkpoints = (await host.storage.orchestration.listCheckpoints(runId)).map((checkpoint) => ({
     ...checkpoint,
     details: sanitizeTraceDetails(checkpoint.details),
   }));
   const warnings: string[] = [];
   const runEvents = host.storage.orchestration.listRunEvents
-    ? host.storage.orchestration
-        .listRunEvents(runId)
-        .map((event) => ({ ...event, payload: sanitizeTraceDetails(event.payload) }))
+    ? (await host.storage.orchestration.listRunEvents(runId)).map((event) => ({
+        ...event,
+        payload: sanitizeTraceDetails(event.payload),
+      }))
     : [];
   if (!host.storage.orchestration.listRunEvents) {
     warnings.push("Run event storage does not expose listRunEvents; trace is checkpoint-only.");
   }
-  const runtimeDecisions = (host.storage.runtimeDecisionTraces?.list({ runId, limit: 300 }) ?? []).map(
+  const runtimeDecisions = ((await host.storage.runtimeDecisionTraces?.list({ runId, limit: 300 })) ?? []).map(
     (decision) => projectOrchestrationPublicValue(decision) as RuntimeDecisionTraceRecord,
   );
 

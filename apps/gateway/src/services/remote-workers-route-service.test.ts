@@ -62,18 +62,18 @@ function record(overrides: Partial<RemoteWorkerRegistryRecord> = {}): RemoteWork
 
 function store(overrides: Partial<RemoteWorkerRegistryStore> = {}): RemoteWorkerRegistryStore {
   return {
-    listWorkerRegistry: vi.fn(() => ({ items: [record()] })),
-    findWorkerRegistryEntry: vi.fn(() => record()),
+    listWorkerRegistry: vi.fn(async () => ({ items: [record()] })),
+    findWorkerRegistryEntry: vi.fn(async () => record()),
     ...overrides,
   };
 }
 
 function assignmentStore(overrides: Partial<RemoteWorkerAssignmentStore> = {}): RemoteWorkerAssignmentStore {
   return {
-    listAssignmentAggregates: vi.fn(() => ({ items: [] })),
-    findAssignmentAggregate: vi.fn(() => undefined),
-    findCurrentGeneration: vi.fn(() => undefined),
-    listEventsAfter: vi.fn(() => []),
+    listAssignmentAggregates: vi.fn(async () => ({ items: [] })),
+    findAssignmentAggregate: vi.fn(async () => undefined),
+    findCurrentGeneration: vi.fn(async () => undefined),
+    listEventsAfter: vi.fn(async () => []),
     ...overrides,
   };
 }
@@ -124,12 +124,12 @@ function aggregate(overrides: Partial<RemoteWorkerAssignmentAggregate> = {}): Re
 }
 
 describe("RemoteWorkersRouteService HX-507A", () => {
-  it("projects a deeply frozen read-only page with explicit downstream unavailability", () => {
+  it("projects a deeply frozen read-only page with explicit downstream unavailability", async () => {
     const registry = store({
-      listWorkerRegistry: vi.fn(() => ({ items: [record()], nextCursor: "worker-a" })),
+      listWorkerRegistry: vi.fn(async () => ({ items: [record()], nextCursor: "worker-a" })),
     });
     const service = new RemoteWorkersRouteService(registry, assignmentStore(), () => OBSERVED_AT);
-    const page = service.listRegistry({ workspaceId: "workspace-a", limit: 1 });
+    const page = await service.listRegistry({ workspaceId: "workspace-a", limit: 1 });
 
     expect(page).toMatchObject({
       readOnly: true,
@@ -166,20 +166,22 @@ describe("RemoteWorkersRouteService HX-507A", () => {
     );
   });
 
-  it("decodes only canonical workspace-bound cursors and passes the raw position to storage", () => {
-    const registry = store({ listWorkerRegistry: vi.fn(() => ({ items: [] })) });
+  it("decodes only canonical workspace-bound cursors and passes the raw position to storage", async () => {
+    const registry = store({ listWorkerRegistry: vi.fn(async () => ({ items: [] })) });
     const service = new RemoteWorkersRouteService(registry, assignmentStore(), () => OBSERVED_AT);
     const cursor = encodeRemoteWorkerRegistryCursor({
       schemaVersion: REMOTE_WORKER_REGISTRY_CURSOR_SCHEMA_VERSION,
       workspaceId: "workspace-a",
       lastWorkerId: "worker-before",
     });
-    service.listRegistry({ workspaceId: "workspace-a", cursor });
+    await service.listRegistry({ workspaceId: "workspace-a", cursor });
     expect(registry.listWorkerRegistry).toHaveBeenCalledWith("workspace-a", {
       limit: 25,
       cursor: "worker-before",
     });
-    expect(() => service.listRegistry({ workspaceId: "workspace-b", cursor })).toThrow(RemoteWorkerRegistryInputError);
+    await expect(service.listRegistry({ workspaceId: "workspace-b", cursor })).rejects.toThrow(
+      RemoteWorkerRegistryInputError,
+    );
 
     const reordered = Buffer.from(
       JSON.stringify({
@@ -203,9 +205,9 @@ describe("RemoteWorkersRouteService HX-507A", () => {
     expect(() => decodeRemoteWorkerRegistryCursor("not-canonical+base64")).toThrow(RemoteWorkerRegistryInputError);
   });
 
-  it("derives quarantine and revoke posture only from the canonical latest control", () => {
+  it("derives quarantine and revoke posture only from the canonical latest control", async () => {
     const registry = store({
-      listWorkerRegistry: vi.fn(() => ({
+      listWorkerRegistry: vi.fn(async () => ({
         items: [
           record({
             control: {
@@ -227,53 +229,55 @@ describe("RemoteWorkersRouteService HX-507A", () => {
         ],
       })),
     });
-    const page = new RemoteWorkersRouteService(registry, assignmentStore(), () => OBSERVED_AT).listRegistry({
+    const page = await new RemoteWorkersRouteService(registry, assignmentStore(), () => OBSERVED_AT).listRegistry({
       workspaceId: "workspace-a",
     });
     expect(page.items.map((item) => item.posture.value)).toEqual(["quarantined", "revoked"]);
   });
 
-  it("returns frozen detail, maps foreign-workspace absence to 404, and fails inconsistent storage closed", () => {
+  it("returns frozen detail, maps foreign-workspace absence to 404, and fails inconsistent storage closed", async () => {
     const registry = store();
     const service = new RemoteWorkersRouteService(registry, assignmentStore(), () => OBSERVED_AT);
-    const detail = service.getRegistryEntry({ workspaceId: "workspace-a", workerId: "worker-a" });
+    const detail = await service.getRegistryEntry({ workspaceId: "workspace-a", workerId: "worker-a" });
     expect(detail).toMatchObject({ readOnly: true, workspaceId: "workspace-a", item: { workerId: "worker-a" } });
     expect(Object.isFrozen(detail.item)).toBe(true);
 
     const missing = new RemoteWorkersRouteService(
-      store({ findWorkerRegistryEntry: vi.fn(() => undefined) }),
+      store({ findWorkerRegistryEntry: vi.fn(async () => undefined) }),
       assignmentStore(),
       () => OBSERVED_AT,
     );
-    expect(() => missing.getRegistryEntry({ workspaceId: "workspace-b", workerId: "worker-a" })).toThrow(NotFoundError);
+    await expect(missing.getRegistryEntry({ workspaceId: "workspace-b", workerId: "worker-a" })).rejects.toThrow(
+      NotFoundError,
+    );
 
     const wrongDetail = new RemoteWorkersRouteService(
       store({
-        findWorkerRegistryEntry: vi.fn(() =>
+        findWorkerRegistryEntry: vi.fn(async () =>
           record({ admission: admission({ workerId: "worker-b", nodeId: "node-b" }) }),
         ),
       }),
       assignmentStore(),
       () => OBSERVED_AT,
     );
-    expect(() => wrongDetail.getRegistryEntry({ workspaceId: "workspace-a", workerId: "worker-a" })).toThrow(
+    await expect(wrongDetail.getRegistryEntry({ workspaceId: "workspace-a", workerId: "worker-a" })).rejects.toThrow(
       /storage detail is inconsistent/u,
     );
 
     const inconsistent = new RemoteWorkersRouteService(
       store({
-        listWorkerRegistry: vi.fn(() => ({
+        listWorkerRegistry: vi.fn(async () => ({
           items: [record({ admission: admission({ registryWorkspaceId: "workspace-b" }) })],
         })),
       }),
       assignmentStore(),
       () => OBSERVED_AT,
     );
-    expect(() => inconsistent.listRegistry({ workspaceId: "workspace-a" })).toThrow(TypeError);
+    await expect(inconsistent.listRegistry({ workspaceId: "workspace-a" })).rejects.toThrow(TypeError);
 
     const reordered = new RemoteWorkersRouteService(
       store({
-        listWorkerRegistry: vi.fn(() => ({
+        listWorkerRegistry: vi.fn(async () => ({
           items: [record({ admission: admission({ workerId: "worker-b", nodeId: "node-b" }) }), record()],
           nextCursor: "worker-a",
         })),
@@ -281,10 +285,10 @@ describe("RemoteWorkersRouteService HX-507A", () => {
       assignmentStore(),
       () => OBSERVED_AT,
     );
-    expect(() => reordered.listRegistry({ workspaceId: "workspace-a", limit: 2 })).toThrow(/order is invalid/u);
+    await expect(reordered.listRegistry({ workspaceId: "workspace-a", limit: 2 })).rejects.toThrow(/order is invalid/u);
   });
 
-  it("binds malformed storage pages to the requested limit and decoded cursor", () => {
+  it("binds malformed storage pages to the requested limit and decoded cursor", async () => {
     const cursor = encodeRemoteWorkerRegistryCursor({
       schemaVersion: REMOTE_WORKER_REGISTRY_CURSOR_SCHEMA_VERSION,
       workspaceId: "workspace-a",
@@ -292,35 +296,37 @@ describe("RemoteWorkersRouteService HX-507A", () => {
     });
     const oversized = new RemoteWorkersRouteService(
       store({
-        listWorkerRegistry: vi.fn(() => ({
+        listWorkerRegistry: vi.fn(async () => ({
           items: [record(), record({ admission: admission({ workerId: "worker-b", nodeId: "node-b" }) })],
         })),
       }),
       assignmentStore(),
       () => OBSERVED_AT,
     );
-    expect(() => oversized.listRegistry({ workspaceId: "workspace-a", limit: 1 })).toThrow(
+    await expect(oversized.listRegistry({ workspaceId: "workspace-a", limit: 1 })).rejects.toThrow(
       /storage page is inconsistent/u,
     );
 
     for (const workerId of ["worker-a", "worker-0"]) {
       const stale = new RemoteWorkersRouteService(
         store({
-          listWorkerRegistry: vi.fn(() => ({
+          listWorkerRegistry: vi.fn(async () => ({
             items: [record({ admission: admission({ workerId, nodeId: `node-${workerId}` }) })],
           })),
         }),
         () => OBSERVED_AT,
       );
-      expect(() => stale.listRegistry({ workspaceId: "workspace-a", cursor })).toThrow(/storage page is inconsistent/u);
+      await expect(stale.listRegistry({ workspaceId: "workspace-a", cursor })).rejects.toThrow(
+        /storage page is inconsistent/u,
+      );
     }
 
     const shortPageWithCursor = new RemoteWorkersRouteService(
-      store({ listWorkerRegistry: vi.fn(() => ({ items: [record()], nextCursor: "worker-a" })) }),
+      store({ listWorkerRegistry: vi.fn(async () => ({ items: [record()], nextCursor: "worker-a" })) }),
       assignmentStore(),
       () => OBSERVED_AT,
     );
-    expect(() => shortPageWithCursor.listRegistry({ workspaceId: "workspace-a", limit: 2 })).toThrow(
+    await expect(shortPageWithCursor.listRegistry({ workspaceId: "workspace-a", limit: 2 })).rejects.toThrow(
       /storage page is inconsistent/u,
     );
   });
@@ -342,15 +348,15 @@ describe("RemoteWorkersRouteService HX-507A", () => {
 });
 
 describe("RemoteWorkersRouteService HX-507B projections", () => {
-  it("projects a frozen, secret-free assignment page with derived lease freshness and phase", () => {
+  it("projects a frozen, secret-free assignment page with derived lease freshness and phase", async () => {
     const assignments = assignmentStore({
-      listAssignmentAggregates: vi.fn(() => ({
+      listAssignmentAggregates: vi.fn(async () => ({
         items: [aggregate()],
         nextCursor: { lastCreatedAt: "2026-07-15T11:00:00.000Z", lastAssignmentId: "assign-a" },
       })),
     });
     const service = new RemoteWorkersRouteService(store(), assignments, () => OBSERVED_AT);
-    const page = service.listAssignments({ workspaceId: "workspace-a", workerId: "worker-a", limit: 1 });
+    const page = await service.listAssignments({ workspaceId: "workspace-a", workerId: "worker-a", limit: 1 });
 
     expect(page).toMatchObject({
       readOnly: true,
@@ -385,15 +391,17 @@ describe("RemoteWorkersRouteService HX-507B projections", () => {
     expect(decoded).toMatchObject({ workspaceId: "workspace-a", workerId: "worker-a", lastAssignmentId: "assign-a" });
   });
 
-  it("derives lease_expired, cancelling, and settled phases from canonical evidence", () => {
-    const build = (over: Partial<RemoteWorkerAssignmentAggregate>) =>
-      new RemoteWorkersRouteService(
-        store(),
-        assignmentStore({ listAssignmentAggregates: vi.fn(() => ({ items: [aggregate(over)] })) }),
-        () => OBSERVED_AT,
-      ).listAssignments({ workspaceId: "workspace-a" }).items[0]!;
+  it("derives lease_expired, cancelling, and settled phases from canonical evidence", async () => {
+    const build = async (over: Partial<RemoteWorkerAssignmentAggregate>) =>
+      (
+        await new RemoteWorkersRouteService(
+          store(),
+          assignmentStore({ listAssignmentAggregates: vi.fn(async () => ({ items: [aggregate(over)] })) }),
+          () => OBSERVED_AT,
+        ).listAssignments({ workspaceId: "workspace-a" })
+      ).items[0]!;
 
-    const staleLease = build({
+    const staleLease = await build({
       lease: {
         assignmentGeneration: 1,
         leaseRevision: 1,
@@ -406,7 +414,7 @@ describe("RemoteWorkersRouteService HX-507B projections", () => {
     expect(staleLease.phase.value).toBe("lease_expired");
     expect(staleLease.leaseFreshness.value).toMatchObject({ fresh: false });
 
-    const cancelling = build({
+    const cancelling = await build({
       control: {
         expectedAssignmentGeneration: 1,
         controlRevision: 1,
@@ -417,7 +425,7 @@ describe("RemoteWorkersRouteService HX-507B projections", () => {
     expect(cancelling.phase.value).toBe("cancelling");
     expect(cancelling.control?.value).toMatchObject({ action: "cancel_requested" });
 
-    const settled = build({
+    const settled = await build({
       settlement: {
         assignmentGeneration: 1,
         outcome: "completed",
@@ -437,11 +445,11 @@ describe("RemoteWorkersRouteService HX-507B projections", () => {
     expect(settled.materialization.value).toMatchObject({ count: 2 });
   });
 
-  it("projects an unstarted assignment as created with null identity/lease", () => {
+  it("projects an unstarted assignment as created with null identity/lease", async () => {
     const service = new RemoteWorkersRouteService(
       store(),
       assignmentStore({
-        listAssignmentAggregates: vi.fn(() => ({
+        listAssignmentAggregates: vi.fn(async () => ({
           items: [
             {
               assignment: assignmentRecord({
@@ -454,7 +462,7 @@ describe("RemoteWorkersRouteService HX-507B projections", () => {
       }),
       () => OBSERVED_AT,
     );
-    const item = service.listAssignments({ workspaceId: "workspace-a" }).items[0]!;
+    const item = (await service.listAssignments({ workspaceId: "workspace-a" })).items[0]!;
     expect(item.phase.value).toBe("created");
     expect(item.identity.value).toBeNull();
     expect(item.lease.value).toBeNull();
@@ -462,7 +470,7 @@ describe("RemoteWorkersRouteService HX-507B projections", () => {
     expect(item.lineage.value).toMatchObject({ sessionId: null, turnId: null });
   });
 
-  it("rebinds a cursor to its exact workspace+filter set", () => {
+  it("rebinds a cursor to its exact workspace+filter set", async () => {
     const cursor = encodeRemoteWorkerAssignmentCursor({
       schemaVersion: "goatcitadel.remote-worker-assignment-cursor.v1",
       workspaceId: "workspace-a",
@@ -474,17 +482,19 @@ describe("RemoteWorkersRouteService HX-507B projections", () => {
     });
     const service = new RemoteWorkersRouteService(store(), assignmentStore(), () => OBSERVED_AT);
     // Same filter set is accepted.
-    expect(() => service.listAssignments({ workspaceId: "workspace-a", workerId: "worker-a", cursor })).not.toThrow();
+    await expect(
+      service.listAssignments({ workspaceId: "workspace-a", workerId: "worker-a", cursor }),
+    ).resolves.toBeDefined();
     // A different filter set is rejected — the cursor cannot be replayed across scopes.
-    expect(() => service.listAssignments({ workspaceId: "workspace-a", cursor })).toThrow(
+    await expect(service.listAssignments({ workspaceId: "workspace-a", cursor })).rejects.toThrow(
       RemoteWorkerRegistryInputError,
     );
-    expect(() => service.listAssignments({ workspaceId: "workspace-b", workerId: "worker-a", cursor })).toThrow(
+    await expect(service.listAssignments({ workspaceId: "workspace-b", workerId: "worker-a", cursor })).rejects.toThrow(
       RemoteWorkerRegistryInputError,
     );
   });
 
-  it("returns sanitized ordered event summaries with explicit omitted content counts", () => {
+  it("returns sanitized ordered event summaries with explicit omitted content counts", async () => {
     const events: RemoteWorkerAssignmentEventRecord[] = [
       eventRecord(1, "status"),
       eventRecord(2, "transcript_delta"),
@@ -492,11 +502,11 @@ describe("RemoteWorkersRouteService HX-507B projections", () => {
       eventRecord(4, "diagnostic"),
     ];
     const assignments = assignmentStore({
-      findCurrentGeneration: vi.fn(() => generationRecord()),
-      listEventsAfter: vi.fn(() => events),
+      findCurrentGeneration: vi.fn(async () => generationRecord()),
+      listEventsAfter: vi.fn(async () => events),
     });
     const service = new RemoteWorkersRouteService(store(), assignments, () => OBSERVED_AT);
-    const page = service.getAssignmentEvents({ workspaceId: "workspace-a", assignmentId: "assign-a" });
+    const page = await service.getAssignmentEvents({ workspaceId: "workspace-a", assignmentId: "assign-a" });
     expect(page.assignmentGeneration).toBe(1);
     expect(page.items.map((item) => item.sequence)).toEqual([1, 2, 3, 4]);
     expect(page.nextAfterSequence).toBe(4);
@@ -505,23 +515,23 @@ describe("RemoteWorkersRouteService HX-507B projections", () => {
     expect(JSON.stringify(page)).not.toMatch(/payload|Sha256|stdout|chunk|"text"|"role"/u);
   });
 
-  it("404s events for an assignment with no started generation and isolates cross-workspace ids", () => {
+  it("404s events for an assignment with no started generation and isolates cross-workspace ids", async () => {
     const service = new RemoteWorkersRouteService(
       store(),
-      assignmentStore({ findCurrentGeneration: vi.fn(() => undefined) }),
+      assignmentStore({ findCurrentGeneration: vi.fn(async () => undefined) }),
       () => OBSERVED_AT,
     );
-    expect(() => service.getAssignmentEvents({ workspaceId: "workspace-a", assignmentId: "missing" })).toThrow(
+    await expect(service.getAssignmentEvents({ workspaceId: "workspace-a", assignmentId: "missing" })).rejects.toThrow(
       NotFoundError,
     );
   });
 
-  it("reconciles admission, assignment/lease, and settlement while holding HX-505 owners unavailable", () => {
+  it("reconciles admission, assignment/lease, and settlement while holding HX-505 owners unavailable", async () => {
     const registry = store({
-      findWorkerRegistryEntry: vi.fn(() => record()),
+      findWorkerRegistryEntry: vi.fn(async () => record()),
     });
     const assignments = assignmentStore({
-      listAssignmentAggregates: vi.fn(() => ({
+      listAssignmentAggregates: vi.fn(async () => ({
         items: [
           aggregate(),
           aggregate({
@@ -538,10 +548,11 @@ describe("RemoteWorkersRouteService HX-507B projections", () => {
         ],
       })),
     });
-    const reconciliation = new RemoteWorkersRouteService(registry, assignments, () => OBSERVED_AT).getReconciliation({
-      workspaceId: "workspace-a",
-      workerId: "worker-a",
-    });
+    const reconciliation = await new RemoteWorkersRouteService(
+      registry,
+      assignments,
+      () => OBSERVED_AT,
+    ).getReconciliation({ workspaceId: "workspace-a", workerId: "worker-a" });
     expect(reconciliation.posture.value).toBe("active");
     expect(reconciliation.admissionControl.value?.status).toBe("consistent");
     expect(reconciliation.assignmentLease.value?.status).toBe("divergent");
@@ -551,7 +562,7 @@ describe("RemoteWorkersRouteService HX-507B projections", () => {
     expect(Object.isFrozen(reconciliation)).toBe(true);
   });
 
-  it("reconciles every assignment page instead of reporting false consistency from the first page", () => {
+  it("reconciles every assignment page instead of reporting false consistency from the first page", async () => {
     const secondPageCursor = {
       lastCreatedAt: "2026-07-15T10:00:00.000Z",
       lastAssignmentId: "assign-page-one",
@@ -578,18 +589,18 @@ describe("RemoteWorkersRouteService HX-507B projections", () => {
       } as RemoteWorkerAssignmentAggregate["settlement"],
     });
     const listAssignmentAggregates = vi.fn(
-      (_workspaceId: string, options?: Parameters<RemoteWorkerAssignmentStore["listAssignmentAggregates"]>[1]) =>
+      async (_workspaceId: string, options?: Parameters<RemoteWorkerAssignmentStore["listAssignmentAggregates"]>[1]) =>
         options?.cursor
           ? { items: [expired, settledWithoutMaterialization] }
           : { items: [aggregate()], nextCursor: secondPageCursor },
     );
     const service = new RemoteWorkersRouteService(
-      store({ findWorkerRegistryEntry: vi.fn(() => record()) }),
+      store({ findWorkerRegistryEntry: vi.fn(async () => record()) }),
       assignmentStore({ listAssignmentAggregates }),
       () => OBSERVED_AT,
     );
 
-    const reconciliation = service.getReconciliation({ workspaceId: "workspace-a", workerId: "worker-a" });
+    const reconciliation = await service.getReconciliation({ workspaceId: "workspace-a", workerId: "worker-a" });
 
     expect(reconciliation.assignmentLease.value).toEqual({
       status: "divergent",
@@ -610,27 +621,27 @@ describe("RemoteWorkersRouteService HX-507B projections", () => {
     });
   });
 
-  it("fails closed when reconciliation storage repeats a pagination cursor", () => {
+  it("fails closed when reconciliation storage repeats a pagination cursor", async () => {
     const repeatedCursor = {
       lastCreatedAt: "2026-07-15T10:00:00.000Z",
       lastAssignmentId: "assign-repeat",
     };
     const service = new RemoteWorkersRouteService(
-      store({ findWorkerRegistryEntry: vi.fn(() => record()) }),
+      store({ findWorkerRegistryEntry: vi.fn(async () => record()) }),
       assignmentStore({
-        listAssignmentAggregates: vi.fn(() => ({ items: [aggregate()], nextCursor: repeatedCursor })),
+        listAssignmentAggregates: vi.fn(async () => ({ items: [aggregate()], nextCursor: repeatedCursor })),
       }),
       () => OBSERVED_AT,
     );
 
-    expect(() => service.getReconciliation({ workspaceId: "workspace-a", workerId: "worker-a" })).toThrow(
+    await expect(service.getReconciliation({ workspaceId: "workspace-a", workerId: "worker-a" })).rejects.toThrow(
       "Remote worker assignment reconciliation cursor did not advance.",
     );
   });
 
-  it("bounds full reconciliation scans and fails closed instead of running an unbounded Ops request", () => {
+  it("bounds full reconciliation scans and fails closed instead of running an unbounded Ops request", async () => {
     let pageNumber = 0;
-    const listAssignmentAggregates = vi.fn(() => {
+    const listAssignmentAggregates = vi.fn(async () => {
       pageNumber += 1;
       return {
         items: [aggregate({ assignment: assignmentRecord({ assignmentId: `assign-${pageNumber}` }) })],
@@ -641,24 +652,26 @@ describe("RemoteWorkersRouteService HX-507B projections", () => {
       };
     });
     const service = new RemoteWorkersRouteService(
-      store({ findWorkerRegistryEntry: vi.fn(() => record()) }),
+      store({ findWorkerRegistryEntry: vi.fn(async () => record()) }),
       assignmentStore({ listAssignmentAggregates }),
       () => OBSERVED_AT,
     );
 
-    expect(() => service.getReconciliation({ workspaceId: "workspace-a", workerId: "worker-a" })).toThrow(
+    await expect(service.getReconciliation({ workspaceId: "workspace-a", workerId: "worker-a" })).rejects.toThrow(
       "Remote worker assignment reconciliation exceeded 100 pages.",
     );
     expect(listAssignmentAggregates).toHaveBeenCalledTimes(100);
   });
 
-  it("404s reconciliation for an unknown worker id", () => {
+  it("404s reconciliation for an unknown worker id", async () => {
     const service = new RemoteWorkersRouteService(
-      store({ findWorkerRegistryEntry: vi.fn(() => undefined) }),
+      store({ findWorkerRegistryEntry: vi.fn(async () => undefined) }),
       assignmentStore(),
       () => OBSERVED_AT,
     );
-    expect(() => service.getReconciliation({ workspaceId: "workspace-a", workerId: "ghost" })).toThrow(NotFoundError);
+    await expect(service.getReconciliation({ workspaceId: "workspace-a", workerId: "ghost" })).rejects.toThrow(
+      NotFoundError,
+    );
   });
 });
 

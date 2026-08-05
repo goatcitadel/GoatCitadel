@@ -7,7 +7,7 @@ import type {
   ModelUsageAttributionContext,
   RealtimeEvent,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { BackgroundReviewService } from "../background-review-service.js";
 import {
   ChatPostCommitEffectService,
@@ -25,23 +25,23 @@ export interface ChatPostCommitRuntimeCompositionInput {
     request: ChatCompletionRequest,
     attribution: ModelUsageAttributionContext,
   ): Promise<ChatCompletionResponse>;
-  resolveModelDefaults(): { providerId?: string; model?: string };
+  resolveModelDefaults(): Promise<{ providerId?: string; model?: string }>;
   resolveApiStyle(providerId?: string, model?: string): LlmApiStyle;
   /** Required in production composition: post-commit children must never run unfenced. */
   effectAuthority: ChatPostCommitEffectAuthorityPort;
-  isAutonomyDisabled(): boolean;
+  isAutonomyDisabled(): Promise<boolean>;
   publishRealtime(
     eventType: string,
     source: string,
     payload: Record<string, unknown>,
     options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
-  ): void;
+  ): Promise<unknown>;
   recordDurableTimelineEvent(
     runId: string,
     eventType: DurableRunTimelineEvent["eventType"],
     payload?: Record<string, unknown>,
-  ): void;
-  recordImprovementDurableRunCompletion(run: DurableRunRecord, checkpointState: Record<string, unknown>): void;
+  ): Promise<void>;
+  recordImprovementDurableRunCompletion(run: DurableRunRecord, checkpointState: Record<string, unknown>): Promise<void>;
 }
 
 export interface ChatPostCommitRuntimeComposition {

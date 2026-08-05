@@ -42,7 +42,7 @@ import {
   type MeshReplicationRecord,
   type ModelUsageAttributionContext,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { MeshCapabilityAuthenticatedNodeIdentity } from "./mesh-capability-publication-service.js";
 import { createUtilityModelUsageAttribution } from "./utility-model-usage-attribution.js";
 
@@ -149,7 +149,7 @@ export interface MeshCapabilityInvocationDispatchOptions {
    * envelope append (the external-exposure write) — never on attempts the
    * storage intent guard rejects and never on a pre-dispatch cancellation.
    */
-  executionFence?: () => void;
+  executionFence?: () => Promise<void>;
   signal?: AbortSignal;
 }
 
@@ -209,9 +209,9 @@ export interface MeshCapabilityInvocationServiceOptions {
   storage: Storage;
   transport: {
     localNodeId(): string;
-    appendEvent(input: MeshReplicationIngestRequest): MeshReplicationRecord;
+    appendEvent(input: MeshReplicationIngestRequest): Promise<MeshReplicationRecord>;
   };
-  publishRealtime?: (eventType: string, source: string, payload: Record<string, unknown>) => void;
+  publishRealtime?: (eventType: string, source: string, payload: Record<string, unknown>) => Promise<unknown>;
   now?: () => Date;
   settlementPollIntervalMs?: number;
   deadlineSafetyMarginMs?: number;
@@ -239,7 +239,11 @@ export function isMeshCapabilityNodeInvocationPath(url: string): boolean {
 export class MeshCapabilityInvocationService {
   private readonly storage: Storage;
   private readonly transport: MeshCapabilityInvocationServiceOptions["transport"];
-  private readonly publishRealtime?: (eventType: string, source: string, payload: Record<string, unknown>) => void;
+  private readonly publishRealtime?: (
+    eventType: string,
+    source: string,
+    payload: Record<string, unknown>,
+  ) => Promise<unknown>;
   private readonly now: () => Date;
   private readonly settlementPollIntervalMs: number;
   private readonly deadlineSafetyMarginMs: number;
@@ -306,23 +310,29 @@ export class MeshCapabilityInvocationService {
     }
     // Lazy storage-truth recovery: settle other expired unsettled intents to a
     // bounded terminal state before this dispatch proceeds.
-    this.reconcileExpiredInvocationIntents(normalized.workspaceId);
+    await this.reconcileExpiredInvocationIntents(normalized.workspaceId);
 
-    const existingSettlement = this.storage.meshCapabilityPublications.findInvocationSettlement(
+    const existingSettlement = await this.storage.meshCapabilityPublications.findInvocationSettlement(
       normalized.workspaceId,
       invocationId,
     );
     if (existingSettlement) {
       // The dispatch write happened on an earlier attempt of this exact tool
       // run; mark the fence before the possibly-effectful outcome is consumed.
-      options.executionFence?.();
-      const intent = this.storage.meshCapabilityPublications.findInvocationIntent(normalized.workspaceId, invocationId);
+      await options.executionFence?.();
+      const intent = await this.storage.meshCapabilityPublications.findInvocationIntent(
+        normalized.workspaceId,
+        invocationId,
+      );
       return this.buildSettledOutcome(normalized.workspaceId, intent, invocationId, existingSettlement);
     }
 
-    let intent = this.storage.meshCapabilityPublications.findInvocationIntent(normalized.workspaceId, invocationId);
+    let intent = await this.storage.meshCapabilityPublications.findInvocationIntent(
+      normalized.workspaceId,
+      invocationId,
+    );
     if (!intent) {
-      intent = this.createIntentForCallableActivation(normalized, invocationId, idempotencyKey, inputSha256);
+      intent = await this.createIntentForCallableActivation(normalized, invocationId, idempotencyKey, inputSha256);
     } else if (intent.idempotencyKey !== idempotencyKey || intent.inputSha256 !== inputSha256) {
       throw new MeshCapabilityInvocationServiceError("mesh_capability_invocation_conflict");
     }
@@ -334,10 +344,10 @@ export class MeshCapabilityInvocationService {
     this.storeVaultInput(normalized.workspaceId, invocationId, inputCanonicalJson, inputSha256, intent.deadlineAt);
     // The envelope append is the external-exposure write: the durable
     // execution fence must land immediately before it (HX-415 discipline).
-    options.executionFence?.();
+    await options.executionFence?.();
     const envelope = buildDispatchEnvelope(intent);
     try {
-      this.transport.appendEvent({
+      await this.transport.appendEvent({
         sourceNodeId: this.transport.localNodeId(),
         eventType: MESH_CAPABILITY_INVOCATION_DISPATCH_EVENT_TYPE,
         payload: envelope as unknown as Record<string, unknown>,
@@ -346,13 +356,13 @@ export class MeshCapabilityInvocationService {
     } catch {
       // The append outcome is unknowable after a transport error: treat the
       // delivery as ambiguous, settle a bounded terminal state, and flag it.
-      const settlement = this.settleAsGateway(intent, "unknown", "mesh_capability_dispatch_transport_failed");
+      const settlement = await this.settleAsGateway(intent, "unknown", "mesh_capability_dispatch_transport_failed");
       return this.buildGatewaySettledOutcome(normalized.workspaceId, intent, settlement, {
         disposition: "unknown",
         errorCode: "mesh_capability_dispatch_transport_failed",
       });
     }
-    this.publishRealtime?.("mesh_capability_invocation_dispatched", "mesh", {
+    await this.publishRealtime?.("mesh_capability_invocation_dispatched", "mesh", {
       workspaceId: intent.workspaceId,
       invocationId: intent.invocationId,
       capabilityId: intent.capabilityId,
@@ -361,7 +371,7 @@ export class MeshCapabilityInvocationService {
       publisherGeneration: intent.publisherGeneration,
       deadlineAt: intent.deadlineAt,
     });
-    return this.awaitSettlement(intent, options.signal);
+    return await this.awaitSettlement(intent, options.signal);
   }
 
   /**
@@ -370,12 +380,12 @@ export class MeshCapabilityInvocationService {
    * the exact input bytes whose digest the envelope binds. After a Gateway
    * restart the transient bytes are gone and the read fails content-free.
    */
-  public readInvocationInput(
+  public async readInvocationInput(
     identity: MeshCapabilityAuthenticatedNodeIdentity,
     invocationId: string,
-  ): { invocationId: string; inputSha256: string; input: Record<string, unknown> } {
-    const intent = this.requireIntentForNode(identity, invocationId);
-    const settled = this.storage.meshCapabilityPublications.findInvocationSettlement(
+  ): Promise<{ invocationId: string; inputSha256: string; input: Record<string, unknown> }> {
+    const intent = await this.requireIntentForNode(identity, invocationId);
+    const settled = await this.storage.meshCapabilityPublications.findInvocationSettlement(
       identity.workspaceId,
       invocationId,
     );
@@ -397,11 +407,11 @@ export class MeshCapabilityInvocationService {
    * Bounded, generation-fenced progress ingestion. Progress is transient
    * observability — it never mutates durable invocation state.
    */
-  public recordProgress(
+  public async recordProgress(
     identity: MeshCapabilityAuthenticatedNodeIdentity,
     submission: MeshCapabilityNodeProgressSubmission,
-  ): { accepted: true; sequence: number } {
-    const intent = this.requireIntentForNode(identity, submission.invocationId);
+  ): Promise<{ accepted: true; sequence: number }> {
+    const intent = await this.requireIntentForNode(identity, submission.invocationId);
     if (
       submission.publisherGeneration !== intent.publisherGeneration ||
       submission.publicationLeaseFencingToken !== intent.publicationLeaseFencingToken
@@ -416,7 +426,7 @@ export class MeshCapabilityInvocationService {
     ) {
       throw new MeshCapabilityInvocationServiceError("mesh_capability_progress_rejected");
     }
-    const settled = this.storage.meshCapabilityPublications.findInvocationSettlement(
+    const settled = await this.storage.meshCapabilityPublications.findInvocationSettlement(
       identity.workspaceId,
       submission.invocationId,
     );
@@ -438,7 +448,7 @@ export class MeshCapabilityInvocationService {
       lastSequence: submission.sequence,
       count: (tracked?.count ?? 0) + 1,
     });
-    this.publishRealtime?.("mesh_capability_invocation_progress", "mesh", {
+    await this.publishRealtime?.("mesh_capability_invocation_progress", "mesh", {
       workspaceId: identity.workspaceId,
       invocationId: intent.invocationId,
       capabilityId: intent.capabilityId,
@@ -455,25 +465,25 @@ export class MeshCapabilityInvocationService {
    * stale-generation rejection; this owner surfaces them as content-free
    * codes and additionally pins the settling node to the dispatched node.
    */
-  public settleFromNode(
+  public async settleFromNode(
     identity: MeshCapabilityAuthenticatedNodeIdentity,
     submission: MeshCapabilityNodeSettlementSubmission,
-  ): { settlement: MeshCapabilityInvocationSettlementRecord; replayed: boolean } {
-    const intent = this.requireIntentForNode(identity, submission.invocationId);
+  ): Promise<{ settlement: MeshCapabilityInvocationSettlementRecord; replayed: boolean }> {
+    const intent = await this.requireIntentForNode(identity, submission.invocationId);
     if (
       submission.publisherGeneration !== intent.publisherGeneration ||
       submission.publicationLeaseFencingToken !== intent.publicationLeaseFencingToken
     ) {
       throw new MeshCapabilityInvocationServiceError("mesh_capability_settlement_stale_generation");
     }
-    const output = this.verifySettlementOutput(intent, submission);
-    const existing = this.storage.meshCapabilityPublications.findInvocationSettlement(
+    const output = await this.verifySettlementOutput(intent, submission);
+    const existing = await this.storage.meshCapabilityPublications.findInvocationSettlement(
       identity.workspaceId,
       submission.invocationId,
     );
     let settlement: MeshCapabilityInvocationSettlementRecord;
     try {
-      settlement = this.storage.meshCapabilityPublications.settleInvocation({
+      settlement = await this.storage.meshCapabilityPublications.settleInvocation({
         workspaceId: identity.workspaceId,
         invocationId: submission.invocationId,
         disposition: submission.disposition,
@@ -488,13 +498,13 @@ export class MeshCapabilityInvocationService {
         idempotencyKey: `mesh-capability-settlement:node:${identity.nodeId}:${submission.invocationId}`,
       });
     } catch (error) {
-      throw this.mapSettlementWriteError(identity.workspaceId, submission.invocationId, error);
+      throw await this.mapSettlementWriteError(identity.workspaceId, submission.invocationId, error);
     }
     if (output) {
       this.storeVaultOutput(identity.workspaceId, submission.invocationId, output, submission.outputSha256);
     }
     this.clearProgressTracking(identity.workspaceId, submission.invocationId);
-    this.publishRealtime?.("mesh_capability_invocation_settled", "mesh", {
+    await this.publishRealtime?.("mesh_capability_invocation_settled", "mesh", {
       workspaceId: identity.workspaceId,
       invocationId: settlement.invocationId,
       capabilityId: intent.capabilityId,
@@ -510,8 +520,11 @@ export class MeshCapabilityInvocationService {
    * performed on behalf of one invocation. Lineage comes exclusively from the
    * immutable intent — a node can never self-attribute cost or lineage.
    */
-  public resolveModelUsageAttribution(workspaceId: string, invocationId: string): ModelUsageAttributionContext {
-    const intent = this.storage.meshCapabilityPublications.findInvocationIntent(workspaceId, invocationId);
+  public async resolveModelUsageAttribution(
+    workspaceId: string,
+    invocationId: string,
+  ): Promise<ModelUsageAttributionContext> {
+    const intent = await this.storage.meshCapabilityPublications.findInvocationIntent(workspaceId, invocationId);
     if (!intent) {
       throw new MeshCapabilityInvocationServiceError("mesh_capability_invocation_not_found");
     }
@@ -533,17 +546,20 @@ export class MeshCapabilityInvocationService {
    * open forever. Late node settlements after this terminal state conflict
    * per the storage rules.
    */
-  public reconcileExpiredInvocationIntents(workspaceId: string, limit = EXPIRED_INTENT_RECONCILE_BATCH): number {
-    const expired = this.storage.meshCapabilityPublications.listUnsettledExpiredInvocationIntents(
+  public async reconcileExpiredInvocationIntents(
+    workspaceId: string,
+    limit = EXPIRED_INTENT_RECONCILE_BATCH,
+  ): Promise<number> {
+    const expired = await this.storage.meshCapabilityPublications.listUnsettledExpiredInvocationIntents(
       workspaceId,
       Math.max(1, Math.min(limit, 64)),
     );
     let reconciled = 0;
     for (const intent of expired) {
-      const settlement = this.settleAsGateway(intent, "unknown", "mesh_capability_dispatch_deadline_expired");
+      const settlement = await this.settleAsGateway(intent, "unknown", "mesh_capability_dispatch_deadline_expired");
       if (settlement) {
         reconciled += 1;
-        this.publishRealtime?.("mesh_capability_invocation_reconciled", "mesh", {
+        await this.publishRealtime?.("mesh_capability_invocation_reconciled", "mesh", {
           workspaceId: intent.workspaceId,
           invocationId: intent.invocationId,
           capabilityId: intent.capabilityId,
@@ -556,14 +572,14 @@ export class MeshCapabilityInvocationService {
     return reconciled;
   }
 
-  private createIntentForCallableActivation(
+  private async createIntentForCallableActivation(
     input: ReturnType<typeof normalizeDispatchInput>,
     invocationId: string,
     idempotencyKey: string,
     inputSha256: string,
-  ): MeshCapabilityInvocationIntentRecord {
-    const activation = this.resolveCallableActivation(input.workspaceId, input.binding, input.capabilityId);
-    const limits = this.resolveDeclaredResourceLimits(activation);
+  ): Promise<MeshCapabilityInvocationIntentRecord> {
+    const activation = await this.resolveCallableActivation(input.workspaceId, input.binding, input.capabilityId);
+    const limits = await this.resolveDeclaredResourceLimits(activation);
     if (
       Buffer.byteLength(canonicalJsonString(input.args), "utf8") >
       Math.min(limits.maxRequestBytes, MAX_SETTLEMENT_OUTPUT_BYTES)
@@ -573,7 +589,7 @@ export class MeshCapabilityInvocationService {
     const deadlineMs = Math.max(MINIMUM_DISPATCH_DEADLINE_MS, limits.timeoutMs - this.deadlineSafetyMarginMs);
     const deadlineAt = new Date(this.now().getTime() + deadlineMs).toISOString();
     try {
-      return this.storage.meshCapabilityPublications.createInvocationIntent({
+      return await this.storage.meshCapabilityPublications.createInvocationIntent({
         workspaceId: input.workspaceId,
         invocationId,
         activationId: activation.activationId,
@@ -612,14 +628,14 @@ export class MeshCapabilityInvocationService {
     }
   }
 
-  private resolveCallableActivation(
+  private async resolveCallableActivation(
     workspaceId: string,
     binding: ChatTurnCapabilityToolMeshPublicationBinding,
     capabilityId: string,
-  ): MeshCapabilityActivationRecord {
-    const activation = this.storage.meshCapabilityPublications
-      .listCallableActivations(workspaceId)
-      .find((candidate) => candidate.activationId === binding.activationId);
+  ): Promise<MeshCapabilityActivationRecord> {
+    const activation = (await this.storage.meshCapabilityPublications.listCallableActivations(workspaceId)).find(
+      (candidate) => candidate.activationId === binding.activationId,
+    );
     if (
       !activation ||
       activation.capabilityId !== capabilityId ||
@@ -638,16 +654,16 @@ export class MeshCapabilityInvocationService {
     return activation;
   }
 
-  private resolveDeclaredResourceLimits(activation: MeshCapabilityActivationRecord): {
+  private async resolveDeclaredResourceLimits(activation: MeshCapabilityActivationRecord): Promise<{
     timeoutMs: number;
     maxRequestBytes: number;
     maxResponseBytes: number;
-  } {
+  }> {
     let entryDescriptor: {
       resourceLimits?: { timeoutMs?: number; maxRequestBytes?: number; maxResponseBytes?: number };
     };
     try {
-      const manifest = this.storage.meshCapabilityPublications.getManifest(
+      const manifest = await this.storage.meshCapabilityPublications.getManifest(
         activation.workspaceId,
         activation.nodeId,
         activation.publisherGeneration,
@@ -690,7 +706,7 @@ export class MeshCapabilityInvocationService {
   ): Promise<MeshCapabilityInvocationDispatchOutcome> {
     const deadlineMs = Date.parse(intent.deadlineAt);
     for (;;) {
-      const settlement = this.storage.meshCapabilityPublications.findInvocationSettlement(
+      const settlement = await this.storage.meshCapabilityPublications.findInvocationSettlement(
         intent.workspaceId,
         intent.invocationId,
       );
@@ -698,14 +714,14 @@ export class MeshCapabilityInvocationService {
         return this.buildSettledOutcome(intent.workspaceId, intent, intent.invocationId, settlement);
       }
       if (signal?.aborted) {
-        const written = this.settleAsGateway(intent, "cancelled", "mesh_capability_dispatch_cancelled");
+        const written = await this.settleAsGateway(intent, "cancelled", "mesh_capability_dispatch_cancelled");
         return this.buildGatewaySettledOutcome(intent.workspaceId, intent, written, {
           disposition: "cancelled",
           errorCode: "mesh_capability_dispatch_cancelled",
         });
       }
       if (this.now().getTime() >= deadlineMs) {
-        const written = this.settleAsGateway(intent, "unknown", "mesh_capability_dispatch_deadline_expired");
+        const written = await this.settleAsGateway(intent, "unknown", "mesh_capability_dispatch_deadline_expired");
         return this.buildGatewaySettledOutcome(intent.workspaceId, intent, written, {
           disposition: "unknown",
           errorCode: "mesh_capability_dispatch_deadline_expired",
@@ -721,11 +737,11 @@ export class MeshCapabilityInvocationService {
    * wins the race and this converges on it; a stale-generation guard
    * rejection leaves the invocation unsettled for manual reconciliation.
    */
-  private settleAsGateway(
+  private async settleAsGateway(
     intent: MeshCapabilityInvocationIntentRecord,
     disposition: MeshCapabilitySettlementDisposition,
     errorCode: string,
-  ): MeshCapabilityInvocationSettlementRecord | undefined {
+  ): Promise<MeshCapabilityInvocationSettlementRecord | undefined> {
     const settlementSha256 = sha256Utf8(
       canonicalJsonString({
         schemaVersion: MESH_CAPABILITY_INVOCATION_ENVELOPE_SCHEMA_VERSION,
@@ -736,7 +752,7 @@ export class MeshCapabilityInvocationService {
       }),
     );
     try {
-      const settlement = this.storage.meshCapabilityPublications.settleInvocation({
+      const settlement = await this.storage.meshCapabilityPublications.settleInvocation({
         workspaceId: intent.workspaceId,
         invocationId: intent.invocationId,
         disposition,
@@ -747,7 +763,7 @@ export class MeshCapabilityInvocationService {
         idempotencyKey: `mesh-capability-settlement:gateway:${intent.invocationId}`,
       });
       this.clearProgressTracking(intent.workspaceId, intent.invocationId);
-      this.publishRealtime?.("mesh_capability_invocation_settled", "mesh", {
+      await this.publishRealtime?.("mesh_capability_invocation_settled", "mesh", {
         workspaceId: intent.workspaceId,
         invocationId: intent.invocationId,
         capabilityId: intent.capabilityId,
@@ -759,7 +775,7 @@ export class MeshCapabilityInvocationService {
       return settlement;
     } catch {
       // One-winner: converge on a concurrent settlement when present.
-      const settlement = this.storage.meshCapabilityPublications.findInvocationSettlement(
+      const settlement = await this.storage.meshCapabilityPublications.findInvocationSettlement(
         intent.workspaceId,
         intent.invocationId,
       );
@@ -825,17 +841,20 @@ export class MeshCapabilityInvocationService {
     };
   }
 
-  private mapSettlementWriteError(
+  private async mapSettlementWriteError(
     workspaceId: string,
     invocationId: string,
     error: unknown,
-  ): MeshCapabilityInvocationServiceError | Error {
+  ): Promise<MeshCapabilityInvocationServiceError | Error> {
     if (error instanceof MeshCapabilityInvocationServiceError) return error;
     if (error instanceof ConflictError) {
       if (/different request bytes/iu.test(error.message)) {
         return new MeshCapabilityInvocationServiceError("mesh_capability_settlement_conflict");
       }
-      const existing = this.storage.meshCapabilityPublications.findInvocationSettlement(workspaceId, invocationId);
+      const existing = await this.storage.meshCapabilityPublications.findInvocationSettlement(
+        workspaceId,
+        invocationId,
+      );
       return new MeshCapabilityInvocationServiceError(
         existing ? "mesh_capability_settlement_conflict" : "mesh_capability_settlement_stale_generation",
       );
@@ -846,10 +865,10 @@ export class MeshCapabilityInvocationService {
     return error instanceof Error ? error : new Error(String(error));
   }
 
-  private verifySettlementOutput(
+  private async verifySettlementOutput(
     intent: MeshCapabilityInvocationIntentRecord,
     submission: MeshCapabilityNodeSettlementSubmission,
-  ): Record<string, unknown> | undefined {
+  ): Promise<Record<string, unknown> | undefined> {
     if (submission.output === undefined) return undefined;
     if (
       typeof submission.output !== "object" ||
@@ -859,13 +878,16 @@ export class MeshCapabilityInvocationService {
       throw new MeshCapabilityInvocationServiceError("mesh_capability_settlement_invalid");
     }
     const canonical = canonicalJsonString(submission.output);
-    const maxResponseBytes = ((): number => {
+    const maxResponseBytes = await (async (): Promise<number> => {
       try {
-        const activation = this.storage.meshCapabilityPublications.getActivation(
+        const activation = await this.storage.meshCapabilityPublications.getActivation(
           intent.workspaceId,
           intent.activationId,
         );
-        return Math.min(this.resolveDeclaredResourceLimits(activation).maxResponseBytes, MAX_SETTLEMENT_OUTPUT_BYTES);
+        return Math.min(
+          (await this.resolveDeclaredResourceLimits(activation)).maxResponseBytes,
+          MAX_SETTLEMENT_OUTPUT_BYTES,
+        );
       } catch {
         return MAX_SETTLEMENT_OUTPUT_BYTES;
       }
@@ -879,14 +901,17 @@ export class MeshCapabilityInvocationService {
     return submission.output;
   }
 
-  private requireIntentForNode(
+  private async requireIntentForNode(
     identity: MeshCapabilityAuthenticatedNodeIdentity,
     invocationId: string,
-  ): MeshCapabilityInvocationIntentRecord {
+  ): Promise<MeshCapabilityInvocationIntentRecord> {
     if (typeof invocationId !== "string" || invocationId.length < 1 || invocationId.length > 256) {
       throw new MeshCapabilityInvocationServiceError("mesh_capability_invocation_not_found");
     }
-    const intent = this.storage.meshCapabilityPublications.findInvocationIntent(identity.workspaceId, invocationId);
+    const intent = await this.storage.meshCapabilityPublications.findInvocationIntent(
+      identity.workspaceId,
+      invocationId,
+    );
     if (!intent) {
       throw new MeshCapabilityInvocationServiceError("mesh_capability_invocation_not_found");
     }

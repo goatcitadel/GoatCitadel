@@ -278,20 +278,20 @@ describe("gateway service coverage helpers", () => {
     expect(classifyCapabilityGapFromTrace({ trace: baseTrace as never })).toBeNull();
   });
 
-  it("creates evidence envelopes with stable hashes, redaction, signatures, and realtime metadata", () => {
+  it("creates evidence envelopes with stable hashes, redaction, signatures, and realtime metadata", async () => {
     const created: unknown[] = [];
     const publishRealtime = vi.fn();
     const storage = {
       evidenceEnvelopes: {
-        latest: vi.fn((query?: { workspaceId?: string }) =>
+        latest: vi.fn(async (query?: { workspaceId?: string }) =>
           created.filter((item) => !query?.workspaceId || item.workspaceId === query.workspaceId).at(-1),
         ),
-        create: vi.fn((input) => {
+        create: vi.fn(async (input) => {
           const envelope = { ...input };
           created.push(envelope);
           return envelope;
         }),
-        list: vi.fn((query) => created.map((item) => ({ ...(item as Record<string, unknown>), query }))),
+        list: vi.fn(async (query) => created.map((item) => ({ ...(item as Record<string, unknown>), query }))),
       },
     };
     const service = new EvidenceEnvelopeService({
@@ -300,7 +300,7 @@ describe("gateway service coverage helpers", () => {
       publishRealtime,
     });
 
-    const envelope = service.createEnvelope({
+    const envelope = await service.createEnvelope({
       eventKind: "tool_call_completed",
       workspaceId: "workspace-a",
       sessionId: "sess-1",
@@ -312,13 +312,13 @@ describe("gateway service coverage helpers", () => {
       },
       createdAt: "2026-05-14T00:00:00.000Z",
     });
-    const second = service.createEnvelope({
+    const second = await service.createEnvelope({
       eventKind: "approval_resolved",
       workspaceId: "workspace-a",
       sessionId: "sess-1",
       createdAt: "2026-05-14T00:00:01.000Z",
     });
-    const otherWorkspace = service.createEnvelope({
+    const otherWorkspace = await service.createEnvelope({
       eventKind: "approval_resolved",
       workspaceId: "workspace-b",
       sessionId: "sess-2",
@@ -338,7 +338,7 @@ describe("gateway service coverage helpers", () => {
     });
     expect(second.previousEnvelopeHash).toBe(envelope.contentHash);
     expect(otherWorkspace.previousEnvelopeHash).toBeUndefined();
-    expect(service.listEnvelopes({ sessionId: "sess-1" })[0]).toMatchObject({ sessionId: "sess-1" });
+    expect((await service.listEnvelopes({ sessionId: "sess-1" }))[0]).toMatchObject({ sessionId: "sess-1" });
     expect(storage.evidenceEnvelopes.latest).toHaveBeenCalledWith({ workspaceId: "workspace-a" });
     expect(storage.evidenceEnvelopes.latest).toHaveBeenCalledWith({ workspaceId: "workspace-b" });
     expect(publishRealtime).toHaveBeenCalledWith(
@@ -350,12 +350,12 @@ describe("gateway service coverage helpers", () => {
     expect(sha256("abc")).toHaveLength(64);
   });
 
-  it("reports MCP template readiness and server health from host checks", () => {
+  it("reports MCP template readiness and server health from host checks", async () => {
     const reports: unknown[] = [];
     const host: McpDiagnosticsHost = {
       requireFeatureEnabled: vi.fn(),
       listMcpTemplates: vi.fn(
-        () =>
+        async () =>
           [
             {
               templateId: "stdio-missing",
@@ -383,7 +383,7 @@ describe("gateway service coverage helpers", () => {
             },
           ] as never,
       ),
-      requireMcpServer: vi.fn(() => ({
+      requireMcpServer: vi.fn(async () => ({
         enabled: false,
         status: "connecting",
         transport: "stdio",
@@ -397,11 +397,11 @@ describe("gateway service coverage helpers", () => {
       recordConnectorHealthRun: vi.fn((report) => reports.push(report)),
     };
 
-    const discovery = listMcpTemplateDiscovery(host);
+    const discovery = await listMcpTemplateDiscovery(host);
     expect(discovery.map((item) => item.readiness)).toEqual(["needs_command", "needs_auth", "ready"]);
     expect(discovery[0]?.dependencyChecks).toContainEqual(expect.objectContaining({ key: "command", status: "fail" }));
 
-    const report = runMcpServerHealthCheck(host, "server-1");
+    const report = await runMcpServerHealthCheck(host, "server-1");
     expect(report).toMatchObject({
       connectorType: "mcp_server",
       connectorId: "server-1",
@@ -526,17 +526,17 @@ describe("gateway service coverage helpers", () => {
     const created: unknown[] = [];
     const storage = {
       evidenceEnvelopes: {
-        latest: vi.fn(() => undefined),
-        create: vi.fn((input) => {
+        latest: vi.fn(async () => undefined),
+        create: vi.fn(async (input) => {
           const envelope = { ...input };
           created.push(envelope);
           return envelope;
         }),
-        list: vi.fn(() => created),
+        list: vi.fn(async () => created),
       },
     };
     vi.stubEnv("GOATCITADEL_EVIDENCE_SIGNING_KEY", "");
-    const unsignedEnvelope = new EvidenceEnvelopeService({ storage: storage as never }).createEnvelope({
+    const unsignedEnvelope = await new EvidenceEnvelopeService({ storage: storage as never }).createEnvelope({
       eventKind: "memory_lineage_updated",
       sessionId: "sess-unsigned",
       metadata: {
@@ -559,7 +559,7 @@ describe("gateway service coverage helpers", () => {
     const httpHost: McpDiagnosticsHost = {
       requireFeatureEnabled: vi.fn(),
       listMcpTemplates: vi.fn(
-        () =>
+        async () =>
           [
             {
               templateId: "http-warn",
@@ -571,7 +571,7 @@ describe("gateway service coverage helpers", () => {
             },
           ] as never,
       ),
-      requireMcpServer: vi.fn(() => ({
+      requireMcpServer: vi.fn(async () => ({
         enabled: true,
         status: "connected",
         transport: "http",
@@ -584,14 +584,14 @@ describe("gateway service coverage helpers", () => {
       pickConnectorDiagnosticAction: vi.fn(() => undefined),
       recordConnectorHealthRun: vi.fn(),
     };
-    expect(listMcpTemplateDiscovery(httpHost)[0]).toMatchObject({
+    expect((await listMcpTemplateDiscovery(httpHost))[0]).toMatchObject({
       readiness: "needs_url",
       dependencyChecks: expect.arrayContaining([
         expect.objectContaining({ key: "url", status: "warn" }),
         expect.objectContaining({ key: "auth", status: "pass" }),
       ]),
     });
-    expect(runMcpServerHealthCheck(httpHost, "http-ok")).toMatchObject({
+    expect(await runMcpServerHealthCheck(httpHost, "http-ok")).toMatchObject({
       status: "ok",
       checks: expect.arrayContaining([
         expect.objectContaining({ key: "url", status: "pass" }),

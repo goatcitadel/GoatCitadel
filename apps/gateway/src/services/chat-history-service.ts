@@ -14,7 +14,7 @@ import type {
   ChatMessageAnchoredWindow,
   ChatMessageHistoryContinuationPage,
   ChatMessagePage,
-  Storage,
+  AsyncStorage as Storage,
 } from "@goatcitadel/storage";
 
 export interface ChatHistoryServiceDependencies {
@@ -34,11 +34,11 @@ export async function listChatMessagePage(
     snapshotMessageCount?: number;
   },
 ): Promise<ChatMessagePageResponse> {
-  const workspaceId = requireSessionWorkspace(deps.storage, input.sessionId, input.workspaceId);
+  const workspaceId = await requireSessionWorkspace(deps.storage, input.sessionId, input.workspaceId);
   await deps.ensureChatMessageProjection(input.sessionId);
   const page =
     input.offset !== undefined
-      ? deps.storage.chatMessages.listOffsetPage({
+      ? await deps.storage.chatMessages.listOffsetPage({
           workspaceId,
           sessionId: input.sessionId,
           limit: input.limit,
@@ -46,7 +46,7 @@ export async function listChatMessagePage(
           snapshotMaxSequence: input.snapshotMaxSequence,
           snapshotMessageCount: input.snapshotMessageCount,
         })
-      : deps.storage.chatMessages.listPage({
+      : await deps.storage.chatMessages.listPage({
           workspaceId,
           sessionId: input.sessionId,
           limit: input.limit,
@@ -60,7 +60,7 @@ export async function readChatHistoryWindow(
   anchor: ChatHistoryAnchorIdentity,
   limit?: number,
 ): Promise<ChatMessageAnchoredWindow> {
-  const workspaceId = requireSessionWorkspace(deps.storage, anchor.sessionId, anchor.workspaceId);
+  const workspaceId = await requireSessionWorkspace(deps.storage, anchor.sessionId, anchor.workspaceId);
   await deps.ensureChatMessageProjection(anchor.sessionId);
   return deps.storage.chatMessages.readAnchoredWindow({ ...anchor, workspaceId }, limit);
 }
@@ -77,7 +77,7 @@ export async function readChatHistoryContinuation(
     limit?: number;
   },
 ): Promise<ChatMessageHistoryContinuationPage> {
-  const workspaceId = requireSessionWorkspace(deps.storage, input.sessionId, input.workspaceId);
+  const workspaceId = await requireSessionWorkspace(deps.storage, input.sessionId, input.workspaceId);
   await deps.ensureChatMessageProjection(input.sessionId);
   return deps.storage.chatMessages.readHistoryContinuation({ ...input, workspaceId });
 }
@@ -338,10 +338,14 @@ function buildWindowContinuationCursors(
   };
 }
 
-function requireSessionWorkspace(storage: Storage, sessionId: string, requestedWorkspaceId: string): string {
+async function requireSessionWorkspace(
+  storage: Storage,
+  sessionId: string,
+  requestedWorkspaceId: string,
+): Promise<string> {
   const normalizedSessionId = sessionId.trim();
   const normalizedWorkspaceId = requestedWorkspaceId.trim();
-  const meta = normalizedSessionId ? storage.chatSessionMeta.get(normalizedSessionId) : undefined;
+  const meta = normalizedSessionId ? await storage.chatSessionMeta.get(normalizedSessionId) : undefined;
   if (!meta || !normalizedWorkspaceId || meta.workspaceId !== normalizedWorkspaceId) {
     // Do not distinguish a missing session from a cross-workspace session.
     throw new NotFoundError({ entity: "Chat session", id: normalizedSessionId || "unknown" });

@@ -6,7 +6,7 @@ import {
   type ChatTurnFailureRecord,
   type ChatTurnTraceRecord,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { OrchestrationStepExecutionResult } from "../orchestration/types.js";
 import type { PreparedChatExecutionPlanResolution } from "./chat-turn-types.js";
 
@@ -35,39 +35,39 @@ export function isChatTurnCancelledError(error: unknown): boolean {
   return name.includes("cancel") || message.includes("chat turn cancelled");
 }
 
-export function patchChatTurnTraceIfStatus(
+export async function patchChatTurnTraceIfStatus(
   repository: Pick<Storage["chatTurnTraces"], "get" | "patch" | "patchIfStatus">,
   turnId: string,
   expectedStatuses: readonly ChatTurnTraceRecord["status"][],
   input: Parameters<Storage["chatTurnTraces"]["patch"]>[1],
-): ChatTurnTraceRecord {
-  const current = repository.get(turnId);
+): Promise<ChatTurnTraceRecord> {
+  const current = await repository.get(turnId);
   if (!expectedStatuses.includes(current.status)) {
     throwChatTurnCompletionOwnershipError(turnId, current.status);
   }
   const patched = repository.patchIfStatus
-    ? repository.patchIfStatus(turnId, expectedStatuses, input)
-    : repository.patch(turnId, input);
+    ? await repository.patchIfStatus(turnId, expectedStatuses, input)
+    : await repository.patch(turnId, input);
   if (patched) {
     return patched;
   }
-  throwChatTurnCompletionOwnershipError(turnId, repository.get(turnId).status);
+  throwChatTurnCompletionOwnershipError(turnId, (await repository.get(turnId)).status);
 }
 
-export function tryPatchChatTurnTraceIfStatus(
+export async function tryPatchChatTurnTraceIfStatus(
   repository: Pick<Storage["chatTurnTraces"], "get" | "patch" | "patchIfStatus">,
   turnId: string,
   expectedStatuses: readonly ChatTurnTraceRecord["status"][],
   input: Parameters<Storage["chatTurnTraces"]["patch"]>[1],
-): { trace: ChatTurnTraceRecord; patched: boolean } {
-  const current = repository.get(turnId);
+): Promise<{ trace: ChatTurnTraceRecord; patched: boolean }> {
+  const current = await repository.get(turnId);
   if (!expectedStatuses.includes(current.status)) {
     return { trace: current, patched: false };
   }
   const patched = repository.patchIfStatus
-    ? repository.patchIfStatus(turnId, expectedStatuses, input)
-    : repository.patch(turnId, input);
-  return patched ? { trace: patched, patched: true } : { trace: repository.get(turnId), patched: false };
+    ? await repository.patchIfStatus(turnId, expectedStatuses, input)
+    : await repository.patch(turnId, input);
+  return patched ? { trace: patched, patched: true } : { trace: await repository.get(turnId), patched: false };
 }
 
 function throwChatTurnCompletionOwnershipError(turnId: string, status: ChatTurnTraceRecord["status"]): never {

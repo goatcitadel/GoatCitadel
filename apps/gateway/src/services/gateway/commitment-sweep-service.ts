@@ -25,11 +25,11 @@ export interface ActiveHoursWindow {
 
 export interface CommitmentSweepDeps {
   /** Honor the master autonomy kill switch (`autonomyV1Disabled`). */
-  isAutonomyEnabled(): boolean;
+  isAutonomyEnabled(): Promise<boolean>;
   /** Due + pending commitments, oldest-due first. */
-  listDueCommitments(nowIso: string, limit: number): AgentCommitmentRecord[];
+  listDueCommitments(nowIso: string, limit: number): AgentCommitmentRecord[] | Promise<AgentCommitmentRecord[]>;
   /** Per-session autonomy prefs (cooldown source). */
-  getSessionAutonomyPrefs(sessionId: string): SessionAutonomyPrefsRecord;
+  getSessionAutonomyPrefs(sessionId: string): Promise<SessionAutonomyPrefsRecord>;
   /**
    * Deliver one check-in. Reuses F1: enqueues an autonomous (restricted) turn
    * seeded with the suggested text and the `{notify}`/channel delivery path.
@@ -37,9 +37,9 @@ export interface CommitmentSweepDeps {
    */
   deliverCommitment(commitment: AgentCommitmentRecord): Promise<boolean> | boolean;
   /** Transition an enqueued commitment to `delivery_pending`. */
-  markDeliveryPending(commitmentId: string): boolean;
+  markDeliveryPending(commitmentId: string): boolean | Promise<boolean>;
   /** Transition a commitment whose enqueue or async delivery failed to `delivery_failed`. */
-  markDeliveryFailed?(commitmentId: string): boolean;
+  markDeliveryFailed?(commitmentId: string): boolean | Promise<boolean>;
   now?: () => Date;
   /** Optional per-session active-hours override (defaults to 08:00–22:00 local). */
   resolveActiveHours?: (sessionId: string) => ActiveHoursWindow | undefined;
@@ -68,12 +68,12 @@ export async function runCommitmentSweep(deps: CommitmentSweepDeps): Promise<Com
     skippedActiveHours: 0,
     failed: 0,
   };
-  if (!deps.isAutonomyEnabled()) {
+  if (!(await deps.isAutonomyEnabled())) {
     return result;
   }
   const now = deps.now ? deps.now() : new Date();
   const nowIso = now.toISOString();
-  const due = deps.listDueCommitments(nowIso, deps.limit ?? DEFAULT_DUE_LIMIT);
+  const due = await deps.listDueCommitments(nowIso, deps.limit ?? DEFAULT_DUE_LIMIT);
   result.scanned = due.length;
 
   // Track sessions we have already delivered to this tick so a backlog respects
@@ -85,7 +85,7 @@ export async function runCommitmentSweep(deps: CommitmentSweepDeps): Promise<Com
       result.skippedCooldown += 1;
       continue;
     }
-    const prefs = deps.getSessionAutonomyPrefs(commitment.sessionId);
+    const prefs = await deps.getSessionAutonomyPrefs(commitment.sessionId);
     if (getCooldownRemainingSeconds(prefs, now) > 0) {
       result.skippedCooldown += 1;
       continue;
@@ -98,15 +98,15 @@ export async function runCommitmentSweep(deps: CommitmentSweepDeps): Promise<Com
     try {
       const delivered = await deps.deliverCommitment(commitment);
       if (!delivered) {
-        deps.markDeliveryFailed?.(commitment.commitmentId);
+        await deps.markDeliveryFailed?.(commitment.commitmentId);
         result.failed += 1;
         continue;
       }
-      deps.markDeliveryPending(commitment.commitmentId);
+      await deps.markDeliveryPending(commitment.commitmentId);
       deliveredSessionsThisTick.add(commitment.sessionId);
       result.delivered += 1;
     } catch {
-      deps.markDeliveryFailed?.(commitment.commitmentId);
+      await deps.markDeliveryFailed?.(commitment.commitmentId);
       result.failed += 1;
     }
   }

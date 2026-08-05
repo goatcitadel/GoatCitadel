@@ -164,9 +164,9 @@ export interface AbandonHeartbeatOccurrenceOutcome {
 
 /**
  * Owns the content-free, append/transition-only authority for one durable
- * heartbeat child. The implementation deliberately exposes a synchronous
- * callback so admission creation and cadence consumption cannot escape the
- * claim transaction.
+ * heartbeat child. The synchronous callback remains for isolated compatibility
+ * callers; Gateway uses the callback-free composite so admission creation and
+ * cadence consumption stay in one worker-owned claim transaction.
  */
 export class HeartbeatOccurrenceRepository {
   private readonly autonomyPrefs: SessionAutonomyPrefsRepository;
@@ -178,6 +178,25 @@ export class HeartbeatOccurrenceRepository {
   }
 
   public claim(
+    input: ClaimHeartbeatOccurrenceInput,
+    admit: HeartbeatOccurrenceAdmissionCallback,
+  ): ClaimHeartbeatOccurrenceOutcome {
+    return this.claimInternal(input, admit);
+  }
+
+  /**
+   * Callback-free worker-safe claim. Admission creation stays inside the same
+   * database transaction, while no executable function crosses the async
+   * Gateway storage boundary.
+   */
+  public claimWithAdmission(input: ClaimHeartbeatOccurrenceInput): ClaimHeartbeatOccurrenceOutcome {
+    return this.claimInternal(input, (request) => {
+      const outcome = this.mutationAdmissions.admit(request.admissionInput);
+      return { admission: outcome.admission, child: request.child };
+    });
+  }
+
+  private claimInternal(
     input: ClaimHeartbeatOccurrenceInput,
     admit: HeartbeatOccurrenceAdmissionCallback,
   ): ClaimHeartbeatOccurrenceOutcome {

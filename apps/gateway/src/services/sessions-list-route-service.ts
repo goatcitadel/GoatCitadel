@@ -1,4 +1,4 @@
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { createRouteService, type RoutePort, type RouteService } from "./route-service-factory.js";
 
 export const sessionsListRouteMethods = [

@@ -19,12 +19,12 @@ export async function buildSideChatSystemInstruction(
   if (!parentSessionId || parentSessionId === childSessionId) {
     throw new Error("Invalid side chat parent session.");
   }
-  const relation = host.storage.chatSideChats.getByChildSession(childSessionId);
+  const relation = await host.storage.chatSideChats.getByChildSession(childSessionId);
   if (!relation || relation.parentSessionId !== parentSessionId) {
     throw new Error("Side chat context does not match this child session.");
   }
-  const childMeta = host.storage.chatSessionMeta.ensure(childSessionId);
-  const parentMeta = host.storage.chatSessionMeta.ensure(parentSessionId);
+  const childMeta = await host.storage.chatSessionMeta.ensure(childSessionId);
+  const parentMeta = await host.storage.chatSessionMeta.ensure(parentSessionId);
   if (host.normalizeWorkspaceId(childMeta.workspaceId) !== host.normalizeWorkspaceId(parentMeta.workspaceId)) {
     throw new Error("Side chat parent workspace does not match child session workspace.");
   }

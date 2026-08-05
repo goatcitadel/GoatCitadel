@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ChatGeneratedArtifactRecord, ChatSessionRecord, ChatThreadTurnRecord } from "@goatcitadel/contracts";
-import { Storage } from "@goatcitadel/storage";
+import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   attachGeneratedArtifactsToThreadTurns,
@@ -137,8 +137,8 @@ function seedAssistantTurn(
 
 function createHost(storage: Storage, session: ChatSessionRecord): ChatGeneratedArtifactDependencies {
   return {
-    storage,
-    requireChatSession: vi.fn(() => session),
+    storage: createSqliteAsyncStorage(storage),
+    requireChatSession: vi.fn(async () => session),
   };
 }
 
@@ -211,7 +211,7 @@ describe("chat-generated-artifact-service vitest coverage", () => {
     const turnId = `turn-${input.kind}-${input.label.replaceAll(" ", "-")}`;
     seedAssistantTurn(storage, session.sessionId, turnId, input.content);
 
-    const artifact = createChatGeneratedArtifactFromTurn(createHost(storage, session), {
+    const artifact = await createChatGeneratedArtifactFromTurn(createHost(storage, session), {
       sessionId: session.sessionId,
       turnId,
     });
@@ -239,19 +239,19 @@ describe("chat-generated-artifact-service vitest coverage", () => {
     seedAssistantTurn(storage, session.sessionId, "turn-list", "```mermaid\ngraph TD\n  A --> B\n```", "cowork");
     const host = createHost(storage, session);
 
-    const artifact = createChatGeneratedArtifactFromTurn(host, {
+    const artifact = await createChatGeneratedArtifactFromTurn(host, {
       sessionId: session.sessionId,
       turnId: "turn-list",
     });
-    const sessionItems = listChatGeneratedArtifacts(host, { sessionId: " sess-list ", limit: 10 });
-    const visibleItems = listChatGeneratedArtifacts(host, {
+    const sessionItems = await listChatGeneratedArtifacts(host, { sessionId: " sess-list ", limit: 10 });
+    const visibleItems = await listChatGeneratedArtifacts(host, {
       workspaceId: " workspace-a ",
       projectId: " project-a ",
       sourceSurface: "cowork",
       kind: "mermaid",
       limit: 10,
     });
-    const hydrated = getChatGeneratedArtifact(host, artifact.artifactId, { workspaceId: "workspace-a" });
+    const hydrated = await getChatGeneratedArtifact(host, artifact.artifactId, { workspaceId: "workspace-a" });
     const turns = attachGeneratedArtifactsToThreadTurns(
       [{ turnId: "turn-list" }, { turnId: "turn-empty" }] as ChatThreadTurnRecord[],
       new Map([["turn-list", [artifact]]]),
@@ -302,20 +302,20 @@ describe("chat-generated-artifact-service vitest coverage", () => {
     seedAssistantTurn(storage, session.sessionId, "turn-supersede", "```ts\nexport const answer = 42;\n```");
     const host = createHost(storage, session);
 
-    const initial = createChatGeneratedArtifactFromTurn(host, {
+    const initial = await createChatGeneratedArtifactFromTurn(host, {
       sessionId: session.sessionId,
       turnId: "turn-supersede",
     });
-    const repeated = createChatGeneratedArtifactFromTurn(host, {
+    const repeated = await createChatGeneratedArtifactFromTurn(host, {
       sessionId: session.sessionId,
       turnId: "turn-supersede",
     });
-    const superseded = createChatGeneratedArtifactFromTurn(host, {
+    const superseded = await createChatGeneratedArtifactFromTurn(host, {
       sessionId: session.sessionId,
       turnId: "turn-supersede",
       supersedeLatest: true,
     });
-    const repeatedSupersede = createChatGeneratedArtifactFromTurn(host, {
+    const repeatedSupersede = await createChatGeneratedArtifactFromTurn(host, {
       sessionId: session.sessionId,
       turnId: "turn-supersede",
       supersedeLatest: true,
@@ -335,58 +335,60 @@ describe("chat-generated-artifact-service vitest coverage", () => {
     const session = seedSession(storage, "sess-errors", "workspace-a");
     seedAssistantTurn(storage, session.sessionId, "turn-errors", "```ts\nexport const answer = 42;\n```");
     const host = createHost(storage, session);
-    const artifact = createChatGeneratedArtifactFromTurn(host, {
+    const artifact = await createChatGeneratedArtifactFromTurn(host, {
       sessionId: session.sessionId,
       turnId: "turn-errors",
     });
 
-    expect(() => getChatGeneratedArtifact(host, "   ", { workspaceId: "workspace-a" })).toThrow(/artifactId/i);
-    expect(() => getChatGeneratedArtifact(host, artifact.artifactId, { workspaceId: "   " })).toThrow(/workspaceId/i);
-    expect(() => getChatGeneratedArtifact(host, artifact.artifactId, { workspaceId: "workspace-b" })).toThrow(
+    await expect(getChatGeneratedArtifact(host, "   ", { workspaceId: "workspace-a" })).rejects.toThrow(/artifactId/i);
+    await expect(getChatGeneratedArtifact(host, artifact.artifactId, { workspaceId: "   " })).rejects.toThrow(
+      /workspaceId/i,
+    );
+    await expect(getChatGeneratedArtifact(host, artifact.artifactId, { workspaceId: "workspace-b" })).rejects.toThrow(
       /requested workspace/i,
     );
-    expect(() => createChatGeneratedArtifactFromTurn(host, { sessionId: " ", turnId: "turn-errors" })).toThrow(
+    await expect(createChatGeneratedArtifactFromTurn(host, { sessionId: " ", turnId: "turn-errors" })).rejects.toThrow(
       /sessionId/i,
     );
-    expect(() => createChatGeneratedArtifactFromTurn(host, { sessionId: session.sessionId, turnId: " " })).toThrow(
-      /turnId/i,
-    );
+    await expect(
+      createChatGeneratedArtifactFromTurn(host, { sessionId: session.sessionId, turnId: " " }),
+    ).rejects.toThrow(/turnId/i);
 
     storage.chatTurnTraces.create({
       ...storage.chatTurnTraces.get("turn-errors"),
       turnId: "turn-wrong-session",
       sessionId: "other-session",
     });
-    expect(() =>
+    await expect(
       createChatGeneratedArtifactFromTurn(host, {
         sessionId: session.sessionId,
         turnId: "turn-wrong-session",
       }),
-    ).toThrow(/does not belong to session/);
+    ).rejects.toThrow(/does not belong to session/);
 
     storage.chatTurnTraces.create({
       ...storage.chatTurnTraces.get("turn-errors"),
       turnId: "turn-no-assistant",
       assistantMessageId: undefined,
     });
-    expect(() =>
+    await expect(
       createChatGeneratedArtifactFromTurn(host, {
         sessionId: session.sessionId,
         turnId: "turn-no-assistant",
       }),
-    ).toThrow(/assistant turns/);
+    ).rejects.toThrow(/assistant turns/);
 
     storage.chatTurnTraces.create({
       ...storage.chatTurnTraces.get("turn-errors"),
       turnId: "turn-blank-assistant-id",
       assistantMessageId: "   ",
     });
-    expect(() =>
+    await expect(
       createChatGeneratedArtifactFromTurn(host, {
         sessionId: session.sessionId,
         turnId: "turn-blank-assistant-id",
       }),
-    ).toThrow(/Assistant output is missing/);
+    ).rejects.toThrow(/Assistant output is missing/);
 
     storage.chatMessages.upsert({
       messageId: "assistant-empty",
@@ -402,15 +404,15 @@ describe("chat-generated-artifact-service vitest coverage", () => {
       turnId: "turn-empty-output",
       assistantMessageId: "assistant-empty",
     });
-    expect(() =>
+    await expect(
       createChatGeneratedArtifactFromTurn(host, {
         sessionId: session.sessionId,
         turnId: "turn-empty-output",
       }),
-    ).toThrow(/empty/);
+    ).rejects.toThrow(/empty/);
   }, 15_000);
 
-  it("returns a matching artifact after create collisions and rethrows mismatched collisions", () => {
+  it("returns a matching artifact after create collisions and rethrows mismatched collisions", async () => {
     const session = seedMockSession();
     const trace = {
       turnId: "turn-collision",
@@ -436,53 +438,53 @@ describe("chat-generated-artifact-service vitest coverage", () => {
     const createError = new Error("insert failed");
     let collidedArtifact: ChatGeneratedArtifactRecord | undefined;
     const host = {
-      requireChatSession: vi.fn(() => session),
+      requireChatSession: vi.fn(async () => session),
       storage: {
-        chatTurnTraces: { get: vi.fn(() => trace) },
+        chatTurnTraces: { get: vi.fn(async () => trace) },
         gatewaySql: {
           prepare: vi.fn(() => ({
-            get: vi.fn(() => ({ content: "```ts\nexport const answer = 42;\n```" })),
+            get: vi.fn(async () => ({ content: "```ts\nexport const answer = 42;\n```" })),
           })),
         },
         chatGeneratedArtifacts: {
-          listByTurn: vi.fn(() => []),
-          create: vi.fn((input: ChatGeneratedArtifactRecord) => {
+          listByTurn: vi.fn(async () => []),
+          create: vi.fn(async (input: ChatGeneratedArtifactRecord) => {
             collidedArtifact = { ...input };
             throw createError;
           }),
-          get: vi.fn(() => collidedArtifact),
+          get: vi.fn(async () => collidedArtifact),
         },
       },
     } as unknown as ChatGeneratedArtifactDependencies;
 
     expect(
-      createChatGeneratedArtifactFromTurn(host, {
+      await createChatGeneratedArtifactFromTurn(host, {
         sessionId: session.sessionId,
         turnId: "turn-collision",
       }),
     ).toEqual(expect.objectContaining({ artifactId: collidedArtifact?.artifactId }));
 
-    vi.mocked(host.storage.chatGeneratedArtifacts.get).mockReturnValue({
+    vi.mocked(host.storage.chatGeneratedArtifacts.get).mockResolvedValue({
       ...collidedArtifact!,
       kind: "html",
       contentHash: "wrong",
     });
-    expect(() =>
+    await expect(
       createChatGeneratedArtifactFromTurn(host, {
         sessionId: session.sessionId,
         turnId: "turn-collision",
       }),
-    ).toThrow(createError);
+    ).rejects.toThrow(createError);
 
-    vi.mocked(host.storage.chatGeneratedArtifacts.get).mockImplementation(() => {
+    vi.mocked(host.storage.chatGeneratedArtifacts.get).mockImplementation(async () => {
       throw new Error("not found after collision");
     });
-    expect(() =>
+    await expect(
       createChatGeneratedArtifactFromTurn(host, {
         sessionId: session.sessionId,
         turnId: "turn-collision",
       }),
-    ).toThrow(createError);
+    ).rejects.toThrow(createError);
   });
 });
 

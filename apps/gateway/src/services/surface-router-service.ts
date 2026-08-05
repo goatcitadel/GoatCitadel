@@ -29,9 +29,11 @@ export interface SurfaceJudgeResult {
 
 export interface SurfaceRouterServiceDeps {
   classify?: (prompt: string, ctx: SurfaceHeuristicContext) => SurfaceClassification;
-  traceRepo: Pick<RuntimeDecisionTraceRepository, "append">;
+  traceRepo: {
+    append(input: Parameters<RuntimeDecisionTraceRepository["append"]>[0]): Promise<unknown>;
+  };
   judge?: (input: SurfaceJudgeInput) => Promise<SurfaceJudgeResult | undefined>;
-  fetchExemplars?: (citadelId: string) => SurfaceRouteOverrideExemplar[];
+  fetchExemplars?: (citadelId: string) => Promise<SurfaceRouteOverrideExemplar[]>;
   judgeThreshold?: number;
 }
 
@@ -53,7 +55,7 @@ export class SurfaceRouterService {
   public async route(request: SurfaceRouteRequest): Promise<SurfaceClassification> {
     let result = this.classify(request.prompt, request.context);
     if (result.confidence < this.judgeThreshold && this.judge) {
-      const priors = this.fetchExemplars ? this.fetchExemplars(request.citadelId) : [];
+      const priors = this.fetchExemplars ? await this.fetchExemplars(request.citadelId) : [];
       const judged = await this.judge({
         prompt: request.prompt,
         citadelId: request.citadelId,
@@ -77,7 +79,7 @@ export class SurfaceRouterService {
       mode: "chat",
       alternatives: [],
     };
-    this.traceRepo.append({
+    await this.traceRepo.append({
       kind: "routing_choice",
       scope: {
         citadelId: request.citadelId,

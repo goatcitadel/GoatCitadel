@@ -111,7 +111,7 @@ export interface LlamaCppHuggingFaceDownloadJobStatus {
 export interface LlamaCppRuntimeServiceOptions {
   rootDir: string;
   config: LlamaCppConfig;
-  onEvent?: (eventType: string, payload: Record<string, unknown>) => void;
+  onEvent?: (eventType: string, payload: Record<string, unknown>) => void | Promise<unknown>;
   leaseIdleTimeoutMs?: number;
   runtimeHooks?: LlamaCppRuntimeServiceHooks;
 }
@@ -1019,7 +1019,17 @@ export class LlamaCppRuntimeService {
 
     this.hfDownloadJobs.set(jobId, job);
     this.hfDownloadControllers.set(jobId, new AbortController());
-    void this.runHuggingFaceDownload(jobId, input);
+    void this.runHuggingFaceDownload(jobId, input).catch((error: unknown) => {
+      const failedAt = new Date().toISOString();
+      this.updateHuggingFaceDownloadJob(jobId, {
+        status: "failed",
+        stage: "done",
+        error: normalizeErrorMessage(error),
+        updatedAt: failedAt,
+        completedAt: failedAt,
+      });
+      this.hfDownloadControllers.delete(jobId);
+    });
     return { ...job };
   }
 
@@ -1369,7 +1379,22 @@ export class LlamaCppRuntimeService {
   }
 
   private emit(eventType: string, payload: Record<string, unknown>): void {
-    this.options.onEvent?.(eventType, payload);
+    if (!this.options.onEvent) return;
+    const reportFailure = (error: unknown) => {
+      // Process callbacks cannot await retained-event persistence. Surface a
+      // failed delivery without recursively publishing another realtime event.
+      // eslint-disable-next-line no-console -- Last-resort sink when the configured lifecycle event reporter itself fails.
+      console.warn("[goatcitadel] llama.cpp lifecycle event persistence failed", {
+        eventType,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    };
+    try {
+      const pending = this.options.onEvent(eventType, payload);
+      void Promise.resolve(pending).catch(reportFailure);
+    } catch (error) {
+      reportFailure(error);
+    }
   }
 
   private buildLeaseDiagnostics(): LlamaCppRuntimeLeaseDiagnostics {

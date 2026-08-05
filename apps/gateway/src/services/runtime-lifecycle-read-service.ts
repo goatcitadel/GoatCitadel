@@ -45,21 +45,21 @@ interface LifecycleResolutionState {
 }
 
 export interface RuntimeLifecycleReadHost {
-  getApproval(approvalId: string): ApprovalRequest;
-  getApprovalWaitRunId(approvalId: string): string | undefined;
-  getDurableRun(runId: string): DurableRunRecord;
-  findDurableRunMaybe(runId: string): DurableRunRecord | undefined;
-  findTask(taskId: string): TaskRecord | undefined;
-  getTurnTrace(turnId: string): ChatTurnTraceRecord;
-  listHydratedChatTurnTraces(sessionId: string, limit: number): ChatTurnTraceRecord[];
-  listChatExecutionPlans(sessionId: string, limit: number): ChatExecutionPlanRecord[];
-  listChatDelegationRuns(sessionId: string, limit: number): ChatDelegationRunRecord[];
-  listChatDelegationSteps(runId: string): ChatDelegationStepRecord[];
-  getSession(sessionId: string): SessionMeta;
+  getApproval(approvalId: string): Promise<ApprovalRequest>;
+  getApprovalWaitRunId(approvalId: string): Promise<string | undefined>;
+  getDurableRun(runId: string): Promise<DurableRunRecord>;
+  findDurableRunMaybe(runId: string): Promise<DurableRunRecord | undefined>;
+  findTask(taskId: string): Promise<TaskRecord | undefined>;
+  getTurnTrace(turnId: string): Promise<ChatTurnTraceRecord>;
+  listHydratedChatTurnTraces(sessionId: string, limit: number): Promise<ChatTurnTraceRecord[]>;
+  listChatExecutionPlans(sessionId: string, limit: number): Promise<ChatExecutionPlanRecord[]>;
+  listChatDelegationRuns(sessionId: string, limit: number): Promise<ChatDelegationRunRecord[]>;
+  listChatDelegationSteps(runId: string): Promise<ChatDelegationStepRecord[]>;
+  getSession(sessionId: string): Promise<SessionMeta>;
   getSessionSummary(sessionId: string): Promise<SessionSummary>;
-  listChatSessionProactiveRuns(sessionId: string, limit: number): ProactiveRunRecord[];
-  listApprovalEffects(approvalId: string): ApprovalEffectRecord[];
-  listRuntimeDecisionTraces(query: RuntimeDecisionTraceQuery): RuntimeDecisionTraceRecord[];
+  listChatSessionProactiveRuns(sessionId: string, limit: number): Promise<ProactiveRunRecord[]>;
+  listApprovalEffects(approvalId: string): Promise<ApprovalEffectRecord[]>;
+  listRuntimeDecisionTraces(query: RuntimeDecisionTraceQuery): Promise<RuntimeDecisionTraceRecord[]>;
 }
 
 export class RuntimeLifecycleReadService {
@@ -102,7 +102,7 @@ export class RuntimeLifecycleReadService {
       },
     };
 
-    let approval = state.approvalId ? this.host.getApproval(state.approvalId) : undefined;
+    let approval = state.approvalId ? await this.host.getApproval(state.approvalId) : undefined;
     if (approval) {
       state.preferApprovalCanonical = true;
       collectLifecycleLinksFromUnknown(linked, approval.linkage);
@@ -113,7 +113,7 @@ export class RuntimeLifecycleReadService {
       }
     }
 
-    let task = state.taskId ? this.host.findTask(state.taskId) : undefined;
+    let task = state.taskId ? await this.host.findTask(state.taskId) : undefined;
     if (task) {
       collectLifecycleLinksFromUnknown(linked, task.proactiveContext);
       linked.taskIds.add(task.taskId);
@@ -122,38 +122,46 @@ export class RuntimeLifecycleReadService {
       }
     }
 
-    let durableRun = state.runId ? this.host.getDurableRun(state.runId) : undefined;
+    let durableRun = state.runId ? await this.host.getDurableRun(state.runId) : undefined;
     if (durableRun) {
       applyDurableFallbacks(durableRun, linked, state);
       linked.runIds.add(durableRun.runId);
     }
 
-    let turns = this.loadTurns(state);
+    let turns = await this.loadTurns(state);
     applyTurnTraceLinkage(turns, linked, state);
 
     if (approval) {
-      applyApprovalCanonical(approval, linked, state, this.host.getApprovalWaitRunId.bind(this.host));
+      await applyApprovalCanonical(approval, linked, state, this.host.getApprovalWaitRunId.bind(this.host));
     }
     if (task) {
       applyTaskCanonical(task, linked, state);
     }
 
-    turns = this.ensureTurnsLoaded(state, turns);
+    turns = await this.ensureTurnsLoaded(state, turns);
     applyTurnTraceLinkage(turns, linked, state);
 
-    const executionPlans = state.sessionId
-      ? this.host.listChatExecutionPlans(state.sessionId, 50).filter((plan) => this.isPlanRelevant(plan, state))
-      : [];
-    applyExecutionPlanLinkage(executionPlans, linked, state, this.host.findDurableRunMaybe.bind(this.host));
+    const executionPlanCandidates = state.sessionId ? await this.host.listChatExecutionPlans(state.sessionId, 50) : [];
+    const executionPlans: ChatExecutionPlanRecord[] = [];
+    for (const plan of executionPlanCandidates) {
+      if (await this.isPlanRelevant(plan, state)) {
+        executionPlans.push(plan);
+      }
+    }
+    await applyExecutionPlanLinkage(executionPlans, linked, state, this.host.findDurableRunMaybe.bind(this.host));
 
     const delegationRuns = state.sessionId
-      ? this.host.listChatDelegationRuns(state.sessionId, 50).filter((run) => this.isDelegationRunRelevant(run, state))
+      ? (await this.host.listChatDelegationRuns(state.sessionId, 50)).filter((run) =>
+          this.isDelegationRunRelevant(run, state),
+        )
       : [];
-    const delegationSteps = delegationRuns.flatMap((run) => this.host.listChatDelegationSteps(run.runId));
+    const delegationSteps = (
+      await Promise.all(delegationRuns.map((run) => this.host.listChatDelegationSteps(run.runId)))
+    ).flat();
     applyDelegationLinkage(delegationRuns, delegationSteps, linked, state);
 
     if (state.turnId && !turns.some((turn) => turn.turnId === state.turnId)) {
-      turns = this.ensureTurnsLoaded(state, turns);
+      turns = await this.ensureTurnsLoaded(state, turns);
       applyTurnTraceLinkage(turns, linked, state);
     }
 
@@ -163,7 +171,7 @@ export class RuntimeLifecycleReadService {
       // lifecycle) instead of throwing and failing the whole fetch; the query-supplied runId
       // at the first lookup still surfaces a hard not-found.
       try {
-        durableRun = this.host.getDurableRun(state.runId);
+        durableRun = await this.host.getDurableRun(state.runId);
       } catch (error) {
         if (!(error instanceof NotFoundError)) {
           throw error;
@@ -181,7 +189,7 @@ export class RuntimeLifecycleReadService {
       // rather than throwing and failing the whole fetch; the user-supplied id at line 104
       // still surfaces a hard not-found.
       try {
-        approval = this.host.getApproval(state.approvalId);
+        approval = await this.host.getApproval(state.approvalId);
       } catch (error) {
         if (!(error instanceof NotFoundError)) {
           throw error;
@@ -193,11 +201,11 @@ export class RuntimeLifecycleReadService {
         collectLifecycleLinksFromUnknown(linked, approval.linkage);
         collectLifecycleLinksFromUnknown(linked, approval.payload);
         collectLifecycleLinksFromUnknown(linked, approval.preview);
-        applyApprovalCanonical(approval, linked, state, this.host.getApprovalWaitRunId.bind(this.host));
+        await applyApprovalCanonical(approval, linked, state, this.host.getApprovalWaitRunId.bind(this.host));
       }
     }
     if (state.taskId && !task) {
-      task = this.host.findTask(state.taskId);
+      task = await this.host.findTask(state.taskId);
       if (task) {
         linked.taskIds.add(task.taskId);
         if (task.workspaceId) {
@@ -210,7 +218,7 @@ export class RuntimeLifecycleReadService {
     let session: SessionMeta | undefined;
     let sessionSummary: SessionSummary | undefined;
     if (state.sessionId) {
-      session = this.host.getSession(state.sessionId);
+      session = await this.host.getSession(state.sessionId);
       sessionSummary = await this.host.getSessionSummary(state.sessionId);
       linked.sessionIds.add(session.sessionId);
     }
@@ -226,7 +234,7 @@ export class RuntimeLifecycleReadService {
     }
 
     const proactiveRuns = state.sessionId
-      ? this.host.listChatSessionProactiveRuns(state.sessionId, 50).filter((run) => {
+      ? (await this.host.listChatSessionProactiveRuns(state.sessionId, 50)).filter((run) => {
           if (state.taskId && run.linkedTaskId === state.taskId) {
             return true;
           }
@@ -251,19 +259,21 @@ export class RuntimeLifecycleReadService {
         .map((candidate) => candidate.linkedDurableRunId)
         .find((candidate): candidate is string => typeof candidate === "string" && candidate.trim().length > 0) ??
       task?.proactiveContext?.durableRunId;
-    const approvalWaitDurableRunId = state.approvalId ? this.host.getApprovalWaitRunId(state.approvalId) : undefined;
+    const approvalWaitDurableRunId = state.approvalId
+      ? await this.host.getApprovalWaitRunId(state.approvalId)
+      : undefined;
     const proactiveDurableRun = proactiveDurableRunId
       ? durableRun?.runId === proactiveDurableRunId
         ? durableRun
-        : this.host.findDurableRunMaybe(proactiveDurableRunId)
+        : await this.host.findDurableRunMaybe(proactiveDurableRunId)
       : undefined;
     const approvalWaitDurableRun = approvalWaitDurableRunId
       ? durableRun?.runId === approvalWaitDurableRunId
         ? durableRun
-        : this.host.findDurableRunMaybe(approvalWaitDurableRunId)
+        : await this.host.findDurableRunMaybe(approvalWaitDurableRunId)
       : undefined;
-    const approvalEffects = state.approvalId ? this.host.listApprovalEffects(state.approvalId) : [];
-    const decisionTrace = this.loadDecisionTrace(state);
+    const approvalEffects = state.approvalId ? await this.host.listApprovalEffects(state.approvalId) : [];
+    const decisionTrace = await this.loadDecisionTrace(state);
 
     return {
       query: {
@@ -384,31 +394,34 @@ export class RuntimeLifecycleReadService {
     };
   }
 
-  private loadTurns(state: LifecycleResolutionState): ChatTurnTraceRecord[] {
+  private async loadTurns(state: LifecycleResolutionState): Promise<ChatTurnTraceRecord[]> {
     if (state.turnId) {
-      return [this.host.getTurnTrace(state.turnId)];
+      return [await this.host.getTurnTrace(state.turnId)];
     }
     if (state.sessionId) {
-      return this.host.listHydratedChatTurnTraces(state.sessionId, 200);
+      return await this.host.listHydratedChatTurnTraces(state.sessionId, 200);
     }
     return [];
   }
 
-  private ensureTurnsLoaded(state: LifecycleResolutionState, turns: ChatTurnTraceRecord[]): ChatTurnTraceRecord[] {
+  private async ensureTurnsLoaded(
+    state: LifecycleResolutionState,
+    turns: ChatTurnTraceRecord[],
+  ): Promise<ChatTurnTraceRecord[]> {
     const byId = new Map(turns.map((turn) => [turn.turnId, turn] as const));
     if (state.turnId && !byId.has(state.turnId)) {
-      const resolvedTurn = this.host.getTurnTrace(state.turnId);
+      const resolvedTurn = await this.host.getTurnTrace(state.turnId);
       byId.set(resolvedTurn.turnId, resolvedTurn);
     }
     if (byId.size === 0 && state.sessionId) {
-      for (const turn of this.host.listHydratedChatTurnTraces(state.sessionId, 200)) {
+      for (const turn of await this.host.listHydratedChatTurnTraces(state.sessionId, 200)) {
         byId.set(turn.turnId, turn);
       }
     }
     return [...byId.values()];
   }
 
-  private isPlanRelevant(plan: ChatExecutionPlanRecord, state: LifecycleResolutionState): boolean {
+  private async isPlanRelevant(plan: ChatExecutionPlanRecord, state: LifecycleResolutionState): Promise<boolean> {
     if (!state.turnId && !state.runId && !state.taskId && !state.approvalId && !state.executionPlanId) {
       return true;
     }
@@ -418,15 +431,15 @@ export class RuntimeLifecycleReadService {
     if (state.turnId && plan.turnId === state.turnId) {
       return true;
     }
-    if (
-      state.runId &&
-      plan.steps.some(
-        (step) =>
+    if (state.runId) {
+      for (const step of plan.steps) {
+        if (
           step.durableRunId === state.runId ||
-          resolveDeprecatedChildRunId(step, this.host.findDurableRunMaybe.bind(this.host)) === state.runId,
-      )
-    ) {
-      return true;
+          (await resolveDeprecatedChildRunId(step, this.host.findDurableRunMaybe.bind(this.host))) === state.runId
+        ) {
+          return true;
+        }
+      }
     }
     return false;
   }
@@ -447,7 +460,7 @@ export class RuntimeLifecycleReadService {
     return false;
   }
 
-  private loadDecisionTrace(state: LifecycleResolutionState): RuntimeDecisionTraceRecord[] {
+  private async loadDecisionTrace(state: LifecycleResolutionState): Promise<RuntimeDecisionTraceRecord[]> {
     const byId = new Map<string, RuntimeDecisionTraceRecord>();
     const queries: RuntimeDecisionTraceQuery[] = [];
     if (state.sessionId) {
@@ -470,7 +483,7 @@ export class RuntimeLifecycleReadService {
     }
 
     for (const query of queries) {
-      for (const record of this.host.listRuntimeDecisionTraces(query)) {
+      for (const record of await this.host.listRuntimeDecisionTraces(query)) {
         byId.set(record.decisionId, record);
       }
     }
@@ -509,12 +522,12 @@ function applyTurnTraceLinkage(
   }
 }
 
-function applyExecutionPlanLinkage(
+async function applyExecutionPlanLinkage(
   executionPlans: readonly ChatExecutionPlanRecord[],
   linked: LifecycleLinkedSets,
   state: LifecycleResolutionState,
-  findDurableRunMaybe: (runId: string) => DurableRunRecord | undefined,
-): void {
+  findDurableRunMaybe: (runId: string) => Promise<DurableRunRecord | undefined>,
+): Promise<void> {
   for (const plan of executionPlans) {
     linked.sessionIds.add(plan.sessionId);
     linked.turnIds.add(plan.turnId);
@@ -534,7 +547,7 @@ function applyExecutionPlanLinkage(
         linked.runIds.add(step.durableRunId);
         assignLifecycleField(state, "runId", step.durableRunId, "execution_plan");
       }
-      const deprecatedChildRunId = resolveDeprecatedChildRunId(step, findDurableRunMaybe);
+      const deprecatedChildRunId = await resolveDeprecatedChildRunId(step, findDurableRunMaybe);
       if (deprecatedChildRunId) {
         linked.runIds.add(deprecatedChildRunId);
       }
@@ -572,12 +585,12 @@ function applyDelegationLinkage(
   }
 }
 
-function applyApprovalCanonical(
+async function applyApprovalCanonical(
   approval: ApprovalRequest,
   linked: LifecycleLinkedSets,
   state: LifecycleResolutionState,
-  getApprovalWaitRunId: (approvalId: string) => string | undefined,
-): void {
+  getApprovalWaitRunId: (approvalId: string) => Promise<string | undefined>,
+): Promise<void> {
   linked.approvalIds.add(approval.approvalId);
   assignLifecycleField(state, "approvalId", approval.approvalId, "approval_linkage");
   if (approval.linkage?.sessionId) {
@@ -604,7 +617,7 @@ function applyApprovalCanonical(
     assignLifecycleField(state, "turnId", payloadTurnId, "fallback_payload");
   }
   if (!state.runId) {
-    const approvalWaitRunId = getApprovalWaitRunId(approval.approvalId);
+    const approvalWaitRunId = await getApprovalWaitRunId(approval.approvalId);
     if (approvalWaitRunId) {
       linked.runIds.add(approvalWaitRunId);
       assignLifecycleField(state, "runId", approvalWaitRunId, "approval_wait_run");
@@ -797,12 +810,12 @@ function findLifecycleString(payload: unknown, keys: string[]): string | undefin
   return undefined;
 }
 
-function resolveDeprecatedChildRunId(
+async function resolveDeprecatedChildRunId(
   step: Pick<ChatExecutionPlanStepRecord, "childRunId" | "durableRunId">,
-  findDurableRunMaybe: (runId: string) => DurableRunRecord | undefined,
-): string | undefined {
+  findDurableRunMaybe: (runId: string) => Promise<DurableRunRecord | undefined>,
+): Promise<string | undefined> {
   if (step.durableRunId || !step.childRunId) {
     return undefined;
   }
-  return findDurableRunMaybe(step.childRunId)?.runId;
+  return (await findDurableRunMaybe(step.childRunId))?.runId;
 }

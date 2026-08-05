@@ -715,7 +715,7 @@ function createHarness(options: { prefs?: ChatSessionPrefsRecord; projectId?: st
       taskSubagents: {
         findByAgentSessionId: vi.fn(() => undefined),
       },
-      runImmediateTransaction: vi.fn(<T>(callback: () => T) => callback()),
+      runImmediateTransaction: vi.fn(async <T>(callback: () => T | Promise<T>) => await callback()),
     },
   } satisfies ChatDelegationServiceHost;
 
@@ -893,13 +893,13 @@ describe("ChatDelegationService loop 20 coverage", () => {
   it("rolls back pre-dispatch policy failure evidence with parent and task truth", async () => {
     const { deps, dispatchClaims, runs, service, steps, tasks } = createHarness();
     const transaction = deps.storage.runImmediateTransaction.getMockImplementation()!;
-    deps.storage.runImmediateTransaction.mockImplementation((callback) => {
+    deps.storage.runImmediateTransaction.mockImplementation(async (callback) => {
       const stepSnapshot = new Map([...steps].map(([key, value]) => [key, { ...value }]));
       const claimSnapshot = new Map([...dispatchClaims].map(([key, value]) => [key, { ...value }]));
       const runSnapshot = new Map([...runs].map(([key, value]) => [key, { ...value }]));
       const taskSnapshot = new Map([...tasks].map(([key, value]) => [key, { ...value }]));
       try {
-        return transaction(callback);
+        return await transaction(callback);
       } catch (error) {
         steps.clear();
         stepSnapshot.forEach((value, key) => steps.set(key, value));
@@ -1186,10 +1186,10 @@ describe("ChatDelegationService loop 20 coverage", () => {
       finishedAt: "2026-05-14T00:00:02.000Z",
     });
     let transactionDepth = 0;
-    deps.storage.runImmediateTransaction.mockImplementation((callback) => {
+    deps.storage.runImmediateTransaction.mockImplementation(async (callback) => {
       transactionDepth += 1;
       try {
-        return callback();
+        return await callback();
       } finally {
         transactionDepth -= 1;
       }
@@ -1269,10 +1269,10 @@ describe("ChatDelegationService loop 20 coverage", () => {
       return getParentForUpdate(runId);
     });
     let transactionDepth = 0;
-    deps.storage.runImmediateTransaction.mockImplementation((callback) => {
+    deps.storage.runImmediateTransaction.mockImplementation(async (callback) => {
       transactionDepth += 1;
       try {
-        return callback();
+        return await callback();
       } finally {
         transactionDepth -= 1;
       }
@@ -1661,7 +1661,7 @@ describe("ChatDelegationService loop 20 coverage", () => {
         _request: ChatSendMessageRequest,
         options?: {
           turnIdentity?: TestAgentTurnIdentity;
-          assertDispatchOwnership?: () => void;
+          assertDispatchOwnership?: () => Promise<void>;
         },
       ) => {
         const callNumber = deps.agentSendChatMessage.mock.calls.length;
@@ -1669,7 +1669,7 @@ describe("ChatDelegationService loop 20 coverage", () => {
           markStaleOwnerEntered();
           await staleOwnerBlocked;
         }
-        options?.assertDispatchOwnership?.();
+        await options?.assertDispatchOwnership?.();
         providerBoundaryCalls += 1;
         return createIdentifiedChatResponse(childSessionId, options!.turnIdentity!);
       },
@@ -1723,7 +1723,7 @@ describe("ChatDelegationService loop 20 coverage", () => {
       async (
         childSessionId: string,
         _request: ChatSendMessageRequest,
-        options?: { turnIdentity?: TestAgentTurnIdentity; assertDispatchOwnership?: () => void },
+        options?: { turnIdentity?: TestAgentTurnIdentity; assertDispatchOwnership?: () => Promise<void> },
       ) => {
         const callNumber = deps.agentSendChatMessage.mock.calls.length;
         if (callNumber === 1) {
@@ -1731,7 +1731,7 @@ describe("ChatDelegationService loop 20 coverage", () => {
           await staleOwnerBlocked;
           throw new Error("late stale-owner provider rejection");
         }
-        options?.assertDispatchOwnership?.();
+        await options?.assertDispatchOwnership?.();
         return createIdentifiedChatResponse(childSessionId, options!.turnIdentity!);
       },
     ) as never;
@@ -1970,13 +1970,13 @@ describe("ChatDelegationService loop 20 coverage", () => {
   it("does not publish aggregate task or completion activity when the aggregate transaction rolls back", async () => {
     const { deps, dispatchClaims, runs, service, steps, tasks } = createHarness();
     const transaction = deps.storage.runImmediateTransaction.getMockImplementation()!;
-    deps.storage.runImmediateTransaction.mockImplementation((callback) => {
+    deps.storage.runImmediateTransaction.mockImplementation(async (callback) => {
       const stepSnapshot = new Map([...steps].map(([key, value]) => [key, { ...value }]));
       const claimSnapshot = new Map([...dispatchClaims].map(([key, value]) => [key, { ...value }]));
       const runSnapshot = new Map([...runs].map(([key, value]) => [key, { ...value }]));
       const taskSnapshot = new Map([...tasks].map(([key, value]) => [key, { ...value }]));
       try {
-        return transaction(callback);
+        return await transaction(callback);
       } catch (error) {
         steps.clear();
         stepSnapshot.forEach((value, key) => steps.set(key, value));
@@ -2306,13 +2306,13 @@ describe("ChatDelegationService loop 20 coverage", () => {
   it("rolls back dependency skip evidence with its aggregate and reconstructs it once on re-entry", async () => {
     const { deps, dispatchClaims, runs, service, steps, tasks } = createHarness();
     const transaction = deps.storage.runImmediateTransaction.getMockImplementation()!;
-    deps.storage.runImmediateTransaction.mockImplementation((callback) => {
+    deps.storage.runImmediateTransaction.mockImplementation(async (callback) => {
       const stepSnapshot = new Map([...steps].map(([key, value]) => [key, { ...value }]));
       const claimSnapshot = new Map([...dispatchClaims].map(([key, value]) => [key, { ...value }]));
       const runSnapshot = new Map([...runs].map(([key, value]) => [key, { ...value }]));
       const taskSnapshot = new Map([...tasks].map(([key, value]) => [key, { ...value }]));
       try {
-        return transaction(callback);
+        return await transaction(callback);
       } catch (error) {
         steps.clear();
         stepSnapshot.forEach((value, key) => steps.set(key, value));
@@ -2563,13 +2563,13 @@ describe("ChatDelegationService loop 20 coverage", () => {
       }),
     ) as never;
     const transaction = deps.storage.runImmediateTransaction.getMockImplementation()!;
-    deps.storage.runImmediateTransaction.mockImplementation((callback) => {
+    deps.storage.runImmediateTransaction.mockImplementation(async (callback) => {
       const stepSnapshot = new Map([...steps].map(([key, value]) => [key, { ...value }]));
       const claimSnapshot = new Map([...dispatchClaims].map(([key, value]) => [key, { ...value }]));
       const runSnapshot = new Map([...runs].map(([key, value]) => [key, { ...value }]));
       const taskSnapshot = new Map([...tasks].map(([key, value]) => [key, { ...value }]));
       try {
-        return transaction(callback);
+        return await transaction(callback);
       } catch (error) {
         steps.clear();
         stepSnapshot.forEach((value, key) => steps.set(key, value));
@@ -2610,13 +2610,13 @@ describe("ChatDelegationService loop 20 coverage", () => {
   it("rolls back terminal success when its subagent projection crashes and re-enters without duplicate evidence", async () => {
     const { deps, dispatchClaims, runs, service, steps, tasks } = createHarness();
     const transaction = deps.storage.runImmediateTransaction.getMockImplementation()!;
-    deps.storage.runImmediateTransaction.mockImplementation((callback) => {
+    deps.storage.runImmediateTransaction.mockImplementation(async (callback) => {
       const stepSnapshot = new Map([...steps].map(([key, value]) => [key, { ...value }]));
       const claimSnapshot = new Map([...dispatchClaims].map(([key, value]) => [key, { ...value }]));
       const runSnapshot = new Map([...runs].map(([key, value]) => [key, { ...value }]));
       const taskSnapshot = new Map([...tasks].map(([key, value]) => [key, { ...value }]));
       try {
-        return transaction(callback);
+        return await transaction(callback);
       } catch (error) {
         steps.clear();
         stepSnapshot.forEach((value, key) => steps.set(key, value));

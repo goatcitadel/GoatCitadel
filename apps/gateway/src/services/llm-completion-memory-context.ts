@@ -1,5 +1,5 @@
 import type { ChatCompletionRequest, MemoryContextPack, MemoryContextPlacement } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { LlmCompletionHost } from "./llm-completion-host.js";
 import { buildMemoryContextSystemMessage, extractPromptFromMessages } from "./llm-completion-helpers.js";
 
@@ -13,17 +13,17 @@ export async function composeChatCompletionMemoryContext(
   const prompt = extractPromptFromMessages(request.messages);
   if (!prompt.trim()) return undefined;
 
-  return host.memoryLifecycleService.composeContext({
+  return await host.memoryLifecycleService.composeContext({
     scope: "chat",
     // Scope DB memory-item collection to this turn's workspace (review Finding 1).
     // Without workspaceId the memory-item collector ran the unfiltered query and
     // could surface another workspace's items into this completion's context. Uses
     // the same resolver as the hooks path so memory + hook scoping stay consistent.
-    workspaceId: host.resolveChatCompletionHookWorkspaceId(request),
+    workspaceId: await host.resolveChatCompletionHookWorkspaceId(request),
     prompt,
     sessionId: memoryInput?.sessionId,
     taskId: memoryInput?.taskId,
-    workspace: host.resolveMemoryWorkspaceRelativeDir(memoryInput?.workspace, memoryInput?.sessionId),
+    workspace: await host.resolveMemoryWorkspaceRelativeDir(memoryInput?.workspace, memoryInput?.sessionId),
     relationScope: memoryInput?.relationScope,
     maxContextTokens: memoryInput?.maxContextTokens,
     forceRefresh: memoryInput?.forceRefresh,
@@ -36,20 +36,20 @@ export async function composeChatCompletionMemoryContext(
  * The memory-context system message itself is skipped so it is recorded once,
  * as the structured memory_context entry, not twice.
  */
-export function persistContextManifestForCompletionRequest(
+export async function persistContextManifestForCompletionRequest(
   deps: { contextManifests: Storage["contextManifests"] },
   input: {
     request: ChatCompletionRequest;
     memoryContext?: MemoryContextPack;
     memoryContextPlacement?: MemoryContextPlacement;
   },
-): void {
+): Promise<void> {
   const turnId = input.request.memory?.turnId?.trim();
   if (!turnId) {
     return;
   }
 
-  const manifest = deps.contextManifests.ensure({
+  const manifest = await deps.contextManifests.ensure({
     scope: "chat_turn",
     turnId,
     sessionId: input.request.memory?.sessionId?.trim(),
@@ -71,7 +71,7 @@ export function persistContextManifestForCompletionRequest(
     if (memoryContextSystemMessage && contentText === memoryContextSystemMessage) {
       continue;
     }
-    deps.contextManifests.appendEntry({
+    await deps.contextManifests.appendEntry({
       manifestId: manifest.manifestId,
       kind: "system_message",
       entryIndex,
@@ -90,7 +90,7 @@ export function persistContextManifestForCompletionRequest(
     return;
   }
 
-  deps.contextManifests.appendEntry({
+  await deps.contextManifests.appendEntry({
     manifestId: manifest.manifestId,
     kind: "memory_context",
     entryIndex,

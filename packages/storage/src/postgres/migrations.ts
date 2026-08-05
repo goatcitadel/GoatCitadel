@@ -13545,6 +13545,68 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ON engineering_learnings(workspace_id, fingerprint);
     `,
   },
+  {
+    version: 130,
+    name: "session_control_lifecycle_bootstrap_clock_guard",
+    sql: `
+      DO $session_control_lifecycle_bootstrap_clock_guard$
+      DECLARE function_sql TEXT;
+      DECLARE upgraded_sql TEXT;
+      DECLARE anchor TEXT := 'AND NOT auth_bypass';
+      DECLARE replacement TEXT := $lifecycle_bootstrap_clock_evidence$AND NOT auth_bypass
+            AND NOT EXISTS (
+              SELECT 1
+              FROM chat_session_lifecycle_intents intent
+              JOIN chat_session_meta meta
+                ON meta.lifecycle_intent_id = intent.intent_id
+              WHERE /* lifecycle bootstrap clock evidence */
+                intent.workspace_id = NEW.workspace_id
+                AND intent.session_id = NEW.session_id
+                AND intent.intent_kind IN ('initialize', 'reactivate')
+                AND intent.session_incarnation_id = intent.intent_id
+                AND intent.next_generation = NEW.generation
+                AND intent.idempotency_key = NEW.transition_idempotency_key
+                AND intent.request_sha256 = NEW.transition_request_sha256
+                AND intent.created_at = NEW.created_at
+                AND NEW.updated_at = intent.created_at
+                AND NEW.is_current = 1
+                AND NEW.owner_kind = 'operator'
+                AND NEW.lease_state = 'operator_active'
+                AND meta.workspace_id = NEW.workspace_id
+                AND meta.session_id = NEW.session_id
+                AND meta.lifecycle_intent_id = intent.intent_id
+                AND meta.deletion_intent_id IS NULL
+                AND meta.lifecycle_status = 'active'
+            )$lifecycle_bootstrap_clock_evidence$;
+      BEGIN
+        SELECT pg_get_functiondef(to_regprocedure('gc_session_control_grant_insert_guard()'))
+          INTO function_sql;
+        IF function_sql IS NULL THEN
+          RAISE EXCEPTION 'Postgres migration 130 requires the session-control grant insert guard'
+            USING ERRCODE = '23514';
+        END IF;
+        IF strpos(function_sql, 'lifecycle bootstrap clock evidence') = 0 THEN
+          IF strpos(function_sql, anchor) = 0 THEN
+            RAISE EXCEPTION 'Postgres migration 130 could not locate the grant clock guard anchor'
+              USING ERRCODE = '23514';
+          END IF;
+          upgraded_sql := replace(function_sql, anchor, replacement);
+          IF upgraded_sql = function_sql THEN
+            RAISE EXCEPTION 'Postgres migration 130 did not upgrade the grant clock guard'
+              USING ERRCODE = '23514';
+          END IF;
+          EXECUTE upgraded_sql;
+        END IF;
+        SELECT pg_get_functiondef(to_regprocedure('gc_session_control_grant_insert_guard()'))
+          INTO function_sql;
+        IF strpos(function_sql, 'lifecycle bootstrap clock evidence') = 0 THEN
+          RAISE EXCEPTION 'Postgres migration 130 grant clock guard assertion failed'
+            USING ERRCODE = '23514';
+        END IF;
+      END;
+      $session_control_lifecycle_bootstrap_clock_guard$;
+    `,
+  },
 ];
 
 function buildWorkspacePathBridgePosixFlavorPostgresSql(): string {

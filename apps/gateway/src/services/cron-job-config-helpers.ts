@@ -14,7 +14,7 @@ import {
   normalizeCronJobName,
   normalizeCronSchedule,
 } from "./gateway/cron-automation-service.js";
-import type { CronJobSpecInput, Storage } from "@goatcitadel/storage";
+import type { CronJobSpecInput, AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { CronSpecMutationOwner } from "./cron-config-generation-owner.js";
 import {
@@ -103,7 +103,7 @@ export async function loadCronJobsFromConfig(host: CronJobConfigHost): Promise<v
       });
       continue;
     }
-    const existing = host.storage.cronJobs.get(normalizedJobId);
+    const existing = await host.storage.cronJobs.get(normalizedJobId);
     let normalizedEndAt: string | undefined;
     try {
       normalizedEndAt = normalizeCronEndAt(sanitized.endAt ?? existing?.endAt);
@@ -167,7 +167,7 @@ function sanitizeCronJobRow(input: unknown): SanitizedCronJobRow | null {
 }
 
 export async function ensurePrivateBetaBackupCronJob(host: CronJobConfigHost): Promise<void> {
-  const existing = host.storage.cronJobs.get(PRIVATE_BETA_BACKUP_JOB_ID);
+  const existing = await host.storage.cronJobs.get(PRIVATE_BETA_BACKUP_JOB_ID);
   await reconcileBuiltIn(host, {
     jobId: PRIVATE_BETA_BACKUP_JOB_ID,
     name: "Private Beta Daily Backup",
@@ -182,7 +182,7 @@ export async function ensurePrivateBetaBackupCronJob(host: CronJobConfigHost): P
 }
 
 export async function ensureMemoryFlushCronJob(host: CronJobConfigHost): Promise<void> {
-  const existing = host.storage.cronJobs.get(MEMORY_FLUSH_DAILY_JOB_ID);
+  const existing = await host.storage.cronJobs.get(MEMORY_FLUSH_DAILY_JOB_ID);
   await reconcileBuiltIn(host, {
     jobId: MEMORY_FLUSH_DAILY_JOB_ID,
     name: "Memory Flush Daily",
@@ -197,7 +197,7 @@ export async function ensureMemoryFlushCronJob(host: CronJobConfigHost): Promise
 }
 
 export async function ensureMemoryConsolidationCronJob(host: CronJobConfigHost): Promise<void> {
-  const existing = host.storage.cronJobs.get(MEMORY_CONSOLIDATION_WEEKLY_JOB_ID);
+  const existing = await host.storage.cronJobs.get(MEMORY_CONSOLIDATION_WEEKLY_JOB_ID);
   await reconcileBuiltIn(host, {
     jobId: MEMORY_CONSOLIDATION_WEEKLY_JOB_ID,
     name: "Memory Consolidation Weekly",
@@ -216,7 +216,7 @@ export async function ensureMemoryConsolidationCronJob(host: CronJobConfigHost):
 }
 
 export async function ensureCostReportCronJob(host: CronJobConfigHost): Promise<void> {
-  const existing = host.storage.cronJobs.get(COST_REPORT_HOURLY_JOB_ID);
+  const existing = await host.storage.cronJobs.get(COST_REPORT_HOURLY_JOB_ID);
   await reconcileBuiltIn(host, {
     jobId: COST_REPORT_HOURLY_JOB_ID,
     name: "Cost Report Hourly",
@@ -231,7 +231,7 @@ export async function ensureCostReportCronJob(host: CronJobConfigHost): Promise<
 }
 
 export async function ensureUpdateReviewCronJob(host: CronJobConfigHost): Promise<void> {
-  const existing = host.storage.cronJobs.get(UPDATE_REVIEW_DAILY_JOB_ID);
+  const existing = await host.storage.cronJobs.get(UPDATE_REVIEW_DAILY_JOB_ID);
   await reconcileBuiltIn(host, {
     jobId: UPDATE_REVIEW_DAILY_JOB_ID,
     name: "Daily Update Review",

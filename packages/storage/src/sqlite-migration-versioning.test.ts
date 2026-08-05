@@ -42,8 +42,8 @@ describe("sqlite schema migrations", () => {
     assert.deepEqual(
       { ...rows.at(-1) },
       {
-        version: 186,
-        name: "compound_engineering_foundation",
+        version: 187,
+        name: "session_control_lifecycle_bootstrap_clock_guard",
       },
     );
     db.close();

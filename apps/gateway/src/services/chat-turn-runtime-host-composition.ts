@@ -94,12 +94,12 @@ function composeSessionPreparation(
     },
     buildDefaultChatPersonalityOverlay: () => source.buildDefaultChatPersonalityOverlay(),
     assertTurnAdmissionWrite: source.assertTurnAdmissionWrite
-      ? (admission) => source.assertTurnAdmissionWrite?.(admission)
+      ? (admission) => source.assertTurnAdmissionWrite!(admission)
       : undefined,
     buildLlmMessagesFromBranchPath: (sessionId, pathTurnIds, currentUserMessage, options, state) =>
       source.buildLlmMessagesFromBranchPath(sessionId, pathTurnIds, currentUserMessage, options, state),
     composeFrozenOperatorProfileDigest: source.composeFrozenOperatorProfileDigest
-      ? (workspaceId) => source.composeFrozenOperatorProfileDigest?.(workspaceId)
+      ? (workspaceId) => source.composeFrozenOperatorProfileDigest!(workspaceId)
       : undefined,
     ensureChatSessionModelDefaults: (sessionId, prefs) => source.ensureChatSessionModelDefaults(sessionId, prefs),
     ensureChatSessionRuntimeGrants: (sessionId) => source.ensureChatSessionRuntimeGrants(sessionId),
@@ -110,9 +110,9 @@ function composeSessionPreparation(
     normalizeWorkspaceId: (workspaceId) => source.normalizeWorkspaceId(workspaceId),
     patchSessionAutonomyPrefs: (sessionId, input) => source.patchSessionAutonomyPrefs(sessionId, input),
     prepareAgentChatTurn: (sessionId, input, options) => source.prepareAgentChatTurn(sessionId, input, options),
-    recordRuntimeDecision: source.recordRuntimeDecision ? (input) => source.recordRuntimeDecision?.(input) : undefined,
+    recordRuntimeDecision: source.recordRuntimeDecision ? (input) => source.recordRuntimeDecision!(input) : undefined,
     resolveBasePromptCapabilityCatalog: source.resolveBasePromptCapabilityCatalog
-      ? () => source.resolveBasePromptCapabilityCatalog?.() ?? { toolNames: [] }
+      ? () => source.resolveBasePromptCapabilityCatalog!()
       : undefined,
     resolveChatRoutedContextSources: (input) => source.resolveChatRoutedContextSources(input),
     resolveRuntimeGuidance: (workspaceId) => source.resolveRuntimeGuidance(workspaceId),
@@ -166,7 +166,7 @@ function composeDurableOwnership(source: ChatTurnRuntimeHost): ChatTurnDurableRu
       source.finalizeDurableChatRun(runId, prepared, trace, expectedLeaseOwnerId),
     isFeatureEnabled: (flag) => source.isFeatureEnabled(flag),
     cancelDurableChatRun: source.cancelDurableChatRun
-      ? (runId, actorId) => source.cancelDurableChatRun?.(runId, actorId)
+      ? (runId, actorId) => source.cancelDurableChatRun!(runId, actorId)
       : undefined,
   };
 }

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage, Storage } from "@goatcitadel/storage";
 import { executeBrowserTool } from "./browser-tools.js";
 import { ToolPolicyEngine } from "./engine.js";
 import { evaluateDangerousHostBypass } from "./sandbox/network-guard.js";
@@ -21,7 +21,7 @@ function createConfig(): ToolPolicyConfig {
   };
 }
 
-function createStorage(): Storage {
+function createStorage(): Storage & AsyncStorage {
   return {
     audit: {
       append: vi.fn(async () => undefined),
@@ -55,7 +55,7 @@ function createStorage(): Storage {
     db: {
       prepare: vi.fn(() => ({ run: vi.fn() })),
     },
-  } as unknown as Storage;
+  } as unknown as Storage & AsyncStorage;
 }
 
 function request(toolName: string, args: Record<string, unknown> = {}): ToolInvokeRequest {
@@ -378,7 +378,7 @@ describe("policy-engine branch-tail coverage", () => {
       },
       storage,
     );
-    const evaluation = riskyEngine.evaluateAccess({
+    const evaluation = await riskyEngine.evaluateAccess({
       toolName: "shell.exec",
       args: { command: "rm -rf ./tmp" },
       agentId: "agent-loop8",

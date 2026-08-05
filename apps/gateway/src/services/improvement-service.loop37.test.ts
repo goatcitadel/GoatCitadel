@@ -2,7 +2,7 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Storage } from "@goatcitadel/storage";
+import { createLocalAsyncStorage, Storage } from "@goatcitadel/storage";
 import type { DurableRunRecord } from "@goatcitadel/contracts";
 import {
   ImprovementService,
@@ -28,8 +28,8 @@ afterEach(() => {
 });
 
 describe("ImprovementService loop37 signal persistence", () => {
-  it("persists durable completion signals with checkpoint workspace fallback and idempotent reads", () => {
-    const harness = createHarness();
+  it("persists durable completion signals with checkpoint workspace fallback and idempotent reads", async () => {
+    const harness = await createHarness();
     const run = createDurableRun({
       runId: "run-completed-loop37",
       status: "completed",
@@ -47,8 +47,8 @@ describe("ImprovementService loop37 signal persistence", () => {
       toolCount: 2,
     };
 
-    const first = harness.service.recordDurableRunCompletionSignal({ run, checkpointState });
-    const second = harness.service.recordDurableRunCompletionSignal({ run, checkpointState });
+    const first = await harness.service.recordDurableRunCompletionSignal({ run, checkpointState });
+    const second = await harness.service.recordDurableRunCompletionSignal({ run, checkpointState });
     const row = readSignalRow(harness.storage, first!.signalId);
 
     expect(second?.signalId).toBe(first?.signalId);
@@ -80,10 +80,10 @@ describe("ImprovementService loop37 signal persistence", () => {
     ]);
   });
 
-  it("records prompt-lab benchmark positives and negatives with persisted routing metadata", () => {
-    const harness = createHarness();
+  it("records prompt-lab benchmark positives and negatives with persisted routing metadata", async () => {
+    const harness = await createHarness();
 
-    const positive = harness.service.recordPromptLabBenchmarkCompletionSignal({
+    const positive = await harness.service.recordPromptLabBenchmarkCompletionSignal({
       benchmarkRunId: "bench-loop37-positive",
       packId: "pack-routing",
       providerId: "openai",
@@ -92,7 +92,7 @@ describe("ImprovementService loop37 signal persistence", () => {
       passRate: 0.95,
       runFailures: 0,
     });
-    const negative = harness.service.recordPromptLabBenchmarkCompletionSignal({
+    const negative = await harness.service.recordPromptLabBenchmarkCompletionSignal({
       benchmarkRunId: "bench-loop37-negative",
       packId: "pack-routing",
       providerId: "openai",
@@ -102,7 +102,7 @@ describe("ImprovementService loop37 signal persistence", () => {
       runFailures: 3,
       failureSignal: "no assistant output",
     });
-    const negativeAgain = harness.service.recordPromptLabBenchmarkCompletionSignal({
+    const negativeAgain = await harness.service.recordPromptLabBenchmarkCompletionSignal({
       benchmarkRunId: "bench-loop37-negative",
       packId: "pack-routing",
       providerId: "openai",
@@ -129,7 +129,7 @@ describe("ImprovementService loop37 signal persistence", () => {
     });
     expect(negativeAgain?.signalId).toBe(negative?.signalId);
 
-    const storedNegative = harness.service.getImprovementSignal(negative!.signalId);
+    const storedNegative = await harness.service.getImprovementSignal(negative!.signalId);
     expect(storedNegative.metadata).toMatchObject({
       packId: "pack-routing",
       targetKey: "pack-routing:openai:gpt-5.4-mini",
@@ -140,13 +140,13 @@ describe("ImprovementService loop37 signal persistence", () => {
       runFailures: 3,
       failureSignal: "no assistant output",
     });
-    expect(harness.service.listImprovementSignals(10, "prompt-lab").map((signal) => signal.signalId)).toEqual(
+    expect((await harness.service.listImprovementSignals(10, "prompt-lab")).map((signal) => signal.signalId)).toEqual(
       expect.arrayContaining([positive!.signalId, negative!.signalId]),
     );
   });
 });
 
-function createHarness(): Harness {
+async function createHarness(): Promise<Harness> {
   const rootDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "gc-improvement-loop37-"));
   const transcriptsDir = path.join(rootDir, "transcripts");
   const auditDir = path.join(rootDir, "audit");
@@ -159,9 +159,9 @@ function createHarness(): Harness {
   });
   const published: Harness["published"] = [];
   const ctx: ImprovementServiceContext = {
-    storage,
+    storage: createLocalAsyncStorage(storage),
     gatewaySql: storage.gatewaySql,
-    publishRealtime: (channel, topic, payload) => {
+    publishRealtime: async (channel, topic, payload) => {
       published.push({ channel, topic, payload });
     },
     requireFeatureEnabled: () => undefined,
@@ -183,10 +183,12 @@ function createHarness(): Harness {
     backgroundTasks: new Set<Promise<void>>(),
     closing: false,
   } as unknown as ImprovementServiceCallbacks;
+  const service = new ImprovementService(ctx, callbacks);
+  await service.initialize();
   const harness: Harness = {
     rootDir,
     storage,
-    service: new ImprovementService(ctx, callbacks),
+    service,
     published,
   };
   harnesses.push(harness);

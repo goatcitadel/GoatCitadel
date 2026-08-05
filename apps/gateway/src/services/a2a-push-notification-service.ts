@@ -8,7 +8,7 @@ import type {
   A2ATaskPushNotificationConfig,
 } from "@goatcitadel/contracts";
 import { fetchAllowlisted } from "@goatcitadel/policy-engine";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
 import {
   runIdempotentExternalSideEffect,
@@ -33,8 +33,12 @@ export interface A2APushNotificationServiceDependencies {
   tasks: Pick<TaskLifecycleService, "appendTaskActivity">;
   mutationIdempotencyStore?: MutationIdempotencyStore;
   pushDeliveryFetch?: typeof fetchAllowlisted;
-  buildTaskFromBinding: (binding: A2ATaskBindingRecord, checkedAt: string) => A2ABridgeTask;
-  buildEventsForTask: (task: A2ABridgeTask, since: number, checkedAt: string) => A2ABridgeTaskEvent[];
+  buildTaskFromBinding: (binding: A2ATaskBindingRecord, checkedAt: string) => A2ABridgeTask | Promise<A2ABridgeTask>;
+  buildEventsForTask: (
+    task: A2ABridgeTask,
+    since: number,
+    checkedAt: string,
+  ) => A2ABridgeTaskEvent[] | Promise<A2ABridgeTaskEvent[]>;
 }
 
 export class A2APushNotificationService {
@@ -45,7 +49,7 @@ export class A2APushNotificationService {
     params: Record<string, unknown>,
     checkedAt = new Date().toISOString(),
   ): Promise<A2ATaskPushNotificationConfig> {
-    const binding = this.requirePeerTaskBinding(peer, params);
+    const binding = await this.requirePeerTaskBinding(peer, params);
     const configInput = readObject(params.pushNotificationConfig) ?? readObject(params.config) ?? params;
     const url = normalizePushUrl(readString(configInput.url) ?? readString(configInput.webhookUrl));
     if (!url) {
@@ -58,7 +62,7 @@ export class A2APushNotificationService {
       readString(auth?.bearerToken) ??
       readString(configInput.token) ??
       readString(configInput.bearerToken);
-    const config = this.deps.storage.a2aTaskPushConfigs.upsert(
+    const config = await this.deps.storage.a2aTaskPushConfigs.upsert(
       {
         taskId: binding.a2aTaskId,
         peerId: peer.peerId,
@@ -71,7 +75,7 @@ export class A2APushNotificationService {
       checkedAt,
     );
     if (binding.localTaskId) {
-      this.deps.tasks.appendTaskActivity(binding.localTaskId, {
+      await this.deps.tasks.appendTaskActivity(binding.localTaskId, {
         agentId: `a2a:${peer.peerId}`,
         activityType: "control",
         message: "A2A peer configured task push notification delivery.",
@@ -84,44 +88,44 @@ export class A2APushNotificationService {
       });
     }
     if (config.enabled) {
-      const task = this.deps.buildTaskFromBinding(binding, checkedAt);
+      const task = await this.deps.buildTaskFromBinding(binding, checkedAt);
       await this.deliverForTask(peer, binding, task, checkedAt);
     }
-    return this.sanitizePushConfig(this.deps.storage.a2aTaskPushConfigs.get(binding.a2aTaskId, peer.peerId));
+    return this.sanitizePushConfig(await this.deps.storage.a2aTaskPushConfigs.get(binding.a2aTaskId, peer.peerId));
   }
 
-  public getTaskPushNotificationConfig(
+  public async getTaskPushNotificationConfig(
     peer: A2APeerAuthContext,
     params: Record<string, unknown>,
-  ): A2ATaskPushNotificationConfig {
-    const binding = this.requirePeerTaskBinding(peer, params);
-    return this.sanitizePushConfig(this.deps.storage.a2aTaskPushConfigs.get(binding.a2aTaskId, peer.peerId));
+  ): Promise<A2ATaskPushNotificationConfig> {
+    const binding = await this.requirePeerTaskBinding(peer, params);
+    return this.sanitizePushConfig(await this.deps.storage.a2aTaskPushConfigs.get(binding.a2aTaskId, peer.peerId));
   }
 
-  public listTaskPushNotificationConfigs(
+  public async listTaskPushNotificationConfigs(
     peer: A2APeerAuthContext,
     params: Record<string, unknown> = {},
-  ): A2ATaskPushNotificationConfig[] {
+  ): Promise<A2ATaskPushNotificationConfig[]> {
     const taskId = readString(params.taskId) ?? readString(params.id);
     if (taskId) {
-      const binding = this.requirePeerTaskBinding(peer, { taskId });
-      const config = this.deps.storage.a2aTaskPushConfigs.find(binding.a2aTaskId, peer.peerId);
+      const binding = await this.requirePeerTaskBinding(peer, { taskId });
+      const config = await this.deps.storage.a2aTaskPushConfigs.find(binding.a2aTaskId, peer.peerId);
       return config ? [this.sanitizePushConfig(config)] : [];
     }
-    return this.deps.storage.a2aTaskPushConfigs
-      .listByPeer(peer.peerId, readNumber(params.limit) ?? 100)
-      .map((config) => this.sanitizePushConfig(config));
+    return (await this.deps.storage.a2aTaskPushConfigs.listByPeer(peer.peerId, readNumber(params.limit) ?? 100)).map(
+      (config) => this.sanitizePushConfig(config),
+    );
   }
 
-  public deleteTaskPushNotificationConfig(
+  public async deleteTaskPushNotificationConfig(
     peer: A2APeerAuthContext,
     params: Record<string, unknown>,
     checkedAt = new Date().toISOString(),
-  ): { taskId: string; peerId: string; deleted: boolean } {
-    const binding = this.requirePeerTaskBinding(peer, params);
-    const deleted = this.deps.storage.a2aTaskPushConfigs.delete(binding.a2aTaskId, peer.peerId);
+  ): Promise<{ taskId: string; peerId: string; deleted: boolean }> {
+    const binding = await this.requirePeerTaskBinding(peer, params);
+    const deleted = await this.deps.storage.a2aTaskPushConfigs.delete(binding.a2aTaskId, peer.peerId);
     if (deleted && binding.localTaskId) {
-      this.deps.tasks.appendTaskActivity(binding.localTaskId, {
+      await this.deps.tasks.appendTaskActivity(binding.localTaskId, {
         agentId: `a2a:${peer.peerId}`,
         activityType: "control",
         message: "A2A peer removed task push notification delivery.",
@@ -140,13 +144,13 @@ export class A2APushNotificationService {
     task: A2ABridgeTask,
     checkedAt: string,
   ): Promise<A2ATaskPushDeliveryResult[]> {
-    const config = this.deps.storage.a2aTaskPushConfigs.find(binding.a2aTaskId, peer.peerId);
+    const config = await this.deps.storage.a2aTaskPushConfigs.find(binding.a2aTaskId, peer.peerId);
     if (!config?.enabled) {
       return [];
     }
-    const events = this.deps
-      .buildEventsForTask(task, config.lastEventSequence, checkedAt)
-      .filter((event) => config.events.includes(event.kind));
+    const events = (await this.deps.buildEventsForTask(task, config.lastEventSequence, checkedAt)).filter((event) =>
+      config.events.includes(event.kind),
+    );
     const results: A2ATaskPushDeliveryResult[] = [];
     for (const event of events) {
       results.push(await this.deliverPushEvent(config, binding, task, event, checkedAt));
@@ -154,12 +158,15 @@ export class A2APushNotificationService {
     return results;
   }
 
-  private requirePeerTaskBinding(peer: A2APeerAuthContext, params: Record<string, unknown>): A2ATaskBindingRecord {
+  private async requirePeerTaskBinding(
+    peer: A2APeerAuthContext,
+    params: Record<string, unknown>,
+  ): Promise<A2ATaskBindingRecord> {
     const taskId = readString(params.taskId) ?? readString(params.id);
     if (!taskId) {
       throw new A2AJsonRpcServiceError(-32602, "taskId is required.");
     }
-    const binding = this.deps.storage.a2aTaskBindings.find(taskId);
+    const binding = await this.deps.storage.a2aTaskBindings.find(taskId);
     if (!binding) {
       throw new A2AJsonRpcServiceError(-32004, "A2A task binding was not found.");
     }
@@ -195,7 +202,7 @@ export class A2APushNotificationService {
     // evaluates against that workspace's citadel. deny/require_approval block
     // here (recorded as a blocked delivery — retrying cannot change a ward);
     // require_dry_run threads to the runner, which refuses pre-boundary.
-    const ward = resolveWardEffectForExternalAction({
+    const ward = await resolveWardEffectForExternalAction({
       storage: this.deps.storage,
       workspaceId: binding.workspaceId,
       action: buildA2AOutboundWardAction("push"),
@@ -205,7 +212,7 @@ export class A2APushNotificationService {
         ward.effect === "deny"
           ? `A Citadel Ward denies a2a.outbound.push (citadel ${ward.citadelId}).`
           : `A Citadel Ward requires approval for a2a.outbound.push (citadel ${ward.citadelId}); approval-gated push delivery is not wired, so delivery is blocked.`;
-      const updated = this.deps.storage.a2aTaskPushConfigs.recordDelivery(
+      const updated = await this.deps.storage.a2aTaskPushConfigs.recordDelivery(
         task.id,
         binding.peerId,
         {
@@ -249,11 +256,11 @@ export class A2APushNotificationService {
         eventSequence: event.sequence,
         eventKind: event.kind,
       },
-      execute: (claim) => this.sendPushRequest(claim, config, payload),
+      execute: async (claim) => await this.sendPushRequest(claim, config, payload),
     });
 
     if (run.status === "executed" || run.claim.replayOutcome === "duplicate") {
-      const updated = this.deps.storage.a2aTaskPushConfigs.recordDelivery(
+      const updated = await this.deps.storage.a2aTaskPushConfigs.recordDelivery(
         task.id,
         binding.peerId,
         {
@@ -294,7 +301,7 @@ export class A2APushNotificationService {
           : "retry_scheduled";
     const nextRetryAt =
       status === "retry_scheduled" ? addMinutesIso(checkedAt, Math.min(30, 2 ** attemptCount)) : undefined;
-    const updated = this.deps.storage.a2aTaskPushConfigs.recordDelivery(
+    const updated = await this.deps.storage.a2aTaskPushConfigs.recordDelivery(
       task.id,
       binding.peerId,
       {
@@ -326,7 +333,7 @@ export class A2APushNotificationService {
     config: A2ATaskPushNotificationConfig & { authToken?: string },
     payload: Record<string, unknown>,
   ): Promise<{ statusCode: number; ok: boolean }> {
-    claim.markExternalCallStarted();
+    await claim.markExternalCallStarted();
     const response = await (this.deps.pushDeliveryFetch ?? fetchAllowlisted)(config.url, {
       allowlist: this.deps.config.toolPolicy.sandbox.networkAllowlist,
       timeoutMs: 10_000,

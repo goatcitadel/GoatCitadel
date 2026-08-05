@@ -7,17 +7,11 @@ import {
   type MemoryChangeEvent,
   type MemoryItemRecord,
 } from "@goatcitadel/contracts";
+import type { AsyncGatewaySqlRepository } from "@goatcitadel/storage";
 export const MEMORY_ITEM_STATUS_VALUES = new Set(["active", "forgotten"]);
 
 export interface MemoryItemHost {
-  gatewaySql: {
-    readonly dialect: "sqlite" | "postgres";
-    prepare(sql: string): {
-      get(...args: unknown[]): unknown;
-      all(...args: unknown[]): unknown[];
-      run(...args: unknown[]): unknown;
-    };
-  };
+  gatewaySql: AsyncGatewaySqlRepository;
   tryParseJson<T>(raw: string | null | undefined, fallback: T): T;
 }
 
@@ -68,8 +62,8 @@ export function mapMemoryItemRow(host: MemoryItemHost, row: MemoryItemRow): Memo
   };
 }
 
-export function requireMemoryItem(host: MemoryItemHost, itemId: string): MemoryItemRecord {
-  const row = host.gatewaySql
+export async function requireMemoryItem(host: MemoryItemHost, itemId: string): Promise<MemoryItemRecord> {
+  const row = (await host.gatewaySql
     .prepare(
       `
       SELECT item_id, namespace, title, content, metadata_json, pinned, ttl_override_seconds, expires_at, status,
@@ -78,21 +72,21 @@ export function requireMemoryItem(host: MemoryItemHost, itemId: string): MemoryI
       WHERE item_id = ?
     `,
     )
-    .get(itemId) as MemoryItemRow | undefined;
+    .get(itemId)) as MemoryItemRow | undefined;
   if (!row) {
     throw new NotFoundError({ entity: "Memory item", id: itemId });
   }
   return mapMemoryItemRow(host, row);
 }
 
-export function recordMemoryChange(
+export async function recordMemoryChange(
   host: MemoryItemHost,
   itemId: string,
   changeType: MemoryChangeEvent["changeType"],
   actorId: string | undefined,
   payload: Record<string, unknown>,
   identity: { changeId?: string; createdAt?: string } = {},
-): MemoryChangeEvent {
+): Promise<MemoryChangeEvent> {
   if ((identity.changeId === undefined) !== (identity.createdAt === undefined)) {
     throw new TypeError("Deterministic memory history identity requires both changeId and createdAt.");
   }
@@ -106,7 +100,7 @@ export function recordMemoryChange(
     payload,
     createdAt: identity.createdAt ?? new Date().toISOString(),
   };
-  host.gatewaySql
+  await host.gatewaySql
     .prepare(
       `
       INSERT INTO memory_change_history (change_id, item_id, change_type, actor_id, payload_json, created_at)
@@ -125,7 +119,7 @@ export function recordMemoryChange(
   if (!deterministicIdentity) {
     return change;
   }
-  const row = host.gatewaySql
+  const row = (await host.gatewaySql
     .prepare(
       `
       SELECT change_id, item_id, change_type, actor_id, payload_json, created_at
@@ -133,7 +127,7 @@ export function recordMemoryChange(
       WHERE change_id = ?
     `,
     )
-    .get(change.changeId) as
+    .get(change.changeId)) as
     | {
         change_id: string;
         item_id: string;

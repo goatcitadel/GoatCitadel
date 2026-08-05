@@ -363,14 +363,18 @@ function createHarness(
     checkpoints: [],
     tasks: new Map(),
   };
-  const storage = createStorage(state);
-  const publishRealtime = vi.fn();
+  const database = {
+    prepare: (sql: string) => createStatement(sql, state),
+    runImmediateTransaction: async <T>(callback: () => T | Promise<T>): Promise<Awaited<T>> => await callback(),
+  };
+  const storage = { ...createStorage(state), db: database };
+  const publishRealtime = vi.fn(async () => undefined);
   const invokeTool = vi.fn();
   const callbacks: ChatProactiveServiceCallbacks = {
-    listChatSessions: () => [{ sessionId: session.sessionId, lastActivityAt: session.lastActivityAt }],
-    getSession: () => session,
-    hasRunningTurn: options.hasRunningTurn ?? (() => false),
-    getSessionIdleSeconds: options.idleSeconds ?? (() => 600),
+    listChatSessions: async () => [{ sessionId: session.sessionId, lastActivityAt: session.lastActivityAt }],
+    getSession: async () => session,
+    hasRunningTurn: async () => (options.hasRunningTurn ?? (() => false))(),
+    getSessionIdleSeconds: async () => (options.idleSeconds ?? (() => 600))(),
     listChatMessages: async () => state.messages,
     invokeTool: async (request, options) => {
       const result = await invokeTool(request);
@@ -380,7 +384,7 @@ function createHarness(
       return result;
     },
     detectDelegationRoles: options.detectDelegationRoles ?? (() => []),
-    createDurableRun: (input) => {
+    createDurableRun: async (input) => {
       const run = createDurableRun({
         workflowKey: input.workflowKey,
         payload: input.payload,
@@ -395,12 +399,9 @@ function createHarness(
   };
   const ctx = {
     storage,
-    gatewaySql: {
-      prepare: (sql: string) => createStatement(sql, state),
-      runImmediateTransaction: <T>(callback: () => T): T => callback(),
-    },
+    gatewaySql: database,
     publishRealtime,
-    isFeatureEnabled: (flag: keyof RuntimeSettings["features"]) => flag === "durableKernelV1Enabled",
+    isFeatureEnabled: async (flag: keyof RuntimeSettings["features"]) => flag === "durableKernelV1Enabled",
   } as unknown as ServiceContext;
   return {
     state,

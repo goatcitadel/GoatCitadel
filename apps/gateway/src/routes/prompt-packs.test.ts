@@ -3,6 +3,29 @@ import { describe, expect, it, vi } from "vitest";
 import { promptPackRoutes } from "./prompt-packs.js";
 
 describe("prompt-pack routes", () => {
+  it("awaits Promise-native prompt-pack list results before wrapping them as items", async () => {
+    const listPromptPacks = vi.fn(async () => [
+      {
+        packId: "pack-async",
+        name: "Async pack",
+        sourceLabel: "test",
+        testCount: 1,
+        createdAt: "2026-08-05T00:00:00.000Z",
+        updatedAt: "2026-08-05T00:00:00.000Z",
+      },
+    ]);
+    const app = Fastify();
+    app.decorate("services", { promptPacks: { listPromptPacks } } as never);
+    await app.register(promptPackRoutes);
+
+    const response = await app.inject({ method: "GET", url: "/api/v1/prompt-packs?limit=20" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ items: [{ packId: "pack-async" }] });
+    expect(listPromptPacks).toHaveBeenCalledWith(20);
+    await app.close();
+  });
+
   it("previews Promptfoo imports and exports Promptfoo records without changing default export", async () => {
     const previewPromptPackImport = vi.fn(() => ({
       valid: true,

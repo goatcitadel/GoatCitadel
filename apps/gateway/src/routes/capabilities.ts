@@ -168,7 +168,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     const items = parsed.data.workspaceId
       ? fastify.services.capabilities.listCapabilityCatalog(
           scope,
-          fastify.services.capabilityScope.resolveEffectiveSkills(parsed.data.workspaceId),
+          await fastify.services.capabilityScope.resolveEffectiveSkills(parsed.data.workspaceId),
         )
       : fastify.services.capabilities.listCapabilityCatalog(scope);
     return reply.send({ scope, items: projectCapabilityPublicValue(items) });
@@ -251,7 +251,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     }
     return reply.send({
       items: projectCapabilityPublicValue(
-        fastify.services.capabilities.listAutonomousActivationGrants(parsed.data.includeExpired === "true"),
+        await fastify.services.capabilities.listAutonomousActivationGrants(parsed.data.includeExpired === "true"),
       ),
     });
   });
@@ -264,7 +264,11 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply
         .code(201)
-        .send(projectCapabilityPublicValue(fastify.services.capabilities.createAutonomousActivationGrant(parsed.data)));
+        .send(
+          projectCapabilityPublicValue(
+            await fastify.services.capabilities.createAutonomousActivationGrant(parsed.data),
+          ),
+        );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -276,7 +280,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send(
-      projectCapabilityPublicValue(fastify.services.capabilities.evaluateAutonomousActivationGrant(parsed.data)),
+      projectCapabilityPublicValue(await fastify.services.capabilities.evaluateAutonomousActivationGrant(parsed.data)),
     );
   });
 
@@ -294,7 +298,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply.send(
         projectCapabilityPublicValue(
-          fastify.services.capabilities.revokeAutonomousActivationGrant(params.data.grantId, body.data),
+          await fastify.services.capabilities.revokeAutonomousActivationGrant(params.data.grantId, body.data),
         ),
       );
     } catch (error) {
@@ -348,7 +352,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      const outcome = fastify.services.capabilities.promoteCapabilityCandidate(
+      const outcome = await fastify.services.capabilities.promoteCapabilityCandidate(
         params.data.candidateId,
         body.data.expectedRevision,
         body.data.versionId,
@@ -372,7 +376,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      const outcome = fastify.services.capabilities.revokeCapabilityCandidate(
+      const outcome = await fastify.services.capabilities.revokeCapabilityCandidate(
         params.data.candidateId,
         body.data.expectedRevision,
         body.data.versionId,
@@ -396,7 +400,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      const outcome = fastify.services.capabilities.rollbackCapabilityCandidate(
+      const outcome = await fastify.services.capabilities.rollbackCapabilityCandidate(
         params.data.candidateId,
         body.data.targetVersionId,
         body.data.expectedRevision,

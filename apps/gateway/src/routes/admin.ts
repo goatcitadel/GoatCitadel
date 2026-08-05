@@ -76,7 +76,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
   const authAdmin = fastify.services.authAdmin;
 
   fastify.get("/api/v1/admin/retention", operatorReadRoute, async (_request, reply) => {
-    return reply.send(authAdmin.getRetentionPolicy());
+    return reply.send(await authAdmin.getRetentionPolicy());
   });
 
   fastify.patch("/api/v1/admin/retention", operatorMutationRoute, async (request, reply) => {
@@ -103,7 +103,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     if (body.auditDays !== undefined) {
       patch.auditDays = body.auditDays === "off" ? undefined : (body.auditDays ?? undefined);
     }
-    const updated = authAdmin.updateRetentionPolicy(patch);
+    const updated = await authAdmin.updateRetentionPolicy(patch);
     return reply.send(updated);
   });
 

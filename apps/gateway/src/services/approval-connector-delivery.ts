@@ -15,17 +15,17 @@ const MCP_APPROVAL_DELIVERY_TOOL_NAME = "goatcitadel.approval.remote_action_read
 export interface ApprovalRemoteTokenDeliveryRuntime {
   readonly tokenSecrets: Pick<ApprovalRemoteTokenSecretService, "store" | "delete">;
   readonly requestAttribution: { traceId?: string; originSurface?: string };
-  createDurableRun(input: DurableRunCreateRequest): DurableRunRecord;
+  createDurableRun(input: DurableRunCreateRequest): Promise<DurableRunRecord>;
 }
 
-export function enqueueApprovalRemoteTokenConnectorDelivery(
+export async function enqueueApprovalRemoteTokenConnectorDelivery(
   runtime: ApprovalRemoteTokenDeliveryRuntime,
   input: {
     approval: ApprovalRequest;
     connector: ConnectorRecord;
     tokenRecord: { token: string; tokenId: string; expiresAt: string };
   },
-): DurableRunRecord | undefined {
+): Promise<DurableRunRecord | undefined> {
   const needsSecret =
     input.connector.connectorType === "browser" ||
     (input.connector.connectorType === "integration_connection" && supportsInlineApprovalActions(input.connector));
@@ -51,7 +51,7 @@ export function enqueueApprovalRemoteTokenConnectorDelivery(
       }
       return undefined;
     }
-    return runtime.createDurableRun({
+    return await runtime.createDurableRun({
       runId: randomUUID(),
       workflowKey: "connector.delivery",
       payload: stripUndefined({

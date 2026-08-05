@@ -2,7 +2,14 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AuditLog, createDatabase, Storage, TranscriptLog, type DatabaseClient } from "@goatcitadel/storage";
+import {
+  AuditLog,
+  createDatabase,
+  createLocalAsyncStorage,
+  Storage,
+  TranscriptLog,
+  type DatabaseClient,
+} from "@goatcitadel/storage";
 import { reconcileInterruptedChatTurns } from "./chat-turn-interruption-recovery-service.js";
 
 /**
@@ -85,7 +92,7 @@ function createHarness(): Harness {
 }
 
 describe("chat-turn interruption recovery on the postgres dialect", () => {
-  it("reconciles a stranded trace and an orphaned user message without sqlite-only exec statements", () => {
+  it("reconciles a stranded trace and an orphaned user message without sqlite-only exec statements", async () => {
     const { storage } = createHarness();
     storage.chatMessages.upsert({
       messageId: "msg-stranded",
@@ -117,9 +124,9 @@ describe("chat-turn interruption recovery on the postgres dialect", () => {
       timestamp: "2026-07-07T19:50:00.000Z",
     });
 
-    const result = reconcileInterruptedChatTurns({
-      storage,
-      publishRealtime: vi.fn(),
+    const result = await reconcileInterruptedChatTurns({
+      storage: createLocalAsyncStorage(storage),
+      publishRealtime: vi.fn(async () => undefined),
       recordDevDiagnostic: vi.fn(),
       now: () => "2026-07-07T20:00:00.000Z",
     });

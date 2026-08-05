@@ -17,7 +17,7 @@ import {
   ValidationError,
   type RealtimeEvent,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { readBoundedResponseText } from "./bounded-response-reader.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import { preserveHookSecretsForPublicUpdate } from "./hooks-public-projection.js";
@@ -74,9 +74,9 @@ export interface HooksServiceContext {
     source: string,
     payload: Record<string, unknown>,
     options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
-  ): void;
+  ): Promise<unknown>;
   normalizeWorkspaceId(workspaceId?: string): string;
-  isFeatureEnabled(flag: keyof RuntimeSettings["features"]): boolean;
+  isFeatureEnabled(flag: keyof RuntimeSettings["features"]): Promise<boolean>;
 }
 
 export class HooksService {
@@ -89,7 +89,7 @@ export class HooksService {
       createDurableRun: (
         input: DurableRunCreateRequest,
         options: { publishRealtime: false; idempotentIfExists: true },
-      ) => DurableRunRecord;
+      ) => Promise<DurableRunRecord>;
       requestDurableRunProcessing: (runId: string) => void;
       fetchImpl?: typeof fetch;
     },
@@ -108,7 +108,7 @@ export class HooksService {
     return true;
   }
 
-  private recordCircuitBreakerOutcome(hookId: string, success: boolean): void {
+  private async recordCircuitBreakerOutcome(hookId: string, success: boolean): Promise<void> {
     if (success) {
       this.circuitBreakers.delete(hookId);
       return;
@@ -117,7 +117,7 @@ export class HooksService {
     state.consecutiveFailures += 1;
     if (state.consecutiveFailures >= CIRCUIT_BREAKER_FAILURE_THRESHOLD && !state.trippedAt) {
       state.trippedAt = Date.now();
-      this.publishRealtimeSafely(
+      await this.publishRealtimeSafely(
         "hook_circuit_breaker_tripped",
         "hooks",
         {
@@ -131,8 +131,8 @@ export class HooksService {
     this.circuitBreakers.set(hookId, state);
   }
 
-  public listWorkspaceHooks(workspaceId: string, limit = 200): HookRecord[] {
-    return this.ctx.storage.workspaceHooks.list(this.ctx.normalizeWorkspaceId(workspaceId), limit);
+  public async listWorkspaceHooks(workspaceId: string, limit = 200): Promise<HookRecord[]> {
+    return await this.ctx.storage.workspaceHooks.list(this.ctx.normalizeWorkspaceId(workspaceId), limit);
   }
 
   /**
@@ -144,43 +144,46 @@ export class HooksService {
    *
    * The check reads from the workspace hook index once per call (not per chunk).
    */
-  public hasMutateHook(workspaceId: string, trigger: HookTrigger): boolean {
+  public async hasMutateHook(workspaceId: string, trigger: HookTrigger): Promise<boolean> {
     const normalized = this.ctx.normalizeWorkspaceId(workspaceId);
-    const hooks = this.ctx.storage.workspaceHooks.listByTrigger(normalized, trigger, 200);
+    const hooks = await this.ctx.storage.workspaceHooks.listByTrigger(normalized, trigger, 200);
     return hooks.some((hook) => hook.enabled && hook.mode === "mutate");
   }
 
-  public getToolCallBeforeInterposition(workspaceId: string): ToolCallBeforeHookInterpositionBinding {
+  public async getToolCallBeforeInterposition(workspaceId: string): Promise<ToolCallBeforeHookInterpositionBinding> {
     const normalized = this.ctx.normalizeWorkspaceId(workspaceId);
-    return buildToolCallBeforeHookInterpositionBinding(
-      TOOL_EFFECT_INTERPOSITION_TRIGGERS.flatMap((trigger) =>
-        this.ctx.storage.workspaceHooks.listByTrigger(normalized, trigger, TOOL_CALL_BEFORE_HOOK_BINDING_LIMIT),
-      ),
-    );
+    const hooks = (
+      await Promise.all(
+        TOOL_EFFECT_INTERPOSITION_TRIGGERS.map((trigger) =>
+          this.ctx.storage.workspaceHooks.listByTrigger(normalized, trigger, TOOL_CALL_BEFORE_HOOK_BINDING_LIMIT),
+        ),
+      )
+    ).flat();
+    return buildToolCallBeforeHookInterpositionBinding(hooks);
   }
 
-  public listWorkspaceHookRuns(workspaceId: string, limit = 200): HookRunRecord[] {
-    return this.ctx.storage.hookRuns.listByWorkspace(this.ctx.normalizeWorkspaceId(workspaceId), limit);
+  public async listWorkspaceHookRuns(workspaceId: string, limit = 200): Promise<HookRunRecord[]> {
+    return await this.ctx.storage.hookRuns.listByWorkspace(this.ctx.normalizeWorkspaceId(workspaceId), limit);
   }
 
-  public createWorkspaceHook(input: HookCreateInput): HookRecord {
+  public async createWorkspaceHook(input: HookCreateInput): Promise<HookRecord> {
     const workspaceId = this.ctx.normalizeWorkspaceId(input.workspaceId);
-    this.ctx.storage.workspaces.get(workspaceId);
-    this.assertModeAllowed(workspaceId, input.mode);
+    await this.ctx.storage.workspaces.get(workspaceId);
+    await this.assertModeAllowed(workspaceId, input.mode);
     this.assertTriggerModeSupported(input.trigger, input.mode);
     this.assertWebhookUrlAllowed(input.action.webhook.url);
-    const created = this.ctx.storage.workspaceHooks.create({
+    const created = await this.ctx.storage.workspaceHooks.create({
       ...input,
       workspaceId,
     });
-    void this.ctx.storage.audit.append("hooks", {
+    void (await this.ctx.storage.audit.append("hooks", {
       event: "hook.create",
       hookId: created.hookId,
       workspaceId,
       trigger: created.trigger,
       mode: created.mode,
-    });
-    this.publishRealtimeSafely("system", "hooks", {
+    }));
+    await this.publishRealtimeSafely("system", "hooks", {
       type: "hook_created",
       hookId: created.hookId,
       workspaceId,
@@ -190,25 +193,25 @@ export class HooksService {
     return created;
   }
 
-  public updateWorkspaceHook(workspaceId: string, hookId: string, input: HookUpdateInput): HookRecord {
+  public async updateWorkspaceHook(workspaceId: string, hookId: string, input: HookUpdateInput): Promise<HookRecord> {
     const normalizedWorkspaceId = this.ctx.normalizeWorkspaceId(workspaceId);
-    const current = this.ctx.storage.workspaceHooks.get(normalizedWorkspaceId, hookId);
+    const current = await this.ctx.storage.workspaceHooks.get(normalizedWorkspaceId, hookId);
     const nextMode = current.mode;
-    this.assertModeAllowed(normalizedWorkspaceId, nextMode);
+    await this.assertModeAllowed(normalizedWorkspaceId, nextMode);
     this.assertTriggerModeSupported(current.trigger, nextMode);
     if (input.action?.webhook.url) {
       this.assertWebhookUrlAllowed(input.action.webhook.url);
     }
-    const updated = this.ctx.storage.workspaceHooks.update(normalizedWorkspaceId, hookId, input);
-    void this.ctx.storage.audit.append("hooks", {
+    const updated = await this.ctx.storage.workspaceHooks.update(normalizedWorkspaceId, hookId, input);
+    void (await this.ctx.storage.audit.append("hooks", {
       event: "hook.update",
       hookId: updated.hookId,
       workspaceId: normalizedWorkspaceId,
       trigger: updated.trigger,
       mode: updated.mode,
       enabled: updated.enabled,
-    });
-    this.publishRealtimeSafely("system", "hooks", {
+    }));
+    await this.publishRealtimeSafely("system", "hooks", {
       type: "hook_updated",
       hookId: updated.hookId,
       workspaceId: normalizedWorkspaceId,
@@ -219,26 +222,30 @@ export class HooksService {
     return updated;
   }
 
-  public updateWorkspaceHookFromPublicProjection(
+  public async updateWorkspaceHookFromPublicProjection(
     workspaceId: string,
     hookId: string,
     input: HookUpdateInput,
-  ): HookRecord {
+  ): Promise<HookRecord> {
     const normalizedWorkspaceId = this.ctx.normalizeWorkspaceId(workspaceId);
-    const current = this.ctx.storage.workspaceHooks.get(normalizedWorkspaceId, hookId);
-    return this.updateWorkspaceHook(normalizedWorkspaceId, hookId, preserveHookSecretsForPublicUpdate(current, input));
+    const current = await this.ctx.storage.workspaceHooks.get(normalizedWorkspaceId, hookId);
+    return await this.updateWorkspaceHook(
+      normalizedWorkspaceId,
+      hookId,
+      preserveHookSecretsForPublicUpdate(current, input),
+    );
   }
 
-  public deleteWorkspaceHook(workspaceId: string, hookId: string): boolean {
+  public async deleteWorkspaceHook(workspaceId: string, hookId: string): Promise<boolean> {
     const normalizedWorkspaceId = this.ctx.normalizeWorkspaceId(workspaceId);
-    const deleted = this.ctx.storage.workspaceHooks.delete(normalizedWorkspaceId, hookId);
+    const deleted = await this.ctx.storage.workspaceHooks.delete(normalizedWorkspaceId, hookId);
     if (deleted) {
-      void this.ctx.storage.audit.append("hooks", {
+      void (await this.ctx.storage.audit.append("hooks", {
         event: "hook.delete",
         hookId,
         workspaceId: normalizedWorkspaceId,
-      });
-      this.publishRealtimeSafely("system", "hooks", {
+      }));
+      await this.publishRealtimeSafely("system", "hooks", {
         type: "hook_deleted",
         hookId,
         workspaceId: normalizedWorkspaceId,
@@ -259,17 +266,19 @@ export class HooksService {
     /** Frozen binding checked against the exact list fetched for this dispatch. */
     expectedInterposition?: ToolCallBeforeHookInterpositionBinding;
     /** Process-local fence immediately before the first configured webhook dispatch. */
-    beforeExternalDispatch?: () => void;
+    beforeExternalDispatch?: () => Promise<void>;
   }): Promise<HookInlineDispatchResult<TPatch>> {
     const workspaceId = this.ctx.normalizeWorkspaceId(input.workspaceId);
-    const hooks = this.ctx.storage.workspaceHooks.listByTrigger(workspaceId, input.trigger, 200);
+    const hooks = await this.ctx.storage.workspaceHooks.listByTrigger(workspaceId, input.trigger, 200);
     if (input.trigger === "tool.call.before" && input.expectedInterposition) {
-      const current = buildToolCallBeforeHookInterpositionBinding([
-        ...hooks,
-        ...TOOL_EFFECT_INTERPOSITION_TRIGGERS.filter((trigger) => trigger !== input.trigger).flatMap((trigger) =>
-          this.ctx.storage.workspaceHooks.listByTrigger(workspaceId, trigger, TOOL_CALL_BEFORE_HOOK_BINDING_LIMIT),
-        ),
-      ]);
+      const siblingHooks = (
+        await Promise.all(
+          TOOL_EFFECT_INTERPOSITION_TRIGGERS.filter((trigger) => trigger !== input.trigger).map((trigger) =>
+            this.ctx.storage.workspaceHooks.listByTrigger(workspaceId, trigger, TOOL_CALL_BEFORE_HOOK_BINDING_LIMIT),
+          ),
+        )
+      ).flat();
+      const current = buildToolCallBeforeHookInterpositionBinding([...hooks, ...siblingHooks]);
       if (current.hash !== input.expectedInterposition.hash || current.count !== input.expectedInterposition.count) {
         throw new Error("Immutable Chat tool-hook interposition binding drifted before dispatch.");
       }
@@ -281,14 +290,14 @@ export class HooksService {
     // Inline hooks are HTTPS webhook calls. Cross the caller-owned boundary
     // once, before the first delivery, so a blocking/mutating hook cannot be
     // mistaken for a pre-dispatch no-effect decision.
-    input.beforeExternalDispatch?.();
+    await input.beforeExternalDispatch?.();
 
     let mergedPatch: TPatch | undefined;
     const appliedRuns: HookRunRecord[] = [];
 
     for (const hook of hooks) {
       const idempotencyKey = buildDeliveryIdempotencyKey(input.trigger, input.entityType, input.entityId);
-      const run = this.ctx.storage.hookRuns.create({
+      const run = await this.ctx.storage.hookRuns.create({
         hookId: hook.hookId,
         workspaceId,
         trigger: input.trigger,
@@ -327,7 +336,7 @@ export class HooksService {
     };
   }
 
-  public enqueueAfterHooks(input: {
+  public async enqueueAfterHooks(input: {
     workspaceId?: string;
     trigger: HookTrigger;
     entityType: string;
@@ -335,20 +344,22 @@ export class HooksService {
     idempotencyDiscriminator?: string;
     payload: Record<string, unknown>;
     expectedInterposition?: ToolCallBeforeHookInterpositionBinding;
-    beforeExternalDispatch?: () => void;
-  }): HookRunRecord[] {
+    beforeExternalDispatch?: () => Promise<void>;
+  }): Promise<HookRunRecord[]> {
     const workspaceId = this.ctx.normalizeWorkspaceId(input.workspaceId);
-    const hooks = this.ctx.storage.workspaceHooks.listByTrigger(workspaceId, input.trigger, 200);
+    const hooks = await this.ctx.storage.workspaceHooks.listByTrigger(workspaceId, input.trigger, 200);
     if (
       input.expectedInterposition &&
       (TOOL_EFFECT_INTERPOSITION_TRIGGERS as readonly HookTrigger[]).includes(input.trigger)
     ) {
-      const current = buildToolCallBeforeHookInterpositionBinding([
-        ...hooks,
-        ...TOOL_EFFECT_INTERPOSITION_TRIGGERS.filter((trigger) => trigger !== input.trigger).flatMap((trigger) =>
-          this.ctx.storage.workspaceHooks.listByTrigger(workspaceId, trigger, TOOL_CALL_BEFORE_HOOK_BINDING_LIMIT),
-        ),
-      ]);
+      const siblingHooks = (
+        await Promise.all(
+          TOOL_EFFECT_INTERPOSITION_TRIGGERS.filter((trigger) => trigger !== input.trigger).map((trigger) =>
+            this.ctx.storage.workspaceHooks.listByTrigger(workspaceId, trigger, TOOL_CALL_BEFORE_HOOK_BINDING_LIMIT),
+          ),
+        )
+      ).flat();
+      const current = buildToolCallBeforeHookInterpositionBinding([...hooks, ...siblingHooks]);
       if (current.hash !== input.expectedInterposition.hash || current.count !== input.expectedInterposition.count) {
         throw new Error("Immutable Chat tool-hook interposition binding drifted before enqueue.");
       }
@@ -356,67 +367,70 @@ export class HooksService {
     if (hooks.length === 0) {
       return [];
     }
-    input.beforeExternalDispatch?.();
-    return hooks.map((hook) => {
-      const idempotencyKey = buildAfterHookDeliveryIdempotencyKey(
-        input.trigger,
-        input.entityType,
-        input.entityId,
-        input.idempotencyDiscriminator,
-      );
-      const materialized = this.ctx.storage.runImmediateTransaction(() =>
-        this.materializeAfterHook({
-          hook,
-          workspaceId,
-          input,
-          idempotencyKey,
-        }),
-      );
-      if (materialized.skippedNow) {
-        this.publishRealtimeSafely("system", "hooks", {
-          type: "hook_delivery_skipped",
-          hookId: hook.hookId,
-          hookRunId: materialized.run.runId,
-          workspaceId,
-          trigger: hook.trigger,
-          reason: "durable_kernel_disabled",
-        });
-      }
-      if (materialized.durableRunCreated && materialized.durableRun) {
-        this.publishRealtimeSafely(
-          "system",
-          "durable",
-          {
-            type: "durable_run_created",
-            runId: materialized.durableRun.runId,
-            workflowKey: materialized.durableRun.workflowKey,
-            status: materialized.durableRun.status,
-          },
-          {
-            eventClass: "domain_fact",
-            eventAuthority: "retained_stream",
-            links: { runId: materialized.durableRun.runId },
-          },
+    await input.beforeExternalDispatch?.();
+    return await Promise.all(
+      hooks.map(async (hook) => {
+        const idempotencyKey = buildAfterHookDeliveryIdempotencyKey(
+          input.trigger,
+          input.entityType,
+          input.entityId,
+          input.idempotencyDiscriminator,
         );
-      }
-      if (materialized.durableRun && (materialized.hookRunCreated || materialized.durableLinkAttached)) {
-        this.publishRealtimeSafely("system", "hooks", {
-          type: "hook_delivery_queued",
-          hookId: hook.hookId,
-          hookRunId: materialized.run.runId,
-          durableRunId: materialized.durableRun.runId,
-          workspaceId,
-          trigger: hook.trigger,
-        });
-      }
-      if (materialized.run.status === "queued" && materialized.run.durableRunId) {
-        this.deps.requestDurableRunProcessing(materialized.run.durableRunId);
-      }
-      return materialized.run;
-    });
+        const materialized = await this.ctx.storage.runImmediateTransaction(
+          async () =>
+            await this.materializeAfterHook({
+              hook,
+              workspaceId,
+              input,
+              idempotencyKey,
+            }),
+        );
+        if (materialized.skippedNow) {
+          await this.publishRealtimeSafely("system", "hooks", {
+            type: "hook_delivery_skipped",
+            hookId: hook.hookId,
+            hookRunId: materialized.run.runId,
+            workspaceId,
+            trigger: hook.trigger,
+            reason: "durable_kernel_disabled",
+          });
+        }
+        if (materialized.durableRunCreated && materialized.durableRun) {
+          await this.publishRealtimeSafely(
+            "system",
+            "durable",
+            {
+              type: "durable_run_created",
+              runId: materialized.durableRun.runId,
+              workflowKey: materialized.durableRun.workflowKey,
+              status: materialized.durableRun.status,
+            },
+            {
+              eventClass: "domain_fact",
+              eventAuthority: "retained_stream",
+              links: { runId: materialized.durableRun.runId },
+            },
+          );
+        }
+        if (materialized.durableRun && (materialized.hookRunCreated || materialized.durableLinkAttached)) {
+          await this.publishRealtimeSafely("system", "hooks", {
+            type: "hook_delivery_queued",
+            hookId: hook.hookId,
+            hookRunId: materialized.run.runId,
+            durableRunId: materialized.durableRun.runId,
+            workspaceId,
+            trigger: hook.trigger,
+          });
+        }
+        if (materialized.run.status === "queued" && materialized.run.durableRunId) {
+          this.deps.requestDurableRunProcessing(materialized.run.durableRunId);
+        }
+        return materialized.run;
+      }),
+    );
   }
 
-  private materializeAfterHook(input: {
+  private async materializeAfterHook(input: {
     hook: HookRecord;
     workspaceId: string;
     input: {
@@ -426,33 +440,34 @@ export class HooksService {
       payload: Record<string, unknown>;
     };
     idempotencyKey: string;
-  }): AfterHookMaterialization {
+  }): Promise<AfterHookMaterialization> {
     const { hook, workspaceId, idempotencyKey } = input;
-    const existing = this.ctx.storage.hookRuns.findByIdempotencyForUpdate(hook.hookId, idempotencyKey);
+    const existing = await this.ctx.storage.hookRuns.findByIdempotencyForUpdate(hook.hookId, idempotencyKey);
     let hookRunCreated = false;
     let run = existing;
     if (!run) {
       try {
-        run = this.ctx.storage.runImmediateTransaction(() =>
-          this.ctx.storage.hookRuns.create({
-            hookId: hook.hookId,
-            workspaceId,
-            trigger: input.input.trigger,
-            entityType: input.input.entityType,
-            entityId: input.input.entityId,
-            mode: hook.mode,
-            status: "queued",
-            idempotencyKey,
-            attemptCount: 0,
-            requestPayload: input.input.payload,
-          }),
+        run = await this.ctx.storage.runImmediateTransaction(
+          async () =>
+            await this.ctx.storage.hookRuns.create({
+              hookId: hook.hookId,
+              workspaceId,
+              trigger: input.input.trigger,
+              entityType: input.input.entityType,
+              entityId: input.input.entityId,
+              mode: hook.mode,
+              status: "queued",
+              idempotencyKey,
+              attemptCount: 0,
+              requestPayload: input.input.payload,
+            }),
         );
         hookRunCreated = true;
       } catch (error) {
         // A second Gateway may win the unique (hook_id, idempotency_key)
         // insert. The nested transaction/savepoint clears PostgreSQL's failed
         // statement state so the owner transaction can lock and adopt it.
-        run = this.ctx.storage.hookRuns.findByIdempotencyForUpdate(hook.hookId, idempotencyKey);
+        run = await this.ctx.storage.hookRuns.findByIdempotencyForUpdate(hook.hookId, idempotencyKey);
         if (!run) {
           throw error;
         }
@@ -468,9 +483,9 @@ export class HooksService {
       idempotencyKey,
     });
 
-    if (!this.ctx.isFeatureEnabled("durableKernelV1Enabled")) {
+    if (!(await this.ctx.isFeatureEnabled("durableKernelV1Enabled"))) {
       if (run.status === "queued" && !run.durableRunId) {
-        run = this.ctx.storage.hookRuns.markOutcome(run.runId, {
+        run = await this.ctx.storage.hookRuns.markOutcome(run.runId, {
           status: "skipped",
           errorText: "durable_kernel_disabled",
           completedAt: new Date().toISOString(),
@@ -484,7 +499,7 @@ export class HooksService {
         };
       }
       const durableRun = run.durableRunId
-        ? this.readAndValidateHookDeliveryRun(run, buildHookDeliveryDurableRunId(run.runId))
+        ? await this.readAndValidateHookDeliveryRun(run, buildHookDeliveryDurableRunId(run.runId))
         : undefined;
       return {
         run,
@@ -513,21 +528,21 @@ export class HooksService {
       );
     }
     const durableInput = buildHookDeliveryDurableRunInput(run, expectedDurableRunId);
-    let durableRun = this.findDurableRun(expectedDurableRunId);
+    let durableRun = await this.findDurableRun(expectedDurableRunId);
     let durableRunCreated = false;
     if (!durableRun) {
-      durableRun = this.deps.createDurableRun(durableInput, {
+      durableRun = await this.deps.createDurableRun(durableInput, {
         publishRealtime: false,
         idempotentIfExists: true,
       });
       durableRunCreated = true;
     }
     assertHookDeliveryDurableRun(durableRun, durableInput);
-    const persistedDurableRun = this.ctx.storage.durableRuns.getRun(expectedDurableRunId);
+    const persistedDurableRun = await this.ctx.storage.durableRuns.getRun(expectedDurableRunId);
     assertHookDeliveryDurableRun(persistedDurableRun, durableInput);
 
     const durableLinkAttached = !run.durableRunId;
-    run = this.ctx.storage.hookRuns.attachDurableRun(run.runId, expectedDurableRunId);
+    run = await this.ctx.storage.hookRuns.attachDurableRun(run.runId, expectedDurableRunId);
     return {
       run,
       durableRun: persistedDurableRun,
@@ -538,9 +553,9 @@ export class HooksService {
     };
   }
 
-  private findDurableRun(runId: string): DurableRunRecord | undefined {
+  private async findDurableRun(runId: string): Promise<DurableRunRecord | undefined> {
     try {
-      return this.ctx.storage.durableRuns.getRun(runId);
+      return await this.ctx.storage.durableRuns.getRun(runId);
     } catch (error) {
       if (error instanceof NotFoundError) {
         return undefined;
@@ -549,13 +564,16 @@ export class HooksService {
     }
   }
 
-  private readAndValidateHookDeliveryRun(run: HookRunRecord, expectedDurableRunId: string): DurableRunRecord {
+  private async readAndValidateHookDeliveryRun(
+    run: HookRunRecord,
+    expectedDurableRunId: string,
+  ): Promise<DurableRunRecord> {
     if (run.durableRunId !== expectedDurableRunId) {
       throw new Error(
         `Hook run ${run.runId} has foreign durable linkage ${run.durableRunId ?? "<missing>"}; expected ${expectedDurableRunId}.`,
       );
     }
-    const durableRun = this.ctx.storage.durableRuns.getRun(expectedDurableRunId);
+    const durableRun = await this.ctx.storage.durableRuns.getRun(expectedDurableRunId);
     assertHookDeliveryDurableRun(durableRun, buildHookDeliveryDurableRunInput(run, expectedDurableRunId));
     return durableRun;
   }
@@ -565,7 +583,7 @@ export class HooksService {
     attemptCount: number,
     options?: { signal?: AbortSignal },
   ): Promise<HookRunRecord> {
-    const run = this.ctx.storage.hookRuns.get(hookRunId);
+    const run = await this.ctx.storage.hookRuns.get(hookRunId);
     if (
       run.status === "completed" ||
       run.status === "blocked" ||
@@ -574,7 +592,7 @@ export class HooksService {
     ) {
       return run;
     }
-    const hook = this.ctx.storage.workspaceHooks.get(run.workspaceId, run.hookId);
+    const hook = await this.ctx.storage.workspaceHooks.get(run.workspaceId, run.hookId);
     const delivered = await this.executeRecordedHookRun(
       hook,
       run.runId,
@@ -588,13 +606,13 @@ export class HooksService {
     return delivered;
   }
 
-  public markHookRunDeadLettered(hookRunId: string, errorText: string): HookRunRecord {
-    const run = this.ctx.storage.hookRuns.markOutcome(hookRunId, {
+  public async markHookRunDeadLettered(hookRunId: string, errorText: string): Promise<HookRunRecord> {
+    const run = await this.ctx.storage.hookRuns.markOutcome(hookRunId, {
       status: "dead_lettered",
       errorText,
       completedAt: new Date().toISOString(),
     });
-    this.publishRealtimeSafely("system", "hooks", {
+    await this.publishRealtimeSafely("system", "hooks", {
       type: "hook_delivery_dead_lettered",
       hookId: run.hookId,
       hookRunId: run.runId,
@@ -615,7 +633,7 @@ export class HooksService {
     throwIfHookExecutionAborted(options?.signal);
     if (this.isCircuitBreakerTripped(hook.hookId)) {
       if (hook.failPolicy === "closed" && hook.mode !== "observe") {
-        this.ctx.storage.hookRuns.markOutcome(hookRunId, {
+        await this.ctx.storage.hookRuns.markOutcome(hookRunId, {
           status: "failed",
           errorText: "circuit_breaker_open_fail_closed",
           completedAt: new Date().toISOString(),
@@ -625,14 +643,14 @@ export class HooksService {
           message: `Hook ${hook.label} circuit breaker is open but fail-closed policy requires enforcement. Manual reset needed.`,
         });
       }
-      return this.ctx.storage.hookRuns.markOutcome(hookRunId, {
+      return await this.ctx.storage.hookRuns.markOutcome(hookRunId, {
         status: "skipped",
         errorText: "circuit_breaker_open",
         completedAt: new Date().toISOString(),
       });
     }
 
-    const current = this.ctx.storage.hookRuns.markAttempt(hookRunId, {
+    const current = await this.ctx.storage.hookRuns.markAttempt(hookRunId, {
       status: "running",
       attemptCount,
       requestPayload: payload,
@@ -647,7 +665,7 @@ export class HooksService {
         ? `${entityExecutionKey}:${current.idempotencyKey ?? current.runId}`
         : entityExecutionKey;
     if (this.activeExecutions.has(executionKey)) {
-      return this.ctx.storage.hookRuns.markOutcome(hookRunId, {
+      return await this.ctx.storage.hookRuns.markOutcome(hookRunId, {
         status: "skipped",
         errorText: "recursion_guard",
         completedAt: new Date().toISOString(),
@@ -661,7 +679,7 @@ export class HooksService {
       const decision = normalizeDecision(response.decision);
       const patchSummary = summarizePatch(response.patch);
       const status = decision?.type === "block" ? "blocked" : "completed";
-      const completed = this.ctx.storage.hookRuns.markOutcome(hookRunId, {
+      const completed = await this.ctx.storage.hookRuns.markOutcome(hookRunId, {
         status,
         decision,
         patchSummary,
@@ -669,22 +687,22 @@ export class HooksService {
         responsePayload: response as Record<string, unknown>,
         completedAt: new Date().toISOString(),
       });
-      this.publishRunRealtime(hook, completed);
-      this.recordCircuitBreakerOutcome(hook.hookId, true);
+      await this.publishRunRealtime(hook, completed);
+      await this.recordCircuitBreakerOutcome(hook.hookId, true);
       return completed;
     } catch (error) {
       if (isHookAbortError(error, options?.signal)) {
         throw error;
       }
       const timedOut = isTimeoutError(error);
-      const failed = this.ctx.storage.hookRuns.markOutcome(hookRunId, {
+      const failed = await this.ctx.storage.hookRuns.markOutcome(hookRunId, {
         status: timedOut ? "timed_out" : "failed",
         errorText: error instanceof Error ? error.message : String(error),
         latencyMs: Math.max(0, Date.now() - startedAt),
         completedAt: new Date().toISOString(),
       });
-      this.publishRunRealtime(hook, failed);
-      this.recordCircuitBreakerOutcome(hook.hookId, false);
+      await this.publishRunRealtime(hook, failed);
+      await this.recordCircuitBreakerOutcome(hook.hookId, false);
       if (hook.failPolicy === "closed" && hook.mode !== "observe") {
         throw new ConflictError({
           code: "STATE_CONFLICT",
@@ -772,8 +790,8 @@ export class HooksService {
     }
   }
 
-  private publishRunRealtime(hook: HookRecord, run: HookRunRecord): void {
-    this.publishRealtimeSafely("system", "hooks", {
+  private async publishRunRealtime(hook: HookRecord, run: HookRunRecord): Promise<void> {
+    await this.publishRealtimeSafely("system", "hooks", {
       type: "hook_run_updated",
       hookId: hook.hookId,
       hookRunId: run.runId,
@@ -785,27 +803,29 @@ export class HooksService {
     });
   }
 
-  private publishRealtimeSafely(
+  private async publishRealtimeSafely(
     eventType: string,
     source: string,
     payload: Record<string, unknown>,
     options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
-  ): void {
+  ): Promise<void> {
     try {
-      this.ctx.publishRealtime(eventType, source, payload, options);
+      await this.ctx.publishRealtime(eventType, source, payload, options);
     } catch {
       // Retained realtime is a projection; it cannot roll back canonical hook state
       // or turn a webhook that already returned success into a replayable failure.
     }
   }
 
-  private assertModeAllowed(workspaceId: string, mode: HookMode): void {
+  private async assertModeAllowed(workspaceId: string, mode: HookMode): Promise<void> {
     if (mode === "observe") {
       return;
     }
-    const workspace = this.ctx.storage.workspaces.get(workspaceId);
+    const workspace = await this.ctx.storage.workspaces.get(workspaceId);
     const runtimeSettings =
-      this.ctx.storage.systemSettings.get<HookRuntimeSettings>(HOOK_RUNTIME_SETTINGS_KEY)?.value ?? {};
+      ((await this.ctx.storage.systemSettings.get(HOOK_RUNTIME_SETTINGS_KEY))?.value as
+        | HookRuntimeSettings
+        | undefined) ?? {};
     const workspaceHooks =
       (workspace.workspacePrefs?.hooks as
         | {

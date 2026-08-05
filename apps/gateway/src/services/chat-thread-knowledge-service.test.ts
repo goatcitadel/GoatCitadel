@@ -339,11 +339,11 @@ describe("chat-thread-knowledge-service", () => {
     });
     const host = createHost(storage);
 
-    const firstRemoval = removeChatThreadKnowledgeAttachment(host, session.sessionId, "knowledge-a");
+    const firstRemoval = await removeChatThreadKnowledgeAttachment(host, session.sessionId, "knowledge-a");
     assert.equal(firstRemoval.deleted, true);
     assert.notEqual(storage.knowledge.getDocument(document.docId), undefined);
 
-    const secondRemoval = removeChatThreadKnowledgeAttachment(host, session.sessionId, "knowledge-b");
+    const secondRemoval = await removeChatThreadKnowledgeAttachment(host, session.sessionId, "knowledge-b");
     assert.equal(secondRemoval.deleted, true);
     assert.equal(storage.knowledge.getDocument(document.docId), undefined);
     assert.equal(storage.knowledge.listChunksByDocument(document.docId).length, 0);

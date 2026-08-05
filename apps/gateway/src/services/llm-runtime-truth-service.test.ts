@@ -43,7 +43,7 @@ describe("LlmRuntimeTruthService", () => {
     expect(record.metrics.energyJoules).toBeUndefined();
   });
 
-  it("reports local engine fit and eval Pareto evidence from stored measurements only", () => {
+  it("reports local engine fit and eval Pareto evidence from stored measurements only", async () => {
     const measurements: LlmRuntimeMeasurementRecord[] = [
       {
         measurementId: "m-fast",
@@ -101,13 +101,13 @@ describe("LlmRuntimeTruthService", () => {
       ],
     });
 
-    expect(service.listLocalEngines().items.find((item) => item.engineKind === "ollama")).toMatchObject({
+    expect((await service.listLocalEngines()).items.find((item) => item.engineKind === "ollama")).toMatchObject({
       configured: true,
       fit: "strong",
       measurementSource: "live",
     });
 
-    const proof = service.runEvalProof({
+    const proof = await service.runEvalProof({
       prompt: "Compare providers",
       candidates: [
         { providerId: "ollama", model: "llama3", qualityScore: 0.8 },
@@ -119,7 +119,7 @@ describe("LlmRuntimeTruthService", () => {
     expect(proof.run.results.find((item) => item.providerId === "remote")?.paretoOptimal).toBe(false);
     expect(proof.run.warnings.join(" ")).toContain("does not call providers");
 
-    const exported = service.exportEvalProofRuns(5);
+    const exported = await service.exportEvalProofRuns(5);
     expect(exported).toMatchObject({
       version: "llm.eval_proof_export.v1",
       format: "json",

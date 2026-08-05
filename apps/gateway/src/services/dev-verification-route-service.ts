@@ -14,7 +14,7 @@ import type {
   WorkspaceRecord,
 } from "@goatcitadel/contracts";
 import { TOOL_EFFECT_CLASSIFICATION_VERSION } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { AcquireLocalEmbeddingLease } from "@goatcitadel/policy-engine";
 import type { GatewayDevDiagnosticsService } from "../dev-diagnostics/service.js";
 import {
@@ -79,15 +79,15 @@ export interface DevVerificationRouteDependencies {
     input: ChatCompletionRequest,
     attribution: ModelUsageAttributionContext,
   ): AsyncGenerator<Record<string, unknown>>;
-  createChatSession(input: ChatSessionCreateInput): ChatSessionRecord;
-  createWorkspace(input: WorkspaceCreateInput): WorkspaceRecord;
+  createChatSession(input: ChatSessionCreateInput): Promise<ChatSessionRecord>;
+  createWorkspace(input: WorkspaceCreateInput): Promise<WorkspaceRecord>;
   getLlmConfig(): LlmRuntimeConfig;
   getProviderSecretStatus(providerId: string): {
     providerId: string;
     hasSecret: boolean;
     source: "none" | "keychain" | "env" | "inline";
   };
-  getRealtimeEventSequenceBounds(): { oldestSequence?: number; newestSequence?: number };
+  getRealtimeEventSequenceBounds(): Promise<{ oldestSequence?: number; newestSequence?: number }>;
   isDevDiagnosticsEnabled(): boolean;
   listDevDiagnostics(
     input?: Parameters<GatewayDevDiagnosticsService["list"]>[0],
@@ -97,7 +97,7 @@ export interface DevVerificationRouteDependencies {
     source: string,
     payload: Record<string, unknown>,
     options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
-  ): RealtimeEvent;
+  ): Promise<RealtimeEvent>;
   reconcileGeneralChatPostCommit(runId: string): Promise<boolean>;
 }
 
@@ -136,19 +136,19 @@ export class DevVerificationRouteService {
    * knowledge rows so the visible Attach source action remains deterministic
    * and never dispatches to the public network.
    */
-  public seedChatAttachmentEvidence(input: DevVerificationChatAttachmentEvidenceInput) {
+  public async seedChatAttachmentEvidence(input: DevVerificationChatAttachmentEvidenceInput) {
     const workspaceId = input.workspaceId.trim();
     const sessionId = input.sessionId.trim();
     const now = input.now ?? new Date().toISOString();
-    const session = this.storage.chatSessionMeta.get(sessionId);
+    const session = await this.storage.chatSessionMeta.get(sessionId);
     if (!session || session.workspaceId !== workspaceId) {
       throw new Error("Verification Chat attachment evidence requires an exact session/workspace match.");
     }
-    const branch = this.storage.chatSessionBranchState.get(sessionId);
+    const branch = await this.storage.chatSessionBranchState.get(sessionId);
     if (!branch) {
       throw new Error(`Verification Chat session ${sessionId} has no active branch.`);
     }
-    const trace = this.storage.chatTurnTraces.get(branch.activeLeafTurnId);
+    const trace = await this.storage.chatTurnTraces.get(branch.activeLeafTurnId);
     if (trace.status !== "completed") {
       throw new Error(`Verification Chat turn ${trace.turnId} must be completed before evidence is attached.`);
     }
@@ -169,13 +169,15 @@ export class DevVerificationRouteService {
       ? trace.citations
       : [...trace.citations, citation];
     if (citations !== trace.citations) {
-      this.storage.chatTurnTraces.patch(trace.turnId, { citations });
+      await this.storage.chatTurnTraces.patch(trace.turnId, { citations });
     }
 
     const toolRunId = `dev-verification-tool-${identity}`;
-    let toolRun = this.storage.chatToolRuns.listByTurn(trace.turnId).find((item) => item.toolRunId === toolRunId);
+    let toolRun = (await this.storage.chatToolRuns.listByTurn(trace.turnId)).find(
+      (item) => item.toolRunId === toolRunId,
+    );
     if (!toolRun) {
-      toolRun = this.storage.chatToolRuns.create({
+      toolRun = await this.storage.chatToolRuns.create({
         toolRunId,
         turnId: trace.turnId,
         sessionId,
@@ -197,17 +199,15 @@ export class DevVerificationRouteService {
       });
     }
 
-    let source = this.storage.chatThreadKnowledgeAttachments
-      .listBySession(sessionId)
-      .find(
-        (item) =>
-          item.sourceType === "url" &&
-          item.sourceRef === DEV_VERIFICATION_CHAT_ATTACHMENT_EVIDENCE.sourceUrl &&
-          item.retrievalMode === "retrieval",
-      );
+    let source = (await this.storage.chatThreadKnowledgeAttachments.listBySession(sessionId)).find(
+      (item) =>
+        item.sourceType === "url" &&
+        item.sourceRef === DEV_VERIFICATION_CHAT_ATTACHMENT_EVIDENCE.sourceUrl &&
+        item.retrievalMode === "retrieval",
+    );
     if (!source) {
       const namespace = `chat-session:${sessionId}:knowledge`;
-      const document = this.storage.knowledge.createDocument(
+      const document = await this.storage.knowledge.createDocument(
         {
           namespace,
           sourceType: "url",
@@ -217,12 +217,12 @@ export class DevVerificationRouteService {
         },
         now,
       );
-      const chunks = this.storage.knowledge.appendChunks(
+      const chunks = await this.storage.knowledge.appendChunks(
         document.docId,
         [{ content: DEV_VERIFICATION_CHAT_ATTACHMENT_EVIDENCE.sourceSnippet }],
         now,
       );
-      source = this.storage.chatThreadKnowledgeAttachments.create({
+      source = await this.storage.chatThreadKnowledgeAttachments.create({
         attachmentId: `dev-verification-url-${identity}`,
         sessionId,
         sourceType: "url",
@@ -256,7 +256,7 @@ export class DevVerificationRouteService {
    * visible approval or user-input prompt is resumable only when its exact turn
    * admission is bound to a waiting `chat.turn.execute` run.
    */
-  public seedDurableChatWait(input: DevVerificationDurableChatWaitInput) {
+  public async seedDurableChatWait(input: DevVerificationDurableChatWaitInput) {
     const runId = randomUUID();
     const assistantMessageId = randomUUID();
     const transportRequest: ChatSendMessageRequest = {
@@ -274,7 +274,7 @@ export class DevVerificationRouteService {
     };
     const request = freezeChatTurnExecutionRequest(transportRequest);
     const requestActor = freezeChatTurnRequestActor(transportRequest);
-    const lifecycle = this.storage.chatSessionLifecycles.ensureActive({
+    const lifecycle = await this.storage.chatSessionLifecycles.ensureActive({
       workspaceId: input.workspaceId,
       sessionId: input.sessionId,
       actorId: requestActor.actorId,
@@ -282,27 +282,29 @@ export class DevVerificationRouteService {
       correlationId: `dev-verification:lifecycle:${input.sessionId}`,
       metadataTimestamp: input.now,
     });
-    const sessionMeta = this.storage.chatSessionMeta.get(input.sessionId);
+    const sessionMeta = await this.storage.chatSessionMeta.get(input.sessionId);
     if (!sessionMeta) {
       throw new Error(`Verification Chat session ${input.sessionId} has no canonical metadata.`);
     }
     const admissionMaterialSha256 = computeFrozenChatTurnAdmissionMaterialSha256(request);
-    const admission = this.storage.sessionMutationAdmissions.admit({
-      workspaceId: input.workspaceId,
-      sessionId: input.sessionId,
-      expectedSessionIncarnationId: lifecycle.intent.sessionIncarnationId,
-      turnId: input.turnId,
-      runtimeOwnerId: `dev-verification:${runId}`,
-      admissionKind: "turn_write",
-      aggregateRevision: sessionMeta.revision,
-      controllerGeneration: lifecycle.generation,
-      actorKind: requestActor.actorKind,
-      actorId: requestActor.actorId,
-      operation: "chat_send",
-      materialSha256: admissionMaterialSha256,
-      idempotencyKey: `dev-verification:admission:${runId}`,
-      correlationId: `dev-verification:${runId}`,
-    }).admission;
+    const admission = (
+      await this.storage.sessionMutationAdmissions.admit({
+        workspaceId: input.workspaceId,
+        sessionId: input.sessionId,
+        expectedSessionIncarnationId: lifecycle.intent.sessionIncarnationId,
+        turnId: input.turnId,
+        runtimeOwnerId: `dev-verification:${runId}`,
+        admissionKind: "turn_write",
+        aggregateRevision: sessionMeta.revision,
+        controllerGeneration: lifecycle.generation,
+        actorKind: requestActor.actorKind,
+        actorId: requestActor.actorId,
+        operation: "chat_send",
+        materialSha256: admissionMaterialSha256,
+        idempotencyKey: `dev-verification:admission:${runId}`,
+        correlationId: `dev-verification:${runId}`,
+      })
+    ).admission;
     const postCommitGenerationId = randomUUID();
     const authority = buildChatTurnRuntimeAuthoritySeal({
       runId,
@@ -330,7 +332,7 @@ export class DevVerificationRouteService {
       ),
       authority,
     );
-    const run = this.storage.durableRuns.createRun({
+    const run = await this.storage.durableRuns.createRun({
       runId,
       workflowKey: "chat.turn.execute",
       status: "waiting",
@@ -358,7 +360,7 @@ export class DevVerificationRouteService {
       startedAt: input.now,
       now: input.now,
     });
-    this.storage.sessionMutationAdmissions.bindDurableRun({
+    await this.storage.sessionMutationAdmissions.bindDurableRun({
       admissionId: admission.admissionId,
       sessionIncarnationId: admission.sessionIncarnationId,
       workspaceId: input.workspaceId,
@@ -370,7 +372,7 @@ export class DevVerificationRouteService {
         leaseRevision: admission.runtimeLeaseRevision!,
       },
     });
-    this.storage.durableRuns.createCheckpoint({
+    await this.storage.durableRuns.createCheckpoint({
       runId: run.runId,
       checkpointKind: "run_waiting",
       state: withChatTurnRuntimeAuthorityCheckpoint(
@@ -402,13 +404,13 @@ export class DevVerificationRouteService {
     return this.deps.listDevDiagnostics(input);
   }
 
-  public publishRealtime(
+  public async publishRealtime(
     eventType: string,
     source: string,
     payload: Record<string, unknown>,
     options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
   ) {
-    return this.deps.publishRealtime(eventType, source, payload, options);
+    return await this.deps.publishRealtime(eventType, source, payload, options);
   }
 
   public async settleDurableChatWait(runId: string): Promise<void> {

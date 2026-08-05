@@ -11,7 +11,7 @@ import type {
 import { invokeIntegrationConnectionAction, type IntegrationActionHost } from "./integration-action-service.js";
 import type { ExternalSideEffectRunStore } from "./external-side-effect-runner-service.js";
 import { approveDryRun, createInMemoryDryRunCommitStore } from "./dry-run-commit-service.js";
-import { Storage } from "@goatcitadel/storage";
+import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 
 function createConnection(overrides: Partial<IntegrationConnection> = {}): IntegrationConnection {
   return {
@@ -1992,15 +1992,16 @@ describe("integration-action-service", () => {
           transcriptsDir: path.join(root, "transcripts"),
           auditDir: path.join(root, "audit"),
         });
+        const asyncStorage = createSqliteAsyncStorage(storage);
         const connection = createConnection({
           workspaceId: "ws-guarded",
           config: { bridgeUrl: "http://127.0.0.1:4040" },
         });
         const localInput = { title: "Approved bridge note", content: "Send once after approval." };
         const { host, store } = dryRunHost(connection, undefined, "integration.productivity.apple-notes.write");
-        host.mutationStore = storage.mutationIdempotency;
-        host.sideEffectRunStore = storage.externalSideEffectRuns;
-        host.storage.runImmediateTransaction = <T>(work: () => T): T => storage.runImmediateTransaction(work);
+        host.mutationStore = asyncStorage.mutationIdempotency;
+        host.sideEffectRunStore = asyncStorage.externalSideEffectRuns;
+        host.storage.runImmediateTransaction = asyncStorage.runImmediateTransaction.bind(asyncStorage);
 
         try {
           const refusal = await invokeIntegrationConnectionAction(host, connection.connectionId, "write", {
@@ -2012,9 +2013,11 @@ describe("integration-action-service", () => {
             blockedReason: "external_side_effect_dry_run_required",
           });
           expect(
-            storage.externalSideEffectRuns.listByConnection(connection.connectionId, {
-              workspaceId: connection.workspaceId,
-            })[0],
+            (
+              await asyncStorage.externalSideEffectRuns.listByConnection(connection.connectionId, {
+                workspaceId: connection.workspaceId,
+              })
+            )[0],
           ).toMatchObject({ status: "idempotency_unavailable", replayAttempt: "blocked" });
 
           approveDryRun(store, dryRunId, {
@@ -2033,12 +2036,14 @@ describe("integration-action-service", () => {
           expect(host.fetchWithDiagnosticsTimeout).toHaveBeenCalledTimes(1);
           expect(store.get(dryRunId)).toMatchObject({ state: "committed" });
           expect(
-            storage.externalSideEffectRuns.listByConnection(connection.connectionId, {
-              workspaceId: connection.workspaceId,
-            })[0],
+            (
+              await asyncStorage.externalSideEffectRuns.listByConnection(connection.connectionId, {
+                workspaceId: connection.workspaceId,
+              })
+            )[0],
           ).toMatchObject({ status: "completed", replayOutcome: "claimed", resumeState: "completed" });
         } finally {
-          storage.close();
+          await asyncStorage.close();
           rmSync(root, { recursive: true, force: true });
         }
       });

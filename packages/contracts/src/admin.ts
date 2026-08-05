@@ -161,5 +161,20 @@ export interface DatabaseHealthSnapshot {
   reachable: boolean;
   migrationVersion?: number;
   latencyMs?: number;
+  storageWait?: {
+    windowMs: number;
+    count: number;
+    slowCount: number;
+    criticalCount: number;
+    p95Ms: number;
+    maxMs: number;
+    latest?: {
+      operationKind: string;
+      transactionPosture: "none" | "active";
+      sessionPosture: "none" | "pinned";
+      outcome: "completed" | "failed" | "timed_out";
+      durationMs: number;
+    };
+  };
   issues: string[];
 }

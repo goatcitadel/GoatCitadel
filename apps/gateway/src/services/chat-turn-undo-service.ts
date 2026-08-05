@@ -5,7 +5,7 @@ import type {
   DevDiagnosticsLevel,
   RealtimeEvent,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { buildSelectedPathTurnIds } from "./chat-thread-utils.js";
 import { assertChatSessionActive } from "./chat-session-utils.js";
 import type { ChatTurnSessionState } from "./chat-turn-prep-service.js";
@@ -30,7 +30,7 @@ export interface ChatTurnUndoDependencies {
     topic: string,
     payload: Record<string, unknown>,
     options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
-  ): void;
+  ): Promise<unknown>;
   recordDevDiagnostic(input: {
     level: DevDiagnosticsLevel;
     category: DevDiagnosticsCategory | string;
@@ -60,7 +60,7 @@ export async function undoChatTurns(
     // write-lease race against a concurrent archive would still mutate the archived
     // session's turns. Mirror the send/prep path, which asserts the session is active via
     // `assertChatSessionActive(...)` (see chat-turn-prep-service.ts) before any write.
-    const sessionMeta = deps.storage.chatSessionMeta.get(sessionId);
+    const sessionMeta = await deps.storage.chatSessionMeta.get(sessionId);
     if (sessionMeta) {
       assertChatSessionActive(sessionId, sessionMeta.lifecycleStatus);
     }
@@ -101,13 +101,13 @@ export async function undoChatTurns(
       ...(trace.assistantMessageId ? [trace.assistantMessageId] : []),
     ]);
     const now = new Date().toISOString();
-    const mutation = deps.storage.runImmediateTransaction(() => {
-      const removedMessageCount = deps.storage.chatMessages.deleteByMessageIds(sessionId, removedMessageIds);
-      const removedTraceCount = deps.storage.chatTurnTraces.deleteByTurnIds(sessionId, removedTurnIds);
+    const mutation = await deps.storage.runImmediateTransaction(async () => {
+      const removedMessageCount = await deps.storage.chatMessages.deleteByMessageIds(sessionId, removedMessageIds);
+      const removedTraceCount = await deps.storage.chatTurnTraces.deleteByTurnIds(sessionId, removedTurnIds);
       if (nextActiveLeafTurnId) {
-        deps.storage.chatSessionBranchState.setActiveLeaf(sessionId, nextActiveLeafTurnId, now);
+        await deps.storage.chatSessionBranchState.setActiveLeaf(sessionId, nextActiveLeafTurnId, now);
       } else {
-        deps.storage.chatSessionBranchState.clear(sessionId);
+        await deps.storage.chatSessionBranchState.clear(sessionId);
       }
       return { removedMessageCount, removedTraceCount };
     });
@@ -129,7 +129,7 @@ export async function undoChatTurns(
         operatorId: options.operatorId,
       },
     });
-    deps.publishRealtime(
+    await deps.publishRealtime(
       "chat_thread_updated",
       "chat",
       {

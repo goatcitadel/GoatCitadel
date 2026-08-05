@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { DURABLE_CHILD_WATCHER_LIMITS } from "@goatcitadel/contracts";
-import { Storage } from "@goatcitadel/storage";
+import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DurableRunService } from "./durable-run-service.js";
 
@@ -23,13 +23,14 @@ function createHarness() {
     transcriptsDir: path.join(root, "transcripts"),
     auditDir: path.join(root, "audit"),
   });
+  const asyncStorage = createSqliteAsyncStorage(storage);
   cleanups.push(() => {
     storage.close();
     fs.rmSync(root, { recursive: true, force: true });
   });
   const publishRealtime = vi.fn();
   const context = {
-    storage,
+    storage: asyncStorage,
     config: { assistant: { durable: { enabled: true } } },
     publishRealtime,
     requireFeatureEnabled: vi.fn(),
@@ -58,27 +59,27 @@ function createHarness() {
 }
 
 describe("DurableRunService child watchers", () => {
-  it("catches historical and live child transitions without waking approval-waiting runs", () => {
+  it("catches historical and live child transitions without waking approval-waiting runs", async () => {
     const { storage, service, publishRealtime } = createHarness();
     const wakeSpy = vi.spyOn(service, "wakeDurableRun");
     const resumeSpy = vi.spyOn(service, "resumeDurableRun");
     const processSpy = vi.spyOn(service, "requestRunProcessing");
-    service.recordDurableTimelineEvent("child-run", "run_started", { phase: "provider" });
+    await service.recordDurableTimelineEvent("child-run", "run_started", { phase: "provider" });
     const parentBefore = storage.durableRuns.getRun("parent-run");
     const childBefore = storage.durableRuns.getRun("child-run");
 
-    const watcher = service.watchDurableChildRun({
+    const watcher = await service.watchDurableChildRun({
       parentRunId: "parent-run",
       childRunId: "child-run",
       source: "chat_delegation",
       metadata: { stepId: "step-1" },
     });
     expect(watcher.lastConsumedSequence).toBe(1);
-    service.recordDurableTimelineEvent("child-run", "run_waiting", { approvalId: "approval-1" });
+    await service.recordDurableTimelineEvent("child-run", "run_waiting", { approvalId: "approval-1" });
 
-    const notices = service
-      .listDurableRunTimeline("parent-run")
-      .filter((event) => event.eventType === "child_state_changed");
+    const notices = (await service.listDurableRunTimeline("parent-run")).filter(
+      (event) => event.eventType === "child_state_changed",
+    );
     expect(notices.map((event) => event.payload?.childEventType)).toEqual(["run_started", "run_waiting"]);
     expect(notices.map((event) => event.sequence)).toEqual([1, 2]);
     expect(storage.durableRuns.getRun("parent-run")).toMatchObject({
@@ -95,24 +96,24 @@ describe("DurableRunService child watchers", () => {
     expect(publishRealtime).not.toHaveBeenCalled();
   });
 
-  it("defers transitions while detached and returns bounded catch-up evidence on reattach", () => {
+  it("defers transitions while detached and returns bounded catch-up evidence on reattach", async () => {
     const { service } = createHarness();
-    const watcher = service.watchDurableChildRun({ parentRunId: "parent-run", childRunId: "child-run" });
-    service.detachDurableChildWatcher(watcher.watcherId);
-    service.recordDurableTimelineEvent("child-run", "run_started");
-    service.recordDurableTimelineEvent("child-run", "run_completed");
-    expect(service.listDurableRunTimeline("parent-run")).toEqual([]);
+    const watcher = await service.watchDurableChildRun({ parentRunId: "parent-run", childRunId: "child-run" });
+    await service.detachDurableChildWatcher(watcher.watcherId);
+    await service.recordDurableTimelineEvent("child-run", "run_started");
+    await service.recordDurableTimelineEvent("child-run", "run_completed");
+    expect(await service.listDurableRunTimeline("parent-run")).toEqual([]);
 
-    const caughtUp = service.reattachDurableChildWatcher(watcher.watcherId);
+    const caughtUp = await service.reattachDurableChildWatcher(watcher.watcherId);
     expect(caughtUp.consumedCount).toBe(2);
     expect(caughtUp.projectedCount).toBe(2);
     expect(caughtUp.hasMore).toBe(false);
     expect(caughtUp.notices.map((notice) => notice.payload?.childEventType)).toEqual(["run_started", "run_completed"]);
   });
 
-  it("rolls back a new watcher and its parent notice when initial catch-up cannot commit its watermark", () => {
+  it("rolls back a new watcher and its parent notice when initial catch-up cannot commit its watermark", async () => {
     const { storage, service } = createHarness();
-    service.recordDurableTimelineEvent("child-run", "run_started", { phase: "provider" });
+    await service.recordDurableTimelineEvent("child-run", "run_started", { phase: "provider" });
     storage.gatewaySql.exec(`
       CREATE TRIGGER fail_initial_child_watcher_watermark
       BEFORE UPDATE OF last_consumed_sequence ON durable_child_watchers
@@ -121,64 +122,64 @@ describe("DurableRunService child watchers", () => {
       END
     `);
 
-    expect(() =>
+    await expect(
       service.watchDurableChildRun({
         parentRunId: "parent-run",
         childRunId: "child-run",
         watcherId: "watcher-atomic-create",
       }),
-    ).toThrow("simulated child watcher watermark failure");
+    ).rejects.toThrow("simulated child watcher watermark failure");
 
     expect(storage.durableChildWatchers.getByPair("parent-run", "child-run")).toBeUndefined();
     expect(storage.durableRunEvents.listByRun("parent-run")).toEqual([]);
   });
 
-  it("fails metadata and lookup bounds before persistence and redacts secret metadata", () => {
+  it("fails metadata and lookup bounds before persistence and redacts secret metadata", async () => {
     const { storage, service } = createHarness();
 
-    expect(() =>
+    await expect(
       service.watchDurableChildRun({
         parentRunId: "parent-run",
         childRunId: "child-run",
         metadata: { value: "x".repeat(DURABLE_CHILD_WATCHER_LIMITS.metadataBytes + 1) },
       }),
-    ).toThrow(/metadata exceeds .* bytes/);
+    ).rejects.toThrow(/metadata exceeds .* bytes/);
     let deep: Record<string, unknown> = { leaf: true };
     for (let depth = 0; depth <= DURABLE_CHILD_WATCHER_LIMITS.metadataMaxDepth; depth += 1) {
       deep = { nested: deep };
     }
-    expect(() =>
+    await expect(
       service.watchDurableChildRun({
         parentRunId: "parent-run",
         childRunId: "child-run",
         metadata: deep,
       }),
-    ).toThrow(/metadata exceeds depth/);
+    ).rejects.toThrow(/metadata exceeds depth/);
     const secretKey = "sk-secret-key-1234567890abcdef1234567890";
-    expect(() =>
+    await expect(
       service.watchDurableChildRun({
         parentRunId: "parent-run",
         childRunId: "child-run",
         metadata: { [secretKey]: "safe" },
       }),
-    ).toThrow(/metadata keys must not contain secret material/);
-    expect(() =>
+    ).rejects.toThrow(/metadata keys must not contain secret material/);
+    await expect(
       service.watchDurableChildRun({
         watcherId: secretKey,
         parentRunId: "parent-run",
         childRunId: "child-run",
       }),
-    ).toThrow(/watcherId must not contain secret material/);
-    expect(() =>
+    ).rejects.toThrow(/watcherId must not contain secret material/);
+    await expect(
       service.watchDurableChildRun({
         parentRunId: "parent-run",
         childRunId: "child-run",
         source: secretKey,
       }),
-    ).toThrow(/source must not contain secret material/);
+    ).rejects.toThrow(/source must not contain secret material/);
     expect(storage.durableChildWatchers.getByPair("parent-run", "child-run")).toBeUndefined();
 
-    const watcher = service.watchDurableChildRun({
+    const watcher = await service.watchDurableChildRun({
       parentRunId: "parent-run",
       childRunId: "child-run",
       metadata: { apiToken: "sk-1234567890abcdef1234567890", note: "safe" },
@@ -190,12 +191,12 @@ describe("DurableRunService child watchers", () => {
       .get<{ metadata_json: string }>(watcher.watcherId);
     expect(persistedMetadata?.metadata_json).not.toContain(secretKey);
 
-    expect(() =>
+    await expect(
       service.detachDurableChildWatcher("w".repeat(DURABLE_CHILD_WATCHER_LIMITS.watcherIdBytes + 1)),
-    ).toThrow(/watcherId exceeds/);
-    expect(() => service.listDurableChildWatchers("r".repeat(DURABLE_CHILD_WATCHER_LIMITS.runIdBytes + 1))).toThrow(
-      /runId exceeds/,
-    );
+    ).rejects.toThrow(/watcherId exceeds/);
+    await expect(
+      service.listDurableChildWatchers("r".repeat(DURABLE_CHILD_WATCHER_LIMITS.runIdBytes + 1)),
+    ).rejects.toThrow(/runId exceeds/);
   });
 
   it("reconciles an attached watcher during durable worker startup", async () => {

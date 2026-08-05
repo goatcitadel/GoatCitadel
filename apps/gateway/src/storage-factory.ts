@@ -1,40 +1,68 @@
 import path from "node:path";
-import { Storage, PostgresSyncDatabaseClient, applyPostgresMigrationsSync } from "@goatcitadel/storage";
+import {
+  Storage,
+  createLocalAsyncStorage,
+  createPostgresRemoteStorage,
+  createPostgresSyncCompatibilityStorage,
+  type AsyncStorage,
+  type PostgresSyncWaitDiagnostic,
+} from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "./config.js";
 import { resolveGatewayPostgresConnectionOptions } from "./postgres-runtime-config.js";
 
-export function createGatewayStorage(config: GatewayRuntimeConfig): Storage {
+export interface CreateGatewayStorageOptions {
+  onPostgresSyncWait?: (diagnostic: PostgresSyncWaitDiagnostic) => void;
+}
+
+const POSTGRES_STARTUP_MIGRATION_WAIT_TIMEOUT_MS = 180_000;
+
+/**
+ * Construct the one Promise-based storage boundary used by every Gateway
+ * runtime. PostgreSQL defaults to the worker-owned remote facade so database
+ * waits cannot block the Gateway event loop. The disabled flag retains one
+ * release of package-owned synchronous compatibility without importing the
+ * sync client into apps/gateway.
+ */
+export function createGatewayStorage(
+  config: GatewayRuntimeConfig,
+  options: CreateGatewayStorageOptions = {},
+): AsyncStorage {
+  const transcriptsDir = path.resolve(config.rootDir, config.assistant.transcriptsDir);
+  const auditDir = path.resolve(config.rootDir, config.assistant.auditDir);
+
   if (config.assistant.database.driver === "postgres") {
-    const db = new PostgresSyncDatabaseClient(
-      resolveGatewayPostgresConnectionOptions(config, {
-        applicationName: "goatcitadel-gateway",
+    const connection = resolveGatewayPostgresConnectionOptions(config, {
+      applicationName: config.assistant.database.postgres.asyncGatewayEnabled
+        ? "goatcitadel-gateway-async"
+        : "goatcitadel-gateway-sync-rollback",
+    });
+    if (config.assistant.database.postgres.asyncGatewayEnabled) {
+      return createPostgresRemoteStorage({
+        connection,
+        migrationsTable: config.assistant.database.postgres.migrationsTable,
+        transcriptsDir,
+        auditDir,
+        startupWaitTimeoutMs: POSTGRES_STARTUP_MIGRATION_WAIT_TIMEOUT_MS,
+      });
+    }
+
+    return createLocalAsyncStorage(
+      createPostgresSyncCompatibilityStorage({
+        connection,
+        migrationsTable: config.assistant.database.postgres.migrationsTable,
+        transcriptsDir,
+        auditDir,
+        onWait: options.onPostgresSyncWait,
       }),
     );
-    try {
-      applyPostgresMigrationsSync(db, {
-        migrationsTable: config.assistant.database.postgres.migrationsTable,
-      });
-      return new Storage({
-        db,
-        transcriptsDir: path.resolve(config.rootDir, config.assistant.transcriptsDir),
-        auditDir: path.resolve(config.rootDir, config.assistant.auditDir),
-      });
-    } catch (error) {
-      try {
-        db.close();
-      } catch (cleanupError) {
-        // Preserve the actionable migration/startup error. PostgresSyncDatabaseClient.close()
-        // retires its worker in a finally block even when the close request itself fails.
-        void cleanupError;
-      }
-      throw error;
-    }
   }
 
-  return new Storage({
-    dbPath: config.dbPath,
-    transcriptsDir: path.resolve(config.rootDir, config.assistant.transcriptsDir),
-    auditDir: path.resolve(config.rootDir, config.assistant.auditDir),
-    tuning: config.assistant.database.sqlite,
-  });
+  return createLocalAsyncStorage(
+    new Storage({
+      dbPath: config.dbPath,
+      transcriptsDir,
+      auditDir,
+      tuning: config.assistant.database.sqlite,
+    }),
+  );
 }

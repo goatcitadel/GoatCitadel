@@ -129,11 +129,11 @@ export async function streamSseReply(
     request.raw.off?.("aborted", cleanup);
   };
   const mutationLifecycle: ChatStreamMutationLifecycle = {
-    commitAlongsideCanonicalWrite: () => {
-      commitMutationIdempotencyAlongsideCanonicalWrite(request);
+    commitAlongsideCanonicalWrite: async () => {
+      await commitMutationIdempotencyAlongsideCanonicalWrite(request);
     },
-    markCommitted: () => {
-      markMutationCommitted(request);
+    markCommitted: async () => {
+      await markMutationCommitted(request);
     },
   };
 

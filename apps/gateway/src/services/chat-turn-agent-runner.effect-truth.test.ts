@@ -149,7 +149,7 @@ function createLegacyEffectTruthExecutor(input: {
 }
 
 describe("Chat tool effect truth", () => {
-  it("never mines injected nested result IDs or a safe-read payload for receipts", () => {
+  it("never mines injected nested result IDs or a safe-read payload for receipts", async () => {
     const owners = canonicalOwners({
       approvalIdempotencyKey: CONTEXT.idempotencyKey,
       externalIdempotencyKey: CONTEXT.idempotencyKey,
@@ -164,21 +164,23 @@ describe("Chat tool effect truth", () => {
 
     // Result bodies are deliberately not an input to the receipt resolver.
     expect(injectedResult.nested.effectId).toBe("approval-valid");
-    expect(collectConcreteToolEffectRefs(owners, [], CONTEXT)).toEqual([]);
+    expect(await collectConcreteToolEffectRefs(owners, [], CONTEXT)).toEqual([]);
   });
 
-  it("rejects a prior same-turn approval receipt without exact idempotency correlation", () => {
+  it("rejects a prior same-turn approval receipt without exact idempotency correlation", async () => {
     const owners = canonicalOwners({ approvalTargetId: CONTEXT.turnId });
-    expect(collectConcreteToolEffectRefs(owners, [receipt("approval_effect", "prior-effect")], CONTEXT)).toEqual([]);
+    expect(await collectConcreteToolEffectRefs(owners, [receipt("approval_effect", "prior-effect")], CONTEXT)).toEqual(
+      [],
+    );
   });
 
-  it("rejects a same-workspace unrelated external effect and a foreign envelope", () => {
+  it("rejects a same-workspace unrelated external effect and a foreign envelope", async () => {
     const owners = canonicalOwners({ externalWorkspaceId: CONTEXT.workspaceId });
     expect(
-      collectConcreteToolEffectRefs(owners, [receipt("external_side_effect", "unrelated-effect")], CONTEXT),
+      await collectConcreteToolEffectRefs(owners, [receipt("external_side_effect", "unrelated-effect")], CONTEXT),
     ).toEqual([]);
     expect(
-      collectConcreteToolEffectRefs(
+      await collectConcreteToolEffectRefs(
         canonicalOwners({ externalIdempotencyKey: CONTEXT.idempotencyKey }),
         [receipt("external_side_effect", "foreign", { toolRunId: "tool-run-foreign" })],
         CONTEXT,
@@ -186,11 +188,11 @@ describe("Chat tool effect truth", () => {
     ).toEqual([]);
   });
 
-  it("accepts only an exact out-of-band envelope plus canonical owner correlation", () => {
+  it("accepts only an exact out-of-band envelope plus canonical owner correlation", async () => {
     const owners = canonicalOwners({ externalIdempotencyKey: CONTEXT.idempotencyKey });
-    expect(collectConcreteToolEffectRefs(owners, [receipt("external_side_effect", "effect-current")], CONTEXT)).toEqual(
-      [{ owner: "external_side_effect", refId: "effect-current" }],
-    );
+    expect(
+      await collectConcreteToolEffectRefs(owners, [receipt("external_side_effect", "effect-current")], CONTEXT),
+    ).toEqual([{ owner: "external_side_effect", refId: "effect-current" }]);
   });
 
   it("does not consult the live catalog for missing, malformed, or absent sealed-profile metadata", () => {

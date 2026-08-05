@@ -566,7 +566,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
             harnesses: probeAgenticHarnessAvailability(buildAgenticHarnessProbeOptions(generatedAt)),
             providers: fastify.services.llm.listLlmProviders(),
             plugins: fastify.services.integrations.listIntegrationPlugins(),
-            channelCatalog: fastify.services.integrations.listIntegrationCatalog("channel"),
+            channelCatalog: await fastify.services.integrations.listIntegrationCatalog("channel"),
             channelConnections: fastify.services.integrations.listIntegrationConnections("channel"),
             a2a: fastify.services.a2a.getStatus({ checkedAt: generatedAt }),
           }),
@@ -677,7 +677,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       const access = readTaskWorkspaceAccess(request);
       const view = parsed.data.view ?? (parsed.data.includeDeleted ? "all" : "active");
-      const items = fastify.services.tasks.listTasks(
+      const items = await fastify.services.tasks.listTasks(
         parsed.data.limit,
         parsed.data.status,
         parsed.data.cursor,

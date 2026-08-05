@@ -1,4 +1,4 @@
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { ToolPolicyEngine } from "@goatcitadel/policy-engine";
 import type { RealtimeEvent } from "@goatcitadel/contracts";
 import type { GatewayRuntimeConfig } from "../config.js";
@@ -24,15 +24,15 @@ export interface ServiceContext {
     source: string,
     payload: Record<string, unknown>,
     options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
-  ): void;
+  ): Promise<unknown>;
 
   /** Throws if the given feature flag is disabled. */
-  requireFeatureEnabled(flag: keyof RuntimeSettings["features"]): void;
+  requireFeatureEnabled(flag: keyof RuntimeSettings["features"]): Promise<void>;
 
   /** Returns whether the given feature flag is enabled. */
-  isFeatureEnabled(flag: keyof RuntimeSettings["features"]): boolean;
+  isFeatureEnabled(flag: keyof RuntimeSettings["features"]): Promise<boolean>;
 
-  /** Returns the raw gateway SQL handle (better-sqlite3 Database). */
+  /** Returns the async Gateway SQL repository for compatibility consumers. */
   readonly gatewaySql: Storage["gatewaySql"];
 
   /** Normalizes an optional workspace id to a safe default. */

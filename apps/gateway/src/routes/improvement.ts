@@ -335,7 +335,7 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.get("/api/v1/improvement/harness-audit", async (_request, reply) => {
-    return reply.send(improvement.getHarnessAuditReport());
+    return reply.send(await improvement.getHarnessAuditReport());
   });
 
   fastify.get("/api/v1/improvement/reports/:reportId", async (request, reply) => {

@@ -57,8 +57,8 @@ export async function dispatchConnectorDelivery(
       source: string,
       payload: Record<string, unknown>,
       options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
-    ) => void;
-    markExternalCallStarted?: () => void;
+    ) => Promise<unknown>;
+    markExternalCallStarted?: () => void | Promise<void>;
     deliveryEffectId?: string;
     signal?: AbortSignal;
   },
@@ -122,7 +122,7 @@ export async function dispatchConnectorDelivery(
         });
       }
       requireConnectorCapability(connector, "interactive_actions", payload.action);
-      return dispatchBrowserRealtime(connector, payload, deps.publishRealtime, deps.markExternalCallStarted);
+      return await dispatchBrowserRealtime(connector, payload, deps.publishRealtime, deps.markExternalCallStarted);
 
     default:
       throw new ValidationError({
@@ -162,7 +162,7 @@ async function dispatchIntegrationChannelAction(
     commsUnsend: (input: ChannelUnsendInput) => Promise<ToolInvokeResult | Record<string, unknown>>;
     commsTyping: (input: ChannelTypingInput) => Promise<ChannelTypingResult | Record<string, unknown>>;
     commsActivity?: (input: ChannelActivityInput) => Promise<ChannelActivityResult | Record<string, unknown>>;
-    markExternalCallStarted?: () => void;
+    markExternalCallStarted?: () => void | Promise<void>;
     deliveryEffectId?: string;
     signal?: AbortSignal;
   },
@@ -180,7 +180,7 @@ async function dispatchIntegrationChannelAction(
     const rawMessage = requireNonEmptyString(actionPayload.message, "payload.message");
     const rawAttachments = normalizeAttachments(actionPayload.attachments);
     const { message, attachments } = applyAsDocumentDirectives(rawMessage, rawAttachments);
-    deps.markExternalCallStarted?.();
+    await deps.markExternalCallStarted?.();
     result = await deps.commsSend({
       connectionId: connector.sourceId,
       target: target ?? requireNonEmptyString(actionPayload.target, "payload.target"),
@@ -197,7 +197,7 @@ async function dispatchIntegrationChannelAction(
     const rawMessage = requireNonEmptyString(actionPayload.message, "payload.message");
     const rawAttachments = normalizeAttachments(actionPayload.attachments);
     const { message, attachments } = applyAsDocumentDirectives(rawMessage, rawAttachments);
-    deps.markExternalCallStarted?.();
+    await deps.markExternalCallStarted?.();
     result = await deps.commsReply({
       connectionId: connector.sourceId,
       target: target ?? requireNonEmptyString(actionPayload.target, "payload.target"),
@@ -214,7 +214,7 @@ async function dispatchIntegrationChannelAction(
     });
   } else if (payload.action === "channel.react") {
     dispatchKind = "integration_channel_action";
-    deps.markExternalCallStarted?.();
+    await deps.markExternalCallStarted?.();
     result = await deps.commsReact({
       connectionId: connector.sourceId,
       target,
@@ -227,7 +227,7 @@ async function dispatchIntegrationChannelAction(
     });
   } else if (payload.action === "channel.typing") {
     dispatchKind = "integration_channel_action";
-    deps.markExternalCallStarted?.();
+    await deps.markExternalCallStarted?.();
     result = await deps.commsTyping({
       connectionId: connector.sourceId,
       target: target ?? requireNonEmptyString(actionPayload.target, "payload.target"),
@@ -241,7 +241,7 @@ async function dispatchIntegrationChannelAction(
       throw new ValidationError({ message: "Connector delivery action channel.activity is not available." });
     }
     dispatchKind = "integration_channel_action";
-    deps.markExternalCallStarted?.();
+    await deps.markExternalCallStarted?.();
     result = await deps.commsActivity({
       connectionId: connector.sourceId,
       target: target ?? requireNonEmptyString(actionPayload.target, "payload.target"),
@@ -256,7 +256,7 @@ async function dispatchIntegrationChannelAction(
     });
   } else {
     dispatchKind = "integration_channel_action";
-    deps.markExternalCallStarted?.();
+    await deps.markExternalCallStarted?.();
     result = await deps.commsUnsend({
       connectionId: connector.sourceId,
       target,
@@ -349,7 +349,7 @@ async function dispatchMcpInvoke(
     | "policyContext"
     | "consentContext"
   >,
-  markExternalCallStarted?: () => void,
+  markExternalCallStarted?: () => void | Promise<void>,
 ): Promise<ConnectorDeliveryDispatchResult> {
   const actionPayload = payload.payload ?? {};
   const toolName = requireNonEmptyString(actionPayload.toolName, "payload.toolName");
@@ -389,7 +389,7 @@ async function dispatchMcpInvoke(
       message: "MCP approval delivery requires workspaceId policy lineage.",
     });
   }
-  markExternalCallStarted?.();
+  await markExternalCallStarted?.();
   const response = await invokeMcpTool(request);
   if (!response.ok) {
     throw new Error(response.error ?? `MCP invoke failed for ${connector.connectorId}/${toolName}.`);
@@ -401,7 +401,7 @@ async function dispatchMcpInvoke(
   };
 }
 
-function dispatchBrowserRealtime(
+async function dispatchBrowserRealtime(
   connector: ConnectorRecord,
   payload: ConnectorDeliveryWorkflowPayload,
   publishRealtime: (
@@ -409,15 +409,15 @@ function dispatchBrowserRealtime(
     source: string,
     payload: Record<string, unknown>,
     options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
-  ) => void,
-  markExternalCallStarted?: () => void,
-): ConnectorDeliveryDispatchResult {
+  ) => Promise<unknown>,
+  markExternalCallStarted?: () => void | Promise<void>,
+): Promise<ConnectorDeliveryDispatchResult> {
   const actionPayload = payload.payload ?? {};
   const eventType = optionalString(actionPayload.eventType) ?? "connector_delivery_browser_event";
   const source = optionalString(actionPayload.source) ?? "connectors";
   const eventPayload = normalizeRecord(actionPayload.payload);
-  markExternalCallStarted?.();
-  publishRealtime(
+  await markExternalCallStarted?.();
+  await publishRealtime(
     eventType,
     source,
     {

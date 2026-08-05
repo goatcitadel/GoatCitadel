@@ -118,8 +118,8 @@ function createStorage(overrides: Record<string, unknown> = {}) {
   return storage;
 }
 
-function project(storage = createStorage()) {
-  return projectDurableBackgroundTaskRail(storage as never, {
+async function project(storage = createStorage()) {
+  return await projectDurableBackgroundTaskRail(storage as never, {
     parentRunId: parent.runId,
     workspaceId: "workspace-a",
     sessionId: "parent-session",
@@ -144,7 +144,7 @@ function signal(index: number, childSequence: number, childEventId: string): Dur
 }
 
 describe("durable background-task projection", () => {
-  it("keeps canonical run state authoritative over duplicate, stale, conflicting, and out-of-order signals", () => {
+  it("keeps canonical run state authoritative over duplicate, stale, conflicting, and out-of-order signals", async () => {
     const events = [
       signal(1, 2, "child-event-2"),
       signal(2, 1, "child-event-1"),
@@ -153,7 +153,7 @@ describe("durable background-task projection", () => {
     ];
     const storage = createStorage({ durableRunEvents: { listByRun: vi.fn(() => events) } });
 
-    const result = project(storage);
+    const result = await project(storage);
 
     expect(result.tasks[0]?.canonicalStatus).toBe("running");
     expect(result.tasks[0]?.signalIntegrity).toMatchObject({
@@ -168,7 +168,7 @@ describe("durable background-task projection", () => {
     expect(result.tasks[0]?.blockers.some((item) => item.kind === "signal_integrity")).toBe(true);
   });
 
-  it("redacts public previews while hashing and counting the exact terminal output bytes", () => {
+  it("redacts public previews while hashing and counting the exact terminal output bytes", async () => {
     const rawOutput = "Evidence with Bearer abcdefghijklmnopqrstuvwxyz and useful details.";
     const completedChild = { ...child, status: "completed" as const, finishedAt: "2026-07-13T00:02:00.000Z" };
     const storage = createStorage({
@@ -246,7 +246,7 @@ describe("durable background-task projection", () => {
       },
     });
 
-    const result = project(storage);
+    const result = await project(storage);
     const output = result.tasks[0]!.output;
 
     expect(output.summary).toContain("[REDACTED]");
@@ -260,7 +260,7 @@ describe("durable background-task projection", () => {
     expect(result.synthesis.lineage[0]).toMatchObject({ sourceId: "step-1", childRunId: "child-run" });
   });
 
-  it("binds synthesis lineage to one exact delegation generation and marks other watched children uncovered", () => {
+  it("binds synthesis lineage to one exact delegation generation and marks other watched children uncovered", async () => {
     const childA = {
       ...child,
       runId: "child-a",
@@ -348,7 +348,7 @@ describe("durable background-task projection", () => {
       chatSessionMeta: { get: vi.fn((sessionId: string) => ({ sessionId, workspaceId: "workspace-a" })) },
     });
 
-    const result = project(storage);
+    const result = await project(storage);
 
     expect(result.synthesis).toMatchObject({
       availability: "partial",
@@ -361,7 +361,7 @@ describe("durable background-task projection", () => {
     expect(result.unknowns.join(" ")).toContain("spans 2 delegation runs");
   });
 
-  it("fails lineage verification when referenced delegation records are missing", () => {
+  it("fails lineage verification when referenced delegation records are missing", async () => {
     const storage = createStorage({
       chatDelegationRuns: {
         get: vi.fn(() => {
@@ -376,13 +376,13 @@ describe("durable background-task projection", () => {
       },
     });
 
-    const result = project(storage);
+    const result = await project(storage);
 
     expect(result.tasks[0]).toMatchObject({ scope: { verified: false }, controls: { cancel: { enabled: false } } });
     expect(result.synthesis).toMatchObject({ lineage: [], uncoveredChildRunIds: ["child-run"] });
   });
 
-  it("degrades a deleted child session and rejects oversized metadata identifiers without leaking links", () => {
+  it("degrades a deleted child session and rejects oversized metadata identifiers without leaking links", async () => {
     const oversizedId = "x".repeat(201);
     const badWatcher = { ...watcher, metadata: { ...watcher.metadata, delegationRunId: oversizedId } };
     const storage = createStorage({
@@ -395,7 +395,7 @@ describe("durable background-task projection", () => {
       },
     });
 
-    const result = project(storage);
+    const result = await project(storage);
     const task = result.tasks[0]!;
 
     expect(task.scope.verified).toBe(false);
@@ -413,7 +413,7 @@ describe("durable background-task projection", () => {
     expect(result.synthesis.lineage).toEqual([]);
   });
 
-  it("degrades missing children and terminal children without concrete output", () => {
+  it("degrades missing children and terminal children without concrete output", async () => {
     const completedChild = { ...child, status: "completed" as const };
     const missingChildStorage = createStorage({
       durableRuns: {
@@ -423,7 +423,7 @@ describe("durable background-task projection", () => {
         }),
       },
     });
-    expect(project(missingChildStorage).tasks[0]).toMatchObject({
+    expect((await project(missingChildStorage)).tasks[0]).toMatchObject({
       canonicalStatus: "missing",
       output: { availability: "missing" },
     });
@@ -465,13 +465,13 @@ describe("durable background-task projection", () => {
       },
       chatMessages: { get: vi.fn(() => undefined) },
     });
-    const missingOutput = project(missingOutputStorage);
+    const missingOutput = await project(missingOutputStorage);
     expect(missingOutput.tasks[0]?.output.availability).toBe("missing");
     expect(missingOutput.tasks[0]?.blockers.some((item) => item.kind === "missing_output")).toBe(true);
     expect(missingOutput.synthesis.missingTerminalChildRunIds).toEqual(["child-run"]);
   });
 
-  it("marks capped watcher and signal reads as incomplete instead of implying completeness", () => {
+  it("marks capped watcher and signal reads as incomplete instead of implying completeness", async () => {
     const watchers = Array.from({ length: 500 }, (_, index) => ({
       ...watcher,
       watcherId: `watcher-${index}`,
@@ -493,7 +493,7 @@ describe("durable background-task projection", () => {
       },
     });
 
-    const result = project(storage);
+    const result = await project(storage);
 
     expect(result.coverage).toEqual({
       watchers: { complete: false, observedCount: 500, limit: 500 },
@@ -505,10 +505,10 @@ describe("durable background-task projection", () => {
     );
   });
 
-  it("normalizes the same persisted inputs deterministically across projection restarts", () => {
+  it("normalizes the same persisted inputs deterministically across projection restarts", async () => {
     const events = [signal(1, 1, "child-event-1")];
     const storage = createStorage({ durableRunEvents: { listByRun: vi.fn(() => events) } });
-    expect(project(storage)).toEqual(project(storage));
+    expect(await project(storage)).toEqual(await project(storage));
   });
 });
 

@@ -12,6 +12,7 @@ import type {
   A2UIProofLaneDraft,
   BrowserProofLaneDraft,
   CronReviewItem,
+  DatabaseHealthSnapshot,
   FollowOnParityReport,
   FollowOnProofLaneArtifactRecord,
   GatewayAuthCredentialPlan,
@@ -343,6 +344,7 @@ export interface DaemonStatusResponse {
 
 export interface HealthSummaryResponse {
   generatedAt: string;
+  database?: DatabaseHealthSnapshot;
   systemVitals: SystemVitalsResponse;
   daemonStatus: DaemonStatusResponse;
   daemonLogs: {

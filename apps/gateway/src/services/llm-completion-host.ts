@@ -17,13 +17,13 @@ export interface LlmCompletionHost {
     LlmService,
     "chatCompletions" | "chatCompletionsStream" | "getRuntimeConfig" | "resolveExecutionApiStyle"
   >;
-  resolveMemoryWorkspaceRelativeDir(workspace: string | undefined, sessionId: string | undefined): string;
-  resolveChatCompletionHookWorkspaceId(request: ChatCompletionRequest): string;
+  resolveMemoryWorkspaceRelativeDir(workspace: string | undefined, sessionId: string | undefined): Promise<string>;
+  resolveChatCompletionHookWorkspaceId(request: ChatCompletionRequest): Promise<string>;
   persistContextManifestForCompletionRequest(input: {
     request: ChatCompletionRequest;
     memoryContext?: MemoryContextPack;
     memoryContextPlacement?: MemoryContextPlacement;
-  }): void;
+  }): Promise<void>;
   recordLlmRuntimeMeasurement?(record: LlmRuntimeMeasurementRecord): void;
   resolveFallbackTargets(
     runtime: ReturnType<LlmService["getRuntimeConfig"]>,
@@ -51,5 +51,5 @@ export interface LlmCompletionHost {
     };
     context?: Record<string, unknown>;
   }): void;
-  publishRealtime(channel: string, topic: string, payload: Record<string, unknown>): void;
+  publishRealtime(channel: string, topic: string, payload: Record<string, unknown>): Promise<unknown>;
 }

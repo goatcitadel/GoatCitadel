@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { hasLiveDataIntent, hasLiveDataKeywords, hasResearchListIntent } from "./live-data-detect.js";
+import {
+  hasExternalResearchIntent,
+  hasLiveDataIntent,
+  hasLiveDataKeywords,
+  hasResearchListIntent,
+} from "./live-data-detect.js";
 
 describe("live data detection", () => {
   it("treats explicit browser tool instructions as web lookup intent", () => {
@@ -55,5 +60,19 @@ describe("live data detection", () => {
         ].join("\n"),
       ),
     ).toBe(true);
+  });
+
+  it("detects explicit external research actions without treating passive research references as web intent", () => {
+    expect(
+      hasExternalResearchIntent(
+        "Please do some research on funny jokes and put together a PowerPoint presentation on it.",
+      ),
+    ).toBe(true);
+    expect(hasExternalResearchIntent("Conduct research into PostgreSQL checkpoint behavior.")).toBe(true);
+    expect(hasExternalResearchIntent("Please research whether the claim is supported by reliable sources.")).toBe(true);
+
+    expect(hasExternalResearchIntent("Summarize my research notes into a presentation.")).toBe(false);
+    expect(hasExternalResearchIntent("The research section is already included below.")).toBe(false);
+    expect(hasExternalResearchIntent("Rewrite this paragraph about research methods.")).toBe(false);
   });
 });

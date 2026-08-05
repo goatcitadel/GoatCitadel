@@ -46,7 +46,7 @@ import type {
   RequestRuntimeLeaseClaim,
   SessionMutationAdmissionRecord,
   PreemptHeartbeatAndAdmitOperatorTurnOutcome,
-  Storage,
+  AsyncStorage as Storage,
 } from "@goatcitadel/storage";
 import type {
   ActiveTurnAdmission,
@@ -443,20 +443,20 @@ export interface ControlEventStreamPage {
 export class SessionControlService {
   public constructor(private readonly storage: SessionControlStorage) {}
 
-  public admitOperatorChatTurn(input: AdmitOperatorChatTurnInput): ActiveTurnAdmission {
+  public async admitOperatorChatTurn(input: AdmitOperatorChatTurnInput): Promise<ActiveTurnAdmission> {
     if (input.authenticatedOperator) {
-      return this.admitAuthenticatedOperatorChatTurn(input, input.authenticatedOperator);
+      return await this.admitAuthenticatedOperatorChatTurn(input, input.authenticatedOperator);
     }
-    return this.admitChatTurn({
+    return await this.admitChatTurn({
       ...input,
       actor: { actorKind: "operator", actorId: input.actorId },
     });
   }
 
-  private admitAuthenticatedOperatorChatTurn(
+  private async admitAuthenticatedOperatorChatTurn(
     input: AdmitOperatorChatTurnInput,
     authenticatedOperator: AuthenticatedOperatorAdmissionContext,
-  ): ActiveTurnAdmission {
+  ): Promise<ActiveTurnAdmission> {
     const actorId = input.actorId.trim();
     if (
       authenticatedOperator.kind !== "authenticated_operator_http" ||
@@ -477,19 +477,19 @@ export class SessionControlService {
     const materialSha256 = computeFrozenChatTurnAdmissionMaterialSha256(admittedRequest);
     let outcome: PreemptHeartbeatAndAdmitOperatorTurnOutcome | undefined;
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const meta = this.storage.chatSessionMeta.get(input.sessionId);
+      const meta = await this.storage.chatSessionMeta.get(input.sessionId);
       if (!meta) {
         throw new NotFoundError({ entity: "Chat session", id: input.sessionId });
       }
-      const observedControl = this.storage.sessionControls.getControl(meta.workspaceId, input.sessionId);
-      const control = this.storage.sessionControls.resolveMutationAuthority({
+      const observedControl = await this.storage.sessionControls.getControl(meta.workspaceId, input.sessionId);
+      const control = await this.storage.sessionControls.resolveMutationAuthority({
         actorKind: "operator",
         workspaceId: meta.workspaceId,
         sessionId: input.sessionId,
         expectedGeneration: observedControl.generation,
       });
       try {
-        outcome = this.storage.sessionMutationAdmissions.preemptHeartbeatAndAdmitOperatorTurn({
+        outcome = await this.storage.sessionMutationAdmissions.preemptHeartbeatAndAdmitOperatorTurn({
           workspaceId: meta.workspaceId,
           sessionId: input.sessionId,
           turnId: input.turnId,
@@ -508,7 +508,7 @@ export class SessionControlService {
         // A restart/concurrent settlement can invalidate the transaction's
         // candidate after it was selected. Re-read canonical active authority
         // and retry once; the repository remains the only preemption owner.
-        const active = this.storage.sessionMutationAdmissions.listActive(meta.workspaceId, input.sessionId);
+        const active = await this.storage.sessionMutationAdmissions.listActive(meta.workspaceId, input.sessionId);
         if (active.length === 1 && !isExactHeartbeatAdmission(active[0]!)) {
           throw new ActiveTurnNotPreemptibleError(active[0]!);
         }
@@ -534,16 +534,16 @@ export class SessionControlService {
     return activeAdmissionFromRecord(outcome.admission, materialSha256, admittedRequest, requestActor, true);
   }
 
-  public admitChatTurn(input: AdmitChatTurnInput): ActiveTurnAdmission {
-    const meta = this.storage.chatSessionMeta.get(input.sessionId);
+  public async admitChatTurn(input: AdmitChatTurnInput): Promise<ActiveTurnAdmission> {
+    const meta = await this.storage.chatSessionMeta.get(input.sessionId);
     if (!meta) {
       throw new NotFoundError({ entity: "Chat session", id: input.sessionId });
     }
-    const observedControl = this.storage.sessionControls.getControl(meta.workspaceId, input.sessionId);
+    const observedControl = await this.storage.sessionControls.getControl(meta.workspaceId, input.sessionId);
     const actor = normalizeChatTurnAdmissionActor(input.actor);
     const control =
       actor.actorKind === "external_companion"
-        ? this.storage.sessionControls.resolveMutationAuthority({
+        ? await this.storage.sessionControls.resolveMutationAuthority({
             actorKind: "external_companion",
             workspaceId: meta.workspaceId,
             sessionId: input.sessionId,
@@ -557,7 +557,7 @@ export class SessionControlService {
             tokenHashSha256: actor.tokenHashSha256,
             requiredCapability: actor.requiredCapability,
           })
-        : this.storage.sessionControls.resolveMutationAuthority({
+        : await this.storage.sessionControls.resolveMutationAuthority({
             // System-owned producers execute under the current operator-owned
             // session generation; their admission actor remains explicitly system.
             actorKind: "operator",
@@ -568,7 +568,7 @@ export class SessionControlService {
     const admittedRequest = freezeChatTurnExecutionRequest(input.request);
     const requestActor = freezeChatTurnRequestActor(input.request, actor);
     const materialSha256 = computeFrozenChatTurnAdmissionMaterialSha256(admittedRequest);
-    const outcome = this.storage.sessionMutationAdmissions.admit({
+    const outcome = await this.storage.sessionMutationAdmissions.admit({
       workspaceId: meta.workspaceId,
       sessionId: input.sessionId,
       turnId: input.turnId,
@@ -587,11 +587,13 @@ export class SessionControlService {
   }
 
   /**
-   * Admit the exact heartbeat callback prepared by the storage claim owner.
-   * This method is deliberately synchronous: cadence consumption, admission,
-   * and occurrence insertion must remain inside one database transaction.
+   * Hydrate the exact heartbeat admission created atomically by the storage
+   * claim owner. The callback-free storage composite keeps cadence,
+   * admission, and occurrence insertion inside one worker-owned transaction.
    */
-  public admitSystemHeartbeatOccurrence(input: AdmitSystemHeartbeatOccurrenceInput): AdmittedSystemHeartbeatOccurrence {
+  public async admitSystemHeartbeatOccurrence(
+    input: AdmitSystemHeartbeatOccurrenceInput,
+  ): Promise<AdmittedSystemHeartbeatOccurrence> {
     const occurrenceRequest = input.occurrenceRequest;
     const admissionInput = occurrenceRequest.admissionInput;
     const admittedRequest = freezeChatTurnExecutionRequest(input.request);
@@ -613,30 +615,42 @@ export class SessionControlService {
     ) {
       throw new ConflictError({ message: "The heartbeat occurrence callback conflicts with its canonical request." });
     }
-    const meta = this.storage.chatSessionMeta.get(admissionInput.sessionId);
+    const meta = await this.storage.chatSessionMeta.get(admissionInput.sessionId);
     if (!meta || meta.workspaceId !== admissionInput.workspaceId) {
       throw new ConflictError({ message: "The heartbeat occurrence callback has no exact Chat session workspace." });
     }
-    const outcome = this.storage.sessionMutationAdmissions.admit(admissionInput);
+    const sessionIncarnationId = admissionInput.expectedSessionIncarnationId;
+    if (!sessionIncarnationId) {
+      throw new ConflictError({ message: "The heartbeat occurrence admission is missing its session incarnation." });
+    }
+    const { expectedSessionIncarnationId: _expectedSessionIncarnationId, ...previewInput } = admissionInput;
+    const preview = await this.storage.sessionMutationAdmissions.previewAdmissionIdentity({
+      ...previewInput,
+      sessionIncarnationId,
+    });
+    const stored = await this.storage.sessionMutationAdmissions.require(preview.admissionId);
+    if (stored.requestSha256 !== preview.requestSha256 || stored.sessionIncarnationId !== sessionIncarnationId) {
+      throw new ConflictError({ message: "The heartbeat occurrence admission identity drifted after its claim." });
+    }
     const admission = activeAdmissionFromRecord(
-      outcome.admission,
+      stored,
       materialSha256,
       admittedRequest,
       requestActor,
       true,
-      freezeSystemHeartbeatOccurrenceAdmission(outcome.admission, {
+      freezeSystemHeartbeatOccurrenceAdmission(stored, {
         occurrenceId: occurrenceRequest.occurrenceId,
         claimSha256: occurrenceRequest.claimSha256,
         durableRunId: occurrenceRequest.child.durableRunId,
       }),
     );
-    return { admission, record: outcome.admission };
+    return { admission, record: stored };
   }
 
   /** Recover only the exact expired pre-bind lease owned by one occurrence. */
-  public recoverSystemHeartbeatOccurrence(
+  public async recoverSystemHeartbeatOccurrence(
     input: RecoverSystemHeartbeatOccurrenceInput,
-  ): RecoverSystemHeartbeatOccurrenceOutcome {
+  ): Promise<RecoverSystemHeartbeatOccurrenceOutcome> {
     const occurrence = input.occurrence;
     const admittedRequest = freezeChatTurnExecutionRequest(input.request);
     const materialSha256 = computeFrozenChatTurnAdmissionMaterialSha256(admittedRequest);
@@ -675,9 +689,9 @@ export class SessionControlService {
     ) {
       throw new ConflictError({ message: "The heartbeat occurrence request identity drifted before recovery." });
     }
-    const stored = this.storage.sessionMutationAdmissions.require(occurrence.admissionId);
+    const stored = await this.storage.sessionMutationAdmissions.require(occurrence.admissionId);
     const outcome: ReclaimExpiredSystemTurnWriteRequestLeaseOutcome =
-      this.storage.sessionMutationAdmissions.reclaimExpiredSystemTurnWriteRequestLease({
+      await this.storage.sessionMutationAdmissions.reclaimExpiredSystemTurnWriteRequestLease({
         admissionId: occurrence.admissionId,
         workspaceId: occurrence.workspaceId,
         sessionId: occurrence.sessionId,
@@ -726,9 +740,9 @@ export class SessionControlService {
     };
   }
 
-  public renewRequestLease(admission: ActiveTurnAdmission): ActiveTurnAdmission {
+  public async renewRequestLease(admission: ActiveTurnAdmission): Promise<ActiveTurnAdmission> {
     const claim = requireRequestClaim(admission);
-    const record = this.storage.sessionMutationAdmissions.renewTurnWriteRequestLease({
+    const record = await this.storage.sessionMutationAdmissions.renewTurnWriteRequestLease({
       ...toStorageIdentity(admission.identity),
       requestRuntimeClaim: claim,
     });
@@ -739,17 +753,17 @@ export class SessionControlService {
     return admission;
   }
 
-  public bindDurableRun(admission: ActiveTurnAdmission, durableRunId: string): void {
+  public async bindDurableRun(admission: ActiveTurnAdmission, durableRunId: string): Promise<void> {
     const requestRuntimeClaim = requireRequestClaim(admission);
     assertAdmissionIdentity(
-      this.storage.sessionMutationAdmissions.require(admission.identity.admissionId),
+      await this.storage.sessionMutationAdmissions.require(admission.identity.admissionId),
       admission.identity,
     );
     assertAdmissionActor(
-      this.storage.sessionMutationAdmissions.require(admission.identity.admissionId),
+      await this.storage.sessionMutationAdmissions.require(admission.identity.admissionId),
       admission.requestActor,
     );
-    this.storage.sessionMutationAdmissions.bindDurableRun({
+    await this.storage.sessionMutationAdmissions.bindDurableRun({
       ...toStorageIdentity(admission.identity),
       durableRunId,
       requestRuntimeClaim,
@@ -757,13 +771,13 @@ export class SessionControlService {
     admission.requestClaim = undefined;
   }
 
-  public assertActiveTurnWrite(admission: ActiveTurnAdmission): SessionMutationAdmissionRecord {
+  public async assertActiveTurnWrite(admission: ActiveTurnAdmission): Promise<SessionMutationAdmissionRecord> {
     const requestRuntimeClaim = admission.requestClaim ? toStorageRequestClaim(admission.requestClaim) : undefined;
     const durableClaim = admission.durableClaim ? toStorageDurableClaim(admission.durableClaim) : undefined;
     if (!requestRuntimeClaim && !durableClaim) {
       throw new ConflictError({ message: "The Chat turn has no active request or durable execution claim." });
     }
-    const outcome = this.storage.sessionMutationAdmissions.assertActiveTurnWrite({
+    const outcome = await this.storage.sessionMutationAdmissions.assertActiveTurnWrite({
       ...toStorageIdentity(admission.identity),
       ...(requestRuntimeClaim ? { requestRuntimeClaim } : {}),
       ...(durableClaim ? { durableClaim } : {}),
@@ -773,7 +787,7 @@ export class SessionControlService {
     return outcome.admission;
   }
 
-  public closeTurnWrite(input: CloseChatTurnAdmissionInput): SessionMutationAdmissionRecord {
+  public async closeTurnWrite(input: CloseChatTurnAdmissionInput): Promise<SessionMutationAdmissionRecord> {
     const requestRuntimeClaim = input.admission.requestClaim
       ? toStorageRequestClaim(input.admission.requestClaim)
       : undefined;
@@ -781,7 +795,7 @@ export class SessionControlService {
     if (!requestRuntimeClaim && !durableClaim) {
       throw new ConflictError({ message: "The Chat turn has no active claim for terminal closure." });
     }
-    const record = this.storage.sessionMutationAdmissions.closeTurnWrite({
+    const record = await this.storage.sessionMutationAdmissions.closeTurnWrite({
       ...toStorageIdentity(input.admission.identity),
       status: input.status,
       actorId: input.actorId,
@@ -794,13 +808,14 @@ export class SessionControlService {
     return record;
   }
 
-  public cancelExpiredUnboundTurnAdmissions(input: {
+  public async cancelExpiredUnboundTurnAdmissions(input: {
     actorId: string;
     idempotencyKeyPrefix: string;
     correlationId: string;
     limit?: number;
-  }): string[] {
-    return this.storage.sessionMutationAdmissions.cancelExpiredUnboundTurnAdmissions(input).cancelledAdmissionIds;
+  }): Promise<string[]> {
+    return (await this.storage.sessionMutationAdmissions.cancelExpiredUnboundTurnAdmissions(input))
+      .cancelledAdmissionIds;
   }
 
   // ---------------------------------------------------------------------------
@@ -819,7 +834,9 @@ export class SessionControlService {
   // is reused unchanged when external send is later wired.
   // ---------------------------------------------------------------------------
 
-  public createExternalRequest(command: CreateExternalSessionControlCommand): SessionControlRequestResponse {
+  public async createExternalRequest(
+    command: CreateExternalSessionControlCommand,
+  ): Promise<SessionControlRequestResponse> {
     const actor = requireExternalCompanionActor(command.actor);
     const capabilities = normalizeCapabilitySet(command.input.capabilities);
     if (command.input.clientInstanceId !== actor.clientInstanceId) {
@@ -828,8 +845,8 @@ export class SessionControlService {
         "The request client instance does not match the authenticated companion.",
       );
     }
-    const { workspaceId } = this.resolveSessionWorkspace(command.sessionId);
-    const outcome = this.storage.sessionControls.createExternalRequest({
+    const { workspaceId } = await this.resolveSessionWorkspace(command.sessionId);
+    const outcome = await this.storage.sessionControls.createExternalRequest({
       workspaceId,
       sessionId: command.sessionId,
       companionSessionId: actor.companionSessionId,
@@ -845,11 +862,11 @@ export class SessionControlService {
     return parseSessionControlRequestResponse({ request: outcome.request });
   }
 
-  public handoff(command: HandoffSessionControlCommand): SessionControlHandoffResponse {
+  public async handoff(command: HandoffSessionControlCommand): Promise<SessionControlHandoffResponse> {
     const actor = requireOperatorControlActor(command.actor);
     const effectiveCapabilities = normalizeCapabilitySet(command.input.effectiveCapabilities);
-    const { workspaceId } = this.resolveSessionWorkspace(command.sessionId);
-    const outcome = this.storage.sessionControls.handoff({
+    const { workspaceId } = await this.resolveSessionWorkspace(command.sessionId);
+    const outcome = await this.storage.sessionControls.handoff({
       workspaceId,
       sessionId: command.sessionId,
       requestId: command.input.requestId,
@@ -862,11 +879,11 @@ export class SessionControlService {
     return parseSessionControlHandoffResponse({ request: outcome.request, control: outcome.control });
   }
 
-  public heartbeat(command: HeartbeatSessionControlCommand): SessionControlHeartbeatResponse {
+  public async heartbeat(command: HeartbeatSessionControlCommand): Promise<SessionControlHeartbeatResponse> {
     const actor = requireExternalCompanionActor(command.actor);
     const tokenHashSha256 = normalizePresentedControlToken(command.presentedTokenHashSha256);
-    const { workspaceId } = this.resolveSessionWorkspace(command.sessionId);
-    const outcome = this.storage.sessionControls.heartbeat({
+    const { workspaceId } = await this.resolveSessionWorkspace(command.sessionId);
+    const outcome = await this.storage.sessionControls.heartbeat({
       workspaceId,
       sessionId: command.sessionId,
       companionSessionId: actor.companionSessionId,
@@ -881,11 +898,11 @@ export class SessionControlService {
     return parseSessionControlHeartbeatResponse({ generation: outcome.control.generation, control: outcome.control });
   }
 
-  public reconnect(command: ReconnectSessionControlCommand): SessionControlReconnectResponse {
+  public async reconnect(command: ReconnectSessionControlCommand): Promise<SessionControlReconnectResponse> {
     const actor = requireExternalCompanionActor(command.actor);
     const tokenHashSha256 = normalizePresentedControlToken(command.presentedTokenHashSha256);
-    const { workspaceId } = this.resolveSessionWorkspace(command.sessionId);
-    const outcome = this.storage.sessionControls.reconnect({
+    const { workspaceId } = await this.resolveSessionWorkspace(command.sessionId);
+    const outcome = await this.storage.sessionControls.reconnect({
       workspaceId,
       sessionId: command.sessionId,
       companionSessionId: actor.companionSessionId,
@@ -904,11 +921,11 @@ export class SessionControlService {
     });
   }
 
-  public release(command: ReleaseSessionControlCommand): SessionControlReleaseResponse {
+  public async release(command: ReleaseSessionControlCommand): Promise<SessionControlReleaseResponse> {
     const actor = requireExternalCompanionActor(command.actor);
     const tokenHashSha256 = normalizePresentedControlToken(command.presentedTokenHashSha256);
-    const { workspaceId } = this.resolveSessionWorkspace(command.sessionId);
-    const outcome = this.storage.sessionControls.release({
+    const { workspaceId } = await this.resolveSessionWorkspace(command.sessionId);
+    const outcome = await this.storage.sessionControls.release({
       workspaceId,
       sessionId: command.sessionId,
       companionSessionId: actor.companionSessionId,
@@ -926,11 +943,11 @@ export class SessionControlService {
     });
   }
 
-  public revoke(command: RevokeSessionControlCommand): SessionControlRevokeResponse {
+  public async revoke(command: RevokeSessionControlCommand): Promise<SessionControlRevokeResponse> {
     const actor = requireOperatorControlActor(command.actor);
-    const { workspaceId } = this.resolveSessionWorkspace(command.sessionId);
+    const { workspaceId } = await this.resolveSessionWorkspace(command.sessionId);
     if (command.input.target === "request") {
-      const outcome = this.storage.sessionControls.cancelExternalRequest({
+      const outcome = await this.storage.sessionControls.cancelExternalRequest({
         workspaceId,
         sessionId: command.sessionId,
         requestId: command.input.requestId,
@@ -940,7 +957,7 @@ export class SessionControlService {
       });
       return parseSessionControlRevokeResponse({ target: "request", request: outcome.request });
     }
-    const outcome = this.storage.sessionControls.revoke({
+    const outcome = await this.storage.sessionControls.revoke({
       workspaceId,
       sessionId: command.sessionId,
       expectedGeneration: command.input.expectedGeneration,
@@ -957,10 +974,12 @@ export class SessionControlService {
     });
   }
 
-  public cancelExternalRequest(command: CancelExternalSessionControlRequestCommand): SessionControlRequestRecord {
+  public async cancelExternalRequest(
+    command: CancelExternalSessionControlRequestCommand,
+  ): Promise<SessionControlRequestRecord> {
     const actor = requireOperatorControlActor(command.actor);
-    const { workspaceId } = this.resolveSessionWorkspace(command.sessionId);
-    const outcome = this.storage.sessionControls.cancelExternalRequest({
+    const { workspaceId } = await this.resolveSessionWorkspace(command.sessionId);
+    const outcome = await this.storage.sessionControls.cancelExternalRequest({
       workspaceId,
       sessionId: command.sessionId,
       requestId: command.requestId,
@@ -971,25 +990,25 @@ export class SessionControlService {
     return outcome.request;
   }
 
-  public getControl(query: ReadSessionControlQuery): SessionControlRecord {
+  public async getControl(query: ReadSessionControlQuery): Promise<SessionControlRecord> {
     // Purpose gate first: an unauthorized/wrong-purpose companion must be
     // rejected before any session-existence-revealing read so it cannot use a
     // guessed global sessionId as an existence oracle. Operators bypass the gate.
     const companion = query.actor.actorKind === "operator" ? undefined : requireExternalCompanionActor(query.actor);
-    const { workspaceId } = this.resolveSessionWorkspace(query.sessionId);
-    const control = this.storage.sessionControls.getControl(workspaceId, query.sessionId);
+    const { workspaceId } = await this.resolveSessionWorkspace(query.sessionId);
+    const control = await this.storage.sessionControls.getControl(workspaceId, query.sessionId);
     if (!companion) return control;
     if (!isCompanionBoundController(control, companion)) {
-      this.requireCompanionPendingRequest(workspaceId, query.sessionId, companion);
+      await this.requireCompanionPendingRequest(workspaceId, query.sessionId, companion);
     }
     return control;
   }
 
-  public getDetail(query: ReadSessionControlQuery): SessionControlDetailResponse {
+  public async getDetail(query: ReadSessionControlQuery): Promise<SessionControlDetailResponse> {
     // Purpose gate first (see getControl): reject before resolving session state.
     const companion = query.actor.actorKind === "operator" ? undefined : requireExternalCompanionActor(query.actor);
-    const { workspaceId } = this.resolveSessionWorkspace(query.sessionId);
-    const detail = this.storage.sessionControls.getDetail(workspaceId, query.sessionId);
+    const { workspaceId } = await this.resolveSessionWorkspace(query.sessionId);
+    const detail = await this.storage.sessionControls.getDetail(workspaceId, query.sessionId);
     if (!companion) return detail;
     if (isCompanionBoundController(detail.control, companion)) return detail;
     const ownPending =
@@ -1006,9 +1025,9 @@ export class SessionControlService {
     return parseSessionControlDetailResponse({ control: detail.control, pendingRequests: ownPending });
   }
 
-  public listControls(query: ListSessionControlsQuery): SessionControlListResponse {
+  public async listControls(query: ListSessionControlsQuery): Promise<SessionControlListResponse> {
     requireOperatorControlActor(query.actor);
-    return this.storage.sessionControls.listControls(query.workspaceId, query.limit);
+    return await this.storage.sessionControls.listControls(query.workspaceId, query.limit);
   }
 
   /**
@@ -1023,12 +1042,12 @@ export class SessionControlService {
    * wrong-companion binding, send-only capability, and non-external-controller
    * ownership — fails closed with `SESSION_CONTROL_CAPABILITY_DENIED`.
    */
-  public authorizeExternalSessionRead(query: ReadSessionControlQuery): void {
+  public async authorizeExternalSessionRead(query: ReadSessionControlQuery): Promise<void> {
     // Purpose gate first (see getControl): reject before resolving session state.
     if (query.actor.actorKind === "operator") return;
     const companion = requireExternalCompanionActor(query.actor);
-    const { workspaceId } = this.resolveSessionWorkspace(query.sessionId);
-    const control = this.storage.sessionControls.getControl(workspaceId, query.sessionId);
+    const { workspaceId } = await this.resolveSessionWorkspace(query.sessionId);
+    const control = await this.storage.sessionControls.getControl(workspaceId, query.sessionId);
     const hasReadCapability =
       control.ownerKind === "external_companion" && control.capabilities.some((capability) => capability === "read");
     if (!isCompanionBoundController(control, companion) || !hasReadCapability) {
@@ -1036,10 +1055,10 @@ export class SessionControlService {
     }
   }
 
-  public listEvents(query: ListSessionControlEventsQuery): SessionControlEventRecord[] {
-    this.authorizeExternalSessionRead({ actor: query.actor, sessionId: query.sessionId });
-    const { workspaceId } = this.resolveSessionWorkspace(query.sessionId);
-    return this.storage.sessionControls.listEvents(
+  public async listEvents(query: ListSessionControlEventsQuery): Promise<SessionControlEventRecord[]> {
+    await this.authorizeExternalSessionRead({ actor: query.actor, sessionId: query.sessionId });
+    const { workspaceId } = await this.resolveSessionWorkspace(query.sessionId);
+    return await this.storage.sessionControls.listEvents(
       workspaceId,
       query.sessionId,
       query.limit === undefined ? {} : { limit: query.limit },
@@ -1061,17 +1080,22 @@ export class SessionControlService {
    * projection as `listEvents` — no approval action token, message text, prompt,
    * or token material can appear because the control-event table stores none.
    */
-  public pageControlEventStream(query: ControlEventStreamPageQuery): ControlEventStreamPage {
-    this.authorizeExternalSessionRead({ actor: query.actor, sessionId: query.sessionId });
-    const { workspaceId } = this.resolveSessionWorkspace(query.sessionId);
-    const control = this.storage.sessionControls.getControl(workspaceId, query.sessionId);
-    const bounds = this.storage.sessionControls.getEventSequenceBounds(workspaceId, query.sessionId);
+  public async pageControlEventStream(query: ControlEventStreamPageQuery): Promise<ControlEventStreamPage> {
+    await this.authorizeExternalSessionRead({ actor: query.actor, sessionId: query.sessionId });
+    const { workspaceId } = await this.resolveSessionWorkspace(query.sessionId);
+    const control = await this.storage.sessionControls.getControl(workspaceId, query.sessionId);
+    const bounds = await this.storage.sessionControls.getEventSequenceBounds(workspaceId, query.sessionId);
     const afterCursor = Number.isFinite(query.afterCursor) ? Math.max(0, Math.trunc(query.afterCursor as number)) : 0;
     const requestedLimit = Number.isFinite(query.limit)
       ? Math.trunc(query.limit as number)
       : SESSION_CONTROL_MAX_LIST_ITEMS;
     const limit = Math.min(SESSION_CONTROL_MAX_LIST_ITEMS, Math.max(1, requestedLimit));
-    const rows = this.storage.sessionControls.listEventsAfterSequence(workspaceId, query.sessionId, afterCursor, limit);
+    const rows = await this.storage.sessionControls.listEventsAfterSequence(
+      workspaceId,
+      query.sessionId,
+      afterCursor,
+      limit,
+    );
     const events: ControlEventStreamEnvelope[] = rows.map((row) => ({ cursor: row.sequence, event: row.event }));
     const lastCursor = events.length > 0 ? events[events.length - 1]!.cursor : afterCursor;
     return {
@@ -1086,20 +1110,20 @@ export class SessionControlService {
     };
   }
 
-  private resolveSessionWorkspace(sessionId: string): { workspaceId: string } {
-    const meta = this.storage.chatSessionMeta.get(sessionId);
+  private async resolveSessionWorkspace(sessionId: string): Promise<{ workspaceId: string }> {
+    const meta = await this.storage.chatSessionMeta.get(sessionId);
     if (!meta) {
       throw new NotFoundError({ entity: "Chat session", id: sessionId });
     }
     return { workspaceId: meta.workspaceId };
   }
 
-  private requireCompanionPendingRequest(
+  private async requireCompanionPendingRequest(
     workspaceId: string,
     sessionId: string,
     actor: SessionControlExternalCompanionActor,
-  ): void {
-    const detail = this.storage.sessionControls.getDetail(workspaceId, sessionId);
+  ): Promise<void> {
+    const detail = await this.storage.sessionControls.getDetail(workspaceId, sessionId);
     const hasPending =
       detail.control.ownerKind === "operator" &&
       detail.pendingRequests.some(

@@ -7,6 +7,7 @@ import {
   type MemoryChangeEvent,
   type MemoryItemRecord,
 } from "@goatcitadel/contracts";
+import type { AsyncGatewaySqlRepository } from "@goatcitadel/storage";
 
 export const MEMORY_LIFECYCLE_APPROVAL_BINDING_VERSION = "goatcitadel.memory-lifecycle-approval.v1" as const;
 export const MEMORY_LIFECYCLE_REQUEST_VERSION = "goatcitadel.memory-lifecycle-request.v1" as const;
@@ -46,13 +47,7 @@ export interface ApprovedMemoryMutationAuthority {
   correctionActionId?: string;
 }
 
-export interface MemoryJourneySql {
-  readonly dialect: "sqlite" | "postgres";
-  prepare(sql: string): {
-    get(...args: unknown[]): unknown;
-    run(...args: unknown[]): unknown;
-  };
-}
+export type MemoryJourneySql = AsyncGatewaySqlRepository;
 
 interface ApprovalRow {
   approval_id: string;
@@ -150,7 +145,7 @@ export function buildMemoryLifecycleApprovalBinding(input: {
 }
 
 /** Resolve and lock the real approval from canonical storage inside the owning transaction. */
-export function resolveApprovedMemoryMutation(
+export async function resolveApprovedMemoryMutation(
   sql: MemoryJourneySql,
   input: {
     context: ApprovedMemoryMutationContext;
@@ -161,18 +156,18 @@ export function resolveApprovedMemoryMutation(
     action: MemoryJourneyApprovalAction;
     requestSha256: string;
   },
-): ApprovedMemoryMutationAuthority {
+): Promise<ApprovedMemoryMutationAuthority> {
   const approvalId = requireCanonicalId(input.context.approvalId, "approval ID");
   const workspaceId = requireCanonicalId(input.workspaceId, "workspace ID");
   const actorId = requireCanonicalId(input.actorId, "actor ID");
   const lockClause = sql.dialect === "postgres" ? " FOR UPDATE" : "";
-  const row = sql
+  const row = (await sql
     .prepare(
       `SELECT approval_id, kind, status, linkage_json, payload_json, expires_at, resolved_at, resolved_by
        FROM approvals
        WHERE approval_id = @approvalId${lockClause}`,
     )
-    .get({ approvalId }) as ApprovalRow | undefined;
+    .get({ approvalId })) as ApprovalRow | undefined;
   if (!row) failAuthority();
 
   const linkage = parseRecord(row.linkage_json);

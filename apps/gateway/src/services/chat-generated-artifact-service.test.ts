@@ -4,18 +4,20 @@ import path from "node:path";
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
 import type { ChatSessionRecord } from "@goatcitadel/contracts";
-import { Storage } from "@goatcitadel/storage";
+import { createSqliteAsyncStorage, Storage, type AsyncStorage } from "@goatcitadel/storage";
 import { createChatGeneratedArtifactFromTurn, getChatGeneratedArtifact } from "./chat-generated-artifact-service.js";
 
-async function createStorage(): Promise<{ storage: Storage; rootDir: string }> {
+async function createStorage(): Promise<{ storage: Storage; asyncStorage: AsyncStorage; rootDir: string }> {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-generated-artifacts-"));
+  const storage = new Storage({
+    dbPath: path.join(rootDir, "runtime.sqlite"),
+    transcriptsDir: path.join(rootDir, "transcripts"),
+    auditDir: path.join(rootDir, "audit"),
+  });
   return {
     rootDir,
-    storage: new Storage({
-      dbPath: path.join(rootDir, "runtime.sqlite"),
-      transcriptsDir: path.join(rootDir, "transcripts"),
-      auditDir: path.join(rootDir, "audit"),
-    }),
+    storage,
+    asyncStorage: createSqliteAsyncStorage(storage),
   };
 }
 
@@ -138,22 +140,22 @@ describe("chat-generated-artifact-service", () => {
   });
 
   it("returns the existing artifact for repeated non-superseding creates on the same turn", async () => {
-    const { storage, rootDir } = await createStorage();
+    const { storage, asyncStorage, rootDir } = await createStorage();
     roots.push(rootDir);
     storages.push(storage);
     const session = seedSession(storage, "sess-1");
     seedAssistantTurn(storage, session.sessionId, "turn-1", "```ts\nexport const answer = 42;\n```");
 
     const host = {
-      storage,
-      requireChatSession: () => session,
+      storage: asyncStorage,
+      requireChatSession: async () => session,
     };
 
-    const first = createChatGeneratedArtifactFromTurn(host, {
+    const first = await createChatGeneratedArtifactFromTurn(host, {
       sessionId: session.sessionId,
       turnId: "turn-1",
     });
-    const second = createChatGeneratedArtifactFromTurn(host, {
+    const second = await createChatGeneratedArtifactFromTurn(host, {
       sessionId: session.sessionId,
       turnId: "turn-1",
     });
@@ -163,7 +165,7 @@ describe("chat-generated-artifact-service", () => {
   });
 
   it("persists artifact provenance metadata and supersede lineage", async () => {
-    const { storage, rootDir } = await createStorage();
+    const { storage, asyncStorage, rootDir } = await createStorage();
     roots.push(rootDir);
     storages.push(storage);
     const session = seedSession(storage, "sess-2", "default", "chat", "project-2");
@@ -175,21 +177,23 @@ describe("chat-generated-artifact-service", () => {
     );
 
     const host = {
-      storage,
-      requireChatSession: () => session,
+      storage: asyncStorage,
+      requireChatSession: async () => session,
     };
 
-    const initial = createChatGeneratedArtifactFromTurn(host, {
+    const initial = await createChatGeneratedArtifactFromTurn(host, {
       sessionId: session.sessionId,
       turnId: "turn-2",
     });
-    const superseded = createChatGeneratedArtifactFromTurn(host, {
+    const superseded = await createChatGeneratedArtifactFromTurn(host, {
       sessionId: session.sessionId,
       turnId: "turn-2",
       supersedeLatest: true,
     });
 
-    const hydrated = getChatGeneratedArtifact(host, superseded.artifactId, { workspaceId: session.workspaceId });
+    const hydrated = await getChatGeneratedArtifact(host, superseded.artifactId, {
+      workspaceId: session.workspaceId,
+    });
 
     assert.equal(initial.sourceBlockIndex, 0);
     assert.equal(initial.projectId, "project-2");
@@ -201,50 +205,50 @@ describe("chat-generated-artifact-service", () => {
   });
 
   it("rejects artifact reads when the requested workspace does not own the session", async () => {
-    const { storage, rootDir } = await createStorage();
+    const { storage, asyncStorage, rootDir } = await createStorage();
     roots.push(rootDir);
     storages.push(storage);
     const session = seedSession(storage, "sess-workspace-check", "workspace-a");
     seedAssistantTurn(storage, session.sessionId, "turn-workspace-check", "```ts\nexport const answer = 42;\n```");
 
     const host = {
-      storage,
-      requireChatSession: () => session,
+      storage: asyncStorage,
+      requireChatSession: async () => session,
     };
 
-    const artifact = createChatGeneratedArtifactFromTurn(host, {
+    const artifact = await createChatGeneratedArtifactFromTurn(host, {
       sessionId: session.sessionId,
       turnId: "turn-workspace-check",
     });
 
-    assert.throws(
-      () => getChatGeneratedArtifact(host, artifact.artifactId, { workspaceId: "workspace-b" }),
+    await assert.rejects(
+      getChatGeneratedArtifact(host, artifact.artifactId, { workspaceId: "workspace-b" }),
       /Artifact does not belong to the requested workspace/,
     );
   });
 
   it("returns the same superseded artifact for repeated identical new-version requests", async () => {
-    const { storage, rootDir } = await createStorage();
+    const { storage, asyncStorage, rootDir } = await createStorage();
     roots.push(rootDir);
     storages.push(storage);
     const session = seedSession(storage, "sess-3");
     seedAssistantTurn(storage, session.sessionId, "turn-3", "```ts\nexport const answer = 42;\n```");
 
     const host = {
-      storage,
-      requireChatSession: () => session,
+      storage: asyncStorage,
+      requireChatSession: async () => session,
     };
 
-    const initial = createChatGeneratedArtifactFromTurn(host, {
+    const initial = await createChatGeneratedArtifactFromTurn(host, {
       sessionId: session.sessionId,
       turnId: "turn-3",
     });
-    const firstSupersede = createChatGeneratedArtifactFromTurn(host, {
+    const firstSupersede = await createChatGeneratedArtifactFromTurn(host, {
       sessionId: session.sessionId,
       turnId: "turn-3",
       supersedeLatest: true,
     });
-    const secondSupersede = createChatGeneratedArtifactFromTurn(host, {
+    const secondSupersede = await createChatGeneratedArtifactFromTurn(host, {
       sessionId: session.sessionId,
       turnId: "turn-3",
       supersedeLatest: true,
@@ -256,18 +260,18 @@ describe("chat-generated-artifact-service", () => {
   });
 
   it("collapses concurrent supersede requests that observe the same parent artifact", async () => {
-    const { storage, rootDir } = await createStorage();
+    const { storage, asyncStorage, rootDir } = await createStorage();
     roots.push(rootDir);
     storages.push(storage);
     const session = seedSession(storage, "sess-4");
     seedAssistantTurn(storage, session.sessionId, "turn-4", "```ts\nexport const answer = 42;\n```");
 
     const host = {
-      storage,
-      requireChatSession: () => session,
+      storage: asyncStorage,
+      requireChatSession: async () => session,
     };
 
-    const initial = createChatGeneratedArtifactFromTurn(host, {
+    const initial = await createChatGeneratedArtifactFromTurn(host, {
       sessionId: session.sessionId,
       turnId: "turn-4",
     });
@@ -299,7 +303,7 @@ describe("chat-generated-artifact-service", () => {
     }
   });
 
-  it("rethrows when a post-collision artifact does not match the requested create identity", () => {
+  it("rethrows when a post-collision artifact does not match the requested create identity", async () => {
     const expectedError = new Error("insert failed");
     const session = {
       sessionId: "sess-mismatch",
@@ -318,10 +322,10 @@ describe("chat-generated-artifact-service", () => {
     } satisfies ChatSessionRecord;
 
     const host = {
-      requireChatSession: () => session,
+      requireChatSession: async () => session,
       storage: {
         chatTurnTraces: {
-          get: () => ({
+          get: async () => ({
             turnId: "turn-mismatch",
             sessionId: session.sessionId,
             userMessageId: "user-turn-mismatch",
@@ -344,18 +348,18 @@ describe("chat-generated-artifact-service", () => {
           }),
         },
         gatewaySql: {
-          prepare: () => ({
-            get: () => ({
+          prepare: async () => ({
+            get: async () => ({
               content: "```ts\nexport const answer = 42;\n```",
             }),
           }),
         },
         chatGeneratedArtifacts: {
-          listByTurn: () => [],
-          create: () => {
+          listByTurn: async () => [],
+          create: async () => {
             throw expectedError;
           },
-          get: () => ({
+          get: async () => ({
             artifactId: "gart-mismatch",
             sessionId: session.sessionId,
             workspaceId: "default",
@@ -376,12 +380,11 @@ describe("chat-generated-artifact-service", () => {
       },
     };
 
-    assert.throws(
-      () =>
-        createChatGeneratedArtifactFromTurn(host as Parameters<typeof createChatGeneratedArtifactFromTurn>[0], {
-          sessionId: session.sessionId,
-          turnId: "turn-mismatch",
-        }),
+    await assert.rejects(
+      createChatGeneratedArtifactFromTurn(host as Parameters<typeof createChatGeneratedArtifactFromTurn>[0], {
+        sessionId: session.sessionId,
+        turnId: "turn-mismatch",
+      }),
       expectedError,
     );
   });

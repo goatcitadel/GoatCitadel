@@ -31,7 +31,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { CHAT_TURN_ACTIVE_STATUSES, isChatTurnTerminalStatus, NotFoundError } from "@goatcitadel/contracts";
 import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { TurnRuntime } from "@goatcitadel/orchestration";
 import type {
   OrchestrationExecutionResult,
@@ -166,7 +166,7 @@ export interface ChatTurnStreamHost
     };
     context?: Record<string, unknown>;
   }): void;
-  recordRuntimeDecision?(input: RuntimeDecisionTraceAppendInput): void;
+  recordRuntimeDecision?(input: RuntimeDecisionTraceAppendInput): Promise<void>;
   buildChatOrchestrationSummary(input: {
     runId: string;
     objective: string;
@@ -178,15 +178,15 @@ export interface ChatTurnStreamHost
     finalized?: boolean;
     advisoryOnly?: boolean;
   }): NonNullable<ChatTurnTraceRecord["orchestration"]>;
-  createChatSession(input: ChatSessionCreateInput): ChatSessionRecord;
-  inheritDelegatedSessionToolGrants(sessionId: string, delegatedSessionId: string): void;
-  updateChatSessionPrefs(sessionId: string, input: ChatSessionPrefsPatch): unknown;
+  createChatSession(input: ChatSessionCreateInput): Promise<ChatSessionRecord>;
+  inheritDelegatedSessionToolGrants(sessionId: string, delegatedSessionId: string): Promise<void>;
+  updateChatSessionPrefs(sessionId: string, input: ChatSessionPrefsPatch): Promise<unknown>;
   agentSendChatMessage(
     sessionId: string,
     input: ChatSendMessageRequest,
     options?: { abortSignal?: AbortSignal },
   ): Promise<ChatSendMessageResponse>;
-  isFeatureEnabled(flag: string): boolean;
+  isFeatureEnabled(flag: string): Promise<boolean>;
   agentSendChatMessageStream(
     sessionId: string,
     input: ChatSendMessageRequest,
@@ -203,8 +203,12 @@ export interface ChatTurnStreamHost
     surface?: ToolPolicyActorContext["surface"];
     permissionProfileId?: string;
     localOperatorOverrideId?: string;
-  }): ToolPolicyActorContext;
-  updateActiveLeafOrThrow(sessionId: string, previousActiveTurnId: string | undefined, nextActiveTurnId: string): void;
+  }): Promise<ToolPolicyActorContext>;
+  updateActiveLeafOrThrow(
+    sessionId: string,
+    previousActiveTurnId: string | undefined,
+    nextActiveTurnId: string,
+  ): Promise<void>;
   collectCapabilityUpgradeSuggestions(input: {
     sessionId: string;
     content: string;
@@ -217,7 +221,7 @@ export interface ChatTurnStreamHost
     content: string;
     capabilitySuggestions: ChatCapabilityUpgradeSuggestion[];
     trace: ChatTurnTraceRecord;
-  }): ChatSpecialistCandidateSuggestionRecord[];
+  }): Promise<ChatSpecialistCandidateSuggestionRecord[]>;
   /**
    * R3-8 `agent.fanout` session registry. Optional so lightweight test hosts
    * keep working; when absent, no executor is registered and a model
@@ -226,9 +230,11 @@ export interface ChatTurnStreamHost
   readonly subagentFanout?: Pick<SubagentFanoutRuntime, "register">;
 }
 
-export type ChatTurnCanonicalWriteFence = <T>(work: () => T) => T;
+export type ChatTurnCanonicalWriteFence = <T>(work: () => T | Promise<T>) => Promise<Awaited<T>>;
 
-const executeUnfencedChatTurnWrite: ChatTurnCanonicalWriteFence = <T>(work: () => T): T => work();
+const executeUnfencedChatTurnWrite: ChatTurnCanonicalWriteFence = async <T>(
+  work: () => T | Promise<T>,
+): Promise<Awaited<T>> => await work();
 
 /**
  * Build the user-role chat messages that should be appended to the next LLM call so the
@@ -246,13 +252,16 @@ export function drainSteerMessagesForLlm(
   }));
 }
 
-export function collectOrchestrationToolRuns(host: ChatTurnStreamHost, runId: string): ChatToolRunRecord[] {
-  const steps = host.storage.chatDelegationSteps.listByRun(runId);
+export async function collectOrchestrationToolRuns(
+  host: ChatTurnStreamHost,
+  runId: string,
+): Promise<ChatToolRunRecord[]> {
+  const steps = await host.storage.chatDelegationSteps.listByRun(runId);
   const childTurnIds = steps.map((step) => step.childTurnId).filter((value): value is string => Boolean(value));
   if (childTurnIds.length === 0) {
     return [];
   }
-  const toolRunsByTurnId = host.storage.chatToolRuns.listByTurnIds(childTurnIds);
+  const toolRunsByTurnId = await host.storage.chatToolRuns.listByTurnIds(childTurnIds);
   const orderedToolRuns: ChatToolRunRecord[] = [];
   for (const step of steps) {
     if (!step.childTurnId) {
@@ -266,13 +275,13 @@ export function collectOrchestrationToolRuns(host: ChatTurnStreamHost, runId: st
   return orderedToolRuns;
 }
 
-function recordRuntimeDecision(
+async function recordRuntimeDecision(
   host: ChatTurnStreamHost,
   input: RuntimeDecisionTraceAppendInput,
   canonicalWriteFence: ChatTurnCanonicalWriteFence = executeUnfencedChatTurnWrite,
-): void {
+): Promise<void> {
   try {
-    canonicalWriteFence(() => host.recordRuntimeDecision?.(input));
+    await canonicalWriteFence(() => host.recordRuntimeDecision?.(input));
   } catch (error) {
     if (isAuthoritativeModelUsageAccountingError(error)) {
       throw error;
@@ -285,7 +294,7 @@ function recordRuntimeDecision(
 }
 
 /** Exported for focused effect-truth trace tests. */
-export function recordStepRuntimeDecisions(
+export async function recordStepRuntimeDecisions(
   host: ChatTurnStreamHost,
   prepared: PreparedAgentChatTurn,
   input: {
@@ -295,13 +304,13 @@ export function recordStepRuntimeDecisions(
     childToolRuns: ChatToolRunRecord[];
   },
   canonicalWriteFence: ChatTurnCanonicalWriteFence = executeUnfencedChatTurnWrite,
-): void {
+): Promise<void> {
   for (const toolRun of input.childToolRuns) {
     const kind = resolveToolDecisionKind(toolRun);
     if (!kind) {
       continue;
     }
-    recordRuntimeDecision(
+    await recordRuntimeDecision(
       host,
       {
         kind,
@@ -443,22 +452,23 @@ export async function executePreparedModeOrchestration(
   const inputPolicyContext = (input as ChatSendMessageRequestWithPolicyContext).policyContext;
   const effectivePermissionProfileId = inputPolicyContext?.permissionProfileId ?? input.permissionProfileId;
   const runMode = orchestration.orchestrationPlan.routeDecision.parallelism === "parallel" ? "parallel" : "sequential";
-  const persistedExecutionPlan = canonicalWriteFence(() =>
-    host.storage.chatExecutionPlans.create({
-      sessionId: prepared.session.sessionId,
-      turnId: prepared.turnId,
-      mode: orchestration.routerInput.task.mode,
-      planningMode: prepared.prefs.planningMode,
-      source: orchestration.executionPlanDraft.source,
-      advisoryOnly: orchestration.executionPlanDraft.advisoryOnly,
-      objective: orchestration.executionPlanDraft.objective,
-      summary: orchestration.executionPlanDraft.summary,
-      status: "running",
-      startedAt: new Date().toISOString(),
-      steps: orchestration.executionPlanDraft.steps,
-    }),
+  const persistedExecutionPlan = await canonicalWriteFence(
+    async () =>
+      await host.storage.chatExecutionPlans.create({
+        sessionId: prepared.session.sessionId,
+        turnId: prepared.turnId,
+        mode: orchestration.routerInput.task.mode,
+        planningMode: prepared.prefs.planningMode,
+        source: orchestration.executionPlanDraft.source,
+        advisoryOnly: orchestration.executionPlanDraft.advisoryOnly,
+        objective: orchestration.executionPlanDraft.objective,
+        summary: orchestration.executionPlanDraft.summary,
+        status: "running",
+        startedAt: new Date().toISOString(),
+        steps: orchestration.executionPlanDraft.steps,
+      }),
   );
-  recordRuntimeDecision(
+  await recordRuntimeDecision(
     host,
     {
       kind: "workflow_choice",
@@ -512,7 +522,7 @@ export async function executePreparedModeOrchestration(
     },
     canonicalWriteFence,
   );
-  recordRuntimeDecision(
+  await recordRuntimeDecision(
     host,
     {
       kind: "execution_plan_created",
@@ -564,8 +574,8 @@ export async function executePreparedModeOrchestration(
   const persistedStepIds = new Map(
     orchestration.orchestrationPlan.steps.map((step) => [step.stepId, `${runId}:${step.stepId}`] as const),
   );
-  canonicalWriteFence(() => {
-    host.storage.chatDelegationRuns.create({
+  await canonicalWriteFence(async () => {
+    await host.storage.chatDelegationRuns.create({
       runId,
       sessionId: prepared.session.sessionId,
       taskId: `chat-orchestration:${prepared.turnId}`,
@@ -584,7 +594,7 @@ export async function executePreparedModeOrchestration(
     });
     for (const [index, step] of orchestration.orchestrationPlan.steps.entries()) {
       const persistedStepId = persistedStepIds.get(step.stepId)!;
-      host.storage.chatDelegationSteps.create({
+      await host.storage.chatDelegationSteps.create({
         stepId: persistedStepId,
         runId,
         role: step.role,
@@ -629,8 +639,8 @@ export async function executePreparedModeOrchestration(
       finalized: true,
       advisoryOnly: true,
     });
-    canonicalWriteFence(() => {
-      host.storage.chatDelegationRuns.patch(runId, {
+    await canonicalWriteFence(async () => {
+      await host.storage.chatDelegationRuns.patch(runId, {
         status: "completed",
         visibility: advisorySummary.visibility,
         workflowTemplate: advisorySummary.workflowTemplate,
@@ -641,13 +651,13 @@ export async function executePreparedModeOrchestration(
         trace: runTrace,
         finishedAt: new Date().toISOString(),
       });
-      host.storage.chatExecutionPlans.patch(persistedExecutionPlan.planId, {
+      await host.storage.chatExecutionPlans.patch(persistedExecutionPlan.planId, {
         status: "ready",
         summary: orchestration.executionPlanDraft.summary,
         finishedAt: new Date().toISOString(),
       });
     });
-    recordRuntimeDecision(
+    await recordRuntimeDecision(
       host,
       {
         kind: "execution_plan_revised",
@@ -708,8 +718,8 @@ export async function executePreparedModeOrchestration(
               },
             },
             {
-              onCommit: () =>
-                canonicalWriteFence(() => {
+              onCommit: async () =>
+                await canonicalWriteFence(() => {
                   steerCommitted = true;
                 }),
             },
@@ -733,7 +743,7 @@ export async function executePreparedModeOrchestration(
             : request;
         const logicalOperationId = attribution.operationId ?? `orchestration-call-${completionIndex}`;
         const logicalDispatchGeneration = attribution.dispatchGeneration ?? `${logicalOperationId}:generation-1`;
-        canonicalWriteFence(() => undefined);
+        await canonicalWriteFence(() => undefined);
         return host.createChatCompletion(
           {
             ...composed,
@@ -757,11 +767,11 @@ export async function executePreparedModeOrchestration(
         const orchestrationMode = orchestration.routerInput.task.mode;
         const streamTerminalStep =
           Boolean(finalDeltaSink) &&
-          !host.isFeatureEnabled("orchestrationFinalStreamingV1Disabled") &&
+          !(await host.isFeatureEnabled("orchestrationFinalStreamingV1Disabled")) &&
           (orchestrationMode === "cowork" || orchestrationMode === "code") &&
           isTerminalSynthesisStep(plan, step) &&
           typeof host.agentSendChatMessageStream === "function";
-        return executeDelegatedPlanStep(host, prepared, {
+        return await executeDelegatedPlanStep(host, prepared, {
           task,
           plan,
           priorSteps,
@@ -784,9 +794,9 @@ export async function executePreparedModeOrchestration(
       onStepResult: async (step, allSteps) => {
         currentSteps = [...allSteps];
         const childToolRuns = step.childTurnId
-          ? (host.storage.chatToolRuns.listByTurnIds([step.childTurnId]).get(step.childTurnId) ?? [])
+          ? ((await host.storage.chatToolRuns.listByTurnIds([step.childTurnId])).get(step.childTurnId) ?? [])
           : [];
-        recordStepRuntimeDecisions(
+        await recordStepRuntimeDecisions(
           host,
           prepared,
           {
@@ -845,8 +855,8 @@ export async function executePreparedModeOrchestration(
             ).length,
           },
         });
-        canonicalWriteFence(() => {
-          host.storage.chatDelegationSteps.patch(persistedStepIds.get(step.stepId) ?? step.stepId, {
+        await canonicalWriteFence(async () => {
+          await host.storage.chatDelegationSteps.patch(persistedStepIds.get(step.stepId) ?? step.stepId, {
             status: step.status,
             providerId: step.providerId,
             model: step.model,
@@ -864,14 +874,14 @@ export async function executePreparedModeOrchestration(
             ...(step.finishedAt ? { finishedAt: step.finishedAt } : {}),
             ...(typeof step.durationMs === "number" ? { durationMs: step.durationMs } : {}),
           });
-          host.storage.chatExecutionPlans.patch(persistedExecutionPlan.planId, {
+          await host.storage.chatExecutionPlans.patch(persistedExecutionPlan.planId, {
             steps: mergeExecutionPlanStepStatuses(
-              host.storage.chatExecutionPlans.get(persistedExecutionPlan.planId).steps,
+              (await host.storage.chatExecutionPlans.get(persistedExecutionPlan.planId)).steps,
               allSteps,
             ),
           });
         });
-        recordRuntimeDecision(
+        await recordRuntimeDecision(
           host,
           {
             kind: "execution_plan_revised",
@@ -925,8 +935,8 @@ export async function executePreparedModeOrchestration(
     finalized: true,
   });
   const orchestrationFinishedAt = summary.status === "running" ? undefined : new Date().toISOString();
-  canonicalWriteFence(() => {
-    host.storage.chatDelegationRuns.patch(runId, {
+  await canonicalWriteFence(async () => {
+    await host.storage.chatDelegationRuns.patch(runId, {
       status: summary.status,
       visibility: summary.visibility,
       workflowTemplate: summary.workflowTemplate,
@@ -942,7 +952,7 @@ export async function executePreparedModeOrchestration(
       },
       ...(orchestrationFinishedAt ? { finishedAt: orchestrationFinishedAt } : {}),
     });
-    host.storage.chatExecutionPlans.patch(persistedExecutionPlan.planId, {
+    await host.storage.chatExecutionPlans.patch(persistedExecutionPlan.planId, {
       status:
         summary.status === "running"
           ? "running"
@@ -954,12 +964,12 @@ export async function executePreparedModeOrchestration(
       summary: result.finalSummary,
       ...(orchestrationFinishedAt ? { finishedAt: orchestrationFinishedAt } : {}),
       steps: mergeExecutionPlanStepStatuses(
-        host.storage.chatExecutionPlans.get(persistedExecutionPlan.planId).steps,
+        (await host.storage.chatExecutionPlans.get(persistedExecutionPlan.planId)).steps,
         result.stepResults,
       ),
     });
   });
-  recordRuntimeDecision(
+  await recordRuntimeDecision(
     host,
     {
       kind: "execution_plan_revised",
@@ -1048,16 +1058,16 @@ export async function executeDelegatedPlanStep(
   const delegatedRole = input.step.delegatedRole ?? input.step.role;
   const orchestrationTaskId = `chat-orchestration:${prepared.turnId}`;
   const canonicalWriteFence = input.canonicalWriteFence ?? executeUnfencedChatTurnWrite;
-  const childSession = canonicalWriteFence(() => {
-    const parentProjectId = host.storage.chatSessionProjects.get(prepared.session.sessionId)?.projectId;
-    const created = host.createChatSession({
+  const childSession = await canonicalWriteFence(async () => {
+    const parentProjectId = (await host.storage.chatSessionProjects.get(prepared.session.sessionId))?.projectId;
+    const created = await host.createChatSession({
       workspaceId: prepared.workspaceId,
       title: `Delegate · ${toTitleCase(delegatedRole)}`,
       projectId: parentProjectId,
       mode: input.task.mode,
     });
-    host.inheritDelegatedSessionToolGrants(prepared.session.sessionId, created.sessionId);
-    host.updateChatSessionPrefs(created.sessionId, {
+    await host.inheritDelegatedSessionToolGrants(prepared.session.sessionId, created.sessionId);
+    await host.updateChatSessionPrefs(created.sessionId, {
       mode: input.task.mode,
       planningMode: "off",
       providerId: input.step.providerId ?? prepared.prefs.providerId,
@@ -1152,7 +1162,7 @@ export async function executeDelegatedPlanStep(
     if (input.signal?.aborted) {
       throw new ChatTurnCancelledError(prepared.turnId);
     }
-    const inheritedPolicyContext = host.resolveToolPolicyContext?.({
+    const inheritedPolicyContext = await host.resolveToolPolicyContext?.({
       operatorId: input.operatorId,
       authActorId: input.authActorId,
       authActorSource: input.authActorSource,
@@ -1165,15 +1175,16 @@ export async function executeDelegatedPlanStep(
       localOperatorOverrideId: input.localOperatorOverrideId,
     });
     delegatedDispatchStarted = true;
-    canonicalWriteFence(() =>
-      patchActiveDelegationStep(host, {
-        stepId: `${input.runId}:${input.step.stepId}`,
-        childSessionId: childSession.sessionId,
-        role: delegatedRole,
-        label: input.step.label,
-        providerId: input.step.providerId ?? prepared.prefs.providerId,
-        model: input.step.model ?? prepared.prefs.model,
-      }),
+    await canonicalWriteFence(
+      async () =>
+        await patchActiveDelegationStep(host, {
+          stepId: `${input.runId}:${input.step.stepId}`,
+          childSessionId: childSession.sessionId,
+          role: delegatedRole,
+          label: input.step.label,
+          providerId: input.step.providerId ?? prepared.prefs.providerId,
+          model: input.step.model ?? prepared.prefs.model,
+        }),
     );
     const delegatedSendRequest = buildDelegatedChatSendRequest({
       content,
@@ -1515,7 +1526,7 @@ function isTerminalDelegatedStreamTrace(trace: ChatTurnTraceRecord | undefined):
   }
 }
 
-function patchActiveDelegationStep(
+async function patchActiveDelegationStep(
   host: ChatTurnStreamHost,
   input: {
     stepId: string;
@@ -1525,9 +1536,9 @@ function patchActiveDelegationStep(
     providerId?: string;
     model?: string;
   },
-): void {
+): Promise<void> {
   try {
-    host.storage.chatDelegationSteps.patch(input.stepId, {
+    await host.storage.chatDelegationSteps.patch(input.stepId, {
       status: "running",
       providerId: input.providerId,
       model: input.model,
@@ -1719,7 +1730,7 @@ export async function* streamChatModelCouncil(
   if (!host.executeChatModelCouncil) {
     throw new Error("Model council runtime collaborator is unavailable.");
   }
-  canonicalWriteFence(() => undefined);
+  await canonicalWriteFence(() => undefined);
   const result = await host.executeChatModelCouncil(prepared, signal);
   if (result.usage || result.modelUsageEventIds.length > 0) {
     yield {
@@ -1762,8 +1773,8 @@ export async function* streamPreparedAgentChatTurn(
   const chatTurnTraces = host.storage.chatTurnTraces;
   const baseCanonicalWriteFence = options?.canonicalWriteFence ?? executeUnfencedChatTurnWrite;
   const canonicalWriteFence: ChatTurnCanonicalWriteFence = options?.mutationLifecycle
-    ? <T>(work: () => T): T => {
-        const result = baseCanonicalWriteFence(work);
+    ? async <T>(work: () => T | Promise<T>): Promise<Awaited<T>> => {
+        const result = await baseCanonicalWriteFence(work);
         options.mutationLifecycle?.markCommitted();
         return result;
       }
@@ -1793,36 +1804,37 @@ export async function* streamPreparedAgentChatTurn(
         : (resolvedOrchestration ?? (await host.resolvePreparedTurnOrchestration(prepared)));
     if (modeOrchestration) {
       const mode = resolvePreparedTurnMode(prepared);
-      const initialTrace = canonicalWriteFence(() =>
-        createOrRefreshRunningChatTurnTrace(host, {
-          turnId,
-          sessionId,
-          userMessageId: prepared.userEventId,
-          parentTurnId: prepared.parentTurnId,
-          branchKind: prepared.branchKind,
-          sourceTurnId: prepared.sourceTurnId,
-          status: "running",
-          mode,
-          model: modeOrchestration.orchestrationPlan.steps.at(0)?.model ?? input.model ?? prepared.prefs.model,
-          webMode: prepared.normalized.webMode ?? prepared.prefs.webMode,
-          memoryMode: prepared.normalized.memoryMode ?? prepared.prefs.memoryMode,
-          thinkingLevel: prepared.normalized.thinkingLevel ?? prepared.prefs.thinkingLevel,
-          speedMode: prepared.normalized.speedMode ?? prepared.prefs.speedMode,
-          subagentPolicy: prepared.normalized.subagentPolicy ?? prepared.prefs.subagentPolicy,
-          effectiveToolAutonomy: prepared.effectiveToolAutonomy,
-          routing: {
-            primaryProviderId: input.providerId ?? prepared.prefs.providerId,
-            primaryModel: input.model ?? prepared.prefs.model,
-            effectiveProviderId:
-              modeOrchestration.orchestrationPlan.steps.at(0)?.providerId ??
-              input.providerId ??
-              prepared.prefs.providerId,
-            effectiveModel:
-              modeOrchestration.orchestrationPlan.steps.at(0)?.model ?? input.model ?? prepared.prefs.model,
-            modelRouter: prepared.modelRouterDecision,
-            ...(input.runVariableEvidence ? { runVariables: input.runVariableEvidence } : {}),
-          },
-        }),
+      const initialTrace = await canonicalWriteFence(
+        async () =>
+          await createOrRefreshRunningChatTurnTrace(host, {
+            turnId,
+            sessionId,
+            userMessageId: prepared.userEventId,
+            parentTurnId: prepared.parentTurnId,
+            branchKind: prepared.branchKind,
+            sourceTurnId: prepared.sourceTurnId,
+            status: "running",
+            mode,
+            model: modeOrchestration.orchestrationPlan.steps.at(0)?.model ?? input.model ?? prepared.prefs.model,
+            webMode: prepared.normalized.webMode ?? prepared.prefs.webMode,
+            memoryMode: prepared.normalized.memoryMode ?? prepared.prefs.memoryMode,
+            thinkingLevel: prepared.normalized.thinkingLevel ?? prepared.prefs.thinkingLevel,
+            speedMode: prepared.normalized.speedMode ?? prepared.prefs.speedMode,
+            subagentPolicy: prepared.normalized.subagentPolicy ?? prepared.prefs.subagentPolicy,
+            effectiveToolAutonomy: prepared.effectiveToolAutonomy,
+            routing: {
+              primaryProviderId: input.providerId ?? prepared.prefs.providerId,
+              primaryModel: input.model ?? prepared.prefs.model,
+              effectiveProviderId:
+                modeOrchestration.orchestrationPlan.steps.at(0)?.providerId ??
+                input.providerId ??
+                prepared.prefs.providerId,
+              effectiveModel:
+                modeOrchestration.orchestrationPlan.steps.at(0)?.model ?? input.model ?? prepared.prefs.model,
+              modelRouter: prepared.modelRouterDecision,
+              ...(input.runVariableEvidence ? { runVariables: input.runVariableEvidence } : {}),
+            },
+          }),
       );
       yield {
         type: "trace_update",
@@ -1857,32 +1869,33 @@ export async function* streamPreparedAgentChatTurn(
         input,
         controller.signal,
         async (summary) => {
-          const progressTrace = canonicalWriteFence(() =>
-            host.storage.chatTurnTraces.patch(turnId, {
-              executionPlanId,
-              orchestration: summary,
-              model:
-                summary.steps.at(-1)?.model ??
-                modeOrchestration.orchestrationPlan.steps.at(0)?.model ??
-                input.model ??
-                prepared.prefs.model,
-              routing: {
-                primaryProviderId: input.providerId ?? prepared.prefs.providerId,
-                primaryModel: input.model ?? prepared.prefs.model,
-                effectiveProviderId:
-                  summary.steps.at(-1)?.providerId ??
-                  modeOrchestration.orchestrationPlan.steps.at(0)?.providerId ??
-                  input.providerId ??
-                  prepared.prefs.providerId,
-                effectiveModel:
+          const progressTrace = await canonicalWriteFence(
+            async () =>
+              await host.storage.chatTurnTraces.patch(turnId, {
+                executionPlanId,
+                orchestration: summary,
+                model:
                   summary.steps.at(-1)?.model ??
                   modeOrchestration.orchestrationPlan.steps.at(0)?.model ??
                   input.model ??
                   prepared.prefs.model,
-                modelRouter: prepared.modelRouterDecision,
-                ...(input.runVariableEvidence ? { runVariables: input.runVariableEvidence } : {}),
-              },
-            }),
+                routing: {
+                  primaryProviderId: input.providerId ?? prepared.prefs.providerId,
+                  primaryModel: input.model ?? prepared.prefs.model,
+                  effectiveProviderId:
+                    summary.steps.at(-1)?.providerId ??
+                    modeOrchestration.orchestrationPlan.steps.at(0)?.providerId ??
+                    input.providerId ??
+                    prepared.prefs.providerId,
+                  effectiveModel:
+                    summary.steps.at(-1)?.model ??
+                    modeOrchestration.orchestrationPlan.steps.at(0)?.model ??
+                    input.model ??
+                    prepared.prefs.model,
+                  modelRouter: prepared.modelRouterDecision,
+                  ...(input.runVariableEvidence ? { runVariables: input.runVariableEvidence } : {}),
+                },
+              }),
           );
           progressQueue.push({ kind: "trace", trace: progressTrace });
         },
@@ -1963,7 +1976,7 @@ export async function* streamPreparedAgentChatTurn(
           citation,
         };
       }
-      const orchestrationToolRuns = collectOrchestrationToolRuns(host, orchestrationResult.summary.runId);
+      const orchestrationToolRuns = await collectOrchestrationToolRuns(host, orchestrationResult.summary.runId);
       const waitingOrchestrationStep = orchestrationResult.summary.steps.find((step) => step.status === "running");
       const orchestrationTraceStatus =
         orchestrationResult.summary.status === "running"
@@ -2022,7 +2035,7 @@ export async function* streamPreparedAgentChatTurn(
         citations: orchestrationCitations,
       };
       let committedTrace: ChatTurnTraceRecord | undefined;
-      assertChatStreamCompletionWritable(host, turnId, controller.signal);
+      await assertChatStreamCompletionWritable(host, turnId, controller.signal);
       await host.ingestEvent(
         randomUUID(),
         {
@@ -2038,15 +2051,15 @@ export async function* streamPreparedAgentChatTurn(
           },
         },
         {
-          onCommit: () => {
-            committedTrace = canonicalWriteFence(() => {
-              const trace = patchChatTurnTraceIfStatus(
+          onCommit: async () => {
+            committedTrace = await canonicalWriteFence(async () => {
+              const trace = await patchChatTurnTraceIfStatus(
                 chatTurnTraces,
                 turnId,
                 CHAT_TURN_ACTIVE_STATUSES,
                 completionPatch,
               );
-              host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
+              await host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
               return trace;
             });
           },
@@ -2089,8 +2102,8 @@ export async function* streamPreparedAgentChatTurn(
         assistantText: finalText,
         trace: hydratedTrace,
       });
-      canonicalWriteFence(() => undefined);
-      const specialistCandidateSuggestions = canonicalWriteFence(() =>
+      await canonicalWriteFence(() => undefined);
+      const specialistCandidateSuggestions = await canonicalWriteFence(() =>
         host.collectSpecialistCandidateSuggestions({
           sessionId,
           mode: prepared.capabilityProfile?.selection.mode ?? resolvePreparedTurnMode(prepared),
@@ -2101,13 +2114,15 @@ export async function* streamPreparedAgentChatTurn(
       );
       if (capabilityUpgradeSuggestions.length > 0 || specialistCandidateSuggestions.length > 0) {
         hydratedTrace = {
-          ...canonicalWriteFence(() =>
-            host.storage.chatTurnTraces.patch(turnId, {
-              capabilityUpgradeSuggestions: capabilityUpgradeSuggestions.length > 0 ? capabilityUpgradeSuggestions : [],
-              specialistCandidateSuggestions:
-                specialistCandidateSuggestions.length > 0 ? specialistCandidateSuggestions : [],
-            }),
-          ),
+          ...(await canonicalWriteFence(
+            async () =>
+              await host.storage.chatTurnTraces.patch(turnId, {
+                capabilityUpgradeSuggestions:
+                  capabilityUpgradeSuggestions.length > 0 ? capabilityUpgradeSuggestions : [],
+                specialistCandidateSuggestions:
+                  specialistCandidateSuggestions.length > 0 ? specialistCandidateSuggestions : [],
+              }),
+          )),
           toolRuns: orchestrationToolRuns,
         };
         if (capabilityUpgradeSuggestions.length > 0) {
@@ -2126,8 +2141,8 @@ export async function* streamPreparedAgentChatTurn(
         trace: hydratedTrace,
       };
       if (!deferGeneralPostCommit) {
-        canonicalWriteFence(() => {
-          host.publishRealtime(
+        await canonicalWriteFence(async () => {
+          await host.publishRealtime(
             "chat_thread_updated",
             "chat",
             {
@@ -2141,7 +2156,7 @@ export async function* streamPreparedAgentChatTurn(
           // Direct learned-memory promotion, commitments, and post-turn
           // prewarm are production-dark. Canonical durable post-commit owns
           // governed children and inspectable evidence.
-          enqueueAgentEndHook(host, {
+          await enqueueAgentEndHook(host, {
             workspaceId: prepared.workspaceId,
             sessionId,
             turnId,
@@ -2192,7 +2207,7 @@ export async function* streamPreparedAgentChatTurn(
     }));
     const historyWithSteers =
       drainedSteers.length > 0 ? [...prepared.history, ...steerHistoryMessages] : prepared.history;
-    recordRuntimeDecision(
+    await recordRuntimeDecision(
       host,
       {
         kind: prepared.modelRouterDecision.requiresTools ? "routing_choice" : "direct_answer",
@@ -2241,8 +2256,8 @@ export async function* streamPreparedAgentChatTurn(
           },
         },
         {
-          onCommit: () =>
-            canonicalWriteFence(() => {
+          onCommit: async () =>
+            await canonicalWriteFence(() => {
               steerCommitted = true;
             }),
         },
@@ -2253,8 +2268,8 @@ export async function* streamPreparedAgentChatTurn(
     }
     const serverContextUsageAttribution = buildPreparedRoutedContextUsageAttribution(prepared);
     const directStream = input.modelCouncil?.enabled
-      ? streamChatModelCouncil(host, prepared, controller.signal, canonicalWriteFence)
-      : runDirectTurnStreamWithSubagentFanout(
+      ? await streamChatModelCouncil(host, prepared, controller.signal, canonicalWriteFence)
+      : await runDirectTurnStreamWithSubagentFanout(
           host,
           prepared,
           {
@@ -2404,7 +2419,7 @@ export async function* streamPreparedAgentChatTurn(
       }
     }
 
-    assertChatStreamCompletionWritable(host, turnId, controller.signal);
+    await assertChatStreamCompletionWritable(host, turnId, controller.signal);
 
     if (!approvalRequired && !userInputRequired && !finalText.trim()) {
       const preRepairContent = finalText;
@@ -2430,11 +2445,11 @@ export async function* streamPreparedAgentChatTurn(
       }
     }
 
-    assertChatStreamCompletionWritable(host, turnId, controller.signal);
+    await assertChatStreamCompletionWritable(host, turnId, controller.signal);
 
     if (approvalRequired) {
-      const traceWithMeta = canonicalWriteFence(() => {
-        const trace = host.storage.chatTurnTraces.patch(turnId, {
+      const traceWithMeta = await canonicalWriteFence(async () => {
+        const trace = await host.storage.chatTurnTraces.patch(turnId, {
           retrieval: prepared.retrievalTrace,
           reflection: {
             attempted: false,
@@ -2453,11 +2468,11 @@ export async function* streamPreparedAgentChatTurn(
           },
           citations: dedupeChatCitations(streamCitations),
         });
-        host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
+        await host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
         return trace;
       });
       if (!deferGeneralPostCommit) {
-        host.publishRealtime(
+        await host.publishRealtime(
           "chat_thread_updated",
           "chat",
           {
@@ -2471,7 +2486,7 @@ export async function* streamPreparedAgentChatTurn(
       }
       const approvalTraceBase: ChatTurnTraceRecord = {
         ...traceWithMeta,
-        toolRuns: host.storage.chatToolRuns.listByTurn(turnId),
+        toolRuns: await host.storage.chatToolRuns.listByTurn(turnId),
       };
       const capabilityUpgradeSuggestions = await host.collectCapabilityUpgradeSuggestions({
         sessionId,
@@ -2479,16 +2494,17 @@ export async function* streamPreparedAgentChatTurn(
         assistantText: finalText,
         trace: approvalTraceBase,
       });
-      canonicalWriteFence(() => undefined);
+      await canonicalWriteFence(() => undefined);
       const approvalTrace =
         capabilityUpgradeSuggestions.length > 0
           ? {
-              ...canonicalWriteFence(() =>
-                host.storage.chatTurnTraces.patch(turnId, {
-                  capabilityUpgradeSuggestions,
-                }),
-              ),
-              toolRuns: host.storage.chatToolRuns.listByTurn(turnId),
+              ...(await canonicalWriteFence(
+                async () =>
+                  await host.storage.chatTurnTraces.patch(turnId, {
+                    capabilityUpgradeSuggestions,
+                  }),
+              )),
+              toolRuns: await host.storage.chatToolRuns.listByTurn(turnId),
             }
           : approvalTraceBase;
       if (capabilityUpgradeSuggestions.length > 0) {
@@ -2500,13 +2516,14 @@ export async function* streamPreparedAgentChatTurn(
         };
       }
       if (!deferGeneralPostCommit) {
-        canonicalWriteFence(() =>
-          host.recordCapabilityGapFromTrace({
-            sessionId,
-            turnId,
-            content: prepared.content,
-            trace: approvalTrace,
-          }),
+        await canonicalWriteFence(
+          async () =>
+            await host.recordCapabilityGapFromTrace({
+              sessionId,
+              turnId,
+              content: prepared.content,
+              trace: approvalTrace,
+            }),
         );
       }
       yield {
@@ -2516,28 +2533,29 @@ export async function* streamPreparedAgentChatTurn(
         trace: approvalTrace,
       };
       if (!deferGeneralPostCommit) {
-        canonicalWriteFence(() =>
-          enqueueAgentEndHook(host, {
-            workspaceId: prepared.workspaceId,
-            sessionId,
-            turnId,
-            status: approvalTrace.status,
-            toolRunCount: approvalTrace.toolRuns.length,
-            stream: true,
-            repaired: Boolean(approvalTrace.completion?.repaired),
-            runId: approvalTrace.durable?.runId,
-            approvalId: approvalTrace.toolRuns.find((toolRun) => toolRun.approvalId)?.approvalId,
-            providerId: approvalTrace.routing?.effectiveProviderId ?? approvalTrace.routing?.primaryProviderId,
-            model: approvalTrace.routing?.effectiveModel ?? approvalTrace.model,
-          }),
+        await canonicalWriteFence(
+          async () =>
+            await enqueueAgentEndHook(host, {
+              workspaceId: prepared.workspaceId,
+              sessionId,
+              turnId,
+              status: approvalTrace.status,
+              toolRunCount: approvalTrace.toolRuns.length,
+              stream: true,
+              repaired: Boolean(approvalTrace.completion?.repaired),
+              runId: approvalTrace.durable?.runId,
+              approvalId: approvalTrace.toolRuns.find((toolRun) => toolRun.approvalId)?.approvalId,
+              providerId: approvalTrace.routing?.effectiveProviderId ?? approvalTrace.routing?.primaryProviderId,
+              model: approvalTrace.routing?.effectiveModel ?? approvalTrace.model,
+            }),
         );
       }
       return;
     }
 
     if (userInputRequired && pendingUserInput) {
-      const traceWithMeta = canonicalWriteFence(() => {
-        const trace = host.storage.chatTurnTraces.patch(turnId, {
+      const traceWithMeta = await canonicalWriteFence(async () => {
+        const trace = await host.storage.chatTurnTraces.patch(turnId, {
           status: "waiting_for_user_input",
           pendingUserInput,
           retrieval: prepared.retrievalTrace,
@@ -2558,11 +2576,11 @@ export async function* streamPreparedAgentChatTurn(
           },
           citations: dedupeChatCitations(streamCitations),
         });
-        host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
+        await host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
         return trace;
       });
       if (!deferGeneralPostCommit) {
-        host.publishRealtime(
+        await host.publishRealtime(
           "chat_thread_updated",
           "chat",
           {
@@ -2576,7 +2594,7 @@ export async function* streamPreparedAgentChatTurn(
       }
       const userInputTrace: ChatTurnTraceRecord = {
         ...traceWithMeta,
-        toolRuns: host.storage.chatToolRuns.listByTurn(turnId),
+        toolRuns: await host.storage.chatToolRuns.listByTurn(turnId),
       };
       yield {
         type: "trace_update",
@@ -2585,27 +2603,28 @@ export async function* streamPreparedAgentChatTurn(
         trace: userInputTrace,
       };
       if (!deferGeneralPostCommit) {
-        canonicalWriteFence(() =>
-          enqueueAgentEndHook(host, {
-            workspaceId: prepared.workspaceId,
-            sessionId,
-            turnId,
-            status: userInputTrace.status,
-            toolRunCount: userInputTrace.toolRuns.length,
-            stream: true,
-            repaired: Boolean(userInputTrace.completion?.repaired),
-            runId: userInputTrace.durable?.runId,
-            providerId: userInputTrace.routing?.effectiveProviderId ?? userInputTrace.routing?.primaryProviderId,
-            model: userInputTrace.routing?.effectiveModel ?? userInputTrace.model,
-          }),
+        await canonicalWriteFence(
+          async () =>
+            await enqueueAgentEndHook(host, {
+              workspaceId: prepared.workspaceId,
+              sessionId,
+              turnId,
+              status: userInputTrace.status,
+              toolRunCount: userInputTrace.toolRuns.length,
+              stream: true,
+              repaired: Boolean(userInputTrace.completion?.repaired),
+              runId: userInputTrace.durable?.runId,
+              providerId: userInputTrace.routing?.effectiveProviderId ?? userInputTrace.routing?.primaryProviderId,
+              model: userInputTrace.routing?.effectiveModel ?? userInputTrace.model,
+            }),
         );
       }
       return;
     }
 
     if (finalText.trim()) {
-      assertChatStreamCompletionWritable(host, turnId, controller.signal);
-      const currentTraceBeforeWrite = host.storage.chatTurnTraces.get(turnId);
+      await assertChatStreamCompletionWritable(host, turnId, controller.signal);
+      const currentTraceBeforeWrite = await host.storage.chatTurnTraces.get(turnId);
       await observeBeforeAssistantMessageWrite(host, {
         workspaceId: prepared.workspaceId,
         sessionId,
@@ -2618,7 +2637,7 @@ export async function* streamPreparedAgentChatTurn(
           currentTraceBeforeWrite.routing?.effectiveProviderId ?? currentTraceBeforeWrite.routing?.primaryProviderId,
         model: currentTraceBeforeWrite.routing?.effectiveModel ?? currentTraceBeforeWrite.model,
       });
-      assertChatStreamCompletionWritable(host, turnId, controller.signal);
+      await assertChatStreamCompletionWritable(host, turnId, controller.signal);
       const completionPatch: Parameters<Storage["chatTurnTraces"]["patch"]>[1] = {
         assistantMessageId,
         status: "completed",
@@ -2691,15 +2710,15 @@ export async function* streamPreparedAgentChatTurn(
               : undefined,
         },
         {
-          onCommit: () => {
-            committedTrace = canonicalWriteFence(() => {
-              const trace = patchChatTurnTraceIfStatus(
+          onCommit: async () => {
+            committedTrace = await canonicalWriteFence(async () => {
+              const trace = await patchChatTurnTraceIfStatus(
                 chatTurnTraces,
                 turnId,
                 completionOwnerStatuses,
                 completionPatch,
               );
-              host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
+              await host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
               return trace;
             });
           },
@@ -2710,7 +2729,7 @@ export async function* streamPreparedAgentChatTurn(
       }
       let hydratedTrace: ChatTurnTraceRecord = {
         ...committedTrace,
-        toolRuns: host.storage.chatToolRuns.listByTurn(turnId),
+        toolRuns: await host.storage.chatToolRuns.listByTurn(turnId),
       };
       yield {
         type: "message_done",
@@ -2727,8 +2746,8 @@ export async function* streamPreparedAgentChatTurn(
         assistantText: finalText,
         trace: hydratedTrace,
       });
-      canonicalWriteFence(() => undefined);
-      const specialistCandidateSuggestions = canonicalWriteFence(() =>
+      await canonicalWriteFence(() => undefined);
+      const specialistCandidateSuggestions = await canonicalWriteFence(() =>
         host.collectSpecialistCandidateSuggestions({
           sessionId,
           mode: resolvePreparedTurnMode(prepared),
@@ -2739,14 +2758,16 @@ export async function* streamPreparedAgentChatTurn(
       );
       if (capabilityUpgradeSuggestions.length > 0 || specialistCandidateSuggestions.length > 0) {
         hydratedTrace = {
-          ...canonicalWriteFence(() =>
-            host.storage.chatTurnTraces.patch(turnId, {
-              capabilityUpgradeSuggestions: capabilityUpgradeSuggestions.length > 0 ? capabilityUpgradeSuggestions : [],
-              specialistCandidateSuggestions:
-                specialistCandidateSuggestions.length > 0 ? specialistCandidateSuggestions : [],
-            }),
-          ),
-          toolRuns: host.storage.chatToolRuns.listByTurn(turnId),
+          ...(await canonicalWriteFence(
+            async () =>
+              await host.storage.chatTurnTraces.patch(turnId, {
+                capabilityUpgradeSuggestions:
+                  capabilityUpgradeSuggestions.length > 0 ? capabilityUpgradeSuggestions : [],
+                specialistCandidateSuggestions:
+                  specialistCandidateSuggestions.length > 0 ? specialistCandidateSuggestions : [],
+              }),
+          )),
+          toolRuns: await host.storage.chatToolRuns.listByTurn(turnId),
         };
         if (capabilityUpgradeSuggestions.length > 0) {
           yield {
@@ -2758,13 +2779,14 @@ export async function* streamPreparedAgentChatTurn(
         }
       }
       if (!deferGeneralPostCommit) {
-        canonicalWriteFence(() =>
-          host.recordCapabilityGapFromTrace({
-            sessionId,
-            turnId,
-            content: prepared.content,
-            trace: hydratedTrace,
-          }),
+        await canonicalWriteFence(
+          async () =>
+            await host.recordCapabilityGapFromTrace({
+              sessionId,
+              turnId,
+              content: prepared.content,
+              trace: hydratedTrace,
+            }),
         );
       }
       yield {
@@ -2774,8 +2796,8 @@ export async function* streamPreparedAgentChatTurn(
         trace: hydratedTrace,
       };
       if (!deferGeneralPostCommit) {
-        canonicalWriteFence(() => {
-          host.publishRealtime(
+        await canonicalWriteFence(async () => {
+          await host.publishRealtime(
             "chat_thread_updated",
             "chat",
             {
@@ -2793,11 +2815,11 @@ export async function* streamPreparedAgentChatTurn(
       }
     }
 
-    const completedTrace = canonicalWriteFence(() => {
-      const trace = host.storage.chatTurnTraces.get(turnId);
-      const toolRuns = host.storage.chatToolRuns.listByTurn(turnId);
+    const completedTrace = await canonicalWriteFence(async () => {
+      const trace = await host.storage.chatTurnTraces.get(turnId);
+      const toolRuns = await host.storage.chatToolRuns.listByTurn(turnId);
       if (!deferGeneralPostCommit) {
-        enqueueAgentEndHook(host, {
+        await enqueueAgentEndHook(host, {
           workspaceId: prepared.workspaceId,
           sessionId,
           turnId,
@@ -2836,7 +2858,7 @@ export async function* streamPreparedAgentChatTurn(
       prepared.serverOnlyPosture.durableRunId.trim().length > 0,
     );
     if (controller.signal.aborted || (!exactSystemHeartbeat && isChatTurnCancelledError(error))) {
-      const trace = host.markChatTurnCancelled(sessionId, turnId);
+      const trace = await host.markChatTurnCancelled(sessionId, turnId);
       yield {
         type: "trace_update",
         sessionId,
@@ -2844,18 +2866,18 @@ export async function* streamPreparedAgentChatTurn(
         trace,
       };
       if (!deferGeneralPostCommit) {
-        enqueueAgentEndHook(host, {
+        await enqueueAgentEndHook(host, {
           workspaceId: prepared.workspaceId,
           sessionId,
           turnId,
           status: trace.status,
-          toolRunCount: trace.toolRuns?.length ?? host.storage.chatToolRuns.listByTurn(turnId).length,
+          toolRunCount: trace.toolRuns?.length ?? (await host.storage.chatToolRuns.listByTurn(turnId)).length,
           stream: true,
           repaired: Boolean(trace.completion?.repaired),
           runId: trace.durable?.runId,
           approvalId:
             trace.toolRuns?.find((toolRun) => toolRun.approvalId)?.approvalId ??
-            host.storage.chatToolRuns.listByTurn(turnId).find((toolRun) => toolRun.approvalId)?.approvalId,
+            (await host.storage.chatToolRuns.listByTurn(turnId)).find((toolRun) => toolRun.approvalId)?.approvalId,
           providerId: trace.routing?.effectiveProviderId ?? trace.routing?.primaryProviderId,
           model: trace.routing?.effectiveModel ?? trace.model,
         });
@@ -2875,17 +2897,17 @@ function readDurableControlReason(signal: AbortSignal, error: unknown): Error | 
   return isDurableControlError(candidate) ? candidate : undefined;
 }
 
-function assertChatStreamCompletionWritable(
+async function assertChatStreamCompletionWritable(
   host: Pick<ChatTurnStreamHost, "storage">,
   turnId: string,
   signal: AbortSignal,
-): void {
+): Promise<void> {
   if (signal.aborted) {
     throw new ChatTurnCancelledError(turnId);
   }
   let status: ChatTurnTraceRecord["status"];
   try {
-    status = host.storage.chatTurnTraces.get(turnId).status;
+    status = (await host.storage.chatTurnTraces.get(turnId)).status;
   } catch (error) {
     if (error instanceof NotFoundError) {
       // The stream runtime may not have persisted its initial trace yet. The
@@ -2902,16 +2924,16 @@ function assertChatStreamCompletionWritable(
   }
 }
 
-function createOrRefreshRunningChatTurnTrace(
+async function createOrRefreshRunningChatTurnTrace(
   host: ChatTurnStreamHost,
   input: Parameters<Storage["chatTurnTraces"]["create"]>[0],
-): ChatTurnTraceRecord {
+): Promise<ChatTurnTraceRecord> {
   try {
-    const existing = host.storage.chatTurnTraces.get(input.turnId);
+    const existing = await host.storage.chatTurnTraces.get(input.turnId);
     if (existing.status === "cancelled") {
       throw new ChatTurnCancelledError(input.turnId);
     }
-    return host.storage.chatTurnTraces.patch(input.turnId, {
+    return await host.storage.chatTurnTraces.patch(input.turnId, {
       parentTurnId: input.parentTurnId,
       branchKind: input.branchKind,
       sourceTurnId: input.sourceTurnId,
@@ -2923,7 +2945,7 @@ function createOrRefreshRunningChatTurnTrace(
     });
   } catch (error) {
     if (error instanceof NotFoundError) {
-      return host.storage.chatTurnTraces.create(input);
+      return await host.storage.chatTurnTraces.create(input);
     }
     throw error;
   }

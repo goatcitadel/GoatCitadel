@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage, Storage } from "@goatcitadel/storage";
 
 const mocked = vi.hoisted(() => ({
   isBrowserToolName: vi.fn<(name: string) => boolean>(),
@@ -3448,7 +3448,11 @@ function request(toolName: string, args: Record<string, unknown>): ToolInvokeReq
   };
 }
 
-function commsStorage(connection: { connectionId: string; key: string; config: Record<string, unknown> }): Storage {
+function commsStorage(connection: {
+  connectionId: string;
+  key: string;
+  config: Record<string, unknown>;
+}): Storage & AsyncStorage {
   return {
     integrationConnections: {
       get: vi.fn(() => connection),
@@ -3465,7 +3469,7 @@ function commsStorage(connection: { connectionId: string; key: string; config: R
       markSent: vi.fn(),
       markFailed: vi.fn(),
     },
-  } as unknown as Storage;
+  } as unknown as Storage & AsyncStorage;
 }
 
 async function expectFailed(resultPromise: Promise<Record<string, unknown>>, errorPattern: RegExp): Promise<void> {

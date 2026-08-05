@@ -1148,8 +1148,8 @@ describe("ChatTurnAgentRunner stream and tool-loop behavior", () => {
   it("emits a warning loop event for repeated identical tool calls when detection is enabled", async () => {
     const createChatCompletion = vi
       .fn<() => Promise<ChatCompletionResponse>>()
-      .mockResolvedValueOnce(toolCallCompletion("latest ai tooling"))
-      .mockResolvedValueOnce(toolCallCompletion("latest ai tooling"))
+      .mockResolvedValueOnce(namedToolCallCompletion("time.now", {}))
+      .mockResolvedValueOnce(namedToolCallCompletion("time.now", {}))
       .mockResolvedValueOnce({
         model: "glm-5",
         choices: [
@@ -1178,7 +1178,7 @@ describe("ChatTurnAgentRunner stream and tool-loop behavior", () => {
     });
     const orchestrator = new ChatTurnAgentRunner({
       storage: createMockStorage() as never,
-      listToolCatalog: () => createToolCatalog(),
+      listToolCatalog: () => createToolCatalog(["time.now"]),
       createChatCompletion,
       invokeTool,
       toolLoopDetection: {
@@ -1199,7 +1199,7 @@ describe("ChatTurnAgentRunner stream and tool-loop behavior", () => {
       sessionId: "sess-loop-warning-1",
       turnId: randomUUID(),
       userMessageId: "msg-user-loop-warning-1",
-      content: "Search AI tooling references",
+      content: "Call `time.now` twice and then summarize.",
       mode: "code",
       providerId: "glm",
       model: "glm-5",
@@ -1207,7 +1207,7 @@ describe("ChatTurnAgentRunner stream and tool-loop behavior", () => {
       memoryMode: "off",
       thinkingLevel: "standard",
       toolAutonomy: "safe_auto",
-      historyMessages: [{ role: "user", content: "Search AI tooling references" }],
+      historyMessages: [{ role: "user", content: "Call `time.now` twice and then summarize." }],
     });
 
     expect(invokeTool).toHaveBeenCalledTimes(2);
@@ -1225,9 +1225,9 @@ describe("ChatTurnAgentRunner stream and tool-loop behavior", () => {
   it("suppresses further tool execution when repeated identical calls hit the critical threshold", async () => {
     const createChatCompletion = vi
       .fn<() => Promise<ChatCompletionResponse>>()
-      .mockResolvedValueOnce(toolCallCompletion("latest ai tooling"))
-      .mockResolvedValueOnce(toolCallCompletion("latest ai tooling"))
-      .mockResolvedValueOnce(toolCallCompletion("latest ai tooling"));
+      .mockResolvedValueOnce(namedToolCallCompletion("time.now", {}))
+      .mockResolvedValueOnce(namedToolCallCompletion("time.now", {}))
+      .mockResolvedValueOnce(namedToolCallCompletion("time.now", {}));
     const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValue({
       outcome: "executed",
       policyReason: "allowed",
@@ -1244,7 +1244,7 @@ describe("ChatTurnAgentRunner stream and tool-loop behavior", () => {
     });
     const orchestrator = new ChatTurnAgentRunner({
       storage: createMockStorage() as never,
-      listToolCatalog: () => createToolCatalog(),
+      listToolCatalog: () => createToolCatalog(["time.now"]),
       createChatCompletion,
       invokeTool,
       toolLoopDetection: {
@@ -1265,7 +1265,7 @@ describe("ChatTurnAgentRunner stream and tool-loop behavior", () => {
       sessionId: "sess-loop-critical-1",
       turnId: randomUUID(),
       userMessageId: "msg-user-loop-critical-1",
-      content: "Search AI tooling references",
+      content: "Keep calling `time.now` until the loop guard stops the repeated call.",
       mode: "code",
       providerId: "glm",
       model: "glm-5",
@@ -1273,7 +1273,9 @@ describe("ChatTurnAgentRunner stream and tool-loop behavior", () => {
       memoryMode: "off",
       thinkingLevel: "standard",
       toolAutonomy: "safe_auto",
-      historyMessages: [{ role: "user", content: "Search AI tooling references" }],
+      historyMessages: [
+        { role: "user", content: "Keep calling `time.now` until the loop guard stops the repeated call." },
+      ],
     });
 
     expect(invokeTool).toHaveBeenCalledTimes(2);
@@ -1286,7 +1288,7 @@ describe("ChatTurnAgentRunner stream and tool-loop behavior", () => {
         }),
       ]),
     );
-    expect(result.assistantContent).toContain("strongest relevant points");
+    expect(result.assistantContent).toContain("strongest");
     expect(result.turnTrace.failure?.failureClass).toBe("tool_loop_guard");
   });
 

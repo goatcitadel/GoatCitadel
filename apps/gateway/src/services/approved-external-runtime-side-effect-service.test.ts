@@ -2,11 +2,20 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Storage } from "@goatcitadel/storage";
+import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import { executeApprovedExternalRuntimeSideEffect } from "./approved-external-runtime-side-effect-service.js";
 import { claimIdempotentExternalSideEffect } from "./external-side-effect-runner-service.js";
 
 const cleanups: Array<() => void> = [];
+const asyncStorageByStorage = new WeakMap<Storage, ReturnType<typeof createSqliteAsyncStorage>>();
+
+function runtimeStorage(storage: Storage): ReturnType<typeof createSqliteAsyncStorage> {
+  const existing = asyncStorageByStorage.get(storage);
+  if (existing) return existing;
+  const created = createSqliteAsyncStorage(storage);
+  asyncStorageByStorage.set(storage, created);
+  return created;
+}
 
 afterEach(() => {
   for (const cleanup of cleanups.splice(0)) cleanup();
@@ -63,8 +72,8 @@ describe("approved external runtime side-effect boundary", () => {
         throw new Error("pending action store unavailable 3");
       })
       .mockImplementation(originalMarkResolved);
-    const execute = vi.fn(async (markExternalCallStarted: () => void) => {
-      markExternalCallStarted();
+    const execute = vi.fn(async (markExternalCallStarted: () => Promise<void>) => {
+      await markExternalCallStarted();
       return {
         outcome: "executed" as const,
         policyReason: "approved plugin mutation executed",
@@ -74,13 +83,13 @@ describe("approved external runtime side-effect boundary", () => {
     });
 
     const first = await executeApprovedExternalRuntimeSideEffect({
-      storage,
+      storage: runtimeStorage(storage),
       approvalId,
       request,
       execute,
     });
     const second = await executeApprovedExternalRuntimeSideEffect({
-      storage,
+      storage: runtimeStorage(storage),
       approvalId,
       request,
       execute,
@@ -113,8 +122,8 @@ describe("approved external runtime side-effect boundary", () => {
         throw new Error("external side-effect ledger unavailable");
       })
       .mockImplementation(originalCreateOrGet);
-    const execute = vi.fn(async (markExternalCallStarted: () => void) => {
-      markExternalCallStarted();
+    const execute = vi.fn(async (markExternalCallStarted: () => Promise<void>) => {
+      await markExternalCallStarted();
       return {
         outcome: "executed" as const,
         policyReason: "approved plugin mutation executed after restart",
@@ -129,14 +138,24 @@ describe("approved external runtime side-effect boundary", () => {
       actorScope: "workspace-1",
     };
 
-    await expect(executeApprovedExternalRuntimeSideEffect({ storage, approvalId, request, execute })).rejects.toThrow(
-      "external side-effect ledger unavailable",
-    );
+    await expect(
+      executeApprovedExternalRuntimeSideEffect({
+        storage: runtimeStorage(storage),
+        approvalId,
+        request,
+        execute,
+      }),
+    ).rejects.toThrow("external side-effect ledger unavailable");
     expect(storage.mutationIdempotency.get(mutationIdentity)).toBeUndefined();
     expect(storage.externalSideEffectRuns.listByWorkspace("workspace-1")).toEqual([]);
     expect(execute).not.toHaveBeenCalled();
 
-    const retried = await executeApprovedExternalRuntimeSideEffect({ storage, approvalId, request, execute });
+    const retried = await executeApprovedExternalRuntimeSideEffect({
+      storage: runtimeStorage(storage),
+      approvalId,
+      request,
+      execute,
+    });
 
     expect(retried).toMatchObject({ outcome: "executed", auditEventId: "audit-claim-ledger-retry" });
     expect(execute).toHaveBeenCalledTimes(1);
@@ -157,7 +176,12 @@ describe("approved external runtime side-effect boundary", () => {
       result: { inspected: true },
     }));
 
-    const result = await executeApprovedExternalRuntimeSideEffect({ storage, approvalId, request, execute });
+    const result = await executeApprovedExternalRuntimeSideEffect({
+      storage: runtimeStorage(storage),
+      approvalId,
+      request,
+      execute,
+    });
 
     expect(result).toMatchObject({ outcome: "executed", result: { inspected: true } });
     expect(storage.externalSideEffectRuns.listByWorkspace("workspace-1")).toEqual([
@@ -177,8 +201,8 @@ describe("approved external runtime side-effect boundary", () => {
 
   it("distinguishes a local approved mutation from an external-runtime boundary", async () => {
     const { storage, approvalId, request } = createHarness("local-mutation-boundary-truth");
-    const execute = vi.fn(async (markExternalCallStarted: () => void) => {
-      markExternalCallStarted();
+    const execute = vi.fn(async (markExternalCallStarted: () => Promise<void>) => {
+      await markExternalCallStarted();
       return {
         outcome: "executed" as const,
         policyReason: "approved local file mutation completed",
@@ -187,7 +211,12 @@ describe("approved external runtime side-effect boundary", () => {
       };
     });
 
-    await executeApprovedExternalRuntimeSideEffect({ storage, approvalId, request, execute });
+    await executeApprovedExternalRuntimeSideEffect({
+      storage: runtimeStorage(storage),
+      approvalId,
+      request,
+      execute,
+    });
 
     expect(storage.approvalEvents.listByApprovalId(approvalId)).toEqual([
       expect.objectContaining({
@@ -203,8 +232,8 @@ describe("approved external runtime side-effect boundary", () => {
 
   it("records a declared external-runtime mutation as crossing the external boundary", async () => {
     const { storage, approvalId, request } = createHarness("external-runtime-boundary-truth");
-    const execute = vi.fn(async (markExternalCallStarted: () => void) => {
-      markExternalCallStarted();
+    const execute = vi.fn(async (markExternalCallStarted: () => Promise<void>) => {
+      await markExternalCallStarted();
       return {
         outcome: "executed" as const,
         policyReason: "approved external provider mutation completed",
@@ -214,7 +243,7 @@ describe("approved external runtime side-effect boundary", () => {
     });
 
     await executeApprovedExternalRuntimeSideEffect({
-      storage,
+      storage: runtimeStorage(storage),
       approvalId,
       request: { ...request, externalRuntime: true },
       execute,
@@ -242,9 +271,9 @@ describe("approved external runtime side-effect boundary", () => {
       taskId: request.taskId,
       runId: request.runId ?? request.policyContext?.runId,
     };
-    const seeded = claimIdempotentExternalSideEffect({
-      mutationStore: storage.mutationIdempotency,
-      sideEffectRunStore: storage.externalSideEffectRuns,
+    const seeded = await claimIdempotentExternalSideEffect({
+      mutationStore: runtimeStorage(storage).mutationIdempotency,
+      sideEffectRunStore: runtimeStorage(storage).externalSideEffectRuns,
       workspaceId: "workspace-1",
       boundary: "approved_external_runtime",
       catalogId: request.toolName,
@@ -260,7 +289,12 @@ describe("approved external runtime side-effect boundary", () => {
       .run("2020-01-01T00:00:00.000Z", seeded.sideEffectRunId!);
     const execute = vi.fn();
 
-    const result = await executeApprovedExternalRuntimeSideEffect({ storage, approvalId, request, execute });
+    const result = await executeApprovedExternalRuntimeSideEffect({
+      storage: runtimeStorage(storage),
+      approvalId,
+      request,
+      execute,
+    });
 
     expect(execute).not.toHaveBeenCalled();
     expect(result).toMatchObject({
@@ -305,10 +339,10 @@ describe("approved external runtime side-effect boundary", () => {
       taskId: request.taskId,
       runId: request.runId ?? request.policyContext?.runId,
     };
-    const seeded = claimIdempotentExternalSideEffect({
-      mutationStore: storage.mutationIdempotency,
-      sideEffectRunStore: storage.externalSideEffectRuns,
-      runClaimTransaction: (work) => storage.runImmediateTransaction(work),
+    const seeded = await claimIdempotentExternalSideEffect({
+      mutationStore: runtimeStorage(storage).mutationIdempotency,
+      sideEffectRunStore: runtimeStorage(storage).externalSideEffectRuns,
+      runClaimTransaction: (work) => runtimeStorage(storage).runImmediateTransaction(work),
       workspaceId: "workspace-1",
       boundary: "approved_external_runtime",
       catalogId: request.toolName,
@@ -322,9 +356,14 @@ describe("approved external runtime side-effect boundary", () => {
     const realDateNow = Date.now;
     const dateNow = vi.spyOn(Date, "now").mockImplementation(() => realDateNow() + 60 * 60 * 1000);
     try {
-      await expect(executeApprovedExternalRuntimeSideEffect({ storage, approvalId, request, execute })).rejects.toThrow(
-        "already executing on another worker",
-      );
+      await expect(
+        executeApprovedExternalRuntimeSideEffect({
+          storage: runtimeStorage(storage),
+          approvalId,
+          request,
+          execute,
+        }),
+      ).rejects.toThrow("already executing on another worker");
     } finally {
       dateNow.mockRestore();
     }
@@ -344,10 +383,10 @@ describe("approved external runtime side-effect boundary", () => {
       taskId: request.taskId,
       runId: request.runId ?? request.policyContext?.runId,
     };
-    const seeded = claimIdempotentExternalSideEffect({
-      mutationStore: storage.mutationIdempotency,
-      sideEffectRunStore: storage.externalSideEffectRuns,
-      runClaimTransaction: (work) => storage.runImmediateTransaction(work),
+    const seeded = await claimIdempotentExternalSideEffect({
+      mutationStore: runtimeStorage(storage).mutationIdempotency,
+      sideEffectRunStore: runtimeStorage(storage).externalSideEffectRuns,
+      runClaimTransaction: (work) => runtimeStorage(storage).runImmediateTransaction(work),
       workspaceId: "workspace-1",
       boundary: "approved_external_runtime",
       catalogId: request.toolName,
@@ -365,7 +404,12 @@ describe("approved external runtime side-effect boundary", () => {
     const dateNow = vi.spyOn(Date, "now").mockImplementation(() => realDateNow() - 60 * 60 * 1000);
     let result;
     try {
-      result = await executeApprovedExternalRuntimeSideEffect({ storage, approvalId, request, execute });
+      result = await executeApprovedExternalRuntimeSideEffect({
+        storage: runtimeStorage(storage),
+        approvalId,
+        request,
+        execute,
+      });
     } finally {
       dateNow.mockRestore();
     }
@@ -391,9 +435,9 @@ describe("approved external runtime side-effect boundary", () => {
       taskId: request.taskId,
       runId: request.runId ?? request.policyContext?.runId,
     };
-    const seeded = claimIdempotentExternalSideEffect({
-      mutationStore: storage.mutationIdempotency,
-      sideEffectRunStore: storage.externalSideEffectRuns,
+    const seeded = await claimIdempotentExternalSideEffect({
+      mutationStore: runtimeStorage(storage).mutationIdempotency,
+      sideEffectRunStore: runtimeStorage(storage).externalSideEffectRuns,
       workspaceId: "workspace-1",
       boundary: "approved_external_runtime",
       catalogId: request.toolName,
@@ -437,7 +481,12 @@ describe("approved external runtime side-effect boundary", () => {
     );
     const execute = vi.fn();
 
-    const result = await executeApprovedExternalRuntimeSideEffect({ storage, approvalId, request, execute });
+    const result = await executeApprovedExternalRuntimeSideEffect({
+      storage: runtimeStorage(storage),
+      approvalId,
+      request,
+      execute,
+    });
 
     expect(result).toMatchObject(ownerResult);
     expect(execute).not.toHaveBeenCalled();
@@ -454,8 +503,8 @@ describe("approved external runtime side-effect boundary", () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const execute = vi.fn(async (markExternalCallStarted: () => void) => {
-      markExternalCallStarted();
+    const execute = vi.fn(async (markExternalCallStarted: () => Promise<void>) => {
+      await markExternalCallStarted();
       await gate;
       return {
         outcome: "executed" as const,
@@ -465,9 +514,19 @@ describe("approved external runtime side-effect boundary", () => {
       };
     });
 
-    const firstPromise = executeApprovedExternalRuntimeSideEffect({ storage, approvalId, request, execute });
+    const firstPromise = executeApprovedExternalRuntimeSideEffect({
+      storage: runtimeStorage(storage),
+      approvalId,
+      request,
+      execute,
+    });
     await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
-    const secondPromise = executeApprovedExternalRuntimeSideEffect({ storage, approvalId, request, execute });
+    const secondPromise = executeApprovedExternalRuntimeSideEffect({
+      storage: runtimeStorage(storage),
+      approvalId,
+      request,
+      execute,
+    });
     release();
     const [first, second] = await Promise.all([firstPromise, secondPromise]);
 
@@ -489,7 +548,12 @@ describe("approved external runtime side-effect boundary", () => {
       auditEventId: "audit-preflight-block",
     }));
 
-    const result = await executeApprovedExternalRuntimeSideEffect({ storage, approvalId, request, execute });
+    const result = await executeApprovedExternalRuntimeSideEffect({
+      storage: runtimeStorage(storage),
+      approvalId,
+      request,
+      execute,
+    });
 
     expect(result).toMatchObject({ outcome: "blocked", policyReason: "blocked by final runtime policy" });
     expect(storage.pendingApprovalActions.find(approvalId)).toMatchObject({ resolutionStatus: "failed" });
@@ -508,8 +572,8 @@ describe("approved external runtime side-effect boundary", () => {
         throw new Error("external ledger temporarily unavailable");
       })
       .mockImplementation(originalMarkCompleted);
-    const execute = vi.fn(async (markExternalCallStarted: () => void) => {
-      markExternalCallStarted();
+    const execute = vi.fn(async (markExternalCallStarted: () => Promise<void>) => {
+      await markExternalCallStarted();
       return {
         outcome: "executed" as const,
         policyReason: "approved plugin mutation executed",
@@ -518,7 +582,12 @@ describe("approved external runtime side-effect boundary", () => {
       };
     });
 
-    const result = await executeApprovedExternalRuntimeSideEffect({ storage, approvalId, request, execute });
+    const result = await executeApprovedExternalRuntimeSideEffect({
+      storage: runtimeStorage(storage),
+      approvalId,
+      request,
+      execute,
+    });
 
     expect(result).toMatchObject({ outcome: "executed", auditEventId: "audit-completion-retry" });
     expect(execute).toHaveBeenCalledTimes(1);
@@ -546,8 +615,8 @@ describe("approved external runtime side-effect boundary", () => {
       actorScope: "workspace-1",
     };
     let replacementToken: string | undefined;
-    const execute = vi.fn(async (markExternalCallStarted: () => void) => {
-      markExternalCallStarted();
+    const execute = vi.fn(async (markExternalCallStarted: () => Promise<void>) => {
+      await markExternalCallStarted();
       const current = storage.mutationIdempotency.get(mutationIdentity)!;
       expect(current.claimToken).toEqual(expect.any(String));
       expect(
@@ -571,7 +640,12 @@ describe("approved external runtime side-effect boundary", () => {
       };
     });
 
-    const result = await executeApprovedExternalRuntimeSideEffect({ storage, approvalId, request, execute });
+    const result = await executeApprovedExternalRuntimeSideEffect({
+      storage: runtimeStorage(storage),
+      approvalId,
+      request,
+      execute,
+    });
 
     expect(execute).toHaveBeenCalledTimes(1);
     expect(result).toMatchObject({
@@ -629,8 +703,8 @@ describe("approved external runtime side-effect boundary", () => {
     const providerGate = new Promise<void>((resolve) => {
       releaseProvider = resolve;
     });
-    const provider = vi.fn(async (markExternalCallStarted: () => void) => {
-      markExternalCallStarted();
+    const provider = vi.fn(async (markExternalCallStarted: () => Promise<void>) => {
+      await markExternalCallStarted();
       await providerGate;
       return {
         outcome: "executed" as const,
@@ -641,7 +715,7 @@ describe("approved external runtime side-effect boundary", () => {
     });
 
     const winner = executeApprovedExternalRuntimeSideEffect({
-      storage: workerA,
+      storage: runtimeStorage(workerA),
       approvalId: approval.approvalId,
       request,
       execute: provider,
@@ -649,7 +723,7 @@ describe("approved external runtime side-effect boundary", () => {
     await vi.waitFor(() => expect(provider).toHaveBeenCalledTimes(1));
     await expect(
       executeApprovedExternalRuntimeSideEffect({
-        storage: workerB,
+        storage: runtimeStorage(workerB),
         approvalId: approval.approvalId,
         request,
         execute: provider,
@@ -707,10 +781,10 @@ describe("approved external runtime side-effect boundary", () => {
       taskId: undefined,
       runId: undefined,
     };
-    const claim = claimIdempotentExternalSideEffect({
-      mutationStore: crashedWorker.mutationIdempotency,
-      sideEffectRunStore: crashedWorker.externalSideEffectRuns,
-      runClaimTransaction: (work) => crashedWorker.runImmediateTransaction(work),
+    const claim = await claimIdempotentExternalSideEffect({
+      mutationStore: runtimeStorage(crashedWorker).mutationIdempotency,
+      sideEffectRunStore: runtimeStorage(crashedWorker).externalSideEffectRuns,
+      runClaimTransaction: (work) => runtimeStorage(crashedWorker).runImmediateTransaction(work),
       workspaceId: "workspace-1",
       boundary: "approved_external_runtime",
       catalogId: request.toolName,
@@ -736,7 +810,7 @@ describe("approved external runtime side-effect boundary", () => {
     });
 
     const recovered = await executeApprovedExternalRuntimeSideEffect({
-      storage: recoveryWorker,
+      storage: runtimeStorage(recoveryWorker),
       approvalId: approval.approvalId,
       request,
       execute: replayProvider,

@@ -41,9 +41,9 @@ const catalog: PersonalityCatalogResponse = {
 function createDeps(defaultPersonalityId = "operator"): ChatCommandDependencies {
   const currentCatalog = { ...catalog, defaultPersonalityId };
   return {
-    getSession: vi.fn(() => ({ sessionId: "session-1" })),
-    getPersonalityCatalog: vi.fn(() => currentCatalog),
-    setDefaultPersonality: vi.fn((id: string) => ({
+    getSession: vi.fn(async () => ({ sessionId: "session-1" })),
+    getPersonalityCatalog: vi.fn(async () => currentCatalog),
+    setDefaultPersonality: vi.fn(async (id: string) => ({
       ...catalog,
       defaultPersonalityId: id,
     })),

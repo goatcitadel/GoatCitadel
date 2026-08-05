@@ -6,11 +6,11 @@ export const journeyTimelineRouteMethods = ["listTimeline"] as const;
 export type JourneyTimelineRouteMethod = (typeof journeyTimelineRouteMethods)[number];
 export type JourneyTimelineRoutePort = Pick<JourneyTimelineService, JourneyTimelineRouteMethod>;
 export type JourneyTimelineRouteService = Readonly<{
-  listTimeline(input: JourneyTimelineQuery): JourneyTimelinePage;
+  listTimeline(input: JourneyTimelineQuery): Promise<JourneyTimelinePage>;
 }>;
 
 export function createJourneyTimelineRouteService(port: JourneyTimelineRoutePort): JourneyTimelineRouteService {
   return Object.freeze({
-    listTimeline: (input) => port.listTimeline(input),
+    listTimeline: async (input) => await port.listTimeline(input),
   });
 }

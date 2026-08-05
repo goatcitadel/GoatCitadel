@@ -81,14 +81,14 @@ describe("CapabilityScopeResolver", () => {
     });
   }
 
-  it("resolves ALL for every type when unconfigured", () => {
-    const r = makeResolver([]).resolve("personal", "default");
+  it("resolves ALL for every type when unconfigured", async () => {
+    const r = await makeResolver([]).resolve("personal", "default");
     expect(r.skills).toBe("ALL");
     expect(r.integrations).toBe("ALL");
     expect(r.mcpServers).toBe("ALL");
   });
 
-  it("scopes mcpServers by citadel grant", () => {
+  it("scopes mcpServers by citadel grant", async () => {
     const rows: CapabilityScopeAssignment[] = [
       {
         assignmentId: "1",
@@ -101,13 +101,13 @@ describe("CapabilityScopeResolver", () => {
         updatedAt: "t",
       },
     ];
-    const r = makeResolver(rows).resolve("personal", "default");
+    const r = await makeResolver(rows).resolve("personal", "default");
     expect(r.mcpServers).not.toBe("ALL");
     expect([...(r.mcpServers as Set<string>)]).toEqual(["m1"]);
     expect(r.skills).toBe("ALL"); // other types untouched
   });
 
-  it("fail-open: returns ALL when the kill-switch disables scoping", () => {
+  it("fail-open: returns ALL when the kill-switch disables scoping", async () => {
     const rows: CapabilityScopeAssignment[] = [
       {
         assignmentId: "1",
@@ -120,11 +120,11 @@ describe("CapabilityScopeResolver", () => {
         updatedAt: "t",
       },
     ];
-    const r = makeResolver(rows, { disabled: true }).resolve("personal", "default");
+    const r = await makeResolver(rows, { disabled: true }).resolve("personal", "default");
     expect(r.mcpServers).toBe("ALL");
   });
 
-  it("fail-closed: returns empty capability sets when a dependency throws", () => {
+  it("fail-closed: returns empty capability sets when a dependency throws", async () => {
     const resolver = new CapabilityScopeResolver({
       listAssignmentsForScope: () => {
         throw new Error("boom");
@@ -134,7 +134,7 @@ describe("CapabilityScopeResolver", () => {
       listAllMcpServerIds: () => [],
       isDisabled: () => false,
     });
-    const r = resolver.resolve("personal", "default");
+    const r = await resolver.resolve("personal", "default");
     expect([...(r.skills as Set<string>)]).toEqual([]);
     expect([...(r.integrations as Set<string>)]).toEqual([]);
     expect([...(r.mcpServers as Set<string>)]).toEqual([]);

@@ -412,7 +412,7 @@ describe("WorkspacePathBridgeService", () => {
     const targetReplay = request({ verificationId: "target-replay" });
     const historical = await service.resolve(targetReplay);
     fs.directory("G:\\Escaped").symlink(PROJECT, "G:\\Escaped");
-    expect(service.inspect("workspace-1", targetReplay.verificationId)).toEqual(historical);
+    await expect(service.inspect("workspace-1", targetReplay.verificationId)).resolves.toEqual(historical);
     await expect(service.resolve(targetReplay)).rejects.toThrow(/conflicts with current filesystem evidence/u);
   });
 
@@ -444,9 +444,11 @@ describe("WorkspacePathBridgeService", () => {
   it("keeps inspection and lists workspace-scoped", async () => {
     const { service } = createService({});
     const snapshot = await service.resolve(request());
-    expect(service.inspect("workspace-1", snapshot.snapshotId)).toEqual(snapshot);
-    expect(service.list("workspace-1", 10)).toEqual([snapshot]);
-    expect(() => service.inspect("workspace-2", snapshot.snapshotId)).toThrow(/outside the requested workspace/u);
+    await expect(service.inspect("workspace-1", snapshot.snapshotId)).resolves.toEqual(snapshot);
+    await expect(service.list("workspace-1", 10)).resolves.toEqual([snapshot]);
+    await expect(service.inspect("workspace-2", snapshot.snapshotId)).rejects.toThrow(
+      /outside the requested workspace/u,
+    );
   });
 });
 

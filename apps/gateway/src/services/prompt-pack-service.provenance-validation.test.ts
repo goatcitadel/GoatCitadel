@@ -181,11 +181,11 @@ describe("prompt-pack diagnostics Expected Tool Families key", () => {
 });
 
 describe("prompt-pack import provenance", () => {
-  it("uses Pack-Version for name and sourceLabel when the caller omits them and stores the content hash", () => {
+  it("uses Pack-Version for name and sourceLabel when the caller omits them and stores the content hash", async () => {
     const replacePackTests = createReplacePackTestsMock();
     const service = createImportService(replacePackTests);
 
-    service.importPromptPack({ content: PACK_WITH_HEADER });
+    await service.importPromptPack({ content: PACK_WITH_HEADER });
 
     expect(replacePackTests).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -196,23 +196,23 @@ describe("prompt-pack import provenance", () => {
     );
   });
 
-  it("prefers caller-supplied name and sourceLabel over Pack-Version", () => {
+  it("prefers caller-supplied name and sourceLabel over Pack-Version", async () => {
     const replacePackTests = createReplacePackTestsMock();
     const service = createImportService(replacePackTests);
 
-    service.importPromptPack({ content: PACK_WITH_HEADER, name: "Named Pack", sourceLabel: "manual-import" });
+    await service.importPromptPack({ content: PACK_WITH_HEADER, name: "Named Pack", sourceLabel: "manual-import" });
 
     expect(replacePackTests).toHaveBeenCalledWith(
       expect.objectContaining({ name: "Named Pack", sourceLabel: "manual-import" }),
     );
   });
 
-  it("rejects imports whose declared counts do not match parsed tests", () => {
+  it("rejects imports whose declared counts do not match parsed tests", async () => {
     const replacePackTests = createReplacePackTestsMock();
     const service = createImportService(replacePackTests);
     const content = PACK_WITH_HEADER.replace("- 1 Chat tests", "- 3 Chat tests");
 
-    expect(() => service.importPromptPack({ content })).toThrow(
+    await expect(service.importPromptPack({ content })).rejects.toThrow(
       /Prompt pack structure validation failed: declared 3 chat tests but parsed 1/,
     );
     expect(replacePackTests).not.toHaveBeenCalled();
@@ -271,11 +271,11 @@ describe("v7 overall gate pack fixture", () => {
 });
 
 describe("builtin prompt pack import", () => {
-  it("imports the overall-v7 builtin with Pack-Version provenance and a fixed packId", () => {
+  it("imports the overall-v7 builtin with Pack-Version provenance and a fixed packId", async () => {
     const replacePackTests = createReplacePackTestsMock();
     const service = createImportService(replacePackTests);
 
-    const imported = service.importBuiltinPromptPack("overall-v7");
+    const imported = await service.importBuiltinPromptPack("overall-v7");
 
     expect(replacePackTests).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -290,8 +290,8 @@ describe("builtin prompt pack import", () => {
     expect(imported.pack.packId).toBe("overall-v7");
   });
 
-  it("still rejects unknown builtin pack keys", () => {
+  it("still rejects unknown builtin pack keys", async () => {
     const service = createImportService(createReplacePackTestsMock());
-    expect(() => service.importBuiltinPromptPack("nope")).toThrow(/Unknown built-in prompt pack/);
+    await expect(service.importBuiltinPromptPack("nope")).rejects.toThrow(/Unknown built-in prompt pack/);
   });
 });

@@ -61,6 +61,11 @@ export interface PostgresHealthCheck {
   issues: string[];
 }
 
+export interface PostgresExecutionResult<T extends QueryResultRow = QueryResultRow> {
+  rows: T[];
+  rowCount: number;
+}
+
 export interface PostgresMigrationLockOptions {
   waitForLock?: boolean;
 }
@@ -164,8 +169,20 @@ export class PostgresDatabaseClient {
     sql: string,
     params: readonly unknown[] = [],
   ): Promise<T[]> {
-    const result = await this.pool.query<T>(sql, await this.sanitizeParams(sql, params));
-    return result.rows;
+    return (await this.execute<T>(sql, params)).rows;
+  }
+
+  public async execute<T extends QueryResultRow = QueryResultRow>(
+    sql: string,
+    params: readonly unknown[] = [],
+    pinnedClient?: PoolClient,
+  ): Promise<PostgresExecutionResult<T>> {
+    const executor = pinnedClient ?? this.pool;
+    const result = await executor.query<T>(sql, await this.sanitizeParams(sql, params));
+    return {
+      rows: result.rows,
+      rowCount: result.rowCount ?? 0,
+    };
   }
 
   public async queryOne<T extends QueryResultRow = QueryResultRow>(

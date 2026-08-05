@@ -28,9 +28,9 @@ export interface McpDurableTaskView {
 }
 
 export interface McpDurableTasksPort {
-  listRuns: (limit?: number) => DurableRunRecord[];
-  getRun: (runId: string) => DurableRunRecord | undefined;
-  cancelRun: (runId: string) => DurableRunRecord;
+  listRuns: (limit?: number) => Promise<DurableRunRecord[]>;
+  getRun: (runId: string) => Promise<DurableRunRecord | undefined>;
+  cancelRun: (runId: string) => Promise<DurableRunRecord>;
 }
 
 interface McpDurableTaskScope {
@@ -113,8 +113,7 @@ export async function handleInternalMcpDurableTasksInvoke(
     switch (input.toolName) {
       case MCP_DURABLE_TASKS_LIST_TOOL_NAME: {
         const limit = parseLimit(input.arguments?.limit) ?? 50;
-        const tasks = deps
-          .listRuns(200)
+        const tasks = (await deps.listRuns(200))
           .filter((run) => durableRunMatchesScope(run, scope))
           .slice(0, limit)
           .map(toDurableTaskView);
@@ -122,7 +121,7 @@ export async function handleInternalMcpDurableTasksInvoke(
       }
       case MCP_DURABLE_TASKS_GET_TOOL_NAME: {
         const taskId = requireNonEmptyString(input.arguments?.taskId, "taskId");
-        const run = deps.getRun(taskId);
+        const run = await deps.getRun(taskId);
         if (!run || !durableRunMatchesScope(run, scope)) {
           return { ok: false, error: `Durable task ${taskId} not found.` };
         }
@@ -130,11 +129,11 @@ export async function handleInternalMcpDurableTasksInvoke(
       }
       case MCP_DURABLE_TASKS_CANCEL_TOOL_NAME: {
         const taskId = requireNonEmptyString(input.arguments?.taskId, "taskId");
-        const run = deps.getRun(taskId);
+        const run = await deps.getRun(taskId);
         if (!run || !durableRunMatchesScope(run, scope)) {
           return { ok: false, error: `Durable task ${taskId} not found.` };
         }
-        return { ok: true, output: { task: toDurableTaskView(deps.cancelRun(taskId)) } };
+        return { ok: true, output: { task: toDurableTaskView(await deps.cancelRun(taskId)) } };
       }
       default:
         return { ok: false, error: `Unsupported internal durable-tasks tool ${input.toolName}.` };

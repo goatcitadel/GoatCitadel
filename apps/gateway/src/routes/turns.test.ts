@@ -104,7 +104,7 @@ describe("turns routes", () => {
       usage: {},
       routing: { effectiveProviderId: "anthropic", effectiveModel: "claude-x" },
     }));
-    const getAgent = vi.fn(() => ({
+    const getAgent = vi.fn(async () => ({
       agentId: "agent_1",
       presetDefaults: {
         preferredProviderId: "anthropic",
@@ -142,7 +142,7 @@ describe("turns routes", () => {
       usage: {},
       routing: {},
     }));
-    const getAgent = vi.fn(() => {
+    const getAgent = vi.fn(async () => {
       throw new Error("agent not found");
     });
     app = buildApp(createChatCompletion, getAgent);

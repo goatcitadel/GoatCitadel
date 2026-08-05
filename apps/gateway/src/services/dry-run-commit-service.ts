@@ -59,6 +59,15 @@ export interface DryRunPreviewInput {
   createdAt: string;
 }
 
+type Awaitable<T> = T | Promise<T>;
+
+/** Promise-compatible port used by the Gateway async-storage boundary and synchronous test stores. */
+export interface DryRunCommitStorePort {
+  create(record: DryRunCommitRecord): Awaitable<DryRunCommitRecord>;
+  get(dryRunId: string): Awaitable<DryRunCommitRecord | undefined>;
+  update(dryRunId: string, patch: Partial<DryRunCommitRecord>): Awaitable<DryRunCommitRecord | undefined>;
+}
+
 /** Compute the canonical, domain-separated dry-run hash for a planned action. Pure + deterministic. */
 export function computeDryRunHash(plannedAction: DryRunPlannedAction): string {
   // Hash the canonical bytes of a fixed-shape object so the digest is independent of key order and
@@ -83,7 +92,10 @@ function nextDryRunId(): string {
  * Produce + persist a DRY-RUN preview for a planned side-effect. NO external boundary is crossed.
  * The returned record is in `awaiting_commit` state and carries the `dryRunHash` an operator approves.
  */
-export function createDryRunPreview(store: DryRunCommitStore, input: DryRunPreviewInput): DryRunCommitRecord {
+export async function createDryRunPreview(
+  store: DryRunCommitStorePort,
+  input: DryRunPreviewInput,
+): Promise<DryRunCommitRecord> {
   const dryRunHash = computeDryRunHash(input.plannedAction);
   const record: DryRunCommitRecord = {
     dryRunId: nextDryRunId(),
@@ -101,12 +113,12 @@ export function createDryRunPreview(store: DryRunCommitStore, input: DryRunPrevi
 }
 
 /** Operator approval of a previewed action. The commit is refused until this has been recorded. */
-export function approveDryRun(
-  store: DryRunCommitStore,
+export async function approveDryRun(
+  store: DryRunCommitStorePort,
   dryRunId: string,
   input: { approvedBy?: string; approvedAt: string },
-): DryRunCommitRecord | undefined {
-  const record = store.get(dryRunId);
+): Promise<DryRunCommitRecord | undefined> {
+  const record = await store.get(dryRunId);
   if (!record || record.state !== "awaiting_commit") {
     return record;
   }
@@ -164,10 +176,10 @@ export type DryRunCommitResult<TValue> =
  * commit a different one physically cannot reach the external system.
  */
 export async function commitDryRun<TValue>(
-  store: DryRunCommitStore,
+  store: DryRunCommitStorePort,
   input: DryRunCommitInput<TValue>,
 ): Promise<DryRunCommitResult<TValue>> {
-  const existing = store.get(input.dryRunId);
+  const existing = await store.get(input.dryRunId);
   if (!existing) {
     throw new Error(`dry-run record ${input.dryRunId} not found; cannot commit an unknown preview`);
   }
@@ -189,7 +201,7 @@ export async function commitDryRun<TValue>(
       approvedDryRunHash: existing.dryRunHash,
       recordedAt: input.committedAt,
     };
-    const record = store.update(input.dryRunId, { diagnostic, updatedAt: input.committedAt }) ?? existing;
+    const record = (await store.update(input.dryRunId, { diagnostic, updatedAt: input.committedAt })) ?? existing;
     return { status: "rejected", record, diagnostic };
   }
 
@@ -206,11 +218,11 @@ export async function commitDryRun<TValue>(
       recordedAt: input.committedAt,
     };
     const record =
-      store.update(input.dryRunId, {
+      (await store.update(input.dryRunId, {
         state: "rejected_hash_mismatch",
         diagnostic,
         updatedAt: input.committedAt,
-      }) ?? existing;
+      })) ?? existing;
     return { status: "rejected", record, diagnostic };
   }
 
@@ -226,12 +238,12 @@ export async function commitDryRun<TValue>(
   try {
     const value = await input.execute(context);
     const record =
-      store.update(input.dryRunId, {
+      (await store.update(input.dryRunId, {
         state: "committed",
         committedAt: input.committedAt,
         externalReferenceId: readExternalReferenceId(value),
         updatedAt: input.committedAt,
-      }) ?? existing;
+      })) ?? existing;
     return { status: "committed", record, value };
   } catch (error) {
     const diagnostic: DryRunCommitDiagnostic = {
@@ -247,11 +259,11 @@ export async function commitDryRun<TValue>(
       recordedAt: input.committedAt,
     };
     const record =
-      store.update(input.dryRunId, {
+      (await store.update(input.dryRunId, {
         state: "rejected_commit_failed",
         diagnostic,
         updatedAt: input.committedAt,
-      }) ?? existing;
+      })) ?? existing;
     return {
       status: "failed",
       record,

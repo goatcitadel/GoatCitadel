@@ -9,7 +9,7 @@ import type {
   RealtimeEvent,
 } from "@goatcitadel/contracts";
 import { canonicalJsonString, ConflictError, ValidationError } from "@goatcitadel/contracts";
-import type { DurableChatUserInputResponderAuthSource, Storage } from "@goatcitadel/storage";
+import type { DurableChatUserInputResponderAuthSource, AsyncStorage as Storage } from "@goatcitadel/storage";
 import { buildChatThreadResponse, resolveNewestLeafTurnId } from "./chat-thread-utils.js";
 import type { ChatTurnSessionState } from "./chat-turn-prep-service.js";
 import type { DurableRunService } from "./durable-run-service.js";
@@ -44,7 +44,7 @@ export interface ChatMessageRouteRuntimeHost {
     source: string,
     payload: Record<string, unknown>,
     options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
-  ): void;
+  ): Promise<unknown>;
   recordDevDiagnostic(input: {
     level: "info" | "warn" | "error";
     category: string;
@@ -69,9 +69,8 @@ export async function getChatThread(
   runtime.getSession(sessionId);
   const state = await runtime.loadChatTurnSessionState(sessionId, {
     includeDecisionTrace: options.includeDecisionTrace === true,
-    isConversationTrace: (trace) => !hasExactSystemHeartbeatRunIdentity(runtime, trace),
   });
-  return buildChatThreadFromState(runtime, sessionId, state);
+  return await buildChatThreadFromState(runtime, sessionId, state);
 }
 
 export async function selectChatBranchTurn(
@@ -80,17 +79,13 @@ export async function selectChatBranchTurn(
   turnId: string,
 ): Promise<ChatThreadResponse> {
   runtime.getSession(sessionId);
-  const loadOptions: ChatThreadLoadOptions = {
-    isConversationTrace: (trace) => !hasExactSystemHeartbeatRunIdentity(runtime, trace),
-  };
+  const loadOptions: ChatThreadLoadOptions = {};
   const state = await runtime.loadChatTurnSessionState(sessionId, loadOptions);
-  const target = state.traces.find(
-    (trace) =>
-      trace.turnId === turnId &&
-      state.messagesById.has(trace.userMessageId) &&
-      !hasExactSystemHeartbeatRunIdentity(runtime, trace),
-  );
+  const target = state.traces.find((trace) => trace.turnId === turnId && state.messagesById.has(trace.userMessageId));
   if (!target) {
+    throw new Error(`Chat turn ${turnId} not found in session ${sessionId}`);
+  }
+  if (await hasExactSystemHeartbeatRunIdentity(runtime, target)) {
     throw new Error(`Chat turn ${turnId} not found in session ${sessionId}`);
   }
   const newestLeafTurnId = resolveNewestLeafTurnId(
@@ -106,9 +101,9 @@ export async function selectChatBranchTurn(
     ),
     state.childrenByTurnId,
   );
-  runtime.storage.chatSessionBranchState.setActiveLeaf(sessionId, newestLeafTurnId);
+  await runtime.storage.chatSessionBranchState.setActiveLeaf(sessionId, newestLeafTurnId);
   const nextState = await runtime.loadChatTurnSessionState(sessionId, loadOptions);
-  runtime.publishRealtime(
+  await runtime.publishRealtime(
     "chat_thread_updated",
     "chat",
     {
@@ -126,17 +121,17 @@ export async function selectChatBranchTurn(
       },
     },
   );
-  return buildChatThreadFromState(runtime, sessionId, {
+  return await buildChatThreadFromState(runtime, sessionId, {
     ...nextState,
     activeLeafTurnId: newestLeafTurnId,
   });
 }
 
-export function getTurnContextManifestForSession(
+export async function getTurnContextManifestForSession(
   runtime: ChatMessageRouteRuntimeHost,
   sessionId: string,
   turnId: string,
-): ContextManifestDetail | undefined {
+): Promise<ContextManifestDetail | undefined> {
   const normalizedSessionId = sessionId.trim();
   const normalizedTurnId = turnId.trim();
   if (!normalizedSessionId) {
@@ -145,11 +140,11 @@ export function getTurnContextManifestForSession(
   if (!normalizedTurnId) {
     throw new ValidationError({ code: "FIELD_REQUIRED", field: "turnId" });
   }
-  const trace = runtime.storage.chatTurnTraces.get(normalizedTurnId);
+  const trace = await runtime.storage.chatTurnTraces.get(normalizedTurnId);
   if (trace.sessionId !== normalizedSessionId) {
     throw new Error(`Chat turn ${normalizedTurnId} does not belong to session ${normalizedSessionId}`);
   }
-  return runtime.storage.contextManifests.maybeGetDetailByTurn(normalizedTurnId);
+  return await runtime.storage.contextManifests.maybeGetDetailByTurn(normalizedTurnId);
 }
 
 export async function answerChatUserInputPrompt(
@@ -161,7 +156,7 @@ export async function answerChatUserInputPrompt(
   responder: ChatUserInputPromptResponder,
 ): Promise<ChatUserInputPromptAnswerResponse> {
   runtime.getSession(sessionId);
-  const trace = runtime.storage.chatTurnTraces.get(turnId);
+  const trace = await runtime.storage.chatTurnTraces.get(turnId);
   if (trace.sessionId !== sessionId) {
     throw new Error(`Chat turn ${turnId} does not belong to session ${sessionId}`);
   }
@@ -171,7 +166,7 @@ export async function answerChatUserInputPrompt(
       message: `Chat turn ${turnId} cannot be resumed because it is not linked to a durable run.`,
     });
   }
-  const durableRun = runtime.durableRunService.getDurableRun(durableRunId);
+  const durableRun = await runtime.durableRunService.getDurableRun(durableRunId);
   const durablePayload = parseDurableChatTurnPayload(durableRun);
   if (!durablePayload) {
     throw new ConflictError({
@@ -206,7 +201,7 @@ export async function answerChatUserInputPrompt(
     }
   }
 
-  const outcome = runtime.storage.sessionMutationAdmissions.resolveDurableChatUserInput({
+  const outcome = await runtime.storage.sessionMutationAdmissions.resolveDurableChatUserInput({
     admissionIdentity: {
       admissionId: durablePayload.admissionId,
       sessionIncarnationId: durablePayload.sessionIncarnationId,
@@ -242,7 +237,7 @@ export async function answerChatUserInputPrompt(
         runStatus: outcome.run.status,
       },
     });
-    runtime.publishRealtime(
+    await runtime.publishRealtime(
       "chat_thread_updated",
       "chat",
       {
@@ -272,27 +267,39 @@ export async function answerChatUserInputPrompt(
   };
 }
 
-function buildChatThreadFromState(
+async function buildChatThreadFromState(
   runtime: ChatMessageRouteRuntimeHost,
   sessionId: string,
   state: ChatTurnSessionState,
-): ChatThreadResponse {
+): Promise<ChatThreadResponse> {
   const heartbeatTurnIds = new Set(
-    state.traces.filter((trace) => hasExactSystemHeartbeatRunIdentity(runtime, trace)).map((trace) => trace.turnId),
+    (
+      await Promise.all(
+        state.traces.map(async (trace) =>
+          (await hasExactSystemHeartbeatRunIdentity(runtime, trace)) ? trace.turnId : undefined,
+        ),
+      )
+    ).filter((turnId): turnId is string => Boolean(turnId)),
   );
   const renderableTraces = state.traces.filter(
     (trace) => state.messagesById.has(trace.userMessageId) && !heartbeatTurnIds.has(trace.turnId),
   );
-  const heartbeatNotices = state.traces
-    .filter((trace) => heartbeatTurnIds.has(trace.turnId))
-    .map((trace) => projectExactSystemHeartbeatNotice(runtime, sessionId, state, trace))
-    .filter((notice): notice is ChatThreadSystemNoticeRecord => Boolean(notice));
-  const timerNotices = runtime.storage.chatTimers
-    .listFiredBySession(sessionId)
-    .map((timer) => projectChatTimerNotice(runtime, sessionId, timer))
-    .filter((notice): notice is ChatThreadSystemNoticeRecord => Boolean(notice));
+  const heartbeatNotices = (
+    await Promise.all(
+      state.traces
+        .filter((trace) => heartbeatTurnIds.has(trace.turnId))
+        .map(async (trace) => await projectExactSystemHeartbeatNotice(runtime, sessionId, state, trace)),
+    )
+  ).filter((notice): notice is ChatThreadSystemNoticeRecord => Boolean(notice));
+  const timerNotices = (
+    await Promise.all(
+      (await runtime.storage.chatTimers.listFiredBySession(sessionId)).map(
+        async (timer) => await projectChatTimerNotice(runtime, sessionId, timer),
+      ),
+    )
+  ).filter((notice): notice is ChatThreadSystemNoticeRecord => Boolean(notice));
   const systemNotices = [...heartbeatNotices, ...timerNotices];
-  const generatedArtifactsByTurnId = runtime.storage.chatGeneratedArtifacts.listByTurnIds(
+  const generatedArtifactsByTurnId = await runtime.storage.chatGeneratedArtifacts.listByTurnIds(
     renderableTraces.map((trace) => trace.turnId),
   );
   return buildChatThreadResponse({
@@ -312,11 +319,11 @@ function buildChatThreadFromState(
   });
 }
 
-function projectChatTimerNotice(
+async function projectChatTimerNotice(
   runtime: ChatMessageRouteRuntimeHost,
   sessionId: string,
   timer: ChatTimerRecord,
-): ChatThreadSystemNoticeRecord | undefined {
+): Promise<ChatThreadSystemNoticeRecord | undefined> {
   try {
     if (
       timer.sessionId !== sessionId ||
@@ -327,7 +334,7 @@ function projectChatTimerNotice(
     ) {
       return undefined;
     }
-    const message = runtime.storage.chatMessages.get(timer.noticeMessageId);
+    const message = await runtime.storage.chatMessages.get(timer.noticeMessageId);
     if (
       !message ||
       message.sessionId !== sessionId ||
@@ -351,11 +358,14 @@ function projectChatTimerNotice(
   }
 }
 
-function hasExactSystemHeartbeatRunIdentity(runtime: ChatMessageRouteRuntimeHost, trace: ChatTurnTraceRecord): boolean {
+async function hasExactSystemHeartbeatRunIdentity(
+  runtime: ChatMessageRouteRuntimeHost,
+  trace: ChatTurnTraceRecord,
+): Promise<boolean> {
   try {
     const runId = trace.durable?.runId?.trim();
     if (!runId) return false;
-    const run = runtime.durableRunService.getDurableRun(runId);
+    const run = await runtime.durableRunService.getDurableRun(runId);
     const payload = parseDurableChatTurnPayload(run) as
       | (NonNullable<ReturnType<typeof parseDurableChatTurnPayload>> & {
           heartbeatOccurrenceId?: unknown;
@@ -382,12 +392,12 @@ function hasExactSystemHeartbeatRunIdentity(runtime: ChatMessageRouteRuntimeHost
  * thread reads are fail-closed: malformed, partial, silent, or drifted
  * evidence is simply absent instead of being upgraded into a visible message.
  */
-function projectExactSystemHeartbeatNotice(
+async function projectExactSystemHeartbeatNotice(
   runtime: ChatMessageRouteRuntimeHost,
   sessionId: string,
   state: ChatTurnSessionState,
   trace: ChatTurnTraceRecord,
-): ChatThreadSystemNoticeRecord | undefined {
+): Promise<ChatThreadSystemNoticeRecord | undefined> {
   try {
     const runId = trace.durable?.runId?.trim();
     const assistantMessageId = trace.assistantMessageId?.trim();
@@ -407,7 +417,7 @@ function projectExactSystemHeartbeatNotice(
       return undefined;
     }
 
-    const run = runtime.durableRunService.getDurableRun(runId);
+    const run = await runtime.durableRunService.getDurableRun(runId);
     if (run.runId !== runId || run.workflowKey !== "chat.turn.execute" || run.status !== "completed") {
       return undefined;
     }
@@ -428,13 +438,13 @@ function projectExactSystemHeartbeatNotice(
       heartbeatPayload.assistantMessageId !== assistantMessageId ||
       heartbeatPayload.requestActor.actorKind !== "system" ||
       heartbeatPayload.requestActor.actorId !== "system-heartbeat" ||
-      runtime.storage.chatMessages.get(heartbeatPayload.userMessageId)
+      (await runtime.storage.chatMessages.get(heartbeatPayload.userMessageId))
     ) {
       return undefined;
     }
     verifyAutonomousChatAdmissionRunMetadata(run, { trace });
 
-    const occurrence = runtime.storage.heartbeatOccurrences.find(heartbeatPayload.heartbeatOccurrenceId);
+    const occurrence = await runtime.storage.heartbeatOccurrences.find(heartbeatPayload.heartbeatOccurrenceId);
     if (
       !occurrence ||
       occurrence.state !== "terminal" ||
@@ -464,7 +474,7 @@ function projectExactSystemHeartbeatNotice(
       return undefined;
     }
 
-    const terminalHandoff = runtime.storage.sessionMutationAdmissions.findVerifiedTerminalTurnWriteHandoff({
+    const terminalHandoff = await runtime.storage.sessionMutationAdmissions.findVerifiedTerminalTurnWriteHandoff({
       admissionId: heartbeatPayload.admissionId,
       workspaceId: heartbeatPayload.workspaceId,
       sessionId,
@@ -529,7 +539,7 @@ function projectExactSystemHeartbeatNotice(
       return undefined;
     }
 
-    const checkpoint = runtime.storage.durableRuns.getLatestCheckpointByKind(runId, "run_completed");
+    const checkpoint = await runtime.storage.durableRuns.getLatestCheckpointByKind(runId, "run_completed");
     if (
       !checkpoint ||
       checkpoint.runId !== runId ||
@@ -547,7 +557,7 @@ function projectExactSystemHeartbeatNotice(
     }
     verifyCheckpointAnchoredChatTurnRuntimeAuthority(run.metadata, checkpoint.state);
 
-    const message = runtime.storage.chatMessages.get(assistantMessageId);
+    const message = await runtime.storage.chatMessages.get(assistantMessageId);
     if (
       !message ||
       message.messageId !== assistantMessageId ||

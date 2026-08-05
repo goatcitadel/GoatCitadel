@@ -1,4 +1,4 @@
-import type { CostLedgerRepository } from "@goatcitadel/storage";
+import type { DeepAsyncRepository, CostLedgerRepository } from "@goatcitadel/storage";
 
 export interface UsageInput {
   sessionId: string;
@@ -16,9 +16,9 @@ export interface UsageInput {
 }
 
 export class TokenCostLedger {
-  public constructor(private readonly repo: CostLedgerRepository) {}
+  public constructor(private readonly repo: DeepAsyncRepository<CostLedgerRepository>) {}
 
-  public record(input: UsageInput): boolean {
+  public async record(input: UsageInput): Promise<boolean> {
     const knownMetrics = [
       input.tokenInput === undefined ? undefined : "input",
       input.tokenOutput === undefined ? undefined : "output",
@@ -30,7 +30,7 @@ export class TokenCostLedger {
     if (!hasUsageEvidence) {
       return false;
     }
-    this.repo.insert({
+    await this.repo.insert({
       sessionId: input.sessionId,
       agentId: input.agentId,
       taskId: input.taskId,

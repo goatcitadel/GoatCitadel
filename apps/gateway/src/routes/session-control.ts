@@ -65,7 +65,7 @@ export function registerSessionControlRoutes(fastify: FastifyInstance): void {
         correlationId: resolveCorrelationId(request),
         input,
       });
-      markMutationCommitted(request);
+      await markMutationCommitted(request);
       return reply.send(response);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -134,7 +134,7 @@ export function registerSessionControlRoutes(fastify: FastifyInstance): void {
         correlationId: resolveCorrelationId(request),
         input,
       });
-      markMutationCommitted(request);
+      await markMutationCommitted(request);
       return reply.send(response);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -165,7 +165,7 @@ export function registerSessionControlRoutes(fastify: FastifyInstance): void {
         presentedTokenHashSha256,
         input,
       });
-      markMutationCommitted(request);
+      await markMutationCommitted(request);
       return reply.send(response);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -197,7 +197,7 @@ export function registerSessionControlRoutes(fastify: FastifyInstance): void {
         presentedTokenHashSha256,
         input,
       });
-      markMutationCommitted(request);
+      await markMutationCommitted(request);
       return reply.send(response);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -229,7 +229,7 @@ export function registerSessionControlRoutes(fastify: FastifyInstance): void {
         presentedTokenHashSha256,
         input,
       });
-      markMutationCommitted(request);
+      await markMutationCommitted(request);
       return reply.send(response);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -258,7 +258,7 @@ export function registerSessionControlRoutes(fastify: FastifyInstance): void {
         correlationId: resolveCorrelationId(request),
         input,
       });
-      markMutationCommitted(request);
+      await markMutationCommitted(request);
       return reply.send(response);
     } catch (error) {
       return sendRouteError(reply, error, request.log);

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { ApprovalRequest, PendingApprovalAction, ToolInvokeRequest } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage } from "@goatcitadel/storage";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { hasVerifiedApprovalBypass } from "./approval-bypass.js";
 import { stripHtmlNoiseTags, stripHtmlTags } from "./html-noise.js";
@@ -45,7 +45,7 @@ describe("tool pattern support", () => {
 });
 
 describe("approval bypass support", () => {
-  it("matches pending approval args with stable object keys and nested arrays", () => {
+  it("matches pending approval args with stable object keys and nested arrays", async () => {
     const request = createToolInvokeRequest({
       args: {
         alpha: "first",
@@ -72,10 +72,10 @@ describe("approval bypass support", () => {
       },
     });
 
-    expect(hasVerifiedApprovalBypass(request, storage)).toBe(true);
+    expect(await hasVerifiedApprovalBypass(request, storage)).toBe(true);
   });
 
-  it("matches pending approvals by effective trust across source attribution and top-level trust", () => {
+  it("matches pending approvals by effective trust across source attribution and top-level trust", async () => {
     const sourceAttribution = [
       {
         sourceType: "url",
@@ -92,10 +92,10 @@ describe("approval bypass support", () => {
       request: storedRequest as unknown as Record<string, unknown>,
     });
 
-    expect(hasVerifiedApprovalBypass(request, storage)).toBe(true);
+    expect(await hasVerifiedApprovalBypass(request, storage)).toBe(true);
   });
 
-  it("binds governed skill, path-repair, and grounding receipts to the approved request", () => {
+  it("binds governed skill, path-repair, and grounding receipts to the approved request", async () => {
     const storedRequest = createToolInvokeRequest({
       turnId: "turn-1",
       runtimeSkillApplications: [
@@ -118,41 +118,41 @@ describe("approval bypass support", () => {
       request: storedRequest as unknown as Record<string, unknown>,
     });
 
-    expect(hasVerifiedApprovalBypass(storedRequest, storage)).toBe(true);
-    expect(hasVerifiedApprovalBypass({ ...storedRequest, runtimeSkillApplications: [] }, storage)).toBe(false);
+    expect(await hasVerifiedApprovalBypass(storedRequest, storage)).toBe(true);
+    expect(await hasVerifiedApprovalBypass({ ...storedRequest, runtimeSkillApplications: [] }, storage)).toBe(false);
     expect(
-      hasVerifiedApprovalBypass(
+      await hasVerifiedApprovalBypass(
         { ...storedRequest, presentationGrounding: { sourceTermCount: 8, matchedSourceTermCount: 7 } },
         storage,
       ),
     ).toBe(false);
   });
 
-  it("rejects no-expiry pending approvals with malformed creation dates", () => {
+  it("rejects no-expiry pending approvals with malformed creation dates", async () => {
     const request = createToolInvokeRequest();
     const storage = createStorageWithPendingApproval({
       createdAt: "not-a-date",
       request: request as unknown as Record<string, unknown>,
     });
 
-    expect(hasVerifiedApprovalBypass(request, storage)).toBe(false);
+    expect(await hasVerifiedApprovalBypass(request, storage)).toBe(false);
   });
 
-  it("rejects pending approvals until the canonical approval row is approved", () => {
+  it("rejects pending approvals until the canonical approval row is approved", async () => {
     const request = createToolInvokeRequest();
     const storage = createStorageWithPendingApproval({
       request: request as unknown as Record<string, unknown>,
       approvalStatus: "pending",
     });
 
-    expect(hasVerifiedApprovalBypass(request, storage)).toBe(false);
+    expect(await hasVerifiedApprovalBypass(request, storage)).toBe(false);
   });
 
-  it("honors explicit pending approval expiry timestamps", () => {
+  it("honors explicit pending approval expiry timestamps", async () => {
     const request = createToolInvokeRequest();
 
     expect(
-      hasVerifiedApprovalBypass(
+      await hasVerifiedApprovalBypass(
         request,
         createStorageWithPendingApproval({
           expiresAt: new Date(Date.now() + 60_000).toISOString(),
@@ -161,7 +161,7 @@ describe("approval bypass support", () => {
       ),
     ).toBe(true);
     expect(
-      hasVerifiedApprovalBypass(
+      await hasVerifiedApprovalBypass(
         request,
         createStorageWithPendingApproval({
           expiresAt: "not-a-date",
@@ -171,26 +171,26 @@ describe("approval bypass support", () => {
     ).toBe(false);
   });
 
-  it("rejects missing approval reasons and mismatched pending approval records", () => {
+  it("rejects missing approval reasons and mismatched pending approval records", async () => {
     const request = createToolInvokeRequest();
 
     expect(
-      hasVerifiedApprovalBypass({ ...request, consentContext: undefined }, createStorageWithPendingApproval()),
+      await hasVerifiedApprovalBypass({ ...request, consentContext: undefined }, createStorageWithPendingApproval()),
     ).toBe(false);
     expect(
-      hasVerifiedApprovalBypass(
+      await hasVerifiedApprovalBypass(
         request,
         createStorageWithPendingApproval({ actionType: "chat.message" as PendingApprovalAction["actionType"] }),
       ),
     ).toBe(false);
     expect(
-      hasVerifiedApprovalBypass(
+      await hasVerifiedApprovalBypass(
         request,
         createStorageWithPendingApproval({ resolutionStatus: "executed" as PendingApprovalAction["resolutionStatus"] }),
       ),
     ).toBe(false);
     expect(
-      hasVerifiedApprovalBypass(
+      await hasVerifiedApprovalBypass(
         request,
         createStorageWithPendingApproval({
           request: {
@@ -202,7 +202,7 @@ describe("approval bypass support", () => {
     ).toBe(false);
 
     expect(
-      hasVerifiedApprovalBypass(
+      await hasVerifiedApprovalBypass(
         createToolInvokeRequest({ args: undefined as unknown as Record<string, unknown> }),
         createStorageWithPendingApproval({
           request: createToolInvokeRequest({
@@ -475,7 +475,7 @@ function createToolInvokeRequest(overrides: Partial<ToolInvokeRequest> = {}): To
 
 function createStorageWithPendingApproval(
   overrides: Partial<PendingApprovalAction> & { approvalStatus?: ApprovalRequest["status"] } = {},
-): Storage {
+): AsyncStorage {
   const { approvalStatus, ...pendingOverrides } = overrides;
   const pending: PendingApprovalAction = {
     approvalId: "approval-1",
@@ -488,7 +488,7 @@ function createStorageWithPendingApproval(
 
   return {
     approvals: {
-      get: vi.fn((approvalId: string) =>
+      get: vi.fn(async (approvalId: string) =>
         createApprovalRequest({
           approvalId,
           status: approvalStatus ?? "approved",
@@ -496,8 +496,8 @@ function createStorageWithPendingApproval(
       ),
     },
     pendingApprovalActions: {
-      find: vi.fn(() => pending),
-      findFreshPending: vi.fn((_approvalId: string, defaultTtlMs: number) => {
+      find: vi.fn(async () => pending),
+      findFreshPending: vi.fn(async (_approvalId: string, defaultTtlMs: number) => {
         if (pending.resolutionStatus !== "pending") {
           return undefined;
         }
@@ -507,7 +507,7 @@ function createStorageWithPendingApproval(
         return Number.isFinite(expiresAt) && expiresAt > Date.now() ? pending : undefined;
       }),
     },
-  } as unknown as Storage;
+  } as unknown as AsyncStorage;
 }
 
 function createApprovalRequest(overrides: Partial<ApprovalRequest> = {}): ApprovalRequest {

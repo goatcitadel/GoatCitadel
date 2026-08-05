@@ -29,7 +29,7 @@ import {
   type SkillLearningEvidenceRecord,
   type SkillLearningRecurrenceSummary,
   type GovernanceJourneyEventRecord,
-  type Storage,
+  type AsyncStorage as Storage,
 } from "@goatcitadel/storage";
 
 import { SECRET_CONTENT_PATTERN, validateSkillContent } from "./skill-content-validation.js";
@@ -269,19 +269,19 @@ export class SkillLearningService {
     const actorId = requireAuthenticatedOperator(input.actor);
     const sessionId = normalizeIdentity(input.sessionId, "session ID", 256);
     const correctionContent = requireBoundedUtf8(input.correction, "correction", MAX_CORRECTION_BYTES);
-    const workspace = this.resolveWorkspace(sessionId);
+    const workspace = await this.resolveWorkspace(sessionId);
     const effectiveConfigRevision = this.readEffectiveConfigRevision();
-    const traces = this.options.storage.chatTurnTraces.listBySession(sessionId, HISTORY_TRACE_LIMIT);
+    const traces = await this.options.storage.chatTurnTraces.listBySession(sessionId, HISTORY_TRACE_LIMIT);
     const trace = traces.find((item) => item.status === "completed" && Boolean(item.assistantMessageId));
     if (!trace?.assistantMessageId) {
       throw new ConflictError({ message: "No completed canonical assistant turn is available to learn from." });
     }
-    const source = this.options.storage.chatMessages.get(trace.assistantMessageId);
+    const source = await this.options.storage.chatMessages.get(trace.assistantMessageId);
     if (!source || source.sessionId !== sessionId || source.role !== "assistant") {
       throw new ConflictError({ message: "The latest completed turn has no canonical assistant source message." });
     }
     const sourceContent = requireBoundedUtf8(source.content, "source", MAX_SOURCE_BYTES);
-    return this.persistLearning({
+    return await this.persistLearning({
       workspaceId: workspace.workspaceId,
       workspaceRevision: workspace.revision,
       effectiveConfigRevision,
@@ -297,15 +297,15 @@ export class SkillLearningService {
     });
   }
 
-  public createHistoryDryRun(input: {
+  public async createHistoryDryRun(input: {
     sessionId: string;
     actor: SkillLearningActor;
     cursor?: string;
     limit?: number;
-  }): SkillLearningHistoryPage {
+  }): Promise<SkillLearningHistoryPage> {
     const reviewingActorId = requireAuthenticatedOperator(input.actor);
     const sessionId = normalizeIdentity(input.sessionId, "session ID", 256);
-    const workspace = this.resolveWorkspace(sessionId);
+    const workspace = await this.resolveWorkspace(sessionId);
     const effectiveConfigRevision = this.readEffectiveConfigRevision();
     const cursor = input.cursor ? decodeHistoryCursor(input.cursor) : undefined;
     if (cursor && (cursor.workspaceId !== workspace.workspaceId || cursor.sessionId !== sessionId)) {
@@ -323,7 +323,7 @@ export class SkillLearningService {
       throw new ConflictError({ message: "Skill-learning history cursor exceeds the declared scan bound." });
     }
     const requestedPageMessages = Math.min(HISTORY_PAGE_MAX_MESSAGES, Math.max(2, limit * 2));
-    const page = this.options.storage.chatMessages.listOffsetPage({
+    const page = await this.options.storage.chatMessages.listOffsetPage({
       workspaceId: workspace.workspaceId,
       sessionId,
       limit: Math.min(requestedPageMessages, HISTORY_SCAN_MAX_MESSAGES - offset),
@@ -340,7 +340,7 @@ export class SkillLearningService {
     }
     const scanItems = [...page.items];
     if (cursor?.boundaryMessageId) {
-      const boundary = this.options.storage.chatMessages.get(cursor.boundaryMessageId);
+      const boundary = await this.options.storage.chatMessages.get(cursor.boundaryMessageId);
       if (!boundary || boundary.sessionId !== sessionId) {
         throw new ConflictError({ message: "Skill-learning history boundary is stale or foreign." });
       }
@@ -357,7 +357,7 @@ export class SkillLearningService {
     if (pageBytes > HISTORY_PAGE_MAX_BYTES) {
       throw new ConflictError({ message: "Skill-learning history page exceeds the byte bound." });
     }
-    const traces = this.options.storage.chatTurnTraces.listBySession(sessionId, HISTORY_TRACE_LIMIT);
+    const traces = await this.options.storage.chatTurnTraces.listBySession(sessionId, HISTORY_TRACE_LIMIT);
     const completedTraces = traces.filter((trace) => trace.status === "completed" && trace.assistantMessageId);
     const byAssistantMessageId = new Map(completedTraces.map((trace) => [trace.assistantMessageId as string, trace]));
     const correctionTracesByUserMessageId = new Map<string, ChatTurnTraceRecord[]>();
@@ -394,7 +394,7 @@ export class SkillLearningService {
       const sourceSha256 = sha256Text(source.content);
       const correctionSha256 = sha256Text(correction.content);
       const permissionEnvelopeSha256 = emptyPermissionEnvelopeSha256();
-      const correctionProvenance = resolveHistoryCorrectionProvenance({
+      const correctionProvenance = await resolveHistoryCorrectionProvenance({
         storage: this.options.storage,
         workspaceId: workspace.workspaceId,
         sessionId,
@@ -506,7 +506,7 @@ export class SkillLearningService {
     if (token.sessionId !== requestedSessionId) {
       throw new ConflictError({ message: "Skill-learning selection is foreign to the current Chat session." });
     }
-    const workspace = this.resolveWorkspace(token.sessionId);
+    const workspace = await this.resolveWorkspace(token.sessionId);
     if (workspace.workspaceId !== token.workspaceId || workspace.revision !== token.workspaceRevision) {
       throw new ConflictError({ message: "Skill-learning selection failed the workspace revision CAS." });
     }
@@ -514,7 +514,7 @@ export class SkillLearningService {
     if (effectiveConfigRevision !== token.effectiveConfigRevision) {
       throw new ConflictError({ message: "Skill-learning selection failed the effective config revision CAS." });
     }
-    const snapshotPage = this.options.storage.chatMessages.listOffsetPage({
+    const snapshotPage = await this.options.storage.chatMessages.listOffsetPage({
       workspaceId: workspace.workspaceId,
       sessionId: token.sessionId,
       limit: 1,
@@ -524,9 +524,9 @@ export class SkillLearningService {
     if (snapshotPage.cursorState === "stale") {
       throw new ConflictError({ message: "Skill-learning selection high-water is stale." });
     }
-    const source = this.options.storage.chatMessages.get(token.sourceMessageId);
-    const correction = this.options.storage.chatMessages.get(token.correctionMessageId);
-    const trace = this.options.storage.chatTurnTraces.get(token.turnId);
+    const source = await this.options.storage.chatMessages.get(token.sourceMessageId);
+    const correction = await this.options.storage.chatMessages.get(token.correctionMessageId);
+    const trace = await this.options.storage.chatTurnTraces.get(token.turnId);
     if (
       !source ||
       !correction ||
@@ -542,10 +542,10 @@ export class SkillLearningService {
     }
     const sourceContent = requireBoundedUtf8(source.content, "history source", HISTORY_ITEM_MAX_BYTES);
     const correctionContent = requireBoundedUtf8(correction.content, "history correction", HISTORY_ITEM_MAX_BYTES);
-    const correctionTraces = this.options.storage.chatTurnTraces
-      .listBySession(token.sessionId, HISTORY_TRACE_LIMIT)
-      .filter((candidate) => candidate.branchKind !== "retry" && candidate.userMessageId === correction.messageId);
-    const { correctionOrigin, correctionAuthentication } = resolveHistoryCorrectionProvenance({
+    const correctionTraces = (
+      await this.options.storage.chatTurnTraces.listBySession(token.sessionId, HISTORY_TRACE_LIMIT)
+    ).filter((candidate) => candidate.branchKind !== "retry" && candidate.userMessageId === correction.messageId);
+    const { correctionOrigin, correctionAuthentication } = await resolveHistoryCorrectionProvenance({
       storage: this.options.storage,
       workspaceId: workspace.workspaceId,
       sessionId: token.sessionId,
@@ -605,8 +605,8 @@ export class SkillLearningService {
     ) {
       throw new ConflictError({ message: "Skill-learning selection bytes or dry-run fingerprint changed." });
     }
-    this.assertAdjacentPairAtHighWater(token);
-    return this.persistLearning({
+    await this.assertAdjacentPairAtHighWater(token);
+    return await this.persistLearning({
       workspaceId: workspace.workspaceId,
       workspaceRevision: workspace.revision,
       effectiveConfigRevision,
@@ -634,12 +634,12 @@ export class SkillLearningService {
     });
   }
 
-  private assertAdjacentPairAtHighWater(token: HistorySelectionTokenV1): void {
+  private async assertAdjacentPairAtHighWater(token: HistorySelectionTokenV1): Promise<void> {
     let offset = 0;
     let newerBoundary: { messageId: string } | undefined;
     while (offset < HISTORY_SCAN_MAX_MESSAGES) {
       const remaining = HISTORY_SCAN_MAX_MESSAGES - offset;
-      const page = this.options.storage.chatMessages.listOffsetPage({
+      const page = await this.options.storage.chatMessages.listOffsetPage({
         workspaceId: token.workspaceId,
         sessionId: token.sessionId,
         limit: Math.min(1_000, remaining),
@@ -671,8 +671,10 @@ export class SkillLearningService {
     const permissionEnvelope = input.permissionEnvelope ?? EMPTY_PERMISSION_ENVELOPE;
     const secretLikeContent = containsSecretLikeContent(`${sourceContent}\n${correctionContent}`);
     const identity = this.buildIdentity(input, sourceContent, correctionContent, permissionEnvelope, secretLikeContent);
-    return this.withLearningLock(identity.candidateId, () =>
-      this.persistLearningLocked(input, sourceContent, correctionContent, identity, secretLikeContent),
+    return await this.withLearningLock(
+      identity.candidateId,
+      async () =>
+        await this.persistLearningLocked(input, sourceContent, correctionContent, identity, secretLikeContent),
     );
   }
 
@@ -683,14 +685,14 @@ export class SkillLearningService {
     identity: LearningIdentity,
     secretLikeContent: boolean,
   ): Promise<SkillLearningResult> {
-    this.assertLearningRevisions(input);
-    const existing = this.options.storage.skillLearningEvidence.findByIdempotencyKey(identity.idempotencyKey);
+    await this.assertLearningRevisions(input);
+    const existing = await this.options.storage.skillLearningEvidence.findByIdempotencyKey(identity.idempotencyKey);
     if (existing) {
       assertEvidenceReplayMatches(existing, input, identity);
-      return this.replayResult(existing, input, { ...identity, createdAt: existing.createdAt });
+      return await this.replayResult(existing, input, { ...identity, createdAt: existing.createdAt });
     }
 
-    const priorRecurrence = this.options.storage.skillLearningEvidence.summarizeRecurrence({
+    const priorRecurrence = await this.options.storage.skillLearningEvidence.summarizeRecurrence({
       workspaceId: input.workspaceId,
       targetKey: identity.targetKey,
       fingerprint: identity.fingerprint,
@@ -699,15 +701,15 @@ export class SkillLearningService {
     const skillMarkdown = buildLearnedSkillMarkdown(identity.title, correctionContent, identity.targetKey);
     const validation = validateSkillContent({ skillMarkdown });
     const assessment = assessSkillLearningEvidence({
-      workspaceMatches: this.resolveWorkspace(input.sessionId).workspaceId === input.workspaceId,
-      sourceReferenceValid: this.isCanonicalSourceReference(input),
+      workspaceMatches: (await this.resolveWorkspace(input.sessionId)).workspaceId === input.workspaceId,
+      sourceReferenceValid: await this.isCanonicalSourceReference(input),
       secretLikeContent,
       correctionOrigin: input.correctionOrigin,
       validationPassed: validation.valid,
       permissionDiffDisposition: "none",
       conflictingFingerprint: priorRecurrence.hasConflictingFingerprint || priorRecurrence.hasNonCleanEvidence,
     });
-    this.assertLearningRevisions(input);
+    await this.assertLearningRevisions(input);
     const evidenceArtifacts = secretLikeContent
       ? undefined
       : await this.persistEvidenceArtifacts(input, identity, sourceContent, correctionContent);
@@ -733,9 +735,14 @@ export class SkillLearningService {
       blockerCodes: assessment.blockerCodes,
       createdAt: identity.createdAt,
     };
-    const priorSupportingEvidence = this.options.storage.skillLearningEvidence
-      .listByFingerprint(input.workspaceId, identity.targetKey, identity.fingerprint, 500)
-      .filter((item) => item.poisoningStatus === "clean" && item.sourceKind === "chat_turn");
+    const priorSupportingEvidence = (
+      await this.options.storage.skillLearningEvidence.listByFingerprint(
+        input.workspaceId,
+        identity.targetKey,
+        identity.fingerprint,
+        500,
+      )
+    ).filter((item) => item.poisoningStatus === "clean" && item.sourceKind === "chat_turn");
     const supportingEvidence =
       assessment.poisoningStatus === "clean"
         ? [...priorSupportingEvidence, evidence].sort((left, right) => left.evidenceId.localeCompare(right.evidenceId))
@@ -755,9 +762,9 @@ export class SkillLearningService {
       distinctSessionCount: prospectiveSessions.size,
       automaticStagingEligible,
     };
-    let existingMatchingCandidate = this.options.storage.candidateSkillVersions
-      .listByCandidateId(identity.candidateId, 500)
-      .find((item) => item.sourceFingerprint === identity.fingerprint);
+    let existingMatchingCandidate = (
+      await this.options.storage.candidateSkillVersions.listByCandidateId(identity.candidateId, 500)
+    ).find((item) => item.sourceFingerprint === identity.fingerprint);
     const eligibilityTransition = !priorRecurrence.automaticStagingEligible && automaticStagingEligible;
     const transitionIdentity = {
       method: "INTERNAL",
@@ -767,7 +774,7 @@ export class SkillLearningService {
     };
     let transitionClaimToken: string | undefined;
     if (eligibilityTransition && !existingMatchingCandidate) {
-      const claim = this.options.storage.mutationIdempotency.claim({
+      const claim = await this.options.storage.mutationIdempotency.claim({
         ...transitionIdentity,
         payloadHash: identity.fingerprint,
         now: identity.createdAt,
@@ -776,9 +783,9 @@ export class SkillLearningService {
       if (claim.outcome === "claimed") {
         transitionClaimToken = claim.record.claimToken;
       } else if (claim.outcome === "duplicate") {
-        existingMatchingCandidate = this.options.storage.candidateSkillVersions
-          .listByCandidateId(identity.candidateId, 500)
-          .find((item) => item.sourceFingerprint === identity.fingerprint);
+        existingMatchingCandidate = (
+          await this.options.storage.candidateSkillVersions.listByCandidateId(identity.candidateId, 500)
+        ).find((item) => item.sourceFingerprint === identity.fingerprint);
         if (!existingMatchingCandidate) {
           throw new ConflictError({
             message: "Completed skill-learning transition is missing its governed candidate.",
@@ -800,7 +807,7 @@ export class SkillLearningService {
     let transactionCommitted = false;
     try {
       if (eligibilityTransition && !existingMatchingCandidate && transitionClaimToken) {
-        this.assertLearningRevisions(input);
+        await this.assertLearningRevisions(input);
         candidateArtifacts = await this.persistCandidateArtifacts({
           input,
           identity,
@@ -813,9 +820,9 @@ export class SkillLearningService {
         candidate = buildCandidateRecord(this.options.rootDir, input, identity, candidateArtifacts);
       }
 
-      this.options.storage.runImmediateTransaction(() => {
-        this.assertLearningRevisions(input);
-        const currentRecurrence = this.options.storage.skillLearningEvidence.summarizeRecurrence({
+      await this.options.storage.runImmediateTransaction(async () => {
+        await this.assertLearningRevisions(input);
+        const currentRecurrence = await this.options.storage.skillLearningEvidence.summarizeRecurrence({
           workspaceId: input.workspaceId,
           targetKey: identity.targetKey,
           fingerprint: identity.fingerprint,
@@ -826,9 +833,9 @@ export class SkillLearningService {
             message: "Skill-learning recurrence changed before the atomic candidate decision; retry.",
           });
         }
-        const currentMatchingCandidate = this.options.storage.candidateSkillVersions
-          .listByCandidateId(identity.candidateId, 500)
-          .find((item) => item.sourceFingerprint === identity.fingerprint);
+        const currentMatchingCandidate = (
+          await this.options.storage.candidateSkillVersions.listByCandidateId(identity.candidateId, 500)
+        ).find((item) => item.sourceFingerprint === identity.fingerprint);
         if (currentMatchingCandidate?.versionId !== existingMatchingCandidate?.versionId) {
           throw new ConflictError({
             message: "Skill-learning candidate state changed before the atomic transition; retry.",
@@ -838,27 +845,27 @@ export class SkillLearningService {
           candidate || (assessment.poisoningStatus === "clean" && existingMatchingCandidate),
         );
         const candidateAggregateAlreadyExists = Boolean(
-          this.options.storage.skillAggregateRevisions.get("candidate_skill", identity.candidateId) ||
-          this.options.storage.candidateSkillVersions.listByCandidateId(identity.candidateId, 1).length > 0,
+          (await this.options.storage.skillAggregateRevisions.get("candidate_skill", identity.candidateId)) ||
+          (await this.options.storage.candidateSkillVersions.listByCandidateId(identity.candidateId, 1)).length > 0,
         );
-        const persistLearningMutation = () => {
-          const storedEvidence = this.options.storage.skillLearningEvidence.create(evidence);
+        const persistLearningMutation = async () => {
+          const storedEvidence = await this.options.storage.skillLearningEvidence.create(evidence);
           if (candidate) {
-            this.options.storage.candidateSkillVersions.upsert(candidate);
-            this.options.storage.candidateSkillEvidenceLinks.create({
+            await this.options.storage.candidateSkillVersions.upsert(candidate);
+            await this.options.storage.candidateSkillEvidenceLinks.create({
               versionId: candidate.versionId,
               evidenceId: storedEvidence.evidenceId,
               linkedAt: identity.createdAt,
             });
             for (const supporting of supportingEvidence) {
               if (supporting.evidenceId === storedEvidence.evidenceId) continue;
-              this.options.storage.candidateSkillEvidenceLinks.create({
+              await this.options.storage.candidateSkillEvidenceLinks.create({
                 versionId: candidate.versionId,
                 evidenceId: supporting.evidenceId,
                 linkedAt: identity.createdAt,
               });
             }
-            this.persistProposal(
+            await this.persistProposal(
               input,
               identity,
               assessment,
@@ -872,16 +879,16 @@ export class SkillLearningService {
               candidate,
               candidateArtifacts as CandidateArtifacts,
             )) {
-              this.options.storage.governanceJourneyEvents.create(lifecycleEvent);
+              await this.options.storage.governanceJourneyEvents.create(lifecycleEvent);
             }
           } else if (assessment.poisoningStatus === "clean" && existingMatchingCandidate) {
-            this.options.storage.candidateSkillEvidenceLinks.create({
+            await this.options.storage.candidateSkillEvidenceLinks.create({
               versionId: existingMatchingCandidate.versionId,
               evidenceId: storedEvidence.evidenceId,
               linkedAt: identity.createdAt,
             });
           }
-          this.options.storage.governanceJourneyEvents.create(
+          await this.options.storage.governanceJourneyEvents.create(
             buildJourneyEvent(
               input,
               identity,
@@ -895,35 +902,40 @@ export class SkillLearningService {
         };
 
         if (candidateAggregateChanges && candidateAggregateAlreadyExists) {
-          const expectedRevision = this.options.storage.skillAggregateRevisions.ensure(
-            "candidate_skill",
-            identity.candidateId,
-            identity.createdAt,
+          const expectedRevision = (
+            await this.options.storage.skillAggregateRevisions.ensure(
+              "candidate_skill",
+              identity.candidateId,
+              identity.createdAt,
+            )
           ).revision;
-          this.options.storage.skillAggregateRevisions.runWithRevision(
+          await this.options.storage.skillAggregateRevisions.fenceExpectedRevision(
             "candidate_skill",
             identity.candidateId,
             expectedRevision,
-            () => {
-              persistLearningMutation();
-              return { value: undefined, changed: true };
-            },
+            identity.createdAt,
+          );
+          await persistLearningMutation();
+          await this.options.storage.skillAggregateRevisions.advanceExpectedRevision(
+            "candidate_skill",
+            identity.candidateId,
+            expectedRevision,
             identity.createdAt,
           );
         } else {
-          persistLearningMutation();
           if (candidate) {
-            this.options.storage.skillAggregateRevisions.ensure(
+            await this.options.storage.skillAggregateRevisions.createInitialRevisionFence(
               "candidate_skill",
               identity.candidateId,
               identity.createdAt,
             );
           }
+          await persistLearningMutation();
         }
       });
       transactionCommitted = true;
       if (transitionClaimToken) {
-        this.options.storage.mutationIdempotency.markCompleted({
+        await this.options.storage.mutationIdempotency.markCompleted({
           ...transitionIdentity,
           updatedAt: identity.createdAt,
           claimToken: transitionClaimToken,
@@ -931,7 +943,7 @@ export class SkillLearningService {
       }
     } catch (error) {
       if (transitionClaimToken && !transactionCommitted) {
-        this.options.storage.mutationIdempotency.markFailed({
+        await this.options.storage.mutationIdempotency.markFailed({
           ...transitionIdentity,
           updatedAt: identity.createdAt,
           claimToken: transitionClaimToken,
@@ -939,7 +951,7 @@ export class SkillLearningService {
       }
       throw error;
     }
-    const recurrence = this.options.storage.skillLearningEvidence.summarizeRecurrence({
+    const recurrence = await this.options.storage.skillLearningEvidence.summarizeRecurrence({
       workspaceId: input.workspaceId,
       targetKey: identity.targetKey,
       fingerprint: identity.fingerprint,
@@ -1012,11 +1024,11 @@ export class SkillLearningService {
     };
   }
 
-  private isCanonicalSourceReference(input: PersistLearningInput): boolean {
-    const meta = this.options.storage.chatSessionMeta.get(input.sessionId);
-    const message = this.options.storage.chatMessages.get(input.sourceMessageId);
+  private async isCanonicalSourceReference(input: PersistLearningInput): Promise<boolean> {
+    const meta = await this.options.storage.chatSessionMeta.get(input.sessionId);
+    const message = await this.options.storage.chatMessages.get(input.sourceMessageId);
     try {
-      const trace = this.options.storage.chatTurnTraces.get(input.turnId);
+      const trace = await this.options.storage.chatTurnTraces.get(input.turnId);
       return (
         meta?.workspaceId === input.workspaceId &&
         message?.sessionId === input.sessionId &&
@@ -1031,12 +1043,12 @@ export class SkillLearningService {
     }
   }
 
-  private resolveWorkspace(sessionId: string) {
-    const meta = this.options.storage.chatSessionMeta.get(sessionId);
+  private async resolveWorkspace(sessionId: string) {
+    const meta = await this.options.storage.chatSessionMeta.get(sessionId);
     if (!meta?.workspaceId) {
       throw new ConflictError({ message: "Skill learning requires a canonical workspace-scoped Chat session." });
     }
-    const workspace = this.options.storage.workspaces.get(meta.workspaceId);
+    const workspace = await this.options.storage.workspaces.get(meta.workspaceId);
     if (workspace.lifecycleStatus !== "active") {
       throw new ConflictError({ message: "Skill learning is unavailable for an inactive workspace." });
     }
@@ -1056,12 +1068,12 @@ export class SkillLearningService {
     return revision;
   }
 
-  private assertLearningRevisions(
+  private async assertLearningRevisions(
     input: Pick<PersistLearningInput, "workspaceId" | "workspaceRevision" | "effectiveConfigRevision">,
-  ): void {
+  ): Promise<void> {
     let workspace;
     try {
-      workspace = this.options.storage.workspaces.get(input.workspaceId);
+      workspace = await this.options.storage.workspaces.get(input.workspaceId);
     } catch {
       throw new ConflictError({ message: "Skill-learning write failed the workspace revision CAS." });
     }
@@ -1083,7 +1095,7 @@ export class SkillLearningService {
     await this.persistExactDirectory(
       relSegments,
       { "source.txt": sourceContent, "correction.txt": correctionContent },
-      () => this.assertLearningRevisions(input),
+      async () => await this.assertLearningRevisions(input),
     );
     return {
       source: {
@@ -1113,7 +1125,7 @@ export class SkillLearningService {
     await this.persistExactDirectory(
       relSegments,
       { "manifest.json": manifest, "SKILL.md": input.skillMarkdown, "proof.json": proof },
-      () => this.assertLearningRevisions(input.input),
+      async () => await this.assertLearningRevisions(input.input),
     );
     return {
       bundlePath: path.join(this.managedRoot, ...relSegments),
@@ -1209,7 +1221,7 @@ export class SkillLearningService {
     const relative = path.relative(this.allowedRoot, this.candidateRoot);
     assertPathInside(this.candidateRoot, this.allowedRoot, "skill candidate root");
     const segments = relative.split(path.sep).filter(Boolean).map(sanitizePathSegment);
-    return ensureRealDirectories(realAllowedRoot, segments);
+    return await ensureRealDirectories(realAllowedRoot, segments);
   }
 
   private async resolveSafeArtifactDirectory(relSegments: string[]): Promise<string> {
@@ -1218,7 +1230,7 @@ export class SkillLearningService {
     assertPathInside(this.candidateRoot, this.allowedRoot, "skill candidate root");
     const rootSegments = relative.split(path.sep).filter(Boolean).map(sanitizePathSegment);
     const managedRealRoot = await resolveExistingRealDirectories(realAllowedRoot, rootSegments);
-    return resolveExistingRealDirectories(managedRealRoot, relSegments.map(sanitizePathSegment));
+    return await resolveExistingRealDirectories(managedRealRoot, relSegments.map(sanitizePathSegment));
   }
 
   private async withLearningLock<T>(key: string, operation: () => Promise<T>): Promise<T> {
@@ -1238,19 +1250,19 @@ export class SkillLearningService {
     }
   }
 
-  private persistProposal(
+  private async persistProposal(
     input: PersistLearningInput,
     identity: LearningIdentity,
     assessment: SkillLearningEvidenceAssessment,
     recurrence: SkillLearningRecurrenceSummary,
     candidateArtifacts: CandidateArtifacts,
-  ): void {
+  ): Promise<void> {
     const expected = buildProposalRecord(input, identity, assessment, recurrence, candidateArtifacts);
-    const existing = this.options.storage.capabilityProposals.find(identity.proposalId);
+    const existing = await this.options.storage.capabilityProposals.find(identity.proposalId);
     if (existing && canonicalJsonString(existing) !== canonicalJsonString(expected)) {
       throw new ConflictError({ message: `Learning proposal ${identity.proposalId} conflicts with immutable replay.` });
     }
-    if (!existing) this.options.storage.capabilityProposals.upsert(expected);
+    if (!existing) await this.options.storage.capabilityProposals.upsert(expected);
   }
 
   private async replayResult(
@@ -1265,12 +1277,12 @@ export class SkillLearningService {
         "correction.txt": input.correctionContent,
       });
     }
-    const journeyEvent = this.options.storage.governanceJourneyEvents.find(identity.journeyEventId);
+    const journeyEvent = await this.options.storage.governanceJourneyEvents.find(identity.journeyEventId);
     if (!journeyEvent) {
       throw new ConflictError({ message: "Skill-learning evidence is missing its Journey event." });
     }
     assertJourneyReplayMatches(journeyEvent, input, identity, evidence);
-    const candidate = this.options.storage.candidateSkillVersions.find(identity.versionId);
+    const candidate = await this.options.storage.candidateSkillVersions.find(identity.versionId);
     if (candidate) {
       const skillMarkdown = buildLearnedSkillMarkdown(identity.title, input.correctionContent, identity.targetKey);
       const validation = validateSkillContent({ skillMarkdown });
@@ -1286,7 +1298,7 @@ export class SkillLearningService {
         MAX_REPLAY_ARTIFACT_BYTES,
       );
       const immutableRecurrence = parseImmutableRecurrenceProof(proofText, evidence.evidenceId);
-      const links = this.options.storage.candidateSkillEvidenceLinks.listByVersion(candidate.versionId, 1_000);
+      const links = await this.options.storage.candidateSkillEvidenceLinks.listByVersion(candidate.versionId, 1_000);
       if (links.length >= 1_000) {
         throw new ConflictError({
           message: "Skill-learning candidate evidence links exceed the replay verification bound.",
@@ -1296,23 +1308,25 @@ export class SkillLearningService {
       if (immutableRecurrence.evidenceIds.some((evidenceId) => !currentLinkIds.has(evidenceId))) {
         throw new ConflictError({ message: "Skill-learning candidate lost immutable recurrence evidence links." });
       }
-      const supportingEvidence = immutableRecurrence.evidenceIds.map((evidenceId) => {
-        const supporting = this.options.storage.skillLearningEvidence.find(evidenceId);
-        if (
-          !supporting ||
-          supporting.poisoningStatus !== "clean" ||
-          supporting.sourceKind !== "chat_turn" ||
-          supporting.workspaceId !== input.workspaceId ||
-          supporting.targetKey !== identity.targetKey ||
-          supporting.fingerprint !== identity.fingerprint ||
-          !supporting.sourceSessionId
-        ) {
-          throw new ConflictError({
-            message: "Skill-learning immutable recurrence evidence failed replay verification.",
-          });
-        }
-        return supporting;
-      });
+      const supportingEvidence = await Promise.all(
+        immutableRecurrence.evidenceIds.map(async (evidenceId) => {
+          const supporting = await this.options.storage.skillLearningEvidence.find(evidenceId);
+          if (
+            !supporting ||
+            supporting.poisoningStatus !== "clean" ||
+            supporting.sourceKind !== "chat_turn" ||
+            supporting.workspaceId !== input.workspaceId ||
+            supporting.targetKey !== identity.targetKey ||
+            supporting.fingerprint !== identity.fingerprint ||
+            !supporting.sourceSessionId
+          ) {
+            throw new ConflictError({
+              message: "Skill-learning immutable recurrence evidence failed replay verification.",
+            });
+          }
+          return supporting;
+        }),
+      );
       const distinctSessionCount = new Set(supportingEvidence.map((item) => item.sourceSessionId)).size;
       if (distinctSessionCount !== immutableRecurrence.distinctSessionCount) {
         throw new ConflictError({
@@ -1367,7 +1381,7 @@ export class SkillLearningService {
       ) {
         throw new ConflictError({ message: "Skill-learning candidate metadata failed immutable replay verification." });
       }
-      const proposal = this.options.storage.capabilityProposals.find(identity.proposalId);
+      const proposal = await this.options.storage.capabilityProposals.find(identity.proposalId);
       if (!proposal) {
         throw new ConflictError({ message: "Skill-learning candidate is missing its inspectable proposal." });
       }
@@ -1391,7 +1405,7 @@ export class SkillLearningService {
         candidate,
         artifacts,
       )) {
-        const storedEvent = this.options.storage.governanceJourneyEvents.find(expectedEvent.eventId);
+        const storedEvent = await this.options.storage.governanceJourneyEvents.find(expectedEvent.eventId);
         if (
           !storedEvent ||
           canonicalJsonString(storedEvent) !== canonicalJsonString(normalizeJourneyEventForReplay(expectedEvent))
@@ -1402,7 +1416,7 @@ export class SkillLearningService {
         }
       }
     }
-    const recurrence = this.options.storage.skillLearningEvidence.summarizeRecurrence({
+    const recurrence = await this.options.storage.skillLearningEvidence.summarizeRecurrence({
       workspaceId: evidence.workspaceId,
       targetKey: evidence.targetKey,
       fingerprint: evidence.fingerprint,
@@ -2051,18 +2065,18 @@ function safeActorIdLabel(actorId: string): string {
   return `sha256:${sha256Text(actorId).slice(0, 16)}`;
 }
 
-function resolveHistoryCorrectionProvenance(input: {
+async function resolveHistoryCorrectionProvenance(input: {
   storage: Storage;
   workspaceId: string;
   sessionId: string;
   correction: ChatMessageRecord;
   correctionTraces: ChatTurnTraceRecord[];
   reviewingActorId: string;
-}): {
+}): Promise<{
   correctionOrigin: CorrectionOrigin;
   correctionAuthentication: CorrectionAuthenticationBindingV1;
-} {
-  const correctionAuthentication = resolveCorrectionAuthenticationBinding(input);
+}> {
+  const correctionAuthentication = await resolveCorrectionAuthenticationBinding(input);
   const storedOrigin = classifyStoredCorrectionOrigin(input.correction.actorType, input.correction.actorId);
   const canonicalChatOperatorProjection =
     input.correction.actorType === "user" && input.correction.actorId === "operator";
@@ -2075,14 +2089,14 @@ function resolveHistoryCorrectionProvenance(input: {
   };
 }
 
-function resolveCorrectionAuthenticationBinding(input: {
+async function resolveCorrectionAuthenticationBinding(input: {
   storage: Storage;
   workspaceId: string;
   sessionId: string;
   correction: ChatMessageRecord;
   correctionTraces: ChatTurnTraceRecord[];
   reviewingActorId: string;
-}): CorrectionAuthenticationBindingV1 {
+}): Promise<CorrectionAuthenticationBindingV1> {
   if (input.correctionTraces.length !== 1) {
     return emptyCorrectionAuthenticationBinding(input.correctionTraces.length === 0 ? "unavailable" : "invalid");
   }
@@ -2090,7 +2104,7 @@ function resolveCorrectionAuthenticationBinding(input: {
   const unavailable = emptyCorrectionAuthenticationBinding("unavailable", trace.turnId);
   let profile: ChatTurnCapabilityProfileRecord | undefined;
   try {
-    profile = input.storage.chatTurnCapabilityProfiles.findByTurn(trace.turnId);
+    profile = await input.storage.chatTurnCapabilityProfiles.findByTurn(trace.turnId);
   } catch {
     return emptyCorrectionAuthenticationBinding("invalid", trace.turnId);
   }

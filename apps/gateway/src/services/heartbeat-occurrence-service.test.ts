@@ -41,18 +41,13 @@ describe("HeartbeatOccurrenceService", () => {
     expect(nextCadence.sourceRunId).not.toBe(first.sourceRunId);
   });
 
-  it("uses the synchronous claim admission exactly once and preclaims enqueue authority", async () => {
+  it("uses the callback-free atomic claim exactly once and hydrates its preclaimed enqueue authority", async () => {
     const plan = buildHeartbeatOccurrencePlan(CLAIM_INPUT);
     const occurrence = buildOccurrence(plan);
     const admissionRecord = buildAdmissionRecord(occurrence);
     const activeAdmission = buildActiveAdmission(occurrence, plan);
     const admitSystemHeartbeatOccurrence = vi.fn(() => ({ admission: activeAdmission, record: admissionRecord }));
-    const claim = vi.fn((_input, callback) => {
-      const request = buildAdmissionRequest(occurrence);
-      const result = callback(request);
-      expect(result).toEqual({ admission: admissionRecord, child: request.child });
-      return { disposition: "created", occurrence } as const;
-    });
+    const claim = vi.fn(() => ({ disposition: "created", occurrence }) as const);
     const enqueuePreclaimedHeartbeat = vi.fn(async () => true);
     const service = new HeartbeatOccurrenceService(
       buildDeps({ claim, admitSystemHeartbeatOccurrence, enqueuePreclaimedHeartbeat }),
@@ -60,21 +55,21 @@ describe("HeartbeatOccurrenceService", () => {
 
     await expect(service.claimAndEnqueue(CLAIM_INPUT)).resolves.toEqual({ disposition: "enqueued" });
 
-    expect(claim).toHaveBeenCalledWith(
-      {
-        workspaceId: CLAIM_INPUT.workspaceId,
-        sessionId: CLAIM_INPUT.sessionId,
-        expectedPriorCadence: CLAIM_INPUT.expectedPriorCadence,
-        evaluatedPolicySha256: plan.evaluatedPolicySha256,
-        frozenRequestSha256: plan.frozenRequestSha256,
-        frozenObjectiveSha256: plan.frozenObjectiveSha256,
-        idleFloorSeconds: CLAIM_INPUT.idleFloorSeconds,
-      },
-      expect.any(Function),
-    );
+    expect(claim).toHaveBeenCalledWith({
+      workspaceId: CLAIM_INPUT.workspaceId,
+      sessionId: CLAIM_INPUT.sessionId,
+      expectedPriorCadence: CLAIM_INPUT.expectedPriorCadence,
+      evaluatedPolicySha256: plan.evaluatedPolicySha256,
+      frozenRequestSha256: plan.frozenRequestSha256,
+      frozenObjectiveSha256: plan.frozenObjectiveSha256,
+      idleFloorSeconds: CLAIM_INPUT.idleFloorSeconds,
+    });
     expect(claim.mock.calls[0]?.[0]).not.toHaveProperty("content");
     expect(claim.mock.calls[0]?.[0]).not.toHaveProperty("prompt");
-    expect(admitSystemHeartbeatOccurrence).toHaveBeenCalledTimes(1);
+    expect(admitSystemHeartbeatOccurrence).toHaveBeenCalledWith({
+      occurrenceRequest: buildAdmissionRequest(occurrence),
+      request: plan.request,
+    });
     expect(enqueuePreclaimedHeartbeat).toHaveBeenCalledWith(
       expect.objectContaining({
         occurrence,
@@ -761,7 +756,7 @@ function buildDeps(
   return {
     storage: {
       heartbeatOccurrences: {
-        claim: overrides.claim ?? vi.fn(() => ({ disposition: "not_due", reason: "interval" })),
+        claimWithAdmission: overrides.claim ?? vi.fn(() => ({ disposition: "not_due", reason: "interval" })),
         find: overrides.find ?? vi.fn(),
         listRecoverablePage: overrides.listRecoverablePage ?? vi.fn(() => ({ items: [] })),
         findUnresolved: overrides.findUnresolved ?? vi.fn(),

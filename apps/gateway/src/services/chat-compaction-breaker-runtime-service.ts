@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { ApprovalCreateInput, ApprovalRequest, ChatCompactionBreakerActionRecord } from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import {
   CHAT_COMPACTION_BREAKER_APPROVAL_SCHEMA_VERSION,
   CHAT_COMPACTION_BREAKER_MAX_ACTION_TTL_SECONDS,
@@ -37,9 +37,9 @@ export function createChatCompactionBreakerActionServiceForGateway(
   host: ChatCompactionBreakerRuntimeHost,
 ): ChatCompactionBreakerActionService {
   const now = host.now ?? (() => new Date());
-  const resolveSessionWorkspaceId = (sessionId: string): string => {
-    host.storage.sessions.getBySessionId(sessionId);
-    return host.normalizeWorkspaceId(host.storage.chatSessionMeta.get(sessionId)?.workspaceId);
+  const resolveSessionWorkspaceId = async (sessionId: string): Promise<string> => {
+    await host.storage.sessions.getBySessionId(sessionId);
+    return host.normalizeWorkspaceId((await host.storage.chatSessionMeta.get(sessionId))?.workspaceId);
   };
 
   return new ChatCompactionBreakerActionService({
@@ -85,12 +85,12 @@ export function createChatCompactionBreakerActionServiceForGateway(
 async function authorizeCompactionBreakerAction(input: {
   storage: RuntimeStorage;
   now: () => Date;
-  resolveSessionWorkspaceId(sessionId: string): string;
+  resolveSessionWorkspaceId(sessionId: string): Promise<string>;
   input: Parameters<ChatCompactionBreakerGovernancePort["authorize"]>[0];
 }): Promise<ChatCompactionBreakerGovernanceDecision> {
   const request = input.input;
-  const workspaceId = input.resolveSessionWorkspaceId(request.sessionId);
-  const ward = resolveWardEffectForExternalAction({
+  const workspaceId = await input.resolveSessionWorkspaceId(request.sessionId);
+  const ward = await resolveWardEffectForExternalAction({
     storage: input.storage,
     workspaceId,
     action: `chat.compaction_breaker.${request.actionKind}`,
@@ -122,7 +122,7 @@ async function authorizeCompactionBreakerAction(input: {
 
   let approval: ApprovalRequest;
   try {
-    approval = input.storage.approvals.get(approvalId);
+    approval = await input.storage.approvals.get(approvalId);
   } catch (error) {
     if (!(error instanceof NotFoundError)) {
       throw error;
@@ -222,18 +222,18 @@ async function authorizeCompactionBreakerAction(input: {
   });
 }
 
-function isCompactionBreakerActionUseAuthorized(input: {
+async function isCompactionBreakerActionUseAuthorized(input: {
   storage: RuntimeStorage;
-  resolveSessionWorkspaceId(sessionId: string): string;
+  resolveSessionWorkspaceId(sessionId: string): Promise<string>;
   action: ChatCompactionBreakerActionRecord;
   observedAt: string;
-}): boolean {
+}): Promise<boolean> {
   const observedAtMs = Date.parse(input.observedAt);
   if (!Number.isFinite(observedAtMs) || !input.action.approvalId) {
     return false;
   }
-  const workspaceId = input.resolveSessionWorkspaceId(input.action.sessionId);
-  const ward = resolveWardEffectForExternalAction({
+  const workspaceId = await input.resolveSessionWorkspaceId(input.action.sessionId);
+  const ward = await resolveWardEffectForExternalAction({
     storage: input.storage,
     workspaceId,
     action: `chat.compaction_breaker.${input.action.actionKind}`,
@@ -243,7 +243,7 @@ function isCompactionBreakerActionUseAuthorized(input: {
   }
   let approval: ApprovalRequest;
   try {
-    approval = input.storage.approvals.get(input.action.approvalId);
+    approval = await input.storage.approvals.get(input.action.approvalId);
   } catch (error) {
     if (error instanceof NotFoundError) {
       return false;

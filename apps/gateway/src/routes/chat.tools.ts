@@ -77,7 +77,7 @@ export function registerChatToolRoutes(fastify: FastifyInstance): void {
           resolvedBy: resolveActorId(request),
         },
       );
-      markMutationCommitted(request);
+      await markMutationCommitted(request);
       return reply.send({
         ok: true,
         approvalId: body.data.approvalId,
@@ -89,7 +89,7 @@ export function registerChatToolRoutes(fastify: FastifyInstance): void {
         resumedRunId: result.resumedRunId,
       });
     } catch (error) {
-      markMutationCommittedFromError(request, error);
+      await markMutationCommittedFromError(request, error);
       return reply.code(400).send({ error: (error as Error).message });
     }
   });
@@ -103,10 +103,10 @@ export function registerChatToolRoutes(fastify: FastifyInstance): void {
       await fastify.services.chatTools.resolveChatToolApproval(body.data.sessionId, body.data.approvalId, "reject", {
         resolvedBy: resolveActorId(request),
       });
-      markMutationCommitted(request);
+      await markMutationCommitted(request);
       return reply.send({ ok: true, approvalId: body.data.approvalId });
     } catch (error) {
-      markMutationCommittedFromError(request, error);
+      await markMutationCommittedFromError(request, error);
       return reply.code(400).send({ error: (error as Error).message });
     }
   });

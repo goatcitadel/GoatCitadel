@@ -299,8 +299,10 @@ async function executePlannedDispatch({ behavior, body, model, request, requestP
             }),
       };
       response.write(`data: ${JSON.stringify(frame)}\n\n`, () => {
-        completeRequestSummary(requestSummary, { outcome: "stream_disconnect", status: 200 });
-        response.destroy(new Error("synthetic_provider_stream_disconnect"));
+        setTimeout(() => {
+          completeRequestSummary(requestSummary, { outcome: "stream_disconnect", status: 200 });
+          response.destroy(new Error("synthetic_provider_stream_disconnect"));
+        }, 10);
       });
       return;
     }
@@ -335,6 +337,15 @@ async function executePlannedDispatch({ behavior, body, model, request, requestP
         writeNonStreamingSuccess(response, body.model ?? model, plannedReply, requestPath);
       }
       completeRequestSummary(requestSummary, { outcome: "success", status: 200 });
+      return;
+    }
+    case "tool_call": {
+      if (body.stream === true) {
+        writeStreamingToolCall(response, model, behavior, requestPath);
+      } else {
+        writeNonStreamingToolCall(response, body.model ?? model, behavior, requestPath);
+      }
+      completeRequestSummary(requestSummary, { outcome: "tool_call", status: 200 });
       return;
     }
   }
@@ -395,6 +406,14 @@ function normalizeDispatchPlan(value, defaultReplyText) {
           type: "success",
           delayMs,
           replyText: normalizeBoundedText(entry.replyText ?? defaultReplyText, `dispatchPlan[${index}].replyText`),
+        };
+      case "tool_call":
+        return {
+          type: "tool_call",
+          delayMs,
+          name: normalizeToolName(entry.name, `dispatchPlan[${index}].name`),
+          arguments: normalizeToolArguments(entry.arguments, `dispatchPlan[${index}].arguments`),
+          callId: normalizeToolCallId(entry.callId ?? `call_stub_${index + 1}`, `dispatchPlan[${index}].callId`),
         };
       default:
         throw new TypeError(`dispatchPlan[${index}].type is unsupported`);
@@ -562,6 +581,44 @@ function normalizeOptionalBoundedText(value, label) {
   return normalizeBoundedText(value, label);
 }
 
+function normalizeToolName(value, label) {
+  const normalized = normalizeBoundedText(value, label);
+  if (!/^[A-Za-z0-9_-]{1,128}$/u.test(normalized)) {
+    throw new TypeError(`${label} must be a provider-safe function name`);
+  }
+  return normalized;
+}
+
+function normalizeToolCallId(value, label) {
+  const normalized = normalizeBoundedText(value, label);
+  if (!/^[A-Za-z0-9_-]{1,128}$/u.test(normalized)) {
+    throw new TypeError(`${label} must be a provider-safe call id`);
+  }
+  return normalized;
+}
+
+function normalizeToolArguments(value, label) {
+  let serialized;
+  try {
+    serialized = typeof value === "string" ? value : JSON.stringify(value ?? {});
+  } catch {
+    throw new TypeError(`${label} must be JSON serializable`);
+  }
+  if (typeof serialized !== "string" || serialized.length > 20_000) {
+    throw new TypeError(`${label} must serialize to no more than 20000 characters`);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(serialized);
+  } catch {
+    throw new TypeError(`${label} must be valid JSON`);
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new TypeError(`${label} must be a JSON object`);
+  }
+  return serialized;
+}
+
 function writeNonStreamingSuccess(response, model, replyText, requestPath) {
   if (requestPath === "/v1/responses") {
     writeJsonResponse(response, 200, {
@@ -649,6 +706,97 @@ function writeStreamingSuccess(response, model, replyText, requestPath = "/v1/ch
   ];
   for (const frame of frames) response.write(`data: ${JSON.stringify(frame)}\n\n`);
   response.end("data: [DONE]\n\n");
+}
+
+function writeNonStreamingToolCall(response, model, behavior, requestPath) {
+  if (requestPath === "/v1/responses") {
+    const item = buildResponsesToolCallItem(behavior);
+    writeJsonResponse(response, 200, {
+      id: "stub-response-tool-call",
+      object: "response",
+      status: "completed",
+      model,
+      output: [item],
+      usage: { input_tokens: 12, output_tokens: 8, total_tokens: 20 },
+    });
+    return;
+  }
+  writeJsonResponse(response, 200, {
+    id: "stub-completion-tool-call",
+    object: "chat.completion",
+    model,
+    choices: [
+      {
+        index: 0,
+        message: {
+          role: "assistant",
+          content: null,
+          tool_calls: [buildChatToolCall(behavior)],
+        },
+        finish_reason: "tool_calls",
+      },
+    ],
+    usage: { prompt_tokens: 12, completion_tokens: 8, total_tokens: 20 },
+  });
+}
+
+function writeStreamingToolCall(response, model, behavior, requestPath) {
+  response.writeHead(200, { "cache-control": "no-cache", "content-type": "text/event-stream" });
+  if (requestPath === "/v1/responses") {
+    const item = buildResponsesToolCallItem(behavior);
+    const frames = [
+      { type: "response.output_item.done", item },
+      {
+        type: "response.completed",
+        response: {
+          id: "stub-response-tool-call",
+          object: "response",
+          status: "completed",
+          model,
+          output: [item],
+          usage: { input_tokens: 12, output_tokens: 8, total_tokens: 20 },
+        },
+      },
+    ];
+    for (const frame of frames) response.write(`data: ${JSON.stringify(frame)}\n\n`);
+    response.end("data: [DONE]\n\n");
+    return;
+  }
+  const frames = [
+    {
+      id: "stub-stream-tool-call",
+      object: "chat.completion.chunk",
+      model,
+      choices: [{ index: 0, delta: { role: "assistant", tool_calls: [buildChatToolCall(behavior)] } }],
+    },
+    {
+      id: "stub-stream-tool-call",
+      object: "chat.completion.chunk",
+      model,
+      choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+      usage: { prompt_tokens: 12, completion_tokens: 8, total_tokens: 20 },
+    },
+  ];
+  for (const frame of frames) response.write(`data: ${JSON.stringify(frame)}\n\n`);
+  response.end("data: [DONE]\n\n");
+}
+
+function buildResponsesToolCallItem(behavior) {
+  return {
+    id: `item_${behavior.callId}`,
+    type: "function_call",
+    call_id: behavior.callId,
+    name: behavior.name,
+    arguments: behavior.arguments,
+  };
+}
+
+function buildChatToolCall(behavior) {
+  return {
+    id: behavior.callId,
+    type: "function",
+    function: { name: behavior.name, arguments: behavior.arguments },
+  };
 }
 
 function writeStreamingProviderError(response, model, behavior, requestPath) {

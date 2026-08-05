@@ -71,6 +71,7 @@ describe("ChatSessionLifecycleRepository live PostgreSQL", () => {
       const schemaName = `hx411_lifecycle_${suffix}`;
       const legacySessionId = `legacy-${suffix}`;
       const freshSessionId = `fresh-${suffix}`;
+      const delayedSessionId = `delayed-${suffix}`;
       const adminPool = new Pool({ connectionString, max: 2 });
       const scopedUrl = new URL(connectionString);
       scopedUrl.searchParams.set("options", `-csearch_path=${schemaName}`);
@@ -94,7 +95,7 @@ describe("ChatSessionLifecycleRepository live PostgreSQL", () => {
           POSTGRES_MIGRATIONS.filter((migration) => migration.sql.includes("chat_session_lifecycle_intents")).map(
             (migration) => migration.version,
           ),
-          [2, 115],
+          [2, 115, 130],
         );
         const through113 = await runPostgresMigrations(
           migrations,
@@ -221,6 +222,57 @@ describe("ChatSessionLifecycleRepository live PostgreSQL", () => {
           correlationId: `correlation:lifecycle:init:${freshSessionId}`,
         });
         assert.equal(fresh.generation, 1);
+
+        const delayedCreatedAt = setupDb
+          .prepare(
+            `SELECT to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS created_at`,
+          )
+          .get<{ created_at: string }>()!.created_at;
+        const delayedIntentId = `intent-${delayedSessionId}`;
+        const delayedIdempotencyKey = `lifecycle:init:${delayedSessionId}`;
+        setupDb
+          .prepare(
+            `INSERT INTO chat_session_lifecycle_intents (
+               intent_id, session_incarnation_id, workspace_id, session_id, intent_kind,
+               expected_generation, next_generation, expected_revision, actor_kind, actor_id,
+               idempotency_key, request_sha256, correlation_id, event_id, created_at
+             ) VALUES (
+               @intentId, @intentId, 'workspace-a', @sessionId, 'initialize',
+               NULL, 1, NULL, 'system', 'system', @idempotencyKey, @requestSha256,
+               @correlationId, @eventId, @createdAt
+             )`,
+          )
+          .run({
+            intentId: delayedIntentId,
+            sessionId: delayedSessionId,
+            idempotencyKey: delayedIdempotencyKey,
+            requestSha256: "a".repeat(64),
+            correlationId: `correlation:${delayedSessionId}`,
+            eventId: `event:${delayedSessionId}`,
+            createdAt: delayedCreatedAt,
+          });
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1_100);
+        setupDb
+          .prepare(
+            `INSERT INTO chat_session_meta (
+               session_id, workspace_id, revision, lifecycle_intent_id, created_at, updated_at
+             ) VALUES (@sessionId, 'workspace-a', 1, @intentId, @createdAt, @createdAt)`,
+          )
+          .run({ sessionId: delayedSessionId, intentId: delayedIntentId, createdAt: delayedCreatedAt });
+        assert.deepEqual(
+          setupDb
+            .prepare(
+              `SELECT generation, owner_kind, lease_state, transition_idempotency_key
+               FROM chat_session_control_grants WHERE session_id = @sessionId`,
+            )
+            .get({ sessionId: delayedSessionId }),
+          {
+            generation: 1,
+            owner_kind: "operator",
+            lease_state: "operator_active",
+            transition_idempotency_key: delayedIdempotencyKey,
+          },
+        );
         assert.throws(() =>
           setupDb
             .prepare(

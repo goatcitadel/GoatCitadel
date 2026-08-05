@@ -20,7 +20,7 @@ function createFixture() {
 }
 
 describe("resolveChatRunVariableRequest", () => {
-  it("revalidates and freezes a prompt-pack invocation with session-scoped evidence", () => {
+  it("revalidates and freezes a prompt-pack invocation with session-scoped evidence", async () => {
     const fixture = createFixture();
     const invocation = {
       ownerKind: "prompt_pack" as const,
@@ -30,7 +30,7 @@ describe("resolveChatRunVariableRequest", () => {
       schemaHash: hashRunVariableSchema(fixture.schema),
       values: { topic: "durable leases" },
     };
-    const resolved = resolveChatRunVariableRequest(fixture.storage, "session-1", {
+    const resolved = await resolveChatRunVariableRequest(fixture.storage, "session-1", {
       content: "Explain durable leases.",
       templateInvocation: invocation,
     });
@@ -45,7 +45,7 @@ describe("resolveChatRunVariableRequest", () => {
     fixture.storage.close();
   });
 
-  it("rejects forged previews, stale schemas, and cross-owner test injection", () => {
+  it("rejects forged previews, stale schemas, and cross-owner test injection", async () => {
     const fixture = createFixture();
     const base = {
       ownerKind: "prompt_pack" as const,
@@ -55,30 +55,30 @@ describe("resolveChatRunVariableRequest", () => {
       schemaHash: hashRunVariableSchema(fixture.schema),
       values: { topic: "leases" },
     };
-    expect(() =>
+    await expect(
       resolveChatRunVariableRequest(fixture.storage, "session-1", {
         content: "Forged content",
         templateInvocation: base,
       }),
-    ).toThrow(/stale or forged/u);
-    expect(() =>
+    ).rejects.toThrow(/stale or forged/u);
+    await expect(
       resolveChatRunVariableRequest(fixture.storage, "session-1", {
         content: "Explain leases.",
         templateInvocation: { ...base, schemaHash: "0".repeat(64) },
       }),
-    ).toThrow(/schema changed/u);
+    ).rejects.toThrow(/schema changed/u);
     const other = fixture.storage.promptPacks.replacePackTests({
       packId: "pack-2",
       name: "Other",
       runVariableSchema: fixture.schema,
       tests: [{ code: "OTHER", title: "Other", prompt: "Other {{topic}}", orderIndex: 0 }],
     });
-    expect(() =>
+    await expect(
       resolveChatRunVariableRequest(fixture.storage, "session-1", {
         content: "Other leases",
         templateInvocation: { ...base, templateId: other.tests[0]!.testId },
       }),
-    ).toThrow(/does not belong/u);
+    ).rejects.toThrow(/does not belong/u);
     fixture.storage.close();
   });
 });

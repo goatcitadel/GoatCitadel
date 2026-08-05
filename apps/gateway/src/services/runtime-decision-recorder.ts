@@ -2,7 +2,7 @@ import type { RuntimeDecisionTraceAppendInput, RuntimeDecisionTraceRecord } from
 
 export interface RuntimeDecisionRecorderHost {
   readonly runtimeDecisionTraces: {
-    append(input: RuntimeDecisionTraceAppendInput): RuntimeDecisionTraceRecord;
+    append(input: RuntimeDecisionTraceAppendInput): Promise<RuntimeDecisionTraceRecord>;
   };
   recordDevDiagnostic?(input: {
     level: "warn";
@@ -16,9 +16,9 @@ export interface RuntimeDecisionRecorderHost {
 export class RuntimeDecisionRecorder {
   public constructor(private readonly host: RuntimeDecisionRecorderHost) {}
 
-  public record(input: RuntimeDecisionTraceAppendInput): RuntimeDecisionTraceRecord | undefined {
+  public async record(input: RuntimeDecisionTraceAppendInput): Promise<RuntimeDecisionTraceRecord | undefined> {
     try {
-      return this.host.runtimeDecisionTraces.append(input);
+      return await this.host.runtimeDecisionTraces.append(input);
     } catch (error) {
       const scope = input.scope ?? {};
       try {

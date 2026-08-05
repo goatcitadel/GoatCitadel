@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ApprovalCreateInput, ApprovalRequest, ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage, Storage } from "@goatcitadel/storage";
+import type { ApprovalCreateCommitPort, ApprovalCreateCommitResult } from "./approval-gate.js";
 import { ToolPolicyEngine } from "./engine.js";
 
 const policyConfig: ToolPolicyConfig = {
@@ -40,20 +41,19 @@ function createRequest(): ToolInvokeRequest {
   };
 }
 
-type TestApprovalCreateExtension =
-  | readonly unknown[]
-  | { finalize(finalApproval: ApprovalRequest): readonly unknown[] | undefined }
-  | undefined;
-
-function finalizeExtension(extension: TestApprovalCreateExtension, approval: ApprovalRequest): readonly unknown[] {
-  if (!extension) {
+async function finalizeExtension(
+  extension: ApprovalCreateCommitResult | Promise<ApprovalCreateCommitResult> | undefined,
+  approval: ApprovalRequest,
+): Promise<readonly unknown[]> {
+  const resolvedExtension = await extension;
+  if (!resolvedExtension) {
     return [];
   }
-  if (Array.isArray(extension)) {
-    return extension;
+  if (Array.isArray(resolvedExtension)) {
+    return resolvedExtension;
   }
-  if (typeof extension === "object" && "finalize" in extension) {
-    return extension.finalize(approval) ?? [];
+  if (typeof resolvedExtension === "object" && "finalize" in resolvedExtension) {
+    return (await resolvedExtension.finalize(approval)) ?? [];
   }
   return [];
 }
@@ -110,7 +110,7 @@ function createHarness() {
     db: {
       prepare: vi.fn(() => ({ run: runDb })),
     },
-  } as unknown as Storage;
+  } as unknown as Storage & AsyncStorage;
 
   return { storage, create, appendAudit, upsertPending, appendApprovalEvent, runDb };
 }
@@ -119,10 +119,7 @@ describe("ToolPolicyEngine canonical approval creation", () => {
   it("returns canonical wait/provenance truth even when the legacy approval audit sink is unavailable", async () => {
     const harness = createHarness();
     const createApproval = vi.fn(
-      async (
-        input: ApprovalCreateInput,
-        onCreated?: (approval: ApprovalRequest) => TestApprovalCreateExtension,
-      ): Promise<ApprovalRequest> => {
+      async (input: ApprovalCreateInput, onCreated?: ApprovalCreateCommitPort): Promise<ApprovalRequest> => {
         const created = harness.create(input);
         const canonical = {
           ...created,
@@ -131,7 +128,7 @@ describe("ToolPolicyEngine canonical approval creation", () => {
             durableRunId: "approval-wait-1",
           },
         };
-        finalizeExtension(onCreated?.(created), canonical);
+        await finalizeExtension(onCreated?.(created), canonical);
         return canonical;
       },
     );
@@ -198,15 +195,12 @@ describe("ToolPolicyEngine canonical approval creation", () => {
     const harness = createHarness();
     const canonicalExpiresAt = "2026-07-11T00:00:00.000Z";
     const createApproval = vi.fn(
-      async (
-        input: ApprovalCreateInput,
-        onCreated?: (approval: ApprovalRequest) => TestApprovalCreateExtension,
-      ): Promise<ApprovalRequest> => {
+      async (input: ApprovalCreateInput, onCreated?: ApprovalCreateCommitPort): Promise<ApprovalRequest> => {
         const canonical = {
           ...harness.create(input),
           expiresAt: canonicalExpiresAt,
         };
-        finalizeExtension(onCreated?.(canonical), canonical);
+        await finalizeExtension(onCreated?.(canonical), canonical);
         return canonical;
       },
     );
@@ -226,16 +220,13 @@ describe("ToolPolicyEngine canonical approval creation", () => {
     const harness = createHarness();
     let committedApproval: ApprovalRequest | undefined;
     const createApproval = vi.fn(
-      async (
-        input: ApprovalCreateInput,
-        onCreated?: (approval: ApprovalRequest) => TestApprovalCreateExtension,
-      ): Promise<ApprovalRequest> => {
+      async (input: ApprovalCreateInput, onCreated?: ApprovalCreateCommitPort): Promise<ApprovalRequest> => {
         const mutated = {
           ...harness.create(input),
           payload: { command: "rm -rf workspace" },
         };
         const extension = onCreated?.(mutated);
-        finalizeExtension(extension, mutated);
+        await finalizeExtension(extension, mutated);
         committedApproval = mutated;
         return mutated;
       },
@@ -284,12 +275,9 @@ describe("ToolPolicyEngine canonical approval creation", () => {
     fail(harness);
     let committedApproval: ApprovalRequest | undefined;
     const createApproval = vi.fn(
-      async (
-        input: ApprovalCreateInput,
-        onCreated?: (approval: ApprovalRequest) => TestApprovalCreateExtension,
-      ): Promise<ApprovalRequest> => {
+      async (input: ApprovalCreateInput, onCreated?: ApprovalCreateCommitPort): Promise<ApprovalRequest> => {
         const provisional = harness.create(input);
-        finalizeExtension(onCreated?.(provisional), provisional);
+        await finalizeExtension(onCreated?.(provisional), provisional);
         committedApproval = provisional;
         return provisional;
       },
@@ -311,12 +299,9 @@ describe("ToolPolicyEngine canonical approval creation", () => {
     let committedApproval: ApprovalRequest | undefined;
     let committedEffects: readonly unknown[] = [];
     const createApproval = vi.fn(
-      async (
-        input: ApprovalCreateInput,
-        onCreated?: (approval: ApprovalRequest) => TestApprovalCreateExtension,
-      ): Promise<ApprovalRequest> => {
+      async (input: ApprovalCreateInput, onCreated?: ApprovalCreateCommitPort): Promise<ApprovalRequest> => {
         const provisional = harness.create(input);
-        committedEffects = finalizeExtension(onCreated?.(provisional), provisional);
+        committedEffects = await finalizeExtension(onCreated?.(provisional), provisional);
         committedApproval = provisional;
         return provisional;
       },
@@ -345,10 +330,7 @@ describe("ToolPolicyEngine canonical approval creation", () => {
     const harness = createHarness();
     let committedEffects: readonly unknown[] = [];
     const createApproval = vi.fn(
-      async (
-        input: ApprovalCreateInput,
-        onCreated?: (approval: ApprovalRequest) => TestApprovalCreateExtension,
-      ): Promise<ApprovalRequest> => {
+      async (input: ApprovalCreateInput, onCreated?: ApprovalCreateCommitPort): Promise<ApprovalRequest> => {
         const provisional = harness.create(input);
         const extension = onCreated?.(provisional);
         const rejected: ApprovalRequest = {
@@ -358,7 +340,7 @@ describe("ToolPolicyEngine canonical approval creation", () => {
           resolvedBy: "system",
           resolutionNote: "Auto-rejected by shell danger policy.",
         };
-        committedEffects = finalizeExtension(extension, rejected);
+        committedEffects = await finalizeExtension(extension, rejected);
         return rejected;
       },
     );

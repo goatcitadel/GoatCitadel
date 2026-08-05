@@ -7,10 +7,11 @@ import {
 } from "@goatcitadel/contracts";
 import {
   HEARTBEAT_SYSTEM_ACTOR_ID,
+  type HeartbeatOccurrenceAdmissionRequest,
   type HeartbeatOccurrenceBoundIdentity,
   type HeartbeatOccurrenceRecord,
   type HeartbeatPriorCadence,
-  type Storage,
+  type AsyncStorage as Storage,
 } from "@goatcitadel/storage";
 import type { ActiveTurnAdmission } from "./chat-turn-types.js";
 import { buildAutonomousTurnContext, HEARTBEAT_PERMISSION_PROFILE_ID } from "./gateway/autonomous-turn-policy.js";
@@ -77,9 +78,9 @@ export interface HeartbeatOccurrenceServiceDeps {
     SessionControlRuntimeOwner,
     "admitSystemHeartbeatOccurrence" | "recoverSystemHeartbeatOccurrence"
   >;
-  canEnqueueHeartbeat(): boolean;
+  canEnqueueHeartbeat(): Promise<boolean>;
   enqueuePreclaimedHeartbeat(input: EnqueuePreclaimedHeartbeatInput): Promise<boolean>;
-  getDurableRun(runId: string): DurableRunRecord;
+  getDurableRun(runId: string): Promise<DurableRunRecord>;
   recoverDurableRun(runId: string): Promise<void>;
   recordRecoveryDiagnostic?(input: {
     level: "info" | "warn";
@@ -101,36 +102,28 @@ export class HeartbeatOccurrenceService {
   public constructor(private readonly deps: HeartbeatOccurrenceServiceDeps) {}
 
   public async claimAndEnqueue(input: ClaimAndEnqueueHeartbeatInput): Promise<HeartbeatDatabaseAdmissionOutcome> {
-    if (!this.deps.canEnqueueHeartbeat()) {
+    if (!(await this.deps.canEnqueueHeartbeat())) {
       return { disposition: "database_parked", reason: "execution_disabled" };
     }
     const plan = buildHeartbeatOccurrencePlan(input);
-    let turnAdmission: ActiveTurnAdmission | undefined;
-    const outcome = this.deps.storage.heartbeatOccurrences.claim(
-      {
-        workspaceId: input.workspaceId,
-        sessionId: input.sessionId,
-        expectedPriorCadence: input.expectedPriorCadence,
-        evaluatedPolicySha256: plan.evaluatedPolicySha256,
-        frozenRequestSha256: plan.frozenRequestSha256,
-        frozenObjectiveSha256: plan.frozenObjectiveSha256,
-        idleFloorSeconds: input.idleFloorSeconds,
-      },
-      (occurrenceRequest) => {
-        const admitted = this.deps.sessionControlRuntimeOwner.admitSystemHeartbeatOccurrence({
-          occurrenceRequest,
-          request: plan.request,
-        });
-        turnAdmission = admitted.admission;
-        return { admission: admitted.record, child: occurrenceRequest.child };
-      },
-    );
+    const outcome = await this.deps.storage.heartbeatOccurrences.claimWithAdmission({
+      workspaceId: input.workspaceId,
+      sessionId: input.sessionId,
+      expectedPriorCadence: input.expectedPriorCadence,
+      evaluatedPolicySha256: plan.evaluatedPolicySha256,
+      frozenRequestSha256: plan.frozenRequestSha256,
+      frozenObjectiveSha256: plan.frozenObjectiveSha256,
+      idleFloorSeconds: input.idleFloorSeconds,
+    });
     if (outcome.disposition === "not_due") {
       return { disposition: "database_not_due", reason: outcome.reason };
     }
     if (outcome.disposition === "created") {
-      if (!turnAdmission) throw new Error("Heartbeat occurrence committed without its synchronous admission result.");
-      const enqueue = await this.enqueueWithAuthorityDriftFence(outcome.occurrence, turnAdmission, plan);
+      const admitted = await this.deps.sessionControlRuntimeOwner.admitSystemHeartbeatOccurrence({
+        occurrenceRequest: toHeartbeatOccurrenceAdmissionRequest(outcome.occurrence),
+        request: plan.request,
+      });
+      const enqueue = await this.enqueueWithAuthorityDriftFence(outcome.occurrence, admitted.admission, plan);
       if (enqueue.closed) return { disposition: "database_recovered", outcome: "closed" };
       return enqueue.enqueued ? { disposition: "enqueued" } : { disposition: "failed" };
     }
@@ -168,7 +161,7 @@ export class HeartbeatOccurrenceService {
     let after = this.recoveryContinuation;
     const recoveredOccurrenceIds = new Set<string>();
     for (;;) {
-      const page = this.deps.storage.heartbeatOccurrences.listRecoverablePage({
+      const page = await this.deps.storage.heartbeatOccurrences.listRecoverablePage({
         limit: Math.min(boundedPageSize, boundedItemBudget - observed),
         ...(after ? { after } : {}),
       });
@@ -209,7 +202,7 @@ export class HeartbeatOccurrenceService {
   ): Promise<void> {
     const deadlineMs = Date.now() + OPERATOR_PREEMPTION_RECOVERY_TIMEOUT_MS;
     for (;;) {
-      const current = this.readExactDecisionCommittedRecoveryState(identity);
+      const current = await this.readExactDecisionCommittedRecoveryState(identity);
       if (current.settled) {
         this.recordOperatorRecoveryDiagnostic("info", "already_settled", identity, deadlineMs);
         return;
@@ -232,7 +225,7 @@ export class HeartbeatOccurrenceService {
         );
         throw error;
       }
-      const recovered = this.readExactDecisionCommittedRecoveryState(identity);
+      const recovered = await this.readExactDecisionCommittedRecoveryState(identity);
       if (recovered.settled) {
         this.recordOperatorRecoveryDiagnostic("info", "recovered", identity, deadlineMs);
         return;
@@ -264,12 +257,12 @@ export class HeartbeatOccurrenceService {
     });
   }
 
-  private readExactDecisionCommittedRecoveryState(identity: DecisionCommittedHeartbeatRecoveryIdentity): {
+  private async readExactDecisionCommittedRecoveryState(identity: DecisionCommittedHeartbeatRecoveryIdentity): Promise<{
     occurrence: HeartbeatOccurrenceRecord;
     settled: boolean;
-  } {
-    const occurrence = this.deps.storage.heartbeatOccurrences.find(identity.occurrenceId);
-    const admission = this.deps.storage.sessionMutationAdmissions.get(identity.heartbeatAdmissionId);
+  }> {
+    const occurrence = await this.deps.storage.heartbeatOccurrences.find(identity.occurrenceId);
+    const admission = await this.deps.storage.sessionMutationAdmissions.get(identity.heartbeatAdmissionId);
     if (
       !occurrence ||
       !admission ||
@@ -352,7 +345,7 @@ export class HeartbeatOccurrenceService {
     });
     assertHeartbeatOccurrencePlan(occurrence, plan);
     if (occurrence.state === "durable_bound" || occurrence.state === "terminal") {
-      return this.recoverBoundOccurrence(occurrence);
+      return await this.recoverBoundOccurrence(occurrence);
     }
     if (occurrence.state !== "admitted") {
       return { outcome: "closed", enqueued: false };
@@ -360,8 +353,8 @@ export class HeartbeatOccurrenceService {
     // A disabled restart must not leave a pre-bind heartbeat holding the active
     // turn slot. Atomically close only this exact request-runtime admission and
     // retain the already-consumed cadence evidence on its abandoned occurrence.
-    if (!this.deps.canEnqueueHeartbeat()) {
-      const parked = this.deps.storage.sessionMutationAdmissions.abandonAdmittedHeartbeatForExecutionDisabled({
+    if (!(await this.deps.canEnqueueHeartbeat())) {
+      const parked = await this.deps.storage.sessionMutationAdmissions.abandonAdmittedHeartbeatForExecutionDisabled({
         workspaceId: occurrence.workspaceId,
         sessionId: occurrence.sessionId,
         occurrenceId: occurrence.occurrenceId,
@@ -371,9 +364,9 @@ export class HeartbeatOccurrenceService {
         correlationId: occurrence.occurrenceId,
       });
       if (parked.disposition === "drift") {
-        const current = this.deps.storage.heartbeatOccurrences.find(occurrence.occurrenceId);
+        const current = await this.deps.storage.heartbeatOccurrences.find(occurrence.occurrenceId);
         if (current?.state === "durable_bound" || current?.state === "terminal") {
-          return this.recoverBoundOccurrence(current);
+          return await this.recoverBoundOccurrence(current);
         }
         if (current?.state === "abandoned") {
           assertExactHeartbeatAbandonment(occurrence, current);
@@ -381,35 +374,35 @@ export class HeartbeatOccurrenceService {
         }
         throw new Error("Execution-disabled heartbeat parking lost its exact pre-bind authority.");
       }
-      const abandoned = this.deps.storage.heartbeatOccurrences.find(occurrence.occurrenceId);
+      const abandoned = await this.deps.storage.heartbeatOccurrences.find(occurrence.occurrenceId);
       if (!abandoned || abandoned.abandonmentReason !== "admission_closed") {
         throw new Error("Execution-disabled heartbeat parking committed without cadence-retaining abandonment.");
       }
       assertExactHeartbeatAbandonment(occurrence, abandoned);
       return { outcome: "parked", enqueued: false };
     }
-    let recovered: ReturnType<
-      HeartbeatOccurrenceServiceDeps["sessionControlRuntimeOwner"]["recoverSystemHeartbeatOccurrence"]
+    let recovered: Awaited<
+      ReturnType<HeartbeatOccurrenceServiceDeps["sessionControlRuntimeOwner"]["recoverSystemHeartbeatOccurrence"]>
     >;
     try {
-      recovered = this.deps.sessionControlRuntimeOwner.recoverSystemHeartbeatOccurrence({
+      recovered = await this.deps.sessionControlRuntimeOwner.recoverSystemHeartbeatOccurrence({
         occurrence,
         request: plan.request,
       });
     } catch (error) {
-      if (this.isExactAuthorityDriftAbandonment(occurrence)) {
+      if (await this.isExactAuthorityDriftAbandonment(occurrence)) {
         return { outcome: "closed", enqueued: false };
       }
       throw error;
     }
     if (recovered.disposition === "live") {
-      return this.isExactAuthorityDriftAbandonment(occurrence)
+      return (await this.isExactAuthorityDriftAbandonment(occurrence))
         ? { outcome: "closed", enqueued: false }
         : { outcome: "busy", enqueued: false };
     }
     if (recovered.disposition === "closed_or_authority_drift") {
       const expectedReason = recovered.reason === "closed" ? "admission_closed" : recovered.reason;
-      const abandoned = this.deps.storage.heartbeatOccurrences.find(occurrence.occurrenceId);
+      const abandoned = await this.deps.storage.heartbeatOccurrences.find(occurrence.occurrenceId);
       if (
         !abandoned ||
         abandoned.state !== "abandoned" ||
@@ -422,17 +415,17 @@ export class HeartbeatOccurrenceService {
       return { outcome: "closed", enqueued: false };
     }
     if (recovered.disposition === "durable_bound") {
-      const current = this.deps.storage.heartbeatOccurrences.findUnresolved(
+      const current = await this.deps.storage.heartbeatOccurrences.findUnresolved(
         occurrence.workspaceId,
         occurrence.sessionId,
       );
       if (!current || current.occurrenceId !== occurrence.occurrenceId || current.state !== "durable_bound") {
-        if (this.isExactAuthorityDriftAbandonment(occurrence)) {
+        if (await this.isExactAuthorityDriftAbandonment(occurrence)) {
           return { outcome: "closed", enqueued: false };
         }
         throw new Error("Heartbeat admission is durable-bound without the exact occurrence transition.");
       }
-      return this.recoverBoundOccurrence(current);
+      return await this.recoverBoundOccurrence(current);
     }
     const enqueue = await this.enqueueWithAuthorityDriftFence(occurrence, recovered.admission, plan);
     return enqueue.closed
@@ -444,27 +437,27 @@ export class HeartbeatOccurrenceService {
     occurrence: HeartbeatOccurrenceRecord,
   ): Promise<{ outcome: "resumed" | "terminal" | "closed"; enqueued: false }> {
     const identity = toBoundIdentity(occurrence);
-    if (this.isExactAuthorityDriftAbandonment(occurrence)) {
+    if (await this.isExactAuthorityDriftAbandonment(occurrence)) {
       return { outcome: "closed", enqueued: false };
     }
     // Replay validation is intentional: storage checks the immutable profile,
     // v2 payload, actor, child, admission, trace, and all four heartbeat hashes.
     try {
-      this.deps.storage.heartbeatOccurrences.markDurableBound(identity);
+      await this.deps.storage.heartbeatOccurrences.markDurableBound(identity);
     } catch (error) {
-      if (this.isExactAuthorityDriftAbandonment(occurrence)) {
+      if (await this.isExactAuthorityDriftAbandonment(occurrence)) {
         return { outcome: "closed", enqueued: false };
       }
       throw error;
     }
-    if (this.isExactAuthorityDriftAbandonment(occurrence)) {
+    if (await this.isExactAuthorityDriftAbandonment(occurrence)) {
       return { outcome: "closed", enqueued: false };
     }
     let run: DurableRunRecord;
     try {
-      run = this.deps.getDurableRun(occurrence.durableRunId);
+      run = await this.deps.getDurableRun(occurrence.durableRunId);
     } catch (error) {
-      if (this.isExactAuthorityDriftAbandonment(occurrence)) {
+      if (await this.isExactAuthorityDriftAbandonment(occurrence)) {
         return { outcome: "closed", enqueued: false };
       }
       throw error;
@@ -475,19 +468,21 @@ export class HeartbeatOccurrenceService {
     try {
       await this.deps.recoverDurableRun(run.runId);
     } catch (error) {
-      if (this.isExactAuthorityDriftAbandonment(occurrence)) {
+      if (await this.isExactAuthorityDriftAbandonment(occurrence)) {
         return { outcome: "closed", enqueued: false };
       }
       throw error;
     }
-    if (this.isExactAuthorityDriftAbandonment(occurrence)) {
+    if (await this.isExactAuthorityDriftAbandonment(occurrence)) {
       return { outcome: "closed", enqueued: false };
     }
-    let settlement: ReturnType<HeartbeatOccurrenceServiceDeps["storage"]["heartbeatOccurrences"]["markTerminal"]>;
+    let settlement: Awaited<
+      ReturnType<HeartbeatOccurrenceServiceDeps["storage"]["heartbeatOccurrences"]["markTerminal"]>
+    >;
     try {
-      settlement = this.deps.storage.heartbeatOccurrences.markTerminal(identity);
+      settlement = await this.deps.storage.heartbeatOccurrences.markTerminal(identity);
     } catch (error) {
-      if (this.isExactAuthorityDriftAbandonment(occurrence)) {
+      if (await this.isExactAuthorityDriftAbandonment(occurrence)) {
         return { outcome: "closed", enqueued: false };
       }
       throw error;
@@ -503,24 +498,24 @@ export class HeartbeatOccurrenceService {
     turnAdmission: ActiveTurnAdmission,
     plan: HeartbeatOccurrencePlan,
   ): Promise<{ enqueued: boolean; closed: boolean }> {
-    if (this.isExactAuthorityDriftAbandonment(occurrence)) {
+    if (await this.isExactAuthorityDriftAbandonment(occurrence)) {
       return { enqueued: false, closed: true };
     }
     try {
       const enqueued = await this.enqueue(occurrence, turnAdmission, plan);
-      return this.isExactAuthorityDriftAbandonment(occurrence)
+      return (await this.isExactAuthorityDriftAbandonment(occurrence))
         ? { enqueued: false, closed: true }
         : { enqueued, closed: false };
     } catch (error) {
-      if (this.isExactAuthorityDriftAbandonment(occurrence)) {
+      if (await this.isExactAuthorityDriftAbandonment(occurrence)) {
         return { enqueued: false, closed: true };
       }
       throw error;
     }
   }
 
-  private isExactAuthorityDriftAbandonment(expected: HeartbeatOccurrenceRecord): boolean {
-    const current = this.deps.storage.heartbeatOccurrences.find(expected.occurrenceId);
+  private async isExactAuthorityDriftAbandonment(expected: HeartbeatOccurrenceRecord): Promise<boolean> {
+    const current = await this.deps.storage.heartbeatOccurrences.find(expected.occurrenceId);
     if (!current || current.state !== "abandoned") return false;
     assertExactHeartbeatAbandonment(expected, current);
     if (current.abandonmentReason !== "authority_drift") {
@@ -646,6 +641,38 @@ function toExactIdentity(occurrence: HeartbeatOccurrenceRecord) {
     admissionId: occurrence.admissionId,
     turnId: occurrence.turnId,
     durableRunId: occurrence.durableRunId,
+  };
+}
+
+function toHeartbeatOccurrenceAdmissionRequest(
+  occurrence: HeartbeatOccurrenceRecord,
+): HeartbeatOccurrenceAdmissionRequest {
+  return {
+    occurrenceId: occurrence.occurrenceId,
+    claimSha256: occurrence.claimSha256,
+    claimedAt: occurrence.claimedAt,
+    child: {
+      userMessageId: occurrence.userMessageId,
+      assistantMessageId: occurrence.assistantMessageId,
+      turnId: occurrence.turnId,
+      durableRunId: occurrence.durableRunId,
+    },
+    admissionInput: {
+      workspaceId: occurrence.workspaceId,
+      sessionId: occurrence.sessionId,
+      expectedSessionIncarnationId: occurrence.sessionIncarnationId,
+      turnId: occurrence.turnId,
+      runtimeOwnerId: occurrence.runtimeOwnerId,
+      admissionKind: "turn_write",
+      aggregateRevision: occurrence.aggregateRevision,
+      controllerGeneration: occurrence.controllerGeneration,
+      actorKind: "system",
+      actorId: HEARTBEAT_SYSTEM_ACTOR_ID,
+      operation: "chat_system_heartbeat",
+      materialSha256: occurrence.admissionMaterialSha256,
+      idempotencyKey: occurrence.admissionIdempotencyKey,
+      correlationId: occurrence.admissionCorrelationId,
+    },
   };
 }
 

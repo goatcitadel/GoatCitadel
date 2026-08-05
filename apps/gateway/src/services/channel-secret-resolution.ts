@@ -36,12 +36,12 @@ export function isTelegramApprovalActionConnectionReady(connection: IntegrationC
   );
 }
 
-export function isTelegramApprovalActionConnectorReady(
-  connections: { get(connectionId: string): IntegrationConnection },
+export async function isTelegramApprovalActionConnectorReady(
+  connections: { get(connectionId: string): Promise<IntegrationConnection> },
   connectionId: string,
-): boolean {
+): Promise<boolean> {
   try {
-    return isTelegramApprovalActionConnectionReady(connections.get(connectionId));
+    return isTelegramApprovalActionConnectionReady(await connections.get(connectionId));
   } catch {
     return false;
   }

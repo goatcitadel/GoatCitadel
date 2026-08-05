@@ -98,12 +98,12 @@ describe("ImprovementRouteService", () => {
     }
   });
 
-  it("builds a harness audit report from audit signals and improvement reports", () => {
+  it("builds a harness audit report from audit signals and improvement reports", async () => {
     const improvement = fakeImprovement();
     const audit = fakeAudit();
     const service = new ImprovementRouteService({ audit, improvement });
 
-    const report = service.getHarnessAuditReport();
+    const report = await service.getHarnessAuditReport();
 
     expect(report.overallScore).toBeGreaterThan(0);
     expect(report.pillars.map((pillar) => pillar.pillarId)).toContain("permissions_safety");

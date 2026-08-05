@@ -10,7 +10,7 @@ import type {
   ToolExecutionTrustLevel,
   ToolInvokeRequest,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage } from "@goatcitadel/storage";
 import { stripHtmlNoiseTags, stripHtmlTags } from "./html-noise.js";
 import { parseIngestionBackend, parseIngestionSourceType, type IngestionBackendName } from "./ingestion-source-type.js";
 import {
@@ -55,7 +55,7 @@ interface FetchUrlResult {
 
 export async function ingestDocumentViaBackend(input: {
   request: ToolInvokeRequest;
-  storage: Storage;
+  storage: AsyncStorage;
   fetchUrl: (url: string) => Promise<FetchUrlResult>;
   embeddingRuntime?: Omit<EmbeddingRuntimeOptions, "purpose">;
   networkAllowlist?: string[];
@@ -77,7 +77,7 @@ export async function ingestDocumentViaBackend(input: {
   const cacheTtlSeconds =
     positiveInt(args.cacheTtlSeconds) ?? (sourceType === "url" ? DEFAULT_URL_CACHE_TTL_SECONDS : 0);
   const now = new Date();
-  const cachedDocument = readCachedDocument({
+  const cachedDocument = await readCachedDocument({
     storage: input.storage,
     namespace,
     sourceType,
@@ -166,7 +166,7 @@ export async function ingestDocumentViaBackend(input: {
     positiveInt(chunking.overlapChars) ?? 180,
     positiveInt(chunking.maxChunks) ?? 400,
   );
-  const doc = input.storage.knowledge.createDocument({
+  const doc = await input.storage.knowledge.createDocument({
     namespace,
     sourceType,
     sourceRef: source,
@@ -199,7 +199,7 @@ export async function ingestDocumentViaBackend(input: {
       },
     };
   });
-  const savedChunks = input.storage.knowledge.appendChunks(doc.docId, embeddedChunks);
+  const savedChunks = await input.storage.knowledge.appendChunks(doc.docId, embeddedChunks);
   return {
     backend: buildBackendDescriptor(backendName, cacheTtlSeconds),
     fetchResult: fetched,
@@ -224,18 +224,23 @@ function collectModelUsageEventIds(target: Set<string>, eventIds: readonly strin
   }
 }
 
-export function searchIngestedContext(input: { storage: Storage; namespace?: string; query: string; limit?: number }): {
+export async function searchIngestedContext(input: {
+  storage: AsyncStorage;
+  namespace?: string;
+  query: string;
+  limit?: number;
+}): Promise<{
   namespace: string;
   query: string;
   items: RetrievedContextChunk[];
-} {
+}> {
   const namespace = input.namespace;
   const query = input.query.trim().toLowerCase();
   const limit = Math.max(1, Math.min(input.limit ?? 8, 50));
-  const docs = input.storage.knowledge.listDocuments(namespace, 500);
+  const docs = await input.storage.knowledge.listDocuments(namespace, 500);
   const docById = new Map(docs.map((doc) => [doc.docId, doc] as const));
   const items: RetrievedContextChunk[] = [];
-  for (const chunk of input.storage.knowledge.listChunksByNamespace(namespace, 2000)) {
+  for (const chunk of await input.storage.knowledge.listChunksByNamespace(namespace, 2000)) {
     const doc = docById.get(chunk.docId);
     if (!doc) {
       continue;
@@ -444,8 +449,8 @@ async function fetchDocument(input: {
   };
 }
 
-function readCachedDocument(input: {
-  storage: Storage;
+async function readCachedDocument(input: {
+  storage: AsyncStorage;
   namespace: string;
   sourceType: "file" | "url" | "text";
   source: string;
@@ -453,7 +458,7 @@ function readCachedDocument(input: {
   networkAllowlist: string[];
   sourceAllowlist: string[];
   now: Date;
-}):
+}): Promise<
   | {
       title: string;
       text: string;
@@ -463,8 +468,9 @@ function readCachedDocument(input: {
       parser?: FetchResult["parser"];
       chunks: RetrievedContextChunk[];
     }
-  | undefined {
-  const docs = input.storage.knowledge.listDocuments(input.namespace, 500);
+  | undefined
+> {
+  const docs = await input.storage.knowledge.listDocuments(input.namespace, 500);
   for (const doc of docs) {
     if (doc.sourceType !== input.sourceType || doc.sourceRef !== input.source) {
       continue;
@@ -504,7 +510,7 @@ function readCachedDocument(input: {
         continue;
       }
     }
-    const chunks = input.storage.knowledge.listChunksByDocument(doc.docId, 1000).map((chunk) => ({
+    const chunks = (await input.storage.knowledge.listChunksByDocument(doc.docId, 1000)).map((chunk) => ({
       chunkId: chunk.chunkId,
       docId: chunk.docId,
       content: chunk.content,

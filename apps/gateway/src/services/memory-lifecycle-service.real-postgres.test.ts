@@ -7,9 +7,9 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import {
   POSTGRES_MIGRATIONS,
   PostgresDatabaseClient,
-  PostgresSyncDatabaseClient,
-  Storage,
+  createPostgresRemoteStorage,
   runPostgresMigrations,
+  type AsyncStorage,
 } from "@goatcitadel/storage";
 import type { MemoryForgetRequest } from "@goatcitadel/contracts";
 import {
@@ -25,10 +25,10 @@ interface Harness {
   scopedPool: Pool;
   schemaName: string;
   rootDir: string;
-  storage: Storage;
+  storage: AsyncStorage;
   service: MemoryLifecycleService;
-  requestForget(input: MemoryForgetRequest): MemoryForgetApprovalOutcome;
-  approve(approvalId: string): void;
+  requestForget(input: MemoryForgetRequest): Promise<MemoryForgetApprovalOutcome>;
+  approve(approvalId: string): Promise<void>;
   execute(approvalId: string): ReturnType<MemoryLifecycleService["executeApprovedMemoryLifecycleMutation"]>;
   close(): Promise<void>;
 }
@@ -70,7 +70,7 @@ describe.skipIf(!realPostgresUrl)("MemoryLifecycleService real PostgreSQL bulk f
     // fails closed on both the include-global scope AND the default scope:
     // canonical workspace ownership is never inferred from metadata, and a
     // refused request leaves zero deltas.
-    expect(() =>
+    await expect(
       harness.requestForget({
         workspaceId: "workspace-a",
         namespace: "workspace.shared",
@@ -78,21 +78,21 @@ describe.skipIf(!realPostgresUrl)("MemoryLifecycleService real PostgreSQL bulk f
         includeGlobal: true,
         actionId: "fr108-real-pg-legacy-refusal",
       }),
-    ).toThrow(/workspace-owned/i);
-    expect(() =>
+    ).rejects.toThrow(/workspace-owned/i);
+    await expect(
       harness.requestForget({
         workspaceId: "workspace-a",
         namespace: "workspace.shared",
         query: "fr108-purge-marker",
         actionId: "fr108-real-pg-legacy-default-refusal",
       }),
-    ).toThrow(/workspace-owned/i);
+    ).rejects.toThrow(/workspace-owned/i);
     await expect(countRows(harness.scopedPool, "memory_change_history", "change_type = 'forgotten'")).resolves.toBe(0);
     await expect(countRows(harness.scopedPool, "memory_items", "status = 'forgotten'")).resolves.toBe(1);
 
     // The canonical-only marker binds all 525 active canonically-owned rows —
     // beyond the 500-row update chunk — in one deterministic approval.
-    const outcome = harness.requestForget({
+    const outcome = await harness.requestForget({
       workspaceId: "workspace-a",
       namespace: "workspace.shared",
       query: "fr108-canonical-scope",
@@ -104,8 +104,8 @@ describe.skipIf(!realPostgresUrl)("MemoryLifecycleService real PostgreSQL bulk f
     await expect(countRows(harness.scopedPool, "memory_items", "status = 'forgotten'")).resolves.toBe(1);
     await expect(countRows(harness.scopedPool, "memory_change_history", "change_type = 'forgotten'")).resolves.toBe(0);
 
-    harness.approve(outcome.pendingApproval.approvalId);
-    const applied = harness.execute(outcome.pendingApproval.approvalId);
+    await harness.approve(outcome.pendingApproval.approvalId);
+    const applied = await harness.execute(outcome.pendingApproval.approvalId);
     expect(applied).toMatchObject({ disposition: "applied", action: "items_forgotten", changedCount: 525 });
 
     const scopedCounts = await harness.scopedPool.query<{
@@ -158,7 +158,7 @@ describe.skipIf(!realPostgresUrl)("MemoryLifecycleService real PostgreSQL bulk f
     ).rejects.toThrow(/immutable|append-only/i);
 
     // Replayed execution converges without new writes.
-    const replay = harness.execute(outcome.pendingApproval.approvalId);
+    const replay = await harness.execute(outcome.pendingApproval.approvalId);
     expect(replay.changedCount).toBe(525);
     await expect(countRows(harness.scopedPool, "memory_change_history", "change_type = 'forgotten'")).resolves.toBe(
       525,
@@ -174,13 +174,13 @@ describe.skipIf(!realPostgresUrl)("MemoryLifecycleService real PostgreSQL bulk f
       metadata: { workspaceId: "workspace-b" },
     });
 
-    const outcome = harness.requestForget({
+    const outcome = await harness.requestForget({
       workspaceId: "workspace-a",
       itemIds: [itemId],
       actionId: "fr108-concurrent-duplicate",
     });
     if (!outcome.pendingApproval) throw new Error("Expected a pending forget approval.");
-    harness.approve(outcome.pendingApproval.approvalId);
+    await harness.approve(outcome.pendingApproval.approvalId);
 
     let blocker: PoolClient | undefined;
     try {
@@ -204,9 +204,9 @@ describe.skipIf(!realPostgresUrl)("MemoryLifecycleService real PostgreSQL bulk f
         `,
         [itemId, now, randomUUID(), firstHistoryPayload],
       );
-      // The executor blocks this thread with Atomics.wait. Send one static
-      // server-side batch so PostgreSQL receives COMMIT before that wait begins;
-      // the dynamic fixture values were bound above through transaction-local settings.
+      // Send one static server-side batch before awaiting the async executor;
+      // the dynamic fixture values were bound above through transaction-local
+      // settings, and the Gateway event loop remains free while PostgreSQL waits.
       const releaseConcurrentOwner = blocker.query(`
         UPDATE memory_items
         SET status = 'forgotten',
@@ -231,7 +231,7 @@ describe.skipIf(!realPostgresUrl)("MemoryLifecycleService real PostgreSQL bulk f
       const startedAt = Date.now();
       let failure: unknown;
       try {
-        harness.execute(outcome.pendingApproval.approvalId);
+        await harness.execute(outcome.pendingApproval.approvalId);
       } catch (error) {
         failure = error;
       }
@@ -256,7 +256,7 @@ describe.skipIf(!realPostgresUrl)("MemoryLifecycleService real PostgreSQL bulk f
 
       // A fresh request over the drifted (already forgotten) state settles as
       // a pure no-op without any approval.
-      const noOp = harness.requestForget({
+      const noOp = await harness.requestForget({
         workspaceId: "workspace-a",
         itemIds: [itemId],
         actionId: "fr108-concurrent-follow-up",
@@ -275,13 +275,13 @@ describe.skipIf(!realPostgresUrl)("MemoryLifecycleService real PostgreSQL bulk f
     const itemId = "fr108-lock-timeout-item";
     await seedMemoryItem(harness.scopedPool, { itemId, workspaceId: "workspace-a" });
 
-    const outcome = harness.requestForget({
+    const outcome = await harness.requestForget({
       workspaceId: "workspace-a",
       itemIds: [itemId],
       actionId: "fr108-lock-timeout",
     });
     if (!outcome.pendingApproval) throw new Error("Expected a pending forget approval.");
-    harness.approve(outcome.pendingApproval.approvalId);
+    await harness.approve(outcome.pendingApproval.approvalId);
 
     let blocker: PoolClient | undefined;
     try {
@@ -293,7 +293,7 @@ describe.skipIf(!realPostgresUrl)("MemoryLifecycleService real PostgreSQL bulk f
       const startedAt = Date.now();
       let failure: unknown;
       try {
-        harness.execute(outcome.pendingApproval.approvalId);
+        await harness.execute(outcome.pendingApproval.approvalId);
       } catch (error) {
         failure = error;
       }
@@ -313,7 +313,7 @@ describe.skipIf(!realPostgresUrl)("MemoryLifecycleService real PostgreSQL bulk f
 
       // The SAME approval retries cleanly once the lock clears: the approved
       // state is unchanged, so the recovered effect converges.
-      const retry = harness.execute(outcome.pendingApproval.approvalId);
+      const retry = await harness.execute(outcome.pendingApproval.approvalId);
       expect(retry).toMatchObject({ disposition: "applied", changedCount: 1 });
       await expect(countRows(harness.scopedPool, "memory_change_history", "change_type = 'forgotten'")).resolves.toBe(
         1,
@@ -346,8 +346,7 @@ async function createHarness(): Promise<Harness> {
 
   await adminPool.query(`CREATE SCHEMA ${quotedSchemaName}`);
   let scopedPool: Pool | undefined;
-  let syncClient: PostgresSyncDatabaseClient | undefined;
-  let storage: Storage | undefined;
+  let storage: AsyncStorage | undefined;
   try {
     try {
       await runPostgresMigrations(migrationClient, POSTGRES_MIGRATIONS);
@@ -356,18 +355,19 @@ async function createHarness(): Promise<Harness> {
     }
 
     scopedPool = new Pool({ connectionString: scopedUrl.toString(), max: 4 });
-    syncClient = new PostgresSyncDatabaseClient({
-      connectionString: scopedUrl.toString(),
-      database: "goatcitadel_test",
-      applicationName: `goatcitadel-memory-forget-real-postgres-${suffix}`,
-      pool: { max: 2, connectionTimeoutMs: 10_000 },
-    });
-    syncClient.prepare("SELECT 1 AS ready").get();
-    storage = new Storage({
-      db: syncClient,
+    storage = createPostgresRemoteStorage({
+      connection: {
+        connectionString: scopedUrl.toString(),
+        database: new URL(scopedUrl.toString()).pathname.slice(1),
+        applicationName: `goatcitadel-memory-forget-real-postgres-${suffix}`,
+        pool: { max: 2, connectionTimeoutMs: 10_000 },
+      },
+      migrationsTable: "schema_migrations",
       transcriptsDir: path.join(rootDir, "transcripts"),
       auditDir: path.join(rootDir, "audit"),
+      startupWaitTimeoutMs: 120_000,
     });
+    await storage.waitUntilReady();
     const service = new MemoryLifecycleService({
       context: {} as never,
       learned: {} as never,
@@ -383,21 +383,24 @@ async function createHarness(): Promise<Harness> {
           }
         },
         requireFeatureEnabled: () => undefined,
-        publishRealtime: vi.fn(),
-      } as never,
+        publishRealtime: vi.fn(async () => undefined),
+      },
       approvalAuthority: {
         approvals: storage.approvals,
         approvalEvents: storage.approvalEvents,
         governanceJourneyEvents: storage.governanceJourneyEvents,
       },
-      resolveLearnedMemoryPolicy: vi.fn(() => ({ allowWrite: true, reason: "allowed" as const })),
+      resolveLearnedMemoryPolicy: vi.fn(async () => ({ allowWrite: true, reason: "allowed" as const })),
       readTranscriptOrEmpty: vi.fn(async () => []),
     });
     const storageRef = storage;
     const requestForget = (input: MemoryForgetRequest) =>
       service.requestMemoryForgetApproval({ ...input, requesterId: "operator:postgres-proof" });
-    const approve = (approvalId: string) => {
-      storageRef.approvals.resolve(approvalId, { decision: "approve", resolvedBy: "operator:postgres-proof" });
+    const approve = async (approvalId: string): Promise<void> => {
+      await storageRef.approvals.resolve(approvalId, {
+        decision: "approve",
+        resolvedBy: "operator:postgres-proof",
+      });
     };
     const execute = (approvalId: string) =>
       service.executeApprovedMemoryLifecycleMutation({ workspaceId: "workspace-a", approvalId });
@@ -418,7 +421,7 @@ async function createHarness(): Promise<Harness> {
           return;
         }
         closed = true;
-        storage.close();
+        await storage.close();
         await scopedPool.end();
         await adminPool.query(`DROP SCHEMA IF EXISTS ${quotedSchemaName} CASCADE`);
         await adminPool.end();
@@ -430,9 +433,7 @@ async function createHarness(): Promise<Harness> {
   } catch (error) {
     try {
       if (storage) {
-        storage.close();
-      } else {
-        syncClient?.close();
+        await storage.close();
       }
     } catch {
       // Preserve the original setup failure while still cleaning the schema.

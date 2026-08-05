@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ImprovementRef } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { AutonomyControlService } from "./autonomy-control-service.js";
 import type { SkillMutationService, SkillMutationSnapshot } from "./skill-mutation-service.js";
 
@@ -20,15 +20,18 @@ export interface ImprovementSnapshotDeps {
   storage: { systemSettings: Pick<Storage["systemSettings"], "get" | "set"> };
   skillMutation: Pick<
     SkillMutationService,
-    "captureSnapshotFor" | "applySkillMutationSync" | "promoteSelfAuthoredSkill" | "restoreSnapshotSync"
+    "captureSnapshotFor" | "applySkillMutation" | "promoteSelfAuthoredSkill" | "restoreSnapshot"
   >;
-  isFeatureEnabled(flag: "autonomyV1Disabled"): boolean;
+  isFeatureEnabled(flag: "autonomyV1Disabled"): Promise<boolean>;
   /** Lazily resolved in the gateway wiring: autonomy-control is constructed after improvement. */
   recordAutonomousMutation: AutonomyControlService["recordAutonomousMutation"];
 }
 
-export function captureRepairPolicySnapshot(deps: ImprovementSnapshotDeps, targetKey: string): ImprovementRef {
-  return captureImprovementPolicySnapshot(
+export async function captureRepairPolicySnapshot(
+  deps: ImprovementSnapshotDeps,
+  targetKey: string,
+): Promise<ImprovementRef> {
+  return await captureImprovementPolicySnapshot(
     deps,
     IMPROVEMENT_REPAIR_POLICY_CONFIG_SETTING_KEY,
     "repair_policy_snapshot",
@@ -40,7 +43,7 @@ export function applyRepairPolicyCandidate(
   deps: ImprovementSnapshotDeps,
   targetKey: string,
   revisionRef: ImprovementRef,
-): ImprovementRef {
+): Promise<ImprovementRef> {
   return applyImprovementPolicyCandidate(
     deps,
     IMPROVEMENT_REPAIR_POLICY_CONFIG_SETTING_KEY,
@@ -50,12 +53,18 @@ export function applyRepairPolicyCandidate(
   );
 }
 
-export function restoreRepairPolicySnapshot(deps: ImprovementSnapshotDeps, snapshotRef: ImprovementRef): void {
-  restoreImprovementPolicySnapshot(deps, IMPROVEMENT_REPAIR_POLICY_CONFIG_SETTING_KEY, snapshotRef);
+export async function restoreRepairPolicySnapshot(
+  deps: ImprovementSnapshotDeps,
+  snapshotRef: ImprovementRef,
+): Promise<void> {
+  await restoreImprovementPolicySnapshot(deps, IMPROVEMENT_REPAIR_POLICY_CONFIG_SETTING_KEY, snapshotRef);
 }
 
-export function captureRoutingPolicySnapshot(deps: ImprovementSnapshotDeps, targetKey: string): ImprovementRef {
-  return captureImprovementPolicySnapshot(
+export async function captureRoutingPolicySnapshot(
+  deps: ImprovementSnapshotDeps,
+  targetKey: string,
+): Promise<ImprovementRef> {
+  return await captureImprovementPolicySnapshot(
     deps,
     IMPROVEMENT_ROUTING_POLICY_CONFIG_SETTING_KEY,
     "routing_policy_snapshot",
@@ -67,7 +76,7 @@ export function applyRoutingPolicyCandidate(
   deps: ImprovementSnapshotDeps,
   targetKey: string,
   revisionRef: ImprovementRef,
-): ImprovementRef {
+): Promise<ImprovementRef> {
   return applyImprovementPolicyCandidate(
     deps,
     IMPROVEMENT_ROUTING_POLICY_CONFIG_SETTING_KEY,
@@ -77,8 +86,11 @@ export function applyRoutingPolicyCandidate(
   );
 }
 
-export function restoreRoutingPolicySnapshot(deps: ImprovementSnapshotDeps, snapshotRef: ImprovementRef): void {
-  restoreImprovementPolicySnapshot(deps, IMPROVEMENT_ROUTING_POLICY_CONFIG_SETTING_KEY, snapshotRef);
+export async function restoreRoutingPolicySnapshot(
+  deps: ImprovementSnapshotDeps,
+  snapshotRef: ImprovementRef,
+): Promise<void> {
+  await restoreImprovementPolicySnapshot(deps, IMPROVEMENT_ROUTING_POLICY_CONFIG_SETTING_KEY, snapshotRef);
 }
 
 // ── S2: skill self-authoring activation callbacks ─────────────────────────
@@ -88,13 +100,13 @@ export function restoreRoutingPolicySnapshot(deps: ImprovementSnapshotDeps, snap
 // written non-callable, and promotion to `approved` happens only under master
 // autonomy and only through this recorded, reversible activation.
 
-export function captureSkillRevisionSnapshot(
+export async function captureSkillRevisionSnapshot(
   deps: ImprovementSnapshotDeps,
   targetKey: string,
   revisionRef: ImprovementRef,
-): ImprovementRef {
+): Promise<ImprovementRef> {
   const { skillId, skillMarkdown } = readSkillRevisionRef(targetKey, revisionRef);
-  const snapshot = deps.skillMutation.captureSnapshotFor({ skillId, skillMarkdown });
+  const snapshot = await deps.skillMutation.captureSnapshotFor({ skillId, skillMarkdown });
   // NOTE: the unified autonomy-audit entry is intentionally NOT appended here.
   // This snapshot is captured at PROPOSAL time (an approval is then created and
   // the apply happens only later, after approval — or never). Recording the
@@ -119,11 +131,11 @@ function buildSkillRevisionSnapshotRef(snapshot: SkillMutationSnapshot, targetKe
   };
 }
 
-export function applySkillRevisionCandidate(
+export async function applySkillRevisionCandidate(
   deps: ImprovementSnapshotDeps,
   targetKey: string,
   revisionRef: ImprovementRef,
-): ImprovementRef {
+): Promise<ImprovementRef> {
   const { skillId, skillMarkdown, evaluationRunId, sourceTurnId, summary } = readSkillRevisionRef(
     targetKey,
     revisionRef,
@@ -134,9 +146,9 @@ export function applySkillRevisionCandidate(
   // Capture the prior state immediately BEFORE the write so the audit restoreRef
   // carries the correct pre-mutation bytes (the proposal-time snapshot is on the
   // activation rail; this one backs the unified autonomy-audit ledger).
-  const priorSnapshot = deps.skillMutation.captureSnapshotFor({ skillId, skillMarkdown });
+  const priorSnapshot = await deps.skillMutation.captureSnapshotFor({ skillId, skillMarkdown });
   // Validate + security-scan + secret-block + jail-write as non-callable candidate.
-  const result = deps.skillMutation.applySkillMutationSync({
+  const result = await deps.skillMutation.applySkillMutation({
     skillMarkdown,
     skillId,
     evaluationRunId,
@@ -146,17 +158,21 @@ export function applySkillRevisionCandidate(
   // Full autonomy: promote to a callable `approved` state ONLY when the master
   // autonomy switch is engaged. When off, the skill stays a non-callable
   // `candidate` (pure proposal mode). Promotion is reversible by the snapshot.
-  const autonomyEnabled = !deps.isFeatureEnabled("autonomyV1Disabled");
-  const lifecycle = autonomyEnabled ? deps.skillMutation.promoteSelfAuthoredSkill(result.skillId) : result.lifecycle;
+  const autonomyEnabled = !(await deps.isFeatureEnabled("autonomyV1Disabled"));
+  const lifecycle = autonomyEnabled
+    ? await deps.skillMutation.promoteSelfAuthoredSkill(result.skillId)
+    : result.lifecycle;
   // Unified audit: append ONLY now that the write (and any promote) has
   // succeeded, so a failed/blocked apply never leaves a phantom ledger entry.
   // The snapshot ref is value-carrying (prior bytes inline) and is exactly what
   // restoreSkillRevisionSnapshot consumes. Best-effort; never blocks the apply.
-  deps.recordAutonomousMutation({
-    kind: "skill_revision",
-    targetKey: result.skillId,
-    restoreRef: { kind: "skill_revision", snapshotRef: buildSkillRevisionSnapshotRef(priorSnapshot, targetKey) },
-  });
+  await deps
+    .recordAutonomousMutation({
+      kind: "skill_revision",
+      targetKey: result.skillId,
+      restoreRef: { kind: "skill_revision", snapshotRef: buildSkillRevisionSnapshotRef(priorSnapshot, targetKey) },
+    })
+    .catch(() => undefined);
   return {
     refType: "skill_revision_config",
     refId: result.skillId,
@@ -171,13 +187,16 @@ export function applySkillRevisionCandidate(
   };
 }
 
-export function restoreSkillRevisionSnapshot(deps: ImprovementSnapshotDeps, snapshotRef: ImprovementRef): void {
+export async function restoreSkillRevisionSnapshot(
+  deps: ImprovementSnapshotDeps,
+  snapshotRef: ImprovementRef,
+): Promise<void> {
   const metadata = isRecord(snapshotRef.metadata) ? snapshotRef.metadata : {};
   const snapshot = metadata.snapshot;
   if (!isRecord(snapshot) || typeof snapshot.skillId !== "string") {
     throw new Error("Skill revision snapshot is missing its captured state; cannot restore.");
   }
-  deps.skillMutation.restoreSnapshotSync(snapshot as unknown as SkillMutationSnapshot);
+  await deps.skillMutation.restoreSnapshot(snapshot as unknown as SkillMutationSnapshot);
 }
 
 function readSkillRevisionRef(
@@ -212,13 +231,13 @@ function readSkillRevisionRef(
   };
 }
 
-function captureImprovementPolicySnapshot(
+async function captureImprovementPolicySnapshot(
   deps: ImprovementSnapshotDeps,
   settingKey: string,
   refType: ImprovementRef["refType"],
   targetKey: string,
-): ImprovementRef {
-  const policies = readImprovementPolicyMap(deps, settingKey);
+): Promise<ImprovementRef> {
+  const policies = await readImprovementPolicyMap(deps, settingKey);
   const hadValue = Object.prototype.hasOwnProperty.call(policies, targetKey);
   const previousValue = hadValue ? policies[targetKey] : null;
   return {
@@ -234,17 +253,17 @@ function captureImprovementPolicySnapshot(
   };
 }
 
-function applyImprovementPolicyCandidate(
+async function applyImprovementPolicyCandidate(
   deps: ImprovementSnapshotDeps,
   settingKey: string,
   refType: ImprovementRef["refType"],
   targetKey: string,
   revisionRef: ImprovementRef,
-): ImprovementRef {
-  const policies = readImprovementPolicyMap(deps, settingKey);
+): Promise<ImprovementRef> {
+  const policies = await readImprovementPolicyMap(deps, settingKey);
   const proposedChange = isRecord(revisionRef.metadata) ? revisionRef.metadata.proposedChange : undefined;
   const nextValue = proposedChange ?? revisionRef.metadata ?? {};
-  writeImprovementPolicyMap(deps, settingKey, {
+  await writeImprovementPolicyMap(deps, settingKey, {
     ...policies,
     [targetKey]: nextValue,
   });
@@ -260,11 +279,11 @@ function applyImprovementPolicyCandidate(
   };
 }
 
-function restoreImprovementPolicySnapshot(
+async function restoreImprovementPolicySnapshot(
   deps: ImprovementSnapshotDeps,
   expectedSettingKey: string,
   snapshotRef: ImprovementRef,
-): void {
+): Promise<void> {
   const metadata = isRecord(snapshotRef.metadata) ? snapshotRef.metadata : {};
   const settingKey =
     typeof metadata.settingKey === "string" && metadata.settingKey.trim().length > 0
@@ -272,31 +291,34 @@ function restoreImprovementPolicySnapshot(
       : expectedSettingKey;
   const targetKey = typeof metadata.targetKey === "string" ? metadata.targetKey : snapshotRef.refId;
   const hadValue = metadata.hadValue === true;
-  const policies = readImprovementPolicyMap(deps, settingKey);
+  const policies = await readImprovementPolicyMap(deps, settingKey);
   const next = { ...policies };
   if (hadValue) {
     next[targetKey] = metadata.previousValue;
   } else {
     delete next[targetKey];
   }
-  writeImprovementPolicyMap(deps, settingKey, next);
+  await writeImprovementPolicyMap(deps, settingKey, next);
 }
 
-function readImprovementPolicyMap(deps: ImprovementSnapshotDeps, settingKey: string): Record<string, unknown> {
-  const stored = deps.storage.systemSettings.get<unknown>(settingKey)?.value;
+async function readImprovementPolicyMap(
+  deps: ImprovementSnapshotDeps,
+  settingKey: string,
+): Promise<Record<string, unknown>> {
+  const stored = (await deps.storage.systemSettings.get<unknown>(settingKey))?.value;
   return isRecord(stored) ? { ...stored } : {};
 }
 
-function writeImprovementPolicyMap(
+async function writeImprovementPolicyMap(
   deps: ImprovementSnapshotDeps,
   settingKey: string,
   next: Record<string, unknown>,
-): void {
+): Promise<void> {
   if (Object.keys(next).length === 0) {
-    deps.storage.systemSettings.set(settingKey, null);
+    await deps.storage.systemSettings.set(settingKey, null);
     return;
   }
-  deps.storage.systemSettings.set(settingKey, next);
+  await deps.storage.systemSettings.set(settingKey, next);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

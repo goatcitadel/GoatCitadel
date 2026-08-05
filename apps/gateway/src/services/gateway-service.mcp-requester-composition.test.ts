@@ -258,9 +258,9 @@ function buildHarness(options: { resolvers?: boolean; onAuthRead?: () => void } 
   };
   const host: McpRequesterScopedCompositionHost = {
     ...(options.resolvers === false ? {} : { resolvers }),
-    listMcpServers: () => servers.map((server) => ({ ...server })),
-    getChatTurnCapabilityProfile: (profileId) => profiles.get(profileId),
-    readAuthConnectionState: (actor) => {
+    listMcpServers: async () => servers.map((server) => ({ ...server })),
+    getChatTurnCapabilityProfile: async (profileId) => profiles.get(profileId),
+    readAuthConnectionState: async (actor) => {
       options.onAuthRead?.();
       return { revoked: revokedActors.has(actor.actorId) };
     },

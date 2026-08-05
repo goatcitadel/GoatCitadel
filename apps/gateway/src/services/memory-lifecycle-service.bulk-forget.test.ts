@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MemoryForgetRequest } from "@goatcitadel/contracts";
-import { Storage } from "@goatcitadel/storage";
+import { Storage, createLocalAsyncStorage } from "@goatcitadel/storage";
 import { MemoryLifecycleService, type MemoryForgetApprovalOutcome } from "./memory-lifecycle-service.js";
 
 /**
@@ -33,14 +33,15 @@ afterEach(() => {
 
 function createHarness(): Harness {
   const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
+  const asyncStorage = createLocalAsyncStorage(storage);
   const publishRealtime = vi.fn();
   const service = new MemoryLifecycleService({
     context: {} as never,
     learned: {} as never,
     maintenance: {} as never,
     admin: {
-      gatewaySql: storage.gatewaySql,
-      memoryQualityIssues: storage.memoryQualityIssues,
+      gatewaySql: asyncStorage.gatewaySql,
+      memoryQualityIssues: asyncStorage.memoryQualityIssues,
       tryParseJson: <T>(raw: string | null | undefined, fallback: T): T => {
         try {
           return raw ? (JSON.parse(raw) as T) : fallback;
@@ -52,9 +53,9 @@ function createHarness(): Harness {
       publishRealtime,
     },
     approvalAuthority: {
-      approvals: storage.approvals,
-      approvalEvents: storage.approvalEvents,
-      governanceJourneyEvents: storage.governanceJourneyEvents,
+      approvals: asyncStorage.approvals,
+      approvalEvents: asyncStorage.approvalEvents,
+      governanceJourneyEvents: asyncStorage.governanceJourneyEvents,
     },
     resolveLearnedMemoryPolicy: vi.fn(() => ({ allowWrite: true, reason: "allowed" as const })),
     readTranscriptOrEmpty: vi.fn(async () => []),
@@ -103,20 +104,20 @@ function seedMemoryItem(
     });
 }
 
-function requestForget(harness: Harness, input: MemoryForgetRequest): MemoryForgetApprovalOutcome {
-  return harness.service.requestMemoryForgetApproval({
+async function requestForget(harness: Harness, input: MemoryForgetRequest): Promise<MemoryForgetApprovalOutcome> {
+  return await harness.service.requestMemoryForgetApproval({
     ...input,
     requesterId: "operator-requester",
   } satisfies BulkForgetRequestInput);
 }
 
-function approveAndExecute(harness: Harness, outcome: MemoryForgetApprovalOutcome) {
+async function approveAndExecute(harness: Harness, outcome: MemoryForgetApprovalOutcome) {
   if (!outcome.pendingApproval) throw new Error("Expected a pending forget approval.");
   harness.storage.approvals.resolve(outcome.pendingApproval.approvalId, {
     decision: "approve",
     resolvedBy: RESOLVER_ID,
   });
-  return harness.service.executeApprovedMemoryLifecycleMutation({
+  return await harness.service.executeApprovedMemoryLifecycleMutation({
     workspaceId: outcome.pendingApproval.workspaceId,
     approvalId: outcome.pendingApproval.approvalId,
   });
@@ -137,7 +138,7 @@ function historyRows(harness: Harness): Array<{ item_id: string; actor_id: strin
 }
 
 describe("MemoryLifecycleService approval-first bulk forget", () => {
-  it("resolves criteria beyond the list cap at request time and forgets every bound row atomically on approval", () => {
+  it("resolves criteria beyond the list cap at request time and forgets every bound row atomically on approval", async () => {
     const harness = createHarness();
     const expectedIds = Array.from({ length: 501 }, (_, index) => `workspace-a-${String(index).padStart(4, "0")}`);
     for (const itemId of expectedIds) {
@@ -148,7 +149,7 @@ describe("MemoryLifecycleService approval-first bulk forget", () => {
     }
     seedMemoryItem(harness, { itemId: "global-item", workspaceId: null });
 
-    const outcome = requestForget(harness, {
+    const outcome = await requestForget(harness, {
       namespace: "workspace.shared",
       query: "bulk-forget-needle",
       workspaceId: "workspace-a",
@@ -162,7 +163,7 @@ describe("MemoryLifecycleService approval-first bulk forget", () => {
     expect(historyRows(harness)).toHaveLength(0);
     expect(statusOf(harness, "workspace-a-0000")).toBe("active");
 
-    const applied = approveAndExecute(harness, outcome);
+    const applied = await approveAndExecute(harness, outcome);
     expect(applied).toMatchObject({
       disposition: "applied",
       action: "items_forgotten",
@@ -195,12 +196,12 @@ describe("MemoryLifecycleService approval-first bulk forget", () => {
     );
   });
 
-  it("treats namespace/query as AND filters for explicit IDs and settles already-forgotten targets without approval", () => {
+  it("treats namespace/query as AND filters for explicit IDs and settles already-forgotten targets without approval", async () => {
     const harness = createHarness();
     seedMemoryItem(harness, { itemId: "active-match", title: "literal 100%_done" });
     seedMemoryItem(harness, { itemId: "forgotten-match", title: "literal 100%_done", status: "forgotten" });
 
-    const outcome = requestForget(harness, {
+    const outcome = await requestForget(harness, {
       itemIds: ["forgotten-match", "active-match", "active-match"],
       namespace: "workspace.shared",
       query: "100%_done",
@@ -211,26 +212,26 @@ describe("MemoryLifecycleService approval-first bulk forget", () => {
     // Only the real state transition is bound; the forgotten row needs no approval.
     expect(outcome.pendingApproval.itemIds).toStrictEqual(["active-match"]);
 
-    const applied = approveAndExecute(harness, outcome);
+    const applied = await approveAndExecute(harness, outcome);
     expect(applied).toMatchObject({ changedCount: 1 });
     expect(statusOf(harness, "active-match")).toBe("forgotten");
     expect(historyRows(harness)).toHaveLength(1);
 
     // Criteria matching ONLY forgotten rows are a pure no-op: no approval row.
-    const noOp = requestForget(harness, {
+    const noOp = await requestForget(harness, {
       itemIds: ["forgotten-match"],
       workspaceId: "workspace-a",
     });
     expect(noOp).toMatchObject({ pendingApproval: null, noMutationRequired: true, alreadyForgottenCount: 1 });
   });
 
-  it("uses one deterministic item-ID order for mixed-case and punctuation targets", () => {
+  it("uses one deterministic item-ID order for mixed-case and punctuation targets", async () => {
     const harness = createHarness();
     for (const itemId of ["a", "_", "A"]) {
       seedMemoryItem(harness, { itemId });
     }
 
-    const outcome = requestForget(harness, {
+    const outcome = await requestForget(harness, {
       itemIds: ["a", "_", "A"],
       workspaceId: "workspace-a",
       actionId: "forget-action-id-order",
@@ -238,17 +239,17 @@ describe("MemoryLifecycleService approval-first bulk forget", () => {
     if (!outcome.pendingApproval) throw new Error("Expected a pending forget approval.");
     expect(outcome.pendingApproval.itemIds).toStrictEqual(["A", "_", "a"]);
 
-    const applied = approveAndExecute(harness, outcome);
+    const applied = await approveAndExecute(harness, outcome);
     expect(applied).toMatchObject({ changedCount: 3, itemIds: ["A", "_", "a"] });
     expect(historyRows(harness)).toHaveLength(3);
   });
 
-  it("escapes LIKE wildcards so a literal forget query cannot widen its destructive match", () => {
+  it("escapes LIKE wildcards so a literal forget query cannot widen its destructive match", async () => {
     const harness = createHarness();
     seedMemoryItem(harness, { itemId: "literal", title: "release 100%_done" });
     seedMemoryItem(harness, { itemId: "wildcard-collision", title: "release 100AAAdone" });
 
-    const outcome = requestForget(harness, {
+    const outcome = await requestForget(harness, {
       query: "100%_done",
       workspaceId: "workspace-a",
       actionId: "forget-action-literal-query",
@@ -256,12 +257,12 @@ describe("MemoryLifecycleService approval-first bulk forget", () => {
     if (!outcome.pendingApproval) throw new Error("Expected a pending forget approval.");
     expect(outcome.pendingApproval.itemIds).toStrictEqual(["literal"]);
 
-    approveAndExecute(harness, outcome);
+    await approveAndExecute(harness, outcome);
     expect(statusOf(harness, "literal")).toBe("forgotten");
     expect(statusOf(harness, "wildcard-collision")).toBe("active");
   });
 
-  it("fails closed on legacy/global rows: approval-scoped forgets require canonical workspace ownership", () => {
+  it("fails closed on legacy/global rows: approval-scoped forgets require canonical workspace ownership", async () => {
     const harness = createHarness();
     seedMemoryItem(harness, { itemId: "workspace-item" });
     seedMemoryItem(harness, { itemId: "global-item", workspaceId: null });
@@ -270,51 +271,51 @@ describe("MemoryLifecycleService approval-first bulk forget", () => {
     // Global/legacy rows resolve into the include-global scope but cannot be
     // bound to a workspace approval: missing workspace scope is never replaced
     // with an inferred default, so the request fails closed with zero deltas.
-    expect(() =>
+    await expect(
       requestForget(harness, {
         namespace: "workspace.shared",
         workspaceId: "workspace-a",
         includeGlobal: true,
         actionId: "forget-action-global-opt-in",
       }),
-    ).toThrow(/workspace-owned/i);
+    ).rejects.toThrow(/workspace-owned/i);
     expect(statusOf(harness, "workspace-item")).toBe("active");
     expect(statusOf(harness, "global-item")).toBe("active");
     expect(historyRows(harness)).toHaveLength(0);
 
     // The canonical-workspace subset remains forgettable through approval.
-    const outcome = requestForget(harness, {
+    const outcome = await requestForget(harness, {
       itemIds: ["workspace-item"],
       workspaceId: "workspace-a",
       actionId: "forget-action-workspace-only",
     });
-    approveAndExecute(harness, outcome);
+    await approveAndExecute(harness, outcome);
     expect(statusOf(harness, "workspace-item")).toBe("forgotten");
   });
 
-  it("prevalidates every explicit ID at request time and leaves state untouched when one target is missing or out of scope", () => {
+  it("prevalidates every explicit ID at request time and leaves state untouched when one target is missing or out of scope", async () => {
     const harness = createHarness();
     seedMemoryItem(harness, { itemId: "valid-a" });
     seedMemoryItem(harness, { itemId: "foreign-b", workspaceId: "workspace-b" });
 
-    expect(() =>
+    await expect(
       requestForget(harness, {
         itemIds: ["valid-a", "foreign-b", "missing-c"],
         workspaceId: "workspace-a",
         actionId: "forget-action-prevalidate",
       }),
-    ).toThrow();
+    ).rejects.toThrow();
     expect(statusOf(harness, "valid-a")).toBe("active");
     expect(statusOf(harness, "foreign-b")).toBe("active");
     expect(historyRows(harness)).toHaveLength(0);
     expect(harness.publishRealtime).not.toHaveBeenCalled();
   });
 
-  it("rolls back items, history, and governed evidence together when history persistence fails mid-execution", () => {
+  it("rolls back items, history, and governed evidence together when history persistence fails mid-execution", async () => {
     const harness = createHarness();
     seedMemoryItem(harness, { itemId: "rollback-a" });
     seedMemoryItem(harness, { itemId: "rollback-b" });
-    const outcome = requestForget(harness, {
+    const outcome = await requestForget(harness, {
       itemIds: ["rollback-a", "rollback-b"],
       workspaceId: "workspace-a",
       actionId: "forget-action-rollback",
@@ -337,12 +338,12 @@ describe("MemoryLifecycleService approval-first bulk forget", () => {
     // Unexpected infrastructure failures propagate RAW (not as the terminal
     // MemoryLifecycleApplyError) so the approval-effect worker defers the
     // effect for bounded retry instead of failing the mutation closed.
-    expect(() =>
+    await expect(
       harness.service.executeApprovedMemoryLifecycleMutation({
         workspaceId: "workspace-a",
         approvalId: outcome.pendingApproval.approvalId,
       }),
-    ).toThrow("simulated history failure");
+    ).rejects.toThrow("simulated history failure");
 
     expect(statusOf(harness, "rollback-a")).toBe("active");
     expect(statusOf(harness, "rollback-b")).toBe("active");
@@ -354,10 +355,10 @@ describe("MemoryLifecycleService approval-first bulk forget", () => {
     expect(harness.publishRealtime).not.toHaveBeenCalled();
   });
 
-  it("keeps approved single-item forgets atomic when history persistence fails", () => {
+  it("keeps approved single-item forgets atomic when history persistence fails", async () => {
     const harness = createHarness();
     seedMemoryItem(harness, { itemId: "single-rollback" });
-    const outcome = requestForget(harness, {
+    const outcome = await requestForget(harness, {
       itemIds: ["single-rollback"],
       workspaceId: "workspace-a",
       actionId: "single-forget-rollback",
@@ -376,29 +377,29 @@ describe("MemoryLifecycleService approval-first bulk forget", () => {
     `);
     harness.publishRealtime.mockClear();
 
-    expect(() =>
+    await expect(
       harness.service.executeApprovedMemoryLifecycleMutation({
         workspaceId: "workspace-a",
         approvalId: outcome.pendingApproval.approvalId,
       }),
-    ).toThrow("single history failure");
+    ).rejects.toThrow("single history failure");
 
     expect(statusOf(harness, "single-rollback")).toBe("active");
     expect(historyRows(harness)).toHaveLength(0);
     expect(harness.publishRealtime).not.toHaveBeenCalled();
   });
 
-  it("preserves approval provenance in single-item forget history", () => {
+  it("preserves approval provenance in single-item forget history", async () => {
     const harness = createHarness();
     seedMemoryItem(harness, { itemId: "single-provenance" });
 
-    const outcome = requestForget(harness, {
+    const outcome = await requestForget(harness, {
       itemIds: ["single-provenance"],
       workspaceId: "workspace-a",
       actionId: "single-forget-action",
     });
     if (!outcome.pendingApproval) throw new Error("Expected a pending forget approval.");
-    approveAndExecute(harness, outcome);
+    await approveAndExecute(harness, outcome);
 
     expect(historyRows(harness)).toHaveLength(1);
     expect(JSON.parse(historyRows(harness)[0]?.payload_json ?? "{}")).toMatchObject({
@@ -409,17 +410,17 @@ describe("MemoryLifecycleService approval-first bulk forget", () => {
     });
   });
 
-  it("rejects global inclusion without a workspace boundary before resolving anything", () => {
+  it("rejects global inclusion without a workspace boundary before resolving anything", async () => {
     const harness = createHarness();
     seedMemoryItem(harness, { itemId: "still-active" });
 
-    expect(() =>
+    await expect(
       requestForget(harness, {
         itemIds: ["still-active"],
         includeGlobal: true,
         actionId: "forget-action-invalid-global",
       }),
-    ).toThrow();
+    ).rejects.toThrow();
     expect(statusOf(harness, "still-active")).toBe("active");
     expect(historyRows(harness)).toHaveLength(0);
   });

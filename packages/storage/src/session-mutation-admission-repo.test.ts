@@ -6,6 +6,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { describe, it } from "node:test";
 import { Worker } from "node:worker_threads";
 import { canonicalJsonString } from "@goatcitadel/contracts";
+import { createSqliteAsyncStorage } from "./async-storage.js";
+import { Storage } from "./index.js";
 import { createDatabase } from "./sqlite.js";
 import { ChatSessionLifecycleRepository } from "./chat-session-lifecycle-repo.js";
 import { DurableRunEventRepository } from "./durable-run-event-repo.js";
@@ -956,6 +958,59 @@ describe("SessionMutationAdmissionRepository SQLite", () => {
       4,
     );
     db.close();
+  });
+
+  it("keeps the Promise-native SQLite post-commit callback and settlement in one transaction", async () => {
+    const db = createDatabase({ dbPath: ":memory:" });
+    const terminal = createPostCommitChildFixture(db, "commitments", "async-terminal-version");
+    const rollback = createPostCommitChildFixture(db, "commitments", "async-callback-rollback");
+    const storage = createSqliteAsyncStorage(
+      new Storage({
+        db,
+        transcriptsDir: "unused-transcripts",
+        auditDir: "unused-audit",
+        modelUsageRecoverySweepIntervalMs: 60_000,
+      }),
+    );
+    try {
+      const terminalOutcome = await storage.sessionMutationAdmissions.runPostCommitChildStage(
+        terminal.input,
+        async (authority) => {
+          assert.equal(authority.durableRunVersion, 3);
+          await storage.gatewaySql
+            .prepare("UPDATE durable_runs SET version = version + 1 WHERE run_id = @runId")
+            .run({ runId: terminal.input.childRunId });
+          return { disposition: "allowed", value: "stored" };
+        },
+      );
+      assert.equal(terminalOutcome.value, "stored");
+      assert.equal(terminalOutcome.admission.status, "completed");
+      assert.equal(terminalOutcome.admission.terminalDurableRunVersion, 4);
+
+      await assert.rejects(
+        storage.sessionMutationAdmissions.runPostCommitChildStage(rollback.input, async () => {
+          await storage.gatewaySql
+            .prepare("UPDATE durable_runs SET version = version + 1 WHERE run_id = @runId")
+            .run({ runId: rollback.input.childRunId });
+          throw new Error("async post-commit callback failed");
+        }),
+        /async post-commit callback failed/iu,
+      );
+      assert.equal(
+        (await storage.sessionMutationAdmissions.require(rollback.input.childAdmission.admissionId)).status,
+        "active",
+      );
+      assert.equal(
+        (
+          await storage.gatewaySql
+            .prepare("SELECT version FROM durable_runs WHERE run_id = @runId")
+            .get<{ version: number }>({ runId: rollback.input.childRunId })
+        )?.version,
+        3,
+      );
+    } finally {
+      await storage.close();
+    }
   });
 
   it("admits only one active durable turn across two SQLite workers", async () => {

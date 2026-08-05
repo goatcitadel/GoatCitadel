@@ -22,9 +22,9 @@ import * as approvalLifecycleService from "./approval-lifecycle-service.js";
 import * as approvalRemoteActionService from "./approval-remote-action-service.js";
 
 export interface ApprovalRuntime {
-  listToolGrants(scope?: ToolGrantScope, scopeRef?: string, limit?: number): ToolGrantRecord[];
-  createToolGrant(input: ToolGrantCreateInput): ToolGrantRecord;
-  revokeToolGrant(grantId: string, revokedBy: string): boolean;
+  listToolGrants(scope?: ToolGrantScope, scopeRef?: string, limit?: number): Promise<ToolGrantRecord[]>;
+  createToolGrant(input: ToolGrantCreateInput): Promise<ToolGrantRecord>;
+  revokeToolGrant(grantId: string, revokedBy: string): Promise<boolean>;
   createApproval(
     input: ApprovalCreateInput,
     onCreated?: ApprovalCreateCommitHook,
@@ -37,7 +37,7 @@ export interface ApprovalRuntime {
       issuedBy?: string;
       expiresInMs?: number;
     },
-  ): RemoteApprovalActionTokenIssueResult;
+  ): Promise<RemoteApprovalActionTokenIssueResult>;
   resolveApprovalWithRemoteToken(input: {
     token: string;
     connectorId: string;
@@ -54,16 +54,16 @@ export interface ApprovalRuntime {
     resolutionNote?: string;
     resolvedBy?: string;
   }): Promise<ApprovalResolveResult>;
-  listApprovals(status?: ApprovalRequest["status"], limit?: number, workspaceId?: string): ApprovalRequest[];
+  listApprovals(status?: ApprovalRequest["status"], limit?: number, workspaceId?: string): Promise<ApprovalRequest[]>;
   listApprovalsPage(input: {
     status?: ApprovalRequest["status"];
     limit?: number;
     cursor?: string;
     workspaceId?: string;
-  }): ApprovalListResponse;
+  }): Promise<ApprovalListResponse>;
   resolveApprovalsBulk(input: ApprovalBulkResolveInput): Promise<ApprovalBulkResolveResult>;
-  expirePendingApprovals(limit?: number): number;
-  getApprovalReplay(approvalId: string, replayedBy?: string): ApprovalReplayResult;
+  expirePendingApprovals(limit?: number): Promise<number>;
+  getApprovalReplay(approvalId: string, replayedBy?: string): Promise<ApprovalReplayResult>;
   resolveApproval(
     approvalId: string,
     input: ApprovalResolveInput,
@@ -90,15 +90,15 @@ export interface ApprovalRuntime {
 export class ApprovalRuntimeService implements ApprovalRuntime {
   public constructor(private readonly host: ApprovalLifecycleHost & ApprovalRemoteActionContext) {}
 
-  public listToolGrants(scope?: ToolGrantScope, scopeRef?: string, limit = 200): ToolGrantRecord[] {
+  public async listToolGrants(scope?: ToolGrantScope, scopeRef?: string, limit = 200): Promise<ToolGrantRecord[]> {
     return approvalLifecycleService.listToolGrants(this.host, scope, scopeRef, limit);
   }
 
-  public createToolGrant(input: ToolGrantCreateInput): ToolGrantRecord {
+  public async createToolGrant(input: ToolGrantCreateInput): Promise<ToolGrantRecord> {
     return approvalLifecycleService.createToolGrant(this.host, input);
   }
 
-  public revokeToolGrant(grantId: string, revokedBy: string): boolean {
+  public async revokeToolGrant(grantId: string, revokedBy: string): Promise<boolean> {
     return approvalLifecycleService.revokeToolGrant(this.host, grantId, revokedBy);
   }
 
@@ -112,14 +112,14 @@ export class ApprovalRuntimeService implements ApprovalRuntime {
       : approvalLifecycleService.createApproval(this.host, input, onCreated);
   }
 
-  public createApprovalRemoteActionToken(
+  public async createApprovalRemoteActionToken(
     approvalId: string,
     input: {
       connectorId: string;
       issuedBy?: string;
       expiresInMs?: number;
     },
-  ): RemoteApprovalActionTokenIssueResult {
+  ): Promise<RemoteApprovalActionTokenIssueResult> {
     return approvalRemoteActionService.createApprovalRemoteActionToken(this.host, approvalId, input);
   }
 
@@ -145,16 +145,20 @@ export class ApprovalRuntimeService implements ApprovalRuntime {
     return approvalRemoteActionService.resolveApprovalWithRemoteTokenId(this.host, input);
   }
 
-  public listApprovals(status?: ApprovalRequest["status"], limit = 100, workspaceId?: string): ApprovalRequest[] {
+  public async listApprovals(
+    status?: ApprovalRequest["status"],
+    limit = 100,
+    workspaceId?: string,
+  ): Promise<ApprovalRequest[]> {
     return approvalLifecycleService.listApprovals(this.host, status, limit, workspaceId);
   }
 
-  public listApprovalsPage(input: {
+  public async listApprovalsPage(input: {
     status?: ApprovalRequest["status"];
     limit?: number;
     cursor?: string;
     workspaceId?: string;
-  }): ApprovalListResponse {
+  }): Promise<ApprovalListResponse> {
     return approvalLifecycleService.listApprovalsPage(this.host, input);
   }
 
@@ -162,11 +166,11 @@ export class ApprovalRuntimeService implements ApprovalRuntime {
     return approvalLifecycleService.resolveApprovalsBulk(this.host, input);
   }
 
-  public expirePendingApprovals(limit = 100): number {
+  public async expirePendingApprovals(limit = 100): Promise<number> {
     return approvalLifecycleService.expirePendingApprovals(this.host, limit);
   }
 
-  public getApprovalReplay(approvalId: string, replayedBy = "operator"): ApprovalReplayResult {
+  public async getApprovalReplay(approvalId: string, replayedBy = "operator"): Promise<ApprovalReplayResult> {
     return approvalLifecycleService.getApprovalReplay(this.host, approvalId, replayedBy);
   }
 

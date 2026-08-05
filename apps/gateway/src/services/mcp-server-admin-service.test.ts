@@ -34,10 +34,10 @@ rl.on("line", (line) => {
 `;
 
 describe("mcp-server-admin-service", () => {
-  it("creates stdio server records with normalized policy and emits realtime", () => {
+  it("creates stdio server records with normalized policy and emits realtime", async () => {
     const host = createHost();
 
-    const created = createMcpServer(host, {
+    const created = await createMcpServer(host, {
       label: "  Local filesystem  ",
       transport: "stdio",
       command: "  npx  ",
@@ -79,36 +79,36 @@ describe("mcp-server-admin-service", () => {
     });
   });
 
-  it("rejects unsupported remote auth before mutating storage", () => {
+  it("rejects unsupported remote auth before mutating storage", async () => {
     const host = createHost();
 
-    expect(() =>
+    await expect(
       createMcpServer(host, {
         label: "Remote OAuth",
         transport: "http",
         url: "https://remote.example/mcp",
         authType: "oauth2",
       }),
-    ).toThrow("MCP transport http requires local stdio");
+    ).rejects.toThrow("MCP transport http requires local stdio");
     expect(host.writeMcpServers).not.toHaveBeenCalled();
     expect(host.publishRealtime).not.toHaveBeenCalled();
   });
 
-  it("rejects caller-created internal goatcitadel MCP server URLs before mutating storage", () => {
+  it("rejects caller-created internal goatcitadel MCP server URLs before mutating storage", async () => {
     const host = createHost({ servers: [createServer({ serverId: "server-1" })] });
 
-    expect(() =>
+    await expect(
       createMcpServer(host, {
         label: "Forged approval inbox",
         transport: "http",
         url: "goatcitadel://approval-inbox",
       }),
-    ).toThrow("Internal goatcitadel:// MCP servers are Gateway-owned");
-    expect(() =>
+    ).rejects.toThrow("Internal goatcitadel:// MCP servers are Gateway-owned");
+    await expect(
       updateMcpServer(host, "server-1", {
         url: "goatcitadel://durable-tasks",
       }),
-    ).toThrow("Internal goatcitadel:// MCP servers are Gateway-owned");
+    ).rejects.toThrow("Internal goatcitadel:// MCP servers are Gateway-owned");
 
     expect(host.servers).toEqual([expect.objectContaining({ serverId: "server-1" })]);
     expect(host.servers[0]).not.toHaveProperty("url");
@@ -116,10 +116,10 @@ describe("mcp-server-admin-service", () => {
     expect(host.publishRealtime).not.toHaveBeenCalled();
   });
 
-  it("creates supported remote server records with explicit token env policy", () => {
+  it("creates supported remote server records with explicit token env policy", async () => {
     const host = createHost();
 
-    const created = createMcpServer(host, {
+    const created = await createMcpServer(host, {
       label: "Remote SSE",
       transport: "sse",
       url: "https://remote.example/mcp",
@@ -141,7 +141,7 @@ describe("mcp-server-admin-service", () => {
     expect(host.writeMcpServers).toHaveBeenCalledWith([created]);
   });
 
-  it("updates server fields and merges policy without replacing existing defaults", () => {
+  it("updates server fields and merges policy without replacing existing defaults", async () => {
     const existing = createServer({
       serverId: "server-1",
       policy: {
@@ -154,7 +154,7 @@ describe("mcp-server-admin-service", () => {
     });
     const host = createHost({ servers: [existing] });
 
-    const updated = updateMcpServer(host, "server-1", {
+    const updated = await updateMcpServer(host, "server-1", {
       label: "  ",
       command: "  ",
       args: ["  inspect  ", ""],
@@ -191,7 +191,7 @@ describe("mcp-server-admin-service", () => {
     });
     expect(host.servers).toEqual([updated]);
 
-    const policyUpdated = updateMcpServerPolicy(host, "server-1", {
+    const policyUpdated = await updateMcpServerPolicy(host, "server-1", {
       redactionMode: "off",
       allowedToolPatterns: ["tools.search"],
     });
@@ -201,7 +201,7 @@ describe("mcp-server-admin-service", () => {
       allowedToolPatterns: ["tools.search"],
       blockedToolPatterns: ["secret.*"],
     });
-    expect(() => updateMcpServer(host, "missing", { label: "Nope" })).toThrow("Unknown MCP server: missing");
+    await expect(updateMcpServer(host, "missing", { label: "Nope" })).rejects.toThrow("Unknown MCP server: missing");
   });
 
   it("connects servers, replaces their tools, and records connected status", async () => {
@@ -236,7 +236,7 @@ describe("mcp-server-admin-service", () => {
       expect.objectContaining({ status: "connected", lastError: undefined }),
     );
 
-    expect(disconnectMcpServer(host, "server-1")).toMatchObject({
+    await expect(disconnectMcpServer(host, "server-1")).resolves.toMatchObject({
       serverId: "server-1",
       status: "disconnected",
     });
@@ -385,7 +385,7 @@ describe("mcp-server-admin-service", () => {
       })),
     });
 
-    const started = startMcpOAuth(host, "server-1");
+    const started = await startMcpOAuth(host, "server-1");
 
     expect(started.authorizeUrl).toContain("https://mcp.example/oauth/authorize");
     expect(started.authorizeUrl).toContain(`state=${encodeURIComponent(started.state)}`);
@@ -421,16 +421,16 @@ describe("mcp-server-admin-service", () => {
     );
   });
 
-  it("deletes servers, tools, approval inbox entries, and emits realtime only when present", () => {
+  it("deletes servers, tools, approval inbox entries, and emits realtime only when present", async () => {
     const host = createHost({
       servers: [createServer({ serverId: "server-1" }), createServer({ serverId: "server-2" })],
       tools: [createTool("server-1", "server.one"), createTool("server-2", "server.two")],
     });
 
-    expect(deleteMcpServer(host, "missing")).toEqual({ deleted: false });
+    await expect(deleteMcpServer(host, "missing")).resolves.toEqual({ deleted: false });
     expect(host.writeMcpServers).not.toHaveBeenCalled();
 
-    expect(deleteMcpServer(host, "server-1")).toEqual({ deleted: true });
+    await expect(deleteMcpServer(host, "server-1")).resolves.toEqual({ deleted: true });
 
     expect(host.servers.map((server) => server.serverId)).toEqual(["server-2"]);
     expect(host.tools.map((tool) => tool.toolName)).toEqual(["server.two"]);
@@ -467,14 +467,14 @@ function createHost(input?: {
     authState: input?.authState ? { ...input.authState } : {},
     storage: {
       approvalInbox: {
-        deleteByReceiver: vi.fn(),
+        deleteByReceiver: vi.fn(async () => 0),
       },
     },
-    readMcpServers: vi.fn(() => host.servers),
-    writeMcpServers: vi.fn((servers: McpServerRecord[]) => {
+    readMcpServers: vi.fn(async () => host.servers),
+    writeMcpServers: vi.fn(async (servers: McpServerRecord[]) => {
       host.servers = [...servers];
     }),
-    patchMcpServerState: vi.fn((serverId: string, patch: Partial<McpServerRecord>) => {
+    patchMcpServerState: vi.fn(async (serverId: string, patch: Partial<McpServerRecord>) => {
       let updated: McpServerRecord | undefined;
       host.servers = host.servers.map((server) => {
         if (server.serverId !== serverId) {
@@ -492,20 +492,20 @@ function createHost(input?: {
       }
       return updated;
     }),
-    readMcpTools: vi.fn(() => host.tools),
-    writeMcpTools: vi.fn((tools: McpToolRecord[]) => {
+    readMcpTools: vi.fn(async () => host.tools),
+    writeMcpTools: vi.fn(async (tools: McpToolRecord[]) => {
       host.tools = [...tools];
     }),
     resolveConnectedMcpTools: vi.fn(input?.resolveConnectedMcpTools ?? (async () => [])),
-    requireMcpServer: vi.fn((serverId: string) => {
+    requireMcpServer: vi.fn(async (serverId: string) => {
       const server = host.servers.find((item) => item.serverId === serverId);
       if (!server) {
         throw new Error(`Unknown MCP server: ${serverId}`);
       }
       return server;
     }),
-    readMcpAuthState: vi.fn(() => host.authState),
-    writeMcpAuthState: vi.fn((state: Record<string, { oauthState?: string; updatedAt: string }>) => {
+    readMcpAuthState: vi.fn(async () => host.authState),
+    writeMcpAuthState: vi.fn(async (state: Record<string, { oauthState?: string; updatedAt: string }>) => {
       host.authState = state;
     }),
     exchangeMcpOAuthCode: vi.fn(input?.exchangeMcpOAuthCode),

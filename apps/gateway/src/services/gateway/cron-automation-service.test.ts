@@ -84,14 +84,14 @@ class FakeDb {
     }
   }
 
-  public runImmediateTransaction<T>(callback: () => T): T {
+  public async runImmediateTransaction<T>(callback: () => T | Promise<T>): Promise<T> {
     const snapshot = {
       review: new Map([...this.review.entries()].map(([id, row]) => [id, { ...row }])),
       diffs: new Map(this.diffs),
     };
     this.snapshot = snapshot;
     try {
-      const result = callback();
+      const result = await callback();
       this.snapshot = null;
       return result;
     } catch (error) {
@@ -616,9 +616,9 @@ describe("CronAutomationService job behavior", () => {
     cronJobs.upsert(buildTaskJob({ jobId: "ended-job", endAt: "2000-01-01T00:00:00.000Z" }));
     cronJobs.upsert(buildTaskJob({ jobId: "custom-job", action: "custom" as never }));
 
-    expect(service.listCronJobs()).toHaveLength(4);
-    expect(service.getCronJob(" EXISTING-JOB ")).toMatchObject({ jobId: "existing-job" });
-    expect(() => service.getCronJob("missing-job")).toThrow("Cron job not found: missing-job");
+    expect(await service.listCronJobs()).toHaveLength(4);
+    expect(await service.getCronJob(" EXISTING-JOB ")).toMatchObject({ jobId: "existing-job" });
+    await expect(service.getCronJob("missing-job")).rejects.toThrow("Cron job not found: missing-job");
     await expect(
       service.createCronJob({ jobId: "existing-job", name: "Existing", schedule: "0 12 * * * UTC" }),
     ).rejects.toThrow("Cron job already exists: existing-job");
@@ -999,7 +999,7 @@ describe("CronAutomationService job behavior", () => {
 
     try {
       const firstSweep = service.runDueTaskCronJobs(now);
-      expect(curator).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(curator).toHaveBeenCalledTimes(1));
       const overlappingSweep = service.runDueTaskCronJobs(now);
       await overlappingSweep;
       releaseCurator?.();
@@ -1265,7 +1265,7 @@ describe("contextFrom resolution", () => {
       lastRunOutput: "context-payload",
     });
 
-    service.createCronJob({
+    await service.createCronJob({
       jobId: "downstream",
       name: "Downstream",
       action: "task",
@@ -1302,7 +1302,7 @@ describe("contextFrom resolution", () => {
       enabled: true,
     });
 
-    service.createCronJob({
+    await service.createCronJob({
       jobId: "downstream2",
       name: "Downstream2",
       action: "task",
@@ -1439,7 +1439,7 @@ describe("no_agent cron action", () => {
       realtime,
       runner: async () => ({ stdout: "", stderr: "", exitCode: 0, timedOut: false }),
     });
-    service.createCronJob({
+    await service.createCronJob({
       jobId: "probe-empty",
       name: "probe-empty",
       action: "no_agent",
@@ -1449,7 +1449,7 @@ describe("no_agent cron action", () => {
     await service.runCronJobNow("probe-empty");
     const events = realtime.mock.calls.map((call) => call[2]?.type).filter(Boolean);
     expect(events).not.toContain("cron_no_agent_output");
-    const job = service.getCronJob("probe-empty");
+    const job = await service.getCronJob("probe-empty");
     expect(job.lastRunOutput).toBeUndefined();
   });
 
@@ -1459,7 +1459,7 @@ describe("no_agent cron action", () => {
       realtime,
       runner: async () => ({ stdout: "alert", stderr: "", exitCode: 0, timedOut: false }),
     });
-    service.createCronJob({
+    await service.createCronJob({
       jobId: "probe-alert",
       name: "probe-alert",
       action: "no_agent",
@@ -1472,7 +1472,7 @@ describe("no_agent cron action", () => {
       .map((call) => call[2]);
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.output).toBe("alert");
-    const job = service.getCronJob("probe-alert");
+    const job = await service.getCronJob("probe-alert");
     expect(job.lastRunOutput).toBe("alert");
   });
 
@@ -1481,7 +1481,7 @@ describe("no_agent cron action", () => {
       realtime: vi.fn(),
       runner: async () => ({ stdout: "", stderr: "boom", exitCode: 2, timedOut: false }),
     });
-    service.createCronJob({
+    await service.createCronJob({
       jobId: "probe-fail",
       name: "probe-fail",
       action: "no_agent",
@@ -1561,13 +1561,13 @@ describe("agent_turn cron action", () => {
       }),
     );
     expect(cronJobs.get("agent-turn-job")?.lastRunStatus).toBeUndefined();
-    const lookup = service.findCronRunById(result.runId);
+    const lookup = await service.findCronRunById(result.runId);
     expect(lookup).toMatchObject({
       childDurableRunId: "durable-99",
       childDurableStatus: "running",
       childTurnId: "turn-99",
     });
-    expect(service.listCronReviewQueue()).toEqual([]);
+    expect(await service.listCronReviewQueue()).toEqual([]);
   });
 
   it("rejects creating an agent_turn job with an empty prompt", async () => {
@@ -1628,7 +1628,7 @@ describe("agent_turn cron action", () => {
       profileWarning: "creator profile missing",
     }));
     const service = createService(db, vi.fn(), { cronJobs, handlers: { agentTurn } });
-    service.createCronJob({
+    await service.createCronJob({
       jobId: "agent-turn-fail-closed",
       name: "Agent turn fail closed",
       action: "agent_turn",
@@ -1637,7 +1637,7 @@ describe("agent_turn cron action", () => {
     });
 
     const result = await service.runCronJobNow("agent-turn-fail-closed");
-    const [review] = service.listCronReviewQueue();
+    const [review] = await service.listCronReviewQueue();
 
     expect(result).toMatchObject({ jobId: "agent-turn-fail-closed", status: "ok" });
     expect(review).toMatchObject({
@@ -1671,7 +1671,7 @@ describe("no_agent workdir forwarding", () => {
         return { stdout: "", stderr: "", exitCode: 0, timedOut: false };
       },
     });
-    service.createCronJob({
+    await service.createCronJob({
       jobId: "wd-job",
       name: "Wd",
       action: "no_agent",
@@ -1685,7 +1685,7 @@ describe("no_agent workdir forwarding", () => {
 });
 
 describe("CronAutomationService.retryCronReviewQueueItem", () => {
-  it("lists review queue items and resolves cron run diffs", () => {
+  it("lists review queue items and resolves cron run diffs", async () => {
     const db = new FakeDb();
     db.review.set("older", {
       item_id: "older",
@@ -1722,30 +1722,30 @@ describe("CronAutomationService.retryCronReviewQueueItem", () => {
 
     const service = createService(db);
 
-    expect(service.listCronReviewQueue(1.5)).toEqual([
+    expect(await service.listCronReviewQueue(1.5)).toEqual([
       expect.objectContaining({
         itemId: "newer",
         summary: {},
         diff: { changed: true },
       }),
     ]);
-    expect(service.listCronReviewQueue(5)[1]).toMatchObject({
+    expect((await service.listCronReviewQueue(5))[1]).toMatchObject({
       itemId: "older",
       summary: {},
       diff: {},
       resolvedAt: "2026-03-05T00:00:00.000Z",
     });
-    expect(service.getCronRunDiff("run-2")).toEqual({
+    expect(await service.getCronRunDiff("run-2")).toEqual({
       diffId: "diff-2",
       runId: "run-2",
       previousRunId: "run-1",
       diff: { changed: true },
       createdAt: "2026-03-06T00:00:00.000Z",
     });
-    expect(() => service.getCronRunDiff("missing")).toThrow("Cron run diff not found for run missing");
+    await expect(service.getCronRunDiff("missing")).rejects.toThrow("Cron run diff not found for run missing");
   });
 
-  it("rolls back review-item update when diff insert fails", () => {
+  it("rolls back review-item update when diff insert fails", async () => {
     const db = new FakeDb();
     db.review.set("item-1", {
       item_id: "item-1",
@@ -1762,15 +1762,15 @@ describe("CronAutomationService.retryCronReviewQueueItem", () => {
     db.failDiffInsert = true;
 
     const service = createService(db);
-    expect(() => service.retryCronReviewQueueItem("missing")).toThrow("Cron review item not found: missing");
-    expect(() => service.retryCronReviewQueueItem("item-1")).toThrow("cron_run_diffs unavailable");
+    await expect(service.retryCronReviewQueueItem("missing")).rejects.toThrow("Cron review item not found: missing");
+    await expect(service.retryCronReviewQueueItem("item-1")).rejects.toThrow("cron_run_diffs unavailable");
 
     const row = db.review.get("item-1");
     expect(row?.status).toBe("open");
     expect(row?.run_id).toBe("run-old");
   });
 
-  it("throws when retry update cannot reload the review item", () => {
+  it("throws when retry update cannot reload the review item", async () => {
     const db = new FakeDb();
     db.dropUpdatedReviewSelect = true;
     db.review.set("item-stale", {
@@ -1787,10 +1787,12 @@ describe("CronAutomationService.retryCronReviewQueueItem", () => {
     });
 
     const service = createService(db);
-    expect(() => service.retryCronReviewQueueItem("item-stale")).toThrow("Cron review item retry update failed.");
+    await expect(service.retryCronReviewQueueItem("item-stale")).rejects.toThrow(
+      "Cron review item retry update failed.",
+    );
   });
 
-  it("updates item and publishes retry event on success", () => {
+  it("updates item and publishes retry event on success", async () => {
     const db = new FakeDb();
     const publishRealtime = vi.fn();
     db.review.set("item-2", {
@@ -1807,7 +1809,7 @@ describe("CronAutomationService.retryCronReviewQueueItem", () => {
     });
 
     const service = createService(db, publishRealtime);
-    const updated = service.retryCronReviewQueueItem("item-2");
+    const updated = await service.retryCronReviewQueueItem("item-2");
 
     expect(updated.itemId).toBe("item-2");
     expect(updated.status).toBe("retrying");
@@ -1835,7 +1837,7 @@ describe("runCronJobNow returns runId", () => {
       realtime: vi.fn(),
       runner: async () => ({ stdout: "alert", stderr: "", exitCode: 0, timedOut: false }),
     });
-    service.createCronJob({
+    await service.createCronJob({
       jobId: "rid-job",
       name: "Rid",
       action: "no_agent",
@@ -1855,12 +1857,12 @@ describe("findCronRunById", () => {
     vi.stubEnv(EXPERIMENTAL_NO_AGENT_CRON_ENV, "true");
   });
 
-  it("returns undefined for unknown run ids", () => {
+  it("returns undefined for unknown run ids", async () => {
     const service = makeServiceWithNoAgent({
       realtime: vi.fn(),
       runner: async () => ({ stdout: "", stderr: "", exitCode: 0, timedOut: false }),
     });
-    expect(service.findCronRunById("missing-run-id")).toBeUndefined();
+    expect(await service.findCronRunById("missing-run-id")).toBeUndefined();
   });
 
   it("returns the job snapshot when a run id matches lastRunId", async () => {
@@ -1868,7 +1870,7 @@ describe("findCronRunById", () => {
       realtime: vi.fn(),
       runner: async () => ({ stdout: "alert", stderr: "", exitCode: 0, timedOut: false }),
     });
-    service.createCronJob({
+    await service.createCronJob({
       jobId: "found-job",
       name: "Found",
       action: "no_agent",
@@ -1876,7 +1878,7 @@ describe("findCronRunById", () => {
       actionConfig: { noAgent: { command: "echo" } },
     });
     const result = await service.runCronJobNow("found-job");
-    const lookup = service.findCronRunById(result.runId);
+    const lookup = await service.findCronRunById(result.runId);
     expect(lookup?.jobId).toBe("found-job");
     expect(lookup?.runId).toBe(result.runId);
     expect(lookup?.status).toBe("ok");
@@ -1890,7 +1892,7 @@ describe("findCronRunById", () => {
       realtime: vi.fn(),
       runner: async () => ({ stdout: "", stderr: "boom", exitCode: 2, timedOut: false }),
     });
-    service.createCronJob({
+    await service.createCronJob({
       jobId: "failed-job",
       name: "Failed",
       action: "no_agent",
@@ -1904,9 +1906,9 @@ describe("findCronRunById", () => {
       vi.useRealTimers();
     }
 
-    const job = service.getCronJob("failed-job");
+    const job = await service.getCronJob("failed-job");
     expect(job.lastRunId).toBeDefined();
-    const lookup = service.findCronRunById(job.lastRunId ?? "");
+    const lookup = await service.findCronRunById(job.lastRunId ?? "");
     expect(lookup).toMatchObject({
       jobId: "failed-job",
       runId: job.lastRunId,

@@ -37,7 +37,7 @@ import {
   type AcquireLocalEmbeddingLease,
   type PrepareEmbeddingUsageDispatch,
 } from "@goatcitadel/policy-engine";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
 import { LlmService } from "./llm-service.js";
 import {
@@ -58,7 +58,7 @@ export class MemoryContextService {
     private readonly storage: Storage,
     private readonly llmService: LlmService,
     private readonly config: GatewayRuntimeConfig,
-    private readonly publishRealtime: (eventType: string, payload: Record<string, unknown>) => void,
+    private readonly publishRealtime: (eventType: string, payload: Record<string, unknown>) => Promise<unknown>,
     private readonly acquireLocalEmbeddingLease?: AcquireLocalEmbeddingLease,
     private readonly prepareEmbeddingUsageDispatch?: PrepareEmbeddingUsageDispatch,
   ) {}
@@ -101,7 +101,7 @@ export class MemoryContextService {
         candidates: [],
         queryEmbedding,
       });
-      const pack = this.storage.memoryContexts.upsert({
+      const pack = await this.storage.memoryContexts.upsert({
         cacheKey,
         scope: input.scope,
         sessionId: input.sessionId,
@@ -121,7 +121,7 @@ export class MemoryContextService {
         expiresAt: new Date(Date.now() + qmd.cacheTtlSeconds * 1000).toISOString(),
       });
       const enrichedFallback = enrichMemoryPack(pack, relationScope, new Map());
-      this.storage.memoryQmdRuns.append({
+      await this.storage.memoryQmdRuns.append({
         scope: input.scope,
         sessionId: input.sessionId,
         taskId: input.taskId,
@@ -135,7 +135,7 @@ export class MemoryContextService {
         distilledTokenEstimate: fallback.distilledTokenEstimate,
         savingsPercent: 0,
       });
-      this.publishRealtime("memory_qmd_fallback", {
+      await this.publishRealtime("memory_qmd_fallback", {
         contextId: pack.contextId,
         scope: input.scope,
         reason: enrichedFallback.quality.reason,
@@ -183,7 +183,7 @@ export class MemoryContextService {
     });
 
     if (!input.forceRefresh) {
-      const cached = this.storage.memoryContexts.findFreshByCacheKey({
+      const cached = await this.storage.memoryContexts.findFreshByCacheKey({
         cacheKey,
         scope: input.scope,
         sessionId: input.sessionId,
@@ -193,7 +193,7 @@ export class MemoryContextService {
       });
       if (cached) {
         const enrichedCached = refreshMemoryPackAssembly(enrichMemoryPack(cached, relationScope, new Map()), assembly);
-        this.storage.memoryQmdRuns.append({
+        await this.storage.memoryQmdRuns.append({
           scope: input.scope,
           sessionId: input.sessionId,
           taskId: input.taskId,
@@ -207,7 +207,7 @@ export class MemoryContextService {
           distilledTokenEstimate: enrichedCached.distilledTokenEstimate,
           savingsPercent: calculateSavings(enrichedCached.originalTokenEstimate, enrichedCached.distilledTokenEstimate),
         });
-        this.publishRealtime("memory_qmd_cache_hit", {
+        await this.publishRealtime("memory_qmd_cache_hit", {
           contextId: enrichedCached.contextId,
           scope: input.scope,
           sessionId: input.sessionId,
@@ -224,7 +224,7 @@ export class MemoryContextService {
       const fallback = composeFallbackContext(candidates, maxContextTokens);
       const candidateMap = toCandidateMap(candidates);
       const citations = enrichMemoryCitations(fallback.citations, relationScope, candidateMap);
-      const pack = this.storage.memoryContexts.upsert({
+      const pack = await this.storage.memoryContexts.upsert({
         cacheKey,
         scope: input.scope,
         sessionId: input.sessionId,
@@ -245,7 +245,7 @@ export class MemoryContextService {
         expiresAt: new Date(Date.now() + qmd.cacheTtlSeconds * 1000).toISOString(),
       });
       const enrichedFallback = enrichMemoryPack(pack, relationScope, candidateMap);
-      this.storage.memoryQmdRuns.append({
+      await this.storage.memoryQmdRuns.append({
         scope: input.scope,
         sessionId: input.sessionId,
         taskId: input.taskId,
@@ -259,7 +259,7 @@ export class MemoryContextService {
         distilledTokenEstimate: enrichedFallback.distilledTokenEstimate,
         savingsPercent: calculateSavings(originalTokenEstimate, enrichedFallback.distilledTokenEstimate),
       });
-      this.publishRealtime("memory_qmd_fallback", {
+      await this.publishRealtime("memory_qmd_fallback", {
         contextId: enrichedFallback.contextId,
         scope: input.scope,
         reason: enrichedFallback.quality.reason,
@@ -279,7 +279,7 @@ export class MemoryContextService {
         requestedProviderId: providerId,
         requestedModelId: model,
         lineage: {
-          workspaceId: resolveTrustedMemoryUsageWorkspaceId(this.storage, input.sessionId) ?? input.workspaceId,
+          workspaceId: (await resolveTrustedMemoryUsageWorkspaceId(this.storage, input.sessionId)) ?? input.workspaceId,
           sessionId: input.sessionId,
           durableRunId: input.runId,
           taskId: input.taskId,
@@ -348,7 +348,7 @@ export class MemoryContextService {
         },
         distilledTokenEstimate: composed.distilledTokenEstimate,
       });
-      const pack = this.storage.memoryContexts.upsert({
+      const pack = await this.storage.memoryContexts.upsert({
         cacheKey,
         scope: input.scope,
         sessionId: input.sessionId,
@@ -366,7 +366,7 @@ export class MemoryContextService {
       });
       const enrichedGenerated = enrichMemoryPack(pack, relationScope, candidateMap);
 
-      this.storage.memoryQmdRuns.append({
+      await this.storage.memoryQmdRuns.append({
         scope: input.scope,
         sessionId: input.sessionId,
         taskId: input.taskId,
@@ -387,7 +387,7 @@ export class MemoryContextService {
       });
 
       if (write.promptInjectionDetected) {
-        this.publishRealtime("memory_qmd_fallback", {
+        await this.publishRealtime("memory_qmd_fallback", {
           contextId: enrichedGenerated.contextId,
           scope: input.scope,
           sessionId: input.sessionId,
@@ -397,7 +397,7 @@ export class MemoryContextService {
           evidenceHash: write.evidenceHash?.slice(0, 12),
         });
       } else {
-        this.publishRealtime("memory_qmd_generated", {
+        await this.publishRealtime("memory_qmd_generated", {
           contextId: enrichedGenerated.contextId,
           scope: input.scope,
           sessionId: input.sessionId,
@@ -429,7 +429,7 @@ export class MemoryContextService {
         },
         distilledTokenEstimate: fallback.distilledTokenEstimate,
       });
-      const pack = this.storage.memoryContexts.upsert({
+      const pack = await this.storage.memoryContexts.upsert({
         cacheKey,
         scope: input.scope,
         sessionId: input.sessionId,
@@ -446,7 +446,7 @@ export class MemoryContextService {
         expiresAt: new Date(Date.now() + qmd.cacheTtlSeconds * 1000).toISOString(),
       });
       const enrichedFallback = enrichMemoryPack(pack, relationScope, candidateMap);
-      this.storage.memoryQmdRuns.append({
+      await this.storage.memoryQmdRuns.append({
         scope: input.scope,
         sessionId: input.sessionId,
         taskId: input.taskId,
@@ -465,7 +465,7 @@ export class MemoryContextService {
           ? `${MEMORY_CONTEXT_PROMPT_INJECTION_REASON}:${write.evidenceHash?.slice(0, 12)}`
           : message,
       });
-      this.publishRealtime("memory_qmd_fallback", {
+      await this.publishRealtime("memory_qmd_fallback", {
         contextId: enrichedFallback.contextId,
         scope: input.scope,
         reason: write.promptInjectionDetected ? MEMORY_CONTEXT_PROMPT_INJECTION_REASON : message,
@@ -475,30 +475,30 @@ export class MemoryContextService {
     }
   }
 
-  public get(contextId: string): MemoryContextPack {
+  public async get(contextId: string): Promise<MemoryContextPack> {
     return this.storage.memoryContexts.get(contextId);
   }
 
-  public listRecent(limit = 60): MemoryContextPack[] {
+  public async listRecent(limit = 60): Promise<MemoryContextPack[]> {
     return this.storage.memoryContexts.listRecent(limit);
   }
 
-  public listByRun(runId: string): MemoryContextPack[] {
+  public async listByRun(runId: string): Promise<MemoryContextPack[]> {
     return this.storage.memoryContexts.listByRun(runId);
   }
 
-  public stats(from: string, to: string): MemoryQmdStatsResponse {
+  public async stats(from: string, to: string): Promise<MemoryQmdStatsResponse> {
     return this.storage.memoryQmdRuns.stats(from, to);
   }
 
-  public retrievalStatus(now = new Date()): MemoryRetrievalStatusResponse {
+  public async retrievalStatus(now = new Date()): Promise<MemoryRetrievalStatusResponse> {
     const checkedAt = now.toISOString();
     const qmd = this.config.assistant.memory.qmd;
     const enabled = Boolean(this.config.assistant.memory.enabled && qmd.enabled);
-    const recentContexts = this.listRecent(20);
-    const recentRuns = this.storage.memoryQmdRuns.list(20);
+    const recentContexts = await this.listRecent(20);
+    const recentRuns = await this.storage.memoryQmdRuns.list(20);
     const from = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
-    const stats = this.storage.memoryQmdRuns.stats(from, checkedAt);
+    const stats = await this.storage.memoryQmdRuns.stats(from, checkedAt);
     const retrievalStrategies = collectRecentRetrievalStrategies(recentContexts);
     const retrievalMode = resolveMemoryRetrievalMode(enabled, retrievalStrategies);
     const rerankMode = resolveMemoryRerankMode(enabled, retrievalStrategies);
@@ -602,7 +602,7 @@ export class MemoryContextService {
     }
 
     throwIfMemoryContextAborted(input.signal);
-    for (const item of this.collectMemoryItemSources(this.resolveMemoryItemWorkspaceId(input))) {
+    for (const item of await this.collectMemoryItemSources(await this.resolveMemoryItemWorkspaceId(input))) {
       sources.push(item);
     }
 
@@ -632,14 +632,14 @@ export class MemoryContextService {
   // workspace-scoped. Resolve from the explicit workspaceId, else the session's
   // owning workspace, else the default workspace — never undefined, which would
   // trigger the unfiltered cross-workspace query in listActiveMemoryItems.
-  private resolveMemoryItemWorkspaceId(input: MemoryContextComposeRequest): string {
+  private async resolveMemoryItemWorkspaceId(input: MemoryContextComposeRequest): Promise<string> {
     const explicit = input.workspaceId?.trim();
     if (explicit) {
       return explicit;
     }
     const sessionId = input.sessionId?.trim();
     if (sessionId) {
-      const metaWorkspaceId = this.storage.chatSessionMeta?.get(sessionId)?.workspaceId?.trim();
+      const metaWorkspaceId = (await this.storage.chatSessionMeta?.get(sessionId))?.workspaceId?.trim();
       if (metaWorkspaceId) {
         return metaWorkspaceId;
       }
@@ -647,21 +647,24 @@ export class MemoryContextService {
     return DEFAULT_MEMORY_WORKSPACE_ID;
   }
 
-  private collectMemoryItemSources(workspaceId?: string): MemoryItemSource[] {
+  private async collectMemoryItemSources(workspaceId?: string): Promise<MemoryItemSource[]> {
     try {
-      return this.storage.memoryMaintenance
-        .listActiveMemoryItems(this.config.assistant.memory.qmd.maxMemoryFiles, normalizeMemoryWorkspaceId(workspaceId))
-        .map((item) => ({
-          type: "memory_item",
-          itemId: item.itemId,
-          namespace: item.namespace,
-          title: item.title,
-          content: item.content,
-          updatedAt: item.updatedAt,
-          pinned: item.pinned,
-          retrievalHints: extractMemoryRetrievalHints(item.metadata),
-          embedding: extractMemoryEmbedding(item.metadata),
-        }));
+      return (
+        await this.storage.memoryMaintenance.listActiveMemoryItems(
+          this.config.assistant.memory.qmd.maxMemoryFiles,
+          normalizeMemoryWorkspaceId(workspaceId),
+        )
+      ).map((item) => ({
+        type: "memory_item",
+        itemId: item.itemId,
+        namespace: item.namespace,
+        title: item.title,
+        content: item.content,
+        updatedAt: item.updatedAt,
+        pinned: item.pinned,
+        retrievalHints: extractMemoryRetrievalHints(item.metadata),
+        embedding: extractMemoryEmbedding(item.metadata),
+      }));
     } catch {
       return [];
     }
@@ -676,7 +679,7 @@ export class MemoryContextService {
       sessionIds.add(input.sessionId);
     }
     if ((relationScope === "peer" || relationScope === "project") && input.runId) {
-      for (const step of this.storage.chatDelegationSteps.listByRun(input.runId)) {
+      for (const step of await this.storage.chatDelegationSteps.listByRun(input.runId)) {
         if (step.childSessionId) {
           sessionIds.add(step.childSessionId);
         }
@@ -685,7 +688,10 @@ export class MemoryContextService {
     return [...sessionIds];
   }
 
-  private degradeUnsafeMemoryContext(input: MemoryContextComposeRequest, pack: MemoryContextPack): MemoryContextPack {
+  private async degradeUnsafeMemoryContext(
+    input: MemoryContextComposeRequest,
+    pack: MemoryContextPack,
+  ): Promise<MemoryContextPack> {
     const write = sanitizeMemoryContextWrite({
       contextText: pack.contextText,
       citations: pack.citations,
@@ -702,7 +708,7 @@ export class MemoryContextService {
       quality: write.quality,
       distilledTokenEstimate: write.distilledTokenEstimate,
     };
-    this.storage.memoryQmdRuns.append({
+    await this.storage.memoryQmdRuns.append({
       scope: input.scope,
       sessionId: input.sessionId,
       taskId: input.taskId,
@@ -717,7 +723,7 @@ export class MemoryContextService {
       savingsPercent: calculateSavings(pack.originalTokenEstimate, write.distilledTokenEstimate),
       errorText: `${MEMORY_CONTEXT_PROMPT_INJECTION_REASON}:${write.evidenceHash?.slice(0, 12)}`,
     });
-    this.publishRealtime("memory_qmd_fallback", {
+    await this.publishRealtime("memory_qmd_fallback", {
       contextId: pack.contextId,
       scope: input.scope,
       sessionId: input.sessionId,
@@ -997,12 +1003,12 @@ function extractMessageContent(response: ChatCompletionResponse): string {
   return "";
 }
 
-function resolveTrustedMemoryUsageWorkspaceId(storage: Storage, sessionId?: string): string | undefined {
+async function resolveTrustedMemoryUsageWorkspaceId(storage: Storage, sessionId?: string): Promise<string | undefined> {
   if (!sessionId) {
     return undefined;
   }
   try {
-    return storage.chatSessionMeta.get(sessionId)?.workspaceId;
+    return (await storage.chatSessionMeta.get(sessionId))?.workspaceId;
   } catch {
     return undefined;
   }

@@ -33,31 +33,33 @@ describe("chat-turn-user-message", () => {
     ).toBe("System note\n\nUser request");
   });
 
-  it("resolves unique attachment references from metadata and non-text parts", () => {
+  it("resolves unique attachment references from metadata and non-text parts", async () => {
     const deps = createDeps([
       createAttachment({ attachmentId: "file-1", fileName: "notes.txt", mimeType: "text/plain" }),
       createAttachment({ attachmentId: "file-2", fileName: "diagram.png", mimeType: "image/png" }),
     ]);
 
     expect(
-      resolveMessageAttachments(
-        deps,
-        createMessage({
-          attachments: [
-            { attachmentId: "file-1", fileName: "notes.txt", mimeType: "text/plain", sizeBytes: 12 },
-            { attachmentId: "file-1", fileName: "notes.txt", mimeType: "text/plain", sizeBytes: 12 },
-          ],
-          parts: [
-            { type: "image_ref", attachmentId: "file-2", mimeType: "image/png" },
-            { type: "text", text: "Ignore text parts for attachment lookup." },
-          ],
-        }),
+      (
+        await resolveMessageAttachments(
+          deps,
+          createMessage({
+            attachments: [
+              { attachmentId: "file-1", fileName: "notes.txt", mimeType: "text/plain", sizeBytes: 12 },
+              { attachmentId: "file-1", fileName: "notes.txt", mimeType: "text/plain", sizeBytes: 12 },
+            ],
+            parts: [
+              { type: "image_ref", attachmentId: "file-2", mimeType: "image/png" },
+              { type: "text", text: "Ignore text parts for attachment lookup." },
+            ],
+          }),
+        )
       ).map((attachment) => attachment.attachmentId),
     ).toEqual(["file-1", "file-2"]);
     expect(deps.storage.chatAttachments.listByIds).toHaveBeenCalledWith(["file-1", "file-2"]);
   });
 
-  it("builds prompt context with previews, unavailable notices, and vision markers", () => {
+  it("builds prompt context with previews, unavailable notices, and vision markers", async () => {
     const deps = createDeps([
       createAttachment({
         attachmentId: "file-1",
@@ -75,9 +77,13 @@ describe("chat-turn-user-message", () => {
       }),
     ]);
 
-    expect(buildAttachmentPromptContext(deps, [], false)).toBeUndefined();
+    expect(await buildAttachmentPromptContext(deps, [], false)).toBeUndefined();
 
-    const context = buildAttachmentPromptContext(deps, [{ attachmentId: "file-1" }, { attachmentId: "file-2" }], true);
+    const context = await buildAttachmentPromptContext(
+      deps,
+      [{ attachmentId: "file-1" }, { attachmentId: "file-2" }],
+      true,
+    );
 
     expect(context).toContain("Attached file context");
     expect(context).toContain("- brief.txt (text/plain, 80 bytes)");

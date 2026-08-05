@@ -44,21 +44,21 @@ export interface HeartbeatSessionRef {
 
 export interface HeartbeatTickDeps {
   /** Honor the master autonomy kill switch (`autonomyV1Disabled`). */
-  isAutonomyEnabled(): boolean;
+  isAutonomyEnabled(): Promise<boolean>;
   /** Active mission sessions to consider (oldest-activity ordering is irrelevant). */
   listSessions(limit: number): HeartbeatSessionRef[];
   /** Per-session autonomy prefs (heartbeat flags + cooldown source). */
-  getSessionAutonomyPrefs(sessionId: string): SessionAutonomyPrefsRecord;
+  getSessionAutonomyPrefs(sessionId: string): Promise<SessionAutonomyPrefsRecord>;
   /**
    * Whether this session may receive heartbeats at all. The gateway uses this to
    * skip non-human / eval-integrity / replay-scratch sessions (safety invariant:
    * eval-integrity turns are never affected).
    */
-  isHeartbeatEligibleSession(sessionId: string): boolean;
+  isHeartbeatEligibleSession(sessionId: string): boolean | Promise<boolean>;
   /** Seconds since the session's last activity. */
-  getSessionIdleSeconds(sessionId: string): number;
+  getSessionIdleSeconds(sessionId: string): Promise<number>;
   /** True while a turn is mid-flight for the session (skip — never overlap). */
-  hasRunningTurn(sessionId: string): boolean;
+  hasRunningTurn(sessionId: string): Promise<boolean>;
   /**
    * Fire one silent heartbeat turn for the session. Enqueues a `chat.turn.execute`
    * autonomous run under the `heartbeat-restricted` profile, seeded with the
@@ -126,7 +126,7 @@ function emptyResult(): HeartbeatTickResult {
  */
 export async function runHeartbeatTick(deps: HeartbeatTickDeps): Promise<HeartbeatTickResult> {
   const result = emptyResult();
-  if (!deps.isAutonomyEnabled()) {
+  if (!(await deps.isAutonomyEnabled())) {
     return result;
   }
   const now = deps.now ? deps.now() : new Date();
@@ -135,12 +135,12 @@ export async function runHeartbeatTick(deps: HeartbeatTickDeps): Promise<Heartbe
   result.scanned = sessions.length;
 
   for (const session of sessions) {
-    const prefs = deps.getSessionAutonomyPrefs(session.sessionId);
+    const prefs = await deps.getSessionAutonomyPrefs(session.sessionId);
     if (!prefs.heartbeatEnabled) {
       result.skippedDisabled += 1;
       continue;
     }
-    if (!deps.isHeartbeatEligibleSession(session.sessionId)) {
+    if (!(await deps.isHeartbeatEligibleSession(session.sessionId))) {
       result.skippedIneligible += 1;
       continue;
     }
@@ -148,11 +148,11 @@ export async function runHeartbeatTick(deps: HeartbeatTickDeps): Promise<Heartbe
       result.skippedActiveHours += 1;
       continue;
     }
-    if (deps.getSessionIdleSeconds(session.sessionId) < idleFloor) {
+    if ((await deps.getSessionIdleSeconds(session.sessionId)) < idleFloor) {
       result.skippedNotIdle += 1;
       continue;
     }
-    if (deps.hasRunningTurn(session.sessionId)) {
+    if (await deps.hasRunningTurn(session.sessionId)) {
       result.skippedRunningTurn += 1;
       continue;
     }

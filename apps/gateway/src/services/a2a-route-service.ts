@@ -22,7 +22,7 @@ import type {
   TaskRecord,
 } from "@goatcitadel/contracts";
 import { fetchAllowlisted } from "@goatcitadel/policy-engine";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { FastifyRequest } from "fastify";
 import type { GatewayRuntimeConfig } from "../config.js";
 import { timingSafeStringEqual } from "./crypto-equals.js";
@@ -109,7 +109,7 @@ export interface A2ARouteServiceDependencies {
     mode?: "chat" | "cowork" | "code";
     origin?: "operator" | "prompt_pack" | "system";
     includeInHistory?: boolean;
-  }) => { sessionId: string };
+  }) => Promise<{ sessionId: string }>;
   chatTurnRuntime: Pick<ChatTurnRuntimeService, "agentSendChatMessage">;
   mutationIdempotencyStore?: MutationIdempotencyStore;
   evidenceEnvelopeService?: Pick<EvidenceEnvelopeService, "createEnvelope">;
@@ -167,8 +167,8 @@ export class A2ARouteService {
       tasks: deps.tasks,
       mutationIdempotencyStore: deps.mutationIdempotencyStore,
       pushDeliveryFetch: deps.pushDeliveryFetch,
-      buildTaskFromBinding: (binding, checkedAt) => this.buildTaskFromBinding(binding, checkedAt),
-      buildEventsForTask: (task, since, checkedAt) => this.buildEventsForTask(task, since, checkedAt),
+      buildTaskFromBinding: async (binding, checkedAt) => await this.buildTaskFromBinding(binding, checkedAt),
+      buildEventsForTask: async (task, since, checkedAt) => await this.buildEventsForTask(task, since, checkedAt),
     });
   }
 
@@ -276,23 +276,23 @@ export class A2ARouteService {
           const task = await this.sendMessage(peer, request.value.params ?? {}, checkedAt, true, "a2a_jsonrpc");
           return jsonRpcResult(request.value.id, {
             task,
-            events: this.buildEventsForTask(task, 0, checkedAt),
+            events: await this.buildEventsForTask(task, 0, checkedAt),
           });
         }
         case "GetTask":
           return jsonRpcResult(request.value.id, {
-            task: this.getA2ATask(peer, request.value.params ?? {}, checkedAt),
+            task: await this.getA2ATask(peer, request.value.params ?? {}, checkedAt),
           });
         case "CancelTask":
           return jsonRpcResult(request.value.id, {
             task: await this.cancelA2ATask(peer, request.value.params ?? {}, checkedAt),
           });
         case "SubscribeToTask": {
-          const task = this.getA2ATask(peer, request.value.params ?? {}, checkedAt);
+          const task = await this.getA2ATask(peer, request.value.params ?? {}, checkedAt);
           const since = readNumber(request.value.params?.lastEventSequence) ?? 0;
           return jsonRpcResult(request.value.id, {
             task,
-            events: this.buildEventsForTask(task, since, checkedAt),
+            events: await this.buildEventsForTask(task, since, checkedAt),
           });
         }
         case "SetTaskPushNotificationConfig":
@@ -301,15 +301,15 @@ export class A2ARouteService {
           });
         case "GetTaskPushNotificationConfig":
           return jsonRpcResult(request.value.id, {
-            config: this.getTaskPushNotificationConfig(peer, request.value.params ?? {}),
+            config: await this.getTaskPushNotificationConfig(peer, request.value.params ?? {}),
           });
         case "ListTaskPushNotificationConfig":
           return jsonRpcResult(request.value.id, {
-            configs: this.listTaskPushNotificationConfigs(peer, request.value.params ?? {}),
+            configs: await this.listTaskPushNotificationConfigs(peer, request.value.params ?? {}),
           });
         case "DeleteTaskPushNotificationConfig":
           return jsonRpcResult(request.value.id, {
-            deleted: this.deleteTaskPushNotificationConfig(peer, request.value.params ?? {}, checkedAt),
+            deleted: await this.deleteTaskPushNotificationConfig(peer, request.value.params ?? {}, checkedAt),
           });
         case "GetAuthenticatedExtendedCard":
           return jsonRpcResult(request.value.id, {
@@ -323,8 +323,8 @@ export class A2ARouteService {
     }
   }
 
-  public getBinding(a2aTaskId: string): A2ATaskBindingRecord | undefined {
-    return this.deps.storage.a2aTaskBindings.find(a2aTaskId);
+  public async getBinding(a2aTaskId: string): Promise<A2ATaskBindingRecord | undefined> {
+    return await this.deps.storage.a2aTaskBindings.find(a2aTaskId);
   }
 
   public getAuthenticatedExtendedAgentCard(
@@ -362,16 +362,16 @@ export class A2ARouteService {
     checkedAt = new Date().toISOString(),
   ): Promise<A2ABridgeTask> {
     this.assertInboundBinding("HTTP_JSON");
-    return this.sendMessage(peer, params, checkedAt, false, "a2a_http_json");
+    return await this.sendMessage(peer, params, checkedAt, false, "a2a_http_json");
   }
 
-  public getHttpJsonTask(
+  public async getHttpJsonTask(
     peer: A2APeerAuthResult,
     params: Record<string, unknown>,
     checkedAt = new Date().toISOString(),
-  ): A2ABridgeTask {
+  ): Promise<A2ABridgeTask> {
     this.assertInboundBinding("HTTP_JSON");
-    return this.getA2ATask(peer, params, checkedAt);
+    return await this.getA2ATask(peer, params, checkedAt);
   }
 
   public async cancelHttpJsonTask(
@@ -380,20 +380,20 @@ export class A2ARouteService {
     checkedAt = new Date().toISOString(),
   ): Promise<A2ABridgeTask> {
     this.assertInboundBinding("HTTP_JSON");
-    return this.cancelA2ATask(peer, params, checkedAt);
+    return await this.cancelA2ATask(peer, params, checkedAt);
   }
 
-  public getHttpJsonTaskEvents(
+  public async getHttpJsonTaskEvents(
     peer: A2APeerAuthResult,
     params: Record<string, unknown>,
     checkedAt = new Date().toISOString(),
-  ): { task: A2ABridgeTask; events: A2ABridgeTaskEvent[] } {
+  ): Promise<{ task: A2ABridgeTask; events: A2ABridgeTaskEvent[] }> {
     this.assertInboundBinding("HTTP_JSON");
-    const task = this.getA2ATask(peer, params, checkedAt);
+    const task = await this.getA2ATask(peer, params, checkedAt);
     const since = readNumber(params.lastEventSequence) ?? 0;
     return {
       task,
-      events: this.buildEventsForTask(task, since, checkedAt),
+      events: await this.buildEventsForTask(task, since, checkedAt),
     };
   }
 
@@ -403,7 +403,7 @@ export class A2ARouteService {
     checkedAt = new Date().toISOString(),
   ): Promise<A2ABridgeTask> {
     this.assertInboundBinding("GRPC");
-    return this.sendMessage(peer, params, checkedAt, false, "a2a_grpc");
+    return await this.sendMessage(peer, params, checkedAt, false, "a2a_grpc");
   }
 
   public async sendGrpcStreamingMessage(
@@ -415,17 +415,17 @@ export class A2ARouteService {
     const task = await this.sendMessage(peer, params, checkedAt, true, "a2a_grpc");
     return {
       task,
-      events: this.buildEventsForTask(task, 0, checkedAt),
+      events: await this.buildEventsForTask(task, 0, checkedAt),
     };
   }
 
-  public getGrpcTask(
+  public async getGrpcTask(
     peer: A2APeerAuthResult,
     params: Record<string, unknown>,
     checkedAt = new Date().toISOString(),
-  ): A2ABridgeTask {
+  ): Promise<A2ABridgeTask> {
     this.assertInboundBinding("GRPC");
-    return this.getA2ATask(peer, params, checkedAt);
+    return await this.getA2ATask(peer, params, checkedAt);
   }
 
   public async cancelGrpcTask(
@@ -434,20 +434,20 @@ export class A2ARouteService {
     checkedAt = new Date().toISOString(),
   ): Promise<A2ABridgeTask> {
     this.assertInboundBinding("GRPC");
-    return this.cancelA2ATask(peer, params, checkedAt);
+    return await this.cancelA2ATask(peer, params, checkedAt);
   }
 
-  public getGrpcTaskEvents(
+  public async getGrpcTaskEvents(
     peer: A2APeerAuthResult,
     params: Record<string, unknown>,
     checkedAt = new Date().toISOString(),
-  ): { task: A2ABridgeTask; events: A2ABridgeTaskEvent[] } {
+  ): Promise<{ task: A2ABridgeTask; events: A2ABridgeTaskEvent[] }> {
     this.assertInboundBinding("GRPC");
-    const task = this.getA2ATask(peer, params, checkedAt);
+    const task = await this.getA2ATask(peer, params, checkedAt);
     const since = readNumber(params.lastEventSequence) ?? 0;
     return {
       task,
-      events: this.buildEventsForTask(task, since, checkedAt),
+      events: await this.buildEventsForTask(task, since, checkedAt),
     };
   }
 
@@ -464,29 +464,29 @@ export class A2ARouteService {
     params: Record<string, unknown>,
     checkedAt = new Date().toISOString(),
   ): Promise<A2ATaskPushNotificationConfig> {
-    return this.pushNotifications.setTaskPushNotificationConfig(peer, params, checkedAt);
+    return await this.pushNotifications.setTaskPushNotificationConfig(peer, params, checkedAt);
   }
 
-  public getTaskPushNotificationConfig(
+  public async getTaskPushNotificationConfig(
     peer: A2APeerAuthResult,
     params: Record<string, unknown>,
-  ): A2ATaskPushNotificationConfig {
-    return this.pushNotifications.getTaskPushNotificationConfig(peer, params);
+  ): Promise<A2ATaskPushNotificationConfig> {
+    return await this.pushNotifications.getTaskPushNotificationConfig(peer, params);
   }
 
-  public listTaskPushNotificationConfigs(
+  public async listTaskPushNotificationConfigs(
     peer: A2APeerAuthResult,
     params: Record<string, unknown> = {},
-  ): A2ATaskPushNotificationConfig[] {
-    return this.pushNotifications.listTaskPushNotificationConfigs(peer, params);
+  ): Promise<A2ATaskPushNotificationConfig[]> {
+    return await this.pushNotifications.listTaskPushNotificationConfigs(peer, params);
   }
 
-  public deleteTaskPushNotificationConfig(
+  public async deleteTaskPushNotificationConfig(
     peer: A2APeerAuthResult,
     params: Record<string, unknown>,
     checkedAt = new Date().toISOString(),
-  ): { taskId: string; peerId: string; deleted: boolean } {
-    return this.pushNotifications.deleteTaskPushNotificationConfig(peer, params, checkedAt);
+  ): Promise<{ taskId: string; peerId: string; deleted: boolean }> {
+    return await this.pushNotifications.deleteTaskPushNotificationConfig(peer, params, checkedAt);
   }
 
   public async setGrpcTaskPushNotificationConfig(
@@ -495,32 +495,32 @@ export class A2ARouteService {
     checkedAt = new Date().toISOString(),
   ): Promise<A2ATaskPushNotificationConfig> {
     this.assertInboundBinding("GRPC");
-    return this.setTaskPushNotificationConfig(peer, params, checkedAt);
+    return await this.setTaskPushNotificationConfig(peer, params, checkedAt);
   }
 
-  public getGrpcTaskPushNotificationConfig(
+  public async getGrpcTaskPushNotificationConfig(
     peer: A2APeerAuthResult,
     params: Record<string, unknown>,
-  ): A2ATaskPushNotificationConfig {
+  ): Promise<A2ATaskPushNotificationConfig> {
     this.assertInboundBinding("GRPC");
-    return this.getTaskPushNotificationConfig(peer, params);
+    return await this.getTaskPushNotificationConfig(peer, params);
   }
 
-  public listGrpcTaskPushNotificationConfigs(
+  public async listGrpcTaskPushNotificationConfigs(
     peer: A2APeerAuthResult,
     params: Record<string, unknown> = {},
-  ): A2ATaskPushNotificationConfig[] {
+  ): Promise<A2ATaskPushNotificationConfig[]> {
     this.assertInboundBinding("GRPC");
-    return this.listTaskPushNotificationConfigs(peer, params);
+    return await this.listTaskPushNotificationConfigs(peer, params);
   }
 
-  public deleteGrpcTaskPushNotificationConfig(
+  public async deleteGrpcTaskPushNotificationConfig(
     peer: A2APeerAuthResult,
     params: Record<string, unknown>,
     checkedAt = new Date().toISOString(),
-  ): { taskId: string; peerId: string; deleted: boolean } {
+  ): Promise<{ taskId: string; peerId: string; deleted: boolean }> {
     this.assertInboundBinding("GRPC");
-    return this.deleteTaskPushNotificationConfig(peer, params, checkedAt);
+    return await this.deleteTaskPushNotificationConfig(peer, params, checkedAt);
   }
 
   public previewOutbound(
@@ -597,7 +597,7 @@ export class A2ARouteService {
     // deny/require_approval block here, before either transport; require_dry_run
     // threads to the runner, which refuses pre-boundary.
     const wardAction = buildA2AOutboundWardAction(preview.transport === "GRPC" ? "grpc" : "jsonrpc", input.method);
-    const ward = resolveWardEffectForExternalAction({
+    const ward = await resolveWardEffectForExternalAction({
       storage: this.deps.storage,
       action: wardAction,
     });
@@ -654,7 +654,7 @@ export class A2ARouteService {
       output: { peerId: peer.peerId, method: input.method },
       execute: async (claim) => {
         const discovered = await this.discoverOutboundJsonRpcUrl(peer, checkedAt);
-        claim.markExternalCallStarted();
+        await claim.markExternalCallStarted();
         const response = await fetchAllowlisted(discovered.jsonRpcUrl, {
           allowlist: this.deps.config.toolPolicy.sandbox.networkAllowlist,
           init: {
@@ -743,12 +743,15 @@ export class A2ARouteService {
     return undefined;
   }
 
-  private requirePeerTaskBinding(peer: A2APeerAuthResult, params: Record<string, unknown>): A2ATaskBindingRecord {
+  private async requirePeerTaskBinding(
+    peer: A2APeerAuthResult,
+    params: Record<string, unknown>,
+  ): Promise<A2ATaskBindingRecord> {
     const taskId = readString(params.taskId) ?? readString(params.id);
     if (!taskId) {
       throw new A2AJsonRpcServiceError(-32602, "taskId is required.");
     }
-    const binding = this.deps.storage.a2aTaskBindings.find(taskId);
+    const binding = await this.deps.storage.a2aTaskBindings.find(taskId);
     if (!binding) {
       throw new A2AJsonRpcServiceError(-32004, "A2A task binding was not found.");
     }
@@ -776,12 +779,12 @@ export class A2ARouteService {
     const workspaceId = readString(params.workspaceId) ?? "default";
     const identity = buildStableA2ADispatchIdentity(peer.peerId, idempotencyKey);
     let binding =
-      this.deps.storage.a2aTaskBindings.findByIdempotency(peer.peerId, idempotencyKey) ??
-      this.deps.storage.a2aTaskBindings.find(a2aTaskId);
+      (await this.deps.storage.a2aTaskBindings.findByIdempotency(peer.peerId, idempotencyKey)) ??
+      (await this.deps.storage.a2aTaskBindings.find(a2aTaskId));
     if (binding) {
       this.assertInboundRequestOwnsBinding(peer, binding, { a2aTaskId, contextId, workspaceId, idempotencyKey });
     } else {
-      binding = this.deps.storage.a2aTaskBindings.createOrGet(
+      binding = await this.deps.storage.a2aTaskBindings.createOrGet(
         {
           a2aTaskId,
           contextId,
@@ -811,7 +814,7 @@ export class A2ARouteService {
       this.assertInboundRequestOwnsBinding(peer, binding, { a2aTaskId, contextId, workspaceId, idempotencyKey });
     }
 
-    const resources = this.ensureA2ABindingResources({
+    const resources = await this.ensureA2ABindingResources({
       binding,
       identity,
       message,
@@ -821,13 +824,13 @@ export class A2ARouteService {
     });
     binding = resources.binding;
     if (!resources.ready) {
-      return this.buildTaskFromBinding(binding, checkedAt);
+      return await this.buildTaskFromBinding(binding, checkedAt);
     }
 
-    const claim = this.claimA2ADispatch(binding.a2aTaskId, identity);
+    const claim = await this.claimA2ADispatch(binding.a2aTaskId, identity);
     binding = claim.binding;
     if (!claim.owned) {
-      return this.buildTaskFromBinding(binding, checkedAt);
+      return await this.buildTaskFromBinding(binding, checkedAt);
     }
     const ownedBinding = claim.binding;
     if (!ownedBinding.sessionId || !ownedBinding.localTaskId) {
@@ -851,14 +854,15 @@ export class A2ARouteService {
         },
         {
           turnIdentity: claim.turnIdentity,
-          assertDispatchOwnership: () => this.assertA2ADispatchOwnership(bindingId, claim.attemptId, claim.claimToken),
+          assertDispatchOwnership: async () =>
+            await this.assertA2ADispatchOwnership(bindingId, claim.attemptId, claim.claimToken),
         },
       );
-      const durableRunId = this.resolveA2ADurableRunId(response, claim.turnIdentity.turnId);
+      const durableRunId = await this.resolveA2ADurableRunId(response, claim.turnIdentity.turnId);
       if (!durableRunId) {
         throw new Error(`A2A dispatch ${bindingId} has no canonical durable-run linkage yet.`);
       }
-      const completed = this.completeA2ADispatch({
+      const completed = await this.completeA2ADispatch({
         a2aTaskId: bindingId,
         attemptId: claim.attemptId,
         claimToken: claim.claimToken,
@@ -867,24 +871,24 @@ export class A2ARouteService {
       });
       binding = completed.binding;
       if (completed.linkedTask) {
-        this.publishA2ADurableRunLinkSafely(completed.linkedTask);
+        await this.publishA2ADurableRunLinkSafely(completed.linkedTask);
       }
     } catch {
       // A thrown Chat dispatch is ambiguous: the provider or canonical turn may
       // already have advanced. Keep the owned attempt intact for DB-clock lease
       // takeover, which re-enters the same stable turn identity.
-      binding = this.deps.storage.a2aTaskBindings.get(bindingId);
+      binding = await this.deps.storage.a2aTaskBindings.get(bindingId);
     }
 
-    const nextTask = this.buildTaskFromBinding(binding, checkedAt);
+    const nextTask = await this.buildTaskFromBinding(binding, checkedAt);
     await this.pushNotifications.deliverForTask(peer, binding, nextTask, checkedAt);
     return nextTask;
   }
 
-  private resolveA2ADurableRunId(
+  private async resolveA2ADurableRunId(
     response: Awaited<ReturnType<ChatTurnRuntimeService["agentSendChatMessage"]>>,
     canonicalTurnId: string,
-  ): string | undefined {
+  ): Promise<string | undefined> {
     const responseRunId = readDurableRunId(response);
     if (responseRunId) {
       return responseRunId;
@@ -892,7 +896,7 @@ export class A2ARouteService {
     const turnIds = [...new Set([response.turnId?.trim(), canonicalTurnId.trim()].filter(Boolean))] as string[];
     for (const turnId of turnIds) {
       try {
-        const persistedRunId = this.deps.storage.chatTurnTraces.get(turnId).durable?.runId?.trim();
+        const persistedRunId = (await this.deps.storage.chatTurnTraces.get(turnId)).durable?.runId?.trim();
         if (persistedRunId) {
           return persistedRunId;
         }
@@ -919,27 +923,27 @@ export class A2ARouteService {
     }
   }
 
-  private ensureA2ABindingResources(input: {
+  private async ensureA2ABindingResources(input: {
     binding: A2ATaskBindingRecord;
     identity: StableA2ADispatchIdentity;
     message: ReturnType<typeof normalizeInboundMessage>;
     peer: A2APeerAuthResult;
     contextId: string;
     idempotencyKey: string;
-  }): { binding: A2ATaskBindingRecord; ready: boolean } {
-    const claim = this.claimA2AResourceInitialization(input.binding.a2aTaskId, input.identity);
+  }): Promise<{ binding: A2ATaskBindingRecord; ready: boolean }> {
+    const claim = await this.claimA2AResourceInitialization(input.binding.a2aTaskId, input.identity);
     if (claim.status === "waiting") {
       return { binding: claim.binding, ready: false };
     }
     if (claim.status === "ready") {
-      this.validateA2ABindingResources(claim.binding);
-      this.ensureA2AAcceptanceActivity(claim.binding, input.identity);
+      await this.validateA2ABindingResources(claim.binding);
+      await this.ensureA2AAcceptanceActivity(claim.binding, input.identity);
       return { binding: claim.binding, ready: true };
     }
 
     let sessionId = claim.binding.sessionId;
     let existingTask = claim.binding.localTaskId
-      ? this.requireA2ALocalTask(claim.binding, claim.binding.localTaskId)
+      ? await this.requireA2ALocalTask(claim.binding, claim.binding.localTaskId)
       : undefined;
     if (!sessionId && existingTask) {
       sessionId = existingTask.agenticContext?.parentSessionId?.trim();
@@ -948,22 +952,24 @@ export class A2ARouteService {
       }
     }
     if (sessionId) {
-      this.validateA2ASession(sessionId, claim.binding.workspaceId);
+      await this.validateA2ASession(sessionId, claim.binding.workspaceId);
     } else {
-      this.assertA2AResourceInitializationOwnership(claim.binding.a2aTaskId, claim.attemptId, claim.claimToken);
-      sessionId = this.deps.createChatSession({
-        stableKey: input.identity.sessionStableKey,
-        workspaceId: claim.binding.workspaceId,
-        title: `A2A: ${input.peer.label ?? input.peer.peerId}`,
-        tags: ["a2a", `a2a:${input.peer.peerId}`],
-        origin: "system",
-        mode: "chat",
-        includeInHistory: false,
-      }).sessionId;
-      this.validateA2ASession(sessionId, claim.binding.workspaceId);
+      await this.assertA2AResourceInitializationOwnership(claim.binding.a2aTaskId, claim.attemptId, claim.claimToken);
+      sessionId = (
+        await this.deps.createChatSession({
+          stableKey: input.identity.sessionStableKey,
+          workspaceId: claim.binding.workspaceId,
+          title: `A2A: ${input.peer.label ?? input.peer.peerId}`,
+          tags: ["a2a", `a2a:${input.peer.peerId}`],
+          origin: "system",
+          mode: "chat",
+          includeInHistory: false,
+        })
+      ).sessionId;
+      await this.validateA2ASession(sessionId, claim.binding.workspaceId);
     }
 
-    this.assertA2AResourceInitializationOwnership(claim.binding.a2aTaskId, claim.attemptId, claim.claimToken);
+    await this.assertA2AResourceInitializationOwnership(claim.binding.a2aTaskId, claim.attemptId, claim.claimToken);
     const ensuredTask = existingTask
       ? {
           task: this.validateA2ALocalTask(existingTask, {
@@ -974,7 +980,7 @@ export class A2ARouteService {
           }),
           created: false,
         }
-      : this.ensureA2ALocalTask({
+      : await this.ensureA2ALocalTask({
           a2aTaskId: claim.binding.a2aTaskId,
           localTaskId: input.identity.localTaskId,
           message: input.message,
@@ -983,7 +989,7 @@ export class A2ARouteService {
           workspaceId: claim.binding.workspaceId,
         });
     existingTask = ensuredTask.task;
-    const completed = this.completeA2AResourceInitialization({
+    const completed = await this.completeA2AResourceInitialization({
       a2aTaskId: claim.binding.a2aTaskId,
       attemptId: claim.attemptId,
       claimToken: claim.claimToken,
@@ -993,16 +999,19 @@ export class A2ARouteService {
     if (!completed.sessionId || !completed.localTaskId) {
       return { binding: completed, ready: false };
     }
-    this.validateA2ABindingResources(completed);
-    this.ensureA2AAcceptanceActivity(completed, input.identity);
+    await this.validateA2ABindingResources(completed);
+    await this.ensureA2AAcceptanceActivity(completed, input.identity);
     return { binding: completed, ready: true };
   }
 
-  private ensureA2AAcceptanceActivity(binding: A2ATaskBindingRecord, identity: StableA2ADispatchIdentity): void {
+  private async ensureA2AAcceptanceActivity(
+    binding: A2ATaskBindingRecord,
+    identity: StableA2ADispatchIdentity,
+  ): Promise<void> {
     if (!binding.localTaskId) {
       return;
     }
-    const persisted = this.deps.tasks.persistDelegationActivityOnce(
+    const persisted = await this.deps.tasks.persistDelegationActivityOnce(
       identity.activityId,
       binding.localTaskId,
       {
@@ -1018,13 +1027,13 @@ export class A2ARouteService {
       binding.createdAt,
     );
     if (persisted.created) {
-      this.publishA2AAcceptanceActivitySafely(persisted.activity);
+      await this.publishA2AAcceptanceActivitySafely(persisted.activity);
     }
   }
 
-  private publishA2AAcceptanceActivitySafely(activity: TaskActivityRecord): void {
+  private async publishA2AAcceptanceActivitySafely(activity: TaskActivityRecord): Promise<void> {
     try {
-      this.deps.tasks.publishDelegationActivity(activity);
+      await this.deps.tasks.publishDelegationActivity(activity);
     } catch (error) {
       process.stderr.write(
         `[a2a-route] acceptance activity committed but realtime publication failed: ${
@@ -1034,16 +1043,16 @@ export class A2ARouteService {
     }
   }
 
-  private claimA2AResourceInitialization(
+  private async claimA2AResourceInitialization(
     a2aTaskId: string,
     identity: StableA2ADispatchIdentity,
-  ): A2AResourceInitializationClaimResult {
-    return this.deps.storage.runImmediateTransaction(() => {
-      const current = this.deps.storage.a2aTaskBindings.getForUpdate(a2aTaskId);
+  ): Promise<A2AResourceInitializationClaimResult> {
+    return await this.deps.storage.runImmediateTransaction(async () => {
+      const current = await this.deps.storage.a2aTaskBindings.getForUpdate(a2aTaskId);
       if (current.sessionId && current.localTaskId) {
         return { binding: current, status: "ready" as const };
       }
-      const databaseNow = this.deps.storage.a2aTaskBindings.readDatabaseNow();
+      const databaseNow = await this.deps.storage.a2aTaskBindings.readDatabaseNow();
       const initialization = readA2AResourceInitializationState(current);
       if (
         initialization.status === "owned" &&
@@ -1056,7 +1065,7 @@ export class A2ARouteService {
       const attemptId = initialization.attemptId ?? identity.resourceAttemptId;
       const claimToken = randomUUID();
       const claimExpiresAt = new Date(Date.parse(databaseNow) + A2A_RESOURCE_INITIALIZATION_LEASE_MS).toISOString();
-      const claimed = this.deps.storage.a2aTaskBindings.update(
+      const claimed = await this.deps.storage.a2aTaskBindings.update(
         a2aTaskId,
         {
           metadata: {
@@ -1076,8 +1085,12 @@ export class A2ARouteService {
     });
   }
 
-  private assertA2AResourceInitializationOwnership(a2aTaskId: string, attemptId: string, claimToken: string): void {
-    const current = this.deps.storage.a2aTaskBindings.get(a2aTaskId);
+  private async assertA2AResourceInitializationOwnership(
+    a2aTaskId: string,
+    attemptId: string,
+    claimToken: string,
+  ): Promise<void> {
+    const current = await this.deps.storage.a2aTaskBindings.get(a2aTaskId);
     const initialization = readA2AResourceInitializationState(current);
     if (
       initialization.status !== "owned" ||
@@ -1088,15 +1101,15 @@ export class A2ARouteService {
     }
   }
 
-  private completeA2AResourceInitialization(input: {
+  private async completeA2AResourceInitialization(input: {
     a2aTaskId: string;
     attemptId: string;
     claimToken: string;
     sessionId: string;
     localTaskId: string;
-  }): A2ATaskBindingRecord {
-    return this.deps.storage.runImmediateTransaction(() => {
-      const current = this.deps.storage.a2aTaskBindings.getForUpdate(input.a2aTaskId);
+  }): Promise<A2ATaskBindingRecord> {
+    return await this.deps.storage.runImmediateTransaction(async () => {
+      const current = await this.deps.storage.a2aTaskBindings.getForUpdate(input.a2aTaskId);
       if (current.sessionId && current.localTaskId) {
         return current;
       }
@@ -1114,8 +1127,8 @@ export class A2ARouteService {
       ) {
         throw new Error(`A2A task ${input.a2aTaskId} has conflicting canonical resource linkage.`);
       }
-      const databaseNow = this.deps.storage.a2aTaskBindings.readDatabaseNow();
-      return this.deps.storage.a2aTaskBindings.update(
+      const databaseNow = await this.deps.storage.a2aTaskBindings.readDatabaseNow();
+      return await this.deps.storage.a2aTaskBindings.update(
         input.a2aTaskId,
         {
           sessionId: input.sessionId,
@@ -1137,23 +1150,27 @@ export class A2ARouteService {
     });
   }
 
-  private validateA2ABindingResources(binding: A2ATaskBindingRecord): void {
+  private async validateA2ABindingResources(binding: A2ATaskBindingRecord): Promise<void> {
     if (!binding.sessionId || !binding.localTaskId) {
       throw new Error(`A2A task binding ${binding.a2aTaskId} has incomplete canonical resource linkage.`);
     }
-    this.validateA2ASession(binding.sessionId, binding.workspaceId);
-    this.requireA2ALocalTask(binding, binding.localTaskId, binding.sessionId);
+    await this.validateA2ASession(binding.sessionId, binding.workspaceId);
+    await this.requireA2ALocalTask(binding, binding.localTaskId, binding.sessionId);
   }
 
-  private validateA2ASession(sessionId: string, workspaceId: string): void {
-    const meta = this.deps.storage.chatSessionMeta.get(sessionId);
+  private async validateA2ASession(sessionId: string, workspaceId: string): Promise<void> {
+    const meta = await this.deps.storage.chatSessionMeta.get(sessionId);
     if (!meta || meta.workspaceId !== workspaceId) {
       throw new Error(`A2A session ${sessionId} conflicts with canonical workspace identity.`);
     }
   }
 
-  private requireA2ALocalTask(binding: A2ATaskBindingRecord, localTaskId: string, sessionId?: string): TaskRecord {
-    const task = this.deps.tasks.getTask(localTaskId, { workspaceId: binding.workspaceId });
+  private async requireA2ALocalTask(
+    binding: A2ATaskBindingRecord,
+    localTaskId: string,
+    sessionId?: string,
+  ): Promise<TaskRecord> {
+    const task = await this.deps.tasks.getTask(localTaskId, { workspaceId: binding.workspaceId });
     return this.validateA2ALocalTask(task, {
       a2aTaskId: binding.a2aTaskId,
       localTaskId,
@@ -1177,21 +1194,21 @@ export class A2ARouteService {
     return task;
   }
 
-  private ensureA2ALocalTask(input: {
+  private async ensureA2ALocalTask(input: {
     a2aTaskId: string;
     localTaskId: string;
     message: ReturnType<typeof normalizeInboundMessage>;
     peer: A2APeerAuthResult;
     sessionId: string;
     workspaceId: string;
-  }): { task: TaskRecord; created: boolean } {
+  }): Promise<{ task: TaskRecord; created: boolean }> {
     const validate = (task: TaskRecord): TaskRecord => this.validateA2ALocalTask(task, input);
-    const existing = this.deps.storage.tasks.find(input.localTaskId);
+    const existing = await this.deps.storage.tasks.find(input.localTaskId);
     if (existing) {
       return { task: validate(existing), created: false };
     }
     try {
-      const task = this.deps.tasks.createTask(
+      const task = await this.deps.tasks.createTask(
         {
           workspaceId: input.workspaceId,
           title: buildTaskTitle(input.message, input.peer.peerId),
@@ -1212,7 +1229,7 @@ export class A2ARouteService {
       );
       return { task: validate(task), created: true };
     } catch (error) {
-      const raced = this.deps.storage.tasks.find(input.localTaskId);
+      const raced = await this.deps.storage.tasks.find(input.localTaskId);
       if (!raced) {
         throw error;
       }
@@ -1220,10 +1237,13 @@ export class A2ARouteService {
     }
   }
 
-  private claimA2ADispatch(a2aTaskId: string, identity: StableA2ADispatchIdentity): A2ADispatchClaimResult {
-    return this.deps.storage.runImmediateTransaction(() => {
-      const current = this.deps.storage.a2aTaskBindings.getForUpdate(a2aTaskId);
-      const databaseNow = this.deps.storage.a2aTaskBindings.readDatabaseNow();
+  private async claimA2ADispatch(
+    a2aTaskId: string,
+    identity: StableA2ADispatchIdentity,
+  ): Promise<A2ADispatchClaimResult> {
+    return await this.deps.storage.runImmediateTransaction(async () => {
+      const current = await this.deps.storage.a2aTaskBindings.getForUpdate(a2aTaskId);
+      const databaseNow = await this.deps.storage.a2aTaskBindings.readDatabaseNow();
       const dispatch = readA2ADispatchState(current);
       if (current.durableRunId || dispatch.status === "applied") {
         return { binding: current, owned: false as const };
@@ -1243,7 +1263,7 @@ export class A2ARouteService {
       const turnIdentity = dispatch.turnIdentity ?? identity.turnIdentity;
       const claimToken = randomUUID();
       const claimExpiresAt = new Date(Date.parse(databaseNow) + A2A_DISPATCH_LEASE_MS).toISOString();
-      const claimed = this.deps.storage.a2aTaskBindings.update(
+      const claimed = await this.deps.storage.a2aTaskBindings.update(
         a2aTaskId,
         {
           state: current.state === "failed" ? "working" : current.state,
@@ -1265,23 +1285,23 @@ export class A2ARouteService {
     });
   }
 
-  private assertA2ADispatchOwnership(a2aTaskId: string, attemptId: string, claimToken: string): void {
-    const current = this.deps.storage.a2aTaskBindings.get(a2aTaskId);
+  private async assertA2ADispatchOwnership(a2aTaskId: string, attemptId: string, claimToken: string): Promise<void> {
+    const current = await this.deps.storage.a2aTaskBindings.get(a2aTaskId);
     const dispatch = readA2ADispatchState(current);
     if (dispatch.status !== "owned" || dispatch.attemptId !== attemptId || dispatch.claimToken !== claimToken) {
       throw new Error(`A2A dispatch ownership for ${a2aTaskId} was lost before provider dispatch.`);
     }
   }
 
-  private completeA2ADispatch(input: {
+  private async completeA2ADispatch(input: {
     a2aTaskId: string;
     attemptId: string;
     claimToken: string;
     durableRunId: string;
     turnId: string;
-  }): { binding: A2ATaskBindingRecord; linkedTask?: TaskRecord } {
-    return this.deps.storage.runImmediateTransaction(() => {
-      const current = this.deps.storage.a2aTaskBindings.getForUpdate(input.a2aTaskId);
+  }): Promise<{ binding: A2ATaskBindingRecord; linkedTask?: TaskRecord }> {
+    return await this.deps.storage.runImmediateTransaction(async () => {
+      const current = await this.deps.storage.a2aTaskBindings.getForUpdate(input.a2aTaskId);
       const dispatch = readA2ADispatchState(current);
       if (current.durableRunId || dispatch.status === "applied") {
         return { binding: current };
@@ -1293,12 +1313,12 @@ export class A2ARouteService {
       ) {
         return { binding: current };
       }
-      const databaseNow = this.deps.storage.a2aTaskBindings.readDatabaseNow();
+      const databaseNow = await this.deps.storage.a2aTaskBindings.readDatabaseNow();
       if (!current.localTaskId) {
         throw new Error(`A2A task ${input.a2aTaskId} lost canonical local-task linkage before completion.`);
       }
-      const linkedTask = this.deps.tasks.persistA2ADurableRunLink(current.localTaskId, input.durableRunId);
-      const binding = this.deps.storage.a2aTaskBindings.update(
+      const linkedTask = await this.deps.tasks.persistA2ADurableRunLink(current.localTaskId, input.durableRunId);
+      const binding = await this.deps.storage.a2aTaskBindings.update(
         input.a2aTaskId,
         {
           durableRunId: input.durableRunId,
@@ -1322,9 +1342,13 @@ export class A2ARouteService {
     });
   }
 
-  private getA2ATask(peer: A2APeerAuthResult, params: Record<string, unknown>, checkedAt: string): A2ABridgeTask {
-    const binding = this.requirePeerTaskBinding(peer, params);
-    return this.buildTaskFromBinding(binding, checkedAt);
+  private async getA2ATask(
+    peer: A2APeerAuthResult,
+    params: Record<string, unknown>,
+    checkedAt: string,
+  ): Promise<A2ABridgeTask> {
+    const binding = await this.requirePeerTaskBinding(peer, params);
+    return await this.buildTaskFromBinding(binding, checkedAt);
   }
 
   private async cancelA2ATask(
@@ -1336,20 +1360,20 @@ export class A2ARouteService {
     if (!taskId) {
       throw new A2AJsonRpcServiceError(-32602, "taskId is required.");
     }
-    let binding = this.deps.storage.a2aTaskBindings.find(taskId);
+    let binding = await this.deps.storage.a2aTaskBindings.find(taskId);
     if (!binding) {
       throw new A2AJsonRpcServiceError(-32004, "A2A task binding was not found.");
     }
     this.assertPeerOwnsBinding(peer, binding);
-    if (this.isCanonicalA2ACancellationApplied(binding)) {
-      binding = this.persistCanonicalA2ACancellation(binding.a2aTaskId, checkedAt);
-      return this.buildTaskFromBinding(binding, checkedAt);
+    if (await this.isCanonicalA2ACancellationApplied(binding)) {
+      binding = await this.persistCanonicalA2ACancellation(binding.a2aTaskId, checkedAt);
+      return await this.buildTaskFromBinding(binding, checkedAt);
     }
-    const claimedAttempt = this.deps.storage.runImmediateTransaction(() => {
-      const lockedBinding = this.deps.storage.a2aTaskBindings.getForUpdate(taskId);
-      if (this.isCanonicalA2ACancellationApplied(lockedBinding)) {
+    const claimedAttempt = await this.deps.storage.runImmediateTransaction(async () => {
+      const lockedBinding = await this.deps.storage.a2aTaskBindings.getForUpdate(taskId);
+      if (await this.isCanonicalA2ACancellationApplied(lockedBinding)) {
         const previous = readA2ACancellationState(lockedBinding);
-        const reconciled = this.deps.storage.a2aTaskBindings.update(
+        const reconciled = await this.deps.storage.a2aTaskBindings.update(
           taskId,
           {
             state: "canceled",
@@ -1383,7 +1407,7 @@ export class A2ARouteService {
       const claimedBinding =
         reusesPendingAttempt && lockedBinding.state !== "canceled"
           ? lockedBinding
-          : this.deps.storage.a2aTaskBindings.update(
+          : await this.deps.storage.a2aTaskBindings.update(
               taskId,
               {
                 ...(lockedBinding.state === "canceled" ? { state: "working" as const } : {}),
@@ -1398,11 +1422,11 @@ export class A2ARouteService {
     });
     binding = claimedAttempt.binding;
     if (claimedAttempt.terminal) {
-      return this.buildTaskFromBinding(binding, checkedAt);
+      return await this.buildTaskFromBinding(binding, checkedAt);
     }
     const { attempt, controlId } = claimedAttempt;
-    const failOrConverge = (status: "pending" | "failed", message: string): A2ABridgeTask => {
-      const reconciled = this.persistA2ACancellationOutcome({
+    const failOrConverge = async (status: "pending" | "failed", message: string): Promise<A2ABridgeTask> => {
+      const reconciled = await this.persistA2ACancellationOutcome({
         taskId,
         attempt,
         controlId,
@@ -1411,7 +1435,7 @@ export class A2ARouteService {
         error: message,
       });
       if (isA2ACancellationApplied(reconciled)) {
-        return this.buildTaskFromBinding(reconciled, checkedAt);
+        return await this.buildTaskFromBinding(reconciled, checkedAt);
       }
       throw new A2AJsonRpcServiceError(-32025, `A2A task cancellation was not applied: ${message}`);
     };
@@ -1420,7 +1444,7 @@ export class A2ARouteService {
         throw new Error("A2A task binding has no canonical local task.");
       }
       if (binding.durableRunId) {
-        const localTask = this.deps.tasks.getTask(binding.localTaskId, { workspaceId: binding.workspaceId });
+        const localTask = await this.deps.tasks.getTask(binding.localTaskId, { workspaceId: binding.workspaceId });
         const linkedDurableRunId = localTask.agenticContext?.durableRunId?.trim();
         if (linkedDurableRunId && linkedDurableRunId !== binding.durableRunId) {
           throw new Error(
@@ -1428,10 +1452,10 @@ export class A2ARouteService {
           );
         }
         if (!linkedDurableRunId) {
-          const repairedTask = this.deps.storage.runImmediateTransaction(() =>
+          const repairedTask = await this.deps.storage.runImmediateTransaction(() =>
             this.deps.tasks.persistA2ADurableRunLink(binding.localTaskId!, binding.durableRunId!),
           );
-          this.publishA2ADurableRunLinkSafely(repairedTask);
+          await this.publishA2ADurableRunLinkSafely(repairedTask);
         }
       }
     } catch (error) {
@@ -1441,7 +1465,7 @@ export class A2ARouteService {
       );
     }
 
-    let controlResult: ReturnType<TaskLifecycleService["invokeAgenticControl"]>;
+    let controlResult: Awaited<ReturnType<TaskLifecycleService["invokeAgenticControl"]>>;
     try {
       controlResult = await Promise.resolve(
         this.deps.tasks.invokeAgenticControl(
@@ -1467,7 +1491,7 @@ export class A2ARouteService {
         `Canonical agentic control did not cancel the runtime (${controlResult.status}/${controlResult.runtimeEffect}): ${controlResult.message}`,
       );
     }
-    const updated = this.persistA2ACancellationOutcome({
+    const updated = await this.persistA2ACancellationOutcome({
       taskId,
       attempt,
       controlId,
@@ -1482,15 +1506,15 @@ export class A2ARouteService {
         "A2A task cancellation applied at runtime but lost binding transition ownership; inspect canonical task truth.",
       );
     }
-    const task = this.buildTaskFromBinding(updated, checkedAt);
+    const task = await this.buildTaskFromBinding(updated, checkedAt);
     await this.pushNotifications.deliverForTask(peer, updated, task, checkedAt);
     return task;
   }
 
-  private isCanonicalA2ACancellationApplied(binding: A2ATaskBindingRecord): boolean {
+  private async isCanonicalA2ACancellationApplied(binding: A2ATaskBindingRecord): Promise<boolean> {
     if (binding.durableRunId) {
       try {
-        return this.deps.storage.durableRuns.getRun(binding.durableRunId).status === "cancelled";
+        return (await this.deps.storage.durableRuns.getRun(binding.durableRunId)).status === "cancelled";
       } catch {
         // Missing canonical durable truth cannot prove cancellation, and an
         // attached task projection is not allowed to override that authority.
@@ -1499,7 +1523,7 @@ export class A2ARouteService {
     }
     if (binding.localTaskId) {
       try {
-        const task = this.deps.tasks.getTask(binding.localTaskId, { workspaceId: binding.workspaceId });
+        const task = await this.deps.tasks.getTask(binding.localTaskId, { workspaceId: binding.workspaceId });
         return task.agenticContext?.status === "cancelled";
       } catch {
         // Missing or cross-workspace task truth cannot prove cancellation.
@@ -1509,17 +1533,17 @@ export class A2ARouteService {
     return false;
   }
 
-  private persistCanonicalA2ACancellation(a2aTaskId: string, checkedAt: string): A2ATaskBindingRecord {
-    return this.deps.storage.runImmediateTransaction(() => {
-      const current = this.deps.storage.a2aTaskBindings.getForUpdate(a2aTaskId);
-      if (!this.isCanonicalA2ACancellationApplied(current)) {
+  private async persistCanonicalA2ACancellation(a2aTaskId: string, checkedAt: string): Promise<A2ATaskBindingRecord> {
+    return await this.deps.storage.runImmediateTransaction(async () => {
+      const current = await this.deps.storage.a2aTaskBindings.getForUpdate(a2aTaskId);
+      if (!(await this.isCanonicalA2ACancellationApplied(current))) {
         return current;
       }
       if (current.state === "canceled" && isA2ACancellationApplied(current)) {
         return current;
       }
       const previous = readA2ACancellationState(current);
-      return this.deps.storage.a2aTaskBindings.update(
+      return await this.deps.storage.a2aTaskBindings.update(
         a2aTaskId,
         {
           state: "canceled",
@@ -1540,7 +1564,7 @@ export class A2ARouteService {
     });
   }
 
-  private persistA2ACancellationOutcome(input: {
+  private async persistA2ACancellationOutcome(input: {
     taskId: string;
     attempt: number;
     controlId: string;
@@ -1549,9 +1573,9 @@ export class A2ARouteService {
     error?: string;
     resultStatus?: string;
     runtimeEffect?: string;
-  }): A2ATaskBindingRecord {
-    return this.deps.storage.runImmediateTransaction(() => {
-      const current = this.deps.storage.a2aTaskBindings.getForUpdate(input.taskId);
+  }): Promise<A2ATaskBindingRecord> {
+    return await this.deps.storage.runImmediateTransaction(async () => {
+      const current = await this.deps.storage.a2aTaskBindings.getForUpdate(input.taskId);
       if (isA2ACancellationApplied(current)) {
         return current;
       }
@@ -1559,7 +1583,7 @@ export class A2ARouteService {
       if (cancellation.controlId !== input.controlId || cancellation.attempt !== input.attempt) {
         return current;
       }
-      return this.deps.storage.a2aTaskBindings.update(
+      return await this.deps.storage.a2aTaskBindings.update(
         input.taskId,
         {
           ...(input.status === "applied"
@@ -1583,9 +1607,9 @@ export class A2ARouteService {
     });
   }
 
-  private publishA2ADurableRunLinkSafely(task: TaskRecord): void {
+  private async publishA2ADurableRunLinkSafely(task: TaskRecord): Promise<void> {
     try {
-      this.deps.tasks.publishA2ADurableRunLink(task);
+      await this.deps.tasks.publishA2ADurableRunLink(task);
     } catch (error) {
       process.stderr.write(
         `[a2a-route] durable link committed but realtime publication failed: ${
@@ -1595,11 +1619,11 @@ export class A2ARouteService {
     }
   }
 
-  private buildTaskFromBinding(binding: A2ATaskBindingRecord, checkedAt: string): A2ABridgeTask {
-    const localTask = binding.localTaskId ? readTaskMaybe(this.deps.tasks, binding.localTaskId) : undefined;
+  private async buildTaskFromBinding(binding: A2ATaskBindingRecord, checkedAt: string): Promise<A2ABridgeTask> {
+    const localTask = binding.localTaskId ? await readTaskMaybe(this.deps.tasks, binding.localTaskId) : undefined;
     const statusState = localTask ? mapTaskStatusToA2AState(localTask.status, binding.state) : binding.state;
     const message = readInboundMessageFromBinding(binding);
-    const artifacts = binding.localTaskId ? this.readArtifacts(binding.localTaskId) : [];
+    const artifacts = binding.localTaskId ? await this.readArtifacts(binding.localTaskId) : [];
     const task: A2ABridgeTask = {
       id: binding.a2aTaskId,
       contextId: binding.contextId,
@@ -1623,7 +1647,11 @@ export class A2ARouteService {
     return projectA2ATaskForExternal(task);
   }
 
-  private buildEventsForTask(task: A2ABridgeTask, since: number, checkedAt: string): A2ABridgeTaskEvent[] {
+  private async buildEventsForTask(
+    task: A2ABridgeTask,
+    since: number,
+    checkedAt: string,
+  ): Promise<A2ABridgeTaskEvent[]> {
     const events: A2ABridgeTaskEvent[] = [
       {
         sequence: Math.max(1, since + 1),
@@ -1655,17 +1683,17 @@ export class A2ARouteService {
         artifact,
       });
     }
-    const binding = this.deps.storage.a2aTaskBindings.find(task.id);
+    const binding = await this.deps.storage.a2aTaskBindings.find(task.id);
     if (binding && events.length > 0) {
-      this.deps.storage.a2aTaskBindings.update(task.id, {
+      await this.deps.storage.a2aTaskBindings.update(task.id, {
         lastEventSequence: events[events.length - 1]!.sequence,
       });
     }
     return events.filter((event) => event.sequence > since).map(projectA2ATaskEventForExternal);
   }
 
-  private readArtifacts(taskId: string): A2ABridgeArtifact[] {
-    return this.deps.tasks.listTaskDeliverables(taskId, 100).map((deliverable, index) => ({
+  private async readArtifacts(taskId: string): Promise<A2ABridgeArtifact[]> {
+    return (await this.deps.tasks.listTaskDeliverables(taskId, 100)).map((deliverable, index) => ({
       artifactId: deliverable.deliverableId,
       name: deliverable.title || `artifact-${index + 1}`,
       uri: deliverable.path,
@@ -1716,7 +1744,7 @@ export class A2ARouteService {
     if (!jsonRpc?.url) {
       throw new Error("A2A peer does not expose a callable JSON-RPC interface.");
     }
-    this.deps.evidenceEnvelopeService?.createEnvelope({
+    await this.deps.evidenceEnvelopeService?.createEnvelope({
       eventKind: "external_writeback",
       metadata: {
         boundary: "a2a_agent_card_discovery",

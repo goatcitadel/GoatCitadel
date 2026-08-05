@@ -59,7 +59,7 @@ export const journeyRoutes: FastifyPluginAsync = async (fastify) => {
     const service = (fastify.services as unknown as { journeyTimeline?: JourneyTimelineRouteService }).journeyTimeline;
     if (!service) return reply.code(503).send({ error: "Journey timeline service is unavailable." });
     try {
-      return reply.send(service.listTimeline(parsed.data as JourneyTimelineQuery));
+      return reply.send(await service.listTimeline(parsed.data as JourneyTimelineQuery));
     } catch (error) {
       if (error instanceof TypeError) return reply.code(400).send({ error: error.message });
       return sendRouteError(reply, error, request.log);

@@ -236,6 +236,7 @@ Always load:
 
 Then load selectively:
 
+- [presentation.md](./presentation.md) as the compact runtime entrypoint for slide-deck and PowerPoint artifact work
 - [components.md](./components.md) when choosing, creating, or repairing components
 - [layout.md](./layout.md) when page structure, hierarchy, density, or responsiveness matter
 - [taste.md](./taste.md) when visual strategy, typography, color, or distinctiveness matter
@@ -327,6 +328,7 @@ Do not keep trying to "save" the user from a deliberate style choice.
 | Audit only | `enforcement`, `audit`, then whichever module owns the finding |
 | Component creation | `enforcement`, `components`, `audit` |
 | Redesign in existing system | `enforcement`, `layout`, `components`, `taste`, `audit`, with `Adopt` protections active |
+| Presentation or slide deck | `presentation` only; it contains the compact hard rules needed by the governed Chat runtime |
 
 ## Anti-Bloat Rule
 

@@ -32,7 +32,7 @@ import {
 import { ConflictError } from "@goatcitadel/contracts";
 
 describe("approval lifecycle service", () => {
-  it("keeps a created tool grant committed when realtime projection fails", () => {
+  it("keeps a created tool grant committed when realtime projection fails", async () => {
     const host = createApprovalHarness();
     const input: ToolGrantCreateInput = {
       toolPattern: "browser.*",
@@ -54,37 +54,37 @@ describe("approval lifecycle service", () => {
       throw new Error("realtime projection unavailable");
     });
 
-    expect(createToolGrant(host, input)).toEqual(grant);
+    expect(await createToolGrant(host, input)).toEqual(grant);
     expect(host.policyEngine.createGrant).toHaveBeenCalledTimes(1);
     expect(host.publishRealtime).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps a revoked tool grant committed when realtime projection fails", () => {
+  it("keeps a revoked tool grant committed when realtime projection fails", async () => {
     const host = createApprovalHarness();
     host.policyEngine.revokeGrant.mockReturnValue(true);
     host.publishRealtime.mockImplementationOnce(() => {
       throw new Error("realtime projection unavailable");
     });
 
-    expect(revokeToolGrant(host, "grant-1", "operator-test")).toBe(true);
+    expect(await revokeToolGrant(host, "grant-1", "operator-test")).toBe(true);
     expect(host.policyEngine.revokeGrant).toHaveBeenCalledTimes(1);
     expect(host.publishRealtime).toHaveBeenCalledTimes(1);
   });
 
-  it("does not hide tool-grant policy mutation failures", () => {
+  it("does not hide tool-grant policy mutation failures", async () => {
     const createHost = createApprovalHarness();
     createHost.policyEngine.createGrant.mockImplementationOnce(() => {
       throw new Error("grant create conflict");
     });
 
-    expect(() =>
+    await expect(
       createToolGrant(createHost, {
         toolPattern: "browser.*",
         decision: "allow",
         scope: "global",
         createdBy: "operator-test",
       }),
-    ).toThrow("grant create conflict");
+    ).rejects.toThrow("grant create conflict");
     expect(createHost.publishRealtime).not.toHaveBeenCalled();
 
     const revokeHost = createApprovalHarness();
@@ -92,11 +92,11 @@ describe("approval lifecycle service", () => {
       throw new Error("grant revoke conflict");
     });
 
-    expect(() => revokeToolGrant(revokeHost, "grant-1", "operator-test")).toThrow("grant revoke conflict");
+    await expect(revokeToolGrant(revokeHost, "grant-1", "operator-test")).rejects.toThrow("grant revoke conflict");
     expect(revokeHost.publishRealtime).not.toHaveBeenCalled();
   });
 
-  it("rolls back remote-token issuance when resolution wins the observability lock", () => {
+  it("rolls back remote-token issuance when resolution wins the observability lock", async () => {
     const host = createApprovalHarness();
     const pending = host.storage.approvals.get("approval-1");
     host.requireConnectorRecord = vi.fn(() => ({ connectorId: "connector-1" }) as never);
@@ -118,19 +118,19 @@ describe("approval lifecycle service", () => {
       return [];
     });
 
-    expect(() => createApprovalRemoteActionToken(host, "approval-1", { connectorId: "connector-1" })).toThrow(
+    await expect(createApprovalRemoteActionToken(host, "approval-1", { connectorId: "connector-1" })).rejects.toThrow(
       /already resolved/i,
     );
     expect(host.enqueueApprovalRemoteTokenDelivery).not.toHaveBeenCalled();
   });
 
-  it("does not issue or deliver a remote token after the approval deadline", () => {
+  it("does not issue or deliver a remote token after the approval deadline", async () => {
     const host = createApprovalHarness({
       expiresAt: "2020-04-11T00:00:00.000Z",
     });
     host.requireConnectorRecord = vi.fn(() => ({ connectorId: "connector-1" }) as never);
 
-    expect(() => createApprovalRemoteActionToken(host, "approval-1", { connectorId: "connector-1" })).toThrow(
+    await expect(createApprovalRemoteActionToken(host, "approval-1", { connectorId: "connector-1" })).rejects.toThrow(
       /has expired/i,
     );
     expect(host.storage.remoteActionTokens.create).not.toHaveBeenCalled();
@@ -138,7 +138,7 @@ describe("approval lifecycle service", () => {
     expect(host.enqueueApprovalRemoteTokenDelivery).not.toHaveBeenCalled();
   });
 
-  it("rolls back remote-token issuance when the approval expires during locked observability work", () => {
+  it("rolls back remote-token issuance when the approval expires during locked observability work", async () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2026-04-11T00:00:00.000Z"));
@@ -152,7 +152,7 @@ describe("approval lifecycle service", () => {
         return [];
       });
 
-      expect(() => createApprovalRemoteActionToken(host, "approval-1", { connectorId: "connector-1" })).toThrow(
+      await expect(createApprovalRemoteActionToken(host, "approval-1", { connectorId: "connector-1" })).rejects.toThrow(
         /has expired/i,
       );
       expect(host.enqueueApprovalRemoteTokenDelivery).not.toHaveBeenCalled();
@@ -161,7 +161,7 @@ describe("approval lifecycle service", () => {
     }
   });
 
-  it("rolls back a remote token whose own TTL elapses before the locked transaction commits", () => {
+  it("rolls back a remote token whose own TTL elapses before the locked transaction commits", async () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2026-04-11T00:00:00.000Z"));
@@ -178,19 +178,19 @@ describe("approval lifecycle service", () => {
         return [];
       });
 
-      expect(() =>
+      await expect(
         createApprovalRemoteActionToken(host, "approval-1", {
           connectorId: "connector-1",
           expiresInMs: 60_000,
         }),
-      ).toThrow(/expired before issuance committed/i);
+      ).rejects.toThrow(/expired before issuance committed/i);
       expect(host.enqueueApprovalRemoteTokenDelivery).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("issues relative remote-token TTLs from the database clock under fast and slow host skew", () => {
+  it("issues relative remote-token TTLs from the database clock under fast and slow host skew", async () => {
     vi.useFakeTimers();
     try {
       for (const hostClock of ["2100-04-11T00:00:00.000Z", "2000-04-11T00:00:00.000Z"]) {
@@ -208,7 +208,7 @@ describe("approval lifecycle service", () => {
           findPendingFresh: vi.fn(() => created),
         });
 
-        const issued = createApprovalRemoteActionToken(host, "approval-1", {
+        const issued = await createApprovalRemoteActionToken(host, "approval-1", {
           connectorId: "connector-1",
           expiresInMs: 60_000,
         });
@@ -232,13 +232,15 @@ describe("approval lifecycle service", () => {
     }
   });
 
-  it("reports queued, absent, and failed remote-token delivery without reviving issuance", () => {
+  it("reports queued, absent, and failed remote-token delivery without reviving issuance", async () => {
     const queuedHost = createApprovalHarness();
     queuedHost.requireConnectorRecord = vi.fn(() => ({ connectorId: "connector-1" }) as never);
     queuedHost.storage.remoteActionTokens.create = vi.fn(() => createRemoteActionTokenRecord("token-queued"));
     queuedHost.enqueueApprovalRemoteTokenDelivery = vi.fn(() => ({ runId: "delivery-run-1" }));
 
-    expect(createApprovalRemoteActionToken(queuedHost, "approval-1", { connectorId: "connector-1" })).toMatchObject({
+    expect(
+      await createApprovalRemoteActionToken(queuedHost, "approval-1", { connectorId: "connector-1" }),
+    ).toMatchObject({
       tokenId: "token-queued",
       deliveryStatus: "queued",
       deliveryRunId: "delivery-run-1",
@@ -249,7 +251,9 @@ describe("approval lifecycle service", () => {
     absentHost.storage.remoteActionTokens.create = vi.fn(() => createRemoteActionTokenRecord("token-absent"));
     absentHost.enqueueApprovalRemoteTokenDelivery = vi.fn(() => undefined);
 
-    expect(createApprovalRemoteActionToken(absentHost, "approval-1", { connectorId: "connector-1" })).toMatchObject({
+    expect(
+      await createApprovalRemoteActionToken(absentHost, "approval-1", { connectorId: "connector-1" }),
+    ).toMatchObject({
       tokenId: "token-absent",
       deliveryStatus: "not_configured",
     });
@@ -261,7 +265,9 @@ describe("approval lifecycle service", () => {
       throw new Error("connector delivery unavailable");
     });
 
-    expect(createApprovalRemoteActionToken(failedHost, "approval-1", { connectorId: "connector-1" })).toMatchObject({
+    expect(
+      await createApprovalRemoteActionToken(failedHost, "approval-1", { connectorId: "connector-1" }),
+    ).toMatchObject({
       tokenId: "token-failed",
       deliveryStatus: "failed",
       deliveryError: "connector delivery unavailable",
@@ -288,7 +294,7 @@ describe("approval lifecycle service", () => {
     );
   });
 
-  it("keeps pending-list reads side-effect free and preserves repository-owned expiry filtering", () => {
+  it("keeps pending-list reads side-effect free and preserves repository-owned expiry filtering", async () => {
     const host = createApprovalHarness();
     const activeApproval: ApprovalRequest = {
       approvalId: "approval-active",
@@ -303,12 +309,12 @@ describe("approval lifecycle service", () => {
     };
     host.storage.approvals.list = vi.fn(() => [activeApproval]);
 
-    expect(listApprovals(host, "pending").map((approval) => approval.approvalId)).toEqual(["approval-active"]);
+    expect((await listApprovals(host, "pending")).map((approval) => approval.approvalId)).toEqual(["approval-active"]);
     expect(host.storage.approvals.list).toHaveBeenCalledWith("pending", 100, undefined);
     expect(host.storage.approvals.resolve).not.toHaveBeenCalled();
   });
 
-  it("preserves repository-owned pending-page expiry and cursor truth", () => {
+  it("preserves repository-owned pending-page expiry and cursor truth", async () => {
     const host = createApprovalHarness();
     const activeApproval = host.storage.approvals.get("approval-1");
     host.storage.approvals.listPage = vi.fn(() => ({
@@ -316,17 +322,17 @@ describe("approval lifecycle service", () => {
       nextCursor: "opaque-next-cursor",
     }));
 
-    expect(listApprovalsPage(host, { status: "pending", limit: 2 })).toEqual({
+    expect(await listApprovalsPage(host, { status: "pending", limit: 2 })).toEqual({
       items: [expect.objectContaining({ approvalId: "approval-1" })],
       nextCursor: "opaque-next-cursor",
     });
     expect(host.storage.approvals.resolve).not.toHaveBeenCalled();
   });
 
-  it("commits an exact detached mesh activation approval and one canonical created event", () => {
+  it("commits an exact detached mesh activation approval and one canonical created event", async () => {
     const host = createApprovalHarness();
     const payload = createMeshActivationApprovalPayload();
-    const result = commitMeshCapabilityActivationApproval(host, {
+    const result = await commitMeshCapabilityActivationApproval(host, {
       approvalId: "mesh-capability-activation:" + "a".repeat(64),
       payload,
       preview: {
@@ -372,7 +378,7 @@ describe("approval lifecycle service", () => {
     expect(host.enqueueApprovalWaitMaterialization).not.toHaveBeenCalled();
   });
 
-  it("returns exact mesh approval replay without emitting another created event", () => {
+  it("returns exact mesh approval replay without emitting another created event", async () => {
     const host = createApprovalHarness();
     const payload = createMeshActivationApprovalPayload();
     const approval = {
@@ -408,7 +414,7 @@ describe("approval lifecycle service", () => {
     ]);
 
     expect(
-      commitMeshCapabilityActivationApproval(host, {
+      await commitMeshCapabilityActivationApproval(host, {
         approvalId: approval.approvalId,
         payload,
         preview: {
@@ -423,7 +429,7 @@ describe("approval lifecycle service", () => {
     expect(host.storage.approvalEvents.append).not.toHaveBeenCalled();
   });
 
-  it("fails exact mesh replay closed when canonical creation evidence is missing, duplicated, or mismatched", () => {
+  it("fails exact mesh replay closed when canonical creation evidence is missing, duplicated, or mismatched", async () => {
     const payload = createMeshActivationApprovalPayload();
     const approvalId = "mesh-capability-activation:" + "a".repeat(64);
     const canonicalCreated = {
@@ -458,7 +464,7 @@ describe("approval lifecycle service", () => {
       });
       host.storage.approvalEvents.listByApprovalId.mockReturnValue(events);
 
-      expect(() =>
+      await expect(
         commitMeshCapabilityActivationApproval(host, {
           approvalId,
           payload,
@@ -470,15 +476,15 @@ describe("approval lifecycle service", () => {
           },
           linkage: { workspaceId: payload.workspaceId },
         }),
-      ).toThrow(/inconsistent creation evidence/i);
+      ).rejects.toThrow(/inconsistent creation evidence/i);
       expect(host.storage.approvalEvents.append).not.toHaveBeenCalled();
     }
   });
 
-  it("fails mesh activation approval creation before storage for changed preview or foreign linkage", () => {
+  it("fails mesh activation approval creation before storage for changed preview or foreign linkage", async () => {
     const host = createApprovalHarness();
     const payload = createMeshActivationApprovalPayload();
-    expect(() =>
+    await expect(
       commitMeshCapabilityActivationApproval(host, {
         approvalId: "mesh-capability-activation:" + "a".repeat(64),
         payload,
@@ -490,8 +496,8 @@ describe("approval lifecycle service", () => {
         },
         linkage: { workspaceId: payload.workspaceId },
       }),
-    ).toThrow(/preview does not match/i);
-    expect(() =>
+    ).rejects.toThrow(/preview does not match/i);
+    await expect(
       commitMeshCapabilityActivationApproval(host, {
         approvalId: "mesh-capability-activation:" + "a".repeat(64),
         payload,
@@ -503,7 +509,7 @@ describe("approval lifecycle service", () => {
         },
         linkage: { workspaceId: "foreign-workspace" },
       }),
-    ).toThrow(/linkage is not exact/i);
+    ).rejects.toThrow(/linkage is not exact/i);
     expect(host.storage.approvals.createDeterministicDetachedWithTtlDuration).not.toHaveBeenCalled();
     expect(host.storage.approvalEvents.append).not.toHaveBeenCalled();
   });
@@ -579,6 +585,7 @@ describe("approval lifecycle service", () => {
         }),
       }),
     );
+    expect(host.requestApprovalEffectProcessing).toHaveBeenCalledOnce();
     expect(approval.linkage?.durableRunId).toBe("approval-wait-1");
   });
 
@@ -586,10 +593,10 @@ describe("approval lifecycle service", () => {
     const host = createApprovalHarness();
     host.storage.pendingApprovalActions.upsertPending = vi.fn();
     let transactionActive = false;
-    host.storage.runImmediateTransaction = vi.fn(<T>(callback: () => T): T => {
+    host.storage.runImmediateTransaction = vi.fn(async <T>(callback: () => T | Promise<T>): Promise<Awaited<T>> => {
       transactionActive = true;
       try {
-        return callback();
+        return await callback();
       } finally {
         transactionActive = false;
       }
@@ -883,6 +890,7 @@ describe("approval lifecycle service", () => {
         resolvedBy: "operator",
       },
     );
+    expect(host.requestApprovalEffectProcessing).toHaveBeenCalledOnce();
     expect(result.durableRunId).toBe("approval-wait-42");
     expect(result.resolutionEffects).toMatchObject({
       approvalWaitDurableRunId: "approval-wait-42",
@@ -1286,7 +1294,7 @@ describe("approval lifecycle service", () => {
     );
   });
 
-  it("continues the expiry sweep after one candidate fails and reports the first failure", () => {
+  it("continues the expiry sweep after one candidate fails and reports the first failure", async () => {
     const host = createApprovalHarness({ expiresAt: "2020-04-11T00:00:00.000Z" });
     const candidate = host.storage.approvals.get("approval-1");
     host.storage.approvals.listExpiredPending = vi.fn(() => [
@@ -1300,7 +1308,7 @@ describe("approval lifecycle service", () => {
       })
       .mockImplementation(transactionImplementation);
 
-    expect(() => expirePendingApprovals(host, 10)).toThrow("poison approval transaction");
+    await expect(expirePendingApprovals(host, 10)).rejects.toThrow("poison approval transaction");
 
     expect(host.storage.runImmediateTransaction).toHaveBeenCalledTimes(2);
     expect(host.storage.approvals.resolve).toHaveBeenCalledWith(
@@ -3337,10 +3345,10 @@ function createApprovalHarness(input?: {
         find: vi.fn((runId: string) => codeModeRuns.find((run) => run.runId === runId)),
         upsert: vi.fn((record: CodeModeRunRecord) => record),
       },
-      runImmediateTransaction: vi.fn(<T>(callback: () => T): T => {
+      runImmediateTransaction: vi.fn(async <T>(callback: () => T | Promise<T>): Promise<Awaited<T>> => {
         const approvalBeforeTransaction = approval;
         try {
-          return callback();
+          return await callback();
         } catch (error) {
           approval = approvalBeforeTransaction;
           throw error;
@@ -3400,6 +3408,7 @@ function createApprovalHarness(input?: {
     enqueueApprovalObservabilityEffects: vi.fn(() => []),
     enqueueApprovalWaitMaterialization: vi.fn(),
     enqueueApprovalResolutionEffects: vi.fn(),
+    requestApprovalEffectProcessing: vi.fn(),
     awaitApprovalResolutionEffects: vi.fn(async (approvalId: string) =>
       host.storage.approvalEffects.listByApproval(approvalId),
     ),

@@ -3,7 +3,7 @@ import type { ApprovalRequest } from "@goatcitadel/contracts";
 import { CapabilitySystemService } from "./capability-system-service.js";
 
 describe("CapabilitySystemService loop 29 approval queue behavior", () => {
-  it("marks expired durable approvals stale while preserving inline fallback details", () => {
+  it("marks expired durable approvals stale while preserving inline fallback details", async () => {
     const expiredApproval: ApprovalRequest = {
       approvalId: "approval-expired",
       kind: "tool.invoke",
@@ -60,18 +60,18 @@ describe("CapabilitySystemService loop 29 approval queue behavior", () => {
         approvals,
         chatInlineApprovals,
       } as never,
-      readFeatureFlags: () => ({ codeModeV1Enabled: true }),
+      readFeatureFlags: async () => ({ codeModeV1Enabled: true }),
       listToolCatalog: () => [],
       listLoadedSkills: () => [],
-      readSkillStates: () => new Map(),
+      readSkillStates: async () => new Map(),
       invokeTool: vi.fn(),
       createApproval: vi.fn(),
       resolveApproval: vi.fn(),
-      publishRealtime: vi.fn(),
-      readPolicySnapshot: () => ({}),
+      publishRealtime: vi.fn(async () => undefined),
+      readPolicySnapshot: async () => ({}),
     });
 
-    expect(service.listChatPendingApprovals("session-expired")).toEqual([
+    expect(await service.listChatPendingApprovals("session-expired")).toEqual([
       expect.objectContaining({
         approvalId: "approval-expired",
         kind: "tool.invoke",

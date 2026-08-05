@@ -9,7 +9,7 @@ import type {
   TranscriptEvent,
 } from "@goatcitadel/contracts";
 import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage } from "@goatcitadel/storage";
 import { resolveSessionRoute, type SessionRouteResolution } from "./session-key.js";
 import { TokenCostLedger } from "./token-cost-ledger.js";
 
@@ -18,9 +18,9 @@ export interface EventIngestOptions {
   idempotencyKey: string;
   payload: GatewayEventInput;
   /** Runs inside the ingest transaction for writes that must commit atomically with the message. */
-  onCommit?: () => void;
+  onCommit?: () => unknown | Promise<unknown>;
   /** Runs only after a newly accepted ingest transaction has committed successfully. */
-  afterCommit?: () => void;
+  afterCommit?: () => unknown | Promise<unknown>;
 }
 
 /**
@@ -50,7 +50,7 @@ export class EventIngestService {
   private readonly tokenCostLedger: TokenCostLedger;
   private subscriptionUsageWarned = false;
 
-  public constructor(private readonly storage: Storage) {
+  public constructor(private readonly storage: AsyncStorage) {
     this.tokenCostLedger = new TokenCostLedger(storage.costLedger);
   }
 
@@ -87,15 +87,15 @@ export class EventIngestService {
       costUsd: options.payload.usage?.costUsd,
     };
 
-    const existing = this.storage.idempotency.find(options.endpoint, options.idempotencyKey);
+    const existing = await this.storage.idempotency.find(options.endpoint, options.idempotencyKey);
     if (existing) {
       return this.buildDedupResult(existing, payloadHash, route, options.payload.route);
     }
 
-    const ingestResult = this.storage.runImmediateTransaction(() => {
-      const inserted = this.storage.idempotency.insertPendingIfAbsent(idempotencyRow);
+    const ingestResult = await this.storage.runImmediateTransaction(async () => {
+      const inserted = await this.storage.idempotency.insertPendingIfAbsent(idempotencyRow);
       if (!inserted) {
-        const concurrent = this.storage.idempotency.find(options.endpoint, options.idempotencyKey);
+        const concurrent = await this.storage.idempotency.find(options.endpoint, options.idempotencyKey);
         if (concurrent) {
           return this.buildDedupResult(concurrent, payloadHash, route, options.payload.route);
         }
@@ -105,9 +105,9 @@ export class EventIngestService {
       // transaction as the message commit. This prevents a mixed/foreign/stale
       // reference set from suppressing legacy projection and closes the TOCTOU
       // window with retention or privacy deletion.
-      const canonicalUsageValidated = validateCanonicalUsageReferences(this.storage, options.payload, route);
+      const canonicalUsageValidated = await validateCanonicalUsageReferences(this.storage, options.payload, route);
 
-      this.storage.sessions.upsert({
+      await this.storage.sessions.upsert({
         sessionId: route.sessionId,
         sessionKey: route.sessionKey,
         kind: route.kind,
@@ -116,11 +116,11 @@ export class EventIngestService {
         timestamp: now,
       });
 
-      this.storage.chatMessages.upsert(toChatMessageRecord(transcriptEvent));
-      options.onCommit?.();
+      await this.storage.chatMessages.upsert(toChatMessageRecord(transcriptEvent));
+      await options.onCommit?.();
 
       if (!canonicalUsageValidated) {
-        this.storage.sessions.applyUsage({
+        await this.storage.sessions.applyUsage({
           sessionId: route.sessionId,
           tokenInput: options.payload.usage?.inputTokens ?? 0,
           tokenOutput: options.payload.usage?.outputTokens ?? 0,
@@ -139,7 +139,7 @@ export class EventIngestService {
               "key for programmatic usage.",
           );
         }
-        this.tokenCostLedger.record({
+        await this.tokenCostLedger.record({
           sessionId: route.sessionId,
           agentId: options.payload.actor.type === "agent" ? options.payload.actor.id : undefined,
           taskId: options.payload.taskId,
@@ -154,14 +154,14 @@ export class EventIngestService {
           timestamp: now,
         });
       }
-      this.storage.transcriptOutbox.enqueue(transcriptEvent, now);
+      await this.storage.transcriptOutbox.enqueue(transcriptEvent, now);
 
-      this.storage.idempotency.markProcessed(options.endpoint, options.idempotencyKey, "accepted", now);
+      await this.storage.idempotency.markProcessed(options.endpoint, options.idempotencyKey, "accepted", now);
 
       return {
         accepted: true,
         deduped: false,
-        session: this.storage.sessions.getBySessionId(route.sessionId),
+        session: await this.storage.sessions.getBySessionId(route.sessionId),
         transcriptOffset: 0,
       } satisfies GatewayEventResult;
     });
@@ -169,7 +169,7 @@ export class EventIngestService {
     if (ingestResult.deduped) {
       return ingestResult;
     }
-    options.afterCommit?.();
+    await options.afterCommit?.();
 
     const { targetOffset: transcriptOffset } = await flushTranscriptOutboxSession(this.storage, {
       sessionId: route.sessionId,
@@ -196,13 +196,13 @@ export class EventIngestService {
    *   instead report `accepted: false` so the caller can surface a replay/
    *   conflict instead of losing the message.
    */
-  private buildDedupResult(
+  private async buildDedupResult(
     existing: InboundEventIndexRow,
     incomingPayloadHash: string,
     route: SessionRouteResolution,
     payloadRoute: GatewayEventInput["route"],
-  ): GatewayEventResult {
-    const session = this.resolveDedupSession(existing, route, payloadRoute);
+  ): Promise<GatewayEventResult> {
+    const session = await this.resolveDedupSession(existing, route, payloadRoute);
     const payloadMatches = existing.payloadHash === incomingPayloadHash;
     return {
       accepted: payloadMatches,
@@ -219,13 +219,13 @@ export class EventIngestService {
    * retry into a 500. When the row is gone we synthesize a minimal `SessionMeta`
    * (the field is non-optional and dereferenced downstream).
    */
-  private resolveDedupSession(
+  private async resolveDedupSession(
     existing: InboundEventIndexRow,
     route: SessionRouteResolution,
     payloadRoute: GatewayEventInput["route"],
-  ): SessionMeta {
+  ): Promise<SessionMeta> {
     try {
-      return this.storage.sessions.getBySessionKey(existing.sessionKey);
+      return await this.storage.sessions.getBySessionKey(existing.sessionKey);
     } catch (error) {
       if (!(error instanceof NotFoundError)) {
         throw error;
@@ -250,7 +250,8 @@ export class EventIngestService {
   }
 
   public async flushPendingTranscriptOutbox(limit = 200): Promise<number> {
-    const sessionIds = new Set(this.storage.transcriptOutbox.listPending(limit).map((record) => record.sessionId));
+    const pending = await this.storage.transcriptOutbox.listPending(limit);
+    const sessionIds = new Set(pending.map((record) => record.sessionId));
     let deliveredCount = 0;
     for (const sessionId of sessionIds) {
       const result = await flushTranscriptOutboxSession(this.storage, {
@@ -272,11 +273,11 @@ const MAX_CANONICAL_USAGE_OWNER_LENGTH = 512;
  * accepted provider attempt owned by this exact ingest. Any malformed or mixed
  * set fails the whole ingest transaction; it never falls back to legacy sums.
  */
-function validateCanonicalUsageReferences(
-  storage: Storage,
+async function validateCanonicalUsageReferences(
+  storage: AsyncStorage,
   payload: GatewayEventInput,
   route: SessionRouteResolution,
-): boolean {
+): Promise<boolean> {
   const ids = payload.usage?.canonicalUsageEventIds;
   const owner = payload.usage?.canonicalUsageOwner;
   if (ids === undefined) {
@@ -321,14 +322,14 @@ function validateCanonicalUsageReferences(
       message: "canonical usage owner does not match the ingest session",
     });
   }
-  const authoritativeSession = storage.chatSessionMeta.getForUpdate(sessionId);
+  const authoritativeSession = await storage.chatSessionMeta.getForUpdate(sessionId);
   if (!authoritativeSession || authoritativeSession.workspaceId !== workspaceId) {
     throw new ConflictError({
       message: "canonical usage workspace does not match the authoritative session owner",
     });
   }
   try {
-    const authoritativeTurn = storage.chatTurnTraces.getForUpdate(turnId);
+    const authoritativeTurn = await storage.chatTurnTraces.getForUpdate(turnId);
     if (authoritativeTurn.sessionId !== sessionId) {
       throw new ConflictError({
         message: "canonical usage turn does not match the authoritative session owner",
@@ -353,7 +354,7 @@ function validateCanonicalUsageReferences(
     }
     unique.add(eventId);
 
-    const record = storage.modelUsageEvents.findByEventIdForUpdate(eventId);
+    const record = await storage.modelUsageEvents.findByEventIdForUpdate(eventId);
     if (!record) {
       throw new ConflictError({ message: "canonical usage event is unavailable" });
     }
@@ -421,21 +422,21 @@ function toChatMessageRecord(event: TranscriptEvent): ChatMessageRecord {
 }
 
 async function flushTranscriptOutboxSession(
-  storage: Storage,
+  storage: AsyncStorage,
   input: {
     sessionId: string;
     targetEventId?: string;
     limit?: number;
   },
 ): Promise<{ deliveredCount: number; targetOffset: number }> {
-  const pending = storage.transcriptOutbox.listPending(input.limit ?? 100, input.sessionId);
+  const pending = await storage.transcriptOutbox.listPending(input.limit ?? 100, input.sessionId);
   let deliveredCount = 0;
   let targetOffset = 0;
 
   for (const record of pending) {
     try {
       const offset = await storage.transcripts.append(record.event);
-      storage.transcriptOutbox.markDelivered(record.eventId, {
+      await storage.transcriptOutbox.markDelivered(record.eventId, {
         deliveredAt: new Date().toISOString(),
         transcriptOffset: offset,
       });
@@ -445,7 +446,7 @@ async function flushTranscriptOutboxSession(
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const updated = storage.transcriptOutbox.markFailed(record.eventId, {
+      const updated = await storage.transcriptOutbox.markFailed(record.eventId, {
         lastAttemptAt: new Date().toISOString(),
         lastError: message,
       });

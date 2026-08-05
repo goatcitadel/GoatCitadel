@@ -345,7 +345,7 @@ const opsQualityQuerySchema = z.object({
 
 export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/dashboard/state", async (_request, reply) => {
-    return reply.send(projectPublicSecretValue(fastify.services.dashboard.getDashboardState()));
+    return reply.send(projectPublicSecretValue(await fastify.services.dashboard.getDashboardState()));
   });
 
   fastify.get("/api/v1/system/vitals", async (_request, reply) => {
@@ -357,25 +357,32 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    const reviewQueue = fastify.services.dashboard.isFeatureEnabled("cronReviewQueueV1Enabled")
-      ? fastify.services.cron.listCronReviewQueue(parsed.data.cronReviewLimit)
-      : [];
+    const [reviewQueue, realtimeEvents, sessions, cronJobs, improvementReports, replayRuns] = await Promise.all([
+      fastify.services.dashboard.isFeatureEnabled("cronReviewQueueV1Enabled")
+        ? fastify.services.cron.listCronReviewQueue(parsed.data.cronReviewLimit)
+        : Promise.resolve([]),
+      fastify.services.dashboard.listRealtimeEvents(parsed.data.eventLimit),
+      fastify.services.dashboard.listSessions(parsed.data.sessionLimit),
+      fastify.services.cron.listCronJobs(),
+      fastify.services.improvement.listImprovementReports(parsed.data.improvementLimit),
+      fastify.services.improvement.listDecisionReplayRuns(parsed.data.improvementLimit),
+    ]);
     return reply.send(
       projectPublicSecretValue({
         generatedAt: new Date().toISOString(),
         events: {
-          items: fastify.services.dashboard.listRealtimeEvents(parsed.data.eventLimit),
+          items: realtimeEvents,
         },
         sessions: {
-          items: fastify.services.dashboard.listSessions(parsed.data.sessionLimit),
+          items: sessions,
         },
         scheduler: {
-          jobs: fastify.services.cron.listCronJobs(),
+          jobs: cronJobs,
           reviewQueue,
         },
         improvement: {
-          reports: fastify.services.improvement.listImprovementReports(parsed.data.improvementLimit),
-          replayRuns: fastify.services.improvement.listDecisionReplayRuns(parsed.data.improvementLimit),
+          reports: improvementReports,
+          replayRuns,
         },
       }),
     );
@@ -386,7 +393,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(projectPublicSecretValue(fastify.services.dashboard.getOpsQualitySnapshot(parsed.data)));
+    return reply.send(projectPublicSecretValue(await fastify.services.dashboard.getOpsQualitySnapshot(parsed.data)));
   });
 
   fastify.get("/api/v1/ops/quality/export", async (request, reply) => {
@@ -394,7 +401,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(projectPublicSecretValue(fastify.services.dashboard.getOpsQualityExport(parsed.data)));
+    return reply.send(projectPublicSecretValue(await fastify.services.dashboard.getOpsQualityExport(parsed.data)));
   });
 
   fastify.get("/api/v1/observe/health", async (request, reply) => {
@@ -405,10 +412,17 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
     const now = new Date();
     const to = now.toISOString();
     const from = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
-    const backups = await fastify.services.dashboard.listBackups(parsed.data.backupLimit);
+    const [backups, database, costSummary, costUsageAvailability, qmd] = await Promise.all([
+      fastify.services.dashboard.listBackups(parsed.data.backupLimit),
+      fastify.services.health.getDatabaseHealthSnapshot(),
+      fastify.services.dashboard.costSummary(parsed.data.costScope, from, to),
+      fastify.services.dashboard.costUsageAvailability(from, to),
+      fastify.services.dashboard.getMemoryQmdStats(from, to),
+    ]);
     return reply.send(
       projectPublicSecretValue({
         generatedAt: to,
+        database,
         systemVitals: fastify.services.dashboard.getSystemVitals(),
         daemonStatus: fastify.services.daemon.getDaemonStatus(),
         daemonLogs: {
@@ -416,13 +430,13 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
         },
         costs: {
           summary: {
-            items: fastify.services.dashboard.costSummary(parsed.data.costScope, from, to),
+            items: costSummary,
             scope: parsed.data.costScope,
             from,
             to,
-            usageAvailability: fastify.services.dashboard.costUsageAvailability(from, to),
+            usageAvailability: costUsageAvailability,
           },
-          qmd: fastify.services.dashboard.getMemoryQmdStats(from, to),
+          qmd,
         },
         backups: {
           items: backups,
@@ -465,7 +479,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.get("/api/v1/cron/jobs", async (_request, reply) => {
-    return reply.send(projectPublicSecretValue({ items: fastify.services.cron.listCronJobs() }));
+    return reply.send(projectPublicSecretValue({ items: await fastify.services.cron.listCronJobs() }));
   });
 
   fastify.get("/api/v1/cron/jobs/:jobId", async (request, reply) => {
@@ -474,7 +488,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(projectPublicSecretValue(fastify.services.cron.getCronJob(parsed.data.jobId)));
+      return reply.send(projectPublicSecretValue(await fastify.services.cron.getCronJob(parsed.data.jobId)));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -513,7 +527,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       const update = containsPublicProjectionMarker(parsedUpdate)
         ? reconcileCronPublicUpdate(
-            fastify.services.cron.getCronJob(parsedParams.data.jobId) as unknown as Record<string, unknown>,
+            (await fastify.services.cron.getCronJob(parsedParams.data.jobId)) as unknown as Record<string, unknown>,
             parsedUpdate as Record<string, unknown>,
           )
         : parsedUpdate;
@@ -660,7 +674,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(
-        projectPublicSecretValue({ items: fastify.services.cron.listCronReviewQueue(parsed.data.limit) }),
+        projectPublicSecretValue({ items: await fastify.services.cron.listCronReviewQueue(parsed.data.limit) }),
       );
     } catch (error) {
       return reply.code(409).send({ error: (error as Error).message });
@@ -673,7 +687,9 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(projectPublicSecretValue(fastify.services.cron.retryCronReviewQueueItem(parsed.data.itemId)));
+      return reply.send(
+        projectPublicSecretValue(await fastify.services.cron.retryCronReviewQueueItem(parsed.data.itemId)),
+      );
     } catch (error) {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("not found");
@@ -687,7 +703,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(projectPublicSecretValue(fastify.services.cron.getCronRunDiff(parsed.data.runId)));
+      return reply.send(projectPublicSecretValue(await fastify.services.cron.getCronRunDiff(parsed.data.runId)));
     } catch (error) {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("not found");
@@ -696,7 +712,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.get("/api/v1/operators", async (_request, reply) => {
-    return reply.send({ items: fastify.services.dashboard.listOperators() });
+    return reply.send({ items: await fastify.services.dashboard.listOperators() });
   });
 
   fastify.get("/api/v1/memory/files", async (request, reply) => {
@@ -711,7 +727,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.get("/api/v1/settings", async (request, reply) => {
     try {
-      return reply.send(projectSettingsPublicValue(fastify.services.settings.getSettings()));
+      return reply.send(projectSettingsPublicValue(await fastify.services.settings.getSettings()));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -736,7 +752,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.get("/api/v1/auth/settings", async (request, reply) => {
     try {
-      const settings = fastify.services.settings.getSettings();
+      const settings = await fastify.services.settings.getSettings();
       return reply.send({
         revision: settings.revision,
         ...fastify.services.settings.getAuthRuntimeSettings(),
@@ -766,7 +782,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.get("/api/v1/personalities", async (_request, reply) => {
-    return reply.send(fastify.services.settings.getPersonalityCatalog());
+    return reply.send(await fastify.services.settings.getPersonalityCatalog());
   });
 
   fastify.post("/api/v1/personalities", async (request, reply) => {
@@ -775,7 +791,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.code(201).send(fastify.services.settings.createPersonality(parsed.data));
+      return reply.code(201).send(await fastify.services.settings.createPersonality(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -787,7 +803,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.settings.setDefaultPersonality(parsed.data.personalityId));
+      return reply.send(await fastify.services.settings.setDefaultPersonality(parsed.data.personalityId));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -805,7 +821,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(fastify.services.settings.updatePersonality(params.data.personalityId, body.data));
+      return reply.send(await fastify.services.settings.updatePersonality(params.data.personalityId, body.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -817,7 +833,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.settings.deletePersonality(params.data.personalityId));
+      return reply.send(await fastify.services.settings.deletePersonality(params.data.personalityId));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }

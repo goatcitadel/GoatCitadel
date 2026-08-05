@@ -296,7 +296,7 @@ describe("agentSendChatMessage abort signal coverage", () => {
         routing: {},
         startedAt: "2026-05-16T00:00:00.000Z",
       } as unknown as ChatTurnTraceRecord;
-      const cancelDurableChatRun = vi.fn();
+      const cancelDurableChatRun = vi.fn(async () => undefined);
       let resolveStream: (() => void) | undefined;
       const streamReady = new Promise<void>((resolve) => {
         resolveStream = resolve;
@@ -415,7 +415,7 @@ describe("agentSendChatMessage abort signal coverage", () => {
         startedAt: "2026-05-16T00:00:00.000Z",
       } as unknown as ChatTurnTraceRecord;
       const durableRun = { runId: "durable-run-1" } as DurableRunRecord;
-      const cancelDurableChatRun = vi.fn();
+      const cancelDurableChatRun = vi.fn(async () => undefined);
       let resolveStream: (() => void) | undefined;
       const streamReady = new Promise<void>((resolve) => {
         resolveStream = resolve;
@@ -520,7 +520,7 @@ describe("agentSendChatMessage abort signal coverage", () => {
         routing: {},
         startedAt: "2026-05-16T00:00:00.000Z",
       } as unknown as ChatTurnTraceRecord;
-      const cancelDurableChatRun = vi.fn();
+      const cancelDurableChatRun = vi.fn(async () => undefined);
       // launchPreparedAgentChatTurnStream registers a real stream lease before
       // dispatch; a bare vi.fn() resolves to undefined, which trips the
       // "has no active stream registration" guard in

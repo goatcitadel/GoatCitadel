@@ -11,6 +11,7 @@ import type {
   ConnectorDiagnosticReport,
   IntegrationConnection,
 } from "@goatcitadel/contracts";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import {
   buildChannelSetupValidationResult,
   buildDefaultChannelSetupDraft,
@@ -28,16 +29,7 @@ import {
 import { preserveChannelSetupDraftSecretsForPublicUpdate } from "./channel-setup-public-projection.js";
 
 export interface ChannelSetupHost {
-  readonly storage: {
-    channelSetupDrafts: {
-      create(input: Partial<ChannelSetupDraft> & Pick<ChannelSetupDraft, "catalogId">): ChannelSetupDraft;
-      get(draftId: string): ChannelSetupDraft;
-      update(draftId: string, patch: Partial<ChannelSetupDraft>): ChannelSetupDraft;
-      delete(draftId: string): void;
-      listByCatalog(catalogId: string, limit: number): ChannelSetupDraft[];
-      listByConnection(connectionId: string, limit: number): ChannelSetupDraft[];
-    };
-  };
+  readonly storage: Pick<Storage, "channelSetupDrafts">;
   readonly recentChannelSetupTests: Map<string, ChannelSetupRecentTestCacheEntry>;
   buildIntegrationConnectionChecks(connection: IntegrationConnection): ConnectorDiagnosticReport["checks"];
   createIntegrationConnection(input: {
@@ -46,8 +38,8 @@ export interface ChannelSetupHost {
     enabled: boolean;
     status: "connected";
     config: Record<string, unknown>;
-  }): IntegrationConnection;
-  getIntegrationConnection(connectionId: string): IntegrationConnection;
+  }): Promise<IntegrationConnection>;
+  getIntegrationConnection(connectionId: string): Promise<IntegrationConnection>;
   recordDevDiagnostic(input: {
     level: "info" | "warn" | "error";
     category: string;
@@ -59,7 +51,10 @@ export interface ChannelSetupHost {
     connection: IntegrationConnection,
     options: { includeSandboxSend: boolean },
   ): Promise<{ checks: ConnectorDiagnosticReport["checks"]; probe?: ConnectorDiagnosticReport["probe"] }>;
-  updateIntegrationConnection(connectionId: string, patch: Partial<IntegrationConnection>): IntegrationConnection;
+  updateIntegrationConnection(
+    connectionId: string,
+    patch: Partial<IntegrationConnection>,
+  ): Promise<IntegrationConnection>;
 }
 
 export function getChannelSetupDefinition(_host: ChannelSetupHost, catalogId: string): ChannelSetupDefinition {
@@ -70,14 +65,14 @@ export function listChannelSetupDefinitions(_host: ChannelSetupHost): ChannelSet
   return listChannelSetupDefinitionCatalogs();
 }
 
-export function listChannelSetupDrafts(
+export async function listChannelSetupDrafts(
   host: ChannelSetupHost,
   options?: {
     catalogId?: string;
     connectionId?: string;
     limit?: number;
   },
-): ChannelSetupDraft[] {
+): Promise<ChannelSetupDraft[]> {
   const limit = Math.max(1, Math.min(options?.limit ?? 20, 100));
   if (options?.connectionId) {
     return host.storage.channelSetupDrafts.listByConnection(options.connectionId, limit);
@@ -85,16 +80,21 @@ export function listChannelSetupDrafts(
   if (options?.catalogId) {
     return host.storage.channelSetupDrafts.listByCatalog(options.catalogId, limit);
   }
-  return listChannelSetupDefinitionCatalogs()
-    .flatMap((definition) => host.storage.channelSetupDrafts.listByCatalog(definition.catalog.catalogId, limit))
+  const draftGroups = await Promise.all(
+    listChannelSetupDefinitionCatalogs().map((definition) =>
+      host.storage.channelSetupDrafts.listByCatalog(definition.catalog.catalogId, limit),
+    ),
+  );
+  return draftGroups
+    .flat()
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
     .slice(0, limit);
 }
 
-export function createChannelSetupDraft(
+export async function createChannelSetupDraft(
   host: ChannelSetupHost,
   input: ChannelSetupDraftCreateInput,
-): ChannelSetupDraft {
+): Promise<ChannelSetupDraft> {
   const runtime = requireChannelSetupDefinition(input.catalogId);
   let seedDraft: Record<string, unknown> = buildDefaultChannelSetupDraft(runtime.definition);
   let hydration = undefined;
@@ -102,7 +102,7 @@ export function createChannelSetupDraft(
   let enabled = true;
 
   if (input.connectionId) {
-    const connection = host.getIntegrationConnection(input.connectionId);
+    const connection = await host.getIntegrationConnection(input.connectionId);
     if (connection.catalogId !== input.catalogId) {
       throw new Error(`Connection ${input.connectionId} does not belong to ${input.catalogId}.`);
     }
@@ -116,7 +116,7 @@ export function createChannelSetupDraft(
     enabled = connection.enabled;
   }
 
-  const created = host.storage.channelSetupDrafts.create({
+  const created = await host.storage.channelSetupDrafts.create({
     ...input,
     lifecycleMode: input.lifecycleMode ?? (input.connectionId ? "edit" : "create"),
     label,
@@ -150,19 +150,19 @@ export function createChannelSetupDraft(
   return created;
 }
 
-export function updateChannelSetupDraft(
+export async function updateChannelSetupDraft(
   host: ChannelSetupHost,
   draftId: string,
   input: ChannelSetupDraftUpdateInput,
   options: { reconcilePublicProjection?: boolean } = {},
-): ChannelSetupDraft {
-  const current = host.storage.channelSetupDrafts.get(draftId);
+): Promise<ChannelSetupDraft> {
+  const current = await host.storage.channelSetupDrafts.get(draftId);
   const effectiveInput = options.reconcilePublicProjection
     ? preserveChannelSetupDraftSecretsForPublicUpdate(current, input)
     : input;
   const runtime = requireChannelSetupDefinition(current.catalogId);
   host.recentChannelSetupTests.delete(draftId);
-  const updated = host.storage.channelSetupDrafts.update(draftId, {
+  const updated = await host.storage.channelSetupDrafts.update(draftId, {
     ...effectiveInput,
     contentVersion: runtime.definition.wizard.contentVersion,
     adapterVersion: runtime.definition.adapter.adapterVersion,
@@ -190,12 +190,15 @@ export function updateChannelSetupDraft(
   return updated;
 }
 
-export function validateChannelSetupDraft(host: ChannelSetupHost, draftId: string): ChannelSetupValidationResult {
-  const draft = host.storage.channelSetupDrafts.get(draftId);
+export async function validateChannelSetupDraft(
+  host: ChannelSetupHost,
+  draftId: string,
+): Promise<ChannelSetupValidationResult> {
+  const draft = await host.storage.channelSetupDrafts.get(draftId);
   const runtime = requireChannelSetupDefinition(draft.catalogId);
   const issues = runtime.validate(draft);
   const result = buildChannelSetupValidationResult(draft, runtime.definition.validation.levels, issues);
-  host.storage.channelSetupDrafts.update(draftId, {
+  await host.storage.channelSetupDrafts.update(draftId, {
     lastValidatedAt: result.checkedAt,
     lastFailureCategory: firstFailureCategory(result.issues),
   });
@@ -220,8 +223,8 @@ export function validateChannelSetupDraft(host: ChannelSetupHost, draftId: strin
 }
 
 export async function testChannelSetupDraft(host: ChannelSetupHost, draftId: string): Promise<ChannelSetupTestResult> {
-  const draft = host.storage.channelSetupDrafts.get(draftId);
-  const validation = validateChannelSetupDraft(host, draftId);
+  const draft = await host.storage.channelSetupDrafts.get(draftId);
+  const validation = await validateChannelSetupDraft(host, draftId);
   if (validation.status === "error") {
     host.recentChannelSetupTests.delete(draftId);
     const blocked: ChannelSetupTestResult = {
@@ -232,7 +235,7 @@ export async function testChannelSetupDraft(host: ChannelSetupHost, draftId: str
       checkedAt: new Date().toISOString(),
       recommendedNextAction: "Resolve the required setup fields before running a live test.",
     };
-    host.storage.channelSetupDrafts.update(draftId, {
+    await host.storage.channelSetupDrafts.update(draftId, {
       lastTestedAt: blocked.checkedAt,
       lastFailureCategory: firstFailureCategory(blocked.issues),
     });
@@ -240,7 +243,7 @@ export async function testChannelSetupDraft(host: ChannelSetupHost, draftId: str
   }
 
   const runtime = requireChannelSetupDefinition(draft.catalogId);
-  const connection = buildEphemeralChannelConnection(host, draft, runtime.definition.adapter.secretFieldKeys);
+  const connection = await buildEphemeralChannelConnection(host, draft, runtime.definition.adapter.secretFieldKeys);
   const testSignature = buildChannelSetupRecentTestSignature(draft, connection, runtime.definition.testing.testVersion);
   const liveChecks = await host.runIntegrationConnectionLiveChecks(connection, { includeSandboxSend: true });
   const checks = [...host.buildIntegrationConnectionChecks(connection), ...liveChecks.checks];
@@ -262,7 +265,7 @@ export async function testChannelSetupDraft(host: ChannelSetupHost, draftId: str
         : "Finalize the connection and send a sandbox message to confirm destination access.",
     probe: liveChecks.probe,
   };
-  host.storage.channelSetupDrafts.update(draftId, {
+  await host.storage.channelSetupDrafts.update(draftId, {
     lastTestedAt: result.checkedAt,
     lastFailureCategory: firstFailureCategory(result.issues),
   });
@@ -298,13 +301,13 @@ export async function finalizeChannelSetupDraft(
   host: ChannelSetupHost,
   draftId: string,
 ): Promise<ChannelSetupFinalizeResult> {
-  const draft = host.storage.channelSetupDrafts.get(draftId);
+  const draft = await host.storage.channelSetupDrafts.get(draftId);
   const runtime = requireChannelSetupDefinition(draft.catalogId);
-  const validation = validateChannelSetupDraft(host, draftId);
+  const validation = await validateChannelSetupDraft(host, draftId);
   if (validation.status === "error") {
     throw new Error("Channel setup draft still has validation errors.");
   }
-  const reusableTest = getReusableChannelSetupTestResult(host, host.recentChannelSetupTests, draft);
+  const reusableTest = await getReusableChannelSetupTestResult(host, host.recentChannelSetupTests, draft);
   if (reusableTest) {
     host.recordDevDiagnostic({
       level: "info",
@@ -337,21 +340,23 @@ export async function finalizeChannelSetupDraft(
     label: draft.label ?? runtime.definition.catalog.label,
     enabled: draft.enabled ?? true,
     status: "connected" as const,
-    config: buildEphemeralChannelConnection(host, draft).config,
+    config: (await buildEphemeralChannelConnection(host, draft)).config,
     lastSyncAt: test.checkedAt,
     lastError: undefined,
   };
 
   const connection = draft.connectionId
-    ? host.updateIntegrationConnection(draft.connectionId, payload)
-    : host.updateIntegrationConnection(
-        host.createIntegrationConnection({
-          catalogId: draft.catalogId,
-          label: payload.label,
-          enabled: payload.enabled,
-          status: payload.status,
-          config: payload.config,
-        }).connectionId,
+    ? await host.updateIntegrationConnection(draft.connectionId, payload)
+    : await host.updateIntegrationConnection(
+        (
+          await host.createIntegrationConnection({
+            catalogId: draft.catalogId,
+            label: payload.label,
+            enabled: payload.enabled,
+            status: payload.status,
+            config: payload.config,
+          })
+        ).connectionId,
         {
           lastSyncAt: payload.lastSyncAt,
           lastError: payload.lastError,
@@ -375,7 +380,7 @@ export async function finalizeChannelSetupDraft(
   });
 
   host.recentChannelSetupTests.delete(draftId);
-  host.storage.channelSetupDrafts.delete(draftId);
+  await host.storage.channelSetupDrafts.delete(draftId);
 
   return {
     connection,
@@ -384,8 +389,11 @@ export async function finalizeChannelSetupDraft(
   };
 }
 
-export function createChannelSetupRepairDraft(host: ChannelSetupHost, connectionId: string): ChannelSetupDraft {
-  const connection = host.getIntegrationConnection(connectionId);
+export async function createChannelSetupRepairDraft(
+  host: ChannelSetupHost,
+  connectionId: string,
+): Promise<ChannelSetupDraft> {
+  const connection = await host.getIntegrationConnection(connectionId);
   return createChannelSetupDraft(host, {
     catalogId: connection.catalogId,
     connectionId,
@@ -393,8 +401,11 @@ export function createChannelSetupRepairDraft(host: ChannelSetupHost, connection
   });
 }
 
-export function createChannelSetupRotateSecretDraft(host: ChannelSetupHost, connectionId: string): ChannelSetupDraft {
-  const connection = host.getIntegrationConnection(connectionId);
+export async function createChannelSetupRotateSecretDraft(
+  host: ChannelSetupHost,
+  connectionId: string,
+): Promise<ChannelSetupDraft> {
+  const connection = await host.getIntegrationConnection(connectionId);
   return createChannelSetupDraft(host, {
     catalogId: connection.catalogId,
     connectionId,
@@ -406,8 +417,9 @@ export async function retestChannelConnection(
   host: ChannelSetupHost,
   connectionId: string,
 ): Promise<ChannelSetupTestResult> {
-  const repairDraft = createChannelSetupDraft(host, {
-    catalogId: host.getIntegrationConnection(connectionId).catalogId,
+  const connection = await host.getIntegrationConnection(connectionId);
+  const repairDraft = await createChannelSetupDraft(host, {
+    catalogId: connection.catalogId,
     connectionId,
     lifecycleMode: "retest",
   });

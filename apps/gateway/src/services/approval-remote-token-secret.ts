@@ -1,5 +1,5 @@
 import { ValidationError } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { SecretStoreService } from "./secret-store-service.js";
 
 const SECRET_REF_PREFIX = "keychain:goatcitadel:";
@@ -36,8 +36,8 @@ export class ApprovalRemoteTokenSecretService {
     this.delete(buildApprovalRemoteTokenSecretRef(tokenId));
   }
 
-  public reconcileExpired(limit = 100): number {
-    const candidates = this.tokens.listPendingExpired(limit);
+  public async reconcileExpired(limit = 100): Promise<number> {
+    const candidates = await this.tokens.listPendingExpired(limit);
     let expired = 0;
     let cleanupError: unknown;
     for (const candidate of candidates) {
@@ -47,7 +47,7 @@ export class ApprovalRemoteTokenSecretService {
         cleanupError ??= error;
         continue;
       }
-      const current = this.tokens.expirePendingIfExpired(candidate.tokenId);
+      const current = await this.tokens.expirePendingIfExpired(candidate.tokenId);
       if (current.state === "expired") {
         expired += 1;
       }

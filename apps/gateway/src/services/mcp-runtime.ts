@@ -269,7 +269,7 @@ export interface McpRequesterScopedToolCallRuntimeInput {
    * are written. It is never fired for a resolver/validation/initialize/
    * revalidation failure.
    */
-  effectDispatch: () => void;
+  effectDispatch: () => Promise<void>;
   /**
    * Composition-owned normalize+secret-scan of the fresh tools/list result the
    * runtime fetched under the REVALIDATION permit. The runtime never normalizes
@@ -310,7 +310,7 @@ function createRequesterScopedTransport(input: {
   attempt: Pick<McpRequesterScopedToolCallAttempt, "assertCurrent" | "connection" | "signal">;
   networkAllowlist: string[];
   remaining: () => number;
-  effectDispatch?: () => void;
+  effectDispatch?: () => Promise<void>;
   onEffectDispatched?: () => void;
 }): RequesterScopedTransport {
   const attempt = input.attempt;
@@ -322,7 +322,7 @@ function createRequesterScopedTransport(input: {
 
   const post = async (envelope: JsonRpcEnvelope, opts: { effect: boolean }): Promise<JsonRpcEnvelope | undefined> => {
     // Re-assert current generation/expiry after every await and before each write.
-    attempt.assertCurrent();
+    await attempt.assertCurrent();
     const headers: Record<string, string> = {
       Accept: "application/json, text/event-stream",
       "Content-Type": "application/json",
@@ -338,8 +338,14 @@ function createRequesterScopedTransport(input: {
     if (opts.effect) {
       // HX-305: fire the Chat/external-effect callbacks exactly once, right
       // before the effect-bearing bytes leave the process.
-      input.effectDispatch?.();
+      await input.effectDispatch?.();
       input.onEffectDispatched?.();
+      // The durable effect fence may itself perform asynchronous storage work.
+      // Re-read live requester authority after that await and before any
+      // effect-bearing bytes leave the process. A revoke during the fence is
+      // therefore fail-closed; `onEffectDispatched` already marks the outcome
+      // conservatively unknown for reconciliation.
+      await attempt.assertCurrent();
     }
     const response = await fetchAllowlistedOnce(url, {
       allowlist: input.networkAllowlist,
@@ -424,7 +430,7 @@ export async function invokeRequesterScopedMcpToolCall(
   let dispatcher: ReturnType<typeof createIsolatedGuardedDispatcher> | undefined;
   let dispatched = false;
   try {
-    attempt.assertCurrent();
+    await attempt.assertCurrent();
     const transport = createRequesterScopedTransport({
       attempt,
       networkAllowlist: input.networkAllowlist,
@@ -455,26 +461,26 @@ export async function invokeRequesterScopedMcpToolCall(
     // permit strictly before its write, hand the RAW result to the composition-
     // owned normalize+scan, then let the lease enforce the exact catalog/tool
     // SHA fence. Any failure here is pre-dispatch by construction.
-    attempt.assertCurrent();
-    attempt.consumeToolsListRevalidationPermit(attempt.authorizeToolsListRevalidation());
+    await attempt.assertCurrent();
+    await attempt.consumeToolsListRevalidationPermit(await attempt.authorizeToolsListRevalidation());
     const revalidationEnvelope = await transport.post(
       { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} },
       { effect: false },
     );
-    attempt.assertCurrent();
+    await attempt.assertCurrent();
     if (!revalidationEnvelope || revalidationEnvelope.error || !isRecord(revalidationEnvelope.result)) {
       throw new McpRequesterResolutionError("transport_pre_dispatch_failed");
     }
     const fresh = input.revalidate(revalidationEnvelope.result);
     // A revoke/abort that landed while the composition normalized the fresh
     // catalog discards the late revalidate result before it can be accepted.
-    attempt.assertCurrent();
-    attempt.acceptFreshToolsListRevalidation(fresh);
+    await attempt.assertCurrent();
+    await attempt.acceptFreshToolsListRevalidation(fresh);
 
     // Effect boundary: authorize + consume the tool-call permit at the write,
     // using the authorized raw remote tool name (never the caller-supplied alias).
-    attempt.assertCurrent();
-    const permit = attempt.consumeToolsCallPermit(attempt.authorizeToolsCall());
+    await attempt.assertCurrent();
+    const permit = await attempt.consumeToolsCallPermit(await attempt.authorizeToolsCall());
     const callEnvelope = await transport.post(
       {
         jsonrpc: "2.0",
@@ -484,7 +490,7 @@ export async function invokeRequesterScopedMcpToolCall(
       },
       { effect: true },
     );
-    attempt.assertCurrent();
+    await attempt.assertCurrent();
     return buildRequesterScopedToolCallResult(input.toolName, callEnvelope, attempt);
   } catch (error) {
     return buildRequesterScopedFailure(input.toolName, error, dispatched);
@@ -546,7 +552,7 @@ export async function discoverRequesterScopedMcpTools(
   const remaining = buildRequesterScopedDeadline(input.now ?? Date.now);
   let dispatcher: ReturnType<typeof createIsolatedGuardedDispatcher> | undefined;
   try {
-    attempt.assertCurrent();
+    await attempt.assertCurrent();
     const transport = createRequesterScopedTransport({
       attempt,
       networkAllowlist: input.networkAllowlist,
@@ -554,7 +560,7 @@ export async function discoverRequesterScopedMcpTools(
     });
     dispatcher = transport.dispatcher;
 
-    attempt.consumeOperationPermit(attempt.authorizeInitialize());
+    await attempt.consumeOperationPermit(await attempt.authorizeInitialize());
     await transport.post(
       {
         jsonrpc: "2.0",
@@ -568,16 +574,16 @@ export async function discoverRequesterScopedMcpTools(
       },
       { effect: false },
     );
-    attempt.assertCurrent();
-    attempt.consumeOperationPermit(attempt.authorizeInitializedNotification());
+    await attempt.assertCurrent();
+    await attempt.consumeOperationPermit(await attempt.authorizeInitializedNotification());
     await transport.post({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }, { effect: false });
-    attempt.assertCurrent();
-    attempt.consumeOperationPermit(attempt.authorizeToolsList());
+    await attempt.assertCurrent();
+    await attempt.consumeOperationPermit(await attempt.authorizeToolsList());
     const envelope = await transport.post(
       { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} },
       { effect: false },
     );
-    attempt.assertCurrent();
+    await attempt.assertCurrent();
     if (!envelope || envelope.error || !isRecord(envelope.result)) {
       throw new McpRequesterResolutionError("transport_pre_dispatch_failed");
     }
@@ -1725,7 +1731,7 @@ async function readBodyChunkWithDeadline(
           // in-flight read() with { done: true }, which would otherwise win the
           // race and surface a misleading missing-response error.
           reject(createMcpHttpBodyTimeoutError());
-          void cancelBodyReader(reader);
+          void cancelBodyReader(reader).catch(() => undefined);
         }, remainingMs);
       }),
     ]);

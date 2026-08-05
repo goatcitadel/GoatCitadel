@@ -18,7 +18,7 @@ import type {
   DurableRunTimelineEvent,
 } from "@goatcitadel/contracts";
 import { isDurableRunTerminal, NotFoundError, redactStructuredSecrets } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 
 const OUTPUT_PREVIEW_BYTES = 1_200;
 const ERROR_PREVIEW_BYTES = 320;
@@ -49,10 +49,10 @@ type BackgroundTaskProjectionStorage = Pick<
   | "durableRuns"
 >;
 
-export function projectDurableBackgroundTaskRail(
+export async function projectDurableBackgroundTaskRail(
   storage: BackgroundTaskProjectionStorage,
   input: DurableBackgroundTaskProjectionInput,
-): DurableBackgroundTaskRailResponse {
+): Promise<DurableBackgroundTaskRailResponse> {
   const parentRunId = input.parentRunId.trim();
   const workspaceId = input.workspaceId.trim();
   const sessionId = input.sessionId.trim();
@@ -60,10 +60,10 @@ export function projectDurableBackgroundTaskRail(
     throw new Error("parentRunId, workspaceId, and sessionId are required for the background-task rail");
   }
 
-  const parent = storage.durableRuns.getRun(parentRunId);
-  assertParentScope(storage, parent, workspaceId, sessionId);
-  const watchers = storage.durableChildWatchers.listByParent(parentRunId, WATCHER_READ_LIMIT);
-  const parentEvents = storage.durableRunEvents.listByRun(parentRunId, PARENT_SIGNAL_READ_LIMIT);
+  const parent = await storage.durableRuns.getRun(parentRunId);
+  await assertParentScope(storage, parent, workspaceId, sessionId);
+  const watchers = await storage.durableChildWatchers.listByParent(parentRunId, WATCHER_READ_LIMIT);
+  const parentEvents = await storage.durableRunEvents.listByRun(parentRunId, PARENT_SIGNAL_READ_LIMIT);
   const watchersComplete = watchers.length < WATCHER_READ_LIMIT;
   const parentSignalsComplete = parentEvents.length < PARENT_SIGNAL_READ_LIMIT;
   const unknowns: string[] = [];
@@ -73,8 +73,9 @@ export function projectDurableBackgroundTaskRail(
   }
   const delegationRuns = new Map<string, ChatDelegationRunRecord>();
 
-  const tasks = watchers.map((watcher) => {
-    const task = projectTask(
+  const tasks: DurableBackgroundTaskItem[] = [];
+  for (const watcher of watchers) {
+    const task = await projectTask(
       storage,
       watcher,
       parentEvents,
@@ -100,8 +101,8 @@ export function projectDurableBackgroundTaskRail(
     if (!task.toolCoverage.complete) {
       unknowns.push(`Tool coverage reached the ${TOOL_READ_LIMIT} item read boundary for child ${watcher.childRunId}.`);
     }
-    return task;
-  });
+    tasks.push(task);
+  }
 
   const synthesisRun = selectSynthesisRun(delegationRuns, sessionId);
   const synthesisTasks = synthesisRun ? tasks.filter((task) => task.delegationRunId === synthesisRun.runId) : [];
@@ -113,7 +114,7 @@ export function projectDurableBackgroundTaskRail(
   const missingTerminalChildRunIds = tasks
     .filter((task) => isTerminalBackgroundStatus(task.canonicalStatus) && task.output.availability !== "available")
     .map((task) => task.childRunId);
-  const synthesisStepCoverage = inspectSynthesisStepCoverage(storage, synthesisRun, synthesisTasks);
+  const synthesisStepCoverage = await inspectSynthesisStepCoverage(storage, synthesisRun, synthesisTasks);
   const uncoveredStepIds = synthesisStepCoverage.uncoveredStepIds;
   if (!synthesisStepCoverage.complete) {
     unknowns.push(`Delegation-step coverage reached the ${DELEGATION_STEP_READ_LIMIT} item read boundary.`);
@@ -263,7 +264,7 @@ export function normalizeDurableBackgroundTaskSignals(
   };
 }
 
-function projectTask(
+async function projectTask(
   storage: BackgroundTaskProjectionStorage,
   watcher: DurableChildWatcherRecord,
   parentEvents: DurableRunTimelineEvent[],
@@ -271,8 +272,8 @@ function projectTask(
   workspaceId: string,
   parentSessionId: string,
   delegationRuns: Map<string, ChatDelegationRunRecord>,
-): DurableBackgroundTaskItem {
-  const child = readOptional(() => storage.durableRuns.getRun(watcher.childRunId));
+): Promise<DurableBackgroundTaskItem> {
+  const child = await readOptional(() => storage.durableRuns.getRun(watcher.childRunId));
   const metadata = watcher.metadata ?? {};
   const delegationRunIdResult = readSemanticId(metadata, "delegationRunId");
   const stepIdResult = readSemanticId(metadata, "stepId");
@@ -296,7 +297,7 @@ function projectTask(
   ].every((result) => result.valid);
   const childSessionId = metadataSessionId ?? childPayloadSessionId;
   const childTurnId = metadataTurnId ?? childPayloadTurnId;
-  const childMeta = childSessionId ? readOptional(() => storage.chatSessionMeta.get(childSessionId)) : undefined;
+  const childMeta = childSessionId ? await readOptional(() => storage.chatSessionMeta.get(childSessionId)) : undefined;
   const childWorkspaceId = childMeta?.workspaceId ?? (childMeta ? "default" : undefined);
   const linkageConsistent =
     metadataIdsValid &&
@@ -306,12 +307,12 @@ function projectTask(
   const scopeVerified = linkageConsistent && childWorkspaceId === workspaceId;
 
   const delegationRun = delegationRunId
-    ? readOptional(() => storage.chatDelegationRuns.get(delegationRunId))
+    ? await readOptional(() => storage.chatDelegationRuns.get(delegationRunId))
     : undefined;
   const delegationMetadataComplete = watcher.source !== "chat_delegation" || Boolean(delegationRunId && stepId);
   const delegationScopeVerified =
     !delegationRunId || Boolean(delegationRun && delegationRun.sessionId === parentSessionId);
-  const step = stepId ? readOptional(() => storage.chatDelegationSteps.get(stepId)) : undefined;
+  const step = stepId ? await readOptional(() => storage.chatDelegationSteps.get(stepId)) : undefined;
   const stepLinkVerified =
     !stepId ||
     (step !== undefined &&
@@ -323,7 +324,7 @@ function projectTask(
       (!child || !isDurableRunTerminal(child.status) || isTerminalDelegationStepStatus(step.status)));
   const lineageVerified =
     Boolean(child) && scopeVerified && delegationMetadataComplete && delegationScopeVerified && stepLinkVerified;
-  const rawTools = lineageVerified && childTurnId ? storage.chatToolRuns.listByTurn(childTurnId) : [];
+  const rawTools = lineageVerified && childTurnId ? await storage.chatToolRuns.listByTurn(childTurnId) : [];
   const toolRecordsValid = rawTools.every(
     (tool) =>
       tool.turnId === childTurnId &&
@@ -350,8 +351,8 @@ function projectTask(
     observedCount: Math.min(rawTools.length, TOOL_READ_LIMIT),
     limit: TOOL_READ_LIMIT,
   };
-  const approvals = verified ? projectApprovals(storage, tools, childSessionId) : [];
-  const output = projectOutput(storage, child, step, childSessionId, childTurnId, verified);
+  const approvals = verified ? await projectApprovals(storage, tools, childSessionId) : [];
+  const output = await projectOutput(storage, child, step, childSessionId, childTurnId, verified);
   const canonicalStatus = verified ? (child?.status ?? "missing") : child ? "unknown" : "missing";
   const signalIntegrity = normalizeDurableBackgroundTaskSignals(parentEvents, watcher.watcherId, parentSignalsComplete);
   const blockers = buildBlockers({ watcher, child, approvals, output, verified, signalIntegrity, toolCoverage });
@@ -431,26 +432,28 @@ function projectTool(tool: ChatToolRunRecord): DurableBackgroundTaskItem["tools"
   };
 }
 
-function projectApprovals(
+async function projectApprovals(
   storage: Pick<BackgroundTaskProjectionStorage, "approvals">,
   tools: DurableBackgroundTaskItem["tools"],
   childSessionId: string | undefined,
-): DurableBackgroundTaskApprovalState[] {
+): Promise<DurableBackgroundTaskApprovalState[]> {
   const referenced = new Map(
     tools
       .filter((tool): tool is typeof tool & { approvalId: string } => Boolean(tool.approvalId))
       .map((tool) => [tool.approvalId, tool]),
   );
-  return [...referenced].map(([approvalId, tool]) => {
-    const approval = readOptional(() => storage.approvals.get(approvalId));
-    const linkage = approval?.linkage;
-    const linkageVerified =
-      childSessionId !== undefined &&
-      linkage !== undefined &&
-      linkage.sessionId === childSessionId &&
-      (!linkage.toolName || linkage.toolName === tool.toolName);
-    return approval && linkageVerified ? projectApproval(approval) : missingApproval(approvalId);
-  });
+  return Promise.all(
+    [...referenced].map(async ([approvalId, tool]) => {
+      const approval = await readOptional(() => storage.approvals.get(approvalId));
+      const linkage = approval?.linkage;
+      const linkageVerified =
+        childSessionId !== undefined &&
+        linkage !== undefined &&
+        linkage.sessionId === childSessionId &&
+        (!linkage.toolName || linkage.toolName === tool.toolName);
+      return approval && linkageVerified ? projectApproval(approval) : missingApproval(approvalId);
+    }),
+  );
 }
 
 function projectApproval(approval: ApprovalRequest): DurableBackgroundTaskApprovalState {
@@ -468,23 +471,23 @@ function missingApproval(approvalId: string): DurableBackgroundTaskApprovalState
   return { approvalId, status: "missing", links: [semanticLink("approval", approvalId, "Missing approval")] };
 }
 
-function projectOutput(
+async function projectOutput(
   storage: Pick<BackgroundTaskProjectionStorage, "chatMessages" | "chatTurnTraces">,
   child: DurableRunRecord | undefined,
   step: ChatDelegationStepRecord | undefined,
   childSessionId: string | undefined,
   childTurnId: string | undefined,
   verified: boolean,
-): DurableBackgroundTaskOutputEvidence {
+): Promise<DurableBackgroundTaskOutputEvidence> {
   if (!verified) return { availability: child ? "unknown" : "missing" };
   if (!child || !isDurableRunTerminal(child.status)) return { availability: "not_terminal" };
   if (step?.output?.trim()) return outputEvidence("delegation_step", step.stepId, step.output);
   if (childSessionId && childTurnId) {
-    const trace = readOptional(() => storage.chatTurnTraces.get(childTurnId));
+    const trace = await readOptional(() => storage.chatTurnTraces.get(childTurnId));
     if (!trace || trace.turnId !== childTurnId || trace.sessionId !== childSessionId) {
       return { availability: "unknown" };
     }
-    const message = trace.assistantMessageId ? storage.chatMessages.get(trace.assistantMessageId) : undefined;
+    const message = trace.assistantMessageId ? await storage.chatMessages.get(trace.assistantMessageId) : undefined;
     if (
       message?.content.trim() &&
       message.sessionId === childSessionId &&
@@ -604,13 +607,13 @@ function buildLineageEntry(task: DurableBackgroundTaskItem): DurableBackgroundTa
   ];
 }
 
-function inspectSynthesisStepCoverage(
+async function inspectSynthesisStepCoverage(
   storage: Pick<BackgroundTaskProjectionStorage, "chatDelegationSteps">,
   synthesisRun: ChatDelegationRunRecord | undefined,
   synthesisTasks: DurableBackgroundTaskItem[],
-): { complete: boolean; integrityValid: boolean; uncoveredStepIds: string[] } {
+): Promise<{ complete: boolean; integrityValid: boolean; uncoveredStepIds: string[] }> {
   if (!synthesisRun) return { complete: true, integrityValid: true, uncoveredStepIds: [] };
-  const steps = storage.chatDelegationSteps.listByRun(synthesisRun.runId);
+  const steps = await storage.chatDelegationSteps.listByRun(synthesisRun.runId);
   const observed = steps.slice(0, DELEGATION_STEP_READ_LIMIT);
   const integrityValid = observed.every(
     (step) =>
@@ -646,14 +649,14 @@ function selectSynthesisRun(
     .sort((left, right) => right.startedAt.localeCompare(left.startedAt) || right.runId.localeCompare(left.runId))[0];
 }
 
-function assertParentScope(
+async function assertParentScope(
   storage: Pick<BackgroundTaskProjectionStorage, "chatSessionMeta">,
   parent: DurableRunRecord,
   workspaceId: string,
   sessionId: string,
-): void {
+): Promise<void> {
   const payloadSessionId = readString(parent.payload, "sessionId");
-  const meta = storage.chatSessionMeta.get(sessionId);
+  const meta = await storage.chatSessionMeta.get(sessionId);
   const storedWorkspaceId = meta?.workspaceId ?? (meta ? "default" : undefined);
   if (
     parent.workflowKey !== "chat.turn.execute" ||
@@ -680,9 +683,9 @@ function isTerminalDelegationStepStatus(status: ChatDelegationStepRecord["status
   return status === "completed" || status === "failed" || status === "skipped" || status === "cancelled";
 }
 
-function readOptional<T>(read: () => T): T | undefined {
+async function readOptional<T>(read: () => T | Promise<T>): Promise<T | undefined> {
   try {
-    return read();
+    return await read();
   } catch (error) {
     if (error instanceof NotFoundError || (error instanceof Error && /not found/i.test(error.message)))
       return undefined;

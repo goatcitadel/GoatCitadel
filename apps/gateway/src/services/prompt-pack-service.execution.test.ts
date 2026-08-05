@@ -17,7 +17,7 @@ import type {
   PromptPackTestRecord,
 } from "@goatcitadel/contracts";
 import {
-  PromptPackService,
+  PromptPackService as RuntimePromptPackService,
   pickPromptPackAutoScoreRun,
   promptPackExecutionRequiresDurable,
   ensurePromptPackDurableReadiness,
@@ -31,6 +31,19 @@ import {
   createTest,
   createTrace,
 } from "./prompt-pack-service-test-fixtures.js";
+
+class PromptPackService extends RuntimePromptPackService {
+  public constructor(
+    context: ConstructorParameters<typeof RuntimePromptPackService>[0] & { gatewaySql?: unknown },
+    dependencies: ConstructorParameters<typeof RuntimePromptPackService>[1],
+  ) {
+    const storage = context.storage as unknown as Record<string, unknown>;
+    if (storage.db === undefined && context.gatewaySql !== undefined) {
+      storage.db = context.gatewaySql;
+    }
+    super(context, dependencies);
+  }
+}
 
 describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
   it("treats shipped chat, cowork, and code prompt-pack runs as durable-owned", () => {
@@ -69,7 +82,7 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
     ).toThrow(/durable-owned code execution is unavailable/i);
   });
 
-  it("does not bootstrap prompt-pack session allows over an inherited active deny grant", () => {
+  it("does not bootstrap prompt-pack session allows over an inherited active deny grant", async () => {
     const createGrant = vi.fn();
     const createTtlGrant = vi.fn();
     const listActive = vi.fn((scope?: string, scopeRef?: string) =>
@@ -127,7 +140,7 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
       } as never,
     );
 
-    (
+    await (
       service as unknown as {
         ensurePromptPackSessionToolGrants(
           sessionId: string,
@@ -140,7 +153,7 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
             thinkingLevel: "standard";
           },
           prompt: string,
-        ): void;
+        ): Promise<void>;
       }
     ).ensurePromptPackSessionToolGrants(
       "session-1",
@@ -164,7 +177,7 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
     expect(createGrant).not.toHaveBeenCalled();
   });
 
-  it("inherits default-workspace denies when prompt-pack session metadata is missing", () => {
+  it("inherits default-workspace denies when prompt-pack session metadata is missing", async () => {
     const createGrant = vi.fn();
     const createTtlGrant = vi.fn();
     const listActive = vi.fn((scope?: string, scopeRef?: string) =>
@@ -222,7 +235,7 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
       } as never,
     );
 
-    (
+    await (
       service as unknown as {
         ensurePromptPackSessionToolGrants(
           sessionId: string,
@@ -235,7 +248,7 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
             thinkingLevel: "standard";
           },
           prompt: string,
-        ): void;
+        ): Promise<void>;
       }
     ).ensurePromptPackSessionToolGrants(
       "session-without-meta",
@@ -311,7 +324,7 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
     expect(createChatSession).not.toHaveBeenCalled();
   });
 
-  it("blocks benchmark launch before creating a benchmark row when durable preflight fails", () => {
+  it("blocks benchmark launch before creating a benchmark row when durable preflight fails", async () => {
     const benchmarkInsert = vi.fn();
     const service = new PromptPackService(
       {
@@ -362,16 +375,16 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
       },
     );
 
-    expect(() =>
+    await expect(
       service.runPromptPackBenchmark("pack-1", {
         testCodes: ["TEST-01"],
         providers: [{ providerId: "openai", model: "gpt-5.4" }],
       }),
-    ).toThrow(/preflight failed/i);
+    ).rejects.toThrow(/preflight failed/i);
     expect(benchmarkInsert).not.toHaveBeenCalled();
   });
 
-  it("can launch a benchmark for every test in the pack from the backend", () => {
+  it("can launch a benchmark for every test in the pack from the backend", async () => {
     const firstTest = createTest("test-1", "TEST-01");
     const secondTest = createTest("test-2", "TEST-02");
     const benchmarkInsert = vi.fn();
@@ -420,7 +433,7 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
       },
     );
 
-    service.runPromptPackBenchmark("pack-1", {
+    await service.runPromptPackBenchmark("pack-1", {
       allTests: true,
       providers: [{ providerId: "openai", model: "gpt-5.4" }],
     });
@@ -433,7 +446,7 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
     );
   });
 
-  it("imports prompt packs, exposes list APIs, and rejects markdown without tests", () => {
+  it("imports prompt packs, exposes list APIs, and rejects markdown without tests", async () => {
     const tests = [createTest("test-imported", "TEST-C901")];
     const pack = createPack("pack-imported");
     const replacePackTests = vi.fn(() => ({ pack, tests }));
@@ -465,7 +478,7 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
     );
     vi.spyOn(service as never, "refreshPromptPackExportFile").mockImplementation(() => undefined);
 
-    const imported = service.importPromptPack({
+    const imported = await service.importPromptPack({
       name: " Imported Pack ",
       sourceLabel: "prompt-pack-fixture.md",
       content: buildPromptPackMarkdown([
@@ -485,12 +498,12 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
         tests: expect.arrayContaining([expect.objectContaining({ code: "TEST-C901" })]),
       }),
     );
-    expect(service.listPromptPacks()).toEqual([pack]);
-    expect(service.listPromptPackTests(pack.packId)).toEqual(tests);
-    expect(() => service.importPromptPack({ content: "# Empty" })).toThrow(/No tests found/);
+    expect(await service.listPromptPacks()).toEqual([pack]);
+    expect(await service.listPromptPackTests(pack.packId)).toEqual(tests);
+    await expect(service.importPromptPack({ content: "# Empty" })).rejects.toThrow(/No tests found/);
   });
 
-  it("exports prompt-pack reports with latest and immutable snapshot metadata", () => {
+  it("exports prompt-pack reports with latest and immutable snapshot metadata", async () => {
     const rootDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "gc-prompt-pack-export-"));
     try {
       const pack = createPack("pack-1");
@@ -507,18 +520,18 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
         runs: [run],
       });
 
-      const missing = service.getPromptPackExport(pack.packId);
+      const missing = await service.getPromptPackExport(pack.packId);
       expect(missing.exists).toBe(false);
       expect(missing.latestSnapshotExists).toBe(false);
 
-      const exported = service.exportPromptPack(pack.packId);
+      const exported = await service.exportPromptPack(pack.packId);
       expect(exported.exists).toBe(true);
       expect(exported.latestSnapshotExists).toBe(true);
       expect(exported.snapshotCount).toBe(1);
       expect(fsSync.existsSync(exported.path)).toBe(true);
       expect(fsSync.existsSync(exported.latestSnapshotPath ?? "")).toBe(true);
 
-      const noOpReset = service.resetPromptPackRunsAndScores(pack.packId, {
+      const noOpReset = await service.resetPromptPackRunsAndScores(pack.packId, {
         clearRuns: false,
         clearScores: false,
       });
@@ -531,7 +544,7 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
     }
   });
 
-  it("stores manual score reviews and lists them only for matching pack tests", () => {
+  it("stores manual score reviews and lists them only for matching pack tests", async () => {
     const test = createTest("test-review", "TEST-REVIEW");
     const run: PromptPackRunRecord = {
       ...createRun("run-review", "completed", "2026-03-14T00:00:01.000Z"),
@@ -577,7 +590,7 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
     );
     vi.spyOn(service as never, "refreshPromptPackExportFile").mockImplementation(() => undefined);
 
-    const review = service.scorePromptPackTest({
+    const review = await service.scorePromptPackTest({
       packId: "pack-1",
       testId: test.testId,
       runId: run.runId,
@@ -600,8 +613,8 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
     });
     expect(review.notes).toBe("Manual scoring from operator review.");
     expect(createReview).toHaveBeenCalledWith(expect.objectContaining({ packId: "pack-1", testId: test.testId }));
-    expect(service.listPromptPackTestReviews("pack-1", test.testId)).toEqual([review]);
-    expect(() => service.listPromptPackTestReviews("pack-1", "other-test")).toThrow(/does not belong/);
+    expect(await service.listPromptPackTestReviews("pack-1", test.testId)).toEqual([review]);
+    await expect(service.listPromptPackTestReviews("pack-1", "other-test")).rejects.toThrow(/does not belong/);
   });
 
   it("scores the latest matching prompt-pack run by code and session", async () => {
@@ -1008,7 +1021,7 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
     );
   });
 
-  it("runs replay regression comparisons and emits improvement signals for each capability delta", () => {
+  it("runs replay regression comparisons and emits improvement signals for each capability delta", async () => {
     const test = createTest("test-1", "TEST-C777");
     const currentScore: PromptPackScoreRecord = {
       ...createScore("score-current", "run-current", "2026-03-16T00:00:00.000Z", 1),
@@ -1114,10 +1127,10 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
       },
     );
 
-    const { regressionRunId } = service.runPromptPackReplayRegression("pack-1", {
+    const { regressionRunId } = await service.runPromptPackReplayRegression("pack-1", {
       testCodes: ["TEST-C777"],
     });
-    const status = service.getPromptPackReplayRegressionStatus(regressionRunId);
+    const status = await service.getPromptPackReplayRegressionStatus(regressionRunId);
 
     expect(status.run.status).toBe("completed");
     expect(status.results).toHaveLength(5);
@@ -1131,7 +1144,7 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
     );
   });
 
-  it("builds prompt-pack capability trends and threshold breaches from v3 scores and run failures", () => {
+  it("builds prompt-pack capability trends and threshold breaches from v3 scores and run failures", async () => {
     const score: PromptPackAutoScoreRecord = {
       autoScoreId: "auto-trend",
       packId: "pack-1",
@@ -1179,7 +1192,7 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
       },
     );
 
-    const trends = service.getPromptPackCapabilityTrends("pack-1");
+    const trends = await service.getPromptPackCapabilityTrends("pack-1");
 
     expect(trends.items.find((item) => item.capability === "taskSuccess")?.breached).toBe(true);
     expect(trends.items.find((item) => item.capability === "run_failure_rate")?.breached).toBe(true);
@@ -2326,7 +2339,7 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
       run: resumedRun,
     } as never);
 
-    expect(service.resumeInterruptedBenchmarkRuns()).toBe(1);
+    expect(await service.resumeInterruptedBenchmarkRuns()).toBe(1);
     await Promise.all([...backgroundTasks]);
 
     expect(runBackgroundWork).toHaveBeenCalledWith(
@@ -2705,10 +2718,10 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
       run: completedRun,
     } as never);
 
-    expect(service.resumeInterruptedBenchmarkRuns()).toBe(1);
-    await Promise.resolve();
+    expect(await service.resumeInterruptedBenchmarkRuns()).toBe(1);
+    await vi.waitFor(() => expect(runPromptPackTest).toHaveBeenCalledTimes(1));
 
-    const cancelled = service.cancelPromptPackBenchmark(benchmarkRun.benchmark_run_id);
+    const cancelled = await service.cancelPromptPackBenchmark(benchmarkRun.benchmark_run_id);
     expect(cancelled.run.status).toBe("cancelled");
 
     resolveRun?.(completedRun);
@@ -2829,7 +2842,7 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
       },
     );
 
-    service.cancelPromptPackBenchmark(benchmarkRun.benchmark_run_id);
+    await service.cancelPromptPackBenchmark(benchmarkRun.benchmark_run_id);
 
     const resumedService = new PromptPackService(
       {
@@ -2864,7 +2877,7 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
     );
 
     expect(benchmarkRun.status).toBe("cancelled");
-    expect(resumedService.resumeInterruptedBenchmarkRuns()).toBe(0);
+    expect(await resumedService.resumeInterruptedBenchmarkRuns()).toBe(0);
   });
 
   it("prefers the newest completed run when auto-score selection has no explicit run id", () => {

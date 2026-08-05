@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { McpInvokeRequest, McpInvokeResponse, ToolInvokeRequest, ToolInvokeResult } from "@goatcitadel/contracts";
-import { Storage } from "@goatcitadel/storage";
+import { Storage, createSqliteAsyncStorage } from "@goatcitadel/storage";
 import {
   executeApprovedExternalRuntimePendingAction,
   type ApprovedExternalRuntimePendingActionPort,
@@ -49,7 +49,7 @@ describe("external runtime approval adapter", () => {
     overrides: Partial<ApprovedExternalRuntimePendingActionPort> = {},
   ): ApprovedExternalRuntimePendingActionPort {
     return {
-      storage,
+      storage: createSqliteAsyncStorage(storage),
       executeApprovedAction: vi.fn(async () => undefined),
       enrichMcpInvokePolicyContext: vi.fn((input: McpInvokeRequest) => input),
       invokeApprovedMcpRuntime: vi.fn(async () => ({ ok: true, output: "mcp output" })),

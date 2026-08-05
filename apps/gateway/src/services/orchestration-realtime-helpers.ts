@@ -7,7 +7,7 @@ interface OrchestrationRealtimePublisher {
     topic: string,
     payload: Record<string, unknown>,
     options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
-  ): void;
+  ): Promise<unknown>;
 }
 
 function buildOrchestrationRealtimeLinks(input: {
@@ -20,7 +20,7 @@ function buildOrchestrationRealtimeLinks(input: {
   };
 }
 
-export function publishOrchestrationRealtime(
+export async function publishOrchestrationRealtime(
   host: OrchestrationRealtimePublisher,
   payload: {
     runId: string;
@@ -39,8 +39,8 @@ export function publishOrchestrationRealtime(
     nextPhaseId?: string;
     error?: string;
   },
-): void {
-  host.publishRealtime("orchestration_event", "orchestration", payload, {
+): Promise<void> {
+  await host.publishRealtime("orchestration_event", "orchestration", payload, {
     eventClass: "domain_fact",
     eventAuthority: "retained_stream",
     links: buildOrchestrationRealtimeLinks({

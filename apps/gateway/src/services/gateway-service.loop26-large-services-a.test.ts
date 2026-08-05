@@ -68,7 +68,7 @@ async function collect<T>(source: AsyncGenerator<T>, limit = 10): Promise<T[]> {
 }
 
 describe("GatewayService loop 26 stream and runtime behavior", () => {
-  it("persists stream chunks with active-stream sequencing and bounded purge cadence", () => {
+  it("persists stream chunks with active-stream sequencing and bounded purge cadence", async () => {
     const active = {
       nextSequence: 7,
       isActive: () => true,
@@ -92,7 +92,7 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
       },
     });
 
-    const chunk = GatewayService.prototype.persistChatStreamChunk.call(
+    const chunk = await GatewayService.prototype.persistChatStreamChunk.call(
       gateway,
       {
         type: "delta",
@@ -133,7 +133,7 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
     expect(gateway.storage.chatStreamEvents.purgeBefore).toHaveBeenCalledWith(expect.stringMatching(/T.*Z$/));
   });
 
-  it("streams a fresh durable turn after its initial message-start event", () => {
+  it("streams a fresh durable turn after its initial message-start event", async () => {
     const append = vi.fn();
     const gateway = createGatewayHarness({
       chatTurnExecutionRegistry: new ChatTurnExecutionRegistry(),
@@ -150,13 +150,13 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
       },
     });
 
-    const producer = GatewayService.prototype.registerActiveChatTurnStream.call(
+    const producer = await GatewayService.prototype.registerActiveChatTurnStream.call(
       gateway,
       "session-1",
       "turn-1",
       "run-1",
     );
-    const delta = GatewayService.prototype.persistChatStreamChunk.call(
+    const delta = await GatewayService.prototype.persistChatStreamChunk.call(
       gateway,
       {
         type: "delta",
@@ -178,13 +178,17 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
     );
   });
 
-  it("persists the pending thinking tail before terminal content", () => {
+  it("persists the pending thinking tail before terminal content", async () => {
     const gateway = createGatewayHarness({
       chatTurnExecutionRegistry: new ChatTurnExecutionRegistry(),
     });
-    const producer = GatewayService.prototype.registerActiveChatTurnStream.call(gateway, "session-1", "turn-thinking");
+    const producer = await GatewayService.prototype.registerActiveChatTurnStream.call(
+      gateway,
+      "session-1",
+      "turn-thinking",
+    );
 
-    GatewayService.prototype.persistChatStreamChunk.call(
+    await GatewayService.prototype.persistChatStreamChunk.call(
       gateway,
       {
         type: "thinking_delta",
@@ -195,7 +199,7 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
       undefined,
       producer,
     );
-    const done = GatewayService.prototype.persistChatStreamChunk.call(
+    const done = await GatewayService.prototype.persistChatStreamChunk.call(
       gateway,
       {
         type: "message_done",
@@ -219,7 +223,7 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
     expect(done).toMatchObject({ type: "message_done", sequence: 3 });
   });
 
-  it("persists a projected tool-result chunk without mutating the executable record", () => {
+  it("persists a projected tool-result chunk without mutating the executable record", async () => {
     const gateway = createGatewayHarness();
     const toolRun = {
       toolRunId: "tool-secret-1",
@@ -240,7 +244,7 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
       finishedAt: "2026-03-22T12:00:01.000Z",
     };
 
-    const chunk = GatewayService.prototype.persistChatStreamChunk.call(gateway, {
+    const chunk = await GatewayService.prototype.persistChatStreamChunk.call(gateway, {
       type: "tool_result",
       sessionId: "session-1",
       turnId: "turn-1",
@@ -264,20 +268,23 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
     );
   });
 
-  it("redacts credentials split at every provider delta boundary before persistence", () => {
+  it("redacts credentials split at every provider delta boundary before persistence", async () => {
     const content = "Authorization: Bearer hunter2";
     for (let split = 1; split < content.length; split += 1) {
       const gateway = createGatewayHarness();
-      const chunks = [content.slice(0, split), content.slice(split)].map((delta) =>
-        GatewayService.prototype.persistChatStreamChunk.call(gateway, {
-          type: "delta",
-          sessionId: "session-split",
-          turnId: "turn-split",
-          messageId: "message-split",
-          delta,
-        } as never),
-      );
-      const done = GatewayService.prototype.persistChatStreamChunk.call(gateway, {
+      const chunks = [];
+      for (const delta of [content.slice(0, split), content.slice(split)]) {
+        chunks.push(
+          await GatewayService.prototype.persistChatStreamChunk.call(gateway, {
+            type: "delta",
+            sessionId: "session-split",
+            turnId: "turn-split",
+            messageId: "message-split",
+            delta,
+          } as never),
+        );
+      }
+      const done = await GatewayService.prototype.persistChatStreamChunk.call(gateway, {
         type: "message_done",
         sessionId: "session-split",
         turnId: "turn-split",
@@ -642,7 +649,7 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
     });
   });
 
-  it("detects durable live-tail state from stream rows and trace fallback", () => {
+  it("detects durable live-tail state from stream rows and trace fallback", async () => {
     const gateway = createGatewayHarness({
       storage: {
         gatewaySql: {
@@ -655,12 +662,14 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
       },
     });
 
-    expect((GatewayService.prototype as any).isDurableTurnStillStreaming.call(gateway, "turn-1")).toBe(true);
-    expect(
+    await expect((GatewayService.prototype as any).isDurableTurnStillStreaming.call(gateway, "turn-1")).resolves.toBe(
+      true,
+    );
+    await expect(
       (GatewayService.prototype as any).isDurableTurnStillStreaming.call(gateway, "turn-1", {
         includeInterrupts: false,
       }),
-    ).toBe(false);
+    ).resolves.toBe(false);
     expect(gateway.storage.durableRuns.getRun).toHaveBeenCalledWith("run-from-stream");
 
     const fallbackGateway = createGatewayHarness({
@@ -675,7 +684,9 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
       },
     });
 
-    expect((GatewayService.prototype as any).isDurableTurnStillStreaming.call(fallbackGateway, "turn-2")).toBe(false);
+    await expect(
+      (GatewayService.prototype as any).isDurableTurnStillStreaming.call(fallbackGateway, "turn-2"),
+    ).resolves.toBe(false);
 
     const missingGateway = createGatewayHarness({
       storage: {
@@ -693,7 +704,9 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
       },
     });
 
-    expect((GatewayService.prototype as any).isDurableTurnStillStreaming.call(missingGateway, "turn-3")).toBe(false);
+    await expect(
+      (GatewayService.prototype as any).isDurableTurnStillStreaming.call(missingGateway, "turn-3"),
+    ).resolves.toBe(false);
   });
 
   it("adds ephemeral stream envelopes without retaining them", async () => {
@@ -908,7 +921,7 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
     );
   });
 
-  it("uses chat session workspace metadata when evaluating tool access without explicit workspace", () => {
+  it("uses chat session workspace metadata when evaluating tool access without explicit workspace", async () => {
     const evaluateAccess = vi.fn((input: Record<string, unknown>) => ({ allowed: true, input }));
     const gateway = createGatewayHarness({
       policyEngine: { evaluateAccess },
@@ -925,13 +938,13 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
       },
     });
 
-    expect(
+    await expect(
       GatewayService.prototype.evaluateToolAccess.call(gateway, {
         sessionId: "session-1",
         toolName: "browser.search",
         args: { q: "status" },
       } as never),
-    ).toMatchObject({ allowed: true });
+    ).resolves.toMatchObject({ allowed: true });
     expect(evaluateAccess).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: "session-1",
@@ -943,7 +956,7 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
     );
   });
 
-  it("normalizes docs ingest file sources through access evaluation before policy checks", () => {
+  it("normalizes docs ingest file sources through access evaluation before policy checks", async () => {
     const evaluateAccess = vi.fn((input: Record<string, unknown>) => ({ allowed: true, input }));
     const gateway = createGatewayHarness({
       config: {
@@ -980,7 +993,7 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
       },
     });
 
-    GatewayService.prototype.evaluateToolAccess.call(gateway, {
+    await GatewayService.prototype.evaluateToolAccess.call(gateway, {
       sessionId: "session-1",
       agentId: "agent",
       toolName: "docs.ingest",
@@ -996,7 +1009,7 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
     );
   });
 
-  it("applies runtime browser defaults before tool access evaluation", () => {
+  it("applies runtime browser defaults before tool access evaluation", async () => {
     const evaluateAccess = vi.fn((input: Record<string, unknown>) => ({ allowed: true, input }));
     const gateway = createGatewayHarness({
       config: {
@@ -1024,7 +1037,7 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
       },
     });
 
-    GatewayService.prototype.evaluateToolAccess.call(gateway, {
+    await GatewayService.prototype.evaluateToolAccess.call(gateway, {
       sessionId: "session-1",
       toolName: "browser.search",
       args: { query: "status" },

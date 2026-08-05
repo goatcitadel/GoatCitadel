@@ -46,7 +46,7 @@ export function createEffectAwareInvokeToolForTest(
   return async (request, options) => {
     const result = await invokeTool(request);
     if (result.outcome === "executed") {
-      options.executionFence();
+      await options.executionFence();
     }
     return result;
   };

@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PendingApprovalAction, ToolPolicyConfig } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage, Storage } from "@goatcitadel/storage";
 import { ToolPolicyEngine } from "./engine.js";
 
-function createStorageStub(): Storage {
+function createStorageStub(): Storage & AsyncStorage {
   return {
     approvals: {
       create: vi.fn((input) => ({
@@ -40,7 +40,7 @@ function createStorageStub(): Storage {
         run: vi.fn(),
       })),
     },
-  } as unknown as Storage;
+  } as unknown as Storage & AsyncStorage;
 }
 
 function createConfig(overrides: Partial<ToolPolicyConfig> = {}): ToolPolicyConfig {
@@ -60,7 +60,7 @@ function createConfig(overrides: Partial<ToolPolicyConfig> = {}): ToolPolicyConf
 }
 
 describe("ToolPolicyEngine package tail coverage", () => {
-  it("evaluates sparse structural targets without manufacturing blocked paths or hosts", () => {
+  it("evaluates sparse structural targets without manufacturing blocked paths or hosts", async () => {
     const engine = new ToolPolicyEngine(
       createConfig({
         tools: { profile: "danger", approvalMode: "bypass", allow: [], deny: [] },
@@ -69,28 +69,34 @@ describe("ToolPolicyEngine package tail coverage", () => {
     );
 
     expect(
-      engine.evaluateAccess({
-        toolName: "fs.move",
-        args: { to: "./workspace/moved.txt" },
-        agentId: "agent",
-        sessionId: "session",
-      }).allowed,
+      (
+        await engine.evaluateAccess({
+          toolName: "fs.move",
+          args: { to: "./workspace/moved.txt" },
+          agentId: "agent",
+          sessionId: "session",
+        })
+      ).allowed,
     ).toBe(true);
     expect(
-      engine.evaluateAccess({
-        toolName: "docs.ingest",
-        args: { sourceType: "url", backend: "firecrawl" },
-        agentId: "agent",
-        sessionId: "session",
-      }).allowed,
+      (
+        await engine.evaluateAccess({
+          toolName: "docs.ingest",
+          args: { sourceType: "url", backend: "firecrawl" },
+          agentId: "agent",
+          sessionId: "session",
+        })
+      ).allowed,
     ).toBe(true);
     expect(
-      engine.evaluateAccess({
-        toolName: "browser.navigate",
-        args: {},
-        agentId: "agent",
-        sessionId: "session",
-      }).allowed,
+      (
+        await engine.evaluateAccess({
+          toolName: "browser.navigate",
+          args: {},
+          agentId: "agent",
+          sessionId: "session",
+        })
+      ).allowed,
     ).toBe(true);
   });
 
@@ -133,7 +139,7 @@ describe("ToolPolicyEngine package tail coverage", () => {
 
   it("rejects malformed approved action payloads before policy execution", async () => {
     const storage = createStorageStub();
-    vi.mocked(storage.pendingApprovalActions.find).mockReturnValue({
+    vi.mocked(storage.pendingApprovalActions.find).mockResolvedValue({
       approvalId: "approval-malformed",
       actionType: "tool.invoke",
       request: {},

@@ -12,7 +12,7 @@ import {
   type GovernedLifecycleEventRecord,
   type SkillRuntimeState,
 } from "@goatcitadel/contracts";
-import { GovernedLifecycleEventRepository, type DatabaseClient } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 
 /**
  * HX-402 P2 — skill/capability-domain producer for the immutable P0 governed
@@ -49,14 +49,12 @@ const CAPABILITY_CANDIDATE_SOURCE_KIND = "capability_candidate_version" as const
 
 // ── shared SQL-host adapter (P1 pattern) ──────────────────────────────
 
-interface SkillGovernedSqlHost {
-  readonly dialect: "sqlite" | "postgres";
-  prepare(sql: string): {
-    get(...args: unknown[]): unknown;
-    all(...args: unknown[]): unknown[];
-    run(...args: unknown[]): unknown;
-  };
-  runImmediateTransaction?<T>(callback: () => T): T;
+export interface AsyncGovernedLifecycleEventRepository {
+  find(eventId: string): Promise<GovernedLifecycleEventRecord | undefined>;
+  createWithJourney(
+    input: GovernedLifecycleEventRecord,
+    buildJourneyEvents: (stored: GovernedLifecycleEventRecord) => readonly GovernanceJourneyEventRecord[],
+  ): Promise<{ event: GovernedLifecycleEventRecord; journeyEvents: GovernanceJourneyEventRecord[] }>;
 }
 
 /**
@@ -66,27 +64,21 @@ interface SkillGovernedSqlHost {
  * inner transaction a nested-safe savepoint, so `createWithJourney` composes
  * inside the producer's own mutation transaction.
  */
-export function createSkillGovernedLifecycleRepository(host: SkillGovernedSqlHost): GovernedLifecycleEventRepository {
-  const runImmediateTransaction = host.runImmediateTransaction;
-  if (typeof runImmediateTransaction !== "function") {
-    throw new ConflictError({
-      code: "STATE_CONFLICT",
-      message: "Governed skill lifecycle evidence requires transactional gateway storage.",
-    });
-  }
-  const client: DatabaseClient = {
-    dialect: host.dialect,
-    prepare: (sql: string) => host.prepare(sql) as ReturnType<DatabaseClient["prepare"]>,
-    exec: () => {
-      throw new Error("Governed skill lifecycle adapter does not execute raw SQL scripts.");
-    },
-    close: () => {
-      throw new Error("Governed skill lifecycle adapter does not own the database connection.");
-    },
-    transaction: <T>(_mode: "deferred" | "immediate" | "exclusive", callback: () => T): T =>
-      runImmediateTransaction.call(host, callback) as T,
+export function createSkillGovernedLifecycleRepository(
+  storage: Pick<Storage, "governanceJourneyEvents" | "governedLifecycleEvents" | "runImmediateTransaction">,
+): AsyncGovernedLifecycleEventRepository {
+  return {
+    find: (eventId) => storage.governedLifecycleEvents.find(eventId),
+    createWithJourney: (input, buildJourneyEvents) =>
+      storage.runImmediateTransaction(async () => {
+        const event = await storage.governedLifecycleEvents.create(input);
+        const journeyEvents: GovernanceJourneyEventRecord[] = [];
+        for (const journeyEvent of buildJourneyEvents(event)) {
+          journeyEvents.push(await storage.governanceJourneyEvents.create(journeyEvent));
+        }
+        return { event, journeyEvents };
+      }),
   };
-  return new GovernedLifecycleEventRepository(client);
 }
 
 // ── skill-state approval binding ──────────────────────────────────────
@@ -531,10 +523,10 @@ const SKILL_STATE_OPERATIONS: Record<SkillRuntimeState, "enabled" | "disabled" |
  * byte-identically; the same identity with different material conflicts inside
  * the owner.
  */
-export function persistApprovedSkillStateEvidence(
-  repository: GovernedLifecycleEventRepository,
+export async function persistApprovedSkillStateEvidence(
+  repository: AsyncGovernedLifecycleEventRepository,
   input: ApprovedSkillStateEvidenceInput,
-): GovernedSkillLifecycleEvidence {
+): Promise<GovernedSkillLifecycleEvidence> {
   const operation = SKILL_STATE_OPERATIONS[input.state];
   const skillId = requireCanonicalId(input.skillId, "skill ID");
   const eventId = `skill-lifecycle:${requireCanonicalId(input.authority.approvalId, "approval ID")}:${skillId}`;
@@ -607,7 +599,7 @@ export function persistApprovedSkillStateEvidence(
     recordedAt: input.authority.occurredAt,
   };
   assertJourney(journeyEvent, "Approved skill-state Journey event failed its canonical contract.");
-  return writeCoupledEvidence(repository, record, journeyEvent);
+  return await writeCoupledEvidence(repository, record, journeyEvent);
 }
 
 export interface ApprovedActivationPolicyEvidenceInput {
@@ -616,10 +608,10 @@ export interface ApprovedActivationPolicyEvidenceInput {
   activationEventId: string;
 }
 
-export function persistApprovedActivationPolicyEvidence(
-  repository: GovernedLifecycleEventRepository,
+export async function persistApprovedActivationPolicyEvidence(
+  repository: AsyncGovernedLifecycleEventRepository,
   input: ApprovedActivationPolicyEvidenceInput,
-): GovernedSkillLifecycleEvidence {
+): Promise<GovernedSkillLifecycleEvidence> {
   const eventId = `skill-lifecycle:${requireCanonicalId(input.authority.approvalId, "approval ID")}:activation-policy`;
   const targetId = "skill-activation-policy:global";
   const record: GovernedLifecycleEventRecord = {
@@ -689,7 +681,7 @@ export function persistApprovedActivationPolicyEvidence(
     recordedAt: input.authority.occurredAt,
   };
   assertJourney(journeyEvent, "Approved activation-policy Journey event failed its canonical contract.");
-  return writeCoupledEvidence(repository, record, journeyEvent);
+  return await writeCoupledEvidence(repository, record, journeyEvent);
 }
 
 // ── approved capability-candidate evidence ────────────────────────────
@@ -708,10 +700,10 @@ const CAPABILITY_ACTION_OPERATIONS: Record<CapabilityLifecycleApprovalAction, Ca
   candidate_rolled_back: "candidate_rolled_back",
 };
 
-export function persistApprovedCapabilityCandidateEvidence(
-  repository: GovernedLifecycleEventRepository,
+export async function persistApprovedCapabilityCandidateEvidence(
+  repository: AsyncGovernedLifecycleEventRepository,
   input: ApprovedCapabilityCandidateEvidenceInput,
-): GovernedSkillLifecycleEvidence {
+): Promise<GovernedSkillLifecycleEvidence> {
   const candidateId = requireCanonicalId(input.candidateId, "candidate ID");
   const operation = CAPABILITY_ACTION_OPERATIONS[input.action];
   const eventId = `capability-lifecycle:${requireCanonicalId(input.authority.approvalId, "approval ID")}`;
@@ -787,7 +779,7 @@ export function persistApprovedCapabilityCandidateEvidence(
     recordedAt: input.authority.occurredAt,
   };
   assertJourney(journeyEvent, "Approved capability-candidate Journey event failed its canonical contract.");
-  return writeCoupledEvidence(repository, record, journeyEvent);
+  return await writeCoupledEvidence(repository, record, journeyEvent);
 }
 
 // ── review-only capability proposal evidence (approval-free) ──────────
@@ -807,10 +799,10 @@ export interface CapabilityProposalCreatedEvidenceInput {
  * non-callable. The governed `proposal_created` kind declares
  * `sourceRequired: true, approvalRequired: false` in the frozen registry.
  */
-export function persistCapabilityProposalCreatedEvidence(
-  repository: GovernedLifecycleEventRepository,
+export async function persistCapabilityProposalCreatedEvidence(
+  repository: AsyncGovernedLifecycleEventRepository,
   input: CapabilityProposalCreatedEvidenceInput,
-): GovernedSkillLifecycleEvidence {
+): Promise<GovernedSkillLifecycleEvidence> {
   const proposalId = requireCanonicalId(input.proposalId, "proposal ID");
   const eventId = `capability-lifecycle:proposal:${proposalId}`;
   const record: GovernedLifecycleEventRecord = {
@@ -870,7 +862,7 @@ export function persistCapabilityProposalCreatedEvidence(
     recordedAt: input.occurredAt,
   };
   assertJourney(journeyEvent, "Capability proposal Journey event failed its canonical contract.");
-  return writeCoupledEvidence(repository, record, journeyEvent);
+  return await writeCoupledEvidence(repository, record, journeyEvent);
 }
 
 // ── module-private fail-safe system authority (P1 brand pattern) ──────
@@ -945,10 +937,10 @@ export interface SkillSystemDisableEvidenceInput {
  * mutation, its `skill_activation_events` source row, and this evidence pair
  * commit inside one transaction.
  */
-export function persistSkillSystemDisableEvidence(
-  repository: GovernedLifecycleEventRepository,
+export async function persistSkillSystemDisableEvidence(
+  repository: AsyncGovernedLifecycleEventRepository,
   input: SkillSystemDisableEvidenceInput,
-): GovernedSkillLifecycleEvidence {
+): Promise<GovernedSkillLifecycleEvidence> {
   if (!isSkillGovernanceSystemAuthority(input.authority)) {
     throw new ConflictError({
       code: "STATE_CONFLICT",
@@ -1017,7 +1009,7 @@ export function persistSkillSystemDisableEvidence(
     recordedAt: input.occurredAt,
   };
   assertJourney(journeyEvent, "Skill system-disable Journey event failed its canonical contract.");
-  return writeCoupledEvidence(repository, record, journeyEvent);
+  return await writeCoupledEvidence(repository, record, journeyEvent);
 }
 
 export interface CapabilitySystemRevokeEvidenceInput {
@@ -1033,10 +1025,10 @@ export interface CapabilitySystemRevokeEvidenceInput {
  * system-actor-only in the frozen registry and reachable only through the
  * WeakSet-verified module-private authority.
  */
-export function persistCapabilitySystemRevokeEvidence(
-  repository: GovernedLifecycleEventRepository,
+export async function persistCapabilitySystemRevokeEvidence(
+  repository: AsyncGovernedLifecycleEventRepository,
   input: CapabilitySystemRevokeEvidenceInput,
-): GovernedSkillLifecycleEvidence {
+): Promise<GovernedSkillLifecycleEvidence> {
   if (!isSkillGovernanceSystemAuthority(input.authority)) {
     throw new ConflictError({
       code: "STATE_CONFLICT",
@@ -1117,7 +1109,7 @@ export function persistCapabilitySystemRevokeEvidence(
     recordedAt: input.occurredAt,
   };
   assertJourney(journeyEvent, "Capability system-revoke Journey event failed its canonical contract.");
-  return writeCoupledEvidence(repository, record, journeyEvent);
+  return await writeCoupledEvidence(repository, record, journeyEvent);
 }
 
 // ── recovered-effect error taxonomy (P1's terminal/defer split) ───────
@@ -1185,12 +1177,12 @@ export class CapabilityLifecycleApplyError extends Error {
 
 // ── local helpers ─────────────────────────────────────────────────────
 
-function writeCoupledEvidence(
-  repository: GovernedLifecycleEventRepository,
+async function writeCoupledEvidence(
+  repository: AsyncGovernedLifecycleEventRepository,
   record: GovernedLifecycleEventRecord,
   journeyEvent: GovernanceJourneyEventRecord,
-): GovernedSkillLifecycleEvidence {
-  const { event, journeyEvents } = repository.createWithJourney(record, () => [journeyEvent]);
+): Promise<GovernedSkillLifecycleEvidence> {
+  const { event, journeyEvents } = await repository.createWithJourney(record, () => [journeyEvent]);
   const storedJourney = journeyEvents[0];
   if (!storedJourney) {
     throw new ConflictError({

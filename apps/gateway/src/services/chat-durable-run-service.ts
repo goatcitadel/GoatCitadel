@@ -21,7 +21,7 @@ import {
   verifyChatRoutedContextSnapshot,
   verifyChatTurnCapabilityCatalogBinding,
   verifyChatTurnCapabilitySkillBindings,
-  type Storage,
+  type AsyncStorage as Storage,
 } from "@goatcitadel/storage";
 import {
   resolvePreparedTurnMode,
@@ -164,20 +164,20 @@ export interface GeneralChatPostCommitProgress {
    * memory prewarm remains explicitly best-effort cache warming; meaningful
    * async effects must use `enqueueDurableEffect` below.
    */
-  runEffect(effect: GeneralChatPostCommitEffect, callback: () => void): boolean;
+  runEffect(effect: GeneralChatPostCommitEffect, callback: () => void | Promise<void>): Promise<boolean>;
   /**
    * Commits the parent receipt first, then invokes an idempotent notification
    * publisher outside the transaction. Reconciliation republishes an existing
    * receipt so a crash between receipt commit and delivery cannot lose it.
    */
-  publishEffect(effect: GeneralChatPostCommitEffect, callback: () => void): boolean;
+  publishEffect(effect: GeneralChatPostCommitEffect, callback: () => void | Promise<void>): Promise<boolean>;
   /**
    * Atomically creates a deterministic durable child run and records the
    * parent's enqueue receipt. Child execution is lease-governed and may be
    * retried after a crash, so provider-backed work is at-least-once rather
    * than exactly-once.
    */
-  enqueueDurableEffect(input: GeneralChatPostCommitDurableEffectInput): string | undefined;
+  enqueueDurableEffect(input: GeneralChatPostCommitDurableEffectInput): Promise<string | undefined>;
 }
 
 export type ChatDurableThreadEventType =
@@ -236,12 +236,12 @@ export function resolveCanonicalChatDurableWaitForEvent(trace: ChatTurnTraceReco
 }
 
 interface DurableRunStore {
-  getRun?(runId: string): DurableRunRecord;
+  getRun?(runId: string): Promise<DurableRunRecord>;
   getLatestCheckpointByKind?(
     runId: string,
     checkpointKind: DurableCheckpointRecord["checkpointKind"],
-  ): DurableCheckpointRecord | undefined;
-  lockFreshActiveLeaseForUpdate?(runId: string, expectedLeaseOwnerId: string): DurableRunRecord | undefined;
+  ): Promise<DurableCheckpointRecord | undefined>;
+  lockFreshActiveLeaseForUpdate?(runId: string, expectedLeaseOwnerId: string): Promise<DurableRunRecord | undefined>;
   updateRun(input: {
     runId: string;
     status?: DurableRunStatus;
@@ -253,41 +253,45 @@ interface DurableRunStore {
     clearLease?: boolean;
     metadata?: Record<string, unknown>;
     expectedVersion?: number;
-  }): DurableRunRecord;
+  }): Promise<DurableRunRecord>;
   createCheckpoint(input: {
     runId: string;
     checkpointKind: DurableCheckpointRecord["checkpointKind"];
     state: Record<string, unknown>;
     createdAt?: string;
-  }): DurableCheckpointRecord;
+  }): Promise<DurableCheckpointRecord>;
 }
 
 interface ChatToolRunSummaryStore {
-  listByTurn(turnId: string): Array<{
-    toolRunId: string;
-    toolName: string;
-    status: string;
-    startedAt?: string;
-    finishedAt?: string;
-  }>;
+  listByTurn(turnId: string): Promise<
+    Array<{
+      toolRunId: string;
+      toolName: string;
+      status: string;
+      startedAt?: string;
+      finishedAt?: string;
+    }>
+  >;
 }
 
 interface ChatToolArtifactSummaryStore {
-  listByTurn(turnId: string): Array<{
-    artifactId: string;
-    toolRunId?: string;
-    toolName?: string;
-    contentType?: string;
-    byteLength?: number;
-    storageRelPath?: string;
-    snippet?: string;
-  }>;
+  listByTurn(turnId: string): Promise<
+    Array<{
+      artifactId: string;
+      toolRunId?: string;
+      toolName?: string;
+      contentType?: string;
+      byteLength?: number;
+      storageRelPath?: string;
+      snippet?: string;
+    }>
+  >;
 }
 
 export interface ChatDurableRunBeginDeps {
   shouldUseDurableExecution: boolean;
-  runImmediateTransaction?<T>(callback: () => T): T;
-  createDurableRun(input: DurableRunCreateRequest): DurableRunRecord;
+  runImmediateTransaction?<T>(callback: () => Promise<T>): Promise<T>;
+  createDurableRun(input: DurableRunCreateRequest): Promise<DurableRunRecord>;
   buildDurablePayloadRecord(
     prepared: PreparedAgentChatTurn,
     input: ChatSendMessageRequest,
@@ -305,7 +309,7 @@ export interface ChatDurableRunBeginDeps {
       sourceTurnId?: string;
     },
     durableRunId?: string,
-  ): void;
+  ): Promise<unknown>;
   /** When present, the initial durable chat-turn trace is persisted through this store. */
   chatTurnTraces?: Pick<Storage["chatTurnTraces"], "get" | "create">;
   capabilityCatalogSnapshots?: Pick<Storage["capabilityCatalogSnapshots"], "create">;
@@ -313,36 +317,36 @@ export interface ChatDurableRunBeginDeps {
   sessionMutationAdmissions?: Pick<Storage["sessionMutationAdmissions"], "bindCapabilityProfile">;
   routedContextSnapshots?: Pick<Storage["routedContextSnapshots"], "create">;
   skillLifecycle?: Pick<Storage["skillLifecycle"], "list">;
-  assertTurnAdmissionWrite?(prepared: PreparedAgentChatTurn): void;
-  bindTurnAdmissionToDurableRun?(prepared: PreparedAgentChatTurn, durableRunId: string): void;
+  assertTurnAdmissionWrite?(prepared: PreparedAgentChatTurn): Promise<void>;
+  bindTurnAdmissionToDurableRun?(prepared: PreparedAgentChatTurn, durableRunId: string): Promise<void>;
   /** Selects retry/edit sibling branches inside the durable admission transaction. */
-  activatePreparedBranch?(prepared: PreparedAgentChatTurn): void;
-  onDurableRunCommitted?(run: DurableRunRecord): void;
+  activatePreparedBranch?(prepared: PreparedAgentChatTurn): Promise<void>;
+  onDurableRunCommitted?(run: DurableRunRecord): Promise<void>;
   requestDurableRunProcessing(runId: string): void;
 }
 
 export interface ChatDurableRunFinalizeDeps {
-  runImmediateTransaction<T>(callback: () => T): T;
+  runImmediateTransaction<T>(callback: () => Promise<T>): Promise<T>;
   durableRuns: DurableRunStore;
   chatToolRuns: ChatToolRunSummaryStore;
   chatToolArtifacts: ChatToolArtifactSummaryStore;
-  chatMessages?: Pick<{ get(messageId: string): ChatMessageRecord | undefined }, "get">;
+  chatMessages?: Pick<{ get(messageId: string): Promise<ChatMessageRecord | undefined> }, "get">;
   recordDurableTimelineEvent(
     durableRunId: string,
     eventType: DurableRunTimelineEvent["eventType"],
     payload?: Record<string, unknown>,
-  ): void;
+  ): Promise<void>;
   chatTurnTraces: Pick<Storage["chatTurnTraces"], "patch">;
-  resolvePostCommitEligibility(sessionId: string): PostCommitEligibility;
+  resolvePostCommitEligibility(sessionId: string): Promise<PostCommitEligibility>;
 }
 
-export function beginDurableChatRun(
+export async function beginDurableChatRun(
   deps: ChatDurableRunBeginDeps,
   prepared: PreparedAgentChatTurn,
   input: ChatSendMessageRequest,
   threadEventType: ChatDurableThreadEventType,
   options?: { mutationLifecycle?: ChatStreamMutationLifecycle; runId?: string },
-): DurableRunRecord | undefined {
+): Promise<DurableRunRecord | undefined> {
   const inputCarriesContextRefs = hasOwnRoutedContextRefs(input);
   const provisionalRoutedContextSnapshot = readPreparedRoutedContextSnapshot(prepared);
   if (!deps.shouldUseDurableExecution) {
@@ -387,12 +391,12 @@ export function beginDurableChatRun(
     throw new Error(`Durable Chat turn ${prepared.turnId} requires atomic mutation-admission binding.`);
   }
   let run!: DurableRunRecord;
-  const admit = (beforeStreamPersist?: () => void) => {
+  const admit = async (beforeStreamPersist?: () => void) => {
     if (prepared.turnAdmission) {
       if (!deps.assertTurnAdmissionWrite) {
         throw new Error(`Durable Chat turn ${prepared.turnId} cannot verify its mutation admission.`);
       }
-      deps.assertTurnAdmissionWrite(prepared);
+      await deps.assertTurnAdmissionWrite(prepared);
     }
     if (prepared.capabilityProfile && !prepared.capabilityProfile.identity.durableRunId) {
       const { hashes: _hashes, ...draft } = prepared.capabilityProfile;
@@ -408,21 +412,23 @@ export function beginDurableChatRun(
         prepared.capabilityProfile,
       );
     }
-    assertPreparedChatCapabilityAdmissionBindings(deps, prepared);
+    await assertPreparedChatCapabilityAdmissionBindings(deps, prepared);
     if (prepared.capabilityProfile) {
       if (!deps.sessionMutationAdmissions) {
         throw new Error(`Durable Chat turn ${prepared.turnId} cannot bind its capability profile admission.`);
       }
-      bindPreparedChatCapabilityProfileAdmission(
+      await bindPreparedChatCapabilityProfileAdmission(
         { sessionMutationAdmissions: deps.sessionMutationAdmissions },
         prepared,
       );
     }
     if (prepared.capabilityCatalogSnapshot && deps.capabilityCatalogSnapshots) {
-      prepared.capabilityCatalogSnapshot = deps.capabilityCatalogSnapshots.create(prepared.capabilityCatalogSnapshot);
+      prepared.capabilityCatalogSnapshot = await deps.capabilityCatalogSnapshots.create(
+        prepared.capabilityCatalogSnapshot,
+      );
     }
     if (prepared.capabilityProfile && deps.chatTurnCapabilityProfiles) {
-      prepared.capabilityProfile = deps.chatTurnCapabilityProfiles.create(prepared.capabilityProfile);
+      prepared.capabilityProfile = await deps.chatTurnCapabilityProfiles.create(prepared.capabilityProfile);
     }
     let routedContextSnapshot: ChatRoutedContextSnapshotRecord | undefined;
     if (provisionalRoutedContextSnapshot) {
@@ -434,7 +440,7 @@ export function beginDurableChatRun(
         profileHash: prepared.capabilityProfile.hashes.profileHash,
       });
       assertPreparedRoutedContextSnapshotBinding(prepared, routedContextSnapshot);
-      routedContextSnapshot = deps.routedContextSnapshots.create(routedContextSnapshot);
+      routedContextSnapshot = await deps.routedContextSnapshots.create(routedContextSnapshot);
       verifyChatRoutedContextSnapshot(routedContextSnapshot);
       assertPreparedRoutedContextSnapshotBinding(prepared, routedContextSnapshot);
       writePreparedRoutedContextSnapshot(prepared, routedContextSnapshot);
@@ -443,7 +449,7 @@ export function beginDurableChatRun(
       deps.buildDurablePayloadRecord(prepared, input, threadEventType, runId),
       routedContextSnapshot,
     );
-    run = deps.createDurableRun({
+    run = await deps.createDurableRun({
       runId,
       workflowKey: "chat.turn.execute",
       payload: durablePayload,
@@ -463,10 +469,10 @@ export function beginDurableChatRun(
       if (!deps.bindTurnAdmissionToDurableRun) {
         throw new Error(`Durable Chat turn ${prepared.turnId} cannot bind its mutation admission.`);
       }
-      deps.bindTurnAdmissionToDurableRun(prepared, run.runId);
+      await deps.bindTurnAdmissionToDurableRun(prepared, run.runId);
     }
     if (deps.chatTurnTraces) {
-      persistInitialDurableChatTurnTrace({ chatTurnTraces: deps.chatTurnTraces }, prepared, input, run);
+      await persistInitialDurableChatTurnTrace({ chatTurnTraces: deps.chatTurnTraces }, prepared, input, run);
     }
     if (prepared.branchKind === "retry" || prepared.branchKind === "edit") {
       // A retry/edit's lineage parent is the source turn's parent, while its
@@ -477,10 +483,10 @@ export function beginDurableChatRun(
       if (!deps.activatePreparedBranch) {
         throw new Error(`Durable Chat ${prepared.branchKind} turn ${prepared.turnId} cannot select its branch.`);
       }
-      deps.activatePreparedBranch(prepared);
+      await deps.activatePreparedBranch(prepared);
     }
     beforeStreamPersist?.();
-    deps.persistChatStreamChunk(
+    await deps.persistChatStreamChunk(
       {
         type: "message_start",
         sessionId: prepared.session.sessionId,
@@ -494,14 +500,14 @@ export function beginDurableChatRun(
     );
   };
   if (deps.runImmediateTransaction) {
-    deps.runImmediateTransaction(admit);
+    await deps.runImmediateTransaction(admit);
     options?.mutationLifecycle?.markCommitted();
   } else {
     // Compatibility for legacy/profile-less hosts: durable creation itself is
     // already committed before the first stream chunk is attempted.
-    admit(() => options?.mutationLifecycle?.markCommitted());
+    await admit(() => options?.mutationLifecycle?.markCommitted());
   }
-  deps.onDurableRunCommitted?.(run);
+  await deps.onDurableRunCommitted?.(run);
   deps.requestDurableRunProcessing(run.runId);
   return run;
 }
@@ -607,17 +613,17 @@ function assertDurablePayloadContainsNoRawRoutedContext(payload: Record<string, 
  * Idempotent: if a trace already exists for the turn (e.g. a retry re-entered the
  * durable path) it is left untouched.
  */
-export function persistInitialDurableChatTurnTrace(
+export async function persistInitialDurableChatTurnTrace(
   deps: { chatTurnTraces: Pick<Storage["chatTurnTraces"], "get" | "create"> },
   prepared: PreparedAgentChatTurn,
   input: ChatSendMessageRequest,
   run: DurableRunRecord,
-): void {
-  persistInitialChatTurnTrace(deps, prepared, input, run);
+): Promise<void> {
+  await persistInitialChatTurnTrace(deps, prepared, input, run);
 }
 
 /** Persist the immutable capability evidence before any provider/tool execution. */
-export function persistPreparedChatCapabilityAdmission(
+export async function persistPreparedChatCapabilityAdmission(
   deps: {
     capabilityCatalogSnapshots: Pick<Storage["capabilityCatalogSnapshots"], "create">;
     chatTurnCapabilityProfiles: Pick<Storage["chatTurnCapabilityProfiles"], "create">;
@@ -625,7 +631,7 @@ export function persistPreparedChatCapabilityAdmission(
     skillLifecycle?: Pick<Storage["skillLifecycle"], "list">;
   },
   prepared: PreparedAgentChatTurn,
-): void {
+): Promise<void> {
   if (Boolean(prepared.capabilityProfile) !== Boolean(prepared.capabilityCatalogSnapshot)) {
     throw new Error(`Chat turn ${prepared.turnId} has an incomplete capability admission bundle.`);
   }
@@ -635,16 +641,16 @@ export function persistPreparedChatCapabilityAdmission(
   if (!prepared.capabilityCatalogSnapshot) {
     throw new Error(`Chat turn ${prepared.turnId} has an incomplete capability admission bundle.`);
   }
-  assertPreparedChatCapabilityAdmissionBindings(deps, prepared);
-  bindPreparedChatCapabilityProfileAdmission(deps, prepared);
-  prepared.capabilityCatalogSnapshot = deps.capabilityCatalogSnapshots.create(prepared.capabilityCatalogSnapshot);
-  prepared.capabilityProfile = deps.chatTurnCapabilityProfiles.create(prepared.capabilityProfile);
+  await assertPreparedChatCapabilityAdmissionBindings(deps, prepared);
+  await bindPreparedChatCapabilityProfileAdmission(deps, prepared);
+  prepared.capabilityCatalogSnapshot = await deps.capabilityCatalogSnapshots.create(prepared.capabilityCatalogSnapshot);
+  prepared.capabilityProfile = await deps.chatTurnCapabilityProfiles.create(prepared.capabilityProfile);
 }
 
-function bindPreparedChatCapabilityProfileAdmission(
+async function bindPreparedChatCapabilityProfileAdmission(
   deps: { sessionMutationAdmissions: Pick<Storage["sessionMutationAdmissions"], "bindCapabilityProfile"> },
   prepared: PreparedAgentChatTurn,
-): void {
+): Promise<void> {
   const admission = prepared.turnAdmission;
   const profile = prepared.capabilityProfile;
   if (!admission || !profile) {
@@ -666,7 +672,7 @@ function bindPreparedChatCapabilityProfileAdmission(
   if (!requestRuntimeClaim && !durableClaim) {
     throw new Error(`Chat turn ${prepared.turnId} capability admission has no active request or durable claim.`);
   }
-  deps.sessionMutationAdmissions.bindCapabilityProfile({
+  await deps.sessionMutationAdmissions.bindCapabilityProfile({
     admissionId: admission.identity.admissionId,
     sessionIncarnationId: admission.identity.sessionIncarnationId,
     workspaceId: admission.identity.workspaceId,
@@ -680,12 +686,12 @@ function bindPreparedChatCapabilityProfileAdmission(
   });
 }
 
-function assertPreparedChatCapabilityAdmissionBindings(
+async function assertPreparedChatCapabilityAdmissionBindings(
   deps: {
     skillLifecycle?: Pick<Storage["skillLifecycle"], "list">;
   },
   prepared: PreparedAgentChatTurn,
-): void {
+): Promise<void> {
   if (!prepared.capabilityProfile || !prepared.capabilityCatalogSnapshot) {
     return;
   }
@@ -693,22 +699,25 @@ function assertPreparedChatCapabilityAdmissionBindings(
   if (prepared.capabilityProfile.selection.trustedSkills.length > 0 && !deps.skillLifecycle) {
     throw new Error(`Chat turn ${prepared.turnId} cannot verify its trusted skill lifecycle bindings.`);
   }
-  verifyChatTurnCapabilitySkillBindings(prepared.capabilityProfile, deps.skillLifecycle?.list() ?? []);
+  verifyChatTurnCapabilitySkillBindings(
+    prepared.capabilityProfile,
+    deps.skillLifecycle ? await deps.skillLifecycle.list() : [],
+  );
 }
 
 /**
  * Persist the initial running trace that makes a streamed turn durable enough
  * for cancellation/idempotency ownership before its first SSE payload.
  */
-export function persistInitialChatTurnTrace(
+export async function persistInitialChatTurnTrace(
   deps: { chatTurnTraces: Pick<Storage["chatTurnTraces"], "get" | "create"> },
   prepared: PreparedAgentChatTurn,
   input: ChatSendMessageRequest,
   run?: DurableRunRecord,
-): void {
+): Promise<void> {
   const routedContextSnapshot = readPreparedRoutedContextSnapshot(prepared);
   try {
-    const existing = deps.chatTurnTraces.get(prepared.turnId);
+    const existing = await deps.chatTurnTraces.get(prepared.turnId);
     assertTraceRoutedContextBinding(existing, routedContextSnapshot);
     return;
   } catch (error) {
@@ -716,7 +725,7 @@ export function persistInitialChatTurnTrace(
       throw error;
     }
   }
-  deps.chatTurnTraces.create({
+  await deps.chatTurnTraces.create({
     turnId: prepared.turnId,
     sessionId: prepared.session.sessionId,
     userMessageId: prepared.userEventId,
@@ -790,13 +799,13 @@ function assertTraceRoutedContextBinding(
 }
 
 /** Patch a chat-turn trace, tolerating a trace that was never created for the turn. */
-function patchDurableTraceIfPresent(
+async function patchDurableTraceIfPresent(
   chatTurnTraces: Pick<Storage["chatTurnTraces"], "patch">,
   turnId: string,
   input: Parameters<Storage["chatTurnTraces"]["patch"]>[1],
-): void {
+): Promise<void> {
   try {
-    chatTurnTraces.patch(turnId, input);
+    await chatTurnTraces.patch(turnId, input);
   } catch (error) {
     if (!(error instanceof NotFoundError)) {
       throw error;
@@ -804,23 +813,23 @@ function patchDurableTraceIfPresent(
   }
 }
 
-export function finalizeDurableChatRun(
+export async function finalizeDurableChatRun(
   deps: ChatDurableRunFinalizeDeps,
   runId: string,
   prepared: PreparedAgentChatTurn,
   trace: ChatTurnTraceRecord,
   expectedLeaseOwnerId?: string,
-): void {
+): Promise<void> {
   const now = new Date().toISOString();
-  const currentRun = deps.durableRuns.getRun?.(runId);
+  const currentRun = await deps.durableRuns.getRun?.(runId);
   const admittedPayload = currentRun
     ? requireExactAdmittedV2ChatFinalizeContext(currentRun, prepared, trace)
     : undefined;
   const heartbeatIdentity =
     currentRun && admittedPayload ? readExactSystemHeartbeatFinalizeIdentity(currentRun, admittedPayload) : undefined;
   if (currentRun && isDurableRunTerminal(currentRun.status)) {
-    verifyTerminalDurableChatReplayAuthority(deps, currentRun, prepared, trace);
-    patchDurableTraceIfPresent(deps.chatTurnTraces, prepared.turnId, {
+    await verifyTerminalDurableChatReplayAuthority(deps, currentRun, prepared, trace);
+    await patchDurableTraceIfPresent(deps.chatTurnTraces, prepared.turnId, {
       durable: {
         runId,
         status: currentRun.status,
@@ -833,8 +842,8 @@ export function finalizeDurableChatRun(
     if (heartbeatIdentity && trace.status === "waiting_for_approval") {
       throw new Error(`System heartbeat ${runId} cannot retain waiting-for-approval authority.`);
     }
-    verifyWaitingDurableChatReplayAuthority(deps, currentRun, prepared, trace);
-    patchDurableTraceIfPresent(deps.chatTurnTraces, prepared.turnId, {
+    await verifyWaitingDurableChatReplayAuthority(deps, currentRun, prepared, trace);
+    await patchDurableTraceIfPresent(deps.chatTurnTraces, prepared.turnId, {
       durable: {
         runId,
         status: "waiting",
@@ -844,7 +853,7 @@ export function finalizeDurableChatRun(
     return;
   }
   if (currentRun && currentRun.status !== "running") {
-    patchDurableTraceIfPresent(deps.chatTurnTraces, prepared.turnId, {
+    await patchDurableTraceIfPresent(deps.chatTurnTraces, prepared.turnId, {
       durable: {
         runId,
         status: currentRun.status,
@@ -852,11 +861,11 @@ export function finalizeDurableChatRun(
     });
     return;
   }
-  const lockCommittableRun = (): DurableRunRecord | undefined => {
+  const lockCommittableRun = async (): Promise<DurableRunRecord | undefined> => {
     if (expectedLeaseOwnerId) {
-      return deps.durableRuns.lockFreshActiveLeaseForUpdate?.(runId, expectedLeaseOwnerId);
+      return await deps.durableRuns.lockFreshActiveLeaseForUpdate?.(runId, expectedLeaseOwnerId);
     }
-    const latest = deps.durableRuns.getRun?.(runId) ?? currentRun;
+    const latest = (await deps.durableRuns.getRun?.(runId)) ?? currentRun;
     return latest?.status === "running" ? latest : undefined;
   };
   const heartbeatApprovalBlocked = Boolean(heartbeatIdentity && trace.status === "waiting_for_approval");
@@ -877,16 +886,16 @@ export function finalizeDurableChatRun(
         },
       }
     : trace;
-  const checkpointState = buildDurableCheckpointState(deps, prepared, effectiveTrace, {
+  const checkpointState = await buildDurableCheckpointState(deps, prepared, effectiveTrace, {
     systemHeartbeat: Boolean(heartbeatIdentity),
   });
   const postCommitEligibility = heartbeatIdentity
     ? SYSTEM_HEARTBEAT_POST_COMMIT_ELIGIBILITY
-    : deps.resolvePostCommitEligibility(prepared.session.sessionId);
+    : await deps.resolvePostCommitEligibility(prepared.session.sessionId);
   if (heartbeatApprovalBlocked) {
     assertNoSystemHeartbeatDecisionEvidence(currentRun!);
-    runChatFinalizeTransaction(deps, () => {
-      const latest = lockCommittableRun();
+    await runChatFinalizeTransaction(deps, async () => {
+      const latest = await lockCommittableRun();
       if (!latest) return;
       const generationId = randomUUID();
       const terminalCheckpointState = Object.fromEntries(
@@ -914,7 +923,7 @@ export function finalizeDurableChatRun(
       });
       const metadata = withChatTurnRuntimeAuthority(pendingMetadata, authority);
       const anchoredCheckpointState = withChatTurnRuntimeAuthorityCheckpoint(terminalCheckpointState, authority);
-      deps.durableRuns.updateRun({
+      await deps.durableRuns.updateRun({
         runId,
         status: "failed",
         updatedAt: now,
@@ -924,9 +933,13 @@ export function finalizeDurableChatRun(
         metadata,
         expectedVersion: latest.version,
       });
-      deps.durableRuns.createCheckpoint({ runId, checkpointKind: "run_failed", state: anchoredCheckpointState });
-      deps.recordDurableTimelineEvent(runId, "run_failed", anchoredCheckpointState);
-      deps.chatTurnTraces.patch(prepared.turnId, {
+      await deps.durableRuns.createCheckpoint({
+        runId,
+        checkpointKind: "run_failed",
+        state: anchoredCheckpointState,
+      });
+      await deps.recordDurableTimelineEvent(runId, "run_failed", anchoredCheckpointState);
+      await deps.chatTurnTraces.patch(prepared.turnId, {
         status: "failed",
         finishedAt: now,
         failure: effectiveTrace.failure,
@@ -942,8 +955,8 @@ export function finalizeDurableChatRun(
     trace.status === "waiting_for_tool"
   ) {
     const waitForEvent = resolveCanonicalChatDurableWaitForEvent(trace);
-    runChatFinalizeTransaction(deps, () => {
-      const latest = lockCommittableRun();
+    await runChatFinalizeTransaction(deps, async () => {
+      const latest = await lockCommittableRun();
       if (!latest) return;
       const generationId = randomUUID();
       const transitionMetadata = resetChatTurnRuntimeTransitionMetadata(
@@ -971,7 +984,7 @@ export function finalizeDurableChatRun(
         { ...checkpointState, waitForEvent },
         authority,
       );
-      deps.durableRuns.updateRun({
+      await deps.durableRuns.updateRun({
         runId,
         status: "waiting",
         updatedAt: now,
@@ -981,13 +994,13 @@ export function finalizeDurableChatRun(
         metadata,
         expectedVersion: latest.version,
       });
-      deps.durableRuns.createCheckpoint({
+      await deps.durableRuns.createCheckpoint({
         runId,
         checkpointKind: "run_waiting",
         state: anchoredCheckpointState,
       });
-      deps.recordDurableTimelineEvent(runId, "run_waiting", anchoredCheckpointState);
-      patchDurableTraceIfPresent(deps.chatTurnTraces, prepared.turnId, {
+      await deps.recordDurableTimelineEvent(runId, "run_waiting", anchoredCheckpointState);
+      await patchDurableTraceIfPresent(deps.chatTurnTraces, prepared.turnId, {
         durable: {
           runId,
           status: "waiting",
@@ -1000,8 +1013,8 @@ export function finalizeDurableChatRun(
   if (trace.status === "cancelled") {
     if (heartbeatIdentity) assertNoSystemHeartbeatDecisionEvidence(currentRun!);
     const checkpointKind: DurableCheckpointRecord["checkpointKind"] = "run_cancelled";
-    runChatFinalizeTransaction(deps, () => {
-      const latest = lockCommittableRun();
+    await runChatFinalizeTransaction(deps, async () => {
+      const latest = await lockCommittableRun();
       if (!latest) return;
       const generationId = randomUUID();
       const pendingMetadata = markGeneralChatPostCommitPending(
@@ -1024,7 +1037,7 @@ export function finalizeDurableChatRun(
       });
       const metadata = withChatTurnRuntimeAuthority(pendingMetadata, authority);
       const anchoredCheckpointState = withChatTurnRuntimeAuthorityCheckpoint(checkpointState, authority);
-      deps.durableRuns.updateRun({
+      await deps.durableRuns.updateRun({
         runId,
         status: "cancelled",
         updatedAt: now,
@@ -1034,13 +1047,13 @@ export function finalizeDurableChatRun(
         metadata,
         expectedVersion: latest.version,
       });
-      deps.durableRuns.createCheckpoint({
+      await deps.durableRuns.createCheckpoint({
         runId,
         checkpointKind,
         state: anchoredCheckpointState,
       });
-      deps.recordDurableTimelineEvent(runId, "run_cancelled", anchoredCheckpointState);
-      patchDurableTraceIfPresent(deps.chatTurnTraces, prepared.turnId, {
+      await deps.recordDurableTimelineEvent(runId, "run_cancelled", anchoredCheckpointState);
+      await patchDurableTraceIfPresent(deps.chatTurnTraces, prepared.turnId, {
         durable: {
           runId,
           status: "cancelled",
@@ -1069,7 +1082,7 @@ export function finalizeDurableChatRun(
       : undefined;
   const terminalOutput =
     nextStatus === "completed" && (!heartbeatDecision || heartbeatDecision.decision.notify)
-      ? readCanonicalDurableChatTerminalOutput(deps, prepared, trace, {
+      ? await readCanonicalDurableChatTerminalOutput(deps, prepared, trace, {
           systemHeartbeat: Boolean(heartbeatDecision),
         })
       : undefined;
@@ -1090,8 +1103,8 @@ export function finalizeDurableChatRun(
         [HEARTBEAT_DECISION_RAW_OUTPUT_METADATA_KEY]: heartbeatDecision.rawOutput,
       }
     : baseTerminalCheckpointState;
-  runChatFinalizeTransaction(deps, () => {
-    const latest = lockCommittableRun();
+  await runChatFinalizeTransaction(deps, async () => {
+    const latest = await lockCommittableRun();
     if (!latest) return;
     const generationId = randomUUID();
     const transitionMetadata = resetChatTurnRuntimeTransitionMetadata(
@@ -1121,7 +1134,7 @@ export function finalizeDurableChatRun(
     });
     const metadata = withChatTurnRuntimeAuthority(pendingMetadata, authority);
     const anchoredCheckpointState = withChatTurnRuntimeAuthorityCheckpoint(terminalCheckpointState, authority);
-    deps.durableRuns.updateRun({
+    await deps.durableRuns.updateRun({
       runId,
       status: nextStatus,
       updatedAt: now,
@@ -1131,17 +1144,17 @@ export function finalizeDurableChatRun(
       ...(failed ? { lastError: trace.failure?.message ?? "Durable chat run failed." } : { clearLastError: true }),
       expectedVersion: latest.version,
     });
-    deps.durableRuns.createCheckpoint({
+    await deps.durableRuns.createCheckpoint({
       runId,
       checkpointKind,
       state: anchoredCheckpointState,
     });
-    deps.recordDurableTimelineEvent(
+    await deps.recordDurableTimelineEvent(
       runId,
       failed ? "run_failed" : "run_completed",
       omitHeartbeatDecisionRawOutput(anchoredCheckpointState),
     );
-    patchDurableTraceIfPresent(deps.chatTurnTraces, prepared.turnId, {
+    await patchDurableTraceIfPresent(deps.chatTurnTraces, prepared.turnId, {
       ...(completionFailed ? { status: "failed" as const } : {}),
       durable: {
         runId,
@@ -1401,12 +1414,12 @@ export function resetChatTurnRuntimeTransitionMetadata(
   return reset;
 }
 
-function verifyWaitingDurableChatReplayAuthority(
+async function verifyWaitingDurableChatReplayAuthority(
   deps: ChatDurableRunFinalizeDeps,
   run: DurableRunRecord,
   prepared: PreparedAgentChatTurn,
   trace: ChatTurnTraceRecord,
-): void {
+): Promise<void> {
   const payload = requireExactAdmittedV2ChatFinalizeContext(run, prepared, trace);
   const heartbeatIdentity = readExactSystemHeartbeatFinalizeIdentity(run, payload);
   if (heartbeatIdentity) {
@@ -1427,7 +1440,7 @@ function verifyWaitingDurableChatReplayAuthority(
   ) {
     throw new Error(`Durable Chat run ${run.runId} has no exact waiting replay authority.`);
   }
-  const checkpoint = deps.durableRuns.getLatestCheckpointByKind?.(run.runId, "run_waiting");
+  const checkpoint = await deps.durableRuns.getLatestCheckpointByKind?.(run.runId, "run_waiting");
   if (!checkpoint) {
     throw new Error(`Durable Chat run ${run.runId} has no exact latest waiting authority checkpoint.`);
   }
@@ -1504,12 +1517,12 @@ function verifyWaitingDurableChatReplayAuthority(
   }
 }
 
-function verifyTerminalDurableChatReplayAuthority(
+async function verifyTerminalDurableChatReplayAuthority(
   deps: ChatDurableRunFinalizeDeps,
   run: DurableRunRecord,
   prepared: PreparedAgentChatTurn,
   trace: ChatTurnTraceRecord,
-): void {
+): Promise<void> {
   const payload = requireExactAdmittedV2ChatFinalizeContext(run, prepared, trace);
   if (run.metadata?.autonomousAdmission !== undefined) {
     verifyAutonomousChatAdmissionRunMetadata(run, { trace });
@@ -1529,16 +1542,16 @@ function verifyTerminalDurableChatReplayAuthority(
     throw new Error(`Durable Chat run ${run.runId} has no exact terminal replay authority.`);
   }
   const checkpointKind = checkpointKindForTerminalDurableChatRunStatus(run.status);
-  const checkpoint = deps.durableRuns.getLatestCheckpointByKind?.(run.runId, checkpointKind);
+  const checkpoint = await deps.durableRuns.getLatestCheckpointByKind?.(run.runId, checkpointKind);
   if (!checkpoint) {
     throw new Error(`Durable Chat run ${run.runId} has no exact latest terminal authority checkpoint.`);
   }
   verifyCheckpointAnchoredChatTurnRuntimeAuthority(run.metadata, checkpoint.state);
-  verifyTerminalReplayOutputBinding(deps, run, prepared, trace, payload, authority, checkpoint);
+  await verifyTerminalReplayOutputBinding(deps, run, prepared, trace, payload, authority, checkpoint);
   verifyTerminalReplayFinalizerPrefix(run, payload, authority);
 }
 
-function verifyTerminalReplayOutputBinding(
+async function verifyTerminalReplayOutputBinding(
   deps: ChatDurableRunFinalizeDeps,
   run: DurableRunRecord,
   prepared: PreparedAgentChatTurn,
@@ -1546,7 +1559,7 @@ function verifyTerminalReplayOutputBinding(
   payload: ExactAdmittedV2ChatFinalizePayload,
   authority: ChatTurnRuntimeAuthoritySealV1,
   checkpoint: DurableCheckpointRecord,
-): void {
+): Promise<void> {
   const metadata = run.metadata ?? {};
   const terminalOutput = authority.material.terminalOutput;
   const heartbeatIdentity = readExactSystemHeartbeatFinalizeIdentity(run, payload);
@@ -1603,7 +1616,7 @@ function verifyTerminalReplayOutputBinding(
     ) {
       throw new Error(`System heartbeat ${run.runId} replay decision evidence drifted from its authority.`);
     }
-    const message = deps.chatMessages?.get(payload.assistantMessageId);
+    const message = await deps.chatMessages?.get(payload.assistantMessageId);
     if (!heartbeatDecision.decision.notify) {
       const outputKeys = [
         "outputText",
@@ -1660,7 +1673,7 @@ function verifyTerminalReplayOutputBinding(
   ) {
     throw new Error(`Non-heartbeat Chat run ${run.runId} authority contains heartbeat decision evidence.`);
   }
-  const message = terminalOutput ? deps.chatMessages?.get(terminalOutput.assistantMessageId) : undefined;
+  const message = terminalOutput ? await deps.chatMessages?.get(terminalOutput.assistantMessageId) : undefined;
   if (
     !terminalOutput ||
     terminalOutput.assistantMessageId !== payload.assistantMessageId ||
@@ -1822,8 +1835,8 @@ function verifyTerminalReplayFinalizerPrefix(
   }
 }
 
-function runChatFinalizeTransaction<T>(deps: ChatDurableRunFinalizeDeps, callback: () => T): T {
-  return deps.runImmediateTransaction(callback);
+async function runChatFinalizeTransaction<T>(deps: ChatDurableRunFinalizeDeps, callback: () => Promise<T>): Promise<T> {
+  return await deps.runImmediateTransaction(callback);
 }
 
 function omitHeartbeatDecisionRawOutput(state: Record<string, unknown>): Record<string, unknown> {
@@ -1843,14 +1856,17 @@ function checkpointKindForTerminalDurableChatRunStatus(
   return "run_failed";
 }
 
-function buildDurableCheckpointState(
+async function buildDurableCheckpointState(
   deps: Pick<ChatDurableRunFinalizeDeps, "chatToolRuns" | "chatToolArtifacts" | "chatMessages">,
   prepared: PreparedAgentChatTurn,
   trace: ChatTurnTraceRecord,
   options: { systemHeartbeat?: boolean } = {},
-): Record<string, unknown> {
-  const toolRuns = deps.chatToolRuns.listByTurn(prepared.turnId);
-  const artifacts = deps.chatToolArtifacts.listByTurn(prepared.turnId).map((artifact) => ({
+): Promise<Record<string, unknown>> {
+  const [toolRuns, artifactRows] = await Promise.all([
+    deps.chatToolRuns.listByTurn(prepared.turnId),
+    deps.chatToolArtifacts.listByTurn(prepared.turnId),
+  ]);
+  const artifacts = artifactRows.map((artifact) => ({
     artifactId: artifact.artifactId,
     toolRunId: artifact.toolRunId,
     toolName: artifact.toolName,
@@ -1859,7 +1875,7 @@ function buildDurableCheckpointState(
     storageRelPath: artifact.storageRelPath,
     snippet: artifact.snippet,
   }));
-  const terminalOutput = readCanonicalDurableChatTerminalOutput(deps, prepared, trace, options);
+  const terminalOutput = await readCanonicalDurableChatTerminalOutput(deps, prepared, trace, options);
   return {
     objective: prepared.content,
     currentStep: trace.status,
@@ -1889,12 +1905,12 @@ export interface CanonicalDurableChatTerminalOutput {
   outputSummary: string;
 }
 
-export function readCanonicalDurableChatTerminalOutput(
+export async function readCanonicalDurableChatTerminalOutput(
   deps: Pick<ChatDurableRunFinalizeDeps, "chatMessages">,
   prepared: PreparedAgentChatTurn,
   trace: ChatTurnTraceRecord,
   options: { systemHeartbeat?: boolean } = {},
-): CanonicalDurableChatTerminalOutput | undefined {
+): Promise<CanonicalDurableChatTerminalOutput | undefined> {
   if (trace.status !== "completed" && trace.status !== "partial") {
     return undefined;
   }
@@ -1905,7 +1921,7 @@ export function readCanonicalDurableChatTerminalOutput(
   if (trace.assistantMessageId !== undefined && trace.assistantMessageId !== messageId) {
     throw new Error(`Chat turn ${prepared.turnId} terminal trace points at a different assistant message.`);
   }
-  const message = deps.chatMessages?.get(messageId);
+  const message = await deps.chatMessages?.get(messageId);
   const expectedActorType = options.systemHeartbeat ? "system" : "agent";
   const expectedActorId = options.systemHeartbeat ? SYSTEM_HEARTBEAT_ACTOR_ID : undefined;
   if (

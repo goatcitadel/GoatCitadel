@@ -20,7 +20,7 @@ let skillDir = "";
 beforeEach(async () => {
   skillDir = await fs.mkdtemp(path.join(os.tmpdir(), "governed-skill-instructions-"));
   await Promise.all(
-    ["SKILL.md", "enforcement.md", "layout.md", "taste.md", "assets.md", "audit.md"].map((name) =>
+    ["SKILL.md", "enforcement.md", "layout.md", "taste.md", "assets.md", "audit.md", "presentation.md"].map((name) =>
       fs.writeFile(path.join(skillDir, name), `# ${name}\n\nExact instructions for ${name}.\n`, "utf8"),
     ),
   );
@@ -33,7 +33,7 @@ afterEach(async () => {
 });
 
 describe("governed runtime skill instructions", () => {
-  it("freezes and rehydrates the complete presentation design module set", () => {
+  it("freezes and rehydrates only the compact presentation module", () => {
     const harness = buildHarness();
     const receipts = buildGovernedActivatedSkillReceipts({
       content: "Create a polished PowerPoint presentation.",
@@ -43,14 +43,8 @@ describe("governed runtime skill instructions", () => {
     });
 
     expect(receipts).toHaveLength(1);
-    expect(receipts[0]?.modules.map((module) => module.name)).toEqual([
-      "main",
-      "enforcement",
-      "layout",
-      "taste",
-      "assets",
-      "audit",
-    ]);
+    expect(receipts[0]?.modules.map((module) => module.name)).toEqual(["presentation"]);
+    expect(receipts[0]?.instructionBytes).toBeLessThanOrEqual(10 * 1024);
     const profile = {
       selection: { trustedSkills: [harness.trusted], activatedSkills: receipts },
     } as ChatTurnCapabilityProfileRecord;
@@ -60,7 +54,8 @@ describe("governed runtime skill instructions", () => {
       lifecycleRows: [harness.lifecycle],
     });
     expect(instructions).toContain("Server-owned governed runtime skill instructions follow.");
-    expect(instructions).toContain("Runtime skill module: bundled:design-intelligence/audit");
+    expect(instructions).toContain("Runtime skill module: bundled:design-intelligence/presentation");
+    expect(instructions).not.toContain("Runtime skill module: bundled:design-intelligence/layout");
   });
 
   it("does not inject a skill awaiting first-use confirmation", () => {
@@ -122,6 +117,19 @@ describe("governed runtime skill instructions", () => {
         lifecycleRows: [harness.lifecycle],
       }),
     ).toThrow(/exact-byte lifecycle verification/i);
+  });
+
+  it("fails closed when the presentation module exceeds 8 KiB", async () => {
+    await fs.writeFile(path.join(skillDir, "presentation.md"), "x".repeat(8 * 1024 + 1), "utf8");
+    const harness = buildHarness();
+    expect(() =>
+      buildGovernedActivatedSkillReceipts({
+        content: "Create a presentation.",
+        decision: harness.decision,
+        trustedSkills: [harness.trusted],
+        lifecycleRows: [harness.lifecycle],
+      }),
+    ).toThrow(/presentation module exceeds the 8192-byte limit/i);
   });
 });
 

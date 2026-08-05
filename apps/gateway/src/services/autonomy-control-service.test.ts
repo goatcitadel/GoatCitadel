@@ -96,7 +96,7 @@ describe("AutonomyControlService", () => {
   describe("getStatus", () => {
     it("reflects the kill switch when engaged", async () => {
       const { service } = await createService({ autonomyDisabled: true });
-      const status = service.getStatus();
+      const status = await service.getStatus();
       expect(status.revision).toBe(7);
       expect(status.killSwitchEngaged).toBe(true);
       expect(status.autonomyEnabled).toBe(false);
@@ -110,7 +110,7 @@ describe("AutonomyControlService", () => {
         targetKey: "skill_x",
         restoreRef: ref("curator_archive"),
       });
-      const status = service.getStatus();
+      const status = await service.getStatus();
       expect(status.killSwitchEngaged).toBe(false);
       expect(status.autonomyEnabled).toBe(true);
       expect(status.audit.totalEntries).toBe(2);
@@ -135,7 +135,7 @@ describe("AutonomyControlService", () => {
         restoreRef: ref("memory", { priorSnapshot }),
       });
 
-      const status = service.getStatus(1);
+      const status = await service.getStatus(1);
 
       expect(JSON.stringify(status)).not.toContain("rollback-db-secret");
       expect(JSON.stringify(status)).not.toContain("rollback-auth-secret");
@@ -159,7 +159,7 @@ describe("AutonomyControlService", () => {
       const rawEntry = storage.autonomyAudit.listRecent(1)[0];
       expect(rawEntry?.restoreRef).toEqual({ kind: "memory", priorSnapshot });
 
-      const reverted = service.revertAutonomousChangesSince("2000-01-01T00:00:00.000Z");
+      const reverted = await service.revertAutonomousChangesSince("2000-01-01T00:00:00.000Z");
 
       expect(reverted.reverted).toBe(1);
       expect(handlers.restoreOperatorProfile).toHaveBeenCalledWith(priorSnapshot);
@@ -177,26 +177,34 @@ describe("AutonomyControlService", () => {
 
     it("leaves status unchanged when the config-generation mutation rejects", async () => {
       const { service, setKillSwitch } = await createService({ autonomyDisabled: false, revision: 11 });
-      const before = service.getStatus();
+      const before = await service.getStatus();
       setKillSwitch.mockRejectedValueOnce(new Error("generation apply failed"));
 
       await expect(service.setKillSwitch(true, 11)).rejects.toThrow("generation apply failed");
 
-      expect(service.getStatus()).toEqual(before);
+      expect(await service.getStatus()).toEqual(before);
     });
   });
 
   describe("recordAutonomousMutation", () => {
     it("appends an entry and never throws when the ledger write fails", async () => {
       const { service, storage, diagnostics } = await createService();
-      const entry = service.recordAutonomousMutation({ kind: "tune", targetKey: "k", restoreRef: ref("tune") });
+      const entry = await service.recordAutonomousMutation({
+        kind: "tune",
+        targetKey: "k",
+        restoreRef: ref("tune"),
+      });
       expect(entry?.kind).toBe("tune");
 
       // Force the append to throw — the mutation path must survive.
       vi.spyOn(storage.autonomyAudit, "append").mockImplementationOnce(() => {
         throw new Error("disk full");
       });
-      const failed = service.recordAutonomousMutation({ kind: "tune", targetKey: "k2", restoreRef: ref("tune") });
+      const failed = await service.recordAutonomousMutation({
+        kind: "tune",
+        targetKey: "k2",
+        restoreRef: ref("tune"),
+      });
       expect(failed).toBeUndefined();
       expect(diagnostics.some((d) => d.event === "autonomy_audit_append_failed")).toBe(true);
     });
@@ -222,7 +230,7 @@ describe("AutonomyControlService", () => {
         "2026-06-23T00:00:00.000Z",
       );
 
-      const summary = service.revertAutonomousChangesSince("2026-06-21T00:00:00.000Z");
+      const summary = await service.revertAutonomousChangesSince("2026-06-21T00:00:00.000Z");
       expect(summary.considered).toBe(2);
       expect(summary.reverted).toBe(2);
       expect(summary.failed).toBe(0);
@@ -259,7 +267,7 @@ describe("AutonomyControlService", () => {
         "2026-06-22T01:00:00.000Z",
       );
 
-      const summary = service.revertAutonomousChangesSince("2026-06-22T00:00:00.000Z");
+      const summary = await service.revertAutonomousChangesSince("2026-06-22T00:00:00.000Z");
       expect(summary.considered).toBe(2);
       expect(summary.reverted).toBe(1);
       expect(summary.failed).toBe(1);
@@ -290,7 +298,7 @@ describe("AutonomyControlService", () => {
       // listUnrevertedSince already excludes it, so feed it back through a kind we
       // know is present by appending a second, still-unreverted entry to ensure the
       // pass runs, then assert the claimed one never dispatches.
-      const summary = service.revertAutonomousChangesSince("2026-06-22T00:00:00.000Z");
+      const summary = await service.revertAutonomousChangesSince("2026-06-22T00:00:00.000Z");
       expect(summary.considered).toBe(0); // the only entry is already reverted → excluded
       expect(handlers.revertTune).not.toHaveBeenCalled();
     });
@@ -302,8 +310,8 @@ describe("AutonomyControlService", () => {
         "2026-06-22T00:00:00.000Z",
       );
 
-      const first = service.revertAutonomousChangesSince("2026-06-22T00:00:00.000Z");
-      const second = service.revertAutonomousChangesSince("2026-06-22T00:00:00.000Z");
+      const first = await service.revertAutonomousChangesSince("2026-06-22T00:00:00.000Z");
+      const second = await service.revertAutonomousChangesSince("2026-06-22T00:00:00.000Z");
 
       expect(first.reverted).toBe(1);
       expect(second.considered).toBe(0);
@@ -329,14 +337,14 @@ describe("AutonomyControlService", () => {
         "2026-06-22T00:00:00.000Z",
       );
 
-      const firstPass = service.revertAutonomousChangesSince("2026-06-22T00:00:00.000Z");
+      const firstPass = await service.revertAutonomousChangesSince("2026-06-22T00:00:00.000Z");
       expect(firstPass.failed).toBe(1);
       // The entry stays un-reverted (claim rolled back) and is visible to a retry.
       expect(storage.autonomyAudit.listUnrevertedSince("2026-06-22T00:00:00.000Z").map((e) => e.targetKey)).toEqual([
         "flaky",
       ]);
 
-      const retryPass = service.revertAutonomousChangesSince("2026-06-22T00:00:00.000Z");
+      const retryPass = await service.revertAutonomousChangesSince("2026-06-22T00:00:00.000Z");
       expect(retryPass.reverted).toBe(1);
       expect(handlers.revertTune).toHaveBeenCalledTimes(2);
       expect(storage.autonomyAudit.listUnrevertedSince("2026-06-22T00:00:00.000Z")).toHaveLength(0);
@@ -350,7 +358,7 @@ describe("AutonomyControlService", () => {
         { kind: "curator_archive", targetKey: "gone", restoreRef: ref("curator_archive", { skillId: "gone" }) },
         "2026-06-22T00:00:00.000Z",
       );
-      const summary = service.revertAutonomousChangesSince("2026-06-22T00:00:00.000Z");
+      const summary = await service.revertAutonomousChangesSince("2026-06-22T00:00:00.000Z");
       expect(summary.skipped).toBe(1);
       expect(summary.reverted).toBe(0);
       expect(handlers.restoreCuratorArchive).toHaveBeenCalledWith("gone");
@@ -376,7 +384,7 @@ describe("AutonomyControlService", () => {
         },
         "2026-06-22T00:00:01.000Z",
       );
-      const summary = service.revertAutonomousChangesSince("2026-06-22T00:00:00.000Z");
+      const summary = await service.revertAutonomousChangesSince("2026-06-22T00:00:00.000Z");
       expect(summary.reverted).toBe(2);
       expect(handlers.restoreOperatorProfile).toHaveBeenCalledTimes(2);
     });
@@ -391,7 +399,9 @@ describe("AutonomyControlService", () => {
         { kind: "curator_archive", targetKey: "c", restoreRef: ref("curator_archive") },
         "2026-06-22T00:00:01.000Z",
       );
-      const summary = service.revertAutonomousChangesSince("2026-06-22T00:00:00.000Z", { kinds: ["tune"] });
+      const summary = await service.revertAutonomousChangesSince("2026-06-22T00:00:00.000Z", {
+        kinds: ["tune"],
+      });
       expect(summary.considered).toBe(1);
       expect(summary.reverted).toBe(1);
       expect(handlers.revertTune).toHaveBeenCalledTimes(1);

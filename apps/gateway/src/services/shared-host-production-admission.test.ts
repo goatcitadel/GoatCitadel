@@ -110,7 +110,10 @@ describe("shared-host production admission wiring", () => {
     }
 
     const maintenanceStart = gatewaySource.indexOf("private async runMaintenanceSchedulerTick");
-    const maintenanceEnd = gatewaySource.indexOf("private handleOrchestrationWorktreeLeaseLoss", maintenanceStart);
+    const maintenanceEnd = gatewaySource.indexOf(
+      "private async handleOrchestrationWorktreeLeaseLoss",
+      maintenanceStart,
+    );
     expect(maintenanceStart).toBeGreaterThanOrEqual(0);
     expect(maintenanceEnd).toBeGreaterThan(maintenanceStart);
     const maintenanceSource = gatewaySource.slice(maintenanceStart, maintenanceEnd);

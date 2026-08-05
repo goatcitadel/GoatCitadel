@@ -53,13 +53,13 @@ describe("chat session routes", () => {
       view: "all",
     });
 
-    await expect(
-      app.inject({
-        method: "POST",
-        url: "/api/v1/chat/sessions",
-        payload: { title: "New", mode: "cowork", tags: ["ops"], includeInHistory: false },
-      }),
-    ).resolves.toMatchObject({ statusCode: 201 });
+    const createdSession = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions",
+      payload: { title: "New", mode: "cowork", tags: ["ops"], includeInHistory: false },
+    });
+    expect(createdSession.statusCode).toBe(201);
+    expect(createdSession.json()).toMatchObject({ sessionId: "sess-created" });
     await expect(
       app.inject({
         method: "POST",

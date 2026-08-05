@@ -89,8 +89,7 @@ describe("chat-message-route-runtime", () => {
       }),
     ]);
     expect(state.messagesById.has(heartbeat.trace.userMessageId)).toBe(false);
-    expect(loadOptions?.isConversationTrace?.(heartbeat.trace)).toBe(false);
-    expect(loadOptions?.isConversationTrace?.(state.traces[0]!)).toBe(true);
+    expect(loadOptions?.isConversationTrace).toBeUndefined();
 
     const selected = await selectChatBranchTurn(runtime, "sess-1", "turn-root");
     expect(selected.activeLeafTurnId).toBe("turn-child-b");
@@ -355,7 +354,7 @@ describe("chat-message-route-runtime", () => {
     expect(rawAssistantMessage.content).toContain("legacy-hook-secret");
   });
 
-  it("validates context manifest session and turn identifiers", () => {
+  it("validates context manifest session and turn identifiers", async () => {
     const runtime = createRuntime({
       trace: createTrace({
         turnId: "turn-1",
@@ -364,10 +363,14 @@ describe("chat-message-route-runtime", () => {
       contextManifest: { manifestId: "manifest-1" },
     });
 
-    expect(() => getTurnContextManifestForSession(runtime, " ", "turn-1")).toThrow(ValidationError);
-    expect(() => getTurnContextManifestForSession(runtime, "sess-1", " ")).toThrow(ValidationError);
-    expect(() => getTurnContextManifestForSession(runtime, "sess-2", "turn-1")).toThrow("does not belong to session");
-    expect(getTurnContextManifestForSession(runtime, "sess-1", "turn-1")).toEqual({ manifestId: "manifest-1" });
+    await expect(getTurnContextManifestForSession(runtime, " ", "turn-1")).rejects.toThrow(ValidationError);
+    await expect(getTurnContextManifestForSession(runtime, "sess-1", " ")).rejects.toThrow(ValidationError);
+    await expect(getTurnContextManifestForSession(runtime, "sess-2", "turn-1")).rejects.toThrow(
+      "does not belong to session",
+    );
+    await expect(getTurnContextManifestForSession(runtime, "sess-1", "turn-1")).resolves.toEqual({
+      manifestId: "manifest-1",
+    });
   });
 
   it("validates mismatched active prompts before invoking the atomic continuation owner", async () => {

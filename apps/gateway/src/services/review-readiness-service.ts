@@ -20,7 +20,7 @@ import type {
   TaskRecord,
 } from "@goatcitadel/contracts";
 import { redactStructuredSecrets } from "@goatcitadel/contracts";
-import type { StructuredReviewRepository } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { TaskLifecycleService } from "./task-lifecycle-service.js";
 import type { RuntimeReleaseTrustReader, RuntimeReleaseTrustSnapshot } from "./runtime-release-trust-service.js";
 import {
@@ -45,11 +45,11 @@ export interface ReviewReadinessServiceDependencies {
   runtimeEnv?: Readonly<Record<string, string | undefined>>;
   gitRunner?: (args: string[], cwd: string) => string | undefined;
   releaseTrust?: RuntimeReleaseTrustReader;
-  structuredReviews?: StructuredReviewRepository;
-  requireFeatureEnabled?: (flag: "structuredReviewV2Enabled") => void;
-  isFeatureEnabled?: (flag: "structuredReviewV2Enabled") => boolean;
+  structuredReviews?: Storage["structuredReviews"];
+  requireFeatureEnabled?: (flag: "structuredReviewV2Enabled") => void | Promise<void>;
+  isFeatureEnabled?: (flag: "structuredReviewV2Enabled") => boolean | Promise<boolean>;
   createAssemblyRun?: (input: CreateAssemblyRunInput) => Promise<AssemblyRunRecord>;
-  getAssemblyRunDetail?: (runId: string) => AssemblyRunDetailResponse;
+  getAssemblyRunDetail?: (runId: string) => AssemblyRunDetailResponse | Promise<AssemblyRunDetailResponse>;
   createCodeModeRun?: (input: {
     language: "typescript";
     source: string;
@@ -58,7 +58,7 @@ export interface ReviewReadinessServiceDependencies {
     requestedOutputIntent: string;
     aider: { requestMarkdown: string; repositoryRootRelPath?: string };
   }) => Promise<CodeModeRunRecord>;
-  appendAudit?: (payload: Record<string, unknown>) => void;
+  appendAudit?: (payload: Record<string, unknown>) => void | Promise<void>;
   taskLifecycleService: Pick<
     TaskLifecycleService,
     "appendTaskActivity" | "appendTaskDeliverable" | "createTask" | "listTasks" | "updateTask"
@@ -123,8 +123,8 @@ export class ReviewReadinessService {
     }
   }
 
-  public getReadiness(): ReviewReadinessSummary {
-    const linkedTasks = this.listReviewTasks();
+  public async getReadiness(): Promise<ReviewReadinessSummary> {
+    const linkedTasks = await this.listReviewTasks();
     const releaseTrust = this.deps.releaseTrust?.getSnapshot();
     return {
       branch: this.git(["rev-parse", "--abbrev-ref", "HEAD"]) || "unknown",
@@ -138,7 +138,10 @@ export class ReviewReadinessService {
     };
   }
 
-  public importFindings(input: { findings: ReviewFindingInput[]; actorId?: string }): ReviewFindingImportResult {
+  public async importFindings(input: {
+    findings: ReviewFindingInput[];
+    actorId?: string;
+  }): Promise<ReviewFindingImportResult> {
     const importedAt = new Date().toISOString();
     const created: TaskRecord[] = [];
     const updated: TaskRecord[] = [];
@@ -155,56 +158,56 @@ export class ReviewReadinessService {
     const reviewRunId =
       normalizedFindings.length > 0 &&
       this.deps.structuredReviews &&
-      this.deps.isFeatureEnabled?.("structuredReviewV2Enabled")
-        ? this.createExternalReviewRun(normalizedFindings, importedAt)
+      (await this.deps.isFeatureEnabled?.("structuredReviewV2Enabled"))
+        ? await this.createExternalReviewRun(normalizedFindings, importedAt)
         : undefined;
-    const existingByKey = new Map(this.listReviewTasks().map((task) => [extractReviewKey(task), task]));
+    const existingByKey = new Map((await this.listReviewTasks()).map((task) => [extractReviewKey(task), task]));
 
     for (const normalized of normalizedFindings) {
       const key = buildFindingKey(normalized);
       const existing = existingByKey.get(key);
       if (existing) {
-        const task = this.deps.taskLifecycleService.updateTask(existing.taskId, {
+        const task = await this.deps.taskLifecycleService.updateTask(existing.taskId, {
           description: renderFindingDescription(key, normalized),
           priority: normalized.priority ?? existing.priority,
           status: existing.status === "done" ? "review" : existing.status,
         });
-        this.deps.taskLifecycleService.appendTaskActivity(task.taskId, {
+        await this.deps.taskLifecycleService.appendTaskActivity(task.taskId, {
           activityType: "diagnostic",
           agentId: input.actorId,
           message: `Review finding refreshed from ${normalized.source}.`,
           metadata: { reviewFindingKey: key, source: normalized.source, component: normalized.component },
         });
-        appendEvidenceDeliverable(this.deps.taskLifecycleService, task.taskId, normalized);
+        await appendEvidenceDeliverable(this.deps.taskLifecycleService, task.taskId, normalized);
         updated.push(task);
         existingByKey.set(key, task);
         if (reviewRunId) {
-          this.persistStructuredFinding(reviewRunId, normalized, task.taskId, importedAt);
+          await this.persistStructuredFinding(reviewRunId, normalized, task.taskId, importedAt);
         }
         continue;
       }
-      const task = this.deps.taskLifecycleService.createTask({
+      const task = await this.deps.taskLifecycleService.createTask({
         title: normalized.title,
         description: renderFindingDescription(key, normalized),
         status: "review",
         priority: normalized.priority ?? "normal",
         createdBy: "review-readiness",
       });
-      this.deps.taskLifecycleService.appendTaskActivity(task.taskId, {
+      await this.deps.taskLifecycleService.appendTaskActivity(task.taskId, {
         activityType: "diagnostic",
         agentId: input.actorId,
         message: `Review finding imported from ${normalized.source}.`,
         metadata: { reviewFindingKey: key, source: normalized.source, component: normalized.component },
       });
-      appendEvidenceDeliverable(this.deps.taskLifecycleService, task.taskId, normalized);
+      await appendEvidenceDeliverable(this.deps.taskLifecycleService, task.taskId, normalized);
       created.push(task);
       existingByKey.set(key, task);
       if (reviewRunId) {
-        this.persistStructuredFinding(reviewRunId, normalized, task.taskId, importedAt);
+        await this.persistStructuredFinding(reviewRunId, normalized, task.taskId, importedAt);
       }
     }
 
-    this.deps.appendAudit?.({
+    await this.deps.appendAudit?.({
       event: "structured_review.findings_imported",
       reviewRunId,
       findingCount: normalizedFindings.length,
@@ -223,7 +226,7 @@ export class ReviewReadinessService {
     costBudgetUsd?: number;
     tokenBudget?: number;
   }): Promise<ReviewRunRecord> {
-    this.requireStructuredReviewFeature();
+    await this.requireStructuredReviewFeature();
     if (!this.deps.structuredReviews || !this.deps.createAssemblyRun) {
       throw new Error("Structured review runtime is unavailable.");
     }
@@ -249,7 +252,7 @@ export class ReviewReadinessService {
     };
     const reviewRunId = `review-${randomUUID()}`;
     const createdAt = new Date().toISOString();
-    this.deps.structuredReviews.createRun({
+    await this.deps.structuredReviews.createRun({
       reviewRunId,
       source: "native",
       status: "queued",
@@ -305,8 +308,8 @@ export class ReviewReadinessService {
           ? [{ role, providerId: participant.providerId, model: participant.model, runId: assembly.runId }]
           : [];
       });
-      this.deps.structuredReviews.updateRun(reviewRunId, { status: "running", modelReceipts });
-      this.deps.appendAudit?.({
+      await this.deps.structuredReviews.updateRun(reviewRunId, { status: "running", modelReceipts });
+      await this.deps.appendAudit?.({
         event: "structured_review.started",
         reviewRunId,
         assemblyRunId: assembly.runId,
@@ -316,45 +319,49 @@ export class ReviewReadinessService {
         actorId: input.actorId,
       });
     } catch (error) {
-      this.deps.structuredReviews.updateRun(reviewRunId, {
+      await this.deps.structuredReviews.updateRun(reviewRunId, {
         status: "failed",
         modelReceipts: [],
         error: error instanceof Error ? error.message : String(error),
         finishedAt: new Date().toISOString(),
       });
     }
-    return this.getStructuredReviewRun(reviewRunId);
+    return await this.getStructuredReviewRun(reviewRunId);
   }
 
-  public listStructuredReviewRuns(limit = 50): { items: ReviewRunRecord[] } {
-    this.requireStructuredReviewFeature();
+  public async listStructuredReviewRuns(limit = 50): Promise<{ items: ReviewRunRecord[] }> {
+    await this.requireStructuredReviewFeature();
     if (!this.deps.structuredReviews) {
       return { items: [] };
     }
-    return { items: this.deps.structuredReviews.listRuns(limit).map((run) => this.refreshStructuredReviewRun(run)) };
+    return {
+      items: await Promise.all(
+        (await this.deps.structuredReviews.listRuns(limit)).map((run) => this.refreshStructuredReviewRun(run)),
+      ),
+    };
   }
 
-  public getStructuredReviewRun(reviewRunId: string): ReviewRunRecord {
-    this.requireStructuredReviewFeature();
-    const run = this.deps.structuredReviews?.getRun(reviewRunId);
+  public async getStructuredReviewRun(reviewRunId: string): Promise<ReviewRunRecord> {
+    await this.requireStructuredReviewFeature();
+    const run = await this.deps.structuredReviews?.getRun(reviewRunId);
     if (!run) {
       throw new Error(`Structured review run not found: ${reviewRunId}`);
     }
-    return this.refreshStructuredReviewRun(run);
+    return await this.refreshStructuredReviewRun(run);
   }
 
-  public acceptStructuredReviewFinding(
+  public async acceptStructuredReviewFinding(
     findingId: string,
     input: { actorId?: string; mirrorToTask?: boolean } = {},
-  ): ReviewFindingRecord {
-    this.requireStructuredReviewFeature();
-    const finding = this.readStructuredReviewFinding(findingId);
+  ): Promise<ReviewFindingRecord> {
+    await this.requireStructuredReviewFeature();
+    const finding = await this.readStructuredReviewFinding(findingId);
     if (!finding) {
       throw new Error(`Structured review finding not found: ${findingId}`);
     }
     let linkedTaskId = finding.linkedTaskId;
     if (input.mirrorToTask !== false && !linkedTaskId) {
-      linkedTaskId = this.createTaskForStructuredFinding(finding, input.actorId).taskId;
+      linkedTaskId = (await this.createTaskForStructuredFinding(finding, input.actorId)).taskId;
     }
     return this.updateStructuredReviewFinding(finding, {
       status: "accepted",
@@ -362,29 +369,29 @@ export class ReviewReadinessService {
     });
   }
 
-  public dismissStructuredReviewFinding(findingId: string, actorId?: string): ReviewFindingRecord {
-    this.requireStructuredReviewFeature();
-    const finding = this.readStructuredReviewFinding(findingId);
+  public async dismissStructuredReviewFinding(findingId: string, actorId?: string): Promise<ReviewFindingRecord> {
+    await this.requireStructuredReviewFeature();
+    const finding = await this.readStructuredReviewFinding(findingId);
     if (!finding) {
       throw new Error(`Structured review finding not found: ${findingId}`);
     }
-    this.deps.appendAudit?.({ event: "structured_review.finding_dismissed", findingId, actorId });
-    return this.updateStructuredReviewFinding(finding, { status: "dismissed" });
+    await this.deps.appendAudit?.({ event: "structured_review.finding_dismissed", findingId, actorId });
+    return await this.updateStructuredReviewFinding(finding, { status: "dismissed" });
   }
 
   public async requestStructuredReviewFix(findingId: string, actorId?: string): Promise<ReviewFindingRecord> {
-    this.requireStructuredReviewFeature();
+    await this.requireStructuredReviewFeature();
     if (!this.deps.createCodeModeRun) {
       throw new Error("Code Mode runtime is unavailable.");
     }
-    const finding = this.readStructuredReviewFinding(findingId);
+    const finding = await this.readStructuredReviewFinding(findingId);
     if (!finding) {
       throw new Error(`Structured review finding not found: ${findingId}`);
     }
     if (finding.fixClass === "advisory") {
       throw new Error("Advisory findings cannot enter the fix workflow.");
     }
-    const reviewRun = this.getStructuredReviewRun(finding.reviewRunId);
+    const reviewRun = await this.getStructuredReviewRun(finding.reviewRunId);
     const currentDiffHash = sha256(this.readFrozenReviewDiff());
     if (currentDiffHash !== reviewRun.diffHash) {
       throw new Error("The reviewed diff changed; run a fresh structured review before requesting a fix.");
@@ -400,12 +407,12 @@ export class ReviewReadinessService {
         requestMarkdown: buildStructuredReviewFixRequest(finding, reviewRun),
       },
     });
-    const updated = this.updateStructuredReviewFinding(finding, {
+    const updated = await this.updateStructuredReviewFinding(finding, {
       status: "fix_requested",
       fixApprovalId: run.approvalId,
       fixedByCodeModeRunId: run.runId,
     });
-    this.deps.appendAudit?.({
+    await this.deps.appendAudit?.({
       event: "structured_review.fix_requested",
       findingId,
       reviewRunId: finding.reviewRunId,
@@ -416,12 +423,12 @@ export class ReviewReadinessService {
     return updated;
   }
 
-  public closeStructuredReviewFinding(
+  public async closeStructuredReviewFinding(
     findingId: string,
     input: { verificationEvidence: string[]; followUpReviewRunId: string; actorId?: string },
-  ): ReviewFindingRecord {
-    this.requireStructuredReviewFeature();
-    const finding = this.readStructuredReviewFinding(findingId);
+  ): Promise<ReviewFindingRecord> {
+    await this.requireStructuredReviewFeature();
+    const finding = await this.readStructuredReviewFinding(findingId);
     if (!finding) {
       throw new Error(`Structured review finding not found: ${findingId}`);
     }
@@ -429,16 +436,16 @@ export class ReviewReadinessService {
     if (evidence.length < 1) {
       throw new Error("Closing a review finding requires verification evidence.");
     }
-    const followUp = this.getStructuredReviewRun(input.followUpReviewRunId);
+    const followUp = await this.getStructuredReviewRun(input.followUpReviewRunId);
     if (followUp.status !== "completed") {
       throw new Error("Closing a review finding requires a completed follow-up review.");
     }
-    const updated = this.updateStructuredReviewFinding(finding, {
+    const updated = await this.updateStructuredReviewFinding(finding, {
       status: "closed",
       verificationEvidence: evidence,
       followUpReviewRunId: followUp.reviewRunId,
     });
-    this.deps.appendAudit?.({
+    await this.deps.appendAudit?.({
       event: "structured_review.finding_closed",
       findingId,
       followUpReviewRunId: followUp.reviewRunId,
@@ -453,19 +460,19 @@ export class ReviewReadinessService {
 
   public async refreshRuntimeReleaseTrust(): Promise<ReviewReadinessSummary> {
     await this.deps.releaseTrust?.requestRefresh({ force: true, reason: "operator" });
-    return this.getReadiness();
+    return await this.getReadiness();
   }
 
-  private requireStructuredReviewFeature(): void {
-    this.deps.requireFeatureEnabled?.("structuredReviewV2Enabled");
+  private async requireStructuredReviewFeature(): Promise<void> {
+    await this.deps.requireFeatureEnabled?.("structuredReviewV2Enabled");
   }
 
-  private createExternalReviewRun(findings: ReviewFindingInput[], createdAt: string): string {
+  private async createExternalReviewRun(findings: ReviewFindingInput[], createdAt: string): Promise<string> {
     const reviewRunId = `review-${randomUUID()}`;
     const reviewedSha = this.git(["rev-parse", "HEAD"]) || "unknown";
     const changedFiles = Array.from(new Set(findings.flatMap((finding) => finding.files))).sort();
     const diffHash = sha256(JSON.stringify(findings));
-    this.deps.structuredReviews!.createRun({
+    await this.deps.structuredReviews!.createRun({
       reviewRunId,
       source: "external_import",
       status: "completed",
@@ -483,13 +490,13 @@ export class ReviewReadinessService {
     return reviewRunId;
   }
 
-  private persistStructuredFinding(
+  private async persistStructuredFinding(
     reviewRunId: string,
     input: ReviewFindingInput,
     linkedTaskId: string | undefined,
     createdAt = new Date().toISOString(),
     status: ReviewFindingRecord["status"] = "accepted",
-  ): ReviewFindingRecord {
+  ): Promise<ReviewFindingRecord> {
     if (!this.deps.structuredReviews) {
       throw new Error("Structured review storage is unavailable.");
     }
@@ -497,7 +504,7 @@ export class ReviewReadinessService {
     return this.deps.structuredReviews.createFinding(record);
   }
 
-  private refreshStructuredReviewRun(run: ReviewRunRecord): ReviewRunRecord {
+  private async refreshStructuredReviewRun(run: ReviewRunRecord): Promise<ReviewRunRecord> {
     if ((run.status !== "queued" && run.status !== "running") || !this.deps.getAssemblyRunDetail) {
       return run;
     }
@@ -507,7 +514,7 @@ export class ReviewReadinessService {
     }
     let detail: AssemblyRunDetailResponse;
     try {
-      detail = this.deps.getAssemblyRunDetail(assemblyRunId);
+      detail = await this.deps.getAssemblyRunDetail(assemblyRunId);
     } catch {
       return run;
     }
@@ -517,36 +524,36 @@ export class ReviewReadinessService {
     const finishedAt = detail.run.finishedAt ?? new Date().toISOString();
     const status: ReviewRunRecord["status"] =
       detail.run.status === "completed" ? "completed" : detail.run.status === "stopped" ? "cancelled" : "failed";
-    if (status === "completed" && this.listStructuredReviewFindings(run.reviewRunId).length === 0) {
+    if (status === "completed" && (await this.listStructuredReviewFindings(run.reviewRunId)).length === 0) {
       for (const finding of extractAssemblyReviewFindings(detail)) {
         if (validateStructuredFinding(finding)) {
-          this.persistStructuredFinding(run.reviewRunId, finding, undefined, finishedAt, "open");
+          await this.persistStructuredFinding(run.reviewRunId, finding, undefined, finishedAt, "open");
         }
       }
     }
-    return this.deps.structuredReviews!.updateRun(run.reviewRunId, {
+    return (await this.deps.structuredReviews!.updateRun(run.reviewRunId, {
       status,
       modelReceipts: run.modelReceipts,
       finishedAt,
       error: status === "failed" ? (detail.run.error ?? "Assembly review failed.") : undefined,
-    })!;
+    }))!;
   }
 
-  private listStructuredReviewFindings(reviewRunId: string): ReviewFindingRecord[] {
+  private async listStructuredReviewFindings(reviewRunId: string): Promise<ReviewFindingRecord[]> {
     if (!this.deps.structuredReviews) {
       return [];
     }
     return this.deps.structuredReviews.listFindings(reviewRunId);
   }
 
-  private readStructuredReviewFinding(findingId: string): ReviewFindingRecord | undefined {
-    return this.deps.structuredReviews?.getFinding(findingId);
+  private async readStructuredReviewFinding(findingId: string): Promise<ReviewFindingRecord | undefined> {
+    return await this.deps.structuredReviews?.getFinding(findingId);
   }
 
-  private updateStructuredReviewFinding(
+  private async updateStructuredReviewFinding(
     finding: ReviewFindingRecord,
     patch: Partial<ReviewFindingRecord>,
-  ): ReviewFindingRecord {
+  ): Promise<ReviewFindingRecord> {
     if (!this.deps.structuredReviews) {
       throw new Error("Structured review storage is unavailable.");
     }
@@ -560,22 +567,22 @@ export class ReviewReadinessService {
     return this.deps.structuredReviews.updateFinding(updated);
   }
 
-  private createTaskForStructuredFinding(finding: ReviewFindingRecord, actorId?: string): TaskRecord {
+  private async createTaskForStructuredFinding(finding: ReviewFindingRecord, actorId?: string): Promise<TaskRecord> {
     const key = buildFindingKey(finding);
-    const task = this.deps.taskLifecycleService.createTask({
+    const task = await this.deps.taskLifecycleService.createTask({
       title: finding.title,
       description: renderFindingDescription(key, finding),
       status: "review",
       priority: finding.priority ?? mapReviewSeverityToTaskPriority(finding.severity),
       createdBy: "review-readiness",
     });
-    this.deps.taskLifecycleService.appendTaskActivity(task.taskId, {
+    await this.deps.taskLifecycleService.appendTaskActivity(task.taskId, {
       activityType: "diagnostic",
       agentId: actorId,
       message: `Structured review finding accepted from ${finding.reviewRunId}.`,
       metadata: { reviewFindingKey: key, reviewRunId: finding.reviewRunId, findingId: finding.findingId },
     });
-    appendEvidenceDeliverable(this.deps.taskLifecycleService, task.taskId, finding);
+    await appendEvidenceDeliverable(this.deps.taskLifecycleService, task.taskId, finding);
     return task;
   }
 
@@ -643,10 +650,10 @@ export class ReviewReadinessService {
     };
   }
 
-  private listReviewTasks(): TaskRecord[] {
-    return this.deps.taskLifecycleService
-      .listTasks(500, undefined, undefined, "all")
-      .filter((task) => task.createdBy === "review-readiness" || Boolean(extractReviewKey(task)));
+  private async listReviewTasks(): Promise<TaskRecord[]> {
+    return (await this.deps.taskLifecycleService.listTasks(500, undefined, undefined, "all")).filter(
+      (task) => task.createdBy === "review-readiness" || Boolean(extractReviewKey(task)),
+    );
   }
 
   private resolveLane(lane: string, command: string): ReviewReadinessLane {
@@ -1536,15 +1543,15 @@ function extractReviewKey(task: TaskRecord): string | undefined {
   return line?.slice(REVIEW_FINDING_PREFIX.length).trim();
 }
 
-function appendEvidenceDeliverable(
+async function appendEvidenceDeliverable(
   taskLifecycleService: ReviewReadinessServiceDependencies["taskLifecycleService"],
   taskId: string,
   finding: ReviewFindingInput,
-): void {
+): Promise<void> {
   if (!finding.evidenceRef) {
     return;
   }
-  taskLifecycleService.appendTaskDeliverable(taskId, {
+  await taskLifecycleService.appendTaskDeliverable(taskId, {
     deliverableType: finding.evidenceRef.startsWith("http") ? "url" : "artifact",
     title: "Review evidence",
     path: finding.evidenceRef,

@@ -1297,10 +1297,10 @@ describe("MemoryContextService", () => {
       expiresAt: "2026-05-15T00:00:00.000Z",
     });
 
-    expect(service.get(pack.contextId)).toBe(pack);
-    expect(service.listRecent()).toEqual([pack]);
-    expect(service.listByRun("run-missing")).toEqual([]);
-    expect(service.stats("2026-05-01", "2026-05-15")).toEqual({
+    await expect(service.get(pack.contextId)).resolves.toBe(pack);
+    await expect(service.listRecent()).resolves.toEqual([pack]);
+    await expect(service.listByRun("run-missing")).resolves.toEqual([]);
+    await expect(service.stats("2026-05-01", "2026-05-15")).resolves.toEqual({
       from: "2026-05-01",
       to: "2026-05-15",
       totalRuns: 0,
@@ -1363,7 +1363,7 @@ describe("MemoryContextService", () => {
       errorText: "memory distiller timed out",
     });
 
-    expect(service.retrievalStatus(new Date("2026-05-15T00:10:00.000Z"))).toMatchObject({
+    await expect(service.retrievalStatus(new Date("2026-05-15T00:10:00.000Z"))).resolves.toMatchObject({
       enabled: true,
       retrievalMode: "hybrid_rank",
       rerankAvailable: true,
@@ -1387,7 +1387,7 @@ describe("MemoryContextService", () => {
       vi.fn(),
     );
 
-    expect(service.retrievalStatus(new Date("2026-05-15T00:10:00.000Z"))).toMatchObject({
+    await expect(service.retrievalStatus(new Date("2026-05-15T00:10:00.000Z"))).resolves.toMatchObject({
       enabled: true,
       retrievalMode: "lexical_recency",
       rerankAvailable: false,
@@ -1408,7 +1408,7 @@ describe("MemoryContextService", () => {
       vi.fn(),
     );
 
-    expect(service.retrievalStatus(new Date("2026-05-15T00:10:00.000Z"))).toMatchObject({
+    await expect(service.retrievalStatus(new Date("2026-05-15T00:10:00.000Z"))).resolves.toMatchObject({
       enabled: false,
       retrievalMode: "disabled",
       rerankAvailable: false,

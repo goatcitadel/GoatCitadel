@@ -27,13 +27,13 @@ const RECURRENCE_SCAN_LIMIT = 500;
 const CURSOR_MAX_BYTES = 8_192;
 
 export interface JourneyTimelineEventStore {
-  listPage(input: GovernanceJourneyListInput): StoredJourneyPage;
+  listPage(input: GovernanceJourneyListInput): Promise<StoredJourneyPage>;
 }
 
 export class JourneyTimelineService {
   public constructor(private readonly events: JourneyTimelineEventStore) {}
 
-  public listTimeline(input: JourneyTimelineQuery): JourneyTimelinePage {
+  public async listTimeline(input: JourneyTimelineQuery): Promise<JourneyTimelinePage> {
     const filter = normalizeFilter(input);
     const filterHash = hashFilter(filter);
     const cursor = input.cursor ? decodeJourneyTimelineCursor(input.cursor) : undefined;
@@ -41,7 +41,7 @@ export class JourneyTimelineService {
       assertCursorMatches(cursor, filter, filterHash);
     }
 
-    const page = this.events.listPage({
+    const page = await this.events.listPage({
       ...filter,
       highWater: cursor?.highWater,
       position: cursor?.position,
@@ -51,7 +51,7 @@ export class JourneyTimelineService {
     for (const fingerprint of new Set(page.items.flatMap((event) => (event.fingerprint ? [event.fingerprint] : [])))) {
       recurrenceByFingerprint.set(
         fingerprint,
-        this.summarizeRecurrence(filter.workspaceId, filter.includeGlobal === true, fingerprint, page.highWater),
+        await this.summarizeRecurrence(filter.workspaceId, filter.includeGlobal === true, fingerprint, page.highWater),
       );
     }
 
@@ -79,13 +79,13 @@ export class JourneyTimelineService {
     };
   }
 
-  private summarizeRecurrence(
+  private async summarizeRecurrence(
     workspaceId: string,
     includeGlobal: boolean,
     fingerprint: string,
     highWater: StoredJourneyPage["highWater"],
-  ): JourneyTimelineRecurrence {
-    const page = this.events.listPage({
+  ): Promise<JourneyTimelineRecurrence> {
+    const page = await this.events.listPage({
       workspaceId,
       includeGlobal,
       fingerprint,

@@ -66,8 +66,8 @@ describe("backfillMissingShellExplanations", () => {
     const stored = new Map(approvals.map((a) => [a.approvalId, a]));
     return {
       approvals: {
-        list: () => approvals.map((a) => ({ ...a, status: "pending" as const })),
-        setShellExplanations: (id: string, explanations: unknown[]) => {
+        list: async () => approvals.map((a) => ({ ...a, status: "pending" as const })),
+        setShellExplanations: async (id: string, explanations: unknown[]) => {
           const a = stored.get(id);
           if (!a) return false;
           a.shellExplanations = explanations;
@@ -94,7 +94,7 @@ describe("backfillMissingShellExplanations", () => {
         ],
       },
     ]);
-    const result = backfillMissingShellExplanations(storage);
+    const result = await backfillMissingShellExplanations(storage);
     expect(result.scanned).toBe(2);
     expect(result.backfilled).toBe(1);
   });
@@ -102,7 +102,7 @@ describe("backfillMissingShellExplanations", () => {
   it("skips approvals with no commands", async () => {
     const { backfillMissingShellExplanations } = await import("./shell-command-explainer.js");
     const storage = fakeStorage([{ approvalId: "a1", preview: {}, payload: {} }]);
-    expect(backfillMissingShellExplanations(storage).backfilled).toBe(0);
+    expect((await backfillMissingShellExplanations(storage)).backfilled).toBe(0);
   });
 });
 

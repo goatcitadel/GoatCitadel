@@ -6,10 +6,7 @@ import { randomUUID } from "node:crypto";
 import { createDatabase, CapabilityScopeRepository } from "@goatcitadel/storage";
 import type { CapabilityScopeAssignment } from "@goatcitadel/contracts";
 import { CapabilityScopeResolver } from "./capability-scope-resolver.js";
-import {
-  CapabilityScopeRouteService,
-  type CapabilityRegistryEntry,
-} from "./capability-scope-route-service.js";
+import { CapabilityScopeRouteService, type CapabilityRegistryEntry } from "./capability-scope-route-service.js";
 
 const createdFiles: string[] = [];
 
@@ -64,34 +61,36 @@ function makeResolverFromRows(rows: CapabilityScopeAssignment[]) {
 function makeSvc(repo: CapabilityScopeRepository, extraRows: CapabilityScopeAssignment[] = []) {
   // Resolver reads live from repo so updateScope effects are visible; extra static rows
   // simulate external scope assignments (e.g. citadel rows when testing workspace views).
-  const resolver = extraRows.length === 0
-    ? makeResolverFromRepo(repo)
-    : makeResolverFromRows(extraRows);
+  const resolver = extraRows.length === 0 ? makeResolverFromRepo(repo) : makeResolverFromRows(extraRows);
   return new CapabilityScopeRouteService({
-    repo,
+    repo: {
+      list: async (...args) => repo.list(...args),
+      replaceSet: async (...args) => repo.replaceSet(...args),
+      clear: async (...args) => repo.clear(...args),
+    },
     resolver,
-    listRegistry: (type) => REGISTRY[type] ?? [],
-    resolveCitadelId: (_workspaceId) => "personal",
+    listRegistry: async (type) => REGISTRY[type] ?? [],
+    resolveCitadelId: async (_workspaceId) => "personal",
   });
 }
 
 describe("CapabilityScopeRouteService.getView", () => {
   beforeEach(cleanup);
 
-  it("unconfigured citadel → mode:inherit, all items available+inherited, effectiveRefs=all", () => {
+  it("unconfigured citadel → mode:inherit, all items available+inherited, effectiveRefs=all", async () => {
     const repo = createRepo();
     const svc = makeSvc(repo);
-    const view = svc.getView("citadel", "personal", "skill");
+    const view = await svc.getView("citadel", "personal", "skill");
     expect(view.mode).toBe("inherit");
     expect(view.items).toHaveLength(3);
     expect(view.items.every((i) => i.available && i.inherited)).toBe(true);
     expect(view.effectiveRefs.sort()).toEqual(["skill-a", "skill-b", "skill-c"]);
   });
 
-  it("after updateScope → mode:curated, effectiveRefs = only enabled refs", () => {
+  it("after updateScope → mode:curated, effectiveRefs = only enabled refs", async () => {
     const repo = createRepo();
     const svc = makeSvc(repo);
-    const updated = svc.updateScope("citadel", "personal", {
+    const updated = await svc.updateScope("citadel", "personal", {
       resourceType: "skill",
       assignments: [
         { resourceRef: "skill-a", enabled: true },
@@ -107,19 +106,19 @@ describe("CapabilityScopeRouteService.getView", () => {
     expect(updated.items.every((i) => !i.inherited)).toBe(true);
   });
 
-  it("resetScope removes rows → mode:inherit again", () => {
+  it("resetScope removes rows → mode:inherit again", async () => {
     const repo = createRepo();
     const svc = makeSvc(repo);
-    svc.updateScope("citadel", "personal", {
+    await svc.updateScope("citadel", "personal", {
       resourceType: "skill",
       assignments: [{ resourceRef: "skill-a", enabled: true }],
     });
-    const reset = svc.resetScope("citadel", "personal", "skill");
+    const reset = await svc.resetScope("citadel", "personal", "skill");
     expect(reset.mode).toBe("inherit");
     expect(reset.items.every((i) => i.inherited)).toBe(true);
   });
 
-  it("workspace view candidate set = citadel-effective (intersection D4)", () => {
+  it("workspace view candidate set = citadel-effective (intersection D4)", async () => {
     const repo = createRepo();
     // Citadel has only skill-a in scope
     const rows: CapabilityScopeAssignment[] = [
@@ -135,7 +134,7 @@ describe("CapabilityScopeRouteService.getView", () => {
       },
     ];
     const svc = makeSvc(repo, rows);
-    const wsView = svc.getView("workspace", "default", "skill");
+    const wsView = await svc.getView("workspace", "default", "skill");
     // Workspace inherits citadel — candidate set is only skill-a (in citadel scope)
     expect(wsView.items.map((i) => i.resourceRef)).toEqual(["skill-a"]);
     expect(wsView.mode).toBe("inherit");

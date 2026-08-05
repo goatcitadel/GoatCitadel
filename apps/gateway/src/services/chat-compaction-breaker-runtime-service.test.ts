@@ -127,32 +127,32 @@ describe("Gateway chat compaction breaker runtime adapter", () => {
         },
       });
 
-      expect(
+      await expect(
         fixture.service.resolvePendingForceAction({
           sessionId: "session-1",
           sealedDimensionHash: "dimension-a",
           actorId: "token:operator-1",
         }),
-      ).toEqual({ actionId: action.actionId, actorHash: action.actorHash });
+      ).resolves.toEqual({ actionId: action.actionId, actorHash: action.actorHash });
 
       wards.push({ name: "late deny", actionPattern: "chat.compaction_breaker.*", effect: "deny" });
-      expect(
+      await expect(
         fixture.service.resolvePendingForceAction({
           sessionId: "session-1",
           sealedDimensionHash: "dimension-a",
           actorId: "token:operator-1",
         }),
-      ).toBeUndefined();
+      ).resolves.toBeUndefined();
 
       wards.splice(0);
       fixture.approval = { ...fixture.approval, status: "edited" };
-      expect(
+      await expect(
         fixture.service.resolvePendingForceAction({
           sessionId: "session-1",
           sealedDimensionHash: "dimension-a",
           actorId: "token:operator-1",
         }),
-      ).toBeUndefined();
+      ).resolves.toBeUndefined();
     } finally {
       fixture.db.close();
     }
@@ -224,13 +224,13 @@ describe("Gateway chat compaction breaker runtime adapter", () => {
         },
       });
       expect(action.status).toBe("rejected");
-      expect(
+      await expect(
         fixture.service.resolvePendingForceAction({
           sessionId: "session-1",
           sealedDimensionHash: "dimension-a",
           actorId: "token:operator-1",
         }),
-      ).toBeUndefined();
+      ).resolves.toBeUndefined();
     } finally {
       fixture.db.close();
     }

@@ -146,7 +146,32 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
           );
         }
 
-        const durableRun = await waitForDurableRunStatus(stack.gatewayUrl, durableRunId, ["completed"]);
+        let durableRun;
+        try {
+          durableRun = await waitForDurableRunStatus(stack.gatewayUrl, durableRunId, ["completed"]);
+        } catch (error) {
+          const [observedRun, observedThread, observedLifecycle] = await Promise.all([
+            requestJson(stack.gatewayUrl, `/api/v1/durable/runs/${encodeURIComponent(durableRunId)}`),
+            requestJson(stack.gatewayUrl, `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/thread`),
+            requestJson(
+              stack.gatewayUrl,
+              `/api/v1/runtime/lifecycle?approvalId=${encodeURIComponent(approvalId)}`,
+            ),
+          ]);
+          await writeJson(
+            path.join(context.artifactRoot, "diagnostics", "runtime-truth-resume-failure.json"),
+            {
+              approvalSeed: approvalSeed.body,
+              approved: approved.body,
+              durableRun: observedRun.body,
+              thread: observedThread.body,
+              lifecycle: observedLifecycle.body,
+              providerRequests: llmStub.requestSummaries(),
+              error: errorMessage(error),
+            },
+          );
+          throw error;
+        }
         const providerDispatchesAfterResume = llmStub.completionDispatches();
         const resumedProviderDispatches = providerDispatchesAfterResume - providerDispatchesBeforeRestart;
         if (resumedProviderDispatches < 1) {

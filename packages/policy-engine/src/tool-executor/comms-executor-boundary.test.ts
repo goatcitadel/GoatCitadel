@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage, Storage } from "@goatcitadel/storage";
 import { executeCommsTool } from "./comms-executor.js";
 
 const MATTERMOST_CHANNEL_ID = "aaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -43,7 +43,7 @@ function createMattermostStorage(
   deliveryId: string,
 ): {
   markFailed: ReturnType<typeof vi.fn>;
-  storage: Storage;
+  storage: Storage & AsyncStorage;
 } {
   const markFailed = vi.fn();
   const storage = {
@@ -70,7 +70,7 @@ function createMattermostStorage(
       markSent: vi.fn(),
       markFailed,
     },
-  } as unknown as Storage;
+  } as unknown as Storage & AsyncStorage;
   return { markFailed, storage };
 }
 
@@ -131,7 +131,7 @@ describe("comms mutation boundary tracking", () => {
         markSent: vi.fn(),
         markFailed,
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
     const beforeExternalSideEffect = vi.fn();
 
     const result = await executeCommsTool(
@@ -315,7 +315,7 @@ describe("comms mutation boundary tracking", () => {
         markSent: vi.fn(),
         markFailed,
       },
-    } as unknown as Storage;
+    } as unknown as Storage & AsyncStorage;
 
     const result = await executeCommsTool(
       {

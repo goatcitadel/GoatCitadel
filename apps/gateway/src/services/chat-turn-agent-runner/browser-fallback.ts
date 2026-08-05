@@ -20,11 +20,17 @@ import {
 import { isDurableControlError } from "../durable-control-error.js";
 
 export interface BrowserFallbackExecutorDeps {
-  invokeTool: (request: ToolInvokeRequest, options?: { executionFence?: () => void }) => Promise<ToolInvokeResult>;
-  invokeMcpTool?: (request: McpInvokeRequest, options?: { executionFence?: () => void }) => Promise<McpInvokeResponse>;
-  listMcpBrowserFallbackTargets?: () => McpBrowserFallbackTarget[];
+  invokeTool: (
+    request: ToolInvokeRequest,
+    options?: { executionFence?: () => Promise<void> },
+  ) => Promise<ToolInvokeResult>;
+  invokeMcpTool?: (
+    request: McpInvokeRequest,
+    options?: { executionFence?: () => Promise<void> },
+  ) => Promise<McpInvokeResponse>;
+  listMcpBrowserFallbackTargets?: () => Promise<McpBrowserFallbackTarget[]>;
   buildPolicyContext: (input: Partial<ChatTurnAgentRunnerInput>) => ToolPolicyActorContext;
-  listPriorToolRuns: (turnId: string) => ChatToolRunRecord[];
+  listPriorToolRuns: (turnId: string) => Promise<ChatToolRunRecord[]>;
   selectRecentBrowserResultUrls: (
     userContent: string,
     toolRuns: ChatToolRunRecord[],
@@ -33,11 +39,15 @@ export interface BrowserFallbackExecutorDeps {
   ) => string[];
 }
 
-function buildTurnExecutionOptions(turnInput: ChatTurnAgentRunnerInput): { executionFence: () => void } | undefined {
+function buildTurnExecutionOptions(
+  turnInput: ChatTurnAgentRunnerInput,
+): { executionFence: () => Promise<void> } | undefined {
   const canonicalWriteFence = turnInput.canonicalWriteFence;
   return canonicalWriteFence
     ? {
-        executionFence: () => canonicalWriteFence(() => undefined),
+        executionFence: async () => {
+          await canonicalWriteFence(() => undefined);
+        },
       }
     : undefined;
 }
@@ -115,7 +125,9 @@ export async function tryAlternateBuiltinBrowserResult(
     },
     finishedAt: new Date().toISOString(),
   };
-  const priorToolRuns = deps.listPriorToolRuns(input.turnId).filter((run) => run.toolRunId !== input.created.toolRunId);
+  const priorToolRuns = (await deps.listPriorToolRuns(input.turnId)).filter(
+    (run) => run.toolRunId !== input.created.toolRunId,
+  );
   const alternateUrls = deps
     .selectRecentBrowserResultUrls(input.turnInput.content, [...priorToolRuns, syntheticCurrentFailure], 3, 1)
     .filter((url) => url !== input.args.url);
@@ -312,7 +324,7 @@ export async function tryBrowserFallbackAcrossMcpTiers(
   input: McpBrowserFallbackInput,
   deps: BrowserFallbackExecutorDeps,
 ): Promise<{ result: Record<string, unknown> } | undefined> {
-  const targets = deps.listMcpBrowserFallbackTargets?.() ?? [];
+  const targets = (await deps.listMcpBrowserFallbackTargets?.()) ?? [];
   for (const target of targets) {
     if (input.turnInput.signal?.aborted) {
       break;

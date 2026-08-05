@@ -31,21 +31,21 @@ function createDeps(input: {
 }
 
 describe("resolveEffectiveRuntimeScopeFromStorage", () => {
-  it("derives Citadel scope from an explicit workspace", () => {
+  it("derives Citadel scope from an explicit workspace", async () => {
     const deps = createDeps({
       workspaces: {
         engineering: { workspaceId: "engineering", citadelId: "company" },
       },
     });
 
-    expect(resolveEffectiveRuntimeScopeFromStorage(deps, { workspaceId: "engineering", mode: "code" })).toEqual({
+    expect(await resolveEffectiveRuntimeScopeFromStorage(deps, { workspaceId: "engineering", mode: "code" })).toEqual({
       citadelId: "company",
       workspaceId: "engineering",
       mode: "code",
     });
   });
 
-  it("derives workspace and Citadel scope from a project", () => {
+  it("derives workspace and Citadel scope from a project", async () => {
     const deps = createDeps({
       workspaces: {
         engineering: { workspaceId: "engineering", citadelId: "company" },
@@ -55,14 +55,14 @@ describe("resolveEffectiveRuntimeScopeFromStorage", () => {
       },
     });
 
-    expect(resolveEffectiveRuntimeScopeFromStorage(deps, { projectId: "project-1" })).toEqual({
+    expect(await resolveEffectiveRuntimeScopeFromStorage(deps, { projectId: "project-1" })).toEqual({
       citadelId: "company",
       workspaceId: "engineering",
       projectId: "project-1",
     });
   });
 
-  it("derives workspace and Citadel scope from a session", () => {
+  it("derives workspace and Citadel scope from a session", async () => {
     const deps = createDeps({
       workspaces: {
         finance: { workspaceId: "finance", citadelId: "company" },
@@ -72,29 +72,29 @@ describe("resolveEffectiveRuntimeScopeFromStorage", () => {
       },
     });
 
-    expect(resolveEffectiveRuntimeScopeFromStorage(deps, { sessionId: "session-1" })).toEqual({
+    expect(await resolveEffectiveRuntimeScopeFromStorage(deps, { sessionId: "session-1" })).toEqual({
       citadelId: "company",
       workspaceId: "finance",
       sessionId: "session-1",
     });
   });
 
-  it("rejects an explicit Citadel that weakens the workspace boundary", () => {
+  it("rejects an explicit Citadel that weakens the workspace boundary", async () => {
     const deps = createDeps({
       workspaces: {
         finance: { workspaceId: "finance", citadelId: "company" },
       },
     });
 
-    expect(() =>
+    await expect(
       resolveEffectiveRuntimeScopeFromStorage(deps, { citadelId: "personal", workspaceId: "finance" }),
-    ).toThrow(ValidationError);
-    expect(() =>
+    ).rejects.toBeInstanceOf(ValidationError);
+    await expect(
       resolveEffectiveRuntimeScopeFromStorage(deps, { citadelId: "personal", workspaceId: "finance" }),
-    ).toThrow(/belongs to citadel company/);
+    ).rejects.toThrow(/belongs to citadel company/);
   });
 
-  it("rejects a project that belongs to a different workspace", () => {
+  it("rejects a project that belongs to a different workspace", async () => {
     const deps = createDeps({
       workspaces: {
         finance: { workspaceId: "finance", citadelId: "company" },
@@ -104,11 +104,11 @@ describe("resolveEffectiveRuntimeScopeFromStorage", () => {
       },
     });
 
-    expect(() =>
+    await expect(
       resolveEffectiveRuntimeScopeFromStorage(deps, { workspaceId: "finance", projectId: "project-1" }),
-    ).toThrow(ValidationError);
-    expect(() =>
+    ).rejects.toBeInstanceOf(ValidationError);
+    await expect(
       resolveEffectiveRuntimeScopeFromStorage(deps, { workspaceId: "finance", projectId: "project-1" }),
-    ).toThrow(/belongs to workspace engineering/);
+    ).rejects.toThrow(/belongs to workspace engineering/);
   });
 });

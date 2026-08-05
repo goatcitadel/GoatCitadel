@@ -9,7 +9,7 @@ import { buildActivepiecesTriggerWebhookRunInput, type IntegrationActionHost } f
 
 export type GatewayExternalSideEffectReplayJob = IdempotentExternalSideEffectRunInput<Record<string, unknown>> & {
   externalDestinationFingerprint: string;
-  runClaimTransaction<T>(work: () => T): T;
+  runClaimTransaction<T>(work: () => T | Promise<T>): Promise<Awaited<T>>;
   requireDurableBoundaryRecord: true;
 };
 
@@ -40,17 +40,17 @@ export const EXTERNAL_SIDE_EFFECT_REPLAY_JOB_ALLOWLIST = [
  * a DISTINCT, commented fail-closed reason.
  *
  * This function must never throw: `runReplaySafeExternalSideEffectWorker`
- * calls `host.buildExternalSideEffectReplayJob` synchronously as part of a
- * durable workflow step, so any unexpected reconstruction failure (e.g. a
+ * awaits `host.buildExternalSideEffectReplayJob` as part of a durable workflow
+ * step, so any unexpected reconstruction failure (e.g. a
  * malformed webhook URL surfacing from `buildActivepiecesTriggerWebhookRunInput`)
  * is caught here and treated as "no replay job available", not as an
  * unhandled workflow crash.
  */
-export function buildGatewayExternalSideEffectReplayJob(
+export async function buildGatewayExternalSideEffectReplayJob(
   host: IntegrationActionHost,
   run: ExternalSideEffectRunRecord,
   _payload: ExternalSideEffectReplayWorkflowPayload,
-): GatewayExternalSideEffectReplayJob | undefined {
+): Promise<GatewayExternalSideEffectReplayJob | undefined> {
   const storage = host.storage;
   // Reason: allowlist miss — boundary/catalogId/actionId is not an exact
   // match for a production-approved replay integration.
@@ -68,7 +68,7 @@ export function buildGatewayExternalSideEffectReplayJob(
 
   let connection: IntegrationConnection | undefined;
   try {
-    connection = storage.integrationConnections.get(run.connectionId);
+    connection = await storage.integrationConnections.get(run.connectionId);
   } catch {
     connection = undefined;
   }
@@ -100,7 +100,7 @@ export function buildGatewayExternalSideEffectReplayJob(
   // here (a ward may have been added or tightened since the original attempt),
   // so a `wardEffect` is never even attached to the job we return below.
   const wardAction = buildIntegrationWardAction(allowlisted.catalogId, allowlisted.actionId);
-  const wardResolution = resolveWardEffectForExternalAction({
+  const wardResolution = await resolveWardEffectForExternalAction({
     storage,
     workspaceId: connection.workspaceId,
     action: wardAction,
@@ -154,7 +154,8 @@ export function buildGatewayExternalSideEffectReplayJob(
     mutationStore: host.mutationStore,
     sideEffectRunStore: host.sideEffectRunStore,
     externalDestinationFingerprint: parts.input.externalDestinationFingerprint,
-    runClaimTransaction: (work) => storage.runImmediateTransaction!(work),
+    runClaimTransaction: async <T>(work: () => T | Promise<T>): Promise<Awaited<T>> =>
+      await storage.runImmediateTransaction!(work),
     requireDurableBoundaryRecord: true,
   };
 }

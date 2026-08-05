@@ -19,7 +19,7 @@ import {
   type CodeModeVerificationEvidenceRecord,
   type CodeModeVerificationSubjectBinding,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 
 const MAX_GIT_CAPTURE_BYTES = 8 * 1024 * 1024;
 const GIT_CAPTURE_TIMEOUT_MS = 15_000;
@@ -36,7 +36,7 @@ interface CodeModeVerificationServiceOptions {
     sessionId: string,
     input: ChatSessionWorkbenchCommandRunRequest,
   ) => Promise<ChatSessionWorkbenchCommandRunResponse>;
-  publishRealtime: (eventType: string, source: string, payload: Record<string, unknown>) => void;
+  publishRealtime: (eventType: string, source: string, payload: Record<string, unknown>) => Promise<unknown>;
   /** Test/load-harness override; production keeps the bounded 15-second Git capture limit. */
   gitCaptureTimeoutMs?: number;
 }
@@ -86,7 +86,7 @@ export class CodeModeVerificationService {
       throw new ValidationError({ message: "The linked Chat workbench is not ready for verification." });
     }
     const command = resolveVerificationCommand(commandName, workbench.packageManager ?? "pnpm");
-    const before = this.captureSubject(run);
+    const before = await this.captureSubject(run);
     let commandResult: ChatSessionWorkbenchCommandRunResponse | undefined;
     let commandError: string | undefined;
     try {
@@ -97,7 +97,7 @@ export class CodeModeVerificationService {
     } catch (error) {
       commandError = error instanceof Error ? error.message : String(error);
     }
-    const after = this.captureSubject(run);
+    const after = await this.captureSubject(run);
     const execution = readCommandExecution(commandResult?.run);
     const subjectStayedFresh = before.subject.subjectHash === after.subject.subjectHash;
     const commandPassed = execution.status === "passed" && execution.exitCode === 0;
@@ -122,8 +122,8 @@ export class CodeModeVerificationService {
       outputArtifactRefs: commandResult?.state.outputArtifactId ? [commandResult.state.outputArtifactId] : [],
       createdAt,
     });
-    const recorded = this.options.storage.codeModeRuns.recordVerificationEvidence(evidence);
-    this.options.publishRealtime(
+    const recorded = await this.options.storage.codeModeRuns.recordVerificationEvidence(evidence);
+    await this.options.publishRealtime(
       recorded.evidence.status === "verified"
         ? "code_mode_run_verification_passed"
         : "code_mode_run_verification_failed",
@@ -140,18 +140,18 @@ export class CodeModeVerificationService {
     return recorded;
   }
 
-  public refreshRun(run: CodeModeRunRecord): CodeModeRunRecord {
+  public async refreshRun(run: CodeModeRunRecord): Promise<CodeModeRunRecord> {
     if (run.status !== "completed" || run.verification?.status !== "verified") {
       return run;
     }
-    const latestEvidence = this.options.storage.codeModeRuns.listVerificationEvidence(run.runId, 1)[0];
+    const latestEvidence = (await this.options.storage.codeModeRuns.listVerificationEvidence(run.runId, 1))[0];
     const evidenceMatchesCurrentState = Boolean(
       latestEvidence &&
       latestEvidence.evidenceId === run.verification.evidenceId &&
       latestEvidence.status === "verified" &&
       latestEvidence.subject.subjectHash === run.verification.subjectHash,
     );
-    const current = this.captureSubject(run);
+    const current = await this.captureSubject(run);
     if (evidenceMatchesCurrentState && current.valid && current.subject.subjectHash === run.verification.subjectHash) {
       return run;
     }
@@ -183,8 +183,8 @@ export class CodeModeVerificationService {
       subject: current.subject,
       createdAt: now,
     };
-    const recorded = this.options.storage.codeModeRuns.recordVerificationEvidence(evidence);
-    this.options.publishRealtime("code_mode_run_verification_stale", "capabilities", {
+    const recorded = await this.options.storage.codeModeRuns.recordVerificationEvidence(evidence);
+    await this.options.publishRealtime("code_mode_run_verification_stale", "capabilities", {
       runId: run.runId,
       evidenceId: evidence.evidenceId,
       verificationStatus: "stale",
@@ -193,13 +193,13 @@ export class CodeModeVerificationService {
     return recorded.run;
   }
 
-  public listEvidence(runId: string, limit = 50): CodeModeVerificationEvidenceRecord[] {
+  public async listEvidence(runId: string, limit = 50): Promise<CodeModeVerificationEvidenceRecord[]> {
     return this.options.storage.codeModeRuns.listVerificationEvidence(runId, limit);
   }
 
-  private captureSubject(run: CodeModeRunRecord): VerificationSubjectCapture {
+  private async captureSubject(run: CodeModeRunRecord): Promise<VerificationSubjectCapture> {
     const artifacts = captureManagedArtifacts(this.options.rootDir, this.options.artifactRoot, run);
-    const worktree = captureWorktree(
+    const worktree = await captureWorktree(
       this.options.storage,
       run,
       normalizeGitCaptureTimeout(this.options.gitCaptureTimeoutMs),
@@ -405,12 +405,16 @@ function captureManagedArtifacts(
   return { items, valid: items.every((item) => item.verified), reasons };
 }
 
-function captureWorktree(storage: Storage, run: CodeModeRunRecord, gitCaptureTimeoutMs: number): WorktreeCapture {
+async function captureWorktree(
+  storage: Storage,
+  run: CodeModeRunRecord,
+  gitCaptureTimeoutMs: number,
+): Promise<WorktreeCapture> {
   const fallbackIdentity = sha256(JSON.stringify({ sessionId: run.sessionId ?? null, runId: run.runId }));
   if (!run.sessionId) {
     return unavailableWorktree(fallbackIdentity, "worktree_session_missing");
   }
-  const workbench = storage.chatSessionWorkbench.get(run.sessionId);
+  const workbench = await storage.chatSessionWorkbench.get(run.sessionId);
   if (!workbench?.worktreePath || workbench.worktreeStatus !== "ready") {
     return unavailableWorktree(fallbackIdentity, "worktree_not_ready", workbench?.baseRef);
   }

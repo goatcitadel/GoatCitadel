@@ -79,7 +79,7 @@ export const sessionsListRoute: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
 
-    const items = fastify.services.sessionsList.listSessions(parsed.data.limit, parsed.data.cursor);
+    const items = await fastify.services.sessionsList.listSessions(parsed.data.limit, parsed.data.cursor);
     const last = items[items.length - 1];
     const nextCursor = items.length === parsed.data.limit && last ? `${last.updatedAt}|${last.sessionId}` : undefined;
 
@@ -88,7 +88,7 @@ export const sessionsListRoute: FastifyPluginAsync = async (fastify) => {
 
   fastify.get("/api/v1/sessions/:sessionId", async (request, reply) => {
     const sessionId = (request.params as { sessionId: string }).sessionId;
-    return reply.send(projectSessionMetaForPublic(fastify.services.sessionsList.getSession(sessionId)));
+    return reply.send(projectSessionMetaForPublic(await fastify.services.sessionsList.getSession(sessionId)));
   });
 
   fastify.get("/api/v1/sessions/:sessionId/transcript", async (request, reply) => {

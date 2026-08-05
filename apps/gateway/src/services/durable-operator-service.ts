@@ -44,7 +44,7 @@ export interface DurableOperatorServiceDeps {
   >;
   readonly memoryLifecycleService: Pick<MemoryLifecycleService, "syncMaintenanceFromDurableRun">;
   readonly hooksService: Pick<HooksService, "enqueueAfterHooks">;
-  resolveDurableRunHookWorkspaceId(run: DurableRunRecord): string;
+  resolveDurableRunHookWorkspaceId(run: DurableRunRecord): Promise<string>;
 }
 
 export class DurableOperatorPostCommitError extends Error {
@@ -68,104 +68,104 @@ export class DurableOperatorPostCommitError extends Error {
 export class DurableOperatorService {
   public constructor(private readonly deps: DurableOperatorServiceDeps) {}
 
-  public getDiagnostics(): DurableDiagnosticsResponse {
+  public async getDiagnostics(): Promise<DurableDiagnosticsResponse> {
     return this.deps.durableRunService.getDurableDiagnostics();
   }
 
-  public listRuns(limit = 50): DurableRunRecord[] {
+  public async listRuns(limit = 50): Promise<DurableRunRecord[]> {
     return this.deps.durableRunService.listDurableRuns(limit);
   }
 
-  public listDeadLetters(limit = 50): DurableDeadLetterRecord[] {
+  public async listDeadLetters(limit = 50): Promise<DurableDeadLetterRecord[]> {
     return this.deps.durableRunService.listDurableDeadLetters(limit);
   }
 
-  public listRunCheckpoints(runId: string, limit = 200): DurableCheckpointRecord[] {
+  public async listRunCheckpoints(runId: string, limit = 200): Promise<DurableCheckpointRecord[]> {
     return this.deps.durableRunService.listDurableRunCheckpoints(runId, limit);
   }
 
-  public createRun(input: DurableRunCreateRequest): DurableRunRecord {
-    const run = this.deps.durableRunService.createDurableRun(input);
+  public async createRun(input: DurableRunCreateRequest): Promise<DurableRunRecord> {
+    const run = await this.deps.durableRunService.createDurableRun(input);
     return this.afterRunCommit("Durable run creation", run, [
-      () => {
-        if (run.status === "queued") this.deps.durableRunService.requestRunProcessing(run.runId);
+      async () => {
+        if (run.status === "queued") await this.deps.durableRunService.requestRunProcessing(run.runId);
       },
     ]);
   }
 
-  public getRun(runId: string): DurableRunRecord {
+  public async getRun(runId: string): Promise<DurableRunRecord> {
     return this.deps.durableRunService.getDurableRun(runId);
   }
 
-  public listRunTimeline(runId: string, limit = 300): DurableRunTimelineEvent[] {
+  public async listRunTimeline(runId: string, limit = 300): Promise<DurableRunTimelineEvent[]> {
     return this.deps.durableRunService.listDurableRunTimeline(runId, limit);
   }
 
-  public watchChildRun(input: DurableChildWatcherCreateRequest): DurableChildWatcherRecord {
+  public async watchChildRun(input: DurableChildWatcherCreateRequest): Promise<DurableChildWatcherRecord> {
     return this.deps.durableRunService.watchDurableChildRun(input);
   }
 
-  public listChildWatchers(parentRunId: string, limit = 200): DurableChildWatcherRecord[] {
+  public async listChildWatchers(parentRunId: string, limit = 200): Promise<DurableChildWatcherRecord[]> {
     return this.deps.durableRunService.listDurableChildWatchers(parentRunId, limit);
   }
 
-  public detachChildWatcher(watcherId: string): DurableChildWatcherRecord {
+  public async detachChildWatcher(watcherId: string): Promise<DurableChildWatcherRecord> {
     return this.deps.durableRunService.detachDurableChildWatcher(watcherId);
   }
 
-  public reattachChildWatcher(watcherId: string): DurableChildWatcherCatchUpResult {
+  public async reattachChildWatcher(watcherId: string): Promise<DurableChildWatcherCatchUpResult> {
     return this.deps.durableRunService.reattachDurableChildWatcher(watcherId);
   }
 
-  public closeChildWatcher(watcherId: string): DurableChildWatcherRecord {
+  public async closeChildWatcher(watcherId: string): Promise<DurableChildWatcherRecord> {
     return this.deps.durableRunService.closeDurableChildWatcher(watcherId);
   }
 
-  public getBackgroundTaskRail(
+  public async getBackgroundTaskRail(
     parentRunId: string,
     input: { workspaceId: string; sessionId: string },
-  ): DurableBackgroundTaskRailResponse {
+  ): Promise<DurableBackgroundTaskRailResponse> {
     return this.deps.durableRunService.getDurableBackgroundTaskRail(parentRunId, input);
   }
 
-  public controlBackgroundTask(
+  public async controlBackgroundTask(
     parentRunId: string,
     watcherId: string,
     input: DurableBackgroundTaskControlRequest,
     actorId: string,
-  ): DurableBackgroundTaskControlResponse {
+  ): Promise<DurableBackgroundTaskControlResponse> {
     return this.deps.durableRunService.controlDurableBackgroundTask(parentRunId, watcherId, input, actorId);
   }
 
-  public pauseRun(runId: string, actorId = "operator"): DurableRunRecord {
+  public async pauseRun(runId: string, actorId = "operator"): Promise<DurableRunRecord> {
     return this.deps.durableRunService.pauseDurableRun(runId, actorId);
   }
 
-  public resumeRun(runId: string, actorId = "operator"): DurableRunRecord {
-    const run = this.deps.durableRunService.resumeDurableRun(runId, actorId);
+  public async resumeRun(runId: string, actorId = "operator"): Promise<DurableRunRecord> {
+    const run = await this.deps.durableRunService.resumeDurableRun(runId, actorId);
     return this.afterRunCommit("Durable run resume", run, [
       () => this.deps.memoryLifecycleService.syncMaintenanceFromDurableRun(run),
       () => this.deps.durableRunService.requestRunProcessing(runId),
     ]);
   }
 
-  public cancelRun(runId: string, actorId = "operator"): DurableRunRecord {
-    const run = this.deps.durableRunService.cancelDurableRun(runId, actorId);
+  public async cancelRun(runId: string, actorId = "operator"): Promise<DurableRunRecord> {
+    const run = await this.deps.durableRunService.cancelDurableRun(runId, actorId);
     return this.afterRunCommit("Durable run cancellation", run, [
       () => this.deps.memoryLifecycleService.syncMaintenanceFromDurableRun(run),
     ]);
   }
 
-  public retryRun(runId: string, reason = "manual_retry", actorId = "operator"): DurableRunRecord {
-    const run = this.deps.durableRunService.retryDurableRun(runId, reason, actorId);
+  public async retryRun(runId: string, reason = "manual_retry", actorId = "operator"): Promise<DurableRunRecord> {
+    const run = await this.deps.durableRunService.retryDurableRun(runId, reason, actorId);
     return this.afterRunCommit("Durable run retry", run, [
       () => this.deps.memoryLifecycleService.syncMaintenanceFromDurableRun(run),
-      () => {
-        if (run.status === "queued") this.deps.durableRunService.requestRunProcessing(runId);
+      async () => {
+        if (run.status === "queued") await this.deps.durableRunService.requestRunProcessing(runId);
       },
-      () =>
-        this.deps.hooksService.enqueueAfterHooks({
-          workspaceId: this.deps.resolveDurableRunHookWorkspaceId(run),
+      async () => {
+        await this.deps.hooksService.enqueueAfterHooks({
+          workspaceId: await this.deps.resolveDurableRunHookWorkspaceId(run),
           trigger: "orchestration.retry.scheduled",
           entityType: "durable_run",
           entityId: runId,
@@ -176,25 +176,27 @@ export class DurableOperatorService {
             status: run.status,
             attemptCount: run.attemptCount,
           },
-        }),
+        });
+      },
     ]);
   }
 
-  public wakeRun(
+  public async wakeRun(
     runId: string,
     event: {
       eventKey: string;
       payload?: Record<string, unknown>;
       correlationId?: string;
     },
-  ): DurableWakeResult {
-    const result = this.deps.durableRunService.wakeDurableRun(runId, event);
+    options: { deferProcessing?: boolean } = {},
+  ): Promise<DurableWakeResult> {
+    const result = await this.deps.durableRunService.wakeDurableRun(runId, event);
     if (result.outcome === "woke" && result.run) {
       return this.afterWakeCommit("Durable run wake", result, [
-        () => this.deps.durableRunService.requestRunProcessing(runId),
-        () =>
-          this.deps.hooksService.enqueueAfterHooks({
-            workspaceId: this.deps.resolveDurableRunHookWorkspaceId(result.run!),
+        ...(options.deferProcessing ? [] : [() => this.deps.durableRunService.requestRunProcessing(runId)]),
+        async () =>
+          await this.deps.hooksService.enqueueAfterHooks({
+            workspaceId: await this.deps.resolveDurableRunHookWorkspaceId(result.run!),
             trigger: "orchestration.run.woken",
             entityType: "durable_run",
             entityId: runId,
@@ -210,37 +212,37 @@ export class DurableOperatorService {
     return result;
   }
 
-  private afterRunCommit(
+  private async afterRunCommit(
     operation: string,
     run: DurableRunRecord,
-    postCommitConsumers: ReadonlyArray<() => void>,
-  ): DurableRunRecord {
+    postCommitConsumers: ReadonlyArray<() => void | Promise<void>>,
+  ): Promise<DurableRunRecord> {
     try {
-      this.runPostCommitConsumers(postCommitConsumers);
+      await this.runPostCommitConsumers(postCommitConsumers);
       return run;
     } catch (error) {
       throw new DurableOperatorPostCommitError(operation, run, error);
     }
   }
 
-  private afterWakeCommit(
+  private async afterWakeCommit(
     operation: string,
     result: DurableWakeResult,
-    postCommitConsumers: ReadonlyArray<() => void>,
-  ): DurableWakeResult {
+    postCommitConsumers: ReadonlyArray<() => void | Promise<void>>,
+  ): Promise<DurableWakeResult> {
     try {
-      this.runPostCommitConsumers(postCommitConsumers);
+      await this.runPostCommitConsumers(postCommitConsumers);
       return result;
     } catch (error) {
       throw new DurableOperatorPostCommitError(operation, result, error);
     }
   }
 
-  private runPostCommitConsumers(consumers: ReadonlyArray<() => void>): void {
+  private async runPostCommitConsumers(consumers: ReadonlyArray<() => void | Promise<void>>): Promise<void> {
     const failures: unknown[] = [];
     for (const consume of consumers) {
       try {
-        consume();
+        await consume();
       } catch (error) {
         failures.push(error);
       }
@@ -250,11 +252,11 @@ export class DurableOperatorService {
     }
   }
 
-  public recoverDeadLetter(
+  public async recoverDeadLetter(
     entryId: string,
     actorId = "operator",
     options?: { maxAttempts?: number },
-  ): DurableRunRecord {
+  ): Promise<DurableRunRecord> {
     return this.deps.durableRunService.recoverDurableDeadLetter(entryId, actorId, options);
   }
 }

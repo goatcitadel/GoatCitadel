@@ -37,7 +37,7 @@ import {
   type PostCommitChildAdmissionIdentity,
   type PostCommitEligibility,
   type SessionMutationAdmissionRecord,
-  type Storage,
+  type AsyncStorage as Storage,
 } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
@@ -102,9 +102,9 @@ export interface DurableRunServiceContext {
     source: string,
     payload: Record<string, unknown>,
     options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
-  ): void;
-  requireFeatureEnabled(flag: keyof RuntimeSettings["features"]): void;
-  isFeatureEnabled(flag: keyof RuntimeSettings["features"]): boolean;
+  ): Promise<unknown>;
+  requireFeatureEnabled(flag: keyof RuntimeSettings["features"]): Promise<void>;
+  isFeatureEnabled(flag: keyof RuntimeSettings["features"]): Promise<boolean>;
 }
 
 export interface DurableRunServiceLogger {
@@ -298,9 +298,9 @@ function assertGeneralChatPostCommitEffectChild(
   }
 }
 
-function findDurableRun(storage: Storage, runId: string): DurableRunRecord | undefined {
+async function findDurableRun(storage: Storage, runId: string): Promise<DurableRunRecord | undefined> {
   try {
-    return storage.durableRuns.getRun(runId);
+    return await storage.durableRuns.getRun(runId);
   } catch (error) {
     if (error instanceof NotFoundError) {
       return undefined;
@@ -657,11 +657,11 @@ export class DurableRunService {
         run: DurableRunRecord,
         progress: GeneralChatPostCommitProgress,
       ) => Promise<Record<string, unknown> | void> | Record<string, unknown> | void;
-      resolvePostCommitEligibility?: (sessionId: string) => PostCommitEligibility;
-      evaluateContinuationGate?: (run: DurableRunRecord) => ContinuationGateDecision | undefined;
-      recordEvidenceEnvelope?: (input: EvidenceEnvelopeCreateRequest) => void;
+      resolvePostCommitEligibility?: (sessionId: string) => Promise<PostCommitEligibility>;
+      evaluateContinuationGate?: (run: DurableRunRecord) => Promise<ContinuationGateDecision | undefined>;
+      recordEvidenceEnvelope?: (input: EvidenceEnvelopeCreateRequest) => Promise<unknown>;
       taskLifecycle?: {
-        autoBlockOnIncompleteExit(taskId: string, runId: string): unknown;
+        autoBlockOnIncompleteExit(taskId: string, runId: string): unknown | Promise<unknown>;
       };
       sharedHostLifecycle?: SharedHostLifecycleAdmissionPort;
       isLocalProcessAlive?: (pid: number) => boolean;
@@ -670,20 +670,26 @@ export class DurableRunService {
 
   // ── queries ──────────────────────────────────────────────────────
 
-  getDurableDiagnostics(): DurableDiagnosticsResponse {
-    const statusCounts = this.ctx.storage.durableRuns.statusCounts();
+  async getDurableDiagnostics(): Promise<DurableDiagnosticsResponse> {
+    const [statusCounts, runCount, deadLetters, recentRuns, recentDeadLetters] = await Promise.all([
+      this.ctx.storage.durableRuns.statusCounts(),
+      this.ctx.storage.durableRuns.countRuns(),
+      this.ctx.storage.durableRuns.listDeadLetters(1000),
+      this.ctx.storage.durableRuns.listRuns(25),
+      this.ctx.storage.durableRuns.listDeadLetters(25),
+    ]);
     const durableFoundationReady = this.isDurableFoundationEnabled() && Boolean(this.deps?.workflowRegistry);
     return {
       enabled: this.isDurableFoundationEnabled(),
       replayFoundationReady: durableFoundationReady,
-      runCount: this.ctx.storage.durableRuns.countRuns(),
+      runCount,
       queuedCount: statusCounts.queued ?? 0,
       runningCount: statusCounts.running ?? 0,
       waitingCount: statusCounts.waiting ?? 0,
       failedCount: statusCounts.failed ?? 0,
-      deadLetterCount: this.ctx.storage.durableRuns.listDeadLetters(1000).length,
-      recentRuns: this.ctx.storage.durableRuns.listRuns(25).map((run) => deriveDurableRunOperationalState(run)),
-      recentDeadLetters: this.ctx.storage.durableRuns.listDeadLetters(25),
+      deadLetterCount: deadLetters.length,
+      recentRuns: recentRuns.map((run) => deriveDurableRunOperationalState(run)),
+      recentDeadLetters,
       ...(this.lastEventLoopLagAt
         ? {
             eventLoopLag: {
@@ -700,30 +706,30 @@ export class DurableRunService {
     };
   }
 
-  listDurableRuns(limit = 50): DurableRunRecord[] {
-    return this.ctx.storage.durableRuns.listRuns(limit).map((run) => deriveDurableRunOperationalState(run));
+  async listDurableRuns(limit = 50): Promise<DurableRunRecord[]> {
+    return (await this.ctx.storage.durableRuns.listRuns(limit)).map((run) => deriveDurableRunOperationalState(run));
   }
 
-  listDurableDeadLetters(limit = 50): DurableDeadLetterRecord[] {
-    return this.ctx.storage.durableRuns.listDeadLetters(limit);
+  async listDurableDeadLetters(limit = 50): Promise<DurableDeadLetterRecord[]> {
+    return await this.ctx.storage.durableRuns.listDeadLetters(limit);
   }
 
-  listDurableRunCheckpoints(runId: string, limit = 200): DurableCheckpointRecord[] {
-    return this.ctx.storage.durableRuns.listCheckpoints(runId, limit);
+  async listDurableRunCheckpoints(runId: string, limit = 200): Promise<DurableCheckpointRecord[]> {
+    return await this.ctx.storage.durableRuns.listCheckpoints(runId, limit);
   }
 
-  getDurableRun(runId: string): DurableRunRecord {
-    this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
-    return deriveDurableRunOperationalState(this.ctx.storage.durableRuns.getRun(runId));
+  async getDurableRun(runId: string): Promise<DurableRunRecord> {
+    await this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
+    return deriveDurableRunOperationalState(await this.ctx.storage.durableRuns.getRun(runId));
   }
 
-  listDurableRunTimeline(runId: string, limit = 300): DurableRunTimelineEvent[] {
-    this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
-    return this.ctx.storage.durableRunEvents.listByRun(runId, limit);
+  async listDurableRunTimeline(runId: string, limit = 300): Promise<DurableRunTimelineEvent[]> {
+    await this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
+    return await this.ctx.storage.durableRunEvents.listByRun(runId, limit);
   }
 
-  watchDurableChildRun(input: DurableChildWatcherCreateRequest): DurableChildWatcherRecord {
-    this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
+  async watchDurableChildRun(input: DurableChildWatcherCreateRequest): Promise<DurableChildWatcherRecord> {
+    await this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
     const parentRunId = input.parentRunId.trim();
     const childRunId = input.childRunId.trim();
     if (!parentRunId || !childRunId) {
@@ -747,75 +753,75 @@ export class DurableRunService {
       metadata: input.metadata ?? {},
     };
     assertDurableChildWatcherCreateRequestBounds(boundedInput);
-    this.ctx.storage.durableRuns.getRun(parentRunId);
-    this.ctx.storage.durableRuns.getRun(childRunId);
+    await this.ctx.storage.durableRuns.getRun(parentRunId);
+    await this.ctx.storage.durableRuns.getRun(childRunId);
     const metadata = redactStructuredSecrets(redactRawRemoteApprovalBearers(boundedInput.metadata ?? {})).value;
     assertDurableChildWatcherCreateRequestBounds({ ...boundedInput, metadata });
     let watcher!: DurableChildWatcherRecord;
-    this.ctx.storage.runImmediateTransaction(() => {
-      const created = this.ctx.storage.durableChildWatchers.create({
+    await this.ctx.storage.runImmediateTransaction(async () => {
+      const created = await this.ctx.storage.durableChildWatchers.create({
         watcherId,
         parentRunId,
         childRunId,
         source,
         metadata,
       });
-      watcher = this.ctx.storage.durableChildWatchers.catchUpWatcher(created.watcherId, 100).watcher;
+      watcher = (await this.ctx.storage.durableChildWatchers.catchUpWatcher(created.watcherId, 100)).watcher;
     });
     return watcher;
   }
 
-  listDurableChildWatchers(parentRunId: string, limit = 200): DurableChildWatcherRecord[] {
-    this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
+  async listDurableChildWatchers(parentRunId: string, limit = 200): Promise<DurableChildWatcherRecord[]> {
+    await this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
     assertDurableChildWatcherRunIdBounds(parentRunId);
-    this.ctx.storage.durableRuns.getRun(parentRunId);
-    return this.ctx.storage.durableChildWatchers.listByParent(parentRunId, limit);
+    await this.ctx.storage.durableRuns.getRun(parentRunId);
+    return await this.ctx.storage.durableChildWatchers.listByParent(parentRunId, limit);
   }
 
-  detachDurableChildWatcher(watcherId: string): DurableChildWatcherRecord {
-    this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
+  async detachDurableChildWatcher(watcherId: string): Promise<DurableChildWatcherRecord> {
+    await this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
     assertDurableChildWatcherIdBounds(watcherId);
-    return this.ctx.storage.durableChildWatchers.detach(watcherId);
+    return await this.ctx.storage.durableChildWatchers.detach(watcherId);
   }
 
-  reattachDurableChildWatcher(watcherId: string): DurableChildWatcherCatchUpResult {
-    this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
+  async reattachDurableChildWatcher(watcherId: string): Promise<DurableChildWatcherCatchUpResult> {
+    await this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
     assertDurableChildWatcherIdBounds(watcherId);
     let result!: DurableChildWatcherCatchUpResult;
-    this.ctx.storage.runImmediateTransaction(() => {
-      const watcher = this.ctx.storage.durableChildWatchers.reattach(watcherId);
-      result = this.ctx.storage.durableChildWatchers.catchUpWatcher(watcher.watcherId, 100);
+    await this.ctx.storage.runImmediateTransaction(async () => {
+      const watcher = await this.ctx.storage.durableChildWatchers.reattach(watcherId);
+      result = await this.ctx.storage.durableChildWatchers.catchUpWatcher(watcher.watcherId, 100);
     });
     return result;
   }
 
-  closeDurableChildWatcher(watcherId: string): DurableChildWatcherRecord {
-    this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
+  async closeDurableChildWatcher(watcherId: string): Promise<DurableChildWatcherRecord> {
+    await this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
     assertDurableChildWatcherIdBounds(watcherId);
-    return this.ctx.storage.durableChildWatchers.close(watcherId);
+    return await this.ctx.storage.durableChildWatchers.close(watcherId);
   }
 
-  getDurableBackgroundTaskRail(
+  async getDurableBackgroundTaskRail(
     parentRunId: string,
     input: { workspaceId: string; sessionId: string },
-  ): DurableBackgroundTaskRailResponse {
-    this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
+  ): Promise<DurableBackgroundTaskRailResponse> {
+    await this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
     assertDurableChildWatcherRunIdBounds(parentRunId);
-    return projectDurableBackgroundTaskRail(this.ctx.storage, { parentRunId, ...input });
+    return await projectDurableBackgroundTaskRail(this.ctx.storage, { parentRunId, ...input });
   }
 
-  controlDurableBackgroundTask(
+  async controlDurableBackgroundTask(
     parentRunId: string,
     watcherId: string,
     input: DurableBackgroundTaskControlRequest,
     actorId = "operator",
-  ): DurableBackgroundTaskControlResponse {
-    this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
+  ): Promise<DurableBackgroundTaskControlResponse> {
+    await this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
     assertDurableChildWatcherRunIdBounds(parentRunId);
     assertDurableChildWatcherIdBounds(watcherId);
     assertNoRawRemoteApprovalBearer(actorId);
 
-    const before = this.getDurableBackgroundTaskRail(parentRunId, input);
+    const before = await this.getDurableBackgroundTaskRail(parentRunId, input);
     const task = before.tasks.find((candidate) => candidate.watcherId === watcherId);
     if (!task) {
       throw new NotFoundError({ entity: "Durable background task", id: watcherId });
@@ -834,7 +840,7 @@ export class DurableRunService {
         if (!task.controls.detach.enabled) {
           throw new Error(task.controls.detach.reason ?? `Durable child watcher ${watcherId} cannot be detached.`);
         }
-        const transition = this.ctx.storage.runImmediateTransaction(() =>
+        const transition = await this.ctx.storage.runImmediateTransaction(() =>
           this.ctx.storage.durableChildWatchers.detachIfRevision(watcherId, parentRunId, input.expectedWatcherRevision),
         );
         outcome = transition.outcome;
@@ -844,13 +850,13 @@ export class DurableRunService {
         if (!task.controls.reattach.enabled) {
           throw new Error(task.controls.reattach.reason ?? `Durable child watcher ${watcherId} cannot be reattached.`);
         }
-        const transition = this.ctx.storage.runImmediateTransaction(() => {
-          const result = this.ctx.storage.durableChildWatchers.reattachIfRevision(
+        const transition = await this.ctx.storage.runImmediateTransaction(async () => {
+          const result = await this.ctx.storage.durableChildWatchers.reattachIfRevision(
             watcherId,
             parentRunId,
             input.expectedWatcherRevision,
           );
-          this.ctx.storage.durableChildWatchers.catchUpWatcher(watcherId, 100);
+          await this.ctx.storage.durableChildWatchers.catchUpWatcher(watcherId, 100);
           return result;
         });
         outcome = transition.outcome;
@@ -863,11 +869,11 @@ export class DurableRunService {
         if (input.expectedChildVersion === undefined) {
           throw new Error("expectedChildVersion is required to cancel a background task.");
         }
-        const cancelled = this.cancelDurableRun(task.childRunId, `background-task-rail:${actorId}`, {
+        const cancelled = await this.cancelDurableRun(task.childRunId, `background-task-rail:${actorId}`, {
           expectedVersion: input.expectedChildVersion,
           reason: input.reason,
-          assertLockedPrecondition: () => {
-            this.ctx.storage.durableChildWatchers.claimControlRevision(
+          assertLockedPrecondition: async () => {
+            await this.ctx.storage.durableChildWatchers.claimControlRevision(
               watcherId,
               parentRunId,
               input.expectedWatcherRevision,
@@ -884,7 +890,7 @@ export class DurableRunService {
       watcherId,
       childRunId: task.childRunId,
       outcome,
-      rail: this.getDurableBackgroundTaskRail(parentRunId, input),
+      rail: await this.getDurableBackgroundTaskRail(parentRunId, input),
     };
   }
 
@@ -906,17 +912,17 @@ export class DurableRunService {
           try {
             await this.performBootRecovery();
           } catch (error) {
-            this.reportWorkerBackgroundFailure("boot_recovery", error);
+            await this.reportWorkerBackgroundFailure("boot_recovery", error);
           }
           try {
             await this.runWorkerProcessingLoop();
           } catch (error) {
-            this.reportWorkerBackgroundFailure("run_processing", error);
+            await this.reportWorkerBackgroundFailure("run_processing", error);
           }
         }),
       )
-      .catch((error) => {
-        this.reportWorkerBackgroundFailure("run_processing", error);
+      .catch(async (error) => {
+        await this.reportWorkerBackgroundFailure("run_processing", error);
       })
       .finally(() => {
         this.workerActive = false;
@@ -933,14 +939,14 @@ export class DurableRunService {
     const resumedCount = await this.reconcileRecoverableRuns();
     const pruneConfig = resolveCheckpointPruneConfig();
     const durableRunsRepo = this.ctx.storage.durableRuns as unknown as {
-      pruneCheckpoints?: (input: { keepPerRun: number; diskBudgetBytes: number }) => {
+      pruneCheckpoints?: (input: { keepPerRun: number; diskBudgetBytes: number }) => Promise<{
         prunedOrphans: number;
         prunedAged: number;
         finalBytes: number;
         diskBudgetBytes: number;
-      };
+      }>;
     };
-    const pruneSummary = durableRunsRepo.pruneCheckpoints?.(pruneConfig) ?? {
+    const pruneSummary = (await durableRunsRepo.pruneCheckpoints?.(pruneConfig)) ?? {
       prunedOrphans: 0,
       prunedAged: 0,
       finalBytes: 0,
@@ -990,10 +996,13 @@ export class DurableRunService {
     };
   }
 
-  private reportWorkerBackgroundFailure(stage: "boot_recovery" | "run_processing", error: unknown): void {
+  private async reportWorkerBackgroundFailure(
+    stage: "boot_recovery" | "run_processing",
+    error: unknown,
+  ): Promise<void> {
     const message = redactRawRemoteApprovalBearerText(error instanceof Error ? error.message : String(error));
-    const publishFailure = () => {
-      this.publishRealtimeSafely(
+    const publishFailure = async () => {
+      await this.publishRealtimeSafely(
         "system",
         "durable",
         {
@@ -1017,21 +1026,22 @@ export class DurableRunService {
       );
     } catch {
       // A reporter must never create a second unhandled worker failure.
-      publishFailure();
+      await publishFailure();
       return;
     }
-    publishFailure();
+    await publishFailure();
   }
 
-  stopWorker(): void {
+  async stopWorker(): Promise<void> {
     this.workerStopped = true;
     this.workerRequested = false;
     if (this.pollTimer) {
       clearTimeout(this.pollTimer);
       this.pollTimer = undefined;
     }
+    const leaseRevocations: Promise<void>[] = [];
     for (const [runId, activeExecution] of this.activeRunAbortControllers) {
-      this.revokeActiveExecutionLease(runId, activeExecution.leaseOwnerId);
+      leaseRevocations.push(this.revokeActiveExecutionLease(runId, activeExecution.leaseOwnerId));
       activeExecution.controller.abort(
         new DurableWorkerInterruptionError(
           "worker_stopped",
@@ -1039,6 +1049,7 @@ export class DurableRunService {
         ),
       );
     }
+    await Promise.all(leaseRevocations);
     this.activeRunAbortControllers.clear();
   }
 
@@ -1064,8 +1075,8 @@ export class DurableRunService {
     const backgroundTasks = this.deps.backgroundTasks;
     const task = Promise.resolve()
       .then(() => this.runWithSharedHostWorkerAdmission(() => this.runWorkerProcessingLoop()))
-      .catch((error) => {
-        this.reportWorkerBackgroundFailure("run_processing", error);
+      .catch(async (error) => {
+        await this.reportWorkerBackgroundFailure("run_processing", error);
       })
       .finally(() => {
         this.workerActive = false;
@@ -1080,7 +1091,7 @@ export class DurableRunService {
     );
     if (admission && !admission.admitted) return;
     const reservation = admission?.admitted ? admission.reservation : undefined;
-    const stopOnForceDrain = () => this.stopWorker();
+    const stopOnForceDrain = () => void this.stopWorker();
     reservation?.signal.addEventListener("abort", stopOnForceDrain, { once: true });
     try {
       await work();
@@ -1093,8 +1104,8 @@ export class DurableRunService {
   private async runWorkerProcessingLoop(): Promise<void> {
     do {
       this.workerRequested = false;
-      if (!this.ctx.isFeatureEnabled("autonomyV1Disabled")) {
-        this.resumeRunsWaitingForAutonomyKillSwitch();
+      if (!(await this.ctx.isFeatureEnabled("autonomyV1Disabled"))) {
+        await this.resumeRunsWaitingForAutonomyKillSwitch();
       }
       await this.reconcileRecoverableRuns();
       await this.drainQueuedRuns();
@@ -1109,7 +1120,7 @@ export class DurableRunService {
    * here, so a concurrent writer surfaces as a version conflict instead of a
    * silent lost update.
    */
-  updateRunState(input: {
+  async updateRunState(input: {
     runId: string;
     status?: DurableRunRecord["status"];
     metadata?: Record<string, unknown>;
@@ -1119,7 +1130,7 @@ export class DurableRunService {
     clearFinishedAt?: boolean;
     clearLease?: boolean;
     expectedLeaseOwnerId?: string;
-  }): DurableRunRecord {
+  }): Promise<DurableRunRecord> {
     assertNoRawRemoteApprovalBearer(input);
     if (
       input.metadata &&
@@ -1129,8 +1140,8 @@ export class DurableRunService {
     ) {
       throw new Error("durable recovery metadata is reserved for internal state transitions");
     }
-    const update = (current: DurableRunRecord) =>
-      this.ctx.storage.durableRuns.updateRun({
+    const update = async (current: DurableRunRecord) =>
+      await this.ctx.storage.durableRuns.updateRun({
         runId: input.runId,
         status: input.status ?? current.status,
         metadata: input.metadata ?? current.metadata,
@@ -1143,18 +1154,18 @@ export class DurableRunService {
         expectedVersion: current.version,
       });
     if (!input.expectedLeaseOwnerId) {
-      return update(this.ctx.storage.durableRuns.getRun(input.runId));
+      return await update(await this.ctx.storage.durableRuns.getRun(input.runId));
     }
     let next!: DurableRunRecord;
-    this.ctx.storage.runImmediateTransaction(() => {
-      const current = this.lockFreshLeaseOwnerForTransition(input.runId, input.expectedLeaseOwnerId!);
+    await this.ctx.storage.runImmediateTransaction(async () => {
+      const current = await this.lockFreshLeaseOwnerForTransition(input.runId, input.expectedLeaseOwnerId!);
       if (!current) {
         throw new DurableWorkerInterruptionError(
           "lease_lost",
           `Durable run ${input.runId} lease ownership moved before its workflow state could commit.`,
         );
       }
-      next = update(current);
+      next = await update(current);
     });
     return next;
   }
@@ -1164,11 +1175,11 @@ export class DurableRunService {
       return false;
     }
     try {
-      let observed = this.ctx.storage.durableRuns.getRun(runId);
+      let observed = await this.ctx.storage.durableRuns.getRun(runId);
       const linkedPending = readLinkedFinalizationPending(observed);
       if (linkedPending) {
         await this.finalizePendingLinkedState(observed);
-        observed = this.ctx.storage.durableRuns.getRun(runId);
+        observed = await this.ctx.storage.durableRuns.getRun(runId);
         if (readLinkedFinalizationPending(observed)) {
           return false;
         }
@@ -1178,26 +1189,26 @@ export class DurableRunService {
         if (AUTONOMOUS_CHAT_POST_COMMIT_PENDING_METADATA_KEY in (observed.metadata ?? {})) {
           throw new Error(`Autonomous Chat post-commit ${runId} has an invalid pending marker.`);
         }
-        this.closeTerminalChatTurnAdmissionIfReady(observed);
+        await this.closeTerminalChatTurnAdmissionIfReady(observed);
         return true;
       }
-      this.verifyAutonomousChatTerminalAuthority(observed, observedPending);
-      const claim = this.claimAutonomousChatPostCommit(observed);
+      await this.verifyAutonomousChatTerminalAuthority(observed, observedPending);
+      const claim = await this.claimAutonomousChatPostCommit(observed);
       if (!claim) {
         return false;
       }
-      this.verifyAutonomousChatTerminalAuthority(claim.run, claim.pending);
+      await this.verifyAutonomousChatTerminalAuthority(claim.run, claim.pending);
       let resolution: Record<string, unknown> | void;
       const canonicalAutonomousAdmission = isAutonomousAdmittedV2ChatRun(claim.run);
       const authoritySupersededBeforeSideEffect =
         canonicalAutonomousAdmission &&
-        this.settleCanonicalAutonomousChatWriteAuthority(claim.run) === "authority_superseded";
+        (await this.settleCanonicalAutonomousChatWriteAuthority(claim.run)) === "authority_superseded";
       if (!authoritySupersededBeforeSideEffect) {
         const postCommitAbort = new AbortController();
         const claimHeartbeat = setInterval(
-          () => {
+          async () => {
             try {
-              if (!this.renewAutonomousChatPostCommitClaim(claim.run.runId, claim.pending)) {
+              if (!(await this.renewAutonomousChatPostCommitClaim(claim.run.runId, claim.pending))) {
                 postCommitAbort.abort(
                   new DurableWorkerInterruptionError(
                     "lease_lost",
@@ -1206,7 +1217,7 @@ export class DurableRunService {
                 );
               }
             } catch (error) {
-              this.reportDurableRunRecoveryFailure(claim.run.runId, error);
+              await this.reportDurableRunRecoveryFailure(claim.run.runId, error);
               postCommitAbort.abort(error);
             }
           },
@@ -1247,7 +1258,7 @@ export class DurableRunService {
         }
       }
       let clearedClaim = false;
-      const cleared = this.retryDurableRunUpdate(runId, (current) => {
+      const cleared = await this.retryDurableRunUpdate(runId, async (current) => {
         const currentPending = readAutonomousChatPostCommitPendingMarker(current);
         if (
           current.status !== "completed" ||
@@ -1257,11 +1268,11 @@ export class DurableRunService {
         ) {
           return current;
         }
-        this.verifyAutonomousChatTerminalAuthority(current, currentPending);
+        await this.verifyAutonomousChatTerminalAuthority(current, currentPending);
         const authoritySuperseded =
           authoritySupersededBeforeSideEffect ||
           (canonicalAutonomousAdmission &&
-            this.settleCanonicalAutonomousChatWriteAuthority(current) === "authority_superseded");
+            (await this.settleCanonicalAutonomousChatWriteAuthority(current)) === "authority_superseded");
         const metadata = { ...(current.metadata ?? {}) };
         delete metadata[AUTONOMOUS_CHAT_POST_COMMIT_PENDING_METADATA_KEY];
         const generalPending = readGeneralChatPostCommitPendingMarker(current);
@@ -1298,7 +1309,7 @@ export class DurableRunService {
         };
         readExactAutonomousChatPostCommitSettlement(autonomousSettlement);
         metadata.autonomousChatPostCommit = autonomousSettlement;
-        const updated = this.ctx.storage.durableRuns.updateRun({
+        const updated = await this.ctx.storage.durableRuns.updateRun({
           runId: current.runId,
           status: current.status,
           metadata,
@@ -1310,20 +1321,20 @@ export class DurableRunService {
       });
       if (clearedClaim && !hasAutonomousChatPostCommitPending(cleared)) {
         if (!hasGeneralChatPostCommitPending(cleared)) {
-          this.closeTerminalChatTurnAdmissionIfReady(cleared);
+          await this.closeTerminalChatTurnAdmissionIfReady(cleared);
         }
       }
       return clearedClaim && !hasAutonomousChatPostCommitPending(cleared);
     } catch (error) {
-      this.reportDurableRunRecoveryFailure(runId, error);
+      await this.reportDurableRunRecoveryFailure(runId, error);
       return false;
     }
   }
 
-  private verifyAutonomousChatTerminalAuthority(
+  private async verifyAutonomousChatTerminalAuthority(
     run: DurableRunRecord,
     pending: AutonomousChatPostCommitPendingMarker,
-  ): void {
+  ): Promise<void> {
     const payload = run.payload as { version?: unknown; turnId?: unknown } | undefined;
     if (run.workflowKey !== "chat.turn.execute" || payload?.version !== "chat.turn.execute.v2") {
       if (run.metadata?.[CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY] !== undefined) {
@@ -1331,11 +1342,11 @@ export class DurableRunService {
       }
       return;
     }
-    this.requireExactParentTurnAdmission(run, { requireActive: false });
+    await this.requireExactParentTurnAdmission(run, { requireActive: false });
     if (run.metadata?.autonomousAdmission === undefined) {
       throw new Error(`Autonomous Chat post-commit ${run.runId} has no autonomous admission seal.`);
     }
-    this.verifyCanonicalAutonomousChatAdmission(run);
+    await this.verifyCanonicalAutonomousChatAdmission(run);
     const authority = readChatTurnRuntimeAuthoritySeal(run.metadata[CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY]);
     if (
       !authority ||
@@ -1351,7 +1362,7 @@ export class DurableRunService {
       throw new Error(`Autonomous Chat post-commit ${run.runId} has no exact terminal runtime authority.`);
     }
     assertDurableRetryPolicyMatchesRun(run.metadata.retryPolicy, run.maxAttempts, DURABLE_RETRY_POLICY_DEFAULT);
-    const checkpoint = this.ctx.storage.durableRuns.getLatestCheckpointByKind(run.runId, "run_completed");
+    const checkpoint = await this.ctx.storage.durableRuns.getLatestCheckpointByKind(run.runId, "run_completed");
     if (!checkpoint) {
       throw new Error(`Autonomous Chat post-commit ${run.runId} has no authority-anchored terminal checkpoint.`);
     }
@@ -1367,7 +1378,7 @@ export class DurableRunService {
     ) {
       throw new Error(`Autonomous Chat post-commit ${run.runId} has no matching general generation.`);
     }
-    if (this.verifyCompletedSystemHeartbeatOutputBinding(run, authority, checkpoint)) return;
+    if (await this.verifyCompletedSystemHeartbeatOutputBinding(run, authority, checkpoint)) return;
     const terminalOutput = authority.material.terminalOutput;
     if (
       !terminalOutput ||
@@ -1387,9 +1398,9 @@ export class DurableRunService {
     }
   }
 
-  private readCheckpointAnchoredChatTurnRuntimeAuthority(
+  private async readCheckpointAnchoredChatTurnRuntimeAuthority(
     run: DurableRunRecord,
-  ): ChatTurnRuntimeAuthoritySealV1 | undefined {
+  ): Promise<ChatTurnRuntimeAuthoritySealV1 | undefined> {
     const payload = run.payload as { version?: unknown; turnId?: unknown } | undefined;
     const authorityValue = run.metadata?.[CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY];
     const admittedV2Chat = run.workflowKey === "chat.turn.execute" && payload?.version === "chat.turn.execute.v2";
@@ -1402,8 +1413,8 @@ export class DurableRunService {
     if (!admittedV2Chat) {
       throw new Error(`Durable run ${run.runId} carries runtime authority without an admitted v2 Chat turn.`);
     }
-    this.requireExactParentTurnAdmission(run, { requireActive: false });
-    if (run.metadata?.autonomousAdmission !== undefined) this.verifyCanonicalAutonomousChatAdmission(run);
+    await this.requireExactParentTurnAdmission(run, { requireActive: false });
+    if (run.metadata?.autonomousAdmission !== undefined) await this.verifyCanonicalAutonomousChatAdmission(run);
     if (
       !(run.status === "waiting" || run.status === "completed" || run.status === "failed" || run.status === "cancelled")
     ) {
@@ -1428,7 +1439,7 @@ export class DurableRunService {
           : run.status === "failed"
             ? "run_failed"
             : "run_cancelled";
-    const checkpoint = this.ctx.storage.durableRuns.getLatestCheckpointByKind(run.runId, checkpointKind);
+    const checkpoint = await this.ctx.storage.durableRuns.getLatestCheckpointByKind(run.runId, checkpointKind);
     if (!checkpoint) {
       throw new Error(`Durable Chat run ${run.runId} has no checkpoint for its runtime authority.`);
     }
@@ -1450,17 +1461,17 @@ export class DurableRunService {
     }
   }
 
-  private verifyGeneralChatPostCommitRuntimeAuthority(
+  private async verifyGeneralChatPostCommitRuntimeAuthority(
     run: DurableRunRecord,
     marker: GeneralChatPostCommitPendingMarker,
-  ): ChatTurnRuntimeAuthoritySealV1 {
+  ): Promise<ChatTurnRuntimeAuthoritySealV1> {
     const payload = run.payload as { version?: unknown } | undefined;
     if (run.workflowKey !== "chat.turn.execute" || payload?.version !== "chat.turn.execute.v2") {
       throw new Error(
         `Durable Chat post-commit ${run.runId} has no exact admitted v2 authority and is quarantined from reconciliation.`,
       );
     }
-    const authority = this.readCheckpointAnchoredChatTurnRuntimeAuthority(run);
+    const authority = await this.readCheckpointAnchoredChatTurnRuntimeAuthority(run);
     if (!authority) {
       throw new Error(`Durable Chat post-commit ${run.runId} has no checkpoint-anchored runtime authority.`);
     }
@@ -1552,15 +1563,15 @@ export class DurableRunService {
     return true;
   }
 
-  private verifyCanonicalTerminalOutputAgainstAuthority(
+  private async verifyCanonicalTerminalOutputAgainstAuthority(
     run: DurableRunRecord,
     authority: ChatTurnRuntimeAuthoritySealV1,
-  ): void {
+  ): Promise<void> {
     if (authority.material.durableStatus !== "completed") return;
     const terminalOutput = authority.material.terminalOutput;
     const payload = run.payload as { sessionId?: unknown } | undefined;
-    const checkpoint = this.ctx.storage.durableRuns.getLatestCheckpointByKind(run.runId, "run_completed");
-    if (checkpoint && this.verifyCompletedSystemHeartbeatOutputBinding(run, authority, checkpoint)) return;
+    const checkpoint = await this.ctx.storage.durableRuns.getLatestCheckpointByKind(run.runId, "run_completed");
+    if (checkpoint && (await this.verifyCompletedSystemHeartbeatOutputBinding(run, authority, checkpoint))) return;
     if (
       !terminalOutput ||
       !checkpoint ||
@@ -1579,7 +1590,7 @@ export class DurableRunService {
     ) {
       throw new Error(`Durable Chat run ${run.runId} terminal output drifted from its runtime authority.`);
     }
-    const message = this.ctx.storage.chatMessages.get(terminalOutput.assistantMessageId);
+    const message = await this.ctx.storage.chatMessages.get(terminalOutput.assistantMessageId);
     if (
       !message ||
       message.messageId !== terminalOutput.assistantMessageId ||
@@ -1592,11 +1603,11 @@ export class DurableRunService {
     }
   }
 
-  private verifyCompletedSystemHeartbeatOutputBinding(
+  private async verifyCompletedSystemHeartbeatOutputBinding(
     run: DurableRunRecord,
     authority: ChatTurnRuntimeAuthoritySealV1,
     checkpoint: DurableCheckpointRecord,
-  ): boolean {
+  ): Promise<boolean> {
     const payload = run.payload as
       | {
           sessionId?: unknown;
@@ -1688,7 +1699,7 @@ export class DurableRunService {
 
     const metadata = run.metadata ?? {};
     const terminalOutput = authority.material.terminalOutput;
-    const message = this.ctx.storage.chatMessages.get(payload.assistantMessageId);
+    const message = await this.ctx.storage.chatMessages.get(payload.assistantMessageId);
     if (!decision.decision.notify) {
       if (
         terminalOutput ||
@@ -1733,16 +1744,16 @@ export class DurableRunService {
     return true;
   }
 
-  private claimAutonomousChatPostCommit(
+  private async claimAutonomousChatPostCommit(
     observed: DurableRunRecord,
-  ): { run: DurableRunRecord; pending: AutonomousChatPostCommitPendingMarker } | undefined {
+  ): Promise<{ run: DurableRunRecord; pending: AutonomousChatPostCommitPendingMarker } | undefined> {
     const observedPending = readAutonomousChatPostCommitPendingMarker(observed);
     if (!observedPending) {
       return undefined;
     }
     const claimId = randomUUID();
     let claim: { run: DurableRunRecord; pending: AutonomousChatPostCommitPendingMarker } | undefined;
-    this.retryDurableRunUpdate(observed.runId, (current) => {
+    await this.retryDurableRunUpdate(observed.runId, async (current) => {
       claim = undefined;
       const pending = readAutonomousChatPostCommitPendingMarker(current);
       if (
@@ -1752,7 +1763,7 @@ export class DurableRunService {
       ) {
         return current;
       }
-      const claimedAt = this.readDurableDatabaseNow();
+      const claimedAt = await this.readDurableDatabaseNow();
       const claimedAtMs = Date.parse(claimedAt);
       const activeClaimExpiresAt = pending.claimExpiresAt ? Date.parse(pending.claimExpiresAt) : Number.NaN;
       if (pending.claimId && Number.isFinite(activeClaimExpiresAt) && activeClaimExpiresAt > claimedAtMs) {
@@ -1763,7 +1774,7 @@ export class DurableRunService {
         claimId,
         claimExpiresAt: new Date(claimedAtMs + AUTONOMOUS_CHAT_POST_COMMIT_CLAIM_TTL_MS).toISOString(),
       };
-      const claimedRun = this.ctx.storage.durableRuns.updateRun({
+      const claimedRun = await this.ctx.storage.durableRuns.updateRun({
         runId: current.runId,
         status: current.status,
         metadata: {
@@ -1779,9 +1790,12 @@ export class DurableRunService {
     return claim;
   }
 
-  private renewAutonomousChatPostCommitClaim(runId: string, claimed: AutonomousChatPostCommitPendingMarker): boolean {
+  private async renewAutonomousChatPostCommitClaim(
+    runId: string,
+    claimed: AutonomousChatPostCommitPendingMarker,
+  ): Promise<boolean> {
     let renewed = false;
-    this.retryDurableRunUpdate(runId, (current) => {
+    await this.retryDurableRunUpdate(runId, async (current) => {
       const pending = readAutonomousChatPostCommitPendingMarker(current);
       if (
         current.status !== "completed" ||
@@ -1791,9 +1805,9 @@ export class DurableRunService {
       ) {
         return current;
       }
-      const now = this.readDurableDatabaseNow();
+      const now = await this.readDurableDatabaseNow();
       const nowMs = Date.parse(now);
-      const next = this.ctx.storage.durableRuns.updateRun({
+      const next = await this.ctx.storage.durableRuns.updateRun({
         runId: current.runId,
         status: current.status,
         metadata: {
@@ -1815,23 +1829,23 @@ export class DurableRunService {
   async reconcileGeneralChatPostCommit(runId: string): Promise<boolean> {
     let observed: DurableRunRecord;
     try {
-      observed = this.ctx.storage.durableRuns.getRun(runId);
+      observed = await this.ctx.storage.durableRuns.getRun(runId);
       if (readLinkedFinalizationPending(observed)) {
         await this.finalizePendingLinkedState(observed);
-        observed = this.ctx.storage.durableRuns.getRun(runId);
+        observed = await this.ctx.storage.durableRuns.getRun(runId);
         if (readLinkedFinalizationPending(observed)) {
           return false;
         }
       }
       if (hasAutonomousChatPostCommitPending(observed)) {
         await this.reconcileAutonomousChatPostCommit(runId);
-        observed = this.ctx.storage.durableRuns.getRun(runId);
+        observed = await this.ctx.storage.durableRuns.getRun(runId);
         if (hasAutonomousChatPostCommitPending(observed)) {
           return false;
         }
       }
     } catch (error) {
-      this.reportDurableRunRecoveryFailure(runId, error);
+      await this.reportDurableRunRecoveryFailure(runId, error);
       return false;
     }
     const nowMs = Date.now();
@@ -1939,14 +1953,14 @@ export class DurableRunService {
       });
     }
     try {
-      const canonical = this.ctx.storage.sessionMutationAdmissions.require(activeAdmission.admissionId);
+      const canonical = await this.ctx.storage.sessionMutationAdmissions.require(activeAdmission.admissionId);
       if (!sameTurnAdmissionIdentity(canonical, activeAdmission)) {
         return terminalChatAdmissionOutcome("lineage_mismatch", startedAt, 0, {
           admissionId: canonical.admissionId,
           admissionStatus: canonical.status,
         });
       }
-      const binding = this.ctx.storage.sessionMutationAdmissions.findDurableRunBinding({
+      const binding = await this.ctx.storage.sessionMutationAdmissions.findDurableRunBinding({
         admissionId: canonical.admissionId,
         workspaceId: canonical.workspaceId,
         sessionId: canonical.sessionId,
@@ -1959,7 +1973,7 @@ export class DurableRunService {
           admissionStatus: canonical.status,
         });
       }
-      const run = this.ctx.storage.durableRuns.getRun(binding.durableRunId);
+      const run = await this.ctx.storage.durableRuns.getRun(binding.durableRunId);
       if (!isTerminalChatRunRecoveryCandidate(run)) {
         return terminalChatAdmissionOutcome("not_terminal", startedAt, 0, {
           durableRunId: run.runId,
@@ -1999,7 +2013,7 @@ export class DurableRunService {
     let observedActive = false;
     try {
       while (true) {
-        const run = this.ctx.storage.durableRuns.getRun(input.runId);
+        const run = await this.ctx.storage.durableRuns.getRun(input.runId);
         if (!isExactChatRunProjection(run, input)) {
           return terminalChatAdmissionOutcome("lineage_mismatch", startedAt, deadline, {
             durableRunId: run.runId,
@@ -2017,7 +2031,7 @@ export class DurableRunService {
           continue;
         }
 
-        const admission = this.requireExactParentTurnAdmission(run, { requireActive: false });
+        const admission = await this.requireExactParentTurnAdmission(run, { requireActive: false });
         if (input.expectedAdmissionId !== undefined && admission.admissionId !== input.expectedAdmissionId) {
           return terminalChatAdmissionOutcome("lineage_mismatch", startedAt, deadline, {
             durableRunId: run.runId,
@@ -2026,7 +2040,7 @@ export class DurableRunService {
             admissionStatus: admission.status,
           });
         }
-        const binding = this.ctx.storage.sessionMutationAdmissions.findDurableRunBinding({
+        const binding = await this.ctx.storage.sessionMutationAdmissions.findDurableRunBinding({
           admissionId: admission.admissionId,
           workspaceId: admission.workspaceId,
           sessionId: admission.sessionId,
@@ -2076,9 +2090,9 @@ export class DurableRunService {
             admissionStatus: admission.status,
           });
         }
-        const settledAdmission = this.ctx.storage.sessionMutationAdmissions.require(admission.admissionId);
+        const settledAdmission = await this.ctx.storage.sessionMutationAdmissions.require(admission.admissionId);
         if (settledAdmission.status !== "active") {
-          const reconciledRun = this.ctx.storage.durableRuns.getRun(run.runId);
+          const reconciledRun = await this.ctx.storage.durableRuns.getRun(run.runId);
           return terminalChatAdmissionOutcome(
             isExactDurableTerminalAdmissionRelease(settledAdmission, reconciledRun) ? "released" : "lineage_mismatch",
             startedAt,
@@ -2118,28 +2132,28 @@ export class DurableRunService {
         if (!this.ownsGeneralChatPostCommitInFlight(runId, ownershipGeneration)) {
           return false;
         }
-        const observed = this.ctx.storage.durableRuns.getRun(runId);
+        const observed = await this.ctx.storage.durableRuns.getRun(runId);
         const marker = readGeneralChatPostCommitPendingMarker(observed);
         if (!marker) {
           if (GENERAL_CHAT_POST_COMMIT_PENDING_METADATA_KEY in (observed.metadata ?? {})) {
             throw new Error(`Durable Chat post-commit ${runId} has an invalid pending marker.`);
           }
-          this.closeTerminalChatTurnAdmissionIfReady(observed);
+          await this.closeTerminalChatTurnAdmissionIfReady(observed);
           return true;
         }
-        const authority = this.verifyGeneralChatPostCommitRuntimeAuthority(observed, marker);
+        const authority = await this.verifyGeneralChatPostCommitRuntimeAuthority(observed, marker);
         if (!this.arePriorChatTurnFinalizersSettled(observed, authority)) {
           return false;
         }
         if (this.hasSettledGeneralChatPostCommitParentEffects(observed, marker)) {
-          const settlement = this.settleGeneralChatPostCommitGeneration(runId, marker);
+          const settlement = await this.settleGeneralChatPostCommitGeneration(runId, marker);
           if (settlement.generationChanged) {
             continue;
           }
           for (const childRunId of settlement.queuedChildRunIds) {
             this.requestRunProcessing(childRunId);
           }
-          this.closeTerminalChatTurnAdmissionIfReady(settlement.run);
+          await this.closeTerminalChatTurnAdmissionIfReady(settlement.run);
           return settlement.complete;
         }
         const completedEffects = new Set(readGeneralChatPostCommitCompletedEffects(observed));
@@ -2148,15 +2162,15 @@ export class DurableRunService {
           requestedAt: marker.requestedAt,
           targetTraceStatus: marker.traceStatus,
           completedEffects: [...completedEffects],
-          runEffect: (effect, callback) =>
+          runEffect: async (effect, callback) =>
             this.ownsGeneralChatPostCommitInFlight(runId, ownershipGeneration)
               ? this.runGeneralChatPostCommitEffect(runId, marker, effect, callback, completedEffects)
               : false,
-          publishEffect: (effect, callback) =>
+          publishEffect: async (effect, callback) =>
             this.ownsGeneralChatPostCommitInFlight(runId, ownershipGeneration)
               ? this.publishGeneralChatPostCommitEffect(runId, marker, effect, callback, completedEffects)
               : false,
-          enqueueDurableEffect: (input) =>
+          enqueueDurableEffect: async (input) =>
             this.ownsGeneralChatPostCommitInFlight(runId, ownershipGeneration)
               ? this.enqueueGeneralChatPostCommitEffect(runId, marker, input, completedEffects)
               : undefined,
@@ -2165,7 +2179,7 @@ export class DurableRunService {
         if (!this.ownsGeneralChatPostCommitInFlight(runId, ownershipGeneration)) {
           return false;
         }
-        const reconciled = this.ctx.storage.durableRuns.getRun(runId);
+        const reconciled = await this.ctx.storage.durableRuns.getRun(runId);
         const reconciledMarker = readGeneralChatPostCommitPendingMarker(reconciled);
         if (!reconciledMarker) {
           if (GENERAL_CHAT_POST_COMMIT_PENDING_METADATA_KEY in (reconciled.metadata ?? {})) {
@@ -2176,14 +2190,14 @@ export class DurableRunService {
         if (!sameGeneralChatPostCommitGeneration(marker, reconciledMarker)) {
           continue;
         }
-        const settlement = this.settleGeneralChatPostCommitGeneration(runId, marker, resolution);
+        const settlement = await this.settleGeneralChatPostCommitGeneration(runId, marker, resolution);
         if (settlement.generationChanged) {
           continue;
         }
         for (const childRunId of settlement.queuedChildRunIds) {
           this.requestRunProcessing(childRunId);
         }
-        this.closeTerminalChatTurnAdmissionIfReady(settlement.run);
+        await this.closeTerminalChatTurnAdmissionIfReady(settlement.run);
         return settlement.complete;
       }
       throw new Error(`Durable Chat post-commit ${runId} changed generations too many times to reconcile safely.`);
@@ -2192,10 +2206,10 @@ export class DurableRunService {
         return false;
       }
       if (error instanceof DurableChatParentAuthoritySupersededError) {
-        this.settleAuthoritySupersededGeneralChatPostCommit(runId);
+        await this.settleAuthoritySupersededGeneralChatPostCommit(runId);
         return true;
       }
-      this.reportDurableRunRecoveryFailure(runId, error);
+      await this.reportDurableRunRecoveryFailure(runId, error);
       return false;
     }
   }
@@ -2210,21 +2224,21 @@ export class DurableRunService {
     return value.generationId === marker.generationId && value.parentLocalEffectsStatus === "settled";
   }
 
-  private settleGeneralChatPostCommitGeneration(
+  private async settleGeneralChatPostCommitGeneration(
     runId: string,
     expectedMarker: GeneralChatPostCommitPendingMarker,
     resolution?: Record<string, unknown> | void,
-  ): {
+  ): Promise<{
     run: DurableRunRecord;
     generationChanged: boolean;
     complete: boolean;
     queuedChildRunIds: string[];
-  } {
+  }> {
     let generationChanged = false;
     const queuedChildRunIds: string[] = [];
-    let settled = this.ctx.storage.durableRuns.getRun(runId);
-    this.ctx.storage.runImmediateTransaction(() => {
-      const current = this.ctx.storage.durableRuns.getRunForUpdate(runId);
+    let settled = await this.ctx.storage.durableRuns.getRun(runId);
+    await this.ctx.storage.runImmediateTransaction(async () => {
+      const current = await this.ctx.storage.durableRuns.getRunForUpdate(runId);
       const currentMarker = readGeneralChatPostCommitPendingMarker(current);
       if (!currentMarker) {
         settled = current;
@@ -2235,7 +2249,7 @@ export class DurableRunService {
         settled = current;
         return;
       }
-      const runtimeAuthority = this.verifyGeneralChatPostCommitRuntimeAuthority(current, currentMarker);
+      const runtimeAuthority = await this.verifyGeneralChatPostCommitRuntimeAuthority(current, currentMarker);
       if (!this.arePriorChatTurnFinalizersSettled(current, runtimeAuthority)) {
         throw new Error(`Durable Chat post-commit ${runId} cannot settle before its prior finalizers.`);
       }
@@ -2287,7 +2301,7 @@ export class DurableRunService {
         if (childRunId !== expectedChildRunId) {
           throw new Error(`Durable Chat post-commit ${runId} has an invalid ${effect} child-run receipt.`);
         }
-        const child = this.ctx.storage.durableRuns.getRunForUpdate(childRunId);
+        const child = await this.ctx.storage.durableRuns.getRunForUpdate(childRunId);
         assertGeneralChatPostCommitEffectChildLink(child, runId, currentMarker.generationId, effect);
         if (!isDurableRunTerminal(child.status)) {
           childrenPending = true;
@@ -2340,7 +2354,7 @@ export class DurableRunService {
         .sort((left, right) => left.localeCompare(right));
 
       if (terminalParent && admittedV2Parent && !parentFinalizationBlocked) {
-        const admission = this.requireExactParentTurnAdmission(current, { requireActive: false });
+        const admission = await this.requireExactParentTurnAdmission(current, { requireActive: false });
         const expectedHandoff = {
           version: 1 as const,
           admissionId: admission.admissionId,
@@ -2389,7 +2403,7 @@ export class DurableRunService {
         ...(shouldRetainPending ? {} : { completedAt }),
       };
       readExactGeneralChatPostCommitSettlement(metadata.generalChatPostCommit);
-      settled = this.ctx.storage.durableRuns.updateRun({
+      settled = await this.ctx.storage.durableRuns.updateRun({
         runId: current.runId,
         status: current.status,
         metadata,
@@ -2397,7 +2411,7 @@ export class DurableRunService {
         expectedVersion: current.version,
       });
       if (!hasGeneralChatPostCommitPending(settled) && terminalParent) {
-        this.closeTerminalChatTurnAdmissionIfReady(settled);
+        await this.closeTerminalChatTurnAdmissionIfReady(settled);
       }
     });
     return {
@@ -2442,12 +2456,12 @@ export class DurableRunService {
     }
   }
 
-  private settleAuthoritySupersededGeneralChatPostCommit(runId: string): void {
-    this.ctx.storage.runImmediateTransaction(() => {
-      const current = this.ctx.storage.durableRuns.getRunForUpdate(runId);
+  private async settleAuthoritySupersededGeneralChatPostCommit(runId: string): Promise<void> {
+    await this.ctx.storage.runImmediateTransaction(async () => {
+      const current = await this.ctx.storage.durableRuns.getRunForUpdate(runId);
       const marker = readGeneralChatPostCommitPendingMarker(current);
       if (!marker) return;
-      const admission = this.requireExactParentTurnAdmission(current, { requireActive: false });
+      const admission = await this.requireExactParentTurnAdmission(current, { requireActive: false });
       if (admission.status !== "cancelled" || admission.terminalAuthorityKind !== "authority_superseded") {
         throw new Error(`Durable Chat parent ${runId} has no authority-superseded terminal evidence.`);
       }
@@ -2473,7 +2487,7 @@ export class DurableRunService {
         settledAt: new Date().toISOString(),
       };
       readExactGeneralChatPostCommitSettlement(metadata.generalChatPostCommit);
-      this.ctx.storage.durableRuns.updateRun({
+      await this.ctx.storage.durableRuns.updateRun({
         runId: current.runId,
         status: current.status,
         metadata,
@@ -2484,25 +2498,25 @@ export class DurableRunService {
   }
 
   /**
-   * Atomically applies one synchronous local consumer and records its per-turn
+   * Atomically applies one local consumer and records its per-turn
    * receipt. PostgreSQL workers serialize on the parent row before invoking
    * the callback, so two processes cannot both run the same callback. This
-   * guarantee covers only work that commits synchronously on the same database
-   * connection; provider-backed consumers use deterministic child runs below.
+   * guarantee covers only work awaited on the same transaction connection;
+   * provider-backed consumers use deterministic child runs below.
    */
-  private runGeneralChatPostCommitEffect(
+  private async runGeneralChatPostCommitEffect(
     runId: string,
     expectedMarker: GeneralChatPostCommitPendingMarker,
     effect: GeneralChatPostCommitEffect,
-    callback: () => void,
+    callback: () => void | Promise<void>,
     completedEffects: Set<GeneralChatPostCommitEffect>,
-  ): boolean {
+  ): Promise<boolean> {
     if (completedEffects.has(effect)) {
       return false;
     }
     let applied = false;
-    this.ctx.storage.runImmediateTransaction(() => {
-      const current = this.ctx.storage.durableRuns.getRunForUpdate(runId);
+    await this.ctx.storage.runImmediateTransaction(async () => {
+      const current = await this.ctx.storage.durableRuns.getRunForUpdate(runId);
       const currentMarker = readGeneralChatPostCommitPendingMarker(current);
       if (!currentMarker || !sameGeneralChatPostCommitGeneration(expectedMarker, currentMarker)) {
         return;
@@ -2512,15 +2526,7 @@ export class DurableRunService {
         completedEffects.add(effect);
         return;
       }
-      const callbackResult = callback() as unknown;
-      if (
-        callbackResult &&
-        typeof callbackResult === "object" &&
-        "then" in callbackResult &&
-        typeof (callbackResult as { then?: unknown }).then === "function"
-      ) {
-        throw new Error(`Durable Chat post-commit effect ${effect} must commit synchronously.`);
-      }
+      await callback();
       const metadata = {
         ...(current.metadata ?? {}),
         [GENERAL_CHAT_POST_COMMIT_PENDING_METADATA_KEY]: {
@@ -2528,7 +2534,7 @@ export class DurableRunService {
           completedEffects: [...currentEffects, effect],
         },
       };
-      this.ctx.storage.durableRuns.updateRun({
+      await this.ctx.storage.durableRuns.updateRun({
         runId: current.runId,
         status: current.status,
         metadata,
@@ -2546,38 +2552,38 @@ export class DurableRunService {
    * transaction commits, and it also runs when the receipt already exists so an
    * idempotent retained delivery closes a crash gap without emitting ghosts.
    */
-  private publishGeneralChatPostCommitEffect(
+  private async publishGeneralChatPostCommitEffect(
     runId: string,
     expectedMarker: GeneralChatPostCommitPendingMarker,
     effect: GeneralChatPostCommitEffect,
-    callback: () => void,
+    callback: () => void | Promise<void>,
     completedEffects: Set<GeneralChatPostCommitEffect>,
-  ): boolean {
-    const applied = this.runGeneralChatPostCommitEffect(
+  ): Promise<boolean> {
+    const applied = await this.runGeneralChatPostCommitEffect(
       runId,
       expectedMarker,
       effect,
       () => undefined,
       completedEffects,
     );
-    const committed = this.ctx.storage.durableRuns.getRun(runId);
+    const committed = await this.ctx.storage.durableRuns.getRun(runId);
     const currentMarker = readGeneralChatPostCommitPendingMarker(committed);
     if (
       currentMarker &&
       sameGeneralChatPostCommitGeneration(expectedMarker, currentMarker) &&
       currentMarker.completedEffects.includes(effect)
     ) {
-      callback();
+      await callback();
     }
     return applied;
   }
 
-  private enqueueGeneralChatPostCommitEffect(
+  private async enqueueGeneralChatPostCommitEffect(
     parentRunId: string,
     expectedMarker: GeneralChatPostCommitPendingMarker,
     input: GeneralChatPostCommitDurableEffectInput,
     completedEffects: Set<GeneralChatPostCommitEffect>,
-  ): string | undefined {
+  ): Promise<string | undefined> {
     const effect = input.effect;
     const childRunId = buildGeneralChatPostCommitEffectRunId(parentRunId, expectedMarker.generationId, effect);
     const dispatchedChildRunId = expectedMarker.durableEffectRunIds[effect];
@@ -2585,7 +2591,7 @@ export class DurableRunService {
       if (dispatchedChildRunId !== childRunId) {
         throw new Error(`Durable Chat post-commit ${parentRunId} has an invalid ${effect} child-run receipt.`);
       }
-      const child = this.ctx.storage.durableRuns.getRun(childRunId);
+      const child = await this.ctx.storage.durableRuns.getRun(childRunId);
       assertGeneralChatPostCommitEffectChildLink(child, parentRunId, expectedMarker.generationId, effect);
       if (child.status === "queued") {
         this.requestRunProcessing(childRunId);
@@ -2597,8 +2603,8 @@ export class DurableRunService {
     }
     let committedChildRunId: string | undefined;
     let createdChild: DurableRunRecord | undefined;
-    this.ctx.storage.runImmediateTransaction(() => {
-      const current = this.ctx.storage.durableRuns.getRunForUpdate(parentRunId);
+    await this.ctx.storage.runImmediateTransaction(async () => {
+      const current = await this.ctx.storage.durableRuns.getRunForUpdate(parentRunId);
       const currentMarker = readGeneralChatPostCommitPendingMarker(current);
       if (!currentMarker || !sameGeneralChatPostCommitGeneration(expectedMarker, currentMarker)) {
         return;
@@ -2617,7 +2623,7 @@ export class DurableRunService {
         return;
       }
 
-      const childAdmission = this.admitGeneralChatPostCommitChild(current, currentMarker, input, childRunId);
+      const childAdmission = await this.admitGeneralChatPostCommitChild(current, currentMarker, input, childRunId);
       const payload: GeneralChatPostCommitEffectWorkflowPayload = {
         version: "chat.post_commit.effect.v2",
         parentRunId,
@@ -2630,7 +2636,7 @@ export class DurableRunService {
       };
       let child: DurableRunRecord | undefined;
       try {
-        child = this.ctx.storage.durableRuns.getRun(childRunId);
+        child = await this.ctx.storage.durableRuns.getRun(childRunId);
       } catch (error) {
         if (!(error instanceof NotFoundError)) {
           throw error;
@@ -2640,7 +2646,7 @@ export class DurableRunService {
         assertGeneralChatPostCommitEffectChild(child, payload);
       } else {
         const now = new Date().toISOString();
-        child = this.ctx.storage.durableRuns.createRun({
+        child = await this.ctx.storage.durableRuns.createRun({
           runId: childRunId,
           workflowKey: "chat.post_commit.effect",
           status: "queued",
@@ -2660,7 +2666,7 @@ export class DurableRunService {
           },
           now,
         });
-        this.ctx.storage.durableRuns.createCheckpoint({
+        await this.ctx.storage.durableRuns.createCheckpoint({
           runId: childRunId,
           checkpointKind: "run_created",
           state: {
@@ -2672,7 +2678,7 @@ export class DurableRunService {
           },
           createdAt: now,
         });
-        this.recordDurableTimelineEvent(childRunId, "run_created", {
+        await this.recordDurableTimelineEvent(childRunId, "run_created", {
           workflowKey: child.workflowKey,
           status: child.status,
           parentRunId,
@@ -2685,7 +2691,7 @@ export class DurableRunService {
         createdChild = child;
       }
 
-      this.ctx.storage.durableRuns.updateRun({
+      await this.ctx.storage.durableRuns.updateRun({
         runId: current.runId,
         status: current.status,
         metadata: {
@@ -2705,7 +2711,7 @@ export class DurableRunService {
       committedChildRunId = childRunId;
     });
     if (createdChild) {
-      this.ctx.publishRealtime(
+      await this.ctx.publishRealtime(
         "system",
         "durable",
         {
@@ -2726,17 +2732,17 @@ export class DurableRunService {
     return committedChildRunId;
   }
 
-  private requireExactParentTurnAdmission(
+  private async requireExactParentTurnAdmission(
     parentRun: DurableRunRecord,
     options: { requireActive?: boolean } = {},
-  ): SessionMutationAdmissionRecord & { turnId: string } {
+  ): Promise<SessionMutationAdmissionRecord & { turnId: string }> {
     const payload = parentRun.payload as Record<string, unknown>;
     const admissionId = typeof payload.admissionId === "string" ? payload.admissionId : "";
     const requestActor =
       payload.requestActor && typeof payload.requestActor === "object" && !Array.isArray(payload.requestActor)
         ? (payload.requestActor as Record<string, unknown>)
         : undefined;
-    const admission = admissionId ? this.ctx.storage.sessionMutationAdmissions.require(admissionId) : undefined;
+    const admission = admissionId ? await this.ctx.storage.sessionMutationAdmissions.require(admissionId) : undefined;
     if (
       payload.version !== "chat.turn.execute.v2" ||
       !admission ||
@@ -2758,25 +2764,27 @@ export class DurableRunService {
     return admission as SessionMutationAdmissionRecord & { turnId: string };
   }
 
-  private verifyCanonicalAutonomousChatAdmission(
+  private async verifyCanonicalAutonomousChatAdmission(
     run: DurableRunRecord,
-  ): ReturnType<typeof verifyAutonomousChatAdmissionRunMetadata> {
-    const admission = this.requireExactParentTurnAdmission(run, { requireActive: false });
+  ): Promise<ReturnType<typeof verifyAutonomousChatAdmissionRunMetadata>> {
+    const admission = await this.requireExactParentTurnAdmission(run, { requireActive: false });
     const turnId = (run.payload as { turnId?: unknown } | undefined)?.turnId;
     if (typeof turnId !== "string" || !turnId.trim()) {
       throw new Error(`Autonomous Chat run ${run.runId} has no canonical turn identity.`);
     }
-    const trace = this.ctx.storage.chatTurnTraces.get(turnId);
+    const trace = await this.ctx.storage.chatTurnTraces.get(turnId);
     if (!trace) {
       throw new Error(`Autonomous Chat run ${run.runId} has no canonical trace binding.`);
     }
     return verifyAutonomousChatAdmissionRunMetadata(run, { admission, trace });
   }
 
-  private settleCanonicalAutonomousChatWriteAuthority(run: DurableRunRecord): "current" | "authority_superseded" {
-    const admission = this.requireExactParentTurnAdmission(run, { requireActive: false });
-    this.verifyCanonicalAutonomousChatAdmission(run);
-    const authority = this.ctx.storage.sessionMutationAdmissions.settleTurnWriteAuthority({
+  private async settleCanonicalAutonomousChatWriteAuthority(
+    run: DurableRunRecord,
+  ): Promise<"current" | "authority_superseded"> {
+    const admission = await this.requireExactParentTurnAdmission(run, { requireActive: false });
+    await this.verifyCanonicalAutonomousChatAdmission(run);
+    const authority = await this.ctx.storage.sessionMutationAdmissions.settleTurnWriteAuthority({
       admissionId: admission.admissionId,
       sessionIncarnationId: admission.sessionIncarnationId,
       workspaceId: admission.workspaceId,
@@ -2790,7 +2798,7 @@ export class DurableRunService {
     return "current";
   }
 
-  private closeTerminalChatTurnAdmissionIfReady(run: DurableRunRecord): void {
+  private async closeTerminalChatTurnAdmissionIfReady(run: DurableRunRecord): Promise<void> {
     const admittedV2Parent =
       run.workflowKey === "chat.turn.execute" &&
       (run.payload as { version?: unknown } | undefined)?.version === "chat.turn.execute.v2";
@@ -2822,7 +2830,7 @@ export class DurableRunService {
     if (metadata.chatTurnAdmissionHandoff === undefined) {
       throw new Error(`Durable Chat parent ${run.runId} has no committed terminal handoff marker.`);
     }
-    const admission = this.requireExactParentTurnAdmission(run, { requireActive: false });
+    const admission = await this.requireExactParentTurnAdmission(run, { requireActive: false });
     const handoff = readExactChatTurnAdmissionHandoff(metadata.chatTurnAdmissionHandoff);
     const generalSettlement = readExactGeneralChatPostCommitSettlement(metadata.generalChatPostCommit);
     if (
@@ -2835,7 +2843,7 @@ export class DurableRunService {
     ) {
       throw new Error(`Durable Chat parent ${run.runId} has no exact completed general settlement.`);
     }
-    const runtimeAuthority = this.readCheckpointAnchoredChatTurnRuntimeAuthority(run);
+    const runtimeAuthority = await this.readCheckpointAnchoredChatTurnRuntimeAuthority(run);
     if (runtimeAuthority) {
       if (
         !runtimeAuthority.material.requiredFinalizers.includes("general") ||
@@ -2848,7 +2856,7 @@ export class DurableRunService {
       ) {
         throw new Error(`Durable Chat parent ${run.runId} finalizer settlements do not match runtime authority.`);
       }
-      this.verifyCanonicalTerminalOutputAgainstAuthority(run, runtimeAuthority);
+      await this.verifyCanonicalTerminalOutputAgainstAuthority(run, runtimeAuthority);
     }
     const childRunIds = [
       ...new Set(Object.values(generalSettlement.durableEffectRunIds as Record<string, string>)),
@@ -2869,7 +2877,7 @@ export class DurableRunService {
         admission.terminalAuthorityKind === "authority_superseded" ||
         admission.terminalAuthorityKind === "lifecycle_delete"
       ) {
-        if (retryExhaustion) this.projectChatRetryExhaustionDeadLetter(run, retryExhaustion);
+        if (retryExhaustion) await this.projectChatRetryExhaustionDeadLetter(run, retryExhaustion);
         return;
       }
       if (
@@ -2877,13 +2885,13 @@ export class DurableRunService {
         admission.terminalDurableRunId === run.runId &&
         admission.terminalDurableRunStatus === run.status
       ) {
-        this.settleSystemHeartbeatOccurrenceIfPresent(run, admission);
-        if (retryExhaustion) this.projectChatRetryExhaustionDeadLetter(run, retryExhaustion);
+        await this.settleSystemHeartbeatOccurrenceIfPresent(run, admission);
+        if (retryExhaustion) await this.projectChatRetryExhaustionDeadLetter(run, retryExhaustion);
         return;
       }
       throw new Error(`Durable Chat parent ${run.runId} admission was closed by conflicting authority.`);
     }
-    const authority = this.ctx.storage.sessionMutationAdmissions.settleTurnWriteAuthority({
+    const authority = await this.ctx.storage.sessionMutationAdmissions.settleTurnWriteAuthority({
       admissionId: admission.admissionId,
       sessionIncarnationId: admission.sessionIncarnationId,
       workspaceId: admission.workspaceId,
@@ -2891,10 +2899,10 @@ export class DurableRunService {
       turnId: admission.turnId,
     });
     if (authority.disposition === "authority_superseded") {
-      if (retryExhaustion) this.projectChatRetryExhaustionDeadLetter(run, retryExhaustion);
+      if (retryExhaustion) await this.projectChatRetryExhaustionDeadLetter(run, retryExhaustion);
       return;
     }
-    this.ctx.storage.sessionMutationAdmissions.closeTurnWrite({
+    await this.ctx.storage.sessionMutationAdmissions.closeTurnWrite({
       admissionId: admission.admissionId,
       sessionIncarnationId: admission.sessionIncarnationId,
       workspaceId: admission.workspaceId,
@@ -2905,14 +2913,14 @@ export class DurableRunService {
       idempotencyKey: `chat-turn-handoff:${run.runId}`,
       correlationId: run.runId,
     });
-    this.settleSystemHeartbeatOccurrenceIfPresent(run, admission);
-    if (retryExhaustion) this.projectChatRetryExhaustionDeadLetter(run, retryExhaustion);
+    await this.settleSystemHeartbeatOccurrenceIfPresent(run, admission);
+    if (retryExhaustion) await this.projectChatRetryExhaustionDeadLetter(run, retryExhaustion);
   }
 
-  private settleSystemHeartbeatOccurrenceIfPresent(
+  private async settleSystemHeartbeatOccurrenceIfPresent(
     run: DurableRunRecord,
     admission: SessionMutationAdmissionRecord & { turnId: string },
-  ): void {
+  ): Promise<void> {
     const payload = run.payload as {
       heartbeatOccurrenceId?: unknown;
       capabilityProfileId?: unknown;
@@ -2934,7 +2942,7 @@ export class DurableRunService {
     ) {
       throw new Error(`System heartbeat ${run.runId} has no exact occurrence settlement identity.`);
     }
-    const settlement = occurrences.markTerminal({
+    const settlement = await occurrences.markTerminal({
       occurrenceId: payload.heartbeatOccurrenceId,
       workspaceId: admission.workspaceId,
       sessionId: admission.sessionId,
@@ -2950,11 +2958,11 @@ export class DurableRunService {
     }
   }
 
-  private projectChatRetryExhaustionDeadLetter(
+  private async projectChatRetryExhaustionDeadLetter(
     run: DurableRunRecord,
     marker: ChatRetryExhaustionDeadLetterPending,
-  ): void {
-    const current = this.ctx.storage.durableRuns.getRun(run.runId);
+  ): Promise<void> {
+    const current = await this.ctx.storage.durableRuns.getRun(run.runId);
     if (
       current.status === "dead_lettered" &&
       current.metadata?.[CHAT_RETRY_EXHAUSTION_DEAD_LETTER_PENDING_METADATA_KEY] === undefined
@@ -2975,7 +2983,7 @@ export class DurableRunService {
       throw new Error(`Durable Chat run ${run.runId} retry-exhaustion projection conflicts with terminal truth.`);
     }
     this.assertExactAdmittedChatRetryAuthority(current);
-    this.ctx.storage.durableRuns.upsertDeadLetter({
+    await this.ctx.storage.durableRuns.upsertDeadLetter({
       runId: run.runId,
       reason: marker.reason,
       payload: {
@@ -2987,7 +2995,7 @@ export class DurableRunService {
     });
     const metadata = { ...(current.metadata ?? {}) };
     delete metadata[CHAT_RETRY_EXHAUSTION_DEAD_LETTER_PENDING_METADATA_KEY];
-    this.ctx.storage.durableRuns.updateRun({
+    await this.ctx.storage.durableRuns.updateRun({
       runId: run.runId,
       status: "dead_lettered",
       metadata,
@@ -2995,7 +3003,7 @@ export class DurableRunService {
       clearLease: true,
       expectedVersion: current.version,
     });
-    this.recordDurableTimelineEvent(run.runId, "run_dead_lettered", {
+    await this.recordDurableTimelineEvent(run.runId, "run_dead_lettered", {
       actorId: marker.actorId,
       reason: marker.reason,
       attemptNo: marker.attemptNo,
@@ -3004,14 +3012,14 @@ export class DurableRunService {
     });
   }
 
-  private admitGeneralChatPostCommitChild(
+  private async admitGeneralChatPostCommitChild(
     parentRun: DurableRunRecord,
     marker: GeneralChatPostCommitPendingMarker,
     input: GeneralChatPostCommitDurableEffectInput,
     childRunId: string,
-  ): PostCommitChildAdmissionIdentity {
-    const parentAdmission = this.requireExactParentTurnAdmission(parentRun, { requireActive: false });
-    const authority = this.ctx.storage.sessionMutationAdmissions.settleTurnWriteAuthority({
+  ): Promise<PostCommitChildAdmissionIdentity> {
+    const parentAdmission = await this.requireExactParentTurnAdmission(parentRun, { requireActive: false });
+    const authority = await this.ctx.storage.sessionMutationAdmissions.settleTurnWriteAuthority({
       admissionId: parentAdmission.admissionId,
       sessionIncarnationId: parentAdmission.sessionIncarnationId,
       workspaceId: parentAdmission.workspaceId,
@@ -3032,7 +3040,7 @@ export class DurableRunService {
     ) {
       throw new Error(`Durable Chat post-commit parent ${parentRun.runId} has no exact turn admission lineage.`);
     }
-    const sessionMeta = this.ctx.storage.chatSessionMeta.get(input.sessionId);
+    const sessionMeta = await this.ctx.storage.chatSessionMeta.get(input.sessionId);
     if (
       !sessionMeta ||
       sessionMeta.workspaceId !== input.workspaceId ||
@@ -3051,7 +3059,7 @@ export class DurableRunService {
       sessionIncarnationId,
       postCommitEligibility: marker.postCommitEligibility,
     });
-    const outcome = this.ctx.storage.sessionMutationAdmissions.admit({
+    const outcome = await this.ctx.storage.sessionMutationAdmissions.admit({
       workspaceId: input.workspaceId,
       sessionId: input.sessionId,
       expectedSessionIncarnationId: sessionIncarnationId,
@@ -3096,23 +3104,23 @@ export class DurableRunService {
     };
   }
 
-  private resolvePostCommitEligibility(sessionId: string): PostCommitEligibility {
-    const resolved = this.deps?.resolvePostCommitEligibility?.(sessionId);
+  private async resolvePostCommitEligibility(sessionId: string): Promise<PostCommitEligibility> {
+    const resolved = await this.deps?.resolvePostCommitEligibility?.(sessionId);
     if (resolved) return resolved;
-    const origin = this.ctx.storage.chatSessionMeta?.get?.(sessionId)?.origin;
+    const origin = (await this.ctx.storage.chatSessionMeta?.get?.(sessionId))?.origin;
     return {
       version: 1,
-      autonomyEnabledAtParentSettlement: !this.ctx.isFeatureEnabled("autonomyV1Disabled"),
+      autonomyEnabledAtParentSettlement: !(await this.ctx.isFeatureEnabled("autonomyV1Disabled")),
       evalIntegrityTurn: origin === "prompt_pack",
       humanSession: origin !== "system" && origin !== "prompt_pack",
     };
   }
 
-  createDurableRun(
+  async createDurableRun(
     input: DurableRunCreateRequest,
     options: { publishRealtime?: boolean; idempotentIfExists?: boolean } = {},
-  ): DurableRunRecord {
-    this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
+  ): Promise<DurableRunRecord> {
+    await this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
     assertNoRawRemoteApprovalBearer(input);
     if (
       input.metadata &&
@@ -3144,7 +3152,7 @@ export class DurableRunService {
     const stableRunId =
       (options.idempotentIfExists ?? workflowKey === "chat.turn.execute") ? input.runId?.trim() : undefined;
     if (stableRunId) {
-      const existing = findDurableRun(this.ctx.storage, stableRunId);
+      const existing = await findDurableRun(this.ctx.storage, stableRunId);
       if (existing) {
         assertIdempotentDurableRunMatches(existing, workflowKey, input.payload ?? {}, retryPolicy);
         return existing;
@@ -3152,8 +3160,8 @@ export class DurableRunService {
     }
     let run!: DurableRunRecord;
     try {
-      this.ctx.storage.runImmediateTransaction(() => {
-        run = this.ctx.storage.durableRuns.createRun({
+      await this.ctx.storage.runImmediateTransaction(async () => {
+        run = await this.ctx.storage.durableRuns.createRun({
           runId: input.runId,
           workflowKey,
           status,
@@ -3164,7 +3172,7 @@ export class DurableRunService {
           startedAt: status === "queued" ? undefined : now,
           now,
         });
-        this.createDurableCheckpoint({
+        await this.createDurableCheckpoint({
           runId: run.runId,
           checkpointKind: "run_created",
           state: {
@@ -3173,19 +3181,19 @@ export class DurableRunService {
           },
           createdAt: now,
         });
-        this.recordDurableTimelineEvent(run.runId, "run_created", {
+        await this.recordDurableTimelineEvent(run.runId, "run_created", {
           workflowKey: run.workflowKey,
           status: run.status,
         });
         if (status === "waiting") {
-          this.createDurableCheckpoint({
+          await this.createDurableCheckpoint({
             runId: run.runId,
             checkpointKind: "run_waiting",
             state: {
               waitForEvent: input.waitForEvent ?? null,
             },
           });
-          this.recordDurableTimelineEvent(run.runId, "run_waiting", {
+          await this.recordDurableTimelineEvent(run.runId, "run_waiting", {
             waitForEvent: input.waitForEvent ?? null,
           });
         }
@@ -3194,7 +3202,7 @@ export class DurableRunService {
       if (!stableRunId) {
         throw error;
       }
-      const existing = findDurableRun(this.ctx.storage, stableRunId);
+      const existing = await findDurableRun(this.ctx.storage, stableRunId);
       if (!existing) {
         throw error;
       }
@@ -3202,7 +3210,7 @@ export class DurableRunService {
       return existing;
     }
     if (options.publishRealtime !== false) {
-      this.publishDurableRealtimeSafely(run.runId, {
+      await this.publishDurableRealtimeSafely(run.runId, {
         type: "durable_run_created",
         runId: run.runId,
         workflowKey: run.workflowKey,
@@ -3212,10 +3220,10 @@ export class DurableRunService {
     return run;
   }
 
-  pauseDurableRun(runId: string, actorId = "operator"): DurableRunRecord {
-    this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
+  async pauseDurableRun(runId: string, actorId = "operator"): Promise<DurableRunRecord> {
+    await this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
     assertNoRawRemoteApprovalBearer(actorId);
-    const current = this.ctx.storage.durableRuns.getRun(runId);
+    const current = await this.ctx.storage.durableRuns.getRun(runId);
     if (current.status === "paused") {
       return current;
     }
@@ -3228,8 +3236,8 @@ export class DurableRunService {
       throw new Error(`Durable run ${runId} is already terminal (${current.status})`);
     }
     let next!: DurableRunRecord;
-    this.ctx.storage.runImmediateTransaction(() => {
-      next = this.ctx.storage.durableRuns.updateRun({
+    await this.ctx.storage.runImmediateTransaction(async () => {
+      next = await this.ctx.storage.durableRuns.updateRun({
         runId,
         status: "paused",
         startedAt: current.startedAt ?? new Date().toISOString(),
@@ -3239,13 +3247,13 @@ export class DurableRunService {
         updatedAt: new Date().toISOString(),
         expectedVersion: current.version,
       });
-      this.recordDurableTimelineEvent(runId, "run_paused", {
+      await this.recordDurableTimelineEvent(runId, "run_paused", {
         actorId,
         previousStatus: current.status,
       });
     });
-    this.abortActiveRun(runId, `Durable run ${runId} paused by ${actorId}.`, "paused");
-    this.publishDurableRealtimeSafely(runId, {
+    await this.abortActiveRun(runId, `Durable run ${runId} paused by ${actorId}.`, "paused");
+    await this.publishDurableRealtimeSafely(runId, {
       type: "durable_run_paused",
       runId,
       actorId,
@@ -3253,22 +3261,22 @@ export class DurableRunService {
     return next;
   }
 
-  resumeDurableRun(runId: string, actorId = "operator"): DurableRunRecord {
-    this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
+  async resumeDurableRun(runId: string, actorId = "operator"): Promise<DurableRunRecord> {
+    await this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
     assertNoRawRemoteApprovalBearer(actorId);
-    const current = this.ctx.storage.durableRuns.getRun(runId);
+    const current = await this.ctx.storage.durableRuns.getRun(runId);
     if (current.status !== "paused") {
       throw new Error(`Durable run ${runId} cannot be resumed from ${current.status}`);
     }
-    if (isAutonomousDurableRunForKillSwitch(current) && this.ctx.isFeatureEnabled("autonomyV1Disabled")) {
+    if (isAutonomousDurableRunForKillSwitch(current) && (await this.ctx.isFeatureEnabled("autonomyV1Disabled"))) {
       throw new Error(
         `Autonomous durable run ${runId} cannot be resumed while the autonomy kill switch is engaged (autonomyV1Disabled).`,
       );
     }
     let next!: DurableRunRecord;
-    this.ctx.storage.runImmediateTransaction(() => {
-      const metadata = this.prepareQueuedTransitionMetadata(current, "resume");
-      next = this.ctx.storage.durableRuns.updateRun({
+    await this.ctx.storage.runImmediateTransaction(async () => {
+      const metadata = await this.prepareQueuedTransitionMetadata(current, "resume");
+      next = await this.ctx.storage.durableRuns.updateRun({
         runId,
         status: "queued",
         startedAt: current.startedAt ?? new Date().toISOString(),
@@ -3279,17 +3287,17 @@ export class DurableRunService {
         metadata,
         expectedVersion: current.version,
       });
-      this.createDurableCheckpoint({
+      await this.createDurableCheckpoint({
         runId,
         checkpointKind: "run_resumed",
         state: { actorId, previousStatus: current.status },
       });
-      this.recordDurableTimelineEvent(runId, "run_resumed", {
+      await this.recordDurableTimelineEvent(runId, "run_resumed", {
         actorId,
         previousStatus: current.status,
       });
     });
-    this.publishDurableRealtimeSafely(runId, {
+    await this.publishDurableRealtimeSafely(runId, {
       type: "durable_run_resumed",
       runId,
       actorId,
@@ -3297,17 +3305,17 @@ export class DurableRunService {
     return next;
   }
 
-  private prepareQueuedTransitionMetadata(
+  private async prepareQueuedTransitionMetadata(
     run: DurableRunRecord,
     transition: "wake" | "resume",
-  ): Record<string, unknown> {
+  ): Promise<Record<string, unknown>> {
     this.assertExactAdmittedChatRetryAuthority(run);
     const metadata = { ...(run.metadata ?? {}) };
     const payload = run.payload as { version?: unknown; turnId?: unknown } | undefined;
     const hasAutonomousAdmission = metadata.autonomousAdmission !== undefined;
     const admittedV2 = isAdmittedV2ChatRun(run);
     const admittedAutonomousV2 = admittedV2 && hasAutonomousAdmission;
-    if (admittedAutonomousV2) this.verifyCanonicalAutonomousChatAdmission(run);
+    if (admittedAutonomousV2) await this.verifyCanonicalAutonomousChatAdmission(run);
     const carriesWaitingAuthority =
       metadata[CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY] !== undefined ||
       (metadata.waitForEvent !== undefined && metadata.waitForEvent !== null);
@@ -3325,7 +3333,7 @@ export class DurableRunService {
       if (canonicalJsonString(metadata.waitForEvent) !== canonicalJsonString(authority.material.waitForEvent)) {
         throw new Error(`Admitted Chat run ${run.runId} wait registration drifted from its runtime authority.`);
       }
-      const waitingCheckpoint = this.ctx.storage.durableRuns.getLatestCheckpointByKind(run.runId, "run_waiting");
+      const waitingCheckpoint = await this.ctx.storage.durableRuns.getLatestCheckpointByKind(run.runId, "run_waiting");
       if (!waitingCheckpoint) {
         throw new Error(`Admitted Chat run ${run.runId} has no authority-anchored waiting checkpoint.`);
       }
@@ -3361,15 +3369,15 @@ export class DurableRunService {
     return metadata;
   }
 
-  cancelDurableRun(
+  async cancelDurableRun(
     runId: string,
     actorId = "operator",
-    options?: { expectedVersion?: number; reason?: string; assertLockedPrecondition?: () => void },
-  ): DurableRunRecord {
-    this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
+    options?: { expectedVersion?: number; reason?: string; assertLockedPrecondition?: () => void | Promise<void> },
+  ): Promise<DurableRunRecord> {
+    await this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
     assertNoRawRemoteApprovalBearer(actorId);
     const cancellationReason = normalizeDurableCancellationReason(options?.reason);
-    const current = this.ctx.storage.durableRuns.getRun(runId);
+    const current = await this.ctx.storage.durableRuns.getRun(runId);
     if (current.status === "cancelled") {
       return current;
     }
@@ -3385,13 +3393,13 @@ export class DurableRunService {
     let chatLink: DurableChatCancellationLink | undefined;
     let transitioned = false;
     let next!: DurableRunRecord;
-    this.ctx.storage.runImmediateTransaction(() => {
-      const lockedCurrent = this.ctx.storage.durableRuns.getRunForUpdate(runId);
+    await this.ctx.storage.runImmediateTransaction(async () => {
+      const lockedCurrent = await this.ctx.storage.durableRuns.getRunForUpdate(runId);
       if (lockedCurrent.status === "cancelled") {
         next = lockedCurrent;
         return;
       }
-      options?.assertLockedPrecondition?.();
+      await options?.assertLockedPrecondition?.();
       if (options?.expectedVersion !== undefined && lockedCurrent.version !== options.expectedVersion) {
         throw new Error(
           `Durable run ${runId} changed from version ${options.expectedVersion} to ${lockedCurrent.version} before cancellation.`,
@@ -3408,7 +3416,7 @@ export class DurableRunService {
       if (chatLink) {
         let latestTrace: ChatTurnTraceRecord;
         try {
-          latestTrace = this.ctx.storage.chatTurnTraces.get(chatLink.turnId);
+          latestTrace = await this.ctx.storage.chatTurnTraces.get(chatLink.turnId);
         } catch (error) {
           if (error instanceof NotFoundError) {
             throw new Error(`Durable Chat run ${runId} cannot be cancelled without its canonical turn trace.`, {
@@ -3424,7 +3432,7 @@ export class DurableRunService {
           );
         }
         if (latestTrace.status !== "cancelled") {
-          const cancelledTrace = this.ctx.storage.chatTurnTraces.patchIfStatus(
+          const cancelledTrace = await this.ctx.storage.chatTurnTraces.patchIfStatus(
             chatLink.turnId,
             CHAT_TURN_ACTIVE_STATUSES,
             {
@@ -3457,7 +3465,7 @@ export class DurableRunService {
       };
       if (chatLink) {
         const generationId = randomUUID();
-        const eligibility = this.resolvePostCommitEligibility(chatLink.sessionId);
+        const eligibility = await this.resolvePostCommitEligibility(chatLink.sessionId);
         cancellationMetadata = markGeneralChatPostCommitPending(
           resetChatTurnRuntimeTransitionMetadata(
             mergeCanonicalDurableChatTerminalOutputMetadata(lockedCurrent.metadata, undefined),
@@ -3469,9 +3477,9 @@ export class DurableRunService {
         );
         if (isAdmittedV2ChatRun(lockedCurrent)) {
           this.assertExactAdmittedChatRetryAuthority(lockedCurrent);
-          this.requireExactParentTurnAdmission(lockedCurrent);
+          await this.requireExactParentTurnAdmission(lockedCurrent);
           if (lockedCurrent.metadata?.autonomousAdmission !== undefined) {
-            this.verifyCanonicalAutonomousChatAdmission(lockedCurrent);
+            await this.verifyCanonicalAutonomousChatAdmission(lockedCurrent);
           }
           const authority = buildChatTurnRuntimeAuthoritySeal({
             runId,
@@ -3488,7 +3496,7 @@ export class DurableRunService {
           cancellationCheckpointState = withChatTurnRuntimeAuthorityCheckpoint(cancellationCheckpointState, authority);
         }
       }
-      next = this.ctx.storage.durableRuns.updateRun({
+      next = await this.ctx.storage.durableRuns.updateRun({
         runId,
         status: "cancelled",
         finishedAt: now,
@@ -3498,12 +3506,12 @@ export class DurableRunService {
         ...(chatLink ? { metadata: cancellationMetadata } : {}),
         expectedVersion: lockedCurrent.version,
       });
-      this.createDurableCheckpoint({
+      await this.createDurableCheckpoint({
         runId,
         checkpointKind: "run_cancelled",
         state: cancellationCheckpointState,
       });
-      this.recordDurableTimelineEvent(runId, "run_cancelled", {
+      await this.recordDurableTimelineEvent(runId, "run_cancelled", {
         actorId,
         previousStatus: lockedCurrent.status,
         ...(cancellationReason ? { reason: cancellationReason } : {}),
@@ -3513,8 +3521,8 @@ export class DurableRunService {
     if (!transitioned) {
       return next;
     }
-    this.abortActiveRun(runId, `Durable run ${runId} cancelled by ${actorId}.`, "cancelled");
-    this.publishDurableRealtimeSafely(runId, {
+    await this.abortActiveRun(runId, `Durable run ${runId} cancelled by ${actorId}.`, "cancelled");
+    await this.publishDurableRealtimeSafely(runId, {
       type: "durable_run_cancelled",
       runId,
       actorId,
@@ -3525,10 +3533,10 @@ export class DurableRunService {
     return next;
   }
 
-  retryDurableRun(runId: string, reason = "manual_retry", actorId = "operator"): DurableRunRecord {
-    this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
+  async retryDurableRun(runId: string, reason = "manual_retry", actorId = "operator"): Promise<DurableRunRecord> {
+    await this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
     assertNoRawRemoteApprovalBearer({ reason, actorId });
-    const current = this.ctx.storage.durableRuns.getRun(runId);
+    const current = await this.ctx.storage.durableRuns.getRun(runId);
     this.assertExactAdmittedChatRetryAuthority(current);
     if (current.status !== "failed") {
       throw new Error(`Durable run ${runId} cannot be retried from ${current.status}`);
@@ -3536,7 +3544,7 @@ export class DurableRunService {
     if (readLinkedFinalizationPending(current)) {
       throw new Error(`Durable run ${runId} cannot be retried until linked-state finalization completes`);
     }
-    const recoverability = this.deps?.workflowRegistry.isWorkflowRecoverable(current);
+    const recoverability = await this.deps?.workflowRegistry.isWorkflowRecoverable(current);
     if (recoverability && !recoverability.recoverable) {
       throw new Error(recoverability.reason ?? `Durable run ${runId} cannot be safely retried.`);
     }
@@ -3546,58 +3554,63 @@ export class DurableRunService {
     return this.scheduleDurableRunRetry(current, reason, actorId);
   }
 
-  scheduleRunningWorkflowRetry(
+  async scheduleRunningWorkflowRetry(
     runId: string,
     reason = "workflow_retry",
     actorId = "worker",
     expectedLeaseOwnerId?: string,
-  ): DurableRunRecord {
-    this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
+  ): Promise<DurableRunRecord> {
+    await this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
     assertNoRawRemoteApprovalBearer({ reason, actorId });
-    const observed = this.ctx.storage.durableRuns.getRun(runId);
-    let scheduled!: ReturnType<DurableRunService["persistDurableRunRetry"]>;
-    this.ctx.storage.runImmediateTransaction(() => {
+    const observed = await this.ctx.storage.durableRuns.getRun(runId);
+    let scheduled!: Awaited<ReturnType<DurableRunService["persistDurableRunRetry"]>>;
+    await this.ctx.storage.runImmediateTransaction(async () => {
       const current = expectedLeaseOwnerId
-        ? this.lockFreshLeaseOwnerForTransition(runId, expectedLeaseOwnerId)
+        ? await this.lockFreshLeaseOwnerForTransition(runId, expectedLeaseOwnerId)
         : undefined;
       if (!current) {
         throw new Error(`Durable run ${runId} cannot schedule running retry from ${observed.status}`);
       }
       this.assertExactAdmittedChatRetryAuthority(current);
-      const recoverability = this.deps?.workflowRegistry.isWorkflowRecoverable(current);
+      const recoverability = await this.deps?.workflowRegistry.isWorkflowRecoverable(current);
       if (recoverability && !recoverability.recoverable) {
         throw new Error(recoverability.reason ?? `Durable run ${runId} cannot be safely retried.`);
       }
-      scheduled = this.persistDurableRunRetry(current, reason, actorId);
+      scheduled = await this.persistDurableRunRetry(current, reason, actorId);
     });
-    this.publishDurableRunRetryResult(scheduled);
+    await this.publishDurableRunRetryResult(scheduled);
     return scheduled.run;
   }
 
-  private scheduleDurableRunRetry(current: DurableRunRecord, reason: string, actorId: string): DurableRunRecord {
-    let scheduled!: ReturnType<DurableRunService["persistDurableRunRetry"]>;
-    this.ctx.storage.runImmediateTransaction(() => {
-      scheduled = this.persistDurableRunRetry(current, reason, actorId);
+  private async scheduleDurableRunRetry(
+    current: DurableRunRecord,
+    reason: string,
+    actorId: string,
+  ): Promise<DurableRunRecord> {
+    let scheduled!: Awaited<ReturnType<DurableRunService["persistDurableRunRetry"]>>;
+    await this.ctx.storage.runImmediateTransaction(async () => {
+      scheduled = await this.persistDurableRunRetry(current, reason, actorId);
     });
-    this.publishDurableRunRetryResult(scheduled);
+    await this.publishDurableRunRetryResult(scheduled);
     return scheduled.run;
   }
 
   /** Persists a retry/dead-letter transition. The caller owns the transaction. */
-  private persistDurableRunRetry(
+  private async persistDurableRunRetry(
     current: DurableRunRecord,
     reason: string,
     actorId: string,
-  ):
+  ): Promise<
     | { outcome: "dead_lettered"; run: DurableRunRecord; attemptNo: number; reason: string }
     | { outcome: "terminal_finalization_pending"; run: DurableRunRecord; attemptNo: number; reason: string }
-    | { outcome: "scheduled"; run: DurableRunRecord; attemptNo: number; nextRetryAt: string } {
+    | { outcome: "scheduled"; run: DurableRunRecord; attemptNo: number; nextRetryAt: string }
+  > {
     const runId = current.runId;
     this.assertExactAdmittedChatRetryAuthority(current);
     const attemptNo = current.attemptCount + 1;
     if (attemptNo > current.maxAttempts) {
       if (isAdmittedV2ChatRun(current)) {
-        const requestedAt = this.readDurableDatabaseNow();
+        const requestedAt = await this.readDurableDatabaseNow();
         const exhaustedReason = redactRawRemoteApprovalBearerText(`retry_exhausted:${reason}`);
         const retryExhaustion: ChatRetryExhaustionDeadLetterPending = {
           version: 1,
@@ -3608,11 +3621,16 @@ export class DurableRunService {
           reasonSha256: hashChatTurnRuntimeAuthorityValue(exhaustedReason),
           requestedAt,
         };
-        const failed = this.persistCanonicalAdmittedChatFailureInTransaction(current, exhaustedReason, requestedAt, {
-          attemptCount: attemptNo,
-          retryExhaustion,
-        });
-        this.recordDurableTimelineEvent(runId, "run_retry_budget_exhausted", {
+        const failed = await this.persistCanonicalAdmittedChatFailureInTransaction(
+          current,
+          exhaustedReason,
+          requestedAt,
+          {
+            attemptCount: attemptNo,
+            retryExhaustion,
+          },
+        );
+        await this.recordDurableTimelineEvent(runId, "run_retry_budget_exhausted", {
           actorId,
           reason: exhaustedReason,
           attemptNo,
@@ -3627,7 +3645,7 @@ export class DurableRunService {
         };
       }
       const now = new Date().toISOString();
-      const deadLetter = this.ctx.storage.durableRuns.upsertDeadLetter({
+      const deadLetter = await this.ctx.storage.durableRuns.upsertDeadLetter({
         runId,
         reason: `retry_exhausted:${reason}`,
         payload: {
@@ -3636,7 +3654,7 @@ export class DurableRunService {
           maxAttempts: current.maxAttempts,
         },
       });
-      const deadLettered = this.ctx.storage.durableRuns.updateRun({
+      const deadLettered = await this.ctx.storage.durableRuns.updateRun({
         runId,
         status: "dead_lettered",
         attemptCount: attemptNo,
@@ -3646,11 +3664,11 @@ export class DurableRunService {
         lastError: deadLetter.reason,
         expectedVersion: current.version,
       });
-      this.recordDurableTimelineEvent(runId, "run_dead_lettered", {
+      await this.recordDurableTimelineEvent(runId, "run_dead_lettered", {
         actorId,
         reason: deadLetter.reason,
       });
-      this.recordDurableTimelineEvent(runId, "run_retry_budget_exhausted", {
+      await this.recordDurableTimelineEvent(runId, "run_retry_budget_exhausted", {
         actorId,
         reason: deadLetter.reason,
         attemptNo,
@@ -3659,17 +3677,17 @@ export class DurableRunService {
       return { outcome: "dead_lettered", run: deadLettered, attemptNo, reason: deadLetter.reason };
     }
     const delayMs = this.computeDurableRetryDelayMs(current, attemptNo);
-    const retry = this.upsertRetryWithDatabaseClock({ runId, attemptNo, reason, delayMs });
+    const retry = await this.upsertRetryWithDatabaseClock({ runId, attemptNo, reason, delayMs });
     if (!retry.nextRetryAt) {
       throw new Error(`Durable retry ${runId}/${attemptNo} is missing database-clock readiness.`);
     }
-    this.recordDurableTimelineEvent(runId, "run_retry_scheduled", {
+    await this.recordDurableTimelineEvent(runId, "run_retry_scheduled", {
       actorId,
       reason,
       nextRetryAt: retry.nextRetryAt,
       attemptNo,
     });
-    const next = this.ctx.storage.durableRuns.updateRun({
+    const next = await this.ctx.storage.durableRuns.updateRun({
       runId,
       status: "queued",
       attemptCount: attemptNo,
@@ -3682,9 +3700,11 @@ export class DurableRunService {
     return { outcome: "scheduled", run: next, attemptNo, nextRetryAt: retry.nextRetryAt };
   }
 
-  private publishDurableRunRetryResult(result: ReturnType<DurableRunService["persistDurableRunRetry"]>): void {
+  private async publishDurableRunRetryResult(
+    result: Awaited<ReturnType<DurableRunService["persistDurableRunRetry"]>>,
+  ): Promise<void> {
     if (result.outcome === "terminal_finalization_pending") {
-      this.publishDurableRealtimeSafely(result.run.runId, {
+      await this.publishDurableRealtimeSafely(result.run.runId, {
         type: "durable_run_failed",
         runId: result.run.runId,
         error: result.reason,
@@ -3694,14 +3714,14 @@ export class DurableRunService {
       return;
     }
     if (result.outcome === "dead_lettered") {
-      this.publishDurableRealtimeSafely(result.run.runId, {
+      await this.publishDurableRealtimeSafely(result.run.runId, {
         type: "durable_run_dead_lettered",
         runId: result.run.runId,
         reason: result.reason,
       });
       return;
     }
-    this.publishDurableRealtimeSafely(result.run.runId, {
+    await this.publishDurableRealtimeSafely(result.run.runId, {
       type: "durable_run_retry_scheduled",
       runId: result.run.runId,
       attemptNo: result.attemptNo,
@@ -3709,17 +3729,17 @@ export class DurableRunService {
     });
   }
 
-  wakeDurableRun(
+  async wakeDurableRun(
     runId: string,
     event: {
       eventKey: string;
       payload?: Record<string, unknown>;
       correlationId?: string;
     },
-  ): DurableWakeResult {
-    this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
+  ): Promise<DurableWakeResult> {
+    await this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
     assertNoRawRemoteApprovalBearer(event);
-    const current = this.ctx.storage.durableRuns.getRun(runId);
+    const current = await this.ctx.storage.durableRuns.getRun(runId);
     if (current.status === "paused") {
       return {
         runId,
@@ -3786,9 +3806,9 @@ export class DurableRunService {
     const now = new Date().toISOString();
     let next!: DurableRunRecord;
     try {
-      this.ctx.storage.runImmediateTransaction(() => {
-        const metadata = this.prepareQueuedTransitionMetadata(current, "wake");
-        next = this.ctx.storage.durableRuns.updateRun({
+      await this.ctx.storage.runImmediateTransaction(async () => {
+        const metadata = await this.prepareQueuedTransitionMetadata(current, "wake");
+        next = await this.ctx.storage.durableRuns.updateRun({
           runId,
           status: "queued",
           updatedAt: now,
@@ -3799,7 +3819,7 @@ export class DurableRunService {
           metadata,
           expectedVersion: current.version,
         });
-        this.recordDurableTimelineEvent(runId, "run_woken", {
+        await this.recordDurableTimelineEvent(runId, "run_woken", {
           eventKey: event.eventKey,
           correlationId: event.correlationId,
           payload: event.payload ?? {},
@@ -3811,11 +3831,11 @@ export class DurableRunService {
         eventKey: event.eventKey,
         correlationId: event.correlationId,
         outcome: "failed",
-        run: this.ctx.storage.durableRuns.getRun(runId),
+        run: await this.ctx.storage.durableRuns.getRun(runId),
         detail: error instanceof Error ? error.message : "Wake failed",
       };
     }
-    this.publishDurableRealtimeSafely(runId, {
+    await this.publishDurableRealtimeSafely(runId, {
       type: "durable_run_woken",
       runId,
       eventKey: event.eventKey,
@@ -3842,15 +3862,15 @@ export class DurableRunService {
    * {@link wakeDurableRun}; wakeDurableRun independently skips non-"waiting" runs
    * and re-checks the same event-key/correlation match.
    */
-  resumeRunsWaitingForAutonomyKillSwitch(): { woken: string[] } {
-    if (!this.ctx.isFeatureEnabled("durableKernelV1Enabled")) {
+  async resumeRunsWaitingForAutonomyKillSwitch(): Promise<{ woken: string[] }> {
+    if (!(await this.ctx.isFeatureEnabled("durableKernelV1Enabled"))) {
       return { woken: [] };
     }
     const woken: string[] = [];
-    for (const runId of this.ctx.storage.durableRuns.listRunIdsByStatus("waiting")) {
+    for (const runId of await this.ctx.storage.durableRuns.listRunIdsByStatus("waiting")) {
       let run: DurableRunRecord;
       try {
-        run = this.ctx.storage.durableRuns.getRun(runId);
+        run = await this.ctx.storage.durableRuns.getRun(runId);
       } catch {
         // Run vanished between the id scan and the read — nothing to resume.
         continue;
@@ -3859,7 +3879,7 @@ export class DurableRunService {
       if (waitForEvent?.eventKey !== AUTONOMY_KILL_SWITCH_RESUME_EVENT) {
         continue;
       }
-      const result = this.wakeDurableRun(runId, {
+      const result = await this.wakeDurableRun(runId, {
         eventKey: AUTONOMY_KILL_SWITCH_RESUME_EVENT,
         correlationId: runId,
       });
@@ -3870,25 +3890,25 @@ export class DurableRunService {
     return { woken };
   }
 
-  recoverDurableDeadLetter(
+  async recoverDurableDeadLetter(
     entryId: string,
     actorId = "operator",
     options?: { maxAttempts?: number },
-  ): DurableRunRecord {
-    this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
+  ): Promise<DurableRunRecord> {
+    await this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
     assertNoRawRemoteApprovalBearer(actorId);
-    const deadLetter = this.ctx.storage.durableRuns.getDeadLetterById(entryId);
+    const deadLetter = await this.ctx.storage.durableRuns.getDeadLetterById(entryId);
     if (deadLetter.resolvedAt) {
       throw new Error(`Durable dead letter ${entryId} is already resolved`);
     }
-    const current = this.ctx.storage.durableRuns.getRun(deadLetter.runId);
+    const current = await this.ctx.storage.durableRuns.getRun(deadLetter.runId);
     if (current.status !== "dead_lettered") {
       throw new Error(`Durable run ${deadLetter.runId} cannot be recovered from ${current.status}`);
     }
     if (current.attemptCount >= 20) {
       throw new Error(`Durable run ${deadLetter.runId} exhausted the hard 20-attempt recovery ceiling`);
     }
-    const recoverability = this.deps?.workflowRegistry.isWorkflowRecoverable(current);
+    const recoverability = await this.deps?.workflowRegistry.isWorkflowRecoverable(current);
     if (recoverability && !recoverability.recoverable) {
       throw new Error(recoverability.reason ?? `Durable run ${deadLetter.runId} cannot be safely recovered.`);
     }
@@ -3897,12 +3917,12 @@ export class DurableRunService {
       : undefined;
     let next!: DurableRunRecord;
     const recoveredAt = new Date().toISOString();
-    this.ctx.storage.runImmediateTransaction(() => {
-      this.ctx.storage.durableRuns.resolveDeadLetter(entryId, {
+    await this.ctx.storage.runImmediateTransaction(async () => {
+      await this.ctx.storage.durableRuns.resolveDeadLetter(entryId, {
         resolvedAt: recoveredAt,
         resolutionNote: `recovered by ${actorId}${newMaxAttempts ? `, maxAttempts raised to ${newMaxAttempts}` : ""}`,
       });
-      next = this.ctx.storage.durableRuns.updateRun({
+      next = await this.ctx.storage.durableRuns.updateRun({
         runId: deadLetter.runId,
         status: "queued",
         updatedAt: recoveredAt,
@@ -3912,14 +3932,14 @@ export class DurableRunService {
         ...(newMaxAttempts ? { maxAttempts: newMaxAttempts } : {}),
         expectedVersion: current.version,
       });
-      this.recordDurableTimelineEvent(deadLetter.runId, "dead_letter_recovered", {
+      await this.recordDurableTimelineEvent(deadLetter.runId, "dead_letter_recovered", {
         actorId,
         deadLetterId: entryId,
         ...(newMaxAttempts ? { maxAttemptsOverride: newMaxAttempts } : {}),
       });
     });
     this.requestRunProcessing(deadLetter.runId);
-    this.publishDurableRealtimeSafely(deadLetter.runId, {
+    await this.publishDurableRealtimeSafely(deadLetter.runId, {
       type: "durable_dead_letter_recovered",
       runId: deadLetter.runId,
       deadLetterId: entryId,
@@ -3933,14 +3953,14 @@ export class DurableRunService {
     return this.ctx.config.assistant.durable.enabled;
   }
 
-  private publishRealtimeSafely(
+  private async publishRealtimeSafely(
     eventType: string,
     source: string,
     payload: Record<string, unknown>,
     options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
-  ): void {
+  ): Promise<void> {
     try {
-      this.ctx.publishRealtime(eventType, source, redactRawRemoteApprovalBearers(payload), options);
+      await this.ctx.publishRealtime(eventType, source, redactRawRemoteApprovalBearers(payload), options);
     } catch (error) {
       try {
         this.ctx.logger?.warn(
@@ -3958,8 +3978,8 @@ export class DurableRunService {
     }
   }
 
-  private publishDurableRealtimeSafely(runId: string, payload: Record<string, unknown>): void {
-    this.publishRealtimeSafely("system", "durable", payload, buildDurableRealtimeOptions(runId));
+  private async publishDurableRealtimeSafely(runId: string, payload: Record<string, unknown>): Promise<void> {
+    await this.publishRealtimeSafely("system", "durable", payload, buildDurableRealtimeOptions(runId));
   }
 
   normalizeDurableRetryPolicy(input: Partial<DurableRetryPolicy> | undefined): DurableRetryPolicy {
@@ -3979,12 +3999,12 @@ export class DurableRunService {
     return Math.max(100, Math.min(policy.maxDelayMs, Math.floor(raw)));
   }
 
-  recordDurableTimelineEvent(
+  async recordDurableTimelineEvent(
     runId: string,
     eventType: DurableRunTimelineEvent["eventType"],
     payload?: Record<string, unknown>,
     stepKey?: string,
-  ): DurableRunTimelineEvent {
+  ): Promise<DurableRunTimelineEvent> {
     const event: Omit<DurableRunTimelineEvent, "sequence"> = {
       eventId: randomUUID(),
       runId,
@@ -3993,9 +4013,9 @@ export class DurableRunService {
       payload: redactRawRemoteApprovalBearers(payload ?? {}),
       createdAt: new Date().toISOString(),
     };
-    const appended = this.ctx.storage.durableRunEvents.append(event);
+    const appended = await this.ctx.storage.durableRunEvents.append(event);
     try {
-      this.ctx.storage.durableChildWatchers.catchUpAttachedByChild(runId, {
+      await this.ctx.storage.durableChildWatchers.catchUpAttachedByChild(runId, {
         watcherLimit: 100,
         eventLimitPerWatcher: 100,
       });
@@ -4014,25 +4034,25 @@ export class DurableRunService {
     return appended;
   }
 
-  private recordDurableTimelineEventSafely(
+  private async recordDurableTimelineEventSafely(
     runId: string,
     eventType: DurableRunTimelineEvent["eventType"],
     payload?: Record<string, unknown>,
     stepKey?: string,
-  ): void {
+  ): Promise<void> {
     try {
-      this.recordDurableTimelineEvent(runId, eventType, payload, stepKey);
+      await this.recordDurableTimelineEvent(runId, eventType, payload, stepKey);
     } catch (error) {
-      this.reportDurableRunRecoveryFailure(runId, error);
+      await this.reportDurableRunRecoveryFailure(runId, error);
     }
   }
 
-  private createDurableCheckpoint(input: {
+  private async createDurableCheckpoint(input: {
     runId: string;
     checkpointKind: DurableCheckpointRecord["checkpointKind"];
     state?: Record<string, unknown>;
     createdAt?: string;
-  }): DurableCheckpointRecord {
+  }): Promise<DurableCheckpointRecord> {
     return this.ctx.storage.durableRuns.createCheckpoint({
       ...input,
       state: redactRawRemoteApprovalBearers(input.state ?? {}),
@@ -4043,17 +4063,17 @@ export class DurableRunService {
     if (!this.deps) {
       return 0;
     }
-    this.reconcileDurableChildWatchers();
+    await this.reconcileDurableChildWatchers();
     const recoveryObservedAt = new Date().toISOString();
     let reclaimedCount = await this.reconcileExitedLocalProcessRuns(recoveryObservedAt);
-    const runningRunIds = this.ctx.storage.durableRuns.listExpiredRunningRunIds(recoveryObservedAt);
+    const runningRunIds = await this.ctx.storage.durableRuns.listExpiredRunningRunIds(recoveryObservedAt);
     for (const runId of runningRunIds) {
       try {
-        const run = this.ctx.storage.durableRuns.getRun(runId);
+        const run = await this.ctx.storage.durableRuns.getRun(runId);
         if (run.status !== "running" || !run.leaseExpiresAt) {
           continue;
         }
-        const recoverability = this.deps.workflowRegistry.isWorkflowRecoverable(run);
+        const recoverability = await this.deps.workflowRegistry.isWorkflowRecoverable(run);
         if (!recoverability.recoverable) {
           const reason = recoverability.reason ?? "Run could not be recovered after restart.";
           await this.transitionRunToPendingFinalization(run, reason, recoveryObservedAt, { kind: "expired" });
@@ -4061,16 +4081,16 @@ export class DurableRunService {
         }
         let reclaimedByThisPass = false;
         let reclaimed!: DurableRunRecord;
-        this.ctx.storage.runImmediateTransaction(() => {
-          const current = this.lockExpiredExecutionLeaseForRecovery(run);
+        await this.ctx.storage.runImmediateTransaction(async () => {
+          const current = await this.lockExpiredExecutionLeaseForRecovery(run);
           if (!current) {
             return;
           }
-          this.recordDurableTimelineEvent(current.runId, "run_lease_expired", {
+          await this.recordDurableTimelineEvent(current.runId, "run_lease_expired", {
             leaseOwnerId: current.leaseOwnerId,
             leaseExpiresAt: current.leaseExpiresAt,
           });
-          reclaimed = this.ctx.storage.durableRuns.updateRun({
+          reclaimed = await this.ctx.storage.durableRuns.updateRun({
             runId: current.runId,
             status: "queued",
             clearFinishedAt: true,
@@ -4080,7 +4100,7 @@ export class DurableRunService {
             expectedVersion: current.version,
           });
           reclaimedByThisPass = true;
-          this.recordDurableTimelineEvent(reclaimed.runId, "run_reclaimed", {
+          await this.recordDurableTimelineEvent(reclaimed.runId, "run_reclaimed", {
             previousLeaseOwnerId: current.leaseOwnerId,
             previousLeaseExpiresAt: current.leaseExpiresAt,
           });
@@ -4090,7 +4110,7 @@ export class DurableRunService {
         }
         reclaimedCount += 1;
       } catch (error) {
-        this.reportDurableRunRecoveryFailure(runId, error);
+        await this.reportDurableRunRecoveryFailure(runId, error);
       }
     }
     await this.reconcilePendingLinkedFinalizations();
@@ -4104,13 +4124,13 @@ export class DurableRunService {
       return 0;
     }
     let reclaimedCount = 0;
-    for (const runId of this.ctx.storage.durableRuns.listRunIdsByStatus("running")) {
+    for (const runId of await this.ctx.storage.durableRuns.listRunIdsByStatus("running")) {
       try {
-        const observed = this.ctx.storage.durableRuns.getRun(runId);
+        const observed = await this.ctx.storage.durableRuns.getRun(runId);
         if (!this.isConfirmedExitedLocalProcessOwner(observed.leaseOwnerId)) {
           continue;
         }
-        const recoverability = this.deps.workflowRegistry.isWorkflowRecoverable(observed);
+        const recoverability = await this.deps.workflowRegistry.isWorkflowRecoverable(observed);
         if (!recoverability.recoverable) {
           await this.transitionRunToPendingFinalization(
             observed,
@@ -4121,18 +4141,18 @@ export class DurableRunService {
           continue;
         }
         let reclaimedByThisPass = false;
-        this.ctx.storage.runImmediateTransaction(() => {
-          const current = this.lockFreshLeaseOwnerForTransition(observed.runId, observed.leaseOwnerId!);
+        await this.ctx.storage.runImmediateTransaction(async () => {
+          const current = await this.lockFreshLeaseOwnerForTransition(observed.runId, observed.leaseOwnerId!);
           if (!current || !this.isConfirmedExitedLocalProcessOwner(current.leaseOwnerId)) {
             return;
           }
-          this.recordDurableTimelineEvent(current.runId, "run_incomplete_worker_exit", {
+          await this.recordDurableTimelineEvent(current.runId, "run_incomplete_worker_exit", {
             leaseOwnerId: current.leaseOwnerId,
             leaseHeartbeatAt: current.leaseHeartbeatAt,
             leaseExpiresAt: current.leaseExpiresAt,
             recovery: "confirmed_dead_local_process",
           });
-          const reclaimed = this.ctx.storage.durableRuns.updateRun({
+          const reclaimed = await this.ctx.storage.durableRuns.updateRun({
             runId: current.runId,
             status: "queued",
             clearFinishedAt: true,
@@ -4142,7 +4162,7 @@ export class DurableRunService {
             expectedVersion: current.version,
           });
           reclaimedByThisPass = true;
-          this.recordDurableTimelineEvent(reclaimed.runId, "run_reclaimed", {
+          await this.recordDurableTimelineEvent(reclaimed.runId, "run_reclaimed", {
             previousLeaseOwnerId: current.leaseOwnerId,
             previousLeaseExpiresAt: current.leaseExpiresAt,
             recovery: "confirmed_dead_local_process",
@@ -4152,15 +4172,15 @@ export class DurableRunService {
           reclaimedCount += 1;
         }
       } catch (error) {
-        this.reportDurableRunRecoveryFailure(runId, error);
+        await this.reportDurableRunRecoveryFailure(runId, error);
       }
     }
     return reclaimedCount;
   }
 
-  private reconcileDurableChildWatchers(): void {
+  private async reconcileDurableChildWatchers(): Promise<void> {
     try {
-      this.ctx.storage.durableChildWatchers.catchUpAttached({
+      await this.ctx.storage.durableChildWatchers.catchUpAttached({
         watcherLimit: 100,
         eventLimitPerWatcher: 100,
       });
@@ -4183,11 +4203,11 @@ export class DurableRunService {
     const safeReason = redactRawRemoteApprovalBearerText(reason);
     let transitioned = false;
     let failed = observed;
-    this.ctx.storage.runImmediateTransaction(() => {
+    await this.ctx.storage.runImmediateTransaction(async () => {
       const current =
         recovery.kind === "expired"
-          ? this.lockExpiredExecutionLeaseForRecovery(observed)
-          : this.lockFreshLeaseOwnerForTransition(observed.runId, recovery.leaseOwnerId);
+          ? await this.lockExpiredExecutionLeaseForRecovery(observed)
+          : await this.lockFreshLeaseOwnerForTransition(observed.runId, recovery.leaseOwnerId);
       if (!current) {
         return;
       }
@@ -4195,14 +4215,14 @@ export class DurableRunService {
         if (!this.isConfirmedExitedLocalProcessOwner(current.leaseOwnerId)) {
           return;
         }
-        this.recordDurableTimelineEvent(current.runId, "run_incomplete_worker_exit", {
+        await this.recordDurableTimelineEvent(current.runId, "run_incomplete_worker_exit", {
           leaseOwnerId: current.leaseOwnerId,
           leaseHeartbeatAt: current.leaseHeartbeatAt,
           leaseExpiresAt: current.leaseExpiresAt,
           recovery: "confirmed_dead_local_process",
         });
       } else {
-        this.recordDurableTimelineEvent(current.runId, "run_lease_expired", {
+        await this.recordDurableTimelineEvent(current.runId, "run_lease_expired", {
           leaseOwnerId: current.leaseOwnerId,
           leaseExpiresAt: current.leaseExpiresAt,
         });
@@ -4239,7 +4259,7 @@ export class DurableRunService {
         }
         delete (metadata as { waitForEvent?: unknown }).waitForEvent;
         const generationId = randomUUID();
-        const postCommitEligibility = this.resolvePostCommitEligibility(payload.sessionId);
+        const postCommitEligibility = await this.resolvePostCommitEligibility(payload.sessionId);
         metadata = markGeneralChatPostCommitPending(
           metadata,
           recoveryObservedAt,
@@ -4247,8 +4267,8 @@ export class DurableRunService {
           postCommitEligibility,
           generationId,
         );
-        this.requireExactParentTurnAdmission(current);
-        if (metadata.autonomousAdmission !== undefined) this.verifyCanonicalAutonomousChatAdmission(current);
+        await this.requireExactParentTurnAdmission(current);
+        if (metadata.autonomousAdmission !== undefined) await this.verifyCanonicalAutonomousChatAdmission(current);
         const authority = buildChatTurnRuntimeAuthoritySeal({
           runId: current.runId,
           turnId: payload.turnId,
@@ -4268,13 +4288,19 @@ export class DurableRunService {
         metadata = withChatTurnRuntimeAuthority(metadata, authority);
         checkpointState = withChatTurnRuntimeAuthorityCheckpoint(checkpointState, authority);
       }
-      failed = this.persistFailedRunInTransaction(current, safeReason, recoveryObservedAt, metadata, checkpointState);
+      failed = await this.persistFailedRunInTransaction(
+        current,
+        safeReason,
+        recoveryObservedAt,
+        metadata,
+        checkpointState,
+      );
       transitioned = true;
     });
     if (!transitioned) {
       return undefined;
     }
-    this.publishDurableRealtimeSafely(failed.runId, {
+    await this.publishDurableRealtimeSafely(failed.runId, {
       type: "durable_run_failed",
       runId: failed.runId,
       error: safeReason,
@@ -4290,15 +4316,15 @@ export class DurableRunService {
     const batchSize = 500;
     let afterRunId: string | undefined;
     while (true) {
-      const runIds = this.ctx.storage.durableRuns.listPendingLinkedFinalizationRunIds(batchSize, afterRunId);
+      const runIds = await this.ctx.storage.durableRuns.listPendingLinkedFinalizationRunIds(batchSize, afterRunId);
       for (const runId of runIds) {
         try {
-          const run = this.ctx.storage.durableRuns.getRun(runId);
+          const run = await this.ctx.storage.durableRuns.getRun(runId);
           if (readLinkedFinalizationPending(run)) {
             await this.finalizePendingLinkedState(run);
           }
         } catch (error) {
-          this.reportDurableRunRecoveryFailure(runId, error);
+          await this.reportDurableRunRecoveryFailure(runId, error);
         }
       }
       if (runIds.length < batchSize) {
@@ -4315,7 +4341,10 @@ export class DurableRunService {
     const batchSize = 500;
     let afterRunId: string | undefined;
     while (true) {
-      const runIds = this.ctx.storage.durableRuns.listPendingAutonomousChatPostCommitRunIds(batchSize, afterRunId);
+      const runIds = await this.ctx.storage.durableRuns.listPendingAutonomousChatPostCommitRunIds(
+        batchSize,
+        afterRunId,
+      );
       for (const runId of runIds) {
         await this.reconcileAutonomousChatPostCommit(runId);
       }
@@ -4333,7 +4362,8 @@ export class DurableRunService {
     const batchSize = 500;
     let afterRunId: string | undefined;
     while (true) {
-      const runIds = this.ctx.storage.durableRuns.listPendingGeneralChatPostCommitRunIds?.(batchSize, afterRunId) ?? [];
+      const runIds =
+        (await this.ctx.storage.durableRuns.listPendingGeneralChatPostCommitRunIds?.(batchSize, afterRunId)) ?? [];
       let nextIndex = 0;
       const reconcileNext = async () => {
         while (nextIndex < runIds.length) {
@@ -4345,7 +4375,7 @@ export class DurableRunService {
               Date.now() + GENERAL_CHAT_POST_COMMIT_IN_FLIGHT_TTL_MS,
             );
           } catch (error) {
-            this.reportDurableRunRecoveryFailure(runId, error);
+            await this.reportDurableRunRecoveryFailure(runId, error);
           }
         }
       };
@@ -4369,28 +4399,30 @@ export class DurableRunService {
     if (!observedPending) {
       return;
     }
-    this.verifyLinkedFinalizationAuthority(run, observedPending);
-    const claim = this.claimPendingLinkedFinalization(run);
+    await this.verifyLinkedFinalizationAuthority(run, observedPending);
+    const claim = await this.claimPendingLinkedFinalization(run);
     if (!claim) {
       return;
     }
-    this.verifyLinkedFinalizationAuthority(claim.run, claim.pending);
+    await this.verifyLinkedFinalizationAuthority(claim.run, claim.pending);
     const finalizationAbort = new AbortController();
     const claimHeartbeat = setInterval(
       () => {
-        try {
-          if (!this.renewPendingLinkedFinalizationClaim(claim.run.runId, claim.pending)) {
-            finalizationAbort.abort(
-              new DurableWorkerInterruptionError(
-                "lease_lost",
-                `Durable linked finalization ${claim.pending.finalizationId} lost claim ownership.`,
-              ),
-            );
+        void (async () => {
+          try {
+            if (!(await this.renewPendingLinkedFinalizationClaim(claim.run.runId, claim.pending))) {
+              finalizationAbort.abort(
+                new DurableWorkerInterruptionError(
+                  "lease_lost",
+                  `Durable linked finalization ${claim.pending.finalizationId} lost claim ownership.`,
+                ),
+              );
+            }
+          } catch (error) {
+            await this.reportDurableRunRecoveryFailure(claim.run.runId, error);
+            finalizationAbort.abort(error);
           }
-        } catch (error) {
-          this.reportDurableRunRecoveryFailure(claim.run.runId, error);
-          finalizationAbort.abort(error);
-        }
+        })().catch((error) => finalizationAbort.abort(error));
       },
       Math.floor(LINKED_FINALIZATION_CLAIM_TTL_MS / 3),
     );
@@ -4425,7 +4457,7 @@ export class DurableRunService {
     if (finalizationAbort.signal.aborted) {
       return;
     }
-    const cleared = this.retryDurableRunUpdate(run.runId, (current) => {
+    const cleared = await this.retryDurableRunUpdate(run.runId, async (current) => {
       const currentPending = readLinkedFinalizationPending(current);
       if (
         current.status !== "failed" ||
@@ -4468,12 +4500,15 @@ export class DurableRunService {
     });
     if (!readLinkedFinalizationPending(cleared)) {
       if (!hasAutonomousChatPostCommitPending(cleared) && !hasGeneralChatPostCommitPending(cleared)) {
-        this.closeTerminalChatTurnAdmissionIfReady(cleared);
+        await this.closeTerminalChatTurnAdmissionIfReady(cleared);
       }
     }
   }
 
-  private verifyLinkedFinalizationAuthority(run: DurableRunRecord, pending: LinkedFinalizationPending): void {
+  private async verifyLinkedFinalizationAuthority(
+    run: DurableRunRecord,
+    pending: LinkedFinalizationPending,
+  ): Promise<void> {
     const payload = run.payload as { version?: unknown; turnId?: unknown } | undefined;
     const authorityValue = run.metadata?.[CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY];
     if (run.workflowKey !== "chat.turn.execute" || payload?.version !== "chat.turn.execute.v2") {
@@ -4482,8 +4517,8 @@ export class DurableRunService {
       }
       return;
     }
-    this.requireExactParentTurnAdmission(run, { requireActive: false });
-    if (run.metadata?.autonomousAdmission !== undefined) this.verifyCanonicalAutonomousChatAdmission(run);
+    await this.requireExactParentTurnAdmission(run, { requireActive: false });
+    if (run.metadata?.autonomousAdmission !== undefined) await this.verifyCanonicalAutonomousChatAdmission(run);
     assertDurableRetryPolicyMatchesRun(run.metadata?.retryPolicy, run.maxAttempts, DURABLE_RETRY_POLICY_DEFAULT);
     const authority = readChatTurnRuntimeAuthoritySeal(authorityValue);
     if (
@@ -4510,29 +4545,29 @@ export class DurableRunService {
     ) {
       throw new Error(`Durable linked finalization ${run.runId} has no matching general generation.`);
     }
-    const checkpoint = this.ctx.storage.durableRuns.getLatestCheckpointByKind(run.runId, "run_failed");
+    const checkpoint = await this.ctx.storage.durableRuns.getLatestCheckpointByKind(run.runId, "run_failed");
     if (!checkpoint) {
       throw new Error(`Durable linked finalization ${run.runId} has no authority-anchored failure checkpoint.`);
     }
     verifyCheckpointAnchoredChatTurnRuntimeAuthority(run.metadata, checkpoint.state);
   }
 
-  private claimPendingLinkedFinalization(
+  private async claimPendingLinkedFinalization(
     observed: DurableRunRecord,
-  ): { run: DurableRunRecord; pending: LinkedFinalizationPending } | undefined {
+  ): Promise<{ run: DurableRunRecord; pending: LinkedFinalizationPending } | undefined> {
     const observedPending = readLinkedFinalizationPending(observed);
     if (!observedPending) {
       return undefined;
     }
     const claimId = randomUUID();
     let claim: { run: DurableRunRecord; pending: LinkedFinalizationPending } | undefined;
-    this.retryDurableRunUpdate(observed.runId, (current) => {
+    await this.retryDurableRunUpdate(observed.runId, async (current) => {
       claim = undefined;
       const pending = readLinkedFinalizationPending(current);
       if (current.status !== "failed" || !pending || pending.finalizationId !== observedPending.finalizationId) {
         return current;
       }
-      const claimedAt = this.readDurableDatabaseNow();
+      const claimedAt = await this.readDurableDatabaseNow();
       const claimedAtMs = Date.parse(claimedAt);
       const activeClaimExpiresAt = pending.claimExpiresAt ? Date.parse(pending.claimExpiresAt) : Number.NaN;
       if (pending.claimId && Number.isFinite(activeClaimExpiresAt) && activeClaimExpiresAt > claimedAtMs) {
@@ -4547,7 +4582,7 @@ export class DurableRunService {
         ...(current.metadata ?? {}),
         linkedFinalizationPending: claimedPending,
       };
-      const claimedRun = this.ctx.storage.durableRuns.updateRun({
+      const claimedRun = await this.ctx.storage.durableRuns.updateRun({
         runId: current.runId,
         status: current.status,
         metadata,
@@ -4560,9 +4595,12 @@ export class DurableRunService {
     return claim;
   }
 
-  private renewPendingLinkedFinalizationClaim(runId: string, claimed: LinkedFinalizationPending): boolean {
+  private async renewPendingLinkedFinalizationClaim(
+    runId: string,
+    claimed: LinkedFinalizationPending,
+  ): Promise<boolean> {
     let renewed = false;
-    this.retryDurableRunUpdate(runId, (current) => {
+    await this.retryDurableRunUpdate(runId, async (current) => {
       const pending = readLinkedFinalizationPending(current);
       if (
         current.status !== "failed" ||
@@ -4572,9 +4610,9 @@ export class DurableRunService {
       ) {
         return current;
       }
-      const now = this.readDurableDatabaseNow();
+      const now = await this.readDurableDatabaseNow();
       const nowMs = Date.parse(now);
-      const next = this.ctx.storage.durableRuns.updateRun({
+      const next = await this.ctx.storage.durableRuns.updateRun({
         runId: current.runId,
         status: current.status,
         metadata: {
@@ -4593,10 +4631,10 @@ export class DurableRunService {
     return renewed;
   }
 
-  private reportDurableRunRecoveryFailure(runId: string, error: unknown): void {
+  private async reportDurableRunRecoveryFailure(runId: string, error: unknown): Promise<void> {
     const message = redactRawRemoteApprovalBearerText(error instanceof Error ? error.message : String(error));
-    const publishFailure = () => {
-      this.publishRealtimeSafely(
+    const publishFailure = async () => {
+      await this.publishRealtimeSafely(
         "system",
         "durable",
         { type: "durable_run_recovery_failed", runId, error: message },
@@ -4611,10 +4649,10 @@ export class DurableRunService {
       this.resolveLogger().error({ runId, error: message }, "durable run recovery failed; continuing with other runs");
     } catch {
       // Recovery isolation must not depend on the logger.
-      publishFailure();
+      await publishFailure();
       return;
     }
-    publishFailure();
+    await publishFailure();
   }
 
   private async drainQueuedRuns(): Promise<void> {
@@ -4626,15 +4664,15 @@ export class DurableRunService {
       if (this.workerStopped || this.isLeaseAcquisitionPaused()) {
         return;
       }
-      const run = this.claimNextQueuedRun();
+      const run = await this.claimNextQueuedRun();
       if (!run) {
         return;
       }
       let preserveForLeaseRecovery = false;
       try {
-        const gateDecision = deps.evaluateContinuationGate?.(run);
+        const gateDecision = await deps.evaluateContinuationGate?.(run);
         if (gateDecision && gateDecision.decision !== "continue") {
-          if (this.recordContinuationGateDecision(run, gateDecision, deps)) {
+          if (await this.recordContinuationGateDecision(run, gateDecision, deps)) {
             continue;
           }
         }
@@ -4663,21 +4701,21 @@ export class DurableRunService {
           );
         }
       } finally {
-        const current = this.ctx.storage.durableRuns.getRun(run.runId);
+        const current = await this.ctx.storage.durableRuns.getRun(run.runId);
         if (!preserveForLeaseRecovery && current.status === "running" && current.leaseOwnerId === run.leaseOwnerId) {
           const incompleteMessage = "Durable workflow exited without marking a terminal or waiting state.";
           const failedByThisPass = await this.failWorkflowRun(current, incompleteMessage);
           if (failedByThisPass) {
-            this.recordDurableTimelineEventSafely(current.runId, "run_incomplete_worker_exit", {
+            await this.recordDurableTimelineEventSafely(current.runId, "run_incomplete_worker_exit", {
               leaseOwnerId: current.leaseOwnerId,
               leaseExpiresAt: current.leaseExpiresAt,
             });
             const taskId = typeof current.payload?.taskId === "string" ? current.payload.taskId : undefined;
             if (taskId && this.deps?.taskLifecycle) {
               try {
-                this.deps.taskLifecycle.autoBlockOnIncompleteExit(taskId, current.runId);
+                await this.deps.taskLifecycle.autoBlockOnIncompleteExit(taskId, current.runId);
               } catch (error) {
-                this.publishDurableRealtimeSafely(current.runId, {
+                await this.publishDurableRealtimeSafely(current.runId, {
                   kind: "task_auto_block_failed",
                   runId: current.runId,
                   taskId,
@@ -4687,7 +4725,7 @@ export class DurableRunService {
             }
           }
         }
-        const finalized = this.ctx.storage.durableRuns.getRun(run.runId);
+        const finalized = await this.ctx.storage.durableRuns.getRun(run.runId);
         if (
           !preserveForLeaseRecovery &&
           isRepresentableTerminalChatRun(finalized) &&
@@ -4709,43 +4747,43 @@ export class DurableRunService {
             // Terminal reconciliation is owned by this run and remains
             // recoverable on a later sweep. One corrupt/incomplete run must not
             // abort the shared drain before unrelated queued work can execute.
-            this.reportDurableRunRecoveryFailure(finalized.runId, error);
+            await this.reportDurableRunRecoveryFailure(finalized.runId, error);
           }
         }
       }
     }
   }
 
-  private recordContinuationGateDecision(
+  private async recordContinuationGateDecision(
     run: DurableRunRecord,
     gateDecision: ContinuationGateDecision,
     deps: NonNullable<typeof this.deps>,
-  ): boolean {
+  ): Promise<boolean> {
     const shouldBlock = this.shouldBlockContinuationGateDecision(gateDecision);
     const now = new Date().toISOString();
     const blockedStatus = gateDecision.decision === "stop" ? "cancelled" : "paused";
     const blockedEventType = blockedStatus === "cancelled" ? "run_cancelled" : "run_paused";
-    this.ctx.storage.runImmediateTransaction(() => {
-      const current = this.lockFreshExecutionLeaseForTransition(run);
+    await this.ctx.storage.runImmediateTransaction(async () => {
+      const current = await this.lockFreshExecutionLeaseForTransition(run);
       if (!current) {
         throw new DurableWorkerInterruptionError(
           "lease_lost",
           `Durable run ${run.runId} lease ownership moved before its continuation gate could commit.`,
         );
       }
-      this.createDurableCheckpoint({
+      await this.createDurableCheckpoint({
         runId: run.runId,
         checkpointKind: "continuation_gate",
         state: { continuationGate: gateDecision },
         createdAt: gateDecision.createdAt,
       });
-      this.recordDurableTimelineEvent(run.runId, "continuation_gate", {
+      await this.recordDurableTimelineEvent(run.runId, "continuation_gate", {
         decision: gateDecision.decision,
         reasonCodes: gateDecision.reasonCodes,
         recommendedAction: gateDecision.recommendedAction,
       });
       if (shouldBlock) {
-        this.ctx.storage.durableRuns.updateRun({
+        await this.ctx.storage.durableRuns.updateRun({
           runId: run.runId,
           status: blockedStatus,
           updatedAt: now,
@@ -4754,7 +4792,7 @@ export class DurableRunService {
           clearLastError: true,
           expectedVersion: current.version,
         });
-        this.recordDurableTimelineEvent(run.runId, blockedEventType, {
+        await this.recordDurableTimelineEvent(run.runId, blockedEventType, {
           actorId: "continuation_gate",
           previousStatus: run.status,
           decision: gateDecision.decision,
@@ -4762,7 +4800,7 @@ export class DurableRunService {
         });
       }
     });
-    this.publishDurableRealtimeSafely(run.runId, {
+    await this.publishDurableRealtimeSafely(run.runId, {
       type: "durable_continuation_gate",
       runId: run.runId,
       decision: gateDecision.decision,
@@ -4770,7 +4808,7 @@ export class DurableRunService {
       recommendedAction: gateDecision.recommendedAction,
     });
     try {
-      deps.recordEvidenceEnvelope?.({
+      await deps.recordEvidenceEnvelope?.({
         eventKind: "continuation_gate",
         runId: run.runId,
         metadata: {
@@ -4781,14 +4819,14 @@ export class DurableRunService {
         },
       });
     } catch (error) {
-      this.publishDurableRealtimeSafely(run.runId, {
+      await this.publishDurableRealtimeSafely(run.runId, {
         type: "durable_continuation_gate_evidence_failed",
         runId: run.runId,
         error: error instanceof Error ? error.message : String(error),
       });
     }
     if (shouldBlock) {
-      this.publishDurableRealtimeSafely(run.runId, {
+      await this.publishDurableRealtimeSafely(run.runId, {
         type: blockedStatus === "cancelled" ? "durable_run_cancelled" : "durable_run_paused",
         runId: run.runId,
         actorId: "continuation_gate",
@@ -4846,13 +4884,13 @@ export class DurableRunService {
       timeoutMs: error.timeoutMs,
       waitForEvent,
     };
-    let waiting = this.ctx.storage.durableRuns.getRun(run.runId);
-    this.ctx.storage.runImmediateTransaction(() => {
-      const current = this.lockFreshExecutionLeaseForTransition(run);
+    let waiting = await this.ctx.storage.durableRuns.getRun(run.runId);
+    await this.ctx.storage.runImmediateTransaction(async () => {
+      const current = await this.lockFreshExecutionLeaseForTransition(run);
       if (!current) {
         return;
       }
-      waiting = this.ctx.storage.durableRuns.updateRun({
+      waiting = await this.ctx.storage.durableRuns.updateRun({
         runId: current.runId,
         status: "waiting",
         clearFinishedAt: true,
@@ -4871,18 +4909,18 @@ export class DurableRunService {
         },
         expectedVersion: current.version,
       });
-      this.createDurableCheckpoint({
+      await this.createDurableCheckpoint({
         runId: waiting.runId,
         checkpointKind: "run_waiting",
         state: checkpointState,
         createdAt: now,
       });
-      this.recordDurableTimelineEvent(waiting.runId, "run_waiting", checkpointState);
+      await this.recordDurableTimelineEvent(waiting.runId, "run_waiting", checkpointState);
     });
     if (waiting.status !== "waiting") {
       return;
     }
-    this.publishDurableRealtimeSafely(waiting.runId, {
+    await this.publishDurableRealtimeSafely(waiting.runId, {
       type: "durable_run_waiting",
       runId: waiting.runId,
       reason: "cowork_workflow_timeout",
@@ -4903,13 +4941,13 @@ export class DurableRunService {
       message: safeErrorMessage,
       waitForEvent,
     };
-    let waiting = this.ctx.storage.durableRuns.getRun(run.runId);
-    this.ctx.storage.runImmediateTransaction(() => {
-      const current = this.lockFreshExecutionLeaseForTransition(run);
+    let waiting = await this.ctx.storage.durableRuns.getRun(run.runId);
+    await this.ctx.storage.runImmediateTransaction(async () => {
+      const current = await this.lockFreshExecutionLeaseForTransition(run);
       if (!current) {
         return;
       }
-      waiting = this.ctx.storage.durableRuns.updateRun({
+      waiting = await this.ctx.storage.durableRuns.updateRun({
         runId: current.runId,
         status: "waiting",
         clearFinishedAt: true,
@@ -4927,18 +4965,18 @@ export class DurableRunService {
         },
         expectedVersion: current.version,
       });
-      this.createDurableCheckpoint({
+      await this.createDurableCheckpoint({
         runId: waiting.runId,
         checkpointKind: "run_waiting",
         state: checkpointState,
         createdAt: now,
       });
-      this.recordDurableTimelineEvent(waiting.runId, "run_waiting", checkpointState);
+      await this.recordDurableTimelineEvent(waiting.runId, "run_waiting", checkpointState);
     });
     if (waiting.status !== "waiting") {
       return;
     }
-    this.publishDurableRealtimeSafely(waiting.runId, {
+    await this.publishDurableRealtimeSafely(waiting.runId, {
       type: "durable_run_waiting",
       runId: waiting.runId,
       reason: "autonomy_kill_switch",
@@ -4954,9 +4992,9 @@ export class DurableRunService {
     activeExecution.controller.abort(buildDurableControlInterruptionError(kind, reason));
   }
 
-  private revokeActiveExecutionLease(runId: string, expectedLeaseOwnerId: string): void {
+  private async revokeActiveExecutionLease(runId: string, expectedLeaseOwnerId: string): Promise<void> {
     try {
-      this.retryDurableRunUpdate(runId, (current) => {
+      await this.retryDurableRunUpdate(runId, async (current) => {
         if (current.status !== "running" || current.leaseOwnerId !== expectedLeaseOwnerId) {
           return current;
         }
@@ -4971,7 +5009,7 @@ export class DurableRunService {
         });
       });
     } catch (error) {
-      this.reportDurableRunRecoveryFailure(runId, error);
+      await this.reportDurableRunRecoveryFailure(runId, error);
     }
   }
 
@@ -4979,14 +5017,14 @@ export class DurableRunService {
     run: DurableRunRecord,
     execute: (context: { signal: AbortSignal; controller: AbortController }) => Promise<T>,
   ): Promise<T> {
-    const owned = this.ctx.storage.durableRuns.getRun(run.runId);
+    const owned = await this.ctx.storage.durableRuns.getRun(run.runId);
     if (owned.status !== "running" || owned.leaseOwnerId !== run.leaseOwnerId || this.workerStopped) {
       throw new DurableWorkerInterruptionError(
         this.workerStopped ? "worker_stopped" : "lease_lost",
         `Durable run ${run.runId} lease ownership was lost before workflow execution.`,
       );
     }
-    const renewedBeforeExecution = this.renewLeaseWithDatabaseClock({
+    const renewedBeforeExecution = await this.renewLeaseWithDatabaseClock({
       runId: run.runId,
       workerId: run.leaseOwnerId!,
       leaseDurationMs: DURABLE_LEASE_TTL_MS,
@@ -5034,10 +5072,10 @@ export class DurableRunService {
         rejectHeartbeatFailure(error);
         return;
       }
-      this.recordEventLoopLag(Date.now() - expectedAtMs, run.runId);
+      await this.recordEventLoopLag(Date.now() - expectedAtMs, run.runId);
       let current: DurableRunRecord;
       try {
-        current = this.ctx.storage.durableRuns.getRun(run.runId);
+        current = await this.ctx.storage.durableRuns.getRun(run.runId);
       } catch (error) {
         consecutiveHeartbeatFailures += 1;
         if (!heartbeatToleranceExhausted()) {
@@ -5045,7 +5083,7 @@ export class DurableRunService {
           return;
         }
         active = false;
-        this.revokeActiveExecutionLease(run.runId, run.leaseOwnerId!);
+        await this.revokeActiveExecutionLease(run.runId, run.leaseOwnerId!);
         const interruption = new DurableWorkerInterruptionError(
           "heartbeat_unavailable",
           error instanceof Error ? error.message : String(error),
@@ -5067,7 +5105,7 @@ export class DurableRunService {
         return;
       }
       try {
-        const renewed = this.renewLeaseWithDatabaseClock({
+        const renewed = await this.renewLeaseWithDatabaseClock({
           runId: run.runId,
           workerId: run.leaseOwnerId!,
           leaseDurationMs: DURABLE_LEASE_TTL_MS,
@@ -5093,7 +5131,7 @@ export class DurableRunService {
           return;
         }
         active = false;
-        this.revokeActiveExecutionLease(run.runId, run.leaseOwnerId!);
+        await this.revokeActiveExecutionLease(run.runId, run.leaseOwnerId!);
         const interruption = new DurableWorkerInterruptionError(
           "heartbeat_unavailable",
           error instanceof Error ? error.message : `Durable run ${run.runId} lease heartbeat failed.`,
@@ -5119,7 +5157,7 @@ export class DurableRunService {
     }
   }
 
-  private recordEventLoopLag(lagMs: number, runId: string): void {
+  private async recordEventLoopLag(lagMs: number, runId: string): Promise<void> {
     const boundedLagMs = Math.max(0, Math.floor(lagMs));
     this.lastEventLoopLagMs = boundedLagMs;
     this.lastEventLoopLagAt = new Date().toISOString();
@@ -5132,7 +5170,7 @@ export class DurableRunService {
         Date.now() + Math.min(30_000, Math.max(5_000, boundedLagMs)),
       );
     }
-    this.recordDurableTimelineEventSafely(runId, "worker_event_loop_lag", {
+    await this.recordDurableTimelineEventSafely(runId, "worker_event_loop_lag", {
       lagMs: boundedLagMs,
       thresholdMs: DURABLE_EVENT_LOOP_LAG_WARN_MS,
       leaseAcquisitionPausedUntil:
@@ -5140,7 +5178,7 @@ export class DurableRunService {
           ? new Date(this.leaseAcquisitionPausedUntilMs).toISOString()
           : undefined,
     });
-    this.publishDurableRealtimeSafely(runId, {
+    await this.publishDurableRealtimeSafely(runId, {
       type: "durable_worker_event_loop_lag",
       runId,
       lagMs: boundedLagMs,
@@ -5155,25 +5193,25 @@ export class DurableRunService {
     return this.leaseAcquisitionPausedUntilMs > Date.now();
   }
 
-  private claimNextQueuedRun(): DurableRunRecord | undefined {
-    const queuedRunIds = this.ctx.storage.durableRuns.listRunIdsByStatus("queued");
+  private async claimNextQueuedRun(): Promise<DurableRunRecord | undefined> {
+    const queuedRunIds = await this.ctx.storage.durableRuns.listRunIdsByStatus("queued");
     if (queuedRunIds.length === 0) {
       return undefined;
     }
     let run: DurableRunRecord | undefined;
     for (const runId of queuedRunIds) {
-      if (this.terminalizeQueuedLegacyUnadmittedChatTurn(runId)) {
+      if (await this.terminalizeQueuedLegacyUnadmittedChatTurn(runId)) {
         continue;
       }
       try {
-        this.assertExactAdmittedChatRetryAuthority(this.ctx.storage.durableRuns.getRun(runId));
+        this.assertExactAdmittedChatRetryAuthority(await this.ctx.storage.durableRuns.getRun(runId));
       } catch (error) {
-        this.reportDurableRunRecoveryFailure(runId, error);
+        await this.reportDurableRunRecoveryFailure(runId, error);
         continue;
       }
       const leaseOwnerId = buildDurableLocalProcessLeaseOwnerId();
-      this.ctx.storage.runImmediateTransaction(() => {
-        run = this.tryClaimQueuedRunWithDatabaseClock({
+      await this.ctx.storage.runImmediateTransaction(async () => {
+        run = await this.tryClaimQueuedRunWithDatabaseClock({
           runId,
           workerId: leaseOwnerId,
           leaseDurationMs: DURABLE_LEASE_TTL_MS,
@@ -5181,7 +5219,7 @@ export class DurableRunService {
         if (!run) {
           return;
         }
-        this.createDurableCheckpoint({
+        await this.createDurableCheckpoint({
           runId: run.runId,
           checkpointKind: "run_started",
           state: {
@@ -5190,7 +5228,7 @@ export class DurableRunService {
           },
           createdAt: run.leaseHeartbeatAt ?? run.updatedAt,
         });
-        this.recordDurableTimelineEvent(run.runId, "run_started", {
+        await this.recordDurableTimelineEvent(run.runId, "run_started", {
           workflowKey: run.workflowKey,
           status: run.status,
         });
@@ -5202,7 +5240,7 @@ export class DurableRunService {
     if (!run) {
       return undefined;
     }
-    this.publishDurableRealtimeSafely(run.runId, {
+    await this.publishDurableRealtimeSafely(run.runId, {
       type: "durable_run_started",
       runId: run.runId,
       workflowKey: run.workflowKey,
@@ -5215,23 +5253,23 @@ export class DurableRunService {
    * quarantined before lease acquisition, so they cannot execute and do not
    * consume a retry attempt merely to discover that authority is absent.
    */
-  private terminalizeQueuedLegacyUnadmittedChatTurn(runId: string): boolean {
-    const observed = this.ctx.storage.durableRuns.getRun(runId);
+  private async terminalizeQueuedLegacyUnadmittedChatTurn(runId: string): Promise<boolean> {
+    const observed = await this.ctx.storage.durableRuns.getRun(runId);
     if (observed.status !== "queued" || !isLegacyUnadmittedDurableChatTurn(observed)) {
       return false;
     }
     const reason =
       "Legacy durable Chat run lacks immutable session-incarnation admission and requires manual reconciliation.";
     let failed: DurableRunRecord | undefined;
-    this.ctx.storage.runImmediateTransaction(() => {
-      const current = this.ctx.storage.durableRuns.getRun(runId);
+    await this.ctx.storage.runImmediateTransaction(async () => {
+      const current = await this.ctx.storage.durableRuns.getRun(runId);
       if (current.status !== "queued" || !isLegacyUnadmittedDurableChatTurn(current)) {
         return;
       }
-      const now = this.readDurableDatabaseNow();
+      const now = await this.readDurableDatabaseNow();
       const metadata = { ...(current.metadata ?? {}) };
       delete (metadata as { linkedFinalizationPending?: unknown }).linkedFinalizationPending;
-      failed = this.persistFailedRunInTransaction(current, reason, now, {
+      failed = await this.persistFailedRunInTransaction(current, reason, now, {
         ...metadata,
         linkedFinalizationPending: {
           reason,
@@ -5243,21 +5281,21 @@ export class DurableRunService {
     if (!failed) {
       return false;
     }
-    this.publishDurableRealtimeSafely(failed.runId, {
+    await this.publishDurableRealtimeSafely(failed.runId, {
       type: "durable_run_failed",
       runId: failed.runId,
       error: reason,
     });
-    void this.notifyRunFailedSafely(failed, reason);
+    void this.notifyRunFailedSafely(failed, reason).catch(() => undefined);
     this.requestRunProcessing(failed.runId);
     return true;
   }
 
-  private tryClaimQueuedRunWithDatabaseClock(input: {
+  private async tryClaimQueuedRunWithDatabaseClock(input: {
     runId: string;
     workerId: string;
     leaseDurationMs: number;
-  }): DurableRunRecord | undefined {
+  }): Promise<DurableRunRecord | undefined> {
     const durableRuns = this.ctx.storage.durableRuns;
     const claim = durableRuns.tryClaimQueuedRunWithDatabaseClock;
     if (typeof claim === "function") {
@@ -5276,11 +5314,11 @@ export class DurableRunService {
     throw new Error("Durable run repository is missing database-clock lease claim authority");
   }
 
-  private renewLeaseWithDatabaseClock(input: {
+  private async renewLeaseWithDatabaseClock(input: {
     runId: string;
     workerId: string;
     leaseDurationMs: number;
-  }): DurableRunRecord | undefined {
+  }): Promise<DurableRunRecord | undefined> {
     const durableRuns = this.ctx.storage.durableRuns;
     const renew = durableRuns.renewLeaseWithDatabaseClock;
     if (typeof renew === "function") {
@@ -5299,12 +5337,12 @@ export class DurableRunService {
     throw new Error("Durable run repository is missing database-clock lease renewal authority");
   }
 
-  private upsertRetryWithDatabaseClock(input: {
+  private async upsertRetryWithDatabaseClock(input: {
     runId: string;
     attemptNo: number;
     reason: string;
     delayMs: number;
-  }): DurableRetryRecord {
+  }): Promise<DurableRetryRecord> {
     const durableRuns = this.ctx.storage.durableRuns;
     const upsert = durableRuns.upsertRetryWithDatabaseClock;
     if (typeof upsert === "function") {
@@ -5323,7 +5361,7 @@ export class DurableRunService {
     throw new Error("Durable run repository is missing database-clock retry scheduling authority");
   }
 
-  private readDurableDatabaseNow(): string {
+  private async readDurableDatabaseNow(): Promise<string> {
     const durableRuns = this.ctx.storage.durableRuns;
     const read = durableRuns.readDatabaseNow;
     if (typeof read === "function") {
@@ -5335,7 +5373,7 @@ export class DurableRunService {
     throw new Error("Durable run repository is missing database-clock recovery claim authority");
   }
 
-  private persistCanonicalAdmittedChatFailureInTransaction(
+  private async persistCanonicalAdmittedChatFailureInTransaction(
     current: DurableRunRecord,
     message: string,
     now: string,
@@ -5343,7 +5381,7 @@ export class DurableRunService {
       attemptCount?: number;
       retryExhaustion?: ChatRetryExhaustionDeadLetterPending;
     } = {},
-  ): DurableRunRecord {
+  ): Promise<DurableRunRecord> {
     if (!isAdmittedV2ChatRun(current)) {
       throw new Error(`Durable run ${current.runId} is not an admitted v2 Chat turn.`);
     }
@@ -5365,7 +5403,7 @@ export class DurableRunService {
     ) {
       throw new Error(`Durable Chat run ${current.runId} has no canonical failure identity.`);
     }
-    this.requireExactParentTurnAdmission(current);
+    await this.requireExactParentTurnAdmission(current);
     const currentMetadata = current.metadata ?? {};
     if (
       currentMetadata[CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY] !== undefined ||
@@ -5386,7 +5424,7 @@ export class DurableRunService {
           evalIntegrityTurn: false,
           humanSession: false,
         }
-      : this.resolvePostCommitEligibility(payload.sessionId);
+      : await this.resolvePostCommitEligibility(payload.sessionId);
     const linkedFinalizationPending: LinkedFinalizationPending = {
       reason: message,
       requestedAt: now,
@@ -5435,20 +5473,20 @@ export class DurableRunService {
     const now = new Date().toISOString();
     const safeMessage = redactRawRemoteApprovalBearerText(message);
     let transitioned = false;
-    let failed = this.ctx.storage.durableRuns.getRun(run.runId);
-    this.ctx.storage.runImmediateTransaction(() => {
-      const current = this.lockFreshExecutionLeaseForTransition(run);
+    let failed = await this.ctx.storage.durableRuns.getRun(run.runId);
+    await this.ctx.storage.runImmediateTransaction(async () => {
+      const current = await this.lockFreshExecutionLeaseForTransition(run);
       if (!current) {
         return;
       }
       failed = isAdmittedV2ChatRun(current)
-        ? this.persistCanonicalAdmittedChatFailureInTransaction(current, safeMessage, now)
-        : this.persistFailedRunInTransaction(current, safeMessage, now);
+        ? await this.persistCanonicalAdmittedChatFailureInTransaction(current, safeMessage, now)
+        : await this.persistFailedRunInTransaction(current, safeMessage, now);
       transitioned = true;
     });
     if (!transitioned) {
       if (failed.leaseOwnerId !== run.leaseOwnerId) {
-        this.publishRealtimeSafely(
+        await this.publishRealtimeSafely(
           "system",
           "durable",
           {
@@ -5467,7 +5505,7 @@ export class DurableRunService {
       }
       return false;
     }
-    this.publishDurableRealtimeSafely(failed.runId, {
+    await this.publishDurableRealtimeSafely(failed.runId, {
       type: "durable_run_failed",
       runId: failed.runId,
       error: safeMessage,
@@ -5481,11 +5519,11 @@ export class DurableRunService {
     try {
       await this.deps?.onRunFailed?.(run, message);
     } catch (error) {
-      this.reportDurableRunRecoveryFailure(run.runId, error);
+      await this.reportDurableRunRecoveryFailure(run.runId, error);
     }
   }
 
-  private persistFailedRunInTransaction(
+  private async persistFailedRunInTransaction(
     current: DurableRunRecord,
     message: string,
     now: string,
@@ -5495,8 +5533,8 @@ export class DurableRunService {
       error: message,
     },
     options: { attemptCount?: number } = {},
-  ): DurableRunRecord {
-    const next = this.ctx.storage.durableRuns.updateRun({
+  ): Promise<DurableRunRecord> {
+    const next = await this.ctx.storage.durableRuns.updateRun({
       runId: current.runId,
       status: "failed",
       finishedAt: now,
@@ -5507,13 +5545,13 @@ export class DurableRunService {
       updatedAt: now,
       expectedVersion: current.version,
     });
-    this.createDurableCheckpoint({
+    await this.createDurableCheckpoint({
       runId: next.runId,
       checkpointKind: "run_failed",
       state: checkpointState,
       createdAt: now,
     });
-    this.recordDurableTimelineEvent(next.runId, "run_failed", {
+    await this.recordDurableTimelineEvent(next.runId, "run_failed", {
       workflowKey: next.workflowKey,
       error: message,
     });
@@ -5528,7 +5566,7 @@ export class DurableRunService {
     );
   }
 
-  private lockFreshExecutionLeaseForTransition(run: DurableRunRecord): DurableRunRecord | undefined {
+  private async lockFreshExecutionLeaseForTransition(run: DurableRunRecord): Promise<DurableRunRecord | undefined> {
     const expectedLeaseOwnerId = run.leaseOwnerId?.trim();
     if (!expectedLeaseOwnerId) {
       return undefined;
@@ -5536,20 +5574,25 @@ export class DurableRunService {
     return this.lockFreshLeaseOwnerForTransition(run.runId, expectedLeaseOwnerId);
   }
 
-  private lockFreshLeaseOwnerForTransition(runId: string, expectedLeaseOwnerId: string): DurableRunRecord | undefined {
+  private async lockFreshLeaseOwnerForTransition(
+    runId: string,
+    expectedLeaseOwnerId: string,
+  ): Promise<DurableRunRecord | undefined> {
     const durableRuns = this.ctx.storage.durableRuns;
     const lock = durableRuns.lockFreshActiveLeaseForUpdate;
     if (typeof lock === "function") {
       return lock.call(durableRuns, runId, expectedLeaseOwnerId);
     }
     if (process.env.NODE_ENV === "test") {
-      const current = durableRuns.getRun(runId);
+      const current = await durableRuns.getRun(runId);
       return this.hasActiveLeaseOwner(current, expectedLeaseOwnerId) ? current : undefined;
     }
     throw new Error("Durable run repository is missing the database-clock transition fence");
   }
 
-  private lockExpiredExecutionLeaseForRecovery(observed: DurableRunRecord): DurableRunRecord | undefined {
+  private async lockExpiredExecutionLeaseForRecovery(
+    observed: DurableRunRecord,
+  ): Promise<DurableRunRecord | undefined> {
     if (!observed.leaseExpiresAt) {
       return undefined;
     }
@@ -5563,7 +5606,7 @@ export class DurableRunService {
       });
     }
     if (process.env.NODE_ENV === "test") {
-      const current = durableRuns.getRun(observed.runId);
+      const current = await durableRuns.getRun(observed.runId);
       return current.status === "running" &&
         current.leaseOwnerId === observed.leaseOwnerId &&
         current.leaseExpiresAt === observed.leaseExpiresAt &&
@@ -5601,16 +5644,16 @@ export class DurableRunService {
     return status === "completed" || status === "failed" || status === "cancelled" || status === "dead_lettered";
   }
 
-  private retryDurableRunUpdate(
+  private async retryDurableRunUpdate(
     runId: string,
-    update: (current: DurableRunRecord) => DurableRunRecord,
+    update: (current: DurableRunRecord) => DurableRunRecord | Promise<DurableRunRecord>,
     maxAttempts = 3,
-  ): DurableRunRecord {
+  ): Promise<DurableRunRecord> {
     let lastError: unknown;
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-      const current = this.ctx.storage.durableRuns.getRun(runId);
+      const current = await this.ctx.storage.durableRuns.getRun(runId);
       try {
-        return update(current);
+        return await update(current);
       } catch (error) {
         if (!isDurableRunUpdateConflict(error) || attempt === maxAttempts - 1) {
           throw error;
@@ -5618,7 +5661,7 @@ export class DurableRunService {
         lastError = error;
       }
     }
-    this.publishRealtimeSafely(
+    await this.publishRealtimeSafely(
       "durable_run_update_conflict_exhausted",
       "durable",
       {

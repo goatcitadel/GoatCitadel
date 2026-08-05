@@ -46,6 +46,7 @@ const mocks = vi.hoisted(() => {
     dockerRunningNames: [] as string[],
     dockerMountSources: new Map<string, string>(),
     dockerStates: [] as string[],
+    execFile: vi.fn(),
     execFileSync: vi.fn(),
     isBundledPostgresMode: vi.fn(),
     resolveGatewayPostgresConnectionOptions: vi.fn(),
@@ -54,6 +55,7 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock("node:child_process", () => ({
+  execFile: mocks.execFile,
   execFileSync: mocks.execFileSync,
 }));
 
@@ -85,6 +87,7 @@ beforeEach(() => {
   mocks.dockerRunningNames.length = 0;
   mocks.dockerMountSources.clear();
   mocks.dockerStates.length = 0;
+  mocks.execFile.mockReset();
   mocks.execFileSync.mockReset();
   mocks.execFileSync.mockImplementation((command: string, args: string[]) => {
     if (command === "docker" && args[0] === "info") {
@@ -112,6 +115,20 @@ beforeEach(() => {
     }
     return "";
   });
+  mocks.execFile.mockImplementation(
+    (
+      command: string,
+      args: string[],
+      _options: unknown,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      try {
+        callback(null, String(mocks.execFileSync(command, args, _options) ?? ""), "");
+      } catch (error) {
+        callback(error as Error, "", "");
+      }
+    },
+  );
   mocks.isBundledPostgresMode.mockImplementation((config: ReturnType<typeof buildConfig>) =>
     Boolean(config.assistant.database.bundledPostgres.enabled),
   );
@@ -227,10 +244,15 @@ describe("bundled postgres runtime lifecycle", () => {
     );
 
     await handle?.stop();
-    expect(mocks.execFileSync).toHaveBeenCalledWith("docker", expect.arrayContaining(["stop"]), expect.any(Object));
+    expect(mocks.execFile).toHaveBeenCalledWith(
+      "docker",
+      ["stop", "--time", "300", buildBundledDockerContainerName(rootDir)],
+      expect.objectContaining({ timeout: 310_000 }),
+      expect.any(Function),
+    );
   });
 
-  it("starts an existing stopped Docker container and ignores shutdown failures", async () => {
+  it("starts an existing stopped Docker container and reports shutdown failures", async () => {
     const rootDir = await makeTempDir();
     mockHardenedRunningDockerContainer(rootDir);
     mocks.dbScripts.push(
@@ -273,7 +295,7 @@ describe("bundled postgres runtime lifecycle", () => {
 
     expect(handle?.strategy).toBe("docker");
     expect(mocks.execFileSync).toHaveBeenCalledWith("docker", expect.arrayContaining(["start"]), expect.any(Object));
-    await expect(handle?.stop()).resolves.toBeUndefined();
+    await expect(handle?.stop()).rejects.toThrow("docker shutdown failed");
   });
 
   it("fails once with an operator repair command for an unsafe stopped container", async () => {
@@ -393,10 +415,11 @@ describe("bundled postgres runtime lifecycle", () => {
     const action = ensureBundledPostgresRuntime(buildConfig(rootDir, { binDir: "auto", startTimeoutMs: 1 }));
 
     await expect(action).rejects.toThrow("Bundled Postgres did not become reachable");
-    expect(mocks.execFileSync).toHaveBeenCalledWith(
+    expect(mocks.execFile).toHaveBeenCalledWith(
       expect.stringContaining(nativeExecutableName("pg_ctl")),
       expect.arrayContaining(["stop"]),
       expect.anything(),
+      expect.any(Function),
     );
     expect(mocks.execFileSync).not.toHaveBeenCalledWith("docker", expect.arrayContaining(["run"]), expect.anything());
   });
@@ -522,11 +545,12 @@ describe("bundled postgres runtime lifecycle", () => {
       expect.any(Object),
     );
 
-    await expect(handle?.stop()).resolves.toBeUndefined();
-    expect(mocks.execFileSync).toHaveBeenCalledWith(
+    await expect(handle?.stop()).rejects.toThrow("native shutdown failed");
+    expect(mocks.execFile).toHaveBeenCalledWith(
       pgCtl,
-      ["-D", path.resolve(rootDir, "data", "postgres"), "-w", "stop", "-m", "fast"],
-      expect.any(Object),
+      ["-D", path.resolve(rootDir, "data", "postgres"), "-w", "-t", "300", "stop", "-m", "fast"],
+      expect.objectContaining({ timeout: 310_000 }),
+      expect.any(Function),
     );
   });
 
@@ -728,6 +752,7 @@ function buildConfig(
     autoStart?: boolean;
     binDir?: string;
     startTimeoutMs?: number;
+    stopTimeoutMs?: number;
   } = {},
 ) {
   return {
@@ -743,6 +768,7 @@ function buildConfig(
           dataDir: "data/postgres",
           port: 45432,
           startTimeoutMs: options.startTimeoutMs ?? 10_000,
+          stopTimeoutMs: options.stopTimeoutMs ?? 300_000,
         },
       },
     },

@@ -3,10 +3,13 @@ import type { Storage } from "@goatcitadel/storage";
 import { AutonomousActivationGrantService } from "./autonomous-activation-grant-service.js";
 
 describe("AutonomousActivationGrantService", () => {
-  it("refuses record-time grant use when activation count or expiry is exhausted", () => {
+  it("refuses record-time grant use when activation count or expiry is exhausted", async () => {
     const settings = createSettings();
-    const service = new AutonomousActivationGrantService(settings, vi.fn());
-    const grant = service.createGrant({
+    const service = new AutonomousActivationGrantService(
+      settings as never,
+      vi.fn(async () => undefined),
+    );
+    const grant = await service.createGrant({
       workspaceId: "workspace-1",
       surfaces: ["mcp"],
       maxRiskLevel: "danger",
@@ -19,10 +22,10 @@ describe("AutonomousActivationGrantService", () => {
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
     });
 
-    expect(service.recordGrantUse(grant.grantId).usedActivations).toBe(1);
-    expect(() => service.recordGrantUse(grant.grantId)).toThrow("activation count is exhausted");
+    expect((await service.recordGrantUse(grant.grantId)).usedActivations).toBe(1);
+    await expect(service.recordGrantUse(grant.grantId)).rejects.toThrow("activation count is exhausted");
 
-    const expired = service.createGrant({
+    const expired = await service.createGrant({
       workspaceId: "workspace-1",
       surfaces: ["mcp"],
       maxRiskLevel: "danger",
@@ -39,12 +42,15 @@ describe("AutonomousActivationGrantService", () => {
       ),
     );
 
-    expect(() => service.recordGrantUse(expired.grantId)).toThrow("is expired");
+    await expect(service.recordGrantUse(expired.grantId)).rejects.toThrow("is expired");
   });
 
-  it("refuses record-time grant use when the remaining budget is exhausted", () => {
-    const service = new AutonomousActivationGrantService(createSettings(), vi.fn());
-    const grant = service.createGrant({
+  it("refuses record-time grant use when the remaining budget is exhausted", async () => {
+    const service = new AutonomousActivationGrantService(
+      createSettings() as never,
+      vi.fn(async () => undefined),
+    );
+    const grant = await service.createGrant({
       workspaceId: "workspace-1",
       surfaces: ["code"],
       maxRiskLevel: "danger",
@@ -57,7 +63,7 @@ describe("AutonomousActivationGrantService", () => {
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
     });
 
-    expect(() => service.recordGrantUse(grant.grantId, 0.2)).toThrow("budget is exhausted");
+    await expect(service.recordGrantUse(grant.grantId, 0.2)).rejects.toThrow("budget is exhausted");
   });
 });
 

@@ -426,7 +426,10 @@ export class SharedHostLifecycleService implements SharedHostLifecycleAdmissionP
         this.failedSignals.set(event.eventId, { event, error, failedAt: this.timestamp() });
       });
     this.pendingSignals.add(signal);
-    void signal.then(() => this.pendingSignals.delete(signal));
+    void signal.then(
+      () => this.pendingSignals.delete(signal),
+      () => this.pendingSignals.delete(signal),
+    );
   }
 
   private timestamp(): string {

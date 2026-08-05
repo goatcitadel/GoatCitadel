@@ -247,9 +247,9 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     }
     try {
       return reply.send({
-        items: fastify.services.chatSessions
-          .listChatGeneratedArtifacts(parsed.data)
-          .map(projectChatGeneratedArtifactForPublic),
+        items: (await fastify.services.chatSessions.listChatGeneratedArtifacts(parsed.data)).map(
+          projectChatGeneratedArtifactForPublic,
+        ),
       });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -294,7 +294,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     try {
       return reply.send({
         item: projectChatGeneratedArtifactForPublic(
-          fastify.services.chatSessions.getChatGeneratedArtifact(params.data.artifactId, {
+          await fastify.services.chatSessions.getChatGeneratedArtifact(params.data.artifactId, {
             workspaceId: query.data.workspaceId,
             citadelId: query.data.citadelId,
           }),
@@ -314,7 +314,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     }
     try {
       return reply.send(
-        projectChatSessionSearchResponseForPublic(fastify.services.chatSessions.searchChatSessions(parsed.data)),
+        projectChatSessionSearchResponseForPublic(await fastify.services.chatSessions.searchChatSessions(parsed.data)),
       );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -331,7 +331,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       reply.header("pragma", "no-cache");
     }
     try {
-      const items = fastify.services.chatSessions.listChatSessions(parsed.data);
+      const items = await fastify.services.chatSessions.listChatSessions(parsed.data);
       const last = items.at(-1);
       const nextCursor = items.length === parsed.data.limit && last ? `${last.updatedAt}|${last.sessionId}` : undefined;
       return reply.send({ items: items.map(projectChatSessionForPublic), nextCursor });
@@ -346,7 +346,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      const created = fastify.services.chatSessions.createChatSession(parsed.data);
+      const created = await fastify.services.chatSessions.createChatSession(parsed.data);
       return reply.code(201).send(projectChatSessionForPublic(created));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -371,13 +371,13 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     const workspaceId = parsed.data.workspaceId;
-    const items = fastify.services.chatSessions
-      .listRecentCrossProjectSessions({
+    const items = (
+      await fastify.services.chatSessions.listRecentCrossProjectSessions({
         citadelId: parsed.data.citadelId,
         workspaceId,
         limit: parsed.data.limit,
       })
-      .map(projectRecentCrossProjectSessionForPublic);
+    ).map(projectRecentCrossProjectSessionForPublic);
     return reply.send({
       items,
       workspaceId,
@@ -392,7 +392,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     }
     try {
       reply.header("cache-control", "private, no-store");
-      return reply.send(fastify.services.chatSessions.getChatSessionStatus(params.data.sessionId));
+      return reply.send(await fastify.services.chatSessions.getChatSessionStatus(params.data.sessionId));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -403,7 +403,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
     try {
       reply.header("cache-control", "private, no-store");
-      return reply.send({ items: fastify.services.chatSessions.listChatTimers(params.data.sessionId) });
+      return reply.send({ items: await fastify.services.chatSessions.listChatTimers(params.data.sessionId) });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -421,7 +421,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
-      const item = fastify.services.chatSessions.createChatTimer(
+      const item = await fastify.services.chatSessions.createChatTimer(
         params.data.sessionId,
         body.data,
         request.authActorId || "operator",
@@ -445,7 +445,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     }
     try {
       return reply.send({
-        item: fastify.services.chatSessions.cancelChatTimer(
+        item: await fastify.services.chatSessions.cancelChatTimer(
           params.data.sessionId,
           params.data.timerId,
           body.data.expectedRevision,
@@ -471,7 +471,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       const { expectedRevision, ...input } = body.data;
       return reply.send(
         projectChatSessionForPublic(
-          fastify.services.chatSessions.updateChatSession(params.data.sessionId, input, expectedRevision),
+          await fastify.services.chatSessions.updateChatSession(params.data.sessionId, input, expectedRevision),
         ),
       );
     } catch (error) {
@@ -513,7 +513,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     try {
       return reply.send(
         projectChatSessionForPublic(
-          fastify.services.chatSessions.pinChatSession(params.data.sessionId, body.data.expectedRevision),
+          await fastify.services.chatSessions.pinChatSession(params.data.sessionId, body.data.expectedRevision),
         ),
       );
     } catch (error) {
@@ -535,7 +535,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     try {
       return reply.send(
         projectChatSessionForPublic(
-          fastify.services.chatSessions.unpinChatSession(params.data.sessionId, body.data.expectedRevision),
+          await fastify.services.chatSessions.unpinChatSession(params.data.sessionId, body.data.expectedRevision),
         ),
       );
     } catch (error) {
@@ -557,7 +557,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     try {
       return reply.send(
         projectChatSessionForPublic(
-          fastify.services.chatSessions.archiveChatSession(params.data.sessionId, body.data.expectedRevision),
+          await fastify.services.chatSessions.archiveChatSession(params.data.sessionId, body.data.expectedRevision),
         ),
       );
     } catch (error) {
@@ -579,7 +579,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     try {
       return reply.send(
         projectChatSessionForPublic(
-          fastify.services.chatSessions.restoreChatSession(params.data.sessionId, body.data.expectedRevision),
+          await fastify.services.chatSessions.restoreChatSession(params.data.sessionId, body.data.expectedRevision),
         ),
       );
     } catch (error) {
@@ -601,7 +601,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     try {
       return reply.send(
         projectChatSessionForPublic(
-          fastify.services.chatSessions.assignChatSessionProject(
+          await fastify.services.chatSessions.assignChatSessionProject(
             params.data.sessionId,
             body.data.projectId,
             body.data.expectedRevision,
@@ -619,7 +619,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      const result = fastify.services.chatSessions.getChatSideChat(params.data.sessionId);
+      const result = await fastify.services.chatSessions.getChatSideChat(params.data.sessionId);
       return reply.send({
         ...result,
         ...(result.childSession ? { childSession: projectChatSessionForPublic(result.childSession) } : {}),
@@ -641,7 +641,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
-      const result = fastify.services.chatSessions.createChatSideChat(params.data.sessionId, body.data);
+      const result = await fastify.services.chatSessions.createChatSideChat(params.data.sessionId, body.data);
       return reply.code(201).send({
         ...result,
         childSession: projectChatSessionForPublic(result.childSession),
@@ -664,7 +664,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     }
     try {
       return reply.send(
-        fastify.services.chatSessions.setChatSessionBinding({
+        await fastify.services.chatSessions.setChatSessionBinding({
           sessionId: params.data.sessionId,
           ...body.data,
         }),
@@ -681,7 +681,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     }
     try {
       return reply.send({
-        item: fastify.services.chatSessions.getChatSessionBinding(params.data.sessionId) ?? null,
+        item: (await fastify.services.chatSessions.getChatSessionBinding(params.data.sessionId)) ?? null,
       });
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -941,12 +941,12 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     }
     try {
       return reply.send({
-        items: fastify.services.chatSessions
-          .listChatGeneratedArtifacts({
+        items: (
+          await fastify.services.chatSessions.listChatGeneratedArtifacts({
             ...query.data,
             sessionId: params.data.sessionId,
           })
-          .map(projectChatGeneratedArtifactForPublic),
+        ).map(projectChatGeneratedArtifactForPublic),
       });
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -967,7 +967,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     try {
       return reply.code(201).send({
         item: projectChatGeneratedArtifactForPublic(
-          fastify.services.chatSessions.createChatGeneratedArtifactFromTurn({
+          await fastify.services.chatSessions.createChatGeneratedArtifactFromTurn({
             sessionId: params.data.sessionId,
             turnId: params.data.turnId,
             supersedeLatest: body.data.supersedeLatest,
@@ -993,7 +993,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     try {
       return reply.code(201).send({
         item: projectChatGeneratedArtifactForPublic(
-          fastify.services.chatSessions.createChatGeneratedArtifactVersion(params.data.artifactId, body.data),
+          await fastify.services.chatSessions.createChatGeneratedArtifactVersion(params.data.artifactId, body.data),
         ),
       });
     } catch (error) {
@@ -1005,7 +1005,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     const query = documentPatchProposalQuerySchema.safeParse(request.query ?? {});
     if (!query.success) return reply.code(400).send({ error: query.error.flatten() });
     try {
-      return reply.send(fastify.services.chatSessions.listDocumentPatchProposals(query.data));
+      return reply.send(await fastify.services.chatSessions.listDocumentPatchProposals(query.data));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -1015,9 +1015,9 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     const body = createDocumentPatchProposalSchema.safeParse(request.body ?? {});
     if (!body.success) return reply.code(400).send({ error: body.error.flatten() });
     try {
-      return reply
-        .code(201)
-        .send({ item: fastify.services.chatSessions.createDocumentPatchProposal(body.data, resolveActorId(request)) });
+      return reply.code(201).send({
+        item: await fastify.services.chatSessions.createDocumentPatchProposal(body.data, resolveActorId(request)),
+      });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -1029,7 +1029,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid proposal apply request." });
     try {
       return reply.send({
-        item: fastify.services.chatSessions.applyDocumentPatchProposal(
+        item: await fastify.services.chatSessions.applyDocumentPatchProposal(
           params.data.proposalId,
           body.data.workspaceId,
           resolveActorId(request),
@@ -1046,7 +1046,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid proposal rejection request." });
     try {
       return reply.send({
-        item: fastify.services.chatSessions.rejectDocumentPatchProposal(
+        item: await fastify.services.chatSessions.rejectDocumentPatchProposal(
           params.data.proposalId,
           body.data.workspaceId,
           resolveActorId(request),
@@ -1064,7 +1064,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     }
     try {
       return reply.send({
-        items: fastify.services.chatSessions.listChatThreadKnowledgeAttachments(params.data.sessionId),
+        items: await fastify.services.chatSessions.listChatThreadKnowledgeAttachments(params.data.sessionId),
       });
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -1103,7 +1103,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     }
     try {
       return reply.send(
-        fastify.services.chatSessions.removeChatThreadKnowledgeAttachment(
+        await fastify.services.chatSessions.removeChatThreadKnowledgeAttachment(
           params.data.sessionId,
           params.data.attachmentId,
         ),

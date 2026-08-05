@@ -57,7 +57,7 @@ describe("CitadelsRouteService.interpretSessionMessage", () => {
 });
 
 describe("CitadelsRouteService vault", () => {
-  it("seals on store and opens on reveal, never exposing the value on store or list", () => {
+  it("seals on store and opens on reveal, never exposing the value on store or list", async () => {
     const key = generateVaultKey();
     const store = new Map<string, CitadelVaultSecretRecord>();
     let lastSealed: unknown;
@@ -80,7 +80,7 @@ describe("CitadelsRouteService vault", () => {
     });
     const service = new CitadelsRouteService(repo, undefined, () => key);
 
-    const stored = service.storeVaultSecret("c1", "stripe", "sk-live-SECRET-123");
+    const stored = await service.storeVaultSecret("c1", "stripe", "sk-live-SECRET-123");
     expect(stored).toEqual({
       ok: true,
       secret: { secretId: "s1", secretName: "stripe", createdAt: "t", updatedAt: "t" },
@@ -88,24 +88,24 @@ describe("CitadelsRouteService vault", () => {
     // The persisted envelope is ciphertext, not the plaintext.
     expect(JSON.stringify(lastSealed)).not.toContain("sk-live-SECRET-123");
 
-    expect(service.revealVaultSecret("c1", "s1")).toEqual({ ok: true, value: "sk-live-SECRET-123" });
+    await expect(service.revealVaultSecret("c1", "s1")).resolves.toEqual({ ok: true, value: "sk-live-SECRET-123" });
 
     // The list view carries names + provenance only — never the sealed or opened value.
-    expect(service.listVaultSecrets("c1")).toEqual([
+    await expect(service.listVaultSecrets("c1")).resolves.toEqual([
       { secretId: "s1", secretName: "stripe", createdAt: "t", updatedAt: "t" },
     ]);
   });
 
-  it("fails closed (unavailable) when no vault key is configured", () => {
+  it("fails closed (unavailable) when no vault key is configured", async () => {
     const service = new CitadelsRouteService(repoStub({}));
-    expect(service.storeVaultSecret("c1", "k", "v")).toEqual({ ok: false, reason: "unavailable" });
-    expect(service.revealVaultSecret("c1", "s1")).toEqual({ ok: false, reason: "unavailable" });
+    await expect(service.storeVaultSecret("c1", "k", "v")).resolves.toEqual({ ok: false, reason: "unavailable" });
+    await expect(service.revealVaultSecret("c1", "s1")).resolves.toEqual({ ok: false, reason: "unavailable" });
   });
 
-  it("returns not_found when revealing a missing secret", () => {
+  it("returns not_found when revealing a missing secret", async () => {
     const key = generateVaultKey();
     const repo = repoStub({ getVaultSecret: vi.fn(() => undefined) });
     const service = new CitadelsRouteService(repo, undefined, () => key);
-    expect(service.revealVaultSecret("c1", "nope")).toEqual({ ok: false, reason: "not_found" });
+    await expect(service.revealVaultSecret("c1", "nope")).resolves.toEqual({ ok: false, reason: "not_found" });
   });
 });

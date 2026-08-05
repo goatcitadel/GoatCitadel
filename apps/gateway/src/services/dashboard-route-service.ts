@@ -22,7 +22,7 @@ import {
   type RuntimeLifecycleToolRunSummary,
 } from "@goatcitadel/contracts";
 import { readDesignQualityEvidence } from "@goatcitadel/skills";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { BackupRetentionService } from "./backup-retention-service.js";
 import type { DurableOperatorService } from "./durable-operator-service.js";
 import type { MemoryLifecycleService } from "./memory-lifecycle-service.js";
@@ -221,23 +221,27 @@ export interface OpsQualityExportInput extends OpsQualitySnapshotInput {
 
 export function createDashboardRoutePort(deps: DashboardRoutePortDependencies): DashboardRoutePort {
   return {
-    costSummary: (scope, from, to) => deps.storage.costLedger.summary(scope, from, to),
-    costUsageAvailability: (from, to) => deps.storage.costLedger.usageAvailability(from, to),
-    getDashboardState: () => {
-      const sessions = deps.storage.sessions.list(200);
+    costSummary: async (scope, from, to) => await deps.storage.costLedger.summary(scope, from, to),
+    costUsageAvailability: async (from, to) => await deps.storage.costLedger.usageAvailability(from, to),
+    getDashboardState: async () => {
+      const sessions = await deps.storage.sessions.list(200);
       const now = new Date();
-      const pendingApprovals = deps.storage.approvals
-        .list("pending", 10000)
-        .filter((approval) => !approval.expiresAt || Date.parse(approval.expiresAt) > now.getTime()).length;
-      const activeSubagents = deps.storage.taskSubagents.activeCount();
-      const taskStatusCounts = deps.storage.tasks.statusCounts();
-      const recentEvents = deps.storage.realtimeEvents.list(100).map((event) => ({
+      const pendingApprovals = (
+        await (
+          await deps.storage.approvals.list("pending", 10000)
+        ).filter((approval) => !approval.expiresAt || Date.parse(approval.expiresAt) > now.getTime())
+      ).length;
+      const activeSubagents = await deps.storage.taskSubagents.activeCount();
+      const taskStatusCounts = await deps.storage.tasks.statusCounts();
+      const recentEvents = await (
+        await deps.storage.realtimeEvents.list(100)
+      ).map((event) => ({
         ...event,
         payload: redactStructuredSecrets(event.payload).value,
       }));
       const from = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
       const to = now.toISOString();
-      const byDay = deps.storage.costLedger.summary("day", from, to);
+      const byDay = await deps.storage.costLedger.summary("day", from, to);
       const dailyCostUsd = byDay.reduce((sum, row) => sum + row.costUsd, 0);
 
       return {
@@ -251,10 +255,10 @@ export function createDashboardRoutePort(deps: DashboardRoutePortDependencies): 
       };
     },
     getMemoryQmdStats: (from, to) => deps.memoryLifecycleService.getContextStats(from, to),
-    getObserveRunTrace: (runId) => buildObserveRunTrace(deps, String(runId)),
-    getObserveRunTraceExport: (runId) => buildObserveRunTraceExport(deps, String(runId)),
-    getOpsQualityExport: (input) => buildOpsQualityExport(deps, input as OpsQualityExportInput),
-    getOpsQualitySnapshot: (input) => buildOpsQualitySnapshot(deps, input),
+    getObserveRunTrace: async (runId) => await buildObserveRunTrace(deps, String(runId)),
+    getObserveRunTraceExport: async (runId) => await buildObserveRunTraceExport(deps, String(runId)),
+    getOpsQualityExport: async (input) => await buildOpsQualityExport(deps, input as OpsQualityExportInput),
+    getOpsQualitySnapshot: async (input) => await buildOpsQualitySnapshot(deps, input),
     getSystemVitals: () => {
       const total = os.totalmem();
       const free = os.freemem();
@@ -276,12 +280,14 @@ export function createDashboardRoutePort(deps: DashboardRoutePortDependencies): 
     isFeatureEnabled: (flag) => deps.isFeatureEnabled(flag),
     listBackups: (limit) => deps.backupRetentionService.listBackups(limit),
     listMemoryFiles: (relativeDir) => deps.memoryLifecycleService.listMemoryFiles(relativeDir),
-    listOperators: () => {
+    listOperators: async () => {
       const activeSinceIso = new Date(Date.now() - 10 * 60 * 1000).toISOString();
-      return deps.operatorSummaryCache.get(() => deps.storage.sessions.listOperatorSummaries(activeSinceIso));
+      return await deps.operatorSummaryCache.getAsync(() =>
+        deps.storage.sessions.listOperatorSummaries(activeSinceIso),
+      );
     },
     listRealtimeEvents: (limit, cursor) => deps.realtimeEventService.listRealtimeEvents(limit, cursor),
-    listSessions: (limit, cursor) => deps.storage.sessions.list(limit, cursor),
+    listSessions: async (limit, cursor) => await deps.storage.sessions.list(limit, cursor),
   };
 }
 
@@ -289,15 +295,17 @@ export function createDashboardRouteService(port: DashboardRoutePort): Dashboard
   return createRouteService(port, dashboardRouteMethods);
 }
 
-function buildOpsQualitySnapshot(
+async function buildOpsQualitySnapshot(
   deps: DashboardRoutePortDependencies,
   input: OpsQualitySnapshotInput,
-): OpsQualitySnapshotResponse {
+): Promise<OpsQualitySnapshotResponse> {
   const generatedAt = new Date().toISOString();
-  const promptPacksResult = safeRead(() => deps.promptPackService.listPromptPacks(input.packLimit));
-  const evalProofResult = safeRead(() => deps.storage.llmEvalProofRuns.list(input.evalLimit));
-  const securityEvalPacksResult = safeRead(() => deps.promptPackService.listSecurityEvalPacks());
-  const securityQualityGatesResult = safeRead(() => deps.promptPackService.listSecurityQualityGates());
+  const [promptPacksResult, evalProofResult, securityEvalPacksResult, securityQualityGatesResult] = await Promise.all([
+    safeReadAsync(() => deps.promptPackService.listPromptPacks(input.packLimit)),
+    safeReadAsync(() => deps.storage.llmEvalProofRuns.list(input.evalLimit)),
+    safeReadAsync(() => deps.promptPackService.listSecurityEvalPacks()),
+    safeReadAsync(() => deps.promptPackService.listSecurityQualityGates()),
+  ]);
   const designQualityResult = safeRead(() =>
     (deps.readDesignQualityEvidence ?? readDesignQualityEvidence)(deps.rootDir),
   );
@@ -422,11 +430,11 @@ function buildOpsQualitySnapshot(
   };
 }
 
-function buildOpsQualityExport(
+async function buildOpsQualityExport(
   deps: DashboardRoutePortDependencies,
   input: OpsQualityExportInput,
-): OpsQualityOtelExportResponse {
-  const snapshot = buildOpsQualitySnapshot(deps, input);
+): Promise<OpsQualityOtelExportResponse> {
+  const snapshot = await buildOpsQualitySnapshot(deps, input);
   const spans = buildOpsQualityOtelSpans(snapshot);
   const payload = {
     version: "ops.quality_export.otel_json.v1" as const,
@@ -692,18 +700,18 @@ async function buildObserveRunTrace(
   deps: DashboardRoutePortDependencies,
   runId: string,
 ): Promise<ObserveRunTraceResponse> {
-  const run = deps.durableOperatorService.getRun(runId);
-  const checkpointResult = safeRead(() => deps.durableOperatorService.listRunCheckpoints(runId, 500));
-  const timelineResult = safeRead(() => deps.durableOperatorService.listRunTimeline(runId, 500));
+  const run = await deps.durableOperatorService.getRun(runId);
+  const checkpointResult = await safeReadAsync(() => deps.durableOperatorService.listRunCheckpoints(runId, 500));
+  const timelineResult = await safeReadAsync(() => deps.durableOperatorService.listRunTimeline(runId, 500));
   const lifecycleResult = await safeReadAsync(() => deps.runtimeLifecycleReadService.getRuntimeLifecycle({ runId }));
   const lifecycle = lifecycleResult.value;
   const checkpoints = checkpointResult.value ?? [];
   const timeline = timelineResult.value ?? [];
   const approvalIds = lifecycle ? dedupe(lifecycle.linked.approvalIds) : collectStringIds(run, "approvalId");
-  const approvals = loadApprovals(deps.storage, approvalIds);
+  const approvals = await loadApprovals(deps.storage, approvalIds);
   const turnIds = lifecycle ? dedupe(lifecycle.linked.turnIds) : collectStringIds(run, "turnId");
-  const artifactsResult = loadArtifacts(deps.storage, turnIds);
-  const memoryResult = safeRead(() => deps.storage.memoryContexts.listByRun(runId));
+  const artifactsResult = await loadArtifacts(deps.storage, turnIds);
+  const memoryResult = await safeReadAsync(() => deps.storage.memoryContexts.listByRun(runId));
   const providerUsage = buildProviderUsage(lifecycle);
   const errors = collectRunTraceErrors(run, checkpoints, timeline, lifecycle);
   const replayCheckpointIds = checkpoints
@@ -801,17 +809,17 @@ function safeRunTraceFilenameSegment(value: string): string {
   return safe || "unknown";
 }
 
-function loadApprovals(
+async function loadApprovals(
   storage: Storage,
   approvalIds: string[],
-): {
+): Promise<{
   items: ApprovalRequest[];
   missingIds: string[];
-} {
+}> {
   const items: ApprovalRequest[] = [];
   const missingIds: string[] = [];
   for (const approvalId of approvalIds) {
-    const result = safeRead(() => storage.approvals.get(approvalId));
+    const result = await safeReadAsync(() => storage.approvals.get(approvalId));
     if (result.value) {
       items.push(result.value);
     } else {
@@ -821,17 +829,17 @@ function loadApprovals(
   return { items, missingIds };
 }
 
-function loadArtifacts(
+async function loadArtifacts(
   storage: Storage,
   turnIds: string[],
-): {
+): Promise<{
   items: ObserveRunTraceArtifact[];
   error?: Error;
-} {
+}> {
   if (turnIds.length === 0) {
     return { items: [] };
   }
-  const result = safeRead(() => storage.chatGeneratedArtifacts.listByTurnIds(turnIds));
+  const result = await safeReadAsync(() => storage.chatGeneratedArtifacts.listByTurnIds(turnIds));
   if (result.error) {
     return { items: [], error: result.error };
   }

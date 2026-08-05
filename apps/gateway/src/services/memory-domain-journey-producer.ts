@@ -1,18 +1,20 @@
 import { createHash } from "node:crypto";
 import {
+  assertGovernedLifecycleEventRecord,
   canonicalJsonString,
   computeGovernedMutationMaterialSha256,
   ConflictError,
   GOVERNED_LIFECYCLE_EVENT_VERSION,
   isGovernanceJourneyEventRecord,
   type ApprovalRequest,
+  type GovernanceJourneyEvidenceRef,
   type GovernanceJourneyEventRecord,
   type GovernedLifecycleEventRecord,
   type MemoryChangeEvent,
   type MemoryGovernedOperation,
   type MemoryItemRecord,
 } from "@goatcitadel/contracts";
-import { GovernedLifecycleEventRepository, type DatabaseClient } from "@goatcitadel/storage";
+import type { AsyncGatewaySqlRepository } from "@goatcitadel/storage";
 import {
   buildApprovedMemoryJourneyEvent,
   MEMORY_LIFECYCLE_APPROVAL_BINDING_VERSION,
@@ -36,44 +38,39 @@ export const MEMORY_MAINTENANCE_SYSTEM_ACTOR_ID = "system:memory-maintenance" as
 
 const MEMORY_HISTORY_SOURCE_KIND = "memory_change_history" as const;
 
-interface MemoryGovernedSqlHost {
-  readonly dialect: "sqlite" | "postgres";
-  prepare(sql: string): {
-    get(...args: unknown[]): unknown;
-    all(...args: unknown[]): unknown[];
-    run(...args: unknown[]): unknown;
-  };
-  runImmediateTransaction?<T>(callback: () => T): T;
+export interface MemoryGovernedLifecycleRepository {
+  createWithJourney(
+    input: GovernedLifecycleEventRecord,
+    buildJourneyEvents: (stored: GovernedLifecycleEventRecord) => readonly GovernanceJourneyEventRecord[],
+  ): Promise<{ event: GovernedLifecycleEventRecord; journeyEvents: GovernanceJourneyEventRecord[] }>;
 }
 
 /**
- * Adapt the gateway SQL host to the storage `DatabaseClient` surface the P0
- * repository needs. Only `prepare` and immediate `transaction` are real; the
- * repository never calls `exec`/`close`, and both dialects' clients make the
- * inner transaction a nested-safe savepoint, so `createWithJourney` composes
- * inside the producer's own mutation transaction.
+ * Preserve the P0 repository's append-and-Journey atomicity directly on the
+ * Promise-native gateway SQL surface. Both async dialect adapters make the
+ * inner immediate transaction a nested-safe savepoint, so
+ * `createWithJourney` composes inside the producer's owning mutation.
  */
-export function createMemoryGovernedLifecycleRepository(host: MemoryGovernedSqlHost): GovernedLifecycleEventRepository {
-  const runImmediateTransaction = host.runImmediateTransaction;
-  if (typeof runImmediateTransaction !== "function") {
+export function createMemoryGovernedLifecycleRepository(
+  host: AsyncGatewaySqlRepository,
+): MemoryGovernedLifecycleRepository {
+  if (typeof host.runImmediateTransaction !== "function") {
     throw new ConflictError({
       code: "STATE_CONFLICT",
       message: "Governed memory lifecycle evidence requires transactional gateway storage.",
     });
   }
-  const client: DatabaseClient = {
-    dialect: host.dialect,
-    prepare: (sql: string) => host.prepare(sql) as ReturnType<DatabaseClient["prepare"]>,
-    exec: () => {
-      throw new Error("Governed memory lifecycle adapter does not execute raw SQL scripts.");
-    },
-    close: () => {
-      throw new Error("Governed memory lifecycle adapter does not own the database connection.");
-    },
-    transaction: <T>(_mode: "deferred" | "immediate" | "exclusive", callback: () => T): T =>
-      runImmediateTransaction.call(host, callback) as T,
+  return {
+    createWithJourney: async (input, buildJourneyEvents) =>
+      await host.runImmediateTransaction(async () => {
+        const event = await createGovernedLifecycleEvent(host, input);
+        const journeyEvents: GovernanceJourneyEventRecord[] = [];
+        for (const journeyEvent of buildJourneyEvents(event)) {
+          journeyEvents.push(await createGovernanceJourneyEvent(host, journeyEvent));
+        }
+        return { event, journeyEvents };
+      }),
   };
-  return new GovernedLifecycleEventRepository(client);
 }
 
 /**
@@ -242,10 +239,10 @@ export interface ApprovedMemoryLifecycleEvidence {
  * `createWithJourney`. Exact replays converge byte-identically; the same
  * identity with different material conflicts inside the owner.
  */
-export function persistApprovedMemoryMutationEvidence(
-  repository: GovernedLifecycleEventRepository,
+export async function persistApprovedMemoryMutationEvidence(
+  repository: MemoryGovernedLifecycleRepository,
   input: ApprovedMemoryLifecycleEvidenceInput,
-): ApprovedMemoryLifecycleEvidence {
+): Promise<ApprovedMemoryLifecycleEvidence> {
   const operation = governedOperationForApprovedChange(input);
   const eventId = governedMemoryLifecycleEventId(input.change.changeId);
   const journeyEvent = buildApprovedMemoryJourneyEvent({ ...input, governedLifecycleEventId: eventId });
@@ -284,7 +281,7 @@ export function persistApprovedMemoryMutationEvidence(
     occurredAt: input.authority.occurredAt,
     recordedAt: input.authority.occurredAt,
   };
-  const { event, journeyEvents } = repository.createWithJourney(record, () => [journeyEvent]);
+  const { event, journeyEvents } = await repository.createWithJourney(record, () => [journeyEvent]);
   const storedJourney = journeyEvents[0];
   if (!storedJourney) {
     throw new ConflictError({
@@ -444,10 +441,10 @@ export interface MemorySystemExpiryEvidenceInput {
  * writes it for a WeakSet-verified module-private authority — an operator or
  * approval-effect payload can never reach it.
  */
-export function persistMemorySystemExpiryEvidence(
-  repository: GovernedLifecycleEventRepository,
+export async function persistMemorySystemExpiryEvidence(
+  repository: MemoryGovernedLifecycleRepository,
   input: MemorySystemExpiryEvidenceInput,
-): ApprovedMemoryLifecycleEvidence {
+): Promise<ApprovedMemoryLifecycleEvidence> {
   if (!isMemoryMaintenanceSystemAuthority(input.authority)) {
     throw new ConflictError({
       code: "STATE_CONFLICT",
@@ -526,7 +523,7 @@ export function persistMemorySystemExpiryEvidence(
   if (!isGovernanceJourneyEventRecord(journeyEvent)) {
     throw new TypeError("Memory maintenance expiry Journey event failed its canonical contract.");
   }
-  const { event, journeyEvents } = repository.createWithJourney(record, () => [journeyEvent]);
+  const { event, journeyEvents } = await repository.createWithJourney(record, () => [journeyEvent]);
   const storedJourney = journeyEvents[0];
   if (!storedJourney) {
     throw new ConflictError({
@@ -565,6 +562,273 @@ export class MemoryLifecycleApplyError extends Error {
     super(APPLY_ERROR_MESSAGES[code]);
     this.name = "MemoryLifecycleApplyError";
     this.code = code;
+  }
+}
+
+interface GovernedLifecycleRow {
+  schema_version: GovernedLifecycleEventRecord["schemaVersion"];
+  event_id: string;
+  idempotency_key: string;
+  domain: GovernedLifecycleEventRecord["domain"];
+  operation: GovernedLifecycleEventRecord["operation"];
+  target_kind: GovernedLifecycleEventRecord["targetKind"];
+  target_id: string;
+  material_sha256: string;
+  scope_kind: GovernedLifecycleEventRecord["scopeKind"];
+  workspace_id: string | null;
+  actor_id: string;
+  actor_type: GovernedLifecycleEventRecord["actorType"];
+  session_id: string | null;
+  turn_id: string | null;
+  source_required: number | string;
+  approval_required: number | string;
+  source_kind: string | null;
+  source_id: string | null;
+  approval_id: string | null;
+  occurred_at: string;
+  recorded_at: string;
+}
+
+interface GovernanceJourneyRow {
+  schema_version: GovernanceJourneyEventRecord["schemaVersion"];
+  event_id: string;
+  idempotency_key: string;
+  scope_kind: GovernanceJourneyEventRecord["scopeKind"];
+  workspace_id: string | null;
+  event_type: string;
+  subject_kind: string;
+  subject_id: string;
+  action: string;
+  actor_id: string;
+  actor_type: GovernanceJourneyEventRecord["actorType"];
+  session_id: string | null;
+  turn_id: string | null;
+  approval_id: string | null;
+  fingerprint: string | null;
+  source_kind: string | null;
+  source_id: string | null;
+  trust_disposition: string | null;
+  poisoning_status: GovernanceJourneyEventRecord["poisoningStatus"] | null;
+  evidence_refs_json: string;
+  provenance_json: string;
+  summary_json: string;
+  occurred_at: string;
+  recorded_at: string;
+}
+
+async function createGovernedLifecycleEvent(
+  host: AsyncGatewaySqlRepository,
+  input: GovernedLifecycleEventRecord,
+): Promise<GovernedLifecycleEventRecord> {
+  assertGovernedLifecycleEventRecord(input);
+  await host
+    .prepare(
+      `INSERT INTO governed_lifecycle_events (
+        schema_version, event_id, idempotency_key, domain, operation, target_kind, target_id,
+        material_sha256, scope_kind, workspace_id, actor_id, actor_type, session_id, turn_id,
+        source_required, approval_required, source_kind, source_id, approval_id, occurred_at, recorded_at
+      ) VALUES (
+        @schemaVersion, @eventId, @idempotencyKey, @domain, @operation, @targetKind, @targetId,
+        @materialSha256, @scopeKind, @workspaceId, @actorId, @actorType, @sessionId, @turnId,
+        @sourceRequired, @approvalRequired, @sourceKind, @sourceId, @approvalId, @occurredAt, @recordedAt
+      ) ON CONFLICT DO NOTHING`,
+    )
+    .run({
+      schemaVersion: input.schemaVersion,
+      eventId: input.eventId,
+      idempotencyKey: input.idempotencyKey,
+      domain: input.domain,
+      operation: input.operation,
+      targetKind: input.targetKind,
+      targetId: input.targetId,
+      materialSha256: input.materialSha256,
+      scopeKind: input.scopeKind,
+      workspaceId: input.workspaceId ?? null,
+      actorId: input.actorId,
+      actorType: input.actorType,
+      sessionId: input.sessionId ?? null,
+      turnId: input.turnId ?? null,
+      sourceRequired: input.sourceRequired ? 1 : 0,
+      approvalRequired: input.approvalRequired ? 1 : 0,
+      sourceKind: input.sourceKind ?? null,
+      sourceId: input.sourceId ?? null,
+      approvalId: input.approvalId ?? null,
+      occurredAt: input.occurredAt,
+      recordedAt: input.recordedAt,
+    });
+  const row = await host
+    .prepare("SELECT * FROM governed_lifecycle_events WHERE idempotency_key = ?")
+    .get<GovernedLifecycleRow>(input.idempotencyKey);
+  if (!row) {
+    throw new ConflictError({
+      code: "WRITE_CONFLICT",
+      message: `Governed lifecycle event ${input.eventId} conflicts with an existing immutable record.`,
+    });
+  }
+  const stored = mapGovernedLifecycleRow(row);
+  assertImmutableEvidenceReplay(stored, input, `Governed lifecycle event ${input.eventId}`);
+  return stored;
+}
+
+async function createGovernanceJourneyEvent(
+  host: AsyncGatewaySqlRepository,
+  input: GovernanceJourneyEventRecord,
+): Promise<GovernanceJourneyEventRecord> {
+  if (!isGovernanceJourneyEventRecord(input)) {
+    throw new TypeError("Memory lifecycle Journey event failed its canonical contract.");
+  }
+  const normalizedInput: GovernanceJourneyEventRecord = {
+    ...input,
+    evidenceRefs: normalizeJourneyEvidenceRefs(input.evidenceRefs),
+  };
+  await host
+    .prepare(
+      `INSERT INTO governance_journey_events (
+        schema_version, event_id, idempotency_key, scope_kind, workspace_id, event_type,
+        subject_kind, subject_id, action, actor_id, actor_type, session_id, turn_id,
+        approval_id, fingerprint, source_kind, source_id, trust_disposition, poisoning_status,
+        evidence_refs_json, provenance_json, summary_json, occurred_at, recorded_at
+      ) VALUES (
+        @schemaVersion, @eventId, @idempotencyKey, @scopeKind, @workspaceId, @eventType,
+        @subjectKind, @subjectId, @action, @actorId, @actorType, @sessionId, @turnId,
+        @approvalId, @fingerprint, @sourceKind, @sourceId, @trustDisposition, @poisoningStatus,
+        @evidenceRefsJson, @provenanceJson, @summaryJson, @occurredAt, @recordedAt
+      ) ON CONFLICT DO NOTHING`,
+    )
+    .run({
+      schemaVersion: normalizedInput.schemaVersion,
+      eventId: normalizedInput.eventId,
+      idempotencyKey: normalizedInput.idempotencyKey,
+      scopeKind: normalizedInput.scopeKind,
+      workspaceId: normalizedInput.workspaceId ?? null,
+      eventType: normalizedInput.eventType,
+      subjectKind: normalizedInput.subjectKind,
+      subjectId: normalizedInput.subjectId,
+      action: normalizedInput.action,
+      actorId: normalizedInput.actorId,
+      actorType: normalizedInput.actorType,
+      sessionId: normalizedInput.sessionId ?? null,
+      turnId: normalizedInput.turnId ?? null,
+      approvalId: normalizedInput.approvalId ?? null,
+      fingerprint: normalizedInput.fingerprint ?? null,
+      sourceKind: normalizedInput.sourceKind ?? null,
+      sourceId: normalizedInput.sourceId ?? null,
+      trustDisposition: normalizedInput.trustDisposition ?? null,
+      poisoningStatus: normalizedInput.poisoningStatus ?? null,
+      evidenceRefsJson: canonicalJsonString(normalizedInput.evidenceRefs),
+      provenanceJson: canonicalJsonString(normalizedInput.provenance),
+      summaryJson: canonicalJsonString(normalizedInput.summary),
+      occurredAt: normalizedInput.occurredAt,
+      recordedAt: normalizedInput.recordedAt,
+    });
+  const row = await host
+    .prepare("SELECT * FROM governance_journey_events WHERE idempotency_key = ?")
+    .get<GovernanceJourneyRow>(normalizedInput.idempotencyKey);
+  if (!row) {
+    throw new ConflictError({
+      code: "WRITE_CONFLICT",
+      message: `Governance Journey event ${input.eventId} conflicts with an existing immutable record.`,
+    });
+  }
+  const stored = mapGovernanceJourneyRow(row);
+  assertImmutableEvidenceReplay(stored, normalizedInput, `Governance Journey event ${input.eventId}`);
+  return stored;
+}
+
+function mapGovernedLifecycleRow(row: GovernedLifecycleRow): GovernedLifecycleEventRecord {
+  const record: GovernedLifecycleEventRecord = {
+    schemaVersion: row.schema_version,
+    eventId: row.event_id,
+    idempotencyKey: row.idempotency_key,
+    domain: row.domain,
+    operation: row.operation,
+    targetKind: row.target_kind,
+    targetId: row.target_id,
+    materialSha256: row.material_sha256,
+    scopeKind: row.scope_kind,
+    ...(row.workspace_id === null ? {} : { workspaceId: row.workspace_id }),
+    actorId: row.actor_id,
+    actorType: row.actor_type,
+    ...(row.session_id === null ? {} : { sessionId: row.session_id }),
+    ...(row.turn_id === null ? {} : { turnId: row.turn_id }),
+    sourceRequired: Number(row.source_required) === 1,
+    approvalRequired: Number(row.approval_required) === 1,
+    ...(row.source_kind === null ? {} : { sourceKind: row.source_kind }),
+    ...(row.source_id === null ? {} : { sourceId: row.source_id }),
+    ...(row.approval_id === null ? {} : { approvalId: row.approval_id }),
+    occurredAt: row.occurred_at,
+    recordedAt: row.recorded_at,
+  };
+  assertGovernedLifecycleEventRecord(record);
+  return record;
+}
+
+function mapGovernanceJourneyRow(row: GovernanceJourneyRow): GovernanceJourneyEventRecord {
+  const record: GovernanceJourneyEventRecord = {
+    schemaVersion: row.schema_version,
+    eventId: row.event_id,
+    idempotencyKey: row.idempotency_key,
+    scopeKind: row.scope_kind,
+    ...(row.workspace_id === null ? {} : { workspaceId: row.workspace_id }),
+    eventType: row.event_type,
+    subjectKind: row.subject_kind,
+    subjectId: row.subject_id,
+    action: row.action,
+    actorId: row.actor_id,
+    actorType: row.actor_type,
+    ...(row.session_id === null ? {} : { sessionId: row.session_id }),
+    ...(row.turn_id === null ? {} : { turnId: row.turn_id }),
+    ...(row.approval_id === null ? {} : { approvalId: row.approval_id }),
+    ...(row.fingerprint === null ? {} : { fingerprint: row.fingerprint }),
+    ...(row.source_kind === null ? {} : { sourceKind: row.source_kind }),
+    ...(row.source_id === null ? {} : { sourceId: row.source_id }),
+    ...(row.trust_disposition === null ? {} : { trustDisposition: row.trust_disposition }),
+    ...(row.poisoning_status === null ? {} : { poisoningStatus: row.poisoning_status }),
+    evidenceRefs: normalizeJourneyEvidenceRefs(
+      parseCanonicalJson<GovernanceJourneyEvidenceRef[]>(row.evidence_refs_json),
+    ),
+    provenance: parseCanonicalJson<Record<string, unknown>>(row.provenance_json),
+    summary: parseCanonicalJson<Record<string, unknown>>(row.summary_json),
+    occurredAt: row.occurred_at,
+    recordedAt: row.recorded_at,
+  };
+  if (!isGovernanceJourneyEventRecord(record)) {
+    throw new TypeError("Stored memory lifecycle Journey event failed its canonical contract.");
+  }
+  return record;
+}
+
+function parseCanonicalJson<T>(raw: string): T {
+  try {
+    return JSON.parse(raw) as T;
+  } catch (error) {
+    throw new TypeError("Stored memory lifecycle Journey event contains malformed JSON.", { cause: error });
+  }
+}
+
+function normalizeJourneyEvidenceRefs(
+  evidenceRefs: readonly GovernanceJourneyEvidenceRef[],
+): GovernanceJourneyEvidenceRef[] {
+  const byIdentity = new Map<string, GovernanceJourneyEvidenceRef>();
+  for (const evidenceRef of evidenceRefs) {
+    byIdentity.set(`${evidenceRef.owner}:${evidenceRef.refId}`, {
+      owner: evidenceRef.owner,
+      refId: evidenceRef.refId,
+    });
+  }
+  return [...byIdentity.values()].sort((left, right) => {
+    const leftIdentity = `${left.owner}:${left.refId}`;
+    const rightIdentity = `${right.owner}:${right.refId}`;
+    return leftIdentity < rightIdentity ? -1 : leftIdentity > rightIdentity ? 1 : 0;
+  });
+}
+
+function assertImmutableEvidenceReplay(stored: unknown, attempted: unknown, label: string): void {
+  if (canonicalJsonString(stored) !== canonicalJsonString(attempted)) {
+    throw new ConflictError({
+      code: "WRITE_CONFLICT",
+      message: `${label} conflicts with an existing immutable record.`,
+    });
   }
 }
 

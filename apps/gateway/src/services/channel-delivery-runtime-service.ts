@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Delivery claims, reconciliation, retry, hydration, and diagnostics remain one auditable runtime owner. */
 import { createHash, randomUUID } from "node:crypto";
 import type {
   ChannelAttachmentInput,
@@ -58,40 +59,7 @@ export interface ChannelDeliveryRuntimeRepository {
       maxBackoffMs?: number;
     },
     now?: string,
-  ): CommsSendResult & {
-    connectionId?: string;
-    payloadHash?: string;
-    payload?: Record<string, unknown>;
-    idempotencyKey?: string;
-    attempts?: number;
-    maxAttempts?: number;
-    nextAttemptAt?: string;
-    staleAfterMs?: number;
-    baseBackoffMs?: number;
-    maxBackoffMs?: number;
-    staleReason?: string;
-    deliveryDiagnostics?: ChannelDeliveryDiagnostics;
-  };
-  findByIdempotencyKey?(idempotencyKey: string):
-    | (CommsSendResult & {
-        connectionId?: string;
-        payloadHash?: string;
-        payload?: Record<string, unknown>;
-        idempotencyKey?: string;
-        attempts?: number;
-        maxAttempts?: number;
-        nextAttemptAt?: string;
-        staleAfterMs?: number;
-        baseBackoffMs?: number;
-        maxBackoffMs?: number;
-        staleReason?: string;
-        deliveryDiagnostics?: ChannelDeliveryDiagnostics;
-      })
-    | undefined;
-  listDue?(
-    now?: string,
-    limit?: number,
-  ): Array<
+  ): Promise<
     CommsSendResult & {
       connectionId?: string;
       payloadHash?: string;
@@ -107,41 +75,79 @@ export interface ChannelDeliveryRuntimeRepository {
       deliveryDiagnostics?: ChannelDeliveryDiagnostics;
     }
   >;
+  findByIdempotencyKey?(idempotencyKey: string): Promise<
+    | (CommsSendResult & {
+        connectionId?: string;
+        payloadHash?: string;
+        payload?: Record<string, unknown>;
+        idempotencyKey?: string;
+        attempts?: number;
+        maxAttempts?: number;
+        nextAttemptAt?: string;
+        staleAfterMs?: number;
+        baseBackoffMs?: number;
+        maxBackoffMs?: number;
+        staleReason?: string;
+        deliveryDiagnostics?: ChannelDeliveryDiagnostics;
+      })
+    | undefined
+  >;
+  listDue?(
+    now?: string,
+    limit?: number,
+  ): Promise<
+    Array<
+      CommsSendResult & {
+        connectionId?: string;
+        payloadHash?: string;
+        payload?: Record<string, unknown>;
+        idempotencyKey?: string;
+        attempts?: number;
+        maxAttempts?: number;
+        nextAttemptAt?: string;
+        staleAfterMs?: number;
+        baseBackoffMs?: number;
+        maxBackoffMs?: number;
+        staleReason?: string;
+        deliveryDiagnostics?: ChannelDeliveryDiagnostics;
+      }
+    >
+  >;
   claimAttempt?(
     deliveryId: string,
     expectedAttempts: number,
     attempts: number,
     claimExpiresAt: string,
     updatedAt?: string,
-  ): boolean;
+  ): Promise<boolean>;
   quarantineAttempt?(
     deliveryId: string,
     expectedAttempts: number,
     expectedNextAttemptAt: string | undefined,
     error: string,
     updatedAt?: string,
-  ): boolean;
+  ): Promise<boolean>;
   markStaleIfUnchanged?(
     deliveryId: string,
     expectedAttempts: number,
     expectedNextAttemptAt: string | undefined,
     error: string,
     updatedAt?: string,
-  ): boolean;
+  ): Promise<boolean>;
   finalizeAttemptSent?(
     deliveryId: string,
     expectedAttempts: number,
     expectedClaimExpiresAt: string,
     providerMessageId: string | undefined,
     updatedAt?: string,
-  ): boolean;
+  ): Promise<boolean>;
   finalizeAttemptRetrying?(
     deliveryId: string,
     expectedAttempts: number,
     expectedClaimExpiresAt: string,
     input: { error: string; nextAttemptAt: string },
     updatedAt?: string,
-  ): boolean;
+  ): Promise<boolean>;
   finalizeAttemptFailed?(
     deliveryId: string,
     expectedAttempts: number,
@@ -153,21 +159,21 @@ export interface ChannelDeliveryRuntimeRepository {
       providerMessageId?: string;
     },
     updatedAt?: string,
-  ): boolean;
+  ): Promise<boolean>;
   recordManualProviderOutcome?(
     deliveryId: string,
     expectedAttempts: number,
     providerMessageId: string | undefined,
     error: string,
     updatedAt?: string,
-  ): boolean;
-  markAttempt?(deliveryId: string, attempts: number, updatedAt?: string): void;
+  ): Promise<boolean>;
+  markAttempt?(deliveryId: string, attempts: number, updatedAt?: string): Promise<void>;
   markRetrying?(
     deliveryId: string,
     input: { attempts: number; error: string; nextAttemptAt: string },
     updatedAt?: string,
-  ): void;
-  markSent(deliveryId: string, providerMessageId?: string, updatedAt?: string): void;
+  ): Promise<void>;
+  markSent(deliveryId: string, providerMessageId?: string, updatedAt?: string): Promise<void>;
   markFailed(
     deliveryId: string,
     error: string,
@@ -175,7 +181,7 @@ export interface ChannelDeliveryRuntimeRepository {
     deliveryStatus?: string,
     staleReason?: string,
     providerMessageId?: string,
-  ): void;
+  ): Promise<void>;
 }
 
 export interface ChannelDeliveryRuntimeEnqueueInput {
@@ -230,7 +236,7 @@ export class ChannelDeliveryRuntimeService {
     },
   ) {}
 
-  public enqueue(input: ChannelDeliveryRuntimeEnqueueInput): ChannelDeliveryRuntimeRecord {
+  public async enqueue(input: ChannelDeliveryRuntimeEnqueueInput): Promise<ChannelDeliveryRuntimeRecord> {
     const now = this.now();
     const plannedPayload = applyChannelDeliveryPlan(input.channelKey, input.payload);
     const payloadFingerprint = fingerprintPayload(plannedPayload);
@@ -244,19 +250,19 @@ export class ChannelDeliveryRuntimeService {
         }
         return copyRecord(existing.record);
       }
-      const persisted = this.deps.repository.findByIdempotencyKey?.(idempotencyKey);
+      const persisted = await this.deps.repository.findByIdempotencyKey?.(idempotencyKey);
       if (persisted) {
         if (persisted.payloadHash && persisted.payloadHash !== payloadFingerprint) {
           throw new Error(`Delivery idempotency key ${idempotencyKey} was reused with a different payload.`);
         }
-        const hydrated = this.hydratePersistedDelivery(persisted, plannedPayload, payloadFingerprint);
+        const hydrated = await this.hydratePersistedDelivery(persisted, plannedPayload, payloadFingerprint);
         if (hydrated) {
           return copyRecord(hydrated.record);
         }
-        const refreshed = this.deps.repository.findByIdempotencyKey?.(idempotencyKey);
+        const refreshed = await this.deps.repository.findByIdempotencyKey?.(idempotencyKey);
         if (refreshed) {
           const refreshedPayload = refreshed.payload ?? plannedPayload;
-          const refreshedDelivery = this.hydratePersistedDelivery(
+          const refreshedDelivery = await this.hydratePersistedDelivery(
             refreshed,
             refreshedPayload,
             refreshed.payloadHash ?? fingerprintPayload(refreshedPayload),
@@ -269,7 +275,7 @@ export class ChannelDeliveryRuntimeService {
       }
     }
 
-    const queued = this.deps.repository.createQueued(
+    const queued = await this.deps.repository.createQueued(
       {
         connectionId: input.connectionId,
         channelKey: input.channelKey,
@@ -323,13 +329,13 @@ export class ChannelDeliveryRuntimeService {
     return [...this.deliveries.values()].map((item) => copyRecord(item.record));
   }
 
-  public markStaleDeliveries(): ChannelDeliveryRuntimeRecord[] {
+  public async markStaleDeliveries(): Promise<ChannelDeliveryRuntimeRecord[]> {
     const now = this.now();
     const stale: ChannelDeliveryRuntimeRecord[] = [];
     for (const delivery of this.deliveries.values()) {
       if (delivery.recoveryQuarantineOnDue) {
         if (isDue(delivery.record.nextAttemptAt, now)) {
-          if (this.quarantineRecoveredDelivery(delivery, now, "in another runtime")) {
+          if (await this.quarantineRecoveredDelivery(delivery, now, "in another runtime")) {
             stale.push(copyRecord(delivery.record));
           } else {
             this.evictDelivery(delivery);
@@ -340,7 +346,7 @@ export class ChannelDeliveryRuntimeService {
       if (!isActiveStatus(delivery.record.status) || !isStale(delivery, now)) {
         continue;
       }
-      if (this.markStaleIfCurrent(delivery, now)) {
+      if (await this.markStaleIfCurrent(delivery, now)) {
         stale.push(copyRecord(delivery.record));
       } else {
         this.evictDelivery(delivery);
@@ -362,7 +368,7 @@ export class ChannelDeliveryRuntimeService {
   private async drainDueAdmitted(limit: number, signal?: AbortSignal): Promise<ChannelDeliveryRuntimeRecord[]> {
     if (signal?.aborted) return [];
     const now = this.now();
-    this.hydrateDueDeliveries(now, limit);
+    await this.hydrateDueDeliveries(now, limit);
     const due = [...this.deliveries.values()]
       .filter((delivery) => isDrainEligibleStatus(delivery.record.status))
       .filter(
@@ -381,17 +387,21 @@ export class ChannelDeliveryRuntimeService {
     return results;
   }
 
-  private hydrateDueDeliveries(now: string, limit: number): void {
-    const persisted = this.deps.repository.listDue?.(now, limit) ?? [];
+  private async hydrateDueDeliveries(now: string, limit: number): Promise<void> {
+    const persisted = (await this.deps.repository.listDue?.(now, limit)) ?? [];
     for (const record of persisted) {
       if (this.deliveries.has(record.deliveryId) || !record.payload) {
         continue;
       }
-      this.hydratePersistedDelivery(record, record.payload, record.payloadHash ?? fingerprintPayload(record.payload));
+      await this.hydratePersistedDelivery(
+        record,
+        record.payload,
+        record.payloadHash ?? fingerprintPayload(record.payload),
+      );
     }
   }
 
-  private hydratePersistedDelivery(
+  private async hydratePersistedDelivery(
     persisted: CommsSendResult & {
       connectionId?: string;
       payloadHash?: string;
@@ -407,7 +417,7 @@ export class ChannelDeliveryRuntimeService {
     },
     payload: Record<string, unknown>,
     payloadFingerprint: string,
-  ): QueuedRuntimeDelivery | undefined {
+  ): Promise<QueuedRuntimeDelivery | undefined> {
     const record: ChannelDeliveryRuntimeRecord = {
       deliveryId: persisted.deliveryId,
       connectionId: persisted.connectionId ?? "",
@@ -441,7 +451,7 @@ export class ChannelDeliveryRuntimeService {
       recoveryQuarantineOnDue,
     };
     if (recoveryQuarantineOnDue && isDue(record.nextAttemptAt, hydratedAt)) {
-      if (!this.quarantineRecoveredDelivery(delivery, hydratedAt, "before restart")) {
+      if (!(await this.quarantineRecoveredDelivery(delivery, hydratedAt, "before restart"))) {
         return undefined;
       }
     }
@@ -455,14 +465,14 @@ export class ChannelDeliveryRuntimeService {
   private async processDelivery(delivery: QueuedRuntimeDelivery): Promise<ChannelDeliveryRuntimeRecord | undefined> {
     const startedAt = this.now();
     if (delivery.recoveryQuarantineOnDue) {
-      if (!this.quarantineRecoveredDelivery(delivery, startedAt, "in another runtime")) {
+      if (!(await this.quarantineRecoveredDelivery(delivery, startedAt, "in another runtime"))) {
         this.evictDelivery(delivery);
         return undefined;
       }
       return copyRecord(delivery.record);
     }
     if (isStale(delivery, startedAt)) {
-      if (!this.markStaleIfCurrent(delivery, startedAt)) {
+      if (!(await this.markStaleIfCurrent(delivery, startedAt))) {
         this.evictDelivery(delivery);
         return undefined;
       }
@@ -472,7 +482,7 @@ export class ChannelDeliveryRuntimeService {
     const nextAttempts = expectedAttempts + 1;
     const claimExpiresAt = new Date(Date.parse(startedAt) + delivery.staleAfterMs).toISOString();
     const claimed = this.deps.repository.claimAttempt
-      ? this.deps.repository.claimAttempt(
+      ? await this.deps.repository.claimAttempt(
           delivery.record.deliveryId,
           expectedAttempts,
           nextAttempts,
@@ -492,13 +502,13 @@ export class ChannelDeliveryRuntimeService {
     delivery.record.nextAttemptAt = claimExpiresAt;
     delivery.record.updatedAt = startedAt;
     if (!this.deps.repository.claimAttempt) {
-      this.deps.repository.markAttempt?.(delivery.record.deliveryId, delivery.record.attempts, startedAt);
+      await this.deps.repository.markAttempt?.(delivery.record.deliveryId, delivery.record.attempts, startedAt);
     }
     let result: ChannelDeliveryRuntimeSendResult;
     try {
       result = await this.deps.send({ ...copyRecord(delivery.record), payload: delivery.payload });
     } catch (error) {
-      return this.handleDeliveryFailure(delivery, error) ? copyRecord(delivery.record) : undefined;
+      return (await this.handleDeliveryFailure(delivery, error)) ? copyRecord(delivery.record) : undefined;
     }
 
     const completedAt = this.now();
@@ -506,16 +516,16 @@ export class ChannelDeliveryRuntimeService {
     delivery.record.deliveryDiagnostics = result.deliveryDiagnostics ?? delivery.record.deliveryDiagnostics;
     try {
       const finalized = this.deps.repository.finalizeAttemptSent
-        ? this.deps.repository.finalizeAttemptSent(
+        ? await this.deps.repository.finalizeAttemptSent(
             delivery.record.deliveryId,
             delivery.record.attempts,
             delivery.record.nextAttemptAt ?? "",
             result.providerMessageId,
             completedAt,
           )
-        : (this.deps.repository.markSent(delivery.record.deliveryId, result.providerMessageId, completedAt), true);
+        : await this.markSentAndConfirm(delivery.record.deliveryId, result.providerMessageId, completedAt);
       if (!finalized) {
-        this.markLostClaimAfterProviderSuccess(delivery, result, completedAt);
+        await this.markLostClaimAfterProviderSuccess(delivery, result, completedAt);
         return copyRecord(delivery.record);
       }
       delivery.record.status = "sent";
@@ -528,23 +538,32 @@ export class ChannelDeliveryRuntimeService {
         this.deps.onDeliverySent?.(copyRecord(delivery.record));
       }
     } catch (error) {
-      this.markPostSendBookkeepingFailure(delivery, error, completedAt);
+      await this.markPostSendBookkeepingFailure(delivery, error, completedAt);
     }
     return copyRecord(delivery.record);
   }
 
-  private markLostClaimAfterProviderSuccess(
+  private async markSentAndConfirm(
+    deliveryId: string,
+    providerMessageId: string | undefined,
+    completedAt: string,
+  ): Promise<true> {
+    await this.deps.repository.markSent(deliveryId, providerMessageId, completedAt);
+    return true;
+  }
+
+  private async markLostClaimAfterProviderSuccess(
     delivery: QueuedRuntimeDelivery,
     result: ChannelDeliveryRuntimeSendResult,
     now: string,
-  ): void {
+  ): Promise<void> {
     const message =
       "post_send_claim_lost: provider dispatch completed after this runtime lost the durable attempt claim; " +
       "manual reconciliation is required.";
     delivery.record.providerMessageId = result.providerMessageId;
     delivery.record.deliveryDiagnostics = result.deliveryDiagnostics ?? delivery.record.deliveryDiagnostics;
     this.applyFailedRecord(delivery, "manual_reconciliation_required", message, now);
-    this.deps.repository.recordManualProviderOutcome?.(
+    await this.deps.repository.recordManualProviderOutcome?.(
       delivery.record.deliveryId,
       delivery.record.attempts,
       result.providerMessageId,
@@ -553,10 +572,10 @@ export class ChannelDeliveryRuntimeService {
     );
   }
 
-  private markStaleIfCurrent(delivery: QueuedRuntimeDelivery, now: string): boolean {
+  private async markStaleIfCurrent(delivery: QueuedRuntimeDelivery, now: string): Promise<boolean> {
     const message = "Delivery became stale before it could be sent.";
     if (this.deps.repository.markStaleIfUnchanged) {
-      const marked = this.deps.repository.markStaleIfUnchanged(
+      const marked = await this.deps.repository.markStaleIfUnchanged(
         delivery.record.deliveryId,
         delivery.record.attempts,
         delivery.record.nextAttemptAt,
@@ -571,12 +590,16 @@ export class ChannelDeliveryRuntimeService {
         this.notifyDeliveryFailedBestEffort(delivery.record);
       }
     } else {
-      this.markFailed(delivery, "stale", message, now);
+      await this.markFailed(delivery, "stale", message, now);
     }
     return true;
   }
 
-  private markPostSendBookkeepingFailure(delivery: QueuedRuntimeDelivery, error: unknown, now: string): void {
+  private async markPostSendBookkeepingFailure(
+    delivery: QueuedRuntimeDelivery,
+    error: unknown,
+    now: string,
+  ): Promise<void> {
     const detail = error instanceof Error ? error.message : String(error);
     const message = `post_send_bookkeeping_failed: provider dispatch completed, but sent-state finalization failed; manual reconciliation required. ${detail}`;
     delivery.record.status = "manual_reconciliation_required";
@@ -586,7 +609,7 @@ export class ChannelDeliveryRuntimeService {
     delivery.record.nextAttemptAt = undefined;
     delivery.record.updatedAt = now;
     try {
-      this.deps.repository.markFailed(
+      await this.deps.repository.markFailed(
         delivery.record.deliveryId,
         message,
         now,
@@ -604,12 +627,16 @@ export class ChannelDeliveryRuntimeService {
     }
   }
 
-  private quarantineRecoveredDelivery(delivery: QueuedRuntimeDelivery, now: string, boundaryContext: string): boolean {
+  private async quarantineRecoveredDelivery(
+    delivery: QueuedRuntimeDelivery,
+    now: string,
+    boundaryContext: string,
+  ): Promise<boolean> {
     const message =
       `Delivery had already crossed its dispatch attempt boundary ${boundaryContext}; ` +
       "manual reconciliation is required.";
     if (this.deps.repository.quarantineAttempt) {
-      const quarantined = this.deps.repository.quarantineAttempt(
+      const quarantined = await this.deps.repository.quarantineAttempt(
         delivery.record.deliveryId,
         delivery.record.attempts,
         delivery.record.nextAttemptAt,
@@ -624,7 +651,7 @@ export class ChannelDeliveryRuntimeService {
         this.notifyDeliveryFailedBestEffort(delivery.record);
       }
     } else {
-      this.markFailed(delivery, "manual_reconciliation_required", message, now);
+      await this.markFailed(delivery, "manual_reconciliation_required", message, now);
     }
     delivery.recoveryQuarantineOnDue = false;
     return true;
@@ -647,7 +674,7 @@ export class ChannelDeliveryRuntimeService {
     }
   }
 
-  private handleDeliveryFailure(delivery: QueuedRuntimeDelivery, error: unknown): boolean {
+  private async handleDeliveryFailure(delivery: QueuedRuntimeDelivery, error: unknown): Promise<boolean> {
     const now = this.now();
     const message = error instanceof Error ? error.message : String(error);
     const providerMessageId = readStructuredProviderMessageId(error);
@@ -661,7 +688,7 @@ export class ChannelDeliveryRuntimeService {
       !isStale(delivery, now);
     if (!canRetry) {
       if (this.deps.repository.finalizeAttemptFailed) {
-        const finalized = this.deps.repository.finalizeAttemptFailed(
+        const finalized = await this.deps.repository.finalizeAttemptFailed(
           delivery.record.deliveryId,
           delivery.record.attempts,
           delivery.record.nextAttemptAt ?? "",
@@ -674,7 +701,7 @@ export class ChannelDeliveryRuntimeService {
         );
         if (!finalized) {
           if (delivery.record.providerMessageId) {
-            this.deps.repository.recordManualProviderOutcome?.(
+            await this.deps.repository.recordManualProviderOutcome?.(
               delivery.record.deliveryId,
               delivery.record.attempts,
               delivery.record.providerMessageId,
@@ -690,13 +717,13 @@ export class ChannelDeliveryRuntimeService {
           this.notifyDeliveryFailedBestEffort(delivery.record);
         }
       } else {
-        this.markFailed(delivery, deliveryStatus, message, now);
+        await this.markFailed(delivery, deliveryStatus, message, now);
       }
       return true;
     }
     const nextAttemptAt = new Date(Date.parse(now) + computeBackoffMs(delivery)).toISOString();
     if (this.deps.repository.finalizeAttemptRetrying) {
-      const finalized = this.deps.repository.finalizeAttemptRetrying(
+      const finalized = await this.deps.repository.finalizeAttemptRetrying(
         delivery.record.deliveryId,
         delivery.record.attempts,
         delivery.record.nextAttemptAt ?? "",
@@ -715,7 +742,7 @@ export class ChannelDeliveryRuntimeService {
     delivery.record.nextAttemptAt = nextAttemptAt;
     delivery.record.updatedAt = now;
     if (!this.deps.repository.finalizeAttemptRetrying) {
-      this.deps.repository.markRetrying?.(
+      await this.deps.repository.markRetrying?.(
         delivery.record.deliveryId,
         {
           attempts: delivery.record.attempts,
@@ -728,15 +755,15 @@ export class ChannelDeliveryRuntimeService {
     return true;
   }
 
-  private markFailed(
+  private async markFailed(
     delivery: QueuedRuntimeDelivery,
     deliveryStatus: ChannelDeliveryStatus | "stale",
     error: string,
     now: string,
-  ): void {
+  ): Promise<void> {
     this.applyFailedRecord(delivery, deliveryStatus, error, now);
     if (delivery.record.providerMessageId) {
-      this.deps.repository.markFailed(
+      await this.deps.repository.markFailed(
         delivery.record.deliveryId,
         error,
         now,
@@ -745,7 +772,7 @@ export class ChannelDeliveryRuntimeService {
         delivery.record.providerMessageId,
       );
     } else {
-      this.deps.repository.markFailed(
+      await this.deps.repository.markFailed(
         delivery.record.deliveryId,
         error,
         now,

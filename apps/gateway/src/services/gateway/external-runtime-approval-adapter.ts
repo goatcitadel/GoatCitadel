@@ -33,7 +33,7 @@ export interface ApprovedExternalRuntimePendingActionPort {
     signal: AbortSignal | undefined,
     options: ApprovedExternalRuntimeExecutionOptions,
   ): Promise<ToolInvokeResult | undefined>;
-  enrichMcpInvokePolicyContext(input: McpInvokeRequest): McpInvokeRequest;
+  enrichMcpInvokePolicyContext(input: McpInvokeRequest): Promise<McpInvokeRequest>;
   invokeApprovedMcpRuntime(input: McpInvokeRequest, markExternalCallStarted?: () => void): Promise<McpInvokeResponse>;
   invokeApprovedExternalRuntimeTool(
     request: ToolInvokeRequest,
@@ -78,7 +78,7 @@ export async function executeApprovedExternalRuntimePendingAction(
       const request = withExternalRuntimePolicyContext(storedRequest, policyResult);
       if (request.toolName === "mcp.invoke") {
         const mcpResult = await port.invokeApprovedMcpRuntime(
-          port.enrichMcpInvokePolicyContext(toApprovedMcpInvokeRequest(request, signal)),
+          await port.enrichMcpInvokePolicyContext(toApprovedMcpInvokeRequest(request, signal)),
           markExternalCallStarted,
         );
         return toolInvokeResultFromMcpApproval(policyResult, mcpResult);

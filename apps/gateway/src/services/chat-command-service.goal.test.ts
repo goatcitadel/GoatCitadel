@@ -47,11 +47,11 @@ function createDeps(
   } = {},
 ): ChatCommandDependencies {
   return {
-    getSession: vi.fn((sessionId: string) => input.sessions?.[sessionId] ?? { sessionId }),
-    getChatSessionPrefs: vi.fn(() => ({ ...basePrefs, ...input.prefs })),
-    listChatSessionLearnedMemory: vi.fn(() => ({ items: input.items ?? [], conflicts: [] })),
-    extractAndPersistLearnedMemory: vi.fn(),
-    updateChatSessionLearnedMemory: vi.fn((sessionId: string, itemId: string, patch: { status?: string }) => ({
+    getSession: vi.fn(async (sessionId: string) => input.sessions?.[sessionId] ?? { sessionId }),
+    getChatSessionPrefs: vi.fn(async () => ({ ...basePrefs, ...input.prefs })),
+    listChatSessionLearnedMemory: vi.fn(async () => ({ items: input.items ?? [], conflicts: [] })),
+    extractAndPersistLearnedMemory: vi.fn(async () => undefined),
+    updateChatSessionLearnedMemory: vi.fn(async (sessionId: string, itemId: string, patch: { status?: string }) => ({
       ...goalItem({ sessionId, itemId }),
       status: patch.status ?? "active",
     })),

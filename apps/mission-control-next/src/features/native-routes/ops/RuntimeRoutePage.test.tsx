@@ -247,6 +247,18 @@ vi.mock("@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot", () =>
                       ],
                     },
                     daemonLogs: { items: [] },
+                    database: {
+                      driver: "postgres",
+                      healthy: true,
+                      storageWait: {
+                        windowMs: 300000,
+                        count: 7,
+                        slowCount: 2,
+                        criticalCount: 1,
+                        p95Ms: 275,
+                        maxMs: 2100,
+                      },
+                    },
                     costs: {
                       summary: {
                         scope: "day",
@@ -574,6 +586,10 @@ describe("RuntimeRoutePage", () => {
     );
 
     expect(markup).toContain("Runtime posture");
+    expect(markup).toContain("DB wait p95");
+    expect(markup).toContain("275ms");
+    expect(markup).toContain("DB wait max");
+    expect(markup).toContain("2.10s");
     expect(markup).toContain("Runtime authority map");
     expect(markup).toContain("Mesh capability publications");
     expect(markup).toContain("No mesh capability manifests");

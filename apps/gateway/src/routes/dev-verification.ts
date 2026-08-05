@@ -3,8 +3,13 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
-import type { CandidateSkillVersionRecord, CapabilityArtifactRecord, ChatMessageRecord } from "@goatcitadel/contracts";
-import { Storage } from "@goatcitadel/storage";
+import type {
+  CandidateSkillVersionRecord,
+  CapabilityArtifactRecord,
+  ChatMessageRecord,
+  ChatSessionRecord,
+} from "@goatcitadel/contracts";
+import type { AsyncStorage } from "@goatcitadel/storage";
 import { listMissingTrackedRouteAccessClasses } from "./route-access.js";
 import { registerDevVerificationProviderExerciseRoute } from "./dev-verification-provider-exercise.js";
 import { withMemoryEmbeddingMetadata } from "../services/memory-embedding-metadata.js";
@@ -125,34 +130,34 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
 
-    const workspace = fastify.services.devVerification.createWorkspace({
+    const workspace = await fastify.services.devVerification.createWorkspace({
       name: parsed.data.workspaceName,
       slug: `verification-${randomUUID().slice(0, 8)}`,
       description: "Deterministic verification workspace seeded for automated testing.",
     });
-    const sessions = [
-      ...Array.from({ length: Math.max(0, parsed.data.sessionCount - 1) }, (_item, index) =>
-        fastify.services.devVerification.createChatSession({
+    const sessions: ChatSessionRecord[] = [];
+    for (let index = 0; index < Math.max(0, parsed.data.sessionCount - 1); index += 1) {
+      sessions.push(
+        await fastify.services.devVerification.createChatSession({
           title: `${parsed.data.sessionTitle} ${index + 2}`,
           workspaceId: workspace.workspaceId,
         }),
-      ),
-      fastify.services.devVerification.createChatSession({
+      );
+    }
+    sessions.push(
+      await fastify.services.devVerification.createChatSession({
         title: parsed.data.sessionTitle,
         workspaceId: workspace.workspaceId,
       }),
-    ];
+    );
     const session = sessions[sessions.length - 1];
     if (!session) {
       return reply.code(500).send({ error: "Verification seed did not create any chat sessions." });
     }
     const now = Date.now();
-    const storage = new Storage({
-      dbPath: fastify.gatewayConfig.dbPath,
-      transcriptsDir: path.join(fastify.gatewayConfig.rootDir, "data", "transcripts"),
-      auditDir: path.join(fastify.gatewayConfig.rootDir, "data", "audit"),
-    });
-    try {
+    const storage = fastify.services.devVerification.storage;
+    {
+      await storage.waitUntilReady();
       const messages: ChatMessageRecord[] = [];
       messages.push({
         messageId: randomUUID(),
@@ -203,7 +208,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
           timestamp: new Date(offset).toISOString(),
         });
       }
-      storage.chatMessages.upsertMany(messages);
+      await storage.chatMessages.upsertMany(messages);
       let parentTurnId: string | undefined;
       let activeLeafTurnId: string | undefined;
       for (let index = 0; index < messages.length; index += 1) {
@@ -213,7 +218,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
         }
         const assistantMessage = messages[index + 1]?.role === "assistant" ? messages[index + 1] : undefined;
         const turnId = randomUUID();
-        storage.chatTurnTraces.create({
+        await storage.chatTurnTraces.create({
           turnId,
           sessionId: session.sessionId,
           userMessageId: userMessage.messageId,
@@ -235,9 +240,9 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
         }
       }
       if (activeLeafTurnId) {
-        storage.chatSessionBranchState.setActiveLeaf(session.sessionId, activeLeafTurnId);
+        await storage.chatSessionBranchState.setActiveLeaf(session.sessionId, activeLeafTurnId);
       }
-      storage.costLedger.insert({
+      await storage.costLedger.insert({
         sessionId: session.sessionId,
         agentId: "goatherder",
         providerId: "verification-stub",
@@ -249,8 +254,6 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
         createdAt: new Date(now - 75_000).toISOString(),
       });
       await seedVerificationCapabilityCandidate(storage, fastify.gatewayConfig.rootDir);
-    } finally {
-      storage.close();
     }
 
     return reply.code(201).send({
@@ -296,8 +299,8 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
         workspaceId: parsed.data.workspaceId,
       },
     });
-    const approvalWaitRunId = storage.approvalWaitRuns.getRunId(approval.approvalId);
-    const chatTurnDurableWait = fastify.services.devVerification.seedDurableChatWait({
+    const approvalWaitRunId = await storage.approvalWaitRuns.getRunId(approval.approvalId);
+    const chatTurnDurableWait = await fastify.services.devVerification.seedDurableChatWait({
       workspaceId: parsed.data.workspaceId,
       sessionId: parsed.data.sessionId,
       turnId,
@@ -313,7 +316,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       now,
     });
 
-    storage.chatMessages.upsert({
+    await storage.chatMessages.upsert({
       messageId: userMessageId,
       sessionId: parsed.data.sessionId,
       role: "user",
@@ -322,7 +325,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       content: "Run the governed verification command.",
       timestamp: now,
     });
-    storage.chatTurnTraces.create({
+    await storage.chatTurnTraces.create({
       turnId,
       sessionId: parsed.data.sessionId,
       userMessageId,
@@ -351,7 +354,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
     // this row the thread-driven effect in useChatOutboundExecution.ts clobbers
     // the queue-derived pendingApproval back to null, causing the visual lane's
     // chat-pending-approval scenario to flake.
-    storage.chatToolRuns.create({
+    await storage.chatToolRuns.create({
       toolRunId: randomUUID(),
       turnId,
       sessionId: parsed.data.sessionId,
@@ -361,7 +364,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       args: { command: "pnpm test" },
       startedAt: now,
     });
-    storage.chatInlineApprovals.upsert({
+    await storage.chatInlineApprovals.upsert({
       approvalId: approval.approvalId,
       sessionId: parsed.data.sessionId,
       turnId,
@@ -376,7 +379,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       },
       createdAt: now,
     });
-    storage.chatSessionBranchState.setActiveLeaf(parsed.data.sessionId, turnId);
+    await storage.chatSessionBranchState.setActiveLeaf(parsed.data.sessionId, turnId);
     await fastify.services.devVerification.settleDurableChatWait(chatTurnDurableWait.runId);
 
     return reply.code(201).send({
@@ -399,7 +402,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.code(201).send(fastify.services.devVerification.seedChatAttachmentEvidence(parsed.data));
+      return reply.code(201).send(await fastify.services.devVerification.seedChatAttachmentEvidence(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -420,7 +423,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
     const promptId = randomUUID();
     const storage = fastify.services.devVerification.storage;
     const content = "Help me choose the next verification step for this run.";
-    const chatTurnDurableWait = fastify.services.devVerification.seedDurableChatWait({
+    const chatTurnDurableWait = await fastify.services.devVerification.seedDurableChatWait({
       workspaceId: parsed.data.workspaceId,
       sessionId: parsed.data.sessionId,
       turnId,
@@ -436,7 +439,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       now,
     });
 
-    storage.chatMessages.upsert({
+    await storage.chatMessages.upsert({
       messageId: userMessageId,
       sessionId: parsed.data.sessionId,
       role: "user",
@@ -445,7 +448,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       content,
       timestamp: now,
     });
-    storage.chatTurnTraces.create({
+    await storage.chatTurnTraces.create({
       turnId,
       sessionId: parsed.data.sessionId,
       userMessageId,
@@ -484,7 +487,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       },
       startedAt: now,
     });
-    storage.chatSessionBranchState.setActiveLeaf(parsed.data.sessionId, turnId);
+    await storage.chatSessionBranchState.setActiveLeaf(parsed.data.sessionId, turnId);
     await fastify.services.devVerification.settleDurableChatWait(chatTurnDurableWait.runId);
 
     return reply.code(201).send({
@@ -505,24 +508,28 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    const items = parsed.data.tasks.map((item) => {
-      const current = fastify.services.tasks.getTask(item.taskId, { workspaceId: parsed.data.workspaceId });
-      return fastify.services.tasks.updateTaskWithRevision(
-        item.taskId,
-        {
-          agenticContext: {
-            ...(current.agenticContext ?? {}),
-            runId: item.runId,
-            status: item.status,
-            surface: item.surface,
-            contextMode: "isolated",
-            parentSessionId: item.parentSessionId,
+    const items = await Promise.all(
+      parsed.data.tasks.map(async (item) => {
+        const current = await fastify.services.tasks.getTask(item.taskId, {
+          workspaceId: parsed.data.workspaceId,
+        });
+        return fastify.services.tasks.updateTaskWithRevision(
+          item.taskId,
+          {
+            agenticContext: {
+              ...(current.agenticContext ?? {}),
+              runId: item.runId,
+              status: item.status,
+              surface: item.surface,
+              contextMode: "isolated",
+              parentSessionId: item.parentSessionId,
+            },
           },
-        },
-        current.revision,
-        { workspaceId: parsed.data.workspaceId },
-      );
-    });
+          current.revision,
+          { workspaceId: parsed.data.workspaceId },
+        );
+      }),
+    );
     return reply.code(201).send({ items });
   });
 
@@ -555,7 +562,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
     } finally {
       requestAbort.dispose();
     }
-    storage.db
+    await storage.db
       .prepare(
         `
         INSERT INTO memory_items (
@@ -633,7 +640,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
         title: "Verification orphaned approval wait",
       },
     });
-    const orphanApprovalResolved = fastify.services.devVerification.storage.approvals.resolve(
+    const orphanApprovalResolved = await fastify.services.devVerification.storage.approvals.resolve(
       orphanApproval.approvalId,
       {
         decision: "approve",
@@ -641,15 +648,17 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
         resolutionNote: "Seeded resolved approval for orphan recovery verification.",
       },
     );
-    const orphanRunId = fastify.services.devVerification.storage.approvalWaitRuns.getRunId(orphanApproval.approvalId);
+    const orphanRunId = await fastify.services.devVerification.storage.approvalWaitRuns.getRunId(
+      orphanApproval.approvalId,
+    );
     if (!orphanRunId) {
       return reply.code(500).send({ error: "Failed to seed orphan approval wait run." });
     }
-    fastify.services.devVerification.storage.approvalWaitRuns.markResolved(
+    await fastify.services.devVerification.storage.approvalWaitRuns.markResolved(
       orphanApproval.approvalId,
       orphanApprovalResolved.resolvedAt,
     );
-    const orphanRun = fastify.services.devVerification.storage.durableRuns.updateRun({
+    const orphanRun = await fastify.services.devVerification.storage.durableRuns.updateRun({
       runId: orphanRunId,
       status: "running",
       startedAt: now,
@@ -672,7 +681,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
         title: "Verification dead-letter approval wait",
       },
     });
-    const deadLetterApprovalResolved = fastify.services.devVerification.storage.approvals.resolve(
+    const deadLetterApprovalResolved = await fastify.services.devVerification.storage.approvals.resolve(
       deadLetterApproval.approvalId,
       {
         decision: "approve",
@@ -680,17 +689,17 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
         resolutionNote: "Seeded resolved approval for dead-letter recovery verification.",
       },
     );
-    const deadLetterRunId = fastify.services.devVerification.storage.approvalWaitRuns.getRunId(
+    const deadLetterRunId = await fastify.services.devVerification.storage.approvalWaitRuns.getRunId(
       deadLetterApproval.approvalId,
     );
     if (!deadLetterRunId) {
       return reply.code(500).send({ error: "Failed to seed dead-letter approval wait run." });
     }
-    fastify.services.devVerification.storage.approvalWaitRuns.markResolved(
+    await fastify.services.devVerification.storage.approvalWaitRuns.markResolved(
       deadLetterApproval.approvalId,
       deadLetterApprovalResolved.resolvedAt,
     );
-    const deadLetterRun = fastify.services.devVerification.storage.durableRuns.updateRun({
+    const deadLetterRun = await fastify.services.devVerification.storage.durableRuns.updateRun({
       runId: deadLetterRunId,
       status: "dead_lettered",
       startedAt: now,
@@ -698,7 +707,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       lastError: "Seeded dead letter for durable recovery verification.",
       updatedAt: now,
     });
-    const deadLetter = fastify.services.devVerification.storage.durableRuns.upsertDeadLetter({
+    const deadLetter = await fastify.services.devVerification.storage.durableRuns.upsertDeadLetter({
       runId: deadLetterRunId,
       reason: "verification_seed_dead_letter",
       payload: {
@@ -734,15 +743,15 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
     // Use a near-future cutoff so the seed deterministically clears any retained preexisting
     // events before appending the explicit verification events. That guarantees a real replay gap.
     const pruneCutoff = new Date(Date.now() + 1000).toISOString();
-    const staleEvent = storage.append(
+    const staleEvent = await storage.append(
       "verification_replay_gap_seed",
       "events",
       { kind: "verification_seed" },
       undefined,
       oldCreatedAt,
     );
-    const prunedCount = storage.pruneOlderThan(pruneCutoff);
-    const explicitEvent = fastify.services.devVerification.publishRealtime(
+    const prunedCount = await storage.pruneOlderThan(pruneCutoff);
+    const explicitEvent = await fastify.services.devVerification.publishRealtime(
       "verification_memory_refresh",
       "memory",
       {
@@ -758,15 +767,19 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
         },
       },
     );
-    const compatibilityEvent = fastify.services.devVerification.publishRealtime("approval_hint_emitted", "approvals", {
-      kind: "verification_compatibility_seed",
-      note: "Compatibility fallback verification event.",
-    });
+    const compatibilityEvent = await fastify.services.devVerification.publishRealtime(
+      "approval_hint_emitted",
+      "approvals",
+      {
+        kind: "verification_compatibility_seed",
+        note: "Compatibility fallback verification event.",
+      },
+    );
 
     return reply.code(201).send({
       staleCursor: String(staleEvent.sequence),
       prunedCount,
-      bounds: fastify.services.devVerification.getRealtimeEventSequenceBounds(),
+      bounds: await fastify.services.devVerification.getRealtimeEventSequenceBounds(),
       explicitEvent,
       compatibilityEvent,
     });
@@ -806,7 +819,7 @@ const VERIFICATION_CAPABILITY_CANDIDATE_ID = "usability-browser-candidate";
 const VERIFICATION_CAPABILITY_CANDIDATE_VERSION_ID = "usability-browser-candidate-v1";
 const VERIFICATION_CAPABILITY_CANDIDATE_CREATED_AT = "2026-07-29T00:00:00.000Z";
 
-async function seedVerificationCapabilityCandidate(storage: Storage, rootDir: string): Promise<void> {
+async function seedVerificationCapabilityCandidate(storage: AsyncStorage, rootDir: string): Promise<void> {
   const bundleRoot = `data/capability-candidates/${VERIFICATION_CAPABILITY_CANDIDATE_ID}/${VERIFICATION_CAPABILITY_CANDIDATE_VERSION_ID}`;
   const manifestArtifact = await writeVerificationCandidateArtifact(
     rootDir,
@@ -861,24 +874,26 @@ async function seedVerificationCapabilityCandidate(storage: Storage, rootDir: st
     createdAt: VERIFICATION_CAPABILITY_CANDIDATE_CREATED_AT,
     updatedAt: VERIFICATION_CAPABILITY_CANDIDATE_CREATED_AT,
   };
-  const existing = storage.candidateSkillVersions.find(VERIFICATION_CAPABILITY_CANDIDATE_VERSION_ID);
+  const existing = await storage.candidateSkillVersions.find(VERIFICATION_CAPABILITY_CANDIDATE_VERSION_ID);
   if (existing) {
     if (existing.candidateId !== VERIFICATION_CAPABILITY_CANDIDATE_ID || existing.lifecycleState !== "candidate") {
       throw new Error("verification capability candidate identity or lifecycle state conflicts with canonical storage");
     }
-    storage.skillAggregateRevisions.ensure(
+    await storage.skillAggregateRevisions.ensure(
       "candidate_skill",
       VERIFICATION_CAPABILITY_CANDIDATE_ID,
       VERIFICATION_CAPABILITY_CANDIDATE_CREATED_AT,
     );
     return;
   }
-  storage.skillAggregateRevisions.createWithInitialRevision(
-    "candidate_skill",
-    VERIFICATION_CAPABILITY_CANDIDATE_ID,
-    () => ({ value: storage.candidateSkillVersions.upsert(record), changed: true }),
-    VERIFICATION_CAPABILITY_CANDIDATE_CREATED_AT,
-  );
+  await storage.runImmediateTransaction(async () => {
+    await storage.skillAggregateRevisions.createInitialRevisionFence(
+      "candidate_skill",
+      VERIFICATION_CAPABILITY_CANDIDATE_ID,
+      VERIFICATION_CAPABILITY_CANDIDATE_CREATED_AT,
+    );
+    await storage.candidateSkillVersions.upsert(record);
+  });
 }
 
 async function writeVerificationCandidateArtifact(

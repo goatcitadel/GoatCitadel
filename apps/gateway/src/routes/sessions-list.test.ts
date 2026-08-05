@@ -123,8 +123,8 @@ describe("sessions routes", () => {
       },
     ];
     const sessionsList = {
-      listSessions: vi.fn(() => [session]),
-      getSession: vi.fn(() => session),
+      listSessions: vi.fn(async () => [session]),
+      getSession: vi.fn(async () => session),
       getTranscript: vi.fn(async () => transcript),
       getSessionSummary: vi.fn(async () => summary),
       listSessionTimeline: vi.fn(async () => timeline),

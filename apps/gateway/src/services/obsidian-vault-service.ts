@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ObsidianIntegrationConfig, ObsidianIntegrationStatus } from "@goatcitadel/contracts";
-import type { SystemSettingsRepository } from "@goatcitadel/storage";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 
 const OBSIDIAN_CONFIG_KEY = "obsidian_integration_v1";
 const OBSIDIAN_STATUS_KEY = "obsidian_integration_status_v1";
@@ -28,26 +28,26 @@ export interface ObsidianSearchResult {
 }
 
 export class ObsidianVaultService {
-  public constructor(private readonly systemSettings: SystemSettingsRepository) {}
+  public constructor(private readonly systemSettings: Pick<Storage["systemSettings"], "get" | "set">) {}
 
-  public getConfig(): ObsidianIntegrationConfig {
-    const stored = this.systemSettings.get<Partial<ObsidianIntegrationConfig>>(OBSIDIAN_CONFIG_KEY)?.value;
+  public async getConfig(): Promise<ObsidianIntegrationConfig> {
+    const stored = (await this.systemSettings.get<Partial<ObsidianIntegrationConfig>>(OBSIDIAN_CONFIG_KEY))?.value;
     return normalizeConfig(stored);
   }
 
-  public updateConfig(input: Partial<ObsidianIntegrationConfig>): ObsidianIntegrationConfig {
-    const current = this.getConfig();
+  public async updateConfig(input: Partial<ObsidianIntegrationConfig>): Promise<ObsidianIntegrationConfig> {
+    const current = await this.getConfig();
     const next = normalizeConfig({
       ...current,
       ...input,
       allowedSubpaths: input.allowedSubpaths ?? current.allowedSubpaths,
     });
-    this.systemSettings.set(OBSIDIAN_CONFIG_KEY, next);
+    await this.systemSettings.set(OBSIDIAN_CONFIG_KEY, next);
     return next;
   }
 
   public async getStatus(): Promise<ObsidianIntegrationStatus> {
-    const config = this.getConfig();
+    const config = await this.getConfig();
     const status = await this.refreshStatus(config);
     return {
       ...config,
@@ -60,7 +60,7 @@ export class ObsidianVaultService {
   }
 
   public async searchNotes(query: string, limit = 20): Promise<ObsidianSearchResult[]> {
-    const config = this.getConfig();
+    const config = await this.getConfig();
     this.assertReadEnabled(config);
     const normalizedQuery = query.trim().toLowerCase();
     if (!normalizedQuery) {
@@ -110,7 +110,7 @@ export class ObsidianVaultService {
   }
 
   public async readNote(relativePath: string): Promise<{ relativePath: string; content: string }> {
-    const config = this.getConfig();
+    const config = await this.getConfig();
     this.assertReadEnabled(config);
     const fullPath = await this.resolveExistingNotePath(config, relativePath);
     const content = await fs.readFile(fullPath, "utf8");
@@ -125,7 +125,7 @@ export class ObsidianVaultService {
     relativePath: string,
     markdownBlock: string,
   ): Promise<{ relativePath: string; appendedAt: string }> {
-    const config = this.getConfig();
+    const config = await this.getConfig();
     this.assertWriteEnabled(config);
     const block = markdownBlock.trim();
     if (!block) {
@@ -275,7 +275,7 @@ export class ObsidianVaultService {
 
   private async refreshStatus(config: ObsidianIntegrationConfig): Promise<ObsidianStatusState> {
     const now = new Date().toISOString();
-    const previous = this.systemSettings.get<ObsidianStatusState>(OBSIDIAN_STATUS_KEY)?.value;
+    const previous = (await this.systemSettings.get<ObsidianStatusState>(OBSIDIAN_STATUS_KEY))?.value;
     let vaultReachable = false;
     const statusError = await (async (): Promise<string | undefined> => {
       if (!config.enabled) {
@@ -303,14 +303,14 @@ export class ObsidianVaultService {
       lastOperationAt: previous?.lastOperationAt,
       lastError: statusError,
     };
-    this.systemSettings.set(OBSIDIAN_STATUS_KEY, next);
+    await this.systemSettings.set(OBSIDIAN_STATUS_KEY, next);
     return next;
   }
 
   private async recordOperation(): Promise<void> {
-    const current = this.systemSettings.get<ObsidianStatusState>(OBSIDIAN_STATUS_KEY)?.value;
+    const current = (await this.systemSettings.get<ObsidianStatusState>(OBSIDIAN_STATUS_KEY))?.value;
     const now = new Date().toISOString();
-    this.systemSettings.set(OBSIDIAN_STATUS_KEY, {
+    await this.systemSettings.set(OBSIDIAN_STATUS_KEY, {
       vaultReachable: current?.vaultReachable ?? false,
       checkedAt: now,
       lastError: current?.lastError,

@@ -1,11 +1,18 @@
 import type { ApprovalCreateInput, ApprovalObservabilityEffectInput, ApprovalRequest } from "@goatcitadel/contracts";
 import { ValidationError } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { AsyncStorage } from "@goatcitadel/storage";
 
-export type ApprovalCreateCommitPort = (approval: ApprovalRequest) => ApprovalCreateCommitResult;
+export type ApprovalCreateCommitPort = (
+  approval: ApprovalRequest,
+) => ApprovalCreateCommitResult | Promise<ApprovalCreateCommitResult>;
 
 export interface ApprovalCreateCommitFinalizer {
-  finalize(approval: ApprovalRequest): readonly ApprovalObservabilityEffectInput[] | undefined;
+  finalize(
+    approval: ApprovalRequest,
+  ):
+    | readonly ApprovalObservabilityEffectInput[]
+    | undefined
+    | Promise<readonly ApprovalObservabilityEffectInput[] | undefined>;
 }
 
 export type ApprovalCreateCommitResult =
@@ -44,7 +51,7 @@ function isApprovalRiskLevel(value: unknown): value is ApprovalRequest["riskLeve
 
 export class ApprovalGate {
   public constructor(
-    private readonly storage: Storage,
+    private readonly storage: AsyncStorage,
     private readonly createApproval?: ApprovalCreatePort,
   ) {}
 
@@ -71,16 +78,14 @@ export class ApprovalGate {
     // `createApproval`, which atomically records creation evidence, reserves the
     // durable wait run, and queues retryable observability before returning.
     let approval!: ApprovalRequest;
-    const runTransaction =
-      this.storage.runImmediateTransaction?.bind(this.storage) ?? (<T>(callback: () => T): T => callback());
-    runTransaction(() => {
+    await this.storage.runImmediateTransaction(async () => {
       approval =
         authority?.ttlMs !== undefined
-          ? this.storage.approvals.createWithTtlDuration(input, authority.ttlMs)
-          : this.storage.approvals.create(input);
-      const extension = onCreated?.(approval);
+          ? await this.storage.approvals.createWithTtlDuration(input, authority.ttlMs)
+          : await this.storage.approvals.create(input);
+      const extension = await onCreated?.(approval);
       if (isApprovalCreateCommitFinalizer(extension)) {
-        extension.finalize(approval);
+        await extension.finalize(approval);
       } else if (Array.isArray(extension) && extension.length > 0) {
         throw new Error(
           "Compatibility approval creation cannot commit observability effects without the canonical approval creation runtime.",
