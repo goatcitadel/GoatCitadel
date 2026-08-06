@@ -89,7 +89,7 @@ export class PostgresStorageWaitMonitor {
         },
       });
     } catch {
-      // Observability must never affect database behavior.
+      // Observability failures are intentionally ignored and non-fatal; they must never affect database behavior.
     }
   }
 
