@@ -177,6 +177,122 @@ describe("approval-resolution-effects-service", () => {
     expect(requestRunProcessing).toHaveBeenCalledWith("durable-resumed");
   });
 
+  it("defers a previously claimed linked Chat wake until approved action settlement commits", async () => {
+    const effect = createEffect({
+      effectKind: "linked_chat_turn_wake",
+      targetKind: "chat_turn",
+      targetId: "turn-raced-wake",
+      status: "running",
+      payload: { runId: "durable-raced-wake" },
+    });
+    const actionEffect = createEffect({
+      effectId: "effect-pending-action-race",
+      approvalId: effect.approvalId,
+      effectKind: "pending_action_execute",
+      targetKind: "pending_action",
+      targetId: effect.approvalId,
+      status: "running",
+    });
+    const deferEffectForRetry = vi.fn(() => ({ ...effect, status: "running" as const }));
+    const wakeDurableRun = vi.fn();
+    const service = new ApprovalEffectsService(
+      {
+        storage: {
+          approvalEffects: {
+            listByApproval: vi.fn(() => [actionEffect, effect]),
+            deferEffectForRetry,
+            get: vi.fn(() => effect),
+          },
+        },
+        publishRealtime: vi.fn(),
+      } as unknown as ServiceContext,
+      {
+        ...createApprovalEffectDeps(),
+        wakeDurableRun,
+      },
+    );
+
+    await (
+      service as unknown as {
+        handleLinkedChatTurnWake(currentEffect: ApprovalEffectRecord): Promise<void>;
+      }
+    ).handleLinkedChatTurnWake(effect);
+
+    expect(deferEffectForRetry).toHaveBeenCalledWith(
+      effect.effectId,
+      expect.any(String),
+      effect.version,
+      expect.objectContaining({
+        lastError: expect.stringContaining("settlement has not committed"),
+        result: expect.objectContaining({
+          reason: "pending_action_not_settled",
+          pendingActionEffectId: actionEffect.effectId,
+        }),
+      }),
+    );
+    expect(wakeDurableRun).not.toHaveBeenCalled();
+  });
+
+  it("defers a linked Chat wake when a completed tool action is missing continuation evidence", async () => {
+    const effect = createEffect({
+      effectKind: "linked_chat_turn_wake",
+      targetKind: "chat_turn",
+      targetId: "turn-missing-continuation-evidence",
+      status: "running",
+      payload: { runId: "durable-missing-continuation-evidence" },
+    });
+    const actionEffect = createEffect({
+      effectId: "effect-completed-action-missing-evidence",
+      approvalId: effect.approvalId,
+      effectKind: "pending_action_execute",
+      targetKind: "pending_action",
+      targetId: effect.approvalId,
+      status: "completed",
+    });
+    const deferEffectForRetry = vi.fn(() => ({ ...effect, status: "running" as const }));
+    const wakeDurableRun = vi.fn();
+    const service = new ApprovalEffectsService(
+      {
+        storage: {
+          approvalEffects: {
+            listByApproval: vi.fn(() => [actionEffect, effect]),
+            deferEffectForRetry,
+            get: vi.fn(() => effect),
+          },
+          pendingApprovalActions: {
+            find: vi.fn(() => ({ actionType: "tool.invoke", resolutionStatus: "executed" })),
+          },
+          chatInlineApprovals: { get: vi.fn(() => undefined) },
+          chatToolRuns: { listByTurn: vi.fn(() => []) },
+        },
+        publishRealtime: vi.fn(),
+      } as unknown as ServiceContext,
+      {
+        ...createApprovalEffectDeps(),
+        wakeDurableRun,
+      },
+    );
+
+    await (
+      service as unknown as {
+        handleLinkedChatTurnWake(currentEffect: ApprovalEffectRecord): Promise<void>;
+      }
+    ).handleLinkedChatTurnWake(effect);
+
+    expect(deferEffectForRetry).toHaveBeenCalledWith(
+      effect.effectId,
+      expect.any(String),
+      effect.version,
+      expect.objectContaining({
+        result: expect.objectContaining({
+          reason: "approved_action_evidence_incomplete",
+          inlineApprovalStatus: "missing",
+        }),
+      }),
+    );
+    expect(wakeDurableRun).not.toHaveBeenCalled();
+  });
+
   it("captures attribution and delegates observability allocation to the atomic repository batch", async () => {
     const effect = createEffect({
       effectId: "observability-effect-1",
@@ -2404,6 +2520,246 @@ describe("approval-resolution-effects-service", () => {
         result: expect.objectContaining({ materialized: false }),
       }),
     );
+  });
+
+  it("keeps legacy v1 Chat runs out of the durable approval-resume path", async () => {
+    const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
+    const now = "2026-08-06T00:00:00.000Z";
+    const runId = "durable-legacy-v1-approval";
+    const turnId = "turn-legacy-v1-approval";
+    const sessionId = "session-legacy-v1-approval";
+    const userMessageId = "user-legacy-v1-approval";
+    try {
+      const run = createExactWaitingApprovalRun(storage, { runId, sessionId, turnId, userMessageId, now });
+      storage.durableRuns.updateRun({
+        runId,
+        status: "waiting",
+        payload: { ...run.payload, version: "chat.turn.execute.v1" },
+        expectedVersion: run.version,
+      });
+      const approvalId = storage.approvals.create({
+        kind: "tool.invoke",
+        riskLevel: "caution",
+        payload: {},
+        preview: {},
+      }).approvalId;
+      const actionEffect = storage.approvalEffects.upsert({
+        approvalId,
+        effectKind: "pending_action_execute",
+        targetKind: "pending_action",
+        targetId: approvalId,
+        payload: { actionType: "tool.invoke", decision: "approve" },
+      });
+      storage.approvalEffects.upsert({
+        approvalId,
+        effectKind: "linked_chat_turn_wake",
+        targetKind: "chat_turn",
+        targetId: turnId,
+        payload: { decision: "approve", runId, turnId },
+      });
+      const trace = {
+        ...createWaitingChildTrace(sessionId, turnId),
+        userMessageId,
+        assistantMessageId: `assistant-approved-${turnId}`,
+        durable: { runId, status: "waiting" as const, checkpointKind: "run_waiting" },
+      };
+      const service = new ApprovalEffectsService(
+        { storage: createSqliteAsyncStorage(storage), publishRealtime: vi.fn() } as unknown as ServiceContext,
+        createApprovalEffectDeps(),
+      );
+
+      await expect(
+        (
+          service as unknown as {
+            shouldResumeApprovedActionThroughLinkedChatTurn(
+              effect: ApprovalEffectRecord,
+              currentTrace: ChatTurnTraceRecord,
+            ): Promise<boolean>;
+          }
+        ).shouldResumeApprovedActionThroughLinkedChatTurn(actionEffect, trace),
+      ).resolves.toBe(false);
+    } finally {
+      storage.close();
+    }
+  });
+
+  it("settles an approved search result without terminalizing the waiting durable Chat turn", async () => {
+    const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
+    const now = "2026-08-06T00:00:00.000Z";
+    const runId = "durable-approved-search-resume";
+    const turnId = "turn-approved-search-resume";
+    const sessionId = "session-approved-search-resume";
+    const approvalId = storage.approvals.create({
+      kind: "tool.invoke",
+      riskLevel: "caution",
+      payload: {},
+      preview: {},
+    }).approvalId;
+    createExactWaitingApprovalRun(storage, {
+      runId,
+      sessionId,
+      turnId,
+      userMessageId: "user-approved-search-resume",
+      now,
+    });
+    storage.chatTurnTraces.create({
+      turnId,
+      sessionId,
+      userMessageId: "user-approved-search-resume",
+      assistantMessageId: `assistant-approved-${turnId}`,
+      status: "waiting_for_approval",
+      mode: "chat",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      routing: {},
+      durable: { runId, status: "waiting", checkpointKind: "run_waiting" },
+      startedAt: now,
+    });
+    storage.chatInlineApprovals.upsert({
+      approvalId,
+      sessionId,
+      turnId,
+      toolName: "browser.search",
+      status: "pending",
+      reason: "Official-provider search requires approval.",
+      createdAt: now,
+    });
+    storage.chatToolRuns.create({
+      toolRunId: "tool-approved-search-resume",
+      turnId,
+      sessionId,
+      toolName: "browser.search",
+      status: "approval_required",
+      approvalId,
+      args: { query: "LaughLab funniest joke research", maxResults: 6 },
+      startedAt: now,
+    });
+    const effect = storage.approvalEffects.upsert({
+      approvalId,
+      effectKind: "pending_action_execute",
+      targetKind: "pending_action",
+      targetId: approvalId,
+      payload: { actionType: "tool.invoke", decision: "approve" },
+    });
+    storage.approvalEffects.upsert({
+      approvalId,
+      effectKind: "linked_chat_turn_wake",
+      targetKind: "chat_turn",
+      targetId: turnId,
+      payload: { decision: "approve", runId, turnId },
+    });
+    const requestRunProcessing = vi.fn();
+    const wakeDurableRun = vi.fn((wakeRunId: string, event: { eventKey: string; correlationId?: string }) => {
+      const current = storage.durableRuns.getRun(wakeRunId);
+      const metadata = { ...(current.metadata ?? {}), waitForEvent: null };
+      const queued = storage.durableRuns.updateRun({
+        runId: wakeRunId,
+        status: "queued",
+        metadata,
+        expectedVersion: current.version,
+      });
+      return {
+        runId: wakeRunId,
+        eventKey: event.eventKey,
+        correlationId: event.correlationId,
+        outcome: "woke" as const,
+        run: queued,
+      };
+    });
+    const service = new ApprovalEffectsService(
+      { storage: createSqliteAsyncStorage(storage), publishRealtime: vi.fn() } as unknown as ServiceContext,
+      {
+        ...createApprovalEffectDeps(),
+        wakeDurableRun,
+        requestRunProcessing,
+      },
+    );
+    const claimNow = new Date();
+    const claimedEffect = storage.approvalEffects.claimNextPendingEffect(
+      (service as unknown as { workerId: string }).workerId,
+      claimNow.toISOString(),
+      new Date(claimNow.getTime() + 60_000).toISOString(),
+    );
+    expect(claimedEffect?.effectId).toBe(effect.effectId);
+    const actionRecord = {
+      outcome: "executed",
+      auditEventId: "audit-approved-search-resume",
+      result: {
+        results: [
+          {
+            title: "LaughLab and the science of jokes",
+            url: "https://example.test/laughlab",
+          },
+        ],
+      },
+    };
+
+    try {
+      await (
+        service as unknown as {
+          materializeExecutedChatApproval(
+            currentEffect: ApprovalEffectRecord,
+            currentAction: PendingApprovalAction,
+            result: Record<string, unknown>,
+          ): Promise<void>;
+        }
+      ).materializeExecutedChatApproval(
+        claimedEffect!,
+        {
+          approvalId,
+          actionType: "tool.invoke",
+          request: {
+            toolName: "browser.search",
+            args: { query: "LaughLab funniest joke research", maxResults: 6 },
+          },
+          createdAt: now,
+          resolutionStatus: "executed",
+          result: actionRecord,
+        },
+        actionRecord,
+      );
+
+      expect(storage.chatToolRuns.listByTurn(turnId)[0]).toMatchObject({
+        status: "executed",
+        approvalId,
+        result: actionRecord.result,
+      });
+      expect(storage.chatInlineApprovals.get(approvalId)).toMatchObject({ status: "approved" });
+      expect(storage.approvalEffects.get(effect.effectId).status).toBe("completed");
+      expect(storage.durableRuns.getRun(runId).status).toBe("waiting");
+      expect(storage.durableRuns.listCheckpoints(runId)).toEqual([
+        expect.objectContaining({ checkpointKind: "run_waiting" }),
+      ]);
+      expect(storage.chatTurnTraces.get(turnId)).toMatchObject({
+        status: "waiting_for_approval",
+        durable: { runId, status: "waiting", checkpointKind: "run_waiting" },
+      });
+      expect(storage.chatTurnTraces.get(turnId).finishedAt).toBeUndefined();
+      expect(storage.chatMessages.get(`assistant-approved-${turnId}`)).toBeUndefined();
+
+      const linkedWake = storage.approvalEffects.claimNextPendingEffect(
+        (service as unknown as { workerId: string }).workerId,
+        claimNow.toISOString(),
+        new Date(claimNow.getTime() + 60_000).toISOString(),
+      );
+      expect(linkedWake).toMatchObject({ effectKind: "linked_chat_turn_wake", targetId: turnId });
+      await (
+        service as unknown as {
+          handleLinkedChatTurnWake(currentEffect: ApprovalEffectRecord): Promise<void>;
+        }
+      ).handleLinkedChatTurnWake(linkedWake!);
+
+      expect(storage.durableRuns.getRun(runId).status).toBe("queued");
+      expect(storage.chatTurnTraces.get(turnId).status).toBe("running");
+      expect(requestRunProcessing).toHaveBeenCalledWith(runId);
+      expect(storage.approvalEffects.get(linkedWake!.effectId)).toMatchObject({
+        status: "completed",
+        result: expect.objectContaining({ outcome: "woke" }),
+      });
+    } finally {
+      storage.close();
+    }
   });
 
   it("rolls back durable completion and assistant materialization when the child trace patch fails", async () => {

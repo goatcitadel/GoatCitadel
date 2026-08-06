@@ -339,6 +339,38 @@ function isCanonicalBase64Payload(value: string): boolean {
   );
 }
 
+function isBasicAuthorizationCredential(value: string): boolean {
+  const token = value.trim();
+  const unpadded = token.replace(/=+$/u, "");
+  if (!/^[A-Za-z0-9+/]+={0,2}$/u.test(token) || unpadded.length < 2 || unpadded.length % 4 === 1) {
+    return false;
+  }
+  const padded = `${unpadded}${"=".repeat((4 - (unpadded.length % 4)) % 4)}`;
+  if (token !== unpadded && token !== padded) {
+    return false;
+  }
+
+  let buffer = 0;
+  let bufferedBits = 0;
+  for (const character of unpadded) {
+    const alphabetIndex = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".indexOf(character);
+    if (alphabetIndex < 0) {
+      return false;
+    }
+    buffer = (buffer << 6) | alphabetIndex;
+    bufferedBits += 6;
+    if (bufferedBits >= 8) {
+      bufferedBits -= 8;
+      const decodedByte = (buffer >> bufferedBits) & 0xff;
+      if (decodedByte === 0x3a) {
+        return true;
+      }
+      buffer &= (1 << bufferedBits) - 1;
+    }
+  }
+  return false;
+}
+
 function isSafeStructuredMetadataValue(key: string, value: unknown): boolean {
   const normalized = normalizeStructuredKey(key);
   if (typeof value === "boolean") {
@@ -669,8 +701,11 @@ function isSafeCryptographicDigest(value: string): boolean {
 }
 
 function looksLikeExplicitCredential(value: string): boolean {
+  const trimmed = value.trim();
+  const basicCredential = trimmed.match(/^Basic\s+([^\s]+)/iu)?.[1];
   return (
-    /^(?:Bearer|Basic)\s+\S+/i.test(value.trim()) ||
+    /^Bearer\s+\S+/iu.test(trimmed) ||
+    (basicCredential !== undefined && isBasicAuthorizationCredential(basicCredential)) ||
     /(?:^|\s)(?:Authorization|Proxy-Authorization)\s*:\s*\S+/i.test(value) ||
     containsCredentialAssignmentText(value) ||
     containsCredentialChannelUrl(value) ||
@@ -1411,7 +1446,12 @@ function buildSecretPatterns(marker: string, options: SecretTextRedactionOptions
       },
     },
     {
-      pattern: /\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/-]+={0,}/gi,
+      pattern: /\bBearer\s+[A-Za-z0-9._~+/-]+={0,}/giu,
+      replace: (match) => `${match.split(/\s+/, 1)[0]} ${marker}`,
+    },
+    {
+      pattern: /\bBasic\s+([A-Za-z0-9+/]+={0,2})(?![A-Za-z0-9+/=])/giu,
+      shouldRedact: (_match, credential) => isBasicAuthorizationCredential(credential),
       replace: (match) => `${match.split(/\s+/, 1)[0]} ${marker}`,
     },
     {

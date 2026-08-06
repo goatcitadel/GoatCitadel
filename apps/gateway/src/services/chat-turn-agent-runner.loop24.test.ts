@@ -310,7 +310,7 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
           bytesWritten: 24_000,
           format: "pptx",
           title: request.args.title,
-          slideCount: 3,
+          slideCount: 4,
         },
       };
     });
@@ -354,6 +354,258 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
     expect(result.turnTrace.completion?.firstProviderRequestUsage?.effectiveInputTokens).toBeLessThan(12_000);
     expect(result.turnTrace.status).toBe("completed");
     expect(result.turnTrace.citations).toHaveLength(2);
+  });
+
+  it("continues a research deck from an approved search result without repeating the search", async () => {
+    const content = "i want you to research the funniest jokes and then present them in a powerpoint";
+    const sessionId = "sess-loop24-approved-research-deck";
+    const turnId = "turn-loop24-approved-research-deck";
+    const storage = createMockStorage();
+    storage.chatToolRuns.create({
+      toolRunId: "tool-run-initial-funny-jokes-search",
+      turnId,
+      sessionId,
+      toolName: "browser.search",
+      status: "executed",
+      args: { query: "funniest jokes research", maxResults: 6, apiKey: "approved-search-secret" },
+      result: {
+        results: [
+          {
+            title: "LaughLab and the science of jokes",
+            url: "https://example.test/laughlab",
+            snippet: "The first search explains incongruity, surprise, and broadly effective joke structure.",
+          },
+        ],
+      },
+      startedAt: "2026-08-06T00:00:00.000Z",
+      finishedAt: "2026-08-06T00:00:01.000Z",
+    });
+    storage.chatToolRuns.create({
+      toolRunId: "tool-run-approved-funny-jokes-search",
+      turnId,
+      sessionId,
+      toolName: "browser.search",
+      status: "executed",
+      approvalId: "approval-funny-jokes-search",
+      args: {
+        query: "LaughLab funniest joke humor research",
+        maxResults: 6,
+        backend: "official",
+      },
+      result: { results: [] },
+      startedAt: "2026-08-06T00:00:02.000Z",
+      finishedAt: "2026-08-06T00:00:03.000Z",
+    });
+    const providerRequests: ChatCompletionRequest[] = [];
+    const createChatCompletion = vi
+      .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
+      .mockImplementationOnce(async (request) => {
+        providerRequests.push(request);
+        return namedToolCallCompletion("browser.search", {
+          query: "LaughLab funniest joke humor research",
+          maxResults: 6,
+          backend: "official",
+        });
+      })
+      .mockImplementationOnce(async (request) => {
+        providerRequests.push(request);
+        return namedToolCallCompletion("browser.search", {
+          backend: "native",
+          maxResults: 10,
+          query: "site:richardwiseman.wordpress.com LaughLab funniest joke",
+        });
+      })
+      .mockImplementationOnce(async (request) => {
+        providerRequests.push(request);
+        return namedToolCallCompletion("presentations.create", {
+          path: "./workspace/goatcitadel_out/funny-jokes-approved-research.pptx",
+          title: "Why Funny Jokes Work",
+          slides: [
+            {
+              title: "Why Funny Jokes Work",
+              bullets: ["A research-guided comedy sampler", "Humor remains subjective"],
+              visualBrief: "A comedy microphone under a spotlight",
+            },
+            {
+              title: "Why We Laugh",
+              bullets: ["Incongruity and surprise overturn the audience's expected interpretation."],
+            },
+            {
+              title: "Reliable Structures",
+              bullets: ["Misdirection, callbacks, and the rule of three create comic rhythm."],
+            },
+            {
+              title: "Delivery",
+              bullets: ["A concise setup and deliberate timing give the twist room to land."],
+            },
+          ],
+        });
+      })
+      .mockImplementationOnce(async (request) => {
+        providerRequests.push(request);
+        return namedToolCallCompletion("presentations.create", {
+          path: "./workspace/goatcitadel_out/funny-jokes-approved-research.pptx",
+          slides: [
+            {
+              title: "Why Funny Jokes Work",
+              bullets: ["A research-guided comedy sampler", "Humor remains subjective"],
+            },
+            {
+              title: "Why We Laugh",
+              bullets: ["Incongruity and surprise overturn the audience's expected interpretation."],
+            },
+            {
+              title: "Reliable Structures",
+              bullets: ["Misdirection, callbacks, and the rule of three create comic rhythm."],
+            },
+            {
+              title: "Delivery",
+              bullets: ["A concise setup and deliberate timing give the twist room to land."],
+            },
+          ],
+        });
+      })
+      .mockImplementationOnce(async (request) => {
+        providerRequests.push(request);
+        return namedToolCallCompletion("presentations.create", {
+          path: "./workspace/goatcitadel_out/funny-jokes-approved-research.pptx",
+          title: "Why Funny Jokes Work",
+          slides: [
+            {
+              title: "Why We Laugh",
+              bullets: ["Incongruity and surprise overturn the audience's expected interpretation."],
+            },
+            {
+              title: "Reliable Structures",
+              bullets: ["Misdirection, callbacks, and the rule of three create comic rhythm."],
+            },
+            {
+              title: "Delivery",
+              bullets: ["A concise setup and deliberate timing give the twist room to land."],
+            },
+          ],
+        });
+      })
+      .mockImplementationOnce(async (request) => {
+        providerRequests.push(request);
+        return completion(
+          "The approved research is incorporated, and the PowerPoint presentation is complete. " +
+            "[Download the PowerPoint](sandbox:/mnt/data/wrong-name.pptx)",
+        );
+      });
+    const invokeTool = vi.fn(async (request: ToolInvokeRequest): Promise<ToolInvokeResult> => {
+      if (request.toolName === "browser.search") {
+        return {
+          outcome: "executed",
+          result: { results: [{ title: "duplicate search", url: "https://example.test/duplicate" }] },
+        };
+      }
+      return {
+        outcome: "executed",
+        result: {
+          path: "F:\\code\\personal-ai\\workspace\\goatcitadel_out\\funny-jokes-approved-research.pptx",
+          bytesWritten: 24_000,
+          format: "pptx",
+          title: request.args.title,
+          // presentations.create reports the generated cover plus the three
+          // content slides supplied in the tool arguments.
+          slideCount: 4,
+        },
+      };
+    });
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: storage as never,
+      listToolCatalog: () => createToolCatalog(["browser.search", "presentations.create"]),
+      createChatCompletion,
+      invokeTool,
+      workspaceFileRootDir: "F:\\code\\personal-ai\\workspace",
+    });
+
+    const result = await orchestrator.run(
+      turnInput({
+        sessionId,
+        turnId,
+        content,
+        webMode: "auto",
+        historyMessages: [{ role: "user", content }],
+      }),
+    );
+
+    expect(invokeTool.mock.calls.map(([request]) => request.toolName)).toEqual(["presentations.create"]);
+    expect(invokeTool.mock.calls[0]?.[0].args).toMatchObject({
+      title: "Why Funny Jokes Work",
+      slides: [
+        expect.objectContaining({ title: "Why We Laugh" }),
+        expect.objectContaining({ title: "Reliable Structures" }),
+        expect.objectContaining({ title: "Delivery" }),
+      ],
+    });
+    expect(
+      providerRequests[0]?.messages.some(
+        (message) =>
+          message.role === "tool" &&
+          typeof message.content === "string" &&
+          message.content.includes("LaughLab and the science of jokes"),
+      ),
+    ).toBe(true);
+    expect(
+      providerRequests[0]?.messages.some(
+        (message) =>
+          message.role === "system" &&
+          typeof message.content === "string" &&
+          message.content.includes("Do not call browser.search again during this turn"),
+      ),
+    ).toBe(true);
+    expect(
+      providerRequests[1]?.messages.some(
+        (message) =>
+          message.role === "tool" &&
+          typeof message.content === "string" &&
+          message.content.includes("research_evidence_complete") &&
+          message.content.includes("LaughLab and the science of jokes"),
+      ),
+    ).toBe(true);
+    expect(
+      providerRequests[2]?.messages.some(
+        (message) =>
+          message.role === "tool" &&
+          typeof message.content === "string" &&
+          message.content.includes("research_evidence_complete"),
+      ),
+    ).toBe(true);
+    expect(
+      providerRequests[0]?.messages.some(
+        (message) =>
+          message.role === "tool" && typeof message.content === "string" && message.content.includes('"results":[]'),
+      ),
+    ).toBe(true);
+    expect(JSON.stringify(providerRequests)).not.toContain("approved-search-secret");
+    expect(result.turnTrace.status).toBe("completed");
+    const blockedPresentationRuns = result.turnTrace.toolRuns.filter(
+      (run) => run.toolName === "presentations.create" && run.status === "blocked",
+    );
+    expect(blockedPresentationRuns).toHaveLength(2);
+    expect(blockedPresentationRuns.map((run) => run.error).join(" ")).toMatch(/duplicates.*title slide/i);
+    expect(blockedPresentationRuns.map((run) => run.error).join(" ")).toMatch(/missing a specific title/i);
+    expect(result.assistantContent).not.toContain("sandbox:/");
+    expect(result.assistantContent).toContain(
+      "/api/v1/files/download?relativePath=goatcitadel_out%2Ffunny-jokes-approved-research.pptx",
+    );
+    expect(result.assistantContent).toContain("Slides: 4.");
+    expect(result.turnTrace.toolRuns).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          toolRunId: "tool-run-initial-funny-jokes-search",
+          status: "executed",
+        }),
+        expect.objectContaining({
+          toolRunId: "tool-run-approved-funny-jokes-search",
+          status: "executed",
+          approvalId: "approval-funny-jokes-search",
+        }),
+        expect.objectContaining({ toolName: "presentations.create", status: "executed" }),
+      ]),
+    );
   });
 
   it("defers synthetic presentation visuals until after policy authorization", async () => {
@@ -436,7 +688,7 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
       .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
       .mockResolvedValueOnce(namedToolCallCompletion("presentations.create", genericArgs))
       .mockResolvedValueOnce(namedToolCallCompletion("presentations.create", genericArgs))
-      .mockResolvedValueOnce(completion("I could not produce a grounded deck from that generic draft."));
+      .mockResolvedValueOnce(completion("Done. [Download the PowerPoint](sandbox:/mnt/data/fake-presentation.pptx)"));
     const invokeTool = vi.fn();
     const runner = new ChatTurnAgentRunner({
       storage: createMockStorage() as never,
@@ -462,6 +714,12 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
         (run) => run.toolName === "presentations.create" && run.error?.includes("content quality gate"),
       ),
     ).toHaveLength(2);
+    expect(result.turnTrace.status).toBe("failed");
+    expect(result.turnTrace.completion?.status).toBe("interrupted");
+    expect(result.turnTrace.failure?.failureClass).toBe("tool_blocked");
+    expect(result.assistantContent).toContain("No downloadable PowerPoint was produced.");
+    expect(result.assistantContent).not.toContain("sandbox:/");
+    expect(result.assistantContent).not.toMatch(/\[Download\b/iu);
   });
 
   it("uses the configured workspace artifact directory for write-jail fallbacks", async () => {

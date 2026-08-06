@@ -413,6 +413,53 @@ describe("presentation PPTX layout selection", () => {
     expect(imageObjects.some((image) => image.objectName === "GoatCitadel accent visual")).toBe(false);
   });
 
+  it("shrinks overlong bullet rows instead of allowing PowerPoint to ellipsize them", async () => {
+    const textObjects: Array<{ text: string; options?: Record<string, unknown> }> = [];
+    vi.doMock("sharp", () => ({
+      default: () => ({ png: () => ({ toBuffer: async () => Buffer.from("mock-png") }) }),
+    }));
+    vi.doMock("pptxgenjs", () => ({
+      default: class MockPptxGen {
+        public layout = "";
+        public author = "";
+        public company = "";
+        public subject = "";
+        public title = "";
+        public theme = {};
+        public ShapeType = { rect: "rect", roundRect: "roundRect" };
+
+        public addSlide() {
+          const slide: Record<string, unknown> = {};
+          slide.addShape = () => slide;
+          slide.addImage = () => slide;
+          slide.addText = (text: string, options?: Record<string, unknown>) => {
+            textObjects.push({ text: String(text), options });
+            return slide;
+          };
+          slide.addNotes = () => slide;
+          return slide;
+        }
+
+        public async write() {
+          return Buffer.from("PKmock");
+        }
+      },
+    }));
+
+    const overlongBullet =
+      "Research limitation: accessible search evidence consisted mainly of editorial compilations; no controlled audience test was available in this pass. Joke wording may vary across organizations and publications.";
+
+    await createPresentationPptxWithDiagnostics({
+      title: "Sources",
+      slides: [{ title: "Sources and limitations", bullets: [overlongBullet] }],
+    });
+
+    expect(textObjects.find((item) => item.text === overlongBullet)?.options).toMatchObject({
+      fit: "shrink",
+      valign: "top",
+    });
+  });
+
   it("keeps generated visuals safe when raw callers omit display strings", async () => {
     const design = createArtifactDesignPlan({
       kind: "presentation",

@@ -757,6 +757,15 @@ describe("redactStructuredSecrets", () => {
     );
   });
 
+  it("preserves ordinary basic-science prose while redacting a real Basic credential", () => {
+    const prose =
+      "Mechanism: make up means both compose matter and invent falsehoods. The punch line rewards a basic science fact without requiring specialized knowledge.";
+
+    expect(redactStructuredSecrets(prose).value).toBe(prose);
+    expect(redactSecretText("Basic dXNlcjpwYXNz").value).toBe("Basic [REDACTED]");
+    expect(redactStructuredSecrets("Basic dXNlcjpwYXNz").value).toBe("[REDACTED]");
+  });
+
   it("preserves explicitly typed binary payloads without exempting signatures or untyped high-entropy text", () => {
     const pngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 

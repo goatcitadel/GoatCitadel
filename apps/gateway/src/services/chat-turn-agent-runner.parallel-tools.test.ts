@@ -142,6 +142,38 @@ describe("ChatTurnAgentRunner parallel read-only tool batches", () => {
     expect(maxStarted).toBeLessThan(minFinished);
   });
 
+  it("reuses a settled approved call before admitting a read-only parallel batch", async () => {
+    const suffix = "approved-reuse";
+    const input = turnInput(suffix);
+    const harness = buildHarness({
+      toolNames: ["memory.read", "memory.read"],
+      delaysByProbeMs: { 1: 20, 2: 20 },
+    });
+    harness.storage.chatToolRuns.create({
+      toolRunId: "tool-run-approved-memory-read",
+      turnId: input.turnId,
+      sessionId: input.sessionId,
+      toolName: "memory.read",
+      status: "executed",
+      approvalId: "approval-memory-read",
+      args: { probe: 1 },
+      result: { ok: true, probe: 1, approved: true },
+      startedAt: "2026-08-06T00:00:00.000Z",
+      finishedAt: "2026-08-06T00:00:01.000Z",
+    });
+
+    await harness.orchestrator.run(input);
+
+    expect(harness.invokeTool).toHaveBeenCalledTimes(1);
+    expect(harness.invokeTool.mock.calls[0]?.[0].args).toEqual({ probe: 2 });
+    expect(harness.storage.chatToolRuns.listByTurn(input.turnId)).toHaveLength(2);
+    const continuationMessages = toolMessagesOf(harness.completionRequests[1]);
+    expect(continuationMessages.slice(-2).map((message) => message.tool_call_id)).toEqual(["call-1", "call-2"]);
+    expect(continuationMessages.find((message) => message.tool_call_id === "call-1")?.content).toContain(
+      '"approved":true',
+    );
+  });
+
   it("appends tool results in emission order even when the first call finishes last", async () => {
     const harness = buildHarness({
       toolNames: READ_ONLY_BATCH,

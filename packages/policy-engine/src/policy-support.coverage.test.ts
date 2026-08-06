@@ -354,8 +354,18 @@ describe("tool security support", () => {
   it("collects leak detections from strings and handles non-serializable inputs", () => {
     const circular: Record<string, unknown> = {};
     circular.self = circular;
+    const presentation = {
+      slides: [
+        {
+          speakerNotes:
+            "Mechanism: make up means both compose matter and invent falsehoods. The punch line rewards a basic science fact without requiring specialized knowledge.",
+        },
+      ],
+    };
 
     expect(collectLeakDetections("Bearer abcdefghijklmnopqrstuvwxyz")).toEqual(["bearer_token"]);
+    expect(collectLeakDetections("Basic dXNlcjpwYXNz")).toEqual(["structured_secret"]);
+    expect(collectLeakDetections(presentation)).toEqual([]);
     expect(collectLeakDetections(circular)).toEqual([]);
   });
 

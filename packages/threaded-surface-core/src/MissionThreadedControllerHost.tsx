@@ -1391,7 +1391,7 @@ export function MissionThreadedControllerHost({
     });
     const runId = response.items[0]?.runId;
     return runId ? fetchAgenticRunTree(runId, { workspaceId }) : null;
-  }, [currentSessionMode, selectedSessionId, workspaceId]);
+  }, [selectedSessionId, workspaceId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1566,6 +1566,17 @@ export function MissionThreadedControllerHost({
     [selectedSession?.sessionId],
   );
 
+  const handleSessionCreated = useCallback(
+    (created: ChatSessionRecord) => {
+      onNavigateSurface?.(currentSessionMode, {
+        sessionId: created.sessionId,
+        turnId: null,
+        artifactId: null,
+      });
+    },
+    [currentSessionMode, onNavigateSurface],
+  );
+
   const sessionControls = useChatSessionControls({
     workspaceId,
     historyView,
@@ -1584,6 +1595,7 @@ export function MissionThreadedControllerHost({
     setQueuedOutbound: (value) => queuedOutboundSetterRef.current(value),
     setThread,
     loadSidebar,
+    onSessionCreated: handleSessionCreated,
     refreshSessionAggregate: refreshChatSessionAggregate,
     setSessionMetadataConflictDraft: handleSessionMetadataConflictDraftChange,
     setBinding,
@@ -2531,6 +2543,7 @@ export function MissionThreadedControllerHost({
       pushLocalNotice,
       refreshOrchestrationRun,
       resolveAgenticRunTree,
+      workspaceId,
     ],
   );
   const guardWorkbenchNavigation = useCallback(
@@ -2816,6 +2829,11 @@ export function MissionThreadedControllerHost({
         setPendingThreadContext(null);
         setActiveGeneratedArtifact(null);
         setSessionRailOpen(false);
+        onNavigateSurface?.(messageMode, {
+          sessionId,
+          turnId: options?.turnId ?? null,
+          artifactId: null,
+        });
         return;
       }
       guardWorkbenchNavigation(() => {
@@ -2826,10 +2844,17 @@ export function MissionThreadedControllerHost({
         setPendingThreadContext(null);
         setActiveGeneratedArtifact(null);
         setSessionRailOpen(false);
+        onNavigateSurface?.(messageMode, {
+          sessionId,
+          turnId: options?.turnId ?? null,
+          artifactId: null,
+        });
       }, "Switching sessions will discard the unsaved editor changes in the current Code workbench file.");
     },
     [
       guardWorkbenchNavigation,
+      messageMode,
+      onNavigateSurface,
       openHistoricalWindow,
       returnToLatest,
       selectedSessionId,
@@ -3086,7 +3111,7 @@ export function MissionThreadedControllerHost({
         }
       });
     },
-    [pushLocalNotice, refreshWorkbench, selectedSessionId, selectedTurn?.turnId],
+    [pushLocalNotice, refreshWorkbench, selectedSessionId, selectedTurn?.turnId, setUiError],
   );
 
   const applyPrefPatchToSession = useCallback(
@@ -3147,7 +3172,7 @@ export function MissionThreadedControllerHost({
         throw err;
       }
     },
-    [prefsRef, refreshChatSessionAggregate, selectedSession, setPrefs],
+    [prefsRef, refreshChatSessionAggregate, selectedSession, setPrefs, setUiError],
   );
   const handlePrefPatch = useCallback(
     async (patch: ChatSessionPrefsPatch) => {
@@ -3228,6 +3253,7 @@ export function MissionThreadedControllerHost({
       setHistoryView,
       setSelectedSessionId,
       setThread,
+      setUiError,
       thread,
     ],
   );
@@ -3259,7 +3285,7 @@ export function MissionThreadedControllerHost({
         }
       });
     },
-    [applyPrefPatchToSession, selectedSession],
+    [applyPrefPatchToSession, selectedSession, setUiError],
   );
   const requestThreadModelPatch = useCallback(
     (patch: ChatSessionPrefsPatch) => {
@@ -3967,7 +3993,6 @@ export function MissionThreadedControllerHost({
     knowledgeUrlDraft,
     messageMode,
     openBtwSideChat,
-    pendingAttachments.length,
     pendingAttachments,
     pendingDocumentContextRefs.length,
     pendingTemplateInvocation,
@@ -4111,6 +4136,7 @@ export function MissionThreadedControllerHost({
       archiveWorkspacePending,
       availableFolders,
       blockHistoricalMutation,
+      creatingSessionMode,
       deferredSearch,
       externalSessions,
       handleArchiveWorkspace,
@@ -4135,6 +4161,7 @@ export function MissionThreadedControllerHost({
       setProjectName,
       setProjectPath,
       setSearch,
+      setShowProjectCreate,
       setSelectedFolderId,
       setSelectedProjectId,
       setSelectedTag,

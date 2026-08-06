@@ -2665,7 +2665,7 @@ describe("approval lifecycle service", () => {
     );
   });
 
-  it("resumes an approval-blocked chat turn end to end and keeps duplicate wake processing idempotent", async () => {
+  it("defers an approval-blocked Chat wake until action settlement and keeps duplicate processing idempotent", async () => {
     const backgroundTasks = new Set<Promise<void>>();
     const requestRunProcessing = vi.fn();
     const markResolved = vi.fn();
@@ -2904,19 +2904,14 @@ describe("approval lifecycle service", () => {
     const processedEffects = host.storage.approvalEffects.listByApproval("approval-1");
     const processedSummary = deriveApprovalResolutionEffectsResult(processedEffects);
 
-    // Under the HX-411 durable-admission / deferred-materialization contract the
-    // approved tool action still executes in-band, but assistant-message
-    // materialization is delegated to the linked durable chat-turn run instead of
-    // completing synchronously inside approval resolution. This lightweight
-    // lifecycle harness backs `durable-turn-1` with a skeletal run that lacks the
-    // canonical waiting-approval parent authority a production run carries, so the
-    // in-band materialization step defers to the durable path (the full synchronous
-    // materialization is exercised by approval-resolution-effects-service.test.ts).
-    // The resume therefore genuinely wakes the linked durable run (`resumed: true`)
-    // and requests its processing, which is what will materialize the assistant turn.
+    // The approved action executes once, but this skeletal harness cannot commit
+    // the canonical Chat continuation evidence. The linked wake must therefore
+    // remain deferred instead of racing ahead of the still-running action effect.
+    // Production-shaped settlement + wake coverage lives in
+    // approval-resolution-effects-service.test.ts.
     expect(resolution).toMatchObject({
       allowScope: "once",
-      resumed: true,
+      resumed: false,
       resumedTurnId: "turn-1",
       resumedRunId: "durable-turn-1",
     });
@@ -2932,17 +2927,9 @@ describe("approval lifecycle service", () => {
     // woken below.
     expect(chatMessagesUpsert).not.toHaveBeenCalled();
     expect(chatTurnTracesPatch).not.toHaveBeenCalled();
-    // Compensating coverage that the turn will still complete: both the approval-wait
-    // run and the linked durable chat-turn run are woken and have their processing
-    // requested through the durable path. In production the linked run then
-    // materializes the assistant turn; here we assert the resume drives that path.
-    expect(requestRunProcessing).toHaveBeenCalledTimes(2);
+    // Only the approval-wait run can advance until action settlement commits.
+    expect(requestRunProcessing).toHaveBeenCalledTimes(1);
     expect(requestRunProcessing).toHaveBeenNthCalledWith(1, "approval-wait-1");
-    expect(requestRunProcessing).toHaveBeenNthCalledWith(2, "durable-turn-1");
-    expect(host.wakeDurableRun).toHaveBeenCalledWith(
-      "durable-turn-1",
-      expect.objectContaining({ eventKey: "approval.resolved" }),
-    );
     expect(processedEffects.map((effect) => [effect.effectKind, effect.status])).toEqual([
       ["approval_resolution_signals", "completed"],
       // The tool action executed, but chat materialization is delegated to the
@@ -2950,16 +2937,16 @@ describe("approval lifecycle service", () => {
       // completing or failing in this harness.
       ["pending_action_execute", "running"],
       ["approval_wait_wake", "completed"],
-      ["linked_chat_turn_wake", "completed"],
+      ["linked_chat_turn_wake", "running"],
       ["approval_after_hooks", "completed"],
     ]);
     expect(processedSummary).toMatchObject({
       approvalWaitDurableRunId: "approval-wait-1",
       chatTurnResume: {
-        resumed: true,
+        resumed: false,
         turnId: "turn-1",
         durableRunId: "durable-turn-1",
-        wakeOutcome: "woke",
+        wakeOutcome: undefined,
       },
     });
 
@@ -2974,9 +2961,9 @@ describe("approval lifecycle service", () => {
     await Promise.allSettled([...backgroundTasks]);
 
     expect(host.storage.approvalEffects.listByApproval("approval-1")).toHaveLength(5);
-    expect(requestRunProcessing).toHaveBeenCalledTimes(2);
+    expect(requestRunProcessing).toHaveBeenCalledTimes(1);
     expect(executeApprovedPendingAction).toHaveBeenCalledTimes(1);
-    expect(host.wakeDurableRun).toHaveBeenCalledTimes(2);
+    expect(host.wakeDurableRun).toHaveBeenCalledTimes(1);
   });
 
   it("does not create an official-search grant for approve-once replay", async () => {

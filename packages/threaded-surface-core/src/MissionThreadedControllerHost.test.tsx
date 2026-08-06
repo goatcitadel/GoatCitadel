@@ -81,6 +81,10 @@ const useChatMultimodalControlsMock = vi.fn();
 const useRouteGeneratedArtifactRevealMock = vi.fn();
 const useExternalSourceAttachmentsMock = vi.fn();
 const useMediaQueryMock = vi.fn();
+const callChatSessionDataMock = useChatSessionDataMock;
+const callChatThreadControllerMock = useChatThreadControllerMock;
+const callChatSurfaceOrchestrationMock = useChatSurfaceOrchestrationMock;
+const callChatMultimodalControlsMock = useChatMultimodalControlsMock;
 
 let mockSurfaceMode: ChatMode = "chat";
 let mockCompact = false;
@@ -2050,6 +2054,40 @@ describe("MissionThreadedControllerHost", () => {
     );
   });
 
+  it("synchronizes created and rail-selected sessions through the route owner", async () => {
+    const navigateSurface = vi.fn();
+    await renderHost({ onNavigateSurface: navigateSurface });
+    await selectDefaultSession();
+
+    const sessionControlsInput = useChatSessionControlsMock.mock.calls.at(-1)?.[0] as
+      | { onSessionCreated?: (session: ChatSessionRecord) => void }
+      | undefined;
+    await act(async () => {
+      sessionControlsInput?.onSessionCreated?.({
+        ...selectedSession,
+        sessionId: "session-new",
+        sessionKey: "session-new",
+      });
+      await flushEffects();
+    });
+    expect(navigateSurface).toHaveBeenCalledWith("chat", {
+      sessionId: "session-new",
+      turnId: null,
+      artifactId: null,
+    });
+
+    navigateSurface.mockClear();
+    await act(async () => {
+      latestSurfaceInput?.sessionRail.onSelectSession("session-2", { turnId: "turn-2" });
+      await flushEffects();
+    });
+    expect(navigateSurface).toHaveBeenCalledWith("chat", {
+      sessionId: "session-2",
+      turnId: "turn-2",
+      artifactId: null,
+    });
+  });
+
   it("builds code workflow props and runs workbench/code helper actions", async () => {
     mockSurfaceMode = "code";
     await renderHost({ lockSurface: true, surface: "code" });
@@ -2748,7 +2786,7 @@ describe("MissionThreadedControllerHost", () => {
       setupMocks();
       mockSurfaceMode = item.mode;
       useChatThreadControllerMock.mockReturnValue({
-        ...useChatThreadControllerMock(),
+        ...callChatThreadControllerMock(),
         selectedSession: null,
         selectedProject: null,
         messages: [],
@@ -3516,17 +3554,17 @@ describe("MissionThreadedControllerHost", () => {
       await cleanupRenderedHosts();
       setupMocks();
       useChatSessionDataMock.mockReturnValue({
-        ...useChatSessionDataMock(),
+        ...callChatSessionDataMock(),
         prefs: { ...prefs, ...prefsPatch },
       });
       const handleGenerateImage = vi.fn(async () => generatedArtifact);
       useChatMultimodalControlsMock.mockReturnValue({
-        ...useChatMultimodalControlsMock(),
+        ...callChatMultimodalControlsMock(),
         handleGenerateImage,
       });
       const handleSend = vi.fn(async () => undefined);
       useChatSurfaceOrchestrationMock.mockReturnValue({
-        ...useChatSurfaceOrchestrationMock(),
+        ...callChatSurfaceOrchestrationMock(),
         handleSend,
       });
 
@@ -4401,7 +4439,7 @@ describe("MissionThreadedControllerHost", () => {
     // autoRouteActive is true, and point the thread controller at a session
     // whose projectId reflects the desired bound/unbound state.
     function setupEmptyThread(options: { hasBoundProject: boolean }) {
-      const base = useChatSessionDataMock();
+      const base = callChatSessionDataMock();
       useChatSessionDataMock.mockReturnValue({
         ...base,
         thread: { sessionId: "session-1", selectedTurnId: null, activeLeafTurnId: null, turns: [] },

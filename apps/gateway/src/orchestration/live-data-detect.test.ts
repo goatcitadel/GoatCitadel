@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  extractExternalResearchSubject,
   hasExternalResearchIntent,
   hasLiveDataIntent,
   hasLiveDataKeywords,
@@ -74,5 +75,14 @@ describe("live data detection", () => {
     expect(hasExternalResearchIntent("Summarize my research notes into a presentation.")).toBe(false);
     expect(hasExternalResearchIntent("The research section is already included below.")).toBe(false);
     expect(hasExternalResearchIntent("Rewrite this paragraph about research methods.")).toBe(false);
+  });
+
+  it("keeps presentation delivery wording out of the research subject", () => {
+    expect(
+      extractExternalResearchSubject("i want you to research the funniest jokes and then present them in a powerpoint"),
+    ).toBe("the funniest jokes");
+    expect(extractExternalResearchSubject("Research the launch results, then present them as a slide deck.")).toBe(
+      "the launch results",
+    );
   });
 });

@@ -348,6 +348,28 @@ describe("tool executor tail coverage", () => {
     expect(JSON.stringify(created)).toContain("renderer-generated-visual");
   }, 20_000);
 
+  it("rejects a presentation without its required title before visual preparation or file output", async () => {
+    const root = createRoot();
+    const config = createConfig(root);
+    const storage = createKnowledgeStorage();
+    const deckPath = path.join(root, "missing-title.pptx");
+    const preparePresentationVisuals = vi.fn();
+
+    await expect(
+      executeTool(
+        request("presentations.create", {
+          path: deckPath,
+          slides: [{ title: "A Content Slide", bullets: ["Grounded content"] }],
+        }),
+        config,
+        storage,
+        { preparePresentationVisuals },
+      ),
+    ).rejects.toThrow("Missing required argument: title");
+    expect(preparePresentationVisuals).not.toHaveBeenCalled();
+    expect(fs.existsSync(deckPath)).toBe(false);
+  });
+
   it("keeps post-approval visual bytes ephemeral while reporting mappings and skill provenance", async () => {
     const root = createRoot();
     const config = createConfig(root);

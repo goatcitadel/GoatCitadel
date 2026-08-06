@@ -585,7 +585,11 @@ function addBulletRows(
       h: rowHeight,
       fontFace: design.typography.bodyFont,
       fontSize: rowMetrics.fontSize,
-      fit: "none",
+      // Keep the complete source text visible when PowerPoint's real font
+      // metrics wrap more aggressively than our deterministic row estimate.
+      // A fixed-size text box silently replaces overflow with an ellipsis;
+      // shrink-to-fit preserves the content inside the allocated row instead.
+      fit: "shrink",
       color: design.tokens.text,
       breakLine: false,
       valign: "top",

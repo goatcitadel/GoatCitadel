@@ -412,6 +412,26 @@ describe("gateway service coverage helpers", () => {
     expect(reports).toHaveLength(1);
   });
 
+  it("awaits an asynchronous MCP diagnostics feature gate before doing work", async () => {
+    const featureDisabled = new Error("connector diagnostics disabled");
+    const listMcpTemplates = vi.fn(async () => []);
+    const requireMcpServer = vi.fn();
+    const host: McpDiagnosticsHost = {
+      requireFeatureEnabled: vi.fn(async () => {
+        throw featureDisabled;
+      }),
+      listMcpTemplates,
+      requireMcpServer,
+      pickConnectorDiagnosticAction: vi.fn(),
+      recordConnectorHealthRun: vi.fn(),
+    };
+
+    await expect(listMcpTemplateDiscovery(host)).rejects.toBe(featureDisabled);
+    await expect(runMcpServerHealthCheck(host, "server-1")).rejects.toBe(featureDisabled);
+    expect(listMcpTemplates).not.toHaveBeenCalled();
+    expect(requireMcpServer).not.toHaveBeenCalled();
+  });
+
   it("suggests chat models from active provider defaults, templates, and remote listings", async () => {
     const listLlmModels = vi.fn(async (providerId?: string) => {
       if (providerId === "custom-active") {

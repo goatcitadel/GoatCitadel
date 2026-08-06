@@ -149,7 +149,7 @@ async function presentationsCreate(
   const requestedPath = required(args.path, "path");
   const p = ensurePptxPath(requestedPath);
   assertWritePathInJail(p, config.sandbox.writeJailRoots);
-  let title = truncateText(asString(args.title) ?? "Presentation", 120);
+  let title = truncateText(required(args.title, "title"), 120);
   let subtitle = truncateText(asString(args.subtitle) ?? "", 180);
   let slides = normalizePresentationSlides(args.slides, title, asString(args.body));
   const repair = repairPresentationDesignQuality({ title, subtitle, slides });

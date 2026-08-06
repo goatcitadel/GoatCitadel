@@ -161,6 +161,9 @@ export async function executeOfficialResearchSearch(
 export function isOfficialResearchSearchInvocation(input: OfficialResearchSearchSelectionInput): boolean {
   const backend = typeof input.backend === "string" ? input.backend.trim().toLowerCase() : undefined;
   const engine = typeof input.engine === "string" ? input.engine.trim().toLowerCase() : undefined;
+  if (backend === "native" || backend === "firecrawl" || backend === "ollama") {
+    return false;
+  }
   return backend === "official" || engine === "brave" || engine === "parallel" || Array.isArray(input.providers);
 }
 

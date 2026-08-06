@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import type { ChatToolRunRecord, ChatCompletionRequest, ChatUserInputPromptRecord } from "@goatcitadel/contracts";
 import { extractPrimaryUserTaskContent } from "../chat-agent-prompt-lab-contract.js";
 
@@ -186,7 +187,9 @@ export function analyzePresentationContentQuality(input: {
   if (new Set(slideTitles).size !== slideTitles.length) {
     findings.push("The deck contains duplicate slide titles.");
   }
-  if (GENERIC_PRESENTATION_TITLE.test(title.trim())) {
+  if (!title) {
+    findings.push("The deck is missing a specific title for the automatically generated title slide.");
+  } else if (GENERIC_PRESENTATION_TITLE.test(title.trim())) {
     findings.push("The deck uses a generic title instead of a specific subject.");
   }
   const explicitSingleSlide = /\b(?:single|one)[ -]slide\b/iu.test(input.content);
@@ -617,7 +620,11 @@ function extractPresentationBulletsFromPrompt(content: string): string[] {
     : ["Clarify the main audience", "Focus each slide on one idea", "Keep bullets brief and scannable"];
 }
 
-export function mergePresentationArtifactDeliveryContent(existingContent: string, toolRun: ChatToolRunRecord): string {
+export function mergePresentationArtifactDeliveryContent(
+  existingContent: string,
+  toolRun: ChatToolRunRecord,
+  options?: { downloadHref?: string },
+): string {
   if (toolRun.status !== "executed") {
     const failure = toolRun.error ?? "the presentation tool did not complete";
     const fallback = `I tried to create the PowerPoint artifact with \`presentations.create\`, but ${failure}.`;
@@ -634,21 +641,59 @@ export function mergePresentationArtifactDeliveryContent(existingContent: string
           : "the requested PPTX path";
   const slideCount = typeof result.slideCount === "number" ? result.slideCount : undefined;
   const bytesWritten = typeof result.bytesWritten === "number" ? result.bytesWritten : undefined;
+  const trimmed = stripSandboxPresentationDownloadLinks(existingContent).trim();
   const delivery = [
-    `Created the PowerPoint presentation artifact at \`${path}\`.`,
-    slideCount !== undefined ? `Slides: ${slideCount}.` : undefined,
-    bytesWritten !== undefined ? `Size: ${bytesWritten} bytes.` : undefined,
+    trimmed.includes(path) ? undefined : `Created the PowerPoint presentation artifact at \`${path}\`.`,
+    slideCount !== undefined && !new RegExp(`\\bSlides:\\s*${slideCount}\\b`, "iu").test(trimmed)
+      ? `Slides: ${slideCount}.`
+      : undefined,
+    bytesWritten !== undefined && !trimmed.includes(`${bytesWritten} bytes`)
+      ? `Size: ${bytesWritten} bytes.`
+      : undefined,
+    options?.downloadHref && !trimmed.includes(options.downloadHref)
+      ? `[Download the PowerPoint](${options.downloadHref})`
+      : undefined,
   ]
-    .filter(Boolean)
+    .filter((part): part is string => Boolean(part))
     .join(" ");
-  const trimmed = existingContent.trim();
   if (!trimmed || looksLikeMissingPresentationArtifactContent(trimmed)) {
     return delivery;
   }
-  if (trimmed.includes(path)) {
+  if (!delivery) {
     return trimmed;
   }
   return `${trimmed}\n\n${delivery}`;
+}
+
+export function buildWorkspaceFileDownloadHref(
+  artifactPath: string,
+  workspaceFileRootDir: string | undefined,
+): string | undefined {
+  const trimmedArtifactPath = artifactPath.trim();
+  const trimmedRoot = workspaceFileRootDir?.trim();
+  if (!trimmedArtifactPath || !trimmedRoot) {
+    return undefined;
+  }
+  const root = path.resolve(trimmedRoot);
+  const absoluteArtifactPath = path.resolve(trimmedArtifactPath);
+  const relativePath = path.relative(root, absoluteArtifactPath);
+  if (
+    !relativePath ||
+    path.isAbsolute(relativePath) ||
+    relativePath === ".." ||
+    relativePath.startsWith(`..${path.sep}`)
+  ) {
+    return undefined;
+  }
+  const normalized = relativePath.replaceAll("\\", "/");
+  if (!normalized.toLowerCase().endsWith(".pptx")) {
+    return undefined;
+  }
+  return `/api/v1/files/download?${new URLSearchParams({ relativePath: normalized }).toString()}`;
+}
+
+function stripSandboxPresentationDownloadLinks(content: string): string {
+  return content.replace(/\[[^\]]*\]\(\s*sandbox:\/mnt\/data\/[^)\s]+(?:\s+"[^"]*")?\s*\)/giu, "");
 }
 
 function looksLikeMissingPresentationArtifactContent(content: string): boolean {

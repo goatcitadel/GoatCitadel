@@ -605,6 +605,41 @@ describe("ApprovalEffectRepository", () => {
     assert.equal(claimed?.effectKind, "pending_action_execute");
   });
 
+  it("does not claim a linked Chat wake while the same approval action is still running", () => {
+    const { repo, db } = createRepoWithDb();
+    insertApproval(db, "approval-action-before-chat-wake");
+    const createdAt = "2026-08-06T00:00:00.000Z";
+    const pendingAction = repo.upsert({
+      approvalId: "approval-action-before-chat-wake",
+      effectKind: "pending_action_execute",
+      targetKind: "pending_action",
+      targetId: "approval-action-before-chat-wake",
+      createdAt,
+      updatedAt: createdAt,
+    });
+    const linkedWake = repo.upsert({
+      approvalId: "approval-action-before-chat-wake",
+      effectKind: "linked_chat_turn_wake",
+      targetKind: "chat_turn",
+      targetId: "turn-action-before-chat-wake",
+      createdAt,
+      updatedAt: createdAt,
+    });
+
+    const actionClaim = repo.claimNextPendingEffect("action-worker", createdAt, "2026-08-06T00:05:00.000Z");
+    assert.equal(actionClaim?.effectId, pendingAction.effectId);
+    assert.equal(repo.claimNextPendingEffect("wake-worker", createdAt, "2026-08-06T00:05:00.000Z"), undefined);
+
+    const completedAction = repo.completeEffect(pendingAction.effectId, "action-worker", actionClaim!.version, {
+      result: { outcome: "executed" },
+    });
+    assert.equal(completedAction?.status, "completed");
+    assert.equal(
+      repo.claimNextPendingEffect("wake-worker", createdAt, "2026-08-06T00:05:00.000Z")?.effectId,
+      linkedWake.effectId,
+    );
+  });
+
   it("keeps observability on an independent filtered claim lane", () => {
     const { repo, db } = createRepoWithDb();
     insertApproval(db, "approval-observability");

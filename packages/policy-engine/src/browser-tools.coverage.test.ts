@@ -547,10 +547,11 @@ describe("browser tools coverage sweep", () => {
 
     const search = await executeBrowserTool(
       "browser.search",
-      { query: "goatcitadel", engine: "duckduckgo", limit: 2 },
+      { query: "goatcitadel", engine: "duckduckgo", backend: "native", providers: ["brave"], limit: 2 },
       config,
     );
     expect(search.action).toBe("search");
+    expect(search.backend).toBe("native");
     expect(Array.isArray(search.results)).toBe(true);
 
     const nav = await executeBrowserTool(
@@ -1122,7 +1123,12 @@ describe("browser tools coverage sweep", () => {
 
     const search = await executeBrowserTool(
       "browser.search",
-      { query: "coverage", backend: "firecrawl", firecrawlBaseUrl: "http://127.0.0.1:3002" },
+      {
+        query: "coverage",
+        backend: "firecrawl",
+        providers: ["brave"],
+        firecrawlBaseUrl: "http://127.0.0.1:3002",
+      },
       config,
     );
     expect(search.backend).toBe("firecrawl");

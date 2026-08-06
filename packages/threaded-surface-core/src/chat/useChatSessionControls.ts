@@ -82,6 +82,7 @@ export function useChatSessionControls(input: {
   setQueuedOutbound: React.Dispatch<React.SetStateAction<OutboundQueueItem[]>>;
   setThread: React.Dispatch<React.SetStateAction<ChatThreadResponse | null>>;
   loadSidebar: (nextHistoryView?: ChatHistoryView, options?: ChatSidebarLoadOptions) => Promise<void>;
+  onSessionCreated?: (session: ChatSessionRecord) => void;
   refreshSessionAggregate?: (sessionId: string) => Promise<void>;
   setSessionMetadataConflictDraft?: (draft: SessionMetadataConflictDraft | null) => void;
   setBinding: React.Dispatch<React.SetStateAction<ChatSessionBindingRecord | null>>;
@@ -104,6 +105,7 @@ export function useChatSessionControls(input: {
     setQueuedOutbound,
     setThread,
     loadSidebar,
+    onSessionCreated,
     refreshSessionAggregate,
     setSessionMetadataConflictDraft,
     setBinding,
@@ -140,6 +142,7 @@ export function useChatSessionControls(input: {
           setHistoryView(nextHistoryView);
         }
         setSelectedSessionId(created.sessionId);
+        onSessionCreated?.(created);
         await loadSidebar(nextHistoryView, { bypassCache: true, preferredSessionId: created.sessionId });
       } catch (err) {
         setError((err as Error).message);
@@ -147,7 +150,16 @@ export function useChatSessionControls(input: {
         setCreatingSessionMode(null);
       }
     },
-    [historyView, loadSidebar, selectedProjectId, setError, setHistoryView, setSelectedSessionId, workspaceId],
+    [
+      historyView,
+      loadSidebar,
+      onSessionCreated,
+      selectedProjectId,
+      setError,
+      setHistoryView,
+      setSelectedSessionId,
+      workspaceId,
+    ],
   );
 
   const ensureSession = useCallback(async (): Promise<ChatSessionRecord> => {
@@ -171,11 +183,13 @@ export function useChatSessionControls(input: {
       setHistoryView(nextHistoryView);
     }
     setSelectedSessionId(created.sessionId);
+    onSessionCreated?.(created);
     await loadSidebar(nextHistoryView, { bypassCache: true, preferredSessionId: created.sessionId });
     return created;
   }, [
     historyView,
     loadSidebar,
+    onSessionCreated,
     selectedProjectId,
     selectedSession,
     selectedSessionId,

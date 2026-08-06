@@ -1,7 +1,17 @@
-import { memo, useEffect, useMemo, useRef, useState, type HTMLAttributes, type ReactNode } from "react";
+import {
+  memo,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type AnchorHTMLAttributes,
+  type HTMLAttributes,
+  type ReactNode,
+} from "react";
 import { Check, Copy } from "lucide-react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { downloadFile } from "../../api/client";
 import { cn } from "../../lib/utils";
 import { normalizeAssistantDisplayText } from "./assistant-display-text";
 import { AssistantStreamingTailContext, HighlightedCode } from "./HighlightedCode";
@@ -14,6 +24,8 @@ import {
 export type AssistantStreamPresentationMode = "smooth" | "instant";
 
 const MARKDOWN_REMARK_PLUGINS = [remarkGfm];
+const WORKSPACE_FILE_DOWNLOAD_PATH = "/api/v1/files/download";
+const WORKSPACE_FILE_OBJECT_URL_REVOKE_DELAY_MS = 5 * 60 * 1000;
 
 export function AssistantMessageRenderer({
   role,
@@ -71,6 +83,19 @@ function createMarkdownComponents({ allowGeneratedUi }: { allowGeneratedUi: bool
       const safeHref = resolveSafeMarkdownHref(href);
       if (!safeHref) {
         return <span className="mc-assistant-link-disabled">{children}</span>;
+      }
+      const workspaceFile = allowGeneratedUi ? parseWorkspaceFileDownloadHref(safeHref) : undefined;
+      if (workspaceFile) {
+        return (
+          <WorkspaceFileDownloadLink
+            href={safeHref}
+            relativePath={workspaceFile.relativePath}
+            fileName={workspaceFile.fileName}
+            {...props}
+          >
+            {children}
+          </WorkspaceFileDownloadLink>
+        );
       }
       const external = isExternalMarkdownHref(safeHref);
       return (
@@ -143,6 +168,117 @@ function createMarkdownComponents({ allowGeneratedUi }: { allowGeneratedUi: bool
       return <ul {...props}>{children}</ul>;
     },
   };
+}
+
+function WorkspaceFileDownloadLink({
+  children,
+  href,
+  relativePath,
+  fileName,
+  ...props
+}: {
+  children: ReactNode;
+  href: string;
+  relativePath: string;
+  fileName: string;
+} & Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "children" | "href">) {
+  const [downloading, setDownloading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  return (
+    <>
+      <a
+        href={href}
+        aria-busy={downloading || undefined}
+        {...props}
+        onClick={(event) => {
+          event.preventDefault();
+          if (downloading) {
+            return;
+          }
+          setDownloading(true);
+          setError(null);
+          void downloadWorkspaceFileToDevice(relativePath, fileName)
+            .catch(() => {
+              setError("Download failed. Try again or open the file from Library.");
+            })
+            .finally(() => {
+              setDownloading(false);
+            });
+        }}
+      >
+        {children}
+      </a>
+      {error ? (
+        <span className="mc-assistant-link-error" role="alert">
+          {error}
+        </span>
+      ) : null}
+    </>
+  );
+}
+
+export function parseWorkspaceFileDownloadHref(href: string): { relativePath: string; fileName: string } | undefined {
+  const prefix = `${WORKSPACE_FILE_DOWNLOAD_PATH}?`;
+  if (!href.startsWith(prefix) || href.includes("#")) {
+    return undefined;
+  }
+  const params = new URLSearchParams(href.slice(prefix.length));
+  const relativePaths = params.getAll("relativePath");
+  if ([...params.keys()].length !== 1 || relativePaths.length !== 1) {
+    return undefined;
+  }
+  const relativePath = relativePaths[0]?.trim();
+  if (!relativePath || !isSafeWorkspaceRelativePath(relativePath)) {
+    return undefined;
+  }
+  const fileName = relativePath.split("/").at(-1);
+  return fileName ? { relativePath, fileName } : undefined;
+}
+
+export async function downloadWorkspaceFileToDevice(relativePath: string, fallbackFileName?: string): Promise<void> {
+  if (
+    typeof window === "undefined" ||
+    typeof document === "undefined" ||
+    typeof URL === "undefined" ||
+    typeof URL.createObjectURL !== "function"
+  ) {
+    throw new Error("Workspace file downloads are unavailable in this environment.");
+  }
+  const file = await downloadFile(relativePath);
+  const content =
+    file.encoding === "base64"
+      ? Uint8Array.from(atob(file.content), (character) => character.charCodeAt(0))
+      : file.encoding === "utf8"
+        ? file.content
+        : undefined;
+  if (content === undefined) {
+    throw new Error(`Unsupported workspace file encoding: ${file.encoding}`);
+  }
+  const objectUrl = URL.createObjectURL(new Blob([content], { type: file.contentType || "application/octet-stream" }));
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = file.relativePath.split(/[\\/]/u).at(-1) || fallbackFileName || "download";
+  anchor.rel = "noopener";
+  anchor.style.display = "none";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), WORKSPACE_FILE_OBJECT_URL_REVOKE_DELAY_MS);
+}
+
+function isSafeWorkspaceRelativePath(relativePath: string): boolean {
+  if (
+    relativePath.startsWith("/") ||
+    relativePath.includes("\\") ||
+    /^[a-z]:/iu.test(relativePath) ||
+    // eslint-disable-next-line no-control-regex -- reject control characters in a download target
+    /[\u0000-\u001f\u007f]/u.test(relativePath)
+  ) {
+    return false;
+  }
+  const segments = relativePath.split("/");
+  return segments.every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
 }
 
 function isMarkdownCodeBlock(content: string, className: string | undefined, node: unknown): boolean {

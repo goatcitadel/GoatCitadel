@@ -153,6 +153,7 @@ import {
 } from "./chat-turn-agent-runner/failure-records.js";
 import {
   analyzePresentationContentQuality,
+  buildWorkspaceFileDownloadHref,
   buildSafeWriteFallbackPath,
   buildSafeWritePath,
   buildSyntheticDocumentCreateArgs,
@@ -886,6 +887,8 @@ export interface ChatTurnAgentRunnerDeps {
   ) => Promise<MeshCapabilityInvocationDispatchOutcome>;
   toolLoopDetection?: ToolLoopDetectionConfig;
   safeWriteFallbackDir?: string;
+  /** Absolute root used to derive jailed workspace-file download links from verified tool results. */
+  workspaceFileRootDir?: string;
   /**
    * Thinking-display skeleton gate. Read live (like the `isFeatureEnabled`
    * closures other services pass in) rather than a plain boolean snapshot, so an
@@ -1783,8 +1786,38 @@ export class ChatTurnAgentRunner {
     const canUseFilesystemListTool = toolSchema.canonicalToModel.has("fs.list");
     const localFileIntent = intents.localFile;
     const citations: ChatCitationRecord[] = [];
-    const toolRuns: ChatToolRunRecord[] = [];
-    let toolRunCount = 0;
+    const persistedSettledToolRuns = (await this.deps.storage.chatToolRuns.listByTurn(input.turnId)).filter(
+      isSettledToolRunContinuationEvidence,
+    );
+    const toolRuns: ChatToolRunRecord[] = [...persistedSettledToolRuns];
+    let toolRunCount = persistedSettledToolRuns.reduce(
+      (count, run) => count + toolRunBudgetCostForToolCall(run.toolName, run.args ?? {}),
+      0,
+    );
+    for (const persistedRun of persistedSettledToolRuns) {
+      const toolCallId = buildPersistedToolContinuationCallId(persistedRun);
+      conversationMessages.push(
+        createAssistantToolCallMessage({
+          toolCallId,
+          toolName: this.resolveModelToolName(persistedRun.toolName, toolSchema.canonicalToModel),
+          argumentsJson: canonicalJsonString(projectToolResultForModel(persistedRun.args ?? {})),
+        }),
+      );
+      conversationMessages.push({
+        role: "tool",
+        tool_call_id: toolCallId,
+        content: serializeToolResultForModel(buildPersistedToolContinuationResult(persistedRun)),
+      } as ChatCompletionMessage);
+      rememberToolLoopHistory(loopGuardState, persistedRun);
+      for (const citation of inferCitationsFromToolResult(persistedRun)) {
+        if (!citations.some((candidate) => candidate.citationId === citation.citationId)) {
+          citations.push(citation);
+        }
+      }
+    }
+    const hasPersistedExecutedSearchEvidence = persistedSettledToolRuns.some(
+      (run) => run.toolName === "browser.search" && run.status === "executed" && run.result !== undefined,
+    );
     let assistantContent = "";
     let assistantModel = input.model;
     let routingState: ChatTurnTraceRecord["routing"] = {
@@ -2868,6 +2901,7 @@ export class ChatTurnAgentRunner {
       !promptLabContract.toolUseSuppressed &&
       input.webMode !== "off" &&
       canUseSearchTool &&
+      !hasPersistedExecutedSearchEvidence &&
       toolRunCount < executionBudget.maxToolRunsPerTurn
     ) {
       const quickWebQuery = inferQueryFromPrompt(input.content) ?? deriveLiveDataQuery(input.content);
@@ -3042,6 +3076,7 @@ export class ChatTurnAgentRunner {
       (!localFileIntent || promptLabCoworkPromptSpecificWebLookup) &&
       !intents.time &&
       canUseSearchTool &&
+      !hasPersistedExecutedSearchEvidence &&
       toolRunCount < executionBudget.maxToolRunsPerTurn
     ) {
       throwIfChatTurnCancelled(input);
@@ -3262,6 +3297,14 @@ export class ChatTurnAgentRunner {
       conversationMessages.push({
         role: "system",
         content: buildEvidenceGroundingInstruction(),
+      } as ChatCompletionMessage);
+    }
+    const researchArtifactSearchEvidenceComplete =
+      intents.presentationArtifact && hasApprovedResearchArtifactSearchEvidence(toolRuns);
+    if (researchArtifactSearchEvidenceComplete) {
+      conversationMessages.push({
+        role: "system",
+        content: buildResearchArtifactSearchCompletionInstruction(),
       } as ChatCompletionMessage);
     }
 
@@ -3942,6 +3985,14 @@ export class ChatTurnAgentRunner {
             // Any loop-guard hit falls back to the serial path so trip
             // handling stays in exactly one place (the loop below).
             toolCalls.every((call) => !detectToolLoopRisk(loopGuardState, call.toolName, call.args)) &&
+            // Persisted approval outcomes must be answered from canonical
+            // evidence before any read-only batch is allowed to execute.
+            toolCalls.every((call) => !findReusableApprovedToolRun(toolRuns, call.toolName, call.args)) &&
+            toolCalls.every(
+              (call) =>
+                call.toolName !== "browser.search" ||
+                !findReusableBrowserSearchEvidence(toolRuns, call.args.query, researchArtifactSearchEvidenceComplete),
+            ) &&
             // Mirror the serial path's wall-clock gate before starting ANY
             // work: with the turn budget effectively spent, fall back to the
             // serial loop so its budget-exceeded handling runs unchanged.
@@ -3986,23 +4037,36 @@ export class ChatTurnAgentRunner {
           }
           for (const toolCall of toolCalls) {
             throwIfChatTurnCancelled(input);
-            const reusableSearchRun =
+            const reusableSearchEvidence =
               toolCall.toolName === "browser.search"
-                ? [...toolRuns]
-                    .reverse()
-                    .find(
-                      (run) =>
-                        run.toolName === "browser.search" &&
-                        run.status === "executed" &&
-                        run.result !== undefined &&
-                        normalizeSearchReuseQuery(run.args?.query) !== undefined &&
-                        (normalizeSearchReuseQuery(run.args?.query) ===
-                          normalizeSearchReuseQuery(toolCall.args.query) ||
-                          (typeof toolCall.args.query === "string" &&
-                            looksLikeContinuationSearchPrompt(toolCall.args.query))),
-                    )
+                ? findReusableBrowserSearchEvidence(
+                    toolRuns,
+                    toolCall.args.query,
+                    researchArtifactSearchEvidenceComplete,
+                  )
                 : undefined;
-            if (reusableSearchRun) {
+            if (reusableSearchEvidence?.researchArtifactEvidenceComplete) {
+              answeredToolCallIds.add(toolCall.id);
+              conversationMessages.push({
+                role: "tool",
+                tool_call_id: toolCall.id,
+                content: serializeToolResultForModel(
+                  buildResearchArtifactSearchReuseResult(reusableSearchEvidence.run),
+                ),
+              } as ChatCompletionMessage);
+              continue;
+            }
+            const reusableApprovedRun = findReusableApprovedToolRun(toolRuns, toolCall.toolName, toolCall.args);
+            if (reusableApprovedRun) {
+              answeredToolCallIds.add(toolCall.id);
+              conversationMessages.push({
+                role: "tool",
+                tool_call_id: toolCall.id,
+                content: serializeToolResultForModel(buildPersistedToolContinuationResult(reusableApprovedRun)),
+              } as ChatCompletionMessage);
+              continue;
+            }
+            if (reusableSearchEvidence) {
               // Research/web turns are deterministically searched before the
               // first provider synthesis. If the provider immediately asks to
               // search again, satisfy that tool-call id from the frozen search
@@ -4011,7 +4075,7 @@ export class ChatTurnAgentRunner {
               conversationMessages.push({
                 role: "tool",
                 tool_call_id: toolCall.id,
-                content: serializeToolResultForModel(reusableSearchRun.result),
+                content: serializeToolResultForModel(reusableSearchEvidence.run.result),
               } as ChatCompletionMessage);
               continue;
             }
@@ -4865,6 +4929,46 @@ export class ChatTurnAgentRunner {
         assistantContent = repairedCoworkContent;
         markCompletionRepair("cowork_contract_normalization", "orchestrator", preRepairContent, assistantContent);
       }
+    }
+    const presentationAttempts = toolRuns.filter((run) => run.toolName === "presentations.create");
+    const verifiedPresentationWrite = presentationAttempts.some(hasVerifiedPresentationArtifactWrite);
+    if (
+      !approvalPayload &&
+      !pendingUserInput &&
+      !terminalProviderFailure &&
+      finalStatus !== "cancelled" &&
+      intents.presentationArtifact &&
+      !verifiedPresentationWrite
+    ) {
+      const lastAttempt = presentationAttempts.at(-1);
+      const failureClass: ChatTurnFailureClass = lastAttempt?.status === "blocked" ? "tool_blocked" : "tool_failed";
+      const failureMessage =
+        lastAttempt?.error ?? "The requested PowerPoint presentation did not produce a verified file artifact.";
+      assistantContent = [
+        lastAttempt
+          ? mergePresentationArtifactDeliveryContent("", lastAttempt)
+          : "I could not create the requested PowerPoint presentation artifact.",
+        "No downloadable PowerPoint was produced.",
+      ].join("\n\n");
+      finalStatus = "failed";
+      finalFailure = buildChatTurnFailureRecord(failureClass, failureMessage);
+      completionState = {
+        ...completionState,
+        status: "interrupted",
+      };
+    } else if (
+      !approvalPayload &&
+      !pendingUserInput &&
+      finalStatus !== "cancelled" &&
+      intents.presentationArtifact &&
+      verifiedPresentationWrite
+    ) {
+      const verifiedAttempt = [...presentationAttempts].reverse().find(hasVerifiedPresentationArtifactWrite)!;
+      const result = verifiedAttempt.result as Record<string, unknown>;
+      const artifactPath = typeof result.path === "string" ? result.path : (result.fallbackPath as string);
+      assistantContent = mergePresentationArtifactDeliveryContent(assistantContent, verifiedAttempt, {
+        downloadHref: buildWorkspaceFileDownloadHref(artifactPath, this.deps.workspaceFileRootDir),
+      });
     }
     if (finalStatus !== "cancelled" && !promptLabEvalIntegrityTurn) {
       assistantContent = appendToolFailureConstraints(
@@ -8231,7 +8335,7 @@ function buildToolFailureGuidanceBase(input: {
     return "Use a safe fallback path inside the workspace write jail.";
   }
   if (normalizedError.includes("presentation content quality gate")) {
-    return "Regenerate the deck from the substantive conversation context. Use a specific title and topic-grounded slides; do not repeat the request or presentation-template instructions as content.";
+    return "Regenerate the deck from the substantive conversation context. Set the required title to a specific subject and keep slides content-only; never omit title or repeat it as the first slide. Do not repeat the request or presentation-template instructions as content.";
   }
   if (input.toolName.startsWith("shell.") && normalizedError.includes("requires approval")) {
     return "Use a safer restricted tool or request approval for the risky shell command.";
@@ -8299,6 +8403,17 @@ function buildEvidenceGroundingInstruction(): string {
     "- If you cannot verify a specific claim from the tool results, do not present it as verified. Use hedging language or omit it.",
     "- Cite only the few URLs that directly support the key claims you make. Do not append long source inventories.",
     "- If the results are insufficient to answer the question well, tell the user what was found and what is missing.",
+  ].join("\n");
+}
+
+function buildResearchArtifactSearchCompletionInstruction(): string {
+  return [
+    "Research-artifact continuation rule:",
+    "- An operator-approved search has settled and this turn already has usable search results.",
+    "- Do not call browser.search again during this turn.",
+    "- Use the gathered evidence now and create the requested presentation with presentations.create.",
+    "- Set a specific required title and keep slides content-only; never omit title or repeat it as the first slide.",
+    "- If the evidence is limited, state that limitation in the deck and final response instead of starting another search.",
   ].join("\n");
 }
 
@@ -14808,6 +14923,117 @@ function projectHistoryMessagesForModel(
 
 function projectToolRunsForModel(toolRuns: ChatToolRunRecord[]): ChatToolRunRecord[] {
   return projectToolResultForModel(toolRuns);
+}
+
+function isSettledToolRunContinuationEvidence(run: ChatToolRunRecord): boolean {
+  return run.status === "executed" || run.status === "failed" || run.status === "blocked";
+}
+
+function buildPersistedToolContinuationCallId(run: ChatToolRunRecord): string {
+  return `resume_${createHash("sha256").update(run.toolRunId).digest("hex").slice(0, 24)}`;
+}
+
+function buildPersistedToolContinuationResult(run: ChatToolRunRecord): Record<string, unknown> {
+  if (run.status === "executed") {
+    return run.result ?? { status: "executed" };
+  }
+  return {
+    ...(run.result ?? {}),
+    status: run.status,
+    error: run.error ?? (run.status === "blocked" ? "Tool execution was blocked." : "Tool execution failed."),
+    ...(run.failureGuidance ? { failureGuidance: run.failureGuidance } : {}),
+  };
+}
+
+function findReusableApprovedToolRun(
+  toolRuns: readonly ChatToolRunRecord[],
+  toolName: string,
+  args: Record<string, unknown>,
+): ChatToolRunRecord | undefined {
+  const argsMaterial = canonicalJsonString(args);
+  return [...toolRuns]
+    .reverse()
+    .find(
+      (run) =>
+        Boolean(run.approvalId) &&
+        isSettledToolRunContinuationEvidence(run) &&
+        run.toolName === toolName &&
+        canonicalJsonString(run.args ?? {}) === argsMaterial,
+    );
+}
+
+function hasApprovedResearchArtifactSearchEvidence(toolRuns: readonly ChatToolRunRecord[]): boolean {
+  const hasSettledApprovedSearch = toolRuns.some(
+    (run) =>
+      run.toolName === "browser.search" &&
+      Boolean(run.approvalId) &&
+      run.status === "executed" &&
+      run.result !== undefined,
+  );
+  return hasSettledApprovedSearch && toolRuns.some(hasUsableBrowserSearchResults);
+}
+
+function findReusableBrowserSearchEvidence(
+  toolRuns: readonly ChatToolRunRecord[],
+  query: unknown,
+  freezeResearchArtifactEvidence: boolean,
+): { run: ChatToolRunRecord; researchArtifactEvidenceComplete: boolean } | undefined {
+  const candidates = [...toolRuns]
+    .reverse()
+    .filter((run) => run.toolName === "browser.search" && run.status === "executed" && run.result !== undefined);
+  if (freezeResearchArtifactEvidence) {
+    const usableEvidence = candidates.find(hasUsableBrowserSearchResults);
+    if (usableEvidence) {
+      return { run: usableEvidence, researchArtifactEvidenceComplete: true };
+    }
+  }
+  const normalizedQuery = normalizeSearchReuseQuery(query);
+  const reusable = candidates.find(
+    (run) =>
+      normalizeSearchReuseQuery(run.args?.query) !== undefined &&
+      (normalizeSearchReuseQuery(run.args?.query) === normalizedQuery ||
+        (typeof query === "string" && looksLikeContinuationSearchPrompt(query))),
+  );
+  return reusable ? { run: reusable, researchArtifactEvidenceComplete: false } : undefined;
+}
+
+function hasUsableBrowserSearchResults(run: ChatToolRunRecord): boolean {
+  if (run.toolName !== "browser.search" || run.status !== "executed" || !run.result) {
+    return false;
+  }
+  const result = run.result as Record<string, unknown>;
+  return Array.isArray(result.results) && result.results.length > 0;
+}
+
+function hasVerifiedPresentationArtifactWrite(run: ChatToolRunRecord): boolean {
+  if (run.toolName !== "presentations.create" || run.status !== "executed" || !run.result) {
+    return false;
+  }
+  const result = run.result as Record<string, unknown>;
+  const artifactPath = typeof result.path === "string" ? result.path : result.fallbackPath;
+  return (
+    typeof artifactPath === "string" &&
+    artifactPath.trim().length > 0 &&
+    typeof result.bytesWritten === "number" &&
+    Number.isFinite(result.bytesWritten) &&
+    result.bytesWritten > 0
+  );
+}
+
+function buildResearchArtifactSearchReuseResult(run: ChatToolRunRecord): Record<string, unknown> {
+  const result =
+    run.result && typeof run.result === "object" && !Array.isArray(run.result)
+      ? (run.result as Record<string, unknown>)
+      : { result: run.result };
+  return {
+    ...result,
+    goatcitadelContinuation: {
+      status: "research_evidence_complete",
+      reusedFromToolRunId: run.toolRunId,
+      instruction:
+        "Do not request another browser.search in this turn. Use these gathered results and create the requested presentation now.",
+    },
+  };
 }
 
 function serializeToolResultForModel(value: unknown): string {

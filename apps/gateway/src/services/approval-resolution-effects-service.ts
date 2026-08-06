@@ -2234,6 +2234,9 @@ export class ApprovalEffectsService {
   }
 
   private async handleLinkedChatTurnWake(effect: ApprovalEffectRecord): Promise<void> {
+    if (await this.deferLinkedChatTurnWakeUntilApprovedActionSettles(effect)) {
+      return;
+    }
     const payload = effect.payload;
     const runId = asOptionalString(payload.runId);
     if (!runId) {
@@ -2329,6 +2332,92 @@ export class ApprovalEffectsService {
     if (canonical.status !== "running" || canonical.durable?.runId !== runId) {
       throw new Error(`Linked Chat wake ${runId} lost the turn ${turnId} resume race.`);
     }
+  }
+
+  /**
+   * Effect priority cannot establish a cross-worker happens-before edge. Keep a
+   * previously claimed wake parked until the approved action effect and its
+   * model-consumable tool evidence have both committed.
+   */
+  private async deferLinkedChatTurnWakeUntilApprovedActionSettles(effect: ApprovalEffectRecord): Promise<boolean> {
+    const approvalEffects = (this.ctx.storage as Partial<Pick<Storage, "approvalEffects">>).approvalEffects;
+    if (!approvalEffects || typeof approvalEffects.listByApproval !== "function") {
+      return false;
+    }
+    const siblingAction = (await approvalEffects.listByApproval(effect.approvalId)).find(
+      (candidate) => candidate.effectKind === "pending_action_execute",
+    );
+    if (!siblingAction) {
+      return false;
+    }
+    if (siblingAction.status === "pending" || siblingAction.status === "running") {
+      await this.deferClaimedEffectForRetry(
+        effect,
+        this.workerId,
+        new Error("Approved action settlement has not committed before the linked Chat wake."),
+        {
+          deliveryState: "retry_scheduled",
+          reason: "pending_action_not_settled",
+          pendingActionEffectId: siblingAction.effectId,
+          pendingActionEffectStatus: siblingAction.status,
+        },
+        APPROVAL_EFFECT_CHILD_WAIT_RETRY_MS,
+      );
+      return true;
+    }
+    if (siblingAction.status !== "completed") {
+      return false;
+    }
+
+    const partialStorage = this.ctx.storage as Partial<
+      Pick<Storage, "pendingApprovalActions" | "chatInlineApprovals" | "chatToolRuns">
+    >;
+    const pendingActions = partialStorage.pendingApprovalActions;
+    const inlineApprovals = partialStorage.chatInlineApprovals;
+    const chatToolRuns = partialStorage.chatToolRuns;
+    if (
+      !pendingActions ||
+      !inlineApprovals ||
+      !chatToolRuns ||
+      typeof pendingActions.find !== "function" ||
+      typeof inlineApprovals.get !== "function" ||
+      typeof chatToolRuns.listByTurn !== "function"
+    ) {
+      return false;
+    }
+    const pendingAction = await pendingActions.find(effect.approvalId);
+    if (pendingAction?.actionType !== "tool.invoke" || pendingAction.resolutionStatus !== "executed") {
+      return false;
+    }
+    const deferForIncompleteEvidence = async (details: Record<string, unknown>): Promise<boolean> => {
+      await this.deferClaimedEffectForRetry(
+        effect,
+        this.workerId,
+        new Error("Approved action completed without committed Chat continuation evidence."),
+        {
+          deliveryState: "retry_scheduled",
+          reason: "approved_action_evidence_incomplete",
+          pendingActionEffectId: siblingAction.effectId,
+          ...details,
+        },
+        APPROVAL_EFFECT_CHILD_WAIT_RETRY_MS,
+      );
+      return true;
+    };
+    const inlineApproval = await inlineApprovals.get(effect.approvalId);
+    if (!inlineApproval) {
+      return deferForIncompleteEvidence({ inlineApprovalStatus: "missing", toolRunStatus: "unknown" });
+    }
+    const settledRun = (await chatToolRuns.listByTurn(inlineApproval.turnId)).find(
+      (candidate) => candidate.approvalId === effect.approvalId,
+    );
+    if (inlineApproval.status === "approved" && settledRun?.status === "executed") {
+      return false;
+    }
+    return deferForIncompleteEvidence({
+      inlineApprovalStatus: inlineApproval.status,
+      toolRunStatus: settledRun?.status ?? "missing",
+    });
   }
 
   private async handlePendingActionExecute(effect: ApprovalEffectRecord, signal?: AbortSignal): Promise<void> {
@@ -2765,6 +2854,10 @@ export class ApprovalEffectsService {
             cause: error,
           });
         }
+        if (await this.shouldResumeApprovedActionThroughLinkedChatTurn(effect, childTrace)) {
+          await completeMaterialization();
+          return;
+        }
         const outputText = buildApprovedToolActionOutput(toolName, toolResult);
         const childMaterialized = await this.completeChatTurnFromApprovedAction({
           trace: childTrace,
@@ -2847,6 +2940,49 @@ export class ApprovalEffectsService {
       }
       throw error;
     }
+  }
+
+  /** Only exact v2 direct Chat authority resumes through the linked durable run. */
+  private async shouldResumeApprovedActionThroughLinkedChatTurn(
+    effect: ApprovalEffectRecord,
+    trace: ChatTurnTraceRecord,
+  ): Promise<boolean> {
+    if (trace.mode !== "chat" || trace.status !== "waiting_for_approval" || !trace.durable?.runId) {
+      return false;
+    }
+    const approvalEffects = (this.ctx.storage as Partial<Pick<Storage, "approvalEffects">>).approvalEffects;
+    if (!approvalEffects || typeof approvalEffects.listByApproval !== "function") {
+      return false;
+    }
+    const linkedWake = (await approvalEffects.listByApproval(effect.approvalId)).find(
+      (candidate) =>
+        candidate.effectKind === "linked_chat_turn_wake" &&
+        candidate.targetKind === "chat_turn" &&
+        candidate.targetId === trace.turnId &&
+        (candidate.status === "pending" || candidate.status === "running" || candidate.status === "completed"),
+    );
+    if (!linkedWake) {
+      return false;
+    }
+    let run: DurableRunRecord;
+    try {
+      run = await this.ctx.storage.durableRuns.getRun(trace.durable.runId);
+    } catch {
+      return false;
+    }
+    try {
+      await requireExactApprovalChatParentAuthority(this.ctx.storage, run, trace, trace.turnId);
+    } catch {
+      return false;
+    }
+    const delegationSteps = (this.ctx.storage as Partial<Pick<Storage, "chatDelegationSteps">>).chatDelegationSteps;
+    if (delegationSteps && typeof delegationSteps.listParentsByChildSessionIds === "function") {
+      const parents = await delegationSteps.listParentsByChildSessionIds([trace.sessionId]);
+      if (parents.has(trace.sessionId)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private async materializeFailedChatApprovalOrDefer(

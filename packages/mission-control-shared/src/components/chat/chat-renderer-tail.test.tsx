@@ -3,7 +3,12 @@ import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { AssistantMessageRenderer, copyTextToClipboard, splitStreamingMarkdown } from "./AssistantMessageRenderer";
+import {
+  AssistantMessageRenderer,
+  copyTextToClipboard,
+  parseWorkspaceFileDownloadHref,
+  splitStreamingMarkdown,
+} from "./AssistantMessageRenderer";
 import { normalizeAssistantDisplayText, normalizeCitationDisplayText } from "./assistant-display-text";
 import { resetAssistantCodeHighlighterForTests } from "./assistant-code-highlight";
 import {
@@ -17,6 +22,7 @@ import { GeneratedArtifactViewer } from "./GeneratedArtifactViewer";
 
 const apiMocks = vi.hoisted(() => ({
   downloadChatAttachment: vi.fn(),
+  downloadFile: vi.fn(),
   fetchChatAttachmentPreview: vi.fn(),
   getGatewayApiBaseUrl: vi.fn(() => "https://gateway-a.example"),
 }));
@@ -38,6 +44,7 @@ const highlightLanguagesMocks = vi.hoisted(() => ({
 
 vi.mock("../../api/client", () => ({
   downloadChatAttachment: apiMocks.downloadChatAttachment,
+  downloadFile: apiMocks.downloadFile,
   fetchChatAttachmentPreview: apiMocks.fetchChatAttachmentPreview,
   getGatewayApiBaseUrl: apiMocks.getGatewayApiBaseUrl,
 }));
@@ -198,6 +205,15 @@ describe("chat rendering tail coverage", () => {
       blob: new Blob(["hello"], { type: "text/plain" }),
       fileName: "result.txt",
     });
+    apiMocks.downloadFile.mockResolvedValue({
+      relativePath: "goatcitadel_out/research-deck.pptx",
+      fullPath: "F:/code/personal-ai/workspace/goatcitadel_out/research-deck.pptx",
+      size: 3,
+      modifiedAt: "2026-08-06T00:00:00.000Z",
+      contentType: "application/octet-stream",
+      encoding: "base64",
+      content: Buffer.from([1, 2, 3]).toString("base64"),
+    });
     apiMocks.fetchChatAttachmentPreview.mockResolvedValue({
       attachmentId: "att-1",
       fileName: "notes.txt",
@@ -289,6 +305,51 @@ describe("chat rendering tail coverage", () => {
 
     renderer.update(<AssistantMessageRenderer role="user" content="User copy" />);
     expect(renderer.root.findAllByType("button")).toHaveLength(0);
+  });
+
+  it("downloads exact workspace-file links through the authenticated API instead of navigating", async () => {
+    vi.useFakeTimers();
+    const browser = installBrowserDownloadStubs();
+    const preventDefault = vi.fn();
+    const href = "/api/v1/files/download?relativePath=goatcitadel_out%2Fresearch-deck.pptx";
+
+    renderer = create(<AssistantMessageRenderer role="assistant" content={`[Download the PowerPoint](${href})`} />);
+    const link = renderer.root.findByType("a");
+    expect(link.props.href).toBe(href);
+
+    await act(async () => {
+      link.props.onClick({ preventDefault });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(apiMocks.downloadFile).toHaveBeenCalledWith("goatcitadel_out/research-deck.pptx");
+    expect(browser.createObjectURL).toHaveBeenCalledWith(expect.any(Blob));
+    expect(browser.anchor.download).toBe("research-deck.pptx");
+    expect(browser.anchor.click).toHaveBeenCalledOnce();
+    expect(browser.appendChild).toHaveBeenCalledWith(browser.anchor);
+
+    renderer.update(<AssistantMessageRenderer role="user" content={`[Untrusted file link](${href})`} />);
+    expect(renderer.root.findByType("a").props.onClick).toBeUndefined();
+  });
+
+  it("recognizes only a single safe relativePath on the exact workspace-file route", () => {
+    expect(
+      parseWorkspaceFileDownloadHref("/api/v1/files/download?relativePath=goatcitadel_out%2Fresearch-deck.pptx"),
+    ).toEqual({
+      relativePath: "goatcitadel_out/research-deck.pptx",
+      fileName: "research-deck.pptx",
+    });
+    expect(parseWorkspaceFileDownloadHref("/api/v1/files/download?relativePath=..%2Fsecrets.txt")).toBeUndefined();
+    expect(
+      parseWorkspaceFileDownloadHref("/api/v1/files/download?relativePath=goatcitadel_out%2Fdeck.pptx&raw=true"),
+    ).toBeUndefined();
+    expect(
+      parseWorkspaceFileDownloadHref(
+        "https://example.test/api/v1/files/download?relativePath=goatcitadel_out%2Fdeck.pptx",
+      ),
+    ).toBeUndefined();
   });
 
   it("disables response copy while the assistant is still streaming", async () => {

@@ -339,6 +339,10 @@ describe("official research search providers", () => {
     expect(isOfficialResearchSearchInvocation({ backend: "OFFICIAL" })).toBe(true);
     expect(isOfficialResearchSearchInvocation({ engine: "PARALLEL" })).toBe(true);
     expect(isOfficialResearchSearchInvocation({ providers: [] })).toBe(true);
+    expect(isOfficialResearchSearchInvocation({ backend: "native", providers: ["brave"] })).toBe(false);
+    expect(isOfficialResearchSearchInvocation({ backend: "native", engine: "brave" })).toBe(false);
+    expect(isOfficialResearchSearchInvocation({ backend: "firecrawl", providers: ["parallel"] })).toBe(false);
+    expect(isOfficialResearchSearchInvocation({ backend: "ollama", providers: ["brave"] })).toBe(false);
     expect(isOfficialResearchSearchInvocation({ engines: ["brave"] })).toBe(false);
   });
 });

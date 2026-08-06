@@ -86,6 +86,7 @@ function Harness(props: {
   selectedSessionId?: string | null;
   historyView?: "active" | "archived";
   selectedProjectId?: string;
+  onSessionCreated?: (session: ChatSessionRecord) => void;
   refreshSessionAggregate?: (sessionId: string) => Promise<void>;
   setSessionMetadataConflictDraft?: Parameters<typeof useChatSessionControls>[0]["setSessionMetadataConflictDraft"];
 }) {
@@ -129,6 +130,7 @@ function Harness(props: {
       setThreadCleared(value === null);
     },
     loadSidebar: loadSidebar.current,
+    onSessionCreated: props.onSessionCreated,
     refreshSessionAggregate: props.refreshSessionAggregate,
     setSessionMetadataConflictDraft: props.setSessionMetadataConflictDraft,
     setBinding,
@@ -166,10 +168,17 @@ describe("useChatSessionControls", () => {
   });
 
   it("creates and ensures sessions across selected, placeholder, and new-session paths", async () => {
+    const onSessionCreated = vi.fn();
     let renderer!: ReactTestRenderer;
     await act(async () => {
       renderer = create(
-        <Harness session={null} selectedSessionId={null} historyView="archived" selectedProjectId="project-1" />,
+        <Harness
+          session={null}
+          selectedSessionId={null}
+          historyView="archived"
+          selectedProjectId="project-1"
+          onSessionCreated={onSessionCreated}
+        />,
       );
     });
 
@@ -185,9 +194,18 @@ describe("useChatSessionControls", () => {
       bypassCache: true,
       preferredSessionId: "session-new",
     });
+    expect(onSessionCreated).toHaveBeenCalledTimes(1);
+    expect(onSessionCreated).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: "session-new" }));
 
     await act(async () => {
-      renderer.update(<Harness key="placeholder" session={null} selectedSessionId="session-placeholder" />);
+      renderer.update(
+        <Harness
+          key="placeholder"
+          session={null}
+          selectedSessionId="session-placeholder"
+          onSessionCreated={onSessionCreated}
+        />,
+      );
     });
     const placeholder = await latest!.controls.ensureSession();
     expect(placeholder).toMatchObject({
@@ -196,14 +214,24 @@ describe("useChatSessionControls", () => {
       mode: "chat",
       scope: "mission",
     });
+    expect(onSessionCreated).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      renderer.update(<Harness key="selected" session={selectedSession} />);
+      renderer.update(<Harness key="selected" session={selectedSession} onSessionCreated={onSessionCreated} />);
     });
     await expect(latest!.controls.ensureSession()).resolves.toBe(selectedSession);
+    expect(onSessionCreated).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      renderer.update(<Harness key="new" session={null} selectedSessionId={null} historyView="archived" />);
+      renderer.update(
+        <Harness
+          key="new"
+          session={null}
+          selectedSessionId={null}
+          historyView="archived"
+          onSessionCreated={onSessionCreated}
+        />,
+      );
     });
     let created: ChatSessionRecord | null = null;
     await act(async () => {
@@ -215,10 +243,17 @@ describe("useChatSessionControls", () => {
       { originSurface: "chat" },
     );
     expect(latest!.snapshot()).toMatchObject({ selectedSessionId: "session-new", historyView: "active" });
+    expect(onSessionCreated).toHaveBeenCalledTimes(2);
 
     await act(async () => {
       renderer.update(
-        <Harness key="new-project" session={null} selectedSessionId={null} selectedProjectId="project-1" />,
+        <Harness
+          key="new-project"
+          session={null}
+          selectedSessionId={null}
+          selectedProjectId="project-1"
+          onSessionCreated={onSessionCreated}
+        />,
       );
     });
     await act(async () => {
@@ -229,6 +264,7 @@ describe("useChatSessionControls", () => {
       { workspaceId: "workspace-1", projectId: "project-1", mode: "chat" },
       { originSurface: "chat" },
     );
+    expect(onSessionCreated).toHaveBeenCalledTimes(3);
   });
 
   it("creates projects, archives workspace chats, and persists session metadata controls", async () => {

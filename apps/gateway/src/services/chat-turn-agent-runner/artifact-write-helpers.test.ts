@@ -1,5 +1,11 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { analyzePresentationContentQuality, buildSyntheticPresentationCreateArgs } from "./artifact-write-helpers.js";
+import {
+  analyzePresentationContentQuality,
+  buildSyntheticPresentationCreateArgs,
+  buildWorkspaceFileDownloadHref,
+  mergePresentationArtifactDeliveryContent,
+} from "./artifact-write-helpers.js";
 
 const research = `# Dating Across a Large Age Gap
 
@@ -21,6 +27,54 @@ const research = `# Dating Across a Large Age Gap
 - American Psychological Association — https://www.apa.org/topics/relationships`;
 
 describe("thread-grounded presentation artifacts", () => {
+  it("blocks a missing title when the supplied slides cannot be safely promoted", () => {
+    const report = analyzePresentationContentQuality({
+      content: "Create a one-slide PowerPoint about release readiness.",
+      args: {
+        path: "./workspace/goatcitadel_out/release-readiness.pptx",
+        slides: [
+          {
+            title: "Release Readiness",
+            bullets: ["Build is green", "Smoke tests passed", "Rollback is documented"],
+          },
+        ],
+      },
+    });
+
+    expect(report.passed).toBe(false);
+    expect(report.findings).toContain(
+      "The deck is missing a specific title for the automatically generated title slide.",
+    );
+  });
+
+  it("builds only jailed workspace download links and replaces stale sandbox links", () => {
+    const workspaceRoot = path.resolve("workspace");
+    const artifactPath = path.join(workspaceRoot, "goatcitadel_out", "funny jokes.pptx");
+    const downloadHref = buildWorkspaceFileDownloadHref(artifactPath, workspaceRoot);
+    const content = mergePresentationArtifactDeliveryContent(
+      "Done. [Download](sandbox:/mnt/data/wrong.pptx)",
+      {
+        toolRunId: "tool-run-download",
+        sessionId: "session-download",
+        turnId: "turn-download",
+        toolName: "presentations.create",
+        status: "executed",
+        result: { path: artifactPath, bytesWritten: 42, slideCount: 6 },
+        startedAt: "2026-08-06T00:00:00.000Z",
+        finishedAt: "2026-08-06T00:00:01.000Z",
+      },
+      { downloadHref },
+    );
+
+    expect(downloadHref).toBe("/api/v1/files/download?relativePath=goatcitadel_out%2Ffunny+jokes.pptx");
+    expect(content).not.toContain("sandbox:/");
+    expect(content).toContain(`[Download the PowerPoint](${downloadHref})`);
+    expect(buildWorkspaceFileDownloadHref(path.resolve("..", "deck.pptx"), workspaceRoot)).toBeUndefined();
+    expect(
+      buildWorkspaceFileDownloadHref(path.join(workspaceRoot, "goatcitadel_out", "notes.txt"), workspaceRoot),
+    ).toBeUndefined();
+  });
+
   it("builds a subject-specific deck from prior assistant research without visible Cowork copy", () => {
     const historyMessages = [
       { role: "user" as const, content: "What should a 24-year-old and 48-year-old consider when dating?" },

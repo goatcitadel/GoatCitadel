@@ -1142,6 +1142,23 @@ describe("MissionControlNextApp", () => {
     expect(window.location.search).not.toContain("theme=dark");
   });
 
+  it("updates the canonical Chat URL when the threaded controller selects a new session", async () => {
+    await renderApp("http://localhost:5173/chat?sessionId=session-old&turnId=turn-old&artifactId=artifact-old");
+
+    await act(async () => {
+      (
+        appMocks.threadedRouteProps?.onNavigateSurface as (
+          surface: "chat",
+          options: { sessionId: string; turnId: null; artifactId: null },
+        ) => void
+      )("chat", { sessionId: "session-new", turnId: null, artifactId: null });
+    });
+    await flush();
+
+    expect(window.location.pathname).toBe("/chat");
+    expect(window.location.search).toBe("?sessionId=session-new");
+  });
+
   it("surfaces replay-gap events as an operator-visible recovery signal", async () => {
     const renderer = await renderApp();
     appMocks.deriveRealtimeRefresh.mockReturnValueOnce({

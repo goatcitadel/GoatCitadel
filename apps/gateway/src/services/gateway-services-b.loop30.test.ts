@@ -234,6 +234,7 @@ describe("Gateway Services B loop 30 coverage", () => {
       message: expect.stringContaining("provider abort was not acknowledged"),
     });
     await vi.advanceTimersByTimeAsync(25);
+    await vi.advanceTimersByTimeAsync(3_000);
     await expectation;
 
     expect(ctx.setExplanationFailed).not.toHaveBeenCalled();

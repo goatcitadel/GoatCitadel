@@ -1911,6 +1911,7 @@ export class GatewayService {
       recordRuntimeDecision: async (input) => await this.recordRuntimeDecision(input),
       toolLoopDetection: this.config.toolPolicy.tools.loopDetection,
       safeWriteFallbackDir: path.resolve(config.rootDir, config.assistant.workspaceDir, "goatcitadel_out"),
+      workspaceFileRootDir: path.resolve(config.rootDir, config.assistant.workspaceDir),
       chatThinkingStreamV1Enabled: async () => await this.isFeatureEnabled("chatThinkingStreamV1Enabled"),
       attachedContextToolsV1Enabled: async () => await this.isFeatureEnabled("attachedContextToolsV1Enabled"),
       parallelToolExecutionV1Disabled: async () => await this.isFeatureEnabled("parallelToolExecutionV1Disabled"),

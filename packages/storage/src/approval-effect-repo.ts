@@ -160,6 +160,20 @@ export class ApprovalEffectRepository {
           )
         )
         AND effect_kind <> 'approval_observability'
+        -- Priority is only a scheduling hint: another worker may already own
+        -- the approved action while this worker scans for the linked Chat wake.
+        -- Keep the wake unclaimable until the same-approval action effect has
+        -- committed its terminal result and continuation evidence.
+        AND NOT (
+          approval_effects.effect_kind = 'linked_chat_turn_wake'
+          AND EXISTS (
+            SELECT 1
+            FROM approval_effects AS action_effect
+            WHERE action_effect.approval_id = approval_effects.approval_id
+              AND action_effect.effect_kind = 'pending_action_execute'
+              AND action_effect.status IN ('pending', 'running')
+          )
+        )
       ORDER BY
         CASE effect_kind
           WHEN 'approval_wait_materialize' THEN 0
