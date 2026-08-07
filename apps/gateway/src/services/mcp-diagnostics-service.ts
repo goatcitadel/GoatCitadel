@@ -9,7 +9,7 @@ import { projectMcpPublicValue } from "./mcp-public-projection.js";
 import type { McpRequesterScopeLastOutcome } from "./mcp-requester-resolution-service.js";
 
 export interface McpDiagnosticsHost {
-  requireFeatureEnabled(flag: string): void;
+  requireFeatureEnabled(flag: string): void | Promise<void>;
   listMcpTemplates(): Promise<Array<McpServerTemplateRecord & { installed: boolean }>>;
   requireMcpServer(serverId: string): Promise<{
     enabled: boolean;
@@ -151,7 +151,7 @@ export function listMcpRequesterScopePostures(host: McpRequesterScopePostureHost
 }
 
 export async function listMcpTemplateDiscovery(host: McpDiagnosticsHost): Promise<McpTemplateDiscoveryResult[]> {
-  host.requireFeatureEnabled("connectorDiagnosticsV1Enabled");
+  await host.requireFeatureEnabled("connectorDiagnosticsV1Enabled");
   return (await host.listMcpTemplates()).map((template: McpServerTemplateRecord & { installed: boolean }) => {
     const checks: McpTemplateDiscoveryResult["dependencyChecks"] = [];
     if (template.transport === "stdio") {
@@ -208,7 +208,7 @@ export async function runMcpServerHealthCheck(
   host: McpDiagnosticsHost,
   serverId: string,
 ): Promise<ConnectorDiagnosticReport> {
-  host.requireFeatureEnabled("connectorDiagnosticsV1Enabled");
+  await host.requireFeatureEnabled("connectorDiagnosticsV1Enabled");
   const server = await host.requireMcpServer(serverId);
   const checks: ConnectorDiagnosticReport["checks"] = [];
   checks.push({
