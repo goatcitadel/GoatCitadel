@@ -64,6 +64,28 @@ export class EffectAwareChatTurnAgentRunner extends ChatTurnAgentRunner {
 
 export function createToolCatalog(toolNames: string[] = ["browser.search"]): ToolCatalogEntry[] {
   return toolNames.map((toolName) => {
+    if (toolName === "runtime.configure") {
+      return {
+        toolName,
+        category: "ops",
+        riskLevel: "caution",
+        requiresApproval: false,
+        description: "Open an allowlisted Gateway runtime configuration flow",
+        argSchema: {
+          type: "object",
+          properties: {
+            targetId: {
+              type: "string",
+              enum: ["search.brave", "search.parallel"],
+            },
+          },
+          required: ["targetId"],
+          additionalProperties: false,
+        },
+        examples: [],
+        pack: "core",
+      };
+    }
     if (toolName === "memory.search") {
       return {
         toolName: "memory.search",
@@ -589,6 +611,9 @@ export function createExecuteToolCallForTest(input: {
   recordRuntimeDecision?: NonNullable<ChatTurnAgentRunnerDeps["recordRuntimeDecision"]>;
   safeWriteFallbackDir?: string;
   evaluateToolAccess?: NonNullable<ChatTurnAgentRunnerDeps["evaluateToolAccess"]>;
+  assertRuntimeConfigurationPromptAvailable?: NonNullable<
+    ChatTurnAgentRunnerDeps["assertRuntimeConfigurationPromptAvailable"]
+  >;
 }): (input: ExecuteToolCallInput) => Promise<ExecuteToolCallResult> {
   const orchestrator = new ChatTurnAgentRunner({
     storage: input.storage ?? (createMockStorage() as never),
@@ -605,6 +630,7 @@ export function createExecuteToolCallForTest(input: {
     persistToolArtifact: input.persistToolArtifact,
     safeWriteFallbackDir: input.safeWriteFallbackDir,
     evaluateToolAccess: input.evaluateToolAccess,
+    assertRuntimeConfigurationPromptAvailable: input.assertRuntimeConfigurationPromptAvailable,
   });
   const executeToolCall = (
     orchestrator as unknown as {

@@ -6,6 +6,7 @@ import {
   denyChatTool,
   fetchChatPendingApprovals,
   selectChatBranchTurn,
+  submitChatSecureConfiguration,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { recordClientDiagnostic } from "@goatcitadel/mission-control-shared/state/dev-diagnostics-store";
 import { recordChatApprovalPhase } from "./chat-causality";
@@ -378,14 +379,20 @@ export function useChatOperatorPrompts({
       if (!selectedSession || !pendingUserInput) return;
       setUserInputPending(true);
       try {
-        const result = await answerChatUserInputPrompt(
-          selectedSession.sessionId,
-          pendingUserInput.turnId,
-          pendingUserInput.promptId,
-          {
-            response,
-          },
-        );
+        const result =
+          response.kind === "secure_configuration"
+            ? await submitChatSecureConfiguration(
+                selectedSession.sessionId,
+                pendingUserInput.turnId,
+                pendingUserInput.promptId,
+                { secret: response.secret },
+              )
+            : await answerChatUserInputPrompt(
+                selectedSession.sessionId,
+                pendingUserInput.turnId,
+                pendingUserInput.promptId,
+                { response },
+              );
         setPendingUserInput(null);
         pushLocalNotice(
           result.resumed

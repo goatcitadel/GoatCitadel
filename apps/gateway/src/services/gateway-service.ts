@@ -25,6 +25,7 @@ import {
   assertWritePathInJail,
   describeBrowserSessionState,
   fetchAllowlisted,
+  RUNTIME_CONFIGURE_TOOL_NAME,
   type LocalEmbeddingLeaseRequest,
 } from "@goatcitadel/policy-engine";
 import { listSkillExportTargets, renderSkillExportPreview, SkillsService } from "@goatcitadel/skills";
@@ -409,6 +410,7 @@ import { LlamaCppRuntimeService } from "./llama-cpp-runtime-service.js";
 import { acquireBoundLlamaCppEmbeddingLease, acquireBoundLlamaCppLease } from "./llama-cpp-provider-lease.js";
 import { NpuSidecarService } from "./npu-sidecar-service.js";
 import { SecretStoreService } from "./secret-store-service.js";
+import { RuntimeConfigurationService } from "./runtime-configuration-service.js";
 import { ApprovalRemoteTokenSecretService } from "./approval-remote-token-secret.js";
 import { GatewayTurnRuntime } from "./chat-turn-runtime.js";
 import { ResearchService } from "./research-service.js";
@@ -794,6 +796,7 @@ import { DeviceTokenVault } from "./device-token-vault.js";
 export const MEMORY_ITEM_STATUS_VALUES = new Set(["active", "forgotten"]);
 
 const CHAT_SESSION_AUTO_ALLOW_TOOLS = [
+  RUNTIME_CONFIGURE_TOOL_NAME,
   "browser.search",
   "browser.navigate",
   "browser.extract",
@@ -1269,6 +1272,7 @@ export class GatewayService {
   public readonly modelUsageAccounting: ModelUsageAccountingService;
   public readonly policyEngine: ToolPolicyEngine;
   public readonly secretStore: SecretStoreService;
+  public readonly runtimeConfigurationService: RuntimeConfigurationService;
   public readonly approvalRemoteTokenSecrets: ApprovalRemoteTokenSecretService;
   private readonly skillsService: SkillsService;
   private readonly capabilityScopeResolver: CapabilityScopeResolver;
@@ -1584,12 +1588,75 @@ export class GatewayService {
         void (await this.storage.audit.append("approvals", payload));
       },
     });
+    const secretStore = new SecretStoreService();
+    this.secretStore = secretStore;
+    const runtimeConfigurationInstallationScopeId = `root-${createHash("sha256")
+      .update(path.resolve(config.rootDir))
+      .digest("hex")
+      .slice(0, 24)}`;
+    this.runtimeConfigurationService = new RuntimeConfigurationService({
+      secretStore,
+      installationScopeId: runtimeConfigurationInstallationScopeId,
+      networkAllowlist: config.toolPolicy.sandbox.networkAllowlist,
+      getNetworkAllowlist: () => this.config.toolPolicy.sandbox.networkAllowlist,
+      getDeploymentProfile: () => this.config.assistant.deploymentProfile,
+      hasBlockingDurableReservation: async (targetId, scopeRef) =>
+        (
+          await this.storage.sessionMutationAdmissions.listBlockingDurableChatSecureConfigurationsByTargetScope({
+            targetId,
+            scopeRef,
+          })
+        ).length > 0,
+      assertAuthorized: async (input) => {
+        const decision = await this.evaluateToolAccess({
+          toolName: RUNTIME_CONFIGURE_TOOL_NAME,
+          args: { targetId: input.targetId },
+          agentId: "assistant",
+          sessionId: input.sessionId,
+          workspaceId: input.workspaceId,
+          taskId: input.taskId,
+          runId: input.runId,
+          permissionProfileId: input.permissionProfileId,
+          localOperatorOverrideId: input.localOperatorOverrideId,
+          surface: "chat",
+          policyContext: {
+            operatorId: input.operatorId ?? input.actorId,
+            authActorId: input.actorId,
+            authActorSource: input.authActorSource,
+            permissionProfileId: input.permissionProfileId,
+            localOperatorOverrideId: input.localOperatorOverrideId,
+            surface: "chat",
+            workspaceId: input.workspaceId,
+            sessionId: input.sessionId,
+            taskId: input.taskId,
+            runId: input.runId,
+          },
+        });
+        if (!decision.allowed || decision.requiresApproval) {
+          throw new PolicyViolationError({
+            message: "Runtime configuration is no longer authorized for this Chat turn.",
+            details: {
+              targetId: input.targetId,
+              diagnosticCode: decision.requiresApproval
+                ? "runtime_configuration_approval_required"
+                : "runtime_configuration_policy_blocked",
+              reasonCodes: decision.reasonCodes,
+            },
+          });
+        }
+      },
+      appendAudit: async (payload) => {
+        void (await this.storage.audit.append("tool_invocations", payload));
+      },
+    });
     this.policyEngine = new ToolPolicyEngine(config.toolPolicy, this.storage, undefined, {
       // Tool-policy approval creation must enter the canonical lifecycle. A
       // direct policy-engine storage write would omit the durable wait run and
       // retryable approval observability envelope.
       createApproval: async (input, onCreated, authority) => await this.createApproval(input, onCreated, authority),
       assertBrowserSessionAccess: (check) => this.browserSessionRuntimeService.assertAccess(check),
+      resolveCredential: (provider) => this.runtimeConfigurationService.resolveOfficialSearchCredential(provider),
+      configureRuntime: (_request, targetId) => this.runtimeConfigurationService.assertConfigurationAvailable(targetId),
       resolveApprovalActionTokenSecret: (secretRef) => this.approvalRemoteTokenSecrets.resolve(secretRef),
       deleteApprovalActionTokenSecret: (secretRef) => this.approvalRemoteTokenSecrets.delete(secretRef),
       isApprovalActionConnectorReady: (connectionId) =>
@@ -1617,8 +1684,6 @@ export class GatewayService {
           generateImage: (imageRequest, attribution) => this.llmService.generateImage(imageRequest, attribution),
         }),
     });
-    const secretStore = new SecretStoreService();
-    this.secretStore = secretStore;
     this.approvalRemoteTokenSecrets = new ApprovalRemoteTokenSecretService(
       secretStore,
       this.storage.remoteActionTokens,
@@ -1898,6 +1963,8 @@ export class GatewayService {
       invokeToolWithEffectTruth: async (request, options) => await this.invokeTool(request, options),
       persistToolArtifact: (input) => chatToolArtifactService.persistChatToolArtifact(this, input),
       evaluateToolAccess: async (request) => await this.evaluateToolAccess(request),
+      assertRuntimeConfigurationPromptAvailable: (targetId) =>
+        this.runtimeConfigurationService.assertConfigurationAvailable(targetId as "search.brave" | "search.parallel"),
       // HX-408 M2: the pre-dispatch drift gate re-verifies the frozen mesh
       // activation snapshot through the activation owner right before dispatch.
       resolveMeshCapabilityPreDispatchBlock: ({ workspaceId, binding }) =>
@@ -2987,6 +3054,12 @@ export class GatewayService {
       publishRealtime: async (eventType, source, payload, options) =>
         await this.publishRealtime(eventType, source, payload, options),
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
+      configureRuntimeTarget: async (input) => await this.runtimeConfigurationService.configureAndValidate(input),
+      getRuntimeConfigurationScopeRef: () => this.runtimeConfigurationService.getInstallationScopeRef(),
+      finalizeRuntimeConfiguration: async (requestId) =>
+        await this.runtimeConfigurationService.finalizeConfiguration(requestId),
+      rollbackRuntimeConfiguration: async (requestId) =>
+        await this.runtimeConfigurationService.rollbackConfiguration(requestId),
     };
   }
 

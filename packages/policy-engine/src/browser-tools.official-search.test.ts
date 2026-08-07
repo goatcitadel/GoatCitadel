@@ -47,6 +47,29 @@ describe("browser.search official provider path", () => {
     expect(result.untrustedContent).toMatchObject({ source: "browser.search" });
   });
 
+  it("resolves official credentials through the browser execution context", async () => {
+    const resolveCredential = vi.fn(async () => "context-brave-secret");
+    const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      expect(new Headers(init?.headers).get("X-Subscription-Token")).toBe("context-brave-secret");
+      return Response.json({ web: { results: [] } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await executeBrowserTool(
+      "browser.search",
+      { query: "current specification", backend: "official", providers: ["brave"] },
+      config(["api.search.brave.com"]),
+      {
+        matchedGrantAllowedHosts: ["api.search.brave.com"],
+        resolveCredential,
+      },
+    );
+
+    expect(resolveCredential).toHaveBeenCalledWith("brave");
+    expect(result).toMatchObject({ action: "search", backend: "official", backendUsed: true });
+    expect(JSON.stringify(result)).not.toContain("context-brave-secret");
+  });
+
   it.each([
     ["uppercase backend", { backend: "OFFICIAL" }, "api.search.brave.com"],
     ["singular engine", { engine: "parallel" }, "api.parallel.ai"],

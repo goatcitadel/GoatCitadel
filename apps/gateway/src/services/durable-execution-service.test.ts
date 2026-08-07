@@ -4172,6 +4172,75 @@ describe("durable-execution-service orchestration workflow", () => {
       recoverable: false,
       reason: "Durable chat run was interrupted after tool execution began and cannot be safely replayed.",
     });
+
+    const settledConfigurationRun: DurableRunRecord = {
+      ...run,
+      payload: {
+        ...(run.payload as Record<string, unknown>),
+        userInputResponses: [
+          {
+            promptId: "prompt-runtime-configuration",
+            kind: "text",
+            question: "Configure Brave Search?",
+            answeredAt: "2026-08-07T20:00:00.000Z",
+            response: {
+              kind: "text",
+              text: "Configured and validated search.brave for this installation.",
+            },
+          },
+        ],
+      },
+    };
+    host.storage.chatTurnTraces.get.mockReturnValueOnce({
+      turnId: "turn-1",
+      sessionId: "session-1",
+      userMessageId: "user-1",
+      assistantMessageId: undefined,
+      status: "running",
+    });
+    host.storage.chatToolRuns.listByTurn.mockReturnValueOnce([
+      {
+        toolRunId: "tool-runtime-configuration",
+        turnId: "turn-1",
+        sessionId: "session-1",
+        toolName: "runtime.configure",
+        status: "executed",
+        startedAt: "2026-08-07T19:59:00.000Z",
+        finishedAt: "2026-08-07T19:59:01.000Z",
+        result: {
+          status: "configuration_required",
+          configurationRequired: true,
+          targetId: "search.brave",
+        },
+      },
+    ]);
+    expect(await isDurableWorkflowRecoverable(host as never, settledConfigurationRun)).toEqual({
+      recoverable: true,
+    });
+
+    host.storage.chatTurnTraces.get.mockReturnValueOnce({
+      turnId: "turn-1",
+      sessionId: "session-1",
+      userMessageId: "user-1",
+      assistantMessageId: undefined,
+      status: "running",
+    });
+    host.storage.chatToolRuns.listByTurn.mockReturnValueOnce([
+      {
+        toolRunId: "tool-uncertain",
+        turnId: "turn-1",
+        sessionId: "session-1",
+        toolName: "shell.exec",
+        status: "executed",
+        startedAt: "2026-08-07T19:59:00.000Z",
+        finishedAt: "2026-08-07T19:59:01.000Z",
+        effectDisposition: "unknown",
+      },
+    ]);
+    expect(await isDurableWorkflowRecoverable(host as never, settledConfigurationRun)).toEqual({
+      recoverable: false,
+      reason: "Durable chat run was interrupted after tool execution began and cannot be safely replayed.",
+    });
   });
 
   it("requires canonical semantic evidence before recovering a persisted Chat wait", async () => {

@@ -13607,6 +13607,173 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
       $session_control_lifecycle_bootstrap_clock_guard$;
     `,
   },
+  {
+    version: 131,
+    name: "durable_chat_secure_configuration_reservations",
+    sql: `
+      CREATE TABLE IF NOT EXISTS chat_turn_secure_configuration_reservations (
+        reservation_id TEXT PRIMARY KEY CHECK(length(btrim(reservation_id)) BETWEEN 1 AND 256),
+        version BIGINT NOT NULL CHECK(version = 1),
+        admission_id TEXT NOT NULL CHECK(length(btrim(admission_id)) BETWEEN 1 AND 256),
+        session_incarnation_id TEXT NOT NULL CHECK(length(btrim(session_incarnation_id)) BETWEEN 1 AND 320),
+        workspace_id TEXT NOT NULL CHECK(length(btrim(workspace_id)) BETWEEN 1 AND 80),
+        session_id TEXT NOT NULL CHECK(length(btrim(session_id)) BETWEEN 1 AND 256),
+        turn_id TEXT NOT NULL CHECK(length(btrim(turn_id)) BETWEEN 1 AND 256),
+        durable_run_id TEXT NOT NULL CHECK(length(btrim(durable_run_id)) BETWEEN 1 AND 256),
+        prompt_id TEXT NOT NULL CHECK(length(btrim(prompt_id)) BETWEEN 1 AND 256),
+        target_id TEXT NOT NULL CHECK(length(btrim(target_id)) BETWEEN 1 AND 256),
+        responder_actor_id TEXT NOT NULL CHECK(length(btrim(responder_actor_id)) BETWEEN 1 AND 256),
+        responder_auth_actor_source TEXT NOT NULL
+          CHECK(responder_auth_actor_source IN ('none', 'token', 'basic', 'loopback')),
+        waiting_run_version BIGINT NOT NULL CHECK(waiting_run_version > 0),
+        reserved_run_version BIGINT NOT NULL CHECK(reserved_run_version = waiting_run_version + 1),
+        expires_at TEXT NOT NULL CHECK(gc_try_parse_timestamptz(expires_at) IS NOT NULL),
+        status TEXT NOT NULL CHECK(status IN (
+          'reserved', 'completed', 'released', 'expired_unreconciled', 'reconciled'
+        )),
+        provider TEXT,
+        configuration_revision TEXT,
+        scope_ref TEXT NOT NULL CHECK(length(btrim(scope_ref)) BETWEEN 1 AND 256),
+        reserved_at TEXT NOT NULL CHECK(gc_try_parse_timestamptz(reserved_at) IS NOT NULL),
+        reclaimed_at TEXT,
+        completed_at TEXT,
+        released_at TEXT,
+        expired_at TEXT,
+        reconciled_at TEXT,
+        reconciled_by_reservation_id TEXT,
+        UNIQUE(admission_id, durable_run_id, prompt_id, waiting_run_version),
+        FOREIGN KEY(admission_id) REFERENCES chat_session_mutation_admissions(admission_id) ON DELETE RESTRICT,
+        FOREIGN KEY(durable_run_id) REFERENCES durable_runs(run_id) ON DELETE RESTRICT,
+        FOREIGN KEY(reconciled_by_reservation_id)
+          REFERENCES chat_turn_secure_configuration_reservations(reservation_id) ON DELETE RESTRICT,
+        CHECK(
+          (status = 'reserved' AND provider IS NULL AND configuration_revision IS NULL
+            AND completed_at IS NULL AND released_at IS NULL AND expired_at IS NULL
+            AND (reclaimed_at IS NULL OR gc_try_parse_timestamptz(reclaimed_at) IS NOT NULL)
+            AND reconciled_at IS NULL AND reconciled_by_reservation_id IS NULL)
+          OR (status = 'completed' AND length(btrim(provider)) BETWEEN 1 AND 128
+            AND configuration_revision ~ '^[0-9a-f]{64}$'
+            AND gc_try_parse_timestamptz(completed_at) IS NOT NULL
+            AND released_at IS NULL AND expired_at IS NULL
+            AND (reclaimed_at IS NULL OR gc_try_parse_timestamptz(reclaimed_at) IS NOT NULL)
+            AND reconciled_at IS NULL AND reconciled_by_reservation_id IS NULL)
+          OR (status = 'released' AND provider IS NULL AND configuration_revision IS NULL
+            AND completed_at IS NULL AND gc_try_parse_timestamptz(released_at) IS NOT NULL
+            AND expired_at IS NULL AND reclaimed_at IS NULL AND reconciled_at IS NULL
+            AND reconciled_by_reservation_id IS NULL)
+          OR (status = 'expired_unreconciled' AND provider IS NULL AND configuration_revision IS NULL
+            AND completed_at IS NULL AND released_at IS NULL
+            AND gc_try_parse_timestamptz(expired_at) IS NOT NULL
+            AND (reclaimed_at IS NULL OR gc_try_parse_timestamptz(reclaimed_at) IS NOT NULL)
+            AND reconciled_at IS NULL AND reconciled_by_reservation_id IS NULL)
+          OR (status = 'reconciled' AND provider IS NULL AND configuration_revision IS NULL
+            AND completed_at IS NULL AND released_at IS NULL
+            AND gc_try_parse_timestamptz(expired_at) IS NOT NULL
+            AND (reclaimed_at IS NULL OR gc_try_parse_timestamptz(reclaimed_at) IS NOT NULL)
+            AND gc_try_parse_timestamptz(reconciled_at) IS NOT NULL
+            AND length(btrim(reconciled_by_reservation_id)) BETWEEN 1 AND 256)
+        )
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_turn_secure_configuration_one_reserved
+        ON chat_turn_secure_configuration_reservations(admission_id, durable_run_id, prompt_id)
+        WHERE status = 'reserved';
+      CREATE INDEX IF NOT EXISTS idx_chat_turn_secure_configuration_run_status
+        ON chat_turn_secure_configuration_reservations(durable_run_id, status, reserved_at);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_turn_secure_configuration_one_target_scope
+        ON chat_turn_secure_configuration_reservations(target_id, scope_ref)
+        WHERE status = 'reserved';
+
+      CREATE OR REPLACE FUNCTION gc_secure_configuration_reservation_update_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF NOT (
+            (OLD.status = 'reserved' AND NEW.status IN ('completed', 'released', 'expired_unreconciled'))
+            OR (OLD.status = 'reserved' AND NEW.status = 'reserved'
+              AND OLD.reclaimed_at IS NULL AND gc_try_parse_timestamptz(NEW.reclaimed_at) IS NOT NULL)
+            OR (OLD.status = 'expired_unreconciled' AND NEW.status = 'reconciled')
+          )
+          OR NEW.reservation_id IS DISTINCT FROM OLD.reservation_id
+          OR NEW.version IS DISTINCT FROM OLD.version
+          OR NEW.admission_id IS DISTINCT FROM OLD.admission_id
+          OR NEW.session_incarnation_id IS DISTINCT FROM OLD.session_incarnation_id
+          OR NEW.workspace_id IS DISTINCT FROM OLD.workspace_id
+          OR NEW.session_id IS DISTINCT FROM OLD.session_id
+          OR NEW.turn_id IS DISTINCT FROM OLD.turn_id
+          OR NEW.durable_run_id IS DISTINCT FROM OLD.durable_run_id
+          OR NEW.prompt_id IS DISTINCT FROM OLD.prompt_id
+          OR NEW.target_id IS DISTINCT FROM OLD.target_id
+          OR NEW.responder_actor_id IS DISTINCT FROM OLD.responder_actor_id
+          OR NEW.responder_auth_actor_source IS DISTINCT FROM OLD.responder_auth_actor_source
+          OR NEW.waiting_run_version IS DISTINCT FROM OLD.waiting_run_version
+          OR NEW.reserved_run_version IS DISTINCT FROM OLD.reserved_run_version
+          OR NEW.expires_at IS DISTINCT FROM OLD.expires_at
+          OR NEW.reserved_at IS DISTINCT FROM OLD.reserved_at
+          OR NEW.scope_ref IS DISTINCT FROM OLD.scope_ref
+          OR (OLD.reclaimed_at IS NOT NULL AND NEW.reclaimed_at IS DISTINCT FROM OLD.reclaimed_at) THEN
+          RAISE EXCEPTION 'secure configuration reservation transition invariant violated'
+            USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      DROP TRIGGER IF EXISTS trg_chat_turn_secure_configuration_reservations_update_guard
+        ON chat_turn_secure_configuration_reservations;
+      CREATE TRIGGER trg_chat_turn_secure_configuration_reservations_update_guard
+        BEFORE UPDATE ON chat_turn_secure_configuration_reservations
+        FOR EACH ROW EXECUTE FUNCTION gc_secure_configuration_reservation_update_guard();
+
+      CREATE OR REPLACE FUNCTION gc_reject_secure_configuration_reservation_delete()
+      RETURNS trigger AS $$
+      BEGIN
+        RAISE EXCEPTION 'secure configuration reservations are append-only' USING ERRCODE = '23514';
+      END;
+      $$ LANGUAGE plpgsql;
+      DROP TRIGGER IF EXISTS trg_chat_turn_secure_configuration_reservations_no_delete
+        ON chat_turn_secure_configuration_reservations;
+      CREATE TRIGGER trg_chat_turn_secure_configuration_reservations_no_delete
+        BEFORE DELETE ON chat_turn_secure_configuration_reservations
+        FOR EACH ROW EXECUTE FUNCTION gc_reject_secure_configuration_reservation_delete();
+
+      CREATE OR REPLACE FUNCTION gc_secure_configuration_admission_close_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF OLD.status = 'active' AND NEW.status <> 'active' AND EXISTS (
+          SELECT 1 FROM chat_turn_secure_configuration_reservations reservation
+          WHERE reservation.admission_id = OLD.admission_id AND reservation.status = 'reserved'
+            AND gc_try_parse_timestamptz(reservation.expires_at) > clock_timestamp()
+        ) THEN
+          RAISE EXCEPTION 'active secure configuration reservation blocks admission close'
+            USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      DROP TRIGGER IF EXISTS trg_chat_session_mutation_admissions_secure_reservation_close_guard
+        ON chat_session_mutation_admissions;
+      CREATE TRIGGER trg_chat_session_mutation_admissions_secure_reservation_close_guard
+        BEFORE UPDATE OF status ON chat_session_mutation_admissions
+        FOR EACH ROW EXECUTE FUNCTION gc_secure_configuration_admission_close_guard();
+
+      CREATE OR REPLACE FUNCTION gc_secure_configuration_durable_run_transition_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF OLD.status = 'waiting' AND NEW.status <> 'waiting' AND EXISTS (
+          SELECT 1 FROM chat_turn_secure_configuration_reservations reservation
+          WHERE reservation.durable_run_id = OLD.run_id AND reservation.status = 'reserved'
+            AND gc_try_parse_timestamptz(reservation.expires_at) > clock_timestamp()
+        ) THEN
+          RAISE EXCEPTION 'active secure configuration reservation blocks durable run transition'
+            USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      DROP TRIGGER IF EXISTS trg_durable_runs_secure_reservation_cancel_guard ON durable_runs;
+      CREATE TRIGGER trg_durable_runs_secure_reservation_cancel_guard
+        BEFORE UPDATE OF status ON durable_runs
+        FOR EACH ROW EXECUTE FUNCTION gc_secure_configuration_durable_run_transition_guard();
+    `,
+  },
 ];
 
 function buildWorkspacePathBridgePosixFlavorPostgresSql(): string {

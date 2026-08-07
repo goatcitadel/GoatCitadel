@@ -423,6 +423,7 @@ export type {
 export {
   acceptChatDelegation,
   answerChatUserInputPrompt,
+  submitChatSecureConfiguration,
   applyChatSessionWorkbenchPatch,
   attachThreadKnowledgeAttachment,
   approveChatTool,

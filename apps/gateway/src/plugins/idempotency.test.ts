@@ -321,6 +321,60 @@ describe("idempotencyHeaderPlugin", () => {
     }
   });
 
+  it("binds secure configuration retries without durably hashing the credential body", async () => {
+    let handlerCalls = 0;
+    const built = await buildApp((fastify) => {
+      fastify.post(
+        "/api/v1/chat/sessions/:sessionId/turns/:turnId/user-input/:promptId/secure-configuration",
+        async () => {
+          handlerCalls += 1;
+          return { ok: true };
+        },
+      );
+    });
+    const claim = vi.spyOn(built.store, "claim");
+    const url =
+      "/api/v1/chat/sessions/session-1/turns/turn-1/user-input/runtime_configuration%3Aprompt-1/secure-configuration";
+
+    try {
+      const first = await built.app.inject({
+        method: "POST",
+        url,
+        headers: { "Idempotency-Key": "idem-secure-1" },
+        payload: { secret: "gc-canary-secret-one" },
+      });
+      const second = await built.app.inject({
+        method: "POST",
+        url,
+        headers: { "Idempotency-Key": "idem-secure-2" },
+        payload: { secret: "gc-canary-secret-two" },
+      });
+      const lostResponseRetry = await built.app.inject({
+        method: "POST",
+        url,
+        headers: { "Idempotency-Key": "idem-secure-1" },
+        payload: { secret: "gc-canary-secret-retry-must-be-ignored-by-owner" },
+      });
+
+      expect(first.statusCode).toBe(200);
+      expect(second.statusCode).toBe(200);
+      expect(lostResponseRetry.statusCode).toBe(200);
+      expect(handlerCalls).toBe(3);
+      const firstHash = claim.mock.calls[0]?.[0].payloadHash;
+      const secondHash = claim.mock.calls[1]?.[0].payloadHash;
+      expect(firstHash).toMatch(/^[a-f0-9]{64}$/);
+      expect(secondHash).toBe(firstHash);
+      expect(firstHash).not.toBe(
+        createHash("sha256")
+          .update(JSON.stringify({ secret: "gc-canary-secret-one" }))
+          .digest("hex"),
+      );
+      expect(JSON.stringify(claim.mock.calls)).not.toContain("gc-canary-secret");
+    } finally {
+      await built.app.close();
+    }
+  });
+
   it("rejects reused keys when the payload changes", async () => {
     const { app } = await buildApp((fastify) => {
       fastify.post("/api/v1/approvals/:approvalId/resolve", async () => ({ ok: true }));

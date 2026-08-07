@@ -126,6 +126,23 @@ describe("chat API origin surface headers", () => {
     });
   });
 
+  it("posts secrets only to the dedicated no-store configuration endpoint", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ ok: true, resumed: true }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { submitChatSecureConfiguration } = await import("./chat");
+
+    await submitChatSecureConfiguration("session/1", "turn 1", "prompt 1", { secret: "direct-secret" });
+
+    expect(fetchMock.mock.calls[0]?.[0]).toContain(
+      "/api/v1/chat/sessions/session%2F1/turns/turn%201/user-input/prompt%201/secure-configuration",
+    );
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+      method: "POST",
+      cache: "no-store",
+      body: JSON.stringify({ secret: "direct-secret" }),
+    });
+  });
+
   it("uses focused session timer endpoints without sending a chat turn", async () => {
     const fetchMock = vi.fn(async () => jsonResponse({ item: { timerId: "timer-1" }, items: [] }));
     vi.stubGlobal("fetch", fetchMock);

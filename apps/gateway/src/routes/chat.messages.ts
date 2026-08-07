@@ -29,6 +29,7 @@ import {
   resolveExternalCompanionAdmissionContext,
   resolveSendAdmissionArgs,
 } from "./session-control-request-context.js";
+import { registerChatSecureConfigurationRoute } from "./chat.secure-configuration.js";
 
 const listMessagesSchema = z.object({
   limit: z.coerce.number().int().positive().max(1000).default(200),
@@ -333,18 +334,43 @@ const cancelTurnSchema = z.object({
   cancelledBy: z.string().min(1).optional(),
 });
 
-const answerUserInputPromptSchema = z.object({
-  response: z.discriminatedUnion("kind", [
-    z.object({
-      kind: z.literal("single_select"),
-      optionId: z.string().trim().min(1).max(256),
-    }),
-    z.object({
-      kind: z.literal("text"),
-      text: z.string().trim().min(1).max(20_000),
-    }),
-  ]),
-});
+const answerUserInputPromptSchema = z
+  .object({
+    response: z.discriminatedUnion("kind", [
+      z
+        .object({
+          kind: z.literal("single_select"),
+          optionId: z.string().trim().min(1).max(256),
+        })
+        .strict(),
+      z
+        .object({
+          kind: z.literal("text"),
+          text: z.string().trim().min(1).max(20_000),
+        })
+        .strict(),
+    ]),
+    // Compatibility-only input. The Gateway intentionally ignores this value
+    // and derives responder identity from authenticated request decorations.
+    responder: z
+      .object({
+        actorId: z.string().min(1),
+        authActorSource: z.enum([
+          "none",
+          "token",
+          "basic",
+          "loopback",
+          "sse",
+          "device",
+          "companion",
+          "a2a_peer",
+          "mesh_node",
+        ]),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
 
 export function registerChatMessageRoutes(fastify: FastifyInstance): void {
   // HX-411: the reviewed bounded transcript reads and the canonical send routes
@@ -617,6 +643,8 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
       );
     },
   );
+
+  registerChatSecureConfigurationRoute(fastify);
 
   fastify.get(
     "/api/v1/chat/sessions/:sessionId/turns/:turnId/stream",

@@ -72,6 +72,7 @@ import type {
   ChatTurnCapabilityProfileEnvelope,
   ChatUserInputPromptAnswerRequest,
   ChatUserInputPromptAnswerResponse,
+  ChatSecureConfigurationSubmitRequest,
   LearnedMemoryConflictRecord,
   LearnedMemoryItemRecord,
   LearnedMemoryUpdateInput,
@@ -903,6 +904,22 @@ export async function answerChatUserInputPrompt(
     `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/user-input/${encodeURIComponent(promptId)}/respond`,
     {
       method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function submitChatSecureConfiguration(
+  sessionId: string,
+  turnId: string,
+  promptId: string,
+  input: ChatSecureConfigurationSubmitRequest,
+): Promise<ChatUserInputPromptAnswerResponse> {
+  return request<ChatUserInputPromptAnswerResponse>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/user-input/${encodeURIComponent(promptId)}/secure-configuration`,
+    {
+      method: "POST",
+      cache: "no-store",
       body: JSON.stringify(input),
     },
   );

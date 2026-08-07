@@ -1,4 +1,5 @@
 import { SESSION_CONTROL_GENERATION_HEADER, SESSION_CONTROL_TOKEN_HEADER } from "@goatcitadel/contracts";
+import Fastify from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createGatewayLogger } from "./runtime-ux.js";
 
@@ -145,5 +146,32 @@ describe("runtime logger coverage", () => {
     const output = String(warnSpy.mock.calls.at(-1)?.[0] ?? "");
     expect(output).toContain("[redacted]");
     expect(output).not.toContain(secret);
+  });
+
+  it("honors Fastify route-level silent logging for credential-bearing routes", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const app = Fastify({ loggerInstance: createGatewayLogger(true) });
+    app.post("/secure", { logLevel: "silent" }, async (request) => {
+      request.log.info({ body: request.body }, "secure credential request");
+      return { ok: true };
+    });
+    await app.ready();
+    logSpy.mockClear();
+    warnSpy.mockClear();
+    errorSpy.mockClear();
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/secure",
+      payload: { secret: "SECURE_ROUTE_CANARY_20260807" },
+    });
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    const emitted = JSON.stringify([...logSpy.mock.calls, ...warnSpy.mock.calls, ...errorSpy.mock.calls]);
+    expect(emitted).not.toContain("secure credential request");
+    expect(emitted).not.toContain("SECURE_ROUTE_CANARY_20260807");
   });
 });

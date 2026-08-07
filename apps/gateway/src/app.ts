@@ -106,6 +106,12 @@ const BROWSER_MUTATION_INTENT_HEADER = "x-goatcitadel-browser-intent";
 const BROWSER_MUTATION_INTENT_VALUE = "mutation";
 const DEFAULT_FASTIFY_PLUGIN_TIMEOUT_MS = 120_000;
 
+function isSecureRuntimeConfigurationSubmitPath(url: string): boolean {
+  return /^\/api\/v1\/chat\/sessions\/[^/?]+\/turns\/[^/?]+\/user-input\/[^/?]+\/secure-configuration(?:\?|$)/u.test(
+    url,
+  );
+}
+
 /**
  * Baseline Content-Security-Policy applied to responses that do not set their
  * own. It permits same-origin scripts so the Mission Control SPA can boot.
@@ -199,7 +205,14 @@ export async function buildApp() {
       return reply.statusCode >= 400 ? projectPublicErrorValue(payload) : payload;
     });
 
-    app.addHook("onSend", async (_request, reply) => {
+    app.addHook("onSend", async (request, reply) => {
+      if (isSecureRuntimeConfigurationSubmitPath(request.raw.url ?? request.url)) {
+        // Apply at the response boundary so parser, CORS, auth, CSRF,
+        // idempotency, rate-limit, and handler failures all inherit the same
+        // no-store guarantee.
+        reply.header("cache-control", "no-store");
+        reply.header("pragma", "no-cache");
+      }
       applyBaselineSecurityHeaders(reply, { isNonLoopbackBind });
     });
 
@@ -331,21 +344,24 @@ export async function buildApp() {
           },
         };
       });
-
-      await app.register(rateLimit, {
-        global: false,
-        timeWindow: "1 minute",
-        keyGenerator: (request) => request.ip,
-        allowList: (request) => isLoopbackRateLimitAllowlisted(request.ip, request),
-        max: rateLimitConfig.maxGeneral,
-        skipOnError: true,
-        addHeaders: {
-          "x-ratelimit-limit": true,
-          "x-ratelimit-remaining": true,
-          "x-ratelimit-reset": true,
-        },
-      });
     }
+
+    // Keep the plugin installed even when broad API rate limiting is disabled:
+    // narrow credential-bearing routes define mandatory route-local limits and
+    // must not silently become unlimited through the general feature toggle.
+    await app.register(rateLimit, {
+      global: false,
+      timeWindow: "1 minute",
+      keyGenerator: (request) => request.ip,
+      allowList: (request) => isLoopbackRateLimitAllowlisted(request.ip, request),
+      max: rateLimitConfig.maxGeneral,
+      skipOnError: true,
+      addHeaders: {
+        "x-ratelimit-limit": true,
+        "x-ratelimit-remaining": true,
+        "x-ratelimit-reset": true,
+      },
+    });
 
     await app.register(gatewayPlugin);
     await app.register(routeServicesPlugin);

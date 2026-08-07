@@ -18,6 +18,10 @@ export type SessionMutationAdmissionTerminalAuthorityKind =
   | "post_commit_child_stage";
 export const SESSION_MUTATION_REQUEST_RUNTIME_LEASE_MS = 60_000;
 const HEARTBEAT_PREEMPTION_PENDING_CONTROL_REQUEST_LIMIT = 256;
+const SECURE_CONFIGURATION_PROVIDER_BY_TARGET: Readonly<Record<string, string>> = {
+  "search.brave": "brave",
+  "search.parallel": "parallel",
+};
 
 export interface SessionMutationAdmissionRecord {
   admissionId: string;
@@ -292,6 +296,14 @@ export interface DurableChatUserInputResumeRecord {
   answeredAt: string;
   response: { kind: "single_select"; optionId: string } | { kind: "text"; text: string };
   selectedOption?: { optionId: string; label: string; description: string };
+  runtimeConfigurationReceipt?: DurableChatRuntimeConfigurationReceipt;
+}
+
+export interface DurableChatRuntimeConfigurationReceipt {
+  targetId: string;
+  provider: string;
+  revision: string;
+  scopeRef: string;
 }
 
 export interface DurableChatUserInputAdmissionIdentity extends TurnWriteAdmissionIdentity {
@@ -312,6 +324,82 @@ export interface ResolveDurableChatUserInputInput {
     authActorSource: DurableChatUserInputResponderAuthSource;
   };
   response: { kind: "single_select"; optionId: string } | { kind: "text"; text: string };
+  runtimeConfigurationReceipt?: DurableChatRuntimeConfigurationReceipt;
+}
+
+export interface DurableChatSecureConfigurationReservationRecord {
+  version: 1;
+  reservationId: string;
+  admissionId: string;
+  sessionIncarnationId: string;
+  workspaceId: string;
+  sessionId: string;
+  turnId: string;
+  durableRunId: string;
+  promptId: string;
+  targetId: string;
+  responderActorId: string;
+  responderAuthActorSource: DurableChatUserInputResponderAuthSource;
+  waitingRunVersion: number;
+  reservedRunVersion: number;
+  expiresAt: string;
+  status: "reserved" | "completed" | "released" | "expired_unreconciled" | "reconciled";
+  provider?: string;
+  configurationRevision?: string;
+  scopeRef: string;
+  reservedAt: string;
+  reclaimedAt?: string;
+  completedAt?: string;
+  releasedAt?: string;
+  expiredAt?: string;
+  reconciledAt?: string;
+  reconciledByReservationId?: string;
+  requiresReconciliation: boolean;
+}
+
+export interface ReserveDurableChatSecureConfigurationInput {
+  admissionIdentity: DurableChatUserInputAdmissionIdentity;
+  durableRunId: string;
+  expectedWaitingRunVersion: number;
+  promptId: string;
+  targetId: string;
+  scopeRef: string;
+  responder: {
+    actorId: string;
+    authActorSource: DurableChatUserInputResponderAuthSource;
+  };
+}
+
+export interface ReserveDurableChatSecureConfigurationOutcome {
+  disposition: "reserved" | "replayed";
+  run: { runId: string; status: "waiting"; version: number };
+  reservation: DurableChatSecureConfigurationReservationRecord;
+  requiresTargetReconciliation: boolean;
+}
+
+export interface ReleaseDurableChatSecureConfigurationInput {
+  reservationId: string;
+  admissionIdentity: DurableChatUserInputAdmissionIdentity;
+  durableRunId: string;
+  promptId: string;
+  targetId: string;
+  scopeRef: string;
+  expectedReservedRunVersion: number;
+  responder: {
+    actorId: string;
+    authActorSource: DurableChatUserInputResponderAuthSource;
+  };
+}
+
+export interface ReleaseDurableChatSecureConfigurationOutcome {
+  disposition: "released";
+  run: { runId: string; status: "waiting"; version: number };
+  reservation: DurableChatSecureConfigurationReservationRecord;
+}
+
+export interface ListActiveDurableChatSecureConfigurationsByTargetScopeInput {
+  targetId: string;
+  scopeRef: string;
 }
 
 export interface DurableChatUserInputContinuationSealRecord {
@@ -736,6 +824,35 @@ interface DurableChatUserInputContinuationSealRow {
   queued_run_version: number | bigint | string;
   resolved_at: string;
   material_sha256: string;
+}
+
+interface DurableChatSecureConfigurationReservationRow {
+  reservation_id: string;
+  version: number | bigint | string;
+  admission_id: string;
+  session_incarnation_id: string;
+  workspace_id: string;
+  session_id: string;
+  turn_id: string;
+  durable_run_id: string;
+  prompt_id: string;
+  target_id: string;
+  responder_actor_id: string;
+  responder_auth_actor_source: DurableChatUserInputResponderAuthSource;
+  waiting_run_version: number | bigint | string;
+  reserved_run_version: number | bigint | string;
+  expires_at: string;
+  status: "reserved" | "completed" | "released" | "expired_unreconciled" | "reconciled";
+  provider: string | null;
+  configuration_revision: string | null;
+  scope_ref: string;
+  reserved_at: string;
+  reclaimed_at: string | null;
+  completed_at: string | null;
+  released_at: string | null;
+  expired_at: string | null;
+  reconciled_at: string | null;
+  reconciled_by_reservation_id: string | null;
 }
 
 interface WaitingChatUserInputTraceRow {
@@ -1957,6 +2074,391 @@ export class SessionMutationAdmissionRepository {
     }
   }
 
+  public reserveDurableChatSecureConfiguration(
+    input: ReserveDurableChatSecureConfigurationInput,
+  ): ReserveDurableChatSecureConfigurationOutcome {
+    const normalized = normalizeDurableChatSecureConfigurationReservationInput(input);
+    this.expireActiveSecureConfigurationReservations({
+      targetId: normalized.targetId,
+      scopeRef: normalized.scopeRef,
+    });
+    try {
+      return this.db.transaction("immediate", () => {
+        const observed = this.requireRow(normalized.admissionIdentity.admissionId, false);
+        this.acquireSessionLock(observed.session_id);
+        const admission = this.requireRow(normalized.admissionIdentity.admissionId, true);
+        this.assertDurableChatUserInputAdmissionIdentity(admission, normalized.admissionIdentity);
+        this.assertSecureConfigurationResponder(admission, normalized.responder);
+        if (admission.status !== "active") {
+          throw admissionConflict("SESSION_MUTATION_ADMISSION_CLOSED", "Turn mutation admission is closed.");
+        }
+        this.requireAdmissionCurrentAuthority(admission);
+        this.requireExactTurnBinding(admission);
+        const durableBinding = this.requireDurableBinding(
+          normalized.admissionIdentity.admissionId,
+          normalized.admissionIdentity.turnId,
+          normalized.durableRunId,
+          true,
+        );
+        if (
+          durableBinding.workspace_id !== normalized.admissionIdentity.workspaceId ||
+          durableBinding.session_id !== normalized.admissionIdentity.sessionId ||
+          durableBinding.session_incarnation_id !== normalized.admissionIdentity.sessionIncarnationId
+        ) {
+          throw admissionConflict(
+            "SESSION_MUTATION_DURABLE_BINDING_CONFLICT",
+            "Turn admission durable-run binding conflicts.",
+          );
+        }
+
+        const reservationId = deriveId(
+          "ctscr",
+          normalized.admissionIdentity.admissionId,
+          normalized.durableRunId,
+          normalized.promptId,
+          normalized.scopeRef,
+          String(normalized.expectedWaitingRunVersion),
+        );
+        const activeReservation = this.findActiveDurableChatSecureConfigurationByTargetScope(
+          normalized.targetId,
+          normalized.scopeRef,
+          true,
+        );
+        if (activeReservation) {
+          this.assertExactSecureConfigurationReservation(activeReservation, {
+            ...normalized,
+            reservationId: activeReservation.reservation_id,
+            expectedReservedRunVersion: asPositiveInteger(activeReservation.reserved_run_version),
+          });
+          const waitingVersion = asPositiveInteger(activeReservation.waiting_run_version);
+          const reservedVersion = asPositiveInteger(activeReservation.reserved_run_version);
+          if (
+            normalized.expectedWaitingRunVersion !== waitingVersion &&
+            normalized.expectedWaitingRunVersion !== reservedVersion
+          ) {
+            throw admissionConflict(
+              "SESSION_MUTATION_SECURE_CONFIGURATION_WAIT_CONFLICT",
+              "Secure configuration reservation does not match the requested waiting version.",
+            );
+          }
+          const replayRun = this.requireDurableRun(normalized.durableRunId, true);
+          if (
+            replayRun.workflow_key !== "chat.turn.execute" ||
+            replayRun.status !== "waiting" ||
+            asPositiveInteger(replayRun.version) !== reservedVersion
+          ) {
+            throw admissionConflict(
+              "SESSION_MUTATION_SECURE_CONFIGURATION_WAIT_CONFLICT",
+              "Secure configuration reservation no longer owns the waiting run version.",
+            );
+          }
+          this.requireExactDurableRunPayloadIdentity(admission, replayRun);
+          const replayMetadata = replayRun.metadata_json ? parseJsonObject(replayRun.metadata_json) : {};
+          assertExactDurableChatUserInputWait(
+            replayMetadata,
+            normalized.promptId,
+            "chat.user_input.resolved",
+            normalized.promptId,
+          );
+          const replayTrace = this.requireWaitingChatUserInputTrace(
+            normalized.admissionIdentity,
+            normalized.durableRunId,
+          );
+          const replayPrompt = readExactChatUserInputPrompt(replayTrace.pending_user_input_json!, normalized.promptId);
+          const replaySecurePrompt = requireExactSecureConfigurationPrompt(replayPrompt, normalized.targetId);
+          const databaseNow = this.readDatabaseTime();
+          if (
+            replayPrompt.turnId !== normalized.admissionIdentity.turnId ||
+            activeReservation.expires_at !== replaySecurePrompt.expiresAt ||
+            Date.parse(activeReservation.expires_at) <= Date.parse(databaseNow)
+          ) {
+            throw admissionConflict(
+              "SESSION_MUTATION_SECURE_CONFIGURATION_EXPIRED",
+              "Secure configuration reservation is expired or no longer matches the pending prompt.",
+            );
+          }
+          // A reserved run version alone cannot prove that the original
+          // effect owner died. Two Gateway processes can observe the same
+          // version while the first request is still probing or writing the
+          // keychain. Automatic reclaim would therefore permit concurrent
+          // credential effects and a losing rollback could clobber the
+          // winner. Keep every active duplicate fail-closed as a replay. A
+          // crashed reservation expires into durable quarantine and a fresh
+          // prompt must replace it.
+          const effectiveReservation = activeReservation;
+          return {
+            disposition: "replayed",
+            run: { runId: replayRun.run_id, status: "waiting", version: reservedVersion },
+            reservation: mapDurableChatSecureConfigurationReservation(effectiveReservation),
+            requiresTargetReconciliation:
+              effectiveReservation.reclaimed_at !== null ||
+              this.hasUnreconciledSecureConfigurationTarget(normalized.targetId, normalized.scopeRef),
+          };
+        }
+        const existing = this.findDurableChatSecureConfigurationReservation(reservationId, true);
+        if (existing) {
+          this.assertExactSecureConfigurationReservation(existing, {
+            ...normalized,
+            reservationId,
+            expectedReservedRunVersion: incrementPositiveInteger(normalized.expectedWaitingRunVersion),
+          });
+          if (existing.status !== "reserved") {
+            throw admissionConflict(
+              "SESSION_MUTATION_SECURE_CONFIGURATION_RESERVATION_CLOSED",
+              "Secure configuration reservation is already closed.",
+            );
+          }
+          const replayRun = this.requireDurableRun(normalized.durableRunId, true);
+          if (
+            replayRun.workflow_key !== "chat.turn.execute" ||
+            replayRun.status !== "waiting" ||
+            asPositiveInteger(replayRun.version) !== asPositiveInteger(existing.reserved_run_version)
+          ) {
+            throw admissionConflict(
+              "SESSION_MUTATION_SECURE_CONFIGURATION_WAIT_CONFLICT",
+              "Secure configuration reservation no longer owns the waiting run version.",
+            );
+          }
+          return {
+            disposition: "replayed",
+            run: { runId: replayRun.run_id, status: "waiting", version: asPositiveInteger(replayRun.version) },
+            reservation: mapDurableChatSecureConfigurationReservation(existing),
+            requiresTargetReconciliation: this.hasUnreconciledSecureConfigurationTarget(
+              normalized.targetId,
+              normalized.scopeRef,
+            ),
+          };
+        }
+        const run = this.requireDurableRun(normalized.durableRunId, true);
+        if (
+          run.workflow_key !== "chat.turn.execute" ||
+          run.status !== "waiting" ||
+          asPositiveInteger(run.version) !== normalized.expectedWaitingRunVersion
+        ) {
+          throw admissionConflict(
+            "SESSION_MUTATION_SECURE_CONFIGURATION_WAIT_CONFLICT",
+            "Durable Chat run is not at the expected waiting version.",
+          );
+        }
+        this.requireExactDurableRunPayloadIdentity(admission, run);
+        const metadata = run.metadata_json ? parseJsonObject(run.metadata_json) : {};
+        assertExactDurableChatUserInputWait(
+          metadata,
+          normalized.promptId,
+          "chat.user_input.resolved",
+          normalized.promptId,
+        );
+        const trace = this.requireWaitingChatUserInputTrace(normalized.admissionIdentity, normalized.durableRunId);
+        const prompt = readExactChatUserInputPrompt(trace.pending_user_input_json!, normalized.promptId);
+        const securePrompt = requireExactSecureConfigurationPrompt(prompt, normalized.targetId);
+        if (prompt.turnId !== normalized.admissionIdentity.turnId) {
+          throw admissionConflict(
+            "SESSION_MUTATION_USER_INPUT_PROMPT_CONFLICT",
+            "Chat turn pending user-input prompt belongs to a different turn.",
+          );
+        }
+        const reservedAt = this.readDatabaseTime();
+        if (Date.parse(securePrompt.expiresAt) <= Date.parse(reservedAt)) {
+          throw admissionConflict(
+            "SESSION_MUTATION_SECURE_CONFIGURATION_EXPIRED",
+            "Secure configuration prompt has expired.",
+          );
+        }
+        const reservedRunVersion = incrementPositiveInteger(normalized.expectedWaitingRunVersion);
+        this.db
+          .prepare(
+            `INSERT INTO chat_turn_secure_configuration_reservations (
+               reservation_id, version, admission_id, session_incarnation_id, workspace_id,
+               session_id, turn_id, durable_run_id, prompt_id, target_id,
+               responder_actor_id, responder_auth_actor_source, waiting_run_version,
+               reserved_run_version, expires_at, status, scope_ref, reserved_at
+             ) VALUES (
+               @reservationId, 1, @admissionId, @sessionIncarnationId, @workspaceId,
+               @sessionId, @turnId, @durableRunId, @promptId, @targetId,
+               @responderActorId, @responderAuthActorSource, @waitingRunVersion,
+               @reservedRunVersion, @expiresAt, 'reserved', @scopeRef, @reservedAt
+             )`,
+          )
+          .run({
+            reservationId,
+            admissionId: normalized.admissionIdentity.admissionId,
+            sessionIncarnationId: normalized.admissionIdentity.sessionIncarnationId,
+            workspaceId: normalized.admissionIdentity.workspaceId,
+            sessionId: normalized.admissionIdentity.sessionId,
+            turnId: normalized.admissionIdentity.turnId,
+            durableRunId: normalized.durableRunId,
+            promptId: normalized.promptId,
+            targetId: normalized.targetId,
+            responderActorId: normalized.responder.actorId,
+            responderAuthActorSource: normalized.responder.authActorSource,
+            waitingRunVersion: normalized.expectedWaitingRunVersion,
+            reservedRunVersion,
+            expiresAt: securePrompt.expiresAt,
+            scopeRef: normalized.scopeRef,
+            reservedAt,
+          });
+        const updatedRun = this.db
+          .prepare(
+            `UPDATE durable_runs
+             SET version = version + 1, updated_at = @reservedAt
+             WHERE run_id = @durableRunId AND workflow_key = 'chat.turn.execute'
+               AND status = 'waiting' AND version = @waitingRunVersion`,
+          )
+          .run({
+            durableRunId: normalized.durableRunId,
+            waitingRunVersion: normalized.expectedWaitingRunVersion,
+            reservedAt,
+          });
+        if (updatedRun.changes !== 1) {
+          throw admissionConflict(
+            "SESSION_MUTATION_SECURE_CONFIGURATION_WAIT_CONFLICT",
+            "Durable Chat waiting version changed during secure configuration reservation.",
+          );
+        }
+        const reservation = this.findDurableChatSecureConfigurationReservation(reservationId, false);
+        if (!reservation) throw new TypeError("secure configuration reservation insert did not persist");
+        return {
+          disposition: "reserved",
+          run: { runId: normalized.durableRunId, status: "waiting", version: reservedRunVersion },
+          reservation: mapDurableChatSecureConfigurationReservation(reservation),
+          requiresTargetReconciliation: this.hasUnreconciledSecureConfigurationTarget(
+            normalized.targetId,
+            normalized.scopeRef,
+          ),
+        };
+      });
+    } catch (error) {
+      throw normalizeAdmissionWriteError(error);
+    }
+  }
+
+  public listActiveDurableChatSecureConfigurationsByTargetScope(
+    input: ListActiveDurableChatSecureConfigurationsByTargetScopeInput,
+  ): DurableChatSecureConfigurationReservationRecord[] {
+    const targetId = secureConfigurationTargetId(input.targetId, "targetId");
+    const scopeRef = boundedIdentifier(input.scopeRef, "scopeRef", 256);
+    const livePredicate =
+      this.db.dialect === "postgres"
+        ? "gc_try_parse_timestamptz(expires_at) > clock_timestamp()"
+        : "julianday(expires_at) > julianday('now')";
+    return this.db
+      .prepare(
+        `SELECT * FROM chat_turn_secure_configuration_reservations
+         WHERE target_id = @targetId AND scope_ref = @scopeRef
+           AND status = 'reserved' AND ${livePredicate}
+         ORDER BY reserved_at ASC, reservation_id ASC`,
+      )
+      .all<DurableChatSecureConfigurationReservationRow>({ targetId, scopeRef })
+      .map(mapDurableChatSecureConfigurationReservation);
+  }
+
+  public listBlockingDurableChatSecureConfigurationsByTargetScope(
+    input: ListActiveDurableChatSecureConfigurationsByTargetScopeInput,
+  ): DurableChatSecureConfigurationReservationRecord[] {
+    const targetId = secureConfigurationTargetId(input.targetId, "targetId");
+    const scopeRef = boundedIdentifier(input.scopeRef, "scopeRef", 256);
+    const databaseNow = this.readDatabaseTime();
+    return this.db
+      .prepare(
+        `SELECT * FROM chat_turn_secure_configuration_reservations
+         WHERE target_id = @targetId AND scope_ref = @scopeRef
+           AND status IN ('reserved', 'expired_unreconciled')
+         ORDER BY reserved_at ASC, reservation_id ASC`,
+      )
+      .all<DurableChatSecureConfigurationReservationRow>({ targetId, scopeRef })
+      .map((row) => {
+        const record = mapDurableChatSecureConfigurationReservation(row);
+        return {
+          ...record,
+          requiresReconciliation:
+            row.status === "expired_unreconciled" ||
+            row.reclaimed_at !== null ||
+            Date.parse(row.expires_at) <= Date.parse(databaseNow),
+        };
+      });
+  }
+
+  public releaseDurableChatSecureConfiguration(
+    input: ReleaseDurableChatSecureConfigurationInput,
+  ): ReleaseDurableChatSecureConfigurationOutcome {
+    const normalized = normalizeDurableChatSecureConfigurationReleaseInput(input);
+    this.expireActiveSecureConfigurationReservations({ reservationId: normalized.reservationId });
+    try {
+      return this.db.transaction("immediate", () => {
+        const observed = this.requireRow(normalized.admissionIdentity.admissionId, false);
+        this.acquireSessionLock(observed.session_id);
+        const admission = this.requireRow(normalized.admissionIdentity.admissionId, true);
+        this.assertDurableChatUserInputAdmissionIdentity(admission, normalized.admissionIdentity);
+        this.assertSecureConfigurationResponder(admission, normalized.responder);
+        if (admission.status !== "active") {
+          throw admissionConflict("SESSION_MUTATION_ADMISSION_CLOSED", "Turn mutation admission is closed.");
+        }
+        this.requireAdmissionCurrentAuthority(admission);
+        this.requireExactTurnBinding(admission);
+        const reservation = this.findDurableChatSecureConfigurationReservation(normalized.reservationId, true);
+        if (!reservation) {
+          throw admissionConflict(
+            "SESSION_MUTATION_SECURE_CONFIGURATION_RESERVATION_MISSING",
+            "Secure configuration reservation is missing.",
+          );
+        }
+        this.assertExactSecureConfigurationReservation(reservation, normalized);
+        if (reservation.status !== "reserved") {
+          throw admissionConflict(
+            "SESSION_MUTATION_SECURE_CONFIGURATION_RESERVATION_CLOSED",
+            "Secure configuration reservation is already closed.",
+          );
+        }
+        if (reservation.reclaimed_at) {
+          throw admissionConflict(
+            "SESSION_MUTATION_SECURE_CONFIGURATION_RECONCILIATION_REQUIRED",
+            "A restart-reclaimed secure configuration reservation cannot be released without reconciliation.",
+          );
+        }
+        const run = this.requireDurableRun(normalized.durableRunId, true);
+        if (
+          run.workflow_key !== "chat.turn.execute" ||
+          run.status !== "waiting" ||
+          asPositiveInteger(run.version) !== normalized.expectedReservedRunVersion
+        ) {
+          throw admissionConflict(
+            "SESSION_MUTATION_SECURE_CONFIGURATION_WAIT_CONFLICT",
+            "Secure configuration reservation no longer owns the waiting run version.",
+          );
+        }
+        this.requireExactDurableRunPayloadIdentity(admission, run);
+        const releasedAt = this.readDatabaseTime();
+        const updated = this.db
+          .prepare(
+            `UPDATE chat_turn_secure_configuration_reservations
+             SET status = 'released', released_at = @releasedAt
+             WHERE reservation_id = @reservationId AND status = 'reserved'
+               AND reserved_run_version = @expectedReservedRunVersion AND reclaimed_at IS NULL`,
+          )
+          .run({
+            reservationId: normalized.reservationId,
+            expectedReservedRunVersion: normalized.expectedReservedRunVersion,
+            releasedAt,
+          });
+        if (updated.changes !== 1) {
+          throw admissionConflict(
+            "SESSION_MUTATION_SECURE_CONFIGURATION_RESERVATION_STALE",
+            "Secure configuration reservation changed concurrently.",
+          );
+        }
+        const released = this.findDurableChatSecureConfigurationReservation(normalized.reservationId, false);
+        if (!released) throw new TypeError("released secure configuration reservation is missing");
+        return {
+          disposition: "released",
+          run: { runId: normalized.durableRunId, status: "waiting", version: normalized.expectedReservedRunVersion },
+          reservation: mapDurableChatSecureConfigurationReservation(released),
+        };
+      });
+    } catch (error) {
+      throw normalizeAdmissionWriteError(error);
+    }
+  }
+
   public resolveDurableChatUserInput(input: ResolveDurableChatUserInputInput): ResolveDurableChatUserInputOutcome {
     const normalized = normalizeDurableChatUserInputResolutionInput(input);
     try {
@@ -1995,6 +2497,7 @@ export class SessionMutationAdmissionRepository {
               "Durable Chat user-input continuation replay has no canonical response record.",
             );
           }
+          this.assertExactSecureConfigurationContinuationReplay(normalized, admission, responseRecord);
           this.assertExactDurableChatUserInputContinuationReplay(normalized, seal, responseRecord);
           return {
             disposition: "replayed",
@@ -2066,9 +2569,107 @@ export class SessionMutationAdmissionRepository {
           );
         }
         const resolvedAt = this.readDatabaseTime();
-        const responseRecord = buildDurableChatUserInputResumeRecord(prompt, normalized.response, resolvedAt);
+        const activeSecureReservation = this.findActiveDurableChatSecureConfigurationReservation(
+          normalized.admissionIdentity.admissionId,
+          normalized.durableRunId,
+          normalized.promptId,
+          true,
+        );
+        if (prompt.secureConfiguration) {
+          const securePrompt = requireExactSecureConfigurationPrompt(
+            prompt,
+            normalized.runtimeConfigurationReceipt?.targetId,
+          );
+          if (!normalized.runtimeConfigurationReceipt || !activeSecureReservation) {
+            throw admissionConflict(
+              "SESSION_MUTATION_SECURE_CONFIGURATION_RESERVATION_REQUIRED",
+              "Secure configuration completion requires an active reservation and receipt.",
+            );
+          }
+          const receipt = normalized.runtimeConfigurationReceipt;
+          this.assertSecureConfigurationResponder(admission, normalized.responder);
+          this.assertExactSecureConfigurationReservation(activeSecureReservation, {
+            admissionIdentity: normalized.admissionIdentity,
+            durableRunId: normalized.durableRunId,
+            promptId: normalized.promptId,
+            targetId: securePrompt.targetId,
+            scopeRef: receipt.scopeRef,
+            responder: normalized.responder,
+            reservationId: activeSecureReservation.reservation_id,
+            expectedReservedRunVersion: normalized.expectedWaitingRunVersion,
+          });
+          if (
+            activeSecureReservation.expires_at !== securePrompt.expiresAt ||
+            Date.parse(activeSecureReservation.expires_at) <= Date.parse(resolvedAt)
+          ) {
+            throw admissionConflict(
+              "SESSION_MUTATION_SECURE_CONFIGURATION_EXPIRED",
+              "Secure configuration prompt has expired.",
+            );
+          }
+          if (
+            receipt.targetId !== securePrompt.targetId ||
+            SECURE_CONFIGURATION_PROVIDER_BY_TARGET[receipt.targetId] !== receipt.provider
+          ) {
+            throw admissionConflict(
+              "SESSION_MUTATION_SECURE_CONFIGURATION_RECEIPT_CONFLICT",
+              "Runtime configuration receipt targets a different secure prompt.",
+            );
+          }
+          const completedReservation = this.db
+            .prepare(
+              `UPDATE chat_turn_secure_configuration_reservations
+               SET status = 'completed', provider = @provider,
+                   configuration_revision = @configurationRevision,
+                   scope_ref = @scopeRef, completed_at = @completedAt
+               WHERE reservation_id = @reservationId AND status = 'reserved'
+                 AND reserved_run_version = @reservedRunVersion
+                 AND target_id = @targetId AND scope_ref = @scopeRef`,
+            )
+            .run({
+              reservationId: activeSecureReservation.reservation_id,
+              reservedRunVersion: normalized.expectedWaitingRunVersion,
+              targetId: receipt.targetId,
+              provider: receipt.provider,
+              configurationRevision: receipt.revision,
+              scopeRef: receipt.scopeRef,
+              completedAt: resolvedAt,
+            });
+          if (completedReservation.changes !== 1) {
+            throw admissionConflict(
+              "SESSION_MUTATION_SECURE_CONFIGURATION_RESERVATION_STALE",
+              "Secure configuration reservation changed during completion.",
+            );
+          }
+          this.db
+            .prepare(
+              `UPDATE chat_turn_secure_configuration_reservations
+               SET status = 'reconciled', reconciled_at = @reconciledAt,
+                   reconciled_by_reservation_id = @replacementReservationId
+               WHERE target_id = @targetId AND scope_ref = @scopeRef
+                 AND status = 'expired_unreconciled'
+                 AND reservation_id <> @replacementReservationId`,
+            )
+            .run({
+              targetId: receipt.targetId,
+              scopeRef: receipt.scopeRef,
+              reconciledAt: resolvedAt,
+              replacementReservationId: activeSecureReservation.reservation_id,
+            });
+        } else if (activeSecureReservation || normalized.runtimeConfigurationReceipt) {
+          throw admissionConflict(
+            "SESSION_MUTATION_SECURE_CONFIGURATION_RECEIPT_CONFLICT",
+            "Ordinary durable user input cannot consume a secure configuration reservation or receipt.",
+          );
+        }
+        const responseRecord = buildDurableChatUserInputResumeRecord(
+          prompt,
+          normalized.response,
+          resolvedAt,
+          normalized.runtimeConfigurationReceipt,
+        );
         const resumeRecordSha256 = sha256(canonicalJsonString(responseRecord));
-        const queuedRunVersion = normalized.expectedWaitingRunVersion + 1;
+        const queuedRunVersion = incrementPositiveInteger(normalized.expectedWaitingRunVersion);
         const sealMaterial = {
           version: 1 as const,
           admissionId: normalized.admissionIdentity.admissionId,
@@ -3095,6 +3696,7 @@ export class SessionMutationAdmissionRepository {
     proof: CloseAuthorityProof,
     closedAtOverride?: string,
   ): SessionMutationAdmissionRecord {
+    this.assertNoActiveSecureConfigurationReservation(input.admissionId);
     const closedAt = closedAtOverride ?? this.readDatabaseTime();
     const updated = this.db
       .prepare(
@@ -4658,6 +5260,225 @@ export class SessionMutationAdmissionRepository {
     }
   }
 
+  private assertSecureConfigurationResponder(
+    admission: AdmissionRow,
+    responder: { actorId: string; authActorSource: DurableChatUserInputResponderAuthSource },
+  ): void {
+    if (
+      admission.actor_kind !== "operator" ||
+      responder.actorId !== admission.actor_id ||
+      !["none", "token", "basic", "loopback"].includes(responder.authActorSource)
+    ) {
+      throw admissionConflict(
+        "SESSION_MUTATION_SECURE_CONFIGURATION_RESPONDER_UNAUTHORIZED",
+        "Secure configuration must be answered by the admitted control-plane operator.",
+      );
+    }
+  }
+
+  private findDurableChatSecureConfigurationReservation(
+    reservationId: string,
+    forUpdate: boolean,
+  ): DurableChatSecureConfigurationReservationRow | undefined {
+    return this.db
+      .prepare(
+        `SELECT * FROM chat_turn_secure_configuration_reservations
+         WHERE reservation_id = @reservationId${forUpdate && this.db.dialect === "postgres" ? " FOR UPDATE" : ""}`,
+      )
+      .get<DurableChatSecureConfigurationReservationRow>({ reservationId });
+  }
+
+  private findActiveDurableChatSecureConfigurationReservation(
+    admissionId: string,
+    durableRunId: string,
+    promptId: string,
+    forUpdate: boolean,
+  ): DurableChatSecureConfigurationReservationRow | undefined {
+    return this.db
+      .prepare(
+        `SELECT * FROM chat_turn_secure_configuration_reservations
+         WHERE admission_id = @admissionId AND durable_run_id = @durableRunId
+           AND prompt_id = @promptId AND status = 'reserved'${
+             forUpdate && this.db.dialect === "postgres" ? " FOR UPDATE" : ""
+           }`,
+      )
+      .get<DurableChatSecureConfigurationReservationRow>({ admissionId, durableRunId, promptId });
+  }
+
+  private findActiveDurableChatSecureConfigurationByTargetScope(
+    targetId: string,
+    scopeRef: string,
+    forUpdate: boolean,
+  ): DurableChatSecureConfigurationReservationRow | undefined {
+    return this.db
+      .prepare(
+        `SELECT * FROM chat_turn_secure_configuration_reservations
+         WHERE target_id = @targetId AND scope_ref = @scopeRef AND status = 'reserved'${
+           forUpdate && this.db.dialect === "postgres" ? " FOR UPDATE" : ""
+         }`,
+      )
+      .get<DurableChatSecureConfigurationReservationRow>({ targetId, scopeRef });
+  }
+
+  private hasUnreconciledSecureConfigurationTarget(targetId: string, scopeRef: string): boolean {
+    return Boolean(
+      this.db
+        .prepare(
+          `SELECT 1 FROM chat_turn_secure_configuration_reservations
+           WHERE target_id = @targetId AND scope_ref = @scopeRef
+             AND status = 'expired_unreconciled' LIMIT 1`,
+        )
+        .get({ targetId, scopeRef }),
+    );
+  }
+
+  private expireActiveSecureConfigurationReservations(input: {
+    targetId?: string;
+    scopeRef?: string;
+    admissionId?: string;
+    reservationId?: string;
+  }): number {
+    const clauses = ["status = 'reserved'"];
+    const params: Record<string, string> = {};
+    if (input.targetId !== undefined) {
+      clauses.push("target_id = @targetId");
+      params.targetId = input.targetId;
+    }
+    if (input.scopeRef !== undefined) {
+      clauses.push("scope_ref = @scopeRef");
+      params.scopeRef = input.scopeRef;
+    }
+    if (input.admissionId !== undefined) {
+      clauses.push("admission_id = @admissionId");
+      params.admissionId = input.admissionId;
+    }
+    if (input.reservationId !== undefined) {
+      clauses.push("reservation_id = @reservationId");
+      params.reservationId = input.reservationId;
+    }
+    const expiryPredicate =
+      this.db.dialect === "postgres"
+        ? "gc_try_parse_timestamptz(expires_at) <= clock_timestamp()"
+        : "julianday(expires_at) <= julianday('now')";
+    const databaseTime =
+      this.db.dialect === "postgres"
+        ? `to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`
+        : `strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`;
+    return this.db
+      .prepare(
+        `UPDATE chat_turn_secure_configuration_reservations
+         SET status = 'expired_unreconciled', expired_at = ${databaseTime}
+         WHERE ${clauses.join(" AND ")} AND ${expiryPredicate}`,
+      )
+      .run(params).changes;
+  }
+
+  private findCompletedDurableChatSecureConfigurationReservation(
+    admissionId: string,
+    durableRunId: string,
+    promptId: string,
+    forUpdate: boolean,
+  ): DurableChatSecureConfigurationReservationRow | undefined {
+    return this.db
+      .prepare(
+        `SELECT * FROM chat_turn_secure_configuration_reservations
+         WHERE admission_id = @admissionId AND durable_run_id = @durableRunId
+           AND prompt_id = @promptId AND status = 'completed'${
+             forUpdate && this.db.dialect === "postgres" ? " FOR UPDATE" : ""
+           }`,
+      )
+      .get<DurableChatSecureConfigurationReservationRow>({ admissionId, durableRunId, promptId });
+  }
+
+  private assertExactSecureConfigurationReservation(
+    row: DurableChatSecureConfigurationReservationRow,
+    input: {
+      reservationId: string;
+      admissionIdentity: ReturnType<typeof normalizeDurableChatUserInputAdmissionIdentity>;
+      durableRunId: string;
+      promptId: string;
+      targetId: string;
+      scopeRef: string;
+      expectedReservedRunVersion: number;
+      responder: { actorId: string; authActorSource: DurableChatUserInputResponderAuthSource };
+    },
+  ): void {
+    if (
+      row.reservation_id !== input.reservationId ||
+      row.admission_id !== input.admissionIdentity.admissionId ||
+      row.session_incarnation_id !== input.admissionIdentity.sessionIncarnationId ||
+      row.workspace_id !== input.admissionIdentity.workspaceId ||
+      row.session_id !== input.admissionIdentity.sessionId ||
+      row.turn_id !== input.admissionIdentity.turnId ||
+      row.durable_run_id !== input.durableRunId ||
+      row.prompt_id !== input.promptId ||
+      row.target_id !== input.targetId ||
+      row.scope_ref !== input.scopeRef ||
+      row.responder_actor_id !== input.responder.actorId ||
+      row.responder_auth_actor_source !== input.responder.authActorSource ||
+      asPositiveInteger(row.reserved_run_version) !== input.expectedReservedRunVersion ||
+      asPositiveInteger(row.waiting_run_version) + 1 !== input.expectedReservedRunVersion
+    ) {
+      throw admissionConflict(
+        "SESSION_MUTATION_SECURE_CONFIGURATION_RESERVATION_CONFLICT",
+        "Secure configuration reservation identity conflicts.",
+      );
+    }
+  }
+
+  private assertExactSecureConfigurationContinuationReplay(
+    input: ReturnType<typeof normalizeDurableChatUserInputResolutionInput>,
+    admission: AdmissionRow,
+    responseRecord: DurableChatUserInputResumeRecord,
+  ): void {
+    const receipt = input.runtimeConfigurationReceipt;
+    const recordedReceipt = responseRecord.runtimeConfigurationReceipt;
+    if (!receipt && !recordedReceipt) return;
+    if (!receipt || !recordedReceipt || canonicalJsonString(receipt) !== canonicalJsonString(recordedReceipt)) {
+      throw admissionConflict(
+        "SESSION_MUTATION_SECURE_CONFIGURATION_REPLAY_CONFLICT",
+        "Secure configuration continuation replay conflicts.",
+      );
+    }
+    this.assertSecureConfigurationResponder(admission, input.responder);
+    const reservation = this.findCompletedDurableChatSecureConfigurationReservation(
+      input.admissionIdentity.admissionId,
+      input.durableRunId,
+      input.promptId,
+      true,
+    );
+    if (
+      !reservation ||
+      reservation.target_id !== receipt.targetId ||
+      reservation.responder_actor_id !== input.responder.actorId ||
+      reservation.responder_auth_actor_source !== input.responder.authActorSource ||
+      reservation.provider !== receipt.provider ||
+      reservation.configuration_revision !== receipt.revision ||
+      reservation.scope_ref !== receipt.scopeRef
+    ) {
+      throw admissionConflict(
+        "SESSION_MUTATION_SECURE_CONFIGURATION_REPLAY_CONFLICT",
+        "Secure configuration continuation replay conflicts.",
+      );
+    }
+  }
+
+  private assertNoActiveSecureConfigurationReservation(admissionId: string): void {
+    this.expireActiveSecureConfigurationReservations({ admissionId });
+    const active = this.db
+      .prepare(
+        `SELECT 1 FROM chat_turn_secure_configuration_reservations
+         WHERE admission_id = @admissionId AND status = 'reserved' LIMIT 1`,
+      )
+      .get({ admissionId });
+    if (active) {
+      throw admissionConflict(
+        "SESSION_MUTATION_SECURE_CONFIGURATION_RESERVATION_ACTIVE",
+        "An active secure configuration reservation blocks admission close.",
+      );
+    }
+  }
+
   private findDurableChatUserInputContinuationSeal(
     admissionId: string,
     durableRunId: string,
@@ -4921,6 +5742,9 @@ function normalizeDurableChatUserInputResolutionInput(input: ResolveDurableChatU
     authActorSource: input.responder.authActorSource,
   };
   const response = normalizeChatUserInputResponse(input.response, "response");
+  const runtimeConfigurationReceipt = input.runtimeConfigurationReceipt
+    ? normalizeDurableChatRuntimeConfigurationReceipt(input.runtimeConfigurationReceipt, "runtimeConfigurationReceipt")
+    : undefined;
   return {
     admissionIdentity,
     durableRunId,
@@ -4930,6 +5754,66 @@ function normalizeDurableChatUserInputResolutionInput(input: ResolveDurableChatU
     correlationId,
     responder,
     response,
+    ...(runtimeConfigurationReceipt ? { runtimeConfigurationReceipt } : {}),
+  };
+}
+
+function normalizeDurableChatSecureConfigurationReservationInput(input: ReserveDurableChatSecureConfigurationInput) {
+  return {
+    admissionIdentity: normalizeDurableChatUserInputAdmissionIdentity(input.admissionIdentity),
+    durableRunId: identifier(input.durableRunId, "durableRunId"),
+    expectedWaitingRunVersion: positiveInteger(input.expectedWaitingRunVersion, "expectedWaitingRunVersion"),
+    promptId: identifier(input.promptId, "promptId"),
+    targetId: secureConfigurationTargetId(input.targetId, "targetId"),
+    scopeRef: boundedIdentifier(input.scopeRef, "scopeRef", 256),
+    responder: normalizeDurableChatUserInputResponder(input.responder),
+  };
+}
+
+function normalizeDurableChatSecureConfigurationReleaseInput(input: ReleaseDurableChatSecureConfigurationInput) {
+  return {
+    reservationId: identifier(input.reservationId, "reservationId"),
+    admissionIdentity: normalizeDurableChatUserInputAdmissionIdentity(input.admissionIdentity),
+    durableRunId: identifier(input.durableRunId, "durableRunId"),
+    promptId: identifier(input.promptId, "promptId"),
+    targetId: secureConfigurationTargetId(input.targetId, "targetId"),
+    scopeRef: boundedIdentifier(input.scopeRef, "scopeRef", 256),
+    expectedReservedRunVersion: positiveInteger(input.expectedReservedRunVersion, "expectedReservedRunVersion"),
+    responder: normalizeDurableChatUserInputResponder(input.responder),
+  };
+}
+
+function normalizeDurableChatUserInputResponder(input: {
+  actorId: string;
+  authActorSource: DurableChatUserInputResponderAuthSource;
+}) {
+  const responder = readJsonObject(input);
+  if (
+    !responder ||
+    !hasExactKeys(responder, ["actorId", "authActorSource"]) ||
+    !isDurableChatUserInputResponderAuthSource(input.authActorSource)
+  ) {
+    throw new ValidationError({ field: "responder" });
+  }
+  return {
+    actorId: identifier(input.actorId, "responder.actorId"),
+    authActorSource: input.authActorSource,
+  };
+}
+
+function normalizeDurableChatRuntimeConfigurationReceipt(
+  input: DurableChatRuntimeConfigurationReceipt,
+  field: string,
+): DurableChatRuntimeConfigurationReceipt {
+  const receipt = readJsonObject(input);
+  if (!receipt || !hasExactKeys(receipt, ["provider", "revision", "scopeRef", "targetId"])) {
+    throw new ValidationError({ field });
+  }
+  return {
+    targetId: secureConfigurationTargetId(input.targetId, `${field}.targetId`),
+    provider: boundedIdentifier(input.provider, `${field}.provider`, 128),
+    revision: digest(input.revision, `${field}.revision`),
+    scopeRef: boundedIdentifier(input.scopeRef, `${field}.scopeRef`, 256),
   };
 }
 
@@ -5172,6 +6056,41 @@ function mapDurableChatUserInputContinuationSeal(
     queuedRunVersion: asPositiveInteger(row.queued_run_version),
     resolvedAt: row.resolved_at,
     materialSha256: row.material_sha256,
+  };
+}
+
+function mapDurableChatSecureConfigurationReservation(
+  row: DurableChatSecureConfigurationReservationRow,
+): DurableChatSecureConfigurationReservationRecord {
+  return {
+    version: 1,
+    reservationId: row.reservation_id,
+    admissionId: row.admission_id,
+    sessionIncarnationId: row.session_incarnation_id,
+    workspaceId: row.workspace_id,
+    sessionId: row.session_id,
+    turnId: row.turn_id,
+    durableRunId: row.durable_run_id,
+    promptId: row.prompt_id,
+    targetId: row.target_id,
+    responderActorId: row.responder_actor_id,
+    responderAuthActorSource: row.responder_auth_actor_source,
+    waitingRunVersion: asPositiveInteger(row.waiting_run_version),
+    reservedRunVersion: asPositiveInteger(row.reserved_run_version),
+    expiresAt: row.expires_at,
+    status: row.status,
+    ...(row.provider ? { provider: row.provider } : {}),
+    ...(row.configuration_revision ? { configurationRevision: row.configuration_revision } : {}),
+    scopeRef: row.scope_ref,
+    reservedAt: row.reserved_at,
+    ...(row.reclaimed_at ? { reclaimedAt: row.reclaimed_at } : {}),
+    ...(row.completed_at ? { completedAt: row.completed_at } : {}),
+    ...(row.released_at ? { releasedAt: row.released_at } : {}),
+    ...(row.expired_at ? { expiredAt: row.expired_at } : {}),
+    ...(row.reconciled_at ? { reconciledAt: row.reconciled_at } : {}),
+    ...(row.reconciled_by_reservation_id ? { reconciledByReservationId: row.reconciled_by_reservation_id } : {}),
+    requiresReconciliation:
+      row.status === "expired_unreconciled" || (row.status === "reserved" && row.reclaimed_at !== null),
   };
 }
 
@@ -6362,6 +7281,18 @@ interface ExactChatUserInputPrompt {
   title: string;
   question: string;
   options?: Array<{ optionId: string; label: string; description: string }>;
+  required?: boolean;
+  expiresAt?: string;
+  secureConfiguration?: {
+    targetId: string;
+    targetLabel: string;
+    secretFieldLabel: string;
+    acquisitionUrl?: string;
+    acquisitionLabel?: string;
+    storage: "os_keychain";
+    scope: "installation";
+    verification: "live_probe";
+  };
 }
 
 function assertExactDurableChatUserInputWait(
@@ -6382,6 +7313,7 @@ function assertExactDurableChatUserInputWait(
 function readExactChatUserInputPrompt(value: string, promptId: string): ExactChatUserInputPrompt {
   const prompt = parseJsonObject(value);
   const options = prompt.options;
+  const secureConfiguration = readJsonObject(prompt.secureConfiguration);
   if (
     prompt.promptId !== promptId ||
     typeof prompt.turnId !== "string" ||
@@ -6395,6 +7327,61 @@ function readExactChatUserInputPrompt(value: string, promptId: string): ExactCha
       "SESSION_MUTATION_USER_INPUT_PROMPT_CONFLICT",
       "Chat turn pending user-input prompt is invalid.",
     );
+  }
+  let normalizedSecureConfiguration: ExactChatUserInputPrompt["secureConfiguration"];
+  if (prompt.secureConfiguration !== undefined) {
+    const hasLegacySecureConfigurationKeys =
+      secureConfiguration !== undefined &&
+      hasExactKeys(secureConfiguration, [
+        "scope",
+        "secretFieldLabel",
+        "storage",
+        "targetId",
+        "targetLabel",
+        "verification",
+      ]);
+    const hasAcquisitionSecureConfigurationKeys =
+      secureConfiguration !== undefined &&
+      hasExactKeys(secureConfiguration, [
+        "acquisitionLabel",
+        "acquisitionUrl",
+        "scope",
+        "secretFieldLabel",
+        "storage",
+        "targetId",
+        "targetLabel",
+        "verification",
+      ]);
+    const expectedAcquisition = secureConfigurationAcquisitionMetadata(secureConfiguration?.targetId);
+    if (
+      !secureConfiguration ||
+      (!hasLegacySecureConfigurationKeys && !hasAcquisitionSecureConfigurationKeys) ||
+      typeof secureConfiguration.targetId !== "string" ||
+      !secureConfiguration.targetId.trim() ||
+      typeof secureConfiguration.targetLabel !== "string" ||
+      typeof secureConfiguration.secretFieldLabel !== "string" ||
+      secureConfiguration.storage !== "os_keychain" ||
+      secureConfiguration.scope !== "installation" ||
+      secureConfiguration.verification !== "live_probe" ||
+      (hasAcquisitionSecureConfigurationKeys &&
+        (!expectedAcquisition ||
+          secureConfiguration.acquisitionUrl !== expectedAcquisition.acquisitionUrl ||
+          secureConfiguration.acquisitionLabel !== expectedAcquisition.acquisitionLabel))
+    ) {
+      throw admissionConflict(
+        "SESSION_MUTATION_USER_INPUT_PROMPT_CONFLICT",
+        "Chat turn pending secure configuration prompt is invalid.",
+      );
+    }
+    normalizedSecureConfiguration = {
+      targetId: secureConfiguration.targetId.trim(),
+      targetLabel: secureConfiguration.targetLabel,
+      secretFieldLabel: secureConfiguration.secretFieldLabel,
+      ...(hasAcquisitionSecureConfigurationKeys && expectedAcquisition ? expectedAcquisition : {}),
+      storage: "os_keychain",
+      scope: "installation",
+      verification: "live_probe",
+    };
   }
   let normalizedOptions: ExactChatUserInputPrompt["options"];
   if (options !== undefined) {
@@ -6428,7 +7415,48 @@ function readExactChatUserInputPrompt(value: string, promptId: string): ExactCha
     title: prompt.title,
     question: prompt.question,
     ...(normalizedOptions ? { options: normalizedOptions } : {}),
+    ...(typeof prompt.required === "boolean" ? { required: prompt.required } : {}),
+    ...(typeof prompt.expiresAt === "string" ? { expiresAt: prompt.expiresAt } : {}),
+    ...(normalizedSecureConfiguration ? { secureConfiguration: normalizedSecureConfiguration } : {}),
   };
+}
+
+function secureConfigurationAcquisitionMetadata(
+  targetId: unknown,
+): { acquisitionUrl: string; acquisitionLabel: string } | undefined {
+  if (targetId === "search.brave") {
+    return {
+      acquisitionUrl: "https://brave.com/search/api/",
+      acquisitionLabel: "Get a Brave Search API key",
+    };
+  }
+  if (targetId === "search.parallel") {
+    return {
+      acquisitionUrl: "https://platform.parallel.ai/",
+      acquisitionLabel: "Get a Parallel API key",
+    };
+  }
+  return undefined;
+}
+
+function requireExactSecureConfigurationPrompt(
+  prompt: ExactChatUserInputPrompt,
+  expectedTargetId?: string,
+): ExactChatUserInputPrompt["secureConfiguration"] & { expiresAt: string } {
+  const secureConfiguration = prompt.secureConfiguration;
+  if (
+    !secureConfiguration ||
+    prompt.required !== true ||
+    !prompt.expiresAt ||
+    Number.isNaN(Date.parse(prompt.expiresAt)) ||
+    (expectedTargetId !== undefined && secureConfiguration.targetId !== expectedTargetId)
+  ) {
+    throw admissionConflict(
+      "SESSION_MUTATION_SECURE_CONFIGURATION_PROMPT_CONFLICT",
+      "Durable Chat prompt is not the exact required secure configuration target.",
+    );
+  }
+  return { ...secureConfiguration, expiresAt: prompt.expiresAt };
 }
 
 function normalizeChatUserInputResponse(
@@ -6458,6 +7486,7 @@ function buildDurableChatUserInputResumeRecord(
   prompt: ExactChatUserInputPrompt,
   response: ResolveDurableChatUserInputInput["response"],
   resolvedAt: string,
+  runtimeConfigurationReceipt?: DurableChatRuntimeConfigurationReceipt,
 ): DurableChatUserInputResumeRecord {
   if (prompt.kind !== response.kind) {
     throw admissionConflict(
@@ -6473,6 +7502,7 @@ function buildDurableChatUserInputResumeRecord(
       question: prompt.question,
       answeredAt: resolvedAt,
       response,
+      ...(runtimeConfigurationReceipt ? { runtimeConfigurationReceipt } : {}),
     };
   }
   const option = prompt.options?.find((candidate) => candidate.optionId === response.optionId);
@@ -6490,6 +7520,7 @@ function buildDurableChatUserInputResumeRecord(
     answeredAt: resolvedAt,
     response,
     selectedOption: option,
+    ...(runtimeConfigurationReceipt ? { runtimeConfigurationReceipt } : {}),
   };
 }
 
@@ -6501,10 +7532,28 @@ function normalizeDurableChatUserInputResumeRecord(
   if (!record) throw new ValidationError({ field });
   const kind = record.kind;
   if (kind !== "single_select" && kind !== "text") throw new ValidationError({ field: `${field}.kind` });
+  const hasRuntimeConfigurationReceipt = record.runtimeConfigurationReceipt !== undefined;
   const expectedKeys =
     kind === "single_select"
-      ? ["answeredAt", "kind", "promptId", "question", "response", "selectedOption", "title"]
-      : ["answeredAt", "kind", "promptId", "question", "response", "title"];
+      ? [
+          "answeredAt",
+          "kind",
+          "promptId",
+          "question",
+          "response",
+          ...(hasRuntimeConfigurationReceipt ? ["runtimeConfigurationReceipt"] : []),
+          "selectedOption",
+          "title",
+        ]
+      : [
+          "answeredAt",
+          "kind",
+          "promptId",
+          "question",
+          "response",
+          ...(hasRuntimeConfigurationReceipt ? ["runtimeConfigurationReceipt"] : []),
+          "title",
+        ];
   if (!hasExactKeys(record, expectedKeys)) throw new ValidationError({ field });
   const promptId = identifier(String(record.promptId ?? ""), `${field}.promptId`);
   const title = typeof record.title === "string" ? record.title : undefined;
@@ -6513,6 +7562,12 @@ function normalizeDurableChatUserInputResumeRecord(
   const answeredAt = requiredIsoTimestamp(String(record.answeredAt ?? ""), `${field}.answeredAt`);
   const response = readJsonObject(record.response);
   if (!response) throw new ValidationError({ field: `${field}.response` });
+  const runtimeConfigurationReceipt = hasRuntimeConfigurationReceipt
+    ? normalizeDurableChatRuntimeConfigurationReceipt(
+        record.runtimeConfigurationReceipt as DurableChatRuntimeConfigurationReceipt,
+        `${field}.runtimeConfigurationReceipt`,
+      )
+    : undefined;
   if (kind === "text") {
     if (
       !hasExactKeys(response, ["kind", "text"]) ||
@@ -6523,7 +7578,15 @@ function normalizeDurableChatUserInputResumeRecord(
     ) {
       throw new ValidationError({ field: `${field}.response` });
     }
-    return { promptId, kind, title, question, answeredAt, response: { kind: "text", text: response.text } };
+    return {
+      promptId,
+      kind,
+      title,
+      question,
+      answeredAt,
+      response: { kind: "text", text: response.text },
+      ...(runtimeConfigurationReceipt ? { runtimeConfigurationReceipt } : {}),
+    };
   }
   if (
     !hasExactKeys(response, ["kind", "optionId"]) ||
@@ -6555,6 +7618,7 @@ function normalizeDurableChatUserInputResumeRecord(
       label: selectedOption.label,
       description: selectedOption.description,
     },
+    ...(runtimeConfigurationReceipt ? { runtimeConfigurationReceipt } : {}),
   };
 }
 
@@ -6611,6 +7675,12 @@ export function computePostCommitChildAdmissionMaterialSha256(input: PostCommitC
 
 function identifier(value: string, field: string): string {
   return boundedIdentifier(value, field, 256);
+}
+
+function secureConfigurationTargetId(value: string, field: string): string {
+  const normalized = boundedIdentifier(value, field, 256);
+  if (!SECURE_CONFIGURATION_PROVIDER_BY_TARGET[normalized]) throw new ValidationError({ field });
+  return normalized;
 }
 
 function boundedIdentifier(value: string, field: string, max: number): string {

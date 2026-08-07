@@ -711,6 +711,144 @@ describe("SessionMutationAdmissionRepository live PostgreSQL", () => {
       }
     },
   );
+
+  postgresIt(
+    "fences secure configuration effect reservations, concurrent answers, release, and retry",
+    { timeout: 300_000 },
+    async () => {
+      assert.ok(connectionString);
+      const suffix = randomUUID().replaceAll("-", "");
+      const schemaName = `hx411_secure_configuration_${suffix}`;
+      const adminPool = new Pool({ connectionString, max: 2 });
+      const scopedUrl = new URL(connectionString);
+      scopedUrl.searchParams.set("options", `-csearch_path=${schemaName}`);
+      const database = decodeURIComponent(scopedUrl.pathname.replace(/^\//u, "")) || "postgres";
+      const pool = new Pool({ connectionString: scopedUrl.toString(), max: 2 });
+      const migrations = new PostgresDatabaseClient({ connectionString: scopedUrl.toString(), database }, { pool });
+      let db: PostgresSyncDatabaseClient | undefined;
+      try {
+        await adminPool.query(`CREATE SCHEMA ${schemaName}`);
+        await runPostgresMigrations(migrations, POSTGRES_MIGRATIONS);
+        db = new PostgresSyncDatabaseClient({
+          connectionString: scopedUrl.toString(),
+          database,
+          applicationName: `hx411-secure-configuration-${suffix}`,
+          pool: { max: 1, connectionTimeoutMs: 10_000 },
+        });
+        db.exec(`SET search_path TO ${schemaName}`);
+
+        const expired = createPostgresContinuationFixture(db, `expired-${suffix}`);
+        makePostgresContinuationPromptSecure(db, expired, "search.brave", "2000-01-01T00:00:00.000Z");
+        assert.throws(
+          () =>
+            expired.repo.reserveDurableChatSecureConfiguration(
+              postgresSecureConfigurationReservationInput(expired, "search.brave", 2),
+            ),
+          /expired/iu,
+        );
+
+        const restartFixture = createPostgresContinuationFixture(db, `restart-${suffix}`);
+        makePostgresContinuationPromptSecure(db, restartFixture, "search.brave", "2099-08-07T00:00:00.000Z");
+        const restartReserved = restartFixture.repo.reserveDurableChatSecureConfiguration(
+          postgresSecureConfigurationReservationInput(restartFixture, "search.brave", 2),
+        );
+        const recoveredDb = new PostgresSyncDatabaseClient({
+          connectionString: scopedUrl.toString(),
+          database,
+          applicationName: `hx411-secure-configuration-recovered-${suffix}`,
+          pool: { max: 1, connectionTimeoutMs: 10_000 },
+        });
+        try {
+          recoveredDb.exec(`SET search_path TO ${schemaName}`);
+          const recoveredRepo = new SessionMutationAdmissionRepository(recoveredDb);
+          const replayed = recoveredRepo.reserveDurableChatSecureConfiguration({
+            ...postgresSecureConfigurationReservationInput(restartFixture, "search.brave", 2),
+            expectedWaitingRunVersion: restartReserved.run.version,
+          });
+          assert.equal(replayed.disposition, "replayed");
+          assert.equal(replayed.requiresTargetReconciliation, false);
+          assert.deepEqual(
+            recoveredRepo.listBlockingDurableChatSecureConfigurationsByTargetScope({
+              targetId: "search.brave",
+              scopeRef: "root-postgres-installation",
+            }),
+            [replayed.reservation],
+          );
+        } finally {
+          recoveredDb.close();
+        }
+
+        const fixture = createPostgresContinuationFixture(db, `active-${suffix}`);
+        makePostgresContinuationPromptSecure(db, fixture, "search.parallel", "2099-08-07T00:00:00.000Z");
+        assert.throws(
+          () =>
+            fixture.repo.reserveDurableChatSecureConfiguration(
+              postgresSecureConfigurationReservationInput(fixture, "search.brave", 2),
+            ),
+          /exact required secure configuration target/iu,
+        );
+        const first = fixture.repo.reserveDurableChatSecureConfiguration(
+          postgresSecureConfigurationReservationInput(fixture, "search.parallel", 2),
+        );
+        assert.equal(first.run.version, 3);
+
+        const concurrentAnswer = {
+          ...fixture.resolution,
+          expectedWaitingRunVersion: 3,
+          response: { kind: "text" as const, text: "ordinary concurrent answer" },
+        };
+        const race = await runPostgresContinuationRace(scopedUrl.toString(), database, schemaName, concurrentAnswer);
+        assert.equal(
+          race.every((result) => !result.ok && /active reservation and receipt/iu.test(result.error ?? "")),
+          true,
+        );
+
+        const released = fixture.repo.releaseDurableChatSecureConfiguration({
+          reservationId: first.reservation.reservationId,
+          admissionIdentity: fixture.resolution.admissionIdentity,
+          durableRunId: fixture.runId,
+          promptId: fixture.resolution.promptId,
+          targetId: "search.parallel",
+          scopeRef: "root-postgres-installation",
+          expectedReservedRunVersion: 3,
+          responder: fixture.resolution.responder,
+        });
+        assert.equal(released.reservation.status, "released");
+        const retry = fixture.repo.reserveDurableChatSecureConfiguration(
+          postgresSecureConfigurationReservationInput(fixture, "search.parallel", 3),
+        );
+        assert.equal(retry.run.version, 4);
+        const receipt = {
+          targetId: "search.parallel",
+          provider: "parallel",
+          revision: "d".repeat(64),
+          scopeRef: "root-postgres-installation",
+        };
+        const resolved = fixture.repo.resolveDurableChatUserInput({
+          ...fixture.resolution,
+          expectedWaitingRunVersion: 4,
+          response: { kind: "text", text: "Runtime configuration completed and validated." },
+          runtimeConfigurationReceipt: receipt,
+        });
+        assert.deepEqual(resolved.run, { runId: fixture.runId, status: "queued", version: 5 });
+        assert.deepEqual(resolved.responseRecord.runtimeConfigurationReceipt, receipt);
+        assert.equal(
+          db
+            .prepare(
+              `SELECT COUNT(*) AS count FROM chat_turn_secure_configuration_reservations
+               WHERE durable_run_id = @runId AND status = 'released'`,
+            )
+            .get<{ count: number }>({ runId: fixture.runId })?.count,
+          1,
+        );
+      } finally {
+        db?.close();
+        await migrations.close();
+        await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
+        await adminPool.end();
+      }
+    },
+  );
 });
 
 function createPostgresContinuationFixture(
@@ -876,6 +1014,65 @@ function createPostgresContinuationFixture(
       responder: { actorId: "operator-a", authActorSource: "token" as const },
       response: { kind: "text" as const, text: "Proceed with the verified plan." },
     },
+  };
+}
+
+function makePostgresContinuationPromptSecure(
+  db: PostgresSyncDatabaseClient,
+  fixture: ReturnType<typeof createPostgresContinuationFixture>,
+  targetId: "search.brave" | "search.parallel",
+  expiresAt: string,
+): void {
+  const targetLabel = targetId === "search.brave" ? "Brave Search" : "Parallel Search";
+  const acquisition =
+    targetId === "search.brave"
+      ? {
+          acquisitionUrl: "https://brave.com/search/api/",
+          acquisitionLabel: "Get a Brave Search API key",
+        }
+      : {
+          acquisitionUrl: "https://platform.parallel.ai/",
+          acquisitionLabel: "Get a Parallel API key",
+        };
+  db.prepare(
+    `UPDATE chat_turn_traces SET pending_user_input_json = @pendingUserInputJson
+     WHERE turn_id = @turnId`,
+  ).run({
+    turnId: fixture.turnId,
+    pendingUserInputJson: canonicalJsonString({
+      promptId: fixture.resolution.promptId,
+      turnId: fixture.turnId,
+      kind: "text",
+      title: `Configure ${targetLabel}`,
+      question: `Enter the credential needed to connect ${targetLabel}.`,
+      required: true,
+      expiresAt,
+      secureConfiguration: {
+        targetId,
+        targetLabel,
+        secretFieldLabel: `${targetLabel} API key`,
+        ...acquisition,
+        storage: "os_keychain",
+        scope: "installation",
+        verification: "live_probe",
+      },
+    }),
+  });
+}
+
+function postgresSecureConfigurationReservationInput(
+  fixture: ReturnType<typeof createPostgresContinuationFixture>,
+  targetId: "search.brave" | "search.parallel",
+  expectedWaitingRunVersion: number,
+) {
+  return {
+    admissionIdentity: fixture.resolution.admissionIdentity,
+    durableRunId: fixture.runId,
+    expectedWaitingRunVersion,
+    promptId: fixture.resolution.promptId,
+    targetId,
+    scopeRef: "root-postgres-installation",
+    responder: fixture.resolution.responder,
   };
 }
 

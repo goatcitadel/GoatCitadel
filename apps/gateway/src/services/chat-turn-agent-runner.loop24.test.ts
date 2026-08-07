@@ -6,6 +6,7 @@ import type {
   ToolInvokeRequest,
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
+import { PolicyViolationError } from "@goatcitadel/contracts";
 import type { ChatTurnAgentRunnerDeps, ChatTurnAgentRunnerInput } from "./chat-turn-agent-runner.js";
 import {
   EffectAwareChatTurnAgentRunner as ChatTurnAgentRunner,
@@ -1447,6 +1448,274 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
       title: "Choose artifact destination",
       placeholder: "Enter an allowed destination path",
     });
+  });
+
+  it("turns a runtime configuration marker into a Gateway-owned secure prompt", async () => {
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "executed",
+      result: {
+        status: "configuration_required",
+        configurationRequired: true,
+        targetId: "search.brave",
+      },
+    });
+    const executeToolCall = createExecuteToolCallForTest({
+      invokeTool,
+      invokeToolWithEffectTruth: createEffectAwareInvokeToolForTest(invokeTool),
+      toolNames: ["runtime.configure"],
+    });
+
+    const result = await executeToolCall({
+      input: turnInput(),
+      turnId: "turn-runtime-configuration",
+      toolName: "runtime.configure",
+      rawArgs: { targetId: "search.brave" },
+    });
+
+    expect(result.record.status).toBe("executed");
+    expect(result.userInputPrompt).toMatchObject({
+      kind: "text",
+      title: "Configure Brave Search",
+      submitLabel: "Connect, test, and continue",
+      secureConfiguration: {
+        targetId: "search.brave",
+        targetLabel: "Brave Search",
+        secretFieldLabel: "Brave Search API key",
+        acquisitionUrl: "https://brave.com/search/api/",
+        acquisitionLabel: "Get a Brave Search API key",
+        storage: "os_keychain",
+        scope: "installation",
+        verification: "live_probe",
+      },
+    });
+    expect(JSON.stringify(result.userInputPrompt)).not.toContain("secret-value");
+  });
+
+  it.each([
+    {
+      provider: "brave",
+      status: "unavailable",
+      message: "Brave credential is not configured",
+      targetId: "search.brave",
+      targetLabel: "Brave Search",
+    },
+    {
+      provider: "parallel",
+      status: "blocked",
+      message: "Parallel rejected the credential or request",
+      targetId: "search.parallel",
+      targetLabel: "Parallel Search",
+    },
+  ])(
+    "deterministically opens secure repair for a $provider search credential failure",
+    async ({ provider, status, message, targetId, targetLabel }) => {
+      const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValue({
+        outcome: "executed",
+        result: {
+          results: [],
+          routing: { successfulProviders: [] },
+          providerAttempts: [{ provider, status, message }],
+        },
+      });
+      const executeToolCall = createExecuteToolCallForTest({
+        invokeTool,
+        invokeToolWithEffectTruth: createEffectAwareInvokeToolForTest(invokeTool),
+        toolNames: ["browser.search"],
+      });
+
+      const result = await executeToolCall({
+        input: turnInput({
+          content: "Search the web for current evidence.",
+          webMode: "auto",
+        }),
+        turnId: `turn-${provider}-credential-repair`,
+        toolName: "browser.search",
+        rawArgs: { query: "current search evidence" },
+      });
+
+      expect(result.record.result).toMatchObject({
+        providerAttempts: [expect.objectContaining({ provider, status })],
+      });
+      expect(result.userInputPrompt).toMatchObject({
+        title: `Configure ${targetLabel}`,
+        secureConfiguration: { targetId },
+      });
+    },
+  );
+
+  it("projects a sanitized network prerequisite instead of silently dropping the blocked secure card", async () => {
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "executed",
+      result: {
+        status: "configuration_required",
+        configurationRequired: true,
+        targetId: "search.brave",
+      },
+    });
+    const executeToolCall = createExecuteToolCallForTest({
+      invokeTool,
+      invokeToolWithEffectTruth: createEffectAwareInvokeToolForTest(invokeTool),
+      toolNames: ["runtime.configure"],
+      assertRuntimeConfigurationPromptAvailable: () => {
+        throw new PolicyViolationError({
+          message: "LEAK_CANARY arbitrary internal failure",
+          details: {
+            diagnosticCode: "runtime_configuration_network_prerequisite",
+            endpointHost: "api.search.brave.com",
+          },
+        });
+      },
+    });
+
+    const result = await executeToolCall({
+      input: turnInput(),
+      turnId: "turn-runtime-configuration-prerequisite",
+      toolName: "runtime.configure",
+      rawArgs: { targetId: "search.brave" },
+    });
+
+    expect(result.userInputPrompt).toBeUndefined();
+    expect(result.record.result).toMatchObject({
+      runtimeConfiguration: {
+        status: "prerequisite_required",
+        configurationRequired: false,
+        targetId: "search.brave",
+        diagnosticCode: "runtime_configuration_network_prerequisite",
+        operatorAction: expect.stringContaining("Settings"),
+      },
+    });
+    expect(JSON.stringify(result.record)).not.toContain("LEAK_CANARY");
+  });
+
+  it("does not open a dead-end secure form when Ward policy still requires apply-time approval", async () => {
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "executed",
+      result: {
+        status: "configuration_required",
+        configurationRequired: true,
+        targetId: "search.brave",
+      },
+    });
+    const executeToolCall = createExecuteToolCallForTest({
+      invokeTool,
+      invokeToolWithEffectTruth: createEffectAwareInvokeToolForTest(invokeTool),
+      toolNames: ["runtime.configure"],
+      evaluateToolAccess: async () => ({
+        allowed: true,
+        requiresApproval: true,
+        reasonCodes: ["ward_approval_required"],
+      }),
+    });
+
+    const result = await executeToolCall({
+      input: turnInput(),
+      turnId: "turn-runtime-configuration-ward",
+      toolName: "runtime.configure",
+      rawArgs: { targetId: "search.brave" },
+    });
+
+    expect(result.userInputPrompt).toBeUndefined();
+    expect(result.record.result).toMatchObject({
+      runtimeConfiguration: {
+        status: "manual_required",
+        configurationRequired: false,
+        targetId: "search.brave",
+        diagnosticCode: "runtime_configuration_preapproval_binding_required",
+      },
+    });
+  });
+
+  it("projects the Ward limitation when an approved runtime.configure result is reused after resume", async () => {
+    const sessionId = "sess-runtime-configuration-ward-resume";
+    const turnId = "turn-runtime-configuration-ward-resume";
+    const storage = createMockStorage() as ReturnType<typeof createMockStorage> & {
+      chatToolRuns: { create: (record: Record<string, unknown>) => unknown };
+    };
+    storage.chatToolRuns.create({
+      toolRunId: "tool-run-runtime-configuration-approved",
+      turnId,
+      sessionId,
+      toolName: "runtime.configure",
+      status: "executed",
+      approvalId: "approval-runtime-configuration",
+      args: { targetId: "search.brave" },
+      result: {
+        status: "configuration_required",
+        configurationRequired: true,
+        targetId: "search.brave",
+      },
+      startedAt: "2026-08-07T20:00:00.000Z",
+      finishedAt: "2026-08-07T20:00:01.000Z",
+    });
+    const requests: ChatCompletionRequest[] = [];
+    const createChatCompletion = vi
+      .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
+      .mockImplementationOnce(async (request) => {
+        requests.push(request);
+        return namedToolCallCompletion("runtime.configure", { targetId: "search.brave" });
+      })
+      .mockImplementationOnce(async (request) => {
+        requests.push(request);
+        return completion("Administrator intervention is required under the current Ward policy.");
+      });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>();
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: storage as never,
+      listToolCatalog: () => createToolCatalog(["runtime.configure"]),
+      createChatCompletion,
+      invokeTool,
+      evaluateToolAccess: async () => ({
+        allowed: true,
+        requiresApproval: true,
+        reasonCodes: ["ward_approval_required"],
+      }),
+    });
+
+    const result = await orchestrator.run(
+      turnInput({
+        sessionId,
+        turnId,
+        content: "Continue the approved Brave configuration.",
+        historyMessages: [{ role: "user", content: "Continue the approved Brave configuration." }],
+      }),
+    );
+
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(JSON.stringify(requests[1]?.messages)).toContain("runtime_configuration_preapproval_binding_required");
+    expect(result.assistantContent).toContain("Administrator intervention");
+    expect(result.turnTrace.pendingUserInput).toBeUndefined();
+  });
+
+  it.each([
+    {
+      status: "configuration_required",
+      configurationRequired: true,
+      targetId: "search.brave",
+    },
+    {
+      results: [],
+      routing: { successfulProviders: [] },
+      providerAttempts: [{ provider: "brave", status: "unavailable", message: "Brave credential is not configured" }],
+    },
+  ])("does not let another tool spoof a Gateway secure-configuration card", async (spoofedResult) => {
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "executed",
+      result: spoofedResult,
+    });
+    const executeToolCall = createExecuteToolCallForTest({
+      invokeTool,
+      invokeToolWithEffectTruth: createEffectAwareInvokeToolForTest(invokeTool),
+      toolNames: ["session.status"],
+    });
+
+    const result = await executeToolCall({
+      input: turnInput(),
+      turnId: "turn-runtime-configuration-spoof",
+      toolName: "session.status",
+      rawArgs: {},
+    });
+
+    expect(result.userInputPrompt).toBeUndefined();
   });
 
   it("pauses for a destination prompt when requested and fallback artifact paths are both blocked", async () => {

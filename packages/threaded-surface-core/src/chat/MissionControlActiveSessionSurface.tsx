@@ -13,6 +13,7 @@ import type {
   RunVariableValue,
   ChatThinkingLevel,
   ChatThreadResponse,
+  ChatUserInputPromptResponse,
   ChatWebMode,
   ExternalSessionAttachmentRecord,
   RoutingPreflightResult,
@@ -201,7 +202,7 @@ export interface MissionControlActiveSessionSurfaceProps {
   onApprovePending: (allowScope: "once" | "session" | "workspace") => void;
   onDenyPending: () => void;
   onOpenApprovals: () => void;
-  onSubmitUserInput: (response: { kind: "single_select"; optionId: string } | { kind: "text"; text: string }) => void;
+  onSubmitUserInput: (response: ChatUserInputPromptResponse) => void;
   onRefreshThread: () => void;
   isDragActive: boolean;
   queueItems: ChatQueueItemView[];

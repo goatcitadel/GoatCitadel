@@ -2091,6 +2091,16 @@ export interface ChatUserInputPromptRecord {
   placeholder?: string;
   submitLabel?: string;
   multiline?: boolean;
+  secureConfiguration?: {
+    targetId: string;
+    targetLabel: string;
+    secretFieldLabel: string;
+    acquisitionUrl?: string;
+    acquisitionLabel?: string;
+    storage: "os_keychain";
+    scope: "installation";
+    verification: "live_probe";
+  };
 }
 
 export type ChatUserInputPromptResponse =
@@ -2101,10 +2111,18 @@ export type ChatUserInputPromptResponse =
   | {
       kind: "text";
       text: string;
+    }
+  | {
+      kind: "secure_configuration";
+      secret: string;
     };
 
 export interface ChatUserInputPromptAnswerRequest {
-  response: ChatUserInputPromptResponse;
+  response: Exclude<ChatUserInputPromptResponse, { kind: "secure_configuration" }>;
+}
+
+export interface ChatSecureConfigurationSubmitRequest {
+  secret: string;
 }
 
 export interface ChatUserInputPromptAnswerResponse {
@@ -2115,6 +2133,13 @@ export interface ChatUserInputPromptAnswerResponse {
   resumed: boolean;
   resumedTurnId?: string;
   resumedRunId?: string;
+  replayed?: boolean;
+  runtimeConfigurationReceipt?: {
+    targetId: string;
+    provider: string;
+    revision: string;
+    scopeRef: string;
+  };
 }
 
 export interface ChatStreamChunkBase {

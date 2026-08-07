@@ -135,15 +135,49 @@ describe("gateway route rate limits", () => {
     },
     RATE_LIMIT_TEST_TIMEOUT_MS,
   );
+
+  it(
+    "keeps secure Chat configuration bounded and no-store when general rate limiting is disabled",
+    async () => {
+      configureRateLimitedGateway(false);
+      const app = await buildApp();
+      try {
+        const statuses: number[] = [];
+        for (let attempt = 0; attempt < 6; attempt += 1) {
+          const response = await app.inject({
+            method: "POST",
+            url: `/api/v1/chat/sessions/missing-${attempt}/turns/missing-${attempt}/user-input/secure-prompt-${attempt}/secure-configuration`,
+            remoteAddress: "127.0.0.1",
+            headers: {
+              authorization: `Bearer ${TOKEN}`,
+              "idempotency-key": `secure-rate-limit-${attempt}`,
+            },
+            // Rate limiting happens before strict body validation. Keeping the
+            // request invalid proves the mandatory bucket without entering the
+            // runtime configuration owner or carrying a credential-like value.
+            payload: { secret: "" },
+          });
+          statuses.push(response.statusCode);
+          expect(response.headers["cache-control"]).toBe("no-store");
+          expect(response.headers.pragma).toBe("no-cache");
+        }
+        expect(statuses.slice(0, 5)).not.toContain(429);
+        expect(statuses[5]).toBe(429);
+      } finally {
+        await app.close();
+      }
+    },
+    RATE_LIMIT_TEST_TIMEOUT_MS,
+  );
 });
 
-function configureRateLimitedGateway(): void {
+function configureRateLimitedGateway(enabled = true): void {
   process.env.GATEWAY_HOST = "127.0.0.1";
   process.env.GOATCITADEL_ALLOWED_ORIGINS = "http://localhost:5173";
   process.env.GOATCITADEL_ALLOW_TAILNET_DEV_ORIGINS = "false";
   process.env.GOATCITADEL_AUTH_MODE = "token";
   process.env.GOATCITADEL_AUTH_TOKEN = TOKEN;
-  process.env.GOATCITADEL_RATE_LIMIT_ENABLED = "true";
+  process.env.GOATCITADEL_RATE_LIMIT_ENABLED = String(enabled);
   process.env.GOATCITADEL_RATE_LIMIT_MAX_GENERAL = "2";
   process.env.GOATCITADEL_RATE_LIMIT_MAX_MUTATION = "2";
   process.env.GOATCITADEL_RATE_LIMIT_MAX_AUTH = "20";

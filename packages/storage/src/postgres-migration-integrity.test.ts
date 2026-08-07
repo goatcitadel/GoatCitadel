@@ -853,4 +853,26 @@ describe("protected Postgres migration integrity", () => {
     assert.match(sql, /pg_advisory_xact_lock\(hashtextextended\([\s\S]*?,\s*506\s*\)\)/u);
     assert.match(sql, /pg_advisory_xact_lock\(hashtextextended\([\s\S]*?,\s*507\s*\)\)/u);
   });
+
+  it("keeps migration 131 secret-free, CAS-fenced, DB-clock-valid, and cancellation-blocking", () => {
+    const migration = POSTGRES_MIGRATIONS.find((candidate) => candidate.version === 131);
+    assert.equal(migration?.name, "durable_chat_secure_configuration_reservations");
+    assert.equal(migration?.batchedStatements, undefined);
+    const sql = migration?.sql ?? "";
+    assert.match(sql, /CREATE TABLE IF NOT EXISTS chat_turn_secure_configuration_reservations/u);
+    assert.match(sql, /reserved_run_version = waiting_run_version \+ 1/u);
+    assert.match(sql, /gc_try_parse_timestamptz\(expires_at\) IS NOT NULL/u);
+    assert.match(sql, /idx_chat_turn_secure_configuration_one_reserved[\s\S]*WHERE status = 'reserved'/u);
+    assert.match(sql, /idx_chat_turn_secure_configuration_one_target_scope[\s\S]*WHERE status = 'reserved'/u);
+    assert.match(sql, /expired_unreconciled/u);
+    assert.match(sql, /reconciled_by_reservation_id/u);
+    assert.match(sql, /reclaimed_at/u);
+    assert.match(sql, /gc_secure_configuration_reservation_update_guard/u);
+    assert.match(sql, /gc_secure_configuration_admission_close_guard/u);
+    assert.match(sql, /gc_secure_configuration_durable_run_transition_guard/u);
+    assert.match(sql, /gc_try_parse_timestamptz\(reservation\.expires_at\) > clock_timestamp\(\)/u);
+    assert.match(sql, /configuration_revision ~ '\^\[0-9a-f\]\{64\}\$'/u);
+    assert.doesNotMatch(sql, /(?:secret|credential|token|value|digest|hash)\s+(?:TEXT|BYTEA|JSONB?)/iu);
+    assert.doesNotMatch(sql, /\b(?:INSERT\s+INTO|UPDATE\s+durable_runs|DELETE\s+FROM)\b/iu);
+  });
 });

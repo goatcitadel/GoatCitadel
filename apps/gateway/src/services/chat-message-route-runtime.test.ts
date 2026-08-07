@@ -554,6 +554,255 @@ describe("chat-message-route-runtime", () => {
     expect(JSON.stringify(runtime.publishRealtime.mock.calls)).not.toContain("Continue with the safe path");
   });
 
+  it("configures through the Gateway boundary and persists only a non-secret continuation", async () => {
+    const runtime = createRuntime({
+      trace: createTrace({
+        status: "waiting_for_user_input",
+        durable: { runId: "run-secure" },
+        pendingUserInput: {
+          promptId: "prompt-secure",
+          kind: "text",
+          title: "Configure Brave Search",
+          question: "Enter the Brave Search API key.",
+          required: true,
+          expiresAt: "2099-08-07T20:00:00.000Z",
+          secureConfiguration: {
+            targetId: "search.brave",
+            targetLabel: "Brave Search",
+            secretFieldLabel: "Brave Search API key",
+            storage: "os_keychain",
+            scope: "installation",
+            verification: "live_probe",
+          },
+        },
+      }),
+      durableRun: createDurableRun("run-secure", "waiting"),
+    });
+
+    await expect(
+      answerChatUserInputPrompt(runtime, "sess-1", "turn-1", "prompt-secure", {
+        kind: "secure_configuration",
+        secret: "raw-brave-secret",
+      }),
+    ).resolves.toMatchObject({ resumed: true, resumedRunId: "run-secure" });
+
+    expect(runtime.configureRuntimeTarget).toHaveBeenCalledWith({
+      targetId: "search.brave",
+      secret: "raw-brave-secret",
+      requestId: "prompt-secure",
+      workspaceId: "workspace-1",
+      sessionId: "sess-1",
+      turnId: "turn-1",
+      actorId: TEST_RESPONDER.actorId,
+      expiresAt: "2099-08-07T20:00:00.000Z",
+      operatorId: TEST_RESPONDER.actorId,
+      authActorSource: TEST_RESPONDER.authActorSource,
+      runId: "run-secure",
+    });
+    expect(runtime.storage.sessionMutationAdmissions.reserveDurableChatSecureConfiguration).toHaveBeenCalledWith(
+      expect.objectContaining({
+        durableRunId: "run-secure",
+        expectedWaitingRunVersion: 3,
+        promptId: "prompt-secure",
+        targetId: "search.brave",
+        scopeRef: "test-installation-01",
+        responder: TEST_RESPONDER,
+      }),
+    );
+    const admissionRequest = vi.mocked(runtime.storage.sessionMutationAdmissions.resolveDurableChatUserInput).mock
+      .calls[0]?.[0];
+    expect(admissionRequest?.response).toEqual({
+      kind: "text",
+      text: expect.stringContaining("excluded from Chat context"),
+    });
+    expect(admissionRequest).toMatchObject({
+      expectedWaitingRunVersion: 4,
+      runtimeConfigurationReceipt: {
+        targetId: "search.brave",
+        provider: "brave",
+        revision: "runtime-revision-1",
+        scopeRef: "test-installation-01",
+      },
+    });
+    expect(JSON.stringify(admissionRequest)).not.toContain("raw-brave-secret");
+    expect(JSON.stringify(runtime.recordDevDiagnostic.mock.calls)).not.toContain("raw-brave-secret");
+    expect(JSON.stringify(runtime.publishRealtime.mock.calls)).not.toContain("raw-brave-secret");
+    expect(runtime.finalizeRuntimeConfiguration).toHaveBeenCalledWith("prompt-secure");
+    expect(runtime.rollbackRuntimeConfiguration).not.toHaveBeenCalled();
+  });
+
+  it("rolls back an applied secure configuration when durable prompt settlement fails", async () => {
+    const runtime = createRuntime({
+      trace: createTrace({
+        status: "waiting_for_user_input",
+        durable: { runId: "run-secure-failed-cas" },
+        pendingUserInput: {
+          promptId: "prompt-secure-failed-cas",
+          kind: "text",
+          question: "Enter the Brave Search API key.",
+          expiresAt: "2099-08-07T20:00:00.000Z",
+          secureConfiguration: {
+            targetId: "search.brave",
+            targetLabel: "Brave Search",
+            secretFieldLabel: "Brave Search API key",
+            storage: "os_keychain",
+            scope: "installation",
+            verification: "live_probe",
+          },
+        },
+      }),
+      durableRun: createDurableRun("run-secure-failed-cas", "waiting"),
+    });
+    vi.mocked(runtime.storage.sessionMutationAdmissions.resolveDurableChatUserInput).mockRejectedValueOnce(
+      new Error("stale durable run version"),
+    );
+
+    await expect(
+      answerChatUserInputPrompt(runtime, "sess-1", "turn-1", "prompt-secure-failed-cas", {
+        kind: "secure_configuration",
+        secret: "raw-secret-that-must-roll-back",
+      }),
+    ).rejects.toThrow("stale durable run version");
+
+    expect(runtime.rollbackRuntimeConfiguration).toHaveBeenCalledWith("prompt-secure-failed-cas");
+    expect(runtime.storage.sessionMutationAdmissions.releaseDurableChatSecureConfiguration).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reservationId: "reservation:prompt-secure-failed-cas",
+        expectedReservedRunVersion: 4,
+      }),
+    );
+    expect(runtime.finalizeRuntimeConfiguration).not.toHaveBeenCalled();
+  });
+
+  it("never lets a replay claimant apply or release another secure configuration fence", async () => {
+    const disposition = "replayed" as const;
+    const runtime = createRuntime({
+      trace: createTrace({
+        status: "waiting_for_user_input",
+        durable: { runId: "run-secure-shared-fence" },
+        pendingUserInput: {
+          promptId: "prompt-secure-shared-fence",
+          kind: "text",
+          question: "Enter the Brave Search API key.",
+          expiresAt: "2099-08-07T20:00:00.000Z",
+          secureConfiguration: {
+            targetId: "search.brave",
+            targetLabel: "Brave Search",
+            secretFieldLabel: "Brave Search API key",
+            storage: "os_keychain",
+            scope: "installation",
+            verification: "live_probe",
+          },
+        },
+      }),
+      durableRun: createDurableRun("run-secure-shared-fence", "waiting"),
+    });
+    vi.mocked(runtime.storage.sessionMutationAdmissions.reserveDurableChatSecureConfiguration).mockImplementationOnce(
+      (request) => ({
+        disposition,
+        run: { runId: request.durableRunId, status: "waiting", version: 4 },
+        reservation: {
+          version: 1,
+          reservationId: "reservation:shared",
+          admissionId: request.admissionIdentity.admissionId,
+          sessionIncarnationId: request.admissionIdentity.sessionIncarnationId,
+          workspaceId: request.admissionIdentity.workspaceId,
+          sessionId: request.admissionIdentity.sessionId,
+          turnId: request.admissionIdentity.turnId,
+          durableRunId: request.durableRunId,
+          promptId: request.promptId,
+          targetId: request.targetId,
+          responderActorId: request.responder.actorId,
+          responderAuthActorSource: request.responder.authActorSource,
+          waitingRunVersion: 3,
+          reservedRunVersion: 4,
+          expiresAt: "2099-08-07T20:00:00.000Z",
+          status: "reserved",
+          scopeRef: request.scopeRef,
+          reservedAt: "2026-08-07T20:00:00.000Z",
+          requiresReconciliation: false,
+        },
+        requiresTargetReconciliation: false,
+      }),
+    );
+    vi.mocked(runtime.configureRuntimeTarget!).mockRejectedValueOnce(new Error("another submission owns this request"));
+
+    await expect(
+      answerChatUserInputPrompt(runtime, "sess-1", "turn-1", "prompt-secure-shared-fence", {
+        kind: "secure_configuration",
+        secret: "different-retry-secret",
+      }),
+    ).rejects.toThrow("already being applied");
+
+    expect(runtime.storage.sessionMutationAdmissions.releaseDurableChatSecureConfiguration).not.toHaveBeenCalled();
+    expect(runtime.configureRuntimeTarget).not.toHaveBeenCalled();
+  });
+
+  it("replays only the durable secret-free receipt after the one-time prompt was consumed", async () => {
+    const durableRun = createDurableRun("run-secure-replay", "running");
+    durableRun.payload = {
+      ...(durableRun.payload as Record<string, unknown>),
+      userInputResponses: [
+        {
+          promptId: "prompt-secure",
+          kind: "text",
+          title: "Configure Brave Search",
+          question: "Enter the Brave Search API key.",
+          answeredAt: "2026-08-07T20:00:00.000Z",
+          response: {
+            kind: "text",
+            text: "Secure runtime configuration completed and the credential was excluded from Chat context.",
+          },
+          runtimeConfigurationReceipt: {
+            targetId: "search.brave",
+            provider: "brave",
+            revision: "runtime-revision-settled",
+            scopeRef: "test-installation-01",
+          },
+        },
+      ],
+    };
+    const runtime = createRuntime({
+      trace: createTrace({
+        status: "running",
+        durable: { runId: "run-secure-replay" },
+        pendingUserInput: undefined,
+      }),
+      durableRun,
+      resolveOutcome: {
+        disposition: "replayed",
+        run: { runId: "run-secure-replay", status: "completed", version: 8 },
+      },
+    });
+
+    await expect(
+      answerChatUserInputPrompt(runtime, "sess-1", "turn-1", "prompt-secure", {
+        kind: "secure_configuration",
+        secret: "retried-secret",
+      }),
+    ).resolves.toMatchObject({
+      replayed: true,
+      runtimeConfigurationReceipt: {
+        targetId: "search.brave",
+        revision: "runtime-revision-settled",
+      },
+    });
+
+    expect(runtime.configureRuntimeTarget).not.toHaveBeenCalled();
+    expect(runtime.storage.sessionMutationAdmissions.resolveDurableChatUserInput).toHaveBeenCalledWith(
+      expect.objectContaining({
+        response: expect.objectContaining({ kind: "text" }),
+        runtimeConfigurationReceipt: expect.objectContaining({
+          targetId: "search.brave",
+          revision: "runtime-revision-settled",
+        }),
+      }),
+    );
+    expect(
+      JSON.stringify(runtime.storage.sessionMutationAdmissions.resolveDurableChatUserInput.mock.calls),
+    ).not.toContain("retried-secret");
+  });
+
   it("passes selected options to storage without echoing the answer", async () => {
     const runtime = createRuntime({
       trace: createTrace({
@@ -733,6 +982,41 @@ function createRuntime(input: {
       },
       sessionMutationAdmissions: {
         findVerifiedTerminalTurnWriteHandoff: vi.fn(() => input.terminalHandoff),
+        reserveDurableChatSecureConfiguration: vi.fn((request) => ({
+          disposition: "reserved",
+          run: {
+            runId: request.durableRunId,
+            status: "waiting",
+            version: request.expectedWaitingRunVersion + 1,
+          },
+          reservation: {
+            version: 1,
+            reservationId: `reservation:${request.promptId}`,
+            admissionId: request.admissionIdentity.admissionId,
+            sessionIncarnationId: request.admissionIdentity.sessionIncarnationId,
+            workspaceId: request.admissionIdentity.workspaceId,
+            sessionId: request.admissionIdentity.sessionId,
+            turnId: request.admissionIdentity.turnId,
+            durableRunId: request.durableRunId,
+            promptId: request.promptId,
+            targetId: request.targetId,
+            responderActorId: request.responder.actorId,
+            responderAuthActorSource: request.responder.authActorSource,
+            waitingRunVersion: request.expectedWaitingRunVersion,
+            reservedRunVersion: request.expectedWaitingRunVersion + 1,
+            expiresAt: "2099-08-07T20:00:00.000Z",
+            status: "reserved",
+            scopeRef: request.scopeRef,
+            reservedAt: "2026-08-07T20:00:00.000Z",
+            requiresReconciliation: false,
+          },
+          requiresTargetReconciliation: false,
+        })),
+        releaseDurableChatSecureConfiguration: vi.fn((request) => ({
+          disposition: "released",
+          run: { runId: request.durableRunId, status: "waiting", version: request.expectedReservedRunVersion },
+          reservation: { reservationId: request.reservationId, status: "released" },
+        })),
         resolveDurableChatUserInput: vi.fn((request) => ({
           disposition: input.resolveOutcome?.disposition ?? "resolved",
           run: input.resolveOutcome?.run ?? {
@@ -753,6 +1037,15 @@ function createRuntime(input: {
     loadChatTurnSessionState: vi.fn(async () => threadState),
     publishRealtime: vi.fn(),
     recordDevDiagnostic: vi.fn(),
+    configureRuntimeTarget: vi.fn(async () => ({
+      targetId: "search.brave",
+      provider: "brave",
+      revision: "runtime-revision-1",
+      scopeRef: "test-installation-01",
+    })),
+    getRuntimeConfigurationScopeRef: vi.fn(() => "test-installation-01"),
+    finalizeRuntimeConfiguration: vi.fn(),
+    rollbackRuntimeConfiguration: vi.fn(async () => undefined),
   } as unknown as ChatMessageRouteRuntimeHost & { trace: ChatTurnTraceRecord };
   return runtime;
 }

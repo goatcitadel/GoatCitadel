@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  OFFICIAL_SEARCH_CREDENTIAL_ENV_ALIASES,
   canonicalizeResearchResultUrl,
   executeOfficialResearchSearch,
+  getOfficialSearchCredentialEnvAliases,
   isOfficialResearchSearchInvocation,
   resolveOfficialSearchProviders,
 } from "./research-search-official-providers.js";
@@ -65,6 +67,82 @@ describe("official research search providers", () => {
       outboundRequests: [{ provider: "brave", requestCount: 1 }],
     });
     expect(response.warnings.join(" ")).toContain("usage persistence is deferred");
+  });
+
+  it("awaits the protected runtime credential resolver before environment fallback", async () => {
+    const resolveCredential = vi.fn(async () => "runtime-brave-secret");
+    const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      expect(new Headers(init?.headers).get("X-Subscription-Token")).toBe("runtime-brave-secret");
+      return Response.json({ web: { results: [] } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await executeOfficialResearchSearch(
+      { query: "GoatCitadel", providers: ["brave"] },
+      {
+        env: { GOATCITADEL_SEARCH_BRAVE_API_KEY: "environment-brave-secret" },
+        resolveCredential,
+      },
+    );
+
+    expect(resolveCredential).toHaveBeenCalledWith("brave");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(response)).not.toContain("runtime-brave-secret");
+    expect(JSON.stringify(response)).not.toContain("environment-brave-secret");
+  });
+
+  it("falls back to exported environment aliases only when the runtime resolver has no credential", async () => {
+    const resolveCredential = vi.fn(async () => undefined);
+    const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      expect(new Headers(init?.headers).get("x-api-key")).toBe("parallel-env-secret");
+      return Response.json({ results: [] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await executeOfficialResearchSearch(
+      { query: "GoatCitadel", providers: ["parallel"] },
+      { env: { PARALLEL_API_KEY: "parallel-env-secret" }, resolveCredential },
+    );
+
+    expect(resolveCredential).toHaveBeenCalledWith("parallel");
+    expect(getOfficialSearchCredentialEnvAliases("parallel")).toBe(OFFICIAL_SEARCH_CREDENTIAL_ENV_ALIASES.parallel);
+    expect(getOfficialSearchCredentialEnvAliases("parallel")).toEqual([
+      "GOATCITADEL_SEARCH_PARALLEL_API_KEY",
+      "PARALLEL_API_KEY",
+    ]);
+  });
+
+  it("contains resolver failures and arbitrary credential values outside results and errors", async () => {
+    const resolverSecret = "opaque-resolver-secret";
+    const resolverFailure = await executeOfficialResearchSearch(
+      { query: "GoatCitadel", providers: ["brave"] },
+      {
+        env: {},
+        resolveCredential: async () => {
+          throw new Error(`credential lookup failed for ${resolverSecret}`);
+        },
+      },
+    );
+
+    expect(resolverFailure.providerAttempts?.[0]).toMatchObject({
+      status: "unavailable",
+      message: "Official provider credential could not be resolved.",
+    });
+    expect(JSON.stringify(resolverFailure)).not.toContain(resolverSecret);
+
+    const transportSecret = "opaque-transport-secret";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error(`transport rejected ${transportSecret}`);
+      }),
+    );
+    const transportFailure = await executeOfficialResearchSearch(
+      { query: "GoatCitadel", providers: ["brave"] },
+      { env: {}, resolveCredential: async () => transportSecret },
+    );
+
+    expect(JSON.stringify(transportFailure)).not.toContain(transportSecret);
   });
 
   it("clamps provider requests and output to 20 even when an advisory caller requests 50", async () => {

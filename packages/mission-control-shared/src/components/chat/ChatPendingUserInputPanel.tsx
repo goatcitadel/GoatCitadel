@@ -1,24 +1,30 @@
 import { useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import type { ChatUserInputPromptRecord } from "@goatcitadel/contracts";
+import type { ChatUserInputPromptRecord, ChatUserInputPromptResponse } from "@goatcitadel/contracts";
 import { HelpHint } from "../HelpHint";
 
 export function ChatPendingUserInputPanel(props: {
   pendingUserInput: ChatUserInputPromptRecord | null;
   pending: boolean;
   variant?: "default" | "compact";
-  onSubmit: (response: { kind: "single_select"; optionId: string } | { kind: "text"; text: string }) => void;
+  onSubmit: (response: ChatUserInputPromptResponse) => void;
   onDismiss?: () => void;
 }) {
   const { pendingUserInput, pending, variant, onSubmit, onDismiss } = props;
   const [selectedOptionId, setSelectedOptionId] = useState<string>("");
   const [textValue, setTextValue] = useState("");
+  const [secureEntry, setSecureEntry] = useState<{ promptKey: string; value: string }>({
+    promptKey: "none",
+    value: "",
+  });
 
   const promptKey = pendingUserInput?.promptId ?? "none";
+  const secureValue = secureEntry.promptKey === promptKey ? secureEntry.value : "";
   const trimmedText = useMemo(() => textValue.trim(), [textValue]);
 
   useEffect(() => {
     setSelectedOptionId("");
     setTextValue("");
+    setSecureEntry({ promptKey, value: "" });
   }, [promptKey]);
 
   if (!pendingUserInput) {
@@ -27,10 +33,21 @@ export function ChatPendingUserInputPanel(props: {
 
   const activePrompt = pendingUserInput;
   const submitLabel = activePrompt.submitLabel?.trim() || "Submit";
-  const canSubmit = activePrompt.kind === "single_select" ? selectedOptionId.length > 0 : trimmedText.length > 0;
+  const isSecureConfiguration = activePrompt.secureConfiguration !== undefined;
+  const canSubmit = isSecureConfiguration
+    ? secureValue.length > 0
+    : activePrompt.kind === "single_select"
+      ? selectedOptionId.length > 0
+      : trimmedText.length > 0;
   const showDismiss = activePrompt.dismissible && typeof onDismiss === "function";
 
   function handleSubmit() {
+    if (activePrompt.secureConfiguration) {
+      const secret = secureValue;
+      setSecureEntry({ promptKey, value: "" });
+      onSubmit({ kind: "secure_configuration", secret });
+      return;
+    }
     if (activePrompt.kind === "single_select") {
       onSubmit({ kind: "single_select", optionId: selectedOptionId });
       return;
@@ -67,7 +84,41 @@ export function ChatPendingUserInputPanel(props: {
         <span className="chat-approval-countdown">Answer required</span>
       </div>
       <p className="chat-approval-reason">{activePrompt.question}</p>
-      {activePrompt.kind === "single_select" ? (
+      {activePrompt.secureConfiguration ? (
+        <div className="chat-user-input-secure">
+          <label className="chat-user-input-option-row" htmlFor={`chat-secure-configuration-${activePrompt.promptId}`}>
+            <strong>{activePrompt.secureConfiguration.secretFieldLabel}</strong>
+          </label>
+          <input
+            id={`chat-secure-configuration-${activePrompt.promptId}`}
+            className="chat-user-input-input"
+            type="password"
+            autoComplete="new-password"
+            value={secureValue}
+            placeholder={activePrompt.placeholder}
+            disabled={pending}
+            aria-describedby={`chat-secure-configuration-note-${activePrompt.promptId}`}
+            onChange={(event) => setSecureEntry({ promptKey, value: event.target.value })}
+          />
+          <p
+            id={`chat-secure-configuration-note-${activePrompt.promptId}`}
+            className="chat-user-input-option-description"
+          >
+            This value goes directly to the Gateway and is stored in your OS keychain for this GoatCitadel installation.
+            It is excluded from Chat, the model, and memory. Gateway will verify{" "}
+            {activePrompt.secureConfiguration.targetLabel} with a live probe before use.
+          </p>
+          {activePrompt.secureConfiguration.acquisitionUrl && activePrompt.secureConfiguration.acquisitionLabel ? (
+            <p className="chat-user-input-option-description">
+              Need a credential?{" "}
+              <a href={activePrompt.secureConfiguration.acquisitionUrl} target="_blank" rel="noreferrer noopener">
+                {activePrompt.secureConfiguration.acquisitionLabel}
+              </a>
+              .
+            </p>
+          ) : null}
+        </div>
+      ) : activePrompt.kind === "single_select" ? (
         <div className="chat-user-input-options" role="radiogroup" aria-label={activePrompt.question}>
           {(activePrompt.options ?? []).map((option) => (
             <label key={option.optionId} className="chat-user-input-option">

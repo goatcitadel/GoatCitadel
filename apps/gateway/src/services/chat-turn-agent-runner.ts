@@ -189,6 +189,7 @@ import {
 } from "./chat-tool-loop.js";
 import {
   listReadOnlyBuiltinToolNames,
+  RUNTIME_CONFIGURE_TOOL_NAME,
   SUBAGENT_FANOUT_TOOL_NAME,
   SUBMIT_WORK_RESULT_TOOL_NAME,
 } from "@goatcitadel/policy-engine";
@@ -226,6 +227,10 @@ import { executionProfileFromNormalizationProfile } from "./chat-turn-execution-
 import { isDurableControlError } from "./durable-control-error.js";
 import { INTERNAL_TOOL_EFFECT_POTENTIAL_KEY } from "./chat-message-sanitize.js";
 import type { ToolCallBeforeHookInterpositionBinding } from "./tool-runtime-interposition.js";
+import {
+  getRuntimeConfigurationAvailabilityProjection,
+  getRuntimeConfigurationPromptDescriptor,
+} from "./runtime-configuration-service.js";
 import {
   classifyProviderFailure,
   getRemainingChatCompletionBudgetMs,
@@ -855,6 +860,8 @@ export interface ChatTurnAgentRunnerDeps {
     reasonCodes: string[];
     matchedGrantId?: string;
   }>;
+  /** Fail-closed host readiness/profile gate before Chat renders a secure configuration card. */
+  assertRuntimeConfigurationPromptAvailable?: (targetId: string) => void | Promise<void>;
   /**
    * HX-408 M2 pre-dispatch drift gate for mesh-published callables. The
    * gateway composition re-verifies the frozen `meshPublication` snapshot
@@ -1802,6 +1809,35 @@ export class ChatTurnAgentRunner {
     );
     for (const persistedRun of persistedSettledToolRuns) {
       const toolCallId = buildPersistedToolContinuationCallId(persistedRun);
+      let persistedContinuationResult = buildPersistedToolContinuationResult(persistedRun);
+      if (
+        persistedRun.toolName === RUNTIME_CONFIGURE_TOOL_NAME &&
+        persistedRun.approvalId &&
+        persistedRun.result &&
+        this.deps.evaluateToolAccess
+      ) {
+        const targetId = readRuntimeConfigurationTargetFromResult(persistedRun.toolName, persistedRun.result);
+        if (targetId) {
+          const access = await this.deps.evaluateToolAccess({
+            toolName: RUNTIME_CONFIGURE_TOOL_NAME,
+            args: { targetId },
+            agentId: "assistant",
+            sessionId: input.sessionId,
+            taskId: input.policyTaskId,
+            runId: input.policyRunId,
+            permissionProfileId: input.permissionProfileId,
+            localOperatorOverrideId: input.localOperatorOverrideId,
+            surface: input.mode,
+            policyContext: buildTurnToolPolicyContext(input),
+          });
+          if (!access.allowed || access.requiresApproval) {
+            persistedContinuationResult = {
+              ...persistedContinuationResult,
+              runtimeConfiguration: buildRuntimeConfigurationPolicyProjection(targetId, access),
+            };
+          }
+        }
+      }
       conversationMessages.push(
         createAssistantToolCallMessage({
           toolCallId,
@@ -1812,7 +1848,7 @@ export class ChatTurnAgentRunner {
       conversationMessages.push({
         role: "tool",
         tool_call_id: toolCallId,
-        content: serializeToolResultForModel(buildPersistedToolContinuationResult(persistedRun)),
+        content: serializeToolResultForModel(persistedContinuationResult),
       } as ChatCompletionMessage);
       rememberToolLoopHistory(loopGuardState, persistedRun);
       for (const citation of inferCitationsFromToolResult(persistedRun)) {
@@ -4061,6 +4097,42 @@ export class ChatTurnAgentRunner {
             }
             const reusableApprovedRun = findReusableApprovedToolRun(toolRuns, toolCall.toolName, toolCall.args);
             if (reusableApprovedRun) {
+              if (
+                toolCall.toolName === RUNTIME_CONFIGURE_TOOL_NAME &&
+                reusableApprovedRun.result &&
+                this.deps.evaluateToolAccess
+              ) {
+                const targetId = readRuntimeConfigurationTargetFromResult(
+                  reusableApprovedRun.toolName,
+                  reusableApprovedRun.result,
+                );
+                if (targetId) {
+                  const access = await this.deps.evaluateToolAccess({
+                    toolName: RUNTIME_CONFIGURE_TOOL_NAME,
+                    args: { targetId },
+                    agentId: "assistant",
+                    sessionId: input.sessionId,
+                    taskId: input.policyTaskId,
+                    runId: input.policyRunId,
+                    permissionProfileId: input.permissionProfileId,
+                    localOperatorOverrideId: input.localOperatorOverrideId,
+                    surface: input.mode,
+                    policyContext: buildTurnToolPolicyContext(input),
+                  });
+                  if (!access.allowed || access.requiresApproval) {
+                    answeredToolCallIds.add(toolCall.id);
+                    conversationMessages.push({
+                      role: "tool",
+                      tool_call_id: toolCall.id,
+                      content: serializeToolResultForModel({
+                        ...buildPersistedToolContinuationResult(reusableApprovedRun),
+                        runtimeConfiguration: buildRuntimeConfigurationPolicyProjection(targetId, access),
+                      }),
+                    } as ChatCompletionMessage);
+                    continue;
+                  }
+                }
+              }
               answeredToolCallIds.add(toolCall.id);
               conversationMessages.push({
                 role: "tool",
@@ -5845,6 +5917,100 @@ export class ChatTurnAgentRunner {
         res.record = updated;
         if (res.chunk?.type === "tool_result") {
           res.chunk.toolRun = updated;
+        }
+      }
+    }
+    if (
+      res.record.result &&
+      !res.userInputPrompt &&
+      (res.record.status === "executed" || res.record.status === "failed" || res.record.status === "blocked")
+    ) {
+      const candidate = buildRuntimeConfigurationUserInputPrompt(input.turnId, res.record.toolName, res.record.result);
+      if (candidate?.secureConfiguration) {
+        try {
+          await this.deps.assertRuntimeConfigurationPromptAvailable?.(candidate.secureConfiguration.targetId);
+          if (res.record.toolName !== RUNTIME_CONFIGURE_TOOL_NAME && this.deps.evaluateToolAccess) {
+            const access = await this.deps.evaluateToolAccess({
+              toolName: RUNTIME_CONFIGURE_TOOL_NAME,
+              args: { targetId: candidate.secureConfiguration.targetId },
+              agentId: "assistant",
+              sessionId: input.input.sessionId,
+              taskId: input.input.policyTaskId,
+              runId: input.input.policyRunId,
+              permissionProfileId: input.input.permissionProfileId,
+              localOperatorOverrideId: input.input.localOperatorOverrideId,
+              surface: input.input.mode,
+              policyContext: buildTurnToolPolicyContext(input.input),
+            });
+            if (!access.allowed || access.requiresApproval) {
+              res.userInputPrompt = undefined;
+              const prerequisite = buildRuntimeConfigurationPolicyProjection(
+                candidate.secureConfiguration.targetId,
+                access,
+              );
+              const updated = await this.patchToolRun(input.input, res.record.toolRunId, {
+                result: { ...res.record.result, runtimeConfiguration: prerequisite },
+                failureGuidance: `${prerequisite.message} ${prerequisite.operatorAction}`,
+              });
+              res.record = updated;
+              if (res.chunk?.type === "tool_result") {
+                res.chunk.toolRun = updated;
+              }
+            } else {
+              res.userInputPrompt = candidate;
+            }
+          } else if (this.deps.evaluateToolAccess) {
+            const access = await this.deps.evaluateToolAccess({
+              toolName: RUNTIME_CONFIGURE_TOOL_NAME,
+              args: { targetId: candidate.secureConfiguration.targetId },
+              agentId: "assistant",
+              sessionId: input.input.sessionId,
+              taskId: input.input.policyTaskId,
+              runId: input.input.policyRunId,
+              permissionProfileId: input.input.permissionProfileId,
+              localOperatorOverrideId: input.input.localOperatorOverrideId,
+              surface: input.input.mode,
+              policyContext: buildTurnToolPolicyContext(input.input),
+            });
+            if (!access.allowed || access.requiresApproval) {
+              res.userInputPrompt = undefined;
+              const prerequisite = buildRuntimeConfigurationPolicyProjection(
+                candidate.secureConfiguration.targetId,
+                access,
+              );
+              const updated = await this.patchToolRun(input.input, res.record.toolRunId, {
+                result: { ...res.record.result, runtimeConfiguration: prerequisite },
+                failureGuidance: `${prerequisite.message} ${prerequisite.operatorAction}`,
+              });
+              res.record = updated;
+              if (res.chunk?.type === "tool_result") {
+                res.chunk.toolRun = updated;
+              }
+            } else {
+              res.userInputPrompt = candidate;
+            }
+          } else {
+            res.userInputPrompt = candidate;
+          }
+        } catch (error) {
+          res.userInputPrompt = undefined;
+          const prerequisite = getRuntimeConfigurationAvailabilityProjection(
+            candidate.secureConfiguration.targetId,
+            error,
+          );
+          if (prerequisite) {
+            const updated = await this.patchToolRun(input.input, res.record.toolRunId, {
+              result: {
+                ...res.record.result,
+                runtimeConfiguration: prerequisite,
+              },
+              failureGuidance: `${prerequisite.message} ${prerequisite.operatorAction}`,
+            });
+            res.record = updated;
+            if (res.chunk?.type === "tool_result") {
+              res.chunk.toolRun = updated;
+            }
+          }
         }
       }
     }
@@ -15066,6 +15232,7 @@ function findReusableApprovedToolRun(
         Boolean(run.approvalId) &&
         isSettledToolRunContinuationEvidence(run) &&
         run.toolName === toolName &&
+        !(run.toolName === "browser.search" && run.result && hasMissingOfficialSearchCredential(run.result)) &&
         canonicalJsonString(run.args ?? {}) === argsMaterial,
     );
 }
@@ -15088,7 +15255,13 @@ function findReusableBrowserSearchEvidence(
 ): { run: ChatToolRunRecord; researchArtifactEvidenceComplete: boolean } | undefined {
   const candidates = [...toolRuns]
     .reverse()
-    .filter((run) => run.toolName === "browser.search" && run.status === "executed" && run.result !== undefined);
+    .filter(
+      (run) =>
+        run.toolName === "browser.search" &&
+        run.status === "executed" &&
+        run.result !== undefined &&
+        !hasMissingOfficialSearchCredential(run.result),
+    );
   const normalizedQuery = normalizeSearchReuseQuery(query);
   const reusable = candidates.find(
     (run) =>
@@ -15097,6 +15270,94 @@ function findReusableBrowserSearchEvidence(
         (reuseContinuationPrompt && typeof query === "string" && looksLikeContinuationSearchPrompt(query))),
   );
   return reusable ? { run: reusable, researchArtifactEvidenceComplete: Boolean(reusable.approvalId) } : undefined;
+}
+
+function buildRuntimeConfigurationUserInputPrompt(
+  turnId: string,
+  toolName: string,
+  result: Record<string, unknown>,
+): ChatUserInputPromptRecord | undefined {
+  const targetId = readRuntimeConfigurationTargetFromResult(toolName, result);
+  if (!targetId) return undefined;
+  const descriptor = getRuntimeConfigurationPromptDescriptor(targetId);
+  if (!descriptor) return undefined;
+  return {
+    promptId: `runtime_configuration:${randomUUID()}`,
+    turnId,
+    kind: "text",
+    title: `Configure ${descriptor.targetLabel}`,
+    question: `Enter the credential needed to connect ${descriptor.targetLabel}. The Gateway will test it before activation and then continue this turn.`,
+    required: true,
+    expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
+    placeholder: descriptor.secretFieldLabel,
+    submitLabel: "Connect, test, and continue",
+    multiline: false,
+    secureConfiguration: descriptor,
+  };
+}
+
+function buildRuntimeConfigurationPolicyProjection(
+  targetId: string,
+  access: { allowed: boolean; requiresApproval: boolean },
+): {
+  status: "manual_required";
+  configurationRequired: false;
+  targetId: string;
+  diagnosticCode: "runtime_configuration_preapproval_binding_required" | "runtime_configuration_policy_blocked";
+  message: string;
+  operatorAction: string;
+} {
+  return {
+    status: "manual_required",
+    configurationRequired: false,
+    targetId,
+    diagnosticCode: access.requiresApproval
+      ? "runtime_configuration_preapproval_binding_required"
+      : "runtime_configuration_policy_blocked",
+    message: access.requiresApproval
+      ? "Current policy requires separate apply-time approval that this secure form cannot bind yet."
+      : "Current deny-wins policy blocks secure Chat configuration for this target.",
+    operatorAction: access.requiresApproval
+      ? "Administrator intervention is required; this Chat form cannot complete under the current Ward policy."
+      : "Review the governing policy in Settings, then retry the original Chat request.",
+  };
+}
+
+function readRuntimeConfigurationTargetFromResult(
+  toolName: string,
+  result: Record<string, unknown>,
+): string | undefined {
+  if (
+    toolName === RUNTIME_CONFIGURE_TOOL_NAME &&
+    result.configurationRequired === true &&
+    result.status === "configuration_required" &&
+    typeof result.targetId === "string"
+  ) {
+    return result.targetId;
+  }
+  if (toolName !== "browser.search") return undefined;
+  const routing = toPlainRecord(result.routing);
+  if (Array.isArray(routing?.successfulProviders) && routing.successfulProviders.length > 0) {
+    return undefined;
+  }
+  const attempts = Array.isArray(result.providerAttempts) ? result.providerAttempts : [];
+  for (const attemptValue of attempts) {
+    const attempt = toPlainRecord(attemptValue);
+    const provider = attempt?.provider;
+    const message = typeof attempt?.message === "string" ? attempt.message : "";
+    if (
+      (provider === "brave" || provider === "parallel") &&
+      ((attempt?.status === "unavailable" && /credential (?:is not configured|could not be resolved)/i.test(message)) ||
+        (attempt?.status === "blocked" && /rejected the credential or request/i.test(message)))
+    ) {
+      return `search.${provider}`;
+    }
+  }
+  return undefined;
+}
+
+function hasMissingOfficialSearchCredential(result: Record<string, unknown>): boolean {
+  return readRuntimeConfigurationTargetFromResult("browser.search", result) !== undefined;
 }
 
 function hasUsableBrowserSearchResults(run: ChatToolRunRecord): boolean {

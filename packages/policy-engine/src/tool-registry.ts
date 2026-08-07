@@ -25,6 +25,13 @@ export interface ToolDefinition {
  */
 export const SUBAGENT_FANOUT_TOOL_NAME = "agent.fanout";
 
+/** Chat-callable request for a Gateway-owned secure runtime configuration flow. */
+export const RUNTIME_CONFIGURE_TOOL_NAME = "runtime.configure";
+
+export const RUNTIME_CONFIGURATION_TARGET_IDS = ["search.brave", "search.parallel"] as const;
+
+export type RuntimeConfigurationTargetId = (typeof RUNTIME_CONFIGURATION_TARGET_IDS)[number];
+
 /** Delegated-worker completion/scope-request envelope. The gateway owns fulfillment. */
 export const SUBMIT_WORK_RESULT_TOOL_NAME = "submit_work_result";
 
@@ -83,6 +90,29 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     readOnly: true,
     description: "Return basic status for the active session.",
     pack: "core",
+  },
+  {
+    name: RUNTIME_CONFIGURE_TOOL_NAME,
+    category: "ops",
+    riskLevel: "caution",
+    requiresApproval: false,
+    description:
+      "Request a secure operator-owned configuration flow for an official search provider. Credentials are never accepted as tool arguments.",
+    argSchema: {
+      type: "object",
+      properties: {
+        targetId: { type: "string", enum: [...RUNTIME_CONFIGURATION_TARGET_IDS] },
+      },
+      required: ["targetId"],
+      additionalProperties: false,
+    },
+    pack: "core",
+    recommendedContexts: ["chat"],
+    preferredForIntents: ["configure_search", "repair_search", "configure_runtime"],
+    usageHints: [
+      "Use this when official Brave or Parallel search needs configuration or credential repair.",
+      "Never ask the operator to paste credentials into Chat; this tool opens a separate secure runtime flow.",
+    ],
   },
   {
     name: "notify.request",

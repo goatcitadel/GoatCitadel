@@ -13,15 +13,31 @@ const PARALLEL_ENDPOINT = "https://api.parallel.ai/v1/search";
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const TRACKING_PARAMS = new Set(["fbclid", "gclid", "mc_cid", "mc_eid", "ref", "ref_src", "source"]);
 
-const PROVIDER_ENV_ALIASES: Record<ResearchSearchOfficialProvider, readonly string[]> = {
+export type OfficialSearchCredentialProvider = ResearchSearchOfficialProvider;
+
+export type ResolveOfficialSearchCredential = (
+  provider: OfficialSearchCredentialProvider,
+) => string | undefined | Promise<string | undefined>;
+
+export const OFFICIAL_SEARCH_CREDENTIAL_ENV_ALIASES: Readonly<
+  Record<OfficialSearchCredentialProvider, readonly string[]>
+> = {
   brave: ["GOATCITADEL_SEARCH_BRAVE_API_KEY", "BRAVE_SEARCH_API_KEY"],
   parallel: ["GOATCITADEL_SEARCH_PARALLEL_API_KEY", "PARALLEL_API_KEY"],
 };
 
+export function getOfficialSearchCredentialEnvAliases(provider: OfficialSearchCredentialProvider): readonly string[] {
+  return OFFICIAL_SEARCH_CREDENTIAL_ENV_ALIASES[provider];
+}
+
 export interface OfficialResearchSearchOptions {
   env?: NodeJS.ProcessEnv;
+  /** Resolve a protected runtime credential before consulting process environment aliases. */
+  resolveCredential?: ResolveOfficialSearchCredential;
   signal?: AbortSignal;
   additionalAllowlists?: string[][];
+  /** Optional stricter response cap for bounded probes; never exceeds the provider default. */
+  maxResponseBytes?: number;
   now?: () => Date;
 }
 
@@ -267,7 +283,22 @@ async function executeProvider(
 ): Promise<ProviderResult> {
   const started = now();
   let outboundRequestMade = false;
-  const apiKey = resolveProviderApiKey(provider, options.env ?? process.env);
+  let apiKey: string | undefined;
+  try {
+    apiKey = await resolveProviderApiKey(provider, options);
+  } catch {
+    return completedProviderResult(
+      provider,
+      started,
+      now(),
+      "unavailable",
+      [],
+      false,
+      undefined,
+      undefined,
+      "Official provider credential could not be resolved.",
+    );
+  }
   if (!apiKey) {
     return completedProviderResult(
       provider,
@@ -285,6 +316,7 @@ async function executeProvider(
     const markOutboundRequest = () => {
       outboundRequestMade = true;
     };
+    const maxResponseBytes = normalizeMaxResponseBytes(options.maxResponseBytes);
     const raw =
       provider === "brave"
         ? await fetchBrave(
@@ -294,9 +326,18 @@ async function executeProvider(
             signal,
             options.additionalAllowlists,
             timeoutMs,
+            maxResponseBytes,
             markOutboundRequest,
           )
-        : await fetchParallel(input, apiKey, signal, options.additionalAllowlists, timeoutMs, markOutboundRequest);
+        : await fetchParallel(
+            input,
+            apiKey,
+            signal,
+            options.additionalAllowlists,
+            timeoutMs,
+            maxResponseBytes,
+            markOutboundRequest,
+          );
     const completed = now();
     const results = normalizeProviderResults(provider, raw, completed.toISOString(), maxResults);
     if (results.length === 0 && raw.length > 0) {
@@ -305,7 +346,7 @@ async function executeProvider(
     return completedProviderResult(provider, started, completed, "succeeded", results, outboundRequestMade);
   } catch (error) {
     const completed = now();
-    const normalized = normalizeProviderError(error, signal);
+    const normalized = normalizeProviderError(error, signal, [apiKey]);
     return completedProviderResult(
       provider,
       started,
@@ -327,6 +368,7 @@ async function fetchBrave(
   signal: AbortSignal,
   additionalAllowlists: string[][] | undefined,
   timeoutMs: number,
+  maxResponseBytes: number,
   onOutboundRequest: () => void,
 ): Promise<Array<Record<string, unknown>>> {
   const endpoint = new URL(BRAVE_ENDPOINT);
@@ -343,6 +385,7 @@ async function fetchBrave(
     ["api.search.brave.com"],
     additionalAllowlists,
     timeoutMs,
+    maxResponseBytes,
     { method: "GET", signal, headers: { Accept: "application/json", "X-Subscription-Token": apiKey } },
     onOutboundRequest,
   );
@@ -360,6 +403,7 @@ async function fetchParallel(
   signal: AbortSignal,
   additionalAllowlists: string[][] | undefined,
   timeoutMs: number,
+  maxResponseBytes: number,
   onOutboundRequest: () => void,
 ): Promise<Array<Record<string, unknown>>> {
   const response = await fetchProvider(
@@ -367,6 +411,7 @@ async function fetchParallel(
     ["api.parallel.ai"],
     additionalAllowlists,
     timeoutMs,
+    maxResponseBytes,
     {
       method: "POST",
       signal,
@@ -387,6 +432,7 @@ async function fetchProvider(
   allowlist: string[],
   additionalAllowlists: string[][] | undefined,
   timeoutMs: number,
+  maxResponseBytes: number,
   init: RequestInit,
   onOutboundRequest: () => void,
 ): Promise<Response> {
@@ -399,7 +445,7 @@ async function fetchProvider(
     additionalAllowlists,
     timeoutMs,
     bodyReadTimeoutMs: timeoutMs,
-    maxResponseBytes: MAX_RESPONSE_BYTES,
+    maxResponseBytes,
     maxRedirects: 0,
     init,
   });
@@ -428,6 +474,11 @@ async function fetchProvider(
     response.status,
     retryAfterMs,
   );
+}
+
+function normalizeMaxResponseBytes(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return MAX_RESPONSE_BYTES;
+  return Math.min(MAX_RESPONSE_BYTES, Math.max(1_024, Math.floor(value)));
 }
 
 async function parseProviderJson(response: Response): Promise<unknown> {
@@ -551,16 +602,17 @@ function blockedProviderResult(
 function normalizeProviderError(
   error: unknown,
   signal: AbortSignal,
+  sensitiveValues: readonly string[] = [],
 ): Pick<ResearchSearchProviderAttempt, "status" | "httpStatus" | "retryAfterMs"> & { message: string } {
   if (error instanceof ProviderExecutionError) {
     return {
       status: error.status,
       httpStatus: error.httpStatus,
       retryAfterMs: error.retryAfterMs,
-      message: safeMessage(error),
+      message: safeMessage(error, sensitiveValues),
     };
   }
-  const message = safeMessage(error);
+  const message = safeMessage(error, sensitiveValues);
   if (signal.aborted || /timed out|abort/i.test(message)) {
     return { status: "timed_out", message: "Official search provider request timed out." };
   }
@@ -573,8 +625,16 @@ function normalizeProviderError(
   return { status: "upstream_error", message };
 }
 
-function resolveProviderApiKey(provider: ResearchSearchOfficialProvider, env: NodeJS.ProcessEnv): string | undefined {
-  for (const name of PROVIDER_ENV_ALIASES[provider]) {
+async function resolveProviderApiKey(
+  provider: ResearchSearchOfficialProvider,
+  options: OfficialResearchSearchOptions,
+): Promise<string | undefined> {
+  const resolved = (await options.resolveCredential?.(provider))?.trim();
+  if (resolved) {
+    return resolved;
+  }
+  const env = options.env ?? process.env;
+  for (const name of getOfficialSearchCredentialEnvAliases(provider)) {
     const value = env[name]?.trim();
     if (value) return value;
   }
@@ -643,9 +703,15 @@ function providerOrder(left: ResearchSearchOfficialProvider, right: ResearchSear
   return (left === "brave" ? 0 : 1) - (right === "brave" ? 0 : 1);
 }
 
-function safeMessage(value: unknown): string {
+function safeMessage(value: unknown, sensitiveValues: readonly string[] = []): string {
   const raw = value instanceof Error ? value.message : String(value);
-  return redactSecretText(raw).value;
+  let safe = redactSecretText(raw).value;
+  for (const sensitiveValue of sensitiveValues) {
+    if (sensitiveValue) {
+      safe = safe.split(sensitiveValue).join("[REDACTED]");
+    }
+  }
+  return safe;
 }
 
 function truncate(value: string, max: number): string {

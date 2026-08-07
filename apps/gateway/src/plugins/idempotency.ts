@@ -36,6 +36,12 @@ const GENERATION_FENCED_CHAT_SSE_ROUTES = new Set([
   "/api/v1/chat/sessions/:sessionId/turns/:turnId/retry/stream",
   "/api/v1/chat/sessions/:sessionId/turns/:turnId/edit/stream",
 ]);
+const SECRET_SENSITIVE_USER_INPUT_ROUTES = new Set([
+  "/api/v1/chat/sessions/:sessionId/turns/:turnId/user-input/:promptId/respond",
+  "/api/v1/chat/sessions/:sessionId/turns/:turnId/user-input/:promptId/secure-configuration",
+]);
+const SECURE_CONFIGURATION_ROUTE =
+  "/api/v1/chat/sessions/:sessionId/turns/:turnId/user-input/:promptId/secure-configuration";
 
 export const idempotencyHeaderPlugin = fp<IdempotencyHeaderPluginOptions>(async (fastify, options) => {
   fastify.decorateRequest("idempotencyKey", "");
@@ -72,7 +78,7 @@ export const idempotencyHeaderPlugin = fp<IdempotencyHeaderPluginOptions>(async 
       routePath,
       idempotencyKey: key,
       actorScope,
-      payloadHash: hashCanonicalPayload((request as { body?: unknown }).body ?? null),
+      payloadHash: hashMutationPayload(request),
       ...(usesGenerationFencedCanonicalCommit(routePath) ? { leaseDurationMs: HTTP_MUTATION_CLAIM_LEASE_MS } : {}),
     });
     if (claim.outcome === "claimed") {
@@ -91,6 +97,16 @@ export const idempotencyHeaderPlugin = fp<IdempotencyHeaderPluginOptions>(async 
           throw new MutationIdempotencyClaimLostError();
         }
       };
+      return;
+    }
+
+    if (claim.outcome === "duplicate" && routePath === SECURE_CONFIGURATION_ROUTE) {
+      // The secure handler owns a secret-independent replay path backed by the
+      // immutable durable continuation seal. Let an exact transport retry
+      // recover that receipt after a lost response; the newly supplied bytes
+      // are ignored and never compared or re-applied. In-progress and payload-
+      // mismatch claims remain blocked above/below this narrow exception.
+      request.mutationIdempotencyOutcome = "committed";
       return;
     }
 
@@ -205,6 +221,25 @@ function getNormalizedRoutePath(request: FastifyRequest): string {
 
 function hashCanonicalPayload(value: unknown): string {
   return createHash("sha256").update(stableStringify(value)).digest("hex");
+}
+
+/**
+ * The generic idempotency owner durably retains this digest. Secure runtime
+ * input routes therefore must not derive it from the request body: even the
+ * generic route may receive a malicious extra secret before strict validation.
+ * The
+ * concrete, query-free path contains only the already-public Chat authority
+ * tuple (session, turn, and one-time prompt id), so it is sufficient to bind an
+ * HTTP retry without creating a credential oracle or durable secret fingerprint.
+ */
+function hashMutationPayload(request: FastifyRequest): string {
+  if (SECRET_SENSITIVE_USER_INPUT_ROUTES.has(getNormalizedRoutePath(request))) {
+    return hashCanonicalPayload({
+      kind: "chat_user_input_redacted_v1",
+      path: request.url.split("?", 1)[0] || request.url,
+    });
+  }
+  return hashCanonicalPayload((request as { body?: unknown }).body ?? null);
 }
 
 function stableStringify(value: unknown): string {

@@ -17,6 +17,7 @@ import {
 
 const approveChatToolMock = vi.fn();
 const answerChatUserInputPromptMock = vi.fn();
+const submitChatSecureConfigurationMock = vi.fn();
 const denyChatToolMock = vi.fn();
 const editChatTurnMock = vi.fn();
 const fetchChatPendingApprovalsMock = vi.fn();
@@ -33,6 +34,7 @@ const clearChatStreamActivityMock = vi.fn();
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   answerChatUserInputPrompt: (...args: unknown[]) => answerChatUserInputPromptMock(...args),
+  submitChatSecureConfiguration: (...args: unknown[]) => submitChatSecureConfigurationMock(...args),
   approveChatTool: (...args: unknown[]) => approveChatToolMock(...args),
   denyChatTool: (...args: unknown[]) => denyChatToolMock(...args),
   editChatTurn: (...args: unknown[]) => editChatTurnMock(...args),
@@ -348,6 +350,7 @@ describe("useChatOutboundExecution", () => {
     resetChatStreamingPreviewForTests();
     approveChatToolMock.mockReset();
     answerChatUserInputPromptMock.mockReset();
+    submitChatSecureConfigurationMock.mockReset();
     denyChatToolMock.mockReset();
     editChatTurnMock.mockReset();
     fetchChatPendingApprovalsMock.mockReset();
@@ -1173,6 +1176,7 @@ describe("useChatOutboundExecution", () => {
     approveChatToolMock.mockResolvedValue({ resumed: false });
     denyChatToolMock.mockResolvedValue(undefined);
     answerChatUserInputPromptMock.mockResolvedValue({ resumed: true });
+    submitChatSecureConfigurationMock.mockResolvedValue({ resumed: true });
 
     await act(async () => {
       create(<Harness />);
@@ -1208,6 +1212,27 @@ describe("useChatOutboundExecution", () => {
     expect(answerChatUserInputPromptMock).toHaveBeenCalledWith("session-1", "turn-2", "prompt-1", {
       response: { kind: "text", value: "Continue" },
     });
+  });
+
+  it("sends secure configuration through the dedicated transport", async () => {
+    submitChatSecureConfigurationMock.mockResolvedValue({ resumed: true });
+    await act(async () => {
+      create(<Harness />);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      latest?.setPendingUserInput({ turnId: "turn-2", promptId: "prompt-secure", prompt: "Configure Brave" });
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      await latest?.submitUserInput({ kind: "secure_configuration", secret: "direct-secret" });
+    });
+
+    expect(submitChatSecureConfigurationMock).toHaveBeenCalledWith("session-1", "turn-2", "prompt-secure", {
+      secret: "direct-secret",
+    });
+    expect(answerChatUserInputPromptMock).not.toHaveBeenCalled();
   });
 
   it("covers approval scope notices, resolver failures, and deferred user-input outcomes", async () => {

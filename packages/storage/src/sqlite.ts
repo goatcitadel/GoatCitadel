@@ -7013,11 +7013,136 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
           upgradeSessionControlLifecycleBootstrapClockGuard(db);
         },
       },
+      {
+        version: 188,
+        name: "durable_chat_secure_configuration_reservations",
+        up: (db) => {
+          createDurableChatSecureConfigurationReservationSchema(db);
+        },
+      },
     ],
   },
 ];
 
 const SCHEMA_MIGRATIONS = createSqliteMigrationRegistry(SCHEMA_MIGRATION_GROUPS);
+
+function createDurableChatSecureConfigurationReservationSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS chat_turn_secure_configuration_reservations (
+      reservation_id TEXT PRIMARY KEY CHECK(length(TRIM(reservation_id)) BETWEEN 1 AND 256),
+      version INTEGER NOT NULL CHECK(version = 1),
+      admission_id TEXT NOT NULL CHECK(length(TRIM(admission_id)) BETWEEN 1 AND 256),
+      session_incarnation_id TEXT NOT NULL CHECK(length(TRIM(session_incarnation_id)) BETWEEN 1 AND 320),
+      workspace_id TEXT NOT NULL CHECK(length(TRIM(workspace_id)) BETWEEN 1 AND 80),
+      session_id TEXT NOT NULL CHECK(length(TRIM(session_id)) BETWEEN 1 AND 256),
+      turn_id TEXT NOT NULL CHECK(length(TRIM(turn_id)) BETWEEN 1 AND 256),
+      durable_run_id TEXT NOT NULL CHECK(length(TRIM(durable_run_id)) BETWEEN 1 AND 256),
+      prompt_id TEXT NOT NULL CHECK(length(TRIM(prompt_id)) BETWEEN 1 AND 256),
+      target_id TEXT NOT NULL CHECK(length(TRIM(target_id)) BETWEEN 1 AND 256),
+      responder_actor_id TEXT NOT NULL CHECK(length(TRIM(responder_actor_id)) BETWEEN 1 AND 256),
+      responder_auth_actor_source TEXT NOT NULL
+        CHECK(responder_auth_actor_source IN ('none', 'token', 'basic', 'loopback')),
+      waiting_run_version INTEGER NOT NULL CHECK(waiting_run_version > 0),
+      reserved_run_version INTEGER NOT NULL CHECK(reserved_run_version = waiting_run_version + 1),
+      expires_at TEXT NOT NULL CHECK(julianday(expires_at) IS NOT NULL),
+      status TEXT NOT NULL CHECK(status IN (
+        'reserved', 'completed', 'released', 'expired_unreconciled', 'reconciled'
+      )),
+      provider TEXT,
+      configuration_revision TEXT,
+      scope_ref TEXT NOT NULL CHECK(length(TRIM(scope_ref)) BETWEEN 1 AND 256),
+      reserved_at TEXT NOT NULL CHECK(julianday(reserved_at) IS NOT NULL),
+      reclaimed_at TEXT,
+      completed_at TEXT,
+      released_at TEXT,
+      expired_at TEXT,
+      reconciled_at TEXT,
+      reconciled_by_reservation_id TEXT,
+      UNIQUE(admission_id, durable_run_id, prompt_id, waiting_run_version),
+      FOREIGN KEY(admission_id) REFERENCES chat_session_mutation_admissions(admission_id) ON DELETE RESTRICT,
+      FOREIGN KEY(durable_run_id) REFERENCES durable_runs(run_id) ON DELETE RESTRICT,
+      FOREIGN KEY(reconciled_by_reservation_id)
+        REFERENCES chat_turn_secure_configuration_reservations(reservation_id) ON DELETE RESTRICT,
+      CHECK(
+        (status = 'reserved' AND provider IS NULL AND configuration_revision IS NULL
+          AND completed_at IS NULL AND released_at IS NULL AND expired_at IS NULL
+          AND (reclaimed_at IS NULL OR julianday(reclaimed_at) IS NOT NULL)
+          AND reconciled_at IS NULL AND reconciled_by_reservation_id IS NULL)
+        OR (status = 'completed' AND length(TRIM(provider)) BETWEEN 1 AND 128
+          AND length(configuration_revision) = 64
+          AND configuration_revision NOT GLOB '*[^0-9a-f]*'
+          AND julianday(completed_at) IS NOT NULL AND released_at IS NULL AND expired_at IS NULL
+          AND (reclaimed_at IS NULL OR julianday(reclaimed_at) IS NOT NULL)
+          AND reconciled_at IS NULL AND reconciled_by_reservation_id IS NULL)
+        OR (status = 'released' AND provider IS NULL AND configuration_revision IS NULL
+          AND completed_at IS NULL AND julianday(released_at) IS NOT NULL AND expired_at IS NULL
+          AND reclaimed_at IS NULL AND reconciled_at IS NULL AND reconciled_by_reservation_id IS NULL)
+        OR (status = 'expired_unreconciled' AND provider IS NULL AND configuration_revision IS NULL
+          AND completed_at IS NULL AND released_at IS NULL AND julianday(expired_at) IS NOT NULL
+          AND (reclaimed_at IS NULL OR julianday(reclaimed_at) IS NOT NULL)
+          AND reconciled_at IS NULL AND reconciled_by_reservation_id IS NULL)
+        OR (status = 'reconciled' AND provider IS NULL AND configuration_revision IS NULL
+          AND completed_at IS NULL AND released_at IS NULL AND julianday(expired_at) IS NOT NULL
+          AND (reclaimed_at IS NULL OR julianday(reclaimed_at) IS NOT NULL)
+          AND julianday(reconciled_at) IS NOT NULL
+          AND length(TRIM(reconciled_by_reservation_id)) BETWEEN 1 AND 256)
+      )
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_turn_secure_configuration_one_reserved
+      ON chat_turn_secure_configuration_reservations(admission_id, durable_run_id, prompt_id)
+      WHERE status = 'reserved';
+    CREATE INDEX IF NOT EXISTS idx_chat_turn_secure_configuration_run_status
+      ON chat_turn_secure_configuration_reservations(durable_run_id, status, reserved_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_turn_secure_configuration_one_target_scope
+      ON chat_turn_secure_configuration_reservations(target_id, scope_ref)
+      WHERE status = 'reserved';
+
+    CREATE TRIGGER IF NOT EXISTS trg_chat_turn_secure_configuration_reservations_update_guard
+    BEFORE UPDATE ON chat_turn_secure_configuration_reservations
+    WHEN NOT (
+        (OLD.status = 'reserved' AND NEW.status IN ('completed', 'released', 'expired_unreconciled'))
+        OR (OLD.status = 'reserved' AND NEW.status = 'reserved'
+          AND OLD.reclaimed_at IS NULL AND julianday(NEW.reclaimed_at) IS NOT NULL)
+        OR (OLD.status = 'expired_unreconciled' AND NEW.status = 'reconciled')
+      )
+      OR NEW.reservation_id <> OLD.reservation_id OR NEW.version <> OLD.version
+      OR NEW.admission_id <> OLD.admission_id
+      OR NEW.session_incarnation_id <> OLD.session_incarnation_id
+      OR NEW.workspace_id <> OLD.workspace_id OR NEW.session_id <> OLD.session_id
+      OR NEW.turn_id <> OLD.turn_id OR NEW.durable_run_id <> OLD.durable_run_id
+      OR NEW.prompt_id <> OLD.prompt_id OR NEW.target_id <> OLD.target_id
+      OR NEW.responder_actor_id <> OLD.responder_actor_id
+      OR NEW.responder_auth_actor_source <> OLD.responder_auth_actor_source
+      OR NEW.waiting_run_version <> OLD.waiting_run_version
+      OR NEW.reserved_run_version <> OLD.reserved_run_version
+      OR NEW.expires_at <> OLD.expires_at OR NEW.reserved_at <> OLD.reserved_at
+      OR NEW.scope_ref <> OLD.scope_ref
+      OR (OLD.reclaimed_at IS NOT NULL AND NEW.reclaimed_at IS NOT OLD.reclaimed_at)
+    BEGIN SELECT RAISE(ABORT, 'secure configuration reservation transition invariant violated'); END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_chat_turn_secure_configuration_reservations_no_delete
+    BEFORE DELETE ON chat_turn_secure_configuration_reservations
+    BEGIN SELECT RAISE(ABORT, 'secure configuration reservations are append-only'); END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_chat_session_mutation_admissions_secure_reservation_close_guard
+    BEFORE UPDATE OF status ON chat_session_mutation_admissions
+    WHEN OLD.status = 'active' AND NEW.status <> 'active' AND EXISTS (
+      SELECT 1 FROM chat_turn_secure_configuration_reservations reservation
+      WHERE reservation.admission_id = OLD.admission_id AND reservation.status = 'reserved'
+        AND julianday(reservation.expires_at) > julianday('now')
+    )
+    BEGIN SELECT RAISE(ABORT, 'active secure configuration reservation blocks admission close'); END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_durable_runs_secure_reservation_cancel_guard
+    BEFORE UPDATE OF status ON durable_runs
+    WHEN OLD.status = 'waiting' AND NEW.status <> 'waiting' AND EXISTS (
+      SELECT 1 FROM chat_turn_secure_configuration_reservations reservation
+      WHERE reservation.durable_run_id = OLD.run_id AND reservation.status = 'reserved'
+        AND julianday(reservation.expires_at) > julianday('now')
+    )
+    BEGIN SELECT RAISE(ABORT, 'active secure configuration reservation blocks durable run transition'); END;
+  `);
+}
 
 function upgradeChatRoutedContextSnapshotsV2(db: DatabaseSync): void {
   if (!tableExists(db, "chat_routed_context_snapshots")) return;

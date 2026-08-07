@@ -15,6 +15,7 @@ import { SessionControlRepository } from "./session-control-repo.js";
 import {
   SessionMutationAdmissionRepository,
   computePostCommitChildAdmissionMaterialSha256,
+  type DurableChatSecureConfigurationReservationRecord,
   type PostCommitChildAdmissionIdentity,
   type PostCommitChildStageInput,
 } from "./session-mutation-admission-repo.js";
@@ -560,6 +561,374 @@ describe("SessionMutationAdmissionRepository SQLite", () => {
       assert.deepEqual(readContinuationMutationSnapshot(db, fixture), before);
       db.close();
     }
+  });
+
+  it("reserves secure configuration before effect and completes only with an exact secret-free receipt", () => {
+    const db = createDatabase({ dbPath: ":memory:" });
+    const fixture = createContinuationFixture(db);
+    makeContinuationPromptSecure(db, fixture, {
+      targetId: "search.brave",
+      expiresAt: "2099-08-07T00:00:00.000Z",
+    });
+    const reservationInput = secureConfigurationReservationInput(fixture, "search.brave", 2);
+
+    assert.throws(
+      () =>
+        fixture.repo.reserveDurableChatSecureConfiguration({
+          ...reservationInput,
+          expectedWaitingRunVersion: 1,
+        }),
+      /expected waiting version/iu,
+    );
+    assert.throws(
+      () =>
+        fixture.repo.reserveDurableChatSecureConfiguration({
+          ...reservationInput,
+          targetId: "search.parallel",
+        }),
+      /exact required secure configuration target/iu,
+    );
+    assert.throws(
+      () =>
+        fixture.repo.reserveDurableChatSecureConfiguration({
+          ...reservationInput,
+          responder: { actorId: "operator-other", authActorSource: "token" },
+        }),
+      /admitted control-plane operator/iu,
+    );
+
+    const reserved = fixture.repo.reserveDurableChatSecureConfiguration(reservationInput);
+    assert.equal(reserved.disposition, "reserved");
+    assert.deepEqual(reserved.run, { runId: fixture.runId, status: "waiting", version: 3 });
+    assert.equal(reserved.reservation.status, "reserved");
+    assert.equal(fixture.repo.reserveDurableChatSecureConfiguration(reservationInput).disposition, "replayed");
+    assert.throws(
+      () =>
+        fixture.repo.resolveDurableChatUserInput({
+          ...fixture.resolution,
+          expectedWaitingRunVersion: 3,
+          response: { kind: "text", text: "ordinary answer" },
+        }),
+      /active reservation and receipt/iu,
+    );
+    assert.throws(
+      () =>
+        db.prepare("UPDATE durable_runs SET status = 'cancelled' WHERE run_id = @runId").run({ runId: fixture.runId }),
+      /active secure configuration reservation/iu,
+    );
+    assert.throws(
+      () =>
+        db
+          .prepare("UPDATE chat_session_mutation_admissions SET status = 'cancelled' WHERE admission_id = @admissionId")
+          .run({ admissionId: fixture.resolution.admissionIdentity.admissionId }),
+      /active secure configuration reservation/iu,
+    );
+
+    const receipt = {
+      targetId: "search.brave",
+      provider: "brave",
+      revision: "a".repeat(64),
+      scopeRef: "root-installation-a",
+    };
+    assert.throws(
+      () =>
+        fixture.repo.resolveDurableChatUserInput({
+          ...fixture.resolution,
+          expectedWaitingRunVersion: 3,
+          response: { kind: "text", text: "Runtime configuration completed and validated." },
+          runtimeConfigurationReceipt: { ...receipt, provider: "parallel" },
+        }),
+      /receipt targets a different|receipt/iu,
+    );
+    const resolved = fixture.repo.resolveDurableChatUserInput({
+      ...fixture.resolution,
+      expectedWaitingRunVersion: 3,
+      response: { kind: "text", text: "Runtime configuration completed and validated." },
+      runtimeConfigurationReceipt: receipt,
+    });
+    assert.equal(resolved.disposition, "resolved");
+    assert.deepEqual(resolved.run, { runId: fixture.runId, status: "queued", version: 4 });
+    assert.deepEqual(resolved.responseRecord.runtimeConfigurationReceipt, receipt);
+    assert.deepEqual(
+      {
+        ...(db
+          .prepare(
+            `SELECT status, provider, configuration_revision, scope_ref
+             FROM chat_turn_secure_configuration_reservations WHERE reservation_id = @reservationId`,
+          )
+          .get({ reservationId: reserved.reservation.reservationId }) as Record<string, unknown>),
+      },
+      {
+        status: "completed",
+        provider: "brave",
+        configuration_revision: "a".repeat(64),
+        scope_ref: "root-installation-a",
+      },
+    );
+    const serializedRows = JSON.stringify(
+      db.prepare("SELECT * FROM chat_turn_secure_configuration_reservations").all(),
+    );
+    assert.doesNotMatch(serializedRows, /raw-secret-canary/iu);
+    const columns = db.prepare("PRAGMA table_info(chat_turn_secure_configuration_reservations)").all<{
+      name: string;
+    }>();
+    assert.equal(
+      columns.some((column) => /secret|credential|token|value|hash|digest/iu.test(column.name)),
+      false,
+    );
+    db.close();
+  });
+
+  it("releases an exact secure reservation and permits a bumped-version retry", () => {
+    const db = createDatabase({ dbPath: ":memory:" });
+    const fixture = createContinuationFixture(db);
+    makeContinuationPromptSecure(db, fixture, {
+      targetId: "search.parallel",
+      expiresAt: "2099-08-07T00:00:00.000Z",
+    });
+    const first = fixture.repo.reserveDurableChatSecureConfiguration(
+      secureConfigurationReservationInput(fixture, "search.parallel", 2),
+    );
+    assert.throws(
+      () =>
+        fixture.repo.releaseDurableChatSecureConfiguration({
+          ...secureConfigurationReleaseInput(fixture, first.reservation),
+          expectedReservedRunVersion: 2,
+        }),
+      /reservation identity conflicts/iu,
+    );
+    const released = fixture.repo.releaseDurableChatSecureConfiguration(
+      secureConfigurationReleaseInput(fixture, first.reservation),
+    );
+    assert.equal(released.reservation.status, "released");
+    assert.deepEqual(released.run, { runId: fixture.runId, status: "waiting", version: 3 });
+
+    const second = fixture.repo.reserveDurableChatSecureConfiguration(
+      secureConfigurationReservationInput(fixture, "search.parallel", 3),
+    );
+    assert.equal(second.reservation.waitingRunVersion, 3);
+    assert.equal(second.reservation.reservedRunVersion, 4);
+    assert.notEqual(second.reservation.reservationId, first.reservation.reservationId);
+    const resolved = fixture.repo.resolveDurableChatUserInput({
+      ...fixture.resolution,
+      expectedWaitingRunVersion: 4,
+      response: { kind: "text", text: "Runtime configuration completed and validated." },
+      runtimeConfigurationReceipt: {
+        targetId: "search.parallel",
+        provider: "parallel",
+        revision: "b".repeat(64),
+        scopeRef: "root-installation-a",
+      },
+    });
+    assert.deepEqual(resolved.run, { runId: fixture.runId, status: "queued", version: 5 });
+    assert.equal(
+      db
+        .prepare(
+          `SELECT COUNT(*) AS count FROM chat_turn_secure_configuration_reservations
+           WHERE durable_run_id = @runId AND status = 'released'`,
+        )
+        .get<{ count: number }>({ runId: fixture.runId })?.count,
+      1,
+    );
+    db.close();
+  });
+
+  it("uses database time to reject expired secure configuration reservations and completions", () => {
+    const expiredDb = createDatabase({ dbPath: ":memory:" });
+    const expired = createContinuationFixture(expiredDb);
+    makeContinuationPromptSecure(expiredDb, expired, {
+      targetId: "search.brave",
+      expiresAt: "2000-01-01T00:00:00.000Z",
+    });
+    assert.throws(
+      () =>
+        expired.repo.reserveDurableChatSecureConfiguration(
+          secureConfigurationReservationInput(expired, "search.brave", 2),
+        ),
+      /expired/iu,
+    );
+    expiredDb.close();
+
+    const db = createDatabase({ dbPath: ":memory:" });
+    const fixture = createContinuationFixture(db);
+    makeContinuationPromptSecure(db, fixture, {
+      targetId: "search.brave",
+      expiresAt: "2099-08-07T00:00:00.000Z",
+    });
+    const reserved = fixture.repo.reserveDurableChatSecureConfiguration(
+      secureConfigurationReservationInput(fixture, "search.brave", 2),
+    );
+    db.prepare(
+      `UPDATE chat_turn_traces SET pending_user_input_json = json_set(
+         pending_user_input_json, '$.expiresAt', '2000-01-01T00:00:00.000Z'
+       ) WHERE turn_id = @turnId`,
+    ).run({ turnId: fixture.turnId });
+    assert.throws(
+      () =>
+        fixture.repo.resolveDurableChatUserInput({
+          ...fixture.resolution,
+          expectedWaitingRunVersion: reserved.run.version,
+          response: { kind: "text", text: "Runtime configuration completed and validated." },
+          runtimeConfigurationReceipt: {
+            targetId: "search.brave",
+            provider: "brave",
+            revision: "c".repeat(64),
+            scopeRef: "root-installation-a",
+          },
+        }),
+      /expired/iu,
+    );
+    assert.equal(
+      db
+        .prepare("SELECT status FROM chat_turn_secure_configuration_reservations WHERE reservation_id = @reservationId")
+        .get<{ status: string }>({ reservationId: reserved.reservation.reservationId })?.status,
+      "reserved",
+    );
+    db.close();
+  });
+
+  it("does not infer effect ownership from a reserved run version after process restart", () => {
+    const dbPath = path.join(os.tmpdir(), `goatcitadel-secure-reservation-${randomUUID()}.db`);
+    try {
+      const firstDb = createDatabase({ dbPath });
+      const fixture = createContinuationFixture(firstDb);
+      makeContinuationPromptSecure(firstDb, fixture, {
+        targetId: "search.brave",
+        expiresAt: "2099-08-07T00:00:00.000Z",
+      });
+      const initialInput = secureConfigurationReservationInput(fixture, "search.brave", 2);
+      const reserved = fixture.repo.reserveDurableChatSecureConfiguration(initialInput);
+      assert.equal(reserved.disposition, "reserved");
+      firstDb.close();
+
+      const recoveredDb = createDatabase({ dbPath });
+      const recovered = new SessionMutationAdmissionRepository(recoveredDb);
+      const replayed = recovered.reserveDurableChatSecureConfiguration({
+        ...initialInput,
+        expectedWaitingRunVersion: reserved.run.version,
+      });
+      assert.equal(replayed.disposition, "replayed");
+      assert.equal(replayed.reservation.reservationId, reserved.reservation.reservationId);
+      assert.deepEqual(replayed.run, reserved.run);
+      assert.equal(replayed.requiresTargetReconciliation, false);
+      assert.equal(replayed.reservation.requiresReconciliation, false);
+      const competingReplay = recovered.reserveDurableChatSecureConfiguration({
+        ...initialInput,
+        expectedWaitingRunVersion: reserved.run.version,
+      });
+      assert.equal(competingReplay.disposition, "replayed");
+      assert.equal(competingReplay.requiresTargetReconciliation, false);
+      const olderExactReplay = recovered.reserveDurableChatSecureConfiguration(initialInput);
+      assert.equal(olderExactReplay.disposition, "replayed");
+      assert.equal(olderExactReplay.requiresTargetReconciliation, false);
+      assert.equal(olderExactReplay.reservation.requiresReconciliation, false);
+      assert.deepEqual(
+        recovered.listBlockingDurableChatSecureConfigurationsByTargetScope({
+          targetId: "search.brave",
+          scopeRef: "root-installation-a",
+        }),
+        [replayed.reservation],
+      );
+      recoveredDb.close();
+    } finally {
+      fs.rmSync(dbPath, { force: true });
+      fs.rmSync(`${dbPath}-wal`, { force: true });
+      fs.rmSync(`${dbPath}-shm`, { force: true });
+    }
+  });
+
+  it("quarantines expired restart ambiguity until a new prompt completes reconciliation", async () => {
+    const db = createDatabase({ dbPath: ":memory:" });
+    const fixture = createContinuationFixture(db);
+    makeContinuationPromptSecure(db, fixture, {
+      targetId: "search.parallel",
+      expiresAt: new Date(Date.now() + 75).toISOString(),
+    });
+    const first = fixture.repo.reserveDurableChatSecureConfiguration(
+      secureConfigurationReservationInput(fixture, "search.parallel", 2),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 125));
+    assert.throws(
+      () =>
+        fixture.repo.reserveDurableChatSecureConfiguration({
+          ...secureConfigurationReservationInput(fixture, "search.parallel", 2),
+          expectedWaitingRunVersion: 3,
+        }),
+      /expired/iu,
+    );
+    const quarantined = fixture.repo.listBlockingDurableChatSecureConfigurationsByTargetScope({
+      targetId: "search.parallel",
+      scopeRef: "root-installation-a",
+    });
+    assert.equal(quarantined.length, 1);
+    assert.equal(quarantined[0]?.status, "expired_unreconciled");
+    assert.equal(quarantined[0]?.requiresReconciliation, true);
+
+    const retryPromptId = `${fixture.resolution.promptId}:retry`;
+    makeContinuationPromptSecure(db, fixture, {
+      promptId: retryPromptId,
+      targetId: "search.parallel",
+      expiresAt: "2099-08-07T00:00:00.000Z",
+    });
+    db.prepare(`UPDATE durable_runs SET metadata_json = @metadataJson WHERE run_id = @runId`).run({
+      runId: fixture.runId,
+      metadataJson: canonicalJsonString({
+        waitForEvent: { eventKey: "chat.user_input.resolved", correlationId: retryPromptId },
+      }),
+    });
+    const replacement = fixture.repo.reserveDurableChatSecureConfiguration({
+      admissionIdentity: fixture.resolution.admissionIdentity,
+      durableRunId: fixture.runId,
+      expectedWaitingRunVersion: 3,
+      promptId: retryPromptId,
+      targetId: "search.parallel",
+      scopeRef: "root-installation-a",
+      responder: fixture.resolution.responder,
+    });
+    assert.equal(replacement.requiresTargetReconciliation, true);
+    assert.equal(replacement.run.version, 4);
+    assert.equal(
+      fixture.repo.listBlockingDurableChatSecureConfigurationsByTargetScope({
+        targetId: "search.parallel",
+        scopeRef: "root-installation-a",
+      }).length,
+      2,
+    );
+    fixture.repo.resolveDurableChatUserInput({
+      ...fixture.resolution,
+      expectedWaitingRunVersion: 4,
+      promptId: retryPromptId,
+      correlationId: retryPromptId,
+      response: { kind: "text", text: "Runtime configuration completed and validated." },
+      runtimeConfigurationReceipt: {
+        targetId: "search.parallel",
+        provider: "parallel",
+        revision: "e".repeat(64),
+        scopeRef: "root-installation-a",
+      },
+    });
+    assert.deepEqual(
+      fixture.repo.listBlockingDurableChatSecureConfigurationsByTargetScope({
+        targetId: "search.parallel",
+        scopeRef: "root-installation-a",
+      }),
+      [],
+    );
+    assert.deepEqual(
+      {
+        ...(db
+          .prepare(
+            `SELECT status, reconciled_by_reservation_id
+             FROM chat_turn_secure_configuration_reservations WHERE reservation_id = @reservationId`,
+          )
+          .get({ reservationId: first.reservation.reservationId }) as Record<string, unknown>),
+      },
+      {
+        status: "reconciled",
+        reconciled_by_reservation_id: replacement.reservation.reservationId,
+      },
+    );
+    db.close();
   });
 
   it("rejects system and external-companion continuation admissions before any mutation", () => {
@@ -1246,6 +1615,80 @@ function createContinuationFixture(
       responder: { actorId: "operator-a", authActorSource: "token" as const },
       response: { kind: "text" as const, text: "Proceed with the verified plan." },
     },
+  };
+}
+
+function makeContinuationPromptSecure(
+  db: ReturnType<typeof createDatabase>,
+  fixture: ReturnType<typeof createContinuationFixture>,
+  input: { promptId?: string; targetId: "search.brave" | "search.parallel"; expiresAt: string },
+): void {
+  const targetLabel = input.targetId === "search.brave" ? "Brave Search" : "Parallel Search";
+  const acquisition =
+    input.targetId === "search.brave"
+      ? {
+          acquisitionUrl: "https://brave.com/search/api/",
+          acquisitionLabel: "Get a Brave Search API key",
+        }
+      : {
+          acquisitionUrl: "https://platform.parallel.ai/",
+          acquisitionLabel: "Get a Parallel API key",
+        };
+  db.prepare(
+    `UPDATE chat_turn_traces SET pending_user_input_json = @pendingUserInputJson
+     WHERE turn_id = @turnId`,
+  ).run({
+    turnId: fixture.turnId,
+    pendingUserInputJson: canonicalJsonString({
+      promptId: input.promptId ?? fixture.resolution.promptId,
+      turnId: fixture.turnId,
+      kind: "text",
+      title: `Configure ${targetLabel}`,
+      question: `Enter the credential needed to connect ${targetLabel}.`,
+      required: true,
+      expiresAt: input.expiresAt,
+      secureConfiguration: {
+        targetId: input.targetId,
+        targetLabel,
+        secretFieldLabel: `${targetLabel} API key`,
+        ...acquisition,
+        storage: "os_keychain",
+        scope: "installation",
+        verification: "live_probe",
+      },
+    }),
+  });
+}
+
+function secureConfigurationReservationInput(
+  fixture: ReturnType<typeof createContinuationFixture>,
+  targetId: "search.brave" | "search.parallel",
+  expectedWaitingRunVersion: number,
+) {
+  return {
+    admissionIdentity: fixture.resolution.admissionIdentity,
+    durableRunId: fixture.runId,
+    expectedWaitingRunVersion,
+    promptId: fixture.resolution.promptId,
+    targetId,
+    scopeRef: "root-installation-a",
+    responder: fixture.resolution.responder,
+  };
+}
+
+function secureConfigurationReleaseInput(
+  fixture: ReturnType<typeof createContinuationFixture>,
+  reservation: DurableChatSecureConfigurationReservationRecord,
+) {
+  return {
+    reservationId: reservation.reservationId,
+    admissionIdentity: fixture.resolution.admissionIdentity,
+    durableRunId: fixture.runId,
+    promptId: fixture.resolution.promptId,
+    targetId: reservation.targetId,
+    scopeRef: reservation.scopeRef,
+    expectedReservedRunVersion: reservation.reservedRunVersion,
+    responder: fixture.resolution.responder,
   };
 }
 

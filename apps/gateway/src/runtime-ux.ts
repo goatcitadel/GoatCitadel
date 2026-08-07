@@ -11,6 +11,7 @@ type TerminalReporterOptions = {
   bindings?: Record<string, unknown>;
 };
 type LoggerBindings = Record<string, unknown>;
+type LoggerChildOptions = { level?: string };
 
 const levelWeight: Record<TerminalLevel | "silent", number> = {
   trace: 10,
@@ -146,14 +147,15 @@ class PrettyGatewayLogger implements FastifyBaseLogger {
     });
   }
 
-  public child(bindings: LoggerBindings): FastifyBaseLogger {
+  public child(bindings: LoggerBindings, options?: LoggerChildOptions): FastifyBaseLogger {
+    const childLevel = isTerminalLogLevel(options?.level) ? options.level : this.level;
     return new PrettyGatewayLogger(
       this.verbose,
       {
         ...this.bindings,
         ...sanitizeObject(bindings as Record<string, unknown>),
       },
-      this.level,
+      childLevel,
     );
   }
 
@@ -209,6 +211,10 @@ class PrettyGatewayLogger implements FastifyBaseLogger {
         break;
     }
   }
+}
+
+function isTerminalLogLevel(value: unknown): value is TerminalLevel | "silent" {
+  return typeof value === "string" && Object.hasOwn(levelWeight, value);
 }
 
 function emitTerminalLine(

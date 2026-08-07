@@ -1632,6 +1632,81 @@ describe("chat routes additional coverage", () => {
     );
   });
 
+  it("routes credentials only through the no-store secure configuration endpoint", async () => {
+    const answerChatUserInputPrompt = vi.fn(async () => ({
+      ok: true,
+      sessionId: "sess-1",
+      turnId: "turn-2",
+      promptId: "prompt-secure",
+      resumed: true,
+    }));
+    app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
+    app.decorateRequest("authActorId", "token:operator-1");
+    app.decorateRequest("authActorSource", "token");
+    app.decorate("services", { chatMessages: { answerChatUserInputPrompt } } as never);
+    await app.register(chatRoutes);
+
+    const generic = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/turns/turn-2/user-input/prompt-secure/respond",
+      payload: { response: { kind: "secure_configuration", secret: "must-not-route-here" } },
+    });
+    expect(generic.statusCode).toBe(400);
+    expect(answerChatUserInputPrompt).not.toHaveBeenCalled();
+
+    const disguisedGeneric = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/turns/turn-2/user-input/prompt-secure/respond",
+      payload: { response: { kind: "text", text: "continue", secret: "must-not-be-stripped" } },
+    });
+    expect(disguisedGeneric.statusCode).toBe(400);
+    expect(answerChatUserInputPrompt).not.toHaveBeenCalled();
+
+    const secureWithExtraField = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/turns/turn-2/user-input/prompt-secure/secure-configuration",
+      payload: { secret: "direct-gateway-secret", targetId: "search.parallel" },
+    });
+    expect(secureWithExtraField.statusCode).toBe(400);
+    expect(answerChatUserInputPrompt).not.toHaveBeenCalled();
+
+    const proxiedPlaintext = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/turns/turn-2/user-input/prompt-secure/secure-configuration",
+      headers: { forwarded: "for=192.0.2.10;proto=http" },
+      payload: { secret: "must-not-cross-a-proxy" },
+    });
+    expect(proxiedPlaintext.statusCode).toBe(403);
+    expect(answerChatUserInputPrompt).not.toHaveBeenCalled();
+
+    const realIpProxy = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/turns/turn-2/user-input/prompt-secure/secure-configuration",
+      headers: { "x-real-ip": "192.0.2.10" },
+      payload: { secret: "must-not-cross-a-real-ip-proxy" },
+    });
+    expect(realIpProxy.statusCode).toBe(403);
+    expect(answerChatUserInputPrompt).not.toHaveBeenCalled();
+
+    const secure = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/turns/turn-2/user-input/prompt-secure/secure-configuration",
+      payload: { secret: "direct-gateway-secret" },
+    });
+
+    expect(secure.statusCode).toBe(200);
+    expect(secure.headers["cache-control"]).toBe("no-store");
+    expect(secure.headers.pragma).toBe("no-cache");
+    expect(answerChatUserInputPrompt).toHaveBeenCalledWith(
+      "sess-1",
+      "turn-2",
+      "prompt-secure",
+      { kind: "secure_configuration", secret: "direct-gateway-secret" },
+      { actorId: "token:operator-1", authActorSource: "token" },
+    );
+  });
+
   it("rejects oversized user-input prompt identifiers and answers without mutation", async () => {
     const answerChatUserInputPrompt = vi.fn();
     app = Fastify();

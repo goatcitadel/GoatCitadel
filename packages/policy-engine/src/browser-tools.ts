@@ -19,6 +19,7 @@ import {
   executeOfficialResearchSearch,
   isOfficialResearchSearchInvocation,
   resolveOfficialSearchProviders,
+  type ResolveOfficialSearchCredential,
 } from "./research-search-official-providers.js";
 
 type BrowserToolName =
@@ -43,6 +44,8 @@ export interface BrowserExecutionContext {
   matchedGrantAllowedHosts?: string[];
   fullWebAccess?: boolean;
   assertBrowserSessionAccess?: (check: BrowserSessionAccessCheck) => void;
+  /** Process-local protected credential lookup; never serialized into browser tool arguments. */
+  resolveCredential?: ResolveOfficialSearchCredential;
 }
 
 interface BrowserStepInput {
@@ -251,6 +254,7 @@ async function executeBrowserSearch(
       },
       {
         signal: executionContext?.signal,
+        resolveCredential: executionContext?.resolveCredential,
         additionalAllowlists: [resolveNetworkAllowlist(config, executionContext)],
       },
     );

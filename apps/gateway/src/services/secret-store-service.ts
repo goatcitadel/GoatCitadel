@@ -50,6 +50,16 @@ export class SecretStoreService {
     return hasCommand("secret-tool");
   }
 
+  /**
+   * Whether non-interactive writes can keep the raw value out of both argv and
+   * the child-process environment. The current macOS `security(1)` adapter
+   * cannot meet that stronger custody contract, so Chat-hosted configuration
+   * must fail closed there until a native keychain adapter replaces it.
+   */
+  public isWriteCustodySafe(): boolean {
+    return process.platform !== "darwin";
+  }
+
   public setProviderApiKey(providerId: string, apiKey: string): void {
     assertProviderId(providerId);
     if (!apiKey.trim()) {
@@ -137,17 +147,22 @@ export class SecretStoreService {
     const script = `
 [Windows.Security.Credentials.PasswordVault,Windows.Security.Credentials,ContentType=WindowsRuntime] | Out-Null
 [Windows.Security.Credentials.PasswordCredential,Windows.Security.Credentials,ContentType=WindowsRuntime] | Out-Null
+$secretValue = [Console]::In.ReadToEnd()
 $vault = [Windows.Security.Credentials.PasswordVault]::new()
 try { $existing = $vault.Retrieve($env:GOATCITADEL_SECRET_SERVICE, $env:GOATCITADEL_SECRET_ACCOUNT); $vault.Remove($existing) } catch { Write-Output "credential_not_found" | Out-Null }
-$credential = [Windows.Security.Credentials.PasswordCredential]::new($env:GOATCITADEL_SECRET_SERVICE, $env:GOATCITADEL_SECRET_ACCOUNT, $env:GOATCITADEL_SECRET_VALUE)
+$credential = [Windows.Security.Credentials.PasswordCredential]::new($env:GOATCITADEL_SECRET_SERVICE, $env:GOATCITADEL_SECRET_ACCOUNT, $secretValue)
 $vault.Add($credential)
 Write-Output "ok"
 `;
-    runCommand("powershell", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], {
-      GOATCITADEL_SECRET_SERVICE: SECRET_SERVICE,
-      GOATCITADEL_SECRET_ACCOUNT: account,
-      GOATCITADEL_SECRET_VALUE: secret,
-    });
+    runCommand(
+      "powershell",
+      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
+      {
+        GOATCITADEL_SECRET_SERVICE: SECRET_SERVICE,
+        GOATCITADEL_SECRET_ACCOUNT: account,
+      },
+      { stdin: secret },
+    );
   }
 
   private getWindowsCredential(account: string): string | undefined {
@@ -319,7 +334,7 @@ export function runCommand(
     // a leak in the secret-management layer itself. Instead pass only a minimal
     // allowlist of locator/runtime vars the helpers genuinely need to be found and
     // run (PowerShell on Windows, `security` on macOS, `secret-tool` on Linux),
-    // plus the explicit per-call overrides that carry the service/account/value.
+    // plus explicit non-secret per-call locator overrides. Raw values use stdin.
     env: {
       ...minimalHelperEnv(),
       ...(envOverrides ?? {}),

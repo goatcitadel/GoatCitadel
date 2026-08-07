@@ -25,8 +25,14 @@ import {
 } from "./sandbox/http-request-policy.js";
 import { executeBrowserTool, isBrowserToolName } from "./browser-tools.js";
 import { scanBrowserContentGuard } from "./browser-content-guard.js";
+import type { ResolveOfficialSearchCredential } from "./research-search-official-providers.js";
 import { collectLeakDetections, sanitizeForModel } from "./tool-security.js";
 import { matchesToolPattern } from "./tool-patterns.js";
+import {
+  RUNTIME_CONFIGURATION_TARGET_IDS,
+  RUNTIME_CONFIGURE_TOOL_NAME,
+  type RuntimeConfigurationTargetId,
+} from "./tool-registry.js";
 import type { AcquireLocalEmbeddingLease, PrepareEmbeddingUsageDispatch } from "./local-embeddings.js";
 import { classifyShellRisk } from "./sandbox/shell-risk-gate.js";
 import {
@@ -81,6 +87,8 @@ export interface ToolExecutorRuntimeHooks {
   acquireLocalEmbeddingLease?: AcquireLocalEmbeddingLease;
   prepareEmbeddingUsageDispatch?: PrepareEmbeddingUsageDispatch;
   assertBrowserSessionAccess?: (check: BrowserSessionAccessCheck) => void;
+  /** Resolve protected official-search credentials at execution time, before environment fallback. */
+  resolveCredential?: ResolveOfficialSearchCredential;
   /** Resolve a protected approval action bearer only inside the native comms provider adapter. */
   resolveApprovalActionTokenSecret?: (secretRef: string) => string;
   /** Remove a protected approval action bearer after a terminal provider outcome. */
@@ -132,6 +140,8 @@ export interface ToolExecutorRuntimeHooks {
   ) => Promise<Record<string, unknown>>;
   /** Record a delegated worker result or approval-gated filesystem scope request. */
   submitWorkResult?: (request: ToolInvokeRequest) => Promise<Record<string, unknown>>;
+  /** Gateway-owned secure configuration flow. Secret material must never be returned through this hook. */
+  configureRuntime?: (request: ToolInvokeRequest, targetId: RuntimeConfigurationTargetId) => void | Promise<void>;
   /** Post-authorization, Gateway-owned presentation image generation hook. */
   preparePresentationVisuals?: PreparePresentationVisuals;
 }
@@ -226,6 +236,7 @@ export async function executeTool(
       actorId: resolveToolActorId(request),
       ...(request.runId ? { runId: request.runId } : {}),
       assertBrowserSessionAccess: runtimeHooks.assertBrowserSessionAccess,
+      resolveCredential: runtimeHooks.resolveCredential,
     });
     return finalizeToolResult(rawResult);
   }
@@ -260,6 +271,18 @@ export async function executeTool(
     );
   }
   switch (request.toolName) {
+    case RUNTIME_CONFIGURE_TOOL_NAME: {
+      const targetId = readRuntimeConfigurationTarget(request.args);
+      if (!runtimeHooks.configureRuntime) {
+        throw new Error("Secure runtime configuration is unavailable in this runtime.");
+      }
+      await runtimeHooks.configureRuntime(request, targetId);
+      return finalizeToolResult({
+        status: "configuration_required",
+        configurationRequired: true,
+        targetId,
+      });
+    }
     case "session.status":
       return finalizeToolResult(
         runtimeHooks.getChatSessionStatus
@@ -369,6 +392,17 @@ export async function executeTool(
     default:
       throw new Error(`Unsupported tool executor: ${request.toolName}`);
   }
+}
+
+function readRuntimeConfigurationTarget(args: Record<string, unknown>): RuntimeConfigurationTargetId {
+  if (Object.keys(args).length !== 1 || !Object.hasOwn(args, "targetId")) {
+    throw new Error("runtime.configure accepts only targetId.");
+  }
+  const targetId = args.targetId;
+  if (typeof targetId !== "string" || !(RUNTIME_CONFIGURATION_TARGET_IDS as readonly string[]).includes(targetId)) {
+    throw new Error("runtime.configure targetId must identify a supported secure configuration target.");
+  }
+  return targetId as RuntimeConfigurationTargetId;
 }
 
 function readNotifyRequest(args: Record<string, unknown>): NotifyRequest {

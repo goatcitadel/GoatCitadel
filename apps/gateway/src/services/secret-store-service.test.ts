@@ -150,10 +150,12 @@ describe("SecretStoreService", () => {
         env: expect.objectContaining({
           GOATCITADEL_SECRET_SERVICE: "goatcitadel",
           GOATCITADEL_SECRET_ACCOUNT: "provider:moonshot",
-          GOATCITADEL_SECRET_VALUE: "sk-win",
         }),
+        input: "sk-win",
       }),
     );
+    const windowsWriteOptions = spawnSyncMock.mock.calls[1]?.[2] as { env?: Record<string, string>; input?: string };
+    expect(windowsWriteOptions.env).not.toHaveProperty("GOATCITADEL_SECRET_VALUE");
     for (const call of spawnSyncMock.mock.calls) {
       expect(call[2]).toEqual(expect.objectContaining({ windowsHide: true }));
     }
@@ -167,6 +169,17 @@ describe("SecretStoreService", () => {
     const service = new SecretStoreService();
 
     expect(() => service.setSecret("provider:anthropic", "sk-test")).toThrow("security failed: security denied");
+  });
+
+  it("marks only keychain adapters with argv-and-env-free writes as safe for Chat custody", () => {
+    const service = new SecretStoreService();
+
+    setPlatform("win32");
+    expect(service.isWriteCustodySafe()).toBe(true);
+    setPlatform("linux");
+    expect(service.isWriteCustodySafe()).toBe(true);
+    setPlatform("darwin");
+    expect(service.isWriteCustodySafe()).toBe(false);
   });
 
   it("redacts the secret from a macOS keychain-write error that echoes it", () => {

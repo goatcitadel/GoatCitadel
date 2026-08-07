@@ -6,7 +6,7 @@ export * from "./tool-executor.js";
 export * from "./presentation-visual-runtime.js";
 export * from "./tool-security.js";
 export * from "./browser-content-guard.js";
-export { describeBrowserSessionState } from "./browser-tools.js";
+export { describeBrowserSessionState, type BrowserExecutionContext } from "./browser-tools.js";
 export * from "./tool-patterns.js";
 export * from "./safe-env-name.js";
 export * from "./ingestion-backends.js";

@@ -32,6 +32,30 @@ describe("tool registry", () => {
     expect(subtasksSchema).toMatchObject({ type: "array", minItems: 1, maxItems: 3 });
   });
 
+  it("registers runtime.configure as a Chat-only typed secure-flow request with no secret arguments", () => {
+    const tool = createDefaultToolRegistry()
+      .toCatalog()
+      .find((entry) => entry.toolName === "runtime.configure");
+
+    expect(tool).toMatchObject({
+      category: "ops",
+      riskLevel: "caution",
+      requiresApproval: false,
+      pack: "core",
+      recommendedContexts: ["chat"],
+      argSchema: {
+        type: "object",
+        properties: {
+          targetId: { type: "string", enum: ["search.brave", "search.parallel"] },
+        },
+        required: ["targetId"],
+        additionalProperties: false,
+      },
+    });
+    expect(JSON.stringify(tool?.argSchema)).not.toMatch(/secret|credential|apiKey/i);
+    expect(tool?.usageHints?.join(" ")).toContain("Never ask the operator to paste credentials into Chat");
+  });
+
   it("includes browser session-state tools", () => {
     const catalog = createDefaultToolRegistry().toCatalog();
     expect(catalog.some((tool) => tool.toolName === "browser.cookies.get")).toBe(true);

@@ -25,6 +25,7 @@ import {
   type ApprovalWaitWorkflowPayload,
   type ChatSendMessageRequest,
   type ChatRoutedContextSnapshotRecord,
+  type ChatToolRunRecord,
   type ChatTurnTraceRecord,
   type ConnectorDeliveryWorkflowPayload,
   type CuratorTickWorkflowPayload,
@@ -3526,12 +3527,67 @@ async function isDurableChatTurnRecoverable(
   }
   const toolRuns = await host.storage.chatToolRuns.listByTurn(payload.turnId);
   if (toolRuns.length > 0) {
+    if (isReplaySafeUserInputContinuation(payload, trace, toolRuns)) {
+      return { recoverable: true };
+    }
     return {
       recoverable: false,
       reason: "Durable chat run was interrupted after tool execution began and cannot be safely replayed.",
     };
   }
   return { recoverable: true };
+}
+
+function isReplaySafeUserInputContinuation(
+  payload: DurableChatTurnExecutionPayload,
+  trace: ChatTurnTraceRecord,
+  toolRuns: ChatToolRunRecord[],
+): boolean {
+  if ((payload.userInputResponses?.length ?? 0) === 0 || trace.pendingUserInput !== undefined) {
+    return false;
+  }
+  return toolRuns.every((toolRun) => {
+    if (!toolRun.finishedAt || !["executed", "blocked", "failed"].includes(toolRun.status)) {
+      return false;
+    }
+    if (toolRun.effectOutcomeKind === "none" && toolRun.effectDisposition !== "unknown") {
+      return true;
+    }
+    return isExactNoEffectRuntimeConfigurationToolRun(toolRun);
+  });
+}
+
+function isExactNoEffectRuntimeConfigurationToolRun(toolRun: ChatToolRunRecord): boolean {
+  if (toolRun.status !== "executed") return false;
+  const result = readUnknownRecord(toolRun.result);
+  if (!result) return false;
+  const normalizedToolName = toolRun.toolName.replace(/_/gu, ".");
+  if (normalizedToolName === "runtime.configure") {
+    return (
+      result.status === "configuration_required" &&
+      result.configurationRequired === true &&
+      (result.targetId === "search.brave" || result.targetId === "search.parallel")
+    );
+  }
+  if (normalizedToolName !== "browser.search") return false;
+  const accounting = readUnknownRecord(result.accounting);
+  const execution = readUnknownRecord(result.execution);
+  const attempts = Array.isArray(result.providerAttempts) ? result.providerAttempts : [];
+  return (
+    execution?.executableTool === "browser.search" &&
+    execution.requiredBackend === "official" &&
+    Array.isArray(accounting?.outboundRequests) &&
+    accounting.outboundRequests.length === 0 &&
+    attempts.length > 0 &&
+    attempts.every((attempt) => {
+      const record = readUnknownRecord(attempt);
+      return (
+        record?.status === "unavailable" &&
+        typeof record.message === "string" &&
+        record.message.includes("credential is not configured")
+      );
+    })
+  );
 }
 
 async function hasRetainedDurableChatOutput(
@@ -3976,8 +4032,13 @@ function formatDurableChatTurnResumeEntry(response: DurableChatTurnUserInputResu
     if (response.selectedOption?.description?.trim()) {
       lines.push(`Option detail: ${response.selectedOption.description.trim()}`);
     }
-  } else {
+  } else if (response.response.kind === "text") {
     lines.push(`Answer: ${response.response.text.trim()}`);
+  } else {
+    // Defense in depth: the route owner must transform secure configuration
+    // into a non-secret text receipt before durable admission. Never render a
+    // raw secure response if malformed or legacy data reaches this formatter.
+    lines.push("Answer: Secure configuration response was excluded from durable Chat context.");
   }
   return lines.join("\n");
 }

@@ -12,7 +12,13 @@ import type {
   RealtimeEvent,
 } from "@goatcitadel/contracts";
 import { canonicalJsonString, ConflictError, ValidationError } from "@goatcitadel/contracts";
-import type { DurableChatUserInputResponderAuthSource, AsyncStorage as Storage } from "@goatcitadel/storage";
+import type {
+  DurableChatRuntimeConfigurationReceipt,
+  DurableChatUserInputAdmissionIdentity,
+  DurableChatUserInputResponderAuthSource,
+  ReserveDurableChatSecureConfigurationOutcome,
+  AsyncStorage as Storage,
+} from "@goatcitadel/storage";
 import { buildChatThreadResponse, resolveNewestLeafTurnId } from "./chat-thread-utils.js";
 import type { ChatTurnSessionState } from "./chat-turn-prep-service.js";
 import type { DurableRunService } from "./durable-run-service.js";
@@ -50,7 +56,7 @@ export interface ChatMessageRouteRuntimeHost {
   };
   readonly storage: Storage;
   readonly durableRunService: Pick<DurableRunService, "getDurableRun" | "requestRunProcessing">;
-  getSession(sessionId: string): unknown;
+  getSession(sessionId: string): unknown | Promise<unknown>;
   loadChatTurnSessionState(sessionId: string, options?: ChatThreadLoadOptions): Promise<ChatTurnSessionState>;
   publishRealtime(
     eventType: string,
@@ -67,6 +73,30 @@ export interface ChatMessageRouteRuntimeHost {
     turnId?: string;
     context?: Record<string, unknown>;
   }): void;
+  configureRuntimeTarget?(input: {
+    targetId: string;
+    secret: string;
+    requestId: string;
+    workspaceId: string;
+    sessionId: string;
+    turnId: string;
+    actorId: string;
+    expiresAt: string;
+    operatorId?: string;
+    authActorSource?: ChatUserInputPromptResponder["authActorSource"];
+    runId?: string;
+    taskId?: string;
+    permissionProfileId?: string;
+    localOperatorOverrideId?: string;
+  }): Promise<{
+    targetId: string;
+    provider: string;
+    revision: string;
+    scopeRef: string;
+  }>;
+  getRuntimeConfigurationScopeRef?(targetId: string): string;
+  finalizeRuntimeConfiguration?(requestId: string): void | Promise<void>;
+  rollbackRuntimeConfiguration?(requestId: string): Promise<void>;
 }
 
 export interface ChatUserInputPromptResponder {
@@ -79,7 +109,7 @@ export async function getChatThread(
   sessionId: string,
   options: ChatThreadLoadOptions = {},
 ): Promise<ChatThreadResponse> {
-  runtime.getSession(sessionId);
+  await runtime.getSession(sessionId);
   const state = await runtime.loadChatTurnSessionState(sessionId, {
     includeDecisionTrace: options.includeDecisionTrace === true,
   });
@@ -91,7 +121,7 @@ export async function selectChatBranchTurn(
   sessionId: string,
   turnId: string,
 ): Promise<ChatThreadResponse> {
-  runtime.getSession(sessionId);
+  await runtime.getSession(sessionId);
   const loadOptions: ChatThreadLoadOptions = {};
   const state = await runtime.loadChatTurnSessionState(sessionId, loadOptions);
   const target = state.traces.find((trace) => trace.turnId === turnId && state.messagesById.has(trace.userMessageId));
@@ -168,7 +198,7 @@ export async function answerChatUserInputPrompt(
   response: ChatUserInputPromptResponse,
   responder: ChatUserInputPromptResponder,
 ): Promise<ChatUserInputPromptAnswerResponse> {
-  runtime.getSession(sessionId);
+  await runtime.getSession(sessionId);
   const trace = await runtime.storage.chatTurnTraces.get(turnId);
   if (trace.sessionId !== sessionId) {
     throw new Error(`Chat turn ${turnId} does not belong to session ${sessionId}`);
@@ -191,48 +221,170 @@ export async function answerChatUserInputPrompt(
       message: `Durable run ${durableRunId} belongs to a different Chat turn admission.`,
     });
   }
+  const admissionIdentity = {
+    admissionId: durablePayload.admissionId,
+    sessionIncarnationId: durablePayload.sessionIncarnationId,
+    workspaceId: durablePayload.workspaceId,
+    sessionId: durablePayload.sessionId,
+    turnId: durablePayload.turnId,
+    aggregateRevision: durablePayload.admissionAggregateRevision,
+    controllerGeneration: durablePayload.admissionControllerGeneration,
+    materialSha256: durablePayload.admissionMaterialSha256,
+  };
 
   // Preserve specific request feedback while the turn is still waiting. Once a
   // seal exists the trace is intentionally running/terminal and storage owns
   // exact replay validation, so these checks must not reject a legitimate
   // retry before the immutable seal is consulted.
+  let durableResponse: Exclude<ChatUserInputPromptResponse, { kind: "secure_configuration" }>;
+  let appliedRuntimeConfigurationRequestId: string | undefined;
+  let runtimeConfigurationReceipt: DurableChatRuntimeConfigurationReceipt | undefined;
+  let secureReservation: ReserveDurableChatSecureConfigurationOutcome | undefined;
   if (trace.status === "waiting_for_user_input") {
     const prompt = trace.pendingUserInput;
     if (!prompt || prompt.promptId !== promptId) {
       throw new ValidationError({ message: `Prompt ${promptId} is not active for chat turn ${turnId}.` });
     }
-    if (prompt.kind !== response.kind) {
+    const secureConfiguration = prompt.secureConfiguration;
+    if (secureConfiguration) {
+      if (response.kind !== "secure_configuration") {
+        throw new ValidationError({ message: `Prompt ${promptId} expects a secure configuration response.` });
+      }
+      const admittedResponderId = durablePayload.requestActor.authActorId ?? durablePayload.requestActor.actorId;
+      if (
+        responder.actorId !== admittedResponderId ||
+        (durablePayload.requestActor.authActorSource !== undefined &&
+          responder.authActorSource !== durablePayload.requestActor.authActorSource)
+      ) {
+        throw new ConflictError({
+          message: `Secure configuration prompt ${promptId} must be answered by the operator authority that created it.`,
+        });
+      }
+      const securePromptExpiresAt = prompt.expiresAt ? Date.parse(prompt.expiresAt) : Number.NaN;
+      if (!Number.isFinite(securePromptExpiresAt) || securePromptExpiresAt <= Date.now()) {
+        throw new ValidationError({ message: `Secure configuration prompt ${promptId} has expired.` });
+      }
+      if (!runtime.configureRuntimeTarget) {
+        throw new ConflictError({ message: "Secure runtime configuration is unavailable on this Gateway." });
+      }
+      const scopeRef = runtime.getRuntimeConfigurationScopeRef?.(secureConfiguration.targetId);
+      if (!scopeRef) {
+        throw new ConflictError({ message: "Secure runtime configuration scope is unavailable on this Gateway." });
+      }
+      secureReservation = await runtime.storage.sessionMutationAdmissions.reserveDurableChatSecureConfiguration({
+        admissionIdentity,
+        durableRunId,
+        expectedWaitingRunVersion: durableRun.version,
+        promptId,
+        targetId: secureConfiguration.targetId,
+        scopeRef,
+        responder,
+      });
+      if (secureReservation.disposition !== "reserved") {
+        throw new ConflictError({
+          message: `Secure configuration prompt ${promptId} is already being applied by another request.`,
+        });
+      }
+      try {
+        runtimeConfigurationReceipt = await runtime.configureRuntimeTarget({
+          targetId: secureConfiguration.targetId,
+          secret: response.secret,
+          requestId: promptId,
+          workspaceId: durablePayload.workspaceId,
+          sessionId,
+          turnId,
+          actorId: responder.actorId,
+          expiresAt: prompt.expiresAt!,
+          operatorId: durablePayload.requestActor.operatorId ?? responder.actorId,
+          authActorSource: responder.authActorSource,
+          runId: durableRunId,
+          ...(durablePayload.request.policyTaskId ? { taskId: durablePayload.request.policyTaskId } : {}),
+          ...(durablePayload.request.permissionProfileId
+            ? { permissionProfileId: durablePayload.request.permissionProfileId }
+            : {}),
+          ...(durablePayload.request.localOperatorOverrideId
+            ? { localOperatorOverrideId: durablePayload.request.localOperatorOverrideId }
+            : {}),
+        });
+      } catch (error) {
+        if (isSafeToReleaseSecureReservation(secureReservation, error)) {
+          await releaseSecureConfigurationReservation(
+            runtime,
+            secureReservation,
+            admissionIdentity,
+            durableRunId,
+            promptId,
+            responder,
+          );
+        }
+        throw error;
+      }
+      appliedRuntimeConfigurationRequestId = promptId;
+      durableResponse = secureConfigurationCompletedResponse(runtimeConfigurationReceipt);
+    } else if (prompt.kind !== response.kind) {
       throw new ValidationError({ message: `Prompt ${promptId} expects a ${prompt.kind} response.` });
-    }
-    if (response.kind === "single_select") {
+    } else if (response.kind === "single_select") {
       const validOptionIds = new Set((prompt.options ?? []).map((option) => option.optionId));
       if (!validOptionIds.has(response.optionId)) {
         throw new ValidationError({ message: `Option ${response.optionId} is not valid for prompt ${promptId}.` });
       }
-    } else if (response.text.trim().length === 0) {
+      durableResponse = response;
+    } else if (response.kind === "text" && response.text.trim().length === 0) {
       throw new ValidationError({ message: `Prompt ${promptId} requires non-empty text.` });
+    } else if (response.kind === "text") {
+      durableResponse = { kind: "text", text: response.text.trim() };
+    } else {
+      throw new ValidationError({ message: `Prompt ${promptId} does not accept secure configuration.` });
     }
+  } else if (response.kind === "secure_configuration") {
+    // A response-delivery retry may arrive after the one-time prompt settled.
+    // Replay only the exact durable, secret-free receipt. The newly supplied
+    // bytes are intentionally ignored and never compared, hashed, persisted,
+    // or sent back through the runtime configuration owner.
+    const recordedResponse = durablePayload.userInputResponses?.find((candidate) => candidate.promptId === promptId);
+    if (recordedResponse?.response.kind !== "text" || !recordedResponse.runtimeConfigurationReceipt) {
+      throw new ConflictError({
+        message: `Secure configuration prompt ${promptId} was already consumed or is no longer active.`,
+      });
+    }
+    durableResponse = recordedResponse.response;
+    runtimeConfigurationReceipt = recordedResponse.runtimeConfigurationReceipt;
+  } else {
+    durableResponse = response.kind === "text" ? { kind: "text", text: response.text.trim() } : response;
   }
 
-  const outcome = await runtime.storage.sessionMutationAdmissions.resolveDurableChatUserInput({
-    admissionIdentity: {
-      admissionId: durablePayload.admissionId,
-      sessionIncarnationId: durablePayload.sessionIncarnationId,
-      workspaceId: durablePayload.workspaceId,
-      sessionId: durablePayload.sessionId,
-      turnId: durablePayload.turnId,
-      aggregateRevision: durablePayload.admissionAggregateRevision,
-      controllerGeneration: durablePayload.admissionControllerGeneration,
-      materialSha256: durablePayload.admissionMaterialSha256,
-    },
-    durableRunId,
-    expectedWaitingRunVersion: durableRun.version,
-    promptId,
-    eventKey: "chat.user_input.resolved",
-    correlationId: promptId,
-    responder,
-    response: response.kind === "text" ? { kind: "text", text: response.text.trim() } : response,
-  });
+  let outcome;
+  try {
+    outcome = await runtime.storage.sessionMutationAdmissions.resolveDurableChatUserInput({
+      admissionIdentity,
+      durableRunId,
+      expectedWaitingRunVersion: secureReservation?.run.version ?? durableRun.version,
+      promptId,
+      eventKey: "chat.user_input.resolved",
+      correlationId: promptId,
+      responder,
+      response: durableResponse,
+      ...(runtimeConfigurationReceipt ? { runtimeConfigurationReceipt } : {}),
+    });
+  } catch (error) {
+    if (appliedRuntimeConfigurationRequestId) {
+      await runtime.rollbackRuntimeConfiguration?.(appliedRuntimeConfigurationRequestId);
+      if (secureReservation && isSafeToReleaseSecureReservation(secureReservation)) {
+        await releaseSecureConfigurationReservation(
+          runtime,
+          secureReservation,
+          admissionIdentity,
+          durableRunId,
+          promptId,
+          responder,
+        );
+      }
+    }
+    throw error;
+  }
+  if (appliedRuntimeConfigurationRequestId) {
+    await runtime.finalizeRuntimeConfiguration?.(appliedRuntimeConfigurationRequestId);
+  }
   if (outcome.run.status === "queued") {
     runtime.durableRunService.requestRunProcessing(durableRunId);
   }
@@ -277,7 +429,57 @@ export async function answerChatUserInputPrompt(
     resumed: true,
     resumedTurnId: turnId,
     resumedRunId: durableRunId,
+    ...(outcome.disposition === "replayed" ? { replayed: true } : {}),
+    ...(runtimeConfigurationReceipt ? { runtimeConfigurationReceipt } : {}),
   };
+}
+
+function secureConfigurationCompletedResponse(receipt: {
+  targetId: string;
+  provider: string;
+  revision: string;
+  scopeRef: string;
+}): { kind: "text"; text: string } {
+  return {
+    kind: "text",
+    text:
+      "Secure runtime configuration completed and passed its live probe. " +
+      `Target ${receipt.targetId} (${receipt.provider}) is active at revision ${receipt.revision} ` +
+      `for installation scope ${receipt.scopeRef}. ` +
+      "The credential was stored in the OS keychain and excluded from Chat context.",
+  };
+}
+
+function isSafeToReleaseSecureReservation(
+  outcome: ReserveDurableChatSecureConfigurationOutcome,
+  error?: unknown,
+): boolean {
+  if (outcome.disposition !== "reserved" || outcome.reservation.reclaimedAt || outcome.requiresTargetReconciliation) {
+    return false;
+  }
+  if (!error || typeof error !== "object") return true;
+  const details = "details" in error && error.details && typeof error.details === "object" ? error.details : undefined;
+  return !(details && "manualReconciliationRequired" in details && details.manualReconciliationRequired === true);
+}
+
+async function releaseSecureConfigurationReservation(
+  runtime: ChatMessageRouteRuntimeHost,
+  outcome: ReserveDurableChatSecureConfigurationOutcome,
+  admissionIdentity: DurableChatUserInputAdmissionIdentity,
+  durableRunId: string,
+  promptId: string,
+  responder: ChatUserInputPromptResponder,
+): Promise<void> {
+  await runtime.storage.sessionMutationAdmissions.releaseDurableChatSecureConfiguration({
+    reservationId: outcome.reservation.reservationId,
+    admissionIdentity,
+    durableRunId,
+    promptId,
+    targetId: outcome.reservation.targetId,
+    scopeRef: outcome.reservation.scopeRef,
+    expectedReservedRunVersion: outcome.run.version,
+    responder,
+  });
 }
 
 async function buildChatThreadFromState(

@@ -42,10 +42,43 @@ describe("sqlite schema migrations", () => {
     assert.deepEqual(
       { ...rows.at(-1) },
       {
-        version: 187,
-        name: "session_control_lifecycle_bootstrap_clock_guard",
+        version: 188,
+        name: "durable_chat_secure_configuration_reservations",
       },
     );
+    db.close();
+  });
+
+  it("keeps migration 188 secret-free, version-CAS fenced, and cancellation-blocking", () => {
+    const db = createDatabase({ dbPath: ":memory:" });
+    const tableSql = db
+      .prepare(
+        `SELECT sql FROM sqlite_master
+         WHERE type = 'table' AND name = 'chat_turn_secure_configuration_reservations'`,
+      )
+      .get<{ sql: string }>()?.sql;
+    assert.ok(tableSql);
+    assert.match(tableSql, /reserved_run_version = waiting_run_version \+ 1/u);
+    assert.match(tableSql, /julianday\(expires_at\) IS NOT NULL/u);
+    assert.doesNotMatch(tableSql, /(?:secret|credential|token|value|digest|hash)\s+(?:TEXT|BLOB|JSON)/iu);
+    const triggerNames = db
+      .prepare(
+        `SELECT name FROM sqlite_master
+         WHERE type = 'trigger' AND name IN (
+           'trg_chat_session_mutation_admissions_secure_reservation_close_guard',
+           'trg_chat_turn_secure_configuration_reservations_no_delete',
+           'trg_chat_turn_secure_configuration_reservations_update_guard',
+           'trg_durable_runs_secure_reservation_cancel_guard'
+         ) ORDER BY name`,
+      )
+      .all<{ name: string }>()
+      .map((row) => row.name);
+    assert.deepEqual(triggerNames, [
+      "trg_chat_session_mutation_admissions_secure_reservation_close_guard",
+      "trg_chat_turn_secure_configuration_reservations_no_delete",
+      "trg_chat_turn_secure_configuration_reservations_update_guard",
+      "trg_durable_runs_secure_reservation_cancel_guard",
+    ]);
     db.close();
   });
 

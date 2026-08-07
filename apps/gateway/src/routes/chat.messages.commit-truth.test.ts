@@ -92,6 +92,13 @@ describe("non-stream Chat route commit truth", () => {
       payload: { response: { kind: "text", text: "continue" } },
     },
     {
+      label: "secure prompt response",
+      methodName: "answerChatUserInputPrompt",
+      url: "/api/v1/chat/sessions/session-1/turns/turn-1/user-input/prompt-1/secure-configuration",
+      payload: { secret: "test-only-secret" },
+      replayableCompleted: true,
+    },
+    {
       label: "cancel",
       methodName: "cancelChatTurn",
       url: "/api/v1/chat/sessions/session-1/turns/turn-1/cancel",
@@ -131,8 +138,8 @@ describe("non-stream Chat route commit truth", () => {
     const retry = await app.inject(request);
 
     expect(first.statusCode).toBe(500);
-    expect(retry.statusCode).toBe(409);
-    expect(mutation).toHaveBeenCalledTimes(1);
+    expect(retry.statusCode).toBe(scenario.replayableCompleted ? 200 : 409);
+    expect(mutation).toHaveBeenCalledTimes(scenario.replayableCompleted ? 2 : 1);
   });
 
   it.each([

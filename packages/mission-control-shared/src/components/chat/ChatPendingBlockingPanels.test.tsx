@@ -161,6 +161,122 @@ describe("chat pending blocking panels", () => {
     textRenderer.unmount();
   });
 
+  it("submits secure configuration directly and clears the secret field", async () => {
+    const onSubmit = vi.fn();
+    const secureRenderer = createRenderer(
+      <ChatPendingUserInputPanel
+        pending={false}
+        pendingUserInput={{
+          turnId: "turn-secure",
+          promptId: "prompt-secure",
+          kind: "text",
+          title: "Configure Brave Search",
+          question: "Enter the credential needed to enable Brave Search.",
+          required: true,
+          submitLabel: "Save and verify",
+          secureConfiguration: {
+            targetId: "brave_search",
+            targetLabel: "Brave Search",
+            secretFieldLabel: "Brave Search API key",
+            acquisitionUrl: "https://brave.com/search/api/",
+            acquisitionLabel: "Get a Brave Search API key",
+            storage: "os_keychain",
+            scope: "installation",
+            verification: "live_probe",
+          },
+        }}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    let secureInput = secureRenderer.root.findByProps({ className: "chat-user-input-input" });
+    expect(secureInput.props.type).toBe("password");
+    expect(secureInput.props.autoComplete).toBe("new-password");
+    expect(JSON.stringify(secureRenderer.toJSON())).toContain("goes directly to the Gateway");
+    expect(JSON.stringify(secureRenderer.toJSON())).toContain("excluded from Chat, the model, and memory");
+    const acquisitionLink = secureRenderer.root.findByProps({ href: "https://brave.com/search/api/" });
+    expect(acquisitionLink.props.target).toBe("_blank");
+    expect(acquisitionLink.props.rel).toContain("noopener");
+    expect(acquisitionLink.children).toContain("Get a Brave Search API key");
+
+    let secureSubmit = secureRenderer.root.findByProps({ className: "gc-button chat-approval-allow" });
+    expect(secureSubmit.props.disabled).toBe(true);
+    await act(async () => {
+      secureInput.props.onChange({ target: { value: "brave-secret-value" } });
+    });
+    secureSubmit = secureRenderer.root.findByProps({ className: "gc-button chat-approval-allow" });
+    expect(secureSubmit.props.disabled).toBe(false);
+
+    await act(async () => {
+      secureSubmit.props.onClick();
+    });
+    expect(onSubmit).toHaveBeenCalledWith({ kind: "secure_configuration", secret: "brave-secret-value" });
+    secureInput = secureRenderer.root.findByProps({ className: "chat-user-input-input" });
+    expect(secureInput.props.value).toBe("");
+    secureRenderer.unmount();
+  });
+
+  it("clears a typed credential synchronously when the active secure prompt changes", async () => {
+    const onSubmit = vi.fn();
+    const secureConfiguration = {
+      targetId: "search.brave",
+      targetLabel: "Brave Search",
+      secretFieldLabel: "Brave Search API key",
+      acquisitionUrl: "https://brave.com/search/api/",
+      acquisitionLabel: "Get a Brave Search API key",
+      storage: "os_keychain" as const,
+      scope: "installation" as const,
+      verification: "live_probe" as const,
+    };
+    const secureRenderer = createRenderer(
+      <ChatPendingUserInputPanel
+        pending={false}
+        pendingUserInput={{
+          turnId: "turn-secure-a",
+          promptId: "prompt-secure-a",
+          kind: "text",
+          title: "Configure Brave Search",
+          question: "Enter the Brave credential.",
+          required: true,
+          secureConfiguration,
+        }}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    await act(async () => {
+      secureRenderer.root
+        .findByProps({ className: "chat-user-input-input" })
+        .props.onChange({ target: { value: "credential-for-prompt-a" } });
+    });
+    expect(secureRenderer.root.findByProps({ className: "chat-user-input-input" }).props.value).toBe(
+      "credential-for-prompt-a",
+    );
+
+    await act(async () => {
+      secureRenderer.update(
+        <ChatPendingUserInputPanel
+          pending={false}
+          pendingUserInput={{
+            turnId: "turn-secure-b",
+            promptId: "prompt-secure-b",
+            kind: "text",
+            title: "Configure Brave Search again",
+            question: "Enter a fresh Brave credential.",
+            required: true,
+            secureConfiguration,
+          }}
+          onSubmit={onSubmit}
+        />,
+      );
+    });
+
+    expect(secureRenderer.root.findByProps({ className: "chat-user-input-input" }).props.value).toBe("");
+    expect(secureRenderer.root.findByProps({ className: "gc-button chat-approval-allow" }).props.disabled).toBe(true);
+    expect(onSubmit).not.toHaveBeenCalled();
+    secureRenderer.unmount();
+  });
+
   it("does not approve or deny approval prompts on Escape", async () => {
     const onApprove = vi.fn();
     const onDeny = vi.fn();

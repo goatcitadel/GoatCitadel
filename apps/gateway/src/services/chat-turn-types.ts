@@ -199,6 +199,12 @@ export interface DurableChatTurnUserInputResumeRecord {
     label: string;
     description?: string;
   };
+  runtimeConfigurationReceipt?: {
+    targetId: string;
+    provider: string;
+    revision: string;
+    scopeRef: string;
+  };
 }
 
 export function isPersistableChatStreamChunk(chunk: ChatStreamChunkDraft): chunk is PersistableChatStreamChunk {
