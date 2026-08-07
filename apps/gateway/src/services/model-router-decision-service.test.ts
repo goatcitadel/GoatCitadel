@@ -108,9 +108,10 @@ describe("model-router decision service", () => {
     }
   });
 
-  it("routes explicit non-current research to governed web tools without claiming freshness", () => {
+  it("routes explicit market research to governed web tools without claiming freshness", () => {
     const decision = routeWithModelRouter({
-      prompt: "Please do some research on funny jokes and put together a PowerPoint presentation on it.",
+      prompt:
+        "Can you please do some market research on CCGs and what makes each one unique and better than the competition? Please put it into a powerpoint deck.",
     });
 
     expect(decision).toMatchObject({

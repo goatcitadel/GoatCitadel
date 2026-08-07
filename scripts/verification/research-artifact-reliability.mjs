@@ -24,7 +24,7 @@ const PROCESS_LOG_PREFIX = "research-artifact-reliability";
 export const RESEARCH_ARTIFACT_PROVIDER_ID = "openai";
 export const RESEARCH_ARTIFACT_PROVIDER_MODEL = "gpt-5-verification";
 export const RESEARCH_ARTIFACT_PROMPT =
-  "Please do some research on funny jokes and put together a PowerPoint presentation on it.";
+  "Can you please do some market research on CCGs and what makes each one unique and better than the competition? Please put it into a powerpoint deck.";
 export const RESEARCH_ARTIFACT_TASK_COUNT = 3;
 const PROVIDER_ID = RESEARCH_ARTIFACT_PROVIDER_ID;
 const PROVIDER_MODEL = RESEARCH_ARTIFACT_PROVIDER_MODEL;
@@ -67,7 +67,7 @@ export async function runThreeTaskReplay(context, correlationId) {
       },
       {
         type: "success",
-        replyText: `Research complete. I preserved the source citations and created funny-jokes-reliability-${index}.pptx.`,
+        replyText: `Research complete. I preserved the source citations and created ccg-market-reliability-${index}.pptx.`,
       },
     );
   }
@@ -194,50 +194,49 @@ export async function runThreeTaskReplay(context, correlationId) {
 
 export function buildPresentationArgs(index) {
   return {
-    path: `./workspace/artifacts/funny-jokes-reliability-${index}.pptx`,
-    title: "Why Funny Jokes Work",
-    subtitle: "Research-backed patterns for structure, timing, and delivery",
+    path: `./workspace/artifacts/ccg-market-reliability-${index}.pptx`,
+    title: "Competitive CCG Landscape",
+    subtitle: "Research-backed differentiation across leading collectible card games",
     theme: "midnight teal",
     design: { mode: "polished", skillId: "design-intelligence" },
     slides: [
       {
-        title: "Surprise Creates the Turn",
+        title: "Category Differentiators",
         bullets: [
-          "A setup establishes a plausible interpretation before the punchline changes it.",
-          "The strongest twist remains understandable after the audience revises its first assumption.",
+          "Rules accessibility, collection depth, and organized play shape each game's market position.",
+          "Distinct intellectual property and gameplay loops create different reasons for players to choose each game.",
         ],
-        speakerNotes:
-          "Grounding: Encyclopaedia Britannica overview of humor and incongruity, https://www.britannica.com/art/humour",
+        speakerNotes: "Grounding: official Magic product catalog, https://magic.wizards.com/en/products",
       },
       {
-        title: "Three Repeatable Structures",
+        title: "Competitive Strengths",
         bullets: [
-          "Misdirection makes the expected ending feel obvious until the final beat.",
-          "Callbacks reward attention by reusing an earlier detail in a new context.",
-          "The rule of three establishes a pattern twice and breaks it on the third item.",
-        ],
-      },
-      {
-        title: "Delivery Changes the Same Words",
-        bullets: [
-          "Trim setup language so every detail either establishes context or supports the turn.",
-          "Pause immediately before the key reveal, then leave room for recognition.",
-          "Match tone and subject matter to the audience rather than relying on shock alone.",
+          "Magic emphasizes deep deck construction, long-running formats, and broad organized play.",
+          "Pokémon combines an accessible ruleset with a globally recognized character ecosystem.",
+          "Other CCGs differentiate through digital-first play, cooperative modes, or focused licensed worlds.",
         ],
       },
       {
-        title: "A Practical Revision Pass",
+        title: "Community and Product Strategy",
         bullets: [
-          "Underline the audience's expected interpretation and circle the exact word that reverses it.",
-          "Move the funniest or most surprising word as close to the end as grammar permits.",
-          "Test aloud, record where listeners react, and remove any setup they did not need.",
+          "Release cadence and collectability sustain engagement between competitive events.",
+          "Retail availability and local-play support influence discovery and retention.",
+          "Digital clients reduce friction while physical products preserve collecting and in-person play.",
+        ],
+      },
+      {
+        title: "Comparison Framework",
+        bullets: [
+          "Compare onboarding friction, strategic depth, secondary-market dynamics, and play-format breadth.",
+          "Separate intellectual-property appeal from mechanics and community strength.",
+          "Use current product and organized-play evidence before making investment or launch decisions.",
         ],
       },
       {
         title: "Research Sources",
         bullets: [
-          "Encyclopaedia Britannica — Humour: https://www.britannica.com/art/humour",
-          "MasterClass — Comedy writing structures: https://www.masterclass.com/articles/how-to-write-comedy",
+          "Wizards of the Coast — Magic products: https://magic.wizards.com/en/products",
+          "The Pokémon Company — Pokémon TCG: https://www.pokemon.com/us/pokemon-tcg/",
         ],
       },
     ],
@@ -263,7 +262,7 @@ export async function createResearchSession(gatewayUrl, correlationId, index) {
       expectedRevision: prefs.body.revision,
       providerId: PROVIDER_ID,
       model: PROVIDER_MODEL,
-      webMode: "auto",
+      webMode: "quick",
       memoryMode: "off",
       thinkingLevel: "off",
       subagentPolicy: "off",
@@ -281,7 +280,7 @@ export async function sendResearchTurn(gatewayUrl, sessionId, correlationId, per
     content: PROMPT,
     providerId: PROVIDER_ID,
     model: PROVIDER_MODEL,
-    webMode: "auto",
+    webMode: "quick",
     memoryMode: "off",
     thinkingLevel: "off",
     subagentPolicy: "off",
@@ -289,7 +288,7 @@ export async function sendResearchTurn(gatewayUrl, sessionId, correlationId, per
     prefsOverride: {
       providerId: PROVIDER_ID,
       model: PROVIDER_MODEL,
-      webMode: "auto",
+      webMode: "quick",
       memoryMode: "off",
       thinkingLevel: "off",
       subagentPolicy: "off",
@@ -448,13 +447,18 @@ export async function validateResearchTurn({ turn, capabilityProfile, runtimeRoo
     activatedSkillInstructionBytes < 10 * 1024,
     `activated-skill instructions exceeded the 10 KiB ceiling (${activatedSkillInstructionBytes} bytes)`,
   );
+  const frozenToolNames = new Set(
+    (capabilityProfile?.selection?.tools ?? []).map((tool) => String(tool.canonicalName ?? "")),
+  );
+  assert.ok(frozenToolNames.has("browser.search"), "capability profile omitted browser.search");
+  assert.ok(frozenToolNames.has("presentations.create"), "capability profile omitted presentations.create");
 
   const executedRuns = (turn.trace?.toolRuns ?? []).filter((run) => run.status === "executed");
   assert.deepEqual(
     executedRuns.map((run) => run.toolName),
     ["browser.search", "presentations.create"],
   );
-  assert.equal(executedRuns[0]?.args?.query, "funny jokes");
+  assert.equal(executedRuns[0]?.args?.query, "CCGs and what makes each one unique and better than the competition");
   assert.ok((turn.trace?.citations ?? []).length > 0, "research turn retained no citations");
   assert.ok((turn.trace?.citations ?? []).every((citation) => /^https?:\/\//u.test(citation.url)));
 
@@ -463,7 +467,7 @@ export async function validateResearchTurn({ turn, capabilityProfile, runtimeRoo
   const deckPath = path.isAbsolute(outputPath) ? outputPath : path.resolve(runtimeRoot, outputPath);
   const validation = await validatePptxArchive(deckPath);
   assert.ok(validation.slideCount >= 5, `expected at least five deck slides, found ${validation.slideCount}`);
-  const copiedDeckPath = path.join(deckDir, `funny-jokes-reliability-${index}.pptx`);
+  const copiedDeckPath = path.join(deckDir, `ccg-market-reliability-${index}.pptx`);
   await fs.copyFile(deckPath, copiedDeckPath);
   const assistantContent = String(turn.assistantMessage?.content ?? "");
   assert.match(assistantContent, /\.pptx/u);

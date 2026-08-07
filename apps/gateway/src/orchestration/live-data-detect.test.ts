@@ -8,6 +8,9 @@ import {
 } from "./live-data-detect.js";
 
 describe("live data detection", () => {
+  const marketResearchDeckRequest =
+    "Can you please do some market research on CCGs and what makes each one unique and better than the competition? Please put it into a powerpoint deck.";
+
   it("treats explicit browser tool instructions as web lookup intent", () => {
     expect(hasLiveDataKeywords("Use browser.search to verify the latest package versions.")).toBe(true);
     expect(hasLiveDataKeywords("Open the release page with browser.navigate and compare it.")).toBe(true);
@@ -70,10 +73,17 @@ describe("live data detection", () => {
       ),
     ).toBe(true);
     expect(hasExternalResearchIntent("Conduct research into PostgreSQL checkpoint behavior.")).toBe(true);
+    expect(hasExternalResearchIntent("Conduct market research into CCG competitors.")).toBe(true);
+    expect(hasExternalResearchIntent(marketResearchDeckRequest)).toBe(true);
     expect(hasExternalResearchIntent("Please research whether the claim is supported by reliable sources.")).toBe(true);
 
     expect(hasExternalResearchIntent("Summarize my research notes into a presentation.")).toBe(false);
+    expect(hasExternalResearchIntent("Summarize my market research notes into a presentation.")).toBe(false);
     expect(hasExternalResearchIntent("The research section is already included below.")).toBe(false);
+    expect(hasExternalResearchIntent("Rewrite this market research paragraph.")).toBe(false);
+    expect(hasExternalResearchIntent("I already did some market research on CCGs; turn those notes into a deck.")).toBe(
+      false,
+    );
     expect(hasExternalResearchIntent("Rewrite this paragraph about research methods.")).toBe(false);
   });
 
@@ -83,6 +93,9 @@ describe("live data detection", () => {
     ).toBe("the funniest jokes");
     expect(extractExternalResearchSubject("Research the launch results, then present them as a slide deck.")).toBe(
       "the launch results",
+    );
+    expect(extractExternalResearchSubject(marketResearchDeckRequest)).toBe(
+      "CCGs and what makes each one unique and better than the competition",
     );
   });
 });

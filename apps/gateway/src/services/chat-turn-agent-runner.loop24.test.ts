@@ -251,28 +251,29 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
     },
   );
 
-  it("routes the exact research-deck prompt through a cleaned search before presentation creation", async () => {
-    const content = "Please do some research on funny jokes and put together a PowerPoint presentation on it.";
+  it("routes the exact market-research deck prompt through a cleaned search before presentation creation", async () => {
+    const content =
+      "Can you please do some market research on CCGs and what makes each one unique and better than the competition? Please put it into a powerpoint deck.";
     const providerRequests: ChatCompletionRequest[] = [];
     const createChatCompletion = vi
       .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
       .mockImplementationOnce(async (request) => {
         providerRequests.push(request);
         return namedToolCallCompletion("presentations.create", {
-          path: "./workspace/goatcitadel_out/funny-jokes.pptx",
-          title: "Why Funny Jokes Work",
+          path: "./workspace/goatcitadel_out/ccg-market-comparison.pptx",
+          title: "Competitive CCG Landscape",
           slides: [
             {
-              title: "What Makes a Joke Funny",
-              bullets: ["Surprise changes the expected interpretation at the punchline."],
+              title: "Category Differentiators",
+              bullets: ["Rules accessibility, collection depth, and organized play shape each game's position."],
             },
             {
-              title: "Reliable Joke Structures",
-              bullets: ["Misdirection, callbacks, and the rule of three create recognizable comic rhythm."],
+              title: "Competitive Strengths",
+              bullets: ["Distinct mechanics and intellectual property create different reasons to choose each game."],
             },
             {
-              title: "Examples and Delivery",
-              bullets: ["Concise setup and deliberate timing give the audience room to recognize the twist."],
+              title: "Market Positioning",
+              bullets: ["Player communities, release cadence, and retail support reinforce long-term differentiation."],
             },
           ],
         });
@@ -280,7 +281,7 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
       .mockImplementationOnce(async (request) => {
         providerRequests.push(request);
         return completion(
-          "I researched common joke structures, preserved the source evidence, and created the PowerPoint presentation.",
+          "I researched the CCG market, preserved the source evidence, and created the PowerPoint presentation.",
         );
       });
     const invokeTool = vi.fn(async (request: ToolInvokeRequest): Promise<ToolInvokeResult> => {
@@ -290,14 +291,14 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
           result: {
             results: [
               {
-                title: "Humor and incongruity",
-                url: "https://www.britannica.com/art/humour",
-                snippet: "Research describes incongruity and resolution as common mechanisms in humor.",
+                title: "Magic: The Gathering products",
+                url: "https://magic.wizards.com/en/products",
+                snippet: "Official product information documents Magic's releases and gameplay offerings.",
               },
               {
-                title: "Comedy writing structures",
-                url: "https://www.masterclass.com/articles/how-to-write-comedy",
-                snippet: "Callbacks, misdirection, and the rule of three are common joke-writing structures.",
+                title: "Pokémon Trading Card Game",
+                url: "https://www.pokemon.com/us/pokemon-tcg/",
+                snippet: "Official product information documents Pokémon TCG play, products, and community support.",
               },
             ],
           },
@@ -306,7 +307,7 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
       return {
         outcome: "executed",
         result: {
-          path: "F:\\code\\personal-ai\\workspace\\goatcitadel_out\\funny-jokes.pptx",
+          path: "F:\\code\\personal-ai\\workspace\\goatcitadel_out\\ccg-market-comparison.pptx",
           bytesWritten: 24_000,
           format: "pptx",
           title: request.args.title,
@@ -324,7 +325,7 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
     const result = await orchestrator.run(
       turnInput({
         content,
-        webMode: "auto",
+        webMode: "quick",
         historyMessages: [{ role: "user", content }],
       }),
     );
@@ -333,7 +334,9 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
       "browser.search",
       "presentations.create",
     ]);
-    expect(invokeTool.mock.calls[0]?.[0].args).toMatchObject({ query: "funny jokes" });
+    expect(invokeTool.mock.calls[0]?.[0].args).toMatchObject({
+      query: "CCGs and what makes each one unique and better than the competition",
+    });
     expect(extractRequestToolNames(providerRequests[0])).toEqual(
       expect.arrayContaining(["browser_search", "presentations_create"]),
     );
