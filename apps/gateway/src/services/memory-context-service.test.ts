@@ -1226,7 +1226,7 @@ describe("MemoryContextService", () => {
     expect(storage.memoryQmdRuns.records).toEqual([]);
   });
 
-  it("preserves memory distiller timeout fallback text while aborting the provider request", async () => {
+  it("preserves memory distiller fallback while successful provider settlement finishes after abort", async () => {
     const rootDir = await createWorkspaceRoot();
     await fs.mkdir(path.join(rootDir, "workspace", "memory"), { recursive: true });
     await fs.writeFile(
@@ -1235,12 +1235,22 @@ describe("MemoryContextService", () => {
       "utf8",
     );
     let providerSignal: AbortSignal | undefined;
+    let providerSettled = false;
     const storage = createStorage();
     const llmService = createLlmService({
       chatCompletions: vi.fn((request) => {
         providerSignal = (request as { signal?: AbortSignal }).signal;
-        return new Promise<ChatCompletionResponse>((_resolve, reject) => {
-          providerSignal?.addEventListener("abort", () => reject(providerSignal?.reason), { once: true });
+        return new Promise<ChatCompletionResponse>((resolve) => {
+          providerSignal?.addEventListener(
+            "abort",
+            () => {
+              setTimeout(() => {
+                providerSettled = true;
+                resolve({} as ChatCompletionResponse);
+              }, 50);
+            },
+            { once: true },
+          );
         });
       }),
     });
@@ -1268,6 +1278,7 @@ describe("MemoryContextService", () => {
       droppedCandidateCount: 0,
     });
     expect(providerSignal?.aborted).toBe(true);
+    expect(providerSettled).toBe(true);
     expect(storage.memoryQmdRuns.records[0]).toEqual(
       expect.objectContaining({
         status: "fallback",

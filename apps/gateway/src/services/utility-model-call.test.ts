@@ -30,6 +30,32 @@ describe("runBoundedUtilityModelCall", () => {
     expect(observedAbort).toBe(true);
   });
 
+  it("allows timeout fallback when successful usage settlement finishes shortly after abort", async () => {
+    vi.useFakeTimers();
+    const result = runBoundedUtilityModelCall({
+      timeoutMs: 25,
+      timeoutMessage: "utility timed out",
+      start: (signal) =>
+        new Promise<string>((resolve) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              setTimeout(() => resolve("settled"), 750);
+            },
+            { once: true },
+          );
+        }),
+    }).catch((error) => error as Error);
+
+    await vi.advanceTimersByTimeAsync(25);
+    await vi.advanceTimersByTimeAsync(750);
+
+    const failure = await result;
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure.name).toBe("Error");
+    expect(failure.message).toBe("utility timed out");
+  });
+
   it.each([
     [
       "terminal settlement persistence",
@@ -60,17 +86,42 @@ describe("runBoundedUtilityModelCall", () => {
     await expectation;
   });
 
+  it("preserves a delayed authoritative accounting failure during settlement grace", async () => {
+    vi.useFakeTimers();
+    const accountingFault = new ModelUsageSettlementError("usage-1", "cancelled", new Error("database offline"));
+    const result = runBoundedUtilityModelCall({
+      timeoutMs: 25,
+      timeoutMessage: "utility timed out",
+      start: (signal) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              setTimeout(() => reject(accountingFault), 750);
+            },
+            { once: true },
+          );
+        }),
+    });
+
+    const expectation = expect(result).rejects.toBe(accountingFault);
+    await vi.advanceTimersByTimeAsync(25);
+    await vi.advanceTimersByTimeAsync(750);
+    await expectation;
+  });
+
   it("stays bounded and blocks fallback when a utility provider ignores abort", async () => {
+    vi.useFakeTimers();
     const result = runBoundedUtilityModelCall({
       timeoutMs: 20,
       timeoutMessage: "utility timed out",
       start: () => new Promise(() => undefined),
     }).catch((error) => error);
 
-    const failure = await Promise.race([
-      result,
-      new Promise((resolve) => setTimeout(() => resolve("utility-helper-hung"), 250)),
-    ]);
+    await vi.advanceTimersByTimeAsync(20);
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    const failure = await result;
     expect(failure).toBeInstanceOf(Error);
     expect((failure as Error).name).toBe("ModelUsageDispatchUncertainError");
     expect((failure as Error).message).toContain("utility timed out");

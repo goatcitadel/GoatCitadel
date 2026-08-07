@@ -2,6 +2,7 @@ import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-c
 import { observePromptSettlement } from "./prompt-settlement.js";
 
 const UTILITY_MODEL_TIMEOUT = Symbol("utility-model-timeout");
+const UTILITY_ABORT_SETTLEMENT_GRACE_MS = 3_000;
 
 type Settled<T> = { ok: true; value: T } | { ok: false; error: unknown };
 
@@ -36,7 +37,14 @@ export async function runBoundedUtilityModelCall<T>(input: {
     const first = await Promise.race([operation, timeout]);
     if (first === UTILITY_MODEL_TIMEOUT) {
       timeoutController.abort(new Error(input.timeoutMessage));
-      const terminal = await observePromptSettlement(operation);
+      // Provider completion can win the request deadline while its canonical
+      // usage settlement is still committing. Give that accepted operation a
+      // bounded chance to finish before classifying it as dispatch-uncertain.
+      // A provider that truly ignores abort remains fail-closed after the
+      // grace period instead of pinning the utility caller indefinitely.
+      const terminal = await observePromptSettlement(operation, {
+        graceMs: UTILITY_ABORT_SETTLEMENT_GRACE_MS,
+      });
       if (
         terminal.status === "fulfilled" &&
         !terminal.value.ok &&
