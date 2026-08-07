@@ -162,6 +162,12 @@ export function buildCompactToolResultMetadata(result: Record<string, unknown>):
     "engineLabel",
     "browserFailureClass",
     "title",
+    "path",
+    "fallbackPath",
+    "bytesWritten",
+    "format",
+    "mimeType",
+    "slideCount",
   ] as const;
   for (const key of scalarKeys) {
     const value = result[key];

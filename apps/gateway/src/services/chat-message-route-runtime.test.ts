@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { ConflictError, ValidationError } from "@goatcitadel/contracts";
 import type {
@@ -60,6 +63,86 @@ describe("chat-message-route-runtime", () => {
     );
     expect(selected.activeLeafTurnId).toBe("turn-child-b");
     expect(selected.turns.map((turn) => turn.turnId)).toEqual(["turn-root", "turn-child-b"]);
+  });
+
+  it("projects verified historical file writes as safe workspace downloads without mutating stored content", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-download-projection-"));
+    const workspaceRoot = path.join(tempRoot, "workspace");
+    try {
+      const outputDir = path.join(workspaceRoot, "goatcitadel_out");
+      const artifactPath = path.join(outputDir, "funniest-jokes.pptx");
+      const outsidePath = path.join(tempRoot, "outside.txt");
+      await fs.mkdir(outputDir, { recursive: true });
+      await fs.writeFile(artifactPath, Buffer.from("valid-pptx-fixture"));
+      await fs.writeFile(outsidePath, "outside");
+      const state = createThreadState();
+      const rootTrace = state.traces.find((trace) => trace.turnId === "turn-root")!;
+      rootTrace.toolRuns = [
+        {
+          toolRunId: "tool-file-1",
+          turnId: rootTrace.turnId,
+          sessionId: rootTrace.sessionId,
+          toolName: "presentations.create",
+          status: "executed",
+          result: { path: artifactPath, bytesWritten: 18, slideCount: 12 },
+          startedAt: "2026-03-22T12:00:00.000Z",
+          finishedAt: "2026-03-22T12:00:01.000Z",
+        },
+        {
+          toolRunId: "tool-file-outside",
+          turnId: rootTrace.turnId,
+          sessionId: rootTrace.sessionId,
+          toolName: "artifacts.create",
+          status: "executed",
+          result: { path: outsidePath, bytesWritten: 7 },
+          startedAt: "2026-03-22T12:00:01.000Z",
+          finishedAt: "2026-03-22T12:00:02.000Z",
+        },
+        {
+          toolRunId: "tool-file-failed",
+          turnId: rootTrace.turnId,
+          sessionId: rootTrace.sessionId,
+          toolName: "fs.write",
+          status: "failed",
+          result: { path: path.join(outputDir, "blocked.txt"), bytesWritten: 10 },
+          startedAt: "2026-03-22T12:00:01.000Z",
+          finishedAt: "2026-03-22T12:00:02.000Z",
+        },
+        {
+          toolRunId: "tool-file-missing",
+          turnId: rootTrace.turnId,
+          sessionId: rootTrace.sessionId,
+          toolName: "documents.create",
+          status: "executed",
+          result: { path: path.join(outputDir, "missing.docx"), bytesWritten: 10 },
+          startedAt: "2026-03-22T12:00:02.000Z",
+          finishedAt: "2026-03-22T12:00:03.000Z",
+        },
+      ];
+      const storedAssistantMessage = state.messagesById.get("assistant-root")!;
+      storedAssistantMessage.content = [
+        "Done.",
+        "[Download the PowerPoint](sandbox:/mnt/data/funniest-jokes.pptx)",
+        "[Outside file](sandbox:/mnt/data/outside.txt)",
+        "[Blocked file](sandbox:/mnt/data/blocked.txt)",
+        "[Missing file](sandbox:/mnt/data/missing.docx)",
+      ].join("\n\n");
+      const runtime = createRuntime({ state, workspaceFileRootDir: workspaceRoot });
+
+      const thread = await getChatThread(runtime, "sess-1");
+      const projectedContent = thread.turns.find((turn) => turn.turnId === "turn-root")?.assistantMessage?.content;
+
+      expect(projectedContent).toContain(
+        "[Download the PowerPoint](/api/v1/files/download?relativePath=goatcitadel_out%2Ffunniest-jokes.pptx)",
+      );
+      expect(projectedContent).not.toContain("sandbox:/mnt/data/funniest-jokes.pptx");
+      expect(projectedContent).toContain("[Outside file](sandbox:/mnt/data/outside.txt)");
+      expect(projectedContent).toContain("[Blocked file](sandbox:/mnt/data/blocked.txt)");
+      expect(projectedContent).toContain("[Missing file](sandbox:/mnt/data/missing.docx)");
+      expect(storedAssistantMessage.content).toContain("sandbox:/mnt/data/funniest-jokes.pptx");
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it("projects an exact retained heartbeat separately without changing branch truth", async () => {
@@ -607,6 +690,7 @@ function createRuntime(input: {
   terminalHandoff?: VerifiedTerminalTurnWriteHandoff;
   chatTimers?: ChatTimerRecord[];
   canonicalMessageOverrides?: Map<string, ChatMessageRecord>;
+  workspaceFileRootDir?: string;
   resolveOutcome?: {
     disposition: "resolved" | "replayed";
     run: { runId: string; status: string; version: number };
@@ -615,6 +699,9 @@ function createRuntime(input: {
   const threadState = input.state ?? createThreadState();
   const runtime = {
     trace: createTrace(input.trace),
+    config: input.workspaceFileRootDir
+      ? { rootDir: input.workspaceFileRootDir, assistant: { workspaceDir: "." } }
+      : undefined,
     storage: {
       chatGeneratedArtifacts: {
         listByTurnIds: vi.fn(() => new Map()),

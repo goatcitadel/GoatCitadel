@@ -2979,6 +2979,7 @@ export class GatewayService {
 
   private buildChatMessageRouteRuntimeHost(): chatMessageRouteRuntime.ChatMessageRouteRuntimeHost {
     return {
+      config: this.config,
       storage: this.storage,
       durableRunService: this.durableRunService,
       getSession: async (sessionId) => await this.getSession(sessionId),

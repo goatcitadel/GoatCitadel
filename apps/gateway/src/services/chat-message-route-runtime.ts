@@ -1,4 +1,7 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import type {
+  ChatMessageRecord,
   ChatThreadSystemNoticeRecord,
   ChatTimerRecord,
   ChatTurnTraceRecord,
@@ -27,6 +30,12 @@ import {
 } from "./chat-durable-runtime-authority.js";
 import * as chatGeneratedArtifactService from "./chat-generated-artifact-service.js";
 import { projectChatMessageForPublic, projectChatTurnTraceForPublic } from "./chat-secret-projection.js";
+import {
+  buildWorkspaceFileDownloadHref,
+  getExecutedWorkspaceFileWriteReceipt,
+  mergeWorkspaceFileDownloadContent,
+} from "./chat-turn-agent-runner/artifact-write-helpers.js";
+import { MAX_INLINE_FILE_DOWNLOAD_BYTES } from "./files-route-service.js";
 
 export interface ChatThreadLoadOptions {
   includeDecisionTrace?: boolean;
@@ -35,6 +44,10 @@ export interface ChatThreadLoadOptions {
 }
 
 export interface ChatMessageRouteRuntimeHost {
+  readonly config?: {
+    rootDir: string;
+    assistant: { workspaceDir: string };
+  };
   readonly storage: Storage;
   readonly durableRunService: Pick<DurableRunService, "getDurableRun" | "requestRunProcessing">;
   getSession(sessionId: string): unknown;
@@ -302,21 +315,88 @@ async function buildChatThreadFromState(
   const generatedArtifactsByTurnId = await runtime.storage.chatGeneratedArtifacts.listByTurnIds(
     renderableTraces.map((trace) => trace.turnId),
   );
+  const workspaceFileRootDir = runtime.config
+    ? path.resolve(runtime.config.rootDir, runtime.config.assistant.workspaceDir)
+    : undefined;
+  const turns = await Promise.all(
+    renderableTraces.map(async (trace) => {
+      const assistantMessage = projectChatMessageForPublic(
+        trace.assistantMessageId ? state.messagesById.get(trace.assistantMessageId) : undefined,
+      );
+      return {
+        trace: projectChatTurnTraceForPublic(trace),
+        userMessage: state.messagesById.get(trace.userMessageId),
+        assistantMessage: await projectAssistantWorkspaceFileDownloads(assistantMessage, trace, workspaceFileRootDir),
+        generatedArtifacts: (generatedArtifactsByTurnId.get(trace.turnId) ?? []).map(
+          chatGeneratedArtifactService.buildGeneratedArtifactReference,
+        ),
+      };
+    }),
+  );
   return buildChatThreadResponse({
     sessionId,
     activeLeafTurnId: state.activeLeafTurnId,
     systemNotices,
-    turns: renderableTraces.map((trace) => ({
-      trace: projectChatTurnTraceForPublic(trace),
-      userMessage: state.messagesById.get(trace.userMessageId),
-      assistantMessage: projectChatMessageForPublic(
-        trace.assistantMessageId ? state.messagesById.get(trace.assistantMessageId) : undefined,
-      ),
-      generatedArtifacts: (generatedArtifactsByTurnId.get(trace.turnId) ?? []).map(
-        chatGeneratedArtifactService.buildGeneratedArtifactReference,
-      ),
-    })),
+    turns,
   });
+}
+
+async function projectAssistantWorkspaceFileDownloads(
+  assistantMessage: ChatMessageRecord | undefined,
+  trace: ChatTurnTraceRecord,
+  workspaceFileRootDir: string | undefined,
+): Promise<ChatMessageRecord | undefined> {
+  if (!assistantMessage || !workspaceFileRootDir) {
+    return assistantMessage;
+  }
+  let content = assistantMessage.content;
+  for (const toolRun of trace.toolRuns) {
+    if (toolRun.sessionId !== trace.sessionId || toolRun.turnId !== trace.turnId) {
+      continue;
+    }
+    const receipt = getExecutedWorkspaceFileWriteReceipt(toolRun);
+    if (!receipt) {
+      continue;
+    }
+    const verifiedPath = await resolveLiveWorkspaceDownloadPath(receipt.artifactPath, workspaceFileRootDir);
+    if (!verifiedPath) {
+      continue;
+    }
+    content = mergeWorkspaceFileDownloadContent(
+      content,
+      toolRun,
+      buildWorkspaceFileDownloadHref(verifiedPath, workspaceFileRootDir),
+    );
+  }
+  return content === assistantMessage.content ? assistantMessage : { ...assistantMessage, content };
+}
+
+async function resolveLiveWorkspaceDownloadPath(
+  artifactPath: string,
+  workspaceFileRootDir: string,
+): Promise<string | undefined> {
+  if (!path.isAbsolute(artifactPath)) {
+    return undefined;
+  }
+  try {
+    const [realWorkspaceRoot, realArtifactPath] = await Promise.all([
+      fs.realpath(workspaceFileRootDir),
+      fs.realpath(artifactPath),
+    ]);
+    const relativePath = path.relative(realWorkspaceRoot, realArtifactPath);
+    if (
+      !relativePath ||
+      path.isAbsolute(relativePath) ||
+      relativePath === ".." ||
+      relativePath.startsWith(`..${path.sep}`)
+    ) {
+      return undefined;
+    }
+    const stat = await fs.stat(realArtifactPath);
+    return stat.isFile() && stat.size > 0 && stat.size <= MAX_INLINE_FILE_DOWNLOAD_BYTES ? realArtifactPath : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function projectChatTimerNotice(

@@ -8,7 +8,7 @@ import {
   type HTMLAttributes,
   type ReactNode,
 } from "react";
-import { Check, Copy } from "lucide-react";
+import { Check, Copy, FileDown } from "lucide-react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { downloadFile } from "../../api/client";
@@ -175,6 +175,7 @@ function WorkspaceFileDownloadLink({
   href,
   relativePath,
   fileName,
+  className,
   ...props
 }: {
   children: ReactNode;
@@ -189,6 +190,7 @@ function WorkspaceFileDownloadLink({
     <>
       <a
         href={href}
+        className={cn("mc-assistant-file-link", className)}
         aria-busy={downloading || undefined}
         {...props}
         onClick={(event) => {
@@ -207,7 +209,8 @@ function WorkspaceFileDownloadLink({
             });
         }}
       >
-        {children}
+        <FileDown className="mc-assistant-file-link-icon" size={14} strokeWidth={2.2} aria-hidden="true" />
+        <span>{children}</span>
       </a>
       {error ? (
         <span className="mc-assistant-link-error" role="alert">

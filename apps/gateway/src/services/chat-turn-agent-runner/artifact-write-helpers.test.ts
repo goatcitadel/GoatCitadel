@@ -4,7 +4,9 @@ import {
   analyzePresentationContentQuality,
   buildSyntheticPresentationCreateArgs,
   buildWorkspaceFileDownloadHref,
+  getExecutedWorkspaceFileWriteReceipt,
   mergePresentationArtifactDeliveryContent,
+  mergeWorkspaceFileDownloadContent,
 } from "./artifact-write-helpers.js";
 
 const research = `# Dating Across a Large Age Gap
@@ -72,8 +74,60 @@ describe("thread-grounded presentation artifacts", () => {
     expect(buildWorkspaceFileDownloadHref(path.resolve("..", "deck.pptx"), workspaceRoot)).toBeUndefined();
     expect(
       buildWorkspaceFileDownloadHref(path.join(workspaceRoot, "goatcitadel_out", "notes.txt"), workspaceRoot),
+    ).toBe("/api/v1/files/download?relativePath=goatcitadel_out%2Fnotes.txt");
+  });
+
+  it("upgrades matching legacy sandbox links for governed document writes", () => {
+    const workspaceRoot = path.resolve("workspace");
+    const artifactPath = path.join(workspaceRoot, "goatcitadel_out", "research brief.docx");
+    const toolRun = {
+      toolRunId: "tool-run-document-download",
+      sessionId: "session-download",
+      turnId: "turn-download",
+      toolName: "documents.create",
+      status: "executed",
+      result: { path: artifactPath, bytesWritten: 128 },
+      startedAt: "2026-08-06T00:00:00.000Z",
+      finishedAt: "2026-08-06T00:00:01.000Z",
+    } as const;
+    const downloadHref = buildWorkspaceFileDownloadHref(artifactPath, workspaceRoot);
+
+    expect(getExecutedWorkspaceFileWriteReceipt(toolRun)).toEqual({ artifactPath, bytesWritten: 128 });
+    expect(
+      mergeWorkspaceFileDownloadContent(
+        "Done. [Download the document](sandbox:/mnt/data/research%20brief.docx)",
+        toolRun,
+        downloadHref,
+      ),
+    ).toBe(`Done. [Download the document](${downloadHref})`);
+    expect(
+      mergeWorkspaceFileDownloadContent("Done. [Unrelated file](sandbox:/mnt/data/other.docx)", toolRun, downloadHref),
+    ).toContain(`[Download the document](${downloadHref})`);
+    expect(
+      getExecutedWorkspaceFileWriteReceipt({
+        ...toolRun,
+        status: "failed",
+      }),
     ).toBeUndefined();
   });
+
+  it.each(["presentations.create", "documents.create", "artifacts.create", "fs.write"])(
+    "recognizes executed %s output as a downloadable file receipt",
+    (toolName) => {
+      expect(
+        getExecutedWorkspaceFileWriteReceipt({
+          toolRunId: `tool-run-${toolName}`,
+          sessionId: "session-download",
+          turnId: "turn-download",
+          toolName,
+          status: "executed",
+          result: { path: path.resolve("workspace", "goatcitadel_out", "output.bin"), bytesWritten: 64 },
+          startedAt: "2026-08-06T00:00:00.000Z",
+          finishedAt: "2026-08-06T00:00:01.000Z",
+        }),
+      ).toMatchObject({ bytesWritten: 64 });
+    },
+  );
 
   it("builds a subject-specific deck from prior assistant research without visible Cowork copy", () => {
     const historyMessages = [

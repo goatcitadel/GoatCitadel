@@ -161,13 +161,16 @@ import {
   buildWriteDestinationUserInputPrompt,
   detectDocumentArtifactIntent,
   detectPresentationArtifactIntent,
+  getExecutedWorkspaceFileWriteReceipt,
   isWriteDestinationTool,
   isWriteJailBlockReason,
   mergeDocumentArtifactDeliveryContent,
   mergePresentationArtifactDeliveryContent,
+  mergeWorkspaceFileDownloadContent,
   normalizePathForComparison,
 } from "./chat-turn-agent-runner/artifact-write-helpers.js";
 import { repairToolCalls, type ToolCallRepairFeedback } from "./chat-agent-tool-call-repair.js";
+import { MAX_INLINE_FILE_DOWNLOAD_BYTES } from "./files-route-service.js";
 import {
   IMPROVEMENT_TUNE_DEFAULTS,
   IMPROVEMENT_TUNE_SETTING_KEYS,
@@ -4966,9 +4969,26 @@ export class ChatTurnAgentRunner {
       const verifiedAttempt = [...presentationAttempts].reverse().find(hasVerifiedPresentationArtifactWrite)!;
       const result = verifiedAttempt.result as Record<string, unknown>;
       const artifactPath = typeof result.path === "string" ? result.path : (result.fallbackPath as string);
+      const bytesWritten = typeof result.bytesWritten === "number" ? result.bytesWritten : undefined;
       assistantContent = mergePresentationArtifactDeliveryContent(assistantContent, verifiedAttempt, {
-        downloadHref: buildWorkspaceFileDownloadHref(artifactPath, this.deps.workspaceFileRootDir),
+        downloadHref:
+          bytesWritten !== undefined && bytesWritten <= MAX_INLINE_FILE_DOWNLOAD_BYTES
+            ? buildWorkspaceFileDownloadHref(artifactPath, this.deps.workspaceFileRootDir)
+            : undefined,
       });
+    }
+    if (!approvalPayload && !pendingUserInput && finalStatus !== "cancelled" && !promptLabEvalIntegrityTurn) {
+      for (const toolRun of toolRuns) {
+        const receipt = getExecutedWorkspaceFileWriteReceipt(toolRun);
+        if (!receipt || receipt.bytesWritten > MAX_INLINE_FILE_DOWNLOAD_BYTES) {
+          continue;
+        }
+        assistantContent = mergeWorkspaceFileDownloadContent(
+          assistantContent,
+          toolRun,
+          buildWorkspaceFileDownloadHref(receipt.artifactPath, this.deps.workspaceFileRootDir),
+        );
+      }
     }
     if (finalStatus !== "cancelled" && !promptLabEvalIntegrityTurn) {
       assistantContent = appendToolFailureConstraints(

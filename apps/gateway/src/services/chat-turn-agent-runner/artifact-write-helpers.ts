@@ -686,10 +686,73 @@ export function buildWorkspaceFileDownloadHref(
     return undefined;
   }
   const normalized = relativePath.replaceAll("\\", "/");
-  if (!normalized.toLowerCase().endsWith(".pptx")) {
+  return `/api/v1/files/download?${new URLSearchParams({ relativePath: normalized }).toString()}`;
+}
+
+export interface ExecutedWorkspaceFileWriteReceipt {
+  artifactPath: string;
+  bytesWritten: number;
+}
+
+export function getExecutedWorkspaceFileWriteReceipt(
+  toolRun: ChatToolRunRecord,
+): ExecutedWorkspaceFileWriteReceipt | undefined {
+  if (toolRun.status !== "executed" || !isWriteDestinationTool(toolRun.toolName)) {
     return undefined;
   }
-  return `/api/v1/files/download?${new URLSearchParams({ relativePath: normalized }).toString()}`;
+  const result = (toolRun.result ?? {}) as Record<string, unknown>;
+  const artifactPath =
+    typeof result.path === "string"
+      ? result.path.trim()
+      : typeof result.fallbackPath === "string"
+        ? result.fallbackPath.trim()
+        : "";
+  const bytesWritten = result.bytesWritten;
+  if (!artifactPath || typeof bytesWritten !== "number" || !Number.isFinite(bytesWritten) || bytesWritten <= 0) {
+    return undefined;
+  }
+  return { artifactPath, bytesWritten };
+}
+
+export function mergeWorkspaceFileDownloadContent(
+  existingContent: string,
+  toolRun: ChatToolRunRecord,
+  downloadHref: string | undefined,
+): string {
+  const receipt = getExecutedWorkspaceFileWriteReceipt(toolRun);
+  if (!receipt || !downloadHref) {
+    return existingContent;
+  }
+  const fileName = path.basename(receipt.artifactPath);
+  const upgraded = replaceMatchingSandboxWorkspaceFileLink(existingContent, fileName, downloadHref);
+  if (upgraded.includes(downloadHref)) {
+    return upgraded;
+  }
+  const label =
+    toolRun.toolName === "presentations.create"
+      ? "Download the PowerPoint"
+      : toolRun.toolName === "documents.create"
+        ? "Download the document"
+        : `Download ${fileName}`;
+  const link = `[${label}](${downloadHref})`;
+  return upgraded.trim() ? `${upgraded.trim()}\n\n${link}` : link;
+}
+
+function replaceMatchingSandboxWorkspaceFileLink(content: string, fileName: string, downloadHref: string): string {
+  const normalizedFileName = fileName.toLowerCase();
+  return content.replace(
+    /\[([^\]]*)\]\(\s*(sandbox:[^)\s]+)(?:\s+"[^"]*")?\s*\)/giu,
+    (match, label: string, sandboxHref: string) => {
+      const targetName = sandboxHref.replaceAll("\\", "/").split("/").at(-1) ?? "";
+      let decodedTargetName = targetName;
+      try {
+        decodedTargetName = decodeURIComponent(targetName);
+      } catch {
+        // A malformed model-authored sandbox URL remains inert in the renderer.
+      }
+      return decodedTargetName.toLowerCase() === normalizedFileName ? `[${label}](${downloadHref})` : match;
+    },
+  );
 }
 
 function stripSandboxPresentationDownloadLinks(content: string): string {

@@ -863,6 +863,17 @@
   text-underline-offset: 0.18em;
 }
 
+.mc-assistant-file-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-weight: 650;
+}
+
+.mc-assistant-file-link-icon {
+  flex: 0 0 auto;
+}
+
 .mc-assistant-link-disabled {
   color: var(--text-muted);
   overflow-wrap: anywhere;

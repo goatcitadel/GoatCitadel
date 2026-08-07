@@ -316,6 +316,8 @@ describe("chat rendering tail coverage", () => {
     renderer = create(<AssistantMessageRenderer role="assistant" content={`[Download the PowerPoint](${href})`} />);
     const link = renderer.root.findByType("a");
     expect(link.props.href).toBe(href);
+    const fileIcon = renderer.root.findByProps({ className: "mc-assistant-file-link-icon" });
+    expect(fileIcon.props["aria-hidden"]).toBe("true");
 
     await act(async () => {
       link.props.onClick({ preventDefault });
@@ -332,6 +334,7 @@ describe("chat rendering tail coverage", () => {
 
     renderer.update(<AssistantMessageRenderer role="user" content={`[Untrusted file link](${href})`} />);
     expect(renderer.root.findByType("a").props.onClick).toBeUndefined();
+    expect(renderer.root.findAllByProps({ className: "mc-assistant-file-link-icon" })).toHaveLength(0);
   });
 
   it("recognizes only a single safe relativePath on the exact workspace-file route", () => {
