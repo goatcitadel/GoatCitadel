@@ -97,6 +97,10 @@ const MAX_PROVIDER_ERROR_BODY_BYTES = 64 * 1024;
 const PROVIDER_ERROR_BODY_TIMEOUT_MS = 5000;
 const MAX_PROVIDER_SSE_BYTES = 16 * 1024 * 1024;
 const MAX_PROVIDER_SSE_EVENTS = 2048;
+// Responses Lite can emit thousands of bounded reasoning/control deltas before
+// the first visible output chunk. Keep arbitrary provider streams on the tighter
+// default while retaining byte, event, and request-time bounds for this route.
+const MAX_OPENAI_CODEX_RESPONSES_LITE_SSE_EVENTS = 64 * 1024;
 
 export interface LlmRuntimeUpdateInput {
   activeProviderId?: string;
@@ -2073,7 +2077,11 @@ export class LlmService {
         let rawCompletion: ChatCompletionResponse;
         if (codexResponsesProvider && dispatched.response.body) {
           try {
-            rawCompletion = await collectOpenAiResponsesStreamCompletion(dispatched.response, model);
+            rawCompletion = await collectOpenAiResponsesStreamCompletion(
+              dispatched.response,
+              model,
+              resolveProviderSseEventLimit(resolved.provider, model),
+            );
           } catch (error) {
             const providerErrorText = readProviderOwnedOutputCapFailureText(error);
             const recovered = providerErrorText
@@ -2269,7 +2277,10 @@ export class LlmService {
           return assignedIndex;
         };
 
-        for await (const event of streamJsonSseResponse(dispatched.response, { forceSse: shouldParseAsSse })) {
+        for await (const event of streamJsonSseResponse(dispatched.response, {
+          forceSse: shouldParseAsSse,
+          maxEvents: resolveProviderSseEventLimit(resolved.provider, model),
+        })) {
           await accounting?.renewLease();
           const eventType = typeof event.type === "string" ? event.type : "";
           if (eventType === "response.output_text.delta") {
@@ -4471,7 +4482,7 @@ function tryParseJsonRecord(payload: string): Record<string, unknown> | null {
 
 async function* streamJsonSseResponse(
   response: Response,
-  options?: { forceSse?: boolean; onDone?: () => void },
+  options?: { forceSse?: boolean; maxEvents?: number; onDone?: () => void },
 ): AsyncGenerator<Record<string, unknown>> {
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   if (!response.body) {
@@ -4490,6 +4501,7 @@ async function* streamJsonSseResponse(
   let buffer = "";
   let receivedBytes = 0;
   let eventCount = 0;
+  const maxEvents = options?.maxEvents ?? MAX_PROVIDER_SSE_EVENTS;
   try {
     while (true) {
       const { done, value } = await reader.read();
@@ -4516,9 +4528,9 @@ async function* streamJsonSseResponse(
             return;
           }
           eventCount += 1;
-          if (eventCount > MAX_PROVIDER_SSE_EVENTS) {
+          if (eventCount > maxEvents) {
             await reader.cancel();
-            throw new Error(`provider stream exceeded ${MAX_PROVIDER_SSE_EVENTS} events.`);
+            throw new Error(`provider stream exceeded ${maxEvents} events.`);
           }
           yield payload;
         }
@@ -4536,8 +4548,8 @@ async function* streamJsonSseResponse(
           return;
         }
         eventCount += 1;
-        if (eventCount > MAX_PROVIDER_SSE_EVENTS) {
-          throw new Error(`provider stream exceeded ${MAX_PROVIDER_SSE_EVENTS} events.`);
+        if (eventCount > maxEvents) {
+          throw new Error(`provider stream exceeded ${maxEvents} events.`);
         }
         yield payload;
       }
@@ -4686,6 +4698,15 @@ function usesOpenAICodexResponsesLite(
   return isOpenAICodexResponsesProvider(provider) && /^gpt-5\.6-(?:sol|terra|luna)$/iu.test(model.trim());
 }
 
+function resolveProviderSseEventLimit(
+  provider: Pick<LlmProviderConfig, "providerId" | "apiStyle">,
+  model: string,
+): number {
+  return usesOpenAICodexResponsesLite(provider, model)
+    ? MAX_OPENAI_CODEX_RESPONSES_LITE_SSE_EVENTS
+    : MAX_PROVIDER_SSE_EVENTS;
+}
+
 function applyOpenAICodexResponsesLiteHeader(
   headers: Record<string, string>,
   provider: Pick<LlmProviderConfig, "providerId" | "apiStyle">,
@@ -4699,10 +4720,11 @@ function applyOpenAICodexResponsesLiteHeader(
 async function collectOpenAiResponsesStreamCompletion(
   response: Response,
   model: string,
+  maxEvents: number,
 ): Promise<ChatCompletionResponse> {
   let outputText = "";
   const streamedOutputItems: Array<Record<string, unknown>> = [];
-  for await (const event of streamJsonSseResponse(response, { forceSse: true })) {
+  for await (const event of streamJsonSseResponse(response, { forceSse: true, maxEvents })) {
     const eventType = typeof event.type === "string" ? event.type : "";
     if (eventType === "response.output_text.delta") {
       outputText += String(event.delta ?? "");

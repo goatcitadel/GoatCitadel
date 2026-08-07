@@ -3180,6 +3180,143 @@ describe("LlmService", () => {
     });
   });
 
+  it("allows bounded Codex Responses Lite streams with more than 2048 reasoning events", async () => {
+    const secretStore = createTrackedSecretStore({
+      "provider:openai-codex:oauth": JSON.stringify({
+        accessToken: "codex-access-token",
+        refreshToken: "codex-refresh-token",
+        expiresAt: Date.now() + 10 * 60_000,
+        updatedAt: Date.now(),
+      }),
+    });
+    const service = new LlmService(createCodexConfig(), process.env, { secretStore });
+    const originalFetch = globalThis.fetch;
+    const reasoningEvents = Array.from(
+      { length: 2_049 },
+      (_entry, index) =>
+        `data: {"type":"response.reasoning_summary_text.delta","sequence_number":${index},"delta":"r"}`,
+    );
+
+    globalThis.fetch = vi.fn(async () => {
+      return new Response(
+        [
+          ...reasoningEvents,
+          'data: {"type":"response.output_text.delta","delta":"ok","response_id":"resp_codex_long_reasoning"}',
+          'data: {"type":"response.completed","response":{"id":"resp_codex_long_reasoning","model":"gpt-5.6-sol","output":[],"usage":{"input_tokens":8,"output_tokens":2,"total_tokens":10}}}',
+          "data: [DONE]",
+          "",
+        ].join("\n\n"),
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      );
+    }) as unknown as typeof fetch;
+
+    try {
+      const chunks: Array<Record<string, unknown>> = [];
+      for await (const chunk of service.chatCompletionsStream({
+        providerId: "openai-codex",
+        model: "openai-codex/gpt-5.6-sol",
+        messages: [{ role: "user", content: "Research a complex topic." }],
+      })) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks).toHaveLength(2);
+      expect(chunks[0]).toMatchObject({ choices: [{ delta: { content: "ok" } }] });
+      expect(chunks[1]).toMatchObject({ choices: [{ finish_reason: "stop" }] });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("collects bounded Codex Responses Lite streams with more than 2048 reasoning events", async () => {
+    const secretStore = createTrackedSecretStore({
+      "provider:openai-codex:oauth": JSON.stringify({
+        accessToken: "codex-access-token",
+        refreshToken: "codex-refresh-token",
+        expiresAt: Date.now() + 10 * 60_000,
+        updatedAt: Date.now(),
+      }),
+    });
+    const service = new LlmService(createCodexConfig(), process.env, { secretStore });
+    const originalFetch = globalThis.fetch;
+    const reasoningEvents = Array.from(
+      { length: 2_049 },
+      (_entry, index) =>
+        `data: {"type":"response.reasoning_summary_text.delta","sequence_number":${index},"delta":"r"}`,
+    );
+
+    globalThis.fetch = vi.fn(async () => {
+      return new Response(
+        [
+          ...reasoningEvents,
+          'data: {"type":"response.output_text.delta","delta":"ok","response_id":"resp_codex_long_reasoning"}',
+          'data: {"type":"response.completed","response":{"id":"resp_codex_long_reasoning","model":"gpt-5.6-sol","output":[],"usage":{"input_tokens":8,"output_tokens":2,"total_tokens":10}}}',
+          "data: [DONE]",
+          "",
+        ].join("\n\n"),
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      );
+    }) as unknown as typeof fetch;
+
+    try {
+      const completion = await service.chatCompletions({
+        providerId: "openai-codex",
+        model: "openai-codex/gpt-5.6-sol",
+        messages: [{ role: "user", content: "Research a complex topic." }],
+      });
+
+      expect(completion.choices?.[0]?.message).toMatchObject({ content: "ok" });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("retains the default event limit for non-Lite Codex Responses streams", async () => {
+    const secretStore = createTrackedSecretStore({
+      "provider:openai-codex:oauth": JSON.stringify({
+        accessToken: "codex-access-token",
+        refreshToken: "codex-refresh-token",
+        expiresAt: Date.now() + 10 * 60_000,
+        updatedAt: Date.now(),
+      }),
+    });
+    const service = new LlmService(createCodexConfig(), process.env, { secretStore });
+    const originalFetch = globalThis.fetch;
+    const reasoningEvents = Array.from(
+      { length: 2_049 },
+      (_entry, index) =>
+        `data: {"type":"response.reasoning_summary_text.delta","sequence_number":${index},"delta":"r"}`,
+    );
+
+    globalThis.fetch = vi.fn(async () => {
+      return new Response(
+        [
+          ...reasoningEvents,
+          'data: {"type":"response.completed","response":{"id":"resp_codex_guard","model":"gpt-5.5","output":[]}}',
+          "data: [DONE]",
+          "",
+        ].join("\n\n"),
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      );
+    }) as unknown as typeof fetch;
+
+    try {
+      const consume = async (): Promise<void> => {
+        for await (const _chunk of service.chatCompletionsStream({
+          providerId: "openai-codex",
+          model: "openai-codex/gpt-5.5",
+          messages: [{ role: "user", content: "hello" }],
+        })) {
+          // Consume the provider stream to exercise its event guard.
+        }
+      };
+
+      await expect(consume()).rejects.toThrow("provider stream exceeded 2048 events.");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("adapts non-stream OpenAI Codex chat calls from the stream-only Responses bridge", async () => {
     const secretStore = createTrackedSecretStore({
       "provider:openai-codex:oauth": JSON.stringify({

@@ -160,6 +160,7 @@ function Harness(props: {
   isRoutePreflightAcknowledged?: (hash: string) => boolean;
   loadSessionCoreState?: (sessionId: string, options?: any) => Promise<void>;
   loadSidebar?: () => Promise<void>;
+  pushLocalNotice?: (content: string, tone?: "neutral" | "success" | "warning") => void;
   queuedOutbound?: any[];
   prefs?: any;
   selectedSession?: any | null;
@@ -286,7 +287,7 @@ function Harness(props: {
       loadSidebar: props.loadSidebar ?? vi.fn(async () => undefined),
       loadSessionCoreState: props.loadSessionCoreState ?? vi.fn(async () => undefined),
       ensureSession: props.ensureSession ?? vi.fn(async () => ({ sessionId: "session-1" }) as any),
-      pushLocalNotice: vi.fn(),
+      pushLocalNotice: props.pushLocalNotice ?? vi.fn(),
       handleCommandExecution: props.handleCommandExecution ?? vi.fn(async () => undefined),
     },
     refs: {
@@ -861,6 +862,76 @@ describe("useChatOutboundExecution", () => {
         originSurface: "chat",
       }),
     );
+  });
+
+  it("does not reconnect after a terminal provider error stream", async () => {
+    const pushLocalNotice = vi.fn();
+    streamAgentChatMessageMock.mockImplementationOnce(async (_sessionId, _payload, onChunk) => {
+      onChunk({
+        type: "message_start",
+        eventId: "evt-0",
+        sequence: 0,
+        sessionId: "session-1",
+        turnId: "turn-provider-failed",
+        messageId: "assistant-provider-failed",
+        branchKind: "append",
+        parentTurnId: "turn-1",
+      });
+      onChunk({
+        type: "error",
+        eventId: "evt-1",
+        sequence: 1,
+        sessionId: "session-1",
+        turnId: "turn-provider-failed",
+        error: "provider stream exceeded 2048 events.",
+      });
+      onChunk({
+        type: "message_done",
+        eventId: "evt-2",
+        sequence: 2,
+        sessionId: "session-1",
+        turnId: "turn-provider-failed",
+        messageId: "assistant-provider-failed",
+        content: "The provider stream failed before completion.",
+      });
+      onChunk({
+        type: "trace_update",
+        eventId: "evt-3",
+        sequence: 3,
+        sessionId: "session-1",
+        turnId: "turn-provider-failed",
+        trace: {
+          status: "failed",
+          routing: {},
+          failure: {
+            failureClass: "unknown",
+            message: "provider stream exceeded 2048 events.",
+            retryable: true,
+            recommendedAction: "retry",
+          },
+        },
+      });
+      // Matches consumeSseResponse: error chunks are delivered to onChunk and
+      // then rethrown after the response reaches EOF.
+      throw new Error("provider stream exceeded 2048 events.");
+    });
+
+    await act(async () => {
+      create(<Harness streamEnabled pushLocalNotice={pushLocalNotice} />);
+    });
+    await act(async () => {
+      await latest?.execute({
+        id: "queue-provider-failed",
+        action: "send",
+        content: "Research the market",
+        attachments: [],
+        createdAt: "2026-05-03T12:45:00.000Z",
+      });
+    });
+
+    expect(resumeChatTurnStreamMock).not.toHaveBeenCalled();
+    expect(pushLocalNotice).not.toHaveBeenCalled();
+    expect(latest?.getSnapshot().error).toBe("provider stream exceeded 2048 events.");
   });
 
   it("does not advance the resume cursor past a chunk whose processing throws", async () => {

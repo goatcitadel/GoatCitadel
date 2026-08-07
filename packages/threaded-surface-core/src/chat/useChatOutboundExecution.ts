@@ -659,6 +659,8 @@ export function useChatOutboundExecution(
             sourceTurnId: item.action === "send" ? undefined : item.targetTurnId,
             mode: item.action,
           };
+          let streamErrorChunkReceived = false;
+          let terminalStreamStateReceived = false;
           const onChunk = (chunk: ChatStreamChunk) => {
             const liveStream = activeStreamRef.current;
             if (
@@ -717,6 +719,15 @@ export function useChatOutboundExecution(
             }
             if (chunk.type === "trace_update" && chunk.trace.durable?.runId) {
               liveStream.runId = chunk.trace.durable.runId;
+            }
+            if (
+              chunk.type === "trace_update" &&
+              (chunk.trace.status === "failed" || chunk.trace.status === "cancelled")
+            ) {
+              terminalStreamStateReceived = true;
+            }
+            if (chunk.type === "done") {
+              terminalStreamStateReceived = true;
             }
             if (chunk.type === "message_done") {
               const previewBuffer = getStreamingPreviewBuffer();
@@ -789,6 +800,7 @@ export function useChatOutboundExecution(
               setPendingUserInput(chunk.prompt);
             }
             if (chunk.type === "error") {
+              streamErrorChunkReceived = true;
               const errorMessage = chunk.error?.trim() || STREAMING_REQUEST_FAILED_MESSAGE;
               setError(errorMessage, getOutboundErrorSource(item.action));
               promoteStreamingPreviewToThread(chunk.sessionId, "error");
@@ -924,6 +936,13 @@ export function useChatOutboundExecution(
               break;
             } catch (streamError) {
               if (isAbortError(streamError)) {
+                throw streamError;
+              }
+              // The shared SSE consumer rethrows a server error chunk after it
+              // reaches EOF so the caller retains the failure message. Once the
+              // same stream has also delivered canonical terminal state, that
+              // exception is an application failure, not a transport drop.
+              if (streamErrorChunkReceived && terminalStreamStateReceived) {
                 throw streamError;
               }
               const liveStream = activeStreamRef.current;
