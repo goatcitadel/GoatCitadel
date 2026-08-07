@@ -29,7 +29,7 @@ import type { ChatStreamStatus } from "@goatcitadel/mission-control-shared/compo
 import type { ChatThreadNotice } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadView";
 import type { CoworkAgenticControlItem } from "@goatcitadel/mission-control-shared/components/cowork-view-model";
 import type { ActiveChatDelegationRun } from "./useChatDelegationPolicyActions";
-import type { PendingUserInputState } from "./useChatOutboundExecution";
+import type { OptimisticChatUserMessage, PendingUserInputState } from "./useChatOutboundExecution";
 import type { ChatStreamingPreview, ChatVisualStreamMode } from "./chat-streaming-preview";
 import type { WorkTrustDescriptor } from "./work-trust";
 import type { ChatErrorSource } from "./chat-error-copy";
@@ -169,6 +169,7 @@ export interface MissionControlActiveSessionSurfaceProps {
    */
   streamingPreview: ChatStreamingPreview | null;
   activeStreamingTurnId: string | null;
+  optimisticUserMessage?: OptimisticChatUserMessage | null;
   queuedCount: number;
   streamError: string | null;
   streamErrorSource?: ChatErrorSource | null;

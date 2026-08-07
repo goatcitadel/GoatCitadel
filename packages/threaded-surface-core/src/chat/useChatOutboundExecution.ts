@@ -8,7 +8,7 @@ import type {
   ChatStreamChunk,
   ChatThreadResponse,
 } from "@goatcitadel/contracts";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   editChatTurn,
   resumeChatTurnStream,
@@ -88,6 +88,16 @@ export interface UseChatOutboundExternalContext {
   onTemplateInvocationSent?: (item: OutboundQueueItem) => void;
 }
 
+export interface OptimisticChatUserMessage {
+  queueItemId: string;
+  messageId: string;
+  sessionId?: string;
+  canonicalMessageId?: string;
+  content: string;
+  timestamp: string;
+  attachments?: ChatMessageRecord["attachments"];
+}
+
 type OutboundExecutionPrefsSource = Pick<
   ChatSessionPrefsRecord,
   "memoryMode" | "webMode" | "thinkingLevel" | "speedMode" | "subagentPolicy"
@@ -135,8 +145,7 @@ export function useChatOutboundExecution(
   onExternalContextSentRef.current = input.externalContext?.onExternalContextSent;
   const onTemplateInvocationSentRef = useRef(input.externalContext?.onTemplateInvocationSent);
   onTemplateInvocationSentRef.current = input.externalContext?.onTemplateInvocationSent;
-  const { surfaceMode, selectedSessionId, selectedSession, prefs, fullWebAccess, selectedProviderId, selectedModel } =
-    sessionConfig;
+  const { selectedSessionId, selectedSession, prefs, fullWebAccess, selectedProviderId, selectedModel } = sessionConfig;
   const { streamEnabled, visualStreamMode = "smooth", activeStreamRef } = streamConfig;
   const { sending, error, queuedOutbound, thread, messages } = stateConfig;
   const {
@@ -170,6 +179,7 @@ export function useChatOutboundExecution(
   const sendingRef = useRef(false);
   const prefsRef = useRef<ChatSessionPrefsRecord | null>(prefs);
   const threadRef = useRef<ChatThreadResponse | null>(thread);
+  const [optimisticUserMessage, setOptimisticUserMessage] = useState<OptimisticChatUserMessage | null>(null);
   useEffect(() => {
     selectedSessionIdRef.current = selectedSessionId;
   }, [selectedSessionId]);
@@ -365,7 +375,7 @@ export function useChatOutboundExecution(
       commitThreadUpdate(nextThread);
       return true;
     },
-    [commitThreadUpdate, messageMutationVersionRef],
+    [activeStreamRef, commitThreadUpdate, finalizedStreamMessageRef, messageMutationVersionRef],
   );
   // These callback refs are intentionally refreshed during render so sibling
   // orchestration hooks can call the current implementation before effects run.
@@ -467,6 +477,20 @@ export function useChatOutboundExecution(
         mimeType: entry.mimeType,
         sizeBytes: entry.sizeBytes,
       }));
+      const localUserMessageId = `local-user-${item.id}`;
+      const shouldProjectOptimisticUserMessage =
+        item.action === "send" && !shouldExecuteLocalChatCommand(item.action, trimmedContent);
+      if (shouldProjectOptimisticUserMessage) {
+        const optimisticSessionId = item.sessionId ?? selectedSessionId ?? undefined;
+        setOptimisticUserMessage({
+          queueItemId: item.id,
+          messageId: localUserMessageId,
+          ...(optimisticSessionId ? { sessionId: optimisticSessionId } : {}),
+          content: (item.displayContent ?? trimmedContent).trim(),
+          timestamp: item.createdAt,
+          attachments: localAttachments.length > 0 ? localAttachments : undefined,
+        });
+      }
       let session: ChatSessionRecord | null = null;
       // Closure-local counters for the streaming preview path: accumulated per
       // queue-item execution (including any stream-resume segments, which reuse
@@ -518,6 +542,11 @@ export function useChatOutboundExecution(
         });
         setError(null);
         session = await ensureSession();
+        if (shouldProjectOptimisticUserMessage) {
+          setOptimisticUserMessage((current) =>
+            current?.queueItemId === item.id ? { ...current, sessionId: session!.sessionId } : current,
+          );
+        }
         recordChatOutboundPhase({
           phase: "session_ready",
           action: item.action,
@@ -587,7 +616,7 @@ export function useChatOutboundExecution(
           item.action === "retry" && targetTurn
             ? targetTurn.userMessage
             : {
-                messageId: `local-user-${Date.now()}`,
+                messageId: localUserMessageId,
                 sessionId: session.sessionId,
                 role: "user",
                 actorType: "user",
@@ -679,6 +708,7 @@ export function useChatOutboundExecution(
               previewDeltaCount = 0;
               previewCharCount = 0;
               liveStream.turnId = chunk.turnId;
+              setOptimisticUserMessage((current) => (current?.queueItemId === item.id ? null : current));
               getStreamingPreviewBuffer().start({
                 sessionId: chunk.sessionId,
                 turnId: chunk.turnId,
@@ -976,10 +1006,17 @@ export function useChatOutboundExecution(
             setCapabilitySuggestions(sent.trace.capabilityUpgradeSuggestions ?? []);
             setSpecialistSuggestions(sent.trace.specialistCandidateSuggestions ?? []);
           }
+          const canonicalUserMessageId = sent.userMessage?.messageId;
+          if (shouldProjectOptimisticUserMessage && canonicalUserMessageId) {
+            setOptimisticUserMessage((current) =>
+              current?.queueItemId === item.id ? { ...current, canonicalMessageId: canonicalUserMessageId } : current,
+            );
+          }
           await loadSessionCoreState(session.sessionId, {
             background: true,
             includeThread: true,
           });
+          setOptimisticUserMessage((current) => (current?.queueItemId === item.id ? null : current));
         }
         setEditingTurnId(null);
         // Successful (non-thrown) completion is the ONLY point that consumes
@@ -1061,6 +1098,7 @@ export function useChatOutboundExecution(
           },
         });
       } finally {
+        setOptimisticUserMessage((current) => (current?.queueItemId === item.id ? null : current));
         const activeStream = activeStreamRef.current;
         if (session && activeStream?.sessionId === session.sessionId) {
           activeStreamRef.current = null;
@@ -1075,11 +1113,14 @@ export function useChatOutboundExecution(
       }
     },
     [
+      activeStreamRef,
       clearStreamingPreview,
       commitThreadUpdate,
       ensureSession,
       ensureFreshRoutePreflight,
       finishOutboundExecution,
+      finalizedStreamMessageRef,
+      getOutboundErrorSource,
       getStreamingPreviewBuffer,
       handleCommandExecution,
       fullWebAccess,
@@ -1090,13 +1131,15 @@ export function useChatOutboundExecution(
       scheduleStreamMessageReconciliation,
       selectedModel,
       selectedProviderId,
-      surfaceMode,
+      selectedSessionId,
       setCapabilitySuggestions,
       setSpecialistSuggestions,
       setDraft,
       setEditingTurnId,
       setError,
       setPendingAttachments,
+      setPendingApproval,
+      setPendingUserInput,
       streamEnabled,
       pushLocalNotice,
     ],
@@ -1148,6 +1191,7 @@ export function useChatOutboundExecution(
     handleDenyPending,
     handleSubmitUserInput,
     handleSelectBranchTurn,
+    optimisticUserMessage,
     streamStatus,
     streamingPreview,
     activeStreamingTurnId,

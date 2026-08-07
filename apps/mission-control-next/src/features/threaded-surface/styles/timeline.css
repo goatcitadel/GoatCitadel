@@ -593,6 +593,15 @@
   background: color-mix(in oklab, var(--mc-area-color) 9%, var(--mc-surface-1));
 }
 
+.mc-next-thread-turn.optimistic-user-message .mc-next-thread-bubble.user .mc-next-thread-meta {
+  padding-inline-end: 0;
+}
+
+.mc-next-thread-delivery-status {
+  color: var(--text-secondary);
+  font-weight: 700;
+}
+
 /* Collapsible "thinking" disclosure (ChatThinkingSection). Inert/absent whenever
    the gateway's chatThinkingStreamV1Enabled flag stays at its default (off), since
    turn.thinking is then never populated. */

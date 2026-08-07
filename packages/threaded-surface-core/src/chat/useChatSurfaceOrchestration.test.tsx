@@ -209,6 +209,7 @@ describe("useChatSurfaceOrchestration", () => {
     expect(item.content).toContain("Source thread: Launch plan");
     expect(item.content).toContain("[New message]");
     expect(item.content).toContain("What should I do next?");
+    expect(item.displayContent).toBe("What should I do next?");
     expect(onOutboundContextConsumed).toHaveBeenCalledTimes(1);
   });
 

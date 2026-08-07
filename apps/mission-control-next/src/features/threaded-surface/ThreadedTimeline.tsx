@@ -5,6 +5,7 @@ import {
   type ChatThreadTurnRecord,
 } from "@goatcitadel/contracts";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
+import { ChatOptimisticUserMessage } from "@goatcitadel/mission-control-shared/components/chat/ChatOptimisticUserMessage";
 import { ChatStreamStatusBar } from "@goatcitadel/mission-control-shared/components/chat/ChatStreamStatusBar";
 import { SurfaceReconnectBanner } from "@goatcitadel/mission-control-shared/components/chat/SurfaceReconnectBanner";
 import {
@@ -333,7 +334,18 @@ export function ThreadedTimeline({
   const threadTurnCount = props.thread?.turns.length ?? 0;
   const systemNotices = props.thread?.systemNotices ?? EMPTY_SYSTEM_NOTICES;
   const latestSystemNotice = systemNotices.at(-1) ?? null;
-  const hasThreadContent = threadTurnCount > 0 || systemNotices.length > 0;
+  const optimisticUserMessage = props.optimisticUserMessage ?? null;
+  const canonicalMessageIds = useMemo(
+    () => new Set((props.thread?.turns ?? []).map((turn) => turn.userMessage.messageId)),
+    [props.thread?.turns],
+  );
+  const visibleOptimisticUserMessage =
+    optimisticUserMessage &&
+    !canonicalMessageIds.has(optimisticUserMessage.messageId) &&
+    (!optimisticUserMessage.canonicalMessageId || !canonicalMessageIds.has(optimisticUserMessage.canonicalMessageId))
+      ? optimisticUserMessage
+      : null;
+  const hasThreadContent = threadTurnCount > 0 || systemNotices.length > 0 || Boolean(visibleOptimisticUserMessage);
   const latestConversationTimestamp = lastTurn
     ? toTimelineTimestamp(lastTurn.assistantMessage?.timestamp ?? lastTurn.userMessage.timestamp)
     : Number.NEGATIVE_INFINITY;
@@ -343,11 +355,17 @@ export function ThreadedTimeline({
   const systemNoticeIsLatest = Boolean(
     latestSystemNotice && latestSystemNoticeTimestamp >= latestConversationTimestamp,
   );
-  const latestTurnId = systemNoticeIsLatest
-    ? `system-notice:${latestSystemNotice!.noticeId}`
-    : (props.thread?.activeLeafTurnId ?? lastTurn?.turnId ?? null);
-  const latestTraceStatus = systemNoticeIsLatest ? "completed" : (lastTurn?.trace.status ?? null);
-  const sessionId = props.thread?.sessionId ?? null;
+  const latestTurnId = visibleOptimisticUserMessage
+    ? `optimistic:${visibleOptimisticUserMessage.messageId}`
+    : systemNoticeIsLatest
+      ? `system-notice:${latestSystemNotice!.noticeId}`
+      : (props.thread?.activeLeafTurnId ?? lastTurn?.turnId ?? null);
+  const latestTraceStatus = visibleOptimisticUserMessage
+    ? props.streamStatus
+    : systemNoticeIsLatest
+      ? "completed"
+      : (lastTurn?.trace.status ?? null);
+  const sessionId = props.thread?.sessionId ?? visibleOptimisticUserMessage?.sessionId ?? null;
   /*
    * The host's `props.streamingPreview` only updates on stream start/stop now
    * (see useChatStreamingPreviewState.ts) -- the live, per-flush value comes
@@ -484,8 +502,8 @@ export function ThreadedTimeline({
     followOutput: props.followOutput,
     onBottomStateChange: props.onBottomStateChange,
     signals: {
-      sessionId: props.thread?.sessionId ?? null,
-      threadTurnCount: threadTurnCount + systemNotices.length,
+      sessionId,
+      threadTurnCount: threadTurnCount + systemNotices.length + (visibleOptimisticUserMessage ? 1 : 0),
       latestTurnId,
       latestTraceStatus,
       latestTurnToolRunCount: lastTurn?.toolRuns.length ?? 0,
@@ -553,7 +571,7 @@ export function ThreadedTimeline({
           <div className="mc-next-thread-empty">Loading thread...</div>
         ) : props.mode === "chat" && props.thread && !hasThreadContent ? (
           <ChatFirstMessageCanvas props={props} />
-        ) : !props.thread || !hasThreadContent ? (
+        ) : !hasThreadContent ? (
           <div className="mc-next-thread-empty">
             <p className="mc-next-thread-meta">
               <strong>GoatCitadel</strong>
@@ -623,6 +641,9 @@ export function ThreadedTimeline({
                   />
                 );
               })}
+              {visibleOptimisticUserMessage ? (
+                <ChatOptimisticUserMessage message={visibleOptimisticUserMessage} />
+              ) : null}
               <ChatStreamStatusBar
                 mode={props.mode}
                 status={props.streamStatus}

@@ -108,6 +108,7 @@ function buildProps(overrides: Partial<any> = {}): any {
     visualStreamMode: "smooth",
     streamingPreview: null,
     activeStreamingTurnId: null,
+    optimisticUserMessage: null,
     queuedCount: 0,
     streamError: null,
     eventStreamStatus: "connected",
@@ -222,6 +223,39 @@ describe("ThreadedTimeline", () => {
     container = null;
     resetChannelActivitySnapshots();
     resetChatStreamingPreviewForTests();
+  });
+
+  it("shows the outgoing message and connecting status before the first canonical turn arrives", () => {
+    const renderer = TestRenderer.create(
+      <ThreadedTimeline
+        props={
+          buildProps({
+            mode: "chat",
+            delegationRun: null,
+            streamStatus: "connecting",
+            thread: {
+              sessionId: "session-1",
+              turns: [],
+              systemNotices: [],
+              systemNoticeHiddenCount: 0,
+            },
+            optimisticUserMessage: {
+              queueItemId: "queue-pending",
+              messageId: "local-user-queue-pending",
+              sessionId: "session-1",
+              content: "Show this immediately",
+              timestamp: "2026-08-06T12:00:00.000Z",
+            },
+          }) as any
+        }
+      />,
+    );
+
+    const text = renderedText(renderer);
+    expect(text).toContain("Show this immediately");
+    expect(text).toContain("Sending");
+    expect(text).toContain("Connecting...");
+    expect(text).not.toContain("Start with a plain request");
   });
 
   it("renders a notice-only conversation without a starter canvas or user bubble", () => {

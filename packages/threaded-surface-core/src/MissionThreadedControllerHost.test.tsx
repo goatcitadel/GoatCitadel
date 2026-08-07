@@ -1019,6 +1019,7 @@ describe("MissionThreadedControllerHost", () => {
       action: "send",
       sessionId: "session-1",
       content: "Ship the review",
+      displayContent: "Ship the review",
       attachments: [createStoredAttachment()],
       createdAt: "2026-05-01T00:00:00.000Z",
       paused: false,
@@ -1036,6 +1037,7 @@ describe("MissionThreadedControllerHost", () => {
         paused: true,
         modelCouncil: { enabled: true },
         requestPrefs: outboundRequestPrefs,
+        displayContent: "Ship the review",
       }),
     ]);
     expect(Object.isFrozen(parsed)).toBe(true);
@@ -1043,6 +1045,7 @@ describe("MissionThreadedControllerHost", () => {
 
     const maliciousCandidates = [
       { ...validPersistedItem, unexpectedDispatchOverride: "foreign" },
+      { ...validPersistedItem, displayContent: { injected: true } },
       { ...validPersistedItem, id: " queue-with-whitespace" },
       { ...validPersistedItem, sessionId: "session-foreign" },
       { ...validPersistedItem, modelCouncil: { enabled: true, participants: ["attacker"] } },

@@ -585,6 +585,7 @@ export function parseHydratedOutboundQueue(
           "sessionId",
           "targetTurnId",
           "content",
+          "displayContent",
           "attachments",
           "createdAt",
           "paused",
@@ -597,6 +598,9 @@ export function parseHydratedOutboundQueue(
         queueIds.has(candidate.id) ||
         !["send", "edit", "retry"].includes(candidate.action as string) ||
         !isBoundedString(candidate.content, MAX_HYDRATED_MESSAGE_CHARS, true) ||
+        (hasOwn(candidate, "displayContent") &&
+          (!isBoundedString(candidate.displayContent, MAX_HYDRATED_MESSAGE_CHARS) ||
+            candidate.displayContent.trim().length === 0)) ||
         !isCanonicalTimestamp(candidate.createdAt) ||
         (hasOwn(candidate, "paused") && typeof candidate.paused !== "boolean") ||
         (scope.sessionId === null ? hasOwn(candidate, "sessionId") : candidate.sessionId !== scope.sessionId)
@@ -649,6 +653,7 @@ export function parseHydratedOutboundQueue(
           ...(scope.sessionId ? { sessionId: scope.sessionId } : {}),
           ...(typeof targetTurnId === "string" ? { targetTurnId } : {}),
           content: candidate.content,
+          ...(typeof candidate.displayContent === "string" ? { displayContent: candidate.displayContent } : {}),
           attachments,
           createdAt: candidate.createdAt,
           paused: true,
@@ -2176,6 +2181,7 @@ export function MissionThreadedControllerHost({
     // and ChatThreadView subscribe to it directly instead of reading this prop.
     streamingPreview,
     activeStreamingTurnId,
+    optimisticUserMessage,
     prefsRef,
   } = outbound;
   runtimeBlockerActiveRef.current = Boolean(pendingApproval || pendingUserInput);
@@ -4037,8 +4043,8 @@ export function MissionThreadedControllerHost({
       queuedOutbound.map((item) => ({
         id: item.id,
         action: item.action,
-        label: item.content.trim()
-          ? item.content.trim().slice(0, 96)
+        label: (item.displayContent ?? item.content).trim()
+          ? (item.displayContent ?? item.content).trim().slice(0, 96)
           : `Turn ${item.targetTurnId?.slice(-6) ?? "queued"}`,
         createdAt: item.createdAt,
         paused: Boolean(item.paused),
@@ -4283,6 +4289,10 @@ export function MissionThreadedControllerHost({
         visualStreamMode,
         streamingPreview,
         activeStreamingTurnId,
+        optimisticUserMessage:
+          !optimisticUserMessage?.sessionId || optimisticUserMessage.sessionId === selectedSession.sessionId
+            ? optimisticUserMessage
+            : null,
         queuedCount: queuedOutbound.length,
         streamError: error,
         streamErrorSource: errorSource,

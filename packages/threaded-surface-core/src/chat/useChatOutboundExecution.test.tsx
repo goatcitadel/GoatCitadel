@@ -77,6 +77,7 @@ type HarnessState = {
     streamStatus: string;
     streamingPreview: unknown;
     activeStreamingTurnId: string | null;
+    optimisticUserMessage: unknown;
     sending: boolean;
     thread: ChatThreadResponse | null;
     mutationVersion: number;
@@ -331,6 +332,7 @@ function Harness(props: {
       streamStatus: outbound.streamStatus,
       streamingPreview: outbound.streamingPreview,
       activeStreamingTurnId: outbound.activeStreamingTurnId,
+      optimisticUserMessage: outbound.optimisticUserMessage,
       sending,
       thread,
       mutationVersion: messageMutationVersionRef.current,
@@ -1407,6 +1409,141 @@ describe("useChatOutboundExecution", () => {
     expect(latest?.getSnapshot().error).toBe("The selected branch turn is no longer available.");
   });
 
+  it("projects a user message before preflight completes and hands it off once message_start arrives", async () => {
+    const preflightDeferred = createDeferred<any>();
+    const streamDeferred = createDeferred<void>();
+    let capturedOnChunk: ((chunk: any) => void) | null = null;
+    streamAgentChatMessageMock.mockImplementationOnce(async (_sessionId, _payload, onChunk) => {
+      capturedOnChunk = onChunk;
+      await streamDeferred.promise;
+    });
+
+    await act(async () => {
+      create(<Harness streamEnabled ensureFreshRoutePreflight={vi.fn(() => preflightDeferred.promise)} />);
+    });
+
+    let executePromise: Promise<void> | undefined;
+    await act(async () => {
+      executePromise = latest?.execute({
+        id: "queue-optimistic",
+        action: "send",
+        content: "[Selected conversation context]\nInternal context\n\n[New message]\nShow this immediately",
+        displayContent: "Show this immediately",
+        attachments: [{ attachmentId: "file-1", fileName: "proof.txt", mimeType: "text/plain", sizeBytes: 5 }],
+        createdAt: "2026-08-06T12:00:00.000Z",
+      });
+      await Promise.resolve();
+    });
+
+    expect(latest?.getSnapshot().optimisticUserMessage).toEqual({
+      queueItemId: "queue-optimistic",
+      messageId: "local-user-queue-optimistic",
+      sessionId: "session-1",
+      content: "Show this immediately",
+      timestamp: "2026-08-06T12:00:00.000Z",
+      attachments: [{ attachmentId: "file-1", fileName: "proof.txt", mimeType: "text/plain", sizeBytes: 5 }],
+    });
+    expect(streamAgentChatMessageMock).not.toHaveBeenCalled();
+    expect(latest?.getSnapshot().thread?.turns).toHaveLength(1);
+
+    await act(async () => {
+      preflightDeferred.resolve(null);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(capturedOnChunk).not.toBeNull();
+    expect(latest?.getSnapshot().optimisticUserMessage).not.toBeNull();
+
+    const messageStart = {
+      type: "message_start",
+      eventId: "evt-optimistic-start",
+      sessionId: "session-1",
+      turnId: "turn-optimistic",
+      messageId: "assistant-optimistic",
+      branchKind: "append",
+      parentTurnId: "turn-1",
+    };
+    await act(async () => {
+      capturedOnChunk?.(messageStart);
+    });
+
+    expect(latest?.getSnapshot().optimisticUserMessage).toBeNull();
+    expect(
+      latest
+        ?.getSnapshot()
+        .thread?.turns.filter((turn) => turn.userMessage.messageId === "local-user-queue-optimistic"),
+    ).toHaveLength(1);
+
+    await act(async () => {
+      capturedOnChunk?.(messageStart);
+      capturedOnChunk?.({
+        type: "message_done",
+        eventId: "evt-optimistic-done",
+        sessionId: "session-1",
+        turnId: "turn-optimistic",
+        messageId: "assistant-optimistic",
+        content: "Done",
+      });
+      streamDeferred.resolve();
+      await executePromise;
+    });
+    expect(
+      latest
+        ?.getSnapshot()
+        .thread?.turns.filter((turn) => turn.userMessage.messageId === "local-user-queue-optimistic"),
+    ).toHaveLength(1);
+  });
+
+  it("keeps the optimistic user message visible while a non-stream send is in flight", async () => {
+    const sendDeferred = createDeferred<any>();
+    sendAgentChatMessageMock.mockImplementationOnce(() => sendDeferred.promise);
+
+    await act(async () => {
+      create(<Harness ensureFreshRoutePreflight={vi.fn(async () => null)} />);
+    });
+
+    let executePromise: Promise<void> | undefined;
+    await act(async () => {
+      executePromise = latest?.execute({
+        id: "queue-non-stream-optimistic",
+        action: "send",
+        content: "Keep this visible",
+        displayContent: "Keep this visible",
+        attachments: [],
+        createdAt: "2026-08-06T12:05:00.000Z",
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(latest?.getSnapshot().optimisticUserMessage).toEqual(
+      expect.objectContaining({
+        messageId: "local-user-queue-non-stream-optimistic",
+        content: "Keep this visible",
+      }),
+    );
+
+    await act(async () => {
+      sendDeferred.resolve({
+        sessionId: "session-1",
+        turnId: "turn-non-stream",
+        userMessage: {
+          messageId: "user-non-stream",
+          sessionId: "session-1",
+          role: "user",
+          actorType: "user",
+          actorId: "operator",
+          content: "Keep this visible",
+          timestamp: "2026-08-06T12:05:01.000Z",
+        },
+        transport: "mission",
+      });
+      await executePromise;
+    });
+
+    expect(latest?.getSnapshot().optimisticUserMessage).toBeNull();
+  });
+
   it("buffers stream deltas into preview state until message_done promotes final content", async () => {
     vi.useFakeTimers();
     const streamDeferred = createDeferred<void>();
@@ -1818,6 +1955,7 @@ describe("useChatOutboundExecution", () => {
       });
     });
     expect(latest?.getSnapshot().error).toBe("preflight failed");
+    expect(latest?.getSnapshot().optimisticUserMessage).toBeNull();
   });
 
   it("covers thread-derived approval merges, retry failures, and prefs without route overrides", async () => {

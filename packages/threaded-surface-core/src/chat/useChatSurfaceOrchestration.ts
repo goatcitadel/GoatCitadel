@@ -44,6 +44,8 @@ export interface OutboundQueueItem {
   sessionId?: string;
   targetTurnId?: string;
   content: string;
+  /** Operator-visible draft before selected-context wrappers are added. */
+  displayContent?: string;
   attachments: ChatAttachmentRecord[];
   createdAt: string;
   paused?: boolean;
@@ -183,6 +185,7 @@ export function useChatSurfaceOrchestration(input: {
       sessionId: input.selectedSessionId ?? undefined,
       targetTurnId: editingTurnId ?? undefined,
       content,
+      ...(action === "send" ? { displayContent: draftContent } : {}),
       attachments: input.pendingAttachments,
       createdAt: new Date().toISOString(),
       requestPrefs,
@@ -204,7 +207,7 @@ export function useChatSurfaceOrchestration(input: {
       return;
     }
     await input.executeOutboundItemRef.current?.(nextItem);
-  }, [editingTurnId, input]);
+  }, [editingTurnId, input, setQueuedOutbound]);
 
   const handleRetryTurn = useCallback(
     async (turnId: string) => {
@@ -228,7 +231,7 @@ export function useChatSurfaceOrchestration(input: {
       }
       await input.executeOutboundItemRef.current?.(nextItem);
     },
-    [input],
+    [input, setQueuedOutbound],
   );
 
   const handleStopActiveTurn = useCallback(async () => {
@@ -285,7 +288,7 @@ export function useChatSurfaceOrchestration(input: {
       },
     });
     setQueuedOutbound((current) => current.map((item) => ({ ...item, paused: false })));
-  }, [input.selectedSessionId, input.pushLocalNoticeRef, queuedOutbound.length]);
+  }, [input.selectedSessionId, queuedOutbound.length, setQueuedOutbound]);
 
   const handleRemoveQueuedItem = useCallback(
     (id: string) => {
@@ -299,7 +302,7 @@ export function useChatSurfaceOrchestration(input: {
       });
       setQueuedOutbound((current) => current.filter((item) => item.id !== id));
     },
-    [input.selectedSessionId],
+    [input.selectedSessionId, setQueuedOutbound],
   );
 
   useEffect(() => {
@@ -330,6 +333,7 @@ export function useChatSurfaceOrchestration(input: {
     input.tryBeginOutboundExecutionRef,
     queueDrainSignal,
     queuedOutbound,
+    setQueuedOutbound,
   ]);
 
   return {
