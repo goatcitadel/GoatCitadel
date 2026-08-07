@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   ChatRoutedContextInspection,
   ChatThreadTurnRecord,
@@ -205,15 +205,18 @@ export function useChatCapabilityProfileInspection(input: {
   workspaceId: string;
   turn: ChatThreadTurnRecord | null;
 }): ChatCapabilityProfileInspection {
+  const { sessionId, workspaceId, turn } = input;
   const [inspection, setInspection] = useState<ChatCapabilityProfileInspection>(IDLE_INSPECTION);
-  const turnId = input.turn?.turnId;
-  const expectedProfileId = input.turn?.trace.capabilityProfileId;
-  const expectedProfileHash = input.turn?.trace.capabilityProfileHash;
-  const selectionSignature = traceSelectionSignature(input.turn);
+  const selectedTurnRef = useRef(turn);
+  selectedTurnRef.current = turn;
+  const turnId = turn?.turnId;
+  const expectedProfileId = turn?.trace.capabilityProfileId;
+  const expectedProfileHash = turn?.trace.capabilityProfileHash;
+  const selectionSignature = traceSelectionSignature(turn);
 
   useEffect(() => {
-    const turn = input.turn;
-    if (!input.sessionId || !turn) {
+    const selectedTurn = selectedTurnRef.current;
+    if (!sessionId || !selectedTurn) {
       setInspection(IDLE_INSPECTION);
       return;
     }
@@ -246,15 +249,15 @@ export function useChatCapabilityProfileInspection(input: {
       expectedProfileHash,
       mismatchFields: [],
     });
-    void fetchChatTurnCapabilityProfile(input.sessionId, turn.turnId, input.workspaceId)
+    void fetchChatTurnCapabilityProfile(sessionId, selectedTurn.turnId, workspaceId)
       .then((envelope) => {
         if (!stale) {
           setInspection(
             resolveEnvelope({
               envelope,
-              sessionId: input.sessionId!,
-              workspaceId: input.workspaceId,
-              turn,
+              sessionId,
+              workspaceId,
+              turn: selectedTurn,
             }),
           );
         }
@@ -299,7 +302,7 @@ export function useChatCapabilityProfileInspection(input: {
     return () => {
       stale = true;
     };
-  }, [expectedProfileHash, expectedProfileId, input.sessionId, input.workspaceId, selectionSignature, turnId]);
+  }, [expectedProfileHash, expectedProfileId, selectionSignature, sessionId, turnId, workspaceId]);
 
   return inspection;
 }

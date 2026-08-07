@@ -125,21 +125,21 @@ describe("useSurfaceClassifyPreview", () => {
     let caughtError: unknown = null;
 
     function Harness() {
-      try {
-        latest = useSurfaceClassifyPreview({
-          draft: "write a python script",
-          enabled: true,
-          hasBoundProject: false,
-        });
-      } catch (e) {
-        caughtError = e;
-      }
+      latest = useSurfaceClassifyPreview({
+        draft: "write a python script",
+        enabled: true,
+        hasBoundProject: false,
+      });
       return null;
     }
 
-    act(() => {
-      create(<Harness />);
-    });
+    try {
+      act(() => {
+        create(<Harness />);
+      });
+    } catch (error) {
+      caughtError = error;
+    }
     act(() => {
       vi.advanceTimersByTime(350);
     });

@@ -401,6 +401,8 @@ export function useChatDelegationPolicyActions(input: {
     [input.selectedTurnId, input.thread],
   );
   const activeWorkflowTurn = useMemo(() => resolveActiveWorkflowTurn(input.thread), [input.thread]);
+  const activeDelegationRunId = activeDelegationRun?.runId;
+  const activeDelegationAttachedTurnId = activeDelegationRun?.attachedTurnId;
 
   useEffect(() => {
     setActiveDelegationRun(null);
@@ -415,7 +417,7 @@ export function useChatDelegationPolicyActions(input: {
     if (!runId || !turnId || !sessionId || input.thread?.sessionId !== sessionId) {
       return;
     }
-    if (!shouldHydrateTraceDelegationRun(activeDelegationRun, runId, turnId)) {
+    if (activeDelegationAttachedTurnId === turnId && activeDelegationRunId !== runId) {
       return;
     }
     let cancelled = false;
@@ -457,9 +459,8 @@ export function useChatDelegationPolicyActions(input: {
       cancelled = true;
     };
   }, [
-    activeDelegationRun?.attachedTurnId,
-    activeDelegationRun?.runId,
-    activeDelegationRun?.status,
+    activeDelegationAttachedTurnId,
+    activeDelegationRunId,
     activeWorkflowTurn?.trace.orchestration?.runId,
     activeWorkflowTurn?.turnId,
     input.thread?.sessionId,
@@ -506,7 +507,6 @@ export function useChatDelegationPolicyActions(input: {
     activeDelegationRun?.taskId,
     activeDelegationRun?.runId,
     activeWorkflowTurn?.trace.orchestration?.runId,
-    activeWorkflowTurn?.turnId,
     surfaceMode,
     pushLocalNotice,
     runtimeBlockerActiveRef,
@@ -755,7 +755,6 @@ export function useChatDelegationPolicyActions(input: {
       activeDelegationRun?.taskId,
       activeDelegationRun?.runId,
       activeWorkflowTurn?.trace.orchestration?.runId,
-      activeWorkflowTurn?.turnId,
       fullWebAccess,
       prefs,
       selectedModel,

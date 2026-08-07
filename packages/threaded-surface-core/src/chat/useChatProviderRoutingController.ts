@@ -144,9 +144,10 @@ export function useChatProviderRoutingController(input: {
   mcpTemplates: Array<McpServerTemplateRecord & { installed: boolean }>;
 }) {
   const [commandIndex, setCommandIndex] = useState(0);
+  const settingsLlm = input.settings?.llm;
+  const { getCachedModels, loadModelsForProvider } = input;
 
   const providerOptions = useMemo<ChatModelProviderOption[]>(() => {
-    const settingsLlm = input.settings?.llm;
     const activeProviderId = input.runtimeLlmConfig?.activeProviderId ?? settingsLlm?.activeProviderId;
     const activeModel = input.runtimeLlmConfig?.activeModel ?? settingsLlm?.activeModel;
     return input.runtimeProviderCatalog.map((provider) => {
@@ -180,8 +181,8 @@ export function useChatProviderRoutingController(input: {
     input.runtimeLlmConfig?.activeModel,
     input.runtimeLlmConfig?.activeProviderId,
     input.runtimeProviderCatalog,
-    input.settings?.llm?.activeModel,
-    input.settings?.llm?.activeProviderId,
+    settingsLlm?.activeModel,
+    settingsLlm?.activeProviderId,
   ]);
 
   const requestedProviderId =
@@ -201,10 +202,10 @@ export function useChatProviderRoutingController(input: {
   const selectedProviderSelection = useMemo(() => {
     return resolveProviderModelSelection({
       provider: selectedProviderOption,
-      loadedModels: selectedProviderId ? input.getCachedModels(selectedProviderId) : [],
+      loadedModels: selectedProviderId ? getCachedModels(selectedProviderId) : [],
       selectedModel: requestedModelId,
     });
-  }, [input.getCachedModels, requestedModelId, selectedProviderId, selectedProviderOption]);
+  }, [getCachedModels, requestedModelId, selectedProviderId, selectedProviderOption]);
 
   const selectedModel = selectedProviderSelection.model;
   const selectedProviderLabel = selectedProviderOption?.label ?? "Provider auto";
@@ -225,8 +226,8 @@ export function useChatProviderRoutingController(input: {
     if (!selectedProviderId) {
       return;
     }
-    void input.loadModelsForProvider(selectedProviderId);
-  }, [input.loadModelsForProvider, selectedProviderId]);
+    void loadModelsForProvider(selectedProviderId);
+  }, [loadModelsForProvider, selectedProviderId]);
 
   const commandSuggestions = useMemo(() => {
     const trimmed = input.draft.trimStart();

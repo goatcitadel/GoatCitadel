@@ -27,57 +27,71 @@ export function useChatApprovalController(input: {
   setLocalNotices: Dispatch<SetStateAction<ChatThreadNotice[]>>;
   pushLocalNotice: (content: string, tone?: ChatThreadNotice["tone"]) => void;
 }) {
+  const {
+    selectedSessionId,
+    activeStreamRef,
+    setPendingAttachments,
+    setEditingTurnId,
+    setPendingApproval,
+    setPendingUserInput,
+    setDelegationSuggestion,
+    setCapabilitySuggestions,
+    setSpecialistSuggestions,
+    setSelectedTurnId,
+    setLocalNotices,
+    pushLocalNotice,
+  } = input;
   const lastLoadedShellSessionIdRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!input.selectedSessionId) {
-      abortActiveChatStream(input.activeStreamRef.current);
-      input.activeStreamRef.current = null;
-      input.setSelectedTurnId(null);
-      input.setLocalNotices([]);
-      input.setPendingAttachments([]);
-      input.setDelegationSuggestion(null);
-      input.setCapabilitySuggestions([]);
-      input.setSpecialistSuggestions([]);
-      input.setPendingApproval(null);
-      input.setPendingUserInput(null);
+    if (!selectedSessionId) {
+      abortActiveChatStream(activeStreamRef.current);
+      activeStreamRef.current = null;
+      setSelectedTurnId(null);
+      setLocalNotices([]);
+      setPendingAttachments([]);
+      setDelegationSuggestion(null);
+      setCapabilitySuggestions([]);
+      setSpecialistSuggestions([]);
+      setPendingApproval(null);
+      setPendingUserInput(null);
       lastLoadedShellSessionIdRef.current = null;
       return;
     }
-    if (lastLoadedShellSessionIdRef.current !== input.selectedSessionId) {
-      const hadActiveStream = input.activeStreamRef.current !== null;
-      abortActiveChatStream(input.activeStreamRef.current);
-      input.activeStreamRef.current = null;
+    if (lastLoadedShellSessionIdRef.current !== selectedSessionId) {
+      const hadActiveStream = activeStreamRef.current !== null;
+      abortActiveChatStream(activeStreamRef.current);
+      activeStreamRef.current = null;
       if (hadActiveStream) {
-        input.pushLocalNotice(
+        pushLocalNotice(
           "Stream interrupted - switched sessions. The previous turn may still be processing on the server.",
           "warning",
         );
       }
-      input.setPendingAttachments([]);
-      input.setSelectedTurnId(null);
-      input.setEditingTurnId(null);
-      input.setLocalNotices([]);
-      input.setPendingApproval(null);
-      input.setPendingUserInput(null);
-      input.setDelegationSuggestion(null);
-      input.setCapabilitySuggestions([]);
-      input.setSpecialistSuggestions([]);
-      lastLoadedShellSessionIdRef.current = input.selectedSessionId;
+      setPendingAttachments([]);
+      setSelectedTurnId(null);
+      setEditingTurnId(null);
+      setLocalNotices([]);
+      setPendingApproval(null);
+      setPendingUserInput(null);
+      setDelegationSuggestion(null);
+      setCapabilitySuggestions([]);
+      setSpecialistSuggestions([]);
+      lastLoadedShellSessionIdRef.current = selectedSessionId;
     }
   }, [
-    input.activeStreamRef,
-    input.pushLocalNotice,
-    input.selectedSessionId,
-    input.setCapabilitySuggestions,
-    input.setDelegationSuggestion,
-    input.setEditingTurnId,
-    input.setLocalNotices,
-    input.setPendingApproval,
-    input.setPendingUserInput,
-    input.setPendingAttachments,
-    input.setSelectedTurnId,
-    input.setSpecialistSuggestions,
+    activeStreamRef,
+    pushLocalNotice,
+    selectedSessionId,
+    setCapabilitySuggestions,
+    setDelegationSuggestion,
+    setEditingTurnId,
+    setLocalNotices,
+    setPendingApproval,
+    setPendingUserInput,
+    setPendingAttachments,
+    setSelectedTurnId,
+    setSpecialistSuggestions,
   ]);
 
   return undefined;

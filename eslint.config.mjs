@@ -66,10 +66,7 @@ export default tseslint.config(
       },
     },
     rules: {
-      "@typescript-eslint/no-unused-vars": [
-        "error",
-        { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
-      ],
+      "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
       "no-console": "off",
       "no-control-regex": "off",
       "no-redeclare": "off",
@@ -143,10 +140,7 @@ export default tseslint.config(
       "no-console": "warn",
       "@typescript-eslint/no-explicit-any": "warn",
       "max-lines": ["warn", { max: 1000, skipBlankLines: true, skipComments: true }],
-      "@typescript-eslint/no-unused-vars": [
-        "warn",
-        { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
-      ],
+      "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
     },
   },
   {
@@ -187,6 +181,7 @@ export default tseslint.config(
     files: [
       "apps/mission-control-next/**/*.{ts,tsx}",
       "packages/mission-control-shared/**/*.{ts,tsx}",
+      "packages/threaded-surface-core/**/*.{ts,tsx}",
     ],
     plugins: { "react-hooks": reactHooks },
     rules: {
