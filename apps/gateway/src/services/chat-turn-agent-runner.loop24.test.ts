@@ -15,6 +15,7 @@ import {
   createToolCatalog,
   namedToolCallCompletion,
 } from "./chat-turn-agent-runner-test-fixtures.js";
+import { presentationSourceId } from "./chat-turn-agent-runner/presentation-research-evidence.js";
 
 const WALKING_RESEARCH = [
   "# Daily Walking",
@@ -38,6 +39,21 @@ const FREE_TIME_RESEARCH = [
   "## Making it repeatable",
   "- Keep a short menu of low-friction choices, schedule ambitious options, and review what actually felt worthwhile.",
 ].join("\n");
+
+const CCG_EVIDENCE = [
+  ["magic", "Magic: The Gathering products", "https://magic.wizards.com/en/products", "official"],
+  ["pokemon", "Pokémon Trading Card Game", "https://www.pokemon.com/us/pokemon-tcg/", "official"],
+  ["yugioh", "Yu-Gi-Oh! Card Game", "https://www.yugioh-card.com/en/", "official"],
+  ["one-piece", "One Piece Card Game", "https://en.onepiece-cardgame.com/", "official"],
+  ["lorcana", "Disney Lorcana", "https://www.disneylorcana.com/en-US/", "official"],
+  ["fab", "Flesh and Blood TCG", "https://fabtcg.com/", "official"],
+  ["swu", "Star Wars: Unlimited", "https://starwarsunlimited.com/", "official"],
+  ["riftbound", "Riftbound TCG", "https://riftbound.leagueoflegends.com/", "official"],
+  ["gundam", "Gundam Card Game", "https://www.gundam-gcg.com/en/", "official"],
+  ["tcgplayer", "CCG marketplace signals", "https://www.tcgplayer.com/content/ccg-market", "marketplace"],
+  ["icv2", "North American hobby market", "https://icv2.com/articles/markets/view/ccg-market", "independent"],
+  ["retailer", "Retail inventory considerations", "https://starcitygames.com/articles/ccg-retail", "retailer"],
+] as const;
 
 describe("ChatTurnAgentRunner loop 24 coverage", () => {
   it("repairs content-filter interrupted direct completions through the repair pass", async () => {
@@ -183,7 +199,7 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
         historyMessages: [
           {
             role: "user",
-            content: "Research the top 10 things to do in free time.",
+            content: "List the top 10 things to do in free time.",
           },
           { role: "assistant", content: FREE_TIME_RESEARCH },
           { role: "user", content: "Put all that information into a real PowerPoint presentation." },
@@ -251,7 +267,7 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
     },
   );
 
-  it("routes the exact market-research deck prompt through a cleaned search before presentation creation", async () => {
+  it("routes the exact market-research deck prompt through search and rejects a generic uncited deck", async () => {
     const content =
       "Can you please do some market research on CCGs and what makes each one unique and better than the competition? Please put it into a powerpoint deck.";
     const providerRequests: ChatCompletionRequest[] = [];
@@ -330,10 +346,7 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
       }),
     );
 
-    expect(invokeTool.mock.calls.map(([request]) => request.toolName)).toEqual([
-      "browser.search",
-      "presentations.create",
-    ]);
+    expect(invokeTool.mock.calls.map(([request]) => request.toolName)).toEqual(["browser.search"]);
     expect(invokeTool.mock.calls[0]?.[0].args).toMatchObject({
       query: "CCGs and what makes each one unique and better than the competition",
     });
@@ -355,11 +368,465 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
       maxTokens: 2_400,
     });
     expect(result.turnTrace.completion?.firstProviderRequestUsage?.effectiveInputTokens).toBeLessThan(12_000);
-    expect(result.turnTrace.status).toBe("completed");
+    expect(result.turnTrace.status).toBe("failed");
+    expect(result.turnTrace.failure?.failureClass).toBe("tool_blocked");
+    expect(
+      result.turnTrace.toolRuns
+        .filter((run) => run.toolName === "presentations.create")
+        .map((run) => run.error)
+        .join(" "),
+    ).toMatch(/structured research metadata|structured sources registry|uncited legacy string bullet/i);
+    expect(result.assistantContent).toContain("No downloadable PowerPoint was produced.");
     expect(result.turnTrace.citations).toHaveLength(2);
   });
 
-  it("continues a research deck from an approved search result without repeating the search", async () => {
+  it("routes a context-dependent research follow-up through the structured evidence gate", async () => {
+    const content = "Put those findings into a PowerPoint.";
+    const priorResearch = [
+      "Research competing note-taking apps and compare their feature fit.",
+      "The research found distinct capture, organization, collaboration, and export considerations. ".repeat(5),
+    ].join(" ");
+    const createChatCompletion = vi
+      .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(
+        namedToolCallCompletion("presentations.create", {
+          path: "./workspace/goatcitadel_out/note-app-findings.pptx",
+          title: "Note-taking app findings",
+          slides: [
+            {
+              title: "Capture",
+              bullets: ["Capture methods differ across the reviewed applications and workflows."],
+            },
+            {
+              title: "Organization",
+              bullets: ["Organization models create different trade-offs for individual and team use."],
+            },
+            {
+              title: "Decision guide",
+              bullets: ["The best fit depends on collaboration, export, and retrieval needs."],
+            },
+          ],
+        }),
+      )
+      .mockResolvedValue(completion("No deck was written because the research evidence contract was incomplete."));
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>();
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["presentations.create"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run(
+      turnInput({
+        content,
+        historyMessages: [
+          { role: "user", content: "Research competing note-taking apps and compare their feature fit." },
+          { role: "assistant", content: priorResearch },
+          { role: "user", content },
+        ],
+      }),
+    );
+
+    expect(invokeTool).not.toHaveBeenCalled();
+    const blocked = result.turnTrace.toolRuns.find(
+      (run) => run.toolName === "presentations.create" && run.status === "blocked",
+    );
+    expect(blocked?.error).toMatch(
+      /research presentation content\/evidence gate.*structured research metadata.*structured sources registry/i,
+    );
+    expect(result.turnTrace.status).toBe("failed");
+  });
+
+  it("admits a structured evidence-backed deck for the exact CCG market-research prompt", async () => {
+    const content =
+      "Can you please do some market research on CCGs and what makes each one unique and better than the competition? Please put it into a powerpoint deck.";
+    const createChatCompletion = vi
+      .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(
+        namedToolCallCompletion("browser.search", {
+          query: "One Piece Lorcana Flesh and Blood organized play",
+          maxResults: 6,
+        }),
+      )
+      .mockResolvedValueOnce(
+        namedToolCallCompletion("browser.search", {
+          query: "Star Wars Unlimited Riftbound Gundam official support",
+          maxResults: 6,
+        }),
+      )
+      .mockResolvedValueOnce(
+        namedToolCallCompletion("browser.search", {
+          query: "North America CCG marketplace retail signals",
+          maxResults: 6,
+        }),
+      )
+      .mockResolvedValueOnce(namedToolCallCompletion("presentations.create", structuredCcgPresentationArgs()))
+      .mockResolvedValueOnce(completion("The evidence-backed CCG presentation is complete."));
+    const invokeTool = vi.fn(async (request: ToolInvokeRequest): Promise<ToolInvokeResult> => {
+      if (request.toolName === "browser.search") {
+        return {
+          outcome: "executed",
+          result: {
+            results: CCG_EVIDENCE.map(([, title, url]) => ({
+              title,
+              url,
+              snippet: `${title} product, play, market, or retail evidence.`,
+              publishedAt: "2026-07-01",
+            })),
+          },
+        };
+      }
+      return {
+        outcome: "executed",
+        result: {
+          path: "F:\\code\\personal-ai\\workspace\\goatcitadel_out\\ccg-competitive-landscape-v2.pptx",
+          bytesWritten: 64_000,
+          format: "pptx",
+          title: request.args.title,
+          slideCount: 14,
+        },
+      };
+    });
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search", "presentations.create"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run(
+      turnInput({
+        content,
+        webMode: "quick",
+        historyMessages: [{ role: "user", content }],
+      }),
+    );
+
+    expect(invokeTool.mock.calls.map(([request]) => request.toolName)).toEqual([
+      "browser.search",
+      "browser.search",
+      "browser.search",
+      "browser.search",
+      "presentations.create",
+    ]);
+    const presentationRequest = invokeTool.mock.calls[4]?.[0];
+    const sources = presentationRequest?.args.sources as Array<Record<string, unknown>>;
+    expect(sources).toHaveLength(12);
+    expect(sources[0]).toMatchObject({
+      id: presentationSourceId("https://magic.wizards.com/en/products"),
+      url: "https://magic.wizards.com/en/products",
+      role: "official",
+      toolName: "browser.search",
+    });
+    expect(presentationRequest?.presentationGrounding).toMatchObject({
+      sourceUrlCount: 12,
+      matchedSourceUrlCount: 12,
+    });
+    expect(result.turnTrace.status).toBe("completed");
+    expect(result.turnTrace.toolRuns).toEqual(
+      expect.arrayContaining([expect.objectContaining({ toolName: "presentations.create", status: "executed" })]),
+    );
+  });
+
+  it("preserves the research grounding receipt through a safe write-jail fallback", async () => {
+    const content =
+      "Can you please do some market research on CCGs and what makes each one unique and better than the competition? Please put it into a powerpoint deck.";
+    const createChatCompletion = vi
+      .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(
+        namedToolCallCompletion("browser.search", {
+          query: "One Piece Lorcana Flesh and Blood organized play",
+          maxResults: 6,
+        }),
+      )
+      .mockResolvedValueOnce(
+        namedToolCallCompletion("browser.search", {
+          query: "Star Wars Unlimited Riftbound Gundam official support",
+          maxResults: 6,
+        }),
+      )
+      .mockResolvedValueOnce(
+        namedToolCallCompletion("browser.search", {
+          query: "North America CCG marketplace retail signals",
+          maxResults: 6,
+        }),
+      )
+      .mockResolvedValueOnce(namedToolCallCompletion("presentations.create", structuredCcgPresentationArgs()))
+      .mockResolvedValueOnce(completion("The evidence-backed CCG presentation is complete."));
+    let presentationAttempt = 0;
+    const invokeTool = vi.fn(async (request: ToolInvokeRequest): Promise<ToolInvokeResult> => {
+      if (request.toolName === "browser.search") {
+        return {
+          outcome: "executed",
+          result: {
+            results: CCG_EVIDENCE.map(([, title, url]) => ({
+              title,
+              url,
+              snippet: `${title} product, play, market, or retail evidence.`,
+              publishedAt: "2026-07-01",
+            })),
+          },
+        };
+      }
+      presentationAttempt += 1;
+      if (presentationAttempt === 1) {
+        return {
+          outcome: "blocked",
+          policyReason: "outside write jail",
+          result: { blocked: true },
+        };
+      }
+      return {
+        outcome: "executed",
+        result: {
+          path: request.args.path,
+          bytesWritten: 64_000,
+          format: "pptx",
+          title: request.args.title,
+          slideCount: 14,
+        },
+      };
+    });
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search", "presentations.create"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run(
+      turnInput({
+        content,
+        webMode: "quick",
+        historyMessages: [{ role: "user", content }],
+      }),
+    );
+
+    const presentationRequests = invokeTool.mock.calls
+      .map(([request]) => request)
+      .filter((request) => request.toolName === "presentations.create");
+    expect(presentationRequests).toHaveLength(2);
+    expect(presentationRequests[0]?.presentationGrounding).toBeDefined();
+    expect(presentationRequests[1]?.presentationGrounding).toEqual(presentationRequests[0]?.presentationGrounding);
+    expect(presentationRequests[1]?.args.path).toBe(
+      "./workspace/goatcitadel_out/ccg-competitive-landscape-v2-sess-loop24.pptx",
+    );
+    expect(result.turnTrace.status).toBe("completed");
+  });
+
+  it("corrects one scope and citation research-gate failure and then creates the deck", async () => {
+    const content =
+      "Can you please do some market research on CCGs and what makes each one unique and better than the competition? Please put it into a powerpoint deck.";
+    const createChatCompletion = vi
+      .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(
+        namedToolCallCompletion("browser.search", {
+          query: "One Piece Lorcana Flesh and Blood organized play",
+          maxResults: 6,
+        }),
+      )
+      .mockResolvedValueOnce(
+        namedToolCallCompletion("browser.search", {
+          query: "Star Wars Unlimited Riftbound Gundam official support",
+          maxResults: 6,
+        }),
+      )
+      .mockResolvedValueOnce(
+        namedToolCallCompletion("browser.search", {
+          query: "North America CCG marketplace retail signals",
+          maxResults: 6,
+        }),
+      )
+      .mockResolvedValueOnce(
+        namedToolCallCompletion("presentations.create", scopeAndCitationInvalidCcgPresentationArgs()),
+      )
+      .mockImplementationOnce(async (request) => {
+        expect(request.messages).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              role: "system",
+              content: expect.stringMatching(
+                /content\/evidence correction attempt 1 of 1.*scope or methodology.*claim citations.*240 characters.*preserve every valid source ID.*retry presentations\.create exactly once/is,
+              ),
+            }),
+          ]),
+        );
+        return namedToolCallCompletion("presentations.create", structuredCcgPresentationArgs());
+      })
+      .mockResolvedValueOnce(completion("The corrected evidence-backed CCG presentation is complete."));
+    const invokeTool = vi.fn(async (request: ToolInvokeRequest): Promise<ToolInvokeResult> => {
+      if (request.toolName === "presentations.create") {
+        return {
+          outcome: "executed",
+          result: {
+            path: "F:\\code\\personal-ai\\workspace\\goatcitadel_out\\ccg-competitive-landscape-v2.pptx",
+            bytesWritten: 64_000,
+            format: "pptx",
+            title: request.args.title,
+            slideCount: 14,
+          },
+        };
+      }
+      return {
+        outcome: "executed",
+        result: {
+          results: CCG_EVIDENCE.map(([, title, url]) => ({
+            title,
+            url,
+            snippet: `${title} product, play, market, or retail evidence.`,
+            publishedAt: "2026-07-01",
+          })),
+        },
+      };
+    });
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search", "presentations.create"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run(
+      turnInput({
+        content,
+        webMode: "quick",
+        historyMessages: [{ role: "user", content }],
+      }),
+    );
+
+    expect(createChatCompletion).toHaveBeenCalledTimes(6);
+    const correctionInstructionCount = (createChatCompletion.mock.calls[4]?.[0].messages ?? []).filter(
+      (message) =>
+        message.role === "system" &&
+        typeof message.content === "string" &&
+        message.content.includes("Research presentation content/evidence correction attempt 1 of 1."),
+    ).length;
+    expect(correctionInstructionCount).toBe(1);
+    expect(invokeTool.mock.calls.map(([request]) => request.toolName)).toEqual([
+      "browser.search",
+      "browser.search",
+      "browser.search",
+      "browser.search",
+      "presentations.create",
+    ]);
+    const blockedPresentationRuns = result.turnTrace.toolRuns.filter(
+      (run) => run.toolName === "presentations.create" && run.status === "blocked",
+    );
+    expect(blockedPresentationRuns).toHaveLength(1);
+    expect(blockedPresentationRuns[0]?.error).toMatch(
+      /research metadata is missing `geography`|has no canonical citation/i,
+    );
+    expect(result.turnTrace.status).toBe("completed");
+    expect(result.turnTrace.failure).toBeUndefined();
+  });
+
+  it("uses one shared research correction budget and stops on a distinct second gate failure", async () => {
+    const content =
+      "Can you please do some market research on CCGs and what makes each one unique and better than the competition? Please put it into a powerpoint deck.";
+    const createChatCompletion = vi
+      .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(
+        namedToolCallCompletion("browser.search", {
+          query: "One Piece Lorcana Flesh and Blood organized play",
+          maxResults: 6,
+        }),
+      )
+      .mockResolvedValueOnce(
+        namedToolCallCompletion("browser.search", {
+          query: "Star Wars Unlimited Riftbound Gundam official support",
+          maxResults: 6,
+        }),
+      )
+      .mockResolvedValueOnce(
+        namedToolCallCompletion("browser.search", {
+          query: "North America CCG marketplace retail signals",
+          maxResults: 6,
+        }),
+      )
+      .mockResolvedValueOnce(
+        namedToolCallCompletion("presentations.create", scopeAndCitationInvalidCcgPresentationArgs()),
+      )
+      .mockImplementationOnce(async (request) => {
+        expect(request.messages).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              role: "system",
+              content: expect.stringMatching(/content\/evidence correction attempt 1 of 1/is),
+            }),
+          ]),
+        );
+        return namedToolCallCompletion("presentations.create", overlongCcgPresentationArgs(8));
+      })
+      .mockImplementationOnce(async (request) => {
+        expect(request.tools).toBeUndefined();
+        return completion(
+          "The deck was not written because the corrected presentation still failed research preflight.",
+        );
+      });
+    const invokeTool = vi.fn(async (request: ToolInvokeRequest): Promise<ToolInvokeResult> => {
+      if (request.toolName !== "browser.search") {
+        throw new Error("A blocked research deck must not reach the presentation provider.");
+      }
+      return {
+        outcome: "executed",
+        result: {
+          results: CCG_EVIDENCE.map(([, title, url]) => ({
+            title,
+            url,
+            snippet: `${title} product, play, market, or retail evidence.`,
+            publishedAt: "2026-07-01",
+          })),
+        },
+      };
+    });
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search", "presentations.create"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run(
+      turnInput({
+        content,
+        webMode: "quick",
+        historyMessages: [{ role: "user", content }],
+      }),
+    );
+
+    expect(createChatCompletion).toHaveBeenCalledTimes(6);
+    const correctionInstructionCount = (createChatCompletion.mock.calls[4]?.[0].messages ?? []).filter(
+      (message) =>
+        message.role === "system" &&
+        typeof message.content === "string" &&
+        message.content.includes("Research presentation content/evidence correction attempt 1 of 1."),
+    ).length;
+    expect(correctionInstructionCount).toBe(1);
+    expect(invokeTool.mock.calls.map(([request]) => request.toolName)).toEqual([
+      "browser.search",
+      "browser.search",
+      "browser.search",
+      "browser.search",
+    ]);
+    const blockedPresentationRuns = result.turnTrace.toolRuns.filter(
+      (run) => run.toolName === "presentations.create" && run.status === "blocked",
+    );
+    expect(blockedPresentationRuns).toHaveLength(2);
+    expect(blockedPresentationRuns[0]?.error).toMatch(
+      /research metadata is missing `geography`|has no canonical citation/i,
+    );
+    expect(blockedPresentationRuns[1]?.error).toMatch(
+      /research bullet on .* is \d+ characters; rewrite it to 240 characters or fewer without dropping its citations/i,
+    );
+    expect(result.turnTrace.status).toBe("failed");
+    expect(result.turnTrace.failure).toMatchObject({ failureClass: "tool_blocked" });
+    expect(result.turnTrace.failure?.message).toMatch(
+      /research bullet on .* is \d+ characters; rewrite it to 240 characters or fewer without dropping its citations/i,
+    );
+  });
+
+  it("reuses an approved equivalent search while allowing a distinct gap-closing search", async () => {
     const content = "i want you to research the funniest jokes and then present them in a powerpoint";
     const sessionId = "sess-loop24-approved-research-deck";
     const turnId = "turn-loop24-approved-research-deck";
@@ -448,43 +915,64 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
         providerRequests.push(request);
         return namedToolCallCompletion("presentations.create", {
           path: "./workspace/goatcitadel_out/funny-jokes-approved-research.pptx",
-          slides: [
+          title: "Why Funny Jokes Work",
+          research: {
+            asOfDate: "2026-08-06",
+            geography: "Global public research context",
+            physicalDigitalBoundary: "Humor research across physical and digital publication formats",
+            inclusionCriteria: ["Publicly retrievable research or explanatory sources"],
+            exclusions: [],
+            methodology: ["Synthesize only claims retained in canonical search evidence"],
+            limitations: ["Humor remains subjective and the available evidence is bounded"],
+            competitors: ["Incongruity", "Misdirection", "Timing"],
+            comparisonCriteria: ["explanatory value"],
+          },
+          sources: [
             {
-              title: "Why Funny Jokes Work",
-              bullets: ["A research-guided comedy sampler", "Humor remains subjective"],
+              id: "laughlab",
+              title: "LaughLab and the science of jokes",
+              url: "https://example.test/laughlab",
+              publisher: "Example research",
+              role: "independent",
             },
             {
-              title: "Why We Laugh",
-              bullets: ["Incongruity and surprise overturn the audience's expected interpretation."],
-            },
-            {
-              title: "Reliable Structures",
-              bullets: ["Misdirection, callbacks, and the rule of three create comic rhythm."],
-            },
-            {
-              title: "Delivery",
-              bullets: ["A concise setup and deliberate timing give the twist room to land."],
+              id: "duplicate",
+              title: "Duplicate search",
+              url: "https://example.test/duplicate",
+              publisher: "Example research",
+              role: "independent",
             },
           ],
-        });
-      })
-      .mockImplementationOnce(async (request) => {
-        providerRequests.push(request);
-        return namedToolCallCompletion("presentations.create", {
-          path: "./workspace/goatcitadel_out/funny-jokes-approved-research.pptx",
-          title: "Why Funny Jokes Work",
           slides: [
             {
               title: "Why We Laugh",
-              bullets: ["Incongruity and surprise overturn the audience's expected interpretation."],
+              bullets: [
+                {
+                  text: "Incongruity and surprise can overturn the audience's expected interpretation.",
+                  claimKind: "analysis",
+                  sourceIds: ["laughlab"],
+                },
+              ],
             },
             {
               title: "Reliable Structures",
-              bullets: ["Misdirection, callbacks, and the rule of three create comic rhythm."],
+              bullets: [
+                {
+                  text: "Misdirection and callbacks are useful structures to examine in joke construction.",
+                  claimKind: "analysis",
+                  sourceIds: ["laughlab", "duplicate"],
+                },
+              ],
             },
             {
               title: "Delivery",
-              bullets: ["A concise setup and deliberate timing give the twist room to land."],
+              bullets: [
+                {
+                  text: "Best for a live audience when the setup stays concise and the delivery leaves room for the twist.",
+                  claimKind: "recommendation",
+                  sourceIds: [],
+                },
+              ],
             },
           ],
         });
@@ -534,8 +1022,14 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
       }),
     );
 
-    expect(invokeTool.mock.calls.map(([request]) => request.toolName)).toEqual(["presentations.create"]);
+    expect(invokeTool.mock.calls.map(([request]) => request.toolName)).toEqual([
+      "browser.search",
+      "presentations.create",
+    ]);
     expect(invokeTool.mock.calls[0]?.[0].args).toMatchObject({
+      query: "site:richardwiseman.wordpress.com LaughLab funniest joke",
+    });
+    expect(invokeTool.mock.calls[1]?.[0].args).toMatchObject({
       title: "Why Funny Jokes Work",
       slides: [
         expect.objectContaining({ title: "Why We Laugh" }),
@@ -556,7 +1050,7 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
         (message) =>
           message.role === "system" &&
           typeof message.content === "string" &&
-          message.content.includes("Do not call browser.search again during this turn"),
+          message.content.includes("Do not repeat an identical or equivalent browser.search"),
       ),
     ).toBe(true);
     expect(
@@ -564,8 +1058,7 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
         (message) =>
           message.role === "tool" &&
           typeof message.content === "string" &&
-          message.content.includes("research_evidence_complete") &&
-          message.content.includes("LaughLab and the science of jokes"),
+          message.content.includes("equivalent_search_reused"),
       ),
     ).toBe(true);
     expect(
@@ -573,7 +1066,7 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
         (message) =>
           message.role === "tool" &&
           typeof message.content === "string" &&
-          message.content.includes("research_evidence_complete"),
+          message.content.includes("duplicate search"),
       ),
     ).toBe(true);
     expect(
@@ -587,9 +1080,8 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
     const blockedPresentationRuns = result.turnTrace.toolRuns.filter(
       (run) => run.toolName === "presentations.create" && run.status === "blocked",
     );
-    expect(blockedPresentationRuns).toHaveLength(2);
+    expect(blockedPresentationRuns).toHaveLength(1);
     expect(blockedPresentationRuns.map((run) => run.error).join(" ")).toMatch(/duplicates.*title slide/i);
-    expect(blockedPresentationRuns.map((run) => run.error).join(" ")).toMatch(/missing a specific title/i);
     expect(result.assistantContent).not.toContain("sandbox:/");
     expect(result.assistantContent).toContain(
       "/api/v1/files/download?relativePath=goatcitadel_out%2Ffunny-jokes-approved-research.pptx",
@@ -652,7 +1144,7 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
       mode: "cowork",
       content: "Put all that information into a real PowerPoint presentation.",
       historyMessages: [
-        { role: "user", content: "Research the benefits and practical routine for daily walking." },
+        { role: "user", content: "Explain the benefits and a practical routine for daily walking." },
         { role: "assistant", content: WALKING_RESEARCH },
         { role: "user", content: "Put all that information into a real PowerPoint presentation." },
       ],
@@ -714,7 +1206,8 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
     expect(invokeTool).not.toHaveBeenCalled();
     expect(
       result.turnTrace.toolRuns.filter(
-        (run) => run.toolName === "presentations.create" && run.error?.includes("content quality gate"),
+        (run) =>
+          run.toolName === "presentations.create" && run.error?.includes("research presentation content/evidence gate"),
       ),
     ).toHaveLength(2);
     expect(result.turnTrace.status).toBe("failed");
@@ -1110,7 +1603,7 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
       content: "Put all that information into a real PowerPoint presentation.",
       modelContent: "I can outline the deck, but I did not create a PowerPoint file.",
       historyMessages: [
-        { role: "user" as const, content: "Research the benefits and practical routine for daily walking." },
+        { role: "user" as const, content: "Explain the benefits and a practical routine for daily walking." },
         { role: "assistant" as const, content: WALKING_RESEARCH },
         { role: "user" as const, content: "Put all that information into a real PowerPoint presentation." },
       ],
@@ -1380,6 +1873,153 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
     expect(result.assistantContent).not.toContain("Source URLs:");
   });
 });
+
+function structuredCcgPresentationArgs(): Record<string, unknown> {
+  const competitors = [
+    "Magic: The Gathering",
+    "Pokémon",
+    "Yu-Gi-Oh!",
+    "One Piece",
+    "Disney Lorcana",
+    "Flesh and Blood",
+    "Star Wars: Unlimited",
+    "Riftbound",
+    "Gundam",
+  ];
+  const profileSlides = CCG_EVIDENCE.slice(0, 9).map(([id, title]) => ({
+    title: `${title} fit`,
+    archetype: "narrative",
+    bullets: [
+      {
+        text: `${title} mechanics/player benefit: documented gameplay creates a distinct player experience. Learning curve/strategic depth: documented rules support a qualitative fit.`,
+        claimKind: "fact",
+        sourceIds: [id],
+      },
+      {
+        text: "Entry-product and ongoing cost: not measured comparably. IP/collectibility appeal: documented brand proposition. Format/organized play: documented support.",
+        claimKind: "analysis",
+        sourceIds: [id],
+      },
+      {
+        text: "Local play/digital access: reviewed separately. Retail demand/community building: not measured. Release/SKU burden, singles liquidity, and inventory risk: not measured.",
+        claimKind: "analysis",
+        sourceIds: [id],
+      },
+      {
+        text: `Recommendation: Best fit for players or retailers aligned with ${title}; trade-off: verify local demand and community depth.`,
+        claimKind: "recommendation",
+        sourceIds: [],
+      },
+    ],
+  }));
+  return {
+    path: "./workspace/goatcitadel_out/ccg-competitive-landscape-v2.pptx",
+    title: "CCG Competitive Landscape 2026: Best Fits for Players and Retailers",
+    research: {
+      asOfDate: "2026-08-06",
+      geography: "North America with global scale context",
+      physicalDigitalBoundary: "Physical CCGs in the core comparison; digital clients in an appendix",
+      inclusionCriteria: ["Active North American retail distribution and organized play"],
+      exclusions: ["Digital-only games are separated from the physical comparison"],
+      methodology: ["Apply one player and retailer rubric to every core physical game"],
+      limitations: ["Public sources do not expose directly comparable revenue for every title"],
+      competitors,
+      comparisonCriteria: [
+        "Signature mechanics and resulting player benefit",
+        "Learning curve and strategic depth",
+        "Dated entry-product and ongoing cost, or explicit not measured",
+        "IP and collectibility appeal",
+        "Format and organized-play support",
+        "Local-play and digital access",
+        "Retail demand and community-building potential",
+        "Release or SKU burden, singles liquidity, and inventory risk",
+        "Best-fit player or store profile and major trade-off",
+      ],
+    },
+    sources: CCG_EVIDENCE.map(([id, title, url, role]) => ({
+      id,
+      title,
+      url,
+      publisher: new URL(url).hostname,
+      role,
+    })),
+    slides: [
+      ...profileSlides,
+      {
+        title: "Physical CCG comparison matrix",
+        archetype: "matrix",
+        table: {
+          headers: ["Game", "Differentiated fit"],
+          rows: CCG_EVIDENCE.slice(0, 9).map(([id, title]) => [
+            { text: title, sourceIds: [id] },
+            { text: "Documented differentiated fit", sourceIds: [id] },
+          ]),
+        },
+      },
+      {
+        title: "Qualitative positioning map",
+        archetype: "comparison",
+        bullets: [
+          {
+            text: "The positioning spectrum separates documented ecosystem breadth from the amount of local validation still required.",
+            claimKind: "analysis",
+            sourceIds: ["tcgplayer", "icv2", "retailer"],
+          },
+        ],
+        table: {
+          headers: ["Positioning axis", "Qualitative interpretation"],
+          rows: [
+            [
+              { text: "Established ecosystem", sourceIds: ["tcgplayer", "icv2"] },
+              { text: "Broader documented retail and play signals", sourceIds: ["tcgplayer", "icv2"] },
+            ],
+            [
+              { text: "Local validation needed", sourceIds: ["retailer"] },
+              { text: "Test community depth before expanding inventory", sourceIds: ["retailer"] },
+            ],
+          ],
+        },
+      },
+      {
+        title: "Player fit guide",
+        archetype: "comparison",
+        bullets: [
+          {
+            text: "Best for each player need depends on learning curve, organized play, collectibility, and local availability.",
+            claimKind: "recommendation",
+            sourceIds: [],
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function overlongCcgPresentationArgs(repetitions: number): Record<string, unknown> {
+  const args = structuredCcgPresentationArgs();
+  const slides = args.slides as Array<Record<string, unknown>>;
+  const bullets = slides[0]?.bullets as Array<Record<string, unknown>>;
+  bullets[0] = {
+    ...bullets[0],
+    text: [
+      "Magic has a documented product and organized-play proposition with a detailed strategic profile.",
+      ...Array.from({ length: repetitions }, () => "Its official materials document strategic depth and play support."),
+    ].join(" "),
+  };
+  return args;
+}
+
+function scopeAndCitationInvalidCcgPresentationArgs(): Record<string, unknown> {
+  const args = structuredCcgPresentationArgs();
+  delete (args.research as Record<string, unknown>).geography;
+  const slides = args.slides as Array<Record<string, unknown>>;
+  const bullets = slides[0]?.bullets as Array<Record<string, unknown>>;
+  bullets[0] = {
+    ...bullets[0],
+    sourceIds: [],
+  };
+  return args;
+}
 
 function createExecuteToolCall(input: {
   storage?: ChatTurnAgentRunnerDeps["storage"];

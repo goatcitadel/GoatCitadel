@@ -189,7 +189,79 @@ export function buildCompactToolResultMetadata(result: Record<string, unknown>):
   if (localBusinessResearch) {
     compacted.localBusinessResearch = localBusinessResearch;
   }
+  const renderManifest = compactPresentationRenderManifest(result.renderManifest);
+  if (renderManifest) {
+    compacted.renderManifest = renderManifest;
+  }
+  const packageAudit = compactPresentationPackageAudit(result.packageAudit);
+  if (packageAudit) {
+    compacted.packageAudit = packageAudit;
+  }
   return compacted;
+}
+
+function compactPresentationRenderManifest(value: unknown): Record<string, unknown> | undefined {
+  const record = toPlainRecord(value);
+  if (!record || readCount(record.slideCount) === undefined) {
+    return undefined;
+  }
+  return compactDefinedRecord({
+    slideCount: readCount(record.slideCount),
+    contentSlideCount: readCount(record.contentSlideCount),
+    layoutCounts: compactCountMap(record.layoutCounts),
+    minimumFontSize: readNumber(record.minimumFontSize),
+    minimumTitleFontSize: readNumber(record.minimumTitleFontSize),
+    minimumBodyFontSize: readNumber(record.minimumBodyFontSize),
+    minimumTableFontSize: readNumber(record.minimumTableFontSize),
+    minimumSourceFontSize: readNumber(record.minimumSourceFontSize),
+    minimumCitationFontSize: readNumber(record.minimumCitationFontSize),
+    minimumSlideNumberFontSize: readNumber(record.minimumSlideNumberFontSize),
+    hyperlinkCount: readCount(record.hyperlinkCount),
+    sourceCount: readCount(record.sourceCount),
+    tableCount: readCount(record.tableCount),
+    chartCount: readCount(record.chartCount),
+    continuationCount: readCount(record.continuationCount),
+    visualCount: readCount(record.visualCount),
+    authoredNoteCount: readCount(record.authoredNoteCount),
+  });
+}
+
+function compactPresentationPackageAudit(value: unknown): Record<string, unknown> | undefined {
+  const record = toPlainRecord(value);
+  if (!record || typeof record.passed !== "boolean") {
+    return undefined;
+  }
+  const observed = toPlainRecord(record.observed);
+  return compactDefinedRecord({
+    passed: record.passed,
+    findingCount: Array.isArray(record.findings) ? record.findings.length : undefined,
+    observed: observed
+      ? compactDefinedRecord({
+          slideCount: readCount(observed.slideCount),
+          hyperlinkCount: readCount(observed.hyperlinkCount),
+          uniqueHyperlinkTargetCount: readCount(observed.uniqueHyperlinkTargetCount),
+          tableCount: readCount(observed.tableCount),
+          chartCount: readCount(observed.chartCount),
+          pictureCount: readCount(observed.pictureCount),
+          authoredNoteCount: readCount(observed.authoredNoteCount),
+          layoutCounts: compactCountMap(observed.layoutCounts),
+        })
+      : undefined,
+  });
+}
+
+function compactCountMap(value: unknown): Record<string, number> | undefined {
+  const record = toPlainRecord(value);
+  if (!record) return undefined;
+  const entries = Object.entries(record)
+    .filter(([key, count]) => key.length > 0 && key.length <= 80 && readCount(count) !== undefined)
+    .slice(0, 32)
+    .map(([key, count]) => [key, readCount(count) as number]);
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+function readCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
 function compactLocalBusinessResearchRecord(value: unknown): Record<string, unknown> | undefined {

@@ -338,7 +338,7 @@ describe("tool executor tail coverage", () => {
     expect(designReport.designQuality).toMatchObject({
       skillId: "design-intelligence",
       status: "warning",
-      retryAttempted: true,
+      retryAttempted: false,
     });
     expect(deck.subarray(0, 2).toString("utf8")).toBe("PK");
     expect(deck.includes("ppt/presentation.xml")).toBe(true);
@@ -523,7 +523,7 @@ describe("tool executor tail coverage", () => {
     };
     expect(designReport.designQuality).toMatchObject({
       status: "warning",
-      retryAttempted: true,
+      retryAttempted: false,
       findings: expect.arrayContaining([expect.objectContaining({ id: "asset-specificity" })]),
     });
     expect(designReport.validation?.find((check) => check.id === "asset-specificity")?.status).toBe("warning");

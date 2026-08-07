@@ -169,6 +169,7 @@ import {
   mergeWorkspaceFileDownloadContent,
   normalizePathForComparison,
 } from "./chat-turn-agent-runner/artifact-write-helpers.js";
+import { groundResearchPresentationArgs } from "./chat-turn-agent-runner/presentation-research-evidence.js";
 import { repairToolCalls, type ToolCallRepairFeedback } from "./chat-agent-tool-call-repair.js";
 import { MAX_INLINE_FILE_DOWNLOAD_BYTES } from "./files-route-service.js";
 import {
@@ -363,6 +364,8 @@ import { assertNoToolOutputInjection } from "./assembled-prompt-injection-guard.
 const FINAL_PASS_COMPLETION_TIMEOUT_MS = CHAT_COMPLETION_TIMEOUT_MS_BY_MODE.deep;
 const TOOL_FAILURE_CIRCUIT_BREAKER_THRESHOLD = 2;
 const TOOL_FAILURE_RATE_LIMIT_THRESHOLD = 4;
+const RESEARCH_PRESENTATION_CONTENT_EVIDENCE_GATE_PATTERN =
+  /\bresearch presentation content\/evidence gate blocked this deck before writing:/iu;
 // P0-B: at most one tool-less re-ask when a terminal turn produced no
 // user-visible answer (empty or reasoning-only) but budget remains. Bounded so a
 // model that keeps emitting nothing cannot spin the loop.
@@ -1980,6 +1983,7 @@ export class ChatTurnAgentRunner {
     let suppressIncompleteCompletionRepair = false;
     let terminalProviderFailure = false;
     const toolFailureSignatureCounts = new Map<string, number>();
+    let researchPresentationCorrectionAttempted = persistedSettledToolRuns.some(isResearchPresentationGateRun);
     let promptLabToolComplianceRetryIssued = false;
     let promptLabSynthesisOnly = false;
     let quickWebSynthesisOnly = false;
@@ -3302,9 +3306,9 @@ export class ChatTurnAgentRunner {
         content: buildEvidenceGroundingInstruction(),
       } as ChatCompletionMessage);
     }
-    const researchArtifactSearchEvidenceComplete =
+    const approvedResearchArtifactSearchSettled =
       intents.presentationArtifact && hasApprovedResearchArtifactSearchEvidence(toolRuns);
-    if (researchArtifactSearchEvidenceComplete) {
+    if (approvedResearchArtifactSearchSettled) {
       conversationMessages.push({
         role: "system",
         content: buildResearchArtifactSearchCompletionInstruction(),
@@ -3994,7 +3998,7 @@ export class ChatTurnAgentRunner {
             toolCalls.every(
               (call) =>
                 call.toolName !== "browser.search" ||
-                !findReusableBrowserSearchEvidence(toolRuns, call.args.query, researchArtifactSearchEvidenceComplete),
+                !findReusableBrowserSearchEvidence(toolRuns, call.args.query, !intents.presentationArtifact),
             ) &&
             // Mirror the serial path's wall-clock gate before starting ANY
             // work: with the turn budget effectively spent, fall back to the
@@ -4042,11 +4046,7 @@ export class ChatTurnAgentRunner {
             throwIfChatTurnCancelled(input);
             const reusableSearchEvidence =
               toolCall.toolName === "browser.search"
-                ? findReusableBrowserSearchEvidence(
-                    toolRuns,
-                    toolCall.args.query,
-                    researchArtifactSearchEvidenceComplete,
-                  )
+                ? findReusableBrowserSearchEvidence(toolRuns, toolCall.args.query, !intents.presentationArtifact)
                 : undefined;
             if (reusableSearchEvidence?.researchArtifactEvidenceComplete) {
               answeredToolCallIds.add(toolCall.id);
@@ -4293,7 +4293,22 @@ export class ChatTurnAgentRunner {
               break;
             }
 
-            if (executed.record.status === "failed" || executed.record.status === "blocked") {
+            const researchPresentationGateFailure = isResearchPresentationGateRun(executed.record);
+            let requestResearchPresentationCorrection = false;
+            if (researchPresentationGateFailure) {
+              if (researchPresentationCorrectionAttempted) {
+                circuitBreakerReason = `Research presentation correction failed after one bounded retry: ${executed.record.error ?? "the research presentation still fails the content/evidence gate."}`;
+                circuitBreakerFailureClass = "tool_blocked";
+              } else {
+                researchPresentationCorrectionAttempted = true;
+                requestResearchPresentationCorrection = true;
+              }
+            }
+
+            if (
+              (executed.record.status === "failed" || executed.record.status === "blocked") &&
+              !researchPresentationGateFailure
+            ) {
               const retryableFailure =
                 executed.record.status === "failed" && isRetryableToolFailure(executed.record.error);
               // Rate-limited failures still count toward the breaker but with a higher
@@ -4340,6 +4355,12 @@ export class ChatTurnAgentRunner {
               tool_call_id: toolCall.id,
               content: serializeToolResultForModel(toolResultPayload),
             } as ChatCompletionMessage);
+            if (requestResearchPresentationCorrection) {
+              conversationMessages.push({
+                role: "system",
+                content: buildResearchPresentationCorrectionInstruction(),
+              } as ChatCompletionMessage);
+            }
             const researchListSourceFailureInstruction = buildResearchListSourceFailureInstruction({
               researchListIntent: intents.researchList,
               toolRun: executed.record,
@@ -4612,6 +4633,7 @@ export class ChatTurnAgentRunner {
       intents.presentationArtifact &&
       toolSchema.canonicalToModel.has("presentations.create") &&
       !toolRuns.some((run) => run.toolName === "presentations.create" && run.status === "executed") &&
+      !toolRuns.some(isResearchPresentationGateRun) &&
       toolRuns.filter(
         (run) =>
           run.toolName === "presentations.create" &&
@@ -6463,6 +6485,7 @@ export class ChatTurnAgentRunner {
               input: input.input,
               toolName: preflight.toolName,
               args: preflight.args,
+              presentationGrounding: preflight.presentationGrounding,
               policyReason: result.policyReason,
               sourceAttribution,
               effectInvocationContext,
@@ -7148,7 +7171,7 @@ export class ChatTurnAgentRunner {
       matchedSourceUrlCount?: number;
     };
   } {
-    const args = { ...input.rawArgs };
+    let args = { ...input.rawArgs };
     let presentationGrounding:
       | {
           sourceTermCount: number;
@@ -7206,6 +7229,20 @@ export class ChatTurnAgentRunner {
           blockedReason: redirectedBlockedUrl.blockedReason,
         };
       }
+    }
+    if (
+      isBrowserSearch &&
+      !input.evalIntegrityTurn &&
+      typeof args.query === "string" &&
+      detectPresentationArtifactIntent(input.userContent) &&
+      looksLikeContinuationSearchPrompt(args.query)
+    ) {
+      return {
+        toolName: effectiveToolName,
+        args,
+        blockedReason:
+          "execution skipped: research-artifact browser.search requires a specific gap-closing query; continuation-only search wording would repeat existing evidence",
+      };
     }
     if (isBrowserSearch && !input.evalIntegrityTurn && !input.quickWebProfile) {
       const promotedUrl = inferBrowserNavigateUrlFromRepeatedSearches(input.userContent, input.priorToolRuns);
@@ -7343,24 +7380,42 @@ export class ChatTurnAgentRunner {
     }
 
     if (input.toolName === "presentations.create" && !input.evalIntegrityTurn) {
+      const researchGrounding = groundResearchPresentationArgs({
+        args,
+        userContent: input.userContent,
+        priorToolRuns: input.priorToolRuns,
+        historyMessages: input.historyMessages,
+      });
+      args = researchGrounding.args;
       const quality = analyzePresentationContentQuality({
         args,
         content: input.userContent,
         historyMessages: input.historyMessages,
       });
-      if (!quality.passed) {
+      const findings = [...quality.findings, ...researchGrounding.report.findings];
+      if (!quality.passed || !researchGrounding.report.passed) {
+        const gateName = researchGrounding.report.required
+          ? "research presentation content/evidence gate"
+          : "presentation content quality gate";
         return {
           toolName: effectiveToolName,
           args,
-          blockedReason: `presentation content quality gate blocked this deck before writing: ${quality.findings.join(" ")}`,
+          blockedReason: `${gateName} blocked this deck before writing: ${findings.join(" ")}`,
         };
       }
-      presentationGrounding = {
-        sourceTermCount: quality.sourceTermCount,
-        matchedSourceTermCount: quality.matchedSourceTermCount,
-        sourceUrlCount: quality.sourceUrlCount,
-        matchedSourceUrlCount: quality.matchedSourceUrlCount,
-      };
+      presentationGrounding = researchGrounding.report.required
+        ? {
+            sourceTermCount: researchGrounding.report.materialClaimCount,
+            matchedSourceTermCount: researchGrounding.report.citedMaterialClaimCount,
+            sourceUrlCount: researchGrounding.report.declaredSourceCount,
+            matchedSourceUrlCount: researchGrounding.report.matchedSourceCount,
+          }
+        : {
+            sourceTermCount: quality.sourceTermCount,
+            matchedSourceTermCount: quality.matchedSourceTermCount,
+            sourceUrlCount: quality.sourceUrlCount,
+            matchedSourceUrlCount: quality.matchedSourceUrlCount,
+          };
     }
 
     const promptLabBroadSearchBlock = describePromptLabBroadLocalSearchBlock({
@@ -7384,6 +7439,7 @@ export class ChatTurnAgentRunner {
     input: ChatTurnAgentRunnerInput;
     toolName: string;
     args: Record<string, unknown>;
+    presentationGrounding?: ToolInvokeRequest["presentationGrounding"];
     policyReason?: string;
     sourceAttribution?: ToolInvokeRequest["sourceAttribution"];
     effectInvocationContext: ToolEffectInvocationContext;
@@ -7452,6 +7508,7 @@ export class ChatTurnAgentRunner {
           reason: `chat mode ${input.input.mode}; safe write fallback`,
         },
         policyContext: buildTurnToolPolicyContext(input.input),
+        ...(input.presentationGrounding ? { presentationGrounding: input.presentationGrounding } : {}),
       },
       {
         effectContext: input.effectInvocationContext,
@@ -8354,7 +8411,11 @@ function buildToolFailureGuidanceBase(input: {
   if (normalizedError.includes("write jail") || normalizedError.includes("outside write")) {
     return "Use a safe fallback path inside the workspace write jail.";
   }
-  if (normalizedError.includes("presentation content quality gate")) {
+  if (
+    normalizedError.includes("presentation content quality gate") ||
+    normalizedError.includes("research presentation content/evidence gate") ||
+    normalizedError.includes("research presentation content evidence gate")
+  ) {
     return "Regenerate the deck from the substantive conversation context. Set the required title to a specific subject and keep slides content-only; never omit title or repeat it as the first slide. Do not repeat the request or presentation-template instructions as content.";
   }
   if (input.toolName.startsWith("shell.") && normalizedError.includes("requires approval")) {
@@ -8430,10 +8491,11 @@ function buildResearchArtifactSearchCompletionInstruction(): string {
   return [
     "Research-artifact continuation rule:",
     "- An operator-approved search has settled and this turn already has usable search results.",
-    "- Do not call browser.search again during this turn.",
-    "- Use the gathered evidence now and create the requested presentation with presentations.create.",
+    "- Do not repeat an identical or equivalent browser.search; the Gateway will reuse that settled evidence.",
+    "- You may run a materially different gap-closing search when the current evidence does not cover the required subjects or comparison criteria.",
+    "- Use only canonical tool evidence in the structured research metadata, sources registry, and claim citations passed to presentations.create.",
     "- Set a specific required title and keep slides content-only; never omit title or repeat it as the first slide.",
-    "- If the evidence is limited, state that limitation in the deck and final response instead of starting another search.",
+    "- If bounded evidence remains limited, state that limitation in the deck and final response instead of inventing coverage.",
   ].join("\n");
 }
 
@@ -9471,6 +9533,23 @@ function isRateLimitedToolFailure(errorText: string | undefined): boolean {
   return normalized.includes("429") || normalized.includes("rate limit");
 }
 
+function isResearchPresentationGateRun(run: ChatToolRunRecord): boolean {
+  return (
+    run.toolName === "presentations.create" &&
+    (run.status === "blocked" || run.status === "failed") &&
+    RESEARCH_PRESENTATION_CONTENT_EVIDENCE_GATE_PATTERN.test(run.error ?? "")
+  );
+}
+
+function buildResearchPresentationCorrectionInstruction(): string {
+  return [
+    "Research presentation content/evidence correction attempt 1 of 1.",
+    "Correct every exact preflight finding in the preceding presentations.create tool result, including any missing research scope or methodology, canonical evidence or source coverage, claim citations, dated support for numeric claims, comparison criteria or competitor coverage, evidence-bearing title or structured table-header issue, and research bullet longer than 240 characters.",
+    "Preserve every valid source ID and citation; do not delete valid evidence, invent a source, or claim evidence that the successful research tool runs did not return.",
+    "Keep all other presentation arguments unchanged and retry presentations.create exactly once. Do not call other tools.",
+  ].join(" ");
+}
+
 function shouldTripToolCircuitBreakerImmediately(errorText: string | undefined): boolean {
   if (!errorText) {
     return false;
@@ -10185,7 +10264,16 @@ function inferQueryFromPrompt(userContent: string): string | undefined {
 
 function normalizeSearchReuseQuery(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
-  const normalized = value.trim().toLowerCase().replace(/\s+/gu, " ");
+  const normalized = value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/gu, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, " ")
+    .split(/\s+/u)
+    .filter(Boolean)
+    .filter((token) => !["please", "search", "browse", "lookup", "online", "web", "the"].includes(token))
+    .sort()
+    .join(" ");
   return normalized || undefined;
 }
 
@@ -14996,25 +15084,19 @@ function hasApprovedResearchArtifactSearchEvidence(toolRuns: readonly ChatToolRu
 function findReusableBrowserSearchEvidence(
   toolRuns: readonly ChatToolRunRecord[],
   query: unknown,
-  freezeResearchArtifactEvidence: boolean,
+  reuseContinuationPrompt: boolean,
 ): { run: ChatToolRunRecord; researchArtifactEvidenceComplete: boolean } | undefined {
   const candidates = [...toolRuns]
     .reverse()
     .filter((run) => run.toolName === "browser.search" && run.status === "executed" && run.result !== undefined);
-  if (freezeResearchArtifactEvidence) {
-    const usableEvidence = candidates.find(hasUsableBrowserSearchResults);
-    if (usableEvidence) {
-      return { run: usableEvidence, researchArtifactEvidenceComplete: true };
-    }
-  }
   const normalizedQuery = normalizeSearchReuseQuery(query);
   const reusable = candidates.find(
     (run) =>
       normalizeSearchReuseQuery(run.args?.query) !== undefined &&
       (normalizeSearchReuseQuery(run.args?.query) === normalizedQuery ||
-        (typeof query === "string" && looksLikeContinuationSearchPrompt(query))),
+        (reuseContinuationPrompt && typeof query === "string" && looksLikeContinuationSearchPrompt(query))),
   );
-  return reusable ? { run: reusable, researchArtifactEvidenceComplete: false } : undefined;
+  return reusable ? { run: reusable, researchArtifactEvidenceComplete: Boolean(reusable.approvalId) } : undefined;
 }
 
 function hasUsableBrowserSearchResults(run: ChatToolRunRecord): boolean {
@@ -15048,10 +15130,10 @@ function buildResearchArtifactSearchReuseResult(run: ChatToolRunRecord): Record<
   return {
     ...result,
     goatcitadelContinuation: {
-      status: "research_evidence_complete",
+      status: "equivalent_search_reused",
       reusedFromToolRunId: run.toolRunId,
       instruction:
-        "Do not request another browser.search in this turn. Use these gathered results and create the requested presentation now.",
+        "This identical search is already settled. Use it now, or run only a materially different gap-closing search before creating the presentation.",
     },
   };
 }

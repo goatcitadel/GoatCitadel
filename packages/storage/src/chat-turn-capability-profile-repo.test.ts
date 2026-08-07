@@ -118,6 +118,10 @@ function buildDraft(): ChatTurnCapabilityProfileDraft {
 function buildDraftWithProviderDefinition(
   providerDefinition: Record<string, unknown>,
   suffix: string,
+  names: { canonicalName: string; modelName: string } = {
+    canonicalName: "credential_probe",
+    modelName: "credential_probe",
+  },
 ): ChatTurnCapabilityProfileDraft {
   const draft = buildDraft();
   draft.profileId = `chat-capability-profile-${suffix}`;
@@ -127,16 +131,16 @@ function buildDraftWithProviderDefinition(
   draft.catalog.callableCount = 1;
   draft.selection.tools = [
     {
-      canonicalName: "credential_probe",
-      modelName: "credential_probe",
+      canonicalName: names.canonicalName,
+      modelName: names.modelName,
       definitionHash,
       providerDefinition,
     },
   ];
-  draft.selection.modelNameAllowMap = [{ modelName: "credential_probe", canonicalName: "credential_probe" }];
+  draft.selection.modelNameAllowMap = [{ modelName: names.modelName, canonicalName: names.canonicalName }];
   draft.governance.policyDecisions = [
     {
-      toolName: "credential_probe",
+      toolName: names.canonicalName,
       allowed: true,
       requiresApproval: true,
       reasonCodes: ["approval_required"],
@@ -144,12 +148,12 @@ function buildDraftWithProviderDefinition(
   ];
   draft.governance.authReadiness.push({
     kind: "tool",
-    ref: "credential_probe",
+    ref: names.canonicalName,
     status: "unknown",
     reasonCodes: ["runtime_auth_check_required"],
   });
   draft.governance.approval.selectedToolCount = 1;
-  draft.governance.approval.toolsRequiringApproval = ["credential_probe"];
+  draft.governance.approval.toolsRequiringApproval = [names.canonicalName];
   return draft;
 }
 
@@ -167,6 +171,96 @@ function credentialToolDefinition(apiKeySchema: unknown): Record<string, unknown
       },
     },
   };
+}
+
+function richPresentationToolDefinition(): Record<string, unknown> {
+  return {
+    type: "function",
+    function: {
+      name: "presentations_create",
+      description: "Create a real PowerPoint deck with structured research evidence.",
+      parameters: {
+        type: "object",
+        properties: {
+          slides: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                bullets: {
+                  type: "array",
+                  items: {
+                    oneOf: [
+                      { type: "string" },
+                      {
+                        type: "object",
+                        properties: {
+                          text: { type: "string" },
+                          claimKind: { type: "string", enum: ["fact", "analysis", "recommendation"] },
+                          sourceIds: { type: "array", items: { type: "string" }, uniqueItems: true },
+                        },
+                        required: ["text"],
+                      },
+                    ],
+                  },
+                },
+                table: {
+                  type: "object",
+                  properties: {
+                    rows: {
+                      type: "array",
+                      items: {
+                        type: "array",
+                        items: {
+                          oneOf: [
+                            { type: "string" },
+                            {
+                              type: "object",
+                              properties: {
+                                text: { type: "string" },
+                                sourceIds: { type: "array", items: { type: "string" }, uniqueItems: true },
+                              },
+                              required: ["text"],
+                            },
+                          ],
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          research: {
+            type: "object",
+            properties: {
+              asOfDate: { type: "string" },
+              methodology: { type: "array", items: { type: "string" } },
+              competitors: { type: "array", items: { type: "string" } },
+            },
+          },
+          sources: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                id: { type: "string" },
+                url: { type: "string", pattern: "^https://" },
+                role: { type: "string", enum: ["official", "independent", "retailer", "marketplace"] },
+              },
+            },
+          },
+        },
+        required: ["slides"],
+      },
+    },
+  };
+}
+
+function maxJsonDepth(value: unknown, depth = 0): number {
+  if (value === null || typeof value !== "object") return depth;
+  const children = Array.isArray(value) ? value : Object.values(value as Record<string, unknown>);
+  return children.reduce((maximum, child) => Math.max(maximum, maxJsonDepth(child, depth + 1)), depth);
 }
 
 function addRequesterMcpBinding(draft: ChatTurnCapabilityProfileDraft): void {
@@ -536,6 +630,33 @@ describe("ChatTurnCapabilityProfileRepository", () => {
       error: "Persisted capability profile failed integrity verification.",
     });
     assert.doesNotMatch(inspection.error ?? "", /tampered-profile|column bindings|profileHash/);
+    db.close();
+  });
+
+  it("admits the shipped rich presentation depth while rejecting a deeper provider schema", () => {
+    const { db, repo } = createStore();
+    const presentationNames = {
+      canonicalName: "presentations.create",
+      modelName: "presentations_create",
+    };
+    const richProfile = sealChatTurnCapabilityProfile(
+      buildDraftWithProviderDefinition(richPresentationToolDefinition(), "rich-presentation", presentationNames),
+    );
+
+    assert.equal(maxJsonDepth(richProfile), 21);
+    assert.deepEqual(createWithFrozenIncarnation(db, repo, richProfile), richProfile);
+
+    const pathologicalDefinition = richPresentationToolDefinition();
+    let nested = pathologicalDefinition;
+    for (let index = 0; index < 18; index += 1) {
+      nested.pathological = {};
+      nested = nested.pathological as Record<string, unknown>;
+    }
+    const pathologicalProfile = sealChatTurnCapabilityProfile(
+      buildDraftWithProviderDefinition(pathologicalDefinition, "pathological-presentation", presentationNames),
+    );
+    assert.equal(maxJsonDepth(pathologicalProfile), 22);
+    assert.throws(() => repo.create(pathologicalProfile), /exceeds the 21 JSON depth limit/);
     db.close();
   });
 

@@ -109,6 +109,26 @@ describe("tool registry", () => {
     expect(tool?.argSchema).toMatchObject({
       required: ["path", "title", "slides"],
       properties: {
+        research: { required: expect.arrayContaining(["asOfDate", "comparisonCriteria"]) },
+        sources: {
+          items: {
+            properties: {
+              role: { enum: expect.arrayContaining(["official", "retailer", "financial"]) },
+            },
+          },
+        },
+        slides: {
+          items: {
+            properties: {
+              archetype: { enum: expect.arrayContaining(["matrix", "chart", "sources", "closing"]) },
+              bullets: {
+                items: { oneOf: expect.arrayContaining([expect.objectContaining({ maxLength: 240 })]) },
+              },
+              table: { required: ["headers", "rows"] },
+              chart: { required: ["type", "categories", "series"] },
+            },
+          },
+        },
         design: {
           properties: {
             skillId: { enum: ["design-intelligence"] },
@@ -117,6 +137,8 @@ describe("tool registry", () => {
       },
     });
     expect(tool?.usageHints?.join("\n")).toContain("Design Quality V1");
+    expect(JSON.stringify(tool?.argSchema)).not.toContain("speakerNotes");
+    expect(tool?.usageHints?.join("\n")).toContain("does not accept model-authored presenter notes");
   });
 
   it("exposes document creation as a governed artifact tool", () => {

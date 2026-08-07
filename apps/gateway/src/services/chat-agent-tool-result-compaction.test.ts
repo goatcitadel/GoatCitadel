@@ -162,6 +162,68 @@ describe("chat-agent-tool-result-compaction", () => {
     });
   });
 
+  it("preserves the bounded presentation manifest and package-audit receipt", () => {
+    const compacted = compactToolResultForTurn(
+      {
+        path: "C:/workspace/goatcitadel_out/research.pptx",
+        slideCount: 18,
+        renderManifest: {
+          slideCount: 18,
+          contentSlideCount: 14,
+          layoutCounts: { hero: 1, table: 6, sources: 4 },
+          minimumFontSize: 10,
+          minimumBodyFontSize: 16,
+          hyperlinkCount: 42,
+          sourceCount: 15,
+          tableCount: 6,
+          chartCount: 1,
+          continuationCount: 4,
+          visualCount: 8,
+          authoredNoteCount: 0,
+        },
+        packageAudit: {
+          passed: true,
+          findings: [],
+          observed: {
+            slideCount: 18,
+            hyperlinkCount: 42,
+            uniqueHyperlinkTargetCount: 15,
+            tableCount: 6,
+            chartCount: 1,
+            pictureCount: 1,
+            authoredNoteCount: 0,
+            layoutCounts: { hero: 1, table: 6, sources: 4 },
+          },
+        },
+        designReport: { internal: "x".repeat(20_000) },
+      },
+      artifact({ compactMode: "structured", snippet: "artifact preview", contentType: "application/json" }),
+    );
+
+    expect(compacted).toMatchObject({
+      renderManifest: {
+        slideCount: 18,
+        contentSlideCount: 14,
+        layoutCounts: { hero: 1, table: 6, sources: 4 },
+        minimumBodyFontSize: 16,
+        hyperlinkCount: 42,
+        sourceCount: 15,
+        tableCount: 6,
+        chartCount: 1,
+      },
+      packageAudit: {
+        passed: true,
+        findingCount: 0,
+        observed: {
+          slideCount: 18,
+          hyperlinkCount: 42,
+          uniqueHyperlinkTargetCount: 15,
+        },
+      },
+    });
+    expect(compacted.designReport).toBeUndefined();
+  });
+
   it("preserves compact local-business research evidence during structured compaction", () => {
     const compacted = compactToolResultForTurn(
       {

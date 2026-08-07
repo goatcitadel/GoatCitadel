@@ -127,10 +127,7 @@ export function buildSyntheticPresentationCreateArgs(
   return {
     path: path ?? buildSafeWritePath("presentation.pptx", safeWriteFallbackDir),
     title,
-    slides: brief.sections.map((section) => ({
-      ...section,
-      speakerNotes: "Grounded in the prior conversation context.",
-    })),
+    slides: brief.sections,
     design: {
       mode: "polished",
       skillId: "design-intelligence",
@@ -162,9 +159,7 @@ export function analyzePresentationContentQuality(input: {
       typeof input.args.subtitle === "string" ? input.args.subtitle : "",
       ...slides.flatMap((slide) => [
         typeof slide.title === "string" ? slide.title : "",
-        ...(Array.isArray(slide.bullets)
-          ? slide.bullets.filter((value): value is string => typeof value === "string")
-          : []),
+        ...(Array.isArray(slide.bullets) ? slide.bullets.map(readPresentationBulletText).filter(Boolean) : []),
       ]),
     ].join(" "),
   );
@@ -195,7 +190,7 @@ export function analyzePresentationContentQuality(input: {
   const explicitSingleSlide = /\b(?:single|one)[ -]slide\b/iu.test(input.content);
   const substantiveContent = slides
     .flatMap((slide) =>
-      Array.isArray(slide.bullets) ? slide.bullets.filter((value): value is string => typeof value === "string") : [],
+      Array.isArray(slide.bullets) ? slide.bullets.map(readPresentationBulletText).filter(Boolean) : [],
     )
     .join(" ")
     .replace(/\s+/gu, " ")
@@ -353,8 +348,7 @@ function titleCasePresentationText(value: string): string {
     )
     .replace(/[^a-zA-Z0-9\s'-]+/g, " ")
     .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 90);
+    .trim();
   if (!cleaned) {
     return "Presentation";
   }
@@ -375,22 +369,19 @@ function buildPresentationBrief(input: ArtifactIntentInput): PresentationBrief {
   const assistantSources = history
     .filter((message) => message.role === "assistant")
     .map((message) => messageContentText(message.content).trim())
-    .filter((content) => content.length >= 180 && !looksLikeMissingPresentationArtifactContent(content))
-    .slice(-3);
+    .filter((content) => content.length >= 180 && !looksLikeMissingPresentationArtifactContent(content));
   const priorUserText = history
     .filter((message) => message.role === "user")
     .map((message) => messageContentText(message.content).trim())
     .filter((content) => content && normalizePresentationText(content) !== normalizePresentationText(input.content))
-    .slice(-5)
     .join("\n");
   const explicitSourceText = input.sourceText?.trim();
   const contextDependent = Boolean(explicitSourceText) || PRESENTATION_CONTEXT_REFERENCE.test(input.content);
-  const sourceText = (
+  const sourceText =
     explicitSourceText ||
     (contextDependent
       ? assistantSources.join("\n\n") || priorUserText
-      : (extractPrimaryUserTaskContent(input.content) ?? input.content))
-  ).slice(-18_000);
+      : (extractPrimaryUserTaskContent(input.content) ?? input.content));
   const title = inferGroundedPresentationTitle(priorUserText, sourceText, input.content);
   const sections = parsePresentationSections(sourceText).map((section, index) =>
     normalizePresentationText(section.title) === normalizePresentationText(title)
@@ -492,7 +483,7 @@ function parsePresentationSections(sourceText: string): Array<{ title: string; b
     }
   }
   flush();
-  return sections.filter((section) => normalizePresentationText(section.title) !== "presentation").slice(0, 12);
+  return sections.filter((section) => normalizePresentationText(section.title) !== "presentation");
 }
 
 function extractPresentationSourceUrls(sourceText: string): string[] {
@@ -500,28 +491,18 @@ function extractPresentationSourceUrls(sourceText: string): string[] {
 }
 
 function cleanPresentationBullet(value: string): string {
-  const cleaned = value
+  return value
     .replace(/\[([^\]]+)\]\(([^)]+)\)/gu, "$1 — $2")
     .replace(/[*_`>#]+/gu, "")
     .replace(/\s+/gu, " ")
     .trim();
-  return truncatePresentationBullet(cleaned);
 }
 
-function truncatePresentationBullet(value: string, maxLength = 280): string {
-  if (value.length <= maxLength) return value;
-  const candidate = value.slice(0, maxLength + 1);
-  const sentenceBoundary = Math.max(
-    candidate.lastIndexOf(". "),
-    candidate.lastIndexOf("? "),
-    candidate.lastIndexOf("! "),
-  );
-  if (sentenceBoundary >= Math.floor(maxLength * 0.55)) {
-    return candidate.slice(0, sentenceBoundary + 1).trim();
-  }
-  const wordBoundary = candidate.lastIndexOf(" ");
-  const cutAt = wordBoundary >= Math.floor(maxLength * 0.7) ? wordBoundary : maxLength;
-  return `${candidate.slice(0, cutAt).trimEnd()}…`;
+function readPresentationBulletText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+  const text = (value as Record<string, unknown>).text;
+  return typeof text === "string" ? text : "";
 }
 
 function extractPresentationSourceTerms(sourceText: string): string[] {
@@ -613,10 +594,9 @@ function extractPresentationBulletsFromPrompt(content: string): string[] {
   const lines = content
     .split(/\r?\n|[.;]/)
     .map((line) => line.replace(/^[-*\d.)\s]+/, "").trim())
-    .filter((line) => line.length >= 12 && !/^suggested tools:/i.test(line))
-    .slice(0, 5);
+    .filter((line) => line.length >= 12 && !/^suggested tools:/i.test(line));
   return lines.length > 0
-    ? lines.map((line) => line.slice(0, 180))
+    ? lines
     : ["Clarify the main audience", "Focus each slide on one idea", "Keep bullets brief and scannable"];
 }
 
@@ -744,11 +724,11 @@ function replaceMatchingSandboxWorkspaceFileLink(content: string, fileName: stri
     /\[([^\]]*)\]\(\s*(sandbox:[^)\s]+)(?:\s+"[^"]*")?\s*\)/giu,
     (match, label: string, sandboxHref: string) => {
       const targetName = sandboxHref.replaceAll("\\", "/").split("/").at(-1) ?? "";
-      let decodedTargetName = targetName;
+      let decodedTargetName: string;
       try {
         decodedTargetName = decodeURIComponent(targetName);
       } catch {
-        // A malformed model-authored sandbox URL remains inert in the renderer.
+        return match;
       }
       return decodedTargetName.toLowerCase() === normalizedFileName ? `[${label}](${downloadHref})` : match;
     },

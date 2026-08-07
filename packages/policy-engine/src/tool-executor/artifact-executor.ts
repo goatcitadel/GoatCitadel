@@ -15,7 +15,18 @@ import {
 } from "../document-artifacts.js";
 import { analyzePresentationDeckQuality, type PresentationDeckQualitySummary } from "../presentation-layout.js";
 import {
+  normalizePresentationResearch,
+  normalizePresentationSlides,
+  normalizePresentationSources,
+  normalizePresentationText,
+  preparePresentationSlides,
+  presentationSlideText,
+  validatePresentationVisibleContent,
+  validateResearchPresentation,
+} from "../presentation-model.js";
+import {
   createPresentationPptxWithDiagnostics,
+  type PresentationPackageAuditor,
   type PresentationPptxDiagnostics,
   type PresentationSlide,
   type PresentationVisualAsset,
@@ -25,6 +36,12 @@ import { assertWritePathInJail } from "../sandbox/path-jail.js";
 
 const ARTIFACT_TOOL_NAMES = new Set(["artifacts.create", "documents.create", "presentations.create"]);
 
+interface PresentationArtifactRuntime {
+  request?: ToolInvokeRequest;
+  preparePresentationVisuals?: PreparePresentationVisuals;
+  presentationPackageAuditor?: PresentationPackageAuditor;
+}
+
 export function isArtifactToolName(toolName: string): boolean {
   return ARTIFACT_TOOL_NAMES.has(toolName);
 }
@@ -33,7 +50,7 @@ export async function executeArtifactTool(
   toolName: string,
   args: Record<string, unknown>,
   config: ToolPolicyConfig,
-  runtime: { request?: ToolInvokeRequest; preparePresentationVisuals?: PreparePresentationVisuals } = {},
+  runtime: PresentationArtifactRuntime = {},
 ): Promise<Record<string, unknown>> {
   switch (toolName) {
     case "artifacts.create":
@@ -144,23 +161,44 @@ async function documentsCreate(args: Record<string, unknown>, config: ToolPolicy
 async function presentationsCreate(
   args: Record<string, unknown>,
   config: ToolPolicyConfig,
-  runtime: { request?: ToolInvokeRequest; preparePresentationVisuals?: PreparePresentationVisuals },
+  runtime: PresentationArtifactRuntime,
 ) {
   const requestedPath = required(args.path, "path");
   const p = ensurePptxPath(requestedPath);
   assertWritePathInJail(p, config.sandbox.writeJailRoots);
-  let title = truncateText(required(args.title, "title"), 120);
-  let subtitle = truncateText(asString(args.subtitle) ?? "", 180);
-  let slides = normalizePresentationSlides(args.slides, title, asString(args.body));
-  const repair = repairPresentationDesignQuality({ title, subtitle, slides });
-  title = repair.title;
-  subtitle = repair.subtitle;
-  slides = repair.slides;
+  assertStructuredResearchGrounding(args, runtime.request);
+  assertNoModelCallablePresentationNotes(args.slides);
+  const title = normalizePresentationText(required(args.title, "title"));
+  const subtitle = normalizePresentationText(asString(args.subtitle) ?? "");
+  const normalizedSources = normalizePresentationSources(args.sources);
+  const research = normalizePresentationResearch(args.research);
+  const normalizedSlides = normalizePresentationSlides(
+    args.slides,
+    title,
+    asString(args.body),
+    normalizedSources.aliases,
+  );
+  validatePresentationVisibleContent({
+    title,
+    subtitle: subtitle || undefined,
+    slides: normalizedSlides,
+    sources: normalizedSources.sources,
+  });
+  const slides = preparePresentationSlides(normalizedSlides, normalizedSources.sources);
+  validateResearchPresentation(
+    research,
+    normalizedSources.sources,
+    slides.filter((slide) => !slide.generatedSourceAppendix),
+  );
   const design = createArtifactDesignPlan({
     kind: "presentation",
     title,
     body: subtitle,
-    slides,
+    slides: slides.map((slide) => ({
+      title: slide.title,
+      bullets: presentationSlideText(slide),
+      speakerNotes: slide.speakerNotes,
+    })),
     format: "pptx",
     design: normalizePresentationDesignInput(args),
     destination: args.destination,
@@ -173,17 +211,25 @@ async function presentationsCreate(
     ...slides,
   ];
   const visualAsset = normalizePresentationVisualAsset(args.visualAsset);
+  const preVisualDeckQuality = analyzePresentationDeckQuality(design, deckSlides);
+  assertPresentationLayoutQualityBeforeVisuals(preVisualDeckQuality, design.mode, Boolean(research));
   const preparedVisuals = await preparePresentationVisuals(runtime);
   const mappedVisualSlideIndexes = new Set(preparedVisuals.assets.map((item) => item.slideIndex));
   const deckQuality = analyzePresentationDeckQuality(design, deckSlides, mappedVisualSlideIndexes);
-  const pptx = await createPresentationPptxWithDiagnostics({
-    title,
-    subtitle: subtitle || undefined,
-    slides,
-    design,
-    visualAsset,
-    visualAssets: preparedVisuals.assets.map((item) => ({ slideIndex: item.slideIndex, asset: item.asset })),
-  });
+  const pptx = await createPresentationPptxWithDiagnostics(
+    {
+      title,
+      subtitle: subtitle || undefined,
+      slides,
+      research,
+      sources: normalizedSources.sources,
+      slidesPrepared: true,
+      design,
+      visualAsset,
+      visualAssets: preparedVisuals.assets.map((item) => ({ slideIndex: item.slideIndex, asset: item.asset })),
+    },
+    runtime.presentationPackageAuditor ? { auditPackage: runtime.presentationPackageAuditor } : {},
+  );
   const full = path.resolve(p);
   await fs.mkdir(path.dirname(full), { recursive: true });
   await fs.writeFile(full, pptx.buffer);
@@ -192,7 +238,7 @@ async function presentationsCreate(
     bytesWritten: pptx.buffer.length,
     format: "pptx",
     title,
-    slideCount: slides.length + 1,
+    slideCount: pptx.manifest.slideCount,
     renderer: pptx.renderer,
     warnings: [...preparedVisuals.warnings, ...pptx.warnings],
     visualAsset: visualAsset
@@ -211,6 +257,15 @@ async function presentationsCreate(
     })),
     visualPlan: preparedVisuals.plan,
     visualProviderCalls: preparedVisuals.providerCalls,
+    research: research
+      ? {
+          asOfDate: research.asOfDate,
+          geography: research.geography,
+          sourceCount: normalizedSources.sources.length,
+        }
+      : undefined,
+    renderManifest: pptx.manifest,
+    packageAudit: pptx.packageAudit,
     designReport: buildArtifactDesignReport(design, {
       localPath: full,
       usedAssetIds: pptx.usedAssetIds,
@@ -218,15 +273,13 @@ async function presentationsCreate(
       residualRisks: buildPresentationResidualRisks(
         [...preparedVisuals.warnings, ...pptx.warnings],
         [
-          ...repair.findings,
           ...presentationQualityFindings(deckQuality),
           ...presentationAssetSpecificityFindings(visualAsset, preparedVisuals.assets.length, design.mode),
         ],
       ),
       designQuality: {
-        retryAttempted: design.mode !== "minimal" && design.mode !== "plain",
+        retryAttempted: pptx.retryAttempted,
         findings: [
-          ...repair.findings,
           ...presentationQualityFindings(deckQuality),
           ...presentationAssetSpecificityFindings(visualAsset, preparedVisuals.assets.length, design.mode),
         ],
@@ -252,6 +305,76 @@ async function presentationsCreate(
   };
 }
 
+function assertPresentationLayoutQualityBeforeVisuals(
+  quality: PresentationDeckQualitySummary,
+  designMode: string,
+  research: boolean,
+): void {
+  if ((designMode === "polished" || research) && quality.templateWarnings.length > 0) {
+    throw new Error(`Presentation layout validation failed: ${quality.templateWarnings.join(" ")}`);
+  }
+}
+
+function assertNoModelCallablePresentationNotes(value: unknown): void {
+  if (!Array.isArray(value)) return;
+  const noteSlideIndex = value.findIndex(
+    (slide) =>
+      Boolean(slide) &&
+      typeof slide === "object" &&
+      !Array.isArray(slide) &&
+      Object.prototype.hasOwnProperty.call(slide, "speakerNotes"),
+  );
+  if (noteSlideIndex >= 0) {
+    throw new Error(
+      `presentations.create does not accept model-authored speakerNotes (slide ${noteSlideIndex + 1}); trusted authored notes are available only through the direct presentation renderer API.`,
+    );
+  }
+}
+
+function assertStructuredResearchGrounding(
+  args: Readonly<Record<string, unknown>>,
+  request: ToolInvokeRequest | undefined,
+): void {
+  const hasStructuredResearch =
+    Object.prototype.hasOwnProperty.call(args, "research") || Object.prototype.hasOwnProperty.call(args, "sources");
+  if (!hasStructuredResearch) {
+    return;
+  }
+  const receipt = request?.presentationGrounding;
+  if (!receipt || !isValidPresentationGroundingReceipt(receipt)) {
+    throw new Error(
+      "Structured research presentations require a valid server-authored presentationGrounding receipt before artifact rendering.",
+    );
+  }
+}
+
+function isValidPresentationGroundingReceipt(
+  receipt: NonNullable<ToolInvokeRequest["presentationGrounding"]>,
+): boolean {
+  if (
+    !isNonNegativeSafeInteger(receipt.sourceTermCount) ||
+    !isNonNegativeSafeInteger(receipt.matchedSourceTermCount) ||
+    receipt.matchedSourceTermCount > receipt.sourceTermCount
+  ) {
+    return false;
+  }
+  const hasSourceUrlCount = receipt.sourceUrlCount !== undefined;
+  const hasMatchedSourceUrlCount = receipt.matchedSourceUrlCount !== undefined;
+  if (hasSourceUrlCount !== hasMatchedSourceUrlCount) {
+    return false;
+  }
+  return (
+    !hasSourceUrlCount ||
+    (isNonNegativeSafeInteger(receipt.sourceUrlCount) &&
+      isNonNegativeSafeInteger(receipt.matchedSourceUrlCount) &&
+      receipt.matchedSourceUrlCount <= receipt.sourceUrlCount)
+  );
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
 function buildPresentationResidualRisks(
   warnings: readonly string[],
   findings: readonly ArtifactDesignQualityFinding[],
@@ -273,6 +396,14 @@ function presentationValidationResults(
     .map(([renderer, count]) => `${renderer}:${count}`)
     .join(", ");
   return {
+    ...(pptx?.packageAudit
+      ? {
+          "pptx-package": {
+            status: "passed" as const,
+            detail: `In-package OOXML audit passed after ${pptx.retryAttempted ? "one deterministic repair" : "the first render"}; ${pptx.packageAudit.observed.slideCount} slide(s), ${pptx.packageAudit.observed.hyperlinkCount} hyperlink occurrence(s), and ${pptx.packageAudit.observed.authoredNoteCount} authored note(s) matched the manifest.`,
+          },
+        }
+      : {}),
     "presentation-template": {
       status: templateStatus,
       detail:
@@ -312,31 +443,6 @@ function repairDocumentDesignQuality(input: { title: string; body: string; secti
     title,
     body,
     sections,
-    findings: dedupeDesignQualityFindings(findings),
-  };
-}
-
-function repairPresentationDesignQuality(input: { title: string; subtitle: string; slides: PresentationSlide[] }): {
-  title: string;
-  subtitle: string;
-  slides: PresentationSlide[];
-  findings: ArtifactDesignQualityFinding[];
-} {
-  const findings: ArtifactDesignQualityFinding[] = [];
-  const title = repairVisibleArtifactText(input.title, "Presentation", findings);
-  const subtitle = repairVisibleArtifactText(input.subtitle, "", findings);
-  const slides = input.slides.map((slide, index) => ({
-    title: repairVisibleArtifactText(slide.title, `Slide ${index + 1}`, findings),
-    bullets: slide.bullets
-      .map((bullet) => repairVisibleArtifactText(bullet, "", findings))
-      .filter((bullet) => bullet.length > 0),
-    speakerNotes: slide.speakerNotes,
-    visualBrief: slide.visualBrief,
-  }));
-  return {
-    title,
-    subtitle,
-    slides,
     findings: dedupeDesignQualityFindings(findings),
   };
 }
@@ -568,58 +674,26 @@ function ensurePptxPath(value: string): string {
   return path.join(parsed.dir, fileName);
 }
 
-function normalizePresentationSlides(
-  value: unknown,
-  fallbackTitle: string,
-  fallbackBody?: string,
-): PresentationSlide[] {
-  const rawSlides = Array.isArray(value) ? value : [];
-  const slides = rawSlides
-    .map((item, index) => {
-      const slide = record(item);
-      const title = truncateText(asString(slide.title) ?? `Slide ${index + 1}`, 100);
-      const bullets = normalizePresentationBullets(slide.bullets);
-      return {
-        title,
-        bullets,
-        speakerNotes: truncateText(asString(slide.speakerNotes) ?? "", 600) || undefined,
-        visualBrief: truncateText(asString(slide.visualBrief) ?? "", 600) || undefined,
-      } satisfies PresentationSlide;
-    })
-    .filter((slide) => slide.title || slide.bullets.length > 0)
-    .slice(0, 40);
-  if (slides.length > 0) {
-    return slides;
-  }
-  const fallbackBullets = normalizePresentationBullets(fallbackBody);
-  return [{ title: fallbackTitle, bullets: fallbackBullets }];
-}
-
-function normalizePresentationBullets(value: unknown): string[] {
-  const rawItems = Array.isArray(value) ? value : typeof value === "string" ? value.split(/\r?\n|;/g) : [];
-  return rawItems
-    .map((item) => truncateText(asString(item) ?? "", 180))
-    .filter((item) => item.length > 0)
-    .slice(0, 8);
-}
-
 function normalizePresentationVisualAsset(value: unknown): PresentationVisualAsset | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
   const asset = record(value);
   const bytesBase64 = asString(asset.bytesBase64) ?? asString(asset.b64Json) ?? asString(asset.dataBase64);
   if (!bytesBase64) {
-    return undefined;
+    throw new Error("Presentation visualAsset requires non-empty image bytes.");
   }
   const mimeType = asString(asset.mimeType) ?? "image/png";
   if (!mimeType.toLowerCase().startsWith("image/")) {
-    return undefined;
+    throw new Error("Presentation visualAsset mimeType must be an image type.");
   }
   return {
     bytesBase64,
     mimeType,
-    altText: truncateText(asString(asset.altText) ?? "", 220) || undefined,
-    source: truncateText(asString(asset.source) ?? "", 80) || undefined,
-    sourceModel: truncateText(asString(asset.sourceModel) ?? asString(asset.model) ?? "", 80) || undefined,
-    revisedPrompt: truncateText(asString(asset.revisedPrompt) ?? "", 600) || undefined,
+    altText: normalizePresentationText(asString(asset.altText) ?? "") || undefined,
+    source: normalizePresentationText(asString(asset.source) ?? "") || undefined,
+    sourceModel: normalizePresentationText(asString(asset.sourceModel) ?? asString(asset.model) ?? "") || undefined,
+    revisedPrompt: normalizePresentationText(asString(asset.revisedPrompt) ?? "") || undefined,
   };
 }
 

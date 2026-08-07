@@ -1408,15 +1408,148 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
               title: { type: "string" },
               bullets: {
                 type: "array",
-                items: { type: "string" },
+                maxItems: 24,
+                items: {
+                  oneOf: [
+                    { type: "string", maxLength: 240 },
+                    {
+                      type: "object",
+                      properties: {
+                        text: { type: "string", maxLength: 240 },
+                        claimKind: { type: "string", enum: ["fact", "analysis", "recommendation"] },
+                        sourceIds: { type: "array", items: { type: "string" }, uniqueItems: true },
+                      },
+                      required: ["text"],
+                    },
+                  ],
+                },
               },
-              speakerNotes: { type: "string" },
+              archetype: {
+                type: "string",
+                enum: ["auto", "narrative", "comparison", "matrix", "chart", "section", "sources", "closing"],
+              },
+              table: {
+                type: "object",
+                properties: {
+                  headers: {
+                    type: "array",
+                    minItems: 1,
+                    items: {
+                      oneOf: [
+                        { type: "string" },
+                        {
+                          type: "object",
+                          properties: {
+                            text: { type: "string" },
+                            sourceIds: { type: "array", items: { type: "string" }, uniqueItems: true },
+                          },
+                          required: ["text"],
+                        },
+                      ],
+                    },
+                  },
+                  rows: {
+                    type: "array",
+                    minItems: 1,
+                    items: {
+                      type: "array",
+                      minItems: 1,
+                      items: {
+                        oneOf: [
+                          { type: "string" },
+                          {
+                            type: "object",
+                            properties: {
+                              text: { type: "string" },
+                              sourceIds: { type: "array", items: { type: "string" }, uniqueItems: true },
+                            },
+                            required: ["text"],
+                          },
+                        ],
+                      },
+                    },
+                  },
+                },
+                required: ["headers", "rows"],
+              },
+              chart: {
+                type: "object",
+                properties: {
+                  type: { type: "string", enum: ["bar", "column", "line"] },
+                  categories: { type: "array", minItems: 1, items: { type: "string" } },
+                  series: {
+                    type: "array",
+                    minItems: 1,
+                    items: {
+                      type: "object",
+                      properties: {
+                        name: { type: "string" },
+                        values: { type: "array", minItems: 1, items: { type: "number" } },
+                        sourceIds: { type: "array", items: { type: "string" }, uniqueItems: true },
+                      },
+                      required: ["name", "values"],
+                    },
+                  },
+                  sourceIds: { type: "array", items: { type: "string" }, uniqueItems: true },
+                },
+                required: ["type", "categories", "series"],
+              },
               visualBrief: {
                 type: "string",
                 description: "Optional subject-specific direction for a generated visual on this slide.",
               },
             },
             required: ["title"],
+          },
+        },
+        research: {
+          type: "object",
+          properties: {
+            asOfDate: { type: "string" },
+            geography: { type: "string" },
+            physicalDigitalBoundary: { type: "string" },
+            inclusionCriteria: { type: "array", minItems: 1, items: { type: "string" } },
+            exclusions: { type: "array", minItems: 1, items: { type: "string" } },
+            methodology: { type: "array", minItems: 1, items: { type: "string" } },
+            limitations: { type: "array", minItems: 1, items: { type: "string" } },
+            competitors: { type: "array", minItems: 1, items: { type: "string" } },
+            comparisonCriteria: { type: "array", minItems: 1, items: { type: "string" } },
+          },
+          required: [
+            "asOfDate",
+            "geography",
+            "physicalDigitalBoundary",
+            "inclusionCriteria",
+            "exclusions",
+            "methodology",
+            "limitations",
+            "competitors",
+            "comparisonCriteria",
+          ],
+        },
+        sources: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string" },
+              title: { type: "string" },
+              url: { type: "string", pattern: "^https://", maxLength: 480 },
+              publisher: { type: "string" },
+              publishedAt: { type: "string" },
+              retrievedAt: { type: "string" },
+              role: {
+                type: "string",
+                enum: ["official", "independent", "retailer", "marketplace", "financial", "event", "other"],
+              },
+              domain: { type: "string" },
+              snippet: { type: "string" },
+              confidence: { type: "number", minimum: 0, maximum: 1 },
+              toolRunId: { type: "string" },
+              toolName: { type: "string" },
+              query: { type: "string" },
+            },
+            required: ["title", "url", "publisher", "role"],
           },
         },
         theme: { type: "string" },
@@ -1464,6 +1597,8 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
       "Use design.mode polished or design.preset when the user asks for a visually appealing deck.",
       "Set design.skillId to design-intelligence for non-plain decks so Design Quality V1 checks asset specificity, layout integrity, and placeholder/provenance cleanup.",
       "Prefer provider-generated visuals with provenance when available; otherwise the design report must disclose local-renderer fallback visuals.",
+      "For research decks, provide canonical sources, complete research metadata, rich cited bullets, and semantic matrix/chart slides; source appendix slides are generated automatically.",
+      "presentations.create does not accept model-authored presenter notes. Trusted direct-render callers may supply human-authored notes; renderer, model, prompt, layout, and provenance diagnostics belong only in the returned design report and render manifest.",
     ],
   },
   {

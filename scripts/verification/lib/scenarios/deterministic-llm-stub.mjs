@@ -8,8 +8,14 @@ export const DETERMINISTIC_LLM_MODEL = "verification-stub-chat";
 export const DETERMINISTIC_LLM_KEY_ENV = "GOATCITADEL_VERIFY_STUB_LLM_KEY";
 export const DETERMINISTIC_LLM_DEFAULT_REPLY = "Verification stub reply.";
 
+// A valid 1x1 opaque teal PNG. The deterministic provider uses it to exercise
+// the real image-generation and PPTX embedding path without network credentials.
+const DETERMINISTIC_IMAGE_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+
 const DEFAULT_LISTEN_HOST = "127.0.0.1";
 const ALLOWED_WILDCARD_LISTEN_HOSTS = new Set(["0.0.0.0", "::"]);
+const MAX_TOOL_ARGUMENT_CHARACTERS = 128_000;
 
 export async function writeDeterministicLlmProviderConfig(runtimeRoot, baseUrl, options = {}) {
   const providerId = options.providerId ?? DETERMINISTIC_LLM_PROVIDER_ID;
@@ -84,6 +90,7 @@ export async function startDeterministicLlmStub(options = {}) {
   const dispatchWaiters = new Set();
   let completionDispatches = 0;
   let dispatchPlanDispatches = 0;
+  let imageGenerationDispatches = 0;
 
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
@@ -110,7 +117,10 @@ export async function startDeterministicLlmStub(options = {}) {
 
     if (
       expectedAuthorization &&
-      (url.pathname === "/v1/models" || url.pathname === "/v1/chat/completions" || url.pathname === "/v1/responses") &&
+      (url.pathname === "/v1/models" ||
+        url.pathname === "/v1/chat/completions" ||
+        url.pathname === "/v1/responses" ||
+        url.pathname === "/v1/images/generations") &&
       request.headers.authorization !== expectedAuthorization
     ) {
       completeRequestSummary(requestSummary, { outcome: "credential_rejected", status: 401 });
@@ -124,6 +134,23 @@ export async function startDeterministicLlmStub(options = {}) {
       completeRequestSummary(requestSummary, { outcome: "models", status: 200 });
       writeJsonResponse(response, 200, {
         data: [{ id: model, object: "model", owned_by: "goatcitadel-verification" }],
+      });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/v1/images/generations") {
+      imageGenerationDispatches += 1;
+      requestSummary.behavior = "image_generation";
+      completeRequestSummary(requestSummary, { outcome: "success", status: 200 });
+      writeJsonResponse(response, 200, {
+        created: 1_786_089_600,
+        model: body.model ?? model,
+        data: [
+          {
+            b64_json: DETERMINISTIC_IMAGE_PNG_BASE64,
+            revised_prompt: "Deterministic presentation verification visual.",
+          },
+        ],
       });
       return;
     }
@@ -223,6 +250,7 @@ export async function startDeterministicLlmStub(options = {}) {
     requestSummaries: () => requestSummaries.map((entry) => ({ ...entry })),
     completionDispatches: () => completionDispatches,
     dispatchPlanDispatches: () => dispatchPlanDispatches,
+    imageGenerationDispatches: () => imageGenerationDispatches,
     completionDispatchRecords: () =>
       requestSummaries
         .filter(
@@ -604,8 +632,8 @@ function normalizeToolArguments(value, label) {
   } catch {
     throw new TypeError(`${label} must be JSON serializable`);
   }
-  if (typeof serialized !== "string" || serialized.length > 20_000) {
-    throw new TypeError(`${label} must serialize to no more than 20000 characters`);
+  if (typeof serialized !== "string" || serialized.length > MAX_TOOL_ARGUMENT_CHARACTERS) {
+    throw new TypeError(`${label} must serialize to no more than ${MAX_TOOL_ARGUMENT_CHARACTERS} characters`);
   }
   let parsed;
   try {

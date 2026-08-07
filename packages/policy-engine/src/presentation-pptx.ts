@@ -1,20 +1,66 @@
 import { createArtifactDesignPlan, type ArtifactDesignPlan } from "./artifact-design.js";
 import {
-  resolveContentSlideRenderer,
+  analyzePresentationDeckQuality,
   resolvePresentationDeckLayoutPlan,
   type PresentationSlideLayoutDecision,
 } from "./presentation-layout.js";
-import { createFallbackPresentationPptx } from "./presentation-pptx-fallback.js";
+import {
+  buildPresentationRenderManifest,
+  preparePresentationSlides,
+  normalizePresentationText,
+  presentationSlideText,
+  validatePresentationCapacity,
+  validatePresentationVisibleContent,
+  validateResearchPresentation,
+  validateTrustedPresentationNotes,
+  type PresentationRenderManifest,
+  type PresentationResearch,
+  type PresentationSlide,
+  type PresentationSource,
+} from "./presentation-model.js";
+import {
+  createFallbackPresentationPptx,
+  resolveFallbackPresentationLayoutNames,
+} from "./presentation-pptx-fallback.js";
+import {
+  auditPresentationPptxPackage,
+  type PresentationPackageAuditExpectation,
+  type PresentationPackageAuditReport,
+  type PresentationPackageAuditor,
+} from "./presentation-pptx-audit.js";
+import {
+  buildAuthoredNotes,
+  drawPresentationSlide,
+  type PptxPresentationLike as RenderPptxPresentationLike,
+  type PptxSlideLike,
+} from "./presentation-pptx-renderers.js";
 
 export { createStoredZip, type ZipEntry } from "./presentation-pptx-fallback.js";
 export { createFallbackPresentationPptx };
-
-export interface PresentationSlide {
-  title: string;
-  bullets: string[];
-  speakerNotes?: string;
-  visualBrief?: string;
-}
+export {
+  auditPresentationPptxPackage,
+  readPresentationZipEntries,
+  type PresentationPackageAuditExpectation,
+  type PresentationPackageAuditFinding,
+  type PresentationPackageAuditObserved,
+  type PresentationPackageAuditReport,
+  type PresentationPackageAuditor,
+} from "./presentation-pptx-audit.js";
+export type {
+  PresentationArchetype,
+  PresentationBullet,
+  PresentationChart,
+  PresentationChartSeries,
+  PresentationClaimKind,
+  PresentationRenderManifest,
+  PresentationResearch,
+  PresentationRichBullet,
+  PresentationSlide,
+  PresentationSource,
+  PresentationSourceRole,
+  PresentationTable,
+  PresentationTableCell,
+} from "./presentation-model.js";
 
 export interface PresentationVisualAsset {
   bytesBase64: string;
@@ -34,6 +80,10 @@ export interface PresentationPptxInput {
   visualAsset?: PresentationVisualAsset;
   /** Ephemeral server-owned assets mapped to final deck slide indexes (cover is 0). */
   visualAssets?: Array<{ slideIndex: number; asset: PresentationVisualAsset }>;
+  research?: PresentationResearch;
+  sources?: PresentationSource[];
+  /** Set only by the policy executor after deterministic pagination and source appendix generation. */
+  slidesPrepared?: boolean;
 }
 
 export interface PresentationSlideVisual {
@@ -47,40 +97,49 @@ export interface PresentationPptxDiagnostics {
   fallbackTriggered: boolean;
   warnings: string[];
   usedAssetIds: string[];
+  retryAttempted: boolean;
+  packageAudit?: PresentationPackageAuditReport;
   errorMessage?: string;
 }
 
 export interface PresentationPptxResult extends PresentationPptxDiagnostics {
   buffer: Buffer;
+  manifest: PresentationRenderManifest;
 }
-
-const SLIDE_W = 13.333;
-const SLIDE_H = 7.5;
 
 type PptxOutput = string | ArrayBuffer | Blob | Uint8Array;
 
-interface PptxSlideLike {
-  background?: { color: string };
-  color?: string;
-  addShape(shapeName: string, options?: Record<string, unknown>): PptxSlideLike;
-  addImage(options: Record<string, unknown>): PptxSlideLike;
-  addText(text: string, options?: Record<string, unknown>): PptxSlideLike;
-  addNotes(notes: string): PptxSlideLike;
-}
-
-interface PptxPresentationLike {
+interface PptxPresentationLike extends RenderPptxPresentationLike {
   layout: string;
   author: string;
   company: string;
   subject: string;
   title: string;
   theme: { headFontFace?: string; bodyFontFace?: string };
-  ShapeType: Record<string, string>;
+  ChartType?: Record<string, string>;
   addSlide(): PptxSlideLike;
   write(options: { outputType: "nodebuffer"; compression: boolean }): Promise<PptxOutput>;
 }
 
 type PptxGenConstructor = new () => PptxPresentationLike;
+
+export interface PresentationPptxRuntime {
+  auditPackage?: PresentationPackageAuditor;
+}
+
+export class PresentationPackageAuditError extends Error {
+  public constructor(
+    public readonly firstAudit: PresentationPackageAuditReport,
+    public readonly secondAudit?: PresentationPackageAuditReport,
+    detail?: string,
+  ) {
+    const findings = (secondAudit ?? firstAudit).findings.map((item) => `${item.id}: ${item.message}`).join(" ");
+    super(
+      `Presentation package failed structural validation after one deterministic repair. ${findings}${detail ? ` ${detail}` : ""}`,
+    );
+    this.name = "PresentationPackageAuditError";
+  }
+}
 
 export async function createPresentationPptx(input: PresentationPptxInput): Promise<Buffer> {
   return (await createPresentationPptxWithDiagnostics(input)).buffer;
@@ -88,29 +147,124 @@ export async function createPresentationPptx(input: PresentationPptxInput): Prom
 
 export async function createPresentationPptxWithDiagnostics(
   input: PresentationPptxInput,
+  runtime: PresentationPptxRuntime = {},
 ): Promise<PresentationPptxResult> {
+  const preparedInput = preparePresentationPptxInput(input);
+  const auditPackage = runtime.auditPackage ?? auditPresentationPptxPackage;
+  const mustAudit = Boolean(preparedInput.research || preparedInput.sources?.length || runtime.auditPackage);
   try {
+    const rendered = await createPptxGenPresentation(preparedInput);
+    if (mustAudit) {
+      const firstAudit = await auditRenderedPresentation(auditPackage, rendered, preparedInput, "pptxgenjs");
+      if (!firstAudit.passed) {
+        return rerenderAfterAuditFailure(preparedInput, firstAudit, auditPackage);
+      }
+      return {
+        ...rendered,
+        renderer: "pptxgenjs",
+        fallbackTriggered: false,
+        warnings: [],
+        usedAssetIds: ["renderer-generated-visual", "built-in-shapes-icons"],
+        retryAttempted: false,
+        packageAudit: firstAudit,
+      };
+    }
     return {
-      buffer: await createPptxGenPresentation(input),
+      ...rendered,
       renderer: "pptxgenjs",
       fallbackTriggered: false,
       warnings: [],
       usedAssetIds: ["renderer-generated-visual", "built-in-shapes-icons"],
+      retryAttempted: false,
     };
   } catch (error) {
+    if (error instanceof PresentationPackageAuditError) {
+      throw error;
+    }
     const errorMessage = summarizePresentationRenderError(error);
-    return {
-      buffer: createFallbackPresentationPptx(input),
-      renderer: "fallback",
-      fallbackTriggered: true,
-      warnings: [`PPTX visual renderer failed; generated a text-only fallback deck instead. Cause: ${errorMessage}`],
-      usedAssetIds: [],
-      errorMessage,
-    };
+    return renderAuditedFallback(preparedInput, errorMessage, mustAudit, auditPackage);
   }
 }
 
-async function createPptxGenPresentation(input: PresentationPptxInput): Promise<Buffer> {
+async function rerenderAfterAuditFailure(
+  input: PresentationPptxInput,
+  firstAudit: PresentationPackageAuditReport,
+  auditPackage: PresentationPackageAuditor,
+): Promise<PresentationPptxResult> {
+  const repairedInput = deterministicallyRepairPresentationInput(input);
+  assertPresentationLayoutQuality(repairedInput);
+  let rendered: { buffer: Buffer; manifest: PresentationRenderManifest };
+  try {
+    rendered = await createPptxGenPresentation(repairedInput);
+  } catch (error) {
+    throw new PresentationPackageAuditError(
+      firstAudit,
+      undefined,
+      `The repair render failed: ${summarizePresentationRenderError(error)}`,
+    );
+  }
+  const secondAudit = await auditRenderedPresentation(auditPackage, rendered, repairedInput, "pptxgenjs");
+  if (!secondAudit.passed) {
+    throw new PresentationPackageAuditError(firstAudit, secondAudit);
+  }
+  return {
+    ...rendered,
+    renderer: "pptxgenjs",
+    fallbackTriggered: false,
+    warnings: ["The first structural package audit failed; one deterministic repair and rerender passed."],
+    usedAssetIds: ["renderer-generated-visual", "built-in-shapes-icons"],
+    retryAttempted: true,
+    packageAudit: secondAudit,
+  };
+}
+
+async function renderAuditedFallback(
+  input: PresentationPptxInput,
+  errorMessage: string,
+  mustAudit: boolean,
+  auditPackage: PresentationPackageAuditor,
+): Promise<PresentationPptxResult> {
+  const manifest = buildFallbackManifest(input);
+  const buffer = createFallbackPresentationPptx(input);
+  const warning =
+    "PPTX visual renderer failed; generated a semantic text fallback preserving authored notes, citations, links, and tables. Unsupported charts are visibly labeled data tables.";
+  const result = { buffer, manifest };
+  const packageAudit = mustAudit ? await auditRenderedPresentation(auditPackage, result, input, "fallback") : undefined;
+  if (packageAudit && !packageAudit.passed) {
+    throw new PresentationPackageAuditError(packageAudit, packageAudit, `Primary renderer failure: ${errorMessage}`);
+  }
+  return {
+    ...result,
+    renderer: "fallback",
+    fallbackTriggered: true,
+    warnings: [`${warning} Cause: ${errorMessage}`],
+    usedAssetIds: [],
+    retryAttempted: true,
+    packageAudit,
+    errorMessage,
+  };
+}
+
+async function auditRenderedPresentation(
+  auditPackage: PresentationPackageAuditor,
+  rendered: { buffer: Buffer; manifest: PresentationRenderManifest },
+  input: PresentationPptxInput,
+  renderer: "pptxgenjs" | "fallback",
+): Promise<PresentationPackageAuditReport> {
+  const expectation: PresentationPackageAuditExpectation = {
+    title: input.title,
+    subtitle: input.subtitle,
+    slides: input.slides,
+    sources: input.sources ?? [],
+    manifest: rendered.manifest,
+    renderer,
+  };
+  return auditPackage(rendered.buffer, expectation);
+}
+
+async function createPptxGenPresentation(
+  input: PresentationPptxInput,
+): Promise<{ buffer: Buffer; manifest: PresentationRenderManifest }> {
   const PptxGen = await loadPptxGen();
   const design =
     input.design ??
@@ -118,7 +272,11 @@ async function createPptxGenPresentation(input: PresentationPptxInput): Promise<
       kind: "presentation",
       title: input.title,
       body: input.subtitle,
-      slides: input.slides,
+      slides: input.slides.map((slide) => ({
+        title: slide.title,
+        bullets: presentationSlideText(slide),
+        speakerNotes: slide.speakerNotes,
+      })),
       format: "pptx",
     });
   const contentSlides = input.slides.length > 0 ? input.slides : [{ title: input.title, bullets: [] }];
@@ -126,7 +284,7 @@ async function createPptxGenPresentation(input: PresentationPptxInput): Promise<
     {
       title: input.title,
       bullets: input.subtitle ? [input.subtitle] : [],
-      speakerNotes: `Design preset: ${design.preset}`,
+      archetype: "auto",
     },
     ...contentSlides,
   ];
@@ -161,497 +319,169 @@ async function createPptxGenPresentation(input: PresentationPptxInput): Promise<
     }
     pptSlide.background = { color: design.tokens.background };
     pptSlide.color = design.tokens.text;
-    drawSlideFrame(pptx, pptSlide, design, index);
-    if (index === 0) {
-      drawHeroSlide(pptx, pptSlide, slide, design, slideVisual.dataUri);
-    } else {
-      drawContentSlide(
-        pptx,
-        pptSlide,
-        slide,
-        design,
-        slideVisual.dataUri,
-        index,
-        layoutPlan[index],
-        mappedVisualSlideIndexes.has(index),
-      );
+    drawPresentationSlide({
+      pptx,
+      slide: pptSlide,
+      content: slide,
+      design,
+      visualData: slideVisual.dataUri,
+      index,
+      layoutDecision: layoutPlan[index],
+      hasMappedVisual: mappedVisualSlideIndexes.has(index),
+      sources: input.sources ?? [],
+    });
+    const notes = buildAuthoredNotes(slide, input.sources ?? []);
+    if (notes) {
+      pptSlide.addNotes(notes);
     }
-    const notes = [
-      slide.speakerNotes,
-      `Layout: ${layoutPlan[index]?.renderer ?? "unknown"}; density=${layoutPlan[index]?.density ?? "unknown"}; reason=${layoutPlan[index]?.reason ?? "n/a"}.`,
-      `GoatCitadel design provenance: preset=${design.preset}; visualLevel=${design.visualLevel}; assetPolicy=${design.assetPolicy}.`,
-      `Visual source: ${slideVisual.source}.`,
-      (visualAssets.find((item) => item.slideIndex === index)?.asset ?? (index === 0 ? visualAsset : undefined))
-        ?.revisedPrompt
-        ? `Generated visual revised prompt: ${
-            (visualAssets.find((item) => item.slideIndex === index)?.asset ?? visualAsset)?.revisedPrompt
-          }`
-        : undefined,
-      "Renderer assets used: renderer-generated-visual, built-in-shapes-icons.",
-    ]
-      .filter(Boolean)
-      .join("\n");
-    pptSlide.addNotes(notes);
   });
 
   const output = await pptx.write({ outputType: "nodebuffer", compression: true });
-  return toBuffer(output);
+  const manifest = buildPresentationRenderManifest({
+    slides: input.slides,
+    sources: input.sources ?? [],
+    layoutNames: layoutPlan.map((decision) => decision.renderer),
+    visualCount:
+      1 +
+      layoutPlan.filter(
+        (decision) =>
+          decision.slideIndex > 0 &&
+          decision.renderer === "image-text" &&
+          mappedVisualSlideIndexes.has(decision.slideIndex),
+      ).length +
+      input.slides.filter((slide) => Boolean(slide.table || slide.chart)).length,
+  });
+  return { buffer: toBuffer(output), manifest };
 }
 
-function drawSlideFrame(
-  pptx: PptxPresentationLike,
-  slide: PptxSlideLike,
-  design: ArtifactDesignPlan,
-  index: number,
-): void {
-  slide.addShape(shape(pptx, "rect"), {
-    x: 0,
-    y: 0,
-    w: SLIDE_W,
-    h: SLIDE_H,
-    fill: { color: design.tokens.background },
-    line: { color: design.tokens.background, transparency: 100 },
-  });
-  slide.addShape(shape(pptx, "rect"), {
-    x: 0,
-    y: 0,
-    w: 0.13,
-    h: SLIDE_H,
-    fill: { color: design.tokens.accent },
-    line: { color: design.tokens.accent, transparency: 100 },
-  });
-  slide.addShape(shape(pptx, "rect"), {
-    x: 0.52,
-    y: 6.95,
-    w: 12.1,
-    h: 0.02,
-    fill: { color: design.tokens.border, transparency: 40 },
-    line: { color: design.tokens.border, transparency: 100 },
-  });
-  slide.addText(String(index + 1).padStart(2, "0"), {
-    x: 12.0,
-    y: 6.96,
-    w: 0.55,
-    h: 0.3,
-    fontFace: design.typography.headingFont,
-    fontSize: 10,
-    bold: true,
-    color: design.tokens.accent,
-    align: "right",
-    margin: 0,
-  });
-}
-
-function drawHeroSlide(
-  pptx: PptxPresentationLike,
-  slide: PptxSlideLike,
-  content: PresentationSlide,
-  design: ArtifactDesignPlan,
-  visualData: string,
-): void {
-  slide.addShape(shape(pptx, "roundRect"), {
-    x: 0.66,
-    y: 0.64,
-    w: 7.0,
-    h: 6.0,
-    rectRadius: 0.08,
-    fill: { color: design.tokens.surface, transparency: design.preset === "cyberpunk-ops" ? 10 : 0 },
-    line: { color: design.tokens.border, transparency: 15 },
-    shadow: { type: "outer", color: "000000", opacity: 0.12, blur: 2, angle: 45, offset: 1 },
-  });
-  slide.addText(content.title, {
-    x: 1.0,
-    y: 1.1,
-    w: 6.25,
-    h: 1.45,
-    fontFace: design.typography.headingFont,
-    fontSize: 32,
-    bold: true,
-    fit: "shrink",
-    color: design.tokens.text,
-    breakLine: false,
-    margin: 0.02,
-  });
-  if (content.bullets[0]) {
-    slide.addText(content.bullets[0], {
-      x: 1.04,
-      y: 2.85,
-      w: 5.85,
-      h: 0.75,
-      fontFace: design.typography.bodyFont,
-      fontSize: 17,
-      fit: "shrink",
-      color: design.tokens.mutedText,
-      margin: 0,
-    });
+function preparePresentationPptxInput(input: PresentationPptxInput): PresentationPptxInput {
+  const sources = input.sources ?? [];
+  const slides = input.slidesPrepared ? input.slides : preparePresentationSlides(input.slides, sources);
+  const visualAsset = normalizePresentationVisualAsset(input.visualAsset);
+  const visualAssets = normalizeMappedPresentationVisualAssets(input.visualAssets, slides.length + 1);
+  if (visualAsset && visualAssets.some((item) => item.slideIndex === 0)) {
+    throw new Error("Presentation input supplies two cover visual assets; choose one explicit cover asset.");
   }
-  slide.addShape(shape(pptx, "rect"), {
-    x: 1.04,
-    y: 4.0,
-    w: 1.25,
-    h: 0.08,
-    fill: { color: design.tokens.accent },
-    line: { color: design.tokens.accent, transparency: 100 },
-  });
-  slide.addImage({
-    data: visualData,
-    x: 8.05,
-    y: 0.72,
-    w: 4.6,
-    h: 5.7,
-    altText: `Generated abstract visual for ${content.title}`,
-    objectName: "GoatCitadel generated visual",
-  });
-}
-
-function drawContentSlide(
-  pptx: PptxPresentationLike,
-  slide: PptxSlideLike,
-  content: PresentationSlide,
-  design: ArtifactDesignPlan,
-  visualData: string,
-  index: number,
-  layoutDecision?: PresentationSlideLayoutDecision,
-  hasMappedVisual = false,
-): void {
-  slide.addText(content.title, {
-    x: 0.76,
-    y: 0.48,
-    w: 10.9,
-    h: 0.68,
-    fontFace: design.typography.headingFont,
-    fontSize: 24,
-    bold: true,
-    fit: "shrink",
-    color: design.tokens.text,
-    margin: 0,
-  });
-  if (hasMappedVisual) {
-    if (content.bullets.length >= 4) {
-      drawVisualFeatureSlide(pptx, slide, content, design, visualData);
-    } else {
-      drawImageTextSlide(pptx, slide, content, design, visualData);
-    }
-    return;
-  }
-  const renderer = layoutDecision?.renderer === "hero" ? "image-text" : layoutDecision?.renderer;
-  const resolvedRenderer = renderer ?? resolveContentSlideRenderer(design, index, content);
-  if (resolvedRenderer === "two-column") {
-    drawTwoColumnSlide(pptx, slide, content, design);
-    return;
-  }
-  if (resolvedRenderer === "stacked-list") {
-    drawStackedListSlide(pptx, slide, content, design);
-    return;
-  }
-  if (resolvedRenderer === "stat-callout") {
-    drawCalloutSlide(pptx, slide, content, design, visualData);
-    return;
-  }
-  drawImageTextSlide(pptx, slide, content, design, visualData);
-}
-
-function drawImageTextSlide(
-  pptx: PptxPresentationLike,
-  slide: PptxSlideLike,
-  content: PresentationSlide,
-  design: ArtifactDesignPlan,
-  visualData: string,
-): void {
-  slide.addShape(shape(pptx, "roundRect"), {
-    x: 0.76,
-    y: 1.45,
-    w: 7.05,
-    h: 4.85,
-    rectRadius: 0.05,
-    fill: { color: design.tokens.surface },
-    line: { color: design.tokens.border, transparency: 15 },
-  });
-  drawRhythmBand(pptx, slide, content, design, 1.08, 1.78, 1.72);
-  addBulletRows(pptx, slide, content.bullets, design, 1.08, 2.12, 6.32, 3.62);
-  slide.addImage({
-    data: visualData,
-    x: 8.35,
-    y: 1.55,
-    w: 3.9,
-    h: 4.65,
-    altText: `Generated supporting visual for ${content.title}`,
-    objectName: "GoatCitadel supporting visual",
-  });
-  drawRhythmBand(pptx, slide, content, design, 1.08, 5.98, 2.65);
-}
-
-function drawTwoColumnSlide(
-  pptx: PptxPresentationLike,
-  slide: PptxSlideLike,
-  content: PresentationSlide,
-  design: ArtifactDesignPlan,
-): void {
-  const left = content.bullets.slice(0, Math.ceil(content.bullets.length / 2));
-  const right = content.bullets.slice(left.length);
-  [0.76, 6.42].forEach((x, columnIndex) => {
-    slide.addShape(shape(pptx, "roundRect"), {
-      x,
-      y: 1.44,
-      w: 5.15,
-      h: 4.82,
-      rectRadius: 0.05,
-      fill: {
-        color: columnIndex === 0 ? design.tokens.surface : design.tokens.background,
-        transparency: columnIndex === 0 ? 0 : 8,
-      },
-      line: { color: columnIndex === 0 ? design.tokens.border : design.tokens.accent2, transparency: 18 },
-    });
-  });
-  addBulletRows(pptx, slide, left, design, 1.08, 1.82, 4.45, 3.95, { compact: true });
-  addBulletRows(pptx, slide, right, design, 6.74, 1.82, 4.45, 3.95, {
-    compact: true,
-    startIndex: left.length + 1,
-  });
-}
-
-function drawStackedListSlide(
-  pptx: PptxPresentationLike,
-  slide: PptxSlideLike,
-  content: PresentationSlide,
-  design: ArtifactDesignPlan,
-): void {
-  slide.addShape(shape(pptx, "roundRect"), {
-    x: 0.76,
-    y: 1.42,
-    w: 11.62,
-    h: 4.86,
-    rectRadius: 0.05,
-    fill: { color: design.tokens.surface },
-    line: { color: design.tokens.border, transparency: 15 },
-  });
-  drawRhythmBand(pptx, slide, content, design, 1.08, 1.76, 2.4);
-  addBulletRows(pptx, slide, content.bullets, design, 1.08, 2.08, 10.98, 3.88, {
-    compact: true,
-  });
-}
-
-function drawVisualFeatureSlide(
-  pptx: PptxPresentationLike,
-  slide: PptxSlideLike,
-  content: PresentationSlide,
-  design: ArtifactDesignPlan,
-  visualData: string,
-): void {
-  const left = content.bullets.slice(0, Math.ceil(content.bullets.length / 2));
-  const right = content.bullets.slice(left.length);
-  slide.addShape(shape(pptx, "roundRect"), {
-    x: 0.76,
-    y: 1.42,
-    w: 6.2,
-    h: 4.86,
-    rectRadius: 0.05,
-    fill: { color: design.tokens.surface },
-    line: { color: design.tokens.border, transparency: 15 },
-  });
-  addBulletRows(pptx, slide, left, design, 1.08, 1.78, 5.55, 4.12, { compact: true });
-  slide.addImage({
-    data: visualData,
-    x: 7.28,
-    y: 1.42,
-    w: 5.1,
-    h: 2.75,
-    altText: `Generated supporting visual for ${content.title}`,
-    objectName: "GoatCitadel section visual",
-  });
-  if (right.length > 0) {
-    slide.addShape(shape(pptx, "roundRect"), {
-      x: 7.28,
-      y: 4.42,
-      w: 5.1,
-      h: 1.86,
-      rectRadius: 0.04,
-      fill: { color: design.tokens.background, transparency: 5 },
-      line: { color: design.tokens.accent2, transparency: 20 },
-    });
-    addBulletRows(pptx, slide, right, design, 7.56, 4.68, 4.54, 1.34, {
-      compact: true,
-      startIndex: left.length + 1,
-    });
-  }
-}
-
-function drawCalloutSlide(
-  pptx: PptxPresentationLike,
-  slide: PptxSlideLike,
-  content: PresentationSlide,
-  design: ArtifactDesignPlan,
-  visualData: string,
-): void {
-  const [first, ...rest] = content.bullets;
-  slide.addImage({
-    data: visualData,
-    x: 0.76,
-    y: 1.36,
-    w: 4.0,
-    h: 4.95,
-    altText: `Generated visual callout for ${content.title}`,
-    objectName: "GoatCitadel callout visual",
-  });
-  slide.addShape(shape(pptx, "roundRect"), {
-    x: 5.15,
-    y: 1.65,
-    w: 6.85,
-    h: 1.45,
-    rectRadius: 0.07,
-    fill: { color: design.tokens.accent, transparency: 4 },
-    line: { color: design.tokens.accent, transparency: 100 },
-  });
-  slide.addText(first ?? "Key takeaway", {
-    x: 5.55,
-    y: 1.94,
-    w: 6.0,
-    h: 0.7,
-    fontFace: design.typography.headingFont,
-    fontSize: 22,
-    bold: true,
-    fit: "shrink",
-    color: "FFFFFF",
-    margin: 0,
-  });
-  if (rest.length > 0) {
-    addBulletRows(pptx, slide, rest, design, 5.35, 3.55, 6.4, 2.5, { compact: true });
-  } else {
-    drawRhythmBand(pptx, slide, content, design, 5.55, 3.62, 2.4);
-  }
-}
-
-function addBulletRows(
-  pptx: PptxPresentationLike,
-  slide: PptxSlideLike,
-  bullets: string[],
-  design: ArtifactDesignPlan,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  options: { compact?: boolean; startIndex?: number } = {},
-): void {
-  if (bullets.length === 0) {
-    slide.addText("No details provided.", {
-      x,
-      y,
-      w,
-      h: 0.45,
-      fontFace: design.typography.bodyFont,
-      fontSize: options.compact ? 11 : 13,
-      color: design.tokens.mutedText,
-      margin: 0,
-    });
-    return;
-  }
-  const rowGap = options.compact ? 0.1 : 0.16;
-  const baseFontSize = options.compact ? (bullets.length > 3 ? 10.6 : 11.6) : bullets.length > 3 ? 12.2 : 13.6;
-  const availableHeight = Math.max(0.4, h - rowGap * Math.max(0, bullets.length - 1));
-  const rowMetrics = allocateBulletRowMetrics(
-    bullets,
-    w - 0.58,
-    availableHeight,
-    baseFontSize,
-    Boolean(options.compact),
+  validatePresentationVisibleContent({ title: input.title, subtitle: input.subtitle, slides, sources });
+  validatePresentationCapacity(slides, sources);
+  validateTrustedPresentationNotes(slides);
+  validateResearchPresentation(
+    input.research,
+    sources,
+    slides.filter((slide) => !slide.generatedSourceAppendix),
   );
-  const startIndex = options.startIndex ?? 1;
-  let rowY = y;
-  bullets.forEach((bullet, index) => {
-    const rowHeight = rowMetrics.heights[index] ?? availableHeight / bullets.length;
-    slide.addShape(shape(pptx, "rect"), {
-      x,
-      y: rowY + 0.06,
-      w: 0.05,
-      h: Math.max(0.22, rowHeight - 0.14),
-      fill: { color: index % 2 === 0 ? design.tokens.accent : design.tokens.accent2 },
-      line: { color: design.tokens.border, transparency: 100 },
-    });
-    slide.addText(String(startIndex + index).padStart(2, "0"), {
-      x: x + 0.14,
-      y: rowY + 0.05,
-      w: 0.32,
-      h: 0.24,
-      fontFace: design.typography.headingFont,
-      fontSize: options.compact ? 6.6 : 7.4,
-      bold: true,
-      color: design.tokens.accent,
-      margin: 0,
-    });
-    slide.addText(bullet, {
-      x: x + 0.52,
-      y: rowY,
-      w: w - 0.58,
-      h: rowHeight,
-      fontFace: design.typography.bodyFont,
-      fontSize: rowMetrics.fontSize,
-      // Keep the complete source text visible when PowerPoint's real font
-      // metrics wrap more aggressively than our deterministic row estimate.
-      // A fixed-size text box silently replaces overflow with an ellipsis;
-      // shrink-to-fit preserves the content inside the allocated row instead.
-      fit: "shrink",
-      color: design.tokens.text,
-      breakLine: false,
-      valign: "top",
-      margin: 0.02,
-      breakLineOnHyphen: false,
-    });
-    rowY += rowHeight + rowGap;
+  const prepared = {
+    ...input,
+    slides,
+    sources,
+    visualAsset,
+    visualAssets,
+    slidesPrepared: true,
+    design: input.design ?? createPresentationDesign(input, slides),
+  };
+  assertPresentationLayoutQuality(prepared);
+  return prepared;
+}
+
+function buildFallbackManifest(input: PresentationPptxInput): PresentationRenderManifest {
+  const layoutNames = resolveFallbackPresentationLayoutNames(input);
+  const nativeTableCount = input.slides.filter((slide) => Boolean(slide.table || slide.chart)).length;
+  return buildPresentationRenderManifest({
+    slides: input.slides,
+    sources: input.sources ?? [],
+    layoutNames,
+    visualCount: nativeTableCount,
   });
 }
 
-function allocateBulletRowMetrics(
-  bullets: string[],
-  textWidth: number,
-  availableHeight: number,
-  baseFontSize: number,
-  compact: boolean,
-): { heights: number[]; fontSize: number } {
-  const minimumHeight = compact ? 0.42 : 0.5;
-  const charactersPerLine = Math.max(24, Math.floor((textWidth * 120) / baseFontSize));
-  const lineCounts = bullets.map((bullet) => Math.max(1, Math.ceil(bullet.trim().length / charactersPerLine)));
-  const preferred = lineCounts.map((lineCount) => Math.max(minimumHeight, 0.13 + lineCount * (baseFontSize / 52)));
-  const preferredTotal = preferred.reduce((total, value) => total + value, 0);
-  if (preferredTotal <= availableHeight) {
-    return { heights: preferred, fontSize: baseFontSize };
+function createPresentationDesign(
+  input: PresentationPptxInput,
+  slides: readonly PresentationSlide[],
+): ArtifactDesignPlan {
+  return createArtifactDesignPlan({
+    kind: "presentation",
+    title: input.title,
+    body: input.subtitle,
+    slides: slides.map((slide) => ({
+      title: slide.title,
+      bullets: presentationSlideText(slide),
+      speakerNotes: slide.speakerNotes,
+    })),
+    format: "pptx",
+  });
+}
+
+function assertPresentationLayoutQuality(input: PresentationPptxInput): void {
+  const design = input.design ?? createPresentationDesign(input, input.slides);
+  if (design.mode !== "polished" && !input.research) {
+    return;
   }
-  const scale = availableHeight / preferredTotal;
-  const fontSize = Math.max(compact ? 9.2 : 10.4, Math.round(baseFontSize * scale * 10) / 10);
-  const scaled = preferred.map((height) => Math.max(minimumHeight, height * scale));
-  const scaledTotal = scaled.reduce((total, value) => total + value, 0);
-  if (scaledTotal <= availableHeight) {
-    return { heights: scaled, fontSize };
+  const deckSlides: PresentationSlide[] = [
+    { title: input.title, bullets: input.subtitle ? [input.subtitle] : [] },
+    ...input.slides,
+  ];
+  const mappedVisualSlideIndexes = new Set(
+    (input.visualAssets ?? [])
+      .map((item) => item.slideIndex)
+      .filter((index) => Number.isSafeInteger(index) && index >= 0 && index < deckSlides.length),
+  );
+  const quality = analyzePresentationDeckQuality(design, deckSlides, mappedVisualSlideIndexes);
+  if (quality.templateWarnings.length > 0) {
+    throw new Error(`Presentation layout validation failed: ${quality.templateWarnings.join(" ")}`);
   }
-  const finalScale = availableHeight / scaledTotal;
+}
+
+function deterministicallyRepairPresentationInput(input: PresentationPptxInput): PresentationPptxInput {
+  const slides = input.slides.flatMap((slide) => conservativelyPaginatePreparedSlide(slide));
+  if (slides.length + 1 > 40) {
+    throw new Error(`Presentation repair pagination produced ${slides.length + 1} slides; the maximum is 40.`);
+  }
+  const slideCountChanged = slides.length !== input.slides.length;
   return {
-    heights: scaled.map((height) => height * finalScale),
-    fontSize,
+    ...input,
+    slides,
+    slidesPrepared: true,
+    visualAssets: slideCountChanged ? [] : input.visualAssets,
+    design: input.design ?? createPresentationDesign(input, slides),
   };
 }
 
-function drawRhythmBand(
-  pptx: PptxPresentationLike,
-  slide: PptxSlideLike,
-  content: PresentationSlide,
-  design: ArtifactDesignPlan,
-  x: number,
-  y: number,
-  w: number,
-): void {
-  const colors = [design.tokens.accent, design.tokens.accent2, design.tokens.accent3];
-  const segmentCount = Math.max(1, Math.min(3, content.bullets.length || 1));
-  const segmentGap = 0.08;
-  const segmentWidth = (w - segmentGap * (segmentCount - 1)) / segmentCount;
-  for (let index = 0; index < segmentCount; index += 1) {
-    slide.addShape(shape(pptx, "rect"), {
-      x: x + index * (segmentWidth + segmentGap),
-      y,
-      w: segmentWidth,
-      h: 0.06,
-      fill: { color: colors[index % colors.length] },
-      line: { color: colors[index % colors.length], transparency: 100 },
-    });
+function conservativelyPaginatePreparedSlide(slide: PresentationSlide): PresentationSlide[] {
+  if (slide.generatedSourceAppendix) {
+    return [slide];
   }
+  if (slide.table && slide.table.rows.length > 2) {
+    const pages: PresentationSlide[] = [];
+    for (let index = 0; index < slide.table.rows.length; index += 2) {
+      const pageIndex = Math.floor(index / 2);
+      pages.push({
+        ...slide,
+        title: pageIndex === 0 ? slide.title : continuationTitle(slide.title),
+        bullets: pageIndex === 0 ? slide.bullets : [],
+        speakerNotes: pageIndex === 0 ? slide.speakerNotes : undefined,
+        table: { headers: slide.table.headers, rows: slide.table.rows.slice(index, index + 2) },
+      });
+    }
+    return pages;
+  }
+  if (!slide.table && !slide.chart && slide.bullets.length > 4) {
+    const pages: PresentationSlide[] = [];
+    for (let index = 0; index < slide.bullets.length; index += 4) {
+      const pageIndex = Math.floor(index / 4);
+      pages.push({
+        ...slide,
+        title: pageIndex === 0 ? slide.title : continuationTitle(slide.title),
+        bullets: slide.bullets.slice(index, index + 4),
+        speakerNotes: pageIndex === 0 ? slide.speakerNotes : undefined,
+      });
+    }
+    return pages;
+  }
+  return [slide];
+}
+
+function continuationTitle(value: string): string {
+  return `${value.replace(/(?: — Continued)+$/u, "")} — Continued`;
 }
 
 function normalizePresentationVisualAsset(
@@ -662,20 +492,22 @@ function normalizePresentationVisualAsset(
   }
   const bytesBase64 = asset.bytesBase64.trim();
   if (!bytesBase64) {
-    return undefined;
+    throw new Error("Presentation visual asset requires non-empty image bytes.");
   }
   const mimeType = asset.mimeType?.trim() || "image/png";
   if (!mimeType.toLowerCase().startsWith("image/")) {
-    return undefined;
+    throw new Error("Presentation visual asset mimeType must be an image type.");
   }
   return {
     ...asset,
     bytesBase64,
     mimeType,
-    altText: asset.altText?.trim() || undefined,
-    source: asset.source?.trim() || undefined,
-    sourceModel: asset.sourceModel?.trim() || undefined,
-    revisedPrompt: asset.revisedPrompt?.trim() || undefined,
+    altText: asset.altText === undefined ? undefined : normalizeRequiredVisualText(asset.altText, "altText"),
+    source: asset.source === undefined ? undefined : normalizeRequiredVisualText(asset.source, "source"),
+    sourceModel:
+      asset.sourceModel === undefined ? undefined : normalizeRequiredVisualText(asset.sourceModel, "sourceModel"),
+    revisedPrompt:
+      asset.revisedPrompt === undefined ? undefined : normalizeRequiredVisualText(asset.revisedPrompt, "revisedPrompt"),
   };
 }
 
@@ -691,8 +523,17 @@ export async function buildPresentationSlideVisuals(
   visualAsset?: PresentationVisualAsset,
   visualAssets: Array<{ slideIndex: number; asset: PresentationVisualAsset }> = [],
 ): Promise<PresentationSlideVisual[]> {
-  const mapped = new Map(visualAssets.map((item) => [item.slideIndex, item.asset]));
-  if (visualAsset && !mapped.has(0)) mapped.set(0, visualAsset);
+  const mapped = new Map<number, PresentationVisualAsset>();
+  visualAssets.forEach((item) => {
+    if (mapped.has(item.slideIndex)) {
+      throw new Error(`Presentation input supplies duplicate visual assets for slide ${item.slideIndex}.`);
+    }
+    mapped.set(item.slideIndex, item.asset);
+  });
+  if (visualAsset && mapped.has(0)) {
+    throw new Error("Presentation input supplies two cover visual assets; choose one explicit cover asset.");
+  }
+  if (visualAsset) mapped.set(0, visualAsset);
   return Promise.all(
     slides.map(async (slide, index) => {
       const mappedAsset = mapped.get(index);
@@ -715,7 +556,7 @@ export async function buildPresentationSlideVisuals(
           {
             deckTitle,
             slideTitle: slide.title,
-            bullets: slide.bullets,
+            bullets: presentationSlideText(slide),
             slideIndex: index,
             renderer: layoutPlan[index]?.renderer ?? "image-text",
           },
@@ -734,13 +575,29 @@ function normalizeMappedPresentationVisualAssets(
 ): Array<{ slideIndex: number; asset: PresentationVisualAsset }> {
   const mapped = new Map<number, PresentationVisualAsset>();
   for (const item of assets ?? []) {
-    if (!Number.isSafeInteger(item.slideIndex) || item.slideIndex < 0 || item.slideIndex >= slideCount) continue;
+    if (!Number.isSafeInteger(item.slideIndex) || item.slideIndex < 0 || item.slideIndex >= slideCount) {
+      throw new Error(`Presentation visual asset slideIndex ${item.slideIndex} is outside the rendered deck.`);
+    }
     const asset = normalizePresentationVisualAsset(item.asset);
-    if (asset) mapped.set(item.slideIndex, asset);
+    if (!asset) {
+      throw new Error(`Presentation visual asset for slide ${item.slideIndex} is missing.`);
+    }
+    if (mapped.has(item.slideIndex)) {
+      throw new Error(`Presentation input supplies duplicate visual assets for slide ${item.slideIndex}.`);
+    }
+    mapped.set(item.slideIndex, asset);
   }
   return [...mapped.entries()]
     .map(([slideIndex, asset]) => ({ slideIndex, asset }))
     .sort((left, right) => left.slideIndex - right.slideIndex);
+}
+
+function normalizeRequiredVisualText(value: string, label: string): string {
+  const normalized = normalizePresentationText(value);
+  if (!normalized) {
+    throw new Error(`Presentation visual asset ${label} must be a non-empty string when supplied.`);
+  }
+  return normalized;
 }
 
 interface AbstractVisualSeed {
@@ -820,10 +677,6 @@ function summarizePresentationRenderError(error: unknown): string {
 async function loadPptxGen(): Promise<PptxGenConstructor> {
   const module = (await import("pptxgenjs")) as unknown as { default?: PptxGenConstructor } & PptxGenConstructor;
   return module.default ?? module;
-}
-
-function shape(pptx: PptxPresentationLike, name: string): string {
-  return pptx.ShapeType[name] ?? name;
 }
 
 function toBuffer(value: PptxOutput): Buffer {

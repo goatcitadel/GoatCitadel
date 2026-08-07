@@ -3,6 +3,50 @@ import test from "node:test";
 
 import { startDeterministicLlmStub } from "./deterministic-llm-stub.mjs";
 
+test("deterministic provider serves a valid PNG through the image-generation route", async () => {
+  const stub = await startDeterministicLlmStub();
+  try {
+    const response = await fetch(`${stub.baseUrl}/images/generations`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: stub.model, prompt: "fixture image", response_format: "b64_json" }),
+    });
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    const bytes = Buffer.from(payload.data[0].b64_json, "base64");
+    assert.deepEqual([...bytes.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
+    assert.equal(stub.imageGenerationDispatches(), 1);
+    assert.equal(JSON.stringify(stub.requestSummaries()).includes("fixture image"), false);
+  } finally {
+    await stub.close();
+  }
+});
+
+test("scripted tool calls retain a full research-deck payload while bounding pathological arguments", async () => {
+  const accepted = { title: "Fixture", evidence: "x".repeat(24_000) };
+  const stub = await startDeterministicLlmStub({
+    dispatchPlan: [{ type: "tool_call", name: "presentations_create", arguments: accepted }],
+  });
+  try {
+    const response = await fetch(`${stub.baseUrl}/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: stub.model, input: "fixture" }),
+    });
+    assert.equal(response.status, 200);
+    assert.match(await response.text(), /presentations_create/u);
+  } finally {
+    await stub.close();
+  }
+
+  await assert.rejects(
+    startDeterministicLlmStub({
+      dispatchPlan: [{ type: "tool_call", name: "presentations_create", arguments: { evidence: "x".repeat(128_001) } }],
+    }),
+    /no more than 128000 characters/u,
+  );
+});
+
 test("scripted Responses provider emits a native server_error then succeeds without retaining prompt text", async () => {
   const stub = await startDeterministicLlmStub({
     dispatchPlan: [

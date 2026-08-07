@@ -41,7 +41,10 @@ const MAX_TOOLS = 32;
 const MAX_SKILLS = 128;
 const MAX_GRANTS = 512;
 const MAX_POLICY_DECISIONS = 512;
-const MAX_JSON_DEPTH = 16;
+// The shipped presentations.create provider schema reaches depth 21 once it is
+// nested under selection.tools[].providerDefinition. Keep the traversal bound
+// at that measured catalog maximum rather than disabling depth protection.
+const MAX_JSON_DEPTH = 21;
 const MAX_JSON_NODES = 50_000;
 const MAX_COLLECTION_ITEMS = 2_048;
 const MAX_STRING_LENGTH = 131_072;

@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { chromium } from "playwright";
 
 import {
   prepareVerificationRuntime,
@@ -16,8 +17,23 @@ import {
   startDeterministicLlmStub,
   writeDeterministicLlmProviderConfig,
 } from "./lib/scenarios/deterministic-llm-stub.mjs";
+import {
+  DETERMINISTIC_FIRECRAWL_RESULTS,
+  startDeterministicFirecrawlStub,
+} from "./lib/scenarios/deterministic-firecrawl-stub.mjs";
 import { parseGatewayChatSse } from "./lib/scenarios/gateway-chat-fault-recovery-lane.mjs";
 import { createRunContext, finalizeRunContext, repoRoot, runScenario, writeJson } from "./lib/shared.mjs";
+import {
+  auditPptxPackage,
+  formatPptxAuditFailure,
+  listZipEntryNames as listPptxZipEntryNames,
+} from "./lib/pptx-package-audit.mjs";
+import {
+  buildCcgResearchDeckFixture,
+  extractFixtureSourceUrls,
+  extractFixtureVisibleText,
+} from "./lib/ccg-research-deck-fixture.mjs";
+import { assertResearchArtifactPromptDeckSemantics } from "./lib/research-artifact-prompt-contract.mjs";
 
 const LANE = "review";
 const PROCESS_LOG_PREFIX = "research-artifact-reliability";
@@ -26,12 +42,22 @@ export const RESEARCH_ARTIFACT_PROVIDER_MODEL = "gpt-5-verification";
 export const RESEARCH_ARTIFACT_PROMPT =
   "Can you please do some market research on CCGs and what makes each one unique and better than the competition? Please put it into a powerpoint deck.";
 export const RESEARCH_ARTIFACT_TASK_COUNT = 3;
+export const RESEARCH_ARTIFACT_GAP_QUERIES = [
+  "official Magic Pokemon Yu-Gi-Oh trading card game products organized play",
+  "official One Piece Disney Lorcana Flesh and Blood trading card game organized play",
+  "official Star Wars Unlimited Riftbound Gundam card game organized play",
+  "North America CCG retailer marketplace financial event evidence 2026",
+];
 const PROVIDER_ID = RESEARCH_ARTIFACT_PROVIDER_ID;
 const PROVIDER_MODEL = RESEARCH_ARTIFACT_PROVIDER_MODEL;
 const PROMPT = RESEARCH_ARTIFACT_PROMPT;
 const TASK_COUNT = RESEARCH_ARTIFACT_TASK_COUNT;
 const TURN_TIMEOUT_FALLBACK_MS = 360_000;
 const TURN_TIMEOUT_MS = resolveTurnTimeoutMs(process.env.GOATCITADEL_VERIFY_RESEARCH_TURN_TIMEOUT_MS);
+const FIRST_PROVIDER_INPUT_TOKEN_CEILING = 12_000;
+// The structured presentation schema is part of the governed prompt-context
+// estimate even though only a smaller serialized request reaches the provider.
+const PROMPT_CONTEXT_ESTIMATE_TOKEN_CEILING = 13_000;
 
 export async function main() {
   const context = await createRunContext(LANE, { profile: "isolated-built-runtime" });
@@ -57,13 +83,29 @@ export async function runThreeTaskReplay(context, correlationId) {
   assert.ok(presentationModuleBytes <= 8 * 1024, `presentation.md exceeds 8 KiB (${presentationModuleBytes} bytes)`);
 
   const dispatchPlan = [];
+  const promptSemanticContracts = [];
+  const acquiredEvidenceUrls = deterministicEvidenceUrls();
   for (let index = 1; index <= TASK_COUNT; index += 1) {
+    const presentationArgs = buildPresentationArgs(index);
+    promptSemanticContracts.push(
+      assertResearchArtifactPromptDeckSemantics({
+        prompt: PROMPT,
+        args: presentationArgs,
+        acquiredEvidenceUrls,
+      }),
+    );
     dispatchPlan.push(
+      ...RESEARCH_ARTIFACT_GAP_QUERIES.map((query, queryIndex) => ({
+        type: "tool_call",
+        name: "browser_search",
+        callId: `call_research_gap_${index}_${queryIndex + 1}`,
+        arguments: { query, maxResults: 20, backend: "firecrawl", firecrawlFallbackToNative: false },
+      })),
       {
         type: "tool_call",
         name: "presentations_create",
         callId: `call_research_deck_${index}`,
-        arguments: buildPresentationArgs(index),
+        arguments: presentationArgs,
       },
       {
         type: "success",
@@ -80,7 +122,9 @@ export async function runThreeTaskReplay(context, correlationId) {
   });
   let runtimeRoot;
   let stack;
+  let firecrawlStub;
   try {
+    firecrawlStub = await startDeterministicFirecrawlStub();
     runtimeRoot = await prepareVerificationRuntime(`${context.runId}-research-artifact`);
     await writeDeterministicLlmProviderConfig(runtimeRoot, stub.baseUrl, {
       apiStyle: "openai-responses",
@@ -89,7 +133,8 @@ export async function runThreeTaskReplay(context, correlationId) {
     });
     stack = await startVerificationStack(context, {
       runtimeRoot,
-      includeUi: false,
+      includeUi: true,
+      uiMode: "preview",
       gatewayMode: "built",
       processLogPrefix: PROCESS_LOG_PREFIX,
       gatewayEnv: {
@@ -97,7 +142,6 @@ export async function runThreeTaskReplay(context, correlationId) {
         GOATCITADEL_RATE_LIMIT_ENABLED: "false",
         GOATCITADEL_DISABLE_SECRET_STORE: "true",
         GOATCITADEL_DEV_DIAGNOSTICS_VERBOSE: "true",
-        GOATCITADEL_DISABLE_RICH_PRESENTATION_VISUALS: "true",
         [DETERMINISTIC_LLM_KEY_ENV]: "verification-fixture-key",
       },
     });
@@ -106,12 +150,26 @@ export async function runThreeTaskReplay(context, correlationId) {
 
     const deckDir = path.join(context.artifactRoot, "artifacts", "presentations");
     const resultPath = path.join(context.artifactRoot, "diagnostics", "research-artifact-replay.json");
+    const packagedChatScreenshotPath = path.join(
+      context.artifactRoot,
+      "screenshots",
+      "research-artifact-packaged-chat.png",
+    );
+    const packagedChatDownloadPath = path.join(deckDir, "ccg-market-reliability-1-packaged-chat-download.pptx");
     await fs.mkdir(deckDir, { recursive: true });
     const results = [];
     for (let index = 1; index <= TASK_COUNT; index += 1) {
       const taskCorrelationId = `${correlationId}-task-${index}`;
       const sessionId = await createResearchSession(stack.gatewayUrl, taskCorrelationId, index);
-      const turn = await sendResearchTurn(stack.gatewayUrl, sessionId, taskCorrelationId, permissionProfileId);
+      const turn =
+        index === 1
+          ? await sendResearchTurnThroughPackagedChat({
+              stack,
+              sessionId,
+              screenshotPath: packagedChatScreenshotPath,
+              downloadPath: packagedChatDownloadPath,
+            })
+          : await sendResearchTurn(stack.gatewayUrl, sessionId, taskCorrelationId, permissionProfileId);
       const capabilityProfile = await readResearchTurnCapabilityProfile(
         stack.gatewayUrl,
         sessionId,
@@ -124,17 +182,43 @@ export async function runThreeTaskReplay(context, correlationId) {
         runtimeRoot,
         deckDir,
         index,
+        expectedPermissionProfileId: permissionProfileId,
+        acquiredEvidenceUrls,
       });
+      if (index === 1) {
+        const [downloaded, canonical] = await Promise.all([
+          fs.readFile(packagedChatDownloadPath),
+          fs.readFile(validated.deckPath),
+        ]);
+        assert.equal(
+          createHash("sha256").update(downloaded).digest("hex"),
+          createHash("sha256").update(canonical).digest("hex"),
+          "packaged Chat download bytes differ from the audited canonical deck",
+        );
+      }
       results.push({ sessionId, turnId: turn.turnId, ...validated });
     }
 
-    assert.equal(stub.dispatchPlanDispatches(), TASK_COUNT * 2);
+    assert.equal(stub.dispatchPlanDispatches(), TASK_COUNT * (RESEARCH_ARTIFACT_GAP_QUERIES.length + 2));
+    const requiredGapQueries = new Set(RESEARCH_ARTIFACT_GAP_QUERIES.map(normalizeSearchQuery));
+    const firecrawlGapRequests = firecrawlStub
+      .requests()
+      .filter((request) => requiredGapQueries.has(normalizeSearchQuery(request.query)));
+    assert.equal(firecrawlGapRequests.length, TASK_COUNT * RESEARCH_ARTIFACT_GAP_QUERIES.length);
+    assert.ok(
+      stub.imageGenerationDispatches() >= TASK_COUNT,
+      `rich presentation path made only ${stub.imageGenerationDispatches()} image-generation calls`,
+    );
+    assert.ok(firecrawlGapRequests.every((request) => request.matched));
     await writeJson(resultPath, {
       schemaVersion: 1,
       prompt: PROMPT,
       taskCount: TASK_COUNT,
       presentationModuleBytes,
       providerDispatches: stub.dispatchPlanDispatches(),
+      imageGenerationDispatches: stub.imageGenerationDispatches(),
+      firecrawlRequests: firecrawlStub.requests(),
+      promptSemanticContracts,
       results,
     });
     return {
@@ -144,11 +228,17 @@ export async function runThreeTaskReplay(context, correlationId) {
       notes: [
         "Each task used a fresh Chat session in an isolated built Gateway runtime.",
         "The provider was deterministic and loopback-only; browser.search and presentations.create were the real governed tools.",
+        "Gap-closing searches used the existing local Firecrawl boundary with deterministic external HTTPS evidence.",
       ],
       metrics: {
         tasks: TASK_COUNT,
         completed: results.length,
         providerDispatches: stub.dispatchPlanDispatches(),
+        imageGenerationDispatches: stub.imageGenerationDispatches(),
+        packagedChatTasks: 1,
+        firecrawlRequests: firecrawlStub.requests().length,
+        firecrawlGapRequests: firecrawlGapRequests.length,
+        promptSemanticContractsPassed: promptSemanticContracts.filter((report) => report.passed).length,
         presentationModuleBytes,
         maximumFirstProviderInputTokens: Math.max(...results.map((result) => result.firstProviderInputTokens)),
         maximumPromptContextEstimatedTokens: Math.max(...results.map((result) => result.promptContextEstimatedTokens)),
@@ -159,9 +249,13 @@ export async function runThreeTaskReplay(context, correlationId) {
       artifacts: {
         diagnostics: [
           relativeArtifact(context, resultPath),
-          ...results.map((result) => relativeArtifact(context, result.copiedDeckPath)),
+          ...results.flatMap((result) => [
+            relativeArtifact(context, result.copiedDeckPath),
+            relativeArtifact(context, result.auditPath),
+          ]),
+          relativeArtifact(context, packagedChatDownloadPath),
         ],
-        screenshots: [],
+        screenshots: [relativeArtifact(context, packagedChatScreenshotPath)],
         traces: [],
         logs: [],
         perf: [],
@@ -184,63 +278,18 @@ export async function runThreeTaskReplay(context, correlationId) {
       completionDispatches: stub.completionDispatches(),
       dispatchPlanDispatches: stub.dispatchPlanDispatches(),
       requests: stub.requestSummaries(),
+      firecrawlRequests: firecrawlStub?.requests() ?? [],
     });
     throw error;
   } finally {
     await stopVerificationStack(stack ?? (runtimeRoot ? { runtimeRoot } : undefined));
+    await firecrawlStub?.close();
     await stub.close();
   }
 }
 
 export function buildPresentationArgs(index) {
-  return {
-    path: `./workspace/artifacts/ccg-market-reliability-${index}.pptx`,
-    title: "Competitive CCG Landscape",
-    subtitle: "Research-backed differentiation across leading collectible card games",
-    theme: "midnight teal",
-    design: { mode: "polished", skillId: "design-intelligence" },
-    slides: [
-      {
-        title: "Category Differentiators",
-        bullets: [
-          "Rules accessibility, collection depth, and organized play shape each game's market position.",
-          "Distinct intellectual property and gameplay loops create different reasons for players to choose each game.",
-        ],
-        speakerNotes: "Grounding: official Magic product catalog, https://magic.wizards.com/en/products",
-      },
-      {
-        title: "Competitive Strengths",
-        bullets: [
-          "Magic emphasizes deep deck construction, long-running formats, and broad organized play.",
-          "Pokémon combines an accessible ruleset with a globally recognized character ecosystem.",
-          "Other CCGs differentiate through digital-first play, cooperative modes, or focused licensed worlds.",
-        ],
-      },
-      {
-        title: "Community and Product Strategy",
-        bullets: [
-          "Release cadence and collectability sustain engagement between competitive events.",
-          "Retail availability and local-play support influence discovery and retention.",
-          "Digital clients reduce friction while physical products preserve collecting and in-person play.",
-        ],
-      },
-      {
-        title: "Comparison Framework",
-        bullets: [
-          "Compare onboarding friction, strategic depth, secondary-market dynamics, and play-format breadth.",
-          "Separate intellectual-property appeal from mechanics and community strength.",
-          "Use current product and organized-play evidence before making investment or launch decisions.",
-        ],
-      },
-      {
-        title: "Research Sources",
-        bullets: [
-          "Wizards of the Coast — Magic products: https://magic.wizards.com/en/products",
-          "The Pokémon Company — Pokémon TCG: https://www.pokemon.com/us/pokemon-tcg/",
-        ],
-      },
-    ],
-  };
+  return buildCcgResearchDeckFixture(index);
 }
 
 export async function createResearchSession(gatewayUrl, correlationId, index) {
@@ -382,6 +431,64 @@ export async function sendResearchTurn(gatewayUrl, sessionId, correlationId, per
   return turn;
 }
 
+export async function sendResearchTurnThroughPackagedChat({ stack, sessionId, screenshotPath, downloadPath }) {
+  assert.ok(stack?.uiUrl, "packaged Chat replay requires a running preview UI");
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const browserContext = await browser.newContext({
+      viewport: { width: 1440, height: 1024 },
+      colorScheme: "dark",
+    });
+    const page = await browserContext.newPage();
+    await page.goto(`${stack.uiUrl}/chat?sessionId=${encodeURIComponent(sessionId)}`, {
+      waitUntil: "domcontentloaded",
+      timeout: 120_000,
+    });
+    const composer = page.getByLabel("Message composer", { exact: true });
+    await composer.waitFor({ state: "visible", timeout: 120_000 });
+    await composer.fill(PROMPT);
+    await page.locator(".mc-next-composer-primary", { hasText: "Send" }).click();
+    const downloadLink = page.getByRole("link", { name: "Download the PowerPoint" }).last();
+    const deadline = Date.now() + TURN_TIMEOUT_MS;
+    while (!(await downloadLink.isVisible().catch(() => false))) {
+      const snapshot = await requestJson(
+        stack.gatewayUrl,
+        `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/thread?includeDecisionTrace=true`,
+      );
+      const latestTurn = Array.isArray(snapshot.body?.turns) ? snapshot.body.turns.at(-1) : undefined;
+      if (latestTurn?.trace?.status === "failed") {
+        const failure = latestTurn.trace.failure;
+        throw new Error(
+          `packaged Chat research turn failed before producing a download: ${JSON.stringify(failure ?? {})}`,
+        );
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(`packaged Chat did not render a PowerPoint download within ${TURN_TIMEOUT_MS}ms`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    }
+    const downloadHref = await downloadLink.getAttribute("href");
+    assert.match(downloadHref ?? "", /\.pptx|\/api\/v1\/files\/download/iu);
+    const [download] = await Promise.all([page.waitForEvent("download", { timeout: 120_000 }), downloadLink.click()]);
+    assert.match(download.suggestedFilename(), /\.pptx$/iu);
+    await download.saveAs(downloadPath);
+    const downloadBytes = await fs.readFile(downloadPath);
+    assert.equal(downloadBytes.subarray(0, 2).toString("ascii"), "PK", "packaged Chat download is not a PPTX ZIP");
+    await page.screenshot({ path: screenshotPath, fullPage: true });
+
+    const thread = await requestJson(
+      stack.gatewayUrl,
+      `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/thread?includeDecisionTrace=true`,
+    );
+    assertResponseOk(thread, "read packaged Chat research-artifact thread");
+    const turn = Array.isArray(thread.body?.turns) ? thread.body.turns.at(-1) : undefined;
+    assert.ok(turn, "packaged Chat research-artifact turn is missing");
+    return turn;
+  } finally {
+    await browser.close();
+  }
+}
+
 export async function createResearchArtifactPermissionProfile(gatewayUrl, correlationId) {
   const created = await requestJson(gatewayUrl, "/api/v1/tools/permission-profiles", {
     method: "POST",
@@ -399,7 +506,7 @@ export async function createResearchArtifactPermissionProfile(gatewayUrl, correl
       allow: ["browser.search", "presentations.create"],
       deny: [],
       readAccessMode: "roots_only",
-      defaultForSurfaces: [],
+      defaultForSurfaces: ["chat"],
     },
   });
   assertResponseOk(created, "create research-artifact permission profile");
@@ -418,7 +525,15 @@ export async function readResearchTurnCapabilityProfile(gatewayUrl, sessionId, t
   return response.body.profile;
 }
 
-export async function validateResearchTurn({ turn, capabilityProfile, runtimeRoot, deckDir, index }) {
+export async function validateResearchTurn({
+  turn,
+  capabilityProfile,
+  runtimeRoot,
+  deckDir,
+  index,
+  expectedPermissionProfileId,
+  acquiredEvidenceUrls = deterministicEvidenceUrls(),
+}) {
   assert.equal(turn.trace?.status, "completed");
   assert.equal(turn.trace?.completion?.repaired, false);
   assert.equal(turn.trace?.failure, undefined);
@@ -431,11 +546,12 @@ export async function validateResearchTurn({ turn, capabilityProfile, runtimeRoo
   const firstProviderInputTokens = Number(
     turn.trace?.completion?.firstProviderRequestUsage?.effectiveInputTokens ?? Number.NaN,
   );
-  assert.ok(Number.isFinite(firstProviderInputTokens) && firstProviderInputTokens < 12_000);
+  assert.ok(Number.isFinite(firstProviderInputTokens) && firstProviderInputTokens < FIRST_PROVIDER_INPUT_TOKEN_CEILING);
   const promptContextEstimatedTokens = Number(turn.trace?.routing?.promptContextBudget?.tokenEstimates?.total);
   assert.ok(
-    Number.isFinite(promptContextEstimatedTokens) && promptContextEstimatedTokens < 12_000,
-    `estimated first-provider context exceeded the 12000-token ceiling (${promptContextEstimatedTokens})`,
+    Number.isFinite(promptContextEstimatedTokens) &&
+      promptContextEstimatedTokens < PROMPT_CONTEXT_ESTIMATE_TOKEN_CEILING,
+    `estimated first-provider context exceeded the ${PROMPT_CONTEXT_ESTIMATE_TOKEN_CEILING}-token ceiling (${promptContextEstimatedTokens})`,
   );
   const activatedSkills = capabilityProfile?.selection?.activatedSkills ?? [];
   const activatedSkillInstructionBytes = activatedSkills.reduce(
@@ -452,23 +568,67 @@ export async function validateResearchTurn({ turn, capabilityProfile, runtimeRoo
   );
   assert.ok(frozenToolNames.has("browser.search"), "capability profile omitted browser.search");
   assert.ok(frozenToolNames.has("presentations.create"), "capability profile omitted presentations.create");
+  assert.equal(
+    capabilityProfile?.governance?.permission?.profileId,
+    expectedPermissionProfileId,
+    "research turn did not use the narrow verification permission profile",
+  );
 
   const executedRuns = (turn.trace?.toolRuns ?? []).filter((run) => run.status === "executed");
-  assert.deepEqual(
-    executedRuns.map((run) => run.toolName),
-    ["browser.search", "presentations.create"],
-  );
-  assert.equal(executedRuns[0]?.args?.query, "CCGs and what makes each one unique and better than the competition");
-  assert.ok((turn.trace?.citations ?? []).length > 0, "research turn retained no citations");
+  const searchRuns = executedRuns.filter((run) => run.toolName === "browser.search");
+  assert.ok(searchRuns.length >= 3, `expected multiple gap-closing searches, found ${searchRuns.length}`);
+  const normalizedQueries = new Set(searchRuns.map((run) => normalizeSearchQuery(run.args?.query)));
+  assert.equal(normalizedQueries.size, searchRuns.length, "research turn reused an equivalent search query");
+  for (const query of RESEARCH_ARTIFACT_GAP_QUERIES) {
+    assert.ok(
+      normalizedQueries.has(normalizeSearchQuery(query)),
+      `research turn omitted the required gap search: ${query}`,
+    );
+  }
+  assert.ok((turn.trace?.citations ?? []).length >= 12, "research turn retained fewer than 12 citations");
   assert.ok((turn.trace?.citations ?? []).every((citation) => /^https?:\/\//u.test(citation.url)));
+  const citationUrls = new Set(turn.trace.citations.map((citation) => canonicalCitationUrl(citation.url)));
+  assert.ok(citationUrls.size >= 12, `research turn retained only ${citationUrls.size} unique citation URLs`);
+  const citationDomains = new Set(turn.trace.citations.map((citation) => new URL(citation.url).hostname.toLowerCase()));
+  assert.ok(citationDomains.size >= 8, `research turn retained citations from only ${citationDomains.size} domains`);
 
-  const presentationRun = executedRuns[1];
+  const presentationRun = executedRuns.findLast((run) => run.toolName === "presentations.create");
+  assert.ok(presentationRun, "research turn did not execute presentations.create");
+  assert.equal(executedRuns.at(-1), presentationRun, "presentation creation was not the final executed tool");
+  assert.ok(Array.isArray(presentationRun.args?.sources) && presentationRun.args.sources.length >= 12);
+  assert.ok(Array.isArray(presentationRun.args?.slides) && presentationRun.args.slides.length >= 12);
+  assert.equal(typeof presentationRun.args?.research?.asOfDate, "string");
+  assert.ok(Array.isArray(presentationRun.args?.research?.competitors));
+  const promptSemanticContract = assertResearchArtifactPromptDeckSemantics({
+    prompt: PROMPT,
+    args: presentationRun.args,
+    acquiredEvidenceUrls,
+  });
   const outputPath = requireText(presentationRun?.result?.path, "presentation result path");
   const deckPath = path.isAbsolute(outputPath) ? outputPath : path.resolve(runtimeRoot, outputPath);
-  const validation = await validatePptxArchive(deckPath);
-  assert.ok(validation.slideCount >= 5, `expected at least five deck slides, found ${validation.slideCount}`);
+  const renderManifest = presentationRun.result?.renderManifest;
+  assert.ok(renderManifest, "presentation result omitted renderManifest");
+  assert.equal(presentationRun.result?.packageAudit?.passed, true, "production in-render package audit did not pass");
+  const validation = await validatePptxArchive(deckPath, {
+    expectedVisibleText: extractFixtureVisibleText(presentationRun.args),
+    expectedExternalUrls: extractFixtureSourceUrls(presentationRun.args),
+    manifest: renderManifest,
+    requireLayoutDiversity: true,
+  });
+  assert.ok(validation.slideCount >= 16, `expected at least 16 deck slides, found ${validation.slideCount}`);
+  assert.ok(
+    validation.metrics.tableCount >= 4,
+    `expected at least four native tables, found ${validation.metrics.tableCount}`,
+  );
+  assert.ok(validation.metrics.chartCount >= 1, "deck did not exercise the native chart path");
+  assert.ok(validation.metrics.pictureCount >= 1, "deck did not embed a provider-generated presentation visual");
+  assert.ok(validation.metrics.hyperlinkCount >= 12, "deck retained fewer than 12 clickable source hyperlinks");
+  assert.ok(validation.metrics.sourceUrlCount >= 12, "deck source appendix exposes fewer than 12 complete URLs");
+  assert.equal(validation.metrics.shrinkAutofitCount, 0, "deck contains body shrink-to-fit");
   const copiedDeckPath = path.join(deckDir, `ccg-market-reliability-${index}.pptx`);
+  const auditPath = path.join(deckDir, `ccg-market-reliability-${index}.audit.json`);
   await fs.copyFile(deckPath, copiedDeckPath);
+  await writeJson(auditPath, validation);
   const assistantContent = String(turn.assistantMessage?.content ?? "");
   assert.match(assistantContent, /\.pptx/u);
   assert.doesNotMatch(assistantContent, /timed out|reconnect|repaired completion|provider request failed/iu);
@@ -478,46 +638,25 @@ export async function validateResearchTurn({ turn, capabilityProfile, runtimeRoo
     promptContextEstimatedTokens,
     activatedSkillInstructionBytes,
     citations: turn.trace.citations.map((citation) => citation.url),
-    searchQuery: executedRuns[0].args.query,
+    searchQueries: searchRuns.map((run) => run.args.query),
     deckPath,
     copiedDeckPath,
+    auditPath,
     deckBytes: validation.bytes,
     slideCount: validation.slideCount,
+    auditMetrics: validation.metrics,
+    promptSemanticContract,
   };
 }
 
-export async function validatePptxArchive(filePath) {
-  const buffer = await fs.readFile(filePath);
-  assert.equal(buffer.readUInt32LE(0), 0x04034b50, "PPTX does not begin with a ZIP local-file header");
-  const entries = listZipEntryNames(buffer);
-  assert.ok(entries.includes("[Content_Types].xml"), "PPTX is missing [Content_Types].xml");
-  assert.ok(entries.includes("ppt/presentation.xml"), "PPTX is missing ppt/presentation.xml");
-  const slides = entries.filter((entry) => /^ppt\/slides\/slide\d+\.xml$/u.test(entry));
-  return { bytes: buffer.byteLength, slideCount: slides.length, entries };
+export async function validatePptxArchive(filePath, options = {}) {
+  const report = await auditPptxPackage(filePath, options);
+  assert.equal(report.passed, true, formatPptxAuditFailure(report));
+  return { ...report, slideCount: report.metrics.slideCount };
 }
 
 export function listZipEntryNames(buffer) {
-  const minimumEocdOffset = Math.max(0, buffer.byteLength - 65_557);
-  let eocdOffset = -1;
-  for (let offset = buffer.byteLength - 22; offset >= minimumEocdOffset; offset -= 1) {
-    if (buffer.readUInt32LE(offset) === 0x06054b50) {
-      eocdOffset = offset;
-      break;
-    }
-  }
-  assert.ok(eocdOffset >= 0, "ZIP end-of-central-directory record is missing");
-  const entryCount = buffer.readUInt16LE(eocdOffset + 10);
-  let offset = buffer.readUInt32LE(eocdOffset + 16);
-  const entries = [];
-  for (let index = 0; index < entryCount; index += 1) {
-    assert.equal(buffer.readUInt32LE(offset), 0x02014b50, "ZIP central-directory entry is malformed");
-    const nameLength = buffer.readUInt16LE(offset + 28);
-    const extraLength = buffer.readUInt16LE(offset + 30);
-    const commentLength = buffer.readUInt16LE(offset + 32);
-    entries.push(buffer.subarray(offset + 46, offset + 46 + nameLength).toString("utf8"));
-    offset += 46 + nameLength + extraLength + commentLength;
-  }
-  return entries;
+  return listPptxZipEntryNames(buffer);
 }
 
 export async function ensureOnboardingComplete(gatewayUrl, completedBy = "verification-research-artifact-reliability") {
@@ -548,6 +687,26 @@ function requireText(value, label) {
 
 function requireOptionalText(value) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function normalizeSearchQuery(value) {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim()
+    .split(/\s+/u)
+    .sort()
+    .join(" ");
+}
+
+function canonicalCitationUrl(value) {
+  const parsed = new URL(value);
+  parsed.hash = "";
+  return parsed.toString();
+}
+
+export function deterministicEvidenceUrls() {
+  return [...DETERMINISTIC_FIRECRAWL_RESULTS.values()].flat().map((result) => result.url);
 }
 
 function relativeArtifact(context, filePath) {

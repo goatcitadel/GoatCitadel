@@ -5,7 +5,12 @@ import {
   resolveContentSlideRenderer,
   resolvePresentationDeckLayoutPlan,
 } from "./presentation-layout.js";
-import { buildPresentationSlideVisuals, createPresentationPptxWithDiagnostics } from "./presentation-pptx.js";
+import {
+  buildPresentationSlideVisuals,
+  createPresentationPptxWithDiagnostics,
+  type PresentationPackageAuditReport,
+} from "./presentation-pptx.js";
+import { stablePresentationSourceId } from "./presentation-model.js";
 
 afterEach(() => {
   vi.doUnmock("pptxgenjs");
@@ -157,18 +162,82 @@ describe("presentation PPTX layout selection", () => {
       { title: "Routine", bullets: ["Pick time", "Set route", "Go outside"] },
       { title: "Habits", bullets: ["Use shoes", "Drink water", "Track wins"] },
       { title: "Progress", bullets: ["Walk daily", "Add minutes", "Repeat weekly"] },
+      { title: "Routes", bullets: ["Pick a loop", "Check weather", "Bring water"] },
+      { title: "Company", bullets: ["Invite a friend", "Call family", "Walk a dog"] },
+      { title: "Recovery", bullets: ["Slow down", "Stretch later", "Rest well"] },
+      { title: "Review", bullets: ["Track distance", "Note energy", "Plan next week"] },
     ];
 
     const quality = analyzePresentationDeckQuality(design, deckSlides);
 
-    expect(quality.rendererCounts).toEqual({
-      "image-text": 4,
-      "two-column": 0,
+    expect(quality.rendererCounts).toMatchObject({
+      "image-text": 5,
+      "two-column": 2,
       "stacked-list": 0,
-      "stat-callout": 0,
+      "stat-callout": 1,
     });
-    expect(quality.templateWarnings).toEqual([expect.stringContaining("Layout variety is low")]);
+    expect(quality.templateWarnings).toEqual(
+      expect.arrayContaining([expect.stringContaining("Layout variety is low")]),
+    );
     expect(quality.contentWarnings).toEqual([expect.stringContaining("very brief bullets")]);
+  });
+
+  it("uses distinct continuation layouts after two repeated semantic layouts", () => {
+    const design = createArtifactDesignPlan({ kind: "presentation", format: "pptx", title: "Semantic rhythm" });
+    const table = { headers: [{ text: "Game" }], rows: [[{ text: "Example" }]] };
+    const chart = { type: "bar" as const, categories: ["Example"], series: [{ name: "Signal", values: [1] }] };
+    const deckSlides = [
+      { title: "Semantic rhythm", bullets: ["Overview"] },
+      ...Array.from({ length: 3 }, (_, index) => ({ title: `Table ${index}`, bullets: [], table })),
+      ...Array.from({ length: 3 }, (_, index) => ({ title: `Chart ${index}`, bullets: [], chart })),
+      ...Array.from({ length: 3 }, (_, index) => ({
+        title: `Section ${index}`,
+        bullets: ["Section detail"],
+        archetype: "section" as const,
+      })),
+    ];
+
+    const renderers = resolvePresentationDeckLayoutPlan(design, deckSlides).map((item) => item.renderer);
+
+    expect(renderers).toEqual([
+      "hero",
+      "table",
+      "table",
+      "table-continuation",
+      "chart",
+      "chart",
+      "chart-continuation",
+      "section",
+      "section",
+      "section-continuation",
+    ]);
+    expect(analyzePresentationDeckQuality(design, deckSlides).templateWarnings).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("repeats")]),
+    );
+  });
+
+  it("exempts only generated source appendix slides from identical-layout runs", () => {
+    const design = createArtifactDesignPlan({ kind: "presentation", format: "pptx", title: "Source rhythm" });
+    const generatedSources = Array.from({ length: 4 }, (_, index) => ({
+      title: `Sources ${index}`,
+      bullets: ["Source"],
+      archetype: "sources" as const,
+      generatedSourceAppendix: true,
+    }));
+    const manualSources = generatedSources.map(({ generatedSourceAppendix: _ignored, ...slide }) => slide);
+
+    expect(
+      resolvePresentationDeckLayoutPlan(design, [
+        { title: "Source rhythm", bullets: ["Overview"] },
+        ...generatedSources,
+      ]).map((item) => item.renderer),
+    ).toEqual(["hero", "sources", "sources", "sources", "sources"]);
+    expect(
+      resolvePresentationDeckLayoutPlan(design, [
+        { title: "Source rhythm", bullets: ["Overview"] },
+        ...manualSources,
+      ]).map((item) => item.renderer),
+    ).toEqual(["hero", "sources", "sources", "sources-continuation", "sources"]);
   });
 
   it("treats very short single-bullet content slides as weak content", () => {
@@ -330,7 +399,7 @@ describe("presentation PPTX layout selection", () => {
     expect(imageObjects).toContainEqual(
       expect.objectContaining({
         data: "data:image/png;base64,mapped-section-bytes",
-        objectName: "GoatCitadel section visual",
+        objectName: "GoatCitadel supporting visual",
       }),
     );
   });
@@ -408,13 +477,13 @@ describe("presentation PPTX layout selection", () => {
 
     expect(result.renderer).toBe("pptxgenjs");
     expect(visibleText.join("\n")).not.toMatch(/GoatCitadel design brief|Designed artifact|Image Text/u);
-    expect(notesText.join("\n")).toContain("GoatCitadel design provenance");
+    expect(notesText.join("\n")).not.toContain("GoatCitadel design provenance");
     expect(localVisualSvg.join("\n")).not.toContain("<text");
     expect(imageObjects.some((image) => image.objectName === "GoatCitadel accent visual")).toBe(false);
   });
 
-  it("shrinks overlong bullet rows instead of allowing PowerPoint to ellipsize them", async () => {
-    const textObjects: Array<{ text: string; options?: Record<string, unknown> }> = [];
+  it("keeps complete bullet text at the body font floor without shrink-to-fit", async () => {
+    const textObjects: Array<{ text: unknown; options?: Record<string, unknown> }> = [];
     vi.doMock("sharp", () => ({
       default: () => ({ png: () => ({ toBuffer: async () => Buffer.from("mock-png") }) }),
     }));
@@ -432,8 +501,8 @@ describe("presentation PPTX layout selection", () => {
           const slide: Record<string, unknown> = {};
           slide.addShape = () => slide;
           slide.addImage = () => slide;
-          slide.addText = (text: string, options?: Record<string, unknown>) => {
-            textObjects.push({ text: String(text), options });
+          slide.addText = (text: unknown, options?: Record<string, unknown>) => {
+            textObjects.push({ text, options });
             return slide;
           };
           slide.addNotes = () => slide;
@@ -449,15 +518,21 @@ describe("presentation PPTX layout selection", () => {
     const overlongBullet =
       "Research limitation: accessible search evidence consisted mainly of editorial compilations; no controlled audience test was available in this pass. Joke wording may vary across organizations and publications.";
 
-    await createPresentationPptxWithDiagnostics({
+    const result = await createPresentationPptxWithDiagnostics({
       title: "Sources",
       slides: [{ title: "Sources and limitations", bullets: [overlongBullet] }],
     });
 
-    expect(textObjects.find((item) => item.text === overlongBullet)?.options).toMatchObject({
-      fit: "shrink",
-      valign: "top",
-    });
+    const bulletTextBox = textObjects.find(
+      (item) =>
+        Array.isArray(item.text) &&
+        item.text.some(
+          (run) => typeof run === "object" && run !== null && (run as { text?: string }).text === overlongBullet,
+        ),
+    );
+    expect(bulletTextBox?.options).toMatchObject({ fontSize: 16 });
+    expect(bulletTextBox?.options).not.toHaveProperty("fit");
+    expect(result.manifest.minimumBodyFontSize).toBe(16);
   });
 
   it("keeps generated visuals safe when raw callers omit display strings", async () => {
@@ -473,6 +548,111 @@ describe("presentation PPTX layout selection", () => {
 
     expect(visuals).toHaveLength(1);
     expect(visuals[0]?.dataUri).toMatch(/^data:image\/png;base64,/u);
+  });
+
+  it("renders semantic tables, charts, clickable citations, clean notes, and a truthful manifest", async () => {
+    const textObjects: unknown[] = [];
+    const notes: string[] = [];
+    const tables: unknown[] = [];
+    const charts: unknown[] = [];
+    vi.doMock("sharp", () => ({
+      default: () => ({ png: () => ({ toBuffer: async () => Buffer.from("mock-png") }) }),
+    }));
+    vi.doMock("pptxgenjs", () => ({
+      default: class MockPptxGen {
+        public layout = "";
+        public author = "";
+        public company = "";
+        public subject = "";
+        public title = "";
+        public theme = {};
+        public ShapeType = { rect: "rect", roundRect: "roundRect" };
+        public ChartType = { bar: "bar", line: "line" };
+
+        public addSlide() {
+          const slide: Record<string, unknown> = {};
+          slide.addShape = () => slide;
+          slide.addImage = () => slide;
+          slide.addText = (text: unknown) => {
+            textObjects.push(text);
+            return slide;
+          };
+          slide.addTable = (rows: unknown) => {
+            tables.push(rows);
+            return slide;
+          };
+          slide.addChart = (type: unknown, series: unknown) => {
+            charts.push({ type, series });
+            return slide;
+          };
+          slide.addNotes = (value: string) => {
+            notes.push(value);
+            return slide;
+          };
+          return slide;
+        }
+
+        public async write() {
+          return Buffer.from("PKmock");
+        }
+      },
+    }));
+
+    const url = "https://example.com/official";
+    const sourceId = stablePresentationSourceId(url);
+    const result = await createPresentationPptxWithDiagnostics(
+      {
+        title: "Grounded Deck",
+        sources: [{ id: sourceId, title: "Official source", url, publisher: "Example", role: "official" }],
+        slides: [
+          {
+            title: "Finding",
+            speakerNotes: "Explain the audience implication.",
+            bullets: [{ text: "Official support is active.", claimKind: "fact", sourceIds: [sourceId] }],
+          },
+          {
+            title: "Matrix",
+            archetype: "matrix",
+            bullets: [],
+            table: {
+              headers: [{ text: "Game" }, { text: "Fit" }],
+              rows: [[{ text: "Example" }, { text: "Strong", sourceIds: [sourceId] }]],
+            },
+          },
+          {
+            title: "Signal",
+            archetype: "chart",
+            bullets: [],
+            chart: {
+              type: "bar",
+              categories: ["Example"],
+              series: [{ name: "Signal", values: [1], sourceIds: [sourceId] }],
+            },
+          },
+        ],
+      },
+      { auditPackage: () => passingPackageAudit() },
+    );
+
+    const textRuns = textObjects.flatMap((item) => (Array.isArray(item) ? item : []));
+    expect(textRuns).toEqual(
+      expect.arrayContaining([expect.objectContaining({ options: expect.objectContaining({ hyperlink: { url } }) })]),
+    );
+    expect(tables).toHaveLength(1);
+    expect(JSON.stringify(tables)).toContain(url);
+    expect(charts).toHaveLength(1);
+    expect(textObjects).toContain("Series: Signal");
+    expect(notes.join("\n")).toContain("Explain the audience implication.");
+    expect(notes.join("\n")).not.toMatch(/design provenance|revised prompt|visual source/iu);
+    expect(result.manifest).toMatchObject({
+      slideCount: 5,
+      contentSlideCount: 4,
+      sourceCount: 1,
+      tableCount: 1,
+      chartCount: 1,
+      minimumBodyFontSize: 16,
+    });
+    expect(result.manifest.hyperlinkCount).toBeGreaterThanOrEqual(4);
   });
 
   it("returns truthful diagnostics when the PPTX renderer falls back", async () => {
@@ -492,7 +672,24 @@ describe("presentation PPTX layout selection", () => {
     expect(result.renderer).toBe("fallback");
     expect(result.fallbackTriggered).toBe(true);
     expect(result.usedAssetIds).toEqual([]);
-    expect(result.warnings).toEqual([expect.stringContaining("text-only fallback deck")]);
+    expect(result.warnings).toEqual([expect.stringContaining("semantic text fallback")]);
     expect(result.buffer.subarray(0, 2).toString("utf8")).toBe("PK");
   });
 });
+
+function passingPackageAudit(): PresentationPackageAuditReport {
+  return {
+    passed: true,
+    findings: [],
+    observed: {
+      slideCount: 0,
+      hyperlinkCount: 0,
+      uniqueHyperlinkTargetCount: 0,
+      tableCount: 0,
+      chartCount: 0,
+      pictureCount: 0,
+      authoredNoteCount: 0,
+      layoutCounts: {},
+    },
+  };
+}
