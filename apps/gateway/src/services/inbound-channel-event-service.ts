@@ -70,13 +70,18 @@ export interface InboundChannelEventServiceDeps {
     deduped: boolean;
     session: { sessionId: string; sessionKey?: string };
   }>;
-  setChatSessionBinding: (binding: {
-    sessionId: string;
-    transport: "integration";
+  ensureInboundChatSession: (input: {
+    route: {
+      channel: string;
+      account: string;
+      peer?: string;
+      room?: string;
+      threadId?: string;
+    };
     connectionId: string;
     target?: string;
-    writable: boolean;
-  }) => Promise<void>;
+    displayName?: string;
+  }) => Promise<{ sessionId: string; sessionKey: string }>;
   hasRunningTurn: (sessionId: string) => Promise<boolean>;
   respondToExistingChatMessage: (
     sessionId: string,
@@ -414,11 +419,31 @@ export class InboundChannelEventService {
     const messageId = stableInboundId("message", claim.event.eventId);
     const content = await this.resolveMessageContent(payload, connection.config);
     assertCurrent();
+    const initializedSession = await this.deps.ensureInboundChatSession({
+      route: {
+        channel: claim.event.channelKey,
+        account: payload.message.account,
+        peer: payload.message.peer,
+        room: payload.message.room,
+        threadId: payload.message.threadId,
+      },
+      connectionId: claim.event.connectionId,
+      target: payload.bindingTarget,
+      displayName: payload.message.displayName,
+    });
+    assertCurrent();
     const ingestResult = await this.deps.ingestChannelMessage(claim.event.channelKey, claim.event.eventId, {
       ...payload.message,
       eventId: messageId,
       content,
     });
+    if (
+      ingestResult.session.sessionId !== initializedSession.sessionId ||
+      (ingestResult.session.sessionKey !== undefined &&
+        ingestResult.session.sessionKey !== initializedSession.sessionKey)
+    ) {
+      throw new Error("Inbound channel ingest resolved a different canonical Chat session.");
+    }
     assertCurrent();
     this.requireTransition(
       claim,
@@ -432,14 +457,6 @@ export class InboundChannelEventService {
         },
       }),
     );
-    await this.deps.setChatSessionBinding({
-      sessionId: ingestResult.session.sessionId,
-      transport: "integration",
-      connectionId: claim.event.connectionId,
-      target: payload.bindingTarget,
-      writable: true,
-    });
-
     if (claim.event.dispatchKind === "record_only") {
       this.requireTransition(
         claim,

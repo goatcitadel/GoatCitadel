@@ -10,7 +10,7 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import { logger } from "@goatcitadel/gateway-core";
+import { logger, resolveSessionRoute } from "@goatcitadel/gateway-core";
 import {
   applyChatModePresetToPatch,
   buildChatModePrefsPatch,
@@ -1121,6 +1121,81 @@ export async function setChatSessionBinding(
     transport: binding.transport,
   });
   return binding;
+}
+
+/**
+ * Materialize the canonical Chat aggregate for a durably accepted integration
+ * route before post-ingest memory policy or turn admission can observe it.
+ * Workspace authority comes only from the persisted integration connection.
+ */
+export async function ensureInboundIntegrationChatSession(
+  deps: ChatSessionDependencies,
+  input: {
+    route: {
+      channel: string;
+      account: string;
+      peer?: string;
+      room?: string;
+      threadId?: string;
+    };
+    connectionId: string;
+    target?: string;
+    displayName?: string;
+  },
+): Promise<{ sessionId: string; sessionKey: string }> {
+  const connectionId = input.connectionId.trim();
+  const target = input.target?.trim();
+  if (!connectionId || !target) {
+    throw new Error("connectionId and target are required for integration transport");
+  }
+  const resolution = resolveSessionRoute(input.route);
+  const now = new Date().toISOString();
+
+  await deps.storage.runImmediateTransaction(async () => {
+    const connection = await deps.storage.integrationConnections.get(connectionId);
+    const workspaceId = deps.normalizeWorkspaceId(connection.workspaceId);
+    const existingMeta = await deps.storage.chatSessionMeta.get(resolution.sessionId);
+    if (existingMeta && deps.normalizeWorkspaceId(existingMeta.workspaceId) !== workspaceId) {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: "stable integration session key already belongs to another workspace",
+      });
+    }
+    const [existingSession] = await deps.storage.sessions.listBySessionIds([resolution.sessionId]);
+    if (!existingSession) {
+      await deps.storage.sessions.upsert({
+        sessionId: resolution.sessionId,
+        sessionKey: resolution.sessionKey,
+        kind: resolution.kind,
+        channel: input.route.channel,
+        account: input.route.account,
+        displayName: input.displayName?.trim() || undefined,
+        timestamp: now,
+      });
+    }
+    await deps.storage.chatSessionMeta.ensure(resolution.sessionId, now, workspaceId);
+    await deps.storage.chatSessionPrefs.ensure(resolution.sessionId, now);
+    await deps.storage.chatSessionBindings.upsert(
+      {
+        sessionId: resolution.sessionId,
+        workspaceId,
+        transport: "integration",
+        connectionId,
+        target,
+        writable: true,
+      },
+      now,
+    );
+  });
+
+  await deps.ensureChatSessionRuntimeGrants(resolution.sessionId);
+  deps.operatorSummaryCache.invalidate();
+  await deps.publishRealtime("chat_session_updated", "chat", {
+    type: "chat_session_binding_updated",
+    sessionId: resolution.sessionId,
+    transport: "integration",
+  });
+  return resolution;
 }
 
 export async function getChatSessionPrefs(

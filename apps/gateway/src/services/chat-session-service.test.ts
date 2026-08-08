@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { ConflictError } from "@goatcitadel/contracts";
+import { resolveSessionRoute } from "@goatcitadel/gateway-core";
 import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import {
   archiveChatSession,
@@ -10,6 +11,7 @@ import {
   assignChatSessionProject,
   createChatSideChat,
   createChatSession,
+  ensureInboundIntegrationChatSession,
   ensureChatSessionWithStableKey,
   deleteChatSession,
   getChatSideChat,
@@ -263,6 +265,79 @@ describe("chat session service", () => {
       ).rejects.toThrow("stable chat session key already belongs to another workspace");
       expect(storage.chatSessionMeta.get(first.sessionId)?.workspaceId).toBe("default");
       expect(storage.chatSessionMeta.get(first.sessionId)?.title).toBe("Delegate - Coder");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("keeps inbound integration sessions in the connection workspace across retries and rebinding", async () => {
+    const { storage, cleanup } = createStorage();
+    try {
+      const deps = createDeps(storage);
+      const connection = storage.integrationConnections.create({
+        catalogId: "channel.discord",
+        kind: "channel",
+        key: "discord",
+        label: "Discord",
+        enabled: true,
+        status: "connected",
+        workspaceId: "workspace-a",
+        config: {},
+      });
+      const input = {
+        route: {
+          channel: "discord",
+          account: connection.connectionId,
+          room: "channel-1",
+        },
+        connectionId: connection.connectionId,
+        target: "channel-1",
+        displayName: "Discord channel",
+      };
+      const resolution = resolveSessionRoute(input.route);
+
+      await expect(ensureInboundIntegrationChatSession(deps, input)).resolves.toEqual(resolution);
+      const preservedTimestamp = "2026-05-03T17:00:00.000Z";
+      storage.db
+        .prepare("UPDATE sessions SET display_name = ?, last_activity_at = ?, updated_at = ? WHERE session_id = ?")
+        .run("Preserved channel title", preservedTimestamp, preservedTimestamp, resolution.sessionId);
+      await expect(ensureInboundIntegrationChatSession(deps, input)).resolves.toEqual(resolution);
+      expect(storage.sessions.getBySessionId(resolution.sessionId)).toMatchObject({
+        displayName: "Preserved channel title",
+        lastActivityAt: preservedTimestamp,
+        updatedAt: preservedTimestamp,
+      });
+      expect(storage.chatSessionMeta.get(resolution.sessionId)).toMatchObject({ workspaceId: "workspace-a" });
+      expect(storage.chatSessionPrefs.get(resolution.sessionId)).toBeDefined();
+      expect(storage.chatSessionBindings.get(resolution.sessionId)).toMatchObject({
+        transport: "integration",
+        connectionId: connection.connectionId,
+        target: "channel-1",
+        writable: true,
+      });
+      expect(
+        storage.db
+          .prepare("SELECT workspace_id FROM chat_session_bindings WHERE session_id = ?")
+          .get(resolution.sessionId),
+      ).toMatchObject({ workspace_id: "workspace-a" });
+      expect(deps.ensureChatSessionRuntimeGrants).toHaveBeenCalledTimes(2);
+      expect(deps.publishRealtime).toHaveBeenCalledTimes(2);
+      expect(deps.publishRealtime).toHaveBeenLastCalledWith("chat_session_updated", "chat", {
+        type: "chat_session_binding_updated",
+        sessionId: resolution.sessionId,
+        transport: "integration",
+      });
+
+      storage.integrationConnections.update(connection.connectionId, { workspaceId: "workspace-b" });
+      await expect(ensureInboundIntegrationChatSession(deps, input)).rejects.toBeInstanceOf(ConflictError);
+      expect(storage.chatSessionMeta.get(resolution.sessionId)).toMatchObject({ workspaceId: "workspace-a" });
+      expect(
+        storage.db
+          .prepare("SELECT workspace_id FROM chat_session_bindings WHERE session_id = ?")
+          .get(resolution.sessionId),
+      ).toMatchObject({ workspace_id: "workspace-a" });
+      expect(deps.ensureChatSessionRuntimeGrants).toHaveBeenCalledTimes(2);
+      expect(deps.publishRealtime).toHaveBeenCalledTimes(2);
     } finally {
       cleanup();
     }

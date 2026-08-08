@@ -62,7 +62,7 @@ function createGatewayHarness() {
       get: vi.fn(() => undefined),
     },
     integrationConnections: {
-      get: vi.fn(),
+      get: vi.fn(() => createDiscordConnection()),
     },
     systemSettings: {
       get: vi.fn((key: string) => (settings.has(key) ? { value: settings.get(key) } : undefined)),

@@ -3,7 +3,8 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Storage } from "@goatcitadel/storage";
+import { EventIngestService, resolveSessionRoute } from "@goatcitadel/gateway-core";
+import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import type { ChatMessageRecord, ChatSendMessageResponse } from "@goatcitadel/contracts";
 import {
   InboundChannelEventService,
@@ -11,6 +12,7 @@ import {
   type InboundChannelEventServiceDeps,
 } from "./inbound-channel-event-service.js";
 import type { DurableInboundChannelAcceptInput } from "./channel-inbound-dispatch.js";
+import { ensureInboundIntegrationChatSession, type ChatSessionDependencies } from "./chat-session-service.js";
 import { SharedHostLifecycleService } from "./shared-host-lifecycle-service.js";
 
 describe("InboundChannelEventService", () => {
@@ -43,6 +45,167 @@ describe("InboundChannelEventService", () => {
 
     response.resolve(buildResponse(responseIdentity));
     await waitFor(() => harness.storage.inboundChannelEvents.get(accepted.inboundEventId)?.status === "completed");
+  });
+
+  it("initializes the first Discord route as canonical Chat state before turn admission", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "discord-inbound-session-"));
+    const rawStorage = new Storage({
+      dbPath: ":memory:",
+      transcriptsDir: path.join(root, "transcripts"),
+      auditDir: path.join(root, "audit"),
+    });
+    const storage = createSqliteAsyncStorage(rawStorage);
+    const services: InboundChannelEventService[] = [];
+    const tasks = new Set<Promise<void>>();
+    cleanups.push(async () => {
+      services.forEach((item) => item.close());
+      await Promise.allSettled([...tasks]);
+      await storage.close();
+      await rm(root, { recursive: true, force: true });
+    });
+    const connection = await storage.integrationConnections.create({
+      catalogId: "channel.discord",
+      kind: "channel",
+      key: "discord",
+      label: "Discord",
+      enabled: true,
+      status: "connected",
+      workspaceId: "workspace-a",
+      config: {},
+    });
+    const eventIngest = new EventIngestService(storage);
+    const runtimeGrants = vi.fn(async () => undefined);
+    const chatDeps: ChatSessionDependencies = {
+      storage,
+      operatorSummaryCache: { invalidate: vi.fn() },
+      normalizeWorkspaceId: (workspaceId) => workspaceId?.trim() || "default",
+      ensureChatSessionRuntimeGrants: runtimeGrants,
+      requireChatSession: async () => {
+        throw new Error("not used by inbound binding initialization");
+      },
+      getSession: async (sessionId) => storage.sessions.getBySessionId(sessionId),
+      publishRealtime: vi.fn(async () => undefined),
+      clearChatTurnWriteLease: vi.fn(),
+      removeChatSessionStoredFile: vi.fn(async () => undefined),
+      copyChatSessionStoredFile: vi.fn(async (storageRelPath) => storageRelPath),
+      ensureChatSessionModelDefaults: (_sessionId, prefs) => prefs,
+      hydrateChatPrefsWithAutonomy: async (_sessionId, prefs) => prefs,
+      patchSessionAutonomyPrefs: vi.fn(async () => undefined),
+    };
+    const respondToExistingChatMessage = vi.fn<InboundChannelEventServiceDeps["respondToExistingChatMessage"]>(
+      async (sessionId, _messageId, options) => {
+        expect(await storage.chatSessionMeta.get(sessionId)).toMatchObject({ workspaceId: "workspace-a" });
+        expect(await storage.chatSessionPrefs.get(sessionId)).toBeDefined();
+        expect(await storage.chatSessionBindings.get(sessionId)).toMatchObject({
+          transport: "integration",
+          connectionId: connection.connectionId,
+          target: "discord-channel-1",
+          writable: true,
+        });
+        options.inboundDurableIdentity.onDurableRunLaunched?.(options.inboundDurableIdentity.durableRunId);
+        options.inboundDurableIdentity.onDeliveryEnqueued?.({
+          deliveryId: "discord-delivery-1",
+          providerMessageId: "discord-reply-1",
+          idempotencyKey: options.inboundDurableIdentity.deliveryIdempotencyKey,
+        });
+        return buildResponse(options.inboundDurableIdentity, sessionId);
+      },
+    );
+    const service = new InboundChannelEventService({
+      storage,
+      ownerId: "discord-test-worker",
+      isClosing: () => false,
+      registerBackgroundTask: (task) => {
+        tasks.add(task);
+        void task.finally(() => tasks.delete(task));
+      },
+      getIntegrationConnection: async (connectionId) => storage.integrationConnections.get(connectionId),
+      ensureInboundChatSession: async (input) => await ensureInboundIntegrationChatSession(chatDeps, input),
+      ingestChannelMessage: async (channel, idempotencyKey, message) => {
+        const resolution = resolveSessionRoute({
+          channel,
+          account: message.account,
+          peer: message.peer,
+          room: message.room,
+          threadId: message.threadId,
+        });
+        expect(await storage.chatSessionMeta.get(resolution.sessionId)).toMatchObject({ workspaceId: "workspace-a" });
+        expect(await storage.chatSessionPrefs.get(resolution.sessionId)).toBeDefined();
+        expect(
+          (await storage.chatSessionBindings.listBySessionIds([resolution.sessionId], "workspace-a")).get(
+            resolution.sessionId,
+          ),
+        ).toMatchObject({
+          transport: "integration",
+          connectionId: connection.connectionId,
+          target: "discord-channel-1",
+          writable: true,
+        });
+        return await eventIngest.ingest({
+          endpoint: "/api/v1/gateway/events",
+          idempotencyKey,
+          sourceAuthority: "external_channel",
+          payload: {
+            eventId: message.eventId,
+            route: {
+              channel,
+              account: message.account,
+              peer: message.peer,
+              room: message.room,
+              threadId: message.threadId,
+            },
+            actor: { type: message.actorType ?? "user", id: message.actorId },
+            message: { role: "user", content: message.content },
+          },
+        });
+      },
+      hasRunningTurn: async () => false,
+      respondToExistingChatMessage,
+      transcribeChannelVoice: vi.fn(async () => ({ ok: false as const, reason: "transcription_failed" })),
+      executeInboundCommand: vi.fn(async () => ({ resultText: "Command completed." })),
+      decideBotLoop: () => ({ action: "allow" }),
+      emitChannelActivity: vi.fn(async () => undefined),
+      recordDevDiagnostic: vi.fn(),
+    });
+    services.push(service);
+
+    const accepted = await service.accept({
+      channel: "discord",
+      connectionId: connection.connectionId,
+      idempotencyKey: "discord:message:first",
+      eventType: "discord-gateway-message",
+      bindingTarget: "discord-channel-1",
+      dispatchKind: "agent_turn",
+      message: {
+        eventId: "discord-message-1",
+        account: connection.connectionId,
+        room: "discord-channel-1",
+        actorId: "discord-user-1",
+        actorType: "user",
+        content: "hello from Discord",
+      },
+    });
+
+    await waitFor(() => {
+      const status = rawStorage.inboundChannelEvents.get(accepted.inboundEventId)?.status;
+      return status === "completed" || status === "retry_wait" || status === "failed";
+    });
+    const event = rawStorage.inboundChannelEvents.get(accepted.inboundEventId);
+    expect(event).toMatchObject({
+      status: "completed",
+      attemptCount: 1,
+      sessionId: expect.stringMatching(/^sess_/),
+      durableRunId: expect.stringMatching(/^inbound-run-/),
+      deliveryId: "discord-delivery-1",
+      providerMessageId: "discord-reply-1",
+      lastError: undefined,
+    });
+    const bindingWorkspace = rawStorage.db
+      .prepare("SELECT workspace_id FROM chat_session_bindings WHERE session_id = ?")
+      .get(event?.sessionId) as { workspace_id: string } | undefined;
+    expect(bindingWorkspace?.workspace_id).toBe("workspace-a");
+    expect(respondToExistingChatMessage).toHaveBeenCalledTimes(1);
+    expect(runtimeGrants).toHaveBeenCalledTimes(1);
   });
 
   it("does not recover or claim inbound work after shared-host admission closes", async () => {
@@ -627,7 +790,10 @@ describe("InboundChannelEventService", () => {
         void task.finally(() => tasks.delete(task));
       },
       getIntegrationConnection: () => ({ key: "telegram", enabled: true, status: "connected", config: {} }),
-      setChatSessionBinding: vi.fn(),
+      ensureInboundChatSession: vi.fn(async () => ({
+        sessionId: "session-1",
+        sessionKey: "channel:test",
+      })),
       hasRunningTurn: () => false,
       transcribeChannelVoice: vi.fn(async () => ({ ok: false as const, reason: "transcription_failed" })),
       executeInboundCommand: vi.fn(async () => ({ resultText: "Command completed." })),
@@ -688,11 +854,14 @@ function buildInput(overrides: Partial<DurableInboundChannelAcceptInput> = {}): 
   };
 }
 
-function buildResponse(identity: InboundChannelDeterministicIdentity): ChatSendMessageResponse {
+function buildResponse(
+  identity: InboundChannelDeterministicIdentity,
+  sessionId = "session-1",
+): ChatSendMessageResponse {
   const now = new Date().toISOString();
   const userMessage: ChatMessageRecord = {
     messageId: identity.userMessageId,
-    sessionId: "session-1",
+    sessionId,
     role: "user",
     actorType: "user",
     actorId: "user-1",
@@ -700,11 +869,11 @@ function buildResponse(identity: InboundChannelDeterministicIdentity): ChatSendM
     timestamp: now,
   };
   return {
-    sessionId: "session-1",
+    sessionId,
     userMessage,
     assistantMessage: {
       messageId: identity.assistantMessageId,
-      sessionId: "session-1",
+      sessionId,
       role: "assistant",
       actorType: "agent",
       actorId: "assistant",

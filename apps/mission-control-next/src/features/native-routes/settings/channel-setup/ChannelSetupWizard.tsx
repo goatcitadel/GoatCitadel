@@ -538,10 +538,11 @@ function FieldCollection({
         const rawValue = values[field.key];
         const hasReplacement =
           typeof rawValue === "string" && rawValue.trim().length > 0 && rawValue !== SECRET_REDACTION_MARKER;
-        const configuredSecret =
+        const configuredSecret = Boolean(
           field.sensitive &&
           (rawValue === SECRET_REDACTION_MARKER ||
-            (draft.hydration?.fieldState[field.key] === "configured" && !hasReplacement));
+            (draft.hydration?.fieldState[field.key] === "configured" && !hasReplacement)),
+        );
         const inputId = `channel-${draft.draftId}-${field.key}`;
         const descriptionId = `${inputId}-description`;
         const errorId = `${inputId}-error`;

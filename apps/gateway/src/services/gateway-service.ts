@@ -1555,9 +1555,8 @@ export class GatewayService {
       getIntegrationConnection: async (connectionId) => await this.storage.integrationConnections.get(connectionId),
       ingestChannelMessage: async (channel, idempotencyKey, message) =>
         await this.ingestChannelMessage(channel, idempotencyKey, message),
-      setChatSessionBinding: async (binding) => {
-        await this.setChatSessionBinding(binding);
-      },
+      ensureInboundChatSession: async (input) =>
+        await chatSessionService.ensureInboundIntegrationChatSession(this.buildChatSessionDependencies(), input),
       hasRunningTurn: async (sessionId) => await this.hasRunningTurn(sessionId),
       respondToExistingChatMessage: async (sessionId, eventId, options) =>
         await this.respondToExistingChatMessage(sessionId, eventId, options),

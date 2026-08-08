@@ -28,7 +28,6 @@ import type {
   InboundChannelCommandResult,
 } from "./inbound-channel-event-service.js";
 
-const DEFAULT_DISCORD_WORKSPACE_ID = "default";
 const DISCORD_ROUTE_SESSIONS_SETTING_KEY = "discord_route_sessions_v1";
 const DISCORD_APPROVAL_VERSION_KEY = "discordApprovalVersion";
 const DISCORD_APPROVAL_DECISION_KEY = "discordApprovalDecision";
@@ -222,13 +221,11 @@ export async function ensureDiscordChatSession(
     threadId: route.threadId,
   });
   const now = new Date().toISOString();
-  const existingMeta = await host.storage.chatSessionMeta.get(resolution.sessionId);
-  if (existingMeta?.workspaceId && existingMeta.workspaceId !== DEFAULT_DISCORD_WORKSPACE_ID) {
-    throw new Error("stable Discord session key already belongs to another workspace");
-  }
   await host.storage.runImmediateTransaction(async () => {
+    const connection = await host.storage.integrationConnections.get(input.connectionId);
+    const workspaceId = connection.workspaceId?.trim() || "default";
     const lockedMeta = await host.storage.chatSessionMeta.get(resolution.sessionId);
-    if (lockedMeta?.workspaceId && lockedMeta.workspaceId !== DEFAULT_DISCORD_WORKSPACE_ID) {
+    if (lockedMeta?.workspaceId && lockedMeta.workspaceId !== workspaceId) {
       throw new Error("stable Discord session key already belongs to another workspace");
     }
     await host.storage.sessions.upsert({
@@ -240,12 +237,12 @@ export async function ensureDiscordChatSession(
       displayName: input.displayName?.trim() || undefined,
       timestamp: now,
     });
-    await host.storage.chatSessionMeta.ensure(resolution.sessionId, now, DEFAULT_DISCORD_WORKSPACE_ID);
+    await host.storage.chatSessionMeta.ensure(resolution.sessionId, now, workspaceId);
     await host.storage.chatSessionPrefs.ensure(resolution.sessionId, now);
     await host.storage.chatSessionBindings.upsert(
       {
         sessionId: resolution.sessionId,
-        workspaceId: DEFAULT_DISCORD_WORKSPACE_ID,
+        workspaceId,
         transport: "integration",
         connectionId: input.connectionId,
         target: input.target,

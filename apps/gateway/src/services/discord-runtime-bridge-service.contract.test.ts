@@ -284,6 +284,7 @@ describe("discord-runtime-bridge-service contract behavior", () => {
 
   it("ensures Discord chat sessions, bindings, and route-session thread isolation", async () => {
     const host = createHost();
+    await host.storage.integrationConnections.update("discord-1", { workspaceId: "workspace-a" });
 
     const first = await ensureDiscordChatSession(host, {
       connectionId: "discord-1",
@@ -297,7 +298,7 @@ describe("discord-runtime-bridge-service contract behavior", () => {
     expect(host.storage.chatSessionBindings.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: first.sessionId,
-        workspaceId: "default",
+        workspaceId: "workspace-a",
         transport: "integration",
         connectionId: "discord-1",
         target: "channel-1",
