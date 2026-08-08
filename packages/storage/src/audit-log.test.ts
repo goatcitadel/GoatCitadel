@@ -219,7 +219,7 @@ describe("AuditLog", () => {
     const sanitized = sanitizeForAudit({
       message: [
         "key-abcdefghijklmnopqrstuvwxyz0123456789",
-        "Basic abcdefghijklmnopqrstuvwxyz012345",
+        "Basic dXNlcjpwYXNz",
         "Authorization: Bearer short-token",
         "SERVICE_TOKEN=abcdefghijklmnopqrstuvwxyz012345",
         "keychain:local/provider/openai",

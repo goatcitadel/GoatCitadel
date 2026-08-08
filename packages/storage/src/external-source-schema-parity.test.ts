@@ -163,12 +163,12 @@ describe("HX-407 paired external-source schema parity", () => {
       `);
       for (let version = 1; version <= 165; version += 1)
         mark.run(version, __sqliteInternals.getSchemaMigrationNameForTest(version));
-      // The session-control migrations (172-174) fail closed unless the database carries the
-      // real session/auth predecessor tables, so apply just their creators: chat workspace (10),
-      // agentic chat (13), agentic depth (17), device auth (27), companion sessions (45), and
-      // chat turn capability profiles (154). Every external-source table stays absent, which is
-      // the sparse premise under test.
-      for (const version of [10, 13, 17, 27, 45, 154]) {
+      // The session-control migrations (172-174) and secure-configuration reservation migrations
+      // (188-189) fail closed unless the database carries their real predecessors, so apply just
+      // those creators: chat workspace (10), agentic chat (13), agentic depth (17), durable runs
+      // (21), device auth (27), companion sessions (45), and chat turn capability profiles (154).
+      // Every external-source parent and child stays absent, which is the sparse premise under test.
+      for (const version of [10, 13, 17, 21, 27, 45, 154]) {
         __sqliteInternals.applySchemaMigrationForTest(version, sparse);
       }
       sparse.close();
@@ -187,6 +187,10 @@ describe("HX-407 paired external-source schema parity", () => {
             .get<{ count: number }>()?.count,
           0,
         );
+        const migrationHead = migrated.prepare("SELECT MAX(version) AS version FROM schema_migrations").get() as {
+          version: number;
+        };
+        assert.ok(Number(migrationHead.version) >= 189);
       } finally {
         migrated.close();
       }
