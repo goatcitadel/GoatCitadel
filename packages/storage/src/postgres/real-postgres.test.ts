@@ -800,6 +800,7 @@ test(
         runId,
         parentSessionId,
         storageModuleUrl: new URL(`../index${runtimeModuleExtension}`, import.meta.url).href,
+        asyncStorageModuleUrl: new URL(`../async-storage${runtimeModuleExtension}`, import.meta.url).href,
         postgresModuleUrl: new URL(`./sync${runtimeModuleExtension}`, import.meta.url).href,
         approvalServiceModuleUrl: new URL(
           `../../../../apps/gateway/src/services/approval-resolution-effects-service${runtimeModuleExtension}`,
@@ -6717,9 +6718,14 @@ const DELEGATION_APPROVAL_FANIN_WORKER_SOURCE = String.raw`
   void (async () => {
     let db;
     let storage;
+    let asyncStorage;
     try {
       const { tsImport } = await import(workerData.tsxApiUrl);
       const { Storage } = await tsImport(workerData.storageModuleUrl, workerData.storageModuleUrl);
+      const { createLocalAsyncStorage } = await tsImport(
+        workerData.asyncStorageModuleUrl,
+        workerData.asyncStorageModuleUrl,
+      );
       const { PostgresSyncDatabaseClient } = await tsImport(
         workerData.postgresModuleUrl,
         workerData.postgresModuleUrl,
@@ -6730,6 +6736,7 @@ const DELEGATION_APPROVAL_FANIN_WORKER_SOURCE = String.raw`
       );
       db = new PostgresSyncDatabaseClient(workerData.connectionOptions);
       storage = new Storage({ db, transcriptsDir: ".", auditDir: "." });
+      asyncStorage = createLocalAsyncStorage(storage);
 
       let reachedStepSet = false;
       for (const methodName of ["listByRun", "listByRunForUpdate"]) {
@@ -6746,7 +6753,7 @@ const DELEGATION_APPROVAL_FANIN_WORKER_SOURCE = String.raw`
       }
 
       const service = new ApprovalEffectsService(
-        { storage, publishRealtime() {} },
+        { storage: asyncStorage, publishRealtime() {} },
         {
           backgroundTasks: new Set(),
           wakeDurableRun() {},
@@ -6758,8 +6765,8 @@ const DELEGATION_APPROVAL_FANIN_WORKER_SOURCE = String.raw`
           resolveApprovalHookWorkspaceId() { return "default"; },
         },
       );
-      storage.runImmediateTransaction(() =>
-        service.materializeDelegationParentsFromApprovedChild({
+      await asyncStorage.runImmediateTransaction(async () =>
+        await service.materializeDelegationParentsFromApprovedChild({
           childTrace: {
             sessionId: workerData.child.sessionId,
             turnId: workerData.child.turnId,
@@ -6778,7 +6785,9 @@ const DELEGATION_APPROVAL_FANIN_WORKER_SOURCE = String.raw`
         error: error instanceof Error ? error.stack ?? error.message : String(error),
       });
     } finally {
-      if (storage) {
+      if (asyncStorage) {
+        await asyncStorage.close();
+      } else if (storage) {
         storage.close();
       } else if (db) {
         db.close();
