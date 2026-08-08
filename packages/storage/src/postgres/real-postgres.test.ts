@@ -737,6 +737,7 @@ test(
     let setupStorage: Storage | undefined;
     let workerA: Worker | undefined;
     let workerB: Worker | undefined;
+    let workersCompletion: Promise<void> | undefined;
 
     try {
       await adminPool.query(`CREATE SCHEMA ${schemaName}`);
@@ -834,20 +835,24 @@ test(
           },
         },
       });
+      const readyWorkers: string[] = [];
       const reachedBarriers: string[] = [];
-      const workerACompletion = observeDelegationApprovalFanInWorker(workerA, reachedBarriers);
-      const workerBCompletion = observeDelegationApprovalFanInWorker(workerB, reachedBarriers);
+      const workerACompletion = observeDelegationApprovalFanInWorker(workerA, readyWorkers, reachedBarriers);
+      const workerBCompletion = observeDelegationApprovalFanInWorker(workerB, readyWorkers, reachedBarriers);
+      workersCompletion = Promise.all([workerACompletion, workerBCompletion]).then(() => undefined);
+      void workersCompletion.catch(() => undefined);
 
-      await waitForWorkerStageCount(reachedBarriers, 1, 10_000);
+      await waitForWorkerSignalCount(readyWorkers, 2, 60_000, "ready worker", workersCompletion);
+      await waitForWorkerSignalCount(reachedBarriers, 1, 10_000, "worker barrier", workersCompletion);
       await new Promise((resolve) => setTimeout(resolve, 300));
       assert.equal(reachedBarriers.length, 1, "only the parent-run lock winner may reach the stable-step-set read");
 
       const firstWorkerId = reachedBarriers[0] as "a" | "b";
       await barrierClient.query("SELECT pg_advisory_unlock(hashtext($1))", [barrierKeys[firstWorkerId]]);
-      await waitForWorkerStageCount(reachedBarriers, 2, 10_000);
+      await waitForWorkerSignalCount(reachedBarriers, 2, 10_000, "worker barrier", workersCompletion);
       const secondWorkerId = reachedBarriers[1] as "a" | "b";
       await barrierClient.query("SELECT pg_advisory_unlock(hashtext($1))", [barrierKeys[secondWorkerId]]);
-      await Promise.all([workerACompletion, workerBCompletion]);
+      await workersCompletion;
 
       assert.equal(setupStorage.chatDelegationSteps.get(children.a.stepId).status, "completed");
       assert.equal(setupStorage.chatDelegationSteps.get(children.b.stepId).status, "completed");
@@ -867,6 +872,9 @@ test(
       }
       if (workerB) {
         await workerB.terminate();
+      }
+      if (workersCompletion) {
+        await Promise.allSettled([workersCompletion]);
       }
       setupStorage?.close();
       await scopedPool.end();
@@ -6456,7 +6464,11 @@ function waitForDelegationStepPatchWorker(
   });
 }
 
-function observeDelegationApprovalFanInWorker(worker: Worker, reachedBarriers: string[]): Promise<void> {
+function observeDelegationApprovalFanInWorker(
+  worker: Worker,
+  readyWorkers: string[],
+  reachedBarriers: string[],
+): Promise<void> {
   return new Promise((resolve, reject) => {
     const cleanup = () => {
       worker.off("message", onMessage);
@@ -6468,7 +6480,11 @@ function observeDelegationApprovalFanInWorker(worker: Worker, reachedBarriers: s
         return;
       }
       const typed = message as { type?: unknown; workerId?: unknown; error?: unknown };
-      if (typed.type === "at_step_set" && typeof typed.workerId === "string") {
+      if (typed.type === "ready" && typeof typed.workerId === "string") {
+        if (!readyWorkers.includes(typed.workerId)) {
+          readyWorkers.push(typed.workerId);
+        }
+      } else if (typed.type === "at_step_set" && typeof typed.workerId === "string") {
         reachedBarriers.push(typed.workerId);
       } else if (typed.type === "done") {
         cleanup();
@@ -6492,12 +6508,26 @@ function observeDelegationApprovalFanInWorker(worker: Worker, reachedBarriers: s
   });
 }
 
-async function waitForWorkerStageCount(stages: string[], expected: number, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (stages.length < expected && Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-  assert.ok(stages.length >= expected, `expected ${expected} worker stage(s), received ${stages.length}`);
+async function waitForWorkerSignalCount(
+  signals: string[],
+  expected: number,
+  timeoutMs: number,
+  label: string,
+  workersCompletion: Promise<void>,
+): Promise<void> {
+  const waitForCount = (async () => {
+    const deadline = Date.now() + timeoutMs;
+    while (signals.length < expected && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.ok(signals.length >= expected, `expected ${expected} ${label}(s), received ${signals.length}`);
+  })();
+  await Promise.race([
+    waitForCount,
+    workersCompletion.then(() => {
+      assert.ok(signals.length >= expected, `workers completed before reporting ${expected} ${label}(s)`);
+    }),
+  ]);
 }
 
 function waitForTaskUpdateWorker(worker: Worker): Promise<{ description?: string; priority?: string }> {
@@ -6719,6 +6749,7 @@ const DELEGATION_APPROVAL_FANIN_WORKER_SOURCE = String.raw`
     let db;
     let storage;
     let asyncStorage;
+    let failure;
     try {
       const { tsImport } = await import(workerData.tsxApiUrl);
       const { Storage } = await tsImport(workerData.storageModuleUrl, workerData.storageModuleUrl);
@@ -6765,6 +6796,8 @@ const DELEGATION_APPROVAL_FANIN_WORKER_SOURCE = String.raw`
           resolveApprovalHookWorkspaceId() { return "default"; },
         },
       );
+      await asyncStorage.db.prepare("SELECT 1 AS ready").get();
+      parentPort.postMessage({ type: "ready", workerId: workerData.workerId });
       await asyncStorage.runImmediateTransaction(async () =>
         await service.materializeDelegationParentsFromApprovedChild({
           childTrace: {
@@ -6777,14 +6810,10 @@ const DELEGATION_APPROVAL_FANIN_WORKER_SOURCE = String.raw`
           approvalId: "approval-" + workerData.workerId,
         }),
       );
-      parentPort.postMessage({ type: "done", workerId: workerData.workerId });
     } catch (error) {
-      parentPort.postMessage({
-        type: "error",
-        workerId: workerData.workerId,
-        error: error instanceof Error ? error.stack ?? error.message : String(error),
-      });
-    } finally {
+      failure = error;
+    }
+    try {
       if (asyncStorage) {
         await asyncStorage.close();
       } else if (storage) {
@@ -6792,6 +6821,17 @@ const DELEGATION_APPROVAL_FANIN_WORKER_SOURCE = String.raw`
       } else if (db) {
         db.close();
       }
+    } catch (error) {
+      failure ??= error;
+    }
+    if (failure) {
+      parentPort.postMessage({
+        type: "error",
+        workerId: workerData.workerId,
+        error: failure instanceof Error ? failure.stack ?? failure.message : String(failure),
+      });
+    } else {
+      parentPort.postMessage({ type: "done", workerId: workerData.workerId });
     }
   })();
 `;
