@@ -573,6 +573,11 @@ describe("chat-message-route-runtime", () => {
             storage: "os_keychain",
             scope: "installation",
             verification: "live_probe",
+            approvedAction: {
+              approvalId: "approval-runtime-configure",
+              toolRunId: "tool-run-runtime-configure",
+              promptId: "prompt-secure",
+            },
           },
         },
       }),
@@ -598,6 +603,11 @@ describe("chat-message-route-runtime", () => {
       operatorId: TEST_RESPONDER.actorId,
       authActorSource: TEST_RESPONDER.authActorSource,
       runId: "run-secure",
+      approvedAction: {
+        approvalId: "approval-runtime-configure",
+        toolRunId: "tool-run-runtime-configure",
+        promptId: "prompt-secure",
+      },
     });
     expect(runtime.storage.sessionMutationAdmissions.reserveDurableChatSecureConfiguration).toHaveBeenCalledWith(
       expect.objectContaining({

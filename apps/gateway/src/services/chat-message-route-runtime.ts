@@ -88,6 +88,11 @@ export interface ChatMessageRouteRuntimeHost {
     taskId?: string;
     permissionProfileId?: string;
     localOperatorOverrideId?: string;
+    approvedAction?: {
+      approvalId: string;
+      toolRunId: string;
+      promptId: string;
+    };
   }): Promise<{
     targetId: string;
     provider: string;
@@ -305,6 +310,7 @@ export async function answerChatUserInputPrompt(
           ...(durablePayload.request.localOperatorOverrideId
             ? { localOperatorOverrideId: durablePayload.request.localOperatorOverrideId }
             : {}),
+          ...(secureConfiguration.approvedAction ? { approvedAction: secureConfiguration.approvedAction } : {}),
         });
       } catch (error) {
         if (isSafeToReleaseSecureReservation(secureReservation, error)) {

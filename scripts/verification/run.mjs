@@ -32,6 +32,7 @@ import {
   runDeepEcosystemLane,
   runDesktopLane,
   runDurableRecoveryLane,
+  runSelfConfigurationLane,
   runUsageReconciliationLane,
   runRoutedContextSnapshotsLane,
   runModelCouncilLane,
@@ -83,6 +84,7 @@ const VALID_LANES = new Set([
   "api-compat",
   "operator-proof",
   "durable-recovery",
+  "self-configuration",
   "usage-reconciliation",
   "routed-context-snapshots",
   "model-council",
@@ -154,6 +156,7 @@ const REVIEW_LANES = new Set([
   "a2a-full",
   "operator-proof",
   "durable-recovery",
+  "self-configuration",
   "usage-reconciliation",
   "routed-context-snapshots",
   "model-council",
@@ -279,6 +282,8 @@ async function main() {
       await runOperatorProofLane(context, { profile });
     } else if (lane === "durable-recovery") {
       await runDurableRecoveryLane(context, { profile });
+    } else if (lane === "self-configuration") {
+      await runSelfConfigurationLane(context, { profile });
     } else if (lane === "usage-reconciliation") {
       await runUsageReconciliationLane(context, { profile });
     } else if (lane === "routed-context-snapshots") {

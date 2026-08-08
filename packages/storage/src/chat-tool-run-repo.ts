@@ -78,6 +78,7 @@ export class ChatToolRunRepository {
   private readonly listBySessionStmt;
   private readonly listByTurnIdsStmtCache = new Map<number, ReturnType<DatabaseClient["prepare"]>>();
   private readonly patchStmt;
+  private readonly compareAndSwapResultStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare("SELECT * FROM chat_tool_runs WHERE tool_run_id = ?");
@@ -111,6 +112,12 @@ export class ChatToolRunRepository {
         effect_evidence_json = @effectEvidenceJson,
         finished_at = @finishedAt
       WHERE tool_run_id = @toolRunId
+    `);
+    this.compareAndSwapResultStmt = db.prepare(`
+      UPDATE chat_tool_runs
+      SET result_json = @nextResultJson
+      WHERE tool_run_id = @toolRunId
+        AND result_json = @expectedResultJson
     `);
     this.listByTurnStmt = db.prepare(`
       SELECT * FROM chat_tool_runs
@@ -199,6 +206,20 @@ export class ChatToolRunRepository {
       finishedAt: input.finishedAt !== undefined ? input.finishedAt : (current.finishedAt ?? null),
     });
     return this.get(toolRunId);
+  }
+
+  /** Atomically replaces an exact persisted result; stale writers receive no authority. */
+  public compareAndSwapResult(
+    toolRunId: string,
+    expectedResult: Record<string, unknown>,
+    nextResult: Record<string, unknown>,
+  ): ChatToolRunRecord | undefined {
+    const outcome = this.compareAndSwapResultStmt.run({
+      toolRunId,
+      expectedResultJson: JSON.stringify(expectedResult),
+      nextResultJson: JSON.stringify(nextResult),
+    });
+    return outcome.changes === 1 ? this.get(toolRunId) : undefined;
   }
 
   public listByTurn(turnId: string): ChatToolRunRecord[] {

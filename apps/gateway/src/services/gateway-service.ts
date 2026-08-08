@@ -410,7 +410,11 @@ import { LlamaCppRuntimeService } from "./llama-cpp-runtime-service.js";
 import { acquireBoundLlamaCppEmbeddingLease, acquireBoundLlamaCppLease } from "./llama-cpp-provider-lease.js";
 import { NpuSidecarService } from "./npu-sidecar-service.js";
 import { SecretStoreService } from "./secret-store-service.js";
-import { RuntimeConfigurationService } from "./runtime-configuration-service.js";
+import {
+  RuntimeConfigurationService,
+  type RuntimeConfigurationAuthorizationInput,
+} from "./runtime-configuration-service.js";
+import { assertRuntimeConfigurationApprovalBinding } from "./runtime-configuration-approval-binding.js";
 import { ApprovalRemoteTokenSecretService } from "./approval-remote-token-secret.js";
 import { GatewayTurnRuntime } from "./chat-turn-runtime.js";
 import { ResearchService } from "./research-service.js";
@@ -585,6 +589,7 @@ import { normalizeAgentInputFromSend } from "./chat-agent-input-normalization.js
 import * as chatTurnTraceHydration from "./chat-turn-trace-hydration.js";
 import { markChatTurnCancelled } from "./chat-turn-cancellation.js";
 import { reconcileInterruptedChatTurns } from "./chat-turn-interruption-recovery-service.js";
+import { recoverInterruptedChatSecureConfigurations } from "./chat-secure-configuration-recovery-service.js";
 import * as chatTurnUserMessage from "./chat-turn-user-message.js";
 import {
   ChatDelegationService,
@@ -1608,42 +1613,7 @@ export class GatewayService {
           })
         ).length > 0,
       assertAuthorized: async (input) => {
-        const decision = await this.evaluateToolAccess({
-          toolName: RUNTIME_CONFIGURE_TOOL_NAME,
-          args: { targetId: input.targetId },
-          agentId: "assistant",
-          sessionId: input.sessionId,
-          workspaceId: input.workspaceId,
-          taskId: input.taskId,
-          runId: input.runId,
-          permissionProfileId: input.permissionProfileId,
-          localOperatorOverrideId: input.localOperatorOverrideId,
-          surface: "chat",
-          policyContext: {
-            operatorId: input.operatorId ?? input.actorId,
-            authActorId: input.actorId,
-            authActorSource: input.authActorSource,
-            permissionProfileId: input.permissionProfileId,
-            localOperatorOverrideId: input.localOperatorOverrideId,
-            surface: "chat",
-            workspaceId: input.workspaceId,
-            sessionId: input.sessionId,
-            taskId: input.taskId,
-            runId: input.runId,
-          },
-        });
-        if (!decision.allowed || decision.requiresApproval) {
-          throw new PolicyViolationError({
-            message: "Runtime configuration is no longer authorized for this Chat turn.",
-            details: {
-              targetId: input.targetId,
-              diagnosticCode: decision.requiresApproval
-                ? "runtime_configuration_approval_required"
-                : "runtime_configuration_policy_blocked",
-              reasonCodes: decision.reasonCodes,
-            },
-          });
-        }
+        await this.assertRuntimeConfigurationPromptAuthority(input, runtimeConfigurationInstallationScopeId);
       },
       appendAudit: async (payload) => {
         void (await this.storage.audit.append("tool_invocations", payload));
@@ -1965,6 +1935,8 @@ export class GatewayService {
       evaluateToolAccess: async (request) => await this.evaluateToolAccess(request),
       assertRuntimeConfigurationPromptAvailable: (targetId) =>
         this.runtimeConfigurationService.assertConfigurationAvailable(targetId as "search.brave" | "search.parallel"),
+      assertRuntimeConfigurationPromptAuthority: async (input) =>
+        await this.assertRuntimeConfigurationPromptAuthority(input),
       // HX-408 M2: the pre-dispatch drift gate re-verifies the frozen mesh
       // activation snapshot through the activation owner right before dispatch.
       resolveMeshCapabilityPreDispatchBlock: ({ workspaceId, binding }) =>
@@ -3368,6 +3340,114 @@ export class GatewayService {
     this.devDiagnostics.record(input);
   }
 
+  public async assertRuntimeConfigurationPromptAuthority(
+    input: RuntimeConfigurationAuthorizationInput,
+    scopeRef = this.runtimeConfigurationService.getInstallationScopeRef(),
+  ): Promise<void> {
+    const decision = await this.evaluateToolAccess({
+      toolName: RUNTIME_CONFIGURE_TOOL_NAME,
+      args: { targetId: input.targetId },
+      agentId: "assistant",
+      sessionId: input.sessionId,
+      workspaceId: input.workspaceId,
+      taskId: input.taskId,
+      runId: input.runId,
+      permissionProfileId: input.permissionProfileId,
+      localOperatorOverrideId: input.localOperatorOverrideId,
+      surface: "chat",
+      policyContext: {
+        operatorId: input.operatorId ?? input.actorId,
+        authActorId: input.actorId,
+        authActorSource: input.authActorSource,
+        permissionProfileId: input.permissionProfileId,
+        localOperatorOverrideId: input.localOperatorOverrideId,
+        surface: "chat",
+        workspaceId: input.workspaceId,
+        sessionId: input.sessionId,
+        taskId: input.taskId,
+        runId: input.runId,
+      },
+    });
+    if (!decision.allowed) {
+      throw new PolicyViolationError({
+        message: "Runtime configuration is no longer authorized for this Chat turn.",
+        details: {
+          targetId: input.targetId,
+          diagnosticCode: "runtime_configuration_policy_blocked",
+          reasonCodes: decision.reasonCodes,
+        },
+      });
+    }
+    if (decision.requiresApproval && !input.approvedAction) {
+      throw new PolicyViolationError({
+        message: "Runtime configuration requires an approved action bound to this secure prompt.",
+        details: {
+          targetId: input.targetId,
+          diagnosticCode: "runtime_configuration_approval_required",
+          reasonCodes: decision.reasonCodes,
+        },
+      });
+    }
+    if (!input.approvedAction) return;
+    if (!input.runId) {
+      throw new PolicyViolationError({
+        message: "The approved runtime configuration action is missing its durable run authority.",
+        details: {
+          targetId: input.targetId,
+          diagnosticCode: "runtime_configuration_approval_binding_invalid",
+        },
+      });
+    }
+    try {
+      await this.storage.sessionMutationAdmissions.assertDurableChatSecureConfigurationPromptLineage({
+        workspaceId: input.workspaceId,
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        durableRunId: input.runId,
+        targetId: input.targetId,
+        scopeRef,
+        authorityPromptId: input.approvedAction.promptId,
+        currentPromptId: input.requestId,
+      });
+      const [approval, approvalEvents, pendingAction, toolRun] = await Promise.all([
+        this.storage.approvals.get(input.approvedAction.approvalId),
+        this.storage.approvalEvents.listByApprovalId(input.approvedAction.approvalId),
+        this.storage.pendingApprovalActions.find(input.approvedAction.approvalId),
+        this.storage.chatToolRuns.get(input.approvedAction.toolRunId),
+      ]);
+      assertRuntimeConfigurationApprovalBinding(
+        {
+          binding: input.approvedAction,
+          targetId: input.targetId,
+          workspaceId: input.workspaceId,
+          sessionId: input.sessionId,
+          turnId: input.turnId,
+          actorId: input.actorId,
+          authActorSource: input.authActorSource,
+          runId: input.runId,
+          currentPromptId: input.requestId,
+          promptLineageValid: true,
+          currentPolicyReasonCodes: decision.reasonCodes,
+          currentRequiresApproval: decision.requiresApproval,
+          currentMatchedGrantId: decision.matchedGrantId,
+          currentWardEffect: decision.wardEffect,
+          currentPermissionProfileId: decision.permissionProfileId,
+          currentLocalOperatorOverrideId: decision.localOperatorOverrideId,
+        },
+        { approval, approvalEvents, pendingAction, toolRun },
+      );
+    } catch (error) {
+      if (error instanceof PolicyViolationError) throw error;
+      throw new PolicyViolationError({
+        message: "The approved runtime configuration action could not be revalidated.",
+        details: {
+          targetId: input.targetId,
+          diagnosticCode: "runtime_configuration_approval_binding_invalid",
+        },
+      });
+    }
+  }
+
   public async recordRuntimeDecision(input: RuntimeDecisionTraceAppendInput): Promise<void> {
     await (this.runtimeDecisionRecorder as RuntimeDecisionRecorder | undefined)?.record(input);
   }
@@ -3591,6 +3671,7 @@ export class GatewayService {
     if (heartbeatRecovery.scanned > 0) {
       log.info("recovered durable heartbeat occurrences after restart", { ...heartbeatRecovery });
     }
+    await this.recoverInterruptedSecureConfigurationsOnBoot();
     const expiredUnboundTurnAdmissionIds = await cancelExpiredUnboundChatTurnAdmissionsOnBoot(
       this.sessionControlRuntimeOwner,
       `gateway-startup:${randomUUID()}`,
@@ -3678,6 +3759,70 @@ export class GatewayService {
       }
     } catch (error) {
       log.warn("Failed to reconcile interrupted chat turns on startup", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Rotate secure prompts stranded by process death before the durable worker
+   * can resume their original waiting runs. Every prompt is revalidated under
+   * current deny-wins policy before any successor is minted; approval-bound
+   * prompts must also retain their exact one-time authority lineage.
+   */
+  private async recoverInterruptedSecureConfigurationsOnBoot(): Promise<void> {
+    try {
+      const recovered = await recoverInterruptedChatSecureConfigurations({
+        storage: this.storage,
+        validateAuthority: async (candidate) => {
+          if (candidate.targetId !== "search.brave" && candidate.targetId !== "search.parallel") {
+            throw new PolicyViolationError({
+              message: "Interrupted secure configuration target is unsupported.",
+              details: { diagnosticCode: "runtime_configuration_approval_binding_invalid" },
+            });
+          }
+          await this.assertRuntimeConfigurationPromptAuthority(
+            {
+              targetId: candidate.targetId,
+              requestId: candidate.promptId,
+              workspaceId: candidate.workspaceId,
+              sessionId: candidate.sessionId,
+              turnId: candidate.turnId,
+              actorId: candidate.responderActorId,
+              expiresAt: candidate.expiresAt,
+              authActorSource: candidate.responderAuthActorSource,
+              runId: candidate.durableRunId,
+              ...(candidate.operatorId ? { operatorId: candidate.operatorId } : {}),
+              ...(candidate.taskId ? { taskId: candidate.taskId } : {}),
+              ...(candidate.permissionProfileId ? { permissionProfileId: candidate.permissionProfileId } : {}),
+              ...(candidate.localOperatorOverrideId
+                ? { localOperatorOverrideId: candidate.localOperatorOverrideId }
+                : {}),
+              ...(candidate.approvedAction ? { approvedAction: candidate.approvedAction } : {}),
+            },
+            candidate.scopeRef,
+          );
+        },
+        publishRealtime: async (eventType, source, payload, options) =>
+          await this.publishRealtime(eventType, source, payload, options),
+        recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
+      });
+      if (
+        recovered.recoveredPromptIds.length > 0 ||
+        recovered.quarantinedPromptIds.length > 0 ||
+        recovered.persistenceFailures > 0
+      ) {
+        log.info("reconciled interrupted secure configuration prompts after restart", {
+          scanned: recovered.scanned,
+          recovered: recovered.recoveredPromptIds.length,
+          quarantined: recovered.quarantinedPromptIds.length,
+          notificationFailures: recovered.notificationFailures,
+          persistenceFailures: recovered.persistenceFailures,
+          limitReached: recovered.limitReached,
+        });
+      }
+    } catch (error) {
+      log.warn("Failed to reconcile interrupted secure configuration prompts on startup", {
         error: error instanceof Error ? error.message : String(error),
       });
     }

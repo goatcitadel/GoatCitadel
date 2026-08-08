@@ -334,7 +334,12 @@ function isChatUserInputPromptRecord(value: unknown): value is ChatUserInputProm
           typeof value.secureConfiguration.acquisitionLabel === "string") &&
         value.secureConfiguration.storage === "os_keychain" &&
         value.secureConfiguration.scope === "installation" &&
-        value.secureConfiguration.verification === "live_probe")) &&
+        value.secureConfiguration.verification === "live_probe" &&
+        (value.secureConfiguration.approvedAction === undefined ||
+          (isRecord(value.secureConfiguration.approvedAction) &&
+            typeof value.secureConfiguration.approvedAction.approvalId === "string" &&
+            typeof value.secureConfiguration.approvedAction.toolRunId === "string" &&
+            typeof value.secureConfiguration.approvedAction.promptId === "string")))) &&
     (value.options === undefined ||
       (Array.isArray(value.options) &&
         value.options.every(

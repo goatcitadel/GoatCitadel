@@ -875,4 +875,31 @@ describe("protected Postgres migration integrity", () => {
     assert.doesNotMatch(sql, /(?:secret|credential|token|value|digest|hash)\s+(?:TEXT|BYTEA|JSONB?)/iu);
     assert.doesNotMatch(sql, /\b(?:INSERT\s+INTO|UPDATE\s+durable_runs|DELETE\s+FROM)\b/iu);
   });
+
+  it("repairs deployed migration-131 drift forward and quarantines ambiguous active rows", () => {
+    const migration = POSTGRES_MIGRATIONS.find((candidate) => candidate.version === 132);
+    assert.equal(migration?.name, "repair_durable_chat_secure_configuration_reservations");
+    assert.equal(migration?.batchedStatements, undefined);
+    const sql = migration?.sql ?? "";
+    assert.match(sql, /prototype_columns CONSTANT TEXT\[\]/u);
+    assert.match(sql, /ADD COLUMN IF NOT EXISTS expired_at TEXT/u);
+    assert.match(sql, /SET status = 'expired_unreconciled'/u);
+    assert.match(sql, /expired_at = COALESCE/u);
+    assert.match(sql, /cannot infer installation scope from a missing or invalid secure configuration scope_ref/u);
+    assert.match(sql, /ALTER COLUMN scope_ref SET NOT NULL/u);
+    assert.match(sql, /chat_turn_secure_configuration_reservations_scope_ref_check/u);
+    assert.match(sql, /CHECK\(length\(btrim\(scope_ref\)\) BETWEEN 1 AND 256\)/u);
+    assert.match(sql, /unsupported secure configuration reservation table shape/u);
+    assert.match(sql, /left an ambiguous active secure configuration reservation/u);
+    assert.match(sql, /secure configuration column type assertion failed/u);
+    assert.match(sql, /idx_chat_turn_secure_configuration_one_target_scope/u);
+    assert.match(sql, /gc_secure_configuration_admission_close_guard/u);
+    assert.match(sql, /gc_secure_configuration_durable_run_transition_guard/u);
+    assert.match(
+      sql,
+      /OLD\.status = 'expired_unreconciled' AND NEW\.status = 'expired_unreconciled'[\s\S]*OLD\.reclaimed_at IS NULL/u,
+    );
+    assert.doesNotMatch(sql, /(?:secret|credential|token|value|digest|hash)\s+(?:TEXT|BYTEA|JSONB?)/iu);
+    assert.doesNotMatch(sql, /\b(?:UPDATE\s+durable_runs|DELETE\s+FROM|TRUNCATE\s+TABLE)\b/iu);
+  });
 });

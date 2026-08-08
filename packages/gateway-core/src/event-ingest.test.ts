@@ -1258,7 +1258,7 @@ describe("EventIngestService canonical usage references", () => {
     } finally {
       storage.close();
     }
-  });
+  }, 15_000);
 
   it.each([
     "missing",

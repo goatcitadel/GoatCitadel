@@ -478,6 +478,7 @@ export class ToolPolicyEngine {
               taskId: request.taskId,
               matchedGrantId: evaluation.matchedGrantId,
               reasonCodes: evaluation.reasonCodes,
+              wardEffect: evaluation.wardEffect,
             },
           });
 

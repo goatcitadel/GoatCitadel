@@ -164,6 +164,36 @@ describe("ChatToolRunRepository", () => {
     );
   });
 
+  it("compare-and-swaps an exact result only once", () => {
+    const { repo } = createStore();
+    const original = { status: "configuration_required", targetId: "search.brave" };
+    const firstSeal = {
+      ...original,
+      runtimeConfigurationPromptAuthority: { promptId: "prompt-1", expiresAt: "2026-08-08T00:15:00.000Z" },
+    };
+    repo.create({
+      toolRunId: "runtime-configure-run",
+      turnId: "turn-runtime-configure",
+      sessionId: "session-runtime-configure",
+      toolName: "runtime.configure",
+      status: "executed",
+      result: original,
+    });
+
+    assert.deepEqual(repo.compareAndSwapResult("runtime-configure-run", original, firstSeal)?.result, firstSeal);
+    assert.equal(
+      repo.compareAndSwapResult("runtime-configure-run", original, {
+        ...original,
+        runtimeConfigurationPromptAuthority: {
+          promptId: "prompt-2",
+          expiresAt: "2026-08-08T00:30:00.000Z",
+        },
+      }),
+      undefined,
+    );
+    assert.deepEqual(repo.get("runtime-configure-run").result, firstSeal);
+  });
+
   it("handles missing rows and malformed stored payloads defensively", () => {
     const { db, repo } = createStore();
     repo.create({

@@ -64,6 +64,7 @@ import {
   snapshotRestContract,
 } from "./scenarios/api-compatibility-helpers.mjs";
 import { runDurableRecoveryLane as runDurableRecoveryLaneImpl } from "./scenarios/durable-recovery-lane.mjs";
+import { runSelfConfigurationLane as runSelfConfigurationLaneImpl } from "./scenarios/self-configuration-lane.mjs";
 import { runUsageReconciliationLane as runUsageReconciliationLaneImpl } from "./scenarios/usage-reconciliation-lane.mjs";
 import { runRoutedContextSnapshotsLane as runRoutedContextSnapshotsLaneImpl } from "./scenarios/routed-context-snapshots-lane.mjs";
 import { runModelCouncilLane as runModelCouncilLaneImpl } from "./scenarios/model-council-lane.mjs";
@@ -2153,6 +2154,10 @@ export async function runOperatorProofLane(context, _options = {}) {
 
 export async function runDurableRecoveryLane(context, options = {}) {
   return await runDurableRecoveryLaneImpl(context, options, verificationLaneDeps());
+}
+
+export async function runSelfConfigurationLane(context, options = {}) {
+  return await runSelfConfigurationLaneImpl(context, options, verificationLaneDeps());
 }
 
 export async function runUsageReconciliationLane(context, options = {}) {

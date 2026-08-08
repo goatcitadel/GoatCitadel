@@ -837,6 +837,275 @@ describe("SessionMutationAdmissionRepository SQLite", () => {
     }
   });
 
+  it("atomically rotates an interrupted secure prompt on its original durable turn and reconciles its quarantine", () => {
+    const db = createDatabase({ dbPath: ":memory:" });
+    const fixture = createContinuationFixture(db);
+    const approvedAction = {
+      approvalId: "approval-secure-recovery",
+      toolRunId: "tool-run-secure-recovery",
+      promptId: fixture.resolution.promptId,
+    };
+    makeContinuationPromptSecure(db, fixture, {
+      targetId: "search.brave",
+      expiresAt: "2099-08-07T00:00:00.000Z",
+      approvedAction,
+    });
+    const reserved = fixture.repo.reserveDurableChatSecureConfiguration(
+      secureConfigurationReservationInput(fixture, "search.brave", 2),
+    );
+
+    const candidate = fixture.repo.findNextInterruptedDurableChatSecureConfiguration();
+    assert.deepEqual(candidate?.approvedAction, approvedAction);
+    const recovered = fixture.repo.recoverInterruptedDurableChatSecureConfiguration({
+      reservationId: candidate!.reservationId,
+      promptId: candidate!.promptId,
+      approvalAuthority: "preserve",
+      approvedAction,
+    });
+    assert.equal(recovered.disposition, "recovered");
+    if (recovered.disposition !== "recovered") throw new TypeError("expected recovery");
+    assert.equal(recovered.previousPromptId, fixture.resolution.promptId);
+    assert.notEqual(recovered.promptId, fixture.resolution.promptId);
+    assert.equal(recovered.run.runId, fixture.runId);
+    assert.equal(recovered.run.version, 4);
+    assert.equal(recovered.reservation.reservationId, reserved.reservation.reservationId);
+    assert.equal(recovered.reservation.status, "expired_unreconciled");
+    assert.equal(recovered.reservation.requiresReconciliation, true);
+    assert.equal(Number.isFinite(Date.parse(recovered.reservation.reclaimedAt ?? "")), true);
+    assert.equal(Number.isFinite(Date.parse(recovered.expiresAt)), true);
+    assert.ok(Date.parse(recovered.expiresAt) > Date.now());
+
+    const trace = db
+      .prepare(`SELECT pending_user_input_json FROM chat_turn_traces WHERE turn_id = @turnId`)
+      .get<{ pending_user_input_json: string }>({ turnId: fixture.turnId });
+    const prompt = JSON.parse(trace!.pending_user_input_json) as Record<string, any>;
+    assert.equal(prompt.promptId, recovered.promptId);
+    assert.equal(prompt.expiresAt, recovered.expiresAt);
+    assert.deepEqual(prompt.secureConfiguration.approvedAction, approvedAction);
+    const runAfterRecovery = db
+      .prepare(`SELECT status, version, metadata_json FROM durable_runs WHERE run_id = @runId`)
+      .get<{ status: string; version: number; metadata_json: string }>({ runId: fixture.runId });
+    assert.deepEqual(
+      {
+        status: runAfterRecovery?.status,
+        version: runAfterRecovery?.version,
+        metadata: JSON.parse(runAfterRecovery!.metadata_json),
+      },
+      {
+        status: "waiting",
+        version: 4,
+        metadata: {
+          waitForEvent: { eventKey: "chat.user_input.resolved", correlationId: recovered.promptId },
+        },
+      },
+    );
+    assert.equal(fixture.repo.findNextInterruptedDurableChatSecureConfiguration(), undefined);
+
+    const replacement = fixture.repo.reserveDurableChatSecureConfiguration({
+      admissionIdentity: fixture.resolution.admissionIdentity,
+      durableRunId: fixture.runId,
+      expectedWaitingRunVersion: recovered.run.version,
+      promptId: recovered.promptId,
+      targetId: "search.brave",
+      scopeRef: "root-installation-a",
+      responder: fixture.resolution.responder,
+    });
+    assert.equal(replacement.disposition, "reserved");
+    assert.equal(replacement.requiresTargetReconciliation, true);
+    assert.equal(replacement.run.version, 5);
+    assert.doesNotThrow(() =>
+      fixture.repo.assertDurableChatSecureConfigurationPromptLineage({
+        workspaceId: fixture.resolution.admissionIdentity.workspaceId,
+        sessionId: fixture.resolution.admissionIdentity.sessionId,
+        turnId: fixture.turnId,
+        durableRunId: fixture.runId,
+        targetId: "search.brave",
+        scopeRef: "root-installation-a",
+        authorityPromptId: approvedAction.promptId,
+        currentPromptId: recovered.promptId,
+      }),
+    );
+    assert.throws(
+      () =>
+        fixture.repo.assertDurableChatSecureConfigurationPromptLineage({
+          workspaceId: fixture.resolution.admissionIdentity.workspaceId,
+          sessionId: fixture.resolution.admissionIdentity.sessionId,
+          turnId: fixture.turnId,
+          durableRunId: fixture.runId,
+          targetId: "search.brave",
+          scopeRef: "root-installation-a",
+          authorityPromptId: approvedAction.promptId,
+          currentPromptId: `${recovered.promptId}:forged`,
+        }),
+      /not an exact server-recovered successor/iu,
+    );
+
+    fixture.repo.resolveDurableChatUserInput({
+      ...fixture.resolution,
+      expectedWaitingRunVersion: replacement.run.version,
+      promptId: recovered.promptId,
+      correlationId: recovered.promptId,
+      response: { kind: "text", text: "Runtime configuration completed and validated." },
+      runtimeConfigurationReceipt: {
+        targetId: "search.brave",
+        provider: "brave",
+        revision: "9".repeat(64),
+        scopeRef: "root-installation-a",
+      },
+    });
+
+    const reconciled = db
+      .prepare(
+        `SELECT status, reconciled_by_reservation_id
+         FROM chat_turn_secure_configuration_reservations WHERE reservation_id = @reservationId`,
+      )
+      .get<{ status: string; reconciled_by_reservation_id: string }>({
+        reservationId: reserved.reservation.reservationId,
+      });
+    assert.deepEqual(
+      { ...reconciled },
+      {
+        status: "reconciled",
+        reconciled_by_reservation_id: replacement.reservation.reservationId,
+      },
+    );
+    assert.equal(
+      db.prepare(`SELECT status FROM durable_runs WHERE run_id = @runId`).get<{ status: string }>({
+        runId: fixture.runId,
+      })?.status,
+      "queued",
+    );
+    db.close();
+  });
+
+  it("rolls back quarantine, trace rotation, and run version together when secure recovery faults", () => {
+    const db = createDatabase({ dbPath: ":memory:" });
+    const fixture = createContinuationFixture(db);
+    makeContinuationPromptSecure(db, fixture, {
+      targetId: "search.parallel",
+      expiresAt: "2099-08-07T00:00:00.000Z",
+    });
+    const reserved = fixture.repo.reserveDurableChatSecureConfiguration(
+      secureConfigurationReservationInput(fixture, "search.parallel", 2),
+    );
+    const beforeTrace = db
+      .prepare(`SELECT pending_user_input_json FROM chat_turn_traces WHERE turn_id = @turnId`)
+      .get<{ pending_user_input_json: string }>({ turnId: fixture.turnId })!.pending_user_input_json;
+    const beforeRun = db
+      .prepare(`SELECT version, metadata_json FROM durable_runs WHERE run_id = @runId`)
+      .get<{ version: number; metadata_json: string }>({ runId: fixture.runId })!;
+    db.exec(`
+      CREATE TRIGGER test_abort_secure_configuration_recovery
+      BEFORE UPDATE OF pending_user_input_json ON chat_turn_traces
+      BEGIN
+        SELECT RAISE(ABORT, 'injected secure configuration recovery fault');
+      END;
+    `);
+
+    assert.throws(
+      () =>
+        fixture.repo.recoverInterruptedDurableChatSecureConfiguration({
+          reservationId: reserved.reservation.reservationId,
+          promptId: reserved.reservation.promptId,
+          approvalAuthority: "not_required",
+        }),
+      /injected secure configuration recovery fault/iu,
+    );
+    const afterReservation = db
+      .prepare(
+        `SELECT status, expired_at, reclaimed_at
+         FROM chat_turn_secure_configuration_reservations WHERE reservation_id = @reservationId`,
+      )
+      .get<{ status: string; expired_at: string | null; reclaimed_at: string | null }>({
+        reservationId: reserved.reservation.reservationId,
+      });
+    assert.deepEqual({ ...afterReservation }, { status: "reserved", expired_at: null, reclaimed_at: null });
+    assert.equal(
+      db.prepare(`SELECT pending_user_input_json FROM chat_turn_traces WHERE turn_id = @turnId`).get<{
+        pending_user_input_json: string;
+      }>({ turnId: fixture.turnId })?.pending_user_input_json,
+      beforeTrace,
+    );
+    assert.deepEqual(
+      db.prepare(`SELECT version, metadata_json FROM durable_runs WHERE run_id = @runId`).get({
+        runId: fixture.runId,
+      }),
+      beforeRun,
+    );
+    db.exec(`DROP TRIGGER test_abort_secure_configuration_recovery`);
+    db.close();
+  });
+
+  it("recovers a migration-quarantined reservation whose recovery marker was never written", () => {
+    const db = createDatabase({ dbPath: ":memory:" });
+    const fixture = createContinuationFixture(db);
+    makeContinuationPromptSecure(db, fixture, {
+      targetId: "search.parallel",
+      expiresAt: "2099-08-07T00:00:00.000Z",
+    });
+    const reserved = fixture.repo.reserveDurableChatSecureConfiguration(
+      secureConfigurationReservationInput(fixture, "search.parallel", 2),
+    );
+    db.prepare(
+      `UPDATE chat_turn_secure_configuration_reservations
+       SET status = 'expired_unreconciled', expired_at = '2026-08-07T00:00:00.000Z'
+       WHERE reservation_id = @reservationId`,
+    ).run({ reservationId: reserved.reservation.reservationId });
+
+    const candidate = fixture.repo.findNextInterruptedDurableChatSecureConfiguration();
+    const recovered = fixture.repo.recoverInterruptedDurableChatSecureConfiguration({
+      reservationId: candidate!.reservationId,
+      promptId: candidate!.promptId,
+      approvalAuthority: "not_required",
+    });
+
+    assert.equal(recovered.disposition, "recovered");
+    if (recovered.disposition !== "recovered") throw new TypeError("expected recovery");
+    assert.equal(recovered.run.version, 4);
+    assert.equal(recovered.reservation.status, "expired_unreconciled");
+    assert.equal(Number.isFinite(Date.parse(recovered.reservation.reclaimedAt ?? "")), true);
+    db.close();
+  });
+
+  it("expires an approval-bound interrupted prompt without rotation when authority is rejected", () => {
+    const db = createDatabase({ dbPath: ":memory:" });
+    const fixture = createContinuationFixture(db);
+    const approvedAction = {
+      approvalId: "approval-rejected-recovery",
+      toolRunId: "tool-run-rejected-recovery",
+      promptId: fixture.resolution.promptId,
+    };
+    makeContinuationPromptSecure(db, fixture, {
+      targetId: "search.brave",
+      expiresAt: "2099-08-07T00:00:00.000Z",
+      approvedAction,
+    });
+    const reserved = fixture.repo.reserveDurableChatSecureConfiguration(
+      secureConfigurationReservationInput(fixture, "search.brave", 2),
+    );
+
+    const quarantined = fixture.repo.recoverInterruptedDurableChatSecureConfiguration({
+      reservationId: reserved.reservation.reservationId,
+      promptId: reserved.reservation.promptId,
+      approvalAuthority: "reject",
+    });
+
+    assert.equal(quarantined.disposition, "quarantined");
+    if (quarantined.disposition !== "quarantined") throw new TypeError("expected quarantine");
+    assert.equal(quarantined.run.version, reserved.run.version);
+    assert.equal(quarantined.reservation.status, "expired_unreconciled");
+    assert.equal(Number.isFinite(Date.parse(quarantined.reservation.reclaimedAt ?? "")), true);
+    const trace = db
+      .prepare(`SELECT pending_user_input_json FROM chat_turn_traces WHERE turn_id = @turnId`)
+      .get<{ pending_user_input_json: string }>({ turnId: fixture.turnId });
+    const prompt = JSON.parse(trace!.pending_user_input_json) as Record<string, any>;
+    assert.equal(prompt.promptId, fixture.resolution.promptId);
+    assert.deepEqual(prompt.secureConfiguration.approvedAction, approvedAction);
+    assert.ok(Date.parse(prompt.expiresAt) <= Date.now());
+    assert.equal(fixture.repo.findNextInterruptedDurableChatSecureConfiguration(), undefined);
+    db.close();
+  });
+
   it("quarantines expired restart ambiguity until a new prompt completes reconciliation", async () => {
     const db = createDatabase({ dbPath: ":memory:" });
     const fixture = createContinuationFixture(db);
@@ -928,6 +1197,51 @@ describe("SessionMutationAdmissionRepository SQLite", () => {
         reconciled_by_reservation_id: replacement.reservation.reservationId,
       },
     );
+    db.close();
+  });
+
+  it("expires a secure reservation through the admission-close path before closing authority", async () => {
+    const db = createDatabase({ dbPath: ":memory:" });
+    const fixture = createContinuationFixture(db);
+    makeContinuationPromptSecure(db, fixture, {
+      targetId: "search.brave",
+      expiresAt: new Date(Date.now() + 100).toISOString(),
+    });
+    const reserved = fixture.repo.reserveDurableChatSecureConfiguration(
+      secureConfigurationReservationInput(fixture, "search.brave", 2),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 175));
+
+    db.prepare(
+      `UPDATE durable_runs
+       SET status = 'running', attempt_count = 1, lease_owner_id = 'worker-close',
+           lease_expires_at = '2099-08-07T00:00:00.000Z', version = version + 1
+       WHERE run_id = @runId`,
+    ).run({ runId: fixture.runId });
+
+    const closed = fixture.repo.closeTurnWrite({
+      ...fixture.resolution.admissionIdentity,
+      status: "completed",
+      actorId: "operator-a",
+      idempotencyKey: "admission:continuation:completed-after-secure-expiry",
+      correlationId: "correlation:continuation:completed-after-secure-expiry",
+      durableClaim: {
+        durableRunId: fixture.runId,
+        leaseOwnerId: "worker-close",
+        attemptCount: 1,
+      },
+    });
+
+    assert.equal(closed.status, "completed");
+    const expired = db
+      .prepare(
+        `SELECT status, expired_at
+         FROM chat_turn_secure_configuration_reservations
+         WHERE reservation_id = @reservationId`,
+      )
+      .get<{ status: string; expired_at: string }>({ reservationId: reserved.reservation.reservationId });
+    assert.equal(expired?.status, "expired_unreconciled");
+    assert.equal(Number.isFinite(Date.parse(expired?.expired_at ?? "")), true);
     db.close();
   });
 
@@ -1621,7 +1935,12 @@ function createContinuationFixture(
 function makeContinuationPromptSecure(
   db: ReturnType<typeof createDatabase>,
   fixture: ReturnType<typeof createContinuationFixture>,
-  input: { promptId?: string; targetId: "search.brave" | "search.parallel"; expiresAt: string },
+  input: {
+    promptId?: string;
+    targetId: "search.brave" | "search.parallel";
+    expiresAt: string;
+    approvedAction?: { approvalId: string; toolRunId: string; promptId: string };
+  },
 ): void {
   const targetLabel = input.targetId === "search.brave" ? "Brave Search" : "Parallel Search";
   const acquisition =
@@ -1652,6 +1971,7 @@ function makeContinuationPromptSecure(
         targetLabel,
         secretFieldLabel: `${targetLabel} API key`,
         ...acquisition,
+        ...(input.approvedAction ? { approvedAction: input.approvedAction } : {}),
         storage: "os_keychain",
         scope: "installation",
         verification: "live_probe",

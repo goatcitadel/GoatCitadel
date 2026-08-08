@@ -88,9 +88,16 @@ export interface RuntimeConfigurationApplyInput {
   taskId?: string;
   permissionProfileId?: string;
   localOperatorOverrideId?: string;
+  approvedAction?: {
+    approvalId: string;
+    toolRunId: string;
+    promptId: string;
+  };
 }
 
-export type RuntimeConfigurationAuthorizationInput = Omit<RuntimeConfigurationApplyInput, "secret">;
+export type RuntimeConfigurationAuthorizationInput = Omit<RuntimeConfigurationApplyInput, "secret" | "targetId"> & {
+  targetId: RuntimeConfigurationTargetId;
+};
 
 export interface RuntimeConfigurationApplyResult {
   configured: true;
@@ -685,6 +692,7 @@ export class RuntimeConfigurationService {
       ...(input.taskId ? { taskId: input.taskId } : {}),
       ...(input.permissionProfileId ? { permissionProfileId: input.permissionProfileId } : {}),
       ...(input.localOperatorOverrideId ? { localOperatorOverrideId: input.localOperatorOverrideId } : {}),
+      ...(input.approvedAction ? { approvedAction: input.approvedAction } : {}),
     });
   }
 

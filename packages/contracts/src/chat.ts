@@ -2100,6 +2100,12 @@ export interface ChatUserInputPromptRecord {
     storage: "os_keychain";
     scope: "installation";
     verification: "live_probe";
+    approvedAction?: {
+      approvalId: string;
+      toolRunId: string;
+      /** Immutable nonce of the first secure prompt issued from this approval. */
+      promptId: string;
+    };
   };
 }
 

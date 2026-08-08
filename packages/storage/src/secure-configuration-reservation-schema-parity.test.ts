@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { POSTGRES_MIGRATIONS } from "./postgres/migrations.js";
 import { buildPostgresRuntimeSchemaSql } from "./postgres/runtime-schema.js";
-import { createSqliteSchemaBlueprint } from "./sqlite.js";
+import { __sqliteInternals, createSqliteSchemaBlueprint } from "./sqlite.js";
 
 describe("durable Chat secure configuration reservation schema parity", () => {
   it("keeps the current SQLite blueprint and generated Postgres schema secret-free and aligned", () => {
@@ -60,9 +60,13 @@ describe("durable Chat secure configuration reservation schema parity", () => {
   });
 
   it("ships matching forward migrations for existing SQLite and Postgres runtimes", () => {
-    const postgres = POSTGRES_MIGRATIONS.find((migration) => migration.version === 131);
-    assert.equal(postgres?.name, "durable_chat_secure_configuration_reservations");
+    const postgres = POSTGRES_MIGRATIONS.find((migration) => migration.version === 132);
+    assert.equal(postgres?.name, "repair_durable_chat_secure_configuration_reservations");
     assert.match(postgres?.sql ?? "", /chat_turn_secure_configuration_reservations/u);
-    assert.match(postgres?.sql ?? "", /status = 'reserved'/u);
+    assert.match(postgres?.sql ?? "", /expired_unreconciled/u);
+    assert.equal(
+      __sqliteInternals.getSchemaMigrationNameForTest(189),
+      "repair_durable_chat_secure_configuration_reservations",
+    );
   });
 });

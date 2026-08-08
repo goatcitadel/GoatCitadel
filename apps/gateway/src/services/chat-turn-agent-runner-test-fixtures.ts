@@ -816,6 +816,19 @@ export function createMockStorage(): unknown {
         toolRuns.set(toolRunId, next);
         return next;
       },
+      compareAndSwapResult(
+        toolRunId: string,
+        expectedResult: Record<string, unknown>,
+        nextResult: Record<string, unknown>,
+      ): ChatToolRunRecord | undefined {
+        const current = toolRuns.get(toolRunId);
+        if (!current || JSON.stringify(current.result) !== JSON.stringify(expectedResult)) {
+          return undefined;
+        }
+        const next = { ...current, result: nextResult };
+        toolRuns.set(toolRunId, next);
+        return next;
+      },
       listByTurn(turnId: string): ChatToolRunRecord[] {
         return [...toolRuns.values()].filter((item) => item.turnId === turnId);
       },

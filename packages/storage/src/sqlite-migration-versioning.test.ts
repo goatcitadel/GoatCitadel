@@ -42,8 +42,8 @@ describe("sqlite schema migrations", () => {
     assert.deepEqual(
       { ...rows.at(-1) },
       {
-        version: 188,
-        name: "durable_chat_secure_configuration_reservations",
+        version: 189,
+        name: "repair_durable_chat_secure_configuration_reservations",
       },
     );
     db.close();
@@ -80,6 +80,231 @@ describe("sqlite schema migrations", () => {
       "trg_durable_runs_secure_reservation_cancel_guard",
     ]);
     db.close();
+  });
+
+  it("repairs the deployed draft-v188 reservation shape and quarantines ambiguous active rows", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(`
+      PRAGMA foreign_keys = ON;
+      CREATE TABLE chat_session_mutation_admissions (
+        admission_id TEXT PRIMARY KEY,
+        status TEXT NOT NULL
+      );
+      CREATE TABLE durable_runs (
+        run_id TEXT PRIMARY KEY,
+        status TEXT NOT NULL
+      );
+      INSERT INTO chat_session_mutation_admissions VALUES ('admission-legacy', 'active');
+      INSERT INTO durable_runs VALUES ('run-legacy', 'waiting');
+      CREATE TABLE chat_turn_secure_configuration_reservations (
+        reservation_id TEXT PRIMARY KEY,
+        version INTEGER NOT NULL CHECK(version = 1),
+        admission_id TEXT NOT NULL,
+        session_incarnation_id TEXT NOT NULL,
+        workspace_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        turn_id TEXT NOT NULL,
+        durable_run_id TEXT NOT NULL,
+        prompt_id TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        responder_actor_id TEXT NOT NULL,
+        responder_auth_actor_source TEXT NOT NULL,
+        waiting_run_version INTEGER NOT NULL,
+        reserved_run_version INTEGER NOT NULL,
+        expires_at TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('reserved', 'completed', 'released')),
+        provider TEXT,
+        configuration_revision TEXT,
+        scope_ref TEXT NOT NULL,
+        reserved_at TEXT NOT NULL,
+        completed_at TEXT,
+        released_at TEXT,
+        FOREIGN KEY(admission_id) REFERENCES chat_session_mutation_admissions(admission_id),
+        FOREIGN KEY(durable_run_id) REFERENCES durable_runs(run_id)
+      );
+      INSERT INTO chat_turn_secure_configuration_reservations (
+        reservation_id, version, admission_id, session_incarnation_id, workspace_id,
+        session_id, turn_id, durable_run_id, prompt_id, target_id, responder_actor_id,
+        responder_auth_actor_source, waiting_run_version, reserved_run_version, expires_at,
+        status, provider, configuration_revision, scope_ref, reserved_at, completed_at, released_at
+      ) VALUES (
+        'reservation-legacy', 1, 'admission-legacy', 'incarnation-legacy', 'workspace-legacy',
+        'session-legacy', 'turn-legacy', 'run-legacy', 'prompt-legacy', 'search.brave',
+        'operator-legacy', 'token', 2, 3, '2099-08-07T00:00:00.000Z',
+        'reserved', NULL, NULL, 'root-installation-a', '2026-08-07T00:00:00.000Z', NULL, NULL
+      );
+    `);
+
+    __sqliteInternals.applySchemaMigrationForTest(189, db);
+
+    const repaired = db
+      .prepare(
+        `SELECT status, expired_at, reclaimed_at, reconciled_at, reconciled_by_reservation_id
+         FROM chat_turn_secure_configuration_reservations
+         WHERE reservation_id = 'reservation-legacy'`,
+      )
+      .get() as
+      | {
+          status: string;
+          expired_at: string;
+          reclaimed_at: string | null;
+          reconciled_at: string | null;
+          reconciled_by_reservation_id: string | null;
+        }
+      | undefined;
+    assert.equal(repaired?.status, "expired_unreconciled");
+    assert.equal(Number.isFinite(Date.parse(repaired?.expired_at ?? "")), true);
+    assert.equal(repaired?.reclaimed_at, null);
+    assert.equal(repaired?.reconciled_at, null);
+    assert.equal(repaired?.reconciled_by_reservation_id, null);
+    assert.deepEqual(
+      db
+        .prepare("PRAGMA table_info(chat_turn_secure_configuration_reservations)")
+        .all()
+        .map((column) => (column as { name: string }).name),
+      [
+        "reservation_id",
+        "version",
+        "admission_id",
+        "session_incarnation_id",
+        "workspace_id",
+        "session_id",
+        "turn_id",
+        "durable_run_id",
+        "prompt_id",
+        "target_id",
+        "responder_actor_id",
+        "responder_auth_actor_source",
+        "waiting_run_version",
+        "reserved_run_version",
+        "expires_at",
+        "status",
+        "provider",
+        "configuration_revision",
+        "scope_ref",
+        "reserved_at",
+        "reclaimed_at",
+        "completed_at",
+        "released_at",
+        "expired_at",
+        "reconciled_at",
+        "reconciled_by_reservation_id",
+      ],
+    );
+    db.prepare(
+      `UPDATE chat_turn_secure_configuration_reservations
+       SET reclaimed_at = '2026-08-07T00:01:00.000Z'
+       WHERE reservation_id = 'reservation-legacy'`,
+    ).run();
+    assert.equal(
+      (
+        db
+          .prepare(
+            `SELECT reclaimed_at FROM chat_turn_secure_configuration_reservations
+             WHERE reservation_id = 'reservation-legacy'`,
+          )
+          .get() as { reclaimed_at: string }
+      ).reclaimed_at,
+      "2026-08-07T00:01:00.000Z",
+    );
+    db.close();
+  });
+
+  it("refuses draft-v188 rows whose installation scope cannot be proven", () => {
+    for (const scopeRef of [null, "   "]) {
+      const db = new DatabaseSync(":memory:");
+      db.exec(`
+        CREATE TABLE chat_turn_secure_configuration_reservations (
+          reservation_id TEXT,
+          version INTEGER,
+          admission_id TEXT,
+          session_incarnation_id TEXT,
+          workspace_id TEXT,
+          session_id TEXT,
+          turn_id TEXT,
+          durable_run_id TEXT,
+          prompt_id TEXT,
+          target_id TEXT,
+          responder_actor_id TEXT,
+          responder_auth_actor_source TEXT,
+          waiting_run_version INTEGER,
+          reserved_run_version INTEGER,
+          expires_at TEXT,
+          status TEXT,
+          provider TEXT,
+          configuration_revision TEXT,
+          scope_ref TEXT,
+          reserved_at TEXT,
+          completed_at TEXT,
+          released_at TEXT
+        );
+      `);
+      db.prepare(
+        `INSERT INTO chat_turn_secure_configuration_reservations VALUES (
+          'reservation-unowned-scope', 1, 'admission-unowned-scope', 'incarnation-unowned-scope',
+          'workspace-unowned-scope', 'session-unowned-scope', 'turn-unowned-scope',
+          'run-unowned-scope', 'prompt-unowned-scope', 'search.brave', 'operator-unowned-scope',
+          'token', 2, 3, '2099-08-07T00:00:00.000Z', 'reserved', NULL, NULL,
+          @scopeRef, '2026-08-07T00:00:00.000Z', NULL, NULL
+        )`,
+      ).run({ scopeRef });
+
+      assert.throws(
+        () => __sqliteInternals.applySchemaMigrationForTest(189, db),
+        /cannot infer installation scope from a missing or invalid secure configuration scope_ref/iu,
+      );
+      assert.equal(
+        (
+          db
+            .prepare(
+              `SELECT scope_ref FROM chat_turn_secure_configuration_reservations
+               WHERE reservation_id = 'reservation-unowned-scope'`,
+            )
+            .get() as { scope_ref: string | null }
+        ).scope_ref,
+        scopeRef,
+      );
+      db.close();
+    }
+  });
+
+  it("accepts the final migration-188 shape and refuses unknown legacy shapes without mutation", () => {
+    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-final-188-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+    createDatabase({ dbPath }).close();
+    const current = new DatabaseSync(dbPath);
+    __sqliteInternals.applySchemaMigrationForTest(189, current);
+    assert.equal(
+      (
+        current.prepare("SELECT COUNT(*) AS count FROM chat_turn_secure_configuration_reservations").get() as {
+          count: number;
+        }
+      ).count,
+      0,
+    );
+    current.close();
+
+    const malformed = new DatabaseSync(":memory:");
+    malformed.exec(`
+      CREATE TABLE chat_turn_secure_configuration_reservations (
+        reservation_id TEXT PRIMARY KEY,
+        status TEXT NOT NULL
+      );
+      INSERT INTO chat_turn_secure_configuration_reservations VALUES ('do-not-touch', 'reserved');
+    `);
+    assert.throws(
+      () => __sqliteInternals.applySchemaMigrationForTest(189, malformed),
+      /unsupported secure configuration reservation table shape/iu,
+    );
+    assert.deepEqual(
+      {
+        ...(malformed
+          .prepare("SELECT reservation_id, status FROM chat_turn_secure_configuration_reservations")
+          .get() as Record<string, unknown>),
+      },
+      { reservation_id: "do-not-touch", status: "reserved" },
+    );
+    malformed.close();
   });
 
   it("keeps migration 178 additive, immutable-profile, CAS-fenced, high-water-monotonic, and evidence append-only", () => {

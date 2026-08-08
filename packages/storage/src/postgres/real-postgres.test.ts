@@ -6886,3 +6886,145 @@ const A2A_BINDING_CREATE_WORKER_SOURCE = String.raw`
     }
   })();
 `;
+
+test(
+  "real Postgres upgrades the deployed draft-v131 secure configuration table through migration 132",
+  { skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane" },
+  async () => {
+    assert.ok(connectionString);
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
+    const schemaName = `coverage_secure_configuration_v132_${suffix}`;
+    const adminPool = new Pool({ connectionString });
+    const scopedUrl = new URL(connectionString);
+    scopedUrl.searchParams.set("options", `-csearch_path=${schemaName}`);
+    const scopedPool = new Pool({ connectionString: scopedUrl.toString(), max: 2 });
+    const migrationClient = new PostgresDatabaseClient(
+      { connectionString: scopedUrl.toString(), database: "goatcitadel_test" },
+      { pool: scopedPool },
+    );
+    try {
+      await adminPool.query(`CREATE SCHEMA ${schemaName}`);
+      await runPostgresMigrations(
+        migrationClient,
+        POSTGRES_MIGRATIONS.filter((migration) => migration.version <= 131),
+      );
+      await scopedPool.query(`
+        DROP TRIGGER IF EXISTS trg_chat_turn_secure_configuration_reservations_update_guard
+          ON chat_turn_secure_configuration_reservations;
+        DROP TRIGGER IF EXISTS trg_chat_turn_secure_configuration_reservations_no_delete
+          ON chat_turn_secure_configuration_reservations;
+        DROP TRIGGER IF EXISTS trg_chat_session_mutation_admissions_secure_reservation_close_guard
+          ON chat_session_mutation_admissions;
+        DROP TRIGGER IF EXISTS trg_durable_runs_secure_reservation_cancel_guard ON durable_runs;
+        ALTER TABLE chat_turn_secure_configuration_reservations
+          DROP COLUMN reclaimed_at CASCADE,
+          DROP COLUMN expired_at CASCADE,
+          DROP COLUMN reconciled_at CASCADE,
+          DROP COLUMN reconciled_by_reservation_id CASCADE;
+        ALTER TABLE chat_turn_secure_configuration_reservations
+          ALTER COLUMN scope_ref DROP NOT NULL,
+          DROP CONSTRAINT IF EXISTS chat_turn_secure_configuration_reservations_scope_ref_check;
+        DO $drop_expanded_status_checks$
+        DECLARE
+          constraint_name TEXT;
+        BEGIN
+          FOR constraint_name IN
+            SELECT constraint_row.conname
+            FROM pg_constraint constraint_row
+            WHERE constraint_row.conrelid = 'chat_turn_secure_configuration_reservations'::regclass
+              AND constraint_row.contype = 'c'
+              AND pg_get_constraintdef(constraint_row.oid) ~* '\\mstatus\\M'
+          LOOP
+            EXECUTE format(
+              'ALTER TABLE chat_turn_secure_configuration_reservations DROP CONSTRAINT %I',
+              constraint_name
+            );
+          END LOOP;
+        END;
+        $drop_expanded_status_checks$;
+        ALTER TABLE chat_turn_secure_configuration_reservations
+          ADD CONSTRAINT chat_turn_secure_configuration_reservations_prototype_status_check
+          CHECK(status IN ('reserved', 'completed', 'released'));
+      `);
+
+      const repaired = await runPostgresMigrations(migrationClient, POSTGRES_MIGRATIONS);
+      assert.deepEqual(repaired.appliedVersions, [132]);
+      const columns = await scopedPool.query<{ column_name: string; is_nullable: string }>(
+        `SELECT column_name, is_nullable
+         FROM information_schema.columns
+         WHERE table_schema = $1 AND table_name = 'chat_turn_secure_configuration_reservations'
+         ORDER BY ordinal_position`,
+        [schemaName],
+      );
+      assert.equal(columns.rows.length, 26);
+      for (const repairedColumn of ["reclaimed_at", "expired_at", "reconciled_at", "reconciled_by_reservation_id"]) {
+        assert.ok(columns.rows.some((column) => column.column_name === repairedColumn));
+      }
+      assert.equal(columns.rows.find((column) => column.column_name === "scope_ref")?.is_nullable, "NO");
+      const scopeConstraint = await scopedPool.query<{ constraint_definition: string }>(
+        `SELECT pg_get_constraintdef(constraint_row.oid) AS constraint_definition
+         FROM pg_constraint constraint_row
+         WHERE constraint_row.conrelid = 'chat_turn_secure_configuration_reservations'::regclass
+           AND constraint_row.conname = 'chat_turn_secure_configuration_reservations_scope_ref_check'`,
+      );
+      assert.match(scopeConstraint.rows[0]?.constraint_definition ?? "", /length\(btrim\(scope_ref\)\)/u);
+      const migrationRow = await scopedPool.query<{ name: string }>(
+        "SELECT name FROM schema_migrations WHERE version = 132",
+      );
+      assert.equal(migrationRow.rows[0]?.name, "repair_durable_chat_secure_configuration_reservations");
+    } finally {
+      await scopedPool.end();
+      await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
+      await adminPool.end();
+    }
+  },
+);
+
+test(
+  "real Postgres migration 132 refuses prototype rows with an unowned secure configuration scope",
+  { skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane" },
+  async () => {
+    assert.ok(connectionString);
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
+    const schemaName = `coverage_secure_configuration_scope_v132_${suffix}`;
+    const adminPool = new Pool({ connectionString });
+    const scopedUrl = new URL(connectionString);
+    scopedUrl.searchParams.set("options", `-csearch_path=${schemaName}`);
+    const scopedPool = new Pool({ connectionString: scopedUrl.toString(), max: 2 });
+    try {
+      await adminPool.query(`CREATE SCHEMA ${schemaName}`);
+      await scopedPool.query(`
+        CREATE TABLE chat_turn_secure_configuration_reservations (
+          reservation_id TEXT, version BIGINT, admission_id TEXT, session_incarnation_id TEXT,
+          workspace_id TEXT, session_id TEXT, turn_id TEXT, durable_run_id TEXT, prompt_id TEXT,
+          target_id TEXT, responder_actor_id TEXT, responder_auth_actor_source TEXT,
+          waiting_run_version BIGINT, reserved_run_version BIGINT, expires_at TEXT, status TEXT,
+          provider TEXT, configuration_revision TEXT, scope_ref TEXT, reserved_at TEXT,
+          completed_at TEXT, released_at TEXT
+        );
+        INSERT INTO chat_turn_secure_configuration_reservations VALUES (
+          'reservation-null-scope', 1, 'admission-null-scope', 'incarnation-null-scope',
+          'workspace-null-scope', 'session-null-scope', 'turn-null-scope', 'run-null-scope',
+          'prompt-null-scope', 'search.brave', 'operator-null-scope', 'token', 2, 3,
+          '2099-08-07T00:00:00.000Z', 'reserved', NULL, NULL, NULL,
+          '2026-08-07T00:00:00.000Z', NULL, NULL
+        );
+      `);
+      const repair = POSTGRES_MIGRATIONS.find((migration) => migration.version === 132);
+      assert.ok(repair);
+      await assert.rejects(
+        scopedPool.query(repair.sql),
+        /cannot infer installation scope from a missing or invalid secure configuration scope_ref/iu,
+      );
+      const untouched = await scopedPool.query<{ status: string; scope_ref: string | null }>(
+        `SELECT status, scope_ref FROM chat_turn_secure_configuration_reservations
+         WHERE reservation_id = 'reservation-null-scope'`,
+      );
+      assert.deepEqual(untouched.rows, [{ status: "reserved", scope_ref: null }]);
+    } finally {
+      await scopedPool.end();
+      await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
+      await adminPool.end();
+    }
+  },
+);

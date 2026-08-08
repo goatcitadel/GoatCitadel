@@ -7020,6 +7020,13 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
           createDurableChatSecureConfigurationReservationSchema(db);
         },
       },
+      {
+        version: 189,
+        name: "repair_durable_chat_secure_configuration_reservations",
+        up: (db) => {
+          repairDurableChatSecureConfigurationReservationSchema(db);
+        },
+      },
     ],
   },
 ];
@@ -7142,6 +7149,244 @@ function createDurableChatSecureConfigurationReservationSchema(db: DatabaseSync)
     )
     BEGIN SELECT RAISE(ABORT, 'active secure configuration reservation blocks durable run transition'); END;
   `);
+}
+
+const DURABLE_CHAT_SECURE_CONFIGURATION_RESERVATION_COLUMNS = [
+  "reservation_id",
+  "version",
+  "admission_id",
+  "session_incarnation_id",
+  "workspace_id",
+  "session_id",
+  "turn_id",
+  "durable_run_id",
+  "prompt_id",
+  "target_id",
+  "responder_actor_id",
+  "responder_auth_actor_source",
+  "waiting_run_version",
+  "reserved_run_version",
+  "expires_at",
+  "status",
+  "provider",
+  "configuration_revision",
+  "scope_ref",
+  "reserved_at",
+  "reclaimed_at",
+  "completed_at",
+  "released_at",
+  "expired_at",
+  "reconciled_at",
+  "reconciled_by_reservation_id",
+] as const;
+
+const DURABLE_CHAT_SECURE_CONFIGURATION_PROTOTYPE_COLUMNS =
+  DURABLE_CHAT_SECURE_CONFIGURATION_RESERVATION_COLUMNS.filter(
+    (column) =>
+      column !== "reclaimed_at" &&
+      column !== "expired_at" &&
+      column !== "reconciled_at" &&
+      column !== "reconciled_by_reservation_id",
+  );
+
+function repairDurableChatSecureConfigurationReservationSchema(db: DatabaseSync): void {
+  if (!tableExists(db, "chat_turn_secure_configuration_reservations")) {
+    throw new Error("SQLite migration 189 requires the migration 188 secure configuration reservation table");
+  }
+
+  const actualColumns = db.prepare("PRAGMA table_info(chat_turn_secure_configuration_reservations)").all() as Array<{
+    name: string;
+  }>;
+  const columnNames = actualColumns.map((column) => column.name);
+  const isFinalShape = arraysEqual(columnNames, DURABLE_CHAT_SECURE_CONFIGURATION_RESERVATION_COLUMNS);
+  const isPrototypeShape = arraysEqual(columnNames, DURABLE_CHAT_SECURE_CONFIGURATION_PROTOTYPE_COLUMNS);
+  if (!isFinalShape && !isPrototypeShape) {
+    throw new Error(
+      `SQLite migration 189 found an unsupported secure configuration reservation table shape: ${columnNames.join(",")}`,
+    );
+  }
+
+  const invalidScopeRows = db
+    .prepare(
+      `SELECT COUNT(*) AS count
+       FROM chat_turn_secure_configuration_reservations
+       WHERE scope_ref IS NULL OR length(TRIM(scope_ref)) NOT BETWEEN 1 AND 256`,
+    )
+    .get() as { count: number } | undefined;
+  if (invalidScopeRows?.count !== 0) {
+    throw new Error(
+      "SQLite migration 189 cannot infer installation scope from a missing or invalid secure configuration scope_ref",
+    );
+  }
+
+  dropDurableChatSecureConfigurationReservationSchemaObjects(db);
+  if (isPrototypeShape) {
+    const invalidPrototypeRows = db
+      .prepare(
+        `SELECT COUNT(*) AS count
+         FROM chat_turn_secure_configuration_reservations
+         WHERE NOT (
+           (status = 'reserved' AND provider IS NULL AND configuration_revision IS NULL
+             AND completed_at IS NULL AND released_at IS NULL)
+           OR (status = 'completed' AND length(TRIM(provider)) BETWEEN 1 AND 128
+             AND length(configuration_revision) = 64
+             AND configuration_revision NOT GLOB '*[^0-9a-f]*'
+             AND julianday(completed_at) IS NOT NULL AND released_at IS NULL)
+           OR (status = 'released' AND provider IS NULL AND configuration_revision IS NULL
+             AND completed_at IS NULL AND julianday(released_at) IS NOT NULL)
+         )`,
+      )
+      .get() as { count: number } | undefined;
+    if (invalidPrototypeRows?.count !== 0) {
+      throw new Error("SQLite migration 189 cannot prove the lifecycle of a legacy secure configuration reservation");
+    }
+
+    db.exec(`
+      ALTER TABLE chat_turn_secure_configuration_reservations
+        RENAME TO chat_turn_secure_configuration_reservations_v188_legacy;
+    `);
+    createDurableChatSecureConfigurationReservationSchema(db);
+    db.exec(`
+      INSERT INTO chat_turn_secure_configuration_reservations (
+        reservation_id, version, admission_id, session_incarnation_id, workspace_id,
+        session_id, turn_id, durable_run_id, prompt_id, target_id, responder_actor_id,
+        responder_auth_actor_source, waiting_run_version, reserved_run_version, expires_at,
+        status, provider, configuration_revision, scope_ref, reserved_at, reclaimed_at,
+        completed_at, released_at, expired_at, reconciled_at, reconciled_by_reservation_id
+      )
+      SELECT
+        reservation_id, version, admission_id, session_incarnation_id, workspace_id,
+        session_id, turn_id, durable_run_id, prompt_id, target_id, responder_actor_id,
+        responder_auth_actor_source, waiting_run_version, reserved_run_version, expires_at,
+        CASE status WHEN 'reserved' THEN 'expired_unreconciled' ELSE status END,
+        provider, configuration_revision, scope_ref, reserved_at, NULL,
+        completed_at, released_at,
+        CASE status WHEN 'reserved' THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now') ELSE NULL END,
+        NULL, NULL
+      FROM chat_turn_secure_configuration_reservations_v188_legacy;
+      DROP TABLE chat_turn_secure_configuration_reservations_v188_legacy;
+    `);
+  } else {
+    db.exec(`
+      UPDATE chat_turn_secure_configuration_reservations
+      SET status = 'expired_unreconciled',
+          expired_at = COALESCE(expired_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      WHERE status = 'reserved';
+    `);
+    createDurableChatSecureConfigurationReservationSchema(db);
+  }
+
+  upgradeDurableChatSecureConfigurationRecoveryGuard(db);
+  assertDurableChatSecureConfigurationReservationSchema(db);
+}
+
+function upgradeDurableChatSecureConfigurationRecoveryGuard(db: DatabaseSync): void {
+  db.exec(`
+    DROP TRIGGER IF EXISTS trg_chat_turn_secure_configuration_reservations_update_guard;
+    CREATE TRIGGER trg_chat_turn_secure_configuration_reservations_update_guard
+    BEFORE UPDATE ON chat_turn_secure_configuration_reservations
+    WHEN NOT (
+        (OLD.status = 'reserved' AND NEW.status IN ('completed', 'released', 'expired_unreconciled'))
+        OR (OLD.status = 'reserved' AND NEW.status = 'reserved'
+          AND OLD.reclaimed_at IS NULL AND julianday(NEW.reclaimed_at) IS NOT NULL)
+        OR (OLD.status = 'expired_unreconciled' AND NEW.status = 'expired_unreconciled'
+          AND OLD.reclaimed_at IS NULL AND julianday(NEW.reclaimed_at) IS NOT NULL)
+        OR (OLD.status = 'expired_unreconciled' AND NEW.status = 'reconciled')
+      )
+      OR NEW.reservation_id <> OLD.reservation_id OR NEW.version <> OLD.version
+      OR NEW.admission_id <> OLD.admission_id
+      OR NEW.session_incarnation_id <> OLD.session_incarnation_id
+      OR NEW.workspace_id <> OLD.workspace_id OR NEW.session_id <> OLD.session_id
+      OR NEW.turn_id <> OLD.turn_id OR NEW.durable_run_id <> OLD.durable_run_id
+      OR NEW.prompt_id <> OLD.prompt_id OR NEW.target_id <> OLD.target_id
+      OR NEW.responder_actor_id <> OLD.responder_actor_id
+      OR NEW.responder_auth_actor_source <> OLD.responder_auth_actor_source
+      OR NEW.waiting_run_version <> OLD.waiting_run_version
+      OR NEW.reserved_run_version <> OLD.reserved_run_version
+      OR NEW.expires_at <> OLD.expires_at OR NEW.reserved_at <> OLD.reserved_at
+      OR NEW.scope_ref <> OLD.scope_ref
+      OR (OLD.reclaimed_at IS NOT NULL AND NEW.reclaimed_at IS NOT OLD.reclaimed_at)
+    BEGIN SELECT RAISE(ABORT, 'secure configuration reservation transition invariant violated'); END;
+  `);
+}
+
+function dropDurableChatSecureConfigurationReservationSchemaObjects(db: DatabaseSync): void {
+  db.exec(`
+    DROP TRIGGER IF EXISTS trg_chat_turn_secure_configuration_reservations_update_guard;
+    DROP TRIGGER IF EXISTS trg_chat_turn_secure_configuration_reservations_no_delete;
+    DROP TRIGGER IF EXISTS trg_chat_session_mutation_admissions_secure_reservation_close_guard;
+    DROP TRIGGER IF EXISTS trg_durable_runs_secure_reservation_cancel_guard;
+    DROP INDEX IF EXISTS idx_chat_turn_secure_configuration_one_reserved;
+    DROP INDEX IF EXISTS idx_chat_turn_secure_configuration_run_status;
+    DROP INDEX IF EXISTS idx_chat_turn_secure_configuration_one_target_scope;
+  `);
+}
+
+function assertDurableChatSecureConfigurationReservationSchema(db: DatabaseSync): void {
+  const columns = db.prepare("PRAGMA table_info(chat_turn_secure_configuration_reservations)").all() as Array<{
+    name: string;
+  }>;
+  if (
+    !arraysEqual(
+      columns.map((column) => column.name),
+      DURABLE_CHAT_SECURE_CONFIGURATION_RESERVATION_COLUMNS,
+    )
+  ) {
+    throw new Error("SQLite migration 189 secure configuration column assertion failed");
+  }
+
+  const tableSql = db
+    .prepare(
+      `SELECT sql FROM sqlite_master
+       WHERE type = 'table' AND name = 'chat_turn_secure_configuration_reservations'`,
+    )
+    .get() as { sql: string } | undefined;
+  for (const requiredFragment of [
+    "'expired_unreconciled'",
+    "reconciled_by_reservation_id",
+    "reserved_run_version = waiting_run_version + 1",
+    "julianday(expired_at) IS NOT NULL",
+  ]) {
+    if (!tableSql?.sql.includes(requiredFragment)) {
+      throw new Error(`SQLite migration 189 secure configuration table assertion failed: ${requiredFragment}`);
+    }
+  }
+
+  const schemaObjectCount = db
+    .prepare(
+      `SELECT COUNT(*) AS count
+       FROM sqlite_master
+       WHERE name IN (
+         'idx_chat_turn_secure_configuration_one_reserved',
+         'idx_chat_turn_secure_configuration_run_status',
+         'idx_chat_turn_secure_configuration_one_target_scope',
+         'trg_chat_turn_secure_configuration_reservations_update_guard',
+         'trg_chat_turn_secure_configuration_reservations_no_delete',
+         'trg_chat_session_mutation_admissions_secure_reservation_close_guard',
+         'trg_durable_runs_secure_reservation_cancel_guard'
+       )`,
+    )
+    .get() as { count: number } | undefined;
+  if (schemaObjectCount?.count !== 7) {
+    throw new Error(
+      `SQLite migration 189 secure configuration catalog assertion failed: ${schemaObjectCount?.count ?? 0}`,
+    );
+  }
+
+  const ambiguousRows = db
+    .prepare(
+      `SELECT COUNT(*) AS count
+       FROM chat_turn_secure_configuration_reservations
+       WHERE status = 'reserved'`,
+    )
+    .get() as { count: number } | undefined;
+  if (ambiguousRows?.count !== 0) {
+    throw new Error("SQLite migration 189 left an ambiguous active secure configuration reservation");
+  }
+}
+
+function arraysEqual(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 function upgradeChatRoutedContextSnapshotsV2(db: DatabaseSync): void {

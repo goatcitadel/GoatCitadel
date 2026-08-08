@@ -146,6 +146,7 @@ function createDeferredInitHarness(overrides: Record<string, unknown> = {}) {
     npuSidecar: { close: vi.fn(async () => undefined), init: vi.fn(async () => undefined) },
     promptPackService: { resumeInterruptedBenchmarkRuns: vi.fn() },
     readFeatureFlags: vi.fn(() => ({ durableKernelV1Enabled: true })),
+    recoverInterruptedSecureConfigurationsOnBoot: vi.fn(async () => undefined),
     startMaintenanceScheduler: vi.fn(),
     startOrchestrationWorktreeReapScheduler: vi.fn(),
     startProactiveScheduler: vi.fn(),
@@ -249,6 +250,9 @@ describe("GatewayService loop 22 deferred lifecycle", () => {
       limit: 100,
     });
     expect(gateway.heartbeatOccurrenceService.recoverAll.mock.invocationCallOrder[0]).toBeLessThan(
+      gateway.recoverInterruptedSecureConfigurationsOnBoot.mock.invocationCallOrder[0],
+    );
+    expect(gateway.recoverInterruptedSecureConfigurationsOnBoot.mock.invocationCallOrder[0]).toBeLessThan(
       gateway.sessionControlRuntimeOwner.cancelExpiredUnboundTurnAdmissions.mock.invocationCallOrder[0],
     );
     expect(gateway.heartbeatOccurrenceService.recoverAll.mock.invocationCallOrder[0]).toBeLessThan(
@@ -261,6 +265,9 @@ describe("GatewayService loop 22 deferred lifecycle", () => {
     expect(gateway.startMaintenanceScheduler).toHaveBeenCalled();
     expect(gateway.startOrchestrationWorktreeReapScheduler).toHaveBeenCalled();
     expect(gateway.durableRunService.startWorker).toHaveBeenCalled();
+    expect(gateway.recoverInterruptedSecureConfigurationsOnBoot.mock.invocationCallOrder[0]).toBeLessThan(
+      gateway.durableRunService.startWorker.mock.invocationCallOrder[0],
+    );
     expect(gateway.durableRunService.resumeRunsWaitingForAutonomyKillSwitch).toHaveBeenCalled();
     expect(gateway.cronAutomationService.recoverPendingAgentTurnCronRuns).toHaveBeenCalled();
     expect(gateway.approvalEffectsService.startWorker).toHaveBeenCalled();

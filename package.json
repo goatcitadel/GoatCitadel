@@ -89,6 +89,7 @@
     "verify:api:compat": "node scripts/verification/run.mjs api-compat",
     "verify:operator:proof": "node scripts/verification/run.mjs operator-proof",
     "verify:durable:recovery": "node scripts/verification/run.mjs durable-recovery",
+    "verify:self-configuration": "node scripts/verification/run.mjs self-configuration",
     "verify:usage:reconciliation": "node scripts/verification/run.mjs usage-reconciliation",
     "verify:routed-context:snapshots": "node scripts/verification/run.mjs routed-context-snapshots",
     "verify:model-council": "node scripts/verification/run.mjs model-council",
@@ -182,7 +183,7 @@
       "uuid": "14.0.0",
       "ws@^8.0.0": "8.21.0",
       "@babel/core@^7.0.0": "7.29.6",
-      "js-yaml@^4.0.0": "4.3.0",
+      "js-yaml@^4.0.0": "4.3.1",
       "protobufjs@^7.0.0": "7.6.5",
       "vite@^6.0.0": "6.4.3"
     }

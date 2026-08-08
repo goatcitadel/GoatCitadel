@@ -13774,6 +13774,374 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         FOR EACH ROW EXECUTE FUNCTION gc_secure_configuration_durable_run_transition_guard();
     `,
   },
+  {
+    version: 132,
+    name: "repair_durable_chat_secure_configuration_reservations",
+    sql: `
+      DO $secure_configuration_shape_preflight$
+      DECLARE
+        actual_columns TEXT[];
+        final_columns CONSTANT TEXT[] := ARRAY[
+          'admission_id', 'completed_at', 'configuration_revision', 'durable_run_id',
+          'expired_at', 'expires_at', 'prompt_id', 'provider', 'reclaimed_at',
+          'reconciled_at', 'reconciled_by_reservation_id', 'released_at', 'reservation_id',
+          'reserved_at', 'reserved_run_version', 'responder_actor_id',
+          'responder_auth_actor_source', 'scope_ref', 'session_id', 'session_incarnation_id',
+          'status', 'target_id', 'turn_id', 'version', 'waiting_run_version', 'workspace_id'
+        ];
+        prototype_columns CONSTANT TEXT[] := ARRAY[
+          'admission_id', 'completed_at', 'configuration_revision', 'durable_run_id',
+          'expires_at', 'prompt_id', 'provider', 'released_at', 'reservation_id',
+          'reserved_at', 'reserved_run_version', 'responder_actor_id',
+          'responder_auth_actor_source', 'scope_ref', 'session_id', 'session_incarnation_id',
+          'status', 'target_id', 'turn_id', 'version', 'waiting_run_version', 'workspace_id'
+        ];
+      BEGIN
+        IF to_regclass('chat_turn_secure_configuration_reservations') IS NULL THEN
+          RAISE EXCEPTION
+            'Postgres migration 132 requires the migration 131 secure configuration reservation table'
+            USING ERRCODE = '23514';
+        END IF;
+
+        SELECT array_agg(attribute.attname ORDER BY attribute.attname)
+          INTO actual_columns
+        FROM pg_attribute attribute
+        WHERE attribute.attrelid = 'chat_turn_secure_configuration_reservations'::regclass
+          AND attribute.attnum > 0
+          AND NOT attribute.attisdropped;
+
+        IF actual_columns IS DISTINCT FROM final_columns
+          AND actual_columns IS DISTINCT FROM prototype_columns THEN
+          RAISE EXCEPTION
+            'Postgres migration 132 found an unsupported secure configuration reservation table shape: %',
+            actual_columns
+            USING ERRCODE = '23514';
+        END IF;
+
+        IF EXISTS (
+          SELECT 1 FROM chat_turn_secure_configuration_reservations
+          WHERE scope_ref IS NULL OR length(btrim(scope_ref)) NOT BETWEEN 1 AND 256
+        ) THEN
+          RAISE EXCEPTION
+            'Postgres migration 132 cannot infer installation scope from a missing or invalid secure configuration scope_ref'
+            USING ERRCODE = '23514';
+        END IF;
+      END;
+      $secure_configuration_shape_preflight$;
+
+      DROP TRIGGER IF EXISTS trg_chat_turn_secure_configuration_reservations_update_guard
+        ON chat_turn_secure_configuration_reservations;
+      DROP TRIGGER IF EXISTS trg_chat_session_mutation_admissions_secure_reservation_close_guard
+        ON chat_session_mutation_admissions;
+      DROP TRIGGER IF EXISTS trg_durable_runs_secure_reservation_cancel_guard ON durable_runs;
+
+      ALTER TABLE chat_turn_secure_configuration_reservations
+        ADD COLUMN IF NOT EXISTS reclaimed_at TEXT,
+        ADD COLUMN IF NOT EXISTS expired_at TEXT,
+        ADD COLUMN IF NOT EXISTS reconciled_at TEXT,
+        ADD COLUMN IF NOT EXISTS reconciled_by_reservation_id TEXT;
+
+      DO $secure_configuration_drop_deployed_status_checks$
+      DECLARE
+        constraint_name TEXT;
+      BEGIN
+        FOR constraint_name IN
+          SELECT constraint_row.conname
+          FROM pg_constraint constraint_row
+          WHERE constraint_row.conrelid = 'chat_turn_secure_configuration_reservations'::regclass
+            AND constraint_row.contype = 'c'
+            AND pg_get_constraintdef(constraint_row.oid) ~* '\\mstatus\\M'
+        LOOP
+          EXECUTE format(
+            'ALTER TABLE chat_turn_secure_configuration_reservations DROP CONSTRAINT %I',
+            constraint_name
+          );
+        END LOOP;
+      END;
+      $secure_configuration_drop_deployed_status_checks$;
+
+      UPDATE chat_turn_secure_configuration_reservations
+      SET status = 'expired_unreconciled',
+          expired_at = COALESCE(
+            expired_at,
+            to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+          )
+      WHERE status = 'reserved';
+
+      ALTER TABLE chat_turn_secure_configuration_reservations
+        ALTER COLUMN scope_ref SET NOT NULL;
+      ALTER TABLE chat_turn_secure_configuration_reservations
+        DROP CONSTRAINT IF EXISTS chat_turn_secure_configuration_reservations_scope_ref_check;
+      ALTER TABLE chat_turn_secure_configuration_reservations
+        ADD CONSTRAINT chat_turn_secure_configuration_reservations_scope_ref_check
+          CHECK(length(btrim(scope_ref)) BETWEEN 1 AND 256);
+
+      ALTER TABLE chat_turn_secure_configuration_reservations
+        ADD CONSTRAINT chat_turn_secure_configuration_reservations_status_check
+          CHECK(status IN ('reserved', 'completed', 'released', 'expired_unreconciled', 'reconciled')),
+        ADD CONSTRAINT chat_turn_secure_configuration_reservations_lifecycle_check
+          CHECK(
+            (status = 'reserved' AND provider IS NULL AND configuration_revision IS NULL
+              AND completed_at IS NULL AND released_at IS NULL AND expired_at IS NULL
+              AND (reclaimed_at IS NULL OR gc_try_parse_timestamptz(reclaimed_at) IS NOT NULL)
+              AND reconciled_at IS NULL AND reconciled_by_reservation_id IS NULL)
+            OR (status = 'completed' AND length(btrim(provider)) BETWEEN 1 AND 128
+              AND configuration_revision ~ '^[0-9a-f]{64}$'
+              AND gc_try_parse_timestamptz(completed_at) IS NOT NULL
+              AND released_at IS NULL AND expired_at IS NULL
+              AND (reclaimed_at IS NULL OR gc_try_parse_timestamptz(reclaimed_at) IS NOT NULL)
+              AND reconciled_at IS NULL AND reconciled_by_reservation_id IS NULL)
+            OR (status = 'released' AND provider IS NULL AND configuration_revision IS NULL
+              AND completed_at IS NULL AND gc_try_parse_timestamptz(released_at) IS NOT NULL
+              AND expired_at IS NULL AND reclaimed_at IS NULL AND reconciled_at IS NULL
+              AND reconciled_by_reservation_id IS NULL)
+            OR (status = 'expired_unreconciled' AND provider IS NULL AND configuration_revision IS NULL
+              AND completed_at IS NULL AND released_at IS NULL
+              AND gc_try_parse_timestamptz(expired_at) IS NOT NULL
+              AND (reclaimed_at IS NULL OR gc_try_parse_timestamptz(reclaimed_at) IS NOT NULL)
+              AND reconciled_at IS NULL AND reconciled_by_reservation_id IS NULL)
+            OR (status = 'reconciled' AND provider IS NULL AND configuration_revision IS NULL
+              AND completed_at IS NULL AND released_at IS NULL
+              AND gc_try_parse_timestamptz(expired_at) IS NOT NULL
+              AND (reclaimed_at IS NULL OR gc_try_parse_timestamptz(reclaimed_at) IS NOT NULL)
+              AND gc_try_parse_timestamptz(reconciled_at) IS NOT NULL
+              AND length(btrim(reconciled_by_reservation_id)) BETWEEN 1 AND 256)
+          );
+
+      DO $secure_configuration_reconciliation_foreign_key$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint constraint_row
+          WHERE constraint_row.conrelid = 'chat_turn_secure_configuration_reservations'::regclass
+            AND constraint_row.contype = 'f'
+            AND pg_get_constraintdef(constraint_row.oid) ~
+              'FOREIGN KEY \\(reconciled_by_reservation_id\\) REFERENCES chat_turn_secure_configuration_reservations\\(reservation_id\\)'
+        ) THEN
+          ALTER TABLE chat_turn_secure_configuration_reservations
+            ADD CONSTRAINT chat_turn_secure_configuration_reservations_reconciled_by_fkey
+            FOREIGN KEY(reconciled_by_reservation_id)
+              REFERENCES chat_turn_secure_configuration_reservations(reservation_id) ON DELETE RESTRICT;
+        END IF;
+      END;
+      $secure_configuration_reconciliation_foreign_key$;
+
+      DROP INDEX IF EXISTS idx_chat_turn_secure_configuration_one_reserved;
+      DROP INDEX IF EXISTS idx_chat_turn_secure_configuration_run_status;
+      DROP INDEX IF EXISTS idx_chat_turn_secure_configuration_one_target_scope;
+      CREATE UNIQUE INDEX idx_chat_turn_secure_configuration_one_reserved
+        ON chat_turn_secure_configuration_reservations(admission_id, durable_run_id, prompt_id)
+        WHERE status = 'reserved';
+      CREATE INDEX idx_chat_turn_secure_configuration_run_status
+        ON chat_turn_secure_configuration_reservations(durable_run_id, status, reserved_at);
+      CREATE UNIQUE INDEX idx_chat_turn_secure_configuration_one_target_scope
+        ON chat_turn_secure_configuration_reservations(target_id, scope_ref)
+        WHERE status = 'reserved';
+
+      CREATE OR REPLACE FUNCTION gc_secure_configuration_reservation_update_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF NOT (
+            (OLD.status = 'reserved' AND NEW.status IN ('completed', 'released', 'expired_unreconciled'))
+            OR (OLD.status = 'reserved' AND NEW.status = 'reserved'
+              AND OLD.reclaimed_at IS NULL AND gc_try_parse_timestamptz(NEW.reclaimed_at) IS NOT NULL)
+            OR (OLD.status = 'expired_unreconciled' AND NEW.status = 'expired_unreconciled'
+              AND OLD.reclaimed_at IS NULL AND gc_try_parse_timestamptz(NEW.reclaimed_at) IS NOT NULL)
+            OR (OLD.status = 'expired_unreconciled' AND NEW.status = 'reconciled')
+          )
+          OR NEW.reservation_id IS DISTINCT FROM OLD.reservation_id
+          OR NEW.version IS DISTINCT FROM OLD.version
+          OR NEW.admission_id IS DISTINCT FROM OLD.admission_id
+          OR NEW.session_incarnation_id IS DISTINCT FROM OLD.session_incarnation_id
+          OR NEW.workspace_id IS DISTINCT FROM OLD.workspace_id
+          OR NEW.session_id IS DISTINCT FROM OLD.session_id
+          OR NEW.turn_id IS DISTINCT FROM OLD.turn_id
+          OR NEW.durable_run_id IS DISTINCT FROM OLD.durable_run_id
+          OR NEW.prompt_id IS DISTINCT FROM OLD.prompt_id
+          OR NEW.target_id IS DISTINCT FROM OLD.target_id
+          OR NEW.responder_actor_id IS DISTINCT FROM OLD.responder_actor_id
+          OR NEW.responder_auth_actor_source IS DISTINCT FROM OLD.responder_auth_actor_source
+          OR NEW.waiting_run_version IS DISTINCT FROM OLD.waiting_run_version
+          OR NEW.reserved_run_version IS DISTINCT FROM OLD.reserved_run_version
+          OR NEW.expires_at IS DISTINCT FROM OLD.expires_at
+          OR NEW.reserved_at IS DISTINCT FROM OLD.reserved_at
+          OR NEW.scope_ref IS DISTINCT FROM OLD.scope_ref
+          OR (OLD.reclaimed_at IS NOT NULL AND NEW.reclaimed_at IS DISTINCT FROM OLD.reclaimed_at) THEN
+          RAISE EXCEPTION 'secure configuration reservation transition invariant violated'
+            USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_chat_turn_secure_configuration_reservations_update_guard
+        BEFORE UPDATE ON chat_turn_secure_configuration_reservations
+        FOR EACH ROW EXECUTE FUNCTION gc_secure_configuration_reservation_update_guard();
+
+      CREATE OR REPLACE FUNCTION gc_reject_secure_configuration_reservation_delete()
+      RETURNS trigger AS $$
+      BEGIN
+        RAISE EXCEPTION 'secure configuration reservations are append-only' USING ERRCODE = '23514';
+      END;
+      $$ LANGUAGE plpgsql;
+      DROP TRIGGER IF EXISTS trg_chat_turn_secure_configuration_reservations_no_delete
+        ON chat_turn_secure_configuration_reservations;
+      CREATE TRIGGER trg_chat_turn_secure_configuration_reservations_no_delete
+        BEFORE DELETE ON chat_turn_secure_configuration_reservations
+        FOR EACH ROW EXECUTE FUNCTION gc_reject_secure_configuration_reservation_delete();
+
+      CREATE OR REPLACE FUNCTION gc_secure_configuration_admission_close_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF OLD.status = 'active' AND NEW.status <> 'active' AND EXISTS (
+          SELECT 1 FROM chat_turn_secure_configuration_reservations reservation
+          WHERE reservation.admission_id = OLD.admission_id AND reservation.status = 'reserved'
+            AND gc_try_parse_timestamptz(reservation.expires_at) > clock_timestamp()
+        ) THEN
+          RAISE EXCEPTION 'active secure configuration reservation blocks admission close'
+            USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_chat_session_mutation_admissions_secure_reservation_close_guard
+        BEFORE UPDATE OF status ON chat_session_mutation_admissions
+        FOR EACH ROW EXECUTE FUNCTION gc_secure_configuration_admission_close_guard();
+
+      CREATE OR REPLACE FUNCTION gc_secure_configuration_durable_run_transition_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF OLD.status = 'waiting' AND NEW.status <> 'waiting' AND EXISTS (
+          SELECT 1 FROM chat_turn_secure_configuration_reservations reservation
+          WHERE reservation.durable_run_id = OLD.run_id AND reservation.status = 'reserved'
+            AND gc_try_parse_timestamptz(reservation.expires_at) > clock_timestamp()
+        ) THEN
+          RAISE EXCEPTION 'active secure configuration reservation blocks durable run transition'
+            USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_durable_runs_secure_reservation_cancel_guard
+        BEFORE UPDATE OF status ON durable_runs
+        FOR EACH ROW EXECUTE FUNCTION gc_secure_configuration_durable_run_transition_guard();
+
+      DO $secure_configuration_shape_assertion$
+      DECLARE
+        expected_column_count CONSTANT BIGINT := 26;
+        actual_column_count BIGINT;
+        trigger_count BIGINT;
+      BEGIN
+        SELECT count(*) INTO actual_column_count
+        FROM pg_attribute attribute
+        WHERE attribute.attrelid = 'chat_turn_secure_configuration_reservations'::regclass
+          AND attribute.attnum > 0
+          AND NOT attribute.attisdropped;
+        IF actual_column_count <> expected_column_count THEN
+          RAISE EXCEPTION 'Postgres migration 132 secure configuration column assertion failed: %',
+            actual_column_count USING ERRCODE = '23514';
+        END IF;
+
+        IF EXISTS (
+          SELECT 1
+          FROM information_schema.columns actual
+          FULL JOIN (
+            VALUES
+              ('reservation_id', 'text', 'NO'), ('version', 'bigint', 'NO'),
+              ('admission_id', 'text', 'NO'), ('session_incarnation_id', 'text', 'NO'),
+              ('workspace_id', 'text', 'NO'), ('session_id', 'text', 'NO'),
+              ('turn_id', 'text', 'NO'), ('durable_run_id', 'text', 'NO'),
+              ('prompt_id', 'text', 'NO'), ('target_id', 'text', 'NO'),
+              ('responder_actor_id', 'text', 'NO'), ('responder_auth_actor_source', 'text', 'NO'),
+              ('waiting_run_version', 'bigint', 'NO'), ('reserved_run_version', 'bigint', 'NO'),
+              ('expires_at', 'text', 'NO'), ('status', 'text', 'NO'),
+              ('provider', 'text', 'YES'), ('configuration_revision', 'text', 'YES'),
+              ('scope_ref', 'text', 'NO'), ('reserved_at', 'text', 'NO'),
+              ('reclaimed_at', 'text', 'YES'), ('completed_at', 'text', 'YES'),
+              ('released_at', 'text', 'YES'), ('expired_at', 'text', 'YES'),
+              ('reconciled_at', 'text', 'YES'), ('reconciled_by_reservation_id', 'text', 'YES')
+          ) expected(column_name, data_type, is_nullable)
+            ON actual.column_name = expected.column_name
+          WHERE actual.table_schema = current_schema()
+            AND actual.table_name = 'chat_turn_secure_configuration_reservations'
+            AND (
+              expected.column_name IS NULL
+              OR actual.data_type IS DISTINCT FROM expected.data_type
+              OR actual.is_nullable IS DISTINCT FROM expected.is_nullable
+            )
+        ) THEN
+          RAISE EXCEPTION 'Postgres migration 132 secure configuration column type assertion failed'
+            USING ERRCODE = '23514';
+        END IF;
+
+        IF EXISTS (
+          SELECT 1 FROM chat_turn_secure_configuration_reservations
+          WHERE status = 'reserved'
+        ) THEN
+          RAISE EXCEPTION 'Postgres migration 132 left an ambiguous active secure configuration reservation'
+            USING ERRCODE = '23514';
+        END IF;
+
+        SELECT count(*) INTO trigger_count
+        FROM pg_trigger trigger_row
+        WHERE NOT trigger_row.tgisinternal
+          AND trigger_row.tgname IN (
+            'trg_chat_turn_secure_configuration_reservations_update_guard',
+            'trg_chat_turn_secure_configuration_reservations_no_delete',
+            'trg_chat_session_mutation_admissions_secure_reservation_close_guard',
+            'trg_durable_runs_secure_reservation_cancel_guard'
+          )
+          AND trigger_row.tgrelid IN (
+            'chat_turn_secure_configuration_reservations'::regclass,
+            'chat_session_mutation_admissions'::regclass,
+            'durable_runs'::regclass
+          );
+        IF trigger_count <> 4 THEN
+          RAISE EXCEPTION 'Postgres migration 132 secure configuration trigger assertion failed: %',
+            trigger_count USING ERRCODE = '23514';
+        END IF;
+
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_indexes
+          WHERE schemaname = current_schema()
+            AND indexname = 'idx_chat_turn_secure_configuration_one_target_scope'
+            AND indexdef ~ 'WHERE \\(status = ''reserved''::text\\)'
+        ) THEN
+          RAISE EXCEPTION 'Postgres migration 132 secure configuration target-scope index assertion failed'
+            USING ERRCODE = '23514';
+        END IF;
+
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint constraint_row
+          WHERE constraint_row.conrelid = 'chat_turn_secure_configuration_reservations'::regclass
+            AND constraint_row.contype = 'c'
+            AND constraint_row.conname = 'chat_turn_secure_configuration_reservations_scope_ref_check'
+            AND position('length(btrim(scope_ref))' IN pg_get_constraintdef(constraint_row.oid)) > 0
+        ) THEN
+          RAISE EXCEPTION 'Postgres migration 132 secure configuration scope_ref constraint assertion failed'
+            USING ERRCODE = '23514';
+        END IF;
+
+        IF (
+          SELECT count(*)
+          FROM pg_constraint constraint_row
+          WHERE constraint_row.conrelid = 'chat_turn_secure_configuration_reservations'::regclass
+            AND constraint_row.contype = 'f'
+            AND (
+              pg_get_constraintdef(constraint_row.oid) ~
+                'FOREIGN KEY \\(admission_id\\) REFERENCES chat_session_mutation_admissions\\(admission_id\\)'
+              OR pg_get_constraintdef(constraint_row.oid) ~
+                'FOREIGN KEY \\(durable_run_id\\) REFERENCES durable_runs\\(run_id\\)'
+              OR pg_get_constraintdef(constraint_row.oid) ~
+                'FOREIGN KEY \\(reconciled_by_reservation_id\\) REFERENCES chat_turn_secure_configuration_reservations\\(reservation_id\\)'
+            )
+        ) <> 3 THEN
+          RAISE EXCEPTION 'Postgres migration 132 secure configuration foreign-key assertion failed'
+            USING ERRCODE = '23514';
+        END IF;
+      END;
+      $secure_configuration_shape_assertion$;
+    `,
+  },
 ];
 
 function buildWorkspacePathBridgePosixFlavorPostgresSql(): string {

@@ -985,6 +985,8 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
             "[Download the PowerPoint](sandbox:/mnt/data/wrong-name.pptx)",
         );
       });
+    const workspaceFileRootDir = "/goatcitadel-workspace";
+    const presentationArtifactPath = `${workspaceFileRootDir}/goatcitadel_out/funny-jokes-approved-research.pptx`;
     const invokeTool = vi.fn(async (request: ToolInvokeRequest): Promise<ToolInvokeResult> => {
       if (request.toolName === "browser.search") {
         return {
@@ -995,7 +997,7 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
       return {
         outcome: "executed",
         result: {
-          path: "F:\\code\\personal-ai\\workspace\\goatcitadel_out\\funny-jokes-approved-research.pptx",
+          path: presentationArtifactPath,
           bytesWritten: 24_000,
           format: "pptx",
           title: request.args.title,
@@ -1010,7 +1012,7 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
       listToolCatalog: () => createToolCatalog(["browser.search", "presentations.create"]),
       createChatCompletion,
       invokeTool,
-      workspaceFileRootDir: "F:\\code\\personal-ai\\workspace",
+      workspaceFileRootDir,
     });
 
     const result = await orchestrator.run(
@@ -1625,7 +1627,7 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
     });
   });
 
-  it("projects the Ward limitation when an approved runtime.configure result is reused after resume", async () => {
+  it("recovers the exact sealed runtime.configure prompt after a pre-trace crash", async () => {
     const sessionId = "sess-runtime-configuration-ward-resume";
     const turnId = "turn-runtime-configuration-ward-resume";
     const storage = createMockStorage() as ReturnType<typeof createMockStorage> & {
@@ -1650,15 +1652,18 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
     const requests: ChatCompletionRequest[] = [];
     const createChatCompletion = vi
       .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
-      .mockImplementationOnce(async (request) => {
+      .mockImplementation(async (request) => {
         requests.push(request);
         return namedToolCallCompletion("runtime.configure", { targetId: "search.brave" });
-      })
-      .mockImplementationOnce(async (request) => {
-        requests.push(request);
-        return completion("Administrator intervention is required under the current Ward policy.");
       });
-    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>();
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "approval_required",
+      policyReason: "A fresh runtime configuration approval is required.",
+      auditEventId: "audit-runtime-configuration-fresh-approval",
+      approvalId: "approval-runtime-configuration-fresh",
+    });
+    const assertRuntimeConfigurationPromptAuthority = vi.fn(async () => undefined);
+    let injectPreTraceCrash = true;
     const orchestrator = new ChatTurnAgentRunner({
       storage: storage as never,
       listToolCatalog: () => createToolCatalog(["runtime.configure"]),
@@ -1669,21 +1674,83 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
         requiresApproval: true,
         reasonCodes: ["ward_approval_required"],
       }),
+      assertRuntimeConfigurationPromptAuthority,
+      afterRuntimeConfigurationPromptAuthoritySealed: () => {
+        if (!injectPreTraceCrash) return;
+        injectPreTraceCrash = false;
+        throw new Error("fault_after_runtime_configuration_prompt_seal");
+      },
     });
 
-    const result = await orchestrator.run(
-      turnInput({
+    const durableTurnInput = turnInput({
+      sessionId,
+      turnId,
+      content: "Continue the approved Brave configuration.",
+      historyMessages: [{ role: "user", content: "Continue the approved Brave configuration." }],
+      policyRunId: "durable-run-runtime-configuration",
+      policyContext: {
+        workspaceId: "default",
         sessionId,
-        turnId,
-        content: "Continue the approved Brave configuration.",
-        historyMessages: [{ role: "user", content: "Continue the approved Brave configuration." }],
-      }),
-    );
+        runId: "durable-run-runtime-configuration",
+        authActorId: "operator-1",
+      },
+    });
+    const interrupted = await orchestrator.run(durableTurnInput);
 
     expect(invokeTool).not.toHaveBeenCalled();
-    expect(JSON.stringify(requests[1]?.messages)).toContain("runtime_configuration_preapproval_binding_required");
-    expect(result.assistantContent).toContain("Administrator intervention");
-    expect(result.turnTrace.pendingUserInput).toBeUndefined();
+    expect(requests.length).toBeGreaterThan(0);
+    expect(interrupted.turnTrace.pendingUserInput).toBeUndefined();
+    const interruptedRequestCount = requests.length;
+    const sealedRun = (await storage.chatToolRuns.listByTurn(turnId)).find(
+      (record) => record.toolRunId === "tool-run-runtime-configuration-approved",
+    );
+    const sealedAuthority = (sealedRun?.result?.runtimeConfigurationPromptAuthority as
+      | { promptId?: string; expiresAt?: string }
+      | undefined)!;
+    expect(sealedRun?.result).toMatchObject({
+      runtimeConfigurationPromptAuthority: {
+        promptId: expect.any(String),
+        expiresAt: expect.any(String),
+      },
+    });
+
+    const second = await orchestrator.run(durableTurnInput);
+
+    expect(assertRuntimeConfigurationPromptAuthority).toHaveBeenCalledTimes(2);
+    expect(assertRuntimeConfigurationPromptAuthority).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        requestId: sealedAuthority.promptId,
+        expiresAt: sealedAuthority.expiresAt,
+        runId: "durable-run-runtime-configuration",
+        approvedAction: expect.objectContaining({ promptId: sealedAuthority.promptId }),
+      }),
+    );
+    expect(second.turnTrace).toMatchObject({
+      status: "waiting_for_user_input",
+      pendingUserInput: {
+        promptId: sealedAuthority.promptId,
+        expiresAt: sealedAuthority.expiresAt,
+        secureConfiguration: {
+          targetId: "search.brave",
+          approvedAction: {
+            approvalId: "approval-runtime-configuration",
+            toolRunId: "tool-run-runtime-configuration-approved",
+            promptId: sealedAuthority.promptId,
+          },
+        },
+      },
+    });
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(requests).toHaveLength(interruptedRequestCount);
+
+    assertRuntimeConfigurationPromptAuthority.mockRejectedValueOnce(new Error("runtime_configuration_policy_drift"));
+    await expect(orchestrator.run(durableTurnInput)).rejects.toThrow("runtime_configuration_policy_drift");
+    const authorityAfterDrift = (await storage.chatToolRuns.listByTurn(turnId)).find(
+      (record) => record.toolRunId === "tool-run-runtime-configuration-approved",
+    )?.result?.runtimeConfigurationPromptAuthority as { promptId?: string; expiresAt?: string };
+    expect(authorityAfterDrift).toEqual(sealedAuthority);
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(requests).toHaveLength(interruptedRequestCount);
   });
 
   it.each([

@@ -5,9 +5,9 @@
     "sqlite": {
       "path": "packages/storage/src/sqlite.ts",
       "registryName": "SCHEMA_MIGRATION_GROUPS",
-      "expectedCount": 187,
+      "expectedCount": 189,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 187,
+      "expectedLastVersion": 189,
       "migrations": [
         {
           "version": 1,
@@ -1317,15 +1317,29 @@
           "groupName": "canonical",
           "definitionSha256": "6b1eced61e500280ff6ebc07c09bb721332bbab18a828088928ce665eef78d08",
           "implementationSha256": "2188fdb8d3b8cec7a69dbf487ab468fcea460604e00bb90b8e2184a919904837"
+        },
+        {
+          "version": 188,
+          "name": "durable_chat_secure_configuration_reservations",
+          "groupName": "canonical",
+          "definitionSha256": "7166346d42bf6abad1c5b039e433bcbcfbc55f2e0d3c1f29de589a546dc8e2b4",
+          "implementationSha256": "0e92381b7050649e6133cdb906d2f81e2af0d36c66be2dea6a26d2953952ceb6"
+        },
+        {
+          "version": 189,
+          "name": "repair_durable_chat_secure_configuration_reservations",
+          "groupName": "canonical",
+          "definitionSha256": "80721e7c8801f16b9cea3140c46e7493acc1076f6653b1eb52d6c0e5875cdfe7",
+          "implementationSha256": "6c926e88d836249cf7a93510b759f8cfdd45797dbe39e2a973685beba28bb2f4"
         }
       ]
     },
     "postgres": {
       "path": "packages/storage/src/postgres/migrations.ts",
       "registryName": "POSTGRES_MIGRATIONS",
-      "expectedCount": 130,
+      "expectedCount": 132,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 130,
+      "expectedLastVersion": 132,
       "migrations": [
         {
           "version": 1,
@@ -2107,6 +2121,18 @@
           "name": "session_control_lifecycle_bootstrap_clock_guard",
           "definitionSha256": "48327509538d9d11e83ceecd341759fed089282eb2bf73f3bc9437aa2320ed8d",
           "sqlPayloadSha256": "98a0dea9548e50dede2608b0513a0d62aa75b69ad46f83af49a7911434ca2906"
+        },
+        {
+          "version": 131,
+          "name": "durable_chat_secure_configuration_reservations",
+          "definitionSha256": "d7c7eb013a53038f2a195a7c0dd99e5ccdf9ca8e179284503b7a94d2acd3d566",
+          "sqlPayloadSha256": "3d3466c524a24a68089a94833468afd798bc65cfbb96406d3b79c3c37c8a2e25"
+        },
+        {
+          "version": 132,
+          "name": "repair_durable_chat_secure_configuration_reservations",
+          "definitionSha256": "bdf6ebf28a10ae2653d492ef97f3792f11465b50bc799778454debd6043daaa7",
+          "sqlPayloadSha256": "e17e87e41a0cf5acc097f100cad35440a6b8b4debfb3653c6610c3997db71663"
         }
       ]
     }
