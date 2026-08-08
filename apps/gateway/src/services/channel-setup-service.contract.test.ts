@@ -162,7 +162,7 @@ describe("channel-setup-service contract behavior", () => {
 
     expect(result.status).toBe("error");
     expect(result.issues.map((issue) => issue.key)).toEqual(
-      expect.arrayContaining(["defaultChannelId_required", "botTokenEnv_required"]),
+      expect.arrayContaining(["defaultChannelId_required", "defaultGuildId_required", "botTokenEnv_required"]),
     );
     expect(host.runIntegrationConnectionLiveChecks).not.toHaveBeenCalled();
     expect(host.buildIntegrationConnectionChecks).not.toHaveBeenCalled();
@@ -179,6 +179,7 @@ describe("channel-setup-service contract behavior", () => {
       draft: {
         botTokenEnv: "DISCORD_BOT_TOKEN",
         defaultChannelId: "123456789012345678",
+        defaultGuildId: "987654321098765432",
         runtimeMode: "gateway",
       },
     });
@@ -193,10 +194,51 @@ describe("channel-setup-service contract behavior", () => {
     expect(result.connection.config).toMatchObject({
       botTokenEnv: "DISCORD_BOT_TOKEN",
       defaultChannelId: "123456789012345678",
+      defaultGuildId: "987654321098765432",
       runtimeMode: "gateway",
     });
     expect(() => host.storage.channelSetupDrafts.get(created.draftId)).toThrow(/Missing draft/);
     expect(host.recentChannelSetupTests.has(created.draftId)).toBe(false);
+  });
+
+  it("defers Discord runtime readiness until a new gateway draft has a durable connection", async () => {
+    const host = createHost();
+    host.runIntegrationConnectionLiveChecks = vi.fn(async (_connection, options) => ({
+      checks:
+        options.discordRuntimeReadiness === "deferred"
+          ? []
+          : [
+              {
+                key: "discord_runtime_ready",
+                status: "fail" as const,
+                message: "Gateway runtime is not configured for this connection yet.",
+              },
+            ],
+    }));
+    const created = await createChannelSetupDraft(host, {
+      catalogId: "channel.discord",
+      lifecycleMode: "create",
+    });
+    host.storage.channelSetupDrafts.update(created.draftId, {
+      draft: {
+        botTokenEnv: "DISCORD_BOT_TOKEN",
+        defaultChannelId: "123456789012345678",
+        defaultGuildId: "987654321098765432",
+        runtimeMode: "gateway",
+      },
+    });
+
+    const result = await finalizeChannelSetupDraft(host, created.draftId);
+
+    expect(host.runIntegrationConnectionLiveChecks).toHaveBeenCalledWith(
+      expect.objectContaining({ connectionId: created.draftId, key: "discord" }),
+      {
+        includeSandboxSend: true,
+        discordRuntimeReadiness: "deferred",
+      },
+    );
+    expect(result.test.status).toBe("ok");
+    expect(result.connection.connectionId).toBe("connection-1");
   });
 
   it("finalizes an outbound-only ntfy draft when its sandbox send and setup checks pass", async () => {

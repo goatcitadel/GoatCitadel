@@ -1,7 +1,7 @@
 // Extracted verbatim from `../../SettingsNativePage.tsx` as part of the
 // per-section settings decomposition.
 import { useCallback, useEffect, useState } from "react";
-import { CheckCircle2, ExternalLink, Play, Plus, RefreshCw, Save, ShieldCheck } from "lucide-react";
+import { ExternalLink, Plus, RefreshCw } from "lucide-react";
 import {
   createChannelSetupDraft,
   discoverTelegramTargets,
@@ -22,10 +22,8 @@ import {
   type Notice,
   SettingsActionList,
   SettingsButtonRow,
-  SettingsCodeBlock,
   SettingsEmptyState,
   SettingsField,
-  SettingsFieldGrid,
   SettingsGrid,
   SettingsLoadWarnings,
   SettingsNotice,
@@ -35,13 +33,12 @@ import {
   useAsyncLoad,
 } from "../SettingsShared";
 import { NativeCard } from "../../NativeRoutePageLayout";
-import { NativeButton, NativeMetricGrid, NativeSelectableList } from "../../primitives";
+import { NativeButton, NativeSelectableList } from "../../primitives";
+import { ChannelSetupWizard, type ChannelSetupWizardFeedback } from "../channel-setup/ChannelSetupWizard";
+import { DiscordConnectionOperationsPanel } from "../channel-setup/DiscordConnectionOperationsPanel";
 import {
-  collectDefinitionFieldHints,
   delay,
   formatDateTime,
-  formatJson,
-  parseJsonObject,
   preferredChannelDefinition,
   readConnectionConfigString,
   readDraftString,
@@ -67,11 +64,15 @@ export function ChannelsSection(_props: SettingsSectionProps) {
   const [createCatalogId, setCreateCatalogId] = useState("");
   const [draftLabel, setDraftLabel] = useState("");
   const [draftEnabled, setDraftEnabled] = useState(true);
-  const [draftJson, setDraftJson] = useState("{}");
-  const [validationResult, setValidationResult] = useState<{ kind: "validate" | "test"; items: string[] } | null>(null);
+  const [draftValues, setDraftValues] = useState<Record<string, unknown>>({});
+  const [draftDirty, setDraftDirty] = useState(false);
+  const [validationResult, setValidationResult] = useState<ChannelSetupWizardFeedback | null>(null);
+  const [busyAction, setBusyAction] = useState<"save" | "validate" | "test" | "finalize" | null>(null);
   const selectedDraft = data?.drafts?.find((item) => item.draftId === selectedDraftId) ?? data?.drafts?.[0] ?? null;
-  const selectedDefinition =
-    data?.definitions?.find((item) => item.catalog.catalogId === (selectedDraft?.catalogId || createCatalogId)) ?? null;
+  const createDefinition = data?.definitions?.find((item) => item.catalog.catalogId === createCatalogId) ?? null;
+  const selectedDefinition = selectedDraft
+    ? (data?.definitions?.find((item) => item.catalog.catalogId === selectedDraft.catalogId) ?? null)
+    : createDefinition;
 
   useEffect(() => {
     if (!data?.definitions?.length) {
@@ -100,13 +101,19 @@ export function ChannelsSection(_props: SettingsSectionProps) {
     if (!selectedDraft) {
       setDraftLabel("");
       setDraftEnabled(true);
-      setDraftJson("{}");
+      setDraftValues({});
+      setDraftDirty(false);
       return;
     }
     setDraftLabel(selectedDraft.label ?? "");
     setDraftEnabled(selectedDraft.enabled);
-    setDraftJson(formatJson(selectedDraft.draft));
+    setDraftValues(selectedDraft.draft);
+    setDraftDirty(false);
   }, [selectedDraft]);
+
+  useEffect(() => {
+    setValidationResult(null);
+  }, [selectedDraft?.draftId]);
 
   const handleCreate = async () => {
     if (!createCatalogId) {
@@ -192,7 +199,7 @@ export function ChannelsSection(_props: SettingsSectionProps) {
       return;
     }
     try {
-      const draftObject = parseJsonObject(draftJson, selectedDraft.draft);
+      const draftObject = draftValues;
       const result = await discoverTelegramTargets({
         botToken: readDraftString(draftObject, "botToken"),
         botTokenEnv: readDraftString(draftObject, "botTokenEnv") ?? readDraftString(draftObject, "tokenEnv"),
@@ -213,13 +220,13 @@ export function ChannelsSection(_props: SettingsSectionProps) {
         kind: item.kind,
         default: index === 0,
       }));
-      setDraftJson(
-        formatJson({
-          ...draftObject,
-          targets,
-          defaultChatId: targets[0]?.chatId ?? readDraftString(draftObject, "defaultChatId"),
-        }),
-      );
+      setDraftValues({
+        ...draftObject,
+        targets,
+        defaultChatId: targets[0]?.chatId ?? readDraftString(draftObject, "defaultChatId"),
+      });
+      setDraftDirty(true);
+      setValidationResult(null);
       setNotice({
         tone: "success",
         message: `Detected ${targets.length} Telegram target${targets.length === 1 ? "" : "s"}.`,
@@ -229,32 +236,72 @@ export function ChannelsSection(_props: SettingsSectionProps) {
     }
   };
 
-  const handleSave = async () => {
+  const draftHasChanges = (valuesOverride?: Record<string, unknown>): boolean => {
     if (!selectedDraft) {
-      return;
+      return false;
+    }
+    const nextValues = valuesOverride ?? draftValues;
+    return (
+      draftDirty ||
+      draftLabel.trim() !== (selectedDraft.label ?? "").trim() ||
+      draftEnabled !== selectedDraft.enabled ||
+      JSON.stringify(nextValues) !== JSON.stringify(selectedDraft.draft)
+    );
+  };
+
+  const persistDraft = async (valuesOverride?: Record<string, unknown>): Promise<boolean> => {
+    if (!selectedDraft) {
+      return false;
+    }
+    const nextValues = valuesOverride ?? draftValues;
+    if (!draftHasChanges(nextValues)) {
+      return true;
     }
     try {
-      await updateChannelSetupDraft(selectedDraft.draftId, {
+      const savedDraft = await updateChannelSetupDraft(selectedDraft.draftId, {
         label: draftLabel.trim() || undefined,
         enabled: draftEnabled,
-        draft: parseJsonObject(draftJson, selectedDraft.draft),
+        draft: nextValues,
       });
-      setNotice({ tone: "success", message: "Channel draft saved." });
-      await reload();
+      setDraftLabel(savedDraft.label ?? draftLabel.trim());
+      setDraftEnabled(savedDraft.enabled ?? draftEnabled);
+      setDraftValues(savedDraft.draft ?? nextValues);
+      setDraftDirty(false);
+      return true;
     } catch (saveError) {
       setNotice({ tone: "error", message: getErrorMessage(saveError) });
+      return false;
     }
   };
 
-  const handleValidate = async () => {
+  const handleSave = async (valuesOverride?: Record<string, unknown>): Promise<boolean> => {
+    setBusyAction("save");
+    try {
+      const saved = await persistDraft(valuesOverride);
+      if (saved) {
+        setNotice({ tone: "success", message: "Channel draft saved." });
+        await reload();
+      }
+      return saved;
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const handleValidate = async (valuesOverride?: Record<string, unknown>) => {
     if (!selectedDraft) {
       return;
     }
+    setBusyAction("validate");
     try {
+      if (!(await persistDraft(valuesOverride))) {
+        return;
+      }
       const result = await validateChannelSetupDraft(selectedDraft.draftId);
       setValidationResult({
         kind: "validate",
-        items: result.issues.map((item) => `${item.level.toUpperCase()}: ${item.message}`),
+        status: result.status,
+        issues: result.issues,
       });
       setNotice({
         tone: result.status === "error" ? "error" : result.status === "warn" ? "warning" : "success",
@@ -263,18 +310,38 @@ export function ChannelsSection(_props: SettingsSectionProps) {
       await reload();
     } catch (validateError) {
       setNotice({ tone: "error", message: getErrorMessage(validateError) });
+    } finally {
+      setBusyAction(null);
     }
   };
 
-  const handleTest = async () => {
+  const handleTest = async (valuesOverride?: Record<string, unknown>) => {
     if (!selectedDraft) {
       return;
     }
+    setBusyAction("test");
     try {
+      if (!(await persistDraft(valuesOverride))) {
+        return;
+      }
+      const validation = await validateChannelSetupDraft(selectedDraft.draftId);
+      if (validation.status === "error") {
+        setValidationResult({
+          kind: "validate",
+          status: validation.status,
+          issues: validation.issues,
+        });
+        setNotice({ tone: "error", message: "Resolve the validation errors before running a live test." });
+        await reload();
+        return;
+      }
       const result = await testChannelSetupDraft(selectedDraft.draftId);
       setValidationResult({
         kind: "test",
-        items: result.issues.map((item) => `${item.level.toUpperCase()}: ${item.message}`),
+        status: result.status,
+        issues: result.issues,
+        recommendedNextAction: result.recommendedNextAction,
+        probe: result.probe,
       });
       setNotice({
         tone: result.status === "error" ? "error" : result.status === "warn" ? "warning" : "success",
@@ -283,19 +350,35 @@ export function ChannelsSection(_props: SettingsSectionProps) {
       await reload();
     } catch (testError) {
       setNotice({ tone: "error", message: getErrorMessage(testError) });
+    } finally {
+      setBusyAction(null);
     }
   };
 
-  const handleFinalize = async () => {
+  const handleFinalize = async (valuesOverride?: Record<string, unknown>) => {
     if (!selectedDraft) {
       return;
     }
+    if (draftHasChanges(valuesOverride)) {
+      setNotice({ tone: "warning", message: "Save these changes and run the live test again before finalizing." });
+      return;
+    }
+    if (validationResult?.kind !== "test" || validationResult.status !== "ok") {
+      setNotice({ tone: "warning", message: "A passing live test is required before finalizing this connection." });
+      return;
+    }
+    setBusyAction("finalize");
     try {
       const result = await finalizeChannelSetupDraft(selectedDraft.draftId);
       setNotice({ tone: "success", message: `Channel connection ${result.connection.label} finalized.` });
+      setSelectedDraftId("");
+      setValidationResult(null);
+      setDraftDirty(false);
       await reload();
     } catch (finalizeError) {
       setNotice({ tone: "error", message: getErrorMessage(finalizeError) });
+    } finally {
+      setBusyAction(null);
     }
   };
 
@@ -339,7 +422,7 @@ export function ChannelsSection(_props: SettingsSectionProps) {
                 notice={{
                   tone: "info",
                   message:
-                    "Every listed channel starts as a setup draft. Slack uses OAuth, Telegram can discover targets, and all drafts must save, validate, test, and finalize before runtime use.",
+                    "Choose a channel, start its guided setup, then save, validate, test, and finalize before runtime use. Slack uses OAuth and Telegram can discover targets.",
                 }}
               />
               <SettingsButtonRow>
@@ -351,7 +434,7 @@ export function ChannelsSection(_props: SettingsSectionProps) {
                 ) : null}
                 <NativeButton variant="default" disabled={!createCatalogId} onClick={() => void handleCreate()}>
                   <Plus size={16} />
-                  Create setup draft
+                  {createDefinition ? `Start ${createDefinition.catalog.label} setup` : "Start guided setup"}
                 </NativeButton>
               </SettingsButtonRow>
               <SettingsActionList
@@ -388,106 +471,66 @@ export function ChannelsSection(_props: SettingsSectionProps) {
                 emptyLabel="No channel drafts yet."
               />
             </NativeCard>
+            <DiscordConnectionOperationsPanel connections={data.connections ?? []} />
           </SettingsStack>
           <NativeCard
             density="compact"
             className="mc-next-settings-panel"
             title={selectedDraft?.label || selectedDefinition?.catalog?.label || "Channel draft"}
-            subtitle="Edit the draft payload, then check readiness, send a trial message, and finalize it."
+            subtitle="Follow the guided setup, prove the connection, then finalize it into the live runtime."
           >
-            {selectedDraft ? (
-              <>
-                <SettingsFieldGrid>
-                  <SettingsField label="Label">
-                    <input
-                      className="mc-next-settings-input"
-                      value={draftLabel}
-                      onChange={(event) => setDraftLabel(event.target.value)}
-                    />
-                  </SettingsField>
-                  <SettingsField label="Enabled" group>
-                    <label className="mc-next-settings-toggle">
-                      <input
-                        type="checkbox"
-                        checked={draftEnabled}
-                        onChange={(event) => setDraftEnabled(event.target.checked)}
-                      />
-                      <span>Enable the connection after finalize</span>
-                    </label>
-                  </SettingsField>
-                  <SettingsField label="Draft JSON" span={2}>
-                    <textarea
-                      className="mc-next-settings-textarea mc-next-settings-code"
-                      value={draftJson}
-                      onChange={(event) => setDraftJson(event.target.value)}
-                    />
-                  </SettingsField>
-                </SettingsFieldGrid>
-                {selectedDefinition ? (
-                  <NativeMetricGrid
-                    items={[
-                      {
-                        label: "Difficulty",
-                        value: selectedDefinition.wizard.difficulty,
-                        meta: selectedDefinition.catalog.key,
-                      },
-                      {
-                        label: "Validation levels",
-                        value: String(selectedDefinition.validation.levels.length),
-                        meta: selectedDefinition.testing.levels.join(", "),
-                      },
-                    ]}
-                  />
-                ) : null}
-                <SettingsButtonRow>
-                  {selectedDraft.catalogId === "channel.slack" ? (
-                    <NativeButton variant="default" onClick={() => void handleStartSlackOAuth()}>
-                      <ExternalLink size={16} />
-                      Connect Slack
-                    </NativeButton>
-                  ) : null}
-                  {selectedDraft.catalogId === "channel.telegram" ? (
-                    <NativeButton variant="secondary" onClick={() => void handleDiscoverTelegramTargets()}>
-                      <RefreshCw size={16} />
-                      Detect Telegram Chats
-                    </NativeButton>
-                  ) : null}
-                  <NativeButton variant="default" onClick={() => void handleSave()}>
-                    <Save size={16} />
-                    Save draft
-                  </NativeButton>
-                  <NativeButton variant="secondary" onClick={() => void handleValidate()}>
-                    <ShieldCheck size={16} />
-                    Validate
-                  </NativeButton>
-                  <NativeButton variant="secondary" onClick={() => void handleTest()}>
-                    <Play size={16} />
-                    Test
-                  </NativeButton>
-                  <NativeButton variant="default" onClick={() => void handleFinalize()}>
-                    <CheckCircle2 size={16} />
-                    Finalize
-                  </NativeButton>
-                </SettingsButtonRow>
-                {selectedDefinition ? (
-                  <SettingsActionList
-                    ariaLabel="Channel setup field guidance"
-                    items={collectDefinitionFieldHints(selectedDefinition).map((item) => ({
-                      label: item.label,
-                      description: item.explanation,
-                      meta: item.type,
-                    }))}
-                    emptyLabel="No wizard field hints available."
-                  />
-                ) : null}
-                {validationResult ? (
-                  <SettingsCodeBlock
-                    label={validationResult.kind === "validate" ? "Validation results" : "Test results"}
-                  >
-                    {validationResult.items.join("\n") || "No issues returned."}
-                  </SettingsCodeBlock>
-                ) : null}
-              </>
+            {selectedDraft && selectedDefinition ? (
+              <ChannelSetupWizard
+                definition={selectedDefinition}
+                draft={selectedDraft}
+                values={draftValues}
+                label={draftLabel}
+                enabled={draftEnabled}
+                dirty={draftDirty}
+                feedback={validationResult}
+                busyAction={busyAction}
+                onValuesChange={(next) => {
+                  setDraftValues(next);
+                  setDraftDirty(true);
+                  setValidationResult(null);
+                }}
+                onLabelChange={(next) => {
+                  setDraftLabel(next);
+                  setDraftDirty(true);
+                  setValidationResult(null);
+                }}
+                onEnabledChange={(next) => {
+                  setDraftEnabled(next);
+                  setDraftDirty(true);
+                  setValidationResult(null);
+                }}
+                onDirty={() => {
+                  setDraftDirty(true);
+                  setValidationResult(null);
+                }}
+                onSave={handleSave}
+                onValidate={handleValidate}
+                onTest={handleTest}
+                onFinalize={handleFinalize}
+                supplementaryActions={
+                  <>
+                    {selectedDraft.catalogId === "channel.slack" ? (
+                      <NativeButton variant="secondary" onClick={() => void handleStartSlackOAuth()}>
+                        <ExternalLink size={16} />
+                        Connect Slack
+                      </NativeButton>
+                    ) : null}
+                    {selectedDraft.catalogId === "channel.telegram" ? (
+                      <NativeButton variant="secondary" onClick={() => void handleDiscoverTelegramTargets()}>
+                        <RefreshCw size={16} />
+                        Detect Telegram chats
+                      </NativeButton>
+                    ) : null}
+                  </>
+                }
+              />
+            ) : selectedDraft ? (
+              <SettingsEmptyState label="The setup definition for this draft is unavailable. Refresh or repair the Gateway catalog." />
             ) : (
               <SettingsEmptyState label="Create or select a channel setup draft to continue." />
             )}

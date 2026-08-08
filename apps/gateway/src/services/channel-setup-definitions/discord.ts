@@ -26,7 +26,7 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
     catalog: baseCatalogMeta(catalog, ["guided", "manual"]),
     wizard: {
       archetype: "bot_token_target",
-      contentVersion: "2026.03.discord.v2",
+      contentVersion: "2026.08.discord.v3",
       estimatedMinutes: 10,
       difficulty: "intermediate",
       manualModePolicy: "available-secondary",
@@ -77,12 +77,24 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
             paragraph(
               "Open the Discord Developer Portal, create a new application, then open the Bot tab and add a bot user.",
             ),
+            paragraph(
+              "In Privileged Gateway Intents, enable Message Content Intent. GoatCitadel identifies with that intent so it can receive normal message text; Discord can reject the gateway session when the intent is not enabled for the application.",
+            ),
             linkBlock("Discord Developer Portal", "https://discord.com/developers/applications"),
+            linkBlock("Discord Gateway intent reference", "https://docs.discord.com/developers/events/gateway"),
           ],
           checklist: [
             check("app-created", "Create a new Discord application"),
             check("bot-added", "Add a bot user in the Bot section"),
+            check("message-content-intent", "Enable Message Content Intent under Privileged Gateway Intents"),
             check("token-copied", "Copy the bot token or store it in an environment variable"),
+          ],
+          troubleshooting: [
+            troubleshoot(
+              "message-content-intent-disabled",
+              "Gateway login fails even though the token is valid",
+              "Confirm Message Content Intent is enabled on the application's Bot page. A disabled or unapproved privileged intent can close the Discord gateway session even when REST token and channel probes pass.",
+            ),
           ],
         },
         {
@@ -91,13 +103,19 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
           title: "Add the bot to your server",
           body: [
             paragraph(
-              "Use the Installation section to generate an install link with the bot scope and the minimum permissions needed in your sandbox channel. Gateway mode also needs the bot installed wherever you want inbound routing.",
+              "Use the Installation section to create a server install with the bot scope. Discord currently includes the applications.commands scope with bot installs. Give the bot View Channel, Send Messages, and Read Message History in the sandbox channel. Gateway mode needs the bot installed in every server where you want inbound routing.",
+            ),
+            note(
+              "info",
+              "Add Reactions enables GoatCitadel's best-effort seen marker. Send Messages in Threads, Attach Files, and Embed Links are needed only when you want those corresponding capabilities.",
             ),
           ],
           checklist: [
+            check("bot-scope", "Use a server install with the bot scope and application commands enabled"),
             check("bot-installed", "Install the bot into the target server"),
-            check("channel-visible", "Confirm the bot can see the destination channel"),
-            check("channel-send", "Confirm the bot can send messages in the destination channel"),
+            check("channel-visible", "Grant View Channel in the destination channel"),
+            check("channel-send", "Grant Send Messages in the destination channel"),
+            check("channel-history", "Grant Read Message History in the destination channel"),
           ],
         },
         {
@@ -114,6 +132,12 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
           id: "collect-values",
           kind: "field-collection",
           title: "Paste your connection values",
+          body: [
+            note(
+              "warning",
+              "With the recommended server allowlist policy, the default server and channel form one inbound route. Any member who can use that channel may invoke normal messages by mentioning the bot unless you later add narrower user or role rules. Slash commands still follow the server/channel allowlist, but do not require an @mention.",
+            ),
+          ],
           fields: [
             {
               key: "botTokenEnv",
@@ -124,7 +148,9 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
               whyNeeded:
                 "Bot-token setups default to gateway mode so GoatCitadel can create the persistent online bot session.",
               whereToFind: [
-                paragraph("Create or reuse an env var such as DISCORD_BOT_TOKEN and store the actual token there."),
+                paragraph(
+                  "Create or reuse an env var such as DISCORD_BOT_TOKEN and store the actual token there. If you add or change the process environment, restart GoatCitadel before testing so the Gateway can read it.",
+                ),
               ],
               looksLike: "DISCORD_BOT_TOKEN",
               commonMistakes: [
@@ -158,25 +184,37 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
               label: "Default channel ID",
               type: "id",
               required: true,
-              explanation: "The channel GoatCitadel should use when no explicit target is provided.",
-              whyNeeded: "Needed for diagnostics, default sends, and as the seed channel for gateway allowlisting.",
+              explanation:
+                "The sandbox channel GoatCitadel should probe and use when no explicit target is provided. For server inbound, it must belong to the default server below.",
+              whyNeeded:
+                "Needed for diagnostics, default sends, and as the channel half of the default gateway allowlist route.",
               whereToFind: [
                 paragraph("Enable Developer Mode in Discord, right-click the channel, then choose Copy Channel ID."),
               ],
               looksLike: "123456789012345678",
-              commonMistakes: ["Copying a message id or server id instead of the channel id."],
+              commonMistakes: [
+                "Copying a message id or server id instead of the channel id.",
+                "Choosing a channel that belongs to a different server than the server id below.",
+              ],
               canChangeLater: true,
             },
             {
               key: "defaultGuildId",
-              label: "Optional server (guild) ID",
+              label: "Default server (guild) ID",
               type: "id",
               required: false,
-              explanation: "An optional server id for advanced routing and troubleshooting.",
+              explanation:
+                "Required for the recommended server allowlist path. It may be omitted only when Gateway guild traffic is off, such as a DM-only setup, or when an existing advanced connection already has explicit guild rules.",
+              whyNeeded:
+                "Pairs with the default channel to create the wizard's inbound guild route and enables immediate guild-scoped slash-command synchronization.",
               whereToFind: [
                 paragraph("Enable Developer Mode in Discord, right-click the server, then choose Copy Server ID."),
               ],
               looksLike: "987654321098765432",
+              commonMistakes: [
+                "Copying the channel id instead of the server id.",
+                "Using a server that does not contain the default channel.",
+              ],
               canChangeLater: true,
             },
             {
@@ -205,11 +243,11 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
               required: false,
               defaultValue: "pairing",
               explanation:
-                "Gateway mode only. Pairing asks unknown DM senders to complete approval, open routes DMs immediately, and disabled ignores DMs.",
+                "Gateway mode only. Pairing gives an unknown DM sender a pending code that an operator must approve before messages are accepted. Open accepts DMs immediately; disabled ignores them.",
               options: [
-                { value: "pairing", label: "pairing" },
-                { value: "open", label: "open" },
-                { value: "disabled", label: "disabled" },
+                { value: "pairing", label: "Require pairing approval", hint: "Recommended" },
+                { value: "open", label: "Accept all DMs", hint: "Any reachable Discord user may start a DM route" },
+                { value: "disabled", label: "Disable DMs" },
               ],
               canChangeLater: true,
             },
@@ -220,10 +258,10 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
               required: false,
               defaultValue: "allowlist",
               explanation:
-                "Gateway mode only. Allowlist processes only configured guilds and channels; off ignores guild traffic entirely.",
+                "Gateway mode only. Allowlist accepts the configured server/channel route; the default route requires an @mention for normal messages. Off ignores guild traffic and is appropriate for DM-only setups.",
               options: [
-                { value: "allowlist", label: "allowlist" },
-                { value: "off", label: "off" },
+                { value: "allowlist", label: "Allow selected server and channel", hint: "Recommended" },
+                { value: "off", label: "Disable server messages", hint: "DM-only setup" },
               ],
               canChangeLater: true,
             },
@@ -235,7 +273,11 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
           title: "Validate and test the connection",
           body: [
             paragraph(
-              "Bridge mode runs a complete probe: token auth, channel access, and an optional sandbox send/delete check. Gateway mode also reports whether the persistent Discord runtime is ready.",
+              "For bot-token setups, Test checks token auth and channel access, confirms the channel belongs to the configured server, posts a visible sandbox message, then deletes it. A new gateway connection cannot start its persistent runtime until it has been saved, so that one readiness check is explicitly deferred until Finish creates the durable connection. Retests of existing gateway connections still check current runtime readiness.",
+            ),
+            note(
+              "warning",
+              "The webhook-only bridge fallback is structurally validated but does not receive an automatic live webhook send. Confirm that path manually in Discord.",
             ),
           ],
           troubleshooting: definitionFailures("token"),
@@ -246,13 +288,17 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
           title: "Finish setup",
           body: [
             paragraph(
-              "For the normal bot-token path, setup is complete when the runtime reports a live Discord session and your sandbox channel passes the probe.",
+              "Finish saves the connection and starts the normal bot-token gateway runtime. After the pre-save probes pass, confirm that the saved connection reaches ready state; any login failure remains visible in connection diagnostics for repair.",
+            ),
+            paragraph(
+              "Then mention the bot in the sandbox channel and confirm it replies. If DM policy is pairing, the first DM creates a pending code that must be approved before that sender's next message is accepted.",
             ),
           ],
           successCriteria: [
             "Token auth succeeds or the advanced webhook-only bridge path is intentionally configured.",
-            "A default channel is configured and reachable.",
-            "The Discord runtime is ready when you are using the normal bot-token path.",
+            "The default channel is reachable and belongs to the configured default server when a server id is set.",
+            "New gateway setups defer runtime readiness until the durable connection is created; existing gateway connections must pass their current runtime check.",
+            "A manual @mention in the allowlisted sandbox channel reaches GoatCitadel; paired DMs are approved before use.",
           ],
         },
       ],
@@ -262,11 +308,11 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
       secretFieldKeys: ["botToken", "webhookUrl"],
     },
     validation: {
-      validationVersion: "2026.03.discord.v2",
+      validationVersion: "2026.08.discord.v3",
       levels: ["structural", "semantic", "live-auth"],
     },
     testing: {
-      testVersion: "2026.03.discord.v2",
+      testVersion: "2026.08.discord.v3",
       levels: ["live-auth", "live-send", "manual-confirm"],
       safePreFinalize: true,
       supportsManualConfirmation: true,
@@ -288,7 +334,7 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
     },
     volatility: {
       officialDocsUrl: "https://discord.com/developers/applications",
-      lastReviewedAt: "2026-03-29",
+      lastReviewedAt: "2026-08-07",
       volatility: "medium",
       deprecationRisk: "low",
       preferredPathLabel: "Gateway with bot token",
@@ -367,6 +413,9 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
       const issues: ChannelSetupIssue[] = [];
       const runtimeMode = resolveDiscordRuntimeMode(draft);
       const defaultChannelId = readString(draft.draft, "defaultChannelId");
+      const defaultGuildId = readString(draft.draft, "defaultGuildId");
+      const guildPolicy = readString(draft.draft, "guildPolicy") ?? "allowlist";
+      const hasSavedExplicitGuildRules = hasConfiguredGuildRules(draft.hydration?.rawLegacyConfig?.guilds);
       const hasConfiguredBotToken = Boolean(
         readString(draft.draft, "botToken") ||
         readString(draft.draft, "botTokenEnv") ||
@@ -389,6 +438,14 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
             requiredFieldIssue("botTokenEnv", "Gateway mode requires a Discord bot token or bot token env var."),
           );
         }
+        if (guildPolicy === "allowlist" && !defaultGuildId && !hasSavedExplicitGuildRules) {
+          issues.push(
+            requiredFieldIssue(
+              "defaultGuildId",
+              "Default server (guild) ID is required when Gateway guild policy uses the allowlist. Choose guild policy off for a DM-only setup.",
+            ),
+          );
+        }
       } else if (!hasConfiguredBotToken && !hasConfiguredWebhook) {
         issues.push({
           key: "discord_bridge_auth_missing",
@@ -400,6 +457,11 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
           ],
         });
       }
+      if (defaultGuildId && !/^\d{10,}$/.test(defaultGuildId)) {
+        issues.push(
+          malformedFieldIssue("defaultGuildId", "Default server (guild) ID should look like a Discord numeric ID."),
+        );
+      }
       if (readString(draft.draft, "webhookUrl")) {
         const webhookUrl = readString(draft.draft, "webhookUrl");
         if (webhookUrl && !/^https:\/\/(ptb\.|canary\.)?discord(?:app)?\.com\/api\/webhooks\//.test(webhookUrl)) {
@@ -409,4 +471,8 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
       return issues;
     },
   };
+}
+
+function hasConfiguredGuildRules(value: unknown): boolean {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length > 0);
 }

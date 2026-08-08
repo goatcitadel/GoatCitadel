@@ -62,6 +62,28 @@ describe("channel setup definitions", () => {
     );
   });
 
+  it("publishes complete Discord gateway setup and safety guidance", () => {
+    const definition = requireChannelSetupDefinition("channel.discord").definition;
+    const createBot = definition.wizard.steps.find((step) => step.id === "create-bot");
+    const installBot = definition.wizard.steps.find((step) => step.id === "install-bot");
+    const collectValues = definition.wizard.steps.find((step) => step.id === "collect-values");
+    const testStep = definition.wizard.steps.find((step) => step.id === "test");
+    const finishStep = definition.wizard.steps.find((step) => step.id === "finish");
+    const content = JSON.stringify(definition.wizard);
+
+    expect(createBot?.checklist?.map((item) => item.id)).toContain("message-content-intent");
+    expect(content).toContain("Message Content Intent");
+    expect(JSON.stringify(installBot)).toMatch(/View Channel.*Send Messages.*Read Message History/);
+    expect(JSON.stringify(collectValues)).toContain("@mention");
+    expect(JSON.stringify(testStep)).toMatch(/posts a visible sandbox message.*deletes it/);
+    expect(JSON.stringify(finishStep)).toContain("pending code");
+
+    const defaultGuildId = collectValues?.fields?.find((field) => field.key === "defaultGuildId");
+    expect(defaultGuildId).toMatchObject({ type: "id", required: false });
+    expect(defaultGuildId?.explanation).toMatch(/Required for the recommended server allowlist path/);
+    expect(definition.validation.validationVersion).toBe("2026.08.discord.v3");
+  });
+
   it("hydrates Discord connections without rehydrating configured secrets", () => {
     const definition = requireChannelSetupDefinition("channel.discord");
     const hydrated = definition.hydrate(

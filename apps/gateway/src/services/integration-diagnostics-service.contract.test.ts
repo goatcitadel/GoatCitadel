@@ -131,6 +131,7 @@ describe("integration-diagnostics-service contract behavior", () => {
       runtimeMode: "gateway",
       botToken: "discord-token",
       defaultChannelId: "channel_1",
+      defaultGuildId: "guild_1",
       webhookUrl: "https://discord.example.test/webhook",
     });
     runDiscordBotLiveChecksMock.mockResolvedValue({
@@ -152,10 +153,40 @@ describe("integration-diagnostics-service contract behavior", () => {
           startedAt: "2026-04-08T00:00:00.000Z",
         }),
         channelId: "channel_1",
+        guildId: "guild_1",
         runtimeMode: "gateway",
         webhookUrl: "https://discord.example.test/webhook",
         includeSandboxSend: true,
         fetcher: expect.any(Function),
+      }),
+    );
+  });
+
+  it("defers Discord runtime lookup for pre-finalize setup probes", async () => {
+    const host = createPort();
+    const getDiscordRuntimeStatus = vi.fn(() => undefined);
+    host.getDiscordRuntimeStatus = getDiscordRuntimeStatus;
+    const connection = createDiscordConnection({
+      runtimeMode: "gateway",
+      botToken: "discord-token",
+      defaultChannelId: "channel_1",
+    });
+    runDiscordBotLiveChecksMock.mockResolvedValue({
+      checks: [],
+      probe: { kind: "discord_gateway", mode: "gateway", checkedAt: "2026-08-07T00:00:00.000Z", steps: [] },
+    });
+
+    await runIntegrationConnectionLiveChecks(host, connection, {
+      includeSandboxSend: true,
+      discordRuntimeReadiness: "deferred",
+    });
+
+    expect(getDiscordRuntimeStatus).not.toHaveBeenCalled();
+    expect(runDiscordBotLiveChecksMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeMode: "gateway",
+        runtimeReadiness: "deferred",
+        runtimeStatus: undefined,
       }),
     );
   });

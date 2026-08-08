@@ -194,6 +194,7 @@ describe("channel setup definition loop28 tails", () => {
     ).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ key: "defaultChannelId_malformed" }),
+        expect.objectContaining({ key: "defaultGuildId_required" }),
         expect.objectContaining({ key: "botTokenEnv_required" }),
       ]),
     );
@@ -207,6 +208,77 @@ describe("channel setup definition loop28 tails", () => {
         }),
       ),
     ).toEqual(expect.arrayContaining([expect.objectContaining({ key: "webhookUrl_malformed" })]));
+  });
+
+  it("requires a valid Discord server id only for gateway allowlist routes", () => {
+    const definition = requireChannelSetupDefinition("channel.discord");
+    const baseGatewayDraft = {
+      runtimeMode: "gateway",
+      botTokenEnv: "DISCORD_BOT_TOKEN",
+      defaultChannelId: "123456789012345678",
+    };
+
+    expect(definition.validate(draft("channel.discord", baseGatewayDraft))).toEqual([
+      expect.objectContaining({ key: "defaultGuildId_required", fieldKey: "defaultGuildId" }),
+    ]);
+    expect(
+      definition.validate(
+        draft("channel.discord", {
+          ...baseGatewayDraft,
+          guildPolicy: "off",
+        }),
+      ),
+    ).toEqual([]);
+    expect(
+      definition.validate(
+        draft("channel.discord", {
+          ...baseGatewayDraft,
+          defaultGuildId: "not-a-server",
+        }),
+      ),
+    ).toEqual([expect.objectContaining({ key: "defaultGuildId_malformed", fieldKey: "defaultGuildId" })]);
+    expect(
+      definition.validate(
+        draft("channel.discord", {
+          runtimeMode: "bridge",
+          defaultChannelId: "123456789012345678",
+          webhookUrl: "https://discord.com/api/webhooks/123456789012345678/webhook-secret",
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it("does not force a default Discord server onto saved advanced guild rules", () => {
+    const definition = requireChannelSetupDefinition("channel.discord");
+    const setupDraft = draft(
+      "channel.discord",
+      {
+        runtimeMode: "gateway",
+        botTokenEnv: "DISCORD_BOT_TOKEN",
+        defaultChannelId: "123456789012345678",
+        guildPolicy: "allowlist",
+      },
+      "edit",
+    );
+
+    expect(
+      definition.validate({
+        ...setupDraft,
+        hydration: {
+          status: "opaque-secret",
+          warnings: [],
+          fieldState: { botTokenEnv: "configured" },
+          rawLegacyConfig: {
+            guilds: {
+              "987654321098765432": {
+                requireMention: true,
+                channels: ["123456789012345678"],
+              },
+            },
+          },
+        },
+      }),
+    ).toEqual([]);
   });
 });
 

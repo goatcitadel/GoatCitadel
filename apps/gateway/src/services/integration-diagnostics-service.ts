@@ -58,6 +58,7 @@ export class IntegrationDiagnosticsService {
     connection: IntegrationConnection,
     options: {
       includeSandboxSend: boolean;
+      discordRuntimeReadiness?: "required" | "deferred";
     },
   ): Promise<{ checks: ConnectorDiagnosticReport["checks"]; probe?: ChannelProbeReport }> {
     return runIntegrationConnectionLiveChecks(this.deps, connection, options);
@@ -520,6 +521,7 @@ export async function runIntegrationConnectionLiveChecks(
   connection: IntegrationConnection,
   options: {
     includeSandboxSend: boolean;
+    discordRuntimeReadiness?: "required" | "deferred";
   },
 ): Promise<{ checks: ConnectorDiagnosticReport["checks"]; probe?: ChannelProbeReport }> {
   if (connection.kind !== "channel") {
@@ -555,7 +557,7 @@ export async function runIntegrationConnectionLiveChecks(
       });
     }
     case "discord":
-      return runDiscordConnectionLiveChecks(deps, connection, options.includeSandboxSend);
+      return runDiscordConnectionLiveChecks(deps, connection, options);
     case "telegram": {
       const token =
         deps.resolveConnectionSecret(config, "botToken", "botTokenEnv") ??
@@ -795,7 +797,10 @@ function readIMessageBridgeProvider(
 async function runDiscordConnectionLiveChecks(
   deps: IntegrationDiagnosticsPort,
   connection: IntegrationConnection,
-  includeSandboxSend: boolean,
+  options: {
+    includeSandboxSend: boolean;
+    discordRuntimeReadiness?: "required" | "deferred";
+  },
 ): Promise<{ checks: ConnectorDiagnosticReport["checks"]; probe: ChannelProbeReport }> {
   const config = connection.config;
   const token =
@@ -805,10 +810,15 @@ async function runDiscordConnectionLiveChecks(
   return runDiscordBotLiveChecks({
     token,
     channelId: deps.readConnectionConfigValue(config, "defaultChannelId"),
+    guildId: deps.readConnectionConfigValue(config, "defaultGuildId"),
     runtimeMode,
     webhookUrl: deps.readConnectionConfigValue(config, "webhookUrl"),
-    includeSandboxSend,
-    runtimeStatus: runtimeMode === "gateway" ? deps.getDiscordRuntimeStatus(connection.connectionId) : undefined,
+    includeSandboxSend: options.includeSandboxSend,
+    runtimeReadiness: options.discordRuntimeReadiness,
+    runtimeStatus:
+      runtimeMode === "gateway" && options.discordRuntimeReadiness !== "deferred"
+        ? deps.getDiscordRuntimeStatus(connection.connectionId)
+        : undefined,
     fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
   });
 }
