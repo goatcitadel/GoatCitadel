@@ -2359,6 +2359,7 @@ function createSystemHeartbeatDispatchHost(
             role: "assistant",
             actorType: "system",
             actorId: "system-heartbeat",
+            sourceAuthority: "trusted_lifecycle",
             content: normalizedMessage,
             timestamp: new Date().toISOString(),
           });

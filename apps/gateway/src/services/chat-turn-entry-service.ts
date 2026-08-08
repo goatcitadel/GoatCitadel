@@ -1159,6 +1159,7 @@ async function runAgentSendChatMessageLlmPath(
       role: "assistant",
       actorType: "agent",
       actorId: "assistant",
+      sourceAuthority: "agent_proposed",
       content: assistantText,
       timestamp: new Date().toISOString(),
     };

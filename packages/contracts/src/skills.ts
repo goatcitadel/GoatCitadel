@@ -305,6 +305,26 @@ export interface SkillImportValidationChecks {
   suspiciousScripts: boolean;
   networkIndicators: boolean;
   licenseDetected: boolean;
+  promptwareSafe: boolean;
+  promptwareScanComplete: boolean;
+}
+
+export type SkillPromptwareRuleId =
+  | "instruction_hierarchy_override"
+  | "privileged_prompt_exfiltration"
+  | "approval_policy_bypass"
+  | "tool_execution_without_approval"
+  | "role_identity_override";
+
+export interface SkillPromptwareFinding {
+  scannerVersion: string;
+  ruleId: SkillPromptwareRuleId;
+  severity: "critical" | "high";
+  sourcePath: string;
+  startLine: number;
+  endLine: number;
+  evidenceHash: string;
+  excerpt: string;
 }
 
 export interface SkillImportValidationResult {
@@ -324,6 +344,8 @@ export interface SkillImportValidationResult {
   networkSignals: string[];
   suspiciousSignals: string[];
   licenseFiles: string[];
+  promptwareFindings: SkillPromptwareFinding[];
+  promptwareUnscannedPaths: string[];
   instructionPreview?: string;
   externalToolMappings?: SkillImportExternalToolMapping[];
   scriptDisposition?: SkillImportScriptDisposition;

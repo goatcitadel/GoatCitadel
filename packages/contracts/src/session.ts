@@ -1,4 +1,4 @@
-import type { ChatInputPart } from "./chat.js";
+import type { ChatInputPart, ChatMessageSourceAuthority } from "./chat.js";
 
 export type SessionKind = "dm" | "group" | "thread";
 export type SessionHealth = "healthy" | "degraded" | "blocked";
@@ -48,6 +48,8 @@ export interface TranscriptEvent {
     | "orchestration.phase";
   actorType: "user" | "agent" | "system";
   actorId: string;
+  /** Optional only for legacy transcript records; canonical chat messages require it. */
+  sourceAuthority?: ChatMessageSourceAuthority;
   payload: Record<string, unknown>;
   tokenInput?: number;
   tokenOutput?: number;

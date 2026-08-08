@@ -12,6 +12,7 @@ import { assertWritePathInJail, fetchAllowlisted } from "@goatcitadel/policy-eng
 import { readBoundedResponseBytes, readBoundedResponseText } from "./bounded-response-reader.js";
 import { assertSafeGitPositionalArg } from "./security-utils.js";
 import { NETWORK_INDICATOR_PATTERN, SUSPICIOUS_SCRIPT_PATTERN } from "./skill-content-validation.js";
+import { PROMPTWARE_MAX_FINDINGS, scanPromptwareContent } from "./assembled-prompt-injection-guard.js";
 import {
   SKILL_BUNDLE_MANIFEST_FILENAME,
   isSkillBundleAssetLocationAllowed,
@@ -38,6 +39,7 @@ import type {
   SkillImportHistoryRecord,
   SkillImportProvenance,
   SkillImportScriptDisposition,
+  SkillPromptwareFinding,
   SkillImportSourceType,
   SkillImportValidationResult,
   SkillSourceLookupParsedSource,
@@ -1567,10 +1569,15 @@ export class SkillImportService {
     }
 
     const scan = await scanSkillDirectory(source.skillDir);
+    const promptwareScan = initialContentIntegrity
+      ? await scanPromptwareIntegrityFiles(source.skillDir, initialContentIntegrity)
+      : { findings: [], unscannedPaths: ["<content-integrity-unavailable>"] };
     const suspiciousScripts = scan.suspiciousSignals.length > 0;
     const networkIndicators = scan.networkSignals.length > 0;
     const licenseDetected = scan.licenseFiles.length > 0;
     const scanIncomplete = scan.skippedLargeFiles.length > 0 || scan.truncated;
+    const promptwareSafe = promptwareScan.findings.length === 0;
+    const promptwareScanComplete = promptwareScan.unscannedPaths.length === 0;
     const externalToolMappings = mapImportedSkillTools(declaredTools);
     const scriptDisposition = buildScriptDisposition(scan.scriptFiles, scan.suspiciousSignals);
     const bundleManifest = await validateSkillBundleManifestDirectory(source.skillDir);
@@ -1589,6 +1596,18 @@ export class SkillImportService {
     }
     if (scan.truncated) {
       warnings.push("Security scan reached the file inspection limit; review the remaining files manually.");
+    }
+    if (!promptwareSafe) {
+      errors.push(
+        `Prompt-injection instructions detected in skill files: ${summarizePathList(
+          Array.from(new Set(promptwareScan.findings.map((finding) => finding.sourcePath))),
+        )}.`,
+      );
+    }
+    if (!promptwareScanComplete) {
+      errors.push(
+        `Promptware scan incomplete for model-facing files: ${summarizePathList(promptwareScan.unscannedPaths)}.`,
+      );
     }
     if (!licenseDetected) {
       warnings.push("No license file detected.");
@@ -1674,6 +1693,8 @@ export class SkillImportService {
         suspiciousScripts,
         networkIndicators,
         licenseDetected,
+        promptwareSafe,
+        promptwareScanComplete,
       },
       candidate: {
         ...source.candidate,
@@ -1691,6 +1712,8 @@ export class SkillImportService {
       networkSignals: scan.networkSignals,
       suspiciousSignals: scan.suspiciousSignals,
       licenseFiles: scan.licenseFiles,
+      promptwareFindings: promptwareScan.findings,
+      promptwareUnscannedPaths: promptwareScan.unscannedPaths,
       instructionPreview,
       externalToolMappings,
       scriptDisposition,
@@ -3181,6 +3204,40 @@ async function scanSkillDirectory(dir: string): Promise<{
     skippedLargeFiles: [...skippedLargeFiles],
     truncated,
   };
+}
+
+async function scanPromptwareIntegrityFiles(
+  dir: string,
+  integrity: SkillContentIntegrityManifest,
+): Promise<{ findings: SkillPromptwareFinding[]; unscannedPaths: string[] }> {
+  const findings: SkillPromptwareFinding[] = [];
+  const unscannedPaths: string[] = [];
+
+  for (const entry of integrity.files) {
+    if (!/\.(?:md|txt)$/iu.test(entry.path) || !shouldIncludeSkillContentPath(entry.path)) {
+      continue;
+    }
+    try {
+      const content = await readBoundedSkillTextFile(
+        path.join(dir, ...entry.path.split("/")),
+        SKILL_CONTENT_INTEGRITY_LIMITS.maxFileBytes,
+        `Promptware scan file ${entry.path}`,
+      );
+      const fileFindings = scanPromptwareContent({
+        source: "imported_skill",
+        sourcePath: entry.path,
+        content,
+      }).map(({ source: _source, marker: _marker, ...finding }) => ({
+        ...finding,
+        sourcePath: finding.sourcePath ?? entry.path,
+      }));
+      findings.push(...fileFindings.slice(0, Math.max(0, PROMPTWARE_MAX_FINDINGS - findings.length)));
+    } catch {
+      unscannedPaths.push(entry.path);
+    }
+  }
+
+  return { findings, unscannedPaths };
 }
 
 function buildSkillImportProvenance(

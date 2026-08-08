@@ -1335,12 +1335,16 @@ describe("GatewayService Loop 13 channel, lifecycle, and runtime facade behavior
 
   it("ingests channel messages and gateway events with realtime invalidation semantics", async () => {
     const publishRealtime = vi.fn();
+    const extractLearnedMemory = vi.fn(async () => undefined);
+    const createEnvelope = vi.fn(async () => undefined);
     const ingest = vi.fn(async (_input: unknown) => ({
       deduped: false,
       session: { sessionId: "session-1", sessionKey: "sms:acct:peer" },
     }));
     const { gateway } = createGatewayHarness({
       eventIngestService: { ingest },
+      memoryLifecycleService: { extractLearnedMemory },
+      evidenceEnvelopeService: { createEnvelope },
       publishRealtime,
     });
     const onCommit = vi.fn();
@@ -1364,6 +1368,7 @@ describe("GatewayService Loop 13 channel, lifecycle, and runtime facade behavior
       expect.objectContaining({
         endpoint: "/api/v1/gateway/events",
         idempotencyKey: "idem-1",
+        sourceAuthority: "operator",
         onCommit,
         afterCommit,
       }),
@@ -1383,7 +1388,7 @@ describe("GatewayService Loop 13 channel, lifecycle, and runtime facade behavior
     await expect(
       GatewayService.prototype.ingestChannelMessage.call(gateway, "telegram", "idem-2", {
         account: "bot",
-        actorId: "user-2",
+        actorId: "operator",
         content: "hi",
         eventId: "channel-event-1",
         peer: "peer-2",
@@ -1395,15 +1400,54 @@ describe("GatewayService Loop 13 channel, lifecycle, and runtime facade behavior
       expect.objectContaining({
         eventId: "channel-event-1",
         route: expect.objectContaining({ channel: "telegram", account: "bot", peer: "peer-2" }),
-        actor: { type: "user", id: "user-2" },
+        actor: { type: "user", id: "operator" },
         message: { role: "user", content: "hi" },
       }),
+      { sourceAuthority: "external_channel" },
     );
+    expect(extractLearnedMemory).toHaveBeenCalledWith("session-channel", "hi", {
+      role: "user",
+      sourceRef: "channel-event-1",
+      authority: "external_channel",
+    });
     expect(publishRealtime).toHaveBeenLastCalledWith(
       "system",
       "channels",
-      expect.objectContaining({ type: "channel_message_ingested", sessionId: "session-channel" }),
+      expect.objectContaining({ type: "channel_message_ingested", sessionId: "session-channel", actorId: "operator" }),
     );
+
+    gateway.ingestEvent.mockResolvedValueOnce({
+      session: { sessionId: "session-channel" },
+      deduped: true,
+    });
+    extractLearnedMemory.mockClear();
+    await GatewayService.prototype.ingestChannelMessage.call(gateway, "telegram", "idem-2", {
+      account: "bot",
+      actorId: "operator",
+      content: "hi",
+      eventId: "channel-event-1",
+      peer: "peer-2",
+      role: "user",
+    } as never);
+    expect(extractLearnedMemory).toHaveBeenCalledTimes(1);
+    expect(extractLearnedMemory).toHaveBeenCalledWith("session-channel", "hi", {
+      role: "user",
+      sourceRef: "channel-event-1",
+      authority: "external_channel",
+    });
+
+    extractLearnedMemory.mockRejectedValueOnce(new Error("proposal storage unavailable"));
+    createEnvelope.mockRejectedValueOnce(new Error("evidence storage unavailable"));
+    await expect(
+      GatewayService.prototype.ingestChannelMessage.call(gateway, "telegram", "idem-3", {
+        account: "bot",
+        actorId: "external-user",
+        content: "candidate storage must not fail the channel turn",
+        eventId: "channel-event-2",
+        peer: "peer-2",
+        role: "user",
+      } as never),
+    ).resolves.toMatchObject({ session: { sessionId: "session-channel" } });
   });
 
   it("runs init, deferred init, close, and Discord sync lifecycle facades", async () => {

@@ -1658,6 +1658,7 @@ async function persistProductionCorrectionTurn(input: {
           messageId: payload.eventId,
           sessionId: input.sessionId,
           role: payload.message.role,
+          sourceAuthority: payload.message.role === "user" ? "operator" : "agent_proposed",
           actorType: payload.actor.type,
           actorId: payload.actor.id,
           content: payload.message.content,
@@ -1763,7 +1764,23 @@ function seedMessage(
 ): void {
   storage.chatSessionMeta.ensure(sessionId, iso(ordinal), "default");
   storage.chatMessages.upsert(
-    { messageId, sessionId, role, actorType, actorId, content, timestamp: iso(ordinal) },
+    {
+      messageId,
+      sessionId,
+      role,
+      sourceAuthority:
+        actorType === "system"
+          ? "trusted_lifecycle"
+          : role === "assistant" || actorType === "agent"
+            ? "agent_proposed"
+            : role === "user"
+              ? "operator"
+              : "unknown",
+      actorType,
+      actorId,
+      content,
+      timestamp: iso(ordinal),
+    },
     iso(ordinal),
   );
 }

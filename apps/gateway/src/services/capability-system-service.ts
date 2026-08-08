@@ -2995,6 +2995,7 @@ export class CapabilitySystemService {
       role: "assistant",
       actorType: "agent",
       actorId: "code-mode",
+      sourceAuthority: "agent_proposed",
       content: buildCodeModeFinalTranscriptContent(run),
       timestamp,
     };
@@ -3008,6 +3009,7 @@ export class CapabilitySystemService {
       type: "message.assistant",
       actorType: "agent",
       actorId: "code-mode",
+      sourceAuthority: "agent_proposed",
       payload: { message },
     };
     const wasQueued = Boolean(await this.options.storage.transcriptOutbox.get(eventId));

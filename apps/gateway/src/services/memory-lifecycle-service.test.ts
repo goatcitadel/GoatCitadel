@@ -37,9 +37,9 @@ describe("MemoryLifecycleService", () => {
       } as never,
       learned: {
         extractAndPersistLearnedMemory: vi.fn(),
+        clearChatSessionLearnedMemory: vi.fn(),
         listChatSessionLearnedMemory: vi.fn(() => ({ items: [], conflicts: [] })),
         updateChatSessionLearnedMemory: vi.fn(() => ({ itemId: "item-1" })),
-        rebuildChatSessionLearnedMemory: vi.fn(async () => ({ rebuiltAt: "now", items: [], conflicts: [] })),
       } as never,
       maintenance: {
         getPolicy: vi.fn(() => ({ workspaceId: "default" })),
@@ -87,7 +87,11 @@ describe("MemoryLifecycleService", () => {
     });
     await expect(service.prewarmContext({ scope: "chat", prompt: "hello again" })).resolves.toBeUndefined();
     expect(await service.listSessionLearnedMemory("session-1")).toEqual({ items: [], conflicts: [] });
-    await expect(service.rebuildSessionLearnedMemory("session-1")).resolves.toMatchObject({ rebuiltAt: "now" });
+    await expect(service.rebuildSessionLearnedMemory("session-1")).resolves.toMatchObject({
+      rebuiltAt: expect.any(String),
+      items: [],
+      conflicts: [],
+    });
     expect(await service.getMaintenancePolicy("default")).toMatchObject({ workspaceId: "default" });
     await expect(service.executeMaintenanceDurableRun({ runId: "run-1" } as never)).resolves.toEqual({ ok: true });
   });
@@ -134,9 +138,9 @@ describe("MemoryLifecycleService", () => {
     };
     const learned = {
       extractAndPersistLearnedMemory: vi.fn(),
+      clearChatSessionLearnedMemory: vi.fn(),
       listChatSessionLearnedMemory: vi.fn(() => ({ items: [{ itemId: "learned-1" }], conflicts: [] })),
       updateChatSessionLearnedMemory: vi.fn(() => ({ itemId: "learned-1", content: "updated" })),
-      rebuildChatSessionLearnedMemory: vi.fn(async () => ({ rebuiltAt: "now", items: [], conflicts: [] })),
     };
     const maintenance = {
       getPolicy: vi.fn(() => ({ workspaceId: "workspace-1" })),
@@ -1150,7 +1154,22 @@ describe("MemoryLifecycleService", () => {
       } as never,
       maintenance: {} as never,
       admin: {
-        gatewaySql: {} as never,
+        gatewaySql: createLearnedMemoryAuthoritySql([
+          {
+            sessionId: "session-auto",
+            messageId: "msg-auto",
+            role: "user",
+            content: "Remember that I prefer dark mode.",
+            sourceAuthority: "operator",
+          },
+          {
+            sessionId: "session-on",
+            messageId: "msg-on",
+            role: "assistant",
+            content: "Remember that I prefer light mode.",
+            sourceAuthority: "agent_proposed",
+          },
+        ]) as never,
         tryParseJson: vi.fn(),
         requireFeatureEnabled: vi.fn(),
         publishRealtime: vi.fn(),
@@ -1162,10 +1181,12 @@ describe("MemoryLifecycleService", () => {
     await service.extractLearnedMemory("session-auto", "Remember that I prefer dark mode.", {
       role: "user",
       sourceRef: "msg-auto",
+      authority: "operator",
     });
     await service.extractLearnedMemory("session-on", "Remember that I prefer light mode.", {
       role: "assistant",
       sourceRef: "msg-on",
+      authority: "agent_proposed",
     });
 
     expect(extractAndPersistLearnedMemory).toHaveBeenCalledTimes(2);
@@ -1234,7 +1255,15 @@ describe("MemoryLifecycleService", () => {
       } as never,
       maintenance: {} as never,
       admin: {
-        gatewaySql: {} as never,
+        gatewaySql: createLearnedMemoryAuthoritySql([
+          {
+            sessionId: "session-1",
+            messageId: "turn-1",
+            role: "assistant",
+            content: "Remember my api_key is sk-secret-token-1234567890.",
+            sourceAuthority: "agent_proposed",
+          },
+        ]) as never,
         tryParseJson: vi.fn(),
         requireFeatureEnabled: vi.fn(),
         publishRealtime: vi.fn(),
@@ -1248,6 +1277,7 @@ describe("MemoryLifecycleService", () => {
     await service.extractLearnedMemory("session-1", "Remember my api_key is sk-secret-token-1234567890.", {
       role: "assistant",
       sourceRef: "turn-1",
+      authority: "agent_proposed",
     });
 
     expect(evaluate).toHaveBeenCalledWith({
@@ -1292,7 +1322,15 @@ describe("MemoryLifecycleService", () => {
       } as never,
       maintenance: {} as never,
       admin: {
-        gatewaySql: {} as never,
+        gatewaySql: createLearnedMemoryAuthoritySql([
+          {
+            sessionId: "session-1",
+            messageId: "turn-2",
+            role: "user",
+            content: "Remember that I prefer terse status updates.",
+            sourceAuthority: "operator",
+          },
+        ]) as never,
         tryParseJson: vi.fn(),
         requireFeatureEnabled: vi.fn(),
         publishRealtime: vi.fn(),
@@ -1310,6 +1348,7 @@ describe("MemoryLifecycleService", () => {
     await service.extractLearnedMemory("session-1", "Remember that I prefer terse status updates.", {
       role: "user",
       sourceRef: "turn-2",
+      authority: "operator",
     });
 
     expect(extractAndPersistLearnedMemory).toHaveBeenCalledWith(
@@ -1985,7 +2024,163 @@ describe("MemoryLifecycleService", () => {
       database.close();
     }
   });
+
+  it("queues external and unknown learned memory once, preserves rejection, and never writes active memory", async () => {
+    const database = new DatabaseSync(":memory:");
+    database.exec(`
+      CREATE TABLE chat_messages (
+        message_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        source_authority TEXT
+      );
+      INSERT INTO chat_messages (message_id, session_id, role, content, source_authority)
+      VALUES (
+        'external-message-1',
+        'shared-session',
+        'user',
+        'Remember that shared channel reports must stay concise.',
+        'external_channel'
+      );
+    `);
+    const extractAndPersistLearnedMemory = vi.fn();
+    const createEnvelope = vi.fn();
+    const requireFeatureEnabled = vi.fn();
+    const service = new MemoryLifecycleService({
+      context: {} as never,
+      learned: { extractAndPersistLearnedMemory } as never,
+      maintenance: {} as never,
+      admin: {
+        gatewaySql: wrapDatabaseSyncAsGatewaySql(database) as never,
+        tryParseJson: vi.fn((raw, fallback) => {
+          try {
+            return raw ? JSON.parse(String(raw)) : fallback;
+          } catch {
+            return fallback;
+          }
+        }),
+        requireFeatureEnabled,
+        publishRealtime: vi.fn(),
+      },
+      resolveLearnedMemoryPolicy: vi.fn(() => ({ allowWrite: true, reason: "allowed" })),
+      evidence: { createEnvelope } as never,
+      readTranscriptOrEmpty: vi.fn(async () => []),
+    });
+
+    try {
+      const externalContent = "Remember that shared channel reports must stay concise.";
+      const source = {
+        role: "user" as const,
+        sourceRef: "external-message-1",
+        // A caller hint cannot widen the canonical persisted authority.
+        authority: "operator" as const,
+      };
+      await service.extractLearnedMemory("shared-session", externalContent, source);
+      await service.extractLearnedMemory("shared-session", externalContent, source);
+
+      let candidates = await service.listTraceMemoryCandidates({ workspaceId: "default", status: "all" });
+      expect(candidates).toHaveLength(1);
+      expect(candidates[0]).toMatchObject({
+        status: "proposed",
+        authority: "external_channel",
+        sourceSessionId: "shared-session",
+        sourceMessageId: "external-message-1",
+        candidateType: "operator_preference",
+        proposedInsight: externalContent,
+      });
+      expect(candidates[0]?.dedupeKey).toMatch(/^[a-f0-9]{64}$/u);
+      expect(candidates[0]?.sourceText).toMatch(/^\[redacted external evidence sha256:[a-f0-9]{64}\]$/u);
+      expect(JSON.stringify(createEnvelope.mock.calls)).not.toContain(externalContent);
+
+      const rejected = await service.rejectTraceMemoryCandidate(candidates[0]!.candidateId, "operator-1");
+      expect(rejected).toMatchObject({ status: "rejected", authority: "external_channel" });
+      await service.extractLearnedMemory("shared-session", externalContent, source);
+      candidates = await service.listTraceMemoryCandidates({ workspaceId: "default", status: "all" });
+      expect(candidates).toHaveLength(1);
+      expect(candidates[0]?.status).toBe("rejected");
+
+      await service.extractLearnedMemory("unknown-session", "Remember that unknown input must be reviewed.", {
+        role: "user",
+        sourceRef: "unknown-message-1",
+        authority: "unknown",
+      });
+      candidates = await service.listTraceMemoryCandidates({ workspaceId: "default", status: "all" });
+      expect(candidates).toHaveLength(2);
+      expect(candidates).toEqual(expect.arrayContaining([expect.objectContaining({ authority: "unknown" })]));
+
+      database.exec(`
+        INSERT INTO chat_messages (message_id, session_id, role, content, source_authority)
+        VALUES (
+          'external-message-storage-disabled',
+          'shared-session',
+          'user',
+          'Remember that disabled proposal storage must not fail channel ingest.',
+          'external_channel'
+        );
+      `);
+      requireFeatureEnabled.mockRejectedValueOnce(new Error("memoryLifecycleAdminV1Enabled is disabled"));
+      await expect(
+        service.extractLearnedMemory(
+          "shared-session",
+          "Remember that disabled proposal storage must not fail channel ingest.",
+          {
+            role: "user",
+            sourceRef: "external-message-storage-disabled",
+            authority: "external_channel",
+          },
+        ),
+      ).resolves.toBeUndefined();
+      expect(await service.listTraceMemoryCandidates({ workspaceId: "default", status: "all" })).toHaveLength(2);
+      expect(createEnvelope).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventKind: "memory_write",
+          metadata: expect.objectContaining({
+            decision: "candidate_storage_unavailable",
+            sourceAuthority: "external_channel",
+            errorType: "Error",
+          }),
+        }),
+      );
+
+      await service.extractLearnedMemory("shared-session", "Remember my api_key is sk-secret-token-1234567890.", {
+        role: "user",
+        sourceRef: "external-secret-message",
+        authority: "external_channel",
+      });
+      expect(await service.listTraceMemoryCandidates({ workspaceId: "default", status: "all" })).toHaveLength(2);
+      expect(extractAndPersistLearnedMemory).not.toHaveBeenCalled();
+      expect(JSON.stringify(createEnvelope.mock.calls)).not.toContain("sk-secret-token-1234567890");
+    } finally {
+      database.close();
+    }
+  });
 });
+
+function createLearnedMemoryAuthoritySql(
+  rows: Array<{
+    sessionId: string;
+    messageId: string;
+    role: "user" | "assistant";
+    content: string;
+    sourceAuthority: "operator" | "external_channel" | "agent_proposed" | "trusted_lifecycle" | "unknown";
+  }>,
+) {
+  return {
+    prepare: vi.fn(() => ({
+      get: vi.fn(async (messageId: string, sessionId: string) => {
+        const row = rows.find((candidate) => candidate.messageId === messageId && candidate.sessionId === sessionId);
+        return row
+          ? {
+              source_authority: row.sourceAuthority,
+              role: row.role,
+              content: row.content,
+            }
+          : undefined;
+      }),
+    })),
+  };
+}
 
 /**
  * HX-402 P1: structured/learning mutations run inside one immediate

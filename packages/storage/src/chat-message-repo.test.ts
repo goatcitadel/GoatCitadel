@@ -43,6 +43,7 @@ function message(overrides: Partial<ChatMessageRecord> = {}): ChatMessageRecord 
     role: "user",
     actorType: "user",
     actorId: "operator",
+    sourceAuthority: "operator",
     content: "hello",
     timestamp: "2026-03-05T01:00:00.000Z",
     ...overrides,
@@ -135,6 +136,7 @@ describe("ChatMessageRepository", () => {
       role: "user",
       actorType: "user",
       actorId: "operator",
+      sourceAuthority: "operator",
       content: "first",
       timestamp: "2026-03-05T01:00:00.000Z",
     });
@@ -144,6 +146,7 @@ describe("ChatMessageRepository", () => {
       role: "assistant",
       actorType: "agent",
       actorId: "assistant",
+      sourceAuthority: "agent_proposed",
       content: "second",
       timestamp: "2026-03-05T01:00:01.000Z",
     });
@@ -153,6 +156,7 @@ describe("ChatMessageRepository", () => {
       role: "assistant",
       actorType: "agent",
       actorId: "assistant",
+      sourceAuthority: "agent_proposed",
       content: "third",
       timestamp: "2026-03-05T01:00:02.000Z",
     });
@@ -164,6 +168,29 @@ describe("ChatMessageRepository", () => {
     );
   });
 
+  it("keeps server-owned source authority immutable across message upserts", () => {
+    const { repo, db } = createRepoWithDb();
+    const original = message({
+      messageId: "message-authority-immutable",
+      sourceAuthority: "external_channel",
+    });
+    repo.upsert(original);
+    repo.upsert({
+      ...original,
+      content: "edited projection",
+      sourceAuthority: "operator",
+    });
+
+    assert.deepEqual(
+      {
+        content: repo.get(original.messageId)?.content,
+        sourceAuthority: repo.get(original.messageId)?.sourceAuthority,
+      },
+      { content: "edited projection", sourceAuthority: "external_channel" },
+    );
+    db.close();
+  });
+
   it("pages older items by cursor message id", () => {
     const repo = createRepo();
     for (let index = 1; index <= 5; index += 1) {
@@ -173,6 +200,7 @@ describe("ChatMessageRepository", () => {
         role: index % 2 === 0 ? "assistant" : "user",
         actorType: index % 2 === 0 ? "agent" : "user",
         actorId: index % 2 === 0 ? "assistant" : "operator",
+        sourceAuthority: index % 2 === 0 ? "agent_proposed" : "operator",
         content: `msg-${index}`,
         timestamp: `2026-03-05T01:00:0${index}.000Z`,
       });
@@ -508,6 +536,7 @@ describe("ChatMessageRepository", () => {
         role: "user" as const,
         actorType: "user" as const,
         actorId: "operator",
+        sourceAuthority: "operator" as const,
         content: "first",
         timestamp: "2026-03-05T01:00:00.000Z",
       },
@@ -517,6 +546,7 @@ describe("ChatMessageRepository", () => {
         role: "assistant" as const,
         actorType: "agent" as const,
         actorId: "assistant",
+        sourceAuthority: "agent_proposed" as const,
         content: "second",
         timestamp: "2026-03-05T01:00:01.000Z",
       },
@@ -547,6 +577,7 @@ describe("ChatMessageRepository", () => {
       role: "user",
       actorType: "user",
       actorId: "operator",
+      sourceAuthority: "operator",
       content: "first",
       timestamp: "2026-03-05T01:00:00.000Z",
     });
@@ -557,6 +588,7 @@ describe("ChatMessageRepository", () => {
       role: "user",
       actorType: "user",
       actorId: "operator",
+      sourceAuthority: "operator",
       content: "updated",
       timestamp: "2026-03-05T01:01:00.000Z",
     });
@@ -578,6 +610,7 @@ describe("ChatMessageRepository", () => {
         role: "user",
         actorType: "user",
         actorId: "operator",
+        sourceAuthority: "operator",
         content: "first",
         timestamp: "2026-03-05T01:00:00.000Z",
       },
@@ -590,6 +623,7 @@ describe("ChatMessageRepository", () => {
         role: "user",
         actorType: "user",
         actorId: "operator",
+        sourceAuthority: "operator",
         content: "updated",
         timestamp: "2026-03-05T01:01:00.000Z",
       },
@@ -717,6 +751,7 @@ describe("ChatMessageRepository sanitization", () => {
       role: "user",
       actorType: "user",
       actorId: "operator",
+      sourceAuthority: "operator",
       content: "hello",
       timestamp: "2026-03-05T01:00:00.000Z",
     });
@@ -747,6 +782,7 @@ describe("ChatMessageRepository sanitization", () => {
       role: "user",
       actorType: "user",
       actorId: "operator",
+      sourceAuthority: "operator",
       content: "hello",
       timestamp: "2026-03-05T01:00:00.000Z",
     });

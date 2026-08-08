@@ -191,6 +191,7 @@ function seedChatSession(storage: Storage, sessionId: string): void {
       role: "user",
       actorType: "user",
       actorId: "operator",
+      sourceAuthority: "operator",
       content: `hello from ${sessionId}`,
       timestamp: now,
     },

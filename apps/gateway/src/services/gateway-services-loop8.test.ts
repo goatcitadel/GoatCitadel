@@ -780,7 +780,8 @@ describe("Loop 8 gateway service coverage", () => {
         sessionId: "session-loop8",
         memoryLineage: ["turn-loop8"],
         metadata: expect.objectContaining({
-          claimPreview: "[redacted]",
+          claimPreview: "[redacted external evidence]",
+          sourceAuthority: "unknown",
           decision: expect.objectContaining({
             decision: "blocked",
             redactionStatus: "blocked_secret",

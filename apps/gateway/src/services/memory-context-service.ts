@@ -3,6 +3,7 @@ import path from "node:path";
 import {
   ConflictError,
   type ChatCompletionResponse,
+  type MemoryContextAccessReceipt,
   type MemoryContextAssemblyReport,
   type MemoryContextComposeRequest,
   type MemoryContextPack,
@@ -50,6 +51,10 @@ import {
 import { createUtilityModelUsageAttribution } from "./utility-model-usage-attribution.js";
 import { runBoundedUtilityModelCall } from "./utility-model-call.js";
 import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
+import {
+  resolveMemoryContextAccessReceipt,
+  resolveTrustedMemoryUsageWorkspaceId,
+} from "./memory-context-access-policy.js";
 
 const DEFAULT_MEMORY_WORKSPACE_ID = "default";
 
@@ -74,7 +79,8 @@ export class MemoryContextService {
     const qmd = memoryConfig.qmd;
     const maxContextTokens = reserveMemoryContextBudget(input.maxContextTokens ?? qmd.maxContextTokens);
     const prompt = input.prompt.trim();
-    const relationScope = resolveMemoryRelationScope(input);
+    const accessReceipt = await resolveMemoryContextAccessReceipt(this.storage, input.sessionId);
+    const relationScope = accessReceipt.mode === "session_only" ? "self" : resolveMemoryRelationScope(input);
     const shouldShortCircuit = !memoryConfig.enabled || !qmd.enabled || prompt.length < qmd.minPromptChars;
     // Generate a query embedding for the prompt when the caller did not supply one,
     // so semantic-vector ranking can engage. Skipped on the short-circuit path
@@ -97,6 +103,7 @@ export class MemoryContextService {
         runId: input.runId,
         phaseId: input.phaseId,
         relationScope,
+        accessFingerprint: accessReceipt.fingerprint,
         maxContextTokens,
         candidates: [],
         queryEmbedding,
@@ -115,6 +122,7 @@ export class MemoryContextService {
         quality: {
           status: "fallback",
           reason: "qmd_disabled_or_prompt_too_short",
+          accessReceipt,
         },
         originalTokenEstimate: 0,
         distilledTokenEstimate: fallback.distilledTokenEstimate,
@@ -143,7 +151,7 @@ export class MemoryContextService {
       return enrichedFallback;
     }
 
-    const sources = await this.collectSources(input);
+    const sources = await this.collectSources(input, accessReceipt);
     throwIfMemoryContextAborted(input.signal);
     const availableCandidates = rankMemoryCandidates(
       prompt,
@@ -177,6 +185,7 @@ export class MemoryContextService {
       runId: input.runId,
       phaseId: input.phaseId,
       relationScope,
+      accessFingerprint: accessReceipt.fingerprint,
       maxContextTokens,
       candidates,
       queryEmbedding,
@@ -239,6 +248,7 @@ export class MemoryContextService {
           status: "fallback",
           reason: "no_candidates",
           assembly,
+          accessReceipt,
         },
         originalTokenEstimate,
         distilledTokenEstimate: fallback.distilledTokenEstimate,
@@ -345,6 +355,7 @@ export class MemoryContextService {
         quality: {
           status: "generated",
           assembly,
+          accessReceipt,
         },
         distilledTokenEstimate: composed.distilledTokenEstimate,
       });
@@ -426,6 +437,7 @@ export class MemoryContextService {
           status: "fallback",
           reason: message,
           assembly,
+          accessReceipt,
         },
         distilledTokenEstimate: fallback.distilledTokenEstimate,
       });
@@ -589,16 +601,23 @@ export class MemoryContextService {
     }
   }
 
-  private async collectSources(input: MemoryContextComposeRequest): Promise<MemorySourceInput[]> {
+  private async collectSources(
+    input: MemoryContextComposeRequest,
+    accessReceipt: MemoryContextAccessReceipt,
+  ): Promise<MemorySourceInput[]> {
     const sources: MemorySourceInput[] = [];
-    const relationScope = resolveMemoryRelationScope(input);
-    for (const sessionId of await this.resolveTranscriptSessionIds(input, relationScope)) {
+    const relationScope = accessReceipt.mode === "session_only" ? "self" : resolveMemoryRelationScope(input);
+    for (const sessionId of await this.resolveTranscriptSessionIds(input, relationScope, accessReceipt)) {
       throwIfMemoryContextAborted(input.signal);
       const transcript = await readTranscriptOrEmpty(this.storage, sessionId);
       sources.push({
         type: "transcript",
         events: transcript,
       });
+    }
+
+    if (accessReceipt.mode === "session_only") {
+      return sources;
     }
 
     throwIfMemoryContextAborted(input.signal);
@@ -673,12 +692,17 @@ export class MemoryContextService {
   private async resolveTranscriptSessionIds(
     input: MemoryContextComposeRequest,
     relationScope: MemoryRelationScope,
+    accessReceipt: MemoryContextAccessReceipt,
   ): Promise<string[]> {
     const sessionIds = new Set<string>();
     if (input.sessionId) {
       sessionIds.add(input.sessionId);
     }
-    if ((relationScope === "peer" || relationScope === "project") && input.runId) {
+    if (
+      accessReceipt.mode === "workspace_private" &&
+      (relationScope === "peer" || relationScope === "project") &&
+      input.runId
+    ) {
       for (const step of await this.storage.chatDelegationSteps.listByRun(input.runId)) {
         if (step.childSessionId) {
           sessionIds.add(step.childSessionId);
@@ -1001,17 +1025,6 @@ function extractMessageContent(response: ChatCompletionResponse): string {
       .join("\n");
   }
   return "";
-}
-
-async function resolveTrustedMemoryUsageWorkspaceId(storage: Storage, sessionId?: string): Promise<string | undefined> {
-  if (!sessionId) {
-    return undefined;
-  }
-  try {
-    return (await storage.chatSessionMeta.get(sessionId))?.workspaceId;
-  } catch {
-    return undefined;
-  }
 }
 
 function throwIfMemoryContextAborted(signal?: AbortSignal): void {

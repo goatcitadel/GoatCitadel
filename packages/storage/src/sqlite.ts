@@ -7027,11 +7027,150 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
           repairDurableChatSecureConfigurationReservationSchema(db);
         },
       },
+      {
+        version: 190,
+        name: "memory_source_authority_and_trace_candidate_dedupe",
+        up: (db) => {
+          upgradeMemorySourceAuthorityAndTraceCandidateDedupe(db);
+        },
+      },
     ],
   },
 ];
 
 const SCHEMA_MIGRATIONS = createSqliteMigrationRegistry(SCHEMA_MIGRATION_GROUPS);
+
+function upgradeMemorySourceAuthorityAndTraceCandidateDedupe(db: DatabaseSync): void {
+  const hasChatMessages = tableExists(db, "chat_messages");
+  const hasSessionBindings = tableExists(db, "chat_session_bindings");
+  addColumnIfMissingIfTableExists(db, "chat_messages", "source_authority", "TEXT NOT NULL DEFAULT 'unknown'");
+  if (hasChatMessages && hasSessionBindings) {
+    db.exec(`
+      UPDATE chat_messages
+      SET source_authority = CASE
+        WHEN actor_type = 'system' THEN 'trusted_lifecycle'
+        WHEN role = 'assistant' OR actor_type = 'agent' THEN 'agent_proposed'
+        WHEN role = 'user' AND EXISTS (
+          SELECT 1 FROM chat_session_bindings binding
+          WHERE binding.session_id = chat_messages.session_id AND binding.transport = 'integration'
+        ) THEN 'external_channel'
+        WHEN role = 'user' THEN 'operator'
+        ELSE 'unknown'
+      END
+      WHERE source_authority IS NULL OR source_authority = 'unknown';
+    `);
+  } else if (hasChatMessages) {
+    db.exec(`
+      UPDATE chat_messages
+      SET source_authority = CASE
+        WHEN actor_type = 'system' THEN 'trusted_lifecycle'
+        WHEN role = 'assistant' OR actor_type = 'agent' THEN 'agent_proposed'
+        WHEN role = 'user' THEN 'operator'
+        ELSE 'unknown'
+      END
+      WHERE source_authority IS NULL OR source_authority = 'unknown';
+    `);
+  }
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS memory_trace_candidates (
+      candidate_id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      candidate_type TEXT NOT NULL,
+      status TEXT NOT NULL,
+      source_text TEXT NOT NULL,
+      proposed_insight TEXT NOT NULL,
+      confidence REAL NOT NULL,
+      source_refs_json TEXT NOT NULL,
+      metadata_json TEXT NOT NULL,
+      authority TEXT NOT NULL,
+      actor_id TEXT,
+      promoted_learning_id TEXT,
+      dedupe_key TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `);
+  addColumnIfMissingIfTableExists(db, "memory_trace_candidates", "dedupe_key", "TEXT");
+  db.exec(`
+    UPDATE memory_trace_candidates
+    SET dedupe_key = 'legacy:' || candidate_id
+    WHERE dedupe_key IS NULL OR length(trim(dedupe_key)) = 0;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_trace_candidates_dedupe_key
+      ON memory_trace_candidates(dedupe_key);
+    CREATE INDEX IF NOT EXISTS idx_memory_trace_candidates_workspace_status
+      ON memory_trace_candidates(workspace_id, status);
+    CREATE TABLE IF NOT EXISTS memory_authority_migration_reconciliation (
+      migration_id TEXT PRIMARY KEY,
+      quarantined_count INTEGER NOT NULL,
+      recorded_at TEXT NOT NULL,
+      metadata_json TEXT NOT NULL
+    );
+  `);
+
+  let quarantineCount = 0;
+  if (tableExists(db, "learned_memory_items") && tableExists(db, "learned_memory_sources")) {
+    const quarantineConditions = [
+      `EXISTS (
+        SELECT 1 FROM learned_memory_sources source
+        WHERE source.item_id = item.item_id AND lower(source.source_kind) IN ('assistant', 'agent')
+      )`,
+    ];
+    if (hasChatMessages) {
+      quarantineConditions.push(`EXISTS (
+        SELECT 1 FROM learned_memory_sources source
+        INNER JOIN chat_messages message ON message.message_id = source.source_ref
+        WHERE source.item_id = item.item_id
+          AND message.source_authority IN ('external_channel', 'unknown', 'agent_proposed')
+      )`);
+    }
+    if (hasSessionBindings) {
+      quarantineConditions.push(
+        hasChatMessages
+          ? `EXISTS (
+              SELECT 1 FROM chat_session_bindings binding
+              WHERE binding.session_id = item.session_id AND binding.transport = 'integration'
+                AND NOT EXISTS (
+                  SELECT 1 FROM learned_memory_sources source
+                  INNER JOIN chat_messages message ON message.message_id = source.source_ref
+                  WHERE source.item_id = item.item_id AND message.source_authority = 'operator'
+                )
+            )`
+          : `EXISTS (
+              SELECT 1 FROM chat_session_bindings binding
+              WHERE binding.session_id = item.session_id AND binding.transport = 'integration'
+            )`,
+      );
+    }
+    const quarantinePredicate = quarantineConditions.join("\nOR ");
+    const row = db
+      .prepare(
+        `SELECT COUNT(DISTINCT item.item_id) AS count
+         FROM learned_memory_items item
+         WHERE item.status = 'active' AND (${quarantinePredicate})`,
+      )
+      .get() as { count?: number } | undefined;
+    quarantineCount = Number(row?.count ?? 0);
+    db.prepare(
+      `
+      UPDATE learned_memory_items AS item
+      SET status = 'disabled',
+          disabled_reason = 'external_authority_unverified_migration',
+          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE item.status = 'active' AND (${quarantinePredicate})
+    `,
+    ).run();
+  }
+  db.prepare(
+    `INSERT OR REPLACE INTO memory_authority_migration_reconciliation
+       (migration_id, quarantined_count, recorded_at, metadata_json)
+     VALUES ('sqlite-190', ?, ?, ?)`,
+  ).run(
+    quarantineCount,
+    new Date().toISOString(),
+    JSON.stringify({ disabledReason: "external_authority_unverified_migration", reversible: true }),
+  );
+}
 
 function createDurableChatSecureConfigurationReservationSchema(db: DatabaseSync): void {
   db.exec(`

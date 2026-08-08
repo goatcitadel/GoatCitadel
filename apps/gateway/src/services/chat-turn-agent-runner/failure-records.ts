@@ -1,5 +1,6 @@
 import type {
   ChatProviderFailureRecord,
+  ChatSkillSecurityFailureRecord,
   ChatToolRunRecord,
   ChatTurnFailureClass,
   ChatTurnFailureRecord,
@@ -12,14 +13,29 @@ export function buildChatTurnFailureRecord(
   message: string,
   recommendedAction: ChatTurnRecoveryAction = getChatTurnRecoveryAction(failureClass),
   provider?: ChatProviderFailureRecord,
+  security?: ChatSkillSecurityFailureRecord,
 ): ChatTurnFailureRecord {
   return {
     failureClass,
     message,
-    retryable: failureClass !== "auth_required",
+    retryable: failureClass !== "auth_required" && failureClass !== "skill_security_blocked",
     recommendedAction,
     ...(provider ? { provider } : {}),
+    ...(security ? { security } : {}),
   };
+}
+
+export function extractSkillSecurityFailureRecord(error: unknown): ChatSkillSecurityFailureRecord | undefined {
+  const details = toPlainRecord((error as { details?: unknown } | undefined)?.details);
+  if (!details || details.failureClass !== "skill_security_blocked") return undefined;
+  const scannerVersion = readProviderFailureString(details.scannerVersion);
+  const skillIds = readStringArray(details.skillIds);
+  const ruleIds = readStringArray(details.ruleIds);
+  const evidenceHashes = readStringArray(details.evidenceHashes).filter((value) => /^[a-f0-9]{64}$/u.test(value));
+  if (!scannerVersion || skillIds.length === 0 || ruleIds.length === 0 || evidenceHashes.length === 0) {
+    return undefined;
+  }
+  return { scannerVersion, skillIds, ruleIds, evidenceHashes };
 }
 
 export function extractProviderFailureRecord(error: unknown): ChatProviderFailureRecord | undefined {
@@ -46,10 +62,25 @@ function readProviderFailureString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? [
+        ...new Set(
+          value
+            .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+            .map((item) => item.trim()),
+        ),
+      ]
+    : [];
+}
+
 export function classifyChatTurnFailure(input: {
   error?: unknown;
   toolRuns: ChatToolRunRecord[];
 }): ChatTurnFailureClass {
+  if ((input.error as { failureClass?: unknown } | undefined)?.failureClass === "skill_security_blocked") {
+    return "skill_security_blocked";
+  }
   if (hasToolBlockedFailure(input.toolRuns)) {
     return "tool_blocked";
   }

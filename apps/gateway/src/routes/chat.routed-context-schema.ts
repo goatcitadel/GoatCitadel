@@ -8,7 +8,7 @@ import {
 } from "@goatcitadel/contracts";
 import { z } from "zod";
 
-// HX-407 C1: the three reviewed routed-context kinds. Refs stay identifiers-only
+// Reviewed routed-context kinds stay identifiers-only
 // at this boundary — the server-side resolver (chat-routed-context-service) owns
 // every content lookup and freezes the byte-exact snapshot; the strict object
 // below rejects any content-bearing field. A future contract kind must be

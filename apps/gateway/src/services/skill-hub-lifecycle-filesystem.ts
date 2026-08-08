@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { canonicalJsonString, type SkillContentIntegrityManifest } from "@goatcitadel/contracts";
-import { captureSkillContentIntegrity, SKILL_CONTENT_INTEGRITY_LIMITS } from "./skill-content-integrity.js";
+import {
+  captureSkillContentIntegrity,
+  decodeExactSkillUtf8,
+  SKILL_CONTENT_INTEGRITY_LIMITS,
+} from "./skill-content-integrity.js";
 import {
   NodeSkillHubArtifactFilesystem,
   type SkillHubArtifactFileHandle,
@@ -162,9 +166,10 @@ export class SkillHubLifecycleFilesystem {
   }): Promise<string> {
     const sourceRoot = path.resolve(input.sourceRoot);
     const sourcePath = this.assertContained(sourceRoot, input.sourcePath, false);
-    return Buffer.from(
+    return decodeExactSkillUtf8(
       await this.readVerifiedBytes(sourcePath, input.expectedBytes, input.expectedSha256, input.signal),
-    ).toString("utf8");
+      `Skill Hub artifact ${path.basename(sourcePath)}`,
+    );
   }
 
   public async renameDirectory(

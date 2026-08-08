@@ -298,6 +298,13 @@ export async function promoteTraceMemoryCandidate(candidateId: string): Promise<
   });
 }
 
+export async function rejectTraceMemoryCandidate(candidateId: string): Promise<TraceMemoryCandidateRecord> {
+  return request<TraceMemoryCandidateRecord>(
+    `/api/v1/memory/trace-candidates/${encodeURIComponent(candidateId)}/reject`,
+    { method: "POST" },
+  );
+}
+
 export async function fetchMemoryItems(input?: {
   namespace?: string;
   workspaceId?: string;

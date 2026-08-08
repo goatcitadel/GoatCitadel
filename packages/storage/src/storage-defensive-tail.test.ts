@@ -231,6 +231,7 @@ describe("storage defensive tail coverage", () => {
       type: "message.user",
       actorType: "user",
       actorId: "operator",
+      sourceAuthority: "operator",
       payload: {},
     });
     const failedAppend = assert.rejects(append, /write failed/);
@@ -428,6 +429,7 @@ describe("storage defensive tail coverage", () => {
       role: "user",
       actorType: "user",
       actorId: "operator",
+      sourceAuthority: "operator",
       content: "hello",
       timestamp: "2026-05-01T00:00:00.000Z",
     });

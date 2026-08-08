@@ -4,7 +4,6 @@ import type {
   LearnedMemoryItemRecord,
   LearnedMemoryItemType,
   LearnedMemoryUpdateInput,
-  TranscriptEvent,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { extractLearnedMemoryCandidates, shouldExtractLearnedMemoryContent } from "./learned-memory-utils.js";
@@ -19,35 +18,6 @@ function looksSensitive(value: string): boolean {
     /\bsk-[a-z0-9-]{8,}\b/i.test(normalized) ||
     /\bghp_[a-z0-9]{10,}\b/i.test(normalized)
   );
-}
-
-function extractStringFromUnknown(value: unknown): string {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    return value
-      .map((item) => {
-        if (typeof item === "string") {
-          return item;
-        }
-        if (item && typeof item === "object" && typeof (item as { text?: unknown }).text === "string") {
-          return String((item as { text?: unknown }).text);
-        }
-        return "";
-      })
-      .join("");
-  }
-  if (value && typeof value === "object") {
-    const maybe = value as { text?: unknown; content?: unknown };
-    if (typeof maybe.text === "string") {
-      return maybe.text;
-    }
-    if (typeof maybe.content === "string") {
-      return maybe.content;
-    }
-  }
-  return "";
 }
 
 // ── service class ────────────────────────────────────────────────────
@@ -113,56 +83,9 @@ export class ChatLearnedMemoryService {
     };
   }
 
-  async rebuildChatSessionLearnedMemory(
-    sessionId: string,
-    readTranscriptOrEmpty: (sid: string) => Promise<TranscriptEvent[]>,
-  ): Promise<{
-    rebuiltAt: string;
-    items: LearnedMemoryItemRecord[];
-    conflicts: LearnedMemoryConflictRecord[];
-  }> {
+  async clearChatSessionLearnedMemory(sessionId: string): Promise<void> {
     await this.ctx.storage.sessions.getBySessionId(sessionId);
     await this.ctx.storage.learnedMemory.clearSession(sessionId);
-
-    const traceByMessageId = new Map<string, Pick<ChatTurnTraceRecord, "status" | "toolRuns">>();
-    const traces = await this.ctx.storage.chatTurnTraces.listBySession(sessionId, 5000);
-    for (const trace of traces) {
-      const traceContext = {
-        status: trace.status,
-        toolRuns:
-          trace.toolRuns.length > 0 ? trace.toolRuns : await this.ctx.storage.chatToolRuns.listByTurn(trace.turnId),
-      } satisfies Pick<ChatTurnTraceRecord, "status" | "toolRuns">;
-      traceByMessageId.set(trace.userMessageId, traceContext);
-      if (trace.assistantMessageId) {
-        traceByMessageId.set(trace.assistantMessageId, traceContext);
-      }
-    }
-
-    const transcript = await readTranscriptOrEmpty(sessionId);
-    for (const event of transcript) {
-      if (event.type !== "message.user" && event.type !== "message.assistant") {
-        continue;
-      }
-      const role = event.type === "message.user" ? "user" : "assistant";
-      const content = extractStringFromUnknown(
-        (event.payload as { message?: { content?: unknown } })?.message?.content,
-      );
-      if (!content.trim()) {
-        continue;
-      }
-      await this.extractAndPersistLearnedMemory(sessionId, content, {
-        role,
-        sourceRef: event.eventId,
-        trace: traceByMessageId.get(event.eventId),
-      });
-    }
-    const rebuiltAt = new Date().toISOString();
-    const snapshot = await this.listChatSessionLearnedMemory(sessionId, 500);
-    return {
-      rebuiltAt,
-      items: snapshot.items,
-      conflicts: snapshot.conflicts,
-    };
   }
 
   /**

@@ -18,14 +18,23 @@ import {
   type SkillHubOperationIntentTemplate,
   type SkillHubOperationSettlementDisposition,
   type SkillHubOperationSettlementRecord,
+  type SkillHubSnapshotArtifactRecord,
 } from "@goatcitadel/contracts";
 import {
   computeSkillHubOperationRequestSha256,
   computeSkillHubOperationResultSha256,
   type AsyncStorage as Storage,
+  type SkillHubSnapshotRecord,
 } from "@goatcitadel/storage";
 import { parseSkillMarkdown } from "@goatcitadel/skills";
 import { SkillHubArtifactStore } from "./skill-hub-artifact-store.js";
+import {
+  PROMPTWARE_SCANNER_ID,
+  PROMPTWARE_MAX_FINDINGS,
+  PROMPTWARE_SCANNER_REVISION,
+  PROMPTWARE_SCANNER_VERSION,
+  scanPromptwareContent,
+} from "./assembled-prompt-injection-guard.js";
 import {
   SkillHubLifecycleFilesystem,
   type SkillHubLifecycleFilesystemMutation,
@@ -179,6 +188,15 @@ export class SkillHubLifecycleService {
         boundaryCrossed: false,
       });
     }
+    if (intent.operationKind !== "revoke" && !hasCurrentPromptwareAudit(snapshot)) {
+      return await this.settle(intent, artifact.artifactId, "blocked", intent.contentTreeSha256, {
+        code: "promptware_policy_stale",
+        blockerCodes: ["PROMPTWARE_POLICY_STALE"],
+        scannerId: PROMPTWARE_SCANNER_ID,
+        scannerVersion: PROMPTWARE_SCANNER_VERSION,
+        boundaryCrossed: false,
+      });
+    }
     if (
       intent.operationKind !== "revoke" &&
       (snapshot.trustDisposition !== "candidate" || snapshot.blockerCodes.length > 0)
@@ -192,6 +210,33 @@ export class SkillHubLifecycleService {
     }
 
     const bundlePath = this.options.artifactStore.resolveBundlePath(artifact.bundleRelPath);
+    if (intent.operationKind !== "revoke") {
+      const promptwareScan = await this.scanVerifiedArtifactPromptware(bundlePath, artifact, signal);
+      if (promptwareScan.unscannedPaths.length > 0) {
+        return await this.settle(intent, artifact.artifactId, "blocked", intent.contentTreeSha256, {
+          code: "promptware_scan_incomplete",
+          blockerCodes: ["PROMPTWARE_SCAN_INCOMPLETE"],
+          scannerId: PROMPTWARE_SCANNER_ID,
+          scannerVersion: PROMPTWARE_SCANNER_VERSION,
+          sourcePaths: promptwareScan.unscannedPaths,
+          boundaryCrossed: false,
+        });
+      }
+      if (promptwareScan.findings.length > 0) {
+        return await this.settle(intent, artifact.artifactId, "blocked", intent.contentTreeSha256, {
+          code: "prompt_injection_detected",
+          blockerCodes: ["PROMPT_INJECTION_DETECTED"],
+          scannerId: PROMPTWARE_SCANNER_ID,
+          scannerVersion: PROMPTWARE_SCANNER_VERSION,
+          findings: promptwareScan.findings.map((finding) => ({
+            ruleId: finding.ruleId,
+            sourcePath: finding.sourcePath,
+            evidenceHash: finding.evidenceHash,
+          })),
+          boundaryCrossed: false,
+        });
+      }
+    }
     const skillEntry = artifact.manifest.files.find((file) => file.path === "SKILL.md");
     if (!skillEntry) throw new ConflictError({ message: "Skill Hub artifact is missing its SKILL.md entry." });
     const skillMarkdown = await this.filesystem.readVerifiedText({
@@ -767,6 +812,43 @@ export class SkillHubLifecycleService {
     return this.options.artifactStore.verify({ bundleRelPath, manifest });
   }
 
+  private async scanVerifiedArtifactPromptware(
+    bundlePath: string,
+    artifact: SkillHubSnapshotArtifactRecord,
+    signal: AbortSignal,
+  ): Promise<{
+    findings: Array<{ ruleId: string; sourcePath: string; evidenceHash: string }>;
+    unscannedPaths: string[];
+  }> {
+    const findings: Array<{ ruleId: string; sourcePath: string; evidenceHash: string }> = [];
+    const unscannedPaths: string[] = [];
+    for (const entry of artifact.manifest.files) {
+      if (!/\.(?:md|txt)$/iu.test(entry.path)) continue;
+      try {
+        const content = await this.filesystem.readVerifiedText({
+          sourceRoot: bundlePath,
+          sourcePath: path.join(bundlePath, ...entry.path.split("/")),
+          expectedBytes: entry.bytes,
+          expectedSha256: entry.sha256,
+          signal,
+        });
+        const fileFindings = scanPromptwareContent({
+          source: "imported_skill",
+          sourcePath: entry.path,
+          content,
+        }).map((finding) => ({
+          ruleId: finding.ruleId,
+          sourcePath: finding.sourcePath ?? entry.path,
+          evidenceHash: finding.evidenceHash,
+        }));
+        findings.push(...fileFindings.slice(0, Math.max(0, PROMPTWARE_MAX_FINDINGS - findings.length)));
+      } catch {
+        unscannedPaths.push(entry.path);
+      }
+    }
+    return { findings, unscannedPaths };
+  }
+
   private now(): string {
     return this.options.now?.() ?? new Date().toISOString();
   }
@@ -834,6 +916,24 @@ function asOptionalNumber(value: unknown): number | undefined {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasCurrentPromptwareAudit(snapshot: SkillHubSnapshotRecord): boolean {
+  const scanners = snapshot.audit.scanners;
+  if (!Array.isArray(scanners)) return false;
+  return scanners.some((scanner) => {
+    if (!isRecord(scanner) || !Array.isArray(scanner.coverageIds)) return false;
+    const coverageIds = scanner.coverageIds;
+    return (
+      scanner.scannerId === PROMPTWARE_SCANNER_ID &&
+      scanner.scannerVersion === PROMPTWARE_SCANNER_VERSION &&
+      typeof scanner.revision === "number" &&
+      scanner.revision >= PROMPTWARE_SCANNER_REVISION &&
+      ["exact_bytes", "model_facing_md_txt", "multiline", "protective_negation"].every((coverageId) =>
+        coverageIds.includes(coverageId),
+      )
+    );
+  });
 }
 
 function isConflict(error: unknown): boolean {

@@ -463,6 +463,7 @@ describe("SessionMutationAdmissionRepository live PostgreSQL", () => {
             role: "assistant",
             actorType: "agent",
             actorId: "assistant",
+            sourceAuthority: "agent_proposed",
             content: outputText,
             timestamp: completedAt,
           });

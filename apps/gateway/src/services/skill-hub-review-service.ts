@@ -24,6 +24,11 @@ import type {
 } from "@goatcitadel/storage";
 import { parseSkillMarkdown } from "@goatcitadel/skills";
 import { SKILL_BUNDLE_MANIFEST_FILENAME } from "./skill-bundle-manifest.js";
+import {
+  PROMPTWARE_SCANNER_ID,
+  PROMPTWARE_SCANNER_REVISION,
+  PROMPTWARE_SCANNER_VERSION,
+} from "./assembled-prompt-injection-guard.js";
 import { SkillHubArtifactStore } from "./skill-hub-artifact-store.js";
 import type { MaterializedSkillReviewContext, SkillImportService } from "./skill-import-service.js";
 
@@ -451,6 +456,12 @@ async function prepareReview(
 }
 
 function assertCompleteValidation(validation: SkillImportValidationResult): void {
+  if (validation.checks.promptwareScanComplete !== true || validation.promptwareUnscannedPaths.length > 0) {
+    rejectReview("PROMPTWARE_SCAN_INCOMPLETE", "Skill source promptware coverage was incomplete.");
+  }
+  if (validation.checks.promptwareSafe !== true || validation.promptwareFindings.length > 0) {
+    rejectReview("PROMPT_INJECTION_DETECTED", "Skill source contains prompt-injection instructions.");
+  }
   if (!validation.valid) {
     rejectReview("VALIDATION_FAILED", "Skill source failed production admission validation.");
   }
@@ -546,6 +557,7 @@ function buildAudit(
     ...(permissionEnvelope.scripts.length ? ["SCRIPT_FILES_DECLARED"] : []),
     ...(validation.suspiciousSignals.length ? ["SUSPICIOUS_SCRIPT_INDICATOR"] : []),
     ...(networkOrigins.length ? ["NETWORK_ORIGINS_DECLARED"] : []),
+    "PROMPTWARE_SCAN_CLEAN",
   ];
   return {
     policyId: REVIEW_POLICY_ID,
@@ -564,6 +576,12 @@ function buildAudit(
         revision: 1,
         coverageIds: ["filesystem", "network_origins", "scripts"],
       },
+      {
+        scannerId: PROMPTWARE_SCANNER_ID,
+        scannerVersion: PROMPTWARE_SCANNER_VERSION,
+        revision: PROMPTWARE_SCANNER_REVISION,
+        coverageIds: ["exact_bytes", "model_facing_md_txt", "multiline", "protective_negation"],
+      },
     ],
     findingCodes: [...new Set(findingCodes)].sort(compareStrings),
     blockerCodes,
@@ -576,6 +594,12 @@ function standardizedBlockers(validation: SkillImportValidationResult): string[]
     ...(validation.suspiciousSignals.length ? ["SUSPICIOUS_SCRIPT_INDICATOR"] : []),
     ...(validation.reviewDisposition === "reference_only" ? ["REFERENCE_ONLY_SOURCE"] : []),
     ...(validation.reviewDisposition === "conditional" ? ["CONDITIONAL_REVIEW_REQUIRED"] : []),
+    ...(!validation.checks.promptwareSafe || validation.promptwareFindings.length > 0
+      ? ["PROMPT_INJECTION_DETECTED"]
+      : []),
+    ...(!validation.checks.promptwareScanComplete || validation.promptwareUnscannedPaths.length > 0
+      ? ["PROMPTWARE_SCAN_INCOMPLETE"]
+      : []),
   ];
   return [...new Set(blockers)].sort(compareStrings);
 }

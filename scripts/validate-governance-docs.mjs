@@ -373,8 +373,8 @@ if (!/@goatcitadel\/extensions-sdk@1\.0\.0/.test(pluginSdkDoc)) {
 }
 
 const contract = await readFile(path.join(root, "docs", "1_0_CONTRACT.md"), "utf8");
-if (!/^Last updated: 2026-05-26$/m.test(contract)) {
-  errors.push("docs/1_0_CONTRACT.md must carry the current 2026-05-26 freshness header.");
+if (!/^Last updated: 2026-08-08$/m.test(contract)) {
+  errors.push("docs/1_0_CONTRACT.md must carry the current 2026-08-08 freshness header.");
 }
 if (
   !/## Source of Truth Order[\s\S]*1\. current implementation under `apps\/` and `packages\/`[\s\S]*2\. \[docs\/CANONICAL_RUNTIME_STATE_MODEL\.md\]\(\.\/CANONICAL_RUNTIME_STATE_MODEL\.md\)[\s\S]*3\. this contract for `1\.0` promise and release-scope truth[\s\S]*4\. \[docs\/ENGINEERING_HANDBOOK\.md\]\(\.\/ENGINEERING_HANDBOOK\.md\)/m.test(

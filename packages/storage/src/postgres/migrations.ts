@@ -14142,6 +14142,100 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
       $secure_configuration_shape_assertion$;
     `,
   },
+  {
+    version: 133,
+    name: "memory_source_authority_and_trace_candidate_dedupe",
+    sql: `
+      ALTER TABLE chat_messages
+        ADD COLUMN IF NOT EXISTS source_authority TEXT NOT NULL DEFAULT 'unknown';
+      UPDATE chat_messages message
+      SET source_authority = CASE
+        WHEN message.actor_type = 'system' THEN 'trusted_lifecycle'
+        WHEN message.role = 'assistant' OR message.actor_type = 'agent' THEN 'agent_proposed'
+        WHEN message.role = 'user' AND EXISTS (
+          SELECT 1 FROM chat_session_bindings binding
+          WHERE binding.session_id = message.session_id AND binding.transport = 'integration'
+        ) THEN 'external_channel'
+        WHEN message.role = 'user' THEN 'operator'
+        ELSE 'unknown'
+      END
+      WHERE message.source_authority IS NULL OR message.source_authority = 'unknown';
+
+      CREATE TABLE IF NOT EXISTS memory_trace_candidates (
+        candidate_id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        candidate_type TEXT NOT NULL,
+        status TEXT NOT NULL,
+        source_text TEXT NOT NULL,
+        proposed_insight TEXT NOT NULL,
+        confidence DOUBLE PRECISION NOT NULL,
+        source_refs_json TEXT NOT NULL,
+        metadata_json TEXT NOT NULL,
+        authority TEXT NOT NULL,
+        actor_id TEXT,
+        promoted_learning_id TEXT,
+        dedupe_key TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      ALTER TABLE memory_trace_candidates ADD COLUMN IF NOT EXISTS dedupe_key TEXT;
+      UPDATE memory_trace_candidates
+      SET dedupe_key = 'legacy:' || candidate_id
+      WHERE dedupe_key IS NULL OR length(btrim(dedupe_key)) = 0;
+      ALTER TABLE memory_trace_candidates ALTER COLUMN dedupe_key SET NOT NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_trace_candidates_dedupe_key
+        ON memory_trace_candidates(dedupe_key);
+      CREATE INDEX IF NOT EXISTS idx_memory_trace_candidates_workspace_status
+        ON memory_trace_candidates(workspace_id, status);
+
+      CREATE TABLE IF NOT EXISTS memory_authority_migration_reconciliation (
+        migration_id TEXT PRIMARY KEY,
+        quarantined_count BIGINT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        metadata_json TEXT NOT NULL
+      );
+      WITH quarantined AS (
+        UPDATE learned_memory_items item
+        SET status = 'disabled',
+            disabled_reason = 'external_authority_unverified_migration',
+            updated_at = to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+        WHERE item.status = 'active' AND (
+          EXISTS (
+            SELECT 1 FROM learned_memory_sources source
+            WHERE source.item_id = item.item_id AND lower(source.source_kind) IN ('assistant', 'agent')
+          )
+          OR EXISTS (
+            SELECT 1 FROM learned_memory_sources source
+            INNER JOIN chat_messages message ON message.message_id = source.source_ref
+            WHERE source.item_id = item.item_id
+              AND message.source_authority IN ('external_channel', 'unknown', 'agent_proposed')
+          )
+          OR EXISTS (
+            SELECT 1 FROM chat_session_bindings binding
+            WHERE binding.session_id = item.session_id AND binding.transport = 'integration'
+              AND NOT EXISTS (
+                SELECT 1 FROM learned_memory_sources source
+                INNER JOIN chat_messages message ON message.message_id = source.source_ref
+                WHERE source.item_id = item.item_id AND message.source_authority = 'operator'
+              )
+          )
+        )
+        RETURNING item_id
+      )
+      INSERT INTO memory_authority_migration_reconciliation
+        (migration_id, quarantined_count, recorded_at, metadata_json)
+      SELECT
+        'postgres-133',
+        COUNT(*),
+        to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+        '{"disabledReason":"external_authority_unverified_migration","reversible":true}'
+      FROM quarantined
+      ON CONFLICT(migration_id) DO UPDATE SET
+        quarantined_count = excluded.quarantined_count,
+        recorded_at = excluded.recorded_at,
+        metadata_json = excluded.metadata_json;
+    `,
+  },
 ];
 
 function buildWorkspacePathBridgePosixFlavorPostgresSql(): string {

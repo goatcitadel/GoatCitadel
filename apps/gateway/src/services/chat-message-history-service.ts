@@ -102,6 +102,7 @@ export async function buildLlmMessagesFromTranscript(
             role: "user",
             actorType: "user",
             actorId: "operator",
+            sourceAuthority: event.sourceAuthority ?? "unknown",
             content: baseContent,
             timestamp: event.timestamp,
             parts: parseMessageParts(payload.message?.parts),

@@ -10,6 +10,8 @@ export interface CacheKeyInput {
   runId?: string;
   phaseId?: string;
   relationScope?: MemoryRelationScope;
+  /** Server-owned memory access receipt fingerprint. */
+  accessFingerprint?: string;
   maxContextTokens: number;
   candidates: RankedMemoryCandidate[];
   queryEmbedding?: number[];
@@ -40,6 +42,7 @@ export function buildCacheKey(input: CacheKeyInput): string {
     input.runId ?? "",
     input.phaseId ?? "",
     input.relationScope ?? "",
+    input.accessFingerprint ?? "",
     String(input.maxContextTokens),
     buildQueryHash(input.prompt, input.queryEmbedding),
     buildSourcesHash(input.candidates),

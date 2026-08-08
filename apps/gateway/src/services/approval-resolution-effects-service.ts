@@ -3209,6 +3209,7 @@ export class ApprovalEffectsService {
           role: "assistant",
           actorType: "agent",
           actorId: "assistant",
+          sourceAuthority: "agent_proposed",
           content: input.outputText,
           timestamp: input.now,
         },
@@ -3288,6 +3289,7 @@ export class ApprovalEffectsService {
         role: "assistant",
         actorType: "agent",
         actorId: "assistant",
+        sourceAuthority: "agent_proposed",
         content: input.outputText,
         timestamp: input.now,
       };
@@ -3714,6 +3716,7 @@ export class ApprovalEffectsService {
           role: "assistant",
           actorType: "agent",
           actorId: "assistant",
+          sourceAuthority: "agent_proposed",
           content: stitchedOutput,
           timestamp: now,
         },

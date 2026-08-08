@@ -1079,6 +1079,7 @@ function writePostgresHeartbeatDecisionWindow(
       role: "assistant",
       actorType: "system",
       actorId: HEARTBEAT_SYSTEM_ACTOR_ID,
+      sourceAuthority: "trusted_lifecycle",
       content: input.assistantMessage,
       timestamp: now,
     });
@@ -1826,6 +1827,7 @@ function createPostgresTerminalReadyHeartbeat(db: PostgresSyncDatabaseClient, se
     role: "assistant",
     actorType: "system",
     actorId: HEARTBEAT_SYSTEM_ACTOR_ID,
+    sourceAuthority: "trusted_lifecycle",
     content: outputText,
     timestamp: committedAt,
   });

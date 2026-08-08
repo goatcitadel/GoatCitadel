@@ -6,6 +6,7 @@ import {
   SKILL_CONTENT_INTEGRITY_LIMITS,
   captureSkillContentIntegrity,
   parseSkillContentIntegrityManifest,
+  readBoundedSkillTextFile,
   readBoundedSkillSourceManifestSync,
   skillContentIntegrityMatches,
 } from "./skill-content-integrity.js";
@@ -138,5 +139,13 @@ describe("skill content integrity", () => {
     expect(() => readBoundedSkillSourceManifestSync(manifestPath)).toThrow(
       `exceeds ${SKILL_CONTENT_INTEGRITY_LIMITS.maxSourceManifestBytes} bytes`,
     );
+  });
+
+  it("rejects malformed UTF-8 instead of scanning replacement characters", async () => {
+    const root = await createEmptyRoot();
+    const filePath = path.join(root, "SKILL.md");
+    await fs.writeFile(filePath, Buffer.from([0x49, 0x6e, 0x76, 0x61, 0x6c, 0x69, 0x64, 0xc3, 0x28]));
+
+    await expect(readBoundedSkillTextFile(filePath)).rejects.toThrow(/not canonical UTF-8/u);
   });
 });

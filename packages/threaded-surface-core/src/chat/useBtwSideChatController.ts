@@ -195,6 +195,7 @@ export function useBtwSideChatController(input: {
         role: "user",
         actorType: "user",
         actorId: "operator",
+        sourceAuthority: "operator",
         content: message,
         timestamp: new Date().toISOString(),
       };

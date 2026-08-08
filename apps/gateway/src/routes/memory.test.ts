@@ -501,6 +501,7 @@ describe("memory routes", () => {
     const listTraceCandidates = vi.fn(async () => [{ candidateId: "trace-1" }]);
     const proposeTraceCandidate = vi.fn(async () => ({ candidateId: "trace-2", status: "proposed" }));
     const promoteTraceCandidate = vi.fn(async () => ({ learningId: "learn-1" }));
+    const rejectTraceCandidate = vi.fn(async () => ({ candidateId: "trace-3", status: "rejected" }));
     const built = buildApp({
       recall,
       listFeedback,
@@ -511,6 +512,7 @@ describe("memory routes", () => {
       listTraceCandidates,
       proposeTraceCandidate,
       promoteTraceCandidate,
+      rejectTraceCandidate,
     });
     app = built.app;
     await app.register(memoryRoutes);
@@ -573,6 +575,10 @@ describe("memory routes", () => {
       method: "POST",
       url: "/api/v1/memory/trace-candidates/trace-2/promote",
     });
+    const rejectResponse = await app.inject({
+      method: "POST",
+      url: "/api/v1/memory/trace-candidates/trace-3/reject",
+    });
 
     expect(recallResponse.statusCode).toBe(200);
     expect(feedbackResponse.statusCode).toBe(201);
@@ -583,6 +589,7 @@ describe("memory routes", () => {
     expect(candidateResponse.statusCode).toBe(202);
     expect(candidateListResponse.statusCode).toBe(200);
     expect(promoteResponse.statusCode).toBe(200);
+    expect(rejectResponse.statusCode).toBe(200);
     expect(recall).toHaveBeenCalledWith({ mode: "summary", workspaceId: "default" });
     expect(listFeedback).toHaveBeenCalledWith({ limit: 100, status: "open" });
     expect(runQualityScan).toHaveBeenCalledWith(
@@ -619,6 +626,7 @@ describe("memory routes", () => {
       expect.stringMatching(/^ip:/),
     );
     expect(promoteTraceCandidate).toHaveBeenCalledWith("trace-2", expect.stringMatching(/^ip:/));
+    expect(rejectTraceCandidate).toHaveBeenCalledWith("trace-3", expect.stringMatching(/^ip:/));
   });
 
   it("accepts memory maintenance run-now on both the canonical and compatibility paths", async () => {

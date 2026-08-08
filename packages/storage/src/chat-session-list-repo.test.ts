@@ -73,6 +73,7 @@ describe("ChatSessionListRepository", () => {
         role: "user",
         actorType: "user",
         actorId: "operator",
+        sourceAuthority: "operator",
         content: "needle appears in message content",
         timestamp: "2026-05-03T16:02:01.000Z",
       });

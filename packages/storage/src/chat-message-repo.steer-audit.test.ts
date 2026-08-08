@@ -36,6 +36,7 @@ function baseMessage(overrides: Partial<ChatMessageRecord> = {}): ChatMessageRec
     role: overrides.role ?? "user",
     actorType: overrides.actorType ?? "user",
     actorId: overrides.actorId ?? "operator",
+    sourceAuthority: overrides.sourceAuthority ?? "operator",
     content: overrides.content ?? "hello",
     timestamp: overrides.timestamp ?? "2026-03-05T01:00:00.000Z",
     ...overrides,

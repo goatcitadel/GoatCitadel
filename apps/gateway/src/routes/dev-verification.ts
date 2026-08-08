@@ -165,6 +165,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
         role: "user",
         actorType: "user",
         actorId: "verification-operator",
+        sourceAuthority: "operator",
         content: "Summarize the current release posture and format the result as markdown.",
         timestamp: new Date(now - 120_000).toISOString(),
       });
@@ -174,6 +175,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
         role: "assistant",
         actorType: "agent",
         actorId: "goatherder",
+        sourceAuthority: "agent_proposed",
         content: [
           "# Verification Demo",
           "",
@@ -201,6 +203,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
           role: (index % 2 === 0 ? "user" : "assistant") as ChatMessageRecord["role"],
           actorType: (index % 2 === 0 ? "user" : "agent") as ChatMessageRecord["actorType"],
           actorId: index % 2 === 0 ? "verification-operator" : "goatherder",
+          sourceAuthority: index % 2 === 0 ? "operator" : "agent_proposed",
           content:
             index % 2 === 0
               ? `Verification long-thread prompt ${index + 1}`
@@ -322,6 +325,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       role: "user",
       actorType: "user",
       actorId: "verification-operator",
+      sourceAuthority: "operator",
       content: "Run the governed verification command.",
       timestamp: now,
     });
@@ -445,6 +449,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       role: "user",
       actorType: "user",
       actorId: "verification-operator",
+      sourceAuthority: "operator",
       content,
       timestamp: now,
     });

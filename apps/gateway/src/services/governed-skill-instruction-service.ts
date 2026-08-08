@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   canonicalJsonString,
+  PolicyViolationError,
   type ChatTurnCapabilityActivatedSkill,
   type ChatTurnCapabilityProfileRecord,
   type ChatTurnCapabilityTrustedSkill,
@@ -10,12 +11,39 @@ import {
   type SkillLifecycleRecord,
 } from "@goatcitadel/contracts";
 import { captureSkillContentIntegritySync } from "./skill-content-integrity.js";
+import {
+  PROMPTWARE_SCANNER_VERSION,
+  scanPromptwareContent,
+  type PromptwareRuleId,
+} from "./assembled-prompt-injection-guard.js";
 
 const DESIGN_SKILL_ID = "bundled:design-intelligence";
 const DESIGN_SKILL_NAME = "design-intelligence";
 const PRESENTATION_MODULE = { name: "presentation", relativePath: "presentation.md" } as const;
 const PRESENTATION_MODULE_MAX_BYTES = 8 * 1024;
 const PRESENTATION_INTENT = /\b(?:powerpoint|presentation|slide\s*deck|slides?|pptx|presentations\.create)\b/iu;
+const PROMPTWARE_CLEAN_CACHE_MAX = 256;
+const promptwareCleanCache = new Map<string, true>();
+
+export class SkillSecurityBlockedError extends PolicyViolationError {
+  public readonly failureClass = "skill_security_blocked" as const;
+  public readonly recoveryAction = "review_skill_security" as const;
+
+  public constructor(input: { skillIds: string[]; ruleIds: PromptwareRuleId[]; evidenceHashes: string[] }) {
+    const skillIds = [...new Set(input.skillIds)].sort();
+    super({
+      message: `Activated skill security blocked the turn before provider execution. Disable or re-review: ${skillIds.join(", ")}.`,
+      details: {
+        failureClass: "skill_security_blocked",
+        recoveryAction: "review_skill_security",
+        skillIds,
+        scannerVersion: PROMPTWARE_SCANNER_VERSION,
+        ruleIds: [...new Set(input.ruleIds)].sort(),
+        evidenceHashes: [...new Set(input.evidenceHashes)].sort(),
+      },
+    });
+  }
+}
 
 interface ActivatedSkillSource {
   skillId: string;
@@ -86,13 +114,47 @@ export function renderGovernedActivatedSkillInstructions(input: {
     if (canonicalJsonString(rebuilt.receipt) !== canonicalJsonString(expected)) {
       throw new Error(`Activated skill ${expected.skillId} instruction receipt drifted after profile freeze.`);
     }
+    assertRuntimeSkillPromptwareSafe([expected.skillId], rebuilt.instruction, rebuilt.receipt.instructionSha256);
     rendered.push(rebuilt.instruction);
   }
-  return [
+  const instructionBundle = [
     "Server-owned governed runtime skill instructions follow.",
     "These instructions were selected from the callable trusted catalog and hash-verified against the frozen lifecycle record.",
     ...rendered,
   ].join("\n\n");
+  assertRuntimeSkillPromptwareSafe(
+    receipts.map((receipt) => receipt.skillId),
+    instructionBundle,
+    createHash("sha256").update(instructionBundle, "utf8").digest("hex"),
+  );
+  return instructionBundle;
+}
+
+function assertRuntimeSkillPromptwareSafe(skillIds: string[], instruction: string, instructionSha256: string): void {
+  const cacheKey = `${PROMPTWARE_SCANNER_VERSION}:${instructionSha256}`;
+  if (promptwareCleanCache.has(cacheKey)) {
+    promptwareCleanCache.delete(cacheKey);
+    promptwareCleanCache.set(cacheKey, true);
+    return;
+  }
+  const findings = scanPromptwareContent({
+    source: "imported_skill",
+    sourcePath: skillIds.length === 1 ? `runtime:${skillIds[0]}` : "runtime:activated-skill-bundle",
+    content: instruction,
+  });
+  if (findings.length > 0) {
+    throw new SkillSecurityBlockedError({
+      skillIds,
+      ruleIds: findings.map((finding) => finding.ruleId),
+      evidenceHashes: findings.map((finding) => finding.evidenceHash),
+    });
+  }
+  promptwareCleanCache.set(cacheKey, true);
+  while (promptwareCleanCache.size > PROMPTWARE_CLEAN_CACHE_MAX) {
+    const oldest = promptwareCleanCache.keys().next().value as string | undefined;
+    if (!oldest) break;
+    promptwareCleanCache.delete(oldest);
+  }
 }
 
 function buildReceipt(input: {

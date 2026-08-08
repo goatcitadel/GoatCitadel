@@ -36,6 +36,7 @@ type MemoryRoutePort = Pick<
   | "listTraceMemoryCandidates"
   | "proposeTraceMemoryCandidate"
   | "promoteTraceMemoryCandidate"
+  | "rejectTraceMemoryCandidate"
   | "recallMemory"
   | "proposeMemoryLearning"
   | "supersedeMemoryLearning"
@@ -153,6 +154,10 @@ export class MemoryRouteService {
 
   public promoteTraceCandidate(candidateId: string, actorId: string) {
     return this.memory.promoteTraceMemoryCandidate(candidateId, actorId);
+  }
+
+  public rejectTraceCandidate(candidateId: string, actorId: string) {
+    return this.memory.rejectTraceMemoryCandidate(candidateId, actorId);
   }
 
   public listItems(input: Parameters<MemoryRoutePort["listMemoryItems"]>[0]) {

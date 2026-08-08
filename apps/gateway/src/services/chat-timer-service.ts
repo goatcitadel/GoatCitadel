@@ -137,6 +137,7 @@ export class ChatTimerService {
       role: "assistant",
       actorType: "system",
       actorId: "chat-timer",
+      sourceAuthority: "trusted_lifecycle",
       content: timer.message,
       timestamp: now,
     };

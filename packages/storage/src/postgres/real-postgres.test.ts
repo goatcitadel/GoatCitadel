@@ -986,6 +986,7 @@ test(
         role: "user" as const,
         actorType: "user" as const,
         actorId: "operator",
+        sourceAuthority: "operator" as const,
         content: "Execute exactly once",
         timestamp: now,
       };
@@ -7070,6 +7071,106 @@ test(
          WHERE reservation_id = 'reservation-null-scope'`,
       );
       assert.deepEqual(untouched.rows, [{ status: "reserved", scope_ref: null }]);
+    } finally {
+      await scopedPool.end();
+      await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
+      await adminPool.end();
+    }
+  },
+);
+
+test(
+  "real Postgres migration 133 backfills authority and quarantines untrusted learned memory",
+  { skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane" },
+  async () => {
+    assert.ok(connectionString);
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
+    const schemaName = `coverage_memory_authority_v133_${suffix}`;
+    const adminPool = new Pool({ connectionString });
+    const scopedUrl = new URL(connectionString);
+    scopedUrl.searchParams.set("options", `-csearch_path=${schemaName}`);
+    const scopedPool = new Pool({ connectionString: scopedUrl.toString(), max: 2 });
+    const migrationClient = new PostgresDatabaseClient(
+      { connectionString: scopedUrl.toString(), database: "goatcitadel_test" },
+      { pool: scopedPool },
+    );
+    try {
+      await adminPool.query(`CREATE SCHEMA ${schemaName}`);
+      await runPostgresMigrations(
+        migrationClient,
+        POSTGRES_MIGRATIONS.filter((migration) => migration.version <= 132),
+      );
+      await scopedPool.query(`
+        INSERT INTO chat_session_bindings (
+          session_id, transport, connection_id, target_json, writable, created_at, updated_at, workspace_id
+        ) VALUES (
+          'session-external', 'integration', NULL, NULL, 1,
+          '2026-08-08T00:00:00.000Z', '2026-08-08T00:00:00.000Z', 'default'
+        );
+        INSERT INTO chat_messages (
+          message_id, session_id, role, actor_type, actor_id, content, timestamp, created_at
+        ) VALUES
+          ('msg-assistant', 'session-local', 'assistant', 'agent', 'agent-1', 'assistant output',
+           '2026-08-08T00:00:00.000Z', '2026-08-08T00:00:00.000Z'),
+          ('msg-external', 'session-external', 'user', 'user', 'operator', 'external input',
+           '2026-08-08T00:00:00.000Z', '2026-08-08T00:00:00.000Z'),
+          ('msg-operator', 'session-local', 'user', 'user', 'operator', 'local input',
+           '2026-08-08T00:00:00.000Z', '2026-08-08T00:00:00.000Z'),
+          ('msg-system', 'session-local', 'assistant', 'system', 'runtime', 'system output',
+           '2026-08-08T00:00:00.000Z', '2026-08-08T00:00:00.000Z');
+        INSERT INTO learned_memory_items (
+          item_id, session_id, item_type, content, confidence, status, redacted, created_at, updated_at
+        ) VALUES
+          ('memory-assistant', 'session-local', 'fact', 'assistant memory', 0.5, 'active', 0,
+           '2026-08-08T00:00:00.000Z', '2026-08-08T00:00:00.000Z'),
+          ('memory-external', 'session-external', 'fact', 'external memory', 0.5, 'active', 0,
+           '2026-08-08T00:00:00.000Z', '2026-08-08T00:00:00.000Z'),
+          ('memory-unresolved', 'session-external', 'fact', 'unresolved memory', 0.5, 'active', 0,
+           '2026-08-08T00:00:00.000Z', '2026-08-08T00:00:00.000Z'),
+          ('memory-operator', 'session-local', 'fact', 'operator memory', 0.5, 'active', 0,
+           '2026-08-08T00:00:00.000Z', '2026-08-08T00:00:00.000Z');
+        INSERT INTO learned_memory_sources (source_id, item_id, source_kind, source_ref, created_at) VALUES
+          ('source-assistant', 'memory-assistant', 'assistant', 'msg-assistant', '2026-08-08T00:00:00.000Z'),
+          ('source-external', 'memory-external', 'user', 'msg-external', '2026-08-08T00:00:00.000Z'),
+          ('source-operator', 'memory-operator', 'user', 'msg-operator', '2026-08-08T00:00:00.000Z');
+      `);
+
+      const applied = await runPostgresMigrations(migrationClient, POSTGRES_MIGRATIONS);
+      assert.deepEqual(applied.appliedVersions, [133]);
+      const authorities = await scopedPool.query<{ message_id: string; source_authority: string }>(
+        "SELECT message_id, source_authority FROM chat_messages ORDER BY message_id",
+      );
+      assert.deepEqual(authorities.rows, [
+        { message_id: "msg-assistant", source_authority: "agent_proposed" },
+        { message_id: "msg-external", source_authority: "external_channel" },
+        { message_id: "msg-operator", source_authority: "operator" },
+        { message_id: "msg-system", source_authority: "trusted_lifecycle" },
+      ]);
+      const memories = await scopedPool.query<{ item_id: string; status: string; disabled_reason: string | null }>(
+        "SELECT item_id, status, disabled_reason FROM learned_memory_items ORDER BY item_id",
+      );
+      assert.deepEqual(memories.rows, [
+        {
+          item_id: "memory-assistant",
+          status: "disabled",
+          disabled_reason: "external_authority_unverified_migration",
+        },
+        {
+          item_id: "memory-external",
+          status: "disabled",
+          disabled_reason: "external_authority_unverified_migration",
+        },
+        { item_id: "memory-operator", status: "active", disabled_reason: null },
+        {
+          item_id: "memory-unresolved",
+          status: "disabled",
+          disabled_reason: "external_authority_unverified_migration",
+        },
+      ]);
+      const reconciliation = await scopedPool.query<{ quarantined_count: string }>(
+        "SELECT quarantined_count::text FROM memory_authority_migration_reconciliation WHERE migration_id = 'postgres-133'",
+      );
+      assert.deepEqual(reconciliation.rows, [{ quarantined_count: "3" }]);
     } finally {
       await scopedPool.end();
       await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);

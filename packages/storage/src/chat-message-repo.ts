@@ -2,7 +2,12 @@
 import { randomUUID } from "node:crypto";
 
 import type { DatabaseClient } from "./db.js";
-import type { ChatInputPart, ChatMessageRecord, ChatMessageRole } from "@goatcitadel/contracts";
+import type {
+  ChatInputPart,
+  ChatMessageRecord,
+  ChatMessageRole,
+  ChatMessageSourceAuthority,
+} from "@goatcitadel/contracts";
 import { loadAndSanitize, type QuarantineEntry } from "./load-and-sanitize.js";
 import { parseJsonArray } from "./state-validators.js";
 
@@ -16,6 +21,7 @@ interface ChatMessageRow {
   role: ChatMessageRole;
   actor_type: "user" | "agent" | "system";
   actor_id: string;
+  source_authority: ChatMessageSourceAuthority | null;
   content: string;
   parts_json: string | null;
   attachments_json: string | null;
@@ -191,16 +197,17 @@ export class ChatMessageRepository {
   ) {
     this.upsertStmt = db.prepare(`
       INSERT INTO chat_messages (
-        message_id, session_id, role, actor_type, actor_id, content, parts_json, attachments_json,
+        message_id, session_id, role, actor_type, actor_id, source_authority, content, parts_json, attachments_json,
         timestamp, token_input, token_output, cost_usd, created_at, steered, parent_delegation_step_id
       ) VALUES (
-        @messageId, @sessionId, @role, @actorType, @actorId, @content, @partsJson, @attachmentsJson,
+        @messageId, @sessionId, @role, @actorType, @actorId, @sourceAuthority, @content, @partsJson, @attachmentsJson,
         @timestamp, @tokenInput, @tokenOutput, @costUsd, @createdAt, @steered, @parentDelegationStepId
       )
       ON CONFLICT(message_id) DO UPDATE SET
         role = excluded.role,
         actor_type = excluded.actor_type,
         actor_id = excluded.actor_id,
+        source_authority = chat_messages.source_authority,
         content = excluded.content,
         parts_json = excluded.parts_json,
         attachments_json = excluded.attachments_json,
@@ -491,6 +498,7 @@ export class ChatMessageRepository {
       role: message.role,
       actorType: message.actorType,
       actorId: message.actorId,
+      sourceAuthority: assertSourceAuthority(message.sourceAuthority),
       content: message.content,
       partsJson: message.parts ? JSON.stringify(message.parts) : null,
       attachmentsJson: message.attachments ? JSON.stringify(message.attachments) : null,
@@ -515,6 +523,7 @@ export class ChatMessageRepository {
       "role",
       "actor_type",
       "actor_id",
+      "source_authority",
       "content",
       "parts_json",
       "attachments_json",
@@ -538,6 +547,7 @@ export class ChatMessageRepository {
             role = excluded.role,
             actor_type = excluded.actor_type,
             actor_id = excluded.actor_id,
+            source_authority = chat_messages.source_authority,
             content = excluded.content,
             parts_json = excluded.parts_json,
             attachments_json = excluded.attachments_json,
@@ -556,6 +566,7 @@ export class ChatMessageRepository {
             message.role,
             message.actorType,
             message.actorId,
+            assertSourceAuthority(message.sourceAuthority),
             message.content,
             message.parts ? JSON.stringify(message.parts) : null,
             message.attachments ? JSON.stringify(message.attachments) : null,
@@ -997,6 +1008,7 @@ export class ChatMessageRepository {
       role: row.role,
       actorType: row.actor_type,
       actorId: row.actor_id,
+      sourceAuthority: normalizeStoredSourceAuthority(row.source_authority),
       content: row.content,
       timestamp: row.timestamp,
       tokenInput: row.token_input ?? undefined,
@@ -1121,6 +1133,9 @@ function isChatMessageRow(value: unknown): value is ChatMessageRow {
     typeof value.role === "string" &&
     typeof value.actor_type === "string" &&
     typeof value.actor_id === "string" &&
+    (typeof value.source_authority === "string" ||
+      value.source_authority === null ||
+      value.source_authority === undefined) &&
     typeof value.content === "string" &&
     (typeof value.parts_json === "string" || value.parts_json === null) &&
     (typeof value.attachments_json === "string" || value.attachments_json === null) &&
@@ -1360,4 +1375,25 @@ function coerceNumber(value: unknown): number | undefined {
     return Number.isFinite(parsed) ? parsed : undefined;
   }
   return undefined;
+}
+
+const CHAT_MESSAGE_SOURCE_AUTHORITIES = new Set<ChatMessageSourceAuthority>([
+  "operator",
+  "external_channel",
+  "agent_proposed",
+  "trusted_lifecycle",
+  "unknown",
+]);
+
+function assertSourceAuthority(value: ChatMessageSourceAuthority): ChatMessageSourceAuthority {
+  if (!CHAT_MESSAGE_SOURCE_AUTHORITIES.has(value)) {
+    throw new Error("Chat message writes require a valid server-owned source authority");
+  }
+  return value;
+}
+
+function normalizeStoredSourceAuthority(value: unknown): ChatMessageSourceAuthority {
+  return typeof value === "string" && CHAT_MESSAGE_SOURCE_AUTHORITIES.has(value as ChatMessageSourceAuthority)
+    ? (value as ChatMessageSourceAuthority)
+    : "unknown";
 }

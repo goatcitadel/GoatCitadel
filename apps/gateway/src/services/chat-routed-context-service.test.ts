@@ -115,6 +115,7 @@ function profile(): ChatTurnCapabilityProfileRecord {
 
 function deps(
   input: {
+    sessionKind?: "dm" | "group" | "thread";
     attachments?: Record<string, { record: ChatAttachmentRecord; text: string; delay?: number }>;
     memories?: Record<string, MemoryItemRecord>;
     notes?: Record<string, NoteRecord>;
@@ -122,6 +123,7 @@ function deps(
   } = {},
 ): ChatRoutedContextSourceDeps {
   return {
+    getSessionKind: vi.fn(async () => input.sessionKind ?? "dm"),
     getAttachment: vi.fn((id) => {
       const value = input.attachments?.[id];
       if (!value) throw new Error(`missing ${id}`);
@@ -139,15 +141,91 @@ function deps(
       if (!item) throw new Error(`missing ${id}`);
       return item;
     }),
-    getGeneratedArtifact: vi.fn((id) => {
+    getGeneratedArtifact: vi.fn((id, scope) => {
       const item = input.artifacts?.[id];
       if (!item) throw new Error(`missing ${id}`);
+      if (
+        (item.workspaceId ?? "default") !== scope.workspaceId ||
+        (scope.sessionId && item.sessionId !== scope.sessionId)
+      ) {
+        throw new Error(`missing ${id}`);
+      }
       return item;
     }),
   };
 }
 
 describe("chat routed context service", () => {
+  it("rejects private memory references in shared sessions before reading either source", async () => {
+    const host = deps({
+      sessionKind: "group",
+      memories: { private: memory("private", "private bytes") },
+    });
+
+    await expect(
+      resolveChatRoutedContextSources(host, {
+        refs: [
+          { kind: "memory_item", ref: "private" },
+          { kind: "personal_note", ref: "private-note" },
+        ],
+        sessionId: "session-1",
+        workspaceId: "workspace-1",
+        memoryMode: "on",
+        allowGlobalMemory: false,
+      }),
+    ).rejects.toThrow(/unavailable in shared sessions/u);
+
+    expect(host.getActiveMemoryItem).not.toHaveBeenCalled();
+    expect(host.getPersonalNote).not.toHaveBeenCalled();
+    expect(host.getAttachment).not.toHaveBeenCalled();
+  });
+
+  it("allows same-session generated artifacts in shared sessions and rejects foreign-session artifacts", async () => {
+    const sameSession: ChatGeneratedArtifactRecord = {
+      artifactId: "artifact-same",
+      sessionId: "session-1",
+      workspaceId: "workspace-1",
+      turnId: "turn-1",
+      title: "Same session",
+      kind: "markdown",
+      content: "same-session artifact bytes",
+      sourceSurface: "chat",
+      version: 1,
+      contentHash: hash("same-session artifact bytes"),
+      createdAt: "2026-08-08T00:00:00.000Z",
+      updatedAt: "2026-08-08T00:00:00.000Z",
+    };
+    const foreign = { ...sameSession, artifactId: "artifact-foreign", sessionId: "session-foreign" };
+    const host = deps({
+      sessionKind: "thread",
+      artifacts: { "artifact-same": sameSession, "artifact-foreign": foreign },
+    });
+
+    const resolved = await resolveChatRoutedContextSources(host, {
+      refs: [{ kind: "generated_artifact", ref: "artifact-same" }],
+      sessionId: "session-1",
+      workspaceId: "workspace-1",
+      memoryMode: "on",
+      allowGlobalMemory: false,
+    });
+    expect(resolved.accessMode).toBe("session_only");
+    expect(resolved.sources[0]?.text).toBe("same-session artifact bytes");
+
+    await expect(
+      resolveChatRoutedContextSources(host, {
+        refs: [{ kind: "generated_artifact", ref: "artifact-foreign" }],
+        sessionId: "session-1",
+        workspaceId: "workspace-1",
+        memoryMode: "on",
+        allowGlobalMemory: false,
+      }),
+    ).rejects.toThrow(/missing artifact-foreign/u);
+    expect(host.getGeneratedArtifact).toHaveBeenLastCalledWith("artifact-foreign", {
+      workspaceId: "workspace-1",
+      sessionId: "session-1",
+    });
+  });
+
   it("freezes personal notes and generated artifacts with revision and hash provenance", async () => {
     const note: NoteRecord = {
       noteId: "note-1",

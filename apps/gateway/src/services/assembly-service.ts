@@ -3922,6 +3922,7 @@ async function writeAssemblyExports(
       role: "assistant",
       actorType: "system",
       actorId: "assembly",
+      sourceAuthority: "trusted_lifecycle",
       content: markdown.slice(0, 8_000),
       timestamp: new Date().toISOString(),
     });

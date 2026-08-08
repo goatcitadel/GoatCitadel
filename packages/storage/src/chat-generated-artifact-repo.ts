@@ -137,6 +137,42 @@ export class ChatGeneratedArtifactRepository {
     return mapRow(row);
   }
 
+  /**
+   * Loads an artifact only when its canonical workspace/session provenance is
+   * already inside the caller's effective context boundary. Keeping the
+   * predicates in SQL prevents foreign artifact content from being returned to
+   * the gateway merely so it can reject the record afterward.
+   */
+  public getForContext(
+    artifactId: string,
+    scope: { workspaceId: string; sessionId?: string },
+  ): ChatGeneratedArtifactRecord {
+    const clauses = ["artifact_id = @artifactId", "COALESCE(workspace_id, 'default') = @workspaceId"];
+    if (scope.sessionId !== undefined) {
+      clauses.push("session_id = @sessionId");
+    }
+    const row = toChatGeneratedArtifactRow(
+      this.db
+        .prepare(
+          `
+          SELECT *
+          FROM chat_generated_artifacts
+          WHERE ${clauses.join(" AND ")}
+          LIMIT 1
+        `,
+        )
+        .get({
+          artifactId: sanitizeRequired(artifactId, "artifactId"),
+          workspaceId: sanitizeRequired(scope.workspaceId, "workspaceId"),
+          ...(scope.sessionId !== undefined ? { sessionId: sanitizeRequired(scope.sessionId, "sessionId") } : {}),
+        }),
+    );
+    if (!row) {
+      throw new NotFoundError({ entity: "Generated artifact", id: artifactId });
+    }
+    return mapRow(row);
+  }
+
   public listBySession(sessionId: string, limit = 200): ChatGeneratedArtifactRecord[] {
     const rows = toChatGeneratedArtifactRows(
       this.listBySessionStmt.all({

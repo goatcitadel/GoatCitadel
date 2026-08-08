@@ -105,6 +105,7 @@ export async function persistContextManifestForCompletionRequest(
       originalTokenEstimate: input.memoryContext.originalTokenEstimate,
       distilledTokenEstimate: input.memoryContext.distilledTokenEstimate,
       assembly: input.memoryContext.quality.assembly,
+      accessReceipt: input.memoryContext.quality.accessReceipt,
       placement: input.memoryContextPlacement,
       createdAt: input.memoryContext.createdAt,
       expiresAt: input.memoryContext.expiresAt,

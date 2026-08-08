@@ -255,6 +255,7 @@ const traceCandidateCreateSchema = z.object({
   candidateType: traceCandidateTypeSchema.optional(),
   sourceText: z.string().trim().min(1).optional(),
   sourceSessionId: z.string().trim().min(1).optional(),
+  sourceMessageId: z.string().trim().min(1).optional(),
   sourceRunId: z.string().trim().min(1).optional(),
   sourceTurnId: z.string().trim().min(1).optional(),
   toolCallId: z.string().trim().min(1).optional(),
@@ -713,17 +714,23 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/memory/trace-candidates/:candidateId/promote", operatorOnly, async (request, reply) => {
-    const parsed = traceCandidateParamsSchema.safeParse(request.params);
-    if (!parsed.success) {
-      return reply.code(400).send({ error: parsed.error.flatten() });
-    }
-    try {
-      return reply.send(await memory.promoteTraceCandidate(parsed.data.candidateId, resolveActorId(request)));
-    } catch (error) {
-      return sendRouteError(reply, error, request.log);
-    }
-  });
+  for (const action of ["promote", "reject"] as const) {
+    fastify.post(`/api/v1/memory/trace-candidates/:candidateId/${action}`, operatorOnly, async (request, reply) => {
+      const parsed = traceCandidateParamsSchema.safeParse(request.params);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: parsed.error.flatten() });
+      }
+      try {
+        const candidate =
+          action === "promote"
+            ? await memory.promoteTraceCandidate(parsed.data.candidateId, resolveActorId(request))
+            : await memory.rejectTraceCandidate(parsed.data.candidateId, resolveActorId(request));
+        return reply.send(candidate);
+      } catch (error) {
+        return sendRouteError(reply, error, request.log);
+      }
+    });
+  }
 
   fastify.get("/api/v1/memory/items", operatorOnly, async (request, reply) => {
     const parsed = listItemsQuerySchema.safeParse(request.query);

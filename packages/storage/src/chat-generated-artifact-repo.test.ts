@@ -108,6 +108,18 @@ describe("ChatGeneratedArtifactRepository", () => {
     assert.equal(second.supersedesArtifactId, "artifact-1");
     assert.equal(second.sourceBlockIndex, 4);
     assert.equal(repo.get("artifact-2").model, "claude-sonnet-4.5");
+    assert.equal(
+      repo.getForContext("artifact-2", { workspaceId: "workspace-1", sessionId: "session-1" }).artifactId,
+      "artifact-2",
+    );
+    assert.throws(
+      () => repo.getForContext("artifact-2", { workspaceId: "workspace-1", sessionId: "foreign-session" }),
+      /Generated artifact artifact-2 not found/,
+    );
+    assert.throws(
+      () => repo.getForContext("artifact-2", { workspaceId: "foreign-workspace" }),
+      /Generated artifact artifact-2 not found/,
+    );
 
     assert.deepEqual(
       repo.listBySession("session-1").map((item) => item.artifactId),
@@ -168,6 +180,10 @@ describe("ChatGeneratedArtifactRepository", () => {
   it("rejects missing required fields and missing artifacts", () => {
     const repo = createRepo();
     assert.throws(() => repo.get("missing-artifact"), /Generated artifact missing-artifact not found/);
+    assert.throws(
+      () => repo.getForContext("missing-artifact", { workspaceId: "workspace-1", sessionId: "session-1" }),
+      /Generated artifact missing-artifact not found/,
+    );
     assert.throws(() => repo.create(artifact({ artifactId: "   " })), /artifactId is required/);
     assert.throws(() => repo.create(artifact({ sessionId: "   " })), /sessionId is required/);
     assert.throws(() => repo.create(artifact({ turnId: "   " })), /turnId is required/);

@@ -485,6 +485,8 @@ export function buildUserSafeFailureMessage(failure: ChatTurnFailureRecord): str
       return "This turn is waiting for approval before it can continue.";
     case "interrupted_by_restart":
       return "The gateway restarted while this turn was running, so it never finished. Retry to run it again.";
+    case "skill_security_blocked":
+      return "An activated skill failed the runtime security scan before any model call. Disable or re-review the named skill, then retry.";
     default:
       return "This turn failed before completion. Retry once, or narrow the request so the next pass can finish cleanly.";
   }

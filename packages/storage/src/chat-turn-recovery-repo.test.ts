@@ -49,6 +49,7 @@ function message(overrides: Partial<ChatMessageRecord> = {}): ChatMessageRecord 
     role: "user",
     actorType: "user",
     actorId: "operator",
+    sourceAuthority: "operator",
     content: "hello",
     timestamp: "2026-07-07T19:46:19.000Z",
     ...overrides,

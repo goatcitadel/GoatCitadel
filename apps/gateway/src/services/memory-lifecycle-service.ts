@@ -5,9 +5,11 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import type {
   ChatTurnTraceRecord,
+  ChatMessageSourceAuthority,
   DurableRunRecord,
   LearnedMemoryConflictRecord,
   LearnedMemoryItemRecord,
+  LearnedMemoryItemType,
   LearnedMemoryUpdateInput,
   MemoryWriteAuthority,
   MemoryBatchMutationOperation,
@@ -71,6 +73,7 @@ import type {
   StructuredMemorySourceRef,
   StructuredMemoryStatus,
   TraceMemoryCandidateInput,
+  TraceMemoryCandidateAuthority,
   TraceMemoryCandidateRecord,
   TraceMemoryCandidateStatus,
   TraceMemoryCandidateType,
@@ -96,6 +99,7 @@ import {
 } from "@goatcitadel/policy-engine";
 import { buildMemoryWorkspaceScopeSql } from "@goatcitadel/storage";
 import { ChatLearnedMemoryService } from "./chat-learned-memory-service.js";
+import { extractLearnedMemoryCandidates, shouldExtractLearnedMemoryContent } from "./learned-memory-utils.js";
 import { MemoryContextService } from "./memory-context-service.js";
 import { mapMemoryItemRow, recordMemoryChange, requireMemoryItem, type MemoryItemHost } from "./memory-item-helpers.js";
 import { withMemoryEmbeddingMetadata, type MemoryEmbeddingRuntimeOptions } from "./memory-embedding-metadata.js";
@@ -223,7 +227,7 @@ interface MemoryForgetSelectionRow {
 interface MemoryLifecycleAdminDependencies extends MemoryItemHost {
   gatewaySql: AsyncGatewaySqlRepository;
   memoryQualityIssues: Pick<AsyncStorage["memoryQualityIssues"], "list" | "upsertOpenIssue" | "patchStatus">;
-  requireFeatureEnabled(flag: string): void;
+  requireFeatureEnabled(flag: string): void | Promise<void>;
   publishRealtime(channel: string, topic: string, payload: Record<string, unknown>): Promise<unknown>;
 }
 
@@ -305,7 +309,7 @@ export class MemoryLifecycleService {
     requesterId: string,
     hooks: MemoryMutationRequestHooks = {},
   ): Promise<MemoryMutationApprovalEnvelope> {
-    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     const approvedPatch = snapshotApprovedMemoryItemPatch(patch);
     const current = requireWorkspaceOwnedMemoryItem(await requireMemoryItem(this.deps.admin, itemId));
     const binding = buildMemoryLifecycleApprovalBinding({
@@ -345,7 +349,7 @@ export class MemoryLifecycleService {
     input: MemoryForgetRequest & { requesterId: string },
     hooks: MemoryMutationRequestHooks = {},
   ): Promise<MemoryForgetApprovalOutcome> {
-    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     if ((input.itemIds?.length ?? 0) > MEMORY_FORGET_MAX_ITEM_IDS) {
       throw new ValidationError({
         code: "FIELD_INVALID",
@@ -445,7 +449,7 @@ export class MemoryLifecycleService {
     requesterId: string,
     hooks: MemoryMutationRequestHooks = {},
   ): Promise<MemoryMutationApprovalEnvelope> {
-    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     const operations = snapshotApprovedBatchOperations(normalizeBatchMutationOperations(input.operations));
     const items = await Promise.all(
       operations.map(async (operation) =>
@@ -689,7 +693,7 @@ export class MemoryLifecycleService {
       throw new MemoryLifecycleApplyError("memory_lifecycle_approval_not_executable");
     }
     try {
-      this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+      await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     } catch {
       throw new MemoryLifecycleApplyError("memory_lifecycle_policy_blocked");
     }
@@ -817,7 +821,7 @@ export class MemoryLifecycleService {
       limit?: number;
     } = {},
   ): Promise<MemoryLearningRecord[]> {
-    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     await this.ensureLearningSchema();
     const clauses = ["workspace_id = @workspaceId"];
     const params: Record<string, string | number> = {
@@ -934,7 +938,7 @@ export class MemoryLifecycleService {
       limit?: number;
     } = {},
   ): Promise<MemoryLearningStalenessReport> {
-    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     await this.ensureLearningSchema();
     const checkedAt = new Date().toISOString();
     const learnings = input.learningId
@@ -949,7 +953,7 @@ export class MemoryLifecycleService {
   public async listMemoryEntities(
     input: { workspaceId?: string; status?: StructuredMemoryStatus | "all"; query?: string; limit?: number } = {},
   ): Promise<MemoryEntityRecord[]> {
-    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     const clauses = ["workspace_id = @workspaceId"];
     const params: Record<string, string | number> = {
       workspaceId: normalizeStructuredWorkspaceId(input.workspaceId),
@@ -981,7 +985,7 @@ export class MemoryLifecycleService {
   }
 
   public async createMemoryEntity(input: MemoryEntityInput, actorId = "operator"): Promise<MemoryEntityRecord> {
-    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     const now = new Date().toISOString();
     const title = requireTrimmedText(input.title, "title");
     const summary = optionalTrimmedText(input.summary);
@@ -1074,7 +1078,7 @@ export class MemoryLifecycleService {
   }
 
   public async forgetMemoryEntity(entityId: string, actorId = "operator"): Promise<MemoryEntityRecord> {
-    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     const current = await this.requireMemoryEntity(entityId);
     if (current.status === "forgotten") {
       return current;
@@ -1130,7 +1134,7 @@ export class MemoryLifecycleService {
   public async listMemoryRelations(
     input: { workspaceId?: string; status?: StructuredMemoryStatus | "all"; entityId?: string; limit?: number } = {},
   ): Promise<MemoryRelationRecord[]> {
-    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     const clauses = ["workspace_id = @workspaceId"];
     const params: Record<string, string | number> = {
       workspaceId: normalizeStructuredWorkspaceId(input.workspaceId),
@@ -1159,7 +1163,7 @@ export class MemoryLifecycleService {
   }
 
   public async createMemoryRelation(input: MemoryRelationInput, actorId = "operator"): Promise<MemoryRelationRecord> {
-    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     const from = await this.requireMemoryEntity(input.fromEntityId);
     const to = await this.requireMemoryEntity(input.toEntityId);
     if (from.status !== "active" || to.status !== "active") {
@@ -1266,7 +1270,7 @@ export class MemoryLifecycleService {
       limit?: number;
     } = {},
   ): Promise<MemoryDecisionRecord[]> {
-    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     const clauses = ["workspace_id = @workspaceId"];
     const params: Record<string, string | number> = {
       workspaceId: normalizeStructuredWorkspaceId(input.workspaceId),
@@ -1295,7 +1299,7 @@ export class MemoryLifecycleService {
   }
 
   public async createMemoryDecision(input: MemoryDecisionInput, actorId = "operator"): Promise<MemoryDecisionRecord> {
-    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     const now = new Date().toISOString();
     const decisionText = requireTrimmedText(input.decision, "decision");
     const rationale = requireTrimmedText(input.rationale, "rationale");
@@ -1410,7 +1414,7 @@ export class MemoryLifecycleService {
     input: MemoryDecisionRetrospectiveInput,
     actorId = "operator",
   ): Promise<MemoryDecisionRecord> {
-    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     const current = await this.requireMemoryDecision(decisionId);
     const now = new Date().toISOString();
     const retrospective: MemoryDecisionRetrospective = {
@@ -1467,7 +1471,7 @@ export class MemoryLifecycleService {
   }
 
   public async forgetMemoryDecision(decisionId: string, actorId = "operator"): Promise<MemoryDecisionRecord> {
-    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     const current = await this.requireMemoryDecision(decisionId);
     if (current.status === "forgotten") {
       return current;
@@ -1507,7 +1511,7 @@ export class MemoryLifecycleService {
     recordId: string,
     limit = 100,
   ): Promise<MemoryChangeEvent[]> {
-    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     const rows = await this.deps.admin.gatewaySql
       .prepare(
         `
@@ -1581,7 +1585,7 @@ export class MemoryLifecycleService {
       limit?: number;
     } = {},
   ): Promise<MemoryItemRecord[]> {
-    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     const namespace = input.namespace?.trim();
     const workspaceId = input.workspaceId?.trim();
     const status = input.status && input.status !== "all" ? input.status : undefined;
@@ -1908,7 +1912,7 @@ export class MemoryLifecycleService {
     actorId = "operator",
     approvedMutation?: ApprovedMemoryMutationContext,
   ): Promise<MemoryItemRecord> {
-    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     if (!approvedMutation) {
       throw new ConflictError({
         code: "STATE_CONFLICT",
@@ -2088,7 +2092,7 @@ export class MemoryLifecycleService {
     actorId = "operator",
     options: MemoryForgetItemOptions = {},
   ): Promise<MemoryItemRecord> {
-    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     if (!options.approvedMutation) {
       throw new ConflictError({
         code: "STATE_CONFLICT",
@@ -2119,7 +2123,7 @@ export class MemoryLifecycleService {
     input: MemoryForgetRequest & { actorId?: string } = {},
     hooks: MemoryForgetCommitHooks = {},
   ): Promise<MemoryForgetResponse> {
-    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     if ((input.itemIds?.length ?? 0) > MEMORY_FORGET_MAX_ITEM_IDS) {
       throw new ValidationError({
         code: "FIELD_INVALID",
@@ -2403,7 +2407,7 @@ export class MemoryLifecycleService {
     actorId = "operator",
     approvedMutation?: ApprovedMemoryMutationContext,
   ): Promise<MemoryBatchMutationResponse> {
-    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     if (!approvedMutation) {
       throw new ConflictError({
         code: "STATE_CONFLICT",
@@ -2686,7 +2690,7 @@ export class MemoryLifecycleService {
   }
 
   public async listMemoryItemHistory(itemId: string, limit = 200): Promise<MemoryChangeEvent[]> {
-    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     const safeLimit = Math.max(1, Math.min(2_000, Math.floor(limit)));
     const rows = await this.deps.admin.gatewaySql
       .prepare(
@@ -2756,7 +2760,7 @@ export class MemoryLifecycleService {
       limit?: number;
     } = {},
   ): Promise<MemoryFeedbackRecord[]> {
-    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     await this.ensureFeedbackSchema();
     const clauses = ["workspace_id = @workspaceId"];
     const params: Record<string, string | number> = {
@@ -2790,7 +2794,7 @@ export class MemoryLifecycleService {
   }
 
   public async recordMemoryFeedback(input: MemoryFeedbackInput, actorId = "operator"): Promise<MemoryFeedbackRecord> {
-    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     await this.ensureFeedbackSchema();
     const workspaceId = normalizeStructuredWorkspaceId(input.workspaceId);
     await this.assertMemoryFeedbackContentAllowed(
@@ -2853,7 +2857,7 @@ export class MemoryLifecycleService {
   }
 
   public async listMemoryQualityIssues(input: MemoryQualityIssueListRequest = {}): Promise<MemoryQualityIssueRecord[]> {
-    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     return await this.deps.admin.memoryQualityIssues.list({
       ...input,
       workspaceId: normalizeStructuredWorkspaceId(input.workspaceId),
@@ -2865,7 +2869,7 @@ export class MemoryLifecycleService {
     input: MemoryQualityScanRequest = {},
     actorId = "operator",
   ): Promise<MemoryQualityScanResponse> {
-    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     await this.ensureFeedbackSchema();
     await this.ensureLearningSchema();
     const generatedAt = new Date().toISOString();
@@ -3058,7 +3062,7 @@ export class MemoryLifecycleService {
     input: MemoryQualityIssuePatchInput,
     actorId = "operator",
   ): Promise<MemoryQualityIssueRecord> {
-    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     const record = await this.deps.admin.memoryQualityIssues.patchStatus(issueId, {
       status: normalizeMemoryQualityIssueStatus(input.status),
       resolutionNote: optionalTrimmedText(input.resolutionNote),
@@ -3080,7 +3084,7 @@ export class MemoryLifecycleService {
       limit?: number;
     } = {},
   ): Promise<TraceMemoryCandidateRecord[]> {
-    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     await this.ensureTraceCandidateSchema();
     const clauses = ["workspace_id = @workspaceId"];
     const params: Record<string, string | number> = {
@@ -3108,8 +3112,9 @@ export class MemoryLifecycleService {
   public async proposeTraceMemoryCandidate(
     input: TraceMemoryCandidateInput,
     actorId = "agent",
+    authority: TraceMemoryCandidateAuthority = "agent_proposed",
   ): Promise<TraceMemoryCandidateRecord> {
-    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     await this.ensureTraceCandidateSchema();
     const sourceText = normalizeTraceCandidateText(
       await this.resolveTraceCandidateSourceText(input),
@@ -3124,11 +3129,30 @@ export class MemoryLifecycleService {
       metadata: input.metadata ?? {},
     });
     await this.assertTraceCandidateContentAllowed(contentForGuard, input.workspaceId);
-    const now = new Date().toISOString();
-    const candidateId = randomUUID();
     const workspaceId = normalizeStructuredWorkspaceId(input.workspaceId);
+    const candidateType = normalizeTraceCandidateType(input.candidateType);
+    const dedupeKey = buildTraceMemoryCandidateDedupeKey({
+      workspaceId,
+      sourceSessionId: optionalTrimmedText(input.sourceSessionId),
+      sourceMessageId: optionalTrimmedText(input.sourceMessageId),
+      candidateType,
+      proposedInsight,
+      authority,
+    });
+    const existing = await this.deps.admin.gatewaySql
+      .prepare("SELECT * FROM memory_trace_candidates WHERE dedupe_key = ?")
+      .get<TraceMemoryCandidateRow>(dedupeKey);
+    if (existing) {
+      return mapTraceMemoryCandidateRow(this.deps.admin, existing);
+    }
+    const now = new Date().toISOString();
+    const candidateId = `trace-${dedupeKey.slice(0, 40)}`;
     const metadata = await withMemoryEmbeddingMetadata(
-      input.metadata ?? {},
+      {
+        ...(input.metadata ?? {}),
+        ...(input.sourceSessionId ? { sourceSessionId: input.sourceSessionId } : {}),
+        ...(input.sourceMessageId ? { sourceMessageId: input.sourceMessageId } : {}),
+      },
       buildStructuredMemoryEmbeddingText([proposedInsight, sourceText]),
       undefined,
       this.memoryEmbeddingRuntimeOptions({
@@ -3145,14 +3169,15 @@ export class MemoryLifecycleService {
     const candidate: TraceMemoryCandidateRecord = {
       candidateId,
       workspaceId,
-      candidateType: normalizeTraceCandidateType(input.candidateType),
+      candidateType,
       status: "proposed",
       sourceText,
       proposedInsight,
       confidence: normalizeConfidence(input.confidence),
       sourceRefs: normalizeTraceCandidateSourceRefs(input, actorId),
       metadata,
-      authority: "agent_proposed",
+      authority,
+      dedupeKey,
       actorId: optionalTrimmedText(actorId),
       createdAt: now,
       updatedAt: now,
@@ -3162,11 +3187,12 @@ export class MemoryLifecycleService {
         `
       INSERT INTO memory_trace_candidates (
         candidate_id, workspace_id, candidate_type, status, source_text, proposed_insight, confidence,
-        source_refs_json, metadata_json, authority, actor_id, promoted_learning_id, created_at, updated_at
+        source_refs_json, metadata_json, authority, actor_id, promoted_learning_id, dedupe_key, created_at, updated_at
       ) VALUES (
         @candidateId, @workspaceId, @candidateType, @status, @sourceText, @proposedInsight, @confidence,
-        @sourceRefsJson, @metadataJson, @authority, @actorId, NULL, @createdAt, @updatedAt
+        @sourceRefsJson, @metadataJson, @authority, @actorId, NULL, @dedupeKey, @createdAt, @updatedAt
       )
+      ON CONFLICT(dedupe_key) DO NOTHING
     `,
       )
       .run({
@@ -3180,31 +3206,43 @@ export class MemoryLifecycleService {
         sourceRefsJson: JSON.stringify(candidate.sourceRefs),
         metadataJson: JSON.stringify(candidate.metadata ?? {}),
         authority: candidate.authority,
+        dedupeKey: candidate.dedupeKey,
         actorId: candidate.actorId ?? null,
         createdAt: now,
         updatedAt: now,
       });
+    const canonical = await this.deps.admin.gatewaySql
+      .prepare("SELECT * FROM memory_trace_candidates WHERE dedupe_key = ?")
+      .get<TraceMemoryCandidateRow>(dedupeKey);
+    if (!canonical) {
+      throw new ConflictError({ message: "Trace memory candidate could not be persisted." });
+    }
+    const persistedCandidate = mapTraceMemoryCandidateRow(this.deps.admin, canonical);
     await this.deps.evidence?.createEnvelope({
       eventKind: "memory_write",
       workspaceId: candidate.workspaceId,
       metadata: {
         traceMemoryCandidate: true,
-        authority: candidate.authority,
-        status: candidate.status,
-        candidateType: candidate.candidateType,
-        claimPreview: candidate.proposedInsight.slice(0, 240),
+        authority: persistedCandidate.authority,
+        status: persistedCandidate.status,
+        candidateType: persistedCandidate.candidateType,
+        dedupeKey: persistedCandidate.dedupeKey,
+        claimPreview:
+          persistedCandidate.authority === "external_channel" || persistedCandidate.authority === "unknown"
+            ? "[redacted external proposal]"
+            : persistedCandidate.proposedInsight.slice(0, 240),
       },
     });
     await this.deps.admin.publishRealtime("system", "memory", {
       type: "memory_trace_candidate_proposed",
-      candidateId: candidate.candidateId,
-      candidateType: candidate.candidateType,
+      candidateId: persistedCandidate.candidateId,
+      candidateType: persistedCandidate.candidateType,
     });
-    return candidate;
+    return persistedCandidate;
   }
 
   public async promoteTraceMemoryCandidate(candidateId: string, actorId = "operator"): Promise<MemoryLearningRecord> {
-    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     await this.ensureTraceCandidateSchema();
     const candidate = await this.requireTraceMemoryCandidate(candidateId);
     if (candidate.status !== "proposed") {
@@ -3250,8 +3288,47 @@ export class MemoryLifecycleService {
     return learning;
   }
 
+  public async rejectTraceMemoryCandidate(
+    candidateId: string,
+    actorId = "operator",
+  ): Promise<TraceMemoryCandidateRecord> {
+    await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    await this.ensureTraceCandidateSchema();
+    const candidate = await this.requireTraceMemoryCandidate(candidateId);
+    if (candidate.status === "promoted") {
+      throw new ValidationError({ message: "Promoted trace memory candidates cannot be rejected." });
+    }
+    if (candidate.status === "proposed") {
+      const updatedAt = new Date().toISOString();
+      await this.deps.admin.gatewaySql
+        .prepare(
+          `UPDATE memory_trace_candidates
+           SET status = 'rejected', actor_id = @actorId, updated_at = @updatedAt
+           WHERE candidate_id = @candidateId AND status = 'proposed'`,
+        )
+        .run({ candidateId, actorId, updatedAt });
+      await this.deps.admin.publishRealtime("system", "memory", {
+        type: "memory_trace_candidate_rejected",
+        candidateId,
+      });
+      await this.deps.evidence?.createEnvelope({
+        eventKind: "memory_write",
+        workspaceId: candidate.workspaceId,
+        sessionId: candidate.sourceSessionId,
+        metadata: {
+          traceMemoryCandidate: true,
+          status: "rejected",
+          authority: candidate.authority,
+          dedupeKey: candidate.dedupeKey,
+          rejectedBy: actorId,
+        },
+      });
+    }
+    return await this.requireTraceMemoryCandidate(candidateId);
+  }
+
   public async recallMemory(input: MemoryRecallRequest): Promise<MemoryRecallResponse> {
-    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     const limit = Math.max(1, Math.min(25, Math.floor(input.limit ?? 8)));
     const workspaceId = normalizeStructuredWorkspaceId(input.workspaceId ?? input.workspace);
     const feedback = await this.listMemoryFeedback({ workspaceId, limit: 12 });
@@ -3391,6 +3468,7 @@ export class MemoryLifecycleService {
     source: {
       role: "user" | "assistant";
       sourceRef: string;
+      authority?: ChatMessageSourceAuthority;
       trace?: Pick<ChatTurnTraceRecord, "status" | "toolRuns">;
     },
   ): Promise<void> {
@@ -3410,12 +3488,28 @@ export class MemoryLifecycleService {
     ) {
       return;
     }
+    let storedSource: { source_authority?: string; role?: string; content?: string } | undefined;
+    try {
+      storedSource = await this.deps.admin.gatewaySql
+        .prepare("SELECT source_authority, role, content FROM chat_messages WHERE message_id = ? AND session_id = ?")
+        .get<{ source_authority?: string; role?: string; content?: string }>(source.sourceRef, sessionId);
+    } catch {
+      // Missing or unreadable canonical message authority is untrusted. The
+      // normalization below deliberately fails closed to `unknown`.
+      storedSource = undefined;
+    }
+    const canonicalSourceMatches =
+      storedSource !== undefined && storedSource.role === source.role && storedSource.content === content;
+    const sourceAuthority = canonicalSourceMatches
+      ? normalizeChatMessageSourceAuthority(storedSource?.source_authority)
+      : "unknown";
+    let gateDecision: ReturnType<MemoryWriteGateService["evaluate"]> | undefined;
     if (this.deps.writeGate) {
-      const authority: MemoryWriteAuthority = source.role === "user" ? "operator" : "agent_proposed";
+      const authority: MemoryWriteAuthority = sourceAuthority === "unknown" ? "external_channel" : sourceAuthority;
       const existingClaims = (await this.deps.learned.listChatSessionLearnedMemory(sessionId, 200)).items.map(
         (item) => item.content,
       );
-      const gateDecision = this.deps.writeGate.evaluate({
+      gateDecision = this.deps.writeGate.evaluate({
         authority,
         content,
         existingClaims,
@@ -3428,13 +3522,70 @@ export class MemoryLifecycleService {
         metadata: {
           decision: gateDecision,
           sourceRole: source.role,
+          sourceAuthority,
           sourceRef: source.sourceRef,
-          claimPreview: gateDecision.redactionStatus === "blocked_secret" ? "[redacted]" : content.slice(0, 240),
+          claimPreview:
+            sourceAuthority === "external_channel" || sourceAuthority === "unknown"
+              ? "[redacted external evidence]"
+              : gateDecision.redactionStatus === "blocked_secret"
+                ? "[redacted]"
+                : content.slice(0, 240),
         },
       });
-      if (gateDecision.decision !== "allowed") {
+      if (gateDecision.decision === "blocked") {
         return;
       }
+    }
+
+    if (sourceAuthority === "external_channel" || sourceAuthority === "unknown") {
+      if (!shouldExtractLearnedMemoryContent(content, source)) {
+        return;
+      }
+      const candidates = extractLearnedMemoryCandidates(content, source.role);
+      for (const candidate of candidates) {
+        try {
+          const evidenceHash = createHash("sha256").update(content).digest("hex");
+          await this.proposeTraceMemoryCandidate(
+            {
+              workspaceId,
+              candidateType: mapLearnedItemTypeToTraceCandidateType(candidate.itemType),
+              sourceText: `[redacted external evidence sha256:${evidenceHash}]`,
+              sourceSessionId: sessionId,
+              sourceMessageId: source.sourceRef,
+              proposedInsight: candidate.content,
+              confidence: candidate.confidence,
+              sourceRefs: [{ sourceType: "external", sourceRef: source.sourceRef }],
+              metadata: {
+                sourceAuthority,
+                sourceSessionId: sessionId,
+                sourceMessageId: source.sourceRef,
+                learnedMemoryItemType: candidate.itemType,
+                evidenceSha256: evidenceHash,
+                gateDecision,
+              },
+            },
+            "external-channel-ingest",
+            sourceAuthority,
+          );
+        } catch (error) {
+          await this.deps.evidence?.createEnvelope({
+            eventKind: "memory_write",
+            workspaceId,
+            sessionId,
+            memoryLineage: [source.sourceRef],
+            metadata: {
+              decision: "candidate_storage_unavailable",
+              sourceAuthority,
+              errorType: error instanceof Error ? error.name : "unknown",
+            },
+          });
+        }
+      }
+      return;
+    }
+
+    if (gateDecision && gateDecision.decision !== "allowed") {
+      return;
     }
     await this.deps.learned.extractAndPersistLearnedMemory(sessionId, content, source);
   }
@@ -3457,12 +3608,30 @@ export class MemoryLifecycleService {
     return await this.deps.learned.updateChatSessionLearnedMemory(sessionId, itemId, input);
   }
 
-  public rebuildSessionLearnedMemory(sessionId: string): Promise<{
+  public async rebuildSessionLearnedMemory(sessionId: string): Promise<{
     rebuiltAt: string;
     items: LearnedMemoryItemRecord[];
     conflicts: LearnedMemoryConflictRecord[];
   }> {
-    return this.deps.learned.rebuildChatSessionLearnedMemory(sessionId, (sid) => this.deps.readTranscriptOrEmpty(sid));
+    await this.deps.learned.clearChatSessionLearnedMemory(sessionId);
+    const messages = await this.deps.admin.gatewaySql
+      .prepare(
+        `SELECT message_id, role, content, source_authority
+         FROM chat_messages
+         WHERE session_id = ?
+         ORDER BY seq ASC`,
+      )
+      .all<CanonicalLearnedMemoryMessageRow>(sessionId);
+    for (const message of messages) {
+      if (message.role !== "user" && message.role !== "assistant") continue;
+      await this.extractLearnedMemory(sessionId, message.content, {
+        role: message.role,
+        sourceRef: message.message_id,
+        authority: normalizeChatMessageSourceAuthority(message.source_authority ?? undefined),
+      });
+    }
+    const snapshot = await this.listSessionLearnedMemory(sessionId, 500);
+    return { rebuiltAt: new Date().toISOString(), ...snapshot };
   }
 
   public async getMaintenancePolicy(workspaceId?: string): Promise<MemoryMaintenancePolicyRecord> {
@@ -3576,7 +3745,7 @@ export class MemoryLifecycleService {
     actorId: string,
     status: MemoryLearningStatus,
   ): Promise<MemoryLearningRecord> {
-    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     await this.ensureLearningSchema();
     const now = new Date().toISOString();
     const authority = normalizeAuthority(input.authority ?? (status === "proposed" ? "agent_proposed" : "operator"));
@@ -3811,6 +3980,7 @@ export class MemoryLifecycleService {
         authority TEXT NOT NULL,
         actor_id TEXT,
         promoted_learning_id TEXT,
+        dedupe_key TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       )
@@ -3820,6 +3990,11 @@ export class MemoryLifecycleService {
     await this.deps.admin.gatewaySql
       .prepare(
         "CREATE INDEX IF NOT EXISTS idx_memory_trace_candidates_workspace_status ON memory_trace_candidates(workspace_id, status)",
+      )
+      .run();
+    await this.deps.admin.gatewaySql
+      .prepare(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_trace_candidates_dedupe_key ON memory_trace_candidates(dedupe_key)",
       )
       .run();
   }
@@ -4116,8 +4291,16 @@ interface TraceMemoryCandidateRow {
   authority: string;
   actor_id: string | null;
   promoted_learning_id: string | null;
+  dedupe_key: string | null;
   created_at: string;
   updated_at: string;
+}
+
+interface CanonicalLearnedMemoryMessageRow {
+  message_id: string;
+  role: string;
+  content: string;
+  source_authority: string | null;
 }
 
 interface MemoryRelationRow {
@@ -4231,6 +4414,7 @@ function mapTraceMemoryCandidateRow(
   host: MemoryLifecycleAdminDependencies,
   row: TraceMemoryCandidateRow,
 ): TraceMemoryCandidateRecord {
+  const metadata = parseMemoryJson<Record<string, unknown>>(host, row.metadata_json, {});
   return {
     candidateId: row.candidate_id,
     workspaceId: row.workspace_id,
@@ -4240,8 +4424,11 @@ function mapTraceMemoryCandidateRow(
     proposedInsight: row.proposed_insight,
     confidence: normalizeConfidence(row.confidence),
     sourceRefs: parseMemoryJson(host, row.source_refs_json, []),
-    metadata: parseMemoryJson(host, row.metadata_json, {}),
-    authority: "agent_proposed",
+    metadata,
+    authority: normalizeTraceCandidateAuthority(row.authority),
+    dedupeKey: row.dedupe_key?.trim() || `legacy:${row.candidate_id}`,
+    sourceSessionId: readRecordString(metadata, "sourceSessionId"),
+    sourceMessageId: readRecordString(metadata, "sourceMessageId"),
     actorId: row.actor_id ?? undefined,
     promotedLearningId: row.promoted_learning_id ?? undefined,
     createdAt: row.created_at,
@@ -5037,6 +5224,51 @@ function normalizeTraceCandidateType(value: string | undefined): TraceMemoryCand
 
 function normalizeTraceCandidateStatus(value: string | undefined): TraceMemoryCandidateStatus {
   return value === "rejected" || value === "promoted" ? value : "proposed";
+}
+
+function normalizeTraceCandidateAuthority(value: string | undefined): TraceMemoryCandidateAuthority {
+  return value === "external_channel" || value === "unknown" ? value : "agent_proposed";
+}
+
+function normalizeChatMessageSourceAuthority(value: string | undefined): ChatMessageSourceAuthority {
+  return value === "operator" ||
+    value === "external_channel" ||
+    value === "agent_proposed" ||
+    value === "trusted_lifecycle"
+    ? value
+    : "unknown";
+}
+
+function mapLearnedItemTypeToTraceCandidateType(value: LearnedMemoryItemType): TraceMemoryCandidateType {
+  if (value === "preference") return "operator_preference";
+  if (value === "goal" || value === "constraint") return "decision";
+  if (value === "project_context") return "repo_fact";
+  return "fact";
+}
+
+function buildTraceMemoryCandidateDedupeKey(input: {
+  workspaceId: string;
+  sourceSessionId?: string;
+  sourceMessageId?: string;
+  candidateType: TraceMemoryCandidateType;
+  proposedInsight: string;
+  authority: TraceMemoryCandidateAuthority;
+}): string {
+  const normalizedContentHash = createHash("sha256")
+    .update(input.proposedInsight.toLowerCase().replace(/\s+/gu, " ").trim())
+    .digest("hex");
+  return createHash("sha256")
+    .update(
+      [
+        input.workspaceId,
+        input.sourceSessionId ?? "",
+        input.sourceMessageId ?? "",
+        input.candidateType,
+        normalizedContentHash,
+        input.authority,
+      ].join("|"),
+    )
+    .digest("hex");
 }
 
 function normalizeAuthority(value: string | undefined): StructuredMemoryAuthority {

@@ -989,10 +989,10 @@ test("current registries and checked-in manifest cover every migration exactly",
 
   // These reviewed literals are intentionally independent from the generated
   // manifest so an accidental registry-plus-manifest edit cannot self-certify.
-  assert.equal(sqlite.migrations.length, 189);
-  assert.deepEqual([sqlite.firstVersion, sqlite.lastVersion], [1, 189]);
-  assert.equal(postgres.migrations.length, 132);
-  assert.deepEqual([postgres.firstVersion, postgres.lastVersion], [1, 132]);
+  assert.equal(sqlite.migrations.length, 190);
+  assert.deepEqual([sqlite.firstVersion, sqlite.lastVersion], [1, 190]);
+  assert.equal(postgres.migrations.length, 133);
+  assert.deepEqual([postgres.firstVersion, postgres.lastVersion], [1, 133]);
   assert.equal(
     postgres.migrations.find((record) => record.version === 62)?.name,
     "chat_delegation_step_degraded_handoff_repairs",

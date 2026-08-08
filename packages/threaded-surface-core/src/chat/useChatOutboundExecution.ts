@@ -621,6 +621,7 @@ export function useChatOutboundExecution(
                 role: "user",
                 actorType: "user",
                 actorId: "operator",
+                sourceAuthority: "operator",
                 content: trimmedContent,
                 timestamp: new Date().toISOString(),
                 attachments: localAttachments.length > 0 ? localAttachments : undefined,

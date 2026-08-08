@@ -28,7 +28,9 @@ const apiMocks = vi.hoisted(() => ({
   patchMemoryItem: vi.fn(),
   patchMemoryMaintenancePolicy: vi.fn(),
   patchMemoryQualityIssue: vi.fn(),
+  promoteTraceMemoryCandidate: vi.fn(),
   rejectMemoryMaintenanceRecommendation: vi.fn(),
+  rejectTraceMemoryCandidate: vi.fn(),
   runMemoryMaintenanceNow: vi.fn(),
   runMemoryQualityScan: vi.fn(),
 }));
@@ -59,7 +61,9 @@ vi.mock("../api/client", () => ({
   patchMemoryItem: apiMocks.patchMemoryItem,
   patchMemoryMaintenancePolicy: apiMocks.patchMemoryMaintenancePolicy,
   patchMemoryQualityIssue: apiMocks.patchMemoryQualityIssue,
+  promoteTraceMemoryCandidate: apiMocks.promoteTraceMemoryCandidate,
   rejectMemoryMaintenanceRecommendation: apiMocks.rejectMemoryMaintenanceRecommendation,
+  rejectTraceMemoryCandidate: apiMocks.rejectTraceMemoryCandidate,
   runMemoryMaintenanceNow: apiMocks.runMemoryMaintenanceNow,
   runMemoryQualityScan: apiMocks.runMemoryQualityScan,
 }));
@@ -440,6 +444,8 @@ describe("useMemoryOperatorSnapshot", () => {
     });
     apiMocks.acceptMemoryMaintenanceRecommendation.mockResolvedValue(undefined);
     apiMocks.rejectMemoryMaintenanceRecommendation.mockResolvedValue(undefined);
+    apiMocks.promoteTraceMemoryCandidate.mockResolvedValue({ candidateId: "candidate-1", status: "promoted" });
+    apiMocks.rejectTraceMemoryCandidate.mockResolvedValue({ candidateId: "candidate-1", status: "rejected" });
     apiMocks.addMemoryDecisionRetrospective.mockResolvedValue({
       id: "decision-1",
       title: "Keep automation advisory",
@@ -487,6 +493,25 @@ describe("useMemoryOperatorSnapshot", () => {
       limit: 40,
     });
     expect(apiMocks.fetchMemoryItemHistory).toHaveBeenCalledWith("mem-1", 100);
+  });
+
+  it("promotes and rejects trace candidates only through the operator review APIs", async () => {
+    renderer = await mountHook((value) => {
+      latest = value;
+    });
+
+    await act(async () => {
+      await latest?.resolveTraceMemoryCandidate("candidate-1", "promote");
+    });
+    expect(apiMocks.promoteTraceMemoryCandidate).toHaveBeenCalledWith("candidate-1");
+    expect(apiMocks.rejectTraceMemoryCandidate).not.toHaveBeenCalled();
+    expect(latest?.notice).toEqual({ tone: "success", message: "Trace candidate promoted by operator." });
+
+    await act(async () => {
+      await latest?.resolveTraceMemoryCandidate("candidate-1", "reject");
+    });
+    expect(apiMocks.rejectTraceMemoryCandidate).toHaveBeenCalledWith("candidate-1");
+    expect(latest?.notice).toEqual({ tone: "success", message: "Trace candidate rejected." });
   });
 
   it("fails closed when settings truth cannot be loaded", async () => {

@@ -1,4 +1,6 @@
 export type MemoryContextScope = "chat" | "orchestration";
+export type MemoryContextAccessMode = "workspace_private" | "session_only";
+export const MEMORY_CONTEXT_ACCESS_POLICY_VERSION = "1";
 export type MemoryQmdStatus = "generated" | "cache_hit" | "fallback" | "failed";
 export type MemoryRelationScope = "self" | "peer" | "project";
 export type MemoryFreshness = "fresh" | "recent" | "stale" | "unknown";
@@ -94,6 +96,15 @@ export interface MemoryContextQuality {
   status: MemoryQmdStatus;
   reason?: string;
   assembly?: MemoryContextAssemblyReport;
+  accessReceipt?: MemoryContextAccessReceipt;
+}
+
+export interface MemoryContextAccessReceipt {
+  policyVersion: string;
+  mode: MemoryContextAccessMode;
+  sessionKind?: "dm" | "group" | "thread";
+  failClosed: boolean;
+  fingerprint: string;
 }
 
 export interface MemoryCitationProvenance {
@@ -556,12 +567,14 @@ export type TraceMemoryCandidateType =
   | "repo_fact"
   | "workflow";
 export type TraceMemoryCandidateStatus = "proposed" | "rejected" | "promoted";
+export type TraceMemoryCandidateAuthority = "agent_proposed" | "external_channel" | "unknown";
 
 export interface TraceMemoryCandidateInput {
   workspaceId?: string;
   candidateType?: TraceMemoryCandidateType;
   sourceText?: string;
   sourceSessionId?: string;
+  sourceMessageId?: string;
   sourceRunId?: string;
   sourceTurnId?: string;
   toolCallId?: string;
@@ -579,7 +592,8 @@ export interface TraceMemoryCandidateRecord extends TraceMemoryCandidateInput {
   sourceText: string;
   confidence: number;
   sourceRefs: StructuredMemorySourceRef[];
-  authority: Extract<StructuredMemoryAuthority, "agent_proposed">;
+  authority: TraceMemoryCandidateAuthority;
+  dedupeKey: string;
   actorId?: string;
   promotedLearningId?: string;
   createdAt: string;

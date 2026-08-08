@@ -238,6 +238,7 @@ export async function consumePreparedAgentChatTurn(
           role: "assistant",
           actorType: "agent",
           actorId: "assistant",
+          sourceAuthority: "agent_proposed",
           content: chunk.content,
           timestamp: new Date().toISOString(),
         };
@@ -1107,6 +1108,7 @@ export async function sendPreparedIntegrationChatTurn(
       role: "assistant",
       actorType: "system",
       actorId: "integration",
+      sourceAuthority: "trusted_lifecycle",
       content: assistantContent,
       timestamp: new Date().toISOString(),
     };

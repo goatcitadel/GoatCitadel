@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { randomUUID } from "node:crypto";
 import type {
   ChatMessageRecord,
+  ChatMessageSourceAuthority,
   GatewayEventInput,
   GatewayEventResult,
   InboundEventIndexRow,
@@ -17,6 +18,8 @@ export interface EventIngestOptions {
   endpoint: string;
   idempotencyKey: string;
   payload: GatewayEventInput;
+  /** Server-owned provenance; never sourced from GatewayEventInput. */
+  sourceAuthority?: ChatMessageSourceAuthority;
   /** Runs inside the ingest transaction for writes that must commit atomically with the message. */
   onCommit?: () => unknown | Promise<unknown>;
   /** Runs only after a newly accepted ingest transaction has committed successfully. */
@@ -78,6 +81,7 @@ export class EventIngestService {
       type: options.payload.message.role === "user" ? "message.user" : "message.assistant",
       actorType: options.payload.actor.type,
       actorId: options.payload.actor.id,
+      sourceAuthority: options.sourceAuthority ?? "unknown",
       payload: {
         message: options.payload.message,
         taskId: options.payload.taskId,
@@ -407,6 +411,7 @@ function toChatMessageRecord(event: TranscriptEvent): ChatMessageRecord {
     role: message?.role === "assistant" ? "assistant" : "user",
     actorType: event.actorType,
     actorId: event.actorId,
+    sourceAuthority: event.sourceAuthority ?? "unknown",
     content: typeof message?.content === "string" ? message.content : "",
     timestamp: event.timestamp,
     tokenInput: event.tokenInput,

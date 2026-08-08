@@ -27,6 +27,7 @@ function makeMessage(
     role,
     actorType: role === "user" ? "user" : role === "system" ? "system" : "agent",
     actorId: role === "user" ? "operator" : "assistant",
+    sourceAuthority: role === "user" ? "operator" : role === "system" ? "trusted_lifecycle" : "agent_proposed",
     content,
     timestamp: overrides.timestamp ?? `2026-06-01T00:00:${ordinal.slice(-2)}.000Z`,
     ...overrides,

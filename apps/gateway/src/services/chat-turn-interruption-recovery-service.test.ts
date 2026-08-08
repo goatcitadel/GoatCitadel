@@ -94,10 +94,12 @@ function appendStreamChunk(
 }
 
 function userMessage(overrides: Partial<ChatMessageRecord> = {}): ChatMessageRecord {
+  const role = overrides.role ?? "user";
   return {
     messageId: "msg-user",
     sessionId: "session-a",
     role: "user",
+    sourceAuthority: role === "assistant" ? "agent_proposed" : "operator",
     actorType: "user",
     actorId: "operator",
     content: "please do the thing",

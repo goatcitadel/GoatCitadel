@@ -762,6 +762,7 @@ export {
   patchMemoryMaintenancePolicy,
   promoteTraceMemoryCandidate,
   proposeTraceMemoryCandidate,
+  rejectTraceMemoryCandidate,
   recallMemory,
   rejectMemoryMaintenanceRecommendation,
   recordMemoryFeedback,

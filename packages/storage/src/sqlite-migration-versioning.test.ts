@@ -42,9 +42,143 @@ describe("sqlite schema migrations", () => {
     assert.deepEqual(
       { ...rows.at(-1) },
       {
-        version: 189,
-        name: "repair_durable_chat_secure_configuration_reservations",
+        version: 190,
+        name: "memory_source_authority_and_trace_candidate_dedupe",
       },
+    );
+    db.close();
+  });
+
+  it("backfills message authority, quarantines untrusted learned memory, and preserves legacy candidates", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(`
+      CREATE TABLE chat_messages (
+        message_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        actor_type TEXT NOT NULL,
+        actor_id TEXT NOT NULL,
+        content TEXT NOT NULL
+      );
+      CREATE TABLE chat_session_bindings (
+        session_id TEXT PRIMARY KEY,
+        transport TEXT NOT NULL
+      );
+      CREATE TABLE learned_memory_items (
+        item_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        disabled_reason TEXT,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE learned_memory_sources (
+        source_id TEXT PRIMARY KEY,
+        item_id TEXT NOT NULL,
+        source_kind TEXT NOT NULL,
+        source_ref TEXT NOT NULL
+      );
+      CREATE TABLE memory_trace_candidates (
+        candidate_id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        candidate_type TEXT NOT NULL,
+        status TEXT NOT NULL,
+        source_text TEXT NOT NULL,
+        proposed_insight TEXT NOT NULL,
+        confidence REAL NOT NULL,
+        source_refs_json TEXT NOT NULL,
+        metadata_json TEXT NOT NULL,
+        authority TEXT NOT NULL,
+        actor_id TEXT,
+        promoted_learning_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      INSERT INTO chat_session_bindings VALUES ('session-external', 'integration');
+      INSERT INTO chat_messages VALUES
+        ('msg-assistant', 'session-local', 'assistant', 'agent', 'agent-1', 'assistant output'),
+        ('msg-external', 'session-external', 'user', 'user', 'operator', 'spoofed external input'),
+        ('msg-operator', 'session-local', 'user', 'user', 'operator', 'local operator input'),
+        ('msg-system', 'session-local', 'assistant', 'system', 'runtime', 'lifecycle output');
+
+      INSERT INTO learned_memory_items VALUES
+        ('memory-assistant', 'session-local', 'active', NULL, '2026-08-08T00:00:00.000Z'),
+        ('memory-external', 'session-external', 'active', NULL, '2026-08-08T00:00:00.000Z'),
+        ('memory-unresolved', 'session-external', 'active', NULL, '2026-08-08T00:00:00.000Z'),
+        ('memory-operator', 'session-local', 'active', NULL, '2026-08-08T00:00:00.000Z');
+      INSERT INTO learned_memory_sources VALUES
+        ('source-assistant', 'memory-assistant', 'assistant', 'msg-assistant'),
+        ('source-external', 'memory-external', 'user', 'msg-external'),
+        ('source-operator', 'memory-operator', 'user', 'msg-operator');
+
+      INSERT INTO memory_trace_candidates VALUES (
+        'legacy-candidate', 'default', 'fact', 'rejected', 'legacy source', 'legacy insight', 0.5,
+        '[]', '{}', 'agent_proposed', 'agent-1', NULL,
+        '2026-08-08T00:00:00.000Z', '2026-08-08T00:00:00.000Z'
+      );
+    `);
+
+    __sqliteInternals.applySchemaMigrationForTest(190, db);
+
+    const authorities = db
+      .prepare("SELECT message_id, source_authority FROM chat_messages ORDER BY message_id")
+      .all() as Array<{ message_id: string; source_authority: string }>;
+    assert.deepEqual(
+      authorities.map((row) => ({ ...row })),
+      [
+        { message_id: "msg-assistant", source_authority: "agent_proposed" },
+        { message_id: "msg-external", source_authority: "external_channel" },
+        { message_id: "msg-operator", source_authority: "operator" },
+        { message_id: "msg-system", source_authority: "trusted_lifecycle" },
+      ],
+    );
+    const memories = db
+      .prepare("SELECT item_id, status, disabled_reason FROM learned_memory_items ORDER BY item_id")
+      .all() as Array<{ item_id: string; status: string; disabled_reason: string | null }>;
+    assert.deepEqual(
+      memories.map((row) => ({ ...row })),
+      [
+        {
+          item_id: "memory-assistant",
+          status: "disabled",
+          disabled_reason: "external_authority_unverified_migration",
+        },
+        {
+          item_id: "memory-external",
+          status: "disabled",
+          disabled_reason: "external_authority_unverified_migration",
+        },
+        { item_id: "memory-operator", status: "active", disabled_reason: null },
+        {
+          item_id: "memory-unresolved",
+          status: "disabled",
+          disabled_reason: "external_authority_unverified_migration",
+        },
+      ],
+    );
+    assert.deepEqual(
+      {
+        ...db
+          .prepare(
+            "SELECT quarantined_count, metadata_json FROM memory_authority_migration_reconciliation WHERE migration_id = 'sqlite-190'",
+          )
+          .get(),
+      },
+      {
+        quarantined_count: 3,
+        metadata_json: JSON.stringify({
+          disabledReason: "external_authority_unverified_migration",
+          reversible: true,
+        }),
+      },
+    );
+    assert.deepEqual(
+      {
+        ...db
+          .prepare("SELECT status, dedupe_key FROM memory_trace_candidates WHERE candidate_id = 'legacy-candidate'")
+          .get(),
+      },
+      { status: "rejected", dedupe_key: "legacy:legacy-candidate" },
     );
     db.close();
   });

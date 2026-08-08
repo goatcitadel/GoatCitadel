@@ -150,6 +150,7 @@ import {
   buildChatTurnFailureRecord,
   classifyChatTurnFailure,
   extractProviderFailureRecord,
+  extractSkillSecurityFailureRecord,
 } from "./chat-turn-agent-runner/failure-records.js";
 import {
   analyzePresentationContentQuality,
@@ -4876,6 +4877,7 @@ export class ChatTurnAgentRunner {
               (error as Error).message,
               getChatTurnRecoveryAction(failureClass),
               extractProviderFailureRecord(error),
+              extractSkillSecurityFailureRecord(error),
             );
             completionState = {
               ...completionState,

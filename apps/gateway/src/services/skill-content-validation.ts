@@ -1,4 +1,5 @@
 import { parseSkillMarkdown, resolveSkillNameViolation } from "@goatcitadel/skills";
+import { scanPromptwareContent, type PromptwareScanFinding } from "./assembled-prompt-injection-guard.js";
 import { normalizeSkillId } from "./skill-import-service.js";
 
 /**
@@ -34,12 +35,14 @@ export interface SkillContentValidationResult {
   readonly warnings: string[];
   readonly inferredSkillName?: string;
   readonly inferredSkillId?: string;
+  readonly promptwareFindings: PromptwareScanFinding[];
   readonly checks: {
     readonly frontmatterValid: boolean;
     readonly descriptionQuality: boolean;
     readonly suspiciousScripts: boolean;
     readonly networkIndicators: boolean;
     readonly containsSecret: boolean;
+    readonly promptwareSafe: boolean;
   };
 }
 
@@ -98,6 +101,11 @@ export function validateSkillContent(input: ValidateSkillContentInput): SkillCon
   const suspiciousScripts = SUSPICIOUS_SCRIPT_PATTERN.test(input.skillMarkdown);
   const networkIndicators = NETWORK_INDICATOR_PATTERN.test(input.skillMarkdown);
   const containsSecret = SECRET_CONTENT_PATTERN.test(input.skillMarkdown);
+  const promptwareFindings = scanPromptwareContent({
+    source: "imported_skill",
+    sourcePath: "SKILL.md",
+    content: input.skillMarkdown,
+  });
 
   if (suspiciousScripts) {
     errors.push("Skill draft contains high-risk script indicators and cannot be authored automatically.");
@@ -112,6 +120,13 @@ export function validateSkillContent(input: ValidateSkillContentInput): SkillCon
       warnings.push("Network usage indicators detected in skill content.");
     }
   }
+  if (promptwareFindings.length > 0) {
+    errors.push(
+      `Skill content contains prompt-injection instructions (${promptwareFindings
+        .map((finding) => finding.ruleId)
+        .join(", ")}) and cannot be admitted.`,
+    );
+  }
 
   return {
     valid: errors.length === 0,
@@ -119,12 +134,14 @@ export function validateSkillContent(input: ValidateSkillContentInput): SkillCon
     warnings,
     inferredSkillName,
     inferredSkillId,
+    promptwareFindings,
     checks: {
       frontmatterValid,
       descriptionQuality,
       suspiciousScripts,
       networkIndicators,
       containsSecret,
+      promptwareSafe: promptwareFindings.length === 0,
     },
   };
 }

@@ -622,6 +622,7 @@ export async function prepareAgentChatTurn(
       role: "user",
       actorType: "system",
       actorId: HEARTBEAT_SYSTEM_ACTOR_ID,
+      sourceAuthority: "trusted_lifecycle",
       content,
       timestamp: new Date().toISOString(),
     };
@@ -700,6 +701,7 @@ export async function prepareAgentChatTurn(
       role: "user",
       actorType: "user",
       actorId: "operator",
+      sourceAuthority: "operator",
       content,
       parts: inputParts.length > 0 ? inputParts : undefined,
       timestamp: new Date().toISOString(),

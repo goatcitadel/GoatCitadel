@@ -70,6 +70,13 @@ describe("SkillHubReviewService", { timeout: 120_000 }, () => {
       scripts: [],
     });
     expect(created.artifact.contentTreeSha256).toBe(created.snapshot.contentTreeSha256);
+    expect(
+      (created.snapshot.audit as { scanners: Array<{ scannerId: string; scannerVersion: string }> }).scanners,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ scannerId: "goatcitadel.promptware-scan", scannerVersion: "1.0.0" }),
+      ]),
+    );
     expect(databaseCount(harness.storage, "candidate_skill_versions")).toBe(0);
     expect(databaseCount(harness.storage, "skill_lifecycle")).toBe(0);
 
@@ -105,6 +112,34 @@ describe("SkillHubReviewService", { timeout: 120_000 }, () => {
       mutate: (validation: SkillImportValidationResult, harness: Harness) => Promise<void> | void;
       expectedField: string;
     }> = [
+      {
+        name: "prompt injection",
+        mutate: (validation) => {
+          validation.valid = false;
+          validation.checks.promptwareSafe = false;
+          validation.promptwareFindings = [
+            {
+              scannerVersion: "1.0.0",
+              ruleId: "instruction_hierarchy_override",
+              severity: "critical",
+              sourcePath: "SKILL.md",
+              startLine: 1,
+              endLine: 1,
+              evidenceHash: "a".repeat(64),
+              excerpt: "[redacted fixture]",
+            },
+          ];
+        },
+        expectedField: "PROMPT_INJECTION_DETECTED",
+      },
+      {
+        name: "promptware scan incomplete",
+        mutate: (validation) => {
+          validation.checks.promptwareScanComplete = false;
+          validation.promptwareUnscannedPaths = ["references/unreadable.md"];
+        },
+        expectedField: "PROMPTWARE_SCAN_INCOMPLETE",
+      },
       {
         name: "invalid validation",
         mutate: (validation) => {
@@ -528,6 +563,8 @@ function validationFixture(
       suspiciousScripts: false,
       networkIndicators: false,
       licenseDetected: true,
+      promptwareSafe: true,
+      promptwareScanComplete: true,
     },
     candidate: {
       sourceProvider: "github",
@@ -548,6 +585,8 @@ function validationFixture(
     networkSignals: [],
     suspiciousSignals: [],
     licenseFiles: ["LICENSE"],
+    promptwareFindings: [],
+    promptwareUnscannedPaths: [],
     externalToolMappings,
     scriptDisposition,
     provenance,

@@ -1116,7 +1116,35 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                     <StatusChip tone="muted">{item.candidateType}</StatusChip>
                   </div>
                   <p>{item.proposedInsight}</p>
-                  <span>{formatSourceRefCount(item.sourceRefs.length)}</span>
+                  <span>
+                    {formatSourceRefCount(item.sourceRefs.length)}
+                    {item.authority === "external_channel" ? " · external channel" : ""}
+                    {(item.sourceSessionId ?? readMetadataString(item.metadata, "sourceSessionId"))
+                      ? ` · session ${shortId(item.sourceSessionId ?? readMetadataString(item.metadata, "sourceSessionId") ?? "")}`
+                      : ""}
+                  </span>
+                  {item.status === "proposed" ? (
+                    <div
+                      className="mc-next-runtime-actions"
+                      role="group"
+                      aria-label={`Review trace memory candidate ${item.candidateId}`}
+                    >
+                      <NativeButton
+                        variant="secondary"
+                        disabled={!memoryCanMutate || memory.busyKey?.startsWith(`trace:${item.candidateId}:`) === true}
+                        onClick={() => void memory.resolveTraceMemoryCandidate(item.candidateId, "promote")}
+                      >
+                        Promote
+                      </NativeButton>
+                      <NativeButton
+                        variant="secondary"
+                        disabled={!memoryCanMutate || memory.busyKey?.startsWith(`trace:${item.candidateId}:`) === true}
+                        onClick={() => void memory.resolveTraceMemoryCandidate(item.candidateId, "reject")}
+                      >
+                        Reject
+                      </NativeButton>
+                    </div>
+                  ) : null}
                 </li>
               ))}
             </ul>

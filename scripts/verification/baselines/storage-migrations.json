@@ -5,9 +5,9 @@
     "sqlite": {
       "path": "packages/storage/src/sqlite.ts",
       "registryName": "SCHEMA_MIGRATION_GROUPS",
-      "expectedCount": 189,
+      "expectedCount": 190,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 189,
+      "expectedLastVersion": 190,
       "migrations": [
         {
           "version": 1,
@@ -1331,15 +1331,22 @@
           "groupName": "canonical",
           "definitionSha256": "80721e7c8801f16b9cea3140c46e7493acc1076f6653b1eb52d6c0e5875cdfe7",
           "implementationSha256": "6c926e88d836249cf7a93510b759f8cfdd45797dbe39e2a973685beba28bb2f4"
+        },
+        {
+          "version": 190,
+          "name": "memory_source_authority_and_trace_candidate_dedupe",
+          "groupName": "canonical",
+          "definitionSha256": "5fd2e96c019b14eb730317e8d5d8424d45b4bf5f64812926ac125dc250a60904",
+          "implementationSha256": "72403d2e83f1253795e4f3c5c5f4a68e9de257eb3872c4c3fc954d911b898ff0"
         }
       ]
     },
     "postgres": {
       "path": "packages/storage/src/postgres/migrations.ts",
       "registryName": "POSTGRES_MIGRATIONS",
-      "expectedCount": 132,
+      "expectedCount": 133,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 132,
+      "expectedLastVersion": 133,
       "migrations": [
         {
           "version": 1,
@@ -2133,6 +2140,12 @@
           "name": "repair_durable_chat_secure_configuration_reservations",
           "definitionSha256": "bdf6ebf28a10ae2653d492ef97f3792f11465b50bc799778454debd6043daaa7",
           "sqlPayloadSha256": "e17e87e41a0cf5acc097f100cad35440a6b8b4debfb3653c6610c3997db71663"
+        },
+        {
+          "version": 133,
+          "name": "memory_source_authority_and_trace_candidate_dedupe",
+          "definitionSha256": "1bfb044d1bb1bcc345c041eda56276bb616b76a4e7bba0bedea4446bc85c5303",
+          "sqlPayloadSha256": "7bfbe6807f60628c1964eb444ea4e3d667efb70ad75fe75cafcfa342917fe372"
         }
       ]
     }

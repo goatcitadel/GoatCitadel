@@ -25,7 +25,9 @@ import {
   patchMemoryItem,
   patchMemoryMaintenancePolicy,
   patchMemoryQualityIssue,
+  promoteTraceMemoryCandidate,
   rejectMemoryMaintenanceRecommendation,
+  rejectTraceMemoryCandidate,
   runMemoryMaintenanceNow,
   runMemoryQualityScan,
 } from "../api/client";
@@ -741,6 +743,34 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
     [data?.memoryAdminState],
   );
 
+  const resolveTraceMemoryCandidate = useCallback(
+    async (candidateId: string, action: "promote" | "reject") => {
+      if (data?.memoryAdminState !== "enabled") {
+        setNotice({ tone: "warning", message: "Memory admin is not enabled, so trace review is locked." });
+        return;
+      }
+      setBusyKey(`trace:${candidateId}:${action}`);
+      setNotice(null);
+      try {
+        if (action === "promote") {
+          await promoteTraceMemoryCandidate(candidateId);
+        } else {
+          await rejectTraceMemoryCandidate(candidateId);
+        }
+        await reload();
+        setNotice({
+          tone: "success",
+          message: action === "promote" ? "Trace candidate promoted by operator." : "Trace candidate rejected.",
+        });
+      } catch (reviewError) {
+        setNotice({ tone: "error", message: getErrorMessage(reviewError) });
+      } finally {
+        setBusyKey(null);
+      }
+    },
+    [data?.memoryAdminState, reload],
+  );
+
   return {
     loading,
     error,
@@ -769,6 +799,7 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
     runMaintenance,
     savePolicy,
     resolveRecommendation,
+    resolveTraceMemoryCandidate,
     reviewDecision,
   };
 }

@@ -19,6 +19,7 @@ import {
   type ChatRoutedContextSnapshotRecord,
   type ChatTurnCapabilityProfileRecord,
   type ExternalSessionAttachmentRecord,
+  type MemoryContextAccessMode,
   type MemoryItemRecord,
   type NoteRecord,
   type ChatGeneratedArtifactRecord,
@@ -65,6 +66,7 @@ export interface ResolvedChatRoutedContextSource {
 
 export interface ResolvedChatRoutedContextSources {
   sourceRequestHash: string;
+  accessMode: MemoryContextAccessMode;
   sources: ResolvedChatRoutedContextSource[];
 }
 
@@ -76,6 +78,7 @@ export interface ChatRoutedContextExternalAttachmentContent {
 }
 
 export interface ChatRoutedContextSourceDeps {
+  getSessionKind(sessionId: string): Promise<"dm" | "group" | "thread">;
   getAttachment(attachmentId: string): Promise<ChatAttachmentRecord>;
   readAttachmentContent(
     attachmentId: string,
@@ -87,7 +90,10 @@ export interface ChatRoutedContextSourceDeps {
     options: { allowGlobal: boolean },
   ): Promise<MemoryItemRecord | undefined>;
   getPersonalNote?(noteId: string): Promise<NoteRecord>;
-  getGeneratedArtifact?(artifactId: string): Promise<ChatGeneratedArtifactRecord>;
+  getGeneratedArtifact?(
+    artifactId: string,
+    scope: { workspaceId: string; sessionId?: string },
+  ): Promise<ChatGeneratedArtifactRecord>;
   /**
    * Governed exact-byte read for one live `read_only_external` attachment.
    * Absent in compositions that have not enabled the external-source runtime:
@@ -127,6 +133,18 @@ export async function resolveChatRoutedContextSources(
   input: ResolveChatRoutedContextSourcesInput,
 ): Promise<ResolvedChatRoutedContextSources> {
   const refs = normalizeRefs(input.refs);
+  let accessMode: MemoryContextAccessMode = "session_only";
+  try {
+    const sessionKind = await deps.getSessionKind(input.sessionId);
+    accessMode = sessionKind === "dm" ? "workspace_private" : "session_only";
+  } catch {
+    // Missing or inconsistent canonical session truth intentionally fails closed.
+  }
+  if (accessMode === "session_only" && refs.some((ref) => ref.kind === "memory_item" || ref.kind === "personal_note")) {
+    throw new ConflictError({
+      message: "Private workspace memory and personal notes are unavailable in shared sessions.",
+    });
+  }
   if (refs.some((ref) => ref.kind === "memory_item") && input.memoryMode === "off") {
     throw new ConflictError({ message: "Routed memory context is unavailable while memory mode is off." });
   }
@@ -156,8 +174,15 @@ export async function resolveChatRoutedContextSources(
       if (ref.kind === "generated_artifact") {
         if (!deps.getGeneratedArtifact)
           throw new ConflictError({ message: `Generated artifact ${ref.ref} is unavailable in this runtime.` });
-        const artifact = await deps.getGeneratedArtifact(ref.ref);
-        if (artifact.artifactId !== ref.ref || (artifact.workspaceId ?? "default") !== input.workspaceId) {
+        const artifact = await deps.getGeneratedArtifact(ref.ref, {
+          workspaceId: input.workspaceId,
+          ...(accessMode === "session_only" ? { sessionId: input.sessionId } : {}),
+        });
+        if (
+          artifact.artifactId !== ref.ref ||
+          (artifact.workspaceId ?? "default") !== input.workspaceId ||
+          (accessMode === "session_only" && artifact.sessionId !== input.sessionId)
+        ) {
           throw new ConflictError({
             message: `Generated artifact ${ref.ref} is unavailable in the effective workspace.`,
           });
@@ -306,6 +331,7 @@ export async function resolveChatRoutedContextSources(
   );
   return {
     sourceRequestHash: digest(refs.map(({ kind, ref }) => ({ kind, ref }))),
+    accessMode,
     sources,
   };
 }

@@ -574,12 +574,25 @@ export interface ChatAttachmentRecord {
   createdAt: string;
 }
 
+/**
+ * Server-owned provenance for persisted chat content. This value is resolved at
+ * trusted ingress boundaries and must never be accepted from an untrusted event
+ * payload.
+ */
+export type ChatMessageSourceAuthority =
+  | "operator"
+  | "external_channel"
+  | "agent_proposed"
+  | "trusted_lifecycle"
+  | "unknown";
+
 export interface ChatMessageRecord {
   messageId: string;
   sessionId: string;
   role: ChatMessageRole;
   actorType: "user" | "agent" | "system";
   actorId: string;
+  sourceAuthority: ChatMessageSourceAuthority;
   content: string;
   parts?: ChatInputPart[];
   timestamp: string;
@@ -896,6 +909,7 @@ export type ChatTurnFailureClass =
   | "budget_exceeded"
   | "approval_required"
   | "interrupted_by_restart"
+  | "skill_security_blocked"
   | "unknown";
 
 export type ChatTurnCompletionStatus = "complete" | "truncated" | "interrupted" | "backgrounded";
@@ -917,6 +931,7 @@ export type ChatTurnRecoveryAction =
   | "reconnect_auth"
   | "approve_pending_step"
   | "switch_to_deep_mode"
+  | "review_skill_security"
   | "check_gateway_connection";
 
 export interface ChatTurnFailureRecord {
@@ -925,6 +940,15 @@ export interface ChatTurnFailureRecord {
   retryable?: boolean;
   recommendedAction?: ChatTurnRecoveryAction;
   provider?: ChatProviderFailureRecord;
+  /** Hash-only promptware evidence. Raw rejected skill instructions are never persisted here. */
+  security?: ChatSkillSecurityFailureRecord;
+}
+
+export interface ChatSkillSecurityFailureRecord {
+  scannerVersion: string;
+  skillIds: string[];
+  ruleIds: string[];
+  evidenceHashes: string[];
 }
 
 export interface ChatTurnRepairRecord {
@@ -1051,6 +1075,8 @@ export function getChatTurnRecoveryAction(failureClass: ChatTurnFailureClass): C
       return "approve_pending_step";
     case "interrupted_by_restart":
       return "retry";
+    case "skill_security_blocked":
+      return "review_skill_security";
     default:
       return "retry";
   }
@@ -1072,6 +1098,8 @@ export function getChatTurnRecoveryActionLabel(action: ChatTurnRecoveryAction): 
       return "Switch to Deep mode";
     case "check_gateway_connection":
       return "Check the gateway connection";
+    case "review_skill_security":
+      return "Review skill security";
   }
 }
 
@@ -1091,6 +1119,8 @@ export function getChatTurnRecoveryActionSummary(action: ChatTurnRecoveryAction)
       return "Switch Web to Deep and resend if you want a slower, more exhaustive pass.";
     case "check_gateway_connection":
       return "Check the gateway or network connection, then retry the turn.";
+    case "review_skill_security":
+      return "Disable or re-review the named skill, then retry the turn after it passes the current security scan.";
   }
 }
 

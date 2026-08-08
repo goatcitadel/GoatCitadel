@@ -1,6 +1,6 @@
 # Canonical Runtime State Model
 
-Last updated: 2026-07-13
+Last updated: 2026-08-08
 
 This document defines the repo-native authority model for the core runtime nouns that appear across Gateway, Mission Control, storage, and replay.
 
@@ -284,11 +284,16 @@ Authority:
 - Context pack cache: `packages/storage/src/memory-context-repo.ts`
 - Memory items: `packages/storage/src/memory-item-repo.ts`
 - Learned memory: `apps/gateway/src/services/chat-learned-memory-service.ts` via `packages/storage/src/chat-learned-memory-repo.ts`
+- Read policy and learned-memory admission: `apps/gateway/src/services/memory-lifecycle-service.ts` and `apps/gateway/src/services/memory-context-service.ts`
+- Canonical message provenance: `chat_messages.source_authority` through `packages/storage/src/chat-message-repo.ts`
 
 Implementation status:
 - QMD composition, distillation, and caching: complete.
 - Memory maintenance (retention, compaction, recommendations): feature-flagged behind `memoryMaintenanceV1Enabled`.
 - Learned-memory promotion, dedupe, workspace scope resolution, maintenance recommendation suppression, memory item list/edit/forget/history, and shared write-policy decisions now route through lifecycle-owned policy helpers coordinated by `MemoryLifecycleService`.
+- Memory reads use server-owned access policy `1`, derived only from canonical `sessions.kind`. A canonical `dm` receives `workspace_private`; `group`, `thread`, missing, or inconsistent session truth receives `session_only`. Session-only composition reads only the current transcript with relation scope `self`; it cannot read workspace/global memory items or files. Explicit routed context applies the same boundary, rejects `memory_item` and `personal_note` identifiers before source reads, and admits attachments, external attachments, and generated artifacts only through current-session storage predicates. The access receipt is part of cache identity, memory quality, and the turn context manifest.
+- Every new canonical Chat message has server-owned authority: `operator`, `external_channel`, `agent_proposed`, `trusted_lifecycle`, or fail-closed `unknown`. Learned-memory rebuild reads canonical `chat_messages`; caller hints cannot override stored authority or mismatched role/content. `external_channel` and `unknown` messages can create only redacted, deterministically deduplicated trace candidates. They never create active learned memory until an operator promotes the candidate; operator rejection is durable and prevents retry/rebuild recreation. Secret-like content is blocked before proposal persistence.
+- SQLite migration 190 and PostgreSQL migration 133 backfill source authority, add trace-candidate dedupe, record reconciliation counts, and reversibly disable legacy learned-memory items whose authority cannot be trusted. Rollback does not automatically re-enable quarantined items.
 - Memory context citations carry retrieval strategy and match-signal provenance. Current retrieval is native hybrid ranking: BM25-style lexical scoring, optional operator-visible semantic hints from memory item metadata, optional caller-supplied embedding similarity when embeddings are present, recency, and source diversity. Provenance distinguishes `lexical_recency`, `semantic_hints`, `semantic_vector`, and `hybrid_rank` rather than hiding them behind a generic semantic-search claim.
 - QMD distillation receives a budgeted selected subset of ranked candidates. Context-pack quality metadata records the available candidate count/token estimate, selected candidate count/token estimate, dropped count, and evidence-token budget while preserving the existing context-pack cache and quality JSON storage boundary.
 - Memory context insertion preserves leading system/policy messages and places retrieved non-authoritative memory immediately before the final user message when one exists, otherwise after the leading system-message block. Context manifests record the placement metadata for operator inspection.
@@ -302,6 +307,23 @@ Notes:
 - `MemoryContextService`, `ChatLearnedMemoryService`, and `MemoryMaintenanceService` remain focused collaborators behind that owner.
 - `ChatLearnedMemoryService` is storage-repo backed for learned-memory item persistence.
 - Remaining direct-SQL owners in core runtime-adjacent code no longer include `GatewayService` for `memory_items` lifecycle flows; selected migration and ops services may still touch adjacent stores outside the memory lifecycle owner boundary.
+
+### Governed Skill Instructions
+
+Definition:
+Model-facing instruction bytes contributed by bundled, imported, generated, learned, staged, or activated skills.
+
+Authority:
+- Canonical scanner: `apps/gateway/src/services/assembled-prompt-injection-guard.ts`
+- Shared draft admission: `apps/gateway/src/services/skill-content-validation.ts`
+- Import and lifecycle enforcement: `apps/gateway/src/services/skill-import-service.ts` and `apps/gateway/src/services/skill-hub-lifecycle-service.ts`
+- Provider-bound runtime assembly: `apps/gateway/src/services/governed-skill-instruction-service.ts`
+
+Implementation status:
+- `goatcitadel.promptware-scan` version `1.0.0` scans bounded whole sources for instruction hierarchy override, privileged prompt exfiltration, approval/policy bypass, unapproved tool execution, and role/identity override. It preserves original line positions and hashes, recognizes narrow protective negation, returns bounded structured findings, and does not exempt quotes or code fences.
+- Skill imports scan every canonical-UTF-8 `.md` and `.txt` file in the exact content-integrity tree. Oversized, malformed, unreadable, truncated, or otherwise unscanned model-facing content is a hard blocker. Generated and self-authored drafts enter through the same `validateSkillContent` admission path.
+- Skill Hub snapshots carry a versioned immutable scanner audit. Promptware findings, incomplete coverage, or stale scanner policy cannot be cleared by high-risk confirmation or lifecycle approval; non-revoke lifecycle operations rescan the exact hash-verified artifact.
+- Chat scans every exact activated instruction after receipt/hash verification and scans the final rendered bundle. A finding fails turn preparation as `skill_security_blocked` with recovery action `review_skill_security` before any provider call. Stored failure evidence is limited to skill IDs, rule IDs, scanner version, and hashes. Clean results are cached only by scanner version plus instruction SHA-256.
 
 ## Derived Views
 

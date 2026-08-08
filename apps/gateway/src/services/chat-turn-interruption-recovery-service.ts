@@ -541,6 +541,7 @@ async function persistRecoveredAssistantSource(
     role: "assistant",
     actorType: "agent",
     actorId: "assistant",
+    sourceAuthority: "agent_proposed",
     content: source.content,
     timestamp: source.timestamp,
   };
@@ -554,6 +555,7 @@ async function persistRecoveredAssistantSource(
     type: "message.assistant",
     actorType: "agent",
     actorId: "assistant",
+    sourceAuthority: "agent_proposed",
     payload: { message },
   };
   const wasAlreadyQueued = Boolean(await deps.storage.transcriptOutbox.get(source.messageId));

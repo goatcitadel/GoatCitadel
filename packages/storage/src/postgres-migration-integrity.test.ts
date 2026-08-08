@@ -902,4 +902,23 @@ describe("protected Postgres migration integrity", () => {
     assert.doesNotMatch(sql, /(?:secret|credential|token|value|digest|hash)\s+(?:TEXT|BYTEA|JSONB?)/iu);
     assert.doesNotMatch(sql, /\b(?:UPDATE\s+durable_runs|DELETE\s+FROM|TRUNCATE\s+TABLE)\b/iu);
   });
+
+  it("keeps migration 133 additive, authority-backed, deduplicated, and reversibly quarantined", () => {
+    const migration = POSTGRES_MIGRATIONS.find((candidate) => candidate.version === 133);
+    assert.equal(migration?.name, "memory_source_authority_and_trace_candidate_dedupe");
+    assert.equal(migration?.batchedStatements, undefined);
+    const sql = migration?.sql ?? "";
+    assert.match(sql, /ADD COLUMN IF NOT EXISTS source_authority TEXT NOT NULL DEFAULT 'unknown'/u);
+    assert.match(sql, /WHEN message\.actor_type = 'system' THEN 'trusted_lifecycle'/u);
+    assert.match(sql, /WHEN message\.role = 'assistant' OR message\.actor_type = 'agent' THEN 'agent_proposed'/u);
+    assert.match(sql, /binding\.transport = 'integration'/u);
+    assert.match(sql, /ALTER TABLE memory_trace_candidates ALTER COLUMN dedupe_key SET NOT NULL/u);
+    assert.match(sql, /CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_trace_candidates_dedupe_key/u);
+    assert.match(sql, /SET status = 'disabled'/u);
+    assert.match(sql, /disabled_reason = 'external_authority_unverified_migration'/u);
+    assert.match(sql, /memory_authority_migration_reconciliation/u);
+    assert.match(sql, /"reversible":true/u);
+    assert.doesNotMatch(sql, /SET status = 'active'/u);
+    assert.doesNotMatch(sql, /\b(?:DROP\s+TABLE|TRUNCATE\s+TABLE|DELETE\s+FROM)\b/iu);
+  });
 });

@@ -85,6 +85,7 @@ const memorySnapshot = vi.hoisted(() => ({
   runMaintenance: vi.fn(),
   savePolicy: vi.fn(),
   resolveRecommendation: vi.fn(),
+  resolveTraceMemoryCandidate: vi.fn(),
   reviewDecision: vi.fn(),
   data: {
     files: [{ relativePath: "memory/workspace/note.md", size: 1024, modifiedAt: "2026-04-22T00:00:00.000Z" }],
@@ -272,9 +273,12 @@ const memorySnapshot = vi.hoisted(() => ({
         proposedInsight: "Docs check should stay attached to release verification memory.",
         confidence: 0.82,
         sourceRefs: [{ sourceType: "run", sourceRef: "run-1" }],
-        metadata: {},
-        authority: "agent_proposed",
-        actorId: "agent:test",
+        metadata: { sourceAuthority: "external_channel", sourceSessionId: "shared-session-123456" },
+        authority: "external_channel",
+        actorId: "external-channel-ingest",
+        sourceSessionId: "shared-session-123456",
+        sourceMessageId: "external-message-1",
+        dedupeKey: "f".repeat(64),
         createdAt: "2026-04-22T00:00:00.000Z",
         updatedAt: "2026-04-22T00:00:00.000Z",
       },
@@ -615,6 +619,10 @@ describe("MemoryRoutePage", () => {
     expect(markup).toContain("Release checklist citation helped the operator.");
     expect(markup).toContain("Trace candidates");
     expect(markup).toContain("Docs check should stay attached to release verification memory.");
+    expect(markup).toContain("external channel");
+    expect(markup).toContain("session shared-s");
+    expect(markup).toContain("Promote");
+    expect(markup).toContain("Reject");
     expect(markup).toContain("Graph projection");
     expect(markup).toContain("Provenance map");
     expect(markup).toContain("Memory entities");
@@ -627,6 +635,27 @@ describe("MemoryRoutePage", () => {
     expect(markup).toContain("Run");
     expect(markup).toContain("Artifact");
     expect(markup).toContain("source refs");
+  });
+
+  it("wires operator promote and reject actions for proposed trace candidates", async () => {
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(
+        <MemoryRoutePage
+          route={{ area: "library", section: "memory", theme: "library" } as any}
+          activeWorkspaceId="default"
+          activeWorkspaceName="Default"
+          pendingApprovals={0}
+          navigate={vi.fn()}
+          setActiveWorkspaceId={vi.fn()}
+        />,
+      );
+    });
+
+    act(() => findButton(renderer!.root, "Promote").props.onClick());
+    expect(memorySnapshot.resolveTraceMemoryCandidate).toHaveBeenCalledWith("trace-1", "promote");
+    act(() => findButton(renderer!.root, "Reject").props.onClick());
+    expect(memorySnapshot.resolveTraceMemoryCandidate).toHaveBeenCalledWith("trace-1", "reject");
   });
 
   it("keeps quick-jump navigation on route objects", async () => {
@@ -821,7 +850,7 @@ describe("MemoryRoutePage", () => {
       findButton(renderer!.root, "Save policy").props.onClick();
       findButtons(renderer!.root, "Refresh").at(-1)!.props.onClick();
       findButton(renderer!.root, "Accept").props.onClick();
-      findButton(renderer!.root, "Reject").props.onClick();
+      findButtons(renderer!.root, "Reject").at(-1)!.props.onClick();
       findButton(renderer!.root, "completed").props.onClick();
     });
 

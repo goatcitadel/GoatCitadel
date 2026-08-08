@@ -320,6 +320,184 @@ describe("MemoryContextService", () => {
     );
   });
 
+  it("keeps shared sessions session-only across workspace files, memory items, relation expansion, and provider payloads", async () => {
+    const sentinel = "GC_PRIVATE_MEMORY_SENTINEL_7c35c2";
+    const rootDir = await createWorkspaceRoot();
+    await fs.mkdir(path.join(rootDir, "workspace", "memory"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, "workspace", "memory", "private.md"),
+      `Private workspace fact ${sentinel}`,
+      "utf8",
+    );
+    const storage = createStorage({
+      sessionKinds: { "shared-session": "group" },
+      transcripts: {
+        "shared-session": [
+          createTranscriptEvent({
+            eventId: "shared-event",
+            sessionId: "shared-session",
+            timestamp: "2026-08-08T00:00:00.000Z",
+            message: "The shared session requested its current deployment status.",
+          }),
+        ],
+        "delegated-private-session": [
+          createTranscriptEvent({
+            eventId: "delegated-private-event",
+            sessionId: "delegated-private-session",
+            timestamp: "2026-08-08T00:00:01.000Z",
+            message: `Delegated private detail ${sentinel}`,
+          }),
+        ],
+      },
+      delegationSteps: [{ runId: "run-shared", childSessionId: "delegated-private-session" }],
+      memoryItems: [
+        {
+          itemId: "private-memory-item",
+          namespace: "workspace/default",
+          title: "Private workspace item",
+          content: `Private memory item ${sentinel}`,
+          metadata: { workspaceId: "workspace-1" },
+          pinned: false,
+          status: "active",
+          lifecycleState: "active",
+          createdAt: "2026-08-08T00:00:00.000Z",
+          updatedAt: "2026-08-08T00:00:00.000Z",
+        },
+      ],
+    });
+    const chatCompletions = vi.fn(
+      async (): Promise<ChatCompletionResponse> => ({
+        id: "chatcmpl-shared-memory",
+        object: "chat.completion",
+        created: 1,
+        model: "gpt-test",
+        choices: [
+          {
+            index: 0,
+            finish_reason: "stop",
+            message: {
+              role: "assistant",
+              content: JSON.stringify({
+                summary: "The shared session requested deployment status.",
+                facts: [{ text: "Deployment status was requested.", citationIds: ["t:shared-event"] }],
+                risks: [],
+                openQuestions: [],
+                saferNextSteps: [],
+                citations: [
+                  {
+                    candidateId: "t:shared-event",
+                    sourceType: "transcript",
+                    sourceRef: "shared-event",
+                    snippet: "shared session requested its current deployment status",
+                    score: 0.9,
+                  },
+                ],
+              }),
+            },
+          },
+        ],
+      }),
+    );
+    const service = new MemoryContextService(
+      storage as never,
+      createLlmService({ chatCompletions }) as never,
+      createConfig(rootDir) as never,
+      vi.fn(),
+    );
+
+    const pack = await service.compose({
+      scope: "orchestration",
+      prompt: "Summarize the shared session deployment status request.",
+      sessionId: "shared-session",
+      workspaceId: "workspace-1",
+      runId: "run-shared",
+      relationScope: "project",
+      workspace: "memory",
+      forceRefresh: true,
+    });
+
+    expect(pack.relationScope).toBe("self");
+    expect(pack.quality.accessReceipt).toMatchObject({
+      policyVersion: "1",
+      mode: "session_only",
+      sessionKind: "group",
+      failClosed: false,
+    });
+    expect(pack.citations).toEqual([
+      expect.objectContaining({ candidateId: "t:shared-event", sourceRef: "shared-event" }),
+    ]);
+    expect(storage.memoryMaintenance.queries).toEqual([]);
+    const providerPayload = JSON.stringify(chatCompletions.mock.calls[0]?.[0]);
+    expect(providerPayload).toContain("shared session requested its current deployment status");
+    expect(providerPayload).not.toContain(sentinel);
+    expect(pack.contextText).not.toContain(sentinel);
+  });
+
+  it("does not reuse workspace-private cache entries after canonical session access narrows", async () => {
+    const sentinel = "GC_PRIVATE_CACHE_SENTINEL_91b8d4";
+    const rootDir = await createWorkspaceRoot();
+    await fs.mkdir(path.join(rootDir, "workspace", "memory"), { recursive: true });
+    await fs.writeFile(path.join(rootDir, "workspace", "memory", "private.md"), sentinel, "utf8");
+    const sessionKinds: Record<string, "dm" | "group" | "thread"> = { "session-1": "dm" };
+    const storage = createStorage({ sessionKinds });
+    const chatCompletions = vi.fn(
+      async (): Promise<ChatCompletionResponse> => ({
+        id: "chatcmpl-private-cache",
+        object: "chat.completion",
+        created: 1,
+        model: "gpt-test",
+        choices: [
+          {
+            index: 0,
+            finish_reason: "stop",
+            message: {
+              role: "assistant",
+              content: JSON.stringify({
+                summary: sentinel,
+                facts: [{ text: sentinel, citationIds: ["f:memory/private.md#0"] }],
+                risks: [],
+                openQuestions: [],
+                saferNextSteps: [],
+                citations: [
+                  {
+                    candidateId: "f:memory/private.md#0",
+                    sourceType: "file",
+                    sourceRef: "memory/private.md",
+                    snippet: sentinel,
+                    score: 1,
+                  },
+                ],
+              }),
+            },
+          },
+        ],
+      }),
+    );
+    const service = new MemoryContextService(
+      storage as never,
+      createLlmService({ chatCompletions }) as never,
+      createConfig(rootDir) as never,
+      vi.fn(),
+    );
+    const input = {
+      scope: "chat" as const,
+      prompt: `Recall ${sentinel}`,
+      sessionId: "session-1",
+      workspace: "memory",
+    };
+
+    const privatePack = await service.compose(input);
+    sessionKinds["session-1"] = "thread";
+    const sharedPack = await service.compose(input);
+
+    expect(privatePack.quality.accessReceipt?.mode).toBe("workspace_private");
+    expect(privatePack.contextText).toContain(sentinel);
+    expect(sharedPack.quality.accessReceipt).toMatchObject({ mode: "session_only", sessionKind: "thread" });
+    expect(sharedPack.contextId).not.toBe(privatePack.contextId);
+    expect(sharedPack.contextText).not.toContain(sentinel);
+    expect(chatCompletions).toHaveBeenCalledTimes(1);
+  });
+
   it("budgets ranked candidates before distillation and persists assembly truth through cache hits", async () => {
     const rootDir = await createWorkspaceRoot();
     const memoryItems = Array.from({ length: 8 }, (_, index): MemoryItemRecord => {
@@ -384,6 +562,7 @@ describe("MemoryContextService", () => {
     const input = {
       scope: "chat" as const,
       prompt: "Summarize budgeted release verification memory candidates.",
+      sessionId: "session-1",
       workspace: "memory",
       maxContextTokens: 100,
     };
@@ -478,6 +657,7 @@ describe("MemoryContextService", () => {
     const input = {
       scope: "chat" as const,
       prompt: "Summarize primary release verification memory.",
+      sessionId: "session-1",
       workspace: "memory",
       maxContextTokens: 100,
     };
@@ -559,6 +739,7 @@ describe("MemoryContextService", () => {
     const pack = await service.compose({
       scope: "chat",
       prompt: "What does Beta say about release risk?",
+      sessionId: "session-1",
       workspace: "memory",
       forceRefresh: true,
     });
@@ -632,6 +813,7 @@ describe("MemoryContextService", () => {
     const pack = await service.compose({
       scope: "chat",
       prompt: "What does Gamma need before launch?",
+      sessionId: "session-1",
       workspace: "memory",
       forceRefresh: true,
     });
@@ -739,6 +921,7 @@ describe("MemoryContextService", () => {
     const pack = await service.compose({
       scope: "chat",
       prompt: "How should browser sessions be governed?",
+      sessionId: "session-1",
       workspace: "memory",
       workspaceId: "workspace-a",
       forceRefresh: true,
@@ -854,6 +1037,7 @@ describe("MemoryContextService", () => {
     const pack = await service.compose({
       scope: "chat",
       prompt,
+      sessionId: "session-1",
       workspace: "memory",
       forceRefresh: true,
     });
@@ -1053,6 +1237,7 @@ describe("MemoryContextService", () => {
     const pack = await service.compose({
       scope: "chat",
       prompt,
+      sessionId: "session-1",
       workspace: "memory",
       forceRefresh: true,
     });
@@ -1131,6 +1316,7 @@ describe("MemoryContextService", () => {
     const pack = await service.compose({
       scope: "chat",
       prompt,
+      sessionId: "session-1",
       workspace: "memory",
       forceRefresh: true,
     });
@@ -1213,6 +1399,7 @@ describe("MemoryContextService", () => {
     const pending = service.compose({
       scope: "chat",
       prompt: "Use abort-sensitive memory fact.",
+      sessionId: "session-1",
       workspace: "memory",
       forceRefresh: true,
       signal: controller.signal,
@@ -1264,6 +1451,7 @@ describe("MemoryContextService", () => {
     const pack = await service.compose({
       scope: "chat",
       prompt: "Use timeout-sensitive memory fact.",
+      sessionId: "session-1",
       workspace: "memory",
       forceRefresh: true,
     });
@@ -1489,12 +1677,21 @@ function createStorage(
     transcripts?: Record<string, TranscriptEvent[]>;
     delegationSteps?: Array<{ runId: string; childSessionId?: string }>;
     memoryItems?: MemoryItemRecord[];
+    sessionKinds?: Record<string, "dm" | "group" | "thread">;
   } = {},
 ) {
   const contexts = new Map<string, MemoryContextPack & { cacheKey: string }>();
   const runs: Array<Record<string, unknown>> = [];
   const memoryItemQueries: Array<{ limit: number; workspaceId?: string }> = [];
   return {
+    sessions: {
+      async getBySessionId(sessionId: string) {
+        return {
+          sessionId,
+          kind: options.sessionKinds?.[sessionId] ?? "dm",
+        };
+      },
+    },
     memoryContexts: {
       upsert(input: Omit<MemoryContextPack, "contextId" | "createdAt"> & { cacheKey: string }) {
         const existing = [...contexts.values()].find((context) => context.cacheKey === input.cacheKey);

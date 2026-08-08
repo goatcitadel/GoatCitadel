@@ -497,6 +497,7 @@ async function finalizeRealAutonomousRun(
       messageId: harness.identity.assistantMessageId,
       sessionId: harness.input.sessionId,
       role: "assistant",
+      sourceAuthority: "agent_proposed",
       actorType: "agent",
       actorId: "assistant",
       content: "Canonical autonomous completion.",

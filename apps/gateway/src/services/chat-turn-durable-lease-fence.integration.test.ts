@@ -82,6 +82,7 @@ describe("durable Chat canonical write lease fence", () => {
           messageId: "assistant-expired-write",
           sessionId: "session-expired-write",
           role: "assistant",
+          sourceAuthority: "agent_proposed",
           actorType: "agent",
           actorId: "assistant",
           content: "must roll back",

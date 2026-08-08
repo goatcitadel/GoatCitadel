@@ -3880,12 +3880,25 @@ export class GatewayService {
   public async ingestEvent(
     idempotencyKey: string,
     payload: GatewayEventInput,
-    options?: { onCommit?: () => void; afterCommit?: () => void },
+    options?: {
+      onCommit?: () => void;
+      afterCommit?: () => void;
+      /** Trusted server-only ingress classification; never read from payload. */
+      sourceAuthority?: ChatMessageRecord["sourceAuthority"];
+    },
   ): Promise<GatewayEventResult> {
+    const sourceAuthority =
+      options?.sourceAuthority ??
+      (payload.actor.type === "system"
+        ? "trusted_lifecycle"
+        : payload.message.role === "assistant"
+          ? "agent_proposed"
+          : "operator");
     const result = await this.eventIngestService.ingest({
       endpoint: "/api/v1/gateway/events",
       idempotencyKey,
       payload,
+      sourceAuthority,
       ...(options?.onCommit ? { onCommit: options.onCommit } : {}),
       ...(options?.afterCommit ? { afterCommit: options.afterCommit } : {}),
     });
@@ -6150,6 +6163,7 @@ export class GatewayService {
     const externalSources = this.routeServices?.externalSources;
     return chatRoutedContextService.resolveChatRoutedContextSources(
       {
+        getSessionKind: async (sessionId) => (await this.storage.sessions.getBySessionId(sessionId)).kind,
         getAttachment: (attachmentId) =>
           chatAttachmentService.getChatAttachment(this.buildChatAttachmentHost(), attachmentId),
         readAttachmentContent: async (attachmentId, options) => {
@@ -6163,7 +6177,8 @@ export class GatewayService {
         getActiveMemoryItem: (itemId, workspaceId, options) =>
           this.memoryLifecycleService.getActiveMemoryItemForRoutedContext(itemId, workspaceId, options),
         getPersonalNote: async (noteId) => await this.storage.personalOps.getNote(noteId),
-        getGeneratedArtifact: async (artifactId) => await this.storage.chatGeneratedArtifacts.get(artifactId),
+        getGeneratedArtifact: async (artifactId, scope) =>
+          await this.storage.chatGeneratedArtifacts.getForContext(artifactId, scope),
         // HX-407 C4: the governed exact-byte read for live read_only_external
         // attachments. Absent when the external-source chat composition is not
         // live, in which case external refs fail closed in the resolver.
@@ -6300,6 +6315,7 @@ export class GatewayService {
       role: "user",
       actorType: "user",
       actorId: "operator",
+      sourceAuthority: "operator",
       content,
       timestamp: new Date().toISOString(),
     };
@@ -10002,7 +10018,33 @@ export class GatewayService {
       usage: input.usage,
     };
 
-    const result = await this.ingestEvent(idempotencyKey, payload);
+    const result = await this.ingestEvent(idempotencyKey, payload, { sourceAuthority: "external_channel" });
+    // Run on accepted and replayed durable ingests. Candidate persistence owns a
+    // deterministic dedupe key, so a retry can repair a failed post-commit
+    // proposal write without ever creating a second proposal or active memory.
+    try {
+      await this.memoryLifecycleService.extractLearnedMemory(result.session.sessionId, input.content, {
+        role: "user",
+        sourceRef: payload.eventId,
+        authority: "external_channel",
+      });
+    } catch (error) {
+      try {
+        await this.evidenceEnvelopeService.createEnvelope({
+          eventKind: "memory_write",
+          sessionId: result.session.sessionId,
+          metadata: {
+            decision: "external_candidate_post_ingest_failed",
+            sourceAuthority: "external_channel",
+            sourceMessageId: payload.eventId,
+            errorType: error instanceof Error ? error.name : "unknown",
+          },
+        });
+      } catch {
+        // Candidate review storage and its optional evidence are post-ingest
+        // effects. Neither is allowed to roll back or fail the channel turn.
+      }
+    }
     await this.publishRealtime("system", "channels", {
       type: "channel_message_ingested",
       channel,
@@ -11602,6 +11644,7 @@ function toChatMessageRecord(event: TranscriptEvent): ChatMessageRecord | undefi
     role,
     actorType: event.actorType,
     actorId: event.actorId,
+    sourceAuthority: event.sourceAuthority ?? "unknown",
     content: message.content,
     timestamp: event.timestamp,
     tokenInput: event.tokenInput,
