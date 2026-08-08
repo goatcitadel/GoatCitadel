@@ -166,7 +166,7 @@ describe("channel bot live probes", () => {
         return new Response(JSON.stringify({ id: "bot_1" }), { status: 200 });
       }
       if (url === "https://discord.com/api/v10/channels/channel_1") {
-        return new Response(JSON.stringify({ id: "channel_1" }), { status: 200 });
+        return new Response(JSON.stringify({ id: "channel_1", guild_id: "guild_1" }), { status: 200 });
       }
       if (url === "https://discord.com/api/v10/channels/channel_1/messages" && init?.method === "POST") {
         return new Response(JSON.stringify({ id: "message_1" }), { status: 200 });
@@ -180,6 +180,7 @@ describe("channel bot live probes", () => {
     const result = await runDiscordBotLiveChecks({
       token: "discord-token",
       channelId: "channel_1",
+      guildId: "guild_1",
       runtimeMode: "gateway",
       includeSandboxSend: true,
       runtimeStatus: {
@@ -194,6 +195,7 @@ describe("channel bot live probes", () => {
     expect(result.probe.steps.map((step) => step.key)).toEqual([
       "discord_token_auth",
       "discord_channel_access",
+      "discord_channel_access_guild_match",
       "discord_sandbox_send",
       "discord_sandbox_cleanup",
       "discord_runtime_ready",
@@ -205,8 +207,82 @@ describe("channel bot live probes", () => {
     const sendInit = sendCall?.[1];
     expect(sendInit).toBeDefined();
     expect(JSON.parse(String(sendInit?.body))).toEqual({
-      content: "[GoatCitadel Discord probe 2026-03-31T20:10:00.000Z] Bridge health check. Delete me if I remain.",
+      content: "[GoatCitadel Discord probe 2026-03-31T20:10:00.000Z] Setup check. Delete me if I remain.",
     });
+  });
+
+  it("rejects a Discord channel from a different configured server before sandbox send", async () => {
+    const fetcher = vi.fn(async (url: string) => {
+      if (url === "https://discord.com/api/v10/users/@me") {
+        return new Response(JSON.stringify({ id: "bot_1" }), { status: 200 });
+      }
+      if (url === "https://discord.com/api/v10/channels/channel_1") {
+        return new Response(JSON.stringify({ id: "channel_1", guild_id: "guild_actual" }), { status: 200 });
+      }
+      throw new Error(`unexpected probe call: ${url}`);
+    });
+
+    const result = await runDiscordBotLiveChecks({
+      token: "discord-token",
+      channelId: "channel_1",
+      guildId: "guild_expected",
+      runtimeMode: "gateway",
+      includeSandboxSend: true,
+      runtimeStatus: { ready: true, connectedBotTag: "GoatBot#1234" },
+      fetcher,
+    });
+
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(result.probe.steps).toEqual([
+      expect.objectContaining({ key: "discord_token_auth", status: "pass" }),
+      expect.objectContaining({ key: "discord_channel_access", status: "pass" }),
+      expect.objectContaining({
+        key: "discord_channel_access_guild_match",
+        status: "fail",
+        failureCategory: "destination_mismatch",
+        message: "The configured channel belongs to server guild_actual, not configured server guild_expected.",
+      }),
+      expect.objectContaining({ key: "discord_sandbox_send", status: "skipped" }),
+      expect.objectContaining({ key: "discord_runtime_ready", status: "pass" }),
+    ]);
+    expect(result.checks).toEqual(
+      expect.arrayContaining([expect.objectContaining({ key: "discord_channel_access_guild_match", status: "fail" })]),
+    );
+  });
+
+  it("defers gateway readiness while a Discord setup draft has no durable connection", async () => {
+    const fetcher = vi.fn(async (url: string) => {
+      if (url === "https://discord.com/api/v10/users/@me") {
+        return new Response(JSON.stringify({ id: "bot_1" }), { status: 200 });
+      }
+      if (url === "https://discord.com/api/v10/channels/channel_1") {
+        return new Response(JSON.stringify({ id: "channel_1" }), { status: 200 });
+      }
+      throw new Error(`unexpected probe call: ${url}`);
+    });
+
+    const result = await runDiscordBotLiveChecks({
+      token: "discord-token",
+      channelId: "channel_1",
+      runtimeMode: "gateway",
+      runtimeReadiness: "deferred",
+      includeSandboxSend: false,
+      fetcher,
+    });
+
+    expect(result.probe.steps).toEqual([
+      expect.objectContaining({ key: "discord_token_auth", status: "pass" }),
+      expect.objectContaining({ key: "discord_channel_access", status: "pass" }),
+      expect.objectContaining({
+        key: "discord_runtime_ready",
+        status: "skipped",
+        message: "Gateway runtime readiness will be checked after this draft creates a durable connection.",
+      }),
+    ]);
+    expect(result.checks).toEqual([
+      expect.objectContaining({ key: "discord_token_auth", status: "pass" }),
+      expect.objectContaining({ key: "discord_channel_access", status: "pass" }),
+    ]);
   });
 
   it("treats webhook-only Discord bridge paths as auth-skipped without sandbox send", async () => {

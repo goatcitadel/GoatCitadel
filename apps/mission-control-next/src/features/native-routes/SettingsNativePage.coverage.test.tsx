@@ -800,7 +800,22 @@ function setupResponses() {
         wizard: {
           difficulty: "guided",
           estimatedMinutes: 4,
-          steps: [{ fields: [{ key: "channelId", label: "Channel", type: "text", explanation: "Target channel" }] }],
+          steps: [
+            {
+              id: "slack-values",
+              kind: "field-collection",
+              title: "Configure Slack",
+              fields: [
+                {
+                  key: "channelId",
+                  label: "Channel",
+                  type: "text",
+                  required: false,
+                  explanation: "Target channel",
+                },
+              ],
+            },
+          ],
         },
         validation: { levels: ["config"] },
         testing: { levels: ["send"] },
@@ -815,7 +830,22 @@ function setupResponses() {
         wizard: {
           difficulty: "guided",
           estimatedMinutes: 3,
-          steps: [{ fields: [{ key: "botTokenEnv", label: "Token env", type: "text", explanation: "Bot token" }] }],
+          steps: [
+            {
+              id: "telegram-values",
+              kind: "field-collection",
+              title: "Configure Telegram",
+              fields: [
+                {
+                  key: "botTokenEnv",
+                  label: "Token env",
+                  type: "text",
+                  required: false,
+                  explanation: "Bot token",
+                },
+              ],
+            },
+          ],
         },
         validation: { levels: ["config"] },
         testing: { levels: ["send"] },
@@ -1852,20 +1882,24 @@ describe("SettingsNativePage broad native sections", () => {
     await click(findButton(channels.root, "Telegram setup"));
     await change(channels.root.findByProps({ value: "Telegram setup" }), "Telegram production");
     await change(channels.root.findAllByType("input").find((input) => input.props.type === "checkbox")!, "", false);
+    await click(findButton(channels.root, "Advanced JSON"));
     await change(
       channels.root.findByType("textarea"),
       '{\n  "botTokenEnv": "TELEGRAM_TOKEN",\n  "setupCode": "SETUP2"\n}',
     );
-    await click(findButton(channels.root, "Detect Telegram Chats"));
+    await click(findButton(channels.root, "Guided setup"));
+    await click(findButton(channels.root, "Detect Telegram chats"));
     expect(settingsMocks.discoverTelegramTargets).toHaveBeenCalledWith({
       botToken: undefined,
       botTokenEnv: "TELEGRAM_TOKEN",
       setupCode: "SETUP2",
     });
+    await click(findButton(channels.root, "Advanced JSON"));
     await click(findButton(channels.root, "Save draft"));
+    await click(findButton(channels.root, "Advanced JSON"));
     await click(findButton(channels.root, "Validate"));
-    await click(findButton(channels.root, "Test"));
-    await click(findButton(channels.root, "Finalize"));
+    await click(findButton(channels.root, "Advanced JSON"));
+    await click(findButton(channels.root, "Run live test"));
     expect(settingsMocks.updateChannelSetupDraft).toHaveBeenCalledWith(
       "draft-1",
       expect.objectContaining({
@@ -1876,7 +1910,7 @@ describe("SettingsNativePage broad native sections", () => {
     );
     expect(settingsMocks.validateChannelSetupDraft).toHaveBeenCalledWith("draft-1");
     expect(settingsMocks.testChannelSetupDraft).toHaveBeenCalledWith("draft-1");
-    expect(settingsMocks.finalizeChannelSetupDraft).toHaveBeenCalledWith("draft-1");
+    expect(settingsMocks.finalizeChannelSetupDraft).not.toHaveBeenCalled();
 
     const tools = await mount("tools");
     expect(collectText(tools.root)).toContain("Tool catalog");
@@ -2670,7 +2704,7 @@ describe("SettingsNativePage broad native sections", () => {
     const emptyChannelSelect = emptyChannels.root
       .findAllByType("select")
       .find((select) => collectText(select).includes("No channel definitions available"))!;
-    const emptyCreateButton = findButton(emptyChannels.root, "Create setup draft");
+    const emptyCreateButton = findButton(emptyChannels.root, "Start guided setup");
     expect(emptyChannelSelect.props.value).toBe("");
     expect(emptyChannelSelect.props.disabled).toBe(true);
     expect(emptyCreateButton.props.disabled).toBe(true);
@@ -2682,7 +2716,7 @@ describe("SettingsNativePage broad native sections", () => {
     const populatedChannelSelect = channels.root
       .findAllByType("select")
       .find((select) => collectText(select).includes("Choose a channel definition"))!;
-    const populatedCreateButton = findButton(channels.root, "Create setup draft");
+    const populatedCreateButton = findButton(channels.root, "Start Slack setup");
     expect(populatedChannelSelect.props.value).toBe("channel.slack");
     expect(populatedChannelSelect.props.disabled).toBe(false);
     expect(populatedCreateButton.props.disabled).toBe(false);
@@ -3157,7 +3191,7 @@ describe("SettingsNativePage partial gateway responses", () => {
 
     expect(collectText(channels.root)).toContain("Channel definitions");
     expect(collectText(channels.root)).toContain("No channel definitions available");
-    expect(findButton(channels.root, "Create setup draft").props.disabled).toBe(true);
+    expect(findButton(channels.root, "Start guided setup").props.disabled).toBe(true);
   });
 
   it("renders the MCP section when server, preview, server-mode, and elicitation payloads are empty", async () => {

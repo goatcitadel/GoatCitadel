@@ -49,7 +49,10 @@ export interface ChannelSetupHost {
   }): void;
   runIntegrationConnectionLiveChecks(
     connection: IntegrationConnection,
-    options: { includeSandboxSend: boolean },
+    options: {
+      includeSandboxSend: boolean;
+      discordRuntimeReadiness?: "required" | "deferred";
+    },
   ): Promise<{ checks: ConnectorDiagnosticReport["checks"]; probe?: ConnectorDiagnosticReport["probe"] }>;
   updateIntegrationConnection(
     connectionId: string,
@@ -245,7 +248,12 @@ export async function testChannelSetupDraft(host: ChannelSetupHost, draftId: str
   const runtime = requireChannelSetupDefinition(draft.catalogId);
   const connection = await buildEphemeralChannelConnection(host, draft, runtime.definition.adapter.secretFieldKeys);
   const testSignature = buildChannelSetupRecentTestSignature(draft, connection, runtime.definition.testing.testVersion);
-  const liveChecks = await host.runIntegrationConnectionLiveChecks(connection, { includeSandboxSend: true });
+  const liveChecks = await host.runIntegrationConnectionLiveChecks(connection, {
+    includeSandboxSend: true,
+    ...(draft.catalogId === "channel.discord" && !draft.connectionId
+      ? { discordRuntimeReadiness: "deferred" as const }
+      : {}),
+  });
   const checks = [...host.buildIntegrationConnectionChecks(connection), ...liveChecks.checks];
   const issues = checks.flatMap((check) => mapDiagnosticCheckToChannelIssues(check));
   const status = issues.some((issue) => issue.level === "error")

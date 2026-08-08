@@ -108,8 +108,10 @@ Best for:
 Official references:
 
 - Discord Developer Portal: https://discord.com/developers/applications
-- Discord getting started docs: https://docs.discord.com/developers/docs/getting-started
+- Discord getting started docs: https://docs.discord.com/developers/quick-start/getting-started
 - Discord application auth/install model: https://docs.discord.com/developers/resources/application
+- Discord Gateway intents: https://docs.discord.com/developers/events/gateway
+- Discord permissions: https://docs.discord.com/developers/topics/permissions
 
 ### Choose the right mode first
 
@@ -128,8 +130,9 @@ You should not need to choose a runtime mode in the normal setup flow. Bridge is
 4. Optionally upload a profile image and fill in the description so testers recognize it.
 5. Open the `Bot` section in the left sidebar.
 6. Click `Add Bot` if Discord has not created one yet.
-7. Generate or reset the bot token.
-8. Copy the token into your local environment as `DISCORD_BOT_TOKEN`.
+7. Under `Privileged Gateway Intents`, enable `Message Content Intent`. GoatCitadel requests this intent when it logs in; Discord can reject the gateway session when it is disabled even if REST token checks pass.
+8. Generate or reset the bot token.
+9. Copy the token into your local environment as `DISCORD_BOT_TOKEN`.
 
 Example:
 
@@ -137,43 +140,72 @@ Example:
 DISCORD_BOT_TOKEN=your_token_here
 ```
 
-9. Open the `Installation` section.
-10. For scopes, include at least:
-    - `applications.commands`
-    - `bot`
-11. Start with minimal bot permissions:
+10. Restart GoatCitadel if you added or changed the process environment so the Gateway can read the new value.
+11. Open the `Installation` section and choose a server install with the `bot` scope. Discord currently includes `applications.commands` with bot installs; keep application commands enabled for GoatCitadel's slash commands.
+12. Start with these channel permissions:
+    - `View Channel`
     - `Send Messages`
     - `Read Message History`
-    - `Use Slash Commands` if your workflow needs them
-12. Generate the install link and add the bot to your test server.
-13. In GoatCitadel Mission Control:
-    - open `Connections (Integrations)`
-    - create a new integration using `channel.discord`
+13. Add capability-specific permissions only when needed:
+    - `Add Reactions` for the best-effort seen marker
+    - `Send Messages in Threads` for thread replies
+    - `Attach Files` for uploaded files
+    - `Embed Links` for rich URL-backed messages
+14. Generate the install link and add the bot to your test server.
+15. Enable Developer Mode in Discord. Copy both:
+    - the server id from the target server
+    - the channel id from the sandbox channel inside that server
+16. In GoatCitadel Mission Control:
+    - open `Settings > Channels`
+    - create a Discord setup draft
     - set `botTokenEnv=DISCORD_BOT_TOKEN`
-    - set a default channel id
-14. For `Bridge`, run the built-in probe and confirm:
+    - set the default channel id
+    - set the default server (guild) id when guild policy is `allowlist`
+    - keep DM policy at `pairing` unless you intentionally want open or disabled DMs
+17. Run `Test`. On the bot-token path, the wizard confirms:
     - token auth passes
     - channel access passes
-    - sandbox send passes
-15. For `Gateway`, also confirm the runtime reports:
+    - the channel belongs to the configured server
+    - a visible sandbox message is posted and then deleted
+18. Finish the setup. A new Gateway runtime cannot exist before the connection is saved, so initial runtime readiness is deferred until this step. After finalize, confirm diagnostics report:
     - logged in / ready
     - connected bot identity
     - connected guilds
+19. In the sandbox channel, send `@YourBot hello`. The default guild route requires the mention for normal messages.
+20. If DM policy is `pairing`, send the bot a DM, have an operator approve the generated pending code, then send the message again.
+
+### Default server and sender boundary
+
+The guided Gateway path uses `guildPolicy=allowlist`. The default server id and default channel id create its initial inbound route:
+
+- normal guild messages are accepted only from that server and channel and must mention the bot
+- without narrower advanced user or role rules, any member who can use the selected channel can invoke the bot by mentioning it
+- slash commands still require the allowlisted server/channel route, but they do not require an `@mention`
+- set guild policy to `off` for a DM-only setup; in that mode a default server id is not required
+- DM `pairing` is separate from guild access and remains the recommended default
+
+The advanced webhook-only Bridge path is outbound-only. The wizard structurally validates its webhook URL, but it does not run an automatic live webhook send; confirm that fallback manually in Discord.
 
 ### Discord troubleshooting
 
 - `401`: token invalid, expired, or copied incorrectly
+- gateway close `4014` or valid token but no ready state: enable `Message Content Intent` on the application's Bot page; verified apps may also need intent approval
 - `404` on channel probe: wrong channel id or wrong target
 - `403` on channel probe or sandbox send: bot is installed, but channel permissions are incomplete
+- server/channel match failure: the channel id belongs to a different server; copy both ids again from the same sandbox route
+- bot is online but ignores a normal server message: confirm the server/channel ids match and mention the bot
+- slash command is missing or unavailable: confirm the app was installed with application commands enabled and the member can use application commands in that channel
+- first DM returns a pairing code instead of starting work: expected under the default pairing policy; approve the pending sender, then retry
 - bridge mode showing "offline": expected, because bridge mode does not establish persistent presence
 - gateway mode not ready: confirm the bot token env var is available to the gateway process and the bot is installed in the target server
-- webhook-only bridge mode: send-only fallback, no reactions, no inbound routing, no online presence
+- webhook-only bridge mode: send-only fallback, no reactions, inbound routing, or online presence; confirm delivery manually
 
 ### Intents and restarts
 
-- Bridge mode does not require a gateway restart because the bot should appear online. Restart only after actual env/config changes.
-- Gateway mode needs the usual Discord bot gateway setup and message-content access for inbound routing.
-- Privileged-intent guidance matters for gateway mode, not for the default bridge-only path.
+- Gateway mode explicitly requests Discord's privileged Message Content intent for normal inbound text.
+- Restart GoatCitadel after adding or changing `DISCORD_BOT_TOKEN` so the Gateway process receives the environment value.
+- Finalizing or updating a saved Gateway connection synchronizes its persistent runtime; use connection diagnostics to inspect login or reconnect failures.
+- Bridge mode never creates online presence. It needs a restart only when its process environment changes.
 
 ## Slack
 

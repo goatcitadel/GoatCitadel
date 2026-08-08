@@ -39,9 +39,11 @@ interface TelegramProbeInput {
 interface DiscordProbeInput {
   token?: string;
   channelId?: string;
+  guildId?: string;
   runtimeMode: DiscordRuntimeMode;
   webhookUrl?: string;
   includeSandboxSend: boolean;
+  runtimeReadiness?: "required" | "deferred";
   runtimeStatus?: Pick<DiscordRuntimeStatus, "ready" | "lastError" | "connectedBotTag">;
   fetcher: (url: string, init?: RequestInit) => Promise<Response>;
   checkedAt?: string;
@@ -438,7 +440,7 @@ export async function runDiscordBotLiveChecks(input: DiscordProbeInput): Promise
       });
     }
     if (input.runtimeMode === "gateway") {
-      probe.steps.push(buildDiscordRuntimeProbeStep(input.runtimeStatus));
+      probe.steps.push(buildDiscordRuntimeProbeStep(input.runtimeStatus, input.runtimeReadiness));
     }
     return { checks: mapProbeStepsToChecks(probe.steps), probe };
   }
@@ -454,7 +456,7 @@ export async function runDiscordBotLiveChecks(input: DiscordProbeInput): Promise
     if (auth.status < 200 || auth.status >= 300) {
       probe.steps.push(buildDiscordProbeFailure("discord_token_auth", "Token auth", auth.status));
       if (input.runtimeMode === "gateway") {
-        probe.steps.push(buildDiscordRuntimeProbeStep(input.runtimeStatus));
+        probe.steps.push(buildDiscordRuntimeProbeStep(input.runtimeStatus, input.runtimeReadiness));
       }
       return { checks: mapProbeStepsToChecks(probe.steps), probe };
     }
@@ -473,7 +475,7 @@ export async function runDiscordBotLiveChecks(input: DiscordProbeInput): Promise
       failureCategory: "platform_unavailable",
     });
     if (input.runtimeMode === "gateway") {
-      probe.steps.push(buildDiscordRuntimeProbeStep(input.runtimeStatus));
+      probe.steps.push(buildDiscordRuntimeProbeStep(input.runtimeStatus, input.runtimeReadiness));
     }
     return { checks: mapProbeStepsToChecks(probe.steps), probe };
   }
@@ -496,7 +498,7 @@ export async function runDiscordBotLiveChecks(input: DiscordProbeInput): Promise
       });
     }
     if (input.runtimeMode === "gateway") {
-      probe.steps.push(buildDiscordRuntimeProbeStep(input.runtimeStatus));
+      probe.steps.push(buildDiscordRuntimeProbeStep(input.runtimeStatus, input.runtimeReadiness));
     }
     return { checks: mapProbeStepsToChecks(probe.steps), probe };
   }
@@ -512,7 +514,7 @@ export async function runDiscordBotLiveChecks(input: DiscordProbeInput): Promise
     if (channel.status < 200 || channel.status >= 300) {
       probe.steps.push(buildDiscordProbeFailure("discord_channel_access", "Channel access", channel.status));
       if (input.runtimeMode === "gateway") {
-        probe.steps.push(buildDiscordRuntimeProbeStep(input.runtimeStatus));
+        probe.steps.push(buildDiscordRuntimeProbeStep(input.runtimeStatus, input.runtimeReadiness));
       }
       return { checks: mapProbeStepsToChecks(probe.steps), probe };
     }
@@ -522,6 +524,38 @@ export async function runDiscordBotLiveChecks(input: DiscordProbeInput): Promise
       status: "pass",
       message: "The configured channel is reachable with the current bot permissions.",
     });
+    if (input.guildId) {
+      const actualGuildId = asString(channel.payload.guild_id);
+      if (actualGuildId !== input.guildId) {
+        probe.steps.push({
+          key: "discord_channel_access_guild_match",
+          label: "Server/channel match",
+          status: "fail",
+          message: actualGuildId
+            ? `The configured channel belongs to server ${actualGuildId}, not configured server ${input.guildId}.`
+            : `The configured channel did not report server ${input.guildId}; confirm that it is a guild channel in the selected server.`,
+          failureCategory: "destination_mismatch",
+        });
+        if (input.includeSandboxSend) {
+          probe.steps.push({
+            key: "discord_sandbox_send",
+            label: "Sandbox send",
+            status: "skipped",
+            message: "Sandbox send was skipped because the channel does not belong to the configured server.",
+          });
+        }
+        if (input.runtimeMode === "gateway") {
+          probe.steps.push(buildDiscordRuntimeProbeStep(input.runtimeStatus, input.runtimeReadiness));
+        }
+        return { checks: mapProbeStepsToChecks(probe.steps), probe };
+      }
+      probe.steps.push({
+        key: "discord_channel_access_guild_match",
+        label: "Server/channel match",
+        status: "pass",
+        message: "The configured channel belongs to the configured server.",
+      });
+    }
   } catch (error) {
     probe.steps.push({
       key: "discord_channel_access",
@@ -531,7 +565,7 @@ export async function runDiscordBotLiveChecks(input: DiscordProbeInput): Promise
       failureCategory: "platform_unavailable",
     });
     if (input.runtimeMode === "gateway") {
-      probe.steps.push(buildDiscordRuntimeProbeStep(input.runtimeStatus));
+      probe.steps.push(buildDiscordRuntimeProbeStep(input.runtimeStatus, input.runtimeReadiness));
     }
     return { checks: mapProbeStepsToChecks(probe.steps), probe };
   }
@@ -546,14 +580,14 @@ export async function runDiscordBotLiveChecks(input: DiscordProbeInput): Promise
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            content: `[GoatCitadel Discord probe ${checkedAt}] Bridge health check. Delete me if I remain.`,
+            content: `[GoatCitadel Discord probe ${checkedAt}] Setup check. Delete me if I remain.`,
           }),
         }),
       );
       if (send.status < 200 || send.status >= 300) {
         probe.steps.push(buildDiscordProbeFailure("discord_sandbox_send", "Sandbox send", send.status));
         if (input.runtimeMode === "gateway") {
-          probe.steps.push(buildDiscordRuntimeProbeStep(input.runtimeStatus));
+          probe.steps.push(buildDiscordRuntimeProbeStep(input.runtimeStatus, input.runtimeReadiness));
         }
         return { checks: mapProbeStepsToChecks(probe.steps), probe };
       }
@@ -575,7 +609,7 @@ export async function runDiscordBotLiveChecks(input: DiscordProbeInput): Promise
           failureCategory: "unknown",
         });
         if (input.runtimeMode === "gateway") {
-          probe.steps.push(buildDiscordRuntimeProbeStep(input.runtimeStatus));
+          probe.steps.push(buildDiscordRuntimeProbeStep(input.runtimeStatus, input.runtimeReadiness));
         }
         return { checks: mapProbeStepsToChecks(probe.steps), probe };
       }
@@ -600,7 +634,7 @@ export async function runDiscordBotLiveChecks(input: DiscordProbeInput): Promise
           failureCategory: cleanup.status === 403 ? "permission_mismatch" : inferFailureCategory(cleanup.status),
         });
         if (input.runtimeMode === "gateway") {
-          probe.steps.push(buildDiscordRuntimeProbeStep(input.runtimeStatus));
+          probe.steps.push(buildDiscordRuntimeProbeStep(input.runtimeStatus, input.runtimeReadiness));
         }
         return { checks: mapProbeStepsToChecks(probe.steps), probe };
       }
@@ -619,14 +653,14 @@ export async function runDiscordBotLiveChecks(input: DiscordProbeInput): Promise
         failureCategory: "platform_unavailable",
       });
       if (input.runtimeMode === "gateway") {
-        probe.steps.push(buildDiscordRuntimeProbeStep(input.runtimeStatus));
+        probe.steps.push(buildDiscordRuntimeProbeStep(input.runtimeStatus, input.runtimeReadiness));
       }
       return { checks: mapProbeStepsToChecks(probe.steps), probe };
     }
   }
 
   if (input.runtimeMode === "gateway") {
-    probe.steps.push(buildDiscordRuntimeProbeStep(input.runtimeStatus));
+    probe.steps.push(buildDiscordRuntimeProbeStep(input.runtimeStatus, input.runtimeReadiness));
   }
   return { checks: mapProbeStepsToChecks(probe.steps), probe };
 }
@@ -1641,7 +1675,16 @@ function buildDiscordProbeFailure(key: string, label: string, statusCode: number
 
 function buildDiscordRuntimeProbeStep(
   runtimeStatus?: Pick<DiscordRuntimeStatus, "ready" | "lastError" | "connectedBotTag">,
+  readiness: "required" | "deferred" = "required",
 ): ChannelProbeReport["steps"][number] {
+  if (readiness === "deferred") {
+    return {
+      key: "discord_runtime_ready",
+      label: "Gateway runtime",
+      status: "skipped",
+      message: "Gateway runtime readiness will be checked after this draft creates a durable connection.",
+    };
+  }
   if (!runtimeStatus) {
     return {
       key: "discord_runtime_ready",
