@@ -1,4 +1,3 @@
-/* eslint-disable max-lines -- Keep the production-dark routes 8-10 authentication, replay, and dispatch boundary auditable. */
 import { createHash, timingSafeEqual } from "node:crypto";
 import { types as nodeUtilTypes } from "node:util";
 import { canonicalJsonString } from "@goatcitadel/contracts";
@@ -33,8 +32,7 @@ export const REMOTE_WORKER_ASSIGNMENT_DISPATCH_RESPONSE_SCHEMA_VERSION =
   "goatcitadel.remote-worker-assignment-dispatch-response.v1" as const;
 export const REMOTE_WORKER_ASSIGNMENT_OFFER_POLL_SCHEMA_VERSION =
   "goatcitadel.remote-worker-assignment-offer-poll.v1" as const;
-export const REMOTE_WORKER_ASSIGNMENT_CLAIM_SCHEMA_VERSION =
-  "goatcitadel.remote-worker-assignment-claim.v1" as const;
+export const REMOTE_WORKER_ASSIGNMENT_CLAIM_SCHEMA_VERSION = "goatcitadel.remote-worker-assignment-claim.v1" as const;
 export const REMOTE_WORKER_ASSIGNMENT_WORKLOAD_READ_SCHEMA_VERSION =
   "goatcitadel.remote-worker-assignment-workload-read.v1" as const;
 
@@ -58,10 +56,7 @@ export interface RemoteWorkerAssignmentDispatchProtocolPort {
 export interface RemoteWorkerAssignmentDispatchProtocolDependencies {
   readonly credentialAuthority: RemoteWorkerCurrentRuntimeCredentialAuthorityPort;
   readonly nonceConsumer: RemoteWorkerDurableNonceConsumePort;
-  readonly dispatch: Pick<
-    RemoteWorkerAssignmentDispatchService,
-    "listOffers" | "claimOffer" | "readWorkload"
-  >;
+  readonly dispatch: Pick<RemoteWorkerAssignmentDispatchService, "listOffers" | "claimOffer" | "readWorkload">;
   readonly clock: () => Date;
 }
 
@@ -74,10 +69,7 @@ type ResponseBase = Readonly<{
 type SecretFreeClaimOutcome = Readonly<{
   disposition: ClaimRemoteWorkerAssignmentOfferOutcome["disposition"];
   assignment: ClaimRemoteWorkerAssignmentOfferOutcome["assignment"];
-  generation: Omit<
-    ClaimRemoteWorkerAssignmentOfferOutcome["generation"],
-    "idempotencyKey" | "requestSha256"
-  >;
+  generation: Omit<ClaimRemoteWorkerAssignmentOfferOutcome["generation"], "idempotencyKey" | "requestSha256">;
   lease: Omit<ClaimRemoteWorkerAssignmentOfferOutcome["lease"], "idempotencyKey" | "requestSha256">;
   workload: ClaimRemoteWorkerAssignmentOfferOutcome["workload"];
 }>;
@@ -150,9 +142,7 @@ export class RemoteWorkerAssignmentDispatchProtocolError extends Error {
  * retry must use the same canonical request and idempotency key with a fresh
  * signed nonce; claim storage returns the secret-free canonical replay.
  */
-export class RemoteWorkerAssignmentDispatchProtocolService
-  implements RemoteWorkerAssignmentDispatchProtocolPort
-{
+export class RemoteWorkerAssignmentDispatchProtocolService implements RemoteWorkerAssignmentDispatchProtocolPort {
   public constructor(private readonly dependencies: RemoteWorkerAssignmentDispatchProtocolDependencies) {
     if (typeof dependencies.clock !== "function") throw rejected("Remote worker dispatch clock is unavailable.");
   }
@@ -220,7 +210,12 @@ export class RemoteWorkerAssignmentDispatchProtocolService
         throw rejected("Remote worker dispatch replay protection is unavailable.");
       }
       if (!consumed) throw rejected("Remote worker dispatch request nonce was already consumed.");
-      return await this.executeAuthorized(request.route, request.body.idempotencyKey, request.payload, authority.current);
+      return await this.executeAuthorized(
+        request.route,
+        request.body.idempotencyKey,
+        request.payload,
+        authority.current,
+      );
     } catch (error) {
       if (error instanceof RemoteWorkerAssignmentDispatchProtocolError) throw error;
       throw rejected("Remote worker assignment dispatch could not be completed.");
@@ -279,11 +274,12 @@ export class RemoteWorkerAssignmentDispatchProtocolService
   }
 }
 
-function secretFreeClaimOutcome(
-  outcome: ClaimRemoteWorkerAssignmentOfferOutcome,
-): SecretFreeClaimOutcome {
-  const { idempotencyKey: _generationIdempotencyKey, requestSha256: _generationRequestSha256, ...generation } =
-    outcome.generation;
+function secretFreeClaimOutcome(outcome: ClaimRemoteWorkerAssignmentOfferOutcome): SecretFreeClaimOutcome {
+  const {
+    idempotencyKey: _generationIdempotencyKey,
+    requestSha256: _generationRequestSha256,
+    ...generation
+  } = outcome.generation;
   const { idempotencyKey: _leaseIdempotencyKey, requestSha256: _leaseRequestSha256, ...lease } = outcome.lease;
   return Object.freeze({
     disposition: outcome.disposition,
@@ -375,14 +371,7 @@ function normalizeClaimPayload(value: unknown): ClaimPayload {
 function normalizeWorkloadPayload(value: unknown): WorkloadPayload {
   const fields = exactOwnDataFields(
     value,
-    [
-      "schemaVersion",
-      "registryWorkspaceId",
-      "assignmentId",
-      "assignmentGeneration",
-      "leaseRevision",
-      "leaseToken",
-    ],
+    ["schemaVersion", "registryWorkspaceId", "assignmentId", "assignmentGeneration", "leaseRevision", "leaseToken"],
     [],
     "assignment workload payload",
   );
