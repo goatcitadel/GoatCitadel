@@ -61,6 +61,7 @@ export * from "./remote-worker-protected-admission.js";
 export * from "./remote-worker-protocol.js";
 export * from "./remote-worker-mesh-node-admission.js";
 export * from "./remote-worker-assignment.js";
+export * from "./durable-chat-turn-payload.js";
 export * from "./remote-worker-cell.js";
 export * from "./remote-worker-inference.js";
 export * from "./remote-worker-ops.js";

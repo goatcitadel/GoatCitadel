@@ -147,6 +147,19 @@ export interface CompareRemoteWorkerMeshNodeAuthorityFenceInput extends ResolveR
   readonly expected?: RemoteWorkerMeshNodeAuthorityFence;
 }
 
+/**
+ * Exact M2 runtime credential identity used to discover the one current M3
+ * admission for a worker in an execution workspace. The raw credential is
+ * deliberately absent: callers resolve it through the protected M2 owner and
+ * pass only its storage-bound digest.
+ */
+export interface ResolveCurrentRemoteWorkerMeshNodeAdmissionInput extends RemoteWorkerMeshNodeVerifiedM2FenceInput {
+  readonly workspaceId: string;
+  readonly credentialId: string;
+  readonly credentialGeneration: number;
+  readonly authorizationCredentialSha256: string;
+}
+
 interface RemoteWorkerMeshNodeAdmissionRecordBase {
   readonly workspaceId: string;
   readonly nodeId: string;
@@ -739,6 +752,81 @@ export class RemoteWorkerMeshNodeAdmissionRepository {
     return resolution.fence;
   }
 
+  /**
+   * Resolve the current remote-worker admission bound to an exact protected M2
+   * credential. This is an advisory read for downstream owners: any mutation
+   * must still compare the returned fence inside its own transaction.
+   */
+  public resolveCurrentForRuntimeCredential(
+    input: ResolveCurrentRemoteWorkerMeshNodeAdmissionInput,
+  ): RemoteWorkerMeshNodeAuthorityFence | undefined {
+    const normalized = normalizeCurrentCredentialResolutionInput(input);
+    return this.db.transaction("immediate", () => {
+      this.acquirePostgresLocks(
+        normalized.workspaceId,
+        normalized.nodeId,
+        normalized.registryWorkspaceId,
+        normalized.workerId,
+      );
+      const binding = this.db
+        .prepare(
+          `SELECT binding.*
+             FROM remote_worker_mesh_node_bindings binding
+             JOIN remote_worker_mesh_join_authorities authority
+               ON authority.registry_workspace_id = binding.registry_workspace_id
+              AND authority.bootstrap_id = binding.bootstrap_id
+              AND authority.worker_id = binding.worker_id
+              AND authority.worker_generation = binding.worker_generation
+              AND authority.credential_id = binding.credential_id
+              AND authority.credential_generation = binding.credential_generation
+              AND authority.runtime_credential_token_sha256 = binding.runtime_credential_token_sha256
+              AND authority.protected_evidence_envelope_sha256 = binding.protected_evidence_envelope_sha256
+              AND authority.protected_evidence_context_sha256 = binding.protected_evidence_context_sha256
+              AND authority.node_id = binding.node_id
+              AND authority.workspace_id = binding.workspace_id
+              AND authority.join_authority_generation = binding.join_authority_generation
+              AND authority.join_credential_sha256 = binding.join_credential_sha256
+              AND authority.client_certificate_sha256 = binding.client_certificate_sha256
+            WHERE binding.workspace_id = @workspaceId AND binding.node_id = @nodeId
+              AND binding.registry_workspace_id = @registryWorkspaceId
+              AND binding.bootstrap_id = @bootstrapId
+              AND binding.worker_id = @workerId AND binding.worker_generation = @workerGeneration
+              AND binding.credential_id = @credentialId
+              AND binding.credential_generation = @credentialGeneration
+              AND binding.runtime_credential_token_sha256 = @authorizationCredentialSha256
+              AND binding.client_certificate_sha256 = @clientCertificateSha256
+              AND binding.protected_evidence_envelope_sha256 = @protectedAdmissionEnvelopeSha256
+              AND binding.protected_evidence_context_sha256 = @protectedAdmissionContextSha256
+              AND authority.runtime_credential_token_sha256 = @authorizationCredentialSha256
+            ORDER BY binding.admission_generation DESC LIMIT 1`,
+        )
+        .get(normalized) as BindingRow | undefined;
+      if (!binding) return undefined;
+      const resolution = this.resolveExactAdmission({
+        workspaceId: binding.workspace_id,
+        nodeId: binding.node_id,
+        admissionGeneration: asPositiveInteger(binding.admission_generation, "admissionGeneration"),
+      });
+      if (resolution.disposition !== "current") return undefined;
+      const expected = {
+        registryWorkspaceId: normalized.registryWorkspaceId,
+        bootstrapId: normalized.bootstrapId,
+        workerId: normalized.workerId,
+        workerGeneration: normalized.workerGeneration,
+        credentialId: normalized.credentialId,
+        credentialGeneration: normalized.credentialGeneration,
+        workspaceId: normalized.workspaceId,
+        nodeId: normalized.nodeId,
+        protectedAdmissionEnvelopeSha256: normalized.protectedAdmissionEnvelopeSha256,
+        protectedAdmissionContextSha256: normalized.protectedAdmissionContextSha256,
+      };
+      for (const [field, value] of Object.entries(expected)) {
+        if (resolution.fence[field as keyof typeof resolution.fence] !== value) return undefined;
+      }
+      return resolution.fence;
+    });
+  }
+
   private selectVerifiedM2Credential(
     fence: RemoteWorkerMeshNodeVerifiedM2FenceInput,
     expiresAt: string,
@@ -1241,6 +1329,18 @@ function normalizeResolutionInput(
     workspaceId: identifier(input.workspaceId, "workspaceId"),
     nodeId: identifier(input.nodeId, "nodeId"),
     admissionGeneration: asPositiveInteger(input.admissionGeneration, "admissionGeneration"),
+  };
+}
+
+function normalizeCurrentCredentialResolutionInput(
+  input: ResolveCurrentRemoteWorkerMeshNodeAdmissionInput,
+): ResolveCurrentRemoteWorkerMeshNodeAdmissionInput {
+  return {
+    ...normalizeM2Fence(input),
+    workspaceId: identifier(input.workspaceId, "workspaceId"),
+    credentialId: identifier(input.credentialId, "credentialId"),
+    credentialGeneration: asPositiveInteger(input.credentialGeneration, "credentialGeneration"),
+    authorizationCredentialSha256: digest(input.authorizationCredentialSha256, "authorizationCredentialSha256"),
   };
 }
 

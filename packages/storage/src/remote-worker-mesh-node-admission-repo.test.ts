@@ -5,32 +5,123 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import {
+  REMOTE_WORKER_ASSIGNMENT_MANIFEST_SCHEMA_VERSION,
   REMOTE_WORKER_PROTOCOL_VERSION,
   REMOTE_WORKER_PROTECTED_ADMISSION_EVIDENCE_SCHEMA_VERSION,
   REMOTE_WORKER_PROTECTED_ADMISSION_SIGNER_PIN_SCHEMA_VERSION,
   REMOTE_WORKER_RUNTIME_MANIFEST_SCHEMA_VERSION,
+  buildRemoteWorkerAssignmentParentContext,
   canonicalJsonString,
+  remoteWorkerAssignmentParentContextSha256,
   remoteWorkerProtectedAdmissionContextSha256,
   remoteWorkerProtectedAdmissionRemoteCallerBindingSha256,
+  type ChatTurnCapabilityProfileDraft,
   type CreateRemoteWorkerBootstrapCommand,
   type FinalizeRemoteWorkerBootstrapAdmissionCommand,
+  type RemoteWorkerAssignmentManifest,
   type RemoteWorkerBootstrapRecord,
   type RemoteWorkerProtectedAdmissionSignerPin,
   type RemoteWorkerRuntimeManifest,
 } from "@goatcitadel/contracts";
+import { ChatSessionLifecycleRepository } from "./chat-session-lifecycle-repo.js";
+import {
+  ChatTurnCapabilityProfileRepository,
+  sealChatTurnCapabilityProfile,
+} from "./chat-turn-capability-profile-repo.js";
+import { ChatTurnTraceRepository } from "./chat-turn-trace-repo.js";
 import type { DatabaseClient } from "./db.js";
+import { DurableRunRepository } from "./durable-run-repo.js";
 import {
   RemoteWorkerAdmissionRepository,
   type FinalizeRemoteWorkerBootstrapAdmissionWithNonceInput,
 } from "./remote-worker-admission-repo.js";
 import { RemoteWorkerMeshNodeAdmissionRepository } from "./remote-worker-mesh-node-admission-repo.js";
+import { RemoteWorkerAssignmentRepository } from "./remote-worker-assignment-repo.js";
 import type { RemoteWorkerNonceConsumeInput } from "./remote-worker-nonce-repo.js";
+import { SessionMutationAdmissionRepository } from "./session-mutation-admission-repo.js";
 import { createDatabase } from "./sqlite.js";
+import { TaskRepository } from "./task-repo.js";
 
 const digest = (value: string | Uint8Array): string =>
   createHash("sha256")
     .update(typeof value === "string" ? Buffer.from(value, "utf8") : value)
     .digest("hex");
+
+function taskBoundCapabilityProfileDraft(input: {
+  profileId: string;
+  turnId: string;
+  sessionId: string;
+  durableRunId: string;
+  createdAt: string;
+}): ChatTurnCapabilityProfileDraft {
+  const emptyCatalogHash = digest(canonicalJsonString([]));
+  return {
+    profileId: input.profileId,
+    schemaVersion: "chat.turn.capability-profile.v1",
+    identity: {
+      turnId: input.turnId,
+      sessionId: input.sessionId,
+      workspaceId: "default",
+      citadelId: "default",
+      durableRunId: input.durableRunId,
+      operatorId: "operator-a",
+      authActorId: "operator-a",
+      authActorSource: "token",
+    },
+    source: { channel: "chat", account: "default" },
+    catalog: {
+      snapshotId: "assignment-snapshot",
+      inspectableHash: emptyCatalogHash,
+      callableHash: emptyCatalogHash,
+      inspectableCount: 0,
+      callableCount: 0,
+    },
+    selection: {
+      contentHash: digest("assignment-content"),
+      effectiveProviderId: "provider-a",
+      effectiveModel: "model-a",
+      allowedFallbacks: [],
+      mode: "chat",
+      webMode: "off",
+      memory: {
+        mode: "off",
+        retrievalMode: "standard",
+        workspaceId: "default",
+        sessionId: input.sessionId,
+        contextManifestRef: `chat-memory-scope:${digest("assignment-memory-scope")}`,
+        writeApprovalRequired: true,
+      },
+      thinkingLevel: "standard",
+      speedMode: "standard",
+      subagentPolicy: "auto_when_useful",
+      toolAutonomy: "manual",
+      tools: [],
+      modelNameAllowMap: [],
+      trustedSkills: [],
+    },
+    governance: {
+      activeGrants: [],
+      permission: {
+        profileId: "safe",
+        approvalMode: "approve_all",
+        profileHash: digest("assignment-permission"),
+      },
+      policyDecisions: [],
+      authReadiness: [
+        { kind: "provider", ref: "provider-a", status: "ready", reasonCodes: [] },
+        { kind: "channel", ref: "chat", status: "ready", reasonCodes: [] },
+      ],
+      approval: {
+        mode: "approve_all",
+        selectedToolCount: 0,
+        toolsRequiringApproval: [],
+        approvalGranted: false,
+      },
+    },
+    preflightFingerprint: digest("assignment-preflight"),
+    createdAt: input.createdAt,
+  };
+}
 
 describe("RemoteWorkerMeshNodeAdmissionRepository", () => {
   it("issues a secret once and atomically admits/replays with one durable nonce per attempt", () => {
@@ -245,6 +336,287 @@ describe("RemoteWorkerMeshNodeAdmissionRepository", () => {
       assert.deepEqual(
         repo.compareCurrentAuthorityFence({ ...current.admission, expected: current.fence }),
         current.fence,
+      );
+
+      const currentByCredential = repo.resolveCurrentForRuntimeCredential({
+        registryWorkspaceId: finalized.generation.registryWorkspaceId,
+        bootstrapId: finalized.generation.bootstrapId,
+        workerId: finalized.generation.workerId,
+        workerGeneration: finalized.generation.workerGeneration,
+        nodeId: finalized.generation.nodeId,
+        clientCertificateSha256: finalized.generation.clientCertificateSha256,
+        protectedAdmissionEnvelopeSha256: finalizedInput.command.verifiedProtectedAdmissionEvidence!.envelopeSha256,
+        protectedAdmissionContextSha256: finalizedInput.command.verifiedProtectedAdmissionEvidence!.contextSha256,
+        workspaceId: "default",
+        credentialId: finalized.credential.credentialId,
+        credentialGeneration: finalized.credential.credentialGeneration,
+        authorizationCredentialSha256: finalizedInput.command.credentialTokenSha256,
+      });
+      assert.deepEqual(currentByCredential, current.fence);
+      assert.equal(
+        repo.resolveCurrentForRuntimeCredential({
+          registryWorkspaceId: finalized.generation.registryWorkspaceId,
+          bootstrapId: finalized.generation.bootstrapId,
+          workerId: finalized.generation.workerId,
+          workerGeneration: finalized.generation.workerGeneration,
+          nodeId: finalized.generation.nodeId,
+          clientCertificateSha256: finalized.generation.clientCertificateSha256,
+          protectedAdmissionEnvelopeSha256: finalizedInput.command.verifiedProtectedAdmissionEvidence!.envelopeSha256,
+          protectedAdmissionContextSha256: finalizedInput.command.verifiedProtectedAdmissionEvidence!.contextSha256,
+          workspaceId: "default",
+          credentialId: finalized.credential.credentialId,
+          credentialGeneration: finalized.credential.credentialGeneration,
+          authorizationCredentialSha256: digest("wrong-runtime-credential"),
+        }),
+        undefined,
+      );
+
+      const now = databaseClock(db);
+      const taskId = "task-assignment-claim";
+      const sessionId = "session-assignment-claim";
+      const turnId = "turn-assignment-claim";
+      const durableRunId = "run-assignment-claim";
+      new TaskRepository(db).create({ title: "Remote assignment", workspaceId: "default" }, now, { taskId });
+      new ChatSessionLifecycleRepository(db).initialize({
+        workspaceId: "default",
+        sessionId,
+        actorId: "operator-a",
+        idempotencyKey: "lifecycle:assignment-claim",
+        correlationId: "correlation:assignment-claim",
+        metadataTimestamp: now,
+      });
+      new ChatTurnTraceRepository(db).create({
+        turnId,
+        sessionId,
+        userMessageId: "message-assignment-claim",
+        mode: "chat",
+        webMode: "off",
+        memoryMode: "off",
+        thinkingLevel: "standard",
+        startedAt: now,
+      });
+      const profile = sealChatTurnCapabilityProfile(
+        taskBoundCapabilityProfileDraft({
+          profileId: "profile-assignment-claim",
+          turnId,
+          sessionId,
+          durableRunId,
+          createdAt: now,
+        }),
+      );
+      const parentInput = {
+        executionWorkspaceId: "default",
+        durableRunId,
+        taskId,
+        sessionId,
+        turnId,
+      } as const;
+      const parentContext = buildRemoteWorkerAssignmentParentContext(parentInput);
+      const parentContextSha256 = remoteWorkerAssignmentParentContextSha256(parentInput);
+      const durableRequest = { policyTaskId: taskId, content: "Execute the durable task." } as const;
+      const admissionMaterialSha256 = digest(canonicalJsonString({ version: 2, request: durableRequest }));
+      const mutationAdmissions = new SessionMutationAdmissionRepository(db);
+      const profileAdmission = mutationAdmissions.admit({
+        workspaceId: "default",
+        sessionId,
+        turnId,
+        runtimeOwnerId: "runtime-assignment-claim",
+        admissionKind: "turn_write",
+        aggregateRevision: 1,
+        controllerGeneration: 1,
+        actorKind: "operator",
+        actorId: "operator-a",
+        operation: "chat.turn.execute",
+        materialSha256: admissionMaterialSha256,
+        idempotencyKey: "admission:assignment-claim",
+        correlationId: "correlation:assignment-claim",
+      }).admission;
+      db.transaction("immediate", () => {
+        mutationAdmissions.bindCapabilityProfile({
+          admissionId: profileAdmission.admissionId,
+          workspaceId: profileAdmission.workspaceId,
+          sessionId: profileAdmission.sessionId,
+          sessionIncarnationId: profileAdmission.sessionIncarnationId,
+          turnId: profileAdmission.turnId!,
+          profileId: profile.profileId,
+          profileHash: profile.hashes.profileHash,
+          createdAt: profile.createdAt,
+          requestRuntimeClaim: {
+            runtimeOwnerId: profileAdmission.runtimeOwnerId!,
+            leaseRevision: profileAdmission.runtimeLeaseRevision!,
+          },
+        });
+        new ChatTurnCapabilityProfileRepository(db).create(profile);
+      });
+      const durablePayload = {
+        version: "chat.turn.execute.v2",
+        admissionId: profileAdmission.admissionId,
+        sessionIncarnationId: profileAdmission.sessionIncarnationId,
+        admissionMaterialSha256,
+        workspaceId: "default",
+        admissionAggregateRevision: profileAdmission.aggregateRevision,
+        admissionControllerGeneration: profileAdmission.controllerGeneration,
+        effectiveRequestMaterialSha256: digest(
+          canonicalJsonString({ version: 1, admissionMaterialSha256, request: durableRequest }),
+        ),
+        policyRunIdDerivation: { version: 1, kind: "durable_run_id", runId: durableRunId },
+        requestActor: { actorKind: "operator", actorId: "operator-a" },
+        sessionId,
+        turnId,
+        userMessageId: "message-assignment-claim",
+        assistantMessageId: "assistant-assignment-claim",
+        capabilityProfileId: profile.profileId,
+        capabilityProfileHash: profile.hashes.profileHash,
+        branchKind: "append",
+        threadEventType: "chat_thread_turn_appended",
+        request: durableRequest,
+      } as const;
+      new DurableRunRepository(db).createRun({
+        runId: durableRunId,
+        workflowKey: "chat.turn.execute",
+        status: "running",
+        attemptCount: 2,
+        maxAttempts: 3,
+        leaseOwnerId: "gateway-assignment-owner",
+        leaseHeartbeatAt: now,
+        leaseExpiresAt: "2099-01-01T00:00:00.000Z",
+        version: 7,
+        startedAt: now,
+        now,
+        payload: durablePayload,
+        metadata: {
+          remoteWorkerAssignmentParentContext: parentContext,
+          remoteWorkerAssignmentParentContextSha256: parentContextSha256,
+          capabilityProfileId: profile.profileId,
+          capabilityProfileHash: profile.hashes.profileHash,
+        },
+      });
+      mutationAdmissions.bindDurableRun({
+        admissionId: profileAdmission.admissionId,
+        workspaceId: profileAdmission.workspaceId,
+        sessionId: profileAdmission.sessionId,
+        sessionIncarnationId: profileAdmission.sessionIncarnationId,
+        turnId: profileAdmission.turnId!,
+        durableRunId,
+        requestRuntimeClaim: {
+          runtimeOwnerId: profileAdmission.runtimeOwnerId!,
+          leaseRevision: profileAdmission.runtimeLeaseRevision!,
+        },
+      });
+      const manifest: RemoteWorkerAssignmentManifest = {
+        schemaVersion: REMOTE_WORKER_ASSIGNMENT_MANIFEST_SCHEMA_VERSION,
+        protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
+        registryWorkspaceId: "default",
+        ...parentInput,
+        capabilityProfileSha256: profile.hashes.profileHash,
+        contextSnapshotSha256: digest("assignment-context-snapshot"),
+        toolEffectPostureSha256: digest("assignment-tool-posture"),
+        pathJailSha256: digest("assignment-path-jail"),
+        parentContextSha256,
+        requiredCapabilityClasses: ["durable_compute"],
+        deadlineAt: "2099-01-01T00:00:00.000Z",
+        leaseTtlSeconds: 300,
+        maxEventCount: 100,
+        maxEventBytes: 4_096,
+        eventLowWatermark: 2,
+        eventHighWatermark: 5,
+        maxOutputBytes: 65_536,
+        maxArtifactBytes: 1_048_576,
+      };
+      const assignments = new RemoteWorkerAssignmentRepository(db);
+      const assignment = assignments.createAssignment({
+        manifest,
+        createdByActorId: "gateway-a",
+        idempotencyKey: "assignment-claim:create",
+      }).assignment;
+      const claimAuthority = {
+        registryWorkspaceId: finalized.generation.registryWorkspaceId,
+        bootstrapId: finalized.generation.bootstrapId,
+        workerId: finalized.generation.workerId,
+        workerGeneration: finalized.generation.workerGeneration,
+        credentialId: finalized.credential.credentialId,
+        credentialGeneration: finalized.credential.credentialGeneration,
+        authorizationCredentialSha256: finalizedInput.command.credentialTokenSha256,
+        nodeId: finalized.generation.nodeId,
+        clientCertificateSha256: finalized.generation.clientCertificateSha256,
+        runtimeManifestSha256: finalized.generation.runtimeManifestSha256,
+        workspaceCeilingSha256: finalized.generation.workspaceCeilingSha256,
+        capabilityCeilingSha256: finalized.generation.capabilityCeilingSha256,
+        protectedAdmissionEnvelopeSha256: finalizedInput.command.verifiedProtectedAdmissionEvidence!.envelopeSha256,
+        protectedAdmissionContextSha256: finalizedInput.command.verifiedProtectedAdmissionEvidence!.contextSha256,
+        claimsSha256: finalized.credential.claimsSha256,
+      } as const;
+      db.prepare("UPDATE durable_runs SET payload_json = @payloadJson WHERE run_id = @durableRunId").run({
+        durableRunId,
+        payloadJson: canonicalJsonString({
+          version: "chat.turn.execute.v2",
+          workspaceId: "default",
+          sessionId,
+          turnId,
+          capabilityProfileId: profile.profileId,
+          capabilityProfileHash: profile.hashes.profileHash,
+          request: durableRequest,
+        }),
+      });
+      assert.equal(assignments.listTaskBoundChatOffers({ authority: claimAuthority }).items.length, 0);
+      db.prepare("UPDATE durable_runs SET payload_json = @payloadJson WHERE run_id = @durableRunId").run({
+        durableRunId,
+        payloadJson: canonicalJsonString(durablePayload),
+      });
+      const offers = assignments.listTaskBoundChatOffers({ authority: claimAuthority });
+      assert.deepEqual(
+        offers.items.map((offer) => offer.assignment.assignmentId),
+        [assignment.assignmentId],
+      );
+      assert.equal(offers.items[0]?.workload.capabilityProfileSha256, profile.hashes.profileHash);
+      assert.equal(offers.items[0]?.workload.durableRunVersion, 7);
+
+      const leaseTokenSha256 = digest("assignment-claim:lease-secret");
+      const claimInput = {
+        authority: claimAuthority,
+        meshAdmission: currentByCredential!,
+        assignmentId: assignment.assignmentId,
+        leaseTokenSha256,
+        idempotencyKey: "assignment-claim:start",
+      } as const;
+      db.prepare("UPDATE durable_runs SET payload_json = @payloadJson WHERE run_id = @durableRunId").run({
+        durableRunId,
+        payloadJson: canonicalJsonString({
+          ...durablePayload,
+          requestActor: { actorKind: "operator", actorId: "operator-b" },
+        }),
+      });
+      assert.throws(
+        () => assignments.claimTaskBoundChatOffer(claimInput),
+        /payload conflicts with its frozen admission/u,
+      );
+      db.prepare("UPDATE durable_runs SET payload_json = @payloadJson WHERE run_id = @durableRunId").run({
+        durableRunId,
+        payloadJson: canonicalJsonString(durablePayload),
+      });
+      const claimed = assignments.claimTaskBoundChatOffer(claimInput);
+      assert.equal(claimed.disposition, "started");
+      assert.equal(claimed.generation.workerId, finalized.generation.workerId);
+      assert.equal(claimed.generation.dispatchAuthority.durableRunAttempt, 2);
+      assert.equal(claimed.generation.dispatchAuthority.durableRunVersion, 7);
+      assert.equal(canonicalJsonString(claimed.workload.payload), canonicalJsonString(durablePayload));
+      assert.equal(assignments.claimTaskBoundChatOffer(claimInput).disposition, "replayed_without_lease_secret");
+      assert.throws(
+        () => assignments.claimTaskBoundChatOffer({ ...claimInput, leaseTokenSha256: digest("wrong-lease") }),
+        /generation conflicts/u,
+      );
+      assert.equal(assignments.listTaskBoundChatOffers({ authority: claimAuthority }).items.length, 0);
+      assert.equal(
+        assignments.resolveTaskBoundChatWorkload({
+          authority: claimAuthority,
+          meshAdmission: currentByCredential!,
+          registryWorkspaceId: "default",
+          assignmentId: assignment.assignmentId,
+          expectedAssignmentGeneration: claimed.generation.assignmentGeneration,
+          expectedLeaseRevision: claimed.lease.leaseRevision,
+          leaseTokenSha256,
+        })?.workloadSha256,
+        claimed.workload.workloadSha256,
       );
 
       db.close();
