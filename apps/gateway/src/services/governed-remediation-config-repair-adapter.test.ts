@@ -95,6 +95,39 @@ describe("GovernedRemediationConfigRepairAdapter", () => {
     expect(await fs.readFile(canonicalPath, "utf8")).toBe(beforeCanonical);
   });
 
+  it.each([
+    ["malformed", "{test-only-malformed-budgets-mirror-canary"],
+    [
+      "extra-key",
+      `${JSON.stringify({ mode: "power", unexpected: "test-only-extra-budgets-mirror-canary" }, null, 2)}\n`,
+    ],
+  ])("keeps a %s budgets compatibility mirror entirely observational", async (_case, mirrorBytes) => {
+    const { root, service } = await buildModernService();
+    const adapter = new GovernedRemediationConfigRepairAdapter(service);
+    const mirrorPath = path.join(root, "config", "budgets.json");
+    const ownerJournalPath = path.join(root, "config", ".generations", "governed-remediation");
+    await fs.writeFile(mirrorPath, mirrorBytes, "utf8");
+    const beforeMirror = await fs.readFile(mirrorPath);
+    const candidate = service.getActivePayload();
+    candidate.budgets = { ...candidate.budgets, mode: "saver" };
+
+    const assessment = adapter.assess({
+      deploymentProfile: "trusted_local",
+      scope: scope(),
+      expectedOwnerRevision: adapter.getOwnerRevision(),
+      candidate,
+    });
+
+    expect(assessment).toMatchObject({
+      status: "manual_required",
+      reason: "durable_effect_journal_unavailable",
+      automaticExecution: false,
+    });
+    expect(await fs.readFile(mirrorPath)).toEqual(beforeMirror);
+    await expect(fs.stat(ownerJournalPath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(JSON.stringify(assessment)).not.toContain("budgets-mirror-canary");
+  });
+
   it("classifies invalid or missing candidates without exposing validation details", async () => {
     const { service } = await buildModernService();
     const adapter = new GovernedRemediationConfigRepairAdapter(service);
@@ -195,11 +228,14 @@ describe("GovernedRemediationConfigRepairAdapter", () => {
   });
 
   it("does not classify a committed-but-unreconciled config as safe", async () => {
-    const { service } = await buildModernService({
-      afterCommitMarker: () => {
-        throw new Error("simulated process death after durable config decision");
+    const { service } = await buildModernService(
+      {
+        afterCommitMarker: () => {
+          throw new Error("simulated process death after durable config decision");
+        },
       },
-    }, false);
+      false,
+    );
     await expect(commitBudgetMode(service, "saver")).rejects.toThrow(
       "simulated process death after durable config decision",
     );

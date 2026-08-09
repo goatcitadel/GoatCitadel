@@ -27,38 +27,34 @@ const CONFIG_GENERATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-
 const CONFIG_OWNER_REVISION =
   /^config-generation:v1:[1-9][0-9]{0,15}:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
-export const GOVERNED_CONFIG_MANUAL_REPAIR_RECIPE: GovernedRemediationRecipe =
-  normalizeGovernedRemediationRecipe({
-    schemaVersion: GOVERNED_REMEDIATION_RECIPE_SCHEMA_VERSION,
-    recipeId: "gateway.config.canonical-generation.manual-repair",
-    recipeVersion: 1,
-    repairClass: "declarative_configuration",
-    ownerId: CONFIG_REPAIR_OWNER_ID,
-    targetId: CONFIG_REPAIR_TARGET_ID,
-    requestedCapabilityId: CONFIG_REPAIR_CAPABILITY_ID,
-    executionMode: "manual_required",
-    allowedScopeKinds: ["installation"],
-    allowedDeploymentProfiles: ["local_dev", "remote_hardened", "trusted_local"],
-    inputKind: "none",
-    preEffectApproval: "not_applicable",
-    activationMode: "not_applicable",
-    activationApproval: "not_applicable",
-    verificationProbeId: null,
-    rollbackStrategy: "manual_required",
-    maxApplyAttempts: 0,
-  });
+export const GOVERNED_CONFIG_MANUAL_REPAIR_RECIPE: GovernedRemediationRecipe = normalizeGovernedRemediationRecipe({
+  schemaVersion: GOVERNED_REMEDIATION_RECIPE_SCHEMA_VERSION,
+  recipeId: "gateway.config.canonical-generation.manual-repair",
+  recipeVersion: 1,
+  repairClass: "declarative_configuration",
+  ownerId: CONFIG_REPAIR_OWNER_ID,
+  targetId: CONFIG_REPAIR_TARGET_ID,
+  requestedCapabilityId: CONFIG_REPAIR_CAPABILITY_ID,
+  executionMode: "manual_required",
+  allowedScopeKinds: ["installation"],
+  allowedDeploymentProfiles: ["local_dev", "remote_hardened", "trusted_local"],
+  inputKind: "none",
+  preEffectApproval: "not_applicable",
+  activationMode: "not_applicable",
+  activationApproval: "not_applicable",
+  verificationProbeId: null,
+  rollbackStrategy: "manual_required",
+  maxApplyAttempts: 0,
+});
 
 export const GOVERNED_CONFIG_MANUAL_REPAIR_REGISTRATION: GovernedRemediationRecipeRegistration = Object.freeze({
   recipe: GOVERNED_CONFIG_MANUAL_REPAIR_RECIPE,
   owner: null,
 });
 
-const MANUAL_CONFIG_REGISTRY = new GovernedRemediationRecipeRegistry([
-  GOVERNED_CONFIG_MANUAL_REPAIR_REGISTRATION,
-]);
+const MANUAL_CONFIG_REGISTRY = new GovernedRemediationRecipeRegistry([GOVERNED_CONFIG_MANUAL_REPAIR_REGISTRATION]);
 
-export const GOVERNED_CONFIG_REPAIR_DIFF_SCHEMA_VERSION =
-  "goatcitadel.governed-remediation-config-diff.v1" as const;
+export const GOVERNED_CONFIG_REPAIR_DIFF_SCHEMA_VERSION = "goatcitadel.governed-remediation-config-diff.v1" as const;
 
 export interface GovernedConfigRepairSanitizedDiff {
   readonly schemaVersion: typeof GOVERNED_CONFIG_REPAIR_DIFF_SCHEMA_VERSION;
@@ -118,6 +114,15 @@ export interface AssessGovernedConfigRepairInput {
  * adapter intentionally registers no callable owner: claiming apply, rollback,
  * or restart reconciliation here would be unable to prove effect ownership in
  * the crash window before the remediation receipt is published.
+ *
+ * A separate fixed `config/budgets.json` compatibility-mirror owner was also
+ * evaluated and remains manual-only. Node's path-based rename API cannot keep
+ * the source parent directory bound while atomically capturing the exact
+ * no-follow directory entry, so a parent/reparse swap could move or journal a
+ * foreign entry. The missing filesystem port must pin the source parent and
+ * entry, invoke a durable journal callback before crossing the effect boundary,
+ * and capture/publish/restore relative to those same handles without replacing
+ * concurrent state. A TypeScript read-check-rename wrapper is not that CAS.
  */
 export class GovernedRemediationConfigRepairAdapter {
   public constructor(private readonly configGeneration: ConfigGenerationService) {}
