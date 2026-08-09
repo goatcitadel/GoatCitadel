@@ -17,15 +17,16 @@ const TABLES = [
 ] as const;
 
 describe("governed remediation durable schema parity", () => {
-  it("allocates exactly one fresh paired migration window", () => {
+  it("retains the governed-remediation migration pairs at their allocated versions", () => {
     assert.equal(__sqliteInternals.getSchemaMigrationNameForTest(191), "governed_remediation_durable_owner");
     assert.equal(
       __sqliteInternals.getSchemaMigrationNameForTest(192),
       "governed_remediation_recipe_and_phase_authority",
     );
+    const postgresFoundation = POSTGRES_MIGRATIONS.find((migration) => migration.version === 134);
     const postgres = POSTGRES_MIGRATIONS.find((migration) => migration.version === 135);
+    assert.equal(postgresFoundation?.name, "governed_remediation_durable_owner");
     assert.equal(postgres?.name, "governed_remediation_recipe_and_phase_authority");
-    assert.equal(POSTGRES_MIGRATIONS.at(-1)?.version, 135);
     assert.match(postgres?.sql ?? "", /CREATE TABLE IF NOT EXISTS governed_remediation_states/u);
     assert.match(postgres?.sql ?? "", /governed_remediation_phase_claims/u);
     assert.match(postgres?.sql ?? "", /gc_governed_remediation_cas_insert_guard/u);
