@@ -255,9 +255,16 @@ Owner contracts: `OPENCLAW_HERMES_PARITY_PROGRAM.md`, `HX-503` through `HX-507`.
   revisions, and receipt lineage in paired SQLite/PostgreSQL storage. Broad
   declarative-config repair remains explicitly manual because the current
   owner cannot prove restart-safe rollback after an arbitrary config commit.
-- Implement the first callable repair only at a narrower owner boundary whose
-  prior state, effect identity, restart reconciliation, and rollback can be
-  proven without persisting secrets or arbitrary corrupt bytes.
+- The fixed `config/budgets.json` compatibility mirror was evaluated as a
+  narrower callable owner and remains manual. Node's path-based rename cannot
+  prove a handle-bound, no-follow atomic capture across a parent/reparse swap,
+  so the implementation retains byte-preservation and non-disclosure tests but
+  does not publish a journal, effect, or automatic-repair claim. A callable
+  file recipe now depends on a native handle-relative capture/publish/restore
+  port and a coordinator completion callback for bounded journal retirement.
+- Implement the first callable recipe only through an existing owner that can
+  prove prior state, effect identity, restart reconciliation, and rollback
+  without persisting secrets or arbitrary corrupt bytes.
 - Add provider bootstrap and OAuth repair with owner-specific live probes.
 - Compose schema/config, managed dependency, and owned-service recipes through
   existing owners with rollback.
