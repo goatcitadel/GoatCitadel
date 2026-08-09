@@ -2,6 +2,7 @@
 import { buildPostgresRuntimeSchemaSql } from "./runtime-schema.js";
 import { GOVERNED_REMEDIATION_POSTGRES_SCHEMA_SQL } from "./governed-remediation-schema.js";
 import { GOVERNED_REMEDIATION_RECIPE_BINDING_POSTGRES_SQL } from "./governed-remediation-recipe-binding.js";
+import { REMOTE_WORKER_PROTECTED_ADMISSION_EVIDENCE_POSTGRES_SQL } from "./remote-worker-protected-admission-evidence.js";
 
 export interface PostgresMigration {
   version: number;
@@ -14249,6 +14250,12 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     name: "governed_remediation_recipe_and_phase_authority",
     sql: GOVERNED_REMEDIATION_RECIPE_BINDING_POSTGRES_SQL,
     integritySha256: "27ca84876985f1d8836d4a2b4b441b982652e28ed6642b6afb1f43ffe92aa636",
+  },
+  {
+    version: 136,
+    name: "remote_worker_protected_admission_evidence",
+    sql: REMOTE_WORKER_PROTECTED_ADMISSION_EVIDENCE_POSTGRES_SQL,
+    integritySha256: "6da2dbc1cdb2fbada57fdbaf3573003196ec9702f59519144e501a06ad28463a",
   },
 ];
 

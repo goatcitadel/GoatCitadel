@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
   NotFoundError,
   REMOTE_WORKER_PROTOCOL_VERSION,
+  REMOTE_WORKER_PROTECTED_ADMISSION_SIGNER_PIN_SCHEMA_VERSION,
   REMOTE_WORKER_RUNTIME_MANIFEST_SCHEMA_VERSION,
   canonicalJsonString,
   type RemoteWorkerBootstrapRecord,
@@ -256,6 +257,7 @@ function bootstrapInput(runtimeManifestValue = runtimeManifest()) {
     runtimeManifest: runtimeManifestValue,
     allowedWorkspaceIds: ["workspace-a"],
     capabilityClasses: ["durable_compute"] as const,
+    protectedAdmissionSignerPin: protectedSignerPin(),
     expiresInSeconds: 600,
     actorId: "loopback:127.0.0.1",
     idempotencyKey: "bootstrap-request-a",
@@ -312,6 +314,7 @@ function bootstrapRecord(overrides: Partial<RemoteWorkerBootstrapRecord> = {}): 
     workspaceCeilingSha256: "6".repeat(64),
     capabilityClasses: ["durable_compute"],
     capabilityCeilingSha256: "7".repeat(64),
+    protectedAdmissionSignerPin: protectedSignerPin(),
     state: "pending",
     expiresAt: EXPIRES_AT,
     createdByActorId: "loopback:127.0.0.1",
@@ -319,6 +322,18 @@ function bootstrapRecord(overrides: Partial<RemoteWorkerBootstrapRecord> = {}): 
     requestSha256: "8".repeat(64),
     createdAt: CREATED_AT,
     ...overrides,
+  };
+}
+
+function protectedSignerPin() {
+  const spki = Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"), Buffer.alloc(32, 0x39)]);
+  return {
+    schemaVersion: REMOTE_WORKER_PROTECTED_ADMISSION_SIGNER_PIN_SCHEMA_VERSION,
+    signatureAlgorithm: "ed25519" as const,
+    keysetGeneration: 1,
+    keysetReceiptSha256: "d".repeat(64),
+    signerSpkiSha256: digest(spki),
+    signerSpkiBase64Url: spki.toString("base64url"),
   };
 }
 

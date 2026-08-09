@@ -5,9 +5,9 @@
     "sqlite": {
       "path": "packages/storage/src/sqlite.ts",
       "registryName": "SCHEMA_MIGRATION_GROUPS",
-      "expectedCount": 192,
+      "expectedCount": 193,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 192,
+      "expectedLastVersion": 193,
       "migrations": [
         {
           "version": 1,
@@ -1352,15 +1352,22 @@
           "groupName": "canonical",
           "definitionSha256": "68fde704ae6255b4c90481e7043387356a795fcae04eade6535684910af3f29b",
           "implementationSha256": "c7ad607658e770a81afa5f8e7c8546346688b0e90e9fcc266242b8baf08263d3"
+        },
+        {
+          "version": 193,
+          "name": "remote_worker_protected_admission_evidence",
+          "groupName": "canonical",
+          "definitionSha256": "4053d8dfe6cbdebb715c9ccceee2929066139e2124433cac9c4e6f8e7000d3f1",
+          "implementationSha256": "8c4f8a87fd82ef83e9f646b98eea1a19122b56bc0f9533376c9d7d65abdc432c"
         }
       ]
     },
     "postgres": {
       "path": "packages/storage/src/postgres/migrations.ts",
       "registryName": "POSTGRES_MIGRATIONS",
-      "expectedCount": 135,
+      "expectedCount": 136,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 135,
+      "expectedLastVersion": 136,
       "migrations": [
         {
           "version": 1,
@@ -2172,6 +2179,12 @@
           "name": "governed_remediation_recipe_and_phase_authority",
           "definitionSha256": "cd034fdeddb1c431bb46be6e79f6ba5f8f7d688e56afb08bba74c637bf7daf03",
           "runtimeIntegritySha256": "27ca84876985f1d8836d4a2b4b441b982652e28ed6642b6afb1f43ffe92aa636"
+        },
+        {
+          "version": 136,
+          "name": "remote_worker_protected_admission_evidence",
+          "definitionSha256": "062ca5e74e812a6b6d30fe485ff901cd54115921dbf3222a8f7c12a4fec90d89",
+          "runtimeIntegritySha256": "6da2dbc1cdb2fbada57fdbaf3573003196ec9702f59519144e501a06ad28463a"
         }
       ]
     }

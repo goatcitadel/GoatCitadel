@@ -19,11 +19,10 @@ interface RemoteWorkerAdmissionCompositionDependencies {
 }
 
 /**
- * Production admission composition. No trustworthy pinned remote-evidence
- * adapter exists yet, so the Gateway passes no factory and remains dark. A
- * local copy of worker bytes is deliberately insufficient. Once the protected
- * provisioner can issue signed download/install evidence, its exact verifier
- * must preflight successfully before this function may return a live handler.
+ * Production admission composition. The caller must provide the protected
+ * evidence verifier; a Gateway-local copy of worker bytes is deliberately
+ * insufficient. Its key/codec/crypto preflight must succeed before this
+ * function may return a live handler.
  */
 export async function createGatewayRemoteWorkerAdmissionNativeRequestHandler(
   dependencies: RemoteWorkerAdmissionCompositionDependencies,

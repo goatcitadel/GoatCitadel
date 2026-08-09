@@ -1,5 +1,11 @@
 /* eslint-disable max-lines -- Admission, claims, and route-ceiling invariants stay in one audited contract boundary. */
 import { canonicalJsonString } from "./canonical-json.js";
+import {
+  normalizeRemoteWorkerProtectedAdmissionSignerPin,
+  normalizeRemoteWorkerVerifiedProtectedAdmissionEvidence,
+  type RemoteWorkerProtectedAdmissionSignerPin,
+  type RemoteWorkerVerifiedProtectedAdmissionEvidence,
+} from "./remote-worker-protected-admission.js";
 
 export const REMOTE_WORKER_RUNTIME_MANIFEST_SCHEMA_VERSION = "goatcitadel.remote-worker-runtime-manifest.v1" as const;
 export const REMOTE_WORKER_PROTOCOL_VERSION = "goatcitadel.remote-worker.v1" as const;
@@ -79,6 +85,7 @@ export interface RemoteWorkerBootstrapRecord {
   workspaceCeilingSha256: string;
   capabilityClasses: RemoteWorkerCapabilityClass[];
   capabilityCeilingSha256: string;
+  readonly protectedAdmissionSignerPin?: RemoteWorkerProtectedAdmissionSignerPin;
   state: RemoteWorkerBootstrapState;
   expiresAt: string;
   createdByActorId: string;
@@ -149,6 +156,7 @@ export interface CreateRemoteWorkerBootstrapRequest {
   readonly runtimeManifest: RemoteWorkerRuntimeManifest;
   readonly allowedWorkspaceIds: readonly string[];
   readonly capabilityClasses: readonly RemoteWorkerCapabilityClass[];
+  readonly protectedAdmissionSignerPin?: RemoteWorkerProtectedAdmissionSignerPin;
   readonly expiresInSeconds: number;
   readonly idempotencyKey: string;
 }
@@ -179,6 +187,7 @@ export interface FinalizeRemoteWorkerBootstrapAdmissionCommand {
   readonly credentialExpiresInSeconds: number;
   readonly credentialTokenSha256: string;
   readonly exchangeIdempotencyKey: string;
+  readonly verifiedProtectedAdmissionEvidence?: RemoteWorkerVerifiedProtectedAdmissionEvidence;
 }
 
 export interface RotateRemoteWorkerRuntimeCredentialCommand {
@@ -349,11 +358,12 @@ export function normalizeCreateRemoteWorkerBootstrapRequest(
       "runtimeManifest",
       "allowedWorkspaceIds",
       "capabilityClasses",
+      "protectedAdmissionSignerPin",
       "expiresInSeconds",
       "idempotencyKey",
     ],
     "bootstrap request",
-    ["existingWorkerId"],
+    ["existingWorkerId", "protectedAdmissionSignerPin"],
   );
   const registryWorkspaceId = assertIdentifier(input.registryWorkspaceId, "registryWorkspaceId", 256);
   const existingWorkerId =
@@ -379,6 +389,10 @@ export function normalizeCreateRemoteWorkerBootstrapRequest(
     throw new TypeError("Remote worker allowedWorkspaceIds must include registryWorkspaceId.");
   }
   const capabilityClasses = normalizeCapabilityClasses(input.capabilityClasses);
+  const protectedAdmissionSignerPin =
+    input.protectedAdmissionSignerPin === undefined
+      ? undefined
+      : normalizeRemoteWorkerProtectedAdmissionSignerPin(input.protectedAdmissionSignerPin);
   const expiresInSeconds = assertPositiveInteger(
     input.expiresInSeconds,
     "expiresInSeconds",
@@ -394,6 +408,7 @@ export function normalizeCreateRemoteWorkerBootstrapRequest(
     runtimeManifest: freezeRemoteWorkerRuntimeManifest(input.runtimeManifest),
     allowedWorkspaceIds: Object.freeze(allowedWorkspaceIds),
     capabilityClasses: Object.freeze(capabilityClasses),
+    ...(protectedAdmissionSignerPin === undefined ? {} : { protectedAdmissionSignerPin }),
     expiresInSeconds,
     idempotencyKey,
   });
@@ -414,13 +429,14 @@ export function normalizeCreateRemoteWorkerBootstrapCommand(
       "runtimeManifest",
       "allowedWorkspaceIds",
       "capabilityClasses",
+      "protectedAdmissionSignerPin",
       "expiresInSeconds",
       "idempotencyKey",
       "createdByActorId",
       "bootstrapSecretSha256",
     ],
     "bootstrap persistence command",
-    ["existingWorkerId"],
+    ["existingWorkerId", "protectedAdmissionSignerPin"],
   );
   const request = normalizeCreateRemoteWorkerBootstrapRequest({
     registryWorkspaceId: command.registryWorkspaceId,
@@ -431,6 +447,9 @@ export function normalizeCreateRemoteWorkerBootstrapCommand(
     runtimeManifest: command.runtimeManifest,
     allowedWorkspaceIds: command.allowedWorkspaceIds,
     capabilityClasses: command.capabilityClasses,
+    ...(command.protectedAdmissionSignerPin === undefined
+      ? {}
+      : { protectedAdmissionSignerPin: command.protectedAdmissionSignerPin }),
     expiresInSeconds: command.expiresInSeconds,
     idempotencyKey: command.idempotencyKey,
   });
@@ -469,8 +488,10 @@ export function normalizeFinalizeRemoteWorkerBootstrapAdmissionCommand(
       "credentialExpiresInSeconds",
       "credentialTokenSha256",
       "exchangeIdempotencyKey",
+      "verifiedProtectedAdmissionEvidence",
     ],
     "trusted bootstrap admission command",
+    ["verifiedProtectedAdmissionEvidence"],
   );
   assertSha256(command.bootstrapSecretSha256, "bootstrapSecretSha256");
   assertEnum(
@@ -514,6 +535,13 @@ export function normalizeFinalizeRemoteWorkerBootstrapAdmissionCommand(
     ),
     credentialExpiresInSeconds,
     exchangeIdempotencyKey: assertIdentifier(command.exchangeIdempotencyKey, "exchangeIdempotencyKey", 512),
+    ...(command.verifiedProtectedAdmissionEvidence === undefined
+      ? {}
+      : {
+          verifiedProtectedAdmissionEvidence: normalizeRemoteWorkerVerifiedProtectedAdmissionEvidence(
+            command.verifiedProtectedAdmissionEvidence,
+          ),
+        }),
   });
 }
 
@@ -576,6 +604,7 @@ export function remoteWorkerBootstrapReplayMaterial(command: CreateRemoteWorkerB
     runtimeManifest: normalized.runtimeManifest,
     allowedWorkspaceIds: normalized.allowedWorkspaceIds,
     capabilityClasses: normalized.capabilityClasses,
+    protectedAdmissionSignerPin: normalized.protectedAdmissionSignerPin ?? null,
     expiresInSeconds: normalized.expiresInSeconds,
     createdByActorId: normalized.createdByActorId,
     idempotencyKey: normalized.idempotencyKey,
@@ -584,7 +613,7 @@ export function remoteWorkerBootstrapReplayMaterial(command: CreateRemoteWorkerB
 
 /**
  * Stable admission identity across TLS connections. Exporter-bound transport,
- * PoP, evidence, issuance, candidate-token, and TTL receipts intentionally stay
+ * PoP, per-connection protected evidence, issuance, candidate-token, and TTL receipts intentionally stay
  * out: every legitimate retry uses a fresh connection, nonce, proof, evidence
  * context, and candidate secret. Those values are still verified for the
  * current attempt, while replay may return only the already-canonical
@@ -795,6 +824,7 @@ export function assertRemoteWorkerBootstrapRecord(record: unknown): asserts reco
       "workspaceCeilingSha256",
       "capabilityClasses",
       "capabilityCeilingSha256",
+      "protectedAdmissionSignerPin",
       "state",
       "expiresAt",
       "createdByActorId",
@@ -803,6 +833,7 @@ export function assertRemoteWorkerBootstrapRecord(record: unknown): asserts reco
       "createdAt",
     ],
     "bootstrap record",
+    ["protectedAdmissionSignerPin"],
   );
   assertIdentifier(record.registryWorkspaceId, "registryWorkspaceId", 256);
   assertIdentifier(record.bootstrapId, "bootstrapId", 256);
@@ -835,6 +866,12 @@ export function assertRemoteWorkerBootstrapRecord(record: unknown): asserts reco
   assertSha256(record.capabilityCeilingSha256, "capabilityCeilingSha256");
   if (record.capabilityCeilingSha256 !== sha256CanonicalJson(capabilityClasses)) {
     throw new TypeError("Remote worker bootstrap record capability ceiling digest does not match.");
+  }
+  if (record.protectedAdmissionSignerPin !== undefined) {
+    const pin = normalizeRemoteWorkerProtectedAdmissionSignerPin(record.protectedAdmissionSignerPin);
+    if (pin.keysetGeneration !== record.targetWorkerGeneration) {
+      throw new TypeError("Remote worker protected admission signer pin generation does not match bootstrap target.");
+    }
   }
   assertEnum(record.state, ["pending", "consumed", "expired"], "state");
   assertIsoTimestamp(record.expiresAt, "expiresAt");

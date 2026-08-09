@@ -13,6 +13,7 @@ import type { EngineeringLearningService } from "./engineering-learning-service.
 import { createGatewayRemoteWorkerAdmissionNativeRequestHandler } from "./remote-worker-admission-composition.js";
 import type { RemoteWorkerNativeRequestHandler } from "./remote-worker-native-tls-listener.js";
 import type { EnabledRemoteWorkerRuntimeConfig } from "./remote-worker-runtime-config.js";
+import { RemoteWorkerProtectedAdmissionEvidenceVerifier } from "./remote-worker-protected-admission-evidence-verifier.js";
 
 type GatewayLogger = {
   debug: (...args: unknown[]) => void;
@@ -147,8 +148,7 @@ function createGatewayRuntimeFacade(gateway: GatewayService): GatewayRuntimeInst
       await createGatewayRemoteWorkerAdmissionNativeRequestHandler({
         config,
         admissionStore: gateway.storage.remoteWorkerAdmissions,
-        // Intentionally no verifier factory: a Gateway-local copied tree is
-        // not authoritative evidence for a remote provisioner/runtime.
+        createEvidenceVerifier: () => new RemoteWorkerProtectedAdmissionEvidenceVerifier(),
       }),
     attachDevDiagnosticsLogger: (logger) => gateway.attachDevDiagnosticsLogger(logger),
     close: () => gateway.close(),

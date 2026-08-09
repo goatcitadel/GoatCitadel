@@ -372,7 +372,11 @@ importers:
         specifier: 6.4.3
         version: 6.4.3(@types/node@25.9.1)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.22.4)(yaml@2.9.0)
 
-  apps/remote-worker-provisioner: {}
+  apps/remote-worker-provisioner:
+    dependencies:
+      '@goatcitadel/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
 
   packages/contracts:
     dependencies:

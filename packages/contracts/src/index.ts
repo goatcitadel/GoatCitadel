@@ -57,6 +57,7 @@ export * from "./citadel-mason.js";
 export * from "./mesh.js";
 export * from "./mesh-capability-publication.js";
 export * from "./remote-worker-admission.js";
+export * from "./remote-worker-protected-admission.js";
 export * from "./remote-worker-assignment.js";
 export * from "./remote-worker-cell.js";
 export * from "./remote-worker-inference.js";

@@ -9,9 +9,15 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import {
   REMOTE_WORKER_PROTOCOL_VERSION,
+  REMOTE_WORKER_PROTECTED_ADMISSION_EVIDENCE_WIRE_SCHEMA_VERSION,
+  REMOTE_WORKER_PROTECTED_ADMISSION_SIGNATURE_DOMAIN,
+  REMOTE_WORKER_PROTECTED_ADMISSION_SIGNER_PIN_SCHEMA_VERSION,
+  REMOTE_WORKER_PROTECTED_ADMISSION_SIGNER_RESULT_SCHEMA_VERSION,
   REMOTE_WORKER_RUNTIME_MANIFEST_SCHEMA_VERSION,
   canonicalJsonString,
+  remoteWorkerProtectedAdmissionContextSha256,
   type FinalizeRemoteWorkerBootstrapAdmissionCommand,
+  type RemoteWorkerProtectedAdmissionEvidenceWire,
   type RemoteWorkerRuntimeManifest,
 } from "@goatcitadel/contracts";
 import {
@@ -21,6 +27,8 @@ import {
 } from "@goatcitadel/storage";
 import { afterEach, describe, expect, it } from "vitest";
 import { createGatewayRemoteWorkerAdmissionNativeRequestHandler } from "./remote-worker-admission-composition.js";
+import { RemoteWorkerProtectedAdmissionAuthorityService } from "./remote-worker-protected-admission-authority-service.js";
+import { RemoteWorkerProtectedAdmissionEvidenceVerifier } from "./remote-worker-protected-admission-evidence-verifier.js";
 import {
   REMOTE_WORKER_BOOTSTRAP_EXCHANGE_OPERATION,
   REMOTE_WORKER_BOOTSTRAP_EXCHANGE_RAW_PATH,
@@ -215,6 +223,13 @@ interface LiveAdmissionRequestFixture {
   readonly bootstrapId: string;
   readonly authorityGeneration: number;
   readonly idempotencyKey: string;
+  readonly protectedAdmissionEvidence?: (input: {
+    readonly nonce: string;
+    readonly tlsExporterSha256: string;
+    readonly publicKeySpkiSha256: string;
+    readonly clientCertificateSha256: string;
+    readonly transportTrustAnchorSha256: string;
+  }) => RemoteWorkerProtectedAdmissionEvidenceWire;
 }
 
 async function liveAdmissionRequest(
@@ -275,6 +290,18 @@ async function liveAdmissionRequest(
           const certificate = new X509Certificate(CLIENT_CERT_PEM);
           const publicKeySpkiDer = certificate.publicKey.export({ format: "der", type: "spki" });
           if (!Buffer.isBuffer(publicKeySpkiDer)) throw new Error("Client SPKI fixture was invalid.");
+          const timestamp = new Date().toISOString();
+          const nonce = Buffer.alloc(32, nonceByte).toString("base64url");
+          const clientCertificateSha256 = sha256(certificate.raw);
+          const publicKeySpkiSha256 = sha256(publicKeySpkiDer);
+          const transportTrustAnchorSha256 = sha256(new X509Certificate(CA_PEM).raw);
+          const protectedAdmissionEvidence = input.protectedAdmissionEvidence?.({
+            nonce,
+            tlsExporterSha256: exporterSha256,
+            publicKeySpkiSha256,
+            clientCertificateSha256,
+            transportTrustAnchorSha256,
+          });
           const body: RemoteWorkerProtocolBody = Object.freeze({
             schemaVersion: REMOTE_WORKER_POP_SCHEMA_VERSION,
             operation: REMOTE_WORKER_BOOTSTRAP_EXCHANGE_OPERATION,
@@ -284,16 +311,15 @@ async function liveAdmissionRequest(
             payload: Object.freeze({
               schemaVersion: REMOTE_WORKER_BOOTSTRAP_EXCHANGE_SCHEMA_VERSION,
               publicKeySpkiBase64Url: publicKeySpkiDer.toString("base64url"),
+              ...(protectedAdmissionEvidence === undefined ? {} : { protectedAdmissionEvidence }),
             }),
           });
           const encodedBody = Buffer.from(canonicalJsonString(body), "utf8");
-          const timestamp = new Date().toISOString();
-          const nonce = Buffer.alloc(32, nonceByte).toString("base64url");
           const transportIdentity: RemoteWorkerTransportIdentity = Object.freeze({
             source: "native_mtls",
-            certificateDerSha256: sha256(certificate.raw),
-            publicKeySpkiSha256: sha256(publicKeySpkiDer),
-            trustAnchorDerSha256: sha256(new X509Certificate(CA_PEM).raw),
+            certificateDerSha256: clientCertificateSha256,
+            publicKeySpkiSha256,
+            trustAnchorDerSha256: transportTrustAnchorSha256,
             tlsExporterSha256: exporterSha256,
             tlsExporter: exporter,
           });
@@ -586,6 +612,18 @@ describe("remote worker native TLS listener", () => {
       const database = createDatabase({ dbPath: ":memory:" });
       try {
         const repository = new RemoteWorkerAdmissionRepository(database);
+        const evidenceSigner = generateKeyPairSync("ed25519");
+        const evidenceSignerSpki = evidenceSigner.publicKey.export({ format: "der", type: "spki" });
+        if (!Buffer.isBuffer(evidenceSignerSpki)) throw new Error("Expected DER evidence signer key.");
+        const keysetReceiptSha256 = sha256("live-handler-keyset-receipt");
+        const protectedAdmissionSignerPin = Object.freeze({
+          schemaVersion: REMOTE_WORKER_PROTECTED_ADMISSION_SIGNER_PIN_SCHEMA_VERSION,
+          signatureAlgorithm: "ed25519" as const,
+          keysetGeneration: 1,
+          keysetReceiptSha256,
+          signerSpkiSha256: sha256(evidenceSignerSpki),
+          signerSpkiBase64Url: evidenceSignerSpki.toString("base64url"),
+        });
         const bootstrapSecret = Buffer.alloc(32, 0x27).toString("base64url");
         const bootstrap = repository.createBootstrap({
           registryWorkspaceId: "default",
@@ -595,6 +633,7 @@ describe("remote worker native TLS listener", () => {
           runtimeManifest: signer.manifest,
           allowedWorkspaceIds: ["default"],
           capabilityClasses: ["durable_compute"],
+          protectedAdmissionSignerPin,
           expiresInSeconds: 600,
           createdByActorId: "live-handler-test",
           idempotencyKey: "live-handler-bootstrap-create",
@@ -620,12 +659,7 @@ describe("remote worker native TLS listener", () => {
             assertAvailable: async () => undefined,
             verify: async (input) => {
               evidenceAttempts.push(input);
-              return Object.freeze({
-                contextSha256: input.contextSha256,
-                downloadVerificationReceiptSha256: sha256(`live-download:${input.contextSha256}`),
-                installedTreeAttestationSha256: sha256(`live-installed-tree:${input.contextSha256}`),
-                installedTreeVerificationReceiptSha256: sha256(`live-installed-receipt:${input.contextSha256}`),
-              });
+              return new RemoteWorkerProtectedAdmissionEvidenceVerifier().verify(input);
             },
           }),
         });
@@ -640,6 +674,86 @@ describe("remote worker native TLS listener", () => {
           bootstrapId: bootstrap.bootstrapId,
           authorityGeneration: bootstrap.targetWorkerGeneration,
           idempotencyKey: "live-handler-exchange",
+          protectedAdmissionEvidence: (identity: {
+            readonly nonce: string;
+            readonly tlsExporterSha256: string;
+            readonly publicKeySpkiSha256: string;
+            readonly clientCertificateSha256: string;
+            readonly transportTrustAnchorSha256: string;
+          }): RemoteWorkerProtectedAdmissionEvidenceWire => {
+            const evidenceNonceSha256 = sha256(identity.nonce);
+            const downloadVerificationReceiptSha256 = sha256("live-download");
+            const installedTreeAttestationSha256 = sha256("live-installed-tree");
+            const installedTreeVerificationReceiptSha256 = sha256("live-installed-receipt");
+            const contextSha256 = remoteWorkerProtectedAdmissionContextSha256({
+              registryWorkspaceId: bootstrap.registryWorkspaceId,
+              bootstrapId: bootstrap.bootstrapId,
+              workerId: bootstrap.workerId,
+              nodeId: bootstrap.nodeId,
+              targetWorkerGeneration: bootstrap.targetWorkerGeneration,
+              platform: bootstrap.platform,
+              architecture: bootstrap.architecture,
+              runtimeManifestSha256: sha256(canonicalJsonString(bootstrap.runtimeManifest)),
+              runtimeManifestPayloadSha256: bootstrap.runtimeManifest.payloadSha256,
+              workspaceCeilingSha256: bootstrap.workspaceCeilingSha256,
+              capabilityCeilingSha256: bootstrap.capabilityCeilingSha256,
+              workerPublicKeySpkiSha256: identity.publicKeySpkiSha256,
+              clientCertificateSha256: identity.clientCertificateSha256,
+              transportTrustAnchorSha256: identity.transportTrustAnchorSha256,
+              tlsExporterSha256: identity.tlsExporterSha256,
+              evidenceNonceSha256,
+              downloadVerificationReceiptSha256,
+              installedTreeAttestationSha256,
+              installedTreeVerificationReceiptSha256,
+            });
+            const operationId = Buffer.from(sha256(`live-operation:${identity.nonce}`), "hex").subarray(0, 16);
+            const envelope = Buffer.alloc(288);
+            envelope.write("GCAE", 0, "ascii");
+            envelope.writeUInt16LE(1, 4);
+            envelope.writeUInt8(1, 6);
+            envelope.writeUInt32LE(288, 8);
+            operationId.copy(envelope, 16);
+            Buffer.from(evidenceNonceSha256, "hex").copy(envelope, 32);
+            envelope.writeBigUInt64LE(1n, 64);
+            Buffer.from(contextSha256, "hex").copy(envelope, 96);
+            Buffer.from(sha256(canonicalJsonString(bootstrap.runtimeManifest)), "hex").copy(envelope, 128);
+            Buffer.from(identity.publicKeySpkiSha256, "hex").copy(envelope, 160);
+            Buffer.from(downloadVerificationReceiptSha256, "hex").copy(envelope, 192);
+            Buffer.from(installedTreeAttestationSha256, "hex").copy(envelope, 224);
+            Buffer.from(installedTreeVerificationReceiptSha256, "hex").copy(envelope, 256);
+            const protectedStateSha256 = sha256("live-protected-state");
+            const requestBody = Buffer.alloc(384);
+            operationId.copy(requestBody, 0);
+            Buffer.from(protectedStateSha256, "hex").copy(requestBody, 16);
+            requestBody.writeUInt16LE(1, 48);
+            requestBody.writeUInt8(2, 50);
+            requestBody.writeBigUInt64LE(1n, 52);
+            Buffer.from(keysetReceiptSha256, "hex").copy(requestBody, 60);
+            requestBody.writeUInt32LE(288, 92);
+            envelope.copy(requestBody, 96);
+            const signature = sign(
+              null,
+              Buffer.concat([Buffer.from(`${REMOTE_WORKER_PROTECTED_ADMISSION_SIGNATURE_DOMAIN}\0`, "utf8"), envelope]),
+              evidenceSigner.privateKey,
+            );
+            return Object.freeze({
+              schemaVersion: REMOTE_WORKER_PROTECTED_ADMISSION_EVIDENCE_WIRE_SCHEMA_VERSION,
+              envelopeBase64Url: envelope.toString("base64url"),
+              signerResult: Object.freeze({
+                schemaVersion: REMOTE_WORKER_PROTECTED_ADMISSION_SIGNER_RESULT_SCHEMA_VERSION,
+                disposition: "signed" as const,
+                operationIdBase64Url: operationId.toString("base64url"),
+                workerGeneration: 1,
+                envelopeSha256: sha256(envelope),
+                keysetReceiptSha256,
+                signerSpkiSha256: protectedAdmissionSignerPin.signerSpkiSha256,
+                signerSpkiBase64Url: protectedAdmissionSignerPin.signerSpkiBase64Url,
+                signatureBase64Url: signature.toString("base64url"),
+                protectedStateSha256,
+                requestSha256: sha256(requestBody),
+              }),
+            });
+          },
         });
 
         const first = await liveAdmissionRequest(portOf(listener.address), requestFixture, 0x31);
@@ -670,7 +784,7 @@ describe("remote worker native TLS listener", () => {
         expect(finalizations[1]?.command.verifiedTransportReceiptSha256).not.toBe(
           finalizations[0]?.command.verifiedTransportReceiptSha256,
         );
-        expect(finalizations[1]?.command.verifiedDownloadReceiptSha256).not.toBe(
+        expect(finalizations[1]?.command.verifiedDownloadReceiptSha256).toBe(
           finalizations[0]?.command.verifiedDownloadReceiptSha256,
         );
         expect(finalizations[1]?.command.credentialIssuanceProofSha256).not.toBe(
@@ -682,6 +796,43 @@ describe("remote worker native TLS listener", () => {
         expect(stableAdmissionBindings(finalizations[1]?.command)).toEqual(
           stableAdmissionBindings(finalizations[0]?.command),
         );
+        const authority = new RemoteWorkerProtectedAdmissionAuthorityService(repository).resolveCurrent({
+          registryWorkspaceId: "default",
+          workerId: bootstrap.workerId,
+          workerGeneration: 1,
+        });
+        expect(authority.evidence.envelopeBase64Url).toBe(
+          finalizations[0]?.command.verifiedProtectedAdmissionEvidence?.envelopeBase64Url,
+        );
+        expect(authority.workerPublicKeySpkiDer.byteLength).toBe(44);
+        const canonicalBootstrap = repository.getBootstrap("default", bootstrap.bootstrapId);
+        const authorityStore = {
+          findCurrentGeneration: () => authority.generation,
+          findLatestGenerationControl: () => undefined,
+          findProtectedAdmissionEvidenceRecord: () => authority.evidence,
+          getBootstrap: () => canonicalBootstrap,
+        };
+        expect(() =>
+          new RemoteWorkerProtectedAdmissionAuthorityService({
+            ...authorityStore,
+            findProtectedAdmissionEvidenceRecord: () => ({
+              ...authority.evidence,
+              workspaceCeilingSha256: sha256("tampered-persisted-context-field"),
+            }),
+          }).resolveCurrent({ registryWorkspaceId: "default", workerId: bootstrap.workerId, workerGeneration: 1 }),
+        ).toThrow("Current protected remote worker admission authority is unavailable.");
+        expect(() =>
+          new RemoteWorkerProtectedAdmissionAuthorityService({
+            ...authorityStore,
+            findCurrentGeneration: () => ({ ...authority.generation, bootstrapId: "bootstrap-tampered" }),
+          }).resolveCurrent({ registryWorkspaceId: "default", workerId: bootstrap.workerId, workerGeneration: 1 }),
+        ).toThrow("Current protected remote worker admission authority is unavailable.");
+        expect(() =>
+          new RemoteWorkerProtectedAdmissionAuthorityService({
+            ...authorityStore,
+            getBootstrap: () => ({ ...canonicalBootstrap, nodeId: "node-tampered" }),
+          }).resolveCurrent({ registryWorkspaceId: "default", workerId: bootstrap.workerId, workerGeneration: 1 }),
+        ).toThrow("Current protected remote worker admission authority is unavailable.");
       } finally {
         database.close();
       }

@@ -5,11 +5,16 @@ import {
   assertRemoteWorkerGenerationRecord,
   assertRemoteWorkerRuntimeCredentialRecord,
   canonicalJsonString,
+  normalizeRemoteWorkerProtectedAdmissionEvidenceWire,
+  normalizeRemoteWorkerVerifiedProtectedAdmissionEvidence,
   type FinalizeRemoteWorkerBootstrapAdmissionCommand,
   type RemoteWorkerBootstrapRecord,
   type RemoteWorkerGenerationRecord,
   type RemoteWorkerRuntimeCredentialRecord,
   type RemoteWorkerRuntimeManifest,
+  type RemoteWorkerProtectedAdmissionEvidenceWire,
+  type RemoteWorkerProtectedAdmissionSignerPin,
+  type RemoteWorkerVerifiedProtectedAdmissionEvidence,
 } from "@goatcitadel/contracts";
 import type {
   FinalizeRemoteWorkerBootstrapAdmissionOutcome,
@@ -50,6 +55,7 @@ const REMOTE_WORKER_CREDENTIAL_ISSUANCE_PROOF_SCHEMA_VERSION =
 export interface RemoteWorkerBootstrapExchangePayload {
   readonly schemaVersion: typeof REMOTE_WORKER_BOOTSTRAP_EXCHANGE_SCHEMA_VERSION;
   readonly publicKeySpkiBase64Url: string;
+  readonly protectedAdmissionEvidence?: RemoteWorkerProtectedAdmissionEvidenceWire;
 }
 
 export interface RemoteWorkerAdmissionExchangeInput {
@@ -75,13 +81,17 @@ export interface RemoteWorkerAdmissionEvidenceVerificationInput {
   readonly manifestVerificationReceipt: RemoteWorkerManifestVerificationReceipt;
   readonly preparedBodySha256: string;
   readonly exchangeIdempotencyKey: string;
+  readonly publicKeySpkiBase64Url: string;
   readonly publicKeySpkiSha256: string;
   readonly clientCertificateSha256: string;
   readonly transportTrustAnchorSha256: string;
   readonly tlsExporterSha256: string;
   readonly transportReceiptSha256: string;
   readonly proofOfPossessionReceiptSha256: string;
+  readonly evidenceNonceSha256: string;
   readonly contextSha256: string;
+  readonly protectedAdmissionSignerPin?: RemoteWorkerProtectedAdmissionSignerPin;
+  readonly protectedAdmissionEvidenceWire?: RemoteWorkerProtectedAdmissionEvidenceWire;
 }
 
 export interface RemoteWorkerAdmissionEvidenceVerificationResult {
@@ -89,14 +99,15 @@ export interface RemoteWorkerAdmissionEvidenceVerificationResult {
   readonly downloadVerificationReceiptSha256: string;
   readonly installedTreeAttestationSha256: string;
   readonly installedTreeVerificationReceiptSha256: string;
+  readonly verifiedProtectedAdmissionEvidence?: RemoteWorkerVerifiedProtectedAdmissionEvidence;
 }
 
 export interface RemoteWorkerAdmissionEvidenceVerifierPort {
   /**
-   * Trusted-side verification boundary. Implementations must resolve and
-   * validate server-owned download/install evidence bound to `contextSha256`;
-   * caller-supplied receipt hashes alone are never sufficient. Throw when the
-   * evidence owner, provenance, or verification result is unavailable.
+   * Trusted-side verification boundary. Production implementations must
+   * verify protected-key authorization and the exact download/install receipt
+   * bindings under an operator-pinned keyset. Bare caller-supplied hashes are
+   * never sufficient. Throw when provenance or verification is unavailable.
    */
   verify(
     input: RemoteWorkerAdmissionEvidenceVerificationInput,
@@ -225,6 +236,19 @@ export class RemoteWorkerAdmissionService {
         receipt: prepared.receipt,
         trustAnchorDerSha256: request.transportIdentity.trustAnchorDerSha256,
       });
+      const durableNonce = snapshotRemoteWorkerDurableNonceConsumption({
+        authority: Object.freeze({
+          kind: "bootstrap",
+          registryWorkspaceId: bootstrap.registryWorkspaceId,
+          bootstrapId: bootstrap.bootstrapId,
+          workerId: bootstrap.workerId,
+          targetWorkerGeneration: bootstrap.targetWorkerGeneration,
+        }),
+        nonce: prepared.nonce.nonce,
+        timestamp: prepared.nonce.timestamp,
+        authorityId: prepared.nonce.authorityId,
+        authorityGeneration: prepared.nonce.authorityGeneration,
+      });
       const evidenceContext = remoteWorkerAdmissionEvidenceContext({
         bootstrap,
         runtimeManifestSha256,
@@ -255,16 +279,25 @@ export class RemoteWorkerAdmissionService {
             manifestVerificationReceipt: manifestTrust.receipt,
             preparedBodySha256: prepared.receipt.bodySha256,
             exchangeIdempotencyKey: prepared.body.idempotencyKey,
+            publicKeySpkiBase64Url: normalizedPayload.payload.publicKeySpkiBase64Url,
             publicKeySpkiSha256,
             clientCertificateSha256: prepared.receipt.certificateDerSha256,
             transportTrustAnchorSha256: request.transportIdentity.trustAnchorDerSha256,
             tlsExporterSha256: prepared.receipt.tlsExporterSha256,
             transportReceiptSha256,
             proofOfPossessionReceiptSha256: prepared.receipt.proofOfPossessionReceiptSha256,
+            evidenceNonceSha256: durableNonce.nonceSha256,
             contextSha256: evidenceContext.contextSha256,
+            ...(bootstrap.protectedAdmissionSignerPin === undefined
+              ? {}
+              : { protectedAdmissionSignerPin: bootstrap.protectedAdmissionSignerPin }),
+            ...(normalizedPayload.payload.protectedAdmissionEvidence === undefined
+              ? {}
+              : { protectedAdmissionEvidenceWire: normalizedPayload.payload.protectedAdmissionEvidence }),
           }),
         ),
         evidenceContext.contextSha256,
+        bootstrap.protectedAdmissionSignerPin !== undefined,
       );
 
       const generatedCredentialBytes = this.randomBytes(32);
@@ -311,19 +344,9 @@ export class RemoteWorkerAdmissionService {
         credentialExpiresInSeconds: manifestTrust.credentialTtlSeconds,
         credentialTokenSha256,
         exchangeIdempotencyKey: prepared.body.idempotencyKey,
-      });
-      const durableNonce = snapshotRemoteWorkerDurableNonceConsumption({
-        authority: Object.freeze({
-          kind: "bootstrap",
-          registryWorkspaceId: bootstrap.registryWorkspaceId,
-          bootstrapId: bootstrap.bootstrapId,
-          workerId: bootstrap.workerId,
-          targetWorkerGeneration: bootstrap.targetWorkerGeneration,
-        }),
-        nonce: prepared.nonce.nonce,
-        timestamp: prepared.nonce.timestamp,
-        authorityId: prepared.nonce.authorityId,
-        authorityGeneration: prepared.nonce.authorityGeneration,
+        ...(evidence.verifiedProtectedAdmissionEvidence === undefined
+          ? {}
+          : { verifiedProtectedAdmissionEvidence: evidence.verifiedProtectedAdmissionEvidence }),
       });
       const outcome = snapshotAdmissionOutcome(
         await this.admissionStore.finalizeBootstrapAdmissionWithNonce(
@@ -446,7 +469,18 @@ function normalizeBootstrapExchangePayload(value: unknown): {
   readonly payload: RemoteWorkerBootstrapExchangePayload;
   readonly publicKeySpkiDer: Buffer;
 } {
-  const fields = exactOwnDataFields(value, ["schemaVersion", "publicKeySpkiBase64Url"], "exchange payload");
+  const candidate = value as { protectedAdmissionEvidence?: unknown };
+  const hasProtectedEvidence =
+    candidate !== null &&
+    typeof candidate === "object" &&
+    Object.prototype.hasOwnProperty.call(candidate, "protectedAdmissionEvidence");
+  const fields = exactOwnDataFields(
+    value,
+    hasProtectedEvidence
+      ? ["schemaVersion", "publicKeySpkiBase64Url", "protectedAdmissionEvidence"]
+      : ["schemaVersion", "publicKeySpkiBase64Url"],
+    "exchange payload",
+  );
   if (fields.schemaVersion !== REMOTE_WORKER_BOOTSTRAP_EXCHANGE_SCHEMA_VERSION) {
     throw rejected("Remote worker bootstrap exchange payload is invalid.");
   }
@@ -481,6 +515,13 @@ function normalizeBootstrapExchangePayload(value: unknown): {
     payload: Object.freeze({
       schemaVersion: REMOTE_WORKER_BOOTSTRAP_EXCHANGE_SCHEMA_VERSION,
       publicKeySpkiBase64Url: fields.publicKeySpkiBase64Url,
+      ...(hasProtectedEvidence
+        ? {
+            protectedAdmissionEvidence: normalizeRemoteWorkerProtectedAdmissionEvidenceWire(
+              fields.protectedAdmissionEvidence,
+            ),
+          }
+        : {}),
     }),
     publicKeySpkiDer,
   });
@@ -489,22 +530,42 @@ function normalizeBootstrapExchangePayload(value: unknown): {
 function normalizeEvidenceVerificationResult(
   value: unknown,
   expectedContextSha256: string,
+  protectedEvidenceRequired: boolean,
 ): RemoteWorkerAdmissionEvidenceVerificationResult {
+  const candidate = value as { verifiedProtectedAdmissionEvidence?: unknown };
+  const hasProtectedEvidence =
+    candidate !== null &&
+    typeof candidate === "object" &&
+    Object.prototype.hasOwnProperty.call(candidate, "verifiedProtectedAdmissionEvidence");
   const fields = exactOwnDataFields(
     value,
-    [
-      "contextSha256",
-      "downloadVerificationReceiptSha256",
-      "installedTreeAttestationSha256",
-      "installedTreeVerificationReceiptSha256",
-    ],
+    hasProtectedEvidence
+      ? [
+          "contextSha256",
+          "downloadVerificationReceiptSha256",
+          "installedTreeAttestationSha256",
+          "installedTreeVerificationReceiptSha256",
+          "verifiedProtectedAdmissionEvidence",
+        ]
+      : [
+          "contextSha256",
+          "downloadVerificationReceiptSha256",
+          "installedTreeAttestationSha256",
+          "installedTreeVerificationReceiptSha256",
+        ],
     "trusted evidence result",
   );
   const contextSha256 = sha256Value(fields.contextSha256, "trusted evidence context");
-  if (!safeDigestEqual(contextSha256, expectedContextSha256)) {
+  if (hasProtectedEvidence !== protectedEvidenceRequired) {
+    throw rejected("Remote worker protected admission evidence is unavailable.");
+  }
+  const verifiedProtectedAdmissionEvidence = hasProtectedEvidence
+    ? normalizeRemoteWorkerVerifiedProtectedAdmissionEvidence(fields.verifiedProtectedAdmissionEvidence)
+    : undefined;
+  if (!safeDigestEqual(contextSha256, verifiedProtectedAdmissionEvidence?.contextSha256 ?? expectedContextSha256)) {
     throw rejected("Remote worker trusted evidence context is invalid.");
   }
-  return Object.freeze({
+  const result = Object.freeze({
     contextSha256,
     downloadVerificationReceiptSha256: sha256Value(
       fields.downloadVerificationReceiptSha256,
@@ -515,7 +576,19 @@ function normalizeEvidenceVerificationResult(
       fields.installedTreeVerificationReceiptSha256,
       "installed-tree verification receipt",
     ),
+    ...(verifiedProtectedAdmissionEvidence === undefined ? {} : { verifiedProtectedAdmissionEvidence }),
   });
+  if (
+    verifiedProtectedAdmissionEvidence !== undefined &&
+    (result.downloadVerificationReceiptSha256 !==
+      verifiedProtectedAdmissionEvidence.downloadVerificationReceiptSha256 ||
+      result.installedTreeAttestationSha256 !== verifiedProtectedAdmissionEvidence.installedTreeAttestationSha256 ||
+      result.installedTreeVerificationReceiptSha256 !==
+        verifiedProtectedAdmissionEvidence.installedTreeVerificationReceiptSha256)
+  ) {
+    throw rejected("Remote worker protected admission evidence is inconsistent.");
+  }
+  return result;
 }
 
 function remoteWorkerAdmissionEvidenceContext(input: {

@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, createPublicKey, randomBytes, timingSafeEqual } from "node:crypto";
 import {
   NotFoundError,
   REMOTE_WORKER_ASSIGNMENT_CURSOR_SCHEMA_VERSION,
@@ -27,6 +27,7 @@ import {
   normalizeRemoteWorkerAssignmentCursor,
   normalizeCreateRemoteWorkerBootstrapRequest,
   normalizeRemoteWorkerRegistryCursor,
+  normalizeRemoteWorkerProtectedAdmissionSignerPin,
   redactSecretText,
   type CreateRemoteWorkerBootstrapRequest,
   type RemoteWorkerBootstrapRecord,
@@ -34,6 +35,7 @@ import {
   type RemoteWorkerGenerationControlInput,
   type RemoteWorkerGenerationControlRecord,
   type RemoteWorkerRuntimeManifest,
+  type RemoteWorkerProtectedAdmissionSignerPin,
   type RemoteWorkerAssignmentCursorV1,
   type RemoteWorkerAssignmentEventPage,
   type RemoteWorkerAssignmentEventRecord,
@@ -108,6 +110,7 @@ export interface RemoteWorkerAdmissionMutationStore {
     readonly runtimeManifest: RemoteWorkerRuntimeManifest;
     readonly allowedWorkspaceIds: readonly string[];
     readonly capabilityClasses: readonly RemoteWorkerCapabilityClass[];
+    readonly protectedAdmissionSignerPin: RemoteWorkerProtectedAdmissionSignerPin;
     readonly expiresInSeconds: number;
     readonly idempotencyKey: string;
     readonly createdByActorId: string;
@@ -176,6 +179,7 @@ export interface IssueRemoteWorkerBootstrapInput {
   readonly runtimeManifest: RemoteWorkerRuntimeManifest;
   readonly allowedWorkspaceIds: readonly string[];
   readonly capabilityClasses: readonly RemoteWorkerCapabilityClass[];
+  readonly protectedAdmissionSignerPin: RemoteWorkerProtectedAdmissionSignerPin;
   readonly expiresInSeconds: number;
   readonly actorId: string;
   readonly idempotencyKey: string;
@@ -192,6 +196,8 @@ export interface RemoteWorkerBootstrapIssuance {
   readonly expiresAt: string;
   readonly manifestPayloadSha256: string;
   readonly auditDeliveryId: string;
+  readonly protectedAdmissionSignerSpkiSha256: string;
+  readonly protectedAdmissionKeysetReceiptSha256: string;
   readonly bootstrapSecret?: string;
 }
 
@@ -253,6 +259,7 @@ export class RemoteWorkersRouteService {
         runtimeManifest: input.runtimeManifest,
         allowedWorkspaceIds: input.allowedWorkspaceIds,
         capabilityClasses: input.capabilityClasses,
+        protectedAdmissionSignerPin: validateProtectedAdmissionSignerPin(input.protectedAdmissionSignerPin),
         expiresInSeconds: input.expiresInSeconds,
         idempotencyKey: inputCanonicalIdentifier(input.idempotencyKey, 512),
       });
@@ -261,6 +268,8 @@ export class RemoteWorkersRouteService {
       throw new RemoteWorkerRegistryInputError();
     }
     const actorId = inputCanonicalIdentifier(input.actorId, 256);
+    const protectedAdmissionSignerPin = request.protectedAdmissionSignerPin;
+    if (protectedAdmissionSignerPin === undefined) throw new RemoteWorkerRegistryInputError();
     if (redactSecretText(request.workerLabel).redactionCount > 0) {
       throw new RemoteWorkerRegistryInputError();
     }
@@ -289,6 +298,9 @@ export class RemoteWorkersRouteService {
         manifestVerificationReceiptSha256: manifestVerification.manifestVerificationReceiptSha256,
         allowedWorkspaceCount: request.allowedWorkspaceIds.length,
         capabilityClassCount: request.capabilityClasses.length,
+        protectedAdmissionSignerSpkiSha256: protectedAdmissionSignerPin.signerSpkiSha256,
+        protectedAdmissionKeysetReceiptSha256: protectedAdmissionSignerPin.keysetReceiptSha256,
+        protectedAdmissionKeysetGeneration: protectedAdmissionSignerPin.keysetGeneration,
         createdByActorId: actorId,
       },
       { deliveryId: auditDeliveryId },
@@ -307,6 +319,7 @@ export class RemoteWorkersRouteService {
 
     const outcome = await control.admissions.createBootstrap({
       ...request,
+      protectedAdmissionSignerPin,
       createdByActorId: actorId,
       bootstrapSecretSha256,
     });
@@ -320,6 +333,8 @@ export class RemoteWorkersRouteService {
       state: outcome.record.state,
       expiresAt: outcome.record.expiresAt,
       manifestPayloadSha256: outcome.record.runtimeManifest.payloadSha256,
+      protectedAdmissionSignerSpkiSha256: protectedAdmissionSignerPin.signerSpkiSha256,
+      protectedAdmissionKeysetReceiptSha256: protectedAdmissionSignerPin.keysetReceiptSha256,
       auditDeliveryId,
       ...(outcome.disposition === "created" ? { bootstrapSecret } : {}),
     });
@@ -612,6 +627,29 @@ export class RemoteWorkersRouteService {
     if (!this.operatorControl) throw new RemoteWorkerOperatorControlUnavailableError();
     return this.operatorControl;
   }
+}
+
+function validateProtectedAdmissionSignerPin(
+  value: RemoteWorkerProtectedAdmissionSignerPin,
+): RemoteWorkerProtectedAdmissionSignerPin {
+  const pin = normalizeRemoteWorkerProtectedAdmissionSignerPin(value);
+  const spki = Buffer.from(pin.signerSpkiBase64Url, "base64url");
+  try {
+    const key = createPublicKey({ key: spki, format: "der", type: "spki" });
+    const canonical = key.export({ format: "der", type: "spki" });
+    if (
+      key.asymmetricKeyType !== "ed25519" ||
+      !Buffer.isBuffer(canonical) ||
+      canonical.byteLength !== spki.byteLength ||
+      !timingSafeEqual(canonical, spki) ||
+      !timingSafeEqual(createHash("sha256").update(spki).digest(), Buffer.from(pin.signerSpkiSha256, "hex"))
+    ) {
+      throw new Error("invalid protected admission signer pin");
+    }
+  } catch {
+    throw new RemoteWorkerRegistryInputError();
+  }
+  return pin;
 }
 
 export function encodeRemoteWorkerRegistryCursor(cursor: RemoteWorkerRegistryCursorV1): string {

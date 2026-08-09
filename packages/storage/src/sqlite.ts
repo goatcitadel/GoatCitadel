@@ -57,6 +57,7 @@ import { createSkillEvaluationRunsSchema } from "./sqlite/skill-evaluation-schem
 import { createChannelCronDurabilitySchema } from "./sqlite/channel-cron-durability-schema.js";
 import { createGovernedLifecycleSchema } from "./sqlite/governed-lifecycle-schema.js";
 import { createGovernedRemediationSchema } from "./sqlite/governed-remediation-schema.js";
+import { createRemoteWorkerProtectedAdmissionEvidenceSchema } from "./sqlite/remote-worker-protected-admission-evidence.js";
 import { upgradeGovernedRemediationRecipeBinding } from "./sqlite/governed-remediation-recipe-binding.js";
 
 const SQLITE_BUSY_TIMEOUT_MS = 5_000;
@@ -7075,6 +7076,21 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
         name: "governed_remediation_recipe_and_phase_authority",
         up: (db) => {
           upgradeGovernedRemediationRecipeBinding(db);
+        },
+      },
+      {
+        version: 193,
+        name: "remote_worker_protected_admission_evidence",
+        up: (db) => {
+          if (
+            !tableExists(db, "remote_worker_bootstrap_requests") ||
+            !tableExists(db, "remote_worker_generations") ||
+            !tableExists(db, "remote_worker_generation_controls") ||
+            !tableExists(db, "remote_worker_bootstrap_request_nonces")
+          ) {
+            return;
+          }
+          createRemoteWorkerProtectedAdmissionEvidenceSchema(db);
         },
       },
     ],

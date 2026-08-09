@@ -3,6 +3,7 @@ import Fastify, { type FastifyInstance, type RouteOptions } from "fastify";
 import {
   NotFoundError,
   REMOTE_WORKER_PROTOCOL_VERSION,
+  REMOTE_WORKER_PROTECTED_ADMISSION_SIGNER_PIN_SCHEMA_VERSION,
   REMOTE_WORKER_RUNTIME_MANIFEST_SCHEMA_VERSION,
   canonicalJsonString,
 } from "@goatcitadel/contracts";
@@ -468,6 +469,7 @@ describe("remote worker M2 operator control routes", () => {
         idempotencyKey: "bootstrap-route-a",
         allowedWorkspaceIds: ["workspace-a"],
         capabilityClasses: ["durable_compute"],
+        protectedAdmissionSignerPin: bootstrapRequestBody().protectedAdmissionSignerPin,
       }),
     );
   });
@@ -667,6 +669,7 @@ function bootstrapRequestBody() {
     platform: "windows",
     architecture: "x64",
   } as const;
+  const signerSpki = Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"), Buffer.alloc(32, 0x29)]);
   return {
     workerLabel: "Windows workstation",
     platform: "windows",
@@ -680,6 +683,14 @@ function bootstrapRequestBody() {
     },
     allowedWorkspaceIds: ["workspace-a"],
     capabilityClasses: ["durable_compute"],
+    protectedAdmissionSignerPin: {
+      schemaVersion: REMOTE_WORKER_PROTECTED_ADMISSION_SIGNER_PIN_SCHEMA_VERSION,
+      signatureAlgorithm: "ed25519",
+      keysetGeneration: 1,
+      keysetReceiptSha256: "6".repeat(64),
+      signerSpkiSha256: createHash("sha256").update(signerSpki).digest("hex"),
+      signerSpkiBase64Url: signerSpki.toString("base64url"),
+    },
     expiresInSeconds: 600,
   };
 }

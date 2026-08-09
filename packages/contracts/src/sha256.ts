@@ -20,3 +20,8 @@ const utf8 = new TextEncoder();
 export function sha256Hex(value: string): string {
   return bytesToHex(sha256(utf8.encode(value)));
 }
+
+/** Isomorphic SHA-256 hex digest of exact caller-owned bytes. */
+export function sha256BytesHex(value: Uint8Array): string {
+  return bytesToHex(sha256(value));
+}

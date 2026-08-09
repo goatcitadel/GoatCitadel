@@ -7,6 +7,7 @@ import {
   REMOTE_WORKER_MAX_CAPABILITY_CLASSES,
   REMOTE_WORKER_MAX_LABEL_LENGTH,
   REMOTE_WORKER_REGISTRY_MAX_CURSOR_BYTES,
+  REMOTE_WORKER_PROTECTED_ADMISSION_SIGNER_PIN_SCHEMA_VERSION,
 } from "@goatcitadel/contracts";
 import { markMutationCommitted } from "../plugins/idempotency.js";
 import {
@@ -85,6 +86,19 @@ const bootstrapBodySchema = z
       .array(z.enum(REMOTE_WORKER_CAPABILITY_CLASSES))
       .min(1)
       .max(REMOTE_WORKER_MAX_CAPABILITY_CLASSES),
+    protectedAdmissionSignerPin: z
+      .object({
+        schemaVersion: z.literal(REMOTE_WORKER_PROTECTED_ADMISSION_SIGNER_PIN_SCHEMA_VERSION),
+        signatureAlgorithm: z.literal("ed25519"),
+        keysetGeneration: z.number().int().safe().positive(),
+        keysetReceiptSha256: z.string().regex(/^[0-9a-f]{64}$/u),
+        signerSpkiSha256: z.string().regex(/^[0-9a-f]{64}$/u),
+        signerSpkiBase64Url: z
+          .string()
+          .length(59)
+          .regex(/^[A-Za-z0-9_-]+$/u),
+      })
+      .strict(),
     expiresInSeconds: z.number().int().min(1).max(REMOTE_WORKER_MAX_BOOTSTRAP_TTL_SECONDS),
   })
   .strict();
@@ -171,6 +185,7 @@ export const remoteWorkersRoutes: FastifyPluginAsync = async (fastify) => {
           runtimeManifest: body.data.runtimeManifest as never,
           allowedWorkspaceIds: body.data.allowedWorkspaceIds,
           capabilityClasses: body.data.capabilityClasses,
+          protectedAdmissionSignerPin: body.data.protectedAdmissionSignerPin,
           expiresInSeconds: body.data.expiresInSeconds,
           actorId: identity.actorId,
           idempotencyKey: identity.idempotencyKey,
