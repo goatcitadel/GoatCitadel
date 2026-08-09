@@ -61,9 +61,9 @@ change:
 | `M0` | P0 | Canonical ledger and stale-status reconciliation | `complete` | None | `pnpm docs:check`; `git diff --check` |
 | `M1` | P0/P1 | Proof integrity, storage correctness, and agentic hot-path foundations | `complete` | M0 | Focused storage/Gateway/harness tests, dual-dialect corrupt-shape proof, concurrent-verifier proof |
 | `M2` | P0 | Remote-worker admission, transport, and operator control | `in_progress` | M1 | Focused mesh/auth suites and real two-machine TLS 1.3/mTLS/PoP admission |
-| `M3` | P0 | Remote-worker durable execution and ordered event transport | `planned` | M2 | Worker death/reconnect/takeover, replay, transcript, approval-resume, and no-duplicate proof |
+| `M3` | P0 | Remote-worker durable execution and ordered event transport | `in_progress` | M2 | Worker death/reconnect/takeover, replay, transcript, approval-resume, and no-duplicate proof |
 | `M4` | P0/P1 | Live worker inference, execution cell, settlement, and visibility | `planned` | M3 | `pnpm verify:remote-workers` with the connected-worker row executed, plus live Ops/Chat data |
-| `M5` | P0 | Governed self-configuration and repair expansion | `planned` | M1; M2 for remote custody | `pnpm verify:self-configuration` with live provider, packaged restart, browser secure input, profile, rollback, and delegated-resume evidence |
+| `M5` | P0 | Governed self-configuration and repair expansion | `in_progress` | M1; M2 for remote custody | `pnpm verify:self-configuration` with live provider, packaged restart, browser secure input, profile, rollback, and delegated-resume evidence |
 | `M6` | P1/P2 | Gateway capability and policy follow-ons | `complete` | M1; M5 where repair is involved | Focused capability/policy/provider tests and explicit owner decisions |
 | `M7` | P1/P2 | Consolidated Mission Control UX and live-worker projection | `in_progress` | M4; stable M5/M6 APIs | Focused component tests, populated stories, accessibility, surface, and one visual-regression pass |
 | `M8` | P1 | Mobile companion completion and pinned-Gateway proof | `planned` | M3-M5 contract stability | External mobile build/tests and HX-508 device-auth, paging, approval, offline/reconnect, attachment, and revocation bundle |
@@ -208,6 +208,10 @@ Owner contract: `OPENCLAW_HERMES_PARITY_PROGRAM.md`, `HX-501`.
 
 ### Current work
 
+- Add a production-dark, credential-authenticated assignment RPC over the
+  existing mTLS/PoP listener for synchronization, lease renewal, ordered event
+  append, cancellation reads, and settlement. Keep it uncomposed until M2 can
+  supply a currently verified admitted key and node-admission authority.
 - Connect scheduler dispatch to generation-fenced assignments and the live
   worker protocol.
 - Execute provider/tool work through Gateway-owned policy and secrets.
@@ -246,6 +250,14 @@ Owner contracts: `OPENCLAW_HERMES_PARITY_PROGRAM.md`, `HX-503` through `HX-507`.
 
 ### Current work
 
+- The generic durable coordinator now binds requester, parent reservation,
+  normalized recipe digest, purpose-specific approvals, phase leases, owner
+  revisions, and receipt lineage in paired SQLite/PostgreSQL storage. Broad
+  declarative-config repair remains explicitly manual because the current
+  owner cannot prove restart-safe rollback after an arbitrary config commit.
+- Implement the first callable repair only at a narrower owner boundary whose
+  prior state, effect identity, restart reconciliation, and rollback can be
+  proven without persisting secrets or arbitrary corrupt bytes.
 - Add provider bootstrap and OAuth repair with owner-specific live probes.
 - Compose schema/config, managed dependency, and owned-service recipes through
   existing owners with rollback.
