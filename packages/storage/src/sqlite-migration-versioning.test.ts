@@ -42,8 +42,8 @@ describe("sqlite schema migrations", () => {
     assert.deepEqual(
       { ...rows.at(-1) },
       {
-        version: 194,
-        name: "remote_worker_mesh_node_admission_authority",
+        version: 195,
+        name: "mobile_push_registration_and_delivery_owner",
       },
     );
     db.close();

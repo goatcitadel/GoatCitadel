@@ -41,6 +41,7 @@ describe("mobile-route-service", () => {
     const publishRealtime = vi.fn();
     const service = createMobileRoutePort({
       storage: { audit } as never,
+      mobilePush: createMobilePushMock(),
       publishRealtime,
     });
     const capability = createCapability("location_context");
@@ -76,6 +77,7 @@ describe("mobile-route-service", () => {
     ];
     const service = createMobileRoutePort({
       storage: { audit: { append: vi.fn(), list: vi.fn(async () => records) } } as never,
+      mobilePush: createMobilePushMock(),
       publishRealtime: vi.fn(),
     });
 
@@ -97,6 +99,7 @@ describe("mobile-route-service", () => {
     ];
     const service = createMobileRoutePort({
       storage: { audit: { append: vi.fn(), list: vi.fn(async () => records) } } as never,
+      mobilePush: createMobilePushMock(),
       publishRealtime: vi.fn(),
     });
 
@@ -117,6 +120,7 @@ describe("mobile-route-service", () => {
           list: vi.fn(async () => records),
         },
       } as never,
+      mobilePush: createMobilePushMock(),
       publishRealtime,
     });
     const contexts = Array.from({ length: 14 }, (_, index) =>
@@ -137,7 +141,77 @@ describe("mobile-route-service", () => {
       }),
     );
   });
+
+  it("delegates the raw token to custody without persisting or publishing it", async () => {
+    const records: Record<string, unknown>[] = [];
+    const mobilePush = createMobilePushMock();
+    const publishRealtime = vi.fn();
+    const service = createMobileRoutePort({
+      storage: {
+        audit: {
+          append: vi.fn(async (_stream: string, payload: Record<string, unknown>) => records.push(payload)),
+          list: vi.fn(async () => records),
+        },
+      } as never,
+      mobilePush,
+      publishRealtime,
+    });
+    const rawToken = "ExpoPushToken[raw-secret-value]";
+
+    await service.registerMobilePush(
+      { provider: "expo", enabled: true, token: rawToken, deviceLabel: "Pixel" },
+      { grantId: "grant-1", companionSessionId: "companion-1" },
+    );
+
+    expect(mobilePush.register).toHaveBeenCalledWith(
+      expect.objectContaining({ token: rawToken }),
+      expect.objectContaining({ grantId: "grant-1" }),
+    );
+    expect(JSON.stringify(records)).not.toContain(rawToken);
+    expect(JSON.stringify(records)).not.toMatch(/tokenHash|tokenPreview|tokenSha|secretRef/i);
+    expect(JSON.stringify(publishRealtime.mock.calls)).not.toContain(rawToken);
+  });
+
+  it("revokes grant-bound push registrations during panic-off", async () => {
+    const mobilePush = createMobilePushMock();
+    const service = createMobileRoutePort({
+      storage: { audit: { append: vi.fn(), list: vi.fn(async () => []) } } as never,
+      mobilePush,
+      publishRealtime: vi.fn(),
+    });
+
+    await service.revokeMobileCapabilities({ reason: "panic_off" }, { grantId: "grant-1" });
+
+    expect(mobilePush.revokeGrant).toHaveBeenCalledWith("grant-1");
+  });
 });
+
+function createMobilePushMock() {
+  return {
+    register: vi.fn(async (input: { provider: "expo" | "fcm"; enabled: boolean }) => ({
+      registrationId: "mpr_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      provider: input.provider,
+      registeredAt: "2026-08-09T00:00:00.000Z",
+      updatedAt: "2026-08-09T00:00:00.000Z",
+      enabled: input.enabled,
+      deliveryAvailability: "unavailable" as const,
+      revision: 1,
+    })),
+    revokeGrant: vi.fn(async () => [
+      {
+        registrationId: "mpr_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        grantId: "grant-1",
+        provider: "expo" as const,
+        tokenSecretRef: "keychain:goatcitadel:mobile-push:mpr_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        lifecycleState: "revoked" as const,
+        revision: 2,
+        registeredAt: "2026-08-09T00:00:00.000Z",
+        updatedAt: "2026-08-09T00:01:00.000Z",
+        revokedAt: "2026-08-09T00:01:00.000Z",
+      },
+    ]),
+  };
+}
 
 function createCapability(capabilityId: MobileNativeCapabilityRecord["capabilityId"]): MobileNativeCapabilityRecord {
   return {

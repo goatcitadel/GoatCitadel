@@ -62,6 +62,17 @@ import { KnowledgeRepository } from "./knowledge-repo.js";
 import { CommsDeliveryRepository } from "./comms-delivery-repo.js";
 import { NotificationRoutingRepository } from "./notification-routing-repo.js";
 export { NotificationRoutingRepository } from "./notification-routing-repo.js";
+import { MobilePushRepository } from "./mobile-push-repo.js";
+export {
+  MobilePushRepository,
+  deriveMobilePushDeliveryId,
+  deriveMobilePushRegistrationId,
+  type MobilePushDeliveryClassification,
+  type MobilePushDeliveryRecord,
+  type MobilePushDeliveryStatus,
+  type MobilePushRegistrationLifecycle,
+  type MobilePushRegistrationRecord,
+} from "./mobile-push-repo.js";
 import { ChatTimerRepository } from "./chat-timer-repo.js";
 export { ChatTimerRepository } from "./chat-timer-repo.js";
 import { ChatSessionRunVariableRepository } from "./chat-session-run-variable-repo.js";
@@ -308,6 +319,7 @@ export class Storage {
   public readonly knowledge: KnowledgeRepository;
   public readonly commsDeliveries: CommsDeliveryRepository;
   public readonly notificationRouting: NotificationRoutingRepository;
+  public readonly mobilePush: MobilePushRepository;
   public readonly chatTimers: ChatTimerRepository;
   public readonly chatSessionRunVariables: ChatSessionRunVariableRepository;
   public readonly chatProjects: ChatProjectRepository;
@@ -473,6 +485,7 @@ export class Storage {
     this.knowledge = new KnowledgeRepository(this.db);
     this.commsDeliveries = new CommsDeliveryRepository(this.db);
     this.notificationRouting = new NotificationRoutingRepository(this.db);
+    this.mobilePush = new MobilePushRepository(this.db);
     this.chatTimers = new ChatTimerRepository(this.db);
     this.chatSessionRunVariables = new ChatSessionRunVariableRepository(this.db);
     this.chatProjects = new ChatProjectRepository(this.db);

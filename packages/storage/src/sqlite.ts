@@ -60,6 +60,7 @@ import { createGovernedRemediationSchema } from "./sqlite/governed-remediation-s
 import { createRemoteWorkerProtectedAdmissionEvidenceSchema } from "./sqlite/remote-worker-protected-admission-evidence.js";
 import { createRemoteWorkerMeshNodeAdmissionSchema } from "./sqlite/remote-worker-mesh-node-admission.js";
 import { upgradeGovernedRemediationRecipeBinding } from "./sqlite/governed-remediation-recipe-binding.js";
+import { createMobilePushSchema } from "./sqlite/mobile-push-schema.js";
 
 const SQLITE_BUSY_TIMEOUT_MS = 5_000;
 const LEGACY_REMOTE_APPROVAL_BEARER_PATTERN = /grat_[A-Za-z0-9_-]{43}/;
@@ -7107,6 +7108,13 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
             return;
           }
           createRemoteWorkerMeshNodeAdmissionSchema(db);
+        },
+      },
+      {
+        version: 195,
+        name: "mobile_push_registration_and_delivery_owner",
+        up: (db) => {
+          createMobilePushSchema(db);
         },
       },
     ],

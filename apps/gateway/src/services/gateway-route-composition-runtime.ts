@@ -12,6 +12,7 @@ import { createLlamaCppRoutePort } from "./llama-cpp-route-service.js";
 import { acquireBoundLlamaCppEmbeddingLease } from "./llama-cpp-provider-lease.js";
 import { createMeshRoutePort } from "./mesh-route-service.js";
 import { createMobileRoutePort } from "./mobile-route-service.js";
+import { createUnavailableMobilePushProvider, MobilePushService } from "./mobile-push-service.js";
 import { ModelComparisonService } from "./model-comparison-service.js";
 import { createNpuRoutePort } from "./npu-route-service.js";
 import { ResearchSearchBrokerService } from "./research-search-broker-service.js";
@@ -108,6 +109,33 @@ export function composeRuntimeAdminRouteDependencies(
   });
   const researchSearch = new ResearchSearchBrokerService();
   const updateScout = new UpdateScoutService();
+  const mobilePush = new MobilePushService({
+    storage: gateway.storage,
+    secretStore: gateway.secretStore ?? {
+      isAvailable: () => false,
+      isWriteCustodySafe: () => false,
+      setSecret: () => {
+        throw new Error("OS keychain is unavailable.");
+      },
+      getSecret: () => {
+        throw new Error("OS keychain is unavailable.");
+      },
+      deleteSecret: () => {
+        throw new Error("OS keychain is unavailable.");
+      },
+    },
+    provider: createUnavailableMobilePushProvider(),
+    isGrantActive: async (grantId) =>
+      Boolean(await settingsAuthService.getActiveAuthDeviceGrantById(settingsAuthDeps, grantId)),
+    recordDiagnostic: (diagnostic) =>
+      gateway.recordDevDiagnostic({
+        level: "warn",
+        category: "runtime",
+        event: diagnostic.event,
+        message: diagnostic.message,
+        context: diagnostic.context,
+      }),
+  });
   const warnedOutsideRootPathFingerprints = new Set<string>();
 
   return {
@@ -131,8 +159,25 @@ export function composeRuntimeAdminRouteDependencies(
       resolveGatewayInstallToken: (input) => gateway.resolveGatewayInstallToken(input),
       revokeCompanionSession: (sessionId, actorId, options) =>
         settingsAuthService.revokeCompanionSession(settingsAuthDeps, sessionId, actorId, options),
-      revokeDeviceAccessGrant: (grantId, actorId, options) =>
-        settingsAuthService.revokeDeviceAccessGrant(settingsAuthDeps, grantId, actorId, options),
+      revokeDeviceAccessGrant: async (grantId, actorId, options) => {
+        const revoked = await settingsAuthService.revokeDeviceAccessGrant(settingsAuthDeps, grantId, actorId, options);
+        try {
+          await mobilePush.revokeGrant(revoked.grantId);
+        } catch {
+          try {
+            gateway.recordDevDiagnostic({
+              level: "warn",
+              category: "runtime",
+              event: "mobile_push.grant_revoke_projection_failed",
+              message: "Device grant was revoked, but mobile push metadata cleanup requires reconciliation.",
+              context: { grantId: revoked.grantId },
+            });
+          } catch {
+            // The canonical auth grant revoke must not be rolled back by auxiliary diagnostics.
+          }
+        }
+        return revoked;
+      },
       rotateCompanionSession: (input) => settingsAuthService.rotateCompanionSession(settingsAuthDeps, input),
       runDatabaseCutover: (input) => gateway.runDatabaseCutover(input),
       updateRetentionPolicy: (patch) => gateway.backupRetentionService.updateRetentionPolicy(patch),
@@ -292,6 +337,7 @@ export function composeRuntimeAdminRouteDependencies(
     }),
     mobile: createMobileRoutePort({
       storage: gateway.storage,
+      mobilePush,
       publishRealtime: (eventType, source, payload) => gateway.publishRealtime(eventType, source, payload),
     }),
     modelComparisons: new ModelComparisonService({

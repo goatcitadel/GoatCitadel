@@ -410,6 +410,7 @@ import { LlamaCppRuntimeService } from "./llama-cpp-runtime-service.js";
 import { acquireBoundLlamaCppEmbeddingLease, acquireBoundLlamaCppLease } from "./llama-cpp-provider-lease.js";
 import { NpuSidecarService } from "./npu-sidecar-service.js";
 import { SecretStoreService } from "./secret-store-service.js";
+import { enqueueMobilePushApprovalRefresh } from "./mobile-push-service.js";
 import {
   RuntimeConfigurationService,
   type RuntimeConfigurationAuthorizationInput,
@@ -11063,6 +11064,23 @@ export class GatewayService {
     options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
   ): Promise<RealtimeEvent> {
     const event = await this.realtimeEventService.publishRealtime(eventType, source, payload, options);
+    if ((this.storage as Partial<Storage>).mobilePush) {
+      try {
+        await enqueueMobilePushApprovalRefresh(this.storage, event);
+      } catch {
+        try {
+          this.recordDevDiagnostic({
+            level: "warn",
+            category: "runtime",
+            event: "mobile_push.approval_projection_failed",
+            message: "Mobile push approval projection failed after retained realtime publication.",
+            context: { realtimeEventId: event.eventId, eventType: event.eventType },
+          });
+        } catch {
+          // Retained realtime publication remains authoritative even when diagnostics are unavailable.
+        }
+      }
+    }
     await this.maybeRouteCanonicalNotification(event);
     return event;
   }

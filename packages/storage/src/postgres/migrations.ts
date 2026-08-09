@@ -4,6 +4,7 @@ import { GOVERNED_REMEDIATION_POSTGRES_SCHEMA_SQL } from "./governed-remediation
 import { GOVERNED_REMEDIATION_RECIPE_BINDING_POSTGRES_SQL } from "./governed-remediation-recipe-binding.js";
 import { REMOTE_WORKER_PROTECTED_ADMISSION_EVIDENCE_POSTGRES_SQL } from "./remote-worker-protected-admission-evidence.js";
 import { REMOTE_WORKER_MESH_NODE_ADMISSION_POSTGRES_SQL } from "./remote-worker-mesh-node-admission.js";
+import { MOBILE_PUSH_POSTGRES_SCHEMA_SQL } from "./mobile-push-schema.js";
 
 export interface PostgresMigration {
   version: number;
@@ -14263,6 +14264,12 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     name: "remote_worker_mesh_node_admission_authority",
     sql: REMOTE_WORKER_MESH_NODE_ADMISSION_POSTGRES_SQL,
     integritySha256: "2bdbf5518ee1b919a852d8e3e00b98b05ce1f92d2c0563d73c1fb4010d996f97",
+  },
+  {
+    version: 138,
+    name: "mobile_push_registration_and_delivery_owner",
+    sql: MOBILE_PUSH_POSTGRES_SCHEMA_SQL,
+    integritySha256: "b4f7a5cbfb59f358fd765207b9a36264372e5f51a82ef25bb191b0169bc470a1",
   },
 ];
 

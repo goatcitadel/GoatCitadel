@@ -44,6 +44,8 @@ const SECRET_SENSITIVE_REMOTE_WORKER_CONTROL_ROUTES = new Set([
   "/api/v1/ops/workspaces/:workspaceId/remote-workers/:workerId/generations/:workerGeneration/quarantine",
   "/api/v1/ops/workspaces/:workspaceId/remote-workers/:workerId/generations/:workerGeneration/revoke",
 ]);
+const SECRET_SENSITIVE_MOBILE_PUSH_ROUTES = new Set(["/api/v1/mobile/current-device/push"]);
+const MOBILE_PUSH_REGISTRATION_PATH = "/api/v1/mobile/current-device/push";
 const SECURE_CONFIGURATION_ROUTE =
   "/api/v1/chat/sessions/:sessionId/turns/:turnId/user-input/:promptId/secure-configuration";
 const REMOTE_WORKER_BOOTSTRAP_ROUTE = "/api/v1/ops/workspaces/:workspaceId/remote-workers/bootstrap";
@@ -164,6 +166,14 @@ export const idempotencyHeaderPlugin = fp<IdempotencyHeaderPluginOptions>(async 
     }
     await options.mutationStore.markCompleted(state);
   });
+
+  fastify.addHook("onSend", async (request, reply, payload) => {
+    if (isMobilePushRegistrationRequest(request)) {
+      reply.header("Cache-Control", "no-store");
+      reply.header("Pragma", "no-cache");
+    }
+    return payload;
+  });
 });
 
 /**
@@ -239,6 +249,10 @@ function getNormalizedRoutePath(request: FastifyRequest): string {
   return request.url.split("?", 1)[0] || request.url;
 }
 
+function isMobilePushRegistrationRequest(request: FastifyRequest): boolean {
+  return request.method === "PUT" && (request.url.split("?", 1)[0] || request.url) === MOBILE_PUSH_REGISTRATION_PATH;
+}
+
 function hashCanonicalPayload(value: unknown): string {
   return createHash("sha256").update(stableStringify(value)).digest("hex");
 }
@@ -274,6 +288,18 @@ function hashMutationPayload(request: FastifyRequest): string {
       kind: "remote_worker_generation_control_redacted_v1",
       path: request.url.split("?", 1)[0] || request.url,
       reasonCode,
+    });
+  }
+  if (SECRET_SENSITIVE_MOBILE_PUSH_ROUTES.has(routePath)) {
+    const body = (request as { body?: unknown }).body;
+    const record = body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
+    const provider = record.provider === "expo" || record.provider === "fcm" ? record.provider : null;
+    const enabled = typeof record.enabled === "boolean" ? record.enabled : null;
+    return hashCanonicalPayload({
+      kind: "mobile_push_registration_redacted_v1",
+      path: request.url.split("?", 1)[0] || request.url,
+      provider,
+      enabled,
     });
   }
   return hashCanonicalPayload((request as { body?: unknown }).body ?? null);
