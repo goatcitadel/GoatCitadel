@@ -455,7 +455,8 @@ function collectCreateIndexes(sql: string, indexes: Map<string, PostgresSchemaSh
       predicate,
       predicateTerms: predicate ? extractPredicateTerms(predicate) : [],
       predicateMode,
-      predicateFingerprint: predicateMode === "exact" ? normalizePredicateFingerprint(predicate) : null,
+      predicateFingerprint:
+        predicate !== null && predicateMode === "exact" ? normalizePredicateFingerprint(predicate) : null,
     });
   }
 }

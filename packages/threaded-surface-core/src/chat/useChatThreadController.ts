@@ -47,8 +47,6 @@ export function useChatThreadController(input: {
     input;
   const appliedRouteSelectionKeyRef = useRef<string | null>(null);
   const pendingRouteTurnSelectionRef = useRef<string | null>(null);
-  const { routeSearch, selectedSessionId, setFollowThreadOutput, setSelectedSessionId, setSelectedTurnId, thread } =
-    input;
 
   useEffect(() => {
     if (!routeSearch) {
