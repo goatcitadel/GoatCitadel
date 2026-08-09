@@ -24,7 +24,6 @@ await withManagedLifecycleLock(
     service: "gateway-fixture",
     timeoutMs: 15_000,
     staleHeartbeatMs: 500,
-    unverifiedStaleMs: 2_000,
   },
   async () => {
     record("enter");

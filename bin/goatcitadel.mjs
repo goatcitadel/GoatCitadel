@@ -8,7 +8,8 @@ import readline from "node:readline/promises";
 import {
   atomicCompareAndPublishJson,
   atomicCompareAndRemove,
-  inspectProcessBinding,
+  inspectLifecycleLockHolder,
+  inspectProcessBindingWithRetry,
   queryProcessCreationIdentity,
   readManagedStateFile,
   withManagedLifecycleLock,
@@ -73,6 +74,8 @@ const MANAGED_METADATA_MAX_BYTES = 4096;
 const MANAGED_HEALTH_MAX_BYTES = 8192;
 const MANAGED_OWNERSHIP_PROBE_TIMEOUT_MS = 2_000;
 const MANAGED_LIFECYCLE_LOCK_TIMEOUT_MS = 190_000;
+const POST_LAUNCH_RETENTION_RECHECK_DELAY_MS = 750;
+const POST_LAUNCH_RETENTION_RECHECK_WINDOW_MS = 10_000;
 
 const args = process.argv.slice(2);
 const command = args[0] || "help";
@@ -611,9 +614,26 @@ async function launchGoatCitadel(extraArgs = []) {
       });
     }
 
-    const status = await readRuntimeStatus({ endpoints });
+    let status = await readRuntimeStatus({ endpoints });
+    const retentionDeadline = Date.now() + POST_LAUNCH_RETENTION_RECHECK_WINDOW_MS;
+    while ((!status.readiness.gateway || !status.readiness.ui) && Date.now() < retentionDeadline) {
+      // The post-launch snapshot races a sibling launcher's probes, whose
+      // synchronous identity reads can saturate the host for several seconds.
+      // Re-reading inside a bounded window cannot accept a genuine ownership
+      // loss: readiness must still prove exact running metadata, health, and
+      // identity on the final read.
+      await sleep(POST_LAUNCH_RETENTION_RECHECK_DELAY_MS);
+      status = await readRuntimeStatus({ endpoints });
+    }
     if (!status.readiness.gateway || !status.readiness.ui) {
-      throw new Error("Gateway and Mission Control did not retain accepted endpoint ownership after launch.");
+      const summarize = (diagnostic) =>
+        `${diagnostic.reason} (pidState=${diagnostic.pidState}, responded=${diagnostic.endpointResponded}, ` +
+        `healthy=${diagnostic.endpointHealthy}, identityVerified=${diagnostic.identityVerified})`;
+      throw new Error(
+        "Gateway and Mission Control did not retain accepted endpoint ownership after launch. " +
+          `Gateway: ${summarize(status.endpointOwnership.gateway)}; ` +
+          `Mission Control: ${summarize(status.endpointOwnership.ui)}.`,
+      );
     }
     return status;
   });
@@ -695,12 +715,17 @@ async function inspectLauncherRuntimeOwnershipWithLocks(endpoints, timeoutMs) {
       );
     } catch (error) {
       if (error instanceof Error && error.message.includes("lifecycle lock")) {
-        return inspectLauncherEndpointOwnership(endpoint, timeoutMs);
+        return inspectLauncherEndpointOwnership(endpoint, timeoutMs, { considerLifecycleLockHolder: true });
       }
       throw error;
     }
   };
-  const [gateway, ui] = await Promise.all([inspect(endpoints.gateway), inspect(endpoints.ui)]);
+  // Endpoint inspections run sequentially: each health probe must complete
+  // before any synchronous process-identity read can block the event loop,
+  // or an in-flight probe aborts on an overdue timer and misreads a healthy
+  // endpoint as unresponsive.
+  const gateway = await inspect(endpoints.gateway);
+  const ui = await inspect(endpoints.ui);
   return { gateway, ui };
 }
 
@@ -718,7 +743,7 @@ async function inspectLauncherEndpointOwnership(endpoint, timeoutMs, options = {
       Number.isSafeInteger(health.managedProcessId) &&
       health.managedProcessId > 0;
     if (markerMatched) {
-      processBinding = inspectProcessBinding({ rootPid: pidInfo.pid, servingPid: health.managedProcessId });
+      processBinding = await inspectProcessBindingWithRetry({ rootPid: pidInfo.pid, servingPid: health.managedProcessId });
       if (processBinding.status === "unavailable") {
         pidInfo = { ...pidInfo, state: "unverified", reason: "process_identity_unavailable" };
       } else if (processBinding.status !== "verified") {
@@ -749,7 +774,7 @@ async function inspectLauncherEndpointOwnership(endpoint, timeoutMs, options = {
       // A temporary health failure must not make an otherwise exact managed
       // process impossible to stop. The persisted serving identity plus the
       // current OS ancestry still proves ownership without trusting the port.
-      processBinding = inspectProcessBinding({ rootPid: pidInfo.pid, servingPid: pidInfo.servingPid });
+      processBinding = await inspectProcessBindingWithRetry({ rootPid: pidInfo.pid, servingPid: pidInfo.servingPid });
       if (processBinding.status === "unavailable") {
         pidInfo = { ...pidInfo, state: "unverified", reason: "process_identity_unavailable" };
       } else if (processBinding.status !== "verified") {
@@ -763,6 +788,22 @@ async function inspectLauncherEndpointOwnership(endpoint, timeoutMs, options = {
       pidInfo = classifyManagedRootProcess(pidInfo);
     }
   }
+  let launchInProgress = false;
+  if (
+    options.considerLifecycleLockHolder === true &&
+    endpoint.attachmentMode === "managed" &&
+    health.responded &&
+    pidInfo.state !== "running"
+  ) {
+    // Reached only without the lifecycle lock. A live holder for this exact
+    // service means a managed launch is publishing metadata right now, so the
+    // assessment waits instead of reporting an unrelated-listener collision.
+    const lockHolder = await inspectLifecycleLockHolder({
+      lockPath: endpoint.lockPath,
+      service: endpoint.service,
+    });
+    launchInProgress = lockHolder.held;
+  }
   return {
     endpoint,
     pidInfo,
@@ -775,6 +816,7 @@ async function inspectLauncherEndpointOwnership(endpoint, timeoutMs, options = {
       endpointResponded: health.responded,
       endpointHealthy: health.healthy,
       identityMatched,
+      launchInProgress,
     }),
   };
 }

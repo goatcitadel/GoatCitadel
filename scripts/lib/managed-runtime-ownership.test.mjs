@@ -137,6 +137,44 @@ test("managed endpoint readiness requires live metadata and the exact health ide
   assert.equal(unverified.readinessAccepted, false);
 });
 
+test("a demonstrable in-flight managed launch waits instead of reporting a collision", () => {
+  for (const pidState of ["missing", "invalid", "stale", "reused", "unverified"]) {
+    const waiting = assessLauncherEndpointOwnership({
+      attachmentMode: "managed",
+      pidState,
+      endpointResponded: true,
+      endpointHealthy: true,
+      identityMatched: false,
+      launchInProgress: true,
+    });
+    assert.equal(waiting.collision, false, pidState);
+    assert.equal(waiting.launchAction, "wait_managed", pidState);
+    assert.equal(waiting.reason, "managed_launch_in_progress", pidState);
+    assert.equal(waiting.readinessAccepted, false, pidState);
+  }
+
+  const mismatch = assessLauncherEndpointOwnership({
+    attachmentMode: "managed",
+    pidState: "running",
+    endpointResponded: true,
+    endpointHealthy: true,
+    identityMatched: false,
+    launchInProgress: true,
+  });
+  assert.equal(mismatch.collision, true);
+  assert.equal(mismatch.reason, "managed_identity_mismatch");
+
+  const spawnable = assessLauncherEndpointOwnership({
+    attachmentMode: "managed",
+    pidState: "missing",
+    endpointResponded: false,
+    endpointHealthy: false,
+    identityMatched: false,
+    launchInProgress: true,
+  });
+  assert.equal(spawnable.launchAction, "spawn");
+});
+
 test("a reused live PID with an unrelated listener cannot authorize attach or stop", () => {
   const assessment = assessLauncherEndpointOwnership({
     attachmentMode: "managed",
@@ -333,9 +371,9 @@ test("real concurrent packaged launches serialize and start one process per mana
   assert.equal(first.status, 0, launchDiagnostics);
   assert.equal(second.status, 0, launchDiagnostics);
   assert.equal(statusProbe.status, 0, launchDiagnostics);
-  assert.equal(JSON.parse(first.stdout).status, "ready");
-  assert.equal(JSON.parse(second.stdout).status, "ready");
-  assert.equal(JSON.parse(statusProbe.stdout).status, "ready");
+  assert.equal(JSON.parse(first.stdout).status, "ready", launchDiagnostics);
+  assert.equal(JSON.parse(second.stdout).status, "ready", launchDiagnostics);
+  assert.equal(JSON.parse(statusProbe.stdout).status, "ready", launchDiagnostics);
 
   const starts = fs
     .readFileSync(startLogPath, "utf8")
@@ -362,6 +400,67 @@ test("real concurrent packaged launches serialize and start one process per mana
   assert.equal(JSON.parse(stop.stdout).stopped.length, 2, stop.stderr || stop.stdout);
   assert.equal(fs.existsSync(path.join(installRoot, "runtime", "gateway.pid")), false);
   assert.equal(fs.existsSync(path.join(installRoot, "runtime", "ui.pid")), false);
+});
+
+test("a standalone status probe reports launch-in-progress rather than collision while a live launcher holds the lock", async (t) => {
+  const [gatewayPort, uiPort] = await reservePorts(2);
+  const installRoot = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-launcher-ownership-"));
+  t.after(() => removeOwnedTestRoot(installRoot));
+  materializePackagedFixture(installRoot);
+  const fixtureLauncher = materializeLauncherCodeFixture(path.join(installRoot, "launcher-code"), gatewayPort, uiPort);
+
+  const requests = [];
+  const foreignListener = createLauncherFixtureServer(requests);
+  await listen(foreignListener, gatewayPort);
+  t.after(() => close(foreignListener));
+
+  const launcherStandIn = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    windowsHide: true,
+    stdio: "ignore",
+  });
+  t.after(() => stopOwnedChild(launcherStandIn));
+  await new Promise((resolve, reject) => {
+    launcherStandIn.once("spawn", resolve);
+    launcherStandIn.once("error", reject);
+  });
+  assert.ok(launcherStandIn.pid);
+  const launcherIdentity = queryProcessCreationIdentity(launcherStandIn.pid);
+  assert.equal(launcherIdentity.status, "running");
+
+  const lockPath = path.join(installRoot, "runtime", "locks", "gateway.lifecycle.lock");
+  const writeGatewayLockOwner = () => {
+    fs.mkdirSync(lockPath, { recursive: true });
+    fs.writeFileSync(
+      path.join(lockPath, "owner.json"),
+      `${JSON.stringify({
+        lockId: "11111111-2222-4333-8444-555555555555",
+        pid: launcherStandIn.pid,
+        processIdentity: launcherIdentity.identity,
+        service: "gateway",
+        createdAt: new Date().toISOString(),
+        heartbeatAt: new Date().toISOString(),
+      })}\n`,
+      "utf8",
+    );
+  };
+  writeGatewayLockOwner();
+
+  const launcherEnv = { ...process.env, GOATCITADEL_HOME: installRoot };
+  const inProgress = await runLauncher(["status", "--json"], launcherEnv, fixtureLauncher);
+  assert.equal(inProgress.status, 0, inProgress.stderr || inProgress.stdout);
+  const inProgressPayload = JSON.parse(inProgress.stdout);
+  assert.equal(inProgressPayload.endpointOwnership.gateway.reason, "managed_launch_in_progress");
+  assert.equal(inProgressPayload.endpointOwnership.gateway.conflict, false);
+  assert.equal(inProgressPayload.endpointOwnership.gateway.launchAction, "wait_managed");
+  assert.equal(inProgressPayload.readiness.gateway, false);
+
+  await stopOwnedChild(launcherStandIn);
+  writeGatewayLockOwner();
+  const afterExit = await runLauncher(["status", "--json"], launcherEnv, fixtureLauncher);
+  assert.equal(afterExit.status, 0, afterExit.stderr || afterExit.stdout);
+  const afterExitPayload = JSON.parse(afterExit.stdout);
+  assert.equal(afterExitPayload.endpointOwnership.gateway.reason, "managed_endpoint_collision");
+  assert.equal(afterExitPayload.endpointOwnership.gateway.conflict, true);
 });
 
 test("health deadline remains active when a listener stalls after sending headers", async (t) => {
@@ -598,10 +697,10 @@ async function reservePorts(count) {
   return ports;
 }
 
-function listen(server) {
+function listen(server, port = 0) {
   return new Promise((resolve, reject) => {
     server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
+    server.listen(port, "127.0.0.1", resolve);
   });
 }
 
