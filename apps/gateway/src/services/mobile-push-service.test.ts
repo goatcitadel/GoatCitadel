@@ -321,6 +321,28 @@ describe("MobilePushService", () => {
     expect(JSON.stringify(harness.diagnostics.mock.calls)).not.toContain(rawToken);
   });
 
+  it("derives cleanup custody from the registration id instead of trusting a stored secret ref", async () => {
+    const harness = createHarness();
+    harness.seedGrant("grant-cleanup-target");
+    harness.seedGrant("grant-cleanup-unrelated");
+    const target = await harness.service.register(
+      { provider: "expo", enabled: true, token: "ExpoPushToken[target]" },
+      { grantId: "grant-cleanup-target" },
+    );
+    const unrelated = await harness.service.register(
+      { provider: "expo", enabled: true, token: "ExpoPushToken[unrelated]" },
+      { grantId: "grant-cleanup-unrelated" },
+    );
+    harness.sync.db
+      .prepare("UPDATE mobile_push_registrations SET token_secret_ref = ? WHERE registration_id = ?")
+      .run(`keychain:goatcitadel:mobile-push:${unrelated.registrationId}`, target.registrationId);
+
+    await harness.service.revokeGrant("grant-cleanup-target");
+
+    expect(harness.secrets.has(`mobile-push:${target.registrationId}`)).toBe(false);
+    expect(harness.secrets.get(`mobile-push:${unrelated.registrationId}`)).toBe("ExpoPushToken[unrelated]");
+  });
+
   it("redacts keychain failures before they reach route error handling", async () => {
     const leakedToken = "ExpoPushToken[must-not-surface]";
     const secretStore = createSecretStore();

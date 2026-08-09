@@ -175,11 +175,7 @@ export class MobilePushService {
     const grantId = requireGrantId(grantIdInput);
     const revoked = await this.deps.storage.mobilePush.revokeAllByGrant(grantId, this.nowIso());
     for (const registration of revoked) {
-      try {
-        this.deps.secretStore.deleteSecret(accountFromMobilePushSecretRef(registration.tokenSecretRef));
-      } catch {
-        this.recordCleanupFailure(registration.registrationId, "grant_revoke");
-      }
+      this.deleteSecretBestEffort(registration, "grant_revoke");
     }
     return revoked;
   }
@@ -231,7 +227,8 @@ export class MobilePushService {
   }): Promise<MobilePushRegistrationRecord> {
     const revoked = await this.deps.storage.mobilePush.ensureRevokedRegistration({ ...input, now: this.nowIso() });
     try {
-      this.deps.secretStore.deleteSecret(accountFromMobilePushSecretRef(input.tokenSecretRef));
+      const expectedRef = buildMobilePushTokenSecretRef(input.registrationId);
+      this.deps.secretStore.deleteSecret(accountFromMobilePushSecretRef(expectedRef));
     } catch {
       this.recordCleanupFailure(revoked.registrationId, "disable");
     }
@@ -428,11 +425,12 @@ export class MobilePushService {
   }
 
   private deleteSecretBestEffort(
-    registration: Pick<MobilePushRegistrationRecord, "registrationId" | "tokenSecretRef">,
+    registration: Pick<MobilePushRegistrationRecord, "registrationId">,
     operation: MobilePushDiagnostic["context"]["operation"],
   ): void {
     try {
-      this.deps.secretStore.deleteSecret(accountFromMobilePushSecretRef(registration.tokenSecretRef));
+      const expectedRef = buildMobilePushTokenSecretRef(registration.registrationId);
+      this.deps.secretStore.deleteSecret(accountFromMobilePushSecretRef(expectedRef));
     } catch {
       this.recordCleanupFailure(registration.registrationId, operation);
     }

@@ -2735,6 +2735,179 @@ describe("settings-auth-service companion session lifecycle", () => {
     );
   });
 
+  it("keeps signed mobile push secrets out of durable replay and audit fingerprints", async () => {
+    const firstHarness = buildAuthHarness();
+    const secondHarness = buildAuthHarness();
+    const firstGrant = await createApprovedDeviceGrant(firstHarness);
+    const secondGrant = await createApprovedDeviceGrant(secondHarness);
+    const firstKeys = createCompanionSigningKeys();
+    const secondKeys = createCompanionSigningKeys();
+    const firstSession = await exchangeCompanionSessionFromDeviceGrant(firstHarness.deps, firstGrant.grantId, {
+      signingPublicKeyPem: firstKeys.publicKeyPem,
+    });
+    const secondSession = await exchangeCompanionSessionFromDeviceGrant(secondHarness.deps, secondGrant.grantId, {
+      signingPublicKeyPem: secondKeys.publicKeyPem,
+    });
+    const method = "PUT";
+    const path = "/api/v1/mobile/current-device/push";
+    const timestamp = new Date().toISOString();
+    const nonce = "nonce-mobile-push-redacted-1";
+    const firstToken = "ExpoPushToken[gc-canary-durable-one]";
+    const secondToken = "ExpoPushToken[gc-canary-durable-two]";
+    const firstExtraSecret = "pin-1111";
+    const secondExtraSecret = "pin-2222";
+    const firstBody = {
+      provider: "expo",
+      enabled: true,
+      token: firstToken,
+      maliciousExtraSecret: firstExtraSecret,
+    };
+    const secondBody = {
+      provider: "expo",
+      enabled: true,
+      token: secondToken,
+      maliciousExtraSecret: secondExtraSecret,
+    };
+
+    const acceptedRequests = [
+      {
+        harness: firstHarness,
+        sessionId: firstSession.sessionId,
+        privateKeyPem: firstKeys.privateKeyPem,
+        body: firstBody,
+      },
+      {
+        harness: secondHarness,
+        sessionId: secondSession.sessionId,
+        privateKeyPem: secondKeys.privateKeyPem,
+        body: secondBody,
+      },
+    ];
+    for (const request of acceptedRequests) {
+      await verifyCompanionRequestSignature(request.harness.deps, {
+        sessionId: request.sessionId,
+        method,
+        path,
+        timestamp,
+        nonce,
+        signature: signCompanionRequest({
+          privateKeyPem: request.privateKeyPem,
+          method,
+          path,
+          timestamp,
+          nonce,
+          body: request.body,
+        }),
+        body: request.body,
+      });
+    }
+
+    const replayRows = acceptedRequests.map(
+      ({ harness, sessionId }) =>
+        harness.storage.gatewaySql
+          .prepare(
+            `SELECT session_id, nonce, method, path, request_hash
+           FROM companion_request_replays
+           WHERE session_id = @sessionId AND nonce = @nonce`,
+          )
+          .get({ sessionId, nonce }) as {
+          session_id: string;
+          nonce: string;
+          method: string;
+          path: string;
+          request_hash: string;
+        },
+    );
+    expect(replayRows[0]?.request_hash).toBe(replayRows[1]?.request_hash);
+
+    const oldFullBodyFingerprints = [
+      testSha256(buildCompanionSigningPayload({ method, path, timestamp, nonce, body: firstBody })),
+      testSha256(buildCompanionSigningPayload({ method, path, timestamp, nonce, body: secondBody })),
+    ];
+    expect(replayRows.map((row) => row.request_hash)).not.toEqual(expect.arrayContaining(oldFullBodyFingerprints));
+
+    const changedBodyNonce = "nonce-mobile-push-signature-change-1";
+    const changedTokenBody = { ...firstBody, token: "ExpoPushToken[gc-canary-mutated-without-resigning]" };
+    const originalChangedBodySignature = signCompanionRequest({
+      privateKeyPem: firstKeys.privateKeyPem,
+      method,
+      path,
+      timestamp,
+      nonce: changedBodyNonce,
+      body: firstBody,
+    });
+    await expect(
+      verifyCompanionRequestSignature(firstHarness.deps, {
+        sessionId: firstSession.sessionId,
+        method,
+        path,
+        timestamp,
+        nonce: changedBodyNonce,
+        signature: originalChangedBodySignature,
+        body: changedTokenBody,
+      }),
+    ).rejects.toThrow("Invalid companion request signature.");
+    expect(
+      firstHarness.storage.gatewaySql
+        .prepare("SELECT nonce FROM companion_request_replays WHERE session_id = @sessionId AND nonce = @nonce")
+        .get({ sessionId: firstSession.sessionId, nonce: changedBodyNonce }),
+    ).toBeUndefined();
+
+    const changedExtraNonce = "nonce-mobile-push-extra-change-1";
+    const changedExtraBody = { ...firstBody, maliciousExtraSecret: "pin-9999-without-resigning" };
+    const originalChangedExtraSignature = signCompanionRequest({
+      privateKeyPem: firstKeys.privateKeyPem,
+      method,
+      path,
+      timestamp,
+      nonce: changedExtraNonce,
+      body: firstBody,
+    });
+    await expect(
+      verifyCompanionRequestSignature(firstHarness.deps, {
+        sessionId: firstSession.sessionId,
+        method,
+        path,
+        timestamp,
+        nonce: changedExtraNonce,
+        signature: originalChangedExtraSignature,
+        body: changedExtraBody,
+      }),
+    ).rejects.toThrow("Invalid companion request signature.");
+    expect(
+      firstHarness.storage.gatewaySql
+        .prepare("SELECT nonce FROM companion_request_replays WHERE session_id = @sessionId AND nonce = @nonce")
+        .get({ sessionId: firstSession.sessionId, nonce: changedExtraNonce }),
+    ).toBeUndefined();
+
+    const retainedEvidence = JSON.stringify({
+      replayRows,
+      audit: [...firstHarness.auditRecords, ...secondHarness.auditRecords],
+      realtime: [...firstHarness.realtimeEvents, ...secondHarness.realtimeEvents],
+    });
+    for (const canary of [
+      firstToken,
+      secondToken,
+      firstExtraSecret,
+      secondExtraSecret,
+      "ExpoPushToken[gc-canary-mutated-without-resigning]",
+      "pin-9999-without-resigning",
+      testSha256(firstToken),
+      testSha256(secondToken),
+      testSha256(firstExtraSecret),
+      testSha256(secondExtraSecret),
+      testSha256(
+        buildCompanionSigningPayload({ method, path, timestamp, nonce: changedBodyNonce, body: changedTokenBody }),
+      ),
+      testSha256(
+        buildCompanionSigningPayload({ method, path, timestamp, nonce: changedExtraNonce, body: changedExtraBody }),
+      ),
+      ...oldFullBodyFingerprints,
+    ]) {
+      expect(retainedEvidence).not.toContain(canary);
+    }
+  });
+
   it("preserves nullable legacy grant expiry across companion exchange, access, refresh, and listing", async () => {
     const harness = buildAuthHarness();
     const grant = await createApprovedDeviceGrant(harness);
