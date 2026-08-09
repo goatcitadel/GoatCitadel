@@ -97,7 +97,7 @@ export type RemoteWorkerInferenceDispatchTerminal = "completed" | "failed" | "ca
 
 export interface RemoteWorkerInferenceDispatchOutcome {
   readonly terminalState: RemoteWorkerInferenceDispatchTerminal;
-  /** Provider output text chunks delivered to the worker outbox (secret-free). */
+  /** Bounded provider-output text; model-authored content is preserved, not classified as secret-free. */
   readonly chunks: readonly string[];
   /** HX-306 event id of the settling attempt (consumed, never recomputed). */
   readonly usageEventId: string;

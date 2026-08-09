@@ -4,13 +4,19 @@ import { describe, it } from "node:test";
 import { Worker } from "node:worker_threads";
 import {
   REMOTE_WORKER_ASSIGNMENT_MANIFEST_SCHEMA_VERSION,
+  REMOTE_WORKER_INFERENCE_BUDGET_SCHEMA_VERSION,
+  REMOTE_WORKER_INFERENCE_EFFECTIVE_ROUTE_SCHEMA_VERSION,
   REMOTE_WORKER_INFERENCE_GOVERNANCE_SCHEMA_VERSION,
   REMOTE_WORKER_PROTOCOL_VERSION,
   REMOTE_WORKER_RUNTIME_MANIFEST_SCHEMA_VERSION,
   buildRemoteWorkerAssignmentParentContext,
   canonicalJsonString,
+  remoteWorkerInferenceBudgetOperationSha256,
+  remoteWorkerInferenceEffectiveRouteSha256,
+  remoteWorkerInferenceRequestSha256,
   remoteWorkerAssignmentParentContextSha256,
   type RemoteWorkerInferenceGovernanceReceipt,
+  type RemoteWorkerInferenceEffectiveRouteReceipt,
   type RemoteWorkerInferenceRequestSubmission,
 } from "@goatcitadel/contracts";
 import { Pool } from "pg";
@@ -45,6 +51,8 @@ interface SeededAuthority {
   workerGeneration: number;
   sessionId: string;
   turnId: string;
+  durableRunId: string;
+  taskId: string;
 }
 
 function seedAuthority(db: PostgresSyncDatabaseClient, seed: string): SeededAuthority {
@@ -216,6 +224,8 @@ function seedAuthority(db: PostgresSyncDatabaseClient, seed: string): SeededAuth
     workerGeneration: worker.generation.workerGeneration,
     sessionId,
     turnId,
+    durableRunId,
+    taskId,
   };
 }
 
@@ -242,12 +252,24 @@ function governanceReceipt(): RemoteWorkerInferenceGovernanceReceipt {
   return {
     schemaVersion: REMOTE_WORKER_INFERENCE_GOVERNANCE_SCHEMA_VERSION,
     decision: "allowed",
-    effectiveRouteSha256: D("route"),
+    effectiveRouteSha256: remoteWorkerInferenceEffectiveRouteSha256(routeReceipt()),
     policyRevision: 4,
     policySha256: D("policy"),
     outputTokenCeiling: 4096,
     reasoningTokenCeiling: 1024,
     expiresAt: FUTURE,
+  };
+}
+
+function routeReceipt(): RemoteWorkerInferenceEffectiveRouteReceipt {
+  return {
+    schemaVersion: REMOTE_WORKER_INFERENCE_EFFECTIVE_ROUTE_SCHEMA_VERSION,
+    providerId: "anthropic",
+    modelId: "claude-opus-4",
+    apiStyle: "anthropic_messages",
+    credentialType: "api_key",
+    usagePool: "standard",
+    credentialSource: "env",
   };
 }
 
@@ -293,20 +315,66 @@ describe("RemoteWorkerInferenceRepository live PostgreSQL (skips without GOATCIT
         const repo = new RemoteWorkerInferenceRepository(setupDb);
         const now = new DurableRunRepository(setupDb).readDatabaseNow();
 
-        repo.admitOrReplay({
-          submission: submissionFor(authority),
-          workerId: authority.workerId,
-          workerGeneration: authority.workerGeneration,
-          sessionId: authority.sessionId,
-          turnId: authority.turnId,
-          capabilityProfileSha256: D("capability-profile"),
-          routedContextSha256: D("routed-context"),
+        const submission = submissionFor(authority);
+        const governance = governanceReceipt();
+        const operation = {
           operationId: "operation-1",
           dispatchGeneration: "dispatch-generation-1",
-          governance: governanceReceipt(),
-          budgetReservationId: "reservation-1",
+          requestSha256: remoteWorkerInferenceRequestSha256(submission),
+          effectiveRouteSha256: governance.effectiveRouteSha256,
+          registryWorkspaceId: "default",
+          executionWorkspaceId: "default",
+          assignmentId: authority.assignmentId,
+          assignmentGeneration: authority.assignmentGeneration,
+          workerId: authority.workerId,
+          workerGeneration: authority.workerGeneration,
+          admittedLeaseRevision: 1,
+          sessionId: authority.sessionId,
+          turnId: authority.turnId,
+          durableRunId: authority.durableRunId,
+          taskId: authority.taskId,
+          capabilityProfileSha256: D("capability-profile"),
+          routedContextSha256: submission.contextSha256,
+          outputTokenCeiling: 4096,
+          reasoningTokenCeiling: 1024,
+        } as const;
+        const admitted = repo.admitOrReplay({
+          submission,
+          workerId: authority.workerId,
+          workerGeneration: authority.workerGeneration,
+          executionWorkspaceId: "default",
+          sessionId: authority.sessionId,
+          turnId: authority.turnId,
+          durableRunId: authority.durableRunId,
+          taskId: authority.taskId,
+          admittedLeaseRevision: 1,
+          capabilityProfileSha256: D("capability-profile"),
+          routedContextSha256: submission.contextSha256,
+          operationId: "operation-1",
+          dispatchGeneration: "dispatch-generation-1",
+          governance,
+          effectiveRoute: routeReceipt(),
+          budgetOperation: operation,
           admittedAt: now,
         });
+        repo.recordBudgetReservation(
+          keyFor(authority),
+          {
+            schemaVersion: REMOTE_WORKER_INFERENCE_BUDGET_SCHEMA_VERSION,
+            budgetOwnerId: "test-budget-owner",
+            reservationId: "reservation-1",
+            operationId: operation.operationId,
+            operationSha256: remoteWorkerInferenceBudgetOperationSha256(operation),
+            requestSha256: operation.requestSha256,
+            effectiveRouteSha256: operation.effectiveRouteSha256,
+            reservedOutputTokens: operation.outputTokenCeiling,
+            reservedReasoningTokens: operation.reasoningTokenCeiling,
+            reservedCostMicrousd: 1000,
+            expiresAt: FUTURE,
+          },
+          now,
+        );
+        assert.equal(admitted.request.budgetAuthorityState, "reservation_pending");
 
         // --- Two-connection dispatch-claim race -> exactly one winner ---
         const startSignal = new SharedArrayBuffer(4);
@@ -321,7 +389,7 @@ describe("RemoteWorkerInferenceRepository live PostgreSQL (skips without GOATCIT
               dispatchClaimOwner: owner,
               effectiveProviderId: "anthropic",
               effectiveModelId: "claude-opus-4",
-              usageIntentEventId: `usage-intent-${owner}`,
+              effectiveRouteSha256: governance.effectiveRouteSha256,
               dispatchLeaseExpiresAt: FUTURE,
               now,
             },
@@ -353,12 +421,13 @@ describe("RemoteWorkerInferenceRepository live PostgreSQL (skips without GOATCIT
           ...keyFor(authority),
           dispatchClaimOwner: winner,
           terminalState: "completed",
-          usageTerminalEventId: "usage-terminal-1",
+          usageEventIds: ["usage-intent-1", "usage-terminal-1"],
           now,
         });
         assert.equal(finalized.state, "completed");
         assert.equal(finalized.terminalFrameSequence, 3);
-        assert.equal(finalized.accountingDisposition, "settled");
+        assert.equal(finalized.accountingDisposition, "delegated");
+        assert.equal(repo.markBudgetSettled(keyFor(authority), now).accountingDisposition, "settled");
 
         assert.throws(
           () =>

@@ -14271,6 +14271,211 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     sql: MOBILE_PUSH_POSTGRES_SCHEMA_SQL,
     integritySha256: "b4f7a5cbfb59f358fd765207b9a36264372e5f51a82ef25bb191b0169bc470a1",
   },
+  {
+    version: 139,
+    name: "remote_worker_inference_budget_authority_correction",
+    integritySha256: "2b05393513f6695c8ae8f958989630c8aadf1debff61c3e33ce5993bc532bf68",
+    sql: `
+      DO $rename_legacy_budget$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'remote_worker_inference_requests'
+            AND column_name = 'budget_reservation_id'
+        ) AND NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'remote_worker_inference_requests'
+            AND column_name = 'legacy_budget_reservation_marker'
+        ) THEN
+          ALTER TABLE remote_worker_inference_requests
+            RENAME COLUMN budget_reservation_id TO legacy_budget_reservation_marker;
+        END IF;
+      END
+      $rename_legacy_budget$;
+
+      ALTER TABLE remote_worker_inference_requests
+        ADD COLUMN IF NOT EXISTS execution_workspace_id TEXT,
+        ADD COLUMN IF NOT EXISTS durable_run_id TEXT,
+        ADD COLUMN IF NOT EXISTS task_id TEXT,
+        ADD COLUMN IF NOT EXISTS admitted_lease_revision BIGINT,
+        ADD COLUMN IF NOT EXISTS effective_route_json TEXT,
+        ADD COLUMN IF NOT EXISTS approval_resolution_json TEXT,
+        ADD COLUMN IF NOT EXISTS approval_resolution_sha256 TEXT,
+        ADD COLUMN IF NOT EXISTS approval_resolved_at TEXT,
+        ADD COLUMN IF NOT EXISTS continuation_governance_json TEXT,
+        ADD COLUMN IF NOT EXISTS continuation_governance_sha256 TEXT,
+        ADD COLUMN IF NOT EXISTS continuation_governance_expires_at TEXT,
+        ADD COLUMN IF NOT EXISTS budget_authority_state TEXT NOT NULL DEFAULT 'legacy_unverifiable',
+        ADD COLUMN IF NOT EXISTS budget_operation_id TEXT,
+        ADD COLUMN IF NOT EXISTS budget_operation_json TEXT,
+        ADD COLUMN IF NOT EXISTS budget_operation_sha256 TEXT,
+        ADD COLUMN IF NOT EXISTS budget_reservation_id TEXT,
+        ADD COLUMN IF NOT EXISTS budget_reservation_json TEXT,
+        ADD COLUMN IF NOT EXISTS budget_reservation_sha256 TEXT,
+        ADD COLUMN IF NOT EXISTS budget_reservation_expires_at TEXT,
+        ADD COLUMN IF NOT EXISTS usage_event_ids_json TEXT,
+        ADD COLUMN IF NOT EXISTS usage_event_ids_sha256 TEXT,
+        ADD COLUMN IF NOT EXISTS budget_settled_at TEXT,
+        ADD COLUMN IF NOT EXISTS budget_released_at TEXT,
+        ADD COLUMN IF NOT EXISTS block_reason TEXT;
+
+      CREATE INDEX IF NOT EXISTS idx_remote_worker_inference_budget_recovery
+        ON remote_worker_inference_requests(budget_authority_state, updated_at)
+        WHERE budget_authority_state IN ('settlement_pending', 'reserved', 'reconciliation_required');
+
+      CREATE OR REPLACE FUNCTION gc_remote_worker_inference_budget_authority_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF NEW.budget_authority_state NOT IN (
+          'not_required', 'reservation_pending', 'reserved', 'settlement_pending',
+          'settled', 'released', 'reconciliation_required', 'legacy_unverifiable'
+        )
+          OR (
+            NEW.budget_authority_state <> 'legacy_unverifiable'
+            AND (
+              NEW.execution_workspace_id IS NULL OR NEW.durable_run_id IS NULL OR NEW.task_id IS NULL
+              OR NEW.admitted_lease_revision IS NULL
+            )
+          )
+          OR (
+            NEW.budget_authority_state = 'not_required'
+            AND (NEW.budget_reservation_id IS NOT NULL OR NEW.budget_reservation_json IS NOT NULL)
+          )
+          OR (
+            NEW.budget_authority_state = 'reservation_pending'
+            AND (
+              NEW.state <> 'admitted' OR NEW.budget_operation_id IS NULL OR NEW.budget_operation_json IS NULL
+              OR NEW.budget_operation_sha256 IS NULL OR NEW.effective_route_json IS NULL
+              OR NEW.budget_reservation_id IS NOT NULL
+            )
+          )
+          OR (
+            NEW.budget_authority_state IN ('reserved', 'settlement_pending', 'settled', 'released', 'reconciliation_required')
+            AND (
+              NEW.budget_operation_id IS NULL OR NEW.budget_operation_json IS NULL OR NEW.budget_operation_sha256 IS NULL
+              OR NEW.budget_reservation_id IS NULL OR NEW.budget_reservation_json IS NULL
+              OR NEW.budget_reservation_sha256 IS NULL OR NEW.budget_reservation_expires_at IS NULL
+            )
+          )
+          OR (NEW.budget_authority_state = 'reserved' AND NEW.state NOT IN ('admitted', 'dispatch_claimed', 'streaming', 'blocked'))
+          OR (
+            NEW.budget_authority_state IN ('settlement_pending', 'settled')
+            AND (
+              NEW.state NOT IN ('completed', 'failed', 'cancelled')
+              OR NEW.usage_event_ids_json IS NULL OR NEW.usage_event_ids_sha256 IS NULL
+            )
+          )
+          OR (NEW.budget_authority_state = 'settled' AND NEW.budget_settled_at IS NULL)
+          OR (NEW.budget_authority_state = 'released' AND (NEW.state <> 'blocked' OR NEW.budget_released_at IS NULL))
+          OR (NEW.budget_authority_state = 'reconciliation_required' AND NEW.state <> 'dispatch_unknown')
+          OR (NEW.state IN ('dispatch_claimed', 'streaming') AND NEW.budget_authority_state <> 'reserved') THEN
+          RAISE EXCEPTION 'remote worker inference budget authority evidence is incomplete' USING ERRCODE = '23514';
+        END IF;
+        IF TG_OP = 'UPDATE'
+          AND OLD.budget_authority_state = 'legacy_unverifiable'
+          AND NEW.budget_authority_state IS DISTINCT FROM OLD.budget_authority_state THEN
+          RAISE EXCEPTION 'remote worker inference legacy budget evidence is unverifiable' USING ERRCODE = '23514';
+        END IF;
+        IF TG_OP = 'UPDATE' AND OLD.state = 'waiting_approval' AND NEW.state = 'admitted'
+          AND (
+            NEW.approval_resolution_json IS NULL OR NEW.approval_resolution_sha256 IS NULL
+            OR NEW.approval_resolved_at IS NULL OR NEW.continuation_governance_json IS NULL
+            OR NEW.continuation_governance_sha256 IS NULL OR NEW.continuation_governance_expires_at IS NULL
+            OR NEW.budget_authority_state <> 'reservation_pending'
+          ) THEN
+          RAISE EXCEPTION 'remote worker inference approval continuation evidence is incomplete' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE OR REPLACE FUNCTION gc_remote_worker_inference_v2_authority_immutable_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF NEW.legacy_budget_reservation_marker IS DISTINCT FROM OLD.legacy_budget_reservation_marker
+          OR NEW.execution_workspace_id IS DISTINCT FROM OLD.execution_workspace_id
+          OR NEW.durable_run_id IS DISTINCT FROM OLD.durable_run_id
+          OR NEW.task_id IS DISTINCT FROM OLD.task_id
+          OR NEW.admitted_lease_revision IS DISTINCT FROM OLD.admitted_lease_revision
+          OR (OLD.effective_route_json IS NOT NULL AND NEW.effective_route_json IS DISTINCT FROM OLD.effective_route_json)
+          OR (OLD.approval_resolution_json IS NOT NULL AND NEW.approval_resolution_json IS DISTINCT FROM OLD.approval_resolution_json)
+          OR (OLD.approval_resolution_sha256 IS NOT NULL AND NEW.approval_resolution_sha256 IS DISTINCT FROM OLD.approval_resolution_sha256)
+          OR (OLD.approval_resolved_at IS NOT NULL AND NEW.approval_resolved_at IS DISTINCT FROM OLD.approval_resolved_at)
+          OR (OLD.continuation_governance_json IS NOT NULL AND NEW.continuation_governance_json IS DISTINCT FROM OLD.continuation_governance_json)
+          OR (OLD.continuation_governance_sha256 IS NOT NULL AND NEW.continuation_governance_sha256 IS DISTINCT FROM OLD.continuation_governance_sha256)
+          OR (OLD.continuation_governance_expires_at IS NOT NULL AND NEW.continuation_governance_expires_at IS DISTINCT FROM OLD.continuation_governance_expires_at)
+          OR (OLD.budget_operation_id IS NOT NULL AND NEW.budget_operation_id IS DISTINCT FROM OLD.budget_operation_id)
+          OR (OLD.budget_operation_json IS NOT NULL AND NEW.budget_operation_json IS DISTINCT FROM OLD.budget_operation_json)
+          OR (OLD.budget_operation_sha256 IS NOT NULL AND NEW.budget_operation_sha256 IS DISTINCT FROM OLD.budget_operation_sha256)
+          OR (OLD.budget_reservation_id IS NOT NULL AND NEW.budget_reservation_id IS DISTINCT FROM OLD.budget_reservation_id)
+          OR (OLD.budget_reservation_json IS NOT NULL AND NEW.budget_reservation_json IS DISTINCT FROM OLD.budget_reservation_json)
+          OR (OLD.budget_reservation_sha256 IS NOT NULL AND NEW.budget_reservation_sha256 IS DISTINCT FROM OLD.budget_reservation_sha256)
+          OR (OLD.budget_reservation_expires_at IS NOT NULL AND NEW.budget_reservation_expires_at IS DISTINCT FROM OLD.budget_reservation_expires_at)
+          OR (OLD.usage_event_ids_json IS NOT NULL AND NEW.usage_event_ids_json IS DISTINCT FROM OLD.usage_event_ids_json)
+          OR (OLD.usage_event_ids_sha256 IS NOT NULL AND NEW.usage_event_ids_sha256 IS DISTINCT FROM OLD.usage_event_ids_sha256)
+          OR (OLD.budget_settled_at IS NOT NULL AND NEW.budget_settled_at IS DISTINCT FROM OLD.budget_settled_at)
+          OR (OLD.budget_released_at IS NOT NULL AND NEW.budget_released_at IS DISTINCT FROM OLD.budget_released_at)
+          OR (OLD.block_reason IS NOT NULL AND NEW.block_reason IS DISTINCT FROM OLD.block_reason)
+          OR (
+            OLD.budget_authority_state = 'legacy_unverifiable'
+            AND (
+              NEW.effective_route_json IS DISTINCT FROM OLD.effective_route_json
+              OR NEW.approval_resolution_json IS DISTINCT FROM OLD.approval_resolution_json
+              OR NEW.approval_resolution_sha256 IS DISTINCT FROM OLD.approval_resolution_sha256
+              OR NEW.approval_resolved_at IS DISTINCT FROM OLD.approval_resolved_at
+              OR NEW.continuation_governance_json IS DISTINCT FROM OLD.continuation_governance_json
+              OR NEW.continuation_governance_sha256 IS DISTINCT FROM OLD.continuation_governance_sha256
+              OR NEW.continuation_governance_expires_at IS DISTINCT FROM OLD.continuation_governance_expires_at
+              OR NEW.budget_operation_id IS DISTINCT FROM OLD.budget_operation_id
+              OR NEW.budget_operation_json IS DISTINCT FROM OLD.budget_operation_json
+              OR NEW.budget_operation_sha256 IS DISTINCT FROM OLD.budget_operation_sha256
+              OR NEW.budget_reservation_id IS DISTINCT FROM OLD.budget_reservation_id
+              OR NEW.budget_reservation_json IS DISTINCT FROM OLD.budget_reservation_json
+              OR NEW.budget_reservation_sha256 IS DISTINCT FROM OLD.budget_reservation_sha256
+              OR NEW.budget_reservation_expires_at IS DISTINCT FROM OLD.budget_reservation_expires_at
+              OR NEW.usage_event_ids_json IS DISTINCT FROM OLD.usage_event_ids_json
+              OR NEW.usage_event_ids_sha256 IS DISTINCT FROM OLD.usage_event_ids_sha256
+              OR NEW.budget_settled_at IS DISTINCT FROM OLD.budget_settled_at
+              OR NEW.budget_released_at IS DISTINCT FROM OLD.budget_released_at
+            )
+          ) THEN
+          RAISE EXCEPTION 'remote worker inference v2 authority evidence is immutable' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE OR REPLACE FUNCTION gc_remote_worker_inference_request_terminal_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF OLD.state IN ('completed', 'failed', 'cancelled', 'dispatch_unknown', 'blocked')
+          AND (
+            NEW.state IS DISTINCT FROM OLD.state
+            OR NEW.dispatch_claim_owner IS DISTINCT FROM OLD.dispatch_claim_owner
+            OR NEW.dispatch_lease_expires_at IS DISTINCT FROM OLD.dispatch_lease_expires_at
+            OR NEW.effective_provider_id IS DISTINCT FROM OLD.effective_provider_id
+            OR NEW.effective_model_id IS DISTINCT FROM OLD.effective_model_id
+            OR NEW.usage_terminal_event_id IS DISTINCT FROM OLD.usage_terminal_event_id
+            OR NEW.output_frame_count IS DISTINCT FROM OLD.output_frame_count
+            OR NEW.output_char_count IS DISTINCT FROM OLD.output_char_count
+            OR NEW.worker_acknowledged_through < OLD.worker_acknowledged_through
+          ) THEN
+          RAISE EXCEPTION 'remote worker inference terminal state is immutable except recovery and acknowledgement' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      DROP TRIGGER IF EXISTS trg_remote_worker_inference_budget_authority_guard ON remote_worker_inference_requests;
+      CREATE TRIGGER trg_remote_worker_inference_budget_authority_guard
+        BEFORE INSERT OR UPDATE ON remote_worker_inference_requests
+        FOR EACH ROW EXECUTE FUNCTION gc_remote_worker_inference_budget_authority_guard();
+      DROP TRIGGER IF EXISTS trg_remote_worker_inference_v2_authority_immutable ON remote_worker_inference_requests;
+      CREATE TRIGGER trg_remote_worker_inference_v2_authority_immutable
+        BEFORE UPDATE ON remote_worker_inference_requests
+        FOR EACH ROW EXECUTE FUNCTION gc_remote_worker_inference_v2_authority_immutable_guard();
+    `,
+  },
 ];
 
 function buildWorkspacePathBridgePosixFlavorPostgresSql(): string {

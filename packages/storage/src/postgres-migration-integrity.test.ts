@@ -723,6 +723,63 @@ describe("protected Postgres migration integrity", () => {
     assert.doesNotMatch(sql, /gateway_route|readiness|\blistener\b|scheduler|\bcell\b/iu);
   });
 
+  it("keeps HX-503 correction 139 authority-complete, legacy-safe, and production-dark", () => {
+    const migration = POSTGRES_MIGRATIONS.find((candidate) => candidate.version === 139);
+    assert.equal(migration?.name, "remote_worker_inference_budget_authority_correction");
+    assert.equal(migration?.batchedStatements, undefined);
+    assert.equal(migration?.integritySha256, "2b05393513f6695c8ae8f958989630c8aadf1debff61c3e33ce5993bc532bf68");
+    const sql = migration?.sql ?? "";
+
+    assert.match(sql, /RENAME COLUMN budget_reservation_id TO legacy_budget_reservation_marker/u);
+    for (const column of [
+      "execution_workspace_id",
+      "durable_run_id",
+      "task_id",
+      "admitted_lease_revision",
+      "effective_route_json",
+      "approval_resolution_json",
+      "continuation_governance_json",
+      "budget_authority_state",
+      "budget_operation_json",
+      "budget_reservation_json",
+      "usage_event_ids_json",
+    ]) {
+      assert.match(sql, new RegExp(`ADD COLUMN IF NOT EXISTS ${column}\\b`, "u"));
+    }
+    for (const lifecycle of [
+      "not_required",
+      "reservation_pending",
+      "reserved",
+      "settlement_pending",
+      "settled",
+      "released",
+      "reconciliation_required",
+      "legacy_unverifiable",
+    ]) {
+      assert.match(sql, new RegExp(`'${lifecycle}'`, "u"));
+    }
+    assert.match(sql, /OLD\.budget_authority_state = 'legacy_unverifiable'/u);
+    assert.match(sql, /NEW\.legacy_budget_reservation_marker IS DISTINCT FROM OLD\.legacy_budget_reservation_marker/u);
+    assert.match(
+      sql,
+      /OLD\.budget_authority_state = 'legacy_unverifiable'[\s\S]*NEW\.effective_route_json IS DISTINCT FROM OLD\.effective_route_json/u,
+    );
+    assert.match(sql, /OLD\.state = 'waiting_approval' AND NEW\.state = 'admitted'/u);
+    assert.match(sql, /NEW\.budget_authority_state = 'released' AND \(NEW\.state <> 'blocked'/u);
+    assert.match(sql, /NEW\.budget_authority_state = 'reconciliation_required' AND NEW\.state <> 'dispatch_unknown'/u);
+    assert.match(sql, /idx_remote_worker_inference_budget_recovery/u);
+    for (const trigger of [
+      "trg_remote_worker_inference_budget_authority_guard",
+      "trg_remote_worker_inference_v2_authority_immutable",
+    ]) {
+      assert.match(sql, new RegExp(trigger, "u"));
+    }
+
+    assert.doesNotMatch(sql, /lease_token|lease_secret|raw_lease|provider_credential|api_key|authorization|bearer/iu);
+    assert.doesNotMatch(sql, /CREATE\s+(?:TABLE|ROUTE)|gateway_route|readiness|\blistener\b|scheduler/iu);
+    assert.doesNotMatch(sql, /\b(?:INSERT\s+INTO|DELETE\s+FROM|TRUNCATE\s+TABLE)\b/iu);
+  });
+
   it("keeps HX-505 migration 120 additive, immutable-profile, CAS-fenced, evidence-chained, and production-dark", () => {
     const migration = POSTGRES_MIGRATIONS.find((candidate) => candidate.version === 120);
     assert.equal(migration?.name, "remote_worker_cell_execution_owner");

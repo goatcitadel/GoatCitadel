@@ -5,7 +5,9 @@ import { POSTGRES_MIGRATIONS } from "./postgres/migrations.js";
 import { createDatabase } from "./sqlite.js";
 
 const db = createDatabase({ dbPath: ":memory:" });
-const postgresSql = POSTGRES_MIGRATIONS.find((migration) => migration.version === 119)?.sql ?? "";
+const postgres119Sql = POSTGRES_MIGRATIONS.find((migration) => migration.version === 119)?.sql ?? "";
+const postgres139Sql = POSTGRES_MIGRATIONS.find((migration) => migration.version === 139)?.sql ?? "";
+const postgresSql = `${postgres119Sql}\n${postgres139Sql}`;
 
 after(() => db.close());
 
@@ -42,7 +44,7 @@ const TABLE_COLUMNS = {
     "governance_output_token_ceiling",
     "governance_reasoning_token_ceiling",
     "governance_expires_at",
-    "budget_reservation_id",
+    "legacy_budget_reservation_marker",
     "effective_provider_id",
     "effective_model_id",
     "dispatch_claim_owner",
@@ -58,6 +60,30 @@ const TABLE_COLUMNS = {
     "accounting_disposition",
     "admitted_at",
     "updated_at",
+    "execution_workspace_id",
+    "durable_run_id",
+    "task_id",
+    "admitted_lease_revision",
+    "effective_route_json",
+    "approval_resolution_json",
+    "approval_resolution_sha256",
+    "approval_resolved_at",
+    "continuation_governance_json",
+    "continuation_governance_sha256",
+    "continuation_governance_expires_at",
+    "budget_authority_state",
+    "budget_operation_id",
+    "budget_operation_json",
+    "budget_operation_sha256",
+    "budget_reservation_id",
+    "budget_reservation_json",
+    "budget_reservation_sha256",
+    "budget_reservation_expires_at",
+    "usage_event_ids_json",
+    "usage_event_ids_sha256",
+    "budget_settled_at",
+    "budget_released_at",
+    "block_reason",
   ],
   remote_worker_inference_outbox: [
     "registry_workspace_id",
@@ -79,16 +105,20 @@ const TABLE_COLUMNS = {
 } as const;
 
 describe("HX-503 remote worker inference schema parity", () => {
-  it("keeps SQLite 177 and PostgreSQL 119 paired across exactly two request/outbox tables", () => {
+  it("keeps final SQLite 177+196 and PostgreSQL 119+139 columns paired", () => {
     assert.equal(
-      postgresSql.match(/CREATE TABLE IF NOT EXISTS remote_worker_inference_/gu)?.length,
+      postgres119Sql.match(/CREATE TABLE IF NOT EXISTS remote_worker_inference_/gu)?.length,
       2,
       "PostgreSQL 119 must add exactly the two inference tables",
     );
     for (const [table, columns] of Object.entries(TABLE_COLUMNS)) {
-      assert.match(postgresSql, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`, "u"));
+      assert.match(postgres119Sql, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`, "u"));
       assert.deepEqual(tableColumns(db, table), [...columns], `${table} SQLite columns drifted`);
       for (const column of columns) {
+        if (column === "legacy_budget_reservation_marker") {
+          assert.match(postgres139Sql, /RENAME COLUMN budget_reservation_id TO legacy_budget_reservation_marker/u);
+          continue;
+        }
         assert.match(
           postgresSql,
           new RegExp(`\\b${column}\\s+(?:TEXT|BIGINT)\\b`, "u"),
@@ -123,9 +153,10 @@ describe("HX-503 remote worker inference schema parity", () => {
     }
   });
 
-  it("is purely additive: no frozen table is altered in either dialect", () => {
-    assert.equal(schemaSql(db).match(/ALTER TABLE/gu) ?? null, null);
-    assert.equal(postgresSql.match(/ALTER TABLE/gu) ?? null, null);
+  it("keeps the deployed owners immutable and confines the forward correction to migration 139", () => {
+    assert.equal(postgres119Sql.match(/ALTER TABLE/gu) ?? null, null);
+    assert.match(postgres139Sql, /RENAME COLUMN budget_reservation_id TO legacy_budget_reservation_marker/u);
+    assert.doesNotMatch(postgres139Sql, /DROP\s+(?:TABLE|COLUMN)|TRUNCATE/u);
   });
 
   it("keeps the terminal receipt, claim, and governance invariants paired", () => {
@@ -157,14 +188,27 @@ describe("HX-503 remote worker inference schema parity", () => {
       assert.match(sqliteSql, new RegExp(trigger, "u"), `SQLite trigger ${trigger} missing`);
       assert.match(postgresSql, new RegExp(trigger, "u"), `PostgreSQL trigger ${trigger} missing`);
     }
+    for (const sqliteTrigger of [
+      "trg_remote_worker_inference_budget_authority_insert_guard",
+      "trg_remote_worker_inference_budget_authority_update_guard",
+      "trg_remote_worker_inference_v2_authority_immutable",
+    ]) {
+      assert.match(sqliteSql, new RegExp(sqliteTrigger, "u"));
+    }
+    for (const postgresTrigger of [
+      "trg_remote_worker_inference_budget_authority_guard",
+      "trg_remote_worker_inference_v2_authority_immutable",
+    ]) {
+      assert.match(postgres139Sql, new RegExp(postgresTrigger, "u"));
+    }
   });
 
   it("keeps PostgreSQL 119 additive and free of state-changing DML or runtime claims", () => {
     assert.doesNotMatch(
-      postgresSql,
+      postgres119Sql,
       /\b(?:INSERT\s+INTO|DELETE\s+FROM|UPDATE\s+remote_worker|DROP\s+TABLE|TRUNCATE\s+TABLE)\b/iu,
     );
-    assert.doesNotMatch(postgresSql, /gateway_route|readiness|listener|scheduler|\bcell\b/iu);
+    assert.doesNotMatch(postgres119Sql, /gateway_route|readiness|listener|scheduler|\bcell\b/iu);
   });
 });
 

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { canonicalJsonString } from "./canonical-json.js";
 import {
   REMOTE_WORKER_INFERENCE_BUDGET_SCHEMA_VERSION,
+  REMOTE_WORKER_INFERENCE_EFFECTIVE_ROUTE_SCHEMA_VERSION,
   REMOTE_WORKER_INFERENCE_FRAME_GENESIS_SHA256,
   REMOTE_WORKER_INFERENCE_FRAME_SCHEMA_VERSION,
   REMOTE_WORKER_INFERENCE_GOVERNANCE_SCHEMA_VERSION,
@@ -12,16 +13,19 @@ import {
   REMOTE_WORKER_INFERENCE_REQUEST_SCHEMA_VERSION,
   isRemoteWorkerInferenceTerminalState,
   normalizeRemoteWorkerInferenceBudgetReservation,
+  normalizeRemoteWorkerInferenceEffectiveRouteReceipt,
   normalizeRemoteWorkerInferenceFramePayload,
   normalizeRemoteWorkerInferenceGovernanceReceipt,
   normalizeRemoteWorkerInferenceRequestSubmission,
   remoteWorkerInferenceCanonicalRequestBody,
   remoteWorkerInferenceCanonicalRequestBodySha256,
   remoteWorkerInferenceCanonicalSha256,
+  remoteWorkerInferenceEffectiveRouteSha256,
   remoteWorkerInferenceFrameSha256,
   remoteWorkerInferenceLeaseTokenSha256,
   remoteWorkerInferenceRequestReplayMaterial,
   remoteWorkerInferenceRequestSha256,
+  remoteWorkerInferenceBudgetOperationSha256,
   remoteWorkerInferenceStateCanTransition,
   type RemoteWorkerInferenceRequestSubmission,
 } from "./remote-worker-inference.js";
@@ -300,11 +304,89 @@ describe("HX-503 remote worker inference governance and budget receipts", () => 
   it("normalizes a budget reservation", () => {
     const reservation = normalizeRemoteWorkerInferenceBudgetReservation({
       schemaVersion: REMOTE_WORKER_INFERENCE_BUDGET_SCHEMA_VERSION,
+      budgetOwnerId: "workspace-budget-owner",
       reservationId: "reservation-1",
+      operationId: "operation-1",
+      operationSha256: D("operation"),
+      requestSha256: D("request"),
+      effectiveRouteSha256: D("route"),
       reservedOutputTokens: 4096,
+      reservedReasoningTokens: 1024,
+      reservedCostMicrousd: 1250,
       expiresAt: "2026-07-14T00:00:00.000Z",
     });
     expect(reservation.reservedOutputTokens).toBe(4096);
+  });
+
+  it("hashes the runtime-exact secret-free route and rejects credential-lineage injection", () => {
+    const route = {
+      schemaVersion: REMOTE_WORKER_INFERENCE_EFFECTIVE_ROUTE_SCHEMA_VERSION,
+      providerId: "anthropic",
+      modelId: "claude-opus-4",
+      apiStyle: "anthropic_messages",
+      credentialType: "api_key" as const,
+      usagePool: "standard" as const,
+      credentialSource: "env" as const,
+      credentialConfigFingerprint: D("secret-free-provider-config"),
+      pricingCatalogVersion: "2026-08-01",
+      pricingCatalogHash: D("catalog"),
+      inputRateUsdPerMillion: 15,
+      outputRateUsdPerMillion: 75,
+    };
+    const normalized = normalizeRemoteWorkerInferenceEffectiveRouteReceipt(route);
+    expect(remoteWorkerInferenceEffectiveRouteSha256(normalized)).not.toBe(
+      remoteWorkerInferenceEffectiveRouteSha256({ ...route, usagePool: "subscription" }),
+    );
+    expect(() =>
+      normalizeRemoteWorkerInferenceEffectiveRouteReceipt({
+        ...route,
+        credentialConfigFingerprint: "sk-proj-super-secret",
+      }),
+    ).toThrow(/SHA-256|secret-like/u);
+    expect(() =>
+      normalizeRemoteWorkerInferenceEffectiveRouteReceipt({
+        ...route,
+        credentialSource: "sk-proj-super-secret" as never,
+      }),
+    ).toThrow(/credentialSource/u);
+    expect(() =>
+      normalizeRemoteWorkerInferenceEffectiveRouteReceipt({
+        ...route,
+        usagePool: "Bearer super-secret" as never,
+      }),
+    ).toThrow(/usagePool/u);
+  });
+
+  it("rejects secret-like operation and dispatch identities", () => {
+    const operation = {
+      operationId: "sk-proj-super-secret",
+      dispatchGeneration: "dispatch-1",
+      requestSha256: D("request"),
+      effectiveRouteSha256: D("route"),
+      registryWorkspaceId: "default",
+      executionWorkspaceId: "default",
+      assignmentId: "assignment-1",
+      assignmentGeneration: 1,
+      workerId: "worker-1",
+      workerGeneration: 1,
+      admittedLeaseRevision: 1,
+      sessionId: "session-1",
+      turnId: "turn-1",
+      durableRunId: "run-1",
+      taskId: "task-1",
+      capabilityProfileSha256: D("profile"),
+      routedContextSha256: D("context"),
+      outputTokenCeiling: 64,
+      reasoningTokenCeiling: 0,
+    };
+    expect(() => remoteWorkerInferenceBudgetOperationSha256(operation)).toThrow(/secret-like/u);
+    expect(() =>
+      remoteWorkerInferenceBudgetOperationSha256({
+        ...operation,
+        operationId: "operation-1",
+        dispatchGeneration: "Bearer dispatch-secret-canary",
+      }),
+    ).toThrow(/secret-like/u);
   });
 });
 
