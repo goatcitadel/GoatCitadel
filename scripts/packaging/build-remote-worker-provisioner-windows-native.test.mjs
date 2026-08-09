@@ -177,7 +177,7 @@ test("W1B1B-P0 freezes the exact 17-file fence and canonical current-byte source
   assert.equal(createHash("sha256").update(manifest.bytes).digest("hex"), manifest.sha256);
 });
 
-test("W1B1B-P0 source freezes the authority-bound production-dark signing surface", () => {
+test("M2 source freezes the authority-bound production-callable signing surface", () => {
   const source = fs.readFileSync(protectedArtifactSigningSourcePath, "utf8");
   const header = fs.readFileSync(protectedArtifactSigningHeaderPath, "utf8");
   const nativeTest = fs.readFileSync(protectedArtifactSigningTestPath, "utf8");
@@ -188,14 +188,9 @@ test("W1B1B-P0 source freezes the authority-bound production-dark signing surfac
   assert.equal(source.includes("MapViewOfFile"), false);
   assert.equal(source.includes("CreateFileMapping"), false);
   assert.equal(source.includes("InterlockedCompareExchange"), true);
-  assert.match(
-    header,
-    /#if defined\(GOATCITADEL_PROVISIONER_TESTING\)\s+ProtectedArtifactAuthority\(\) noexcept = default;\s+#else\s+ProtectedArtifactAuthority\(\) noexcept;\s+#endif/u,
-  );
-  assert.match(
-    header,
-    /class ProtectedSigningLease final \{\s+public:\s+#if defined\(GOATCITADEL_PROVISIONER_TESTING\)\s+ProtectedSigningLease\(\) noexcept = default;\s+#endif[\s\S]*?private:\s+#if !defined\(GOATCITADEL_PROVISIONER_TESTING\)\s+ProtectedSigningLease\(\) noexcept;\s+#endif/u,
-  );
+  assert.match(header, /class ProtectedSigningLease final \{\s+public:\s+ProtectedSigningLease\(\) noexcept;/u);
+  assert.match(header, /struct ProtectedSigningFactoryInput final/u);
+  assert.match(source, /bool CreateProtectedSigningLease\(/u);
   assert.match(header, /friend bool SignProtectedArtifact/u);
   assert.equal(nativeTest.includes("int RunProtectedArtifactSigningTests() noexcept"), true);
   assert.equal(nativeTest.includes("kRfc8032EmptySignature"), true);
@@ -2963,8 +2958,9 @@ for (const [target, machine] of [
       assert.equal(result.nativeCodeEvidence.protectedEd25519BridgeCallgraph.target, target);
       assert.equal(result.nativeCodeEvidence.protectedEd25519BridgeCallgraph.owners.length, 5);
       assert.equal(result.nativeCodeEvidence.protectedEd25519BridgeCallgraph.addressTaken, false);
-      assert.equal(result.nativeCodeEvidence.linkMap.productionDarkSymbolsRemoved, true);
-      assert.deepEqual(result.nativeCodeEvidence.linkMap.productionDarkSymbols, [
+      assert.equal(result.nativeCodeEvidence.linkMap.productionSigningSymbolsRetained, true);
+      assert.deepEqual(result.nativeCodeEvidence.linkMap.productionSigningSymbols, [
+        "CreateProtectedSigningLease",
         "SignProtectedArtifact",
         "ExpandEd25519SeedForProtectedSigning",
         "ReduceEd25519ScalarForProtectedSigning",
@@ -2972,11 +2968,12 @@ for (const [target, machine] of [
         "Ed25519MulAddForProtectedSigning",
         "CheckEd25519EquationForProtectedSigning",
       ]);
-      assert.deepEqual(result.nativeCodeEvidence.linkMap.productionDarkTypesRemoved, [
+      assert.equal(result.nativeCodeEvidence.linkMap.productionSigningTypesRetained, true);
+      assert.deepEqual(result.nativeCodeEvidence.linkMap.productionSigningTypes, [
         "ProtectedArtifactAuthority",
         "ProtectedSigningLease",
       ]);
-      assert.equal(result.nativeCodeEvidence.linkMap.productionDarkDomainDataRemoved, true);
+      assert.equal(result.nativeCodeEvidence.linkMap.productionSigningDomainDataRetained, true);
       assert.equal(result.nativeCodeEvidence.linkMap.productionObjectTestOnlyResidueRemoved, true);
       assert.deepEqual(result.nativeCodeEvidence.linkMap.productionObjectForbiddenResidue, [
         "CreateProtectedSigningLeaseForTest",
@@ -3035,21 +3032,21 @@ for (const [target, machine] of [
       ]);
       assert.equal(result.nativeCodeEvidence.objects.protectedArtifactSigning.directMonocypherCallsRemoved, true);
       assert.deepEqual(result.ed25519, {
-        mode: "fixed-protected-startup-kat-only",
+        mode: "fixed-protected-kat-and-admission-evidence-signing",
         rfc8032TestOne: true,
         rfc8410CanonicalEncodings: true,
-        realKey: false,
-        signingLease: false,
-        callableMutation: false,
+        realKey: true,
+        signingLease: true,
+        callableMutation: true,
       });
       assert.deepEqual(result.protectedArtifactSigning, {
-        tranche: "W1B1B-P0",
+        tranche: "M2-admission-evidence",
         compiledObject: true,
-        finalServiceReachable: false,
-        productionFactory: false,
-        productionCaller: false,
-        artifactProducer: false,
-        signingRoute: false,
+        finalServiceReachable: true,
+        productionFactory: true,
+        productionCaller: true,
+        artifactProducer: true,
+        signingRoute: true,
         testOnlyFactories: true,
         exactArtifactPasses: 2,
         postSignEquationValidation: true,
@@ -3059,7 +3056,8 @@ for (const [target, machine] of [
         service: ["SCM-no-args", "--inspect-stdio"],
         client: ["--service-stdio"],
       });
-      assert.equal(result.productionDark, true);
+      assert.equal(result.productionDark, false);
+      assert.equal(result.protectedAdmissionEvidenceSigningCallable, true);
       assert.deepEqual(result.externalProof, {
         elevatedScm: "HOLD",
         successfulProductionClientAuthentication: "HOLD",
@@ -3084,8 +3082,8 @@ for (const [target, machine] of [
       assert.match(result.client.sha256, /^[a-f0-9]{64}$/u);
       const expectedClient =
         target === "windows-x64"
-          ? { bytes: 59_904, sha256: "fdfc5d5e7f0dd3a136a2b65b250233ec1a3969837140c8f640054d95b6a82b4f" }
-          : { bytes: 52_736, sha256: "434379b8cbf3b7f5cf29333e28a044c7ec7aff2bb0c45497c20576290d9fd7ac" };
+          ? { bytes: 69_632, sha256: "c72fb8028d2e18e6edc4573ff7be50d20f4096fc47d9d9965c807d30cf53c507" }
+          : { bytes: 59_904, sha256: "8e89ae758f44700ba21f8fbf8ed915b7dd51dcde42e9c9112f94b24d65232179" };
       assert.equal(result.client.byteLength, expectedClient.bytes);
       assert.equal(result.client.sha256, expectedClient.sha256);
       const serviceInspection = inspectRemoteWorkerProvisionerPe(serviceBytes, {

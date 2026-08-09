@@ -27,6 +27,7 @@ struct ProtectedArtifactControlSnapshot final {
 };
 
 class ProtectedSigningLease;
+struct ProtectedSigningFactoryInput;
 #if defined(GOATCITADEL_PROVISIONER_TESTING)
 struct ProtectedSigningFactoryInputForTest;
 struct ProtectedSigningHandleSnapshotForTest;
@@ -42,11 +43,7 @@ class ProtectedArtifactAuthority final {
   ~ProtectedArtifactAuthority() noexcept;
 
  private:
-#if defined(GOATCITADEL_PROVISIONER_TESTING)
-  ProtectedArtifactAuthority() noexcept = default;
-#else
   ProtectedArtifactAuthority() noexcept;
-#endif
   void Reset() noexcept;
   void MoveFrom(ProtectedArtifactAuthority* other) noexcept;
 
@@ -69,6 +66,9 @@ class ProtectedArtifactAuthority final {
   friend bool SignProtectedArtifact(
       ProtectedSigningLease* lease,
       std::array<std::uint8_t, 64U>* candidate_signature) noexcept;
+  friend bool CreateProtectedSigningLease(
+      const ProtectedSigningFactoryInput& input,
+      ProtectedSigningLease* output) noexcept;
 #if defined(GOATCITADEL_PROVISIONER_TESTING)
   friend bool CreateProtectedSigningLeaseForTest(
       const ProtectedSigningFactoryInputForTest& input,
@@ -85,9 +85,7 @@ class ProtectedArtifactAuthority final {
 
 class ProtectedSigningLease final {
  public:
-#if defined(GOATCITADEL_PROVISIONER_TESTING)
-  ProtectedSigningLease() noexcept = default;
-#endif
+  ProtectedSigningLease() noexcept;
   ProtectedSigningLease(const ProtectedSigningLease&) = delete;
   ProtectedSigningLease& operator=(const ProtectedSigningLease&) = delete;
   ProtectedSigningLease(ProtectedSigningLease&& other) noexcept;
@@ -95,9 +93,6 @@ class ProtectedSigningLease final {
   ~ProtectedSigningLease() noexcept;
 
  private:
-#if !defined(GOATCITADEL_PROVISIONER_TESTING)
-  ProtectedSigningLease() noexcept;
-#endif
   void Reset() noexcept;
   void MoveFrom(ProtectedSigningLease* other) noexcept;
   bool StateIsCurrent() const noexcept;
@@ -124,6 +119,9 @@ class ProtectedSigningLease final {
   friend bool SignProtectedArtifact(
       ProtectedSigningLease* lease,
       std::array<std::uint8_t, 64U>* candidate_signature) noexcept;
+  friend bool CreateProtectedSigningLease(
+      const ProtectedSigningFactoryInput& input,
+      ProtectedSigningLease* output) noexcept;
 #if defined(GOATCITADEL_PROVISIONER_TESTING)
   friend bool CreateProtectedSigningLeaseForTest(
       const ProtectedSigningFactoryInputForTest& input,
@@ -141,6 +139,33 @@ class ProtectedSigningLease final {
       const ProtectedSigningLease& lease) noexcept;
 #endif
 };
+
+// Production composition passes only already-open, no-follow protected handles
+// and immutable authority projections. The factory duplicates every handle;
+// ownership never crosses this boundary and no key bytes are returned.
+struct ProtectedSigningFactoryInput final {
+  HANDLE parent = nullptr;
+  HANDLE artifact = nullptr;
+  HANDLE key_file = nullptr;
+  HANDLE stop_event = nullptr;
+  ProtectedObjectIdentity parent_identity{};
+  ProtectedObjectIdentity artifact_identity{};
+  ProtectedObjectIdentity key_identity{};
+  std::array<std::uint8_t, 32U> artifact_sha256{};
+  std::array<std::uint8_t, 32U> key_file_sha256{};
+  std::array<std::uint8_t, 44U> spki{};
+  std::array<std::uint8_t, 32U> key_id{};
+  std::array<std::uint8_t, 32U> custody_state_sha256{};
+  std::array<std::uint8_t, 32U> incarnation{};
+  ProtectedArtifactPurpose purpose = ProtectedArtifactPurpose::RuntimeManifest;
+  std::uint64_t artifact_length = 0U;
+  std::uint64_t generation = 0U;
+  std::uint64_t deadline_ms = 0U;
+};
+
+__declspec(noinline) bool CreateProtectedSigningLease(
+    const ProtectedSigningFactoryInput& input,
+    ProtectedSigningLease* output) noexcept;
 
 __declspec(noinline) bool SignProtectedArtifact(
     ProtectedSigningLease* lease,

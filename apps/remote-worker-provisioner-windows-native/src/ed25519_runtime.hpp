@@ -44,7 +44,7 @@ __declspec(noinline) void WipeEd25519Owned(
     void* bytes,
     std::size_t size) noexcept;
 
-// Narrow composition boundary for the production-dark protected-artifact
+// Narrow composition boundary for the protected-artifact
 // signer. Only SignProtectedArtifact can construct the required passkey. These
 // functions do not accept a message, artifact, callback, path, handle, or
 // reusable signing authority; ed25519_runtime.cpp remains the sole first-party

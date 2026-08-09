@@ -12,17 +12,21 @@ import {
   decodeWindowsProtectedCreateKeysetResponse,
   decodeWindowsProtectedInspectResponse,
   decodeWindowsProtectedRevokeKeysetResponse,
+  decodeWindowsProtectedSignAdmissionEvidenceResponse,
   decodeWindowsHelperRequest,
   decodeWindowsHelperResponse,
   encodeWindowsHelperInspectRequest,
   encodeWindowsProtectedCreateKeysetRequest,
   encodeWindowsProtectedRevokeKeysetRequest,
+  encodeWindowsProtectedSignAdmissionEvidenceRequest,
   validateWindowsProtectedRequestPayload,
   type WindowsProtectedCreateKeysetRequest,
   type WindowsProtectedCreateKeysetResult,
   type WindowsProtectedInspect,
   type WindowsProtectedRevokeKeysetRequest,
   type WindowsProtectedRevokeKeysetResult,
+  type WindowsProtectedSignAdmissionEvidenceRequest,
+  type WindowsProtectedSignAdmissionEvidenceResult,
   type WindowsHelperProcessResult,
   type WindowsHelperRequestOpcode,
   type WindowsHelperResponse,
@@ -299,6 +303,7 @@ export async function runWindowsServiceClient(
     const isCallable =
       requestOpcode === WINDOWS_HELPER_OPCODE.INSPECT ||
       requestOpcode === WINDOWS_HELPER_OPCODE.CREATE_KEYSET ||
+      requestOpcode === WINDOWS_HELPER_OPCODE.SIGN_ADMISSION_EVIDENCE ||
       requestOpcode === WINDOWS_HELPER_OPCODE.REVOKE_LOCAL_KEYSET;
     if (response.kind === "success" && !isCallable) {
       throw new WindowsHelperProtocolError("protected service client returned success for an unavailable opcode");
@@ -315,7 +320,7 @@ export async function runWindowsServiceClient(
             requestedGeneration: request.payload.readBigUInt64LE(52),
             predecessorGeneration: request.payload.readBigUInt64LE(60),
           });
-        } else {
+        } else if (requestOpcode === WINDOWS_HELPER_OPCODE.REVOKE_LOCAL_KEYSET) {
           const reasons = ["operator_requested", "suspected_compromise", "retired"] as const;
           const reason = reasons[request.payload.readUInt32LE(60) - 1];
           if (reason === undefined) throw new WindowsHelperProtocolError("revoke reason is invalid");
@@ -325,6 +330,25 @@ export async function runWindowsServiceClient(
             generation: request.payload.readBigUInt64LE(52),
             reason,
             expectedKeysetReceiptSha256: request.payload.subarray(68, 100),
+          });
+        } else {
+          const envelope = request.payload.subarray(96, 384);
+          decodeWindowsProtectedSignAdmissionEvidenceResponse(result.stdout, {
+            operationId: request.payload.subarray(0, 16),
+            expectedStateSha256: request.payload.subarray(16, 48),
+            expectedGeneration: request.payload.readBigUInt64LE(52),
+            expectedKeysetReceiptSha256: request.payload.subarray(60, 92),
+            envelope: {
+              operationId: envelope.subarray(16, 32),
+              evidenceNonceSha256: envelope.subarray(32, 64),
+              workerGeneration: envelope.readBigUInt64LE(64),
+              contextSha256: envelope.subarray(96, 128),
+              runtimeManifestSha256: envelope.subarray(128, 160),
+              workerPublicKeySpkiSha256: envelope.subarray(160, 192),
+              downloadVerificationReceiptSha256: envelope.subarray(192, 224),
+              installedTreeAttestationSha256: envelope.subarray(224, 256),
+              installedTreeVerificationReceiptSha256: envelope.subarray(256, 288),
+            },
           });
         }
       }
@@ -397,4 +421,21 @@ export async function revokeWindowsProtectedKeyset(
     throw new WindowsServiceClientExitError(result);
   }
   return decodeWindowsProtectedRevokeKeysetResponse(result.stdout, input);
+}
+
+export async function signWindowsProtectedAdmissionEvidence(
+  executablePath: string,
+  input: WindowsProtectedSignAdmissionEvidenceRequest,
+  options: WindowsServiceClientRunOptions = {},
+): Promise<WindowsProtectedSignAdmissionEvidenceResult> {
+  const frame = encodeWindowsProtectedSignAdmissionEvidenceRequest(input);
+  const result = await runWindowsServiceClientOneShot(executablePath, frame, options);
+  if (
+    result.exitCode !== WINDOWS_SERVICE_CLIENT_EXIT_CODE.SUCCESS ||
+    result.signal !== null ||
+    result.stderr.byteLength !== 0
+  ) {
+    throw new WindowsServiceClientExitError(result);
+  }
+  return decodeWindowsProtectedSignAdmissionEvidenceResponse(result.stdout, input);
 }

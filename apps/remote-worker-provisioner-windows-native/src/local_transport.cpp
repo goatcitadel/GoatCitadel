@@ -3248,6 +3248,7 @@ ServiceTransportResult RunServiceTransport(
     return ServiceTransportResult::ProtocolInvalid;
   }
   CreateKeysetRequest create_request{};
+  SignAdmissionEvidenceRequest sign_request{};
   RevokeKeysetRequest revoke_request{};
   const bool exact_callable_request =
       (request.opcode == static_cast<std::uint8_t>(Opcode::Inspect) &&
@@ -3262,6 +3263,17 @@ ServiceTransportResult RunServiceTransport(
            request.expected_state_sha256.data(),
            create_request.expected_state_sha256.data(),
            32U)) ||
+      (request.opcode ==
+           static_cast<std::uint8_t>(Opcode::SignAdmissionEvidence) &&
+       DecodeSignAdmissionEvidenceRequest(
+           request.body, request.body_length, &sign_request) &&
+       BytesEqual(
+           request.operation_id.data(), sign_request.operation_id.data(),
+           16U) &&
+       BytesEqual(
+           request.expected_state_sha256.data(),
+           sign_request.expected_state_sha256.data(),
+           32U)) ||
       (request.opcode == static_cast<std::uint8_t>(Opcode::RevokeLocalKeyset) &&
        DecodeRevokeKeysetRequest(
            request.body, request.body_length, &revoke_request) &&
@@ -3274,6 +3286,8 @@ ServiceTransportResult RunServiceTransport(
   if (!exact_callable_request &&
       (request.opcode == static_cast<std::uint8_t>(Opcode::Inspect) ||
        request.opcode == static_cast<std::uint8_t>(Opcode::CreateKeyset) ||
+       request.opcode ==
+           static_cast<std::uint8_t>(Opcode::SignAdmissionEvidence) ||
        request.opcode == static_cast<std::uint8_t>(Opcode::RevokeLocalKeyset))) {
     return ServiceTransportResult::ProtocolInvalid;
   }
@@ -3320,6 +3334,8 @@ ServiceTransportResult RunServiceTransport(
     operation_result_length = kProtectedInspectPayloadBytes;
     send_result = true;
   } else if (request.opcode == static_cast<std::uint8_t>(Opcode::CreateKeyset) ||
+             request.opcode ==
+                 static_cast<std::uint8_t>(Opcode::SignAdmissionEvidence) ||
              request.opcode == static_cast<std::uint8_t>(Opcode::RevokeLocalKeyset)) {
     const std::uint64_t operation_budget_ms =
         request.opcode == static_cast<std::uint8_t>(Opcode::CreateKeyset)
@@ -3574,6 +3590,18 @@ bool IsExactProtectedRequest(const ClientExchangeRequest& request) noexcept {
                request.expected_state_sha256.data(),
                32U);
   }
+  if (request.opcode ==
+      static_cast<std::uint8_t>(Opcode::SignAdmissionEvidence)) {
+    SignAdmissionEvidenceRequest decoded{};
+    return DecodeSignAdmissionEvidenceRequest(
+               request.body, request.body_length, &decoded) &&
+           BytesEqual(
+               decoded.operation_id.data(), request.operation_id.data(), 16U) &&
+           BytesEqual(
+               decoded.expected_state_sha256.data(),
+               request.expected_state_sha256.data(),
+               32U);
+  }
   if (request.opcode == static_cast<std::uint8_t>(Opcode::RevokeLocalKeyset)) {
     RevokeKeysetRequest decoded{};
     return DecodeRevokeKeysetRequest(request.body, request.body_length, &decoded) &&
@@ -3593,6 +3621,11 @@ bool IsConsistentBoundError(
     return true;
   }
   if (opcode == static_cast<std::uint8_t>(Opcode::Inspect)) {
+    return false;
+  }
+  if (opcode == static_cast<std::uint8_t>(Opcode::CreateKeyset) ||
+      opcode == static_cast<std::uint8_t>(Opcode::SignAdmissionEvidence) ||
+      opcode == static_cast<std::uint8_t>(Opcode::RevokeLocalKeyset)) {
     return false;
   }
   return IsRecognizedOpcode(opcode) &&
@@ -3771,6 +3804,9 @@ ClientExchangeDisposition RunProtectedClientExchange(
          ExpectedInspectResult(server_response.result, server_response.result_length)) ||
         (request.opcode == static_cast<std::uint8_t>(Opcode::CreateKeyset) &&
          server_response.result_length == kCreateKeysetResultBytes) ||
+        (request.opcode ==
+             static_cast<std::uint8_t>(Opcode::SignAdmissionEvidence) &&
+         server_response.result_length == kSignAdmissionEvidenceResultBytes) ||
         (request.opcode == static_cast<std::uint8_t>(Opcode::RevokeLocalKeyset) &&
          server_response.result_length == kRevokeKeysetResultBytes);
     if (!exact_result) {

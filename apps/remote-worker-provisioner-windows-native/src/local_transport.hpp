@@ -28,7 +28,7 @@ constexpr std::uint32_t kGcpaRequestId = 1U;
 constexpr std::uint64_t kGcpaRecognizedOpcodeBitmap =
     UINT64_C(0x00070007000F0002);
 constexpr std::uint64_t kGcpaCallableOpcodeBitmap =
-    UINT64_C(0x0000000000090002);
+    UINT64_C(0x00000000000D0002);
 
 constexpr wchar_t kProvisionerTransportServiceName[] =
     L"GoatCitadelRemoteWorkerProvisioner";

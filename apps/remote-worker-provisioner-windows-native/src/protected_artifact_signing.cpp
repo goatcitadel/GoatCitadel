@@ -310,7 +310,8 @@ bool ValidateDirectory(
 bool ValidateFile(
     HANDLE file,
     const ProtectedObjectIdentity& expected,
-    std::uint64_t expected_length) noexcept {
+    std::uint64_t expected_length,
+    bool allow_delete_pending = false) noexcept {
   FILE_ATTRIBUTE_TAG_INFO attributes{};
   FILE_STANDARD_INFO standard{};
   ProtectedObjectIdentity identity{};
@@ -324,8 +325,11 @@ bool ValidateFile(
              file, FileAttributeTagInfo, &attributes, sizeof(attributes)) != FALSE &&
          GetFileInformationByHandleEx(
              file, FileStandardInfo, &standard, sizeof(standard)) != FALSE &&
-         (attributes.FileAttributes & kForbiddenAttributes) == 0U &&
-         standard.DeletePending == FALSE && standard.NumberOfLinks == 1U &&
+      (attributes.FileAttributes & kForbiddenAttributes) == 0U &&
+      (allow_delete_pending || standard.DeletePending == FALSE) &&
+      (standard.NumberOfLinks == 1U ||
+       (allow_delete_pending && standard.DeletePending != FALSE &&
+        standard.NumberOfLinks == 0U)) &&
          standard.EndOfFile.QuadPart >= 0 &&
          static_cast<std::uint64_t>(standard.EndOfFile.QuadPart) ==
              expected_length &&
@@ -695,6 +699,123 @@ bool WriteKeyFile(
 
 }  // namespace
 
+ProtectedArtifactAuthority::ProtectedArtifactAuthority() noexcept = default;
+ProtectedSigningLease::ProtectedSigningLease() noexcept = default;
+
+bool CreateProtectedSigningLease(
+    const ProtectedSigningFactoryInput& input,
+    ProtectedSigningLease* output) noexcept {
+  const std::uint64_t ceiling =
+      input.purpose == ProtectedArtifactPurpose::RuntimeManifest
+          ? kRuntimeManifestArtifactCeiling
+          : kAdmissionEvidenceArtifactCeiling;
+  if (output == nullptr || output->occupied_ ||
+      (input.purpose != ProtectedArtifactPurpose::RuntimeManifest &&
+       input.purpose != ProtectedArtifactPurpose::AdmissionEvidence) ||
+      !ValidHandle(input.parent) || !ValidHandle(input.artifact) ||
+      !ValidHandle(input.key_file) || !ValidHandle(input.stop_event) ||
+      input.artifact_length > ceiling || input.generation == 0U ||
+      input.deadline_ms <= GetTickCount64() ||
+      AllZero(input.artifact_sha256.data(), input.artifact_sha256.size()) ||
+      AllZero(input.key_file_sha256.data(), input.key_file_sha256.size()) ||
+      AllZero(input.spki.data(), input.spki.size()) ||
+      AllZero(input.key_id.data(), input.key_id.size()) ||
+      AllZero(
+          input.custody_state_sha256.data(),
+          input.custody_state_sha256.size()) ||
+      AllZero(input.incarnation.data(), input.incarnation.size())) {
+    return false;
+  }
+
+  ProtectedSigningLease candidate{};
+  HANDLE process = GetCurrentProcess();
+  const bool duplicated =
+      DuplicateHandle(
+          process, input.parent, process, &candidate.authority_.parent_, 0U,
+          FALSE, DUPLICATE_SAME_ACCESS) != FALSE &&
+      DuplicateHandle(
+          process, input.artifact, process, &candidate.authority_.artifact_,
+          0U, FALSE, DUPLICATE_SAME_ACCESS) != FALSE &&
+      DuplicateHandle(
+          process, input.key_file, process, &candidate.key_file_, 0U, FALSE,
+          DUPLICATE_SAME_ACCESS) != FALSE &&
+      DuplicateHandle(
+          process, input.stop_event, process, &candidate.authority_.stop_event_,
+          0U, FALSE, DUPLICATE_SAME_ACCESS) != FALSE;
+  if (!duplicated) {
+    candidate.Reset();
+    return false;
+  }
+
+  candidate.authority_.parent_identity_ = input.parent_identity;
+  candidate.authority_.artifact_identity_ = input.artifact_identity;
+  candidate.authority_.artifact_sha256_ = input.artifact_sha256;
+  candidate.authority_.control_.custody_state_sha256 =
+      input.custody_state_sha256;
+  candidate.authority_.incarnation_ = input.incarnation;
+  candidate.authority_.purpose_ = input.purpose;
+  candidate.authority_.length_ = input.artifact_length;
+  candidate.authority_.generation_ = input.generation;
+  candidate.authority_.deadline_ms_ = input.deadline_ms;
+  candidate.key_identity_ = input.key_identity;
+  candidate.key_file_sha256_ = input.key_file_sha256;
+  candidate.spki_ = input.spki;
+  candidate.key_id_ = input.key_id;
+  candidate.current_incarnation_ = input.incarnation;
+  candidate.current_custody_state_sha256_ = input.custody_state_sha256;
+  candidate.current_control_ = candidate.authority_.control_;
+  candidate.current_purpose_ = input.purpose;
+  candidate.current_generation_ = input.generation;
+
+  std::array<std::uint8_t, 32U> artifact_sha256{};
+  std::array<std::uint8_t, kPkcs8Bytes> pkcs8{};
+  Ed25519DerivedKeyMaterial derived{};
+  std::array<std::uint8_t, 32U> key_id{};
+  StreamingHash key_id_hash;
+  const bool valid =
+      ValidateDirectory(candidate.authority_.parent_, input.parent_identity) &&
+      ValidateFile(
+          candidate.authority_.artifact_, input.artifact_identity,
+          input.artifact_length, true) &&
+      ValidateFile(candidate.key_file_, input.key_identity, kPkcs8Bytes) &&
+      HashOpenFile(
+          candidate.authority_.artifact_, input.artifact_length,
+          &artifact_sha256) &&
+      EqualBytes(
+          artifact_sha256.data(), input.artifact_sha256.data(),
+          artifact_sha256.size()) &&
+      ReadExactKey(
+          candidate.key_file_, input.key_identity, input.key_file_sha256,
+          &pkcs8) &&
+      EqualBytes(pkcs8.data(), kPkcs8Prefix.data(), kPkcs8Prefix.size()) &&
+      DeriveEd25519KeyMaterial(pkcs8.data() + kPkcs8Prefix.size(), 32U, &derived) &&
+      EqualBytes(derived.pkcs8.data(), pkcs8.data(), derived.pkcs8.size()) &&
+      EqualBytes(derived.spki.data(), input.spki.data(), derived.spki.size()) &&
+      key_id_hash.Open(BCRYPT_SHA256_ALGORITHM, key_id.size()) &&
+      key_id_hash.Update(input.spki.data(), input.spki.size()) &&
+      key_id_hash.Finish(key_id.data(), key_id.size()) &&
+      EqualBytes(key_id.data(), input.key_id.data(), key_id.size()) &&
+      ControlSnapshotValid(candidate.authority_.control_) &&
+      WaitForSingleObject(candidate.authority_.stop_event_, 0U) == WAIT_TIMEOUT &&
+      GC_SIGNING_PERMIT(AfterFactorySealing);
+  GC_WIPE_VALUE(Pkcs8, &pkcs8);
+  WipeEd25519Owned(&derived, sizeof(derived));
+  SecureZeroMemory(artifact_sha256.data(), artifact_sha256.size());
+  SecureZeroMemory(key_id.data(), key_id.size());
+  if (!valid) {
+    candidate.Reset();
+    return false;
+  }
+  candidate.authority_.occupied_ = true;
+  candidate.occupied_ = true;
+  if (!GC_SIGNING_PERMIT(AfterLeaseIssue)) {
+    candidate.Reset();
+    return false;
+  }
+  *output = std::move(candidate);
+  return output->occupied_;
+}
+
 ProtectedArtifactAuthority::ProtectedArtifactAuthority(
     ProtectedArtifactAuthority&& other) noexcept {
   MoveFrom(&other);
@@ -874,7 +995,7 @@ bool ProtectedSigningLease::AuthorityIsCurrent() const noexcept {
          ValidateDirectory(authority_.parent_, authority_.parent_identity_) &&
          ValidateFile(
              authority_.artifact_, authority_.artifact_identity_,
-             authority_.length_) &&
+             authority_.length_, true) &&
          ValidateFile(key_file_, key_identity_, kPkcs8Bytes);
 }
 

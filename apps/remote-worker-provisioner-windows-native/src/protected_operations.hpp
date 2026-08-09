@@ -19,6 +19,7 @@ constexpr std::size_t kResidueEntryBytes = 84U;
 constexpr std::uint32_t kMaximumOperationIds = 256U;
 constexpr std::uint32_t kMaximumBurnedGenerations = 16U;
 constexpr std::uint32_t kMaximumResidues = 256U;
+constexpr std::uint32_t kMaximumAdmissionEvidenceReplays = 32U;
 
 struct ProtectedGenerationProjection final {
   bool present = false;
@@ -54,6 +55,15 @@ struct ProtectedOperationReplayState final {
   JournalRecord prior{};
 };
 
+struct ProtectedAdmissionEvidenceReplayState final {
+  bool present = false;
+  Byte16 operation_id{};
+  Byte32 body_sha256{};
+  std::uint16_t operator_sid_length = 0U;
+  std::array<std::uint8_t, 68U> operator_sid{};
+  std::array<std::uint8_t, kSignAdmissionEvidenceResultBytes> result{};
+};
+
 struct ProtectedOperationsState final {
   ProtectedFilesystemState filesystem{};
   Byte32 state_sha256{};
@@ -80,6 +90,11 @@ struct ProtectedOperationsState final {
   bool active_revoked = false;
   ProtectedOperationReplayState create_replay{};
   ProtectedOperationReplayState revoke_replay{};
+  std::array<
+      ProtectedAdmissionEvidenceReplayState,
+      kMaximumAdmissionEvidenceReplays>
+      admission_evidence_replays{};
+  std::uint32_t admission_evidence_replay_count = 0U;
   std::array<ProtectedGenerationProjection, kMaximumBurnedGenerations>
       generations{};
   std::array<ProtectedOperationProjection, kMaximumOperationIds> operations{};

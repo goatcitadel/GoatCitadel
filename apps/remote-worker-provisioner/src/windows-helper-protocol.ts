@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createHash, createPublicKey, verify } from "node:crypto";
 import { isAbsolute } from "node:path";
 
 export const WINDOWS_HELPER_MAGIC = "GCPW";
@@ -13,7 +14,12 @@ export const WINDOWS_PROTECTED_CREATE_KEYSET_REQUEST_BYTES = 72;
 export const WINDOWS_PROTECTED_CREATE_KEYSET_RESULT_BYTES = 320;
 export const WINDOWS_PROTECTED_REVOKE_KEYSET_REQUEST_BYTES = 100;
 export const WINDOWS_PROTECTED_REVOKE_KEYSET_RESULT_BYTES = 200;
-export const WINDOWS_PROTECTED_CALLABLE_OPCODE_BITMAP = 0x0000_0000_0009_0002n;
+export const WINDOWS_PROTECTED_ADMISSION_EVIDENCE_ENVELOPE_BYTES = 288;
+export const WINDOWS_PROTECTED_SIGN_ADMISSION_EVIDENCE_REQUEST_BYTES = 384;
+export const WINDOWS_PROTECTED_SIGN_ADMISSION_EVIDENCE_RESULT_BYTES = 320;
+export const WINDOWS_PROTECTED_ADMISSION_EVIDENCE_SIGNATURE_DOMAIN =
+  "goatcitadel.remote-worker.provisioning-evidence.signature.v1";
+export const WINDOWS_PROTECTED_CALLABLE_OPCODE_BITMAP = 0x0000_0000_000d_0002n;
 export const WINDOWS_HELPER_ERROR_PAYLOAD_BYTES = 4;
 export const WINDOWS_HELPER_INSPECT_ARGUMENT = "--inspect-stdio";
 
@@ -26,7 +32,7 @@ export const WINDOWS_HELPER_OPCODE = Object.freeze({
   INSPECT: 0x01,
   CREATE_KEYSET: 0x10,
   ACQUIRE_KEY_FOR_SIGNING: 0x11,
-  COMMIT_SIGNATURE: 0x12,
+  SIGN_ADMISSION_EVIDENCE: 0x12,
   REVOKE_LOCAL_KEYSET: 0x13,
   BEGIN_INSTALL: 0x20,
   SEAL_AND_PUBLISH_INSTALL: 0x21,
@@ -175,6 +181,50 @@ export interface WindowsProtectedRevokeKeysetResult {
   resultingStateSha256: Uint8Array;
   keysetReceiptSha256: Uint8Array;
   revokeControlSha256: Uint8Array;
+}
+
+/** Canonical, secret-free bytes signed by the protected admission-evidence key. */
+export interface WindowsProtectedAdmissionEvidenceEnvelope {
+  operationId: Uint8Array;
+  evidenceNonceSha256: Uint8Array;
+  workerGeneration: bigint;
+  contextSha256: Uint8Array;
+  runtimeManifestSha256: Uint8Array;
+  workerPublicKeySpkiSha256: Uint8Array;
+  downloadVerificationReceiptSha256: Uint8Array;
+  installedTreeAttestationSha256: Uint8Array;
+  installedTreeVerificationReceiptSha256: Uint8Array;
+}
+
+export interface WindowsProtectedSignAdmissionEvidenceRequest {
+  operationId: Uint8Array;
+  expectedStateSha256: Uint8Array;
+  expectedGeneration: bigint;
+  expectedKeysetReceiptSha256: Uint8Array;
+  envelope: WindowsProtectedAdmissionEvidenceEnvelope;
+}
+
+export type WindowsProtectedSignAdmissionEvidenceDisposition =
+  | "signed"
+  | "exact_replay"
+  | "stale_state"
+  | "keyset_unavailable"
+  | "changed_replay"
+  | "operator_mismatch"
+  | "replay_capacity_exhausted"
+  | "signing_failed";
+
+export interface WindowsProtectedSignAdmissionEvidenceResult {
+  disposition: WindowsProtectedSignAdmissionEvidenceDisposition;
+  operationId: Uint8Array;
+  generation: bigint;
+  envelopeSha256: Uint8Array;
+  keysetReceiptSha256: Uint8Array;
+  admissionEvidenceSpkiSha256: Uint8Array;
+  admissionEvidenceSpki: Uint8Array;
+  signature: Uint8Array;
+  protectedStateSha256: Uint8Array;
+  requestSha256: Uint8Array;
 }
 
 export type WindowsHelperResponse =
@@ -462,6 +512,16 @@ const REVOKE_DISPOSITIONS = [
   "already_revoked",
 ] as const;
 const REVOKE_REASONS = ["operator_requested", "suspected_compromise", "retired"] as const;
+const SIGN_ADMISSION_EVIDENCE_DISPOSITIONS = [
+  "signed",
+  "exact_replay",
+  "stale_state",
+  "keyset_unavailable",
+  "changed_replay",
+  "operator_mismatch",
+  "replay_capacity_exhausted",
+  "signing_failed",
+] as const;
 const CUSTODY_POSTURES = [
   "empty",
   "active",
@@ -500,6 +560,100 @@ function requireNonzero(bytes: Buffer, offset: number, length: number, field: st
   }
 }
 
+function sha256(bytes: Uint8Array): Buffer {
+  return createHash("sha256").update(bytes).digest();
+}
+
+export function encodeWindowsProtectedAdmissionEvidenceEnvelope(
+  input: WindowsProtectedAdmissionEvidenceEnvelope,
+): Buffer {
+  const envelope = Buffer.alloc(WINDOWS_PROTECTED_ADMISSION_EVIDENCE_ENVELOPE_BYTES);
+  envelope.write("GCAE", 0, "ascii");
+  envelope.writeUInt16LE(1, 4);
+  envelope.writeUInt8(1, 6);
+  envelope.writeUInt32LE(WINDOWS_PROTECTED_ADMISSION_EVIDENCE_ENVELOPE_BYTES, 8);
+  exactBytes(input.operationId, 16, "envelope.operationId", true).copy(envelope, 16);
+  exactBytes(input.evidenceNonceSha256, 32, "envelope.evidenceNonceSha256", true).copy(envelope, 32);
+  envelope.writeBigUInt64LE(exactU64(input.workerGeneration, "envelope.workerGeneration", true), 64);
+  exactBytes(input.contextSha256, 32, "envelope.contextSha256", true).copy(envelope, 96);
+  exactBytes(input.runtimeManifestSha256, 32, "envelope.runtimeManifestSha256", true).copy(envelope, 128);
+  exactBytes(input.workerPublicKeySpkiSha256, 32, "envelope.workerPublicKeySpkiSha256", true).copy(
+    envelope,
+    160,
+  );
+  exactBytes(
+    input.downloadVerificationReceiptSha256,
+    32,
+    "envelope.downloadVerificationReceiptSha256",
+    true,
+  ).copy(envelope, 192);
+  exactBytes(input.installedTreeAttestationSha256, 32, "envelope.installedTreeAttestationSha256", true).copy(
+    envelope,
+    224,
+  );
+  exactBytes(
+    input.installedTreeVerificationReceiptSha256,
+    32,
+    "envelope.installedTreeVerificationReceiptSha256",
+    true,
+  ).copy(envelope, 256);
+  return envelope;
+}
+
+export function decodeWindowsProtectedAdmissionEvidenceEnvelope(
+  bytes: Uint8Array,
+): WindowsProtectedAdmissionEvidenceEnvelope {
+  if (!(bytes instanceof Uint8Array) || bytes.byteLength !== WINDOWS_PROTECTED_ADMISSION_EVIDENCE_ENVELOPE_BYTES) {
+    throw new WindowsHelperProtocolError("admission-evidence envelope length is invalid");
+  }
+  const envelope = Buffer.from(bytes);
+  if (
+    envelope.toString("ascii", 0, 4) !== "GCAE" ||
+    envelope.readUInt16LE(4) !== 1 ||
+    envelope.readUInt8(6) !== 1 ||
+    envelope.readUInt8(7) !== 0 ||
+    envelope.readUInt32LE(8) !== WINDOWS_PROTECTED_ADMISSION_EVIDENCE_ENVELOPE_BYTES ||
+    envelope.readUInt32LE(12) !== 0
+  ) {
+    throw new WindowsHelperProtocolError("admission-evidence envelope header is invalid");
+  }
+  requireNonzero(envelope, 16, 16, "admission-evidence operation ID");
+  requireNonzero(envelope, 32, 32, "admission-evidence nonce hash");
+  if (envelope.readBigUInt64LE(64) === 0n) {
+    throw new WindowsHelperProtocolError("admission-evidence worker generation must be nonzero");
+  }
+  requireZero(envelope, 72, 24, "admission-evidence reserved field");
+  for (const [offset, field] of [
+    [96, "context hash"],
+    [128, "runtime manifest hash"],
+    [160, "worker public-key hash"],
+    [192, "download verification receipt hash"],
+    [224, "installed-tree attestation hash"],
+    [256, "installed-tree verification receipt hash"],
+  ] as const) {
+    requireNonzero(envelope, offset, 32, `admission-evidence ${field}`);
+  }
+  return {
+    operationId: Buffer.from(envelope.subarray(16, 32)),
+    evidenceNonceSha256: Buffer.from(envelope.subarray(32, 64)),
+    workerGeneration: envelope.readBigUInt64LE(64),
+    contextSha256: Buffer.from(envelope.subarray(96, 128)),
+    runtimeManifestSha256: Buffer.from(envelope.subarray(128, 160)),
+    workerPublicKeySpkiSha256: Buffer.from(envelope.subarray(160, 192)),
+    downloadVerificationReceiptSha256: Buffer.from(envelope.subarray(192, 224)),
+    installedTreeAttestationSha256: Buffer.from(envelope.subarray(224, 256)),
+    installedTreeVerificationReceiptSha256: Buffer.from(envelope.subarray(256, 288)),
+  };
+}
+
+export function buildWindowsProtectedAdmissionEvidenceSigningBytes(envelope: Uint8Array): Buffer {
+  decodeWindowsProtectedAdmissionEvidenceEnvelope(envelope);
+  return Buffer.concat([
+    Buffer.from(`${WINDOWS_PROTECTED_ADMISSION_EVIDENCE_SIGNATURE_DOMAIN}\0`, "utf8"),
+    Buffer.from(envelope),
+  ]);
+}
+
 export function validateWindowsProtectedRequestPayload(opcode: WindowsHelperRequestOpcode, payload: Uint8Array): void {
   const body = Buffer.from(payload);
   if (opcode === WINDOWS_HELPER_OPCODE.INSPECT) {
@@ -533,6 +687,31 @@ export function validateWindowsProtectedRequestPayload(opcode: WindowsHelperRequ
     }
     requireZero(body, 64, 4, "revoke request reserved field");
     requireNonzero(body, 68, 32, "revoke request expected receipt hash");
+    return;
+  }
+  if (opcode === WINDOWS_HELPER_OPCODE.SIGN_ADMISSION_EVIDENCE) {
+    if (body.byteLength !== WINDOWS_PROTECTED_SIGN_ADMISSION_EVIDENCE_REQUEST_BYTES) {
+      throw new WindowsHelperProtocolError("sign admission-evidence request payload length is invalid");
+    }
+    requireNonzero(body, 0, 16, "sign admission-evidence request operation ID");
+    requireNonzero(body, 16, 32, "sign admission-evidence request expected state");
+    if (body.readUInt16LE(48) !== 1 || body.readUInt8(50) !== 2 || body.readUInt8(51) !== 0) {
+      throw new WindowsHelperProtocolError("sign admission-evidence request header is invalid");
+    }
+    if (body.readBigUInt64LE(52) === 0n) {
+      throw new WindowsHelperProtocolError("sign admission-evidence request generation must be nonzero");
+    }
+    requireNonzero(body, 60, 32, "sign admission-evidence request expected receipt hash");
+    if (body.readUInt32LE(92) !== WINDOWS_PROTECTED_ADMISSION_EVIDENCE_ENVELOPE_BYTES) {
+      throw new WindowsHelperProtocolError("sign admission-evidence envelope length is invalid");
+    }
+    const envelope = decodeWindowsProtectedAdmissionEvidenceEnvelope(body.subarray(96));
+    if (!body.subarray(0, 16).equals(envelope.operationId)) {
+      throw new WindowsHelperProtocolError("sign admission-evidence operation ID does not bind the envelope");
+    }
+    if (body.readBigUInt64LE(52) !== envelope.workerGeneration) {
+      throw new WindowsHelperProtocolError("sign admission-evidence generation does not bind the envelope");
+    }
   }
 }
 
@@ -568,6 +747,30 @@ export function encodeWindowsProtectedRevokeKeysetRequest(input: WindowsProtecte
   body.writeUInt32LE(reason, 60);
   exactBytes(input.expectedKeysetReceiptSha256, 32, "expectedKeysetReceiptSha256", true).copy(body, 68);
   return encodeWindowsHelperRequest(WINDOWS_HELPER_OPCODE.REVOKE_LOCAL_KEYSET, body);
+}
+
+export function encodeWindowsProtectedSignAdmissionEvidenceRequest(
+  input: WindowsProtectedSignAdmissionEvidenceRequest,
+): Buffer {
+  const operationId = exactBytes(input.operationId, 16, "operationId", true);
+  const generation = exactU64(input.expectedGeneration, "expectedGeneration", true);
+  const envelope = encodeWindowsProtectedAdmissionEvidenceEnvelope(input.envelope);
+  if (!operationId.equals(envelope.subarray(16, 32))) {
+    throw new WindowsHelperProtocolError("operationId must equal envelope.operationId");
+  }
+  if (generation !== envelope.readBigUInt64LE(64)) {
+    throw new WindowsHelperProtocolError("expectedGeneration must equal envelope.workerGeneration");
+  }
+  const body = Buffer.alloc(WINDOWS_PROTECTED_SIGN_ADMISSION_EVIDENCE_REQUEST_BYTES);
+  operationId.copy(body, 0);
+  exactBytes(input.expectedStateSha256, 32, "expectedStateSha256", true).copy(body, 16);
+  body.writeUInt16LE(1, 48);
+  body.writeUInt8(2, 50);
+  body.writeBigUInt64LE(generation, 52);
+  exactBytes(input.expectedKeysetReceiptSha256, 32, "expectedKeysetReceiptSha256", true).copy(body, 60);
+  body.writeUInt32LE(WINDOWS_PROTECTED_ADMISSION_EVIDENCE_ENVELOPE_BYTES, 92);
+  envelope.copy(body, 96);
+  return encodeWindowsHelperRequest(WINDOWS_HELPER_OPCODE.SIGN_ADMISSION_EVIDENCE, body);
 }
 
 export function decodeWindowsProtectedInspectResponse(bytes: Uint8Array): WindowsProtectedInspect {
@@ -736,6 +939,102 @@ export function decodeWindowsProtectedRevokeKeysetResponse(
     resultingStateSha256: Buffer.from(payload.subarray(104, 136)),
     keysetReceiptSha256: Buffer.from(payload.subarray(136, 168)),
     revokeControlSha256: Buffer.from(payload.subarray(168, 200)),
+  };
+}
+
+export function decodeWindowsProtectedSignAdmissionEvidenceResponse(
+  bytes: Uint8Array,
+  expectedRequest: WindowsProtectedSignAdmissionEvidenceRequest,
+): WindowsProtectedSignAdmissionEvidenceResult {
+  const expectedId = exactBytes(expectedRequest.operationId, 16, "operationId", true);
+  const expectedState = exactBytes(expectedRequest.expectedStateSha256, 32, "expectedStateSha256", true);
+  const expectedGeneration = exactU64(expectedRequest.expectedGeneration, "expectedGeneration", true);
+  const expectedReceipt = exactBytes(
+    expectedRequest.expectedKeysetReceiptSha256,
+    32,
+    "expectedKeysetReceiptSha256",
+    true,
+  );
+  const requestFrame = encodeWindowsProtectedSignAdmissionEvidenceRequest(expectedRequest);
+  const requestBody = requestFrame.subarray(WINDOWS_HELPER_HEADER_BYTES);
+  const envelope = requestBody.subarray(96);
+  const payload = protectedSuccessPayload(
+    bytes,
+    WINDOWS_HELPER_OPCODE.SIGN_ADMISSION_EVIDENCE,
+    WINDOWS_PROTECTED_SIGN_ADMISSION_EVIDENCE_RESULT_BYTES,
+  );
+  if (payload.readUInt16LE(0) !== 1 || payload.readUInt32LE(4) !== 0) {
+    throw new WindowsHelperProtocolError("sign admission-evidence result header is invalid");
+  }
+  const disposition = SIGN_ADMISSION_EVIDENCE_DISPOSITIONS[payload.readUInt16LE(2) - 1];
+  if (disposition === undefined) {
+    throw new WindowsHelperProtocolError("sign admission-evidence result disposition is invalid");
+  }
+  requireZero(payload, 300, 20, "sign admission-evidence trailing reserved field");
+  if (!payload.subarray(8, 24).equals(expectedId)) {
+    throw new WindowsHelperProtocolError("sign admission-evidence result operation ID differs from request");
+  }
+  if (payload.readBigUInt64LE(24) !== expectedGeneration) {
+    throw new WindowsHelperProtocolError("sign admission-evidence result generation differs from request");
+  }
+  if (!payload.subarray(32, 64).equals(sha256(envelope))) {
+    throw new WindowsHelperProtocolError("sign admission-evidence result envelope hash differs from canonical bytes");
+  }
+  if (!payload.subarray(268, 300).equals(sha256(requestBody))) {
+    throw new WindowsHelperProtocolError("sign admission-evidence result request hash differs from canonical bytes");
+  }
+  requireNonzero(payload, 236, 32, "sign admission-evidence protected state hash");
+
+  const carriesSignature = disposition === "signed" || disposition === "exact_replay";
+  if (carriesSignature) {
+    if (!payload.subarray(64, 96).equals(expectedReceipt)) {
+      throw new WindowsHelperProtocolError("sign admission-evidence result keyset receipt differs from request");
+    }
+    if (!payload.subarray(236, 268).equals(expectedState)) {
+      throw new WindowsHelperProtocolError("sign admission-evidence successful result changed protected state");
+    }
+    requireNonzero(payload, 96, 32, "sign admission-evidence SPKI hash");
+    const spki = payload.subarray(128, 172);
+    const spkiPrefix = Buffer.from("302a300506032b6570032100", "hex");
+    if (!spki.subarray(0, 12).equals(spkiPrefix)) {
+      throw new WindowsHelperProtocolError("sign admission-evidence SPKI is not canonical Ed25519");
+    }
+    requireNonzero(spki, 12, 32, "sign admission-evidence public key");
+    if (!payload.subarray(96, 128).equals(sha256(spki))) {
+      throw new WindowsHelperProtocolError("sign admission-evidence SPKI hash is invalid");
+    }
+    requireNonzero(payload, 172, 64, "sign admission-evidence signature");
+    let verified = false;
+    try {
+      const publicKey = createPublicKey({ key: spki, format: "der", type: "spki" });
+      verified = verify(
+        null,
+        buildWindowsProtectedAdmissionEvidenceSigningBytes(envelope),
+        publicKey,
+        payload.subarray(172, 236),
+      );
+    } catch (error) {
+      throw new WindowsHelperProtocolError(
+        `sign admission-evidence public receipt is invalid: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    if (!verified) {
+      throw new WindowsHelperProtocolError("sign admission-evidence signature does not verify in its fixed domain");
+    }
+  } else {
+    requireZero(payload, 64, 172, "sign admission-evidence rejection authority");
+  }
+  return {
+    disposition,
+    operationId: Buffer.from(payload.subarray(8, 24)),
+    generation: payload.readBigUInt64LE(24),
+    envelopeSha256: Buffer.from(payload.subarray(32, 64)),
+    keysetReceiptSha256: Buffer.from(payload.subarray(64, 96)),
+    admissionEvidenceSpkiSha256: Buffer.from(payload.subarray(96, 128)),
+    admissionEvidenceSpki: Buffer.from(payload.subarray(128, 172)),
+    signature: Buffer.from(payload.subarray(172, 236)),
+    protectedStateSha256: Buffer.from(payload.subarray(236, 268)),
+    requestSha256: Buffer.from(payload.subarray(268, 300)),
   };
 }
 

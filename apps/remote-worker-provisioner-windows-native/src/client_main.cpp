@@ -210,6 +210,8 @@ std::size_t BuildGcpwSuccess(
           ? static_cast<std::uint32_t>(gc::kCreateKeysetResultBytes)
       : request_opcode == static_cast<std::uint8_t>(gc::Opcode::RevokeLocalKeyset)
           ? static_cast<std::uint32_t>(gc::kRevokeKeysetResultBytes)
+      : request_opcode == static_cast<std::uint8_t>(gc::Opcode::SignAdmissionEvidence)
+          ? static_cast<std::uint32_t>(gc::kSignAdmissionEvidenceResultBytes)
           : 0U;
   if (output == nullptr || exchange.result_length != expected_length) {
     return 0U;
@@ -271,6 +273,7 @@ int RunServiceStdio() noexcept {
   }
   gc::CreateKeysetRequest create_request{};
   gc::RevokeKeysetRequest revoke_request{};
+  gc::SignAdmissionEvidenceRequest sign_request{};
   const bool body_valid =
       (header.opcode == static_cast<std::uint8_t>(gc::Opcode::Inspect) &&
        header.payload_length == 0U) ||
@@ -280,9 +283,13 @@ int RunServiceStdio() noexcept {
       (header.opcode == static_cast<std::uint8_t>(gc::Opcode::RevokeLocalKeyset) &&
        gc::DecodeRevokeKeysetRequest(
            g_request_body.data(), header.payload_length, &revoke_request)) ||
+      (header.opcode == static_cast<std::uint8_t>(gc::Opcode::SignAdmissionEvidence) &&
+       gc::DecodeSignAdmissionEvidenceRequest(
+           g_request_body.data(), header.payload_length, &sign_request)) ||
       (header.opcode != static_cast<std::uint8_t>(gc::Opcode::Inspect) &&
        header.opcode != static_cast<std::uint8_t>(gc::Opcode::CreateKeyset) &&
-       header.opcode != static_cast<std::uint8_t>(gc::Opcode::RevokeLocalKeyset));
+       header.opcode != static_cast<std::uint8_t>(gc::Opcode::RevokeLocalKeyset) &&
+       header.opcode != static_cast<std::uint8_t>(gc::Opcode::SignAdmissionEvidence));
   const bool locally_valid =
       exact_eof && header_status == gc::HeaderStatus::Valid &&
       gc::IsRecognizedOpcode(header.opcode) && body_valid;
@@ -300,6 +307,10 @@ int RunServiceStdio() noexcept {
   } else if (header.opcode == static_cast<std::uint8_t>(gc::Opcode::RevokeLocalKeyset)) {
     request.operation_id = revoke_request.operation_id;
     request.expected_state_sha256 = revoke_request.expected_state_sha256;
+  } else if (
+      header.opcode == static_cast<std::uint8_t>(gc::Opcode::SignAdmissionEvidence)) {
+    request.operation_id = sign_request.operation_id;
+    request.expected_state_sha256 = sign_request.expected_state_sha256;
   }
   gc::ClientExchangeResponse exchange{};
   const gc::ClientExchangeDisposition disposition =

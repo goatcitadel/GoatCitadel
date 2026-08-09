@@ -20,6 +20,7 @@ static_assert(gc::kResidueEntryBytes == 84U);
 static_assert(gc::kMaximumBurnedGenerations == 16U);
 static_assert(gc::kMaximumOperationIds == 256U);
 static_assert(gc::kMaximumResidues == 256U);
+static_assert(gc::kMaximumAdmissionEvidenceReplays == 32U);
 static_assert(gc::kMaximumPublicationSequence == 864U);
 static_assert(gc::kMaximumHistoricalCustodyKeys == 64U);
 static_assert(sizeof(gc::ProtectedGenerationProjection) == 449U);
@@ -132,6 +133,52 @@ std::array<std::uint8_t, gc::kRevokeKeysetRequestBytes> RevokeBody(
         body.data() + 68U,
         expected_receipt->data(),
         expected_receipt->size());
+  }
+  return body;
+}
+
+std::array<std::uint8_t, gc::kSignAdmissionEvidenceRequestBytes>
+SignAdmissionEvidenceBody(
+    const gc::Byte32& state,
+    std::uint64_t generation,
+    const gc::Byte32& expected_receipt,
+    std::uint8_t operation_seed = 0x40U,
+    std::uint8_t evidence_seed = 0x50U) noexcept {
+  std::array<std::uint8_t, gc::kSignAdmissionEvidenceRequestBytes> body{};
+  for (std::size_t index = 0U; index < 16U; ++index) {
+    body[index] = static_cast<std::uint8_t>(operation_seed + index);
+    body[96U + 16U + index] = body[index];
+  }
+  std::memcpy(body.data() + 16U, state.data(), state.size());
+  WriteU16(body.data() + 48U, 1U);
+  body[50U] = 2U;
+  WriteU64(body.data() + 52U, generation);
+  std::memcpy(body.data() + 60U, expected_receipt.data(), expected_receipt.size());
+  WriteU32(
+      body.data() + 92U,
+      static_cast<std::uint32_t>(gc::kAdmissionEvidenceEnvelopeBytes));
+
+  std::uint8_t* envelope = body.data() + 96U;
+  envelope[0U] = 'G';
+  envelope[1U] = 'C';
+  envelope[2U] = 'A';
+  envelope[3U] = 'E';
+  WriteU16(envelope + 4U, 1U);
+  envelope[6U] = 1U;
+  WriteU32(
+      envelope + 8U,
+      static_cast<std::uint32_t>(gc::kAdmissionEvidenceEnvelopeBytes));
+  for (std::size_t index = 0U; index < 32U; ++index) {
+    envelope[32U + index] = static_cast<std::uint8_t>(evidence_seed + index);
+  }
+  WriteU64(envelope + 64U, generation);
+  constexpr std::array<std::size_t, 6U> kHashOffsets = {
+      96U, 128U, 160U, 192U, 224U, 256U};
+  for (std::size_t field = 0U; field < kHashOffsets.size(); ++field) {
+    for (std::size_t index = 0U; index < 32U; ++index) {
+      envelope[kHashOffsets[field] + index] = static_cast<std::uint8_t>(
+          evidence_seed + 0x20U + field * 7U + index);
+    }
   }
   return body;
 }
@@ -1771,6 +1818,270 @@ int TestIsolatedCommittedRecoveryReplay() noexcept {
   }
   const gc::Byte32 created_state = state.state_sha256;
   const gc::Byte32 created_receipt = state.active_receipt_sha256;
+
+  const auto sign_body = SignAdmissionEvidenceBody(
+      created_state, 1U, created_receipt);
+  gc::Byte32 expected_envelope_sha256{};
+  gc::Byte32 expected_request_sha256{};
+  const bool sign_hashes =
+      gc::ComputeSha256(
+          sign_body.data() + 96U,
+          gc::kAdmissionEvidenceEnvelopeBytes,
+          &expected_envelope_sha256) &&
+      gc::ComputeSha256(
+          sign_body.data(), sign_body.size(), &expected_request_sha256);
+  result.fill(0U);
+  result_length = 0U;
+  const gc::ProtectedOperationResult sign_result = created
+      ? gc::ExecuteProtectedOperation(
+            &state,
+            static_cast<std::uint8_t>(gc::Opcode::SignAdmissionEvidence),
+            sign_body.data(),
+            static_cast<std::uint32_t>(sign_body.size()),
+            kSid.data(),
+            static_cast<std::uint16_t>(kSid.size()),
+            authenticated_binding,
+            GetTickCount64() + 30'000U,
+            stop,
+            &result,
+            &result_length)
+      : gc::ProtectedOperationResult::CustodyOrJournal;
+  const bool signed_evidence = created && sign_hashes &&
+      sign_result == gc::ProtectedOperationResult::Success &&
+      result_length == gc::kSignAdmissionEvidenceResultBytes &&
+      ReadU16(result.data()) == 1U && ReadU16(result.data() + 2U) == 1U &&
+      std::memcmp(result.data() + 8U, sign_body.data(), 16U) == 0 &&
+      ReadU64(result.data() + 24U) == 1U &&
+      std::memcmp(
+          result.data() + 32U,
+          expected_envelope_sha256.data(),
+          expected_envelope_sha256.size()) == 0 &&
+      std::memcmp(
+          result.data() + 64U,
+          created_receipt.data(),
+          created_receipt.size()) == 0 &&
+      std::memcmp(
+          result.data() + 96U,
+          state.admission_evidence_spki_sha256.data(),
+          state.admission_evidence_spki_sha256.size()) == 0 &&
+      std::memcmp(
+          result.data() + 128U,
+          state.admission_evidence_spki.data(),
+          state.admission_evidence_spki.size()) == 0 &&
+      !AllZero(result.data() + 172U, 64U) &&
+      std::memcmp(
+          result.data() + 236U,
+          created_state.data(),
+          created_state.size()) == 0 &&
+      std::memcmp(
+          result.data() + 268U,
+          expected_request_sha256.data(),
+          expected_request_sha256.size()) == 0 &&
+      AllZero(result.data() + 300U, 20U) &&
+      state.state_sha256 == created_state && state.active_generation == 1U &&
+      state.admission_evidence_replay_count == 1U;
+  if (!signed_evidence) {
+    DiagnosticCount(
+        "protected_operations: admission evidence sign result ",
+        static_cast<std::uint32_t>(sign_result));
+    DiagnosticCount(
+        "protected_operations: admission evidence sign length ",
+        result_length);
+    DiagnosticCount(
+        "protected_operations: admission evidence sign disposition ",
+        ReadU16(result.data() + 2U));
+    CanonicalFailure(
+        &failures,
+        "protected_operations: admission evidence protected signature\n");
+  }
+  const auto signed_receipt = result;
+
+  result.fill(0U);
+  result_length = 0U;
+  const gc::ProtectedOperationResult exact_replay_result = signed_evidence
+      ? gc::ExecuteProtectedOperation(
+            &state,
+            static_cast<std::uint8_t>(gc::Opcode::SignAdmissionEvidence),
+            sign_body.data(),
+            static_cast<std::uint32_t>(sign_body.size()),
+            kSid.data(),
+            static_cast<std::uint16_t>(kSid.size()),
+            authenticated_binding,
+            GetTickCount64() + 30'000U,
+            stop,
+            &result,
+            &result_length)
+      : gc::ProtectedOperationResult::CustodyOrJournal;
+  auto expected_replay = signed_receipt;
+  WriteU16(expected_replay.data() + 2U, 2U);
+  if (exact_replay_result != gc::ProtectedOperationResult::Success ||
+      result_length != gc::kSignAdmissionEvidenceResultBytes ||
+      result != expected_replay ||
+      state.admission_evidence_replay_count != 1U) {
+    CanonicalFailure(
+        &failures,
+        "protected_operations: admission evidence exact replay\n");
+  }
+
+  auto changed_sign_body = sign_body;
+  changed_sign_body[96U + 96U] ^= 1U;
+  result.fill(0U);
+  result_length = 0U;
+  const gc::ProtectedOperationResult changed_replay_result =
+      gc::ExecuteProtectedOperation(
+          &state,
+          static_cast<std::uint8_t>(gc::Opcode::SignAdmissionEvidence),
+          changed_sign_body.data(),
+          static_cast<std::uint32_t>(changed_sign_body.size()),
+          kSid.data(),
+          static_cast<std::uint16_t>(kSid.size()),
+          authenticated_binding,
+          GetTickCount64() + 30'000U,
+          stop,
+          &result,
+          &result_length);
+  if (changed_replay_result != gc::ProtectedOperationResult::Success ||
+      result_length != gc::kSignAdmissionEvidenceResultBytes ||
+      ReadU16(result.data() + 2U) != 5U ||
+      !AllZero(result.data() + 64U, 172U)) {
+    CanonicalFailure(
+        &failures,
+        "protected_operations: admission evidence changed replay\n");
+  }
+
+  auto other_sid = kSid;
+  other_sid.back() ^= 1U;
+  result.fill(0U);
+  result_length = 0U;
+  const gc::ProtectedOperationResult operator_replay_result =
+      gc::ExecuteProtectedOperation(
+          &state,
+          static_cast<std::uint8_t>(gc::Opcode::SignAdmissionEvidence),
+          sign_body.data(),
+          static_cast<std::uint32_t>(sign_body.size()),
+          other_sid.data(),
+          static_cast<std::uint16_t>(other_sid.size()),
+          authenticated_binding,
+          GetTickCount64() + 30'000U,
+          stop,
+          &result,
+          &result_length);
+  if (operator_replay_result != gc::ProtectedOperationResult::Success ||
+      result_length != gc::kSignAdmissionEvidenceResultBytes ||
+      ReadU16(result.data() + 2U) != 6U ||
+      !AllZero(result.data() + 64U, 172U)) {
+    CanonicalFailure(
+        &failures,
+        "protected_operations: admission evidence operator replay\n");
+  }
+
+  gc::Byte32 stale_state{};
+  stale_state.fill(0xa5U);
+  const auto stale_sign_body = SignAdmissionEvidenceBody(
+      stale_state, 1U, created_receipt, 0x60U, 0x71U);
+  result.fill(0U);
+  result_length = 0U;
+  const gc::ProtectedOperationResult stale_sign_result =
+      gc::ExecuteProtectedOperation(
+          &state,
+          static_cast<std::uint8_t>(gc::Opcode::SignAdmissionEvidence),
+          stale_sign_body.data(),
+          static_cast<std::uint32_t>(stale_sign_body.size()),
+          kSid.data(),
+          static_cast<std::uint16_t>(kSid.size()),
+          authenticated_binding,
+          GetTickCount64() + 30'000U,
+          stop,
+          &result,
+          &result_length);
+  if (stale_sign_result != gc::ProtectedOperationResult::Success ||
+      ReadU16(result.data() + 2U) != 3U ||
+      !AllZero(result.data() + 64U, 172U)) {
+    CanonicalFailure(
+        &failures,
+        "protected_operations: admission evidence stale state\n");
+  }
+
+  gc::Byte32 wrong_receipt = created_receipt;
+  wrong_receipt[0U] ^= 1U;
+  const auto unavailable_sign_body = SignAdmissionEvidenceBody(
+      created_state, 1U, wrong_receipt, 0x70U, 0x81U);
+  result.fill(0U);
+  result_length = 0U;
+  const gc::ProtectedOperationResult unavailable_sign_result =
+      gc::ExecuteProtectedOperation(
+          &state,
+          static_cast<std::uint8_t>(gc::Opcode::SignAdmissionEvidence),
+          unavailable_sign_body.data(),
+          static_cast<std::uint32_t>(unavailable_sign_body.size()),
+          kSid.data(),
+          static_cast<std::uint16_t>(kSid.size()),
+          authenticated_binding,
+          GetTickCount64() + 30'000U,
+          stop,
+          &result,
+          &result_length);
+  if (unavailable_sign_result != gc::ProtectedOperationResult::Success ||
+      ReadU16(result.data() + 2U) != 4U ||
+      !AllZero(result.data() + 64U, 172U)) {
+    CanonicalFailure(
+        &failures,
+        "protected_operations: admission evidence receipt fence\n");
+  }
+
+  const auto original_key_identity = state.active_keyset_file_identities[2U];
+  state.active_keyset_file_identities[2U].file_id[0U] ^= 1U;
+  const auto identity_sign_body = SignAdmissionEvidenceBody(
+      created_state, 1U, created_receipt, 0x80U, 0x91U);
+  result.fill(0U);
+  result_length = 0U;
+  const gc::ProtectedOperationResult identity_sign_result =
+      gc::ExecuteProtectedOperation(
+          &state,
+          static_cast<std::uint8_t>(gc::Opcode::SignAdmissionEvidence),
+          identity_sign_body.data(),
+          static_cast<std::uint32_t>(identity_sign_body.size()),
+          kSid.data(),
+          static_cast<std::uint16_t>(kSid.size()),
+          authenticated_binding,
+          GetTickCount64() + 30'000U,
+          stop,
+          &result,
+          &result_length);
+  state.active_keyset_file_identities[2U] = original_key_identity;
+  if (identity_sign_result != gc::ProtectedOperationResult::Success ||
+      ReadU16(result.data() + 2U) != 8U ||
+      !AllZero(result.data() + 64U, 172U) ||
+      state.admission_evidence_replay_count != 1U) {
+    CanonicalFailure(
+        &failures,
+        "protected_operations: admission evidence key path identity\n");
+  }
+
+  auto colliding_create = CreateBody(created_state, 2U, 1U);
+  std::memcpy(colliding_create.data(), sign_body.data(), 16U);
+  result.fill(0U);
+  result_length = 0U;
+  const gc::ProtectedOperationResult cross_opcode_result =
+      gc::ExecuteProtectedOperation(
+          &state,
+          static_cast<std::uint8_t>(gc::Opcode::CreateKeyset),
+          colliding_create.data(),
+          static_cast<std::uint32_t>(colliding_create.size()),
+          kSid.data(),
+          static_cast<std::uint16_t>(kSid.size()),
+          authenticated_binding,
+          GetTickCount64() + 30'000U,
+          stop,
+          &result,
+          &result_length);
+  if (cross_opcode_result != gc::ProtectedOperationResult::Success ||
+      ReadU16(result.data() + 2U) != 4U) {
+    CanonicalFailure(
+        &failures,
+        "protected_operations: admission evidence cross-opcode collision\n");
+  }
+
   const auto revoke = RevokeBody(created_state, 1U, 1U, &created_receipt);
   gc::ResetProtectedFilesystemFailuresForTest();
   result.fill(0U);

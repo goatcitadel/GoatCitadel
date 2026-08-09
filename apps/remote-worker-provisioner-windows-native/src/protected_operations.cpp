@@ -2,6 +2,7 @@
 
 #include "key_custody.hpp"
 #include "operation_journal.hpp"
+#include "protected_artifact_signing.hpp"
 
 #include <windows.h>
 
@@ -9855,6 +9856,323 @@ ProtectedOperationResult PerformRevoke(
   return ProtectedOperationResult::Success;
 }
 
+ProtectedAdmissionEvidenceReplayState* FindAdmissionEvidenceReplay(
+    ProtectedOperationsState* state,
+    const Byte16& operation_id) noexcept {
+  if (state == nullptr ||
+      state->admission_evidence_replay_count >
+          kMaximumAdmissionEvidenceReplays) {
+    return nullptr;
+  }
+  for (std::size_t index = 0U;
+       index < state->admission_evidence_replay_count;
+       ++index) {
+    auto& replay = state->admission_evidence_replays[index];
+    if (replay.present && replay.operation_id == operation_id) return &replay;
+  }
+  return nullptr;
+}
+
+void BuildAdmissionEvidenceResult(
+    const SignAdmissionEvidenceRequest& request,
+    std::uint16_t disposition,
+    const Byte32& envelope_sha256,
+    const Byte32& protected_state_sha256,
+    const Byte32& request_sha256,
+    const ProtectedOperationsState* authority,
+    const std::array<std::uint8_t, 64U>* signature,
+    std::array<std::uint8_t, kCreateKeysetResultBytes>* result) noexcept {
+  if (result == nullptr) return;
+  result->fill(0U);
+  WriteU16(result->data(), 1U);
+  WriteU16(result->data() + 2U, disposition);
+  std::memcpy(
+      result->data() + 8U,
+      request.operation_id.data(),
+      request.operation_id.size());
+  WriteU64(result->data() + 24U, request.expected_generation);
+  Copy32(envelope_sha256, result->data() + 32U);
+  if (authority != nullptr && signature != nullptr) {
+    Copy32(authority->active_receipt_sha256, result->data() + 64U);
+    Copy32(authority->admission_evidence_spki_sha256, result->data() + 96U);
+    std::memcpy(
+        result->data() + 128U,
+        authority->admission_evidence_spki.data(),
+        authority->admission_evidence_spki.size());
+    std::memcpy(
+        result->data() + 172U,
+        signature->data(),
+        signature->size());
+  }
+  Copy32(protected_state_sha256, result->data() + 236U);
+  Copy32(request_sha256, result->data() + 268U);
+}
+
+bool BuildEvidenceStagingComponent(
+    const Byte16& operation_id,
+    std::array<wchar_t, 64U>* output) noexcept {
+  if (output == nullptr) return false;
+  output->fill(L'\0');
+  constexpr wchar_t kPrefix[] = L".admission-evidence-";
+  constexpr wchar_t kSuffix[] = L".pending";
+  constexpr wchar_t kHex[] = L"0123456789abcdef";
+  std::size_t offset = 0U;
+  for (std::size_t index = 0U; kPrefix[index] != L'\0'; ++index) {
+    (*output)[offset++] = kPrefix[index];
+  }
+  for (const std::uint8_t byte : operation_id) {
+    (*output)[offset++] = kHex[byte >> 4U];
+    (*output)[offset++] = kHex[byte & 0x0fU];
+  }
+  for (std::size_t index = 0U; kSuffix[index] != L'\0'; ++index) {
+    (*output)[offset++] = kSuffix[index];
+  }
+  return offset + 1U <= output->size();
+}
+
+ProtectedOperationResult ExecuteAdmissionEvidenceSignature(
+    ProtectedOperationsState* state,
+    const std::uint8_t* body,
+    std::uint32_t body_length,
+    const std::uint8_t* operator_sid,
+    std::uint16_t operator_sid_length,
+    std::uint64_t deadline_ms,
+    HANDLE stop_event,
+    std::array<std::uint8_t, kCreateKeysetResultBytes>* result,
+    std::uint32_t* result_length) noexcept {
+  SignAdmissionEvidenceRequest request{};
+  if (!DecodeSignAdmissionEvidenceRequest(body, body_length, &request)) {
+    return ProtectedOperationResult::ProtocolInvalid;
+  }
+  Byte32 request_sha256{};
+  Byte32 envelope_sha256{};
+  if (!ComputeSha256(body, body_length, &request_sha256) ||
+      !ComputeSha256(
+          body + 96U,
+          kAdmissionEvidenceEnvelopeBytes,
+          &envelope_sha256)) {
+    return ProtectedOperationResult::CustodyOrJournal;
+  }
+
+  const ProtectedOperationProjection* durable_operation =
+      FindOperationProjection(*state, request.operation_id);
+  if (durable_operation != nullptr ||
+      (state->create_replay.present &&
+       state->create_replay.operation_id == request.operation_id) ||
+      (state->revoke_replay.present &&
+       state->revoke_replay.operation_id == request.operation_id)) {
+    BuildAdmissionEvidenceResult(
+        request, 5U, envelope_sha256, state->state_sha256, request_sha256,
+        nullptr, nullptr, result);
+    *result_length = kSignAdmissionEvidenceResultBytes;
+    return ProtectedOperationResult::Success;
+  }
+
+  ProtectedAdmissionEvidenceReplayState* replay =
+      FindAdmissionEvidenceReplay(state, request.operation_id);
+  if (replay != nullptr) {
+    const bool body_matches = replay->body_sha256 == request_sha256;
+    const bool operator_matches =
+        replay->operator_sid_length == operator_sid_length &&
+        Equal(replay->operator_sid.data(), operator_sid, operator_sid_length);
+    if (!body_matches || !operator_matches) {
+      BuildAdmissionEvidenceResult(
+          request, body_matches ? 6U : 5U, envelope_sha256,
+          state->state_sha256, request_sha256, nullptr, nullptr, result);
+    } else if (request.expected_state_sha256 != state->state_sha256 ||
+               request.expected_generation != state->active_generation ||
+               request.expected_keyset_receipt_sha256 !=
+                   state->active_receipt_sha256) {
+      BuildAdmissionEvidenceResult(
+          request, 3U, envelope_sha256, state->state_sha256, request_sha256,
+          nullptr, nullptr, result);
+    } else {
+      *result = replay->result;
+      WriteU16(result->data() + 2U, 2U);
+    }
+    *result_length = kSignAdmissionEvidenceResultBytes;
+    return ProtectedOperationResult::Success;
+  }
+
+  if (request.expected_state_sha256 != state->state_sha256) {
+    BuildAdmissionEvidenceResult(
+        request, 3U, envelope_sha256, state->state_sha256, request_sha256,
+        nullptr, nullptr, result);
+    *result_length = kSignAdmissionEvidenceResultBytes;
+    return ProtectedOperationResult::Success;
+  }
+  if (state->active_generation == 0U || state->active_revoked ||
+      request.expected_generation != state->active_generation ||
+      request.expected_keyset_receipt_sha256 != state->active_receipt_sha256) {
+    BuildAdmissionEvidenceResult(
+        request, 4U, envelope_sha256, state->state_sha256, request_sha256,
+        nullptr, nullptr, result);
+    *result_length = kSignAdmissionEvidenceResultBytes;
+    return ProtectedOperationResult::Success;
+  }
+  if (state->admission_evidence_replay_count >=
+      kMaximumAdmissionEvidenceReplays) {
+    BuildAdmissionEvidenceResult(
+        request, 7U, envelope_sha256, state->state_sha256, request_sha256,
+        nullptr, nullptr, result);
+    *result_length = kSignAdmissionEvidenceResultBytes;
+    return ProtectedOperationResult::Success;
+  }
+
+  std::array<wchar_t, 64U> staging_component{};
+  ProtectedPath staging_path{};
+  HANDLE artifact = nullptr;
+  ProtectedObjectIdentity artifact_identity{};
+  std::array<wchar_t, 32U> generation_component{};
+  ProtectedPath keyset_path{};
+  HANDLE keyset_directory = nullptr;
+  ProtectedObjectIdentity keyset_identity{};
+  ProtectedPath key_path{};
+  HANDLE key_file = nullptr;
+  ProtectedObjectIdentity key_identity{};
+  std::uint64_t key_length = 0U;
+  bool delete_pending = false;
+  bool prepared =
+      BuildEvidenceStagingComponent(request.operation_id, &staging_component) &&
+      ComposeProtectedChildPath(
+          state->filesystem.state_root_path,
+          staging_component.data(),
+          &staging_path) &&
+      CreateProtectedFile(state->filesystem, staging_path, true, &artifact) &&
+      WriteReadExact(
+          state->filesystem,
+          artifact,
+          body + 96U,
+          kAdmissionEvidenceEnvelopeBytes) &&
+      ProtectedFilesystemRecoveryCheckpoint(state->filesystem) &&
+      FlushFileBuffers(artifact) != FALSE &&
+      ProtectedFilesystemRecoveryCheckpoint(state->filesystem) &&
+      CaptureProtectedObjectIdentity(
+          state->filesystem, artifact, &artifact_identity);
+  if (prepared) {
+    FILE_DISPOSITION_INFO disposition{};
+    disposition.DeleteFile = TRUE;
+    delete_pending =
+        ProtectedFilesystemRecoveryCheckpoint(state->filesystem) &&
+        SetFileInformationByHandle(
+            artifact,
+            FileDispositionInfo,
+            &disposition,
+            sizeof(disposition)) != FALSE &&
+        ProtectedFilesystemRecoveryCheckpoint(state->filesystem);
+    // The production signing factory revalidates the exact captured identity,
+    // one-link length, and DeletePending state on the already-open handle. A
+    // delete-pending NTFS name reports access denied rather than file-not-found
+    // until the final handle closes, so a path-based absence probe is not a
+    // sound predicate here.
+    prepared = delete_pending;
+  }
+  if (prepared) {
+    prepared = BuildGenerationComponent(
+                   state->active_generation, &generation_component) &&
+        ComposeProtectedChildPath(
+            state->filesystem.keysets_path,
+            generation_component.data(),
+            &keyset_path) &&
+        OpenProtectedExistingDirectory(
+            state->filesystem,
+            keyset_path,
+            false,
+            &keyset_directory,
+            &keyset_identity) &&
+        keyset_identity.volume_serial_number ==
+            state->active_keyset_directory_identity.volume_serial_number &&
+        keyset_identity.file_id ==
+            state->active_keyset_directory_identity.file_id &&
+        ComposeProtectedChildPath(
+            keyset_path, L"admission-evidence.pk8", &key_path) &&
+        OpenProtectedExistingFileForRename(
+            state->filesystem,
+            key_path,
+            48U,
+            &key_file,
+            &key_length,
+            &key_identity) &&
+        key_length == 48U &&
+        key_identity.volume_serial_number ==
+            state->active_keyset_file_identities[2U].volume_serial_number &&
+        key_identity.file_id ==
+            state->active_keyset_file_identities[2U].file_id;
+  }
+
+  std::array<std::uint8_t, 64U> signature{};
+  ProtectedSigningLease lease{};
+  if (prepared) {
+    ProtectedSigningFactoryInput lease_input{};
+    lease_input.parent = state->filesystem.state_root;
+    lease_input.artifact = artifact;
+    lease_input.key_file = key_file;
+    lease_input.stop_event = stop_event;
+    lease_input.parent_identity = state->filesystem.state_root_identity;
+    lease_input.artifact_identity = artifact_identity;
+    lease_input.key_identity = key_identity;
+    lease_input.artifact_sha256 = envelope_sha256;
+    lease_input.key_file_sha256 = state->active_keyset_file_hashes[2U];
+    lease_input.spki = state->admission_evidence_spki;
+    lease_input.key_id = state->admission_evidence_spki_sha256;
+    lease_input.custody_state_sha256 = state->state_sha256;
+    lease_input.incarnation = state->active_receipt_sha256;
+    lease_input.purpose = ProtectedArtifactPurpose::AdmissionEvidence;
+    lease_input.artifact_length = kAdmissionEvidenceEnvelopeBytes;
+    lease_input.generation = state->active_generation;
+    lease_input.deadline_ms = deadline_ms;
+    prepared = CreateProtectedSigningLease(lease_input, &lease) &&
+        SignProtectedArtifact(&lease, &signature);
+  }
+
+  if (key_file != nullptr && key_file != INVALID_HANDLE_VALUE) {
+    CloseHandle(key_file);
+  }
+  if (keyset_directory != nullptr && keyset_directory != INVALID_HANDLE_VALUE) {
+    CloseHandle(keyset_directory);
+  }
+  if (artifact != nullptr && artifact != INVALID_HANDLE_VALUE) {
+    if (!delete_pending) {
+      FILE_DISPOSITION_INFO disposition{};
+      disposition.DeleteFile = TRUE;
+      delete_pending =
+          ProtectedFilesystemRecoveryCheckpoint(state->filesystem) &&
+          SetFileInformationByHandle(
+              artifact,
+              FileDispositionInfo,
+              &disposition,
+              sizeof(disposition)) != FALSE &&
+          ProtectedFilesystemRecoveryCheckpoint(state->filesystem);
+    }
+    CloseHandle(artifact);
+  }
+  if (!prepared) {
+    SecureZeroMemory(signature.data(), signature.size());
+    BuildAdmissionEvidenceResult(
+        request, 8U, envelope_sha256, state->state_sha256, request_sha256,
+        nullptr, nullptr, result);
+    *result_length = kSignAdmissionEvidenceResultBytes;
+    return ProtectedOperationResult::Success;
+  }
+
+  BuildAdmissionEvidenceResult(
+      request, 1U, envelope_sha256, state->state_sha256, request_sha256,
+      state, &signature, result);
+  auto& remembered =
+      state->admission_evidence_replays[
+          state->admission_evidence_replay_count++];
+  remembered.present = true;
+  remembered.operation_id = request.operation_id;
+  remembered.body_sha256 = request_sha256;
+  remembered.operator_sid_length = operator_sid_length;
+  std::memcpy(
+      remembered.operator_sid.data(), operator_sid, operator_sid_length);
+  remembered.result = *result;
+  SecureZeroMemory(signature.data(), signature.size());
+  *result_length = kSignAdmissionEvidenceResultBytes;
+  return ProtectedOperationResult::Success;
+}
+
 }  // namespace
 
 #if defined(GOATCITADEL_PROVISIONER_TESTING)
@@ -11406,9 +11724,26 @@ ProtectedOperationResult ExecuteProtectedOperation(
   }
   result->fill(0U);
   *result_length = 0U;
+  if (opcode == static_cast<std::uint8_t>(Opcode::SignAdmissionEvidence)) {
+    return ExecuteAdmissionEvidenceSignature(
+        state,
+        body,
+        body_length,
+        operator_sid,
+        operator_sid_length,
+        deadline_ms,
+        stop_event,
+        result,
+        result_length);
+  }
   if (opcode == static_cast<std::uint8_t>(Opcode::CreateKeyset)) {
     CreateKeysetRequest request{};
     if (!DecodeCreateKeysetRequest(body, body_length, &request)) return ProtectedOperationResult::ProtocolInvalid;
+    if (FindAdmissionEvidenceReplay(state, request.operation_id) != nullptr) {
+      BuildCreateRejection(request, 4U, state->state_sha256, result);
+      *result_length = kCreateKeysetResultBytes;
+      return ProtectedOperationResult::Success;
+    }
     const ProtectedOperationProjection* existing_operation =
         FindOperationProjection(*state, request.operation_id);
     if (existing_operation == nullptr && state->revoke_replay.present &&
@@ -11521,6 +11856,11 @@ ProtectedOperationResult ExecuteProtectedOperation(
   if (opcode == static_cast<std::uint8_t>(Opcode::RevokeLocalKeyset)) {
     RevokeKeysetRequest request{};
     if (!DecodeRevokeKeysetRequest(body, body_length, &request)) return ProtectedOperationResult::ProtocolInvalid;
+    if (FindAdmissionEvidenceReplay(state, request.operation_id) != nullptr) {
+      BuildRevokeRejection(request, 4U, state->state_sha256, result);
+      *result_length = kRevokeKeysetResultBytes;
+      return ProtectedOperationResult::Success;
+    }
     const ProtectedOperationProjection* existing_operation =
         FindOperationProjection(*state, request.operation_id);
     if (existing_operation == nullptr && state->create_replay.present &&

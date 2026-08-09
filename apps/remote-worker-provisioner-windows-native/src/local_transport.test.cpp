@@ -238,13 +238,13 @@ void TestLiteralMessages() {
             (UINT64_C(1) << static_cast<std::uint8_t>(opcode))) != 0U;
   };
   Expect(
-      gc::kGcpaCallableOpcodeBitmap == UINT64_C(0x0000000000090002) &&
+      gc::kGcpaCallableOpcodeBitmap == UINT64_C(0x00000000000D0002) &&
           callable(gc::Opcode::Inspect) &&
           callable(gc::Opcode::CreateKeyset) &&
           callable(gc::Opcode::RevokeLocalKeyset) &&
           !callable(gc::Opcode::AcquireKeyForSigning) &&
-          !callable(gc::Opcode::CommitSignature),
-      "GCPA exposes INSPECT/CREATE/REVOKE only and keeps signer operations dark");
+          callable(gc::Opcode::SignAdmissionEvidence),
+      "GCPA exposes INSPECT/CREATE/REVOKE/SIGN_ADMISSION_EVIDENCE only");
   const Fixture fixture = MakeFixture();
   const auto expected_client_hello = Hex(
       "47435041010001000100000020000000"
@@ -254,7 +254,7 @@ void TestLiteralMessages() {
       "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
       "2122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40"
       "4142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f60"
-      "02000f00070007000200090000000000");
+      "02000f000700070002000d0000000000");
   const auto expected_request = Hex(
       "474350410100020001000000b8000000"
       "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"

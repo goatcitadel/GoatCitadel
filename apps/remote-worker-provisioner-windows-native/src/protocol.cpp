@@ -165,6 +165,77 @@ bool DecodeRevokeKeysetRequest(
   return true;
 }
 
+bool DecodeAdmissionEvidenceEnvelope(
+    const std::uint8_t* bytes,
+    std::size_t length,
+    AdmissionEvidenceEnvelope* envelope) noexcept {
+  if (envelope == nullptr) return false;
+  *envelope = AdmissionEvidenceEnvelope{};
+  if (bytes == nullptr || length != kAdmissionEvidenceEnvelopeBytes ||
+      bytes[0] != 'G' || bytes[1] != 'C' || bytes[2] != 'A' ||
+      bytes[3] != 'E' || ReadU16(bytes + 4U) != 1U || bytes[6] != 1U ||
+      bytes[7] != 0U || ReadU32(bytes + 8U) != length ||
+      ReadU32(bytes + 12U) != 0U || AllZero(bytes + 16U, 16U) ||
+      AllZero(bytes + 32U, 32U) || ReadU64(bytes + 64U) == 0U ||
+      !AllZero(bytes + 72U, 24U)) {
+    return false;
+  }
+  constexpr std::array<std::size_t, 6U> kHashOffsets = {
+      96U, 128U, 160U, 192U, 224U, 256U};
+  for (const std::size_t offset : kHashOffsets) {
+    if (AllZero(bytes + offset, 32U)) return false;
+  }
+  for (std::size_t index = 0U; index < envelope->operation_id.size(); ++index) {
+    envelope->operation_id[index] = bytes[16U + index];
+  }
+  for (std::size_t index = 0U; index < 32U; ++index) {
+    envelope->evidence_nonce_sha256[index] = bytes[32U + index];
+    envelope->context_sha256[index] = bytes[96U + index];
+    envelope->runtime_manifest_sha256[index] = bytes[128U + index];
+    envelope->worker_public_key_spki_sha256[index] = bytes[160U + index];
+    envelope->download_verification_receipt_sha256[index] =
+        bytes[192U + index];
+    envelope->installed_tree_attestation_sha256[index] =
+        bytes[224U + index];
+    envelope->installed_tree_verification_receipt_sha256[index] =
+        bytes[256U + index];
+  }
+  envelope->worker_generation = ReadU64(bytes + 64U);
+  return true;
+}
+
+bool DecodeSignAdmissionEvidenceRequest(
+    const std::uint8_t* bytes,
+    std::size_t length,
+    SignAdmissionEvidenceRequest* request) noexcept {
+  if (request == nullptr) return false;
+  *request = SignAdmissionEvidenceRequest{};
+  if (bytes == nullptr || length != kSignAdmissionEvidenceRequestBytes ||
+      AllZero(bytes, 16U) || AllZero(bytes + 16U, 32U) ||
+      ReadU16(bytes + 48U) != 1U || bytes[50U] != 2U ||
+      bytes[51U] != 0U || ReadU64(bytes + 52U) == 0U ||
+      AllZero(bytes + 60U, 32U) ||
+      ReadU32(bytes + 92U) != kAdmissionEvidenceEnvelopeBytes ||
+      !DecodeAdmissionEvidenceEnvelope(
+          bytes + 96U, kAdmissionEvidenceEnvelopeBytes, &request->envelope)) {
+    return false;
+  }
+  for (std::size_t index = 0U; index < request->operation_id.size(); ++index) {
+    request->operation_id[index] = bytes[index];
+  }
+  for (std::size_t index = 0U; index < 32U; ++index) {
+    request->expected_state_sha256[index] = bytes[16U + index];
+    request->expected_keyset_receipt_sha256[index] = bytes[60U + index];
+  }
+  request->expected_generation = ReadU64(bytes + 52U);
+  if (request->operation_id == request->envelope.operation_id &&
+      request->expected_generation == request->envelope.worker_generation) {
+    return true;
+  }
+  *request = SignAdmissionEvidenceRequest{};
+  return false;
+}
+
 bool EncodeProtectedInspectResult(
     std::uint16_t pe_machine,
     const std::uint8_t* custody_projection,
@@ -199,7 +270,7 @@ bool IsRecognizedOpcode(std::uint8_t opcode) noexcept {
     case Opcode::Inspect:
     case Opcode::CreateKeyset:
     case Opcode::AcquireKeyForSigning:
-    case Opcode::CommitSignature:
+    case Opcode::SignAdmissionEvidence:
     case Opcode::RevokeLocalKeyset:
     case Opcode::BeginInstall:
     case Opcode::SealAndPublishInstall:

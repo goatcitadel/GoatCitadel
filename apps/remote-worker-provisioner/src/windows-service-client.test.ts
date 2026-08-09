@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, createPrivateKey, createPublicKey, sign } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -20,11 +20,13 @@ import {
   WindowsHelperProcessError,
   WindowsHelperProtocolError,
   decodeWindowsHelperRequest,
+  buildWindowsProtectedAdmissionEvidenceSigningBytes,
   encodeWindowsHelperFrame,
   encodeWindowsHelperInspectRequest,
   encodeWindowsHelperRequest,
   encodeWindowsProtectedCreateKeysetRequest,
   encodeWindowsProtectedRevokeKeysetRequest,
+  encodeWindowsProtectedSignAdmissionEvidenceRequest,
 } from "./windows-helper-protocol.js";
 import {
   WINDOWS_SERVICE_CLIENT_ARGUMENT,
@@ -37,6 +39,7 @@ import {
   revokeWindowsProtectedKeyset,
   runWindowsServiceClient,
   runWindowsServiceClientOneShot,
+  signWindowsProtectedAdmissionEvidence,
 } from "./windows-service-client.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -141,6 +144,32 @@ const mutationRevokeRequest = {
   reason: "suspected_compromise" as const,
   expectedKeysetReceiptSha256: mutationReceipt,
 };
+const mutationSignRequest = {
+  operationId: mutationOperationId,
+  expectedStateSha256: mutationExpectedState,
+  expectedGeneration: 7n,
+  expectedKeysetReceiptSha256: mutationReceipt,
+  envelope: {
+    operationId: mutationOperationId,
+    evidenceNonceSha256: Buffer.alloc(32, 0x10),
+    workerGeneration: 7n,
+    contextSha256: Buffer.alloc(32, 0x20),
+    runtimeManifestSha256: Buffer.alloc(32, 0x30),
+    workerPublicKeySpkiSha256: Buffer.alloc(32, 0x40),
+    downloadVerificationReceiptSha256: Buffer.alloc(32, 0x50),
+    installedTreeAttestationSha256: Buffer.alloc(32, 0x60),
+    installedTreeVerificationReceiptSha256: Buffer.alloc(32, 0x70),
+  },
+};
+const mutationSignPrivateKey = createPrivateKey({
+  key: Buffer.concat([
+    Buffer.from("302e020100300506032b657004220420", "hex"),
+    Buffer.from("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60", "hex"),
+  ]),
+  format: "der",
+  type: "pkcs8",
+});
+const mutationSignSpki = createPublicKey(mutationSignPrivateKey).export({ format: "der", type: "spki" });
 
 function createSuccessPayload(): Buffer {
   const payload = Buffer.alloc(320);
@@ -169,6 +198,25 @@ function revokeSuccessPayload(): Buffer {
   mutationExpectedState.copy(payload, 40);
   payload.fill(0x62, 72, 136);
   payload.fill(0x72, 136, 200);
+  return payload;
+}
+
+function signSuccessPayload(): Buffer {
+  const frame = encodeWindowsProtectedSignAdmissionEvidenceRequest(mutationSignRequest);
+  const body = frame.subarray(16);
+  const envelope = body.subarray(96);
+  const payload = Buffer.alloc(320);
+  payload.writeUInt16LE(1, 0);
+  payload.writeUInt16LE(1, 2);
+  mutationOperationId.copy(payload, 8);
+  payload.writeBigUInt64LE(7n, 24);
+  createHash("sha256").update(envelope).digest().copy(payload, 32);
+  mutationReceipt.copy(payload, 64);
+  createHash("sha256").update(mutationSignSpki).digest().copy(payload, 96);
+  mutationSignSpki.copy(payload, 128);
+  sign(null, buildWindowsProtectedAdmissionEvidenceSigningBytes(envelope), mutationSignPrivateKey).copy(payload, 172);
+  mutationExpectedState.copy(payload, 236);
+  createHash("sha256").update(body).digest().copy(payload, 268);
   return payload;
 }
 
@@ -385,7 +433,7 @@ describe("protected Windows service-client GCPW disposition", () => {
     for (const [code, exitCode] of cases) {
       const request =
         code === WINDOWS_HELPER_ERROR_CODE.OPERATION_UNAVAILABLE
-          ? encodeWindowsHelperRequest(WINDOWS_HELPER_OPCODE.COMMIT_SIGNATURE, Buffer.from([0x00, 0x7f, 0xff]))
+          ? encodeWindowsHelperRequest(WINDOWS_HELPER_OPCODE.ACQUIRE_KEY_FOR_SIGNING, Buffer.from([0x00, 0x7f, 0xff]))
           : encodeWindowsHelperInspectRequest();
       const { fake, result } = startValidated(request);
       fake.stdout.write(errorResponse(code));
@@ -417,9 +465,9 @@ describe("protected Windows service-client GCPW disposition", () => {
     mismatch.fake.emitClose(WINDOWS_SERVICE_CLIENT_EXIT_CODE.SUCCESS);
     await expect(mismatch.result).rejects.toThrow(/does not match GCPW response disposition/);
 
-    const mutation = encodeWindowsHelperRequest(WINDOWS_HELPER_OPCODE.COMMIT_SIGNATURE, Buffer.from([1]));
+    const mutation = encodeWindowsHelperRequest(WINDOWS_HELPER_OPCODE.ACQUIRE_KEY_FOR_SIGNING, Buffer.from([1]));
     const mutationSuccess = startValidated(mutation);
-    mutationSuccess.fake.stdout.write(encodeWindowsHelperFrame(WINDOWS_HELPER_OPCODE.COMMIT_SIGNATURE | 0x80));
+    mutationSuccess.fake.stdout.write(encodeWindowsHelperFrame(WINDOWS_HELPER_OPCODE.ACQUIRE_KEY_FOR_SIGNING | 0x80));
     mutationSuccess.fake.emitClose(WINDOWS_SERVICE_CLIENT_EXIT_CODE.SUCCESS);
     await expect(mutationSuccess.result).rejects.toThrow(/unavailable opcode/);
 
@@ -502,6 +550,25 @@ describe("typed protected service operations", () => {
       generation: 7n,
       reason: "suspected_compromise",
       expectedStateSha256: mutationExpectedState,
+    });
+  });
+
+  it("passes canonical evidence only over stdin and returns a public, verified signature receipt", async () => {
+    const fake = createFakeChild();
+    spawnMock.mockReturnValueOnce(fake.child);
+    const result = signWindowsProtectedAdmissionEvidence(process.execPath, mutationSignRequest);
+    fake.emitSpawn();
+    const exactFrame = encodeWindowsProtectedSignAdmissionEvidenceRequest(mutationSignRequest);
+    expect(Buffer.concat(fake.stdinChunks)).toEqual(exactFrame);
+    expect(spawnMock).toHaveBeenCalledWith(process.execPath, ["--service-stdio"], expect.objectContaining({ env: {} }));
+    fake.stdout.write(encodeWindowsHelperFrame(0x92, signSuccessPayload()));
+    fake.emitClose(WINDOWS_SERVICE_CLIENT_EXIT_CODE.SUCCESS);
+    await expect(result).resolves.toMatchObject({
+      disposition: "signed",
+      operationId: mutationOperationId,
+      generation: 7n,
+      keysetReceiptSha256: mutationReceipt,
+      admissionEvidenceSpki: mutationSignSpki,
     });
   });
 
@@ -804,7 +871,7 @@ describe("shared literal GCPW/GCPA and projection vectors", () => {
         "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20" +
         "2122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40" +
         "4142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f60" +
-        "02000f00070007000200090000000000",
+        "02000f000700070002000d0000000000",
     );
   });
 

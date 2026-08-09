@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
+import { createHash, createPrivateKey, createPublicKey, sign } from "node:crypto";
 import { isAbsolute } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -15,6 +16,7 @@ import {
   WINDOWS_HELPER_REQUEST_ID,
   WINDOWS_HELPER_SECRET_MAX_BYTES,
   WINDOWS_PROTECTED_CALLABLE_OPCODE_BITMAP,
+  WINDOWS_PROTECTED_ADMISSION_EVIDENCE_ENVELOPE_BYTES,
   WindowsHelperExitError,
   WindowsHelperProcessError,
   WindowsHelperProtocolError,
@@ -23,15 +25,21 @@ import {
   decodeWindowsHelperRequest,
   decodeWindowsHelperResponse,
   decodeWindowsProtectedCreateKeysetResponse,
+  decodeWindowsProtectedAdmissionEvidenceEnvelope,
   decodeWindowsProtectedInspectResponse,
   decodeWindowsProtectedRevokeKeysetResponse,
+  decodeWindowsProtectedSignAdmissionEvidenceResponse,
   encodeWindowsHelperFrame,
   encodeWindowsHelperInspectRequest,
   encodeWindowsHelperRequest,
   encodeWindowsProtectedCreateKeysetRequest,
+  encodeWindowsProtectedAdmissionEvidenceEnvelope,
   encodeWindowsProtectedRevokeKeysetRequest,
+  encodeWindowsProtectedSignAdmissionEvidenceRequest,
+  buildWindowsProtectedAdmissionEvidenceSigningBytes,
   runWindowsHelperOneShot,
   runWindowsProvisionerInspect,
+  validateWindowsProtectedRequestPayload,
 } from "./windows-helper-protocol.js";
 
 function inspectPayload(
@@ -91,6 +99,68 @@ function revokeRequestFixture() {
   };
 }
 
+function admissionEvidenceEnvelopeFixture() {
+  return {
+    operationId: protectedOperationId,
+    evidenceNonceSha256: Buffer.alloc(32, 0x10),
+    workerGeneration: 7n,
+    contextSha256: Buffer.alloc(32, 0x20),
+    runtimeManifestSha256: Buffer.alloc(32, 0x30),
+    workerPublicKeySpkiSha256: Buffer.alloc(32, 0x40),
+    downloadVerificationReceiptSha256: Buffer.alloc(32, 0x50),
+    installedTreeAttestationSha256: Buffer.alloc(32, 0x60),
+    installedTreeVerificationReceiptSha256: Buffer.alloc(32, 0x70),
+  };
+}
+
+function signAdmissionEvidenceRequestFixture() {
+  return {
+    operationId: protectedOperationId,
+    expectedStateSha256: protectedExpectedState,
+    expectedGeneration: 7n,
+    expectedKeysetReceiptSha256: Buffer.alloc(32, 0x44),
+    envelope: admissionEvidenceEnvelopeFixture(),
+  };
+}
+
+const admissionEvidencePrivateKey = createPrivateKey({
+  key: Buffer.concat([
+    Buffer.from("302e020100300506032b657004220420", "hex"),
+    Buffer.from("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60", "hex"),
+  ]),
+  format: "der",
+  type: "pkcs8",
+});
+const admissionEvidenceSpki = createPublicKey(admissionEvidencePrivateKey).export({
+  format: "der",
+  type: "spki",
+});
+
+function signAdmissionEvidenceResultPayload(disposition: number): Buffer {
+  const request = signAdmissionEvidenceRequestFixture();
+  const requestFrame = encodeWindowsProtectedSignAdmissionEvidenceRequest(request);
+  const requestBody = requestFrame.subarray(WINDOWS_HELPER_HEADER_BYTES);
+  const envelope = requestBody.subarray(96);
+  const payload = Buffer.alloc(320);
+  payload.writeUInt16LE(1, 0);
+  payload.writeUInt16LE(disposition, 2);
+  protectedOperationId.copy(payload, 8);
+  payload.writeBigUInt64LE(7n, 24);
+  createHash("sha256").update(envelope).digest().copy(payload, 32);
+  if (disposition === 1 || disposition === 2) {
+    request.expectedKeysetReceiptSha256.copy(payload, 64);
+    createHash("sha256").update(admissionEvidenceSpki).digest().copy(payload, 96);
+    admissionEvidenceSpki.copy(payload, 128);
+    sign(null, buildWindowsProtectedAdmissionEvidenceSigningBytes(envelope), admissionEvidencePrivateKey).copy(
+      payload,
+      172,
+    );
+  }
+  protectedExpectedState.copy(payload, 236);
+  createHash("sha256").update(requestBody).digest().copy(payload, 268);
+  return payload;
+}
+
 function createResultPayload(disposition: number): Buffer {
   const payload = Buffer.alloc(320);
   payload.writeUInt16LE(1, 0);
@@ -133,12 +203,15 @@ describe("GCPW v1 frame contract", () => {
   });
 
   it("serializes payload length and bytes without padding", () => {
-    const frame = encodeWindowsHelperRequest(WINDOWS_HELPER_OPCODE.COMMIT_SIGNATURE, Buffer.from([0x00, 0x7f, 0xff]));
+    const frame = encodeWindowsHelperRequest(
+      WINDOWS_HELPER_OPCODE.SIGN_ADMISSION_EVIDENCE,
+      Buffer.from([0x00, 0x7f, 0xff]),
+    );
     expect(frame.byteLength).toBe(WINDOWS_HELPER_HEADER_BYTES + 3);
     expect(frame.toString("hex")).toBe("47435057010012000100000003000000007fff");
     expect(decodeWindowsHelperRequest(frame)).toMatchObject({
       version: 1,
-      opcode: WINDOWS_HELPER_OPCODE.COMMIT_SIGNATURE,
+      opcode: WINDOWS_HELPER_OPCODE.SIGN_ADMISSION_EVIDENCE,
       flags: 0,
       requestId: WINDOWS_HELPER_REQUEST_ID,
       payload: Buffer.from([0x00, 0x7f, 0xff]),
@@ -482,6 +555,196 @@ describe("W1B1A protected GCPW codecs", () => {
         revokeRequestFixture(),
       ),
     ).toThrow(WindowsHelperProtocolError);
+  });
+
+  it("serializes one deterministic, fixed-size, secret-free admission-evidence envelope", () => {
+    const input = admissionEvidenceEnvelopeFixture();
+    const first = encodeWindowsProtectedAdmissionEvidenceEnvelope(input);
+    const second = encodeWindowsProtectedAdmissionEvidenceEnvelope(input);
+    expect(first).toEqual(second);
+    expect(first).toHaveLength(WINDOWS_PROTECTED_ADMISSION_EVIDENCE_ENVELOPE_BYTES);
+    expect(first.subarray(0, 16).toString("hex")).toBe("47434145010001002001000000000000");
+    expect(decodeWindowsProtectedAdmissionEvidenceEnvelope(first)).toEqual(input);
+    expect(buildWindowsProtectedAdmissionEvidenceSigningBytes(first).subarray(-first.byteLength)).toEqual(first);
+
+    for (const mutate of [
+      (value: Buffer) => {
+        value[0] = 0;
+      },
+      (value: Buffer) => value.writeUInt16LE(2, 4),
+      (value: Buffer) => value.writeUInt8(2, 6),
+      (value: Buffer) => value.writeUInt8(1, 7),
+      (value: Buffer) => value.writeUInt32LE(287, 8),
+      (value: Buffer) => value.writeUInt32LE(1, 12),
+      (value: Buffer) => value.fill(0, 16, 32),
+      (value: Buffer) => value.fill(0, 32, 64),
+      (value: Buffer) => value.writeBigUInt64LE(0n, 64),
+      (value: Buffer) => value.writeUInt8(1, 72),
+      (value: Buffer) => value.fill(0, 96, 128),
+      (value: Buffer) => value.fill(0, 256, 288),
+    ]) {
+      const invalid = Buffer.from(first);
+      mutate(invalid);
+      expect(() => decodeWindowsProtectedAdmissionEvidenceEnvelope(invalid)).toThrow(WindowsHelperProtocolError);
+    }
+    expect(() => decodeWindowsProtectedAdmissionEvidenceEnvelope(first.subarray(0, -1))).toThrow(
+      WindowsHelperProtocolError,
+    );
+    expect(() =>
+      decodeWindowsProtectedAdmissionEvidenceEnvelope(Buffer.concat([first, Buffer.alloc(1)])),
+    ).toThrow(WindowsHelperProtocolError);
+  });
+
+  it("binds the admission-evidence request operation, generation, state, receipt, and exact envelope", () => {
+    const request = signAdmissionEvidenceRequestFixture();
+    const frame = encodeWindowsProtectedSignAdmissionEvidenceRequest(request);
+    const decoded = decodeWindowsHelperRequest(frame);
+    expect(decoded.opcode).toBe(WINDOWS_HELPER_OPCODE.SIGN_ADMISSION_EVIDENCE);
+    expect(decoded.payload).toHaveLength(384);
+    expect(decoded.payload.subarray(0, 16)).toEqual(request.operationId);
+    expect(decoded.payload.subarray(16, 48)).toEqual(request.expectedStateSha256);
+    expect(decoded.payload.readUInt16LE(48)).toBe(1);
+    expect(decoded.payload.readUInt8(50)).toBe(2);
+    expect(decoded.payload.readUInt8(51)).toBe(0);
+    expect(decoded.payload.readBigUInt64LE(52)).toBe(7n);
+    expect(decoded.payload.subarray(60, 92)).toEqual(request.expectedKeysetReceiptSha256);
+    expect(decoded.payload.readUInt32LE(92)).toBe(288);
+    expect(() => validateWindowsProtectedRequestPayload(decoded.opcode, decoded.payload)).not.toThrow();
+
+    expect(() =>
+      encodeWindowsProtectedSignAdmissionEvidenceRequest({
+        ...request,
+        operationId: Buffer.alloc(16, 0x99),
+      }),
+    ).toThrow(/must equal envelope/);
+    expect(() =>
+      encodeWindowsProtectedSignAdmissionEvidenceRequest({
+        ...request,
+        expectedGeneration: 8n,
+      }),
+    ).toThrow(/must equal envelope/);
+
+    for (const mutate of [
+      (value: Buffer) => value.writeUInt16LE(2, 48),
+      (value: Buffer) => value.writeUInt8(1, 50),
+      (value: Buffer) => value.writeUInt8(1, 51),
+      (value: Buffer) => value.writeBigUInt64LE(0n, 52),
+      (value: Buffer) => value.fill(0, 60, 92),
+      (value: Buffer) => value.writeUInt32LE(287, 92),
+      (value: Buffer) => {
+        value[112] = value[112]! ^ 1;
+      },
+      (value: Buffer) => value.writeBigUInt64LE(8n, 160),
+    ]) {
+      const invalid = Buffer.from(decoded.payload);
+      mutate(invalid);
+      expect(() =>
+        validateWindowsProtectedRequestPayload(WINDOWS_HELPER_OPCODE.SIGN_ADMISSION_EVIDENCE, invalid),
+      ).toThrow(WindowsHelperProtocolError);
+    }
+    expect(() =>
+      validateWindowsProtectedRequestPayload(
+        WINDOWS_HELPER_OPCODE.SIGN_ADMISSION_EVIDENCE,
+        decoded.payload.subarray(0, -1),
+      ),
+    ).toThrow(WindowsHelperProtocolError);
+    expect(() =>
+      validateWindowsProtectedRequestPayload(
+        WINDOWS_HELPER_OPCODE.SIGN_ADMISSION_EVIDENCE,
+        Buffer.concat([decoded.payload, Buffer.alloc(1)]),
+      ),
+    ).toThrow(WindowsHelperProtocolError);
+  });
+
+  it("verifies signed and replayed admission evidence in the fixed domain and rejects malformed receipts", () => {
+    const request = signAdmissionEvidenceRequestFixture();
+    for (const [number, name] of [
+      [1, "signed"],
+      [2, "exact_replay"],
+      [3, "stale_state"],
+      [4, "keyset_unavailable"],
+      [5, "changed_replay"],
+      [6, "operator_mismatch"],
+      [7, "replay_capacity_exhausted"],
+      [8, "signing_failed"],
+    ] as const) {
+      const result = decodeWindowsProtectedSignAdmissionEvidenceResponse(
+        encodeWindowsHelperFrame(0x92, signAdmissionEvidenceResultPayload(number)),
+        request,
+      );
+      expect(result.disposition).toBe(name);
+      if (number <= 2) {
+        expect(result.keysetReceiptSha256).toEqual(request.expectedKeysetReceiptSha256);
+        expect(result.admissionEvidenceSpki).toEqual(admissionEvidenceSpki);
+        expect(result.signature).not.toEqual(Buffer.alloc(64));
+      } else {
+        expect(result.signature).toEqual(Buffer.alloc(64));
+      }
+    }
+
+    const canonical = signAdmissionEvidenceResultPayload(1);
+    for (const mutate of [
+      (value: Buffer) => value.writeUInt16LE(2, 0),
+      (value: Buffer) => value.writeUInt16LE(0, 2),
+      (value: Buffer) => value.writeUInt16LE(9, 2),
+      (value: Buffer) => value.writeUInt32LE(1, 4),
+      (value: Buffer) => {
+        value[8] = value[8]! ^ 1;
+      },
+      (value: Buffer) => value.writeBigUInt64LE(8n, 24),
+      (value: Buffer) => {
+        value[32] = value[32]! ^ 1;
+      },
+      (value: Buffer) => value.fill(0, 64, 96),
+      (value: Buffer) => {
+        value[96] = value[96]! ^ 1;
+      },
+      (value: Buffer) => {
+        value[128] = value[128]! ^ 1;
+      },
+      (value: Buffer) => value.fill(0, 172, 236),
+      (value: Buffer) => {
+        value[172] = value[172]! ^ 1;
+      },
+      (value: Buffer) => {
+        value[236] = value[236]! ^ 1;
+      },
+      (value: Buffer) => {
+        value[268] = value[268]! ^ 1;
+      },
+      (value: Buffer) => value.writeUInt8(1, 300),
+    ]) {
+      const invalid = Buffer.from(canonical);
+      mutate(invalid);
+      expect(() =>
+        decodeWindowsProtectedSignAdmissionEvidenceResponse(encodeWindowsHelperFrame(0x92, invalid), request),
+      ).toThrow(WindowsHelperProtocolError);
+    }
+
+    const wrongDomain = Buffer.from(canonical);
+    const requestBody = encodeWindowsProtectedSignAdmissionEvidenceRequest(request).subarray(WINDOWS_HELPER_HEADER_BYTES);
+    sign(null, requestBody.subarray(96), admissionEvidencePrivateKey).copy(wrongDomain, 172);
+    expect(() =>
+      decodeWindowsProtectedSignAdmissionEvidenceResponse(encodeWindowsHelperFrame(0x92, wrongDomain), request),
+    ).toThrow(/fixed domain/);
+    expect(() =>
+      decodeWindowsProtectedSignAdmissionEvidenceResponse(encodeWindowsHelperFrame(0x93, canonical), request),
+    ).toThrow(/does not match/);
+    expect(() =>
+      decodeWindowsProtectedSignAdmissionEvidenceResponse(
+        encodeWindowsHelperFrame(0x92, canonical.subarray(0, -1)),
+        request,
+      ),
+    ).toThrow(WindowsHelperProtocolError);
+
+    const rejectionWithAuthority = signAdmissionEvidenceResultPayload(5);
+    rejectionWithAuthority[64] = 1;
+    expect(() =>
+      decodeWindowsProtectedSignAdmissionEvidenceResponse(
+        encodeWindowsHelperFrame(0x92, rejectionWithAuthority),
+        request,
+      ),
+    ).toThrow(/rejection authority/);
   });
 });
 

@@ -1183,21 +1183,21 @@ export function buildRemoteWorkerWindowsProvisioner({ target, outDir }) {
       }),
       nativeCodeEvidence,
       ed25519: Object.freeze({
-        mode: "fixed-protected-startup-kat-only",
+        mode: "fixed-protected-kat-and-admission-evidence-signing",
         rfc8032TestOne: true,
         rfc8410CanonicalEncodings: true,
-        realKey: false,
-        signingLease: false,
-        callableMutation: false,
+        realKey: true,
+        signingLease: true,
+        callableMutation: true,
       }),
       protectedArtifactSigning: Object.freeze({
-        tranche: "W1B1B-P0",
+        tranche: "M2-admission-evidence",
         compiledObject: true,
-        finalServiceReachable: false,
-        productionFactory: false,
-        productionCaller: false,
-        artifactProducer: false,
-        signingRoute: false,
+        finalServiceReachable: true,
+        productionFactory: true,
+        productionCaller: true,
+        artifactProducer: true,
+        signingRoute: true,
         testOnlyFactories: true,
         exactArtifactPasses: 2,
         postSignEquationValidation: true,
@@ -1209,7 +1209,8 @@ export function buildRemoteWorkerWindowsProvisioner({ target, outDir }) {
         service: Object.freeze(["SCM-no-args", "--inspect-stdio"]),
         client: Object.freeze(["--service-stdio"]),
       }),
-      productionDark: true,
+      productionDark: false,
+      protectedAdmissionEvidenceSigningCallable: true,
       externalProof: Object.freeze({
         elevatedScm: "HOLD",
         successfulProductionClientAuthentication: "HOLD",
@@ -1868,7 +1869,8 @@ function inspectNativeCryptographyEvidence({ toolchain, first, second, target })
   if (/(?:Ed25519[^\r\n]*Verify|Verify[^\r\n]*Ed25519)/u.test(firstMap)) {
     throw new Error(`The ${target} production link map retained a forbidden first-party generic Ed25519 verifier.`);
   }
-  const forbiddenProductionDarkSymbols = Object.freeze([
+  const requiredProductionSigningSymbols = Object.freeze([
+    "CreateProtectedSigningLease",
     "SignProtectedArtifact",
     "ExpandEd25519SeedForProtectedSigning",
     "ReduceEd25519ScalarForProtectedSigning",
@@ -1876,18 +1878,22 @@ function inspectNativeCryptographyEvidence({ toolchain, first, second, target })
     "Ed25519MulAddForProtectedSigning",
     "CheckEd25519EquationForProtectedSigning",
   ]);
-  for (const forbidden of forbiddenProductionDarkSymbols) {
-    if (mapContainsNamedSymbol(firstMap, forbidden) || mapContainsNamedSymbol(secondMap, forbidden)) {
+  for (const required of requiredProductionSigningSymbols) {
+    if (!mapContainsNamedSymbol(firstMap, required) || !mapContainsNamedSymbol(secondMap, required)) {
       throw new Error(
-        `The ${target} production link map retained forbidden W1B1B-P0 production-dark symbol ${forbidden}. ` +
-          mapSymbolContext(firstMap, forbidden),
+        `The ${target} production link map lost required protected signing symbol ${required}. ` +
+          mapSymbolContext(firstMap, required),
       );
     }
   }
-  for (const forbiddenType of ["ProtectedArtifactAuthority", "ProtectedSigningLease"]) {
-    if (firstMap.includes(forbiddenType) || secondMap.includes(forbiddenType)) {
+  const requiredProductionSigningTypes = Object.freeze([
+    "ProtectedArtifactAuthority",
+    "ProtectedSigningLease",
+  ]);
+  for (const requiredType of requiredProductionSigningTypes) {
+    if (!firstMap.includes(requiredType) || !secondMap.includes(requiredType)) {
       throw new Error(
-        `The ${target} production link map retained forbidden W1B1B-P0 production-dark type ${forbiddenType}.`,
+        `The ${target} production link map lost required protected signing type ${requiredType}.`,
       );
     }
   }
@@ -1931,8 +1937,8 @@ function inspectNativeCryptographyEvidence({ toolchain, first, second, target })
   if (evidenceDomainPrefix.length !== 61) {
     throw new Error("The fixed W1B1B-P0 evidence domain prefix contract changed.");
   }
-  if (firstPeBytes.includes(evidenceDomainPrefix) || secondPeBytes.includes(evidenceDomainPrefix)) {
-    throw new Error(`The ${target} production service PE retained forbidden W1B1B-P0 domain data.`);
+  if (!firstPeBytes.includes(evidenceDomainPrefix) || !secondPeBytes.includes(evidenceDomainPrefix)) {
+    throw new Error(`The ${target} production service PE lost the fixed admission-evidence signing domain.`);
   }
   const firstLinkedDisassembly = runPinnedDumpbin(
     dumpbinPath,
@@ -1991,10 +1997,11 @@ function inspectNativeCryptographyEvidence({ toolchain, first, second, target })
       linkedCryptoEd25519CheckCallgraph: linkedCheckCallgraph,
       forbiddenSymbolsRemoved: true,
       forbiddenSymbols,
-      productionDarkSymbolsRemoved: true,
-      productionDarkSymbols: forbiddenProductionDarkSymbols,
-      productionDarkTypesRemoved: Object.freeze(["ProtectedArtifactAuthority", "ProtectedSigningLease"]),
-      productionDarkDomainDataRemoved: true,
+      productionSigningSymbolsRetained: true,
+      productionSigningSymbols: requiredProductionSigningSymbols,
+      productionSigningTypesRetained: true,
+      productionSigningTypes: requiredProductionSigningTypes,
+      productionSigningDomainDataRetained: true,
       productionObjectTestOnlyResidueRemoved: true,
       productionObjectForbiddenResidue: protectedArtifactSigningForbiddenObjectResidue,
     }),

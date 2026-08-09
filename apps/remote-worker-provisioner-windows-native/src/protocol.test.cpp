@@ -283,7 +283,7 @@ void TestKnownDarkAndUnknownOpcodes() {
   constexpr std::array<std::uint8_t, 10U> kDarkOpcodes = {
       static_cast<std::uint8_t>(gc::Opcode::CreateKeyset),
       static_cast<std::uint8_t>(gc::Opcode::AcquireKeyForSigning),
-      static_cast<std::uint8_t>(gc::Opcode::CommitSignature),
+      static_cast<std::uint8_t>(gc::Opcode::SignAdmissionEvidence),
       static_cast<std::uint8_t>(gc::Opcode::RevokeLocalKeyset),
       static_cast<std::uint8_t>(gc::Opcode::BeginInstall),
       static_cast<std::uint8_t>(gc::Opcode::SealAndPublishInstall),
@@ -483,6 +483,193 @@ void TestProtectedMutationCodecs() {
   Expect(
       !gc::DecodeRevokeKeysetRequest(revoke.data(), revoke.size(), nullptr),
       "REVOKE null output rejected");
+
+  std::array<std::uint8_t, gc::kAdmissionEvidenceEnvelopeBytes> envelope{};
+  envelope[0U] = 'G';
+  envelope[1U] = 'C';
+  envelope[2U] = 'A';
+  envelope[3U] = 'E';
+  WriteU16(envelope.data() + 4U, 1U);
+  envelope[6U] = 1U;
+  WriteU32(
+      envelope.data() + 8U,
+      static_cast<std::uint32_t>(gc::kAdmissionEvidenceEnvelopeBytes));
+  for (std::size_t index = 0U; index < 16U; ++index) {
+    envelope[16U + index] = static_cast<std::uint8_t>(0x20U + index);
+  }
+  for (std::size_t index = 0U; index < 32U; ++index) {
+    envelope[32U + index] = static_cast<std::uint8_t>(0x40U + index);
+  }
+  WriteU64(envelope.data() + 64U, 7U);
+  constexpr std::array<std::size_t, 6U> kEvidenceHashOffsets = {
+      96U, 128U, 160U, 192U, 224U, 256U};
+  for (std::size_t field = 0U; field < kEvidenceHashOffsets.size(); ++field) {
+    for (std::size_t index = 0U; index < 32U; ++index) {
+      envelope[kEvidenceHashOffsets[field] + index] =
+          static_cast<std::uint8_t>(0x60U + field * 5U + index);
+    }
+  }
+  gc::AdmissionEvidenceEnvelope decoded_envelope{};
+  Expect(
+      gc::DecodeAdmissionEvidenceEnvelope(
+          envelope.data(), envelope.size(), &decoded_envelope) &&
+          decoded_envelope.operation_id[0U] == 0x20U &&
+          decoded_envelope.evidence_nonce_sha256[0U] == 0x40U &&
+          decoded_envelope.worker_generation == 7U &&
+          decoded_envelope.context_sha256[0U] == 0x60U &&
+          decoded_envelope.installed_tree_verification_receipt_sha256[0U] ==
+              static_cast<std::uint8_t>(0x60U + 5U * 5U),
+      "admission-evidence envelope exact codec");
+  auto InvalidEnvelopeClears = [&](const auto& bytes, std::size_t length) {
+    std::memset(&decoded_envelope, 0xa5, sizeof(decoded_envelope));
+    const bool accepted = gc::DecodeAdmissionEvidenceEnvelope(
+        bytes.data(), length, &decoded_envelope);
+    const gc::AdmissionEvidenceEnvelope empty{};
+    return !accepted &&
+           std::memcmp(&decoded_envelope, &empty, sizeof(empty)) == 0;
+  };
+  for (std::size_t length = 0U; length < envelope.size(); ++length) {
+    Expect(
+        InvalidEnvelopeClears(envelope, length),
+        "truncated admission-evidence envelope rejected and cleared");
+  }
+  std::array<std::uint8_t, gc::kAdmissionEvidenceEnvelopeBytes + 1U>
+      extra_envelope{};
+  std::memcpy(extra_envelope.data(), envelope.data(), envelope.size());
+  Expect(
+      InvalidEnvelopeClears(extra_envelope, extra_envelope.size()),
+      "oversize admission-evidence envelope rejected");
+  for (const std::size_t offset : {
+           0U, 4U, 6U, 7U, 8U, 12U, 16U, 32U, 64U, 72U,
+           96U, 128U, 160U, 192U, 224U, 256U}) {
+    auto mutated = envelope;
+    if (offset == 0U) {
+      mutated[0U] = 0U;
+    } else if (offset == 4U) {
+      WriteU16(mutated.data() + 4U, 2U);
+    } else if (offset == 6U) {
+      mutated[6U] = 2U;
+    } else if (offset == 7U || offset == 12U || offset == 72U) {
+      mutated[offset] = 1U;
+    } else if (offset == 8U) {
+      WriteU32(mutated.data() + 8U, 287U);
+    } else if (offset == 16U) {
+      std::fill(
+          mutated.begin() + 16U,
+          mutated.begin() + 32U,
+          static_cast<std::uint8_t>(0U));
+    } else if (offset == 32U) {
+      std::fill(
+          mutated.begin() + 32U,
+          mutated.begin() + 64U,
+          static_cast<std::uint8_t>(0U));
+    } else if (offset == 64U) {
+      WriteU64(mutated.data() + 64U, 0U);
+    } else {
+      std::fill(
+          mutated.begin() + offset,
+          mutated.begin() + offset + 32U,
+          static_cast<std::uint8_t>(0U));
+    }
+    Expect(
+        InvalidEnvelopeClears(mutated, mutated.size()),
+        "admission-evidence envelope mutation rejected");
+  }
+  Expect(
+      !gc::DecodeAdmissionEvidenceEnvelope(
+          envelope.data(), envelope.size(), nullptr),
+      "admission-evidence envelope null output rejected");
+
+  std::array<std::uint8_t, gc::kSignAdmissionEvidenceRequestBytes>
+      sign_request{};
+  std::memcpy(sign_request.data(), envelope.data() + 16U, 16U);
+  for (std::size_t index = 0U; index < 32U; ++index) {
+    sign_request[16U + index] = static_cast<std::uint8_t>(0x80U + index);
+    sign_request[60U + index] = static_cast<std::uint8_t>(0xa0U + index);
+  }
+  WriteU16(sign_request.data() + 48U, 1U);
+  sign_request[50U] = 2U;
+  WriteU64(sign_request.data() + 52U, 7U);
+  WriteU32(
+      sign_request.data() + 92U,
+      static_cast<std::uint32_t>(gc::kAdmissionEvidenceEnvelopeBytes));
+  std::memcpy(sign_request.data() + 96U, envelope.data(), envelope.size());
+  gc::SignAdmissionEvidenceRequest decoded_sign_request{};
+  Expect(
+      gc::DecodeSignAdmissionEvidenceRequest(
+          sign_request.data(), sign_request.size(), &decoded_sign_request) &&
+          decoded_sign_request.operation_id[0U] == 0x20U &&
+          decoded_sign_request.expected_state_sha256[0U] == 0x80U &&
+          decoded_sign_request.expected_generation == 7U &&
+          decoded_sign_request.expected_keyset_receipt_sha256[0U] == 0xa0U &&
+          decoded_sign_request.envelope.worker_generation == 7U,
+      "sign admission-evidence request exact codec");
+  auto InvalidSignRequestClears = [&](const auto& bytes, std::size_t length) {
+    std::memset(&decoded_sign_request, 0xa5, sizeof(decoded_sign_request));
+    const bool accepted = gc::DecodeSignAdmissionEvidenceRequest(
+        bytes.data(), length, &decoded_sign_request);
+    const gc::SignAdmissionEvidenceRequest empty{};
+    return !accepted &&
+           std::memcmp(
+               &decoded_sign_request, &empty, sizeof(decoded_sign_request)) ==
+               0;
+  };
+  for (std::size_t length = 0U; length < sign_request.size(); ++length) {
+    Expect(
+        InvalidSignRequestClears(sign_request, length),
+        "truncated sign admission-evidence request rejected and cleared");
+  }
+  std::array<std::uint8_t, gc::kSignAdmissionEvidenceRequestBytes + 1U>
+      extra_sign_request{};
+  std::memcpy(
+      extra_sign_request.data(), sign_request.data(), sign_request.size());
+  Expect(
+      InvalidSignRequestClears(
+          extra_sign_request, extra_sign_request.size()),
+      "oversize sign admission-evidence request rejected");
+  for (const std::size_t offset : {
+           0U, 16U, 48U, 50U, 51U, 52U, 60U, 92U, 96U, 112U, 160U}) {
+    auto mutated = sign_request;
+    if (offset == 0U) {
+      std::fill(
+          mutated.begin(),
+          mutated.begin() + 16U,
+          static_cast<std::uint8_t>(0U));
+    } else if (offset == 16U) {
+      std::fill(
+          mutated.begin() + 16U,
+          mutated.begin() + 48U,
+          static_cast<std::uint8_t>(0U));
+    } else if (offset == 48U) {
+      WriteU16(mutated.data() + 48U, 2U);
+    } else if (offset == 50U) {
+      mutated[50U] = 1U;
+    } else if (offset == 51U) {
+      mutated[51U] = 1U;
+    } else if (offset == 52U) {
+      WriteU64(mutated.data() + 52U, 0U);
+    } else if (offset == 60U) {
+      std::fill(
+          mutated.begin() + 60U,
+          mutated.begin() + 92U,
+          static_cast<std::uint8_t>(0U));
+    } else if (offset == 92U) {
+      WriteU32(mutated.data() + 92U, 287U);
+    } else if (offset == 96U) {
+      mutated[96U] = 0U;
+    } else if (offset == 112U) {
+      mutated[112U] ^= 1U;
+    } else {
+      WriteU64(mutated.data() + 160U, 8U);
+    }
+    Expect(
+        InvalidSignRequestClears(mutated, mutated.size()),
+        "sign admission-evidence request mutation rejected");
+  }
+  Expect(
+      !gc::DecodeSignAdmissionEvidenceRequest(
+          sign_request.data(), sign_request.size(), nullptr),
+      "sign admission-evidence null output rejected");
 
   std::array<std::uint8_t, 288U> projection{};
   WriteU16(projection.data(), 1U);
