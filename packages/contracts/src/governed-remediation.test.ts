@@ -1,4 +1,6 @@
+import { createHash } from "node:crypto";
 import { describe, expect, expectTypeOf, it } from "vitest";
+import { canonicalJsonString } from "./canonical-json.js";
 import type {
   ChatSecureConfigurationSubmitRequest,
   ChatUserInputPromptAnswerResponse,
@@ -6,14 +8,17 @@ import type {
 } from "./chat.js";
 import {
   GOVERNED_REMEDIATION_FAILURE_SCHEMA_VERSION,
+  GOVERNED_REMEDIATION_PHASE_CLAIM_SCHEMA_VERSION,
   GOVERNED_REMEDIATION_RECEIPT_SCHEMA_VERSION,
   GOVERNED_REMEDIATION_RECIPE_SCHEMA_VERSION,
   GOVERNED_REMEDIATION_RECONCILIATION_SCHEMA_VERSION,
   GOVERNED_REMEDIATION_SCOPE_SCHEMA_VERSION,
   GOVERNED_REMEDIATION_STATE_SCHEMA_VERSION,
+  governedRemediationRecipeSha256,
   governedRemediationReconciliationCanTransition,
   governedRemediationStateCanTransition,
   normalizeGovernedRemediationFailure,
+  normalizeGovernedRemediationPhaseClaim,
   normalizeGovernedRemediationReceipt,
   normalizeGovernedRemediationRecipe,
   normalizeGovernedRemediationReconciliation,
@@ -55,7 +60,8 @@ function credentialRecipe(overrides: Partial<GovernedRemediationRecipe> = {}): G
     allowedDeploymentProfiles: ["local_dev", "trusted_local"],
     inputKind: "secure_credential",
     preEffectApproval: "not_required",
-    activationApproval: "not_required",
+    activationMode: "not_applicable",
+    activationApproval: "not_applicable",
     verificationProbeId: "search.brave.live-probe.v1",
     rollbackStrategy: "restore_previous",
     maxApplyAttempts: 1,
@@ -74,16 +80,20 @@ function awaitingSecureInputState(
     sourceTurnId: "turn-a",
     durableRunId: "run-a",
     blockedCheckpointId: "checkpoint-a",
+    requesterActorId: "actor-a",
     recipeId: "search.brave.credential.configure",
     recipeVersion: 1,
+    recipeSha256: governedRemediationRecipeSha256(credentialRecipe()),
     scope: installationScope(),
     state: "awaiting_secure_input",
     revision: 3,
     expectedWaitingRunVersion: 7,
     expectedOwnerRevision: "a".repeat(64),
+    parentReservationId: "reservation-a",
     promptId: "prompt-a",
     promptExpiresAt: EXPIRES,
-    approvalId: null,
+    preEffectApprovalId: null,
+    activationApprovalId: null,
     effectId: null,
     latestReceiptId: null,
     failureId: null,
@@ -121,6 +131,7 @@ function reconciliation(overrides: Partial<GovernedRemediationReconciliation> = 
     recipeId: "search.brave.credential.configure",
     recipeVersion: 1,
     scope: installationScope(),
+    domain: "effect",
     reason: "rollback_failed",
     observation: "unknown",
     state: "quarantined",
@@ -172,6 +183,17 @@ describe("governed remediation recipe and scope contracts", () => {
     expect(first.allowedScopeKinds).toEqual(["installation", "workspace"]);
     expect(first.allowedDeploymentProfiles).toEqual(["local_dev", "trusted_local"]);
     expect(second).toStrictEqual(first);
+    expect(governedRemediationRecipeSha256(first)).toBe(
+      createHash("sha256").update(canonicalJsonString(first), "utf8").digest("hex"),
+    );
+    expect(governedRemediationRecipeSha256(second)).toBe(governedRemediationRecipeSha256(first));
+    expect(
+      governedRemediationRecipeSha256({
+        ...first,
+        activationMode: "owner_step",
+        activationApproval: "required",
+      }),
+    ).not.toBe(governedRemediationRecipeSha256(first));
   });
 
   it("models explicit manual boundaries without granting generic repair authority", () => {
@@ -185,6 +207,7 @@ describe("governed remediation recipe and scope contracts", () => {
       executionMode: "manual_required",
       inputKind: "none",
       preEffectApproval: "not_applicable",
+      activationMode: "not_applicable",
       activationApproval: "not_applicable",
       verificationProbeId: null,
       rollbackStrategy: "manual_required",
@@ -219,6 +242,13 @@ describe("governed remediation recipe and scope contracts", () => {
         allowedDeploymentProfiles: ["local_dev", "local_dev"],
       }),
     ).toThrow(/cannot contain duplicates/u);
+    expect(() =>
+      normalizeGovernedRemediationRecipe({
+        ...credentialRecipe(),
+        activationMode: "owner_step",
+        activationApproval: "not_applicable",
+      }),
+    ).toThrow(/activation mode and approval posture/u);
   });
 });
 
@@ -229,8 +259,12 @@ describe("governed remediation durable state", () => {
     expect(governedRemediationStateCanTransition("verifying", "credential_verified")).toBe(true);
     expect(governedRemediationStateCanTransition("verifying", "verified")).toBe(true);
     expect(governedRemediationStateCanTransition("verified", "resuming")).toBe(true);
+    expect(governedRemediationStateCanTransition("resuming", "reconciling_resume")).toBe(true);
+    expect(governedRemediationStateCanTransition("reconciling_resume", "completed")).toBe(true);
     expect(governedRemediationStateCanTransition("rolling_back", "rollback_failed")).toBe(true);
-    expect(governedRemediationStateCanTransition("verifying", "failed")).toBe(false);
+    expect(governedRemediationStateCanTransition("verifying", "failed")).toBe(true);
+    expect(governedRemediationStateCanTransition("credential_verified", "declined")).toBe(true);
+    expect(governedRemediationStateCanTransition("verified", "failed")).toBe(true);
     expect(governedRemediationStateCanTransition("verified", "rolling_back")).toBe(false);
     expect(governedRemediationStateCanTransition("completed", "applying")).toBe(false);
     expect(governedRemediationStateCanTransition("rollback_failed", "completed")).toBe(false);
@@ -285,6 +319,66 @@ describe("governed remediation durable state", () => {
         schemaVersion: "goatcitadel.governed-remediation-state.v2",
       }),
     ).toThrow(/schema version is unsupported/u);
+    expect(() =>
+      normalizeGovernedRemediationStateRecord({
+        ...awaitingSecureInputState(),
+        recipeSha256: "A".repeat(64),
+      }),
+    ).toThrow(/lower-case SHA-256 digest/u);
+  });
+});
+
+describe("governed remediation durable phase claims", () => {
+  const activeClaim = {
+    schemaVersion: GOVERNED_REMEDIATION_PHASE_CLAIM_SCHEMA_VERSION,
+    claimId: "claim-a",
+    aggregateKind: "state",
+    aggregateId: "remediation-a",
+    remediationId: "remediation-a",
+    phase: "apply",
+    claimRevision: 1,
+    claimantId: "gateway-a",
+    expectedAggregateRevision: 4,
+    operationId: "apply-a",
+    effectId: "effect-a",
+    expectedOwnerRevision: "a".repeat(64),
+    leaseTokenSha256: "b".repeat(64),
+    leaseExpiresAt: EXPIRES,
+    status: "active",
+    requestSha256: "c".repeat(64),
+    outcomeSha256: null,
+    createdAt: NOW,
+    updatedAt: LATER,
+  } as const;
+
+  it("round-trips secret-free active and completed phase claims", () => {
+    const active = normalizeGovernedRemediationPhaseClaim(jsonRoundTrip(activeClaim));
+    const completed = normalizeGovernedRemediationPhaseClaim({
+      ...active,
+      status: "completed",
+      outcomeSha256: "d".repeat(64),
+    });
+    expect(active).toStrictEqual(activeClaim);
+    expect(completed.status).toBe("completed");
+    expect(Object.isFrozen(completed)).toBe(true);
+  });
+
+  it("rejects bearer material, digest drift, mismatched effects, and incomplete completion", () => {
+    expect(() => normalizeGovernedRemediationPhaseClaim({ ...activeClaim, leaseToken: "raw-bearer" })).toThrow(
+      /unsupported fields/u,
+    );
+    expect(() =>
+      normalizeGovernedRemediationPhaseClaim({ ...activeClaim, leaseTokenSha256: "B".repeat(64) }),
+    ).toThrow(/lower-case SHA-256/u);
+    expect(() => normalizeGovernedRemediationPhaseClaim({ ...activeClaim, effectId: null })).toThrow(
+      /effect binding/u,
+    );
+    expect(() =>
+      normalizeGovernedRemediationPhaseClaim({ ...activeClaim, phase: "effect_reconcile" }),
+    ).toThrow(/aggregate kind/u);
+    expect(() =>
+      normalizeGovernedRemediationPhaseClaim({ ...activeClaim, status: "completed", outcomeSha256: null }),
+    ).toThrow(/status and outcome digest/u);
   });
 });
 
@@ -314,6 +408,7 @@ describe("governed remediation canonical receipts", () => {
         receiptId: "receipt-b",
         kind: "verification",
         applicationReceiptId: "receipt-a",
+        activationReceiptId: null,
         probeId: "search.brave.live-probe.v1",
         probeResult: "accepted",
         ownerRevisionObserved: "a".repeat(64),
@@ -321,10 +416,20 @@ describe("governed remediation canonical receipts", () => {
       {
         ...common,
         receiptId: "receipt-c",
+        kind: "activation",
+        applicationReceiptId: "receipt-a",
+        initialVerificationReceiptId: "receipt-b",
+        ownerRevisionBefore: "a".repeat(64),
+        ownerRevisionAfter: "b".repeat(64),
+      },
+      {
+        ...common,
+        receiptId: "receipt-c2",
         kind: "rollback",
         applicationReceiptId: "receipt-a",
         rollbackStrategy: "restore_previous",
         outcome: "rolled_back",
+        ownerRevisionBefore: "a".repeat(64),
         ownerRevisionAfter: "b".repeat(64),
       },
       {
@@ -343,6 +448,8 @@ describe("governed remediation canonical receipts", () => {
         reconciliationId: "reconciliation-a",
         failureId: "failure-a",
         resolution: "confirmed_rolled_back",
+        applicationReceiptId: "receipt-a",
+        resumeReceiptId: null,
         ownerRevisionObserved: "b".repeat(64),
       },
     ];
@@ -362,6 +469,7 @@ describe("governed remediation canonical receipts", () => {
         ...common,
         kind: "verification",
         applicationReceiptId: "receipt-a",
+        activationReceiptId: null,
         probeId: "search.brave.live-probe.v1",
         probeResult: "rejected",
         ownerRevisionObserved: "a".repeat(64),
@@ -374,6 +482,7 @@ describe("governed remediation canonical receipts", () => {
         applicationReceiptId: "receipt-a",
         rollbackStrategy: "manual_required",
         outcome: "rolled_back",
+        ownerRevisionBefore: "a".repeat(64),
         ownerRevisionAfter: "b".repeat(64),
       }),
     ).toThrow(/cannot claim a manual rollback/u);

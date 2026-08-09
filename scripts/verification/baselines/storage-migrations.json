@@ -5,9 +5,9 @@
     "sqlite": {
       "path": "packages/storage/src/sqlite.ts",
       "registryName": "SCHEMA_MIGRATION_GROUPS",
-      "expectedCount": 191,
+      "expectedCount": 192,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 191,
+      "expectedLastVersion": 192,
       "migrations": [
         {
           "version": 1,
@@ -1345,15 +1345,22 @@
           "groupName": "canonical",
           "definitionSha256": "1a3db779a2dd69deda5894bf4f07552184329dfa39246ee6b5849443af67047a",
           "implementationSha256": "531dc23298c8604681e025c785e6106cdfeeaec82f665c924d9f10561e3bc8db"
+        },
+        {
+          "version": 192,
+          "name": "governed_remediation_recipe_and_phase_authority",
+          "groupName": "canonical",
+          "definitionSha256": "68fde704ae6255b4c90481e7043387356a795fcae04eade6535684910af3f29b",
+          "implementationSha256": "c7ad607658e770a81afa5f8e7c8546346688b0e90e9fcc266242b8baf08263d3"
         }
       ]
     },
     "postgres": {
       "path": "packages/storage/src/postgres/migrations.ts",
       "registryName": "POSTGRES_MIGRATIONS",
-      "expectedCount": 134,
+      "expectedCount": 135,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 134,
+      "expectedLastVersion": 135,
       "migrations": [
         {
           "version": 1,
@@ -2159,6 +2166,12 @@
           "name": "governed_remediation_durable_owner",
           "definitionSha256": "bb201d63f7e86fb516e17c461e58eb8357f5bcd0d1b51b95c149bc9de1a9025c",
           "runtimeIntegritySha256": "94574755a314cbf1a6f1e285d2d3969d372ec2d3560a1b03d3cfc2b7b85187a5"
+        },
+        {
+          "version": 135,
+          "name": "governed_remediation_recipe_and_phase_authority",
+          "definitionSha256": "cd034fdeddb1c431bb46be6e79f6ba5f8f7d688e56afb08bba74c637bf7daf03",
+          "runtimeIntegritySha256": "27ca84876985f1d8836d4a2b4b441b982652e28ed6642b6afb1f43ffe92aa636"
         }
       ]
     }

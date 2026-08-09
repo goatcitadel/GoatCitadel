@@ -692,10 +692,54 @@ describe("Postgres migration ledger compatibility", () => {
     ]);
   });
 
+  it("replaces historical table and index shape after DROP TABLE CASCADE", () => {
+    const manifest = buildPostgresSchemaShapeManifest([
+      {
+        version: 1,
+        name: "initial_shape",
+        sql: `
+          CREATE TABLE IF NOT EXISTS rebuilt_shape (
+            legacy_id TEXT PRIMARY KEY,
+            legacy_payload TEXT NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS idx_rebuilt_shape_legacy
+            ON rebuilt_shape(legacy_payload);
+          CREATE TABLE IF NOT EXISTS preserved_shape (
+            preserved_id TEXT PRIMARY KEY
+          );
+        `,
+      },
+      {
+        version: 2,
+        name: "replacement_shape",
+        sql: `
+          DROP TABLE IF EXISTS public.rebuilt_shape CASCADE;
+          CREATE TABLE IF NOT EXISTS rebuilt_shape (
+            current_id BIGINT PRIMARY KEY
+          );
+          CREATE INDEX IF NOT EXISTS idx_rebuilt_shape_current
+            ON rebuilt_shape(current_id);
+        `,
+      },
+    ]);
+
+    assert.deepEqual(
+      manifest.tables.map((table) => table.name),
+      ["preserved_shape", "rebuilt_shape"],
+    );
+    assert.deepEqual(manifest.tables[1]?.columns, [
+      { name: "current_id", type: "bigint", notNull: true, hasDefault: false, generated: false },
+    ]);
+    assert.deepEqual(
+      manifest.indexes.map((index) => index.name),
+      ["idx_rebuilt_shape_current"],
+    );
+  });
+
   it("covers every canonical IF NOT EXISTS table and index and fails closed on catalog issues", () => {
     const manifest = buildPostgresSchemaShapeManifest(POSTGRES_MIGRATIONS);
-    assert.equal(manifest.tables.length, 300);
-    assert.equal(manifest.indexes.length, 690);
+    assert.equal(manifest.tables.length, 302);
+    assert.equal(manifest.indexes.length, 693);
     assert.equal(
       manifest.tables.every((table) => table.columns.length > 0),
       true,

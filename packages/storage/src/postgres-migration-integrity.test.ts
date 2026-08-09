@@ -948,4 +948,21 @@ describe("protected Postgres migration integrity", () => {
       /\b(secret_value|credential_value|oauth_code|command_text|args_json|payload_json|raw_error|provider_error)\b/iu,
     );
   });
+
+  it("keeps migration 135 fail-closed, hash-only leased, and lineage-fenced", () => {
+    const migration = POSTGRES_MIGRATIONS.find((candidate) => candidate.version === 135);
+    assert.equal(migration?.name, "governed_remediation_recipe_and_phase_authority");
+    assert.match(migration?.integritySha256 ?? "", /^[0-9a-f]{64}$/u);
+    const sql = migration?.sql ?? "";
+    assert.match(sql, /refuses non-empty governed-remediation v1 rows/u);
+    assert.match(sql, /requester_actor_id TEXT NOT NULL/u);
+    assert.match(sql, /recipe_sha256 TEXT NOT NULL/u);
+    assert.match(sql, /owner_revision_before TEXT/u);
+    assert.match(sql, /lease_token_sha256 TEXT NOT NULL/u);
+    assert.doesNotMatch(sql, /\blease_token\s+(?:TEXT|BYTEA|JSONB?)\b/u);
+    assert.match(sql, /gc_governed_remediation_receipt_insert_guard/u);
+    assert.match(sql, /gc_governed_remediation_phase_claim_insert_guard/u);
+    assert.match(sql, /clock_timestamp\(\)/u);
+    assert.doesNotMatch(sql, /\b(?:INSERT\s+INTO|UPDATE\s+governed_remediation|DELETE\s+FROM)\b/iu);
+  });
 });

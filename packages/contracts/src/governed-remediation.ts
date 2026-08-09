@@ -1,4 +1,6 @@
+import { canonicalJsonString } from "./canonical-json.js";
 import type { DeploymentProfile } from "./integrations.js";
+import { sha256Hex } from "./sha256.js";
 
 /**
  * Contract-only foundation for the broader governed-remediation owner.
@@ -22,6 +24,8 @@ export const GOVERNED_REMEDIATION_RECEIPT_SCHEMA_VERSION = "goatcitadel.governed
 export const GOVERNED_REMEDIATION_FAILURE_SCHEMA_VERSION = "goatcitadel.governed-remediation-failure.v1" as const;
 export const GOVERNED_REMEDIATION_RECONCILIATION_SCHEMA_VERSION =
   "goatcitadel.governed-remediation-reconciliation.v1" as const;
+export const GOVERNED_REMEDIATION_PHASE_CLAIM_SCHEMA_VERSION =
+  "goatcitadel.governed-remediation-phase-claim.v1" as const;
 
 export const GOVERNED_REMEDIATION_SCOPE_KINDS = [
   "installation",
@@ -76,6 +80,9 @@ export type GovernedRemediationPreEffectApproval = (typeof GOVERNED_REMEDIATION_
 export const GOVERNED_REMEDIATION_ACTIVATION_APPROVALS = ["not_applicable", "not_required", "required"] as const;
 export type GovernedRemediationActivationApproval = (typeof GOVERNED_REMEDIATION_ACTIVATION_APPROVALS)[number];
 
+export const GOVERNED_REMEDIATION_ACTIVATION_MODES = ["not_applicable", "owner_step"] as const;
+export type GovernedRemediationActivationMode = (typeof GOVERNED_REMEDIATION_ACTIVATION_MODES)[number];
+
 export const GOVERNED_REMEDIATION_ROLLBACK_STRATEGIES = [
   "restore_previous",
   "remove_candidate",
@@ -102,6 +109,7 @@ export interface GovernedRemediationRecipe {
   readonly allowedDeploymentProfiles: readonly DeploymentProfile[];
   readonly inputKind: GovernedRemediationInputKind;
   readonly preEffectApproval: GovernedRemediationPreEffectApproval;
+  readonly activationMode: GovernedRemediationActivationMode;
   readonly activationApproval: GovernedRemediationActivationApproval;
   readonly verificationProbeId: string | null;
   readonly rollbackStrategy: GovernedRemediationRollbackStrategy;
@@ -121,6 +129,7 @@ export const GOVERNED_REMEDIATION_STATES = [
   "activating",
   "verified",
   "resuming",
+  "reconciling_resume",
   "completed",
   "declined",
   "expired",
@@ -154,11 +163,19 @@ const GOVERNED_REMEDIATION_STATE_TRANSITIONS: Readonly<
   ]),
   awaiting_secure_input: Object.freeze<GovernedRemediationState[]>(["applying", "declined", "expired", "failed"]),
   applying: Object.freeze<GovernedRemediationState[]>(["verifying", "rolling_back", "failed"]),
-  verifying: Object.freeze<GovernedRemediationState[]>(["credential_verified", "verified", "rolling_back"]),
+  verifying: Object.freeze<GovernedRemediationState[]>([
+    "credential_verified",
+    "verified",
+    "rolling_back",
+    "failed",
+  ]),
   credential_verified: Object.freeze<GovernedRemediationState[]>([
     "awaiting_activation_approval",
     "activating",
     "verified",
+    "declined",
+    "expired",
+    "failed",
   ]),
   awaiting_activation_approval: Object.freeze<GovernedRemediationState[]>([
     "activating",
@@ -166,9 +183,10 @@ const GOVERNED_REMEDIATION_STATE_TRANSITIONS: Readonly<
     "expired",
     "failed",
   ]),
-  activating: Object.freeze<GovernedRemediationState[]>(["verified", "rolling_back"]),
-  verified: Object.freeze<GovernedRemediationState[]>(["resuming"]),
-  resuming: Object.freeze<GovernedRemediationState[]>(["completed", "failed"]),
+  activating: Object.freeze<GovernedRemediationState[]>(["verified", "rolling_back", "failed"]),
+  verified: Object.freeze<GovernedRemediationState[]>(["resuming", "failed"]),
+  resuming: Object.freeze<GovernedRemediationState[]>(["completed", "failed", "reconciling_resume"]),
+  reconciling_resume: Object.freeze<GovernedRemediationState[]>(["completed", "failed"]),
   completed: Object.freeze<GovernedRemediationState[]>([]),
   declined: Object.freeze<GovernedRemediationState[]>([]),
   expired: Object.freeze<GovernedRemediationState[]>([]),
@@ -195,16 +213,21 @@ export interface GovernedRemediationStateRecord {
   readonly sourceTurnId: string;
   readonly durableRunId: string;
   readonly blockedCheckpointId: string;
+  readonly requesterActorId: string;
   readonly recipeId: string;
   readonly recipeVersion: number;
+  /** SHA-256 of the normalized, canonical recipe JSON selected at creation. */
+  readonly recipeSha256: string;
   readonly scope: GovernedRemediationScope;
   readonly state: GovernedRemediationState;
   readonly revision: number;
   readonly expectedWaitingRunVersion: number;
   readonly expectedOwnerRevision: string | null;
+  readonly parentReservationId: string | null;
   readonly promptId: string | null;
   readonly promptExpiresAt: string | null;
-  readonly approvalId: string | null;
+  readonly preEffectApprovalId: string | null;
+  readonly activationApprovalId: string | null;
   readonly effectId: string | null;
   readonly latestReceiptId: string | null;
   readonly failureId: string | null;
@@ -213,9 +236,52 @@ export interface GovernedRemediationStateRecord {
   readonly updatedAt: string;
 }
 
+export const GOVERNED_REMEDIATION_PHASE_CLAIM_AGGREGATE_KINDS = ["state", "reconciliation"] as const;
+export type GovernedRemediationPhaseClaimAggregateKind =
+  (typeof GOVERNED_REMEDIATION_PHASE_CLAIM_AGGREGATE_KINDS)[number];
+
+export const GOVERNED_REMEDIATION_PHASES = [
+  "parent_reserve",
+  "apply",
+  "verify",
+  "activate_and_verify",
+  "rollback",
+  "resume",
+  "effect_reconcile",
+  "resume_reconcile",
+] as const;
+export type GovernedRemediationPhase = (typeof GOVERNED_REMEDIATION_PHASES)[number];
+
+export const GOVERNED_REMEDIATION_PHASE_CLAIM_STATUSES = ["active", "completed"] as const;
+export type GovernedRemediationPhaseClaimStatus = (typeof GOVERNED_REMEDIATION_PHASE_CLAIM_STATUSES)[number];
+
+/** Secret-free durable projection. The raw lease bearer is never persisted. */
+export interface GovernedRemediationPhaseClaim {
+  readonly schemaVersion: typeof GOVERNED_REMEDIATION_PHASE_CLAIM_SCHEMA_VERSION;
+  readonly claimId: string;
+  readonly aggregateKind: GovernedRemediationPhaseClaimAggregateKind;
+  readonly aggregateId: string;
+  readonly remediationId: string;
+  readonly phase: GovernedRemediationPhase;
+  readonly claimRevision: number;
+  readonly claimantId: string;
+  readonly expectedAggregateRevision: number;
+  readonly operationId: string;
+  readonly effectId: string | null;
+  readonly expectedOwnerRevision: string | null;
+  readonly leaseTokenSha256: string;
+  readonly leaseExpiresAt: string;
+  readonly status: GovernedRemediationPhaseClaimStatus;
+  readonly requestSha256: string;
+  readonly outcomeSha256: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
 export const GOVERNED_REMEDIATION_RECEIPT_KINDS = [
   "application",
   "verification",
+  "activation",
   "rollback",
   "resume",
   "reconciliation",
@@ -244,9 +310,19 @@ export interface GovernedRemediationApplicationReceipt extends GovernedRemediati
 export interface GovernedRemediationVerificationReceipt extends GovernedRemediationReceiptBase {
   readonly kind: "verification";
   readonly applicationReceiptId: string;
+  /** Null for the initial probe; exact activation receipt for a post-activation probe. */
+  readonly activationReceiptId: string | null;
   readonly probeId: string;
   readonly probeResult: "accepted";
   readonly ownerRevisionObserved: string;
+}
+
+export interface GovernedRemediationActivationReceipt extends GovernedRemediationReceiptBase {
+  readonly kind: "activation";
+  readonly applicationReceiptId: string;
+  readonly initialVerificationReceiptId: string;
+  readonly ownerRevisionBefore: string;
+  readonly ownerRevisionAfter: string;
 }
 
 export interface GovernedRemediationRollbackReceipt extends GovernedRemediationReceiptBase {
@@ -254,6 +330,7 @@ export interface GovernedRemediationRollbackReceipt extends GovernedRemediationR
   readonly applicationReceiptId: string;
   readonly rollbackStrategy: Exclude<GovernedRemediationRollbackStrategy, "manual_required">;
   readonly outcome: "rolled_back";
+  readonly ownerRevisionBefore: string;
   readonly ownerRevisionAfter: string;
 }
 
@@ -269,6 +346,8 @@ export const GOVERNED_REMEDIATION_RECONCILIATION_RESOLUTIONS = [
   "confirmed_no_effect",
   "confirmed_rolled_back",
   "confirmed_verified",
+  "confirmed_resumed",
+  "confirmed_not_resumed",
 ] as const;
 export type GovernedRemediationReconciliationResolution =
   (typeof GOVERNED_REMEDIATION_RECONCILIATION_RESOLUTIONS)[number];
@@ -278,12 +357,15 @@ export interface GovernedRemediationReconciliationReceipt extends GovernedRemedi
   readonly reconciliationId: string;
   readonly failureId: string;
   readonly resolution: GovernedRemediationReconciliationResolution;
+  readonly applicationReceiptId: string | null;
+  readonly resumeReceiptId: string | null;
   readonly ownerRevisionObserved: string | null;
 }
 
 export type GovernedRemediationReceipt =
   | GovernedRemediationApplicationReceipt
   | GovernedRemediationVerificationReceipt
+  | GovernedRemediationActivationReceipt
   | GovernedRemediationRollbackReceipt
   | GovernedRemediationResumeReceipt
   | GovernedRemediationReconciliationReceipt;
@@ -361,11 +443,18 @@ export const GOVERNED_REMEDIATION_RECONCILIATION_REASONS = [
 ] as const;
 export type GovernedRemediationReconciliationReason = (typeof GOVERNED_REMEDIATION_RECONCILIATION_REASONS)[number];
 
+export const GOVERNED_REMEDIATION_RECONCILIATION_DOMAINS = ["effect", "resume"] as const;
+export type GovernedRemediationReconciliationDomain =
+  (typeof GOVERNED_REMEDIATION_RECONCILIATION_DOMAINS)[number];
+
 export const GOVERNED_REMEDIATION_RECONCILIATION_OBSERVATIONS = [
   "effect_absent",
   "effect_present_unverified",
   "effect_verified",
   "rolled_back",
+  "resume_pending",
+  "resume_completed",
+  "resume_not_completed",
   "unknown",
 ] as const;
 export type GovernedRemediationReconciliationObservation =
@@ -377,6 +466,8 @@ export const GOVERNED_REMEDIATION_RECONCILIATION_STATES = [
   "resolved_no_effect",
   "resolved_rolled_back",
   "resolved_verified",
+  "resolved_resumed",
+  "resolved_not_resumed",
   "manual_required",
 ] as const;
 export type GovernedRemediationReconciliationState = (typeof GOVERNED_REMEDIATION_RECONCILIATION_STATES)[number];
@@ -389,17 +480,23 @@ const GOVERNED_REMEDIATION_RECONCILIATION_TRANSITIONS: Readonly<
     "resolved_no_effect",
     "resolved_rolled_back",
     "resolved_verified",
+    "resolved_resumed",
+    "resolved_not_resumed",
     "manual_required",
   ]),
   quarantined: Object.freeze<GovernedRemediationReconciliationState[]>([
     "resolved_no_effect",
     "resolved_rolled_back",
     "resolved_verified",
+    "resolved_resumed",
+    "resolved_not_resumed",
     "manual_required",
   ]),
   resolved_no_effect: Object.freeze<GovernedRemediationReconciliationState[]>([]),
   resolved_rolled_back: Object.freeze<GovernedRemediationReconciliationState[]>([]),
   resolved_verified: Object.freeze<GovernedRemediationReconciliationState[]>([]),
+  resolved_resumed: Object.freeze<GovernedRemediationReconciliationState[]>([]),
+  resolved_not_resumed: Object.freeze<GovernedRemediationReconciliationState[]>([]),
   manual_required: Object.freeze<GovernedRemediationReconciliationState[]>([]),
 });
 
@@ -419,6 +516,7 @@ export interface GovernedRemediationReconciliation {
   readonly recipeId: string;
   readonly recipeVersion: number;
   readonly scope: GovernedRemediationScope;
+  readonly domain: GovernedRemediationReconciliationDomain;
   readonly reason: GovernedRemediationReconciliationReason;
   readonly observation: GovernedRemediationReconciliationObservation;
   readonly state: GovernedRemediationReconciliationState;
@@ -456,6 +554,7 @@ export function normalizeGovernedRemediationRecipe(input: unknown): GovernedReme
     "allowedDeploymentProfiles",
     "inputKind",
     "preEffectApproval",
+    "activationMode",
     "activationApproval",
     "verificationProbeId",
     "rollbackStrategy",
@@ -475,6 +574,7 @@ export function normalizeGovernedRemediationRecipe(input: unknown): GovernedReme
     GOVERNED_REMEDIATION_ACTIVATION_APPROVALS,
     "activation approval",
   );
+  const activationMode = enumeration(value.activationMode, GOVERNED_REMEDIATION_ACTIVATION_MODES, "activation mode");
   const rollbackStrategy = enumeration(
     value.rollbackStrategy,
     GOVERNED_REMEDIATION_ROLLBACK_STRATEGIES,
@@ -525,6 +625,7 @@ export function normalizeGovernedRemediationRecipe(input: unknown): GovernedReme
     if (
       inputKind !== "none" ||
       preEffectApproval !== "not_applicable" ||
+      activationMode !== "not_applicable" ||
       activationApproval !== "not_applicable" ||
       verificationProbeId !== null ||
       rollbackStrategy !== "manual_required" ||
@@ -533,8 +634,14 @@ export function normalizeGovernedRemediationRecipe(input: unknown): GovernedReme
       throw invalid("Manual recipes cannot declare input, approval, probe, rollback, or apply authority.");
     }
   } else {
-    if (preEffectApproval === "not_applicable" || activationApproval === "not_applicable") {
-      throw invalid("Governed recipes must declare both approval postures explicitly.");
+    if (preEffectApproval === "not_applicable") {
+      throw invalid("Governed recipes must declare their pre-effect approval posture explicitly.");
+    }
+    if (
+      (activationMode === "not_applicable" && activationApproval !== "not_applicable") ||
+      (activationMode === "owner_step" && activationApproval === "not_applicable")
+    ) {
+      throw invalid("Recipe activation mode and approval posture are inconsistent.");
     }
     if (verificationProbeId === null || rollbackStrategy === "manual_required" || maxApplyAttempts < 1) {
       throw invalid("Governed recipes require a live probe, bounded rollback/safe-stop, and an apply attempt.");
@@ -554,11 +661,21 @@ export function normalizeGovernedRemediationRecipe(input: unknown): GovernedReme
     allowedDeploymentProfiles: Object.freeze(allowedDeploymentProfiles),
     inputKind,
     preEffectApproval,
+    activationMode,
     activationApproval,
     verificationProbeId,
     rollbackStrategy,
     maxApplyAttempts,
   });
+}
+
+/**
+ * Derives the immutable recipe binding used by durable remediation state.
+ * Normalization runs first so equivalent allowed-array orderings have one
+ * secret-free canonical representation in every runtime.
+ */
+export function governedRemediationRecipeSha256(input: unknown): string {
+  return sha256Hex(canonicalJsonString(normalizeGovernedRemediationRecipe(input)));
 }
 
 export function normalizeGovernedRemediationStateRecord(input: unknown): GovernedRemediationStateRecord {
@@ -570,16 +687,20 @@ export function normalizeGovernedRemediationStateRecord(input: unknown): Governe
     "sourceTurnId",
     "durableRunId",
     "blockedCheckpointId",
+    "requesterActorId",
     "recipeId",
     "recipeVersion",
+    "recipeSha256",
     "scope",
     "state",
     "revision",
     "expectedWaitingRunVersion",
     "expectedOwnerRevision",
+    "parentReservationId",
     "promptId",
     "promptExpiresAt",
-    "approvalId",
+    "preEffectApprovalId",
+    "activationApprovalId",
     "effectId",
     "latestReceiptId",
     "failureId",
@@ -606,6 +727,9 @@ export function normalizeGovernedRemediationStateRecord(input: unknown): Governe
   if (state === "rollback_failed" && reconciliationId === null) {
     throw invalid("rollback_failed requires a durable reconciliation reference.");
   }
+  if (state === "reconciling_resume" && (failureId === null || reconciliationId === null)) {
+    throw invalid("reconciling_resume requires durable failure and reconciliation references.");
+  }
   if ((state === "completed" || state === "rolled_back") && latestReceiptId === null) {
     throw invalid(`${state} requires a canonical receipt reference.`);
   }
@@ -623,20 +747,121 @@ export function normalizeGovernedRemediationStateRecord(input: unknown): Governe
     sourceTurnId: identifier(value.sourceTurnId, "source turn ID"),
     durableRunId: identifier(value.durableRunId, "durable run ID"),
     blockedCheckpointId: identifier(value.blockedCheckpointId, "blocked checkpoint ID"),
+    requesterActorId: identifier(value.requesterActorId, "requester actor ID"),
     recipeId: identifier(value.recipeId, "state recipe ID"),
     recipeVersion: integer(value.recipeVersion, "state recipe version", 1),
+    recipeSha256: lowercaseSha256(value.recipeSha256, "state recipe SHA-256"),
     scope: normalizeGovernedRemediationScope(value.scope),
     state,
     revision: integer(value.revision, "state revision", 1),
     expectedWaitingRunVersion: integer(value.expectedWaitingRunVersion, "expected waiting-run version", 1),
     expectedOwnerRevision: nullableIdentifier(value.expectedOwnerRevision, "expected owner revision", 512),
+    parentReservationId: nullableIdentifier(value.parentReservationId, "parent reservation ID"),
     promptId,
     promptExpiresAt,
-    approvalId: nullableIdentifier(value.approvalId, "approval ID"),
+    preEffectApprovalId: nullableIdentifier(value.preEffectApprovalId, "pre-effect approval ID"),
+    activationApprovalId: nullableIdentifier(value.activationApprovalId, "activation approval ID"),
     effectId: nullableIdentifier(value.effectId, "effect ID"),
     latestReceiptId,
     failureId,
     reconciliationId,
+    createdAt,
+    updatedAt,
+  });
+}
+
+export function normalizeGovernedRemediationPhaseClaim(input: unknown): GovernedRemediationPhaseClaim {
+  const value = strictRecord(input, "phase claim", [
+    "schemaVersion",
+    "claimId",
+    "aggregateKind",
+    "aggregateId",
+    "remediationId",
+    "phase",
+    "claimRevision",
+    "claimantId",
+    "expectedAggregateRevision",
+    "operationId",
+    "effectId",
+    "expectedOwnerRevision",
+    "leaseTokenSha256",
+    "leaseExpiresAt",
+    "status",
+    "requestSha256",
+    "outcomeSha256",
+    "createdAt",
+    "updatedAt",
+  ]);
+  assertLiteral(
+    value.schemaVersion,
+    GOVERNED_REMEDIATION_PHASE_CLAIM_SCHEMA_VERSION,
+    "phase claim schema version",
+  );
+  const aggregateKind = enumeration(
+    value.aggregateKind,
+    GOVERNED_REMEDIATION_PHASE_CLAIM_AGGREGATE_KINDS,
+    "phase claim aggregate kind",
+  );
+  const aggregateId = identifier(value.aggregateId, "phase claim aggregate ID");
+  const remediationId = identifier(value.remediationId, "phase claim remediation ID");
+  if (aggregateKind === "state" && aggregateId !== remediationId) {
+    throw invalid("State phase claims must use their remediation ID as aggregate ID.");
+  }
+  const phase = enumeration(value.phase, GOVERNED_REMEDIATION_PHASES, "phase claim phase");
+  if (
+    (aggregateKind === "state" && phase === "effect_reconcile") ||
+    (aggregateKind === "reconciliation" && phase !== "effect_reconcile" && phase !== "resume_reconcile")
+  ) {
+    throw invalid("Phase claim phase does not match its aggregate kind.");
+  }
+  const effectId = nullableIdentifier(value.effectId, "phase claim effect ID");
+  const effectBound = [
+    "parent_reserve",
+    "apply",
+    "verify",
+    "activate_and_verify",
+    "rollback",
+    "resume",
+    "effect_reconcile",
+    "resume_reconcile",
+  ].includes(phase);
+  if (effectBound !== (effectId !== null)) {
+    throw invalid("Phase claim effect binding does not match its phase.");
+  }
+  const status = enumeration(value.status, GOVERNED_REMEDIATION_PHASE_CLAIM_STATUSES, "phase claim status");
+  const outcomeSha256 = value.outcomeSha256 === null ? null : lowercaseSha256(value.outcomeSha256, "phase outcome SHA-256");
+  if ((status === "active") !== (outcomeSha256 === null)) {
+    throw invalid("Phase claim status and outcome digest must advance together.");
+  }
+  const createdAt = timestamp(value.createdAt, "phase claim created timestamp");
+  const updatedAt = timestamp(value.updatedAt, "phase claim updated timestamp");
+  const leaseExpiresAt = timestamp(value.leaseExpiresAt, "phase claim lease expiry");
+  if (Date.parse(updatedAt) < Date.parse(createdAt) || Date.parse(leaseExpiresAt) < Date.parse(updatedAt)) {
+    throw invalid("Phase claim timestamps are not monotonic within the lease.");
+  }
+  const expectedOwnerRevision = nullableIdentifier(
+    value.expectedOwnerRevision,
+    "phase expected owner revision",
+    512,
+  );
+  return Object.freeze({
+    schemaVersion: GOVERNED_REMEDIATION_PHASE_CLAIM_SCHEMA_VERSION,
+    claimId: identifier(value.claimId, "phase claim ID"),
+    aggregateKind,
+    aggregateId,
+    remediationId,
+    phase,
+    claimRevision: integer(value.claimRevision, "phase claim revision", 1),
+    claimantId: identifier(value.claimantId, "phase claimant ID"),
+    expectedAggregateRevision: integer(value.expectedAggregateRevision, "expected phase aggregate revision", 1),
+    operationId: identifier(value.operationId, "phase operation ID"),
+    effectId,
+    expectedOwnerRevision,
+    leaseTokenSha256: lowercaseSha256(value.leaseTokenSha256, "phase lease token SHA-256"),
+    leaseExpiresAt,
+    status,
+    requestSha256: lowercaseSha256(value.requestSha256, "phase request SHA-256"),
+    outcomeSha256,
     createdAt,
     updatedAt,
   });
@@ -647,10 +872,35 @@ export function normalizeGovernedRemediationReceipt(input: unknown): GovernedRem
   const kind = enumeration(discriminator.kind, GOVERNED_REMEDIATION_RECEIPT_KINDS, "receipt kind");
   const variantKeys: Record<GovernedRemediationReceiptKind, readonly string[]> = {
     application: ["ownerId", "effectId", "ownerRevisionBefore", "ownerRevisionAfter"],
-    verification: ["applicationReceiptId", "probeId", "probeResult", "ownerRevisionObserved"],
-    rollback: ["applicationReceiptId", "rollbackStrategy", "outcome", "ownerRevisionAfter"],
+    verification: [
+      "applicationReceiptId",
+      "activationReceiptId",
+      "probeId",
+      "probeResult",
+      "ownerRevisionObserved",
+    ],
+    activation: [
+      "applicationReceiptId",
+      "initialVerificationReceiptId",
+      "ownerRevisionBefore",
+      "ownerRevisionAfter",
+    ],
+    rollback: [
+      "applicationReceiptId",
+      "rollbackStrategy",
+      "outcome",
+      "ownerRevisionBefore",
+      "ownerRevisionAfter",
+    ],
     resume: ["verificationReceiptId", "durableRunId", "blockedCheckpointId", "resumedRunVersion"],
-    reconciliation: ["reconciliationId", "failureId", "resolution", "ownerRevisionObserved"],
+    reconciliation: [
+      "reconciliationId",
+      "failureId",
+      "resolution",
+      "applicationReceiptId",
+      "resumeReceiptId",
+      "ownerRevisionObserved",
+    ],
   };
   const value = strictRecord(input, "receipt", [
     "schemaVersion",
@@ -680,9 +930,23 @@ export function normalizeGovernedRemediationReceipt(input: unknown): GovernedRem
       ...base,
       kind,
       applicationReceiptId: identifier(value.applicationReceiptId, "application receipt ID"),
+      activationReceiptId: nullableIdentifier(value.activationReceiptId, "activation receipt ID"),
       probeId: identifier(value.probeId, "verification probe ID"),
       probeResult: "accepted",
       ownerRevisionObserved: identifier(value.ownerRevisionObserved, "verified owner revision", 512),
+    });
+  }
+  if (kind === "activation") {
+    return Object.freeze({
+      ...base,
+      kind,
+      applicationReceiptId: identifier(value.applicationReceiptId, "activation application receipt ID"),
+      initialVerificationReceiptId: identifier(
+        value.initialVerificationReceiptId,
+        "activation initial verification receipt ID",
+      ),
+      ownerRevisionBefore: identifier(value.ownerRevisionBefore, "activation owner revision before", 512),
+      ownerRevisionAfter: identifier(value.ownerRevisionAfter, "activation owner revision after", 512),
     });
   }
   if (kind === "rollback") {
@@ -701,7 +965,8 @@ export function normalizeGovernedRemediationReceipt(input: unknown): GovernedRem
       applicationReceiptId: identifier(value.applicationReceiptId, "application receipt ID"),
       rollbackStrategy,
       outcome: "rolled_back",
-      ownerRevisionAfter: identifier(value.ownerRevisionAfter, "rollback owner revision", 512),
+      ownerRevisionBefore: identifier(value.ownerRevisionBefore, "rollback owner revision before", 512),
+      ownerRevisionAfter: identifier(value.ownerRevisionAfter, "rollback owner revision after", 512),
     });
   }
   if (kind === "resume") {
@@ -719,12 +984,27 @@ export function normalizeGovernedRemediationReceipt(input: unknown): GovernedRem
     GOVERNED_REMEDIATION_RECONCILIATION_RESOLUTIONS,
     "reconciliation resolution",
   );
+  const reconciliationApplicationReceiptId = nullableIdentifier(
+    value.applicationReceiptId,
+    "reconciliation application receipt ID",
+  );
+  const reconciliationResumeReceiptId = nullableIdentifier(value.resumeReceiptId, "reconciliation resume receipt ID");
+  const requiresApplication = resolution === "confirmed_verified" || resolution === "confirmed_rolled_back";
+  const requiresResume = resolution === "confirmed_resumed";
+  if (
+    requiresApplication !== (reconciliationApplicationReceiptId !== null) ||
+    requiresResume !== (reconciliationResumeReceiptId !== null)
+  ) {
+    throw invalid("Reconciliation receipt application lineage does not match its resolution.");
+  }
   return Object.freeze({
     ...base,
     kind,
     reconciliationId: identifier(value.reconciliationId, "receipt reconciliation ID"),
     failureId: identifier(value.failureId, "receipt failure ID"),
     resolution,
+    applicationReceiptId: reconciliationApplicationReceiptId,
+    resumeReceiptId: reconciliationResumeReceiptId,
     ownerRevisionObserved: nullableIdentifier(value.ownerRevisionObserved, "reconciled owner revision", 512),
   });
 }
@@ -796,6 +1076,7 @@ export function normalizeGovernedRemediationReconciliation(input: unknown): Gove
     "recipeId",
     "recipeVersion",
     "scope",
+    "domain",
     "reason",
     "observation",
     "state",
@@ -811,12 +1092,34 @@ export function normalizeGovernedRemediationReconciliation(input: unknown): Gove
     "reconciliation schema version",
   );
   const reason = enumeration(value.reason, GOVERNED_REMEDIATION_RECONCILIATION_REASONS, "reconciliation reason");
+  const domain = enumeration(
+    value.domain,
+    GOVERNED_REMEDIATION_RECONCILIATION_DOMAINS,
+    "reconciliation domain",
+  );
+  if (
+    (domain === "resume" && reason !== "resume_receipt_missing") ||
+    (domain === "effect" && reason === "resume_receipt_missing")
+  ) {
+    throw invalid("Reconciliation domain does not match its reason.");
+  }
   const observation = enumeration(
     value.observation,
     GOVERNED_REMEDIATION_RECONCILIATION_OBSERVATIONS,
     "reconciliation observation",
   );
   const state = enumeration(value.state, GOVERNED_REMEDIATION_RECONCILIATION_STATES, "reconciliation state");
+  const resumeObservation = observation.startsWith("resume_");
+  const resumeState = state === "resolved_resumed" || state === "resolved_not_resumed";
+  const effectState = state === "resolved_no_effect" || state === "resolved_rolled_back" || state === "resolved_verified";
+  if (
+    (domain === "resume" && (!resumeObservation && observation !== "unknown")) ||
+    (domain === "effect" && resumeObservation) ||
+    (domain === "resume" && effectState) ||
+    (domain === "effect" && resumeState)
+  ) {
+    throw invalid("Reconciliation domain does not match its observation or state.");
+  }
   const resolutionReceiptId = nullableIdentifier(value.resolutionReceiptId, "resolution receipt ID");
   if ((state === "open" || state === "quarantined" || state === "manual_required") && resolutionReceiptId !== null) {
     throw invalid(`${state} reconciliation cannot claim a resolution receipt.`);
@@ -833,6 +1136,12 @@ export function normalizeGovernedRemediationReconciliation(input: unknown): Gove
   if (state === "resolved_verified" && observation !== "effect_verified") {
     throw invalid("resolved_verified requires an effect_verified owner observation.");
   }
+  if (state === "resolved_resumed" && observation !== "resume_completed") {
+    throw invalid("resolved_resumed requires a resume_completed owner observation.");
+  }
+  if (state === "resolved_not_resumed" && observation !== "resume_not_completed") {
+    throw invalid("resolved_not_resumed requires a resume_not_completed owner observation.");
+  }
   const createdAt = timestamp(value.createdAt, "reconciliation created timestamp");
   const updatedAt = timestamp(value.updatedAt, "reconciliation updated timestamp");
   if (Date.parse(updatedAt) < Date.parse(createdAt)) {
@@ -846,6 +1155,7 @@ export function normalizeGovernedRemediationReconciliation(input: unknown): Gove
     recipeId: identifier(value.recipeId, "reconciliation recipe ID"),
     recipeVersion: integer(value.recipeVersion, "reconciliation recipe version", 1),
     scope: normalizeGovernedRemediationScope(value.scope),
+    domain,
     reason,
     observation,
     state,
@@ -922,6 +1232,13 @@ function identifier(value: unknown, field: string, maxLength = 256): string {
 
 function nullableIdentifier(value: unknown, field: string, maxLength = 256): string | null {
   return value === null ? null : identifier(value, field, maxLength);
+}
+
+function lowercaseSha256(value: unknown, field: string): string {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/u.test(value)) {
+    throw invalid(`${field} must be a lower-case SHA-256 digest.`);
+  }
+  return value;
 }
 
 function integer(value: unknown, field: string, minimum: number, maximum = Number.MAX_SAFE_INTEGER): number {

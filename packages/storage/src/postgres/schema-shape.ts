@@ -314,6 +314,7 @@ export function buildPostgresSchemaShapeManifest(
   const tables = new Map<string, MutableTable>();
   const indexes = new Map<string, PostgresSchemaShapeIndex>();
   for (const migration of migrations) {
+    collectDroppedTables(migration.sql, tables, indexes);
     collectCreateTables(migration.sql, tables);
     collectAddedColumns(migration.sql, tables);
     collectCreateIndexes(migration.sql, indexes);
@@ -362,6 +363,29 @@ interface MutableTable {
   name: string;
   columns: Map<string, PostgresSchemaShapeColumn>;
   constraints: Map<string, PostgresSchemaShapeConstraint>;
+}
+
+function collectDroppedTables(
+  sql: string,
+  tables: Map<string, MutableTable>,
+  indexes: Map<string, PostgresSchemaShapeIndex>,
+): void {
+  const pattern = /\bDROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?/gi;
+  for (const match of sql.matchAll(pattern)) {
+    if (match.index === undefined) continue;
+    const end = findStatementEnd(sql, match.index + match[0].length);
+    const body = sql
+      .slice(match.index + match[0].length, end)
+      .replace(/\s+(?:CASCADE|RESTRICT)\s*$/i, "");
+    for (const rawName of splitTopLevel(body, ",")) {
+      const tableName = normalizeIdentifier(lastQualifiedIdentifier(rawName.replace(/\s*\*\s*$/u, "")));
+      if (!isCanonicalIdentifier(tableName)) continue;
+      tables.delete(tableName);
+      for (const [indexName, index] of indexes) {
+        if (index.tableName === tableName) indexes.delete(indexName);
+      }
+    }
+  }
 }
 
 function collectCreateTables(sql: string, tables: Map<string, MutableTable>): void {

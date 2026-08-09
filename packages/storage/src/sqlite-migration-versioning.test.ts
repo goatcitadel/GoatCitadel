@@ -42,8 +42,8 @@ describe("sqlite schema migrations", () => {
     assert.deepEqual(
       { ...rows.at(-1) },
       {
-        version: 191,
-        name: "governed_remediation_durable_owner",
+        version: 192,
+        name: "governed_remediation_recipe_and_phase_authority",
       },
     );
     db.close();
