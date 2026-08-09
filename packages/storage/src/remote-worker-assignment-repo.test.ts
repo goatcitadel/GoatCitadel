@@ -606,6 +606,120 @@ describe("RemoteWorkerAssignmentRepository", () => {
     );
   });
 
+  it("authenticates cancellation-tolerant control reads without weakening active lease authority", () => {
+    const h = createHarness("control-read-authority");
+    h.assignments.startGeneration(h.startInput);
+    const input = {
+      registryWorkspaceId: "default",
+      assignmentId: h.assignment.assignmentId,
+      expectedAssignmentGeneration: 1,
+      expectedLeaseRevision: 1,
+      leaseTokenSha256: h.startInput.leaseTokenSha256,
+    } as const;
+
+    const active = h.assignments.resolveControlReadAuthorityByLeaseTokenHash(input);
+    assert.equal(active?.disposition, "active");
+    assert.equal(active?.generation.nodeAdmissionGeneration, h.nodeAdmission.admissionGeneration);
+    assert.equal(active?.lease.leaseRevision, 1);
+    assert.equal(
+      h.assignments.resolveControlReadAuthorityByLeaseTokenHash({ ...input, leaseTokenSha256: D("wrong-token") }),
+      undefined,
+    );
+    assert.equal(
+      h.assignments.resolveControlReadAuthorityByLeaseTokenHash({ ...input, expectedLeaseRevision: 2 }),
+      undefined,
+    );
+    assert.equal(
+      h.assignments.resolveControlReadAuthorityByLeaseTokenHash({ ...input, expectedAssignmentGeneration: 2 }),
+      undefined,
+    );
+    assert.equal(
+      h.assignments.resolveControlReadAuthorityByLeaseTokenHash({ ...input, registryWorkspaceId: "other" }),
+      undefined,
+    );
+
+    const control = h.assignments.requestCancellation({
+      registryWorkspaceId: "default",
+      assignmentId: h.assignment.assignmentId,
+      expectedAssignmentGeneration: 1,
+      expectedLeaseRevision: 1,
+      reasonCode: "operator.cancelled",
+      reasonSha256: D("control-read-authority:reason"),
+      actorId: "operator-a",
+      idempotencyKey: "control-read-authority:cancel",
+    });
+    const cancelled = h.assignments.resolveControlReadAuthorityByLeaseTokenHash(input);
+    assert.equal(cancelled?.disposition, "cancel_requested");
+    assert.deepEqual(cancelled?.disposition === "cancel_requested" ? cancelled.control : undefined, control);
+    assert.throws(
+      () => h.assignments.resolveActiveAuthorityByLeaseTokenHash(h.startInput.leaseTokenSha256),
+      ConflictError,
+    );
+
+    h.assignments.settleAssignment({
+      registryWorkspaceId: "default",
+      assignmentId: h.assignment.assignmentId,
+      expectedAssignmentGeneration: 1,
+      expectedLeaseRevision: 1,
+      origin: "worker",
+      leaseTokenSha256: h.startInput.leaseTokenSha256,
+      outcome: "cancelled",
+      finalEventSequence: 0,
+      finalEventSha256: REMOTE_WORKER_ASSIGNMENT_EVENT_GENESIS_SHA256,
+      idempotencyKey: "control-read-authority:settle",
+    });
+    assert.equal(h.assignments.resolveControlReadAuthorityByLeaseTokenHash(input), undefined);
+  });
+
+  it("refuses expired, recovery-exhausted, and abandoned control-read authorities", async () => {
+    const exhausted = createHarness("control-read-exhausted", 1);
+    exhausted.assignments.startGeneration(exhausted.startInput);
+    const exhaustedInput = {
+      registryWorkspaceId: "default",
+      assignmentId: exhausted.assignment.assignmentId,
+      expectedAssignmentGeneration: 1,
+      expectedLeaseRevision: 1,
+      leaseTokenSha256: exhausted.startInput.leaseTokenSha256,
+    } as const;
+    await sleep(1_150);
+    assert.equal(exhausted.assignments.resolveControlReadAuthorityByLeaseTokenHash(exhaustedInput), undefined);
+    exhausted.assignments.markRecoveryExhausted({
+      registryWorkspaceId: "default",
+      assignmentId: exhausted.assignment.assignmentId,
+      expectedAssignmentGeneration: 1,
+      expectedLeaseRevision: 1,
+      reasonCode: "lease.recovery_exhausted",
+      reasonSha256: D("control-read-exhausted:reason"),
+      actorId: "gateway-a",
+      idempotencyKey: "control-read-exhausted:control",
+    });
+    assert.equal(exhausted.assignments.resolveControlReadAuthorityByLeaseTokenHash(exhaustedInput), undefined);
+
+    const abandoned = createHarness("control-read-abandoned", 1);
+    abandoned.assignments.startGeneration(abandoned.startInput);
+    await sleep(1_150);
+    abandoned.assignments.recoverExpiredAssignment({
+      ...abandoned.startInput,
+      expectedAssignmentGeneration: 1,
+      expectedLeaseRevision: 1,
+      leaseTokenSha256: D("control-read-abandoned:lease:2"),
+      reasonCode: "lease.expired",
+      reasonSha256: D("control-read-abandoned:reason"),
+      actorId: "gateway-a",
+      idempotencyKey: "control-read-abandoned:generation:2",
+    });
+    assert.equal(
+      abandoned.assignments.resolveControlReadAuthorityByLeaseTokenHash({
+        registryWorkspaceId: "default",
+        assignmentId: abandoned.assignment.assignmentId,
+        expectedAssignmentGeneration: 1,
+        expectedLeaseRevision: 1,
+        leaseTokenSha256: abandoned.startInput.leaseTokenSha256,
+      }),
+      undefined,
+    );
+  });
+
   it("gateway-terminalizes a cancelled assignment after its worker dies and lease expires", async () => {
     const h = createHarness("cancel-expiry", 1);
     h.assignments.startGeneration(h.startInput);

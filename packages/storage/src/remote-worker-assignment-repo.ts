@@ -75,6 +75,29 @@ export interface RenewRemoteWorkerAssignmentLeaseOutcome {
   lease: RemoteWorkerAssignmentLeaseRecord;
 }
 
+export interface ResolveRemoteWorkerAssignmentControlReadInput {
+  readonly registryWorkspaceId: string;
+  readonly assignmentId: string;
+  readonly expectedAssignmentGeneration: number;
+  readonly expectedLeaseRevision: number;
+  readonly leaseTokenSha256: string;
+}
+
+export type ResolvedRemoteWorkerAssignmentControlReadAuthority =
+  | Readonly<{
+      disposition: "active";
+      assignment: RemoteWorkerAssignmentRecord;
+      generation: RemoteWorkerAssignmentGenerationRecord;
+      lease: RemoteWorkerAssignmentLeaseRecord;
+    }>
+  | Readonly<{
+      disposition: "cancel_requested";
+      assignment: RemoteWorkerAssignmentRecord;
+      generation: RemoteWorkerAssignmentGenerationRecord;
+      lease: RemoteWorkerAssignmentLeaseRecord;
+      control: RemoteWorkerAssignmentControlRecord;
+    }>;
+
 export interface RecoverRemoteWorkerAssignmentOutcome {
   disposition: "recovered" | "replayed_without_lease_secret";
   abandoned: RemoteWorkerAssignmentControlRecord;
@@ -548,6 +571,67 @@ export class RemoteWorkerAssignmentRepository {
         generation: this.mapGeneration(generation),
         lease: this.mapLease(current),
       };
+    });
+  }
+
+  /**
+   * Resolve the exact current lease for a worker control read. Unlike the
+   * mutation-only active resolver, this read remains available after a
+   * `cancel_requested` control so a correctly fenced worker can observe the
+   * cancellation and settle it. Recovery/abandonment controls and settlements
+   * remain terminal, and no lease digest leaves this repository boundary.
+   */
+  public resolveControlReadAuthorityByLeaseTokenHash(
+    input: ResolveRemoteWorkerAssignmentControlReadInput,
+  ): ResolvedRemoteWorkerAssignmentControlReadAuthority | undefined {
+    const registryWorkspaceId = identifier(input.registryWorkspaceId, "registryWorkspaceId");
+    const assignmentId = identifier(input.assignmentId, "assignmentId");
+    const expectedAssignmentGeneration = positiveInteger(
+      input.expectedAssignmentGeneration,
+      "expectedAssignmentGeneration",
+    );
+    const expectedLeaseRevision = positiveInteger(input.expectedLeaseRevision, "expectedLeaseRevision");
+    const leaseTokenSha256 = digest(input.leaseTokenSha256, "leaseTokenSha256");
+    const hint = this.findLeaseByTokenHash(leaseTokenSha256);
+    if (
+      !hint ||
+      hint.registry_workspace_id !== registryWorkspaceId ||
+      hint.assignment_id !== assignmentId ||
+      asPositiveInteger(hint.assignment_generation) !== expectedAssignmentGeneration ||
+      asPositiveInteger(hint.lease_revision) !== expectedLeaseRevision
+    ) {
+      return undefined;
+    }
+    return this.db.transaction("immediate", () => {
+      const generation = this.getGenerationRow(registryWorkspaceId, assignmentId, expectedAssignmentGeneration);
+      this.acquirePostgresGenerationLocks(
+        generation.execution_workspace_id,
+        generation.node_id,
+        generation.registry_workspace_id,
+        generation.worker_id,
+        generation.assignment_id,
+        asPositiveInteger(generation.assignment_generation),
+      );
+      const current = this.getCurrentLeaseRow(registryWorkspaceId, assignmentId, expectedAssignmentGeneration);
+      if (
+        asPositiveInteger(current.lease_revision) !== expectedLeaseRevision ||
+        current.lease_token_sha256 !== leaseTokenSha256 ||
+        !this.isTimestampFresh(current.expires_at)
+      ) {
+        return undefined;
+      }
+      this.assertLeaseDispatchAuthorityLive(generation, current);
+      if (this.findSettlement(registryWorkspaceId, assignmentId)) return undefined;
+      const control = this.findLatestControlRow(registryWorkspaceId, assignmentId, expectedAssignmentGeneration);
+      if (control !== undefined && control.action !== "cancel_requested") return undefined;
+      const authority = {
+        assignment: this.getAssignment(registryWorkspaceId, assignmentId),
+        generation: this.mapGeneration(generation),
+        lease: this.mapLease(current),
+      };
+      return control === undefined
+        ? { disposition: "active", ...authority }
+        : { disposition: "cancel_requested", ...authority, control: this.mapControl(control) };
     });
   }
 
