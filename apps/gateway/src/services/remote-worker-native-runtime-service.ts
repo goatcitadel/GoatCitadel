@@ -5,6 +5,7 @@ import {
 import {
   startRemoteWorkerNativeTlsListener,
   type RemoteWorkerNativeTlsListenerHandle,
+  type RemoteWorkerNativeRequestHandler,
 } from "./remote-worker-native-tls-listener.js";
 import {
   SharedHostAdmissionClosedError,
@@ -17,6 +18,7 @@ export type RemoteWorkerNativeRuntimeState =
   | "disabled"
   | "starting"
   | "listening_dark"
+  | "listening_live"
   | "failed_closed"
   | "closed";
 
@@ -46,8 +48,9 @@ const LISTENER_START_RESERVATION_ID = "gateway:remote-worker-native-listener-sta
 
 export function createRemoteWorkerNativeRuntimeService(input: {
   readonly sharedHostLifecycle: SharedHostLifecycleAdmissionPort;
+  readonly handler?: RemoteWorkerNativeRequestHandler;
 }): RemoteWorkerNativeRuntimeService {
-  return new DefaultRemoteWorkerNativeRuntimeService(input.sharedHostLifecycle);
+  return new DefaultRemoteWorkerNativeRuntimeService(input.sharedHostLifecycle, input.handler);
 }
 
 class DefaultRemoteWorkerNativeRuntimeService implements RemoteWorkerNativeRuntimeService {
@@ -58,7 +61,10 @@ class DefaultRemoteWorkerNativeRuntimeService implements RemoteWorkerNativeRunti
   private closePromise: Promise<void> | undefined;
   private inFlightStartAbort: AbortController | undefined;
 
-  constructor(private readonly sharedHostLifecycle: SharedHostLifecycleAdmissionPort) {}
+  constructor(
+    private readonly sharedHostLifecycle: SharedHostLifecycleAdmissionPort,
+    private readonly handler: RemoteWorkerNativeRequestHandler | undefined,
+  ) {}
 
   snapshot(): RemoteWorkerNativeRuntimeSnapshot {
     return snapshot(this.state, this.handle);
@@ -67,7 +73,9 @@ class DefaultRemoteWorkerNativeRuntimeService implements RemoteWorkerNativeRunti
   start(): Promise<RemoteWorkerNativeRuntimeSnapshot> {
     return this.serialize(async () => {
       this.assertOpen();
-      if (this.state === "disabled" || this.state === "listening_dark") return this.snapshot();
+      if (this.state === "disabled" || this.state === "listening_dark" || this.state === "listening_live") {
+        return this.snapshot();
+      }
       if (this.state !== "uninitialized") {
         throw new Error("Remote worker native runtime has failed closed; use an explicit reload to retry.");
       }
@@ -139,13 +147,13 @@ class DefaultRemoteWorkerNativeRuntimeService implements RemoteWorkerNativeRunti
       // The listener owns bounded trust loading and bind cleanup but has no
       // cancellation input. Await it to completion so an aborted late bind can
       // be synchronously closed before this operation releases admission.
-      const handle = await startRemoteWorkerNativeTlsListener(config);
+      const handle = await startRemoteWorkerNativeTlsListener(config, this.handler);
       this.handle = handle;
       if (!handle.enabled || reservation.signal.aborted || localAbort.signal.aborted || this.terminalRequested) {
         await this.closeActiveHandle();
         throw abortReason(reservation.signal, localAbort.signal);
       }
-      this.state = "listening_dark";
+      this.state = this.handler === undefined ? "listening_dark" : "listening_live";
       return this.snapshot();
     } finally {
       if (this.inFlightStartAbort === localAbort) this.inFlightStartAbort = undefined;
@@ -185,8 +193,10 @@ function snapshot(
 ): RemoteWorkerNativeRuntimeSnapshot {
   const value = Object.assign(Object.create(null) as Record<string, unknown>, {
     state,
-    enabled: state === "listening_dark",
-    ...(state === "listening_dark" && handle?.address !== undefined ? { address: handle.address } : {}),
+    enabled: state === "listening_dark" || state === "listening_live",
+    ...((state === "listening_dark" || state === "listening_live") && handle?.address !== undefined
+      ? { address: handle.address }
+      : {}),
   });
   return Object.freeze(value) as unknown as RemoteWorkerNativeRuntimeSnapshot;
 }

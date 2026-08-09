@@ -9,7 +9,10 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import * as listenerModule from "./remote-worker-native-tls-listener.js";
-import { startRemoteWorkerNativeTlsListener } from "./remote-worker-native-tls-listener.js";
+import {
+  startRemoteWorkerNativeTlsListener,
+  type RemoteWorkerNativeHandlerRequest,
+} from "./remote-worker-native-tls-listener.js";
 import type { EnabledRemoteWorkerRuntimeConfig } from "./remote-worker-runtime-config.js";
 import { remoteWorkerWindowsNoFollowHelperDiagnostics } from "./remote-worker-windows-no-follow.js";
 
@@ -134,7 +137,8 @@ function portOf(address: string | undefined): number {
 async function request(
   port: number,
   overrides: Record<string, unknown> = {},
-): Promise<{ status: number; body: string }> {
+  body = Buffer.alloc(0),
+): Promise<{ status: number; body: string; headers: Readonly<Record<string, string | string[] | undefined>> }> {
   return await new Promise((resolve, reject) => {
     const outgoing = httpsRequest(
       {
@@ -149,19 +153,23 @@ async function request(
         maxVersion: "TLSv1.3",
         rejectUnauthorized: true,
         agent: false,
-        headers: { "Content-Length": "0" },
+        headers: { "Content-Type": "application/json", "Content-Length": String(body.byteLength) },
         ...overrides,
       },
       (response) => {
         const chunks: Buffer[] = [];
         response.on("data", (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
         response.once("end", () =>
-          resolve({ status: response.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }),
+          resolve({
+            status: response.statusCode ?? 0,
+            body: Buffer.concat(chunks).toString("utf8"),
+            headers: Object.freeze({ ...response.headers }),
+          }),
         );
       },
     );
     outgoing.once("error", reject);
-    outgoing.end();
+    outgoing.end(body);
   });
 }
 
@@ -259,12 +267,149 @@ describe("remote worker native TLS listener", () => {
       openHandles.push(handle);
       const port = portOf(handle.address);
       const [first, second] = await Promise.all([request(port), request(port)]);
-      expect(first).toEqual({ status: 503, body: '{"error":"REMOTE_WORKER_UNAVAILABLE"}\n' });
+      expect(first).toMatchObject({ status: 503, body: '{"error":"REMOTE_WORKER_UNAVAILABLE"}\n' });
+      expect(first.headers).toMatchObject({
+        "cache-control": "no-store",
+        connection: "close",
+        "content-type": "application/json; charset=utf-8",
+        "retry-after": "60",
+      });
       expect(second).toEqual(first);
       expect(Object.getPrototypeOf(handle)).toBeNull();
 
       await expect(request(port, { cert: undefined, key: undefined })).rejects.toThrow();
       await expect(request(port, { minVersion: "TLSv1.2", maxVersion: "TLSv1.2" })).rejects.toThrow();
+    },
+    90_000,
+  );
+
+  it.runIf(process.platform === "win32")(
+    "passes only frozen normalized request data to a live handler and zeroes ephemeral request authority",
+    async () => {
+      let captured:
+        | {
+            readonly bodyBytes: Buffer;
+            readonly exporter: Buffer;
+          }
+        | undefined;
+      const handlerBody = Buffer.from('{"accepted":true}\n', "utf8");
+      const handler = async (requestValue: RemoteWorkerNativeHandlerRequest) => {
+        expect(Object.isFrozen(requestValue)).toBe(true);
+        expect(Object.getPrototypeOf(requestValue)).toBeNull();
+        expect(Object.isFrozen(requestValue.headers)).toBe(true);
+        expect(Object.getPrototypeOf(requestValue.headers)).toBeNull();
+        expect(Object.keys(requestValue)).toEqual([
+          "method",
+          "rawPath",
+          "headers",
+          "bodyBytes",
+          "transportIdentity",
+        ]);
+        expect(requestValue.method).toBe("POST");
+        expect(requestValue.rawPath).toBe("/remote-worker/live");
+        expect(requestValue.headers["content-type"]).toBe("application/json");
+        expect(requestValue.bodyBytes.toString("utf8")).toBe('{"operation":"heartbeat"}');
+        expect(requestValue.transportIdentity).toMatchObject({
+          source: "native_mtls",
+          certificateDerSha256: expect.stringMatching(/^[0-9a-f]{64}$/u),
+          publicKeySpkiSha256: expect.stringMatching(/^[0-9a-f]{64}$/u),
+          trustAnchorDerSha256: expect.stringMatching(/^[0-9a-f]{64}$/u),
+          tlsExporterSha256: expect.stringMatching(/^[0-9a-f]{64}$/u),
+        });
+        expect(requestValue.transportIdentity.tlsExporter).toHaveLength(32);
+        captured = {
+          bodyBytes: requestValue.bodyBytes,
+          exporter: requestValue.transportIdentity.tlsExporter,
+        };
+        return Object.freeze({
+          statusCode: 202,
+          headers: Object.freeze({ "content-type": "application/json", "x-goatcitadel-result": "accepted" }),
+          body: handlerBody,
+        });
+      };
+      const handle = await startRemoteWorkerNativeTlsListener(await config(), handler);
+      openHandles.push(handle);
+      const body = Buffer.from('{"operation":"heartbeat"}', "utf8");
+      const result = await request(portOf(handle.address), { path: "/remote-worker/live" }, body);
+
+      expect(result).toMatchObject({
+        status: 202,
+        body: '{"accepted":true}\n',
+        headers: {
+          "cache-control": "no-store",
+          connection: "close",
+          "content-type": "application/json",
+          "x-goatcitadel-result": "accepted",
+        },
+      });
+      expect(captured).toBeDefined();
+      expect(captured?.bodyBytes.every((value) => value === 0)).toBe(true);
+      expect(captured?.exporter.every((value) => value === 0)).toBe(true);
+      expect(handlerBody.toString("utf8")).toBe('{"accepted":true}\n');
+    },
+    90_000,
+  );
+
+  it.runIf(process.platform === "win32")(
+    "enforces the exact POST/JSON envelope and fails handler errors with a bounded generic response",
+    async () => {
+      let failedBody: Buffer | undefined;
+      let failedExporter: Buffer | undefined;
+      const handler = async (requestValue: RemoteWorkerNativeHandlerRequest) => {
+        if (requestValue.rawPath === "/remote-worker/throws") {
+          failedBody = requestValue.bodyBytes;
+          failedExporter = requestValue.transportIdentity.tlsExporter;
+          throw new Error("operator-private handler detail");
+        }
+        if (requestValue.rawPath === "/remote-worker/invalid-response") {
+          return {
+            statusCode: 200,
+            headers: { connection: "keep-alive" },
+            body: "{}",
+          };
+        }
+        if (requestValue.rawPath === "/remote-worker/oversized-response") {
+          return {
+            statusCode: 200,
+            body: Buffer.alloc(listenerModule.REMOTE_WORKER_NATIVE_TLS_LIMITS.maxResponseBodyBytes + 1),
+          };
+        }
+        return { statusCode: 200, body: "{}" };
+      };
+      const handle = await startRemoteWorkerNativeTlsListener(await config(), handler);
+      openHandles.push(handle);
+      const port = portOf(handle.address);
+
+      await expect(request(port, { method: "GET" })).rejects.toThrow();
+      await expect(request(port, { headers: { "Content-Length": "0" } })).rejects.toThrow();
+      await expect(
+        request(port, {
+          headers: {
+            "Content-Type": "application/json",
+            "Content-Length": String(listenerModule.REMOTE_WORKER_NATIVE_TLS_LIMITS.maxProtocolBodyBytes + 1),
+          },
+        }),
+      ).rejects.toThrow();
+      const chunked = await malformedTlsRequest(
+        port,
+        "POST /remote-worker/live HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n",
+      );
+      expect(chunked).toHaveLength(0);
+      const incomplete = await malformedTlsRequest(
+        port,
+        "POST /remote-worker/live HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: 3\r\n\r\n{}",
+      );
+      expect(incomplete).toHaveLength(0);
+
+      const thrown = await request(port, { path: "/remote-worker/throws" });
+      expect(thrown).toMatchObject({ status: 500, body: '{"error":"REMOTE_WORKER_REQUEST_FAILED"}\n' });
+      expect(JSON.stringify(thrown)).not.toContain("operator-private handler detail");
+      expect(failedBody?.every((value) => value === 0)).toBe(true);
+      expect(failedExporter?.every((value) => value === 0)).toBe(true);
+      const invalid = await request(port, { path: "/remote-worker/invalid-response" });
+      expect(invalid).toMatchObject({ status: 500, body: '{"error":"REMOTE_WORKER_REQUEST_FAILED"}\n' });
+      const oversized = await request(port, { path: "/remote-worker/oversized-response" });
+      expect(oversized).toMatchObject({ status: 500, body: '{"error":"REMOTE_WORKER_REQUEST_FAILED"}\n' });
     },
     90_000,
   );
