@@ -74,6 +74,7 @@ describe("session mutation source inventory", () => {
       "services/chat-autonomous-turn-service.ts": 1,
       "services/chat-turn-entry-service.ts": 2,
       "services/durable-run-service.ts": 1,
+      "services/gateway-service.ts": 1,
       "services/session-control-runtime-owner.ts": 1,
       "services/session-control-service.ts": 1,
     });

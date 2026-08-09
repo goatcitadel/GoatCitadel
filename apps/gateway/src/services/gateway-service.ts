@@ -446,6 +446,7 @@ import { MediaVoiceService } from "./media-voice-service.js";
 import { ChannelVoiceInboundService } from "./channel-voice-inbound-service.js";
 import {
   InboundChannelEventService,
+  InboundChannelTurnTerminalError,
   type InboundChannelDeterministicIdentity,
 } from "./inbound-channel-event-service.js";
 import { CronAutomationService } from "./gateway/cron-automation-service.js";
@@ -4115,7 +4116,9 @@ export class GatewayService {
     } = {},
   ): Promise<ChatSendMessageResponse> {
     return await this.withChatTurnWriteLease(sessionId, "integration-reply", async () => {
-      await this.ensureChatMessageProjection(sessionId);
+      if (!input.inboundDurableIdentity) {
+        await this.ensureChatMessageProjection(sessionId);
+      }
       const userMessage = await this.storage.chatMessages.get(userMessageId);
       if (!userMessage || userMessage.sessionId !== sessionId || userMessage.role !== "user") {
         throw new Error("existing user message was not found in the requested session");
@@ -4133,37 +4136,127 @@ export class GatewayService {
         content: userMessage.content,
         ...chatInput,
       };
-      const prepared = await this.prepareAgentChatTurn(sessionId, request, {
-        branchKind: "append",
-        existingUserMessage: userMessage,
-        ingestUserMessage: false,
-        extraSystemInstruction: channelSystemInstruction,
-        ...(inboundDurableIdentity
-          ? {
-              userMessageId: inboundDurableIdentity.userMessageId,
-              turnId: inboundDurableIdentity.turnId,
-              assistantMessageId: inboundDurableIdentity.assistantMessageId,
-            }
-          : {}),
-      });
-      const response = await this.consumePreparedAgentChatTurn(
-        sessionId,
-        request,
-        prepared,
-        "chat_thread_turn_appended",
-        undefined,
-        inboundDurableIdentity
-          ? {
-              durableRunId: inboundDurableIdentity.durableRunId,
-              requireDurableExecution: true,
-              onChildDurableRunLaunched: async (runId) => {
-                inboundDurableIdentity.onDurableRunLaunched?.(runId);
-              },
-            }
-          : undefined,
-      );
+      const turnId = inboundDurableIdentity?.turnId ?? randomUUID();
+      const occurrenceId = inboundDurableIdentity?.inboundEventId ?? turnId;
+      let deliveryFallbackMessageId = userMessage.messageId;
+      let response = inboundDurableIdentity
+        ? await this.loadCanonicalInboundChatResponse(sessionId, request, inboundDurableIdentity)
+        : undefined;
+      if (response) {
+        await inboundDurableIdentity?.onDurableRunLaunched?.(inboundDurableIdentity.durableRunId);
+      } else {
+        const admissionActorId = `system:integration:${binding.connectionId}`;
+        let turnAdmission: import("./chat-turn-types.js").ActiveTurnAdmission;
+        try {
+          turnAdmission = await this.sessionControlRuntimeOwner.admitSystemChatTurn({
+            sessionId,
+            turnId,
+            request,
+            systemActorId: admissionActorId,
+            occurrenceId,
+            idempotencyKey: inboundDurableIdentity
+              ? `chat-turn:inbound:${occurrenceId}`
+              : `chat-turn:integration:${occurrenceId}`,
+            correlationId: occurrenceId,
+          });
+        } catch (error) {
+          if (inboundDurableIdentity) {
+            throw new InboundChannelTurnTerminalError(
+              `Inbound Chat turn ${turnId} could not obtain active pre-durable authority.`,
+              error,
+            );
+          }
+          throw error;
+        }
+        let admissionHeartbeat:
+          | ReturnType<typeof this.sessionControlRuntimeOwner.startRequestLeaseHeartbeat>
+          | undefined;
+        let completedNormally = false;
+        try {
+          await this.sessionControlRuntimeOwner.renewRequestLease(turnAdmission);
+          admissionHeartbeat = this.sessionControlRuntimeOwner.startRequestLeaseHeartbeat(turnAdmission);
+          admissionHeartbeat.assertHealthy();
+          const prepared = await this.prepareAgentChatTurn(sessionId, request, {
+            branchKind: "append",
+            existingUserMessage: userMessage,
+            ingestUserMessage: false,
+            extraSystemInstruction: channelSystemInstruction,
+            turnAdmission,
+            userMessageId: inboundDurableIdentity?.userMessageId ?? userMessage.messageId,
+            turnId,
+            ...(inboundDurableIdentity
+              ? {
+                  assistantMessageId: inboundDurableIdentity.assistantMessageId,
+                }
+              : {}),
+          });
+          deliveryFallbackMessageId = prepared.userEventId;
+          admissionHeartbeat.assertHealthy();
+          response = await this.consumePreparedAgentChatTurn(
+            sessionId,
+            request,
+            prepared,
+            "chat_thread_turn_appended",
+            undefined,
+            inboundDurableIdentity
+              ? {
+                  durableRunId: inboundDurableIdentity.durableRunId,
+                  requireDurableExecution: true,
+                  onChildDurableRunLaunched: async (runId) => {
+                    admissionHeartbeat?.stop();
+                    admissionHeartbeat = undefined;
+                    await inboundDurableIdentity.onDurableRunLaunched?.(runId);
+                  },
+                }
+              : undefined,
+          );
+          if (turnAdmission.requestClaim) {
+            admissionHeartbeat?.assertHealthy();
+          }
+          if (inboundDurableIdentity && turnAdmission.requestClaim) {
+            throw new Error(`Inbound Chat turn ${turnId} did not transfer to durable authority.`);
+          }
+          completedNormally = true;
+        } catch (error) {
+          if (inboundDurableIdentity && turnAdmission.requestClaim) {
+            throw new InboundChannelTurnTerminalError(
+              `Inbound Chat turn ${turnId} failed before durable authority transfer.`,
+              error,
+            );
+          }
+          throw error;
+        } finally {
+          admissionHeartbeat?.stop();
+          admissionHeartbeat = undefined;
+          if (turnAdmission.requestClaim) {
+            await this.sessionControlRuntimeOwner.closeTurnWrite({
+              admission: turnAdmission,
+              status: completedNormally && response?.trace?.status !== "cancelled" ? "completed" : "cancelled",
+              actorId: admissionActorId,
+              idempotencyKey: inboundDurableIdentity
+                ? `chat-turn:inbound:${occurrenceId}:prebind-close`
+                : `chat-turn:integration:${occurrenceId}:request-close`,
+              correlationId: occurrenceId,
+            });
+          }
+        }
+      }
+      if (!response) {
+        throw new Error(`Integration reply turn ${turnId} completed without a response.`);
+      }
       const assistantContent = response.assistantMessage?.content?.trim();
-      if (assistantContent) {
+      const inboundWaitingForApproval = Boolean(
+        inboundDurableIdentity && response.trace?.status === "waiting_for_approval",
+      );
+      const inboundResponseIsDeliverable =
+        inboundWaitingForApproval ||
+        ((response.trace?.status === "completed" || response.trace?.status === "partial") && Boolean(assistantContent));
+      if (inboundDurableIdentity && !inboundResponseIsDeliverable) {
+        throw new InboundChannelTurnTerminalError(
+          `Inbound Chat turn ${turnId} settled without a deliverable assistant response.`,
+        );
+      }
+      if (assistantContent && !inboundWaitingForApproval) {
         await this.ensureSessionInternalToolGrant(sessionId, "channel.send", "system-integration-reply");
         // B2b voice replies: synthesize first (hard-bounded inside the
         // service), then send text+audio together on the existing attachment
@@ -4183,13 +4276,13 @@ export class GatewayService {
           target: binding.target,
           message: assistantContent,
           attachments: voiceReplyAttachment ? [voiceReplyAttachment] : undefined,
-          replyToMessageId: deliveryReplyToMessageId?.trim() || prepared.userEventId,
+          replyToMessageId: deliveryReplyToMessageId?.trim() || deliveryFallbackMessageId,
           sessionId,
           agentId: "assistant",
           ...(inboundDurableIdentity ? { idempotencyKey: inboundDurableIdentity.deliveryIdempotencyKey } : {}),
         };
         const deliveryResult = this.requireExecutedToolResult("channel.send", await this.commsSend(deliveryInput));
-        inboundDurableIdentity?.onDeliveryEnqueued?.({
+        await inboundDurableIdentity?.onDeliveryEnqueued?.({
           deliveryId: typeof deliveryResult.deliveryId === "string" ? deliveryResult.deliveryId : undefined,
           providerMessageId:
             typeof deliveryResult.providerMessageId === "string" ? deliveryResult.providerMessageId : undefined,
@@ -4201,6 +4294,72 @@ export class GatewayService {
         transport: "integration",
       };
     });
+  }
+
+  private async loadCanonicalInboundChatResponse(
+    sessionId: string,
+    request: ChatSendMessageRequest,
+    identity: InboundChannelDeterministicIdentity,
+  ): Promise<ChatSendMessageResponse | undefined> {
+    let trace: ChatTurnTraceRecord;
+    try {
+      trace = await this.storage.chatTurnTraces.get(identity.turnId);
+    } catch (error) {
+      if (error instanceof NotFoundError) {
+        return undefined;
+      }
+      throw error;
+    }
+    const userMessage = await this.storage.chatMessages.get(identity.userMessageId);
+    const assistantMessage = trace.assistantMessageId
+      ? await this.storage.chatMessages.get(trace.assistantMessageId)
+      : undefined;
+    if (
+      trace.sessionId !== sessionId ||
+      trace.userMessageId !== identity.userMessageId ||
+      trace.durable?.runId !== identity.durableRunId ||
+      (trace.assistantMessageId !== undefined && trace.assistantMessageId !== identity.assistantMessageId) ||
+      !userMessage ||
+      userMessage.sessionId !== sessionId ||
+      userMessage.role !== "user" ||
+      userMessage.content.trim() !== request.content.trim() ||
+      (assistantMessage !== undefined &&
+        (assistantMessage.messageId !== identity.assistantMessageId ||
+          assistantMessage.sessionId !== sessionId ||
+          assistantMessage.role !== "assistant"))
+    ) {
+      throw new ConflictError({
+        message: `Canonical inbound Chat turn ${identity.turnId} conflicts with its deterministic identity.`,
+      });
+    }
+    const waitingForApproval = trace.status === "waiting_for_approval";
+    if (!waitingForApproval && isChatTurnActiveStatus(trace.status)) {
+      throw new ConflictError({ message: `Canonical inbound Chat turn ${identity.turnId} is still active.` });
+    }
+    if (trace.status === "failed" || trace.status === "cancelled") {
+      throw new InboundChannelTurnTerminalError(
+        `Canonical inbound Chat turn ${identity.turnId} settled as ${trace.status}.`,
+      );
+    }
+    if (
+      !waitingForApproval &&
+      ((trace.status !== "completed" && trace.status !== "partial") || !assistantMessage?.content.trim())
+    ) {
+      throw new InboundChannelTurnTerminalError(
+        `Canonical inbound Chat turn ${identity.turnId} has no deliverable terminal response.`,
+      );
+    }
+    return {
+      sessionId,
+      userMessage,
+      assistantMessage,
+      transport: "integration",
+      model: trace.model,
+      turnId: trace.turnId,
+      trace,
+      citations: trace.citations,
+      routing: trace.routing,
+    };
   }
 
   /**

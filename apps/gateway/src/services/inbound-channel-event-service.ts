@@ -26,13 +26,18 @@ const COMMAND_RESULT_WAIT_TIMEOUT_MS = 14 * 60_000;
 const COMMAND_RESULT_POLL_INTERVAL_MS = 25;
 
 export interface InboundChannelDeterministicIdentity {
+  inboundEventId: string;
   userMessageId: string;
   turnId: string;
   assistantMessageId: string;
   durableRunId: string;
   deliveryIdempotencyKey: string;
-  onDurableRunLaunched?: (runId: string) => void;
-  onDeliveryEnqueued?: (evidence: { deliveryId?: string; providerMessageId?: string; idempotencyKey?: string }) => void;
+  onDurableRunLaunched?: (runId: string) => void | Promise<void>;
+  onDeliveryEnqueued?: (evidence: {
+    deliveryId?: string;
+    providerMessageId?: string;
+    idempotencyKey?: string;
+  }) => void | Promise<void>;
 }
 
 export interface InboundChannelCommandExecutionInput {
@@ -130,6 +135,21 @@ class InboundChannelClaimLostError extends Error {
   public constructor(eventId: string) {
     super(`Inbound channel event claim was lost: ${eventId}`);
     this.name = "InboundChannelClaimLostError";
+  }
+}
+
+/**
+ * The deterministic Chat turn reached a state that cannot be retried under
+ * the same immutable turn identity. The inbound owner must terminalize it
+ * immediately instead of burning retries against a closed admission.
+ */
+export class InboundChannelTurnTerminalError extends Error {
+  public override readonly cause: unknown;
+
+  public constructor(message: string, cause?: unknown) {
+    super(message);
+    this.name = "InboundChannelTurnTerminalError";
+    this.cause = cause;
   }
 }
 
@@ -358,8 +378,9 @@ export class InboundChannelEventService {
         return;
       }
       const message = normalizeError(error);
+      let terminal: InboundChannelEventRecord | undefined;
       if (current.status === "command_execution_started" || isAmbiguousPostCommitError(error)) {
-        this.requireTransition(
+        terminal = this.requireTransition(
           claim,
           await this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
             status: "manual_reconciliation_required",
@@ -370,8 +391,8 @@ export class InboundChannelEventService {
                 : "Reply delivery may have crossed the provider boundary before local settlement.",
           }),
         );
-      } else if (current.attemptCount >= MAX_ATTEMPTS) {
-        this.requireTransition(
+      } else if (error instanceof InboundChannelTurnTerminalError || current.attemptCount >= MAX_ATTEMPTS) {
+        terminal = this.requireTransition(
           claim,
           await this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
             status: "failed",
@@ -391,6 +412,20 @@ export class InboundChannelEventService {
         );
         await this.requestDrain(delayMs);
       }
+      if (
+        terminal?.sessionId &&
+        (terminal.dispatchKind === "agent_turn" || terminal.dispatchKind === "voice_agent_turn")
+      ) {
+        try {
+          await this.emitActivity(claim, parseStoredPayload(terminal), terminal.sessionId, "failed", terminal.turnId);
+        } catch (activityError) {
+          this.diagnostic("warn", "channel.activity_failed", "Channel activity signal failed.", {
+            inboundEventId: claim.eventId,
+            phase: "failed",
+            error: normalizeError(activityError),
+          });
+        }
+      }
       this.diagnostic("warn", "channel.inbound_processing_failed", "Durable inbound channel processing failed.", {
         inboundEventId: claim.eventId,
         generation: claim.generation,
@@ -406,13 +441,19 @@ export class InboundChannelEventService {
     const payload = parseStoredPayload(claim.event);
     const connection = await this.deps.getIntegrationConnection(claim.event.connectionId);
     if (connection.enabled === false || (connection.status !== undefined && connection.status !== "connected")) {
-      this.requireTransition(
+      const suppressed = this.requireTransition(
         claim,
         await this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
           status: "suppressed",
           lastError: "Connection was disabled after durable acceptance.",
         }),
       );
+      if (
+        suppressed.sessionId &&
+        (suppressed.dispatchKind === "agent_turn" || suppressed.dispatchKind === "voice_agent_turn")
+      ) {
+        await this.emitActivity(claim, payload, suppressed.sessionId, "clear", suppressed.turnId);
+      }
       return;
     }
 
@@ -913,6 +954,7 @@ function buildLaneKey(input: DurableInboundChannelAcceptInput): string {
 
 function buildDeterministicIdentity(eventId: string, messageId: string): InboundChannelDeterministicIdentity {
   return {
+    inboundEventId: eventId,
     userMessageId: messageId,
     turnId: stableInboundId("turn", eventId),
     assistantMessageId: stableInboundId("assistant", eventId),

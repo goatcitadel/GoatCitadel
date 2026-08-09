@@ -8,6 +8,7 @@ import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import type { ChatMessageRecord, ChatSendMessageResponse } from "@goatcitadel/contracts";
 import {
   InboundChannelEventService,
+  InboundChannelTurnTerminalError,
   type InboundChannelDeterministicIdentity,
   type InboundChannelEventServiceDeps,
 } from "./inbound-channel-event-service.js";
@@ -45,6 +46,32 @@ describe("InboundChannelEventService", () => {
 
     response.resolve(buildResponse(responseIdentity));
     await waitFor(() => harness.storage.inboundChannelEvents.get(accepted.inboundEventId)?.status === "completed");
+  });
+
+  it("parks approval-required agent turns without advancing to delivery", async () => {
+    const respondToExistingChatMessage = vi.fn<InboundChannelEventServiceDeps["respondToExistingChatMessage"]>(
+      async (_sessionId, _messageId, options) => {
+        await options.inboundDurableIdentity.onDurableRunLaunched?.(options.inboundDurableIdentity.durableRunId);
+        return {
+          ...buildResponse(options.inboundDurableIdentity),
+          trace: { status: "waiting_for_approval" } as ChatSendMessageResponse["trace"],
+        };
+      },
+    );
+    const harness = await createHarness({ respondToExistingChatMessage });
+
+    const accepted = await harness.service.accept(buildInput());
+    await waitFor(() => harness.storage.inboundChannelEvents.get(accepted.inboundEventId)?.status === "waiting");
+
+    expect(harness.storage.inboundChannelEvents.get(accepted.inboundEventId)).toMatchObject({
+      status: "waiting",
+      attemptCount: 1,
+      turnId: expect.stringMatching(/^inbound-turn-/),
+      durableRunId: expect.stringMatching(/^inbound-run-/),
+      deliveryId: undefined,
+      providerMessageId: undefined,
+    });
+    expect(respondToExistingChatMessage).toHaveBeenCalledTimes(1);
   });
 
   it("initializes the first Discord route as canonical Chat state before turn admission", async () => {
@@ -444,6 +471,7 @@ describe("InboundChannelEventService", () => {
   });
 
   it("terminalizes post-send ambiguity for manual reconciliation without replay", async () => {
+    const emitChannelActivity = vi.fn(async () => undefined);
     const respond = vi.fn(async (_sessionId, _eventId, options) => {
       options.inboundDurableIdentity.onDurableRunLaunched?.(options.inboundDurableIdentity.durableRunId);
       throw Object.assign(new Error("provider may have accepted the reply"), {
@@ -451,7 +479,7 @@ describe("InboundChannelEventService", () => {
         mutationCommitted: true,
       });
     });
-    const harness = await createHarness({ respondToExistingChatMessage: respond });
+    const harness = await createHarness({ respondToExistingChatMessage: respond, emitChannelActivity });
     const accepted = await harness.service.accept(buildInput());
     await waitFor(
       () =>
@@ -463,6 +491,66 @@ describe("InboundChannelEventService", () => {
     expect(harness.storage.inboundChannelEvents.get(accepted.inboundEventId)?.reconciliationReason).toContain(
       "provider boundary",
     );
+    expect(emitChannelActivity).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "failed" }));
+  });
+
+  it("retains thinking during retry wait and emits failed after exhausting retries", async () => {
+    const emitChannelActivity = vi.fn(async () => undefined);
+    const respond = vi.fn(async () => {
+      throw new Error("model boundary unavailable");
+    });
+    const harness = await createHarness({ respondToExistingChatMessage: respond, emitChannelActivity });
+    const accepted = await harness.service.accept(buildInput());
+    await waitFor(() => harness.storage.inboundChannelEvents.get(accepted.inboundEventId)?.status === "retry_wait");
+
+    expect(emitChannelActivity.mock.calls.map(([activity]) => activity.phase)).toEqual(["seen", "thinking"]);
+    expect(harness.storage.inboundChannelEvents.get(accepted.inboundEventId)).toMatchObject({
+      status: "retry_wait",
+      attemptCount: 1,
+    });
+
+    harness.service.close();
+    harness.storage.db
+      .prepare("UPDATE inbound_channel_events SET attempt_count = 7, next_attempt_at = ? WHERE event_id = ?")
+      .run(new Date(0).toISOString(), accepted.inboundEventId);
+    const restarted = harness.createAdditionalService();
+    await restarted.drain();
+    await waitFor(() => harness.storage.inboundChannelEvents.get(accepted.inboundEventId)?.status === "failed");
+
+    expect(harness.storage.inboundChannelEvents.get(accepted.inboundEventId)).toMatchObject({
+      status: "failed",
+      attemptCount: 8,
+      lastError: "model boundary unavailable",
+    });
+    expect(emitChannelActivity.mock.calls.filter(([activity]) => activity.phase === "failed")).toHaveLength(1);
+    expect(emitChannelActivity).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        phase: "failed",
+        messageId: "provider-message-1",
+        sessionId: "session-1",
+        target: "chat-1",
+        correlationId: buildInput().idempotencyKey,
+      }),
+    );
+  });
+
+  it("terminalizes a non-replayable pre-bind turn failure on its first attempt", async () => {
+    const emitChannelActivity = vi.fn(async () => undefined);
+    const harness = await createHarness({
+      emitChannelActivity,
+      respondToExistingChatMessage: vi.fn(async () => {
+        throw new InboundChannelTurnTerminalError("pre-durable authority was closed");
+      }),
+    });
+    const accepted = await harness.service.accept(buildInput());
+    await waitFor(() => harness.storage.inboundChannelEvents.get(accepted.inboundEventId)?.status === "failed");
+
+    expect(harness.storage.inboundChannelEvents.get(accepted.inboundEventId)).toMatchObject({
+      status: "failed",
+      attemptCount: 1,
+      lastError: "pre-durable authority was closed",
+    });
+    expect(emitChannelActivity).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "failed" }));
   });
 
   it("records generic signed inbound events without launching an agent turn", async () => {

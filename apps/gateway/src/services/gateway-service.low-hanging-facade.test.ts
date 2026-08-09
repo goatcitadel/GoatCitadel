@@ -1539,6 +1539,27 @@ describe("GatewayService low-hanging facade delegation", () => {
 
   it("handles integration replies with existing chat messages and channel delivery", async () => {
     const gateway = createGatewayHarness();
+    const admissionHeartbeat = { assertHealthy: vi.fn(), stop: vi.fn() };
+    gateway.sessionControlRuntimeOwner = {
+      admitSystemChatTurn: vi.fn(async (input: any) => ({
+        identity: {
+          admissionId: `admission-${input.turnId}`,
+          sessionIncarnationId: "incarnation-1",
+          workspaceId: "workspace-1",
+          sessionId: input.sessionId,
+          turnId: input.turnId,
+          aggregateRevision: 1,
+          controllerGeneration: 1,
+          materialSha256: "a".repeat(64),
+        },
+        admittedRequest: input.request,
+        requestActor: { actorKind: "system", actorId: input.systemActorId },
+        requestClaim: { runtimeOwnerId: `runtime-${input.turnId}`, leaseRevision: 1 },
+      })),
+      renewRequestLease: vi.fn(async (admission: unknown) => admission),
+      startRequestLeaseHeartbeat: vi.fn(() => admissionHeartbeat),
+      closeTurnWrite: vi.fn(),
+    };
     gateway.withChatTurnWriteLease = vi.fn(
       async (_sessionId: string, _operation: string, work: () => Promise<unknown>) => work(),
     );
@@ -1598,7 +1619,7 @@ describe("GatewayService low-hanging facade delegation", () => {
         content: "original user prompt",
         providerId: "openai",
       },
-      {
+      expect.objectContaining({
         branchKind: "append",
         existingUserMessage: {
           messageId: "message-user-1",
@@ -1608,7 +1629,10 @@ describe("GatewayService low-hanging facade delegation", () => {
         },
         ingestUserMessage: false,
         extraSystemInstruction: "Keep the reply concise.",
-      },
+        userMessageId: "message-user-1",
+        turnId: expect.any(String),
+        turnAdmission: expect.any(Object),
+      }),
     );
     expect(gateway.ensureSessionInternalToolGrant).toHaveBeenCalledWith(
       "session-1",
@@ -1650,19 +1674,51 @@ describe("GatewayService low-hanging facade delegation", () => {
       },
     });
     expect(gateway.commsSend).toHaveBeenCalledTimes(1);
+    expect(gateway.sessionControlRuntimeOwner.closeTurnWrite).toHaveBeenCalledTimes(2);
+    expect(admissionHeartbeat.stop).toHaveBeenCalledTimes(2);
   });
 
   it("binds a durable inbound identity through Chat admission and delivery", async () => {
     const gateway = createGatewayHarness();
+    const turnAdmission = {
+      identity: {
+        admissionId: "admission-inbound",
+        sessionIncarnationId: "incarnation-1",
+        workspaceId: "workspace-1",
+        sessionId: "session-1",
+        turnId: "turn-inbound",
+        aggregateRevision: 1,
+        controllerGeneration: 1,
+        materialSha256: "a".repeat(64),
+      },
+      admittedRequest: { content: "durable inbound prompt" },
+      requestActor: { actorKind: "system", actorId: "system:integration:telegram-1" },
+      requestClaim: { runtimeOwnerId: "runtime-inbound", leaseRevision: 1 },
+    };
+    const admissionHeartbeat = {
+      assertHealthy: vi.fn(),
+      stop: vi.fn(),
+    };
+    gateway.sessionControlRuntimeOwner = {
+      admitSystemChatTurn: vi.fn(async () => turnAdmission),
+      renewRequestLease: vi.fn(async () => turnAdmission),
+      startRequestLeaseHeartbeat: vi.fn(() => admissionHeartbeat),
+      closeTurnWrite: vi.fn(),
+    };
     gateway.withChatTurnWriteLease = vi.fn(
       async (_sessionId: string, _operation: string, work: () => Promise<unknown>) => work(),
     );
     gateway.ensureChatMessageProjection = vi.fn(async () => undefined);
     gateway.prepareAgentChatTurn = vi.fn(async () => ({ userEventId: "message-inbound", turnId: "turn-inbound" }));
-    gateway.consumePreparedAgentChatTurn = vi.fn(async () => ({
-      turnId: "turn-inbound",
-      assistantMessage: { messageId: "assistant-inbound", content: "durable reply" },
-    }));
+    gateway.consumePreparedAgentChatTurn = vi.fn(async () => {
+      // The real durable launch transfers request authority before returning.
+      turnAdmission.requestClaim = undefined as never;
+      return {
+        turnId: "turn-inbound",
+        assistantMessage: { messageId: "assistant-inbound", content: "durable reply" },
+        trace: { status: "completed" },
+      };
+    });
     gateway.ensureSessionInternalToolGrant = vi.fn();
     gateway.commsSend = vi.fn(async () => ({ outcome: "executed", result: { deliveryId: "delivery-1" } }));
     gateway.requireExecutedToolResult = vi.fn(() => ({
@@ -1686,10 +1742,16 @@ describe("GatewayService low-hanging facade delegation", () => {
           writable: true,
         })),
       },
+      chatTurnTraces: {
+        get: vi.fn(() => {
+          throw new NotFoundError({ entity: "Chat turn trace", id: "turn-inbound" });
+        }),
+      },
     };
     const onDurableRunLaunched = vi.fn();
     const onDeliveryEnqueued = vi.fn();
     const inboundDurableIdentity = {
+      inboundEventId: "inbound-event-1",
       userMessageId: "message-inbound",
       turnId: "turn-inbound",
       assistantMessageId: "assistant-inbound",
@@ -1704,6 +1766,17 @@ describe("GatewayService low-hanging facade delegation", () => {
       inboundDurableIdentity,
     });
 
+    expect(gateway.sessionControlRuntimeOwner.admitSystemChatTurn).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      turnId: "turn-inbound",
+      request: { content: "durable inbound prompt" },
+      systemActorId: "system:integration:telegram-1",
+      occurrenceId: "inbound-event-1",
+      idempotencyKey: "chat-turn:inbound:inbound-event-1",
+      correlationId: "inbound-event-1",
+    });
+    expect(gateway.sessionControlRuntimeOwner.renewRequestLease).toHaveBeenCalledWith(turnAdmission);
+    expect(gateway.sessionControlRuntimeOwner.startRequestLeaseHeartbeat).toHaveBeenCalledWith(turnAdmission);
     expect(gateway.prepareAgentChatTurn).toHaveBeenCalledWith(
       "session-1",
       { content: "durable inbound prompt" },
@@ -1712,6 +1785,7 @@ describe("GatewayService low-hanging facade delegation", () => {
         userMessageId: "message-inbound",
         turnId: "turn-inbound",
         assistantMessageId: "assistant-inbound",
+        turnAdmission,
       }),
     );
     expect(gateway.consumePreparedAgentChatTurn).toHaveBeenCalledWith(
@@ -1740,6 +1814,427 @@ describe("GatewayService low-hanging facade delegation", () => {
       providerMessageId: "provider-reply-1",
       idempotencyKey: "delivery-key-inbound",
     });
+    expect(admissionHeartbeat.assertHealthy).toHaveBeenCalled();
+    expect(admissionHeartbeat.stop).toHaveBeenCalledTimes(1);
+    expect(gateway.sessionControlRuntimeOwner.closeTurnWrite).not.toHaveBeenCalled();
+  });
+
+  it("rejects a durable inbound result without a trace or assistant response", async () => {
+    const gateway = createGatewayHarness();
+    const turnAdmission = {
+      identity: {
+        admissionId: "admission-empty-inbound",
+        sessionIncarnationId: "incarnation-1",
+        workspaceId: "workspace-1",
+        sessionId: "session-1",
+        turnId: "turn-empty-inbound",
+        aggregateRevision: 1,
+        controllerGeneration: 1,
+        materialSha256: "a".repeat(64),
+      },
+      admittedRequest: { content: "durable inbound prompt" },
+      requestActor: { actorKind: "system", actorId: "system:integration:discord-1" },
+      requestClaim: { runtimeOwnerId: "runtime-empty-inbound", leaseRevision: 1 },
+    };
+    const admissionHeartbeat = { assertHealthy: vi.fn(), stop: vi.fn() };
+    gateway.sessionControlRuntimeOwner = {
+      admitSystemChatTurn: vi.fn(async () => turnAdmission),
+      renewRequestLease: vi.fn(async () => turnAdmission),
+      startRequestLeaseHeartbeat: vi.fn(() => admissionHeartbeat),
+      closeTurnWrite: vi.fn(),
+    };
+    gateway.withChatTurnWriteLease = vi.fn(
+      async (_sessionId: string, _operation: string, work: () => Promise<unknown>) => work(),
+    );
+    gateway.prepareAgentChatTurn = vi.fn(async () => ({ turnId: "turn-empty-inbound" }));
+    gateway.consumePreparedAgentChatTurn = vi.fn(async () => {
+      turnAdmission.requestClaim = undefined as never;
+      return { turnId: "turn-empty-inbound" };
+    });
+    gateway.ensureSessionInternalToolGrant = vi.fn();
+    gateway.commsSend = vi.fn();
+    gateway.storage = {
+      chatMessages: {
+        get: vi.fn(() => ({
+          messageId: "message-empty-inbound",
+          sessionId: "session-1",
+          role: "user",
+          content: "durable inbound prompt",
+        })),
+      },
+      chatSessionBindings: {
+        get: vi.fn(() => ({
+          transport: "integration",
+          connectionId: "discord-1",
+          target: "room-1",
+          writable: true,
+        })),
+      },
+      chatTurnTraces: {
+        get: vi.fn(() => {
+          throw new NotFoundError({ entity: "Chat turn trace", id: "turn-empty-inbound" });
+        }),
+      },
+    };
+
+    await expect(
+      GatewayService.prototype.respondToExistingChatMessage.call(gateway, "session-1", "message-empty-inbound", {
+        inboundDurableIdentity: {
+          inboundEventId: "inbound-event-empty",
+          userMessageId: "message-empty-inbound",
+          turnId: "turn-empty-inbound",
+          assistantMessageId: "assistant-empty-inbound",
+          durableRunId: "durable-empty-inbound",
+          deliveryIdempotencyKey: "delivery-empty-inbound",
+        },
+      }),
+    ).rejects.toThrow("settled without a deliverable assistant response");
+    expect(gateway.commsSend).not.toHaveBeenCalled();
+    expect(admissionHeartbeat.stop).toHaveBeenCalledTimes(1);
+    expect(gateway.sessionControlRuntimeOwner.closeTurnWrite).not.toHaveBeenCalled();
+  });
+
+  it("parks a fresh durable inbound approval wait without sending its interim content", async () => {
+    const gateway = createGatewayHarness();
+    const turnAdmission = {
+      identity: {
+        admissionId: "admission-waiting-inbound",
+        sessionIncarnationId: "incarnation-1",
+        workspaceId: "workspace-1",
+        sessionId: "session-1",
+        turnId: "turn-waiting-inbound",
+        aggregateRevision: 1,
+        controllerGeneration: 1,
+        materialSha256: "a".repeat(64),
+      },
+      admittedRequest: { content: "approval inbound prompt" },
+      requestActor: { actorKind: "system", actorId: "system:integration:discord-1" },
+      requestClaim: { runtimeOwnerId: "runtime-waiting-inbound", leaseRevision: 1 },
+    };
+    const admissionHeartbeat = { assertHealthy: vi.fn(), stop: vi.fn() };
+    gateway.sessionControlRuntimeOwner = {
+      admitSystemChatTurn: vi.fn(async () => turnAdmission),
+      renewRequestLease: vi.fn(async () => turnAdmission),
+      startRequestLeaseHeartbeat: vi.fn(() => admissionHeartbeat),
+      closeTurnWrite: vi.fn(),
+    };
+    gateway.withChatTurnWriteLease = vi.fn(
+      async (_sessionId: string, _operation: string, work: () => Promise<unknown>) => work(),
+    );
+    gateway.prepareAgentChatTurn = vi.fn(async () => ({ turnId: "turn-waiting-inbound" }));
+    gateway.consumePreparedAgentChatTurn = vi.fn(async (...args: any[]) => {
+      turnAdmission.requestClaim = undefined as never;
+      await args[5].onChildDurableRunLaunched("durable-waiting-inbound");
+      return {
+        turnId: "turn-waiting-inbound",
+        assistantMessage: { messageId: "assistant-waiting-inbound", content: "Approval is required." },
+        trace: { status: "waiting_for_approval" },
+      };
+    });
+    gateway.ensureSessionInternalToolGrant = vi.fn();
+    gateway.commsSend = vi.fn();
+    gateway.storage = {
+      chatMessages: {
+        get: vi.fn(() => ({
+          messageId: "message-waiting-inbound",
+          sessionId: "session-1",
+          role: "user",
+          content: "approval inbound prompt",
+        })),
+      },
+      chatSessionBindings: {
+        get: vi.fn(() => ({
+          transport: "integration",
+          connectionId: "discord-1",
+          target: "room-1",
+          writable: true,
+        })),
+      },
+      chatTurnTraces: {
+        get: vi.fn(() => {
+          throw new NotFoundError({ entity: "Chat turn trace", id: "turn-waiting-inbound" });
+        }),
+      },
+    };
+    const onDurableRunLaunched = vi.fn();
+    const onDeliveryEnqueued = vi.fn();
+
+    await expect(
+      GatewayService.prototype.respondToExistingChatMessage.call(gateway, "session-1", "message-waiting-inbound", {
+        inboundDurableIdentity: {
+          inboundEventId: "inbound-event-waiting",
+          userMessageId: "message-waiting-inbound",
+          turnId: "turn-waiting-inbound",
+          assistantMessageId: "assistant-waiting-inbound",
+          durableRunId: "durable-waiting-inbound",
+          deliveryIdempotencyKey: "delivery-waiting-inbound",
+          onDurableRunLaunched,
+          onDeliveryEnqueued,
+        },
+      }),
+    ).resolves.toMatchObject({ trace: { status: "waiting_for_approval" }, transport: "integration" });
+    expect(onDurableRunLaunched).toHaveBeenCalledWith("durable-waiting-inbound");
+    expect(gateway.ensureSessionInternalToolGrant).not.toHaveBeenCalled();
+    expect(gateway.commsSend).not.toHaveBeenCalled();
+    expect(onDeliveryEnqueued).not.toHaveBeenCalled();
+  });
+
+  it("replays an exact terminal inbound trace without a second admission and rejects failed traces", async () => {
+    const gateway = createGatewayHarness();
+    gateway.withChatTurnWriteLease = vi.fn(
+      async (_sessionId: string, _operation: string, work: () => Promise<unknown>) => work(),
+    );
+    gateway.ensureChatMessageProjection = vi.fn(async () => undefined);
+    gateway.sessionControlRuntimeOwner = {
+      admitSystemChatTurn: vi.fn(),
+      renewRequestLease: vi.fn(),
+      startRequestLeaseHeartbeat: vi.fn(),
+      closeTurnWrite: vi.fn(),
+    };
+    const userMessage = {
+      messageId: "message-replay",
+      sessionId: "session-1",
+      role: "user",
+      content: "canonical inbound prompt",
+    };
+    const assistantMessage = {
+      messageId: "assistant-replay",
+      sessionId: "session-1",
+      role: "assistant",
+      content: "canonical inbound response",
+    };
+    const trace = {
+      turnId: "turn-replay",
+      sessionId: "session-1",
+      userMessageId: "message-replay",
+      assistantMessageId: "assistant-replay",
+      status: "completed",
+      model: "model-replay",
+      durable: { runId: "durable-replay", status: "completed" },
+      citations: [],
+      routing: {},
+    };
+    gateway.storage = {
+      chatMessages: {
+        get: vi.fn((messageId: string) => (messageId === assistantMessage.messageId ? assistantMessage : userMessage)),
+      },
+      chatSessionBindings: {
+        get: vi.fn(() => ({
+          transport: "integration",
+          connectionId: "discord-1",
+          target: "room-1",
+          writable: true,
+        })),
+      },
+      chatTurnTraces: { get: vi.fn(() => trace) },
+    };
+    gateway.ensureSessionInternalToolGrant = vi.fn();
+    gateway.commsSend = vi.fn(async () => ({ outcome: "executed", result: { deliveryId: "delivery-replay" } }));
+    gateway.requireExecutedToolResult = vi.fn(() => ({
+      deliveryId: "delivery-replay",
+      providerMessageId: "provider-replay",
+    }));
+    const onDurableRunLaunched = vi.fn();
+    const onDeliveryEnqueued = vi.fn();
+    const identity = {
+      inboundEventId: "inbound-event-replay",
+      userMessageId: "message-replay",
+      turnId: "turn-replay",
+      assistantMessageId: "assistant-replay",
+      durableRunId: "durable-replay",
+      deliveryIdempotencyKey: "delivery-key-replay",
+      onDurableRunLaunched,
+      onDeliveryEnqueued,
+    };
+
+    await expect(
+      GatewayService.prototype.respondToExistingChatMessage.call(gateway, "session-1", "message-replay", {
+        inboundDurableIdentity: identity,
+      }),
+    ).resolves.toMatchObject({ turnId: "turn-replay", transport: "integration" });
+    expect(gateway.sessionControlRuntimeOwner.admitSystemChatTurn).not.toHaveBeenCalled();
+    expect(onDurableRunLaunched).toHaveBeenCalledWith("durable-replay");
+    expect(onDeliveryEnqueued).toHaveBeenCalledWith({
+      deliveryId: "delivery-replay",
+      providerMessageId: "provider-replay",
+      idempotencyKey: "delivery-key-replay",
+    });
+    expect(gateway.commsSend).toHaveBeenCalledTimes(1);
+
+    trace.status = "waiting_for_approval";
+    await expect(
+      GatewayService.prototype.respondToExistingChatMessage.call(gateway, "session-1", "message-replay", {
+        inboundDurableIdentity: identity,
+      }),
+    ).resolves.toMatchObject({ trace: { status: "waiting_for_approval" }, transport: "integration" });
+    expect(gateway.sessionControlRuntimeOwner.admitSystemChatTurn).not.toHaveBeenCalled();
+    expect(onDurableRunLaunched).toHaveBeenCalledTimes(2);
+    expect(onDeliveryEnqueued).toHaveBeenCalledTimes(1);
+    expect(gateway.commsSend).toHaveBeenCalledTimes(1);
+
+    trace.status = "failed";
+    await expect(
+      GatewayService.prototype.respondToExistingChatMessage.call(gateway, "session-1", "message-replay", {
+        inboundDurableIdentity: identity,
+      }),
+    ).rejects.toThrow("settled as failed");
+    expect(gateway.commsSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels pre-bind authority and surfaces a terminal inbound failure", async () => {
+    const gateway = createGatewayHarness();
+    const turnAdmission = {
+      identity: {
+        admissionId: "admission-retry",
+        sessionIncarnationId: "incarnation-1",
+        workspaceId: "workspace-1",
+        sessionId: "session-1",
+        turnId: "turn-retry",
+        aggregateRevision: 1,
+        controllerGeneration: 1,
+        materialSha256: "a".repeat(64),
+      },
+      admittedRequest: { content: "retryable inbound prompt" },
+      requestActor: { actorKind: "system", actorId: "system:integration:discord-1" },
+      requestClaim: { runtimeOwnerId: "runtime-retry", leaseRevision: 1 },
+    };
+    const admissionHeartbeat = { assertHealthy: vi.fn(), stop: vi.fn() };
+    gateway.sessionControlRuntimeOwner = {
+      admitSystemChatTurn: vi.fn(async () => turnAdmission),
+      renewRequestLease: vi.fn(async () => turnAdmission),
+      startRequestLeaseHeartbeat: vi.fn(() => admissionHeartbeat),
+      closeTurnWrite: vi.fn(),
+    };
+    gateway.withChatTurnWriteLease = vi.fn(
+      async (_sessionId: string, _operation: string, work: () => Promise<unknown>) => work(),
+    );
+    gateway.ensureChatMessageProjection = vi.fn(async () => undefined);
+    gateway.prepareAgentChatTurn = vi.fn(async () => {
+      throw new Error("preparation temporarily unavailable");
+    });
+    gateway.storage = {
+      chatMessages: {
+        get: vi.fn(() => ({
+          messageId: "message-retry",
+          sessionId: "session-1",
+          role: "user",
+          content: "retryable inbound prompt",
+        })),
+      },
+      chatSessionBindings: {
+        get: vi.fn(() => ({
+          transport: "integration",
+          connectionId: "discord-1",
+          target: "room-1",
+          writable: true,
+        })),
+      },
+      chatTurnTraces: {
+        get: vi.fn(() => {
+          throw new NotFoundError({ entity: "Chat turn trace", id: "turn-retry" });
+        }),
+      },
+    };
+    const identity = {
+      inboundEventId: "inbound-event-retry",
+      userMessageId: "message-retry",
+      turnId: "turn-retry",
+      assistantMessageId: "assistant-retry",
+      durableRunId: "durable-retry",
+      deliveryIdempotencyKey: "delivery-retry",
+    };
+
+    await expect(
+      GatewayService.prototype.respondToExistingChatMessage.call(gateway, "session-1", "message-retry", {
+        inboundDurableIdentity: identity,
+      }),
+    ).rejects.toThrow("failed before durable authority transfer");
+    expect(gateway.sessionControlRuntimeOwner.closeTurnWrite).toHaveBeenCalledWith({
+      admission: turnAdmission,
+      status: "cancelled",
+      actorId: "system:integration:discord-1",
+      idempotencyKey: "chat-turn:inbound:inbound-event-retry:prebind-close",
+      correlationId: "inbound-event-retry",
+    });
+    expect(gateway.sessionControlRuntimeOwner.renewRequestLease).toHaveBeenCalledTimes(1);
+    expect(admissionHeartbeat.stop).toHaveBeenCalledTimes(1);
+    expect(gateway.ensureChatMessageProjection).not.toHaveBeenCalled();
+  });
+
+  it("cancels inbound authority when request-lease renewal fails", async () => {
+    const gateway = createGatewayHarness();
+    const turnAdmission = {
+      identity: {
+        admissionId: "admission-renewal-failure",
+        sessionIncarnationId: "incarnation-1",
+        workspaceId: "workspace-1",
+        sessionId: "session-1",
+        turnId: "turn-renewal-failure",
+        aggregateRevision: 1,
+        controllerGeneration: 1,
+        materialSha256: "a".repeat(64),
+      },
+      admittedRequest: { content: "renewal failure prompt" },
+      requestActor: { actorKind: "system", actorId: "system:integration:discord-1" },
+      requestClaim: { runtimeOwnerId: "runtime-renewal-failure", leaseRevision: 1 },
+    };
+    gateway.sessionControlRuntimeOwner = {
+      admitSystemChatTurn: vi.fn(async () => turnAdmission),
+      renewRequestLease: vi.fn(async () => {
+        throw new Error("request lease renewal failed");
+      }),
+      startRequestLeaseHeartbeat: vi.fn(),
+      closeTurnWrite: vi.fn(),
+    };
+    gateway.withChatTurnWriteLease = vi.fn(
+      async (_sessionId: string, _operation: string, work: () => Promise<unknown>) => work(),
+    );
+    gateway.prepareAgentChatTurn = vi.fn();
+    gateway.storage = {
+      chatMessages: {
+        get: vi.fn(() => ({
+          messageId: "message-renewal-failure",
+          sessionId: "session-1",
+          role: "user",
+          content: "renewal failure prompt",
+        })),
+      },
+      chatSessionBindings: {
+        get: vi.fn(() => ({
+          transport: "integration",
+          connectionId: "discord-1",
+          target: "room-1",
+          writable: true,
+        })),
+      },
+      chatTurnTraces: {
+        get: vi.fn(() => {
+          throw new NotFoundError({ entity: "Chat turn trace", id: "turn-renewal-failure" });
+        }),
+      },
+    };
+
+    await expect(
+      GatewayService.prototype.respondToExistingChatMessage.call(gateway, "session-1", "message-renewal-failure", {
+        inboundDurableIdentity: {
+          inboundEventId: "inbound-event-renewal-failure",
+          userMessageId: "message-renewal-failure",
+          turnId: "turn-renewal-failure",
+          assistantMessageId: "assistant-renewal-failure",
+          durableRunId: "durable-renewal-failure",
+          deliveryIdempotencyKey: "delivery-renewal-failure",
+        },
+      }),
+    ).rejects.toThrow("failed before durable authority transfer");
+    expect(gateway.sessionControlRuntimeOwner.closeTurnWrite).toHaveBeenCalledWith({
+      admission: turnAdmission,
+      status: "cancelled",
+      actorId: "system:integration:discord-1",
+      idempotencyKey: "chat-turn:inbound:inbound-event-renewal-failure:prebind-close",
+      correlationId: "inbound-event-renewal-failure",
+    });
+    expect(gateway.sessionControlRuntimeOwner.startRequestLeaseHeartbeat).not.toHaveBeenCalled();
+    expect(gateway.prepareAgentChatTurn).not.toHaveBeenCalled();
   });
 
   it("rejects integration replies when source message or writable binding is missing", async () => {
