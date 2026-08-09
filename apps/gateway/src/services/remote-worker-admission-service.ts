@@ -104,10 +104,12 @@ export interface RemoteWorkerAdmissionEvidenceVerifierPort {
 }
 
 export interface RemoteWorkerAdmissionStorePort {
-  findBootstrapBySecretSha256(bootstrapSecretSha256: string): RemoteWorkerBootstrapRecord | undefined;
+  findBootstrapBySecretSha256(
+    bootstrapSecretSha256: string,
+  ): RemoteWorkerBootstrapRecord | undefined | Promise<RemoteWorkerBootstrapRecord | undefined>;
   finalizeBootstrapAdmissionWithNonce(
     input: FinalizeRemoteWorkerBootstrapAdmissionWithNonceInput,
-  ): FinalizeRemoteWorkerBootstrapAdmissionOutcome;
+  ): FinalizeRemoteWorkerBootstrapAdmissionOutcome | Promise<FinalizeRemoteWorkerBootstrapAdmissionOutcome>;
 }
 
 export type RemoteWorkerAdmissionExchangeResult =
@@ -183,7 +185,7 @@ export class RemoteWorkerAdmissionService {
       const request = snapshotExchangeInput(input);
       transportIdentity = request.transportIdentity;
       const bootstrapSecretSha256 = bootstrapAuthorizationSha256(request.headers);
-      const storedBootstrap = this.admissionStore.findBootstrapBySecretSha256(bootstrapSecretSha256);
+      const storedBootstrap = await this.admissionStore.findBootstrapBySecretSha256(bootstrapSecretSha256);
       if (storedBootstrap === undefined) {
         throw rejected("Remote worker bootstrap authority is unavailable.");
       }
@@ -324,7 +326,7 @@ export class RemoteWorkerAdmissionService {
         authorityGeneration: prepared.nonce.authorityGeneration,
       });
       const outcome = snapshotAdmissionOutcome(
-        this.admissionStore.finalizeBootstrapAdmissionWithNonce(
+        await this.admissionStore.finalizeBootstrapAdmissionWithNonce(
           Object.freeze({
             nonce: Object.freeze({
               authority: durableNonce.authority,

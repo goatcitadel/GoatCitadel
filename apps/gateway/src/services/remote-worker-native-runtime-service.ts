@@ -49,8 +49,14 @@ const LISTENER_START_RESERVATION_ID = "gateway:remote-worker-native-listener-sta
 export function createRemoteWorkerNativeRuntimeService(input: {
   readonly sharedHostLifecycle: SharedHostLifecycleAdmissionPort;
   readonly handler?: RemoteWorkerNativeRequestHandler;
+  readonly createHandler?: (
+    config: EnabledRemoteWorkerRuntimeConfig,
+  ) => RemoteWorkerNativeRequestHandler | undefined | Promise<RemoteWorkerNativeRequestHandler | undefined>;
 }): RemoteWorkerNativeRuntimeService {
-  return new DefaultRemoteWorkerNativeRuntimeService(input.sharedHostLifecycle, input.handler);
+  if (input.handler !== undefined && input.createHandler !== undefined) {
+    throw new TypeError("Remote worker native runtime accepts one handler owner.");
+  }
+  return new DefaultRemoteWorkerNativeRuntimeService(input.sharedHostLifecycle, input.handler, input.createHandler);
 }
 
 class DefaultRemoteWorkerNativeRuntimeService implements RemoteWorkerNativeRuntimeService {
@@ -64,6 +70,11 @@ class DefaultRemoteWorkerNativeRuntimeService implements RemoteWorkerNativeRunti
   constructor(
     private readonly sharedHostLifecycle: SharedHostLifecycleAdmissionPort,
     private readonly handler: RemoteWorkerNativeRequestHandler | undefined,
+    private readonly createHandler:
+      | ((
+          config: EnabledRemoteWorkerRuntimeConfig,
+        ) => RemoteWorkerNativeRequestHandler | undefined | Promise<RemoteWorkerNativeRequestHandler | undefined>)
+      | undefined,
   ) {}
 
   snapshot(): RemoteWorkerNativeRuntimeSnapshot {
@@ -144,16 +155,20 @@ class DefaultRemoteWorkerNativeRuntimeService implements RemoteWorkerNativeRunti
     const localAbort = new AbortController();
     this.inFlightStartAbort = localAbort;
     try {
-      // The listener owns bounded trust loading and bind cleanup but has no
-      // cancellation input. Await it to completion so an aborted late bind can
-      // be synchronously closed before this operation releases admission.
-      const handle = await startRemoteWorkerNativeTlsListener(config, this.handler);
+      // Handler preflight and listener trust/bind expose no cancellation input.
+      // Recheck after preflight, then await any bind so an aborted late handle
+      // can be synchronously closed before this operation releases admission.
+      const handler = this.handler ?? (await this.createHandler?.(config));
+      if (reservation.signal.aborted || localAbort.signal.aborted || this.terminalRequested) {
+        throw abortReason(reservation.signal, localAbort.signal);
+      }
+      const handle = await startRemoteWorkerNativeTlsListener(config, handler);
       this.handle = handle;
       if (!handle.enabled || reservation.signal.aborted || localAbort.signal.aborted || this.terminalRequested) {
         await this.closeActiveHandle();
         throw abortReason(reservation.signal, localAbort.signal);
       }
-      this.state = this.handler === undefined ? "listening_dark" : "listening_live";
+      this.state = handler === undefined ? "listening_dark" : "listening_live";
       return this.snapshot();
     } finally {
       if (this.inFlightStartAbort === localAbort) this.inFlightStartAbort = undefined;

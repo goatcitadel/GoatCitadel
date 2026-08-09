@@ -62,9 +62,13 @@ interface Fixture {
   bootstrap: RemoteWorkerBootstrapRecord;
   disposition: FinalizeRemoteWorkerBootstrapAdmissionOutcome["disposition"];
   readonly store: {
-    findBootstrapBySecretSha256: Mock<(bootstrapSecretSha256: string) => RemoteWorkerBootstrapRecord | undefined>;
+    findBootstrapBySecretSha256: Mock<
+      (bootstrapSecretSha256: string) => Promise<RemoteWorkerBootstrapRecord | undefined>
+    >;
     finalizeBootstrapAdmissionWithNonce: Mock<
-      (input: FinalizeRemoteWorkerBootstrapAdmissionWithNonceInput) => FinalizeRemoteWorkerBootstrapAdmissionOutcome
+      (
+        input: FinalizeRemoteWorkerBootstrapAdmissionWithNonceInput,
+      ) => Promise<FinalizeRemoteWorkerBootstrapAdmissionOutcome>
     >;
   };
   readonly evidenceVerifier: {
@@ -236,11 +240,13 @@ function createFixture(): Fixture {
     bootstrap,
     disposition: "admitted",
     store: {
-      findBootstrapBySecretSha256: vi.fn(() => fixture.bootstrap),
-      finalizeBootstrapAdmissionWithNonce: vi.fn((input: FinalizeRemoteWorkerBootstrapAdmissionWithNonceInput) => {
-        order.push("finalize");
-        return admissionOutcome(input.command, fixture.bootstrap, fixture.disposition);
-      }),
+      findBootstrapBySecretSha256: vi.fn(async () => fixture.bootstrap),
+      finalizeBootstrapAdmissionWithNonce: vi.fn(
+        async (input: FinalizeRemoteWorkerBootstrapAdmissionWithNonceInput) => {
+          order.push("finalize");
+          return admissionOutcome(input.command, fixture.bootstrap, fixture.disposition);
+        },
+      ),
     },
     evidenceVerifier: {
       verify: vi.fn((input: RemoteWorkerAdmissionEvidenceVerificationInput) => {

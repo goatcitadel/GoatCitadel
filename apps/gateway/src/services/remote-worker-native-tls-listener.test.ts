@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { createHash, X509Certificate } from "node:crypto";
+import { createHash, createPrivateKey, generateKeyPairSync, sign, X509Certificate } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { request as httpsRequest } from "node:https";
 import { connect as netConnect } from "node:net";
@@ -7,13 +7,44 @@ import { connect as tlsConnect } from "node:tls";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import {
+  REMOTE_WORKER_PROTOCOL_VERSION,
+  REMOTE_WORKER_RUNTIME_MANIFEST_SCHEMA_VERSION,
+  canonicalJsonString,
+  type FinalizeRemoteWorkerBootstrapAdmissionCommand,
+  type RemoteWorkerRuntimeManifest,
+} from "@goatcitadel/contracts";
+import {
+  RemoteWorkerAdmissionRepository,
+  createDatabase,
+  type FinalizeRemoteWorkerBootstrapAdmissionWithNonceInput,
+} from "@goatcitadel/storage";
 import { afterEach, describe, expect, it } from "vitest";
+import { createGatewayRemoteWorkerAdmissionNativeRequestHandler } from "./remote-worker-admission-composition.js";
+import {
+  REMOTE_WORKER_BOOTSTRAP_EXCHANGE_OPERATION,
+  REMOTE_WORKER_BOOTSTRAP_EXCHANGE_RAW_PATH,
+  REMOTE_WORKER_BOOTSTRAP_EXCHANGE_SCHEMA_VERSION,
+  type RemoteWorkerAdmissionEvidenceVerificationInput,
+} from "./remote-worker-admission-service.js";
 import * as listenerModule from "./remote-worker-native-tls-listener.js";
 import {
   startRemoteWorkerNativeTlsListener,
   type RemoteWorkerNativeHandlerRequest,
 } from "./remote-worker-native-tls-listener.js";
+import {
+  REMOTE_WORKER_POP_SCHEMA_VERSION,
+  REMOTE_WORKER_PROTOCOL_HEADERS,
+  buildRemoteWorkerPopMaterial,
+  remoteWorkerProtocolBodySha256,
+  type RemoteWorkerProtocolBody,
+} from "./remote-worker-protocol.js";
 import type { EnabledRemoteWorkerRuntimeConfig } from "./remote-worker-runtime-config.js";
+import {
+  REMOTE_WORKER_TLS_EXPORTER_BYTES,
+  REMOTE_WORKER_TLS_EXPORTER_LABEL,
+  type RemoteWorkerTransportIdentity,
+} from "./remote-worker-transport-identity.js";
 import { remoteWorkerWindowsNoFollowHelperDiagnostics } from "./remote-worker-windows-no-follow.js";
 
 // Public, non-secret test fixtures generated solely for the HX-501 loopback proof.
@@ -132,6 +163,200 @@ function portOf(address: string | undefined): number {
   const port = Number(address?.slice((address.lastIndexOf(":") ?? -1) + 1));
   if (!Number.isInteger(port) || port < 1) throw new Error("Listener did not expose a bound port.");
   return port;
+}
+
+function sha256(value: string | Buffer): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function signedRuntimeManifest(): {
+  readonly manifest: RemoteWorkerRuntimeManifest;
+  readonly signerKeyId: string;
+  readonly signerPublicKeyPem: string;
+  readonly signerSpkiSha256: string;
+} {
+  const signerKeyId = "live-handler-signer";
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+  const signerSpkiDer = publicKey.export({ format: "der", type: "spki" });
+  const signerPublicKeyPem = publicKey.export({ format: "pem", type: "spki" });
+  if (!Buffer.isBuffer(signerSpkiDer) || typeof signerPublicKeyPem !== "string") {
+    throw new Error("Unable to create the live-handler manifest signer fixture.");
+  }
+  const payload = Object.freeze({
+    schemaVersion: REMOTE_WORKER_RUNTIME_MANIFEST_SCHEMA_VERSION,
+    protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
+    bundleSha256: sha256("live-bundle"),
+    dependencyLockSha256: sha256("live-lock"),
+    vendorTreeSha256: sha256("live-vendor"),
+    launcherSha256: sha256("live-launcher"),
+    installedTreeManifestSha256: sha256("live-tree"),
+    installedTreeFileCount: 5,
+    platform: "windows",
+    architecture: "x64",
+  });
+  return Object.freeze({
+    manifest: Object.freeze({
+      payload,
+      payloadSha256: sha256(canonicalJsonString(payload)),
+      signatureAlgorithm: "ed25519",
+      signerKeyId,
+      signatureBase64Url: sign(null, Buffer.from(canonicalJsonString(payload), "utf8"), privateKey).toString(
+        "base64url",
+      ),
+    }),
+    signerKeyId,
+    signerPublicKeyPem,
+    signerSpkiSha256: sha256(signerSpkiDer),
+  });
+}
+
+interface LiveAdmissionRequestFixture {
+  readonly bootstrapSecret: string;
+  readonly bootstrapId: string;
+  readonly authorityGeneration: number;
+  readonly idempotencyKey: string;
+}
+
+async function liveAdmissionRequest(
+  port: number,
+  input: LiveAdmissionRequestFixture,
+  nonceByte: number,
+): Promise<{
+  readonly status: number;
+  readonly body: Readonly<Record<string, unknown>>;
+  readonly tlsExporterSha256: string;
+}> {
+  return await new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let settled = false;
+    const finish = (error?: Error): void => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      if (error !== undefined) {
+        reject(error);
+        return;
+      }
+      try {
+        const response = Buffer.concat(chunks);
+        const headerEnd = response.indexOf("\r\n\r\n");
+        if (headerEnd < 1) throw new Error("Live admission response did not contain HTTP headers.");
+        const headers = response.subarray(0, headerEnd).toString("ascii");
+        const status = Number(/^HTTP\/1\.1 ([0-9]{3}) /u.exec(headers)?.[1]);
+        if (!Number.isInteger(status)) throw new Error("Live admission response status was invalid.");
+        const body = JSON.parse(response.subarray(headerEnd + 4).toString("utf8")) as Record<string, unknown>;
+        resolve({ status, body: Object.freeze(body), tlsExporterSha256: exporterSha256 });
+      } catch (parseError) {
+        reject(parseError);
+      }
+    };
+    let exporterSha256 = "";
+    const socket = tlsConnect({
+      host: "127.0.0.1",
+      port,
+      cert: CLIENT_CERT_PEM,
+      key: CLIENT_KEY_PEM,
+      ca: CA_PEM,
+      minVersion: "TLSv1.3",
+      maxVersion: "TLSv1.3",
+      rejectUnauthorized: true,
+    });
+    socket.on("data", (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
+    socket.once("secureConnect", () => {
+      setImmediate(() => {
+        let exporter: Buffer | undefined;
+        try {
+          exporter = socket.exportKeyingMaterial(
+            REMOTE_WORKER_TLS_EXPORTER_BYTES,
+            REMOTE_WORKER_TLS_EXPORTER_LABEL,
+            Buffer.alloc(0),
+          );
+          exporterSha256 = sha256(exporter);
+          const certificate = new X509Certificate(CLIENT_CERT_PEM);
+          const publicKeySpkiDer = certificate.publicKey.export({ format: "der", type: "spki" });
+          if (!Buffer.isBuffer(publicKeySpkiDer)) throw new Error("Client SPKI fixture was invalid.");
+          const body: RemoteWorkerProtocolBody = Object.freeze({
+            schemaVersion: REMOTE_WORKER_POP_SCHEMA_VERSION,
+            operation: REMOTE_WORKER_BOOTSTRAP_EXCHANGE_OPERATION,
+            authorityId: input.bootstrapId,
+            authorityGeneration: input.authorityGeneration,
+            idempotencyKey: input.idempotencyKey,
+            payload: Object.freeze({
+              schemaVersion: REMOTE_WORKER_BOOTSTRAP_EXCHANGE_SCHEMA_VERSION,
+              publicKeySpkiBase64Url: publicKeySpkiDer.toString("base64url"),
+            }),
+          });
+          const encodedBody = Buffer.from(canonicalJsonString(body), "utf8");
+          const timestamp = new Date().toISOString();
+          const nonce = Buffer.alloc(32, nonceByte).toString("base64url");
+          const transportIdentity: RemoteWorkerTransportIdentity = Object.freeze({
+            source: "native_mtls",
+            certificateDerSha256: sha256(certificate.raw),
+            publicKeySpkiSha256: sha256(publicKeySpkiDer),
+            trustAnchorDerSha256: sha256(new X509Certificate(CA_PEM).raw),
+            tlsExporterSha256: exporterSha256,
+            tlsExporter: exporter,
+          });
+          const material = buildRemoteWorkerPopMaterial({
+            rawPath: REMOTE_WORKER_BOOTSTRAP_EXCHANGE_RAW_PATH,
+            bodySha256: remoteWorkerProtocolBodySha256(body),
+            operation: REMOTE_WORKER_BOOTSTRAP_EXCHANGE_OPERATION,
+            nonce,
+            timestamp,
+            idempotencyKey: input.idempotencyKey,
+            authorityId: input.bootstrapId,
+            authorityGeneration: input.authorityGeneration,
+            transportIdentity,
+          });
+          const proof = sign(
+            null,
+            Buffer.from(canonicalJsonString(material), "utf8"),
+            createPrivateKey(CLIENT_KEY_PEM),
+          ).toString("base64url");
+          const requestHeaders = [
+            `POST ${REMOTE_WORKER_BOOTSTRAP_EXCHANGE_RAW_PATH} HTTP/1.1`,
+            `Host: 127.0.0.1:${String(port)}`,
+            "Connection: close",
+            "Content-Type: application/json",
+            `Content-Length: ${String(encodedBody.byteLength)}`,
+            `Authorization: GoatWorkerBootstrap ${input.bootstrapSecret}`,
+            `${REMOTE_WORKER_PROTOCOL_HEADERS.idempotencyKey}: ${input.idempotencyKey}`,
+            `${REMOTE_WORKER_PROTOCOL_HEADERS.timestamp}: ${timestamp}`,
+            `${REMOTE_WORKER_PROTOCOL_HEADERS.nonce}: ${nonce}`,
+            `${REMOTE_WORKER_PROTOCOL_HEADERS.operation}: ${REMOTE_WORKER_BOOTSTRAP_EXCHANGE_OPERATION}`,
+            `${REMOTE_WORKER_PROTOCOL_HEADERS.proof}: ${proof}`,
+            "",
+            "",
+          ].join("\r\n");
+          socket.write(Buffer.concat([Buffer.from(requestHeaders, "ascii"), encodedBody]));
+        } catch (error) {
+          finish(error instanceof Error ? error : new Error(String(error)));
+        } finally {
+          exporter?.fill(0);
+        }
+      });
+    });
+    socket.once("end", () => finish());
+    socket.once("close", () => finish());
+    socket.once("error", (error) => finish(error));
+  });
+}
+
+function stableAdmissionBindings(command: FinalizeRemoteWorkerBootstrapAdmissionCommand | undefined): object {
+  if (command === undefined) throw new Error("Admission command was not captured.");
+  return Object.freeze({
+    expectedRegistryWorkspaceId: command.expectedRegistryWorkspaceId,
+    expectedBootstrapId: command.expectedBootstrapId,
+    expectedTargetWorkerGeneration: command.expectedTargetWorkerGeneration,
+    verifiedPublicKeySpkiSha256: command.verifiedPublicKeySpkiSha256,
+    verifiedClientCertificateSha256: command.verifiedClientCertificateSha256,
+    verifiedRuntimeManifestSha256: command.verifiedRuntimeManifestSha256,
+    verifiedWorkspaceCeilingSha256: command.verifiedWorkspaceCeilingSha256,
+    verifiedCapabilityCeilingSha256: command.verifiedCapabilityCeilingSha256,
+    verifiedTransportIdentitySource: command.verifiedTransportIdentitySource,
+    verifiedTransportTrustAnchorSha256: command.verifiedTransportTrustAnchorSha256,
+    exchangeIdempotencyKey: command.exchangeIdempotencyKey,
+  });
 }
 
 async function request(
@@ -298,13 +523,7 @@ describe("remote worker native TLS listener", () => {
         expect(Object.getPrototypeOf(requestValue)).toBeNull();
         expect(Object.isFrozen(requestValue.headers)).toBe(true);
         expect(Object.getPrototypeOf(requestValue.headers)).toBeNull();
-        expect(Object.keys(requestValue)).toEqual([
-          "method",
-          "rawPath",
-          "headers",
-          "bodyBytes",
-          "transportIdentity",
-        ]);
+        expect(Object.keys(requestValue)).toEqual(["method", "rawPath", "headers", "bodyBytes", "transportIdentity"]);
         expect(requestValue.method).toBe("POST");
         expect(requestValue.rawPath).toBe("/remote-worker/live");
         expect(requestValue.headers["content-type"]).toBe("application/json");
@@ -346,6 +565,126 @@ describe("remote worker native TLS listener", () => {
       expect(captured?.bodyBytes.every((value) => value === 0)).toBe(true);
       expect(captured?.exporter.every((value) => value === 0)).toBe(true);
       expect(handlerBody.toString("utf8")).toBe('{"accepted":true}\n');
+    },
+    90_000,
+  );
+
+  it.runIf(process.platform === "win32")(
+    "replays one admission secret-free across a fresh exporter-bound TLS connection",
+    async () => {
+      const baseConfig = await config();
+      const signer = signedRuntimeManifest();
+      await writeFile(baseConfig.manifestSigner.publicKeyFile, signer.signerPublicKeyPem);
+      const runtimeConfig: EnabledRemoteWorkerRuntimeConfig = Object.freeze({
+        ...baseConfig,
+        manifestSigner: Object.freeze({
+          keyId: signer.signerKeyId,
+          publicKeyFile: baseConfig.manifestSigner.publicKeyFile,
+          spkiSha256: signer.signerSpkiSha256,
+        }),
+      });
+      const database = createDatabase({ dbPath: ":memory:" });
+      try {
+        const repository = new RemoteWorkerAdmissionRepository(database);
+        const bootstrapSecret = Buffer.alloc(32, 0x27).toString("base64url");
+        const bootstrap = repository.createBootstrap({
+          registryWorkspaceId: "default",
+          workerLabel: "Fresh TLS replay worker",
+          platform: "windows",
+          architecture: "x64",
+          runtimeManifest: signer.manifest,
+          allowedWorkspaceIds: ["default"],
+          capabilityClasses: ["durable_compute"],
+          expiresInSeconds: 600,
+          createdByActorId: "live-handler-test",
+          idempotencyKey: "live-handler-bootstrap-create",
+          bootstrapSecretSha256: sha256(bootstrapSecret),
+        }).record;
+        const evidenceAttempts: RemoteWorkerAdmissionEvidenceVerificationInput[] = [];
+        const finalizations: FinalizeRemoteWorkerBootstrapAdmissionWithNonceInput[] = [];
+        const bootstrapLookups: string[] = [];
+        const serverExporters: string[] = [];
+        const handler = await createGatewayRemoteWorkerAdmissionNativeRequestHandler({
+          config: runtimeConfig,
+          admissionStore: {
+            findBootstrapBySecretSha256: (secretSha256) => {
+              bootstrapLookups.push(secretSha256);
+              return repository.findBootstrapBySecretSha256(secretSha256);
+            },
+            finalizeBootstrapAdmissionWithNonce: (input) => {
+              finalizations.push(input);
+              return repository.finalizeBootstrapAdmissionWithNonce(input);
+            },
+          },
+          createEvidenceVerifier: () => ({
+            assertAvailable: async () => undefined,
+            verify: async (input) => {
+              evidenceAttempts.push(input);
+              return Object.freeze({
+                contextSha256: input.contextSha256,
+                downloadVerificationReceiptSha256: sha256(`live-download:${input.contextSha256}`),
+                installedTreeAttestationSha256: sha256(`live-installed-tree:${input.contextSha256}`),
+                installedTreeVerificationReceiptSha256: sha256(`live-installed-receipt:${input.contextSha256}`),
+              });
+            },
+          }),
+        });
+        expect(handler).toBeTypeOf("function");
+        const listener = await startRemoteWorkerNativeTlsListener(runtimeConfig, async (requestValue) => {
+          serverExporters.push(requestValue.transportIdentity.tlsExporterSha256);
+          return await handler(requestValue);
+        });
+        openHandles.push(listener);
+        const requestFixture = Object.freeze({
+          bootstrapSecret,
+          bootstrapId: bootstrap.bootstrapId,
+          authorityGeneration: bootstrap.targetWorkerGeneration,
+          idempotencyKey: "live-handler-exchange",
+        });
+
+        const first = await liveAdmissionRequest(portOf(listener.address), requestFixture, 0x31);
+        const second = await liveAdmissionRequest(portOf(listener.address), requestFixture, 0x32);
+
+        expect(first.status).toBe(201);
+        expect(first.body).toMatchObject({
+          disposition: "admitted",
+          secretDisposition: "returned_once",
+          credentialSecret: expect.any(String),
+        });
+        expect(second.status).toBe(200);
+        expect(second.body.disposition).toBe("replayed_without_credential_secret");
+        expect(second.body).not.toHaveProperty("credentialSecret");
+        expect(second.body.generation).toEqual(first.body.generation);
+        expect(second.body.credential).toEqual(first.body.credential);
+        expect(second.tlsExporterSha256).not.toBe(first.tlsExporterSha256);
+        expect(bootstrapLookups).toEqual([sha256(bootstrapSecret), sha256(bootstrapSecret)]);
+        expect(serverExporters).toEqual([first.tlsExporterSha256, second.tlsExporterSha256]);
+        expect(evidenceAttempts).toHaveLength(2);
+        expect(evidenceAttempts[1]?.contextSha256).not.toBe(evidenceAttempts[0]?.contextSha256);
+        expect(evidenceAttempts[1]?.tlsExporterSha256).not.toBe(evidenceAttempts[0]?.tlsExporterSha256);
+        expect(evidenceAttempts[1]?.proofOfPossessionReceiptSha256).not.toBe(
+          evidenceAttempts[0]?.proofOfPossessionReceiptSha256,
+        );
+        expect(finalizations).toHaveLength(2);
+        expect(finalizations[1]?.nonce.nonceSha256).not.toBe(finalizations[0]?.nonce.nonceSha256);
+        expect(finalizations[1]?.command.verifiedTransportReceiptSha256).not.toBe(
+          finalizations[0]?.command.verifiedTransportReceiptSha256,
+        );
+        expect(finalizations[1]?.command.verifiedDownloadReceiptSha256).not.toBe(
+          finalizations[0]?.command.verifiedDownloadReceiptSha256,
+        );
+        expect(finalizations[1]?.command.credentialIssuanceProofSha256).not.toBe(
+          finalizations[0]?.command.credentialIssuanceProofSha256,
+        );
+        expect(finalizations[1]?.command.credentialTokenSha256).not.toBe(
+          finalizations[0]?.command.credentialTokenSha256,
+        );
+        expect(stableAdmissionBindings(finalizations[1]?.command)).toEqual(
+          stableAdmissionBindings(finalizations[0]?.command),
+        );
+      } finally {
+        database.close();
+      }
     },
     90_000,
   );

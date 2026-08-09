@@ -44,6 +44,16 @@ afterEach(() => {
 });
 
 describe("remote worker native runtime service", () => {
+  it("accepts exactly one static or dynamic handler owner", () => {
+    expect(() =>
+      createRemoteWorkerNativeRuntimeService({
+        sharedHostLifecycle: lifecycleMock().port,
+        handler: vi.fn(),
+        createHandler: vi.fn(),
+      }),
+    ).toThrow("one handler owner");
+  });
+
   it("defaults disabled without reserving work, loading trust, or binding", async () => {
     const lifecycle = lifecycleMock();
     const service = createRemoteWorkerNativeRuntimeService({ sharedHostLifecycle: lifecycle.port });
@@ -85,6 +95,43 @@ describe("remote worker native runtime service", () => {
 
     await service.close();
     expect(handle.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves the production handler from the exact enabled config and stays dark when it is unavailable", async () => {
+    enableEnvironment();
+    const handle = listenerHandle("127.0.0.1:9443");
+    listenerMocks.start.mockResolvedValue(handle);
+    const lifecycle = lifecycleMock();
+    const createHandler = vi.fn(async () => undefined);
+    const service = createRemoteWorkerNativeRuntimeService({
+      sharedHostLifecycle: lifecycle.port,
+      createHandler,
+    });
+
+    await expect(service.start()).resolves.toEqual({
+      state: "listening_dark",
+      enabled: true,
+      address: "127.0.0.1:9443",
+    });
+    expect(createHandler).toHaveBeenCalledWith(expect.objectContaining({ enabled: true, port: 9443 }));
+    expect(listenerMocks.start.mock.calls[0]?.[1]).toBeUndefined();
+    await service.close();
+  });
+
+  it("fails closed before binding when production handler preflight is unavailable", async () => {
+    enableEnvironment();
+    const lifecycle = lifecycleMock();
+    const service = createRemoteWorkerNativeRuntimeService({
+      sharedHostLifecycle: lifecycle.port,
+      createHandler: vi.fn(async () => {
+        throw new Error("trusted evidence unavailable");
+      }),
+    });
+
+    await expect(service.start()).rejects.toThrow("trusted evidence unavailable");
+    expect(service.snapshot()).toEqual({ state: "failed_closed", enabled: false });
+    expect(listenerMocks.start).not.toHaveBeenCalled();
+    expect(lifecycle.release).toHaveBeenCalledTimes(1);
   });
 
   it("reports a handler-backed listener as live across start, reload, and close", async () => {
