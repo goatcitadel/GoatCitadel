@@ -363,7 +363,11 @@ function createIsolatedConfigRoot(providerBaseUrl: string): string {
   );
   fs.writeFileSync(path.join(root, "config", "llm-providers.json"), `${JSON.stringify(llmConfig, null, 2)}\n`, "utf8");
   const toolPolicyPath = path.join(root, "config", "tool-policy.json");
-  const toolPolicy = JSON.parse(fs.readFileSync(toolPolicyPath, "utf8")) as Record<string, unknown>;
+  // config/tool-policy.json is gitignored, so a fresh checkout (CI) only carries the example.
+  const toolPolicySourcePath = fs.existsSync(toolPolicyPath)
+    ? toolPolicyPath
+    : path.join(root, "config", "tool-policy.example.json");
+  const toolPolicy = JSON.parse(fs.readFileSync(toolPolicySourcePath, "utf8")) as Record<string, unknown>;
   appendLoopbackNetworkAllowlist({ toolPolicy });
   fs.writeFileSync(toolPolicyPath, `${JSON.stringify(toolPolicy, null, 2)}\n`, "utf8");
   const metadataPath = path.join(root, "config", "llm-model-metadata.json");
