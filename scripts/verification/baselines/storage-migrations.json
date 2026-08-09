@@ -5,9 +5,9 @@
     "sqlite": {
       "path": "packages/storage/src/sqlite.ts",
       "registryName": "SCHEMA_MIGRATION_GROUPS",
-      "expectedCount": 190,
+      "expectedCount": 191,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 190,
+      "expectedLastVersion": 191,
       "migrations": [
         {
           "version": 1,
@@ -1338,15 +1338,22 @@
           "groupName": "canonical",
           "definitionSha256": "5fd2e96c019b14eb730317e8d5d8424d45b4bf5f64812926ac125dc250a60904",
           "implementationSha256": "72403d2e83f1253795e4f3c5c5f4a68e9de257eb3872c4c3fc954d911b898ff0"
+        },
+        {
+          "version": 191,
+          "name": "governed_remediation_durable_owner",
+          "groupName": "canonical",
+          "definitionSha256": "1a3db779a2dd69deda5894bf4f07552184329dfa39246ee6b5849443af67047a",
+          "implementationSha256": "531dc23298c8604681e025c785e6106cdfeeaec82f665c924d9f10561e3bc8db"
         }
       ]
     },
     "postgres": {
       "path": "packages/storage/src/postgres/migrations.ts",
       "registryName": "POSTGRES_MIGRATIONS",
-      "expectedCount": 133,
+      "expectedCount": 134,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 133,
+      "expectedLastVersion": 134,
       "migrations": [
         {
           "version": 1,
@@ -2146,6 +2153,12 @@
           "name": "memory_source_authority_and_trace_candidate_dedupe",
           "definitionSha256": "1bfb044d1bb1bcc345c041eda56276bb616b76a4e7bba0bedea4446bc85c5303",
           "sqlPayloadSha256": "7bfbe6807f60628c1964eb444ea4e3d667efb70ad75fe75cafcfa342917fe372"
+        },
+        {
+          "version": 134,
+          "name": "governed_remediation_durable_owner",
+          "definitionSha256": "bb201d63f7e86fb516e17c461e58eb8357f5bcd0d1b51b95c149bc9de1a9025c",
+          "runtimeIntegritySha256": "94574755a314cbf1a6f1e285d2d3969d372ec2d3560a1b03d3cfc2b7b85187a5"
         }
       ]
     }

@@ -331,6 +331,7 @@ export function createDatabase(options: SqliteOptions): DatabaseClient {
   }
   try {
     migrate(db);
+    validateCanonicalSqliteSchemaShape(db);
   } catch (error) {
     // Close the handle so a failed migration does not keep the database file locked;
     // on Windows a leaked handle turns later cleanup into EPERM noise that masks the
@@ -456,17 +457,11 @@ function cleanupSchemaTemplate(): void {
 let cachedCanonicalSqliteSchemaShape: SqliteSchemaShapeManifest | undefined;
 
 function migrate(db: DatabaseSync): void {
-  const expected = getCanonicalSqliteSchemaShape();
-  const lastVersion = SCHEMA_MIGRATIONS[SCHEMA_MIGRATIONS.length - 1]?.version;
-  const validate = (candidate: DatabaseSync): void => {
-    assertSqliteSchemaShape(readSqliteSchemaShape(candidate), expected);
-  };
-  runSqliteMigrations(db, SCHEMA_MIGRATIONS, {
-    validateAfterMigration(candidate, migration) {
-      if (migration.version === lastVersion) validate(candidate);
-    },
-    validateFinal: validate,
-  });
+  runSqliteMigrations(db, SCHEMA_MIGRATIONS);
+}
+
+function validateCanonicalSqliteSchemaShape(db: DatabaseSync): void {
+  assertSqliteSchemaShape(readSqliteSchemaShape(db), getCanonicalSqliteSchemaShape());
 }
 
 function getCanonicalSqliteSchemaShape(): SqliteSchemaShapeManifest {

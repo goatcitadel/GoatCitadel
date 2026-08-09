@@ -14241,6 +14241,7 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     version: 134,
     name: "governed_remediation_durable_owner",
     sql: GOVERNED_REMEDIATION_POSTGRES_SCHEMA_SQL,
+    integritySha256: "94574755a314cbf1a6f1e285d2d3969d372ec2d3560a1b03d3cfc2b7b85187a5",
   },
 ];
 

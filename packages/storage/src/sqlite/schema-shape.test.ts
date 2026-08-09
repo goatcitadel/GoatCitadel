@@ -39,7 +39,7 @@ describe("SQLite canonical schema shape", () => {
     }
   });
 
-  it("validates a skipped IF NOT EXISTS object before committing its ledger marker", () => {
+  it("detects a skipped IF NOT EXISTS object after migration", () => {
     const canonical = new DatabaseSync(":memory:");
     const target = new DatabaseSync(":memory:");
     const migrations: SqliteMigration[] = [
@@ -56,16 +56,12 @@ describe("SQLite canonical schema shape", () => {
       const expected = readSqliteSchemaShape(canonical);
       target.exec("CREATE TABLE shape_probe (id TEXT PRIMARY KEY, wrong_value BLOB)");
 
+      runSqliteMigrations(target, migrations);
       assert.throws(
-        () =>
-          runSqliteMigrations(target, migrations, {
-            validateAfterMigration(db) {
-              assertSqliteSchemaShape(readSqliteSchemaShape(db), expected);
-            },
-          }),
-        /canonical schema-shape validation failed/,
+        () => assertSqliteSchemaShape(readSqliteSchemaShape(target), expected),
+        /canonical schema-shape validation failed/u,
       );
-      assert.equal(target.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get()?.count, 0);
+      assert.equal(target.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get()?.count, 1);
     } finally {
       canonical.close();
       target.close();

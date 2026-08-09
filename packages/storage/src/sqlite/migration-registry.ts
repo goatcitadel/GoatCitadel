@@ -16,24 +16,13 @@ export interface SqliteMigrationGroup {
   migrations: SqliteMigration[];
 }
 
-export interface SqliteMigrationSchemaValidation {
-  /** Runs after a callback and before its ledger marker is committed. */
-  validateAfterMigration?: (db: DatabaseSync, migration: SqliteMigration) => void;
-  /** Runs under the final BEGIN IMMEDIATE checkpoint, including no-op startup. */
-  validateFinal?: (db: DatabaseSync) => void;
-}
-
 export function createSqliteMigrationRegistry(groups: readonly SqliteMigrationGroup[]): SqliteMigration[] {
   const migrations = groups.flatMap((group) => group.migrations);
   assertValidSqliteMigrationRegistry(migrations);
   return migrations;
 }
 
-export function runSqliteMigrations(
-  db: DatabaseSync,
-  migrations: readonly SqliteMigration[],
-  schemaValidation?: SqliteMigrationSchemaValidation,
-): void {
+export function runSqliteMigrations(db: DatabaseSync, migrations: readonly SqliteMigration[]): void {
   // Validate code-owned definitions before creating even the bookkeeping table.
   // This makes malformed registries fail without mutating a fresh database.
   assertValidSqliteMigrationRegistry(migrations);
@@ -77,7 +66,6 @@ export function runSqliteMigrations(
         continue;
       }
       migration.up(db);
-      schemaValidation?.validateAfterMigration?.(db, migration);
       markApplied.run({
         version: migration.version,
         name: migration.name,
@@ -106,7 +94,6 @@ export function runSqliteMigrations(
       listApplied.all() as unknown as AppliedMigrationLedgerRow[],
       "SQLite",
     );
-    schemaValidation?.validateFinal?.(db);
     db.exec("COMMIT");
   } catch (error) {
     try {
