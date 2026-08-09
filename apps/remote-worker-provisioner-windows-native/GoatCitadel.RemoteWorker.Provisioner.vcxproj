@@ -1,0 +1,161 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|ARM64">
+      <Configuration>Release</Configuration>
+      <Platform>ARM64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <ProjectGuid>{916C26A9-1B8A-44B1-998D-42A0F95B76D2}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <RootNamespace>GoatCitadelRemoteWorkerProvisioner</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <VCToolsVersion>14.44.35207</VCToolsVersion>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <VCToolsVersion>14.44.35207</VCToolsVersion>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <TargetName>GoatCitadelRemoteWorkerProvisioner</TargetName>
+    <TargetExt>.exe</TargetExt>
+    <LinkIncremental>false</LinkIncremental>
+    <GenerateManifest>false</GenerateManifest>
+    <ProvisionerLinkMapPath Condition="'$(ProvisionerLinkMapPath)' == ''">$(IntDir)GoatCitadelRemoteWorkerProvisioner.map</ProvisionerLinkMapPath>
+  </PropertyGroup>
+  <Target Name="RequireExpectedClientSha256" BeforeTargets="ClCompile">
+    <Error Condition="'$(ExpectedClientSha256)' == ''" Text="ExpectedClientSha256 is required for the provisioner service build." />
+    <Error Condition="'$(MonocypherSourceRoot)' == ''" Text="MonocypherSourceRoot is required and must name the validated private Monocypher 4.0.3 snapshot." />
+  </Target>
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Release'">
+    <ClCompile>
+      <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <SDLCheck>true</SDLCheck>
+      <ConformanceMode>true</ConformanceMode>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <Optimization>MaxSpeed</Optimization>
+      <WholeProgramOptimization>true</WholeProgramOptimization>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <BufferSecurityCheck>true</BufferSecurityCheck>
+      <SpectreMitigation>Spectre</SpectreMitigation>
+      <ControlFlowGuard>Guard</ControlFlowGuard>
+      <ExceptionHandling>false</ExceptionHandling>
+      <RuntimeTypeInfo>false</RuntimeTypeInfo>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <MinimalRebuild>false</MinimalRebuild>
+      <DebugInformationFormat>None</DebugInformationFormat>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;_WIN32_WINNT=0x0A00;GOATCITADEL_PROVISIONER_CUSTODY=1;GOATCITADEL_EXPECTED_CLIENT_SHA256_HEX=&quot;$(ExpectedClientSha256)&quot;;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(MonocypherSourceRoot)\src;$(MonocypherSourceRoot)\src\optional;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>/Brepro /experimental:deterministic /permissive- /Zc:inline /Zc:preprocessor /volatile:iso /pathmap:$(MSBuildProjectDirectory)=/_/goatcitadel/remote-worker-provisioner %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
+      <GenerateMapFile>true</GenerateMapFile>
+      <MapFileName>$(ProvisionerLinkMapPath)</MapFileName>
+      <RandomizedBaseAddress>true</RandomizedBaseAddress>
+      <DataExecutionPrevention>true</DataExecutionPrevention>
+      <HighEntropyVA>true</HighEntropyVA>
+      <ControlFlowGuard>Guard</ControlFlowGuard>
+      <IgnoreAllDefaultLibraries>true</IgnoreAllDefaultLibraries>
+      <EntryPointSymbol>ProvisionerEntryPoint</EntryPointSymbol>
+      <AdditionalDependencies>kernel32.lib;advapi32.lib;bcrypt.lib;secur32.lib;bufferoverflowu.lib;libvcruntime.lib;libcmt.lib</AdditionalDependencies>
+      <AdditionalOptions>/NODEFAULTLIB /Brepro /DEBUG:NONE /INCREMENTAL:NO /OPT:REF /OPT:ICF /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT /GUARD:CF %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions Condition="'$(Platform)'=='ARM64'">/INCLUDE:__arm64_safe_unaligned_memory_access %(AdditionalOptions)</AdditionalOptions>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="$(MonocypherSourceRoot)\src\monocypher.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <WholeProgramOptimization>false</WholeProgramOptimization>
+      <InlineFunctionExpansion>Disabled</InlineFunctionExpansion>
+      <ObjectFileName>$(IntDir)monocypher-core.obj</ObjectFileName>
+      <AdditionalOptions>/TC /O2 /Ob0 /GL- /Gy /volatile:iso /pathmap:$(MonocypherSourceRoot)=/_/goatcitadel/monocypher-4.0.3 %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <ClCompile Include="$(MonocypherSourceRoot)\src\optional\monocypher-ed25519.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <WholeProgramOptimization>false</WholeProgramOptimization>
+      <InlineFunctionExpansion>Disabled</InlineFunctionExpansion>
+      <ObjectFileName>$(IntDir)monocypher-ed25519.obj</ObjectFileName>
+      <AdditionalOptions>/TC /O2 /Ob0 /GL- /Gy /volatile:iso /pathmap:$(MonocypherSourceRoot)=/_/goatcitadel/monocypher-4.0.3 %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <ClCompile Include="src\ed25519_runtime.cpp">
+      <WholeProgramOptimization>false</WholeProgramOptimization>
+      <InlineFunctionExpansion>Disabled</InlineFunctionExpansion>
+      <ObjectFileName>$(IntDir)ed25519-runtime.obj</ObjectFileName>
+      <AdditionalOptions>/O2 /Ob0 /GL- /Gy /volatile:iso %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <ClCompile Include="src\key_custody.cpp">
+      <WholeProgramOptimization>false</WholeProgramOptimization>
+      <InlineFunctionExpansion>Disabled</InlineFunctionExpansion>
+      <ObjectFileName>$(IntDir)key-custody.obj</ObjectFileName>
+      <AdditionalOptions>/O2 /Ob0 /GL- /Gy /volatile:iso %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <ClCompile Include="src\protected_filesystem.cpp">
+      <WholeProgramOptimization>false</WholeProgramOptimization>
+      <InlineFunctionExpansion>Disabled</InlineFunctionExpansion>
+      <ObjectFileName>$(IntDir)protected-filesystem.obj</ObjectFileName>
+      <AdditionalOptions>/O2 /Ob0 /GL- /Gy /volatile:iso /EHs-c- /GR- %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <ClCompile Include="src\protected_artifact_signing.cpp">
+      <WholeProgramOptimization>false</WholeProgramOptimization>
+      <InlineFunctionExpansion>Disabled</InlineFunctionExpansion>
+      <ObjectFileName>$(IntDir)protected-artifact-signing.obj</ObjectFileName>
+      <AdditionalOptions>/O2 /Ob0 /GL- /Gy /Gw /volatile:iso /EHs-c- /GR- %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <ClCompile Include="src\operation_journal.cpp">
+      <WholeProgramOptimization>false</WholeProgramOptimization>
+      <InlineFunctionExpansion>Disabled</InlineFunctionExpansion>
+      <ObjectFileName>$(IntDir)operation-journal.obj</ObjectFileName>
+      <AdditionalOptions>/O2 /Ob0 /GL- /Gy /volatile:iso /EHs-c- /GR- %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <ClCompile Include="src\protected_operations.cpp">
+      <WholeProgramOptimization>false</WholeProgramOptimization>
+      <InlineFunctionExpansion>Disabled</InlineFunctionExpansion>
+      <ObjectFileName>$(IntDir)protected-operations.obj</ObjectFileName>
+      <AdditionalOptions>/O2 /Ob0 /GL- /Gy /volatile:iso /EHs-c- /GR- %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <ClCompile Include="src\main.cpp" />
+    <ClCompile Include="src\local_transport.cpp" />
+    <ClCompile Include="src\protocol.cpp" />
+    <ClCompile Include="src\service_runtime.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\ed25519_runtime.hpp" />
+    <ClInclude Include="src\local_transport.hpp" />
+    <ClInclude Include="src\key_custody.hpp" />
+    <ClInclude Include="src\protected_filesystem.hpp" />
+    <ClInclude Include="src\protected_artifact_signing.hpp" />
+    <ClInclude Include="src\operation_journal.hpp" />
+    <ClInclude Include="src\protected_operations.hpp" />
+    <ClInclude Include="src\protocol.hpp" />
+    <ClInclude Include="src\service_runtime.hpp" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>
