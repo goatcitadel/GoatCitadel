@@ -599,7 +599,10 @@ export function normalizeGovernedRemediationRecipe(input: unknown): GovernedReme
   if (repairClass === "credential" && inputKind !== "secure_credential") {
     throw invalid("Credential recipes require the dedicated secure-credential input boundary.");
   }
-  if (repairClass === "oauth_connection" && inputKind !== "oauth_redirect") {
+  // A manual OAuth recipe carries no callback/token authority through this
+  // contract. Governed OAuth remains bound to the dedicated redirect owner;
+  // the registry separately requires manual recipes to register owner: null.
+  if (repairClass === "oauth_connection" && executionMode === "governed" && inputKind !== "oauth_redirect") {
     throw invalid("OAuth recipes require the dedicated redirect/token owner boundary.");
   }
   if (

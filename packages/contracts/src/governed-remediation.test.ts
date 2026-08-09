@@ -220,6 +220,34 @@ describe("governed remediation recipe and scope contracts", () => {
     ).toThrow(/outside generic remediation authority/u);
   });
 
+  it("represents manual OAuth recovery without claiming redirect or token custody", () => {
+    const manual = normalizeGovernedRemediationRecipe({
+      ...credentialRecipe(),
+      recipeId: "provider.openai-codex.oauth.manual-reconnect",
+      repairClass: "oauth_connection",
+      ownerId: "gateway.openai-codex-oauth",
+      targetId: "gateway.llm.provider.openai-codex.oauth-owner",
+      requestedCapabilityId: "llm.provider.openai-codex.oauth-credential-present",
+      executionMode: "manual_required",
+      inputKind: "none",
+      preEffectApproval: "not_applicable",
+      activationMode: "not_applicable",
+      activationApproval: "not_applicable",
+      verificationProbeId: null,
+      rollbackStrategy: "manual_required",
+      maxApplyAttempts: 0,
+    });
+
+    expect(manual).toMatchObject({
+      repairClass: "oauth_connection",
+      executionMode: "manual_required",
+      inputKind: "none",
+    });
+    expect(() => normalizeGovernedRemediationRecipe({ ...manual, inputKind: "oauth_redirect" })).toThrow(
+      /Manual recipes cannot declare input/u,
+    );
+  });
+
   it("rejects secret/command extensions and unsafe recipe combinations", () => {
     expect(() => normalizeGovernedRemediationRecipe({ ...credentialRecipe(), secret: "do-not-store" })).toThrow(
       /unsupported fields/u,
@@ -230,6 +258,13 @@ describe("governed remediation recipe and scope contracts", () => {
     expect(() =>
       normalizeGovernedRemediationRecipe({ ...credentialRecipe(), inputKind: "operator_confirmation" }),
     ).toThrow(/dedicated secure-credential/u);
+    expect(() =>
+      normalizeGovernedRemediationRecipe({
+        ...credentialRecipe(),
+        repairClass: "oauth_connection",
+        inputKind: "none",
+      }),
+    ).toThrow(/dedicated redirect\/token/u);
     expect(() =>
       normalizeGovernedRemediationRecipe({ ...credentialRecipe(), preEffectApproval: "required_before_apply" }),
     ).toThrow(/cannot wait for approval after collection/u);
