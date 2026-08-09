@@ -117,6 +117,16 @@ current implementation:
   Model fit groups repeated models while retaining every backend's fit and
   confidence; Ops Quality states its read-only/no-call boundary once instead of
   repeating the same chips on adjacent cards.
+- Projects now keeps `/projects` as an overview and gives `/projects/:projectId`
+  a distinct detail frame; the selected-project continuation lead and
+  cross-project row no longer repeat inside detail, and editing appears only
+  after an explicit selection.
+- The legacy agents-catalog focus now scrolls and focuses the imported-catalog
+  owner with route-specific context instead of reproducing the generic Agents
+  page unchanged.
+- Onboarding outcome states and the Mason staging caption use operator language
+  instead of raw internal keys. Curator timestamps are formatted for people and
+  its usage, score, recommendation, and status fields share aligned columns.
 
 These fixes received focused component tests and package typecheck. The
 consolidated accessibility, surface, and visual pass remains owned by `M7` in
@@ -131,15 +141,9 @@ consolidated accessibility, surface, and visual pass remains owned by `M7` in
 - **Identifier discipline**: bare UUIDs render as body text in the approval/user-input cards, Council
   seat rows, Journey/Artifacts metric tiles, and Trust-policy prose. A shared "id chip" (mono,
   middle-ellipsis, copy affordance, optional label) would fix a dozen surfaces at once.
-- **Projects page redundancy**: the same project appears four times (hero, list, detail, edit panel),
-  and `/projects/:projectId` is pixel-identical to `/projects`. Hide the hero when it duplicates the
-  selection; make the detail route visibly distinct.
-- Library agents-catalog route is pixel-identical to `/library/agents` — focus/scroll the catalog card
-  or drop the separate slug.
-- Onboarding stage captions (`PROVIDER-READY`, `FIRST-TASK-PENDING`) and Mason's `FAIL-CLOSED STAGING`
-  kicker read as internal spec keys; the surrounding copy already explains them in plain language.
-- Curator is reachable only by URL/palette with no nav highlight (intentional for experimental scope,
-  but it also drops the humanized-timestamp and column-alignment conventions).
+- Curator remains reachable only by URL/palette with no nav highlight. That is
+  intentional for experimental scope; its timestamp and column alignment now
+  match the maintained route conventions.
 
 ## Release-readiness verdict
 

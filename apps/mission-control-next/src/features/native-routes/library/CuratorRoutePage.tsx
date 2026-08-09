@@ -6,6 +6,7 @@ import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/Con
 import { getRouteReleaseScope, routeKicker } from "@next/app/route-model";
 import { NativeCard, NativeGrid, NativePageFrame } from "../NativeRoutePageLayout";
 import { EmptyState, NativeButton, NoticeBanner } from "../primitives";
+import { formatDateTime, humanizeEnumToken } from "../shared/native-helpers";
 import type { NativeRoutePagesProps } from "../types";
 import "../native-routes.css";
 
@@ -124,7 +125,7 @@ export function CuratorRoutePage({ route, navigate: _navigate, activeWorkspaceId
       <NativeGrid>
         <NativeCard
           title="Skills (ranked by usage)"
-          subtitle={data ? `${data.items.length} skills · generated ${data.generatedAt}` : "Loading…"}
+          subtitle={data ? `${data.items.length} skills · generated ${formatDateTime(data.generatedAt)}` : "Loading…"}
         >
           {data && data.items.length > 0 ? (
             <div className="mc-next-approvals-list">
@@ -134,17 +135,29 @@ export function CuratorRoutePage({ route, navigate: _navigate, activeWorkspaceId
                     <strong>{item.name}</strong>
                     <span>{item.source}</span>
                   </div>
-                  <div className="mc-next-approvals-chip-row">
-                    <span>Usage: {item.usageCount}</span>
-                    <span>Score: {item.score.mean.toFixed(2)}</span>
-                    <span>Rec: {item.recommendation}</span>
-                    {item.immune ? (
-                      <span data-testid="curator-immune-badge">Immune: {item.immunityReason}</span>
-                    ) : item.archived ? (
-                      <span>Archived</span>
-                    ) : (
-                      <span>{item.state}</span>
-                    )}
+                  <div className="mc-next-curator-metrics" aria-label={`Curator evidence for ${item.name}`}>
+                    <span>
+                      <small>Usage</small>
+                      <strong>{item.usageCount}</strong>
+                    </span>
+                    <span>
+                      <small>Score</small>
+                      <strong>{item.score.mean.toFixed(2)}</strong>
+                    </span>
+                    <span>
+                      <small>Recommendation</small>
+                      <strong>{humanizeEnumToken(item.recommendation)}</strong>
+                    </span>
+                    <span>
+                      <small>Status</small>
+                      {item.immune ? (
+                        <strong data-testid="curator-immune-badge">Immune: {item.immunityReason}</strong>
+                      ) : item.archived ? (
+                        <strong>Archived</strong>
+                      ) : (
+                        <strong>{humanizeEnumToken(item.state)}</strong>
+                      )}
+                    </span>
                   </div>
                   {!item.immune && !item.archived ? (
                     <div className="mc-next-runtime-actions">

@@ -1397,6 +1397,53 @@
   display: none;
 }
 
+.mc-next-library-route-focus {
+  min-width: 0;
+  border-radius: var(--r-md);
+}
+
+.mc-next-library-route-focus:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--mc-area-color) 62%, transparent);
+  outline-offset: 3px;
+}
+
+.mc-next-curator-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.45rem;
+  margin-top: 0.5rem;
+}
+
+.mc-next-curator-metrics > span {
+  display: grid;
+  gap: 0.12rem;
+  min-width: 0;
+  padding: 0.42rem 0.48rem;
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+}
+
+.mc-next-curator-metrics small {
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.mc-next-curator-metrics strong {
+  overflow: hidden;
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  .mc-next-curator-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 /* Capability-scope panel: row head (resource name left, enabled/disabled state
    right) and the inherit/curated chip row above the list. */
 .mc-next-settings-selectable-head {

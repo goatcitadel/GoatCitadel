@@ -180,7 +180,7 @@ export function CitadelMasonRoutePage({
     >
       <section className="mc-next-mason-progress" aria-label="Citadel staging progress">
         <div className="mc-next-mason-progress-copy">
-          <span>Fail-closed staging</span>
+          <span>Draft only · nothing activates yet</span>
           <strong>Blueprint progress</strong>
           <p>These checkpoints summarize captured answers. They do not activate the Citadel or open any Gate.</p>
         </div>

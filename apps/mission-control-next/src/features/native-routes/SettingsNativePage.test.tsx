@@ -2726,7 +2726,8 @@ describe("SettingsNativePage providers", () => {
     expect(text).toContain("First-run setup");
     expect(text).toContain("First trusted outcome");
     expect(text).toContain("Provider-ready path");
-    expect(text).toContain("starter-ready");
+    expect(text).toContain("Starter ready");
+    expect(text).not.toContain("starter-ready");
     expect(text).toContain("Ecosystem proof lanes");
     expect(text).toContain("Voice Wake / Talk Mode");
     expect(text).toContain("Provider configured");
@@ -2850,7 +2851,8 @@ describe("SettingsNativePage providers", () => {
     await flushAsyncUpdates();
 
     const text = collectText(renderer!.root);
-    expect(text).toContain("provider-missing");
+    expect(text).toContain("Provider missing");
+    expect(text).not.toContain("provider-missing");
     expect(text).toContain("demo/local");
     expect(text).toContain("No provider or local endpoint is configured");
     expect(text).toContain("does not send work to a cloud provider");
@@ -2906,7 +2908,8 @@ describe("SettingsNativePage providers", () => {
     await flushAsyncUpdates();
 
     const text = collectText(renderer!.root);
-    expect(text).toContain("proof-complete");
+    expect(text).toContain("Proof complete");
+    expect(text).not.toContain("proof-complete");
     expect(text).toContain("Evidence envelope evidence");
 
     await act(async () => {

@@ -160,6 +160,8 @@ describe("CuratorRoutePage", () => {
     expect(text).toContain("Generate report");
     expect(text).toContain("Refresh");
     expect(text).toContain("Immune: bundled");
+    expect(text).toContain("May 15");
+    expect(text).not.toContain("2026-05-15T12:00:00Z");
     expect(text).not.toContain("Dry run");
     expect(text).not.toContain("Run now");
     // F-M11: curator is experimental and must carry an on-surface badge.

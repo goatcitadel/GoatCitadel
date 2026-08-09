@@ -318,14 +318,18 @@ Owner backlogs: `CAPABILITY_SYSTEM_BACKLOG.md`,
 - The remaining July layout defects are complete: Activity uses compact ages
   and readable summary tracks, Schedules use wider grid tracks, mobile section
   indexes wrap, and command-palette overflow guidance is measured.
+- Projects now has distinct overview and selected-detail routes; the legacy
+  agent-catalog URL focuses its catalog owner; onboarding and Mason replace
+  internal state captions with operator language; Curator uses readable time
+  and aligned evidence columns.
 - Focused Settings and primitive proof is green. Broad accessibility, surface,
   and visual proof remains intentionally grouped with the rest of M7.
 
 ### Current work
 
-- Group shared product polish into common primitives: blocked-state composition,
-  ID chips, project/detail differentiation, route redundancy, diagnostics
-  density, working-context tabs, model grouping, and repeated disclaimer copy.
+- Finish the remaining shared product polish: blocked-state composition and
+  reusable identifier chips. The project/detail, route-focus, diagnostics,
+  working-context, model-grouping, and repeated-disclaimer slices are complete.
 - Integrate live HX-507 worker visibility after M4 instead of testing seeded and
   live variants in separate broad campaigns.
 
