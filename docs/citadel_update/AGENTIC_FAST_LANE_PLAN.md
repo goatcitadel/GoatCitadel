@@ -47,7 +47,7 @@ PR #137 fixed "thin responses" by wrapping cowork in a **plan → execute → sy
 ## P1 — speed depth + quality (1–2 weeks)
 
 - [x] **S4 — parallelize independent tool calls.** *(Round 3, 2026-07-03, kill switch `parallelToolExecutionV1Disabled`.)* All-read-only multi-call batches (registry-declared `readOnly` + `riskLevel:"safe"` + no definition-level approval, cap 4) pre-execute concurrently; the unchanged serial loop consumes results in emission order, so per-call policy/audit/post-processing have exactly one code path. Mixed/unknown/MCP batches stay byte-identical serial. Serial-parity pinned by test (`chat-agent-orchestrator.parallel-tools.test.ts`). Also flagged `memory.read`/`session.status`/`time.now` as `readOnly` in the registry (were unflagged).
-- [ ] **S5 — per-tool IO tax off the hot path.** The full prompt-context
+- [x] **S5 — per-tool IO tax off the hot path.** The full prompt-context
   receipt is now omitted for ordinary live turns and retained only for the
   quick-web/prompt-pack proof profiles or the explicit
   `GOATCITADEL_DEBUG_PROMPT_CONTEXT_BUDGET_RECEIPTS=1` diagnostic gate.
@@ -56,7 +56,12 @@ PR #137 fixed "thin responses" by wrapping cowork in a **plan → execute → sy
   secret-free evidence and delivery IDs remain idempotent. Independent active
   grant reads now resolve concurrently across task, agent, session, Chamber,
   Citadel, workspace, and global scopes before the unchanged deny-wins decision.
-  Remaining work is the avoidable write-side policy/storage round trips.
+  Capability-profile policy probes now use bounded eight-way fan-out with stable
+  evidence order and a non-materializing inspection path; the durable profile
+  freezes those decisions, while the canonical invocation still re-evaluates
+  and records the limit-counting decision. Pre-dispatch terminal outcomes write
+  one final tool row, and advisory runtime-decision projections drain through a
+  bounded shutdown-owned queue after canonical settlement.
 - **Superseded — S6 short turns outside durable wrapping.** Current one-Chat
   runtime truth keeps durable execution authoritative for resumable work. The
   valid performance goal moves to `M1`: reduce admission, heartbeat, and

@@ -89,6 +89,20 @@ interface AccessEvaluation {
   wardEffect?: WardEffect;
 }
 
+function toToolAccessEvaluateResponse(toolName: string, evaluation: AccessEvaluation): ToolAccessEvaluateResponse {
+  return {
+    toolName,
+    allowed: evaluation.allowed,
+    reasonCodes: evaluation.reasonCodes,
+    requiresApproval: evaluation.requiresApproval,
+    matchedGrantId: evaluation.matchedGrantId,
+    riskLevel: evaluation.riskLevel,
+    permissionProfileId: evaluation.permissionProfileId,
+    localOperatorOverrideId: evaluation.localOperatorOverrideId,
+    wardEffect: evaluation.wardEffect,
+  };
+}
+
 function assertHostAllowedForConfig(hostOrUrl: string, config: ToolPolicyConfig): void {
   assertHostAllowed(hostOrUrl, config.sandbox.networkAllowlist);
 }
@@ -334,17 +348,18 @@ export class ToolPolicyEngine {
       countsTowardLimits: false,
     });
 
-    return {
-      toolName: input.toolName,
-      allowed: evaluation.allowed,
-      reasonCodes: evaluation.reasonCodes,
-      requiresApproval: evaluation.requiresApproval,
-      matchedGrantId: evaluation.matchedGrantId,
-      riskLevel: evaluation.riskLevel,
-      permissionProfileId: evaluation.permissionProfileId,
-      localOperatorOverrideId: evaluation.localOperatorOverrideId,
-      wardEffect: evaluation.wardEffect,
-    };
+    return toToolAccessEvaluateResponse(input.toolName, evaluation);
+  }
+
+  /**
+   * Resolves current deny-wins policy without materializing an advisory access
+   * row. Capability-profile and pre-dispatch inspection use this path; the
+   * canonical invocation still re-evaluates and records the limit-counting
+   * decision before execution.
+   */
+  public async inspectAccess(input: ToolAccessEvaluateRequest): Promise<ToolAccessEvaluateResponse> {
+    const evaluation = await this.evaluateAccessInternal(input);
+    return toToolAccessEvaluateResponse(input.toolName, evaluation);
   }
 
   public async invoke(request: ToolInvokeRequest, options: ToolPolicyInvokeOptions = {}): Promise<ToolInvokeResult> {

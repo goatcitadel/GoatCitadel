@@ -59,7 +59,7 @@ change:
 | ID | Priority | Tranche | Status | Depends on | Closing proof |
 |---|---|---|---|---|---|
 | `M0` | P0 | Canonical ledger and stale-status reconciliation | `complete` | None | `pnpm docs:check`; `git diff --check` |
-| `M1` | P0/P1 | Proof integrity, storage correctness, and agentic hot-path foundations | `in_progress` | M0 | Focused storage/Gateway/harness tests, dual-dialect corrupt-shape proof, concurrent-verifier proof |
+| `M1` | P0/P1 | Proof integrity, storage correctness, and agentic hot-path foundations | `complete` | M0 | Focused storage/Gateway/harness tests, dual-dialect corrupt-shape proof, concurrent-verifier proof |
 | `M2` | P0 | Remote-worker admission, transport, and operator control | `in_progress` | M1 | Focused mesh/auth suites and real two-machine TLS 1.3/mTLS/PoP admission |
 | `M3` | P0 | Remote-worker durable execution and ordered event transport | `planned` | M2 | Worker death/reconnect/takeover, replay, transcript, approval-resume, and no-duplicate proof |
 | `M4` | P0/P1 | Live worker inference, execution cell, settlement, and visibility | `planned` | M3 | `pnpm verify:remote-workers` with the connected-worker row executed, plus live Ops/Chat data |
@@ -103,32 +103,42 @@ validation and 9/9 Docker-secret documentation tests; `git diff --check` passed.
 - Worktree-scoped cross-process output locks and staged publication now protect
   the shared verifier/build outputs (`FR-362`).
 - SQLite and PostgreSQL migrators now reject corrupt pre-existing object shapes
-  instead of accepting name existence as shape proof (`FR-356`). The real
-  PostgreSQL test remains environment-gated where no test server is configured.
+  instead of accepting name existence as shape proof (`FR-356`). Fresh
+  PostgreSQL 16 proof covers the corrupt-table and corrupt-index cases; the
+  schema inspector uses PostgreSQL's canonical `pg_catalog.bool` type name.
 - Concurrent audit events are durably microbatched under the existing ordered
   lock, ordinary prompt-budget receipts are gated off the live path, and scoped
   active-grant reads resolve concurrently before the unchanged deny-wins merge.
+- Capability-profile policy probes now use bounded, order-preserving fan-out and
+  a non-materializing inspection path. The durable profile freezes the probe
+  evidence, while canonical invocation still re-evaluates, records the
+  limit-counting decision, and enforces deny-wins policy before execution.
+- Pre-dispatch terminal outcomes use one canonical tool-row write, and advisory
+  runtime-decision projections drain through a bounded, shutdown-owned queue
+  after canonical settlement instead of extending response latency.
 - Checkpoint continuation now follows bounded high-intent Chat classifications,
   and the first eligible successful root Chat turn warms the operator review
   inbox without promoting learned memory or adding a foreground model call.
+- The final governed-remediation storage checkpoint is paired at SQLite 192 and
+  PostgreSQL 135 with migration-lineage and schema-parity coverage.
 
-The remaining M1 closeout is the write-side policy/storage hot-path audit, the
-final paired remediation-storage migration checkpoint, and any externally held
-real-PostgreSQL proof required by the closing campaign.
+### Closure evidence
 
-### Current work
-
-- `FR-362`: add a worktree-scoped cross-process verification/build-output
-  exclusion boundary so concurrent lanes cannot invalidate one another.
-- `FR-356`: validate the post-migration shape of pre-existing PostgreSQL and
-  SQLite objects instead of treating `IF NOT EXISTS` as shape proof.
-- Remove avoidable per-tool hot-path serialization while preserving durable,
-  ordered, secret-free audit evidence.
-- Avoid rebuilding full prompt-budget receipts when no consumer requires them.
-- Extend checkpoint continuation by intent/capability rather than a legacy
-  `cowork` surface label.
-- Improve operator-profile warm-start quality without silently promoting
-  ungoverned learned memory.
+- `FR-362`: concurrent verifier/build lanes cover cross-process exclusion,
+  stale-owner recovery, staged publication, and worktree isolation.
+- `FR-356`: focused SQLite/PostgreSQL shape regressions pass; a disposable real
+  PostgreSQL 16 server passed the exact corrupt-table and corrupt-index cases,
+  and the full PostgreSQL migrator suite passed 51/51.
+- Focused policy/Gateway regressions cover non-materializing inspection,
+  bounded eight-way probe fan-out with stable evidence order, canonical
+  invocation recording, one-write terminal preflight, and bounded advisory
+  decision draining.
+- Audit microbatching, prompt-receipt gating, scoped-grant fan-in, high-intent
+  checkpoint continuation, and first-turn operator-review warming retain their
+  focused regressions.
+- The paired SQLite 192/PostgreSQL 135 migration parity and integrity checks,
+  touched package typechecks, documentation validation, and whitespace checks
+  pass at closeout.
 
 ### Superseded proposals
 
@@ -142,8 +152,8 @@ real-PostgreSQL proof required by the closing campaign.
 - `review/full-code-review-2026-07-09.md` (`FR-356`, `FR-362`)
 - `citadel_update/AGENTIC_FAST_LANE_PLAN.md`
 - Focused storage/Gateway/harness tests, corrupt-shape regressions in both
-  dialects, concurrent-lane regressions, touched package typechecks, and
-  `git diff --check`.
+  dialects including live PostgreSQL 16, concurrent-lane regressions, touched
+  package typechecks, `pnpm docs:check`, and `git diff --check`.
 
 ## M2 - Remote-worker admission, transport, and operator control
 

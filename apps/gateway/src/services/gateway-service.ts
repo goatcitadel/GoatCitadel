@@ -1934,6 +1934,9 @@ export class GatewayService {
       invokeToolWithEffectTruth: async (request, options) => await this.invokeTool(request, options),
       persistToolArtifact: (input) => chatToolArtifactService.persistChatToolArtifact(this, input),
       evaluateToolAccess: async (request) => await this.evaluateToolAccess(request),
+      // Chat prefers this non-materializing probe; the durable profile freezes
+      // its evidence and canonical invocation records independently.
+      inspectToolAccess: async (request) => await this.inspectToolAccess(request),
       assertRuntimeConfigurationPromptAvailable: (targetId) =>
         this.runtimeConfigurationService.assertConfigurationAvailable(targetId as "search.brave" | "search.parallel"),
       assertRuntimeConfigurationPromptAuthority: async (input) =>
@@ -8074,21 +8077,32 @@ export class GatewayService {
   }
 
   public async evaluateToolAccess(input: ToolAccessEvaluateRequest): Promise<ToolAccessEvaluateResponse> {
+    return this.policyEngine.evaluateAccess(await this.prepareToolAccessEvaluation(input));
+  }
+
+  /**
+   * Internal, non-materializing policy probe for frozen capability admission
+   * and last-moment narrowing. External evaluation and invocation paths keep
+   * their canonical decision records.
+   */
+  public async inspectToolAccess(input: ToolAccessEvaluateRequest): Promise<ToolAccessEvaluateResponse> {
+    return this.policyEngine.inspectAccess(await this.prepareToolAccessEvaluation(input));
+  }
+
+  private async prepareToolAccessEvaluation(input: ToolAccessEvaluateRequest): Promise<ToolAccessEvaluateRequest> {
     const workspaceId = this.normalizeWorkspaceId(
       input.workspaceId ??
         (await this.storage.chatSessionMeta.get(input.sessionId))?.workspaceId ??
         DEFAULT_WORKSPACE_ID,
     );
     const citadelId = input.citadelId ?? (await this.storage.workspaces?.find(workspaceId))?.citadelId;
-    return this.policyEngine.evaluateAccess(
-      await this.enrichToolPolicyContext(
-        this.applyRuntimeBrowserBackendDefaults(
-          this.resolveToolRequestPathsForSession({
-            ...input,
-            workspaceId,
-            citadelId,
-          }),
-        ),
+    return await this.enrichToolPolicyContext(
+      this.applyRuntimeBrowserBackendDefaults(
+        this.resolveToolRequestPathsForSession({
+          ...input,
+          workspaceId,
+          citadelId,
+        }),
       ),
     );
   }

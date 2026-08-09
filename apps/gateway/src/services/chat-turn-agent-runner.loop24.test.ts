@@ -162,6 +162,57 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
     expect(toolNames).not.toContain("browser_search");
   });
 
+  it("bounds policy-probe fan-out while preserving catalog-order evidence", async () => {
+    const toolNames = [
+      "session.status",
+      "memory.search",
+      "memory.read",
+      "time.now",
+      "fs.list",
+      "fs.stat",
+      "file.find",
+      "file.read_range",
+      "code.search",
+      "code.search_files",
+      "docs.search",
+      "browser.search",
+    ];
+    let active = 0;
+    let maxActive = 0;
+    const inspectToolAccess = vi.fn(async () => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      active -= 1;
+      return { allowed: true, requiresApproval: false, reasonCodes: [] };
+    });
+    const evaluateToolAccess = vi.fn(() => {
+      throw new Error("recording evaluator must stay off the probe path");
+    });
+    const runner = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(toolNames),
+      createChatCompletion: vi.fn(),
+      invokeTool: vi.fn(),
+      evaluateToolAccess,
+      inspectToolAccess,
+    });
+
+    const schema = await runner.resolveCapabilityToolSchema(
+      turnInput({
+        mode: "code",
+        webMode: "auto",
+        memoryMode: "on",
+        content: `Use ${toolNames.map((toolName) => `\`${toolName}\``).join(", ")} if available.`,
+      }),
+    );
+
+    expect(inspectToolAccess).toHaveBeenCalledTimes(toolNames.length);
+    expect(evaluateToolAccess).not.toHaveBeenCalled();
+    expect(maxActive).toBe(8);
+    expect(schema.policyDecisions.map((decision) => decision.toolName)).toEqual(toolNames);
+  });
+
   it("probes presentation access with safe args and creates a PPTX fallback when the model answers with text", async () => {
     let capturedRequest: ChatCompletionRequest | undefined;
     const createChatCompletion = vi.fn(async (request: ChatCompletionRequest): Promise<ChatCompletionResponse> => {
