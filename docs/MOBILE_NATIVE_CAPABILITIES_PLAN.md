@@ -62,7 +62,7 @@ Raw device grants are not sufficient for privileged mobile writes. Companion mut
 | `image_library` | ready | user initiated | User-selected photo attachments. |
 | `share_intake` | ready | user initiated | Share-sheet drafts enter local review before chat. |
 | `voice_capture` | ready | user initiated | Native microphone recording and voice-note attachment are implemented. Transcription remains a separate optional follow-up. |
-| `approval_key` | scaffolded | foreground | High-risk approvals require explicit local confirmation; biometric module install is blocked until registry auth is available. |
+| `approval_key` | scaffolded | foreground | A paired, request-signed companion can review the redacted queue and reject an item. Approve/edit remain operator-only until the Gateway can verify an approval-specific key released by device authentication; a client-only biometric prompt is not sufficient proof. |
 | `push_refresh` | scaffolded | background opt-in | Gateway API exists; Expo notification module install is pending registry auth. |
 | `geofence_context` | deferred | background opt-in | Contract-visible only; no continuous tracking. |
 | `notification_awareness` | deferred | special access | Contract-visible only; no listener enabled in consumer build. |

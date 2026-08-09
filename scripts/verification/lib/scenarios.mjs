@@ -5312,6 +5312,7 @@ function selectRepresentativeManifestRoute(manifestItems, accessClass) {
     "sse-read": [{ method: "GET", url: "/api/v1/events/stream" }],
     "device-session-exchange": [{ method: "POST", url: "/api/v1/auth/companion/session/exchange" }],
     "session-control-companion": [{ method: "POST", url: "/api/v1/chat/sessions/:sessionId/control/requests" }],
+    "operator-or-companion": [{ method: "GET", url: "/api/v1/approvals" }],
     // Pinned to the plain JSON read; this class also carries an SSE route
     // (.../control/events/stream) that the generic JSON probe cannot exercise.
     "operator-or-session-control-companion": [{ method: "GET", url: "/api/v1/chat/sessions/:sessionId/messages" }],
@@ -5422,6 +5423,14 @@ function buildAuthMatrixExpectations(accessClass) {
         operator: true,
         device: false,
         companion: false,
+      };
+    case "operator-or-companion":
+      return {
+        unauthenticated: false,
+        badToken: false,
+        operator: true,
+        device: false,
+        companion: true,
       };
     default:
       return {

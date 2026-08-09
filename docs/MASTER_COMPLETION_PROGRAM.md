@@ -395,6 +395,11 @@ review evidence.
 
 ### Current work
 
+- Paired general companions can now read the secret-redacted pending approval
+  queue and submit a request-signed rejection. Approval and edit remain
+  operator-only because the current client-local biometric key is not bound to
+  a Gateway-verifiable approval signature; the capability must remain
+  `scaffolded` until that end-to-end key owner exists.
 - Finish consumer-safe approval-key/device-auth, push registration/refresh, and
   any approved geofence-context work.
 - Exercise device auth, session paging, approvals, offline/reconnect,

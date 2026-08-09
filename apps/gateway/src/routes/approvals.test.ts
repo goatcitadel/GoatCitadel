@@ -123,6 +123,23 @@ function buildApp(approvals: Record<string, unknown>, requireOperatorAuth = vi.f
   };
 }
 
+function installCompanionIdentity(app: FastifyInstance): void {
+  app.addHook("onRequest", async (request) => {
+    const source = request.headers["x-auth-source"];
+    request.authActorSource = typeof source === "string" ? source : "none";
+    const purpose = request.headers["x-auth-purpose"];
+    request.authPrincipalPurpose = typeof purpose === "string" ? purpose : undefined;
+    const sessionId = request.headers["x-companion-session-id"];
+    request.authCompanionSessionId = typeof sessionId === "string" ? sessionId : undefined;
+  });
+}
+
+const COMPANION_HEADERS = {
+  "x-auth-source": "companion",
+  "x-auth-purpose": "general_companion",
+  "x-companion-session-id": "comp-sess-1",
+} as const;
+
 describe("approvals routes", () => {
   let app: FastifyInstance | null = null;
 
@@ -154,6 +171,73 @@ describe("approvals routes", () => {
       cursor: "cursor-1",
       workspaceId: "workspace-a",
     });
+  });
+
+  it("allows a paired general companion to review the redacted pending queue without operator auth", async () => {
+    const rawApproval = createSensitiveApproval();
+    const listApprovalsPage = vi.fn(async () => ({ items: [rawApproval] }));
+    const requireOperatorAuth = vi.fn(
+      async (_request: unknown, reply: { code: (status: number) => { send: (body: unknown) => unknown } }) =>
+        reply.code(403).send({ error: "operator only" }),
+    );
+    const built = buildApp({ listApprovalsPage }, requireOperatorAuth);
+    app = built.app;
+    installCompanionIdentity(app);
+    await app.register(approvalsRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/approvals?status=pending",
+      headers: COMPANION_HEADERS,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["cache-control"]).toBe("private, no-store");
+    expect(requireOperatorAuth).not.toHaveBeenCalled();
+    expectSecretSafeApprovalProjection(response.json());
+    expectRawApprovalUnchanged(rawApproval);
+  });
+
+  it("allows a signed companion route principal to reject but never approve or edit", async () => {
+    const resolveApproval = vi.fn(async (_approvalId: string, input: { decision: "approve" | "reject" | "edit" }) => ({
+      approval: { approvalId: APPROVAL_ID, status: input.decision === "reject" ? "rejected" : "approved" },
+    }));
+    const requireOperatorAuth = vi.fn(
+      async (_request: unknown, reply: { code: (status: number) => { send: (body: unknown) => unknown } }) =>
+        reply.code(403).send({ error: "operator only" }),
+    );
+    const built = buildApp({ resolveApproval }, requireOperatorAuth);
+    app = built.app;
+    installCompanionIdentity(app);
+    await app.register(approvalsRoutes);
+
+    const rejected = await app.inject({
+      method: "POST",
+      url: `/api/v1/approvals/${APPROVAL_ID}/resolve`,
+      headers: COMPANION_HEADERS,
+      payload: { decision: "reject", resolutionNote: "Rejected from paired mobile review." },
+    });
+    expect(rejected.statusCode).toBe(200);
+    expect(resolveApproval).toHaveBeenCalledWith(APPROVAL_ID, {
+      decision: "reject",
+      resolutionNote: "Rejected from paired mobile review.",
+      resolvedBy: "companion:comp-sess-1",
+    });
+
+    for (const decision of ["approve", "edit"] as const) {
+      const blocked = await app.inject({
+        method: "POST",
+        url: `/api/v1/approvals/${APPROVAL_ID}/resolve`,
+        headers: COMPANION_HEADERS,
+        payload: { decision, ...(decision === "edit" ? { editedPayload: { safe: true } } : {}) },
+      });
+      expect(blocked.statusCode).toBe(403);
+      expect(blocked.json()).toMatchObject({
+        error: expect.stringContaining("server-verifiable device approval key"),
+      });
+    }
+    expect(resolveApproval).toHaveBeenCalledTimes(1);
+    expect(requireOperatorAuth).not.toHaveBeenCalled();
   });
 
   it("projects approval creation responses without mutating executable approval truth", async () => {

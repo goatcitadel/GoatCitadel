@@ -91,6 +91,7 @@ const REMOTE_APPROVAL_CREATE_TOKEN_HEADER = "x-goatcitadel-approval-create-token
 export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
   const resolveActorId = (request: ApprovalActorRequest) => resolveApprovalActorId(request);
   const operatorOnly = withRouteAccess(fastify, "operator");
+  const operatorOrCompanion = withRouteAccess(fastify, "operator-or-companion");
   const approvals = fastify.services.approvals;
 
   fastify.post(
@@ -154,7 +155,7 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
     },
   );
 
-  fastify.get("/api/v1/approvals", operatorOnly, async (request, reply) => {
+  fastify.get("/api/v1/approvals", operatorOrCompanion, async (request, reply) => {
     const parsed = listQuerySchema.safeParse(request.query);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
@@ -169,6 +170,9 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
           workspaceId?: string;
         }) => Promise<{ items: unknown[]; nextCursor?: string }>;
       };
+      if (request.authActorSource === "companion") {
+        reply.header("Cache-Control", "private, no-store");
+      }
       return reply.send(
         projectApprovalPublicResponse(
           pagedApprovals.listApprovalsPage
@@ -208,7 +212,7 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/approvals/:approvalId/resolve", operatorOnly, async (request, reply) => {
+  fastify.post("/api/v1/approvals/:approvalId/resolve", operatorOrCompanion, async (request, reply) => {
     const params = z.object({ approvalId: z.string().uuid() }).safeParse(request.params);
     if (!params.success) {
       return reply.code(400).send({ error: "Invalid approval ID format." });
@@ -217,6 +221,12 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
     const parsed = resolveSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    if (request.authActorSource === "companion" && parsed.data.decision !== "reject") {
+      return reply.code(403).send({
+        error:
+          "Paired companions may review or reject approvals, but approval and edit require operator authority until a server-verifiable device approval key is registered.",
+      });
     }
 
     try {
