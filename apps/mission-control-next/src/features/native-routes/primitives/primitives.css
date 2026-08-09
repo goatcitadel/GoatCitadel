@@ -909,7 +909,7 @@
     padding-right: 2.75rem;
   }
 
-  .mc-next-filter-pill-scroller::after {
+  .mc-next-filter-pill-scroller[data-overflowing="true"]::after {
     content: "";
     position: absolute;
     top: 0.35rem;
@@ -920,7 +920,7 @@
     background: linear-gradient(90deg, transparent, var(--bg-surface-1, var(--mc-surface-1)) 72%);
   }
 
-  .mc-next-filter-pill-hint {
+  .mc-next-filter-pill-scroller[data-overflowing="true"] .mc-next-filter-pill-hint {
     display: block;
     position: absolute;
     right: 0;

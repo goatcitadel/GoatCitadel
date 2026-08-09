@@ -1,11 +1,15 @@
 import { useCallback, useRef, useState } from "react";
 import { RefreshCw, RotateCcw, Save } from "lucide-react";
-import type { CapabilityResourceType, CapabilityScopeKind, CapabilityScopeUpdateInput, CapabilityScopeView } from "@goatcitadel/contracts";
+import type {
+  CapabilityResourceType,
+  CapabilityScopeKind,
+  CapabilityScopeUpdateInput,
+  CapabilityScopeView,
+} from "@goatcitadel/contracts";
 import {
   getErrorMessage,
   type Notice,
   SettingsButtonRow,
-  SettingsGrid,
   SettingsNotice,
   SettingsSectionShell,
   useAsyncLoad,
@@ -45,10 +49,7 @@ export function CapabilityScopePanel({
   updateScope,
   resetScope,
 }: CapabilityScopePanelProps) {
-  const load = useCallback(
-    () => fetchScope(scopeId, resourceType),
-    [fetchScope, scopeId, resourceType],
-  );
+  const load = useCallback(() => fetchScope(scopeId, resourceType), [fetchScope, scopeId, resourceType]);
   const { loading, error, data: view, reload } = useAsyncLoad(load, [load]);
 
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -127,12 +128,11 @@ export function CapabilityScopePanel({
     );
   }
 
-  const modeLabel =
-    view?.mode === "inherit"
-      ? "Inherited (all from parent)"
-      : "Curated";
+  const modeLabel = view?.mode === "inherit" ? "Inherited (all from parent)" : "Curated";
 
   const resourceLabel = labelForResourceType(resourceType);
+  const panelTitle =
+    title.trim().toLocaleLowerCase() === resourceLabel.toLocaleLowerCase() ? title : `${title} — ${resourceLabel}`;
 
   const listItems =
     view?.items.map((item) => {
@@ -146,75 +146,61 @@ export function CapabilityScopePanel({
     }) ?? [];
 
   return (
-    <>
+    <NativeCard
+      density="compact"
+      className="mc-next-settings-panel"
+      title={panelTitle}
+      subtitle={`Control which ${resourceLabel.toLowerCase()} this ${scopeKind} uses. ${modeLabel}.`}
+      stats={[
+        { label: "Mode", value: modeLabel },
+        { label: "Items", value: String(view?.items.length ?? 0) },
+      ]}
+    >
       {error ? <ErrorState size="inline" description={error} /> : null}
       {notice ? <SettingsNotice notice={notice} /> : null}
-      <SettingsGrid>
-        <NativeCard
-          density="compact"
-          className="mc-next-settings-panel"
-          title={`${title} — ${resourceLabel}`}
-          subtitle={`Control which ${resourceLabel.toLowerCase()} this ${scopeKind} uses. ${modeLabel}.`}
-          stats={[
-            { label: "Mode", value: modeLabel },
-            { label: "Items", value: String(view?.items.length ?? 0) },
-          ]}
-        >
-          {view ? (
-            <>
-              <div className="mc-next-settings-chip-row" aria-label="Scope mode">
-                <span className="mc-next-settings-chip">
-                  {view.mode === "inherit" ? "Inherited" : "Curated"}
-                </span>
-              </div>
-              <NativeSelectableList
-                ariaLabel={`${resourceLabel} for ${scopeKind}`}
-                emptyLabel={`No ${resourceLabel.toLowerCase()} available.`}
+      {view ? (
+        <>
+          <div className="mc-next-settings-chip-row" aria-label="Scope mode">
+            <span className="mc-next-settings-chip">{view.mode === "inherit" ? "Inherited" : "Curated"}</span>
+          </div>
+          <NativeSelectableList
+            ariaLabel={`${resourceLabel} for ${scopeKind}`}
+            emptyLabel={`No ${resourceLabel.toLowerCase()} available.`}
+          >
+            {listItems.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                className="mc-next-settings-selectable"
+                onClick={() => handleToggle(item.id)}
               >
-                {listItems.map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    className="mc-next-settings-selectable"
-                    onClick={() => handleToggle(item.id)}
-                  >
-                    <div className="mc-next-settings-selectable-head">
-                      <strong>{item.title}</strong>
-                      <span>{item.meta}</span>
-                    </div>
-                  </button>
-                ))}
-              </NativeSelectableList>
-            </>
-          ) : null}
-          <SettingsButtonRow>
-            <NativeButton
-              variant="default"
-              disabled={saving || resetting || !hasOverrides}
-              onClick={() => void handleSave()}
-            >
-              <Save size={16} />
-              {saving ? "Saving..." : "Save"}
-            </NativeButton>
-            <NativeButton
-              variant="secondary"
-              disabled={saving || resetting}
-              onClick={() => void handleReset()}
-            >
-              <RotateCcw size={16} />
-              {resetting ? "Resetting..." : "Reset to inherited"}
-            </NativeButton>
-            <NativeButton
-              variant="secondary"
-              disabled={saving || resetting}
-              onClick={() => void reload()}
-            >
-              <RefreshCw size={16} />
-              Refresh
-            </NativeButton>
-          </SettingsButtonRow>
-        </NativeCard>
-      </SettingsGrid>
-    </>
+                <div className="mc-next-settings-selectable-head">
+                  <strong>{item.title}</strong>
+                  <span>{item.meta}</span>
+                </div>
+              </button>
+            ))}
+          </NativeSelectableList>
+        </>
+      ) : null}
+      <SettingsButtonRow>
+        <NativeButton
+          variant="default"
+          disabled={saving || resetting || !hasOverrides}
+          onClick={() => void handleSave()}
+        >
+          <Save size={16} />
+          {saving ? "Saving..." : "Save"}
+        </NativeButton>
+        <NativeButton variant="secondary" disabled={saving || resetting} onClick={() => void handleReset()}>
+          <RotateCcw size={16} />
+          {resetting ? "Resetting..." : "Reset to inherited"}
+        </NativeButton>
+        <NativeButton variant="secondary" disabled={saving || resetting} onClick={() => void reload()}>
+          <RefreshCw size={16} />
+          Refresh
+        </NativeButton>
+      </SettingsButtonRow>
+    </NativeCard>
   );
 }

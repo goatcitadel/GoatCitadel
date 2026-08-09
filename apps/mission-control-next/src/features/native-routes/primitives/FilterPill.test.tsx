@@ -70,12 +70,50 @@ describe("FilterPillGroup", () => {
     );
     expect(markup).toContain('role="tablist"');
     expect(markup).toContain('aria-label="Memory namespace filter"');
-    expect(markup).toContain("Swipe for more filters");
+    expect(markup).not.toContain("Swipe for more filters");
+    expect(markup).toContain('data-overflowing="false"');
   });
 
   it("renders nothing when no options are supplied", () => {
     const markup = renderToStaticMarkup(<FilterPillGroup label="empty" options={[]} value="all" onChange={() => {}} />);
     expect(markup).toBe("");
+  });
+
+  it("shows the swipe hint only while the rendered pill row overflows", async () => {
+    let notifyResize: (() => void) | undefined;
+    const dimensions = { scrollWidth: 480, clientWidth: 240 };
+    class FakeResizeObserver {
+      public constructor(callback: ResizeObserverCallback) {
+        notifyResize = () => callback([], this as unknown as ResizeObserver);
+      }
+      public observe() {}
+      public disconnect() {}
+      public unobserve() {}
+    }
+    vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(
+        <FilterPillGroup label="Memory namespace filter" options={options} value="all" onChange={() => {}} />,
+        {
+          createNodeMock: (element) =>
+            element.props.className === "mc-next-filter-pill-group"
+              ? dimensions
+              : element.type === "button"
+                ? { focus: vi.fn() }
+                : {},
+        },
+      );
+    });
+    expect(renderer!.root.findAllByProps({ className: "mc-next-filter-pill-hint" })).toHaveLength(1);
+
+    dimensions.scrollWidth = 240;
+    await act(async () => notifyResize?.());
+    expect(renderer!.root.findAllByProps({ className: "mc-next-filter-pill-hint" })).toHaveLength(0);
+
+    act(() => renderer!.unmount());
+    vi.unstubAllGlobals();
   });
 
   it("marks only the active option as selected and tabbable", () => {

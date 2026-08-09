@@ -197,10 +197,7 @@ function TaskStatusSummaryWidget(props: OpsSavedBoardsWidgetProps) {
 function UsageCostSummaryWidget(props: OpsSavedBoardsWidgetProps) {
   const load = useWidgetData(props.workspaceId, props.boardGeneration, async () => fetchCostSummary("day"));
   const summary = load.state.status === "ready" ? load.state.data : null;
-  const totals = summary?.items.reduce(
-    (result, item) => ({ tokens: result.tokens + item.tokenTotal, costUsd: result.costUsd + item.costUsd }),
-    { tokens: 0, costUsd: 0 },
-  );
+  const projection = summary ? projectUsageCostSummary(summary) : null;
   return (
     <WidgetChrome
       label="Usage and cost"
@@ -216,18 +213,66 @@ function UsageCostSummaryWidget(props: OpsSavedBoardsWidgetProps) {
         <>
           <WidgetMetrics
             items={[
-              ["Tokens", formatCompactNumber(totals?.tokens ?? 0)],
-              ["Cost", formatCurrency(totals?.costUsd ?? 0)],
+              ["Tokens", formatCompactNumber(projection?.tokens ?? 0)],
+              ["Cost", projection?.costLabel ?? "Unknown"],
               ["Sources", String(summary.items.length)],
             ]}
           />
-          <p className="mc-next-ops-board-widget-note">
-            Gateway day scope; open Costs for provider and attribution evidence.
-          </p>
+          <p className="mc-next-ops-board-widget-note">{projection?.coverageDescription}</p>
         </>
       )}
     </WidgetChrome>
   );
+}
+
+export function projectUsageCostSummary(summary: Awaited<ReturnType<typeof fetchCostSummary>>): {
+  tokens: number;
+  costLabel: string;
+  coverageDescription: string;
+} {
+  const totals = summary.items.reduce(
+    (result, item) => ({
+      tokens: result.tokens + (Number.isFinite(item.tokenTotal) && item.tokenTotal >= 0 ? item.tokenTotal : 0),
+      costUsd: result.costUsd + (Number.isFinite(item.costUsd) && item.costUsd >= 0 ? item.costUsd : 0),
+    }),
+    { tokens: 0, costUsd: 0 },
+  );
+  const canonicalCoverage = summary.usageAvailability?.metricAvailability?.costUsd;
+  const itemCoverage = summary.items.map((item) => item.metricAvailability?.costUsdComplete);
+  const complete =
+    canonicalCoverage?.complete ??
+    (itemCoverage.some((value) => value === false)
+      ? false
+      : itemCoverage.length > 0 && itemCoverage.every((value) => value === true)
+        ? true
+        : undefined);
+
+  if (complete === true) {
+    return {
+      tokens: totals.tokens,
+      costLabel: formatCurrency(totals.costUsd),
+      coverageDescription: "Gateway day scope with complete cost coverage; open Costs for provider attribution.",
+    };
+  }
+
+  const knownCostLabel = totals.costUsd > 0 ? `${formatCurrency(totals.costUsd)}+` : "Unknown";
+  if (complete === false) {
+    const unknownAttempts = canonicalCoverage?.unknownAttemptCount;
+    return {
+      tokens: totals.tokens,
+      costLabel: knownCostLabel,
+      coverageDescription:
+        unknownAttempts && unknownAttempts > 0
+          ? `Known spend is a lower bound because ${unknownAttempts} provider ${unknownAttempts === 1 ? "attempt has" : "attempts have"} unknown cost.`
+          : "Known spend is a lower bound because cost coverage is incomplete; open Costs for evidence.",
+    };
+  }
+
+  return {
+    tokens: totals.tokens,
+    costLabel: knownCostLabel,
+    coverageDescription: "Cost coverage was not reported, so this widget does not claim an exact total.",
+  };
 }
 
 function WidgetChrome({

@@ -1,20 +1,14 @@
-import { HardDrive } from "lucide-react";
 import {
   fetchWorkspaceCapabilities,
   resetWorkspaceCapabilities,
   updateWorkspaceCapabilities,
 } from "@goatcitadel/mission-control-shared/api/client";
-import { type SettingsSectionProps, SettingsGrid, SettingsPageFrame } from "../SettingsShared";
+import { type SettingsSectionProps, SettingsGrid } from "../SettingsShared";
 import { CapabilityScopePanel } from "./CapabilityScopePanel";
 
 export function WorkspaceCapabilitiesSection({ activeWorkspaceId, route, navigate }: SettingsSectionProps) {
   return (
-    <SettingsPageFrame
-      icon={HardDrive}
-      kicker="Settings"
-      title="Workspace capabilities"
-      description="Choose which skills, plugins, and MCP servers this workspace uses. Unset = inherit from Citadel."
-    >
+    <>
       <SettingsGrid>
         <CapabilityScopePanel
           scopeKind="workspace"
@@ -54,6 +48,6 @@ export function WorkspaceCapabilitiesSection({ activeWorkspaceId, route, navigat
           Grant it at the Citadel.
         </button>
       </p>
-    </SettingsPageFrame>
+    </>
   );
 }

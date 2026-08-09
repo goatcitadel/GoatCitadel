@@ -70,7 +70,6 @@ import {
   clearStoredOpenAICodexOAuthFlow,
   createEmptyProviderEditorDraft,
   deriveProviderSmokeEvidenceItems,
-  formatCapabilities,
   formatOpenAICodexOAuthExpiry,
   formatProviderCredentialLabel,
   formatProviderModelsMeta,
@@ -272,6 +271,9 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
       : "Remote provider"
     : "Provider pending";
   const selectedProviderExecutionApiStyle = selectedProvider?.resolvedApiStyle ?? selectedProvider?.apiStyle;
+  const selectedProviderCapabilities = Object.entries(selectedProvider?.capabilities ?? {})
+    .filter(([, enabled]) => Boolean(enabled))
+    .map(([capability]) => capability);
   const selectedProviderApiMeta =
     selectedProvider &&
     selectedProviderExecutionApiStyle &&
@@ -1486,11 +1488,23 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                     <input className="mc-next-settings-input" value={selectedProvider.baseUrl} readOnly />
                   </SettingsField>
                   <SettingsField label="Capabilities">
-                    <input
-                      className="mc-next-settings-input"
-                      value={formatCapabilities(selectedProvider.capabilities)}
-                      readOnly
-                    />
+                    <div
+                      className="mc-next-settings-chip-row"
+                      role="list"
+                      aria-label={`${selectedProvider.label} capabilities`}
+                    >
+                      {selectedProviderCapabilities.length > 0 ? (
+                        selectedProviderCapabilities.map((capability) => (
+                          <span key={capability} className="mc-next-settings-chip" role="listitem">
+                            {capability}
+                          </span>
+                        ))
+                      ) : (
+                        <span className="mc-next-settings-chip" role="listitem">
+                          No declared capabilities
+                        </span>
+                      )}
+                    </div>
                   </SettingsField>
                 </SettingsFieldGrid>
                 <SettingsActionList
