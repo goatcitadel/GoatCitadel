@@ -1,6 +1,11 @@
 # GoatCitadel Mobile Native Capabilities Plan
 
-Last updated: 2026-05-22
+Last updated: 2026-08-08
+
+Execution placement: the current companion-app closeout and pinned-Gateway
+`HX-508` proof are owned by tranche `M8` in
+[MASTER_COMPLETION_PROGRAM.md](./MASTER_COMPLETION_PROGRAM.md). This file owns
+the native capability contract, not a separate program order.
 
 ## Purpose
 
@@ -56,7 +61,7 @@ Raw device grants are not sufficient for privileged mobile writes. Companion mut
 | `camera_capture` | ready | user initiated | User-captured photo attachments. |
 | `image_library` | ready | user initiated | User-selected photo attachments. |
 | `share_intake` | ready | user initiated | Share-sheet drafts enter local review before chat. |
-| `voice_capture` | scaffolded | user initiated | Voice note attachment path exists; transcription remains a follow-up. |
+| `voice_capture` | ready | user initiated | Native microphone recording and voice-note attachment are implemented. Transcription remains a separate optional follow-up. |
 | `approval_key` | scaffolded | foreground | High-risk approvals require explicit local confirmation; biometric module install is blocked until registry auth is available. |
 | `push_refresh` | scaffolded | background opt-in | Gateway API exists; Expo notification module install is pending registry auth. |
 | `geofence_context` | deferred | background opt-in | Contract-visible only; no continuous tracking. |
@@ -67,6 +72,10 @@ Raw device grants are not sufficient for privileged mobile writes. Companion mut
 | `call_screening` | deferred | special access | Metadata-only concept only. |
 
 ## Proof Expectations
+
+The implemented capture path closes the old `voice_capture` implementation
+checkbox. Its Android/device journey still participates in the consolidated
+`M8` proof bundle alongside approvals, reconnect, attachments, and revocation.
 
 Mobile:
 

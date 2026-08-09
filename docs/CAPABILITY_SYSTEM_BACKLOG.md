@@ -1,39 +1,35 @@
 # Capability System Backlog
 
-This backlog tracks the follow-on work after Capability System v1.
+Last updated: 2026-08-08
 
-Status note, 2026-05-15: the broader backlog closeout landed Code Mode env passthrough allowlisting, secrets route rate limits, and high-risk approval-bypass regressions. The items below remain capability-system follow-on scope only; do not use this file as evidence that the May 2026 security blockers are still open without checking the live tests and [docs/review/backlog-closeout-2026-05-15.md](./review/backlog-closeout-2026-05-15.md).
+This backlog owns detailed capability-system follow-ons. Aggregate ordering is
+canonical in [MASTER_COMPLETION_PROGRAM.md](./MASTER_COMPLETION_PROGRAM.md),
+primarily tranche `M6`.
 
-## Near-Term Hardening
+The May 2026 list predated the current governed lifecycle. Current contracts,
+Gateway services, and Mission Control clients now cover snapshot freezing,
+inspectable-versus-callable enforcement, Code Mode approval/run execution,
+bounded IPC/timeout/output behavior, migration/backfill guards, candidate
+promotion/revoke/rollback, candidate detail, and lifecycle filtering. Those
+rows are complete or superseded and must not be reopened from an unchecked
+historical list.
 
-1. Add dedicated gateway tests for:
-   - catalog snapshot freezing
-   - inspectable vs callable enforcement
-   - Code Mode approval creation and run execution
-   - proposal inspectable-but-not-callable behavior
+Historical closeout evidence remains in
+[backlog-closeout-2026-05-15.md](./review/backlog-closeout-2026-05-15.md) and
+[CAPABILITY_SYSTEM_V1.md](./CAPABILITY_SYSTEM_V1.md). New work requires a
+current reproduction or an explicit product decision.
 
-2. Add harness-focused tests for:
-   - IPC cancellation
-   - bounded message rejection
-   - structured timeout errors
-   - stdout and stderr truncation markers
+## Reconciled Baseline
 
-3. Add storage-level migration tests for:
-   - backfill idempotence
-   - disabled-skill callable protection
-   - candidate bundle dedupe and provenance preservation
-
-## Promotion and Governance
-
-1. Add explicit promotion and revocation APIs for candidate skills.
-2. Add proposal validation workflows beyond create-and-inspect.
-3. Add operator-visible rollback helpers for approved or trusted skills.
-
-## Skills Hub Follow-On
-
-1. Add dedicated candidate detail views with proof artifacts.
-2. Add proposal detail views with event history and activation blockers.
-3. Add lifecycle filters and trust-level filtering in Mission Control.
+| Area | Current status |
+|---|---|
+| Catalog snapshot freezing and inspectable/callable enforcement | `complete` |
+| Code Mode approval creation and governed execution | `complete` |
+| Bounded IPC, cancellation, timeout, and output truncation | `complete` |
+| Backfill, disabled-skill protection, candidate dedupe/provenance tests | `complete` |
+| Candidate promotion, revoke, and rollback APIs | `complete` |
+| Candidate detail and lifecycle/trust filtering | `complete` |
+| Automatic proposal filing or validation beyond current lifecycle | `not assumed`; requires a fresh design/reproduction |
 
 ## Code Mode Follow-On
 
@@ -44,7 +40,8 @@ Status note, 2026-05-15: the broader backlog closeout landed Code Mode env passt
 
 ## Registry and Planner Hardening
 
-1. Prove planner and wrapper generation only consume `callableCatalog`.
+1. Preserve the existing proof that planner and wrapper generation consume only
+   `callableCatalog`; add a new task only for a current regression.
 2. Add runtime metrics for inspectable-vs-callable drift.
 3. Add audit exports for catalog snapshots and Code Mode artifact references.
 

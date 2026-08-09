@@ -2,6 +2,11 @@
 
 Evergreen backlog for `apps/mission-control-next`. Confirmed defects should include reproduction evidence and a proof lane. Product ideas stay labeled as hypotheses until validated.
 
+Program placement: evidence-backed implementation is consolidated in tranche
+`M7` of [MASTER_COMPLETION_PROGRAM.md](../MASTER_COMPLETION_PROGRAM.md) so shared
+UI primitives, populated stories, accessibility, surface, and visual proof run
+together. Explore rows remain hypotheses until promoted by evidence.
+
 ## Completed in the 2026-07-12 audit
 
 | ID | Outcome | Proof expectation |

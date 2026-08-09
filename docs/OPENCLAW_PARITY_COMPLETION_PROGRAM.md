@@ -1,10 +1,15 @@
 # OpenClaw Parity Completion Program
 
-Last updated: 2026-07-12
+Last updated: 2026-08-08
 
-This program tracks the remaining closeout order for the full parity program.
+This document preserves the narrow closeout status of the original
+contract-backed OpenClaw epic set. It no longer owns cross-workstream order;
+that order is canonical in
+[MASTER_COMPLETION_PROGRAM.md](./MASTER_COMPLETION_PROGRAM.md).
 
-The current broad-capability implementation program is [OPENCLAW_HERMES_PARITY_PROGRAM.md](./OPENCLAW_HERMES_PARITY_PROGRAM.md). The completion order below is retained for the original contract-backed OpenClaw epic set.
+The detailed remote-worker owner contract remains
+[OPENCLAW_HERMES_PARITY_PROGRAM.md](./OPENCLAW_HERMES_PARITY_PROGRAM.md). The
+completion row below is retained only for the original epic ID.
 
 ## Open Epics
 
@@ -12,9 +17,13 @@ The current broad-capability implementation program is [OPENCLAW_HERMES_PARITY_P
 
 ## Completion Order
 
-1. `GC-P1-09` Packaging and remote deployment parity
+1. `GC-P1-09` Packaging and remote deployment parity — master tranche `M9`
 
 ## Program Notes
 
-- The current full-program closeout order contains only the remaining open epic.
-- Follow-on parity work uses a different recommended order and is tracked separately in [FOLLOW_ON_PARITY_REGISTER.md](./FOLLOW_ON_PARITY_REGISTER.md).
+- The original epic set contains only this remaining open epic. Its execution is
+  intentionally delayed until the master program's release-bearing dependencies
+  are stable, so packaging proof is not repeated after later changes.
+- Follow-on epic status is preserved in
+  [FOLLOW_ON_PARITY_REGISTER.md](./FOLLOW_ON_PARITY_REGISTER.md), but only the
+  master program owns implementation order.
