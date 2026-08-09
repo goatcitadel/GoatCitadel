@@ -5,9 +5,9 @@
     "sqlite": {
       "path": "packages/storage/src/sqlite.ts",
       "registryName": "SCHEMA_MIGRATION_GROUPS",
-      "expectedCount": 195,
+      "expectedCount": 196,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 195,
+      "expectedLastVersion": 196,
       "migrations": [
         {
           "version": 1,
@@ -1373,15 +1373,22 @@
           "groupName": "canonical",
           "definitionSha256": "2fb2e00e398bccfaf2791f17a306723761f90c8e98fe397285c44c050a6e05fe",
           "implementationSha256": "c2a6fc3f02128808bf3d6ceeaa90fb6f12fb450511e5d76bb6d98e81e9d6bb5b"
+        },
+        {
+          "version": 196,
+          "name": "remote_worker_inference_budget_authority_correction",
+          "groupName": "canonical",
+          "definitionSha256": "db37917724c9539a0ff1cc464e3bfc048d18312cf82459c9edcabd028265082c",
+          "implementationSha256": "be7141facdff011f4e0d0f8d65c9b79ed0690ad603be5091053a7aeb21fb5d73"
         }
       ]
     },
     "postgres": {
       "path": "packages/storage/src/postgres/migrations.ts",
       "registryName": "POSTGRES_MIGRATIONS",
-      "expectedCount": 138,
+      "expectedCount": 139,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 138,
+      "expectedLastVersion": 139,
       "migrations": [
         {
           "version": 1,
@@ -2211,6 +2218,13 @@
           "name": "mobile_push_registration_and_delivery_owner",
           "definitionSha256": "c32e8c08e119a15d9126ffdf98eebf5a31b2a2462599988038b4cdd689b96398",
           "runtimeIntegritySha256": "b4f7a5cbfb59f358fd765207b9a36264372e5f51a82ef25bb191b0169bc470a1"
+        },
+        {
+          "version": 139,
+          "name": "remote_worker_inference_budget_authority_correction",
+          "definitionSha256": "f18c1a64b76c498b07230bef233e0bee90645b6db27a637bf8186f9501e9fa95",
+          "sqlPayloadSha256": "bb2675ed9afbd5ad4c3faaeb13713c36d0261c893508ac11190d72e404fe9e56",
+          "runtimeIntegritySha256": "b6bcf06516cfc363dddd0c78bad86cb40b78324bac4c558c5591352bc6d5bab3"
         }
       ]
     }

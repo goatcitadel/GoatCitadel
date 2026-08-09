@@ -62,7 +62,7 @@ change:
 | `M1` | P0/P1 | Proof integrity, storage correctness, and agentic hot-path foundations | `complete` | M0 | Focused storage/Gateway/harness tests, dual-dialect corrupt-shape proof, concurrent-verifier proof |
 | `M2` | P0 | Remote-worker admission, transport, and operator control | `in_progress` | M1 | Focused mesh/auth suites and real two-machine TLS 1.3/mTLS/PoP admission |
 | `M3` | P0 | Remote-worker durable execution and ordered event transport | `in_progress` | M2 | Worker death/reconnect/takeover, replay, transcript, approval-resume, and no-duplicate proof |
-| `M4` | P0/P1 | Live worker inference, execution cell, settlement, and visibility | `planned` | M3 | `pnpm verify:remote-workers` with the connected-worker row executed, plus live Ops/Chat data |
+| `M4` | P0/P1 | Live worker inference, execution cell, settlement, and visibility | `in_progress` | M3 | `pnpm verify:remote-workers` with the connected-worker row executed, plus live Ops/Chat data |
 | `M5` | P0 | Governed self-configuration and repair expansion | `in_progress` | M1; M2 for remote custody | `pnpm verify:self-configuration` with live provider, packaged restart, browser secure input, profile, rollback, and delegated-resume evidence |
 | `M6` | P1/P2 | Gateway capability and policy follow-ons | `complete` | M1; M5 where repair is involved | Focused capability/policy/provider tests and explicit owner decisions |
 | `M7` | P1/P2 | Consolidated Mission Control UX and live-worker projection | `in_progress` | M4; stable M5/M6 APIs | Focused component tests, populated stories, accessibility, surface, and one visual-regression pass |
@@ -242,12 +242,13 @@ Owner contract: `OPENCLAW_HERMES_PARITY_PROGRAM.md`, `HX-501`.
   credential/protected-evidence owner, worker generation, exact assignment
   workspace, and current mesh-admission generation before all five outcomes.
   The native mux and runtime factory remain intentionally uncomposed.
-- Before activation, carry the exact M2 credential, protected-evidence, and
-  mesh-authority fence into each assignment read/mutation and recheck it inside
-  the same storage transaction. The current storage owner already rechecks the
-  worker generation, node admission, durable parent, and lease under lock, but
-  a credential rotation or protected-evidence change can otherwise race the
-  advisory protocol reads.
+- Every protected route 2 through 6 now carries the exact M2 credential,
+  protected-evidence, and M3 mesh-authority fence into its assignment owner.
+  Storage rechecks that complete fence inside the same transaction after the
+  canonical locks and before replay, read, or mutation. Focused regressions
+  prove credential rotation, protected-context drift, and mesh join-authority
+  revoke reject stale reads and writes. Live PostgreSQL contention proof is
+  still required before composition.
 - Compose the dispatch poll/claim/workload-read operations only after an
   authenticated worker runtime can retain its credential and lease secret,
   obtain the exact protected signing pin, and reconnect without replaying a
@@ -264,6 +265,24 @@ Owner contract: `OPENCLAW_HERMES_PARITY_PROGRAM.md`, `HX-501`.
 Owner contracts: `OPENCLAW_HERMES_PARITY_PROGRAM.md`, `HX-502` and `HX-504`.
 
 ## M4 - Live worker adapters, settlement, and visibility
+
+### Implementation progress
+
+- The production-dark HX-503 inference owner is hardened through paired SQLite
+  196/PostgreSQL 139 authority. It hashes the raw lease at the sole boundary,
+  sends only a lease-free normalized command to downstream owners, and binds
+  the exact current worker/assignment/run/task/profile/context, route, budget
+  owner, operation, and token ceilings.
+- Denied and waiting requests reserve no budget. Dispatchable requests require
+  durable budget authority; release records a stable blocked intent before the
+  external effect, and response-loss, expiry, concurrent claim, terminal
+  settlement, and restart recovery are exact-idempotent. Canonical HX-306 usage
+  IDs are retained without fabricating accounting evidence.
+- Integrated proof passes 22 contract tests, 53 Gateway tests, 24 selected
+  storage tests with two live-PostgreSQL rows visibly skipped, all three package
+  typechecks, and the full 196/139 migration-parity, integrity, and runtime
+  schema lane. No listener, scheduler, live atomic budget adapter, or fallback
+  ceiling is composed.
 
 ### Current work
 
@@ -441,15 +460,24 @@ review evidence.
   fields, while the retained replay/audit correlation hash uses a versioned,
   allowlisted secret-free tuple. Durable replay authority remains the
   session-scoped nonce rather than a token-derived fingerprint.
+- The external mobile client now implements the Expo notification/device/task
+  modules, signed token registration/rotation/revoke, a grant-and-session fence
+  immediately before raw-token send, fail-closed tombstones across session or
+  grant changes, refresh-only foreground/background handling, and typed opaque
+  approval deep links. Final correction tip `6834a14cd` passes 49 Jest suites
+  (193 passed, one skipped), lint/typecheck, Android Expo export, and npm-ci
+  dry-run; a real clean install remains blocked by private-package registry
+  authentication.
 - Paired general companions can now read the secret-redacted pending approval
   queue and submit a request-signed rejection. Approval and edit remain
   operator-only because the current client-local biometric key is not bound to
   a Gateway-verifiable approval signature; the capability must remain
   `scaffolded` until that end-to-end key owner exists.
-- Finish consumer-safe approval-key/device-auth; mobile OS token acquisition,
-  rotation/revoke, foreground/background notification handling, and approval
-  deep links; a credentialed Expo/FCM provider and scheduler with an atomic
-  revoke/send fence; and any approved geofence-context work.
+- Finish consumer-safe approval-key/device-auth; a credentialed Expo/FCM
+  provider and scheduler with an atomic revoke/send fence; data-only/silent
+  provider payload proof so the OS cannot display untrusted title/body before
+  JavaScript runs; physical-device delivery; and any approved geofence-context
+  work.
 - Exercise device auth, session paging, approvals, offline/reconnect,
   attachments, and revocation against one pinned Gateway SHA (`HX-508`).
 - Keep screen share, notification awareness, accessibility helper, and call

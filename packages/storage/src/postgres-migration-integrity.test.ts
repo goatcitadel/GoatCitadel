@@ -727,7 +727,7 @@ describe("protected Postgres migration integrity", () => {
     const migration = POSTGRES_MIGRATIONS.find((candidate) => candidate.version === 139);
     assert.equal(migration?.name, "remote_worker_inference_budget_authority_correction");
     assert.equal(migration?.batchedStatements, undefined);
-    assert.equal(migration?.integritySha256, "2b05393513f6695c8ae8f958989630c8aadf1debff61c3e33ce5993bc532bf68");
+    assert.equal(migration?.integritySha256, "b6bcf06516cfc363dddd0c78bad86cb40b78324bac4c558c5591352bc6d5bab3");
     const sql = migration?.sql ?? "";
 
     assert.match(sql, /RENAME COLUMN budget_reservation_id TO legacy_budget_reservation_marker/u);
@@ -765,7 +765,7 @@ describe("protected Postgres migration integrity", () => {
       /OLD\.budget_authority_state = 'legacy_unverifiable'[\s\S]*NEW\.effective_route_json IS DISTINCT FROM OLD\.effective_route_json/u,
     );
     assert.match(sql, /OLD\.state = 'waiting_approval' AND NEW\.state = 'admitted'/u);
-    assert.match(sql, /NEW\.budget_authority_state = 'released' AND \(NEW\.state <> 'blocked'/u);
+    assert.match(sql, /NEW\.budget_authority_state = 'released' AND NEW\.state <> 'blocked'/u);
     assert.match(sql, /NEW\.budget_authority_state = 'reconciliation_required' AND NEW\.state <> 'dispatch_unknown'/u);
     assert.match(sql, /idx_remote_worker_inference_budget_recovery/u);
     for (const trigger of [
