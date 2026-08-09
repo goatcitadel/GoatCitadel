@@ -1180,6 +1180,40 @@ bool CreateProtectedFile(
   return true;
 }
 
+bool CreateProtectedDeleteOnCloseFile(
+    const ProtectedFilesystemState& state,
+    const ProtectedPath& absolute_path,
+    HANDLE* file) noexcept {
+  if (!state.ready || !ProtectedFilesystemRecoveryCheckpoint(state) ||
+      file == nullptr || state.security_descriptor_length == 0U) return false;
+#if defined(GOATCITADEL_PROVISIONER_TESTING)
+  if (!PermitProtectedFilesystemStepForTest(
+          ProtectedFilesystemTestCutpoint::CreateFile)) return false;
+#endif
+  *file = nullptr;
+  SECURITY_ATTRIBUTES attributes{};
+  attributes.nLength = sizeof(attributes);
+  attributes.lpSecurityDescriptor =
+      const_cast<std::uint8_t*>(state.security_descriptor.data());
+  if (!ProtectedFilesystemRecoveryCheckpoint(state)) return false;
+  HANDLE handle = CreateFileW(
+      absolute_path.value.data(),
+      GENERIC_READ | GENERIC_WRITE | DELETE,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+      &attributes,
+      CREATE_NEW,
+      FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT |
+          FILE_FLAG_WRITE_THROUGH | FILE_FLAG_DELETE_ON_CLOSE,
+      nullptr);
+  if (handle == INVALID_HANDLE_VALUE ||
+      !ProtectedFilesystemRecoveryCheckpoint(state)) {
+    if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
+    return false;
+  }
+  *file = handle;
+  return true;
+}
+
 bool FlushAndRenameProtectedFile(
     HANDLE file,
     const ProtectedPath& final_path) noexcept {

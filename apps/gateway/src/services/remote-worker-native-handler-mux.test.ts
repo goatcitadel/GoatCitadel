@@ -2,6 +2,7 @@ import { canonicalJsonString } from "@goatcitadel/contracts";
 import { describe, expect, it, vi } from "vitest";
 import { REMOTE_WORKER_BOOTSTRAP_EXCHANGE_RAW_PATH } from "./remote-worker-admission-service.js";
 import { REMOTE_WORKER_ASSIGNMENT_RPC_ROUTES } from "./remote-worker-assignment-protocol-service.js";
+import { REMOTE_WORKER_ASSIGNMENT_DISPATCH_ROUTES } from "./remote-worker-assignment-dispatch-service.js";
 import {
   createRemoteWorkerMeshNodeAdmissionNativeRequestHandler,
   type RemoteWorkerMeshNodeAdmissionPort,
@@ -49,6 +50,13 @@ describe("remote worker native handler composition", () => {
     });
     for (const route of Object.values(REMOTE_WORKER_ASSIGNMENT_RPC_ROUTES)) {
       await expect(mux(request(route.rawPath))).resolves.toMatchObject({ body: "assignment" });
+    }
+    for (const route of Object.values(REMOTE_WORKER_ASSIGNMENT_DISPATCH_ROUTES)) {
+      await expect(mux(request(route.rawPath))).resolves.toStrictEqual({
+        statusCode: 404,
+        headers: { "content-type": "application/json; charset=utf-8" },
+        body: canonicalJsonString({ error: "REMOTE_WORKER_ROUTE_NOT_FOUND" }),
+      });
     }
     await expect(mux(request("/api/v1/remote-workers/not-a-route"))).resolves.toStrictEqual({
       statusCode: 404,

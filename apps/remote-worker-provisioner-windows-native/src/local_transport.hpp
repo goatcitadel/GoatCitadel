@@ -26,9 +26,9 @@ constexpr std::size_t kGcpaMaximumResponseFrameBytes =
 constexpr std::uint16_t kGcpaVersion = 1U;
 constexpr std::uint32_t kGcpaRequestId = 1U;
 constexpr std::uint64_t kGcpaRecognizedOpcodeBitmap =
-    UINT64_C(0x00070007000F0002);
+    UINT64_C(0x00070007001F0002);
 constexpr std::uint64_t kGcpaCallableOpcodeBitmap =
-    UINT64_C(0x00000000000D0002);
+    UINT64_C(0x00000000001D0002);
 
 constexpr wchar_t kProvisionerTransportServiceName[] =
     L"GoatCitadelRemoteWorkerProvisioner";
@@ -135,6 +135,20 @@ bool ComputeSha256(
     const std::uint8_t* bytes,
     std::size_t length,
     Byte32* output) noexcept;
+// SHA-256, truncated to 16 bytes, over the operation-domain including its NUL,
+// then: caller SID length u16 LE, caller SID, expected state SHA-256,
+// expected generation u64 LE, expected receipt SHA-256, and the exact
+// contract-owned PoP-v2 preimage. This is a local custody-operation fence; it
+// does not change the Ed25519 PoP-v2 preimage or signature contract.
+bool DeriveRuntimePopV2OperationId(
+    const std::uint8_t* authenticated_caller_sid,
+    std::uint16_t authenticated_caller_sid_length,
+    const Byte32& expected_state_sha256,
+    std::uint64_t expected_generation,
+    const Byte32& expected_keyset_receipt_sha256,
+    const std::uint8_t* canonical_preimage,
+    std::size_t canonical_preimage_length,
+    Byte16* output) noexcept;
 bool ComputeAuthenticatedRequestBinding(
     const AuthenticatedRequestBindingInput& input,
     Byte32* output) noexcept;

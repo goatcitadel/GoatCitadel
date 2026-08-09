@@ -13,12 +13,14 @@ import {
   decodeWindowsProtectedInspectResponse,
   decodeWindowsProtectedRevokeKeysetResponse,
   decodeWindowsProtectedSignAdmissionEvidenceResponse,
+  decodeWindowsProtectedSignRuntimePopV2Response,
   decodeWindowsHelperRequest,
   decodeWindowsHelperResponse,
   encodeWindowsHelperInspectRequest,
   encodeWindowsProtectedCreateKeysetRequest,
   encodeWindowsProtectedRevokeKeysetRequest,
   encodeWindowsProtectedSignAdmissionEvidenceRequest,
+  encodeWindowsProtectedSignRuntimePopV2Request,
   validateWindowsProtectedRequestPayload,
   type WindowsProtectedCreateKeysetRequest,
   type WindowsProtectedCreateKeysetResult,
@@ -27,6 +29,8 @@ import {
   type WindowsProtectedRevokeKeysetResult,
   type WindowsProtectedSignAdmissionEvidenceRequest,
   type WindowsProtectedSignAdmissionEvidenceResult,
+  type WindowsProtectedSignRuntimePopV2Request,
+  type WindowsProtectedSignRuntimePopV2Result,
   type WindowsHelperProcessResult,
   type WindowsHelperRequestOpcode,
   type WindowsHelperResponse,
@@ -304,6 +308,7 @@ export async function runWindowsServiceClient(
       requestOpcode === WINDOWS_HELPER_OPCODE.INSPECT ||
       requestOpcode === WINDOWS_HELPER_OPCODE.CREATE_KEYSET ||
       requestOpcode === WINDOWS_HELPER_OPCODE.SIGN_ADMISSION_EVIDENCE ||
+      requestOpcode === WINDOWS_HELPER_OPCODE.SIGN_RUNTIME_POP_V2 ||
       requestOpcode === WINDOWS_HELPER_OPCODE.REVOKE_LOCAL_KEYSET;
     if (response.kind === "success" && !isCallable) {
       throw new WindowsHelperProtocolError("protected service client returned success for an unavailable opcode");
@@ -331,7 +336,7 @@ export async function runWindowsServiceClient(
             reason,
             expectedKeysetReceiptSha256: request.payload.subarray(68, 100),
           });
-        } else {
+        } else if (requestOpcode === WINDOWS_HELPER_OPCODE.SIGN_ADMISSION_EVIDENCE) {
           const envelope = request.payload.subarray(96, 384);
           decodeWindowsProtectedSignAdmissionEvidenceResponse(result.stdout, {
             operationId: request.payload.subarray(0, 16),
@@ -349,6 +354,13 @@ export async function runWindowsServiceClient(
               installedTreeAttestationSha256: envelope.subarray(224, 256),
               installedTreeVerificationReceiptSha256: envelope.subarray(256, 288),
             },
+          });
+        } else {
+          decodeWindowsProtectedSignRuntimePopV2Response(result.stdout, {
+            expectedStateSha256: request.payload.subarray(16, 48),
+            expectedGeneration: request.payload.readBigUInt64LE(52),
+            expectedKeysetReceiptSha256: request.payload.subarray(60, 92),
+            preimage: request.payload.subarray(96, 381),
           });
         }
       }
@@ -438,4 +450,21 @@ export async function signWindowsProtectedAdmissionEvidence(
     throw new WindowsServiceClientExitError(result);
   }
   return decodeWindowsProtectedSignAdmissionEvidenceResponse(result.stdout, input);
+}
+
+export async function signWindowsProtectedRuntimePopV2(
+  executablePath: string,
+  input: WindowsProtectedSignRuntimePopV2Request,
+  options: WindowsServiceClientRunOptions = {},
+): Promise<WindowsProtectedSignRuntimePopV2Result> {
+  const frame = encodeWindowsProtectedSignRuntimePopV2Request(input);
+  const result = await runWindowsServiceClientOneShot(executablePath, frame, options);
+  if (
+    result.exitCode !== WINDOWS_SERVICE_CLIENT_EXIT_CODE.SUCCESS ||
+    result.signal !== null ||
+    result.stderr.byteLength !== 0
+  ) {
+    throw new WindowsServiceClientExitError(result);
+  }
+  return decodeWindowsProtectedSignRuntimePopV2Response(result.stdout, input);
 }

@@ -1,6 +1,12 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, createPrivateKey, createPublicKey, sign } from "node:crypto";
 import { isAbsolute } from "node:path";
+import {
+  REMOTE_WORKER_POP_V2_ROUTE_BINDINGS,
+  REMOTE_WORKER_POP_V2_SCHEMA_VERSION,
+  buildRemoteWorkerPopV2Preimage,
+  type RemoteWorkerPopV2RouteBinding,
+} from "@goatcitadel/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -17,6 +23,8 @@ import {
   WINDOWS_HELPER_SECRET_MAX_BYTES,
   WINDOWS_PROTECTED_CALLABLE_OPCODE_BITMAP,
   WINDOWS_PROTECTED_ADMISSION_EVIDENCE_ENVELOPE_BYTES,
+  WINDOWS_PROTECTED_SIGN_RUNTIME_POP_V2_REQUEST_BYTES,
+  WINDOWS_PROTECTED_SIGN_RUNTIME_POP_V2_RESULT_BYTES,
   WindowsHelperExitError,
   WindowsHelperProcessError,
   WindowsHelperProtocolError,
@@ -29,6 +37,7 @@ import {
   decodeWindowsProtectedInspectResponse,
   decodeWindowsProtectedRevokeKeysetResponse,
   decodeWindowsProtectedSignAdmissionEvidenceResponse,
+  decodeWindowsProtectedSignRuntimePopV2Response,
   encodeWindowsHelperFrame,
   encodeWindowsHelperInspectRequest,
   encodeWindowsHelperRequest,
@@ -36,10 +45,12 @@ import {
   encodeWindowsProtectedAdmissionEvidenceEnvelope,
   encodeWindowsProtectedRevokeKeysetRequest,
   encodeWindowsProtectedSignAdmissionEvidenceRequest,
+  encodeWindowsProtectedSignRuntimePopV2Request,
   buildWindowsProtectedAdmissionEvidenceSigningBytes,
   runWindowsHelperOneShot,
   runWindowsProvisionerInspect,
   validateWindowsProtectedRequestPayload,
+  validateWindowsProtectedRemoteWorkerPopV2Preimage,
 } from "./windows-helper-protocol.js";
 
 function inspectPayload(
@@ -158,6 +169,54 @@ function signAdmissionEvidenceResultPayload(disposition: number): Buffer {
   }
   protectedExpectedState.copy(payload, 236);
   createHash("sha256").update(requestBody).digest().copy(payload, 268);
+  return payload;
+}
+
+const runtimePopV2PrivateKey = admissionEvidencePrivateKey;
+const runtimePopV2Spki = admissionEvidenceSpki;
+
+function runtimePopV2Preimage(route: RemoteWorkerPopV2RouteBinding = REMOTE_WORKER_POP_V2_ROUTE_BINDINGS[6]!): Buffer {
+  return Buffer.from(
+    buildRemoteWorkerPopV2Preimage({
+      schemaVersion: REMOTE_WORKER_POP_V2_SCHEMA_VERSION,
+      method: "POST",
+      rawPath: route.rawPath,
+      operation: route.operation,
+      bodySha256: createHash("sha256").update("body").digest("hex"),
+      nonce: Buffer.alloc(32, 0x31).toString("base64url"),
+      timestamp: "2026-08-09T12:34:56.789Z",
+      idempotencyKey: "mesh-node-admit-1",
+      authorityKind: route.authorityKind,
+      authorityId: route.authorityKind === "bootstrap" ? "bootstrap-1" : "credential-1",
+      authorityGeneration: 3,
+      workerGeneration: 7,
+      tlsExporterSha256: createHash("sha256").update("exporter").digest("hex"),
+      clientCertificateSha256: createHash("sha256").update("certificate").digest("hex"),
+      workerPublicKeySpkiSha256: createHash("sha256").update(runtimePopV2Spki).digest("hex"),
+    }),
+  );
+}
+
+function signRuntimePopV2RequestFixture() {
+  return {
+    expectedStateSha256: protectedExpectedState,
+    expectedGeneration: 7n,
+    expectedKeysetReceiptSha256: Buffer.alloc(32, 0x44),
+    preimage: runtimePopV2Preimage(),
+  };
+}
+
+function signRuntimePopV2ResultPayload(disposition: number): Buffer {
+  const request = signRuntimePopV2RequestFixture();
+  const payload = Buffer.alloc(WINDOWS_PROTECTED_SIGN_RUNTIME_POP_V2_RESULT_BYTES);
+  payload.writeUInt16LE(1, 0);
+  payload.writeUInt16LE(disposition, 2);
+  if (disposition === 1) {
+    request.expectedKeysetReceiptSha256.copy(payload, 8);
+    createHash("sha256").update(runtimePopV2Spki).digest().copy(payload, 40);
+    runtimePopV2Spki.copy(payload, 72);
+    sign(null, request.preimage, runtimePopV2PrivateKey).copy(payload, 116);
+  }
   return payload;
 }
 
@@ -590,9 +649,9 @@ describe("W1B1A protected GCPW codecs", () => {
     expect(() => decodeWindowsProtectedAdmissionEvidenceEnvelope(first.subarray(0, -1))).toThrow(
       WindowsHelperProtocolError,
     );
-    expect(() =>
-      decodeWindowsProtectedAdmissionEvidenceEnvelope(Buffer.concat([first, Buffer.alloc(1)])),
-    ).toThrow(WindowsHelperProtocolError);
+    expect(() => decodeWindowsProtectedAdmissionEvidenceEnvelope(Buffer.concat([first, Buffer.alloc(1)]))).toThrow(
+      WindowsHelperProtocolError,
+    );
   });
 
   it("binds the admission-evidence request operation, generation, state, receipt, and exact envelope", () => {
@@ -625,6 +684,7 @@ describe("W1B1A protected GCPW codecs", () => {
     ).toThrow(/must equal envelope/);
 
     for (const mutate of [
+      (value: Buffer) => value.writeUInt8(1, 0),
       (value: Buffer) => value.writeUInt16LE(2, 48),
       (value: Buffer) => value.writeUInt8(1, 50),
       (value: Buffer) => value.writeUInt8(1, 51),
@@ -722,7 +782,8 @@ describe("W1B1A protected GCPW codecs", () => {
     }
 
     const wrongDomain = Buffer.from(canonical);
-    const requestBody = encodeWindowsProtectedSignAdmissionEvidenceRequest(request).subarray(WINDOWS_HELPER_HEADER_BYTES);
+    const requestBody =
+      encodeWindowsProtectedSignAdmissionEvidenceRequest(request).subarray(WINDOWS_HELPER_HEADER_BYTES);
     sign(null, requestBody.subarray(96), admissionEvidencePrivateKey).copy(wrongDomain, 172);
     expect(() =>
       decodeWindowsProtectedSignAdmissionEvidenceResponse(encodeWindowsHelperFrame(0x92, wrongDomain), request),
@@ -745,6 +806,141 @@ describe("W1B1A protected GCPW codecs", () => {
         request,
       ),
     ).toThrow(/rejection authority/);
+  });
+});
+
+describe("bounded protected remote-worker PoP-v2 codec", () => {
+  it("encodes one exact request and rejects every purpose or fixed-byte mutation", () => {
+    const request = signRuntimePopV2RequestFixture();
+    const frame = encodeWindowsProtectedSignRuntimePopV2Request(request);
+    const decoded = decodeWindowsHelperRequest(frame);
+    expect(decoded.opcode).toBe(WINDOWS_HELPER_OPCODE.SIGN_RUNTIME_POP_V2);
+    expect(decoded.payload).toHaveLength(WINDOWS_PROTECTED_SIGN_RUNTIME_POP_V2_REQUEST_BYTES);
+    expect(decoded.payload.subarray(0, 16)).toEqual(Buffer.alloc(16));
+    expect(decoded.payload.subarray(16, 48)).toEqual(request.expectedStateSha256);
+    expect(decoded.payload.readUInt16LE(48)).toBe(1);
+    expect(decoded.payload.readUInt8(50)).toBe(3);
+    expect(decoded.payload.readUInt8(51)).toBe(0);
+    expect(decoded.payload.readBigUInt64LE(52)).toBe(7n);
+    expect(decoded.payload.subarray(60, 92)).toEqual(request.expectedKeysetReceiptSha256);
+    expect(decoded.payload.readUInt32LE(92)).toBe(285);
+    expect(decoded.payload.subarray(96, 381)).toEqual(request.preimage);
+    expect(decoded.payload.subarray(381)).toEqual(Buffer.alloc(3));
+    expect(validateWindowsProtectedRemoteWorkerPopV2Preimage(request.preimage)).toMatchObject({
+      routeCode: 7,
+      authorityKindCode: 2,
+      authorityGeneration: 3n,
+      workerGeneration: 7n,
+    });
+    for (const route of REMOTE_WORKER_POP_V2_ROUTE_BINDINGS) {
+      expect(validateWindowsProtectedRemoteWorkerPopV2Preimage(runtimePopV2Preimage(route))).toMatchObject({
+        routeCode: route.code,
+        authorityKindCode: route.authorityKind === "bootstrap" ? 1 : 2,
+      });
+    }
+    expect(() => validateWindowsProtectedRequestPayload(decoded.opcode, decoded.payload)).not.toThrow();
+
+    for (const mutate of [
+      (value: Buffer) => value.writeUInt8(1, 0),
+      (value: Buffer) => value.writeUInt16LE(2, 48),
+      (value: Buffer) => value.writeUInt8(2, 50),
+      (value: Buffer) => value.writeUInt8(1, 51),
+      (value: Buffer) => value.writeBigUInt64LE(0n, 52),
+      (value: Buffer) => value.fill(0, 60, 92),
+      (value: Buffer) => value.writeUInt32LE(284, 92),
+      (value: Buffer) => value.writeUInt8(0, 96),
+      (value: Buffer) => value.writeUInt8(3, 129),
+      (value: Buffer) => value.writeUInt8(2, 130),
+      (value: Buffer) => value.writeUInt8(0, 131),
+      (value: Buffer) => value.writeUInt8(11, 131),
+      (value: Buffer) => value.writeUInt8(1, 132),
+      (value: Buffer) => value.writeBigUInt64BE(0n, 133),
+      (value: Buffer) => value.writeBigUInt64BE(0n, 141),
+      (value: Buffer) => value.writeBigUInt64BE(8n, 141),
+      (value: Buffer) => value.writeBigUInt64BE(BigInt(Number.MAX_SAFE_INTEGER) + 1n, 149),
+      (value: Buffer) => value.writeUInt8(1, 381),
+    ]) {
+      const invalid = Buffer.from(decoded.payload);
+      mutate(invalid);
+      expect(() => validateWindowsProtectedRequestPayload(WINDOWS_HELPER_OPCODE.SIGN_RUNTIME_POP_V2, invalid)).toThrow(
+        WindowsHelperProtocolError,
+      );
+    }
+    expect(() =>
+      validateWindowsProtectedRequestPayload(
+        WINDOWS_HELPER_OPCODE.SIGN_RUNTIME_POP_V2,
+        decoded.payload.subarray(0, -1),
+      ),
+    ).toThrow(WindowsHelperProtocolError);
+    expect(() =>
+      validateWindowsProtectedRequestPayload(
+        WINDOWS_HELPER_OPCODE.SIGN_RUNTIME_POP_V2,
+        Buffer.concat([decoded.payload, Buffer.alloc(1)]),
+      ),
+    ).toThrow(WindowsHelperProtocolError);
+  });
+
+  it("verifies signed receipts and rejects removed or failed dispositions", () => {
+    const request = signRuntimePopV2RequestFixture();
+    for (const [number, name] of [
+      [1, "signed"],
+      [3, "stale_state"],
+      [4, "keyset_unavailable"],
+      [5, "operation_authority_mismatch"],
+      [8, "signing_failed"],
+    ] as const) {
+      const result = decodeWindowsProtectedSignRuntimePopV2Response(
+        encodeWindowsHelperFrame(0x94, signRuntimePopV2ResultPayload(number)),
+        request,
+      );
+      expect(result.disposition).toBe(name);
+      if (number === 1) {
+        expect(result.keysetReceiptSha256).toEqual(request.expectedKeysetReceiptSha256);
+        expect(result.runtimeManifestSpki).toEqual(runtimePopV2Spki);
+        expect(result.signature).not.toEqual(Buffer.alloc(64));
+      } else {
+        expect(result.signature).toEqual(Buffer.alloc(64));
+      }
+    }
+    for (const removedDisposition of [2, 6, 7]) {
+      expect(() =>
+        decodeWindowsProtectedSignRuntimePopV2Response(
+          encodeWindowsHelperFrame(0x94, signRuntimePopV2ResultPayload(removedDisposition)),
+          request,
+        ),
+      ).toThrow(/disposition/u);
+    }
+
+    const canonical = signRuntimePopV2ResultPayload(1);
+    for (const mutate of [
+      (value: Buffer) => value.writeUInt16LE(2, 0),
+      (value: Buffer) => value.writeUInt16LE(0, 2),
+      (value: Buffer) => value.writeUInt16LE(9, 2),
+      (value: Buffer) => value.writeUInt32LE(1, 4),
+      (value: Buffer) => value.fill(0, 8, 40),
+      (value: Buffer) => {
+        value[40] = value[40]! ^ 1;
+      },
+      (value: Buffer) => {
+        value[72] = value[72]! ^ 1;
+      },
+      (value: Buffer) => value.fill(0, 116, 180),
+      (value: Buffer) => {
+        value[116] = value[116]! ^ 1;
+      },
+      (value: Buffer) => value.writeUInt8(1, 180),
+    ]) {
+      const invalid = Buffer.from(canonical);
+      mutate(invalid);
+      expect(() =>
+        decodeWindowsProtectedSignRuntimePopV2Response(encodeWindowsHelperFrame(0x94, invalid), request),
+      ).toThrow(WindowsHelperProtocolError);
+    }
+    const rejectionWithAuthority = signRuntimePopV2ResultPayload(5);
+    rejectionWithAuthority[8] = 1;
+    expect(() =>
+      decodeWindowsProtectedSignRuntimePopV2Response(encodeWindowsHelperFrame(0x94, rejectionWithAuthority), request),
+    ).toThrow(/rejection authority/u);
   });
 });
 

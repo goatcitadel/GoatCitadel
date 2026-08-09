@@ -29,7 +29,7 @@ const fixture = (): RemoteWorkerPopV2Input => ({
 });
 
 describe("remote worker protected proof v2 contract", () => {
-  it("pins the exact seven callable POST route and operation purposes", () => {
+  it("pins the exact ten protected-proof POST route and operation purposes", () => {
     expect(REMOTE_WORKER_POP_V2_ROUTE_BINDINGS).toStrictEqual([
       {
         code: 1,
@@ -80,7 +80,39 @@ describe("remote worker protected proof v2 contract", () => {
         operation: "mesh.node.admit",
         authorityKind: "credential",
       },
+      {
+        code: 8,
+        method: "POST",
+        rawPath: "/api/v1/remote-workers/assignment-offer-polls",
+        operation: "assignment.offers.poll",
+        authorityKind: "credential",
+      },
+      {
+        code: 9,
+        method: "POST",
+        rawPath: "/api/v1/remote-workers/assignment-claims",
+        operation: "assignment.claim",
+        authorityKind: "credential",
+      },
+      {
+        code: 10,
+        method: "POST",
+        rawPath: "/api/v1/remote-workers/assignment-workload-reads",
+        operation: "assignment.workload.read",
+        authorityKind: "credential",
+      },
     ]);
+    for (const route of REMOTE_WORKER_POP_V2_ROUTE_BINDINGS) {
+      expect(
+        normalizeRemoteWorkerPopV2Material({
+          ...fixture(),
+          rawPath: route.rawPath,
+          operation: route.operation,
+          authorityKind: route.authorityKind,
+          authorityId: route.authorityKind === "bootstrap" ? "bootstrap-1" : "credential-1",
+        }).routeCode,
+      ).toBe(route.code);
+    }
   });
 
   it("encodes one deterministic, domain-separated fixed-length vector", () => {

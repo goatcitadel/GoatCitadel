@@ -55,6 +55,13 @@ void WriteU64(std::uint8_t* bytes, std::uint64_t value) {
   }
 }
 
+void WriteU64Be(std::uint8_t* bytes, std::uint64_t value) {
+  for (std::size_t index = 0U; index < 8U; ++index) {
+    bytes[index] = static_cast<std::uint8_t>(
+        (value >> ((7U - index) * 8U)) & UINT64_C(0xff));
+  }
+}
+
 std::uint16_t ReadU16(const std::uint8_t* bytes) {
   return static_cast<std::uint16_t>(
       static_cast<std::uint16_t>(bytes[0]) |
@@ -280,11 +287,12 @@ void TestHeaderFieldMatrix() {
 }
 
 void TestKnownDarkAndUnknownOpcodes() {
-  constexpr std::array<std::uint8_t, 10U> kDarkOpcodes = {
+  constexpr std::array<std::uint8_t, 11U> kDarkOpcodes = {
       static_cast<std::uint8_t>(gc::Opcode::CreateKeyset),
       static_cast<std::uint8_t>(gc::Opcode::AcquireKeyForSigning),
       static_cast<std::uint8_t>(gc::Opcode::SignAdmissionEvidence),
       static_cast<std::uint8_t>(gc::Opcode::RevokeLocalKeyset),
+      static_cast<std::uint8_t>(gc::Opcode::SignRuntimePopV2),
       static_cast<std::uint8_t>(gc::Opcode::BeginInstall),
       static_cast<std::uint8_t>(gc::Opcode::SealAndPublishInstall),
       static_cast<std::uint8_t>(gc::Opcode::AbandonToQuarantine),
@@ -670,6 +678,179 @@ void TestProtectedMutationCodecs() {
       !gc::DecodeSignAdmissionEvidenceRequest(
           sign_request.data(), sign_request.size(), nullptr),
       "sign admission-evidence null output rejected");
+
+  std::array<std::uint8_t, gc::kRemoteWorkerPopV2PreimageBytes> pop_preimage{};
+  constexpr char kPopV2Domain[] = "goatcitadel.remote-worker-pop.v2";
+  static_assert(sizeof(kPopV2Domain) == gc::kRemoteWorkerPopV2DomainBytes);
+  std::memcpy(pop_preimage.data(), kPopV2Domain, sizeof(kPopV2Domain));
+  pop_preimage[gc::kRemoteWorkerPopV2DomainBytes + 0U] = 2U;
+  pop_preimage[gc::kRemoteWorkerPopV2DomainBytes + 1U] = 1U;
+  pop_preimage[gc::kRemoteWorkerPopV2DomainBytes + 2U] = 7U;
+  pop_preimage[gc::kRemoteWorkerPopV2DomainBytes + 3U] = 2U;
+  WriteU64Be(pop_preimage.data() + gc::kRemoteWorkerPopV2DomainBytes + 4U, 3U);
+  WriteU64Be(pop_preimage.data() + gc::kRemoteWorkerPopV2DomainBytes + 12U, 7U);
+  WriteU64Be(
+      pop_preimage.data() + gc::kRemoteWorkerPopV2DomainBytes + 20U,
+      UINT64_C(1786288496789));
+  for (std::size_t index = gc::kRemoteWorkerPopV2DomainBytes + 28U;
+       index < pop_preimage.size();
+       ++index) {
+    pop_preimage[index] = static_cast<std::uint8_t>(index & 0xffU);
+  }
+
+  std::array<std::uint8_t, gc::kSignRuntimePopV2RequestBytes> pop_request{};
+  for (std::size_t index = 0U; index < 16U; ++index) {
+    pop_request[index] = static_cast<std::uint8_t>(0xc0U + index);
+  }
+  for (std::size_t index = 0U; index < 32U; ++index) {
+    pop_request[16U + index] = static_cast<std::uint8_t>(0x80U + index);
+    pop_request[60U + index] = static_cast<std::uint8_t>(0xa0U + index);
+  }
+  WriteU16(pop_request.data() + 48U, 1U);
+  pop_request[50U] = 3U;
+  WriteU64(pop_request.data() + 52U, 7U);
+  WriteU32(
+      pop_request.data() + 92U,
+      static_cast<std::uint32_t>(gc::kRemoteWorkerPopV2PreimageBytes));
+  std::memcpy(
+      pop_request.data() + 96U,
+      pop_preimage.data(),
+      pop_preimage.size());
+
+  gc::SignRuntimePopV2Request decoded_pop_request{};
+  Expect(
+      gc::DecodeSignRuntimePopV2Request(
+          pop_request.data(), pop_request.size(), &decoded_pop_request) &&
+          decoded_pop_request.operation_id[0U] == 0xc0U &&
+          decoded_pop_request.expected_state_sha256[0U] == 0x80U &&
+          decoded_pop_request.expected_generation == 7U &&
+          decoded_pop_request.expected_keyset_receipt_sha256[0U] == 0xa0U &&
+          decoded_pop_request.material.route_code == 7U &&
+          decoded_pop_request.material.authority_kind_code == 2U &&
+          decoded_pop_request.material.authority_generation == 3U &&
+          decoded_pop_request.material.worker_generation == 7U &&
+          decoded_pop_request.preimage == pop_preimage,
+      "remote-worker PoP-v2 request exact codec");
+  auto caller_pop_request = pop_request;
+  std::fill(
+      caller_pop_request.begin(),
+      caller_pop_request.begin() + 16U,
+      std::uint8_t{0U});
+  Expect(
+      gc::DecodeSignRuntimePopV2CallerRequest(
+          caller_pop_request.data(),
+          caller_pop_request.size(),
+          &decoded_pop_request) &&
+          decoded_pop_request.operation_id ==
+              std::array<std::uint8_t, 16U>{} &&
+          decoded_pop_request.preimage == pop_preimage &&
+          !gc::DecodeSignRuntimePopV2Request(
+              caller_pop_request.data(),
+              caller_pop_request.size(),
+              &decoded_pop_request) &&
+          !gc::DecodeSignRuntimePopV2CallerRequest(
+              pop_request.data(),
+              pop_request.size(),
+              &decoded_pop_request),
+      "remote-worker PoP-v2 caller placeholder and inner authority are distinct");
+  auto InvalidPopRequestClears = [&](const auto& bytes, std::size_t length) {
+    std::memset(&decoded_pop_request, 0xa5, sizeof(decoded_pop_request));
+    const bool accepted = gc::DecodeSignRuntimePopV2Request(
+        bytes.data(), length, &decoded_pop_request);
+    return !accepted &&
+           decoded_pop_request.operation_id ==
+               std::array<std::uint8_t, 16U>{} &&
+           decoded_pop_request.expected_state_sha256 ==
+               std::array<std::uint8_t, 32U>{} &&
+           decoded_pop_request.expected_generation == 0U &&
+           decoded_pop_request.expected_keyset_receipt_sha256 ==
+               std::array<std::uint8_t, 32U>{} &&
+           decoded_pop_request.preimage ==
+               std::array<
+                   std::uint8_t,
+                   gc::kRemoteWorkerPopV2PreimageBytes>{} &&
+           decoded_pop_request.material.route_code == 0U &&
+           decoded_pop_request.material.authority_kind_code == 0U &&
+           decoded_pop_request.material.authority_generation == 0U &&
+           decoded_pop_request.material.worker_generation == 0U &&
+           decoded_pop_request.material.timestamp_epoch_ms == 0U &&
+           decoded_pop_request.material.worker_public_key_spki_sha256 ==
+               std::array<std::uint8_t, 32U>{};
+  };
+  for (const std::size_t offset : {
+           0U, 16U, 48U, 50U, 51U, 52U, 60U, 92U, 96U, 129U, 130U,
+           131U, 132U, 133U, 141U, 149U, 381U}) {
+    auto mutated = pop_request;
+    if (offset == 0U) {
+      std::fill(mutated.begin(), mutated.begin() + 16U, std::uint8_t{0U});
+    } else if (offset == 16U) {
+      std::fill(
+          mutated.begin() + 16U,
+          mutated.begin() + 48U,
+          std::uint8_t{0U});
+    } else if (offset == 48U) {
+      WriteU16(mutated.data() + 48U, 2U);
+    } else if (offset == 50U) {
+      mutated[50U] = 2U;
+    } else if (offset == 51U || offset == 381U) {
+      mutated[offset] = 1U;
+    } else if (offset == 52U) {
+      WriteU64(mutated.data() + 52U, 0U);
+    } else if (offset == 60U) {
+      std::fill(
+          mutated.begin() + 60U,
+          mutated.begin() + 92U,
+          std::uint8_t{0U});
+    } else if (offset == 92U) {
+      WriteU32(mutated.data() + 92U, 284U);
+    } else if (offset == 96U) {
+      mutated[96U] = 0U;
+    } else if (offset == 129U) {
+      mutated[offset] = 3U;
+    } else if (offset == 130U) {
+      mutated[offset] = 2U;
+    } else if (offset == 131U) {
+      mutated[offset] = 11U;
+    } else if (offset == 132U) {
+      mutated[offset] = 1U;
+    } else if (offset == 133U) {
+      WriteU64Be(mutated.data() + offset, 0U);
+    } else if (offset == 141U) {
+      WriteU64Be(mutated.data() + offset, 8U);
+    } else {
+      WriteU64Be(mutated.data() + offset, UINT64_C(9007199254740992));
+    }
+    Expect(
+        InvalidPopRequestClears(mutated, mutated.size()),
+        "remote-worker PoP-v2 request mutation rejected");
+  }
+  for (std::uint8_t route = 1U; route <= 10U; ++route) {
+    auto bound = pop_request;
+    bound[131U] = route;
+    bound[132U] = route == 1U ? 1U : 2U;
+    Expect(
+        gc::DecodeSignRuntimePopV2Request(
+            bound.data(), bound.size(), &decoded_pop_request),
+        "closed remote-worker PoP-v2 route purpose accepted");
+  }
+  auto wrong_bootstrap_purpose = pop_request;
+  wrong_bootstrap_purpose[131U] = 1U;
+  wrong_bootstrap_purpose[132U] = 2U;
+  Expect(
+      InvalidPopRequestClears(
+          wrong_bootstrap_purpose, wrong_bootstrap_purpose.size()),
+      "bootstrap route rejects credential authority purpose");
+  std::array<std::uint8_t, gc::kSignRuntimePopV2RequestBytes + 1U>
+      extra_pop_request{};
+  std::memcpy(
+      extra_pop_request.data(), pop_request.data(), pop_request.size());
+  Expect(
+      InvalidPopRequestClears(pop_request, pop_request.size() - 1U) &&
+          InvalidPopRequestClears(
+              extra_pop_request, extra_pop_request.size()) &&
+          !gc::DecodeSignRuntimePopV2Request(
+              pop_request.data(), pop_request.size(), nullptr),
+      "remote-worker PoP-v2 exact length and output enforced");
 
   std::array<std::uint8_t, 288U> projection{};
   WriteU16(projection.data(), 1U);

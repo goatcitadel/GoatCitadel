@@ -12,11 +12,13 @@ namespace goatcitadel::remote_worker_provisioner {
 
 constexpr std::uint64_t kRuntimeManifestArtifactCeiling = UINT64_C(524288);
 constexpr std::uint64_t kAdmissionEvidenceArtifactCeiling = UINT64_C(8388608);
+constexpr std::uint64_t kRemoteWorkerPopV2ArtifactBytes = UINT64_C(285);
 constexpr std::size_t kProtectedArtifactStreamingBytes = 65536U;
 
 enum class ProtectedArtifactPurpose : std::uint8_t {
   RuntimeManifest = 1U,
   AdmissionEvidence = 2U,
+  RemoteWorkerPopV2 = 3U,
 };
 
 struct ProtectedArtifactControlSnapshot final {

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   REMOTE_WORKER_PROTECTED_ADMISSION_EVIDENCE_WIRE_SCHEMA_VERSION,
   REMOTE_WORKER_PROTECTED_ADMISSION_SIGNER_PIN_SCHEMA_VERSION,
@@ -75,6 +76,10 @@ export async function createWindowsProtectedAdmissionEvidence(
   if (!pinsEqual(observedPin, expectedPin) || expectedPin.keysetGeneration !== input.targetWorkerGeneration) {
     throw new Error("Windows protected admission signer authority drifted from the operator pin.");
   }
+  const protectedRuntimeManifestSpkiSha256 = runtimeManifestKeySha256(inspect);
+  if (input.workerPublicKeySpkiSha256 !== protectedRuntimeManifestSpkiSha256) {
+    throw new Error("Windows protected admission worker key is not the protected runtime-manifest key.");
+  }
   const operationId = decodeCanonicalBase64Url(input.operationIdBase64Url, 16, "operation ID");
   const contextSha256 = remoteWorkerProtectedAdmissionContextSha256({
     registryWorkspaceId: input.registryWorkspaceId,
@@ -88,7 +93,7 @@ export async function createWindowsProtectedAdmissionEvidence(
     runtimeManifestPayloadSha256: input.runtimeManifestPayloadSha256,
     workspaceCeilingSha256: input.workspaceCeilingSha256,
     capabilityCeilingSha256: input.capabilityCeilingSha256,
-    workerPublicKeySpkiSha256: input.workerPublicKeySpkiSha256,
+    workerPublicKeySpkiSha256: protectedRuntimeManifestSpkiSha256,
     clientCertificateSha256: input.clientCertificateSha256,
     transportTrustAnchorSha256: input.transportTrustAnchorSha256,
     tlsExporterSha256: input.tlsExporterSha256,
@@ -105,7 +110,7 @@ export async function createWindowsProtectedAdmissionEvidence(
     workerGeneration: BigInt(input.targetWorkerGeneration),
     contextSha256: decodeDigest(contextSha256, "protected context"),
     runtimeManifestSha256: decodeDigest(input.runtimeManifestSha256, "runtime manifest"),
-    workerPublicKeySpkiSha256: decodeDigest(input.workerPublicKeySpkiSha256, "worker SPKI"),
+    workerPublicKeySpkiSha256: decodeDigest(protectedRuntimeManifestSpkiSha256, "worker SPKI"),
     downloadVerificationReceiptSha256: decodeDigest(input.downloadVerificationReceiptSha256, "download receipt"),
     installedTreeAttestationSha256: decodeDigest(input.installedTreeAttestationSha256, "installed-tree attestation"),
     installedTreeVerificationReceiptSha256: decodeDigest(
@@ -173,6 +178,24 @@ function pinsEqual(
     left.signerSpkiSha256 === right.signerSpkiSha256 &&
     left.signerSpkiBase64Url === right.signerSpkiBase64Url
   );
+}
+
+function runtimeManifestKeySha256(inspect: WindowsProtectedInspect): string {
+  const spki = Buffer.from(inspect.runtimeManifestSpki);
+  const prefix = Buffer.from("302a300506032b6570032100", "hex");
+  if (
+    spki.byteLength !== 44 ||
+    !spki.subarray(0, prefix.byteLength).equals(prefix) ||
+    spki.subarray(prefix.byteLength).every((byte) => byte === 0)
+  ) {
+    throw new Error("Windows protected admission runtime-manifest SPKI is invalid.");
+  }
+  const digest = Buffer.from(inspect.runtimeManifestSpkiSha256);
+  const calculated = createHash("sha256").update(spki).digest();
+  if (digest.byteLength !== 32 || !digest.equals(calculated)) {
+    throw new Error("Windows protected admission runtime-manifest SPKI hash is invalid.");
+  }
+  return calculated.toString("hex");
 }
 
 function decodeCanonicalBase64Url(value: string, length: number, label: string): Buffer {

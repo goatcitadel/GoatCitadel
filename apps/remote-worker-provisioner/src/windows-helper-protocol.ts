@@ -1,6 +1,13 @@
+/* eslint-disable max-lines -- Fixed-offset protected helper codecs stay co-located so their exact wire layouts and fail-closed validation cannot drift. */
 import { spawn } from "node:child_process";
 import { createHash, createPublicKey, verify } from "node:crypto";
 import { isAbsolute } from "node:path";
+import {
+  REMOTE_WORKER_POP_V2_DOMAIN,
+  REMOTE_WORKER_POP_V2_PREIMAGE_BYTES,
+  REMOTE_WORKER_POP_V2_ROUTE_BINDINGS,
+  type RemoteWorkerPopV2RouteBinding,
+} from "@goatcitadel/contracts";
 
 export const WINDOWS_HELPER_MAGIC = "GCPW";
 export const WINDOWS_HELPER_PROTOCOL_VERSION = 1;
@@ -17,9 +24,11 @@ export const WINDOWS_PROTECTED_REVOKE_KEYSET_RESULT_BYTES = 200;
 export const WINDOWS_PROTECTED_ADMISSION_EVIDENCE_ENVELOPE_BYTES = 288;
 export const WINDOWS_PROTECTED_SIGN_ADMISSION_EVIDENCE_REQUEST_BYTES = 384;
 export const WINDOWS_PROTECTED_SIGN_ADMISSION_EVIDENCE_RESULT_BYTES = 320;
+export const WINDOWS_PROTECTED_SIGN_RUNTIME_POP_V2_REQUEST_BYTES = 384;
+export const WINDOWS_PROTECTED_SIGN_RUNTIME_POP_V2_RESULT_BYTES = 184;
 export const WINDOWS_PROTECTED_ADMISSION_EVIDENCE_SIGNATURE_DOMAIN =
   "goatcitadel.remote-worker.provisioning-evidence.signature.v1";
-export const WINDOWS_PROTECTED_CALLABLE_OPCODE_BITMAP = 0x0000_0000_000d_0002n;
+export const WINDOWS_PROTECTED_CALLABLE_OPCODE_BITMAP = 0x0000_0000_001d_0002n;
 export const WINDOWS_HELPER_ERROR_PAYLOAD_BYTES = 4;
 export const WINDOWS_HELPER_INSPECT_ARGUMENT = "--inspect-stdio";
 
@@ -34,6 +43,7 @@ export const WINDOWS_HELPER_OPCODE = Object.freeze({
   ACQUIRE_KEY_FOR_SIGNING: 0x11,
   SIGN_ADMISSION_EVIDENCE: 0x12,
   REVOKE_LOCAL_KEYSET: 0x13,
+  SIGN_RUNTIME_POP_V2: 0x14,
   BEGIN_INSTALL: 0x20,
   SEAL_AND_PUBLISH_INSTALL: 0x21,
   ABANDON_TO_QUARANTINE: 0x22,
@@ -61,7 +71,7 @@ export const WINDOWS_HELPER_PE_MACHINE = Object.freeze({
 
 export type WindowsHelperPeMachine = (typeof WINDOWS_HELPER_PE_MACHINE)[keyof typeof WINDOWS_HELPER_PE_MACHINE];
 
-export const WINDOWS_HELPER_RECOGNIZED_OPCODE_BITMAP = 0x0007_0007_000f_0002n;
+export const WINDOWS_HELPER_RECOGNIZED_OPCODE_BITMAP = 0x0007_0007_001f_0002n;
 export const WINDOWS_HELPER_CALLABLE_OPCODE_BITMAP = 0x0000_0000_0000_0002n;
 
 const MAGIC_BYTES = Buffer.from(WINDOWS_HELPER_MAGIC, "ascii");
@@ -225,6 +235,37 @@ export interface WindowsProtectedSignAdmissionEvidenceResult {
   signature: Uint8Array;
   protectedStateSha256: Uint8Array;
   requestSha256: Uint8Array;
+}
+
+export interface WindowsProtectedRemoteWorkerPopV2Material {
+  routeCode: RemoteWorkerPopV2RouteBinding["code"];
+  authorityKindCode: 1 | 2;
+  authorityGeneration: bigint;
+  workerGeneration: bigint;
+  timestampEpochMs: bigint;
+  workerPublicKeySpkiSha256: Uint8Array;
+}
+
+export interface WindowsProtectedSignRuntimePopV2Request {
+  expectedStateSha256: Uint8Array;
+  expectedGeneration: bigint;
+  expectedKeysetReceiptSha256: Uint8Array;
+  preimage: Uint8Array;
+}
+
+export type WindowsProtectedSignRuntimePopV2Disposition =
+  | "signed"
+  | "stale_state"
+  | "keyset_unavailable"
+  | "operation_authority_mismatch"
+  | "signing_failed";
+
+export interface WindowsProtectedSignRuntimePopV2Result {
+  disposition: WindowsProtectedSignRuntimePopV2Disposition;
+  keysetReceiptSha256: Uint8Array;
+  runtimeManifestSpkiSha256: Uint8Array;
+  runtimeManifestSpki: Uint8Array;
+  signature: Uint8Array;
 }
 
 export type WindowsHelperResponse =
@@ -522,6 +563,13 @@ const SIGN_ADMISSION_EVIDENCE_DISPOSITIONS = [
   "replay_capacity_exhausted",
   "signing_failed",
 ] as const;
+const SIGN_RUNTIME_POP_V2_DISPOSITIONS = Object.freeze({
+  1: "signed",
+  3: "stale_state",
+  4: "keyset_unavailable",
+  5: "operation_authority_mismatch",
+  8: "signing_failed",
+} as const);
 const CUSTODY_POSTURES = [
   "empty",
   "active",
@@ -577,16 +625,11 @@ export function encodeWindowsProtectedAdmissionEvidenceEnvelope(
   envelope.writeBigUInt64LE(exactU64(input.workerGeneration, "envelope.workerGeneration", true), 64);
   exactBytes(input.contextSha256, 32, "envelope.contextSha256", true).copy(envelope, 96);
   exactBytes(input.runtimeManifestSha256, 32, "envelope.runtimeManifestSha256", true).copy(envelope, 128);
-  exactBytes(input.workerPublicKeySpkiSha256, 32, "envelope.workerPublicKeySpkiSha256", true).copy(
+  exactBytes(input.workerPublicKeySpkiSha256, 32, "envelope.workerPublicKeySpkiSha256", true).copy(envelope, 160);
+  exactBytes(input.downloadVerificationReceiptSha256, 32, "envelope.downloadVerificationReceiptSha256", true).copy(
     envelope,
-    160,
+    192,
   );
-  exactBytes(
-    input.downloadVerificationReceiptSha256,
-    32,
-    "envelope.downloadVerificationReceiptSha256",
-    true,
-  ).copy(envelope, 192);
   exactBytes(input.installedTreeAttestationSha256, 32, "envelope.installedTreeAttestationSha256", true).copy(
     envelope,
     224,
@@ -654,6 +697,54 @@ export function buildWindowsProtectedAdmissionEvidenceSigningBytes(envelope: Uin
   ]);
 }
 
+export function validateWindowsProtectedRemoteWorkerPopV2Preimage(
+  value: Uint8Array,
+): WindowsProtectedRemoteWorkerPopV2Material {
+  if (!(value instanceof Uint8Array) || value.byteLength !== REMOTE_WORKER_POP_V2_PREIMAGE_BYTES) {
+    throw new WindowsHelperProtocolError("remote-worker PoP-v2 preimage length is invalid");
+  }
+  const preimage = Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+  const domain = Buffer.from(REMOTE_WORKER_POP_V2_DOMAIN, "utf8");
+  if (
+    domain.byteLength !== 33 ||
+    !preimage.subarray(0, domain.byteLength).equals(domain) ||
+    preimage.readUInt8(domain.byteLength) !== 2 ||
+    preimage.readUInt8(domain.byteLength + 1) !== 1
+  ) {
+    throw new WindowsHelperProtocolError("remote-worker PoP-v2 domain or fixed header is invalid");
+  }
+  const routeCode = preimage.readUInt8(domain.byteLength + 2);
+  const authorityKindCode = preimage.readUInt8(domain.byteLength + 3);
+  const route = REMOTE_WORKER_POP_V2_ROUTE_BINDINGS.find((candidate) => candidate.code === routeCode);
+  const expectedAuthorityKindCode =
+    route?.authorityKind === "bootstrap" ? 1 : route?.authorityKind === "credential" ? 2 : 0;
+  if (route === undefined || authorityKindCode !== expectedAuthorityKindCode) {
+    throw new WindowsHelperProtocolError("remote-worker PoP-v2 route and authority purpose are invalid");
+  }
+  const authorityGeneration = preimage.readBigUInt64BE(domain.byteLength + 4);
+  const workerGeneration = preimage.readBigUInt64BE(domain.byteLength + 12);
+  const timestampEpochMs = preimage.readBigUInt64BE(domain.byteLength + 20);
+  const maximumSafeInteger = BigInt(Number.MAX_SAFE_INTEGER);
+  if (
+    authorityGeneration === 0n ||
+    authorityGeneration > maximumSafeInteger ||
+    workerGeneration === 0n ||
+    workerGeneration > maximumSafeInteger ||
+    timestampEpochMs > maximumSafeInteger
+  ) {
+    throw new WindowsHelperProtocolError("remote-worker PoP-v2 integer authority is invalid");
+  }
+  const workerPublicKeyOffset = domain.byteLength + 28 + 4 * 32;
+  return {
+    routeCode: route.code,
+    authorityKindCode: authorityKindCode as 1 | 2,
+    authorityGeneration,
+    workerGeneration,
+    timestampEpochMs,
+    workerPublicKeySpkiSha256: Buffer.from(preimage.subarray(workerPublicKeyOffset, workerPublicKeyOffset + 32)),
+  };
+}
+
 export function validateWindowsProtectedRequestPayload(opcode: WindowsHelperRequestOpcode, payload: Uint8Array): void {
   const body = Buffer.from(payload);
   if (opcode === WINDOWS_HELPER_OPCODE.INSPECT) {
@@ -712,6 +803,37 @@ export function validateWindowsProtectedRequestPayload(opcode: WindowsHelperRequ
     if (body.readBigUInt64LE(52) !== envelope.workerGeneration) {
       throw new WindowsHelperProtocolError("sign admission-evidence generation does not bind the envelope");
     }
+    return;
+  }
+  if (opcode === WINDOWS_HELPER_OPCODE.SIGN_RUNTIME_POP_V2) {
+    if (body.byteLength !== WINDOWS_PROTECTED_SIGN_RUNTIME_POP_V2_REQUEST_BYTES) {
+      throw new WindowsHelperProtocolError("sign runtime PoP-v2 request payload length is invalid");
+    }
+    requireZero(body, 0, 16, "sign runtime PoP-v2 caller operation placeholder");
+    requireNonzero(body, 16, 32, "sign runtime PoP-v2 request expected state");
+    if (body.readUInt16LE(48) !== 1 || body.readUInt8(50) !== 3 || body.readUInt8(51) !== 0) {
+      throw new WindowsHelperProtocolError("sign runtime PoP-v2 request header is invalid");
+    }
+    const expectedGeneration = body.readBigUInt64LE(52);
+    if (expectedGeneration === 0n || expectedGeneration > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new WindowsHelperProtocolError("sign runtime PoP-v2 request generation is invalid");
+    }
+    requireNonzero(body, 60, 32, "sign runtime PoP-v2 request expected receipt hash");
+    if (body.readUInt32LE(92) !== REMOTE_WORKER_POP_V2_PREIMAGE_BYTES) {
+      throw new WindowsHelperProtocolError("sign runtime PoP-v2 preimage length is invalid");
+    }
+    const material = validateWindowsProtectedRemoteWorkerPopV2Preimage(
+      body.subarray(96, 96 + REMOTE_WORKER_POP_V2_PREIMAGE_BYTES),
+    );
+    if (material.workerGeneration !== expectedGeneration) {
+      throw new WindowsHelperProtocolError("sign runtime PoP-v2 generation does not bind the preimage");
+    }
+    requireZero(
+      body,
+      96 + REMOTE_WORKER_POP_V2_PREIMAGE_BYTES,
+      WINDOWS_PROTECTED_SIGN_RUNTIME_POP_V2_REQUEST_BYTES - 96 - REMOTE_WORKER_POP_V2_PREIMAGE_BYTES,
+      "sign runtime PoP-v2 trailing reserved field",
+    );
   }
 }
 
@@ -771,6 +893,29 @@ export function encodeWindowsProtectedSignAdmissionEvidenceRequest(
   body.writeUInt32LE(WINDOWS_PROTECTED_ADMISSION_EVIDENCE_ENVELOPE_BYTES, 92);
   envelope.copy(body, 96);
   return encodeWindowsHelperRequest(WINDOWS_HELPER_OPCODE.SIGN_ADMISSION_EVIDENCE, body);
+}
+
+export function encodeWindowsProtectedSignRuntimePopV2Request(input: WindowsProtectedSignRuntimePopV2Request): Buffer {
+  const expectedState = exactBytes(input.expectedStateSha256, 32, "expectedStateSha256", true);
+  const expectedGeneration = exactU64(input.expectedGeneration, "expectedGeneration", true);
+  if (expectedGeneration > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new WindowsHelperProtocolError("expectedGeneration is outside the contract-safe integer range");
+  }
+  const expectedReceipt = exactBytes(input.expectedKeysetReceiptSha256, 32, "expectedKeysetReceiptSha256", true);
+  const preimage = exactBytes(input.preimage, REMOTE_WORKER_POP_V2_PREIMAGE_BYTES, "preimage");
+  const material = validateWindowsProtectedRemoteWorkerPopV2Preimage(preimage);
+  if (material.workerGeneration !== expectedGeneration) {
+    throw new WindowsHelperProtocolError("expectedGeneration must equal the PoP-v2 worker generation");
+  }
+  const body = Buffer.alloc(WINDOWS_PROTECTED_SIGN_RUNTIME_POP_V2_REQUEST_BYTES);
+  expectedState.copy(body, 16);
+  body.writeUInt16LE(1, 48);
+  body.writeUInt8(3, 50);
+  body.writeBigUInt64LE(expectedGeneration, 52);
+  expectedReceipt.copy(body, 60);
+  body.writeUInt32LE(REMOTE_WORKER_POP_V2_PREIMAGE_BYTES, 92);
+  preimage.copy(body, 96);
+  return encodeWindowsHelperRequest(WINDOWS_HELPER_OPCODE.SIGN_RUNTIME_POP_V2, body);
 }
 
 export function decodeWindowsProtectedInspectResponse(bytes: Uint8Array): WindowsProtectedInspect {
@@ -1004,7 +1149,7 @@ export function decodeWindowsProtectedSignAdmissionEvidenceResponse(
       throw new WindowsHelperProtocolError("sign admission-evidence SPKI hash is invalid");
     }
     requireNonzero(payload, 172, 64, "sign admission-evidence signature");
-    let verified = false;
+    let verified: boolean;
     try {
       const publicKey = createPublicKey({ key: spki, format: "der", type: "spki" });
       verified = verify(
@@ -1035,6 +1180,75 @@ export function decodeWindowsProtectedSignAdmissionEvidenceResponse(
     signature: Buffer.from(payload.subarray(172, 236)),
     protectedStateSha256: Buffer.from(payload.subarray(236, 268)),
     requestSha256: Buffer.from(payload.subarray(268, 300)),
+  };
+}
+
+export function decodeWindowsProtectedSignRuntimePopV2Response(
+  bytes: Uint8Array,
+  expectedRequest: WindowsProtectedSignRuntimePopV2Request,
+): WindowsProtectedSignRuntimePopV2Result {
+  const requestFrame = encodeWindowsProtectedSignRuntimePopV2Request(expectedRequest);
+  const requestBody = requestFrame.subarray(WINDOWS_HELPER_HEADER_BYTES);
+  const material = validateWindowsProtectedRemoteWorkerPopV2Preimage(
+    requestBody.subarray(96, 96 + REMOTE_WORKER_POP_V2_PREIMAGE_BYTES),
+  );
+  const expectedReceipt = exactBytes(
+    expectedRequest.expectedKeysetReceiptSha256,
+    32,
+    "expectedKeysetReceiptSha256",
+    true,
+  );
+  const payload = protectedSuccessPayload(
+    bytes,
+    WINDOWS_HELPER_OPCODE.SIGN_RUNTIME_POP_V2,
+    WINDOWS_PROTECTED_SIGN_RUNTIME_POP_V2_RESULT_BYTES,
+  );
+  if (payload.readUInt16LE(0) !== 1 || payload.readUInt32LE(4) !== 0) {
+    throw new WindowsHelperProtocolError("sign runtime PoP-v2 result header is invalid");
+  }
+  const disposition =
+    SIGN_RUNTIME_POP_V2_DISPOSITIONS[payload.readUInt16LE(2) as keyof typeof SIGN_RUNTIME_POP_V2_DISPOSITIONS];
+  if (disposition === undefined) {
+    throw new WindowsHelperProtocolError("sign runtime PoP-v2 result disposition is invalid");
+  }
+  requireZero(payload, 180, 4, "sign runtime PoP-v2 trailing reserved field");
+  const carriesSignature = disposition === "signed";
+  if (carriesSignature) {
+    if (!payload.subarray(8, 40).equals(expectedReceipt)) {
+      throw new WindowsHelperProtocolError("sign runtime PoP-v2 result keyset receipt differs from request");
+    }
+    const spkiHash = payload.subarray(40, 72);
+    const spki = payload.subarray(72, 116);
+    const spkiPrefix = Buffer.from("302a300506032b6570032100", "hex");
+    if (!spki.subarray(0, spkiPrefix.byteLength).equals(spkiPrefix)) {
+      throw new WindowsHelperProtocolError("sign runtime PoP-v2 SPKI is not canonical Ed25519");
+    }
+    requireNonzero(spki, spkiPrefix.byteLength, 32, "sign runtime PoP-v2 public key");
+    if (!spkiHash.equals(sha256(spki)) || !spkiHash.equals(material.workerPublicKeySpkiSha256)) {
+      throw new WindowsHelperProtocolError("sign runtime PoP-v2 SPKI differs from the protected proof authority");
+    }
+    requireNonzero(payload, 116, 64, "sign runtime PoP-v2 signature");
+    let verified: boolean;
+    try {
+      const publicKey = createPublicKey({ key: spki, format: "der", type: "spki" });
+      verified = verify(null, expectedRequest.preimage, publicKey, payload.subarray(116, 180));
+    } catch (error) {
+      throw new WindowsHelperProtocolError(
+        `sign runtime PoP-v2 public receipt is invalid: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    if (!verified) {
+      throw new WindowsHelperProtocolError("sign runtime PoP-v2 signature does not verify over the exact preimage");
+    }
+  } else {
+    requireZero(payload, 8, 172, "sign runtime PoP-v2 rejection authority");
+  }
+  return {
+    disposition,
+    keysetReceiptSha256: Buffer.from(payload.subarray(8, 40)),
+    runtimeManifestSpkiSha256: Buffer.from(payload.subarray(40, 72)),
+    runtimeManifestSpki: Buffer.from(payload.subarray(72, 116)),
+    signature: Buffer.from(payload.subarray(116, 180)),
   };
 }
 

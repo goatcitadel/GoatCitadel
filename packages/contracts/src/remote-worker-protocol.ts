@@ -53,6 +53,27 @@ export const REMOTE_WORKER_POP_V2_ROUTE_BINDINGS = Object.freeze([
     operation: "mesh.node.admit",
     authorityKind: "credential",
   }),
+  Object.freeze({
+    code: 8,
+    method: "POST",
+    rawPath: "/api/v1/remote-workers/assignment-offer-polls",
+    operation: "assignment.offers.poll",
+    authorityKind: "credential",
+  }),
+  Object.freeze({
+    code: 9,
+    method: "POST",
+    rawPath: "/api/v1/remote-workers/assignment-claims",
+    operation: "assignment.claim",
+    authorityKind: "credential",
+  }),
+  Object.freeze({
+    code: 10,
+    method: "POST",
+    rawPath: "/api/v1/remote-workers/assignment-workload-reads",
+    operation: "assignment.workload.read",
+    authorityKind: "credential",
+  }),
 ] as const);
 
 export type RemoteWorkerPopV2RouteBinding = (typeof REMOTE_WORKER_POP_V2_ROUTE_BINDINGS)[number];
@@ -95,9 +116,11 @@ export const REMOTE_WORKER_POP_V2_FIXED_MATERIAL_BYTES = FIXED_HEADER_BYTES + UI
 export const REMOTE_WORKER_POP_V2_PREIMAGE_BYTES = DOMAIN_BYTES.byteLength + REMOTE_WORKER_POP_V2_FIXED_MATERIAL_BYTES;
 
 /**
- * Normalize the only seven worker-callable protocol purposes. Keeping method,
- * route, operation, and authority purpose in one closed table prevents a
- * protected key from becoming a generic signing oracle.
+ * Normalize the closed ten-purpose protected-proof table. Codes 8 through 10
+ * are contract-reserved and remain production-dark until their Gateway and
+ * native handlers are explicitly activated. Keeping method, route, operation,
+ * and authority purpose in one closed table prevents a protected key from
+ * becoming a generic signing oracle.
  */
 export function normalizeRemoteWorkerPopV2Material(value: unknown): RemoteWorkerPopV2Material {
   const fields = exactDataFields(

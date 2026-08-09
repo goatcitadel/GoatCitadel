@@ -305,6 +305,46 @@ void TestRfcAndDomains(int* failures) noexcept {
             gc::SignProtectedArtifact(&lease, &evidence_signature) &&
             !Equal(runtime_signature, evidence_signature));
   }
+  std::array<std::uint8_t, 64U> runtime_pop_reference{};
+  {
+    IsolatedRoot root;
+    gc::ProtectedSigningLease lease{};
+    Record(
+        failures,
+        CreateLease(
+            root,
+            gc::ProtectedArtifactPurpose::RuntimeManifest,
+            gc::kRemoteWorkerPopV2ArtifactBytes,
+            &lease) &&
+            gc::SignProtectedArtifact(&lease, &runtime_pop_reference));
+  }
+  {
+    IsolatedRoot root;
+    gc::ProtectedSigningLease lease{};
+    std::array<std::uint8_t, 64U> pop_signature{};
+    Record(
+        failures,
+        CreateLease(
+            root,
+            gc::ProtectedArtifactPurpose::RemoteWorkerPopV2,
+            gc::kRemoteWorkerPopV2ArtifactBytes,
+            &lease) &&
+            gc::SignProtectedArtifact(&lease, &pop_signature) &&
+            Equal(runtime_pop_reference, pop_signature));
+  }
+  for (const std::uint64_t rejected_length : {
+           gc::kRemoteWorkerPopV2ArtifactBytes - 1U,
+           gc::kRemoteWorkerPopV2ArtifactBytes + 1U}) {
+    IsolatedRoot root;
+    gc::ProtectedSigningLease lease{};
+    Record(
+        failures,
+        !CreateLease(
+            root,
+            gc::ProtectedArtifactPurpose::RemoteWorkerPopV2,
+            rejected_length,
+            &lease));
+  }
 }
 
 void TestBoundariesAndDeterminism(int* failures) noexcept {

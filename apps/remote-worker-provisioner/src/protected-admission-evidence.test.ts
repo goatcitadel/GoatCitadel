@@ -54,9 +54,9 @@ function fixture() {
     remainingOperationCapacity: 255,
     remainingGenerationCapacity: 15,
     activeKeysetReceiptSha256: Buffer.from(digest("receipt"), "hex"),
-    runtimeManifestSpkiSha256: Buffer.from(digest("manifest-key"), "hex"),
+    runtimeManifestSpkiSha256: Buffer.from(digest(worker), "hex"),
     admissionEvidenceSpkiSha256: Buffer.from(digest(signerSpki), "hex"),
-    runtimeManifestSpki: signerSpki,
+    runtimeManifestSpki: worker,
     admissionEvidenceSpki: signerSpki,
   };
   const runtime: WindowsProtectedAdmissionEvidenceRuntime = {
@@ -150,6 +150,17 @@ describe("Windows protected admission evidence production helper", () => {
         runtime,
       ),
     ).rejects.toThrow(/drifted/u);
+    await expect(
+      createWindowsProtectedAdmissionEvidence(
+        "C:\\gc\\provisioner.exe",
+        {
+          ...input(generateKeyPairSync("ed25519").publicKey.export({ format: "der", type: "spki" }) as Buffer),
+          protectedAdmissionSignerPin: pin,
+        },
+        {},
+        runtime,
+      ),
+    ).rejects.toThrow(/protected runtime-manifest key/u);
     expect(runtime.sign).not.toHaveBeenCalled();
   });
 });

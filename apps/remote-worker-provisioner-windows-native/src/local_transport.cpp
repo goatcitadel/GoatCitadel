@@ -52,6 +52,8 @@ constexpr DWORD kPipeGrantedMask = 0x0012008BU;
 constexpr DWORD kProtectedReadMask = 0x001200A9U;
 constexpr DWORD kProtectedFullMask = 0x001F01FFU;
 constexpr std::size_t kHashObjectMaximumBytes = 1024U;
+constexpr std::uint64_t kMaximumContractSafeInteger =
+    UINT64_C(9007199254740991);
 constexpr wchar_t kSystemRootObjectPath[] = L"\\\\?\\GLOBALROOT\\SystemRoot";
 constexpr wchar_t kProgramDataComponent[] = L"ProgramData";
 constexpr wchar_t kGoatCitadelComponent[] = L"GoatCitadel";
@@ -62,6 +64,9 @@ constexpr wchar_t kClientExecutableName[] =
     L"GoatCitadelRemoteWorkerProvisionerClient.exe";
 constexpr char kAuthenticatedRequestDomain[] =
     "goatcitadel.remote-worker.provisioner.gcpa.request.v1";
+constexpr char kRuntimePopV2OperationDomain[] =
+    "goatcitadel.remote-worker-pop-v2.operation.v1";
+static_assert(sizeof(kRuntimePopV2OperationDomain) == 46U);
 
 #if defined(_M_X64)
 constexpr std::uint16_t kLocalPeMachine = kMachineX64;
@@ -451,6 +456,65 @@ bool ComputeSha256(
   }
   Sha256Hasher hash;
   return hash.Open() && hash.Update(bytes, length) && hash.Finish(output);
+}
+
+bool DeriveRuntimePopV2OperationId(
+    const std::uint8_t* authenticated_caller_sid,
+    std::uint16_t authenticated_caller_sid_length,
+    const Byte32& expected_state_sha256,
+    std::uint64_t expected_generation,
+    const Byte32& expected_keyset_receipt_sha256,
+    const std::uint8_t* canonical_preimage,
+    std::size_t canonical_preimage_length,
+    Byte16* output) noexcept {
+  if (output == nullptr) return false;
+  output->fill(0U);
+  if (authenticated_caller_sid == nullptr ||
+      authenticated_caller_sid_length == 0U ||
+      authenticated_caller_sid_length > SECURITY_MAX_SID_SIZE ||
+      IsAllZero(expected_state_sha256.data(), expected_state_sha256.size()) ||
+      expected_generation == 0U ||
+      expected_generation > kMaximumContractSafeInteger ||
+      IsAllZero(
+          expected_keyset_receipt_sha256.data(),
+          expected_keyset_receipt_sha256.size()) ||
+      canonical_preimage == nullptr ||
+      canonical_preimage_length != kRemoteWorkerPopV2PreimageBytes) {
+    return false;
+  }
+  std::array<std::uint8_t, SECURITY_MAX_SID_SIZE> caller_sid{};
+  std::memcpy(
+      caller_sid.data(),
+      authenticated_caller_sid,
+      authenticated_caller_sid_length);
+  if (IsValidSid(caller_sid.data()) == FALSE ||
+      GetLengthSid(caller_sid.data()) != authenticated_caller_sid_length) {
+    return false;
+  }
+  const std::array<std::uint8_t, 2U> sid_length = {
+      static_cast<std::uint8_t>(authenticated_caller_sid_length & 0xffU),
+      static_cast<std::uint8_t>(authenticated_caller_sid_length >> 8U),
+  };
+  Byte32 digest{};
+  Sha256Hasher hash;
+  const bool valid = hash.Open() &&
+      hash.Update(
+          reinterpret_cast<const std::uint8_t*>(kRuntimePopV2OperationDomain),
+          sizeof(kRuntimePopV2OperationDomain)) &&
+      hash.Update(sid_length.data(), sid_length.size()) &&
+      hash.Update(caller_sid.data(), authenticated_caller_sid_length) &&
+      hash.Update(expected_state_sha256.data(), expected_state_sha256.size()) &&
+      HashU64(&hash, expected_generation) &&
+      hash.Update(
+          expected_keyset_receipt_sha256.data(),
+          expected_keyset_receipt_sha256.size()) &&
+      hash.Update(canonical_preimage, canonical_preimage_length) &&
+      hash.Finish(&digest) && !IsAllZero(digest.data(), output->size());
+  if (valid) {
+    std::memcpy(output->data(), digest.data(), output->size());
+  }
+  SecureZeroMemory(digest.data(), digest.size());
+  return valid;
 }
 
 bool ComputeAuthenticatedRequestBinding(
@@ -3249,6 +3313,7 @@ ServiceTransportResult RunServiceTransport(
   }
   CreateKeysetRequest create_request{};
   SignAdmissionEvidenceRequest sign_request{};
+  SignRuntimePopV2Request pop_v2_request{};
   RevokeKeysetRequest revoke_request{};
   const bool exact_callable_request =
       (request.opcode == static_cast<std::uint8_t>(Opcode::Inspect) &&
@@ -3274,6 +3339,17 @@ ServiceTransportResult RunServiceTransport(
            request.expected_state_sha256.data(),
            sign_request.expected_state_sha256.data(),
            32U)) ||
+      (request.opcode ==
+           static_cast<std::uint8_t>(Opcode::SignRuntimePopV2) &&
+       DecodeSignRuntimePopV2Request(
+           request.body, request.body_length, &pop_v2_request) &&
+       BytesEqual(
+           request.operation_id.data(), pop_v2_request.operation_id.data(),
+           16U) &&
+       BytesEqual(
+           request.expected_state_sha256.data(),
+           pop_v2_request.expected_state_sha256.data(),
+           32U)) ||
       (request.opcode == static_cast<std::uint8_t>(Opcode::RevokeLocalKeyset) &&
        DecodeRevokeKeysetRequest(
            request.body, request.body_length, &revoke_request) &&
@@ -3286,9 +3362,11 @@ ServiceTransportResult RunServiceTransport(
   if (!exact_callable_request &&
       (request.opcode == static_cast<std::uint8_t>(Opcode::Inspect) ||
        request.opcode == static_cast<std::uint8_t>(Opcode::CreateKeyset) ||
-       request.opcode ==
-           static_cast<std::uint8_t>(Opcode::SignAdmissionEvidence) ||
-       request.opcode == static_cast<std::uint8_t>(Opcode::RevokeLocalKeyset))) {
+        request.opcode ==
+            static_cast<std::uint8_t>(Opcode::SignAdmissionEvidence) ||
+        request.opcode ==
+            static_cast<std::uint8_t>(Opcode::SignRuntimePopV2) ||
+        request.opcode == static_cast<std::uint8_t>(Opcode::RevokeLocalKeyset))) {
     return ServiceTransportResult::ProtocolInvalid;
   }
   internal->operation_id = request.operation_id;
@@ -3335,7 +3413,9 @@ ServiceTransportResult RunServiceTransport(
     send_result = true;
   } else if (request.opcode == static_cast<std::uint8_t>(Opcode::CreateKeyset) ||
              request.opcode ==
-                 static_cast<std::uint8_t>(Opcode::SignAdmissionEvidence) ||
+                  static_cast<std::uint8_t>(Opcode::SignAdmissionEvidence) ||
+             request.opcode ==
+                  static_cast<std::uint8_t>(Opcode::SignRuntimePopV2) ||
              request.opcode == static_cast<std::uint8_t>(Opcode::RevokeLocalKeyset)) {
     const std::uint64_t operation_budget_ms =
         request.opcode == static_cast<std::uint8_t>(Opcode::CreateKeyset)
@@ -3602,6 +3682,17 @@ bool IsExactProtectedRequest(const ClientExchangeRequest& request) noexcept {
                request.expected_state_sha256.data(),
                32U);
   }
+  if (request.opcode ==
+      static_cast<std::uint8_t>(Opcode::SignRuntimePopV2)) {
+    SignRuntimePopV2Request decoded{};
+    return DecodeSignRuntimePopV2CallerRequest(
+               request.body, request.body_length, &decoded) &&
+           IsAllZero(request.operation_id.data(), request.operation_id.size()) &&
+           BytesEqual(
+               decoded.expected_state_sha256.data(),
+               request.expected_state_sha256.data(),
+               32U);
+  }
   if (request.opcode == static_cast<std::uint8_t>(Opcode::RevokeLocalKeyset)) {
     RevokeKeysetRequest decoded{};
     return DecodeRevokeKeysetRequest(request.body, request.body_length, &decoded) &&
@@ -3625,6 +3716,7 @@ bool IsConsistentBoundError(
   }
   if (opcode == static_cast<std::uint8_t>(Opcode::CreateKeyset) ||
       opcode == static_cast<std::uint8_t>(Opcode::SignAdmissionEvidence) ||
+      opcode == static_cast<std::uint8_t>(Opcode::SignRuntimePopV2) ||
       opcode == static_cast<std::uint8_t>(Opcode::RevokeLocalKeyset)) {
     return false;
   }
@@ -3659,6 +3751,8 @@ ClientExchangeDisposition RunProtectedClientExchange(
 
   Byte32 client_nonce{};
   Byte16 operation_id{};
+  std::array<std::uint8_t, kSignRuntimePopV2RequestBytes> bound_pop_v2_body{};
+  const std::uint8_t* bound_body = request.body;
   if (!GenerateRandom32(&client_nonce)) {
     return ClientExchangeDisposition::TransportFailure;
   }
@@ -3666,6 +3760,37 @@ ClientExchangeDisposition RunProtectedClientExchange(
     if (!GenerateRandom16(&operation_id)) {
       return ClientExchangeDisposition::TransportFailure;
     }
+  } else if (
+      request.opcode == static_cast<std::uint8_t>(Opcode::SignRuntimePopV2)) {
+    std::memcpy(
+        bound_pop_v2_body.data(), request.body, bound_pop_v2_body.size());
+    SignRuntimePopV2Request caller_request{};
+    if (!DecodeSignRuntimePopV2CallerRequest(
+            bound_pop_v2_body.data(),
+            bound_pop_v2_body.size(),
+            &caller_request)) {
+      return ClientExchangeDisposition::TransportFailure;
+    }
+    if (!DeriveRuntimePopV2OperationId(
+            scope.client_.token_projection.user.bytes.data(),
+            scope.client_.token_projection.user.length,
+            caller_request.expected_state_sha256,
+            caller_request.expected_generation,
+            caller_request.expected_keyset_receipt_sha256,
+            caller_request.preimage.data(),
+            caller_request.preimage.size(),
+            &operation_id)) {
+      return ClientExchangeDisposition::TransportFailure;
+    }
+    std::memcpy(
+        bound_pop_v2_body.data(), operation_id.data(), operation_id.size());
+    SignRuntimePopV2Request normalized{};
+    if (!DecodeSignRuntimePopV2Request(
+            bound_pop_v2_body.data(), bound_pop_v2_body.size(), &normalized) ||
+        normalized.operation_id != operation_id) {
+      return ClientExchangeDisposition::TransportFailure;
+    }
+    bound_body = bound_pop_v2_body.data();
   } else {
     operation_id = request.operation_id;
   }
@@ -3722,7 +3847,7 @@ ClientExchangeDisposition RunProtectedClientExchange(
 
   Byte32 body_hash{};
   Byte32 expected_state = request.expected_state_sha256;
-  if (!ComputeSha256(request.body, request.body_length, &body_hash)) {
+  if (!ComputeSha256(bound_body, request.body_length, &body_hash)) {
     return ClientExchangeDisposition::TransportFailure;
   }
   GcpaClientRequestFields gcpa_request{};
@@ -3735,7 +3860,7 @@ ClientExchangeDisposition RunProtectedClientExchange(
   gcpa_request.body_length = request.body_length;
   gcpa_request.body_sha256 = body_hash;
   gcpa_request.expected_state_sha256 = expected_state;
-  gcpa_request.body = request.body;
+  gcpa_request.body = bound_body;
 
   Byte32 binding{};
   AuthenticatedRequestBindingInput binding_input{};
@@ -3807,6 +3932,9 @@ ClientExchangeDisposition RunProtectedClientExchange(
         (request.opcode ==
              static_cast<std::uint8_t>(Opcode::SignAdmissionEvidence) &&
          server_response.result_length == kSignAdmissionEvidenceResultBytes) ||
+        (request.opcode ==
+             static_cast<std::uint8_t>(Opcode::SignRuntimePopV2) &&
+         server_response.result_length == kSignRuntimePopV2ResultBytes) ||
         (request.opcode == static_cast<std::uint8_t>(Opcode::RevokeLocalKeyset) &&
          server_response.result_length == kRevokeKeysetResultBytes);
     if (!exact_result) {

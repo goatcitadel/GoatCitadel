@@ -548,7 +548,10 @@ bool UpdateSignatureDomain(
     ProtectedArtifactPurpose purpose,
     StreamingHash* hash) noexcept {
   if (hash == nullptr) return false;
-  if (purpose == ProtectedArtifactPurpose::RuntimeManifest) return true;
+  if (purpose == ProtectedArtifactPurpose::RuntimeManifest ||
+      purpose == ProtectedArtifactPurpose::RemoteWorkerPopV2) {
+    return true;
+  }
   if (purpose != ProtectedArtifactPurpose::AdmissionEvidence) return false;
   constexpr std::uint8_t kNul = 0U;
   return hash->Update(
@@ -708,13 +711,19 @@ bool CreateProtectedSigningLease(
   const std::uint64_t ceiling =
       input.purpose == ProtectedArtifactPurpose::RuntimeManifest
           ? kRuntimeManifestArtifactCeiling
-          : kAdmissionEvidenceArtifactCeiling;
+          : input.purpose == ProtectedArtifactPurpose::AdmissionEvidence
+              ? kAdmissionEvidenceArtifactCeiling
+              : kRemoteWorkerPopV2ArtifactBytes;
   if (output == nullptr || output->occupied_ ||
       (input.purpose != ProtectedArtifactPurpose::RuntimeManifest &&
-       input.purpose != ProtectedArtifactPurpose::AdmissionEvidence) ||
+       input.purpose != ProtectedArtifactPurpose::AdmissionEvidence &&
+       input.purpose != ProtectedArtifactPurpose::RemoteWorkerPopV2) ||
       !ValidHandle(input.parent) || !ValidHandle(input.artifact) ||
       !ValidHandle(input.key_file) || !ValidHandle(input.stop_event) ||
-      input.artifact_length > ceiling || input.generation == 0U ||
+      input.artifact_length > ceiling ||
+      (input.purpose == ProtectedArtifactPurpose::RemoteWorkerPopV2 &&
+       input.artifact_length != kRemoteWorkerPopV2ArtifactBytes) ||
+      input.generation == 0U ||
       input.deadline_ms <= GetTickCount64() ||
       AllZero(input.artifact_sha256.data(), input.artifact_sha256.size()) ||
       AllZero(input.key_file_sha256.data(), input.key_file_sha256.size()) ||
@@ -959,13 +968,18 @@ void ProtectedSigningLease::MoveFrom(ProtectedSigningLease* other) noexcept {
 bool ProtectedSigningLease::StateIsCurrent() const noexcept {
   const bool purpose_valid =
       authority_.purpose_ == ProtectedArtifactPurpose::RuntimeManifest ||
-      authority_.purpose_ == ProtectedArtifactPurpose::AdmissionEvidence;
+      authority_.purpose_ == ProtectedArtifactPurpose::AdmissionEvidence ||
+      authority_.purpose_ == ProtectedArtifactPurpose::RemoteWorkerPopV2;
   const std::uint64_t ceiling =
       authority_.purpose_ == ProtectedArtifactPurpose::RuntimeManifest
           ? kRuntimeManifestArtifactCeiling
-          : kAdmissionEvidenceArtifactCeiling;
+          : authority_.purpose_ == ProtectedArtifactPurpose::AdmissionEvidence
+              ? kAdmissionEvidenceArtifactCeiling
+              : kRemoteWorkerPopV2ArtifactBytes;
   if (!occupied_ || !authority_.occupied_ || !authority_.consumed_ ||
       !purpose_valid || authority_.length_ > ceiling ||
+      (authority_.purpose_ == ProtectedArtifactPurpose::RemoteWorkerPopV2 &&
+       authority_.length_ != kRemoteWorkerPopV2ArtifactBytes) ||
       authority_.generation_ == 0U || current_generation_ == 0U ||
       AllZero(authority_.incarnation_.data(), authority_.incarnation_.size()) ||
       !ControlSnapshotValid(authority_.control_) ||
@@ -1269,14 +1283,19 @@ bool CreateProtectedSigningLeaseForTest(
           input.custody_state_sha256.data(),
           input.custody_state_sha256.size()) ||
       (input.purpose != ProtectedArtifactPurpose::RuntimeManifest &&
-       input.purpose != ProtectedArtifactPurpose::AdmissionEvidence)) {
+       input.purpose != ProtectedArtifactPurpose::AdmissionEvidence &&
+       input.purpose != ProtectedArtifactPurpose::RemoteWorkerPopV2)) {
     return false;
   }
   const std::uint64_t ceiling =
       input.purpose == ProtectedArtifactPurpose::RuntimeManifest
           ? kRuntimeManifestArtifactCeiling
-          : kAdmissionEvidenceArtifactCeiling;
-  if (input.artifact_length > ceiling) return false;
+          : input.purpose == ProtectedArtifactPurpose::AdmissionEvidence
+              ? kAdmissionEvidenceArtifactCeiling
+              : kRemoteWorkerPopV2ArtifactBytes;
+  if (input.artifact_length > ceiling ||
+      (input.purpose == ProtectedArtifactPurpose::RemoteWorkerPopV2 &&
+       input.artifact_length != kRemoteWorkerPopV2ArtifactBytes)) return false;
 
   ProtectedArtifactControlSnapshot control{};
   control.custody_state_sha256 = input.custody_state_sha256;

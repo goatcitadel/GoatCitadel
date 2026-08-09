@@ -16,9 +16,9 @@ constexpr std::uint16_t kProtocolVersion = 1U;
 constexpr std::uint32_t kRequestId = 1U;
 constexpr std::uint16_t kMachineX64 = 0x8664U;
 constexpr std::uint16_t kMachineArm64 = 0xAA64U;
-constexpr std::uint64_t kRecognizedOpcodeBitmap = UINT64_C(0x00070007000F0002);
+constexpr std::uint64_t kRecognizedOpcodeBitmap = UINT64_C(0x00070007001F0002);
 constexpr std::uint64_t kCallableOpcodeBitmap = UINT64_C(0x0000000000000002);
-constexpr std::uint64_t kProtectedCallableOpcodeBitmap = UINT64_C(0x00000000000D0002);
+constexpr std::uint64_t kProtectedCallableOpcodeBitmap = UINT64_C(0x00000000001D0002);
 constexpr std::size_t kProtectedInspectPayloadBytes = 320U;
 constexpr std::size_t kCreateKeysetRequestBytes = 72U;
 constexpr std::size_t kCreateKeysetResultBytes = 320U;
@@ -27,6 +27,10 @@ constexpr std::size_t kRevokeKeysetResultBytes = 200U;
 constexpr std::size_t kAdmissionEvidenceEnvelopeBytes = 288U;
 constexpr std::size_t kSignAdmissionEvidenceRequestBytes = 384U;
 constexpr std::size_t kSignAdmissionEvidenceResultBytes = 320U;
+constexpr std::size_t kRemoteWorkerPopV2DomainBytes = 33U;
+constexpr std::size_t kRemoteWorkerPopV2PreimageBytes = 285U;
+constexpr std::size_t kSignRuntimePopV2RequestBytes = 384U;
+constexpr std::size_t kSignRuntimePopV2ResultBytes = 184U;
 
 enum class Opcode : std::uint8_t {
   Inspect = 0x01U,
@@ -34,6 +38,7 @@ enum class Opcode : std::uint8_t {
   AcquireKeyForSigning = 0x11U,
   SignAdmissionEvidence = 0x12U,
   RevokeLocalKeyset = 0x13U,
+  SignRuntimePopV2 = 0x14U,
   BeginInstall = 0x20U,
   SealAndPublishInstall = 0x21U,
   AbandonToQuarantine = 0x22U,
@@ -110,6 +115,24 @@ struct SignAdmissionEvidenceRequest final {
   AdmissionEvidenceEnvelope envelope{};
 };
 
+struct RemoteWorkerPopV2Material final {
+  std::uint8_t route_code = 0U;
+  std::uint8_t authority_kind_code = 0U;
+  std::uint64_t authority_generation = 0U;
+  std::uint64_t worker_generation = 0U;
+  std::uint64_t timestamp_epoch_ms = 0U;
+  std::array<std::uint8_t, 32U> worker_public_key_spki_sha256{};
+};
+
+struct SignRuntimePopV2Request final {
+  std::array<std::uint8_t, 16U> operation_id{};
+  std::array<std::uint8_t, 32U> expected_state_sha256{};
+  std::uint64_t expected_generation = 0U;
+  std::array<std::uint8_t, 32U> expected_keyset_receipt_sha256{};
+  std::array<std::uint8_t, kRemoteWorkerPopV2PreimageBytes> preimage{};
+  RemoteWorkerPopV2Material material{};
+};
+
 bool DecodeCreateKeysetRequest(
     const std::uint8_t* bytes,
     std::size_t length,
@@ -126,6 +149,18 @@ bool DecodeSignAdmissionEvidenceRequest(
     const std::uint8_t* bytes,
     std::size_t length,
     SignAdmissionEvidenceRequest* request) noexcept;
+bool DecodeSignRuntimePopV2Request(
+    const std::uint8_t* bytes,
+    std::size_t length,
+    SignRuntimePopV2Request* request) noexcept;
+// The ordinary GCPW caller cannot author the protected operation identity.
+// It must leave the first 16 bytes clear; the approved native client derives
+// the inner GCPA operation id from the authenticated caller SID and exact
+// canonical PoP-v2 preimage before crossing the protected pipe boundary.
+bool DecodeSignRuntimePopV2CallerRequest(
+    const std::uint8_t* bytes,
+    std::size_t length,
+    SignRuntimePopV2Request* request) noexcept;
 bool EncodeProtectedInspectResult(
     std::uint16_t pe_machine,
     const std::uint8_t* custody_projection,

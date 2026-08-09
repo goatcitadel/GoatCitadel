@@ -4,6 +4,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -30,6 +31,8 @@ static_assert(sizeof(gc::HistoricalCustodyKey) == 76U);
 
 constexpr char kStateDomain[] =
     "goatcitadel.remote-worker.provisioner.custody-state.v1";
+constexpr std::array<std::uint8_t, 12U> kOperatorSid = {
+    1U, 1U, 0U, 0U, 0U, 0U, 0U, 5U, 18U, 0U, 0U, 0U};
 constexpr std::size_t kMaximumCanonicalStateBytes =
     gc::kStateHeaderBytes +
     gc::kMaximumBurnedGenerations * gc::kGenerationEntryBytes +
@@ -54,6 +57,13 @@ void WriteU64(std::uint8_t* bytes, std::uint64_t value) noexcept {
   for (std::size_t index = 0U; index < 8U; ++index) {
     bytes[index] = static_cast<std::uint8_t>(
         (value >> (index * 8U)) & UINT64_C(0xff));
+  }
+}
+
+void WriteU64Be(std::uint8_t* bytes, std::uint64_t value) noexcept {
+  for (std::size_t index = 0U; index < 8U; ++index) {
+    bytes[index] = static_cast<std::uint8_t>(
+        (value >> ((7U - index) * 8U)) & UINT64_C(0xff));
   }
 }
 
@@ -142,6 +152,7 @@ SignAdmissionEvidenceBody(
     const gc::Byte32& state,
     std::uint64_t generation,
     const gc::Byte32& expected_receipt,
+    const gc::Byte32& worker_spki_sha256,
     std::uint8_t operation_seed = 0x40U,
     std::uint8_t evidence_seed = 0x50U) noexcept {
   std::array<std::uint8_t, gc::kSignAdmissionEvidenceRequestBytes> body{};
@@ -179,6 +190,69 @@ SignAdmissionEvidenceBody(
       envelope[kHashOffsets[field] + index] = static_cast<std::uint8_t>(
           evidence_seed + 0x20U + field * 7U + index);
     }
+  }
+  std::memcpy(
+      envelope + 160U,
+      worker_spki_sha256.data(),
+      worker_spki_sha256.size());
+  return body;
+}
+
+std::array<std::uint8_t, gc::kSignRuntimePopV2RequestBytes>
+SignRuntimePopV2Body(
+    const gc::Byte32& state,
+    std::uint64_t generation,
+    const gc::Byte32& expected_receipt,
+    const gc::Byte32& worker_spki_sha256,
+    std::uint8_t operation_seed = 0xa0U,
+    std::uint8_t route_code = 7U,
+    std::uint8_t authority_kind_code = 2U) noexcept {
+  std::array<std::uint8_t, gc::kSignRuntimePopV2RequestBytes> body{};
+  std::memcpy(body.data() + 16U, state.data(), state.size());
+  WriteU16(body.data() + 48U, 1U);
+  body[50U] = 3U;
+  WriteU64(body.data() + 52U, generation);
+  std::memcpy(
+      body.data() + 60U,
+      expected_receipt.data(),
+      expected_receipt.size());
+  WriteU32(
+      body.data() + 92U,
+      static_cast<std::uint32_t>(gc::kRemoteWorkerPopV2PreimageBytes));
+
+  std::uint8_t* preimage = body.data() + 96U;
+  constexpr char kDomain[] = "goatcitadel.remote-worker-pop.v2";
+  static_assert(sizeof(kDomain) == gc::kRemoteWorkerPopV2DomainBytes);
+  std::memcpy(preimage, kDomain, sizeof(kDomain));
+  const std::size_t fixed = sizeof(kDomain);
+  preimage[fixed] = 2U;
+  preimage[fixed + 1U] = 1U;
+  preimage[fixed + 2U] = route_code;
+  preimage[fixed + 3U] = authority_kind_code;
+  WriteU64Be(preimage + fixed + 4U, 3U);
+  WriteU64Be(preimage + fixed + 12U, generation);
+  WriteU64Be(preimage + fixed + 20U, UINT64_C(1777777777777));
+  for (std::size_t field = 0U; field < 7U; ++field) {
+    for (std::size_t index = 0U; index < 32U; ++index) {
+      preimage[fixed + 28U + field * 32U + index] =
+          static_cast<std::uint8_t>(operation_seed + field * 11U + index);
+    }
+  }
+  std::memcpy(
+      preimage + fixed + 28U + 4U * 32U,
+      worker_spki_sha256.data(),
+      worker_spki_sha256.size());
+  gc::Byte16 operation_id{};
+  if (gc::DeriveRuntimePopV2OperationId(
+          kOperatorSid.data(),
+          static_cast<std::uint16_t>(kOperatorSid.size()),
+          state,
+          generation,
+          expected_receipt,
+          preimage,
+          gc::kRemoteWorkerPopV2PreimageBytes,
+          &operation_id)) {
+    std::memcpy(body.data(), operation_id.data(), operation_id.size());
   }
   return body;
 }
@@ -480,6 +554,32 @@ bool TestPathExists(
   const DWORD attributes = GetFileAttributesW(path.data());
   return attributes != INVALID_FILE_ATTRIBUTES &&
       ((attributes & FILE_ATTRIBUTE_DIRECTORY) != 0U) == directory;
+}
+
+bool CountTestRootChildren(
+    const IsolatedRecoveryFixture& fixture,
+    std::size_t* count) noexcept {
+  if (count == nullptr) return false;
+  *count = 0U;
+  std::array<wchar_t, gc::kProtectedPathCharacters> pattern{};
+  if (!AppendTestPath(fixture.normal_root.data(), L"*", &pattern)) {
+    return false;
+  }
+  WIN32_FIND_DATAW found{};
+  HANDLE search = FindFirstFileW(pattern.data(), &found);
+  if (search == INVALID_HANDLE_VALUE) return false;
+  bool valid = true;
+  do {
+    if ((found.cFileName[0] == L'.' && found.cFileName[1] == L'\0') ||
+        (found.cFileName[0] == L'.' && found.cFileName[1] == L'.' &&
+         found.cFileName[2] == L'\0')) {
+      continue;
+    }
+    ++*count;
+  } while (FindNextFileW(search, &found) != FALSE);
+  if (GetLastError() != ERROR_NO_MORE_FILES) valid = false;
+  FindClose(search);
+  return valid;
 }
 
 bool CreateTestDirectory(
@@ -1820,7 +1920,10 @@ int TestIsolatedCommittedRecoveryReplay() noexcept {
   const gc::Byte32 created_receipt = state.active_receipt_sha256;
 
   const auto sign_body = SignAdmissionEvidenceBody(
-      created_state, 1U, created_receipt);
+      created_state,
+      1U,
+      created_receipt,
+      state.runtime_manifest_spki_sha256);
   gc::Byte32 expected_envelope_sha256{};
   gc::Byte32 expected_request_sha256{};
   const bool sign_hashes =
@@ -1978,7 +2081,12 @@ int TestIsolatedCommittedRecoveryReplay() noexcept {
   gc::Byte32 stale_state{};
   stale_state.fill(0xa5U);
   const auto stale_sign_body = SignAdmissionEvidenceBody(
-      stale_state, 1U, created_receipt, 0x60U, 0x71U);
+      stale_state,
+      1U,
+      created_receipt,
+      state.runtime_manifest_spki_sha256,
+      0x60U,
+      0x71U);
   result.fill(0U);
   result_length = 0U;
   const gc::ProtectedOperationResult stale_sign_result =
@@ -2005,7 +2113,12 @@ int TestIsolatedCommittedRecoveryReplay() noexcept {
   gc::Byte32 wrong_receipt = created_receipt;
   wrong_receipt[0U] ^= 1U;
   const auto unavailable_sign_body = SignAdmissionEvidenceBody(
-      created_state, 1U, wrong_receipt, 0x70U, 0x81U);
+      created_state,
+      1U,
+      wrong_receipt,
+      state.runtime_manifest_spki_sha256,
+      0x70U,
+      0x81U);
   result.fill(0U);
   result_length = 0U;
   const gc::ProtectedOperationResult unavailable_sign_result =
@@ -2029,10 +2142,50 @@ int TestIsolatedCommittedRecoveryReplay() noexcept {
         "protected_operations: admission evidence receipt fence\n");
   }
 
+  gc::Byte32 mismatched_worker_spki = state.runtime_manifest_spki_sha256;
+  mismatched_worker_spki[0U] ^= 1U;
+  const auto mismatched_worker_sign_body = SignAdmissionEvidenceBody(
+      created_state,
+      1U,
+      created_receipt,
+      mismatched_worker_spki,
+      0x78U,
+      0x89U);
+  result.fill(0U);
+  result_length = 0U;
+  const gc::ProtectedOperationResult mismatched_worker_sign_result =
+      gc::ExecuteProtectedOperation(
+          &state,
+          static_cast<std::uint8_t>(gc::Opcode::SignAdmissionEvidence),
+          mismatched_worker_sign_body.data(),
+          static_cast<std::uint32_t>(mismatched_worker_sign_body.size()),
+          kSid.data(),
+          static_cast<std::uint16_t>(kSid.size()),
+          authenticated_binding,
+          GetTickCount64() + 30'000U,
+          stop,
+          &result,
+          &result_length);
+  if (mismatched_worker_sign_result !=
+          gc::ProtectedOperationResult::Success ||
+      result_length != gc::kSignAdmissionEvidenceResultBytes ||
+      ReadU16(result.data() + 2U) != 4U ||
+      !AllZero(result.data() + 64U, 172U) ||
+      state.admission_evidence_replay_count != 1U) {
+    CanonicalFailure(
+        &failures,
+        "protected_operations: admission evidence runtime-key binding\n");
+  }
+
   const auto original_key_identity = state.active_keyset_file_identities[2U];
   state.active_keyset_file_identities[2U].file_id[0U] ^= 1U;
   const auto identity_sign_body = SignAdmissionEvidenceBody(
-      created_state, 1U, created_receipt, 0x80U, 0x91U);
+      created_state,
+      1U,
+      created_receipt,
+      state.runtime_manifest_spki_sha256,
+      0x80U,
+      0x91U);
   result.fill(0U);
   result_length = 0U;
   const gc::ProtectedOperationResult identity_sign_result =
@@ -2056,6 +2209,271 @@ int TestIsolatedCommittedRecoveryReplay() noexcept {
     CanonicalFailure(
         &failures,
         "protected_operations: admission evidence key path identity\n");
+  }
+
+  const auto run_runtime_pop = [&state,
+                                &authenticated_binding,
+                                stop,
+                                &result,
+                                &result_length](
+                                   const std::array<
+                                       std::uint8_t,
+                                       gc::kSignRuntimePopV2RequestBytes>&
+                                       request_body,
+                                   const std::array<std::uint8_t, 12U>& sid)
+      noexcept {
+        result.fill(0U);
+        result_length = 0U;
+        return gc::ExecuteProtectedOperation(
+            &state,
+            static_cast<std::uint8_t>(gc::Opcode::SignRuntimePopV2),
+            request_body.data(),
+            static_cast<std::uint32_t>(request_body.size()),
+            sid.data(),
+            static_cast<std::uint16_t>(sid.size()),
+            authenticated_binding,
+            GetTickCount64() + 30'000U,
+            stop,
+            &result,
+            &result_length);
+      };
+  const auto runtime_pop_body = SignRuntimePopV2Body(
+      created_state,
+      1U,
+      created_receipt,
+      state.runtime_manifest_spki_sha256);
+  const gc::ProtectedOperationResult runtime_pop_result =
+      run_runtime_pop(runtime_pop_body, kSid);
+  const bool signed_runtime_pop =
+      runtime_pop_result == gc::ProtectedOperationResult::Success &&
+      result_length == gc::kSignRuntimePopV2ResultBytes &&
+      ReadU16(result.data()) == 1U && ReadU16(result.data() + 2U) == 1U &&
+      ReadU32(result.data() + 4U) == 0U &&
+      std::memcmp(
+          result.data() + 8U,
+          created_receipt.data(),
+          created_receipt.size()) == 0 &&
+      std::memcmp(
+          result.data() + 40U,
+          state.runtime_manifest_spki_sha256.data(),
+          state.runtime_manifest_spki_sha256.size()) == 0 &&
+      std::memcmp(
+          result.data() + 72U,
+          state.runtime_manifest_spki.data(),
+          state.runtime_manifest_spki.size()) == 0 &&
+      !AllZero(result.data() + 116U, 64U) &&
+      AllZero(result.data() + 180U, 4U) &&
+      AllZero(
+          result.data() + gc::kSignRuntimePopV2ResultBytes,
+          result.size() - gc::kSignRuntimePopV2ResultBytes) &&
+      state.state_sha256 == created_state && state.active_generation == 1U &&
+      state.operation_id_count == 1U;
+  if (!signed_runtime_pop) {
+    DiagnosticCount(
+        "protected_operations: runtime PoP-v2 sign result ",
+        static_cast<std::uint32_t>(runtime_pop_result));
+    DiagnosticCount(
+        "protected_operations: runtime PoP-v2 sign length ", result_length);
+    DiagnosticCount(
+        "protected_operations: runtime PoP-v2 sign disposition ",
+        ReadU16(result.data() + 2U));
+    CanonicalFailure(
+        &failures,
+        "protected_operations: runtime PoP-v2 protected signature\n");
+  }
+  std::array<std::uint8_t, gc::kSignRuntimePopV2ResultBytes>
+      signed_runtime_pop_receipt{};
+  std::copy_n(
+      result.begin(),
+      signed_runtime_pop_receipt.size(),
+      signed_runtime_pop_receipt.begin());
+
+  const gc::ProtectedOperationResult runtime_pop_reproduced_result =
+      run_runtime_pop(runtime_pop_body, kSid);
+  if (runtime_pop_reproduced_result !=
+          gc::ProtectedOperationResult::Success ||
+      result_length != gc::kSignRuntimePopV2ResultBytes ||
+      std::memcmp(
+          result.data(),
+          signed_runtime_pop_receipt.data(),
+          signed_runtime_pop_receipt.size()) != 0 ||
+      !AllZero(
+          result.data() + gc::kSignRuntimePopV2ResultBytes,
+          result.size() - gc::kSignRuntimePopV2ResultBytes)) {
+    CanonicalFailure(
+        &failures,
+        "protected_operations: runtime PoP-v2 deterministic reproduction\n");
+  }
+
+  auto changed_runtime_pop_body = runtime_pop_body;
+  changed_runtime_pop_body[
+      96U + gc::kRemoteWorkerPopV2DomainBytes + 28U] ^= 1U;
+  const auto authority_gate_key_identity =
+      state.active_keyset_file_identities[0U];
+  state.active_keyset_file_identities[0U].file_id[0U] ^= 1U;
+  const gc::ProtectedOperationResult changed_runtime_pop_result =
+      run_runtime_pop(changed_runtime_pop_body, kSid);
+  if (changed_runtime_pop_result != gc::ProtectedOperationResult::Success ||
+      result_length != gc::kSignRuntimePopV2ResultBytes ||
+      ReadU16(result.data() + 2U) != 5U ||
+      !AllZero(result.data() + 8U, 172U)) {
+    CanonicalFailure(
+        &failures,
+        "protected_operations: runtime PoP-v2 inner preimage authority mismatch\n");
+  }
+
+  auto changed_state_authority_body = runtime_pop_body;
+  changed_state_authority_body[16U] ^= 1U;
+  const gc::ProtectedOperationResult changed_state_authority_result =
+      run_runtime_pop(changed_state_authority_body, kSid);
+  if (changed_state_authority_result != gc::ProtectedOperationResult::Success ||
+      ReadU16(result.data() + 2U) != 5U ||
+      !AllZero(result.data() + 8U, 172U)) {
+    CanonicalFailure(
+        &failures,
+        "protected_operations: runtime PoP-v2 inner state authority mismatch\n");
+  }
+
+  auto changed_receipt_authority_body = runtime_pop_body;
+  changed_receipt_authority_body[60U] ^= 1U;
+  const gc::ProtectedOperationResult changed_receipt_authority_result =
+      run_runtime_pop(changed_receipt_authority_body, kSid);
+  if (changed_receipt_authority_result !=
+          gc::ProtectedOperationResult::Success ||
+      ReadU16(result.data() + 2U) != 5U ||
+      !AllZero(result.data() + 8U, 172U)) {
+    CanonicalFailure(
+        &failures,
+        "protected_operations: runtime PoP-v2 inner receipt authority mismatch\n");
+  }
+
+  auto changed_generation_authority_body = runtime_pop_body;
+  WriteU64(changed_generation_authority_body.data() + 52U, 2U);
+  WriteU64Be(
+      changed_generation_authority_body.data() + 96U +
+          gc::kRemoteWorkerPopV2DomainBytes + 12U,
+      2U);
+  const gc::ProtectedOperationResult changed_generation_authority_result =
+      run_runtime_pop(changed_generation_authority_body, kSid);
+  if (changed_generation_authority_result !=
+          gc::ProtectedOperationResult::Success ||
+      ReadU16(result.data() + 2U) != 5U ||
+      !AllZero(result.data() + 8U, 172U)) {
+    CanonicalFailure(
+        &failures,
+        "protected_operations: runtime PoP-v2 inner generation authority mismatch\n");
+  }
+
+  const gc::ProtectedOperationResult operator_runtime_pop_result =
+      run_runtime_pop(runtime_pop_body, other_sid);
+  if (operator_runtime_pop_result != gc::ProtectedOperationResult::Success ||
+      result_length != gc::kSignRuntimePopV2ResultBytes ||
+      ReadU16(result.data() + 2U) != 5U ||
+      !AllZero(result.data() + 8U, 172U)) {
+    CanonicalFailure(
+        &failures,
+        "protected_operations: runtime PoP-v2 caller SID authority\n");
+  }
+  state.active_keyset_file_identities[0U] = authority_gate_key_identity;
+
+  gc::Byte32 stale_runtime_pop_state{};
+  stale_runtime_pop_state.fill(0xa6U);
+  const auto stale_runtime_pop_body = SignRuntimePopV2Body(
+      stale_runtime_pop_state,
+      1U,
+      created_receipt,
+      state.runtime_manifest_spki_sha256,
+      0xb0U);
+  const gc::ProtectedOperationResult stale_runtime_pop_result =
+      run_runtime_pop(stale_runtime_pop_body, kSid);
+  if (stale_runtime_pop_result != gc::ProtectedOperationResult::Success ||
+      ReadU16(result.data() + 2U) != 3U ||
+      !AllZero(result.data() + 8U, 172U)) {
+    CanonicalFailure(
+        &failures,
+        "protected_operations: runtime PoP-v2 stale state\n");
+  }
+
+  const auto receipt_runtime_pop_body = SignRuntimePopV2Body(
+      created_state,
+      1U,
+      wrong_receipt,
+      state.runtime_manifest_spki_sha256,
+      0xc0U);
+  const gc::ProtectedOperationResult receipt_runtime_pop_result =
+      run_runtime_pop(receipt_runtime_pop_body, kSid);
+  if (receipt_runtime_pop_result != gc::ProtectedOperationResult::Success ||
+      ReadU16(result.data() + 2U) != 4U ||
+      !AllZero(result.data() + 8U, 172U)) {
+    CanonicalFailure(
+        &failures,
+        "protected_operations: runtime PoP-v2 receipt fence\n");
+  }
+
+  const auto generation_runtime_pop_body = SignRuntimePopV2Body(
+      created_state,
+      2U,
+      created_receipt,
+      state.runtime_manifest_spki_sha256,
+      0xd0U);
+  const gc::ProtectedOperationResult generation_runtime_pop_result =
+      run_runtime_pop(generation_runtime_pop_body, kSid);
+  if (generation_runtime_pop_result !=
+          gc::ProtectedOperationResult::Success ||
+      ReadU16(result.data() + 2U) != 4U ||
+      !AllZero(result.data() + 8U, 172U)) {
+    CanonicalFailure(
+        &failures,
+        "protected_operations: runtime PoP-v2 generation fence\n");
+  }
+
+  const auto worker_runtime_pop_body = SignRuntimePopV2Body(
+      created_state,
+      1U,
+      created_receipt,
+      mismatched_worker_spki,
+      0xe0U);
+  const gc::ProtectedOperationResult worker_runtime_pop_result =
+      run_runtime_pop(worker_runtime_pop_body, kSid);
+  if (worker_runtime_pop_result != gc::ProtectedOperationResult::Success ||
+      ReadU16(result.data() + 2U) != 4U ||
+      !AllZero(result.data() + 8U, 172U)) {
+    CanonicalFailure(
+        &failures,
+        "protected_operations: runtime PoP-v2 runtime-key binding\n");
+  }
+
+  auto admission_collision_runtime_pop_body = SignRuntimePopV2Body(
+      created_state,
+      1U,
+      created_receipt,
+      state.runtime_manifest_spki_sha256,
+      0xf0U);
+  std::memcpy(
+      admission_collision_runtime_pop_body.data(), sign_body.data(), 16U);
+  const gc::ProtectedOperationResult admission_collision_runtime_pop_result =
+      run_runtime_pop(admission_collision_runtime_pop_body, kSid);
+  if (admission_collision_runtime_pop_result !=
+          gc::ProtectedOperationResult::Success ||
+      ReadU16(result.data() + 2U) != 5U ||
+      !AllZero(result.data() + 8U, 172U)) {
+    CanonicalFailure(
+        &failures,
+        "protected_operations: runtime PoP-v2 cross-opcode collision\n");
+  }
+
+  const auto original_runtime_key_identity =
+      state.active_keyset_file_identities[0U];
+  state.active_keyset_file_identities[0U].file_id[0U] ^= 1U;
+  const gc::ProtectedOperationResult drifted_runtime_pop_result =
+      run_runtime_pop(runtime_pop_body, kSid);
+  state.active_keyset_file_identities[0U] = original_runtime_key_identity;
+  if (drifted_runtime_pop_result != gc::ProtectedOperationResult::Success ||
+      ReadU16(result.data() + 2U) != 8U ||
+      !AllZero(result.data() + 8U, 172U)) {
+    CanonicalFailure(
+        &failures,
+        "protected_operations: runtime PoP-v2 custody drift\n");
   }
 
   auto colliding_create = CreateBody(created_state, 2U, 1U);
@@ -2082,11 +2500,63 @@ int TestIsolatedCommittedRecoveryReplay() noexcept {
         "protected_operations: admission evidence cross-opcode collision\n");
   }
 
+  const auto crash_cutpoint_body = SignRuntimePopV2Body(
+      created_state,
+      1U,
+      created_receipt,
+      state.runtime_manifest_spki_sha256,
+      0xf8U);
+  gc::SetProtectedFilesystemFailureForTest(
+      gc::ProtectedFilesystemTestCutpoint::Write, 1U);
+  const gc::ProtectedOperationResult crash_cutpoint_result =
+      run_runtime_pop(crash_cutpoint_body, kSid);
+  gc::ResetProtectedFilesystemFailuresForTest();
+  std::size_t root_child_count = 0U;
+  const bool crash_staging_clean =
+      crash_cutpoint_result == gc::ProtectedOperationResult::Success &&
+      result_length == gc::kSignRuntimePopV2ResultBytes &&
+      ReadU16(result.data() + 2U) == 8U &&
+      AllZero(result.data() + 8U, 172U) &&
+      CountTestRootChildren(fixture, &root_child_count) &&
+      root_child_count == 4U;
+  if (!crash_staging_clean) {
+    CanonicalFailure(
+        &failures,
+        "protected_operations: runtime PoP-v2 crash-safe staging cleanup\n");
+  }
+
+  gc::CloseProtectedOperations(&state);
+  gc::ResetProtectedRecoveryEvidenceForTest();
+  const bool signer_restarted = crash_staging_clean &&
+      gc::InitializeProtectedOperations(
+          kDummyVolumeRoot,
+          std::size(kDummyVolumeRoot) - 1U,
+          &state);
+  if (!signer_restarted) {
+    CanonicalFailure(
+        &failures,
+        "protected_operations: runtime PoP-v2 post-crash startup\n");
+  }
+  const gc::ProtectedOperationResult separate_invocation_result =
+      signer_restarted
+      ? run_runtime_pop(runtime_pop_body, kSid)
+      : gc::ProtectedOperationResult::CustodyOrJournal;
+  if (separate_invocation_result != gc::ProtectedOperationResult::Success ||
+      result_length != gc::kSignRuntimePopV2ResultBytes ||
+      std::memcmp(
+          result.data(),
+          signed_runtime_pop_receipt.data(),
+          signed_runtime_pop_receipt.size()) != 0) {
+    CanonicalFailure(
+        &failures,
+        "protected_operations: runtime PoP-v2 separate invocation reproduction\n");
+  }
+
   const auto revoke = RevokeBody(created_state, 1U, 1U, &created_receipt);
   gc::ResetProtectedFilesystemFailuresForTest();
   result.fill(0U);
   result_length = 0U;
-  const gc::ProtectedOperationResult revoke_result = created
+  const gc::ProtectedOperationResult revoke_result = created && signer_restarted
       ? gc::ExecuteProtectedOperation(
             &state,
             static_cast<std::uint8_t>(gc::Opcode::RevokeLocalKeyset),
@@ -2141,6 +2611,22 @@ int TestIsolatedCommittedRecoveryReplay() noexcept {
         "protected_operations: committed fixture revoke\n");
   }
   const gc::Byte32 revoked_state = state.state_sha256;
+  const auto revoked_runtime_pop_body = SignRuntimePopV2Body(
+      revoked_state,
+      1U,
+      created_receipt,
+      state.runtime_manifest_spki_sha256,
+      0x90U);
+  const gc::ProtectedOperationResult revoked_runtime_pop_result =
+      run_runtime_pop(revoked_runtime_pop_body, kSid);
+  if (revoked_runtime_pop_result != gc::ProtectedOperationResult::Success ||
+      result_length != gc::kSignRuntimePopV2ResultBytes ||
+      ReadU16(result.data() + 2U) != 4U ||
+      !AllZero(result.data() + 8U, 172U)) {
+    CanonicalFailure(
+        &failures,
+        "protected_operations: runtime PoP-v2 revoked keyset\n");
+  }
   gc::CloseProtectedOperations(&state);
   gc::ResetProtectedRecoveryEvidenceForTest();
   const bool replayed = revoked && gc::InitializeProtectedOperations(

@@ -6,6 +6,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -9959,8 +9960,8 @@ ProtectedOperationResult ExecuteAdmissionEvidenceSignature(
   if (durable_operation != nullptr ||
       (state->create_replay.present &&
        state->create_replay.operation_id == request.operation_id) ||
-      (state->revoke_replay.present &&
-       state->revoke_replay.operation_id == request.operation_id)) {
+       (state->revoke_replay.present &&
+        state->revoke_replay.operation_id == request.operation_id)) {
     BuildAdmissionEvidenceResult(
         request, 5U, envelope_sha256, state->state_sha256, request_sha256,
         nullptr, nullptr, result);
@@ -9979,12 +9980,18 @@ ProtectedOperationResult ExecuteAdmissionEvidenceSignature(
       BuildAdmissionEvidenceResult(
           request, body_matches ? 6U : 5U, envelope_sha256,
           state->state_sha256, request_sha256, nullptr, nullptr, result);
-    } else if (request.expected_state_sha256 != state->state_sha256 ||
-               request.expected_generation != state->active_generation ||
-               request.expected_keyset_receipt_sha256 !=
-                   state->active_receipt_sha256) {
+    } else if (request.expected_state_sha256 != state->state_sha256) {
       BuildAdmissionEvidenceResult(
           request, 3U, envelope_sha256, state->state_sha256, request_sha256,
+          nullptr, nullptr, result);
+    } else if (state->active_generation == 0U || state->active_revoked ||
+               request.expected_generation != state->active_generation ||
+               request.expected_keyset_receipt_sha256 !=
+                   state->active_receipt_sha256 ||
+               request.envelope.worker_public_key_spki_sha256 !=
+                   state->runtime_manifest_spki_sha256) {
+      BuildAdmissionEvidenceResult(
+          request, 4U, envelope_sha256, state->state_sha256, request_sha256,
           nullptr, nullptr, result);
     } else {
       *result = replay->result;
@@ -10003,7 +10010,9 @@ ProtectedOperationResult ExecuteAdmissionEvidenceSignature(
   }
   if (state->active_generation == 0U || state->active_revoked ||
       request.expected_generation != state->active_generation ||
-      request.expected_keyset_receipt_sha256 != state->active_receipt_sha256) {
+      request.expected_keyset_receipt_sha256 != state->active_receipt_sha256 ||
+      request.envelope.worker_public_key_spki_sha256 !=
+          state->runtime_manifest_spki_sha256) {
     BuildAdmissionEvidenceResult(
         request, 4U, envelope_sha256, state->state_sha256, request_sha256,
         nullptr, nullptr, result);
@@ -10031,14 +10040,14 @@ ProtectedOperationResult ExecuteAdmissionEvidenceSignature(
   HANDLE key_file = nullptr;
   ProtectedObjectIdentity key_identity{};
   std::uint64_t key_length = 0U;
-  bool delete_pending = false;
   bool prepared =
       BuildEvidenceStagingComponent(request.operation_id, &staging_component) &&
       ComposeProtectedChildPath(
           state->filesystem.state_root_path,
           staging_component.data(),
           &staging_path) &&
-      CreateProtectedFile(state->filesystem, staging_path, true, &artifact) &&
+      CreateProtectedDeleteOnCloseFile(
+          state->filesystem, staging_path, &artifact) &&
       WriteReadExact(
           state->filesystem,
           artifact,
@@ -10049,24 +10058,6 @@ ProtectedOperationResult ExecuteAdmissionEvidenceSignature(
       ProtectedFilesystemRecoveryCheckpoint(state->filesystem) &&
       CaptureProtectedObjectIdentity(
           state->filesystem, artifact, &artifact_identity);
-  if (prepared) {
-    FILE_DISPOSITION_INFO disposition{};
-    disposition.DeleteFile = TRUE;
-    delete_pending =
-        ProtectedFilesystemRecoveryCheckpoint(state->filesystem) &&
-        SetFileInformationByHandle(
-            artifact,
-            FileDispositionInfo,
-            &disposition,
-            sizeof(disposition)) != FALSE &&
-        ProtectedFilesystemRecoveryCheckpoint(state->filesystem);
-    // The production signing factory revalidates the exact captured identity,
-    // one-link length, and DeletePending state on the already-open handle. A
-    // delete-pending NTFS name reports access denied rather than file-not-found
-    // until the final handle closes, so a path-based absence probe is not a
-    // sound predicate here.
-    prepared = delete_pending;
-  }
   if (prepared) {
     prepared = BuildGenerationComponent(
                    state->active_generation, &generation_component) &&
@@ -10132,18 +10123,6 @@ ProtectedOperationResult ExecuteAdmissionEvidenceSignature(
     CloseHandle(keyset_directory);
   }
   if (artifact != nullptr && artifact != INVALID_HANDLE_VALUE) {
-    if (!delete_pending) {
-      FILE_DISPOSITION_INFO disposition{};
-      disposition.DeleteFile = TRUE;
-      delete_pending =
-          ProtectedFilesystemRecoveryCheckpoint(state->filesystem) &&
-          SetFileInformationByHandle(
-              artifact,
-              FileDispositionInfo,
-              &disposition,
-              sizeof(disposition)) != FALSE &&
-          ProtectedFilesystemRecoveryCheckpoint(state->filesystem);
-    }
     CloseHandle(artifact);
   }
   if (!prepared) {
@@ -10170,6 +10149,301 @@ ProtectedOperationResult ExecuteAdmissionEvidenceSignature(
   remembered.result = *result;
   SecureZeroMemory(signature.data(), signature.size());
   *result_length = kSignAdmissionEvidenceResultBytes;
+  return ProtectedOperationResult::Success;
+}
+
+void BuildRuntimePopV2Result(
+    std::uint16_t disposition,
+    const ProtectedOperationsState* authority,
+    const std::array<std::uint8_t, 64U>* signature,
+    std::array<std::uint8_t, kCreateKeysetResultBytes>* result) noexcept {
+  if (result == nullptr) return;
+  result->fill(0U);
+  WriteU16(result->data(), 1U);
+  WriteU16(result->data() + 2U, disposition);
+  if (authority == nullptr || signature == nullptr) return;
+  Copy32(authority->active_receipt_sha256, result->data() + 8U);
+  Copy32(authority->runtime_manifest_spki_sha256, result->data() + 40U);
+  std::memcpy(
+      result->data() + 72U,
+      authority->runtime_manifest_spki.data(),
+      authority->runtime_manifest_spki.size());
+  std::memcpy(
+      result->data() + 116U,
+      signature->data(),
+      signature->size());
+}
+
+bool BuildRuntimePopV2StagingComponent(
+    const Byte16& operation_id,
+    std::array<wchar_t, 64U>* output) noexcept {
+  if (output == nullptr) return false;
+  output->fill(L'\0');
+  constexpr wchar_t kPrefix[] = L".runtime-pop-v2-";
+  constexpr wchar_t kSuffix[] = L".pending";
+  constexpr wchar_t kHex[] = L"0123456789abcdef";
+  std::size_t offset = 0U;
+  for (std::size_t index = 0U; kPrefix[index] != L'\0'; ++index) {
+    (*output)[offset++] = kPrefix[index];
+  }
+  for (const std::uint8_t byte : operation_id) {
+    (*output)[offset++] = kHex[byte >> 4U];
+    (*output)[offset++] = kHex[byte & 0x0fU];
+  }
+  for (std::size_t index = 0U; kSuffix[index] != L'\0'; ++index) {
+    (*output)[offset++] = kSuffix[index];
+  }
+  return offset + 1U <= output->size();
+}
+
+bool RuntimeManifestKeyCustodyIsCurrent(
+    const ProtectedOperationsState* state) noexcept {
+  if (state == nullptr) return false;
+  std::array<wchar_t, 32U> generation_component{};
+  ProtectedPath keyset_path{};
+  HANDLE keyset_directory = nullptr;
+  ProtectedObjectIdentity keyset_identity{};
+  ProtectedPath key_path{};
+  HANDLE key_file = nullptr;
+  ProtectedObjectIdentity key_identity{};
+  std::uint64_t key_length = 0U;
+  std::array<std::uint8_t, 48U> key_bytes{};
+  std::size_t read_length = 0U;
+  Byte32 key_hash{};
+  Byte32 spki_hash{};
+  bool valid = BuildGenerationComponent(
+                   state->active_generation, &generation_component) &&
+      ComposeProtectedChildPath(
+          state->filesystem.keysets_path,
+          generation_component.data(),
+          &keyset_path) &&
+      OpenProtectedExistingDirectory(
+          state->filesystem,
+          keyset_path,
+          false,
+          &keyset_directory,
+          &keyset_identity) &&
+      keyset_identity.volume_serial_number ==
+          state->active_keyset_directory_identity.volume_serial_number &&
+      keyset_identity.file_id ==
+          state->active_keyset_directory_identity.file_id &&
+      ComposeProtectedChildPath(
+          keyset_path, L"runtime-manifest.pk8", &key_path) &&
+      OpenProtectedExistingFileForRename(
+          state->filesystem,
+          key_path,
+          key_bytes.size(),
+          &key_file,
+          &key_length,
+          &key_identity) &&
+      key_length == key_bytes.size() &&
+      key_identity.volume_serial_number ==
+          state->active_keyset_file_identities[0U].volume_serial_number &&
+      key_identity.file_id ==
+          state->active_keyset_file_identities[0U].file_id &&
+      ReadProtectedOpenFile(
+          state->filesystem,
+          key_file,
+          key_bytes.data(),
+          key_bytes.size(),
+          &read_length,
+          &key_identity) &&
+      read_length == key_bytes.size() &&
+      key_identity.volume_serial_number ==
+          state->active_keyset_file_identities[0U].volume_serial_number &&
+      key_identity.file_id ==
+          state->active_keyset_file_identities[0U].file_id &&
+      ComputeSha256(key_bytes.data(), key_bytes.size(), &key_hash) &&
+      key_hash == state->active_keyset_file_hashes[0U] &&
+      ComputeSha256(
+          state->runtime_manifest_spki.data(),
+          state->runtime_manifest_spki.size(),
+          &spki_hash) &&
+      spki_hash == state->runtime_manifest_spki_sha256;
+  if (key_file != nullptr && key_file != INVALID_HANDLE_VALUE) {
+    CloseHandle(key_file);
+  }
+  if (keyset_directory != nullptr && keyset_directory != INVALID_HANDLE_VALUE) {
+    CloseHandle(keyset_directory);
+  }
+  SecureZeroMemory(key_bytes.data(), key_bytes.size());
+  SecureZeroMemory(key_hash.data(), key_hash.size());
+  SecureZeroMemory(spki_hash.data(), spki_hash.size());
+  return valid;
+}
+
+ProtectedOperationResult ExecuteRuntimePopV2Signature(
+    ProtectedOperationsState* state,
+    const std::uint8_t* body,
+    std::uint32_t body_length,
+    const std::uint8_t* operator_sid,
+    std::uint16_t operator_sid_length,
+    std::uint64_t deadline_ms,
+    HANDLE stop_event,
+    std::array<std::uint8_t, kCreateKeysetResultBytes>* result,
+    std::uint32_t* result_length) noexcept {
+  SignRuntimePopV2Request request{};
+  if (!DecodeSignRuntimePopV2Request(body, body_length, &request)) {
+    return ProtectedOperationResult::ProtocolInvalid;
+  }
+  Byte16 expected_operation_id{};
+  if (!DeriveRuntimePopV2OperationId(
+          operator_sid,
+          operator_sid_length,
+          request.expected_state_sha256,
+          request.expected_generation,
+          request.expected_keyset_receipt_sha256,
+          request.preimage.data(),
+          request.preimage.size(),
+          &expected_operation_id)) {
+    return ProtectedOperationResult::CustodyOrJournal;
+  }
+  if (request.operation_id != expected_operation_id) {
+    BuildRuntimePopV2Result(5U, nullptr, nullptr, result);
+    *result_length = kSignRuntimePopV2ResultBytes;
+    return ProtectedOperationResult::Success;
+  }
+  Byte32 preimage_sha256{};
+  if (!ComputeSha256(
+          request.preimage.data(), request.preimage.size(), &preimage_sha256)) {
+    return ProtectedOperationResult::CustodyOrJournal;
+  }
+
+  const ProtectedOperationProjection* durable_operation =
+      FindOperationProjection(*state, request.operation_id);
+  if (durable_operation != nullptr ||
+      (state->create_replay.present &&
+       state->create_replay.operation_id == request.operation_id) ||
+      (state->revoke_replay.present &&
+       state->revoke_replay.operation_id == request.operation_id) ||
+      FindAdmissionEvidenceReplay(state, request.operation_id) != nullptr) {
+    BuildRuntimePopV2Result(5U, nullptr, nullptr, result);
+    *result_length = kSignRuntimePopV2ResultBytes;
+    return ProtectedOperationResult::Success;
+  }
+
+  if (request.expected_state_sha256 != state->state_sha256) {
+    BuildRuntimePopV2Result(3U, nullptr, nullptr, result);
+    *result_length = kSignRuntimePopV2ResultBytes;
+    return ProtectedOperationResult::Success;
+  }
+  if (state->active_generation == 0U || state->active_revoked ||
+      request.expected_generation != state->active_generation ||
+      request.expected_keyset_receipt_sha256 != state->active_receipt_sha256 ||
+      request.material.worker_generation != state->active_generation ||
+      request.material.worker_public_key_spki_sha256 !=
+          state->runtime_manifest_spki_sha256) {
+    BuildRuntimePopV2Result(4U, nullptr, nullptr, result);
+    *result_length = kSignRuntimePopV2ResultBytes;
+    return ProtectedOperationResult::Success;
+  }
+  std::array<wchar_t, 64U> staging_component{};
+  ProtectedPath staging_path{};
+  HANDLE artifact = nullptr;
+  ProtectedObjectIdentity artifact_identity{};
+  std::array<wchar_t, 32U> generation_component{};
+  ProtectedPath keyset_path{};
+  HANDLE keyset_directory = nullptr;
+  ProtectedObjectIdentity keyset_identity{};
+  ProtectedPath key_path{};
+  HANDLE key_file = nullptr;
+  ProtectedObjectIdentity key_identity{};
+  std::uint64_t key_length = 0U;
+  bool prepared = BuildRuntimePopV2StagingComponent(
+                      request.operation_id, &staging_component) &&
+      ComposeProtectedChildPath(
+          state->filesystem.state_root_path,
+          staging_component.data(),
+          &staging_path) &&
+      CreateProtectedDeleteOnCloseFile(
+          state->filesystem, staging_path, &artifact) &&
+      WriteReadExact(
+          state->filesystem,
+          artifact,
+          request.preimage.data(),
+          request.preimage.size()) &&
+      ProtectedFilesystemRecoveryCheckpoint(state->filesystem) &&
+      FlushFileBuffers(artifact) != FALSE &&
+      ProtectedFilesystemRecoveryCheckpoint(state->filesystem) &&
+      CaptureProtectedObjectIdentity(
+          state->filesystem, artifact, &artifact_identity);
+  if (prepared) {
+    prepared = BuildGenerationComponent(
+                   state->active_generation, &generation_component) &&
+        ComposeProtectedChildPath(
+            state->filesystem.keysets_path,
+            generation_component.data(),
+            &keyset_path) &&
+        OpenProtectedExistingDirectory(
+            state->filesystem,
+            keyset_path,
+            false,
+            &keyset_directory,
+            &keyset_identity) &&
+        keyset_identity.volume_serial_number ==
+            state->active_keyset_directory_identity.volume_serial_number &&
+        keyset_identity.file_id ==
+            state->active_keyset_directory_identity.file_id &&
+        ComposeProtectedChildPath(
+            keyset_path, L"runtime-manifest.pk8", &key_path) &&
+        OpenProtectedExistingFileForRename(
+            state->filesystem,
+            key_path,
+            48U,
+            &key_file,
+            &key_length,
+            &key_identity) &&
+        key_length == 48U &&
+        key_identity.volume_serial_number ==
+            state->active_keyset_file_identities[0U].volume_serial_number &&
+        key_identity.file_id ==
+            state->active_keyset_file_identities[0U].file_id;
+  }
+
+  std::array<std::uint8_t, 64U> signature{};
+  ProtectedSigningLease lease{};
+  if (prepared) {
+    ProtectedSigningFactoryInput lease_input{};
+    lease_input.parent = state->filesystem.state_root;
+    lease_input.artifact = artifact;
+    lease_input.key_file = key_file;
+    lease_input.stop_event = stop_event;
+    lease_input.parent_identity = state->filesystem.state_root_identity;
+    lease_input.artifact_identity = artifact_identity;
+    lease_input.key_identity = key_identity;
+    lease_input.artifact_sha256 = preimage_sha256;
+    lease_input.key_file_sha256 = state->active_keyset_file_hashes[0U];
+    lease_input.spki = state->runtime_manifest_spki;
+    lease_input.key_id = state->runtime_manifest_spki_sha256;
+    lease_input.custody_state_sha256 = state->state_sha256;
+    lease_input.incarnation = state->active_receipt_sha256;
+    lease_input.purpose = ProtectedArtifactPurpose::RemoteWorkerPopV2;
+    lease_input.artifact_length = kRemoteWorkerPopV2PreimageBytes;
+    lease_input.generation = state->active_generation;
+    lease_input.deadline_ms = deadline_ms;
+    prepared = CreateProtectedSigningLease(lease_input, &lease) &&
+        SignProtectedArtifact(&lease, &signature);
+  }
+
+  if (key_file != nullptr && key_file != INVALID_HANDLE_VALUE) {
+    CloseHandle(key_file);
+  }
+  if (keyset_directory != nullptr && keyset_directory != INVALID_HANDLE_VALUE) {
+    CloseHandle(keyset_directory);
+  }
+  if (artifact != nullptr && artifact != INVALID_HANDLE_VALUE) {
+    CloseHandle(artifact);
+  }
+  if (!prepared) {
+    SecureZeroMemory(signature.data(), signature.size());
+    BuildRuntimePopV2Result(8U, nullptr, nullptr, result);
+    *result_length = kSignRuntimePopV2ResultBytes;
+    return ProtectedOperationResult::Success;
+  }
+
+  BuildRuntimePopV2Result(1U, state, &signature, result);
+  SecureZeroMemory(signature.data(), signature.size());
+  *result_length = kSignRuntimePopV2ResultBytes;
   return ProtectedOperationResult::Success;
 }
 
@@ -11726,6 +12000,18 @@ ProtectedOperationResult ExecuteProtectedOperation(
   *result_length = 0U;
   if (opcode == static_cast<std::uint8_t>(Opcode::SignAdmissionEvidence)) {
     return ExecuteAdmissionEvidenceSignature(
+        state,
+        body,
+        body_length,
+        operator_sid,
+        operator_sid_length,
+        deadline_ms,
+        stop_event,
+        result,
+        result_length);
+  }
+  if (opcode == static_cast<std::uint8_t>(Opcode::SignRuntimePopV2)) {
+    return ExecuteRuntimePopV2Signature(
         state,
         body,
         body_length,

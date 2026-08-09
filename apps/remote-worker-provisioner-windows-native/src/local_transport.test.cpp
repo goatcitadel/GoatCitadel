@@ -238,13 +238,14 @@ void TestLiteralMessages() {
             (UINT64_C(1) << static_cast<std::uint8_t>(opcode))) != 0U;
   };
   Expect(
-      gc::kGcpaCallableOpcodeBitmap == UINT64_C(0x00000000000D0002) &&
+      gc::kGcpaCallableOpcodeBitmap == UINT64_C(0x00000000001D0002) &&
           callable(gc::Opcode::Inspect) &&
           callable(gc::Opcode::CreateKeyset) &&
           callable(gc::Opcode::RevokeLocalKeyset) &&
           !callable(gc::Opcode::AcquireKeyForSigning) &&
-          callable(gc::Opcode::SignAdmissionEvidence),
-      "GCPA exposes INSPECT/CREATE/REVOKE/SIGN_ADMISSION_EVIDENCE only");
+          callable(gc::Opcode::SignAdmissionEvidence) &&
+          callable(gc::Opcode::SignRuntimePopV2),
+      "GCPA exposes INSPECT/CREATE/REVOKE/SIGN_ADMISSION_EVIDENCE/SIGN_RUNTIME_POP_V2 only");
   const Fixture fixture = MakeFixture();
   const auto expected_client_hello = Hex(
       "47435041010001000100000020000000"
@@ -254,7 +255,7 @@ void TestLiteralMessages() {
       "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
       "2122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40"
       "4142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f60"
-      "02000f000700070002000d0000000000");
+      "02001f000700070002001d0000000000");
   const auto expected_request = Hex(
       "474350410100020001000000b8000000"
       "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
@@ -525,6 +526,145 @@ void TestRandomDuplicateGuard() {
   gc::ResetRandomRegistryForTest();
 }
 
+void TestRuntimePopV2OperationAuthority() {
+  gc::SidProjection sid{};
+  Expect(
+      FillSid(
+          &sid,
+          "010500000000000515000000e8030000d0070000b80b0000a00f0000"),
+      "runtime PoP-v2 operation SID valid");
+  gc::Byte32 state{};
+  gc::Byte32 receipt{};
+  std::array<std::uint8_t, gc::kRemoteWorkerPopV2PreimageBytes> preimage{};
+  FillRange(&state, 0x11U);
+  FillRange(&receipt, 0x51U);
+  FillRange(&preimage, 0x81U);
+  constexpr std::uint64_t kGeneration = UINT64_C(0x01020304050607);
+
+  const auto derive = [](const gc::SidProjection& caller_sid,
+                         const gc::Byte32& expected_state,
+                         std::uint64_t expected_generation,
+                         const gc::Byte32& expected_receipt,
+                         const std::array<
+                             std::uint8_t,
+                             gc::kRemoteWorkerPopV2PreimageBytes>& material,
+                         gc::Byte16* output) noexcept {
+    return gc::DeriveRuntimePopV2OperationId(
+        caller_sid.bytes.data(),
+        caller_sid.length,
+        expected_state,
+        expected_generation,
+        expected_receipt,
+        material.data(),
+        material.size(),
+        output);
+  };
+
+  gc::Byte16 baseline{};
+  gc::Byte16 repeated{};
+  Expect(
+      derive(sid, state, kGeneration, receipt, preimage, &baseline) &&
+          derive(sid, state, kGeneration, receipt, preimage, &repeated) &&
+          baseline == repeated,
+      "runtime PoP-v2 operation authority deterministic");
+  Expect(
+      EqualBytes(
+          baseline,
+          Hex("7d7cc44c16fe5c799677e4b7de17bbb2")),
+      "runtime PoP-v2 operation authority vector");
+
+  auto changed_sid = sid;
+  changed_sid.bytes[changed_sid.length - 1U] ^= 1U;
+  auto changed_state = state;
+  changed_state[0U] ^= 1U;
+  auto changed_receipt = receipt;
+  changed_receipt[0U] ^= 1U;
+  auto changed_preimage = preimage;
+  changed_preimage[0U] ^= 1U;
+  constexpr std::array<std::uint64_t, 2U> kGenerations = {
+      kGeneration, kGeneration + 1U};
+  std::array<gc::Byte16, 5U> mutations{};
+  const bool mutation_derivations =
+      derive(changed_sid, state, kGeneration, receipt, preimage, &mutations[0U]) &&
+      derive(sid, changed_state, kGeneration, receipt, preimage, &mutations[1U]) &&
+      derive(sid, state, kGenerations[1U], receipt, preimage, &mutations[2U]) &&
+      derive(sid, state, kGeneration, changed_receipt, preimage, &mutations[3U]) &&
+      derive(sid, state, kGeneration, receipt, changed_preimage, &mutations[4U]);
+  bool every_field_bound = mutation_derivations;
+  for (const auto& mutation : mutations) {
+    every_field_bound = every_field_bound && mutation != baseline;
+  }
+  Expect(every_field_bound, "runtime PoP-v2 operation authority binds every field");
+
+  gc::Byte16 cleared{};
+  cleared.fill(0xa5U);
+  gc::Byte32 zero{};
+  Expect(
+      !gc::DeriveRuntimePopV2OperationId(
+          nullptr,
+          sid.length,
+          state,
+          kGeneration,
+          receipt,
+          preimage.data(),
+          preimage.size(),
+          &cleared) &&
+          cleared == gc::Byte16{},
+      "runtime PoP-v2 operation authority clears invalid SID output");
+  auto malformed_sid = sid;
+  malformed_sid.length = 1U;
+  cleared.fill(0xa5U);
+  Expect(
+      !derive(
+          malformed_sid,
+          state,
+          kGeneration,
+          receipt,
+          preimage,
+          &cleared) &&
+          cleared == gc::Byte16{},
+      "runtime PoP-v2 operation authority rejects bounded malformed SID");
+  cleared.fill(0xa5U);
+  Expect(
+      !derive(sid, zero, kGeneration, receipt, preimage, &cleared) &&
+          cleared == gc::Byte16{},
+      "runtime PoP-v2 operation authority rejects zero state");
+  cleared.fill(0xa5U);
+  Expect(
+      !derive(sid, state, 0U, receipt, preimage, &cleared) &&
+          cleared == gc::Byte16{},
+      "runtime PoP-v2 operation authority rejects zero generation");
+  cleared.fill(0xa5U);
+  Expect(
+      !derive(
+          sid,
+          state,
+          UINT64_C(9007199254740992),
+          receipt,
+          preimage,
+          &cleared) &&
+          cleared == gc::Byte16{},
+      "runtime PoP-v2 operation authority rejects unsafe generation");
+  cleared.fill(0xa5U);
+  Expect(
+      !derive(sid, state, kGeneration, zero, preimage, &cleared) &&
+          cleared == gc::Byte16{},
+      "runtime PoP-v2 operation authority rejects zero receipt");
+  cleared.fill(0xa5U);
+  Expect(
+      !gc::DeriveRuntimePopV2OperationId(
+          sid.bytes.data(),
+          sid.length,
+          state,
+          kGeneration,
+          receipt,
+          preimage.data(),
+          preimage.size() - 1U,
+          &cleared) &&
+          cleared == gc::Byte16{},
+      "runtime PoP-v2 operation authority rejects wrong preimage length");
+}
+
 }  // namespace
 
 int RunLocalTransportTests() noexcept {
@@ -535,5 +675,6 @@ int RunLocalTransportTests() noexcept {
   TestFrozenMessageBoundaries();
   TestNegativeProtocolMatrix();
   TestRandomDuplicateGuard();
+  TestRuntimePopV2OperationAuthority();
   return g_failures - initial_failures;
 }

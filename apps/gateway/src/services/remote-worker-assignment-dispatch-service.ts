@@ -20,6 +20,26 @@ import type { CurrentRemoteWorkerRuntimeCredentialAuthority } from "./remote-wor
 
 type Awaitable<T> = T | Promise<T>;
 
+/**
+ * Contract-reserved assignment dispatch purposes. These descriptors are not
+ * registered in the native mux or any HTTP composition; the runtime remains
+ * production-dark until protected-v2 transport activation owns them.
+ */
+export const REMOTE_WORKER_ASSIGNMENT_DISPATCH_ROUTES = Object.freeze({
+  pollOffers: Object.freeze({
+    rawPath: "/api/v1/remote-workers/assignment-offer-polls",
+    operation: "assignment.offers.poll",
+  }),
+  claim: Object.freeze({
+    rawPath: "/api/v1/remote-workers/assignment-claims",
+    operation: "assignment.claim",
+  }),
+  readWorkload: Object.freeze({
+    rawPath: "/api/v1/remote-workers/assignment-workload-reads",
+    operation: "assignment.workload.read",
+  }),
+} as const);
+
 export interface RemoteWorkerAssignmentDispatchStorePort {
   listTaskBoundChatOffers(
     input: ListRemoteWorkerAssignmentOffersInput,
@@ -77,7 +97,7 @@ export class RemoteWorkerAssignmentDispatchError extends Error {
 /**
  * Production-dark offer/claim/workload owner. A later protected native route
  * may call this only after M2 PoP and current-runtime-credential resolution.
- * It owns no route codes, nonce policy, signer, or native composition.
+ * It owns no nonce policy, signer, handler, or native composition.
  */
 export class RemoteWorkerAssignmentDispatchService {
   public constructor(

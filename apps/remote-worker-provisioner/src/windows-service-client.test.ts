@@ -5,6 +5,8 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { REMOTE_WORKER_POP_V2_SCHEMA_VERSION, buildRemoteWorkerPopV2Preimage } from "@goatcitadel/contracts";
+
 import {
   WINDOWS_HELPER_CALLABLE_OPCODE_BITMAP,
   WINDOWS_HELPER_ERROR_CODE,
@@ -27,6 +29,7 @@ import {
   encodeWindowsProtectedCreateKeysetRequest,
   encodeWindowsProtectedRevokeKeysetRequest,
   encodeWindowsProtectedSignAdmissionEvidenceRequest,
+  encodeWindowsProtectedSignRuntimePopV2Request,
 } from "./windows-helper-protocol.js";
 import {
   WINDOWS_SERVICE_CLIENT_ARGUMENT,
@@ -40,6 +43,7 @@ import {
   runWindowsServiceClient,
   runWindowsServiceClientOneShot,
   signWindowsProtectedAdmissionEvidence,
+  signWindowsProtectedRuntimePopV2,
 } from "./windows-service-client.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -170,6 +174,31 @@ const mutationSignPrivateKey = createPrivateKey({
   type: "pkcs8",
 });
 const mutationSignSpki = createPublicKey(mutationSignPrivateKey).export({ format: "der", type: "spki" });
+const mutationRuntimePopPreimage = Buffer.from(
+  buildRemoteWorkerPopV2Preimage({
+    schemaVersion: REMOTE_WORKER_POP_V2_SCHEMA_VERSION,
+    method: "POST",
+    rawPath: "/api/v1/remote-workers/mesh-node-admissions",
+    operation: "mesh.node.admit",
+    bodySha256: createHash("sha256").update("body").digest("hex"),
+    nonce: Buffer.alloc(32, 0x31).toString("base64url"),
+    timestamp: "2026-08-09T12:34:56.789Z",
+    idempotencyKey: "mesh-node-admit-service-client",
+    authorityKind: "credential",
+    authorityId: "credential-1",
+    authorityGeneration: 3,
+    workerGeneration: 7,
+    tlsExporterSha256: createHash("sha256").update("exporter").digest("hex"),
+    clientCertificateSha256: createHash("sha256").update("certificate").digest("hex"),
+    workerPublicKeySpkiSha256: createHash("sha256").update(mutationSignSpki).digest("hex"),
+  }),
+);
+const mutationRuntimePopRequest = {
+  expectedStateSha256: mutationExpectedState,
+  expectedGeneration: 7n,
+  expectedKeysetReceiptSha256: mutationReceipt,
+  preimage: mutationRuntimePopPreimage,
+};
 
 function createSuccessPayload(): Buffer {
   const payload = Buffer.alloc(320);
@@ -217,6 +246,17 @@ function signSuccessPayload(): Buffer {
   sign(null, buildWindowsProtectedAdmissionEvidenceSigningBytes(envelope), mutationSignPrivateKey).copy(payload, 172);
   mutationExpectedState.copy(payload, 236);
   createHash("sha256").update(body).digest().copy(payload, 268);
+  return payload;
+}
+
+function runtimePopSuccessPayload(): Buffer {
+  const payload = Buffer.alloc(184);
+  payload.writeUInt16LE(1, 0);
+  payload.writeUInt16LE(1, 2);
+  mutationReceipt.copy(payload, 8);
+  createHash("sha256").update(mutationSignSpki).digest().copy(payload, 40);
+  mutationSignSpki.copy(payload, 72);
+  sign(null, mutationRuntimePopPreimage, mutationSignPrivateKey).copy(payload, 116);
   return payload;
 }
 
@@ -572,6 +612,26 @@ describe("typed protected service operations", () => {
     });
   });
 
+  it("passes only the exact contract-owned PoP-v2 preimage and returns the protected runtime receipt", async () => {
+    const fake = createFakeChild();
+    spawnMock.mockReturnValueOnce(fake.child);
+    const result = signWindowsProtectedRuntimePopV2(process.execPath, mutationRuntimePopRequest);
+    fake.emitSpawn();
+    const exactFrame = encodeWindowsProtectedSignRuntimePopV2Request(mutationRuntimePopRequest);
+    expect(Buffer.concat(fake.stdinChunks)).toEqual(exactFrame);
+    const requestPayload = decodeWindowsHelperRequest(exactFrame).payload;
+    expect(requestPayload.subarray(0, 16)).toEqual(Buffer.alloc(16));
+    expect(requestPayload.subarray(96, 381)).toEqual(mutationRuntimePopPreimage);
+    expect(spawnMock).toHaveBeenCalledWith(process.execPath, ["--service-stdio"], expect.objectContaining({ env: {} }));
+    fake.stdout.write(encodeWindowsHelperFrame(0x94, runtimePopSuccessPayload()));
+    fake.emitClose(WINDOWS_SERVICE_CLIENT_EXIT_CODE.SUCCESS);
+    await expect(result).resolves.toMatchObject({
+      disposition: "signed",
+      keysetReceiptSha256: mutationReceipt,
+      runtimeManifestSpki: mutationSignSpki,
+    });
+  });
+
   it("uses the same bounded process owner for typed INSPECT", async () => {
     const fake = createFakeChild();
     spawnMock.mockReturnValueOnce(fake.child);
@@ -603,7 +663,7 @@ const GCPA_MAGIC = "GCPA";
 const GCPA_VERSION = 1;
 const GCPA_REQUEST_ID = 1;
 const GCPA_HEADER_BYTES = 16;
-const GCPA_RECOGNIZED_BITMAP = 0x0007_0007_000f_0002n;
+const GCPA_RECOGNIZED_BITMAP = 0x0007_0007_001f_0002n;
 const GCPA_CALLABLE_BITMAP = WINDOWS_PROTECTED_CALLABLE_OPCODE_BITMAP;
 const GCPA_KIND = Object.freeze({
   CLIENT_HELLO: 0x01,
@@ -871,7 +931,7 @@ describe("shared literal GCPW/GCPA and projection vectors", () => {
         "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20" +
         "2122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40" +
         "4142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f60" +
-        "02000f000700070002000d0000000000",
+        "02001f000700070002001d0000000000",
     );
   });
 
@@ -901,15 +961,19 @@ describe("shared literal GCPW/GCPA and projection vectors", () => {
     expect(request.subarray(168, 200)).toEqual(Buffer.alloc(32));
   });
 
-  it("freezes caller-owned CREATE and REVOKE bytes at every GCPA authority offset", () => {
+  it("freezes caller-owned journaled mutations at each GCPA authority offset", () => {
     const createBody = decodeWindowsHelperRequest(
       encodeWindowsProtectedCreateKeysetRequest(mutationCreateRequest),
     ).payload;
     const revokeBody = decodeWindowsHelperRequest(
       encodeWindowsProtectedRevokeKeysetRequest(mutationRevokeRequest),
     ).payload;
+    const evidenceBody = decodeWindowsHelperRequest(
+      encodeWindowsProtectedSignAdmissionEvidenceRequest(mutationSignRequest),
+    ).payload;
     for (const [opcode, body] of [
       [WINDOWS_HELPER_OPCODE.CREATE_KEYSET, createBody],
+      [WINDOWS_HELPER_OPCODE.SIGN_ADMISSION_EVIDENCE, evidenceBody],
       [WINDOWS_HELPER_OPCODE.REVOKE_LOCAL_KEYSET, revokeBody],
     ] as const) {
       const frame = mutationClientRequestFrame(opcode, body);
@@ -923,6 +987,12 @@ describe("shared literal GCPW/GCPA and projection vectors", () => {
       expect(frame.subarray(16 + 152, 16 + 184)).toEqual(body.subarray(16, 48));
       expect(frame.subarray(16 + 184)).toEqual(body);
     }
+    const runtimePopBody = decodeWindowsHelperRequest(
+      encodeWindowsProtectedSignRuntimePopV2Request(mutationRuntimePopRequest),
+    ).payload;
+    expect(runtimePopBody.subarray(0, 16)).toEqual(Buffer.alloc(16));
+    expect(runtimePopBody.subarray(16, 48)).toEqual(mutationExpectedState);
+    expect(runtimePopBody.subarray(96, 381)).toEqual(mutationRuntimePopPreimage);
   });
 
   it("freezes literal SERVER_RESULT and bound ERROR frames", () => {
@@ -949,7 +1019,7 @@ describe("shared literal GCPW/GCPA and projection vectors", () => {
     const protectedInspect = encodeWindowsHelperFrame(0x81, inspectPayload());
     expect(protectedInspect.subarray(0, 16).toString("hex")).toBe("47435057010081000100000040010000");
     expect(protectedInspect.subarray(16, 48).toString("hex")).toBe(
-      "0100648600002000002000000000000002000f00070007000200000000000000",
+      "0100648600002000002000000000000002001f00070007000200000000000000",
     );
     expect(protectedInspect.readBigUInt64LE(56)).toBe(WINDOWS_PROTECTED_CALLABLE_OPCODE_BITMAP);
     expect(errorResponse(WINDOWS_HELPER_ERROR_CODE.PROTOCOL_INVALID).toString("hex")).toBe(

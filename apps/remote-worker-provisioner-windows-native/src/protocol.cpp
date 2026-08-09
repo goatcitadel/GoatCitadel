@@ -9,6 +9,10 @@ constexpr std::array<std::uint8_t, 4U> kMagic = {'G', 'C', 'P', 'W'};
 constexpr std::uint8_t kFlags = 0U;
 constexpr std::uint8_t kErrorOpcode = 0x7FU;
 constexpr std::uint8_t kSuccessMask = 0x80U;
+constexpr char kRemoteWorkerPopV2Domain[] =
+    "goatcitadel.remote-worker-pop.v2";
+static_assert(sizeof(kRemoteWorkerPopV2Domain) == kRemoteWorkerPopV2DomainBytes);
+constexpr std::uint64_t kMaximumSafeInteger = UINT64_C(9007199254740991);
 
 std::uint16_t ReadU16(const std::uint8_t* bytes) noexcept {
   return static_cast<std::uint16_t>(
@@ -28,6 +32,14 @@ std::uint64_t ReadU64(const std::uint8_t* bytes) noexcept {
   std::uint64_t value = 0U;
   for (std::size_t index = 0U; index < 8U; ++index) {
     value |= static_cast<std::uint64_t>(bytes[index]) << (index * 8U);
+  }
+  return value;
+}
+
+std::uint64_t ReadU64Be(const std::uint8_t* bytes) noexcept {
+  std::uint64_t value = 0U;
+  for (std::size_t index = 0U; index < 8U; ++index) {
+    value = (value << 8U) | static_cast<std::uint64_t>(bytes[index]);
   }
   return value;
 }
@@ -105,6 +117,55 @@ bool AllZero(const std::uint8_t* bytes, std::size_t length) noexcept {
     aggregate = static_cast<std::uint8_t>(aggregate | bytes[index]);
   }
   return aggregate == 0U;
+}
+
+bool DecodeRemoteWorkerPopV2Preimage(
+    const std::uint8_t* bytes,
+    std::size_t length,
+    RemoteWorkerPopV2Material* material) noexcept {
+  if (material == nullptr) return false;
+  *material = RemoteWorkerPopV2Material{};
+  if (bytes == nullptr || length != kRemoteWorkerPopV2PreimageBytes) {
+    return false;
+  }
+  for (std::size_t index = 0U; index < kRemoteWorkerPopV2DomainBytes;
+       ++index) {
+    if (bytes[index] != static_cast<std::uint8_t>(
+                            kRemoteWorkerPopV2Domain[index])) {
+      return false;
+    }
+  }
+  const std::size_t fixed = kRemoteWorkerPopV2DomainBytes;
+  const std::uint8_t route_code = bytes[fixed + 2U];
+  const std::uint8_t authority_kind_code = bytes[fixed + 3U];
+  const std::uint8_t expected_authority_kind =
+      route_code == 1U ? 1U : route_code >= 2U && route_code <= 10U ? 2U : 0U;
+  const std::uint64_t authority_generation = ReadU64Be(bytes + fixed + 4U);
+  const std::uint64_t worker_generation = ReadU64Be(bytes + fixed + 12U);
+  const std::uint64_t timestamp_epoch_ms = ReadU64Be(bytes + fixed + 20U);
+  if (bytes[fixed] != 2U || bytes[fixed + 1U] != 1U ||
+      expected_authority_kind == 0U ||
+      authority_kind_code != expected_authority_kind ||
+      authority_generation == 0U ||
+      authority_generation > kMaximumSafeInteger || worker_generation == 0U ||
+      worker_generation > kMaximumSafeInteger ||
+      timestamp_epoch_ms > kMaximumSafeInteger) {
+    return false;
+  }
+  material->route_code = route_code;
+  material->authority_kind_code = authority_kind_code;
+  material->authority_generation = authority_generation;
+  material->worker_generation = worker_generation;
+  material->timestamp_epoch_ms = timestamp_epoch_ms;
+  constexpr std::size_t kWorkerSpkiHashOffset =
+      kRemoteWorkerPopV2DomainBytes + 28U + 4U * 32U;
+  for (std::size_t index = 0U;
+       index < material->worker_public_key_spki_sha256.size();
+       ++index) {
+    material->worker_public_key_spki_sha256[index] =
+        bytes[kWorkerSpkiHashOffset + index];
+  }
+  return true;
 }
 
 }  // namespace
@@ -236,6 +297,61 @@ bool DecodeSignAdmissionEvidenceRequest(
   return false;
 }
 
+bool DecodeSignRuntimePopV2RequestCore(
+    const std::uint8_t* bytes,
+    std::size_t length,
+    bool caller_placeholder,
+    SignRuntimePopV2Request* request) noexcept {
+  if (request == nullptr) return false;
+  *request = SignRuntimePopV2Request{};
+  RemoteWorkerPopV2Material material{};
+  if (bytes == nullptr || length != kSignRuntimePopV2RequestBytes ||
+      (caller_placeholder ? !AllZero(bytes, 16U) : AllZero(bytes, 16U)) ||
+      AllZero(bytes + 16U, 32U) ||
+      ReadU16(bytes + 48U) != 1U || bytes[50U] != 3U ||
+      bytes[51U] != 0U || ReadU64(bytes + 52U) == 0U ||
+      ReadU64(bytes + 52U) > kMaximumSafeInteger ||
+      AllZero(bytes + 60U, 32U) ||
+      ReadU32(bytes + 92U) != kRemoteWorkerPopV2PreimageBytes ||
+      !DecodeRemoteWorkerPopV2Preimage(
+          bytes + 96U, kRemoteWorkerPopV2PreimageBytes, &material) ||
+      material.worker_generation != ReadU64(bytes + 52U) ||
+      !AllZero(
+          bytes + 96U + kRemoteWorkerPopV2PreimageBytes,
+          kSignRuntimePopV2RequestBytes - 96U -
+              kRemoteWorkerPopV2PreimageBytes)) {
+    return false;
+  }
+  for (std::size_t index = 0U; index < request->operation_id.size();
+       ++index) {
+    request->operation_id[index] = bytes[index];
+  }
+  for (std::size_t index = 0U; index < 32U; ++index) {
+    request->expected_state_sha256[index] = bytes[16U + index];
+    request->expected_keyset_receipt_sha256[index] = bytes[60U + index];
+  }
+  request->expected_generation = ReadU64(bytes + 52U);
+  for (std::size_t index = 0U; index < request->preimage.size(); ++index) {
+    request->preimage[index] = bytes[96U + index];
+  }
+  request->material = material;
+  return true;
+}
+
+bool DecodeSignRuntimePopV2Request(
+    const std::uint8_t* bytes,
+    std::size_t length,
+    SignRuntimePopV2Request* request) noexcept {
+  return DecodeSignRuntimePopV2RequestCore(bytes, length, false, request);
+}
+
+bool DecodeSignRuntimePopV2CallerRequest(
+    const std::uint8_t* bytes,
+    std::size_t length,
+    SignRuntimePopV2Request* request) noexcept {
+  return DecodeSignRuntimePopV2RequestCore(bytes, length, true, request);
+}
+
 bool EncodeProtectedInspectResult(
     std::uint16_t pe_machine,
     const std::uint8_t* custody_projection,
@@ -272,6 +388,7 @@ bool IsRecognizedOpcode(std::uint8_t opcode) noexcept {
     case Opcode::AcquireKeyForSigning:
     case Opcode::SignAdmissionEvidence:
     case Opcode::RevokeLocalKeyset:
+    case Opcode::SignRuntimePopV2:
     case Opcode::BeginInstall:
     case Opcode::SealAndPublishInstall:
     case Opcode::AbandonToQuarantine:

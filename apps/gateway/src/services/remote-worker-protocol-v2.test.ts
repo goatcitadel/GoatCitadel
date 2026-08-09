@@ -22,6 +22,7 @@ import {
   REMOTE_WORKER_BOOTSTRAP_EXCHANGE_RAW_PATH,
 } from "./remote-worker-admission-service.js";
 import { REMOTE_WORKER_ASSIGNMENT_RPC_ROUTES } from "./remote-worker-assignment-protocol-service.js";
+import { REMOTE_WORKER_ASSIGNMENT_DISPATCH_ROUTES } from "./remote-worker-assignment-dispatch-service.js";
 import {
   REMOTE_WORKER_MESH_NODE_ADMISSION_OPERATION,
   REMOTE_WORKER_MESH_NODE_ADMISSION_RAW_PATH,
@@ -128,7 +129,7 @@ function verifyV2Fixture(fixture: SignedV2Fixture) {
 }
 
 describe("remote worker protected proof v2 verification", () => {
-  it("keeps the seven contract route codes pinned to the live Gateway protocol exports", () => {
+  it("keeps all ten contract route codes pinned while dispatch routes remain dark", () => {
     expect(REMOTE_WORKER_POP_V2_ROUTE_BINDINGS).toStrictEqual([
       {
         code: 1,
@@ -151,6 +152,13 @@ describe("remote worker protected proof v2 verification", () => {
         operation: REMOTE_WORKER_MESH_NODE_ADMISSION_OPERATION,
         authorityKind: "credential",
       },
+      ...Object.values(REMOTE_WORKER_ASSIGNMENT_DISPATCH_ROUTES).map((route, index) => ({
+        code: index + 8,
+        method: "POST",
+        rawPath: route.rawPath,
+        operation: route.operation,
+        authorityKind: "credential",
+      })),
     ]);
   });
 

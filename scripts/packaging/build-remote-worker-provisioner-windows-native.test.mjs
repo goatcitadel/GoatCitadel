@@ -73,7 +73,7 @@ after(() => {
   fs.rmSync(temporaryRoot, { recursive: true, force: true });
 });
 
-test("W1B1A freezes the exact 35-file fence and canonical current-byte source manifest", () => {
+test("W1B1A freezes the exact 41-file fence and canonical current-byte source manifest", () => {
   const expected = [
     "apps/remote-worker-provisioner-windows-native/GoatCitadel.RemoteWorker.Provisioner.Client.vcxproj",
     "apps/remote-worker-provisioner-windows-native/GoatCitadel.RemoteWorker.Provisioner.Tests.vcxproj",
@@ -103,24 +103,30 @@ test("W1B1A freezes the exact 35-file fence and canonical current-byte source ma
     "apps/remote-worker-provisioner-windows-native/src/service_runtime.cpp",
     "apps/remote-worker-provisioner-windows-native/src/service_runtime.hpp",
     "apps/remote-worker-provisioner-windows-native/src/service_runtime.test.cpp",
+    "apps/remote-worker-provisioner/src/protected-admission-evidence.test.ts",
+    "apps/remote-worker-provisioner/src/protected-admission-evidence.ts",
+    "apps/remote-worker-provisioner/src/protected-runtime-pop-v2.test.ts",
+    "apps/remote-worker-provisioner/src/protected-runtime-pop-v2.ts",
     "apps/remote-worker-provisioner/src/windows-helper-protocol.test.ts",
     "apps/remote-worker-provisioner/src/windows-helper-protocol.ts",
     "apps/remote-worker-provisioner/src/windows-service-client.test.ts",
     "apps/remote-worker-provisioner/src/windows-service-client.ts",
+    "packages/contracts/src/remote-worker-protocol.test.ts",
+    "packages/contracts/src/remote-worker-protocol.ts",
     "scripts/packaging/build-remote-worker-provisioner-windows-native.mjs",
     "scripts/packaging/build-remote-worker-provisioner-windows-native.test.mjs",
     "scripts/packaging/lib/remote-worker-windows-toolchain.mjs",
   ];
   assert.deepEqual(REMOTE_WORKER_WINDOWS_PROVISIONER_W1B1A_SOURCE_PATHS, expected);
   assert.deepEqual(expected, [...expected].sort(asciiCompare));
-  assert.equal(new Set(expected).size, 35);
+  assert.equal(new Set(expected).size, 41);
   const manifest = computeW1B1aCanonicalSourceManifest();
   assert.equal(manifest.schema, "goatcitadel.remote-worker.provisioner.w1b1a-source-manifest.v2");
-  assert.equal(manifest.fileCount, 35);
-  assert.equal(manifest.entries.length, 35);
+  assert.equal(manifest.fileCount, 41);
+  assert.equal(manifest.entries.length, 41);
   assert.equal(manifest.bytes.toString("utf8").endsWith("\n"), false);
   const lines = manifest.bytes.toString("utf8").split("\n");
-  assert.equal(lines.length, 35);
+  assert.equal(lines.length, 41);
   for (let index = 0; index < lines.length; index += 1) {
     assert.match(lines[index], /^[a-f0-9]{64}  [a-zA-Z0-9_./-]+$/u);
     assert.equal(lines[index], `${manifest.entries[index].sha256}  ${expected[index]}`);
@@ -177,7 +183,7 @@ test("W1B1B-P0 freezes the exact 17-file fence and canonical current-byte source
   assert.equal(createHash("sha256").update(manifest.bytes).digest("hex"), manifest.sha256);
 });
 
-test("M2 source freezes the authority-bound production-callable signing surface", () => {
+test("M2/M3 source freezes the authority-bound production-callable signing surface", () => {
   const source = fs.readFileSync(protectedArtifactSigningSourcePath, "utf8");
   const header = fs.readFileSync(protectedArtifactSigningHeaderPath, "utf8");
   const nativeTest = fs.readFileSync(protectedArtifactSigningTestPath, "utf8");
@@ -185,6 +191,13 @@ test("M2 source freezes the authority-bound production-callable signing surface"
   assert.equal(/\bcrypto_(?:ed25519|eddsa|x25519|sha512)[A-Za-z0-9_]*\s*\(/u.test(source), false);
   assert.equal(source.includes('#include "ed25519_runtime.hpp"'), true);
   assert.match(source, /sizeof\(kEvidenceDomain\) - 1U == 60U/u);
+  assert.match(header, /RemoteWorkerPopV2\s*=\s*3U/u);
+  assert.match(header, /kRemoteWorkerPopV2ArtifactBytes\s*=\s*UINT64_C\(285\)/u);
+  assert.match(
+    source,
+    /input\.purpose\s*==\s*ProtectedArtifactPurpose::RemoteWorkerPopV2\s*&&\s*input\.artifact_length\s*!=\s*kRemoteWorkerPopV2ArtifactBytes/u,
+  );
+  assert.equal(nativeTest.includes("Equal(runtime_pop_reference, pop_signature)"), true);
   assert.equal(source.includes("MapViewOfFile"), false);
   assert.equal(source.includes("CreateFileMapping"), false);
   assert.equal(source.includes("InterlockedCompareExchange"), true);
@@ -3153,7 +3166,7 @@ function proveProductionInspectMode(executablePath, machine) {
   assert.equal(accepted.stdout.readUInt32LE(20), 2 * 1024 * 1024);
   assert.equal(accepted.stdout.readUInt32LE(24), 8 * 1024);
   assert.equal(accepted.stdout.readUInt32LE(28), 0);
-  assert.equal(accepted.stdout.readBigUInt64LE(32), 0x00070007000f0002n);
+  assert.equal(accepted.stdout.readBigUInt64LE(32), 0x00070007001f0002n);
   assert.equal(accepted.stdout.readBigUInt64LE(40), 0x0000000000000002n);
 }
 

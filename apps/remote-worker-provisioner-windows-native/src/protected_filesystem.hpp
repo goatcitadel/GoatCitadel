@@ -78,6 +78,13 @@ bool CreateProtectedFile(
     const ProtectedPath& absolute_path,
     bool retained_across_parent_rename,
     HANDLE* file) noexcept;
+// Creates a non-publishable staging file whose directory entry is owned by the
+// returned handle from the instant CreateFileW succeeds. Closing the last
+// handle removes the entry, including after an abrupt process termination.
+bool CreateProtectedDeleteOnCloseFile(
+    const ProtectedFilesystemState& state,
+    const ProtectedPath& absolute_path,
+    HANDLE* file) noexcept;
 bool FlushAndRenameProtectedFile(
     HANDLE file,
     const ProtectedPath& final_path) noexcept;

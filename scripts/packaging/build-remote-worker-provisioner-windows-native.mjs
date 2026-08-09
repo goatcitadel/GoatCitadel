@@ -54,10 +54,16 @@ export const REMOTE_WORKER_WINDOWS_PROVISIONER_W1B1A_SOURCE_PATHS = Object.freez
   "apps/remote-worker-provisioner-windows-native/src/service_runtime.cpp",
   "apps/remote-worker-provisioner-windows-native/src/service_runtime.hpp",
   "apps/remote-worker-provisioner-windows-native/src/service_runtime.test.cpp",
+  "apps/remote-worker-provisioner/src/protected-admission-evidence.test.ts",
+  "apps/remote-worker-provisioner/src/protected-admission-evidence.ts",
+  "apps/remote-worker-provisioner/src/protected-runtime-pop-v2.test.ts",
+  "apps/remote-worker-provisioner/src/protected-runtime-pop-v2.ts",
   "apps/remote-worker-provisioner/src/windows-helper-protocol.test.ts",
   "apps/remote-worker-provisioner/src/windows-helper-protocol.ts",
   "apps/remote-worker-provisioner/src/windows-service-client.test.ts",
   "apps/remote-worker-provisioner/src/windows-service-client.ts",
+  "packages/contracts/src/remote-worker-protocol.test.ts",
+  "packages/contracts/src/remote-worker-protocol.ts",
   "scripts/packaging/build-remote-worker-provisioner-windows-native.mjs",
   "scripts/packaging/build-remote-worker-provisioner-windows-native.test.mjs",
   "scripts/packaging/lib/remote-worker-windows-toolchain.mjs",
@@ -727,8 +733,8 @@ function sameFileIdentity(left, right) {
 }
 
 export function computeW1B1aCanonicalSourceManifest(sourceRoot = repoRoot) {
-  if (REMOTE_WORKER_WINDOWS_PROVISIONER_W1B1A_SOURCE_PATHS.length !== 35) {
-    throw new Error("The W1B1A canonical source fence must contain exactly 35 paths.");
+  if (REMOTE_WORKER_WINDOWS_PROVISIONER_W1B1A_SOURCE_PATHS.length !== 41) {
+    throw new Error("The W1B1A canonical source fence must contain exactly 41 paths.");
   }
   const sortedPaths = [...REMOTE_WORKER_WINDOWS_PROVISIONER_W1B1A_SOURCE_PATHS].sort();
   if (!sortedPaths.every((value, index) => value === REMOTE_WORKER_WINDOWS_PROVISIONER_W1B1A_SOURCE_PATHS[index])) {
@@ -1886,15 +1892,10 @@ function inspectNativeCryptographyEvidence({ toolchain, first, second, target })
       );
     }
   }
-  const requiredProductionSigningTypes = Object.freeze([
-    "ProtectedArtifactAuthority",
-    "ProtectedSigningLease",
-  ]);
+  const requiredProductionSigningTypes = Object.freeze(["ProtectedArtifactAuthority", "ProtectedSigningLease"]);
   for (const requiredType of requiredProductionSigningTypes) {
     if (!firstMap.includes(requiredType) || !secondMap.includes(requiredType)) {
-      throw new Error(
-        `The ${target} production link map lost required protected signing type ${requiredType}.`,
-      );
+      throw new Error(`The ${target} production link map lost required protected signing type ${requiredType}.`);
     }
   }
   if (
