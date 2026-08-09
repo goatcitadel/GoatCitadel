@@ -63,6 +63,31 @@ test("Gateway fault execution preserves SQLite as the default usability storage"
   assert.match(buildGatewayChatFaultNotes(config.storage)[0], /isolated SQLite/u);
 });
 
+test("Gateway fault execution writes the idle bound to authoritative and compatibility assistant config", async (t) => {
+  const runtimeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-fault-config-"));
+  t.after(async () => fs.rm(runtimeRoot, { recursive: true, force: true }));
+  const configDir = path.join(runtimeRoot, "config");
+  await fs.mkdir(configDir, { recursive: true });
+  await fs.writeFile(
+    path.join(configDir, "goatcitadel.json"),
+    `${JSON.stringify({ generation: { digest: "stale" }, assistant: { environment: "local" } })}\n`,
+    "utf8",
+  );
+  await fs.writeFile(
+    path.join(configDir, "assistant.config.example.json"),
+    `${JSON.stringify({ environment: "local" })}\n`,
+    "utf8",
+  );
+
+  await configureVerificationAssistant(runtimeRoot);
+
+  const unified = JSON.parse(await fs.readFile(path.join(configDir, "goatcitadel.json"), "utf8"));
+  const compatibility = JSON.parse(await fs.readFile(path.join(configDir, "assistant.config.json"), "utf8"));
+  assert.equal(unified.assistant.streamIdleTimeoutMs, 5_000);
+  assert.equal(compatibility.streamIdleTimeoutMs, 5_000);
+  assert.equal(Object.hasOwn(unified, "generation"), false);
+});
+
 test("Gateway fault execution propagates the same managed PostgreSQL environment to initial and restarted stacks", () => {
   const config = createGatewayChatFaultExecutionConfig({
     storage: "postgres",

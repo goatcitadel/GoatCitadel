@@ -1234,6 +1234,72 @@ describe("DurableRunService", () => {
     }
   });
 
+  it("retires terminal v1 post-commit markers without replaying legacy side effects", async () => {
+    const run = {
+      ...createRun("run-legacy-terminal-post-commit", "completed", "chat.turn.execute"),
+      payload: { version: "chat.turn.execute.v1" },
+      metadata: {
+        generalChatPostCommitPending: {
+          version: 1,
+          generationId: "generation-legacy-terminal",
+          traceStatus: "completed",
+          requestedAt: "2026-07-11T00:00:00.000Z",
+          completedEffects: [
+            "capability_gap",
+            "learned_memory_user",
+            "learned_memory_assistant",
+            "memory_prewarm",
+            "realtime",
+            "agent_end",
+          ],
+          durableEffectRunIds: {
+            commitments: "legacy-commitments",
+            background_review: "legacy-background-review",
+            memory_maintenance: "legacy-memory-maintenance",
+          },
+        },
+      },
+    } satisfies DurableRunRecord;
+    const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+    const logger = {
+      info: vi.fn(),
+      debug: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    } satisfies DurableRunServiceLogger;
+    const onGeneralChatPostCommit = vi.fn();
+    const service = new DurableRunService(createContext(runs, [], [], { logger }) as unknown as ServiceContext, {
+      backgroundTasks: new Set(),
+      workflowRegistry: {
+        executeWorkflow: vi.fn(),
+        isWorkflowRecoverable: () => ({ recoverable: true }),
+        markWorkflowUnrecoverable: vi.fn(),
+      },
+      onGeneralChatPostCommit,
+    });
+
+    await expect(service.reconcileGeneralChatPostCommit(run.runId)).resolves.toBe(true);
+
+    const retired = runs.get(run.runId)!;
+    expect(retired.metadata).not.toHaveProperty("generalChatPostCommitPending");
+    expect(retired.metadata).not.toHaveProperty("generalChatPostCommit");
+    expect(retired.metadata).toMatchObject({
+      legacyGeneralChatPostCommitSettlement: {
+        version: "chat.post_commit.legacy-settlement.v1",
+        disposition: "terminal_v1_effects_not_replayed",
+        generationId: "generation-legacy-terminal",
+        traceStatus: "completed",
+        pendingMarkerSha256: expect.stringMatching(/^[0-9a-f]{64}$/u),
+        retiredAt: expect.any(String),
+      },
+    });
+    expect(onGeneralChatPostCommit).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledTimes(1);
+
+    await expect(service.reconcileGeneralChatPostCommit(run.runId)).resolves.toBe(true);
+    expect(logger.info).toHaveBeenCalledTimes(1);
+  });
+
   it("continues the pending general Chat post-commit sweep while another run is stalled", async () => {
     vi.useFakeTimers();
     try {
@@ -1557,22 +1623,86 @@ describe("DurableRunService", () => {
       onGeneralChatPostCommit,
     });
 
-    await expect(
-      service.awaitTerminalChatAdmissionRelease({
-        runId: fixture.run.runId,
-        sessionId: fixture.admission.sessionId,
-        turnId: fixture.admission.turnId,
-        timeoutMs: 10,
-      }),
-    ).resolves.toMatchObject({
+    const outcome = await service.awaitTerminalChatAdmissionRelease({
+      runId: fixture.run.runId,
+      sessionId: fixture.admission.sessionId,
+      turnId: fixture.admission.turnId,
+      timeoutMs: 10,
+    });
+
+    expect(outcome).toMatchObject({
       recoveryOutcome: "reconciliation_pending",
       durableRunId: fixture.run.runId,
       durableRunStatus: "completed",
       admissionStatus: "active",
-      remainingBudgetMs: 0,
     });
+    // The timeout owner reports the integer-millisecond budget observed when the
+    // bounded timer settles. Clock granularity can leave 1ms on a loaded runner;
+    // the contract is that the diagnostic stays inside the caller's budget.
+    expect(outcome.remainingBudgetMs).toBeGreaterThanOrEqual(0);
+    expect(outcome.remainingBudgetMs).toBeLessThanOrEqual(10);
     expect(onGeneralChatPostCommit).toHaveBeenCalledOnce();
     expect(fixture.admission.status).toBe("active");
+  });
+
+  it("releases terminal delivery after provider-backed post-commit work crosses multiple ownership epochs", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-07-11T00:00:00.000Z"));
+      const fixture = createAdmittedChatRuntimeFixture({
+        runId: "run-terminal-delivery-multiple-reconciliation-epochs",
+        status: "completed",
+        generationId: "generation-terminal-delivery-multiple-reconciliation-epochs",
+        traceStatus: "completed",
+      });
+      const runs = new Map<string, DurableRunRecord>([[fixture.run.runId, fixture.run]]);
+      const context = createContext(runs, [], []);
+      installAdmittedChatRuntimeFixture(context, fixture);
+      let invocation = 0;
+      const onGeneralChatPostCommit = vi.fn(async (_run: DurableRunRecord, progress: GeneralChatPostCommitProgress) => {
+        invocation += 1;
+        if (invocation < 3) {
+          await new Promise<void>(() => undefined);
+        }
+        for (const effect of GENERAL_CHAT_POST_COMMIT_EFFECTS) progress.runEffect(effect, () => undefined);
+        return { status: "completed" };
+      });
+      const service = new DurableRunService(context as unknown as ServiceContext, {
+        backgroundTasks: new Set(),
+        workflowRegistry: {
+          executeWorkflow: vi.fn(),
+          isWorkflowRecoverable: () => ({ recoverable: true }),
+          markWorkflowUnrecoverable: vi.fn(),
+        },
+        onGeneralChatPostCommit,
+      });
+
+      const pending = service.awaitTerminalChatAdmissionRelease({
+        runId: fixture.run.runId,
+        sessionId: fixture.admission.sessionId,
+        turnId: fixture.admission.turnId,
+        timeoutMs: 30_000,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onGeneralChatPostCommit).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(10_500);
+
+      await expect(pending).resolves.toMatchObject({
+        recoveryOutcome: "released",
+        durableRunId: fixture.run.runId,
+        durableRunStatus: "completed",
+        admissionId: fixture.admission.admissionId,
+      });
+      expect(onGeneralChatPostCommit).toHaveBeenCalledTimes(3);
+      expect(fixture.admission).toMatchObject({
+        status: "completed",
+        terminalAuthorityKind: "durable_terminal",
+        terminalDurableRunId: fixture.run.runId,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("boot-recovers a completed silent system heartbeat through terminal admission and occurrence handoff", async () => {

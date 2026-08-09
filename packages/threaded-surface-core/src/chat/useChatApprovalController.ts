@@ -42,6 +42,20 @@ export function useChatApprovalController(input: {
     pushLocalNotice,
   } = input;
   const lastLoadedShellSessionIdRef = useRef<string | null>(null);
+  const {
+    activeStreamRef,
+    pushLocalNotice,
+    selectedSessionId,
+    setCapabilitySuggestions,
+    setDelegationSuggestion,
+    setEditingTurnId,
+    setLocalNotices,
+    setPendingApproval,
+    setPendingAttachments,
+    setPendingUserInput,
+    setSelectedTurnId,
+    setSpecialistSuggestions,
+  } = input;
 
   useEffect(() => {
     if (!selectedSessionId) {
@@ -88,8 +102,8 @@ export function useChatApprovalController(input: {
     setEditingTurnId,
     setLocalNotices,
     setPendingApproval,
-    setPendingUserInput,
     setPendingAttachments,
+    setPendingUserInput,
     setSelectedTurnId,
     setSpecialistSuggestions,
   ]);

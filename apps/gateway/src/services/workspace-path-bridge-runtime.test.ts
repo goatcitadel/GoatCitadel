@@ -18,6 +18,7 @@ import type { WorkspacePathBridgeService } from "./workspace-path-bridge-service
 import {
   deriveProjectBindingVerificationId,
   FilePosixProjectGitBindingStore,
+  sameNativeFileIdentity,
   type FilePosixProjectGitBindingStoreOptions,
   WorkspacePathBridgeRuntime,
 } from "./workspace-path-bridge-runtime.js";
@@ -29,6 +30,15 @@ afterEach(async () => {
 });
 
 describe("WorkspacePathBridgeRuntime", () => {
+  it("compares full-width native file identities without Number precision collapse", () => {
+    const left = { dev: 1n, ino: 9_007_199_254_740_992n };
+    const right = { dev: 1n, ino: 9_007_199_254_740_993n };
+
+    expect(Number(left.ino)).toBe(Number(right.ino));
+    expect(sameNativeFileIdentity(left, right)).toBe(false);
+    expect(sameNativeFileIdentity(left, { ...left })).toBe(true);
+  });
+
   it("establishes an immutable server-derived Git binding per positive project revision", async () => {
     const fixture = createFixture();
     const runtime = fixture.runtime();

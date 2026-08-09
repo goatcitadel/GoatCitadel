@@ -50,6 +50,30 @@ const GATEWAY_CHAT_FAULT_STEP_IDS = Object.freeze([
   "provider-timeout-next-turn-admission",
 ]);
 
+export function buildUsabilityFoundationStackOptions(runtimeRoot, secretEnvKeys) {
+  return {
+    runtimeRoot,
+    includeUi: true,
+    // Foundation proof must exercise one immutable browser bundle. Vite's dev
+    // dependency optimizer can briefly close a pre-bundled module connection
+    // after earlier aggregate lanes have warmed the shared cache, leaving a
+    // later fresh profile with HTML but no React shell.
+    uiMode: "preview",
+    processLogPrefix: "usability-foundation",
+    gatewayEnvOmit: secretEnvKeys,
+    uiEnvOmit: secretEnvKeys,
+    gatewayEnv: {
+      GOATCITADEL_AUTH_MODE: "token",
+      GOATCITADEL_AUTH_TOKEN: FOUNDATION_OPERATOR_TOKEN,
+      GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS: "true",
+      GOATCITADEL_RATE_LIMIT_ENABLED: "false",
+      GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED: "true",
+      GOATCITADEL_CODE_MODE_SANDBOX_REQUIRED: "false",
+      [DETERMINISTIC_LLM_KEY_ENV]: "verification-stub-key",
+    },
+  };
+}
+
 export async function runUsabilityCoreLane(context, options = {}, deps) {
   const snapshotSourceState = deps.snapshotUsabilitySourceState ?? snapshotUsabilitySourceState;
   const collectSecretEnvKeys = deps.collectVerificationSecretEnvKeys ?? collectVerificationSecretEnvKeys;
@@ -422,22 +446,7 @@ export async function runFoundationJourney(context, input) {
   try {
     runtimeRoot = await prepareVerificationRuntime(`${context.runId}-foundation`);
     await writeDeterministicLlmProviderConfig(runtimeRoot, stub.baseUrl);
-    stack = await startVerificationStack(context, {
-      runtimeRoot,
-      includeUi: true,
-      processLogPrefix: "usability-foundation",
-      gatewayEnvOmit: secretEnvKeys,
-      uiEnvOmit: secretEnvKeys,
-      gatewayEnv: {
-        GOATCITADEL_AUTH_MODE: "token",
-        GOATCITADEL_AUTH_TOKEN: FOUNDATION_OPERATOR_TOKEN,
-        GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS: "true",
-        GOATCITADEL_RATE_LIMIT_ENABLED: "false",
-        GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED: "true",
-        GOATCITADEL_CODE_MODE_SANDBOX_REQUIRED: "false",
-        [DETERMINISTIC_LLM_KEY_ENV]: "verification-stub-key",
-      },
-    });
+    stack = await startVerificationStack(context, buildUsabilityFoundationStackOptions(runtimeRoot, secretEnvKeys));
 
     await step(
       "health-and-onboarding",

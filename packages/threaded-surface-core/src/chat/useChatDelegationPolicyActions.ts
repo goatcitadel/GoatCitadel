@@ -305,14 +305,14 @@ export function resolveSelectedTurn(
 }
 
 export function shouldHydrateTraceDelegationRun(
-  current: ActiveChatDelegationRun | null,
+  current: Pick<ActiveChatDelegationRun, "runId" | "attachedTurnId" | "status"> | null,
   runId: string,
   turnId: string,
 ): boolean {
   if (!current || current.attachedTurnId !== turnId) {
     return true;
   }
-  return current.runId === runId;
+  return current.runId === runId && current.status === "running";
 }
 
 function buildDelegationGraph(
@@ -403,6 +403,18 @@ export function useChatDelegationPolicyActions(input: {
   const activeWorkflowTurn = useMemo(() => resolveActiveWorkflowTurn(input.thread), [input.thread]);
   const activeDelegationRunId = activeDelegationRun?.runId;
   const activeDelegationAttachedTurnId = activeDelegationRun?.attachedTurnId;
+  const activeDelegationStatus = activeDelegationRun?.status;
+  const activeDelegationHydrationState = useMemo(
+    () =>
+      activeDelegationStatus
+        ? {
+            runId: activeDelegationRunId,
+            attachedTurnId: activeDelegationAttachedTurnId,
+            status: activeDelegationStatus,
+          }
+        : null,
+    [activeDelegationAttachedTurnId, activeDelegationRunId, activeDelegationStatus],
+  );
 
   useEffect(() => {
     setActiveDelegationRun(null);
@@ -417,7 +429,7 @@ export function useChatDelegationPolicyActions(input: {
     if (!runId || !turnId || !sessionId || input.thread?.sessionId !== sessionId) {
       return;
     }
-    if (activeDelegationAttachedTurnId === turnId && activeDelegationRunId !== runId) {
+    if (!shouldHydrateTraceDelegationRun(activeDelegationHydrationState, runId, turnId)) {
       return;
     }
     let cancelled = false;
@@ -459,8 +471,7 @@ export function useChatDelegationPolicyActions(input: {
       cancelled = true;
     };
   }, [
-    activeDelegationAttachedTurnId,
-    activeDelegationRunId,
+    activeDelegationHydrationState,
     activeWorkflowTurn?.trace.orchestration?.runId,
     activeWorkflowTurn?.turnId,
     input.thread?.sessionId,

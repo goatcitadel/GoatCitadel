@@ -1117,6 +1117,24 @@ function projectGatewayDiagnostics(diagnostics, steps) {
 
 export async function configureVerificationAssistant(runtimeRoot) {
   const configDir = path.join(runtimeRoot, "config");
+  const unifiedPath = path.join(configDir, "goatcitadel.json");
+  const unifiedSource = path.join(configDir, "goatcitadel.example.json");
+  let unified;
+  try {
+    unified = JSON.parse(await fs.readFile(unifiedPath, "utf8"));
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+    unified = JSON.parse(await fs.readFile(unifiedSource, "utf8"));
+  }
+  if (!unified.assistant || typeof unified.assistant !== "object" || Array.isArray(unified.assistant)) {
+    throw new Error("Gateway Chat fault fixture requires an authoritative assistant config object");
+  }
+  unified.assistant.streamIdleTimeoutMs = STREAM_IDLE_TIMEOUT_MS;
+  // Boot seals the unified file and projects it into the compatibility files.
+  // Clear the old seal whenever this isolated fixture changes authoritative data.
+  delete unified.generation;
+  await fs.writeFile(unifiedPath, `${JSON.stringify(unified, null, 2)}\n`, "utf8");
+
   const target = path.join(configDir, "assistant.config.json");
   const source = path.join(configDir, "assistant.config.example.json");
   let config;
@@ -1128,25 +1146,6 @@ export async function configureVerificationAssistant(runtimeRoot) {
   }
   config.streamIdleTimeoutMs = STREAM_IDLE_TIMEOUT_MS;
   await fs.writeFile(target, `${JSON.stringify(config, null, 2)}\n`, "utf8");
-
-  // The unified config is authoritative when it is newer than the split
-  // mirror. Keep both representations aligned or startup config sync will
-  // legitimately overwrite the fixture's five-second watchdog with the
-  // production default before the proof begins.
-  const unifiedTarget = path.join(configDir, "goatcitadel.json");
-  const unifiedSource = path.join(configDir, "goatcitadel.example.json");
-  let unified;
-  try {
-    unified = JSON.parse(await fs.readFile(unifiedTarget, "utf8"));
-  } catch (error) {
-    if (error?.code !== "ENOENT") throw error;
-    unified = JSON.parse(await fs.readFile(unifiedSource, "utf8"));
-  }
-  if (!unified.assistant || typeof unified.assistant !== "object" || Array.isArray(unified.assistant)) {
-    throw new Error("verification unified config is missing the assistant section");
-  }
-  unified.assistant.streamIdleTimeoutMs = STREAM_IDLE_TIMEOUT_MS;
-  await fs.writeFile(unifiedTarget, `${JSON.stringify(unified, null, 2)}\n`, "utf8");
 }
 
 async function ensureOnboardingComplete(gatewayUrl) {

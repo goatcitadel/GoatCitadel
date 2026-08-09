@@ -124,17 +124,19 @@ export function ThreadedBtwSideChatPanel({ sideChat }: { sideChat: ThreadedBtwSi
     if (!sideChat?.open || compact) {
       return;
     }
+    const eventTarget = window;
     const handleResize = () => {
       setClampedPosition(latestPositionRef.current ?? resolveDefaultPosition());
     };
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
+    eventTarget.addEventListener("resize", handleResize);
+    return () => eventTarget.removeEventListener("resize", handleResize);
   }, [compact, resolveDefaultPosition, setClampedPosition, sideChat?.open]);
 
   useEffect(() => {
     if (!dragging) {
       return;
     }
+    const eventTarget = window;
     const handlePointerMove = (event: PointerEvent) => {
       const drag = dragRef.current;
       if (!drag) {
@@ -155,13 +157,13 @@ export function ThreadedBtwSideChatPanel({ sideChat }: { sideChat: ThreadedBtwSi
         writeBtwSideChatPosition(sideChat.workspaceId, latest);
       }
     };
-    window.addEventListener("pointermove", handlePointerMove, { passive: false });
-    window.addEventListener("pointerup", finishDrag);
-    window.addEventListener("pointercancel", finishDrag);
+    eventTarget.addEventListener("pointermove", handlePointerMove, { passive: false });
+    eventTarget.addEventListener("pointerup", finishDrag);
+    eventTarget.addEventListener("pointercancel", finishDrag);
     return () => {
-      window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("pointerup", finishDrag);
-      window.removeEventListener("pointercancel", finishDrag);
+      eventTarget.removeEventListener("pointermove", handlePointerMove);
+      eventTarget.removeEventListener("pointerup", finishDrag);
+      eventTarget.removeEventListener("pointercancel", finishDrag);
     };
   }, [dragging, setClampedPosition, sideChat?.workspaceId]);
 

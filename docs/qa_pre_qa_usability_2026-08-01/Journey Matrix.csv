@@ -1,0 +1,12 @@
+Journey owner,Required coverage,Primary proof,Status
+Foundations,"Install/start; health; token/basic/device auth; revoked/persisted credentials; onboarding; workspace; provider; disposable Chat",verify:usability foundation plus auth/runtime lanes,Pending
+Chat,"Send stream stop retry edit branch; sessions; files URLs audio images citations tools; planning research delegation synthesis; approvals input blockers; restart/resume; governed Code Mode artifacts and Run Detail",verify:usability browser actions plus durable/agentic proof,Pending
+Projects,"Project/workspace CRUD conflicts binding and isolation",verify:usability browser actions,Pending
+Library,"Agents capabilities skills activation; memory lifecycle; knowledge/external sources; notes communications files artifacts; Prompt Pack lifecycle; Citadel lifecycle/isolation",verify:usability browser actions plus memory/external-source lanes,Pending
+Ops,"Boards activity sessions costs schedules notifications approvals quality runtime diagnostics backup recovery",verify:usability browser actions plus backup/runtime lanes,Pending
+Settings,"General onboarding budget providers/OAuth/models access/device grants permissions/trust runtime/local AI workspaces integrations/channels MCP/tool grants",verify:usability browser actions plus auth/runtime lanes,Pending
+Experimental,"All 6 experimental routes remain labeled truthful and fail safe",surface/usability manifests,Pending
+Compatibility,"20 legacy query redirects plus direct /cowork /code /settings/safety normalization",surface regression,Pending
+Cross-cutting data,"Empty populated long malformed stale conflicting and degraded/recovery states",usability actions and fault injection,Pending
+Responsive/accessibility,"Desktop/mobile/tablet; virtual keyboard; touch; themes; zoom/reflow; reduced motion; keyboard; focus; names; live announcements",surface visual accessibility lanes,Pending
+Deployment,"SQLite PostgreSQL packaged Windows and responsive companion/device boundary",postgres desktop install and usability lanes,Pending

@@ -63,6 +63,16 @@ public sealed class LauncherService
         var explicitHome = _environment.Get("GOATCITADEL_HOME");
         if (!string.IsNullOrWhiteSpace(explicitHome))
         {
+            var explicitAppDir = _environment.Get("GOATCITADEL_APP_DIR");
+            if (!string.IsNullOrWhiteSpace(explicitAppDir))
+            {
+                var isolatedInvocation = InvocationUnderExplicitAppDir(explicitHome, explicitAppDir);
+                if (isolatedInvocation is not null)
+                {
+                    return isolatedInvocation;
+                }
+            }
+
             var invocation = InvocationUnderInstallRoot(explicitHome);
             if (invocation is not null)
             {
@@ -156,6 +166,27 @@ public sealed class LauncherService
 
         var script = Path.Join(root, "app", "bin", "goatcitadel.mjs");
         return File.Exists(script) ? InvocationForLauncher(script, root) : null;
+    }
+
+    private static LauncherInvocation? InvocationUnderExplicitAppDir(string runtimeRoot, string appDir)
+    {
+        var fullRuntimeRoot = Path.GetFullPath(runtimeRoot);
+        var fullAppDir = Path.GetFullPath(appDir);
+        var manifest = Path.Join(fullAppDir, "release-manifest.json");
+        var packagedNode = Path.Join(fullAppDir, "runtime", "node", "node.exe");
+        var packagedScript = Path.Join(fullAppDir, "bin", "goatcitadel.mjs");
+        if (!File.Exists(manifest) || !File.Exists(packagedNode) || !File.Exists(packagedScript))
+        {
+            return null;
+        }
+
+        return new LauncherInvocation(
+            packagedNode,
+            new[] { packagedScript },
+            fullRuntimeRoot,
+            fullRuntimeRoot,
+            fullAppDir,
+            false);
     }
 
     private LauncherInvocation InvocationForLauncher(string launcher, string? installRootOverride)

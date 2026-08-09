@@ -100,6 +100,34 @@ public sealed class LauncherServiceTests
     }
 
     [TestMethod]
+    public void ResolvesPackagedLauncherWithSeparateRuntimeHomeAndAppDir()
+    {
+        var root = CreateTempRoot();
+        var runtimeHome = Path.Join(root, "isolated-runtime");
+        var appDir = Path.Join(root, "installed-candidate", "app");
+        Directory.CreateDirectory(runtimeHome);
+        var node = Touch(Path.Join(appDir, "runtime", "node", "node.exe"));
+        var script = Touch(Path.Join(appDir, "bin", "goatcitadel.mjs"));
+        Touch(Path.Join(appDir, "release-manifest.json"));
+        var service = new LauncherService(new LauncherEnvironment(
+            new Dictionary<string, string?>
+            {
+                ["GOATCITADEL_HOME"] = runtimeHome,
+                ["GOATCITADEL_APP_DIR"] = appDir,
+            },
+            currentExePath: Path.Join(appDir, "desktop", "GoatCitadel-Mission-Control-Windows.exe")));
+
+        var invocation = service.ResolveLauncher();
+
+        Assert.AreEqual(node, invocation.Program);
+        Assert.AreEqual(script, invocation.ArgsPrefix.Single());
+        Assert.AreEqual(Path.GetFullPath(runtimeHome), invocation.InstallRoot);
+        Assert.AreEqual(Path.GetFullPath(runtimeHome), invocation.WorkingDir);
+        Assert.AreEqual(Path.GetFullPath(appDir), invocation.AppDir);
+        Assert.IsFalse(invocation.WindowsShell);
+    }
+
+    [TestMethod]
     public void DoesNotResolvePackagedLauncherFromDesktopExeAncestorsWhenManifestMissing()
     {
         var root = CreateTempRoot();

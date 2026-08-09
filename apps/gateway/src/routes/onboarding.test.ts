@@ -97,6 +97,34 @@ describe("onboarding routes", () => {
     expect(read).toHaveBeenCalledOnce();
   });
 
+  it("maps the onboarding completion config-generation write fence to a retryable conflict", async () => {
+    const generationFence = new ConflictError({
+      code: "STATE_CONFLICT",
+      message: "Settings are temporarily unavailable while runtime owners reconcile a config generation.",
+      details: { currentRevision: 3, transactionState: "committed" },
+    });
+    const markOnboardingComplete = vi.fn(() => {
+      throw generationFence;
+    });
+    app = Fastify();
+    app.decorate("services", { onboarding: { markOnboardingComplete } } as never);
+    await app.register(onboardingRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/onboarding/complete",
+      payload: { completedBy: "verification" },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({
+      code: "STATE_CONFLICT",
+      error: "Settings are temporarily unavailable while runtime owners reconcile a config generation.",
+      details: { currentRevision: 3, transactionState: "committed" },
+    });
+    expect(markOnboardingComplete).toHaveBeenCalledWith("verification");
+  });
+
   it("validates bootstrap payloads", async () => {
     const bootstrapOnboarding = vi.fn();
     app = Fastify();

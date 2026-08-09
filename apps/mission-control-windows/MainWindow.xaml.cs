@@ -418,7 +418,7 @@ public sealed partial class MainWindow : Window
             return false;
         }
 
-        MissionWebView.Source = uri;
+        MissionWebView.CoreWebView2.Navigate(uri.AbsoluteUri);
         return true;
     }
 
@@ -440,7 +440,7 @@ public sealed partial class MainWindow : Window
         }
 
         ShowAndFocus();
-        MissionWebView.Source = uri;
+        MissionWebView.CoreWebView2.Navigate(uri.AbsoluteUri);
         StartupPanel.Visibility = Visibility.Collapsed;
         MissionWebView.Visibility = Visibility.Visible;
         return true;

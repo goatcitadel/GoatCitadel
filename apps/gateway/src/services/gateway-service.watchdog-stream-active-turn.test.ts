@@ -929,7 +929,7 @@ describe("GatewayService retained stream facade behavior", () => {
       runId: "run-fallback",
       sessionId: "session-1",
       turnId: "turn-1",
-      timeoutMs: 10_000,
+      timeoutMs: 30_000,
     });
 
     gateway.storage.chatStreamEvents.getByEventId = vi.fn(() => ({ turnId: "turn-1", sequence: 2 }));

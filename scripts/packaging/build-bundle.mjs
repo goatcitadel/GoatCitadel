@@ -19,6 +19,7 @@ import {
   renderPosixLauncher,
   renderWindowsLaunchers,
 } from "./lib/package-renderers.mjs";
+import { assertDesktopArtifactProvenance } from "./lib/desktop-artifact-provenance.mjs";
 import { materializeHardLinkedFiles, removeEmptyDirectories } from "./lib/release-payload-ownership.mjs";
 import { removeDirectorySafely } from "./safe-cleanup.mjs";
 
@@ -379,6 +380,11 @@ function copyDesktopExecutable() {
       `Desktop executable is missing: ${desktopArtifactPath}. Run ${buildCommand} before package:bundle, or pass --skip-desktop for a browser-only bundle.`,
     );
   }
+  assertDesktopArtifactProvenance(path.join(path.dirname(desktopArtifactPath), "desktop-manifest.json"), {
+    target,
+    sourceCommit,
+    sourceModified,
+  });
   removeDirectory(desktopRuntimeDir);
   copyDirectory(path.dirname(desktopArtifactPath), desktopRuntimeDir);
   copyIfExists(
