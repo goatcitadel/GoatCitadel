@@ -186,16 +186,29 @@ validation and 9/9 Docker-secret documentation tests; `git diff --check` passed.
   `listening_live` only after its preflight succeeds. The current-authority
   resolver remains intentionally unconsumed until M3 composes it with node and
   assignment mutation owners; raw evidence rows are never callable authority.
+- The protected Windows service now has a production-dark PoP-v2 signing
+  operation over the exact contract-owned 285-byte preimage. Its local
+  operation authority binds the authenticated caller SID, caller-pinned state,
+  active generation, keyset receipt, and exact preimage before state or key
+  access. Delete-on-close staging survives the injected crash boundary, and
+  deterministic x64/ARM64 builds plus x64 execution/ASan proof pass. The
+  untrusted helper performs one sign exchange and has query-only SCM rights; it
+  cannot start or restart the service.
 - An exact-commit Codex Security review closed all 29 changed source files and
   nine trust surfaces with zero findings or deferred rows. Root integration
   proof passes focused Gateway, contracts, provisioner, atomic-storage, paired
   migration-parity, and touched-package typecheck lanes.
+- A separate exact-commit trust-chain review closed the PoP-v2 signer with no
+  blocker or residual integration issue. Its ten route descriptors remain
+  production-dark, and activation still requires an administrator-owned
+  installed-service lifecycle plus real two-machine proof.
 
 ### Current work
 
-- Compose the protected Windows signer helper into the first real worker
-  bootstrap client without weakening its authenticated named-pipe/SCM custody
-  boundary or reusing a signer-operation ID across fresh TLS attempts.
+- Add an administrator-owned installed-service availability/restart
+  coordinator. Keep `StartServiceW` and equivalent service-control authority
+  out of the untrusted worker client, and keep the one-exchange signer dark
+  until that owner supplies the exact current state/generation/receipt pin.
 - Keep current-authority reads and every downstream mutation transactionally
   fenced through M3 node admission and assignment ownership.
 - Prove operator-visible diagnostics and the real closed-ingress, N+1 rotation,
@@ -215,10 +228,21 @@ Owner contract: `OPENCLAW_HERMES_PARITY_PROGRAM.md`, `HX-501`.
 
 ### Current work
 
+- A production-dark task-bound durable-Chat offer/claim/workload owner now
+  derives eligibility from the canonical durable payload and current session,
+  M2 credential, M3 mesh admission, workspace, capability-profile, and parent
+  run authorities. The worker supplies its lease secret, Gateway hashes it
+  before the atomic claim, and response-loss replay returns secret-free
+  canonical state. Route codes 8 through 10 and their PoP-v2 descriptors are
+  reserved, but no native handler or worker poller is registered.
 - Add a production-dark, credential-authenticated assignment RPC over the
   existing mTLS/PoP listener for synchronization, lease renewal, ordered event
   append, cancellation reads, and settlement. Keep it uncomposed until M2 can
   supply a currently verified admitted key and node-admission authority.
+- Compose the dispatch poll/claim/workload-read operations only after an
+  authenticated worker runtime can retain its credential and lease secret,
+  obtain the exact protected signing pin, and reconnect without replaying a
+  one-time secret.
 - Connect scheduler dispatch to generation-fenced assignments and the live
   worker protocol.
 - Execute provider/tool work through Gateway-owned policy and secrets.
