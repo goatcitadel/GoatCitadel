@@ -5,6 +5,7 @@ import type {
   ModelUsagePricingLineage,
 } from "@goatcitadel/gateway-core";
 import { extractProviderOwnedOutputCapErrorText, resolveOutputCapRecovery } from "./llm-output-cap-recovery.js";
+import type { Awaitable } from "./remote-worker-owner-port.js";
 
 /**
  * HX-503 assignment-bound inference LLM adapter (production-dark).
@@ -63,20 +64,20 @@ export interface RemoteWorkerInferenceProviderTransport {
 /** Narrow HX-306 accounting seam, satisfied structurally by ModelUsageAccountingService. */
 export interface RemoteWorkerInferenceAccountingHandle {
   observe(usage: unknown): void;
-  succeed(usage?: unknown): unknown;
-  fail(error: unknown, usage?: unknown): unknown;
-  cancel(reason?: unknown): unknown;
+  succeed(usage?: unknown): Awaitable<unknown>;
+  fail(error: unknown, usage?: unknown): Awaitable<unknown>;
+  cancel(reason?: unknown): Awaitable<unknown>;
 }
 
 export interface RemoteWorkerInferenceAccountingReservation {
   readonly eventId: string;
-  accept(): RemoteWorkerInferenceAccountingHandle;
-  abandon(): void;
-  markDispatchUnknown(reason?: string): void;
+  accept(): Awaitable<RemoteWorkerInferenceAccountingHandle>;
+  abandon(): Awaitable<void>;
+  markDispatchUnknown(reason?: string): Awaitable<void>;
 }
 
 export interface RemoteWorkerInferenceAccountingPort {
-  prepareDispatch(input: BeginModelUsageDispatchInput): RemoteWorkerInferenceAccountingReservation;
+  prepareDispatch(input: BeginModelUsageDispatchInput): Awaitable<RemoteWorkerInferenceAccountingReservation>;
 }
 
 export interface RemoteWorkerInferenceDispatchRequest {
@@ -127,7 +128,7 @@ export class RemoteWorkerInferenceLlmAdapter {
 
     for (;;) {
       const disposition = transportAttemptIndex === 0 ? "initial" : "reduced_retry";
-      const reservation = this.accounting.prepareDispatch({
+      const reservation = await this.accounting.prepareDispatch({
         source: "llm_service",
         attribution: request.attribution,
         effectiveProviderId: request.resolution.providerId,
@@ -145,9 +146,9 @@ export class RemoteWorkerInferenceLlmAdapter {
       });
       usageEventIds.push(reservation.eventId);
 
-      let result: RemoteWorkerInferenceProviderResult;
+      let pending: Promise<RemoteWorkerInferenceProviderResult>;
       try {
-        result = await this.transport.dispatch({
+        pending = this.transport.dispatch({
           resolution: request.resolution,
           messages: request.messages,
           effectiveOutputTokenCap,
@@ -158,15 +159,37 @@ export class RemoteWorkerInferenceLlmAdapter {
         });
       } catch (error) {
         // The transport threw before a durable network attempt was accepted.
-        reservation.abandon();
+        await reservation.abandon();
         return this.failure("failed", usageEventIds, transportAttemptIndex + 1, classifyThrow(error, request.signal));
       }
 
-      const handle = reservation.accept();
+      let handle: RemoteWorkerInferenceAccountingHandle;
+      try {
+        handle = await reservation.accept();
+      } catch {
+        // The provider may have accepted the request, but the canonical attempt
+        // fence did not persist. Never await, retry, or expose that result.
+        void pending.catch(() => undefined);
+        await reservation.markDispatchUnknown();
+        return this.failure(
+          "dispatch_unknown",
+          usageEventIds,
+          transportAttemptIndex + 1,
+          "transport_acceptance_persistence_failed",
+        );
+      }
+
+      let result: RemoteWorkerInferenceProviderResult;
+      try {
+        result = await pending;
+      } catch (error) {
+        await handle.fail(error);
+        return this.failure("failed", usageEventIds, transportAttemptIndex + 1, classifyThrow(error, request.signal));
+      }
 
       if (result.outcome === "success") {
         handle.observe(result.usage ?? {});
-        handle.succeed();
+        await handle.succeed();
         return {
           terminalState: "completed",
           chunks: result.chunks.map((chunk) => chunk.text),
@@ -177,7 +200,7 @@ export class RemoteWorkerInferenceLlmAdapter {
       }
 
       if (result.outcome === "output_cap_error") {
-        handle.fail(new Error("provider_output_cap"));
+        await handle.fail(new Error("provider_output_cap"));
         if (recoveryRemaining > 0) {
           const errorText = extractProviderOwnedOutputCapErrorText(result.providerErrorBody);
           const decision = errorText
@@ -204,7 +227,7 @@ export class RemoteWorkerInferenceLlmAdapter {
       }
 
       if (result.outcome === "dispatch_unknown") {
-        handle.fail(new Error(result.errorCode));
+        await handle.fail(new Error(result.errorCode));
         return this.failure(
           "dispatch_unknown",
           usageEventIds,
@@ -213,7 +236,7 @@ export class RemoteWorkerInferenceLlmAdapter {
         );
       }
 
-      handle.fail(new Error(result.errorCode));
+      await handle.fail(new Error(result.errorCode));
       return this.failure("failed", usageEventIds, transportAttemptIndex + 1, sanitizeCode(result.errorCode));
     }
   }
