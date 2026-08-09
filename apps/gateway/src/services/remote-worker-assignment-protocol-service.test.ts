@@ -4,9 +4,12 @@ import {
   REMOTE_WORKER_ASSIGNMENT_EVENT_GENESIS_SHA256,
   REMOTE_WORKER_ASSIGNMENT_EVENT_SCHEMA_VERSION,
   REMOTE_WORKER_ASSIGNMENT_MANIFEST_SCHEMA_VERSION,
+  REMOTE_WORKER_MESH_NODE_AUTHORITY_FENCE_SCHEMA_VERSION,
+  REMOTE_WORKER_POP_V2_SCHEMA_VERSION,
   REMOTE_WORKER_PROTOCOL_VERSION,
   REMOTE_WORKER_RUNTIME_MANIFEST_SCHEMA_VERSION,
   buildRemoteWorkerAssignmentParentContext,
+  buildRemoteWorkerPopV2Preimage,
   buildRemoteWorkerRuntimeCredentialClaims,
   canonicalJsonString,
   remoteWorkerAssignmentParentContextSha256,
@@ -35,10 +38,15 @@ import {
   REMOTE_WORKER_ASSIGNMENT_WORKER_SETTLEMENT_SCHEMA_VERSION,
   RemoteWorkerAssignmentProtocolService,
   type RemoteWorkerAssignmentProtocolRequest,
+  type RemoteWorkerAssignmentMeshAuthorityPort,
   type RemoteWorkerAssignmentProtocolStorePort,
   type RemoteWorkerAssignmentRuntimeCredentialAuthority,
   type RemoteWorkerAssignmentRuntimeCredentialAuthorityPort,
 } from "./remote-worker-assignment-protocol-service.js";
+import type {
+  CurrentRemoteWorkerRuntimeCredentialAuthority,
+  RemoteWorkerCurrentRuntimeCredentialAuthorityPort,
+} from "./remote-worker-current-authority-service.js";
 import {
   REMOTE_WORKER_POP_SCHEMA_VERSION,
   buildRemoteWorkerPopMaterial,
@@ -273,7 +281,7 @@ function createHarness(seed: string): Harness {
 function authorityFor(
   h: Harness,
   credentialTokenSha256: string,
-): RemoteWorkerAssignmentRuntimeCredentialAuthority | undefined {
+): CurrentRemoteWorkerRuntimeCredentialAuthority | undefined {
   const resolved = h.admissions.resolveRuntimeCredentialByHash(credentialTokenSha256);
   if (resolved === undefined) return undefined;
   return {
@@ -281,10 +289,10 @@ function authorityFor(
     credentialGeneration: resolved.credential.credentialGeneration,
     authorizationCredentialSha256: credentialTokenSha256,
     registryWorkspaceId: resolved.generation.registryWorkspaceId,
+    bootstrapId: resolved.generation.bootstrapId,
     workerId: resolved.generation.workerId,
     workerGeneration: resolved.generation.workerGeneration,
     nodeId: resolved.generation.nodeId,
-    nodeAdmissionGeneration: h.nodeAdmissionGeneration,
     publicKeySpkiDer: Buffer.from(h.publicKeySpkiDer),
     publicKeySpkiSha256: resolved.generation.publicKeySpkiSha256,
     clientCertificateSha256: resolved.generation.clientCertificateSha256,
@@ -292,6 +300,8 @@ function authorityFor(
     runtimeManifestSha256: resolved.generation.runtimeManifestSha256,
     workspaceCeilingSha256: resolved.generation.workspaceCeilingSha256,
     capabilityCeilingSha256: resolved.generation.capabilityCeilingSha256,
+    protectedAdmissionEnvelopeSha256: D(`${resolved.generation.workerId}:protected-envelope`),
+    protectedAdmissionContextSha256: D(`${resolved.generation.workerId}:protected-context`),
     claims: resolved.credential.claims,
     claimsSha256: resolved.credential.claimsSha256,
   };
@@ -304,19 +314,46 @@ function createService(
       authority: RemoteWorkerAssignmentRuntimeCredentialAuthority,
     ) => RemoteWorkerAssignmentRuntimeCredentialAuthority;
     readonly assignments?: RemoteWorkerAssignmentProtocolStorePort;
+    readonly meshAdmissions?: RemoteWorkerAssignmentMeshAuthorityPort;
   } = {},
 ): RemoteWorkerAssignmentProtocolService {
-  const credentialAuthority: RemoteWorkerAssignmentRuntimeCredentialAuthorityPort = {
+  const currentAuthority: RemoteWorkerCurrentRuntimeCredentialAuthorityPort = {
     resolveByCredentialTokenSha256: (credentialTokenSha256) => {
       const authority = authorityFor(h, credentialTokenSha256);
       return authority === undefined ? undefined : (options.authorityTransform?.(authority) ?? authority);
     },
   };
+  const credentialAuthority: RemoteWorkerAssignmentRuntimeCredentialAuthorityPort = currentAuthority;
   return new RemoteWorkerAssignmentProtocolService({
     credentialAuthority,
+    meshAdmissions: options.meshAdmissions ?? {
+      resolveCurrentForRuntimeCredential: (input) => meshAuthorityFor(h, input),
+    },
     nonceConsumer: h.nonces,
     assignments: options.assignments ?? h.assignments,
     clock: () => new Date(h.now),
+  });
+}
+
+function meshAuthorityFor(
+  h: Harness,
+  input: Parameters<RemoteWorkerAssignmentMeshAuthorityPort["resolveCurrentForRuntimeCredential"]>[0],
+) {
+  return Object.freeze({
+    schemaVersion: REMOTE_WORKER_MESH_NODE_AUTHORITY_FENCE_SCHEMA_VERSION,
+    registryWorkspaceId: input.registryWorkspaceId,
+    bootstrapId: input.bootstrapId,
+    workerId: input.workerId,
+    workerGeneration: input.workerGeneration,
+    credentialId: input.credentialId,
+    credentialGeneration: input.credentialGeneration,
+    workspaceId: input.workspaceId,
+    nodeId: input.nodeId,
+    admissionGeneration: h.nodeAdmissionGeneration,
+    joinAuthorityGeneration: 1,
+    joinCredentialSha256: D(`${h.workerId}:mesh-join`),
+    protectedAdmissionEnvelopeSha256: input.protectedAdmissionEnvelopeSha256,
+    protectedAdmissionContextSha256: input.protectedAdmissionContextSha256,
   });
 }
 
@@ -324,33 +361,76 @@ function rpcRequest(
   h: Harness,
   route: (typeof REMOTE_WORKER_ASSIGNMENT_RPC_ROUTES)[keyof typeof REMOTE_WORKER_ASSIGNMENT_RPC_ROUTES],
   payload: object,
-  options: { readonly idempotencyKey?: string; readonly nonce?: string; readonly credentialSecret?: string } = {},
+  options: {
+    readonly idempotencyKey?: string;
+    readonly nonce?: string;
+    readonly credentialSecret?: string;
+    readonly proofVersion?: "legacy_v1" | "protected_v2";
+  } = {},
 ): RemoteWorkerAssignmentProtocolRequest {
   requestSequence += 1;
   const idempotencyKey = options.idempotencyKey ?? `rpc:${requestSequence}`;
   const nonce = options.nonce ?? Buffer.alloc(32, requestSequence % 251).toString("base64url");
   const credentialSecret = options.credentialSecret ?? h.credentialSecret;
-  const body: RemoteWorkerProtocolBody = Object.freeze({
-    schemaVersion: REMOTE_WORKER_POP_SCHEMA_VERSION,
-    operation: route.operation,
-    authorityId: h.credentialId,
-    authorityGeneration: h.credentialGeneration,
-    idempotencyKey,
-    payload: payload as RemoteWorkerProtocolBody["payload"],
-  });
+  const body: RemoteWorkerProtocolBody = Object.freeze(
+    options.proofVersion === "legacy_v1"
+      ? {
+          schemaVersion: REMOTE_WORKER_POP_SCHEMA_VERSION,
+          operation: route.operation,
+          authorityId: h.credentialId,
+          authorityGeneration: h.credentialGeneration,
+          idempotencyKey,
+          payload: payload as RemoteWorkerProtocolBody["payload"],
+        }
+      : {
+          schemaVersion: REMOTE_WORKER_POP_V2_SCHEMA_VERSION,
+          operation: route.operation,
+          authorityId: h.credentialId,
+          authorityGeneration: h.credentialGeneration,
+          workerGeneration: h.workerGeneration,
+          idempotencyKey,
+          payload: payload as RemoteWorkerProtocolBody["payload"],
+        },
+  );
   const transportIdentity = transport(h, requestSequence);
-  const material = buildRemoteWorkerPopMaterial({
-    rawPath: route.rawPath,
-    bodySha256: remoteWorkerProtocolBodySha256(body),
-    operation: route.operation,
-    nonce,
-    timestamp: h.now.toISOString(),
-    idempotencyKey,
-    authorityId: h.credentialId,
-    authorityGeneration: h.credentialGeneration,
-    transportIdentity,
-  });
-  const proof = sign(null, Buffer.from(canonicalJsonString(material), "utf8"), h.privateKey).toString("base64url");
+  const signedBytes =
+    body.schemaVersion === REMOTE_WORKER_POP_V2_SCHEMA_VERSION
+      ? Buffer.from(
+          buildRemoteWorkerPopV2Preimage({
+            schemaVersion: REMOTE_WORKER_POP_V2_SCHEMA_VERSION,
+            method: "POST",
+            rawPath: route.rawPath,
+            operation: route.operation,
+            bodySha256: remoteWorkerProtocolBodySha256(body),
+            nonce,
+            timestamp: h.now.toISOString(),
+            idempotencyKey,
+            authorityKind: "credential",
+            authorityId: h.credentialId,
+            authorityGeneration: h.credentialGeneration,
+            workerGeneration: h.workerGeneration,
+            tlsExporterSha256: transportIdentity.tlsExporterSha256,
+            clientCertificateSha256: transportIdentity.certificateDerSha256,
+            workerPublicKeySpkiSha256: h.publicKeySpkiSha256,
+          }),
+        )
+      : Buffer.from(
+          canonicalJsonString(
+            buildRemoteWorkerPopMaterial({
+              rawPath: route.rawPath,
+              bodySha256: remoteWorkerProtocolBodySha256(body),
+              operation: route.operation,
+              nonce,
+              timestamp: h.now.toISOString(),
+              idempotencyKey,
+              authorityId: h.credentialId,
+              authorityGeneration: h.credentialGeneration,
+              transportIdentity,
+            }),
+          ),
+          "utf8",
+        );
+  const proof = sign(null, signedBytes, h.privateKey).toString("base64url");
   return Object.freeze({
     method: "POST",
     rawPath: route.rawPath,
@@ -438,6 +518,56 @@ function storeWithSettlementResponseLoss(
 }
 
 describe("RemoteWorkerAssignmentProtocolService", () => {
+  it("requires protected PoP-v2 and rejects the legacy proof before durable nonce consumption", async () => {
+    const h = createHarness("protected-v2");
+    const consume = vi.fn((input: Parameters<RemoteWorkerNonceRepository["consume"]>[0]) => h.nonces.consume(input));
+    const resolveMesh = vi.fn(
+      (input: Parameters<RemoteWorkerAssignmentMeshAuthorityPort["resolveCurrentForRuntimeCredential"]>[0]) =>
+        meshAuthorityFor(h, input),
+    );
+    const service = new RemoteWorkerAssignmentProtocolService({
+      credentialAuthority: {
+        resolveByCredentialTokenSha256: (credentialTokenSha256) => authorityFor(h, credentialTokenSha256),
+      },
+      meshAdmissions: {
+        resolveCurrentForRuntimeCredential: resolveMesh,
+      },
+      nonceConsumer: { consume },
+      assignments: h.assignments,
+      clock: () => new Date(h.now),
+    });
+    const payload = commonPayload(h, REMOTE_WORKER_ASSIGNMENT_SYNC_SCHEMA_VERSION);
+
+    await expect(
+      service.execute(
+        rpcRequest(h, REMOTE_WORKER_ASSIGNMENT_RPC_ROUTES.sync, payload, {
+          proofVersion: "legacy_v1",
+          nonce: token("protected-v2:legacy-nonce"),
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "REMOTE_WORKER_ASSIGNMENT_RPC_REJECTED" });
+    expect(consume).not.toHaveBeenCalled();
+    expect(resolveMesh).not.toHaveBeenCalled();
+
+    await expect(
+      service.execute(
+        rpcRequest(h, REMOTE_WORKER_ASSIGNMENT_RPC_ROUTES.sync, payload, {
+          nonce: token("protected-v2:v2-nonce"),
+        }),
+      ),
+    ).resolves.toMatchObject({ disposition: "synchronized" });
+    expect(consume).toHaveBeenCalledTimes(1);
+    expect(resolveMesh).toHaveBeenCalledWith(
+      expect.objectContaining({
+        credentialId: h.credentialId,
+        authorizationCredentialSha256: D(h.credentialSecret),
+        workspaceId: "default",
+        nodeId: h.nodeId,
+      }),
+    );
+    expect(JSON.stringify(resolveMesh.mock.calls)).not.toContain(h.credentialSecret);
+  });
+
   it("syncs an exact active authority and rejects nonce replay plus credential/workspace/capability/generation/token drift", async () => {
     const h = createHarness("sync");
     const service = createService(h);
@@ -468,6 +598,24 @@ describe("RemoteWorkerAssignmentProtocolService", () => {
         ),
       ),
     ).rejects.toBeDefined();
+
+    const staleMeshService = createService(h, {
+      meshAdmissions: {
+        resolveCurrentForRuntimeCredential: (input) => ({
+          ...meshAuthorityFor(h, input),
+          admissionGeneration: h.nodeAdmissionGeneration + 1,
+        }),
+      },
+    });
+    await expect(
+      staleMeshService.execute(
+        rpcRequest(
+          h,
+          REMOTE_WORKER_ASSIGNMENT_RPC_ROUTES.sync,
+          commonPayload(h, REMOTE_WORKER_ASSIGNMENT_SYNC_SCHEMA_VERSION),
+        ),
+      ),
+    ).rejects.toMatchObject({ code: "REMOTE_WORKER_ASSIGNMENT_RPC_REJECTED" });
     await expect(
       service.execute(
         rpcRequest(
@@ -718,6 +866,9 @@ describe("RemoteWorkerAssignmentProtocolService", () => {
     const consume = vi.fn((input: Parameters<RemoteWorkerNonceRepository["consume"]>[0]) => h.nonces.consume(input));
     const service = new RemoteWorkerAssignmentProtocolService({
       credentialAuthority: { resolveByCredentialTokenSha256: resolve },
+      meshAdmissions: {
+        resolveCurrentForRuntimeCredential: (input) => meshAuthorityFor(h, input),
+      },
       nonceConsumer: { consume },
       assignments: h.assignments,
       clock: () => new Date(h.now),

@@ -11,6 +11,7 @@ import {
   assertRemoteWorkerRuntimeCredentialClaims,
   canonicalJsonString,
   evaluateRemoteWorkerRuntimeCredentialRoutePolicy,
+  normalizeRemoteWorkerMeshNodeAuthorityFence,
   normalizeAppendRemoteWorkerAssignmentEventsCommand,
   normalizeRenewRemoteWorkerAssignmentLeaseCommand,
   normalizeSettleRemoteWorkerAssignmentCommand,
@@ -23,6 +24,7 @@ import {
   type RemoteWorkerAssignmentRecord,
   type RemoteWorkerAssignmentSettlementOutcome,
   type RemoteWorkerAssignmentSettlementRecord,
+  type RemoteWorkerMeshNodeAuthorityFence,
   type RemoteWorkerRuntimeCredentialClaims,
   type RenewRemoteWorkerAssignmentLeaseCommand,
   type ResolvedRemoteWorkerAssignmentAuthority,
@@ -31,6 +33,7 @@ import {
 import type {
   RemoteWorkerAssignmentAggregate,
   RenewRemoteWorkerAssignmentLeaseOutcome,
+  ResolveCurrentRemoteWorkerMeshNodeAdmissionInput,
   ResolveRemoteWorkerAssignmentControlReadInput,
   ResolvedRemoteWorkerAssignmentControlReadAuthority,
   SettleRemoteWorkerAssignmentOutcome,
@@ -45,6 +48,10 @@ import {
   type RemoteWorkerProtocolBody,
   type RemoteWorkerResolvedAuthority,
 } from "./remote-worker-protocol.js";
+import type {
+  CurrentRemoteWorkerRuntimeCredentialAuthority,
+  RemoteWorkerCurrentRuntimeCredentialAuthorityPort,
+} from "./remote-worker-current-authority-service.js";
 import type { RemoteWorkerRequestHeaders, RemoteWorkerTransportIdentity } from "./remote-worker-transport-identity.js";
 
 export const REMOTE_WORKER_ASSIGNMENT_RPC_RESPONSE_SCHEMA_VERSION =
@@ -87,45 +94,22 @@ type RemoteWorkerAssignmentRpcRoute =
   (typeof REMOTE_WORKER_ASSIGNMENT_RPC_ROUTES)[keyof typeof REMOTE_WORKER_ASSIGNMENT_RPC_ROUTES];
 
 /**
- * Current, non-revoked runtime credential authority joined with the canonical
- * admitted-key evidence and current node-admission generation. Production
- * composition must obtain `publicKeySpkiDer` from M2's protected-evidence
- * owner; this service is not a key owner and persists none of these fields.
+ * Current, non-revoked runtime credential authority joined with canonical M2
+ * admitted-key evidence. Production composition must obtain
+ * `publicKeySpkiDer` and both protected-evidence digests from the M2
+ * current-authority owner; this service is not a key owner and persists none
+ * of these fields. This protocol resolves the current assignment-workspace
+ * mesh authority and compares it with the committed generation; assignment
+ * storage repeats the relevant fence under its own lock for active reads and
+ * mutations. No token-level node-admission generation is invented here.
  */
-export interface RemoteWorkerAssignmentRuntimeCredentialAuthority {
-  readonly credentialId: string;
-  readonly credentialGeneration: number;
-  readonly authorizationCredentialSha256: string;
-  readonly registryWorkspaceId: string;
-  readonly workerId: string;
-  readonly workerGeneration: number;
-  readonly nodeId: string;
-  readonly nodeAdmissionGeneration: number;
-  readonly publicKeySpkiDer: Buffer;
-  readonly publicKeySpkiSha256: string;
-  readonly clientCertificateSha256: string;
-  readonly transportTrustAnchorSha256: string;
-  readonly runtimeManifestSha256: string;
-  readonly workspaceCeilingSha256: string;
-  readonly capabilityCeilingSha256: string;
-  readonly claims: RemoteWorkerRuntimeCredentialClaims;
-  readonly claimsSha256: string;
-}
+export type RemoteWorkerAssignmentRuntimeCredentialAuthority = CurrentRemoteWorkerRuntimeCredentialAuthority;
 
-export interface RemoteWorkerAssignmentRuntimeCredentialAuthorityPort {
-  /**
-   * Resolve only the latest fresh credential of the latest healthy worker
-   * generation. A production implementation must revalidate the M2 evidence
-   * signature/key pin and current revoke, quarantine, and mesh node-admission
-   * state; a raw protected-evidence row is not sufficient authority.
-   */
-  resolveByCredentialTokenSha256(
-    credentialTokenSha256: string,
-  ):
-    | RemoteWorkerAssignmentRuntimeCredentialAuthority
-    | undefined
-    | Promise<RemoteWorkerAssignmentRuntimeCredentialAuthority | undefined>;
-}
+/**
+ * Resolve only the canonical latest-fresh M2 authority. Mesh-node currency is
+ * checked separately against the assignment workspace and committed generation.
+ */
+export type RemoteWorkerAssignmentRuntimeCredentialAuthorityPort = RemoteWorkerCurrentRuntimeCredentialAuthorityPort;
 
 export interface RemoteWorkerAssignmentProtocolStorePort {
   resolveActiveAuthorityByLeaseTokenHash(
@@ -152,6 +136,12 @@ export interface RemoteWorkerAssignmentProtocolStorePort {
   ): SettleRemoteWorkerAssignmentOutcome | Promise<SettleRemoteWorkerAssignmentOutcome>;
 }
 
+export interface RemoteWorkerAssignmentMeshAuthorityPort {
+  resolveCurrentForRuntimeCredential(
+    input: ResolveCurrentRemoteWorkerMeshNodeAdmissionInput,
+  ): RemoteWorkerMeshNodeAuthorityFence | undefined | Promise<RemoteWorkerMeshNodeAuthorityFence | undefined>;
+}
+
 export interface RemoteWorkerAssignmentProtocolRequest {
   readonly method: string;
   readonly rawPath: string;
@@ -162,6 +152,7 @@ export interface RemoteWorkerAssignmentProtocolRequest {
 
 export interface RemoteWorkerAssignmentProtocolServiceDependencies {
   readonly credentialAuthority: RemoteWorkerAssignmentRuntimeCredentialAuthorityPort;
+  readonly meshAdmissions: RemoteWorkerAssignmentMeshAuthorityPort;
   readonly nonceConsumer: RemoteWorkerDurableNonceConsumePort;
   readonly assignments: RemoteWorkerAssignmentProtocolStorePort;
   readonly clock: () => Date;
@@ -262,6 +253,7 @@ export class RemoteWorkerAssignmentProtocolService {
         kind: "credential",
         authorityId: authority.credentialId,
         authorityGeneration: authority.credentialGeneration,
+        workerGeneration: authority.workerGeneration,
         authorizationCredentialSha256: authority.authorizationCredentialSha256,
         publicKeySpkiDer: authority.publicKeySpkiDer,
         publicKeySpkiSha256: authority.publicKeySpkiSha256,
@@ -273,6 +265,7 @@ export class RemoteWorkerAssignmentProtocolService {
         body: request.body,
         expectedOperation: request.route.operation,
         authority: protocolAuthority,
+        proofRequirement: "protected_v2_required",
         transportIdentity: request.transportIdentity,
         now,
       });
@@ -336,7 +329,7 @@ export class RemoteWorkerAssignmentProtocolService {
     if (resolved === undefined) throw rejected("Remote worker assignment lease authority is unavailable.");
     const records = snapshotResolvedAssignmentAuthority(resolved);
     assertRequestBinding(records, command);
-    assertCredentialAssignmentBinding(credential, records.assignment, records.generation);
+    await this.assertCredentialAssignmentBinding(credential, records.assignment, records.generation);
     return Object.freeze({
       ...responseBase(route),
       disposition: "synchronized",
@@ -350,7 +343,7 @@ export class RemoteWorkerAssignmentProtocolService {
     credential: RemoteWorkerAssignmentRuntimeCredentialAuthority,
   ): Promise<RemoteWorkerAssignmentProtocolResponse> {
     const records = await this.resolveMutationRecords(command.registryWorkspaceId, command.assignmentId);
-    assertCredentialAssignmentBinding(credential, records.assignment, records.generation);
+    await this.assertCredentialAssignmentBinding(credential, records.assignment, records.generation);
     assertGenerationBinding(records.generation, command.expectedAssignmentGeneration);
     if (
       records.lease.leaseRevision !== command.expectedLeaseRevision &&
@@ -372,7 +365,7 @@ export class RemoteWorkerAssignmentProtocolService {
     credential: RemoteWorkerAssignmentRuntimeCredentialAuthority,
   ): Promise<RemoteWorkerAssignmentProtocolResponse> {
     const records = await this.resolveMutationRecords(command.registryWorkspaceId, command.assignmentId);
-    assertCredentialAssignmentBinding(credential, records.assignment, records.generation);
+    await this.assertCredentialAssignmentBinding(credential, records.assignment, records.generation);
     assertGenerationBinding(records.generation, command.expectedAssignmentGeneration);
     if (command.expectedLeaseRevision > records.lease.leaseRevision) {
       throw rejected("Remote worker assignment lease revision is unavailable.");
@@ -402,7 +395,7 @@ export class RemoteWorkerAssignmentProtocolService {
     });
     if (resolved === undefined) throw rejected("Remote worker assignment control authority is unavailable.");
     const records = snapshotControlReadAuthority(resolved);
-    assertCredentialAssignmentBinding(credential, records.assignment, records.generation);
+    await this.assertCredentialAssignmentBinding(credential, records.assignment, records.generation);
     return Object.freeze({
       ...responseBase(route),
       disposition: records.disposition,
@@ -419,7 +412,7 @@ export class RemoteWorkerAssignmentProtocolService {
     credential: RemoteWorkerAssignmentRuntimeCredentialAuthority,
   ): Promise<RemoteWorkerAssignmentProtocolResponse> {
     const records = await this.resolveMutationRecords(command.registryWorkspaceId, command.assignmentId);
-    assertCredentialAssignmentBinding(credential, records.assignment, records.generation);
+    await this.assertCredentialAssignmentBinding(credential, records.assignment, records.generation);
     assertGenerationBinding(records.generation, command.expectedAssignmentGeneration);
     if (command.expectedLeaseRevision > records.lease.leaseRevision) {
       throw rejected("Remote worker assignment lease revision is unavailable.");
@@ -449,6 +442,47 @@ export class RemoteWorkerAssignmentProtocolService {
       generation: snapshotGeneration(aggregate.generation),
       lease: snapshotLease(aggregate.lease),
     });
+  }
+
+  private async assertCredentialAssignmentBinding(
+    credential: RemoteWorkerAssignmentRuntimeCredentialAuthority,
+    assignment: RemoteWorkerAssignmentRecord,
+    generation: RemoteWorkerAssignmentGenerationRecord,
+  ): Promise<void> {
+    assertCredentialAssignmentIdentityBinding(credential, assignment, generation);
+    const resolved = await this.dependencies.meshAdmissions.resolveCurrentForRuntimeCredential({
+      registryWorkspaceId: credential.registryWorkspaceId,
+      bootstrapId: credential.bootstrapId,
+      workerId: credential.workerId,
+      workerGeneration: credential.workerGeneration,
+      nodeId: credential.nodeId,
+      clientCertificateSha256: credential.clientCertificateSha256,
+      protectedAdmissionEnvelopeSha256: credential.protectedAdmissionEnvelopeSha256,
+      protectedAdmissionContextSha256: credential.protectedAdmissionContextSha256,
+      workspaceId: assignment.manifest.executionWorkspaceId,
+      credentialId: credential.credentialId,
+      credentialGeneration: credential.credentialGeneration,
+      authorizationCredentialSha256: credential.authorizationCredentialSha256,
+    });
+    if (resolved === undefined) {
+      throw rejected("Remote worker assignment mesh-node authority is unavailable.");
+    }
+    const meshAdmission = normalizeRemoteWorkerMeshNodeAuthorityFence(resolved);
+    if (
+      meshAdmission.registryWorkspaceId !== credential.registryWorkspaceId ||
+      meshAdmission.bootstrapId !== credential.bootstrapId ||
+      meshAdmission.workerId !== credential.workerId ||
+      meshAdmission.workerGeneration !== credential.workerGeneration ||
+      meshAdmission.credentialId !== credential.credentialId ||
+      meshAdmission.credentialGeneration !== credential.credentialGeneration ||
+      meshAdmission.workspaceId !== assignment.manifest.executionWorkspaceId ||
+      meshAdmission.nodeId !== credential.nodeId ||
+      meshAdmission.admissionGeneration !== generation.nodeAdmissionGeneration ||
+      meshAdmission.protectedAdmissionEnvelopeSha256 !== credential.protectedAdmissionEnvelopeSha256 ||
+      meshAdmission.protectedAdmissionContextSha256 !== credential.protectedAdmissionContextSha256
+    ) {
+      throw rejected("Remote worker assignment mesh-node authority is inconsistent.");
+    }
   }
 }
 
@@ -646,10 +680,10 @@ function snapshotCredentialAuthority(
       "credentialGeneration",
       "authorizationCredentialSha256",
       "registryWorkspaceId",
+      "bootstrapId",
       "workerId",
       "workerGeneration",
       "nodeId",
-      "nodeAdmissionGeneration",
       "publicKeySpkiDer",
       "publicKeySpkiSha256",
       "clientCertificateSha256",
@@ -657,6 +691,8 @@ function snapshotCredentialAuthority(
       "runtimeManifestSha256",
       "workspaceCeilingSha256",
       "capabilityCeilingSha256",
+      "protectedAdmissionEnvelopeSha256",
+      "protectedAdmissionContextSha256",
       "claims",
       "claimsSha256",
     ],
@@ -676,10 +712,10 @@ function snapshotCredentialAuthority(
     credentialGeneration: positiveInteger(fields.credentialGeneration, "credentialGeneration"),
     authorizationCredentialSha256: digest(fields.authorizationCredentialSha256, "authorizationCredentialSha256"),
     registryWorkspaceId: identifier(fields.registryWorkspaceId, "registryWorkspaceId"),
+    bootstrapId: identifier(fields.bootstrapId, "bootstrapId"),
     workerId: identifier(fields.workerId, "workerId"),
     workerGeneration: positiveInteger(fields.workerGeneration, "workerGeneration"),
     nodeId: identifier(fields.nodeId, "nodeId"),
-    nodeAdmissionGeneration: positiveInteger(fields.nodeAdmissionGeneration, "nodeAdmissionGeneration"),
     publicKeySpkiDer: Buffer.from(fields.publicKeySpkiDer),
     publicKeySpkiSha256: digest(fields.publicKeySpkiSha256, "publicKeySpkiSha256"),
     clientCertificateSha256: digest(fields.clientCertificateSha256, "clientCertificateSha256"),
@@ -687,6 +723,11 @@ function snapshotCredentialAuthority(
     runtimeManifestSha256: digest(fields.runtimeManifestSha256, "runtimeManifestSha256"),
     workspaceCeilingSha256: digest(fields.workspaceCeilingSha256, "workspaceCeilingSha256"),
     capabilityCeilingSha256: digest(fields.capabilityCeilingSha256, "capabilityCeilingSha256"),
+    protectedAdmissionEnvelopeSha256: digest(
+      fields.protectedAdmissionEnvelopeSha256,
+      "protectedAdmissionEnvelopeSha256",
+    ),
+    protectedAdmissionContextSha256: digest(fields.protectedAdmissionContextSha256, "protectedAdmissionContextSha256"),
     claims,
     claimsSha256: digest(fields.claimsSha256, "claimsSha256"),
   });
@@ -725,7 +766,7 @@ function assertTransportAuthorityBinding(
   }
 }
 
-function assertCredentialAssignmentBinding(
+function assertCredentialAssignmentIdentityBinding(
   credential: RemoteWorkerAssignmentRuntimeCredentialAuthority,
   assignment: RemoteWorkerAssignmentRecord,
   generation: RemoteWorkerAssignmentGenerationRecord,
@@ -747,7 +788,6 @@ function assertCredentialAssignmentBinding(
     generation.workerId !== credential.workerId ||
     generation.workerGeneration !== credential.workerGeneration ||
     generation.nodeId !== credential.nodeId ||
-    generation.nodeAdmissionGeneration !== credential.nodeAdmissionGeneration ||
     generation.runtimeManifestSha256 !== credential.runtimeManifestSha256 ||
     generation.workspaceCeilingSha256 !== credential.workspaceCeilingSha256 ||
     generation.capabilityCeilingSha256 !== credential.capabilityCeilingSha256
