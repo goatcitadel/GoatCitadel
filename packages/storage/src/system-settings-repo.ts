@@ -69,15 +69,20 @@ export class SystemSettingsRepository {
    * row (including safe first-insert contention); SQLite callers are serialized
    * by the surrounding IMMEDIATE transaction. Callers can include this write in
    * a larger transaction so their domain receipt commits with the increment.
+   * `initialValue` applies only when the row does not exist, allowing an owner to
+   * make a new counter due immediately without changing an established cadence.
    */
   public advanceCyclicCounter(
     key: string,
     resetAt: number,
     now = new Date().toISOString(),
+    initialValue = 0,
   ): { previous: number; value: number; due: boolean } {
     const threshold = Math.max(1, Math.floor(resetAt));
+    const finiteInitial = Number.isFinite(initialValue) ? Math.floor(initialValue) : 0;
+    const initial = Math.max(0, Math.min(threshold - 1, finiteInitial));
     return this.db.transaction("immediate", () => {
-      this.insertIfAbsentStmt.run({ key, valueJson: "0", updatedAt: now });
+      this.insertIfAbsentStmt.run({ key, valueJson: JSON.stringify(initial), updatedAt: now });
       const row = this.getForUpdateStmt.get(key) as SystemSettingRow | undefined;
       if (!row) {
         throw new NotFoundError(`Failed to lock setting ${key}`);

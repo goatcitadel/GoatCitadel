@@ -12,6 +12,7 @@ import { BackgroundReviewService } from "../background-review-service.js";
 import {
   ChatPostCommitEffectService,
   type ChatPostCommitEffectAuthorityPort,
+  type ChatPostCommitEffectServiceDeps,
 } from "../chat-post-commit-effect-service.js";
 import {
   createDurableChatPostCommitEffectWorkflowExecutor,
@@ -27,6 +28,7 @@ export interface ChatPostCommitRuntimeCompositionInput {
   ): Promise<ChatCompletionResponse>;
   resolveModelDefaults(): Promise<{ providerId?: string; model?: string }>;
   resolveApiStyle(providerId?: string, model?: string): LlmApiStyle;
+  proposeTraceMemoryCandidate: ChatPostCommitEffectServiceDeps["proposeTraceMemoryCandidate"];
   /** Required in production composition: post-commit children must never run unfenced. */
   effectAuthority: ChatPostCommitEffectAuthorityPort;
   isAutonomyDisabled(): Promise<boolean>;
@@ -68,6 +70,7 @@ export function createChatPostCommitRuntime(
     storage: input.storage,
     commitmentClassifier,
     backgroundReview: backgroundReviewService,
+    proposeTraceMemoryCandidate: input.proposeTraceMemoryCandidate,
     effectAuthority: input.effectAuthority,
     isAutonomyDisabled: input.isAutonomyDisabled,
     publishRealtime: input.publishRealtime,

@@ -79,7 +79,16 @@ PR #137 fixed "thin responses" by wrapping cowork in a **plan → execute → sy
   Any future automatic proposal filing must be separately designed and proven
   against the current lifecycle owner.
 - [ ] **Trusted-local governance fast-path.** For read-only loopback turns under rate limits, collapse to in-memory allow + batched async audit — keep deny-set + Wards, skip the per-call DB round-trips.
-- [ ] **Warm the operator profile fast** (born empty, fills ~1 turn in 5) — `operator-profile-service.ts:120-123`.
+- [x] **Warm the operator profile review inbox fast.** The canonical durable
+  Chat post-commit reviewer is now due on the first eligible successful root
+  turn in each workspace, then returns to its five-turn cadence. Filtered facts
+  are filed as `agent_proposed` `memory_trace_candidates` with session/turn/run
+  lineage; the durable receipt retains only fingerprints and candidate ids.
+  Eval, system, delegated-child, autonomous, and autonomy-disabled turns remain
+  excluded, and no review model call was added to the foreground turn path.
+  Promotion is still operator-controlled in Library > Memory; a future explicit
+  mapping from promoted trace candidates into the frozen OperatorProfile digest
+  remains separate work rather than an automatic learned-memory write.
 
 ## Done criteria
 - Cowork TTFT measured **first terminal-synthesizer chunk**, not whole-turn. ✅ (S1 implementation)

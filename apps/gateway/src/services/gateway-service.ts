@@ -2708,6 +2708,8 @@ export class GatewayService {
       createChatCompletion: async (request, attribution) => await this.createChatCompletion(request, attribution),
       resolveModelDefaults: async () => await this.getPromptJudgeModelDefaults(),
       resolveApiStyle: (providerId, model) => this.llmService.resolveExecutionApiStyle(providerId, model),
+      proposeTraceMemoryCandidate: (input, actorId, authority) =>
+        this.memoryLifecycleService.proposeTraceMemoryCandidate(input, actorId, authority),
       effectAuthority: chatPostCommitEffectAuthority,
       isAutonomyDisabled: async () => await this.isFeatureEnabled("autonomyV1Disabled"),
       publishRealtime,

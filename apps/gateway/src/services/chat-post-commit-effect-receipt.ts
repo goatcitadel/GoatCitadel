@@ -462,13 +462,35 @@ function sanitizeStageResult(
       const skillEvidenceFingerprint = isSha256Value(result.skillEvidenceFingerprint)
         ? result.skillEvidenceFingerprint
         : undefined;
+      const rawCandidateIds = result.memoryReviewCandidateIds;
+      const memoryReviewCandidateIds = Array.isArray(rawCandidateIds)
+        ? rawCandidateIds.filter(isTraceMemoryCandidateId)
+        : [];
+      if (Array.isArray(rawCandidateIds) && memoryReviewCandidateIds.length !== rawCandidateIds.length) {
+        return redactedReplayResult();
+      }
+      const memoryReviewCandidateCount = isNonNegativeInteger(result.memoryReviewCandidateCount)
+        ? result.memoryReviewCandidateCount
+        : memoryReviewCandidateIds.length;
+      const memoryReviewCandidateRejectedCount = isNonNegativeInteger(result.memoryReviewCandidateRejectedCount)
+        ? result.memoryReviewCandidateRejectedCount
+        : 0;
+      if (
+        memoryReviewCandidateCount !== memoryReviewCandidateIds.length ||
+        memoryReviewCandidateCount + memoryReviewCandidateRejectedCount > memoryEvidenceFingerprints.length
+      ) {
+        return redactedReplayResult();
+      }
       return {
         status: "evidence_recorded",
         memoryFactCount: memoryEvidenceFingerprints.length,
         memoryEvidenceFingerprints,
+        memoryReviewCandidateCount,
+        memoryReviewCandidateIds,
+        memoryReviewCandidateRejectedCount,
         skillProposed: Boolean(skillEvidenceFingerprint),
         ...(skillEvidenceFingerprint ? { skillEvidenceFingerprint } : {}),
-        promotionDisposition: "governed_review_required",
+        promotionDisposition: "governed_trace_candidate_review_required",
       };
     }
     case "memory_maintenance_evaluation":
@@ -498,4 +520,8 @@ function isNonNegativeInteger(value: unknown): value is number {
 
 function isSha256Value(value: unknown): value is string {
   return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
+}
+
+function isTraceMemoryCandidateId(value: unknown): value is string {
+  return typeof value === "string" && /^trace-[a-z0-9._:-]{1,80}$/iu.test(value);
 }
