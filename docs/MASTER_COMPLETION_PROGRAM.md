@@ -184,8 +184,9 @@ validation and 9/9 Docker-secret documentation tests; `git diff --check` passed.
   revoke kills credential and protected-evidence authority.
 - Production ingress has a real protected-evidence verifier and can become
   `listening_live` only after its preflight succeeds. The current-authority
-  resolver remains intentionally unconsumed until M3 composes it with node and
-  assignment mutation owners; raw evidence rows are never callable authority.
+  resolver is consumed only by the production-dark M3 assignment-protocol
+  owner; the runtime factory still omits that handler, and raw evidence rows
+  are never callable authority.
 - The protected Windows service now has a production-dark PoP-v2 signing
   operation over the exact contract-owned 285-byte preimage. Its local
   operation authority binds the authenticated caller SID, caller-pinned state,
@@ -235,10 +236,18 @@ Owner contract: `OPENCLAW_HERMES_PARITY_PROGRAM.md`, `HX-501`.
   before the atomic claim, and response-loss replay returns secret-free
   canonical state. Route codes 8 through 10 and their PoP-v2 descriptors are
   reserved, but no native handler or worker poller is registered.
-- Add a production-dark, credential-authenticated assignment RPC over the
-  existing mTLS/PoP listener for synchronization, lease renewal, ordered event
-  append, cancellation reads, and settlement. Keep it uncomposed until M2 can
-  supply a currently verified admitted key and node-admission authority.
+- The production-dark assignment RPC for synchronization, lease renewal,
+  ordered event append, cancellation reads, and settlement now requires the
+  contract-owned protected PoP-v2 proof. It binds the canonical M2 current
+  credential/protected-evidence owner, worker generation, exact assignment
+  workspace, and current mesh-admission generation before all five outcomes.
+  The native mux and runtime factory remain intentionally uncomposed.
+- Before activation, carry the exact M2 credential, protected-evidence, and
+  mesh-authority fence into each assignment read/mutation and recheck it inside
+  the same storage transaction. The current storage owner already rechecks the
+  worker generation, node admission, durable parent, and lease under lock, but
+  a credential rotation or protected-evidence change can otherwise race the
+  advisory protocol reads.
 - Compose the dispatch poll/claim/workload-read operations only after an
   authenticated worker runtime can retain its credential and lease secret,
   obtain the exact protected signing pin, and reconnect without replaying a
