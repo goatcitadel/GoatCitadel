@@ -5614,7 +5614,9 @@ export class ChatTurnAgentRunner {
     const [recentToolRuns, sessionProject, executionPlans] = await Promise.all([
       this.deps.storage.chatToolRuns.listBySession(input.sessionId, 200),
       this.deps.storage.chatSessionProjects.get(input.sessionId),
-      this.deps.storage.chatExecutionPlans?.listBySession(input.sessionId, 20) ?? Promise.resolve([]),
+      this.deps.storage.chatExecutionPlans
+        ? this.deps.storage.chatExecutionPlans.listBySession(input.sessionId, 20)
+        : Promise.resolve([]),
     ]);
     const projectBound = Boolean(sessionProject?.projectId);
     const activePlan = selectActiveExecutionPlan(executionPlans);

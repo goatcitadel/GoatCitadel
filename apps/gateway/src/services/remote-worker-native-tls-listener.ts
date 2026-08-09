@@ -151,7 +151,10 @@ export async function startRemoteWorkerNativeTlsListener(
           maxHeaderSize: REMOTE_WORKER_NATIVE_TLS_LIMITS.maxHeaderBytes,
         },
         (request, response) => {
-          void handleRequest(request, response);
+          void handleRequest(request, response).catch(() => {
+            response.destroy();
+            request.socket.destroy();
+          });
         },
       );
     } finally {
@@ -624,6 +627,7 @@ function normalizeHandlerResponseHeaders(
       FORBIDDEN_HANDLER_RESPONSE_HEADERS.has(name) ||
       Object.hasOwn(normalized, name) ||
       typeof value !== "string" ||
+      // eslint-disable-next-line no-control-regex -- HTTP response values must reject control bytes explicitly.
       /[\u0000-\u001f\u007f]/u.test(value) ||
       Buffer.byteLength(value, "utf8") > REMOTE_WORKER_NATIVE_TLS_LIMITS.maxResponseHeaderValueBytes
     ) {
