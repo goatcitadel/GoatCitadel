@@ -160,6 +160,7 @@ import {
 import { ResearchSearchRouteService, type ResearchSearchRoutePort } from "./research-search-broker-service.js";
 import {
   RemoteWorkersRouteService,
+  type RemoteWorkerOperatorControlDependencies,
   type RemoteWorkerAssignmentStore,
   type RemoteWorkerRegistryStore,
 } from "./remote-workers-route-service.js";
@@ -356,7 +357,11 @@ export interface GatewayRouteServiceDependencies {
   promptPacks: PromptPacksRoutePort;
   realtimeEvents: RealtimeEventsRoutePort;
   researchSearch: ResearchSearchRoutePort;
-  remoteWorkers: { registry: RemoteWorkerRegistryStore; assignments: RemoteWorkerAssignmentStore };
+  remoteWorkers: {
+    registry: RemoteWorkerRegistryStore;
+    assignments: RemoteWorkerAssignmentStore;
+    operatorControl: RemoteWorkerOperatorControlDependencies;
+  };
   runtimeLifecycle: RuntimeLifecycleRoutePort;
   secrets: SecretsRoutePort;
   sessionControl: SessionControlRouteService;
@@ -431,7 +436,12 @@ export function createGatewayRouteServices(deps: GatewayRouteServiceDependencies
     promptPacks: new PromptPacksRouteService(deps.promptPacks),
     realtimeEvents: createRealtimeEventsRouteService(deps.realtimeEvents),
     researchSearch: new ResearchSearchRouteService(deps.researchSearch),
-    remoteWorkers: new RemoteWorkersRouteService(deps.remoteWorkers.registry, deps.remoteWorkers.assignments),
+    remoteWorkers: new RemoteWorkersRouteService(
+      deps.remoteWorkers.registry,
+      deps.remoteWorkers.assignments,
+      () => new Date().toISOString(),
+      deps.remoteWorkers.operatorControl,
+    ),
     runtimeLifecycle: new RuntimeLifecycleRouteService(deps.runtimeLifecycle),
     secrets: createSecretsRouteService(deps.secrets),
     sessionControl: deps.sessionControl,

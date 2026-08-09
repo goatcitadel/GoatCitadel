@@ -1,10 +1,20 @@
 import rateLimit from "@fastify/rate-limit";
 import Fastify, { type FastifyInstance, type RouteOptions } from "fastify";
-import { NotFoundError } from "@goatcitadel/contracts";
+import {
+  NotFoundError,
+  REMOTE_WORKER_PROTOCOL_VERSION,
+  REMOTE_WORKER_RUNTIME_MANIFEST_SCHEMA_VERSION,
+  canonicalJsonString,
+} from "@goatcitadel/contracts";
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthConfig } from "../config.js";
 import { authPlugin } from "../plugins/auth.js";
-import { RemoteWorkerRegistryInputError } from "../services/remote-workers-route-service.js";
+import { idempotencyHeaderPlugin } from "../plugins/idempotency.js";
+import {
+  RemoteWorkerOperatorControlUnavailableError,
+  RemoteWorkerRegistryInputError,
+} from "../services/remote-workers-route-service.js";
 import { remoteWorkersRoutes } from "./remote-workers.js";
 
 const PAGE = {
@@ -60,6 +70,9 @@ function fullService(overrides: Record<string, unknown> = {}) {
     getReconciliation: vi.fn(() => RECONCILIATION),
     listAssignments: vi.fn(() => ASSIGNMENT_PAGE),
     getAssignmentEvents: vi.fn(() => EVENT_PAGE),
+    issueBootstrap: vi.fn(() => bootstrapResponse()),
+    quarantineGeneration: vi.fn(() => controlResponse("quarantine")),
+    revokeGeneration: vi.fn(() => controlResponse("revoke")),
     ...overrides,
   };
 }
@@ -114,8 +127,21 @@ describe("remote worker operator registry routes HX-507A", () => {
       "/api/v1/ops/workspaces/:workspaceId/remote-workers/:workerId",
       "/api/v1/ops/workspaces/:workspaceId/remote-workers/:workerId/reconciliation",
     ]);
-    expect(routes.every((route) => route.method === "GET" || route.method === "HEAD")).toBe(true);
-    expect(routes.every((route) => route.config.goatcitadelRouteAccessClass === "operator")).toBe(true);
+    expect(getRoutes.every((route) => route.config.goatcitadelRouteAccessClass === "operator")).toBe(true);
+    const postRoutes = routes.filter((route) => route.method === "POST");
+    expect(postRoutes.map((route) => route.url).sort()).toEqual([
+      "/api/v1/ops/workspaces/:workspaceId/remote-workers/:workerId/generations/:workerGeneration/quarantine",
+      "/api/v1/ops/workspaces/:workspaceId/remote-workers/:workerId/generations/:workerGeneration/revoke",
+      "/api/v1/ops/workspaces/:workspaceId/remote-workers/bootstrap",
+    ]);
+    expect(postRoutes.find((route) => route.url.endsWith("/bootstrap"))?.config.goatcitadelRouteAccessClass).toBe(
+      "loopback",
+    );
+    expect(
+      postRoutes
+        .filter((route) => !route.url.endsWith("/bootstrap"))
+        .every((route) => route.config.goatcitadelRouteAccessClass === "operator"),
+    ).toBe(true);
     for (const route of getRoutes) {
       const rateLimit = route.config.rateLimit as {
         max: number;
@@ -126,6 +152,14 @@ describe("remote worker operator registry routes HX-507A", () => {
       expect(rateLimit.keyGenerator({ authActorId: "operator-a", ip: "127.0.0.1" })).toBe("actor:operator-a");
       expect(rateLimit.keyGenerator({ ip: "192.0.2.9" })).toBe("ip:192.0.2.9");
     }
+    expect(
+      (postRoutes.find((route) => route.url.endsWith("/bootstrap"))?.config.rateLimit as { max: number }).max,
+    ).toBe(5);
+    expect(
+      postRoutes
+        .filter((route) => !route.url.endsWith("/bootstrap"))
+        .every((route) => (route.config.rateLimit as { max: number }).max === 30),
+    ).toBe(true);
   });
 
   it("denies unauthenticated reads before service invocation and keeps denial responses non-cacheable", async () => {
@@ -400,12 +434,255 @@ describe("remote worker operator assignment + reconciliation routes HX-507B", ()
   });
 });
 
+describe("remote worker M2 operator control routes", () => {
+  let app: FastifyInstance | undefined;
+
+  afterEach(async () => {
+    await app?.close();
+    app = undefined;
+  });
+
+  it("issues bootstrap material only to true loopback authority and keeps the response non-cacheable", async () => {
+    const issueBootstrap = vi.fn(async () => bootstrapResponse());
+    app = await buildLoopbackBootstrapHarness(issueBootstrap);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/ops/workspaces/workspace-a/remote-workers/bootstrap",
+      headers: { "Idempotency-Key": "bootstrap-route-a" },
+      payload: bootstrapRequestBody(),
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(response.headers.pragma).toBe("no-cache");
+    expect(response.headers.vary).toContain("Authorization");
+    expect(response.json()).toMatchObject({
+      disposition: "created",
+      bootstrapSecret: Buffer.alloc(32, 3).toString("base64url"),
+    });
+    expect(issueBootstrap).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: "workspace-a",
+        actorId: expect.stringMatching(/^loopback:/u),
+        idempotencyKey: "bootstrap-route-a",
+        allowedWorkspaceIds: ["workspace-a"],
+        capabilityClasses: ["durable_compute"],
+      }),
+    );
+  });
+
+  it("rejects proxy-derived and non-loopback bootstrap requests before service invocation", async () => {
+    const issueBootstrap = vi.fn(async () => bootstrapResponse());
+    app = await buildLoopbackBootstrapHarness(issueBootstrap);
+
+    for (const headers of [
+      { "Idempotency-Key": "bootstrap-proxy-a", "x-forwarded-for": "198.51.100.14" },
+      { "Idempotency-Key": "bootstrap-proxy-b", forwarded: "for=198.51.100.14" },
+    ]) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/ops/workspaces/workspace-a/remote-workers/bootstrap",
+        headers,
+        payload: bootstrapRequestBody(),
+      });
+      expect([401, 403]).toContain(response.statusCode);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.body).not.toContain("198.51.100.14");
+    }
+    expect(issueBootstrap).not.toHaveBeenCalled();
+  });
+
+  it("returns a secret-free replay receipt and maps disabled runtime trust to a no-store 503", async () => {
+    const issueBootstrap = vi
+      .fn()
+      .mockResolvedValueOnce(bootstrapResponse())
+      .mockResolvedValueOnce(bootstrapResponse({ disposition: "replayed_without_secret", bootstrapSecret: undefined }))
+      .mockRejectedValueOnce(new RemoteWorkerOperatorControlUnavailableError());
+    app = await buildLoopbackBootstrapHarness(issueBootstrap);
+
+    const request = (idempotencyKey: string) =>
+      app!.inject({
+        method: "POST",
+        url: "/api/v1/ops/workspaces/workspace-a/remote-workers/bootstrap",
+        headers: { "Idempotency-Key": idempotencyKey },
+        payload: bootstrapRequestBody(),
+      });
+    expect((await request("bootstrap-created")).json()).toHaveProperty("bootstrapSecret");
+    const replay = await request("bootstrap-replay");
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json()).toMatchObject({ disposition: "replayed_without_secret" });
+    expect(replay.json()).not.toHaveProperty("bootstrapSecret");
+    const unavailable = await request("bootstrap-unavailable");
+    expect(unavailable.statusCode).toBe(503);
+    expect(unavailable.headers["cache-control"]).toBe("no-store");
+    expect(unavailable.json()).toEqual({ error: "Remote worker operator control is unavailable." });
+  });
+
+  it("binds quarantine and revoke to the path workspace, generation, actor, and idempotency identity", async () => {
+    const quarantineGeneration = vi.fn(async () => controlResponse("quarantine"));
+    const revokeGeneration = vi.fn(async () => controlResponse("revoke"));
+    app = await buildOperatorMutationHarness({ quarantineGeneration, revokeGeneration });
+
+    const quarantine = await app.inject({
+      method: "POST",
+      url: "/api/v1/ops/workspaces/workspace-a/remote-workers/worker-a/generations/1/quarantine",
+      headers: { "Idempotency-Key": "quarantine-a" },
+      payload: { reasonCode: "integrity.checkpoint_missed", reason: "Worker missed a signed checkpoint." },
+    });
+    expect(quarantine.statusCode).toBe(200);
+    expect(quarantine.headers["cache-control"]).toBe("no-store");
+    expect(quarantineGeneration).toHaveBeenCalledWith({
+      workspaceId: "workspace-a",
+      workerId: "worker-a",
+      workerGeneration: 1,
+      reasonCode: "integrity.checkpoint_missed",
+      reason: "Worker missed a signed checkpoint.",
+      actorId: "operator-a",
+      idempotencyKey: "quarantine-a",
+    });
+
+    const revoke = await app.inject({
+      method: "POST",
+      url: "/api/v1/ops/workspaces/workspace-a/remote-workers/worker-a/generations/2/revoke",
+      headers: { "Idempotency-Key": "revoke-a" },
+      payload: { reasonCode: "operator.revoked", reason: "Operator retired this worker generation." },
+    });
+    expect(revoke.statusCode).toBe(200);
+    expect(revokeGeneration).toHaveBeenCalledWith(expect.objectContaining({ workerGeneration: 2 }));
+  });
+
+  it("rejects malformed and secret-like control input without echo, and hides cross-workspace existence", async () => {
+    const secret = "Authorization: Bearer ghp_SUPER_SECRET_TOKEN_1234567890";
+    const quarantineGeneration = vi.fn(async () => {
+      throw new RemoteWorkerRegistryInputError();
+    });
+    const revokeGeneration = vi.fn(async () => {
+      throw new NotFoundError({ entity: "remote worker generation", id: "unavailable" });
+    });
+    app = await buildOperatorMutationHarness({ quarantineGeneration, revokeGeneration });
+
+    const rejected = await app.inject({
+      method: "POST",
+      url: "/api/v1/ops/workspaces/workspace-a/remote-workers/worker-a/generations/1/quarantine",
+      headers: { "Idempotency-Key": "quarantine-secret" },
+      payload: { reasonCode: "operator.quarantine", reason: secret },
+    });
+    expect(rejected.statusCode).toBe(400);
+    expect(rejected.body).not.toContain(secret);
+
+    const foreign = await app.inject({
+      method: "POST",
+      url: "/api/v1/ops/workspaces/foreign/remote-workers/worker-a/generations/1/revoke",
+      headers: { "Idempotency-Key": "revoke-foreign" },
+      payload: { reasonCode: "operator.revoked", reason: "Operator retired this generation." },
+    });
+    expect(foreign.statusCode).toBe(404);
+    expect(foreign.body).not.toMatch(/workspace-a|controlRevision|reasonSha256/u);
+  });
+});
+
 const AUTH_CONFIG = {
   mode: "token",
   allowLoopbackBypass: false,
   token: { value: "operator-token", queryParam: "access_token" },
   basic: { username: "operator", password: "password123" },
 } satisfies AuthConfig;
+
+async function buildLoopbackBootstrapHarness(issueBootstrap: ReturnType<typeof vi.fn>): Promise<FastifyInstance> {
+  const instance = Fastify({ trustProxy: true });
+  instance.decorate("gatewayConfig", {
+    assistant: { auth: { ...AUTH_CONFIG, allowLoopbackBypass: true } },
+  } as never);
+  instance.decorate("gatewayAuth", {
+    getOnboardingStartupState: () => ({ completed: true }),
+    validateDeviceAccessToken: () => undefined,
+    validateCompanionAccessToken: () => undefined,
+    verifyCompanionRequestSignature: () => undefined,
+  } as never);
+  instance.decorate("services", { remoteWorkers: fullService({ issueBootstrap }) } as never);
+  await instance.register(authPlugin);
+  await instance.register(idempotencyHeaderPlugin);
+  await instance.register(remoteWorkersRoutes);
+  return instance;
+}
+
+async function buildOperatorMutationHarness(overrides: Record<string, unknown>): Promise<FastifyInstance> {
+  const instance = Fastify();
+  instance.decorate("requireOperatorAuth", async () => undefined);
+  instance.decorateRequest("authActorId", "operator-a");
+  instance.decorateRequest("authActorSource", "token");
+  instance.decorate("services", { remoteWorkers: fullService(overrides) } as never);
+  await instance.register(idempotencyHeaderPlugin);
+  await instance.register(remoteWorkersRoutes);
+  return instance;
+}
+
+function bootstrapResponse(
+  overrides: { disposition?: "created" | "replayed_without_secret"; bootstrapSecret?: string } = {},
+) {
+  const disposition = overrides.disposition ?? "created";
+  return {
+    disposition,
+    workspaceId: "workspace-a",
+    bootstrapId: "bootstrap-a",
+    workerId: "worker-a",
+    nodeId: "node-a",
+    targetWorkerGeneration: 1,
+    state: "pending",
+    expiresAt: "2026-08-08T12:10:00.000Z",
+    manifestPayloadSha256: "1".repeat(64),
+    auditDeliveryId: "remote-worker-bootstrap:bootstrap-a:issued",
+    ...(disposition === "created"
+      ? { bootstrapSecret: overrides.bootstrapSecret ?? Buffer.alloc(32, 3).toString("base64url") }
+      : {}),
+  };
+}
+
+function controlResponse(action: "quarantine" | "revoke") {
+  return {
+    workspaceId: "workspace-a",
+    workerId: "worker-a",
+    workerGeneration: 1,
+    controlRevision: 1,
+    action,
+    reasonCode: "operator.control",
+    reasonSha256: "2".repeat(64),
+    actorId: "operator-a",
+    createdAt: "2026-08-08T12:00:00.000Z",
+    auditDeliveryId: `remote-worker-control:${action}:${"3".repeat(64)}`,
+  };
+}
+
+function bootstrapRequestBody() {
+  const payload = {
+    schemaVersion: REMOTE_WORKER_RUNTIME_MANIFEST_SCHEMA_VERSION,
+    protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
+    bundleSha256: "1".repeat(64),
+    dependencyLockSha256: "2".repeat(64),
+    vendorTreeSha256: "3".repeat(64),
+    launcherSha256: "4".repeat(64),
+    installedTreeManifestSha256: "5".repeat(64),
+    installedTreeFileCount: 5,
+    platform: "windows",
+    architecture: "x64",
+  } as const;
+  return {
+    workerLabel: "Windows workstation",
+    platform: "windows",
+    architecture: "x64",
+    runtimeManifest: {
+      payload,
+      payloadSha256: createHash("sha256").update(canonicalJsonString(payload), "utf8").digest("hex"),
+      signatureAlgorithm: "ed25519",
+      signerKeyId: "release-signer-a",
+      signatureBase64Url: Buffer.alloc(64, 8).toString("base64url"),
+    },
+    allowedWorkspaceIds: ["workspace-a"],
+    capabilityClasses: ["durable_compute"],
+    expiresInSeconds: 600,
+  };
+}
 
 async function buildAuthenticatedHarness(
   listRegistry: ReturnType<typeof vi.fn>,

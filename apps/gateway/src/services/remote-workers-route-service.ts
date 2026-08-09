@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from "node:crypto";
 import {
   NotFoundError,
   REMOTE_WORKER_ASSIGNMENT_CURSOR_SCHEMA_VERSION,
@@ -24,7 +25,15 @@ import {
   freezeRemoteWorkerRegistryDetail,
   freezeRemoteWorkerRegistryPage,
   normalizeRemoteWorkerAssignmentCursor,
+  normalizeCreateRemoteWorkerBootstrapRequest,
   normalizeRemoteWorkerRegistryCursor,
+  redactSecretText,
+  type CreateRemoteWorkerBootstrapRequest,
+  type RemoteWorkerBootstrapRecord,
+  type RemoteWorkerCapabilityClass,
+  type RemoteWorkerGenerationControlInput,
+  type RemoteWorkerGenerationControlRecord,
+  type RemoteWorkerRuntimeManifest,
   type RemoteWorkerAssignmentCursorV1,
   type RemoteWorkerAssignmentEventPage,
   type RemoteWorkerAssignmentEventRecord,
@@ -50,6 +59,7 @@ import type {
   RemoteWorkerAssignmentAggregate,
   RemoteWorkerRegistryRecord,
 } from "@goatcitadel/storage";
+import type { RemoteWorkerManifestVerifierPort } from "./remote-worker-manifest-verifier.js";
 
 const ASSIGNMENTS_OWNER = "storage.remoteWorkerAssignments";
 const GATEWAY_OWNER = "gateway.remoteWorkers";
@@ -88,6 +98,43 @@ export interface RemoteWorkerAssignmentStore {
   ): Promise<RemoteWorkerAssignmentEventRecord[]>;
 }
 
+export interface RemoteWorkerAdmissionMutationStore {
+  createBootstrap(input: {
+    readonly registryWorkspaceId: string;
+    readonly existingWorkerId?: string;
+    readonly workerLabel: string;
+    readonly platform: string;
+    readonly architecture: string;
+    readonly runtimeManifest: RemoteWorkerRuntimeManifest;
+    readonly allowedWorkspaceIds: readonly string[];
+    readonly capabilityClasses: readonly RemoteWorkerCapabilityClass[];
+    readonly expiresInSeconds: number;
+    readonly idempotencyKey: string;
+    readonly createdByActorId: string;
+    readonly bootstrapSecretSha256: string;
+  }): Promise<{
+    readonly disposition: "created" | "replayed_without_secret";
+    readonly record: RemoteWorkerBootstrapRecord;
+  }>;
+  quarantineGeneration(input: RemoteWorkerGenerationControlInput): Promise<RemoteWorkerGenerationControlRecord>;
+  revokeGeneration(input: RemoteWorkerGenerationControlInput): Promise<RemoteWorkerGenerationControlRecord>;
+}
+
+export interface RemoteWorkerOperatorAuditPort {
+  append(
+    stream: "approvals",
+    payload: Record<string, unknown>,
+    options: { readonly deliveryId: string },
+  ): Promise<void>;
+}
+
+export interface RemoteWorkerOperatorControlDependencies {
+  readonly admissions: RemoteWorkerAdmissionMutationStore;
+  readonly audit: RemoteWorkerOperatorAuditPort;
+  readonly manifestVerifier: RemoteWorkerManifestVerifierPort;
+  readonly randomSecretBytes?: (size: number) => Buffer;
+}
+
 export interface ListRemoteWorkerAssignmentsInput {
   readonly workspaceId: string;
   readonly workerId?: string;
@@ -120,10 +167,68 @@ export interface GetRemoteWorkerRegistryInput {
   readonly workerId: string;
 }
 
+export interface IssueRemoteWorkerBootstrapInput {
+  readonly workspaceId: string;
+  readonly existingWorkerId?: string;
+  readonly workerLabel: string;
+  readonly platform: string;
+  readonly architecture: string;
+  readonly runtimeManifest: RemoteWorkerRuntimeManifest;
+  readonly allowedWorkspaceIds: readonly string[];
+  readonly capabilityClasses: readonly RemoteWorkerCapabilityClass[];
+  readonly expiresInSeconds: number;
+  readonly actorId: string;
+  readonly idempotencyKey: string;
+}
+
+export interface RemoteWorkerBootstrapIssuance {
+  readonly disposition: "created" | "replayed_without_secret";
+  readonly workspaceId: string;
+  readonly bootstrapId: string;
+  readonly workerId: string;
+  readonly nodeId: string;
+  readonly targetWorkerGeneration: number;
+  readonly state: RemoteWorkerBootstrapRecord["state"];
+  readonly expiresAt: string;
+  readonly manifestPayloadSha256: string;
+  readonly auditDeliveryId: string;
+  readonly bootstrapSecret?: string;
+}
+
+export interface ControlRemoteWorkerGenerationInput {
+  readonly workspaceId: string;
+  readonly workerId: string;
+  readonly workerGeneration: number;
+  readonly reasonCode: string;
+  readonly reason: string;
+  readonly actorId: string;
+  readonly idempotencyKey: string;
+}
+
+export interface RemoteWorkerGenerationControlReceipt {
+  readonly workspaceId: string;
+  readonly workerId: string;
+  readonly workerGeneration: number;
+  readonly controlRevision: number;
+  readonly action: "quarantine" | "revoke";
+  readonly reasonCode: string;
+  readonly reasonSha256: string;
+  readonly actorId: string;
+  readonly createdAt: string;
+  readonly auditDeliveryId: string;
+}
+
 export class RemoteWorkerRegistryInputError extends Error {
   public constructor() {
     super("Remote worker registry request is invalid.");
     this.name = "RemoteWorkerRegistryInputError";
+  }
+}
+
+export class RemoteWorkerOperatorControlUnavailableError extends Error {
+  public constructor() {
+    super("Remote worker operator control is unavailable.");
+    this.name = "RemoteWorkerOperatorControlUnavailableError";
   }
 }
 
@@ -132,7 +237,90 @@ export class RemoteWorkersRouteService {
     private readonly registry: RemoteWorkerRegistryStore,
     private readonly assignments: RemoteWorkerAssignmentStore,
     private readonly now: () => string = () => new Date().toISOString(),
+    private readonly operatorControl?: RemoteWorkerOperatorControlDependencies,
   ) {}
+
+  public async issueBootstrap(input: IssueRemoteWorkerBootstrapInput): Promise<RemoteWorkerBootstrapIssuance> {
+    const control = this.requireOperatorControl();
+    let request: CreateRemoteWorkerBootstrapRequest;
+    try {
+      request = normalizeCreateRemoteWorkerBootstrapRequest({
+        registryWorkspaceId: inputIdentifier(input.workspaceId),
+        ...(input.existingWorkerId === undefined ? {} : { existingWorkerId: inputIdentifier(input.existingWorkerId) }),
+        workerLabel: input.workerLabel,
+        platform: input.platform,
+        architecture: input.architecture,
+        runtimeManifest: input.runtimeManifest,
+        allowedWorkspaceIds: input.allowedWorkspaceIds,
+        capabilityClasses: input.capabilityClasses,
+        expiresInSeconds: input.expiresInSeconds,
+        idempotencyKey: inputCanonicalIdentifier(input.idempotencyKey, 512),
+      });
+    } catch (error) {
+      if (error instanceof RemoteWorkerRegistryInputError) throw error;
+      throw new RemoteWorkerRegistryInputError();
+    }
+    const actorId = inputCanonicalIdentifier(input.actorId, 256);
+    await control.manifestVerifier.verify(request.runtimeManifest);
+
+    const secretBytes = (control.randomSecretBytes ?? randomBytes)(32);
+    if (!Buffer.isBuffer(secretBytes) || secretBytes.byteLength !== 32) {
+      secretBytes?.fill?.(0);
+      throw new RemoteWorkerOperatorControlUnavailableError();
+    }
+    const bootstrapSecret = secretBytes.toString("base64url");
+    // Protocol authorization hashes the exact UTF-8 header/token text, not the
+    // decoded random bytes. Keep issuance and live PoP resolution identical.
+    const bootstrapSecretSha256 = sha256Utf8(bootstrapSecret);
+    secretBytes.fill(0);
+
+    const outcome = await control.admissions.createBootstrap({
+      ...request,
+      createdByActorId: actorId,
+      bootstrapSecretSha256,
+    });
+    const auditDeliveryId = `remote-worker-bootstrap:${outcome.record.bootstrapId}:issued`;
+    await control.audit.append(
+      "approvals",
+      {
+        event: "remote_worker.bootstrap.issued",
+        registryWorkspaceId: outcome.record.registryWorkspaceId,
+        bootstrapId: outcome.record.bootstrapId,
+        workerId: outcome.record.workerId,
+        nodeId: outcome.record.nodeId,
+        targetWorkerGeneration: outcome.record.targetWorkerGeneration,
+        manifestPayloadSha256: outcome.record.runtimeManifest.payloadSha256,
+        workspaceCeilingSha256: outcome.record.workspaceCeilingSha256,
+        capabilityCeilingSha256: outcome.record.capabilityCeilingSha256,
+        expiresAt: outcome.record.expiresAt,
+        createdByActorId: outcome.record.createdByActorId,
+      },
+      { deliveryId: auditDeliveryId },
+    );
+    return Object.freeze({
+      disposition: outcome.disposition,
+      workspaceId: outcome.record.registryWorkspaceId,
+      bootstrapId: outcome.record.bootstrapId,
+      workerId: outcome.record.workerId,
+      nodeId: outcome.record.nodeId,
+      targetWorkerGeneration: outcome.record.targetWorkerGeneration,
+      state: outcome.record.state,
+      expiresAt: outcome.record.expiresAt,
+      manifestPayloadSha256: outcome.record.runtimeManifest.payloadSha256,
+      auditDeliveryId,
+      ...(outcome.disposition === "created" ? { bootstrapSecret } : {}),
+    });
+  }
+
+  public quarantineGeneration(
+    input: ControlRemoteWorkerGenerationInput,
+  ): Promise<RemoteWorkerGenerationControlReceipt> {
+    return this.controlGeneration("quarantine", input);
+  }
+
+  public revokeGeneration(input: ControlRemoteWorkerGenerationInput): Promise<RemoteWorkerGenerationControlReceipt> {
+    return this.controlGeneration("revoke", input);
+  }
 
   public async listRegistry(input: ListRemoteWorkerRegistryInput): Promise<RemoteWorkerRegistryPage> {
     const workspaceId = inputIdentifier(input.workspaceId);
@@ -346,6 +534,71 @@ export class RemoteWorkersRouteService {
       observedAt,
     });
   }
+
+  private async controlGeneration(
+    action: "quarantine" | "revoke",
+    input: ControlRemoteWorkerGenerationInput,
+  ): Promise<RemoteWorkerGenerationControlReceipt> {
+    const control = this.requireOperatorControl();
+    const workspaceId = inputIdentifier(input.workspaceId);
+    const workerId = inputIdentifier(input.workerId);
+    if (!Number.isSafeInteger(input.workerGeneration) || input.workerGeneration < 1) {
+      throw new RemoteWorkerRegistryInputError();
+    }
+    const reasonCode = inputCanonicalReasonCode(input.reasonCode);
+    const reason = inputCanonicalText(input.reason, 1_024);
+    if (redactSecretText(reason).redactionCount > 0) {
+      throw new RemoteWorkerRegistryInputError();
+    }
+    // Secret-like evidence is rejected above before any durable fingerprint is
+    // produced. Only this content digest crosses the repository/audit boundary.
+    const reasonSha256 = sha256Utf8(reason);
+    const actorId = inputCanonicalIdentifier(input.actorId, 256);
+    const idempotencyKey = inputCanonicalIdentifier(input.idempotencyKey, 512);
+    const record = await control.admissions[`${action}Generation`]({
+      registryWorkspaceId: workspaceId,
+      workerId,
+      workerGeneration: input.workerGeneration,
+      reasonCode,
+      reasonSha256,
+      actorId,
+      idempotencyKey,
+    });
+    const auditDeliveryId = `remote-worker-control:${record.action}:${record.requestSha256}`;
+    await control.audit.append(
+      "approvals",
+      {
+        event: `remote_worker.generation.${record.action === "quarantine" ? "quarantined" : "revoked"}`,
+        registryWorkspaceId: record.registryWorkspaceId,
+        workerId: record.workerId,
+        workerGeneration: record.workerGeneration,
+        controlRevision: record.controlRevision,
+        action: record.action,
+        reasonCode: record.reasonCode,
+        reasonSha256: record.reasonSha256,
+        actorId: record.actorId,
+        createdAt: record.createdAt,
+      },
+      { deliveryId: auditDeliveryId },
+    );
+    return Object.freeze({
+      workspaceId: record.registryWorkspaceId,
+      workerId: record.workerId,
+      workerGeneration: record.workerGeneration,
+      controlRevision: record.controlRevision,
+      action: record.action,
+      reasonCode: record.reasonCode,
+      reasonSha256: record.reasonSha256,
+      actorId: record.actorId,
+      createdAt: record.createdAt,
+      auditDeliveryId,
+    });
+  }
+
+  private requireOperatorControl(): RemoteWorkerOperatorControlDependencies {
+    if (!this.operatorControl) throw new RemoteWorkerOperatorControlUnavailableError();
+    return this.operatorControl;
+  }
 }
 
 export function encodeRemoteWorkerRegistryCursor(cursor: RemoteWorkerRegistryCursorV1): string {
@@ -435,6 +688,35 @@ function inputIdentifier(value: unknown): string {
     throw new RemoteWorkerRegistryInputError();
   }
   return value;
+}
+
+function inputCanonicalIdentifier(value: unknown, maximumLength: number): string {
+  if (
+    typeof value !== "string" ||
+    value.length < 1 ||
+    value.length > maximumLength ||
+    value !== value.normalize("NFKC").trim() ||
+    /\p{Cc}/u.test(value)
+  ) {
+    throw new RemoteWorkerRegistryInputError();
+  }
+  return value;
+}
+
+function inputCanonicalText(value: unknown, maximumLength: number): string {
+  return inputCanonicalIdentifier(value, maximumLength);
+}
+
+function inputCanonicalReasonCode(value: unknown): string {
+  const reasonCode = inputCanonicalIdentifier(value, 128);
+  if (!/^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$/u.test(reasonCode)) {
+    throw new RemoteWorkerRegistryInputError();
+  }
+  return reasonCode;
+}
+
+function sha256Utf8(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
 function inputLimit(

@@ -40,8 +40,14 @@ const SECRET_SENSITIVE_USER_INPUT_ROUTES = new Set([
   "/api/v1/chat/sessions/:sessionId/turns/:turnId/user-input/:promptId/respond",
   "/api/v1/chat/sessions/:sessionId/turns/:turnId/user-input/:promptId/secure-configuration",
 ]);
+const SECRET_SENSITIVE_REMOTE_WORKER_CONTROL_ROUTES = new Set([
+  "/api/v1/ops/workspaces/:workspaceId/remote-workers/:workerId/generations/:workerGeneration/quarantine",
+  "/api/v1/ops/workspaces/:workspaceId/remote-workers/:workerId/generations/:workerGeneration/revoke",
+]);
 const SECURE_CONFIGURATION_ROUTE =
   "/api/v1/chat/sessions/:sessionId/turns/:turnId/user-input/:promptId/secure-configuration";
+const REMOTE_WORKER_BOOTSTRAP_ROUTE = "/api/v1/ops/workspaces/:workspaceId/remote-workers/bootstrap";
+const CANONICAL_REPLAY_ROUTES = new Set([SECURE_CONFIGURATION_ROUTE, REMOTE_WORKER_BOOTSTRAP_ROUTE]);
 
 export const idempotencyHeaderPlugin = fp<IdempotencyHeaderPluginOptions>(async (fastify, options) => {
   fastify.decorateRequest("idempotencyKey", "");
@@ -100,12 +106,12 @@ export const idempotencyHeaderPlugin = fp<IdempotencyHeaderPluginOptions>(async 
       return;
     }
 
-    if (claim.outcome === "duplicate" && routePath === SECURE_CONFIGURATION_ROUTE) {
-      // The secure handler owns a secret-independent replay path backed by the
-      // immutable durable continuation seal. Let an exact transport retry
-      // recover that receipt after a lost response; the newly supplied bytes
-      // are ignored and never compared or re-applied. In-progress and payload-
-      // mismatch claims remain blocked above/below this narrow exception.
+    if (claim.outcome === "duplicate" && CANONICAL_REPLAY_ROUTES.has(routePath)) {
+      // These handlers own secret-independent replay paths backed by their
+      // canonical repositories. Let an exact transport retry recover a
+      // secret-free receipt after a lost response. Secure configuration ignores
+      // newly supplied bytes; remote-worker bootstrap generates no replay
+      // secret. In-progress and payload-mismatch claims remain blocked.
       request.mutationIdempotencyOutcome = "committed";
       return;
     }
@@ -233,10 +239,27 @@ function hashCanonicalPayload(value: unknown): string {
  * HTTP retry without creating a credential oracle or durable secret fingerprint.
  */
 function hashMutationPayload(request: FastifyRequest): string {
-  if (SECRET_SENSITIVE_USER_INPUT_ROUTES.has(getNormalizedRoutePath(request))) {
+  const routePath = getNormalizedRoutePath(request);
+  if (SECRET_SENSITIVE_USER_INPUT_ROUTES.has(routePath)) {
     return hashCanonicalPayload({
       kind: "chat_user_input_redacted_v1",
       path: request.url.split("?", 1)[0] || request.url,
+    });
+  }
+  if (SECRET_SENSITIVE_REMOTE_WORKER_CONTROL_ROUTES.has(routePath)) {
+    const body = (request as { body?: unknown }).body;
+    const reasonCode =
+      body &&
+      typeof body === "object" &&
+      !Array.isArray(body) &&
+      typeof (body as Record<string, unknown>).reasonCode === "string" &&
+      /^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$/u.test((body as Record<string, unknown>).reasonCode as string)
+        ? ((body as Record<string, unknown>).reasonCode as string)
+        : null;
+    return hashCanonicalPayload({
+      kind: "remote_worker_generation_control_redacted_v1",
+      path: request.url.split("?", 1)[0] || request.url,
+      reasonCode,
     });
   }
   return hashCanonicalPayload((request as { body?: unknown }).body ?? null);

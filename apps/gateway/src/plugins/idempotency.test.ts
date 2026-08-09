@@ -375,6 +375,99 @@ describe("idempotencyHeaderPlugin", () => {
     }
   });
 
+  it("allows exact remote-worker bootstrap replay so the canonical owner can omit the one-time secret", async () => {
+    let handlerCalls = 0;
+    const built = await buildApp((fastify) => {
+      fastify.post("/api/v1/ops/workspaces/:workspaceId/remote-workers/bootstrap", async (request) => {
+        handlerCalls += 1;
+        await markMutationCommitted(request);
+        return handlerCalls === 1
+          ? { disposition: "created", bootstrapSecret: "one-time-secret" }
+          : { disposition: "replayed_without_secret" };
+      });
+    });
+
+    try {
+      const headers = { "Idempotency-Key": "idem-worker-bootstrap-1" };
+      const payload = { workerLabel: "Windows workstation", runtimeManifest: { payloadSha256: "a".repeat(64) } };
+      const first = await built.app.inject({
+        method: "POST",
+        url: "/api/v1/ops/workspaces/workspace-a/remote-workers/bootstrap",
+        headers,
+        payload,
+      });
+      const replay = await built.app.inject({
+        method: "POST",
+        url: "/api/v1/ops/workspaces/workspace-a/remote-workers/bootstrap",
+        headers,
+        payload,
+      });
+      const mismatch = await built.app.inject({
+        method: "POST",
+        url: "/api/v1/ops/workspaces/workspace-a/remote-workers/bootstrap",
+        headers,
+        payload: { ...payload, workerLabel: "Different workstation" },
+      });
+
+      expect(first.statusCode).toBe(200);
+      expect(first.json()).toHaveProperty("bootstrapSecret", "one-time-secret");
+      expect(replay.statusCode).toBe(200);
+      expect(replay.json()).toEqual({ disposition: "replayed_without_secret" });
+      expect(mismatch.statusCode).toBe(409);
+      expect(handlerCalls).toBe(2);
+    } finally {
+      await built.app.close();
+    }
+  });
+
+  it("never fingerprints a remote-worker control reason before secret validation", async () => {
+    let handlerCalls = 0;
+    const built = await buildApp((fastify) => {
+      fastify.post(
+        "/api/v1/ops/workspaces/:workspaceId/remote-workers/:workerId/generations/:workerGeneration/quarantine",
+        async (request, reply) => {
+          handlerCalls += 1;
+          if (handlerCalls === 1) return reply.code(400).send({ error: "invalid reason" });
+          await markMutationCommitted(request);
+          return { ok: true };
+        },
+      );
+    });
+    const claim = vi.spyOn(built.store, "claim");
+    const url = "/api/v1/ops/workspaces/workspace-a/remote-workers/worker-a/generations/1/quarantine";
+    const headers = { "Idempotency-Key": "idem-worker-control-1" };
+    const secret = "Authorization: Bearer ghp_SUPER_SECRET_TOKEN_1234567890";
+
+    try {
+      const rejected = await built.app.inject({
+        method: "POST",
+        url,
+        headers,
+        payload: { reasonCode: "operator.quarantine", reason: secret },
+      });
+      const corrected = await built.app.inject({
+        method: "POST",
+        url,
+        headers,
+        payload: { reasonCode: "operator.quarantine", reason: "Worker missed its integrity checkpoint." },
+      });
+
+      expect(rejected.statusCode).toBe(400);
+      expect(corrected.statusCode).toBe(200);
+      expect(handlerCalls).toBe(2);
+      expect(claim).toHaveBeenCalledTimes(2);
+      expect(claim.mock.calls[0]?.[0].payloadHash).toBe(claim.mock.calls[1]?.[0].payloadHash);
+      expect(claim.mock.calls[0]?.[0].payloadHash).not.toBe(
+        createHash("sha256")
+          .update(JSON.stringify({ reasonCode: "operator.quarantine", reason: secret }))
+          .digest("hex"),
+      );
+      expect(JSON.stringify(claim.mock.calls)).not.toContain(secret);
+    } finally {
+      await built.app.close();
+    }
+  });
+
   it("rejects reused keys when the payload changes", async () => {
     const { app } = await buildApp((fastify) => {
       fastify.post("/api/v1/approvals/:approvalId/resolve", async () => ({ ok: true }));

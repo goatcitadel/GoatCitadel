@@ -15,6 +15,7 @@ import { createMobileRoutePort } from "./mobile-route-service.js";
 import { ModelComparisonService } from "./model-comparison-service.js";
 import { createNpuRoutePort } from "./npu-route-service.js";
 import { ResearchSearchBrokerService } from "./research-search-broker-service.js";
+import { createConfiguredRemoteWorkerManifestVerifier } from "./remote-worker-manifest-verifier.js";
 import { createSessionsListRoutePort } from "./sessions-list-route-service.js";
 import { UpdateScoutService } from "./update-scout-service.js";
 import { WorkflowRecipeService } from "./workflow-recipe-service.js";
@@ -335,6 +336,11 @@ export function composeRuntimeAdminRouteDependencies(
     remoteWorkers: {
       registry: gateway.storage.remoteWorkerAdmissions,
       assignments: gateway.storage.remoteWorkerAssignments,
+      operatorControl: {
+        admissions: gateway.storage.remoteWorkerAdmissions,
+        audit: gateway.storage.audit,
+        manifestVerifier: createConfiguredRemoteWorkerManifestVerifier(),
+      },
     },
     runtimeLifecycle: {
       getRuntimeLifecycle: (input) => gateway.runtimeLifecycleReadService.getRuntimeLifecycle(input),
