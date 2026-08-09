@@ -17,6 +17,7 @@ import type {
   RemoteWorkerCellRecord,
   RemoteWorkerCellRepository,
 } from "@goatcitadel/storage";
+import type { Awaitable, AwaitableOwnerMethods } from "./remote-worker-owner-port.js";
 
 /**
  * HX-505 remote-worker cell service (production-dark).
@@ -31,11 +32,18 @@ import type {
 
 export interface WorkerCellAssignmentAuthorityPort {
   /** Throws unless the assignment generation is a committed, active authority. */
-  assertGenerationActive(key: RemoteWorkerCellKey): void;
+  assertGenerationActive(key: RemoteWorkerCellKey): Awaitable<void>;
 }
 
+type RemoteWorkerCellRepositoryMethod = "profileOrReplay" | "getCell" | "recordCapacityHighWater";
+
+export type RemoteWorkerCellRepositoryPort = AwaitableOwnerMethods<
+  RemoteWorkerCellRepository,
+  RemoteWorkerCellRepositoryMethod
+>;
+
 export interface RemoteWorkerCellServiceDeps {
-  readonly repository: RemoteWorkerCellRepository;
+  readonly repository: RemoteWorkerCellRepositoryPort;
   readonly assignmentAuthority: WorkerCellAssignmentAuthorityPort;
 }
 
@@ -61,13 +69,13 @@ export class RemoteWorkerCellService {
   public constructor(private readonly deps: RemoteWorkerCellServiceDeps) {}
 
   /** Boundary 2: only a committed, active assignment generation may seat an immutable cell. */
-  public profileCell(input: RemoteWorkerCellProfileInput): RemoteWorkerCellProfileOutcome {
-    this.deps.assignmentAuthority.assertGenerationActive({
+  public async profileCell(input: RemoteWorkerCellProfileInput): Promise<RemoteWorkerCellProfileOutcome> {
+    await this.deps.assignmentAuthority.assertGenerationActive({
       registryWorkspaceId: input.profile.registryWorkspaceId,
       assignmentId: input.profile.assignmentId,
       assignmentGeneration: input.profile.assignmentGeneration,
     });
-    return this.deps.repository.profileOrReplay(input);
+    return await this.deps.repository.profileOrReplay(input);
   }
 
   /**
@@ -76,9 +84,11 @@ export class RemoteWorkerCellService {
    * quarantine counts the unrecoverable bytes. No branch ever deletes canonical
    * state or evidence to improve a metric.
    */
-  public evaluateCapacityAdmission(input: WorkerCellCapacityAdmissionInput): WorkerCellCapacityAdmissionResult {
+  public async evaluateCapacityAdmission(
+    input: WorkerCellCapacityAdmissionInput,
+  ): Promise<WorkerCellCapacityAdmissionResult> {
     const key = keyOf(input);
-    const existing = this.deps.repository.getCell(key);
+    const existing = await this.deps.repository.getCell(key);
     if (!existing) throw new Error("Remote worker cell not found for capacity admission.");
     const pressure = evaluateRemoteWorkerCellCapacityPressure({
       footprint: input.footprint,
@@ -94,7 +104,7 @@ export class RemoteWorkerCellService {
       pressure.decision === "quarantine"
         ? existing.quarantineRetainedBytes + input.footprint.quarantineEvidenceBytes
         : existing.quarantineRetainedBytes;
-    const cell = this.deps.repository.recordCapacityHighWater({
+    const cell = await this.deps.repository.recordCapacityHighWater({
       ...key,
       footprint: input.footprint,
       peakDiskBytes: input.peakDiskBytes,

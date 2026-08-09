@@ -11,6 +11,7 @@ import type {
   RemoteWorkerBlobInput,
 } from "@goatcitadel/storage";
 import type { RemoteWorkerArtifactStore } from "./remote-worker-artifact-store.js";
+import type { Awaitable, AwaitableOwnerMethods } from "./remote-worker-owner-port.js";
 
 /**
  * HX-506 artifact settlement service (production-dark).
@@ -30,11 +31,18 @@ export interface RemoteWorkerAssignmentAuthorityFence {
     assignmentId: string;
     assignmentGeneration: number;
     leaseTokenSha256: string;
-  }): void;
+  }): Awaitable<void>;
 }
 
+type RemoteWorkerArtifactSettlementRepositoryMethod = "openUpload" | "appendPart" | "commitArtifact";
+
+export type RemoteWorkerArtifactSettlementRepositoryPort = AwaitableOwnerMethods<
+  RemoteWorkerArtifactRepository,
+  RemoteWorkerArtifactSettlementRepositoryMethod
+>;
+
 export interface RemoteWorkerArtifactSettlementDependencies {
-  repository: RemoteWorkerArtifactRepository;
+  repository: RemoteWorkerArtifactSettlementRepositoryPort;
   store: RemoteWorkerArtifactStore;
   authority: RemoteWorkerAssignmentAuthorityFence;
 }
@@ -82,7 +90,7 @@ export interface CommitArtifactInput {
 }
 
 export class RemoteWorkerArtifactSettlementService {
-  private readonly repository: RemoteWorkerArtifactRepository;
+  private readonly repository: RemoteWorkerArtifactSettlementRepositoryPort;
   private readonly store: RemoteWorkerArtifactStore;
   private readonly authority: RemoteWorkerAssignmentAuthorityFence;
 
@@ -92,16 +100,16 @@ export class RemoteWorkerArtifactSettlementService {
     this.authority = dependencies.authority;
   }
 
-  public openUpload(input: OpenUploadInput): RemoteWorkerArtifactUploadRecord {
-    this.authority.assertLiveAuthority(input);
-    return this.repository.openUpload(input);
+  public async openUpload(input: OpenUploadInput): Promise<RemoteWorkerArtifactUploadRecord> {
+    await this.authority.assertLiveAuthority(input);
+    return await this.repository.openUpload(input);
   }
 
-  public appendPart(input: AppendPartInput): RemoteWorkerArtifactUploadRecord {
+  public async appendPart(input: AppendPartInput): Promise<RemoteWorkerArtifactUploadRecord> {
     // Every part operation rechecks the exact current assignment authority before
     // it records an immutable part receipt.
-    this.authority.assertLiveAuthority(input);
-    return this.repository.appendPart(input);
+    await this.authority.assertLiveAuthority(input);
+    return await this.repository.appendPart(input);
   }
 
   /**
@@ -111,7 +119,7 @@ export class RemoteWorkerArtifactSettlementService {
    * manifest, entries, upload commit, and verification-gate state.
    */
   public async commitArtifact(input: CommitArtifactInput): Promise<RemoteWorkerArtifactUploadRecord> {
-    this.authority.assertLiveAuthority(input);
+    await this.authority.assertLiveAuthority(input);
     if (input.files.length > REMOTE_WORKER_SETTLEMENT_BOUNDS.maxFiles) {
       throw new RangeError("Remote worker artifact commit exceeds the file bound.");
     }
@@ -134,8 +142,8 @@ export class RemoteWorkerArtifactSettlementService {
       });
     }
     // Re-lock assignment authority immediately before the durable transaction.
-    this.authority.assertLiveAuthority(input);
-    return this.repository.commitArtifact({
+    await this.authority.assertLiveAuthority(input);
+    return await this.repository.commitArtifact({
       registryWorkspaceId: input.registryWorkspaceId,
       assignmentId: input.assignmentId,
       assignmentGeneration: input.assignmentGeneration,

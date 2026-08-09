@@ -8,14 +8,14 @@ import {
 const D = (value: string): string => createHash("sha256").update(value).digest("hex");
 
 function fakeRepository() {
-  const advance = vi.fn((input: { nextState: string }) => ({
+  const advance = vi.fn(async (input: { nextState: string }) => ({
     verificationId: "verification-1",
     // Only a passed Gateway attempt satisfies the gate.
     gateState: input.nextState === "passed" ? "satisfied" : "pending",
   }));
   return {
-    recordWorkerClaim: vi.fn((input: unknown) => ({ verificationId: "worker-claim-1", input })),
-    openGatewayVerification: vi.fn(() => ({ verificationId: "verification-1" })),
+    recordWorkerClaim: vi.fn(async (input: unknown) => ({ verificationId: "worker-claim-1", input })),
+    openGatewayVerification: vi.fn(async () => ({ verificationId: "verification-1" })),
     advanceGatewayVerification: advance,
   };
 }
@@ -39,14 +39,14 @@ const baseInput = {
 };
 
 describe("HX-506 verification service", () => {
-  it("records a worker claim as evidence only, never a gate-satisfying attempt", () => {
+  it("records a worker claim as evidence only, never a gate-satisfying attempt", async () => {
     const repository = fakeRepository();
     const service = new RemoteWorkerVerificationService({
       repository: repository as never,
       store: fakeStore() as never,
       verifier: { verify: vi.fn() },
     });
-    service.recordWorkerClaim({
+    await service.recordWorkerClaim({
       registryWorkspaceId: "default",
       assignmentId: "assignment-1",
       assignmentGeneration: 1,

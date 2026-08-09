@@ -16,6 +16,7 @@ import type {
   RemoteWorkerInferenceDispatchRequest,
   RemoteWorkerInferenceProviderResolution,
 } from "./remote-worker-inference-llm-adapter.js";
+import type { Awaitable, AwaitableOwnerMethods } from "./remote-worker-owner-port.js";
 
 /**
  * HX-503 assignment-bound inference service (production-dark).
@@ -38,11 +39,6 @@ import type {
 
 export const REMOTE_WORKER_INFERENCE_REQUIRED_CLAIMS = ["worker_runtime", "gateway_inference"] as const;
 
-type Awaitable<T> = T | Promise<T>;
-type AwaitableRepositoryMethod<Method> = Method extends (...args: infer Args) => infer Result
-  ? (...args: Args) => Awaitable<Result>
-  : never;
-
 type RemoteWorkerInferenceRepositoryMethod =
   | "admitOrReplay"
   | "claimDispatch"
@@ -54,11 +50,10 @@ type RemoteWorkerInferenceRepositoryMethod =
   | "listFramesAfter";
 
 /** Promise-compatible owner boundary used by the Gateway AsyncStorage graph. */
-export type RemoteWorkerInferenceRepositoryPort = {
-  readonly [Method in RemoteWorkerInferenceRepositoryMethod]: AwaitableRepositoryMethod<
-    RemoteWorkerInferenceRepository[Method]
-  >;
-};
+export type RemoteWorkerInferenceRepositoryPort = AwaitableOwnerMethods<
+  RemoteWorkerInferenceRepository,
+  RemoteWorkerInferenceRepositoryMethod
+>;
 
 export interface RemoteWorkerInferenceResolvedAuthority {
   readonly registryWorkspaceId: string;

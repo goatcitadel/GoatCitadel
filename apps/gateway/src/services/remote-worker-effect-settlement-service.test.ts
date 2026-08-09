@@ -13,8 +13,8 @@ function fakeEffectRepository() {
   const transitions: Array<{ transitionState: string; transitionSequence: number; transitionSha256: string }> = [];
   return {
     transitions,
-    recordIntent: vi.fn(() => ({ intentId: "intent-1", canonicalArgsSha256: D("args") })),
-    appendTransition: vi.fn((input: { correlation: unknown }) => {
+    recordIntent: vi.fn(async () => ({ intentId: "intent-1", canonicalArgsSha256: D("args") })),
+    appendTransition: vi.fn(async (input: { correlation: unknown }) => {
       // Mirror the real repository's contract enforcement: an invalid correlation
       // (e.g. a completed_with_effect with no canonical HX-305 outcome) is rejected.
       const correlation = normalizeRemoteWorkerEffectCorrelation(input.correlation as never);
@@ -29,7 +29,7 @@ function fakeEffectRepository() {
       transitions.push(record);
       return record;
     }),
-    recordReceipt: vi.fn((input: { receiptState: string; hx305OutcomeSha256: string | null }) => ({
+    recordReceipt: vi.fn(async (input: { receiptState: string; hx305OutcomeSha256: string | null }) => ({
       intentId: "intent-1",
       receiptState: input.receiptState,
       receiptRevision: 1,

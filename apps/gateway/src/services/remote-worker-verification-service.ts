@@ -6,6 +6,7 @@ import {
 } from "@goatcitadel/contracts";
 import type { RemoteWorkerArtifactRepository } from "@goatcitadel/storage";
 import type { RemoteWorkerArtifactStore } from "./remote-worker-artifact-store.js";
+import type { AwaitableOwnerMethods } from "./remote-worker-owner-port.js";
 
 /**
  * HX-506 trusted verification service (production-dark).
@@ -36,10 +37,20 @@ export interface RemoteWorkerTrustedVerifierPort {
 }
 
 export interface RemoteWorkerVerificationDependencies {
-  repository: RemoteWorkerArtifactRepository;
+  repository: RemoteWorkerVerificationRepositoryPort;
   store: RemoteWorkerArtifactStore;
   verifier: RemoteWorkerTrustedVerifierPort;
 }
+
+type RemoteWorkerVerificationRepositoryMethod =
+  | "recordWorkerClaim"
+  | "openGatewayVerification"
+  | "advanceGatewayVerification";
+
+export type RemoteWorkerVerificationRepositoryPort = AwaitableOwnerMethods<
+  RemoteWorkerArtifactRepository,
+  RemoteWorkerVerificationRepositoryMethod
+>;
 
 export interface RecordWorkerClaimInput {
   registryWorkspaceId: string;
@@ -72,7 +83,7 @@ export interface GatewayVerificationOutcome {
 }
 
 export class RemoteWorkerVerificationService {
-  private readonly repository: RemoteWorkerArtifactRepository;
+  private readonly repository: RemoteWorkerVerificationRepositoryPort;
   private readonly store: RemoteWorkerArtifactStore;
   private readonly verifier: RemoteWorkerTrustedVerifierPort;
 
@@ -83,7 +94,7 @@ export class RemoteWorkerVerificationService {
   }
 
   /** Records worker-reported evidence. It never satisfies the gate. */
-  public recordWorkerClaim(input: RecordWorkerClaimInput): { verificationId: string } {
+  public async recordWorkerClaim(input: RecordWorkerClaimInput): Promise<{ verificationId: string }> {
     const evidence: RemoteWorkerVerificationEvidence = {
       schemaVersion: REMOTE_WORKER_VERIFICATION_EVIDENCE_SCHEMA_VERSION,
       kind: "worker_claim",
@@ -94,7 +105,7 @@ export class RemoteWorkerVerificationService {
       summary: input.summary.slice(0, REMOTE_WORKER_SETTLEMENT_BOUNDS.maxVerificationSummaryBytes),
       capturedOutputBytes: 0,
     };
-    return this.repository.recordWorkerClaim({
+    return await this.repository.recordWorkerClaim({
       registryWorkspaceId: input.registryWorkspaceId,
       assignmentId: input.assignmentId,
       assignmentGeneration: input.assignmentGeneration,
@@ -108,7 +119,7 @@ export class RemoteWorkerVerificationService {
     // Rehash immutable CAS bytes BEFORE execution; a tampered object fails closed.
     const files = await this.loadImmutableFiles(input);
 
-    const attempt = this.repository.openGatewayVerification({
+    const attempt = await this.repository.openGatewayVerification({
       registryWorkspaceId: input.registryWorkspaceId,
       assignmentId: input.assignmentId,
       assignmentGeneration: input.assignmentGeneration,
@@ -119,7 +130,7 @@ export class RemoteWorkerVerificationService {
       idempotencyKey: input.idempotencyKey,
     });
 
-    this.repository.advanceGatewayVerification({
+    await this.repository.advanceGatewayVerification({
       registryWorkspaceId: input.registryWorkspaceId,
       assignmentId: input.assignmentId,
       assignmentGeneration: input.assignmentGeneration,
@@ -153,7 +164,7 @@ export class RemoteWorkerVerificationService {
       summary = error instanceof Error ? error.message.slice(0, 256) : "verifier crashed";
     }
 
-    const advanced = this.repository.advanceGatewayVerification({
+    const advanced = await this.repository.advanceGatewayVerification({
       registryWorkspaceId: input.registryWorkspaceId,
       assignmentId: input.assignmentId,
       assignmentGeneration: input.assignmentGeneration,

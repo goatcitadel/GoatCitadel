@@ -223,7 +223,7 @@ async function commitArtifact(
   const fileBytes = new TextEncoder().encode("artifact-content");
   const blobSha256 = DB(fileBytes);
   const logicalPath = "out/result.bin";
-  const opened = service.openUpload({
+  const opened = await service.openUpload({
     ...key,
     uploadAttempt: 1,
     declaredFileCount: 1,
@@ -232,7 +232,7 @@ async function commitArtifact(
     expiresAt: FUTURE,
     idempotencyKey: "open",
   });
-  service.appendPart({
+  await service.appendPart({
     ...key,
     uploadId: opened.uploadId,
     part: {
