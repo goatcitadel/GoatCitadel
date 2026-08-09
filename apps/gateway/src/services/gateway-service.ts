@@ -1698,6 +1698,7 @@ export class GatewayService {
     // projects its catalog entries.
     this.meshCapabilityPublicationService = new MeshCapabilityPublicationService({
       storage: this.storage,
+      remoteWorkerAuthority: this.storage.remoteWorkerMeshNodeAdmissions,
       publishRealtime: async (eventType, source, payload) => {
         await this.publishRealtime(eventType, source, payload);
       },

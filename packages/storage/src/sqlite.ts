@@ -58,6 +58,7 @@ import { createChannelCronDurabilitySchema } from "./sqlite/channel-cron-durabil
 import { createGovernedLifecycleSchema } from "./sqlite/governed-lifecycle-schema.js";
 import { createGovernedRemediationSchema } from "./sqlite/governed-remediation-schema.js";
 import { createRemoteWorkerProtectedAdmissionEvidenceSchema } from "./sqlite/remote-worker-protected-admission-evidence.js";
+import { createRemoteWorkerMeshNodeAdmissionSchema } from "./sqlite/remote-worker-mesh-node-admission.js";
 import { upgradeGovernedRemediationRecipeBinding } from "./sqlite/governed-remediation-recipe-binding.js";
 
 const SQLITE_BUSY_TIMEOUT_MS = 5_000;
@@ -7091,6 +7092,21 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
             return;
           }
           createRemoteWorkerProtectedAdmissionEvidenceSchema(db);
+        },
+      },
+      {
+        version: 194,
+        name: "remote_worker_mesh_node_admission_authority",
+        up: (db) => {
+          if (
+            !tableExists(db, "mesh_capability_node_admissions") ||
+            !tableExists(db, "mesh_join_tokens") ||
+            !tableExists(db, "remote_worker_runtime_credentials") ||
+            !tableExists(db, "remote_worker_protected_admission_evidence")
+          ) {
+            return;
+          }
+          createRemoteWorkerMeshNodeAdmissionSchema(db);
         },
       },
     ],

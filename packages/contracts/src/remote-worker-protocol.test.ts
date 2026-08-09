@@ -13,12 +13,12 @@ import {
 const fixture = (): RemoteWorkerPopV2Input => ({
   schemaVersion: REMOTE_WORKER_POP_V2_SCHEMA_VERSION,
   method: "POST",
-  rawPath: "/api/v1/remote-workers/assignment-syncs",
-  operation: "assignment.sync",
+  rawPath: "/api/v1/remote-workers/mesh-node-admissions",
+  operation: "mesh.node.admit",
   bodySha256: "11".repeat(32),
   nonce: Buffer.alloc(32, 0x22).toString("base64url"),
   timestamp: "2026-08-09T07:00:00.123Z",
-  idempotencyKey: "assignment-sync:fixture-1",
+  idempotencyKey: "mesh-node-admit:fixture-1",
   authorityKind: "credential",
   authorityId: "credential-1",
   authorityGeneration: 7,
@@ -29,7 +29,7 @@ const fixture = (): RemoteWorkerPopV2Input => ({
 });
 
 describe("remote worker protected proof v2 contract", () => {
-  it("pins the exact six callable POST route and operation purposes", () => {
+  it("pins the exact seven callable POST route and operation purposes", () => {
     expect(REMOTE_WORKER_POP_V2_ROUTE_BINDINGS).toStrictEqual([
       {
         code: 1,
@@ -73,6 +73,13 @@ describe("remote worker protected proof v2 contract", () => {
         operation: "assignment.settle",
         authorityKind: "credential",
       },
+      {
+        code: 7,
+        method: "POST",
+        rawPath: "/api/v1/remote-workers/mesh-node-admissions",
+        operation: "mesh.node.admit",
+        authorityKind: "credential",
+      },
     ]);
   });
 
@@ -86,7 +93,7 @@ describe("remote worker protected proof v2 contract", () => {
     expect(first[domainBytes.byteLength - 1]).toBe(0);
     expect(first.subarray(domainBytes.byteLength)).toHaveLength(252);
     expect(createHash("sha256").update(first).digest("hex")).toBe(
-      "b8728015bbbff5f52ee2a99c0ecb8f43edd8a468dfc890d854bbbae35dcff886",
+      "c9f1db185a7679e20363c365fb0077815b1aefdf0e2367502fc58352202c3918",
     );
   });
 
@@ -103,7 +110,7 @@ describe("remote worker protected proof v2 contract", () => {
       { ...base, authorityGeneration: 8 },
       { ...base, workerGeneration: 4 },
       { ...base, timestamp: "2026-08-09T07:00:00.124Z" },
-      { ...base, idempotencyKey: "assignment-sync:fixture-2" },
+      { ...base, idempotencyKey: "mesh-node-admit:fixture-2" },
     ];
     expect(new Set(mutations.map((entry) => digest(buildRemoteWorkerPopV2Preimage(entry))))).toHaveLength(
       mutations.length,

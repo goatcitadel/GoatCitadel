@@ -47,8 +47,13 @@ const SECRET_SENSITIVE_REMOTE_WORKER_CONTROL_ROUTES = new Set([
 const SECURE_CONFIGURATION_ROUTE =
   "/api/v1/chat/sessions/:sessionId/turns/:turnId/user-input/:promptId/secure-configuration";
 const REMOTE_WORKER_BOOTSTRAP_ROUTE = "/api/v1/ops/workspaces/:workspaceId/remote-workers/bootstrap";
+const REMOTE_WORKER_MESH_JOIN_AUTHORITY_ROUTE =
+  "/api/v1/ops/workspaces/:workspaceId/remote-workers/:workerId/generations/:workerGeneration/mesh-node-join-authorities";
 const CANONICAL_REPLAY_ROUTES = new Set([SECURE_CONFIGURATION_ROUTE]);
-const CANONICAL_IDEMPOTENCY_OWNER_ROUTES = new Set([REMOTE_WORKER_BOOTSTRAP_ROUTE]);
+const CANONICAL_IDEMPOTENCY_OWNER_ROUTES = new Set([
+  REMOTE_WORKER_BOOTSTRAP_ROUTE,
+  REMOTE_WORKER_MESH_JOIN_AUTHORITY_ROUTE,
+]);
 
 export const idempotencyHeaderPlugin = fp<IdempotencyHeaderPluginOptions>(async (fastify, options) => {
   fastify.decorateRequest("idempotencyKey", "");
@@ -80,10 +85,10 @@ export const idempotencyHeaderPlugin = fp<IdempotencyHeaderPluginOptions>(async 
       !shouldEnforceMutationIdempotency(request) ||
       CANONICAL_IDEMPOTENCY_OWNER_ROUTES.has(routePath)
     ) {
-      // A one-time bootstrap secret is deliberately not recoverable from its
-      // durable hash. Its repository therefore owns replay and request drift
-      // directly; a second generic claim could fail after canonical commit and
-      // suppress the only response that is allowed to expose the secret.
+      // One-time remote-worker secrets are deliberately not recoverable from
+      // durable hashes. Their repositories own replay and request drift; a
+      // second generic claim could fail after canonical commit and suppress the
+      // only response that is allowed to expose a secret.
       return;
     }
 

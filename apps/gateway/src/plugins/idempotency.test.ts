@@ -430,6 +430,52 @@ describe("idempotencyHeaderPlugin", () => {
     }
   });
 
+  it("defers mesh join secret replay and drift to its canonical storage owner", async () => {
+    let handlerCalls = 0;
+    const built = await buildApp((fastify) => {
+      let canonicalPayload: string | undefined;
+      fastify.post(
+        "/api/v1/ops/workspaces/:workspaceId/remote-workers/:workerId/generations/:workerGeneration/mesh-node-join-authorities",
+        async (request, reply) => {
+          handlerCalls += 1;
+          const payload = JSON.stringify((request as { body: unknown }).body);
+          canonicalPayload ??= payload;
+          if (payload !== canonicalPayload) return reply.code(409).send({ error: "canonical join request drift" });
+          await markMutationCommitted(request);
+          return handlerCalls === 1
+            ? { disposition: "created", meshNodeCredential: "one-time-mesh-secret" }
+            : { disposition: "replayed_without_secret", secretDisposition: "not_recoverable" };
+        },
+      );
+    });
+    const claim = vi.spyOn(built.store, "claim");
+    const markCompleted = vi.spyOn(built.store, "markCompleted");
+
+    try {
+      const headers = { "Idempotency-Key": "idem-mesh-join-1" };
+      const url = "/api/v1/ops/workspaces/registry-a/remote-workers/worker-a/generations/2/mesh-node-join-authorities";
+      const payload = { targetWorkspaceId: "workspace-a", expiresInSeconds: 300 };
+      const first = await built.app.inject({ method: "POST", url, headers, payload });
+      const replay = await built.app.inject({ method: "POST", url, headers, payload });
+      const mismatch = await built.app.inject({
+        method: "POST",
+        url,
+        headers,
+        payload: { ...payload, expiresInSeconds: 301 },
+      });
+
+      expect(first.statusCode).toBe(200);
+      expect(first.json()).toHaveProperty("meshNodeCredential", "one-time-mesh-secret");
+      expect(replay.json()).toEqual({ disposition: "replayed_without_secret", secretDisposition: "not_recoverable" });
+      expect(mismatch.statusCode).toBe(409);
+      expect(handlerCalls).toBe(3);
+      expect(claim).not.toHaveBeenCalled();
+      expect(markCompleted).not.toHaveBeenCalled();
+    } finally {
+      await built.app.close();
+    }
+  });
+
   it("never fingerprints a remote-worker control reason before secret validation", async () => {
     let handlerCalls = 0;
     const built = await buildApp((fastify) => {

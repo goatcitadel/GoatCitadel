@@ -226,6 +226,7 @@ describe("composeRuntimeAdminRouteDependencies", () => {
     const gateway = createGateway();
     const deps = composeRuntimeAdminRouteDependencies(gateway as never) as any;
 
+    expect(deps.remoteWorkers.operatorControl.meshNodeJoinAuthorities).toBeUndefined();
     expect(deps.authAdmin.getAuthCredentialPlan()).toMatchObject({ mode: "token" });
     expect(deps.authAdmin.createDeviceAccessRequest({ label: "phone" }, { ip: "127.0.0.1" })).toMatchObject({
       input: { label: "phone" },

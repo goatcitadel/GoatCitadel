@@ -46,6 +46,13 @@ export const REMOTE_WORKER_POP_V2_ROUTE_BINDINGS = Object.freeze([
     operation: "assignment.settle",
     authorityKind: "credential",
   }),
+  Object.freeze({
+    code: 7,
+    method: "POST",
+    rawPath: "/api/v1/remote-workers/mesh-node-admissions",
+    operation: "mesh.node.admit",
+    authorityKind: "credential",
+  }),
 ] as const);
 
 export type RemoteWorkerPopV2RouteBinding = (typeof REMOTE_WORKER_POP_V2_ROUTE_BINDINGS)[number];
@@ -88,7 +95,7 @@ export const REMOTE_WORKER_POP_V2_FIXED_MATERIAL_BYTES = FIXED_HEADER_BYTES + UI
 export const REMOTE_WORKER_POP_V2_PREIMAGE_BYTES = DOMAIN_BYTES.byteLength + REMOTE_WORKER_POP_V2_FIXED_MATERIAL_BYTES;
 
 /**
- * Normalize the only six worker-callable protocol purposes. Keeping method,
+ * Normalize the only seven worker-callable protocol purposes. Keeping method,
  * route, operation, and authority purpose in one closed table prevents a
  * protected key from becoming a generic signing oracle.
  */

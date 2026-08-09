@@ -796,7 +796,7 @@ describe("remote worker native TLS listener", () => {
         expect(stableAdmissionBindings(finalizations[1]?.command)).toEqual(
           stableAdmissionBindings(finalizations[0]?.command),
         );
-        const authority = new RemoteWorkerProtectedAdmissionAuthorityService(repository).resolveCurrent({
+        const authority = await new RemoteWorkerProtectedAdmissionAuthorityService(repository).resolveCurrent({
           registryWorkspaceId: "default",
           workerId: bootstrap.workerId,
           workerGeneration: 1,
@@ -812,7 +812,7 @@ describe("remote worker native TLS listener", () => {
           findProtectedAdmissionEvidenceRecord: () => authority.evidence,
           getBootstrap: () => canonicalBootstrap,
         };
-        expect(() =>
+        await expect(
           new RemoteWorkerProtectedAdmissionAuthorityService({
             ...authorityStore,
             findProtectedAdmissionEvidenceRecord: () => ({
@@ -820,19 +820,19 @@ describe("remote worker native TLS listener", () => {
               workspaceCeilingSha256: sha256("tampered-persisted-context-field"),
             }),
           }).resolveCurrent({ registryWorkspaceId: "default", workerId: bootstrap.workerId, workerGeneration: 1 }),
-        ).toThrow("Current protected remote worker admission authority is unavailable.");
-        expect(() =>
+        ).rejects.toThrow("Current protected remote worker admission authority is unavailable.");
+        await expect(
           new RemoteWorkerProtectedAdmissionAuthorityService({
             ...authorityStore,
             findCurrentGeneration: () => ({ ...authority.generation, bootstrapId: "bootstrap-tampered" }),
           }).resolveCurrent({ registryWorkspaceId: "default", workerId: bootstrap.workerId, workerGeneration: 1 }),
-        ).toThrow("Current protected remote worker admission authority is unavailable.");
-        expect(() =>
+        ).rejects.toThrow("Current protected remote worker admission authority is unavailable.");
+        await expect(
           new RemoteWorkerProtectedAdmissionAuthorityService({
             ...authorityStore,
             getBootstrap: () => ({ ...canonicalBootstrap, nodeId: "node-tampered" }),
           }).resolveCurrent({ registryWorkspaceId: "default", workerId: bootstrap.workerId, workerGeneration: 1 }),
-        ).toThrow("Current protected remote worker admission authority is unavailable.");
+        ).rejects.toThrow("Current protected remote worker admission authority is unavailable.");
       } finally {
         database.close();
       }

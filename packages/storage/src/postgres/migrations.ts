@@ -3,6 +3,7 @@ import { buildPostgresRuntimeSchemaSql } from "./runtime-schema.js";
 import { GOVERNED_REMEDIATION_POSTGRES_SCHEMA_SQL } from "./governed-remediation-schema.js";
 import { GOVERNED_REMEDIATION_RECIPE_BINDING_POSTGRES_SQL } from "./governed-remediation-recipe-binding.js";
 import { REMOTE_WORKER_PROTECTED_ADMISSION_EVIDENCE_POSTGRES_SQL } from "./remote-worker-protected-admission-evidence.js";
+import { REMOTE_WORKER_MESH_NODE_ADMISSION_POSTGRES_SQL } from "./remote-worker-mesh-node-admission.js";
 
 export interface PostgresMigration {
   version: number;
@@ -14256,6 +14257,12 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     name: "remote_worker_protected_admission_evidence",
     sql: REMOTE_WORKER_PROTECTED_ADMISSION_EVIDENCE_POSTGRES_SQL,
     integritySha256: "6da2dbc1cdb2fbada57fdbaf3573003196ec9702f59519144e501a06ad28463a",
+  },
+  {
+    version: 137,
+    name: "remote_worker_mesh_node_admission_authority",
+    sql: REMOTE_WORKER_MESH_NODE_ADMISSION_POSTGRES_SQL,
+    integritySha256: "2bdbf5518ee1b919a852d8e3e00b98b05ce1f92d2c0563d73c1fb4010d996f97",
   },
 ];
 

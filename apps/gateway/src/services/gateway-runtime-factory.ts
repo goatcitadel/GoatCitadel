@@ -148,6 +148,7 @@ function createGatewayRuntimeFacade(gateway: GatewayService): GatewayRuntimeInst
       await createGatewayRemoteWorkerAdmissionNativeRequestHandler({
         config,
         admissionStore: gateway.storage.remoteWorkerAdmissions,
+        meshNodeAdmissionStore: gateway.storage.remoteWorkerMeshNodeAdmissions,
         createEvidenceVerifier: () => new RemoteWorkerProtectedAdmissionEvidenceVerifier(),
       }),
     attachDevDiagnosticsLogger: (logger) => gateway.attachDevDiagnosticsLogger(logger),

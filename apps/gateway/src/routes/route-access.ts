@@ -7,6 +7,7 @@ import type {
   preHandlerAsyncHookHandler,
   preHandlerHookHandler,
 } from "fastify";
+import type { MeshCapabilityAuthenticatedNodeIdentity } from "../services/mesh-capability-publication-service.js";
 
 export type RouteAccessClass =
   | "public"
@@ -393,13 +394,7 @@ async function requireMeshNodeAccess(
   }
   const result = (await service.authenticateNodeRequest(request)) as
     | {
-        identity: {
-          workspaceId: string;
-          nodeId: string;
-          admissionGeneration: number;
-          mtlsRequired: boolean;
-          tlsFingerprint?: string;
-        };
+        identity: MeshCapabilityAuthenticatedNodeIdentity;
       }
     | { statusCode: number; reason: string; message: string };
   if ("statusCode" in result) {

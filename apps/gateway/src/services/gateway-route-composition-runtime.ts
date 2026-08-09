@@ -340,6 +340,8 @@ export function composeRuntimeAdminRouteDependencies(
         admissions: gateway.storage.remoteWorkerAdmissions,
         audit: gateway.storage.audit,
         manifestVerifier: createConfiguredRemoteWorkerManifestVerifier(),
+        // Join-secret issuance stays dark with native admission until its
+        // protected signer and assignment owner can pass startup preflight.
       },
     },
     runtimeLifecycle: {

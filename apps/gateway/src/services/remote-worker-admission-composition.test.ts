@@ -16,7 +16,27 @@ describe("remote worker admission production composition", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("returns a live handler only after evidence preflight succeeds", async () => {
+  it("keeps the entire listener dark while atomic M3 or assignment ownership is absent", async () => {
+    const createEvidenceVerifier = vi.fn(() => unusedVerifier());
+    await expect(
+      createGatewayRemoteWorkerAdmissionNativeRequestHandler({
+        config: enabledConfig(),
+        admissionStore: unusedAdmissionStore() as never,
+        createEvidenceVerifier,
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      createGatewayRemoteWorkerAdmissionNativeRequestHandler({
+        config: enabledConfig(),
+        admissionStore: unusedAdmissionStore() as never,
+        meshNodeAdmissionStore: unusedMeshAdmissionStore(),
+        createEvidenceVerifier,
+      }),
+    ).resolves.toBeUndefined();
+    expect(createEvidenceVerifier).not.toHaveBeenCalled();
+  });
+
+  it("returns a live mux only after every owner preflight succeeds", async () => {
     const assertAvailable = vi.fn(async () => undefined);
     const verifier: RemoteWorkerAdmissionEvidenceVerifier = {
       assertAvailable,
@@ -25,13 +45,19 @@ describe("remote worker admission production composition", () => {
       }),
     };
     const config = enabledConfig();
+    const meshNodeAdmissionStore = unusedMeshAdmissionStore();
+    const assignmentProtocol = unusedAssignmentProtocol();
     const handler = await createGatewayRemoteWorkerAdmissionNativeRequestHandler({
       config,
-      admissionStore: unusedAdmissionStore(),
+      admissionStore: unusedAdmissionStore() as never,
+      meshNodeAdmissionStore,
+      assignmentProtocol,
       createEvidenceVerifier: vi.fn(() => verifier),
     });
 
     expect(assertAvailable).toHaveBeenCalledTimes(1);
+    expect(meshNodeAdmissionStore.assertAvailable).toHaveBeenCalledTimes(1);
+    expect(assignmentProtocol.assertAvailable).toHaveBeenCalledTimes(1);
     expect(handler).toBeTypeOf("function");
   });
 
@@ -40,7 +66,9 @@ describe("remote worker admission production composition", () => {
     await expect(
       createGatewayRemoteWorkerAdmissionNativeRequestHandler({
         config: enabledConfig(),
-        admissionStore: unusedAdmissionStore(),
+        admissionStore: unusedAdmissionStore() as never,
+        meshNodeAdmissionStore: unusedMeshAdmissionStore(),
+        assignmentProtocol: unusedAssignmentProtocol(),
         createEvidenceVerifier: () => ({
           assertAvailable: vi.fn(async () => {
             throw preflightError;
@@ -77,6 +105,33 @@ function enabledConfig(): EnabledRemoteWorkerRuntimeConfig {
     bootstrapTtlSeconds: 600,
     credentialTtlSeconds: 900,
   });
+}
+
+function unusedVerifier(): RemoteWorkerAdmissionEvidenceVerifier {
+  return {
+    assertAvailable: vi.fn(async () => undefined),
+    verify: vi.fn(async () => {
+      throw new Error("not exercised");
+    }),
+  };
+}
+
+function unusedMeshAdmissionStore() {
+  return {
+    assertAvailable: vi.fn(async () => undefined),
+    admitWithNonce: vi.fn(async () => {
+      throw new Error("not exercised");
+    }),
+  };
+}
+
+function unusedAssignmentProtocol() {
+  return {
+    assertAvailable: vi.fn(async () => undefined),
+    execute: vi.fn(async () => {
+      throw new Error("not exercised");
+    }),
+  };
 }
 
 function unusedAdmissionStore(): RemoteWorkerAdmissionStorePort {

@@ -62,6 +62,11 @@ import type {
   RemoteWorkerRegistryRecord,
 } from "@goatcitadel/storage";
 import type { RemoteWorkerManifestVerifierPort } from "./remote-worker-manifest-verifier.js";
+import type {
+  RemoteWorkerMeshNodeJoinAuthorityService,
+  IssueRemoteWorkerMeshNodeJoinAuthorityInput,
+  RevokeRemoteWorkerMeshNodeJoinAuthorityInput,
+} from "./remote-worker-mesh-node-join-authority-service.js";
 
 const ASSIGNMENTS_OWNER = "storage.remoteWorkerAssignments";
 const GATEWAY_OWNER = "gateway.remoteWorkers";
@@ -135,6 +140,7 @@ export interface RemoteWorkerOperatorControlDependencies {
   readonly admissions: RemoteWorkerAdmissionMutationStore;
   readonly audit: RemoteWorkerOperatorAuditPort;
   readonly manifestVerifier: RemoteWorkerManifestVerifierPort;
+  readonly meshNodeJoinAuthorities?: RemoteWorkerMeshNodeJoinAuthorityService;
   readonly randomSecretBytes?: (size: number) => Buffer;
 }
 
@@ -338,6 +344,22 @@ export class RemoteWorkersRouteService {
       auditDeliveryId,
       ...(outcome.disposition === "created" ? { bootstrapSecret } : {}),
     });
+  }
+
+  public issueMeshNodeJoinAuthority(
+    input: IssueRemoteWorkerMeshNodeJoinAuthorityInput,
+  ): ReturnType<RemoteWorkerMeshNodeJoinAuthorityService["issue"]> {
+    const service = this.requireOperatorControl().meshNodeJoinAuthorities;
+    if (service === undefined) throw new RemoteWorkerOperatorControlUnavailableError();
+    return service.issue(input);
+  }
+
+  public revokeMeshNodeJoinAuthority(
+    input: RevokeRemoteWorkerMeshNodeJoinAuthorityInput,
+  ): ReturnType<RemoteWorkerMeshNodeJoinAuthorityService["revoke"]> {
+    const service = this.requireOperatorControl().meshNodeJoinAuthorities;
+    if (service === undefined) throw new RemoteWorkerOperatorControlUnavailableError();
+    return service.revoke(input);
   }
 
   public quarantineGeneration(

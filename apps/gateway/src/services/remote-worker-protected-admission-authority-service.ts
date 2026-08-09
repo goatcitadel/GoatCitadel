@@ -5,11 +5,31 @@ import {
   remoteWorkerProtectedAdmissionContextSha256,
   remoteWorkerProtectedAdmissionRemoteCallerBindingSha256,
   type RemoteWorkerBootstrapRecord,
+  type RemoteWorkerGenerationControlRecord,
   type RemoteWorkerGenerationRecord,
   type RemoteWorkerProtectedAdmissionEvidenceRecord,
 } from "@goatcitadel/contracts";
-import type { RemoteWorkerAdmissionRepository } from "@goatcitadel/storage";
 import { RemoteWorkerProtectedAdmissionEvidenceVerifier } from "./remote-worker-protected-admission-evidence-verifier.js";
+
+type Awaitable<T> = T | Promise<T>;
+
+export interface RemoteWorkerProtectedAdmissionAuthorityStorePort {
+  findCurrentGeneration(
+    registryWorkspaceId: string,
+    workerId: string,
+  ): Awaitable<RemoteWorkerGenerationRecord | undefined>;
+  findLatestGenerationControl(
+    registryWorkspaceId: string,
+    workerId: string,
+    workerGeneration: number,
+  ): Awaitable<RemoteWorkerGenerationControlRecord | undefined>;
+  findProtectedAdmissionEvidenceRecord(
+    registryWorkspaceId: string,
+    workerId: string,
+    workerGeneration: number,
+  ): Awaitable<RemoteWorkerProtectedAdmissionEvidenceRecord | undefined>;
+  getBootstrap(registryWorkspaceId: string, bootstrapId: string): Awaitable<RemoteWorkerBootstrapRecord>;
+}
 
 export interface CurrentRemoteWorkerProtectedAdmissionAuthority {
   readonly generation: RemoteWorkerGenerationRecord;
@@ -26,10 +46,7 @@ export interface CurrentRemoteWorkerProtectedAdmissionAuthority {
  */
 export class RemoteWorkerProtectedAdmissionAuthorityService {
   public constructor(
-    private readonly store: Pick<
-      RemoteWorkerAdmissionRepository,
-      "findCurrentGeneration" | "findLatestGenerationControl" | "findProtectedAdmissionEvidenceRecord" | "getBootstrap"
-    >,
+    private readonly store: RemoteWorkerProtectedAdmissionAuthorityStorePort,
     private readonly verifier = new RemoteWorkerProtectedAdmissionEvidenceVerifier(),
   ) {}
 
@@ -37,13 +54,13 @@ export class RemoteWorkerProtectedAdmissionAuthorityService {
     await this.verifier.assertAvailable();
   }
 
-  public resolveCurrent(input: {
+  public async resolveCurrent(input: {
     readonly registryWorkspaceId: string;
     readonly workerId: string;
     readonly workerGeneration: number;
-  }): CurrentRemoteWorkerProtectedAdmissionAuthority {
+  }): Promise<CurrentRemoteWorkerProtectedAdmissionAuthority> {
     try {
-      const current = this.store.findCurrentGeneration(input.registryWorkspaceId, input.workerId);
+      const current = await this.store.findCurrentGeneration(input.registryWorkspaceId, input.workerId);
       if (
         current === undefined ||
         current.registryWorkspaceId !== input.registryWorkspaceId ||
@@ -54,18 +71,21 @@ export class RemoteWorkerProtectedAdmissionAuthorityService {
         throw unavailable();
       }
       if (
-        this.store.findLatestGenerationControl(input.registryWorkspaceId, input.workerId, input.workerGeneration) !==
-        undefined
+        (await this.store.findLatestGenerationControl(
+          input.registryWorkspaceId,
+          input.workerId,
+          input.workerGeneration,
+        )) !== undefined
       ) {
         throw unavailable();
       }
-      const evidence = this.store.findProtectedAdmissionEvidenceRecord(
+      const evidence = await this.store.findProtectedAdmissionEvidenceRecord(
         input.registryWorkspaceId,
         input.workerId,
         input.workerGeneration,
       );
       if (evidence === undefined || evidence.revokedAt !== undefined) throw unavailable();
-      const bootstrap = this.store.getBootstrap(input.registryWorkspaceId, current.bootstrapId);
+      const bootstrap = await this.store.getBootstrap(input.registryWorkspaceId, current.bootstrapId);
       if (bootstrap.protectedAdmissionSignerPin === undefined) throw unavailable();
       assertCurrentBindings(input, current, bootstrap, evidence);
       this.verifier.verifyPersisted(evidence, bootstrap.protectedAdmissionSignerPin);

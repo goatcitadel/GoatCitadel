@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Central Storage composition intentionally enumerates the full repository graph. */
 import type { ChatAttachmentRecord } from "@goatcitadel/contracts";
 import { ValidationError } from "@goatcitadel/contracts";
 import { createDatabase, type SqliteOptions } from "./sqlite.js";
@@ -39,6 +40,7 @@ import { MeshRepository } from "./mesh-repo.js";
 import { MeshCapabilityNodeAdmissionRepository } from "./mesh-capability-node-admission-repo.js";
 import { MeshCapabilityPublicationRepository } from "./mesh-capability-publication-repo.js";
 import { RemoteWorkerAdmissionRepository } from "./remote-worker-admission-repo.js";
+import { RemoteWorkerMeshNodeAdmissionRepository } from "./remote-worker-mesh-node-admission-repo.js";
 import { RemoteWorkerArtifactRepository } from "./remote-worker-artifact-repo.js";
 import { RemoteWorkerAssignmentRepository } from "./remote-worker-assignment-repo.js";
 import { RemoteWorkerCellRepository } from "./remote-worker-cell-repo.js";
@@ -288,6 +290,7 @@ export class Storage {
   public readonly meshCapabilityNodeAdmissions: MeshCapabilityNodeAdmissionRepository;
   public readonly meshCapabilityPublications: MeshCapabilityPublicationRepository;
   public readonly remoteWorkerAdmissions: RemoteWorkerAdmissionRepository;
+  public readonly remoteWorkerMeshNodeAdmissions: RemoteWorkerMeshNodeAdmissionRepository;
   public readonly remoteWorkerArtifacts: RemoteWorkerArtifactRepository;
   public readonly remoteWorkerAssignments: RemoteWorkerAssignmentRepository;
   public readonly remoteWorkerCells: RemoteWorkerCellRepository;
@@ -452,6 +455,7 @@ export class Storage {
     this.meshCapabilityNodeAdmissions = new MeshCapabilityNodeAdmissionRepository(this.db);
     this.meshCapabilityPublications = new MeshCapabilityPublicationRepository(this.db);
     this.remoteWorkerAdmissions = new RemoteWorkerAdmissionRepository(this.db);
+    this.remoteWorkerMeshNodeAdmissions = new RemoteWorkerMeshNodeAdmissionRepository(this.db);
     this.remoteWorkerArtifacts = new RemoteWorkerArtifactRepository(this.db);
     this.remoteWorkerAssignments = new RemoteWorkerAssignmentRepository(this.db);
     this.remoteWorkerCells = new RemoteWorkerCellRepository(this.db);
@@ -932,6 +936,7 @@ export * from "./mesh-repo.js";
 export * from "./mesh-capability-node-admission-repo.js";
 export * from "./mesh-capability-publication-repo.js";
 export * from "./remote-worker-admission-repo.js";
+export * from "./remote-worker-mesh-node-admission-repo.js";
 export * from "./remote-worker-artifact-repo.js";
 export * from "./remote-worker-assignment-repo.js";
 export * from "./remote-worker-effect-repo.js";

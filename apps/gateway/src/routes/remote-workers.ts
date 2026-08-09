@@ -6,6 +6,7 @@ import {
   REMOTE_WORKER_MAX_BOOTSTRAP_TTL_SECONDS,
   REMOTE_WORKER_MAX_CAPABILITY_CLASSES,
   REMOTE_WORKER_MAX_LABEL_LENGTH,
+  REMOTE_WORKER_MESH_NODE_JOIN_AUTHORITY_MAX_TTL_SECONDS,
   REMOTE_WORKER_REGISTRY_MAX_CURSOR_BYTES,
   REMOTE_WORKER_PROTECTED_ADMISSION_SIGNER_PIN_SCHEMA_VERSION,
 } from "@goatcitadel/contracts";
@@ -14,6 +15,7 @@ import {
   RemoteWorkerManifestRejectedError,
   RemoteWorkerManifestVerifierUnavailableError,
 } from "../services/remote-worker-manifest-verifier.js";
+import { RemoteWorkerMeshNodeJoinAuthorityError } from "../services/remote-worker-mesh-node-join-authority-service.js";
 import {
   RemoteWorkerOperatorControlUnavailableError,
   RemoteWorkerRegistryInputError,
@@ -33,6 +35,15 @@ const assignmentParamsSchema = paramsSchema.extend({ assignmentId: identifierSch
 const generationParamsSchema = detailParamsSchema
   .extend({
     workerGeneration: z
+      .string()
+      .regex(/^[1-9]\d{0,14}$/u)
+      .transform(Number)
+      .refine(Number.isSafeInteger),
+  })
+  .strict();
+const joinAuthorityParamsSchema = generationParamsSchema
+  .extend({
+    joinAuthorityGeneration: z
       .string()
       .regex(/^[1-9]\d{0,14}$/u)
       .transform(Number)
@@ -116,10 +127,20 @@ const generationControlBodySchema = z
       .refine((value) => value === value.normalize("NFKC").trim() && !/\p{Cc}/u.test(value)),
   })
   .strict();
+const joinAuthorityIssueBodySchema = z
+  .object({
+    targetWorkspaceId: identifierSchema,
+    expiresInSeconds: z.number().int().min(1).max(REMOTE_WORKER_MESH_NODE_JOIN_AUTHORITY_MAX_TTL_SECONDS),
+  })
+  .strict();
+const joinAuthorityRevokeBodySchema = generationControlBodySchema
+  .extend({ targetWorkspaceId: identifierSchema })
+  .strict();
 
 const RATE_LIMIT_MAX = 120;
 const MUTATION_RATE_LIMIT_MAX = 30;
 const BOOTSTRAP_RATE_LIMIT_MAX = 5;
+const JOIN_AUTHORITY_RATE_LIMIT_MAX = 5;
 const resolveRateLimitKey = (request: { authActorId?: string; ip?: string }): string =>
   request.authActorId?.trim() ? `actor:${request.authActorId.trim()}` : `ip:${request.ip ?? "unknown"}`;
 
@@ -163,6 +184,19 @@ export const remoteWorkersRoutes: FastifyPluginAsync = async (fastify) => {
       return payload;
     },
   });
+  const operatorJoinAuthorityMutation = withRouteAccess(fastify, "operator", {
+    config: {
+      rateLimit: {
+        max: JOIN_AUTHORITY_RATE_LIMIT_MAX,
+        hook: "preHandler",
+        keyGenerator: resolveRateLimitKey,
+      },
+    },
+    onSend: async (_request, reply, payload) => {
+      setNoStoreHeaders(reply);
+      return payload;
+    },
+  });
 
   fastify.post(
     "/api/v1/ops/workspaces/:workspaceId/remote-workers/bootstrap",
@@ -192,6 +226,66 @@ export const remoteWorkersRoutes: FastifyPluginAsync = async (fastify) => {
         });
         await markMutationCommitted(request);
         return reply.code(result.disposition === "created" ? 201 : 200).send(result);
+      } catch (error) {
+        return sendMutationError(reply, request.log, error);
+      }
+    },
+  );
+
+  fastify.post(
+    "/api/v1/ops/workspaces/:workspaceId/remote-workers/:workerId/generations/:workerGeneration/mesh-node-join-authorities",
+    operatorJoinAuthorityMutation,
+    async (request, reply) => {
+      const params = generationParamsSchema.safeParse(request.params);
+      const query = emptyQuerySchema.safeParse(request.query);
+      const body = joinAuthorityIssueBodySchema.safeParse(request.body);
+      const identity = mutationIdentity(request);
+      if (!params.success || !query.success || !body.success || !identity) return invalidRequest(reply);
+      const service = resolveService(fastify.services);
+      if (!service) return unavailable(reply);
+      try {
+        const result = await service.issueMeshNodeJoinAuthority({
+          registryWorkspaceId: params.data.workspaceId,
+          workerId: params.data.workerId,
+          workerGeneration: params.data.workerGeneration,
+          workspaceId: body.data.targetWorkspaceId,
+          expiresInSeconds: body.data.expiresInSeconds,
+          actorId: identity.actorId,
+          idempotencyKey: identity.idempotencyKey,
+        });
+        await markMutationCommitted(request);
+        return reply.code(result.disposition === "created" ? 201 : 200).send(result);
+      } catch (error) {
+        return sendMutationError(reply, request.log, error);
+      }
+    },
+  );
+
+  fastify.post(
+    "/api/v1/ops/workspaces/:workspaceId/remote-workers/:workerId/generations/:workerGeneration/mesh-node-join-authorities/:joinAuthorityGeneration/revoke",
+    operatorJoinAuthorityMutation,
+    async (request, reply) => {
+      const params = joinAuthorityParamsSchema.safeParse(request.params);
+      const query = emptyQuerySchema.safeParse(request.query);
+      const body = joinAuthorityRevokeBodySchema.safeParse(request.body);
+      const identity = mutationIdentity(request);
+      if (!params.success || !query.success || !body.success || !identity) return invalidRequest(reply);
+      const service = resolveService(fastify.services);
+      if (!service) return unavailable(reply);
+      try {
+        const result = await service.revokeMeshNodeJoinAuthority({
+          registryWorkspaceId: params.data.workspaceId,
+          workerId: params.data.workerId,
+          workerGeneration: params.data.workerGeneration,
+          workspaceId: body.data.targetWorkspaceId,
+          joinAuthorityGeneration: params.data.joinAuthorityGeneration,
+          reasonCode: body.data.reasonCode,
+          reason: body.data.reason,
+          actorId: identity.actorId,
+          idempotencyKey: identity.idempotencyKey,
+        });
+        await markMutationCommitted(request);
+        return reply.send(result);
       } catch (error) {
         return sendMutationError(reply, request.log, error);
       }
@@ -369,6 +463,7 @@ function sendMutationError(
   if (error instanceof RemoteWorkerRegistryInputError || error instanceof RemoteWorkerManifestRejectedError) {
     return invalidRequest(reply);
   }
+  if (error instanceof RemoteWorkerMeshNodeJoinAuthorityError) return invalidRequest(reply);
   if (
     error instanceof RemoteWorkerOperatorControlUnavailableError ||
     error instanceof RemoteWorkerManifestVerifierUnavailableError

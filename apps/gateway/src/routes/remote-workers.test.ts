@@ -72,6 +72,8 @@ function fullService(overrides: Record<string, unknown> = {}) {
     listAssignments: vi.fn(() => ASSIGNMENT_PAGE),
     getAssignmentEvents: vi.fn(() => EVENT_PAGE),
     issueBootstrap: vi.fn(() => bootstrapResponse()),
+    issueMeshNodeJoinAuthority: vi.fn(() => meshJoinAuthorityResponse()),
+    revokeMeshNodeJoinAuthority: vi.fn(() => meshJoinRevocationResponse()),
     quarantineGeneration: vi.fn(() => controlResponse("quarantine")),
     revokeGeneration: vi.fn(() => controlResponse("revoke")),
     ...overrides,
@@ -131,6 +133,8 @@ describe("remote worker operator registry routes HX-507A", () => {
     expect(getRoutes.every((route) => route.config.goatcitadelRouteAccessClass === "operator")).toBe(true);
     const postRoutes = routes.filter((route) => route.method === "POST");
     expect(postRoutes.map((route) => route.url).sort()).toEqual([
+      "/api/v1/ops/workspaces/:workspaceId/remote-workers/:workerId/generations/:workerGeneration/mesh-node-join-authorities",
+      "/api/v1/ops/workspaces/:workspaceId/remote-workers/:workerId/generations/:workerGeneration/mesh-node-join-authorities/:joinAuthorityGeneration/revoke",
       "/api/v1/ops/workspaces/:workspaceId/remote-workers/:workerId/generations/:workerGeneration/quarantine",
       "/api/v1/ops/workspaces/:workspaceId/remote-workers/:workerId/generations/:workerGeneration/revoke",
       "/api/v1/ops/workspaces/:workspaceId/remote-workers/bootstrap",
@@ -158,8 +162,13 @@ describe("remote worker operator registry routes HX-507A", () => {
     ).toBe(5);
     expect(
       postRoutes
-        .filter((route) => !route.url.endsWith("/bootstrap"))
+        .filter((route) => !route.url.endsWith("/bootstrap") && !route.url.includes("mesh-node-join-authorities"))
         .every((route) => (route.config.rateLimit as { max: number }).max === 30),
+    ).toBe(true);
+    expect(
+      postRoutes
+        .filter((route) => route.url.includes("mesh-node-join-authorities"))
+        .every((route) => (route.config.rateLimit as { max: number }).max === 5),
     ).toBe(true);
   });
 
@@ -554,6 +563,53 @@ describe("remote worker M2 operator control routes", () => {
     expect(revokeGeneration).toHaveBeenCalledWith(expect.objectContaining({ workerGeneration: 2 }));
   });
 
+  it("binds secret-once mesh join issue and revocation to operator identity and exact path generations", async () => {
+    const issueMeshNodeJoinAuthority = vi.fn(async () => meshJoinAuthorityResponse());
+    const revokeMeshNodeJoinAuthority = vi.fn(async () => meshJoinRevocationResponse());
+    app = await buildOperatorMutationHarness({ issueMeshNodeJoinAuthority, revokeMeshNodeJoinAuthority });
+
+    const issued = await app.inject({
+      method: "POST",
+      url: "/api/v1/ops/workspaces/registry-a/remote-workers/worker-a/generations/2/mesh-node-join-authorities",
+      headers: { "Idempotency-Key": "join-a" },
+      payload: { targetWorkspaceId: "workspace-a", expiresInSeconds: 300 },
+    });
+    expect(issued.statusCode).toBe(201);
+    expect(issued.headers["cache-control"]).toBe("no-store");
+    expect(issueMeshNodeJoinAuthority).toHaveBeenCalledWith({
+      registryWorkspaceId: "registry-a",
+      workerId: "worker-a",
+      workerGeneration: 2,
+      workspaceId: "workspace-a",
+      expiresInSeconds: 300,
+      actorId: "operator-a",
+      idempotencyKey: "join-a",
+    });
+
+    const revoked = await app.inject({
+      method: "POST",
+      url: "/api/v1/ops/workspaces/registry-a/remote-workers/worker-a/generations/2/mesh-node-join-authorities/1/revoke",
+      headers: { "Idempotency-Key": "join-revoke-a" },
+      payload: {
+        targetWorkspaceId: "workspace-a",
+        reasonCode: "operator.rotation",
+        reason: "Operator rotated the mesh admission window.",
+      },
+    });
+    expect(revoked.statusCode).toBe(200);
+    expect(revokeMeshNodeJoinAuthority).toHaveBeenCalledWith({
+      registryWorkspaceId: "registry-a",
+      workerId: "worker-a",
+      workerGeneration: 2,
+      workspaceId: "workspace-a",
+      joinAuthorityGeneration: 1,
+      reasonCode: "operator.rotation",
+      reason: "Operator rotated the mesh admission window.",
+      actorId: "operator-a",
+      idempotencyKey: "join-revoke-a",
+    });
+  });
+
   it("rejects malformed and secret-like control input without echo, and hides cross-workspace existence", async () => {
     const secret = "Authorization: Bearer ghp_SUPER_SECRET_TOKEN_1234567890";
     const quarantineGeneration = vi.fn(async () => {
@@ -653,6 +709,33 @@ function controlResponse(action: "quarantine" | "revoke") {
     actorId: "operator-a",
     createdAt: "2026-08-08T12:00:00.000Z",
     auditDeliveryId: `remote-worker-control:${action}:${"3".repeat(64)}`,
+  };
+}
+
+function meshJoinAuthorityResponse() {
+  return {
+    disposition: "created",
+    authority: { workspaceId: "workspace-a", nodeId: "node-a", joinAuthorityGeneration: 1 },
+    meshNodeCredential: Buffer.alloc(32, 4).toString("base64url"),
+    secretDisposition: "returned_once",
+    auditDeliveryId: `remote-worker-mesh-node-join-issue:${"4".repeat(64)}`,
+  };
+}
+
+function meshJoinRevocationResponse() {
+  return {
+    registryWorkspaceId: "registry-a",
+    workerId: "worker-a",
+    workerGeneration: 2,
+    workspaceId: "workspace-a",
+    joinAuthorityGeneration: 1,
+    reasonCode: "operator.rotation",
+    reasonSha256: "5".repeat(64),
+    revokedByActorId: "operator-a",
+    idempotencyKey: "join-revoke-a",
+    requestSha256: "6".repeat(64),
+    revokedAt: "2026-08-09T07:01:00.000Z",
+    auditDeliveryId: `remote-worker-mesh-node-join-revoke:${"7".repeat(64)}`,
   };
 }
 
