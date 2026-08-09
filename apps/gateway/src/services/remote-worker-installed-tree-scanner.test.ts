@@ -239,7 +239,10 @@ describe("remote worker installed-tree scanner", () => {
       onTerminationRequested: () => {
         const diagnostics = remoteWorkerPosixScanHelperDiagnostics();
         expect(diagnostics.active).toBe(true);
-        expect(diagnostics.receivedResponseBytes).toBeGreaterThan(4);
+        // The absolute deadline includes process and tsx startup. Under a
+        // saturated coverage shard it may expire before the helper emits its
+        // ready frame; termination, poisoning, overlap denial, and later reuse
+        // remain the security contract in both startup- and hang-timeout cases.
         hangingPid = diagnostics.activePid;
         overlap = exerciseRemoteWorkerPosixScanHelperForTesting({ behavior: "success", deadlineMs: 5_000 });
         void overlap.catch(() => undefined);

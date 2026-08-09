@@ -329,7 +329,8 @@ async function runFastLaneCommand(context, command, options = {}) {
           artifacts: emptyArtifacts(),
         };
       }
-      const commandTempRoot = await resolveFastLaneCommandTempRoot(context, command);
+      const preferredCommandTempRoot = await resolveFastLaneCommandTempRoot(context, command);
+      const commandTempRoot = await prepareFastLaneCommandTempRoot(preferredCommandTempRoot);
       const env = await resolveFastLaneCommandEnv(context, command, commandTempRoot);
       try {
         const result = await runCommand(pnpmCommand(), command.args, {
@@ -429,12 +430,23 @@ export async function removeFastLaneCommandTempRoot(commandTempRoot, deps = {}) 
   }
 }
 
+export async function prepareFastLaneCommandTempRoot(preferredRoot, deps = {}) {
+  const removeRoot = deps.removeRoot ?? removeFastLaneCommandTempRoot;
+  const mkdir = deps.mkdir ?? fs.mkdir;
+  const mkdtemp = deps.mkdtemp ?? fs.mkdtemp;
+  if (await removeRoot(preferredRoot)) {
+    await mkdir(preferredRoot, { recursive: true });
+    return preferredRoot;
+  }
+
+  // A locked Windows handle must not make the next command reuse stale SQLite
+  // state. Leave the locked root alone and hand the command a fresh sibling.
+  await mkdir(path.dirname(preferredRoot), { recursive: true });
+  return await mkdtemp(`${preferredRoot}-fresh-`);
+}
+
 export async function resolveFastLaneCommandEnv(context, command, commandTempRoot) {
   const npmCacheRoot = path.join(commandTempRoot, "npm-cache");
-  // A crashed or killed earlier run leaves its scratch behind, and the Windows base
-  // root is the shared user temp directory rather than a per-run path. Start from an
-  // empty root so residue cannot carry across runs.
-  await removeFastLaneCommandTempRoot(commandTempRoot);
   await fs.mkdir(commandTempRoot, { recursive: true });
   await fs.mkdir(npmCacheRoot, { recursive: true });
   const tempEnv = {
@@ -465,8 +477,11 @@ async function resolveFastLaneTempBaseRoot(context) {
   if (configuredTempRoot) {
     return path.join(configuredTempRoot, context.runId);
   }
-  const systemTempRoot =
-    process.platform === "win32" ? os.tmpdir() : path.join("/tmp", `gcv-${process.pid}`, context.runId.slice(-8));
+  const systemTempRoot = path.join(
+    os.tmpdir(),
+    `gcv-${process.pid}`,
+    sanitizeFilePart(String(context.runId)).slice(-24),
+  );
   if (await hasMinimumFreeSpace(systemTempRoot, FAST_LANE_TEMP_MIN_FREE_BYTES)) {
     return systemTempRoot;
   }

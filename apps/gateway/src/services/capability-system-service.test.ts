@@ -38,6 +38,10 @@ const tempRoots: string[] = [];
 const storageCleanups: Array<() => void | Promise<void>> = [];
 const digestPinnedRunnerImage =
   "ghcr.io/goatcitadel/code-mode-runner@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+// These cases cross child execution plus multiple committed filesystem reads.
+// Four-worker Windows V8 coverage can spend most of the default test budget in
+// process and I/O scheduling even while the bounded operations are progressing.
+const CODE_MODE_CANDIDATE_IO_TEST_TIMEOUT_MS = 45_000;
 
 afterEach(async () => {
   for (const cleanup of storageCleanups.splice(0).reverse()) await cleanup();
@@ -4684,132 +4688,140 @@ describe("CapabilitySystemService", () => {
     );
   });
 
-  it("rolls back the first candidate aggregate revision when Code Mode candidate insertion fails", async () => {
-    const harness = await createHarness({
-      sandboxConfig: {
-        required: false,
-        bestEffortHostEnabled: false,
-      },
-    });
-    vi.spyOn(harness.storage.candidateSkillVersions, "upsert").mockImplementationOnce(() => {
-      throw new Error("candidate insert failed");
-    });
-    const input = {
-      capabilityProposal: { candidateId: "candidate-revision-rollback" },
-    };
+  it(
+    "rolls back the first candidate aggregate revision when Code Mode candidate insertion fails",
+    async () => {
+      const harness = await createHarness({
+        sandboxConfig: {
+          required: false,
+          bestEffortHostEnabled: false,
+        },
+      });
+      vi.spyOn(harness.storage.candidateSkillVersions, "upsert").mockImplementationOnce(() => {
+        throw new Error("candidate insert failed");
+      });
+      const input = {
+        capabilityProposal: { candidateId: "candidate-revision-rollback" },
+      };
 
-    const run = await harness.service.createCodeModeRun({
-      language: "typescript",
-      source: "return { ok: true, bundle: 'rollback' };",
-      requestedOutputIntent: "Generate a rollback probe skill.",
-      saveCandidateOnSuccess: true,
-      input,
-    });
+      const run = await harness.service.createCodeModeRun({
+        language: "typescript",
+        source: "return { ok: true, bundle: 'rollback' };",
+        requestedOutputIntent: "Generate a rollback probe skill.",
+        saveCandidateOnSuccess: true,
+        input,
+      });
 
-    const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+      const result = await harness.service.executeApprovedCodeModeRun("approval-1");
 
-    expect(result).toMatchObject({
-      outcome: "executed",
-      result: expect.objectContaining({
-        runId: run.runId,
-        status: "failed",
-        errorCode: "candidate_stage_failed",
-        error: "candidate insert failed",
-      }),
-    });
-    expect(harness.storage.candidateSkillVersions.list(10)).toEqual([]);
-    expect(
-      harness.storage.skillAggregateRevisions.get("candidate_skill", "candidate-revision-rollback"),
-    ).toBeUndefined();
-    expect(
-      (await harness.service.listCatalog("inspectable")).some(
-        (entry) => entry.kind === "candidate_skill" && entry.candidateId === "candidate-revision-rollback",
-      ),
-    ).toBe(false);
-    expect(
-      (await harness.service.listCatalog("callable")).some(
-        (entry) => entry.kind === "candidate_skill" && entry.candidateId === "candidate-revision-rollback",
-      ),
-    ).toBe(false);
+      expect(result).toMatchObject({
+        outcome: "executed",
+        result: expect.objectContaining({
+          runId: run.runId,
+          status: "failed",
+          errorCode: "candidate_stage_failed",
+          error: "candidate insert failed",
+        }),
+      });
+      expect(harness.storage.candidateSkillVersions.list(10)).toEqual([]);
+      expect(
+        harness.storage.skillAggregateRevisions.get("candidate_skill", "candidate-revision-rollback"),
+      ).toBeUndefined();
+      expect(
+        (await harness.service.listCatalog("inspectable")).some(
+          (entry) => entry.kind === "candidate_skill" && entry.candidateId === "candidate-revision-rollback",
+        ),
+      ).toBe(false);
+      expect(
+        (await harness.service.listCatalog("callable")).some(
+          (entry) => entry.kind === "candidate_skill" && entry.candidateId === "candidate-revision-rollback",
+        ),
+      ).toBe(false);
 
-    const failedRun = harness.storage.codeModeRuns.get(run.runId);
-    const source = await fs.readFile(path.resolve(harness.rootDir, failedRun.codeArtifact.relPath), "utf8");
-    const wrapperManifest = JSON.parse(
-      await fs.readFile(path.resolve(harness.rootDir, failedRun.wrapperManifestArtifact.relPath), "utf8"),
-    ) as Record<string, unknown>;
-    const stageCandidateBundle = Reflect.get(harness.service, "stageCandidateBundle") as (
-      runRecord: CodeModeRunRecord,
-      sourceText: string,
-      wrapper: Record<string, unknown>,
-      sampleInput: Record<string, unknown>,
-    ) => Promise<void>;
-    const versionId = `version-${sha256Text(`code-mode-candidate\u0000${run.runId}`).slice(0, 32)}`;
-    const instructionPath = path.resolve(
-      harness.rootDir,
-      "data",
-      "capability-candidates",
-      "candidate-revision-rollback",
-      versionId,
-      "SKILL.md",
-    );
-    const orphanInstruction = await fs.readFile(instructionPath, "utf8");
-    await fs.writeFile(instructionPath, `${orphanInstruction}\nTampered orphan bytes.`, "utf8");
+      const failedRun = harness.storage.codeModeRuns.get(run.runId);
+      const source = await fs.readFile(path.resolve(harness.rootDir, failedRun.codeArtifact.relPath), "utf8");
+      const wrapperManifest = JSON.parse(
+        await fs.readFile(path.resolve(harness.rootDir, failedRun.wrapperManifestArtifact.relPath), "utf8"),
+      ) as Record<string, unknown>;
+      const stageCandidateBundle = Reflect.get(harness.service, "stageCandidateBundle") as (
+        runRecord: CodeModeRunRecord,
+        sourceText: string,
+        wrapper: Record<string, unknown>,
+        sampleInput: Record<string, unknown>,
+      ) => Promise<void>;
+      const versionId = `version-${sha256Text(`code-mode-candidate\u0000${run.runId}`).slice(0, 32)}`;
+      const instructionPath = path.resolve(
+        harness.rootDir,
+        "data",
+        "capability-candidates",
+        "candidate-revision-rollback",
+        versionId,
+        "SKILL.md",
+      );
+      const orphanInstruction = await fs.readFile(instructionPath, "utf8");
+      await fs.writeFile(instructionPath, `${orphanInstruction}\nTampered orphan bytes.`, "utf8");
 
-    await expect(stageCandidateBundle.call(harness.service, failedRun, source, wrapperManifest, input)).rejects.toThrow(
-      "does not match the deterministic candidate bytes",
-    );
-    expect(harness.storage.candidateSkillVersions.list(10)).toEqual([]);
-    expect(
-      harness.storage.skillAggregateRevisions.get("candidate_skill", "candidate-revision-rollback"),
-    ).toBeUndefined();
+      await expect(
+        stageCandidateBundle.call(harness.service, failedRun, source, wrapperManifest, input),
+      ).rejects.toThrow("does not match the deterministic candidate bytes");
+      expect(harness.storage.candidateSkillVersions.list(10)).toEqual([]);
+      expect(
+        harness.storage.skillAggregateRevisions.get("candidate_skill", "candidate-revision-rollback"),
+      ).toBeUndefined();
 
-    await fs.writeFile(instructionPath, orphanInstruction, "utf8");
-    await stageCandidateBundle.call(harness.service, failedRun, source, wrapperManifest, input);
-    expect(harness.storage.candidateSkillVersions.list(10)).toHaveLength(1);
-    expect((await harness.service.getCandidateDetail("candidate-revision-rollback")).revision).toBe(1);
-  });
+      await fs.writeFile(instructionPath, orphanInstruction, "utf8");
+      await stageCandidateBundle.call(harness.service, failedRun, source, wrapperManifest, input);
+      expect(harness.storage.candidateSkillVersions.list(10)).toHaveLength(1);
+      expect((await harness.service.getCandidateDetail("candidate-revision-rollback")).revision).toBe(1);
+    },
+    CODE_MODE_CANDIDATE_IO_TEST_TIMEOUT_MS,
+  );
 
-  it("treats an exact Code Mode candidate stage replay as an immutable no-op", async () => {
-    const harness = await createHarness({
-      sandboxConfig: {
-        required: false,
-        bestEffortHostEnabled: false,
-      },
-    });
-    const input = {
-      capabilityProposal: { candidateId: "candidate-exact-replay" },
-    };
-    const run = await harness.service.createCodeModeRun({
-      language: "javascript",
-      source: "return { ok: true, bundle: 'replay' };",
-      requestedOutputIntent: "Generate an exact replay probe skill.",
-      saveCandidateOnSuccess: true,
-      input,
-    });
-    await harness.service.executeApprovedCodeModeRun("approval-1");
-    const completedRun = harness.storage.codeModeRuns.get(run.runId);
-    const source = await fs.readFile(path.resolve(harness.rootDir, completedRun.codeArtifact.relPath), "utf8");
-    const wrapperManifest = JSON.parse(
-      await fs.readFile(path.resolve(harness.rootDir, completedRun.wrapperManifestArtifact.relPath), "utf8"),
-    ) as Record<string, unknown>;
-    const stageCandidateBundle = Reflect.get(harness.service, "stageCandidateBundle") as (
-      runRecord: CodeModeRunRecord,
-      sourceText: string,
-      wrapper: Record<string, unknown>,
-      sampleInput: Record<string, unknown>,
-    ) => Promise<void>;
-    const stagedEventsBeforeReplay = harness.publishRealtime.mock.calls.filter(
-      ([eventType]) => eventType === "candidate_skill_staged",
-    ).length;
+  it(
+    "treats an exact Code Mode candidate stage replay as an immutable no-op",
+    async () => {
+      const harness = await createHarness({
+        sandboxConfig: {
+          required: false,
+          bestEffortHostEnabled: false,
+        },
+      });
+      const input = {
+        capabilityProposal: { candidateId: "candidate-exact-replay" },
+      };
+      const run = await harness.service.createCodeModeRun({
+        language: "javascript",
+        source: "return { ok: true, bundle: 'replay' };",
+        requestedOutputIntent: "Generate an exact replay probe skill.",
+        saveCandidateOnSuccess: true,
+        input,
+      });
+      await harness.service.executeApprovedCodeModeRun("approval-1");
+      const completedRun = harness.storage.codeModeRuns.get(run.runId);
+      const source = await fs.readFile(path.resolve(harness.rootDir, completedRun.codeArtifact.relPath), "utf8");
+      const wrapperManifest = JSON.parse(
+        await fs.readFile(path.resolve(harness.rootDir, completedRun.wrapperManifestArtifact.relPath), "utf8"),
+      ) as Record<string, unknown>;
+      const stageCandidateBundle = Reflect.get(harness.service, "stageCandidateBundle") as (
+        runRecord: CodeModeRunRecord,
+        sourceText: string,
+        wrapper: Record<string, unknown>,
+        sampleInput: Record<string, unknown>,
+      ) => Promise<void>;
+      const stagedEventsBeforeReplay = harness.publishRealtime.mock.calls.filter(
+        ([eventType]) => eventType === "candidate_skill_staged",
+      ).length;
 
-    await stageCandidateBundle.call(harness.service, completedRun, source, wrapperManifest, input);
+      await stageCandidateBundle.call(harness.service, completedRun, source, wrapperManifest, input);
 
-    expect(harness.storage.candidateSkillVersions.list(10)).toHaveLength(1);
-    expect((await harness.service.getCandidateDetail("candidate-exact-replay")).revision).toBe(1);
-    expect(
-      harness.publishRealtime.mock.calls.filter(([eventType]) => eventType === "candidate_skill_staged"),
-    ).toHaveLength(stagedEventsBeforeReplay);
-  });
+      expect(harness.storage.candidateSkillVersions.list(10)).toHaveLength(1);
+      expect((await harness.service.getCandidateDetail("candidate-exact-replay")).revision).toBe(1);
+      expect(
+        harness.publishRealtime.mock.calls.filter(([eventType]) => eventType === "candidate_skill_staged"),
+      ).toHaveLength(stagedEventsBeforeReplay);
+    },
+    CODE_MODE_CANDIDATE_IO_TEST_TIMEOUT_MS,
+  );
 
   it("advances an existing Code Mode candidate from revision one to two for a second version", async () => {
     const harness = await createHarness({

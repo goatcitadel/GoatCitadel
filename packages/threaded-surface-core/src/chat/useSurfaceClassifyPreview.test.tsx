@@ -122,7 +122,6 @@ describe("useSurfaceClassifyPreview", () => {
     classifySurfaceMode.mockRejectedValue(new Error("network down"));
 
     let latest: ReturnType<typeof useSurfaceClassifyPreview> | undefined;
-    let caughtError: unknown = null;
 
     function Harness() {
       latest = useSurfaceClassifyPreview({
@@ -148,7 +147,6 @@ describe("useSurfaceClassifyPreview", () => {
     });
 
     expect(classifySurfaceMode).toHaveBeenCalledTimes(1);
-    expect(caughtError).toBeNull();
     expect(latest).toBeUndefined();
   });
 });

@@ -3,7 +3,6 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
     VISUAL_DIFF_RATIO_THRESHOLD,
     VISUAL_ROUTE_READY_TIMEOUT_MS,
     appendTraceArtifact,
-    assertBrowserConsoleHealthy,
     assertNextVisualScenarioChrome,
     assertNoFooterStatusCollision,
     assertVisualBaselineCoverage,
@@ -149,11 +148,14 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
                   const correlationSessionId =
                     (route?.fixtureSessionKey && fixture?.sessions?.[route.fixtureSessionKey]) || fixture?.sessionId;
                   await setBrowserCorrelation(page, correlationId, correlationSessionId);
-                  const browserSanity = assertBrowserConsoleHealthy(
+                  const consoleEvidence = await collectVisualBrowserConsoleEvidence({
+                    page,
                     browserLog,
                     browserLogCursor,
-                    verificationTarget.packageName,
-                  );
+                    packageName: verificationTarget.packageName,
+                    deps,
+                  });
+                  const browserSanity = consoleEvidence.browserSanity;
                   await page.evaluate(async () => {
                     if (document.fonts?.ready) {
                       await document.fonts.ready;
@@ -208,6 +210,8 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
                       traceRetentionProbe,
                       consoleErrors: browserSanity.consoleErrors.length,
                       pageErrors: browserSanity.pageErrors.length,
+                      acknowledgedSseRecoveryCount: consoleEvidence.filteredConsole.acknowledgedSseRecoveryCount,
+                      sseRecoveryMs: consoleEvidence.recoveryEvidence.recovery?.recoveryMs,
                     },
                     artifacts: appendTraceArtifact(comparisonArtifacts, traceArtifact),
                   };
@@ -254,6 +258,27 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
   } finally {
     await stopVerificationStack(stack);
   }
+}
+
+export async function collectVisualBrowserConsoleEvidence({ page, browserLog, browserLogCursor, packageName, deps }) {
+  const initialSnapshot = browserLog.getSnapshot(browserLogCursor);
+  const initialClientSseDiagnostics = await deps.readBrowserSseDiagnostics(page);
+  const recoveryEvidence = await deps.pollSseConnectionRecoveryEvidence({
+    snapshot: initialSnapshot,
+    clientSseDiagnostics: initialClientSseDiagnostics,
+    getSnapshot: () => browserLog.getSnapshot(browserLogCursor),
+    readClientSseDiagnostics: () => deps.readBrowserSseDiagnostics(page),
+  });
+  const filteredConsole = deps.filterExpectedBrowserConsoleMessages(recoveryEvidence.snapshot, [], {
+    clientSseDiagnostics: recoveryEvidence.clientSseDiagnostics,
+    sseRecovery: recoveryEvidence.recovery,
+  });
+  const browserSanity = deps.assertBrowserConsoleHealthy(
+    { getSnapshot: () => filteredConsole.snapshot },
+    0,
+    packageName,
+  );
+  return { browserSanity, filteredConsole, recoveryEvidence };
 }
 
 export function assertVisualTraceRetentionProbeScope({ enabled, updateBaselines, routeCount, variantCount }) {

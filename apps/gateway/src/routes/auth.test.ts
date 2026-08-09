@@ -513,7 +513,7 @@ describe("auth routes", () => {
     expect(source).toMatch(/fastify\.get\("\/api\/v1\/auth\/device-requests\/:requestId\/status", publicAuthRoute/);
   });
 
-  it("returns 400 for SSE token bridge in auth mode none", async () => {
+  it("returns the compatibility error for the SSE bridge in auth mode none", async () => {
     app = await buildApp("none");
     const response = await app.inject({
       method: "POST",

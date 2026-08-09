@@ -31,14 +31,15 @@ export function TopbarOverflowMenu({ items, label = "More" }: { items: TopbarOve
     if (!open || typeof document === "undefined" || typeof document.addEventListener !== "function") {
       return undefined;
     }
+    const eventTarget = document;
     const handlePointerDown = (event: Event) => {
       const target = event.target;
       if (containerRef.current && target instanceof Node && !containerRef.current.contains(target)) {
         setOpen(false);
       }
     };
-    document.addEventListener("pointerdown", handlePointerDown);
-    return () => document.removeEventListener("pointerdown", handlePointerDown);
+    eventTarget.addEventListener("pointerdown", handlePointerDown);
+    return () => eventTarget.removeEventListener("pointerdown", handlePointerDown);
   }, [open]);
 
   if (items.length === 0) {

@@ -13,6 +13,7 @@ import {
   getNextCoreNavigationRoutes,
   openMissionControlNextThreadedContext,
   performVerificationInteraction,
+  projectOperatorAuthBoundaryEvidence,
   requireCanonicalMemorySeed,
   runFastLane,
   writeAutonomyGrantRuntimeToolPolicy,
@@ -54,6 +55,54 @@ test("autonomy-grant verification override drops the stale unified-config genera
   assert.equal(unified.toolPolicy.tools.approvalMode, "bypass");
 });
 
+test("operator auth-boundary evidence proves issuance and denial without retaining credentials", () => {
+  const secretValues = {
+    request: "request-secret-fixture-value-123456",
+    device: "device-credential-fixture-value-123456",
+    access: "access-credential-fixture-value-123456",
+    refresh: "refresh-credential-fixture-value-123456",
+  };
+  const evidence = projectOperatorAuthBoundaryEvidence({
+    deviceRequest: {
+      requestId: "request-1",
+      approvalId: "approval-1",
+      requestSecret: secretValues.request,
+      status: "pending",
+    },
+    resolvedApproval: {
+      approval: { approvalId: "approval-1", kind: "auth.device_access", status: "approved" },
+      effects: [{ effectId: "effect-1", effectKind: "approval_wait_wake", status: "completed" }],
+      durableRunId: "run-1",
+      resolutionEffects: { proactiveRunIds: ["proactive-1"], chatTurnResume: { resumed: false } },
+    },
+    approvedStatus: {
+      requestId: "request-1",
+      approvalId: "approval-1",
+      status: "approved",
+      deviceToken: secretValues.device,
+    },
+    companionExchange: {
+      contractId: "companion.android.v1",
+      accessToken: secretValues.access,
+      refreshToken: secretValues.refresh,
+    },
+    deniedChecks: [
+      {
+        actor: "device",
+        route: "/api/v1/admin/retention",
+        response: { status: 403, body: { error: "Operator authentication is required." } },
+      },
+    ],
+  });
+
+  const serialized = JSON.stringify(evidence);
+  for (const secret of Object.values(secretValues)) assert.equal(serialized.includes(secret), false);
+  assert.equal(evidence.approvedStatus.deviceCredentialIssued, true);
+  assert.equal(evidence.companionExchange.accessCredentialIssued, true);
+  assert.equal(evidence.companionExchange.refreshCredentialIssued, true);
+  assert.equal(evidence.deniedChecks[0].status, 403);
+});
+
 test("verification onboarding retries only the exact transient config-generation conflict", async () => {
   const transientConflict = {
     ok: false,
@@ -73,15 +122,20 @@ test("verification onboarding retries only the exact transient config-generation
   ];
   const calls = [];
   const waits = [];
-  const result = await ensureOnboardingComplete("http://127.0.0.1:12345", "verification-test", {}, {
-    requestJson: async (_gatewayUrl, route, options = {}) => {
-      calls.push({ route, method: options.method ?? "GET" });
-      return responses.shift();
+  const result = await ensureOnboardingComplete(
+    "http://127.0.0.1:12345",
+    "verification-test",
+    {},
+    {
+      requestJson: async (_gatewayUrl, route, options = {}) => {
+        calls.push({ route, method: options.method ?? "GET" });
+        return responses.shift();
+      },
+      delay: async (retryMs) => waits.push(retryMs),
+      reconciliationAttempts: 4,
+      reconciliationRetryMs: 7,
     },
-    delay: async (retryMs) => waits.push(retryMs),
-    reconciliationAttempts: 4,
-    reconciliationRetryMs: 7,
-  });
+  );
 
   assert.deepEqual(result, { completed: true, completedBy: "verification-test" });
   assert.deepEqual(waits, [7, 7]);
@@ -96,18 +150,23 @@ test("verification onboarding retries only the exact transient config-generation
 
   let nonRetryWaits = 0;
   await assert.rejects(
-    ensureOnboardingComplete("http://127.0.0.1:12345", "verification-test", {}, {
-      requestJson: async () => ({
-        ok: false,
-        status: 409,
-        body: { code: "STATE_CONFLICT", error: "A different state conflict." },
-      }),
-      delay: async () => {
-        nonRetryWaits += 1;
+    ensureOnboardingComplete(
+      "http://127.0.0.1:12345",
+      "verification-test",
+      {},
+      {
+        requestJson: async () => ({
+          ok: false,
+          status: 409,
+          body: { code: "STATE_CONFLICT", error: "A different state conflict." },
+        }),
+        delay: async () => {
+          nonRetryWaits += 1;
+        },
+        reconciliationAttempts: 4,
+        reconciliationRetryMs: 7,
       },
-      reconciliationAttempts: 4,
-      reconciliationRetryMs: 7,
-    }),
+    ),
     /read onboarding state failed \(409\).*A different state conflict/u,
   );
   assert.equal(nonRetryWaits, 0);

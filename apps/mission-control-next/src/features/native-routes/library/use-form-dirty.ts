@@ -221,6 +221,7 @@ export function useBeforeUnloadGuard(): void {
     if (typeof window === "undefined" || typeof window.addEventListener !== "function") {
       return;
     }
+    const eventTarget = window;
     function handler(event: BeforeUnloadEvent): string | undefined {
       if (!hasDirtySections()) {
         return undefined;
@@ -230,10 +231,10 @@ export function useBeforeUnloadGuard(): void {
       event.returnValue = BEFORE_UNLOAD_MESSAGE;
       return BEFORE_UNLOAD_MESSAGE;
     }
-    window.addEventListener("beforeunload", handler);
+    eventTarget.addEventListener("beforeunload", handler);
     return () => {
-      if (typeof window.removeEventListener === "function") {
-        window.removeEventListener("beforeunload", handler);
+      if (typeof eventTarget.removeEventListener === "function") {
+        eventTarget.removeEventListener("beforeunload", handler);
       }
     };
   }, []);

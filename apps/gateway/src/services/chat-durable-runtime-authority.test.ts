@@ -10,6 +10,7 @@ import {
   readExactAutonomousChatPostCommitPendingMarker,
   readExactChatTurnAdmissionHandoff,
   readExactGeneralChatPostCommitSettlement,
+  readExactLegacyGeneralChatPostCommitPendingMarker,
   selectCanonicalGeneralChatPostCommitResolution,
   verifyCheckpointAnchoredChatTurnRuntimeAuthority,
   verifyAutonomousChatAdmissionRunMetadata,
@@ -346,6 +347,33 @@ describe("Chat durable runtime authority", () => {
         hiddenGeneration: "drift",
       }),
     ).toThrow("missing or unknown keys");
+  });
+
+  it("parses only the exact legacy general post-commit shape", () => {
+    const legacy = {
+      version: 1,
+      generationId: "generation-legacy",
+      traceStatus: "completed",
+      requestedAt: "2026-07-11T00:00:00.000Z",
+      completedEffects: ["agent_end", "realtime"],
+      durableEffectRunIds: { commitments: "child-commitments" },
+    };
+    expect(readExactLegacyGeneralChatPostCommitPendingMarker(legacy)).toEqual(legacy);
+    expect(
+      readExactLegacyGeneralChatPostCommitPendingMarker({
+        ...legacy,
+        postCommitEligibility: eligibility,
+      }),
+    ).toBeUndefined();
+    expect(() => readExactLegacyGeneralChatPostCommitPendingMarker({ ...legacy, hiddenGeneration: "drift" })).toThrow(
+      "missing or unknown keys",
+    );
+    expect(() =>
+      readExactLegacyGeneralChatPostCommitPendingMarker({
+        ...legacy,
+        durableEffectRunIds: { ungoverned: "child-1" },
+      }),
+    ).toThrow("unknown key");
   });
 
   it("requires canonical sorted child ids and their exact digest in handoff evidence", () => {

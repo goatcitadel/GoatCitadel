@@ -78,12 +78,22 @@ if (-not (Test-Path -LiteralPath $payloadValidatorPath -PathType Leaf)) {
 $previousGoatCitadelHome = [Environment]::GetEnvironmentVariable("GOATCITADEL_HOME", "Process")
 $previousGoatCitadelAppDir = [Environment]::GetEnvironmentVariable("GOATCITADEL_APP_DIR", "Process")
 $previousWebViewDataFolder = [Environment]::GetEnvironmentVariable("WEBVIEW2_USER_DATA_FOLDER", "Process")
+$previousWebViewBrowserArguments = [Environment]::GetEnvironmentVariable("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "Process")
 $previousDesktopLauncher = [Environment]::GetEnvironmentVariable("GOATCITADEL_DESKTOP_LAUNCHER", "Process")
 $previousGatewayUrl = [Environment]::GetEnvironmentVariable("GOATCITADEL_GATEWAY_URL", "Process")
 $previousMissionControlUrl = [Environment]::GetEnvironmentVariable("GOATCITADEL_MISSION_CONTROL_URL", "Process")
+$debugPortListener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+try {
+  $debugPortListener.Start()
+  $webViewDebugPort = ([System.Net.IPEndPoint]$debugPortListener.LocalEndpoint).Port
+}
+finally {
+  $debugPortListener.Stop()
+}
 $env:GOATCITADEL_HOME = $runtimeBase
 $env:GOATCITADEL_APP_DIR = $appHome
 $env:WEBVIEW2_USER_DATA_FOLDER = $webViewDataDir
+$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=$webViewDebugPort"
 Remove-Item Env:GOATCITADEL_DESKTOP_LAUNCHER -ErrorAction SilentlyContinue
 Remove-Item Env:GOATCITADEL_GATEWAY_URL -ErrorAction SilentlyContinue
 Remove-Item Env:GOATCITADEL_MISSION_CONTROL_URL -ErrorAction SilentlyContinue
@@ -92,6 +102,7 @@ $hostProc = $null
 $installed = $false
 $uninstalled = $false
 $cleanupFailures = [System.Collections.Generic.List[string]]::new()
+$primaryFailure = $null
 
 function Redact-DiagnosticLine([string]$Line) {
   return ($Line `
@@ -133,6 +144,16 @@ function Show-RuntimeLogs {
   Write-Host "::endgroup::"
 }
 
+function Get-InstalledProcesses {
+  return @(
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+      Where-Object {
+        $_.ExecutablePath -and
+        $_.ExecutablePath.StartsWith($installPrefix, [System.StringComparison]::OrdinalIgnoreCase)
+      }
+  )
+}
+
 function Stop-InstalledProcesses {
   if ($null -ne $hostProc) {
     try {
@@ -157,15 +178,24 @@ function Stop-InstalledProcesses {
     }
   }
 
-  Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-    Where-Object {
-      $_.ExecutablePath -and
-      $_.ExecutablePath.StartsWith($installPrefix, [System.StringComparison]::OrdinalIgnoreCase)
-    } |
+  Get-InstalledProcesses |
     ForEach-Object {
       Write-Host "Backstop kill after installer smoke: PID $($_.ProcessId) $($_.Name) ($($_.ExecutablePath))"
       & taskkill.exe /PID $_.ProcessId /T /F 2>$null | Out-Null
     }
+
+  $stopDeadline = (Get-Date).AddSeconds(15)
+  do {
+    $remainingProcesses = @(Get-InstalledProcesses)
+    if ($remainingProcesses.Count -eq 0) {
+      return
+    }
+    Start-Sleep -Milliseconds 250
+  } while ((Get-Date) -lt $stopDeadline)
+
+  $remainingSummary = ($remainingProcesses |
+      ForEach-Object { "PID $($_.ProcessId) $($_.Name) ($($_.ExecutablePath))" }) -join "; "
+  throw "Installed process teardown did not complete within 15 seconds: $remainingSummary"
 }
 
 try {
@@ -304,10 +334,80 @@ try {
     Start-Sleep -Milliseconds 500
   }
 
+  $webViewTarget = $null
+  $webViewTargets = @()
+  $expectedWebViewPath = "/settings/onboarding"
+  $expectedWebViewTitle = "GoatCitadel Start Here"
+  $webViewDeadline = (Get-Date).AddSeconds(40)
+  while ((Get-Date) -lt $webViewDeadline) {
+    $hostProc.Refresh()
+    if ($hostProc.HasExited) {
+      $hex = "0x{0:X8}" -f $hostProc.ExitCode
+      throw "Desktop host exited during embedded Mission Control smoke with code $hex."
+    }
+    try {
+      $webViewTargets = @(
+        Invoke-RestMethod -Uri "http://127.0.0.1:$webViewDebugPort/json/list" -TimeoutSec 2 -ErrorAction Stop
+      )
+      $webViewTarget = $webViewTargets |
+        Where-Object { $_.type -eq "page" -and $_.url -ne "about:blank" } |
+        Select-Object -First 1
+    }
+    catch {
+      $webViewTarget = $null
+    }
+    if ($webViewTarget) {
+      try {
+        $candidateWebViewUri = [Uri]$webViewTarget.url
+        if ($candidateWebViewUri.AbsolutePath -eq $expectedWebViewPath -and
+            $webViewTarget.title -eq $expectedWebViewTitle) {
+          break
+        }
+      }
+      catch {
+        # Retain the candidate for the bounded, operator-readable failure below.
+      }
+    }
+    Start-Sleep -Milliseconds 500
+  }
+
+  if (-not $webViewTarget) {
+    $observedTargets = ($webViewTargets | ForEach-Object { "$($_.type):$($_.url)" }) -join ", "
+    throw "Desktop host presented a titled window but its embedded Mission Control target remained blank. Observed WebView targets: $observedTargets"
+  }
+  $webViewUri = [Uri]$webViewTarget.url
+  if ($webViewUri.Scheme -notin @("http", "https") -or
+      $webViewUri.Host -notin @("127.0.0.1", "localhost", "::1", "[::1]")) {
+    throw "Embedded Mission Control navigated outside the allowed loopback boundary: $($webViewTarget.url)"
+  }
+  if ($webViewUri.AbsolutePath -ne $expectedWebViewPath) {
+    throw "Embedded Mission Control first launch navigated to '$($webViewUri.AbsolutePath)'; expected '$expectedWebViewPath'."
+  }
+  if ($webViewTarget.title -ne $expectedWebViewTitle) {
+    throw "Embedded Mission Control page title was '$($webViewTarget.title)'; expected '$expectedWebViewTitle'."
+  }
+
+  $nativeRuntimeEvidence = @(
+    @(
+      "gateway.stdout.log",
+      "mission-control.stdout.log"
+    ) | ForEach-Object { Join-Path $runtimeLogDir $_ } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }
+  )
+  if ($nativeRuntimeEvidence.Count -ne 2) {
+    throw "Native desktop did not place Gateway and Mission Control logs under the isolated runtime home '$runtimeBase'."
+  }
+  $installRuntimeLogDir = Join-Path $installDir "runtime/logs"
+  if (Test-Path -LiteralPath $installRuntimeLogDir) {
+    throw "Native desktop wrote mutable runtime logs under the immutable install root '$installRuntimeLogDir'."
+  }
+
   # Tear down the host and its WebView/runtime descendants before readiness and
   # uninstall checks so no file handle under the install directory remains open.
   if (-not $hostProc.HasExited) {
-    & taskkill.exe /PID $hostProc.Id /T /F | Out-Null
+    # A child can exit between taskkill's tree snapshot and termination. Ignore
+    # that native stderr here; the exact installed-path reread below remains the
+    # authoritative cleanup check and kills any process that actually survived.
+    & taskkill.exe /PID $hostProc.Id /T /F 2>$null | Out-Null
   }
   Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
     Where-Object {
@@ -327,6 +427,7 @@ try {
     throw "Desktop host window title was '$windowTitle'; expected 'GoatCitadel Mission Control'."
   }
   Write-Host "Launch smoke passed: host presented window '$windowTitle'."
+  Write-Host "Embedded Mission Control smoke passed: WebView navigated to $($webViewTarget.url)."
 
   # Drive the same packaged launcher used by the desktop host. This proves the
   # installed gateway and Mission Control become healthy with bundled production deps.
@@ -338,13 +439,25 @@ try {
   }
   Write-Host "Runtime readiness smoke: launching packaged gateway + UI via $launcher"
   $quotedLauncher = '"' + $launcher + '"'
-  $launch = Start-Process -FilePath $bundledNode `
-    -ArgumentList @($quotedLauncher, "launch", "--no-open", "--wait", "--json") `
-    -WorkingDirectory $appHome `
-    -RedirectStandardOutput $launchStdout `
-    -RedirectStandardError $launchStderr `
-    -NoNewWindow -PassThru
-  if (-not $launch.WaitForExit(600000)) {
+  # Windows PowerShell 5.1 reconstructs a redirected Start-Process result by
+  # PID and loses the owned process handle after exit, leaving ExitCode null.
+  # Own the Process directly while draining both streams asynchronously so the
+  # timeout and the fail-closed integer exit-code check remain authoritative.
+  $launchStartInfo = [System.Diagnostics.ProcessStartInfo]::new()
+  $launchStartInfo.FileName = $bundledNode
+  $launchStartInfo.Arguments = "$quotedLauncher launch --no-open --wait --json"
+  $launchStartInfo.WorkingDirectory = $appHome
+  $launchStartInfo.UseShellExecute = $false
+  $launchStartInfo.CreateNoWindow = $true
+  $launchStartInfo.RedirectStandardOutput = $true
+  $launchStartInfo.RedirectStandardError = $true
+  $launch = [System.Diagnostics.Process]::new()
+  $launch.StartInfo = $launchStartInfo
+  [void]$launch.Start()
+  $launchStdoutTask = $launch.StandardOutput.ReadToEndAsync()
+  $launchStderrTask = $launch.StandardError.ReadToEndAsync()
+  $launchExited = $launch.WaitForExit(600000)
+  if (-not $launchExited) {
     Show-RuntimeLogs
     Write-Host "::group::Readiness hang diagnostics"
     netstat -ano | Select-String ":8787|:5173" | ForEach-Object { Write-Host $_ }
@@ -356,11 +469,19 @@ try {
       ForEach-Object { Write-Host "PID $($_.ProcessId) $($_.Name): $(Redact-DiagnosticLine ([string]$_.CommandLine))" }
     Write-Host "::endgroup::"
     & taskkill.exe /PID $launch.Id /T /F 2>$null | Out-Null
+  }
+  $launch.WaitForExit()
+  $utf8WithoutBom = [System.Text.UTF8Encoding]::new($false)
+  [System.IO.File]::WriteAllText($launchStdout, $launchStdoutTask.Result, $utf8WithoutBom)
+  [System.IO.File]::WriteAllText($launchStderr, $launchStderrTask.Result, $utf8WithoutBom)
+  if (-not $launchExited) {
+    Show-RuntimeLogs
     throw "Runtime readiness smoke failed: 'goatcitadel launch --wait' did not exit within 10 minutes. Launcher output, runtime logs, and listener/process state are printed above."
   }
-  if ($launch.ExitCode -ne 0) {
+  $launchExitCode = $launch.ExitCode
+  if ($launchExitCode -ne 0) {
     Show-RuntimeLogs
-    throw "Runtime readiness smoke failed: 'goatcitadel launch' exited $($launch.ExitCode) before the gateway/UI became healthy. The installed host would hang on 'Starting the local runtime…'. A gateway boot crash (for example ERR_MODULE_NOT_FOUND from stranded production dependencies) surfaces here."
+    throw "Runtime readiness smoke failed: 'goatcitadel launch' exited $launchExitCode before the gateway/UI became healthy. The installed host would hang on 'Starting the local runtime…'. A gateway boot crash (for example ERR_MODULE_NOT_FOUND from stranded production dependencies) surfaces here."
   }
 
   # Re-poll both /health endpoints independently; this is the canonical ready assertion.
@@ -432,8 +553,16 @@ try {
 
   Write-Host "Windows installer lifecycle smoke passed for $Target in $TrustMode trust mode."
 }
+catch {
+  $primaryFailure = $_.Exception.Message
+}
 finally {
-  Stop-InstalledProcesses
+  try {
+    Stop-InstalledProcesses
+  }
+  catch {
+    $cleanupFailures.Add("Installed process cleanup failed: $($_.Exception.Message)")
+  }
 
   $uninstaller = Join-Path $installDir "unins000.exe"
   if (-not $uninstalled -and (Test-Path -LiteralPath $uninstaller -PathType Leaf)) {
@@ -496,7 +625,9 @@ finally {
     $cleanupFailures.Add("Candidate protocol registration remained after cleanup.")
   }
 
-  if ($cleanupFailures.Count -eq 0 -and (Test-Path -LiteralPath $smokeRoot)) {
+  if ($null -eq $primaryFailure -and
+      $cleanupFailures.Count -eq 0 -and
+      (Test-Path -LiteralPath $smokeRoot)) {
     try {
       Remove-Item -LiteralPath $smokeRoot -Recurse -Force -ErrorAction Stop
     }
@@ -505,7 +636,7 @@ finally {
     }
   }
   if (Test-Path -LiteralPath $smokeRoot) {
-    if ($cleanupFailures.Count -eq 0) {
+    if ($null -eq $primaryFailure -and $cleanupFailures.Count -eq 0) {
       $cleanupFailures.Add("Installer smoke scratch root remained after cleanup.")
     }
     Write-Warning "Preserving installer smoke recovery payload at $smokeRoot"
@@ -529,6 +660,12 @@ finally {
   else {
     $env:WEBVIEW2_USER_DATA_FOLDER = $previousWebViewDataFolder
   }
+  if ($null -eq $previousWebViewBrowserArguments) {
+    Remove-Item Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS -ErrorAction SilentlyContinue
+  }
+  else {
+    $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = $previousWebViewBrowserArguments
+  }
   if ($null -eq $previousDesktopLauncher) {
     Remove-Item Env:GOATCITADEL_DESKTOP_LAUNCHER -ErrorAction SilentlyContinue
   }
@@ -546,6 +683,13 @@ finally {
   }
   else {
     $env:GOATCITADEL_MISSION_CONTROL_URL = $previousMissionControlUrl
+  }
+  if ($null -ne $primaryFailure) {
+    $failureMessage = "Installer smoke failed: $primaryFailure"
+    if ($cleanupFailures.Count -gt 0) {
+      $failureMessage += " Cleanup also failed: $($cleanupFailures -join ' ')"
+    }
+    throw $failureMessage
   }
   if ($cleanupFailures.Count -gt 0) {
     throw "Installer smoke cleanup failed: $($cleanupFailures -join ' ')"

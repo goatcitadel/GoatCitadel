@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   assertMobileVisualGeometry,
   assertVisualTraceRetentionProbeScope,
+  collectVisualBrowserConsoleEvidence,
   parseVisualTraceRetentionProbe,
   prepareVisualScenarioState,
   runVisualRegressionLane,
@@ -88,7 +89,10 @@ test("visual trace-retention probe forces one successful comparison to retain fa
       async assertNextVisualScenarioChrome() {},
       async assertNoFooterStatusCollision() {},
       async assertVisualBaselineCoverage() {},
-      attachBrowserLogging: () => ({ mark: () => ({ consoleMessages: 0, pageErrors: 0 }) }),
+      attachBrowserLogging: () => ({
+        mark: () => ({ consoleMessages: 0, pageErrors: 0 }),
+        getSnapshot: () => ({ consoleMessages: [], pageErrors: [] }),
+      }),
       buildVerificationUiUrl: (base, href) => `${base}${href}`,
       captureBrowserArtifacts: async (_context, input) => ({
         diagnostics: [`diagnostics/${input.slug}.json`],
@@ -114,9 +118,22 @@ test("visual trace-retention probe forces one successful comparison to retain fa
       },
       async ensureOnboardingComplete() {},
       filterVisualItemsBySlug: (items) => items,
+      filterExpectedBrowserConsoleMessages: (snapshot, _steps, options) => ({
+        snapshot,
+        acknowledgedSseRecoveryCount: options.sseRecovery?.acknowledged ? 1 : 0,
+      }),
       async installMissionControlNextBrowserState() {},
       maybeParseBool: () => false,
       async pinVisualRegressionProvider() {},
+      pollSseConnectionRecoveryEvidence: async (input) => ({
+        snapshot: input.snapshot,
+        clientSseDiagnostics: input.clientSseDiagnostics,
+        recovery: { acknowledged: false },
+        pollCount: 0,
+      }),
+      async readBrowserSseDiagnostics() {
+        return { available: false, records: [] };
+      },
       resolveVerificationTargetContext: () => ({
         isNext: false,
         packageName: "@goatcitadel/mission-control-next",
@@ -287,7 +304,10 @@ test("visual regression returns failure evidence when a browser assertion throws
       async assertNextVisualScenarioChrome() {},
       async assertNoFooterStatusCollision() {},
       async assertVisualBaselineCoverage() {},
-      attachBrowserLogging: () => ({ mark: () => ({ consoleMessages: 0, pageErrors: 0 }) }),
+      attachBrowserLogging: () => ({
+        mark: () => ({ consoleMessages: 0, pageErrors: 0 }),
+        getSnapshot: () => ({ consoleMessages: [], pageErrors: [] }),
+      }),
       buildVerificationUiUrl: (base, href) => `${base}${href}`,
       captureBrowserArtifacts: async (_context, input) => ({
         diagnostics: [`diagnostics/${input.slug}.json`],
@@ -306,9 +326,22 @@ test("visual regression returns failure evidence when a browser assertion throws
       },
       async ensureOnboardingComplete() {},
       filterVisualItemsBySlug: (items) => items,
+      filterExpectedBrowserConsoleMessages: (snapshot, _steps, options) => ({
+        snapshot,
+        acknowledgedSseRecoveryCount: options.sseRecovery?.acknowledged ? 1 : 0,
+      }),
       async installMissionControlNextBrowserState() {},
       maybeParseBool: () => false,
       async pinVisualRegressionProvider() {},
+      pollSseConnectionRecoveryEvidence: async (input) => ({
+        snapshot: input.snapshot,
+        clientSseDiagnostics: input.clientSseDiagnostics,
+        recovery: { acknowledged: false },
+        pollCount: 0,
+      }),
+      async readBrowserSseDiagnostics() {
+        return { available: false, records: [] };
+      },
       resolveVerificationTargetContext: () => ({
         isNext: false,
         packageName: "@goatcitadel/mission-control-next",
@@ -348,4 +381,48 @@ test("visual regression returns failure evidence when a browser assertion throws
   assert.match(results[0].error, /page errors: render crashed/);
   assert.deepEqual(results[0].artifacts.screenshots, ["screenshots/visual-regression-chat-desktop-dark-failure.png"]);
   assert.deepEqual(results[0].artifacts.traces, ["playwright/visual-regression-chat-desktop-dark-trace.zip"]);
+});
+
+test("visual console validation reuses acknowledged event-stream recovery evidence", async () => {
+  const snapshot = {
+    consoleMessages: [{ type: "error", text: "net::ERR_CONNECTION_FAILED" }],
+    pageErrors: [],
+    eventStreamRequestFailures: [],
+    eventStreamResponses: [],
+  };
+  let assertedSnapshot;
+  const result = await collectVisualBrowserConsoleEvidence({
+    page: {},
+    browserLogCursor: {},
+    packageName: "@goatcitadel/mission-control-next",
+    browserLog: { getSnapshot: () => snapshot },
+    deps: {
+      async readBrowserSseDiagnostics() {
+        return { available: true, records: [] };
+      },
+      async pollSseConnectionRecoveryEvidence(input) {
+        return {
+          snapshot: input.snapshot,
+          clientSseDiagnostics: input.clientSseDiagnostics,
+          recovery: { acknowledged: true, recoveryMs: 1500 },
+          pollCount: 1,
+        };
+      },
+      filterExpectedBrowserConsoleMessages(input, _steps, options) {
+        assert.equal(options.sseRecovery.acknowledged, true);
+        return {
+          snapshot: { ...input, consoleMessages: [] },
+          acknowledgedSseRecoveryCount: 1,
+        };
+      },
+      assertBrowserConsoleHealthy(log) {
+        assertedSnapshot = log.getSnapshot();
+        return { consoleErrors: [], pageErrors: [] };
+      },
+    },
+  });
+
+  assert.deepEqual(assertedSnapshot.consoleMessages, []);
+  assert.equal(result.filteredConsole.acknowledgedSseRecoveryCount, 1);
+  assert.equal(result.recoveryEvidence.recovery.recoveryMs, 1500);
 });

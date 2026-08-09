@@ -418,6 +418,7 @@ export function ThreadedSurfacePage({
     if (!railDrawerOpen || typeof document === "undefined" || typeof document.addEventListener !== "function") {
       return undefined;
     }
+    const eventTarget = document;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") {
         return;
@@ -426,8 +427,8 @@ export function ThreadedSurfacePage({
       event.stopPropagation();
       closeSessionRail();
     };
-    document.addEventListener("keydown", handleKeyDown, { capture: true });
-    return () => document.removeEventListener("keydown", handleKeyDown, { capture: true });
+    eventTarget.addEventListener("keydown", handleKeyDown, { capture: true });
+    return () => eventTarget.removeEventListener("keydown", handleKeyDown, { capture: true });
   }, [closeSessionRail, railDrawerOpen]);
   useEffect(() => {
     if (!dockOpen) {
@@ -446,6 +447,7 @@ export function ThreadedSurfacePage({
     ) {
       return undefined;
     }
+    const eventTarget = document;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") {
         return;
@@ -454,8 +456,8 @@ export function ThreadedSurfacePage({
       event.stopPropagation();
       handleDockOpenChange(false);
     };
-    document.addEventListener("keydown", handleKeyDown, { capture: true });
-    return () => document.removeEventListener("keydown", handleKeyDown, { capture: true });
+    eventTarget.addEventListener("keydown", handleKeyDown, { capture: true });
+    return () => eventTarget.removeEventListener("keydown", handleKeyDown, { capture: true });
   }, [dockOpen, handleDockOpenChange, railDrawerOpen]);
 
   return (
@@ -1220,6 +1222,7 @@ function useHorizontalPaneResize({
     if (!dragging || typeof window === "undefined") {
       return undefined;
     }
+    const eventTarget = window;
 
     const handlePointerMove = (event: PointerEvent) => {
       const dragState = dragStateRef.current;
@@ -1240,13 +1243,13 @@ function useHorizontalPaneResize({
       setDragging(false);
     };
 
-    window.addEventListener("pointermove", handlePointerMove);
-    window.addEventListener("pointerup", handlePointerUp);
-    window.addEventListener("pointercancel", handlePointerUp);
+    eventTarget.addEventListener("pointermove", handlePointerMove);
+    eventTarget.addEventListener("pointerup", handlePointerUp);
+    eventTarget.addEventListener("pointercancel", handlePointerUp);
     return () => {
-      window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("pointerup", handlePointerUp);
-      window.removeEventListener("pointercancel", handlePointerUp);
+      eventTarget.removeEventListener("pointermove", handlePointerMove);
+      eventTarget.removeEventListener("pointerup", handlePointerUp);
+      eventTarget.removeEventListener("pointercancel", handlePointerUp);
     };
   }, [direction, dragging, maxWidth, minWidth]);
 
@@ -1312,6 +1315,7 @@ function ThreadedPanelSwitcher({
     if (!open || typeof document === "undefined") {
       return undefined;
     }
+    const eventTarget = document;
     const handlePointerDown = (event: MouseEvent) => {
       const target = event.target as Node | null;
       if (target && menuRef.current && !menuRef.current.contains(target)) {
@@ -1325,11 +1329,11 @@ function ThreadedPanelSwitcher({
         setOpen(false);
       }
     };
-    document.addEventListener("mousedown", handlePointerDown);
-    document.addEventListener("keydown", handleKeyDown);
+    eventTarget.addEventListener("mousedown", handlePointerDown);
+    eventTarget.addEventListener("keydown", handleKeyDown);
     return () => {
-      document.removeEventListener("mousedown", handlePointerDown);
-      document.removeEventListener("keydown", handleKeyDown);
+      eventTarget.removeEventListener("mousedown", handlePointerDown);
+      eventTarget.removeEventListener("keydown", handleKeyDown);
     };
   }, [open]);
 
