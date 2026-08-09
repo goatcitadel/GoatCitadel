@@ -6,6 +6,7 @@ import type { VoiceRuntimeReadiness, VoiceRuntimeState } from "./voice.js";
 export type FollowOnParityEpicId =
   | "GC-P0-06"
   | "GC-P0-07"
+  | "GC-P0-14"
   | "GC-P1-08"
   | "GC-P1-09"
   | "GC-P1-10"
@@ -16,22 +17,12 @@ export type FollowOnParityEpicId =
 export const FOLLOW_ON_PARITY_EPIC_IDS: FollowOnParityEpicId[] = [
   "GC-P0-06",
   "GC-P0-07",
+  "GC-P0-14",
   "GC-P1-08",
   "GC-P1-09",
   "GC-P1-10",
   "GC-P2-11",
   "GC-P2-12",
-  "GC-P2-13",
-];
-
-export const FOLLOW_ON_PARITY_RECOMMENDED_ORDER: FollowOnParityEpicId[] = [
-  "GC-P2-12",
-  "GC-P0-06",
-  "GC-P2-11",
-  "GC-P1-09",
-  "GC-P1-08",
-  "GC-P0-07",
-  "GC-P1-10",
   "GC-P2-13",
 ];
 
