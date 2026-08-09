@@ -207,6 +207,7 @@ import { A2ATaskPushConfigRepository } from "./a2a-task-push-config-repo.js";
 import { RuntimeDecisionTraceRepository } from "./runtime-decision-trace-repo.js";
 import { PersonalOpsStorageRepository } from "./personal-ops-repo.js";
 import { GovernedLifecycleEventRepository } from "./governed-lifecycle-event-repo.js";
+import { GovernedRemediationRepository } from "./governed-remediation-repo.js";
 import { ImprovementLifecycleOperationRepository } from "./improvement-lifecycle-operation-repo.js";
 export {
   PersonalOpsInMemoryRepository,
@@ -370,6 +371,7 @@ export class Storage {
   public readonly candidateSkillEvidenceLinks: CandidateSkillEvidenceLinkRepository;
   public readonly governanceJourneyEvents: GovernanceJourneyEventRepository;
   public readonly governedLifecycleEvents: GovernedLifecycleEventRepository;
+  public readonly governedRemediations: GovernedRemediationRepository;
   public readonly improvementLifecycleOperations: ImprovementLifecycleOperationRepository;
   public readonly workspacePathBridgeSnapshots: WorkspacePathBridgeSnapshotRepository;
   public readonly externalSourceConfigs: ExternalSourceConfigRepository;
@@ -531,6 +533,7 @@ export class Storage {
     this.candidateSkillEvidenceLinks = new CandidateSkillEvidenceLinkRepository(this.db);
     this.governanceJourneyEvents = new GovernanceJourneyEventRepository(this.db);
     this.governedLifecycleEvents = new GovernedLifecycleEventRepository(this.db);
+    this.governedRemediations = new GovernedRemediationRepository(this.db);
     this.improvementLifecycleOperations = new ImprovementLifecycleOperationRepository(this.db);
     this.workspacePathBridgeSnapshots = new WorkspacePathBridgeSnapshotRepository(this.db);
     this.externalSourceConfigs = new ExternalSourceConfigRepository(this.db);
@@ -1008,6 +1011,7 @@ export * from "./skill-aggregate-revision-repo.js";
 export * from "./skill-learning-evidence-repo.js";
 export * from "./governance-journey-event-repo.js";
 export * from "./governed-lifecycle-event-repo.js";
+export * from "./governed-remediation-repo.js";
 export * from "./improvement-lifecycle-operation-repo.js";
 export * from "./workspace-path-bridge-snapshot-repo.js";
 export * from "./ops-saved-board-repo.js";

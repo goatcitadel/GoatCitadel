@@ -686,14 +686,16 @@ describe("Postgres migration ledger compatibility", () => {
         keys: ["parent_id desc"],
         predicate: "payload_doc IS NOT NULL AND parent_id > 0",
         predicateTerms: ["0", "parent_id", "payload_doc"],
+        predicateMode: "exact",
+        predicateFingerprint: "payload_docisnotnullandparent_id>0",
       },
     ]);
   });
 
   it("covers every canonical IF NOT EXISTS table and index and fails closed on catalog issues", () => {
     const manifest = buildPostgresSchemaShapeManifest(POSTGRES_MIGRATIONS);
-    assert.equal(manifest.tables.length, 295);
-    assert.equal(manifest.indexes.length, 674);
+    assert.equal(manifest.tables.length, 300);
+    assert.equal(manifest.indexes.length, 690);
     assert.equal(
       manifest.tables.every((table) => table.columns.length > 0),
       true,

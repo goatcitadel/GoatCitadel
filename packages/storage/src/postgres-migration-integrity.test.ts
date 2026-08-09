@@ -921,4 +921,31 @@ describe("protected Postgres migration integrity", () => {
     assert.doesNotMatch(sql, /SET status = 'active'/u);
     assert.doesNotMatch(sql, /\b(?:DROP\s+TABLE|TRUNCATE\s+TABLE|DELETE\s+FROM)\b/iu);
   });
+
+  it("keeps migration 134 paired, secret-free, CAS-fenced, immutable, and recovery-indexed", () => {
+    const migration = POSTGRES_MIGRATIONS.find((candidate) => candidate.version === 134);
+    assert.equal(migration?.name, "governed_remediation_durable_owner");
+    const sql = migration?.sql ?? "";
+    for (const table of [
+      "governed_remediation_states",
+      "governed_remediation_receipts",
+      "governed_remediation_failures",
+      "governed_remediation_reconciliations",
+      "governed_remediation_cas_transitions",
+    ]) {
+      assert.match(sql, new RegExp(`CREATE TABLE IF NOT EXISTS ${table} \\(`, "u"));
+    }
+    assert.match(sql, /idx_governed_remediation_states_owner_scope/u);
+    assert.match(sql, /idx_governed_remediation_states_recovery/u);
+    assert.match(sql, /idx_governed_remediation_reconciliations_recovery/u);
+    assert.match(sql, /gc_governed_remediation_cas_insert_guard/u);
+    assert.match(sql, /gc_governed_remediation_state_insert_guard/u);
+    assert.match(sql, /gc_governed_remediation_state_update_guard/u);
+    assert.match(sql, /gc_governed_remediation_reconciliation_update_guard/u);
+    assert.match(sql, /gc_reject_governed_remediation_mutation/u);
+    assert.doesNotMatch(
+      sql,
+      /\b(secret_value|credential_value|oauth_code|command_text|args_json|payload_json|raw_error|provider_error)\b/iu,
+    );
+  });
 });

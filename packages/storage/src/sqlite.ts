@@ -56,6 +56,7 @@ import {
 import { createSkillEvaluationRunsSchema } from "./sqlite/skill-evaluation-schema.js";
 import { createChannelCronDurabilitySchema } from "./sqlite/channel-cron-durability-schema.js";
 import { createGovernedLifecycleSchema } from "./sqlite/governed-lifecycle-schema.js";
+import { createGovernedRemediationSchema } from "./sqlite/governed-remediation-schema.js";
 
 const SQLITE_BUSY_TIMEOUT_MS = 5_000;
 const LEGACY_REMOTE_APPROVAL_BEARER_PATTERN = /grat_[A-Za-z0-9_-]{43}/;
@@ -7064,6 +7065,13 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
         name: "memory_source_authority_and_trace_candidate_dedupe",
         up: (db) => {
           upgradeMemorySourceAuthorityAndTraceCandidateDedupe(db);
+        },
+      },
+      {
+        version: 191,
+        name: "governed_remediation_durable_owner",
+        up: (db) => {
+          createGovernedRemediationSchema(db);
         },
       },
     ],

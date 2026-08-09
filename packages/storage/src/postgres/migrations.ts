@@ -1,5 +1,6 @@
 /* eslint-disable max-lines -- Postgres migration ledger keeps every versioned migration in one append-only file so ordering, dependencies, and rollback context stay traceable. */
 import { buildPostgresRuntimeSchemaSql } from "./runtime-schema.js";
+import { GOVERNED_REMEDIATION_POSTGRES_SCHEMA_SQL } from "./governed-remediation-schema.js";
 
 export interface PostgresMigration {
   version: number;
@@ -14235,6 +14236,11 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         recorded_at = excluded.recorded_at,
         metadata_json = excluded.metadata_json;
     `,
+  },
+  {
+    version: 134,
+    name: "governed_remediation_durable_owner",
+    sql: GOVERNED_REMEDIATION_POSTGRES_SCHEMA_SQL,
   },
 ];
 
