@@ -560,7 +560,7 @@ export class RemoteWorkersRouteService {
     }
     const reasonCode = inputCanonicalReasonCode(input.reasonCode);
     const reason = inputCanonicalText(input.reason, 1_024);
-    if (redactSecretText(reason).redactionCount > 0) {
+    if (redactSecretText(reasonCode).redactionCount > 0 || redactSecretText(reason).redactionCount > 0) {
       throw new RemoteWorkerRegistryInputError();
     }
     // Secret-like evidence is rejected above before any durable fingerprint is

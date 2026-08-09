@@ -168,12 +168,12 @@ describe("RemoteWorkersRouteService operator controls", () => {
       manifestVerifier: { verify: vi.fn(async () => manifestReceipt(runtimeManifest())) },
     });
 
-    await expect(
-      service.quarantineGeneration({
-        ...controlInput(),
-        reason: "Authorization: Bearer ghp_SUPER_SECRET_TOKEN_1234567890",
-      }),
-    ).rejects.toBeInstanceOf(RemoteWorkerRegistryInputError);
+    for (const input of [
+      controlInput({ reason: "Authorization: Bearer ghp_SUPER_SECRET_TOKEN_1234567890" }),
+      controlInput({ reasonCode: "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }),
+    ]) {
+      await expect(service.quarantineGeneration(input)).rejects.toBeInstanceOf(RemoteWorkerRegistryInputError);
+    }
     expect(admissions.quarantineGeneration).not.toHaveBeenCalled();
     expect(audit.append).not.toHaveBeenCalled();
   });
