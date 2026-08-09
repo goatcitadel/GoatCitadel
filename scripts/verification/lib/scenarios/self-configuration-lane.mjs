@@ -36,6 +36,7 @@ export const SELF_CONFIGURATION_COMMANDS = Object.freeze([
       "src/services/chat-message-route-runtime.test.ts",
       "src/services/chat-turn-agent-runner.loop24.test.ts",
       "src/services/governed-remediation-managed-browser-adapter.test.ts",
+      "src/services/governed-remediation-owned-gateway-service-adapter.test.ts",
       "src/routes/chat.routes.test.ts",
       "src/routes/chat.messages.commit-truth.test.ts",
       "src/app.rate-limit.test.ts",
