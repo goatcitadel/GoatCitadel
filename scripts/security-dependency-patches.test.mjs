@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -11,6 +11,9 @@ const policyEngineRequire = createRequire(path.join(root, "packages", "policy-en
 const pptxgenjsPath = policyEngineRequire.resolve("pptxgenjs");
 const pptxgenjsRequire = createRequire(pptxgenjsPath);
 const imageSizePath = pptxgenjsRequire.resolve("image-size");
+const parserDeadlineMs = 2_000;
+const probeStartupDeadlineMs = 30_000;
+const probeReadyMarker = "probe:ready\n";
 
 const malformedPayloads = {
   heif: [
@@ -27,30 +30,75 @@ const malformedPayloads = {
   ],
 };
 
-test("the patched image-size dependency terminates on no-progress parser payloads", () => {
-  for (const [name, payload] of Object.entries(malformedPayloads)) {
-    const childSource = `
-      const { imageSize } = require(${JSON.stringify(imageSizePath)});
+function runParserProbe(payload) {
+  const childSource = `
+    const { imageSize } = require(${JSON.stringify(imageSizePath)});
+    const payload = Uint8Array.from(${JSON.stringify(payload)});
+    process.stdout.write(${JSON.stringify(probeReadyMarker)}, () => {
       try {
-        imageSize(Uint8Array.from(${JSON.stringify(payload)}));
+        imageSize(payload);
         process.stdout.write("terminated:return");
       } catch {
         process.stdout.write("terminated:throw");
       }
-    `;
-    const result = spawnSync(process.execPath, ["-e", childSource], {
-      encoding: "utf8",
-      timeout: 2_000,
-      windowsHide: true,
     });
+  `;
+  const child = spawn(process.execPath, ["-e", childSource], {
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+  });
 
-    assert.notEqual(result.error?.code, "ETIMEDOUT", `${name} payload blocked the Node.js event loop`);
+  return new Promise((resolve, reject) => {
+    let stdout = "";
+    let stderr = "";
+    let parserTimer;
+    let timeoutPhase = null;
+    const clearTimers = () => {
+      clearTimeout(startupTimer);
+      if (parserTimer) clearTimeout(parserTimer);
+    };
+    const terminateForTimeout = (phase) => {
+      timeoutPhase = phase;
+      child.kill("SIGKILL");
+    };
+    const startupTimer = setTimeout(() => terminateForTimeout("startup"), probeStartupDeadlineMs);
+
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+      if (!parserTimer && stdout.startsWith(probeReadyMarker)) {
+        clearTimeout(startupTimer);
+        parserTimer = setTimeout(() => terminateForTimeout("parser"), parserDeadlineMs);
+      }
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.once("error", (error) => {
+      clearTimers();
+      reject(error);
+    });
+    child.once("close", (status, signal) => {
+      clearTimers();
+      resolve({ signal, status, stderr, stdout, timeoutPhase });
+    });
+  });
+}
+
+test("the patched image-size dependency terminates on no-progress parser payloads", async () => {
+  for (const [name, payload] of Object.entries(malformedPayloads)) {
+    const result = await runParserProbe(payload);
+
+    assert.notEqual(result.timeoutPhase, "startup", `${name} parser probe did not become ready`);
+    assert.notEqual(result.timeoutPhase, "parser", `${name} payload blocked the Node.js event loop`);
+    assert.equal(result.signal, null, `${name} parser probe exited via ${result.signal}`);
     assert.equal(
       result.status,
       0,
       `${name} payload failed outside the parser contract: ${result.stderr || result.stdout}`,
     );
-    assert.match(result.stdout, /^terminated:(return|throw)$/u);
+    assert.match(result.stdout, /^probe:ready\nterminated:(return|throw)$/u);
   }
 });
 
