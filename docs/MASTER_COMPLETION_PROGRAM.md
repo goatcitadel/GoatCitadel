@@ -303,14 +303,17 @@ Owner backlogs: `CAPABILITY_SYSTEM_BACKLOG.md`,
   progressive Skills loading, capability-route framing, provider capability
   chips, measured filter overflow, reminder date input, and saved-board cost
   coverage truth are complete.
+- MCUX-106 fixture implementation is complete: Projects and Approvals now seed
+  real selected records, route through exact fixture identifiers, and wait for
+  populated master/detail selectors.
+- The remaining July layout defects are complete: Activity uses compact ages
+  and readable summary tracks, Schedules use wider grid tracks, mobile section
+  indexes wrap, and command-palette overflow guidance is measured.
 - Focused Settings and primitive proof is green. Broad accessibility, surface,
   and visual proof remains intentionally grouped with the rest of M7.
 
 ### Current work
 
-- Complete MCUX-106 with populated Projects and approval-detail stories.
-- Finish the remaining reverified July UI findings: compact Activity timestamps,
-  wider attention layouts, and the mobile scroll affordance.
 - Group shared product polish into common primitives: blocked-state composition,
   ID chips, project/detail differentiation, route redundancy, diagnostics
   density, working-context tabs, model grouping, and repeated disclaimer copy.

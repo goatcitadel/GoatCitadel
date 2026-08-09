@@ -46,6 +46,8 @@ test("seeds the complete fixture and returns its identifiers", async () => {
   let opsBoardRequest;
   let agenticTaskSeedRequest;
   let kanbanDeliverableRequest;
+  let projectRequest;
+  const projectSessionRequests = [];
   const settingsPatchRequests = [];
   const retryDelays = [];
   const requestJson = async (_gatewayUrl, path, options) => {
@@ -64,6 +66,17 @@ test("seeds the complete fixture and returns its identifiers", async () => {
     }
     if (path === "/api/v1/chat/sessions/session-1/thread") {
       return { ok: true, body: { turns: [{ turnId: "turn-1" }] } };
+    }
+    if (path === "/api/v1/dev/verification/chat-approval-scenario") {
+      return { ok: true, body: { approvalId: "approval-1" } };
+    }
+    if (path === "/api/v1/chat/projects") {
+      projectRequest = options;
+      return { ok: true, body: { projectId: "project-1" } };
+    }
+    if (path === "/api/v1/chat/sessions") {
+      projectSessionRequests.push(options);
+      return { ok: true, body: { sessionId: `project-session-${projectSessionRequests.length}` } };
     }
     if (path === "/api/v1/agents") {
       agentIndex += 1;
@@ -142,6 +155,8 @@ test("seeds the complete fixture and returns its identifiers", async () => {
     sessionIds: ["session-1", "session-2"],
     citadelId: "personal",
     sessions: { approval: "session-1", userInput: "session-2" },
+    projects: { primary: "project-1" },
+    approvals: { primary: "approval-1" },
     agentIds: ["agent-1", "agent-2"],
     taskIds: ["task-1", "task-2", "task-3", "task-4"],
     opsBoardId: "board-1",
@@ -150,6 +165,39 @@ test("seeds the complete fixture and returns its identifiers", async () => {
     candidateVersionId: "usability-browser-candidate-v1",
   });
   assert.deepEqual(stabilizedPaths, ["workspace/verification/mission-control-next-proof.md"]);
+  assert.deepEqual(projectRequest, {
+    method: "POST",
+    body: {
+      workspaceId: "workspace-1",
+      name: "Mission Control Verification",
+      description: "Populated project used to prove project summary and detail surfaces.",
+      workspacePath: "verification/mission-control-next",
+      color: "#20b8a6",
+    },
+  });
+  assert.deepEqual(
+    projectSessionRequests.map((request) => request.body),
+    [
+      {
+        workspaceId: "workspace-1",
+        projectId: "project-1",
+        title: "Release readiness review",
+        mode: "chat",
+      },
+      {
+        workspaceId: "workspace-1",
+        projectId: "project-1",
+        title: "Operator surface polish",
+        mode: "chat",
+      },
+      {
+        workspaceId: "workspace-1",
+        projectId: "project-1",
+        title: "Runtime evidence follow-up",
+        mode: "chat",
+      },
+    ],
+  );
   assert.ok(requests.includes("/api/v1/prompt-packs/import"));
   assert.deepEqual(agenticTaskSeedRequest, {
     method: "POST",

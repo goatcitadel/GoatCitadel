@@ -26,6 +26,7 @@ import {
   NEXT_RELEASE_SURFACE_MANIFEST,
   resolveDirectCompatibilityManifest,
   resolveLegacyRedirectManifest,
+  resolveReleaseSurfaceHref,
   resolveShellContract,
   resolveSurfaceRegressionManifest,
   resolveVisualBaselineNamespace,
@@ -211,7 +212,7 @@ function verificationLaneDeps() {
     repoRoot,
     requestJson,
     resolveVerificationTargetContext,
-    resolveVisualRouteHref,
+    resolveVisualRouteHref: resolveReleaseSurfaceHref,
     restartGatewayProcess,
     runCommand,
     runMissionControlNextMobileShellProof,
@@ -4853,24 +4854,6 @@ async function stabilizeVisualRegressionSnapshot(page) {
     }
   });
   await page.waitForTimeout(100);
-}
-
-function appendQuery(href, query) {
-  if (!query) {
-    return href;
-  }
-  return `${href}${href.includes("?") ? "&" : "?"}${query}`;
-}
-
-function resolveVisualRouteHref(route, variant, fixture) {
-  let href = appendQuery(route.href, variant.themeQuery);
-  if (route?.fixtureSessionKey && fixture?.sessions) {
-    const sessionId = fixture.sessions[route.fixtureSessionKey];
-    if (sessionId) {
-      href = appendQuery(href, `sessionId=${encodeURIComponent(sessionId)}`);
-    }
-  }
-  return href;
 }
 
 async function assertNextVisualScenarioChrome(page, route) {

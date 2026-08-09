@@ -103,21 +103,20 @@ current implementation:
 - Filter overflow guidance is driven by measured overflow.
 - Saved-board cost widgets distinguish unknown coverage from a real zero.
 - Reminder due dates use `datetime-local` and normalize valid input to UTC.
+- Ops Activity uses compact relative ages and a two-part summary grid so event
+  labels keep readable space at desktop and mobile widths.
+- Ops Schedules use wider minimum tracks so the needs-attention content does
+  not inherit the previous four-across truncation.
+- Mobile section indexes wrap, while the command palette shows a measured
+  vertical-scroll cue only until the operator reaches the end.
+- Projects and Approvals visual fixtures now seed and target real selected
+  master/detail records instead of accepting empty route shells.
 
 These fixes received focused component tests and package typecheck. The
 consolidated accessibility, surface, and visual pass remains owned by `M7` in
 `MASTER_COMPLETION_PROGRAM.md`.
 
 ## Deferred findings still open (recommend before/shortly after 1.0)
-
-**Bugs (small, none release-blocking):**
-- Ops Activity feed rows crush their event label at every desktop width (the full timestamp is
-  `flex-shrink: 0` and the source span reserves 30%). Recommend relative ages ("6m") in feed rows and
-  a readable floor for the chip state segment.
-- Ops Schedules: needs-attention card truncates chips/titles in the 4-across grid (fine at 3-across on
-  Notifications) — give it a wider minimum track or a 2-column span.
-- Mobile "ON THIS PAGE" rows and the command palette list scroll with no affordance (overlay
-  scrollbars) — add an edge fade or wrap.
 
 **UX suggestions (product-level):**
 - **Chat blocked state repeats itself up to five times** in one viewport (timeline heading, evidence

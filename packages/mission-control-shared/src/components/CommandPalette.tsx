@@ -1,4 +1,12 @@
-import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import { appCopy, globalCopy } from "../content/copy";
 
 export interface CommandPaletteItem {
@@ -18,11 +26,24 @@ interface CommandPaletteProps {
   items: CommandPaletteItem[];
 }
 
+export function readCommandPaletteScrollState(
+  element: Pick<HTMLElement, "clientHeight" | "scrollHeight" | "scrollTop">,
+) {
+  const overflowing = element.scrollHeight > element.clientHeight + 1;
+  return {
+    overflowing,
+    atEnd: !overflowing || element.scrollTop + element.clientHeight >= element.scrollHeight - 1,
+  };
+}
+
 export function CommandPalette({ open, onClose, items }: CommandPaletteProps) {
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(-1);
+  const [listOverflowing, setListOverflowing] = useState(false);
+  const [listAtEnd, setListAtEnd] = useState(true);
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const listRef = useRef<HTMLUListElement | null>(null);
   const previouslyFocusedElementRef = useRef<HTMLElement | null>(null);
   const wasOpenRef = useRef(false);
   const headingId = useId();
@@ -47,6 +68,41 @@ export function CommandPalette({ open, onClose, items }: CommandPaletteProps) {
       })
       .slice(0, 24);
   }, [items, query]);
+
+  const measureListOverflow = useCallback(() => {
+    const list = listRef.current;
+    if (!list) {
+      setListOverflowing(false);
+      setListAtEnd(true);
+      return;
+    }
+    const state = readCommandPaletteScrollState(list);
+    setListOverflowing(state.overflowing);
+    setListAtEnd(state.atEnd);
+  }, []);
+
+  useEffect(() => {
+    if (!open) {
+      setListOverflowing(false);
+      setListAtEnd(true);
+      return;
+    }
+    const list = listRef.current;
+    if (!list) {
+      return;
+    }
+    measureListOverflow();
+    if (typeof ResizeObserver !== "undefined") {
+      const observer = new ResizeObserver(measureListOverflow);
+      observer.observe(list);
+      return () => observer.disconnect();
+    }
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.addEventListener("resize", measureListOverflow, { passive: true });
+    return () => window.removeEventListener("resize", measureListOverflow);
+  }, [filtered.length, measureListOverflow, open]);
 
   useEffect(() => {
     if (filtered.length === 0) {
@@ -214,7 +270,15 @@ export function CommandPalette({ open, onClose, items }: CommandPaletteProps) {
           />
           <span className="command-palette-shortcut">Ctrl/Cmd + K</span>
         </div>
-        <ul id={listboxId} className="command-palette-list" role="listbox">
+        <ul
+          ref={listRef}
+          id={listboxId}
+          className="command-palette-list"
+          role="listbox"
+          data-overflowing={listOverflowing ? "true" : "false"}
+          data-at-end={listAtEnd ? "true" : "false"}
+          onScroll={measureListOverflow}
+        >
           {filtered.length === 0 ? (
             <li className="command-palette-empty">No matching actions.</li>
           ) : (
@@ -258,6 +322,11 @@ export function CommandPalette({ open, onClose, items }: CommandPaletteProps) {
             ))
           )}
         </ul>
+        {listOverflowing && !listAtEnd ? (
+          <p className="command-palette-scroll-hint" role="status">
+            Scroll for more commands
+          </p>
+        ) : null}
       </div>
     </div>
   );

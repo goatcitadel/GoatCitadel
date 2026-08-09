@@ -395,6 +395,8 @@
 
   .mc-next-section-index-links {
     width: 100%;
+    flex-wrap: wrap;
+    overflow-x: visible;
   }
 }
 

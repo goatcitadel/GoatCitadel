@@ -1103,6 +1103,18 @@
   list-style: none;
   overflow-y: auto;
   flex: 1 1 auto;
+  scrollbar-gutter: stable;
+}
+
+.command-palette-scroll-hint {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0.45rem 1rem;
+  border-top: 1px solid var(--border-subtle, var(--mc-border-subtle));
+  background: color-mix(in oklab, var(--mc-area-color, var(--area-chat)) 7%, var(--bg-surface-2, var(--mc-surface-2)));
+  color: var(--fg-muted, var(--text-muted));
+  font: 600 var(--text-2xs) / 1.2 var(--font-mono, var(--mc-font-mono));
+  text-align: center;
 }
 
 .command-palette-item + .command-palette-item {

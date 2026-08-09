@@ -2165,6 +2165,20 @@
   border-color: color-mix(in oklab, var(--mc-area-color) 22%, var(--border));
 }
 
+.mc-next-activity-feed-row > details {
+  width: 100%;
+  min-width: 0;
+}
+
+.mc-next-activity-feed-row summary {
+  display: grid;
+  grid-template-columns: minmax(min(11rem, 55%), 2fr) minmax(6rem, 1fr);
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+  cursor: pointer;
+}
+
 .mc-next-activity-feed-source {
   font-family: var(--mc-font-mono);
   font-variant-numeric: tabular-nums;
@@ -2174,8 +2188,19 @@
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
-  max-width: 30%;
+  max-width: 100%;
   text-align: right;
+}
+
+@media (max-width: 640px) {
+  .mc-next-activity-feed-row summary {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.28rem;
+  }
+
+  .mc-next-activity-feed-source {
+    text-align: left;
+  }
 }
 
 /* Skill Hub operator lifecycle: immutable candidate and approval truth. */

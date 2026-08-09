@@ -127,9 +127,10 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = withReleaseSurfaceStatus([
   {
     slug: "projects",
     href: "/projects",
-    readyText: "Project containers",
+    readySelector: ".mc-next-project-card.is-selected",
     expectedArea: "projects",
     expectedSection: "root",
+    fixtureProjectKey: "primary",
     interaction: "open-inspector",
   },
   {
@@ -327,9 +328,10 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = withReleaseSurfaceStatus([
   {
     slug: "ops-approvals",
     href: "/ops/approvals",
-    readyText: "Approvals",
+    readySelector: ".mc-next-approvals-inspector",
     expectedArea: "ops",
     expectedSection: "approvals",
+    fixtureApprovalKey: "primary",
     interaction: "open-inspector",
   },
   {
@@ -699,6 +701,22 @@ export function buildVisualBaselineFileName(routeSlug, variantSlug) {
   return `visual-regression-${routeSlug}-${variantSlug}.png`;
 }
 
+export function resolveReleaseSurfaceHref(route, variant = {}, fixture = {}) {
+  let href = appendQuery(route.href, variant.themeQuery);
+  for (const [routeKey, fixtureKey, queryKey] of [
+    ["fixtureSessionKey", "sessions", "sessionId"],
+    ["fixtureProjectKey", "projects", "projectId"],
+    ["fixtureApprovalKey", "approvals", "approvalId"],
+  ]) {
+    const fixtureItemKey = route?.[routeKey];
+    const fixtureValue = fixtureItemKey ? fixture?.[fixtureKey]?.[fixtureItemKey] : undefined;
+    if (fixtureValue) {
+      href = appendQuery(href, `${queryKey}=${encodeURIComponent(fixtureValue)}`);
+    }
+  }
+  return href;
+}
+
 export function resolveShellContract(packageName) {
   return packageName === "@goatcitadel/mission-control-next" ? NEXT_SHELL_CONTRACT : CURRENT_SHELL_CONTRACT;
 }
@@ -725,4 +743,11 @@ export function resolveLegacyRedirectManifest(packageName) {
 
 export function resolveDirectCompatibilityManifest(packageName) {
   return packageName === "@goatcitadel/mission-control-next" ? NEXT_DIRECT_COMPATIBILITY_MANIFEST : [];
+}
+
+function appendQuery(href, query) {
+  if (!query) {
+    return href;
+  }
+  return `${href}${href.includes("?") ? "&" : "?"}${query}`;
 }

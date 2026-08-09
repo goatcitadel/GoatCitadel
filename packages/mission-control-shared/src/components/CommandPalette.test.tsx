@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { act, create } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { CommandPalette, type CommandPaletteItem } from "./CommandPalette";
+import { CommandPalette, readCommandPaletteScrollState, type CommandPaletteItem } from "./CommandPalette";
 
 class FakeElement {
   readonly focus = vi.fn();
@@ -97,6 +97,39 @@ describe("CommandPalette", () => {
         />,
       ),
     ).toBe("");
+  });
+
+  it("measures vertical overflow and hides the prompt at the end", async () => {
+    const listNode = { clientHeight: 100, scrollHeight: 240, scrollTop: 0 };
+    expect(readCommandPaletteScrollState(listNode)).toEqual({ overflowing: true, atEnd: false });
+
+    let renderer: ReturnType<typeof create> | null = null;
+    await act(async () => {
+      renderer = create(
+        <CommandPalette
+          open
+          onClose={() => undefined}
+          items={Array.from({ length: 8 }, (_, index) => ({
+            id: `command-${index}`,
+            label: `Command ${index}`,
+            run: vi.fn(),
+          }))}
+        />,
+        {
+          createNodeMock: (element) =>
+            element.type === "ul" && element.props.className === "command-palette-list" ? listNode : new FakeElement(),
+        },
+      );
+    });
+    expect(renderer!.root.findAllByProps({ className: "command-palette-scroll-hint" })).toHaveLength(1);
+    expect(renderer!.root.findByType("ul").props["data-overflowing"]).toBe("true");
+
+    listNode.scrollTop = 140;
+    await act(async () => {
+      renderer!.root.findByType("ul").props.onScroll();
+    });
+    expect(renderer!.root.findAllByProps({ className: "command-palette-scroll-hint" })).toHaveLength(0);
+    expect(renderer!.root.findByType("ul").props["data-at-end"]).toBe("true");
   });
 
   it("filters actions and activates the selected item from the keyboard", () => {
