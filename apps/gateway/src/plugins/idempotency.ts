@@ -47,7 +47,8 @@ const SECRET_SENSITIVE_REMOTE_WORKER_CONTROL_ROUTES = new Set([
 const SECURE_CONFIGURATION_ROUTE =
   "/api/v1/chat/sessions/:sessionId/turns/:turnId/user-input/:promptId/secure-configuration";
 const REMOTE_WORKER_BOOTSTRAP_ROUTE = "/api/v1/ops/workspaces/:workspaceId/remote-workers/bootstrap";
-const CANONICAL_REPLAY_ROUTES = new Set([SECURE_CONFIGURATION_ROUTE, REMOTE_WORKER_BOOTSTRAP_ROUTE]);
+const CANONICAL_REPLAY_ROUTES = new Set([SECURE_CONFIGURATION_ROUTE]);
+const CANONICAL_IDEMPOTENCY_OWNER_ROUTES = new Set([REMOTE_WORKER_BOOTSTRAP_ROUTE]);
 
 export const idempotencyHeaderPlugin = fp<IdempotencyHeaderPluginOptions>(async (fastify, options) => {
   fastify.decorateRequest("idempotencyKey", "");
@@ -73,11 +74,19 @@ export const idempotencyHeaderPlugin = fp<IdempotencyHeaderPluginOptions>(async 
     }
 
     (request as typeof request & { idempotencyKey: string }).idempotencyKey = key;
-    if (!options.mutationStore || !shouldEnforceMutationIdempotency(request)) {
+    const routePath = getNormalizedRoutePath(request);
+    if (
+      !options.mutationStore ||
+      !shouldEnforceMutationIdempotency(request) ||
+      CANONICAL_IDEMPOTENCY_OWNER_ROUTES.has(routePath)
+    ) {
+      // A one-time bootstrap secret is deliberately not recoverable from its
+      // durable hash. Its repository therefore owns replay and request drift
+      // directly; a second generic claim could fail after canonical commit and
+      // suppress the only response that is allowed to expose the secret.
       return;
     }
 
-    const routePath = getNormalizedRoutePath(request);
     const actorScope = request.authActorId?.trim() || "";
     const claim = await options.mutationStore.claim({
       method: request.method,
@@ -107,11 +116,11 @@ export const idempotencyHeaderPlugin = fp<IdempotencyHeaderPluginOptions>(async 
     }
 
     if (claim.outcome === "duplicate" && CANONICAL_REPLAY_ROUTES.has(routePath)) {
-      // These handlers own secret-independent replay paths backed by their
-      // canonical repositories. Let an exact transport retry recover a
-      // secret-free receipt after a lost response. Secure configuration ignores
-      // newly supplied bytes; remote-worker bootstrap generates no replay
-      // secret. In-progress and payload-mismatch claims remain blocked.
+      // The secure-configuration handler owns a secret-independent replay path
+      // backed by its canonical repository. Let an exact transport retry
+      // recover a secret-free receipt after a lost response; newly supplied
+      // bytes are ignored. In-progress and payload-mismatch claims remain
+      // blocked.
       request.mutationIdempotencyOutcome = "committed";
       return;
     }

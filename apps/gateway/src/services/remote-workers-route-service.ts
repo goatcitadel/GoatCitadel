@@ -261,7 +261,38 @@ export class RemoteWorkersRouteService {
       throw new RemoteWorkerRegistryInputError();
     }
     const actorId = inputCanonicalIdentifier(input.actorId, 256);
-    await control.manifestVerifier.verify(request.runtimeManifest);
+    if (redactSecretText(request.workerLabel).redactionCount > 0) {
+      throw new RemoteWorkerRegistryInputError();
+    }
+    const manifestVerification = await control.manifestVerifier.verify(request.runtimeManifest);
+    const auditDeliveryId = `remote-worker-bootstrap-request:${sha256Utf8(
+      canonicalJsonString({
+        schemaVersion: "goatcitadel.remote-worker-bootstrap-audit-request.v1",
+        request,
+        actorId,
+      }),
+    )}`;
+
+    // A bootstrap secret cannot be recovered from its durable hash. Persist the
+    // secret-free request audit before generating or committing that one-time
+    // value so an audit outage leaves no unusable bootstrap authority behind.
+    // The immutable bootstrap row is the canonical post-effect issuance proof.
+    await control.audit.append(
+      "approvals",
+      {
+        event: "remote_worker.bootstrap.requested",
+        registryWorkspaceId: request.registryWorkspaceId,
+        existingWorkerId: request.existingWorkerId ?? null,
+        platform: request.platform,
+        architecture: request.architecture,
+        manifestPayloadSha256: manifestVerification.payloadSha256,
+        manifestVerificationReceiptSha256: manifestVerification.manifestVerificationReceiptSha256,
+        allowedWorkspaceCount: request.allowedWorkspaceIds.length,
+        capabilityClassCount: request.capabilityClasses.length,
+        createdByActorId: actorId,
+      },
+      { deliveryId: auditDeliveryId },
+    );
 
     const secretBytes = (control.randomSecretBytes ?? randomBytes)(32);
     if (!Buffer.isBuffer(secretBytes) || secretBytes.byteLength !== 32) {
@@ -279,24 +310,6 @@ export class RemoteWorkersRouteService {
       createdByActorId: actorId,
       bootstrapSecretSha256,
     });
-    const auditDeliveryId = `remote-worker-bootstrap:${outcome.record.bootstrapId}:issued`;
-    await control.audit.append(
-      "approvals",
-      {
-        event: "remote_worker.bootstrap.issued",
-        registryWorkspaceId: outcome.record.registryWorkspaceId,
-        bootstrapId: outcome.record.bootstrapId,
-        workerId: outcome.record.workerId,
-        nodeId: outcome.record.nodeId,
-        targetWorkerGeneration: outcome.record.targetWorkerGeneration,
-        manifestPayloadSha256: outcome.record.runtimeManifest.payloadSha256,
-        workspaceCeilingSha256: outcome.record.workspaceCeilingSha256,
-        capabilityCeilingSha256: outcome.record.capabilityCeilingSha256,
-        expiresAt: outcome.record.expiresAt,
-        createdByActorId: outcome.record.createdByActorId,
-      },
-      { deliveryId: auditDeliveryId },
-    );
     return Object.freeze({
       disposition: outcome.disposition,
       workspaceId: outcome.record.registryWorkspaceId,

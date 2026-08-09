@@ -32,6 +32,9 @@ describe("RemoteWorkersRouteService operator controls", () => {
       return { disposition: "created", record: bootstrapRecord({ runtimeManifest: manifest }) };
     });
     const audit = auditPort();
+    vi.mocked(audit.append).mockImplementation(async () => {
+      order.push("audit");
+    });
     const service = operatorService({
       admissions,
       audit,
@@ -46,7 +49,7 @@ describe("RemoteWorkersRouteService operator controls", () => {
 
     const result = await service.issueBootstrap(bootstrapInput(manifest));
 
-    expect(order).toEqual(["verify", "persist"]);
+    expect(order).toEqual(["verify", "audit", "persist"]);
     expect(createBootstrap).toHaveBeenCalledTimes(1);
     expect(result).toMatchObject({
       disposition: "created",
@@ -58,12 +61,12 @@ describe("RemoteWorkersRouteService operator controls", () => {
     expect(audit.append).toHaveBeenCalledWith(
       "approvals",
       expect.objectContaining({
-        event: "remote_worker.bootstrap.issued",
+        event: "remote_worker.bootstrap.requested",
         registryWorkspaceId: "workspace-a",
-        bootstrapId: "bootstrap-a",
         manifestPayloadSha256: manifest.payloadSha256,
+        manifestVerificationReceiptSha256: "c".repeat(64),
       }),
-      { deliveryId: "remote-worker-bootstrap:bootstrap-a:issued" },
+      { deliveryId: bootstrapAuditDeliveryId() },
     );
     const auditJson = JSON.stringify(vi.mocked(audit.append).mock.calls);
     expect(auditJson).not.toContain(result.bootstrapSecret!);
@@ -111,30 +114,47 @@ describe("RemoteWorkersRouteService operator controls", () => {
     expect(audit.append).not.toHaveBeenCalled();
   });
 
-  it("retries the same secret-free audit delivery after a canonical bootstrap write without re-exposing a secret", async () => {
+  it("rejects a secret-like worker label before manifest verification, audit, or persistence", async () => {
+    const admissions = admissionStore();
+    const audit = auditPort();
+    const manifestVerifier = { verify: vi.fn(async () => manifestReceipt(runtimeManifest())) };
+    const service = operatorService({ admissions, audit, manifestVerifier });
+
+    await expect(
+      service.issueBootstrap({
+        ...bootstrapInput(),
+        workerLabel: "Authorization: Bearer ghp_SUPER_SECRET_TOKEN_1234567890",
+      }),
+    ).rejects.toBeInstanceOf(RemoteWorkerRegistryInputError);
+
+    expect(manifestVerifier.verify).not.toHaveBeenCalled();
+    expect(audit.append).not.toHaveBeenCalled();
+    expect(admissions.createBootstrap).not.toHaveBeenCalled();
+  });
+
+  it("does not persist a bootstrap when its request audit fails and returns the one-time secret on retry", async () => {
     const manifest = runtimeManifest();
-    const record = bootstrapRecord({ runtimeManifest: manifest });
-    const admissions = admissionStore({
-      createBootstrap: vi
-        .fn()
-        .mockResolvedValueOnce({ disposition: "created", record })
-        .mockResolvedValueOnce({ disposition: "replayed_without_secret", record }),
-    });
+    const admissions = admissionStore();
     const audit = auditPort();
     vi.mocked(audit.append).mockRejectedValueOnce(new Error("audit unavailable")).mockResolvedValueOnce(undefined);
+    const randomSecretBytes = vi.fn(() => Buffer.alloc(32, 6));
     const service = operatorService({
       admissions,
       audit,
       manifestVerifier: { verify: vi.fn(async () => manifestReceipt(manifest)) },
-      randomSecretBytes: () => Buffer.alloc(32, 6),
+      randomSecretBytes,
     });
     const input = bootstrapInput(manifest);
 
     await expect(service.issueBootstrap(input)).rejects.toThrow("audit unavailable");
-    const replay = await service.issueBootstrap(input);
+    expect(admissions.createBootstrap).not.toHaveBeenCalled();
+    expect(randomSecretBytes).not.toHaveBeenCalled();
+    const retry = await service.issueBootstrap(input);
 
-    expect(replay.disposition).toBe("replayed_without_secret");
-    expect(replay).not.toHaveProperty("bootstrapSecret");
+    expect(retry.disposition).toBe("created");
+    expect(retry).toHaveProperty("bootstrapSecret", Buffer.alloc(32, 6).toString("base64url"));
+    expect(admissions.createBootstrap).toHaveBeenCalledTimes(1);
+    expect(randomSecretBytes).toHaveBeenCalledTimes(1);
     expect(audit.append).toHaveBeenCalledTimes(2);
     expect(vi.mocked(audit.append).mock.calls[0]).toEqual(vi.mocked(audit.append).mock.calls[1]);
   });
@@ -328,6 +348,24 @@ function manifestReceipt(manifest: RemoteWorkerRuntimeManifest) {
     payloadSha256: manifest.payloadSha256,
     manifestVerificationReceiptSha256: "c".repeat(64),
   };
+}
+
+function bootstrapAuditDeliveryId(): string {
+  const input = bootstrapInput();
+  const { workspaceId, actorId, ...request } = input;
+  return `remote-worker-bootstrap-request:${digest(
+    Buffer.from(
+      canonicalJsonString({
+        schemaVersion: "goatcitadel.remote-worker-bootstrap-audit-request.v1",
+        request: {
+          registryWorkspaceId: workspaceId,
+          ...request,
+        },
+        actorId,
+      }),
+      "utf8",
+    ),
+  )}`;
 }
 
 function digest(value: Buffer): string {

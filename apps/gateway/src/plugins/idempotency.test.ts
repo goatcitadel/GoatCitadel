@@ -375,17 +375,25 @@ describe("idempotencyHeaderPlugin", () => {
     }
   });
 
-  it("allows exact remote-worker bootstrap replay so the canonical owner can omit the one-time secret", async () => {
+  it("defers remote-worker bootstrap replay and drift to its one-time-secret canonical owner", async () => {
     let handlerCalls = 0;
     const built = await buildApp((fastify) => {
-      fastify.post("/api/v1/ops/workspaces/:workspaceId/remote-workers/bootstrap", async (request) => {
+      let canonicalPayload: string | undefined;
+      fastify.post("/api/v1/ops/workspaces/:workspaceId/remote-workers/bootstrap", async (request, reply) => {
         handlerCalls += 1;
+        const payload = JSON.stringify((request as { body: unknown }).body);
+        canonicalPayload ??= payload;
+        if (payload !== canonicalPayload) {
+          return reply.code(409).send({ error: "canonical bootstrap request drift" });
+        }
         await markMutationCommitted(request);
         return handlerCalls === 1
           ? { disposition: "created", bootstrapSecret: "one-time-secret" }
           : { disposition: "replayed_without_secret" };
       });
     });
+    const claim = vi.spyOn(built.store, "claim");
+    const markCompleted = vi.spyOn(built.store, "markCompleted");
 
     try {
       const headers = { "Idempotency-Key": "idem-worker-bootstrap-1" };
@@ -414,7 +422,9 @@ describe("idempotencyHeaderPlugin", () => {
       expect(replay.statusCode).toBe(200);
       expect(replay.json()).toEqual({ disposition: "replayed_without_secret" });
       expect(mismatch.statusCode).toBe(409);
-      expect(handlerCalls).toBe(2);
+      expect(handlerCalls).toBe(3);
+      expect(claim).not.toHaveBeenCalled();
+      expect(markCompleted).not.toHaveBeenCalled();
     } finally {
       await built.app.close();
     }
