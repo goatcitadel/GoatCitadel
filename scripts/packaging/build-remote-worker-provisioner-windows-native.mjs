@@ -2753,8 +2753,14 @@ function mapSymbolContext(map, symbol) {
   return lines.slice(Math.max(0, index - 1), Math.min(lines.length, index + 2)).join(" | ");
 }
 
-function normalizeDumpbinRelocationSemantics(value) {
-  return value.replace(/\b[0-9A-F]{4,16}\b/giu, "<HEX>").replace(/(Section length\s+)[0-9A-F]+/giu, "$1<HEX>");
+export function normalizeDumpbinRelocationSemantics(value) {
+  if (typeof value !== "string") {
+    throw new TypeError("The W1B0 symbols/relocations evidence must be a string.");
+  }
+  return value
+    .replace(/\b[0-9A-F]{4,16}\b/giu, "<HEX>")
+    .replace(/(Section length)[ \t]+(?:<HEX>|[0-9A-F]+)/giu, "$1 <HEX>")
+    .replace(/(checksum)[ \t]+<HEX>/giu, "$1 <HEX>");
 }
 
 function firstEvidenceDifference(first, second) {

@@ -26,6 +26,7 @@ import {
   inspectProtectedArtifactSigningCallgraph,
   inspectProtectedEd25519BridgeCallgraph,
   inspectRemoteWorkerProvisionerPe,
+  normalizeDumpbinRelocationSemantics,
   normalizeLinkMapIcfConstantOwners,
   publishProvenProvisionerPairNoReplace,
   publishProvenProvisionerTrioNoReplace,
@@ -1499,6 +1500,38 @@ test("link-map normalization ignores only ICF-selected synthetic constant owners
   const ordinary =
     " 0001:00000000       ?RunKnownAnswerSelfTest@remote_worker_provisioner@goatcitadel@@YA_NXZ 0000000140001000 service_runtime.obj";
   assert.equal(normalizeLinkMapIcfConstantOwners(ordinary), ordinary);
+});
+
+test("relocation-semantics normalization ignores only dumpbin column padding around redacted hex fields", () => {
+  const first = [
+    "008 00000000 SECT3  notype       Static       | .rdata",
+    "    Section length   6D, #relocs    5, #linenums    0, checksum 5EAA1DBD, selection    1 (pick no duplicates)",
+    "00A 00000000 SECT4  notype       Static       | .debug$S",
+    "    Section length  E60, #relocs   12, #linenums    0, checksum        0",
+  ].join("\n");
+  const second = [
+    "008 00000000 SECT3  notype       Static       | .rdata",
+    "    Section length   7A, #relocs    5, #linenums    0, checksum  FAA1DB2, selection    1 (pick no duplicates)",
+    "00A 00000000 SECT4  notype       Static       | .debug$S",
+    "    Section length 1060, #relocs   12, #linenums    0, checksum        0",
+  ].join("\n");
+  assert.equal(normalizeDumpbinRelocationSemantics(first), normalizeDumpbinRelocationSemantics(second));
+  assert.notEqual(
+    normalizeDumpbinRelocationSemantics(first),
+    normalizeDumpbinRelocationSemantics(second.replace("#relocs    5", "#relocs    6")),
+  );
+  assert.notEqual(
+    normalizeDumpbinRelocationSemantics(first),
+    normalizeDumpbinRelocationSemantics(
+      second.replace("selection    1 (pick no duplicates)", "selection    2 (pick any size)"),
+    ),
+  );
+  assert.equal(
+    normalizeDumpbinRelocationSemantics(" 00000236  REL32                      00000000        CF  crypto_ed25519_check"),
+    " <HEX>  REL32                      <HEX>        CF  crypto_ed25519_check",
+  );
+  const once = normalizeDumpbinRelocationSemantics(first);
+  assert.equal(normalizeDumpbinRelocationSemantics(once), once);
 });
 
 test("adapter callgraph proof rejects unowned headers, overloads, mnemonics, and address-taking relocations", () => {
