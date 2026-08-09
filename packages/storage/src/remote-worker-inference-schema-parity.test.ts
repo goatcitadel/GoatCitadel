@@ -83,6 +83,8 @@ const TABLE_COLUMNS = {
     "usage_event_ids_sha256",
     "budget_settled_at",
     "budget_released_at",
+    "budget_release_reason",
+    "budget_release_requested_at",
     "block_reason",
   ],
   remote_worker_inference_outbox: [
@@ -203,6 +205,37 @@ describe("HX-503 remote worker inference schema parity", () => {
     }
   });
 
+  it("pairs the exact budget transition graph, accounting disposition, and durable release intent", () => {
+    const sqliteSql = schemaSql(db);
+    for (const sql of [sqliteSql, postgres139Sql]) {
+      for (const edge of [
+        "OLD.budget_authority_state = 'not_required' AND NEW.budget_authority_state = 'reservation_pending'",
+        "OLD.budget_authority_state = 'reservation_pending' AND NEW.budget_authority_state IN ('not_required', 'reserved')",
+        "OLD.budget_authority_state = 'reserved' AND NEW.budget_authority_state IN ('settlement_pending', 'released', 'reconciliation_required')",
+        "OLD.budget_authority_state = 'settlement_pending' AND NEW.budget_authority_state = 'settled'",
+      ]) {
+        assert.match(sql, new RegExp(escapeRegExp(edge), "u"), `missing budget edge: ${edge}`);
+      }
+      assert.match(
+        sql,
+        /budget_authority_state = 'settlement_pending'[\s\S]*accounting_disposition IS (?:NOT |DISTINCT FROM )?'delegated'/u,
+      );
+      assert.match(
+        sql,
+        /budget_authority_state = 'settled'[\s\S]*accounting_disposition IS (?:NOT |DISTINCT FROM )?'settled'/u,
+      );
+      assert.match(
+        sql,
+        /budget_authority_state = 'reconciliation_required'[\s\S]*accounting_disposition IS (?:NOT |DISTINCT FROM )?'unknown'/u,
+      );
+      assert.match(
+        sql,
+        /budget_release_reason[\s\S]*pre_dispatch_authority_lost[\s\S]*governance_denied[\s\S]*approval_rejected[\s\S]*budget_revalidation_failed/u,
+      );
+      assert.match(sql, /budget_release_requested_at IS NULL OR NEW.block_reason IS NULL/u);
+    }
+  });
+
   it("keeps PostgreSQL 119 additive and free of state-changing DML or runtime claims", () => {
     assert.doesNotMatch(
       postgres119Sql,
@@ -228,4 +261,8 @@ function schemaSql(client: DatabaseClient): string {
   )
     .map((row) => `${row.name}\n${row.sql}`)
     .join("\n");
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }

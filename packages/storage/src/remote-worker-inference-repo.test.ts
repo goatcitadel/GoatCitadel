@@ -9,6 +9,7 @@ import {
   REMOTE_WORKER_INFERENCE_GOVERNANCE_SCHEMA_VERSION,
   REMOTE_WORKER_PROTOCOL_VERSION,
   REMOTE_WORKER_RUNTIME_MANIFEST_SCHEMA_VERSION,
+  authorizeRemoteWorkerInferenceRequestSubmission,
   buildRemoteWorkerAssignmentParentContext,
   canonicalJsonString,
   remoteWorkerInferenceEffectiveRouteSha256,
@@ -17,6 +18,7 @@ import {
   type RemoteWorkerInferenceGovernanceReceipt,
   type RemoteWorkerInferenceBudgetOperationInput,
   type RemoteWorkerInferenceEffectiveRouteReceipt,
+  type RemoteWorkerInferenceAuthorizedSubmission,
   type RemoteWorkerInferenceRequestSubmission,
 } from "@goatcitadel/contracts";
 import { ChatSessionMetaRepository } from "./chat-session-meta-repo.js";
@@ -236,8 +238,8 @@ function seedAuthority(seed: string): SeededAuthority {
 function submissionFor(
   a: SeededAuthority,
   overrides: Partial<RemoteWorkerInferenceRequestSubmission> = {},
-): RemoteWorkerInferenceRequestSubmission {
-  return {
+): RemoteWorkerInferenceAuthorizedSubmission {
+  return authorizeRemoteWorkerInferenceRequestSubmission({
     registryWorkspaceId: "default",
     assignmentId: a.assignmentId,
     assignmentGeneration: a.assignmentGeneration,
@@ -253,7 +255,7 @@ function submissionFor(
     reasoningTokenCeiling: 1024,
     temperatureMilli: 700,
     ...overrides,
-  };
+  }).submission;
 }
 
 function governanceReceipt(
@@ -485,6 +487,15 @@ describe("RemoteWorkerInferenceRepository SQLite", () => {
       /ceilings do not match/u,
     );
     const claim = claimInputFor(a, "owner-a");
+    assert.throws(
+      () =>
+        a.db
+          .prepare(
+            "UPDATE remote_worker_inference_requests SET budget_authority_state = 'settled' WHERE inference_request_id = 'inference-1'",
+          )
+          .run(),
+      /authority transition|evidence is incomplete/u,
+    );
     assert.throws(() => a.repo.claimDispatch({ ...claim, effectiveModelId: "different-model" }), /route drifted/u);
     assert.throws(
       () => a.repo.claimDispatch({ ...claim, dispatchClaimOwner: "Bearer dispatch-owner-secret-canary" }),
@@ -611,6 +622,15 @@ describe("RemoteWorkerInferenceRepository SQLite", () => {
     assert.equal(finalized.usageTerminalEventId, "usage-terminal-1");
     assert.equal(finalized.accountingDisposition, "delegated");
     assert.equal(finalized.budgetAuthorityState, "settlement_pending");
+    assert.throws(
+      () =>
+        a.db
+          .prepare(
+            "UPDATE remote_worker_inference_requests SET budget_authority_state = 'reserved' WHERE inference_request_id = 'inference-1'",
+          )
+          .run(),
+      /authority transition|evidence is incomplete/u,
+    );
     const settled = a.repo.markBudgetSettled(keyFor(a), a.now);
     assert.equal(settled.accountingDisposition, "settled");
     assert.equal(settled.budgetAuthorityState, "settled");
@@ -625,6 +645,21 @@ describe("RemoteWorkerInferenceRepository SQLite", () => {
           .run(),
       /immutable/u,
     );
+    for (const mutation of [
+      "accounting_disposition = 'delegated'",
+      "budget_authority_state = 'settlement_pending'",
+      "usage_terminal_event_id = 'fabricated-usage-id'",
+    ]) {
+      assert.throws(
+        () =>
+          a.db
+            .prepare(
+              `UPDATE remote_worker_inference_requests SET ${mutation} WHERE inference_request_id = 'inference-1'`,
+            )
+            .run(),
+        /authority transition|evidence is incomplete|immutable/u,
+      );
+    }
     // But acknowledgement still advances.
     const acked = a.repo.acknowledge(keyFor(a), 3, a.now);
     assert.equal(acked.workerAcknowledgedThrough, 3);
@@ -708,15 +743,42 @@ describe("RemoteWorkerInferenceRepository SQLite", () => {
     const blocked = seedAuthority("released-blocked");
     blocked.repo.admitOrReplay(admissionFor(blocked));
     claimInputFor(blocked, "owner-a"); // records the exact reservation without claiming dispatch
-    const released = blocked.repo.blockBeforeDispatch(keyFor(blocked), {
+    const intent = blocked.repo.recordBudgetReleaseIntent(keyFor(blocked), {
+      blockReason: "pre_dispatch_authority_lost",
       reason: "pre_dispatch_authority_lost",
-      budgetReleased: true,
       now: blocked.now,
     });
+    assert.equal(intent.state, "blocked");
+    assert.equal(intent.budgetAuthorityState, "reserved");
+    assert.throws(
+      () =>
+        blocked.db
+          .prepare(
+            "UPDATE remote_worker_inference_requests SET budget_release_reason = 'governance_denied' WHERE inference_request_id = 'inference-1'",
+          )
+          .run(),
+      /immutable/u,
+    );
+    const released = blocked.repo.markBudgetReleased(keyFor(blocked), "pre_dispatch_authority_lost", blocked.now);
     assert.equal(released.state, "blocked");
     assert.equal(released.budgetAuthorityState, "released");
+    for (const mutation of [
+      "budget_authority_state = 'reserved'",
+      "accounting_disposition = 'unknown'",
+      "budget_release_requested_at = '2098-01-01T00:00:00.000Z'",
+    ]) {
+      assert.throws(
+        () =>
+          blocked.db
+            .prepare(
+              `UPDATE remote_worker_inference_requests SET ${mutation} WHERE inference_request_id = 'inference-1'`,
+            )
+            .run(),
+        /authority transition|evidence is incomplete|immutable/u,
+      );
+    }
 
-    for (const terminalState of ["failed", "cancelled"] as const) {
+    for (const terminalState of ["completed", "failed", "cancelled"] as const) {
       const terminal = seedAuthority(`released-${terminalState}`);
       terminal.repo.admitOrReplay(admissionFor(terminal));
       terminal.repo.claimDispatch(claimInputFor(terminal, "owner-a"));

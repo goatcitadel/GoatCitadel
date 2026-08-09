@@ -11,12 +11,14 @@ import {
   REMOTE_WORKER_INFERENCE_MAX_MESSAGE_CHARS,
   REMOTE_WORKER_INFERENCE_MAX_TEMPERATURE_MILLI,
   REMOTE_WORKER_INFERENCE_REQUEST_SCHEMA_VERSION,
+  authorizeRemoteWorkerInferenceRequestSubmission,
   isRemoteWorkerInferenceTerminalState,
   normalizeRemoteWorkerInferenceBudgetReservation,
   normalizeRemoteWorkerInferenceEffectiveRouteReceipt,
   normalizeRemoteWorkerInferenceFramePayload,
   normalizeRemoteWorkerInferenceGovernanceReceipt,
-  normalizeRemoteWorkerInferenceRequestSubmission,
+  normalizeRemoteWorkerInferenceReleaseReason,
+  normalizeRemoteWorkerInferenceAuthorizedSubmission,
   remoteWorkerInferenceCanonicalRequestBody,
   remoteWorkerInferenceCanonicalRequestBodySha256,
   remoteWorkerInferenceCanonicalSha256,
@@ -57,13 +59,20 @@ function submission(
   };
 }
 
+function authorized(overrides: Partial<RemoteWorkerInferenceRequestSubmission> = {}) {
+  return authorizeRemoteWorkerInferenceRequestSubmission(submission(overrides)).submission;
+}
+
 describe("HX-503 remote worker inference submission", () => {
   it("normalizes and freezes the exact bounded submission", () => {
-    const normalized = normalizeRemoteWorkerInferenceRequestSubmission(submission());
+    const result = authorizeRemoteWorkerInferenceRequestSubmission(submission());
+    const normalized = result.submission;
     expect(Object.isFrozen(normalized)).toBe(true);
     expect(Object.isFrozen(normalized.messages)).toBe(true);
     expect(normalized.messages).toHaveLength(2);
-    expect(normalized.leaseToken).toBe("raw-lease-secret-abc");
+    expect(result.leaseTokenSha256).toBe(D("raw-lease-secret-abc"));
+    expect(canonicalJsonString(result)).not.toContain("raw-lease-secret-abc");
+    expect(canonicalJsonString(normalized)).not.toContain("leaseToken");
   });
 
   it("uses browser-safe canonical SHA-256 parity", () => {
@@ -72,8 +81,8 @@ describe("HX-503 remote worker inference submission", () => {
   });
 
   it("keeps the raw lease out of the canonical request material and body", () => {
-    const material = remoteWorkerInferenceRequestReplayMaterial(submission());
-    const body = remoteWorkerInferenceCanonicalRequestBody(submission());
+    const material = remoteWorkerInferenceRequestReplayMaterial(authorized());
+    const body = remoteWorkerInferenceCanonicalRequestBody(authorized());
     expect(canonicalJsonString(material)).not.toContain("raw-lease-secret");
     expect(canonicalJsonString(body)).not.toContain("raw-lease-secret");
     expect(canonicalJsonString(material)).not.toContain("leaseToken");
@@ -82,24 +91,24 @@ describe("HX-503 remote worker inference submission", () => {
   it("hashes the raw lease token deterministically and independently of the request hash", () => {
     expect(remoteWorkerInferenceLeaseTokenSha256("raw-lease-secret-abc")).toBe(D("raw-lease-secret-abc"));
     expect(remoteWorkerInferenceLeaseTokenSha256("raw-lease-secret-abc")).not.toBe(
-      remoteWorkerInferenceRequestSha256(submission()),
+      remoteWorkerInferenceRequestSha256(authorized()),
     );
   });
 
   it("holds the request hash stable across lease rotation but changes on body drift", () => {
-    const base = remoteWorkerInferenceRequestSha256(submission());
-    expect(remoteWorkerInferenceRequestSha256(submission({ leaseToken: "rotated-lease-token" }))).toBe(base);
-    expect(remoteWorkerInferenceRequestSha256(submission({ temperatureMilli: 701 }))).not.toBe(base);
-    expect(remoteWorkerInferenceRequestSha256(submission({ messages: [{ role: "user", text: "Hi." }] }))).not.toBe(
+    const base = remoteWorkerInferenceRequestSha256(authorized());
+    expect(remoteWorkerInferenceRequestSha256(authorized({ leaseToken: "rotated-lease-token" }))).toBe(base);
+    expect(remoteWorkerInferenceRequestSha256(authorized({ temperatureMilli: 701 }))).not.toBe(base);
+    expect(remoteWorkerInferenceRequestSha256(authorized({ messages: [{ role: "user", text: "Hi." }] }))).not.toBe(
       base,
     );
-    expect(remoteWorkerInferenceCanonicalRequestBodySha256(submission())).toBe(
-      remoteWorkerInferenceCanonicalRequestBodySha256(submission({ leaseToken: "rotated", idempotencyKey: "other" })),
+    expect(remoteWorkerInferenceCanonicalRequestBodySha256(authorized())).toBe(
+      remoteWorkerInferenceCanonicalRequestBodySha256(authorized({ leaseToken: "rotated", idempotencyKey: "other" })),
     );
   });
 
   it("pins the canonical request body schema version", () => {
-    const body = remoteWorkerInferenceCanonicalRequestBody(submission()) as { schemaVersion: string };
+    const body = remoteWorkerInferenceCanonicalRequestBody(authorized()) as { schemaVersion: string };
     expect(body.schemaVersion).toBe(REMOTE_WORKER_INFERENCE_REQUEST_SCHEMA_VERSION);
   });
 
@@ -125,7 +134,7 @@ describe("HX-503 remote worker inference submission", () => {
       "attachments",
     ]) {
       expect(() =>
-        normalizeRemoteWorkerInferenceRequestSubmission({
+        authorizeRemoteWorkerInferenceRequestSubmission({
           ...submission(),
           [forbidden]: "x",
         } as unknown as RemoteWorkerInferenceRequestSubmission),
@@ -134,16 +143,16 @@ describe("HX-503 remote worker inference submission", () => {
   });
 
   it("enforces message count, per-message size, and total request size bounds", () => {
-    expect(() => normalizeRemoteWorkerInferenceRequestSubmission(submission({ messages: [] }))).toThrow(/bounded/u);
+    expect(() => authorizeRemoteWorkerInferenceRequestSubmission(submission({ messages: [] }))).toThrow(/bounded/u);
     const tooMany = Array.from({ length: REMOTE_WORKER_INFERENCE_MAX_MESSAGES + 1 }, () => ({
       role: "user" as const,
       text: "x",
     }));
-    expect(() => normalizeRemoteWorkerInferenceRequestSubmission(submission({ messages: tooMany }))).toThrow(
+    expect(() => authorizeRemoteWorkerInferenceRequestSubmission(submission({ messages: tooMany }))).toThrow(
       /bounded/u,
     );
     expect(() =>
-      normalizeRemoteWorkerInferenceRequestSubmission(
+      authorizeRemoteWorkerInferenceRequestSubmission(
         submission({ messages: [{ role: "user", text: "x".repeat(REMOTE_WORKER_INFERENCE_MAX_MESSAGE_CHARS + 1) }] }),
       ),
     ).toThrow(/invalid/u);
@@ -151,20 +160,20 @@ describe("HX-503 remote worker inference submission", () => {
 
   it("rejects unsupported roles, non-hex hashes, and out-of-range ceilings", () => {
     expect(() =>
-      normalizeRemoteWorkerInferenceRequestSubmission(submission({ messages: [{ role: "tool" as never, text: "x" }] })),
+      authorizeRemoteWorkerInferenceRequestSubmission(submission({ messages: [{ role: "tool" as never, text: "x" }] })),
     ).toThrow(/unsupported/u);
-    expect(() => normalizeRemoteWorkerInferenceRequestSubmission(submission({ inputSha256: "NOTHEX" }))).toThrow(
+    expect(() => authorizeRemoteWorkerInferenceRequestSubmission(submission({ inputSha256: "NOTHEX" }))).toThrow(
       /digest/u,
     );
-    expect(() => normalizeRemoteWorkerInferenceRequestSubmission(submission({ outputTokenCeiling: 0 }))).toThrow(
+    expect(() => authorizeRemoteWorkerInferenceRequestSubmission(submission({ outputTokenCeiling: 0 }))).toThrow(
       /positive integer/u,
     );
     expect(() =>
-      normalizeRemoteWorkerInferenceRequestSubmission(
+      authorizeRemoteWorkerInferenceRequestSubmission(
         submission({ temperatureMilli: REMOTE_WORKER_INFERENCE_MAX_TEMPERATURE_MILLI + 1 }),
       ),
     ).toThrow(/non-negative/u);
-    expect(() => normalizeRemoteWorkerInferenceRequestSubmission(submission({ reasoningTokenCeiling: -1 }))).toThrow(
+    expect(() => authorizeRemoteWorkerInferenceRequestSubmission(submission({ reasoningTokenCeiling: -1 }))).toThrow(
       /non-negative/u,
     );
   });
@@ -173,13 +182,18 @@ describe("HX-503 remote worker inference submission", () => {
     const cyclic: Record<string, unknown> = { role: "user", text: "x" };
     cyclic.text = cyclic;
     expect(() =>
-      normalizeRemoteWorkerInferenceRequestSubmission(submission({ messages: [cyclic as never] })),
+      authorizeRemoteWorkerInferenceRequestSubmission(submission({ messages: [cyclic as never] })),
     ).toThrow();
     expect(() =>
-      normalizeRemoteWorkerInferenceRequestSubmission(
+      authorizeRemoteWorkerInferenceRequestSubmission(
         JSON.parse('{"__proto__":{"polluted":true}}') as RemoteWorkerInferenceRequestSubmission,
       ),
     ).toThrow();
+  });
+
+  it("rejects raw lease material at every authorized downstream contract", () => {
+    expect(() => normalizeRemoteWorkerInferenceAuthorizedSubmission(submission() as never)).toThrow(/unknown fields/u);
+    expect(() => remoteWorkerInferenceRequestSha256(submission() as never)).toThrow(/unknown fields/u);
   });
 });
 
@@ -247,6 +261,11 @@ describe("HX-503 remote worker inference output frames", () => {
 });
 
 describe("HX-503 remote worker inference governance and budget receipts", () => {
+  it("accepts only the closed release reason code set", () => {
+    expect(normalizeRemoteWorkerInferenceReleaseReason("governance_denied")).toBe("governance_denied");
+    expect(() => normalizeRemoteWorkerInferenceReleaseReason("Bearer secret release reason")).toThrow(/unsupported/u);
+  });
+
   it("normalizes an allowed governance receipt and rejects credential leakage", () => {
     const receipt = normalizeRemoteWorkerInferenceGovernanceReceipt({
       schemaVersion: REMOTE_WORKER_INFERENCE_GOVERNANCE_SCHEMA_VERSION,

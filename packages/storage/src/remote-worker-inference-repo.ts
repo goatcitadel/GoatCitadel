@@ -5,13 +5,14 @@ import {
   REMOTE_WORKER_INFERENCE_MAX_OUTPUT_CHARS,
   canonicalJsonString,
   normalizeRemoteWorkerInferenceApprovalResolutionReceipt,
+  normalizeRemoteWorkerInferenceAuthorizedSubmission,
   normalizeRemoteWorkerInferenceBudgetReservation,
   normalizeRemoteWorkerInferenceEffectiveRouteReceipt,
   normalizeRemoteWorkerInferenceFramePayload,
   normalizeRemoteWorkerInferenceGovernanceReceipt,
   normalizeRemoteWorkerInferenceOperationIdentifier,
+  normalizeRemoteWorkerInferenceReleaseReason,
   normalizeRemoteWorkerInferenceUsageEventIds,
-  normalizeRemoteWorkerInferenceRequestSubmission,
   remoteWorkerInferenceBudgetOperationMaterial,
   remoteWorkerInferenceBudgetOperationSha256,
   remoteWorkerInferenceCanonicalRequestBody,
@@ -22,13 +23,14 @@ import {
   remoteWorkerInferenceRequestSha256,
   remoteWorkerInferenceUsageEventIdsSha256,
   type RemoteWorkerInferenceApprovalResolutionReceipt,
+  type RemoteWorkerInferenceAuthorizedSubmission,
   type RemoteWorkerInferenceBudgetAuthorityState,
   type RemoteWorkerInferenceBudgetOperationInput,
   type RemoteWorkerInferenceBudgetReservation,
   type RemoteWorkerInferenceEffectiveRouteReceipt,
   type RemoteWorkerInferenceFrameKind,
   type RemoteWorkerInferenceGovernanceReceipt,
-  type RemoteWorkerInferenceRequestSubmission,
+  type RemoteWorkerInferenceReleaseReason,
   type RemoteWorkerInferenceState,
   type RemoteWorkerInferenceTerminalState,
 } from "@goatcitadel/contracts";
@@ -55,7 +57,7 @@ import type { DatabaseClient } from "./db.js";
  */
 
 export interface RemoteWorkerInferenceAdmissionInput {
-  readonly submission: RemoteWorkerInferenceRequestSubmission;
+  readonly submission: RemoteWorkerInferenceAuthorizedSubmission;
   readonly workerId: string;
   readonly workerGeneration: number;
   readonly executionWorkspaceId: string;
@@ -202,6 +204,8 @@ export interface RemoteWorkerInferenceRequestRecord {
   readonly accountingDisposition?: "delegated" | "settled" | "unknown";
   readonly budgetSettledAt?: string;
   readonly budgetReleasedAt?: string;
+  readonly budgetReleaseReason?: RemoteWorkerInferenceReleaseReason;
+  readonly budgetReleaseRequestedAt?: string;
   readonly blockReason?: string;
   readonly admittedAt: string;
   readonly updatedAt: string;
@@ -242,9 +246,9 @@ export class RemoteWorkerInferenceRepository {
 
   /** Exact replay lookup with no governance, route, or budget side effect. */
   public inspectReplay(
-    submissionInput: RemoteWorkerInferenceRequestSubmission,
+    submissionInput: RemoteWorkerInferenceAuthorizedSubmission,
   ): RemoteWorkerInferenceAdmissionOutcome | undefined {
-    const submission = normalizeRemoteWorkerInferenceRequestSubmission(submissionInput);
+    const submission = normalizeRemoteWorkerInferenceAuthorizedSubmission(submissionInput);
     const replay = this.findByIdempotency(submission.registryWorkspaceId, submission.idempotencyKey);
     if (!replay) return undefined;
     if (replay.request_sha256 !== remoteWorkerInferenceRequestSha256(submissionInput)) {
@@ -261,7 +265,7 @@ export class RemoteWorkerInferenceRepository {
    * conflict.
    */
   public admitOrReplay(input: RemoteWorkerInferenceAdmissionInput): RemoteWorkerInferenceAdmissionOutcome {
-    const submission = normalizeRemoteWorkerInferenceRequestSubmission(input.submission);
+    const submission = normalizeRemoteWorkerInferenceAuthorizedSubmission(input.submission);
     const governance = normalizeRemoteWorkerInferenceGovernanceReceipt(input.governance);
     const requestSha256 = remoteWorkerInferenceRequestSha256(input.submission);
     const bodyJson = canonicalJsonString(remoteWorkerInferenceCanonicalRequestBody(input.submission));
@@ -389,9 +393,6 @@ export class RemoteWorkerInferenceRepository {
   ): RemoteWorkerInferenceRequestRecord {
     const reservation = normalizeRemoteWorkerInferenceBudgetReservation(reservationInput);
     const recordedAt = assertTimestamp(now, "now");
-    if (Date.parse(reservation.expiresAt) <= Date.parse(recordedAt)) {
-      throw new RemoteWorkerInferenceConflictError("Remote worker inference budget reservation is already expired.");
-    }
     return this.db.transaction("immediate", () => {
       const current = this.getRequestRow(key);
       if (current.budgetAuthorityState === "reserved") {
@@ -618,38 +619,146 @@ export class RemoteWorkerInferenceRepository {
     });
   }
 
-  /** Persist a rejected approval or pre-dispatch governance/budget denial. */
+  /**
+   * Persist the non-dispatchable exact release intent before the external
+   * budget owner is invoked. A concurrent dispatch claim and this transition
+   * race on the same admitted row; only one can commit.
+   */
+  public recordBudgetReleaseIntent(
+    key: RemoteWorkerInferenceRequestKey,
+    input: { blockReason: string; reason: RemoteWorkerInferenceReleaseReason; now: string },
+  ): RemoteWorkerInferenceRequestRecord {
+    const reason = normalizeRemoteWorkerInferenceReleaseReason(input.reason);
+    const blockReason = normalizeRemoteWorkerInferenceOperationIdentifier(input.blockReason, "blockReason");
+    const requestedAt = assertTimestamp(input.now, "now");
+    return this.db.transaction("immediate", () => {
+      const current = this.getRequestRow(key);
+      if (current.state === "blocked" && ["reserved", "released"].includes(current.budgetAuthorityState)) {
+        if (
+          current.budgetReleaseReason !== reason ||
+          current.blockReason !== blockReason ||
+          !current.budgetReleaseRequestedAt
+        ) {
+          throw new RemoteWorkerInferenceConflictError("Remote worker inference budget release intent drifted.");
+        }
+        return current;
+      }
+      if (
+        current.state !== "admitted" ||
+        current.budgetAuthorityState !== "reserved" ||
+        current.dispatchClaimOwner !== undefined
+      ) {
+        throw new RemoteWorkerInferenceConflictError(
+          "Remote worker inference budget release intent lost the pre-dispatch claim race.",
+        );
+      }
+      const changed = this.db
+        .prepare(
+          `UPDATE remote_worker_inference_requests
+             SET state = 'blocked', block_reason = @blockReason,
+                 budget_release_reason = @reason, budget_release_requested_at = @requestedAt,
+                 updated_at = @requestedAt
+           WHERE registry_workspace_id = @registryWorkspaceId
+             AND assignment_id = @assignmentId
+             AND assignment_generation = @assignmentGeneration
+             AND inference_request_id = @inferenceRequestId
+             AND attempt = @attempt
+             AND state = 'admitted' AND budget_authority_state = 'reserved'
+             AND dispatch_claim_owner IS NULL`,
+        )
+        .run({ blockReason, reason, requestedAt, ...key }).changes;
+      if (changed !== 1) {
+        throw new RemoteWorkerInferenceConflictError(
+          "Remote worker inference budget release intent lost the pre-dispatch claim race.",
+        );
+      }
+      return this.getRequestRow(key);
+    });
+  }
+
+  /** Commit the exact reserved -> released transition after idempotent release. */
+  public markBudgetReleased(
+    key: RemoteWorkerInferenceRequestKey,
+    reasonInput: RemoteWorkerInferenceReleaseReason,
+    now: string,
+  ): RemoteWorkerInferenceRequestRecord {
+    const reason = normalizeRemoteWorkerInferenceReleaseReason(reasonInput);
+    const releasedAt = assertTimestamp(now, "now");
+    return this.db.transaction("immediate", () => {
+      const current = this.getRequestRow(key);
+      if (current.budgetAuthorityState === "released") {
+        if (current.state !== "blocked" || current.budgetReleaseReason !== reason) {
+          throw new RemoteWorkerInferenceConflictError("Remote worker inference budget release replay drifted.");
+        }
+        return current;
+      }
+      if (
+        current.state !== "blocked" ||
+        current.budgetAuthorityState !== "reserved" ||
+        current.budgetReleaseReason !== reason ||
+        !current.budgetReleaseRequestedAt
+      ) {
+        throw new RemoteWorkerInferenceConflictError("Remote worker inference budget release intent is incomplete.");
+      }
+      const changed = this.db
+        .prepare(
+          `UPDATE remote_worker_inference_requests
+             SET budget_authority_state = 'released', budget_released_at = @releasedAt,
+                 updated_at = @releasedAt
+           WHERE registry_workspace_id = @registryWorkspaceId
+             AND assignment_id = @assignmentId
+             AND assignment_generation = @assignmentGeneration
+             AND inference_request_id = @inferenceRequestId
+             AND attempt = @attempt
+             AND state = 'blocked' AND budget_authority_state = 'reserved'
+             AND budget_release_reason = @reason`,
+        )
+        .run({ reason, releasedAt, ...key }).changes;
+      if (changed !== 1) {
+        throw new RemoteWorkerInferenceConflictError("Remote worker inference budget release commit lost authority.");
+      }
+      return this.getRequestRow(key);
+    });
+  }
+
+  /** Persist a rejected approval or a denial before any reservation exists. */
   public blockBeforeDispatch(
     key: RemoteWorkerInferenceRequestKey,
     input: {
       reason: string;
       approvalResolution?: RemoteWorkerInferenceApprovalResolutionReceipt;
-      budgetReleased?: boolean;
       now: string;
     },
   ): RemoteWorkerInferenceRequestRecord {
     const approval = input.approvalResolution
       ? normalizeRemoteWorkerInferenceApprovalResolutionReceipt(input.approvalResolution)
       : undefined;
+    const blockReason = normalizeRemoteWorkerInferenceOperationIdentifier(input.reason, "blockReason");
+    const blockedAt = assertTimestamp(input.now, "now");
     return this.db.transaction("immediate", () => {
       const current = this.getRequestRow(key);
       if (!(["admitted", "waiting_approval", "blocked"] as string[]).includes(current.state)) {
         throw new RemoteWorkerInferenceConflictError("Remote worker inference cannot be blocked after dispatch.");
       }
-      const nextBudgetState: RemoteWorkerInferenceBudgetAuthorityState = input.budgetReleased
-        ? "released"
-        : current.budgetAuthorityState === "reserved"
-          ? "reserved"
-          : "not_required";
+      if (current.state === "blocked") {
+        if (current.blockReason !== blockReason || current.budgetAuthorityState !== "not_required") {
+          throw new RemoteWorkerInferenceConflictError("Remote worker inference block replay drifted.");
+        }
+        return current;
+      }
+      if (!(["not_required", "reservation_pending"] as string[]).includes(current.budgetAuthorityState)) {
+        throw new RemoteWorkerInferenceConflictError(
+          "Remote worker inference reserved budget requires a durable release intent before blocking.",
+        );
+      }
       this.db
         .prepare(
           `UPDATE remote_worker_inference_requests
-             SET state = 'blocked', budget_authority_state = @budgetAuthorityState,
+             SET state = 'blocked', budget_authority_state = 'not_required',
                  block_reason = @blockReason,
                  approval_resolution_json = COALESCE(@approvalResolutionJson, approval_resolution_json),
                  approval_resolution_sha256 = COALESCE(@approvalResolutionSha256, approval_resolution_sha256),
                  approval_resolved_at = COALESCE(@approvalResolvedAt, approval_resolved_at),
-                 budget_released_at = CASE WHEN @budgetReleased = 1 THEN @now ELSE budget_released_at END,
                  updated_at = @now
            WHERE registry_workspace_id = @registryWorkspaceId
              AND assignment_id = @assignmentId
@@ -658,13 +767,11 @@ export class RemoteWorkerInferenceRepository {
              AND attempt = @attempt`,
         )
         .run({
-          budgetAuthorityState: nextBudgetState,
-          blockReason: assertBounded(input.reason, "blockReason", 512),
+          blockReason,
           approvalResolutionJson: approval ? canonicalJsonString(approval) : null,
           approvalResolutionSha256: approval ? remoteWorkerInferenceCanonicalSha256(approval) : null,
           approvalResolvedAt: approval?.resolvedAt ?? null,
-          budgetReleased: input.budgetReleased ? 1 : 0,
-          now: assertTimestamp(input.now, "now"),
+          now: blockedAt,
           ...key,
         });
       return this.getRequestRow(key);
@@ -1152,6 +1259,8 @@ interface RequestRow {
   accounting_disposition: string | null;
   budget_settled_at: string | null;
   budget_released_at: string | null;
+  budget_release_reason: string | null;
+  budget_release_requested_at: string | null;
   block_reason: string | null;
   admitted_at: string;
   updated_at: string;
@@ -1254,6 +1363,10 @@ function mapRequest(row: RequestRow): RemoteWorkerInferenceRequestRecord {
       : { accountingDisposition: row.accounting_disposition as "delegated" | "settled" | "unknown" }),
     ...(row.budget_settled_at === null ? {} : { budgetSettledAt: row.budget_settled_at }),
     ...(row.budget_released_at === null ? {} : { budgetReleasedAt: row.budget_released_at }),
+    ...(row.budget_release_reason === null
+      ? {}
+      : { budgetReleaseReason: row.budget_release_reason as RemoteWorkerInferenceReleaseReason }),
+    ...(row.budget_release_requested_at === null ? {} : { budgetReleaseRequestedAt: row.budget_release_requested_at }),
     ...(row.block_reason === null ? {} : { blockReason: row.block_reason }),
     admittedAt: row.admitted_at,
     updatedAt: row.updated_at,

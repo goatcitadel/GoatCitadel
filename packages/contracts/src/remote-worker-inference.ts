@@ -83,6 +83,19 @@ export const REMOTE_WORKER_INFERENCE_BUDGET_AUTHORITY_STATES = [
 export type RemoteWorkerInferenceBudgetAuthorityState =
   (typeof REMOTE_WORKER_INFERENCE_BUDGET_AUTHORITY_STATES)[number];
 
+export const REMOTE_WORKER_INFERENCE_RELEASE_REASONS = [
+  "pre_dispatch_authority_lost",
+  "governance_denied",
+  "approval_rejected",
+  "budget_revalidation_failed",
+] as const;
+export type RemoteWorkerInferenceReleaseReason = (typeof REMOTE_WORKER_INFERENCE_RELEASE_REASONS)[number];
+
+export function normalizeRemoteWorkerInferenceReleaseReason(value: unknown): RemoteWorkerInferenceReleaseReason {
+  enumValue(value, REMOTE_WORKER_INFERENCE_RELEASE_REASONS, "budget release reason");
+  return value;
+}
+
 export const REMOTE_WORKER_INFERENCE_FRAME_KINDS = ["output_text", "terminal"] as const;
 export type RemoteWorkerInferenceFrameKind = (typeof REMOTE_WORKER_INFERENCE_FRAME_KINDS)[number];
 
@@ -135,14 +148,14 @@ export interface RemoteWorkerInferenceRequestSubmission {
   readonly temperatureMilli: number;
 }
 
-export interface NormalizedRemoteWorkerInferenceRequestSubmission {
+/** Exact lease-free request authorized at the Gateway boundary. */
+export interface RemoteWorkerInferenceAuthorizedSubmission {
   readonly registryWorkspaceId: string;
   readonly assignmentId: string;
   readonly assignmentGeneration: number;
   readonly inferenceRequestId: string;
   readonly attempt: number;
   readonly idempotencyKey: string;
-  readonly leaseToken: string;
   readonly messages: readonly RemoteWorkerInferenceMessage[];
   readonly inputSha256: string;
   readonly contextSha256: string;
@@ -150,6 +163,11 @@ export interface NormalizedRemoteWorkerInferenceRequestSubmission {
   readonly outputTokenCeiling: number;
   readonly reasoningTokenCeiling: number;
   readonly temperatureMilli: number;
+}
+
+export interface RemoteWorkerInferenceAuthorizedRequest {
+  readonly leaseTokenSha256: string;
+  readonly submission: RemoteWorkerInferenceAuthorizedSubmission;
 }
 
 const SUBMISSION_KEYS = [
@@ -169,11 +187,41 @@ const SUBMISSION_KEYS = [
   "temperatureMilli",
 ] as const;
 
-export function normalizeRemoteWorkerInferenceRequestSubmission(
+const AUTHORIZED_SUBMISSION_KEYS = SUBMISSION_KEYS.filter((key) => key !== "leaseToken");
+
+/**
+ * Consumes the sole raw-lease boundary. The token is hashed immediately after
+ * exact-shape validation and is never copied into the authorized submission.
+ */
+export function authorizeRemoteWorkerInferenceRequestSubmission(
   input: RemoteWorkerInferenceRequestSubmission,
-): NormalizedRemoteWorkerInferenceRequestSubmission {
+): RemoteWorkerInferenceAuthorizedRequest {
   assertRecord(input, "inference request submission");
   assertExactKeys(input, [...SUBMISSION_KEYS], "inference request submission");
+  const leaseTokenSha256 = remoteWorkerInferenceLeaseTokenSha256(input.leaseToken);
+  const submission = normalizeRemoteWorkerInferenceAuthorizedSubmission({
+    registryWorkspaceId: input.registryWorkspaceId,
+    assignmentId: input.assignmentId,
+    assignmentGeneration: input.assignmentGeneration,
+    inferenceRequestId: input.inferenceRequestId,
+    attempt: input.attempt,
+    idempotencyKey: input.idempotencyKey,
+    messages: input.messages,
+    inputSha256: input.inputSha256,
+    contextSha256: input.contextSha256,
+    modelIntentSha256: input.modelIntentSha256,
+    outputTokenCeiling: input.outputTokenCeiling,
+    reasoningTokenCeiling: input.reasoningTokenCeiling,
+    temperatureMilli: input.temperatureMilli,
+  });
+  return Object.freeze({ leaseTokenSha256, submission });
+}
+
+export function normalizeRemoteWorkerInferenceAuthorizedSubmission(
+  input: RemoteWorkerInferenceAuthorizedSubmission,
+): RemoteWorkerInferenceAuthorizedSubmission {
+  assertRecord(input, "authorized inference submission");
+  assertExactKeys(input, [...AUTHORIZED_SUBMISSION_KEYS], "authorized inference submission");
   return Object.freeze({
     registryWorkspaceId: identifier(input.registryWorkspaceId, "registryWorkspaceId"),
     assignmentId: identifier(input.assignmentId, "assignmentId"),
@@ -181,7 +229,6 @@ export function normalizeRemoteWorkerInferenceRequestSubmission(
     inferenceRequestId: identifier(input.inferenceRequestId, "inferenceRequestId"),
     attempt: positiveInteger(input.attempt, "attempt"),
     idempotencyKey: boundedIdentifier(input.idempotencyKey, "idempotencyKey", 512),
-    leaseToken: leaseToken(input.leaseToken),
     messages: normalizeMessages(input.messages),
     inputSha256: digest(input.inputSha256, "inputSha256"),
     contextSha256: digest(input.contextSha256, "contextSha256"),
@@ -228,8 +275,8 @@ function normalizeMessages(value: unknown): readonly RemoteWorkerInferenceMessag
  * provider. It excludes all identities and the raw lease so the same logical
  * request under a renewed lease hashes identically.
  */
-export function remoteWorkerInferenceCanonicalRequestBody(input: RemoteWorkerInferenceRequestSubmission): object {
-  const normalized = normalizeRemoteWorkerInferenceRequestSubmission(input);
+export function remoteWorkerInferenceCanonicalRequestBody(input: RemoteWorkerInferenceAuthorizedSubmission): object {
+  const normalized = normalizeRemoteWorkerInferenceAuthorizedSubmission(input);
   return Object.freeze({
     schemaVersion: REMOTE_WORKER_INFERENCE_REQUEST_SCHEMA_VERSION,
     messages: normalized.messages,
@@ -246,8 +293,8 @@ export function remoteWorkerInferenceCanonicalRequestBody(input: RemoteWorkerInf
  * Replay material folds identity and body together (never the lease). A reused
  * idempotency key with any changed identity or body byte conflicts.
  */
-export function remoteWorkerInferenceRequestReplayMaterial(input: RemoteWorkerInferenceRequestSubmission): object {
-  const normalized = normalizeRemoteWorkerInferenceRequestSubmission(input);
+export function remoteWorkerInferenceRequestReplayMaterial(input: RemoteWorkerInferenceAuthorizedSubmission): object {
+  const normalized = normalizeRemoteWorkerInferenceAuthorizedSubmission(input);
   return Object.freeze({
     registryWorkspaceId: normalized.registryWorkspaceId,
     assignmentId: normalized.assignmentId,
@@ -259,11 +306,13 @@ export function remoteWorkerInferenceRequestReplayMaterial(input: RemoteWorkerIn
   });
 }
 
-export function remoteWorkerInferenceRequestSha256(input: RemoteWorkerInferenceRequestSubmission): string {
+export function remoteWorkerInferenceRequestSha256(input: RemoteWorkerInferenceAuthorizedSubmission): string {
   return remoteWorkerInferenceCanonicalSha256(remoteWorkerInferenceRequestReplayMaterial(input));
 }
 
-export function remoteWorkerInferenceCanonicalRequestBodySha256(input: RemoteWorkerInferenceRequestSubmission): string {
+export function remoteWorkerInferenceCanonicalRequestBodySha256(
+  input: RemoteWorkerInferenceAuthorizedSubmission,
+): string {
   return remoteWorkerInferenceCanonicalSha256(remoteWorkerInferenceCanonicalRequestBody(input));
 }
 

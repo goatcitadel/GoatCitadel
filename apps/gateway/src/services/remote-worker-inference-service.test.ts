@@ -52,6 +52,10 @@ const AUTHORITY_SECRET_CANARY = "Bearer rw-authority-secret-canary";
 const BUDGET_RESERVE_SECRET_CANARY = "Bearer rw-budget-reserve-secret-canary";
 const BUDGET_SETTLE_SECRET_CANARY = "Bearer rw-budget-settle-secret-canary";
 const BUDGET_RELEASE_SECRET_CANARY = "Bearer rw-budget-release-secret-canary";
+const GOVERNANCE_SECRET_CANARY = "Bearer rw-governance-secret-canary";
+const ROUTING_SECRET_CANARY = "Bearer rw-routing-secret-canary";
+const APPROVAL_SECRET_CANARY = "Bearer rw-approval-secret-canary";
+const REPOSITORY_SECRET_CANARY = "Bearer rw-repository-secret-canary";
 const D = (value: string): string => createHash("sha256").update(value, "utf8").digest("hex");
 const ROUTED_CONTEXT = D("routed-context");
 const CAPABILITY_PROFILE = D("capability-profile");
@@ -61,6 +65,7 @@ afterEach(() => {
 });
 
 interface Harness {
+  db: DatabaseClient;
   repo: RemoteWorkerInferenceRepository;
   authority: RemoteWorkerInferenceResolvedAuthority;
   submission: RemoteWorkerInferenceRequestSubmission;
@@ -257,7 +262,7 @@ function seed(seedName: string): Harness {
     reasoningTokenCeiling: 1024,
     temperatureMilli: 700,
   };
-  return { repo: new RemoteWorkerInferenceRepository(db), authority, submission, now };
+  return { db, repo: new RemoteWorkerInferenceRepository(db), authority, submission, now };
 }
 
 function governanceReceipt(
@@ -300,14 +305,26 @@ interface ServiceDoubles {
   released: string[];
   governanceCalls: number;
   reserveCalls: number;
+  observedInputs: string[];
 }
 
-function promiseBackedRepository(repository: RemoteWorkerInferenceRepository): RemoteWorkerInferenceRepositoryPort {
+function promiseBackedRepository(
+  repository: RemoteWorkerInferenceRepository,
+  observe?: (value: unknown) => void,
+): RemoteWorkerInferenceRepositoryPort {
   return {
-    inspectReplay: async (submission) => repository.inspectReplay(submission),
-    admitOrReplay: async (input) => repository.admitOrReplay(input),
+    inspectReplay: async (submission) => {
+      observe?.(submission);
+      return repository.inspectReplay(submission);
+    },
+    admitOrReplay: async (input) => {
+      observe?.(input);
+      return repository.admitOrReplay(input);
+    },
     recordApprovalContinuation: async (input) => repository.recordApprovalContinuation(input),
     recordBudgetReservation: async (key, reservation, now) => repository.recordBudgetReservation(key, reservation, now),
+    recordBudgetReleaseIntent: async (key, input) => repository.recordBudgetReleaseIntent(key, input),
+    markBudgetReleased: async (key, reason, now) => repository.markBudgetReleased(key, reason, now),
     blockBeforeDispatch: async (key, input) => repository.blockBeforeDispatch(key, input),
     claimDispatch: async (input) => repository.claimDispatch(input),
     appendOutputFrame: async (input) => repository.appendOutputFrame(input),
@@ -319,6 +336,22 @@ function promiseBackedRepository(repository: RemoteWorkerInferenceRepository): R
     getRequest: async (key) => repository.getRequest(key),
     listFramesAfter: async (key, afterSequence) => repository.listFramesAfter(key, afterSequence),
   };
+}
+
+function repositoryWithFailure(
+  repository: RemoteWorkerInferenceRepository,
+  method: keyof RemoteWorkerInferenceRepositoryPort,
+  implementation: (...args: never[]) => unknown = () => {
+    throw new Error(REPOSITORY_SECRET_CANARY);
+  },
+): RemoteWorkerInferenceRepositoryPort {
+  const base = promiseBackedRepository(repository);
+  return new Proxy(base, {
+    get(target, property, receiver) {
+      if (property === method) return implementation;
+      return Reflect.get(target, property, receiver);
+    },
+  });
 }
 
 function build(
@@ -338,8 +371,15 @@ function build(
     adapterThrows?: boolean;
     settleFailsOnce?: boolean;
     releaseFailsOnce?: boolean;
+    releaseResponseLostOnce?: boolean;
     routeDrift?: boolean;
     promiseBackedOwners?: boolean;
+    governanceThrows?: boolean;
+    routingThrows?: boolean;
+    approvalThrows?: boolean;
+    reservationExpiresAt?: string;
+    repositoryPort?: RemoteWorkerInferenceRepositoryPort;
+    observeInputs?: boolean;
   } = {},
 ): { service: RemoteWorkerInferenceService; doubles: ServiceDoubles } {
   const settled: string[][] = [];
@@ -348,9 +388,15 @@ function build(
   let reserveCalls = 0;
   let settlementShouldFail = options.settleFailsOnce === true;
   let releaseShouldFail = options.releaseFailsOnce === true;
+  let releaseResponseShouldBeLost = options.releaseResponseLostOnce === true;
+  const observedInputs: string[] = [];
+  const observe = (value: unknown): void => {
+    if (options.observeInputs) observedInputs.push(JSON.stringify(value));
+  };
   const adapter: ServiceDoubles["adapter"] = {
     calls: [],
     async dispatch(request) {
+      if (options.observeInputs) observedInputs.push(JSON.stringify(request));
       this.calls.push(request);
       if (options.adapterThrows) throw new Error("adapter accounting failure");
       return (
@@ -366,13 +412,16 @@ function build(
   };
   const doubles: ServiceDoubles = {
     authority: {
-      resolveActiveAuthority: () => {
+      resolveActiveAuthority: (input) => {
+        observe(input);
         const authority = options.authorityOverride ? options.authorityOverride() : h.authority;
         return options.promiseBackedOwners ? Promise.resolve(authority) : authority;
       },
     },
     governance: {
-      evaluate: () => {
+      evaluate: (input) => {
+        observe(input);
+        if (options.governanceThrows) throw new Error(GOVERNANCE_SECRET_CANARY);
         const decision = options.decisions?.[governanceCalls] ?? options.decision ?? "allowed";
         governanceCalls += 1;
         const receipt = governanceReceipt(decision);
@@ -381,6 +430,8 @@ function build(
     },
     approval: {
       resolve: ({ pendingApprovalReceiptSha256 }) => {
+        observe({ pendingApprovalReceiptSha256 });
+        if (options.approvalThrows) throw new Error(APPROVAL_SECRET_CANARY);
         if (options.approvalPending) return undefined;
         return {
           schemaVersion: REMOTE_WORKER_INFERENCE_APPROVAL_RESOLUTION_SCHEMA_VERSION,
@@ -393,6 +444,7 @@ function build(
     },
     budget: {
       reserve: ({ operation, operationSha256 }) => {
+        observe({ operation, operationSha256 });
         reserveCalls += 1;
         if (options.reserveThrows) throw new Error(BUDGET_RESERVE_SECRET_CANARY);
         const reservation =
@@ -409,11 +461,12 @@ function build(
                 reservedOutputTokens: operation.outputTokenCeiling,
                 reservedReasoningTokens: operation.reasoningTokenCeiling,
                 reservedCostMicrousd: 1000,
-                expiresAt: FUTURE,
+                expiresAt: options.reservationExpiresAt ?? FUTURE,
               };
         return options.promiseBackedOwners ? Promise.resolve(reservation) : reservation;
       },
       settle: ({ usageEventIds }) => {
+        observe({ usageEventIds });
         if (settlementShouldFail) {
           settlementShouldFail = false;
           throw new Error(BUDGET_SETTLE_SECRET_CANARY);
@@ -422,16 +475,23 @@ function build(
         return options.promiseBackedOwners ? Promise.resolve() : undefined;
       },
       release: ({ reason }) => {
+        observe({ reason });
         if (releaseShouldFail) {
           releaseShouldFail = false;
           throw new Error(BUDGET_RELEASE_SECRET_CANARY);
         }
         released.push(reason);
+        if (releaseResponseShouldBeLost) {
+          releaseResponseShouldBeLost = false;
+          throw new Error(BUDGET_RELEASE_SECRET_CANARY);
+        }
         return options.promiseBackedOwners ? Promise.resolve() : undefined;
       },
     },
     routing: {
-      resolve: () => {
+      resolve: (input) => {
+        observe(input);
+        if (options.routingThrows) throw new Error(ROUTING_SECRET_CANARY);
         const resolution = {
           providerId: "anthropic" as const,
           modelId: options.routeDrift ? "claude-sonnet-4" : "claude-opus-4",
@@ -454,9 +514,12 @@ function build(
     get reserveCalls() {
       return reserveCalls;
     },
+    observedInputs,
   };
   const service = new RemoteWorkerInferenceService({
-    repository: options.promiseBackedOwners ? promiseBackedRepository(h.repo) : h.repo,
+    repository:
+      options.repositoryPort ??
+      (options.promiseBackedOwners || options.observeInputs ? promiseBackedRepository(h.repo, observe) : h.repo),
     authority: doubles.authority,
     governance: doubles.governance,
     approval: doubles.approval,
@@ -736,23 +799,6 @@ describe("RemoteWorkerInferenceService", () => {
     );
   });
 
-  it("rejects release reasons outside the closed secret-free code set", async () => {
-    const h = seed("release-reason");
-    const { service } = build(h);
-    await expect(
-      service.reconcileBudgetRelease(
-        {
-          registryWorkspaceId: "default",
-          assignmentId: h.authority.assignmentId,
-          assignmentGeneration: h.authority.assignmentGeneration,
-          inferenceRequestId: "missing",
-          attempt: 1,
-        },
-        "Bearer secret" as never,
-      ),
-    ).rejects.toThrow(/release reason is unsupported/u);
-  });
-
   it("revalidates current full authority before returning an exact replay", async () => {
     const h = seed("replay-authority");
     await build(h).service.performInference({ submission: h.submission });
@@ -850,4 +896,386 @@ describe("RemoteWorkerInferenceService", () => {
       /stored authority drifted/u,
     );
   });
+
+  it("removes the raw lease before every repository, governance, routing, budget, and dispatch owner", async () => {
+    const h = seed("lease-boundary-spies");
+    const { service, doubles } = build(h, { observeInputs: true });
+    await service.performInference({ submission: h.submission });
+
+    const observed = doubles.observedInputs.join("\n");
+    expect(observed).not.toContain(h.submission.leaseToken);
+    expect(observed).not.toContain('"leaseToken":');
+    const persisted = JSON.stringify({
+      requests: h.db.prepare("SELECT * FROM remote_worker_inference_requests").all(),
+      frames: h.db.prepare("SELECT * FROM remote_worker_inference_outbox").all(),
+    });
+    expect(persisted).not.toContain(h.submission.leaseToken);
+    expect(persisted).not.toContain("lease_token");
+  });
+
+  it("sanitizes governance, routing, and approval owner exceptions", async () => {
+    const governanceHarness = seed("governance-owner-error");
+    await expectSanitizedFailure(
+      build(governanceHarness, { governanceThrows: true }).service.performInference({
+        submission: governanceHarness.submission,
+      }),
+      GOVERNANCE_SECRET_CANARY,
+      "Remote worker inference governance evaluation is unavailable.",
+    );
+    expect(
+      JSON.stringify(governanceHarness.db.prepare("SELECT * FROM remote_worker_inference_requests").all()),
+    ).not.toContain(GOVERNANCE_SECRET_CANARY);
+
+    const routingHarness = seed("routing-owner-error");
+    await expectSanitizedFailure(
+      build(routingHarness, { routingThrows: true }).service.performInference({
+        submission: routingHarness.submission,
+      }),
+      ROUTING_SECRET_CANARY,
+      "Remote worker inference route resolution is unavailable.",
+    );
+    expect(
+      JSON.stringify(routingHarness.db.prepare("SELECT * FROM remote_worker_inference_requests").all()),
+    ).not.toContain(ROUTING_SECRET_CANARY);
+
+    const approvalHarness = seed("approval-owner-error");
+    await build(approvalHarness, { decision: "approval_required" }).service.performInference({
+      submission: approvalHarness.submission,
+    });
+    await expectSanitizedFailure(
+      build(approvalHarness, { approvalThrows: true }).service.performInference({
+        submission: approvalHarness.submission,
+      }),
+      APPROVAL_SECRET_CANARY,
+      "Remote worker inference approval resolution is unavailable.",
+    );
+    expect(
+      JSON.stringify(approvalHarness.db.prepare("SELECT * FROM remote_worker_inference_requests").all()),
+    ).not.toContain(APPROVAL_SECRET_CANARY);
+  });
+
+  it("sanitizes repository failures on initial replay and admission", async () => {
+    for (const method of ["inspectReplay", "admitOrReplay"] as const) {
+      const h = seed(`repository-${method}`);
+      const { service } = build(h, { repositoryPort: repositoryWithFailure(h.repo, method) });
+      await expectSanitizedFailure(
+        service.performInference({ submission: h.submission }),
+        REPOSITORY_SECRET_CANARY,
+        "Remote worker inference request failed at an owner boundary.",
+      );
+      expect(JSON.stringify(h.db.prepare("SELECT * FROM remote_worker_inference_requests").all())).not.toContain(
+        REPOSITORY_SECRET_CANARY,
+      );
+    }
+  });
+
+  it("marks append/finalize owner failures unknown and never rethrows their raw exceptions", async () => {
+    for (const method of ["appendOutputFrame", "finalizeTerminal"] as const) {
+      const h = seed(`repository-${method}`);
+      const { service } = build(h, {
+        repositoryPort: repositoryWithFailure(h.repo, method),
+        ...(method === "finalizeTerminal"
+          ? {
+              outcome: {
+                terminalState: "completed" as const,
+                chunks: [],
+                usageEventId: "usage-event-terminal",
+                usageEventIds: ["usage-event-terminal"],
+                transportAttempts: 1,
+              },
+            }
+          : {}),
+      });
+      await expectSanitizedFailure(
+        service.performInference({ submission: h.submission }),
+        REPOSITORY_SECRET_CANARY,
+        "Remote worker inference dispatch evidence requires reconciliation.",
+      );
+      expect(h.repo.getRequestByIdempotency("default", h.submission.idempotencyKey)?.budgetAuthorityState).toBe(
+        "reconciliation_required",
+      );
+      expect(JSON.stringify(h.db.prepare("SELECT * FROM remote_worker_inference_requests").all())).not.toContain(
+        REPOSITORY_SECRET_CANARY,
+      );
+    }
+  });
+
+  it("sanitizes settlement/release commit and read/ack repository failures", async () => {
+    const settlement = seed("repository-settlement-commit");
+    await expectSanitizedFailure(
+      build(settlement, {
+        repositoryPort: repositoryWithFailure(settlement.repo, "markBudgetSettled"),
+      }).service.performInference({ submission: settlement.submission }),
+      REPOSITORY_SECRET_CANARY,
+      "Remote worker inference budget settlement owner is unavailable.",
+    );
+    expect(
+      settlement.repo.getRequestByIdempotency("default", settlement.submission.idempotencyKey)?.budgetAuthorityState,
+    ).toBe("settlement_pending");
+
+    const release = seed("repository-release-commit");
+    let releaseResolutions = 0;
+    const releaseBuild = build(release, {
+      repositoryPort: repositoryWithFailure(release.repo, "markBudgetReleased"),
+      authorityOverride: () => {
+        releaseResolutions += 1;
+        return releaseResolutions === 1
+          ? release.authority
+          : { ...release.authority, routedContextSha256: D("release-owner-drift") };
+      },
+    });
+    await expectSanitizedFailure(
+      releaseBuild.service.performInference({ submission: release.submission }),
+      REPOSITORY_SECRET_CANARY,
+      "Remote worker inference budget release requires reconciliation.",
+    );
+    expect(releaseBuild.doubles.released).toEqual(["pre_dispatch_authority_lost"]);
+    expect(release.repo.getRequestByIdempotency("default", release.submission.idempotencyKey)).toMatchObject({
+      state: "blocked",
+      budgetAuthorityState: "reserved",
+    });
+
+    const readAck = seed("repository-read-ack");
+    await build(readAck).service.performInference({ submission: readAck.submission });
+    await expectSanitizedFailure(
+      build(readAck, {
+        repositoryPort: repositoryWithFailure(readAck.repo, "listFramesAfter"),
+      }).service.readPendingFrames({ submission: readAck.submission }),
+      REPOSITORY_SECRET_CANARY,
+      "Remote worker inference frame read owner is unavailable.",
+    );
+    await expectSanitizedFailure(
+      build(readAck, { repositoryPort: repositoryWithFailure(readAck.repo, "acknowledge") }).service.acknowledge({
+        submission: readAck.submission,
+        throughSequence: 1,
+      }),
+      REPOSITORY_SECRET_CANARY,
+      "Remote worker inference acknowledgement owner is unavailable.",
+    );
+  });
+
+  it("commits release intent before the external effect and survives response loss with the exact stored reason", async () => {
+    const precommit = seed("release-intent-precommit");
+    let precommitResolutions = 0;
+    const precommitBuild = build(precommit, {
+      repositoryPort: repositoryWithFailure(precommit.repo, "recordBudgetReleaseIntent"),
+      authorityOverride: () => {
+        precommitResolutions += 1;
+        return precommitResolutions === 1
+          ? precommit.authority
+          : { ...precommit.authority, routedContextSha256: D("precommit-drift") };
+      },
+    });
+    await expectSanitizedFailure(
+      precommitBuild.service.performInference({ submission: precommit.submission }),
+      REPOSITORY_SECRET_CANARY,
+      "Remote worker inference budget release intent could not be committed.",
+    );
+    expect(precommitBuild.doubles.released).toEqual([]);
+    expect(precommit.repo.getRequestByIdempotency("default", precommit.submission.idempotencyKey)).toMatchObject({
+      state: "admitted",
+      budgetAuthorityState: "reserved",
+    });
+
+    const postcommit = seed("release-intent-postcommit");
+    const postcommitBase = promiseBackedRepository(postcommit.repo);
+    const postcommitPort: RemoteWorkerInferenceRepositoryPort = {
+      ...postcommitBase,
+      recordBudgetReleaseIntent: async (key, input) => {
+        await postcommitBase.recordBudgetReleaseIntent(key, input);
+        throw new Error(REPOSITORY_SECRET_CANARY);
+      },
+    };
+    let postcommitResolutions = 0;
+    const postcommitBuild = build(postcommit, {
+      repositoryPort: postcommitPort,
+      authorityOverride: () => {
+        postcommitResolutions += 1;
+        return postcommitResolutions === 1
+          ? postcommit.authority
+          : { ...postcommit.authority, routedContextSha256: D("postcommit-drift") };
+      },
+    });
+    await expectSanitizedFailure(
+      postcommitBuild.service.performInference({ submission: postcommit.submission }),
+      REPOSITORY_SECRET_CANARY,
+      "Remote worker inference budget release intent could not be committed.",
+    );
+    expect(postcommitBuild.doubles.released).toEqual([]);
+    expect(postcommit.repo.getRequestByIdempotency("default", postcommit.submission.idempotencyKey)).toMatchObject({
+      state: "blocked",
+      budgetAuthorityState: "reserved",
+      budgetReleaseReason: "pre_dispatch_authority_lost",
+    });
+    const postcommitRestart = build(postcommit);
+    const postcommitRecovered = await postcommitRestart.service.performInference({ submission: postcommit.submission });
+    expect(postcommitRecovered.request.budgetAuthorityState).toBe("released");
+    expect(postcommitRestart.doubles.released).toEqual(["pre_dispatch_authority_lost"]);
+
+    const responseLoss = seed("release-response-loss");
+    const first = build(responseLoss, {
+      decisions: ["allowed", "denied"],
+      releaseResponseLostOnce: true,
+    });
+    await expectSanitizedFailure(
+      first.service.performInference({ submission: responseLoss.submission }),
+      BUDGET_RELEASE_SECRET_CANARY,
+      "Remote worker inference budget release requires reconciliation.",
+    );
+    const intent = responseLoss.repo.getRequestByIdempotency("default", responseLoss.submission.idempotencyKey);
+    expect(intent).toMatchObject({
+      state: "blocked",
+      budgetAuthorityState: "reserved",
+      budgetReleaseReason: "governance_denied",
+      blockReason: "pre_dispatch_governance_denied",
+    });
+    const restarted = build(responseLoss);
+    const recovered = await restarted.service.performInference({ submission: responseLoss.submission });
+    expect(recovered.request.budgetAuthorityState).toBe("released");
+    expect(restarted.doubles.released).toEqual(["governance_denied"]);
+    expect(restarted.doubles.adapter.calls).toHaveLength(0);
+  });
+
+  it("releases an expired persisted reservation after restart without reserving or dispatching again", async () => {
+    const h = seed("expired-reservation-restart");
+    const base = promiseBackedRepository(h.repo);
+    const postcommitLoss: RemoteWorkerInferenceRepositoryPort = {
+      ...base,
+      recordBudgetReservation: async (key, reservation, now) => {
+        await base.recordBudgetReservation(key, reservation, now);
+        throw new Error(REPOSITORY_SECRET_CANARY);
+      },
+    };
+    await expectSanitizedFailure(
+      build(h, {
+        repositoryPort: postcommitLoss,
+        reservationExpiresAt: "2000-01-01T00:00:00.000Z",
+      }).service.performInference({ submission: h.submission }),
+      REPOSITORY_SECRET_CANARY,
+      "Remote worker inference request failed at an owner boundary.",
+    );
+    expect(h.repo.getRequestByIdempotency("default", h.submission.idempotencyKey)).toMatchObject({
+      state: "admitted",
+      budgetAuthorityState: "reserved",
+      budgetReservationExpiresAt: "2000-01-01T00:00:00.000Z",
+    });
+
+    const restarted = build(h);
+    const recovered = await restarted.service.performInference({ submission: h.submission });
+    expect(recovered).toMatchObject({ disposition: "blocked", request: { budgetAuthorityState: "released" } });
+    expect(recovered.request.budgetReleaseReason).toBe("budget_revalidation_failed");
+    expect(restarted.doubles.reserveCalls).toBe(0);
+    expect(restarted.doubles.adapter.calls).toHaveLength(0);
+  });
+
+  it("recovers exactly when the released DB commit succeeds but its response is lost", async () => {
+    const h = seed("released-commit-response-loss");
+    const base = promiseBackedRepository(h.repo);
+    let loseCommitResponse = true;
+    const responseLostPort: RemoteWorkerInferenceRepositoryPort = {
+      ...base,
+      markBudgetReleased: async (key, reason, now) => {
+        const released = await base.markBudgetReleased(key, reason, now);
+        if (loseCommitResponse) {
+          loseCommitResponse = false;
+          throw new Error(REPOSITORY_SECRET_CANARY);
+        }
+        return released;
+      },
+    };
+    let resolutions = 0;
+    const first = build(h, {
+      repositoryPort: responseLostPort,
+      authorityOverride: () => {
+        resolutions += 1;
+        return resolutions === 1 ? h.authority : { ...h.authority, routedContextSha256: D("released-commit-drift") };
+      },
+    });
+    await expectSanitizedFailure(
+      first.service.performInference({ submission: h.submission }),
+      REPOSITORY_SECRET_CANARY,
+      "Remote worker inference budget release requires reconciliation.",
+    );
+    expect(first.doubles.released).toEqual(["pre_dispatch_authority_lost"]);
+    expect(h.repo.getRequestByIdempotency("default", h.submission.idempotencyKey)).toMatchObject({
+      state: "blocked",
+      budgetAuthorityState: "released",
+    });
+
+    const restarted = build(h);
+    const replay = await restarted.service.performInference({ submission: h.submission });
+    expect(replay).toMatchObject({ disposition: "blocked", request: { budgetAuthorityState: "released" } });
+    expect(restarted.doubles.released).toEqual([]);
+    expect(restarted.doubles.adapter.calls).toHaveLength(0);
+  });
+
+  it("turns a DB-clock claim expiry into a durable release instead of a stranded admitted row", async () => {
+    const h = seed("claim-db-clock-expiry");
+    const base = promiseBackedRepository(h.repo);
+    const missedClaim: RemoteWorkerInferenceRepositoryPort = {
+      ...base,
+      claimDispatch: async () => undefined,
+    };
+    const { service, doubles } = build(h, { repositoryPort: missedClaim });
+    const outcome = await service.performInference({ submission: h.submission });
+    expect(outcome).toMatchObject({ disposition: "blocked", request: { budgetAuthorityState: "released" } });
+    expect(outcome.request.budgetReleaseReason).toBe("budget_revalidation_failed");
+    expect(doubles.released).toEqual(["budget_revalidation_failed"]);
+    expect(doubles.adapter.calls).toHaveLength(0);
+  });
+
+  it("lets a concurrent dispatch claim defeat release intent before any external release", async () => {
+    const h = seed("release-claim-race");
+    const base = promiseBackedRepository(h.repo);
+    const racingRepository: RemoteWorkerInferenceRepositoryPort = {
+      ...base,
+      recordBudgetReleaseIntent: async (key, input) => {
+        const current = h.repo.getRequest(key)!;
+        h.repo.claimDispatch({
+          ...key,
+          dispatchClaimOwner: "concurrent-owner",
+          effectiveProviderId: "anthropic",
+          effectiveModelId: "claude-opus-4",
+          effectiveRouteSha256: current.effectiveRouteSha256,
+          dispatchLeaseExpiresAt: FUTURE,
+          now: h.now,
+        });
+        return await base.recordBudgetReleaseIntent(key, input);
+      },
+    };
+    let resolutions = 0;
+    const { service, doubles } = build(h, {
+      repositoryPort: racingRepository,
+      authorityOverride: () => {
+        resolutions += 1;
+        return resolutions === 1 ? h.authority : { ...h.authority, routedContextSha256: D("claim-race-drift") };
+      },
+    });
+    await expect(service.performInference({ submission: h.submission })).rejects.toThrow(
+      "Remote worker inference budget release intent could not be committed.",
+    );
+    expect(doubles.released).toEqual([]);
+    expect(doubles.adapter.calls).toHaveLength(0);
+    expect(h.repo.getRequestByIdempotency("default", h.submission.idempotencyKey)).toMatchObject({
+      state: "dispatch_claimed",
+      budgetAuthorityState: "reserved",
+      dispatchClaimOwner: "concurrent-owner",
+    });
+  });
 });
+
+async function expectSanitizedFailure(
+  operation: Promise<unknown>,
+  canary: string,
+  expectedMessage: string,
+): Promise<void> {
+  let failure: unknown;
+  try {
+    await operation;
+  } catch (error) {
+    failure = error;
+  }
+  expect(failure).toBeInstanceOf(RemoteWorkerInferenceAccessError);
+  expect((failure as Error).message).toBe(expectedMessage);
+  expect((failure as Error).message).not.toContain(canary);
+}

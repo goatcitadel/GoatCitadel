@@ -88,6 +88,15 @@ describe("SQLite 196 remote-worker inference budget authority correction", () =>
       () =>
         upgraded
           .prepare(
+            "UPDATE remote_worker_inference_requests SET state = 'dispatch_claimed', dispatch_claim_owner = 'invented-owner' WHERE inference_request_id = 'request-1'",
+          )
+          .run(),
+      /v2 authority evidence is immutable/u,
+    );
+    assert.throws(
+      () =>
+        upgraded
+          .prepare(
             "UPDATE remote_worker_inference_requests SET effective_route_json = '{}' WHERE inference_request_id = 'request-1'",
           )
           .run(),

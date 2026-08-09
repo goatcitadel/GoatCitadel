@@ -1,12 +1,14 @@
+/* eslint-disable max-lines -- HX-503 keeps the lease boundary, budget lifecycle, provider dispatch, and restart recovery in one audited service owner. */
 import {
   REMOTE_WORKER_INFERENCE_EFFECTIVE_ROUTE_SCHEMA_VERSION,
+  authorizeRemoteWorkerInferenceRequestSubmission,
   canonicalJsonString,
   normalizeRemoteWorkerInferenceApprovalResolutionReceipt,
   normalizeRemoteWorkerInferenceBudgetReservation,
   normalizeRemoteWorkerInferenceEffectiveRouteReceipt,
   normalizeRemoteWorkerInferenceGovernanceReceipt,
   normalizeRemoteWorkerInferenceOperationIdentifier,
-  normalizeRemoteWorkerInferenceRequestSubmission,
+  normalizeRemoteWorkerInferenceReleaseReason,
   normalizeRemoteWorkerInferenceUsageEventIds,
   remoteWorkerInferenceBudgetOperationSha256,
   remoteWorkerInferenceCanonicalSha256,
@@ -15,11 +17,13 @@ import {
   remoteWorkerInferenceRequestSha256,
   remoteWorkerInferenceUsageEventIdsSha256,
   type RemoteWorkerInferenceApprovalResolutionReceipt,
+  type RemoteWorkerInferenceAuthorizedSubmission,
   type RemoteWorkerInferenceBudgetOperationInput,
   type RemoteWorkerInferenceBudgetReservation,
   type RemoteWorkerInferenceEffectiveRouteReceipt,
   type RemoteWorkerInferenceGovernanceReceipt,
   type RemoteWorkerInferenceRequestSubmission,
+  type RemoteWorkerInferenceReleaseReason,
 } from "@goatcitadel/contracts";
 import type {
   RemoteWorkerInferenceFrameRecord,
@@ -44,19 +48,14 @@ import type { Awaitable, AwaitableOwnerMethods } from "./remote-worker-owner-por
  */
 
 export const REMOTE_WORKER_INFERENCE_REQUIRED_CLAIMS = ["worker_runtime", "gateway_inference"] as const;
-export const REMOTE_WORKER_INFERENCE_RELEASE_REASONS = [
-  "pre_dispatch_authority_lost",
-  "governance_denied",
-  "approval_rejected",
-  "budget_revalidation_failed",
-] as const;
-export type RemoteWorkerInferenceReleaseReason = (typeof REMOTE_WORKER_INFERENCE_RELEASE_REASONS)[number];
 
 type RemoteWorkerInferenceRepositoryMethod =
   | "inspectReplay"
   | "admitOrReplay"
   | "recordApprovalContinuation"
   | "recordBudgetReservation"
+  | "recordBudgetReleaseIntent"
+  | "markBudgetReleased"
   | "blockBeforeDispatch"
   | "claimDispatch"
   | "appendOutputFrame"
@@ -99,7 +98,7 @@ export interface RemoteWorkerInferenceAuthorityPort {
 
 export interface RemoteWorkerInferenceGovernanceRequest {
   readonly authority: RemoteWorkerInferenceResolvedAuthority;
-  readonly submission: RemoteWorkerInferenceRequestSubmission;
+  readonly submission: RemoteWorkerInferenceAuthorizedSubmission;
   readonly approvalResolution?: RemoteWorkerInferenceApprovalResolutionReceipt;
 }
 
@@ -163,8 +162,8 @@ export interface RemoteWorkerInferenceServiceOptions {
   readonly budgetOwnerId: string;
   readonly dispatchOwnerId: string;
   readonly clock: () => string;
-  readonly operationIdFor?: (submission: RemoteWorkerInferenceRequestSubmission) => string;
-  readonly dispatchGenerationFor?: (submission: RemoteWorkerInferenceRequestSubmission) => string;
+  readonly operationIdFor?: (submission: RemoteWorkerInferenceAuthorizedSubmission) => string;
+  readonly dispatchGenerationFor?: (submission: RemoteWorkerInferenceAuthorizedSubmission) => string;
 }
 
 export interface RemoteWorkerInferencePerformInput {
@@ -214,35 +213,40 @@ export class RemoteWorkerInferenceService {
   public async performInference(
     input: RemoteWorkerInferencePerformInput,
   ): Promise<RemoteWorkerInferencePerformOutcome> {
-    const submission = normalizeRemoteWorkerInferenceRequestSubmission(input.submission);
+    return await this.atPublicBoundary(
+      "Remote worker inference request failed at an owner boundary.",
+      async () => await this.performInferenceOwned(input),
+    );
+  }
 
-    const leaseTokenSha256 = remoteWorkerInferenceLeaseTokenSha256(submission.leaseToken);
+  private async performInferenceOwned(
+    input: RemoteWorkerInferencePerformInput,
+  ): Promise<RemoteWorkerInferencePerformOutcome> {
+    const { submission, leaseTokenSha256 } = authorizeRemoteWorkerInferenceRequestSubmission(input.submission);
     const authority = await this.resolveAuthorityOrThrow(leaseTokenSha256);
     this.assertCapabilityClaims(authority.capabilityClaims);
     this.assertSubmissionAuthority(authority, submission, "admission");
 
     // Exact replay is checked before governance, routing, approval, or budget.
-    const replay = await this.options.repository.inspectReplay(input.submission);
+    const replay = await this.options.repository.inspectReplay(submission);
     if (replay) {
       this.assertStoredAuthority(authority, replay.request, "replay");
-      return await this.resumeExisting(input.submission, submission, leaseTokenSha256, authority, replay.request);
+      return await this.resumeExisting(submission, leaseTokenSha256, authority, replay.request);
     }
 
-    const governance = normalizeRemoteWorkerInferenceGovernanceReceipt(
-      await this.options.governance.evaluate({ authority, submission: input.submission }),
-    );
+    const governance = await this.evaluateGovernance({ authority, submission });
     if (governance.decision !== "allowed") {
       const admission = await this.options.repository.admitOrReplay({
-        submission: input.submission,
+        submission,
         ...authorityAdmission(authority),
-        operationId: this.operationId(input.submission),
-        dispatchGeneration: this.dispatchGeneration(input.submission),
+        operationId: this.operationId(submission),
+        dispatchGeneration: this.dispatchGeneration(submission),
         governance,
         admittedAt: this.options.clock(),
       });
       if (admission.disposition === "replayed") {
         this.assertStoredAuthority(authority, admission.request, "concurrent replay");
-        return await this.resumeExisting(input.submission, submission, leaseTokenSha256, authority, admission.request);
+        return await this.resumeExisting(submission, leaseTokenSha256, authority, admission.request);
       }
       return await this.finish(
         governance.decision === "denied" ? "blocked" : "waiting_approval",
@@ -250,9 +254,9 @@ export class RemoteWorkerInferenceService {
       );
     }
 
-    const allowed = await this.resolveAllowed(input.submission, authority, governance);
+    const allowed = await this.resolveAllowed(submission, authority, governance);
     const admission = await this.options.repository.admitOrReplay({
-      submission: input.submission,
+      submission,
       ...authorityAdmission(authority),
       operationId: allowed.operation.operationId,
       dispatchGeneration: allowed.operation.dispatchGeneration,
@@ -263,20 +267,22 @@ export class RemoteWorkerInferenceService {
     });
     if (admission.disposition === "replayed") {
       this.assertStoredAuthority(authority, admission.request, "concurrent replay");
-      return await this.resumeExisting(input.submission, submission, leaseTokenSha256, authority, admission.request);
+      return await this.resumeExisting(submission, leaseTokenSha256, authority, admission.request);
     }
-    return await this.reserveRevalidateAndDispatch(
-      input.submission,
-      submission,
-      leaseTokenSha256,
-      admission.request,
-      authority,
-      allowed,
-    );
+    return await this.reserveRevalidateAndDispatch(submission, leaseTokenSha256, admission.request, authority, allowed);
   }
 
   /** Restart-safe settlement. It never invokes the provider. */
   public async reconcileBudgetSettlement(
+    key: RemoteWorkerInferenceRequestKey,
+  ): Promise<RemoteWorkerInferenceRequestRecord> {
+    return await this.atPublicBoundary(
+      "Remote worker inference budget settlement owner is unavailable.",
+      async () => await this.reconcileBudgetSettlementOwned(key),
+    );
+  }
+
+  private async reconcileBudgetSettlementOwned(
     key: RemoteWorkerInferenceRequestKey,
   ): Promise<RemoteWorkerInferenceRequestRecord> {
     const request = await this.requireRequest(key);
@@ -297,24 +303,53 @@ export class RemoteWorkerInferenceService {
   /** Restart-safe release for a blocked, never-dispatched reservation. */
   public async reconcileBudgetRelease(
     key: RemoteWorkerInferenceRequestKey,
-    reason: RemoteWorkerInferenceReleaseReason = "pre_dispatch_authority_lost",
   ): Promise<RemoteWorkerInferenceRequestRecord> {
-    assertReleaseReason(reason);
+    return await this.atPublicBoundary(
+      "Remote worker inference budget release owner is unavailable.",
+      async () => await this.reconcileBudgetReleaseOwned(key),
+    );
+  }
+
+  private async reconcileBudgetReleaseOwned(
+    key: RemoteWorkerInferenceRequestKey,
+  ): Promise<RemoteWorkerInferenceRequestRecord> {
     const request = await this.requireRequest(key);
     if (request.budgetAuthorityState === "released") return request;
-    if (request.state !== "blocked" || request.budgetAuthorityState !== "reserved") {
+    if (
+      request.state !== "blocked" ||
+      request.budgetAuthorityState !== "reserved" ||
+      !request.budgetReleaseReason ||
+      !request.budgetReleaseRequestedAt
+    ) {
       throw new RemoteWorkerInferenceAccessError("Remote worker inference request has no recoverable release.");
     }
+    const reason = normalizeRemoteWorkerInferenceReleaseReason(request.budgetReleaseReason);
     const reservation = this.reservationFromRecord(request);
-    await this.options.budget.release({ reservation, reason });
-    return await this.options.repository.blockBeforeDispatch(key, {
-      reason,
-      budgetReleased: true,
-      now: this.options.clock(),
-    });
+    try {
+      await this.options.budget.release({ reservation, reason });
+    } catch {
+      throw new RemoteWorkerInferenceAccessError("Remote worker inference budget release requires reconciliation.");
+    }
+    try {
+      return await this.options.repository.markBudgetReleased(key, reason, this.options.clock());
+    } catch {
+      throw new RemoteWorkerInferenceAccessError("Remote worker inference budget release requires reconciliation.");
+    }
   }
 
   public async readPendingFrames(input: {
+    submission: Pick<
+      RemoteWorkerInferenceRequestSubmission,
+      "registryWorkspaceId" | "assignmentId" | "assignmentGeneration" | "inferenceRequestId" | "attempt" | "leaseToken"
+    >;
+  }): Promise<readonly RemoteWorkerInferenceFrameRecord[]> {
+    return await this.atPublicBoundary(
+      "Remote worker inference frame read owner is unavailable.",
+      async () => await this.readPendingFramesOwned(input),
+    );
+  }
+
+  private async readPendingFramesOwned(input: {
     submission: Pick<
       RemoteWorkerInferenceRequestSubmission,
       "registryWorkspaceId" | "assignmentId" | "assignmentGeneration" | "inferenceRequestId" | "attempt" | "leaseToken"
@@ -338,6 +373,19 @@ export class RemoteWorkerInferenceService {
     >;
     throughSequence: number;
   }): Promise<RemoteWorkerInferenceRequestRecord> {
+    return await this.atPublicBoundary(
+      "Remote worker inference acknowledgement owner is unavailable.",
+      async () => await this.acknowledgeOwned(input),
+    );
+  }
+
+  private async acknowledgeOwned(input: {
+    submission: Pick<
+      RemoteWorkerInferenceRequestSubmission,
+      "registryWorkspaceId" | "assignmentId" | "assignmentGeneration" | "inferenceRequestId" | "attempt" | "leaseToken"
+    >;
+    throughSequence: number;
+  }): Promise<RemoteWorkerInferenceRequestRecord> {
     const authority = await this.resolveAuthorityOrThrow(
       remoteWorkerInferenceLeaseTokenSha256(input.submission.leaseToken),
     );
@@ -350,8 +398,7 @@ export class RemoteWorkerInferenceService {
   }
 
   private async resumeExisting(
-    submissionInput: RemoteWorkerInferenceRequestSubmission,
-    submission: ReturnType<typeof normalizeRemoteWorkerInferenceRequestSubmission>,
+    submission: RemoteWorkerInferenceAuthorizedSubmission,
     leaseTokenSha256: string,
     authority: RemoteWorkerInferenceResolvedAuthority,
     request: RemoteWorkerInferenceRequestRecord,
@@ -366,8 +413,11 @@ export class RemoteWorkerInferenceService {
       await this.reconcileBudgetSettlement(key);
       return await this.finish("replayed", key);
     }
+    if (request.state === "blocked" && request.budgetAuthorityState === "released") {
+      return await this.finish("blocked", key);
+    }
     if (request.state === "blocked" && request.budgetAuthorityState === "reserved") {
-      await this.reconcileBudgetRelease(key, "pre_dispatch_authority_lost");
+      await this.reconcileBudgetRelease(key);
       return await this.finish("blocked", key);
     }
     if (request.state === "dispatch_claimed" || request.state === "streaming") {
@@ -379,13 +429,12 @@ export class RemoteWorkerInferenceService {
       if (!pendingApprovalReceiptSha256) {
         throw new RemoteWorkerInferenceAccessError("Remote worker inference waiting request lacks approval authority.");
       }
-      const rawApproval = await this.options.approval.resolve({
+      const approval = await this.resolveApproval({
         authority,
         pendingApprovalReceiptSha256,
         requestSha256: request.requestSha256,
       });
-      if (!rawApproval) return await this.finish("waiting_approval", key);
-      const approval = normalizeRemoteWorkerInferenceApprovalResolutionReceipt(rawApproval);
+      if (!approval) return await this.finish("waiting_approval", key);
       if (approval.pendingApprovalReceiptSha256 !== pendingApprovalReceiptSha256) {
         throw new RemoteWorkerInferenceAccessError(
           "Remote worker inference approval receipt does not bind the pending request.",
@@ -406,13 +455,11 @@ export class RemoteWorkerInferenceService {
         return await this.finish("blocked", key);
       }
 
-      const freshGovernance = normalizeRemoteWorkerInferenceGovernanceReceipt(
-        await this.options.governance.evaluate({
-          authority,
-          submission: submissionInput,
-          approvalResolution: approval,
-        }),
-      );
+      const freshGovernance = await this.evaluateGovernance({
+        authority,
+        submission,
+        approvalResolution: approval,
+      });
       if (freshGovernance.decision !== "allowed") {
         await this.options.repository.blockBeforeDispatch(key, {
           reason: `approval_continuation_${freshGovernance.decision}`,
@@ -421,7 +468,7 @@ export class RemoteWorkerInferenceService {
         });
         return await this.finish("blocked", key);
       }
-      const allowed = await this.resolveAllowed(submissionInput, authority, freshGovernance, request);
+      const allowed = await this.resolveAllowed(submission, authority, freshGovernance, request);
       const continued = await this.options.repository.recordApprovalContinuation({
         ...key,
         approvalResolution: approval,
@@ -432,7 +479,6 @@ export class RemoteWorkerInferenceService {
       });
       if (!continued) return await this.finish("replayed", key);
       return await this.reserveRevalidateAndDispatch(
-        submissionInput,
         submission,
         leaseTokenSha256,
         continued,
@@ -444,20 +490,17 @@ export class RemoteWorkerInferenceService {
 
     if (request.state === "admitted" && ["reservation_pending", "reserved"].includes(request.budgetAuthorityState)) {
       const approval = this.approvalFromRecord(request);
-      const freshGovernance = normalizeRemoteWorkerInferenceGovernanceReceipt(
-        await this.options.governance.evaluate({
-          authority,
-          submission: submissionInput,
-          ...(approval ? { approvalResolution: approval } : {}),
-        }),
-      );
+      const freshGovernance = await this.evaluateGovernance({
+        authority,
+        submission,
+        ...(approval ? { approvalResolution: approval } : {}),
+      });
       if (freshGovernance.decision !== "allowed") {
         await this.releaseOrBlock(key, request, `replay_governance_${freshGovernance.decision}`, "governance_denied");
         return await this.finish("blocked", key);
       }
-      const allowed = await this.resolveAllowed(submissionInput, authority, freshGovernance, request);
+      const allowed = await this.resolveAllowed(submission, authority, freshGovernance, request);
       return await this.reserveRevalidateAndDispatch(
-        submissionInput,
         submission,
         leaseTokenSha256,
         request,
@@ -470,8 +513,7 @@ export class RemoteWorkerInferenceService {
   }
 
   private async reserveRevalidateAndDispatch(
-    submissionInput: RemoteWorkerInferenceRequestSubmission,
-    submission: ReturnType<typeof normalizeRemoteWorkerInferenceRequestSubmission>,
+    submission: RemoteWorkerInferenceAuthorizedSubmission,
     leaseTokenSha256: string,
     initialRequest: RemoteWorkerInferenceRequestRecord,
     authority: RemoteWorkerInferenceResolvedAuthority,
@@ -503,42 +545,50 @@ export class RemoteWorkerInferenceService {
         });
         return await this.finish("blocked", key);
       }
-      reservation = this.assertReservation(reserved, allowed.operation, allowed.operationSha256);
+      reservation = this.assertReservationBinding(reserved, allowed.operation, allowed.operationSha256);
       request = await this.options.repository.recordBudgetReservation(key, reservation, this.options.clock());
     } else if (request.budgetAuthorityState === "reserved") {
       reservation = this.reservationFromRecord(request);
-      this.assertReservation(reservation, allowed.operation, allowed.operationSha256);
+      this.assertReservationBinding(reservation, allowed.operation, allowed.operationSha256);
     } else {
       throw new RemoteWorkerInferenceAccessError(
         "Remote worker inference request has no dispatchable budget authority.",
       );
     }
 
+    if (this.reservationIsExpired(reservation)) {
+      await this.releaseOrBlock(key, request, "budget_reservation_expired", "budget_revalidation_failed");
+      return await this.finish("blocked", key);
+    }
+
     let revalidated: RemoteWorkerInferenceResolvedAuthority;
     let revalidatedGovernance: RemoteWorkerInferenceGovernanceReceipt;
-    let revalidatedResolution: RemoteWorkerInferenceProviderResolution;
     try {
       revalidated = await this.resolveAuthorityOrThrow(leaseTokenSha256);
       this.assertSubmissionAuthority(revalidated, submission, "dispatch");
       this.assertStoredAuthority(revalidated, request, "dispatch");
-      revalidatedGovernance = normalizeRemoteWorkerInferenceGovernanceReceipt(
-        await this.options.governance.evaluate({
-          authority: revalidated,
-          submission: submissionInput,
-          ...(approval ? { approvalResolution: approval } : {}),
-        }),
-      );
-      if (revalidatedGovernance.decision !== "allowed") {
-        throw new RemoteWorkerInferenceAccessError(
-          `Remote worker inference governance changed to ${revalidatedGovernance.decision} before dispatch.`,
-        );
-      }
-      const revalidatedAllowed = await this.resolveAllowed(
-        submissionInput,
-        revalidated,
-        revalidatedGovernance,
+      revalidatedGovernance = await this.evaluateGovernance({
+        authority: revalidated,
+        submission,
+        ...(approval ? { approvalResolution: approval } : {}),
+      });
+    } catch {
+      await this.releaseOrBlock(key, request, "pre_dispatch_authority_lost", "pre_dispatch_authority_lost");
+      throw new RemoteWorkerInferenceAccessError("Remote worker inference pre-dispatch authority revalidation failed.");
+    }
+    if (revalidatedGovernance.decision !== "allowed") {
+      await this.releaseOrBlock(
+        key,
         request,
+        `pre_dispatch_governance_${revalidatedGovernance.decision}`,
+        "governance_denied",
       );
+      return await this.finish("blocked", key);
+    }
+
+    let revalidatedResolution: RemoteWorkerInferenceProviderResolution;
+    try {
+      const revalidatedAllowed = await this.resolveAllowed(submission, revalidated, revalidatedGovernance, request);
       this.assertStoredOperation(request, revalidatedAllowed.operation, revalidatedAllowed.operationSha256);
       revalidatedResolution = revalidatedAllowed.resolution;
     } catch {
@@ -556,7 +606,25 @@ export class RemoteWorkerInferenceService {
       dispatchLeaseExpiresAt: claimExpiry,
       now: this.options.clock(),
     });
-    if (!claimed) return await this.finish("lost_claim", key);
+    if (!claimed) {
+      const current = await this.requireRequest(key);
+      if (current.state === "blocked" && current.budgetAuthorityState === "reserved") {
+        await this.reconcileBudgetRelease(key);
+        return await this.finish("blocked", key);
+      }
+      if (current.state === "blocked" && current.budgetAuthorityState === "released") {
+        return await this.finish("blocked", key);
+      }
+      if (
+        current.state === "admitted" &&
+        current.budgetAuthorityState === "reserved" &&
+        current.dispatchClaimOwner === undefined
+      ) {
+        await this.releaseOrBlock(key, current, "dispatch_authority_expired", "budget_revalidation_failed");
+        return await this.finish("blocked", key);
+      }
+      return await this.finish("lost_claim", key);
+    }
 
     let outcome: RemoteWorkerInferenceDispatchOutcome;
     try {
@@ -613,7 +681,7 @@ export class RemoteWorkerInferenceService {
         usageEventIds: outcome.usageEventIds,
         now: this.options.clock(),
       });
-    } catch (error) {
+    } catch {
       const current = await this.requireRequest(key);
       if (current.state === "dispatch_claimed" || current.state === "streaming") {
         await this.options.repository.markDispatchUnknown(key, {
@@ -622,7 +690,7 @@ export class RemoteWorkerInferenceService {
           now: this.options.clock(),
         });
       }
-      throw error;
+      throw new RemoteWorkerInferenceAccessError("Remote worker inference dispatch evidence requires reconciliation.");
     }
 
     await this.reconcileBudgetSettlement(key);
@@ -630,7 +698,7 @@ export class RemoteWorkerInferenceService {
   }
 
   private async resolveAllowed(
-    submission: RemoteWorkerInferenceRequestSubmission,
+    submission: RemoteWorkerInferenceAuthorizedSubmission,
     authority: RemoteWorkerInferenceResolvedAuthority,
     governanceInput: RemoteWorkerInferenceGovernanceReceipt,
     existing?: RemoteWorkerInferenceRequestRecord,
@@ -642,8 +710,14 @@ export class RemoteWorkerInferenceService {
     if (Date.parse(governance.expiresAt) <= Date.parse(this.options.clock())) {
       throw new RemoteWorkerInferenceAccessError("Remote worker inference governance receipt is expired.");
     }
-    const resolution = await this.options.routing.resolve({ authority, governance });
-    const route = routeReceiptFor(resolution);
+    let resolution: RemoteWorkerInferenceProviderResolution;
+    let route: RemoteWorkerInferenceEffectiveRouteReceipt;
+    try {
+      resolution = await this.options.routing.resolve({ authority, governance });
+      route = routeReceiptFor(resolution);
+    } catch {
+      throw new RemoteWorkerInferenceAccessError("Remote worker inference route resolution is unavailable.");
+    }
     const routeSha256 = remoteWorkerInferenceEffectiveRouteSha256(route);
     if (routeSha256 !== governance.effectiveRouteSha256) {
       throw new RemoteWorkerInferenceAccessError(
@@ -666,7 +740,7 @@ export class RemoteWorkerInferenceService {
   }
 
   private budgetOperation(
-    submission: RemoteWorkerInferenceRequestSubmission,
+    submission: RemoteWorkerInferenceAuthorizedSubmission,
     authority: RemoteWorkerInferenceResolvedAuthority,
     governance: RemoteWorkerInferenceGovernanceReceipt,
     effectiveRouteSha256: string,
@@ -695,7 +769,7 @@ export class RemoteWorkerInferenceService {
     };
   }
 
-  private assertReservation(
+  private assertReservationBinding(
     reservationInput: RemoteWorkerInferenceBudgetReservation,
     operation: RemoteWorkerInferenceBudgetOperationInput,
     operationSha256: string,
@@ -708,8 +782,7 @@ export class RemoteWorkerInferenceService {
       reservation.requestSha256 !== operation.requestSha256 ||
       reservation.effectiveRouteSha256 !== operation.effectiveRouteSha256 ||
       reservation.reservedOutputTokens !== operation.outputTokenCeiling ||
-      reservation.reservedReasoningTokens !== operation.reasoningTokenCeiling ||
-      Date.parse(reservation.expiresAt) <= Date.parse(this.options.clock())
+      reservation.reservedReasoningTokens !== operation.reasoningTokenCeiling
     ) {
       throw new RemoteWorkerInferenceAccessError(
         "Remote worker inference budget reservation does not exactly bind the operation.",
@@ -718,28 +791,71 @@ export class RemoteWorkerInferenceService {
     return reservation;
   }
 
+  private reservationIsExpired(reservation: RemoteWorkerInferenceBudgetReservation): boolean {
+    return Date.parse(reservation.expiresAt) <= Date.parse(this.options.clock());
+  }
+
   private async releaseOrBlock(
     key: RemoteWorkerInferenceRequestKey,
     request: RemoteWorkerInferenceRequestRecord,
     blockReason: string,
     releaseReason: RemoteWorkerInferenceReleaseReason,
   ): Promise<void> {
-    assertReleaseReason(releaseReason);
+    const normalizedReleaseReason = normalizeRemoteWorkerInferenceReleaseReason(releaseReason);
     if (request.budgetAuthorityState !== "reserved") {
       await this.options.repository.blockBeforeDispatch(key, { reason: blockReason, now: this.options.clock() });
       return;
     }
-    const reservation = this.reservationFromRecord(request);
+    let intent: RemoteWorkerInferenceRequestRecord;
     try {
-      await this.options.budget.release({ reservation, reason: releaseReason });
-      await this.options.repository.blockBeforeDispatch(key, {
-        reason: blockReason,
-        budgetReleased: true,
+      intent = await this.options.repository.recordBudgetReleaseIntent(key, {
+        blockReason,
+        reason: normalizedReleaseReason,
         now: this.options.clock(),
       });
     } catch {
-      await this.options.repository.blockBeforeDispatch(key, { reason: blockReason, now: this.options.clock() });
+      throw new RemoteWorkerInferenceAccessError(
+        "Remote worker inference budget release intent could not be committed.",
+      );
+    }
+    const storedReason = intent.budgetReleaseReason;
+    if (!storedReason) {
+      throw new RemoteWorkerInferenceAccessError("Remote worker inference budget release intent is incomplete.");
+    }
+    const reason = normalizeRemoteWorkerInferenceReleaseReason(storedReason);
+    const reservation = this.reservationFromRecord(intent);
+    try {
+      await this.options.budget.release({ reservation, reason });
+    } catch {
       throw new RemoteWorkerInferenceAccessError("Remote worker inference budget release requires reconciliation.");
+    }
+    try {
+      await this.options.repository.markBudgetReleased(key, reason, this.options.clock());
+    } catch {
+      throw new RemoteWorkerInferenceAccessError("Remote worker inference budget release requires reconciliation.");
+    }
+  }
+
+  private async evaluateGovernance(
+    request: RemoteWorkerInferenceGovernanceRequest,
+  ): Promise<RemoteWorkerInferenceGovernanceReceipt> {
+    try {
+      return normalizeRemoteWorkerInferenceGovernanceReceipt(await this.options.governance.evaluate(request));
+    } catch {
+      throw new RemoteWorkerInferenceAccessError("Remote worker inference governance evaluation is unavailable.");
+    }
+  }
+
+  private async resolveApproval(input: {
+    readonly authority: RemoteWorkerInferenceResolvedAuthority;
+    readonly pendingApprovalReceiptSha256: string;
+    readonly requestSha256: string;
+  }): Promise<RemoteWorkerInferenceApprovalResolutionReceipt | undefined> {
+    try {
+      const approval = await this.options.approval.resolve(input);
+      return approval === undefined ? undefined : normalizeRemoteWorkerInferenceApprovalResolutionReceipt(approval);
+    } catch {
+      throw new RemoteWorkerInferenceAccessError("Remote worker inference approval resolution is unavailable.");
     }
   }
 
@@ -831,7 +947,7 @@ export class RemoteWorkerInferenceService {
 
   private assertSubmissionAuthority(
     authority: RemoteWorkerInferenceResolvedAuthority,
-    submission: ReturnType<typeof normalizeRemoteWorkerInferenceRequestSubmission>,
+    submission: RemoteWorkerInferenceAuthorizedSubmission,
     phase: string,
   ): void {
     this.assertKeyAuthority(authority, submission, phase);
@@ -901,14 +1017,23 @@ export class RemoteWorkerInferenceService {
     return request;
   }
 
-  private operationId(submission: RemoteWorkerInferenceRequestSubmission): string {
+  private async atPublicBoundary<T>(message: string, operation: () => Promise<T>): Promise<T> {
+    try {
+      return await operation();
+    } catch (error) {
+      if (error instanceof RemoteWorkerInferenceAccessError) throw error;
+      throw new RemoteWorkerInferenceAccessError(message);
+    }
+  }
+
+  private operationId(submission: RemoteWorkerInferenceAuthorizedSubmission): string {
     return (
       this.options.operationIdFor?.(submission) ??
       `rw-inference:${submission.registryWorkspaceId}:${submission.assignmentId}:${submission.assignmentGeneration}:${submission.inferenceRequestId}`
     );
   }
 
-  private dispatchGeneration(submission: RemoteWorkerInferenceRequestSubmission): string {
+  private dispatchGeneration(submission: RemoteWorkerInferenceAuthorizedSubmission): string {
     return this.options.dispatchGenerationFor?.(submission) ?? `${this.operationId(submission)}#${submission.attempt}`;
   }
 }
@@ -963,12 +1088,6 @@ function authorityAdmission(authority: RemoteWorkerInferenceResolvedAuthority) {
 
 function earlierTimestamp(left: string, right: string): string {
   return Date.parse(left) <= Date.parse(right) ? left : right;
-}
-
-function assertReleaseReason(value: string): asserts value is RemoteWorkerInferenceReleaseReason {
-  if (!(REMOTE_WORKER_INFERENCE_RELEASE_REASONS as readonly string[]).includes(value)) {
-    throw new RemoteWorkerInferenceAccessError("Remote worker inference budget release reason is unsupported.");
-  }
 }
 
 function dispositionFor(

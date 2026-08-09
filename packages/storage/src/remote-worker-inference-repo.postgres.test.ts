@@ -9,6 +9,7 @@ import {
   REMOTE_WORKER_INFERENCE_GOVERNANCE_SCHEMA_VERSION,
   REMOTE_WORKER_PROTOCOL_VERSION,
   REMOTE_WORKER_RUNTIME_MANIFEST_SCHEMA_VERSION,
+  authorizeRemoteWorkerInferenceRequestSubmission,
   buildRemoteWorkerAssignmentParentContext,
   canonicalJsonString,
   remoteWorkerInferenceBudgetOperationSha256,
@@ -17,7 +18,7 @@ import {
   remoteWorkerAssignmentParentContextSha256,
   type RemoteWorkerInferenceGovernanceReceipt,
   type RemoteWorkerInferenceEffectiveRouteReceipt,
-  type RemoteWorkerInferenceRequestSubmission,
+  type RemoteWorkerInferenceAuthorizedSubmission,
 } from "@goatcitadel/contracts";
 import { Pool } from "pg";
 import { ChatSessionMetaRepository } from "./chat-session-meta-repo.js";
@@ -229,8 +230,8 @@ function seedAuthority(db: PostgresSyncDatabaseClient, seed: string): SeededAuth
   };
 }
 
-function submissionFor(a: SeededAuthority): RemoteWorkerInferenceRequestSubmission {
-  return {
+function submissionFor(a: SeededAuthority): RemoteWorkerInferenceAuthorizedSubmission {
+  return authorizeRemoteWorkerInferenceRequestSubmission({
     registryWorkspaceId: "default",
     assignmentId: a.assignmentId,
     assignmentGeneration: a.assignmentGeneration,
@@ -245,7 +246,7 @@ function submissionFor(a: SeededAuthority): RemoteWorkerInferenceRequestSubmissi
     outputTokenCeiling: 4096,
     reasoningTokenCeiling: 1024,
     temperatureMilli: 700,
-  };
+  }).submission;
 }
 
 function governanceReceipt(): RemoteWorkerInferenceGovernanceReceipt {
@@ -375,6 +376,15 @@ describe("RemoteWorkerInferenceRepository live PostgreSQL (skips without GOATCIT
           now,
         );
         assert.equal(admitted.request.budgetAuthorityState, "reservation_pending");
+        assert.throws(
+          () =>
+            setupDb
+              .prepare(
+                "UPDATE remote_worker_inference_requests SET budget_authority_state = 'settled' WHERE inference_request_id = 'inference-1'",
+              )
+              .run(),
+          /authority transition|evidence is incomplete/u,
+        );
 
         // --- Two-connection dispatch-claim race -> exactly one winner ---
         const startSignal = new SharedArrayBuffer(4);
@@ -427,7 +437,32 @@ describe("RemoteWorkerInferenceRepository live PostgreSQL (skips without GOATCIT
         assert.equal(finalized.state, "completed");
         assert.equal(finalized.terminalFrameSequence, 3);
         assert.equal(finalized.accountingDisposition, "delegated");
+        assert.throws(
+          () =>
+            setupDb
+              .prepare(
+                "UPDATE remote_worker_inference_requests SET budget_authority_state = 'reserved' WHERE inference_request_id = 'inference-1'",
+              )
+              .run(),
+          /authority transition|evidence is incomplete/u,
+        );
         assert.equal(repo.markBudgetSettled(keyFor(authority), now).accountingDisposition, "settled");
+
+        for (const mutation of [
+          "accounting_disposition = 'delegated'",
+          "budget_authority_state = 'settlement_pending'",
+          "usage_terminal_event_id = 'fabricated-usage-id'",
+        ]) {
+          assert.throws(
+            () =>
+              setupDb
+                .prepare(
+                  `UPDATE remote_worker_inference_requests SET ${mutation} WHERE inference_request_id = 'inference-1'`,
+                )
+                .run(),
+            /authority transition|evidence is incomplete|immutable/u,
+          );
+        }
 
         assert.throws(
           () =>

@@ -8344,6 +8344,8 @@ function upgradeRemoteWorkerInferenceBudgetAuthority(db: DatabaseSync): void {
   addColumnIfMissing(db, "remote_worker_inference_requests", "usage_event_ids_sha256", "TEXT");
   addColumnIfMissing(db, "remote_worker_inference_requests", "budget_settled_at", "TEXT");
   addColumnIfMissing(db, "remote_worker_inference_requests", "budget_released_at", "TEXT");
+  addColumnIfMissing(db, "remote_worker_inference_requests", "budget_release_reason", "TEXT");
+  addColumnIfMissing(db, "remote_worker_inference_requests", "budget_release_requested_at", "TEXT");
   addColumnIfMissing(db, "remote_worker_inference_requests", "block_reason", "TEXT");
 
   db.exec(`
@@ -8365,37 +8367,72 @@ function upgradeRemoteWorkerInferenceBudgetAuthority(db: DatabaseSync): void {
         AND (
           NEW.execution_workspace_id IS NULL OR NEW.durable_run_id IS NULL OR NEW.task_id IS NULL
           OR NEW.admitted_lease_revision IS NULL
+          OR (
+            NEW.budget_authority_state = 'not_required'
+            AND (
+              NEW.state NOT IN ('waiting_approval', 'blocked')
+              OR NEW.budget_reservation_id IS NOT NULL OR NEW.budget_reservation_json IS NOT NULL
+              OR NEW.budget_reservation_sha256 IS NOT NULL OR NEW.budget_reservation_expires_at IS NOT NULL
+            )
+          )
+          OR (
+            NEW.budget_authority_state = 'reservation_pending'
+            AND (
+              NEW.state <> 'admitted' OR NEW.budget_operation_id IS NULL OR NEW.budget_operation_json IS NULL
+              OR NEW.budget_operation_sha256 IS NULL OR NEW.effective_route_json IS NULL
+              OR NEW.budget_reservation_id IS NOT NULL OR NEW.budget_reservation_json IS NOT NULL
+              OR NEW.budget_reservation_sha256 IS NOT NULL OR NEW.budget_reservation_expires_at IS NOT NULL
+            )
+          )
+          OR (
+            NEW.budget_authority_state IN ('reserved', 'settlement_pending', 'settled', 'released', 'reconciliation_required')
+            AND (
+              NEW.budget_operation_id IS NULL OR NEW.budget_operation_json IS NULL OR NEW.budget_operation_sha256 IS NULL
+              OR NEW.budget_reservation_id IS NULL OR NEW.budget_reservation_json IS NULL
+              OR NEW.budget_reservation_sha256 IS NULL OR NEW.budget_reservation_expires_at IS NULL
+            )
+          )
+          OR (NEW.budget_authority_state = 'reserved' AND NEW.state NOT IN ('admitted', 'dispatch_claimed', 'streaming', 'blocked'))
+          OR (
+            NEW.budget_authority_state IN ('settlement_pending', 'settled')
+            AND (
+              NEW.state NOT IN ('completed', 'failed', 'cancelled')
+              OR NEW.usage_event_ids_json IS NULL OR NEW.usage_event_ids_sha256 IS NULL
+            )
+          )
+          OR (NEW.budget_authority_state = 'released' AND NEW.state <> 'blocked')
+          OR (NEW.budget_authority_state = 'reconciliation_required' AND NEW.state <> 'dispatch_unknown')
+          OR (
+            NEW.budget_authority_state IN ('not_required', 'reservation_pending', 'released')
+            AND NEW.accounting_disposition IS NOT NULL
+          )
+          OR (
+            NEW.budget_authority_state = 'reserved'
+            AND (
+              (NEW.state IN ('admitted', 'blocked') AND NEW.accounting_disposition IS NOT NULL)
+              OR (NEW.state IN ('dispatch_claimed', 'streaming') AND NEW.accounting_disposition IS NOT 'delegated')
+            )
+          )
+          OR (NEW.budget_authority_state = 'settlement_pending' AND NEW.accounting_disposition IS NOT 'delegated')
+          OR (NEW.budget_authority_state = 'settled' AND NEW.accounting_disposition IS NOT 'settled')
+          OR (NEW.budget_authority_state = 'reconciliation_required' AND NEW.accounting_disposition IS NOT 'unknown')
+          OR ((NEW.budget_settled_at IS NOT NULL) <> (NEW.budget_authority_state = 'settled'))
+          OR ((NEW.budget_released_at IS NOT NULL) <> (NEW.budget_authority_state = 'released'))
+          OR (
+            NEW.state = 'blocked' AND NEW.budget_authority_state IN ('reserved', 'released')
+            AND (
+              NEW.budget_release_reason IS NULL OR NEW.budget_release_reason NOT IN (
+                'pre_dispatch_authority_lost', 'governance_denied', 'approval_rejected', 'budget_revalidation_failed'
+              )
+              OR NEW.budget_release_requested_at IS NULL OR NEW.block_reason IS NULL
+            )
+          )
+          OR (
+            NOT (NEW.state = 'blocked' AND NEW.budget_authority_state IN ('reserved', 'released'))
+            AND (NEW.budget_release_reason IS NOT NULL OR NEW.budget_release_requested_at IS NOT NULL)
+          )
         )
       )
-      OR (
-        NEW.budget_authority_state = 'not_required'
-        AND (NEW.budget_reservation_id IS NOT NULL OR NEW.budget_reservation_json IS NOT NULL)
-      )
-      OR (
-        NEW.budget_authority_state = 'reservation_pending'
-        AND (
-          NEW.state <> 'admitted' OR NEW.budget_operation_id IS NULL OR NEW.budget_operation_json IS NULL
-          OR NEW.budget_operation_sha256 IS NULL OR NEW.effective_route_json IS NULL
-          OR NEW.budget_reservation_id IS NOT NULL
-        )
-      )
-      OR (
-        NEW.budget_authority_state IN ('reserved', 'settlement_pending', 'settled', 'released', 'reconciliation_required')
-        AND (
-          NEW.budget_operation_id IS NULL OR NEW.budget_operation_json IS NULL OR NEW.budget_operation_sha256 IS NULL
-          OR NEW.budget_reservation_id IS NULL OR NEW.budget_reservation_json IS NULL
-          OR NEW.budget_reservation_sha256 IS NULL OR NEW.budget_reservation_expires_at IS NULL
-        )
-      )
-      OR (NEW.budget_authority_state = 'reserved' AND NEW.state NOT IN ('admitted', 'dispatch_claimed', 'streaming', 'blocked'))
-      OR (
-        NEW.budget_authority_state IN ('settlement_pending', 'settled')
-        AND (NEW.state NOT IN ('completed', 'failed', 'cancelled') OR NEW.usage_event_ids_json IS NULL OR NEW.usage_event_ids_sha256 IS NULL)
-      )
-      OR (NEW.budget_authority_state = 'settled' AND NEW.budget_settled_at IS NULL)
-      OR (NEW.budget_authority_state = 'released' AND (NEW.state <> 'blocked' OR NEW.budget_released_at IS NULL))
-      OR (NEW.budget_authority_state = 'reconciliation_required' AND NEW.state <> 'dispatch_unknown')
-      OR (NEW.state IN ('dispatch_claimed', 'streaming') AND NEW.budget_authority_state <> 'reserved')
     BEGIN
       SELECT RAISE(ABORT, 'remote worker inference budget authority evidence is incomplete');
     END;
@@ -8409,7 +8446,13 @@ function upgradeRemoteWorkerInferenceBudgetAuthority(db: DatabaseSync): void {
         'not_required', 'reservation_pending', 'reserved', 'settlement_pending',
         'settled', 'released', 'reconciliation_required', 'legacy_unverifiable'
       )
-      OR (OLD.budget_authority_state = 'legacy_unverifiable' AND NEW.budget_authority_state <> OLD.budget_authority_state)
+      OR NOT (
+        NEW.budget_authority_state = OLD.budget_authority_state
+        OR (OLD.budget_authority_state = 'not_required' AND NEW.budget_authority_state = 'reservation_pending')
+        OR (OLD.budget_authority_state = 'reservation_pending' AND NEW.budget_authority_state IN ('not_required', 'reserved'))
+        OR (OLD.budget_authority_state = 'reserved' AND NEW.budget_authority_state IN ('settlement_pending', 'released', 'reconciliation_required'))
+        OR (OLD.budget_authority_state = 'settlement_pending' AND NEW.budget_authority_state = 'settled')
+      )
       OR (
         OLD.state = 'waiting_approval' AND NEW.state = 'admitted'
         AND (
@@ -8420,34 +8463,76 @@ function upgradeRemoteWorkerInferenceBudgetAuthority(db: DatabaseSync): void {
         )
       )
       OR (
-        NEW.budget_authority_state = 'not_required'
-        AND (NEW.budget_reservation_id IS NOT NULL OR NEW.budget_reservation_json IS NOT NULL)
-      )
-      OR (
-        NEW.budget_authority_state = 'reservation_pending'
+        NEW.budget_authority_state <> 'legacy_unverifiable'
         AND (
-          NEW.state <> 'admitted' OR NEW.budget_operation_id IS NULL OR NEW.budget_operation_json IS NULL
-          OR NEW.budget_operation_sha256 IS NULL OR NEW.effective_route_json IS NULL
-          OR NEW.budget_reservation_id IS NOT NULL
+          NEW.execution_workspace_id IS NULL OR NEW.durable_run_id IS NULL OR NEW.task_id IS NULL
+          OR NEW.admitted_lease_revision IS NULL
+          OR (
+            NEW.budget_authority_state = 'not_required'
+            AND (
+              NEW.state NOT IN ('waiting_approval', 'blocked')
+              OR NEW.budget_reservation_id IS NOT NULL OR NEW.budget_reservation_json IS NOT NULL
+              OR NEW.budget_reservation_sha256 IS NOT NULL OR NEW.budget_reservation_expires_at IS NOT NULL
+            )
+          )
+          OR (
+            NEW.budget_authority_state = 'reservation_pending'
+            AND (
+              NEW.state <> 'admitted' OR NEW.budget_operation_id IS NULL OR NEW.budget_operation_json IS NULL
+              OR NEW.budget_operation_sha256 IS NULL OR NEW.effective_route_json IS NULL
+              OR NEW.budget_reservation_id IS NOT NULL OR NEW.budget_reservation_json IS NOT NULL
+              OR NEW.budget_reservation_sha256 IS NOT NULL OR NEW.budget_reservation_expires_at IS NOT NULL
+            )
+          )
+          OR (
+            NEW.budget_authority_state IN ('reserved', 'settlement_pending', 'settled', 'released', 'reconciliation_required')
+            AND (
+              NEW.budget_operation_id IS NULL OR NEW.budget_operation_json IS NULL OR NEW.budget_operation_sha256 IS NULL
+              OR NEW.budget_reservation_id IS NULL OR NEW.budget_reservation_json IS NULL
+              OR NEW.budget_reservation_sha256 IS NULL OR NEW.budget_reservation_expires_at IS NULL
+            )
+          )
+          OR (NEW.budget_authority_state = 'reserved' AND NEW.state NOT IN ('admitted', 'dispatch_claimed', 'streaming', 'blocked'))
+          OR (
+            NEW.budget_authority_state IN ('settlement_pending', 'settled')
+            AND (
+              NEW.state NOT IN ('completed', 'failed', 'cancelled')
+              OR NEW.usage_event_ids_json IS NULL OR NEW.usage_event_ids_sha256 IS NULL
+            )
+          )
+          OR (NEW.budget_authority_state = 'released' AND NEW.state <> 'blocked')
+          OR (NEW.budget_authority_state = 'reconciliation_required' AND NEW.state <> 'dispatch_unknown')
+          OR (
+            NEW.budget_authority_state IN ('not_required', 'reservation_pending', 'released')
+            AND NEW.accounting_disposition IS NOT NULL
+          )
+          OR (
+            NEW.budget_authority_state = 'reserved'
+            AND (
+              (NEW.state IN ('admitted', 'blocked') AND NEW.accounting_disposition IS NOT NULL)
+              OR (NEW.state IN ('dispatch_claimed', 'streaming') AND NEW.accounting_disposition IS NOT 'delegated')
+            )
+          )
+          OR (NEW.budget_authority_state = 'settlement_pending' AND NEW.accounting_disposition IS NOT 'delegated')
+          OR (NEW.budget_authority_state = 'settled' AND NEW.accounting_disposition IS NOT 'settled')
+          OR (NEW.budget_authority_state = 'reconciliation_required' AND NEW.accounting_disposition IS NOT 'unknown')
+          OR ((NEW.budget_settled_at IS NOT NULL) <> (NEW.budget_authority_state = 'settled'))
+          OR ((NEW.budget_released_at IS NOT NULL) <> (NEW.budget_authority_state = 'released'))
+          OR (
+            NEW.state = 'blocked' AND NEW.budget_authority_state IN ('reserved', 'released')
+            AND (
+              NEW.budget_release_reason IS NULL OR NEW.budget_release_reason NOT IN (
+                'pre_dispatch_authority_lost', 'governance_denied', 'approval_rejected', 'budget_revalidation_failed'
+              )
+              OR NEW.budget_release_requested_at IS NULL OR NEW.block_reason IS NULL
+            )
+          )
+          OR (
+            NOT (NEW.state = 'blocked' AND NEW.budget_authority_state IN ('reserved', 'released'))
+            AND (NEW.budget_release_reason IS NOT NULL OR NEW.budget_release_requested_at IS NOT NULL)
+          )
         )
       )
-      OR (
-        NEW.budget_authority_state IN ('reserved', 'settlement_pending', 'settled', 'released', 'reconciliation_required')
-        AND (
-          NEW.budget_operation_id IS NULL OR NEW.budget_operation_json IS NULL OR NEW.budget_operation_sha256 IS NULL
-          OR NEW.budget_reservation_id IS NULL OR NEW.budget_reservation_json IS NULL
-          OR NEW.budget_reservation_sha256 IS NULL OR NEW.budget_reservation_expires_at IS NULL
-        )
-      )
-      OR (NEW.budget_authority_state = 'reserved' AND NEW.state NOT IN ('admitted', 'dispatch_claimed', 'streaming', 'blocked'))
-      OR (
-        NEW.budget_authority_state IN ('settlement_pending', 'settled')
-        AND (NEW.state NOT IN ('completed', 'failed', 'cancelled') OR NEW.usage_event_ids_json IS NULL OR NEW.usage_event_ids_sha256 IS NULL)
-      )
-      OR (NEW.budget_authority_state = 'settled' AND NEW.budget_settled_at IS NULL)
-      OR (NEW.budget_authority_state = 'released' AND (NEW.state <> 'blocked' OR NEW.budget_released_at IS NULL))
-      OR (NEW.budget_authority_state = 'reconciliation_required' AND NEW.state <> 'dispatch_unknown')
-      OR (NEW.state IN ('dispatch_claimed', 'streaming') AND NEW.budget_authority_state <> 'reserved')
     BEGIN
       SELECT RAISE(ABORT, 'remote worker inference budget authority transition is invalid');
     END;
@@ -8479,11 +8564,31 @@ function upgradeRemoteWorkerInferenceBudgetAuthority(db: DatabaseSync): void {
       OR (OLD.usage_event_ids_sha256 IS NOT NULL AND NEW.usage_event_ids_sha256 IS NOT OLD.usage_event_ids_sha256)
       OR (OLD.budget_settled_at IS NOT NULL AND NEW.budget_settled_at IS NOT OLD.budget_settled_at)
       OR (OLD.budget_released_at IS NOT NULL AND NEW.budget_released_at IS NOT OLD.budget_released_at)
+      OR (OLD.budget_release_reason IS NOT NULL AND NEW.budget_release_reason IS NOT OLD.budget_release_reason)
+      OR (OLD.budget_release_requested_at IS NOT NULL AND NEW.budget_release_requested_at IS NOT OLD.budget_release_requested_at)
       OR (OLD.block_reason IS NOT NULL AND NEW.block_reason IS NOT OLD.block_reason)
       OR (
         OLD.budget_authority_state = 'legacy_unverifiable'
         AND (
-          NEW.effective_route_json IS NOT OLD.effective_route_json
+          NEW.state IS NOT OLD.state
+          OR NEW.governance_decision IS NOT OLD.governance_decision
+          OR NEW.approval_receipt_sha256 IS NOT OLD.approval_receipt_sha256
+          OR NEW.governance_output_token_ceiling IS NOT OLD.governance_output_token_ceiling
+          OR NEW.governance_reasoning_token_ceiling IS NOT OLD.governance_reasoning_token_ceiling
+          OR NEW.governance_expires_at IS NOT OLD.governance_expires_at
+          OR NEW.effective_provider_id IS NOT OLD.effective_provider_id
+          OR NEW.effective_model_id IS NOT OLD.effective_model_id
+          OR NEW.dispatch_claim_owner IS NOT OLD.dispatch_claim_owner
+          OR NEW.dispatch_claimed_at IS NOT OLD.dispatch_claimed_at
+          OR NEW.dispatch_lease_expires_at IS NOT OLD.dispatch_lease_expires_at
+          OR NEW.usage_intent_event_id IS NOT OLD.usage_intent_event_id
+          OR NEW.usage_terminal_event_id IS NOT OLD.usage_terminal_event_id
+          OR NEW.output_frame_count IS NOT OLD.output_frame_count
+          OR NEW.output_char_count IS NOT OLD.output_char_count
+          OR NEW.terminal_frame_sequence IS NOT OLD.terminal_frame_sequence
+          OR NEW.terminal_sha256 IS NOT OLD.terminal_sha256
+          OR NEW.accounting_disposition IS NOT OLD.accounting_disposition
+          OR NEW.effective_route_json IS NOT OLD.effective_route_json
           OR NEW.approval_resolution_json IS NOT OLD.approval_resolution_json
           OR NEW.approval_resolution_sha256 IS NOT OLD.approval_resolution_sha256
           OR NEW.approval_resolved_at IS NOT OLD.approval_resolved_at
@@ -8501,6 +8606,9 @@ function upgradeRemoteWorkerInferenceBudgetAuthority(db: DatabaseSync): void {
           OR NEW.usage_event_ids_sha256 IS NOT OLD.usage_event_ids_sha256
           OR NEW.budget_settled_at IS NOT OLD.budget_settled_at
           OR NEW.budget_released_at IS NOT OLD.budget_released_at
+          OR NEW.budget_release_reason IS NOT OLD.budget_release_reason
+          OR NEW.budget_release_requested_at IS NOT OLD.budget_release_requested_at
+          OR NEW.block_reason IS NOT OLD.block_reason
         )
       )
     BEGIN
@@ -8518,7 +8626,17 @@ function upgradeRemoteWorkerInferenceBudgetAuthority(db: DatabaseSync): void {
         OR NEW.dispatch_lease_expires_at IS NOT OLD.dispatch_lease_expires_at
         OR NEW.effective_provider_id IS NOT OLD.effective_provider_id
         OR NEW.effective_model_id IS NOT OLD.effective_model_id
+        OR NEW.usage_intent_event_id IS NOT OLD.usage_intent_event_id
         OR NEW.usage_terminal_event_id IS NOT OLD.usage_terminal_event_id
+        OR (
+          NEW.accounting_disposition IS NOT OLD.accounting_disposition
+          AND NOT (
+            OLD.budget_authority_state = 'settlement_pending'
+            AND NEW.budget_authority_state = 'settled'
+            AND OLD.accounting_disposition = 'delegated'
+            AND NEW.accounting_disposition = 'settled'
+          )
+        )
         OR NEW.output_frame_count <> OLD.output_frame_count
         OR NEW.output_char_count <> OLD.output_char_count
         OR NEW.worker_acknowledged_through < OLD.worker_acknowledged_through
