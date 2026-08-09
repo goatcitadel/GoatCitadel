@@ -1,6 +1,7 @@
 import {
   REMOTE_WORKER_SETTLEMENT_BOUNDS,
   REMOTE_WORKER_VERIFICATION_EVIDENCE_SCHEMA_VERSION,
+  redactSecretText,
   type RemoteWorkerVerificationAttemptState,
   type RemoteWorkerVerificationEvidence,
 } from "@goatcitadel/contracts";
@@ -102,7 +103,7 @@ export class RemoteWorkerVerificationService {
       verifierProfileSha256: null,
       preExecutionManifestSha256: input.manifestSha256,
       postExecutionManifestSha256: input.manifestSha256,
-      summary: input.summary.slice(0, REMOTE_WORKER_SETTLEMENT_BOUNDS.maxVerificationSummaryBytes),
+      summary: secretFreeVerificationSummary(input.summary, "worker_claim"),
       capturedOutputBytes: 0,
     };
     return await this.repository.recordWorkerClaim({
@@ -144,24 +145,23 @@ export class RemoteWorkerVerificationService {
     let summary: string;
     let capturedOutputBytes = 0;
     try {
-      const result = await this.verifier.verify({
-        profileSha256: input.verifierProfileSha256,
-        manifestSha256: input.manifestSha256,
-        files,
-        wallDeadlineMs: REMOTE_WORKER_SETTLEMENT_BOUNDS.maxVerifierWallMs,
-      });
-      capturedOutputBytes = Math.min(
-        result.capturedOutputBytes,
-        REMOTE_WORKER_SETTLEMENT_BOUNDS.maxVerifierCapturedOutputBytes,
+      const result = normalizeVerifierResult(
+        await this.verifier.verify({
+          profileSha256: input.verifierProfileSha256,
+          manifestSha256: input.manifestSha256,
+          files,
+          wallDeadlineMs: REMOTE_WORKER_SETTLEMENT_BOUNDS.maxVerifierWallMs,
+        }),
       );
+      capturedOutputBytes = result.capturedOutputBytes;
       nextState = result.outcome;
       summary = result.summary;
       // Rehash AFTER execution: the verifier may not have mutated the immutable bytes.
       await this.loadImmutableFiles(input);
-    } catch (error) {
+    } catch {
       // A crashed or timed-out running verifier becomes indeterminate, never passed.
       nextState = "indeterminate";
-      summary = error instanceof Error ? error.message.slice(0, 256) : "verifier crashed";
+      summary = "verifier_indeterminate";
     }
 
     const advanced = await this.repository.advanceGatewayVerification({
@@ -193,7 +193,7 @@ export class RemoteWorkerVerificationService {
     attemptState: RemoteWorkerVerificationAttemptState,
     input: RunGatewayVerificationInput,
     capturedOutputBytes: number,
-    summary: string,
+    summary: unknown,
   ): RemoteWorkerVerificationEvidence {
     return {
       schemaVersion: REMOTE_WORKER_VERIFICATION_EVIDENCE_SCHEMA_VERSION,
@@ -202,8 +202,73 @@ export class RemoteWorkerVerificationService {
       verifierProfileSha256: input.verifierProfileSha256,
       preExecutionManifestSha256: input.manifestSha256,
       postExecutionManifestSha256: input.manifestSha256,
-      summary: summary.slice(0, REMOTE_WORKER_SETTLEMENT_BOUNDS.maxVerificationSummaryBytes),
+      summary: secretFreeVerificationSummary(summary, attemptState),
       capturedOutputBytes,
     };
   }
+}
+
+function normalizeVerifierResult(value: unknown): {
+  outcome: "passed" | "failed" | "blocked";
+  summary: string;
+  capturedOutputBytes: number;
+} {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("Remote worker verifier result is invalid.");
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError("Remote worker verifier result is invalid.");
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const keys = Reflect.ownKeys(descriptors);
+  const expected = new Set(["outcome", "summary", "capturedOutputBytes"]);
+  if (
+    keys.length !== expected.size ||
+    keys.some((key) => typeof key !== "string" || !expected.has(key)) ||
+    keys.some((key) => {
+      const descriptor = typeof key === "string" ? descriptors[key] : undefined;
+      return descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable;
+    })
+  ) {
+    throw new TypeError("Remote worker verifier result is invalid.");
+  }
+  const outcome = descriptors.outcome?.value;
+  const summary = descriptors.summary?.value;
+  const capturedOutputBytes = descriptors.capturedOutputBytes?.value;
+  if (
+    (outcome !== "passed" && outcome !== "failed" && outcome !== "blocked") ||
+    typeof summary !== "string" ||
+    !Number.isSafeInteger(capturedOutputBytes) ||
+    Number(capturedOutputBytes) < 0 ||
+    Number(capturedOutputBytes) > REMOTE_WORKER_SETTLEMENT_BOUNDS.maxVerifierCapturedOutputBytes
+  ) {
+    throw new TypeError("Remote worker verifier result is invalid.");
+  }
+  return {
+    outcome,
+    summary: secretFreeVerificationSummary(summary, outcome),
+    capturedOutputBytes: Number(capturedOutputBytes),
+  };
+}
+
+function secretFreeVerificationSummary(value: unknown, fallback: string): string {
+  const source = typeof value === "string" ? value : fallback;
+  const redacted = redactSecretText(source, { redactEnvAssignmentsAsWhole: true }).value;
+  const normalized = Array.from(redacted.normalize("NFKC"), (character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint <= 0x1f || codePoint === 0x7f ? " " : character;
+  })
+    .join("")
+    .trim();
+  const safe = normalized.length > 0 ? normalized : fallback;
+  let output = "";
+  let bytes = 0;
+  for (const character of safe) {
+    const characterBytes = Buffer.byteLength(character, "utf8");
+    if (bytes + characterBytes > REMOTE_WORKER_SETTLEMENT_BOUNDS.maxVerificationSummaryBytes) break;
+    output += character;
+    bytes += characterBytes;
+  }
+  return output || fallback;
 }
