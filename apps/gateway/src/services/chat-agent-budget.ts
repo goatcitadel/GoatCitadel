@@ -74,6 +74,8 @@ export interface ChatExecutionBudget {
     | "off"
     | "live_data"
     | "deep"
+    | "research_list"
+    // Read compatibility for traces emitted before the one-Chat migration.
     | "cowork_research_list"
     | "research_artifact"
     | "default";
@@ -130,7 +132,7 @@ export function defaultThinkingTokens(level: ChatThinkingLevel): number | undefi
 
 export function resolveChatExecutionBudget(input: ResolveChatExecutionBudgetInput): ChatExecutionBudget {
   const defaultMaxTokens = defaultThinkingTokens(input.thinkingLevel);
-  const loopLimitBehavior = resolveLoopLimitBehavior(input.mode);
+  const loopLimitBehavior = resolveLoopLimitBehavior(input);
   let budget: ChatExecutionBudget;
   if (input.executionProfile === "quick_web") {
     budget = {
@@ -145,10 +147,10 @@ export function resolveChatExecutionBudget(input: ResolveChatExecutionBudgetInpu
       minSynthesisReserveMs: 5000,
       expensiveToolMinimumRemainingMs: 8000,
     };
-  } else if (shouldUseCoworkResearchListBudget(input)) {
+  } else if (shouldUseResearchListBudget(input)) {
     budget = applyPromptLabExplicitToolBudget(
       {
-        profile: "cowork_research_list",
+        profile: "research_list",
         turnBudgetMs: CHAT_TURN_BUDGET_MS_BY_MODE.coworkResearchList,
         completionTimeoutMs: CHAT_COMPLETION_TIMEOUT_MS_BY_MODE.coworkResearchList,
         maxToolLoops: COWORK_RESEARCH_LIST_MAX_TOOL_LOOPS,
@@ -264,7 +266,7 @@ export function resolveChatExecutionBudget(input: ResolveChatExecutionBudgetInpu
     promptLabHarness: input.promptLabHarness,
     promptLabExplicitTools: input.promptLabExplicitTools,
   });
-  budget = applyCoworkResearchListExtendedBudget(budget, input);
+  budget = applyResearchListExtendedBudget(budget, input);
   if (input.executionProfile === "quick_web") {
     return budget;
   }
@@ -280,11 +282,11 @@ export function resolveChatExecutionBudget(input: ResolveChatExecutionBudgetInpu
   };
 }
 
-function applyCoworkResearchListExtendedBudget(
+function applyResearchListExtendedBudget(
   budget: ChatExecutionBudget,
   input: ResolveChatExecutionBudgetInput,
 ): ChatExecutionBudget {
-  if (!shouldUseCoworkResearchListBudget(input) || input.promptLabHarness) {
+  if (!shouldUseResearchListBudget(input) || input.promptLabHarness) {
     return budget;
   }
   return {
@@ -293,12 +295,21 @@ function applyCoworkResearchListExtendedBudget(
   };
 }
 
-function resolveLoopLimitBehavior(mode: ChatMode): ChatLoopLimitBehavior {
-  return mode === "cowork" ? "checkpoint_continue" : "terminal";
+function resolveLoopLimitBehavior(input: ResolveChatExecutionBudgetInput): ChatLoopLimitBehavior {
+  // Cowork remains a compatibility input, but current product work arrives on
+  // the one Chat surface. Continue bounded tool windows for intents that
+  // genuinely require multi-step execution instead of keying the behavior only
+  // to the retired surface label.
+  return input.mode === "cowork" ||
+    Boolean(input.researchListIntent) ||
+    Boolean(input.artifactIntent) ||
+    Boolean(input.promptLabHarness)
+    ? "checkpoint_continue"
+    : "terminal";
 }
 
-function shouldUseCoworkResearchListBudget(input: ResolveChatExecutionBudgetInput): boolean {
-  return input.mode === "cowork" && input.webMode === "auto" && Boolean(input.researchListIntent);
+function shouldUseResearchListBudget(input: ResolveChatExecutionBudgetInput): boolean {
+  return input.webMode === "auto" && Boolean(input.researchListIntent);
 }
 
 export function applyPromptLabHarnessBudget(

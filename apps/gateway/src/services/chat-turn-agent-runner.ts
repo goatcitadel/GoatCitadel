@@ -2227,10 +2227,10 @@ export class ChatTurnAgentRunner {
     let effectiveTurnBudgetMs = executionBudget.turnBudgetMs;
     let effectiveCompletionTimeoutMs = executionBudget.completionTimeoutMs;
     let turnBudgetDeadline = createTurnBudgetDeadline(effectiveTurnBudgetMs);
-    const coworkCheckpointContinuation = executionBudget.loopLimitBehavior === "checkpoint_continue";
-    let coworkContinuationWindowIndex = 0;
-    let coworkNoProgressWindowCount = 0;
-    let coworkContinuationProgressSnapshot = captureCoworkContinuationProgress({
+    const checkpointContinuation = executionBudget.loopLimitBehavior === "checkpoint_continue";
+    let continuationWindowIndex = 0;
+    let noProgressWindowCount = 0;
+    let continuationProgressSnapshot = captureCoworkContinuationProgress({
       citations,
       localBusinessResearchExpected,
       promptLabContract,
@@ -4380,10 +4380,10 @@ export class ChatTurnAgentRunner {
             }
             const toolRunBudgetCost = toolRunBudgetCostForToolCall(toolCall.toolName, toolCall.args);
             if (toolRunCount + toolRunBudgetCost > executionBudget.maxToolRunsPerTurn) {
-              if (coworkCheckpointContinuation) {
+              if (checkpointContinuation) {
                 coworkToolRunBudgetCheckpoint = true;
                 flushSkippedToolCallResults(
-                  `Cowork checkpoint window reached ${executionBudget.maxToolRunsPerTurn} tool calls; continue from gathered evidence.`,
+                  `Tool checkpoint window reached ${executionBudget.maxToolRunsPerTurn} tool calls; continue from gathered evidence.`,
                 );
                 break;
               }
@@ -4730,27 +4730,24 @@ export class ChatTurnAgentRunner {
             break;
           }
 
-          if (
-            coworkCheckpointContinuation &&
-            (coworkToolRunBudgetCheckpoint || loop + 1 >= executionBudget.maxToolLoops)
-          ) {
+          if (checkpointContinuation && (coworkToolRunBudgetCheckpoint || loop + 1 >= executionBudget.maxToolLoops)) {
             const nextSnapshot = captureCoworkContinuationProgress({
               citations,
               localBusinessResearchExpected,
               promptLabContract,
               toolRuns,
             });
-            const windowHadProgress = hasCoworkContinuationProgress(coworkContinuationProgressSnapshot, nextSnapshot);
-            coworkNoProgressWindowCount = windowHadProgress ? 0 : coworkNoProgressWindowCount + 1;
+            const windowHadProgress = hasCoworkContinuationProgress(continuationProgressSnapshot, nextSnapshot);
+            noProgressWindowCount = windowHadProgress ? 0 : noProgressWindowCount + 1;
             const checkpointLimitLabel = coworkToolRunBudgetCheckpoint
               ? `${executionBudget.maxToolRunsPerTurn} tool-call`
               : `${executionBudget.maxToolLoops} loop`;
             const checkpointReason = buildCoworkLoopCheckpointReason({
               checkpointLimitLabel,
               maxToolLoops: executionBudget.maxToolLoops,
-              noProgressWindowCount: coworkNoProgressWindowCount,
+              noProgressWindowCount,
               windowHadProgress,
-              windowIndex: coworkContinuationWindowIndex + 1,
+              windowIndex: continuationWindowIndex + 1,
             });
             routingState = {
               ...routingState,
@@ -4773,10 +4770,10 @@ export class ChatTurnAgentRunner {
                 citations: [...citations],
               },
             };
-            if (coworkNoProgressWindowCount >= 2) {
+            if (noProgressWindowCount >= 2) {
               const repeatedLoopReason = buildCoworkRepeatedLoopDiagnostic(
                 checkpointLimitLabel,
-                coworkNoProgressWindowCount,
+                noProgressWindowCount,
                 nextSnapshot,
               );
               routingState = {
@@ -4797,13 +4794,13 @@ export class ChatTurnAgentRunner {
               content: buildCoworkLoopContinuationInstruction({
                 checkpointLimitLabel,
                 maxToolLoops: executionBudget.maxToolLoops,
-                noProgressWindowCount: coworkNoProgressWindowCount,
+                noProgressWindowCount,
                 windowHadProgress,
-                windowIndex: coworkContinuationWindowIndex + 1,
+                windowIndex: continuationWindowIndex + 1,
               }),
             } as ChatCompletionMessage);
-            coworkContinuationWindowIndex += 1;
-            coworkContinuationProgressSnapshot = nextSnapshot;
+            continuationWindowIndex += 1;
+            continuationProgressSnapshot = nextSnapshot;
             toolRunCount = 0;
             loop = -1;
             continue;
@@ -9861,7 +9858,7 @@ function buildCoworkLoopCheckpointReason(input: {
     ? "progress observed"
     : `no new progress (${input.noProgressWindowCount} consecutive window)`;
   const checkpointLimitLabel = input.checkpointLimitLabel ?? `${input.maxToolLoops} loop`;
-  return `Cowork loop checkpoint ${input.windowIndex}: exhausted ${checkpointLimitLabel} window; ${progressLabel}; continuing from gathered evidence.`;
+  return `Tool loop checkpoint ${input.windowIndex}: exhausted ${checkpointLimitLabel} window; ${progressLabel}; continuing from gathered evidence.`;
 }
 
 function buildCoworkLoopContinuationInstruction(input: {
@@ -9876,7 +9873,7 @@ function buildCoworkLoopContinuationInstruction(input: {
     : `The last window produced no new tool results, source URLs, child completions, required-field progress, or structured local-business research progress (${input.noProgressWindowCount} consecutive no-progress window). Change approach once or synthesize the partial truth.`;
   const checkpointLimitLabel = input.checkpointLimitLabel ?? `${input.maxToolLoops}-loop`;
   return [
-    `Cowork continuation checkpoint ${input.windowIndex}: the ${checkpointLimitLabel} checkpoint window is exhausted.`,
+    `Tool continuation checkpoint ${input.windowIndex}: the ${checkpointLimitLabel} checkpoint window is exhausted.`,
     progressGuidance,
     "Do not restart the task or repeat identical tool calls. Use narrower arguments when another tool call is needed.",
     "Prefer a clear checkpoint or final synthesis over open-ended tool work.",
@@ -9891,7 +9888,7 @@ function buildCoworkRepeatedLoopDiagnostic(
   const researchDiagnostics = buildCoworkResearchDiagnosticCodes(snapshot);
   const diagnosticsSuffix =
     researchDiagnostics.length > 0 ? ` Research diagnostics: ${researchDiagnostics.join(", ")}.` : "";
-  return `repeated_tool_loop: Cowork continuation stopped after ${noProgressWindowCount} consecutive ${checkpointLimitLabel} checkpoint windows without new tool results, source URLs, child completions, required-field progress, or structured local-business research progress.${diagnosticsSuffix}`;
+  return `repeated_tool_loop: Tool continuation stopped after ${noProgressWindowCount} consecutive ${checkpointLimitLabel} checkpoint windows without new tool results, source URLs, child completions, required-field progress, or structured local-business research progress.${diagnosticsSuffix}`;
 }
 
 function buildCoworkResearchDiagnosticCodes(snapshot: CoworkContinuationProgressSnapshot): string[] {
