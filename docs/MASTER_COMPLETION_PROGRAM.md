@@ -121,6 +121,15 @@ validation and 9/9 Docker-secret documentation tests; `git diff --check` passed.
   inbox without promoting learned memory or adding a foreground model call.
 - The final governed-remediation storage checkpoint is paired at SQLite 192 and
   PostgreSQL 135 with migration-lineage and schema-parity coverage.
+- PostgreSQL 140 now installs one normalized final schema authority instead of
+  treating a raw migration-text manifest as catalog truth. Destructive
+  governed-remediation, remote-mesh, and mobile-push bootstrap bridges acquire
+  replacement locks before reclassification, reject unmodeled owned objects
+  and physical/catalog drift, preserve nonempty authority, and converge fresh
+  and historical lineages to the same exact head. Live PostgreSQL 16 proof
+  covers corrupt-object preservation, the writer-versus-replacement race, and
+  the v140 finite-lineage repair; paired migration parity remains SQLite 196 /
+  PostgreSQL 140.
 
 ### Closure evidence
 
@@ -253,8 +262,16 @@ Owner contract: `OPENCLAW_HERMES_PARITY_PROGRAM.md`, `HX-501`.
   M2 credential, M3 mesh admission, workspace, capability-profile, and parent
   run authorities. The worker supplies its lease secret, Gateway hashes it
   before the atomic claim, and response-loss replay returns secret-free
-  canonical state. Route codes 8 through 10 and their PoP-v2 descriptors are
-  reserved, but no native handler or worker poller is registered.
+  canonical state.
+- Route codes 8 through 10 now have a production-dark protected dispatch wire
+  for offer polling, atomic claim, and immutable workload read. It requires the
+  exact protected PoP-v2 descriptor, verifies current M2 credential/mTLS
+  authority before proof, consumes the durable credential nonce before any
+  assignment business read, and delegates the final M2/M3/task/durable fence
+  to the storage transaction. The worker-proposed 32-byte lease secret is
+  hashed at the Gateway boundary and cannot be echoed in the response. No
+  native mux, runtime factory, startup composition, or worker poller is
+  registered.
 - The production-dark assignment RPC for synchronization, lease renewal,
   ordered event append, cancellation reads, and settlement now requires the
   contract-owned protected PoP-v2 proof. It binds the canonical M2 current
@@ -268,7 +285,7 @@ Owner contract: `OPENCLAW_HERMES_PARITY_PROGRAM.md`, `HX-501`.
   prove credential rotation, protected-context drift, and mesh join-authority
   revoke reject stale reads and writes. Live PostgreSQL contention proof is
   still required before composition.
-- Compose the dispatch poll/claim/workload-read operations only after an
+- Compose the existing dispatch poll/claim/workload-read wire only after an
   authenticated worker runtime can retain its credential and lease secret,
   obtain the exact protected signing pin, and reconnect without replaying a
   one-time secret.
