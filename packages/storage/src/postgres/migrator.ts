@@ -55,6 +55,14 @@ import {
   requiresPostgresHistoryRepairLedgerBridge,
 } from "./migration-ledger-compatibility.js";
 import { POSTGRES_MIGRATIONS, type PostgresMigration, type PostgresMigrationBatchStatement } from "./migrations.js";
+import {
+  assertPostgresSchemaShapeIssues,
+  buildPostgresSchemaShapeManifest,
+  buildPostgresSchemaShapeRelationLockSql,
+  buildPostgresSchemaShapeValidationSql,
+  POSTGRES_SCHEMA_SHAPE_VALIDATION_SQL,
+  type PostgresSchemaShapeIssueRow,
+} from "./schema-shape.js";
 import type { PostgresPinnedSessionControls } from "./sync.js";
 
 const POSTGRES_MIGRATION_LOCK_RETRY_MS = 100;
@@ -93,6 +101,9 @@ export async function runPostgresMigrations(
         applied: assertValidAppliedMigrationLedger(migrations, normalizedCompatibility.appliedRows, "Postgres"),
       };
       await client.assertMigrationSchemaIdentity(tx, migrationSchema);
+      if (result.applied.size === migrations.length) {
+        await assertCanonicalPostgresSchemaShape(tx, migrationSchema, migrations);
+      }
       return result;
     }, pinnedClient);
     const newlyApplied: number[] = [];
@@ -105,6 +116,9 @@ export async function runPostgresMigrations(
         await runBatchedMigration(client, pinnedClient, migrationSchema, migration, migration.batchedStatements);
         await client.transaction(async (tx) => {
           await client.configureMigrationTransaction(tx, migrationSchema, false);
+          if (applied.size + newlyApplied.length + 1 === migrations.length) {
+            await assertCanonicalPostgresSchemaShape(tx, migrationSchema, migrations);
+          }
           await markApplied(tx, client, migrationSchema, migration.version, migration.name);
           if (compatibility.requiresHistoryRepairValidation && isPostgresHistoryRepairMigration(migration)) {
             await assertStrictPostgresLedger(client, tx, migrationSchema, migrations);
@@ -123,6 +137,9 @@ export async function runPostgresMigrations(
           client.getMigrationsTableName(),
           migration,
         );
+        if (applied.size + newlyApplied.length + 1 === migrations.length) {
+          await assertCanonicalPostgresSchemaShape(tx, migrationSchema, migrations);
+        }
         await markApplied(tx, client, migrationSchema, migration.version, migration.name);
         if (compatibility.requiresHistoryRepairValidation && isPostgresHistoryRepairMigration(migration)) {
           await assertStrictPostgresLedger(client, tx, migrationSchema, migrations);
@@ -140,6 +157,22 @@ export async function runPostgresMigrations(
       latestVersion: migrations[migrations.length - 1]?.version ?? 0,
     };
   });
+}
+
+async function assertCanonicalPostgresSchemaShape(
+  tx: PoolClient,
+  migrationSchema: PostgresMigrationSchemaIdentity,
+  migrations: readonly PostgresMigration[],
+): Promise<void> {
+  const manifest = buildPostgresSchemaShapeManifest(migrations);
+  if (manifest.tables.length === 0) return;
+  const relationLockSql = buildPostgresSchemaShapeRelationLockSql(migrationSchema, manifest);
+  if (relationLockSql) await tx.query(relationLockSql);
+  const validation = await tx.query<PostgresSchemaShapeIssueRow>(
+    buildPostgresSchemaShapeValidationSql("$1", "$2", "$3"),
+    [JSON.stringify(manifest.tables), JSON.stringify(manifest.indexes), migrationSchema.oid],
+  );
+  assertPostgresSchemaShapeIssues(validation.rows);
 }
 
 async function reconcileLegacyCompoundV124Ledger(
@@ -526,9 +559,13 @@ function applyPostgresMigrationsSyncLocked(
       applied: assertValidAppliedMigrationLedger(migrations, normalizedCompatibility.appliedRows, "Postgres"),
     };
     assertPostgresMigrationTransactionSchemaIdentitySync(db, migrationSchema);
+    if (result.applied.size === migrations.length) {
+      assertCanonicalPostgresSchemaShapeSync(db, migrationSchema, migrations);
+    }
     return result;
   });
 
+  let newlyAppliedCount = 0;
   for (const migration of migrations) {
     if (applied.has(migration.version)) {
       continue;
@@ -537,12 +574,16 @@ function applyPostgresMigrationsSyncLocked(
       runBatchedMigrationSync(db, migrationSchema, migrationsTable, migration, migration.batchedStatements);
       db.transaction("immediate", () => {
         configurePostgresMigrationTransactionSync(db, migrationSchema, migrationsTable, false);
+        if (applied.size + newlyAppliedCount + 1 === migrations.length) {
+          assertCanonicalPostgresSchemaShapeSync(db, migrationSchema, migrations);
+        }
         markMigrationAppliedSync(db, migrationLedger, migration);
         if (compatibility.requiresHistoryRepairValidation && isPostgresHistoryRepairMigration(migration)) {
           assertStrictPostgresLedgerSync(db, migrationLedger, migrations);
         }
         assertPostgresMigrationTransactionSchemaIdentitySync(db, migrationSchema);
       });
+      newlyAppliedCount += 1;
       continue;
     }
     db.transaction("immediate", () => {
@@ -550,6 +591,9 @@ function applyPostgresMigrationsSyncLocked(
         db.dialect === "postgres" && requiresPostgresHistoryRepairLedgerBridge(migrationsTable, migration);
       configurePostgresMigrationTransactionSync(db, migrationSchema, migrationsTable, bridgeRequired);
       const bridgeActive = executePostgresAtomicMigrationSync(db, migrationSchema, migrationsTable, migration);
+      if (applied.size + newlyAppliedCount + 1 === migrations.length) {
+        assertCanonicalPostgresSchemaShapeSync(db, migrationSchema, migrations);
+      }
       markMigrationAppliedSync(db, migrationLedger, migration);
       if (compatibility.requiresHistoryRepairValidation && isPostgresHistoryRepairMigration(migration)) {
         assertStrictPostgresLedgerSync(db, migrationLedger, migrations);
@@ -559,7 +603,26 @@ function applyPostgresMigrationsSyncLocked(
       }
       assertPostgresMigrationTransactionSchemaIdentitySync(db, migrationSchema);
     });
+    newlyAppliedCount += 1;
   }
+}
+
+function assertCanonicalPostgresSchemaShapeSync(
+  db: DatabaseClient,
+  migrationSchema: PostgresMigrationSchemaIdentity | undefined,
+  migrations: readonly PostgresMigration[],
+): void {
+  if (db.dialect !== "postgres" || !migrationSchema) return;
+  const manifest = buildPostgresSchemaShapeManifest(migrations);
+  if (manifest.tables.length === 0) return;
+  const relationLockSql = buildPostgresSchemaShapeRelationLockSql(migrationSchema, manifest);
+  if (relationLockSql) db.exec(relationLockSql);
+  const issues = db.prepare(POSTGRES_SCHEMA_SHAPE_VALIDATION_SQL).all<PostgresSchemaShapeIssueRow>({
+    tablesJson: JSON.stringify(manifest.tables),
+    indexesJson: JSON.stringify(manifest.indexes),
+    schemaOid: migrationSchema.oid,
+  });
+  assertPostgresSchemaShapeIssues(issues);
 }
 
 function reconcileLegacyCompoundV124LedgerSync(

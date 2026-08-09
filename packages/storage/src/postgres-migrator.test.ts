@@ -33,6 +33,12 @@ import {
 } from "./postgres/migration-ledger-compatibility.js";
 import { applyPostgresMigrationsSync, runPostgresMigrations } from "./postgres/migrator.js";
 import { POSTGRES_MIGRATIONS, type PostgresMigration } from "./postgres/migrations.js";
+import {
+  assertPostgresSchemaShapeIssues,
+  buildPostgresSchemaShapeManifest,
+  buildPostgresSchemaShapeRelationLockSql,
+  POSTGRES_SCHEMA_SHAPE_VALIDATION_SQL,
+} from "./postgres/schema-shape.js";
 
 interface QueryCall {
   sql: string;
@@ -297,6 +303,13 @@ class PinnedSessionDatabase implements DatabaseClient {
   }
 
   public prepare(sql: string): DbStatement {
+    if (sql.includes("goatcitadel_postgres_schema_shape_validation")) {
+      return {
+        run: () => ({ changes: 0 }),
+        get: () => undefined,
+        all: () => [],
+      };
+    }
     if (sql.includes("advisory_xact_lock")) {
       return createStaticStatement(() => ({ transaction_probe_acquired: this.migrationTransactionProbeAcquired }));
     }
@@ -616,6 +629,85 @@ describe("Postgres migration ledger compatibility", () => {
     assert.throws(
       () => parsePostgresMigrationActiveTransactionIds([{ active_xid: "not-an-xid" }]),
       /invalid transaction id/,
+    );
+  });
+
+  it("derives the canonical table, column, constraint, index, and predicate manifest from migration SQL", () => {
+    const manifest = buildPostgresSchemaShapeManifest([
+      {
+        version: 1,
+        name: "shape_manifest",
+        sql: `
+          CREATE TABLE IF NOT EXISTS parent_shape (
+            parent_id INTEGER PRIMARY KEY,
+            state TEXT NOT NULL DEFAULT 'active'
+          );
+          CREATE TABLE IF NOT EXISTS child_shape (
+            child_id BIGSERIAL PRIMARY KEY,
+            parent_id INTEGER NOT NULL,
+            FOREIGN KEY (parent_id) REFERENCES parent_shape(parent_id) ON DELETE CASCADE
+          );
+          ALTER TABLE child_shape
+            ADD COLUMN IF NOT EXISTS payload_doc JSONB GENERATED ALWAYS AS ('{}'::jsonb) STORED;
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_child_shape_active
+            ON child_shape(parent_id DESC)
+            WHERE payload_doc IS NOT NULL AND parent_id > 0;
+        `,
+      },
+    ]);
+
+    assert.deepEqual(
+      manifest.tables.map((table) => table.name),
+      ["child_shape", "parent_shape"],
+    );
+    const child = manifest.tables[0]!;
+    assert.deepEqual(child.columns, [
+      { name: "child_id", type: "bigint", notNull: true, hasDefault: true, generated: false },
+      { name: "parent_id", type: "integer", notNull: true, hasDefault: false, generated: false },
+      { name: "payload_doc", type: "jsonb", notNull: false, hasDefault: true, generated: true },
+    ]);
+    assert.equal(
+      child.constraints.some((constraint) => constraint.type === "p"),
+      true,
+    );
+    assert.equal(
+      child.constraints.some(
+        (constraint) =>
+          constraint.type === "f" && constraint.referencedTable === "parent_shape" && constraint.onDelete === "c",
+      ),
+      true,
+    );
+    assert.deepEqual(manifest.indexes, [
+      {
+        name: "idx_child_shape_active",
+        tableName: "child_shape",
+        unique: true,
+        method: "btree",
+        keys: ["parent_id desc"],
+        predicate: "payload_doc IS NOT NULL AND parent_id > 0",
+        predicateTerms: ["0", "parent_id", "payload_doc"],
+      },
+    ]);
+  });
+
+  it("covers every canonical IF NOT EXISTS table and index and fails closed on catalog issues", () => {
+    const manifest = buildPostgresSchemaShapeManifest(POSTGRES_MIGRATIONS);
+    assert.equal(manifest.tables.length, 295);
+    assert.equal(manifest.indexes.length, 674);
+    assert.equal(
+      manifest.tables.every((table) => table.columns.length > 0),
+      true,
+    );
+    assert.match(POSTGRES_SCHEMA_SHAPE_VALIDATION_SQL, /relation\.oid IS NULL/);
+    assert.match(POSTGRES_SCHEMA_SHAPE_VALIDATION_SQL, /relation\.relowner/);
+    assert.match(POSTGRES_SCHEMA_SHAPE_VALIDATION_SQL, /pg_get_expr\(index_row\.indpred/);
+    assert.match(
+      buildPostgresSchemaShapeRelationLockSql({ name: "quoted.schema", oid: "42" }, manifest),
+      /^LOCK TABLE "quoted\.schema"\./,
+    );
+    assert.throws(
+      () => assertPostgresSchemaShapeIssues([{ issue: "column sessions.account has a non-canonical shape" }]),
+      /canonical schema-shape validation failed.*sessions\.account/,
     );
   });
 

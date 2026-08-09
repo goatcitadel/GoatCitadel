@@ -18,6 +18,11 @@ import {
   type SqliteMigrationGroup,
 } from "./sqlite/migration-registry.js";
 import {
+  assertSqliteSchemaShape,
+  readSqliteSchemaShape,
+  type SqliteSchemaShapeManifest,
+} from "./sqlite/schema-shape.js";
+import {
   createPromptPackSqliteSchemaBuilders,
   type SqlitePromptPackSchemaBuilders,
 } from "./sqlite/prompt-pack-schema.js";
@@ -447,8 +452,35 @@ function cleanupSchemaTemplate(): void {
   }
 }
 
+let cachedCanonicalSqliteSchemaShape: SqliteSchemaShapeManifest | undefined;
+
 function migrate(db: DatabaseSync): void {
-  runSqliteMigrations(db, SCHEMA_MIGRATIONS);
+  const expected = getCanonicalSqliteSchemaShape();
+  const lastVersion = SCHEMA_MIGRATIONS[SCHEMA_MIGRATIONS.length - 1]?.version;
+  const validate = (candidate: DatabaseSync): void => {
+    assertSqliteSchemaShape(readSqliteSchemaShape(candidate), expected);
+  };
+  runSqliteMigrations(db, SCHEMA_MIGRATIONS, {
+    validateAfterMigration(candidate, migration) {
+      if (migration.version === lastVersion) validate(candidate);
+    },
+    validateFinal: validate,
+  });
+}
+
+function getCanonicalSqliteSchemaShape(): SqliteSchemaShapeManifest {
+  if (cachedCanonicalSqliteSchemaShape) return cachedCanonicalSqliteSchemaShape;
+  const canonical = new DatabaseSync(":memory:");
+  try {
+    // The reference is built independently from the target database. This is
+    // what prevents a pre-existing IF NOT EXISTS object from blessing its own
+    // corrupt shape on first startup.
+    runSqliteMigrations(canonical, SCHEMA_MIGRATIONS);
+    cachedCanonicalSqliteSchemaShape = readSqliteSchemaShape(canonical);
+    return cachedCanonicalSqliteSchemaShape;
+  } finally {
+    canonical.close();
+  }
 }
 
 export interface SqliteSchemaColumnBlueprint {
