@@ -29,14 +29,21 @@ current reproduction or an explicit product decision.
 | Backfill, disabled-skill protection, candidate dedupe/provenance tests | `complete` |
 | Candidate promotion, revoke, and rollback APIs | `complete` |
 | Candidate detail and lifecycle/trust filtering | `complete` |
+| Verified source/wrapper artifact inspection | `complete` |
+| Run comparison across catalog, source, wrapper, policy, permission, override, and sandbox evidence | `complete` |
 | Automatic proposal filing or validation beyond current lifecycle | `not assumed`; requires a fresh design/reproduction |
 
 ## Code Mode Follow-On
 
-1. Add richer inspect views for submitted code and wrapper manifests.
-2. Add run comparison tooling across snapshot or policy versions.
-3. Explore safe continuation semantics only after explicit runtime design work.
-4. Evaluate stronger production isolation if Code Mode scope expands beyond trusted code.
+The Gateway and Chat workbench already expose hash-verified previews for source,
+wrapper manifests, result envelopes, and supported adapter artifacts. They also
+compare catalog snapshots, source/input/wrapper/policy hashes, permission and
+operator-override identities, and sandbox posture across runs. Treat both rows
+as complete; reopen them only for a current reproduction or a specifically
+approved UX expansion.
+
+1. Explore safe continuation semantics only after explicit runtime design work.
+2. Evaluate stronger production isolation if Code Mode scope expands beyond trusted code.
 
 ## Registry and Planner Hardening
 

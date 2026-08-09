@@ -248,8 +248,6 @@ public claims remain “repair foundations,” not generic self-repair parity.
 
 ### Current work
 
-- Code Mode richer source/wrapper inspection and run comparison across snapshot
-  or policy versions.
 - Inspectable-versus-callable drift metrics and catalog/artifact audit exports.
 - Safe continuation semantics only after explicit runtime design.
 - Stronger production isolation evaluation without claiming hostile-code
@@ -267,8 +265,11 @@ public claims remain “repair foundations,” not generic self-repair parity.
   release blockers.
 
 Capability promotion, revoke, rollback, candidate detail, and lifecycle
-filtering already exist and are not M6 implementation tasks. Google Meet also
-has a Gateway-owned voice/session integration and is not a missing adapter.
+filtering already exist and are not M6 implementation tasks. Verified Code Mode
+source/wrapper artifact inspection and run comparison across catalog, source,
+wrapper, policy, permission, override, and sandbox evidence are also complete
+in the Gateway and Chat workbench. Google Meet has a Gateway-owned voice/session
+integration and is not a missing adapter.
 
 Owner backlogs: `CAPABILITY_SYSTEM_BACKLOG.md`,
 `PROVIDER_CHANNEL_EXPANSION_BACKLOG.md`, and `citadel_update/STATUS.md`.
