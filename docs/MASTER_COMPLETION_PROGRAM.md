@@ -151,8 +151,10 @@ real-PostgreSQL proof required by the closing campaign.
 
 - The hardened Windows provisioner, authenticated local service transport,
   Ed25519 custody, protected filesystem/journal recovery, deterministic x64 and
-  ARM64 packaging, and production-dark artifact-signing owner are restored on
-  the current program branch.
+  ARM64 packaging are restored on the current program branch. The protected
+  service can now sign a fixed, secret-free 288-byte admission-evidence
+  envelope without exporting its private key; x64 execution, ASan, and paired
+  deterministic x64/ARM64 builds pass.
 - Proof-of-possession verification can now prepare a verified request without
   burning its replay nonce; durable nonce consumption and generation-1
   credential admission commit atomically, including rollback at injected
@@ -160,18 +162,25 @@ real-PostgreSQL proof required by the closing campaign.
 - The native TLS listener now has a bounded authenticated-handler seam with
   strict POST/JSON framing, one request per connection, body/handler deadlines,
   bounded sanitized responses, buffer wiping, and explicit
-  `listening_dark`/`listening_live` runtime truth. It remains dark until a
-  trustworthy admission handler is composed.
-
-Operator bootstrap/control routes, live admission exchange composition, the
-networked worker host, and the real two-machine proof remain open.
+  `listening_dark`/`listening_live` runtime truth.
+- Operator bootstrap/control routes and the admission exchange are composed
+  over the canonical repositories. Real two-connection replay uses distinct
+  TLS exporters/nonces and returns the same canonical generation without
+  replaying the credential secret.
+- Production ingress remains truthfully `listening_dark`: no Gateway-local
+  copied-tree scan is accepted as remote-machine evidence, and the native
+  verifier seam fails closed until the signed envelope and pinned signer are
+  durably bound.
 
 ### Current work
 
-- Add live bootstrap/admission and operator mutation APIs over the shipped
-  admission, credential, nonce, quarantine, revoke, and N+1 owners.
-- Compose authenticated protocol handling through the native listener rather
-  than leaving the owners production-dark.
+- Persist and transactionally pin the signed envelope, worker generation,
+  operation/nonce/request hashes, authenticated operator identity, protected
+  keyset receipt, signer SPKI, signature, installed-tree/download receipts, and
+  admission lifecycle. Enforce crash-durable exact replay and key drift before
+  enabling ingress.
+- Compose the protected Windows signer client into the remote worker exchange
+  without weakening its authenticated named-pipe/SCM custody boundary.
 - Prove closed ingress, rotation/revocation, exact manifest/attestation binding,
   and operator-visible diagnostics.
 - Execute the real two-machine TLS 1.3/mTLS/exporter-bound PoP row.
