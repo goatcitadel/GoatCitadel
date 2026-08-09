@@ -233,6 +233,22 @@ export interface RemoteWorkerAssignmentOffer {
   readonly workload: RemoteWorkerAssignmentWorkloadIdentity;
 }
 
+export type RemoteWorkerAssignmentOfferResolutionPurpose =
+  | Readonly<{ readonly kind: "poll" }>
+  | Readonly<{ readonly kind: "claim" }>
+  | Readonly<{
+      readonly kind: "workload";
+      readonly expectedAssignmentGeneration: number;
+      readonly expectedLeaseRevision: number;
+    }>;
+
+export interface ResolveRemoteWorkerAssignmentOfferInput {
+  readonly authority: RemoteWorkerAssignmentClaimAuthority;
+  readonly meshAdmission: RemoteWorkerMeshNodeAuthorityFence;
+  readonly assignmentId: string;
+  readonly purpose: RemoteWorkerAssignmentOfferResolutionPurpose;
+}
+
 export interface ListRemoteWorkerAssignmentOffersInput {
   readonly authority: RemoteWorkerAssignmentClaimAuthority;
   readonly limit?: number;
@@ -636,6 +652,83 @@ export class RemoteWorkerAssignmentRepository {
         return undefined;
       }
       const workload = this.buildTaskBoundChatWorkload(assignment);
+      return Object.freeze({ assignment, workload: workloadIdentity(workload) });
+    });
+  }
+
+  /**
+   * Resolve one advisory offer under the complete M2 credential/protected and
+   * workspace-specific M3 mesh fence. Polls require an unclaimed assignment;
+   * claim replay may observe only this exact worker generation; workload reads
+   * additionally bind the current generation and lease revision. The complete
+   * authority is re-read after the canonical dispatch lock plan and before the
+   * offer identity is returned.
+   */
+  public resolveTaskBoundChatOffer(
+    input: ResolveRemoteWorkerAssignmentOfferInput,
+  ): RemoteWorkerAssignmentOffer | undefined {
+    const authority = normalizeClaimAuthority(input.authority);
+    const meshAdmission = normalizeRemoteWorkerMeshNodeAuthorityFence(input.meshAdmission);
+    const assignmentId = identifier(input.assignmentId, "assignmentId");
+    const purpose = normalizeOfferResolutionPurpose(input.purpose);
+    return this.db.transaction("immediate", () => {
+      let assignmentHint: RemoteWorkerAssignmentRecord;
+      try {
+        assignmentHint = this.getAssignment(authority.registryWorkspaceId, assignmentId);
+      } catch (error) {
+        if (error instanceof NotFoundError) return undefined;
+        throw error;
+      }
+      const lockContext = this.readTaskBoundDispatchLockContext(assignmentHint);
+      const lockGeneration = purpose.kind === "workload" ? purpose.expectedAssignmentGeneration : 1;
+      this.acquirePostgresTaskBoundDispatchLocks(authority, assignmentHint, lockGeneration, lockContext.sessionId);
+      const assignment = this.getAssignment(authority.registryWorkspaceId, assignmentId);
+      this.assertTaskBoundDispatchLockContext(assignment, lockContext);
+      const worker = this.assertClaimAuthorityCurrent(authority);
+      this.assertTaskBoundOfferAuthority(assignment, worker);
+      this.assertMeshAdmissionAuthority(authority, assignment, meshAdmission);
+      const run = this.getDurableAuthorityRow(assignment.manifest.durableRunId, true);
+      if (
+        run.status !== "running" ||
+        !run.lease_owner_id ||
+        !run.lease_expires_at ||
+        !this.isTimestampFresh(run.lease_expires_at)
+      ) {
+        return undefined;
+      }
+      const workload = this.buildTaskBoundChatWorkload(assignment, run, lockContext.sessionId);
+      const generation = this.findCurrentGenerationRow(authority.registryWorkspaceId, assignmentId);
+      if (purpose.kind === "poll") {
+        if (generation !== undefined) return undefined;
+      } else if (generation !== undefined) {
+        if (
+          generation.worker_id !== authority.workerId ||
+          asPositiveInteger(generation.worker_generation) !== authority.workerGeneration ||
+          (purpose.kind === "claim" && asPositiveInteger(generation.assignment_generation) !== 1)
+        ) {
+          return undefined;
+        }
+        this.assertProtectedCommitFenceCurrent(
+          Object.freeze({ credentialAuthority: authority, meshAdmission }),
+          assignment,
+          generation,
+        );
+        if (purpose.kind === "workload") {
+          if (asPositiveInteger(generation.assignment_generation) !== purpose.expectedAssignmentGeneration) {
+            return undefined;
+          }
+          const lease = this.findCurrentLeaseRow(
+            authority.registryWorkspaceId,
+            assignmentId,
+            purpose.expectedAssignmentGeneration,
+          );
+          if (lease === undefined || asPositiveInteger(lease.lease_revision) !== purpose.expectedLeaseRevision) {
+            return undefined;
+          }
+        }
+      } else if (purpose.kind === "workload") {
+        return undefined;
+      }
       return Object.freeze({ assignment, workload: workloadIdentity(workload) });
     });
   }
@@ -3448,6 +3541,46 @@ function normalizeProtectedCommitFence(
   return Object.freeze({
     credentialAuthority: normalizeClaimAuthority(input.credentialAuthority),
     meshAdmission: normalizeRemoteWorkerMeshNodeAuthorityFence(input.meshAdmission),
+  });
+}
+
+function normalizeOfferResolutionPurpose(
+  input: RemoteWorkerAssignmentOfferResolutionPurpose,
+): RemoteWorkerAssignmentOfferResolutionPurpose {
+  if (input === null || typeof input !== "object" || Array.isArray(input)) {
+    throw new ValidationError({ field: "purpose", message: "Remote worker assignment purpose is invalid." });
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(input);
+  const keys = Object.keys(descriptors).sort();
+  if (
+    Object.values(descriptors).some(
+      (descriptor) => !descriptor.enumerable || descriptor.get !== undefined || descriptor.set !== undefined,
+    )
+  ) {
+    throw new ValidationError({ field: "purpose", message: "Remote worker assignment purpose is invalid." });
+  }
+  if (input.kind === "poll" || input.kind === "claim") {
+    if (keys.length !== 1 || keys[0] !== "kind") {
+      throw new ValidationError({ field: "purpose", message: "Remote worker assignment purpose is invalid." });
+    }
+    return Object.freeze({ kind: input.kind });
+  }
+  if (
+    input.kind !== "workload" ||
+    keys.length !== 3 ||
+    keys[0] !== "expectedAssignmentGeneration" ||
+    keys[1] !== "expectedLeaseRevision" ||
+    keys[2] !== "kind"
+  ) {
+    throw new ValidationError({ field: "purpose", message: "Remote worker assignment purpose is invalid." });
+  }
+  return Object.freeze({
+    kind: "workload",
+    expectedAssignmentGeneration: positiveInteger(
+      input.expectedAssignmentGeneration,
+      "purpose.expectedAssignmentGeneration",
+    ),
+    expectedLeaseRevision: positiveInteger(input.expectedLeaseRevision, "purpose.expectedLeaseRevision"),
   });
 }
 

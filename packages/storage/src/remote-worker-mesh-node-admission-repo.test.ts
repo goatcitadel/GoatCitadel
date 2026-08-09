@@ -574,8 +574,70 @@ describe("RemoteWorkerMeshNodeAdmissionRepository", () => {
       );
       assert.equal(offers.items[0]?.workload.capabilityProfileSha256, profile.hashes.profileHash);
       assert.equal(offers.items[0]?.workload.durableRunVersion, 7);
+      assert.equal(
+        assignments.resolveTaskBoundChatOffer({
+          authority: claimAuthority,
+          meshAdmission: currentByCredential!,
+          assignmentId: assignment.assignmentId,
+          purpose: { kind: "poll" },
+        })?.assignment.assignmentId,
+        assignment.assignmentId,
+      );
+      db.prepare("UPDATE durable_runs SET lease_expires_at = @leaseExpiresAt WHERE run_id = @durableRunId").run({
+        durableRunId,
+        leaseExpiresAt: "2000-01-01T00:00:00.000Z",
+      });
+      assert.equal(
+        assignments.resolveTaskBoundChatOffer({
+          authority: claimAuthority,
+          meshAdmission: currentByCredential!,
+          assignmentId: assignment.assignmentId,
+          purpose: { kind: "poll" },
+        }),
+        undefined,
+      );
+      db.prepare("UPDATE durable_runs SET lease_expires_at = @leaseExpiresAt WHERE run_id = @durableRunId").run({
+        durableRunId,
+        leaseExpiresAt: "2099-01-01T00:00:00.000Z",
+      });
+      assert.equal(
+        assignments.resolveTaskBoundChatOffer({
+          authority: { ...claimAuthority, registryWorkspaceId: "other-workspace" },
+          meshAdmission: currentByCredential!,
+          assignmentId: assignment.assignmentId,
+          purpose: { kind: "poll" },
+        }),
+        undefined,
+      );
+      assert.throws(
+        () =>
+          assignments.resolveTaskBoundChatOffer({
+            authority: {
+              ...claimAuthority,
+              protectedAdmissionContextSha256: digest("assignment-claim:drifted-offer-protected-context"),
+            },
+            meshAdmission: currentByCredential!,
+            assignmentId: assignment.assignmentId,
+            purpose: { kind: "poll" },
+          }),
+        ConflictError,
+      );
+      assert.throws(
+        () =>
+          assignments.resolveTaskBoundChatOffer({
+            authority: claimAuthority,
+            meshAdmission: {
+              ...currentByCredential!,
+              joinCredentialSha256: digest("assignment-claim:drifted-offer-mesh-credential"),
+            },
+            assignmentId: assignment.assignmentId,
+            purpose: { kind: "poll" },
+          }),
+        ConflictError,
+      );
 
-      const leaseTokenSha256 = digest("assignment-claim:lease-secret");
+      const rawLeaseToken = "assignment-claim:worker-proposed-lease-secret";
+      const leaseTokenSha256 = digest(rawLeaseToken);
       const claimInput = {
         authority: claimAuthority,
         meshAdmission: currentByCredential!,
@@ -604,12 +666,66 @@ describe("RemoteWorkerMeshNodeAdmissionRepository", () => {
       assert.equal(claimed.generation.dispatchAuthority.durableRunAttempt, 2);
       assert.equal(claimed.generation.dispatchAuthority.durableRunVersion, 7);
       assert.equal(canonicalJsonString(claimed.workload.payload), canonicalJsonString(durablePayload));
+      assert.equal(JSON.stringify(claimed).includes(rawLeaseToken), false);
+      const persistedLease = db
+        .prepare(
+          `SELECT lease_token_sha256
+           FROM remote_worker_assignment_leases
+           WHERE registry_workspace_id = 'default' AND assignment_id = @assignmentId`,
+        )
+        .get<{ lease_token_sha256: string }>({ assignmentId: assignment.assignmentId });
+      assert.equal(persistedLease?.lease_token_sha256, leaseTokenSha256);
+      assert.notEqual(persistedLease?.lease_token_sha256, rawLeaseToken);
       assert.equal(assignments.claimTaskBoundChatOffer(claimInput).disposition, "replayed_without_lease_secret");
       assert.throws(
         () => assignments.claimTaskBoundChatOffer({ ...claimInput, leaseTokenSha256: digest("wrong-lease") }),
         /generation conflicts/u,
       );
       assert.equal(assignments.listTaskBoundChatOffers({ authority: claimAuthority }).items.length, 0);
+      assert.equal(
+        assignments.resolveTaskBoundChatOffer({
+          authority: claimAuthority,
+          meshAdmission: currentByCredential!,
+          assignmentId: assignment.assignmentId,
+          purpose: { kind: "poll" },
+        }),
+        undefined,
+      );
+      assert.equal(
+        assignments.resolveTaskBoundChatOffer({
+          authority: claimAuthority,
+          meshAdmission: currentByCredential!,
+          assignmentId: assignment.assignmentId,
+          purpose: { kind: "claim" },
+        })?.assignment.assignmentId,
+        assignment.assignmentId,
+      );
+      assert.equal(
+        assignments.resolveTaskBoundChatOffer({
+          authority: claimAuthority,
+          meshAdmission: currentByCredential!,
+          assignmentId: assignment.assignmentId,
+          purpose: {
+            kind: "workload",
+            expectedAssignmentGeneration: claimed.generation.assignmentGeneration,
+            expectedLeaseRevision: claimed.lease.leaseRevision,
+          },
+        })?.assignment.assignmentId,
+        assignment.assignmentId,
+      );
+      assert.equal(
+        assignments.resolveTaskBoundChatOffer({
+          authority: claimAuthority,
+          meshAdmission: currentByCredential!,
+          assignmentId: assignment.assignmentId,
+          purpose: {
+            kind: "workload",
+            expectedAssignmentGeneration: claimed.generation.assignmentGeneration,
+            expectedLeaseRevision: claimed.lease.leaseRevision + 1,
+          },
+        }),
+        undefined,
+      );
       assert.equal(
         assignments.resolveTaskBoundChatWorkload({
           authority: claimAuthority,
@@ -731,6 +847,20 @@ describe("RemoteWorkerMeshNodeAdmissionRepository", () => {
       );
       assert.throws(
         () => restartedAssignments.resolveActiveAuthorityByLeaseTokenHash(nextLeaseTokenSha256, protectedCommitFence),
+        ConflictError,
+      );
+      assert.throws(
+        () =>
+          restartedAssignments.resolveTaskBoundChatOffer({
+            authority: claimAuthority,
+            meshAdmission: currentByCredential!,
+            assignmentId: assignment.assignmentId,
+            purpose: {
+              kind: "workload",
+              expectedAssignmentGeneration: 1,
+              expectedLeaseRevision: 2,
+            },
+          }),
         ConflictError,
       );
       assert.throws(
@@ -893,6 +1023,15 @@ describe("RemoteWorkerMeshNodeAdmissionRepository", () => {
         )?.assignment.assignmentId,
         revocationAssignment.assignmentId,
       );
+      assert.equal(
+        restartedAssignments.resolveTaskBoundChatOffer({
+          authority: rotatedProtectedCommitFence.credentialAuthority,
+          meshAdmission: rotatedProtectedCommitFence.meshAdmission,
+          assignmentId: revocationAssignment.assignmentId,
+          purpose: { kind: "workload", expectedAssignmentGeneration: 1, expectedLeaseRevision: 1 },
+        })?.assignment.assignmentId,
+        revocationAssignment.assignmentId,
+      );
       restartedRepo.revokeJoinAuthority({
         registryWorkspaceId: secondIssued.authority.registryWorkspaceId,
         workerId: secondIssued.authority.workerId,
@@ -911,6 +1050,16 @@ describe("RemoteWorkerMeshNodeAdmissionRepository", () => {
             rotatedProtectedCommitFence,
           ),
         ConflictError,
+      );
+      assert.throws(
+        () =>
+          restartedAssignments.resolveTaskBoundChatOffer({
+            authority: rotatedProtectedCommitFence.credentialAuthority,
+            meshAdmission: rotatedProtectedCommitFence.meshAdmission,
+            assignmentId: revocationAssignment.assignmentId,
+            purpose: { kind: "workload", expectedAssignmentGeneration: 1, expectedLeaseRevision: 1 },
+          }),
+        /current authority fence/u,
       );
       assert.throws(
         () =>

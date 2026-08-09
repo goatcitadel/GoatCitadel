@@ -1,8 +1,12 @@
-import { createHash } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import {
+  REMOTE_WORKER_POP_V2_ROUTE_BINDINGS,
   assertRemoteWorkerRuntimeCredentialClaims,
+  canonicalJsonString,
   remoteWorkerRuntimeCredentialClaimsSha256,
   type RemoteWorkerMeshNodeAuthorityFence,
+  type RemoteWorkerPopV2RouteBinding,
+  type RemoteWorkerRuntimeCredentialClaims,
 } from "@goatcitadel/contracts";
 import type {
   ClaimRemoteWorkerAssignmentOfferInput,
@@ -14,6 +18,7 @@ import type {
   RemoteWorkerAssignmentOfferCursor,
   RemoteWorkerAssignmentWorkloadProjection,
   ResolveCurrentRemoteWorkerMeshNodeAdmissionInput,
+  ResolveRemoteWorkerAssignmentOfferInput,
   ResolveRemoteWorkerAssignmentWorkloadInput,
 } from "@goatcitadel/storage";
 import type { CurrentRemoteWorkerRuntimeCredentialAuthority } from "./remote-worker-current-authority-service.js";
@@ -21,23 +26,14 @@ import type { CurrentRemoteWorkerRuntimeCredentialAuthority } from "./remote-wor
 type Awaitable<T> = T | Promise<T>;
 
 /**
- * Contract-reserved assignment dispatch purposes. These descriptors are not
- * registered in the native mux or any HTTP composition; the runtime remains
- * production-dark until protected-v2 transport activation owns them.
+ * Contract-owned assignment dispatch purposes. A production-dark protected-v2
+ * handler exists, but these descriptors remain unregistered in the native mux
+ * and every HTTP/runtime composition.
  */
 export const REMOTE_WORKER_ASSIGNMENT_DISPATCH_ROUTES = Object.freeze({
-  pollOffers: Object.freeze({
-    rawPath: "/api/v1/remote-workers/assignment-offer-polls",
-    operation: "assignment.offers.poll",
-  }),
-  claim: Object.freeze({
-    rawPath: "/api/v1/remote-workers/assignment-claims",
-    operation: "assignment.claim",
-  }),
-  readWorkload: Object.freeze({
-    rawPath: "/api/v1/remote-workers/assignment-workload-reads",
-    operation: "assignment.workload.read",
-  }),
+  pollOffers: contractDispatchRoute(8),
+  claim: contractDispatchRoute(9),
+  readWorkload: contractDispatchRoute(10),
 } as const);
 
 export interface RemoteWorkerAssignmentDispatchStorePort {
@@ -47,6 +43,9 @@ export interface RemoteWorkerAssignmentDispatchStorePort {
   findTaskBoundChatClaimContext(
     authority: RemoteWorkerAssignmentClaimAuthority,
     assignmentId: string,
+  ): Awaitable<RemoteWorkerAssignmentOffer | undefined>;
+  resolveTaskBoundChatOffer(
+    input: ResolveRemoteWorkerAssignmentOfferInput,
   ): Awaitable<RemoteWorkerAssignmentOffer | undefined>;
   claimTaskBoundChatOffer(
     input: ClaimRemoteWorkerAssignmentOfferInput,
@@ -108,7 +107,7 @@ export class RemoteWorkerAssignmentDispatchService {
   public async listOffers(
     input: ListRemoteWorkerAssignmentDispatchOffersInput,
   ): Promise<ListRemoteWorkerAssignmentOffersResult> {
-    const authority = snapshotAuthority(input.authority);
+    const authority = snapshotRemoteWorkerAssignmentDispatchAuthority(input.authority);
     try {
       const listed = await this.assignments.listTaskBoundChatOffers({
         authority: authority.claim,
@@ -121,7 +120,14 @@ export class RemoteWorkerAssignmentDispatchService {
           authority,
           offer.assignment.manifest.executionWorkspaceId,
         );
-        if (meshAdmission) items.push(offer);
+        if (!meshAdmission) continue;
+        const resolved = await this.assignments.resolveTaskBoundChatOffer({
+          authority: authority.claim,
+          meshAdmission,
+          assignmentId: offer.assignment.assignmentId,
+          purpose: Object.freeze({ kind: "poll" }),
+        });
+        if (resolved) items.push(resolved);
       }
       return Object.freeze({
         items: Object.freeze(items),
@@ -137,18 +143,13 @@ export class RemoteWorkerAssignmentDispatchService {
     input: ClaimRemoteWorkerAssignmentDispatchOfferInput,
   ): Promise<ClaimRemoteWorkerAssignmentOfferOutcome> {
     const leaseTokenSha256 = hashLeaseToken(input.rawLeaseToken);
-    const authority = snapshotAuthority(input.authority);
+    const authority = snapshotRemoteWorkerAssignmentDispatchAuthority(input.authority);
     try {
-      const context = await this.assignments.findTaskBoundChatClaimContext(authority.claim, input.assignmentId);
+      const context = await this.resolveExactContext(authority, input.assignmentId, Object.freeze({ kind: "claim" }));
       if (!context) throw rejected("Remote worker assignment offer is unavailable.");
-      const meshAdmission = await this.resolveMeshAdmission(
-        authority,
-        context.assignment.manifest.executionWorkspaceId,
-      );
-      if (!meshAdmission) throw rejected("Remote worker assignment mesh admission is unavailable.");
       return await this.assignments.claimTaskBoundChatOffer({
         authority: authority.claim,
-        meshAdmission,
+        meshAdmission: context.meshAdmission,
         assignmentId: input.assignmentId,
         leaseTokenSha256,
         idempotencyKey: input.idempotencyKey,
@@ -163,18 +164,21 @@ export class RemoteWorkerAssignmentDispatchService {
     input: ReadRemoteWorkerAssignmentDispatchWorkloadInput,
   ): Promise<RemoteWorkerAssignmentWorkloadProjection | undefined> {
     const leaseTokenSha256 = hashLeaseToken(input.rawLeaseToken);
-    const authority = snapshotAuthority(input.authority);
+    const authority = snapshotRemoteWorkerAssignmentDispatchAuthority(input.authority);
     try {
-      const context = await this.assignments.findTaskBoundChatClaimContext(authority.claim, input.assignmentId);
-      if (!context) return undefined;
-      const meshAdmission = await this.resolveMeshAdmission(
+      const context = await this.resolveExactContext(
         authority,
-        context.assignment.manifest.executionWorkspaceId,
+        input.assignmentId,
+        Object.freeze({
+          kind: "workload",
+          expectedAssignmentGeneration: input.expectedAssignmentGeneration,
+          expectedLeaseRevision: input.expectedLeaseRevision,
+        }),
       );
-      if (!meshAdmission) return undefined;
+      if (!context) return undefined;
       return await this.assignments.resolveTaskBoundChatWorkload({
         authority: authority.claim,
-        meshAdmission,
+        meshAdmission: context.meshAdmission,
         registryWorkspaceId: authority.claim.registryWorkspaceId,
         assignmentId: input.assignmentId,
         expectedAssignmentGeneration: input.expectedAssignmentGeneration,
@@ -186,8 +190,35 @@ export class RemoteWorkerAssignmentDispatchService {
     }
   }
 
+  private async resolveExactContext(
+    authority: RemoteWorkerAssignmentDispatchAuthoritySnapshot,
+    assignmentId: string,
+    purpose: ResolveRemoteWorkerAssignmentOfferInput["purpose"],
+  ): Promise<
+    | Readonly<{
+        offer: RemoteWorkerAssignmentOffer;
+        meshAdmission: RemoteWorkerMeshNodeAuthorityFence;
+      }>
+    | undefined
+  > {
+    const advisory = await this.assignments.findTaskBoundChatClaimContext(authority.claim, assignmentId);
+    if (!advisory) return undefined;
+    const meshAdmission = await this.resolveMeshAdmission(
+      authority,
+      advisory.assignment.manifest.executionWorkspaceId,
+    );
+    if (!meshAdmission) return undefined;
+    const offer = await this.assignments.resolveTaskBoundChatOffer({
+      authority: authority.claim,
+      meshAdmission,
+      assignmentId,
+      purpose,
+    });
+    return offer === undefined ? undefined : Object.freeze({ offer, meshAdmission });
+  }
+
   private async resolveMeshAdmission(
-    authority: SnapshotAuthority,
+    authority: RemoteWorkerAssignmentDispatchAuthoritySnapshot,
     workspaceId: string,
   ): Promise<RemoteWorkerMeshNodeAuthorityFence | undefined> {
     return await this.meshAdmissions.resolveCurrentForRuntimeCredential({
@@ -207,33 +238,41 @@ export class RemoteWorkerAssignmentDispatchService {
   }
 }
 
-interface SnapshotAuthority {
+export interface RemoteWorkerAssignmentDispatchAuthoritySnapshot {
+  readonly current: CurrentRemoteWorkerRuntimeCredentialAuthority;
   readonly claim: RemoteWorkerAssignmentClaimAuthority;
 }
 
-function snapshotAuthority(input: CurrentRemoteWorkerRuntimeCredentialAuthority): SnapshotAuthority {
-  assertRemoteWorkerRuntimeCredentialClaims(input.claims);
+export function snapshotRemoteWorkerAssignmentDispatchAuthority(
+  input: CurrentRemoteWorkerRuntimeCredentialAuthority,
+): RemoteWorkerAssignmentDispatchAuthoritySnapshot {
+  const claims = snapshotClaims(input.claims);
   const claimsSha256 = digest(input.claimsSha256, "claimsSha256");
+  const publicKeySpkiDer = snapshotPublicKey(input.publicKeySpkiDer);
   if (
-    remoteWorkerRuntimeCredentialClaimsSha256(input.claims) !== claimsSha256 ||
-    input.claims.registryWorkspaceId !== input.registryWorkspaceId ||
-    input.claims.workerId !== input.workerId ||
-    input.claims.workerGeneration !== input.workerGeneration ||
-    input.claims.workspaceCeilingSha256 !== input.workspaceCeilingSha256 ||
-    input.claims.capabilityCeilingSha256 !== input.capabilityCeilingSha256
+    remoteWorkerRuntimeCredentialClaimsSha256(claims) !== claimsSha256 ||
+    claims.registryWorkspaceId !== input.registryWorkspaceId ||
+    claims.workerId !== input.workerId ||
+    claims.workerGeneration !== input.workerGeneration ||
+    claims.workspaceCeilingSha256 !== input.workspaceCeilingSha256 ||
+    claims.capabilityCeilingSha256 !== input.capabilityCeilingSha256
   ) {
+    publicKeySpkiDer.fill(0);
     throw rejected("Remote worker assignment credential authority is invalid.");
   }
-  const claim: RemoteWorkerAssignmentClaimAuthority = Object.freeze({
+  const current: CurrentRemoteWorkerRuntimeCredentialAuthority = Object.freeze({
+    credentialId: identifier(input.credentialId, "credentialId"),
+    credentialGeneration: positiveInteger(input.credentialGeneration, "credentialGeneration"),
+    authorizationCredentialSha256: digest(input.authorizationCredentialSha256, "authorizationCredentialSha256"),
     registryWorkspaceId: identifier(input.registryWorkspaceId, "registryWorkspaceId"),
     bootstrapId: identifier(input.bootstrapId, "bootstrapId"),
     workerId: identifier(input.workerId, "workerId"),
     workerGeneration: positiveInteger(input.workerGeneration, "workerGeneration"),
-    credentialId: identifier(input.credentialId, "credentialId"),
-    credentialGeneration: positiveInteger(input.credentialGeneration, "credentialGeneration"),
-    authorizationCredentialSha256: digest(input.authorizationCredentialSha256, "authorizationCredentialSha256"),
     nodeId: identifier(input.nodeId, "nodeId"),
+    publicKeySpkiDer,
+    publicKeySpkiSha256: digest(input.publicKeySpkiSha256, "publicKeySpkiSha256"),
     clientCertificateSha256: digest(input.clientCertificateSha256, "clientCertificateSha256"),
+    transportTrustAnchorSha256: digest(input.transportTrustAnchorSha256, "transportTrustAnchorSha256"),
     runtimeManifestSha256: digest(input.runtimeManifestSha256, "runtimeManifestSha256"),
     workspaceCeilingSha256: digest(input.workspaceCeilingSha256, "workspaceCeilingSha256"),
     capabilityCeilingSha256: digest(input.capabilityCeilingSha256, "capabilityCeilingSha256"),
@@ -241,10 +280,62 @@ function snapshotAuthority(input: CurrentRemoteWorkerRuntimeCredentialAuthority)
       input.protectedAdmissionEnvelopeSha256,
       "protectedAdmissionEnvelopeSha256",
     ),
-    protectedAdmissionContextSha256: digest(input.protectedAdmissionContextSha256, "protectedAdmissionContextSha256"),
+    protectedAdmissionContextSha256: digest(
+      input.protectedAdmissionContextSha256,
+      "protectedAdmissionContextSha256",
+    ),
+    claims,
     claimsSha256,
   });
-  return Object.freeze({ claim });
+  if (!safeDigestEqual(createHash("sha256").update(publicKeySpkiDer).digest("hex"), current.publicKeySpkiSha256)) {
+    publicKeySpkiDer.fill(0);
+    throw rejected("Remote worker assignment credential authority is invalid.");
+  }
+  const claim: RemoteWorkerAssignmentClaimAuthority = Object.freeze({
+    registryWorkspaceId: current.registryWorkspaceId,
+    bootstrapId: current.bootstrapId,
+    workerId: current.workerId,
+    workerGeneration: current.workerGeneration,
+    credentialId: current.credentialId,
+    credentialGeneration: current.credentialGeneration,
+    authorizationCredentialSha256: current.authorizationCredentialSha256,
+    nodeId: current.nodeId,
+    clientCertificateSha256: current.clientCertificateSha256,
+    runtimeManifestSha256: current.runtimeManifestSha256,
+    workspaceCeilingSha256: current.workspaceCeilingSha256,
+    capabilityCeilingSha256: current.capabilityCeilingSha256,
+    protectedAdmissionEnvelopeSha256: current.protectedAdmissionEnvelopeSha256,
+    protectedAdmissionContextSha256: current.protectedAdmissionContextSha256,
+    claimsSha256,
+  });
+  return Object.freeze({ current, claim });
+}
+
+function contractDispatchRoute<Code extends 8 | 9 | 10>(
+  code: Code,
+): Extract<RemoteWorkerPopV2RouteBinding, { readonly code: Code }> {
+  const route = REMOTE_WORKER_POP_V2_ROUTE_BINDINGS.find((candidate) => candidate.code === code);
+  if (route === undefined || route.method !== "POST" || route.authorityKind !== "credential") {
+    throw new Error(`Remote worker assignment dispatch route ${String(code)} is unavailable.`);
+  }
+  return route as Extract<RemoteWorkerPopV2RouteBinding, { readonly code: Code }>;
+}
+
+function snapshotClaims(input: RemoteWorkerRuntimeCredentialClaims): RemoteWorkerRuntimeCredentialClaims {
+  const claims = JSON.parse(canonicalJsonString(input)) as RemoteWorkerRuntimeCredentialClaims;
+  assertRemoteWorkerRuntimeCredentialClaims(claims);
+  return Object.freeze({
+    ...claims,
+    allowedWorkspaceIds: Object.freeze([...claims.allowedWorkspaceIds]),
+    capabilityClasses: Object.freeze([...claims.capabilityClasses]),
+  });
+}
+
+function snapshotPublicKey(value: unknown): Buffer {
+  if (!Buffer.isBuffer(value) || value.byteLength !== 44) {
+    throw rejected("Remote worker assignment credential authority is invalid.");
+  }
+  return Buffer.from(value);
 }
 
 function hashLeaseToken(value: unknown): string {
@@ -281,6 +372,11 @@ function digest(value: unknown, field: string): string {
     throw new TypeError(`Remote worker assignment ${field} is invalid.`);
   }
   return value;
+}
+
+function safeDigestEqual(left: string, right: string): boolean {
+  if (!/^[0-9a-f]{64}$/u.test(left) || !/^[0-9a-f]{64}$/u.test(right)) return false;
+  return timingSafeEqual(Buffer.from(left, "hex"), Buffer.from(right, "hex"));
 }
 
 function rejected(message: string): RemoteWorkerAssignmentDispatchError {

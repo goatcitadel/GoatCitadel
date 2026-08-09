@@ -145,6 +145,9 @@ function dependencies() {
     findTaskBoundChatClaimContext: vi.fn(async (_authority, assignmentId) =>
       offers.find((candidate) => candidate.assignment.assignmentId === assignmentId),
     ),
+    resolveTaskBoundChatOffer: vi.fn(async (input) =>
+      offers.find((candidate) => candidate.assignment.assignmentId === input.assignmentId),
+    ),
     claimTaskBoundChatOffer: vi.fn(async () => claim),
     resolveTaskBoundChatWorkload: vi.fn(async () => workload),
   };
@@ -174,6 +177,13 @@ describe("RemoteWorkerAssignmentDispatchService", () => {
         workspaceId: "workspace-a",
         authorizationCredentialSha256: D("credential-token-a"),
         protectedAdmissionEnvelopeSha256: D("protected-envelope-a"),
+      }),
+    );
+    expect(f.assignments.resolveTaskBoundChatOffer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assignmentId: "assignment-a",
+        meshAdmission: meshFence("workspace-a"),
+        purpose: { kind: "poll" },
       }),
     );
   });
@@ -211,6 +221,14 @@ describe("RemoteWorkerAssignmentDispatchService", () => {
       }),
     );
     expect(claimStore).toHaveBeenNthCalledWith(2, expect.objectContaining({ leaseTokenSha256: expectedDigest }));
+    expect(f.assignments.resolveTaskBoundChatOffer).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ assignmentId: "assignment-a", purpose: { kind: "claim" } }),
+    );
+    expect(f.assignments.resolveTaskBoundChatOffer).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ assignmentId: "assignment-a", purpose: { kind: "claim" } }),
+    );
     expect(started.disposition).toBe("started");
     expect(replayed.disposition).toBe("replayed_without_lease_secret");
     expect(JSON.stringify([started, replayed])).not.toContain(rawLeaseToken);
@@ -229,6 +247,7 @@ describe("RemoteWorkerAssignmentDispatchService", () => {
       }),
     ).rejects.toThrow("canonical 32-byte base64url");
     expect(f.assignments.findTaskBoundChatClaimContext).not.toHaveBeenCalled();
+    expect(f.assignments.resolveTaskBoundChatOffer).not.toHaveBeenCalled();
 
     vi.mocked(f.assignments.findTaskBoundChatClaimContext).mockResolvedValueOnce(undefined);
     await expect(
@@ -237,6 +256,17 @@ describe("RemoteWorkerAssignmentDispatchService", () => {
         assignmentId: "ordinary-chat",
         rawLeaseToken: Buffer.alloc(32, 0x45).toString("base64url"),
         idempotencyKey: "claim-ordinary",
+      }),
+    ).rejects.toThrow("offer is unavailable");
+    expect(f.assignments.claimTaskBoundChatOffer).not.toHaveBeenCalled();
+
+    vi.mocked(f.assignments.resolveTaskBoundChatOffer).mockResolvedValueOnce(undefined);
+    await expect(
+      service.claimOffer({
+        authority: authority(),
+        assignmentId: "assignment-a",
+        rawLeaseToken: Buffer.alloc(32, 0x45).toString("base64url"),
+        idempotencyKey: "claim-stale-exact-authority",
       }),
     ).rejects.toThrow("offer is unavailable");
     expect(f.assignments.claimTaskBoundChatOffer).not.toHaveBeenCalled();
@@ -262,6 +292,12 @@ describe("RemoteWorkerAssignmentDispatchService", () => {
         expectedAssignmentGeneration: 1,
         expectedLeaseRevision: 1,
         leaseTokenSha256: createHash("sha256").update(rawLeaseToken, "utf8").digest("hex"),
+      }),
+    );
+    expect(f.assignments.resolveTaskBoundChatOffer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assignmentId: "assignment-a",
+        purpose: { kind: "workload", expectedAssignmentGeneration: 1, expectedLeaseRevision: 1 },
       }),
     );
 
