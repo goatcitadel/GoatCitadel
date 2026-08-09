@@ -64,7 +64,7 @@ change:
 | `M3` | P0 | Remote-worker durable execution and ordered event transport | `planned` | M2 | Worker death/reconnect/takeover, replay, transcript, approval-resume, and no-duplicate proof |
 | `M4` | P0/P1 | Live worker inference, execution cell, settlement, and visibility | `planned` | M3 | `pnpm verify:remote-workers` with the connected-worker row executed, plus live Ops/Chat data |
 | `M5` | P0 | Governed self-configuration and repair expansion | `planned` | M1; M2 for remote custody | `pnpm verify:self-configuration` with live provider, packaged restart, browser secure input, profile, rollback, and delegated-resume evidence |
-| `M6` | P1/P2 | Gateway capability and policy follow-ons | `planned` | M1; M5 where repair is involved | Focused capability/policy/provider tests and explicit owner decisions |
+| `M6` | P1/P2 | Gateway capability and policy follow-ons | `in_progress` | M1; M5 where repair is involved | Focused capability/policy/provider tests and explicit owner decisions |
 | `M7` | P1/P2 | Consolidated Mission Control UX and live-worker projection | `planned` | M4; stable M5/M6 APIs | Focused component tests, populated stories, accessibility, surface, and one visual-regression pass |
 | `M8` | P1 | Mobile companion completion and pinned-Gateway proof | `planned` | M3-M5 contract stability | External mobile build/tests and HX-508 device-auth, paging, approval, offline/reconnect, attachment, and revocation bundle |
 | `M9` | P0 | Packaging, desktop, remote-hardened, rollback, and recovery | `planned` | M2-M8 release-bearing scope | `pnpm verify:install`, `pnpm verify:desktop`, packaged lifecycle, exact hashes/versions, hardened recovery bundle |
@@ -246,9 +246,20 @@ public claims remain “repair foundations,” not generic self-repair parity.
 
 ## M6 - Gateway capability and policy follow-ons
 
+### Implementation progress
+
+- Verified Code Mode source/wrapper and adapter artifact inspection plus
+  cross-run evidence comparison were already live and are now removed from the
+  active backlog.
+- Workspace-scoped catalog metrics now distinguish intentional
+  inspectable-only capability state from a broken callable-subset invariant,
+  with stable catalog hashes and per-kind counts.
+- Exact-snapshot audit exports now include the catalog plus explicitly requested,
+  workspace-scoped Code Mode run hashes and durable artifact references. They do
+  not export artifact contents or claim a fresh byte-integrity verification.
+
 ### Current work
 
-- Inspectable-versus-callable drift metrics and catalog/artifact audit exports.
 - Safe continuation semantics only after explicit runtime design.
 - Stronger production isolation evaluation without claiming hostile-code
   sandboxing.

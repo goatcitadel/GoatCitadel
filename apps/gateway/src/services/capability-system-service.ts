@@ -16,8 +16,11 @@ import type {
   CandidateLifecycleActionResult,
   CandidateSkillDetailRecord,
   CandidateSkillVersionRecord,
+  CapabilityAuditExportRecord,
   CapabilityArtifactRecord,
   CapabilityCatalogEntry,
+  CapabilityCatalogDriftMetricsRecord,
+  CapabilityKind,
   CapabilityCatalogScope,
   CapabilityCatalogSnapshotRecord,
   CompactToolDirectorySnapshot,
@@ -624,6 +627,63 @@ export class CapabilitySystemService {
 
   public async getCatalogSnapshot(snapshotId: string): Promise<CapabilityCatalogSnapshotRecord> {
     return await this.options.storage.capabilityCatalogSnapshots.get(snapshotId);
+  }
+
+  public async getCatalogDriftMetrics(
+    effectiveSkills: EffectiveCapabilitySet = "ALL",
+  ): Promise<CapabilityCatalogDriftMetricsRecord> {
+    await this.ensureSkillLifecycleBackfill();
+    const inspectableEntries = await this.buildInspectableCatalog(effectiveSkills);
+    return buildCapabilityCatalogDriftMetrics(
+      inspectableEntries,
+      inspectableEntries.filter((entry) => entry.callable),
+      new Date().toISOString(),
+    );
+  }
+
+  public async getCapabilityAuditExport(
+    snapshotId: string,
+    input: {
+      runIds?: string[];
+      workspaceId?: string;
+    } = {},
+  ): Promise<CapabilityAuditExportRecord> {
+    const storedSnapshot = await this.getCatalogSnapshot(snapshotId);
+    const snapshot = redactStructuredSecrets(storedSnapshot).value as CapabilityCatalogSnapshotRecord;
+    const runIds = [...new Set(input.runIds ?? [])].sort(compareCodeUnits);
+    const runs = await Promise.all(
+      runIds.map(async (runId) =>
+        input.workspaceId
+          ? await this.getCodeModeRunInScope(runId, { workspaceId: input.workspaceId })
+          : await this.getCodeModeRun(runId),
+      ),
+    );
+    for (const run of runs) {
+      if (run.capabilitySnapshotId !== snapshotId) {
+        throw new ConflictError({
+          message: `Code Mode run ${run.runId} is not bound to capability snapshot ${snapshotId}.`,
+        });
+      }
+    }
+
+    const exportedAt = new Date().toISOString();
+    const unsigned = redactStructuredSecrets({
+      version: "goatcitadel.capability-audit.v1" as const,
+      exportedAt,
+      snapshot,
+      catalogMetrics: buildCapabilityCatalogDriftMetrics(
+        snapshot.inspectableEntries,
+        snapshot.callableEntries,
+        exportedAt,
+        snapshot.snapshotId,
+      ),
+      codeModeRuns: runs.map(buildCodeModeRunAuditReference),
+      claimBoundary: "hash_and_reference_export_not_artifact_content_verification" as const,
+    }).value as Omit<CapabilityAuditExportRecord, "exportSha256">;
+    return {
+      ...unsigned,
+      exportSha256: sha256Text(canonicalJsonString(unsigned)),
+    };
   }
 
   public async getCandidateDetail(candidateId: string): Promise<CandidateSkillDetailRecord> {
@@ -6095,6 +6155,111 @@ function toPreview(value: string): string | undefined {
 
 function compareCodeUnits(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
+}
+
+const CAPABILITY_CATALOG_KINDS: readonly CapabilityKind[] = [
+  "tool",
+  "skill",
+  "code_mode",
+  "proposal",
+  "candidate_skill",
+  "mesh_tool",
+  "mesh_mcp_server",
+  "mesh_skill",
+];
+
+const CODE_MODE_AUDIT_ARTIFACT_KINDS: readonly CodeModeRunArtifactKind[] = [
+  "source",
+  "wrapper_manifest",
+  "policy_snapshot",
+  "stdout",
+  "stderr",
+  "aider_request",
+  "aider_invocation_plan",
+  "aider_result_envelope",
+  "aider_patch",
+  "aider_stdout",
+  "aider_stderr",
+];
+
+function buildCapabilityCatalogDriftMetrics(
+  inspectableEntries: CapabilityCatalogEntry[],
+  callableEntries: CapabilityCatalogEntry[],
+  observedAt: string,
+  snapshotId?: string,
+): CapabilityCatalogDriftMetricsRecord {
+  const inspectable = [...inspectableEntries].sort(compareCatalogEntriesForAudit);
+  const callable = [...callableEntries].sort(compareCatalogEntriesForAudit);
+  const inspectableById = new Map(inspectable.map((entry) => [entry.capabilityId, canonicalJsonString(entry)]));
+  const orphanCallableCapabilityIds = callable
+    .filter((entry) => inspectableById.get(entry.capabilityId) !== canonicalJsonString(entry))
+    .map((entry) => entry.capabilityId)
+    .sort(compareCodeUnits);
+  return {
+    observedAt,
+    ...(snapshotId ? { snapshotId } : {}),
+    inspectableCount: inspectable.length,
+    callableCount: callable.length,
+    inspectableOnlyCount: Math.max(0, inspectable.length - callable.length),
+    reviewWarningCount: inspectable.filter((entry) => Boolean(entry.reviewWarning)).length,
+    inspectableSha256: sha256Text(canonicalJsonString(inspectable)),
+    callableSha256: sha256Text(canonicalJsonString(callable)),
+    callableSubsetValid: orphanCallableCapabilityIds.length === 0,
+    orphanCallableCapabilityIds,
+    kinds: CAPABILITY_CATALOG_KINDS.map((kind) => {
+      const inspectableCount = inspectable.filter((entry) => entry.kind === kind).length;
+      const callableCount = callable.filter((entry) => entry.kind === kind).length;
+      return {
+        kind,
+        inspectableCount,
+        callableCount,
+        inspectableOnlyCount: Math.max(0, inspectableCount - callableCount),
+      };
+    }),
+  };
+}
+
+function compareCatalogEntriesForAudit(left: CapabilityCatalogEntry, right: CapabilityCatalogEntry): number {
+  return compareCodeUnits(left.capabilityId, right.capabilityId) || compareCodeUnits(left.kind, right.kind);
+}
+
+function buildCodeModeRunAuditReference(run: CodeModeRunRecord): CapabilityAuditExportRecord["codeModeRuns"][number] {
+  const artifacts = CODE_MODE_AUDIT_ARTIFACT_KINDS.flatMap((artifactKind) => {
+    try {
+      const selected = selectCodeModeRunArtifact(run, artifactKind);
+      return [
+        {
+          artifactKind,
+          artifact: selected.artifact,
+          truncated: selected.truncated,
+        },
+      ];
+    } catch (error) {
+      if (error instanceof NotFoundError) {
+        return [];
+      }
+      throw error;
+    }
+  });
+  return {
+    runId: run.runId,
+    status: run.status,
+    ...(run.workspaceId ? { workspaceId: run.workspaceId } : {}),
+    ...(run.sessionId ? { sessionId: run.sessionId } : {}),
+    ...(run.turnId ? { turnId: run.turnId } : {}),
+    capabilitySnapshotId: run.capabilitySnapshotId,
+    codeModeInputHash: run.codeModeInputHash,
+    wrapperManifestHash: run.wrapperManifestHash,
+    policySnapshotHash: run.policySnapshotHash,
+    codeHash: run.codeHash,
+    ...(run.permissionProfileId ? { permissionProfileId: run.permissionProfileId } : {}),
+    ...(run.localOperatorOverrideId ? { localOperatorOverrideId: run.localOperatorOverrideId } : {}),
+    ...(run.executionBackend ? { executionBackend: run.executionBackend } : {}),
+    ...(run.sandbox ? { sandbox: run.sandbox } : {}),
+    artifacts,
+    createdAt: run.createdAt,
+    ...(run.finishedAt ? { finishedAt: run.finishedAt } : {}),
+  };
 }
 
 function buildCodeModeToolInvokeResult(run: CodeModeRunRecord): ToolInvokeResult {

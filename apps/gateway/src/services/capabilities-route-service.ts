@@ -7,6 +7,8 @@ export type CapabilitiesRoutePort = Pick<
   | "createCodeModeRun"
   | "createProposal"
   | "getCandidateDetail"
+  | "getCapabilityAuditExport"
+  | "getCatalogDriftMetrics"
   | "getCatalogSnapshot"
   | "getCompactToolDirectorySnapshot"
   | "getCodeModeRun"
@@ -42,6 +44,19 @@ export class CapabilitiesRouteService {
 
   public getCapabilityCatalogSnapshot(snapshotId: string) {
     return this.capabilities.getCatalogSnapshot(snapshotId);
+  }
+
+  public getCapabilityCatalogDriftMetrics(effectiveSkills?: EffectiveCapabilitySet) {
+    return effectiveSkills === undefined
+      ? this.capabilities.getCatalogDriftMetrics()
+      : this.capabilities.getCatalogDriftMetrics(effectiveSkills);
+  }
+
+  public getCapabilityAuditExport(
+    snapshotId: string,
+    input?: Parameters<CapabilitiesRoutePort["getCapabilityAuditExport"]>[1],
+  ) {
+    return this.capabilities.getCapabilityAuditExport(snapshotId, input);
   }
 
   public getCompactToolDirectorySnapshot(ttlMs?: number) {

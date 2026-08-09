@@ -29,6 +29,28 @@ describe("capabilities routes", () => {
         snapshotId,
         items: [],
       })),
+      getCapabilityCatalogDriftMetrics: vi.fn(async () => ({
+        observedAt: "2026-08-08T00:00:00.000Z",
+        inspectableCount: 3,
+        callableCount: 1,
+        inspectableOnlyCount: 2,
+        reviewWarningCount: 1,
+        inspectableSha256: "a".repeat(64),
+        callableSha256: "b".repeat(64),
+        callableSubsetValid: true,
+        orphanCallableCapabilityIds: [],
+        kinds: [],
+      })),
+      getCapabilityAuditExport: vi.fn(async (snapshotId: string, input: Record<string, unknown>) => ({
+        version: "goatcitadel.capability-audit.v1",
+        exportedAt: "2026-08-08T00:00:00.000Z",
+        snapshot: { snapshotId, inspectableEntries: [], callableEntries: [], createdAt: "2026-08-08T00:00:00.000Z" },
+        catalogMetrics: { snapshotId },
+        codeModeRuns: [],
+        exportSha256: "c".repeat(64),
+        claimBoundary: "hash_and_reference_export_not_artifact_content_verification",
+        input,
+      })),
       getCompactToolDirectorySnapshot: vi.fn(async (ttlMs?: number) => ({
         snapshotId: "compact-tools-abc123",
         version: "compact-tool-directory.v1",
@@ -351,6 +373,41 @@ describe("capabilities routes", () => {
 
     expect(resolveEffectiveSkills).not.toHaveBeenCalled();
     expect(listCapabilityCatalog).toHaveBeenCalledWith("inspectable");
+  });
+
+  it("returns workspace-scoped catalog drift metrics and bounded snapshot audit exports", async () => {
+    const effective = new Set(["skill-a"]);
+    const service = createCapabilitiesService();
+    app = Fastify();
+    app.decorateRequest("authActorId", "operator-test");
+    app.decorateRequest("authActorSource", "loopback");
+    app.decorate("services", {
+      capabilities: service,
+      capabilityScope: { resolveEffectiveSkills: vi.fn(async () => effective) },
+    } as never);
+    await app.register(capabilitiesRoutes);
+
+    const metrics = await app!.inject({
+      method: "GET",
+      url: "/api/v1/capabilities/catalog-metrics?workspaceId=workspace-a",
+    });
+    const exported = await app!.inject({
+      method: "GET",
+      url: "/api/v1/capabilities/snapshots/snapshot-a/audit-export?workspaceId=workspace-a&runIds=run-2,run-1",
+    });
+
+    expect(metrics.statusCode).toBe(200);
+    expect(service.getCapabilityCatalogDriftMetrics).toHaveBeenCalledWith(effective);
+    expect(metrics.json()).toMatchObject({ inspectableCount: 3, callableCount: 1, inspectableOnlyCount: 2 });
+    expect(exported.statusCode).toBe(200);
+    expect(service.getCapabilityAuditExport).toHaveBeenCalledWith("snapshot-a", {
+      workspaceId: "workspace-a",
+      runIds: ["run-2", "run-1"],
+    });
+    expect(exported.json()).toMatchObject({
+      version: "goatcitadel.capability-audit.v1",
+      snapshot: { snapshotId: "snapshot-a" },
+    });
   });
 
   it("returns compact tool-directory snapshots and fetches full schemas by ref", async () => {

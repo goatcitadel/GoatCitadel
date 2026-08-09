@@ -31,6 +31,8 @@ current reproduction or an explicit product decision.
 | Candidate detail and lifecycle/trust filtering | `complete` |
 | Verified source/wrapper artifact inspection | `complete` |
 | Run comparison across catalog, source, wrapper, policy, permission, override, and sandbox evidence | `complete` |
+| Inspectable-versus-callable drift metrics | `complete` |
+| Catalog snapshot and Code Mode artifact-reference audit export | `complete` |
 | Automatic proposal filing or validation beyond current lifecycle | `not assumed`; requires a fresh design/reproduction |
 
 ## Code Mode Follow-On
@@ -49,8 +51,12 @@ approved UX expansion.
 
 1. Preserve the existing proof that planner and wrapper generation consume only
    `callableCatalog`; add a new task only for a current regression.
-2. Add runtime metrics for inspectable-vs-callable drift.
-3. Add audit exports for catalog snapshots and Code Mode artifact references.
+2. Runtime drift metrics now report the intentional inspectable-only population,
+   per-kind counts, catalog hashes, review warnings, and the broken-subset
+   invariant separately.
+3. Snapshot audit exports now bind an exact catalog snapshot to explicitly
+   requested, workspace-scoped Code Mode runs and export only hashes and durable
+   artifact references, never artifact contents.
 
 ## Product Decisions To Revisit
 

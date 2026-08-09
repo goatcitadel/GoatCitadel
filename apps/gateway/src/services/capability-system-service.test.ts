@@ -29,7 +29,7 @@ import type {
   ToolInvokeResult,
   TranscriptEvent,
 } from "@goatcitadel/contracts";
-import { ConflictError } from "@goatcitadel/contracts";
+import { canonicalJsonString, ConflictError } from "@goatcitadel/contracts";
 import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import { CapabilitySystemService, __internal } from "./capability-system-service.js";
 import type { CapabilityRuntimeConfig } from "../config.js";
@@ -624,6 +624,66 @@ describe("CapabilitySystemService", () => {
     });
     expect(comparison.run.capabilitySnapshotId).toBe(current.capabilitySnapshotId);
     expect(comparison.baseline.capabilitySnapshotId).toBe(baseline.capabilitySnapshotId);
+  });
+
+  it("reports inspectable-to-callable drift and exports hash-only snapshot/run audit evidence", async () => {
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+    });
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { audit: true };",
+      originSurface: "code",
+      sessionId: "session-audit",
+      workspaceId: "workspace-audit",
+    });
+    const unrelated = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { audit: false };",
+      originSurface: "code",
+      sessionId: "session-audit",
+      workspaceId: "workspace-audit",
+    });
+
+    const metrics = await harness.service.getCatalogDriftMetrics();
+    const exported = await harness.service.getCapabilityAuditExport(run.capabilitySnapshotId, {
+      workspaceId: "workspace-audit",
+      runIds: [run.runId, run.runId],
+    });
+
+    expect(metrics.callableSubsetValid).toBe(true);
+    expect(metrics.inspectableOnlyCount).toBe(metrics.inspectableCount - metrics.callableCount);
+    expect(metrics.kinds).toHaveLength(8);
+    expect(exported).toMatchObject({
+      version: "goatcitadel.capability-audit.v1",
+      snapshot: { snapshotId: run.capabilitySnapshotId },
+      catalogMetrics: { snapshotId: run.capabilitySnapshotId, callableSubsetValid: true },
+      codeModeRuns: [
+        {
+          runId: run.runId,
+          capabilitySnapshotId: run.capabilitySnapshotId,
+          artifacts: expect.arrayContaining([
+            expect.objectContaining({ artifactKind: "source" }),
+            expect.objectContaining({ artifactKind: "wrapper_manifest" }),
+            expect.objectContaining({ artifactKind: "policy_snapshot" }),
+          ]),
+        },
+      ],
+      claimBoundary: "hash_and_reference_export_not_artifact_content_verification",
+    });
+    expect(exported.exportSha256).toMatch(/^[a-f0-9]{64}$/u);
+    const { exportSha256, ...unsignedExport } = exported;
+    expect(exportSha256).toBe(createHash("sha256").update(canonicalJsonString(unsignedExport)).digest("hex"));
+    expect(JSON.stringify(exported)).not.toContain("return { audit: true };");
+    await expect(
+      harness.service.getCapabilityAuditExport(run.capabilitySnapshotId, {
+        workspaceId: "workspace-audit",
+        runIds: [unrelated.runId],
+      }),
+    ).rejects.toThrow("is not bound to capability snapshot");
   });
 
   it("exposes audit-only Aider evidence artifacts through Code Mode artifact previews", async () => {

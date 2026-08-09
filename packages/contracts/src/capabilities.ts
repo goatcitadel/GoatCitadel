@@ -136,6 +136,69 @@ export interface CapabilityCatalogSnapshotRecord {
   createdAt: string;
 }
 
+export interface CapabilityCatalogKindMetrics {
+  kind: CapabilityKind;
+  inspectableCount: number;
+  callableCount: number;
+  inspectableOnlyCount: number;
+}
+
+/**
+ * Runtime truth for the governed gap between review-visible and callable
+ * capabilities. `inspectableOnlyCount` is intentional governance state, while
+ * `orphanCallableCapabilityIds` identifies a broken catalog invariant.
+ */
+export interface CapabilityCatalogDriftMetricsRecord {
+  observedAt: string;
+  snapshotId?: string;
+  inspectableCount: number;
+  callableCount: number;
+  inspectableOnlyCount: number;
+  reviewWarningCount: number;
+  inspectableSha256: string;
+  callableSha256: string;
+  callableSubsetValid: boolean;
+  orphanCallableCapabilityIds: string[];
+  kinds: CapabilityCatalogKindMetrics[];
+}
+
+export interface CodeModeRunAuditArtifactReference {
+  artifactKind: CodeModeRunArtifactKind;
+  artifact: CapabilityArtifactRecord;
+  truncated: boolean;
+}
+
+/** Hash/reference-only Code Mode evidence; artifact contents are not exported. */
+export interface CodeModeRunAuditReference {
+  runId: string;
+  status: CodeModeRunStatus;
+  workspaceId?: string;
+  sessionId?: string;
+  turnId?: string;
+  capabilitySnapshotId: string;
+  codeModeInputHash: string;
+  wrapperManifestHash: string;
+  policySnapshotHash: string;
+  codeHash: string;
+  permissionProfileId?: string;
+  localOperatorOverrideId?: string;
+  executionBackend?: CodeModeRunExecutionBackendRef;
+  sandbox?: CodeModeSandboxMetadata;
+  artifacts: CodeModeRunAuditArtifactReference[];
+  createdAt: string;
+  finishedAt?: string;
+}
+
+export interface CapabilityAuditExportRecord {
+  version: "goatcitadel.capability-audit.v1";
+  exportedAt: string;
+  snapshot: CapabilityCatalogSnapshotRecord;
+  catalogMetrics: CapabilityCatalogDriftMetricsRecord;
+  codeModeRuns: CodeModeRunAuditReference[];
+  exportSha256: string;
+  claimBoundary: "hash_and_reference_export_not_artifact_content_verification";
+}
+
 export interface ToolSchemaRef {
   refId: string;
   toolName: string;

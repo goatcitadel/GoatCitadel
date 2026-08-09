@@ -1,6 +1,8 @@
 import type {
   CandidateSkillDetailRecord,
+  CapabilityAuditExportRecord,
   CapabilityCatalogEntry,
+  CapabilityCatalogDriftMetricsRecord,
   CapabilityCatalogScope,
   CapabilityCatalogSnapshotRecord,
   CapabilityProposalDetailRecord,
@@ -31,6 +33,28 @@ export async function fetchCapabilityCatalog(
 
 export async function fetchCapabilityCatalogSnapshot(snapshotId: string): Promise<CapabilityCatalogSnapshotRecord> {
   return request(`/api/v1/capabilities/snapshots/${encodeURIComponent(snapshotId)}`);
+}
+
+export async function fetchCapabilityCatalogDriftMetrics(
+  workspaceId?: string,
+): Promise<CapabilityCatalogDriftMetricsRecord> {
+  const suffix = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : "";
+  return request(`/api/v1/capabilities/catalog-metrics${suffix}`);
+}
+
+export async function fetchCapabilityAuditExport(
+  snapshotId: string,
+  input: { workspaceId?: string; runIds?: string[] } = {},
+): Promise<CapabilityAuditExportRecord> {
+  const params = new URLSearchParams();
+  if (input.workspaceId) {
+    params.set("workspaceId", input.workspaceId);
+  }
+  if (input.runIds?.length) {
+    params.set("runIds", [...new Set(input.runIds)].sort().join(","));
+  }
+  const suffix = params.size > 0 ? `?${params.toString()}` : "";
+  return request(`/api/v1/capabilities/snapshots/${encodeURIComponent(snapshotId)}/audit-export${suffix}`);
 }
 
 export async function fetchCapabilityProposals(limit = 100): Promise<{ items: CapabilityProposalRecord[] }> {
