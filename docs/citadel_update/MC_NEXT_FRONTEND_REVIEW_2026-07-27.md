@@ -111,6 +111,12 @@ current implementation:
   vertical-scroll cue only until the operator reaches the end.
 - Projects and Approvals visual fixtures now seed and target real selected
   master/detail records instead of accepting empty route shells.
+- Diagnostics uses a full-width primary card, responsive two-column follow-up
+  cards, and multi-column source details instead of a stranded narrow lane.
+- The five current Working Context tabs use a deliberate balanced 3+2 grid;
+  Model fit groups repeated models while retaining every backend's fit and
+  confidence; Ops Quality states its read-only/no-call boundary once instead of
+  repeating the same chips on adjacent cards.
 
 These fixes received focused component tests and package typecheck. The
 consolidated accessibility, surface, and visual pass remains owned by `M7` in
@@ -134,12 +140,6 @@ consolidated accessibility, surface, and visual pass remains owned by `M7` in
   kicker read as internal spec keys; the surrounding copy already explains them in plain language.
 - Curator is reachable only by URL/palette with no nav highlight (intentional for experimental scope,
   but it also drops the humanized-timestamp and column-alignment conventions).
-- Diagnostics directory renders one ~286px column and leaves two-thirds of the viewport empty.
-- Working-context tab strip wraps 3+1 ("Session" orphaned) at every desktop width — size the four tabs
-  to one row or commit to a 2x2 grid.
-- Model-fit list repeats the same model per backend (4 of 6 visible rows are duplicates) — group by
-  model with backend chips.
-- Security quality cards on Ops Quality repeat the same disclaimer sentence verbatim side by side.
 
 ## Release-readiness verdict
 
@@ -150,11 +150,13 @@ found were overwhelmingly of one family — layout-primitive edge cases (auto-fi
 min-content overflow, nowrap in narrow tracks) plus one systemic token-cycle regression — and the
 fixes here close all of the high-severity items. The deferred list is polish, not blockers.
 
-**Visual baselines: refreshed (no outstanding follow-up).** Because the border-cycle fixes change
-hairline rendering app-wide, `visual-rebaseline.yml` was run twice against this branch on the Linux
-renderer — run 30273608156 after the initial fixes, and run 30277840694 after the review round that
-also broke the remaining Citadel Light cycle — and both results were cherry-picked into this PR
-(all 400 baselines, then the 324 affected by the light/dark token changes).
+**Historical review baselines: refreshed.** Because the original border-cycle fixes changed
+hairline rendering app-wide, `visual-rebaseline.yml` ran twice against that review branch on the
+Linux renderer — run 30273608156 after the initial fixes, and run 30277840694 after the review round
+that also broke the remaining Citadel Light cycle — and both results were cherry-picked into that PR
+(all 400 baselines, then the 324 affected by the light/dark token changes). The later 2026-08-08
+master-program changes listed above intentionally wait for the single final M7 accessibility,
+surface, and visual campaign; those historical runs are not proof for the new layouts.
 
 **Review-feedback round (same PR):** the Citadel Light theme block carried a second border-token
 cycle (`--border: var(--border-default)` + `--border-default: var(--border)`) that the first fix did

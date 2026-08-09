@@ -548,6 +548,21 @@
   border-bottom: 1px solid var(--border);
 }
 
+.mc-next-context-tab-row {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.mc-next-context-tab-row .mc-next-panel-tab {
+  grid-column: span 2;
+  min-width: 0;
+  padding-inline: 0.3rem;
+}
+
+.mc-next-context-tab-row .mc-next-panel-tab:nth-last-child(-n + 2) {
+  grid-column: span 3;
+}
+
 .mc-next-panel-tab {
   min-height: 2rem;
   padding-inline: 0.52rem;

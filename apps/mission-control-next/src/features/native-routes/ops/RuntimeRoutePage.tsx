@@ -1395,8 +1395,9 @@ export function RuntimeRoutePage({
         );
       case "diagnostics":
         return (
-          <NativeGrid>
+          <NativeGrid className="mc-next-ops-diagnostics-grid">
             <NativeCard
+              className="mc-next-ops-diagnostics-primary"
               title="Diagnostics directory"
               subtitle="System vitals, daemon logs, and MCP runtime posture in one diagnostics view."
               actions={

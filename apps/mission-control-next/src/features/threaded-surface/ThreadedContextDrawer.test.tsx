@@ -111,6 +111,18 @@ function baseProps(overrides: Record<string, unknown> = {}) {
 }
 
 describe("ThreadedContextDrawer", () => {
+  it("keeps all five Working Context tabs in a deliberate balanced grid", async () => {
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(<ThreadedContextDrawer surface="chat" props={baseProps()} />);
+    });
+
+    const tabRow = renderer!.root.findByProps({ "aria-label": "Context drawer panels" });
+    expect(tabRow.props.className).toContain("mc-next-context-tab-row");
+    expect(tabRow.props["data-layout"]).toBe("balanced-grid");
+    expect(tabRow.findAllByProps({ role: "tab" })).toHaveLength(5);
+  });
+
   it("keeps documents explicit, edits notes optimistically, and leaves code artifacts read-only", async () => {
     const onToggleInclude = vi.fn();
     const onSaveNote = vi.fn(async (note, body) => ({ ...note, body, revision: note.revision + 1 }));

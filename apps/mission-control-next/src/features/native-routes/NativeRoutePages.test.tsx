@@ -940,6 +940,8 @@ describe("NativeRoutePages Ops quality dashboard", () => {
     expect(text).toContain("P1 · Advisory · mission-control-next");
     expect(text).toContain("No provider calls");
     expect(text).toContain("No source writes");
+    expect(text.match(/No provider calls/g)).toHaveLength(1);
+    expect(text.match(/No source writes/g)).toHaveLength(1);
     expect(text).toContain("design:quality");
     expect(text).toContain("visual:regression");
     expect(text).toContain("Eval proof");

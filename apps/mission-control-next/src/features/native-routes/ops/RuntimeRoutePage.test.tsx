@@ -911,6 +911,8 @@ describe("RuntimeRoutePage", () => {
       ["runtime", "Runtime posture"],
       ["runtime", "No backup"],
       ["diagnostics", "Diagnostics directory"],
+      ["diagnostics", "mc-next-ops-diagnostics-grid"],
+      ["diagnostics", "mc-next-ops-diagnostics-primary"],
       ["diagnostics", "No daemon logs available."],
       ["schedules", "No scheduled jobs."],
       ["improvement", "No improvement reports yet."],
