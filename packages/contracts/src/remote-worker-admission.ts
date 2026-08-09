@@ -582,6 +582,14 @@ export function remoteWorkerBootstrapReplayMaterial(command: CreateRemoteWorkerB
   });
 }
 
+/**
+ * Stable admission identity across TLS connections. Exporter-bound transport,
+ * PoP, evidence, issuance, candidate-token, and TTL receipts intentionally stay
+ * out: every legitimate retry uses a fresh connection, nonce, proof, evidence
+ * context, and candidate secret. Those values are still verified for the
+ * current attempt, while replay may return only the already-canonical
+ * secret-free generation and credential receipt.
+ */
 export function remoteWorkerBootstrapAdmissionReplayMaterial(
   command: FinalizeRemoteWorkerBootstrapAdmissionCommand,
   bootstrapId: string,
@@ -590,6 +598,7 @@ export function remoteWorkerBootstrapAdmissionReplayMaterial(
   const normalized = normalizeFinalizeRemoteWorkerBootstrapAdmissionCommand(command);
   assertRemoteWorkerRuntimeCredentialClaims(claims);
   return Object.freeze({
+    schemaVersion: "goatcitadel.remote-worker-bootstrap-admission-replay.v2",
     bootstrapId: assertIdentifier(bootstrapId, "bootstrapId", 256),
     expectedRegistryWorkspaceId: normalized.expectedRegistryWorkspaceId,
     expectedBootstrapId: normalized.expectedBootstrapId,
@@ -601,14 +610,7 @@ export function remoteWorkerBootstrapAdmissionReplayMaterial(
     verifiedCapabilityCeilingSha256: normalized.verifiedCapabilityCeilingSha256,
     verifiedTransportIdentitySource: normalized.verifiedTransportIdentitySource,
     verifiedTransportTrustAnchorSha256: normalized.verifiedTransportTrustAnchorSha256,
-    verifiedTransportReceiptSha256: normalized.verifiedTransportReceiptSha256,
-    verifiedProofOfPossessionReceiptSha256: normalized.verifiedProofOfPossessionReceiptSha256,
-    verifiedDownloadReceiptSha256: normalized.verifiedDownloadReceiptSha256,
-    verifiedInstalledTreeAttestationSha256: normalized.verifiedInstalledTreeAttestationSha256,
-    verifiedInstalledTreeReceiptSha256: normalized.verifiedInstalledTreeReceiptSha256,
     claims: freezeRemoteWorkerRuntimeCredentialClaims(claims),
-    credentialIssuanceProofSha256: normalized.credentialIssuanceProofSha256,
-    credentialExpiresInSeconds: normalized.credentialExpiresInSeconds,
     exchangeIdempotencyKey: normalized.exchangeIdempotencyKey,
   });
 }

@@ -404,7 +404,17 @@ describe("RemoteWorkerAdmissionRepository", () => {
 
     const replay = repo.finalizeBootstrapAdmissionWithNonce({
       nonce: bootstrapNonceInput(db, bootstrap, "atomic-replay-second"),
-      command: { ...command, credentialTokenSha256: D("atomic-replay:replacement-token") },
+      command: {
+        ...command,
+        verifiedTransportReceiptSha256: D("atomic-replay:replacement-transport"),
+        verifiedProofOfPossessionReceiptSha256: D("atomic-replay:replacement-pop"),
+        verifiedDownloadReceiptSha256: D("atomic-replay:replacement-download"),
+        verifiedInstalledTreeAttestationSha256: D("atomic-replay:replacement-attestation"),
+        verifiedInstalledTreeReceiptSha256: D("atomic-replay:replacement-tree-receipt"),
+        credentialIssuanceProofSha256: D("atomic-replay:replacement-issuance"),
+        credentialExpiresInSeconds: 900,
+        credentialTokenSha256: D("atomic-replay:replacement-token"),
+      },
     });
     assert.equal(replay.disposition, "replayed_without_credential_secret");
     assert.deepEqual(replay.generation, admitted.generation);
@@ -423,7 +433,10 @@ describe("RemoteWorkerAdmissionRepository", () => {
       () =>
         repo.finalizeBootstrapAdmissionWithNonce({
           nonce: bootstrapNonceInput(db, bootstrap, "atomic-replay-changed"),
-          command: { ...command, verifiedTransportReceiptSha256: D("atomic-replay:changed-transport") },
+          command: {
+            ...command,
+            verifiedClientCertificateSha256: D("atomic-replay:changed-certificate"),
+          },
         }),
       ConflictError,
     );
@@ -596,7 +609,17 @@ describe("RemoteWorkerAdmissionRepository", () => {
     const bootstrap = repo.createBootstrap(bootstrapInput()).record;
     const input = finalizeInput(bootstrap);
     const first = repo.finalizeBootstrapAdmission(input);
-    const replay = repo.finalizeBootstrapAdmission({ ...input, credentialTokenSha256: D("different-generated-token") });
+    const replay = repo.finalizeBootstrapAdmission({
+      ...input,
+      verifiedTransportReceiptSha256: D("changed-transport-receipt"),
+      verifiedProofOfPossessionReceiptSha256: D("changed-pop-receipt"),
+      verifiedDownloadReceiptSha256: D("changed-download-receipt"),
+      verifiedInstalledTreeAttestationSha256: D("changed-installed-tree-attestation"),
+      verifiedInstalledTreeReceiptSha256: D("changed-installed-tree-receipt"),
+      credentialIssuanceProofSha256: D("changed-issuance-proof"),
+      credentialExpiresInSeconds: 900,
+      credentialTokenSha256: D("different-generated-token"),
+    });
     assert.equal(replay.disposition, "replayed_without_credential_secret");
     assert.deepEqual(replay.generation, first.generation);
     assert.deepEqual(replay.credential, first.credential);
@@ -606,7 +629,7 @@ describe("RemoteWorkerAdmissionRepository", () => {
       () =>
         repo.finalizeBootstrapAdmission({
           ...input,
-          verifiedTransportReceiptSha256: D("changed-transport-receipt"),
+          verifiedClientCertificateSha256: D("changed-client-certificate"),
         }),
       ConflictError,
     );

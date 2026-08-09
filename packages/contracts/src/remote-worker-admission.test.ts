@@ -282,6 +282,13 @@ describe("remote worker admission contracts", () => {
     const exchangeB = remoteWorkerBootstrapAdmissionReplayMaterial(
       finalizeCommand({
         bootstrapSecretSha256: D("different-bootstrap-secret"),
+        verifiedTransportReceiptSha256: D("different-transport"),
+        verifiedProofOfPossessionReceiptSha256: D("different-pop"),
+        verifiedDownloadReceiptSha256: D("different-download"),
+        verifiedInstalledTreeAttestationSha256: D("different-attestation"),
+        verifiedInstalledTreeReceiptSha256: D("different-tree-receipt"),
+        credentialIssuanceProofSha256: D("different-issuance"),
+        credentialExpiresInSeconds: 600,
         credentialTokenSha256: D("different-token"),
       }),
       "bootstrap-a",
@@ -296,6 +303,13 @@ describe("remote worker admission contracts", () => {
     expect(
       remoteWorkerBootstrapAdmissionReplayMaterial(
         finalizeCommand({ expectedBootstrapId: "bootstrap-b" }),
+        "bootstrap-a",
+        claims,
+      ),
+    ).not.toEqual(exchangeA);
+    expect(
+      remoteWorkerBootstrapAdmissionReplayMaterial(
+        finalizeCommand({ verifiedClientCertificateSha256: D("different-certificate") }),
         "bootstrap-a",
         claims,
       ),

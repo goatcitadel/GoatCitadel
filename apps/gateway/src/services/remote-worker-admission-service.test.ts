@@ -292,6 +292,33 @@ function bindFixtureToBootstrap(fixture: Fixture, bootstrap: RemoteWorkerBootstr
   ).toString("base64url");
 }
 
+function bindFixtureToFreshTlsConnection(fixture: Fixture, exporterByte: number, nonceByte: number): void {
+  const tlsExporter = Buffer.alloc(32, exporterByte);
+  const nonce = Buffer.alloc(32, nonceByte).toString("base64url");
+  fixture.input.transportIdentity = {
+    ...fixture.input.transportIdentity,
+    tlsExporter,
+    tlsExporterSha256: digest(tlsExporter),
+  };
+  fixture.input.headers[REMOTE_WORKER_PROTOCOL_HEADERS.nonce] = nonce;
+  const material = buildRemoteWorkerPopMaterial({
+    rawPath: fixture.input.rawPath,
+    bodySha256: remoteWorkerProtocolBodySha256(fixture.input.body),
+    operation: REMOTE_WORKER_BOOTSTRAP_EXCHANGE_OPERATION,
+    nonce,
+    timestamp: NOW.toISOString(),
+    idempotencyKey: fixture.input.body.idempotencyKey,
+    authorityId: fixture.input.body.authorityId,
+    authorityGeneration: fixture.input.body.authorityGeneration,
+    transportIdentity: fixture.input.transportIdentity,
+  });
+  fixture.input.headers[REMOTE_WORKER_PROTOCOL_HEADERS.proof] = sign(
+    null,
+    Buffer.from(canonicalJsonString(material), "utf8"),
+    fixture.clientPrivateKey,
+  ).toString("base64url");
+}
+
 function admissionOutcome(
   command: FinalizeRemoteWorkerBootstrapAdmissionCommand,
   bootstrap: RemoteWorkerBootstrapRecord,
@@ -441,6 +468,7 @@ describe("RemoteWorkerAdmissionService", () => {
     fixture.bootstrap = { ...fixture.bootstrap, state: "consumed" };
     fixture.disposition = "replayed_without_credential_secret";
     fixture.nextCredentialByte = 0x66;
+    bindFixtureToFreshTlsConnection(fixture, 0x45, 0x34);
     const second = await admissionService.exchange(fixture.input);
     const secondCall = fixture.store.finalizeBootstrapAdmissionWithNonce.mock
       .calls[1]?.[0] as FinalizeRemoteWorkerBootstrapAdmissionWithNonceInput;
@@ -450,7 +478,10 @@ describe("RemoteWorkerAdmissionService", () => {
     expect(second.disposition).toBe("replayed_without_credential_secret");
     expect(JSON.stringify(second)).not.toContain(Buffer.alloc(32, 0x66).toString("base64url"));
     expect(secondCall.command.credentialTokenSha256).not.toBe(firstCall.command.credentialTokenSha256);
-    expect(secondCall.command.credentialIssuanceProofSha256).toBe(firstCall.command.credentialIssuanceProofSha256);
+    expect(secondCall.command.verifiedTransportReceiptSha256).not.toBe(
+      firstCall.command.verifiedTransportReceiptSha256,
+    );
+    expect(secondCall.command.credentialIssuanceProofSha256).not.toBe(firstCall.command.credentialIssuanceProofSha256);
     expect(fixture.generatedBuffers).toHaveLength(2);
     expect(fixture.generatedBuffers[1]).toEqual(Buffer.alloc(32));
   });
@@ -514,10 +545,7 @@ describe("RemoteWorkerAdmissionService", () => {
       expect(persisted).not.toContain(returnedSecret);
 
       fixture.nextCredentialByte = 0x66;
-      fixture.input.transportIdentity = {
-        ...fixture.input.transportIdentity,
-        tlsExporter: Buffer.alloc(32, 0x44),
-      };
+      bindFixtureToFreshTlsConnection(fixture, 0x45, 0x34);
       const replay = await admissionService.exchange(fixture.input);
 
       expect(replay.disposition).toBe("replayed_without_credential_secret");

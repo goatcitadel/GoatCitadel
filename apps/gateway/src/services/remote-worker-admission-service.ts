@@ -641,7 +641,7 @@ function snapshotAdmissionOutcome(
     credential.registryWorkspaceId !== generation.registryWorkspaceId ||
     credential.workerId !== generation.workerId ||
     credential.workerGeneration !== generation.workerGeneration ||
-    credential.issuanceProofSha256 !== command.credentialIssuanceProofSha256 ||
+    (fields.disposition === "admitted" && credential.issuanceProofSha256 !== command.credentialIssuanceProofSha256) ||
     credential.idempotencyKey !== command.exchangeIdempotencyKey
   ) {
     throw rejected("Remote worker admission storage outcome is invalid.");
