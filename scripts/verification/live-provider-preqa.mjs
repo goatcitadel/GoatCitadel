@@ -16,7 +16,14 @@ import {
   assertUsabilitySourceStateUnchanged,
   snapshotUsabilitySourceState,
 } from "./lib/scenarios/usability-source-state.mjs";
-import { createRunContext, finalizeRunContext, repoRoot, runScenario, writeJson } from "./lib/shared.mjs";
+import {
+  createRunContext,
+  finalizeRunContext,
+  releaseRunContext,
+  repoRoot,
+  runScenario,
+  writeJson,
+} from "./lib/shared.mjs";
 
 const LANE = "live-provider-preqa";
 const PROVIDER_ID = "openai-codex";
@@ -49,54 +56,57 @@ export async function main() {
   const context = await createRunContext(LANE, {
     profile: sourceState.mode,
   });
+  try {
+    await runScenario(
+      context,
+      {
+        id: "live-provider.chatgpt.sol-terra-luna",
+        lane: LANE,
+        title: "ChatGPT OAuth Sol journey pack and Terra/Luna smokes",
+        subsystem: "provider-runtime",
+      },
+      async ({ correlationId }) =>
+        await runLiveProviderJourney(context, {
+          correlationId,
+          sourceState,
+        }),
+    );
 
-  await runScenario(
-    context,
-    {
-      id: "live-provider.chatgpt.sol-terra-luna",
-      lane: LANE,
-      title: "ChatGPT OAuth Sol journey pack and Terra/Luna smokes",
-      subsystem: "provider-runtime",
-    },
-    async ({ correlationId }) =>
-      await runLiveProviderJourney(context, {
-        correlationId,
-        sourceState,
-      }),
-  );
+    await runScenario(
+      context,
+      {
+        id: "live-provider.artifact-redaction",
+        lane: LANE,
+        title: "Live provider evidence contains no secret-shaped values",
+        subsystem: "verification-evidence",
+      },
+      async () => {
+        await assertArtifactRedactionGate(context.artifactRoot);
+        return {
+          status: "passed",
+          metrics: { scannedArtifactRoot: true, findings: 0 },
+        };
+      },
+    );
 
-  await runScenario(
-    context,
-    {
-      id: "live-provider.artifact-redaction",
-      lane: LANE,
-      title: "Live provider evidence contains no secret-shaped values",
-      subsystem: "verification-evidence",
-    },
-    async () => {
-      await assertArtifactRedactionGate(context.artifactRoot);
-      return {
-        status: "passed",
-        metrics: { scannedArtifactRoot: true, findings: 0 },
-      };
-    },
-  );
+    await runScenario(
+      context,
+      {
+        id: "live-provider.source-integrity",
+        lane: LANE,
+        title: "Live provider evidence remains bound to one source state",
+        subsystem: "verification-evidence",
+      },
+      async () => await completeLiveProviderSourceState(context, sourceState),
+    );
 
-  await runScenario(
-    context,
-    {
-      id: "live-provider.source-integrity",
-      lane: LANE,
-      title: "Live provider evidence remains bound to one source state",
-      subsystem: "verification-evidence",
-    },
-    async () => await completeLiveProviderSourceState(context, sourceState),
-  );
-
-  const manifest = await finalizeRunContext(context);
-  console.log(`Artifact: ${context.artifactRoot}`);
-  console.log(`Status: ${manifest.status}`);
-  if (manifest.status !== "passed") process.exitCode = 1;
+    const manifest = await finalizeRunContext(context);
+    console.log(`Artifact: ${context.artifactRoot}`);
+    console.log(`Status: ${manifest.status}`);
+    if (manifest.status !== "passed") process.exitCode = 1;
+  } finally {
+    await releaseRunContext(context);
+  }
 }
 
 export async function completeLiveProviderSourceState(context, startedSourceState, deps = {}) {

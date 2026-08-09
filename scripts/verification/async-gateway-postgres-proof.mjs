@@ -31,7 +31,14 @@ import {
   POSTGRES_RECOVERY_URL_ENV,
   parseLoopbackPostgresVerificationUrl,
 } from "./usability-postgres-recovery.mjs";
-import { createRunContext, finalizeRunContext, repoRoot, runScenario, writeJson } from "./lib/shared.mjs";
+import {
+  createRunContext,
+  finalizeRunContext,
+  releaseRunContext,
+  repoRoot,
+  runScenario,
+  writeJson,
+} from "./lib/shared.mjs";
 
 export const ASYNC_GATEWAY_POSTGRES_LANE = "async-gateway-postgres";
 export const EVENT_LOOP_P99_LIMIT_MS = 250;
@@ -48,24 +55,28 @@ export async function main() {
   const context = await createRunContext(ASYNC_GATEWAY_POSTGRES_LANE, {
     profile: "isolated-built-runtime",
   });
-  await runScenario(
-    context,
-    {
-      id: "async-gateway-postgres.research-artifact-checkpoint",
-      lane: ASYNC_GATEWAY_POSTGRES_LANE,
-      title: "Async PostgreSQL Gateway stays responsive through research artifacts and CHECKPOINT",
-      subsystem: "gateway-storage-postgres",
-    },
-    async ({ correlationId }) => runAsyncGatewayPostgresProof(context, correlationId),
-  );
-  const manifest = await finalizeRunContext(context);
-  const scenario = manifest.scenarios.find(
-    (candidate) => candidate.id === "async-gateway-postgres.research-artifact-checkpoint",
-  );
-  console.log(`Artifact: ${context.artifactRoot}`);
-  console.log(`Status: ${manifest.status}`);
-  console.log(`Live PostgreSQL scenario: ${scenario?.status ?? "missing"}`);
-  if (manifest.status !== "passed") process.exitCode = 1;
+  try {
+    await runScenario(
+      context,
+      {
+        id: "async-gateway-postgres.research-artifact-checkpoint",
+        lane: ASYNC_GATEWAY_POSTGRES_LANE,
+        title: "Async PostgreSQL Gateway stays responsive through research artifacts and CHECKPOINT",
+        subsystem: "gateway-storage-postgres",
+      },
+      async ({ correlationId }) => runAsyncGatewayPostgresProof(context, correlationId),
+    );
+    const manifest = await finalizeRunContext(context);
+    const scenario = manifest.scenarios.find(
+      (candidate) => candidate.id === "async-gateway-postgres.research-artifact-checkpoint",
+    );
+    console.log(`Artifact: ${context.artifactRoot}`);
+    console.log(`Status: ${manifest.status}`);
+    console.log(`Live PostgreSQL scenario: ${scenario?.status ?? "missing"}`);
+    if (manifest.status !== "passed") process.exitCode = 1;
+  } finally {
+    await releaseRunContext(context);
+  }
 }
 
 export async function runAsyncGatewayPostgresProof(context, correlationId, options = {}) {

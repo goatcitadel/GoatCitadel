@@ -51,8 +51,8 @@
     "dev": "tsx src/dev-supervisor.ts",
     "dev:watch": "tsx src/dev-supervisor.ts",
     "dev:supervisor": "tsx src/dev-supervisor.ts",
-    "build": "tsc -b tsconfig.json",
-    "typecheck": "tsc -b tsconfig.json",
+    "build": "node ../../scripts/run-with-worktree-output-lock.mjs --label=build:gateway -- pnpm exec tsc -b tsconfig.json",
+    "typecheck": "node ../../scripts/run-with-worktree-output-lock.mjs --label=typecheck:gateway -- pnpm exec tsc -b tsconfig.json",
     "pretest": "node ../../scripts/run-unless-env.mjs GOATCITADEL_SKIP_EXTENSIONS_SDK_PREBUILD pnpm --filter @goatcitadel/extensions-sdk build",
     "test": "vitest run && tsx --test src/services/chat-generated-artifact-service.test.ts src/services/chat-thread-knowledge-service.test.ts",
     "test:postgres:auth": "vitest run src/services/settings-auth-service.test.ts",
@@ -74,6 +74,6 @@
     "admin": "tsx src/admin-cli.ts",
     "session-control": "tsx src/session-control-cli.ts",
     "config:sync": "tsx src/config-sync.ts",
-    "lint": "tsc -b tsconfig.json"
+    "lint": "node ../../scripts/run-with-worktree-output-lock.mjs --label=lint:gateway -- pnpm exec tsc -b tsconfig.json"
   }
 }

@@ -12,7 +12,7 @@ import {
   combineUsabilityPrimaryAndIntegrityErrors,
   completeUsabilityFinalIntegrity,
 } from "./lib/scenarios/usability-final-integrity.mjs";
-import { createRunContext, finalizeRunContext, repoRoot, runScenario } from "./lib/shared.mjs";
+import { createRunContext, finalizeRunContext, releaseRunContext, repoRoot, runScenario } from "./lib/shared.mjs";
 
 export const POSTGRES_RECOVERY_LANE = "usability-postgres-recovery";
 export const POSTGRES_RECOVERY_URL_ENV = "GOATCITADEL_TEST_POSTGRES_URL";
@@ -115,6 +115,7 @@ export async function runUsabilityPostgresRecoveryVerification(options = {}, dep
   const runLane = deps.runGatewayChatFaultRecoveryLane ?? runGatewayChatFaultRecoveryLane;
   const runScenarioImpl = deps.runScenario ?? runScenario;
   const finalizeContext = deps.finalizeRunContext ?? finalizeRunContext;
+  const releaseContext = deps.releaseRunContext ?? releaseRunContext;
   const completeFinalIntegrity = deps.completeUsabilityFinalIntegrity ?? completeUsabilityFinalIntegrity;
   let manifest;
 
@@ -153,6 +154,8 @@ export async function runUsabilityPostgresRecoveryVerification(options = {}, dep
       throw combineUsabilityPrimaryAndIntegrityErrors(safePrimaryError, integrityError);
     }
     throw safePrimaryError;
+  } finally {
+    await releaseContext(context);
   }
 
   return { context, manifest, sourceState };
