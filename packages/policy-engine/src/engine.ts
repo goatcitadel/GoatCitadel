@@ -1274,20 +1274,21 @@ export class ToolPolicyEngine {
     toolDef?: ToolDefinition,
   ): Promise<GrantDecision | undefined> {
     const scoped = buildScopeCandidates(request);
-    const matchingGrants: ToolGrantRecord[] = [];
-    for (const candidate of scoped) {
-      const grants = (await this.storage.toolGrants.listActive(candidate.scope, candidate.scopeRef)).filter(
-        (grant) =>
-          grant.scope === candidate.scope &&
-          grant.scopeRef === candidate.scopeRef &&
-          matchesToolPattern(grant.toolPattern, request.toolName),
-      );
-
-      if (grants.length === 0) {
-        continue;
-      }
-      matchingGrants.push(...grants);
-    }
+    // Scope reads are independent. Resolve them concurrently, then flatten in the
+    // original specific-to-broad order so allow-constraint precedence is unchanged.
+    // Deny-wins remains order-independent and is applied only after every scope has
+    // contributed its active grants.
+    const grantsByScope = await Promise.all(
+      scoped.map(async (candidate) =>
+        (await this.storage.toolGrants.listActive(candidate.scope, candidate.scopeRef)).filter(
+          (grant) =>
+            grant.scope === candidate.scope &&
+            grant.scopeRef === candidate.scopeRef &&
+            matchesToolPattern(grant.toolPattern, request.toolName),
+        ),
+      ),
+    );
+    const matchingGrants = grantsByScope.flat();
 
     const denyGrant = matchingGrants.find((grant) => grant.decision === "deny");
     if (denyGrant) {

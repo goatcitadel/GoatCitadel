@@ -53,8 +53,10 @@ PR #137 fixed "thin responses" by wrapping cowork in a **plan → execute → sy
   `GOATCITADEL_DEBUG_PROMPT_CONTEXT_BUDGET_RECEIPTS=1` diagnostic gate.
   Concurrent same-stream audit events are now microbatched into one JSONL append
   under the existing cross-process lock; callers still await durable, ordered,
-  secret-free evidence and delivery IDs remain idempotent. Remaining work is
-  the avoidable policy/storage round trips.
+  secret-free evidence and delivery IDs remain idempotent. Independent active
+  grant reads now resolve concurrently across task, agent, session, Chamber,
+  Citadel, workspace, and global scopes before the unchanged deny-wins decision.
+  Remaining work is the avoidable write-side policy/storage round trips.
 - **Superseded — S6 short turns outside durable wrapping.** Current one-Chat
   runtime truth keeps durable execution authoritative for resumable work. The
   valid performance goal moves to `M1`: reduce admission, heartbeat, and
