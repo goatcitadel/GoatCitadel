@@ -43,7 +43,7 @@ export function registerTelegramIntegrationRoutes(fastify: FastifyInstance): voi
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      const token = resolveTelegramDiscoveryToken(fastify, parsed.data);
+      const token = await resolveTelegramDiscoveryToken(fastify, parsed.data);
       if (!token) {
         return reply.code(400).send({ error: "Provide a Telegram bot token, token env var, or connection id." });
       }
@@ -73,11 +73,11 @@ export function registerTelegramIntegrationRoutes(fastify: FastifyInstance): voi
         });
       }
       try {
-        const connection = fastify.services.integrations.getIntegrationConnection(params.data.connectionId);
+        const connection = await fastify.services.integrations.getIntegrationConnection(params.data.connectionId);
         if (connection.key !== "telegram") {
           return reply.code(400).send({ error: "Target directory v1 is available for Telegram connections." });
         }
-        const token = resolveTelegramDiscoveryToken(fastify, { connectionId: params.data.connectionId });
+        const token = await resolveTelegramDiscoveryToken(fastify, { connectionId: params.data.connectionId });
         const discoveredTargets =
           token && query.data.refresh
             ? await discoverTelegramTargets({
@@ -120,7 +120,7 @@ export function registerTelegramIntegrationRoutes(fastify: FastifyInstance): voi
         });
       }
       try {
-        const connection = fastify.services.integrations.getIntegrationConnection(params.data.connectionId);
+        const connection = await fastify.services.integrations.getIntegrationConnection(params.data.connectionId);
         if (connection.key !== "telegram") {
           return reply
             .code(400)
@@ -130,7 +130,7 @@ export function registerTelegramIntegrationRoutes(fastify: FastifyInstance): voi
         if (!approval.approved || !approval.configPatch) {
           return reply.code(404).send({ error: "Pairing code was not found or has expired." });
         }
-        const updated = fastify.services.integrations.updateIntegrationConnection(params.data.connectionId, {
+        const updated = await fastify.services.integrations.updateIntegrationConnection(params.data.connectionId, {
           config: {
             ...connection.config,
             ...approval.configPatch,
@@ -151,10 +151,10 @@ export function registerTelegramIntegrationRoutes(fastify: FastifyInstance): voi
   );
 }
 
-function resolveTelegramDiscoveryToken(
+async function resolveTelegramDiscoveryToken(
   fastify: FastifyInstance,
   input: TelegramDiscoveryTokenInput,
-): string | undefined {
+): Promise<string | undefined> {
   if (input.botToken?.trim()) {
     return input.botToken.trim();
   }
@@ -166,7 +166,7 @@ function resolveTelegramDiscoveryToken(
   if (!input.connectionId) {
     return undefined;
   }
-  const connection = fastify.services.integrations.getIntegrationConnection(input.connectionId);
+  const connection = await fastify.services.integrations.getIntegrationConnection(input.connectionId);
   const config = connection.config;
   return (
     readConfigString(config, "botToken") ?? resolveTelegramBotTokenEnvSecret(readConfigString(config, "botTokenEnv"))

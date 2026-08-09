@@ -33,7 +33,10 @@ export interface CommunicationsDashboardQuery {
 export interface CommunicationsDashboardServiceDependencies {
   now?: () => Date;
   createApproval?: (input: ApprovalCreateInput) => Promise<ApprovalRequest>;
-  listIntegrationConnections?: (kind?: IntegrationKind, limit?: number) => IntegrationConnection[];
+  listIntegrationConnections?: (
+    kind?: IntegrationKind,
+    limit?: number,
+  ) => IntegrationConnection[] | Promise<IntegrationConnection[]>;
   commsGmailRead?: (input: GmailReadQuery) => Promise<ToolInvokeResult | Record<string, unknown>>;
   commsCalendarList?: (input: CalendarListQuery) => Promise<ToolInvokeResult | Record<string, unknown>>;
   listContacts?: (workspaceId: string) => ContactRecord[];
@@ -52,7 +55,7 @@ export class CommunicationsDashboardService {
 
   public async getDashboard(query: CommunicationsDashboardQuery = {}): Promise<CommunicationsDashboardResponse> {
     const workspaceId = normalizeWorkspaceId(query.workspaceId);
-    const connections = this.listConnections();
+    const connections = await this.listConnections();
     const mailAccounts = connections.flatMap((connection) => this.toMailAccount(connection, workspaceId));
     const calendarAccounts = connections.flatMap((connection) => this.toCalendarAccount(connection, workspaceId));
     const [messages, events] = await Promise.all([
@@ -292,8 +295,9 @@ export class CommunicationsDashboardService {
     return [...contactMap.values()];
   }
 
-  private listConnections(): IntegrationConnection[] {
-    return this.deps.listIntegrationConnections?.(undefined, INTEGRATION_CONNECTION_LIMIT) ?? [];
+  private async listConnections(): Promise<IntegrationConnection[]> {
+    const connections = await this.deps.listIntegrationConnections?.(undefined, INTEGRATION_CONNECTION_LIMIT);
+    return Array.isArray(connections) ? connections : [];
   }
 
   private toMailAccount(connection: IntegrationConnection, workspaceId: string): MailAccountRecord[] {

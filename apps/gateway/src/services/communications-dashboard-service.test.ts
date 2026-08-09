@@ -195,6 +195,23 @@ describe("communications dashboard service", () => {
       }),
     );
   });
+
+  // The composed gateway port resolves connections asynchronously. Treating it
+  // as synchronous made `/api/v1/communications` answer 500 with
+  // "connections.flatMap is not a function".
+  it("resolves an asynchronous integration connection port", async () => {
+    const service = createCommunicationsDashboardService({
+      now: () => new Date(NOW),
+      listIntegrationConnections: async () => [createConnection()],
+      commsGmailRead: vi.fn(async () => ({ messages: [] })),
+      commsCalendarList: vi.fn(async () => ({ items: [] })),
+    });
+
+    const dashboard = await service.getDashboard({ workspaceId: "workspace-1" });
+
+    expect(dashboard.mailAccounts).toHaveLength(1);
+    expect(dashboard.mailAccounts[0]).toMatchObject({ provider: "gmail", address: "operator@example.test" });
+  });
 });
 
 function createApprovalRecord(input: ApprovalCreateInput): ApprovalRequest {

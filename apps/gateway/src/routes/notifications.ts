@@ -63,7 +63,10 @@ export const notificationRoutes: FastifyPluginAsync = async (fastify) => {
     const query = workspaceQuerySchema.safeParse(request.query);
     if (!query.success) return reply.code(400).send({ error: query.error.flatten() });
     return reply.send({
-      items: fastify.services.integrations.listNotificationTargets(query.data.workspaceId, query.data.includeArchived),
+      items: await fastify.services.integrations.listNotificationTargets(
+        query.data.workspaceId,
+        query.data.includeArchived,
+      ),
     });
   });
 
@@ -72,7 +75,7 @@ export const notificationRoutes: FastifyPluginAsync = async (fastify) => {
     if (!body.success) return reply.code(400).send({ error: body.error.flatten() });
     return reply
       .code(201)
-      .send(fastify.services.integrations.createNotificationTarget(body.data.workspaceId, body.data.target));
+      .send(await fastify.services.integrations.createNotificationTarget(body.data.workspaceId, body.data.target));
   });
 
   fastify.patch("/api/v1/notifications/targets/:targetId", async (request, reply) => {
@@ -87,7 +90,7 @@ export const notificationRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     return reply.send(
-      fastify.services.integrations.updateNotificationTarget(
+      await fastify.services.integrations.updateNotificationTarget(
         body.data.workspaceId,
         params.data.targetId,
         body.data.expectedRevision,
@@ -109,7 +112,10 @@ export const notificationRoutes: FastifyPluginAsync = async (fastify) => {
     const query = workspaceQuerySchema.safeParse(request.query);
     if (!query.success) return reply.code(400).send({ error: query.error.flatten() });
     return reply.send({
-      items: fastify.services.integrations.listNotificationRules(query.data.workspaceId, query.data.includeArchived),
+      items: await fastify.services.integrations.listNotificationRules(
+        query.data.workspaceId,
+        query.data.includeArchived,
+      ),
     });
   });
 
@@ -118,7 +124,7 @@ export const notificationRoutes: FastifyPluginAsync = async (fastify) => {
     if (!body.success) return reply.code(400).send({ error: body.error.flatten() });
     return reply
       .code(201)
-      .send(fastify.services.integrations.createNotificationRule(body.data.workspaceId, body.data.rule));
+      .send(await fastify.services.integrations.createNotificationRule(body.data.workspaceId, body.data.rule));
   });
 
   fastify.patch("/api/v1/notifications/rules/:ruleId", async (request, reply) => {
@@ -126,7 +132,7 @@ export const notificationRoutes: FastifyPluginAsync = async (fastify) => {
     const body = updateRuleSchema.safeParse(request.body);
     if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid notification rule update." });
     return reply.send(
-      fastify.services.integrations.updateNotificationRule(
+      await fastify.services.integrations.updateNotificationRule(
         body.data.workspaceId,
         params.data.ruleId,
         body.data.expectedRevision,
@@ -138,14 +144,14 @@ export const notificationRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.put("/api/v1/notifications/presence", async (request, reply) => {
     const body = presenceSchema.safeParse(request.body);
     if (!body.success) return reply.code(400).send({ error: body.error.flatten() });
-    return reply.send(fastify.services.integrations.upsertNotificationPresence(body.data));
+    return reply.send(await fastify.services.integrations.upsertNotificationPresence(body.data));
   });
 
   fastify.get("/api/v1/notifications/deliveries", async (request, reply) => {
     const query = workspaceQuerySchema.safeParse(request.query);
     if (!query.success) return reply.code(400).send({ error: query.error.flatten() });
     return reply.send({
-      items: fastify.services.integrations.listNotificationDeliveries(query.data.workspaceId, query.data.limit),
+      items: await fastify.services.integrations.listNotificationDeliveries(query.data.workspaceId, query.data.limit),
     });
   });
 
