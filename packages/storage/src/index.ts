@@ -41,7 +41,9 @@ import { MeshCapabilityPublicationRepository } from "./mesh-capability-publicati
 import { RemoteWorkerAdmissionRepository } from "./remote-worker-admission-repo.js";
 import { RemoteWorkerArtifactRepository } from "./remote-worker-artifact-repo.js";
 import { RemoteWorkerAssignmentRepository } from "./remote-worker-assignment-repo.js";
+import { RemoteWorkerCellRepository } from "./remote-worker-cell-repo.js";
 import { RemoteWorkerEffectRepository } from "./remote-worker-effect-repo.js";
+import { RemoteWorkerInferenceRepository } from "./remote-worker-inference-repo.js";
 import { SessionControlRepository } from "./session-control-repo.js";
 import { SessionMutationAdmissionRepository } from "./session-mutation-admission-repo.js";
 import { HeartbeatOccurrenceRepository } from "./heartbeat-occurrence-repo.js";
@@ -288,7 +290,9 @@ export class Storage {
   public readonly remoteWorkerAdmissions: RemoteWorkerAdmissionRepository;
   public readonly remoteWorkerArtifacts: RemoteWorkerArtifactRepository;
   public readonly remoteWorkerAssignments: RemoteWorkerAssignmentRepository;
+  public readonly remoteWorkerCells: RemoteWorkerCellRepository;
   public readonly remoteWorkerEffects: RemoteWorkerEffectRepository;
+  public readonly remoteWorkerInference: RemoteWorkerInferenceRepository;
   public readonly sessionControls: SessionControlRepository;
   public readonly sessionMutationAdmissions: SessionMutationAdmissionRepository;
   public readonly heartbeatOccurrences: HeartbeatOccurrenceRepository;
@@ -450,7 +454,9 @@ export class Storage {
     this.remoteWorkerAdmissions = new RemoteWorkerAdmissionRepository(this.db);
     this.remoteWorkerArtifacts = new RemoteWorkerArtifactRepository(this.db);
     this.remoteWorkerAssignments = new RemoteWorkerAssignmentRepository(this.db);
+    this.remoteWorkerCells = new RemoteWorkerCellRepository(this.db);
     this.remoteWorkerEffects = new RemoteWorkerEffectRepository(this.db);
+    this.remoteWorkerInference = new RemoteWorkerInferenceRepository(this.db);
     this.sessionControls = new SessionControlRepository(this.db);
     this.sessionMutationAdmissions = new SessionMutationAdmissionRepository(this.db);
     this.heartbeatOccurrences = new HeartbeatOccurrenceRepository(this.db);

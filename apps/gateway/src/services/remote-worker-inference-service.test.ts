@@ -35,6 +35,7 @@ import {
   type RemoteWorkerInferenceBudgetPort,
   type RemoteWorkerInferenceDispatchAdapter,
   type RemoteWorkerInferenceGovernancePort,
+  type RemoteWorkerInferenceRepositoryPort,
   type RemoteWorkerInferenceResolvedAuthority,
   type RemoteWorkerInferenceRoutingPort,
 } from "./remote-worker-inference-service.js";
@@ -270,6 +271,19 @@ interface ServiceDoubles {
   settled: string[][];
 }
 
+function promiseBackedRepository(repository: RemoteWorkerInferenceRepository): RemoteWorkerInferenceRepositoryPort {
+  return {
+    admitOrReplay: async (input) => repository.admitOrReplay(input),
+    claimDispatch: async (input) => repository.claimDispatch(input),
+    appendOutputFrame: async (input) => repository.appendOutputFrame(input),
+    markDispatchUnknown: async (key, input) => repository.markDispatchUnknown(key, input),
+    finalizeTerminal: async (input) => repository.finalizeTerminal(input),
+    acknowledge: async (key, throughSequence, now) => repository.acknowledge(key, throughSequence, now),
+    getRequest: async (key) => repository.getRequest(key),
+    listFramesAfter: async (key, afterSequence) => repository.listFramesAfter(key, afterSequence),
+  };
+}
+
 function build(
   h: Harness,
   options: {
@@ -277,6 +291,7 @@ function build(
     reserve?: boolean;
     authorityOverride?: () => RemoteWorkerInferenceResolvedAuthority | undefined;
     outcome?: RemoteWorkerInferenceDispatchOutcome;
+    promiseBackedOwners?: boolean;
   } = {},
 ): { service: RemoteWorkerInferenceService; doubles: ServiceDoubles } {
   const settled: string[][] = [];
@@ -297,34 +312,55 @@ function build(
   };
   const doubles: ServiceDoubles = {
     authority: {
-      resolveActiveAuthority: () => (options.authorityOverride ? options.authorityOverride() : h.authority),
+      resolveActiveAuthority: () => {
+        const authority = options.authorityOverride ? options.authorityOverride() : h.authority;
+        return options.promiseBackedOwners ? Promise.resolve(authority) : authority;
+      },
     },
-    governance: { evaluate: () => governanceReceipt(options.decision ?? "allowed") },
+    governance: {
+      evaluate: () => {
+        const receipt = governanceReceipt(options.decision ?? "allowed");
+        return options.promiseBackedOwners ? Promise.resolve(receipt) : receipt;
+      },
+    },
     budget: {
-      reserve: () =>
-        options.reserve === false
-          ? undefined
-          : {
-              schemaVersion: "goatcitadel.remote-worker-inference-budget.v1",
-              reservationId: "reservation-1",
-              reservedOutputTokens: 4096,
-              expiresAt: FUTURE,
-            },
-      settle: ({ usageEventIds }) => settled.push([...usageEventIds]),
+      reserve: () => {
+        const reservation =
+          options.reserve === false
+            ? undefined
+            : {
+                schemaVersion: "goatcitadel.remote-worker-inference-budget.v1",
+                reservationId: "reservation-1",
+                reservedOutputTokens: 4096,
+                expiresAt: FUTURE,
+              };
+        return options.promiseBackedOwners ? Promise.resolve(reservation) : reservation;
+      },
+      settle: ({ usageEventIds }) => {
+        settled.push([...usageEventIds]);
+        return options.promiseBackedOwners ? Promise.resolve() : undefined;
+      },
     },
     routing: {
-      resolve: () => ({
-        providerId: "anthropic",
-        modelId: "claude-opus-4",
-        apiStyle: "messages",
-        credential: { credentialType: "api_key", usagePool: "standard", credentialSource: "keychain" },
-      }),
+      resolve: () => {
+        const resolution = {
+          providerId: "anthropic" as const,
+          modelId: "claude-opus-4",
+          apiStyle: "messages" as const,
+          credential: {
+            credentialType: "api_key" as const,
+            usagePool: "standard",
+            credentialSource: "keychain" as const,
+          },
+        };
+        return options.promiseBackedOwners ? Promise.resolve(resolution) : resolution;
+      },
     },
     adapter,
     settled,
   };
   const service = new RemoteWorkerInferenceService({
-    repository: h.repo,
+    repository: options.promiseBackedOwners ? promiseBackedRepository(h.repo) : h.repo,
     authority: doubles.authority,
     governance: doubles.governance,
     budget: doubles.budget,
@@ -339,6 +375,16 @@ function build(
 const CLAIMS = ["worker_runtime", "gateway_inference"];
 
 describe("RemoteWorkerInferenceService", () => {
+  it("awaits Promise-backed storage, authority, governance, budget, and routing owners", async () => {
+    const h = seed("async-owners");
+    const { service, doubles } = build(h, { promiseBackedOwners: true });
+    const outcome = await service.performInference({ submission: h.submission, workerCapabilityClaims: CLAIMS });
+    expect(outcome.disposition).toBe("delivered");
+    expect(outcome.request.state).toBe("completed");
+    expect(doubles.adapter.calls).toHaveLength(1);
+    expect(doubles.settled).toEqual([["usage-event-terminal"]]);
+  });
+
   it("performs inference end to end, filters output to text frames, and settles from HX-306 event ids", async () => {
     const h = seed("happy");
     const { service, doubles } = build(h);
@@ -477,11 +523,18 @@ describe("RemoteWorkerInferenceService", () => {
     const h = seed("reconnect");
     const { service } = build(h);
     await service.performInference({ submission: h.submission, workerCapabilityClaims: CLAIMS });
-    const pending = service.readPendingFrames({ submission: h.submission, workerCapabilityClaims: CLAIMS });
+    const pending = await service.readPendingFrames({ submission: h.submission, workerCapabilityClaims: CLAIMS });
     expect(pending.map((frame) => frame.frameSequence)).toEqual([1, 2, 3]);
-    const acked = service.acknowledge({ submission: h.submission, workerCapabilityClaims: CLAIMS, throughSequence: 2 });
+    const acked = await service.acknowledge({
+      submission: h.submission,
+      workerCapabilityClaims: CLAIMS,
+      throughSequence: 2,
+    });
     expect(acked.workerAcknowledgedThrough).toBe(2);
-    const afterAck = service.readPendingFrames({ submission: h.submission, workerCapabilityClaims: CLAIMS });
+    const afterAck = await service.readPendingFrames({
+      submission: h.submission,
+      workerCapabilityClaims: CLAIMS,
+    });
     expect(afterAck.map((frame) => frame.frameSequence)).toEqual([3]);
   });
 
@@ -491,8 +544,8 @@ describe("RemoteWorkerInferenceService", () => {
     const { service } = build(h, { authorityOverride: () => (live ? h.authority : undefined) });
     await service.performInference({ submission: h.submission, workerCapabilityClaims: CLAIMS });
     live = false;
-    expect(() => service.readPendingFrames({ submission: h.submission, workerCapabilityClaims: CLAIMS })).toThrow(
-      /unknown, stale, or expired/u,
-    );
+    await expect(
+      service.readPendingFrames({ submission: h.submission, workerCapabilityClaims: CLAIMS }),
+    ).rejects.toThrow(/unknown, stale, or expired/u);
   });
 });
