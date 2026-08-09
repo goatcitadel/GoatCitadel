@@ -1,6 +1,6 @@
 # GoatCitadel Master Completion Program
 
-Last updated: 2026-08-08
+Last updated: 2026-08-09
 
 Status: canonical aggregate execution ledger
 
@@ -66,7 +66,7 @@ change:
 | `M5` | P0 | Governed self-configuration and repair expansion | `in_progress` | M1; M2 for remote custody | `pnpm verify:self-configuration` with live provider, packaged restart, browser secure input, profile, rollback, and delegated-resume evidence |
 | `M6` | P1/P2 | Gateway capability and policy follow-ons | `complete` | M1; M5 where repair is involved | Focused capability/policy/provider tests and explicit owner decisions |
 | `M7` | P1/P2 | Consolidated Mission Control UX and live-worker projection | `in_progress` | M4; stable M5/M6 APIs | Focused component tests, populated stories, accessibility, surface, and one visual-regression pass |
-| `M8` | P1 | Mobile companion completion and pinned-Gateway proof | `planned` | M3-M5 contract stability | External mobile build/tests and HX-508 device-auth, paging, approval, offline/reconnect, attachment, and revocation bundle |
+| `M8` | P1 | Mobile companion completion and pinned-Gateway proof | `in_progress` | M3-M5 contract stability | External mobile build/tests and HX-508 device-auth, paging, approval, offline/reconnect, attachment, and revocation bundle |
 | `M9` | P0 | Packaging, desktop, remote-hardened, rollback, and recovery | `planned` | M2-M8 release-bearing scope | `pnpm verify:install`, `pnpm verify:desktop`, packaged lifecycle, exact hashes/versions, hardened recovery bundle |
 | `M10` | P0 | Final exact-SHA certification | `planned` | M1-M9 | All required named lanes, then `pnpm verify:all`, authenticated queues, and release evidence |
 
@@ -395,13 +395,28 @@ review evidence.
 
 ### Current work
 
+- The Gateway now has a production-dark, grant-bound push-registration and
+  delivery owner in paired SQLite 195/PostgreSQL 138 storage. Raw Expo/FCM
+  tokens remain only in deterministic OS-keychain custody; durable metadata,
+  approval-refresh payloads, provider receipts, audit, replay, and diagnostics
+  are secret-redacted. Registration/revoke, crash-gap suppression, outbox CAS,
+  unknown-after-send quarantine, and custody-mismatch cleanup have focused
+  proof. The production provider and scheduler remain explicitly unavailable,
+  and the API reports that delivery posture instead of treating an enabled
+  registration as live delivery.
+- Full-body companion signatures still cover push tokens and rejected extra
+  fields, while the retained replay/audit correlation hash uses a versioned,
+  allowlisted secret-free tuple. Durable replay authority remains the
+  session-scoped nonce rather than a token-derived fingerprint.
 - Paired general companions can now read the secret-redacted pending approval
   queue and submit a request-signed rejection. Approval and edit remain
   operator-only because the current client-local biometric key is not bound to
   a Gateway-verifiable approval signature; the capability must remain
   `scaffolded` until that end-to-end key owner exists.
-- Finish consumer-safe approval-key/device-auth, push registration/refresh, and
-  any approved geofence-context work.
+- Finish consumer-safe approval-key/device-auth; mobile OS token acquisition,
+  rotation/revoke, foreground/background notification handling, and approval
+  deep links; a credentialed Expo/FCM provider and scheduler with an atomic
+  revoke/send fence; and any approved geofence-context work.
 - Exercise device auth, session paging, approvals, offline/reconnect,
   attachments, and revocation against one pinned Gateway SHA (`HX-508`).
 - Keep screen share, notification awareness, accessibility helper, and call

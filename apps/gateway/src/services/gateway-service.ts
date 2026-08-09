@@ -11076,7 +11076,8 @@ export class GatewayService {
             message: "Mobile push approval projection failed after retained realtime publication.",
             context: { realtimeEventId: event.eventId, eventType: event.eventType },
           });
-        } catch {
+        } catch (diagnosticError) {
+          void diagnosticError;
           // Retained realtime publication remains authoritative even when diagnostics are unavailable.
         }
       }

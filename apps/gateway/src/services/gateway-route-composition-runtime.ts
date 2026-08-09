@@ -172,7 +172,8 @@ export function composeRuntimeAdminRouteDependencies(
               message: "Device grant was revoked, but mobile push metadata cleanup requires reconciliation.",
               context: { grantId: revoked.grantId },
             });
-          } catch {
+          } catch (diagnosticError) {
+            void diagnosticError;
             // The canonical auth grant revoke must not be rolled back by auxiliary diagnostics.
           }
         }

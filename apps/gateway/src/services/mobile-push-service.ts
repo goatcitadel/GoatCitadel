@@ -443,7 +443,8 @@ export class MobilePushService {
         message: "Mobile push metadata was revoked, but orphaned keychain custody requires operator cleanup.",
         context: { registrationId, operation },
       });
-    } catch {
+    } catch (diagnosticError) {
+      void diagnosticError;
       // Durable revocation remains authoritative even if diagnostic reporting is unavailable.
     }
   }
