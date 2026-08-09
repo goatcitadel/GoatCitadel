@@ -44,8 +44,13 @@ operator-override identities, and sandbox posture across runs. Treat both rows
 as complete; reopen them only for a current reproduction or a specifically
 approved UX expansion.
 
-1. Explore safe continuation semantics only after explicit runtime design work.
-2. Evaluate stronger production isolation if Code Mode scope expands beyond trusted code.
+1. Safe automatic continuation remains intentionally unimplemented. The current
+   execution-recovery contract quarantines uncertain side-effect boundaries;
+   reopening continuation requires a separate durable authority and replay design.
+2. Production-isolation evaluation is complete: runtime metadata, per-platform
+   claim gates, backend evaluation matrices, and adversarial canary owners exist.
+   Cross-platform public hostile-code promotion remains deferred until native
+   Windows, Linux, and macOS proof all passes on the exact release SHA.
 
 ## Registry and Planner Hardening
 
@@ -63,3 +68,5 @@ approved UX expansion.
 1. Whether candidate bundles should remain filesystem-managed long term or move to a more opaque asset store.
 2. Whether Code Mode should eventually allow governed parallel read-only wrapper fan-out.
 3. Whether existing imported skills need richer provenance normalization in the hub.
+4. Whether a future durable Code Mode owner can safely continue after an
+   uncertain execution boundary without replaying external or workspace effects.

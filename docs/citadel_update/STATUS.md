@@ -12,7 +12,7 @@ kept only as a compatibility fallback during migration.
 
 **Canonical execution note (2026-08-08):** this file is a historical branch
 snapshot, not the current program ledger. The remaining advanced Vault decision
-and `route_local` policy decision are recorded in tranche `M6` and the deferred
+and the `route_local` audit-only decision are recorded in tranche `M6` and the deferred
 portfolio register in
 [MASTER_COMPLETION_PROGRAM.md](../MASTER_COMPLETION_PROGRAM.md).
 
@@ -25,7 +25,7 @@ The **structural MVP data model is complete** end-to-end (contracts logic + stor
 1. **The Mason's conversational layer (§9)** — `POST /api/v1/mason/sessions/:id/message` interprets a freeform message with the **real configured model** (`llmService.chatCompletions`), strictly parses the output (hallucinated/injected fields can't poison setup), and merges only valid answers. Degrades gracefully to the structured-answers path when no model is configured. End-to-end wired through composition.
 2. **The UI data layer (§6)** — typed citadel/Mason API client in `mission-control-shared` over the existing `request()` transport, covering all 22 citadel + Mason endpoints, barrel-exported for the React screens.
 
-**Every spec surface is now built.** The mission-control UI (§6) spans all six Citadel surfaces — Mason (stage), Overview (manage), Wards (policy), Council, Blueprint (portability), Vault; the **Vault MVP (§13)** is end-to-end (sealed per-Citadel storage, master key in the OS keychain, fails closed); and **engine.ts enforcement (§27/§20)** now honors citadel scope — citadel-scoped grants + Citadel Wards (deny-wins, via the chosen **engine-consults-Wards** architecture). The **`GOATCITADEL_CITADEL_ENFORCEMENT` wrap-first flag has been removed**: the gateway now resolves the parent `citadelId` from the workspace on every tool invoke and passes it on the request, so Wards always enforce on the correct scope (requests resolving to the default `personal` Citadel, which has no Wards, are byte-identical to before). All typecheck/lint/test evidence here belongs to the dated branch snapshot. Current code has since wired `require_dry_run` through the integration/A2A side-effect owners. The remaining Citadel decisions are the Vault **advanced key hierarchy** (per-Chamber keys, rotation, E2EE) and whether `route_local`, which is evaluated and audited, warrants a real execution-routing seam or remains audit-only.
+**Every spec surface is now built.** The mission-control UI (§6) spans all six Citadel surfaces — Mason (stage), Overview (manage), Wards (policy), Council, Blueprint (portability), Vault; the **Vault MVP (§13)** is end-to-end (sealed per-Citadel storage, master key in the OS keychain, fails closed); and **engine.ts enforcement (§27/§20)** now honors citadel scope — citadel-scoped grants + Citadel Wards (deny-wins, via the chosen **engine-consults-Wards** architecture). The **`GOATCITADEL_CITADEL_ENFORCEMENT` wrap-first flag has been removed**: the gateway now resolves the parent `citadelId` from the workspace on every tool invoke and passes it on the request, so Wards always enforce on the correct scope (requests resolving to the default `personal` Citadel, which has no Wards, are byte-identical to before). All typecheck/lint/test evidence here belongs to the dated branch snapshot. Current code has since wired `require_dry_run` through the integration/A2A side-effect owners. The remaining Citadel decision is the Vault **advanced key hierarchy** (per-Chamber keys, rotation, E2EE). `route_local` stays an evaluated, durable audit signal until a real local-placement authority can enforce it without bypassing Gateway policy, accounting, or remote-worker scheduling.
 
 ---
 
@@ -102,12 +102,12 @@ Full history: `git log --oneline f52faa81e..fix/workspace-isolation-leaks`.
   - **Architecture decision made + implemented: engine-consults-Wards** — when a request has a citadel scope, the engine evaluates the Citadel's Wards via `evaluateWards` BEFORE grants and denies on a Ward deny (reason `citadel_ward_deny`). Chosen over Wards-as-grants to preserve the rich `WardEffect`s. Connects the `citadel_wards` table to real enforcement. Commit `99c86903d`.
   - **Enforcement flag removed; `citadelId` carried on the invoke path** — `ToolInvokeRequest` gains optional `citadelId`; the gateway's single invoke choke point (`normalizeToolInvokeRequest`) resolves the parent Citadel from the workspace (`storage.workspaces.find(workspaceId)?.citadelId`, defaulting to `personal`) and threads it through, mirroring the access path. The `GOATCITADEL_CITADEL_ENFORCEMENT` flag and the `citadelEnforcementEnabled` engine hook are deleted. Wards now always enforce on the resolved scope; the default `personal` Citadel has no Wards, so the common case is byte-identical.
   - Verified: full `policy-engine` suite **568/568** (incl. an invoke-path Ward-deny test and a no-Ward `personal` zero-blast-radius test), gateway typecheck clean.
-  - **Reconciled follow-on:** `deny`, `require_approval`, and `redact` are wired to the engine gate, and current integration/A2A side-effect owners enforce `require_dry_run` before the external boundary. `route_local` still has no execution-routing seam and remains the explicit decision under master tranche `M6`.
+  - **Reconciled follow-on:** `deny`, `require_approval`, and `redact` are wired to the engine gate, and current integration/A2A side-effect owners enforce `require_dry_run` before the external boundary. `route_local` intentionally remains audit-only until a real local-placement authority exists.
 
 **Every spec surface is now built**: Mason LLM, data layer, six UI screens, the Vault MVP end-to-end, and engine enforcement always on (parent `citadelId` resolved at the gateway). Deferred *by the operator's own decision*: the Vault advanced key hierarchy (per-Chamber keys, rotation, E2EE).
 
 ## Suggested next session
-1. **Decide `route_local` ownership** — implement a real execution-routing seam or keep the effect explicitly audit-only.
+1. **Preserve `route_local` as audit-only** — reopen execution routing only with a real local-placement authority and end-to-end scheduler/policy/accounting proof.
 2. **Evaluate advanced Vault keys only after product approval** — per-Chamber keys, rotation, recovery, and E2EE remain deferred architecture work. Citadel screens and navigation are already release-bearing and are not follow-on implementation work.
 
 Review: `git log --oneline f52faa81e..fix/workspace-isolation-leaks`.

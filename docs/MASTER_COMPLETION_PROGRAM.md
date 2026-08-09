@@ -64,7 +64,7 @@ change:
 | `M3` | P0 | Remote-worker durable execution and ordered event transport | `planned` | M2 | Worker death/reconnect/takeover, replay, transcript, approval-resume, and no-duplicate proof |
 | `M4` | P0/P1 | Live worker inference, execution cell, settlement, and visibility | `planned` | M3 | `pnpm verify:remote-workers` with the connected-worker row executed, plus live Ops/Chat data |
 | `M5` | P0 | Governed self-configuration and repair expansion | `planned` | M1; M2 for remote custody | `pnpm verify:self-configuration` with live provider, packaged restart, browser secure input, profile, rollback, and delegated-resume evidence |
-| `M6` | P1/P2 | Gateway capability and policy follow-ons | `in_progress` | M1; M5 where repair is involved | Focused capability/policy/provider tests and explicit owner decisions |
+| `M6` | P1/P2 | Gateway capability and policy follow-ons | `complete` | M1; M5 where repair is involved | Focused capability/policy/provider tests and explicit owner decisions |
 | `M7` | P1/P2 | Consolidated Mission Control UX and live-worker projection | `planned` | M4; stable M5/M6 APIs | Focused component tests, populated stories, accessibility, surface, and one visual-regression pass |
 | `M8` | P1 | Mobile companion completion and pinned-Gateway proof | `planned` | M3-M5 contract stability | External mobile build/tests and HX-508 device-auth, paging, approval, offline/reconnect, attachment, and revocation bundle |
 | `M9` | P0 | Packaging, desktop, remote-hardened, rollback, and recovery | `planned` | M2-M8 release-bearing scope | `pnpm verify:install`, `pnpm verify:desktop`, packaged lifecycle, exact hashes/versions, hardened recovery bundle |
@@ -257,16 +257,20 @@ public claims remain “repair foundations,” not generic self-repair parity.
 - Exact-snapshot audit exports now include the catalog plus explicitly requested,
   workspace-scoped Code Mode run hashes and durable artifact references. They do
   not export artifact contents or claim a fresh byte-integrity verification.
+- Production-isolation evaluation and fail-closed hostile-sandbox claim metadata
+  already cover the supported and candidate native/backend postures. General
+  hostile-code promotion remains proof-gated and deferred, not an implementation
+  claim.
+- `route_local` remains an evaluated, durable audit signal. It will not gain an
+  execution seam until a real local-placement authority can enforce it without
+  bypassing Gateway policy, accounting, or the remote-worker scheduler.
 
-### Current work
+### Closed design boundaries
 
-- Safe continuation semantics only after explicit runtime design.
-- Stronger production isolation evaluation without claiming hostile-code
-  sandboxing.
-- Decide whether `route_local` gains a real execution-routing seam or remains
-  audit-only.
-- Re-evaluate a bundled real embedding default and the trusted-local policy/audit
-  fast path as optional, footprint- and security-sensitive work.
+- Automatic Code Mode continuation across uncertain effect boundaries remains
+  unimplemented pending a separate durable replay/authority design.
+- A bundled real embedding default and a trusted-local policy/audit fast path
+  remain optional, footprint- and security-sensitive portfolio decisions.
 
 ### Deferred decisions owned here
 
@@ -389,7 +393,8 @@ checklist, but its results belong to an older SHA and are not current status.
   surfaces exist; the May backlog must not reopen them generically.
 - Mobile voice capture is implemented; only transcription remains optional.
 - Citadel screens are shipped, and `require_dry_run` is enforced across the
-  current integration/A2A side-effect owners. `route_local` remains a decision.
+  current integration/A2A side-effect owners. `route_local` remains audit-only
+  until a real local-placement authority exists.
 - Separate Cowork and Code primary surfaces are superseded by one Chat surface.
 - Unchecked boxes in `superpowers/plans`, archived Mission Control plans, dated
   review ledgers, and blank manual-QA workbooks are not active tasks unless a
