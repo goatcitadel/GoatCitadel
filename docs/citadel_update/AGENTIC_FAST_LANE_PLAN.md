@@ -51,8 +51,10 @@ PR #137 fixed "thin responses" by wrapping cowork in a **plan → execute → sy
   receipt is now omitted for ordinary live turns and retained only for the
   quick-web/prompt-pack proof profiles or the explicit
   `GOATCITADEL_DEBUG_PROMPT_CONTEXT_BUDGET_RECEIPTS=1` diagnostic gate.
-  Remaining work is the lock-serialized JSONL audit and avoidable policy/storage
-  round trips; any batching must retain ordered, durable, secret-free evidence.
+  Concurrent same-stream audit events are now microbatched into one JSONL append
+  under the existing cross-process lock; callers still await durable, ordered,
+  secret-free evidence and delivery IDs remain idempotent. Remaining work is
+  the avoidable policy/storage round trips.
 - **Superseded — S6 short turns outside durable wrapping.** Current one-Chat
   runtime truth keeps durable execution authoritative for resumable work. The
   valid performance goal moves to `M1`: reduce admission, heartbeat, and

@@ -50,6 +50,19 @@ describe("AuditLog", () => {
     const root = path.join(os.tmpdir(), `goatcitadel-audit-${randomUUID()}`);
     createdDirs.push(root);
     const log = new AuditLog(root);
+    const filePath = path.join(root, "tool_invocations.jsonl");
+    const originalAppendFile = fsPromises.appendFile.bind(fsPromises);
+    let auditWriteCount = 0;
+    const appendFileMock = mock.method(
+      fsPromises,
+      "appendFile",
+      async (...args: Parameters<typeof fsPromises.appendFile>) => {
+        if (String(args[0]) === filePath) {
+          auditWriteCount += 1;
+        }
+        return await originalAppendFile(...args);
+      },
+    );
 
     await Promise.all(
       Array.from({ length: 40 }, (_, index) =>
@@ -65,6 +78,27 @@ describe("AuditLog", () => {
     assert.deepEqual(
       records.map((record) => record.index),
       Array.from({ length: 40 }, (_, index) => index),
+    );
+    assert.equal(auditWriteCount, 1);
+    appendFileMock.mock.restore();
+  });
+
+  it("dedupes delivery IDs within one durable audit batch", async () => {
+    const root = path.join(os.tmpdir(), `goatcitadel-audit-${randomUUID()}`);
+    createdDirs.push(root);
+    const log = new AuditLog(root);
+    const deliveryId = "approval-observability:approval-batch:create-audit";
+
+    await Promise.all([
+      log.append("approvals", { event: "approval.create", sequence: 1 }, { deliveryId }),
+      log.append("approvals", { event: "approval.create", sequence: 2 }, { deliveryId }),
+      log.append("approvals", { event: "approval.resolve", sequence: 3 }),
+    ]);
+
+    const records = await log.list("approvals");
+    assert.deepEqual(
+      records.map((record) => record.sequence),
+      [1, 3],
     );
   });
 
