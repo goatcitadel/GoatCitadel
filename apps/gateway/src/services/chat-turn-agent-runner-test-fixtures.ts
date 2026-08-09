@@ -609,6 +609,7 @@ export function createExecuteToolCallForTest(input: {
   invokeMcpTool?: NonNullable<ChatTurnAgentRunnerDeps["invokeMcpTool"]>;
   listMcpBrowserFallbackTargets?: NonNullable<ChatTurnAgentRunnerDeps["listMcpBrowserFallbackTargets"]>;
   recordRuntimeDecision?: NonNullable<ChatTurnAgentRunnerDeps["recordRuntimeDecision"]>;
+  enqueueRuntimeDecision?: NonNullable<ChatTurnAgentRunnerDeps["enqueueRuntimeDecision"]>;
   safeWriteFallbackDir?: string;
   evaluateToolAccess?: NonNullable<ChatTurnAgentRunnerDeps["evaluateToolAccess"]>;
   assertRuntimeConfigurationPromptAvailable?: NonNullable<
@@ -627,6 +628,7 @@ export function createExecuteToolCallForTest(input: {
     invokeMcpTool: input.invokeMcpTool,
     listMcpBrowserFallbackTargets: input.listMcpBrowserFallbackTargets,
     recordRuntimeDecision: input.recordRuntimeDecision,
+    enqueueRuntimeDecision: input.enqueueRuntimeDecision,
     persistToolArtifact: input.persistToolArtifact,
     safeWriteFallbackDir: input.safeWriteFallbackDir,
     evaluateToolAccess: input.evaluateToolAccess,

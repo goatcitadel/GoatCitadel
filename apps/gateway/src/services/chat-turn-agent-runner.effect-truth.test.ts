@@ -116,6 +116,7 @@ function createEffectTruthExecutor(input: {
   toolNames: string[];
   safeWriteFallbackDir?: string;
   recordRuntimeDecision?: NonNullable<ChatTurnAgentRunnerDeps["recordRuntimeDecision"]>;
+  enqueueRuntimeDecision?: NonNullable<ChatTurnAgentRunnerDeps["enqueueRuntimeDecision"]>;
   storage?: ChatTurnAgentRunnerDeps["storage"];
 }) {
   const legacyInvoke = vi.fn(async (_request: ToolInvokeRequest): Promise<ToolInvokeResult> => {
@@ -129,6 +130,7 @@ function createEffectTruthExecutor(input: {
       toolNames: input.toolNames,
       safeWriteFallbackDir: input.safeWriteFallbackDir,
       recordRuntimeDecision: input.recordRuntimeDecision,
+      enqueueRuntimeDecision: input.enqueueRuntimeDecision,
       storage: input.storage,
     }),
   };
@@ -411,6 +413,50 @@ describe("Chat tool effect truth", () => {
         rationale: expect.stringContaining("Inspect external or runtime state before retry"),
       }),
     );
+  });
+
+  it("admits advisory tool decisions through the canonical fence and queues them off the response path", async () => {
+    const enqueueRuntimeDecision = vi.fn();
+    const recordRuntimeDecision = vi.fn(async () => {
+      throw new Error("the awaited decision recorder must not run when the queue is composed");
+    });
+    const canonicalWriteFence = vi.fn(
+      async <T>(work: () => T | Promise<T>): Promise<Awaited<T>> => await work(),
+    );
+    const invoke = vi.fn<EffectTruthInvoker>(async (_request, options) => {
+      await options.executionFence();
+      return {
+        outcome: "executed",
+        policyReason: "tool completed",
+        auditEventId: "audit-queued-decision",
+        result: { now: "2026-08-08T00:00:00.000Z" },
+      };
+    });
+    const { execute } = createEffectTruthExecutor({
+      invoke,
+      toolNames: ["time.now"],
+      recordRuntimeDecision,
+      enqueueRuntimeDecision,
+    });
+
+    const result = await execute({
+      input: turnInput({ mode: "chat", canonicalWriteFence }),
+      turnId: "turn-queued-decision",
+      toolName: "time.now",
+      rawArgs: {},
+    });
+
+    expect(result.record.status).toBe("executed");
+    expect(enqueueRuntimeDecision).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "tool_selected",
+        scope: expect.objectContaining({ toolRunId: result.record.toolRunId }),
+      }),
+    );
+    expect(recordRuntimeDecision).not.toHaveBeenCalled();
+    // Started row, executor dispatch fence, terminal row, and advisory enqueue
+    // all remain admitted by the same durable turn ownership boundary.
+    expect(canonicalWriteFence.mock.calls.length).toBeGreaterThanOrEqual(4);
   });
 
   it("leaves pre-dispatch truth recoverable when interrupted after escalation but before a fence", async () => {

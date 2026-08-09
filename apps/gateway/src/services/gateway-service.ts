@@ -1510,6 +1510,7 @@ export class GatewayService {
     this.runtimeDecisionRecorder = new RuntimeDecisionRecorder({
       runtimeDecisionTraces: this.storage.runtimeDecisionTraces,
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
+      registerBackgroundTask: (task) => this.registerBackgroundTask(task),
     });
     this.pluginToolOverrideService = new PluginToolOverrideService({
       getOwnerId: () => `gateway:${this.config.assistant.mesh.nodeId}`,
@@ -1948,6 +1949,7 @@ export class GatewayService {
       invokeMcpTool: async (request, options) => await this.invokeMcpTool(request, options),
       listMcpBrowserFallbackTargets: () => this.listMcpBrowserFallbackTargets(),
       recordRuntimeDecision: async (input) => await this.recordRuntimeDecision(input),
+      enqueueRuntimeDecision: (input) => this.runtimeDecisionRecorder.enqueueAdvisory(input),
       toolLoopDetection: this.config.toolPolicy.tools.loopDetection,
       safeWriteFallbackDir: path.resolve(config.rootDir, config.assistant.workspaceDir, "goatcitadel_out"),
       workspaceFileRootDir: path.resolve(config.rootDir, config.assistant.workspaceDir),

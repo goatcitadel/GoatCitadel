@@ -837,6 +837,12 @@ export interface ChatTurnAgentRunnerDeps {
   listMcpBrowserFallbackTargets?: () => Promise<McpBrowserFallbackTarget[]>;
   /** Canonical operator decision projection for ordinary Chat tool runs. */
   recordRuntimeDecision?: (input: RuntimeDecisionTraceAppendInput) => Promise<void>;
+  /**
+   * Bounded, ordered advisory projection queue. The runner admits enqueueing
+   * through its canonical write fence after the tool row has settled; the
+   * Gateway owns persistence and shutdown drain off the response hot path.
+   */
+  enqueueRuntimeDecision?: (input: RuntimeDecisionTraceAppendInput) => boolean | void;
   persistToolArtifact?: (input: {
     sessionId: string;
     turnId: string;
@@ -6282,7 +6288,7 @@ export class ChatTurnAgentRunner {
     input: ChatTurnAgentRunnerInput,
     toolRun: ChatToolRunRecord,
   ): Promise<void> {
-    if (!this.deps.recordRuntimeDecision) return;
+    if (!this.deps.enqueueRuntimeDecision && !this.deps.recordRuntimeDecision) return;
     const kind: RuntimeDecisionTraceAppendInput["kind"] = toolRun.reused
       ? "tool_reused"
       : toolRun.status === "approval_required"
@@ -6310,55 +6316,60 @@ export class ChatTurnAgentRunner {
           (toolRun.reused
             ? (toolRun.reuseReason ?? "A prior compatible tool result was reused.")
             : "Chat selected and settled this tool through the Gateway runtime."));
+    const decision: RuntimeDecisionTraceAppendInput = {
+      kind,
+      scope: {
+        workspaceId: input.capabilityProfile?.identity.workspaceId,
+        sessionId: toolRun.sessionId,
+        turnId: toolRun.turnId,
+        runId: input.policyRunId,
+        toolRunId: toolRun.toolRunId,
+        approvalId: toolRun.approvalId,
+      },
+      selected,
+      rationale,
+      signals: [
+        { source: "capability", key: "tool_name", value: toolRun.toolName, weight: "strong" },
+        { source: "tool_result", key: "tool_status", value: toolRun.status, weight: "strong" },
+        { source: "capability", key: "effect_potential", value: toolRun.effectPotential ?? null, weight: "strong" },
+        {
+          source: "tool_result",
+          key: "effect_disposition",
+          value: toolRun.effectDisposition ?? null,
+          weight: toolRun.effectDisposition === "unknown" ? "blocking" : "strong",
+        },
+        {
+          source: "tool_result",
+          key: "effect_outcome_kind",
+          value: toolRun.effectOutcomeKind ?? null,
+          weight: toolRun.effectOutcomeKind === "uncertain" ? "blocking" : "strong",
+        },
+        {
+          source: "tool_result",
+          key: "effect_evidence_reason",
+          value: toolRun.effectEvidence?.reason ?? null,
+          weight: "informational",
+        },
+        { source: "approval", key: "approval_id", value: toolRun.approvalId ?? null },
+      ],
+      evidenceRefs: [
+        { refType: "tool_run", refId: toolRun.toolRunId },
+        ...(toolRun.approvalId ? [{ refType: "approval" as const, refId: toolRun.approvalId }] : []),
+        ...(toolRun.effectEvidence?.refs.map((ref) => ({
+          refType: "event" as const,
+          refId: ref.refId,
+          label: `tool_effect:${ref.owner}`,
+        })) ?? []),
+      ],
+    };
     try {
-      await this.runCanonicalWrite(input, () =>
-        this.deps.recordRuntimeDecision?.({
-          kind,
-          scope: {
-            workspaceId: input.capabilityProfile?.identity.workspaceId,
-            sessionId: toolRun.sessionId,
-            turnId: toolRun.turnId,
-            runId: input.policyRunId,
-            toolRunId: toolRun.toolRunId,
-            approvalId: toolRun.approvalId,
-          },
-          selected,
-          rationale,
-          signals: [
-            { source: "capability", key: "tool_name", value: toolRun.toolName, weight: "strong" },
-            { source: "tool_result", key: "tool_status", value: toolRun.status, weight: "strong" },
-            { source: "capability", key: "effect_potential", value: toolRun.effectPotential ?? null, weight: "strong" },
-            {
-              source: "tool_result",
-              key: "effect_disposition",
-              value: toolRun.effectDisposition ?? null,
-              weight: toolRun.effectDisposition === "unknown" ? "blocking" : "strong",
-            },
-            {
-              source: "tool_result",
-              key: "effect_outcome_kind",
-              value: toolRun.effectOutcomeKind ?? null,
-              weight: toolRun.effectOutcomeKind === "uncertain" ? "blocking" : "strong",
-            },
-            {
-              source: "tool_result",
-              key: "effect_evidence_reason",
-              value: toolRun.effectEvidence?.reason ?? null,
-              weight: "informational",
-            },
-            { source: "approval", key: "approval_id", value: toolRun.approvalId ?? null },
-          ],
-          evidenceRefs: [
-            { refType: "tool_run", refId: toolRun.toolRunId },
-            ...(toolRun.approvalId ? [{ refType: "approval" as const, refId: toolRun.approvalId }] : []),
-            ...(toolRun.effectEvidence?.refs.map((ref) => ({
-              refType: "event" as const,
-              refId: ref.refId,
-              label: `tool_effect:${ref.owner}`,
-            })) ?? []),
-          ],
-        }),
-      );
+      await this.runCanonicalWrite(input, () => {
+        if (this.deps.enqueueRuntimeDecision) {
+          this.deps.enqueueRuntimeDecision(decision);
+          return;
+        }
+        return this.deps.recordRuntimeDecision?.(decision);
+      });
     } catch (error) {
       if (isDurableControlError(error)) throw error;
       // Decision traces are an operator projection; the tool row remains the
@@ -6464,21 +6475,15 @@ export class ChatTurnAgentRunner {
     const startedAt = new Date().toISOString();
     const toolRunId = randomUUID();
     let effectPotential = this.resolveToolEffectPotential(input.input, preflight.toolName);
-    const effectScope = await this.resolveToolEffectScope(input.input, input.turnId);
-    const created = await this.createToolRun(input.input, {
-      toolRunId,
-      turnId: input.turnId,
-      sessionId: input.input.sessionId,
-      toolName: preflight.toolName,
-      status: "started",
-      args: preflight.args,
-      ...this.buildToolEffectPatch({ potential: effectPotential, phase: "planned" }),
-      startedAt,
-    });
 
     if (preflight.blockedReason) {
-      const updated = await this.patchToolRun(input.input, created.toolRunId, {
+      const updated = await this.createToolRun(input.input, {
+        toolRunId,
+        turnId: input.turnId,
+        sessionId: input.input.sessionId,
+        toolName: preflight.toolName,
         status: "blocked",
+        args: preflight.args,
         ...this.buildToolEffectPatch({ potential: effectPotential, phase: "pre_dispatch_blocked" }),
         error: preflight.blockedReason,
         failureGuidance: buildToolFailureGuidance({
@@ -6488,6 +6493,7 @@ export class ChatTurnAgentRunner {
           error: preflight.blockedReason,
           blockerStrictness: await this.readBlockerStrictness(),
         }),
+        startedAt,
         finishedAt: new Date().toISOString(),
       });
       return {
@@ -6502,8 +6508,13 @@ export class ChatTurnAgentRunner {
     }
 
     if (preflight.failureReason) {
-      const updated = await this.patchToolRun(input.input, created.toolRunId, {
+      const updated = await this.createToolRun(input.input, {
+        toolRunId,
+        turnId: input.turnId,
+        sessionId: input.input.sessionId,
+        toolName: preflight.toolName,
         status: "failed",
+        args: preflight.args,
         ...this.buildToolEffectPatch({ potential: effectPotential, phase: "pre_dispatch_blocked" }),
         error: preflight.failureReason,
         failureGuidance: buildToolFailureGuidance({
@@ -6512,6 +6523,7 @@ export class ChatTurnAgentRunner {
           args: preflight.args,
           error: preflight.failureReason,
         }),
+        startedAt,
         finishedAt: new Date().toISOString(),
       });
       return {
@@ -6530,8 +6542,13 @@ export class ChatTurnAgentRunner {
       if (isExactSystemHeartbeatRunnerPosture(input.input)) {
         throwSystemHeartbeatToolInvocationBlocked(preflight.toolName);
       }
-      const updated = await this.patchToolRun(input.input, created.toolRunId, {
+      const updated = await this.createToolRun(input.input, {
+        toolRunId,
+        turnId: input.turnId,
+        sessionId: input.input.sessionId,
+        toolName: preflight.toolName,
         status: "blocked",
+        args: preflight.args,
         ...this.buildToolEffectPatch({ potential: effectPotential, phase: "pre_dispatch_blocked" }),
         result: {
           policyRevalidation: {
@@ -6555,6 +6572,7 @@ export class ChatTurnAgentRunner {
           error: capabilityProfileBlock,
           blockerStrictness: await this.readBlockerStrictness(),
         }),
+        startedAt,
         finishedAt: new Date().toISOString(),
       });
       return {
@@ -6588,8 +6606,13 @@ export class ChatTurnAgentRunner {
       input.priorToolRuns,
     );
     if (reusableResult) {
-      const updated = await this.patchToolRun(input.input, created.toolRunId, {
+      const updated = await this.createToolRun(input.input, {
+        toolRunId,
+        turnId: input.turnId,
+        sessionId: input.input.sessionId,
+        toolName: preflight.toolName,
         status: "executed",
+        args: preflight.args,
         ...this.buildToolEffectPatch({ potential: effectPotential, phase: "reused" }),
         reused: true,
         reusedFromToolRunId: reusableResult.toolRunId,
@@ -6601,6 +6624,7 @@ export class ChatTurnAgentRunner {
           reusedResult: true,
           reuseReason: "matching_recent_browser_result",
         },
+        startedAt,
         finishedAt: new Date().toISOString(),
       });
       return {
@@ -6637,10 +6661,16 @@ export class ChatTurnAgentRunner {
         ...annotationResult,
         localBusinessResearch: annotationResult,
       };
-      const updated = await this.patchToolRun(input.input, created.toolRunId, {
+      const updated = await this.createToolRun(input.input, {
+        toolRunId,
+        turnId: input.turnId,
+        sessionId: input.input.sessionId,
+        toolName: preflight.toolName,
         status: "executed",
+        args: preflight.args,
         ...this.buildToolEffectPatch({ potential: effectPotential, phase: "completed" }),
         result: result as Record<string, unknown>,
+        startedAt,
         finishedAt: new Date().toISOString(),
       });
       return {
@@ -6654,6 +6684,17 @@ export class ChatTurnAgentRunner {
       };
     }
 
+    const effectScope = await this.resolveToolEffectScope(input.input, input.turnId);
+    const created = await this.createToolRun(input.input, {
+      toolRunId,
+      turnId: input.turnId,
+      sessionId: input.input.sessionId,
+      toolName: preflight.toolName,
+      status: "started",
+      args: preflight.args,
+      ...this.buildToolEffectPatch({ potential: effectPotential, phase: "planned" }),
+      startedAt,
+    });
     const sourceAttribution = collectSourceAttributionFromToolRuns(input.priorToolRuns);
     const effectInvocationContext: ToolEffectInvocationContext = {
       toolRunId: created.toolRunId,
