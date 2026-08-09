@@ -195,6 +195,21 @@ validation and 9/9 Docker-secret documentation tests; `git diff --check` passed.
   deterministic x64/ARM64 builds plus x64 execution/ASan proof pass. The
   untrusted helper performs one sign exchange and has query-only SCM rights; it
   cannot start or restart the service.
+- A distinct production-dark, one-shot Windows availability-broker service now
+  owns the only new `StartServiceW` import. Its SCM entry accepts no operands;
+  before one bounded start of the fixed signer it validates the exact demand-
+  start service configuration, protected service-object ACL, stopped/pending
+  state, fixed protected image path, file identity, single link, ADS closure,
+  file ACL, and package-pinned SHA-256. A running result is accepted only after
+  exact PID, image, LocalSystem token, service SID, privilege, status, and held-
+  image revalidation. It cannot create, reconfigure, control, delete, or query
+  an arbitrary service and persists no secret.
+- The deterministic package proof now publishes an exact service/client/broker
+  trio for x64 and ARM64, preserves partial publication as a HOLD, and passes
+  the x64 ASan/native suite. The existing untrusted client/helper remains
+  unchanged and query-only. The broker has no installed service or caller
+  composition yet; this is PE authority isolation, not containment against a
+  malicious local administrator who already has direct signer start/stop rights.
 - An exact-commit Codex Security review closed all 29 changed source files and
   nine trust surfaces with zero findings or deferred rows. Root integration
   proof passes focused Gateway, contracts, provisioner, atomic-storage, paired
@@ -206,10 +221,14 @@ validation and 9/9 Docker-secret documentation tests; `git diff --check` passed.
 
 ### Current work
 
-- Add an administrator-owned installed-service availability/restart
-  coordinator. Keep `StartServiceW` and equivalent service-control authority
-  out of the untrusted worker client, and keep the one-exchange signer dark
-  until that owner supplies the exact current state/generation/receipt pin.
+- Freeze a distinct shipped coordinator principal and administrator-owned
+  installer recipe for the broker service, executable/directory ACLs, service
+  SID, required privileges, and broker SCM DACL. Do not wire the existing
+  untrusted helper to start it. Until that owner is composed and pinned, keep
+  the broker and one-exchange signer production-dark.
+- Prove the installed stopped/start-pending/running broker contract, signer
+  restart, exact caller rejection, drift rejection, ARM64 execution, and clean
+  uninstall/rollback on a real Windows host.
 - Keep current-authority reads and every downstream mutation transactionally
   fenced through M3 node admission and assignment ownership.
 - Prove operator-visible diagnostics and the real closed-ingress, N+1 rotation,

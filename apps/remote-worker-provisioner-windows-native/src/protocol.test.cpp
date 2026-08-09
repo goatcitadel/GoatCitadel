@@ -14,6 +14,7 @@ namespace gc = goatcitadel::remote_worker_provisioner;
 
 int RunServiceRuntimeTests() noexcept;
 int RunLocalTransportTests() noexcept;
+int RunAvailabilityBrokerTests() noexcept;
 int RunProtectedFilesystemTests() noexcept;
 int RunOperationJournalTests() noexcept;
 int RunKeyCustodyTests() noexcept;
@@ -892,6 +893,7 @@ int main(int argument_count, char* arguments[]) {
   };
   g_failures += RunExternal("service_runtime", &RunServiceRuntimeTests);
   g_failures += RunExternal("local_transport", &RunLocalTransportTests);
+  g_failures += RunExternal("availability_broker", &RunAvailabilityBrokerTests);
   g_failures += RunExternal("protected_filesystem", &RunProtectedFilesystemTests);
   g_failures += RunExternal("operation_journal", &RunOperationJournalTests);
   g_failures += RunExternal("key_custody", &RunKeyCustodyTests);

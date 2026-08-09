@@ -131,6 +131,8 @@
     <ClCompile Include="src\ed25519_runtime.test.cpp" />
     <ClCompile Include="src\local_transport.cpp" />
     <ClCompile Include="src\local_transport.test.cpp" />
+    <ClCompile Include="src\availability_broker.cpp" />
+    <ClCompile Include="src\availability_broker.test.cpp" />
     <ClCompile Include="src\protocol.cpp" />
     <ClCompile Include="src\protocol.test.cpp" />
     <ClCompile Include="src\service_runtime.cpp" />
@@ -142,6 +144,7 @@
   <ItemGroup Condition="'$(VendorPreflight)' != 'true'">
     <ClInclude Include="src\ed25519_runtime.hpp" />
     <ClInclude Include="src\local_transport.hpp" />
+    <ClInclude Include="src\availability_broker.hpp" />
     <ClInclude Include="src\key_custody.hpp" />
     <ClInclude Include="src\protected_filesystem.hpp" />
     <ClInclude Include="src\protected_artifact_signing.hpp" />

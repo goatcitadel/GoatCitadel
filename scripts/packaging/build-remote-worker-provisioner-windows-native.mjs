@@ -17,18 +17,30 @@ const repoRoot = path.resolve(scriptDirectory, "../..");
 const nativeProjectRoot = path.join(repoRoot, "apps", "remote-worker-provisioner-windows-native");
 const productionProjectPath = path.join(nativeProjectRoot, "GoatCitadel.RemoteWorker.Provisioner.vcxproj");
 const clientProjectPath = path.join(nativeProjectRoot, "GoatCitadel.RemoteWorker.Provisioner.Client.vcxproj");
+const availabilityProjectPath = path.join(
+  nativeProjectRoot,
+  "GoatCitadel.RemoteWorker.Provisioner.Availability.vcxproj",
+);
 const testProjectPath = path.join(nativeProjectRoot, "GoatCitadel.RemoteWorker.Provisioner.Tests.vcxproj");
 const monocypherVendorRoot = path.join(repoRoot, "vendor", "monocypher", "4.0.3");
 
 export const REMOTE_WORKER_WINDOWS_PROVISIONER_NAME = "GoatCitadelRemoteWorkerProvisioner.exe";
 export const REMOTE_WORKER_WINDOWS_PROVISIONER_CLIENT_NAME = "GoatCitadelRemoteWorkerProvisionerClient.exe";
+export const REMOTE_WORKER_WINDOWS_PROVISIONER_AVAILABILITY_NAME =
+  "GoatCitadelRemoteWorkerProvisionerAvailability.exe";
 export const REMOTE_WORKER_WINDOWS_PROVISIONER_TEST_NAME = "GoatCitadelRemoteWorkerProvisionerTests.exe";
 export const REMOTE_WORKER_WINDOWS_PROVISIONER_PREFLIGHT_NAME = "GoatCitadelRemoteWorkerProvisionerVendorPreflight.exe";
 
 export const REMOTE_WORKER_WINDOWS_PROVISIONER_W1B1A_SOURCE_PATHS = Object.freeze([
+  "apps/remote-worker-provisioner-windows-native/GoatCitadel.RemoteWorker.Provisioner.Availability.vcxproj",
   "apps/remote-worker-provisioner-windows-native/GoatCitadel.RemoteWorker.Provisioner.Client.vcxproj",
   "apps/remote-worker-provisioner-windows-native/GoatCitadel.RemoteWorker.Provisioner.Tests.vcxproj",
   "apps/remote-worker-provisioner-windows-native/GoatCitadel.RemoteWorker.Provisioner.vcxproj",
+  "apps/remote-worker-provisioner-windows-native/src/availability_broker.cpp",
+  "apps/remote-worker-provisioner-windows-native/src/availability_broker.hpp",
+  "apps/remote-worker-provisioner-windows-native/src/availability_broker.test.cpp",
+  "apps/remote-worker-provisioner-windows-native/src/availability_broker_main.cpp",
+  "apps/remote-worker-provisioner-windows-native/src/availability_broker_runtime.cpp",
   "apps/remote-worker-provisioner-windows-native/src/client_main.cpp",
   "apps/remote-worker-provisioner-windows-native/src/ed25519_runtime.cpp",
   "apps/remote-worker-provisioner-windows-native/src/ed25519_runtime.hpp",
@@ -97,6 +109,7 @@ const targetMachines = Object.freeze({
 const allowedImportDlls = Object.freeze({
   service: Object.freeze(["ADVAPI32.dll", "KERNEL32.dll", "Secur32.dll", "bcrypt.dll"]),
   client: Object.freeze(["ADVAPI32.dll", "KERNEL32.dll", "bcrypt.dll"]),
+  availability: Object.freeze(["ADVAPI32.dll", "KERNEL32.dll", "bcrypt.dll"]),
 });
 
 // These closures are intentionally literal. They are updated only when the reviewed
@@ -511,6 +524,170 @@ export const REMOTE_WORKER_WINDOWS_PROVISIONER_IMPORTS = Object.freeze({
       }),
     ]),
   }),
+  availability: Object.freeze({
+    "windows-x64": Object.freeze([
+      Object.freeze({
+        dll: "ADVAPI32.dll",
+        functions: Object.freeze([
+          "CloseServiceHandle",
+          "EqualSid",
+          "GetAce",
+          "GetLengthSid",
+          "GetSecurityDescriptorControl",
+          "GetSecurityDescriptorDacl",
+          "GetSecurityDescriptorOwner",
+          "GetSecurityInfo",
+          "GetTokenInformation",
+          "IsTokenRestricted",
+          "IsValidAcl",
+          "IsValidSecurityDescriptor",
+          "IsValidSid",
+          "LookupPrivilegeValueW",
+          "OpenProcessToken",
+          "OpenSCManagerW",
+          "OpenServiceW",
+          "OpenThreadToken",
+          "QueryServiceConfig2W",
+          "QueryServiceConfigW",
+          "QueryServiceObjectSecurity",
+          "QueryServiceStatusEx",
+          "RegisterServiceCtrlHandlerExW",
+          "SetServiceStatus",
+          "StartServiceCtrlDispatcherW",
+          "StartServiceW",
+        ]),
+      }),
+      Object.freeze({
+        dll: "KERNEL32.dll",
+        functions: Object.freeze([
+          "CloseHandle",
+          "CompareStringOrdinal",
+          "CreateEventW",
+          "CreateFileW",
+          "ExitProcess",
+          "FindClose",
+          "FindFirstStreamW",
+          "FindNextStreamW",
+          "GetCurrentProcess",
+          "GetCurrentProcessId",
+          "GetCurrentThread",
+          "GetCurrentThreadId",
+          "GetFileInformationByHandleEx",
+          "GetFinalPathNameByHandleW",
+          "GetLastError",
+          "GetProcessTimes",
+          "GetSystemTimeAsFileTime",
+          "GetTickCount",
+          "GetTickCount64",
+          "LocalFree",
+          "OpenProcess",
+          "QueryFullProcessImageNameW",
+          "QueryPerformanceCounter",
+          "ReadFile",
+          "RtlCaptureContext",
+          "RtlLookupFunctionEntry",
+          "RtlVirtualUnwind",
+          "SetEvent",
+          "SetFilePointerEx",
+          "SetLastError",
+          "SetUnhandledExceptionFilter",
+          "TerminateProcess",
+          "UnhandledExceptionFilter",
+          "WaitForSingleObject",
+        ]),
+      }),
+      Object.freeze({
+        dll: "bcrypt.dll",
+        functions: Object.freeze([
+          "BCryptCloseAlgorithmProvider",
+          "BCryptCreateHash",
+          "BCryptDestroyHash",
+          "BCryptFinishHash",
+          "BCryptGetProperty",
+          "BCryptHashData",
+          "BCryptOpenAlgorithmProvider",
+        ]),
+      }),
+    ]),
+    "windows-arm64": Object.freeze([
+      Object.freeze({
+        dll: "ADVAPI32.dll",
+        functions: Object.freeze([
+          "CloseServiceHandle",
+          "EqualSid",
+          "GetAce",
+          "GetLengthSid",
+          "GetSecurityDescriptorControl",
+          "GetSecurityDescriptorDacl",
+          "GetSecurityDescriptorOwner",
+          "GetSecurityInfo",
+          "GetTokenInformation",
+          "IsTokenRestricted",
+          "IsValidAcl",
+          "IsValidSecurityDescriptor",
+          "IsValidSid",
+          "LookupPrivilegeValueW",
+          "OpenProcessToken",
+          "OpenSCManagerW",
+          "OpenServiceW",
+          "OpenThreadToken",
+          "QueryServiceConfig2W",
+          "QueryServiceConfigW",
+          "QueryServiceObjectSecurity",
+          "QueryServiceStatusEx",
+          "RegisterServiceCtrlHandlerExW",
+          "SetServiceStatus",
+          "StartServiceCtrlDispatcherW",
+          "StartServiceW",
+        ]),
+      }),
+      Object.freeze({
+        dll: "KERNEL32.dll",
+        functions: Object.freeze([
+          "CloseHandle",
+          "CompareStringOrdinal",
+          "CreateEventW",
+          "CreateFileW",
+          "ExitProcess",
+          "FindClose",
+          "FindFirstStreamW",
+          "FindNextStreamW",
+          "GetCurrentProcess",
+          "GetCurrentProcessId",
+          "GetCurrentThread",
+          "GetFileInformationByHandleEx",
+          "GetFinalPathNameByHandleW",
+          "GetLastError",
+          "GetProcessTimes",
+          "GetTickCount64",
+          "LocalFree",
+          "OpenProcess",
+          "QueryFullProcessImageNameW",
+          "ReadFile",
+          "RtlCaptureContext",
+          "SetEvent",
+          "SetFilePointerEx",
+          "SetLastError",
+          "SetUnhandledExceptionFilter",
+          "TerminateProcess",
+          "UnhandledExceptionFilter",
+          "WaitForSingleObject",
+        ]),
+      }),
+      Object.freeze({
+        dll: "bcrypt.dll",
+        functions: Object.freeze([
+          "BCryptCloseAlgorithmProvider",
+          "BCryptCreateHash",
+          "BCryptDestroyHash",
+          "BCryptFinishHash",
+          "BCryptGetProperty",
+          "BCryptHashData",
+          "BCryptOpenAlgorithmProvider",
+        ]),
+      }),
+    ]),
+  }),
 });
 
 const maximumPeBytes = 4 * 1024 * 1024;
@@ -541,6 +718,7 @@ const w1b1aServiceAuthorityImports = Object.freeze([
   "SetFileInformationByHandle",
   "SetSecurityDescriptorGroup",
 ]);
+const availabilityAuthorityImports = Object.freeze(["StartServiceW"]);
 const nativeTestSeed = "0x47504357";
 const nativeTestCases = 65_536;
 const expectedNativeTestReceipt = `GCPW_NATIVE_TESTS seed=${nativeTestSeed} cases=${nativeTestCases}\n`;
@@ -733,8 +911,8 @@ function sameFileIdentity(left, right) {
 }
 
 export function computeW1B1aCanonicalSourceManifest(sourceRoot = repoRoot) {
-  if (REMOTE_WORKER_WINDOWS_PROVISIONER_W1B1A_SOURCE_PATHS.length !== 41) {
-    throw new Error("The W1B1A canonical source fence must contain exactly 41 paths.");
+  if (REMOTE_WORKER_WINDOWS_PROVISIONER_W1B1A_SOURCE_PATHS.length !== 47) {
+    throw new Error("The W1B1A canonical source fence must contain exactly 47 paths.");
   }
   const sortedPaths = [...REMOTE_WORKER_WINDOWS_PROVISIONER_W1B1A_SOURCE_PATHS].sort();
   if (!sortedPaths.every((value, index) => value === REMOTE_WORKER_WINDOWS_PROVISIONER_W1B1A_SOURCE_PATHS[index])) {
@@ -958,12 +1136,21 @@ export function buildRemoteWorkerWindowsProvisioner({ target, outDir }) {
   fs.mkdirSync(destinationRoot, { recursive: true });
   const serviceDestination = path.join(destinationRoot, REMOTE_WORKER_WINDOWS_PROVISIONER_NAME);
   const clientDestination = path.join(destinationRoot, REMOTE_WORKER_WINDOWS_PROVISIONER_CLIENT_NAME);
-  assertNoProvisionerPublicationResidue(destinationRoot, [serviceDestination, clientDestination]);
+  const availabilityDestination = path.join(
+    destinationRoot,
+    REMOTE_WORKER_WINDOWS_PROVISIONER_AVAILABILITY_NAME,
+  );
+  assertNoProvisionerPublicationResidue(destinationRoot, [
+    serviceDestination,
+    clientDestination,
+    availabilityDestination,
+  ]);
   const forbiddenTestDestination = path.join(destinationRoot, REMOTE_WORKER_WINDOWS_PROVISIONER_TEST_NAME);
   const serviceExists = fs.existsSync(serviceDestination);
   const clientExists = fs.existsSync(clientDestination);
-  if (serviceExists !== clientExists) {
-    throw new Error("The provisioner output contains a partial service/client pair; preserve it and HOLD.");
+  const availabilityExists = fs.existsSync(availabilityDestination);
+  if (serviceExists !== clientExists || serviceExists !== availabilityExists) {
+    throw new Error("The provisioner output contains a partial service/client/availability trio; preserve it and HOLD.");
   }
   if (fs.existsSync(forbiddenTestDestination)) {
     throw new Error("The output directory contains the forbidden native-test executable.");
@@ -1048,6 +1235,28 @@ export function buildRemoteWorkerWindowsProvisioner({ target, outDir }) {
       binaryKind: "service",
     });
     assertEmbeddedClientDigest(serviceBytesA, clientSha256);
+    const serviceSha256 = crypto.createHash("sha256").update(serviceBytesA).digest("hex");
+
+    const availabilityBinaryA = runPinnedAvailabilityBuild(
+      productionToolchain,
+      path.join(buildRootA, "availability"),
+      serviceSha256,
+    );
+    const availabilityBinaryB = runPinnedAvailabilityBuild(
+      productionToolchain,
+      path.join(buildRootB, "availability"),
+      serviceSha256,
+    );
+    const availabilityBytesA = fs.readFileSync(availabilityBinaryA);
+    const availabilityBytesB = fs.readFileSync(availabilityBinaryB);
+    if (!availabilityBytesA.equals(availabilityBytesB)) {
+      throw new Error("The two clean provisioner availability-broker builds were not byte-identical.");
+    }
+    const availabilityPe = inspectRemoteWorkerProvisionerPe(availabilityBytesA, {
+      expectedMachine,
+      binaryKind: "availability",
+    });
+    assertEmbeddedProvisionerDigest(availabilityBytesA, serviceSha256);
 
     const pathLeakInputs = [
       repoRoot,
@@ -1068,6 +1277,7 @@ export function buildRemoteWorkerWindowsProvisioner({ target, outDir }) {
     ];
     assertNoRemoteWorkerBuildPathLeak(clientBytesA, pathLeakInputs);
     assertNoRemoteWorkerBuildPathLeak(serviceBytesA, pathLeakInputs);
+    assertNoRemoteWorkerBuildPathLeak(availabilityBytesA, pathLeakInputs);
     const nativeCodeEvidence = inspectNativeCryptographyEvidence({
       toolchain: productionToolchain,
       first: serviceBuildA,
@@ -1097,36 +1307,48 @@ export function buildRemoteWorkerWindowsProvisioner({ target, outDir }) {
       throw new Error("The exact W1B1B-P0 source fence changed during the proof builds.");
     }
 
-    const publishedPair = publishProvenProvisionerPairNoReplace({
+    const publishedTrio = publishProvenProvisionerTrioNoReplace({
       serviceSource: serviceBinaryA,
       serviceDestination,
       serviceExpectedBytes: serviceBytesA,
       clientSource: clientBinaryA,
       clientDestination,
       clientExpectedBytes: clientBytesA,
+      availabilitySource: availabilityBinaryA,
+      availabilityDestination,
+      availabilityExpectedBytes: availabilityBytesA,
     });
 
     const finalServiceBytes = fs.readFileSync(serviceDestination);
     const finalClientBytes = fs.readFileSync(clientDestination);
-    if (!finalServiceBytes.equals(serviceBytesA) || !finalClientBytes.equals(clientBytesA)) {
-      throw new Error("The published provisioner pair differs from the proven build bytes.");
+    const finalAvailabilityBytes = fs.readFileSync(availabilityDestination);
+    if (
+      !finalServiceBytes.equals(serviceBytesA) ||
+      !finalClientBytes.equals(clientBytesA) ||
+      !finalAvailabilityBytes.equals(availabilityBytesA)
+    ) {
+      throw new Error("The published provisioner trio differs from the proven build bytes.");
     }
     if (fs.existsSync(forbiddenTestDestination)) {
       throw new Error("The native-test executable escaped the temporary proof root.");
     }
-    assertNoProvisionerPublicationResidue(destinationRoot, [serviceDestination, clientDestination]);
+    assertNoProvisionerPublicationResidue(destinationRoot, [
+      serviceDestination,
+      clientDestination,
+      availabilityDestination,
+    ]);
 
     operationResult = Object.freeze({
       target,
       path: serviceDestination,
-      sha256: crypto.createHash("sha256").update(serviceBytesA).digest("hex"),
+      sha256: serviceSha256,
       byteLength: serviceBytesA.length,
       machine: `0x${servicePe.machine.toString(16)}`,
       coffTimestamp: servicePe.coffTimestamp,
       imports: servicePe.imports,
       service: Object.freeze({
         path: serviceDestination,
-        sha256: crypto.createHash("sha256").update(serviceBytesA).digest("hex"),
+        sha256: serviceSha256,
         byteLength: serviceBytesA.length,
         imports: servicePe.imports,
       }),
@@ -1135,6 +1357,13 @@ export function buildRemoteWorkerWindowsProvisioner({ target, outDir }) {
         sha256: clientSha256,
         byteLength: clientBytesA.length,
         imports: clientPe.imports,
+      }),
+      availability: Object.freeze({
+        path: availabilityDestination,
+        sha256: crypto.createHash("sha256").update(availabilityBytesA).digest("hex"),
+        byteLength: availabilityBytesA.length,
+        imports: availabilityPe.imports,
+        targetServiceSha256: serviceSha256,
       }),
       msvcVersion: REMOTE_WORKER_WINDOWS_MSVC_VERSION,
       windowsSdkVersion: REMOTE_WORKER_WINDOWS_SDK_VERSION,
@@ -1210,17 +1439,22 @@ export function buildRemoteWorkerWindowsProvisioner({ target, outDir }) {
       }),
       cleanBuildsByteIdentical: true,
       publishedNativeTests: false,
-      publishedPair,
+      publishedTrio,
       entrypoints: Object.freeze({
         service: Object.freeze(["SCM-no-args", "--inspect-stdio"]),
         client: Object.freeze(["--service-stdio"]),
+        availability: Object.freeze(["SCM-no-args"]),
       }),
-      productionDark: false,
+      productionDark: true,
       protectedAdmissionEvidenceSigningCallable: true,
       externalProof: Object.freeze({
         elevatedScm: "HOLD",
         successfulProductionClientAuthentication: "HOLD",
         privilegedTransport: "HOLD",
+        availabilityBrokerCallerAndInstallerOwner: "HOLD",
+        installedAvailabilityBrokerScmContract: "HOLD",
+        liveSignerRestart: "HOLD",
+        twoMachineAvailabilityBroker: "HOLD",
         liveArm64Execution: "HOLD",
       }),
     });
@@ -1294,6 +1528,65 @@ export function publishProvenProvisionerPairNoReplace({
   return true;
 }
 
+export function publishProvenProvisionerTrioNoReplace({
+  serviceSource,
+  serviceDestination,
+  serviceExpectedBytes,
+  clientSource,
+  clientDestination,
+  clientExpectedBytes,
+  availabilitySource,
+  availabilityDestination,
+  availabilityExpectedBytes,
+}) {
+  const serviceRoot = path.dirname(serviceDestination);
+  if (
+    serviceRoot !== path.dirname(clientDestination) ||
+    serviceRoot !== path.dirname(availabilityDestination)
+  ) {
+    throw new Error("The provisioner service/client/availability destinations must share one publication directory.");
+  }
+  const destinations = [serviceDestination, clientDestination, availabilityDestination];
+  assertNoProvisionerPublicationResidue(serviceRoot, destinations);
+  const existence = destinations.map((destination) => fs.existsSync(destination));
+  if (existence.some(Boolean) && !existence.every(Boolean)) {
+    throw new Error("The provisioner output contains a partial service/client/availability trio; preserve it and HOLD.");
+  }
+  if (existence.every(Boolean)) {
+    const serviceBytes = fs.readFileSync(serviceDestination);
+    const clientBytes = fs.readFileSync(clientDestination);
+    const availabilityBytes = fs.readFileSync(availabilityDestination);
+    if (
+      !serviceBytes.equals(serviceExpectedBytes) ||
+      !clientBytes.equals(clientExpectedBytes) ||
+      !availabilityBytes.equals(availabilityExpectedBytes)
+    ) {
+      throw new Error("The preexisting provisioner trio differs from the newly proven trio; preserve it and HOLD.");
+    }
+    return false;
+  }
+
+  // Publish from least to most privileged authority. A crash can leave only a
+  // preserved partial trio, which the next invocation rejects without cleanup.
+  publishProvenProvisionerNoReplace({
+    source: clientSource,
+    destination: clientDestination,
+    expectedBytes: clientExpectedBytes,
+  });
+  publishProvenProvisionerNoReplace({
+    source: serviceSource,
+    destination: serviceDestination,
+    expectedBytes: serviceExpectedBytes,
+  });
+  publishProvenProvisionerNoReplace({
+    source: availabilitySource,
+    destination: availabilityDestination,
+    expectedBytes: availabilityExpectedBytes,
+  });
+  assertNoProvisionerPublicationResidue(serviceRoot, destinations);
+  return true;
+}
+
 function assertNoProvisionerPublicationResidue(destinationRoot, destinations) {
   const names = fs.readdirSync(destinationRoot);
   for (const destination of destinations) {
@@ -1331,50 +1624,60 @@ export function publishProvenProvisionerNoReplace({ source, destination, expecte
 }
 
 export function assertEmbeddedClientDigest(serviceBytes, clientSha256) {
-  if (!/^[a-f0-9]{64}$/u.test(clientSha256)) {
-    throw new Error("The embedded client SHA-256 is not canonical lowercase hex.");
+  assertEmbeddedDigest(serviceBytes, clientSha256, "service", "client");
+}
+
+export function assertEmbeddedProvisionerDigest(availabilityBytes, provisionerSha256) {
+  assertEmbeddedDigest(availabilityBytes, provisionerSha256, "availability broker", "provisioner service");
+}
+
+function assertEmbeddedDigest(carrierBytes, digestSha256, carrierLabel, targetLabel) {
+  if (!/^[a-f0-9]{64}$/u.test(digestSha256)) {
+    throw new Error(`The embedded ${targetLabel} SHA-256 is not canonical lowercase hex.`);
   }
-  const digest = Buffer.from(clientSha256, "hex");
-  const first = serviceBytes.indexOf(digest);
-  if (first < 0 || serviceBytes.indexOf(digest, first + 1) >= 0) {
-    throw new Error("The provisioner service must contain exactly one raw embedded client SHA-256.");
+  const digest = Buffer.from(digestSha256, "hex");
+  const first = carrierBytes.indexOf(digest);
+  if (first < 0 || carrierBytes.indexOf(digest, first + 1) >= 0) {
+    throw new Error(`The provisioner ${carrierLabel} must contain exactly one raw embedded ${targetLabel} SHA-256.`);
   }
   if (
-    containsCaseInsensitiveHexText(serviceBytes, clientSha256, 1, false) ||
-    containsCaseInsensitiveHexText(serviceBytes, clientSha256, 2, false) ||
-    containsCaseInsensitiveHexText(serviceBytes, clientSha256, 2, true)
+    containsCaseInsensitiveHexText(carrierBytes, digestSha256, 1, false) ||
+    containsCaseInsensitiveHexText(carrierBytes, digestSha256, 2, false) ||
+    containsCaseInsensitiveHexText(carrierBytes, digestSha256, 2, true)
   ) {
-    throw new Error("The provisioner service retained a forbidden text client SHA-256 projection.");
+    throw new Error(`The provisioner ${carrierLabel} retained a forbidden text ${targetLabel} SHA-256 projection.`);
   }
 
-  if (serviceBytes.length < 512 || serviceBytes.readUInt16LE(0) !== 0x5a4d) {
-    throw new Error("The provisioner service digest carrier is not a bounded PE image.");
+  if (carrierBytes.length < 512 || carrierBytes.readUInt16LE(0) !== 0x5a4d) {
+    throw new Error(`The provisioner ${carrierLabel} digest carrier is not a bounded PE image.`);
   }
-  const peOffset = serviceBytes.readUInt32LE(0x3c);
-  requireRange(serviceBytes, peOffset, 24, "service digest PE header");
-  if (serviceBytes.readUInt32LE(peOffset) !== 0x00004550) {
-    throw new Error("The provisioner service digest carrier has an invalid PE signature.");
+  const peOffset = carrierBytes.readUInt32LE(0x3c);
+  requireRange(carrierBytes, peOffset, 24, `${carrierLabel} digest PE header`);
+  if (carrierBytes.readUInt32LE(peOffset) !== 0x00004550) {
+    throw new Error(`The provisioner ${carrierLabel} digest carrier has an invalid PE signature.`);
   }
   const coffOffset = peOffset + 4;
-  const sectionCount = serviceBytes.readUInt16LE(coffOffset + 2);
-  const optionalSize = serviceBytes.readUInt16LE(coffOffset + 16);
+  const sectionCount = carrierBytes.readUInt16LE(coffOffset + 2);
+  const optionalSize = carrierBytes.readUInt16LE(coffOffset + 16);
   if (sectionCount === 0 || sectionCount > maximumSections) {
-    throw new Error("The provisioner service digest carrier has an invalid section count.");
+    throw new Error(`The provisioner ${carrierLabel} digest carrier has an invalid section count.`);
   }
   const sectionTableOffset = coffOffset + 20 + optionalSize;
-  requireRange(serviceBytes, sectionTableOffset, sectionCount * 40, "service digest section table");
+  requireRange(carrierBytes, sectionTableOffset, sectionCount * 40, `${carrierLabel} digest section table`);
   const carriers = [];
   for (let index = 0; index < sectionCount; index += 1) {
     const sectionOffset = sectionTableOffset + index * 40;
-    const rawSize = serviceBytes.readUInt32LE(sectionOffset + 16);
-    const rawOffset = serviceBytes.readUInt32LE(sectionOffset + 20);
-    const characteristics = serviceBytes.readUInt32LE(sectionOffset + 36);
+    const rawSize = carrierBytes.readUInt32LE(sectionOffset + 16);
+    const rawOffset = carrierBytes.readUInt32LE(sectionOffset + 20);
+    const characteristics = carrierBytes.readUInt32LE(sectionOffset + 36);
     if (first >= rawOffset && first + digest.length <= rawOffset + rawSize) {
       carriers.push({ characteristics });
     }
   }
   if (carriers.length !== 1) {
-    throw new Error("The provisioner service raw client digest is not contained by exactly one PE section.");
+    throw new Error(
+      `The provisioner ${carrierLabel} raw ${targetLabel} digest is not contained by exactly one PE section.`,
+    );
   }
   const characteristics = carriers[0].characteristics;
   const sectionIsReadable = (characteristics & 0x40000000) !== 0;
@@ -1382,7 +1685,7 @@ export function assertEmbeddedClientDigest(serviceBytes, clientSha256) {
   const sectionIsExecutable = (characteristics & 0x20000000) !== 0;
   const sectionContainsCode = (characteristics & 0x00000020) !== 0;
   if (!sectionIsReadable || sectionIsWritable || sectionIsExecutable || sectionContainsCode) {
-    throw new Error("The provisioner service raw client digest is not in a read-only non-code PE section.");
+    throw new Error(`The provisioner ${carrierLabel} raw ${targetLabel} digest is not in a read-only non-code PE section.`);
   }
 }
 
@@ -1482,6 +1785,17 @@ function runPinnedClientBuild(toolchain, buildRoot) {
     projectPath: clientProjectPath,
     expectedBinaryName: REMOTE_WORKER_WINDOWS_PROVISIONER_CLIENT_NAME,
     addressSanitizer: false,
+  });
+}
+
+function runPinnedAvailabilityBuild(toolchain, buildRoot, expectedProvisionerSha256) {
+  return runPinnedMsbuild({
+    toolchain,
+    buildRoot,
+    projectPath: availabilityProjectPath,
+    expectedBinaryName: REMOTE_WORKER_WINDOWS_PROVISIONER_AVAILABILITY_NAME,
+    addressSanitizer: false,
+    additionalProperties: [["ExpectedProvisionerSha256", expectedProvisionerSha256]],
   });
 }
 
@@ -2837,7 +3151,7 @@ function boundedBuildOutput(value) {
 }
 
 export function inspectRemoteWorkerProvisionerPe(bytes, { expectedMachine, binaryKind = "service" }) {
-  if (binaryKind !== "service" && binaryKind !== "client") {
+  if (binaryKind !== "service" && binaryKind !== "client" && binaryKind !== "availability") {
     throw new Error(`Unknown provisioner PE binary kind: ${String(binaryKind)}.`);
   }
   if (!Buffer.isBuffer(bytes) || bytes.length < 512 || bytes.length > maximumPeBytes) {
@@ -3103,6 +3417,7 @@ export function inspectRemoteWorkerProvisionerPe(bytes, { expectedMachine, binar
     const forbiddenImport = canonicalFunctions.find(
       (name) =>
         !(binaryKind === "service" && w1b1aServiceAuthorityImports.includes(name)) &&
+        !(binaryKind === "availability" && availabilityAuthorityImports.includes(name)) &&
         forbiddenProvisionerImportPatterns.some((pattern) => pattern.test(name)),
     );
     if (forbiddenImport !== undefined) {

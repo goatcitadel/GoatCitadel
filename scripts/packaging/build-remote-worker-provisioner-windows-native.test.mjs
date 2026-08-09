@@ -8,6 +8,7 @@ import { after, before, test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   REMOTE_WORKER_WINDOWS_PROVISIONER_IMPORTS,
+  REMOTE_WORKER_WINDOWS_PROVISIONER_AVAILABILITY_NAME,
   REMOTE_WORKER_WINDOWS_PROVISIONER_CLIENT_NAME,
   REMOTE_WORKER_WINDOWS_PROVISIONER_NAME,
   REMOTE_WORKER_WINDOWS_PROVISIONER_PREFLIGHT_NAME,
@@ -15,6 +16,7 @@ import {
   REMOTE_WORKER_WINDOWS_PROVISIONER_W1B1A_SOURCE_PATHS,
   REMOTE_WORKER_WINDOWS_PROVISIONER_W1B1B_P0_SOURCE_PATHS,
   assertEmbeddedClientDigest,
+  assertEmbeddedProvisionerDigest,
   buildRemoteWorkerWindowsProvisioner,
   createFixedEd25519InteropFrame,
   computeW1B1aCanonicalSourceManifest,
@@ -26,6 +28,7 @@ import {
   inspectRemoteWorkerProvisionerPe,
   normalizeLinkMapIcfConstantOwners,
   publishProvenProvisionerPairNoReplace,
+  publishProvenProvisionerTrioNoReplace,
   publishProvenProvisionerNoReplace,
   validateMonocypherSourceSnapshot,
   verifyProtectedSigningInteropReceipts,
@@ -45,6 +48,8 @@ const sourcePath = path.join(nativeRoot, "src", "main.cpp");
 const clientSourcePath = path.join(nativeRoot, "src", "client_main.cpp");
 const serviceRuntimeSourcePath = path.join(nativeRoot, "src", "service_runtime.cpp");
 const serviceRuntimeHeaderPath = path.join(nativeRoot, "src", "service_runtime.hpp");
+const availabilityBrokerHeaderPath = path.join(nativeRoot, "src", "availability_broker.hpp");
+const availabilityBrokerRuntimePath = path.join(nativeRoot, "src", "availability_broker_runtime.cpp");
 const localTransportSourcePath = path.join(nativeRoot, "src", "local_transport.cpp");
 const localTransportHeaderPath = path.join(nativeRoot, "src", "local_transport.hpp");
 const protocolSourcePath = path.join(nativeRoot, "src", "protocol.cpp");
@@ -60,6 +65,7 @@ const ed25519RuntimeHeaderPath = path.join(nativeRoot, "src", "ed25519_runtime.h
 const ed25519RuntimeTestPath = path.join(nativeRoot, "src", "ed25519_runtime.test.cpp");
 const productionProjectPath = path.join(nativeRoot, "GoatCitadel.RemoteWorker.Provisioner.vcxproj");
 const clientProjectPath = path.join(nativeRoot, "GoatCitadel.RemoteWorker.Provisioner.Client.vcxproj");
+const availabilityProjectPath = path.join(nativeRoot, "GoatCitadel.RemoteWorker.Provisioner.Availability.vcxproj");
 const testProjectPath = path.join(nativeRoot, "GoatCitadel.RemoteWorker.Provisioner.Tests.vcxproj");
 const monocypherVendorRoot = path.join(repoRoot, "vendor", "monocypher", "4.0.3");
 
@@ -73,11 +79,17 @@ after(() => {
   fs.rmSync(temporaryRoot, { recursive: true, force: true });
 });
 
-test("W1B1A freezes the exact 41-file fence and canonical current-byte source manifest", () => {
+test("W1B1A freezes the exact 47-file fence and canonical current-byte source manifest", () => {
   const expected = [
+    "apps/remote-worker-provisioner-windows-native/GoatCitadel.RemoteWorker.Provisioner.Availability.vcxproj",
     "apps/remote-worker-provisioner-windows-native/GoatCitadel.RemoteWorker.Provisioner.Client.vcxproj",
     "apps/remote-worker-provisioner-windows-native/GoatCitadel.RemoteWorker.Provisioner.Tests.vcxproj",
     "apps/remote-worker-provisioner-windows-native/GoatCitadel.RemoteWorker.Provisioner.vcxproj",
+    "apps/remote-worker-provisioner-windows-native/src/availability_broker.cpp",
+    "apps/remote-worker-provisioner-windows-native/src/availability_broker.hpp",
+    "apps/remote-worker-provisioner-windows-native/src/availability_broker.test.cpp",
+    "apps/remote-worker-provisioner-windows-native/src/availability_broker_main.cpp",
+    "apps/remote-worker-provisioner-windows-native/src/availability_broker_runtime.cpp",
     "apps/remote-worker-provisioner-windows-native/src/client_main.cpp",
     "apps/remote-worker-provisioner-windows-native/src/ed25519_runtime.cpp",
     "apps/remote-worker-provisioner-windows-native/src/ed25519_runtime.hpp",
@@ -119,14 +131,14 @@ test("W1B1A freezes the exact 41-file fence and canonical current-byte source ma
   ];
   assert.deepEqual(REMOTE_WORKER_WINDOWS_PROVISIONER_W1B1A_SOURCE_PATHS, expected);
   assert.deepEqual(expected, [...expected].sort(asciiCompare));
-  assert.equal(new Set(expected).size, 41);
+  assert.equal(new Set(expected).size, 47);
   const manifest = computeW1B1aCanonicalSourceManifest();
   assert.equal(manifest.schema, "goatcitadel.remote-worker.provisioner.w1b1a-source-manifest.v2");
-  assert.equal(manifest.fileCount, 41);
-  assert.equal(manifest.entries.length, 41);
+  assert.equal(manifest.fileCount, 47);
+  assert.equal(manifest.entries.length, 47);
   assert.equal(manifest.bytes.toString("utf8").endsWith("\n"), false);
   const lines = manifest.bytes.toString("utf8").split("\n");
-  assert.equal(lines.length, 41);
+  assert.equal(lines.length, 47);
   for (let index = 0; index < lines.length; index += 1) {
     assert.match(lines[index], /^[a-f0-9]{64}  [a-zA-Z0-9_./-]+$/u);
     assert.equal(lines[index], `${manifest.entries[index].sha256}  ${expected[index]}`);
@@ -239,9 +251,11 @@ test("builder reuses only the pinned shared toolchain and path-leak owners", () 
     "spawnSync(firstBinaryPath, [], {",
     "The two clean provisioner client builds were not byte-identical.",
     "The two clean provisioner service builds were not byte-identical.",
-    "publishProvenProvisionerPairNoReplace",
-    "exactly one raw embedded client SHA-256",
-    "forbidden text client SHA-256 projection",
+    "The two clean provisioner availability-broker builds were not byte-identical.",
+    "publishProvenProvisionerTrioNoReplace",
+    "assertEmbeddedClientDigest",
+    "assertEmbeddedProvisionerDigest",
+    "containsCaseInsensitiveHexText",
     "The native-test executable escaped the temporary proof root.",
     "crypto.randomBytes(16)",
     "fs.constants.COPYFILE_EXCL",
@@ -259,6 +273,36 @@ test("builder reuses only the pinned shared toolchain and path-leak owners", () 
       false,
       `builder reused forbidden launcher proof authority: ${forbiddenFragment}`,
     );
+  }
+});
+
+test("availability broker exposes one fixed no-operand SCM start authority and revalidates the signer", () => {
+  const header = fs.readFileSync(availabilityBrokerHeaderPath, "utf8");
+  const runtime = fs.readFileSync(availabilityBrokerRuntimePath, "utf8");
+  assert.equal(header.includes('L"GoatCitadelRemoteWorkerProvisionerAvailability"'), true);
+  assert.equal([...runtime.matchAll(/\bStartServiceW\s*\(/gu)].length, 1);
+  assert.match(runtime, /StartServiceW\(target, 0U, nullptr\)/u);
+  assert.match(
+    runtime,
+    /OpenServiceW\([\s\S]*?kTargetServiceName,[\s\S]*?SERVICE_START \| SERVICE_QUERY_CONFIG \| SERVICE_QUERY_STATUS \|[\s\S]*?READ_CONTROL \| SYNCHRONIZE/u,
+  );
+  assert.equal(runtime.includes("RehashHeldImage(*held_image)"), true);
+  assert.equal([...runtime.matchAll(/RehashHeldImage\(\*held_image\)/gu)].length, 3);
+  assert.match(runtime, /ExactServiceMainArguments\(argument_count, arguments\)/u);
+  for (const forbidden of [
+    "CreateServiceW",
+    "ControlService(",
+    "ChangeServiceConfigW",
+    "ChangeServiceConfig2W",
+    "DeleteService",
+    "CreateProcessW",
+    "ShellExecuteW",
+    "WinHttpOpen",
+    "WSAStartup",
+    "LoadLibraryW",
+    "GetProcAddress",
+  ]) {
+    assert.equal(runtime.includes(forbidden), false, `availability broker owns forbidden authority ${forbidden}`);
   }
 });
 
@@ -1769,6 +1813,21 @@ test("native W1B0 source preserves public inspect and exposes only the fixed pro
       `native W1A includes forbidden authority call: ${forbiddenFunction}`,
     );
   }
+
+  const availabilityImports = thawImports(REMOTE_WORKER_WINDOWS_PROVISIONER_IMPORTS.availability["windows-x64"]);
+  availabilityImports[0].functions.push("ControlService");
+  const forbiddenAvailabilityControl = createSyntheticProvisionerPe(0x8664, {
+    binaryKind: "availability",
+    imports: availabilityImports,
+  });
+  assert.throws(
+    () =>
+      inspectRemoteWorkerProvisionerPe(forbiddenAvailabilityControl, {
+        expectedMachine: 0x8664,
+        binaryKind: "availability",
+      }),
+    /forbidden W1A authority import: ControlService/u,
+  );
   assert.equal(/\b(?:Nt|Zw)[A-Z][A-Za-z0-9_]*\s*\(/u.test(combined), false);
   assert.equal(/\b(?:__asm|_asm)\b/u.test(combined), false);
   for (const fuzzFragment of ["0x47504357U", "65536U", "GCPW_NATIVE_TESTS seed=0x47504357 cases=65536\\n"]) {
@@ -1870,11 +1929,12 @@ test("native W1B0 source preserves public inspect and exposes only the fixed pro
   );
 });
 
-test("native projects freeze separate service, client, and paired x64/ARM64 test build closures", () => {
+test("native projects freeze separate service, client, availability, and paired x64/ARM64 test build closures", () => {
   const productionProject = fs.readFileSync(productionProjectPath, "utf8");
   const clientProject = fs.readFileSync(clientProjectPath, "utf8");
+  const availabilityProject = fs.readFileSync(availabilityProjectPath, "utf8");
   const testProject = fs.readFileSync(testProjectPath, "utf8");
-  for (const project of [productionProject, clientProject, testProject]) {
+  for (const project of [productionProject, clientProject, availabilityProject, testProject]) {
     for (const fragment of [
       `<VCToolsVersion>${REMOTE_WORKER_WINDOWS_MSVC_VERSION}</VCToolsVersion>`,
       `<WindowsTargetPlatformVersion>${REMOTE_WORKER_WINDOWS_SDK_VERSION}</WindowsTargetPlatformVersion>`,
@@ -1932,6 +1992,22 @@ test("native projects freeze separate service, client, and paired x64/ARM64 test
     assert.equal(clientProject.includes(fragment), true, `missing client project fragment: ${fragment}`);
   }
   for (const fragment of [
+    `<TargetName>${path.parse(REMOTE_WORKER_WINDOWS_PROVISIONER_AVAILABILITY_NAME).name}</TargetName>`,
+    "RequireExpectedProvisionerSha256",
+    "GOATCITADEL_EXPECTED_PROVISIONER_SHA256_HEX",
+    "<WholeProgramOptimization>true</WholeProgramOptimization>",
+    "/Brepro",
+    "/experimental:deterministic",
+    "/DEBUG:NONE",
+    "<IgnoreAllDefaultLibraries>true</IgnoreAllDefaultLibraries>",
+    "<EntryPointSymbol>AvailabilityBrokerEntryPoint</EntryPointSymbol>",
+    "<AdditionalDependencies>kernel32.lib;advapi32.lib;bcrypt.lib;bufferoverflowu.lib;libvcruntime.lib;libcmt.lib</AdditionalDependencies>",
+    "/NODEFAULTLIB",
+    "/INCLUDE:__arm64_safe_unaligned_memory_access",
+  ]) {
+    assert.equal(availabilityProject.includes(fragment), true, `missing availability project fragment: ${fragment}`);
+  }
+  for (const fragment of [
     `<TargetName Condition="'$(VendorPreflight)' != 'true'">${path.parse(REMOTE_WORKER_WINDOWS_PROVISIONER_TEST_NAME).name}</TargetName>`,
     `<TargetName Condition="'$(VendorPreflight)' == 'true'">${path.parse(REMOTE_WORKER_WINDOWS_PROVISIONER_PREFLIGHT_NAME).name}</TargetName>`,
     '<ProjectConfiguration Include="Release|x64">',
@@ -1966,10 +2042,12 @@ test("native projects freeze separate service, client, and paired x64/ARM64 test
   ]) {
     assert.equal(productionProject.toLowerCase().includes(forbiddenLibrary), false);
     assert.equal(clientProject.toLowerCase().includes(forbiddenLibrary), false);
+    assert.equal(availabilityProject.toLowerCase().includes(forbiddenLibrary), false);
   }
 
   const productionCompiles = extractCompileIncludes(productionProject);
   const clientCompiles = extractCompileIncludes(clientProject);
+  const availabilityCompiles = extractCompileIncludes(availabilityProject);
   const testCompiles = extractCompileIncludes(testProject);
   assert.deepEqual(productionCompiles, [
     "src/local_transport.cpp",
@@ -1992,7 +2070,14 @@ test("native projects freeze separate service, client, and paired x64/ARM64 test
     );
   }
   assert.deepEqual(clientCompiles, ["src/client_main.cpp", "src/local_transport.cpp", "src/protocol.cpp"]);
+  assert.deepEqual(availabilityCompiles, [
+    "src/availability_broker.cpp",
+    "src/availability_broker_main.cpp",
+    "src/availability_broker_runtime.cpp",
+  ]);
   assert.deepEqual(testCompiles, [
+    "src/availability_broker.cpp",
+    "src/availability_broker.test.cpp",
     "src/ed25519_runtime.test.cpp",
     "src/ed25519_runtime.test.cpp",
     "src/key_custody.test.cpp",
@@ -2023,7 +2108,9 @@ test("native projects freeze separate service, client, and paired x64/ARM64 test
     "src/service_runtime.hpp",
   ]);
   assert.deepEqual(extractIncludeIncludes(clientProject), ["src/local_transport.hpp", "src/protocol.hpp"]);
+  assert.deepEqual(extractIncludeIncludes(availabilityProject), ["src/availability_broker.hpp"]);
   assert.deepEqual(extractIncludeIncludes(testProject), [
+    "src/availability_broker.hpp",
     "src/ed25519_runtime.hpp",
     "src/key_custody.hpp",
     "src/local_transport.hpp",
@@ -2043,13 +2130,18 @@ test("native projects freeze separate service, client, and paired x64/ARM64 test
 
   const productionGuid = extractSingle(productionProject, /<ProjectGuid>([^<]+)<\/ProjectGuid>/u);
   const clientGuid = extractSingle(clientProject, /<ProjectGuid>([^<]+)<\/ProjectGuid>/u);
+  const availabilityGuid = extractSingle(availabilityProject, /<ProjectGuid>([^<]+)<\/ProjectGuid>/u);
   const testGuid = extractSingle(testProject, /<ProjectGuid>([^<]+)<\/ProjectGuid>/u);
   assert.notEqual(productionGuid, testGuid);
   assert.notEqual(productionGuid, clientGuid);
   assert.notEqual(clientGuid, testGuid);
+  assert.notEqual(availabilityGuid, productionGuid);
+  assert.notEqual(availabilityGuid, clientGuid);
+  assert.notEqual(availabilityGuid, testGuid);
   for (const forbiddenProjectFragment of ["ProjectReference", "PostBuildEvent", "CustomBuild"]) {
     assert.equal(productionProject.includes(forbiddenProjectFragment), false);
     assert.equal(clientProject.includes(forbiddenProjectFragment), false);
+    assert.equal(availabilityProject.includes(forbiddenProjectFragment), false);
     assert.equal(testProject.includes(forbiddenProjectFragment), false);
   }
 });
@@ -2089,6 +2181,24 @@ test("embedded client digest proof requires one raw read-only non-code projectio
   assert.throws(() => assertEmbeddedClientDigest(utf16BigEndian, digestHex), /forbidden text/);
 });
 
+test("availability broker digest proof pins one raw read-only provisioner-service hash", () => {
+  const digestHex = "89abcdef01234567".repeat(4);
+  const valid = createDigestCarrierPe(digestHex);
+  assert.doesNotThrow(() => assertEmbeddedProvisionerDigest(valid, digestHex));
+
+  const duplicate = Buffer.from(valid);
+  Buffer.from(digestHex, "hex").copy(duplicate, 0x500);
+  assert.throws(() => assertEmbeddedProvisionerDigest(duplicate, digestHex), /exactly one raw embedded/);
+
+  const writable = Buffer.from(valid);
+  writable.writeUInt32LE(0xc0000040, 0x80 + 24 + 240 + 36);
+  assert.throws(() => assertEmbeddedProvisionerDigest(writable, digestHex), /read-only non-code/);
+
+  const ascii = Buffer.from(valid);
+  Buffer.from(digestHex, "ascii").copy(ascii, 0x520);
+  assert.throws(() => assertEmbeddedProvisionerDigest(ascii, digestHex), /forbidden text/);
+});
+
 test("PE proof accepts only the exact per-binary W1B1A import closures and mitigations", () => {
   const w1b1aServiceAuthorityImports = [
     "CreateDirectoryW",
@@ -2099,7 +2209,7 @@ test("PE proof accepts only the exact per-binary W1B1A import closures and mitig
     "SetFileInformationByHandle",
     "SetSecurityDescriptorGroup",
   ].sort(asciiCompare);
-  for (const binaryKind of ["service", "client"]) {
+  for (const binaryKind of ["service", "client", "availability"]) {
     for (const [target, machine] of [
       ["windows-x64", 0x8664],
       ["windows-arm64", 0xaa64],
@@ -2120,6 +2230,9 @@ test("PE proof accepts only the exact per-binary W1B1A import closures and mitig
     const clientFunctions = REMOTE_WORKER_WINDOWS_PROVISIONER_IMPORTS.client[target].flatMap(
       (entry) => entry.functions,
     );
+    const availabilityFunctions = REMOTE_WORKER_WINDOWS_PROVISIONER_IMPORTS.availability[target].flatMap(
+      (entry) => entry.functions,
+    );
     assert.deepEqual(
       serviceFunctions.filter((name) => w1b1aServiceAuthorityImports.includes(name)).sort(asciiCompare),
       w1b1aServiceAuthorityImports,
@@ -2130,6 +2243,14 @@ test("PE proof accepts only the exact per-binary W1B1A import closures and mitig
       [],
       `${target} client closure remains byte-for-byte outside W1B1A authority`,
     );
+    assert.deepEqual(
+      availabilityFunctions.filter((name) => name === "StartServiceW"),
+      ["StartServiceW"],
+      `${target} availability broker owns one exact fixed start authority import`,
+    );
+    for (const forbiddenBrokerImport of ["CreateServiceW", "ControlService", "ChangeServiceConfig2W", "DeleteService"]) {
+      assert.equal(availabilityFunctions.includes(forbiddenBrokerImport), false);
+    }
     const serviceKernel32 = REMOTE_WORKER_WINDOWS_PROVISIONER_IMPORTS.service[target].find(
       (entry) => entry.dll === "KERNEL32.dll",
     );
@@ -2739,6 +2860,60 @@ test("pair publication is client-first, no-replace, and preserves every partial 
   assert.equal(fs.existsSync(residueService), false);
 });
 
+test("trio publication is client/service/availability ordered, no-replace, and fail-closed on partial state", () => {
+  const root = fs.mkdtempSync(path.join(temporaryRoot, "publish-trio-"));
+  const serviceSource = path.join(root, "service-source.exe");
+  const clientSource = path.join(root, "client-source.exe");
+  const availabilitySource = path.join(root, "availability-source.exe");
+  const serviceDestination = path.join(root, REMOTE_WORKER_WINDOWS_PROVISIONER_NAME);
+  const clientDestination = path.join(root, REMOTE_WORKER_WINDOWS_PROVISIONER_CLIENT_NAME);
+  const availabilityDestination = path.join(root, REMOTE_WORKER_WINDOWS_PROVISIONER_AVAILABILITY_NAME);
+  const serviceBytes = Buffer.from("proven service bytes");
+  const clientBytes = Buffer.from("proven client bytes");
+  const availabilityBytes = Buffer.from("proven availability bytes");
+  fs.writeFileSync(serviceSource, serviceBytes, { flag: "wx" });
+  fs.writeFileSync(clientSource, clientBytes, { flag: "wx" });
+  fs.writeFileSync(availabilitySource, availabilityBytes, { flag: "wx" });
+
+  const input = {
+    serviceSource,
+    serviceDestination,
+    serviceExpectedBytes: serviceBytes,
+    clientSource,
+    clientDestination,
+    clientExpectedBytes: clientBytes,
+    availabilitySource,
+    availabilityDestination,
+    availabilityExpectedBytes: availabilityBytes,
+  };
+  assert.equal(publishProvenProvisionerTrioNoReplace(input), true);
+  assert.deepEqual(fs.readFileSync(clientDestination), clientBytes);
+  assert.deepEqual(fs.readFileSync(serviceDestination), serviceBytes);
+  assert.deepEqual(fs.readFileSync(availabilityDestination), availabilityBytes);
+  assert.equal(publishProvenProvisionerTrioNoReplace(input), false);
+  assert.throws(
+    () =>
+      publishProvenProvisionerTrioNoReplace({
+        ...input,
+        availabilityExpectedBytes: Buffer.from("drifted availability bytes"),
+      }),
+    /preexisting provisioner trio differs.*HOLD/u,
+  );
+
+  const partialRoot = fs.mkdtempSync(path.join(temporaryRoot, "publish-trio-partial-"));
+  const partialInput = {
+    ...input,
+    serviceDestination: path.join(partialRoot, REMOTE_WORKER_WINDOWS_PROVISIONER_NAME),
+    clientDestination: path.join(partialRoot, REMOTE_WORKER_WINDOWS_PROVISIONER_CLIENT_NAME),
+    availabilityDestination: path.join(partialRoot, REMOTE_WORKER_WINDOWS_PROVISIONER_AVAILABILITY_NAME),
+  };
+  fs.writeFileSync(partialInput.clientDestination, clientBytes, { flag: "wx" });
+  assert.throws(() => publishProvenProvisionerTrioNoReplace(partialInput), /partial service\/client\/availability trio.*HOLD/u);
+  assert.deepEqual(fs.readFileSync(partialInput.clientDestination), clientBytes);
+  assert.equal(fs.existsSync(partialInput.serviceDestination), false);
+  assert.equal(fs.existsSync(partialInput.availabilityDestination), false);
+});
+
 test("pair publication survives real identical and differing two-process contention without replacement", async () => {
   const identical = await runPairPublicationContention({
     label: "identical",
@@ -2798,7 +2973,7 @@ for (const [target, machine] of [
   }
 
   test(
-    `${target} runs x64 ASan proof and performs paired byte-identical target service/client/test builds`,
+    `${target} runs x64 ASan proof and performs byte-identical target service/client/availability/test builds`,
     { skip: toolchainAvailable ? false : skipReason, timeout: 240_000 },
     () => {
       const outDir = path.join(temporaryRoot, target);
@@ -3068,35 +3243,53 @@ for (const [target, machine] of [
       assert.deepEqual(result.entrypoints, {
         service: ["SCM-no-args", "--inspect-stdio"],
         client: ["--service-stdio"],
+        availability: ["SCM-no-args"],
       });
-      assert.equal(result.productionDark, false);
+      assert.equal(result.productionDark, true);
+      assert.equal(result.publishedTrio, true);
       assert.equal(result.protectedAdmissionEvidenceSigningCallable, true);
       assert.deepEqual(result.externalProof, {
         elevatedScm: "HOLD",
         successfulProductionClientAuthentication: "HOLD",
         privilegedTransport: "HOLD",
+        availabilityBrokerCallerAndInstallerOwner: "HOLD",
+        installedAvailabilityBrokerScmContract: "HOLD",
+        liveSignerRestart: "HOLD",
+        twoMachineAvailabilityBroker: "HOLD",
         liveArm64Execution: "HOLD",
       });
       assert.match(result.sha256, /^[a-f0-9]{64}$/u);
       assert.equal(path.basename(result.path), REMOTE_WORKER_WINDOWS_PROVISIONER_NAME);
       assert.equal(path.basename(result.service.path), REMOTE_WORKER_WINDOWS_PROVISIONER_NAME);
       assert.equal(path.basename(result.client.path), REMOTE_WORKER_WINDOWS_PROVISIONER_CLIENT_NAME);
+      assert.equal(
+        path.basename(result.availability.path),
+        REMOTE_WORKER_WINDOWS_PROVISIONER_AVAILABILITY_NAME,
+      );
       assert.deepEqual(
         fs.readdirSync(outDir).sort(asciiCompare),
-        [REMOTE_WORKER_WINDOWS_PROVISIONER_CLIENT_NAME, REMOTE_WORKER_WINDOWS_PROVISIONER_NAME].sort(asciiCompare),
+        [
+          REMOTE_WORKER_WINDOWS_PROVISIONER_AVAILABILITY_NAME,
+          REMOTE_WORKER_WINDOWS_PROVISIONER_CLIENT_NAME,
+          REMOTE_WORKER_WINDOWS_PROVISIONER_NAME,
+        ].sort(asciiCompare),
       );
       const serviceBytes = fs.readFileSync(result.service.path);
       const clientBytes = fs.readFileSync(result.client.path);
+      const availabilityBytes = fs.readFileSync(result.availability.path);
       assert.equal(serviceBytes.length, result.service.byteLength);
       assert.equal(clientBytes.length, result.client.byteLength);
+      assert.equal(availabilityBytes.length, result.availability.byteLength);
       assert.equal(result.byteLength, result.service.byteLength);
       assert.equal(result.sha256, result.service.sha256);
       assert.match(result.service.sha256, /^[a-f0-9]{64}$/u);
       assert.match(result.client.sha256, /^[a-f0-9]{64}$/u);
+      assert.match(result.availability.sha256, /^[a-f0-9]{64}$/u);
+      assert.equal(result.availability.targetServiceSha256, result.service.sha256);
       const expectedClient =
         target === "windows-x64"
-          ? { bytes: 69_632, sha256: "c72fb8028d2e18e6edc4573ff7be50d20f4096fc47d9d9965c807d30cf53c507" }
-          : { bytes: 59_904, sha256: "8e89ae758f44700ba21f8fbf8ed915b7dd51dcde42e9c9112f94b24d65232179" };
+          ? { bytes: 74_240, sha256: "4b91dd9257c3a948742a6ae8db6d81a98eb89cf06be0352e737de7eb8d6aab69" }
+          : { bytes: 64_512, sha256: "c3260fbd1052c29ae254952dd085bab335b82d4cfdeb31a753353920a48955b1" };
       assert.equal(result.client.byteLength, expectedClient.bytes);
       assert.equal(result.client.sha256, expectedClient.sha256);
       const serviceInspection = inspectRemoteWorkerProvisionerPe(serviceBytes, {
@@ -3107,6 +3300,10 @@ for (const [target, machine] of [
         expectedMachine: machine,
         binaryKind: "client",
       });
+      const availabilityInspection = inspectRemoteWorkerProvisionerPe(availabilityBytes, {
+        expectedMachine: machine,
+        binaryKind: "availability",
+      });
       assert.deepEqual(
         serviceInspection.imports,
         canonicalImports(REMOTE_WORKER_WINDOWS_PROVISIONER_IMPORTS.service[target]),
@@ -3115,10 +3312,18 @@ for (const [target, machine] of [
         clientInspection.imports,
         canonicalImports(REMOTE_WORKER_WINDOWS_PROVISIONER_IMPORTS.client[target]),
       );
+      assert.deepEqual(
+        availabilityInspection.imports,
+        canonicalImports(REMOTE_WORKER_WINDOWS_PROVISIONER_IMPORTS.availability[target]),
+      );
       const embeddedClientDigest = Buffer.from(result.client.sha256, "hex");
       const firstDigest = serviceBytes.indexOf(embeddedClientDigest);
       assert.notEqual(firstDigest, -1);
       assert.equal(serviceBytes.indexOf(embeddedClientDigest, firstDigest + 1), -1);
+      const embeddedServiceDigest = Buffer.from(result.service.sha256, "hex");
+      const firstServiceDigest = availabilityBytes.indexOf(embeddedServiceDigest);
+      assert.notEqual(firstServiceDigest, -1);
+      assert.equal(availabilityBytes.indexOf(embeddedServiceDigest, firstServiceDigest + 1), -1);
 
       if (target === "windows-x64") {
         proveProductionInspectMode(result.service.path, machine);
