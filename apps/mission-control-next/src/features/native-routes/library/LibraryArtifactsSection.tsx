@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Download, FileText, RefreshCw, Waypoints, Workflow } from "lucide-react";
 import type { ChatGeneratedArtifactRecord } from "@goatcitadel/contracts";
 import { fetchChatGeneratedArtifacts } from "@goatcitadel/mission-control-shared/api/client";
+import { IdentifierChip } from "@goatcitadel/mission-control-shared/components/IdentifierChip";
 import { NativeCard } from "../NativeRoutePageLayout";
 import { NativeButton } from "@next/features/native-routes/primitives";
 import type { NativeRoutePagesProps } from "../types";
@@ -154,14 +155,32 @@ export function LibraryArtifactsSection({
               <>
                 <LibraryMetricGrid
                   items={[
-                    { label: "Kind", value: selectedArtifact.kind, meta: `v${selectedArtifact.version}` },
+                    {
+                      label: "Kind",
+                      value: selectedArtifact.kind,
+                      meta: (
+                        <span className="mc-next-identifier-stack">
+                          <span>v{selectedArtifact.version}</span>
+                          <IdentifierChip value={selectedArtifact.artifactId} label="Artifact" />
+                        </span>
+                      ),
+                    },
                     { label: "Project", value: selectedArtifact.projectId ?? "Unscoped", meta: "Artifact binding" },
                     {
                       label: "Provider",
                       value: selectedArtifact.providerId ?? "Unknown",
                       meta: selectedArtifact.model ?? "No model metadata",
                     },
-                    { label: "Session", value: selectedArtifact.sessionId, meta: selectedArtifact.turnId },
+                    {
+                      label: "Session",
+                      value: "Bound",
+                      meta: (
+                        <span className="mc-next-identifier-stack">
+                          <IdentifierChip value={selectedArtifact.sessionId} label="Session" />
+                          <IdentifierChip value={selectedArtifact.turnId} label="Turn" />
+                        </span>
+                      ),
+                    },
                     { label: "Updated", value: formatDateTime(selectedArtifact.updatedAt), meta: "Artifact timestamp" },
                   ]}
                 />

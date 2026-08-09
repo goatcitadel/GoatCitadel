@@ -329,17 +329,14 @@ Owner backlogs: `CAPABILITY_SYSTEM_BACKLOG.md`,
   decision controls.
 - The shared accessible identifier chip now middle-ellipsizes visible values,
   preserves the full value for assistive technology and hover inspection, and
-  copies the exact identifier. Approval, user-input, and selected-turn trace
-  identifiers use it; broader route adoption remains grouped below.
+  copies the exact identifier. Approval, user-input, selected-turn trace,
+  Council seat, Journey evidence, artifact lineage, and expanded trust-policy
+  identifiers use it without turning ordinary descriptive text into copy UI.
 - Focused Settings and primitive proof is green. Broad accessibility, surface,
   and visual proof remains intentionally grouped with the rest of M7.
 
 ### Current work
 
-- Finish selective identifier-chip adoption beyond Chat decision/trace surfaces
-  where copy actions add operator value. Blocked-state composition,
-  project/detail, route-focus, diagnostics, working-context, model-grouping, and
-  repeated-disclaimer slices are complete.
 - Integrate live HX-507 worker visibility after M4 instead of testing seeded and
   live variants in separate broad campaigns.
 

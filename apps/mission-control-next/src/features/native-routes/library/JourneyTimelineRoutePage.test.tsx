@@ -93,6 +93,13 @@ describe("JourneyTimelineRoutePage HX-402", () => {
     expect(text).toContain("Required, missing");
     expect(text).not.toContain("Promote now");
     expect(text).not.toContain("Activate now");
+    expect(renderer!.root.findAllByType("code").map((node) => node.props["aria-label"])).toEqual(
+      expect.arrayContaining([
+        "Event identifier: event-1",
+        "Actor identifier: operator-1",
+        "Workspace identifier: workspace-1",
+      ]),
+    );
     const regionNames = renderer!.root
       .findAll((node) => node.props?.role === "region")
       .map((node) =>

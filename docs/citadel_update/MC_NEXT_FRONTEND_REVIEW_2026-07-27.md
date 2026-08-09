@@ -134,6 +134,9 @@ current implementation:
 - A shared accessible identifier chip now gives approval, input-prompt, and
   selected-turn trace IDs a labeled mono treatment, middle ellipsis, full-value
   semantics, hover inspection, and an exact copy action.
+- The same copyable treatment is selectively applied to Council seat references,
+  Journey event/actor/workspace evidence, artifact session/turn lineage, and
+  expanded Trust-policy evidence. Descriptive prose stays plain text.
 
 These fixes received focused component tests and package typecheck. The
 consolidated accessibility, surface, and visual pass remains owned by `M7` in
@@ -142,9 +145,6 @@ consolidated accessibility, surface, and visual pass remains owned by `M7` in
 ## Deferred findings still open (recommend before/shortly after 1.0)
 
 **UX suggestions (product-level):**
-- **Remaining identifier discipline**: adopt the shared identifier chip for Council seat rows,
-  Journey/Artifacts metric tiles, and Trust-policy prose after confirming where copy actions add
-  operator value instead of visual noise.
 - Curator remains reachable only by URL/palette with no nav highlight. That is
   intentional for experimental scope; its timestamp and column alignment now
   match the maintained route conventions.

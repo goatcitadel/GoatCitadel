@@ -768,6 +768,13 @@ describe("NativeRoutePages library coverage", () => {
     expect(collectText(artifacts.root)).toContain("Release notes");
     expect(collectText(artifacts.root)).toContain("Use in Work");
     expect(collectText(artifacts.root)).toContain("Validation");
+    expect(artifacts.root.findAllByType("code").map((node) => node.props["aria-label"])).toEqual(
+      expect.arrayContaining([
+        "Artifact identifier: artifact-1",
+        "Session identifier: session-1",
+        "Turn identifier: turn-1",
+      ]),
+    );
     await click(findButton(artifacts.root, "Plan"));
     await change(artifacts.root.findByProps({ placeholder: "Search title or kind" }), "release");
     expect(collectText(artifacts.root)).toContain("# Release");

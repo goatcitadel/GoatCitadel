@@ -2,6 +2,8 @@
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TrustPolicySection } from "./TrustPolicySection";
+import type { TrustPolicyMatrixRow } from "./TrustPolicySection";
+import { TrustPolicyRowDetails } from "./TrustPolicyRowDetails";
 import type { SettingsSectionProps } from "../SettingsShared";
 
 const trustApi = vi.hoisted(() => ({
@@ -186,5 +188,30 @@ describe("TrustPolicySection", () => {
 
     expect(cells.map((cell) => cell.props["data-label"])).toContain("Owner action");
     expect(cells.map((cell) => cell.props["data-label"])).toContain("Last-use evidence");
+  });
+
+  it("renders exact copyable identifiers in expanded trust evidence", () => {
+    const row: TrustPolicyMatrixRow = {
+      id: "tool:shell.execute",
+      kind: "tool",
+      label: "Shell execute",
+      status: "approval_required",
+      owner: "tools.grants",
+      lastUse: {
+        runId: "run-trust-1234567890",
+        approvalId: "approval-trust-1234567890",
+        evidenceRef: "evidence-trust-1234567890",
+      },
+    };
+    const renderer = create(<TrustPolicyRowDetails row={row} />);
+
+    expect(renderer.root.findAllByType("code").map((node) => node.props["aria-label"])).toEqual(
+      expect.arrayContaining([
+        "Identifier: tool:shell.execute",
+        "Run identifier: run-trust-1234567890",
+        "Approval identifier: approval-trust-1234567890",
+        "Evidence identifier: evidence-trust-1234567890",
+      ]),
+    );
   });
 });
