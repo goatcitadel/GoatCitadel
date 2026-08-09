@@ -60,7 +60,7 @@ export interface GatewayAuthValidationPort {
       }
     | undefined
   >;
-  verifyCompanionRequestSignature(input: unknown): unknown;
+  verifyCompanionRequestSignature(input: unknown): Promise<void>;
 }
 
 export type GatewayRuntimeInstance = GatewayRuntimePort & GatewayAuthValidationPort;

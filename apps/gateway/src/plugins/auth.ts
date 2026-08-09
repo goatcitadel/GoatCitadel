@@ -369,7 +369,7 @@ export const authPlugin = fp(async (fastify) => {
     }
 
     try {
-      fastify.gatewayAuth.verifyCompanionRequestSignature({
+      await fastify.gatewayAuth.verifyCompanionRequestSignature({
         sessionId: request.authCompanionSessionId,
         method: request.method,
         path: request.url,

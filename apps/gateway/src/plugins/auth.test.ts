@@ -966,6 +966,43 @@ describe("auth plugin", () => {
     });
   });
 
+  it("rejects an asynchronously invalid companion signature before the mutation handler runs", async () => {
+    app = await buildApp({
+      mode: "token",
+      token: { value: "alpha-token", queryParam: "access_token" },
+    });
+    const mutationHandler = vi.fn(async () => ({ ok: true }));
+    app.post("/async-signature-protected-write", mutationHandler);
+    const verifySignature = vi.fn(async () => {
+      await Promise.resolve();
+      throw new Error("Invalid companion request signature.");
+    });
+    (
+      app.gatewayAuth as unknown as {
+        verifyCompanionRequestSignature: typeof verifySignature;
+      }
+    ).verifyCompanionRequestSignature = verifySignature;
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/async-signature-protected-write",
+      headers: {
+        Authorization: "Bearer companion-bearer",
+        "x-goatcitadel-companion-timestamp": "2026-03-30T12:00:00.000Z",
+        "x-goatcitadel-companion-nonce": "nonce-123456",
+        "x-goatcitadel-companion-signature": "ZmFrZV9zaWduYXR1cmU",
+      },
+      payload: {
+        action: "mutate",
+      },
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toEqual({ error: "Invalid companion request signature." });
+    expect(verifySignature).toHaveBeenCalledOnce();
+    expect(mutationHandler).not.toHaveBeenCalled();
+  });
+
   it("rejects companion mutating requests that include query params", async () => {
     app = await buildApp({
       mode: "token",
