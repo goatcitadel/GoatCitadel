@@ -41,6 +41,7 @@ import { NativeCard } from "../../NativeRoutePageLayout";
 import { ErrorState, NativeButton, NativeMetricGrid } from "../../primitives";
 import { deriveLlamaCppAlias } from "../../SettingsNativePage";
 import type { NativeLoadIssue } from "../../shared/native-helpers";
+import { useFormDirty } from "../../library/use-form-dirty";
 
 const VISUAL_REGRESSION_MODE =
   (import.meta.env.VITE_GOATCITADEL_VISUAL_REGRESSION_MODE as string | undefined)?.trim().toLowerCase() === "true";
@@ -141,12 +142,23 @@ export function RuntimeSection(props: SettingsSectionProps) {
     modelPath: "",
     alias: "",
   });
+  const [llamaBaseline, setLlamaBaseline] = useState({
+    enabled: false,
+    autoStart: false,
+    baseUrl: "",
+    command: "",
+    modelsRootPath: "",
+    modelPath: "",
+    alias: "",
+  });
   const [npuForm, setNpuForm] = useState({
     enabled: false,
     autoStart: false,
     sidecarUrl: "",
   });
   const preserveLlamaDraftRef = useRef(false);
+  const llamaDirty = !areRuntimeFormsEqual(llamaForm, llamaBaseline);
+  useFormDirty("settings:runtime", llamaDirty, { label: "Runtime" });
   const discoveredLlamaModels = useMemo(
     () => (data?.llamaModels ?? []).filter((item) => typeof item.filePath === "string" && item.filePath.length > 0),
     [data],
@@ -201,23 +213,30 @@ export function RuntimeSection(props: SettingsSectionProps) {
     }
     const preserveLlamaDraft = preserveLlamaDraftRef.current;
     preserveLlamaDraftRef.current = false;
-    if (!preserveLlamaDraft) {
-      setLlamaForm({
-        enabled: data.settings.llamaCpp?.enabled ?? false,
-        autoStart: data.settings.llamaCpp?.autoStart ?? false,
-        baseUrl: data.settings.llamaCpp?.baseUrl ?? "",
-        command: data.settings.llamaCpp?.command ?? "",
-        modelsRootPath: data.settings.llamaCpp?.modelsRootPath ?? "",
-        modelPath: data.settings.llamaCpp?.modelPath ?? "",
-        alias: data.settings.llamaCpp?.alias ?? "",
-      });
+    const nextLlamaForm = {
+      enabled: data.settings.llamaCpp?.enabled ?? false,
+      autoStart: data.settings.llamaCpp?.autoStart ?? false,
+      baseUrl: data.settings.llamaCpp?.baseUrl ?? "",
+      command: data.settings.llamaCpp?.command ?? "",
+      modelsRootPath: data.settings.llamaCpp?.modelsRootPath ?? "",
+      modelPath: data.settings.llamaCpp?.modelPath ?? "",
+      alias: data.settings.llamaCpp?.alias ?? "",
+    };
+    const canonicalMatchesDraft = areRuntimeFormsEqual(llamaForm, nextLlamaForm);
+    if (canonicalMatchesDraft) {
+      if (!areRuntimeFormsEqual(llamaBaseline, nextLlamaForm)) {
+        setLlamaBaseline(nextLlamaForm);
+      }
+    } else if (!llamaDirty && !preserveLlamaDraft) {
+      setLlamaForm(nextLlamaForm);
+      setLlamaBaseline(nextLlamaForm);
     }
     setNpuForm({
       enabled: false,
       autoStart: false,
       sidecarUrl: data.settings.npu?.sidecarUrl ?? "",
     });
-  }, [data]);
+  }, [data, llamaBaseline, llamaDirty, llamaForm]);
 
   const runAndReload = async (
     operation: () => Promise<unknown>,
@@ -625,6 +644,10 @@ export function RuntimeSection(props: SettingsSectionProps) {
       ) : null}
     </SettingsSectionShell>
   );
+}
+
+function areRuntimeFormsEqual(left: Record<string, unknown>, right: Record<string, unknown>): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function LlamaCppLeaseDiagnostics({ diagnostics }: { diagnostics?: LlamaCppRuntimeLeaseDiagnostics }) {

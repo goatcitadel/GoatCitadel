@@ -554,7 +554,18 @@ function setupResponses() {
     title: "GitHub setup",
     fields: [{ key: "tokenEnv", label: "Token environment variable", type: "text", defaultValue: "GITHUB_TOKEN" }],
   });
-  settingsMocks.updateIntegrationConnection.mockResolvedValue({ connectionId: "conn-1" });
+  settingsMocks.updateIntegrationConnection.mockResolvedValue({
+    connectionId: "conn-1",
+    catalogId: "github",
+    key: "github",
+    label: "GitHub ops",
+    kind: "service",
+    enabled: false,
+    status: "paused",
+    config: { tokenEnv: "GH_DETAIL" },
+    createdAt: "2026-04-24T12:00:00.000Z",
+    updatedAt: "2026-04-24T12:30:00.000Z",
+  });
   settingsMocks.deleteIntegrationConnection.mockResolvedValue({ ok: true });
   settingsMocks.fetchIntegrationConnectionDiagnostics.mockResolvedValue({
     status: "ok",
@@ -2112,6 +2123,7 @@ describe("SettingsNativePage broad native sections", () => {
         config: { tokenEnv: "GH_DETAIL" },
       }),
     );
+    expect(hasDirtySections()).toBe(false);
     await click(findExactButton(integrations.root, "Run"));
     expect(settingsMocks.invokeIntegrationConnectionAction).toHaveBeenCalledWith("conn-1", "sync-issues", {});
     await click(findButton(integrations.root, "Delete"));
@@ -2574,6 +2586,198 @@ describe("SettingsNativePage broad native sections", () => {
       .findAllByType(ConfirmModal)
       .find((modal) => modal.props.title === "Discard provider changes?");
     expect(discardModal?.props.open).toBe(false);
+  });
+
+  it("guards dirty integration detail selection and preserves the selected draft on cancel", async () => {
+    settingsMocks.fetchIntegrationConnections.mockImplementation(async (kind?: string) => ({
+      items:
+        kind === "channel"
+          ? []
+          : [
+              {
+                connectionId: "conn-1",
+                catalogId: "github",
+                key: "github",
+                label: "GitHub",
+                kind: "service",
+                enabled: true,
+                status: "connected",
+                config: { tokenEnv: "GITHUB_TOKEN" },
+                createdAt: "2026-04-24T12:00:00.000Z",
+                updatedAt: "2026-04-24T12:00:00.000Z",
+              },
+              {
+                connectionId: "conn-2",
+                catalogId: "linear",
+                key: "linear",
+                label: "Linear ops",
+                kind: "service",
+                enabled: true,
+                status: "connected",
+                config: { tokenEnv: "LINEAR_TOKEN" },
+                createdAt: "2026-04-24T12:00:00.000Z",
+                updatedAt: "2026-04-24T12:00:00.000Z",
+              },
+            ],
+    }));
+    const integrations = await mount("integrations");
+    await change(integrations.root.findByProps({ value: "GitHub" }), "GitHub draft");
+    expect(hasDirtySections()).toBe(true);
+
+    await click(findButton(integrations.root, "Linear ops"));
+    let discardModal = integrations.root
+      .findAllByType(ConfirmModal)
+      .find((modal) => modal.props.title === "Discard integration changes?");
+    expect(discardModal?.props.open).toBe(true);
+    await act(async () => {
+      discardModal?.props.onCancel();
+    });
+    expect(integrations.root.findByProps({ value: "GitHub draft" })).toBeTruthy();
+
+    await click(findButton(integrations.root, "Linear ops"));
+    discardModal = integrations.root
+      .findAllByType(ConfirmModal)
+      .find((modal) => modal.props.title === "Discard integration changes?");
+    await act(async () => {
+      discardModal?.props.onConfirm();
+    });
+    await flush();
+    expect(integrations.root.findByProps({ value: "Linear ops" })).toBeTruthy();
+  });
+
+  it("guards a dirty new-integration draft before changing its catalog", async () => {
+    settingsMocks.fetchIntegrationCatalog.mockResolvedValueOnce({
+      items: [
+        {
+          catalogId: "github",
+          key: "github",
+          label: "GitHub",
+          description: "GitHub issues and pulls",
+          kind: "service",
+          capabilities: ["issues"],
+          authMethods: ["token"],
+        },
+        {
+          catalogId: "linear",
+          key: "linear",
+          label: "Linear",
+          description: "Linear issues",
+          kind: "service",
+          capabilities: ["issues"],
+          authMethods: ["token"],
+        },
+      ],
+    });
+    const integrations = await mount("integrations");
+    await change(integrations.root.findByProps({ placeholder: "Optional connection label" }), "Draft connection");
+
+    const catalogSelect = integrations.root.findAllByType("select").find((select) => select.props.value === "github")!;
+    await change(catalogSelect, "linear");
+    let discardModal = integrations.root
+      .findAllByType(ConfirmModal)
+      .find((modal) => modal.props.title === "Discard new connection draft?");
+    expect(discardModal?.props.open).toBe(true);
+    await act(async () => {
+      discardModal?.props.onCancel();
+    });
+    expect(integrations.root.findByProps({ placeholder: "Optional connection label" }).props.value).toBe(
+      "Draft connection",
+    );
+    expect(catalogSelect.props.value).toBe("github");
+
+    await change(catalogSelect, "linear");
+    discardModal = integrations.root
+      .findAllByType(ConfirmModal)
+      .find((modal) => modal.props.title === "Discard new connection draft?");
+    await act(async () => {
+      discardModal?.props.onConfirm();
+    });
+    await flush();
+    expect(integrations.root.findByProps({ placeholder: "Optional connection label" }).props.value).toBe("");
+    expect(integrations.root.findAllByType("select").find((select) => select.props.value === "linear")).toBeTruthy();
+  });
+
+  it("guards dirty permission-profile selection and restores only after confirmed discard", async () => {
+    settingsMocks.fetchPermissionProfiles.mockResolvedValueOnce({
+      items: [
+        {
+          profileId: "profile-1",
+          label: "Release captain",
+          description: "Release workflow",
+          builtin: false,
+          status: "active",
+          scope: "workspace",
+          scopeRef: "default",
+          approvalMode: "approve_risky",
+          toolPatterns: ["git.*"],
+          allow: ["git.status"],
+          deny: ["git.push"],
+          readAccessMode: "roots_only",
+          defaultForSurfaces: ["chat"],
+          createdBy: "operator",
+          createdAt: "2026-04-24T12:00:00.000Z",
+          updatedAt: "2026-04-24T12:00:00.000Z",
+        },
+        {
+          profileId: "profile-2",
+          label: "Research reviewer",
+          description: "Research workflow",
+          builtin: false,
+          status: "active",
+          scope: "workspace",
+          scopeRef: "default",
+          approvalMode: "approve_all",
+          toolPatterns: ["browser.*"],
+          allow: ["browser.search"],
+          deny: [],
+          readAccessMode: "roots_only",
+          defaultForSurfaces: ["chat"],
+          createdBy: "operator",
+          createdAt: "2026-04-24T12:00:00.000Z",
+          updatedAt: "2026-04-24T12:00:00.000Z",
+        },
+      ],
+    });
+    const permissions = await mount("permissions");
+    await change(permissions.root.findByProps({ "aria-label": "Edit profile name" }), "Release captain draft");
+    expect(hasDirtySections()).toBe(true);
+
+    await click(findButton(permissions.root, "Research reviewer"));
+    let discardModal = permissions.root
+      .findAllByType(ConfirmModal)
+      .find((modal) => modal.props.title === "Discard permission profile changes?");
+    expect(discardModal?.props.open).toBe(true);
+    await act(async () => {
+      discardModal?.props.onCancel();
+    });
+    expect(permissions.root.findByProps({ value: "Release captain draft" })).toBeTruthy();
+
+    await click(findButton(permissions.root, "Research reviewer"));
+    discardModal = permissions.root
+      .findAllByType(ConfirmModal)
+      .find((modal) => modal.props.title === "Discard permission profile changes?");
+    await act(async () => {
+      discardModal?.props.onConfirm();
+    });
+    await flush();
+    expect(permissions.root.findByProps({ value: "Research reviewer" })).toBeTruthy();
+  });
+
+  it("registers Runtime and Add-ons editor drafts with the global navigation guard", async () => {
+    const runtime = await mount("runtime");
+    await change(runtime.root.findByProps({ value: "http://127.0.0.1:8080/v1" }), "http://127.0.0.1:9090/v1");
+    expect(hasDirtySections()).toBe(true);
+    runtime.unmount();
+    __resetFormDirtyRegistryForTests();
+
+    const addons = await mount("addons");
+    await change(
+      addons.root
+        .findAllByType("textarea")
+        .find((textarea) => textarea.props.placeholder?.includes('"packId":"local-pack"'))!,
+      '{"packId":"draft-pack"}',
+    );
+    expect(hasDirtySections()).toBe(true);
   });
 
   it("guards dirty MCP server selection and resets only after confirmed discard", async () => {

@@ -65,7 +65,7 @@ change:
 | `M4` | P0/P1 | Live worker inference, execution cell, settlement, and visibility | `planned` | M3 | `pnpm verify:remote-workers` with the connected-worker row executed, plus live Ops/Chat data |
 | `M5` | P0 | Governed self-configuration and repair expansion | `planned` | M1; M2 for remote custody | `pnpm verify:self-configuration` with live provider, packaged restart, browser secure input, profile, rollback, and delegated-resume evidence |
 | `M6` | P1/P2 | Gateway capability and policy follow-ons | `complete` | M1; M5 where repair is involved | Focused capability/policy/provider tests and explicit owner decisions |
-| `M7` | P1/P2 | Consolidated Mission Control UX and live-worker projection | `planned` | M4; stable M5/M6 APIs | Focused component tests, populated stories, accessibility, surface, and one visual-regression pass |
+| `M7` | P1/P2 | Consolidated Mission Control UX and live-worker projection | `in_progress` | M4; stable M5/M6 APIs | Focused component tests, populated stories, accessibility, surface, and one visual-regression pass |
 | `M8` | P1 | Mobile companion completion and pinned-Gateway proof | `planned` | M3-M5 contract stability | External mobile build/tests and HX-508 device-auth, paging, approval, offline/reconnect, attachment, and revocation bundle |
 | `M9` | P0 | Packaging, desktop, remote-hardened, rollback, and recovery | `planned` | M2-M8 release-bearing scope | `pnpm verify:install`, `pnpm verify:desktop`, packaged lifecycle, exact hashes/versions, hardened recovery bundle |
 | `M10` | P0 | Final exact-SHA certification | `planned` | M1-M9 | All required named lanes, then `pnpm verify:all`, authenticated queues, and release evidence |
@@ -291,13 +291,26 @@ Owner backlogs: `CAPABILITY_SYSTEM_BACKLOG.md`,
 
 ## M7 - Consolidated Mission Control UX
 
+### Implementation progress
+
+- `MCUX-103` is complete: Integrations, Channels, Permissions, Runtime, and
+  Add-ons now participate in the shared route dirty-state registry. Editors
+  with local selection also require an explicit discard confirmation and keep
+  active drafts across background reloads.
+- `MCUX-108` is complete: the unused shared split-layout components and their
+  accidental app-owned React Reflex dependency were retired.
+- The reverified July polish rows for Run Detail's no-selection state,
+  progressive Skills loading, capability-route framing, provider capability
+  chips, measured filter overflow, reminder date input, and saved-board cost
+  coverage truth are complete.
+- Focused Settings and primitive proof is green. Broad accessibility, surface,
+  and visual proof remains intentionally grouped with the rest of M7.
+
 ### Current work
 
-- Complete MCUX-103, MCUX-106, and MCUX-108.
-- Consolidate the evidence-backed July UI findings: intentional Run Detail empty
-  state, progressive Skills loading, capability-page framing, wrapping provider
-  chips, measured filter overflow, native reminder date input, honest saved-board
-  cost coverage, compact Activity timestamps, and wider attention layouts.
+- Complete MCUX-106 with populated Projects and approval-detail stories.
+- Finish the remaining reverified July UI findings: compact Activity timestamps,
+  wider attention layouts, and the mobile scroll affordance.
 - Group shared product polish into common primitives: blocked-state composition,
   ID chips, project/detail differentiation, route redundancy, diagnostics
   density, working-context tabs, model grouping, and repeated disclaimer copy.

@@ -97,12 +97,14 @@ describe("FilterPillGroup", () => {
       renderer = create(
         <FilterPillGroup label="Memory namespace filter" options={options} value="all" onChange={() => {}} />,
         {
-          createNodeMock: (element) =>
-            element.props.className === "mc-next-filter-pill-group"
+          createNodeMock: (element) => {
+            const props = element.props as { className?: string };
+            return props.className === "mc-next-filter-pill-group"
               ? dimensions
               : element.type === "button"
                 ? { focus: vi.fn() }
-                : {},
+                : {};
+          },
         },
       );
     });

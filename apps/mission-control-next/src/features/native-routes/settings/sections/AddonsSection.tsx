@@ -53,6 +53,7 @@ import {
 } from "../SettingsShared";
 import { NativeCard } from "../../NativeRoutePageLayout";
 import { NativeButton, NativeMetricGrid, NativeSelectableList } from "../../primitives";
+import { useFormDirty } from "../../library/use-form-dirty";
 
 type AddonPostureCriterionState = "Proven" | "Partial" | "Out of 1.0";
 
@@ -205,6 +206,7 @@ export function AddonsSection(_props: SettingsSectionProps) {
     data: null,
   });
   const [localPackText, setLocalPackText] = useState("");
+  const [localPackBaseline, setLocalPackBaseline] = useState("");
   const [localPackPreview, setLocalPackPreview] = useState<LoadState<CapabilityPackPreview>>({
     loading: false,
     error: null,
@@ -233,6 +235,8 @@ export function AddonsSection(_props: SettingsSectionProps) {
   const selectedAddonRuntimeStatus = status.data?.status ?? selectedInstalledRecord?.runtimeStatus ?? "not_installed";
   const selectedAddonCanStop =
     selectedAddonInstalled && selectedAddonEnabled && ["running", "error"].includes(selectedAddonRuntimeStatus);
+  const localPackDirty = localPackText !== localPackBaseline;
+  useFormDirty("settings:addons", localPackDirty, { label: "Add-ons" });
   const productPosture = useMemo(
     () =>
       data
@@ -380,6 +384,7 @@ export function AddonsSection(_props: SettingsSectionProps) {
       const result = await installLocalCapabilityPack(readLocalPackManifest(), { actorId: "operator" });
       setNotice({ tone: "success", message: `${result.preview.manifest.name} staged for review.` });
       setLocalPackPreview({ loading: false, error: null, data: result.preview });
+      setLocalPackBaseline(localPackText);
       await reload();
     } catch (installError) {
       setNotice({ tone: "error", message: getErrorMessage(installError) });

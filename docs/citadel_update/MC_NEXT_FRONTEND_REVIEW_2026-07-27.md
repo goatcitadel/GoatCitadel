@@ -90,7 +90,25 @@ build defect); it was merely absent from this machine's pre-existing `node_modul
 - Streaming hot path, artifact iframe backgrounds, lightbox scrim, release-scope "Hidden" sublabels —
   all previously-cleared items were not re-flagged.
 
-## Deferred findings (recommend before/shortly after 1.0)
+## Resolved after this review
+
+The 2026-08-08 master-program UI tranche closed these deferred rows against the
+current implementation:
+
+- Hidden workspace/Citadel capability routes now use one route frame and one
+  responsive grid without duplicated `Skills` titles.
+- Run Detail without a `runId` now renders an intentional no-selection state.
+- Library Skills renders its primary list without waiting on supporting loads.
+- Provider capabilities render as wrapping chips rather than a clipped input.
+- Filter overflow guidance is driven by measured overflow.
+- Saved-board cost widgets distinguish unknown coverage from a real zero.
+- Reminder due dates use `datetime-local` and normalize valid input to UTC.
+
+These fixes received focused component tests and package typecheck. The
+consolidated accessibility, surface, and visual pass remains owned by `M7` in
+`MASTER_COMPLETION_PROGRAM.md`.
+
+## Deferred findings still open (recommend before/shortly after 1.0)
 
 **Bugs (small, none release-blocking):**
 - Ops Activity feed rows crush their event label at every desktop width (the full timestamp is
@@ -98,18 +116,8 @@ build defect); it was merely absent from this machine's pre-existing `node_modul
   a readable floor for the chip state segment.
 - Ops Schedules: needs-attention card truncates chips/titles in the 4-across grid (fine at 3-across on
   Notifications) — give it a wider minimum track or a 2-column span.
-- Hidden capability routes (`/settings/workspace-capabilities`, `/settings/citadel-capabilities`):
-  double "Unknown" fallback header above the real header, `Skills — Skills` duplicated titles, and a
-  nested SettingsGrid squeezing the first panel until item names ellipsize to single letters.
-- Run Detail without a `runId` renders a load-warning with a Retry that can never succeed, plus a wall
-  of mixed-case "unknown/Unknown" chips — deserves an intentional "No run selected" empty state.
-- Library Skills first paint blocks on the slowest of four gateway calls (captured stuck on the shell
-  loader in 5 of 8 variants) — render the skills list as soon as its own fetch resolves.
-- Settings Providers CAPABILITIES read-only input clips its list mid-token; render as wrapping chips.
 - Mobile "ON THIS PAGE" rows and the command palette list scroll with no affordance (overlay
   scrollbars) — add an edge fade or wrap.
-- FilterPillGroup shows "Swipe for more filters" even when nothing overflows — gate on measured
-  overflow.
 
 **UX suggestions (product-level):**
 - **Chat blocked state repeats itself up to five times** in one viewport (timeline heading, evidence
@@ -123,9 +131,6 @@ build defect); it was merely absent from this machine's pre-existing `node_modul
   selection; make the detail route visibly distinct.
 - Library agents-catalog route is pixel-identical to `/library/agents` — focus/scroll the catalog card
   or drop the separate slug.
-- Ops board "Usage & cost" widget asserts `$0.00` while the Costs route correctly reports Unknown /
-  lower-bound — propagate the evidence flag into the widget.
-- Reminders "Due at" expects a hand-typed millisecond ISO timestamp — use `datetime-local`.
 - Onboarding stage captions (`PROVIDER-READY`, `FIRST-TASK-PENDING`) and Mason's `FAIL-CLOSED STAGING`
   kicker read as internal spec keys; the surrounding copy already explains them in plain language.
 - Curator is reachable only by URL/palette with no nav highlight (intentional for experimental scope,

@@ -22,6 +22,35 @@ const channelApiMocks = vi.hoisted(() => ({
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => channelApiMocks);
 
+vi.mock("@goatcitadel/mission-control-shared/components/ConfirmModal", () => ({
+  ConfirmModal: ({
+    open,
+    title,
+    confirmLabel,
+    cancelLabel,
+    onConfirm,
+    onCancel,
+  }: {
+    open: boolean;
+    title: string;
+    confirmLabel: string;
+    cancelLabel: string;
+    onConfirm: () => void;
+    onCancel: () => void;
+  }) =>
+    open ? (
+      <div>
+        <h2>{title}</h2>
+        <button type="button" onClick={onConfirm}>
+          {confirmLabel}
+        </button>
+        <button type="button" onClick={onCancel}>
+          {cancelLabel}
+        </button>
+      </div>
+    ) : null,
+}));
+
 vi.mock("../../SettingsNativePage", () => ({
   delay: async () => undefined,
   formatDateTime: (value: string | undefined) => value ?? "Never",
@@ -672,6 +701,39 @@ describe("ChannelSetupWizard", () => {
 });
 
 describe("ChannelsSection Discord setup lifecycle", () => {
+  it("preserves unsaved setup edits until a draft switch is confirmed", async () => {
+    const secondDraft: ChannelSetupDraft = {
+      ...discordDraft,
+      draftId: "discord-draft-2",
+      label: "Discord backup",
+      draft: { ...discordDraft.draft, defaultChannelId: "222222222222222222" },
+    };
+    channelApiMocks.fetchChannelSetupDrafts.mockResolvedValue({ items: [discordDraft, secondDraft] });
+    const renderer = await renderChannelsSection();
+    const labelInput = renderer.root.findAllByType("input").find((input) => input.props.placeholder === "Discord")!;
+    await changeValue(labelInput, "Unsaved primary");
+
+    const backupButton = renderer.root
+      .findAllByType("button")
+      .find((button) => textOf(button).includes("Discord backup"))!;
+    await click(backupButton);
+    expect(textOf(renderer.root)).toContain("Discard channel draft changes?");
+
+    await click(findButton(renderer.root, "Keep editing"));
+    expect(
+      renderer.root.findAllByType("input").find((input) => input.props.placeholder === "Discord")?.props.value,
+    ).toBe("Unsaved primary");
+
+    await click(backupButton);
+    await click(findButton(renderer.root, "Discard changes"));
+    await flushWork();
+    expect(
+      renderer.root.findAllByType("input").find((input) => input.props.placeholder === "Discord")?.props.value,
+    ).toBe("Discord backup");
+
+    renderer.unmount();
+  });
+
   it("persists dirty values before validation, runs the live probe, and finalizes without another write", async () => {
     const renderer = await renderChannelsSection();
     expect(renderer.root.findByProps({ "aria-label": "Discord guided setup" })).toBeDefined();
