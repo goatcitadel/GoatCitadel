@@ -690,26 +690,65 @@
   }
 }
 
-.mc-next-threaded-surface.unified .mc-next-composer-blocked-actions {
-  display: flex;
+/* Shared identifier treatment for Chat's operator-facing IDs. The visible
+   value is middle-ellipsized by the component while the full value remains
+   available to assistive tech, hover inspection, and the copy action. */
+.gc-identifier-chip {
+  display: inline-flex;
   box-sizing: border-box;
   min-width: 0;
   max-width: 100%;
+  min-height: 1.65rem;
   align-items: center;
-  gap: 0.52rem;
-  margin-bottom: 0.5rem;
-  padding: 0.5rem 0.62rem;
-  border: 1px solid color-mix(in oklab, var(--warning) 34%, var(--border));
-  border-radius: var(--r-sm);
-  background: color-mix(in oklab, var(--warning) 9%, var(--mc-surface-1));
+  gap: 0.28rem;
+  padding: 0.12rem 0.18rem 0.12rem 0.42rem;
+  border: 1px solid color-mix(in oklab, var(--border-default, var(--border)) 82%, transparent);
+  border-radius: var(--r-pill);
+  background: color-mix(in oklab, var(--mc-surface-3) 82%, transparent);
   color: var(--text-secondary);
-  font-size: var(--text-xs);
+  vertical-align: middle;
 }
 
-.mc-next-threaded-surface.unified .mc-next-composer-blocked-actions p {
+.gc-identifier-chip-label {
+  flex: 0 0 auto;
+  color: var(--text-tertiary);
+  font: 700 var(--text-2xs) / 1 var(--font-sans, var(--mc-font-sans));
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.gc-identifier-chip-value {
   min-width: 0;
-  margin: 0;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font: 600 var(--text-xs) / 1.2 var(--font-mono, var(--mc-font-mono));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gc-identifier-chip-copy {
+  display: inline-flex;
+  flex: 0 0 auto;
+  min-height: 1.35rem;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.08rem 0.34rem;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--text-tertiary);
+  font: 700 var(--text-2xs) / 1 var(--font-sans, var(--mc-font-sans));
+  cursor: pointer;
+}
+
+.gc-identifier-chip-copy:hover {
+  background: color-mix(in oklab, var(--mc-area-color, var(--area-chat)) 12%, transparent);
+  color: var(--foreground);
+}
+
+.gc-identifier-chip-copy:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--mc-area-color, var(--area-chat)) 52%, transparent);
+  outline-offset: 1px;
 }
 
 .mc-next-context-summary-grid {

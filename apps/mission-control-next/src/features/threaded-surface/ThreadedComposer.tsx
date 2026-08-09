@@ -319,20 +319,6 @@ function ComposerBlockingPrompt({ props }: { props: MissionThreadedActiveSession
   return null;
 }
 
-function ComposerBlockedActionState({ props }: { props: MissionThreadedActiveSessionSurfaceProps }) {
-  const kind = props.pendingApproval ? "Approval needed" : "Input needed";
-  const detail = props.pendingApproval
-    ? "Resolve the approval before sending another instruction. The Work Record keeps the proof trail available."
-    : "Answer the requested follow-up before this thread can continue.";
-
-  return (
-    <div className="mc-next-composer-blocked-actions" role="status" aria-live="polite">
-      <StatusChip tone="warning">{kind}</StatusChip>
-      <p>{detail}</p>
-    </div>
-  );
-}
-
 const COWORK_STOP_STATE_ONLY_NOTE =
   "State-only: records operator stop intent in GoatCitadel state. It does not terminate the worker by itself — a live executor must honor the recorded stop before the run is treated as stopped.";
 
@@ -989,9 +975,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
         </div>
       </div>
 
-      {runtimeBlockerActive ? (
-        <ComposerBlockedActionState props={props} />
-      ) : (
+      {!runtimeBlockerActive ? (
         <div className="mc-next-composer-suggestion-row" aria-label="Composer send options">
           <button
             type="button"
@@ -1048,7 +1032,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
             Attach context
           </button>
         </div>
-      )}
+      ) : null}
 
       {props.selectedTurnRecovery ? (
         <div className="mc-next-composer-banner warning">

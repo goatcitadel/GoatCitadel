@@ -322,14 +322,24 @@ Owner backlogs: `CAPABILITY_SYSTEM_BACKLOG.md`,
   agent-catalog URL focuses its catalog owner; onboarding and Mason replace
   internal state captions with operator language; Curator uses readable time
   and aligned evidence columns.
+- Chat now renders one canonical approval or user-input control card in the
+  composer instead of repeating the same blocked state in a second warning
+  strip. Header approval navigation and execution-plan status remain because
+  they expose persisted queue access and plan truth rather than duplicate the
+  decision controls.
+- The shared accessible identifier chip now middle-ellipsizes visible values,
+  preserves the full value for assistive technology and hover inspection, and
+  copies the exact identifier. Approval, user-input, and selected-turn trace
+  identifiers use it; broader route adoption remains grouped below.
 - Focused Settings and primitive proof is green. Broad accessibility, surface,
   and visual proof remains intentionally grouped with the rest of M7.
 
 ### Current work
 
-- Finish the remaining shared product polish: blocked-state composition and
-  reusable identifier chips. The project/detail, route-focus, diagnostics,
-  working-context, model-grouping, and repeated-disclaimer slices are complete.
+- Finish selective identifier-chip adoption beyond Chat decision/trace surfaces
+  where copy actions add operator value. Blocked-state composition,
+  project/detail, route-focus, diagnostics, working-context, model-grouping, and
+  repeated-disclaimer slices are complete.
 - Integrate live HX-507 worker visibility after M4 instead of testing seeded and
   live variants in separate broad campaigns.
 

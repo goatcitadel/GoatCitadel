@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { ChatUserInputPromptRecord, ChatUserInputPromptResponse } from "@goatcitadel/contracts";
 import { HelpHint } from "../HelpHint";
+import { IdentifierChip } from "../IdentifierChip";
 
 export function ChatPendingUserInputPanel(props: {
   pendingUserInput: ChatUserInputPromptRecord | null;
@@ -182,7 +183,7 @@ export function ChatPendingUserInputPanel(props: {
         ) : null}
       </div>
       {activePrompt.expiresAt ? <p className="chat-approval-id">Expires {activePrompt.expiresAt}</p> : null}
-      <p className="chat-approval-id">{activePrompt.promptId}</p>
+      <IdentifierChip className="chat-approval-id" value={activePrompt.promptId} label="Prompt" />
     </div>
   );
 }

@@ -588,7 +588,7 @@ describe("ThreadedComposer", () => {
     expect(markup).not.toContain("Dismiss");
   });
 
-  it("replaces quick action clutter with a compact blocker state while blocked", () => {
+  it("uses the canonical blocker card as the single composer state while blocked", () => {
     const approvalMarkup = buildMarkup({
       pendingApproval: {
         approvalId: "approval-1",
@@ -597,8 +597,9 @@ describe("ThreadedComposer", () => {
         reason: "Needs approval.",
       },
     });
-    expect(approvalMarkup).toContain("mc-next-composer-blocked-actions");
-    expect(approvalMarkup).toContain("Approval needed");
+    expect(approvalMarkup).toContain("mc-next-composer-blocking-prompt");
+    expect(approvalMarkup).not.toContain("mc-next-composer-blocked-actions");
+    expect(approvalMarkup.match(/Approval required/g)).toHaveLength(1);
     expect(approvalMarkup).not.toContain(">Research<");
     expect(approvalMarkup).not.toContain(">Attach context<");
 
@@ -611,8 +612,8 @@ describe("ThreadedComposer", () => {
         question: "Continue?",
       },
     });
-    expect(userInputMarkup).toContain("Input needed");
-    expect(userInputMarkup).toContain("Answer the requested follow-up");
+    expect(userInputMarkup).toContain("Answer required");
+    expect(userInputMarkup).not.toContain("mc-next-composer-blocked-actions");
     expect(userInputMarkup).not.toContain(">Research<");
   });
 

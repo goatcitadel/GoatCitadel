@@ -123,6 +123,21 @@ describe("ThreadedContextDrawer", () => {
     expect(tabRow.findAllByProps({ role: "tab" })).toHaveLength(5);
   });
 
+  it("uses one copyable identifier chip for the selected trace turn", async () => {
+    const turnId = "11111111-2222-3333-4444-555555555555";
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(
+        <ThreadedContextDrawer surface="chat" props={baseProps({ selectedTurn: { turnId, trace: traceFixture() } })} />,
+      );
+    });
+
+    await act(async () => findButton(renderer!.root, "Trace").props.onClick());
+    const chip = renderer!.root.findByProps({ "aria-label": `Turn identifier: ${turnId}` });
+    expect(chip.children).toEqual(["11111111…555555"]);
+    expect(renderer!.root.findAllByProps({ "aria-label": "Copy full turn identifier" })).toHaveLength(1);
+  });
+
   it("keeps documents explicit, edits notes optimistically, and leaves code artifacts read-only", async () => {
     const onToggleInclude = vi.fn();
     const onSaveNote = vi.fn(async (note, body) => ({ ...note, body, revision: note.revision + 1 }));

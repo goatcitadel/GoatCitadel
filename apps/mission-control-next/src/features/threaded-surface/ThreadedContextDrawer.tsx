@@ -10,10 +10,10 @@ import type {
 } from "@goatcitadel/contracts";
 import { ChatTraceCard } from "@goatcitadel/mission-control-shared/components/ChatTraceCard";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
+import { IdentifierChip } from "@goatcitadel/mission-control-shared/components/IdentifierChip";
 import { GeneratedArtifactViewer } from "@goatcitadel/mission-control-shared/components/chat/GeneratedArtifactViewer";
 import { AssistantMessageRenderer } from "@goatcitadel/mission-control-shared/components/chat/AssistantMessageRenderer";
 import { StatusChip } from "../native-routes/primitives";
-import { shortId } from "./workflow/format";
 import { ChatCapabilityProfileRunDetail } from "./ChatCapabilityProfilePanel";
 
 type DrawerTab = "context" | "documents" | "trace" | "assist" | "session";
@@ -591,8 +591,8 @@ export function ThreadedContextDrawer({
             <>
               <section className="mc-next-context-card">
                 <p className="mc-next-panel-kicker">Turn trace</p>
-                <h4>{shortId(props.selectedTurn.turnId)}</h4>
-                <p className="mc-next-thread-meta">{props.selectedTurn.turnId}</p>
+                <h4>Selected turn</h4>
+                <IdentifierChip value={props.selectedTurn.turnId} label="Turn" />
                 <div className="mc-next-context-chip-row">
                   <StatusChip
                     tone={
