@@ -77,9 +77,9 @@ export const POSTGRES_SCHEMA_SHAPE_VALIDATION_SQL = `
     CROSS JOIN LATERAL pg_catalog.jsonb_to_recordset(expected_table.columns) AS expected_column(
       name pg_catalog.text,
       type pg_catalog.text,
-      "notNull" pg_catalog.boolean,
-      "hasDefault" pg_catalog.boolean,
-      generated pg_catalog.boolean
+      "notNull" pg_catalog.bool,
+      "hasDefault" pg_catalog.bool,
+      generated pg_catalog.bool
     )
   ),
   expected_constraints AS (
@@ -108,7 +108,7 @@ export const POSTGRES_SCHEMA_SHAPE_VALIDATION_SQL = `
     FROM pg_catalog.jsonb_to_recordset(@indexesJson::pg_catalog.jsonb) AS expected(
       name pg_catalog.text,
       "tableName" pg_catalog.text,
-      "unique" pg_catalog.boolean,
+      "unique" pg_catalog.bool,
       method pg_catalog.text,
       keys pg_catalog.jsonb,
       predicate pg_catalog.text,
@@ -374,9 +374,7 @@ function collectDroppedTables(
   for (const match of sql.matchAll(pattern)) {
     if (match.index === undefined) continue;
     const end = findStatementEnd(sql, match.index + match[0].length);
-    const body = sql
-      .slice(match.index + match[0].length, end)
-      .replace(/\s+(?:CASCADE|RESTRICT)\s*$/i, "");
+    const body = sql.slice(match.index + match[0].length, end).replace(/\s+(?:CASCADE|RESTRICT)\s*$/i, "");
     for (const rawName of splitTopLevel(body, ",")) {
       const tableName = normalizeIdentifier(lastQualifiedIdentifier(rawName.replace(/\s*\*\s*$/u, "")));
       if (!isCanonicalIdentifier(tableName)) continue;

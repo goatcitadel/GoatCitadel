@@ -747,6 +747,8 @@ describe("Postgres migration ledger compatibility", () => {
     assert.match(POSTGRES_SCHEMA_SHAPE_VALIDATION_SQL, /relation\.oid IS NULL/);
     assert.match(POSTGRES_SCHEMA_SHAPE_VALIDATION_SQL, /relation\.relowner/);
     assert.match(POSTGRES_SCHEMA_SHAPE_VALIDATION_SQL, /pg_get_expr\(index_row\.indpred/);
+    assert.match(POSTGRES_SCHEMA_SHAPE_VALIDATION_SQL, /"notNull" pg_catalog\.bool/);
+    assert.doesNotMatch(POSTGRES_SCHEMA_SHAPE_VALIDATION_SQL, /pg_catalog\.boolean/);
     assert.match(
       buildPostgresSchemaShapeRelationLockSql({ name: "quoted.schema", oid: "42" }, manifest),
       /^LOCK TABLE "quoted\.schema"\./,
