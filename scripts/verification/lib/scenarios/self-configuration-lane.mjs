@@ -16,6 +16,8 @@ export const SELF_CONFIGURATION_COMMANDS = Object.freeze([
       "src/tool-executor-runtime-configuration.test.ts",
       "src/research-search-official-providers.test.ts",
       "src/browser-tools.official-search.test.ts",
+      "src/browser-tools.manual-chromium.test.ts",
+      "src/browser-tools-load-failure.coverage.test.ts",
     ],
   },
   {
@@ -33,6 +35,7 @@ export const SELF_CONFIGURATION_COMMANDS = Object.freeze([
       "src/services/chat-secure-configuration-recovery-service.test.ts",
       "src/services/chat-message-route-runtime.test.ts",
       "src/services/chat-turn-agent-runner.loop24.test.ts",
+      "src/services/governed-remediation-managed-browser-adapter.test.ts",
       "src/routes/chat.routes.test.ts",
       "src/routes/chat.messages.commit-truth.test.ts",
       "src/app.rate-limit.test.ts",

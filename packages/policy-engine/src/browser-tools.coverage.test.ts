@@ -19,7 +19,13 @@ vi.mock("node:child_process", () => ({
   spawnSync: mocked.spawnSync,
 }));
 
-import { describeBrowserSessionState, executeBrowserTool, isBrowserToolName } from "./browser-tools.js";
+import {
+  BROWSER_CHROMIUM_MANUAL_REQUIRED_DIAGNOSTIC_CODE,
+  BROWSER_CHROMIUM_MANUAL_REQUIRED_DIAGNOSTIC_MESSAGE,
+  describeBrowserSessionState,
+  executeBrowserTool,
+  isBrowserToolName,
+} from "./browser-tools.js";
 
 const EXAMPLE_HOST = new URL("https://example.com").hostname;
 const DUCKDUCKGO_HOST = new URL("https://duckduckgo.com").hostname;
@@ -188,14 +194,8 @@ describe("browser tools coverage sweep", () => {
     mocked.spawnSync.mockReset();
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "browser-tools-coverage-"));
     mocked.launch.mockResolvedValue(createPlaywrightStub() as never);
-    mocked.spawnSync.mockImplementation((command: string, args?: string[]) => {
-      if (Array.isArray(args) && args[0] === "--version") {
-        return { status: 0, stdout: "10.29.3", stderr: "" };
-      }
-      if (Array.isArray(args) && args.join(" ") === "exec playwright install chromium") {
-        return { status: 0, stdout: "", stderr: "" };
-      }
-      throw new Error(`Unexpected spawnSync call in test: ${command} ${(args ?? []).join(" ")}`);
+    mocked.spawnSync.mockImplementation(() => {
+      throw new Error("browser tools must never spawn a package manager");
     });
     globalThis.fetch = vi.fn(
       async () =>
@@ -1706,33 +1706,27 @@ describe("browser tools coverage sweep", () => {
     ).rejects.toThrow(/selector/i);
   });
 
-  it("auto-installs Playwright Chromium when the executable is missing and retries launch", async () => {
+  it("reports missing Chromium as manual-required without retrying launch or spawning a package manager", async () => {
     const config = createConfig(tempRoot);
     mocked.launch.mockReset();
-    mocked.spawnSync.mockReset();
-    mocked.spawnSync.mockImplementation((command: string, args?: string[]) => {
-      if (Array.isArray(args) && args[0] === "--version") {
-        return { status: 0, stdout: "10.29.3", stderr: "" };
-      }
-      if (
-        Array.isArray(args) &&
-        args.join(" ") === "--filter @goatcitadel/policy-engine exec playwright install chromium"
-      ) {
-        return { status: 0, stdout: "", stderr: "" };
-      }
-      throw new Error(`Unexpected spawnSync call in test: ${command} ${(args ?? []).join(" ")}`);
-    });
-    mocked.launch
-      .mockRejectedValueOnce(new Error("browserType.launch: Executable doesn't exist at C:\\\\missing\\\\chrome.exe"))
-      .mockResolvedValueOnce(createPlaywrightStub() as never);
+    mocked.launch.mockRejectedValue(
+      new Error("browserType.launch: Executable doesn't exist at C:\\\\missing\\\\chrome.exe"),
+    );
 
-    const response = await executeBrowserTool(
+    const first = await executeBrowserTool(
       "browser.navigate",
       { url: "https://example.com/weather", maxChars: 400 },
       config,
     );
+    const second = await executeBrowserTool(
+      "browser.extract",
+      { url: "https://example.com/weather", selector: "main", maxChars: 400 },
+      config,
+    );
 
-    expect(response.fallbackUsed).toBe(false);
+    const diagnostic = `${BROWSER_CHROMIUM_MANUAL_REQUIRED_DIAGNOSTIC_CODE}: ${BROWSER_CHROMIUM_MANUAL_REQUIRED_DIAGNOSTIC_MESSAGE}`;
+    expect(first).toMatchObject({ fallbackUsed: true, fallbackReason: diagnostic });
+    expect(second).toMatchObject({ fallbackUsed: true, fallbackReason: diagnostic });
     expect(mocked.launch).toHaveBeenCalledTimes(2);
     expect(mocked.launch).toHaveBeenNthCalledWith(
       1,
@@ -1746,14 +1740,7 @@ describe("browser tools coverage sweep", () => {
         args: ["--force-webrtc-ip-handling-policy=disable_non_proxied_udp"],
       }),
     );
-    expect(mocked.spawnSync).toHaveBeenCalledWith(
-      expect.stringMatching(/pnpm(\.cmd|\.exe)?$/i),
-      ["--filter", "@goatcitadel/policy-engine", "exec", "playwright", "install", "chromium"],
-      expect.objectContaining({
-        cwd: process.cwd(),
-        stdio: "inherit",
-      }),
-    );
+    expect(mocked.spawnSync).not.toHaveBeenCalled();
   });
 
   it("rejects disallowed hosts and invalid interact steps", async () => {
@@ -2999,7 +2986,7 @@ describe("browser tools coverage sweep", () => {
     }
   });
 
-  it("handles browser launch failures, install failures, invalid URLs, and aborted signals", async () => {
+  it("handles browser launch failures, invalid URLs, and aborted signals", async () => {
     const config = createConfig(tempRoot);
     mocked.launch.mockRejectedValueOnce(new Error("browser died before launch"));
     globalThis.fetch = vi.fn(
@@ -3015,31 +3002,6 @@ describe("browser tools coverage sweep", () => {
       fallbackUsed: true,
       fallbackReason: "browser died before launch",
     });
-
-    mocked.spawnSync.mockReset();
-    mocked.spawnSync.mockImplementation((_command: string, args?: string[]) => {
-      if (Array.isArray(args) && args[0] === "--version") {
-        return { status: 0, stdout: "10.29.3", stderr: "" };
-      }
-      return { status: 1, stdout: "", stderr: "install failed" };
-    });
-    mocked.launch.mockRejectedValueOnce(new Error("browserType.launch: Executable doesn't exist at C:\\\\missing.exe"));
-    const installFailureFallback = await executeBrowserTool(
-      "browser.navigate",
-      { url: "https://example.com/install-fallback" },
-      config,
-    );
-    expect(String(installFailureFallback.fallbackReason)).toContain("Failed to install Playwright Chromium runtime");
-
-    mocked.spawnSync.mockReset();
-    mocked.spawnSync.mockReturnValue({ status: 1, stdout: "", stderr: "" });
-    mocked.launch.mockRejectedValueOnce(new Error("browserType.launch: Executable doesn't exist at C:\\\\missing.exe"));
-    const pnpmMissingFallback = await executeBrowserTool(
-      "browser.navigate",
-      { url: "https://example.com/pnpm-fallback" },
-      config,
-    );
-    expect(String(pnpmMissingFallback.fallbackReason)).toContain("pnpm is not available");
 
     await expect(executeBrowserTool("browser.navigate", { url: "not a url" }, config)).rejects.toThrow(/Invalid URL/i);
     await expect(executeBrowserTool("browser.navigate", { url: "ftp://example.com/file" }, config)).rejects.toThrow(
@@ -3060,36 +3022,28 @@ describe("browser tools coverage sweep", () => {
     });
   });
 
-  it("reports Playwright install spawn errors and uses the configured app dir", async () => {
+  it("fails native-only screenshot and interaction truthfully when Chromium is missing", async () => {
     const config = createConfig(tempRoot);
-    process.env.GOATCITADEL_APP_DIR = tempRoot;
-    mocked.spawnSync.mockReset();
-    mocked.spawnSync.mockImplementation((_command: string, args?: string[]) => {
-      if (Array.isArray(args) && args[0] === "--version") {
-        return { status: 0, stdout: "10.29.3", stderr: "" };
-      }
-      return { status: 0, stdout: "", stderr: "", error: new Error("spawn failed") };
-    });
-    mocked.launch.mockRejectedValueOnce(new Error("browserType.launch: Executable doesn't exist at C:\\\\missing.exe"));
-    globalThis.fetch = vi.fn(
-      async () =>
-        new Response("<html><body>install fallback</body></html>", {
-          status: 200,
-          headers: { "content-type": "text/html" },
-        }),
-    ) as unknown as typeof fetch;
+    mocked.launch.mockReset();
+    mocked.launch.mockRejectedValue(new Error("browserType.launch: Executable doesn't exist at C:\\\\missing.exe"));
+    const diagnostic = `${BROWSER_CHROMIUM_MANUAL_REQUIRED_DIAGNOSTIC_CODE}: ${BROWSER_CHROMIUM_MANUAL_REQUIRED_DIAGNOSTIC_MESSAGE}`;
 
-    try {
-      const result = await executeBrowserTool("browser.navigate", { url: "https://example.com/install-spawn" }, config);
-      expect(String(result.fallbackReason)).toContain("spawn failed");
-      expect(mocked.spawnSync).toHaveBeenCalledWith(
-        expect.stringMatching(/pnpm/i),
-        ["--filter", "@goatcitadel/policy-engine", "exec", "playwright", "install", "chromium"],
-        expect.objectContaining({ cwd: tempRoot }),
-      );
-    } finally {
-      delete process.env.GOATCITADEL_APP_DIR;
-    }
+    await expect(
+      executeBrowserTool(
+        "browser.screenshot",
+        { url: "https://example.com/screenshot", outputPath: path.join(tempRoot, "missing.png") },
+        config,
+      ),
+    ).rejects.toThrow(diagnostic);
+    await expect(
+      executeBrowserTool(
+        "browser.interact",
+        { url: "https://example.com/interact", steps: [{ action: "click", selector: "button" }] },
+        config,
+      ),
+    ).rejects.toThrow(diagnostic);
+    expect(mocked.launch).toHaveBeenCalledTimes(2);
+    expect(mocked.spawnSync).not.toHaveBeenCalled();
   });
 
   it("covers fallback extraction and Firecrawl normalization edge paths", async () => {
