@@ -28,6 +28,7 @@ import {
   TaskRepository,
   createDatabase,
   type DatabaseClient,
+  type RemoteWorkerAssignmentProtectedCommitFence,
 } from "@goatcitadel/storage";
 import {
   REMOTE_WORKER_ASSIGNMENT_CONTROL_READ_SCHEMA_VERSION,
@@ -330,7 +331,7 @@ function createService(
       resolveCurrentForRuntimeCredential: (input) => meshAuthorityFor(h, input),
     },
     nonceConsumer: h.nonces,
-    assignments: options.assignments ?? h.assignments,
+    assignments: options.assignments ?? storeForProtocolUnit(h.assignments),
     clock: () => new Date(h.now),
   });
 }
@@ -475,6 +476,22 @@ function token(seed: string): string {
   return createHash("sha256").update(seed, "utf8").digest().toString("base64url");
 }
 
+function rotateCredentialAfterProtocolProof(h: Harness, seed: string): void {
+  h.admissions.rotateRuntimeCredential({
+    registryWorkspaceId: "default",
+    workerId: h.workerId,
+    workerGeneration: h.workerGeneration,
+    expectedCredentialId: h.credentialId,
+    expectedCredentialGeneration: h.credentialGeneration,
+    verifiedTransportReceiptSha256: D(`${seed}:transport`),
+    verifiedProofOfPossessionReceiptSha256: D(`${seed}:pop`),
+    credentialIssuanceProofSha256: D(`${seed}:issuance`),
+    expiresInSeconds: 600,
+    credentialTokenSha256: D(`${seed}:credential-token`),
+    idempotencyKey: `${seed}:rotation`,
+  });
+}
+
 function event(
   sequence: number,
   previousEventSha256: string,
@@ -517,6 +534,24 @@ function storeWithSettlementResponseLoss(
   };
 }
 
+/**
+ * Most tests in this file isolate protocol normalization, proof, and response
+ * behavior over a legacy mesh fixture. Exact storage-owned M2/M3 commit-fence
+ * enforcement has a real protected-provenance integration fixture in storage.
+ */
+function storeForProtocolUnit(assignments: RemoteWorkerAssignmentRepository): RemoteWorkerAssignmentProtocolStorePort {
+  return {
+    resolveActiveAuthorityByLeaseTokenHash: (hash) => assignments.resolveActiveAuthorityByLeaseTokenHash(hash),
+    resolveControlReadAuthorityByLeaseTokenHash: (input) =>
+      assignments.resolveControlReadAuthorityByLeaseTokenHash(input),
+    findAssignmentAggregate: (workspaceId, assignmentId) =>
+      assignments.findAssignmentAggregate(workspaceId, assignmentId),
+    renewLease: (input) => assignments.renewLease(input),
+    appendEvents: (input) => assignments.appendEvents(input),
+    settleAssignment: (input) => assignments.settleAssignment(input),
+  };
+}
+
 describe("RemoteWorkerAssignmentProtocolService", () => {
   it("requires protected PoP-v2 and rejects the legacy proof before durable nonce consumption", async () => {
     const h = createHarness("protected-v2");
@@ -533,7 +568,7 @@ describe("RemoteWorkerAssignmentProtocolService", () => {
         resolveCurrentForRuntimeCredential: resolveMesh,
       },
       nonceConsumer: { consume },
-      assignments: h.assignments,
+      assignments: storeForProtocolUnit(h.assignments),
       clock: () => new Date(h.now),
     });
     const payload = commonPayload(h, REMOTE_WORKER_ASSIGNMENT_SYNC_SCHEMA_VERSION);
@@ -566,6 +601,130 @@ describe("RemoteWorkerAssignmentProtocolService", () => {
       }),
     );
     expect(JSON.stringify(resolveMesh.mock.calls)).not.toContain(h.credentialSecret);
+  });
+
+  it("carries the same exact M2/M3 commit fence into every protected assignment route owner", async () => {
+    const h = createHarness("commit-fence-all-routes");
+    const currentCredential = authorityFor(h, D(h.credentialSecret));
+    if (currentCredential === undefined) throw new Error("current credential fixture unavailable");
+    const expectedFence: RemoteWorkerAssignmentProtectedCommitFence = {
+      credentialAuthority: {
+        registryWorkspaceId: currentCredential.registryWorkspaceId,
+        bootstrapId: currentCredential.bootstrapId,
+        workerId: currentCredential.workerId,
+        workerGeneration: currentCredential.workerGeneration,
+        credentialId: currentCredential.credentialId,
+        credentialGeneration: currentCredential.credentialGeneration,
+        authorizationCredentialSha256: currentCredential.authorizationCredentialSha256,
+        nodeId: currentCredential.nodeId,
+        clientCertificateSha256: currentCredential.clientCertificateSha256,
+        runtimeManifestSha256: currentCredential.runtimeManifestSha256,
+        workspaceCeilingSha256: currentCredential.workspaceCeilingSha256,
+        capabilityCeilingSha256: currentCredential.capabilityCeilingSha256,
+        protectedAdmissionEnvelopeSha256: currentCredential.protectedAdmissionEnvelopeSha256,
+        protectedAdmissionContextSha256: currentCredential.protectedAdmissionContextSha256,
+        claimsSha256: currentCredential.claimsSha256,
+      },
+      meshAdmission: {
+        schemaVersion: REMOTE_WORKER_MESH_NODE_AUTHORITY_FENCE_SCHEMA_VERSION,
+        registryWorkspaceId: currentCredential.registryWorkspaceId,
+        bootstrapId: currentCredential.bootstrapId,
+        workerId: currentCredential.workerId,
+        workerGeneration: currentCredential.workerGeneration,
+        credentialId: currentCredential.credentialId,
+        credentialGeneration: currentCredential.credentialGeneration,
+        workspaceId: "default",
+        nodeId: currentCredential.nodeId,
+        admissionGeneration: h.nodeAdmissionGeneration,
+        joinAuthorityGeneration: 1,
+        joinCredentialSha256: D(`${h.workerId}:mesh-join`),
+        protectedAdmissionEnvelopeSha256: currentCredential.protectedAdmissionEnvelopeSha256,
+        protectedAdmissionContextSha256: currentCredential.protectedAdmissionContextSha256,
+      },
+    };
+    const observed: Array<{
+      operation: string;
+      fence: RemoteWorkerAssignmentProtectedCommitFence;
+    }> = [];
+    const store: RemoteWorkerAssignmentProtocolStorePort = {
+      resolveActiveAuthorityByLeaseTokenHash: (hash, fence) => {
+        observed.push({ operation: "sync", fence });
+        return h.assignments.resolveActiveAuthorityByLeaseTokenHash(hash);
+      },
+      resolveControlReadAuthorityByLeaseTokenHash: (input, fence) => {
+        observed.push({ operation: "readControl", fence });
+        return h.assignments.resolveControlReadAuthorityByLeaseTokenHash(input);
+      },
+      findAssignmentAggregate: (workspaceId, assignmentId) =>
+        h.assignments.findAssignmentAggregate(workspaceId, assignmentId),
+      renewLease: (input, fence) => {
+        observed.push({ operation: "renewLease", fence });
+        return h.assignments.renewLease(input);
+      },
+      appendEvents: (input, fence) => {
+        observed.push({ operation: "appendEvents", fence });
+        return h.assignments.appendEvents(input);
+      },
+      settleAssignment: (input, fence) => {
+        observed.push({ operation: "settle", fence });
+        return h.assignments.settleAssignment(input);
+      },
+    };
+    const service = createService(h, { assignments: store });
+    await service.execute(
+      rpcRequest(
+        h,
+        REMOTE_WORKER_ASSIGNMENT_RPC_ROUTES.sync,
+        commonPayload(h, REMOTE_WORKER_ASSIGNMENT_SYNC_SCHEMA_VERSION),
+      ),
+    );
+    await service.execute(
+      rpcRequest(
+        h,
+        REMOTE_WORKER_ASSIGNMENT_RPC_ROUTES.readControl,
+        commonPayload(h, REMOTE_WORKER_ASSIGNMENT_CONTROL_READ_SCHEMA_VERSION),
+      ),
+    );
+    await service.execute(
+      rpcRequest(h, REMOTE_WORKER_ASSIGNMENT_RPC_ROUTES.appendEvents, {
+        ...commonPayload(h, REMOTE_WORKER_ASSIGNMENT_EVENT_APPEND_SCHEMA_VERSION),
+        events: [event(1, REMOTE_WORKER_ASSIGNMENT_EVENT_GENESIS_SHA256, 1)],
+      }),
+    );
+    const nextLeaseToken = token("commit-fence-all-routes:lease:2");
+    await service.execute(
+      rpcRequest(h, REMOTE_WORKER_ASSIGNMENT_RPC_ROUTES.renewLease, {
+        ...commonPayload(h, REMOTE_WORKER_ASSIGNMENT_LEASE_RENEWAL_SCHEMA_VERSION),
+        nextLeaseToken,
+        workerSentThrough: 1,
+      }),
+    );
+    const appended = h.assignments.listEventsAfter("default", h.assignmentId, 1, 0, 10)[0]!;
+    await service.execute(
+      rpcRequest(h, REMOTE_WORKER_ASSIGNMENT_RPC_ROUTES.settle, {
+        ...commonPayload(h, REMOTE_WORKER_ASSIGNMENT_WORKER_SETTLEMENT_SCHEMA_VERSION, {
+          leaseRevision: 2,
+          leaseToken: nextLeaseToken,
+        }),
+        outcome: "failed",
+        finalEventSequence: 1,
+        finalEventSha256: appended.eventSha256,
+        failureSha256: D("commit-fence-all-routes:failure"),
+      }),
+    );
+
+    expect(observed.map(({ operation }) => operation)).toEqual([
+      "sync",
+      "readControl",
+      "appendEvents",
+      "renewLease",
+      "settle",
+    ]);
+    for (const { fence } of observed) {
+      expect(fence).toEqual(expectedFence);
+      expect(JSON.stringify(fence)).not.toContain(h.credentialSecret);
+      expect(JSON.stringify(fence)).not.toContain(h.leaseToken);
+    }
   });
 
   it("syncs an exact active authority and rejects nonce replay plus credential/workspace/capability/generation/token drift", async () => {
@@ -697,6 +856,56 @@ describe("RemoteWorkerAssignmentProtocolService", () => {
         ),
       ),
     ).rejects.toBeDefined();
+  });
+
+  it("fails closed when the M2 credential rotates after protocol proof but before protected read or mutation commit", async () => {
+    const readHarness = createHarness("commit-fence-read-race");
+    const readBase = storeForProtocolUnit(readHarness.assignments);
+    const readStore: RemoteWorkerAssignmentProtocolStorePort = {
+      ...readBase,
+      resolveActiveAuthorityByLeaseTokenHash: (leaseTokenSha256, expectedProtectedAuthority) => {
+        rotateCredentialAfterProtocolProof(readHarness, "commit-fence-read-race");
+        return readHarness.assignments.resolveActiveAuthorityByLeaseTokenHash(
+          leaseTokenSha256,
+          expectedProtectedAuthority,
+        );
+      },
+    };
+    await expect(
+      createService(readHarness, { assignments: readStore }).execute(
+        rpcRequest(
+          readHarness,
+          REMOTE_WORKER_ASSIGNMENT_RPC_ROUTES.sync,
+          commonPayload(readHarness, REMOTE_WORKER_ASSIGNMENT_SYNC_SCHEMA_VERSION),
+        ),
+      ),
+    ).rejects.toMatchObject({ code: "REMOTE_WORKER_ASSIGNMENT_RPC_REJECTED" });
+
+    const mutationHarness = createHarness("commit-fence-mutation-race");
+    const mutationBase = storeForProtocolUnit(mutationHarness.assignments);
+    const mutationStore: RemoteWorkerAssignmentProtocolStorePort = {
+      ...mutationBase,
+      appendEvents: (input, expectedProtectedAuthority) => {
+        rotateCredentialAfterProtocolProof(mutationHarness, "commit-fence-mutation-race");
+        return mutationHarness.assignments.appendEvents(input, expectedProtectedAuthority);
+      },
+    };
+    await expect(
+      createService(mutationHarness, { assignments: mutationStore }).execute(
+        rpcRequest(mutationHarness, REMOTE_WORKER_ASSIGNMENT_RPC_ROUTES.appendEvents, {
+          ...commonPayload(mutationHarness, REMOTE_WORKER_ASSIGNMENT_EVENT_APPEND_SCHEMA_VERSION),
+          events: [event(1, REMOTE_WORKER_ASSIGNMENT_EVENT_GENESIS_SHA256, 1)],
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "REMOTE_WORKER_ASSIGNMENT_RPC_REJECTED" });
+    expect(
+      mutationHarness.db
+        .prepare(
+          `SELECT COUNT(*) AS count FROM remote_worker_assignment_events
+           WHERE registry_workspace_id = 'default' AND assignment_id = @assignmentId`,
+        )
+        .get<{ count: number }>({ assignmentId: mutationHarness.assignmentId })?.count,
+    ).toBe(0);
   });
 
   it("renews with a worker-proposed token, exactly replays response loss, and fences stale callbacks", async () => {
@@ -870,7 +1079,7 @@ describe("RemoteWorkerAssignmentProtocolService", () => {
         resolveCurrentForRuntimeCredential: (input) => meshAuthorityFor(h, input),
       },
       nonceConsumer: { consume },
-      assignments: h.assignments,
+      assignments: storeForProtocolUnit(h.assignments),
       clock: () => new Date(h.now),
     });
     await expect(

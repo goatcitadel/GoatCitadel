@@ -5,6 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import {
+  ConflictError,
+  REMOTE_WORKER_ASSIGNMENT_EVENT_GENESIS_SHA256,
+  REMOTE_WORKER_ASSIGNMENT_EVENT_SCHEMA_VERSION,
   REMOTE_WORKER_ASSIGNMENT_MANIFEST_SCHEMA_VERSION,
   REMOTE_WORKER_PROTOCOL_VERSION,
   REMOTE_WORKER_PROTECTED_ADMISSION_EVIDENCE_SCHEMA_VERSION,
@@ -31,6 +34,7 @@ import {
 import { ChatTurnTraceRepository } from "./chat-turn-trace-repo.js";
 import type { DatabaseClient } from "./db.js";
 import { DurableRunRepository } from "./durable-run-repo.js";
+import { MeshCapabilityNodeAdmissionRepository } from "./mesh-capability-node-admission-repo.js";
 import {
   RemoteWorkerAdmissionRepository,
   type FinalizeRemoteWorkerBootstrapAdmissionWithNonceInput,
@@ -619,13 +623,83 @@ describe("RemoteWorkerMeshNodeAdmissionRepository", () => {
         claimed.workload.workloadSha256,
       );
 
+      const protectedCommitFence = {
+        credentialAuthority: claimAuthority,
+        meshAdmission: currentByCredential!,
+      } as const;
+      assert.equal(
+        assignments.resolveActiveAuthorityByLeaseTokenHash(leaseTokenSha256, protectedCommitFence)?.assignment
+          .assignmentId,
+        assignment.assignmentId,
+      );
+      const protectedControlInput = {
+        registryWorkspaceId: "default",
+        assignmentId: assignment.assignmentId,
+        expectedAssignmentGeneration: claimed.generation.assignmentGeneration,
+        expectedLeaseRevision: claimed.lease.leaseRevision,
+        leaseTokenSha256,
+      } as const;
+      assert.equal(
+        assignments.resolveControlReadAuthorityByLeaseTokenHash(protectedControlInput, protectedCommitFence)
+          ?.disposition,
+        "active",
+      );
+      const protectedAppendInput = {
+        registryWorkspaceId: "default",
+        assignmentId: assignment.assignmentId,
+        expectedAssignmentGeneration: claimed.generation.assignmentGeneration,
+        expectedLeaseRevision: claimed.lease.leaseRevision,
+        leaseTokenSha256,
+        events: [
+          {
+            sequence: 1,
+            eventId: "assignment-claim:protected-event:1",
+            eventType: "status" as const,
+            payload: {
+              schemaVersion: REMOTE_WORKER_ASSIGNMENT_EVENT_SCHEMA_VERSION,
+              phase: "running" as const,
+              statusSha256: digest("assignment-claim:protected-status:1"),
+            },
+            previousEventSha256: REMOTE_WORKER_ASSIGNMENT_EVENT_GENESIS_SHA256,
+            workerSentThrough: 1,
+          },
+        ],
+      } as const;
+      const appended = assignments.appendEvents(protectedAppendInput, protectedCommitFence);
+      assert.equal(appended.disposition, "appended");
+      const nextLeaseTokenSha256 = digest("assignment-claim:protected-lease:2");
+      const protectedRenewInput = {
+        registryWorkspaceId: "default",
+        assignmentId: assignment.assignmentId,
+        expectedAssignmentGeneration: claimed.generation.assignmentGeneration,
+        expectedLeaseRevision: claimed.lease.leaseRevision,
+        expectedLeaseTokenSha256: leaseTokenSha256,
+        leaseTokenSha256: nextLeaseTokenSha256,
+        workerSentThrough: 1,
+        idempotencyKey: "assignment-claim:protected-renew:2",
+      } as const;
+      const renewed = assignments.renewLease(protectedRenewInput, protectedCommitFence);
+      assert.equal(renewed.disposition, "renewed");
+      assert.throws(
+        () =>
+          assignments.resolveActiveAuthorityByLeaseTokenHash(nextLeaseTokenSha256, {
+            ...protectedCommitFence,
+            credentialAuthority: {
+              ...protectedCommitFence.credentialAuthority,
+              protectedAdmissionContextSha256: digest("assignment-claim:drifted-protected-context"),
+            },
+          }),
+        ConflictError,
+      );
+
       db.close();
       db = createDatabase({ dbPath: join(tempRoot, "gateway.sqlite") });
       const restartedRepo = new RemoteWorkerMeshNodeAdmissionRepository(db);
       restartedRepo.assertAvailable();
       assert.equal(restartedRepo.resolveByRawMeshNodeCredential(rawMeshNodeCredential)?.disposition, "current");
 
-      new RemoteWorkerAdmissionRepository(db).rotateRuntimeCredential({
+      const rotatedCredentialTokenSha256 = digest("mesh-rotation:token");
+      const rotated = new RemoteWorkerAdmissionRepository(db).rotateRuntimeCredential({
         registryWorkspaceId: finalized.credential.registryWorkspaceId,
         workerId: finalized.credential.workerId,
         workerGeneration: finalized.credential.workerGeneration,
@@ -635,9 +709,93 @@ describe("RemoteWorkerMeshNodeAdmissionRepository", () => {
         verifiedProofOfPossessionReceiptSha256: digest("mesh-rotation:pop"),
         credentialIssuanceProofSha256: digest("mesh-rotation:issuance"),
         expiresInSeconds: 600,
-        credentialTokenSha256: digest("mesh-rotation:token"),
+        credentialTokenSha256: rotatedCredentialTokenSha256,
         idempotencyKey: "mesh-rotation:2",
       });
+      const restartedAssignments = new RemoteWorkerAssignmentRepository(db);
+      const protectedEventCount = Number(
+        db
+          .prepare(
+            `SELECT COUNT(*) AS count FROM remote_worker_assignment_events
+             WHERE registry_workspace_id = 'default' AND assignment_id = @assignmentId`,
+          )
+          .get<{ count: number | bigint }>({ assignmentId: assignment.assignmentId })?.count ?? 0,
+      );
+      const protectedLeaseCount = Number(
+        db
+          .prepare(
+            `SELECT COUNT(*) AS count FROM remote_worker_assignment_leases
+             WHERE registry_workspace_id = 'default' AND assignment_id = @assignmentId`,
+          )
+          .get<{ count: number | bigint }>({ assignmentId: assignment.assignmentId })?.count ?? 0,
+      );
+      assert.throws(
+        () => restartedAssignments.resolveActiveAuthorityByLeaseTokenHash(nextLeaseTokenSha256, protectedCommitFence),
+        ConflictError,
+      );
+      assert.throws(
+        () =>
+          restartedAssignments.resolveControlReadAuthorityByLeaseTokenHash(
+            { ...protectedControlInput, expectedLeaseRevision: 2, leaseTokenSha256: nextLeaseTokenSha256 },
+            protectedCommitFence,
+          ),
+        ConflictError,
+      );
+      assert.throws(() => restartedAssignments.appendEvents(protectedAppendInput, protectedCommitFence), ConflictError);
+      assert.throws(() => restartedAssignments.renewLease(protectedRenewInput, protectedCommitFence), ConflictError);
+      assert.throws(
+        () =>
+          restartedAssignments.settleAssignment(
+            {
+              registryWorkspaceId: "default",
+              assignmentId: assignment.assignmentId,
+              expectedAssignmentGeneration: 1,
+              expectedLeaseRevision: 2,
+              origin: "worker",
+              leaseTokenSha256: nextLeaseTokenSha256,
+              outcome: "failed",
+              finalEventSequence: 1,
+              finalEventSha256: appended.events[0]!.eventSha256,
+              failureSha256: digest("assignment-claim:protected-failure"),
+              idempotencyKey: "assignment-claim:protected-settle",
+            },
+            protectedCommitFence,
+          ),
+        ConflictError,
+      );
+      assert.equal(
+        Number(
+          db
+            .prepare(
+              `SELECT COUNT(*) AS count FROM remote_worker_assignment_events
+               WHERE registry_workspace_id = 'default' AND assignment_id = @assignmentId`,
+            )
+            .get<{ count: number | bigint }>({ assignmentId: assignment.assignmentId })?.count ?? 0,
+        ),
+        protectedEventCount,
+      );
+      assert.equal(
+        Number(
+          db
+            .prepare(
+              `SELECT COUNT(*) AS count FROM remote_worker_assignment_leases
+               WHERE registry_workspace_id = 'default' AND assignment_id = @assignmentId`,
+            )
+            .get<{ count: number | bigint }>({ assignmentId: assignment.assignmentId })?.count ?? 0,
+        ),
+        protectedLeaseCount,
+      );
+      assert.equal(
+        Number(
+          db
+            .prepare(
+              `SELECT COUNT(*) AS count FROM remote_worker_assignment_settlements
+               WHERE registry_workspace_id = 'default' AND assignment_id = @assignmentId`,
+            )
+            .get<{ count: number | bigint }>({ assignmentId: assignment.assignmentId })?.count ?? 0,
+        ),
+        0,
+      );
       assert.equal(restartedRepo.resolveByRawMeshNodeCredential(rawMeshNodeCredential)?.disposition, "unavailable");
       const rotatedReplayNonce = credentialNonce(db, finalized, "rotated-replay");
       assert.throws(
@@ -646,20 +804,165 @@ describe("RemoteWorkerMeshNodeAdmissionRepository", () => {
       );
       assertNonceWasNotConsumed(db, rotatedReplayNonce);
 
-      restartedRepo.revokeJoinAuthority({
-        registryWorkspaceId: issued.authority.registryWorkspaceId,
-        workerId: issued.authority.workerId,
-        workerGeneration: issued.authority.workerGeneration,
-        workspaceId: issued.authority.workspaceId,
-        joinAuthorityGeneration: issued.authority.joinAuthorityGeneration,
-        reasonCode: "operator.revoked",
-        reason: "test revocation",
+      new MeshCapabilityNodeAdmissionRepository(db).revoke({
+        workspaceId: currentByCredential!.workspaceId,
+        nodeId: currentByCredential!.nodeId,
+        admissionGeneration: currentByCredential!.admissionGeneration,
+        reason: "credential rotated before replacement admission",
         revokedByActorId: "operator-a",
-        idempotencyKey: "mesh-authority-revoke:atomic",
+        idempotencyKey: "mesh-admission-revoke:before-rotated",
       });
-      assert.equal(restartedRepo.resolveByRawMeshNodeCredential(rawMeshNodeCredential)?.disposition, "unavailable");
+      const secondRawMeshNodeCredential = "b".repeat(43);
+      const secondIssued = restartedRepo.issueJoinAuthority({
+        ...issueInput,
+        idempotencyKey: "mesh-authority:atomic:rotated",
+        rawMeshNodeCredential: secondRawMeshNodeCredential,
+      });
+      const secondNonceClock = nonceClock(db);
+      const secondAdmission = restartedRepo.admitWithNonce({
+        nonce: {
+          authority: {
+            kind: "credential",
+            registryWorkspaceId: rotated.credential.registryWorkspaceId,
+            workerId: rotated.credential.workerId,
+            workerGeneration: rotated.credential.workerGeneration,
+            credentialGeneration: rotated.credential.credentialGeneration,
+            credentialId: rotated.credential.credentialId,
+          },
+          nonceSha256: digest("mesh-admission:rotated:nonce"),
+          timestamp: secondNonceClock.timestamp,
+          expiresAt: secondNonceClock.expiresAt,
+        },
+        command: {
+          ...command,
+          rawMeshNodeCredential: secondRawMeshNodeCredential,
+          protocolBodySha256: digest("stable-body:rotated"),
+          transportReceiptSha256: digest("transport:rotated"),
+          proofOfPossessionReceiptSha256: digest("pop:rotated"),
+          tlsExporterSha256: digest("exporter:rotated"),
+          idempotencyKey: "mesh-admission:atomic:rotated",
+        },
+      });
+      const rotatedMeshAuthority = restartedRepo.resolveCurrentForRuntimeCredential({
+        registryWorkspaceId: finalized.generation.registryWorkspaceId,
+        bootstrapId: finalized.generation.bootstrapId,
+        workerId: finalized.generation.workerId,
+        workerGeneration: finalized.generation.workerGeneration,
+        nodeId: finalized.generation.nodeId,
+        clientCertificateSha256: finalized.generation.clientCertificateSha256,
+        protectedAdmissionEnvelopeSha256: finalizedInput.command.verifiedProtectedAdmissionEvidence!.envelopeSha256,
+        protectedAdmissionContextSha256: finalizedInput.command.verifiedProtectedAdmissionEvidence!.contextSha256,
+        workspaceId: "default",
+        credentialId: rotated.credential.credentialId,
+        credentialGeneration: rotated.credential.credentialGeneration,
+        authorizationCredentialSha256: rotatedCredentialTokenSha256,
+      });
+      assert.ok(rotatedMeshAuthority);
+      const revocationAssignment = restartedAssignments.createAssignment({
+        manifest,
+        createdByActorId: "gateway-a",
+        idempotencyKey: "assignment-claim:mesh-revocation:create",
+      }).assignment;
+      const revocationLeaseTokenSha256 = digest("assignment-claim:mesh-revocation:lease");
+      restartedAssignments.startGeneration({
+        registryWorkspaceId: "default",
+        assignmentId: revocationAssignment.assignmentId,
+        workerId: finalized.generation.workerId,
+        workerGeneration: finalized.generation.workerGeneration,
+        nodeId: finalized.generation.nodeId,
+        nodeAdmissionGeneration: secondAdmission.admission.admissionGeneration,
+        dispatchOwnerId: "gateway-assignment-owner",
+        durableRunAttempt: 2,
+        leaseTokenSha256: revocationLeaseTokenSha256,
+        idempotencyKey: "assignment-claim:mesh-revocation:start",
+      });
+      const rotatedProtectedCommitFence = {
+        credentialAuthority: {
+          ...claimAuthority,
+          credentialId: rotated.credential.credentialId,
+          credentialGeneration: rotated.credential.credentialGeneration,
+          authorizationCredentialSha256: rotatedCredentialTokenSha256,
+          claimsSha256: rotated.credential.claimsSha256,
+        },
+        meshAdmission: rotatedMeshAuthority!,
+      } as const;
+      assert.equal(
+        restartedAssignments.resolveActiveAuthorityByLeaseTokenHash(
+          revocationLeaseTokenSha256,
+          rotatedProtectedCommitFence,
+        )?.assignment.assignmentId,
+        revocationAssignment.assignmentId,
+      );
+      restartedRepo.revokeJoinAuthority({
+        registryWorkspaceId: secondIssued.authority.registryWorkspaceId,
+        workerId: secondIssued.authority.workerId,
+        workerGeneration: secondIssued.authority.workerGeneration,
+        workspaceId: secondIssued.authority.workspaceId,
+        joinAuthorityGeneration: secondIssued.authority.joinAuthorityGeneration,
+        reasonCode: "operator.revoked",
+        reason: "test protected assignment commit revocation",
+        revokedByActorId: "operator-a",
+        idempotencyKey: "mesh-authority-revoke:rotated",
+      });
       assert.throws(
-        () => restartedRepo.issueJoinAuthority({ ...issueInput, rawMeshNodeCredential: "y".repeat(43) }),
+        () =>
+          restartedAssignments.resolveActiveAuthorityByLeaseTokenHash(
+            revocationLeaseTokenSha256,
+            rotatedProtectedCommitFence,
+          ),
+        ConflictError,
+      );
+      assert.throws(
+        () =>
+          restartedAssignments.appendEvents(
+            {
+              registryWorkspaceId: "default",
+              assignmentId: revocationAssignment.assignmentId,
+              expectedAssignmentGeneration: 1,
+              expectedLeaseRevision: 1,
+              leaseTokenSha256: revocationLeaseTokenSha256,
+              events: [
+                {
+                  sequence: 1,
+                  eventId: "assignment-claim:mesh-revocation:event",
+                  eventType: "status",
+                  payload: {
+                    schemaVersion: REMOTE_WORKER_ASSIGNMENT_EVENT_SCHEMA_VERSION,
+                    phase: "running",
+                    statusSha256: digest("assignment-claim:mesh-revocation:status"),
+                  },
+                  previousEventSha256: REMOTE_WORKER_ASSIGNMENT_EVENT_GENESIS_SHA256,
+                  workerSentThrough: 1,
+                },
+              ],
+            },
+            rotatedProtectedCommitFence,
+          ),
+        ConflictError,
+      );
+      assert.equal(
+        Number(
+          db
+            .prepare(
+              `SELECT COUNT(*) AS count FROM remote_worker_assignment_events
+               WHERE registry_workspace_id = 'default' AND assignment_id = @assignmentId`,
+            )
+            .get<{ count: number | bigint }>({ assignmentId: revocationAssignment.assignmentId })?.count ?? 0,
+        ),
+        0,
+      );
+
+      assert.equal(
+        restartedRepo.resolveByRawMeshNodeCredential(secondRawMeshNodeCredential)?.disposition,
+        "unavailable",
+      );
+      assert.throws(
+        () =>
+          restartedRepo.issueJoinAuthority({
+            ...issueInput,
+            idempotencyKey: "mesh-authority:atomic:rotated",
+            rawMeshNodeCredential: "y".repeat(43),
+          }),
         /authority_revoked/u,
       );
     } finally {

@@ -32,6 +32,7 @@ import {
 } from "@goatcitadel/contracts";
 import type {
   RemoteWorkerAssignmentAggregate,
+  RemoteWorkerAssignmentProtectedCommitFence,
   RenewRemoteWorkerAssignmentLeaseOutcome,
   ResolveCurrentRemoteWorkerMeshNodeAdmissionInput,
   ResolveRemoteWorkerAssignmentControlReadInput,
@@ -114,9 +115,11 @@ export type RemoteWorkerAssignmentRuntimeCredentialAuthorityPort = RemoteWorkerC
 export interface RemoteWorkerAssignmentProtocolStorePort {
   resolveActiveAuthorityByLeaseTokenHash(
     leaseTokenSha256: string,
+    expectedProtectedAuthority: RemoteWorkerAssignmentProtectedCommitFence,
   ): ResolvedRemoteWorkerAssignmentAuthority | undefined | Promise<ResolvedRemoteWorkerAssignmentAuthority | undefined>;
   resolveControlReadAuthorityByLeaseTokenHash(
     input: ResolveRemoteWorkerAssignmentControlReadInput,
+    expectedProtectedAuthority: RemoteWorkerAssignmentProtectedCommitFence,
   ):
     | ResolvedRemoteWorkerAssignmentControlReadAuthority
     | undefined
@@ -127,12 +130,15 @@ export interface RemoteWorkerAssignmentProtocolStorePort {
   ): RemoteWorkerAssignmentAggregate | undefined | Promise<RemoteWorkerAssignmentAggregate | undefined>;
   renewLease(
     input: RenewRemoteWorkerAssignmentLeaseCommand,
+    expectedProtectedAuthority: RemoteWorkerAssignmentProtectedCommitFence,
   ): RenewRemoteWorkerAssignmentLeaseOutcome | Promise<RenewRemoteWorkerAssignmentLeaseOutcome>;
   appendEvents(
     input: AppendRemoteWorkerAssignmentEventsCommand,
+    expectedProtectedAuthority: RemoteWorkerAssignmentProtectedCommitFence,
   ): RemoteWorkerAssignmentAppendOutcome | Promise<RemoteWorkerAssignmentAppendOutcome>;
   settleAssignment(
     input: SettleRemoteWorkerAssignmentWorkerCommand,
+    expectedProtectedAuthority: RemoteWorkerAssignmentProtectedCommitFence,
   ): SettleRemoteWorkerAssignmentOutcome | Promise<SettleRemoteWorkerAssignmentOutcome>;
 }
 
@@ -323,13 +329,20 @@ export class RemoteWorkerAssignmentProtocolService {
     command: CommonAssignmentPayload,
     credential: RemoteWorkerAssignmentRuntimeCredentialAuthority,
   ): Promise<RemoteWorkerAssignmentProtocolResponse> {
+    const advisory = await this.resolveMutationRecords(command.registryWorkspaceId, command.assignmentId);
+    assertRequestBinding(advisory, command);
+    const expectedProtectedAuthority = await this.resolveProtectedCommitFence(
+      credential,
+      advisory.assignment,
+      advisory.generation,
+    );
     const resolved = await this.dependencies.assignments.resolveActiveAuthorityByLeaseTokenHash(
       command.leaseTokenSha256,
+      expectedProtectedAuthority,
     );
     if (resolved === undefined) throw rejected("Remote worker assignment lease authority is unavailable.");
     const records = snapshotResolvedAssignmentAuthority(resolved);
     assertRequestBinding(records, command);
-    await this.assertCredentialAssignmentBinding(credential, records.assignment, records.generation);
     return Object.freeze({
       ...responseBase(route),
       disposition: "synchronized",
@@ -343,7 +356,11 @@ export class RemoteWorkerAssignmentProtocolService {
     credential: RemoteWorkerAssignmentRuntimeCredentialAuthority,
   ): Promise<RemoteWorkerAssignmentProtocolResponse> {
     const records = await this.resolveMutationRecords(command.registryWorkspaceId, command.assignmentId);
-    await this.assertCredentialAssignmentBinding(credential, records.assignment, records.generation);
+    const expectedProtectedAuthority = await this.resolveProtectedCommitFence(
+      credential,
+      records.assignment,
+      records.generation,
+    );
     assertGenerationBinding(records.generation, command.expectedAssignmentGeneration);
     if (
       records.lease.leaseRevision !== command.expectedLeaseRevision &&
@@ -351,7 +368,7 @@ export class RemoteWorkerAssignmentProtocolService {
     ) {
       throw rejected("Remote worker assignment lease revision is stale.");
     }
-    const outcome = await this.dependencies.assignments.renewLease(command);
+    const outcome = await this.dependencies.assignments.renewLease(command, expectedProtectedAuthority);
     return Object.freeze({
       ...responseBase(route),
       disposition: outcome.disposition,
@@ -365,12 +382,16 @@ export class RemoteWorkerAssignmentProtocolService {
     credential: RemoteWorkerAssignmentRuntimeCredentialAuthority,
   ): Promise<RemoteWorkerAssignmentProtocolResponse> {
     const records = await this.resolveMutationRecords(command.registryWorkspaceId, command.assignmentId);
-    await this.assertCredentialAssignmentBinding(credential, records.assignment, records.generation);
+    const expectedProtectedAuthority = await this.resolveProtectedCommitFence(
+      credential,
+      records.assignment,
+      records.generation,
+    );
     assertGenerationBinding(records.generation, command.expectedAssignmentGeneration);
     if (command.expectedLeaseRevision > records.lease.leaseRevision) {
       throw rejected("Remote worker assignment lease revision is unavailable.");
     }
-    const outcome = await this.dependencies.assignments.appendEvents(command);
+    const outcome = await this.dependencies.assignments.appendEvents(command, expectedProtectedAuthority);
     return Object.freeze({
       ...responseBase(route),
       disposition: outcome.disposition,
@@ -386,16 +407,26 @@ export class RemoteWorkerAssignmentProtocolService {
     command: CommonAssignmentPayload,
     credential: RemoteWorkerAssignmentRuntimeCredentialAuthority,
   ): Promise<RemoteWorkerAssignmentProtocolResponse> {
-    const resolved = await this.dependencies.assignments.resolveControlReadAuthorityByLeaseTokenHash({
-      registryWorkspaceId: command.registryWorkspaceId,
-      assignmentId: command.assignmentId,
-      expectedAssignmentGeneration: command.assignmentGeneration,
-      expectedLeaseRevision: command.leaseRevision,
-      leaseTokenSha256: command.leaseTokenSha256,
-    });
+    const advisory = await this.resolveMutationRecords(command.registryWorkspaceId, command.assignmentId);
+    assertRequestBinding(advisory, command);
+    const expectedProtectedAuthority = await this.resolveProtectedCommitFence(
+      credential,
+      advisory.assignment,
+      advisory.generation,
+    );
+    const resolved = await this.dependencies.assignments.resolveControlReadAuthorityByLeaseTokenHash(
+      {
+        registryWorkspaceId: command.registryWorkspaceId,
+        assignmentId: command.assignmentId,
+        expectedAssignmentGeneration: command.assignmentGeneration,
+        expectedLeaseRevision: command.leaseRevision,
+        leaseTokenSha256: command.leaseTokenSha256,
+      },
+      expectedProtectedAuthority,
+    );
     if (resolved === undefined) throw rejected("Remote worker assignment control authority is unavailable.");
     const records = snapshotControlReadAuthority(resolved);
-    await this.assertCredentialAssignmentBinding(credential, records.assignment, records.generation);
+    assertRequestBinding(records, command);
     return Object.freeze({
       ...responseBase(route),
       disposition: records.disposition,
@@ -412,12 +443,16 @@ export class RemoteWorkerAssignmentProtocolService {
     credential: RemoteWorkerAssignmentRuntimeCredentialAuthority,
   ): Promise<RemoteWorkerAssignmentProtocolResponse> {
     const records = await this.resolveMutationRecords(command.registryWorkspaceId, command.assignmentId);
-    await this.assertCredentialAssignmentBinding(credential, records.assignment, records.generation);
+    const expectedProtectedAuthority = await this.resolveProtectedCommitFence(
+      credential,
+      records.assignment,
+      records.generation,
+    );
     assertGenerationBinding(records.generation, command.expectedAssignmentGeneration);
     if (command.expectedLeaseRevision > records.lease.leaseRevision) {
       throw rejected("Remote worker assignment lease revision is unavailable.");
     }
-    const outcome = await this.dependencies.assignments.settleAssignment(command);
+    const outcome = await this.dependencies.assignments.settleAssignment(command, expectedProtectedAuthority);
     return Object.freeze({
       ...responseBase(route),
       disposition: outcome.disposition,
@@ -444,11 +479,11 @@ export class RemoteWorkerAssignmentProtocolService {
     });
   }
 
-  private async assertCredentialAssignmentBinding(
+  private async resolveProtectedCommitFence(
     credential: RemoteWorkerAssignmentRuntimeCredentialAuthority,
     assignment: RemoteWorkerAssignmentRecord,
     generation: RemoteWorkerAssignmentGenerationRecord,
-  ): Promise<void> {
+  ): Promise<RemoteWorkerAssignmentProtectedCommitFence> {
     assertCredentialAssignmentIdentityBinding(credential, assignment, generation);
     const resolved = await this.dependencies.meshAdmissions.resolveCurrentForRuntimeCredential({
       registryWorkspaceId: credential.registryWorkspaceId,
@@ -483,6 +518,26 @@ export class RemoteWorkerAssignmentProtocolService {
     ) {
       throw rejected("Remote worker assignment mesh-node authority is inconsistent.");
     }
+    return Object.freeze({
+      credentialAuthority: Object.freeze({
+        registryWorkspaceId: credential.registryWorkspaceId,
+        bootstrapId: credential.bootstrapId,
+        workerId: credential.workerId,
+        workerGeneration: credential.workerGeneration,
+        credentialId: credential.credentialId,
+        credentialGeneration: credential.credentialGeneration,
+        authorizationCredentialSha256: credential.authorizationCredentialSha256,
+        nodeId: credential.nodeId,
+        clientCertificateSha256: credential.clientCertificateSha256,
+        runtimeManifestSha256: credential.runtimeManifestSha256,
+        workspaceCeilingSha256: credential.workspaceCeilingSha256,
+        capabilityCeilingSha256: credential.capabilityCeilingSha256,
+        protectedAdmissionEnvelopeSha256: credential.protectedAdmissionEnvelopeSha256,
+        protectedAdmissionContextSha256: credential.protectedAdmissionContextSha256,
+        claimsSha256: credential.claimsSha256,
+      }),
+      meshAdmission,
+    });
   }
 }
 

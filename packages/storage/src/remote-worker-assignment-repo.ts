@@ -193,6 +193,18 @@ export interface RemoteWorkerAssignmentClaimAuthority {
   readonly claimsSha256: string;
 }
 
+/**
+ * Exact M2 credential/protected-admission authority joined to the one current
+ * M3 execution-workspace admission. Protected assignment RPC owners pass this
+ * advisory snapshot back to storage so the assignment transaction can compare
+ * it under the canonical worker/node/assignment locks before any replay, read,
+ * or mutation is observed.
+ */
+export interface RemoteWorkerAssignmentProtectedCommitFence {
+  readonly credentialAuthority: RemoteWorkerAssignmentClaimAuthority;
+  readonly meshAdmission: RemoteWorkerMeshNodeAuthorityFence;
+}
+
 export interface RemoteWorkerAssignmentOfferCursor {
   readonly createdAt: string;
   readonly assignmentId: string;
@@ -744,8 +756,13 @@ export class RemoteWorkerAssignmentRepository {
     });
   }
 
-  public renewLease(input: RenewRemoteWorkerAssignmentLeaseCommand): RenewRemoteWorkerAssignmentLeaseOutcome {
+  public renewLease(
+    input: RenewRemoteWorkerAssignmentLeaseCommand,
+    expectedProtectedAuthority?: RemoteWorkerAssignmentProtectedCommitFence,
+  ): RenewRemoteWorkerAssignmentLeaseOutcome {
     const command = normalizeRenewRemoteWorkerAssignmentLeaseCommand(input);
+    const protectedAuthority =
+      expectedProtectedAuthority === undefined ? undefined : normalizeProtectedCommitFence(expectedProtectedAuthority);
     return this.db.transaction("immediate", () => {
       const generation = this.getGenerationRow(
         command.registryWorkspaceId,
@@ -760,6 +777,10 @@ export class RemoteWorkerAssignmentRepository {
         generation.assignment_id,
         asPositiveInteger(generation.assignment_generation),
       );
+      const assignment = this.getAssignment(command.registryWorkspaceId, command.assignmentId);
+      if (protectedAuthority !== undefined) {
+        this.assertProtectedCommitFenceCurrent(protectedAuthority, assignment, generation);
+      }
       const requestSha256 = sha256(remoteWorkerAssignmentLeaseReplayMaterial(command));
       const replay = this.findLeaseByIdempotency(command.registryWorkspaceId, command.idempotencyKey);
       if (replay) {
@@ -807,7 +828,6 @@ export class RemoteWorkerAssignmentRepository {
       if (command.workerSentThrough < Math.max(acknowledgedThrough, committedWorkerSentThrough)) {
         throw conflict("remote worker assignment sent-through watermark");
       }
-      const assignment = this.getAssignment(command.registryWorkspaceId, command.assignmentId);
       const clock = this.assignmentLeaseClock(assignment.manifest, parentDispatchAuthority);
       const revision = command.expectedLeaseRevision + 1;
       try {
@@ -844,8 +864,11 @@ export class RemoteWorkerAssignmentRepository {
 
   public resolveActiveAuthorityByLeaseTokenHash(
     leaseTokenSha256: string,
+    expectedProtectedAuthority?: RemoteWorkerAssignmentProtectedCommitFence,
   ): ResolvedRemoteWorkerAssignmentAuthority | undefined {
     const token = digest(leaseTokenSha256, "leaseTokenSha256");
+    const protectedAuthority =
+      expectedProtectedAuthority === undefined ? undefined : normalizeProtectedCommitFence(expectedProtectedAuthority);
     const hint = this.findLeaseByTokenHash(token);
     if (!hint) return undefined;
     return this.db.transaction("immediate", () => {
@@ -862,6 +885,10 @@ export class RemoteWorkerAssignmentRepository {
         generation.assignment_id,
         asPositiveInteger(generation.assignment_generation),
       );
+      const assignment = this.getAssignment(generation.registry_workspace_id, generation.assignment_id);
+      if (protectedAuthority !== undefined) {
+        this.assertProtectedCommitFenceCurrent(protectedAuthority, assignment, generation);
+      }
       const current = this.getCurrentLeaseRow(
         hint.registry_workspace_id,
         hint.assignment_id,
@@ -881,7 +908,7 @@ export class RemoteWorkerAssignmentRepository {
         asPositiveInteger(generation.assignment_generation),
       );
       return {
-        assignment: this.getAssignment(generation.registry_workspace_id, generation.assignment_id),
+        assignment,
         generation: this.mapGeneration(generation),
         lease: this.mapLease(current),
       };
@@ -897,6 +924,7 @@ export class RemoteWorkerAssignmentRepository {
    */
   public resolveControlReadAuthorityByLeaseTokenHash(
     input: ResolveRemoteWorkerAssignmentControlReadInput,
+    expectedProtectedAuthority?: RemoteWorkerAssignmentProtectedCommitFence,
   ): ResolvedRemoteWorkerAssignmentControlReadAuthority | undefined {
     const registryWorkspaceId = identifier(input.registryWorkspaceId, "registryWorkspaceId");
     const assignmentId = identifier(input.assignmentId, "assignmentId");
@@ -906,6 +934,8 @@ export class RemoteWorkerAssignmentRepository {
     );
     const expectedLeaseRevision = positiveInteger(input.expectedLeaseRevision, "expectedLeaseRevision");
     const leaseTokenSha256 = digest(input.leaseTokenSha256, "leaseTokenSha256");
+    const protectedAuthority =
+      expectedProtectedAuthority === undefined ? undefined : normalizeProtectedCommitFence(expectedProtectedAuthority);
     const hint = this.findLeaseByTokenHash(leaseTokenSha256);
     if (
       !hint ||
@@ -926,6 +956,10 @@ export class RemoteWorkerAssignmentRepository {
         generation.assignment_id,
         asPositiveInteger(generation.assignment_generation),
       );
+      const assignment = this.getAssignment(registryWorkspaceId, assignmentId);
+      if (protectedAuthority !== undefined) {
+        this.assertProtectedCommitFenceCurrent(protectedAuthority, assignment, generation);
+      }
       const current = this.getCurrentLeaseRow(registryWorkspaceId, assignmentId, expectedAssignmentGeneration);
       if (
         asPositiveInteger(current.lease_revision) !== expectedLeaseRevision ||
@@ -939,7 +973,7 @@ export class RemoteWorkerAssignmentRepository {
       const control = this.findLatestControlRow(registryWorkspaceId, assignmentId, expectedAssignmentGeneration);
       if (control !== undefined && control.action !== "cancel_requested") return undefined;
       const authority = {
-        assignment: this.getAssignment(registryWorkspaceId, assignmentId),
+        assignment,
         generation: this.mapGeneration(generation),
         lease: this.mapLease(current),
       };
@@ -957,8 +991,13 @@ export class RemoteWorkerAssignmentRepository {
     return this.insertControl("recovery_exhausted", input, true);
   }
 
-  public appendEvents(input: AppendRemoteWorkerAssignmentEventsCommand): RemoteWorkerAssignmentAppendOutcome {
+  public appendEvents(
+    input: AppendRemoteWorkerAssignmentEventsCommand,
+    expectedProtectedAuthority?: RemoteWorkerAssignmentProtectedCommitFence,
+  ): RemoteWorkerAssignmentAppendOutcome {
     const command = normalizeAppendRemoteWorkerAssignmentEventsCommand(input);
+    const protectedAuthority =
+      expectedProtectedAuthority === undefined ? undefined : normalizeProtectedCommitFence(expectedProtectedAuthority);
     return this.db.transaction("immediate", () => {
       const generation = this.getGenerationRow(
         command.registryWorkspaceId,
@@ -974,6 +1013,9 @@ export class RemoteWorkerAssignmentRepository {
         asPositiveInteger(generation.assignment_generation),
       );
       const assignment = this.getAssignment(command.registryWorkspaceId, command.assignmentId);
+      if (protectedAuthority !== undefined) {
+        this.assertProtectedCommitFenceCurrent(protectedAuthority, assignment, generation);
+      }
       const replayRows = command.events.map((event) =>
         this.findEventRow(
           command.registryWorkspaceId,
@@ -1173,8 +1215,13 @@ export class RemoteWorkerAssignmentRepository {
     });
   }
 
-  public settleAssignment(input: SettleRemoteWorkerAssignmentCommand): SettleRemoteWorkerAssignmentOutcome {
+  public settleAssignment(
+    input: SettleRemoteWorkerAssignmentCommand,
+    expectedProtectedAuthority?: RemoteWorkerAssignmentProtectedCommitFence,
+  ): SettleRemoteWorkerAssignmentOutcome {
     const command = normalizeSettleRemoteWorkerAssignmentCommand(input);
+    const protectedAuthority =
+      expectedProtectedAuthority === undefined ? undefined : normalizeProtectedCommitFence(expectedProtectedAuthority);
     return this.db.transaction("immediate", () => {
       const generation = this.getGenerationRow(
         command.registryWorkspaceId,
@@ -1189,6 +1236,10 @@ export class RemoteWorkerAssignmentRepository {
         generation.assignment_id,
         asPositiveInteger(generation.assignment_generation),
       );
+      const assignment = this.getAssignment(command.registryWorkspaceId, command.assignmentId);
+      if (protectedAuthority !== undefined) {
+        this.assertProtectedCommitFenceCurrent(protectedAuthority, assignment, generation);
+      }
       const requestSha256 = sha256(remoteWorkerAssignmentSettlementReplayMaterial(command));
       const replay = this.findSettlementByIdempotency(command.registryWorkspaceId, command.idempotencyKey);
       if (replay) {
@@ -1903,6 +1954,41 @@ export class RemoteWorkerAssignmentRepository {
       ),
       lease: this.mapLease(this.getLeaseRow(command.registryWorkspaceId, command.assignmentId, generationNumber, 1)),
     };
+  }
+
+  private assertProtectedCommitFenceCurrent(
+    fence: RemoteWorkerAssignmentProtectedCommitFence,
+    assignment: RemoteWorkerAssignmentRecord,
+    generation: GenerationRow,
+  ): void {
+    const authority = fence.credentialAuthority;
+    const meshAdmission = fence.meshAdmission;
+    if (
+      assignment.registryWorkspaceId !== authority.registryWorkspaceId ||
+      assignment.registryWorkspaceId !== generation.registry_workspace_id ||
+      assignment.assignmentId !== generation.assignment_id ||
+      assignment.manifest.executionWorkspaceId !== generation.execution_workspace_id ||
+      generation.worker_id !== authority.workerId ||
+      asPositiveInteger(generation.worker_generation) !== authority.workerGeneration ||
+      generation.node_id !== authority.nodeId ||
+      generation.runtime_manifest_sha256 !== authority.runtimeManifestSha256 ||
+      generation.workspace_ceiling_sha256 !== authority.workspaceCeilingSha256 ||
+      generation.capability_ceiling_sha256 !== authority.capabilityCeilingSha256 ||
+      meshAdmission.workspaceId !== assignment.manifest.executionWorkspaceId ||
+      meshAdmission.admissionGeneration !== asPositiveInteger(generation.node_admission_generation)
+    ) {
+      throw conflict("remote worker assignment protected commit authority");
+    }
+    try {
+      const worker = this.assertClaimAuthorityCurrent(authority);
+      this.assertWorkerIsCurrentAndAllowed(worker, assignment.manifest);
+      this.assertMeshAdmissionAuthority(authority, assignment, meshAdmission);
+    } catch (error) {
+      if (error instanceof ConflictError || error instanceof NotFoundError) {
+        throw conflict("remote worker assignment protected commit authority");
+      }
+      throw error;
+    }
   }
 
   private assertClaimAuthorityCurrent(authority: RemoteWorkerAssignmentClaimAuthority): WorkerAuthorityRow {
@@ -3353,6 +3439,15 @@ function normalizeClaimAuthority(input: RemoteWorkerAssignmentClaimAuthority): R
       "authority.protectedAdmissionContextSha256",
     ),
     claimsSha256: digest(input.claimsSha256, "authority.claimsSha256"),
+  });
+}
+
+function normalizeProtectedCommitFence(
+  input: RemoteWorkerAssignmentProtectedCommitFence,
+): RemoteWorkerAssignmentProtectedCommitFence {
+  return Object.freeze({
+    credentialAuthority: normalizeClaimAuthority(input.credentialAuthority),
+    meshAdmission: normalizeRemoteWorkerMeshNodeAuthorityFence(input.meshAdmission),
   });
 }
 
