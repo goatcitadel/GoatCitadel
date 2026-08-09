@@ -59,8 +59,8 @@ change:
 | ID | Priority | Tranche | Status | Depends on | Closing proof |
 |---|---|---|---|---|---|
 | `M0` | P0 | Canonical ledger and stale-status reconciliation | `complete` | None | `pnpm docs:check`; `git diff --check` |
-| `M1` | P0/P1 | Proof integrity, storage correctness, and agentic hot-path foundations | `planned` | M0 | Focused storage/Gateway/harness tests, dual-dialect corrupt-shape proof, concurrent-verifier proof |
-| `M2` | P0 | Remote-worker admission, transport, and operator control | `planned` | M1 | Focused mesh/auth suites and real two-machine TLS 1.3/mTLS/PoP admission |
+| `M1` | P0/P1 | Proof integrity, storage correctness, and agentic hot-path foundations | `in_progress` | M0 | Focused storage/Gateway/harness tests, dual-dialect corrupt-shape proof, concurrent-verifier proof |
+| `M2` | P0 | Remote-worker admission, transport, and operator control | `in_progress` | M1 | Focused mesh/auth suites and real two-machine TLS 1.3/mTLS/PoP admission |
 | `M3` | P0 | Remote-worker durable execution and ordered event transport | `planned` | M2 | Worker death/reconnect/takeover, replay, transcript, approval-resume, and no-duplicate proof |
 | `M4` | P0/P1 | Live worker inference, execution cell, settlement, and visibility | `planned` | M3 | `pnpm verify:remote-workers` with the connected-worker row executed, plus live Ops/Chat data |
 | `M5` | P0 | Governed self-configuration and repair expansion | `planned` | M1; M2 for remote custody | `pnpm verify:self-configuration` with live provider, packaged restart, browser secure input, profile, rollback, and delegated-resume evidence |
@@ -98,6 +98,24 @@ validation and 9/9 Docker-secret documentation tests; `git diff --check` passed.
 
 ## M1 - Proof integrity, storage correctness, and agentic foundations
 
+### Implementation progress
+
+- Worktree-scoped cross-process output locks and staged publication now protect
+  the shared verifier/build outputs (`FR-362`).
+- SQLite and PostgreSQL migrators now reject corrupt pre-existing object shapes
+  instead of accepting name existence as shape proof (`FR-356`). The real
+  PostgreSQL test remains environment-gated where no test server is configured.
+- Concurrent audit events are durably microbatched under the existing ordered
+  lock, ordinary prompt-budget receipts are gated off the live path, and scoped
+  active-grant reads resolve concurrently before the unchanged deny-wins merge.
+- Checkpoint continuation now follows bounded high-intent Chat classifications,
+  and the first eligible successful root Chat turn warms the operator review
+  inbox without promoting learned memory or adding a foreground model call.
+
+The remaining M1 closeout is the write-side policy/storage hot-path audit, the
+final paired remediation-storage migration checkpoint, and any externally held
+real-PostgreSQL proof required by the closing campaign.
+
 ### Current work
 
 - `FR-362`: add a worktree-scoped cross-process verification/build-output
@@ -128,6 +146,25 @@ validation and 9/9 Docker-secret documentation tests; `git diff --check` passed.
   `git diff --check`.
 
 ## M2 - Remote-worker admission, transport, and operator control
+
+### Implementation progress
+
+- The hardened Windows provisioner, authenticated local service transport,
+  Ed25519 custody, protected filesystem/journal recovery, deterministic x64 and
+  ARM64 packaging, and production-dark artifact-signing owner are restored on
+  the current program branch.
+- Proof-of-possession verification can now prepare a verified request without
+  burning its replay nonce; durable nonce consumption and generation-1
+  credential admission commit atomically, including rollback at injected
+  post-nonce and post-generation failures.
+- The native TLS listener now has a bounded authenticated-handler seam with
+  strict POST/JSON framing, one request per connection, body/handler deadlines,
+  bounded sanitized responses, buffer wiping, and explicit
+  `listening_dark`/`listening_live` runtime truth. It remains dark until a
+  trustworthy admission handler is composed.
+
+Operator bootstrap/control routes, live admission exchange composition, the
+networked worker host, and the real two-machine proof remain open.
 
 ### Current work
 
