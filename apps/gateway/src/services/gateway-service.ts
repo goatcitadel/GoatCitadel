@@ -1954,6 +1954,7 @@ export class GatewayService {
       chatThinkingStreamV1Enabled: async () => await this.isFeatureEnabled("chatThinkingStreamV1Enabled"),
       attachedContextToolsV1Enabled: async () => await this.isFeatureEnabled("attachedContextToolsV1Enabled"),
       parallelToolExecutionV1Disabled: async () => await this.isFeatureEnabled("parallelToolExecutionV1Disabled"),
+      promptContextBudgetReceiptEnabled: () => process.env.GOATCITADEL_DEBUG_PROMPT_CONTEXT_BUDGET_RECEIPTS === "1",
       subagentFanoutV1Disabled: async () => await this.isFeatureEnabled("subagentFanoutV1Disabled"),
       delegationScopeExpansionV1Enabled: async () => await this.isFeatureEnabled("delegationScopeExpansionV1Enabled"),
     });

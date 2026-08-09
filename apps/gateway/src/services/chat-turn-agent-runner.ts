@@ -224,7 +224,10 @@ import {
   shouldUseConstrainedLocalAgentProfile,
   toolRunBudgetCostForToolCall,
 } from "./chat-agent-budget.js";
-import { buildPromptContextBudgetReceipt } from "./chat-agent-prompt-budget-receipt.js";
+import {
+  buildPromptContextBudgetReceipt,
+  shouldCapturePromptContextBudgetReceipt,
+} from "./chat-agent-prompt-budget-receipt.js";
 import { executionProfileFromNormalizationProfile } from "./chat-turn-execution-profile.js";
 import { isDurableControlError } from "./durable-control-error.js";
 import { INTERNAL_TOOL_EFFECT_POTENTIAL_KEY } from "./chat-message-sanitize.js";
@@ -948,6 +951,12 @@ export interface ChatTurnAgentRunnerDeps {
    * true forces the historical strictly-serial path.
    */
   parallelToolExecutionV1Disabled?: () => Promise<boolean>;
+  /**
+   * Diagnostic-only prompt-context receipt gate. Normal live turns omit the
+   * repeated full-context serialization; quick-web and prompt-pack proof
+   * profiles keep their required receipts independently of this switch.
+   */
+  promptContextBudgetReceiptEnabled?: () => boolean | Promise<boolean>;
   attachedContextToolsV1Enabled?: () => Promise<boolean>;
   /**
    * R3-8 `agent.fanout` kill switch (`subagentFanoutV1Disabled`). Read live
@@ -1785,6 +1794,11 @@ export class ChatTurnAgentRunner {
     const normalizationProfile = input.normalizationProfile ?? "live";
     const executionProfile = executionProfileFromNormalizationProfile(normalizationProfile);
     const quickWebProfile = executionProfile === "quick_web";
+    const capturePromptContextBudgetReceipt = shouldCapturePromptContextBudgetReceipt({
+      debugEnabled: Boolean(await this.deps.promptContextBudgetReceiptEnabled?.()),
+      executionProfile,
+      normalizationProfile,
+    });
     const promptLabContract = parsePromptLabRunContract(input.content);
     const localBusinessResearchExpected = Boolean(buildLocalBusinessResearchPlan(input.content));
     const promptLabHarnessTurnForIntent =
@@ -3588,12 +3602,16 @@ export class ChatTurnAgentRunner {
               : rawToolsForCompletion;
           routingState = {
             ...routingState,
-            promptContextBudget: buildPromptContextBudgetReceipt({
-              executionProfile,
-              messages: conversationMessages,
-              tools: toolsForCompletion,
-              toolRuns,
-            }),
+            ...(capturePromptContextBudgetReceipt
+              ? {
+                  promptContextBudget: buildPromptContextBudgetReceipt({
+                    executionProfile,
+                    messages: conversationMessages,
+                    tools: toolsForCompletion,
+                    toolRuns,
+                  }),
+                }
+              : {}),
           };
           const completionRequest: ChatCompletionRequest = {
             providerId: input.providerId,

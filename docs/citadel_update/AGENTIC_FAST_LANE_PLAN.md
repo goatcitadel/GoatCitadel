@@ -47,13 +47,22 @@ PR #137 fixed "thin responses" by wrapping cowork in a **plan → execute → sy
 ## P1 — speed depth + quality (1–2 weeks)
 
 - [x] **S4 — parallelize independent tool calls.** *(Round 3, 2026-07-03, kill switch `parallelToolExecutionV1Disabled`.)* All-read-only multi-call batches (registry-declared `readOnly` + `riskLevel:"safe"` + no definition-level approval, cap 4) pre-execute concurrently; the unchanged serial loop consumes results in emission order, so per-call policy/audit/post-processing have exactly one code path. Mixed/unknown/MCP batches stay byte-identical serial. Serial-parity pinned by test (`chat-agent-orchestrator.parallel-tools.test.ts`). Also flagged `memory.read`/`session.status`/`time.now` as `readOnly` in the registry (were unflagged).
-- [ ] **S5 — per-tool IO tax off the hot path.** Each tool call does a lock-serialized `fs.appendFile` audit + 3–5 sync SQLite writes blocking the next tool (`engine.ts:1462→audit-log.ts:89`); every iteration `JSON.stringify`s the whole context for a trace receipt and regex-scans every full tool result (`chat-agent-prompt-budget-receipt.ts:16`). Batch/async the audit; gate the receipt behind a debug flag.
+- [ ] **S5 — per-tool IO tax off the hot path.** The full prompt-context
+  receipt is now omitted for ordinary live turns and retained only for the
+  quick-web/prompt-pack proof profiles or the explicit
+  `GOATCITADEL_DEBUG_PROMPT_CONTEXT_BUDGET_RECEIPTS=1` diagnostic gate.
+  Remaining work is the lock-serialized JSONL audit and avoidable policy/storage
+  round trips; any batching must retain ordered, durable, secret-free evidence.
 - **Superseded — S6 short turns outside durable wrapping.** Current one-Chat
   runtime truth keeps durable execution authoritative for resumable work. The
   valid performance goal moves to `M1`: reduce admission, heartbeat, and
   checkpoint overhead without bypassing durable ownership.
 - [x] **Structured checkpoint compaction (ask anchoring).** *(Round 3, 2026-07-03.)* `buildConversationCompactionSummary` now pins the original ask and the latest ask ahead of the decision/failure digest, so trimmed sessions keep the objective. The digest body remains deterministic (regex) by design; LLM summarization stays unshipped.
-- [ ] **Extend checkpoint-continue to code/high-intent chat** so depth isn't gated on the user picking "cowork" — chat/code are terminal, hard-stopping at their tool budgets (chat 4 loops/7 runs, code 6/12 — re-verified 2026-07-03) and reporting `completed` with an honest `degraded` sidecar (`chat-agent-budget.ts:258-260`).
+- [x] **Extend checkpoint-continue to high-intent Chat.** Research-list,
+  artifact, and prompt-pack harness intents now select bounded checkpoint
+  windows on the one Chat surface; the legacy `cowork` mode remains a
+  compatibility input rather than the only gate. Two consecutive no-progress
+  windows still terminate honestly under the loop guard.
 - [x] **Stream idle watchdog.** *(Round 3, 2026-07-03, kill switch `streamIdleWatchdogV1Disabled`, config `assistant.streamIdleTimeoutMs`, default 120s, floor 5s.)* Per-chunk re-armed idle timer around both the primary and cross-provider-fallback stream loops (`stream-idle-watchdog.ts` + `llm-completion-service.ts`); on trip it aborts the provider request and throws a machine-readable `stream_idle_timeout` error into the existing failed-after-emit salvage path — a hang becomes a recoverable stream failure instead of an infinite spinner.
 
 ## P2 — capability / moat (2–4 weeks)

@@ -1,5 +1,6 @@
 import type {
   ChatCompletionRequest,
+  ChatNormalizationProfile,
   ChatPromptContextBudgetReceipt,
   ChatToolRunRecord,
   ChatTurnExecutionProfile,
@@ -11,6 +12,16 @@ export interface BuildPromptContextBudgetReceiptInput {
   readonly messages: ChatCompletionRequest["messages"];
   readonly tools?: readonly Record<string, unknown>[];
   readonly toolRuns?: readonly ChatToolRunRecord[];
+}
+
+export function shouldCapturePromptContextBudgetReceipt(input: {
+  readonly debugEnabled: boolean;
+  readonly executionProfile: ChatTurnExecutionProfile;
+  readonly normalizationProfile: ChatNormalizationProfile;
+}): boolean {
+  return (
+    input.debugEnabled || input.executionProfile === "quick_web" || input.normalizationProfile === "prompt_pack_harness"
+  );
 }
 
 export function buildPromptContextBudgetReceipt(
