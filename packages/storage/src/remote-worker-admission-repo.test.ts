@@ -15,6 +15,7 @@ import {
 } from "@goatcitadel/contracts";
 import type { DatabaseClient, DbStatement } from "./db.js";
 import { RemoteWorkerAdmissionRepository } from "./remote-worker-admission-repo.js";
+import { RemoteWorkerNonceRepository, type RemoteWorkerNonceConsumeInput } from "./remote-worker-nonce-repo.js";
 import { createDatabase } from "./sqlite.js";
 
 const clients: DatabaseClient[] = [];
@@ -94,6 +95,31 @@ function finalizeInput(
     exchangeIdempotencyKey: `exchange:${seed}`,
     ...overrides,
   } satisfies FinalizeRemoteWorkerBootstrapAdmissionCommand;
+}
+
+function bootstrapNonceInput(
+  db: DatabaseClient,
+  bootstrap: ReturnType<RemoteWorkerAdmissionRepository["createBootstrap"]>["record"],
+  seed: string,
+): RemoteWorkerNonceConsumeInput {
+  const clock = db
+    .prepare(
+      `SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now') AS timestamp,
+              strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+60 seconds') AS expires_at`,
+    )
+    .get() as { timestamp: string; expires_at: string };
+  return {
+    authority: {
+      kind: "bootstrap",
+      registryWorkspaceId: bootstrap.registryWorkspaceId,
+      bootstrapId: bootstrap.bootstrapId,
+      workerId: bootstrap.workerId,
+      targetWorkerGeneration: bootstrap.targetWorkerGeneration,
+    },
+    nonceSha256: D(`${seed}:nonce`),
+    timestamp: clock.timestamp,
+    expiresAt: clock.expires_at,
+  };
 }
 
 function harness() {
@@ -355,6 +381,143 @@ describe("RemoteWorkerAdmissionRepository", () => {
     assert.equal(stored.claims_sha256, D(stored.claims_json));
     assert.equal(admitted.credential.claims.workspaceCeilingSha256, bootstrap.workspaceCeilingSha256);
     assert.equal(admitted.credential.claims.capabilityCeilingSha256, bootstrap.capabilityCeilingSha256);
+  });
+
+  it("atomically consumes proof nonce with admission and resolves replay before consuming another nonce", () => {
+    const { db, repo } = harness();
+    const bootstrap = repo.createBootstrap(bootstrapInput("atomic-replay")).record;
+    const command = finalizeInput(bootstrap, "atomic-replay");
+    const admitted = repo.finalizeBootstrapAdmissionWithNonce({
+      nonce: bootstrapNonceInput(db, bootstrap, "atomic-replay"),
+      command,
+    });
+    assert.equal(admitted.disposition, "admitted");
+    assert.equal(repo.findBootstrapBySecretSha256(command.bootstrapSecretSha256)?.bootstrapId, bootstrap.bootstrapId);
+    assert.equal(
+      (
+        db
+          .prepare("SELECT COUNT(*) AS count FROM remote_worker_bootstrap_request_nonces WHERE bootstrap_id = ?")
+          .get(bootstrap.bootstrapId) as { count: number }
+      ).count,
+      1,
+    );
+
+    const replay = repo.finalizeBootstrapAdmissionWithNonce({
+      nonce: bootstrapNonceInput(db, bootstrap, "atomic-replay-second"),
+      command: { ...command, credentialTokenSha256: D("atomic-replay:replacement-token") },
+    });
+    assert.equal(replay.disposition, "replayed_without_credential_secret");
+    assert.deepEqual(replay.generation, admitted.generation);
+    assert.deepEqual(replay.credential, admitted.credential);
+    assert.equal(
+      (
+        db
+          .prepare("SELECT COUNT(*) AS count FROM remote_worker_bootstrap_request_nonces WHERE bootstrap_id = ?")
+          .get(bootstrap.bootstrapId) as { count: number }
+      ).count,
+      1,
+      "exact replay must not consume its replacement nonce",
+    );
+
+    assert.throws(
+      () =>
+        repo.finalizeBootstrapAdmissionWithNonce({
+          nonce: bootstrapNonceInput(db, bootstrap, "atomic-replay-changed"),
+          command: { ...command, verifiedTransportReceiptSha256: D("atomic-replay:changed-transport") },
+        }),
+      ConflictError,
+    );
+    assert.equal(
+      (
+        db
+          .prepare("SELECT COUNT(*) AS count FROM remote_worker_bootstrap_request_nonces WHERE bootstrap_id = ?")
+          .get(bootstrap.bootstrapId) as { count: number }
+      ).count,
+      1,
+      "changed replay must fail before nonce insertion",
+    );
+  });
+
+  it("rolls nonce, generation, and credential writes back at atomic admission failure seams", () => {
+    const { db, repo } = harness();
+    const assertNoAdmission = (bootstrap: ReturnType<RemoteWorkerAdmissionRepository["createBootstrap"]>["record"]) => {
+      const counts = db
+        .prepare(
+          `SELECT
+             (SELECT COUNT(*) FROM remote_worker_bootstrap_request_nonces WHERE bootstrap_id = @bootstrapId) AS nonces,
+             (SELECT COUNT(*) FROM remote_worker_generations WHERE bootstrap_id = @bootstrapId) AS generations,
+             (SELECT COUNT(*) FROM remote_worker_runtime_credentials WHERE worker_id = @workerId) AS credentials`,
+        )
+        .get({ bootstrapId: bootstrap.bootstrapId, workerId: bootstrap.workerId }) as {
+        nonces: number;
+        generations: number;
+        credentials: number;
+      };
+      assert.deepEqual({ ...counts }, { nonces: 0, generations: 0, credentials: 0 });
+      assert.equal(repo.getBootstrap(bootstrap.registryWorkspaceId, bootstrap.bootstrapId).state, "pending");
+    };
+
+    const foreign = repo.createBootstrap(bootstrapInput("atomic-foreign")).record;
+    const foreignNonce = bootstrapNonceInput(db, foreign, "atomic-foreign");
+    assert.throws(
+      () =>
+        repo.finalizeBootstrapAdmissionWithNonce({
+          nonce: {
+            ...foreignNonce,
+            authority: {
+              kind: "bootstrap",
+              registryWorkspaceId: foreign.registryWorkspaceId,
+              bootstrapId: foreign.bootstrapId,
+              workerId: "foreign-worker",
+              targetWorkerGeneration: foreign.targetWorkerGeneration,
+            },
+          },
+          command: finalizeInput(foreign, "atomic-foreign"),
+        }),
+      ConflictError,
+    );
+    assertNoAdmission(foreign);
+
+    for (const [seed, prefix] of [
+      ["atomic-after-nonce", "INSERT INTO remote_worker_generations"],
+      ["atomic-after-generation", "INSERT INTO remote_worker_runtime_credentials"],
+    ] as const) {
+      const bootstrap = repo.createBootstrap(bootstrapInput(seed)).record;
+      const failingRepo = new RemoteWorkerAdmissionRepository(
+        prepareFacade(db, (statement) =>
+          statement.startsWith(prefix) ? throwingStatement(`injected ${seed} failure`) : undefined,
+        ),
+      );
+      assert.throws(
+        () =>
+          failingRepo.finalizeBootstrapAdmissionWithNonce({
+            nonce: bootstrapNonceInput(db, bootstrap, seed),
+            command: finalizeInput(bootstrap, seed),
+          }),
+        ConflictError,
+      );
+      assertNoAdmission(bootstrap);
+    }
+
+    const duplicate = repo.createBootstrap(bootstrapInput("atomic-duplicate")).record;
+    const duplicateNonce = bootstrapNonceInput(db, duplicate, "atomic-duplicate");
+    assert.equal(new RemoteWorkerNonceRepository(db).consume(duplicateNonce), true);
+    assert.throws(
+      () =>
+        repo.finalizeBootstrapAdmissionWithNonce({
+          nonce: duplicateNonce,
+          command: finalizeInput(duplicate, "atomic-duplicate"),
+        }),
+      ConflictError,
+    );
+    const duplicateCounts = db
+      .prepare(
+        `SELECT
+           (SELECT COUNT(*) FROM remote_worker_bootstrap_request_nonces WHERE bootstrap_id = @bootstrapId) AS nonces,
+           (SELECT COUNT(*) FROM remote_worker_generations WHERE bootstrap_id = @bootstrapId) AS generations`,
+      )
+      .get({ bootstrapId: duplicate.bootstrapId }) as { nonces: number; generations: number };
+    assert.deepEqual({ ...duplicateCounts }, { nonces: 1, generations: 0 });
   });
 
   it("binds generation-1 credential evidence to its generation in direct SQLite writes", () => {

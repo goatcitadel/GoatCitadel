@@ -18,6 +18,7 @@ import {
   compareRemoteWorkerCanonicalIdentifiers,
   normalizeCreateRemoteWorkerBootstrapCommand,
   normalizeFinalizeRemoteWorkerBootstrapAdmissionCommand,
+  normalizeRemoteWorkerNonceAuthority,
   normalizeRemoteWorkerGenerationControlInput,
   normalizeRotateRemoteWorkerRuntimeCredentialCommand,
   remoteWorkerBootstrapAdmissionReplayMaterial,
@@ -37,6 +38,7 @@ import {
   type RotateRemoteWorkerRuntimeCredentialCommand,
 } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
+import { RemoteWorkerNonceRepository, type RemoteWorkerNonceConsumeInput } from "./remote-worker-nonce-repo.js";
 import { safeJsonParse } from "./safe-json.js";
 
 export interface CreateRemoteWorkerBootstrapOutcome {
@@ -48,6 +50,11 @@ export interface FinalizeRemoteWorkerBootstrapAdmissionOutcome {
   disposition: "admitted" | "replayed_without_credential_secret";
   generation: RemoteWorkerGenerationRecord;
   credential: RemoteWorkerRuntimeCredentialRecord;
+}
+
+export interface FinalizeRemoteWorkerBootstrapAdmissionWithNonceInput {
+  readonly nonce: RemoteWorkerNonceConsumeInput;
+  readonly command: FinalizeRemoteWorkerBootstrapAdmissionCommand;
 }
 
 export interface RotateRemoteWorkerRuntimeCredentialOutcome {
@@ -524,6 +531,113 @@ export class RemoteWorkerAdmissionRepository {
     });
   }
 
+  /**
+   * Finalize a bootstrap exchange and consume its proof nonce in one durable
+   * transaction. Exact idempotent replays are resolved before nonce
+   * consumption so a retry never burns a fresh nonce or returns secret
+   * material. Any failure after nonce insertion rolls the nonce, generation,
+   * and credential back together.
+   */
+  public finalizeBootstrapAdmissionWithNonce(
+    input: FinalizeRemoteWorkerBootstrapAdmissionWithNonceInput,
+  ): FinalizeRemoteWorkerBootstrapAdmissionOutcome {
+    const normalized = normalizeFinalizeBootstrapAdmissionWithNonceInput(input);
+    const hint = this.findBootstrapBySecretHash(normalized.command.bootstrapSecretSha256);
+    if (!hint) throw unavailable("remote worker bootstrap");
+
+    return this.db.transaction("immediate", () => {
+      this.acquirePostgresAdmissionLocks(hint.registry_workspace_id, hint.worker_id);
+      const bootstrapRow = this.findBootstrapBySecretHash(normalized.command.bootstrapSecretSha256);
+      if (!bootstrapRow || bootstrapRow.bootstrap_id !== hint.bootstrap_id) {
+        throw unavailable("remote worker bootstrap");
+      }
+      const bootstrap = this.mapBootstrap(bootstrapRow);
+      this.assertExpectedBootstrapBinding(bootstrap, normalized.command);
+      const claims = buildRemoteWorkerRuntimeCredentialClaims({
+        registryWorkspaceId: bootstrap.registryWorkspaceId,
+        workerId: bootstrap.workerId,
+        workerGeneration: bootstrap.targetWorkerGeneration,
+        allowedWorkspaceIds: bootstrap.allowedWorkspaceIds,
+        capabilityClasses: bootstrap.capabilityClasses,
+      });
+      const exchangeRequestSha256 = sha256(
+        remoteWorkerBootstrapAdmissionReplayMaterial(normalized.command, bootstrap.bootstrapId, claims),
+      );
+      const replay = this.findGenerationByExchangeIdempotency(
+        bootstrap.registryWorkspaceId,
+        normalized.command.exchangeIdempotencyKey,
+      );
+      if (replay) {
+        assertExactReplay(replay.exchange_request_sha256, exchangeRequestSha256, "remote worker admission exchange");
+        if (replay.bootstrap_id !== bootstrap.bootstrapId) {
+          throw invariantConflict("remote worker admission exchange");
+        }
+        const generation = mapGeneration(replay);
+        const credentialRow = this.getCredentialRowByIdempotency(
+          replay.registry_workspace_id,
+          replay.worker_id,
+          replay.worker_generation,
+          normalized.command.exchangeIdempotencyKey,
+        );
+        this.assertGenerationBootstrapBindings(generation, bootstrap);
+        return {
+          disposition: "replayed_without_credential_secret",
+          generation,
+          credential: this.mapAuthoritativeCredential(credentialRow, generation, bootstrap),
+        };
+      }
+
+      if (bootstrap.state !== "pending") {
+        throw invariantConflict("remote worker admission exchange");
+      }
+      this.assertVerifiedBootstrapBindings(bootstrap, normalized.command);
+      this.assertReadmissionEvidenceRotated(bootstrap, normalized.command);
+      if (this.findGenerationByBootstrap(bootstrap.registryWorkspaceId, bootstrap.bootstrapId)) {
+        throw invariantConflict("remote worker admission exchange");
+      }
+      assertBootstrapNonceAuthority(normalized.nonce, bootstrap);
+      const consumed = new RemoteWorkerNonceRepository(this.db).consume({
+        authority: Object.freeze({
+          kind: "bootstrap",
+          registryWorkspaceId: bootstrap.registryWorkspaceId,
+          bootstrapId: bootstrap.bootstrapId,
+          workerId: bootstrap.workerId,
+          targetWorkerGeneration: bootstrap.targetWorkerGeneration,
+        }),
+        nonceSha256: normalized.nonce.nonceSha256,
+        timestamp: normalized.nonce.timestamp,
+        expiresAt: normalized.nonce.expiresAt,
+      });
+      if (!consumed) throw invariantConflict("remote worker admission exchange");
+
+      const finalized = this.finalizeBootstrapAdmission(normalized.command);
+      if (finalized.disposition !== "admitted") {
+        throw invariantConflict("remote worker admission exchange");
+      }
+      const generation = this.getGeneration(
+        bootstrap.registryWorkspaceId,
+        bootstrap.workerId,
+        bootstrap.targetWorkerGeneration,
+      );
+      const authoritativeBootstrap = this.getBootstrap(bootstrap.registryWorkspaceId, bootstrap.bootstrapId);
+      this.assertGenerationBootstrapBindings(generation, authoritativeBootstrap);
+      const credentialRow = this.getCredentialRowByIdempotency(
+        generation.registryWorkspaceId,
+        generation.workerId,
+        generation.workerGeneration,
+        normalized.command.exchangeIdempotencyKey,
+      );
+      if (digest(credentialRow.token_sha256, "tokenSha256") !== normalized.command.credentialTokenSha256) {
+        throw invalidState();
+      }
+      return {
+        disposition: "admitted",
+        generation,
+        credential: this.mapAuthoritativeCredential(credentialRow, generation, authoritativeBootstrap),
+      };
+    });
+  }
+
   public rotateRuntimeCredential(
     input: RotateRemoteWorkerRuntimeCredentialCommand,
   ): RotateRemoteWorkerRuntimeCredentialOutcome {
@@ -711,6 +825,12 @@ export class RemoteWorkerAdmissionRepository {
       identifier(bootstrapId, "bootstrapId"),
     );
     return this.mapBootstrap(row);
+  }
+
+  /** Resolve bootstrap metadata from a caller-owned secret digest without exposing the digest. */
+  public findBootstrapBySecretSha256(bootstrapSecretSha256: string): RemoteWorkerBootstrapRecord | undefined {
+    const row = this.findBootstrapBySecretHash(digest(bootstrapSecretSha256, "bootstrapSecretSha256"));
+    return row ? this.mapBootstrap(row) : undefined;
   }
 
   public findCurrentGeneration(
@@ -1498,6 +1618,87 @@ function mapControl(row: ControlRow): RemoteWorkerGenerationControlRecord {
   } catch {
     throw invalidState();
   }
+}
+
+function normalizeFinalizeBootstrapAdmissionWithNonceInput(
+  value: FinalizeRemoteWorkerBootstrapAdmissionWithNonceInput,
+): FinalizeRemoteWorkerBootstrapAdmissionWithNonceInput {
+  const fields = exactOwnDataFields(value, ["nonce", "command"], "bootstrap admission with nonce input");
+  const nonceFields = exactOwnDataFields(
+    fields.nonce,
+    ["authority", "nonceSha256", "timestamp", "expiresAt"],
+    "bootstrap admission nonce",
+  );
+  const timestamp = canonicalTimestamp(nonceFields.timestamp, "request timestamp");
+  const expiresAt = canonicalTimestamp(nonceFields.expiresAt, "expiry");
+  if (Date.parse(expiresAt) - Date.parse(timestamp) !== 60_000) {
+    throw new TypeError("Remote worker request-nonce expiry must be exactly the request timestamp plus 60 seconds.");
+  }
+  return Object.freeze({
+    nonce: Object.freeze({
+      authority: normalizeRemoteWorkerNonceAuthority(nonceFields.authority),
+      nonceSha256: digest(nonceFields.nonceSha256 as string, "nonceSha256"),
+      timestamp,
+      expiresAt,
+    }),
+    command: normalizeFinalizeRemoteWorkerBootstrapAdmissionCommand(
+      fields.command as FinalizeRemoteWorkerBootstrapAdmissionCommand,
+    ),
+  });
+}
+
+function assertBootstrapNonceAuthority(
+  nonce: RemoteWorkerNonceConsumeInput,
+  bootstrap: RemoteWorkerBootstrapRecord,
+): void {
+  const authority = nonce.authority;
+  if (
+    authority.kind !== "bootstrap" ||
+    authority.registryWorkspaceId !== bootstrap.registryWorkspaceId ||
+    authority.bootstrapId !== bootstrap.bootstrapId ||
+    authority.workerId !== bootstrap.workerId ||
+    authority.targetWorkerGeneration !== bootstrap.targetWorkerGeneration
+  ) {
+    throw invariantConflict("remote worker admission exchange");
+  }
+}
+
+function exactOwnDataFields(value: unknown, required: readonly string[], label: string): Record<string, unknown> {
+  try {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error();
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype) throw new Error();
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const keys = Reflect.ownKeys(descriptors);
+    if (
+      keys.length !== required.length ||
+      keys.some((key) => typeof key !== "string" || !required.includes(key)) ||
+      required.some((key) => !Object.prototype.hasOwnProperty.call(descriptors, key))
+    ) {
+      throw new Error();
+    }
+    const fields: Record<string, unknown> = {};
+    for (const key of keys as string[]) {
+      const descriptor = descriptors[key];
+      if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) throw new Error();
+      fields[key] = descriptor.value;
+    }
+    return fields;
+  } catch {
+    throw new TypeError(`Remote worker ${label} is invalid.`);
+  }
+}
+
+function canonicalTimestamp(value: unknown, label: string): string {
+  if (
+    typeof value !== "string" ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(value) ||
+    !Number.isFinite(Date.parse(value)) ||
+    new Date(Date.parse(value)).toISOString() !== value
+  ) {
+    throw new TypeError(`Remote worker request-nonce ${label} must be a canonical UTC ISO timestamp.`);
+  }
+  return value;
 }
 
 function deriveServerId(prefix: string, ...parts: string[]): string {
