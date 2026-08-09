@@ -177,22 +177,29 @@ validation and 9/9 Docker-secret documentation tests; `git diff --check` passed.
   over the canonical repositories. Real two-connection replay uses distinct
   TLS exporters/nonces and returns the same canonical generation without
   replaying the credential secret.
-- Production ingress remains truthfully `listening_dark`: no Gateway-local
-  copied-tree scan is accepted as remote-machine evidence, and the native
-  verifier seam fails closed until the signed envelope and pinned signer are
-  durably bound.
+- The fixed protected envelope and operator-pinned signer are now verified by
+  the Gateway, settled atomically with nonce/generation/credential authority,
+  retained across restart in paired SQLite 193/PostgreSQL 136 storage, and
+  cryptographically revalidated on current-authority reads. Quarantine or
+  revoke kills credential and protected-evidence authority.
+- Production ingress has a real protected-evidence verifier and can become
+  `listening_live` only after its preflight succeeds. The current-authority
+  resolver remains intentionally unconsumed until M3 composes it with node and
+  assignment mutation owners; raw evidence rows are never callable authority.
+- An exact-commit Codex Security review closed all 29 changed source files and
+  nine trust surfaces with zero findings or deferred rows. Root integration
+  proof passes focused Gateway, contracts, provisioner, atomic-storage, paired
+  migration-parity, and touched-package typecheck lanes.
 
 ### Current work
 
-- Persist and transactionally pin the signed envelope, worker generation,
-  operation/nonce/request hashes, authenticated operator identity, protected
-  keyset receipt, signer SPKI, signature, installed-tree/download receipts, and
-  admission lifecycle. Enforce crash-durable exact replay and key drift before
-  enabling ingress.
-- Compose the protected Windows signer client into the remote worker exchange
-  without weakening its authenticated named-pipe/SCM custody boundary.
-- Prove closed ingress, rotation/revocation, exact manifest/attestation binding,
-  and operator-visible diagnostics.
+- Compose the protected Windows signer helper into the first real worker
+  bootstrap client without weakening its authenticated named-pipe/SCM custody
+  boundary or reusing a signer-operation ID across fresh TLS attempts.
+- Keep current-authority reads and every downstream mutation transactionally
+  fenced through M3 node admission and assignment ownership.
+- Prove operator-visible diagnostics and the real closed-ingress, N+1 rotation,
+  quarantine, revoke, and restart journeys.
 - Execute the real two-machine TLS 1.3/mTLS/exporter-bound PoP row.
 
 ### Acceptance
@@ -262,10 +269,17 @@ Owner contracts: `OPENCLAW_HERMES_PARITY_PROGRAM.md`, `HX-503` through `HX-507`.
   does not publish a journal, effect, or automatic-repair claim. A callable
   file recipe now depends on a native handle-relative capture/publish/restore
   port and a coordinator completion callback for bounded journal retirement.
+- OpenAI Codex OAuth now has an exact installation-scoped, secret-free
+  assessment and manual-required recipe boundary. It deliberately exposes no
+  effect owner or live-probe claim: current keychain/OAuth APIs cannot prove
+  CAS ownership, restart reconciliation, or rollback custody after token
+  replacement or refresh.
 - Implement the first callable recipe only through an existing owner that can
   prove prior state, effect identity, restart reconciliation, and rollback
   without persisting secrets or arbitrary corrupt bytes.
-- Add provider bootstrap and OAuth repair with owner-specific live probes.
+- Add provider bootstrap and OAuth repair only after an owner-specific live
+  probe plus durable effect/reconcile/rollback custody exists; the current
+  OpenAI Codex OAuth row remains manual rather than faking that authority.
 - Compose schema/config, managed dependency, and owned-service recipes through
   existing owners with rollback.
 - Add reason-specific rollback-failure reconciliation and high-signal Ops
