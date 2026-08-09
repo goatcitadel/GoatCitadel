@@ -64,10 +64,10 @@ const postgresMigration = POSTGRES_MIGRATIONS.find((migration) => migration.vers
 after(() => db.close());
 
 describe("remote worker protected admission schema parity", () => {
-  it("reserves only SQLite 193 and PostgreSQL 136 after the remediation heads", () => {
+  it("retains the exact protected-admission migration identities", () => {
     assert.equal(__sqliteInternals.getSchemaMigrationNameForTest(193), "remote_worker_protected_admission_evidence");
     assert.equal(postgresMigration?.name, "remote_worker_protected_admission_evidence");
-    assert.equal(POSTGRES_MIGRATIONS.at(-1)?.version, 136);
+    assert.equal(POSTGRES_MIGRATIONS.filter((migration) => migration.version === 136).length, 1);
   });
 
   it("keeps fresh SQLite and fresh/upgraded PostgreSQL table shapes exact", () => {

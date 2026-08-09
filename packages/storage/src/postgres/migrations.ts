@@ -5,6 +5,7 @@ import { GOVERNED_REMEDIATION_RECIPE_BINDING_POSTGRES_SQL } from "./governed-rem
 import { REMOTE_WORKER_PROTECTED_ADMISSION_EVIDENCE_POSTGRES_SQL } from "./remote-worker-protected-admission-evidence.js";
 import { REMOTE_WORKER_MESH_NODE_ADMISSION_POSTGRES_SQL } from "./remote-worker-mesh-node-admission.js";
 import { MOBILE_PUSH_POSTGRES_SCHEMA_SQL } from "./mobile-push-schema.js";
+import { buildPostgresV140CanonicalSchemaAuthoritySql } from "./v140-canonical-index-authority.js";
 
 export interface PostgresMigration {
   version: number;
@@ -14547,6 +14548,12 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         BEFORE UPDATE ON remote_worker_inference_requests
         FOR EACH ROW EXECUTE FUNCTION gc_remote_worker_inference_v2_authority_immutable_guard();
     `,
+  },
+  {
+    version: 140,
+    name: "canonical_postgres_schema_authority",
+    integritySha256: "9ee72c0e2879f3cbd2e32fc58d16692969691799537b910be9eea9255e038ca3",
+    sql: buildPostgresV140CanonicalSchemaAuthoritySql(),
   },
 ];
 

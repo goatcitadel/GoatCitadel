@@ -109,7 +109,7 @@ describe("remote worker mesh-node admission schema parity", () => {
       "remote_worker_protected_admission_evidence",
     );
     assert.equal(postgresMigration?.name, "remote_worker_mesh_node_admission_authority");
-    assert.equal(POSTGRES_MIGRATIONS.at(-1)?.version, 137);
+    assert.equal(POSTGRES_MIGRATIONS.filter((migration) => migration.version === 137).length, 1);
   });
 
   it("keeps SQLite and upgraded PostgreSQL authority-ledger columns exact", () => {

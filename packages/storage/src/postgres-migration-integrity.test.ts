@@ -780,6 +780,51 @@ describe("protected Postgres migration integrity", () => {
     assert.doesNotMatch(sql, /\b(?:INSERT\s+INTO|DELETE\s+FROM|TRUNCATE\s+TABLE)\b/iu);
   });
 
+  it("normalizes final index and procedural catalog authority at v140", () => {
+    const migration = POSTGRES_MIGRATIONS.find((candidate) => candidate.version === 140);
+    assert.equal(migration?.name, "canonical_postgres_schema_authority");
+    assert.equal(migration?.integritySha256, "9ee72c0e2879f3cbd2e32fc58d16692969691799537b910be9eea9255e038ca3");
+    const sql = migration?.sql ?? "";
+    assert.equal(sql.match(/DROP INDEX IF EXISTS/gu)?.length, 141);
+    assert.equal(sql.match(/CREATE (?:UNIQUE )?INDEX/gu)?.length, 141);
+    assert.match(
+      sql,
+      /CREATE INDEX "idx_audit_events_stream_time"\s+ON "audit_events" \("stream_name", "occurred_at" DESC, "event_sequence" DESC\)/u,
+    );
+    assert.match(
+      sql,
+      /CREATE INDEX "idx_tool_access_decisions_run_time"\s+ON "tool_access_decisions" \("run_id", "timestamp" DESC\)/u,
+    );
+    assert.match(
+      sql,
+      /CREATE INDEX "idx_approvals_status_expires_at"\s+ON "approvals" \("status", "expires_at_ts" ASC, "approval_id" ASC\)\s+WHERE expires_at_ts IS NOT NULL/u,
+    );
+    assert.match(sql, /found drifted imported-agent source constraint\/index/u);
+    assert.match(sql, /DROP CONSTRAINT "gc_v140_imported_agent_source_path"/u);
+    assert.match(sql, /DROP INDEX IF EXISTS "idx_imported_agent_catalog_source_path"/u);
+    assert.match(
+      sql,
+      /CREATE UNIQUE INDEX "idx_imported_agent_catalog_source_path"[\s\S]*COALESCE\("provenance_repo_url", ''\)/u,
+    );
+    assert.match(sql, /chat_routed_context_snapshots_schema_version_v2_check/u);
+    assert.match(sql, /assembly_runs_run_kind_check/u);
+    assert.match(sql, /assembly_runs_generation_check/u);
+    assert.match(sql, /model_usage_events_cap_retry_lineage_check/u);
+    assert.match(sql, /workspace_path_bridge_snapshots_input_flavor_posix_check/u);
+    assert.match(sql, /external_source_configs_target_flavor_posix_check/u);
+    assert.match(sql, /chat_turn_secure_configuration_reservations_reconciled_by_fkey/u);
+    assert.match(sql, /confdeltype IS DISTINCT FROM 'r'/u);
+    assert.match(sql, /LOCK TABLE %s IN ACCESS EXCLUSIVE MODE/u);
+    assert.match(sql, /indimmediate IS DISTINCT FROM TRUE/u);
+    assert.match(sql, /RI_ConstraintTrigger_%s_%s/u);
+    assert.match(sql, /gc_v140_probe_usage_cap_retry/u);
+    assert.doesNotMatch(sql, /to_regclass\('public\.|ALTER TABLE public\./u);
+    assert.doesNotMatch(
+      sql,
+      /\bIF\s+NOT\s+EXISTS\b|DROP\s+(?:TABLE|COLUMN)|TRUNCATE\s+TABLE|DELETE\s+FROM|UPDATE\s+\S+\s+SET\b/iu,
+    );
+  });
+
   it("keeps HX-505 migration 120 additive, immutable-profile, CAS-fenced, evidence-chained, and production-dark", () => {
     const migration = POSTGRES_MIGRATIONS.find((candidate) => candidate.version === 120);
     assert.equal(migration?.name, "remote_worker_cell_execution_owner");
