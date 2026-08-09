@@ -70,13 +70,13 @@ export const communicationsRoutes: FastifyPluginAsync = async (fastify) => {
   const service = createCommunicationsDashboardService({
     createApproval: (input) => fastify.services.approvals.createApproval(input),
     listIntegrationConnections: (kind, limit) => fastify.services.integrations.listIntegrationConnections(kind, limit),
-    commsGmailRead: (input) => {
-      const fixture = resolveCommunicationsVerificationFixture(fastify, input.connectionId);
-      return fixture ? Promise.resolve({ messages: fixture.messages }) : fastify.services.comms.commsGmailRead(input);
+    commsGmailRead: async (input) => {
+      const fixture = await resolveCommunicationsVerificationFixture(fastify, input.connectionId);
+      return fixture ? { messages: fixture.messages } : await fastify.services.comms.commsGmailRead(input);
     },
-    commsCalendarList: (input) => {
-      const fixture = resolveCommunicationsVerificationFixture(fastify, input.connectionId);
-      return fixture ? Promise.resolve({ items: fixture.events }) : fastify.services.comms.commsCalendarList(input);
+    commsCalendarList: async (input) => {
+      const fixture = await resolveCommunicationsVerificationFixture(fastify, input.connectionId);
+      return fixture ? { items: fixture.events } : await fastify.services.comms.commsCalendarList(input);
     },
   });
 
@@ -115,16 +115,18 @@ export const communicationsRoutes: FastifyPluginAsync = async (fastify) => {
 
 type CalendarEventDraftInput = Omit<CalendarEventRecord, "eventId" | "createdAt" | "updatedAt">;
 
-function resolveCommunicationsVerificationFixture(
+async function resolveCommunicationsVerificationFixture(
   fastify: FastifyInstance,
   connectionId: string,
-): CommunicationsVerificationFixture | undefined {
+): Promise<CommunicationsVerificationFixture | undefined> {
   if (fastify.services.devVerification?.isDevDiagnosticsEnabled?.() !== true) {
     return undefined;
   }
-  const connection = fastify.services.integrations
-    .listIntegrationConnections(undefined, 200)
-    .find((candidate: IntegrationConnection) => candidate.connectionId === connectionId);
+  const connections: IntegrationConnection[] = await fastify.services.integrations.listIntegrationConnections(
+    undefined,
+    200,
+  );
+  const connection = connections.find((candidate) => candidate.connectionId === connectionId);
   if (!isUncredentialedVerificationConnection(connection)) {
     return undefined;
   }

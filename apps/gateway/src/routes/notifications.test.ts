@@ -29,6 +29,7 @@ describe("notification routes", () => {
       },
     });
     expect(target.statusCode).toBe(201);
+    expect(target.json()).toEqual({ targetId: "target-1" });
     expect(integrations.createNotificationTarget).toHaveBeenCalledWith(
       "workspace-1",
       expect.objectContaining({ label: "Ops" }),
@@ -44,6 +45,7 @@ describe("notification routes", () => {
       },
     });
     expect(updated.statusCode).toBe(200);
+    expect(updated.json()).toEqual({ targetId: "target-1", revision: 2 });
     expect(integrations.updateNotificationTarget).toHaveBeenCalledWith(
       "workspace-1",
       "target-1",
@@ -96,6 +98,45 @@ describe("notification routes", () => {
     expect(integrations.listNotificationDeliveries).toHaveBeenCalledWith("workspace-1", 25);
   });
 
+  it("settles async list reads into real arrays instead of serialized promises", async () => {
+    const integrations = service();
+    integrations.listNotificationTargets.mockResolvedValue([{ targetId: "target-1" }] as never);
+    integrations.listNotificationRules.mockResolvedValue([{ ruleId: "rule-1" }] as never);
+    integrations.listNotificationDeliveries.mockResolvedValue([{ deliveryId: "delivery-1" }] as never);
+    app = Fastify();
+    app.decorate("services", { integrations } as never);
+    await app.register(notificationRoutes);
+
+    for (const [url, expected] of [
+      ["/api/v1/notifications/targets?workspaceId=workspace-1", { targetId: "target-1" }],
+      ["/api/v1/notifications/rules?workspaceId=workspace-1", { ruleId: "rule-1" }],
+      ["/api/v1/notifications/deliveries?workspaceId=workspace-1", { deliveryId: "delivery-1" }],
+    ] as const) {
+      const response = await app.inject({ method: "GET", url });
+      expect(response.statusCode).toBe(200);
+      // An unawaited handler serializes the pending promise to `{}`, which the
+      // Mission Control panels then crash on with "items.filter is not a function".
+      expect(Array.isArray(response.json().items)).toBe(true);
+      expect(response.json()).toEqual({ items: [expected] });
+    }
+  });
+
+  it("propagates async port rejections instead of answering 200 with an empty body", async () => {
+    const integrations = service();
+    integrations.listNotificationTargets.mockRejectedValue(
+      new Error("notificationRoutingV1Enabled is disabled") as never,
+    );
+    app = Fastify();
+    app.decorate("services", { integrations } as never);
+    await app.register(notificationRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/notifications/targets?workspaceId=workspace-1",
+    });
+    expect(response.statusCode).toBe(500);
+  });
+
   it("rejects raw target injection and unsupported events at the public boundary", async () => {
     app = Fastify();
     app.decorate("services", { integrations: service() } as never);
@@ -117,17 +158,21 @@ describe("notification routes", () => {
   });
 });
 
+// The composed integrations port is async (every method awaits a feature gate
+// before touching notification routing). Stubbing it synchronously hides
+// unawaited handlers: a Promise serializes to `{}`, so the route still answers
+// 200 while the body is empty and the feature gate's rejection is unhandled.
 function service() {
   return {
-    listNotificationTargets: vi.fn(() => []),
-    createNotificationTarget: vi.fn(() => ({ targetId: "target-1" })),
-    updateNotificationTarget: vi.fn(() => ({ targetId: "target-1", revision: 2 })),
+    listNotificationTargets: vi.fn(async () => []),
+    createNotificationTarget: vi.fn(async () => ({ targetId: "target-1" })),
+    updateNotificationTarget: vi.fn(async () => ({ targetId: "target-1", revision: 2 })),
     sendTestNotification: vi.fn(async () => ({ event: { eventId: "event-1" }, deliveries: [] })),
-    listNotificationRules: vi.fn(() => []),
-    createNotificationRule: vi.fn(() => ({ ruleId: "rule-1" })),
-    updateNotificationRule: vi.fn(() => ({ ruleId: "rule-1", revision: 2 })),
-    upsertNotificationPresence: vi.fn((input) => ({ ...input, leaseId: "lease-1" })),
-    listNotificationDeliveries: vi.fn(() => []),
+    listNotificationRules: vi.fn(async () => []),
+    createNotificationRule: vi.fn(async () => ({ ruleId: "rule-1" })),
+    updateNotificationRule: vi.fn(async () => ({ ruleId: "rule-1", revision: 2 })),
+    upsertNotificationPresence: vi.fn(async (input) => ({ ...input, leaseId: "lease-1" })),
+    listNotificationDeliveries: vi.fn(async () => []),
     requestNotification: vi.fn(async () => ({ event: { eventId: "event-1" }, deliveries: [] })),
   };
 }
