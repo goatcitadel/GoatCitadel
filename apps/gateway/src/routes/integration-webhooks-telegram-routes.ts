@@ -111,7 +111,7 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
               show_alert: true,
             };
           }
-          const approvalActionId = fastify.services.integrationWebhooks.findRemoteActionTokenId?.(approval.token);
+          const approvalActionId = await fastify.services.integrationWebhooks.findRemoteActionTokenId?.(approval.token);
           const callbackIdempotencyKey = deriveTelegramWebhookIdempotencyKey(connectionId, request.body, rawBody);
           const command = await dispatchInboundWebhookCommand(fastify.services.integrationWebhooks, {
             channel: "telegram",
@@ -181,7 +181,7 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
           : undefined;
         if (commandEligible && normalizedCommand?.handled && normalizedCommand.command && normalizedCommand.name) {
           const approvalActionId = normalizedCommand.approvalToken
-            ? fastify.services.integrationWebhooks.findRemoteActionTokenId?.(normalizedCommand.approvalToken)
+            ? await fastify.services.integrationWebhooks.findRemoteActionTokenId?.(normalizedCommand.approvalToken)
             : undefined;
           const approvalCommand =
             normalizedCommand.name === "approve" || normalizedCommand.name === "deny"
