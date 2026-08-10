@@ -16,13 +16,15 @@ export const catalogQuerySchema = z.object({
   kind: kindEnum.optional(),
 });
 
-export function resolveRoutePersonalityCatalog(services: unknown): PersonalityCatalogResponse {
+export async function resolveRoutePersonalityCatalog(services: unknown): Promise<PersonalityCatalogResponse> {
   const settings = (
     services as {
-      settings?: { getPersonalityCatalog?: () => PersonalityCatalogResponse };
+      settings?: { getPersonalityCatalog?: () => PersonalityCatalogResponse | Promise<PersonalityCatalogResponse> };
     }
   ).settings;
-  return settings?.getPersonalityCatalog?.() ?? { items: listPersonalityPresets(), defaultPersonalityId: "default" };
+  return (
+    (await settings?.getPersonalityCatalog?.()) ?? { items: listPersonalityPresets(), defaultPersonalityId: "default" }
+  );
 }
 
 export const connectionsQuerySchema = z.object({

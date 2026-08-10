@@ -268,7 +268,7 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply.send(
         projectPublicSecretValue(
-          fastify.services.comms.getIntegrationConnectionChannelCapabilities(params.data.connectionId),
+          await fastify.services.comms.getIntegrationConnectionChannelCapabilities(params.data.connectionId),
         ),
       );
     } catch (error) {
@@ -286,7 +286,7 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply.send(
         projectPublicSecretValue(
-          fastify.services.comms.getIntegrationConnectionChannelRuntimeStatus(params.data.connectionId),
+          await fastify.services.comms.getIntegrationConnectionChannelRuntimeStatus(params.data.connectionId),
         ),
       );
     } catch (error) {

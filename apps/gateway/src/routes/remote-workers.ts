@@ -331,7 +331,7 @@ export const remoteWorkersRoutes: FastifyPluginAsync = async (fastify) => {
     if (!service) return reply.code(503).send({ error: "Remote worker registry service is unavailable." });
     try {
       return reply.send(
-        service.listRegistry({
+        await service.listRegistry({
           workspaceId: params.data.workspaceId,
           ...(query.data.limit === undefined ? {} : { limit: query.data.limit }),
           ...(query.data.cursor === undefined ? {} : { cursor: query.data.cursor }),
@@ -351,7 +351,7 @@ export const remoteWorkersRoutes: FastifyPluginAsync = async (fastify) => {
     if (!service) return reply.code(503).send({ error: "Remote worker registry service is unavailable." });
     try {
       return reply.send(
-        service.getRegistryEntry({
+        await service.getRegistryEntry({
           workspaceId: params.data.workspaceId,
           workerId: params.data.workerId,
         }),
@@ -373,7 +373,7 @@ export const remoteWorkersRoutes: FastifyPluginAsync = async (fastify) => {
       if (!service) return reply.code(503).send({ error: "Remote worker registry service is unavailable." });
       try {
         return reply.send(
-          service.getReconciliation({
+          await service.getReconciliation({
             workspaceId: params.data.workspaceId,
             workerId: params.data.workerId,
           }),
@@ -393,7 +393,7 @@ export const remoteWorkersRoutes: FastifyPluginAsync = async (fastify) => {
     if (!service) return reply.code(503).send({ error: "Remote worker registry service is unavailable." });
     try {
       return reply.send(
-        service.listAssignments({
+        await service.listAssignments({
           workspaceId: params.data.workspaceId,
           ...(query.data.workerId === undefined ? {} : { workerId: query.data.workerId }),
           ...(query.data.sessionId === undefined ? {} : { sessionId: query.data.sessionId }),
@@ -419,7 +419,7 @@ export const remoteWorkersRoutes: FastifyPluginAsync = async (fastify) => {
       if (!service) return reply.code(503).send({ error: "Remote worker registry service is unavailable." });
       try {
         return reply.send(
-          service.getAssignmentEvents({
+          await service.getAssignmentEvents({
             workspaceId: params.data.workspaceId,
             assignmentId: params.data.assignmentId,
             ...(query.data.afterSequence === undefined ? {} : { afterSequence: query.data.afterSequence }),

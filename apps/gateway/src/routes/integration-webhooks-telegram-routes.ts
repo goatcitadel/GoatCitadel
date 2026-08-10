@@ -95,7 +95,7 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
             : { authorized: false };
           if (!auth.authorized) {
             if (auth.configPatch) {
-              fastify.services.integrationWebhooks.updateIntegrationConnection(connectionId, {
+              await fastify.services.integrationWebhooks.updateIntegrationConnection(connectionId, {
                 config: {
                   ...connection.config,
                   ...auth.configPatch,
@@ -158,7 +158,7 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
           });
           if (!auth.authorized) {
             if (auth.configPatch) {
-              fastify.services.integrationWebhooks.updateIntegrationConnection(connectionId, {
+              await fastify.services.integrationWebhooks.updateIntegrationConnection(connectionId, {
                 config: {
                   ...connection.config,
                   ...auth.configPatch,
@@ -244,7 +244,11 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
           responseOptions: {
             deliveryReplyToMessageId: parsed.deliveryReplyToMessageId,
             channelSystemInstruction: target
-              ? buildChannelPersonalitySystemOverlay(connection.config, target, resolveRoutePersonalityCatalog(fastify))
+              ? buildChannelPersonalitySystemOverlay(
+                  connection.config,
+                  target,
+                  await resolveRoutePersonalityCatalog(fastify),
+                )
               : undefined,
           },
         };
@@ -271,13 +275,15 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
   );
 }
 
-function resolveRoutePersonalityCatalog(fastify: FastifyInstance): PersonalityCatalogResponse {
+async function resolveRoutePersonalityCatalog(fastify: FastifyInstance): Promise<PersonalityCatalogResponse> {
   const settings = (
     fastify.services as {
-      settings?: { getPersonalityCatalog?: () => PersonalityCatalogResponse };
+      settings?: { getPersonalityCatalog?: () => PersonalityCatalogResponse | Promise<PersonalityCatalogResponse> };
     }
   ).settings;
-  return settings?.getPersonalityCatalog?.() ?? { items: listPersonalityPresets(), defaultPersonalityId: "default" };
+  return (
+    (await settings?.getPersonalityCatalog?.()) ?? { items: listPersonalityPresets(), defaultPersonalityId: "default" }
+  );
 }
 
 function readTelegramMetadataString(metadata: Record<string, unknown>, key: string): string | undefined {

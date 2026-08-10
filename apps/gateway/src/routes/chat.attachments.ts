@@ -59,7 +59,7 @@ export function registerChatAttachmentRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.chatAttachments.getChatAttachment(params.data.attachmentId));
+      return reply.send(await fastify.services.chatAttachments.getChatAttachment(params.data.attachmentId));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }

@@ -683,7 +683,7 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      const detail = fastify.services.chatMessages.getTurnContextManifestForSession(
+      const detail = await fastify.services.chatMessages.getTurnContextManifestForSession(
         params.data.sessionId,
         params.data.turnId,
       );

@@ -118,7 +118,7 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send({
-      items: improvement.listCapabilityGapEvents(parsed.data.limit),
+      items: await improvement.listCapabilityGapEvents(parsed.data.limit),
     });
   });
 
@@ -128,7 +128,7 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send({
-      items: improvement.listRepairCandidates(parsed.data.limit),
+      items: await improvement.listRepairCandidates(parsed.data.limit),
     });
   });
 
@@ -156,7 +156,7 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send({
-      items: improvement.listImprovementSignals(parsed.data.limit, parsed.data.workspaceId),
+      items: await improvement.listImprovementSignals(parsed.data.limit, parsed.data.workspaceId),
     });
   });
 
@@ -178,7 +178,7 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send({
-      items: improvement.listImprovementCandidates(parsed.data.limit, parsed.data.workspaceId),
+      items: await improvement.listImprovementCandidates(parsed.data.limit, parsed.data.workspaceId),
     });
   });
 
@@ -334,7 +334,7 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send({
-      items: improvement.listImprovementReports(parsed.data.limit),
+      items: await improvement.listImprovementReports(parsed.data.limit),
     });
   });
 
@@ -372,7 +372,7 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send({
-      items: improvement.listDecisionReplayRuns(parsed.data.limit),
+      items: await improvement.listDecisionReplayRuns(parsed.data.limit),
     });
   });
 

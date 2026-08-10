@@ -144,7 +144,7 @@ export const voiceRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send({
-      items: fastify.services.voice.listVoiceTalkSessions(parsed.data.limit),
+      items: await fastify.services.voice.listVoiceTalkSessions(parsed.data.limit),
     });
   });
 
@@ -169,7 +169,7 @@ export const voiceRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.post("/api/v1/voice/wake/stop", async (_request, reply) => {
-    return reply.send(fastify.services.voice.stopVoiceWake());
+    return reply.send(await fastify.services.voice.stopVoiceWake());
   });
 
   fastify.get("/api/v1/voice/google-meet/sessions", async (request, reply) => {
@@ -178,7 +178,7 @@ export const voiceRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send({
-      items: fastify.services.voice.listGoogleMeetSessions(parsed.data.limit),
+      items: await fastify.services.voice.listGoogleMeetSessions(parsed.data.limit),
     });
   });
 

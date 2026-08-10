@@ -71,7 +71,7 @@ export const toolsInvokeRoute: FastifyPluginAsync = async (fastify) => {
       });
     }
 
-    if (fastify.services.toolsInvoke.isFeatureEnabled("computerUseGuardrailsV1Enabled")) {
+    if (await fastify.services.toolsInvoke.isFeatureEnabled("computerUseGuardrailsV1Enabled")) {
       const safety = evaluateComputerUseSafety(requestInput.toolName, requestInput.args);
       if (safety.requiresVerification && !safety.verified) {
         return reply.code(409).send({
@@ -98,7 +98,7 @@ export const toolsInvokeRoute: FastifyPluginAsync = async (fastify) => {
 
     let policyContext;
     try {
-      policyContext = fastify.services.tools.resolveToolPolicyContext({
+      policyContext = await fastify.services.tools.resolveToolPolicyContext({
         operatorId: request.authActorId,
         authActorId: request.authActorId,
         authActorSource: request.authActorSource,
