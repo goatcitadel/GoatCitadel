@@ -5342,7 +5342,12 @@ function selectRepresentativeManifestRoute(manifestItems, accessClass) {
     // (.../control/events/stream) that the generic JSON probe cannot exercise.
     "operator-or-session-control-companion": [{ method: "GET", url: "/api/v1/chat/sessions/:sessionId/messages" }],
     webhook: [],
-    loopback: [],
+    // The only loopback-class route is workspace-parameterized, which the
+    // generic fallbacks below skip, so it is pinned here and the probe
+    // substitutes the seeded workspace id (like :sessionId). The verification
+    // stack disables the loopback bypass, so the default all-deny expectations
+    // prove the route stays closed to every ordinary principal.
+    loopback: [{ method: "POST", url: "/api/v1/ops/workspaces/:workspaceId/remote-workers/bootstrap" }],
   };
 
   const preferred = preferredRoutes[accessClass] ?? [];
@@ -5474,6 +5479,9 @@ async function probeAuthMatrixRoute(gatewayUrl, representative, credentials) {
   if (url.includes(":sessionId") && credentials.seededSessionId) {
     url = url.replace(":sessionId", encodeURIComponent(credentials.seededSessionId));
   }
+  if (url.includes(":workspaceId") && credentials.seededWorkspaceId) {
+    url = url.replace(":workspaceId", encodeURIComponent(credentials.seededWorkspaceId));
+  }
 
   switch (credentials.caller) {
     case "operator":
@@ -5513,6 +5521,10 @@ async function probeAuthMatrixRoute(gatewayUrl, representative, credentials) {
       deviceType: "desktop",
       platform: "verification",
     };
+  } else if (representative.url === "/api/v1/ops/workspaces/:workspaceId/remote-workers/bootstrap") {
+    // Minimal JSON body so the POST clears content-type parsing and every
+    // denial in the matrix comes from the auth layer, not an empty-body 400.
+    body = {};
   }
 
   if (credentials.caller === "companion") {
