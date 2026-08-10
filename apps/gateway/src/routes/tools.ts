@@ -282,14 +282,13 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
       request.query && typeof request.query === "object"
         ? readQueryString((request.query as Record<string, unknown>).workspaceId)
         : undefined;
-    const items = fastify.services.tools
-      .listPermissionProfiles(includeArchived)
-      .filter((profile: PermissionProfileRecord) =>
+    const items = (await fastify.services.tools.listPermissionProfiles(includeArchived)).filter(
+      (profile: PermissionProfileRecord) =>
         isPermissionProfileVisibleToActor(profile, {
           actorId: request.authActorId,
           workspaceId,
         }),
-      );
+    );
     return reply.send({ items });
   });
 
@@ -377,9 +376,9 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
         });
       }
       try {
-        const existingProfile = fastify.services.tools
-          .listPermissionProfiles(true)
-          .find((profile: PermissionProfileRecord) => profile.profileId === params.data.profileId);
+        const existingProfile = (await fastify.services.tools.listPermissionProfiles(true)).find(
+          (profile: PermissionProfileRecord) => profile.profileId === params.data.profileId,
+        );
         if (!existingProfile) {
           return reply.code(404).send({ error: `Permission profile ${params.data.profileId} not found` });
         }
@@ -412,9 +411,9 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(400).send({ error: params.error.flatten() });
       }
       try {
-        const existingProfile = fastify.services.tools
-          .listPermissionProfiles(true)
-          .find((profile: PermissionProfileRecord) => profile.profileId === params.data.profileId);
+        const existingProfile = (await fastify.services.tools.listPermissionProfiles(true)).find(
+          (profile: PermissionProfileRecord) => profile.profileId === params.data.profileId,
+        );
         if (!existingProfile) {
           return reply.code(404).send({ error: `Permission profile ${params.data.profileId} not found` });
         }
@@ -450,9 +449,9 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(400).send({ error: parsed.error.flatten() });
       }
       try {
-        const profile = fastify.services.tools
-          .listPermissionProfiles(true)
-          .find((item: PermissionProfileRecord) => item.profileId === parsed.data.profileId);
+        const profile = (await fastify.services.tools.listPermissionProfiles(true)).find(
+          (item: PermissionProfileRecord) => item.profileId === parsed.data.profileId,
+        );
         if (!profile) {
           return reply.code(404).send({ error: `Permission profile ${parsed.data.profileId} not found` });
         }
