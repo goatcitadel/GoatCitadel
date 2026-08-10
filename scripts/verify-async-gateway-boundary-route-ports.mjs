@@ -620,7 +620,9 @@ export function buildRouteServicePortMap({ program, checker, repoRoot }) {
   if (unresolved.length > 0) {
     throw new Error(
       `Route-service async map could not classify ${unresolved.sort().join(", ")}: no port builder ` +
-        "object literal with checker-visible member signatures was found in apps/gateway/src. Teach " +
+        "object literal with checker-visible member signatures was found in apps/gateway/src. If the list " +
+        "is large, workspace package types are probably unresolved — run `pnpm install` and " +
+        "`pnpm exec tsc -b apps/gateway` first. Otherwise teach " +
         "scripts/verify-async-gateway-boundary-route-ports.mjs the new builder shape or route the port " +
         "through a builder the scanner can see.",
     );
