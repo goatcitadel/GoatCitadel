@@ -33,9 +33,13 @@ describe("improvement operator proof", () => {
     const priorDisableSecretStore = process.env.GOATCITADEL_DISABLE_SECRET_STORE;
     const priorImprovementLedgerFlag = process.env.GOATCITADEL_FEATURE_IMPROVEMENT_LEDGER_V1_ENABLED;
     const priorImprovementActivationFlag = process.env.GOATCITADEL_FEATURE_IMPROVEMENT_ACTIVATION_V1_ENABLED;
+    const priorGatewayHost = process.env.GATEWAY_HOST;
 
     process.env.GOATCITADEL_ROOT_DIR = tempRoot;
     process.env.GOATCITADEL_AUTH_MODE = "none";
+    // auth.mode=none is only safe on a loopback bind; an operator .env with a
+    // non-loopback GATEWAY_HOST must not leak into this hermetic boot.
+    process.env.GATEWAY_HOST = "127.0.0.1";
     process.env.GOATCITADEL_DATABASE_DRIVER = "sqlite";
     process.env.GOATCITADEL_DISABLE_SECRET_STORE = "true";
     process.env.GOATCITADEL_FEATURE_IMPROVEMENT_LEDGER_V1_ENABLED = "true";
@@ -146,6 +150,11 @@ describe("improvement operator proof", () => {
         delete process.env.GOATCITADEL_FEATURE_IMPROVEMENT_LEDGER_V1_ENABLED;
       } else {
         process.env.GOATCITADEL_FEATURE_IMPROVEMENT_LEDGER_V1_ENABLED = priorImprovementLedgerFlag;
+      }
+      if (priorGatewayHost === undefined) {
+        delete process.env.GATEWAY_HOST;
+      } else {
+        process.env.GATEWAY_HOST = priorGatewayHost;
       }
       if (priorImprovementActivationFlag === undefined) {
         delete process.env.GOATCITADEL_FEATURE_IMPROVEMENT_ACTIVATION_V1_ENABLED;
