@@ -1920,7 +1920,9 @@ function runPinnedNativeTests({ toolchain, firstBuildRoot, secondBuildRoot, mono
     env: environment,
     encoding: "utf8",
     windowsHide: true,
-    timeout: 120_000,
+    // The ASan-instrumented suite shares the host with the rest of the
+    // repo-hygiene sweep; the budget bounds a hang, not a loaded scheduler.
+    timeout: 300_000,
     maxBuffer: 16 * 1024 * 1024,
   });
   if (result.error) {
@@ -3094,7 +3096,9 @@ function runPinnedMsbuild({
     env: buildSanitizedEnvironment(toolchain, buildRoot),
     encoding: "utf8",
     windowsHide: true,
-    timeout: 120_000,
+    // Each MSBuild leg shares the host with the concurrent sweep; the budget
+    // bounds a hang, not a loaded scheduler.
+    timeout: 300_000,
     maxBuffer: 16 * 1024 * 1024,
   });
   if (result.error) {

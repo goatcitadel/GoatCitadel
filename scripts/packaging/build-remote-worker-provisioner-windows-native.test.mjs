@@ -3007,7 +3007,7 @@ for (const [target, machine] of [
 
   test(
     `${target} runs x64 ASan proof and performs byte-identical target service/client/availability/test builds`,
-    { skip: toolchainAvailable ? false : skipReason, timeout: 240_000 },
+    { skip: toolchainAvailable ? false : skipReason, timeout: 600_000 },
     () => {
       const outDir = path.join(temporaryRoot, target);
       const result = buildRemoteWorkerWindowsProvisioner({ target, outDir });

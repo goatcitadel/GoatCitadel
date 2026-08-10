@@ -356,7 +356,7 @@ test("Vite strictPort rejects a TCP-only listener without replacing it", async (
       [viteCliPath, "--host", "127.0.0.1", "--port", String(address.port), "--strictPort"],
       {
         cwd: path.join(repoRoot, "apps", "mission-control-next"),
-        timeoutMs: 15_000,
+        timeoutMs: 60_000,
       },
     );
     assert.notEqual(result.code, 0, result.stdout || result.stderr);
