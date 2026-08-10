@@ -11,6 +11,15 @@ vi.mock("node:sqlite", () => ({
   StatementSync: class StatementSync {},
 }));
 
+// The stub verifier accepts any signature triple unless the signed path
+// carries a query string (mirroring the real canonicalization), so a static
+// header set is enough for every signed-companion inject in this file.
+const COMPANION_SIGNATURE_HEADERS = {
+  "x-goatcitadel-companion-timestamp": "2026-03-30T12:00:00.000Z",
+  "x-goatcitadel-companion-nonce": "nonce-123456",
+  "x-goatcitadel-companion-signature": "ZmFrZV9zaWduYXR1cmU",
+} as const;
+
 function defaultAuthConfig(): AuthConfig {
   return {
     mode: "token",
@@ -750,7 +759,7 @@ describe("auth plugin", () => {
     const genericCompanion = await app.inject({
       method: "GET",
       url: "/protected",
-      headers: { Authorization: "Bearer companion-bearer" },
+      headers: { Authorization: "Bearer companion-bearer", ...COMPANION_SIGNATURE_HEADERS },
     });
     expect(genericCompanion.json()).toMatchObject({
       actorSource: "companion",
@@ -760,7 +769,7 @@ describe("auth plugin", () => {
     const controlCompanion = await app.inject({
       method: "GET",
       url: "/protected",
-      headers: { Authorization: "Bearer companion-control-bearer" },
+      headers: { Authorization: "Bearer companion-control-bearer", ...COMPANION_SIGNATURE_HEADERS },
     });
     expect(controlCompanion.json()).toMatchObject({
       actorSource: "companion",
@@ -849,7 +858,7 @@ describe("auth plugin", () => {
     expect(verifyReplayPersistence).toHaveBeenCalled();
   });
 
-  it("accepts companion bearer tokens for read requests", async () => {
+  it("accepts signed companion bearer tokens for read requests", async () => {
     app = await buildApp({
       mode: "basic",
       basic: { username: "goat", password: "citadel" },
@@ -860,6 +869,7 @@ describe("auth plugin", () => {
       url: "/protected",
       headers: {
         Authorization: "Bearer companion-bearer",
+        ...COMPANION_SIGNATURE_HEADERS,
       },
     });
 
@@ -870,7 +880,55 @@ describe("auth plugin", () => {
     });
   });
 
-  it("accepts approved companion bearer tokens on event stream reads", async () => {
+  it("rejects unsigned companion read requests", async () => {
+    // M8 custody fail-open regression: a companion bearer presented WITHOUT the
+    // device-key request-signature headers must not read anything — token
+    // possession alone is not full companion authentication.
+    app = await buildApp({
+      mode: "token",
+      token: { value: "alpha-token", queryParam: "access_token" },
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/protected",
+      headers: {
+        Authorization: "Bearer companion-bearer",
+      },
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toMatchObject({
+      error: "Missing companion request signature headers.",
+    });
+  });
+
+  it("verifies signed companion reads over the pathname so query strings stay usable", async () => {
+    // The verifier's canonicalization rejects any `?` in the signed path, so
+    // read signatures cover the pathname only; the stub verifier throws when
+    // the plugin forwards a query-bearing path, which would fail this request.
+    app = await buildApp({
+      mode: "token",
+      token: { value: "alpha-token", queryParam: "access_token" },
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/protected?status=pending&limit=20",
+      headers: {
+        Authorization: "Bearer companion-bearer",
+        ...COMPANION_SIGNATURE_HEADERS,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      actorSource: "companion",
+      actorId: "companion:test-session",
+    });
+  });
+
+  it("accepts signed companion bearer tokens on event stream reads", async () => {
     app = await buildApp({
       mode: "token",
       token: { value: "alpha-token", queryParam: "access_token" },
@@ -881,6 +939,7 @@ describe("auth plugin", () => {
       url: "/api/v1/events/stream",
       headers: {
         Authorization: "Bearer companion-bearer",
+        ...COMPANION_SIGNATURE_HEADERS,
       },
     });
 

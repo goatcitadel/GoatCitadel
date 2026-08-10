@@ -10,7 +10,7 @@ import { buildCompanionSigningPayload } from "./companion-auth-helpers.js";
  * HX-411 governed CLI runtime helpers. These own the security-sensitive local
  * pieces the thin command layer composes: local control-secret generation and
  * hashing, the at-rest secret store, and the companion signer that turns the
- * injected device credential into signed-mutation headers by reusing the exact
+ * injected device credential into signed-request headers by reusing the exact
  * `buildCompanionSigningPayload` the Gateway verifies against.
  *
  * The plaintext control secret only ever exists here in-process and in the
@@ -82,10 +82,15 @@ export function createIdempotencyKey(label: string, randomBytes: (size: number) 
 
 /**
  * Build the injected authorizer for the shared client. It always attaches the
- * companion bearer; for signed mutations it adds timestamp/nonce/signature by
+ * companion bearer and adds timestamp/nonce/signature for EVERY request by
  * signing the canonical `buildCompanionSigningPayload` string with the companion
- * Ed25519 private key. The control secret is never part of the signed payload —
- * the shared client adds it separately to the frozen token header.
+ * Ed25519 private key — the Gateway requires the device-key request signature on
+ * reads too (a stolen companion bearer alone must not read anything). Reads are
+ * signed over the pathname: the shared client passes the pathname as `path` and
+ * carries any query string separately, matching the Gateway's read-side
+ * canonicalization which strips the query before verification. The control
+ * secret is never part of the signed payload — the shared client adds it
+ * separately to the frozen token header.
  */
 export function createCompanionControlAuthorize(deps: {
   companion: CompanionControlCredential;
@@ -94,19 +99,16 @@ export function createCompanionControlAuthorize(deps: {
 }): SessionControlAuthorize {
   const privateKey = createPrivateKey(deps.companion.signingPrivateKeyPem);
   return ({ method, path: requestPath, body }) => {
-    const headers: Record<string, string> = {
+    const timestamp = new Date(deps.now()).toISOString();
+    const nonce = deps.randomBytes(18).toString("base64url");
+    const payload = buildCompanionSigningPayload({ method, path: requestPath, timestamp, nonce, body });
+    const signature = nodeSign(null, Buffer.from(payload, "utf8"), privateKey).toString("base64url");
+    return {
       Authorization: `Bearer ${deps.companion.accessToken}`,
+      "x-goatcitadel-companion-timestamp": timestamp,
+      "x-goatcitadel-companion-nonce": nonce,
+      "x-goatcitadel-companion-signature": signature,
     };
-    if (method.toUpperCase() !== "GET") {
-      const timestamp = new Date(deps.now()).toISOString();
-      const nonce = deps.randomBytes(18).toString("base64url");
-      const payload = buildCompanionSigningPayload({ method, path: requestPath, timestamp, nonce, body });
-      const signature = nodeSign(null, Buffer.from(payload, "utf8"), privateKey).toString("base64url");
-      headers["x-goatcitadel-companion-timestamp"] = timestamp;
-      headers["x-goatcitadel-companion-nonce"] = nonce;
-      headers["x-goatcitadel-companion-signature"] = signature;
-    }
-    return headers;
   };
 }
 

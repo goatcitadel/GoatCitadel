@@ -17,6 +17,7 @@ import {
   RemoteWorkerRegistryInputError,
 } from "../services/remote-workers-route-service.js";
 import { remoteWorkersRoutes } from "./remote-workers.js";
+import { installRouteAccessTracking } from "./route-access.js";
 
 const PAGE = {
   schemaVersion: "goatcitadel.remote-worker-registry-page.v1",
@@ -811,6 +812,11 @@ async function buildAuthenticatedHarness(
       max: 500,
     });
   }
+  // Mirror the production composition seam (app.ts): route-access tracking's
+  // global preHandler runs BEFORE authPlugin's companion request-signature
+  // preHandler, so the unsigned-companion probe is denied by route access
+  // (403) exactly like the real Gateway.
+  installRouteAccessTracking(instance);
   await instance.register(authPlugin);
   instance.addHook("onRequest", async (request) => {
     const peerId = request.headers["x-test-a2a-peer"];

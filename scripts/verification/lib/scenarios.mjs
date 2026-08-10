@@ -2058,6 +2058,12 @@ export async function runOperatorProofLane(context, _options = {}) {
           {
             actor: "companion",
             route: "/api/v1/approvals?status=pending&limit=20",
+            // Companion custody requires the device-key request signature on
+            // reads too. This route admits general companions at the
+            // route-access layer, so the bare bearer is rejected by the
+            // signature layer with the Gateway's established missing-signature
+            // denial code (401), not the route-access 403.
+            expectedStatus: 401,
             response: await requestJson(authStack.gatewayUrl, "/api/v1/approvals?status=pending&limit=20", {
               headers: {
                 Authorization: `Bearer ${companionToken}`,
@@ -2147,12 +2153,19 @@ export async function runOperatorProofLane(context, _options = {}) {
         ];
 
         for (const denied of deniedChecks) {
-          if (denied.response.status !== 403) {
+          // Route-access denials are 403; the companion missing-signature
+          // denial is 401 (the request is not fully authenticated without the
+          // device-key second factor). Both prove the credential cannot reach
+          // the route.
+          const expectedStatus = denied.expectedStatus ?? 403;
+          if (denied.response.status !== expectedStatus) {
             throw new Error(
-              `${denied.actor} credential unexpectedly reached ${denied.route}: ${JSON.stringify({
-                status: denied.response.status,
-                body: denied.response.body,
-              })}`,
+              `${denied.actor} credential unexpectedly reached ${denied.route} (expected ${expectedStatus}): ${JSON.stringify(
+                {
+                  status: denied.response.status,
+                  body: denied.response.body,
+                },
+              )}`,
             );
           }
         }
@@ -2264,6 +2277,10 @@ export function projectOperatorAuthBoundaryEvidence(input) {
     deniedChecks: input.deniedChecks.map((entry) => ({
       actor: entry.actor,
       route: entry.route,
+      // Route-access denials expect 403; the companion missing-signature
+      // denial expects 401 (bearer possession alone is not full companion
+      // authentication).
+      expectedStatus: entry.expectedStatus ?? 403,
       status: entry.response.status,
       error: typeof entry.response.body?.error === "string" ? entry.response.body.error : undefined,
       code: typeof entry.response.body?.code === "string" ? entry.response.body.code : undefined,
@@ -4511,9 +4528,17 @@ function isOnboardingReconciliationConflict(response) {
   );
 }
 
-function buildCompanionSignedHeaders({ token, privateKey, path, nonce, body, timestamp = new Date().toISOString() }) {
+function buildCompanionSignedHeaders({
+  token,
+  privateKey,
+  path,
+  nonce,
+  body,
+  timestamp = new Date().toISOString(),
+  method = "POST",
+}) {
   const payload = buildCompanionVerificationPayload({
-    method: "POST",
+    method,
     path,
     timestamp,
     nonce,
@@ -5488,6 +5513,24 @@ async function probeAuthMatrixRoute(gatewayUrl, representative, credentials) {
       deviceType: "desktop",
       platform: "verification",
     };
+  }
+
+  if (credentials.caller === "companion") {
+    // Companion custody requires the device-key request signature on every
+    // authenticated call, reads included — a bare companion bearer is denied
+    // by the signature layer even on companion-readable routes. Reads are
+    // signed over the pathname (the Gateway strips the query string from read
+    // paths before verifying), which is exactly what `url` is here: the
+    // events/stream query is appended below and stays outside the signed
+    // material.
+    headers = buildCompanionSignedHeaders({
+      token: credentials.companionToken,
+      privateKey: credentials.companionPrivateKey,
+      method,
+      path: url,
+      nonce: `auth-matrix-${randomUUID()}`,
+      body,
+    });
   }
 
   if (representative.url === "/api/v1/events/stream") {
