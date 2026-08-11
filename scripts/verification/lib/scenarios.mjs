@@ -915,12 +915,42 @@ export async function runDeepCoreLane(context, _options = {}) {
 
     await runGatewayApiSurfaceScenarios(context, stack.gatewayUrl, seedResponse.body);
 
+    if (verificationTarget.isNext) {
+      // The Mission Control Next projects route (release-surface manifest) waits
+      // for an auto-selected `.mc-next-project-card.is-selected`. The generic
+      // verification seed creates a workspace and sessions but no project, so the
+      // raw `/projects` overview would render its empty state and never select a
+      // card. Seed one project here (mirroring seedMissionControlNextFixture) so
+      // the overview auto-selects the first card during core navigation.
+      const coreProjectResponse = await requestJson(stack.gatewayUrl, "/api/v1/chat/projects", {
+        method: "POST",
+        body: {
+          workspaceId: seedResponse.body.workspaceId,
+          name: "Verification Core Project",
+          description: "Deterministic project so the projects overview auto-selects a card.",
+          workspacePath: "verification/core-project",
+          color: "#20b8a6",
+        },
+      });
+      if (!coreProjectResponse.ok) {
+        throw new Error(`verification core project seed failed: ${JSON.stringify(coreProjectResponse.body)}`);
+      }
+    }
+
     const browser = await chromium.launch({ headless: true });
     try {
       const browserContext = await browser.newContext({
         viewport: { width: 1440, height: 1024 },
         colorScheme: "dark",
       });
+      if (verificationTarget.isNext) {
+        // Point core navigation at the seeded workspace (which now owns the
+        // project seeded above) instead of the empty default workspace, so
+        // `/projects` resolves the seeded project and auto-selects its card. The
+        // citadel/mode/detail values this writes already match the app defaults,
+        // so only the active workspace changes for the navigation sweep.
+        await installMissionControlNextBrowserState(browserContext, seedResponse.body.workspaceId);
+      }
       const page = await browserContext.newPage();
       const browserLog = attachBrowserLogging(page);
 
