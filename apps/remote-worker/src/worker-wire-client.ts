@@ -58,9 +58,19 @@ export interface WorkerWireRequest {
    * the channel (the admission evidence envelope) can commit to this exact
    * connection's exporter.
    */
-  readonly buildBody: (channel: { readonly tlsExporterSha256: string }) => Readonly<Record<string, unknown>>;
+  readonly buildBody: (channel: {
+    readonly tlsExporterSha256: string;
+    readonly nonce: string;
+    readonly timestamp: string;
+  }) => Readonly<Record<string, unknown>>;
   /** Returns the base64url Ed25519 proof over the channel-bound preimage. */
   readonly sign: (material: WorkerRequestSigningMaterial) => string;
+  /**
+   * Additional transport headers the route requires (route 7 carries the raw
+   * mesh join credential out of band so it never enters the signed body). Names
+   * must already be lowercase and must be on the listener's allowlist.
+   */
+  readonly extraHeaders?: Readonly<Record<string, string>>;
   readonly nonce?: string;
   readonly timestamp?: string;
 }
@@ -144,10 +154,13 @@ export class WorkerWireClient {
         try {
           exporter = socket.exportKeyingMaterial(WORKER_TLS_EXPORTER_BYTES, WORKER_TLS_EXPORTER_LABEL, Buffer.alloc(0));
           const tlsExporterSha256 = sha256(exporter);
-          const encodedBody = Buffer.from(canonicalJsonString(request.buildBody({ tlsExporterSha256 })), "utf8");
-          const bodySha256 = sha256(encodedBody);
           const timestamp = request.timestamp ?? new Date().toISOString();
           const nonce = request.nonce ?? randomNonce();
+          const encodedBody = Buffer.from(
+            canonicalJsonString(request.buildBody({ tlsExporterSha256, nonce, timestamp })),
+            "utf8",
+          );
+          const bodySha256 = sha256(encodedBody);
           const proof = request.sign({
             rawPath: request.rawPath,
             operation: request.operation,
@@ -170,6 +183,7 @@ export class WorkerWireClient {
                   nonce,
                   operation: request.operation,
                   proof,
+                  extraHeaders: request.extraHeaders ?? {},
                 }),
                 "ascii",
               ),
@@ -196,6 +210,7 @@ function requestHead(input: {
   readonly nonce: string;
   readonly operation: string;
   readonly proof: string;
+  readonly extraHeaders: Readonly<Record<string, string>>;
 }): string {
   return [
     `POST ${input.rawPath} HTTP/1.1`,
@@ -209,6 +224,7 @@ function requestHead(input: {
     `${WORKER_PROTOCOL_HEADERS.nonce}: ${input.nonce}`,
     `${WORKER_PROTOCOL_HEADERS.operation}: ${input.operation}`,
     `${WORKER_PROTOCOL_HEADERS.proof}: ${input.proof}`,
+    ...Object.entries(input.extraHeaders).map(([name, value]) => `${name}: ${value}`),
     "",
     "",
   ].join("\r\n");

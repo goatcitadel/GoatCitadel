@@ -317,7 +317,11 @@ function snapshotOutcome(
     admission.mtlsRequired !== true ||
     admission.tlsFingerprint !== command.clientCertificateSha256 ||
     admission.provenance !== "remote_worker" ||
-    admission.admittedByActorId !== `remote-worker:${authority.workerId}:${authority.workerGeneration}` ||
+    // The canonical storage owner records `remote-worker:<workerId>` and nothing
+    // else; the generation is already fenced by the binding comparisons below.
+    // Expecting a generation segment here made every real route-7 admission
+    // fail this postcondition AFTER its effect had committed.
+    admission.admittedByActorId !== `remote-worker:${authority.workerId}` ||
     admission.idempotencyKey !== command.idempotencyKey ||
     binding.workspaceId !== admission.workspaceId ||
     binding.nodeId !== admission.nodeId ||

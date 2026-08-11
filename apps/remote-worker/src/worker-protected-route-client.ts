@@ -31,6 +31,8 @@ export interface ProtectedRouteCall {
   readonly payload: Readonly<Record<string, unknown>>;
   /** Statuses accepted without throwing; defaults to 200 only. */
   readonly acceptStatuses?: readonly number[];
+  /** Route-specific transport headers (route 7's out-of-band join credential). */
+  readonly extraHeaders?: Readonly<Record<string, string>>;
 }
 
 export async function callProtectedRoute(call: ProtectedRouteCall): Promise<WorkerWireResponse> {
@@ -49,6 +51,7 @@ export async function callProtectedRoute(call: ProtectedRouteCall): Promise<Work
     operation: call.operation,
     authorization: `Bearer ${call.credential.authorizationCredential}`,
     idempotencyKey: call.idempotencyKey,
+    ...(call.extraHeaders === undefined ? {} : { extraHeaders: call.extraHeaders }),
     buildBody: () => body,
     sign: (material) =>
       signWorkerCredentialPop({

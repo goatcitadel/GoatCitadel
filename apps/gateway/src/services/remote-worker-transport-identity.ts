@@ -12,6 +12,11 @@ const ALLOWED_HEADER_NAMES = new Set([
   "host",
   "idempotency-key",
   "user-agent",
+  // Route 7 (mesh.node.admit) carries the operator-issued join credential in a
+  // dedicated header so the raw secret never enters the signed protocol body.
+  // Without it on this allowlist the transport aborts every route-7 request
+  // before the mux is reached, which left the composed route unreachable.
+  "x-goatcitadel-mesh-node-join-credential",
   "x-goatcitadel-worker-nonce",
   "x-goatcitadel-worker-operation",
   "x-goatcitadel-worker-proof",

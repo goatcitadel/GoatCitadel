@@ -27,6 +27,40 @@ export {
   type WorkerSettlementReceipt,
 } from "./worker-settlement-guard.js";
 export {
+  WorkerWireClient,
+  WorkerWireClientError,
+  workerTransportIdentityDigests,
+  WORKER_PROTOCOL_HEADERS,
+  WORKER_TLS_EXPORTER_BYTES,
+  WORKER_TLS_EXPORTER_LABEL,
+  type WorkerRequestSigningMaterial,
+  type WorkerTransportIdentityDigests,
+  type WorkerTransportMaterial,
+  type WorkerWireRequest,
+  type WorkerWireResponse,
+} from "./worker-wire-client.js";
+export {
+  admitWorker,
+  buildProtectedAdmissionEvidence,
+  WorkerAdmissionError,
+  type WorkerAdmissionTicket,
+} from "./worker-admission-client.js";
+export {
+  callProtectedRoute,
+  WorkerProtectedRouteError,
+  type ProtectedRouteCall,
+} from "./worker-protected-route-client.js";
+export { buildEventChain, WORKER_ROUTES, type LeaseBinding, type WireEvent } from "./connected-worker-routes.js";
+export { runConnectedWorker, type ConnectedWorkerReport } from "./connected-worker-runtime.js";
+export {
+  CONNECTED_WORKER_ENV,
+  CONNECTED_WORKER_STAGES,
+  ConnectedWorkerConfigError,
+  parseConnectedWorkerConfig,
+  type ConnectedWorkerConfig,
+  type ConnectedWorkerStage,
+} from "./worker-runtime-config.js";
+export {
   signWorkerCredentialPop,
   workerPopSigningContext,
   WorkerPopSignerError,

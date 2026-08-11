@@ -1,4 +1,4 @@
-import { createHash, createPrivateKey, createPublicKey, randomBytes, sign, type KeyObject } from "node:crypto";
+import { createHash, createPrivateKey, createPublicKey, sign, type KeyObject } from "node:crypto";
 import {
   REMOTE_WORKER_PROTECTED_ADMISSION_ENVELOPE_BYTES,
   REMOTE_WORKER_PROTECTED_ADMISSION_EVIDENCE_WIRE_SCHEMA_VERSION,
@@ -37,6 +37,10 @@ export const WORKER_POP_V1_SCHEMA_VERSION = "goatcitadel.remote-worker-pop.v1";
  */
 export interface WorkerAdmissionTicket {
   readonly registryWorkspaceId: string;
+  /** Workspace the dispatched work executes in; also the mesh admission scope. */
+  readonly executionWorkspaceId: string;
+  /** Operator-issued mesh join credential, present only for the run that admits the node. */
+  readonly meshJoinCredential?: string;
   readonly bootstrapId: string;
   readonly workerId: string;
   readonly nodeId: string;
@@ -79,7 +83,6 @@ export async function admitWorker(input: {
 }): Promise<RetainedRuntimeCredential> {
   const identity = input.client.identity();
   const privateKey = createPrivateKey(input.clientPrivateKeyPem);
-  const evidenceNonce = randomBytes(32).toString("base64url");
   const response = await input.client.post({
     rawPath: WORKER_BOOTSTRAP_EXCHANGE_RAW_PATH,
     operation: WORKER_BOOTSTRAP_EXCHANGE_OPERATION,
@@ -95,11 +98,14 @@ export async function admitWorker(input: {
         payload: Object.freeze({
           schemaVersion: WORKER_BOOTSTRAP_EXCHANGE_SCHEMA_VERSION,
           publicKeySpkiBase64Url: identity.publicKeySpkiBase64Url,
+          // The evidence nonce IS the request nonce: the Gateway derives the
+          // expected digest from the verified PoP nonce, so the envelope must
+          // commit to that exact value.
           protectedAdmissionEvidence: buildProtectedAdmissionEvidence({
             ticket: input.ticket,
             identity,
             tlsExporterSha256: channel.tlsExporterSha256,
-            evidenceNonce,
+            evidenceNonce: channel.nonce,
           }),
         }),
       }),
