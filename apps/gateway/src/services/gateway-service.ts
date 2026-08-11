@@ -410,7 +410,9 @@ import { LlamaCppRuntimeService } from "./llama-cpp-runtime-service.js";
 import { acquireBoundLlamaCppEmbeddingLease, acquireBoundLlamaCppLease } from "./llama-cpp-provider-lease.js";
 import { NpuSidecarService } from "./npu-sidecar-service.js";
 import { SecretStoreService } from "./secret-store-service.js";
-import { enqueueMobilePushApprovalRefresh } from "./mobile-push-service.js";
+import { enqueueMobilePushApprovalRefresh, MobilePushService } from "./mobile-push-service.js";
+import { createConfiguredMobilePushProvider } from "./mobile-push-provider.js";
+import { startMobilePushDeliveryScheduler } from "./mobile-push-scheduler.js";
 import {
   RuntimeConfigurationService,
   type RuntimeConfigurationAuthorizationInput,
@@ -1411,6 +1413,7 @@ export class GatewayService {
   private maintenanceScheduler?: BackgroundIntervalHandle;
   private chatTimerScheduler?: BackgroundIntervalHandle;
   private orchestrationWorktreeReapScheduler?: BackgroundIntervalHandle;
+  private mobilePushDeliveryScheduler?: BackgroundIntervalHandle;
   private closing = false;
   public onboardingMarker: { completedAt?: string; completedBy?: string } = {};
   private criticalInitComplete = false;
@@ -3696,6 +3699,9 @@ export class GatewayService {
       this.startMaintenanceScheduler();
       this.startChatTimerScheduler();
       this.startOrchestrationWorktreeReapScheduler();
+      // Production-dark by default: without an operator-provisioned Expo push
+      // credential this resolves to no scheduler at all.
+      this.startMobilePushDeliverySchedulerIfCredentialed();
     }
     // Convert chat turns stranded by the previous process death into honest
     // retryable interrupted_by_restart failure traces before the durable worker
@@ -4824,6 +4830,55 @@ export class GatewayService {
         removed: result.removed.length,
         skippedActive: result.skippedActive.length,
       });
+    }
+  }
+
+  /**
+   * M8 mobile push outbox drain. Production-dark contract: the Expo provider
+   * credential is ABSENT by default, `createConfiguredMobilePushProvider`
+   * resolves to the explicit unavailable provider, and
+   * {@link startMobilePushDeliveryScheduler} then refuses to create any timer,
+   * so an enabled registration stays a durable intent rather than live
+   * delivery. Only an operator-provisioned credential (environment variable or
+   * OS-keychain provider secret) turns this scheduler on.
+   */
+  private startMobilePushDeliverySchedulerIfCredentialed(): void {
+    if (this.mobilePushDeliveryScheduler) {
+      return;
+    }
+    const provider = createConfiguredMobilePushProvider({ env: process.env, secretStore: this.secretStore });
+    const service = new MobilePushService({
+      storage: this.storage,
+      secretStore: this.secretStore,
+      provider,
+      isGrantActive: async (grantId) =>
+        Boolean(
+          await settingsAuthService.getActiveAuthDeviceGrantById(
+            createSettingsAuthRuntimeDependenciesForGateway(this.getRouteCompositionPort()),
+            grantId,
+          ),
+        ),
+      recordDiagnostic: (diagnostic) =>
+        this.recordDevDiagnostic({
+          level: "warn",
+          category: "runtime",
+          event: diagnostic.event,
+          message: diagnostic.message,
+          context: diagnostic.context,
+        }),
+    });
+    this.mobilePushDeliveryScheduler = startMobilePushDeliveryScheduler({
+      service,
+      providerAvailable: () => provider.isAvailable(),
+      isClosing: () => this.closing,
+      registerInflight: (task) => this.registerBackgroundTask(task),
+      onError: (error) =>
+        log.warn("mobile push delivery scheduler tick failed", {
+          error: error instanceof Error ? error.message : String(error),
+        }),
+    });
+    if (this.mobilePushDeliveryScheduler) {
+      log.info("mobile push delivery scheduler started with a provisioned provider credential");
     }
   }
 
@@ -10844,6 +10899,10 @@ export class GatewayService {
       this.orchestrationWorktreeReapScheduler.stop();
       this.orchestrationWorktreeReapScheduler = undefined;
     }
+    if (this.mobilePushDeliveryScheduler) {
+      this.mobilePushDeliveryScheduler.stop();
+      this.mobilePushDeliveryScheduler = undefined;
+    }
     this.orchestrationWorktreeService.close();
     if (this.backgroundTasks.size > 0) {
       const tasks = [...this.backgroundTasks];
@@ -10881,6 +10940,10 @@ export class GatewayService {
     if (this.orchestrationWorktreeReapScheduler) {
       this.orchestrationWorktreeReapScheduler.stop();
       this.orchestrationWorktreeReapScheduler = undefined;
+    }
+    if (this.mobilePushDeliveryScheduler) {
+      this.mobilePushDeliveryScheduler.stop();
+      this.mobilePushDeliveryScheduler = undefined;
     }
     this.signalInboundRuntimeService.stop();
     await this.discordRuntimeService.close();

@@ -153,6 +153,85 @@ describe("MobilePushService", () => {
     await expect(harness.service.deliverDue()).resolves.toMatchObject({ attempted: 0 });
   });
 
+  it("refuses to send when a revocation commits between claim and the provider boundary", async () => {
+    const send = vi.fn<MobilePushProviderPort["send"]>(async () => ({ classification: "delivered" }));
+    const harness = createHarness({ isAvailable: () => true, send });
+    harness.seedGrant("grant-fence-revoke");
+    const token = "ExpoPushToken[fence-revoke]";
+    await harness.service.register({ provider: "expo", enabled: true, token }, { grantId: "grant-fence-revoke" });
+    await enqueueMobilePushApprovalRefresh(harness.storage, approvalCreatedEvent("event-fence-1", "approval-fence-1"));
+    const [pending] = await harness.storage.mobilePush.listDeliveries();
+    const registrationId = pending!.registrationId;
+
+    // The revocation lands after the sweep's in-memory registration read but
+    // before the provider boundary; the durable send fence must win.
+    harness.secretStore.getSecret.mockImplementationOnce((account: string) => {
+      const registration = harness.sync.mobilePush.getRegistrationById(registrationId)!;
+      harness.sync.mobilePush.ensureRevokedRegistration({
+        registrationId,
+        grantId: registration.grantId,
+        provider: registration.provider,
+        tokenSecretRef: registration.tokenSecretRef,
+      });
+      return harness.secrets.get(account);
+    });
+
+    const sweep = await harness.service.deliverDue();
+    expect(sweep.outcomes).toEqual([
+      expect.objectContaining({ status: "cancelled_revoked", classification: "registration_revoked" }),
+    ]);
+    expect(send).not.toHaveBeenCalled();
+    const delivery = await harness.storage.mobilePush.getDelivery(pending!.deliveryId);
+    expect(delivery.status).toBe("cancelled_revoked");
+    expect(delivery.completedAt).toBeDefined();
+    // Settled exactly once: nothing remains due afterwards.
+    await expect(harness.service.deliverDue()).resolves.toMatchObject({ attempted: 0 });
+  });
+
+  it("re-reads rotated custody through the fence and settles exactly once with the fresh token", async () => {
+    let clock = Date.parse("2026-08-11T09:00:00.000Z");
+    const send = vi.fn<MobilePushProviderPort["send"]>(async () => ({ classification: "delivered", receiptId: "r-1" }));
+    const harness = createHarness({ isAvailable: () => true, send }, () => new Date(clock));
+    harness.seedGrant("grant-fence-rotate");
+    const oldToken = "ExpoPushToken[fence-old]";
+    const newToken = "ExpoPushToken[fence-new]";
+    await harness.service.register(
+      { provider: "expo", enabled: true, token: oldToken },
+      { grantId: "grant-fence-rotate" },
+    );
+    await enqueueMobilePushApprovalRefresh(harness.storage, approvalCreatedEvent("event-fence-2", "approval-fence-2"));
+    const [pending] = await harness.storage.mobilePush.listDeliveries();
+    const registrationId = pending!.registrationId;
+
+    // Token rotation commits between the stale in-memory read and the send.
+    harness.secretStore.getSecret.mockImplementationOnce(() => {
+      const registration = harness.sync.mobilePush.getRegistrationById(registrationId)!;
+      harness.sync.mobilePush.upsertActiveRegistration({
+        registrationId,
+        grantId: registration.grantId,
+        provider: registration.provider,
+        tokenSecretRef: registration.tokenSecretRef,
+        tokenSha256: sha256(newToken),
+      });
+      harness.secrets.set(`mobile-push:${registrationId}`, newToken);
+      return oldToken;
+    });
+
+    const first = await harness.service.deliverDue();
+    expect(first.outcomes).toEqual([
+      expect.objectContaining({ status: "retry_scheduled", classification: "retryable" }),
+    ]);
+    expect(send).not.toHaveBeenCalled();
+
+    clock += 60_000;
+    const second = await harness.service.deliverDue();
+    expect(second.outcomes).toEqual([expect.objectContaining({ status: "delivered", classification: "delivered" })]);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ token: newToken }));
+    clock += 60_000;
+    await expect(harness.service.deliverDue()).resolves.toMatchObject({ attempted: 0 });
+  });
+
   it("quarantines an expired running lease even while the provider is unavailable", async () => {
     let clock = Date.parse("2026-08-09T05:00:00.000Z");
     const provider: MobilePushProviderPort = {

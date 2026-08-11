@@ -269,13 +269,37 @@ export class MobilePushService {
       return await this.blockMismatchedCustody(delivery, registration);
     }
 
+    // Atomic revoke/send fence: the last durable commit point before the
+    // provider network boundary. A revocation (or token rotation) that
+    // committed after our claim wins here and no send happens; once armed, a
+    // racing revocation leaves the running row to settle exactly once below.
+    const fence = await this.deps.storage.mobilePush.armDeliverySendFence({
+      deliveryId: delivery.deliveryId,
+      registrationId: registration.registrationId,
+      expectedVersion: delivery.version,
+      expectedRegistrationRevision: registration.revision,
+      expectedLeaseExpiresAt: delivery.leaseExpiresAt!,
+      workerId: this.workerId,
+      armedAt: this.nowIso(),
+    });
+    if (!fence.armed) {
+      if (fence.reason === "lease_lost") {
+        return { deliveryId: delivery.deliveryId, status: "lease_lost" };
+      }
+      if (fence.reason === "registration_rotated") {
+        return await this.retry(delivery, "retryable");
+      }
+      return await this.finalize(delivery, "cancelled_revoked", "registration_revoked");
+    }
+    const armedDelivery = fence.delivery;
+
     let providerResult: MobilePushProviderResult;
     try {
       providerResult = await this.deps.provider.send({
-        deliveryId: delivery.deliveryId,
+        deliveryId: armedDelivery.deliveryId,
         provider: registration.provider,
         token,
-        payload: delivery.payload,
+        payload: armedDelivery.payload,
       });
     } catch {
       providerResult = { classification: "unknown_after_send" };
@@ -283,19 +307,19 @@ export class MobilePushService {
     switch (providerResult.classification) {
       case "delivered":
         return await this.finalize(
-          delivery,
+          armedDelivery,
           "delivered",
           "delivered",
           providerResult.receiptId ? sha256(providerResult.receiptId) : undefined,
         );
       case "invalid_token":
-        return await this.invalidateToken(delivery, registration);
+        return await this.invalidateToken(armedDelivery, registration);
       case "retryable":
-        return await this.retry(delivery, "retryable", providerResult.retryAfterMs);
+        return await this.retry(armedDelivery, "retryable", providerResult.retryAfterMs);
       case "provider_unavailable":
-        return await this.retry(delivery, "provider_unavailable", providerResult.retryAfterMs);
+        return await this.retry(armedDelivery, "provider_unavailable", providerResult.retryAfterMs);
       case "unknown_after_send":
-        return await this.finalize(delivery, "unknown_after_send", "unknown_after_send");
+        return await this.finalize(armedDelivery, "unknown_after_send", "unknown_after_send");
     }
   }
 

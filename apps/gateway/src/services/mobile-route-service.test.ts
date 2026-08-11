@@ -42,6 +42,7 @@ describe("mobile-route-service", () => {
     const service = createMobileRoutePort({
       storage: { audit } as never,
       mobilePush: createMobilePushMock(),
+      mobileApprovalKeys: createMobileApprovalKeysMock(),
       publishRealtime,
     });
     const capability = createCapability("location_context");
@@ -78,6 +79,7 @@ describe("mobile-route-service", () => {
     const service = createMobileRoutePort({
       storage: { audit: { append: vi.fn(), list: vi.fn(async () => records) } } as never,
       mobilePush: createMobilePushMock(),
+      mobileApprovalKeys: createMobileApprovalKeysMock(),
       publishRealtime: vi.fn(),
     });
 
@@ -100,6 +102,7 @@ describe("mobile-route-service", () => {
     const service = createMobileRoutePort({
       storage: { audit: { append: vi.fn(), list: vi.fn(async () => records) } } as never,
       mobilePush: createMobilePushMock(),
+      mobileApprovalKeys: createMobileApprovalKeysMock(),
       publishRealtime: vi.fn(),
     });
 
@@ -121,6 +124,7 @@ describe("mobile-route-service", () => {
         },
       } as never,
       mobilePush: createMobilePushMock(),
+      mobileApprovalKeys: createMobileApprovalKeysMock(),
       publishRealtime,
     });
     const contexts = Array.from({ length: 14 }, (_, index) =>
@@ -154,6 +158,7 @@ describe("mobile-route-service", () => {
         },
       } as never,
       mobilePush,
+      mobileApprovalKeys: createMobileApprovalKeysMock(),
       publishRealtime,
     });
     const rawToken = "ExpoPushToken[raw-secret-value]";
@@ -172,19 +177,154 @@ describe("mobile-route-service", () => {
     expect(JSON.stringify(publishRealtime.mock.calls)).not.toContain(rawToken);
   });
 
-  it("revokes grant-bound push registrations during panic-off", async () => {
+  it("revokes grant-bound push registrations and approval keys during panic-off", async () => {
     const mobilePush = createMobilePushMock();
+    const mobileApprovalKeys = createMobileApprovalKeysMock();
+    const records: Record<string, unknown>[] = [];
     const service = createMobileRoutePort({
-      storage: { audit: { append: vi.fn(), list: vi.fn(async () => []) } } as never,
+      storage: {
+        audit: {
+          append: vi.fn(async (_s: string, payload: Record<string, unknown>) => records.push(payload)),
+          list: vi.fn(async () => records),
+        },
+      } as never,
       mobilePush,
+      mobileApprovalKeys,
       publishRealtime: vi.fn(),
     });
 
     await service.revokeMobileCapabilities({ reason: "panic_off" }, { grantId: "grant-1" });
 
     expect(mobilePush.revokeGrant).toHaveBeenCalledWith("grant-1");
+    expect(mobileApprovalKeys.revokeGrant).toHaveBeenCalledWith("grant-1");
+    expect(records[0]).toMatchObject({
+      eventType: "mobile.revocation",
+      revokedApprovalKeyIds: ["mak_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+    });
+
+    // A scoped revocation that does not name approval_key leaves the key alone.
+    mobileApprovalKeys.revokeGrant.mockClear();
+    mobilePush.revokeGrant.mockClear();
+    await service.revokeMobileCapabilities(
+      { reason: "user_disabled", capabilityIds: ["push_refresh"] },
+      { grantId: "grant-1" },
+    );
+    expect(mobilePush.revokeGrant).toHaveBeenCalledWith("grant-1");
+    expect(mobileApprovalKeys.revokeGrant).not.toHaveBeenCalled();
+    await service.revokeMobileCapabilities(
+      { reason: "user_disabled", capabilityIds: ["approval_key"] },
+      { grantId: "grant-1" },
+    );
+    expect(mobileApprovalKeys.revokeGrant).toHaveBeenCalledWith("grant-1");
+  });
+
+  it("audits approval-key registration without persisting public key material", async () => {
+    const records: Record<string, unknown>[] = [];
+    const mobileApprovalKeys = createMobileApprovalKeysMock();
+    const publishRealtime = vi.fn();
+    const service = createMobileRoutePort({
+      storage: {
+        audit: {
+          append: vi.fn(async (_stream: string, payload: Record<string, unknown>) => records.push(payload)),
+          list: vi.fn(async () => records),
+        },
+      } as never,
+      mobilePush: createMobilePushMock(),
+      mobileApprovalKeys,
+      publishRealtime,
+    });
+    const publicKeyPem = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA...\n-----END PUBLIC KEY-----";
+
+    const response = await service.registerMobileApprovalKey(
+      { enabled: true, algorithm: "ed25519", publicKeyPem, keyProvenance: "secure_hardware" },
+      { grantId: "grant-1", companionSessionId: "companion-1" },
+    );
+
+    expect(response).toMatchObject({ enabled: true, verificationAvailability: "unavailable" });
+    expect(mobileApprovalKeys.register).toHaveBeenCalledWith(
+      expect.objectContaining({ publicKeyPem }),
+      expect.objectContaining({ grantId: "grant-1" }),
+    );
+    expect(records[0]).toMatchObject({
+      eventType: "mobile.approval_key_registration",
+      keyId: "mak_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      verificationAvailability: "unavailable",
+    });
+    expect(JSON.stringify(records)).not.toContain("BEGIN PUBLIC KEY");
+    expect(JSON.stringify(publishRealtime.mock.calls)).not.toContain("BEGIN PUBLIC KEY");
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "mobile_approval_key_updated",
+      "mobile",
+      expect.objectContaining({ enabled: true, verificationAvailability: "unavailable" }),
+    );
+  });
+
+  it("lists and operator-revokes approval keys with audit evidence", async () => {
+    const records: Record<string, unknown>[] = [];
+    const mobileApprovalKeys = createMobileApprovalKeysMock();
+    const service = createMobileRoutePort({
+      storage: {
+        audit: {
+          append: vi.fn(async (_stream: string, payload: Record<string, unknown>) => records.push(payload)),
+          list: vi.fn(async () => records),
+        },
+      } as never,
+      mobilePush: createMobilePushMock(),
+      mobileApprovalKeys,
+      publishRealtime: vi.fn(),
+    });
+
+    await expect(service.listMobileApprovalKeys({ limit: 10 })).resolves.toEqual({
+      items: [expect.objectContaining({ keyId: "mak_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" })],
+    });
+    expect(mobileApprovalKeys.listKeys).toHaveBeenCalledWith(10);
+
+    await expect(service.revokeMobileApprovalKeys({ grantId: "grant-1" }, { actorId: "operator" })).resolves.toEqual({
+      revoked: 1,
+      keyIds: ["mak_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+    });
+    expect(mobileApprovalKeys.revokeGrant).toHaveBeenCalledWith("grant-1");
+    expect(records.at(-1)).toMatchObject({
+      eventType: "mobile.approval_key_revocation",
+      targetGrantId: "grant-1",
+    });
   });
 });
+
+function createMobileApprovalKeysMock() {
+  const record = {
+    keyId: "mak_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    grantId: "grant-1",
+    algorithm: "ed25519" as const,
+    lifecycleState: "revoked" as const,
+    keyProvenance: "secure_hardware" as const,
+    publicKeySha256: "a".repeat(64),
+    revision: 2,
+    registeredAt: "2026-08-11T00:00:00.000Z",
+    updatedAt: "2026-08-11T00:01:00.000Z",
+    revokedAt: "2026-08-11T00:01:00.000Z",
+  };
+  return {
+    register: vi.fn(async (input: { enabled: boolean }) => ({
+      keyId: "mak_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      algorithm: "ed25519" as const,
+      enabled: input.enabled,
+      keyProvenance: "secure_hardware" as const,
+      publicKeySha256: "a".repeat(64),
+      registeredAt: "2026-08-11T00:00:00.000Z",
+      updatedAt: "2026-08-11T00:00:00.000Z",
+      revision: 1,
+      verificationAvailability: "unavailable" as const,
+    })),
+    revokeGrant: vi.fn(async () => [
+      {
+        ...record,
+        publicKeyPem: "-----BEGIN PUBLIC KEY-----\nstub\n-----END PUBLIC KEY-----\n",
+      },
+    ]),
+    listKeys: vi.fn(async () => ({ items: [record] })),
+  };
+}
 
 function createMobilePushMock() {
   return {

@@ -11,8 +11,10 @@ import { createLocalAiRouteService as createLocalAiRoutePort } from "./local-ai-
 import { createLlamaCppRoutePort } from "./llama-cpp-route-service.js";
 import { acquireBoundLlamaCppEmbeddingLease } from "./llama-cpp-provider-lease.js";
 import { createMeshRoutePort } from "./mesh-route-service.js";
+import { MobileApprovalKeyService } from "./mobile-approval-key-service.js";
 import { createMobileRoutePort } from "./mobile-route-service.js";
-import { createUnavailableMobilePushProvider, MobilePushService } from "./mobile-push-service.js";
+import { createConfiguredMobilePushProvider } from "./mobile-push-provider.js";
+import { MobilePushService } from "./mobile-push-service.js";
 import { ModelComparisonService } from "./model-comparison-service.js";
 import { createNpuRoutePort } from "./npu-route-service.js";
 import { ResearchSearchBrokerService } from "./research-search-broker-service.js";
@@ -124,7 +126,10 @@ export function composeRuntimeAdminRouteDependencies(
         throw new Error("OS keychain is unavailable.");
       },
     },
-    provider: createUnavailableMobilePushProvider(),
+    // Absent-by-default credential seam: with no operator-provisioned Expo
+    // access token this resolves to the explicit unavailable provider and the
+    // registration API keeps reporting deliveryAvailability "unavailable".
+    provider: createConfiguredMobilePushProvider({ env: process.env, secretStore: gateway.secretStore }),
     isGrantActive: async (grantId) =>
       Boolean(await settingsAuthService.getActiveAuthDeviceGrantById(settingsAuthDeps, grantId)),
     recordDiagnostic: (diagnostic) =>
@@ -135,6 +140,11 @@ export function composeRuntimeAdminRouteDependencies(
         message: diagnostic.message,
         context: diagnostic.context,
       }),
+  });
+  const mobileApprovalKeys = new MobileApprovalKeyService({
+    storage: gateway.storage,
+    isGrantActive: async (grantId) =>
+      Boolean(await settingsAuthService.getActiveAuthDeviceGrantById(settingsAuthDeps, grantId)),
   });
   const warnedOutsideRootPathFingerprints = new Set<string>();
 
@@ -170,6 +180,22 @@ export function composeRuntimeAdminRouteDependencies(
               category: "runtime",
               event: "mobile_push.grant_revoke_projection_failed",
               message: "Device grant was revoked, but mobile push metadata cleanup requires reconciliation.",
+              context: { grantId: revoked.grantId },
+            });
+          } catch (diagnosticError) {
+            void diagnosticError;
+            // The canonical auth grant revoke must not be rolled back by auxiliary diagnostics.
+          }
+        }
+        try {
+          await mobileApprovalKeys.revokeGrant(revoked.grantId);
+        } catch {
+          try {
+            gateway.recordDevDiagnostic({
+              level: "warn",
+              category: "runtime",
+              event: "mobile_approval_key.grant_revoke_projection_failed",
+              message: "Device grant was revoked, but mobile approval key cleanup requires reconciliation.",
               context: { grantId: revoked.grantId },
             });
           } catch (diagnosticError) {
@@ -339,6 +365,7 @@ export function composeRuntimeAdminRouteDependencies(
     mobile: createMobileRoutePort({
       storage: gateway.storage,
       mobilePush,
+      mobileApprovalKeys,
       publishRealtime: (eventType, source, payload) => gateway.publishRealtime(eventType, source, payload),
     }),
     modelComparisons: new ModelComparisonService({

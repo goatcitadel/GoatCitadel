@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type {
+  MobileApprovalKeyListResponse,
+  MobileApprovalKeyRegistrationRequest,
+  MobileApprovalKeyRegistrationResponse,
+  MobileApprovalKeyRevokeRequest,
   MobileAuditListResponse,
   MobileCapabilityHeartbeatRequest,
   MobileCapabilityListResponse,
@@ -13,6 +17,7 @@ import type {
   MobileRevocationRequest,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
+import type { MobileApprovalKeyService } from "./mobile-approval-key-service.js";
 import type { MobilePushService } from "./mobile-push-service.js";
 import { createRouteService, type RoutePort, type RouteService } from "./route-service-factory.js";
 
@@ -22,6 +27,9 @@ export const mobileRouteMethods = [
   "recordMobileCapabilityHeartbeat",
   "recordMobileContextAudit",
   "registerMobilePush",
+  "registerMobileApprovalKey",
+  "listMobileApprovalKeys",
+  "revokeMobileApprovalKeys",
   "revokeMobileCapabilities",
 ] as const;
 
@@ -42,6 +50,7 @@ export interface MobileRouteActorContext {
 export interface MobileRoutePortDependencies {
   storage: Pick<Storage, "audit">;
   mobilePush: Pick<MobilePushService, "register" | "revokeGrant">;
+  mobileApprovalKeys: Pick<MobileApprovalKeyService, "register" | "revokeGrant" | "listKeys">;
   publishRealtime: (eventType: string, source: string, payload: Record<string, unknown>) => Promise<unknown>;
 }
 
@@ -199,15 +208,75 @@ export function createMobileRoutePort(deps: MobileRoutePortDependencies): Mobile
       });
       return registration;
     },
+    registerMobileApprovalKey: async (
+      input: MobileApprovalKeyRegistrationRequest,
+      actor: MobileRouteActorContext,
+    ): Promise<MobileApprovalKeyRegistrationResponse> => {
+      const registration = await deps.mobileApprovalKeys.register(input, actor);
+      await deps.storage.audit.append("approvals", {
+        eventType: "mobile.approval_key_registration",
+        keyId: registration.keyId,
+        algorithm: registration.algorithm,
+        enabled: registration.enabled,
+        keyProvenance: registration.keyProvenance,
+        publicKeySha256: registration.publicKeySha256,
+        verificationAvailability: registration.verificationAvailability,
+        registeredAt: registration.registeredAt,
+        updatedAt: registration.updatedAt,
+        revision: registration.revision,
+        ...actor,
+      });
+      await deps.publishRealtime("mobile_approval_key_updated", "mobile", {
+        keyId: registration.keyId,
+        enabled: registration.enabled,
+        keyProvenance: registration.keyProvenance,
+        verificationAvailability: registration.verificationAvailability,
+        revision: registration.revision,
+        deviceId: actor.deviceId,
+        companionSessionId: actor.companionSessionId,
+      });
+      return registration;
+    },
+    listMobileApprovalKeys: async (input?: { limit?: number }): Promise<MobileApprovalKeyListResponse> => {
+      const limit = Math.max(1, Math.min(input?.limit ?? 100, MAX_AUDIT_ITEMS));
+      return await deps.mobileApprovalKeys.listKeys(limit);
+    },
+    revokeMobileApprovalKeys: async (
+      input: MobileApprovalKeyRevokeRequest,
+      actor: MobileRouteActorContext,
+    ): Promise<{ revoked: number; keyIds: string[] }> => {
+      const revoked = await deps.mobileApprovalKeys.revokeGrant(input.grantId);
+      const keyIds = revoked.map((record) => record.keyId);
+      await deps.storage.audit.append("approvals", {
+        eventType: "mobile.approval_key_revocation",
+        grantId: input.grantId,
+        keyIds,
+        ...actor,
+        // The route actor is the operator; keep the target grant authoritative.
+        targetGrantId: input.grantId,
+      });
+      await deps.publishRealtime("mobile_approval_key_updated", "mobile", {
+        keyIds,
+        enabled: false,
+        revokedCount: keyIds.length,
+        deviceId: actor.deviceId,
+        companionSessionId: actor.companionSessionId,
+      });
+      return { revoked: keyIds.length, keyIds };
+    },
     revokeMobileCapabilities: async (input: MobileRevocationRequest, actor: MobileRouteActorContext) => {
       const revokedAt = normalizeIsoTimestamp(input.revokedAt) ?? new Date().toISOString();
       const revokedPushRegistrations = shouldRevokePush(input) ? await deps.mobilePush.revokeGrant(actor.grantId) : [];
+      const revokedApprovalKeys = shouldRevokeApprovalKey(input)
+        ? await deps.mobileApprovalKeys.revokeGrant(actor.grantId)
+        : [];
       await deps.storage.audit.append("approvals", {
         eventType: "mobile.revocation",
         revokedAt,
         reason: input.reason,
         capabilityIds: input.capabilityIds ?? [],
         revokedPushRegistrationIds: revokedPushRegistrations.map((registration) => registration.registrationId),
+        revokedApprovalKeyIds: revokedApprovalKeys.map((record) => record.keyId),
         ...actor,
       });
       await deps.publishRealtime("mobile_capabilities_revoked", "mobile", {
@@ -215,6 +284,7 @@ export function createMobileRoutePort(deps: MobileRoutePortDependencies): Mobile
         reason: input.reason,
         capabilityIds: input.capabilityIds ?? [],
         revokedPushRegistrationCount: revokedPushRegistrations.length,
+        revokedApprovalKeyCount: revokedApprovalKeys.length,
         deviceId: actor.deviceId,
         companionSessionId: actor.companionSessionId,
       });
@@ -230,6 +300,16 @@ function shouldRevokePush(input: MobileRevocationRequest): boolean {
     input.reason === "session_expired" ||
     !input.capabilityIds?.length ||
     input.capabilityIds.includes("push_refresh")
+  );
+}
+
+function shouldRevokeApprovalKey(input: MobileRevocationRequest): boolean {
+  return (
+    input.reason === "panic_off" ||
+    input.reason === "device_revoked" ||
+    input.reason === "session_expired" ||
+    !input.capabilityIds?.length ||
+    input.capabilityIds.includes("approval_key")
   );
 }
 

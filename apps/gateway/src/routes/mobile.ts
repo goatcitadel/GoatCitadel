@@ -1,6 +1,8 @@
 import type { FastifyPluginAsync, FastifyRequest } from "fastify";
 import {
   MOBILE_NATIVE_CAPABILITY_IDS,
+  mobileApprovalKeyRegistrationRequestSchema,
+  mobileApprovalKeyRevokeRequestSchema,
   mobilePushRegistrationRequestSchema,
   type MobileNativeCapabilityId,
 } from "@goatcitadel/contracts";
@@ -87,14 +89,21 @@ const mobileAuditQuerySchema = z.object({
   capabilityId: capabilityIdSchema.optional(),
 });
 
+const mobileApprovalKeyListQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(200).optional(),
+});
+
 export const mobileRoutes: FastifyPluginAsync = async (fastify) => {
-  const companionPushMutation = withRouteAccess(fastify, "companion", {
-    onRequest: async (_request, reply) => markNoStore(reply),
-    onSend: async (_request, reply, payload) => {
-      markNoStore(reply);
-      return payload;
-    },
-  });
+  const companionNoStoreMutation = () =>
+    withRouteAccess(fastify, "companion", {
+      onRequest: async (_request, reply) => markNoStore(reply),
+      onSend: async (_request, reply, payload) => {
+        markNoStore(reply);
+        return payload;
+      },
+    });
+  const companionPushMutation = companionNoStoreMutation();
+  const companionApprovalKeyMutation = companionNoStoreMutation();
 
   fastify.get("/api/v1/mobile/capabilities", withRouteAccess(fastify, "operator"), async (_request, reply) => {
     return reply.send(await fastify.services.mobile.listMobileCapabilities({}));
@@ -138,6 +147,35 @@ export const mobileRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: body.error.flatten() });
     }
     return reply.send(await fastify.services.mobile.registerMobilePush(body.data, actorContext(request)));
+  });
+
+  // Approval-key registration/rotation/disable rides the same signed companion
+  // contract as push: the auth plugin requires a verified device-key request
+  // signature on every companion-authenticated request. Only public Ed25519
+  // material crosses this boundary; the response never claims live
+  // signature-gated approval while the capability stays scaffolded.
+  fastify.put("/api/v1/mobile/current-device/approval-key", companionApprovalKeyMutation, async (request, reply) => {
+    const body = mobileApprovalKeyRegistrationRequestSchema.safeParse(request.body);
+    if (!body.success) {
+      return reply.code(400).send({ error: body.error.flatten() });
+    }
+    return reply.send(await fastify.services.mobile.registerMobileApprovalKey(body.data, actorContext(request)));
+  });
+
+  fastify.get("/api/v1/mobile/approval-keys", withRouteAccess(fastify, "operator"), async (request, reply) => {
+    const query = mobileApprovalKeyListQuerySchema.safeParse(request.query);
+    if (!query.success) {
+      return reply.code(400).send({ error: query.error.flatten() });
+    }
+    return reply.send(await fastify.services.mobile.listMobileApprovalKeys({ limit: query.data.limit }));
+  });
+
+  fastify.post("/api/v1/mobile/approval-keys/revoke", withRouteAccess(fastify, "operator"), async (request, reply) => {
+    const body = mobileApprovalKeyRevokeRequestSchema.safeParse(request.body);
+    if (!body.success) {
+      return reply.code(400).send({ error: body.error.flatten() });
+    }
+    return reply.send(await fastify.services.mobile.revokeMobileApprovalKeys(body.data, actorContext(request)));
   });
 
   fastify.post(

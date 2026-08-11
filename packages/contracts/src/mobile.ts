@@ -159,6 +159,78 @@ export interface MobilePushApprovalRefreshPayload {
   };
 }
 
+export const MOBILE_APPROVAL_KEY_PROVENANCES = ["secure_hardware", "software", "unknown"] as const;
+export type MobileApprovalKeyProvenanceClaim = (typeof MOBILE_APPROVAL_KEY_PROVENANCES)[number];
+
+/**
+ * Registration boundary for the Gateway-verifiable consumer approval key: an
+ * Ed25519 device public key bound to the durable companion grant. Only public
+ * material crosses this boundary; the private key never leaves device
+ * authentication custody. The Gateway recomputes the authoritative key digest
+ * from the submitted SPKI, so digests/previews are deliberately not caller
+ * inputs.
+ */
+export const mobileApprovalKeyRegistrationRequestSchema = z.discriminatedUnion("enabled", [
+  z
+    .object({
+      enabled: z.literal(true),
+      algorithm: z.literal("ed25519"),
+      publicKeyPem: z.string().trim().min(1).max(512),
+      keyProvenance: z.enum(MOBILE_APPROVAL_KEY_PROVENANCES),
+      deviceLabel: z.string().trim().min(1).max(160).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      enabled: z.literal(false),
+    })
+    .strict(),
+]);
+
+export type MobileApprovalKeyRegistrationRequest = z.infer<typeof mobileApprovalKeyRegistrationRequestSchema>;
+
+export interface MobileApprovalKeyRegistrationResponse {
+  keyId: string;
+  algorithm: "ed25519";
+  enabled: boolean;
+  keyProvenance: MobileApprovalKeyProvenanceClaim;
+  publicKeySha256: string;
+  registeredAt: string;
+  updatedAt: string;
+  revision: number;
+  /**
+   * Whether the Gateway enforces approval-decision signatures end to end. Stays
+   * "unavailable" while the `approval_key` capability is `scaffolded`; a
+   * registered key alone is not live signature-gated approval.
+   */
+  verificationAvailability: "available" | "unavailable";
+}
+
+export interface MobileApprovalKeySummary {
+  keyId: string;
+  grantId: string;
+  algorithm: "ed25519";
+  lifecycleState: "active" | "revoked";
+  keyProvenance: MobileApprovalKeyProvenanceClaim;
+  publicKeySha256: string;
+  revision: number;
+  registeredAt: string;
+  updatedAt: string;
+  revokedAt?: string;
+}
+
+export interface MobileApprovalKeyListResponse {
+  items: MobileApprovalKeySummary[];
+}
+
+export const mobileApprovalKeyRevokeRequestSchema = z
+  .object({
+    grantId: z.string().trim().min(1).max(256),
+  })
+  .strict();
+
+export type MobileApprovalKeyRevokeRequest = z.infer<typeof mobileApprovalKeyRevokeRequestSchema>;
+
 export interface MobileRevocationRequest {
   reason: "panic_off" | "device_revoked" | "user_disabled" | "session_expired";
   capabilityIds?: MobileNativeCapabilityId[];

@@ -254,10 +254,14 @@ describe("composeRuntimeAdminRouteDependencies", () => {
       grantId: "grant-1",
     });
     expect(gateway.storage.mobilePush.revokeAllByGrant).toHaveBeenCalledWith("grant-1", expect.any(String));
+    expect(gateway.storage.mobileApprovalKeys.revokeAllByGrant).toHaveBeenCalledWith("grant-1", expect.any(String));
     expect(gateway.recordDevDiagnostic).toHaveBeenCalledWith(
       expect.objectContaining({ event: "mobile_push.keychain_cleanup_failed" }),
     );
     gateway.storage.mobilePush.revokeAllByGrant.mockRejectedValueOnce(new Error("push storage unavailable"));
+    gateway.storage.mobileApprovalKeys.revokeAllByGrant.mockRejectedValueOnce(
+      new Error("approval key storage unavailable"),
+    );
     gateway.recordDevDiagnostic.mockImplementationOnce(() => {
       throw new Error("diagnostic sink unavailable");
     });
@@ -267,6 +271,12 @@ describe("composeRuntimeAdminRouteDependencies", () => {
     expect(gateway.recordDevDiagnostic).toHaveBeenCalledWith(
       expect.objectContaining({
         event: "mobile_push.grant_revoke_projection_failed",
+        context: { grantId: "grant-2" },
+      }),
+    );
+    expect(gateway.recordDevDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "mobile_approval_key.grant_revoke_projection_failed",
         context: { grantId: "grant-2" },
       }),
     );
@@ -471,6 +481,23 @@ function createGateway() {
             grantId: "grant-1",
             provider: "expo",
             tokenSecretRef: "keychain:goatcitadel:mobile-push:mpr_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            lifecycleState: "revoked",
+            revision: 2,
+            registeredAt: "2026-08-09T00:00:00.000Z",
+            updatedAt: "2026-08-09T00:01:00.000Z",
+            revokedAt: "2026-08-09T00:01:00.000Z",
+          },
+        ]),
+      },
+      mobileApprovalKeys: {
+        revokeAllByGrant: vi.fn(async () => [
+          {
+            keyId: "mak_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            grantId: "grant-1",
+            algorithm: "ed25519",
+            publicKeyPem: "-----BEGIN PUBLIC KEY-----\nstub\n-----END PUBLIC KEY-----\n",
+            publicKeySha256: "a".repeat(64),
+            keyProvenance: "secure_hardware",
             lifecycleState: "revoked",
             revision: 2,
             registeredAt: "2026-08-09T00:00:00.000Z",
