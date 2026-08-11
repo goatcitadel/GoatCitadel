@@ -3321,8 +3321,8 @@ for (const [target, machine] of [
       assert.equal(result.availability.targetServiceSha256, result.service.sha256);
       const expectedClient =
         target === "windows-x64"
-          ? { bytes: 74_240, sha256: "4b91dd9257c3a948742a6ae8db6d81a98eb89cf06be0352e737de7eb8d6aab69" }
-          : { bytes: 64_512, sha256: "c3260fbd1052c29ae254952dd085bab335b82d4cfdeb31a753353920a48955b1" };
+          ? { bytes: 74_240, sha256: "8b8bbf912319df6ca2a245f248bb477e2f4e60fe775efced372d23d9d1f32f1f" }
+          : { bytes: 64_512, sha256: "7fbf7c395373d393b45747c846a72dfc661ad659f7a7921ccc4e18544649bc64" };
       assert.equal(result.client.byteLength, expectedClient.bytes);
       assert.equal(result.client.sha256, expectedClient.sha256);
       const serviceInspection = inspectRemoteWorkerProvisionerPe(serviceBytes, {
