@@ -334,13 +334,35 @@ Owner contract: `OPENCLAW_HERMES_PARITY_PROGRAM.md`, `HX-501`.
   `GOATCITADEL_WORKER_ASSIGNMENT_RUNTIME_ENABLED` flag (default OFF); default
   production omits the owners and the listener stays dark, so the connected-worker
   E2E composes them, not production-by-default.
+- The closed protected-proof table is now exactly **twelve** purposes.
+  `REMOTE_WORKER_POP_V2_ROUTE_BINDINGS` adds code 11 (HX-503 inference
+  request/response exchange) and code 12 (HX-506 artifact/effect settlement
+  submission), both credential-authority POST routes. The closure property is
+  unchanged in kind, only wider: the contracts closure test pins all twelve by
+  exact shape, the Gateway protocol-v2 pin and the provisioner helper-protocol
+  table walk mirror it, the Windows protected PoP-v2 **native signer** admits
+  route codes 1-12 and refuses everything else, and the worker runtime signer
+  still refuses the bootstrap route. The 285-byte preimage layout is unchanged.
+  The native source change forced a deterministic re-pin of the frozen x64/arm64
+  client binary anchors; clean-pair byte-identity and the full ASan proof held on
+  both arches.
+- Routes 11-12 are wired through the same flag-gated composition. The runtime
+  composition builds the execution owner **only** when the production-dark
+  HX-503 inference and HX-506 artifact/effect inner owners are injected;
+  production injects none (there is no live governance, budget, LLM, CAS, or
+  effect-coordinator adapter), so the all-or-nothing admission composition
+  returns undefined and the listener stays `listening_dark` even with the flag
+  ON. The routes 11-12 owner carries the routes 2-6 fence discipline verbatim:
+  the canonical M2 credential and protected admission evidence are resolved
+  before PoP, the durable nonce is consumed before any owner outcome is
+  observed, the current mesh-node admission for the assignment's execution
+  workspace is resolved, and that complete protected commit fence is rechecked
+  **inside** the assignment storage transaction before the inference or
+  settlement owner is reached.
 - Still open on the live loop: production scheduler dispatch (offer creation is
-  still production-dark), and provider inference plus HX-506 artifact/effect
-  settlement. The latter two owners ship production-dark but have NO PoP-v2 wire
-  route in the closed ten-purpose protected-proof table
-  (`REMOTE_WORKER_POP_V2_ROUTE_BINDINGS` is exactly codes 1-10); reaching them
-  needs new route bindings the Windows protected PoP-v2 signer's closed table must
-  also admit — a separate security-reviewed tranche (HX-501B2-adjacent).
+  still production-dark), and a connected-worker E2E harness that injects the
+  HX-503/HX-506 inner owners so the composed listener can actually serve routes
+  11-12 single-host.
 - Prove worker death, disconnect, lease takeover, cancellation, stale callback
   fencing, and approval-gated resume against the live listener once the reachable
   loop is driven end-to-end by the worker process. Restart recovery and
@@ -384,24 +406,27 @@ Owner contracts: `OPENCLAW_HERMES_PARITY_PROGRAM.md`, `HX-502` and `HX-504`.
 
 `pnpm verify:remote-workers` already proves the Gateway-side composition and
 live PostgreSQL owners. As of this tranche the connected-worker runtime core
-exists (`apps/remote-worker`, see M3) and the routes 2-6/8-10 assignment RPC and
-dispatch owners are composable into the native listener behind an activation
-flag, so the reachable admission -> dispatch -> workload -> ordered-event ->
-lease-renewal -> assignment-settlement sub-loop is now composable single-host.
+exists (`apps/remote-worker`, see M3) and the routes 2-6/8-10/11-12 assignment
+RPC, dispatch, and execution owners are composable into the native listener
+behind an activation flag, so the whole admission -> dispatch -> workload ->
+inference -> ordered-event -> lease-renewal -> artifact/effect-settlement loop
+now has a worker-facing wire route.
 
-M4 still does not close, and scenario 12 remains a **sharpened** declared skip
-(not the old vague "requires a live remote worker") for one precise reason: the
-HX-503 inference proxy and HX-506 artifact/effect settlement owners have NO
-PoP-v2 wire route. `REMOTE_WORKER_POP_V2_ROUTE_BINDINGS` is a closed
-ten-purpose table (codes 1-10: bootstrap, assignment sync/lease/events/control/
-settle, mesh admit, offer-poll/claim/workload) with no inference or CAS-settlement
-purpose; adding one also requires extending the closed table the Windows
-protected PoP-v2 signer enforces. Until that security-reviewed tranche lands, a
-live worker cannot proxy inference or settle artifacts/effects through the
-Gateway, and the HX-507 live-runtime fields (connection health, usage/cost,
-resource cell, artifact/effect) stay `unavailable`-labeled. M4 closes when those
-routes exist, the full E2E row executes, and the UI renders live, truth-labeled
-data.
+M4 still does not close, and scenario 12 remains a declared skip — but its hold
+has **narrowed**. The old reason is gone: the HX-503 inference proxy and HX-506
+artifact/effect settlement owners now DO have PoP-v2 wire routes.
+`REMOTE_WORKER_POP_V2_ROUTE_BINDINGS` is a closed **twelve**-purpose table
+(codes 1-10: bootstrap, assignment sync/lease/events/control/settle, mesh admit,
+offer-poll/claim/workload; code 11: inference exchange; code 12: artifact/effect
+settlement submission), and the Windows protected PoP-v2 signer's closed table
+admits exactly the same twelve. What remains is (a) a connected-worker E2E
+harness that injects the production-dark HX-503/HX-506 inner owners so the
+all-or-nothing composition can return a live mux — production injects none, so
+the listener stays dark even with the activation flag ON — and (b) the
+production scheduler that creates real offers. Until both land, the HX-507
+live-runtime fields (connection health, usage/cost, resource cell,
+artifact/effect) stay `unavailable`-labeled. M4 closes when the full E2E row
+executes and the UI renders live, truth-labeled data.
 
 Owner contracts: `OPENCLAW_HERMES_PARITY_PROGRAM.md`, `HX-503` through `HX-507`.
 
