@@ -1,8 +1,8 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-08-10T09:35:15.150Z",
-  "measuredSourceSha256": "a2d564da3f2dae6b9b13259652e1bd2b7cad784865b8eae04730db1fbc45956f",
-  "gatewayLineCount": 11924,
+  "generatedAt": "2026-08-11T18:06:40.760Z",
+  "measuredSourceSha256": "a0c322a0d73695875bd32bcb30d19ea53fc406530d7884c6de2bac92a7fe99fe",
+  "gatewayLineCount": 11987,
   "largeServiceDebt": [
     {
       "path": "apps/gateway/src/services/chat-turn-agent-runner.ts",
@@ -11,8 +11,8 @@
     },
     {
       "path": "apps/gateway/src/services/gateway-service.ts",
-      "lineCount": 11924,
-      "bytes": 513994
+      "lineCount": 11987,
+      "bytes": 516724
     },
     {
       "path": "apps/gateway/src/services/improvement-service.ts",
@@ -158,7 +158,7 @@
     "apps/gateway/src/services/workflow-recipe-service.ts": 4,
     "apps/gateway/src/services/gateway/chat-stream-runtime.ts": 24
   },
-  "totalDependencyMemberAccesses": 9443,
+  "totalDependencyMemberAccesses": 9532,
   "dependencyMemberAccessesByFile": {
     "apps/gateway/src/services/a2a-grpc-client.ts": 2,
     "apps/gateway/src/services/a2a-grpc-outbound-service.ts": 10,
@@ -316,15 +316,16 @@
     "apps/gateway/src/services/gateway-route-composition-integrations.ts": 103,
     "apps/gateway/src/services/gateway-route-composition-memory.ts": 53,
     "apps/gateway/src/services/gateway-route-composition-port.ts": 177,
-    "apps/gateway/src/services/gateway-route-composition-runtime.ts": 101,
+    "apps/gateway/src/services/gateway-route-composition-runtime.ts": 104,
     "apps/gateway/src/services/gateway-route-composition-shared.ts": 37,
     "apps/gateway/src/services/gateway-route-composition-system.ts": 30,
     "apps/gateway/src/services/gateway-route-composition-tools.ts": 57,
     "apps/gateway/src/services/gateway-route-services.ts": 75,
     "apps/gateway/src/services/gateway-runtime-factory.ts": 20,
     "apps/gateway/src/services/gif-search-action.ts": 4,
+    "apps/gateway/src/services/governed-remediation-budgets-mirror-recipe.ts": 53,
     "apps/gateway/src/services/governed-remediation-config-repair-adapter.ts": 3,
-    "apps/gateway/src/services/governed-remediation-coordinator.ts": 74,
+    "apps/gateway/src/services/governed-remediation-coordinator.ts": 79,
     "apps/gateway/src/services/governed-remediation-owned-gateway-service-adapter.ts": 1,
     "apps/gateway/src/services/governed-remediation-registry.ts": 4,
     "apps/gateway/src/services/guidance-document-helpers.ts": 4,
@@ -376,8 +377,11 @@
     "apps/gateway/src/services/mesh-capability-invocation-service.ts": 26,
     "apps/gateway/src/services/mesh-capability-publication-service.ts": 30,
     "apps/gateway/src/services/mesh-route-service.ts": 20,
-    "apps/gateway/src/services/mobile-push-service.ts": 30,
-    "apps/gateway/src/services/mobile-route-service.ts": 12,
+    "apps/gateway/src/services/mobile-approval-key-service.ts": 7,
+    "apps/gateway/src/services/mobile-push-provider.ts": 5,
+    "apps/gateway/src/services/mobile-push-scheduler.ts": 7,
+    "apps/gateway/src/services/mobile-push-service.ts": 31,
+    "apps/gateway/src/services/mobile-route-service.ts": 20,
     "apps/gateway/src/services/model-comparison-service.ts": 10,
     "apps/gateway/src/services/notification-routing-service.ts": 24,
     "apps/gateway/src/services/npu-route-service.ts": 8,
@@ -563,8 +567,8 @@
     "apps/gateway/src/services/workspaces-route-service.ts"
   ],
   "sourceTreeState": "clean",
-  "hostCallbackCollectorCorrectedAt": "2026-08-10T09:35:15.150Z",
-  "hostCallbackSourceRevision": "6c2bb97c5346090e2806ce289d8731f77af546f0",
-  "dependencyMemberCollectorCapturedAt": "2026-08-10T09:35:15.150Z",
-  "dependencyMemberSourceRevision": "6c2bb97c5346090e2806ce289d8731f77af546f0"
+  "hostCallbackCollectorCorrectedAt": "2026-08-11T18:06:40.760Z",
+  "hostCallbackSourceRevision": "fff3a7cef1561da36700b40475e64fbd7d4a1670",
+  "dependencyMemberCollectorCapturedAt": "2026-08-11T18:06:40.760Z",
+  "dependencyMemberSourceRevision": "fff3a7cef1561da36700b40475e64fbd7d4a1670"
 }
