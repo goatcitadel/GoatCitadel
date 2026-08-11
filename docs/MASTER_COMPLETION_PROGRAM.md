@@ -283,8 +283,12 @@ Owner contract: `OPENCLAW_HERMES_PARITY_PROGRAM.md`, `HX-501`.
   Storage rechecks that complete fence inside the same transaction after the
   canonical locks and before replay, read, or mutation. Focused regressions
   prove credential rotation, protected-context drift, and mesh join-authority
-  revoke reject stale reads and writes. Live PostgreSQL contention proof is
-  still required before composition.
+  revoke reject stale reads and writes. The live PostgreSQL contention proof
+  now serializes credential rotation, protected-context drift, join-authority
+  revoke, and duplicate replay against in-flight fenced routes on real
+  concurrent connections: the stale side is rejected deterministically inside
+  the storage transaction and the winning side commits exactly once.
+  Composition remains gated on the authenticated worker runtime below.
 - Compose the existing dispatch poll/claim/workload-read wire only after an
   authenticated worker runtime can retain its credential and lease secret,
   obtain the exact protected signing pin, and reconnect without replaying a
