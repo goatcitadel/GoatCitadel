@@ -1111,6 +1111,45 @@ describe("useMemoryOperatorSnapshot", () => {
     await flush();
   });
 
+  it("lifts loading when a reload commits the snapshot before the initial load resolves (MCSHARED-009)", async () => {
+    // Stall ONLY the initial mount load (its fetchSettings call never resolves
+    // on its own). A reload() fired while that load is still in flight bumps
+    // `loadSequenceRef`, so the mount effect's guarded `.finally` is superseded
+    // and skips its `setLoading(false)`; before the fix `reload()` itself never
+    // touched `loading`, leaving the memory surface stuck on its loader forever
+    // even though the reload had committed a full snapshot.
+    const stalledSettings = deferred<Awaited<ReturnType<typeof apiMocks.fetchSettings>>>();
+    apiMocks.fetchSettings.mockReturnValueOnce(stalledSettings.promise);
+
+    renderer = await mountHook((value) => {
+      latest = value;
+    });
+    expect(latest?.loading).toBe(true);
+    expect(latest?.data).toBeNull();
+
+    await act(async () => {
+      await latest?.reload();
+    });
+    await flush();
+
+    // The reload committed the snapshot, so the surface must no longer report loading.
+    expect(latest?.loading).toBe(false);
+    expect(latest?.data).not.toBeNull();
+    expect(latest?.error).toBeNull();
+
+    // Resolving the superseded mount load afterwards must remain a no-op.
+    stalledSettings.resolve({
+      features: {
+        memoryLifecycleAdminV1Enabled: true,
+        memoryLifecycleAutoForgetEnabled: true,
+        memoryMaintenanceV1Enabled: true,
+        durableKernelV1Enabled: true,
+      },
+    });
+    await flush();
+    expect(latest?.loading).toBe(false);
+  });
+
   it("ignores late memory-history success and failure completions after selection changes", async () => {
     renderer = await mountHook((value) => {
       latest = value;

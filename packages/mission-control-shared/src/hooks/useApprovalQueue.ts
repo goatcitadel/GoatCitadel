@@ -169,9 +169,15 @@ export function useApprovalQueue(options: UseApprovalQueueOptions = {}) {
       }
       setError(formatApprovalLoadError(rejected));
     } finally {
-      if (loadSequenceRef.current === loadId) {
-        setLoadMorePending(false);
-      }
+      // Unconditional: this flag tracks THIS call's in-flightness, and only one
+      // page fetch can be in flight at a time (the early return above). A
+      // refresh load() that starts while the page fetch is in flight bumps
+      // `loadSequenceRef`, so a sequence-guarded clear here is masked whenever
+      // the fetch is superseded — leaving loadMorePending stuck true and the
+      // early return blocking every future page load. The sequence guard stays
+      // on the data commits above; the busy flag must always drop when the call
+      // that raised it settles.
+      setLoadMorePending(false);
     }
   }, [loadMorePending, nextCursorByStatus, view]);
 

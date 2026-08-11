@@ -232,6 +232,18 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
         return;
       }
       setData(next);
+      // Any committed snapshot — from the initial mount load OR an operator
+      // action's reload() — means the surface has data and is no longer in its
+      // initial loading state. `loading` is only ever set true by the mount
+      // effect and cleared in that effect's `.finally`, but that clear is
+      // guarded by `loadSequenceRef`: a reload() that starts while the mount
+      // load is still in flight bumps the ref and masks the mount `.finally`,
+      // while reload() itself never touched `loading`. That left the memory
+      // surface stuck on its loader forever even though `data` was present.
+      // Clearing loading here, where the reload commits its snapshot, makes the
+      // loader reflect data availability regardless of how mount and reload
+      // interleave (mirrors useOpsRuntimeSnapshot's commitData).
+      setLoading(false);
       setSelectedItemId((current) => current ?? next.memoryItems[0]?.itemId ?? null);
       setSelectedRunId((current) => current ?? next.maintenanceRuns[0]?.runId ?? null);
       if (!policyDirty && next.maintenanceStatus?.policy) {
