@@ -146,17 +146,16 @@ describe("HX-407 paired external-source schema parity", () => {
     assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
   });
 
-  // DECLARED HOLD (design conflict, owner decision required): the frozen
-  // lineage supports repair-only sparse databases (migrations 166 and 175-180,
-  // 194, 196 skip absent parents and cite this proof), but the e40432a0b
-  // canonical schema-shape gate validates every createDatabase against the
-  // single canonical head manifest with no sparse admission, so a sparse
-  // database cannot converge. Resolving requires one of: sparse-slice
-  // manifests in the gate, an official end to sparse createDatabase admission
-  // (moving this proof below the gate), or a converging repair path in the
-  // lineage. Skipped rather than forced: any forced fix would weaken the gate
-  // or silently shrink the sparse proof surface.
-  it.skip("does not invent or backfill missing parent owners in a repair-only sparse database", () => {
+  // DESIGN DECISION (owner): `createDatabase` does not admit sparse databases.
+  // The e40432a0b canonical schema-shape gate stays fail-closed for every real
+  // application boot, and a database that skipped an additive migration can
+  // never converge to the canonical head, so the gate refuses it by design.
+  // The skip-on-absent-parent behaviour the frozen lineage relies on is
+  // therefore a migration-layer guarantee, not a createDatabase admission: it
+  // is proven here against the migration runner directly, the same layer the
+  // sibling HX-410 sparse proof uses, and the gate's refusal of the very same
+  // database is asserted below so neither half can drift.
+  it("does not invent or backfill missing parent owners in a repair-only sparse database", () => {
     const dbPath = path.join(os.tmpdir(), `goatcitadel-hx407-sparse-${randomUUID()}.db`);
     try {
       const sparse = new DatabaseSync(dbPath);
@@ -181,29 +180,41 @@ describe("HX-407 paired external-source schema parity", () => {
       for (const version of [10, 13, 17, 21, 27, 45, 154]) {
         __sqliteInternals.applySchemaMigrationForTest(version, sparse);
       }
-      sparse.close();
 
-      const migrated = createDatabase({ dbPath });
       try {
-        const recorded = migrated.prepare("SELECT name FROM schema_migrations WHERE version = 166").get() as
+        // `createDatabase` enables foreign keys before migrating; hold the
+        // sparse proof to the same footing minus the canonical-shape gate.
+        sparse.exec("PRAGMA foreign_keys = ON;");
+        __sqliteInternals.migrate(sparse);
+
+        const recorded = sparse.prepare("SELECT name FROM schema_migrations WHERE version = 166").get() as
           | { name: string }
           | undefined;
         assert.equal(recorded?.name, "governed_external_sources_foundation");
         assert.equal(
-          migrated
-            .prepare(
-              "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name LIKE 'external_source_%'",
-            )
-            .get<{ count: number }>()?.count,
+          (
+            sparse
+              .prepare(
+                "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name LIKE 'external_source_%'",
+              )
+              .get() as { count: number } | undefined
+          )?.count,
           0,
         );
-        const migrationHead = migrated.prepare("SELECT MAX(version) AS version FROM schema_migrations").get() as {
+        const migrationHead = sparse.prepare("SELECT MAX(version) AS version FROM schema_migrations").get() as {
           version: number;
         };
         assert.ok(Number(migrationHead.version) >= 189);
       } finally {
-        migrated.close();
+        sparse.close();
       }
+
+      // The other half of the decision: the same sparse database the migration
+      // runner legitimately leaves non-canonical is refused by `createDatabase`,
+      // which admits only the canonical head shape. The gate reports just the
+      // first twelve divergences, so assert its identity rather than any one
+      // absent object.
+      assert.throws(() => createDatabase({ dbPath }), /SQLite canonical schema-shape validation failed/u);
     } finally {
       for (const suffix of ["", "-wal", "-shm"]) rmSync(`${dbPath}${suffix}`, { force: true });
     }

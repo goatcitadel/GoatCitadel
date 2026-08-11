@@ -130,6 +130,16 @@ validation and 9/9 Docker-secret documentation tests; `git diff --check` passed.
   covers corrupt-object preservation, the writer-versus-replacement race, and
   the v140 finite-lineage repair; paired migration parity remains SQLite 196 /
   PostgreSQL 140.
+- The HX-407 sparse-repair conflict is closed by owner decision: `createDatabase`
+  does not admit sparse databases, and the canonical schema-shape gate stays
+  exactly as fail-closed for every application boot. The frozen lineage's
+  skip-on-absent-parent behaviour is a migration-layer guarantee rather than a
+  `createDatabase` admission, so the HX-407 proof now runs the migration runner
+  directly, un-skipped, and additionally asserts that the gate refuses the same
+  sparse database. A sparse ledger is only ever manufactured by tests: every
+  production `createDatabase` caller opens a fresh or in-order-migrated
+  database, only the migration runner writes `schema_migrations`, and the
+  read-only doctor inspects the file without migrating it.
 
 ### Closure evidence
 
@@ -637,8 +647,8 @@ arc eliminated the un-awaited route-port defect class (sweep plus the
 signatures on read routes, fixed stuck-loading hook guards, re-verified
 the native deterministic pins after toolchain servicing, and refreshed
 all 104 mission-control visual baselines. The HX-407 sparse-repair proof
-is an explicit declared hold pending an owner decision (see the skip
-note in `external-source-schema-parity.test.ts`). This record is broad
+is no longer held: the owner decision recorded under M1 re-points it below
+the schema-shape gate, and it now runs un-skipped. This record is broad
 single-host verification evidence, not M9/M10 completion: every external
 hold above remains open, and packaging artifacts must be rebuilt and
 re-hashed at any SHA they are claimed for.
