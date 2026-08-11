@@ -536,6 +536,11 @@ proof live in the adjacent `personal-ai-mobile-app` repository.
 
 - Execute the clean Windows install, first launch, status, restart, stop,
   uninstall, reinstall, and single-instance journeys on the exact candidate.
+  Harness ready (2026-08-11): `scripts/install-smoke/run-clean-host-smoke.ps1`
+  runs the full journey as one command with a machine-readable evidence bundle
+  (runbook: `scripts/install-smoke/README.md`); its read-only preflight refuses
+  on any non-clean host (proven refusing on a developer machine, exit 2). The
+  clean-VM execution itself remains the outstanding evidence item.
 - Prove `remote_hardened` network allowlist, no loopback bypass, secure auth,
   and illegal-egress refusal.
 - Exercise failed startup and broken auth/policy recovery with operator-visible

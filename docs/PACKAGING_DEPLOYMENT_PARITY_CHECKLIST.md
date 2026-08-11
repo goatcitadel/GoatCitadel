@@ -13,6 +13,11 @@ acceptance checklist, not a competing implementation order.
 - [ ] Record current gateway settings snapshot.
 
 ## 1. Clean Local Installation & Smoke Test
+
+Clean-host harness: `scripts/install-smoke/run-clean-host-smoke.ps1` (runbook:
+`scripts/install-smoke/README.md`) executes this section's installer journeys
+as one command on a clean VM and emits the evidence bundle for section 4.
+
 - [ ] Deploy local gateway and built Mission Control assets.
 - [ ] Run clean installer or startup smoke path in the current environment (`windows-x64` / `windows-arm64`).
 - [ ] Expose user-facing launchers from the mutable GoatCitadel home (separate `app/`, `config/`, `skills/`, `workspaces/`, `data/`).
