@@ -1,6 +1,6 @@
 # GoatCitadel Master Completion Program
 
-Last updated: 2026-08-09
+Last updated: 2026-08-11
 
 Status: canonical aggregate execution ledger
 
@@ -547,6 +547,25 @@ Signed public-trust release promotion additionally requires administrator-owned
 GitHub tag/environment protections and signing controls. That external control
 plane is not a local code task and remains fail-closed until independently
 verified.
+
+### Broad verification record (2026-08-11, merged tip 7df5584e4)
+
+The 2026-08-09 handoff blockers are closed and the program branch merged
+cleanly into `main` after a defect-free broad campaign: the final full
+`verify:all` scored 592 scenarios with 10 classified non-defect failures
+(3 fast-lane parallel-shard load-flakes green solo, 4 cross-platform
+visual margins against freshly Linux-captured baselines, 3 tracked
+pre-existing usability harness drifts unmasked by earlier fixes). The
+arc eliminated the un-awaited route-port defect class (sweep plus the
+`verify:gateway:async-boundary` guard), required companion request
+signatures on read routes, fixed stuck-loading hook guards, re-verified
+the native deterministic pins after toolchain servicing, and refreshed
+all 104 mission-control visual baselines. The HX-407 sparse-repair proof
+is an explicit declared hold pending an owner decision (see the skip
+note in `external-source-schema-parity.test.ts`). This record is broad
+single-host verification evidence, not M9/M10 completion: every external
+hold above remains open, and packaging artifacts must be rebuilt and
+re-hashed at any SHA they are claimed for.
 
 ## M10 - Final exact-SHA certification
 
