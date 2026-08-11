@@ -479,6 +479,63 @@ describe("useOpsRuntimeSnapshot", () => {
     expect(latest?.data?.dashboard?.pendingApprovals).toBe(2);
   });
 
+  it("lifts loading when a poll reload commits data before the initial load resolves (MCSHARED-006)", async () => {
+    // Stall ONLY the initial mount dashboard fetch so the mount load never
+    // resolves on its own. A fallback poll then fires while that load is still in
+    // flight; the poll's own fetches resolve and commit data. Before the fix, the
+    // poll bumped `loadSequenceRef` (so the eventual mount `.finally` was
+    // superseded) yet `reload()` never cleared `loading`, leaving the runtime
+    // route stuck on "Loading current route data…" forever with data present.
+    const stalledMount = createDeferred<Awaited<ReturnType<typeof apiMocks.fetchDashboardState>>>();
+    apiMocks.fetchDashboardState.mockReturnValueOnce(stalledMount.promise);
+
+    await act(async () => {
+      renderer = create(
+        <Harness
+          section="runtime"
+          onValue={(value) => {
+            latest = value;
+          }}
+        />,
+      );
+    });
+    await flush();
+    expect(latest?.loading).toBe(true);
+    expect(latest?.data).toBeNull();
+
+    const refreshCallback = vi.mocked(useRefreshSubscription).mock.calls.at(-1)?.[1];
+    expect(refreshCallback).toBeDefined();
+    await act(async () => {
+      await refreshCallback?.({
+        topic: "system",
+        reason: "fallback_poll",
+        source: "test",
+        eventType: "fallback_poll",
+        timestamp: Date.now(),
+      });
+    });
+    await flush();
+
+    // The poll committed data, so the route must no longer report loading.
+    expect(latest?.loading).toBe(false);
+    expect(latest?.data).not.toBeNull();
+
+    // Resolving the superseded mount fetch afterwards must remain a no-op.
+    await act(async () => {
+      stalledMount.resolve({
+        timestamp: "2026-04-22T00:00:00.000Z",
+        sessions: [],
+        pendingApprovals: 0,
+        activeSubagents: 0,
+        taskStatusCounts: [],
+        recentEvents: [],
+        dailyCostUsd: 0,
+      });
+      await Promise.resolve();
+    });
+    expect(latest?.loading).toBe(false);
+  });
+
   it("returns a stable snapshot reference across re-renders when nothing changed", async () => {
     // The consumer (RuntimeRoutePage's ~1000-line `content` useMemo) depends on the
     // whole snapshot object. If the hook returned a fresh object literal every render,
