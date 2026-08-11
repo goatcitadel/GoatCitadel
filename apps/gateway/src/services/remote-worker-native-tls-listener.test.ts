@@ -654,6 +654,31 @@ describe("remote worker native TLS listener", () => {
               finalizations.push(input);
               return repository.finalizeBootstrapAdmissionWithNonce(input);
             },
+            findCurrentGeneration: (registryWorkspaceId, workerId) =>
+              repository.findCurrentGeneration(registryWorkspaceId, workerId),
+            findLatestGenerationControl: (registryWorkspaceId, workerId, workerGeneration) =>
+              repository.findLatestGenerationControl(registryWorkspaceId, workerId, workerGeneration),
+            findProtectedAdmissionEvidenceRecord: (registryWorkspaceId, workerId, workerGeneration) =>
+              repository.findProtectedAdmissionEvidenceRecord(registryWorkspaceId, workerId, workerGeneration),
+            getBootstrap: (registryWorkspaceId, bootstrapId) =>
+              repository.getBootstrap(registryWorkspaceId, bootstrapId),
+            resolveRuntimeCredentialByHash: (tokenSha256) => repository.resolveRuntimeCredentialByHash(tokenSha256),
+          },
+          meshNodeAdmissionStore: {
+            assertAvailable: async () => undefined,
+            admitWithNonce: async () => {
+              throw new Error(
+                "Production-dark mesh-node admission must stay unexercised in the bootstrap replay proof.",
+              );
+            },
+          },
+          assignmentProtocol: {
+            assertAvailable: async () => undefined,
+            execute: async () => {
+              throw new Error(
+                "Production-dark assignment protocol must stay unexercised in the bootstrap replay proof.",
+              );
+            },
           },
           createEvidenceVerifier: () => ({
             assertAvailable: async () => undefined,
