@@ -89,7 +89,7 @@ const ACTION_ASSERTIONS = Object.freeze({
   "route.chat.approval-and-user-input-resume": [
     a(
       "apps/gateway/src/services/approval-lifecycle-service.test.ts",
-      "resumes an approval-blocked chat turn end to end and keeps duplicate wake processing idempotent",
+      "defers an approval-blocked Chat wake until action settlement and keeps duplicate processing idempotent",
     ),
     a(
       "packages/mission-control-shared/src/components/chat/chat-renderer-tail.test.tsx",
