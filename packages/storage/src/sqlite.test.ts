@@ -452,6 +452,7 @@ test("SQLite prompt pack content hash migration upgrades already-migrated databa
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+      CREATE INDEX idx_prompt_packs_updated ON prompt_packs(updated_at DESC);
     `);
     const markApplied = seed.prepare(`
       INSERT INTO schema_migrations (version, name, applied_at)

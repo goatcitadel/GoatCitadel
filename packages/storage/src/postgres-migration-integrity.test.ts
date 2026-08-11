@@ -723,6 +723,108 @@ describe("protected Postgres migration integrity", () => {
     assert.doesNotMatch(sql, /gateway_route|readiness|\blistener\b|scheduler|\bcell\b/iu);
   });
 
+  it("keeps HX-503 correction 139 authority-complete, legacy-safe, and production-dark", () => {
+    const migration = POSTGRES_MIGRATIONS.find((candidate) => candidate.version === 139);
+    assert.equal(migration?.name, "remote_worker_inference_budget_authority_correction");
+    assert.equal(migration?.batchedStatements, undefined);
+    assert.equal(migration?.integritySha256, "b6bcf06516cfc363dddd0c78bad86cb40b78324bac4c558c5591352bc6d5bab3");
+    const sql = migration?.sql ?? "";
+
+    assert.match(sql, /RENAME COLUMN budget_reservation_id TO legacy_budget_reservation_marker/u);
+    for (const column of [
+      "execution_workspace_id",
+      "durable_run_id",
+      "task_id",
+      "admitted_lease_revision",
+      "effective_route_json",
+      "approval_resolution_json",
+      "continuation_governance_json",
+      "budget_authority_state",
+      "budget_operation_json",
+      "budget_reservation_json",
+      "usage_event_ids_json",
+    ]) {
+      assert.match(sql, new RegExp(`ADD COLUMN IF NOT EXISTS ${column}\\b`, "u"));
+    }
+    for (const lifecycle of [
+      "not_required",
+      "reservation_pending",
+      "reserved",
+      "settlement_pending",
+      "settled",
+      "released",
+      "reconciliation_required",
+      "legacy_unverifiable",
+    ]) {
+      assert.match(sql, new RegExp(`'${lifecycle}'`, "u"));
+    }
+    assert.match(sql, /OLD\.budget_authority_state = 'legacy_unverifiable'/u);
+    assert.match(sql, /NEW\.legacy_budget_reservation_marker IS DISTINCT FROM OLD\.legacy_budget_reservation_marker/u);
+    assert.match(
+      sql,
+      /OLD\.budget_authority_state = 'legacy_unverifiable'[\s\S]*NEW\.effective_route_json IS DISTINCT FROM OLD\.effective_route_json/u,
+    );
+    assert.match(sql, /OLD\.state = 'waiting_approval' AND NEW\.state = 'admitted'/u);
+    assert.match(sql, /NEW\.budget_authority_state = 'released' AND NEW\.state <> 'blocked'/u);
+    assert.match(sql, /NEW\.budget_authority_state = 'reconciliation_required' AND NEW\.state <> 'dispatch_unknown'/u);
+    assert.match(sql, /idx_remote_worker_inference_budget_recovery/u);
+    for (const trigger of [
+      "trg_remote_worker_inference_budget_authority_guard",
+      "trg_remote_worker_inference_v2_authority_immutable",
+    ]) {
+      assert.match(sql, new RegExp(trigger, "u"));
+    }
+
+    assert.doesNotMatch(sql, /lease_token|lease_secret|raw_lease|provider_credential|api_key|authorization|bearer/iu);
+    assert.doesNotMatch(sql, /CREATE\s+(?:TABLE|ROUTE)|gateway_route|readiness|\blistener\b|scheduler/iu);
+    assert.doesNotMatch(sql, /\b(?:INSERT\s+INTO|DELETE\s+FROM|TRUNCATE\s+TABLE)\b/iu);
+  });
+
+  it("normalizes final index and procedural catalog authority at v140", () => {
+    const migration = POSTGRES_MIGRATIONS.find((candidate) => candidate.version === 140);
+    assert.equal(migration?.name, "canonical_postgres_schema_authority");
+    assert.equal(migration?.integritySha256, "9ee72c0e2879f3cbd2e32fc58d16692969691799537b910be9eea9255e038ca3");
+    const sql = migration?.sql ?? "";
+    assert.equal(sql.match(/DROP INDEX IF EXISTS/gu)?.length, 141);
+    assert.equal(sql.match(/CREATE (?:UNIQUE )?INDEX/gu)?.length, 141);
+    assert.match(
+      sql,
+      /CREATE INDEX "idx_audit_events_stream_time"\s+ON "audit_events" \("stream_name", "occurred_at" DESC, "event_sequence" DESC\)/u,
+    );
+    assert.match(
+      sql,
+      /CREATE INDEX "idx_tool_access_decisions_run_time"\s+ON "tool_access_decisions" \("run_id", "timestamp" DESC\)/u,
+    );
+    assert.match(
+      sql,
+      /CREATE INDEX "idx_approvals_status_expires_at"\s+ON "approvals" \("status", "expires_at_ts" ASC, "approval_id" ASC\)\s+WHERE expires_at_ts IS NOT NULL/u,
+    );
+    assert.match(sql, /found drifted imported-agent source constraint\/index/u);
+    assert.match(sql, /DROP CONSTRAINT "gc_v140_imported_agent_source_path"/u);
+    assert.match(sql, /DROP INDEX IF EXISTS "idx_imported_agent_catalog_source_path"/u);
+    assert.match(
+      sql,
+      /CREATE UNIQUE INDEX "idx_imported_agent_catalog_source_path"[\s\S]*COALESCE\("provenance_repo_url", ''\)/u,
+    );
+    assert.match(sql, /chat_routed_context_snapshots_schema_version_v2_check/u);
+    assert.match(sql, /assembly_runs_run_kind_check/u);
+    assert.match(sql, /assembly_runs_generation_check/u);
+    assert.match(sql, /model_usage_events_cap_retry_lineage_check/u);
+    assert.match(sql, /workspace_path_bridge_snapshots_input_flavor_posix_check/u);
+    assert.match(sql, /external_source_configs_target_flavor_posix_check/u);
+    assert.match(sql, /chat_turn_secure_configuration_reservations_reconciled_by_fkey/u);
+    assert.match(sql, /confdeltype IS DISTINCT FROM 'r'/u);
+    assert.match(sql, /LOCK TABLE %s IN ACCESS EXCLUSIVE MODE/u);
+    assert.match(sql, /indimmediate IS DISTINCT FROM TRUE/u);
+    assert.match(sql, /RI_ConstraintTrigger_%s_%s/u);
+    assert.match(sql, /gc_v140_probe_usage_cap_retry/u);
+    assert.doesNotMatch(sql, /to_regclass\('public\.|ALTER TABLE public\./u);
+    assert.doesNotMatch(
+      sql,
+      /\bIF\s+NOT\s+EXISTS\b|DROP\s+(?:TABLE|COLUMN)|TRUNCATE\s+TABLE|DELETE\s+FROM|UPDATE\s+\S+\s+SET\b/iu,
+    );
+  });
+
   it("keeps HX-505 migration 120 additive, immutable-profile, CAS-fenced, evidence-chained, and production-dark", () => {
     const migration = POSTGRES_MIGRATIONS.find((candidate) => candidate.version === 120);
     assert.equal(migration?.name, "remote_worker_cell_execution_owner");
@@ -920,5 +1022,49 @@ describe("protected Postgres migration integrity", () => {
     assert.match(sql, /"reversible":true/u);
     assert.doesNotMatch(sql, /SET status = 'active'/u);
     assert.doesNotMatch(sql, /\b(?:DROP\s+TABLE|TRUNCATE\s+TABLE|DELETE\s+FROM)\b/iu);
+  });
+
+  it("keeps migration 134 paired, secret-free, CAS-fenced, immutable, and recovery-indexed", () => {
+    const migration = POSTGRES_MIGRATIONS.find((candidate) => candidate.version === 134);
+    assert.equal(migration?.name, "governed_remediation_durable_owner");
+    const sql = migration?.sql ?? "";
+    for (const table of [
+      "governed_remediation_states",
+      "governed_remediation_receipts",
+      "governed_remediation_failures",
+      "governed_remediation_reconciliations",
+      "governed_remediation_cas_transitions",
+    ]) {
+      assert.match(sql, new RegExp(`CREATE TABLE IF NOT EXISTS ${table} \\(`, "u"));
+    }
+    assert.match(sql, /idx_governed_remediation_states_owner_scope/u);
+    assert.match(sql, /idx_governed_remediation_states_recovery/u);
+    assert.match(sql, /idx_governed_remediation_reconciliations_recovery/u);
+    assert.match(sql, /gc_governed_remediation_cas_insert_guard/u);
+    assert.match(sql, /gc_governed_remediation_state_insert_guard/u);
+    assert.match(sql, /gc_governed_remediation_state_update_guard/u);
+    assert.match(sql, /gc_governed_remediation_reconciliation_update_guard/u);
+    assert.match(sql, /gc_reject_governed_remediation_mutation/u);
+    assert.doesNotMatch(
+      sql,
+      /\b(secret_value|credential_value|oauth_code|command_text|args_json|payload_json|raw_error|provider_error)\b/iu,
+    );
+  });
+
+  it("keeps migration 135 fail-closed, hash-only leased, and lineage-fenced", () => {
+    const migration = POSTGRES_MIGRATIONS.find((candidate) => candidate.version === 135);
+    assert.equal(migration?.name, "governed_remediation_recipe_and_phase_authority");
+    assert.match(migration?.integritySha256 ?? "", /^[0-9a-f]{64}$/u);
+    const sql = migration?.sql ?? "";
+    assert.match(sql, /refuses non-empty governed-remediation v1 rows/u);
+    assert.match(sql, /requester_actor_id TEXT NOT NULL/u);
+    assert.match(sql, /recipe_sha256 TEXT NOT NULL/u);
+    assert.match(sql, /owner_revision_before TEXT/u);
+    assert.match(sql, /lease_token_sha256 TEXT NOT NULL/u);
+    assert.doesNotMatch(sql, /\blease_token\s+(?:TEXT|BYTEA|JSONB?)\b/u);
+    assert.match(sql, /gc_governed_remediation_receipt_insert_guard/u);
+    assert.match(sql, /gc_governed_remediation_phase_claim_insert_guard/u);
+    assert.match(sql, /clock_timestamp\(\)/u);
+    assert.doesNotMatch(sql, /\b(?:INSERT\s+INTO|UPDATE\s+governed_remediation|DELETE\s+FROM)\b/iu);
   });
 });

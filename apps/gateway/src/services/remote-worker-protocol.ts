@@ -1,13 +1,18 @@
 import { createHash, createPublicKey, timingSafeEqual, verify, type KeyObject } from "node:crypto";
 import {
+  REMOTE_WORKER_POP_V2_SCHEMA_VERSION,
+  buildRemoteWorkerPopV2Preimage,
   canonicalJsonString,
   normalizeRemoteWorkerNonceAuthority,
   remoteWorkerNonceAuthorityProtocolBinding,
+  resolveRemoteWorkerPopV2Route,
   type RemoteWorkerNonceAuthority,
 } from "@goatcitadel/contracts";
 import type { RemoteWorkerRequestHeaders, RemoteWorkerTransportIdentity } from "./remote-worker-transport-identity.js";
 
-export const REMOTE_WORKER_POP_SCHEMA_VERSION = "goatcitadel.remote-worker-pop.v1" as const;
+export const REMOTE_WORKER_POP_V1_SCHEMA_VERSION = "goatcitadel.remote-worker-pop.v1" as const;
+/** Legacy alias retained while unprotected callers migrate deliberately to the v2 binary proof. */
+export const REMOTE_WORKER_POP_SCHEMA_VERSION = REMOTE_WORKER_POP_V1_SCHEMA_VERSION;
 export const REMOTE_WORKER_PROTOCOL_MAX_BODY_BYTES = 512 * 1024;
 export const REMOTE_WORKER_PROTOCOL_TIMESTAMP_SKEW_MS = 60_000;
 export const REMOTE_WORKER_PROTOCOL_MAX_REPLAY_CACHE_ENTRIES = 100_000;
@@ -24,8 +29,7 @@ export const REMOTE_WORKER_PROTOCOL_HEADERS = Object.freeze({
 export type RemoteWorkerAuthorityKind = "bootstrap" | "credential";
 export type RemoteWorkerAuthorizationScheme = "GoatWorkerBootstrap" | "Bearer";
 
-export interface RemoteWorkerProtocolBody {
-  readonly schemaVersion: typeof REMOTE_WORKER_POP_SCHEMA_VERSION;
+interface RemoteWorkerProtocolBodyBase {
   readonly operation: string;
   readonly authorityId: string;
   readonly authorityGeneration: number;
@@ -33,10 +37,23 @@ export interface RemoteWorkerProtocolBody {
   readonly payload: JsonValue;
 }
 
+export interface RemoteWorkerProtocolBodyV1 extends RemoteWorkerProtocolBodyBase {
+  readonly schemaVersion: typeof REMOTE_WORKER_POP_V1_SCHEMA_VERSION;
+}
+
+export interface RemoteWorkerProtocolBodyV2 extends RemoteWorkerProtocolBodyBase {
+  readonly schemaVersion: typeof REMOTE_WORKER_POP_V2_SCHEMA_VERSION;
+  readonly workerGeneration: number;
+}
+
+export type RemoteWorkerProtocolBody = RemoteWorkerProtocolBodyV1 | RemoteWorkerProtocolBodyV2;
+
 export interface RemoteWorkerResolvedAuthority {
   readonly kind: RemoteWorkerAuthorityKind;
   readonly authorityId: string;
   readonly authorityGeneration: number;
+  /** Required for protected v2 proof; distinct from bootstrap/credential generation. */
+  readonly workerGeneration?: number;
   readonly authorizationCredentialSha256: string;
   readonly publicKeySpkiDer: Buffer;
   readonly publicKeySpkiSha256: string;
@@ -208,9 +225,10 @@ export interface RemoteWorkerPopMaterial {
 }
 
 export interface RemoteWorkerProofVerificationReceipt {
-  readonly schemaVersion: typeof REMOTE_WORKER_POP_SCHEMA_VERSION;
+  readonly schemaVersion: typeof REMOTE_WORKER_POP_V1_SCHEMA_VERSION | typeof REMOTE_WORKER_POP_V2_SCHEMA_VERSION;
   readonly authorityId: string;
   readonly authorityGeneration: number;
+  readonly workerGeneration?: number;
   readonly operation: string;
   readonly timestamp: string;
   readonly bodySha256: string;
@@ -218,6 +236,25 @@ export interface RemoteWorkerProofVerificationReceipt {
   readonly certificateDerSha256: string;
   readonly tlsExporterSha256: string;
   readonly proofOfPossessionReceiptSha256: string;
+}
+
+/**
+ * A verified request whose replay nonce has not yet been consumed. Live
+ * admission uses this split so the nonce can be consumed in the same database
+ * transaction that creates the worker generation and first credential.
+ * `nonce` remains process-local protocol material and must never cross a
+ * storage port; use `snapshotRemoteWorkerDurableNonceConsumption` first.
+ */
+export interface PreparedRemoteWorkerProofOfPossession {
+  readonly body: RemoteWorkerProtocolBody;
+  readonly receipt: RemoteWorkerProofVerificationReceipt;
+  readonly nonce: Readonly<{
+    authorityId: string;
+    authorityGeneration: number;
+    nonce: string;
+    timestamp: string;
+    expiresAt: string;
+  }>;
 }
 
 type JsonPrimitive = null | boolean | number | string;
@@ -232,125 +269,197 @@ export class RemoteWorkerProtocolError extends Error {
   }
 }
 
-export async function verifyRemoteWorkerProofOfPossession(input: {
+export interface PrepareRemoteWorkerProofOfPossessionInput {
   readonly method: string;
   readonly rawPath: string;
   readonly headers: RemoteWorkerRequestHeaders;
   readonly body: unknown;
   readonly expectedOperation: string;
   readonly authority: RemoteWorkerResolvedAuthority;
+  /** Protected admission authority must set this; v1 is then rejected without downgrade. */
+  readonly proofRequirement?: "legacy_v1_allowed" | "protected_v2_required";
   readonly transportIdentity: RemoteWorkerTransportIdentity;
-  readonly nonceConsumer: RemoteWorkerNonceConsumePort;
   readonly now?: Date;
-}): Promise<RemoteWorkerProofVerificationReceipt> {
+}
+
+export function prepareRemoteWorkerProofOfPossession(
+  input: PrepareRemoteWorkerProofOfPossessionInput,
+): PreparedRemoteWorkerProofOfPossession {
   const now = input.now ?? new Date();
   if (!Number.isFinite(now.getTime())) throw invalid("Remote worker verification clock is invalid.");
   if (input.method !== "POST") throw invalid("Remote worker protocol method is invalid.");
   const rawPath = normalizeRawPath(input.rawPath);
   const expectedOperation = normalizeOperation(input.expectedOperation);
   const body = normalizeRemoteWorkerProtocolBody(input.body);
+  const proofRequirement = normalizeProofRequirement(input.proofRequirement);
   const authorization = parseAuthorization(requiredHeader(input.headers, REMOTE_WORKER_PROTOCOL_HEADERS.authorization));
   const authority = snapshotResolvedAuthority(input.authority);
   const transportIdentity = snapshotTransportIdentity(input.transportIdentity);
-  const expectedScheme: RemoteWorkerAuthorizationScheme =
-    authority.kind === "bootstrap" ? "GoatWorkerBootstrap" : "Bearer";
-  if (authorization.scheme !== expectedScheme) {
-    throw invalid("Remote worker authorization purpose is invalid.");
-  }
-  if (!safeHexDigestEqual(sha256Utf8(authorization.credential), authority.authorizationCredentialSha256)) {
-    throw invalid("Remote worker authorization credential is invalid.");
-  }
+  try {
+    const expectedScheme: RemoteWorkerAuthorizationScheme =
+      authority.kind === "bootstrap" ? "GoatWorkerBootstrap" : "Bearer";
+    if (authorization.scheme !== expectedScheme) {
+      throw invalid("Remote worker authorization purpose is invalid.");
+    }
+    if (!safeHexDigestEqual(sha256Utf8(authorization.credential), authority.authorizationCredentialSha256)) {
+      throw invalid("Remote worker authorization credential is invalid.");
+    }
 
-  const timestamp = normalizeTimestamp(requiredHeader(input.headers, REMOTE_WORKER_PROTOCOL_HEADERS.timestamp));
-  const timestampMs = Date.parse(timestamp);
-  if (Math.abs(now.getTime() - timestampMs) > REMOTE_WORKER_PROTOCOL_TIMESTAMP_SKEW_MS) {
-    throw invalid("Remote worker request timestamp is outside the freshness window.");
-  }
-  const nonce = normalizeNonce(requiredHeader(input.headers, REMOTE_WORKER_PROTOCOL_HEADERS.nonce));
-  const operation = normalizeOperation(requiredHeader(input.headers, REMOTE_WORKER_PROTOCOL_HEADERS.operation));
-  const idempotencyKey = normalizeIdempotencyKey(
-    requiredHeader(input.headers, REMOTE_WORKER_PROTOCOL_HEADERS.idempotencyKey),
-  );
-  const proof = decodeExactBase64Url(requiredHeader(input.headers, REMOTE_WORKER_PROTOCOL_HEADERS.proof), 64, "proof");
+    const timestamp = normalizeTimestamp(requiredHeader(input.headers, REMOTE_WORKER_PROTOCOL_HEADERS.timestamp));
+    const timestampMs = Date.parse(timestamp);
+    if (Math.abs(now.getTime() - timestampMs) > REMOTE_WORKER_PROTOCOL_TIMESTAMP_SKEW_MS) {
+      throw invalid("Remote worker request timestamp is outside the freshness window.");
+    }
+    const nonce = normalizeNonce(requiredHeader(input.headers, REMOTE_WORKER_PROTOCOL_HEADERS.nonce));
+    const operation = normalizeOperation(requiredHeader(input.headers, REMOTE_WORKER_PROTOCOL_HEADERS.operation));
+    const idempotencyKey = normalizeIdempotencyKey(
+      requiredHeader(input.headers, REMOTE_WORKER_PROTOCOL_HEADERS.idempotencyKey),
+    );
+    const proof = decodeExactBase64Url(
+      requiredHeader(input.headers, REMOTE_WORKER_PROTOCOL_HEADERS.proof),
+      64,
+      "proof",
+    );
 
-  if (
-    operation !== expectedOperation ||
-    body.operation !== operation ||
-    body.idempotencyKey !== idempotencyKey ||
-    body.authorityId !== authority.authorityId ||
-    body.authorityGeneration !== authority.authorityGeneration
-  ) {
-    throw invalid("Remote worker request envelope disagrees with its authenticated headers or authority.");
-  }
-  if (!safeHexDigestEqual(transportIdentity.publicKeySpkiSha256, authority.publicKeySpkiSha256)) {
-    throw invalid("Remote worker transport key does not match the admitted authority key.");
-  }
+    if (
+      operation !== expectedOperation ||
+      body.operation !== operation ||
+      body.idempotencyKey !== idempotencyKey ||
+      body.authorityId !== authority.authorityId ||
+      body.authorityGeneration !== authority.authorityGeneration
+    ) {
+      throw invalid("Remote worker request envelope disagrees with its authenticated headers or authority.");
+    }
+    if (!safeHexDigestEqual(transportIdentity.publicKeySpkiSha256, authority.publicKeySpkiSha256)) {
+      throw invalid("Remote worker transport key does not match the admitted authority key.");
+    }
 
-  const bodySha256 = remoteWorkerProtocolBodySha256(body);
-  const material = buildRemoteWorkerPopMaterial({
-    rawPath,
-    bodySha256,
-    operation,
-    nonce,
-    timestamp,
-    idempotencyKey,
-    authorityId: authority.authorityId,
-    authorityGeneration: authority.authorityGeneration,
-    transportIdentity,
-  });
-  const publicKey = readEd25519PublicKey(authority.publicKeySpkiDer);
-  const actualSpkiDer = publicKey.export({ format: "der", type: "spki" });
-  if (
-    !Buffer.isBuffer(actualSpkiDer) ||
-    !safeHexDigestEqual(sha256Bytes(actualSpkiDer), authority.publicKeySpkiSha256)
-  ) {
-    throw invalid("Remote worker admitted authority key pin is invalid.");
-  }
-  const canonicalMaterial = canonicalJsonString(material);
-  if (!verify(null, Buffer.from(canonicalMaterial, "utf8"), publicKey, proof)) {
-    throw invalid("Remote worker proof of possession is invalid.");
-  }
+    if (proofRequirement === "protected_v2_required" && body.schemaVersion !== REMOTE_WORKER_POP_V2_SCHEMA_VERSION) {
+      throw invalid("Remote worker protected authority requires proof protocol v2.");
+    }
+    if (
+      body.schemaVersion === REMOTE_WORKER_POP_V2_SCHEMA_VERSION &&
+      (authority.workerGeneration === undefined || body.workerGeneration !== authority.workerGeneration)
+    ) {
+      throw invalid("Remote worker request envelope disagrees with its authenticated worker generation.");
+    }
 
-  const expiresAt = new Date(timestampMs + REMOTE_WORKER_PROTOCOL_TIMESTAMP_SKEW_MS).toISOString();
+    const bodySha256 = remoteWorkerProtocolBodySha256(body);
+    let signedBytes: Buffer;
+    if (body.schemaVersion === REMOTE_WORKER_POP_V2_SCHEMA_VERSION) {
+      const route = resolveRemoteWorkerPopV2Route(rawPath, operation);
+      signedBytes = Buffer.from(
+        buildRemoteWorkerPopV2Preimage({
+          schemaVersion: REMOTE_WORKER_POP_V2_SCHEMA_VERSION,
+          method: "POST",
+          rawPath: route.rawPath,
+          operation: route.operation,
+          bodySha256,
+          nonce,
+          timestamp,
+          idempotencyKey,
+          authorityKind: authority.kind,
+          authorityId: authority.authorityId,
+          authorityGeneration: authority.authorityGeneration,
+          workerGeneration: body.workerGeneration,
+          tlsExporterSha256: transportIdentity.tlsExporterSha256,
+          clientCertificateSha256: transportIdentity.certificateDerSha256,
+          workerPublicKeySpkiSha256: authority.publicKeySpkiSha256,
+        }),
+      );
+    } else {
+      signedBytes = Buffer.from(
+        canonicalJsonString(
+          buildRemoteWorkerPopMaterial({
+            rawPath,
+            bodySha256,
+            operation,
+            nonce,
+            timestamp,
+            idempotencyKey,
+            authorityId: authority.authorityId,
+            authorityGeneration: authority.authorityGeneration,
+            transportIdentity,
+          }),
+        ),
+        "utf8",
+      );
+    }
+    const publicKey = readEd25519PublicKey(authority.publicKeySpkiDer);
+    const actualSpkiDer = publicKey.export({ format: "der", type: "spki" });
+    if (
+      !Buffer.isBuffer(actualSpkiDer) ||
+      !safeHexDigestEqual(sha256Bytes(actualSpkiDer), authority.publicKeySpkiSha256)
+    ) {
+      throw invalid("Remote worker admitted authority key pin is invalid.");
+    }
+    if (!verify(null, signedBytes, publicKey, proof)) {
+      throw invalid("Remote worker proof of possession is invalid.");
+    }
+
+    const expiresAt = new Date(timestampMs + REMOTE_WORKER_PROTOCOL_TIMESTAMP_SKEW_MS).toISOString();
+    const receipt: RemoteWorkerProofVerificationReceipt = Object.freeze({
+      schemaVersion: body.schemaVersion,
+      authorityId: authority.authorityId,
+      authorityGeneration: authority.authorityGeneration,
+      ...(body.schemaVersion === REMOTE_WORKER_POP_V2_SCHEMA_VERSION
+        ? { workerGeneration: body.workerGeneration }
+        : {}),
+      operation,
+      timestamp,
+      bodySha256,
+      publicKeySpkiSha256: authority.publicKeySpkiSha256,
+      certificateDerSha256: transportIdentity.certificateDerSha256,
+      tlsExporterSha256: transportIdentity.tlsExporterSha256,
+      proofOfPossessionReceiptSha256: sha256Bytes(signedBytes),
+    });
+    return Object.freeze({
+      body,
+      receipt,
+      nonce: Object.freeze({
+        authorityId: authority.authorityId,
+        authorityGeneration: authority.authorityGeneration,
+        nonce,
+        timestamp,
+        expiresAt,
+      }),
+    });
+  } finally {
+    transportIdentity.tlsExporter.fill(0);
+  }
+}
+
+export async function verifyRemoteWorkerProofOfPossession(
+  input: PrepareRemoteWorkerProofOfPossessionInput & { readonly nonceConsumer: RemoteWorkerNonceConsumePort },
+): Promise<RemoteWorkerProofVerificationReceipt> {
+  const prepared = prepareRemoteWorkerProofOfPossession(input);
   let consumed: boolean;
   try {
     consumed = await input.nonceConsumer.consume({
-      authorityId: authority.authorityId,
-      authorityGeneration: authority.authorityGeneration,
-      nonce,
-      timestamp,
-      expiresAt,
+      ...prepared.nonce,
     });
   } catch {
     throw invalid("Remote worker replay protection is unavailable.");
   }
   if (!consumed) throw invalid("Remote worker request nonce was already consumed.");
-
-  return Object.freeze({
-    schemaVersion: REMOTE_WORKER_POP_SCHEMA_VERSION,
-    authorityId: authority.authorityId,
-    authorityGeneration: authority.authorityGeneration,
-    operation,
-    timestamp,
-    bodySha256,
-    publicKeySpkiSha256: authority.publicKeySpkiSha256,
-    certificateDerSha256: transportIdentity.certificateDerSha256,
-    tlsExporterSha256: transportIdentity.tlsExporterSha256,
-    proofOfPossessionReceiptSha256: sha256Utf8(canonicalMaterial),
-  });
+  return prepared.receipt;
 }
 
 export function normalizeRemoteWorkerProtocolBody(value: unknown): RemoteWorkerProtocolBody {
   assertPlainRecord(value, "body");
-  assertExactKeys(value, [
+  const commonKeys = [
     "schemaVersion",
     "operation",
     "authorityId",
     "authorityGeneration",
     "idempotencyKey",
     "payload",
-  ]);
-  if (value.schemaVersion !== REMOTE_WORKER_POP_SCHEMA_VERSION) {
+  ] as const;
+  if (value.schemaVersion === REMOTE_WORKER_POP_V1_SCHEMA_VERSION) {
+    assertExactKeys(value, commonKeys);
+  } else if (value.schemaVersion === REMOTE_WORKER_POP_V2_SCHEMA_VERSION) {
+    assertExactKeys(value, [...commonKeys, "workerGeneration"]);
+  } else {
     throw invalid("Remote worker request body schema is invalid.");
   }
   const operation = normalizeOperation(value.operation);
@@ -358,14 +467,21 @@ export function normalizeRemoteWorkerProtocolBody(value: unknown): RemoteWorkerP
   const authorityGeneration = positiveSafeInteger(value.authorityGeneration, "authority generation");
   const idempotencyKey = normalizeIdempotencyKey(value.idempotencyKey);
   const payload = strictJsonValue(value.payload, 0, new Set<object>());
-  const normalized = Object.freeze({
-    schemaVersion: REMOTE_WORKER_POP_SCHEMA_VERSION,
+  const common = {
     operation,
     authorityId,
     authorityGeneration,
     idempotencyKey,
     payload,
-  });
+  } as const;
+  const normalized: RemoteWorkerProtocolBody =
+    value.schemaVersion === REMOTE_WORKER_POP_V2_SCHEMA_VERSION
+      ? Object.freeze({
+          schemaVersion: REMOTE_WORKER_POP_V2_SCHEMA_VERSION,
+          ...common,
+          workerGeneration: positiveSafeInteger(value.workerGeneration, "worker generation"),
+        })
+      : Object.freeze({ schemaVersion: REMOTE_WORKER_POP_V1_SCHEMA_VERSION, ...common });
   if (Buffer.byteLength(canonicalJsonString(normalized), "utf8") > REMOTE_WORKER_PROTOCOL_MAX_BODY_BYTES) {
     throw invalid("Remote worker request body exceeds its byte limit.");
   }
@@ -415,6 +531,9 @@ function validateResolvedAuthority(authority: RemoteWorkerResolvedAuthority): vo
   }
   normalizeIdentifier(authority.authorityId, "authority ID", 256);
   positiveSafeInteger(authority.authorityGeneration, "authority generation");
+  if (authority.workerGeneration !== undefined) {
+    positiveSafeInteger(authority.workerGeneration, "worker generation");
+  }
   normalizeSha256(authority.authorizationCredentialSha256, "authorization credential digest");
   normalizeSha256(authority.publicKeySpkiSha256, "public key digest");
   if (!Buffer.isBuffer(authority.publicKeySpkiDer) || authority.publicKeySpkiDer.byteLength > 4_096) {
@@ -424,14 +543,16 @@ function validateResolvedAuthority(authority: RemoteWorkerResolvedAuthority): vo
 
 function snapshotResolvedAuthority(value: unknown): RemoteWorkerResolvedAuthority {
   assertPlainRecord(value, "resolved authority");
-  assertExactKeys(value, [
+  const keys = [
     "kind",
     "authorityId",
     "authorityGeneration",
     "authorizationCredentialSha256",
     "publicKeySpkiDer",
     "publicKeySpkiSha256",
-  ]);
+  ];
+  if (Object.prototype.hasOwnProperty.call(value, "workerGeneration")) keys.push("workerGeneration");
+  assertExactKeys(value, keys);
   if (!Buffer.isBuffer(value.publicKeySpkiDer)) {
     throw invalid("Remote worker authority public key is invalid.");
   }
@@ -439,6 +560,7 @@ function snapshotResolvedAuthority(value: unknown): RemoteWorkerResolvedAuthorit
     kind: value.kind as RemoteWorkerAuthorityKind,
     authorityId: value.authorityId as string,
     authorityGeneration: value.authorityGeneration as number,
+    ...(value.workerGeneration === undefined ? {} : { workerGeneration: value.workerGeneration as number }),
     authorizationCredentialSha256: value.authorizationCredentialSha256 as string,
     publicKeySpkiDer: Buffer.from(value.publicKeySpkiDer),
     publicKeySpkiSha256: value.publicKeySpkiSha256 as string,
@@ -545,6 +667,14 @@ function normalizeOperation(value: unknown): string {
     throw invalid("Remote worker operation is invalid.");
   }
   return value;
+}
+
+function normalizeProofRequirement(
+  value: PrepareRemoteWorkerProofOfPossessionInput["proofRequirement"],
+): "legacy_v1_allowed" | "protected_v2_required" {
+  if (value === undefined || value === "legacy_v1_allowed") return "legacy_v1_allowed";
+  if (value === "protected_v2_required") return value;
+  throw invalid("Remote worker proof requirement is invalid.");
 }
 
 function normalizeIdempotencyKey(value: unknown): string {

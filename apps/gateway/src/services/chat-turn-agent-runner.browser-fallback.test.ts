@@ -155,7 +155,7 @@ describe("ChatTurnAgentRunner browser fallback behavior", () => {
     expect(createChatCompletion).toHaveBeenCalledTimes(3);
     expect(invokeTool).toHaveBeenCalledTimes(2);
     expect(result.assistantContent).toContain("Finished from checkpoint evidence.");
-    expect(result.turnTrace.routing.fallbackReason).toContain("Cowork loop checkpoint 1");
+    expect(result.turnTrace.routing.fallbackReason).toContain("Tool loop checkpoint 1");
     expect(result.turnTrace.failure).toBeUndefined();
   });
 
@@ -281,7 +281,7 @@ describe("ChatTurnAgentRunner browser fallback behavior", () => {
     expect(invokeTool).toHaveBeenCalledTimes(4);
     expect(result.assistantContent).toContain("Checkpointed partial handoff");
     expect(result.turnTrace.failure).toBeUndefined();
-    expect(result.turnTrace.routing.fallbackReason).toContain("Cowork loop checkpoint 2");
+    expect(result.turnTrace.routing.fallbackReason).toContain("Tool loop checkpoint 2");
     expect(result.turnTrace.routing.fallbackReason).not.toContain("repeated_tool_loop");
   });
 

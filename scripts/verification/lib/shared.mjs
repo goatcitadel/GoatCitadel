@@ -11,6 +11,7 @@ import {
   validateVerificationRepairPlan,
   validateVerificationReview,
 } from "./validation.mjs";
+import { acquireWorktreeOutputLock } from "../../lib/worktree-output-lock.mjs";
 
 export const repoRoot = path.resolve(import.meta.dirname, "..", "..", "..");
 export const artifactsRoot = path.join(repoRoot, "artifacts", "verification");
@@ -32,6 +33,10 @@ export function createRunId(lane) {
 }
 
 export async function createRunContext(lane, options = {}) {
+  const outputLockLease = await acquireWorktreeOutputLock({
+    repoRoot,
+    owner: `verification:${lane}`,
+  });
   const runId = options.runId || createRunId(lane);
   const artifactRoot = path.join(artifactsRoot, runId);
   const latestRunPointerPath = path.join(artifactsRoot, "latest-run.json");
@@ -51,27 +56,37 @@ export async function createRunContext(lane, options = {}) {
     },
   });
 
-  await fs.mkdir(path.join(artifactRoot, "diagnostics"), { recursive: true });
-  await fs.mkdir(path.join(artifactRoot, "screenshots"), { recursive: true });
-  await fs.mkdir(path.join(artifactRoot, "playwright"), { recursive: true });
-  await fs.mkdir(path.join(artifactRoot, "provider-results"), { recursive: true });
-  await fs.mkdir(path.join(artifactRoot, "perf"), { recursive: true });
-  await writeJson(path.join(artifactRoot, "manifest.json"), manifest);
-  await writeJson(latestRunPointerPath, {
-    runId,
-    artifactRoot,
-    startedAt: manifest.startedAt,
-  });
+  try {
+    await fs.mkdir(path.join(artifactRoot, "diagnostics"), { recursive: true });
+    await fs.mkdir(path.join(artifactRoot, "screenshots"), { recursive: true });
+    await fs.mkdir(path.join(artifactRoot, "playwright"), { recursive: true });
+    await fs.mkdir(path.join(artifactRoot, "provider-results"), { recursive: true });
+    await fs.mkdir(path.join(artifactRoot, "perf"), { recursive: true });
+    await writeJson(path.join(artifactRoot, "manifest.json"), manifest);
+    await writeJson(latestRunPointerPath, {
+      runId,
+      artifactRoot,
+      startedAt: manifest.startedAt,
+    });
 
-  return {
-    lane,
-    options,
-    repoRoot,
-    runId,
-    artifactRoot,
-    latestRunPointerPath,
-    manifest,
-  };
+    return {
+      lane,
+      options,
+      repoRoot,
+      runId,
+      artifactRoot,
+      latestRunPointerPath,
+      manifest,
+      outputLockLease,
+    };
+  } catch (error) {
+    await outputLockLease.release();
+    throw error;
+  }
+}
+
+export async function releaseRunContext(context) {
+  await context?.outputLockLease?.release();
 }
 
 export async function finalizeRunContext(context, statusOverride) {
@@ -355,15 +370,25 @@ export function spawnVerificationProcess(command, args, options = {}) {
 }
 
 export async function writeJson(filePath, value) {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  await writeFileAtomically(filePath, `${JSON.stringify(value, null, 2)}\n`);
   return filePath;
 }
 
 export async function writeText(filePath, value) {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, value, "utf8");
+  await writeFileAtomically(filePath, value);
   return filePath;
+}
+
+async function writeFileAtomically(filePath, value) {
+  const directory = path.dirname(filePath);
+  await fs.mkdir(directory, { recursive: true });
+  const temporaryPath = path.join(directory, `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
+  try {
+    await fs.writeFile(temporaryPath, value, { encoding: "utf8", flag: "wx" });
+    await fs.rename(temporaryPath, filePath);
+  } finally {
+    await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
+  }
 }
 
 export async function readJson(filePath) {

@@ -1,5 +1,9 @@
 import type { FastifyPluginAsync, FastifyRequest } from "fastify";
-import { MOBILE_NATIVE_CAPABILITY_IDS, type MobileNativeCapabilityId } from "@goatcitadel/contracts";
+import {
+  MOBILE_NATIVE_CAPABILITY_IDS,
+  mobilePushRegistrationRequestSchema,
+  type MobileNativeCapabilityId,
+} from "@goatcitadel/contracts";
 import { z } from "zod";
 import type { MobileRouteActorContext } from "../services/mobile-route-service.js";
 import { withRouteAccess } from "./route-access.js";
@@ -72,15 +76,6 @@ const contextAuditSchema = z.object({
   contexts: z.array(mobileContextSchema).min(1).max(12),
 });
 
-const pushRegistrationSchema = z.object({
-  provider: z.enum(["expo", "fcm", "local_only"]),
-  enabled: z.boolean(),
-  tokenHash: z.string().trim().min(1).optional(),
-  tokenPreview: z.string().trim().min(1).max(32).optional(),
-  deviceLabel: z.string().trim().min(1).optional(),
-  appVersion: z.string().trim().min(1).optional(),
-});
-
 const revocationSchema = z.object({
   reason: z.enum(["panic_off", "device_revoked", "user_disabled", "session_expired"]),
   capabilityIds: z.array(capabilityIdSchema).optional(),
@@ -93,6 +88,14 @@ const mobileAuditQuerySchema = z.object({
 });
 
 export const mobileRoutes: FastifyPluginAsync = async (fastify) => {
+  const companionPushMutation = withRouteAccess(fastify, "companion", {
+    onRequest: async (_request, reply) => markNoStore(reply),
+    onSend: async (_request, reply, payload) => {
+      markNoStore(reply);
+      return payload;
+    },
+  });
+
   fastify.get("/api/v1/mobile/capabilities", withRouteAccess(fastify, "operator"), async (_request, reply) => {
     return reply.send(await fastify.services.mobile.listMobileCapabilities({}));
   });
@@ -129,8 +132,8 @@ export const mobileRoutes: FastifyPluginAsync = async (fastify) => {
       .send(await fastify.services.mobile.recordMobileContextAudit(body.data, actorContext(request)));
   });
 
-  fastify.put("/api/v1/mobile/current-device/push", withRouteAccess(fastify, "companion"), async (request, reply) => {
-    const body = pushRegistrationSchema.safeParse(request.body);
+  fastify.put("/api/v1/mobile/current-device/push", companionPushMutation, async (request, reply) => {
+    const body = mobilePushRegistrationRequestSchema.safeParse(request.body);
     if (!body.success) {
       return reply.code(400).send({ error: body.error.flatten() });
     }
@@ -149,6 +152,11 @@ export const mobileRoutes: FastifyPluginAsync = async (fastify) => {
     },
   );
 };
+
+function markNoStore(reply: { header(name: string, value: string): unknown }): void {
+  reply.header("Cache-Control", "no-store");
+  reply.header("Pragma", "no-cache");
+}
 
 function actorContext(request: FastifyRequest): MobileRouteActorContext {
   return {

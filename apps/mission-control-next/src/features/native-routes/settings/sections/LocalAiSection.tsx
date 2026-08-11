@@ -1,6 +1,7 @@
 // Extracted verbatim from `../../SettingsNativePage.tsx` as part of the
 // per-section settings decomposition.
 import { useState } from "react";
+import type { LocalAiFitRecommendation } from "@goatcitadel/contracts";
 import {
   fetchLocalAiReadiness,
   startLocalAiDownload,
@@ -36,6 +37,7 @@ export function LocalAiSection(_props: SettingsSectionProps) {
   const topRecommendation = data?.readiness?.recommendations?.[0] ?? null;
   const hasDetectedRuntime = data?.readiness?.hardware?.runtimes?.some((runtime) => runtime.detected) ?? false;
   const hasRegisteredEndpoint = (data?.readiness?.endpoints?.length ?? 0) > 0;
+  const recommendationRows = groupLocalAiRecommendations(data?.readiness?.recommendations ?? []).slice(0, 6);
 
   const handleQueueDownload = async () => {
     if (!topRecommendation) {
@@ -137,13 +139,7 @@ export function LocalAiSection(_props: SettingsSectionProps) {
           >
             <SettingsActionList
               ariaLabel="Local model recommendations"
-              items={(data?.readiness?.recommendations ?? []).slice(0, 6).map((item) => ({
-                id: `${item.modelId}-${item.backend}`,
-                label: item.modelId,
-                description: [...item.reasons, ...item.limitations].join(" "),
-                meta: `${item.backend} · ${item.fit} · ${item.confidence}`,
-                actionLabel: item.fit === "not_recommended" ? "Advisory" : "Candidate",
-              }))}
+              items={recommendationRows}
               emptyLabel="No recommendations returned yet."
             />
             <SettingsButtonRow>
@@ -173,6 +169,28 @@ export function LocalAiSection(_props: SettingsSectionProps) {
       </SettingsGrid>
     </SettingsSectionShell>
   );
+}
+
+export function groupLocalAiRecommendations(recommendations: LocalAiFitRecommendation[]) {
+  const grouped = new Map<string, LocalAiFitRecommendation[]>();
+  for (const recommendation of recommendations) {
+    const entries = grouped.get(recommendation.modelId) ?? [];
+    entries.push(recommendation);
+    grouped.set(recommendation.modelId, entries);
+  }
+  return [...grouped.entries()].map(([modelId, entries]) => ({
+    id: modelId,
+    label: modelId,
+    description: [
+      ...new Set(entries.flatMap((entry) => [...entry.reasons, ...entry.limitations]).filter(Boolean)),
+    ].join(" "),
+    meta: entries.map((entry) => `${entry.backend}: ${formatLocalAiFit(entry.fit)} (${entry.confidence})`).join(" · "),
+    actionLabel: entries.every((entry) => entry.fit === "not_recommended") ? "Advisory" : "Candidate",
+  }));
+}
+
+function formatLocalAiFit(fit: LocalAiFitRecommendation["fit"]): string {
+  return fit.replaceAll("_", " ");
 }
 
 function formatLocalAiBytes(value: number | undefined): string {

@@ -7,6 +7,7 @@ import {
   NEXT_RELEASE_SURFACE_MANIFEST,
   RELEASE_SURFACE_VARIANTS,
   resolveDirectCompatibilityManifest,
+  resolveReleaseSurfaceHref,
 } from "./release-surface-manifest.mjs";
 
 test("desktop-narrow visual proof renders inside the less-than-1180 compact boundary", () => {
@@ -35,6 +36,33 @@ test("Ops Runtime visual proof waits for the seeded authority projection", () =>
   const runtimeRoute = NEXT_RELEASE_SURFACE_MANIFEST.find((route) => route.slug === "ops-runtime");
 
   assert.equal(runtimeRoute?.readyText, "Runtime authority map");
+});
+
+test("Projects and Approvals visual proof target populated fixture records", () => {
+  const projectsRoute = NEXT_RELEASE_SURFACE_MANIFEST.find((route) => route.slug === "projects");
+  const approvalsRoute = NEXT_RELEASE_SURFACE_MANIFEST.find((route) => route.slug === "ops-approvals");
+  const fixture = {
+    sessions: { approval: "session 1" },
+    projects: { primary: "project/1" },
+    approvals: { primary: "approval?1" },
+  };
+
+  assert.equal(projectsRoute?.readySelector, ".mc-next-project-card.is-selected");
+  assert.equal(projectsRoute?.fixtureProjectKey, "primary");
+  assert.equal(
+    resolveReleaseSurfaceHref(projectsRoute, { themeQuery: "theme=light" }, fixture),
+    "/projects?theme=light&projectId=project%2F1",
+  );
+  assert.equal(approvalsRoute?.readySelector, ".mc-next-approvals-inspector");
+  assert.equal(approvalsRoute?.fixtureApprovalKey, "primary");
+  assert.equal(
+    resolveReleaseSurfaceHref(approvalsRoute, { themeQuery: "" }, fixture),
+    "/ops/approvals?approvalId=approval%3F1",
+  );
+  assert.equal(
+    resolveReleaseSurfaceHref({ href: "/chat", fixtureSessionKey: "approval" }, { themeQuery: "theme=light" }, fixture),
+    "/chat?theme=light&sessionId=session%201",
+  );
 });
 
 test("Chat owns threaded Working Context while non-Chat routes retain the shell inspector interaction", () => {

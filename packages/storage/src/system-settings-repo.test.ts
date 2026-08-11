@@ -69,6 +69,21 @@ describe("SystemSettingsRepository", () => {
     assert.deepEqual(repo.advanceCyclicCounter("background", 3), { previous: 2, value: 0, due: true });
     assert.equal(repo.get<number>("background")?.value, 0);
   });
+
+  it("can warm-start a new cyclic counter without changing an existing counter", () => {
+    const { repo } = createRepo();
+
+    assert.deepEqual(repo.advanceCyclicCounter("new-workspace", 5, undefined, 4), {
+      previous: 4,
+      value: 0,
+      due: true,
+    });
+    assert.deepEqual(repo.advanceCyclicCounter("new-workspace", 5, undefined, 4), {
+      previous: 0,
+      value: 1,
+      due: false,
+    });
+  });
 });
 
 class MissingReadbackDatabase implements DatabaseClient {

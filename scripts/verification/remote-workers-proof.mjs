@@ -21,7 +21,7 @@
 // cluster (initdb/pg_ctl/psql; PGDATA in the OS temp directory, random
 // identity-checked port in a band distinct from the other lanes, detached
 // start, readiness-polled, fast-stopped and removed on teardown) and runs ALL
-// seven remote-worker `.postgres.test.ts` owner suites against it with
+// the bootstrap bridge plus seven remote-worker `.postgres.test.ts` owner suites against it with
 // requireAllExecuted. If neither a URL nor local PostgreSQL binaries exist, the
 // live-PG check FAILS. The lane's only declared skips are scenarios 11-12.
 import { spawn, spawnSync } from "node:child_process";
@@ -31,9 +31,11 @@ import os from "node:os";
 import path from "node:path";
 import {
   REMOTE_WORKERS_LANE_ARTIFACTS,
+  REMOTE_WORKERS_POSTGRES_AUTHORITY_ARTIFACTS,
   REMOTE_WORKER_LIVE_POSTGRES_SUITES,
   buildRemoteWorkersLaneChecks,
   buildRemoteWorkersProofMatrix,
+  chunkRemoteWorkerEslintTargets,
   deriveCheckStatus,
   deriveRemoteWorkersLaneStatus,
   deriveRemoteWorkersRowStatuses,
@@ -227,15 +229,16 @@ function provisionHermeticPostgres() {
     return { error: `initdb failed (${initdb.status}): ${stripAnsi(initdb.stderr ?? "").slice(-400)}` };
   }
   // Durability settings are relaxed for this THROWAWAY cluster only. Scenario 8
-  // runs seven owner suites whose every live test builds an isolated schema by
+  // runs the bootstrap bridge plus seven owner suites whose every live test builds an isolated schema by
   // replaying the FULL migration ledger; with default fsync each replay costs
   // ~2 minutes of commit latency on this host, which alone exceeds the lane's
   // run budget. fsync/synchronous_commit/full_page_writes govern crash
   // durability, NOT transactional semantics — isolation, locking, advisory
   // locks, triggers, composite-FK enforcement and one-winner CAS (exactly what
   // these suites assert) are unchanged, and the cluster is destroyed on
-  // teardown. max_connections is raised because the seven suites run
-  // concurrently and each opens an admin pool plus per-connection clients.
+  // teardown. The live suites run serially to avoid concurrent full-ledger
+  // DDL against PostgreSQL's shared catalogs; max_connections still leaves
+  // bounded room for each suite's admin pool and per-connection race clients.
   const serverOptions =
     `-p ${port} -c listen_addresses=127.0.0.1 ` +
     "-c fsync=off -c synchronous_commit=off -c full_page_writes=off -c max_connections=200";
@@ -393,13 +396,43 @@ for (const [index, check] of checks.entries()) {
   }
 
   if (check.kind === "eslint") {
-    const targets = [...REMOTE_WORKERS_LANE_ARTIFACTS, ...remoteWorkerTsFiles];
-    const outcome = runProcessCheck(check, { args: ["exec", "eslint", "--max-warnings", "0", ...targets] });
-    const settled = checkResults.get(check.id);
-    if (settled) checkResults.set(check.id, { ...settled, eslintTargets: targets.length });
+    const targets = [
+      ...new Set([
+        ...REMOTE_WORKERS_LANE_ARTIFACTS,
+        ...REMOTE_WORKERS_POSTGRES_AUTHORITY_ARTIFACTS,
+        ...REMOTE_WORKER_LIVE_POSTGRES_SUITES.map((suite) => `packages/storage/src/${suite}`),
+        ...remoteWorkerTsFiles,
+      ]),
+    ];
+    const chunks = chunkRemoteWorkerEslintTargets(targets);
+    const checkStartedAt = Date.now();
+    const stdout = [];
+    const stderr = [];
+    let failedResult;
+    for (const [chunkIndex, chunk] of chunks.entries()) {
+      const result = spawnChecked(pnpmCommandName(), ["exec", "eslint", "--max-warnings", "0", ...chunk]);
+      stdout.push(`[chunk ${chunkIndex + 1}/${chunks.length}]\n${result.stdout ?? ""}`);
+      stderr.push(`[chunk ${chunkIndex + 1}/${chunks.length}]\n${result.stderr ?? ""}`);
+      if (result.error || result.status !== 0) {
+        failedResult = result;
+        break;
+      }
+    }
+    writeCheckLogs(check.id, stdout.join("\n"), stderr.join("\n"));
+    const combined = `${stdout.join("\n")}\n${stderr.join("\n")}`;
+    const passed = failedResult === undefined;
+    recordResult(check, {
+      status: passed ? "passed" : "failed",
+      exitCode: failedResult?.status,
+      ...(failedResult?.error ? { error: String(failedResult.error) } : {}),
+      durationMs: Date.now() - checkStartedAt,
+      eslintTargets: targets.length,
+      eslintChunks: chunks.length,
+    });
+    if (!passed) printTailOnFailure(combined);
     process.stdout.write(
-      outcome.status === "passed"
-        ? `  -> PASS (eslint clean over ${targets.length} files, --max-warnings 0)\n`
+      passed
+        ? `  -> PASS (eslint clean over ${targets.length} files in ${chunks.length} bounded chunks, --max-warnings 0)\n`
         : "  -> FAIL (eslint reported problems; see logs)\n",
     );
     continue;
@@ -421,6 +454,7 @@ for (const [index, check] of checks.entries()) {
       "exec",
       "tsx",
       "--test",
+      "--test-concurrency=1",
       ...REMOTE_WORKER_LIVE_POSTGRES_SUITES.map((suite) => `src/${suite}`),
     ];
     // Connection-reset signatures get ONE fresh-cluster re-attempt: on this
@@ -453,7 +487,7 @@ for (const [index, check] of checks.entries()) {
           recordResult(check, {
             status: "failed",
             failureNote:
-              `${provisioned.error} Scenario 8 requires live execution of all seven remote-worker owner ` +
+              `${provisioned.error} Scenario 8 requires live execution of the bootstrap bridge plus all seven remote-worker owner ` +
               ".postgres.test.ts suites: provide GOATCITADEL_TEST_POSTGRES_URL or local PostgreSQL binaries.",
           });
           process.stdout.write(`  -> FAIL (${provisioned.error})\n`);

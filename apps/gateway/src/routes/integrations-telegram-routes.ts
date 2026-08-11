@@ -102,7 +102,7 @@ export function registerTelegramIntegrationRoutes(fastify: FastifyInstance): voi
   );
 
   fastify.get("/api/v1/channels/personalities", async (_request, reply) => {
-    return reply.send(resolveRoutePersonalityCatalog(fastify.services));
+    return reply.send(await resolveRoutePersonalityCatalog(fastify.services));
   });
 
   fastify.post(

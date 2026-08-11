@@ -9,6 +9,7 @@ import type {
   RemoteWorkerEffectRepository,
   RemoteWorkerEffectTransitionRecord,
 } from "@goatcitadel/storage";
+import type { AwaitableOwnerMethods } from "./remote-worker-owner-port.js";
 
 /**
  * HX-506 effect settlement service (production-dark).
@@ -82,9 +83,16 @@ export interface RemoteWorkerEffectCoordinatorPort {
 }
 
 export interface RemoteWorkerEffectSettlementDependencies {
-  repository: RemoteWorkerEffectRepository;
+  repository: RemoteWorkerEffectRepositoryPort;
   coordinator: RemoteWorkerEffectCoordinatorPort;
 }
+
+type RemoteWorkerEffectRepositoryMethod = "recordIntent" | "appendTransition" | "recordReceipt";
+
+export type RemoteWorkerEffectRepositoryPort = AwaitableOwnerMethods<
+  RemoteWorkerEffectRepository,
+  RemoteWorkerEffectRepositoryMethod
+>;
 
 export interface DispatchRemoteWorkerEffectInput {
   fence: RemoteWorkerEffectExecutionFence;
@@ -102,7 +110,7 @@ export interface DispatchRemoteWorkerEffectResult {
 }
 
 export class RemoteWorkerEffectSettlementService {
-  private readonly repository: RemoteWorkerEffectRepository;
+  private readonly repository: RemoteWorkerEffectRepositoryPort;
   private readonly coordinator: RemoteWorkerEffectCoordinatorPort;
 
   public constructor(dependencies: RemoteWorkerEffectSettlementDependencies) {
@@ -113,7 +121,7 @@ export class RemoteWorkerEffectSettlementService {
   public async dispatchEffect(input: DispatchRemoteWorkerEffectInput): Promise<DispatchRemoteWorkerEffectResult> {
     const { fence } = input;
     // 1. Persist the immutable remote intent BEFORE any policy or delivery.
-    const intent = this.repository.recordIntent({
+    const intent = await this.repository.recordIntent({
       registryWorkspaceId: fence.registryWorkspaceId,
       assignmentId: fence.assignmentId,
       assignmentGeneration: fence.assignmentGeneration,
@@ -126,13 +134,13 @@ export class RemoteWorkerEffectSettlementService {
 
     const transitions: RemoteWorkerEffectTransitionRecord[] = [];
     let sequence = 0;
-    const append = (
+    const append = async (
       state: RemoteWorkerEffectTransitionState,
       correlation: Omit<RemoteWorkerEffectCorrelation, "schemaVersion" | "transitionState">,
-    ): void => {
+    ): Promise<void> => {
       sequence += 1;
       transitions.push(
-        this.repository.appendTransition({
+        await this.repository.appendTransition({
           registryWorkspaceId: fence.registryWorkspaceId,
           assignmentId: fence.assignmentId,
           assignmentGeneration: fence.assignmentGeneration,
@@ -148,7 +156,7 @@ export class RemoteWorkerEffectSettlementService {
     };
 
     // Genesis correlation records the intent before delivery.
-    append("recorded", emptyCorrelation());
+    await append("recorded", emptyCorrelation());
 
     // 2. Invoke ONLY through the canonical coordinator with the execution fence.
     const outcome = await this.coordinator.dispatch({
@@ -159,10 +167,10 @@ export class RemoteWorkerEffectSettlementService {
     });
 
     // 3. Record ONLY exact correlations to the coordinator's evidence.
-    const receiptState = this.recordOutcome(append, outcome);
+    const receiptState = await this.recordOutcome(append, outcome);
     const terminal = transitions[transitions.length - 1]!;
 
-    const receipt = this.repository.recordReceipt({
+    const receipt = await this.repository.recordReceipt({
       registryWorkspaceId: fence.registryWorkspaceId,
       assignmentId: fence.assignmentId,
       assignmentGeneration: fence.assignmentGeneration,
@@ -177,42 +185,42 @@ export class RemoteWorkerEffectSettlementService {
     return { intentId: intent.intentId, transitions, receipt };
   }
 
-  private recordOutcome(
+  private async recordOutcome(
     append: (
       state: RemoteWorkerEffectTransitionState,
       correlation: Omit<RemoteWorkerEffectCorrelation, "schemaVersion" | "transitionState">,
-    ) => void,
+    ) => Promise<void>,
     outcome: RemoteWorkerEffectDispatchOutcome,
-  ): RemoteWorkerEffectReceiptState {
+  ): Promise<RemoteWorkerEffectReceiptState> {
     const approvalRecordSha256 = "approvalRecordSha256" in outcome ? (outcome.approvalRecordSha256 ?? null) : null;
     if ("approvalWaited" in outcome && outcome.approvalWaited) {
-      append("approval_wait", { ...emptyCorrelation(), approvalRecordSha256 });
+      await append("approval_wait", { ...emptyCorrelation(), approvalRecordSha256 });
     }
     switch (outcome.kind) {
       case "blocked_before_dispatch":
-        append("blocked_before_dispatch", {
+        await append("blocked_before_dispatch", {
           ...emptyCorrelation(),
           approvalRecordSha256,
           sanitizedError: outcome.sanitizedError,
         });
         return "blocked_before_dispatch";
       case "failed_before_boundary":
-        append("dispatch_claimed", emptyCorrelation());
-        append("failed_before_boundary", { ...emptyCorrelation(), sanitizedError: outcome.sanitizedError });
+        await append("dispatch_claimed", emptyCorrelation());
+        await append("failed_before_boundary", { ...emptyCorrelation(), sanitizedError: outcome.sanitizedError });
         return "failed_before_boundary";
       case "completed_no_effect":
-        append("dispatch_claimed", {
+        await append("dispatch_claimed", {
           ...emptyCorrelation(),
           approvalRecordSha256,
           externalSideEffectRunId: outcome.externalSideEffectRunId,
         });
-        append("external_boundary_started", {
+        await append("external_boundary_started", {
           ...emptyCorrelation(),
           approvalRecordSha256,
           externalSideEffectRunId: outcome.externalSideEffectRunId,
           boundaryReceiptSha256: outcome.boundaryReceiptSha256,
         });
-        append("completed_no_effect", {
+        await append("completed_no_effect", {
           ...emptyCorrelation(),
           approvalRecordSha256,
           externalSideEffectRunId: outcome.externalSideEffectRunId,
@@ -220,12 +228,12 @@ export class RemoteWorkerEffectSettlementService {
         });
         return "completed_no_effect";
       case "completed_with_effect":
-        append("dispatch_claimed", {
+        await append("dispatch_claimed", {
           ...emptyCorrelation(),
           approvalRecordSha256,
           externalSideEffectRunId: outcome.externalSideEffectRunId,
         });
-        append("external_boundary_started", {
+        await append("external_boundary_started", {
           ...emptyCorrelation(),
           approvalRecordSha256,
           externalSideEffectRunId: outcome.externalSideEffectRunId,
@@ -233,7 +241,7 @@ export class RemoteWorkerEffectSettlementService {
         });
         // completed_with_effect REQUIRES the canonical HX-305 outcome the
         // coordinator supplies; the contract rejects a result-body-only receipt.
-        append("completed_with_effect", {
+        await append("completed_with_effect", {
           ...emptyCorrelation(),
           approvalRecordSha256,
           externalSideEffectRunId: outcome.externalSideEffectRunId,
@@ -243,12 +251,12 @@ export class RemoteWorkerEffectSettlementService {
         return "completed_with_effect";
       case "manual_reconciliation":
         // Any possibly-dispatched error becomes manual reconciliation; no retry.
-        append("dispatch_claimed", {
+        await append("dispatch_claimed", {
           ...emptyCorrelation(),
           approvalRecordSha256,
           externalSideEffectRunId: outcome.externalSideEffectRunId,
         });
-        append("manual_reconciliation", {
+        await append("manual_reconciliation", {
           ...emptyCorrelation(),
           approvalRecordSha256,
           externalSideEffectRunId: outcome.externalSideEffectRunId,

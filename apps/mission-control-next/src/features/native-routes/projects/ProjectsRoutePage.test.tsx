@@ -235,7 +235,7 @@ describe("ProjectsRoutePage", () => {
     mockedRestoreChatProject.mockResolvedValue(project({ projectId: "project-archived", lifecycleStatus: "active" }));
   });
 
-  it("loads project containers, counts thread modes, and auto-selects the first project", async () => {
+  it("keeps the base route as a project overview and routes selection into detail", async () => {
     const navigate = vi.fn();
     const renderer = await renderPage(defaultProps({ navigate }));
 
@@ -253,29 +253,41 @@ describe("ProjectsRoutePage", () => {
       workspaceId: "default",
       limit: 1000,
     });
-    expect(navigate).toHaveBeenCalledWith(
-      { area: "projects", projectId: "project-alpha", theme: "ops" },
-      { replace: true },
-    );
+    expect(navigate).not.toHaveBeenCalled();
 
-    const text = pageText(renderer);
+    const text = pageText(renderer).replace(/\s+/g, " ");
     expect(text).toContain("Project containers");
+    expect(text).toContain("Alpha");
+    expect(text).toContain("Chat 3");
+    expect(text).toContain("Open latest thread");
+    expect(text).not.toContain("Project overview");
+    expect(text).not.toContain("Edit selected");
+
+    act(() => {
+      findButton(renderer.root, "Beta").props.onClick();
+    });
+    expect(navigate).toHaveBeenCalledWith({ area: "projects", projectId: "project-beta", theme: "ops" });
+  });
+
+  it("renders a selected project as a visibly distinct detail route", async () => {
+    const navigate = vi.fn();
+    const renderer = await renderPage(
+      defaultProps({ route: { area: "projects", projectId: "project-alpha", theme: "ops" }, navigate }),
+    );
+    const text = pageText(renderer);
+
+    expect(text).toContain("Projects · Detail");
+    expect(text).toContain("Threads, artifacts, and controls for Alpha");
     expect(text).toContain("Project overview");
     expect(text).toContain("Start from intent");
     expect(text).toContain("Release proof");
     expect(text).toContain("Continue Chat");
     expect(text).toContain("Latest continuation");
     expect(text).toContain("Reopen project artifacts");
-    expect(text).toContain("Alpha");
-    expect(text).toContain("Chat 3");
     expect(text).toContain("chat-1");
     expect(text).toContain("No tags yet.");
     expect(text).toContain("Unknown");
-
-    act(() => {
-      findButton(renderer.root, "Beta").props.onClick();
-    });
-    expect(navigate).toHaveBeenCalledWith({ area: "projects", projectId: "project-beta", theme: "ops" });
+    expect(renderer.root.findAllByProps({ "aria-label": "Continue where you left off" })).toHaveLength(0);
 
     act(() => {
       findButton(renderer.root, "Plan run").props.onClick();
@@ -304,7 +316,7 @@ describe("ProjectsRoutePage", () => {
     const renderer = await renderPage(defaultProps({ route: { area: "projects", projectId: "project-alpha" } }));
     const text = pageText(renderer);
 
-    expect(text).toContain("Project containers");
+    expect(text).toContain("Projects · Detail");
     expect(text).toContain("Project overview");
     expect(text).toContain("Alpha");
     expect(text).toContain("Artifacts 0");
@@ -564,7 +576,7 @@ describe("ProjectsRoutePage", () => {
     );
   });
 
-  it("does not auto-select an archived project when returning to the projects root", async () => {
+  it("uses an active project for overview actions without rewriting the projects root", async () => {
     mockedFetchChatProjects.mockResolvedValueOnce({
       items: [
         project({ projectId: "project-archived", name: "Archived", lifecycleStatus: "archived" }),
@@ -576,10 +588,7 @@ describe("ProjectsRoutePage", () => {
 
     await renderPage(defaultProps({ route: { area: "projects", theme: "ops" }, navigate }));
 
-    expect(navigate).toHaveBeenCalledWith(
-      { area: "projects", projectId: "project-active", theme: "ops" },
-      { replace: true },
-    );
+    expect(navigate).not.toHaveBeenCalled();
   });
 
   it("restores archived projects and leaves failures visible", async () => {
@@ -627,10 +636,9 @@ describe("ProjectsRoutePage", () => {
     expect(renderedText(renderer)).toContain("No active projects found in this workspace.");
     expect(renderedText(renderer)).toContain("Create a bounded home for the work");
     expect(renderedText(renderer)).toContain("Use sample mission");
-    expect(findButton(renderer.root, "New Chat").props.disabled).toBe(true);
-    act(() => {
-      findButton(renderer.root, "New Chat").props.onClick();
-    });
+    expect(
+      renderer.root.findAll((node) => node.type === "button" && collectText(node).includes("New Chat")),
+    ).toHaveLength(0);
     expect(mockedCreateChatSession).not.toHaveBeenCalled();
     act(() => {
       findButton(renderer.root, "Start Chat").props.onClick();

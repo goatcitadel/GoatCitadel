@@ -13,6 +13,7 @@ import type {
   MobileRevocationRequest,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
+import type { MobilePushService } from "./mobile-push-service.js";
 import { createRouteService, type RoutePort, type RouteService } from "./route-service-factory.js";
 
 export const mobileRouteMethods = [
@@ -40,6 +41,7 @@ export interface MobileRouteActorContext {
 
 export interface MobileRoutePortDependencies {
   storage: Pick<Storage, "audit">;
+  mobilePush: Pick<MobilePushService, "register" | "revokeGrant">;
   publishRealtime: (eventType: string, source: string, payload: Record<string, unknown>) => Promise<unknown>;
 }
 
@@ -174,48 +176,61 @@ export function createMobileRoutePort(deps: MobileRoutePortDependencies): Mobile
       input: MobilePushRegistrationRequest,
       actor: MobileRouteActorContext,
     ): Promise<MobilePushRegistrationResponse> => {
-      const registeredAt = new Date().toISOString();
-      const registrationId = randomUUID();
+      const registration = await deps.mobilePush.register(input, actor);
       await deps.storage.audit.append("approvals", {
         eventType: "mobile.push_registration",
-        registrationId,
-        registeredAt,
-        provider: input.provider,
-        enabled: input.enabled,
-        tokenHash: input.tokenHash,
-        tokenPreview: input.tokenPreview,
-        deviceLabel: input.deviceLabel,
-        appVersion: input.appVersion,
+        registrationId: registration.registrationId,
+        registeredAt: registration.registeredAt,
+        updatedAt: registration.updatedAt,
+        provider: registration.provider,
+        enabled: registration.enabled,
+        deliveryAvailability: registration.deliveryAvailability,
+        revision: registration.revision,
         ...actor,
       });
       await deps.publishRealtime("mobile_push_registration_updated", "mobile", {
-        registrationId,
-        enabled: input.enabled,
-        provider: input.provider,
+        registrationId: registration.registrationId,
+        enabled: registration.enabled,
+        provider: registration.provider,
+        deliveryAvailability: registration.deliveryAvailability,
+        revision: registration.revision,
         deviceId: actor.deviceId,
         companionSessionId: actor.companionSessionId,
       });
-      return { registrationId, registeredAt, enabled: input.enabled };
+      return registration;
     },
     revokeMobileCapabilities: async (input: MobileRevocationRequest, actor: MobileRouteActorContext) => {
       const revokedAt = normalizeIsoTimestamp(input.revokedAt) ?? new Date().toISOString();
+      const revokedPushRegistrations = shouldRevokePush(input) ? await deps.mobilePush.revokeGrant(actor.grantId) : [];
       await deps.storage.audit.append("approvals", {
         eventType: "mobile.revocation",
         revokedAt,
         reason: input.reason,
         capabilityIds: input.capabilityIds ?? [],
+        revokedPushRegistrationIds: revokedPushRegistrations.map((registration) => registration.registrationId),
         ...actor,
       });
       await deps.publishRealtime("mobile_capabilities_revoked", "mobile", {
         revokedAt,
         reason: input.reason,
         capabilityIds: input.capabilityIds ?? [],
+        revokedPushRegistrationCount: revokedPushRegistrations.length,
         deviceId: actor.deviceId,
         companionSessionId: actor.companionSessionId,
       });
       return { revokedAt, capabilityIds: input.capabilityIds ?? [] };
     },
   };
+}
+
+function shouldRevokePush(input: MobileRevocationRequest): boolean {
+  return (
+    input.reason === "panic_off" ||
+    input.reason === "device_revoked" ||
+    input.reason === "session_expired" ||
+    !input.capabilityIds?.length ||
+    input.capabilityIds.includes("push_refresh")
+  );
 }
 
 export function createMobileRouteService(port: MobileRoutePort): MobileRouteService {

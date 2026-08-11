@@ -20,81 +20,90 @@ export interface AuditAppendOptions {
   attribution?: RequestAttribution;
 }
 
+interface PendingAuditAppend {
+  payload: Record<string, unknown>;
+  options?: AuditAppendOptions;
+  resolve: () => void;
+  reject: (error: unknown) => void;
+}
+
 export class AuditLog {
   private readonly streamLocks = new Map<string, Promise<void>>();
   private readonly writeQueues = new Map<AuditStream, Promise<void>>();
+  private readonly pendingAppends = new Map<AuditStream, PendingAuditAppend[]>();
+  private readonly scheduledFlushes = new Set<AuditStream>();
   private readonly lastPrunedAt = new Map<AuditStream, number>();
 
   public constructor(private readonly auditDir: string) {}
 
-  public async append(
-    stream: AuditStream,
-    payload: Record<string, unknown>,
-    options?: AuditAppendOptions,
-  ): Promise<void> {
-    const prior = this.writeQueues.get(stream) ?? Promise.resolve();
-    const next = prior.catch(() => undefined).then(() => this.appendInternal(stream, payload, options));
-    this.writeQueues.set(stream, next);
-    try {
-      await next;
-    } finally {
-      if (this.writeQueues.get(stream) === next) {
-        this.writeQueues.delete(stream);
-      }
-    }
-  }
-
-  private async appendInternal(
-    stream: AuditStream,
-    payload: Record<string, unknown>,
-    options?: AuditAppendOptions,
-  ): Promise<void> {
-    const filePath = path.join(this.auditDir, `${stream}.jsonl`);
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
+  public append(stream: AuditStream, payload: Record<string, unknown>, options?: AuditAppendOptions): Promise<void> {
     const attribution = options?.attribution ?? getRequestAttribution();
-    const baseRecord = {
-      ...payload,
-      timestamp:
-        options?.occurredAt ?? (typeof payload.timestamp === "string" ? payload.timestamp : new Date().toISOString()),
-      correlationId: payload.correlationId ?? attribution?.correlationId,
-      traceId: payload.traceId ?? attribution?.traceId,
-      originSurface: payload.originSurface ?? attribution?.originSurface,
-      actorId: payload.actorId ?? attribution?.actorId,
-      deviceId: payload.deviceId ?? attribution?.deviceId,
-      grantId: payload.grantId ?? attribution?.grantId,
-      companionSessionId: payload.companionSessionId ?? attribution?.companionSessionId,
-      ...(options?.deliveryId ? { eventId: options.deliveryId, deliveryId: options.deliveryId } : {}),
-    };
-    const sanitizedRecord = sanitizeForAudit(baseRecord);
-    let line: string;
-    try {
-      line = JSON.stringify(sanitizedRecord) + "\n";
-    } catch (error) {
-      // eslint-disable-next-line no-console -- degraded audit serialization should still surface in local runtime logs.
-      console.warn("[goatcitadel] audit log payload could not be serialized; writing degraded record", {
-        stream,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      line =
-        JSON.stringify({
-          timestamp: baseRecord.timestamp,
-          correlationId: baseRecord.correlationId,
-          traceId: baseRecord.traceId,
-          originSurface: baseRecord.originSurface,
-          actorId: baseRecord.actorId,
-          deviceId: baseRecord.deviceId,
-          grantId: baseRecord.grantId,
-          companionSessionId: baseRecord.companionSessionId,
-          serializationError: error instanceof Error ? error.message : String(error),
-          degraded: true,
-        }) + "\n";
-    }
-    await this.runWithStreamLock(filePath, async () => {
-      await this.pruneAuditStreamIfDue(stream, filePath);
-      if (options?.deliveryId && (await auditFileContainsDeliveryId(filePath, options.deliveryId))) {
+    const capturedOptions = attribution && options?.attribution !== attribution ? { ...options, attribution } : options;
+    return new Promise<void>((resolve, reject) => {
+      const pending = this.pendingAppends.get(stream) ?? [];
+      pending.push({ payload, options: capturedOptions, resolve, reject });
+      this.pendingAppends.set(stream, pending);
+      if (this.scheduledFlushes.has(stream)) {
         return;
       }
-      await fs.appendFile(filePath, line, { encoding: "utf8" });
+      this.scheduledFlushes.add(stream);
+      queueMicrotask(() => this.flushPending(stream));
+    });
+  }
+
+  private flushPending(stream: AuditStream): void {
+    const batch = this.pendingAppends.get(stream) ?? [];
+    this.pendingAppends.delete(stream);
+    this.scheduledFlushes.delete(stream);
+    if (batch.length === 0) {
+      return;
+    }
+
+    const prior = this.writeQueues.get(stream) ?? Promise.resolve();
+    const next = prior.catch(() => undefined).then(() => this.appendBatchInternal(stream, batch));
+    this.writeQueues.set(stream, next);
+    void next
+      .then(
+        () => {
+          for (const entry of batch) {
+            entry.resolve();
+          }
+        },
+        (error: unknown) => {
+          for (const entry of batch) {
+            entry.reject(error);
+          }
+        },
+      )
+      .finally(() => {
+        if (this.writeQueues.get(stream) === next) {
+          this.writeQueues.delete(stream);
+        }
+      });
+  }
+
+  private async appendBatchInternal(stream: AuditStream, batch: readonly PendingAuditAppend[]): Promise<void> {
+    const filePath = path.join(this.auditDir, `${stream}.jsonl`);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    const serialized = batch.map((entry) => serializeAuditRecord(stream, entry.payload, entry.options));
+    await this.runWithStreamLock(filePath, async () => {
+      await this.pruneAuditStreamIfDue(stream, filePath);
+      const requestedDeliveryIds = serialized.flatMap((entry) => (entry.deliveryId ? [entry.deliveryId] : []));
+      const knownDeliveryIds = await readKnownAuditDeliveryIds(filePath, requestedDeliveryIds);
+      const lines: string[] = [];
+      for (const entry of serialized) {
+        if (entry.deliveryId && knownDeliveryIds.has(entry.deliveryId)) {
+          continue;
+        }
+        if (entry.deliveryId) {
+          knownDeliveryIds.add(entry.deliveryId);
+        }
+        lines.push(entry.line);
+      }
+      if (lines.length === 0) {
+        return;
+      }
+      await fs.appendFile(filePath, lines.join(""), { encoding: "utf8" });
     });
   }
 
@@ -159,30 +168,89 @@ export class AuditLog {
   }
 }
 
-async function auditFileContainsDeliveryId(filePath: string, deliveryId: string): Promise<boolean> {
+function serializeAuditRecord(
+  stream: AuditStream,
+  payload: Record<string, unknown>,
+  options?: AuditAppendOptions,
+): { deliveryId?: string; line: string } {
+  const attribution = options?.attribution;
+  const baseRecord = {
+    ...payload,
+    timestamp:
+      options?.occurredAt ?? (typeof payload.timestamp === "string" ? payload.timestamp : new Date().toISOString()),
+    correlationId: payload.correlationId ?? attribution?.correlationId,
+    traceId: payload.traceId ?? attribution?.traceId,
+    originSurface: payload.originSurface ?? attribution?.originSurface,
+    actorId: payload.actorId ?? attribution?.actorId,
+    deviceId: payload.deviceId ?? attribution?.deviceId,
+    grantId: payload.grantId ?? attribution?.grantId,
+    companionSessionId: payload.companionSessionId ?? attribution?.companionSessionId,
+    ...(options?.deliveryId ? { eventId: options.deliveryId, deliveryId: options.deliveryId } : {}),
+  };
+  const sanitizedRecord = sanitizeForAudit(baseRecord);
+  try {
+    return {
+      ...(options?.deliveryId ? { deliveryId: options.deliveryId } : {}),
+      line: JSON.stringify(sanitizedRecord) + "\n",
+    };
+  } catch (error) {
+    // eslint-disable-next-line no-console -- degraded audit serialization should still surface in local runtime logs.
+    console.warn("[goatcitadel] audit log payload could not be serialized; writing degraded record", {
+      stream,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return {
+      ...(options?.deliveryId ? { deliveryId: options.deliveryId } : {}),
+      line:
+        JSON.stringify({
+          timestamp: baseRecord.timestamp,
+          correlationId: baseRecord.correlationId,
+          traceId: baseRecord.traceId,
+          originSurface: baseRecord.originSurface,
+          actorId: baseRecord.actorId,
+          deviceId: baseRecord.deviceId,
+          grantId: baseRecord.grantId,
+          companionSessionId: baseRecord.companionSessionId,
+          ...(options?.deliveryId ? { eventId: options.deliveryId, deliveryId: options.deliveryId } : {}),
+          serializationError: error instanceof Error ? error.message : String(error),
+          degraded: true,
+        }) + "\n",
+    };
+  }
+}
+
+async function readKnownAuditDeliveryIds(filePath: string, deliveryIds: readonly string[]): Promise<Set<string>> {
+  const requested = new Set(deliveryIds);
+  const deliveryIdHints = [...requested];
+  const found = new Set<string>();
+  if (requested.size === 0) {
+    return found;
+  }
   let content: string;
   try {
     content = await fs.readFile(filePath, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return false;
+      return found;
     }
     throw error;
   }
   for (const line of content.split(/\r?\n/)) {
-    if (!line.includes(deliveryId)) {
+    if (!deliveryIdHints.some((deliveryId) => line.includes(deliveryId))) {
       continue;
     }
     try {
       const parsed = JSON.parse(line) as { eventId?: unknown; deliveryId?: unknown };
-      if (parsed.eventId === deliveryId || parsed.deliveryId === deliveryId) {
-        return true;
+      for (const candidate of [parsed.eventId, parsed.deliveryId]) {
+        if (typeof candidate === "string" && requested.has(candidate)) {
+          found.add(candidate);
+        }
       }
     } catch {
       // Malformed historical lines are ignored; a valid idempotent record is still appended.
     }
   }
-  return false;
+  return found;
 }
 
 async function runWithAuditFileLock<T>(filePath: string, operation: () => Promise<T>): Promise<T> {

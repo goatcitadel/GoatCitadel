@@ -497,6 +497,13 @@ describe("useChatDelegationPolicyActions", () => {
       ),
     ).toBe(true);
     expect(
+      shouldHydrateTraceDelegationRun(
+        { ...activeRun, runId: "run-existing", attachedTurnId: "turn-1", status: "completed" },
+        "run-existing",
+        "turn-1",
+      ),
+    ).toBe(false);
+    expect(
       createSeedDelegationSteps({
         objective: "Seed defaults",
         roles: ["Architect"],

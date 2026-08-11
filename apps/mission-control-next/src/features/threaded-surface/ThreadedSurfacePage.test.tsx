@@ -724,6 +724,39 @@ describe("ThreadedSurfacePage", () => {
     expect(markup).toContain("Decisions clear");
   });
 
+  it("keeps persisted approval navigation while rendering one canonical decision card", () => {
+    const markup = renderToStaticMarkup(
+      <ThreadedSurfacePage
+        surface="chat"
+        input={
+          {
+            ...buildInput(),
+            messageMode: "chat",
+            activeSessionSurfaceProps: buildActiveSessionProps({
+              approvalsCount: 1,
+              pendingApproval: {
+                approvalId: "11111111-2222-3333-4444-555555555555",
+                kind: "tool_call",
+                toolName: "filesystem.write",
+              },
+              trust: {
+                ...buildActiveSessionProps().trust,
+                approvalsSummary: "1 approval pending",
+                runStateSummary: "Run: waiting for approval",
+              },
+            }),
+            emptyStateProps: null,
+          } as any
+        }
+      />,
+    );
+
+    expect(markup.match(/Approval required/g)).toHaveLength(1);
+    expect(markup).toContain("Approvals (1)");
+    expect(markup).toContain('aria-label="Approval identifier: 11111111-2222-3333-4444-555555555555"');
+    expect(markup).not.toContain("mc-next-composer-blocked-actions");
+  });
+
   it("renders a quick restore action for archived sessions", () => {
     const markup = renderToStaticMarkup(
       <ThreadedSurfacePage

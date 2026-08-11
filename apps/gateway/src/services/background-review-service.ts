@@ -15,14 +15,17 @@ import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-c
  * P2-S1 — Background-review (the self-improvement learning loop).
  *
  * After a *successful* root turn, the agent reflects on the just-completed
- * transcript and produces content-minimized evidence for later governed review.
- * It never writes OperatorProfile state, skill lifecycle state, or skill files.
+ * transcript and produces candidate material for later governed review. It
+ * never writes OperatorProfile state, skill lifecycle state, or skill files;
+ * the durable post-commit owner may separately submit filtered facts to the
+ * governed trace-candidate inbox.
  *
  * Implementation: the proven, lower-risk **structured-extraction** pattern (the
  * same shape as the F3 commitment classifier) rather than a replayed,
  * tool-restricted delegated agent fork. We make cheap, read-only model call(s)
- * that emit strict JSON (no tool calls). Durable callers may retain only counts
- * and stable fingerprints; raw fact/suggestion content remains response-local.
+ * that emit strict JSON (no tool calls). Durable receipts retain only counts,
+ * stable fingerprints, and candidate ids; raw facts may live only in the
+ * governed proposal owner and raw skill suggestions remain response-local.
  *
  * Safety:
  *   - Runs ONLY on successful, human, non-eval, non-replay sessions (the caller
@@ -111,7 +114,7 @@ export interface BackgroundReviewUsageLineage {
 export interface BackgroundReviewResult {
   /** Whether the review actually ran (guards passed + transcript present). */
   ran: boolean;
-  /** Response-local facts that survived filtering. They are never promoted here. */
+  /** Filtered facts that are never promoted here; a caller may file governed proposals. */
   memoryFacts: OperatorProfileFact[];
   /** Stable, content-free evidence suitable for durable receipts. */
   memoryEvidenceFingerprints: string[];
@@ -176,7 +179,8 @@ export class BackgroundReviewService {
       return empty;
     }
 
-    // Memory/skill model outputs are response-local. This service has no write ports.
+    // Model outputs stay local to this service. A caller may route filtered
+    // memory facts into a governed proposal owner; this service has no write ports.
     const usageLineage: BackgroundReviewUsageLineage = {
       workspaceId: input.workspaceId,
       sessionId: input.sessionId,

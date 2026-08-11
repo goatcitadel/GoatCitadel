@@ -46,7 +46,7 @@ describe("shared-host production admission wiring", () => {
       'this.sharedHostLifecycle.tryReserve("worker", LISTENER_START_RESERVATION_ID)',
     );
     const startIndex = remoteWorkerNativeRuntimeSource.indexOf(
-      "startRemoteWorkerNativeTlsListener(config)",
+      "startRemoteWorkerNativeTlsListener(config, handler)",
       reservationIndex,
     );
     const releaseIndex = remoteWorkerNativeRuntimeSource.indexOf("reservation.release()", startIndex);

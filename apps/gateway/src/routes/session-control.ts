@@ -59,7 +59,7 @@ export function registerSessionControlRoutes(fastify: FastifyInstance): void {
     }
     try {
       const actor = resolveSessionControlCompanionActor(request);
-      const response = fastify.services.sessionControl.createExternalRequest({
+      const response = await fastify.services.sessionControl.createExternalRequest({
         actor,
         sessionId,
         correlationId: resolveCorrelationId(request),
@@ -82,7 +82,10 @@ export function registerSessionControlRoutes(fastify: FastifyInstance): void {
       return reply;
     }
     try {
-      const detail = fastify.services.sessionControl.getDetail({ actor: resolveControlReadActor(request), sessionId });
+      const detail = await fastify.services.sessionControl.getDetail({
+        actor: resolveControlReadActor(request),
+        sessionId,
+      });
       return reply.send(detail);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -128,7 +131,7 @@ export function registerSessionControlRoutes(fastify: FastifyInstance): void {
       return reply;
     }
     try {
-      const response = fastify.services.sessionControl.handoff({
+      const response = await fastify.services.sessionControl.handoff({
         actor: resolveOperatorActor(request),
         sessionId,
         correlationId: resolveCorrelationId(request),
@@ -158,7 +161,7 @@ export function registerSessionControlRoutes(fastify: FastifyInstance): void {
     try {
       const actor = resolveSessionControlCompanionActor(request);
       const presentedTokenHashSha256 = readPresentedControlTokenHashSha256(request);
-      const response = fastify.services.sessionControl.heartbeat({
+      const response = await fastify.services.sessionControl.heartbeat({
         actor,
         sessionId,
         correlationId: resolveCorrelationId(request),
@@ -190,7 +193,7 @@ export function registerSessionControlRoutes(fastify: FastifyInstance): void {
     try {
       const actor = resolveSessionControlCompanionActor(request);
       const presentedTokenHashSha256 = readPresentedControlTokenHashSha256(request);
-      const response = fastify.services.sessionControl.reconnect({
+      const response = await fastify.services.sessionControl.reconnect({
         actor,
         sessionId,
         correlationId: resolveCorrelationId(request),
@@ -222,7 +225,7 @@ export function registerSessionControlRoutes(fastify: FastifyInstance): void {
     try {
       const actor = resolveSessionControlCompanionActor(request);
       const presentedTokenHashSha256 = readPresentedControlTokenHashSha256(request);
-      const response = fastify.services.sessionControl.release({
+      const response = await fastify.services.sessionControl.release({
         actor,
         sessionId,
         correlationId: resolveCorrelationId(request),
@@ -252,7 +255,7 @@ export function registerSessionControlRoutes(fastify: FastifyInstance): void {
       return reply;
     }
     try {
-      const response = fastify.services.sessionControl.revoke({
+      const response = await fastify.services.sessionControl.revoke({
         actor: resolveOperatorActor(request),
         sessionId,
         correlationId: resolveCorrelationId(request),

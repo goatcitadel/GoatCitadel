@@ -12,6 +12,8 @@ describe("CapabilitiesRouteService", () => {
     const methods = [
       "createProposal",
       "getCandidateDetail",
+      "getCapabilityAuditExport",
+      "getCatalogDriftMetrics",
       "getProposalDetail",
       "listProposals",
       "promoteCandidate",
@@ -58,5 +60,24 @@ describe("CapabilitiesRouteService", () => {
     const service = new CapabilitiesRouteService(port);
     service.promoteCapabilityCandidate("candidate-1", 3);
     expect(port.promoteCandidate).toHaveBeenCalledWith("candidate-1", 3, undefined, undefined);
+  });
+
+  it("forwards catalog metrics and explicit hash-only audit export scope", () => {
+    const port = fakePort();
+    const service = new CapabilitiesRouteService(port);
+    const effective = new Set(["skill-a"]);
+
+    expect(service.getCapabilityCatalogDriftMetrics(effective)).toEqual({ method: "getCatalogDriftMetrics" });
+    expect(port.getCatalogDriftMetrics).toHaveBeenCalledWith(effective);
+    expect(
+      service.getCapabilityAuditExport("snapshot-1", {
+        workspaceId: "workspace-1",
+        runIds: ["run-1"],
+      }),
+    ).toEqual({ method: "getCapabilityAuditExport" });
+    expect(port.getCapabilityAuditExport).toHaveBeenCalledWith("snapshot-1", {
+      workspaceId: "workspace-1",
+      runIds: ["run-1"],
+    });
   });
 });

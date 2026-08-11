@@ -585,6 +585,26 @@
   grid-column: 1 / -1;
 }
 
+.mc-next-ops-diagnostics-grid {
+  grid-template-columns: repeat(2, minmax(min(100%, 22rem), 1fr));
+}
+
+.mc-next-ops-diagnostics-primary {
+  grid-column: 1 / -1;
+}
+
+.mc-next-ops-diagnostics-primary .mc-next-runtime-diagnostic-details {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+  gap: 0.42rem;
+}
+
+@media (max-width: 880px) {
+  .mc-next-ops-diagnostics-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .mc-next-ops-runtime-page-runtime .mc-next-directory-grid-native > .mc-next-section-index {
   order: -2;
 }

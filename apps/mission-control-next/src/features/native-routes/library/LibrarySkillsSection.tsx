@@ -73,9 +73,20 @@ export function LibrarySkillsSection({ route, navigate, activeWorkspaceId }: Nat
     skillId: string;
     state: SkillListItem["state"];
   } | null>(null);
-  const { loading, error, data, reload } = useAsyncLoad(async () => {
-    const [skills, sources, history, policy] = await Promise.all([
-      nativeLoad("Skills", fetchSkills(), { items: [] }),
+  const {
+    loading,
+    error,
+    data: skillsData,
+    reload: reloadSkillsList,
+  } = useAsyncLoad(async () => {
+    const skills = await nativeLoad("Skills", fetchSkills(), { items: [] });
+    return {
+      issues: nativeLoadIssues([skills]),
+      skills: skills.data.items,
+    };
+  }, []);
+  const { data: supportingData, reload: reloadSupportingData } = useAsyncLoad(async () => {
+    const [sources, history, policy] = await Promise.all([
       nativeLoad("Skill sources", fetchSkillSources({ limit: 10 }), {
         generatedAt: "1970-01-01T00:00:00.000Z",
         items: [],
@@ -85,13 +96,27 @@ export function LibrarySkillsSection({ route, navigate, activeWorkspaceId }: Nat
       nativeLoad("Skill activation policy", fetchSkillActivationPolicies(), null),
     ]);
     return {
-      issues: nativeLoadIssues([skills, sources, history, policy]),
-      skills: skills.data.items,
+      issues: nativeLoadIssues([sources, history, policy]),
       sources: sources.data.items,
       history: history.data.items,
       policy: policy.data,
     };
   }, []);
+  const reload = useCallback(async () => {
+    await Promise.all([reloadSkillsList(), reloadSupportingData()]);
+  }, [reloadSkillsList, reloadSupportingData]);
+  const data = useMemo(() => {
+    if (!skillsData && !supportingData) {
+      return null;
+    }
+    return {
+      issues: [...(skillsData?.issues ?? []), ...(supportingData?.issues ?? [])],
+      skills: skillsData?.skills ?? [],
+      sources: supportingData?.sources ?? [],
+      history: supportingData?.history ?? [],
+      policy: supportingData?.policy ?? null,
+    };
+  }, [skillsData, supportingData]);
 
   const filteredSkills = useMemo(
     () => filterSkillList(data?.skills ?? [], { query: skillQuery, posture: skillPostureFilter }),

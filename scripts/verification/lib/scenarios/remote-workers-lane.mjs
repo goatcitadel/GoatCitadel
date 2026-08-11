@@ -25,7 +25,7 @@
 //   * a proof-matrix row with no passing checks and no declared skipReason is a
 //     table bug and FAILS — no row can be silently dropped;
 //   * the live-PostgreSQL check must EXECUTE (hermetically provisioned or via
-//     GOATCITADEL_TEST_POSTGRES_URL) with `requireAllExecuted` so its seven
+//     GOATCITADEL_TEST_POSTGRES_URL) with `requireAllExecuted` so its bootstrap bridge plus seven
 //     `.postgres.test.ts` suites may never self-skip inside the lane;
 //   * the ONLY declared skips are scenarios 11 and 12 — the packets' own
 //     two-machine mTLS and live connected-worker end-to-end HOLDs — each
@@ -59,6 +59,7 @@ const gatewayVitest = (files) => [
  * exist.
  */
 export const REMOTE_WORKER_LIVE_POSTGRES_SUITES = [
+  "postgres-bootstrap-bridge.postgres.test.ts",
   "remote-worker-nonce-repo.postgres.test.ts",
   "remote-worker-admission-repo.postgres.test.ts",
   "remote-worker-assignment-repo.postgres.test.ts",
@@ -78,6 +79,57 @@ export const REMOTE_WORKERS_LANE_ARTIFACTS = [
   "scripts/verification/lib/scenarios/remote-workers-lane.mjs",
   "scripts/verification/lib/scenarios/remote-workers-lane.test.mjs",
 ];
+
+/**
+ * PostgreSQL catalog-authority files that scenario 8 relies on in addition to
+ * the filename-selected remote-worker span. Keeping them explicit prevents a
+ * bridge or canonical-manifest correction from escaping the lane's lint gate.
+ */
+export const REMOTE_WORKERS_POSTGRES_AUTHORITY_ARTIFACTS = [
+  "packages/storage/src/postgres-bootstrap-bridge.postgres.test.ts",
+  "packages/storage/src/postgres-migration-integrity.test.ts",
+  "packages/storage/src/postgres-migrator.test.ts",
+  "packages/storage/src/postgres/migrations.ts",
+  "packages/storage/src/postgres/migrator.ts",
+  "packages/storage/src/postgres/schema-shape.ts",
+  "packages/storage/src/postgres/v140-canonical-index-authority.ts",
+  "scripts/verify-storage-migration-parity.test.mjs",
+];
+
+/**
+ * Split the Windows-sensitive eslint target list without changing target
+ * order. `pnpm.cmd` is launched through cmd.exe, whose command-line ceiling is
+ * materially lower than CreateProcess; keeping each target payload below four
+ * thousand characters leaves bounded room for the executable and fixed args.
+ */
+export function chunkRemoteWorkerEslintTargets(targets, maxTargetChars = 4_000) {
+  if (!Number.isSafeInteger(maxTargetChars) || maxTargetChars <= 0) {
+    throw new Error("maxTargetChars must be a positive safe integer");
+  }
+  const chunks = [];
+  let current = [];
+  let currentChars = 0;
+  for (const target of targets) {
+    if (typeof target !== "string" || target.length === 0) {
+      throw new Error("eslint targets must be non-empty strings");
+    }
+    // Include one separator/quoting allowance per argument. Repository paths
+    // currently contain no spaces, but the allowance keeps the bound honest.
+    const targetChars = target.length + 3;
+    if (targetChars > maxTargetChars) {
+      throw new Error(`eslint target exceeds the command payload budget: ${target}`);
+    }
+    if (current.length > 0 && currentChars + targetChars > maxTargetChars) {
+      chunks.push(current);
+      current = [];
+      currentChars = 0;
+    }
+    current.push(target);
+    currentChars += targetChars;
+  }
+  if (current.length > 0) chunks.push(current);
+  return chunks;
+}
 
 /**
  * The lane's numbered checks. `count` enables the zero-test honesty guard;
@@ -383,9 +435,9 @@ export function buildRemoteWorkersProofMatrix() {
         "Hermetic live PostgreSQL: every remote-worker generation-fenced owner .postgres.test.ts run against ONE self-provisioned native cluster (not an optional skip)",
       checks: ["remote-workers.live-postgres"],
       suites: [
-        "packages/storage/src/remote-worker-{nonce,admission,assignment,inference,cell,artifact,effect}-repo.postgres.test.ts (all seven, one hermetic initdb/pg_ctl cluster, requireAllExecuted so no PostgreSQL side self-skips)",
+        "packages/storage/src/postgres-bootstrap-bridge.postgres.test.ts plus remote-worker-{nonce,admission,assignment,inference,cell,artifact,effect}-repo.postgres.test.ts (eight suites, one hermetic initdb/pg_ctl cluster, requireAllExecuted so no PostgreSQL side self-skips)",
       ],
-      note: "The live-PostgreSQL check provisions a hermetic native cluster on a distinct port (or honours GOATCITADEL_TEST_POSTGRES_URL) and runs all seven owner .postgres.test.ts suites with requireAllExecuted; a self-skipped PostgreSQL side fails the lane.",
+      note: "The live-PostgreSQL check provisions a hermetic native cluster on a distinct port (or honours GOATCITADEL_TEST_POSTGRES_URL) and runs the bootstrap bridge plus all seven owner .postgres.test.ts suites with requireAllExecuted; a self-skipped PostgreSQL side fails the lane.",
     },
     {
       row: 9,

@@ -95,7 +95,7 @@ describe("CitadelMasonRoutePage", () => {
     expect(treeString(renderer!)).toContain("What is this Citadel for?");
     expect(treeString(renderer!)).toContain("Start setup");
     expect(treeString(renderer!)).toContain("Blueprint progress");
-    expect(treeString(renderer!)).toContain("Fail-closed staging");
+    expect(treeString(renderer!)).toContain("Draft only · nothing activates yet");
     expect(treeString(renderer!)).toContain("Activation remains unavailable");
   });
 

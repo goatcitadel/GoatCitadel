@@ -2,6 +2,11 @@
 
 Evergreen backlog for `apps/mission-control-next`. Confirmed defects should include reproduction evidence and a proof lane. Product ideas stay labeled as hypotheses until validated.
 
+Program placement: evidence-backed implementation is consolidated in tranche
+`M7` of [MASTER_COMPLETION_PROGRAM.md](../MASTER_COMPLETION_PROGRAM.md) so shared
+UI primitives, populated stories, accessibility, surface, and visual proof run
+together. Explore rows remain hypotheses until promoted by evidence.
+
 ## Completed in the 2026-07-12 audit
 
 | ID | Outcome | Proof expectation |
@@ -28,13 +33,19 @@ Evergreen backlog for `apps/mission-control-next`. Confirmed defects should incl
 | MCUX-105 | Remove the eager, unused WebAwesome stylesheet and dependency | Initial CSS is 89,704 bytes, both themes clear contrast checks, and the budget rejects WebAwesome CSS |
 | MCUX-107 | Make the mobile navigation drawer behave as a modal keyboard surface | Focus enters and stays in the drawer, Escape/scrim close it, and focus returns to the opener |
 
+## Completed in the 2026-08-08 master-program tranche
+
+| ID | Outcome | Proof expectation |
+|---|---|---|
+| MCUX-103 | Extend dirty-state ownership to Integrations, Channels, Permissions, Runtime, and Add-ons | Selection regressions cover cancel/confirm preservation; all five sections register with the shared route guard; focused Settings tests and Mission Control typecheck pass |
+| MCUX-106 | Seed populated Projects and approval-detail stories for visual proof | Fixture and manifest tests prove exact project/approval routing and wait for populated master/detail selectors; the broad visual capture remains grouped with the final M7 pass |
+| MCUX-108 | Retire the unconsumed shared split-layout/React Reflex seam | No production consumer or `react-reflex` dependency remains; shared and Mission Control package builds pass |
+
 ## Next — evidence-backed
 
 | ID | Priority | Work | Acceptance signal |
 |---|---|---|---|
-| MCUX-103 | P2 | Extend the shipped Providers/MCP/Workspaces dirty-state pattern to Integrations, Channels, Permissions, Runtime, and Add-ons | Switching selection/route requires discard confirmation; successful saves and background reloads stay silent and preserve active drafts |
-| MCUX-106 | P2 | Add populated Projects and approval-detail stories to visual proof | Baselines exercise real master/detail content, not only empty shells |
-| MCUX-108 | P3 | Resolve React Reflex ownership by retiring the unconsumed shared split-layout components or declaring the dependency in their owning package | Mission Control Next no longer supplies an otherwise undeclared shared-package dependency; focused shared layout tests and package builds remain green |
+| — | — | No independently testable implementation row remains before the grouped M7 product-polish and broad-proof boundary. | Accessibility, surface, and visual lanes run once after M7 is feature-complete. |
 
 ## Explore — product hypotheses
 

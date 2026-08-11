@@ -645,7 +645,7 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
       runId: "run-1",
       sessionId: "session-1",
       turnId: "turn-1",
-      timeoutMs: 10_000,
+      timeoutMs: 30_000,
     });
   });
 
@@ -954,6 +954,42 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
         policyContext: expect.objectContaining({ permissionProfileId: "safe" }),
       }),
     );
+  });
+
+  it("keeps internal tool inspection off the durable evaluation-write path", async () => {
+    const inspectAccess = vi.fn((input: Record<string, unknown>) => ({ allowed: true, input }));
+    const evaluateAccess = vi.fn(() => ({ allowed: true }));
+    const gateway = createGatewayHarness({
+      policyEngine: { inspectAccess, evaluateAccess },
+      storage: {
+        chatSessionMeta: {
+          get: vi.fn(() => ({ workspaceId: "workspace-inspection" })),
+        },
+        workspaces: {
+          find: vi.fn(() => ({ citadelId: "citadel-inspection" })),
+        },
+        permissionProfiles: {
+          resolveContext: vi.fn(() => ({ permissionProfile: { profileId: "safe" } })),
+        },
+      },
+    });
+
+    await expect(
+      GatewayService.prototype.inspectToolAccess.call(gateway, {
+        sessionId: "session-inspection",
+        agentId: "assistant",
+        toolName: "time.now",
+        args: {},
+      } as never),
+    ).resolves.toMatchObject({ allowed: true });
+    expect(inspectAccess).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: "workspace-inspection",
+        citadelId: "citadel-inspection",
+        policyContext: expect.objectContaining({ permissionProfileId: "safe" }),
+      }),
+    );
+    expect(evaluateAccess).not.toHaveBeenCalled();
   });
 
   it("normalizes docs ingest file sources through access evaluation before policy checks", async () => {

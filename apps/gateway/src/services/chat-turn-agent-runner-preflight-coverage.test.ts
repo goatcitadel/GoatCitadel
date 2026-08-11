@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ToolInvokeRequest, ToolInvokeResult } from "@goatcitadel/contracts";
-import type { ChatTurnAgentRunnerInput } from "./chat-turn-agent-runner.js";
+import type { ChatTurnAgentRunnerDeps, ChatTurnAgentRunnerInput } from "./chat-turn-agent-runner.js";
 import {
   createEffectAwareInvokeToolForTest,
   createExecuteToolCallForTest,
@@ -11,7 +11,15 @@ import { IMPROVEMENT_TUNE_SETTING_KEYS } from "./improvement-tune-reads.js";
 describe("ChatTurnAgentRunner tool preflight coverage", () => {
   it("persists blocked web tools without invoking runtime tools when web mode is off", async () => {
     const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>();
-    const executeToolCall = createExecuteToolCall({ invokeTool });
+    const storage = createMockStorage() as ChatTurnAgentRunnerDeps["storage"];
+    const createToolRun = vi.spyOn(storage.chatToolRuns, "create");
+    const patchToolRun = vi.spyOn(storage.chatToolRuns, "patch");
+    const executeToolCall = createExecuteToolCallForTest({
+      invokeTool,
+      invokeToolWithEffectTruth: createEffectAwareInvokeToolForTest(invokeTool),
+      toolNames: ["http.get"],
+      storage,
+    });
 
     const result = await executeToolCall({
       input: turnInput({
@@ -30,6 +38,9 @@ describe("ChatTurnAgentRunner tool preflight coverage", () => {
       error: "execution skipped: live web access is disabled because Web is set to Off for this chat",
     });
     expect(result.record.failureGuidance).toContain("Retry get");
+    expect(createToolRun).toHaveBeenCalledTimes(1);
+    expect(createToolRun).toHaveBeenCalledWith(expect.objectContaining({ status: "blocked", finishedAt: expect.any(String) }));
+    expect(patchToolRun).not.toHaveBeenCalled();
     expect(result.chunk).toMatchObject({
       type: "tool_result",
       toolRun: expect.objectContaining({

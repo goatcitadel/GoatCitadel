@@ -7,6 +7,7 @@ import type {
   GovernanceJourneyPoisoningStatus,
 } from "@goatcitadel/contracts";
 import { fetchJourneyTimeline } from "@goatcitadel/mission-control-shared";
+import { IdentifierChip } from "@goatcitadel/mission-control-shared/components/IdentifierChip";
 import { getRouteReleaseScope } from "@next/app/route-model";
 import { NativeCard, ReleaseScopeBadge } from "../NativeRoutePageLayout";
 import type { NativeRoutePagesProps } from "../types";
@@ -244,10 +245,25 @@ function JourneyEventDetail({ item }: { item: JourneyTimelineItem }) {
     <>
       <LibraryMetricGrid
         items={[
-          { label: "Evidence", value: formatJourneyEvidenceHealth(item.evidence.health) },
+          {
+            label: "Evidence",
+            value: formatJourneyEvidenceHealth(item.evidence.health),
+            meta: <IdentifierChip value={item.eventId} label="Event" />,
+          },
           { label: "Trust contribution", value: item.evidence.trustContribution.replaceAll("_", " ") },
-          { label: "Actor", value: `${item.actorType} · ${item.actorId}` },
-          { label: "Scope", value: item.scopeKind === "global" ? "Global" : (item.workspaceId ?? "Unknown") },
+          {
+            label: "Actor",
+            value: item.actorType,
+            meta: <IdentifierChip value={item.actorId} label="Actor" />,
+          },
+          {
+            label: "Scope",
+            value: item.scopeKind === "global" ? "Global" : "Workspace",
+            meta:
+              item.scopeKind === "global" || !item.workspaceId ? undefined : (
+                <IdentifierChip value={item.workspaceId} label="Workspace" />
+              ),
+          },
         ]}
       />
       <LibraryCodeBlock label="Stable event fingerprint">{item.eventFingerprint}</LibraryCodeBlock>

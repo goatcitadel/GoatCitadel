@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 export const MOBILE_NATIVE_CAPABILITY_IDS = [
   "location_context",
   "camera_capture",
@@ -104,19 +106,57 @@ export interface MobileContextAuditResponse {
   contextEventIds: string[];
 }
 
-export interface MobilePushRegistrationRequest {
-  provider: "expo" | "fcm" | "local_only";
-  enabled: boolean;
-  tokenHash?: string;
-  tokenPreview?: string;
-  deviceLabel?: string;
-  appVersion?: string;
-}
+export const MOBILE_PUSH_PROVIDERS = ["expo", "fcm"] as const;
+export type MobilePushProvider = (typeof MOBILE_PUSH_PROVIDERS)[number];
+
+const mobilePushRegistrationMetadataSchema = {
+  provider: z.enum(MOBILE_PUSH_PROVIDERS),
+  deviceLabel: z.string().trim().min(1).max(160).optional(),
+  appVersion: z.string().trim().min(1).max(80).optional(),
+};
+
+/**
+ * The provider token is accepted only at the signed companion boundary. Token
+ * hashes/previews are deliberately not caller inputs: the Gateway computes the
+ * authoritative digest and keeps the raw value in OS-keychain custody.
+ */
+export const mobilePushRegistrationRequestSchema = z.discriminatedUnion("enabled", [
+  z
+    .object({
+      ...mobilePushRegistrationMetadataSchema,
+      enabled: z.literal(true),
+      token: z.string().trim().min(1).max(4096),
+    })
+    .strict(),
+  z
+    .object({
+      ...mobilePushRegistrationMetadataSchema,
+      enabled: z.literal(false),
+    })
+    .strict(),
+]);
+
+export type MobilePushRegistrationRequest = z.infer<typeof mobilePushRegistrationRequestSchema>;
 
 export interface MobilePushRegistrationResponse {
   registrationId: string;
+  provider: MobilePushProvider;
   registeredAt: string;
+  updatedAt: string;
   enabled: boolean;
+  deliveryAvailability: "available" | "unavailable";
+  revision: number;
+}
+
+export interface MobilePushApprovalRefreshPayload {
+  schemaVersion: 1;
+  type: "approval_refresh";
+  realtimeEventId: string;
+  approvalId: string;
+  deepLink: {
+    kind: "approval";
+    approvalId: string;
+  };
 }
 
 export interface MobileRevocationRequest {

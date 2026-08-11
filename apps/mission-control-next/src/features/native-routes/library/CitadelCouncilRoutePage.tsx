@@ -7,6 +7,7 @@ import {
   listCitadelCouncil,
   unassignCitadelCouncilAgent,
 } from "@goatcitadel/mission-control-shared/api/client";
+import { IdentifierChip } from "@goatcitadel/mission-control-shared/components/IdentifierChip";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
 import { NativeButton } from "../primitives/NativeButton";
 import { getErrorMessage } from "../shared/native-helpers";
@@ -164,8 +165,13 @@ export function CitadelCouncilRoutePage({
           <NativeList
             items={council.items.map((assignment) => ({
               title: council.agents.find((agent) => agent.agentId === assignment.agentId)?.name ?? assignment.agentId,
-              meta: assignment.assignmentId,
-              body: assignment.agentId,
+              body: "Existing agent reference; no profile data is copied into the Citadel.",
+              actions: (
+                <div className="mc-next-identifier-stack">
+                  <IdentifierChip value={assignment.agentId} label="Agent" />
+                  <IdentifierChip value={assignment.assignmentId} label="Seat" />
+                </div>
+              ),
             }))}
             emptyLabel="No agents seated yet — seat one from the agents catalog to add it to this Citadel."
             density="compact"

@@ -1,8 +1,12 @@
 # Provider And Channel Expansion Backlog
 
-Last updated: 2026-06-02
+Last updated: 2026-08-08
 
-This backlog records external parity ideas that are intentionally not live adapters in the current batch. Treat each item as a governed follow-up, not an implemented runtime claim.
+This backlog records external adapter ideas that remain intentional portfolio
+decisions. Their aggregate placement is the deferred portion of tranche `M6` in
+[MASTER_COMPLETION_PROGRAM.md](./MASTER_COMPLETION_PROGRAM.md). Treat each
+remaining item as a governed follow-up, not an implemented runtime claim or a
+release blocker.
 
 ## Deferred Provider Adapters
 
@@ -12,8 +16,16 @@ This backlog records external parity ideas that are intentionally not live adapt
 
 ## Deferred Channel And Meeting Adapters
 
-- Google Meet: evaluate as a calendar/meeting companion integration, not a hidden bot attendee. Any live path needs explicit auth, meeting consent, transcript provenance, and operator-visible recording boundaries.
 - SimpleX: evaluate as a channel only after local bridge trust, pairing, allowlist, message deletion semantics, and inbound command governance are specified.
+
+## Reconciled Implemented Integrations
+
+- Google Meet is no longer a missing adapter. GoatCitadel has Gateway-owned
+  prerequisite, session, transcript, consult, and stop routes plus a governed
+  Settings flow for explicitly started OpenAI Realtime meeting voice. Future
+  polish or proof must be filed against that current owner rather than reopening
+  the old evaluation item. GoatCitadel still does not claim a hidden bot
+  attendee or recording without consent.
 
 ## Acceptance Bar For Any Future Adapter
 

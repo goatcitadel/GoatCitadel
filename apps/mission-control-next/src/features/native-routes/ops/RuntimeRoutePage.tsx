@@ -561,7 +561,7 @@ export function RuntimeRoutePage({
         );
       case "schedules":
         return (
-          <NativeGrid>
+          <NativeGrid className="mc-next-ops-schedules-grid">
             <OpsNeedsAttentionCard items={needsAttentionItems} navigate={navigate} />
             <NativeCard
               title="Scheduled jobs"
@@ -1395,8 +1395,9 @@ export function RuntimeRoutePage({
         );
       case "diagnostics":
         return (
-          <NativeGrid>
+          <NativeGrid className="mc-next-ops-diagnostics-grid">
             <NativeCard
+              className="mc-next-ops-diagnostics-primary"
               title="Diagnostics directory"
               subtitle="System vitals, daemon logs, and MCP runtime posture in one diagnostics view."
               actions={
@@ -1596,7 +1597,7 @@ export function RuntimeRoutePage({
                             tone={toneForActivityEvent(item.eventType, item.eventClass)}
                             state={humanizeEventLabel(item.eventType)}
                             mid={humanizeEventLabel(item.eventClass ?? item.source ?? "")}
-                            age={formatDateTime(item.timestamp)}
+                            age={formatActivityAge(item.timestamp)}
                           />
                           <span className="mc-next-activity-feed-source">
                             {item.eventType}
@@ -2922,6 +2923,29 @@ export function formatDateTime(value?: string | null) {
       ? `${get("month")}/${get("day")}`
       : `${get("month")}/${get("day")}/${get("year")}`;
   return `${datePart} ${get("hour")}:${get("minute")} ${get("dayPeriod")}`.trim();
+}
+
+export function formatActivityAge(value?: string | null, nowMs = Date.now()) {
+  if (!value) {
+    return "—";
+  }
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) {
+    return "—";
+  }
+  const seconds = Math.max(0, Math.floor((nowMs - timestamp) / 1000));
+  if (seconds < 60) {
+    return seconds === 0 ? "now" : `${seconds}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m`;
+  }
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) {
+    return `${hours}h`;
+  }
+  return `${Math.floor(hours / 24)}d`;
 }
 
 function formatShortRunId(value?: string) {

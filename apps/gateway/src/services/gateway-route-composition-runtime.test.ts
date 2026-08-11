@@ -100,6 +100,7 @@ const mocks = vi.hoisted(() => ({
     requestId,
     secret,
   })),
+  getActiveAuthDeviceGrantById: vi.fn(async () => ({ grantId: "grant-1" })),
   listCompanionAuditEvents: vi.fn((deps: unknown, input: unknown) => ({ deps, input, audit: true })),
   listCompanionSessions: vi.fn((deps: unknown, input: unknown) => ({ deps, input, sessions: true })),
   listDeviceAccessGrants: vi.fn((deps: unknown) => ({ deps, grants: true })),
@@ -148,6 +149,7 @@ vi.mock("./settings-auth-service.js", () => ({
   getCompanionSessionInfo: mocks.getCompanionSessionInfo,
   getCompanionSessionRecord: mocks.getCompanionSessionRecord,
   getDeviceAccessRequestStatus: mocks.getDeviceAccessRequestStatus,
+  getActiveAuthDeviceGrantById: mocks.getActiveAuthDeviceGrantById,
   listCompanionAuditEvents: mocks.listCompanionAuditEvents,
   listCompanionSessions: mocks.listCompanionSessions,
   listDeviceAccessGrants: mocks.listDeviceAccessGrants,
@@ -226,6 +228,7 @@ describe("composeRuntimeAdminRouteDependencies", () => {
     const gateway = createGateway();
     const deps = composeRuntimeAdminRouteDependencies(gateway as never) as any;
 
+    expect(deps.remoteWorkers.operatorControl.meshNodeJoinAuthorities).toBeUndefined();
     expect(deps.authAdmin.getAuthCredentialPlan()).toMatchObject({ mode: "token" });
     expect(deps.authAdmin.createDeviceAccessRequest({ label: "phone" }, { ip: "127.0.0.1" })).toMatchObject({
       input: { label: "phone" },
@@ -247,7 +250,26 @@ describe("composeRuntimeAdminRouteDependencies", () => {
     expect(deps.authAdmin.pruneRetention({ dryRun: true })).toEqual({ pruned: true });
     expect(deps.authAdmin.resolveGatewayInstallToken({ token: "x" })).toEqual({ token: "x", resolved: true });
     expect(deps.authAdmin.revokeCompanionSession("session-1", "operator")).toMatchObject({ actorId: "operator" });
-    expect(deps.authAdmin.revokeDeviceAccessGrant("grant-1", "operator")).toMatchObject({ grantId: "grant-1" });
+    await expect(deps.authAdmin.revokeDeviceAccessGrant("grant-1", "operator")).resolves.toMatchObject({
+      grantId: "grant-1",
+    });
+    expect(gateway.storage.mobilePush.revokeAllByGrant).toHaveBeenCalledWith("grant-1", expect.any(String));
+    expect(gateway.recordDevDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "mobile_push.keychain_cleanup_failed" }),
+    );
+    gateway.storage.mobilePush.revokeAllByGrant.mockRejectedValueOnce(new Error("push storage unavailable"));
+    gateway.recordDevDiagnostic.mockImplementationOnce(() => {
+      throw new Error("diagnostic sink unavailable");
+    });
+    await expect(deps.authAdmin.revokeDeviceAccessGrant("grant-2", "operator")).resolves.toMatchObject({
+      grantId: "grant-2",
+    });
+    expect(gateway.recordDevDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "mobile_push.grant_revoke_projection_failed",
+        context: { grantId: "grant-2" },
+      }),
+    );
     expect(deps.authAdmin.rotateCompanionSession({ sessionId: "session-1" })).toMatchObject({ rotated: true });
     const cutoverInput = { profile: "local", execute: true, confirm: true, expectedRevision: 6 };
     expect(deps.authAdmin.runDatabaseCutover(cutoverInput)).toEqual({ cutover: true });
@@ -442,6 +464,21 @@ function createGateway() {
     storage: {
       db: createDatabaseStub(),
       gatewaySql: createDatabaseStub(),
+      mobilePush: {
+        revokeAllByGrant: vi.fn(async () => [
+          {
+            registrationId: "mpr_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            grantId: "grant-1",
+            provider: "expo",
+            tokenSecretRef: "keychain:goatcitadel:mobile-push:mpr_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            lifecycleState: "revoked",
+            revision: 2,
+            registeredAt: "2026-08-09T00:00:00.000Z",
+            updatedAt: "2026-08-09T00:01:00.000Z",
+            revokedAt: "2026-08-09T00:01:00.000Z",
+          },
+        ]),
+      },
       promptPackRuns: { listByTest: vi.fn(() => []) },
       systemSettings: { get: vi.fn() },
     },

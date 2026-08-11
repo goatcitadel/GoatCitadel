@@ -5,7 +5,11 @@ vi.mock("playwright", () => {
   throw new Error("mocked playwright import failure");
 });
 
-import { executeBrowserTool } from "./browser-tools.js";
+import {
+  BROWSER_CHROMIUM_MANUAL_REQUIRED_DIAGNOSTIC_CODE,
+  BROWSER_CHROMIUM_MANUAL_REQUIRED_DIAGNOSTIC_MESSAGE,
+  executeBrowserTool,
+} from "./browser-tools.js";
 
 describe("browser tools load failure coverage", () => {
   it("falls back with a clear message when the Playwright module cannot be imported", async () => {
@@ -28,7 +32,7 @@ describe("browser tools load failure coverage", () => {
 
     expect(result).toMatchObject({
       fallbackUsed: true,
-      fallbackReason: expect.stringContaining("Playwright runtime is unavailable"),
+      fallbackReason: `${BROWSER_CHROMIUM_MANUAL_REQUIRED_DIAGNOSTIC_CODE}: ${BROWSER_CHROMIUM_MANUAL_REQUIRED_DIAGNOSTIC_MESSAGE}`,
       title: "Fallback",
     });
   });

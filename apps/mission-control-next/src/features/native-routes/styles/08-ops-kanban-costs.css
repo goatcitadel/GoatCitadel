@@ -604,3 +604,7 @@
     transition: none;
   }
 }
+
+.mc-next-ops-schedules-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
+}

@@ -193,7 +193,7 @@ export function registerChatDelegateRoutes(fastify: FastifyInstance): void {
     try {
       return reply.send(
         projectChatDelegationRunForPublic(
-          fastify.services.chatDelegate.getChatDelegationRun(params.data.sessionId, params.data.runId),
+          await fastify.services.chatDelegate.getChatDelegationRun(params.data.sessionId, params.data.runId),
         ),
       );
     } catch (error) {

@@ -1,7 +1,13 @@
 # Plan: Close the GoatCitadel ↔ OpenClaw/Hermes agentic gap
 
 **Status:** Active · **Date:** 2026-06-28 · **Round-3 update:** 2026-07-03 (branch `feat/agentic-round3` — S2/S3/S4/watchdog/compaction-anchoring/planner-fan-out shipped; spec: `docs/superpowers/specs/2026-07-03-agentic-orchestration-round3-design.md`) · **Originally verified against:** `80f654669` plus review fixes
-**Sources:** [GATEWAY_AGENTIC_REVIEW_2026-06-28.md](GATEWAY_AGENTIC_REVIEW_2026-06-28.md) (5-agent audit) + a live-repo side-chat review (3 audits) + the hand-verified [GATEWAY_COMPETITIVE_TEARDOWN_2026-06-21.md](GATEWAY_COMPETITIVE_TEARDOWN_2026-06-21.md). Two of the side-chat's load-bearing claims (S1 cowork buffering, S6 durable-wrap) were re-verified by hand for this plan.
+**Sources:** [GATEWAY_AGENTIC_REVIEW_2026-06-28.md](GATEWAY_AGENTIC_REVIEW_2026-06-28.md) (5-agent audit) + a live-repo side-chat review (3 audits) + the hand-verified historical `GATEWAY_COMPETITIVE_TEARDOWN_2026-06-21.md` source, which is no longer retained in this repository. Two of the side-chat's load-bearing claims (S1 cowork buffering, S6 durable-wrap) were re-verified by hand for this plan.
+
+> **Canonical execution note (2026-08-08):** this is an owner/history document,
+> not the aggregate execution order. Current open agentic work is placed in
+> [MASTER_COMPLETION_PROGRAM.md](../MASTER_COMPLETION_PROGRAM.md), primarily
+> `M1` and the deferred portfolio register. Reconciled rows below distinguish
+> current work from superseded June/July proposals.
 
 ## Objective
 Match OpenClaw/Hermes **speed + liveness** without losing GoatCitadel's governance edge.
@@ -41,19 +47,53 @@ PR #137 fixed "thin responses" by wrapping cowork in a **plan → execute → sy
 ## P1 — speed depth + quality (1–2 weeks)
 
 - [x] **S4 — parallelize independent tool calls.** *(Round 3, 2026-07-03, kill switch `parallelToolExecutionV1Disabled`.)* All-read-only multi-call batches (registry-declared `readOnly` + `riskLevel:"safe"` + no definition-level approval, cap 4) pre-execute concurrently; the unchanged serial loop consumes results in emission order, so per-call policy/audit/post-processing have exactly one code path. Mixed/unknown/MCP batches stay byte-identical serial. Serial-parity pinned by test (`chat-agent-orchestrator.parallel-tools.test.ts`). Also flagged `memory.read`/`session.status`/`time.now` as `readOnly` in the registry (were unflagged).
-- [ ] **S5 — per-tool IO tax off the hot path.** Each tool call does a lock-serialized `fs.appendFile` audit + 3–5 sync SQLite writes blocking the next tool (`engine.ts:1462→audit-log.ts:89`); every iteration `JSON.stringify`s the whole context for a trace receipt and regex-scans every full tool result (`chat-agent-prompt-budget-receipt.ts:16`). Batch/async the audit; gate the receipt behind a debug flag.
-- [ ] **S6 — fast-lane short turns out of durable wrapping.** A ~5s chat answer gets a durable lease + 5s heartbeat CAS loop for its lifetime (`chat-turn-dispatch-service.ts:65`, `durable-run-service.ts:1207,1247`). Promote to durable only past a duration/tool-count threshold.
+- [x] **S5 — per-tool IO tax off the hot path.** The full prompt-context
+  receipt is now omitted for ordinary live turns and retained only for the
+  quick-web/prompt-pack proof profiles or the explicit
+  `GOATCITADEL_DEBUG_PROMPT_CONTEXT_BUDGET_RECEIPTS=1` diagnostic gate.
+  Concurrent same-stream audit events are now microbatched into one JSONL append
+  under the existing cross-process lock; callers still await durable, ordered,
+  secret-free evidence and delivery IDs remain idempotent. Independent active
+  grant reads now resolve concurrently across task, agent, session, Chamber,
+  Citadel, workspace, and global scopes before the unchanged deny-wins decision.
+  Capability-profile policy probes now use bounded eight-way fan-out with stable
+  evidence order and a non-materializing inspection path; the durable profile
+  freezes those decisions, while the canonical invocation still re-evaluates
+  and records the limit-counting decision. Pre-dispatch terminal outcomes write
+  one final tool row, and advisory runtime-decision projections drain through a
+  bounded shutdown-owned queue after canonical settlement.
+- **Superseded — S6 short turns outside durable wrapping.** Current one-Chat
+  runtime truth keeps durable execution authoritative for resumable work. The
+  valid performance goal moves to `M1`: reduce admission, heartbeat, and
+  checkpoint overhead without bypassing durable ownership.
 - [x] **Structured checkpoint compaction (ask anchoring).** *(Round 3, 2026-07-03.)* `buildConversationCompactionSummary` now pins the original ask and the latest ask ahead of the decision/failure digest, so trimmed sessions keep the objective. The digest body remains deterministic (regex) by design; LLM summarization stays unshipped.
-- [ ] **Extend checkpoint-continue to code/high-intent chat** so depth isn't gated on the user picking "cowork" — chat/code are terminal, hard-stopping at their tool budgets (chat 4 loops/7 runs, code 6/12 — re-verified 2026-07-03) and reporting `completed` with an honest `degraded` sidecar (`chat-agent-budget.ts:258-260`).
+- [x] **Extend checkpoint-continue to high-intent Chat.** Research-list,
+  artifact, and prompt-pack harness intents now select bounded checkpoint
+  windows on the one Chat surface; the legacy `cowork` mode remains a
+  compatibility input rather than the only gate. Two consecutive no-progress
+  windows still terminate honestly under the loop guard.
 - [x] **Stream idle watchdog.** *(Round 3, 2026-07-03, kill switch `streamIdleWatchdogV1Disabled`, config `assistant.streamIdleTimeoutMs`, default 120s, floor 5s.)* Per-chunk re-armed idle timer around both the primary and cross-provider-fallback stream loops (`stream-idle-watchdog.ts` + `llm-completion-service.ts`); on trip it aborts the provider request and throws a machine-readable `stream_idle_timeout` error into the existing failed-after-emit salvage path — a hang becomes a recoverable stream failure instead of an infinite spinner.
 
 ## P2 — capability / moat (2–4 weeks)
 
 - [x] **Real sub-agent fan-out — part 1: planner-declared.** *(Round 3, 2026-07-03, kill switch `plannerFanoutV1Disabled`.)* The planner may append extra worker steps for genuinely independent subtasks (cowork only; total production hard-capped at 4; control steps protected; hostile drafts sanitized; dependency-derived stage leveling with fail-closed fallback to the template chain). Independent workers share a stage, so the engine's existing `mapWithConcurrency` (4) runs them concurrently — the default `cowork.plan.work.synthesize` template can finally fan out. *(Correction 2026-07-03: `cowork.workstreams.synthesize` and the research template already parallelized under `auto` — `router.ts:203,287-291`; the June note claiming workstreams needed explicit `parallel` was a misread.)*
-- [x] **Real sub-agent fan-out — part 2: model-callable spawn tool.** *(R3-8, 2026-07-03, kill switch `subagentFanoutV1Disabled`.)* `agent.fanout` is a registry builtin (NOT read-only; `caution`) exposed in cowork/code turns whose `subagentPolicy` ≠ `off` — the pref is finally consumed (`chat-agent-orchestrator.ts` schema gate; restricted scheduled/heartbeat profiles excluded like `schedule.manage`). It accepts ≤3 subtask objectives and rides the NORMAL tool policy path: the policy engine authorizes (approval/deny-wins/audit as usual) then dispatches through a `subagentFanout` runtime hook (the `schedule.manage` delegation pattern) to a session registry (`chat-subagent-fanout-service.ts`) that the entry/stream turn services populate with a turn-scoped executor. The executor runs each subtask through the existing `executeDelegatedPlanStep` machinery concurrently (bounded 3), buffered children only (competitor parity: OpenClaw/Hermes buffer delegated children), outputs excerpted at 3,000 chars, aggregated per-subtask results returned in one payload. No recursion by construction: children keep the delegated hard floors `subagentPolicy:"off"` + `orchestrationEnabled:false`, and child sessions have no registered executor (fails closed). Review hardening before merge: (a) CRITICAL — the executor registry must ALSO be plumbed through `buildChatTurnRuntimeHost` + the `createChatTurnRuntimeHost` whitelist composer (optional host members are silently dropped there with no compiler error; regression tests now exercise the REAL composition), and (b) `agent.fanout` is held to the expensive-tool remaining-budget floor before starting (`minimumRemainingBudgetForToolStart`) without joining `isExpensiveChatTool` (which would drag it into web-scoped browser budget extension). *Open follow-up:* `toolRunCount` still counts one fan-out as 1 of `maxToolRunsPerTurn` even though it can spawn 3 child turns — weighting it needs a budget-semantics pass.
-- [ ] **Close skill self-authoring.** `draftSkillMutation` writes a `candidate`; `isSkillCallable` needs approved/trusted; promotion is flag-OFF and background-review never files a promotion candidate, so authored skills dead-end on disk (`skill-mutation-service.ts:187-200`, `capability-system-service.ts:3215-3220`). After draft, file a promotion candidate.
+- [x] **Real sub-agent fan-out — part 2: model-callable spawn tool.** *(R3-8, 2026-07-03, kill switch `subagentFanoutV1Disabled`.)* `agent.fanout` is a registry builtin (NOT read-only; `caution`) exposed in cowork/code turns whose `subagentPolicy` ≠ `off` — the pref is finally consumed (`chat-agent-orchestrator.ts` schema gate; restricted scheduled/heartbeat profiles excluded like `schedule.manage`). It accepts ≤3 subtask objectives and rides the NORMAL tool policy path: the policy engine authorizes (approval/deny-wins/audit as usual) then dispatches through a `subagentFanout` runtime hook (the `schedule.manage` delegation pattern) to a session registry (`chat-subagent-fanout-service.ts`) that the entry/stream turn services populate with a turn-scoped executor. The executor runs each subtask through the existing `executeDelegatedPlanStep` machinery concurrently (bounded 3), buffered children only (competitor parity: OpenClaw/Hermes buffer delegated children), outputs excerpted at 3,000 chars, aggregated per-subtask results returned in one payload. No recursion by construction: children keep the delegated hard floors `subagentPolicy:"off"` + `orchestrationEnabled:false`, and child sessions have no registered executor (fails closed). Review hardening before merge: (a) CRITICAL — the executor registry must ALSO be plumbed through `buildChatTurnRuntimeHost` + the `createChatTurnRuntimeHost` whitelist composer (optional host members are silently dropped there with no compiler error; regression tests now exercise the REAL composition), and (b) `agent.fanout` is held to the expensive-tool remaining-budget floor before starting (`minimumRemainingBudgetForToolStart`) without joining `isExpensiveChatTool` (which would drag it into web-scoped browser budget extension). **Reconciled follow-up:** fanout now consumes bounded subtask count through `toolRunBudgetCostForToolCall`; the former flat-one-run budget note is complete.
+- **Superseded — direct skill self-authoring promotion proposal.** The capability
+  system now exposes governed candidate promotion, revoke, rollback, detail,
+  and lifecycle controls. Do not add an automatic draft-to-callable shortcut.
+  Any future automatic proposal filing must be separately designed and proven
+  against the current lifecycle owner.
 - [ ] **Trusted-local governance fast-path.** For read-only loopback turns under rate limits, collapse to in-memory allow + batched async audit — keep deny-set + Wards, skip the per-call DB round-trips.
-- [ ] **Warm the operator profile fast** (born empty, fills ~1 turn in 5) — `operator-profile-service.ts:120-123`.
+- [x] **Warm the operator profile review inbox fast.** The canonical durable
+  Chat post-commit reviewer is now due on the first eligible successful root
+  turn in each workspace, then returns to its five-turn cadence. Filtered facts
+  are filed as `agent_proposed` `memory_trace_candidates` with session/turn/run
+  lineage; the durable receipt retains only fingerprints and candidate ids.
+  Eval, system, delegated-child, autonomous, and autonomy-disabled turns remain
+  excluded, and no review model call was added to the foreground turn path.
+  Promotion is still operator-controlled in Library > Memory; a future explicit
+  mapping from promoted trace candidates into the frozen OperatorProfile digest
+  remains separate work rather than an automatic learned-memory write.
 
 ## Done criteria
 - Cowork TTFT measured **first terminal-synthesizer chunk**, not whole-turn. ✅ (S1 implementation)

@@ -1,5 +1,11 @@
 /* eslint-disable max-lines -- Postgres migration ledger keeps every versioned migration in one append-only file so ordering, dependencies, and rollback context stay traceable. */
 import { buildPostgresRuntimeSchemaSql } from "./runtime-schema.js";
+import { GOVERNED_REMEDIATION_POSTGRES_SCHEMA_SQL } from "./governed-remediation-schema.js";
+import { GOVERNED_REMEDIATION_RECIPE_BINDING_POSTGRES_SQL } from "./governed-remediation-recipe-binding.js";
+import { REMOTE_WORKER_PROTECTED_ADMISSION_EVIDENCE_POSTGRES_SQL } from "./remote-worker-protected-admission-evidence.js";
+import { REMOTE_WORKER_MESH_NODE_ADMISSION_POSTGRES_SQL } from "./remote-worker-mesh-node-admission.js";
+import { MOBILE_PUSH_POSTGRES_SCHEMA_SQL } from "./mobile-push-schema.js";
+import { buildPostgresV140CanonicalSchemaAuthoritySql } from "./v140-canonical-index-authority.js";
 
 export interface PostgresMigration {
   version: number;
@@ -14235,6 +14241,319 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         recorded_at = excluded.recorded_at,
         metadata_json = excluded.metadata_json;
     `,
+  },
+  {
+    version: 134,
+    name: "governed_remediation_durable_owner",
+    sql: GOVERNED_REMEDIATION_POSTGRES_SCHEMA_SQL,
+    integritySha256: "94574755a314cbf1a6f1e285d2d3969d372ec2d3560a1b03d3cfc2b7b85187a5",
+  },
+  {
+    version: 135,
+    name: "governed_remediation_recipe_and_phase_authority",
+    sql: GOVERNED_REMEDIATION_RECIPE_BINDING_POSTGRES_SQL,
+    integritySha256: "27ca84876985f1d8836d4a2b4b441b982652e28ed6642b6afb1f43ffe92aa636",
+  },
+  {
+    version: 136,
+    name: "remote_worker_protected_admission_evidence",
+    sql: REMOTE_WORKER_PROTECTED_ADMISSION_EVIDENCE_POSTGRES_SQL,
+    integritySha256: "6da2dbc1cdb2fbada57fdbaf3573003196ec9702f59519144e501a06ad28463a",
+  },
+  {
+    version: 137,
+    name: "remote_worker_mesh_node_admission_authority",
+    sql: REMOTE_WORKER_MESH_NODE_ADMISSION_POSTGRES_SQL,
+    integritySha256: "2bdbf5518ee1b919a852d8e3e00b98b05ce1f92d2c0563d73c1fb4010d996f97",
+  },
+  {
+    version: 138,
+    name: "mobile_push_registration_and_delivery_owner",
+    sql: MOBILE_PUSH_POSTGRES_SCHEMA_SQL,
+    integritySha256: "b4f7a5cbfb59f358fd765207b9a36264372e5f51a82ef25bb191b0169bc470a1",
+  },
+  {
+    version: 139,
+    name: "remote_worker_inference_budget_authority_correction",
+    integritySha256: "b6bcf06516cfc363dddd0c78bad86cb40b78324bac4c558c5591352bc6d5bab3",
+    sql: `
+      DO $rename_legacy_budget$
+      BEGIN
+        IF to_regclass('remote_worker_inference_requests') IS NOT NULL
+          AND EXISTS (
+            SELECT 1 FROM pg_attribute
+            WHERE attrelid = to_regclass('remote_worker_inference_requests')
+              AND attname = 'budget_reservation_id' AND NOT attisdropped
+          ) AND NOT EXISTS (
+            SELECT 1 FROM pg_attribute
+            WHERE attrelid = to_regclass('remote_worker_inference_requests')
+              AND attname = 'legacy_budget_reservation_marker' AND NOT attisdropped
+        ) THEN
+          ALTER TABLE remote_worker_inference_requests
+            RENAME COLUMN budget_reservation_id TO legacy_budget_reservation_marker;
+        END IF;
+      END
+      $rename_legacy_budget$;
+
+      ALTER TABLE remote_worker_inference_requests
+        ADD COLUMN IF NOT EXISTS execution_workspace_id TEXT,
+        ADD COLUMN IF NOT EXISTS durable_run_id TEXT,
+        ADD COLUMN IF NOT EXISTS task_id TEXT,
+        ADD COLUMN IF NOT EXISTS admitted_lease_revision BIGINT,
+        ADD COLUMN IF NOT EXISTS effective_route_json TEXT,
+        ADD COLUMN IF NOT EXISTS approval_resolution_json TEXT,
+        ADD COLUMN IF NOT EXISTS approval_resolution_sha256 TEXT,
+        ADD COLUMN IF NOT EXISTS approval_resolved_at TEXT,
+        ADD COLUMN IF NOT EXISTS continuation_governance_json TEXT,
+        ADD COLUMN IF NOT EXISTS continuation_governance_sha256 TEXT,
+        ADD COLUMN IF NOT EXISTS continuation_governance_expires_at TEXT,
+        ADD COLUMN IF NOT EXISTS budget_authority_state TEXT NOT NULL DEFAULT 'legacy_unverifiable',
+        ADD COLUMN IF NOT EXISTS budget_operation_id TEXT,
+        ADD COLUMN IF NOT EXISTS budget_operation_json TEXT,
+        ADD COLUMN IF NOT EXISTS budget_operation_sha256 TEXT,
+        ADD COLUMN IF NOT EXISTS budget_reservation_id TEXT,
+        ADD COLUMN IF NOT EXISTS budget_reservation_json TEXT,
+        ADD COLUMN IF NOT EXISTS budget_reservation_sha256 TEXT,
+        ADD COLUMN IF NOT EXISTS budget_reservation_expires_at TEXT,
+        ADD COLUMN IF NOT EXISTS usage_event_ids_json TEXT,
+        ADD COLUMN IF NOT EXISTS usage_event_ids_sha256 TEXT,
+        ADD COLUMN IF NOT EXISTS budget_settled_at TEXT,
+        ADD COLUMN IF NOT EXISTS budget_released_at TEXT,
+        ADD COLUMN IF NOT EXISTS budget_release_reason TEXT,
+        ADD COLUMN IF NOT EXISTS budget_release_requested_at TEXT,
+        ADD COLUMN IF NOT EXISTS block_reason TEXT;
+
+      CREATE INDEX IF NOT EXISTS idx_remote_worker_inference_budget_recovery
+        ON remote_worker_inference_requests(budget_authority_state, updated_at)
+        WHERE budget_authority_state IN ('settlement_pending', 'reserved', 'reconciliation_required');
+
+      CREATE OR REPLACE FUNCTION gc_remote_worker_inference_budget_authority_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF NEW.budget_authority_state NOT IN (
+          'not_required', 'reservation_pending', 'reserved', 'settlement_pending',
+          'settled', 'released', 'reconciliation_required', 'legacy_unverifiable'
+        )
+          OR (
+            NEW.budget_authority_state <> 'legacy_unverifiable'
+            AND (
+              NEW.execution_workspace_id IS NULL OR NEW.durable_run_id IS NULL OR NEW.task_id IS NULL
+              OR NEW.admitted_lease_revision IS NULL
+              OR (
+                NEW.budget_authority_state = 'not_required'
+                AND (
+                  NEW.state NOT IN ('waiting_approval', 'blocked')
+                  OR NEW.budget_reservation_id IS NOT NULL OR NEW.budget_reservation_json IS NOT NULL
+                  OR NEW.budget_reservation_sha256 IS NOT NULL OR NEW.budget_reservation_expires_at IS NOT NULL
+                )
+              )
+              OR (
+                NEW.budget_authority_state = 'reservation_pending'
+                AND (
+                  NEW.state <> 'admitted' OR NEW.budget_operation_id IS NULL OR NEW.budget_operation_json IS NULL
+                  OR NEW.budget_operation_sha256 IS NULL OR NEW.effective_route_json IS NULL
+                  OR NEW.budget_reservation_id IS NOT NULL OR NEW.budget_reservation_json IS NOT NULL
+                  OR NEW.budget_reservation_sha256 IS NOT NULL OR NEW.budget_reservation_expires_at IS NOT NULL
+                )
+              )
+              OR (
+                NEW.budget_authority_state IN ('reserved', 'settlement_pending', 'settled', 'released', 'reconciliation_required')
+                AND (
+                  NEW.budget_operation_id IS NULL OR NEW.budget_operation_json IS NULL OR NEW.budget_operation_sha256 IS NULL
+                  OR NEW.budget_reservation_id IS NULL OR NEW.budget_reservation_json IS NULL
+                  OR NEW.budget_reservation_sha256 IS NULL OR NEW.budget_reservation_expires_at IS NULL
+                )
+              )
+              OR (NEW.budget_authority_state = 'reserved' AND NEW.state NOT IN ('admitted', 'dispatch_claimed', 'streaming', 'blocked'))
+              OR (
+                NEW.budget_authority_state IN ('settlement_pending', 'settled')
+                AND (
+                  NEW.state NOT IN ('completed', 'failed', 'cancelled')
+                  OR NEW.usage_event_ids_json IS NULL OR NEW.usage_event_ids_sha256 IS NULL
+                )
+              )
+              OR (NEW.budget_authority_state = 'released' AND NEW.state <> 'blocked')
+              OR (NEW.budget_authority_state = 'reconciliation_required' AND NEW.state <> 'dispatch_unknown')
+              OR (
+                NEW.budget_authority_state IN ('not_required', 'reservation_pending', 'released')
+                AND NEW.accounting_disposition IS NOT NULL
+              )
+              OR (
+                NEW.budget_authority_state = 'reserved'
+                AND (
+                  (NEW.state IN ('admitted', 'blocked') AND NEW.accounting_disposition IS NOT NULL)
+                  OR (NEW.state IN ('dispatch_claimed', 'streaming') AND NEW.accounting_disposition IS DISTINCT FROM 'delegated')
+                )
+              )
+              OR (NEW.budget_authority_state = 'settlement_pending' AND NEW.accounting_disposition IS DISTINCT FROM 'delegated')
+              OR (NEW.budget_authority_state = 'settled' AND NEW.accounting_disposition IS DISTINCT FROM 'settled')
+              OR (NEW.budget_authority_state = 'reconciliation_required' AND NEW.accounting_disposition IS DISTINCT FROM 'unknown')
+              OR ((NEW.budget_settled_at IS NOT NULL) IS DISTINCT FROM (NEW.budget_authority_state = 'settled'))
+              OR ((NEW.budget_released_at IS NOT NULL) IS DISTINCT FROM (NEW.budget_authority_state = 'released'))
+              OR (
+                NEW.state = 'blocked' AND NEW.budget_authority_state IN ('reserved', 'released')
+                AND (
+                  NEW.budget_release_reason IS NULL OR NEW.budget_release_reason NOT IN (
+                    'pre_dispatch_authority_lost', 'governance_denied', 'approval_rejected', 'budget_revalidation_failed'
+                  )
+                  OR NEW.budget_release_requested_at IS NULL OR NEW.block_reason IS NULL
+                )
+              )
+              OR (
+                NOT (NEW.state = 'blocked' AND NEW.budget_authority_state IN ('reserved', 'released'))
+                AND (NEW.budget_release_reason IS NOT NULL OR NEW.budget_release_requested_at IS NOT NULL)
+              )
+            )
+          ) THEN
+          RAISE EXCEPTION 'remote worker inference budget authority evidence is incomplete' USING ERRCODE = '23514';
+        END IF;
+        IF TG_OP = 'UPDATE' AND NOT (
+          NEW.budget_authority_state = OLD.budget_authority_state
+          OR (OLD.budget_authority_state = 'not_required' AND NEW.budget_authority_state = 'reservation_pending')
+          OR (OLD.budget_authority_state = 'reservation_pending' AND NEW.budget_authority_state IN ('not_required', 'reserved'))
+          OR (OLD.budget_authority_state = 'reserved' AND NEW.budget_authority_state IN ('settlement_pending', 'released', 'reconciliation_required'))
+          OR (OLD.budget_authority_state = 'settlement_pending' AND NEW.budget_authority_state = 'settled')
+        ) THEN
+          RAISE EXCEPTION 'remote worker inference budget authority transition is invalid' USING ERRCODE = '23514';
+        END IF;
+        IF TG_OP = 'UPDATE' AND OLD.state = 'waiting_approval' AND NEW.state = 'admitted'
+          AND (
+            NEW.approval_resolution_json IS NULL OR NEW.approval_resolution_sha256 IS NULL
+            OR NEW.approval_resolved_at IS NULL OR NEW.continuation_governance_json IS NULL
+            OR NEW.continuation_governance_sha256 IS NULL OR NEW.continuation_governance_expires_at IS NULL
+            OR NEW.budget_authority_state <> 'reservation_pending'
+          ) THEN
+          RAISE EXCEPTION 'remote worker inference approval continuation evidence is incomplete' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE OR REPLACE FUNCTION gc_remote_worker_inference_v2_authority_immutable_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF NEW.legacy_budget_reservation_marker IS DISTINCT FROM OLD.legacy_budget_reservation_marker
+          OR NEW.execution_workspace_id IS DISTINCT FROM OLD.execution_workspace_id
+          OR NEW.durable_run_id IS DISTINCT FROM OLD.durable_run_id
+          OR NEW.task_id IS DISTINCT FROM OLD.task_id
+          OR NEW.admitted_lease_revision IS DISTINCT FROM OLD.admitted_lease_revision
+          OR (OLD.effective_route_json IS NOT NULL AND NEW.effective_route_json IS DISTINCT FROM OLD.effective_route_json)
+          OR (OLD.approval_resolution_json IS NOT NULL AND NEW.approval_resolution_json IS DISTINCT FROM OLD.approval_resolution_json)
+          OR (OLD.approval_resolution_sha256 IS NOT NULL AND NEW.approval_resolution_sha256 IS DISTINCT FROM OLD.approval_resolution_sha256)
+          OR (OLD.approval_resolved_at IS NOT NULL AND NEW.approval_resolved_at IS DISTINCT FROM OLD.approval_resolved_at)
+          OR (OLD.continuation_governance_json IS NOT NULL AND NEW.continuation_governance_json IS DISTINCT FROM OLD.continuation_governance_json)
+          OR (OLD.continuation_governance_sha256 IS NOT NULL AND NEW.continuation_governance_sha256 IS DISTINCT FROM OLD.continuation_governance_sha256)
+          OR (OLD.continuation_governance_expires_at IS NOT NULL AND NEW.continuation_governance_expires_at IS DISTINCT FROM OLD.continuation_governance_expires_at)
+          OR (OLD.budget_operation_id IS NOT NULL AND NEW.budget_operation_id IS DISTINCT FROM OLD.budget_operation_id)
+          OR (OLD.budget_operation_json IS NOT NULL AND NEW.budget_operation_json IS DISTINCT FROM OLD.budget_operation_json)
+          OR (OLD.budget_operation_sha256 IS NOT NULL AND NEW.budget_operation_sha256 IS DISTINCT FROM OLD.budget_operation_sha256)
+          OR (OLD.budget_reservation_id IS NOT NULL AND NEW.budget_reservation_id IS DISTINCT FROM OLD.budget_reservation_id)
+          OR (OLD.budget_reservation_json IS NOT NULL AND NEW.budget_reservation_json IS DISTINCT FROM OLD.budget_reservation_json)
+          OR (OLD.budget_reservation_sha256 IS NOT NULL AND NEW.budget_reservation_sha256 IS DISTINCT FROM OLD.budget_reservation_sha256)
+          OR (OLD.budget_reservation_expires_at IS NOT NULL AND NEW.budget_reservation_expires_at IS DISTINCT FROM OLD.budget_reservation_expires_at)
+          OR (OLD.usage_event_ids_json IS NOT NULL AND NEW.usage_event_ids_json IS DISTINCT FROM OLD.usage_event_ids_json)
+          OR (OLD.usage_event_ids_sha256 IS NOT NULL AND NEW.usage_event_ids_sha256 IS DISTINCT FROM OLD.usage_event_ids_sha256)
+          OR (OLD.budget_settled_at IS NOT NULL AND NEW.budget_settled_at IS DISTINCT FROM OLD.budget_settled_at)
+          OR (OLD.budget_released_at IS NOT NULL AND NEW.budget_released_at IS DISTINCT FROM OLD.budget_released_at)
+          OR (OLD.budget_release_reason IS NOT NULL AND NEW.budget_release_reason IS DISTINCT FROM OLD.budget_release_reason)
+          OR (OLD.budget_release_requested_at IS NOT NULL AND NEW.budget_release_requested_at IS DISTINCT FROM OLD.budget_release_requested_at)
+          OR (OLD.block_reason IS NOT NULL AND NEW.block_reason IS DISTINCT FROM OLD.block_reason)
+          OR (
+            OLD.budget_authority_state = 'legacy_unverifiable'
+            AND (
+              NEW.state IS DISTINCT FROM OLD.state
+              OR NEW.governance_decision IS DISTINCT FROM OLD.governance_decision
+              OR NEW.approval_receipt_sha256 IS DISTINCT FROM OLD.approval_receipt_sha256
+              OR NEW.governance_output_token_ceiling IS DISTINCT FROM OLD.governance_output_token_ceiling
+              OR NEW.governance_reasoning_token_ceiling IS DISTINCT FROM OLD.governance_reasoning_token_ceiling
+              OR NEW.governance_expires_at IS DISTINCT FROM OLD.governance_expires_at
+              OR NEW.effective_provider_id IS DISTINCT FROM OLD.effective_provider_id
+              OR NEW.effective_model_id IS DISTINCT FROM OLD.effective_model_id
+              OR NEW.dispatch_claim_owner IS DISTINCT FROM OLD.dispatch_claim_owner
+              OR NEW.dispatch_claimed_at IS DISTINCT FROM OLD.dispatch_claimed_at
+              OR NEW.dispatch_lease_expires_at IS DISTINCT FROM OLD.dispatch_lease_expires_at
+              OR NEW.usage_intent_event_id IS DISTINCT FROM OLD.usage_intent_event_id
+              OR NEW.usage_terminal_event_id IS DISTINCT FROM OLD.usage_terminal_event_id
+              OR NEW.output_frame_count IS DISTINCT FROM OLD.output_frame_count
+              OR NEW.output_char_count IS DISTINCT FROM OLD.output_char_count
+              OR NEW.terminal_frame_sequence IS DISTINCT FROM OLD.terminal_frame_sequence
+              OR NEW.terminal_sha256 IS DISTINCT FROM OLD.terminal_sha256
+              OR NEW.accounting_disposition IS DISTINCT FROM OLD.accounting_disposition
+              OR NEW.effective_route_json IS DISTINCT FROM OLD.effective_route_json
+              OR NEW.approval_resolution_json IS DISTINCT FROM OLD.approval_resolution_json
+              OR NEW.approval_resolution_sha256 IS DISTINCT FROM OLD.approval_resolution_sha256
+              OR NEW.approval_resolved_at IS DISTINCT FROM OLD.approval_resolved_at
+              OR NEW.continuation_governance_json IS DISTINCT FROM OLD.continuation_governance_json
+              OR NEW.continuation_governance_sha256 IS DISTINCT FROM OLD.continuation_governance_sha256
+              OR NEW.continuation_governance_expires_at IS DISTINCT FROM OLD.continuation_governance_expires_at
+              OR NEW.budget_operation_id IS DISTINCT FROM OLD.budget_operation_id
+              OR NEW.budget_operation_json IS DISTINCT FROM OLD.budget_operation_json
+              OR NEW.budget_operation_sha256 IS DISTINCT FROM OLD.budget_operation_sha256
+              OR NEW.budget_reservation_id IS DISTINCT FROM OLD.budget_reservation_id
+              OR NEW.budget_reservation_json IS DISTINCT FROM OLD.budget_reservation_json
+              OR NEW.budget_reservation_sha256 IS DISTINCT FROM OLD.budget_reservation_sha256
+              OR NEW.budget_reservation_expires_at IS DISTINCT FROM OLD.budget_reservation_expires_at
+              OR NEW.usage_event_ids_json IS DISTINCT FROM OLD.usage_event_ids_json
+              OR NEW.usage_event_ids_sha256 IS DISTINCT FROM OLD.usage_event_ids_sha256
+              OR NEW.budget_settled_at IS DISTINCT FROM OLD.budget_settled_at
+              OR NEW.budget_released_at IS DISTINCT FROM OLD.budget_released_at
+              OR NEW.budget_release_reason IS DISTINCT FROM OLD.budget_release_reason
+              OR NEW.budget_release_requested_at IS DISTINCT FROM OLD.budget_release_requested_at
+              OR NEW.block_reason IS DISTINCT FROM OLD.block_reason
+            )
+          ) THEN
+          RAISE EXCEPTION 'remote worker inference v2 authority evidence is immutable' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE OR REPLACE FUNCTION gc_remote_worker_inference_request_terminal_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF OLD.state IN ('completed', 'failed', 'cancelled', 'dispatch_unknown', 'blocked')
+          AND (
+            NEW.state IS DISTINCT FROM OLD.state
+            OR NEW.dispatch_claim_owner IS DISTINCT FROM OLD.dispatch_claim_owner
+            OR NEW.dispatch_lease_expires_at IS DISTINCT FROM OLD.dispatch_lease_expires_at
+            OR NEW.effective_provider_id IS DISTINCT FROM OLD.effective_provider_id
+            OR NEW.effective_model_id IS DISTINCT FROM OLD.effective_model_id
+            OR NEW.usage_intent_event_id IS DISTINCT FROM OLD.usage_intent_event_id
+            OR NEW.usage_terminal_event_id IS DISTINCT FROM OLD.usage_terminal_event_id
+            OR (
+              NEW.accounting_disposition IS DISTINCT FROM OLD.accounting_disposition
+              AND NOT (
+                OLD.budget_authority_state = 'settlement_pending'
+                AND NEW.budget_authority_state = 'settled'
+                AND OLD.accounting_disposition = 'delegated'
+                AND NEW.accounting_disposition = 'settled'
+              )
+            )
+            OR NEW.output_frame_count IS DISTINCT FROM OLD.output_frame_count
+            OR NEW.output_char_count IS DISTINCT FROM OLD.output_char_count
+            OR NEW.worker_acknowledged_through < OLD.worker_acknowledged_through
+          ) THEN
+          RAISE EXCEPTION 'remote worker inference terminal state is immutable except recovery and acknowledgement' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      DROP TRIGGER IF EXISTS trg_remote_worker_inference_budget_authority_guard ON remote_worker_inference_requests;
+      CREATE TRIGGER trg_remote_worker_inference_budget_authority_guard
+        BEFORE INSERT OR UPDATE ON remote_worker_inference_requests
+        FOR EACH ROW EXECUTE FUNCTION gc_remote_worker_inference_budget_authority_guard();
+      DROP TRIGGER IF EXISTS trg_remote_worker_inference_v2_authority_immutable ON remote_worker_inference_requests;
+      CREATE TRIGGER trg_remote_worker_inference_v2_authority_immutable
+        BEFORE UPDATE ON remote_worker_inference_requests
+        FOR EACH ROW EXECUTE FUNCTION gc_remote_worker_inference_v2_authority_immutable_guard();
+    `,
+  },
+  {
+    version: 140,
+    name: "canonical_postgres_schema_authority",
+    integritySha256: "9ee72c0e2879f3cbd2e32fc58d16692969691799537b910be9eea9255e038ca3",
+    sql: buildPostgresV140CanonicalSchemaAuthoritySql(),
   },
 ];
 

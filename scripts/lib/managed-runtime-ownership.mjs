@@ -93,6 +93,7 @@ export function assessLauncherEndpointOwnership({
   endpointResponded,
   endpointHealthy,
   identityMatched,
+  launchInProgress = false,
 }) {
   if (!ATTACHMENT_MODES.has(attachmentMode)) {
     throw new Error(`Unsupported launcher endpoint attachment mode: ${attachmentMode}`);
@@ -100,7 +101,7 @@ export function assessLauncherEndpointOwnership({
   if (!MANAGED_PID_STATES.has(pidState)) {
     throw new Error(`Unsupported managed PID state: ${pidState}`);
   }
-  for (const [label, value] of Object.entries({ endpointResponded, endpointHealthy, identityMatched })) {
+  for (const [label, value] of Object.entries({ endpointResponded, endpointHealthy, identityMatched, launchInProgress })) {
     if (typeof value !== "boolean") {
       throw new Error(`${label} must be a boolean.`);
     }
@@ -120,6 +121,25 @@ export function assessLauncherEndpointOwnership({
       collision: false,
       launchAction: endpointHealthy ? "attach" : "wait_external",
       reason: endpointHealthy ? "external_override_ready" : "external_override_unavailable",
+    };
+  }
+
+  // A live lifecycle-lock holder for this exact service is affirmative
+  // evidence of a managed launch that has not finished publishing metadata.
+  // Waiting is bounded by the caller's deadline; without that evidence the
+  // fail-closed collision refusal below is unchanged. A running-but-mismatched
+  // identity stays a collision even mid-launch.
+  if (launchInProgress && endpointResponded && pidState !== "running") {
+    return {
+      attachmentMode,
+      pidState,
+      endpointResponded,
+      endpointHealthy,
+      identityMatched,
+      readinessAccepted: false,
+      collision: false,
+      launchAction: "wait_managed",
+      reason: "managed_launch_in_progress",
     };
   }
 

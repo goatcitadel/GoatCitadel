@@ -166,6 +166,31 @@ const API_EXAMPLE_HOST = host("api", "example", "com");
 const BLOCKED_EXAMPLE_HOST = host("blocked", "example");
 
 describe("ToolPolicyEngine permission profile upper bound", () => {
+  it("inspects policy without materializing a redundant access decision", async () => {
+    const storage = createStorageStub();
+    const engine = new ToolPolicyEngine(policyConfig, storage);
+    const request = {
+      toolName: "time.now",
+      agentId: "assistant",
+      sessionId: "session-policy-inspection",
+      args: {},
+    };
+
+    const inspected = await engine.inspectAccess(request);
+
+    expect(storage.toolAccessDecisions.record).not.toHaveBeenCalled();
+    const evaluated = await engine.evaluateAccess(request);
+    expect(evaluated).toEqual(inspected);
+    expect(storage.toolAccessDecisions.record).toHaveBeenCalledTimes(1);
+    expect(storage.toolAccessDecisions.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "time.now",
+        sessionId: "session-policy-inspection",
+        countsTowardLimits: false,
+      }),
+    );
+  });
+
   it("executes the exact heartbeat read surface without materializing interactive approvals", async () => {
     const storage = createStorageStub();
     const engine = new ToolPolicyEngine(policyConfig, storage, createHeartbeatBoundaryRegistry());

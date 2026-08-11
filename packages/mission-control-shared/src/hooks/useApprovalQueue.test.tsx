@@ -179,6 +179,64 @@ describe("useApprovalQueue", () => {
     expect(hook.result.hasMoreVisibleApprovals).toBe(false);
   });
 
+  it("clears loadMorePending when a refresh load supersedes the in-flight page fetch (MCSHARED-010)", async () => {
+    // The load-more page fetch stalls while a refresh-bus load() fires. The
+    // refresh bumps `loadSequenceRef`, so before the fix the page fetch's
+    // `finally` (guarded on still owning the sequence) skipped its
+    // setLoadMorePending(false): the flag stuck true forever and the early
+    // return in loadMoreVisibleApprovals blocked every future page load.
+    const stalledPage = deferred<{ items: ApprovalRequest[] }>();
+    apiMocks.fetchApprovals.mockImplementation(
+      async (input: ApprovalRequest["status"] | { status?: ApprovalRequest["status"]; cursor?: string }) => {
+        if (typeof input === "object") {
+          return stalledPage.promise;
+        }
+        return {
+          items:
+            input === "pending"
+              ? [
+                  approval({
+                    approvalId: "pending-1",
+                    createdAt: "2026-01-01T11:00:00.000Z",
+                  }),
+                ]
+              : [],
+          nextCursor: input === "pending" ? "cursor-pending" : undefined,
+        };
+      },
+    );
+    const hook = await renderApprovalQueue();
+    expect(hook.result.hasMoreVisibleApprovals).toBe(true);
+
+    await act(async () => {
+      void hook.result.loadMoreVisibleApprovals();
+      await Promise.resolve();
+    });
+    expect(hook.result.loadMorePending).toBe(true);
+
+    await act(async () => {
+      await vi.mocked(useRefreshSubscription).mock.calls[0]?.[1]();
+    });
+
+    await act(async () => {
+      stalledPage.resolve({
+        items: [
+          approval({
+            approvalId: "pending-2",
+            createdAt: "2026-01-01T10:30:00.000Z",
+          }),
+        ],
+      });
+      await Promise.resolve();
+    });
+    await flushAsync();
+
+    // The superseded page fetch settled: its items stay dropped, but the busy
+    // flag must clear so paging is not permanently blocked.
+    expect(hook.result.loadMorePending).toBe(false);
+    expect(hook.result.pendingItems.map((item) => item.approvalId)).toEqual(["pending-1"]);
+  });
+
   it("focuses resolved approvals by switching to history instead of selecting an unrelated pending item", async () => {
     const hook = await renderApprovalQueue({ focusedApprovalId: "approved-1" });
 

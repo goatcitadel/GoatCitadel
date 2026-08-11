@@ -1,0 +1,45 @@
+{
+  "schema": "goatcitadel.vendor-source-receipt.v1",
+  "archive": {
+    "url": "https://monocypher.org/download/monocypher-4.0.3.tar.gz",
+    "bytes": 940390,
+    "sha256": "8cc9bc341a66249016db9bd70e9142d8d0aef9945973744b1ac05dbc55d8ee66",
+    "sha512": "40904ada5c7ee4f7741733e38b69a30a4b0561cbffba5ffe7c2dce16136d540251ec0d9056ff606510d3b5b708fb8a40db7e0870d4a0b2dc17ba2bfb880f8965",
+    "blake2b": "5c586019e8e78ce6fb70f73f4ded10c852335138394b22fb704d0b4379edfc1adaea342f0e4c4b8c52fcf053df401d1fe47812ee5cb5062813de19fc51f8ae93",
+    "sha512SidecarUrl": "https://monocypher.org/download/monocypher-4.0.3.tar.gz.sha512",
+    "blake2bSidecarUrl": "https://monocypher.org/download/monocypher-4.0.3.tar.gz.blake2b"
+  },
+  "repository": {
+    "url": "https://github.com/LoupVaillant/Monocypher.git",
+    "tag": "4.0.3",
+    "correlationCommit": "ab2b16dd619ad5f6979a4fbe69cfa324a6fcc35f"
+  },
+  "licenseExpression": "BSD-2-Clause OR CC0-1.0",
+  "files": [
+    {
+      "path": "src/monocypher.c",
+      "bytes": 102580,
+      "sha256": "57eb914fc88136119bd41655cccb8c250048bf54d470540625186f8ab16f64be"
+    },
+    {
+      "path": "src/monocypher.h",
+      "bytes": 12175,
+      "sha256": "c494da712122da7ff679fdcf318a5317e84972b6c950fe9d896212947797facd"
+    },
+    {
+      "path": "src/optional/monocypher-ed25519.c",
+      "bytes": 16524,
+      "sha256": "60fce3578fb00b00da96490653d993c4cb427b1e1be38183285c66e04d22cc18"
+    },
+    {
+      "path": "src/optional/monocypher-ed25519.h",
+      "bytes": 5449,
+      "sha256": "abc4fad381879f5c29176ebe014b9189956b3dfe0a3e36459b6990bc57212380"
+    },
+    {
+      "path": "LICENCE.md",
+      "bytes": 9085,
+      "sha256": "5f8360e4c06ddcc584bdb4b210c6af824c4bb301e6a9a521869b6d90795ca4b3"
+    }
+  ]
+}

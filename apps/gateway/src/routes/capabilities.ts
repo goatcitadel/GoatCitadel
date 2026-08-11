@@ -16,9 +16,21 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     scope: z.enum(["inspectable", "callable"]).optional(),
     workspaceId: z.string().trim().min(1).optional(),
   });
+  const catalogMetricsQuerySchema = z.object({
+    workspaceId: z.string().trim().min(1).optional(),
+  });
 
   const snapshotParamsSchema = z.object({
     snapshotId: z.string().min(1),
+  });
+  const auditExportQuerySchema = z.object({
+    workspaceId: z.string().trim().min(1).optional(),
+    runIds: z
+      .preprocess(
+        (value) => (typeof value === "string" ? value.split(",") : value),
+        z.array(z.string().trim().min(1).max(256)).max(25),
+      )
+      .optional(),
   });
   const compactToolDirectoryQuerySchema = z.object({
     ttlMs: z.coerce.number().int().min(1000).max(3_600_000).optional(),
@@ -174,6 +186,19 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.send({ scope, items: projectCapabilityPublicValue(items) });
   });
 
+  fastify.get("/api/v1/capabilities/catalog-metrics", async (request, reply) => {
+    const parsed = catalogMetricsQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    const metrics = parsed.data.workspaceId
+      ? await fastify.services.capabilities.getCapabilityCatalogDriftMetrics(
+          await fastify.services.capabilityScope.resolveEffectiveSkills(parsed.data.workspaceId),
+        )
+      : await fastify.services.capabilities.getCapabilityCatalogDriftMetrics();
+    return reply.send(projectCapabilityPublicValue(metrics));
+  });
+
   fastify.get("/api/v1/capabilities/tool-directory/compact", async (request, reply) => {
     const parsed = compactToolDirectoryQuerySchema.safeParse(request.query);
     if (!parsed.success) {
@@ -213,6 +238,31 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       );
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.get("/api/v1/capabilities/snapshots/:snapshotId/audit-export", async (request, reply) => {
+    const params = snapshotParamsSchema.safeParse(request.params);
+    const query = auditExportQuerySchema.safeParse(request.query);
+    if (!params.success || !query.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          query: query.success ? undefined : query.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.send(
+        projectCapabilityPublicValue(
+          await fastify.services.capabilities.getCapabilityAuditExport(params.data.snapshotId, {
+            workspaceId: query.data.workspaceId ?? DEFAULT_WORKSPACE_ID,
+            runIds: query.data.runIds ?? [],
+          }),
+        ),
+      );
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
     }
   });
 

@@ -47,6 +47,34 @@ beforeEach(() => {
 });
 
 describe("RunDetailRoutePage", () => {
+  it("renders an intentional empty state when no run is selected", async () => {
+    const navigate = vi.fn();
+    let renderer: ReactTestRenderer | undefined;
+    await act(async () => {
+      renderer = create(
+        <RunDetailRoutePage
+          route={{ area: "ops", section: "sessions", view: "run-detail", theme: "ops" } as any}
+          activeWorkspaceId="default"
+          activeWorkspaceName="Default"
+          pendingApprovals={0}
+          navigate={navigate}
+          setActiveWorkspaceId={vi.fn()}
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    const text = collectText(renderer!.root);
+    expect(text).toContain("No run selected");
+    expect(text).not.toContain("Run trace");
+    expect(text).not.toContain("Retry");
+    expect(runTraceHarness.fetchObserveRunTrace).not.toHaveBeenCalled();
+
+    await act(async () => findButton(renderer!.root, "Browse runs").props.onClick());
+    expect(navigate).toHaveBeenCalledWith({ area: "ops", section: "sessions", theme: "ops" });
+    act(() => renderer!.unmount());
+  });
+
   it("surfaces persisted structured findings for review run ids", async () => {
     runTraceHarness.fetchObserveRunTrace.mockRejectedValueOnce(new Error("not an observe run"));
     runTraceHarness.fetchStructuredReviewRun.mockResolvedValueOnce({

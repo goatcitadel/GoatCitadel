@@ -40,8 +40,22 @@ const SECRET_SENSITIVE_USER_INPUT_ROUTES = new Set([
   "/api/v1/chat/sessions/:sessionId/turns/:turnId/user-input/:promptId/respond",
   "/api/v1/chat/sessions/:sessionId/turns/:turnId/user-input/:promptId/secure-configuration",
 ]);
+const SECRET_SENSITIVE_REMOTE_WORKER_CONTROL_ROUTES = new Set([
+  "/api/v1/ops/workspaces/:workspaceId/remote-workers/:workerId/generations/:workerGeneration/quarantine",
+  "/api/v1/ops/workspaces/:workspaceId/remote-workers/:workerId/generations/:workerGeneration/revoke",
+]);
+const SECRET_SENSITIVE_MOBILE_PUSH_ROUTES = new Set(["/api/v1/mobile/current-device/push"]);
+const MOBILE_PUSH_REGISTRATION_PATH = "/api/v1/mobile/current-device/push";
 const SECURE_CONFIGURATION_ROUTE =
   "/api/v1/chat/sessions/:sessionId/turns/:turnId/user-input/:promptId/secure-configuration";
+const REMOTE_WORKER_BOOTSTRAP_ROUTE = "/api/v1/ops/workspaces/:workspaceId/remote-workers/bootstrap";
+const REMOTE_WORKER_MESH_JOIN_AUTHORITY_ROUTE =
+  "/api/v1/ops/workspaces/:workspaceId/remote-workers/:workerId/generations/:workerGeneration/mesh-node-join-authorities";
+const CANONICAL_REPLAY_ROUTES = new Set([SECURE_CONFIGURATION_ROUTE]);
+const CANONICAL_IDEMPOTENCY_OWNER_ROUTES = new Set([
+  REMOTE_WORKER_BOOTSTRAP_ROUTE,
+  REMOTE_WORKER_MESH_JOIN_AUTHORITY_ROUTE,
+]);
 
 export const idempotencyHeaderPlugin = fp<IdempotencyHeaderPluginOptions>(async (fastify, options) => {
   fastify.decorateRequest("idempotencyKey", "");
@@ -67,11 +81,19 @@ export const idempotencyHeaderPlugin = fp<IdempotencyHeaderPluginOptions>(async 
     }
 
     (request as typeof request & { idempotencyKey: string }).idempotencyKey = key;
-    if (!options.mutationStore || !shouldEnforceMutationIdempotency(request)) {
+    const routePath = getNormalizedRoutePath(request);
+    if (
+      !options.mutationStore ||
+      !shouldEnforceMutationIdempotency(request) ||
+      CANONICAL_IDEMPOTENCY_OWNER_ROUTES.has(routePath)
+    ) {
+      // One-time remote-worker secrets are deliberately not recoverable from
+      // durable hashes. Their repositories own replay and request drift; a
+      // second generic claim could fail after canonical commit and suppress the
+      // only response that is allowed to expose a secret.
       return;
     }
 
-    const routePath = getNormalizedRoutePath(request);
     const actorScope = request.authActorId?.trim() || "";
     const claim = await options.mutationStore.claim({
       method: request.method,
@@ -100,12 +122,12 @@ export const idempotencyHeaderPlugin = fp<IdempotencyHeaderPluginOptions>(async 
       return;
     }
 
-    if (claim.outcome === "duplicate" && routePath === SECURE_CONFIGURATION_ROUTE) {
-      // The secure handler owns a secret-independent replay path backed by the
-      // immutable durable continuation seal. Let an exact transport retry
-      // recover that receipt after a lost response; the newly supplied bytes
-      // are ignored and never compared or re-applied. In-progress and payload-
-      // mismatch claims remain blocked above/below this narrow exception.
+    if (claim.outcome === "duplicate" && CANONICAL_REPLAY_ROUTES.has(routePath)) {
+      // The secure-configuration handler owns a secret-independent replay path
+      // backed by its canonical repository. Let an exact transport retry
+      // recover a secret-free receipt after a lost response; newly supplied
+      // bytes are ignored. In-progress and payload-mismatch claims remain
+      // blocked.
       request.mutationIdempotencyOutcome = "committed";
       return;
     }
@@ -143,6 +165,14 @@ export const idempotencyHeaderPlugin = fp<IdempotencyHeaderPluginOptions>(async 
       return;
     }
     await options.mutationStore.markCompleted(state);
+  });
+
+  fastify.addHook("onSend", async (request, reply, payload) => {
+    if (isMobilePushRegistrationRequest(request)) {
+      reply.header("Cache-Control", "no-store");
+      reply.header("Pragma", "no-cache");
+    }
+    return payload;
   });
 });
 
@@ -219,6 +249,10 @@ function getNormalizedRoutePath(request: FastifyRequest): string {
   return request.url.split("?", 1)[0] || request.url;
 }
 
+function isMobilePushRegistrationRequest(request: FastifyRequest): boolean {
+  return request.method === "PUT" && (request.url.split("?", 1)[0] || request.url) === MOBILE_PUSH_REGISTRATION_PATH;
+}
+
 function hashCanonicalPayload(value: unknown): string {
   return createHash("sha256").update(stableStringify(value)).digest("hex");
 }
@@ -233,10 +267,39 @@ function hashCanonicalPayload(value: unknown): string {
  * HTTP retry without creating a credential oracle or durable secret fingerprint.
  */
 function hashMutationPayload(request: FastifyRequest): string {
-  if (SECRET_SENSITIVE_USER_INPUT_ROUTES.has(getNormalizedRoutePath(request))) {
+  const routePath = getNormalizedRoutePath(request);
+  if (SECRET_SENSITIVE_USER_INPUT_ROUTES.has(routePath)) {
     return hashCanonicalPayload({
       kind: "chat_user_input_redacted_v1",
       path: request.url.split("?", 1)[0] || request.url,
+    });
+  }
+  if (SECRET_SENSITIVE_REMOTE_WORKER_CONTROL_ROUTES.has(routePath)) {
+    const body = (request as { body?: unknown }).body;
+    const reasonCode =
+      body &&
+      typeof body === "object" &&
+      !Array.isArray(body) &&
+      typeof (body as Record<string, unknown>).reasonCode === "string" &&
+      /^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$/u.test((body as Record<string, unknown>).reasonCode as string)
+        ? ((body as Record<string, unknown>).reasonCode as string)
+        : null;
+    return hashCanonicalPayload({
+      kind: "remote_worker_generation_control_redacted_v1",
+      path: request.url.split("?", 1)[0] || request.url,
+      reasonCode,
+    });
+  }
+  if (SECRET_SENSITIVE_MOBILE_PUSH_ROUTES.has(routePath)) {
+    const body = (request as { body?: unknown }).body;
+    const record = body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
+    const provider = record.provider === "expo" || record.provider === "fcm" ? record.provider : null;
+    const enabled = typeof record.enabled === "boolean" ? record.enabled : null;
+    return hashCanonicalPayload({
+      kind: "mobile_push_registration_redacted_v1",
+      path: request.url.split("?", 1)[0] || request.url,
+      provider,
+      enabled,
     });
   }
   return hashCanonicalPayload((request as { body?: unknown }).body ?? null);

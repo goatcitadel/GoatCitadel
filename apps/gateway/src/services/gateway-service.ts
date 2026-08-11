@@ -410,6 +410,7 @@ import { LlamaCppRuntimeService } from "./llama-cpp-runtime-service.js";
 import { acquireBoundLlamaCppEmbeddingLease, acquireBoundLlamaCppLease } from "./llama-cpp-provider-lease.js";
 import { NpuSidecarService } from "./npu-sidecar-service.js";
 import { SecretStoreService } from "./secret-store-service.js";
+import { enqueueMobilePushApprovalRefresh } from "./mobile-push-service.js";
 import {
   RuntimeConfigurationService,
   type RuntimeConfigurationAuthorizationInput,
@@ -796,7 +797,7 @@ const FEATURE_FLAGS_SETTING_KEY = "feature_flags_v1";
 // (updateFeatureFlags) primes the cache, so this TTL only bounds staleness for any
 // hypothetical out-of-band settings write.
 const FEATURE_FLAGS_CACHE_TTL_MS = 1_000;
-const TERMINAL_CHAT_STREAM_ADMISSION_RELEASE_TIMEOUT_MS = 10_000;
+const TERMINAL_CHAT_STREAM_ADMISSION_RELEASE_TIMEOUT_MS = 30_000; // Covers multiple post-commit ownership epochs.
 import { DeviceTokenVault } from "./device-token-vault.js";
 
 export const MEMORY_ITEM_STATUS_VALUES = new Set(["active", "forgotten"]);
@@ -1510,6 +1511,7 @@ export class GatewayService {
     this.runtimeDecisionRecorder = new RuntimeDecisionRecorder({
       runtimeDecisionTraces: this.storage.runtimeDecisionTraces,
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
+      registerBackgroundTask: (task) => this.registerBackgroundTask(task),
     });
     this.pluginToolOverrideService = new PluginToolOverrideService({
       getOwnerId: () => `gateway:${this.config.assistant.mesh.nodeId}`,
@@ -1697,6 +1699,7 @@ export class GatewayService {
     // projects its catalog entries.
     this.meshCapabilityPublicationService = new MeshCapabilityPublicationService({
       storage: this.storage,
+      remoteWorkerAuthority: this.storage.remoteWorkerMeshNodeAdmissions,
       publishRealtime: async (eventType, source, payload) => {
         await this.publishRealtime(eventType, source, payload);
       },
@@ -1933,6 +1936,9 @@ export class GatewayService {
       invokeToolWithEffectTruth: async (request, options) => await this.invokeTool(request, options),
       persistToolArtifact: (input) => chatToolArtifactService.persistChatToolArtifact(this, input),
       evaluateToolAccess: async (request) => await this.evaluateToolAccess(request),
+      // Chat prefers this non-materializing probe; the durable profile freezes
+      // its evidence and canonical invocation records independently.
+      inspectToolAccess: async (request) => await this.inspectToolAccess(request),
       assertRuntimeConfigurationPromptAvailable: (targetId) =>
         this.runtimeConfigurationService.assertConfigurationAvailable(targetId as "search.brave" | "search.parallel"),
       assertRuntimeConfigurationPromptAuthority: async (input) =>
@@ -1948,12 +1954,14 @@ export class GatewayService {
       invokeMcpTool: async (request, options) => await this.invokeMcpTool(request, options),
       listMcpBrowserFallbackTargets: () => this.listMcpBrowserFallbackTargets(),
       recordRuntimeDecision: async (input) => await this.recordRuntimeDecision(input),
+      enqueueRuntimeDecision: (input) => this.runtimeDecisionRecorder.enqueueAdvisory(input),
       toolLoopDetection: this.config.toolPolicy.tools.loopDetection,
       safeWriteFallbackDir: path.resolve(config.rootDir, config.assistant.workspaceDir, "goatcitadel_out"),
       workspaceFileRootDir: path.resolve(config.rootDir, config.assistant.workspaceDir),
       chatThinkingStreamV1Enabled: async () => await this.isFeatureEnabled("chatThinkingStreamV1Enabled"),
       attachedContextToolsV1Enabled: async () => await this.isFeatureEnabled("attachedContextToolsV1Enabled"),
       parallelToolExecutionV1Disabled: async () => await this.isFeatureEnabled("parallelToolExecutionV1Disabled"),
+      promptContextBudgetReceiptEnabled: () => process.env.GOATCITADEL_DEBUG_PROMPT_CONTEXT_BUDGET_RECEIPTS === "1",
       subagentFanoutV1Disabled: async () => await this.isFeatureEnabled("subagentFanoutV1Disabled"),
       delegationScopeExpansionV1Enabled: async () => await this.isFeatureEnabled("delegationScopeExpansionV1Enabled"),
     });
@@ -2707,6 +2715,8 @@ export class GatewayService {
       createChatCompletion: async (request, attribution) => await this.createChatCompletion(request, attribution),
       resolveModelDefaults: async () => await this.getPromptJudgeModelDefaults(),
       resolveApiStyle: (providerId, model) => this.llmService.resolveExecutionApiStyle(providerId, model),
+      proposeTraceMemoryCandidate: (input, actorId, authority) =>
+        this.memoryLifecycleService.proposeTraceMemoryCandidate(input, actorId, authority),
       effectAuthority: chatPostCommitEffectAuthority,
       isAutonomyDisabled: async () => await this.isFeatureEnabled("autonomyV1Disabled"),
       publishRealtime,
@@ -8069,21 +8079,32 @@ export class GatewayService {
   }
 
   public async evaluateToolAccess(input: ToolAccessEvaluateRequest): Promise<ToolAccessEvaluateResponse> {
+    return this.policyEngine.evaluateAccess(await this.prepareToolAccessEvaluation(input));
+  }
+
+  /**
+   * Internal, non-materializing policy probe for frozen capability admission
+   * and last-moment narrowing. External evaluation and invocation paths keep
+   * their canonical decision records.
+   */
+  public async inspectToolAccess(input: ToolAccessEvaluateRequest): Promise<ToolAccessEvaluateResponse> {
+    return this.policyEngine.inspectAccess(await this.prepareToolAccessEvaluation(input));
+  }
+
+  private async prepareToolAccessEvaluation(input: ToolAccessEvaluateRequest): Promise<ToolAccessEvaluateRequest> {
     const workspaceId = this.normalizeWorkspaceId(
       input.workspaceId ??
         (await this.storage.chatSessionMeta.get(input.sessionId))?.workspaceId ??
         DEFAULT_WORKSPACE_ID,
     );
     const citadelId = input.citadelId ?? (await this.storage.workspaces?.find(workspaceId))?.citadelId;
-    return this.policyEngine.evaluateAccess(
-      await this.enrichToolPolicyContext(
-        this.applyRuntimeBrowserBackendDefaults(
-          this.resolveToolRequestPathsForSession({
-            ...input,
-            workspaceId,
-            citadelId,
-          }),
-        ),
+    return await this.enrichToolPolicyContext(
+      this.applyRuntimeBrowserBackendDefaults(
+        this.resolveToolRequestPathsForSession({
+          ...input,
+          workspaceId,
+          citadelId,
+        }),
       ),
     );
   }
@@ -11043,6 +11064,24 @@ export class GatewayService {
     options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
   ): Promise<RealtimeEvent> {
     const event = await this.realtimeEventService.publishRealtime(eventType, source, payload, options);
+    if ((this.storage as Partial<Storage>).mobilePush) {
+      try {
+        await enqueueMobilePushApprovalRefresh(this.storage, event);
+      } catch {
+        try {
+          this.recordDevDiagnostic({
+            level: "warn",
+            category: "runtime",
+            event: "mobile_push.approval_projection_failed",
+            message: "Mobile push approval projection failed after retained realtime publication.",
+            context: { realtimeEventId: event.eventId, eventType: event.eventType },
+          });
+        } catch (diagnosticError) {
+          void diagnosticError;
+          // Retained realtime publication remains authoritative even when diagnostics are unavailable.
+        }
+      }
+    }
     await this.maybeRouteCanonicalNotification(event);
     return event;
   }

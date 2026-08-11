@@ -126,6 +126,25 @@ describe("capabilities API", () => {
     );
   });
 
+  it("builds scoped catalog metrics and deterministic snapshot audit-export URLs", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { fetchCapabilityAuditExport, fetchCapabilityCatalogDriftMetrics } = await import("./capabilities");
+
+    await fetchCapabilityCatalogDriftMetrics("workspace/1");
+    await fetchCapabilityAuditExport("snapshot/1", {
+      workspaceId: "workspace/1",
+      runIds: ["run-2", "run-1", "run-2"],
+    });
+
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
+      "/api/v1/capabilities/catalog-metrics?workspaceId=workspace%2F1",
+    );
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain(
+      "/api/v1/capabilities/snapshots/snapshot%2F1/audit-export?workspaceId=workspace%2F1&runIds=run-1%2Crun-2",
+    );
+  });
+
   it("uses the named-proof Code Mode verification API without raw command input", async () => {
     const fetchMock = vi.fn(async () => jsonResponse({ run: { runId: "run/1" }, evidence: { evidenceId: "proof-1" } }));
     vi.stubGlobal("fetch", fetchMock);

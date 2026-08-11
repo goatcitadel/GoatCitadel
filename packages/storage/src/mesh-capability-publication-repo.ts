@@ -25,8 +25,10 @@ import {
   type MeshCapabilityPublisherHealthRecord,
   type MeshCapabilityPublisherHealthStatus,
   type MeshCapabilitySettlementDisposition,
+  type RemoteWorkerMeshNodeAuthorityFence,
 } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
+import { RemoteWorkerMeshNodeAdmissionRepository } from "./remote-worker-mesh-node-admission-repo.js";
 import { safeJsonParse } from "./safe-json.js";
 
 export interface RegisterMeshCapabilityPublisherInput {
@@ -40,6 +42,26 @@ export interface RegisterMeshCapabilityPublisherInput {
   publicationLeaseFencingToken: number;
   publicationLeaseExpiresAt: string;
   idempotencyKey: string;
+}
+
+export interface RegisterRemoteWorkerMeshCapabilityPublisherInput {
+  readonly authorityFence: RemoteWorkerMeshNodeAuthorityFence;
+  readonly publisher: RegisterMeshCapabilityPublisherInput;
+}
+
+export interface PublishRemoteWorkerMeshCapabilityManifestInput {
+  readonly authorityFence: RemoteWorkerMeshNodeAuthorityFence;
+  readonly manifest: MeshCapabilityManifest;
+}
+
+export interface ResolveRemoteWorkerMeshCapabilityManifestReplayInput {
+  readonly authorityFence: RemoteWorkerMeshNodeAuthorityFence;
+  readonly workspaceId: string;
+  readonly nodeId: string;
+  readonly admissionGeneration: number;
+  readonly publicationKey: string;
+  readonly supersedesManifestSha256?: string;
+  readonly entries: readonly MeshCapabilityManifestEntry[];
 }
 
 export interface TransitionMeshCapabilityPublisherHealthInput {
@@ -244,7 +266,85 @@ interface SettlementRow {
 }
 
 export class MeshCapabilityPublicationRepository {
-  public constructor(private readonly db: DatabaseClient) {}
+  private readonly remoteWorkerMeshNodeAdmissions: RemoteWorkerMeshNodeAdmissionRepository;
+
+  public constructor(private readonly db: DatabaseClient) {
+    this.remoteWorkerMeshNodeAdmissions = new RemoteWorkerMeshNodeAdmissionRepository(db);
+  }
+
+  /** Atomic M3 authority-CAS plus HX-408 publisher registration/replay. */
+  public registerRemoteWorkerPublisher(
+    input: RegisterRemoteWorkerMeshCapabilityPublisherInput,
+  ): MeshCapabilityPublisherGenerationRecord {
+    const publisher = normalizePublisherInput(input.publisher);
+    assertFenceTargetsAdmission(input.authorityFence, publisher);
+    return this.db.transaction("immediate", () => {
+      this.acquirePostgresAdmissionLocks(publisher.workspaceId, publisher.nodeId);
+      this.remoteWorkerMeshNodeAdmissions.compareCurrentAuthorityFence({
+        workspaceId: publisher.workspaceId,
+        nodeId: publisher.nodeId,
+        admissionGeneration: publisher.admissionGeneration,
+        expected: input.authorityFence,
+      });
+      return this.registerPublisher(publisher);
+    });
+  }
+
+  /** Atomic M3 authority-CAS plus manifest publication/replay. */
+  public publishRemoteWorkerManifest(input: PublishRemoteWorkerMeshCapabilityManifestInput): MeshCapabilityManifest {
+    assertManifestDigests(input.manifest);
+    assertFenceTargetsAdmission(input.authorityFence, input.manifest);
+    return this.db.transaction("immediate", () => {
+      this.acquirePostgresAdmissionLocks(input.manifest.workspaceId, input.manifest.nodeId);
+      this.remoteWorkerMeshNodeAdmissions.compareCurrentAuthorityFence({
+        workspaceId: input.manifest.workspaceId,
+        nodeId: input.manifest.nodeId,
+        admissionGeneration: input.manifest.admissionGeneration,
+        expected: input.authorityFence,
+      });
+      return this.publishManifest(input.manifest);
+    });
+  }
+
+  /**
+   * Fence-aware lost-response replay read. `createdAt`, publisher lease state,
+   * and derived manifest digests are intentionally read from the committed
+   * manifest; the caller supplies only the stable semantic publication intent.
+   */
+  public resolveRemoteWorkerManifestReplay(
+    input: ResolveRemoteWorkerMeshCapabilityManifestReplayInput,
+  ): MeshCapabilityManifest | undefined {
+    const normalized = {
+      workspaceId: identifier(input.workspaceId, "workspaceId"),
+      nodeId: identifier(input.nodeId, "nodeId"),
+      admissionGeneration: positiveInteger(input.admissionGeneration, "admissionGeneration"),
+      publicationKey: identifier(input.publicationKey, "publicationKey", 512),
+      supersedesManifestSha256: optionalDigest(input.supersedesManifestSha256, "supersedesManifestSha256"),
+      entriesCanonicalJson: canonicalJsonString(input.entries),
+    };
+    assertFenceTargetsAdmission(input.authorityFence, normalized);
+    return this.db.transaction("immediate", () => {
+      this.acquirePostgresAdmissionLocks(normalized.workspaceId, normalized.nodeId);
+      this.remoteWorkerMeshNodeAdmissions.compareCurrentAuthorityFence({
+        workspaceId: normalized.workspaceId,
+        nodeId: normalized.nodeId,
+        admissionGeneration: normalized.admissionGeneration,
+        expected: input.authorityFence,
+      });
+      const replay = this.findManifestByPublicationKey(normalized.workspaceId, normalized.publicationKey);
+      if (!replay) return undefined;
+      const stored = replay.manifest;
+      if (
+        stored.nodeId !== normalized.nodeId ||
+        stored.admissionGeneration !== normalized.admissionGeneration ||
+        stored.supersedesManifestSha256 !== normalized.supersedesManifestSha256 ||
+        canonicalJsonString(stored.entries) !== normalized.entriesCanonicalJson
+      ) {
+        throw conflict("Mesh capability manifest publication-key replay conflicts with the committed semantic intent.");
+      }
+      return stored;
+    });
+  }
 
   public registerPublisher(input: RegisterMeshCapabilityPublisherInput): MeshCapabilityPublisherGenerationRecord {
     const normalized = normalizePublisherInput(input);
@@ -1090,6 +1190,19 @@ function assertManifestDigests(manifest: MeshCapabilityManifest): void {
   }
 }
 
+function assertFenceTargetsAdmission(
+  fence: RemoteWorkerMeshNodeAuthorityFence,
+  target: { workspaceId: string; nodeId: string; admissionGeneration: number },
+): void {
+  if (
+    fence.workspaceId !== target.workspaceId ||
+    fence.nodeId !== target.nodeId ||
+    fence.admissionGeneration !== target.admissionGeneration
+  ) {
+    throw conflict("Remote worker authority fence does not target the publication admission.");
+  }
+}
+
 function normalizePublisherInput(input: RegisterMeshCapabilityPublisherInput) {
   return {
     workspaceId: identifier(input.workspaceId, "workspaceId"),
@@ -1363,6 +1476,9 @@ function digest(value: string, field: string): string {
   if (!/^[0-9a-f]{64}$/u.test(value))
     throw new TypeError(`Mesh capability ${field} must be a lower-case SHA-256 digest.`);
   return value;
+}
+function optionalDigest(value: string | undefined, field: string): string | undefined {
+  return value === undefined ? undefined : digest(value, field);
 }
 function timestamp(value: string, field: string): string {
   if (

@@ -4171,6 +4171,7 @@ export function MissionThreadedControllerHost({
       setSelectedFolderId,
       setSelectedProjectId,
       setSelectedTag,
+      setShowProjectCreate,
       showProjectCreate,
       sidebarLoadingMore,
       sidebarNextCursor,

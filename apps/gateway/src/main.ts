@@ -134,6 +134,7 @@ async function runGateway(): Promise<void> {
     try {
       remoteWorkerNativeRuntime = createRemoteWorkerNativeRuntimeService({
         sharedHostLifecycle: app.sharedHostLifecycle,
+        createHandler: (config) => app.gatewayRuntime.createRemoteWorkerAdmissionNativeRequestHandler(config),
       });
       const remoteWorkerSnapshot = await remoteWorkerNativeRuntime.start();
       remoteWorkerPhase.close(

@@ -79,9 +79,31 @@ describe("RemoteWorkerAdmissionRepository live PostgreSQL concurrency", () => {
           new Set(["admitted", "replayed_without_credential_secret"]),
         );
 
+        const freshConnectionReplay = await runRepositoryWorker(
+          scopedUrl.toString(),
+          database,
+          `hx501-fresh-connection-${suffix}`,
+          {
+            operation: "finalize",
+            input: {
+              ...exchange,
+              verifiedTransportReceiptSha256: D("pg-a:fresh-transport"),
+              verifiedProofOfPossessionReceiptSha256: D("pg-a:fresh-pop"),
+              credentialTokenSha256: D("pg-a:fresh-candidate-token"),
+            },
+          },
+        );
+        assert.equal(
+          freshConnectionReplay.ok,
+          true,
+          freshConnectionReplay.ok ? undefined : freshConnectionReplay.error,
+        );
+        if (!freshConnectionReplay.ok) assert.fail("fresh-connection replay did not converge");
+        assert.equal(freshConnectionReplay.value.disposition, "replayed_without_credential_secret");
+
         const changed = await runRepositoryWorker(scopedUrl.toString(), database, `hx501-changed-${suffix}`, {
           operation: "finalize",
-          input: { ...exchange, verifiedTransportReceiptSha256: D("pg-a:changed-transport") },
+          input: { ...exchange, verifiedClientCertificateSha256: D("pg-a:changed-certificate") },
         });
         assert.equal(changed.ok, false);
         if (changed.ok) assert.fail("changed exchange unexpectedly succeeded");

@@ -1,4 +1,5 @@
 import { canonicalJsonString } from "./canonical-json.js";
+import { redactSecretText } from "./secret-redaction.js";
 
 /**
  * HX-503 assignment-bound remote-worker inference contract (production-dark).
@@ -11,15 +12,23 @@ import { canonicalJsonString } from "./canonical-json.js";
  * multimodal body; `assertExactKeys` rejects every such field. The Gateway
  * hashes the raw lease immediately (`remoteWorkerInferenceLeaseTokenSha256`)
  * and never persists or logs it, then chooses the effective provider/model and
- * owns every credential. Output frames are secret-free: raw provider errors,
- * headers, bodies, private reasoning, and credentials never enter a frame.
+ * owns every credential. Output frames are provider-output-only: their schema
+ * has no fields for raw provider errors, headers, response bodies, private
+ * reasoning, or server credential material. Model-authored text is preserved
+ * verbatim within the documented bounds and is not claimed to be secret-free.
  */
 
 export const REMOTE_WORKER_INFERENCE_REQUEST_SCHEMA_VERSION = "goatcitadel.remote-worker-inference-request.v1" as const;
 export const REMOTE_WORKER_INFERENCE_FRAME_SCHEMA_VERSION = "goatcitadel.remote-worker-inference-frame.v1" as const;
 export const REMOTE_WORKER_INFERENCE_GOVERNANCE_SCHEMA_VERSION =
   "goatcitadel.remote-worker-inference-governance.v1" as const;
-export const REMOTE_WORKER_INFERENCE_BUDGET_SCHEMA_VERSION = "goatcitadel.remote-worker-inference-budget.v1" as const;
+export const REMOTE_WORKER_INFERENCE_EFFECTIVE_ROUTE_SCHEMA_VERSION =
+  "goatcitadel.remote-worker-inference-effective-route.v1" as const;
+export const REMOTE_WORKER_INFERENCE_APPROVAL_RESOLUTION_SCHEMA_VERSION =
+  "goatcitadel.remote-worker-inference-approval-resolution.v1" as const;
+export const REMOTE_WORKER_INFERENCE_BUDGET_OPERATION_SCHEMA_VERSION =
+  "goatcitadel.remote-worker-inference-budget-operation.v2" as const;
+export const REMOTE_WORKER_INFERENCE_BUDGET_SCHEMA_VERSION = "goatcitadel.remote-worker-inference-budget.v2" as const;
 
 export const REMOTE_WORKER_INFERENCE_FRAME_GENESIS_SHA256 = "0".repeat(64);
 
@@ -32,6 +41,7 @@ export const REMOTE_WORKER_INFERENCE_MAX_TEMPERATURE_MILLI = 2_000;
 export const REMOTE_WORKER_INFERENCE_MAX_FRAMES = 100_000;
 export const REMOTE_WORKER_INFERENCE_MAX_FRAME_TEXT_CHARS = 131_072;
 export const REMOTE_WORKER_INFERENCE_MAX_OUTPUT_CHARS = 8_388_608;
+export const REMOTE_WORKER_INFERENCE_MAX_USAGE_EVENT_IDS = 32;
 
 export const REMOTE_WORKER_INFERENCE_MESSAGE_ROLES = ["system", "user", "assistant"] as const;
 export type RemoteWorkerInferenceMessageRole = (typeof REMOTE_WORKER_INFERENCE_MESSAGE_ROLES)[number];
@@ -59,6 +69,32 @@ export type RemoteWorkerInferenceTerminalState = (typeof REMOTE_WORKER_INFERENCE
 
 export const REMOTE_WORKER_INFERENCE_GOVERNANCE_DECISIONS = ["allowed", "approval_required", "denied"] as const;
 export type RemoteWorkerInferenceGovernanceDecision = (typeof REMOTE_WORKER_INFERENCE_GOVERNANCE_DECISIONS)[number];
+
+export const REMOTE_WORKER_INFERENCE_BUDGET_AUTHORITY_STATES = [
+  "not_required",
+  "reservation_pending",
+  "reserved",
+  "settlement_pending",
+  "settled",
+  "released",
+  "reconciliation_required",
+  "legacy_unverifiable",
+] as const;
+export type RemoteWorkerInferenceBudgetAuthorityState =
+  (typeof REMOTE_WORKER_INFERENCE_BUDGET_AUTHORITY_STATES)[number];
+
+export const REMOTE_WORKER_INFERENCE_RELEASE_REASONS = [
+  "pre_dispatch_authority_lost",
+  "governance_denied",
+  "approval_rejected",
+  "budget_revalidation_failed",
+] as const;
+export type RemoteWorkerInferenceReleaseReason = (typeof REMOTE_WORKER_INFERENCE_RELEASE_REASONS)[number];
+
+export function normalizeRemoteWorkerInferenceReleaseReason(value: unknown): RemoteWorkerInferenceReleaseReason {
+  enumValue(value, REMOTE_WORKER_INFERENCE_RELEASE_REASONS, "budget release reason");
+  return value;
+}
 
 export const REMOTE_WORKER_INFERENCE_FRAME_KINDS = ["output_text", "terminal"] as const;
 export type RemoteWorkerInferenceFrameKind = (typeof REMOTE_WORKER_INFERENCE_FRAME_KINDS)[number];
@@ -112,14 +148,14 @@ export interface RemoteWorkerInferenceRequestSubmission {
   readonly temperatureMilli: number;
 }
 
-export interface NormalizedRemoteWorkerInferenceRequestSubmission {
+/** Exact lease-free request authorized at the Gateway boundary. */
+export interface RemoteWorkerInferenceAuthorizedSubmission {
   readonly registryWorkspaceId: string;
   readonly assignmentId: string;
   readonly assignmentGeneration: number;
   readonly inferenceRequestId: string;
   readonly attempt: number;
   readonly idempotencyKey: string;
-  readonly leaseToken: string;
   readonly messages: readonly RemoteWorkerInferenceMessage[];
   readonly inputSha256: string;
   readonly contextSha256: string;
@@ -127,6 +163,11 @@ export interface NormalizedRemoteWorkerInferenceRequestSubmission {
   readonly outputTokenCeiling: number;
   readonly reasoningTokenCeiling: number;
   readonly temperatureMilli: number;
+}
+
+export interface RemoteWorkerInferenceAuthorizedRequest {
+  readonly leaseTokenSha256: string;
+  readonly submission: RemoteWorkerInferenceAuthorizedSubmission;
 }
 
 const SUBMISSION_KEYS = [
@@ -146,11 +187,41 @@ const SUBMISSION_KEYS = [
   "temperatureMilli",
 ] as const;
 
-export function normalizeRemoteWorkerInferenceRequestSubmission(
+const AUTHORIZED_SUBMISSION_KEYS = SUBMISSION_KEYS.filter((key) => key !== "leaseToken");
+
+/**
+ * Consumes the sole raw-lease boundary. The token is hashed immediately after
+ * exact-shape validation and is never copied into the authorized submission.
+ */
+export function authorizeRemoteWorkerInferenceRequestSubmission(
   input: RemoteWorkerInferenceRequestSubmission,
-): NormalizedRemoteWorkerInferenceRequestSubmission {
+): RemoteWorkerInferenceAuthorizedRequest {
   assertRecord(input, "inference request submission");
   assertExactKeys(input, [...SUBMISSION_KEYS], "inference request submission");
+  const leaseTokenSha256 = remoteWorkerInferenceLeaseTokenSha256(input.leaseToken);
+  const submission = normalizeRemoteWorkerInferenceAuthorizedSubmission({
+    registryWorkspaceId: input.registryWorkspaceId,
+    assignmentId: input.assignmentId,
+    assignmentGeneration: input.assignmentGeneration,
+    inferenceRequestId: input.inferenceRequestId,
+    attempt: input.attempt,
+    idempotencyKey: input.idempotencyKey,
+    messages: input.messages,
+    inputSha256: input.inputSha256,
+    contextSha256: input.contextSha256,
+    modelIntentSha256: input.modelIntentSha256,
+    outputTokenCeiling: input.outputTokenCeiling,
+    reasoningTokenCeiling: input.reasoningTokenCeiling,
+    temperatureMilli: input.temperatureMilli,
+  });
+  return Object.freeze({ leaseTokenSha256, submission });
+}
+
+export function normalizeRemoteWorkerInferenceAuthorizedSubmission(
+  input: RemoteWorkerInferenceAuthorizedSubmission,
+): RemoteWorkerInferenceAuthorizedSubmission {
+  assertRecord(input, "authorized inference submission");
+  assertExactKeys(input, [...AUTHORIZED_SUBMISSION_KEYS], "authorized inference submission");
   return Object.freeze({
     registryWorkspaceId: identifier(input.registryWorkspaceId, "registryWorkspaceId"),
     assignmentId: identifier(input.assignmentId, "assignmentId"),
@@ -158,7 +229,6 @@ export function normalizeRemoteWorkerInferenceRequestSubmission(
     inferenceRequestId: identifier(input.inferenceRequestId, "inferenceRequestId"),
     attempt: positiveInteger(input.attempt, "attempt"),
     idempotencyKey: boundedIdentifier(input.idempotencyKey, "idempotencyKey", 512),
-    leaseToken: leaseToken(input.leaseToken),
     messages: normalizeMessages(input.messages),
     inputSha256: digest(input.inputSha256, "inputSha256"),
     contextSha256: digest(input.contextSha256, "contextSha256"),
@@ -205,8 +275,8 @@ function normalizeMessages(value: unknown): readonly RemoteWorkerInferenceMessag
  * provider. It excludes all identities and the raw lease so the same logical
  * request under a renewed lease hashes identically.
  */
-export function remoteWorkerInferenceCanonicalRequestBody(input: RemoteWorkerInferenceRequestSubmission): object {
-  const normalized = normalizeRemoteWorkerInferenceRequestSubmission(input);
+export function remoteWorkerInferenceCanonicalRequestBody(input: RemoteWorkerInferenceAuthorizedSubmission): object {
+  const normalized = normalizeRemoteWorkerInferenceAuthorizedSubmission(input);
   return Object.freeze({
     schemaVersion: REMOTE_WORKER_INFERENCE_REQUEST_SCHEMA_VERSION,
     messages: normalized.messages,
@@ -223,8 +293,8 @@ export function remoteWorkerInferenceCanonicalRequestBody(input: RemoteWorkerInf
  * Replay material folds identity and body together (never the lease). A reused
  * idempotency key with any changed identity or body byte conflicts.
  */
-export function remoteWorkerInferenceRequestReplayMaterial(input: RemoteWorkerInferenceRequestSubmission): object {
-  const normalized = normalizeRemoteWorkerInferenceRequestSubmission(input);
+export function remoteWorkerInferenceRequestReplayMaterial(input: RemoteWorkerInferenceAuthorizedSubmission): object {
+  const normalized = normalizeRemoteWorkerInferenceAuthorizedSubmission(input);
   return Object.freeze({
     registryWorkspaceId: normalized.registryWorkspaceId,
     assignmentId: normalized.assignmentId,
@@ -236,11 +306,13 @@ export function remoteWorkerInferenceRequestReplayMaterial(input: RemoteWorkerIn
   });
 }
 
-export function remoteWorkerInferenceRequestSha256(input: RemoteWorkerInferenceRequestSubmission): string {
+export function remoteWorkerInferenceRequestSha256(input: RemoteWorkerInferenceAuthorizedSubmission): string {
   return remoteWorkerInferenceCanonicalSha256(remoteWorkerInferenceRequestReplayMaterial(input));
 }
 
-export function remoteWorkerInferenceCanonicalRequestBodySha256(input: RemoteWorkerInferenceRequestSubmission): string {
+export function remoteWorkerInferenceCanonicalRequestBodySha256(
+  input: RemoteWorkerInferenceAuthorizedSubmission,
+): string {
   return remoteWorkerInferenceCanonicalSha256(remoteWorkerInferenceCanonicalRequestBody(input));
 }
 
@@ -249,7 +321,7 @@ export function remoteWorkerInferenceLeaseTokenSha256(rawLeaseToken: string): st
   return sha256Utf8(leaseToken(rawLeaseToken));
 }
 
-// --- Output frames (secret-free outbox payloads) ----------------------------
+// --- Output frames (bounded provider-output-only outbox payloads) -----------
 
 export interface RemoteWorkerInferenceOutputTextPayload {
   readonly schemaVersion: typeof REMOTE_WORKER_INFERENCE_FRAME_SCHEMA_VERSION;
@@ -395,10 +467,227 @@ export function normalizeRemoteWorkerInferenceGovernanceReceipt(
   });
 }
 
+/**
+ * Secret-free, server-owned route evidence. This deliberately includes the
+ * credential and pricing lineage used by HX-306, but never a credential id,
+ * key, URL, header, or provider request body.
+ */
+export interface RemoteWorkerInferenceEffectiveRouteReceipt {
+  readonly schemaVersion: typeof REMOTE_WORKER_INFERENCE_EFFECTIVE_ROUTE_SCHEMA_VERSION;
+  readonly providerId: string;
+  readonly modelId: string;
+  readonly apiStyle: string;
+  readonly configuredContextWindowTokens?: number;
+  readonly credentialType: "api_key" | "oauth" | "service_account" | "adc" | "unknown";
+  readonly usagePool: "standard" | "subscription" | "local" | "unknown";
+  readonly credentialSource: "inline" | "env" | "keychain" | "oauth" | "adc" | "none" | "unknown";
+  readonly credentialConfigFingerprint?: string;
+  readonly pricingCatalogVersion?: string;
+  readonly pricingCatalogHash?: string;
+  readonly inputRateUsdPerMillion?: number;
+  readonly outputRateUsdPerMillion?: number;
+  readonly cachedInputRateUsdPerMillion?: number;
+}
+
+const EFFECTIVE_ROUTE_KEYS = [
+  "schemaVersion",
+  "providerId",
+  "modelId",
+  "apiStyle",
+  "configuredContextWindowTokens",
+  "credentialType",
+  "usagePool",
+  "credentialSource",
+  "credentialConfigFingerprint",
+  "pricingCatalogVersion",
+  "pricingCatalogHash",
+  "inputRateUsdPerMillion",
+  "outputRateUsdPerMillion",
+  "cachedInputRateUsdPerMillion",
+] as const;
+const EFFECTIVE_ROUTE_CREDENTIAL_TYPES = ["api_key", "oauth", "service_account", "adc", "unknown"] as const;
+const EFFECTIVE_ROUTE_USAGE_POOLS = ["standard", "subscription", "local", "unknown"] as const;
+const EFFECTIVE_ROUTE_CREDENTIAL_SOURCES = ["inline", "env", "keychain", "oauth", "adc", "none", "unknown"] as const;
+
+export function normalizeRemoteWorkerInferenceEffectiveRouteReceipt(
+  input: RemoteWorkerInferenceEffectiveRouteReceipt,
+): RemoteWorkerInferenceEffectiveRouteReceipt {
+  assertRecord(input, "effective route receipt");
+  assertExactKeys(input, [...EFFECTIVE_ROUTE_KEYS], "effective route receipt", [
+    "configuredContextWindowTokens",
+    "credentialConfigFingerprint",
+    "pricingCatalogVersion",
+    "pricingCatalogHash",
+    "inputRateUsdPerMillion",
+    "outputRateUsdPerMillion",
+    "cachedInputRateUsdPerMillion",
+  ]);
+  if (input.schemaVersion !== REMOTE_WORKER_INFERENCE_EFFECTIVE_ROUTE_SCHEMA_VERSION) {
+    throw new TypeError("Remote worker inference effective route receipt schema version is unsupported.");
+  }
+  enumValue(input.credentialType, EFFECTIVE_ROUTE_CREDENTIAL_TYPES, "effective route credentialType");
+  enumValue(input.usagePool, EFFECTIVE_ROUTE_USAGE_POOLS, "effective route usagePool");
+  enumValue(input.credentialSource, EFFECTIVE_ROUTE_CREDENTIAL_SOURCES, "effective route credentialSource");
+  return Object.freeze({
+    schemaVersion: REMOTE_WORKER_INFERENCE_EFFECTIVE_ROUTE_SCHEMA_VERSION,
+    providerId: secretFreeIdentifier(input.providerId, "effective route providerId"),
+    modelId: secretFreeIdentifier(input.modelId, "effective route modelId"),
+    apiStyle: secretFreeIdentifier(input.apiStyle, "effective route apiStyle"),
+    ...(input.configuredContextWindowTokens === undefined
+      ? {}
+      : {
+          configuredContextWindowTokens: positiveInteger(
+            input.configuredContextWindowTokens,
+            "effective route configuredContextWindowTokens",
+          ),
+        }),
+    credentialType: input.credentialType,
+    usagePool: input.usagePool,
+    credentialSource: input.credentialSource,
+    ...(input.credentialConfigFingerprint === undefined
+      ? {}
+      : {
+          credentialConfigFingerprint: digest(
+            input.credentialConfigFingerprint,
+            "effective route credentialConfigFingerprint",
+          ),
+        }),
+    ...(input.pricingCatalogVersion === undefined
+      ? {}
+      : { pricingCatalogVersion: secretFreeIdentifier(input.pricingCatalogVersion, "pricing catalog version") }),
+    ...(input.pricingCatalogHash === undefined
+      ? {}
+      : { pricingCatalogHash: digest(input.pricingCatalogHash, "pricingCatalogHash") }),
+    ...(input.inputRateUsdPerMillion === undefined
+      ? {}
+      : { inputRateUsdPerMillion: nonNegativeFinite(input.inputRateUsdPerMillion, "inputRateUsdPerMillion") }),
+    ...(input.outputRateUsdPerMillion === undefined
+      ? {}
+      : { outputRateUsdPerMillion: nonNegativeFinite(input.outputRateUsdPerMillion, "outputRateUsdPerMillion") }),
+    ...(input.cachedInputRateUsdPerMillion === undefined
+      ? {}
+      : {
+          cachedInputRateUsdPerMillion: nonNegativeFinite(
+            input.cachedInputRateUsdPerMillion,
+            "cachedInputRateUsdPerMillion",
+          ),
+        }),
+  });
+}
+
+export function remoteWorkerInferenceEffectiveRouteSha256(input: RemoteWorkerInferenceEffectiveRouteReceipt): string {
+  return remoteWorkerInferenceCanonicalSha256(normalizeRemoteWorkerInferenceEffectiveRouteReceipt(input));
+}
+
+export interface RemoteWorkerInferenceApprovalResolutionReceipt {
+  readonly schemaVersion: typeof REMOTE_WORKER_INFERENCE_APPROVAL_RESOLUTION_SCHEMA_VERSION;
+  readonly decision: "approved" | "rejected";
+  readonly pendingApprovalReceiptSha256: string;
+  readonly resolutionSha256: string;
+  readonly resolvedAt: string;
+}
+
+export function normalizeRemoteWorkerInferenceApprovalResolutionReceipt(
+  input: RemoteWorkerInferenceApprovalResolutionReceipt,
+): RemoteWorkerInferenceApprovalResolutionReceipt {
+  assertRecord(input, "approval resolution receipt");
+  assertExactKeys(
+    input,
+    ["schemaVersion", "decision", "pendingApprovalReceiptSha256", "resolutionSha256", "resolvedAt"],
+    "approval resolution receipt",
+  );
+  if (input.schemaVersion !== REMOTE_WORKER_INFERENCE_APPROVAL_RESOLUTION_SCHEMA_VERSION) {
+    throw new TypeError("Remote worker inference approval resolution schema version is unsupported.");
+  }
+  enumValue(input.decision, ["approved", "rejected"] as const, "approval resolution decision");
+  return Object.freeze({
+    schemaVersion: REMOTE_WORKER_INFERENCE_APPROVAL_RESOLUTION_SCHEMA_VERSION,
+    decision: input.decision,
+    pendingApprovalReceiptSha256: digest(input.pendingApprovalReceiptSha256, "pendingApprovalReceiptSha256"),
+    resolutionSha256: digest(input.resolutionSha256, "resolutionSha256"),
+    resolvedAt: isoTimestamp(input.resolvedAt, "resolvedAt"),
+  });
+}
+
+export interface RemoteWorkerInferenceBudgetOperationInput {
+  readonly operationId: string;
+  readonly dispatchGeneration: string;
+  readonly requestSha256: string;
+  readonly effectiveRouteSha256: string;
+  readonly registryWorkspaceId: string;
+  readonly executionWorkspaceId: string;
+  readonly assignmentId: string;
+  readonly assignmentGeneration: number;
+  readonly workerId: string;
+  readonly workerGeneration: number;
+  readonly admittedLeaseRevision: number;
+  readonly sessionId: string;
+  readonly turnId: string;
+  readonly durableRunId: string;
+  readonly taskId: string;
+  readonly capabilityProfileSha256: string;
+  readonly routedContextSha256: string;
+  readonly outputTokenCeiling: number;
+  readonly reasoningTokenCeiling: number;
+}
+
+export function remoteWorkerInferenceBudgetOperationMaterial(input: RemoteWorkerInferenceBudgetOperationInput): object {
+  return Object.freeze({
+    schemaVersion: REMOTE_WORKER_INFERENCE_BUDGET_OPERATION_SCHEMA_VERSION,
+    operationId: normalizeRemoteWorkerInferenceOperationIdentifier(input.operationId, "budget operationId"),
+    dispatchGeneration: normalizeRemoteWorkerInferenceOperationIdentifier(
+      input.dispatchGeneration,
+      "budget dispatchGeneration",
+    ),
+    requestSha256: digest(input.requestSha256, "budget requestSha256"),
+    effectiveRouteSha256: digest(input.effectiveRouteSha256, "budget effectiveRouteSha256"),
+    registryWorkspaceId: identifier(input.registryWorkspaceId, "budget registryWorkspaceId"),
+    executionWorkspaceId: identifier(input.executionWorkspaceId, "budget executionWorkspaceId"),
+    assignmentId: identifier(input.assignmentId, "budget assignmentId"),
+    assignmentGeneration: positiveInteger(input.assignmentGeneration, "budget assignmentGeneration"),
+    workerId: identifier(input.workerId, "budget workerId"),
+    workerGeneration: positiveInteger(input.workerGeneration, "budget workerGeneration"),
+    admittedLeaseRevision: positiveInteger(input.admittedLeaseRevision, "budget admittedLeaseRevision"),
+    sessionId: identifier(input.sessionId, "budget sessionId"),
+    turnId: identifier(input.turnId, "budget turnId"),
+    durableRunId: identifier(input.durableRunId, "budget durableRunId"),
+    taskId: identifier(input.taskId, "budget taskId"),
+    capabilityProfileSha256: digest(input.capabilityProfileSha256, "budget capabilityProfileSha256"),
+    routedContextSha256: digest(input.routedContextSha256, "budget routedContextSha256"),
+    outputTokenCeiling: positiveInteger(
+      input.outputTokenCeiling,
+      "budget outputTokenCeiling",
+      REMOTE_WORKER_INFERENCE_MAX_OUTPUT_TOKEN_CEILING,
+    ),
+    reasoningTokenCeiling: nonNegativeInteger(
+      input.reasoningTokenCeiling,
+      "budget reasoningTokenCeiling",
+      REMOTE_WORKER_INFERENCE_MAX_REASONING_TOKEN_CEILING,
+    ),
+  });
+}
+
+export function remoteWorkerInferenceBudgetOperationSha256(input: RemoteWorkerInferenceBudgetOperationInput): string {
+  return remoteWorkerInferenceCanonicalSha256(remoteWorkerInferenceBudgetOperationMaterial(input));
+}
+
+export function normalizeRemoteWorkerInferenceOperationIdentifier(value: unknown, field: string): string {
+  return secretFreeIdentifier(value, field);
+}
+
 export interface RemoteWorkerInferenceBudgetReservation {
   readonly schemaVersion: typeof REMOTE_WORKER_INFERENCE_BUDGET_SCHEMA_VERSION;
+  /** Stable identity of the server-side budget owner that made the decision. */
+  readonly budgetOwnerId: string;
   readonly reservationId: string;
+  readonly operationId: string;
+  readonly operationSha256: string;
+  readonly requestSha256: string;
+  readonly effectiveRouteSha256: string;
   readonly reservedOutputTokens: number;
+  readonly reservedReasoningTokens: number;
+  /** Atomic owner-computed cost authority; never derived from client or daily-USD settings. */
+  readonly reservedCostMicrousd: number;
   readonly expiresAt: string;
 }
 
@@ -408,7 +697,19 @@ export function normalizeRemoteWorkerInferenceBudgetReservation(
   assertRecord(input, "inference budget reservation");
   assertExactKeys(
     input,
-    ["schemaVersion", "reservationId", "reservedOutputTokens", "expiresAt"],
+    [
+      "schemaVersion",
+      "budgetOwnerId",
+      "reservationId",
+      "operationId",
+      "operationSha256",
+      "requestSha256",
+      "effectiveRouteSha256",
+      "reservedOutputTokens",
+      "reservedReasoningTokens",
+      "reservedCostMicrousd",
+      "expiresAt",
+    ],
     "inference budget reservation",
   );
   if (input.schemaVersion !== REMOTE_WORKER_INFERENCE_BUDGET_SCHEMA_VERSION) {
@@ -416,14 +717,44 @@ export function normalizeRemoteWorkerInferenceBudgetReservation(
   }
   return Object.freeze({
     schemaVersion: REMOTE_WORKER_INFERENCE_BUDGET_SCHEMA_VERSION,
-    reservationId: boundedIdentifier(input.reservationId, "reservationId", 256),
+    budgetOwnerId: secretFreeIdentifier(input.budgetOwnerId, "budgetOwnerId"),
+    reservationId: secretFreeIdentifier(input.reservationId, "reservationId"),
+    operationId: normalizeRemoteWorkerInferenceOperationIdentifier(input.operationId, "budget reservation operationId"),
+    operationSha256: digest(input.operationSha256, "budget reservation operationSha256"),
+    requestSha256: digest(input.requestSha256, "budget reservation requestSha256"),
+    effectiveRouteSha256: digest(input.effectiveRouteSha256, "budget reservation effectiveRouteSha256"),
     reservedOutputTokens: positiveInteger(
       input.reservedOutputTokens,
       "reservedOutputTokens",
       REMOTE_WORKER_INFERENCE_MAX_OUTPUT_TOKEN_CEILING,
     ),
+    reservedReasoningTokens: nonNegativeInteger(
+      input.reservedReasoningTokens,
+      "reservedReasoningTokens",
+      REMOTE_WORKER_INFERENCE_MAX_REASONING_TOKEN_CEILING,
+    ),
+    reservedCostMicrousd: nonNegativeInteger(
+      input.reservedCostMicrousd,
+      "reservedCostMicrousd",
+      Number.MAX_SAFE_INTEGER,
+    ),
     expiresAt: isoTimestamp(input.expiresAt, "expiresAt"),
   });
+}
+
+export function normalizeRemoteWorkerInferenceUsageEventIds(input: readonly string[]): readonly string[] {
+  if (!Array.isArray(input) || input.length < 1 || input.length > REMOTE_WORKER_INFERENCE_MAX_USAGE_EVENT_IDS) {
+    throw new TypeError("Remote worker inference usage event ids must be a bounded non-empty array.");
+  }
+  const normalized = input.map((value, index) => secretFreeIdentifier(value, `usageEventIds[${index}]`));
+  if (new Set(normalized).size !== normalized.length) {
+    throw new TypeError("Remote worker inference usage event ids must be unique and ordered.");
+  }
+  return Object.freeze(normalized);
+}
+
+export function remoteWorkerInferenceUsageEventIdsSha256(input: readonly string[]): string {
+  return remoteWorkerInferenceCanonicalSha256(normalizeRemoteWorkerInferenceUsageEventIds(input));
 }
 
 export function remoteWorkerInferenceCanonicalSha256(value: unknown): string {
@@ -471,6 +802,21 @@ function boundedIdentifier(value: unknown, field: string, max: number): string {
     /\p{Cc}/u.test(value)
   ) {
     throw new TypeError(`Remote worker inference ${field} is invalid.`);
+  }
+  return value;
+}
+
+function secretFreeIdentifier(value: unknown, field: string, max = 256): string {
+  const normalized = boundedIdentifier(value, field, max);
+  if (redactSecretText(normalized).redactionCount > 0) {
+    throw new TypeError(`Remote worker inference ${field} must not contain secret-like material.`);
+  }
+  return normalized;
+}
+
+function nonNegativeFinite(value: unknown, field: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    throw new TypeError(`Remote worker inference ${field} must be a non-negative finite number.`);
   }
   return value;
 }

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { FilterPill } from "./FilterPill";
 
 export type FilterPillOption = {
@@ -33,6 +33,28 @@ export type FilterPillGroupProps = {
  */
 export function FilterPillGroup({ label, options, value, onChange, idPrefix = "filter-pill" }: FilterPillGroupProps) {
   const refs = useRef<Array<HTMLButtonElement | null>>([]);
+  const groupRef = useRef<HTMLDivElement | null>(null);
+  const [overflowing, setOverflowing] = useState(false);
+
+  const measureOverflow = useCallback(() => {
+    const group = groupRef.current;
+    setOverflowing(Boolean(group && group.scrollWidth > group.clientWidth + 1));
+  }, []);
+
+  useEffect(() => {
+    const group = groupRef.current;
+    if (!group) {
+      return;
+    }
+    measureOverflow();
+    if (typeof ResizeObserver !== "undefined") {
+      const observer = new ResizeObserver(measureOverflow);
+      observer.observe(group);
+      return () => observer.disconnect();
+    }
+    window.addEventListener("resize", measureOverflow, { passive: true });
+    return () => window.removeEventListener("resize", measureOverflow);
+  }, [measureOverflow, options]);
 
   const activeIndex = useMemo(() => {
     const index = options.findIndex((option) => option.value === value);
@@ -89,8 +111,8 @@ export function FilterPillGroup({ label, options, value, onChange, idPrefix = "f
   }
 
   return (
-    <div className="mc-next-filter-pill-scroller">
-      <div className="mc-next-filter-pill-group" role="tablist" aria-label={label}>
+    <div className="mc-next-filter-pill-scroller" data-overflowing={overflowing ? "true" : "false"}>
+      <div ref={groupRef} className="mc-next-filter-pill-group" role="tablist" aria-label={label}>
         {options.map((option, index) => {
           const selected = option.value === value;
           return (
@@ -111,9 +133,11 @@ export function FilterPillGroup({ label, options, value, onChange, idPrefix = "f
           );
         })}
       </div>
-      <span className="mc-next-filter-pill-hint" aria-hidden="true">
-        Swipe for more filters
-      </span>
+      {overflowing ? (
+        <span className="mc-next-filter-pill-hint" aria-hidden="true">
+          Swipe for more filters
+        </span>
+      ) : null}
     </div>
   );
 }

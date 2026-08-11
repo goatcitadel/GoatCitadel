@@ -1508,6 +1508,7 @@ export interface ChatTurnTraceRecord {
         | "off"
         | "live_data"
         | "deep"
+        | "research_list"
         | "cowork_research_list"
         | "research_artifact"
         | "default";

@@ -10,6 +10,7 @@ import {
   assertRemoteWorkerBootstrapRecord,
   assertRemoteWorkerGenerationControlRecord,
   assertRemoteWorkerGenerationRecord,
+  assertRemoteWorkerProtectedAdmissionEvidenceRecord,
   assertRemoteWorkerRegistryAdmission,
   assertRemoteWorkerRegistryControl,
   assertRemoteWorkerRuntimeCredentialRecord,
@@ -18,7 +19,10 @@ import {
   compareRemoteWorkerCanonicalIdentifiers,
   normalizeCreateRemoteWorkerBootstrapCommand,
   normalizeFinalizeRemoteWorkerBootstrapAdmissionCommand,
+  normalizeRemoteWorkerNonceAuthority,
   normalizeRemoteWorkerGenerationControlInput,
+  remoteWorkerAuthenticatedOperatorActorSha256,
+  remoteWorkerProtectedAdmissionContextSha256,
   normalizeRotateRemoteWorkerRuntimeCredentialCommand,
   remoteWorkerBootstrapAdmissionReplayMaterial,
   remoteWorkerBootstrapReplayMaterial,
@@ -30,6 +34,8 @@ import {
   type RemoteWorkerGenerationControlInput,
   type RemoteWorkerGenerationControlRecord,
   type RemoteWorkerGenerationRecord,
+  type RemoteWorkerProtectedAdmissionEvidenceRecord,
+  type RemoteWorkerProtectedAdmissionSignerPin,
   type RemoteWorkerRegistryAdmission,
   type RemoteWorkerRegistryControl,
   type RemoteWorkerRuntimeCredentialRecord,
@@ -37,6 +43,7 @@ import {
   type RotateRemoteWorkerRuntimeCredentialCommand,
 } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
+import { RemoteWorkerNonceRepository, type RemoteWorkerNonceConsumeInput } from "./remote-worker-nonce-repo.js";
 import { safeJsonParse } from "./safe-json.js";
 
 export interface CreateRemoteWorkerBootstrapOutcome {
@@ -48,6 +55,11 @@ export interface FinalizeRemoteWorkerBootstrapAdmissionOutcome {
   disposition: "admitted" | "replayed_without_credential_secret";
   generation: RemoteWorkerGenerationRecord;
   credential: RemoteWorkerRuntimeCredentialRecord;
+}
+
+export interface FinalizeRemoteWorkerBootstrapAdmissionWithNonceInput {
+  readonly nonce: RemoteWorkerNonceConsumeInput;
+  readonly command: FinalizeRemoteWorkerBootstrapAdmissionCommand;
 }
 
 export interface RotateRemoteWorkerRuntimeCredentialOutcome {
@@ -103,6 +115,52 @@ interface BootstrapRow {
   idempotency_key: string;
   request_sha256: string;
   created_at: string;
+}
+
+interface ProtectedAdmissionSignerPinRow {
+  registry_workspace_id: string;
+  bootstrap_id: string;
+  worker_id: string;
+  keyset_generation: number | bigint | string;
+  keyset_receipt_sha256: string;
+  signer_spki_sha256: string;
+  signer_spki_base64url: string;
+  authenticated_operator_actor_id: string;
+  authenticated_operator_actor_sha256: string;
+  pinned_at: string;
+}
+
+interface ProtectedAdmissionEvidenceRow {
+  registry_workspace_id: string;
+  bootstrap_id: string;
+  worker_id: string;
+  worker_generation: number | bigint | string;
+  operation_id_base64url: string;
+  evidence_nonce_sha256: string;
+  envelope_sha256: string;
+  envelope_base64url: string;
+  keyset_receipt_sha256: string;
+  signer_spki_sha256: string;
+  signer_spki_base64url: string;
+  signature_base64url: string;
+  context_sha256: string;
+  runtime_manifest_sha256: string;
+  runtime_manifest_payload_sha256: string;
+  workspace_ceiling_sha256: string;
+  capability_ceiling_sha256: string;
+  worker_public_key_spki_sha256: string;
+  worker_public_key_spki_base64url: string;
+  client_certificate_sha256: string;
+  transport_trust_anchor_sha256: string;
+  tls_exporter_sha256: string;
+  authenticated_remote_caller_binding_sha256: string;
+  download_verification_receipt_sha256: string;
+  installed_tree_attestation_sha256: string;
+  installed_tree_verification_receipt_sha256: string;
+  authenticated_operator_actor_id: string;
+  authenticated_operator_actor_sha256: string;
+  admitted_at: string;
+  revoked_at: string | null;
 }
 
 interface GenerationRow {
@@ -290,6 +348,12 @@ export class RemoteWorkerAdmissionRepository {
         }
       }
       const targetWorkerGeneration = current ? asPositiveInteger(current.worker_generation) + 1 : 1;
+      if (
+        normalized.protectedAdmissionSignerPin !== undefined &&
+        normalized.protectedAdmissionSignerPin.keysetGeneration !== targetWorkerGeneration
+      ) {
+        throw invariantConflict("remote worker protected admission signer pin");
+      }
       const nodeId = current?.node_id ?? deriveServerId("remote-worker-node", normalized.registryWorkspaceId, workerId);
       const runtimeManifestJson = canonicalJsonString(normalized.runtimeManifest);
       const runtimeManifestSha256 = sha256Bytes(runtimeManifestJson);
@@ -364,6 +428,16 @@ export class RemoteWorkerAdmissionRepository {
         for (const capabilityClass of normalized.capabilityClasses) {
           capabilityStmt.run({ registryWorkspaceId: normalized.registryWorkspaceId, bootstrapId, capabilityClass });
         }
+        if (normalized.protectedAdmissionSignerPin !== undefined) {
+          this.insertProtectedAdmissionSignerPin({
+            registryWorkspaceId: normalized.registryWorkspaceId,
+            bootstrapId,
+            workerId,
+            actorId: normalized.createdByActorId,
+            pinnedAt: clock.now,
+            pin: normalized.protectedAdmissionSignerPin,
+          });
+        }
       } catch (error) {
         throw normalizeWriteError(error, "remote worker bootstrap");
       }
@@ -385,6 +459,7 @@ export class RemoteWorkerAdmissionRepository {
         throw unavailable("remote worker bootstrap");
       const bootstrap = this.mapBootstrap(bootstrapRow);
       this.assertExpectedBootstrapBinding(bootstrap, normalized);
+      this.assertVerifiedBootstrapBindings(bootstrap, normalized);
       const claims = buildRemoteWorkerRuntimeCredentialClaims({
         registryWorkspaceId: bootstrap.registryWorkspaceId,
         workerId: bootstrap.workerId,
@@ -516,10 +591,127 @@ export class RemoteWorkerAdmissionRepository {
         this.getBootstrap(bootstrap.registryWorkspaceId, bootstrap.bootstrapId),
       );
       const credential = this.mapAuthoritativeCredential(credentialRow, generation, bootstrap);
+      if (normalized.verifiedProtectedAdmissionEvidence !== undefined) {
+        this.insertProtectedAdmissionEvidence(bootstrap, generation, normalized.verifiedProtectedAdmissionEvidence);
+      }
       return {
         disposition: "admitted",
         generation,
         credential,
+      };
+    });
+  }
+
+  /**
+   * Finalize a bootstrap exchange and consume its proof nonce in one durable
+   * transaction. Exact idempotent replays are resolved before nonce
+   * consumption so a retry never burns a fresh nonce or returns secret
+   * material. Any failure after nonce insertion rolls the nonce, generation,
+   * and credential back together.
+   */
+  public finalizeBootstrapAdmissionWithNonce(
+    input: FinalizeRemoteWorkerBootstrapAdmissionWithNonceInput,
+  ): FinalizeRemoteWorkerBootstrapAdmissionOutcome {
+    const normalized = normalizeFinalizeBootstrapAdmissionWithNonceInput(input);
+    const hint = this.findBootstrapBySecretHash(normalized.command.bootstrapSecretSha256);
+    if (!hint) throw unavailable("remote worker bootstrap");
+
+    return this.db.transaction("immediate", () => {
+      this.acquirePostgresAdmissionLocks(hint.registry_workspace_id, hint.worker_id);
+      const bootstrapRow = this.findBootstrapBySecretHash(normalized.command.bootstrapSecretSha256);
+      if (!bootstrapRow || bootstrapRow.bootstrap_id !== hint.bootstrap_id) {
+        throw unavailable("remote worker bootstrap");
+      }
+      const bootstrap = this.mapBootstrap(bootstrapRow);
+      this.assertExpectedBootstrapBinding(bootstrap, normalized.command);
+      this.assertVerifiedBootstrapBindings(bootstrap, normalized.command);
+      if (
+        normalized.command.verifiedProtectedAdmissionEvidence !== undefined &&
+        normalized.command.verifiedProtectedAdmissionEvidence.evidenceNonceSha256 !== normalized.nonce.nonceSha256
+      ) {
+        throw invariantConflict("remote worker protected admission evidence nonce");
+      }
+      const claims = buildRemoteWorkerRuntimeCredentialClaims({
+        registryWorkspaceId: bootstrap.registryWorkspaceId,
+        workerId: bootstrap.workerId,
+        workerGeneration: bootstrap.targetWorkerGeneration,
+        allowedWorkspaceIds: bootstrap.allowedWorkspaceIds,
+        capabilityClasses: bootstrap.capabilityClasses,
+      });
+      const exchangeRequestSha256 = sha256(
+        remoteWorkerBootstrapAdmissionReplayMaterial(normalized.command, bootstrap.bootstrapId, claims),
+      );
+      const replay = this.findGenerationByExchangeIdempotency(
+        bootstrap.registryWorkspaceId,
+        normalized.command.exchangeIdempotencyKey,
+      );
+      if (replay) {
+        assertExactReplay(replay.exchange_request_sha256, exchangeRequestSha256, "remote worker admission exchange");
+        if (replay.bootstrap_id !== bootstrap.bootstrapId) {
+          throw invariantConflict("remote worker admission exchange");
+        }
+        const generation = mapGeneration(replay);
+        const credentialRow = this.getCredentialRowByIdempotency(
+          replay.registry_workspace_id,
+          replay.worker_id,
+          replay.worker_generation,
+          normalized.command.exchangeIdempotencyKey,
+        );
+        this.assertGenerationBootstrapBindings(generation, bootstrap);
+        return {
+          disposition: "replayed_without_credential_secret",
+          generation,
+          credential: this.mapAuthoritativeCredential(credentialRow, generation, bootstrap),
+        };
+      }
+
+      if (bootstrap.state !== "pending") {
+        throw invariantConflict("remote worker admission exchange");
+      }
+      this.assertVerifiedBootstrapBindings(bootstrap, normalized.command);
+      this.assertReadmissionEvidenceRotated(bootstrap, normalized.command);
+      if (this.findGenerationByBootstrap(bootstrap.registryWorkspaceId, bootstrap.bootstrapId)) {
+        throw invariantConflict("remote worker admission exchange");
+      }
+      assertBootstrapNonceAuthority(normalized.nonce, bootstrap);
+      const consumed = new RemoteWorkerNonceRepository(this.db).consume({
+        authority: Object.freeze({
+          kind: "bootstrap",
+          registryWorkspaceId: bootstrap.registryWorkspaceId,
+          bootstrapId: bootstrap.bootstrapId,
+          workerId: bootstrap.workerId,
+          targetWorkerGeneration: bootstrap.targetWorkerGeneration,
+        }),
+        nonceSha256: normalized.nonce.nonceSha256,
+        timestamp: normalized.nonce.timestamp,
+        expiresAt: normalized.nonce.expiresAt,
+      });
+      if (!consumed) throw invariantConflict("remote worker admission exchange");
+
+      const finalized = this.finalizeBootstrapAdmission(normalized.command);
+      if (finalized.disposition !== "admitted") {
+        throw invariantConflict("remote worker admission exchange");
+      }
+      const generation = this.getGeneration(
+        bootstrap.registryWorkspaceId,
+        bootstrap.workerId,
+        bootstrap.targetWorkerGeneration,
+      );
+      const authoritativeBootstrap = this.getBootstrap(bootstrap.registryWorkspaceId, bootstrap.bootstrapId);
+      this.assertGenerationBootstrapBindings(generation, authoritativeBootstrap);
+      const credentialRow = this.getCredentialRowByIdempotency(
+        generation.registryWorkspaceId,
+        generation.workerId,
+        generation.workerGeneration,
+        normalized.command.exchangeIdempotencyKey,
+      );
+      if (digest(credentialRow.token_sha256, "tokenSha256") !== normalized.command.credentialTokenSha256) {
+        throw invalidState();
+      }
+      return {
+        disposition: "admitted",
+        generation,
+        credential: this.mapAuthoritativeCredential(credentialRow, generation, authoritativeBootstrap),
       };
     });
   }
@@ -713,6 +905,12 @@ export class RemoteWorkerAdmissionRepository {
     return this.mapBootstrap(row);
   }
 
+  /** Resolve bootstrap metadata from a caller-owned secret digest without exposing the digest. */
+  public findBootstrapBySecretSha256(bootstrapSecretSha256: string): RemoteWorkerBootstrapRecord | undefined {
+    const row = this.findBootstrapBySecretHash(digest(bootstrapSecretSha256, "bootstrapSecretSha256"));
+    return row ? this.mapBootstrap(row) : undefined;
+  }
+
   public findCurrentGeneration(
     registryWorkspaceId: string,
     workerId: string,
@@ -722,6 +920,91 @@ export class RemoteWorkerAdmissionRepository {
       identifier(workerId, "workerId"),
     );
     return row ? this.mapAuthoritativeGeneration(row) : undefined;
+  }
+
+  public findLatestGenerationControl(
+    registryWorkspaceId: string,
+    workerId: string,
+    workerGeneration: number,
+  ): RemoteWorkerGenerationControlRecord | undefined {
+    const row = this.findLatestControlRow(
+      identifier(registryWorkspaceId, "registryWorkspaceId"),
+      identifier(workerId, "workerId"),
+      asPositiveInteger(workerGeneration),
+    );
+    return row ? mapControl(row) : undefined;
+  }
+
+  /**
+   * Returns an immutable, relationally checked audit record. This raw storage
+   * projection is deliberately non-authoritative until the Gateway protected
+   * admission authority service rechecks its pinned Ed25519 signature and
+   * current generation/control state.
+   */
+  public findProtectedAdmissionEvidenceRecord(
+    registryWorkspaceId: string,
+    workerId: string,
+    workerGeneration: number,
+  ): RemoteWorkerProtectedAdmissionEvidenceRecord | undefined {
+    const row = this.findProtectedAdmissionEvidenceRow(
+      identifier(registryWorkspaceId, "registryWorkspaceId"),
+      identifier(workerId, "workerId"),
+      asPositiveInteger(workerGeneration),
+    );
+    if (!row) return undefined;
+    const record = mapProtectedAdmissionEvidence(row);
+    const generation = this.getGeneration(record.registryWorkspaceId, record.workerId, record.workerGeneration);
+    const bootstrap = this.getBootstrap(record.registryWorkspaceId, record.bootstrapId);
+    const pin = bootstrap.protectedAdmissionSignerPin;
+    const expectedContextSha256 = remoteWorkerProtectedAdmissionContextSha256({
+      registryWorkspaceId: bootstrap.registryWorkspaceId,
+      bootstrapId: bootstrap.bootstrapId,
+      workerId: bootstrap.workerId,
+      nodeId: bootstrap.nodeId,
+      targetWorkerGeneration: bootstrap.targetWorkerGeneration,
+      platform: bootstrap.platform,
+      architecture: bootstrap.architecture,
+      runtimeManifestSha256: record.runtimeManifestSha256,
+      runtimeManifestPayloadSha256: record.runtimeManifestPayloadSha256,
+      workspaceCeilingSha256: record.workspaceCeilingSha256,
+      capabilityCeilingSha256: record.capabilityCeilingSha256,
+      workerPublicKeySpkiSha256: record.workerPublicKeySpkiSha256,
+      clientCertificateSha256: record.clientCertificateSha256,
+      transportTrustAnchorSha256: record.transportTrustAnchorSha256,
+      tlsExporterSha256: record.tlsExporterSha256,
+      evidenceNonceSha256: record.evidenceNonceSha256,
+      downloadVerificationReceiptSha256: record.downloadVerificationReceiptSha256,
+      installedTreeAttestationSha256: record.installedTreeAttestationSha256,
+      installedTreeVerificationReceiptSha256: record.installedTreeVerificationReceiptSha256,
+    });
+    if (
+      pin === undefined ||
+      generation.bootstrapId !== record.bootstrapId ||
+      generation.publicKeySpkiSha256 !== record.workerPublicKeySpkiSha256 ||
+      generation.clientCertificateSha256 !== record.clientCertificateSha256 ||
+      generation.transportTrustAnchorSha256 !== record.transportTrustAnchorSha256 ||
+      generation.runtimeManifestSha256 !== record.runtimeManifestSha256 ||
+      generation.workspaceCeilingSha256 !== record.workspaceCeilingSha256 ||
+      generation.capabilityCeilingSha256 !== record.capabilityCeilingSha256 ||
+      generation.downloadVerificationReceiptSha256 !== record.downloadVerificationReceiptSha256 ||
+      generation.installedTreeAttestationSha256 !== record.installedTreeAttestationSha256 ||
+      generation.installedTreeVerificationReceiptSha256 !== record.installedTreeVerificationReceiptSha256 ||
+      generation.admittedAt !== record.admittedAt ||
+      pin.keysetGeneration !== record.workerGeneration ||
+      pin.keysetReceiptSha256 !== record.keysetReceiptSha256 ||
+      pin.signerSpkiSha256 !== record.signerSpkiSha256 ||
+      pin.signerSpkiBase64Url !== record.signerSpkiBase64Url ||
+      bootstrap.runtimeManifest.payloadSha256 !== record.runtimeManifestPayloadSha256 ||
+      bootstrap.createdByActorId !== record.authenticatedOperatorActorId ||
+      record.contextSha256 !== expectedContextSha256
+    ) {
+      throw invalidState();
+    }
+    if (record.revokedAt !== undefined) {
+      const control = this.findLatestControlRow(record.registryWorkspaceId, record.workerId, record.workerGeneration);
+      if (control?.action !== "revoke" || control.created_at !== record.revokedAt) throw invalidState();
+    }
+    return record;
   }
 
   public listWorkers(registryWorkspaceId: string, options: ListRemoteWorkersOptions = {}): ListRemoteWorkersResult {
@@ -838,6 +1121,7 @@ export class RemoteWorkerAdmissionRepository {
         throw invariantConflict(`remote worker generation ${action}`);
       }
       const controlRevision = current ? asPositiveInteger(current.control_revision) + 1 : 1;
+      const createdAt = this.databaseNow();
       try {
         this.db
           .prepare(
@@ -851,7 +1135,31 @@ export class RemoteWorkerAdmissionRepository {
             )
           `,
           )
-          .run({ ...normalized, action, controlRevision, requestSha256, createdAt: this.databaseNow() });
+          .run({ ...normalized, action, controlRevision, requestSha256, createdAt });
+        if (
+          action === "revoke" &&
+          this.findProtectedAdmissionEvidenceRow(
+            normalized.registryWorkspaceId,
+            normalized.workerId,
+            normalized.workerGeneration,
+          ) !== undefined
+        ) {
+          this.db
+            .prepare(
+              `INSERT INTO remote_worker_protected_admission_revocations (
+                 registry_workspace_id, worker_id, worker_generation, control_revision, revoked_at
+               ) VALUES (
+                 @registryWorkspaceId, @workerId, @workerGeneration, @controlRevision, @revokedAt
+               )`,
+            )
+            .run({
+              registryWorkspaceId: normalized.registryWorkspaceId,
+              workerId: normalized.workerId,
+              workerGeneration: normalized.workerGeneration,
+              controlRevision,
+              revokedAt: createdAt,
+            });
+        }
       } catch (error) {
         throw normalizeWriteError(error, `remote worker generation ${action}`);
       }
@@ -864,6 +1172,121 @@ export class RemoteWorkerAdmissionRepository {
         ),
       );
     });
+  }
+
+  private insertProtectedAdmissionSignerPin(input: {
+    readonly registryWorkspaceId: string;
+    readonly bootstrapId: string;
+    readonly workerId: string;
+    readonly actorId: string;
+    readonly pinnedAt: string;
+    readonly pin: RemoteWorkerProtectedAdmissionSignerPin;
+  }): void {
+    this.db
+      .prepare(
+        `INSERT INTO remote_worker_protected_admission_signer_pins (
+           registry_workspace_id, bootstrap_id, worker_id, keyset_generation,
+           keyset_receipt_sha256, signer_spki_sha256, signer_spki_base64url,
+           authenticated_operator_actor_id, authenticated_operator_actor_sha256, pinned_at
+         ) VALUES (
+           @registryWorkspaceId, @bootstrapId, @workerId, @keysetGeneration,
+           @keysetReceiptSha256, @signerSpkiSha256, @signerSpkiBase64Url,
+           @actorId, @actorSha256, @pinnedAt
+         )`,
+      )
+      .run({
+        registryWorkspaceId: input.registryWorkspaceId,
+        bootstrapId: input.bootstrapId,
+        workerId: input.workerId,
+        keysetGeneration: input.pin.keysetGeneration,
+        keysetReceiptSha256: input.pin.keysetReceiptSha256,
+        signerSpkiSha256: input.pin.signerSpkiSha256,
+        signerSpkiBase64Url: input.pin.signerSpkiBase64Url,
+        actorId: input.actorId,
+        actorSha256: remoteWorkerAuthenticatedOperatorActorSha256(input.actorId),
+        pinnedAt: input.pinnedAt,
+      });
+  }
+
+  private insertProtectedAdmissionEvidence(
+    bootstrap: RemoteWorkerBootstrapRecord,
+    generation: RemoteWorkerGenerationRecord,
+    evidence: NonNullable<FinalizeRemoteWorkerBootstrapAdmissionCommand["verifiedProtectedAdmissionEvidence"]>,
+  ): void {
+    const actorSha256 = remoteWorkerAuthenticatedOperatorActorSha256(bootstrap.createdByActorId);
+    const record: RemoteWorkerProtectedAdmissionEvidenceRecord = Object.freeze({
+      ...evidence,
+      registryWorkspaceId: bootstrap.registryWorkspaceId,
+      bootstrapId: bootstrap.bootstrapId,
+      workerId: bootstrap.workerId,
+      authenticatedOperatorActorId: bootstrap.createdByActorId,
+      authenticatedOperatorActorSha256: actorSha256,
+      admittedAt: generation.admittedAt,
+    });
+    assertRemoteWorkerProtectedAdmissionEvidenceRecord(record);
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO remote_worker_protected_admission_evidence (
+             registry_workspace_id, bootstrap_id, worker_id, worker_generation,
+             operation_id_base64url, evidence_nonce_sha256, envelope_sha256, envelope_base64url,
+             keyset_receipt_sha256, signer_spki_sha256, signer_spki_base64url, signature_base64url,
+              context_sha256,
+             runtime_manifest_sha256, runtime_manifest_payload_sha256,
+             workspace_ceiling_sha256, capability_ceiling_sha256, worker_public_key_spki_sha256,
+             worker_public_key_spki_base64url,
+             client_certificate_sha256, transport_trust_anchor_sha256, tls_exporter_sha256,
+              authenticated_remote_caller_binding_sha256, download_verification_receipt_sha256,
+             installed_tree_attestation_sha256, installed_tree_verification_receipt_sha256,
+             authenticated_operator_actor_id, authenticated_operator_actor_sha256, admitted_at
+           ) VALUES (
+             @registryWorkspaceId, @bootstrapId, @workerId, @workerGeneration,
+             @operationIdBase64Url, @evidenceNonceSha256, @envelopeSha256, @envelopeBase64Url,
+             @keysetReceiptSha256, @signerSpkiSha256, @signerSpkiBase64Url, @signatureBase64Url,
+              @contextSha256,
+             @runtimeManifestSha256, @runtimeManifestPayloadSha256,
+             @workspaceCeilingSha256, @capabilityCeilingSha256, @workerPublicKeySpkiSha256,
+             @workerPublicKeySpkiBase64Url,
+             @clientCertificateSha256, @transportTrustAnchorSha256, @tlsExporterSha256,
+              @authenticatedRemoteCallerBindingSha256, @downloadVerificationReceiptSha256,
+             @installedTreeAttestationSha256, @installedTreeVerificationReceiptSha256,
+             @authenticatedOperatorActorId, @authenticatedOperatorActorSha256, @admittedAt
+           )`,
+        )
+        .run({
+          registryWorkspaceId: record.registryWorkspaceId,
+          bootstrapId: record.bootstrapId,
+          workerId: record.workerId,
+          workerGeneration: record.workerGeneration,
+          operationIdBase64Url: record.operationIdBase64Url,
+          evidenceNonceSha256: record.evidenceNonceSha256,
+          envelopeSha256: record.envelopeSha256,
+          envelopeBase64Url: record.envelopeBase64Url,
+          keysetReceiptSha256: record.keysetReceiptSha256,
+          signerSpkiSha256: record.signerSpkiSha256,
+          signerSpkiBase64Url: record.signerSpkiBase64Url,
+          signatureBase64Url: record.signatureBase64Url,
+          contextSha256: record.contextSha256,
+          runtimeManifestSha256: record.runtimeManifestSha256,
+          runtimeManifestPayloadSha256: record.runtimeManifestPayloadSha256,
+          workspaceCeilingSha256: record.workspaceCeilingSha256,
+          capabilityCeilingSha256: record.capabilityCeilingSha256,
+          workerPublicKeySpkiSha256: record.workerPublicKeySpkiSha256,
+          workerPublicKeySpkiBase64Url: record.workerPublicKeySpkiBase64Url,
+          clientCertificateSha256: record.clientCertificateSha256,
+          transportTrustAnchorSha256: record.transportTrustAnchorSha256,
+          tlsExporterSha256: record.tlsExporterSha256,
+          authenticatedRemoteCallerBindingSha256: record.authenticatedRemoteCallerBindingSha256,
+          downloadVerificationReceiptSha256: record.downloadVerificationReceiptSha256,
+          installedTreeAttestationSha256: record.installedTreeAttestationSha256,
+          installedTreeVerificationReceiptSha256: record.installedTreeVerificationReceiptSha256,
+          authenticatedOperatorActorId: record.authenticatedOperatorActorId,
+          authenticatedOperatorActorSha256: record.authenticatedOperatorActorSha256,
+          admittedAt: record.admittedAt,
+        });
+    } catch (error) {
+      throw normalizeWriteError(error, "remote worker protected admission evidence");
+    }
   }
 
   private insertCredential(input: {
@@ -908,11 +1331,57 @@ export class RemoteWorkerAdmissionRepository {
     bootstrap: RemoteWorkerBootstrapRecord,
     input: ReturnType<typeof normalizeFinalizeRemoteWorkerBootstrapAdmissionCommand>,
   ): void {
+    const pin = bootstrap.protectedAdmissionSignerPin;
+    const protectedEvidence = input.verifiedProtectedAdmissionEvidence;
     const matches =
       sha256Bytes(canonicalJsonString(bootstrap.runtimeManifest)) === input.verifiedRuntimeManifestSha256 &&
       bootstrap.workspaceCeilingSha256 === input.verifiedWorkspaceCeilingSha256 &&
       bootstrap.capabilityCeilingSha256 === input.verifiedCapabilityCeilingSha256;
     if (!matches) throw invariantConflict("remote worker admission exchange");
+    if ((pin === undefined) !== (protectedEvidence === undefined)) {
+      throw invariantConflict("remote worker protected admission evidence");
+    }
+    if (pin === undefined || protectedEvidence === undefined) return;
+    const expectedContextSha256 = remoteWorkerProtectedAdmissionContextSha256({
+      registryWorkspaceId: bootstrap.registryWorkspaceId,
+      bootstrapId: bootstrap.bootstrapId,
+      workerId: bootstrap.workerId,
+      nodeId: bootstrap.nodeId,
+      targetWorkerGeneration: bootstrap.targetWorkerGeneration,
+      platform: bootstrap.platform,
+      architecture: bootstrap.architecture,
+      runtimeManifestSha256: input.verifiedRuntimeManifestSha256,
+      runtimeManifestPayloadSha256: bootstrap.runtimeManifest.payloadSha256,
+      workspaceCeilingSha256: input.verifiedWorkspaceCeilingSha256,
+      capabilityCeilingSha256: input.verifiedCapabilityCeilingSha256,
+      workerPublicKeySpkiSha256: input.verifiedPublicKeySpkiSha256,
+      clientCertificateSha256: input.verifiedClientCertificateSha256,
+      transportTrustAnchorSha256: input.verifiedTransportTrustAnchorSha256,
+      tlsExporterSha256: protectedEvidence.tlsExporterSha256,
+      evidenceNonceSha256: protectedEvidence.evidenceNonceSha256,
+      downloadVerificationReceiptSha256: input.verifiedDownloadReceiptSha256,
+      installedTreeAttestationSha256: input.verifiedInstalledTreeAttestationSha256,
+      installedTreeVerificationReceiptSha256: input.verifiedInstalledTreeReceiptSha256,
+    });
+    if (
+      protectedEvidence.workerGeneration !== bootstrap.targetWorkerGeneration ||
+      protectedEvidence.keysetReceiptSha256 !== pin.keysetReceiptSha256 ||
+      protectedEvidence.signerSpkiSha256 !== pin.signerSpkiSha256 ||
+      protectedEvidence.signerSpkiBase64Url !== pin.signerSpkiBase64Url ||
+      protectedEvidence.contextSha256 !== expectedContextSha256 ||
+      protectedEvidence.runtimeManifestSha256 !== input.verifiedRuntimeManifestSha256 ||
+      protectedEvidence.runtimeManifestPayloadSha256 !== bootstrap.runtimeManifest.payloadSha256 ||
+      protectedEvidence.workspaceCeilingSha256 !== input.verifiedWorkspaceCeilingSha256 ||
+      protectedEvidence.capabilityCeilingSha256 !== input.verifiedCapabilityCeilingSha256 ||
+      protectedEvidence.workerPublicKeySpkiSha256 !== input.verifiedPublicKeySpkiSha256 ||
+      protectedEvidence.clientCertificateSha256 !== input.verifiedClientCertificateSha256 ||
+      protectedEvidence.transportTrustAnchorSha256 !== input.verifiedTransportTrustAnchorSha256 ||
+      protectedEvidence.downloadVerificationReceiptSha256 !== input.verifiedDownloadReceiptSha256 ||
+      protectedEvidence.installedTreeAttestationSha256 !== input.verifiedInstalledTreeAttestationSha256 ||
+      protectedEvidence.installedTreeVerificationReceiptSha256 !== input.verifiedInstalledTreeReceiptSha256
+    ) {
+      throw invariantConflict("remote worker protected admission evidence");
+    }
   }
 
   private assertExpectedBootstrapBinding(
@@ -1022,6 +1491,10 @@ export class RemoteWorkerAdmissionRepository {
       if (!runtimeManifest || canonicalJsonString(runtimeManifest) !== row.runtime_manifest_json) throw new Error();
       const consumed = Boolean(this.findGenerationByBootstrap(row.registry_workspace_id, row.bootstrap_id));
       const expired = !this.isTimestampFresh(row.expires_at);
+      const protectedPinRow = this.findProtectedAdmissionSignerPinRow(row.registry_workspace_id, row.bootstrap_id);
+      const protectedAdmissionSignerPin = protectedPinRow
+        ? mapProtectedAdmissionSignerPin(protectedPinRow, row)
+        : undefined;
       const record: RemoteWorkerBootstrapRecord = {
         registryWorkspaceId: row.registry_workspace_id,
         bootstrapId: row.bootstrap_id,
@@ -1036,6 +1509,7 @@ export class RemoteWorkerAdmissionRepository {
         workspaceCeilingSha256: row.workspace_ceiling_sha256,
         capabilityClasses: this.readCapabilityClasses(row.registry_workspace_id, row.bootstrap_id),
         capabilityCeilingSha256: row.capability_ceiling_sha256,
+        ...(protectedAdmissionSignerPin === undefined ? {} : { protectedAdmissionSignerPin }),
         state: consumed ? "consumed" : expired ? "expired" : "pending",
         expiresAt: row.expires_at,
         createdByActorId: row.created_by_actor_id,
@@ -1158,6 +1632,38 @@ export class RemoteWorkerAdmissionRepository {
          WHERE registry_workspace_id = @registryWorkspaceId AND bootstrap_id = @bootstrapId`,
       )
       .get({ registryWorkspaceId, bootstrapId }) as GenerationRow | undefined;
+  }
+
+  private findProtectedAdmissionSignerPinRow(
+    registryWorkspaceId: string,
+    bootstrapId: string,
+  ): ProtectedAdmissionSignerPinRow | undefined {
+    return this.db
+      .prepare(
+        `SELECT * FROM remote_worker_protected_admission_signer_pins
+         WHERE registry_workspace_id = @registryWorkspaceId AND bootstrap_id = @bootstrapId`,
+      )
+      .get({ registryWorkspaceId, bootstrapId }) as ProtectedAdmissionSignerPinRow | undefined;
+  }
+
+  private findProtectedAdmissionEvidenceRow(
+    registryWorkspaceId: string,
+    workerId: string,
+    workerGeneration: number,
+  ): ProtectedAdmissionEvidenceRow | undefined {
+    return this.db
+      .prepare(
+        `SELECT evidence.*, revocation.revoked_at
+         FROM remote_worker_protected_admission_evidence evidence
+         LEFT JOIN remote_worker_protected_admission_revocations revocation
+           ON revocation.registry_workspace_id = evidence.registry_workspace_id
+          AND revocation.worker_id = evidence.worker_id
+          AND revocation.worker_generation = evidence.worker_generation
+         WHERE evidence.registry_workspace_id = @registryWorkspaceId
+           AND evidence.worker_id = @workerId
+           AND evidence.worker_generation = @workerGeneration`,
+      )
+      .get({ registryWorkspaceId, workerId, workerGeneration }) as ProtectedAdmissionEvidenceRow | undefined;
   }
 
   private findCurrentGenerationRow(registryWorkspaceId: string, workerId: string): GenerationRow | undefined {
@@ -1343,6 +1849,77 @@ export class RemoteWorkerAdmissionRepository {
   }
 }
 
+function mapProtectedAdmissionSignerPin(
+  row: ProtectedAdmissionSignerPinRow,
+  bootstrap: BootstrapRow,
+): RemoteWorkerProtectedAdmissionSignerPin {
+  const pin: RemoteWorkerProtectedAdmissionSignerPin = Object.freeze({
+    schemaVersion: "goatcitadel.remote-worker-protected-admission-signer-pin.v1",
+    signatureAlgorithm: "ed25519",
+    keysetGeneration: asPositiveInteger(row.keyset_generation),
+    keysetReceiptSha256: row.keyset_receipt_sha256,
+    signerSpkiSha256: row.signer_spki_sha256,
+    signerSpkiBase64Url: row.signer_spki_base64url,
+  });
+  if (
+    row.registry_workspace_id !== bootstrap.registry_workspace_id ||
+    row.bootstrap_id !== bootstrap.bootstrap_id ||
+    row.worker_id !== bootstrap.worker_id ||
+    pin.keysetGeneration !== asPositiveInteger(bootstrap.target_worker_generation) ||
+    row.authenticated_operator_actor_id !== bootstrap.created_by_actor_id ||
+    row.authenticated_operator_actor_sha256 !==
+      remoteWorkerAuthenticatedOperatorActorSha256(bootstrap.created_by_actor_id) ||
+    row.pinned_at !== bootstrap.created_at
+  ) {
+    throw invalidState();
+  }
+  return pin;
+}
+
+function mapProtectedAdmissionEvidence(
+  row: ProtectedAdmissionEvidenceRow,
+): RemoteWorkerProtectedAdmissionEvidenceRecord {
+  try {
+    const record: RemoteWorkerProtectedAdmissionEvidenceRecord = Object.freeze({
+      schemaVersion: "goatcitadel.remote-worker-protected-admission-evidence.v1",
+      registryWorkspaceId: row.registry_workspace_id,
+      bootstrapId: row.bootstrap_id,
+      workerId: row.worker_id,
+      workerGeneration: asPositiveInteger(row.worker_generation),
+      operationIdBase64Url: row.operation_id_base64url,
+      evidenceNonceSha256: row.evidence_nonce_sha256,
+      envelopeSha256: row.envelope_sha256,
+      envelopeBase64Url: row.envelope_base64url,
+      keysetReceiptSha256: row.keyset_receipt_sha256,
+      signerSpkiSha256: row.signer_spki_sha256,
+      signerSpkiBase64Url: row.signer_spki_base64url,
+      signatureBase64Url: row.signature_base64url,
+      contextSha256: row.context_sha256,
+      runtimeManifestSha256: row.runtime_manifest_sha256,
+      runtimeManifestPayloadSha256: row.runtime_manifest_payload_sha256,
+      workspaceCeilingSha256: row.workspace_ceiling_sha256,
+      capabilityCeilingSha256: row.capability_ceiling_sha256,
+      workerPublicKeySpkiSha256: row.worker_public_key_spki_sha256,
+      workerPublicKeySpkiBase64Url: row.worker_public_key_spki_base64url,
+      clientCertificateSha256: row.client_certificate_sha256,
+      transportTrustAnchorSha256: row.transport_trust_anchor_sha256,
+      tlsExporterSha256: row.tls_exporter_sha256,
+      authenticatedRemoteCallerBindingSha256: row.authenticated_remote_caller_binding_sha256,
+      downloadVerificationReceiptSha256: row.download_verification_receipt_sha256,
+      installedTreeAttestationSha256: row.installed_tree_attestation_sha256,
+      installedTreeVerificationReceiptSha256: row.installed_tree_verification_receipt_sha256,
+      authenticatedOperatorActorId: row.authenticated_operator_actor_id,
+      authenticatedOperatorActorSha256: row.authenticated_operator_actor_sha256,
+      admittedAt: row.admitted_at,
+      ...(row.revoked_at === null ? {} : { revokedAt: row.revoked_at }),
+    });
+    assertRemoteWorkerProtectedAdmissionEvidenceRecord(record);
+    return record;
+  } catch {
+    throw invalidState();
+  }
+}
+
 function mapGeneration(row: GenerationRow): RemoteWorkerGenerationRecord {
   try {
     const record: RemoteWorkerGenerationRecord = {
@@ -1498,6 +2075,87 @@ function mapControl(row: ControlRow): RemoteWorkerGenerationControlRecord {
   } catch {
     throw invalidState();
   }
+}
+
+function normalizeFinalizeBootstrapAdmissionWithNonceInput(
+  value: FinalizeRemoteWorkerBootstrapAdmissionWithNonceInput,
+): FinalizeRemoteWorkerBootstrapAdmissionWithNonceInput {
+  const fields = exactOwnDataFields(value, ["nonce", "command"], "bootstrap admission with nonce input");
+  const nonceFields = exactOwnDataFields(
+    fields.nonce,
+    ["authority", "nonceSha256", "timestamp", "expiresAt"],
+    "bootstrap admission nonce",
+  );
+  const timestamp = canonicalTimestamp(nonceFields.timestamp, "request timestamp");
+  const expiresAt = canonicalTimestamp(nonceFields.expiresAt, "expiry");
+  if (Date.parse(expiresAt) - Date.parse(timestamp) !== 60_000) {
+    throw new TypeError("Remote worker request-nonce expiry must be exactly the request timestamp plus 60 seconds.");
+  }
+  return Object.freeze({
+    nonce: Object.freeze({
+      authority: normalizeRemoteWorkerNonceAuthority(nonceFields.authority),
+      nonceSha256: digest(nonceFields.nonceSha256 as string, "nonceSha256"),
+      timestamp,
+      expiresAt,
+    }),
+    command: normalizeFinalizeRemoteWorkerBootstrapAdmissionCommand(
+      fields.command as FinalizeRemoteWorkerBootstrapAdmissionCommand,
+    ),
+  });
+}
+
+function assertBootstrapNonceAuthority(
+  nonce: RemoteWorkerNonceConsumeInput,
+  bootstrap: RemoteWorkerBootstrapRecord,
+): void {
+  const authority = nonce.authority;
+  if (
+    authority.kind !== "bootstrap" ||
+    authority.registryWorkspaceId !== bootstrap.registryWorkspaceId ||
+    authority.bootstrapId !== bootstrap.bootstrapId ||
+    authority.workerId !== bootstrap.workerId ||
+    authority.targetWorkerGeneration !== bootstrap.targetWorkerGeneration
+  ) {
+    throw invariantConflict("remote worker admission exchange");
+  }
+}
+
+function exactOwnDataFields(value: unknown, required: readonly string[], label: string): Record<string, unknown> {
+  try {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error();
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype) throw new Error();
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const keys = Reflect.ownKeys(descriptors);
+    if (
+      keys.length !== required.length ||
+      keys.some((key) => typeof key !== "string" || !required.includes(key)) ||
+      required.some((key) => !Object.prototype.hasOwnProperty.call(descriptors, key))
+    ) {
+      throw new Error();
+    }
+    const fields: Record<string, unknown> = {};
+    for (const key of keys as string[]) {
+      const descriptor = descriptors[key];
+      if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) throw new Error();
+      fields[key] = descriptor.value;
+    }
+    return fields;
+  } catch {
+    throw new TypeError(`Remote worker ${label} is invalid.`);
+  }
+}
+
+function canonicalTimestamp(value: unknown, label: string): string {
+  if (
+    typeof value !== "string" ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(value) ||
+    !Number.isFinite(Date.parse(value)) ||
+    new Date(Date.parse(value)).toISOString() !== value
+  ) {
+    throw new TypeError(`Remote worker request-nonce ${label} must be a canonical UTC ISO timestamp.`);
+  }
+  return value;
 }
 
 function deriveServerId(prefix: string, ...parts: string[]): string {

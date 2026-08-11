@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { NotFoundError } from "@goatcitadel/contracts";
+import {
+  buildRemoteWorkerAssignmentParentContext,
+  NotFoundError,
+  remoteWorkerAssignmentParentContextSha256,
+} from "@goatcitadel/contracts";
 import type {
   ChatSendMessageRequest,
   ChatStreamChunkDraft,
@@ -161,6 +165,48 @@ describe("chat-durable-run-service", () => {
     ]);
     expect(admissionEvents).toEqual(["admission:asserted", "admission:binding", "admission:bound", "stream:persisted"]);
     expect(requestedRunIds).toEqual(["run-1"]);
+  });
+
+  it("binds task-scoped durable Chat to the immutable remote-worker parent context without widening ordinary Chat", async () => {
+    const createInputs: DurableRunCreateRequest[] = [];
+    const prepared = createPreparedTurn({
+      workspaceId: "stale-projection",
+      session: { sessionId: "stale-session" },
+      turnId: "stale-turn",
+    });
+    const parentInput = {
+      executionWorkspaceId: "default",
+      durableRunId: "run-task-bound",
+      taskId: "task-remote-1",
+      sessionId: "session-1",
+      turnId: "turn-1",
+    } as const;
+
+    await beginDurableChatRun(
+      {
+        shouldUseDurableExecution: true,
+        runImmediateTransaction: async (work) => await work(),
+        createDurableRun: async (input) => {
+          createInputs.push(input);
+          return createRun("run-task-bound", "queued");
+        },
+        buildDurablePayloadRecord: () => ({}),
+        assertTurnAdmissionWrite: async () => undefined,
+        bindTurnAdmissionToDurableRun: async () => undefined,
+        persistChatStreamChunk: async () => undefined,
+        requestDurableRunProcessing: () => undefined,
+      },
+      prepared,
+      createSendRequest({ policyTaskId: parentInput.taskId }),
+      "chat_thread_turn_appended",
+      { runId: parentInput.durableRunId },
+    );
+
+    expect(createInputs[0]?.metadata).toMatchObject({
+      remoteWorkerAssignmentParentContext: buildRemoteWorkerAssignmentParentContext(parentInput),
+      remoteWorkerAssignmentParentContextSha256: remoteWorkerAssignmentParentContextSha256(parentInput),
+    });
+    expect(createInputs[0]?.metadata).not.toHaveProperty("remoteWorkerAssignmentLeaseToken");
   });
 
   it.each(["retry", "edit"] as const)(

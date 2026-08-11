@@ -55,6 +55,17 @@ jobs:
           GOATCITADEL_VERIFY_VISUAL_VARIANT_SLUGS: ${{ inputs.variant_slugs }}
         run: pnpm verify:visual:rebaseline
 
+      # A capture failure leaves its only evidence (manifest, per-route
+      # diagnostics, screenshots) on the runner; keep it retrievable.
+      - name: Upload rebaseline evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-rebaseline-evidence
+          path: artifacts/verification/
+          retention-days: 7
+          if-no-files-found: ignore
+
       - name: Open rebaseline PR
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

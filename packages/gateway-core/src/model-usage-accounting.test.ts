@@ -301,6 +301,27 @@ describe("ModelUsageAccountingService", { timeout: 20_000 }, () => {
     assert.equal((await cancelledCall.handle.cancel(abort)).eventId, cancelled.eventId);
   });
 
+  it("keeps the first terminal settlement authoritative across later outcomes", async () => {
+    const { storage, accounting } = createHarness();
+    const reservation = await accounting.prepareDispatch(dispatchInput());
+    const call = await invokeFetch(reservation, () => Promise.resolve({ ok: true }));
+    await call.pending;
+    const abort = new Error("operator cancelled stream");
+    abort.name = "AbortError";
+
+    const cancelled = await call.handle.cancel(abort);
+    const lateFailure = await call.handle.fail(new Error("late provider failure"), { input_tokens: 5 });
+    const lateSuccess = await call.handle.succeed({ input_tokens: 9, output_tokens: 3 });
+
+    assert.equal(cancelled.terminalOutcome, "cancelled");
+    assert.equal(lateFailure.eventId, cancelled.eventId);
+    assert.equal(lateFailure.terminalOutcome, "cancelled");
+    assert.equal(lateSuccess.eventId, cancelled.eventId);
+    assert.equal(lateSuccess.terminalOutcome, "cancelled");
+    assert.equal(lateSuccess.inputTokens, undefined);
+    assert.equal(storage.modelUsageEvents.findByEventId(cancelled.eventId)?.inputTokens, undefined);
+  });
+
   it("blocks duplicate dispatch identity but permits an explicit new generation", async () => {
     const { storage, accounting } = createHarness();
     const first = await accounting.prepareDispatch(dispatchInput());

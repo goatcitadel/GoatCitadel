@@ -688,6 +688,15 @@ describe("NativeRoutePages library coverage", () => {
     await click(findButton(agents.root, "Skills"));
     expect(navigate).toHaveBeenCalledWith({ area: "library", section: "skills", theme: "ops" });
 
+    const catalog = await mount("library", "agents", {
+      route: { area: "library", section: "agents", view: "catalog", theme: "ops" },
+    });
+    expect(collectText(catalog.root)).toContain("Catalog-focused view");
+    expect(catalog.root.findByProps({ id: "imported-agent-catalog" }).props).toMatchObject({
+      tabIndex: -1,
+      "data-route-focus": "catalog",
+    });
+
     expect(collectText((await mount("ops", "approvals")).root)).toContain("Approvals child route");
     expect(collectText((await mount("ops", "runtime")).root)).toContain("Runtime child route");
     expect(collectText((await mount("projects", "alpha")).root)).toContain("Projects child route");
@@ -759,6 +768,13 @@ describe("NativeRoutePages library coverage", () => {
     expect(collectText(artifacts.root)).toContain("Release notes");
     expect(collectText(artifacts.root)).toContain("Use in Work");
     expect(collectText(artifacts.root)).toContain("Validation");
+    expect(artifacts.root.findAllByType("code").map((node) => node.props["aria-label"])).toEqual(
+      expect.arrayContaining([
+        "Artifact identifier: artifact-1",
+        "Session identifier: session-1",
+        "Turn identifier: turn-1",
+      ]),
+    );
     await click(findButton(artifacts.root, "Plan"));
     await change(artifacts.root.findByProps({ placeholder: "Search title or kind" }), "release");
     expect(collectText(artifacts.root)).toContain("# Release");

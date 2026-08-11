@@ -53,6 +53,8 @@ export async function runSurfaceRegressionLane(context, options = {}, deps) {
   const surfaceOperatorToken = "verification-surface-regression-operator-token";
   const stack = await startVerificationStack(context, {
     includeUi: true,
+    gatewayMode: "built",
+    uiMode: "preview",
     processLogPrefix: options.processLogPrefix,
     gatewayEnvOmit: options.secretEnvKeys,
     uiEnvOmit: options.secretEnvKeys,
@@ -62,6 +64,7 @@ export async function runSurfaceRegressionLane(context, options = {}, deps) {
       GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS: "true",
       GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED: "true",
       GOATCITADEL_CODE_MODE_SANDBOX_REQUIRED: "false",
+      GOATCITADEL_DISABLE_MAINTENANCE_SCHEDULER: "true",
       GOATCITADEL_MESH_NODE_ID: "build-main",
     },
     uiEnv: {

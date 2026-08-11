@@ -80,7 +80,7 @@ export function RunDetailRoutePage({ route, activeWorkspaceId, activeWorkspaceNa
   const { loading, error, data, reload } = useAsyncLoad(async () => {
     if (!runId) {
       return {
-        issues: [{ label: "Run trace", message: "No run id was provided in the route." }],
+        issues: [],
         trace: buildEmptyRunTrace("unknown"),
       };
     }
@@ -181,6 +181,33 @@ export function RunDetailRoutePage({ route, activeWorkspaceId, activeWorkspaceNa
       setReceiptError(err instanceof Error ? err.message : String(err));
     }
   };
+
+  if (!runId) {
+    return (
+      <NativePageFrame
+        area="ops"
+        kicker={routeKicker(route)}
+        title="Run detail"
+        description={`Inspect canonical execution and evidence for ${activeWorkspaceName} after selecting a run.`}
+        loading={false}
+        error={null}
+      >
+        <EmptyState
+          icon={<FileText size={24} />}
+          title="No run selected"
+          description="Choose a run from Sessions, Activity, or another linked evidence surface to inspect its trace."
+          primaryAction={
+            <NativeButton
+              variant="default"
+              onClick={() => navigate({ area: "ops", section: "sessions", theme: route.theme })}
+            >
+              Browse runs
+            </NativeButton>
+          }
+        />
+      </NativePageFrame>
+    );
+  }
 
   return (
     <NativePageFrame

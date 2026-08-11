@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Central Storage composition intentionally enumerates the full repository graph. */
 import type { ChatAttachmentRecord } from "@goatcitadel/contracts";
 import { ValidationError } from "@goatcitadel/contracts";
 import { createDatabase, type SqliteOptions } from "./sqlite.js";
@@ -39,9 +40,12 @@ import { MeshRepository } from "./mesh-repo.js";
 import { MeshCapabilityNodeAdmissionRepository } from "./mesh-capability-node-admission-repo.js";
 import { MeshCapabilityPublicationRepository } from "./mesh-capability-publication-repo.js";
 import { RemoteWorkerAdmissionRepository } from "./remote-worker-admission-repo.js";
+import { RemoteWorkerMeshNodeAdmissionRepository } from "./remote-worker-mesh-node-admission-repo.js";
 import { RemoteWorkerArtifactRepository } from "./remote-worker-artifact-repo.js";
 import { RemoteWorkerAssignmentRepository } from "./remote-worker-assignment-repo.js";
+import { RemoteWorkerCellRepository } from "./remote-worker-cell-repo.js";
 import { RemoteWorkerEffectRepository } from "./remote-worker-effect-repo.js";
+import { RemoteWorkerInferenceRepository } from "./remote-worker-inference-repo.js";
 import { SessionControlRepository } from "./session-control-repo.js";
 import { SessionMutationAdmissionRepository } from "./session-mutation-admission-repo.js";
 import { HeartbeatOccurrenceRepository } from "./heartbeat-occurrence-repo.js";
@@ -58,6 +62,17 @@ import { KnowledgeRepository } from "./knowledge-repo.js";
 import { CommsDeliveryRepository } from "./comms-delivery-repo.js";
 import { NotificationRoutingRepository } from "./notification-routing-repo.js";
 export { NotificationRoutingRepository } from "./notification-routing-repo.js";
+import { MobilePushRepository } from "./mobile-push-repo.js";
+export {
+  MobilePushRepository,
+  deriveMobilePushDeliveryId,
+  deriveMobilePushRegistrationId,
+  type MobilePushDeliveryClassification,
+  type MobilePushDeliveryRecord,
+  type MobilePushDeliveryStatus,
+  type MobilePushRegistrationLifecycle,
+  type MobilePushRegistrationRecord,
+} from "./mobile-push-repo.js";
 import { ChatTimerRepository } from "./chat-timer-repo.js";
 export { ChatTimerRepository } from "./chat-timer-repo.js";
 import { ChatSessionRunVariableRepository } from "./chat-session-run-variable-repo.js";
@@ -207,6 +222,7 @@ import { A2ATaskPushConfigRepository } from "./a2a-task-push-config-repo.js";
 import { RuntimeDecisionTraceRepository } from "./runtime-decision-trace-repo.js";
 import { PersonalOpsStorageRepository } from "./personal-ops-repo.js";
 import { GovernedLifecycleEventRepository } from "./governed-lifecycle-event-repo.js";
+import { GovernedRemediationRepository } from "./governed-remediation-repo.js";
 import { ImprovementLifecycleOperationRepository } from "./improvement-lifecycle-operation-repo.js";
 export {
   PersonalOpsInMemoryRepository,
@@ -285,9 +301,12 @@ export class Storage {
   public readonly meshCapabilityNodeAdmissions: MeshCapabilityNodeAdmissionRepository;
   public readonly meshCapabilityPublications: MeshCapabilityPublicationRepository;
   public readonly remoteWorkerAdmissions: RemoteWorkerAdmissionRepository;
+  public readonly remoteWorkerMeshNodeAdmissions: RemoteWorkerMeshNodeAdmissionRepository;
   public readonly remoteWorkerArtifacts: RemoteWorkerArtifactRepository;
   public readonly remoteWorkerAssignments: RemoteWorkerAssignmentRepository;
+  public readonly remoteWorkerCells: RemoteWorkerCellRepository;
   public readonly remoteWorkerEffects: RemoteWorkerEffectRepository;
+  public readonly remoteWorkerInference: RemoteWorkerInferenceRepository;
   public readonly sessionControls: SessionControlRepository;
   public readonly sessionMutationAdmissions: SessionMutationAdmissionRepository;
   public readonly heartbeatOccurrences: HeartbeatOccurrenceRepository;
@@ -300,6 +319,7 @@ export class Storage {
   public readonly knowledge: KnowledgeRepository;
   public readonly commsDeliveries: CommsDeliveryRepository;
   public readonly notificationRouting: NotificationRoutingRepository;
+  public readonly mobilePush: MobilePushRepository;
   public readonly chatTimers: ChatTimerRepository;
   public readonly chatSessionRunVariables: ChatSessionRunVariableRepository;
   public readonly chatProjects: ChatProjectRepository;
@@ -370,6 +390,7 @@ export class Storage {
   public readonly candidateSkillEvidenceLinks: CandidateSkillEvidenceLinkRepository;
   public readonly governanceJourneyEvents: GovernanceJourneyEventRepository;
   public readonly governedLifecycleEvents: GovernedLifecycleEventRepository;
+  public readonly governedRemediations: GovernedRemediationRepository;
   public readonly improvementLifecycleOperations: ImprovementLifecycleOperationRepository;
   public readonly workspacePathBridgeSnapshots: WorkspacePathBridgeSnapshotRepository;
   public readonly externalSourceConfigs: ExternalSourceConfigRepository;
@@ -446,9 +467,12 @@ export class Storage {
     this.meshCapabilityNodeAdmissions = new MeshCapabilityNodeAdmissionRepository(this.db);
     this.meshCapabilityPublications = new MeshCapabilityPublicationRepository(this.db);
     this.remoteWorkerAdmissions = new RemoteWorkerAdmissionRepository(this.db);
+    this.remoteWorkerMeshNodeAdmissions = new RemoteWorkerMeshNodeAdmissionRepository(this.db);
     this.remoteWorkerArtifacts = new RemoteWorkerArtifactRepository(this.db);
     this.remoteWorkerAssignments = new RemoteWorkerAssignmentRepository(this.db);
+    this.remoteWorkerCells = new RemoteWorkerCellRepository(this.db);
     this.remoteWorkerEffects = new RemoteWorkerEffectRepository(this.db);
+    this.remoteWorkerInference = new RemoteWorkerInferenceRepository(this.db);
     this.sessionControls = new SessionControlRepository(this.db);
     this.sessionMutationAdmissions = new SessionMutationAdmissionRepository(this.db);
     this.heartbeatOccurrences = new HeartbeatOccurrenceRepository(this.db);
@@ -461,6 +485,7 @@ export class Storage {
     this.knowledge = new KnowledgeRepository(this.db);
     this.commsDeliveries = new CommsDeliveryRepository(this.db);
     this.notificationRouting = new NotificationRoutingRepository(this.db);
+    this.mobilePush = new MobilePushRepository(this.db);
     this.chatTimers = new ChatTimerRepository(this.db);
     this.chatSessionRunVariables = new ChatSessionRunVariableRepository(this.db);
     this.chatProjects = new ChatProjectRepository(this.db);
@@ -531,6 +556,7 @@ export class Storage {
     this.candidateSkillEvidenceLinks = new CandidateSkillEvidenceLinkRepository(this.db);
     this.governanceJourneyEvents = new GovernanceJourneyEventRepository(this.db);
     this.governedLifecycleEvents = new GovernedLifecycleEventRepository(this.db);
+    this.governedRemediations = new GovernedRemediationRepository(this.db);
     this.improvementLifecycleOperations = new ImprovementLifecycleOperationRepository(this.db);
     this.workspacePathBridgeSnapshots = new WorkspacePathBridgeSnapshotRepository(this.db);
     this.externalSourceConfigs = new ExternalSourceConfigRepository(this.db);
@@ -923,6 +949,7 @@ export * from "./mesh-repo.js";
 export * from "./mesh-capability-node-admission-repo.js";
 export * from "./mesh-capability-publication-repo.js";
 export * from "./remote-worker-admission-repo.js";
+export * from "./remote-worker-mesh-node-admission-repo.js";
 export * from "./remote-worker-artifact-repo.js";
 export * from "./remote-worker-assignment-repo.js";
 export * from "./remote-worker-effect-repo.js";
@@ -1008,6 +1035,7 @@ export * from "./skill-aggregate-revision-repo.js";
 export * from "./skill-learning-evidence-repo.js";
 export * from "./governance-journey-event-repo.js";
 export * from "./governed-lifecycle-event-repo.js";
+export * from "./governed-remediation-repo.js";
 export * from "./improvement-lifecycle-operation-repo.js";
 export * from "./workspace-path-bridge-snapshot-repo.js";
 export * from "./ops-saved-board-repo.js";

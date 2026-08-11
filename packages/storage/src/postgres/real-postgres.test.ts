@@ -2828,6 +2828,92 @@ test(
 );
 
 test(
+  "real Postgres rejects same-owner pre-existing tables and indexes with corrupt shapes",
+  { skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane" },
+  async () => {
+    assert.ok(connectionString);
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 10);
+    const migrationRole = `shape_migrator_${suffix}`;
+    const schemaName = `coverage_schema_shape_${suffix}`;
+    const ledgerTable = `shape_migrations_${suffix}`;
+    const effectTable = `shape_effect_${suffix}`;
+    const effectIndex = `shape_effect_active_${suffix}`;
+    const adminPool = new Pool({ connectionString });
+    const scopedUrl = new URL(connectionString);
+    scopedUrl.searchParams.set("options", `-csearch_path=${schemaName}`);
+    const pool = new Pool({ connectionString: scopedUrl.toString(), max: 1 });
+    const client = new PostgresDatabaseClient(
+      { connectionString: scopedUrl.toString(), database: "goatcitadel_test" },
+      { pool, migrationsTable: ledgerTable },
+    );
+    const migration: PostgresMigration = {
+      version: 1,
+      name: "same_owner_shape_probe",
+      sql: `
+        CREATE TABLE IF NOT EXISTS ${effectTable} (
+          expected_shape INTEGER NOT NULL,
+          state TEXT NOT NULL,
+          PRIMARY KEY (expected_shape)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ${effectIndex}
+          ON ${effectTable}(expected_shape)
+          WHERE state = 'active';
+      `,
+    };
+    const setMigrationRole = async (): Promise<void> => {
+      const session = await pool.connect();
+      await session.query(`SET ROLE ${migrationRole}`);
+      session.release();
+    };
+
+    try {
+      await adminPool.query(`CREATE ROLE ${migrationRole} NOLOGIN`);
+      await adminPool.query(`CREATE SCHEMA ${schemaName} AUTHORIZATION ${migrationRole}`);
+      await adminPool.query(`
+        CREATE TABLE ${schemaName}.${effectTable} (
+          expected_shape TEXT NOT NULL,
+          state TEXT NOT NULL,
+          PRIMARY KEY (expected_shape)
+        );
+        CREATE INDEX ${effectIndex} ON ${schemaName}.${effectTable}(expected_shape) WHERE state = 'disabled';
+        ALTER TABLE ${schemaName}.${effectTable} OWNER TO ${migrationRole};
+        ALTER INDEX ${schemaName}.${effectIndex} OWNER TO ${migrationRole};
+      `);
+
+      await setMigrationRole();
+      await assert.rejects(runPostgresMigrations(client, [migration]), /canonical schema-shape validation failed/);
+      const afterColumnDrift = await adminPool.query<{ count: number }>(
+        `SELECT COUNT(*)::int AS count FROM ${schemaName}.${ledgerTable}`,
+      );
+      assert.equal(afterColumnDrift.rows[0]?.count, 0);
+
+      await adminPool.query(`
+        DROP TABLE ${schemaName}.${effectTable} CASCADE;
+        CREATE TABLE ${schemaName}.${effectTable} (
+          expected_shape INTEGER NOT NULL,
+          state TEXT NOT NULL,
+          PRIMARY KEY (expected_shape)
+        );
+        CREATE INDEX ${effectIndex} ON ${schemaName}.${effectTable}(expected_shape) WHERE state = 'disabled';
+        ALTER TABLE ${schemaName}.${effectTable} OWNER TO ${migrationRole};
+        ALTER INDEX ${schemaName}.${effectIndex} OWNER TO ${migrationRole};
+      `);
+      await setMigrationRole();
+      await assert.rejects(runPostgresMigrations(client, [migration]), /index .* non-canonical shape/);
+
+      await adminPool.query(`DROP INDEX ${schemaName}.${effectIndex}`);
+      await setMigrationRole();
+      assert.deepEqual((await runPostgresMigrations(client, [migration])).appliedVersions, [1]);
+    } finally {
+      await client.close();
+      await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
+      await adminPool.query(`DROP ROLE IF EXISTS ${migrationRole}`);
+      await adminPool.end();
+    }
+  },
+);
+
+test(
   "real Postgres waits out pre-existing DDL before trusting exclusive schema authority",
   {
     skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane",

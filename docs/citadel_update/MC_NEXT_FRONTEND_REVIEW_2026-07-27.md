@@ -90,52 +90,64 @@ build defect); it was merely absent from this machine's pre-existing `node_modul
 - Streaming hot path, artifact iframe backgrounds, lightbox scrim, release-scope "Hidden" sublabels —
   all previously-cleared items were not re-flagged.
 
-## Deferred findings (recommend before/shortly after 1.0)
+## Resolved after this review
 
-**Bugs (small, none release-blocking):**
-- Ops Activity feed rows crush their event label at every desktop width (the full timestamp is
-  `flex-shrink: 0` and the source span reserves 30%). Recommend relative ages ("6m") in feed rows and
-  a readable floor for the chip state segment.
-- Ops Schedules: needs-attention card truncates chips/titles in the 4-across grid (fine at 3-across on
-  Notifications) — give it a wider minimum track or a 2-column span.
-- Hidden capability routes (`/settings/workspace-capabilities`, `/settings/citadel-capabilities`):
-  double "Unknown" fallback header above the real header, `Skills — Skills` duplicated titles, and a
-  nested SettingsGrid squeezing the first panel until item names ellipsize to single letters.
-- Run Detail without a `runId` renders a load-warning with a Retry that can never succeed, plus a wall
-  of mixed-case "unknown/Unknown" chips — deserves an intentional "No run selected" empty state.
-- Library Skills first paint blocks on the slowest of four gateway calls (captured stuck on the shell
-  loader in 5 of 8 variants) — render the skills list as soon as its own fetch resolves.
-- Settings Providers CAPABILITIES read-only input clips its list mid-token; render as wrapping chips.
-- Mobile "ON THIS PAGE" rows and the command palette list scroll with no affordance (overlay
-  scrollbars) — add an edge fade or wrap.
-- FilterPillGroup shows "Swipe for more filters" even when nothing overflows — gate on measured
-  overflow.
+The 2026-08-08 master-program UI tranche closed these deferred rows against the
+current implementation:
+
+- Hidden workspace/Citadel capability routes now use one route frame and one
+  responsive grid without duplicated `Skills` titles.
+- Run Detail without a `runId` now renders an intentional no-selection state.
+- Library Skills renders its primary list without waiting on supporting loads.
+- Provider capabilities render as wrapping chips rather than a clipped input.
+- Filter overflow guidance is driven by measured overflow.
+- Saved-board cost widgets distinguish unknown coverage from a real zero.
+- Reminder due dates use `datetime-local` and normalize valid input to UTC.
+- Ops Activity uses compact relative ages and a two-part summary grid so event
+  labels keep readable space at desktop and mobile widths.
+- Ops Schedules use wider minimum tracks so the needs-attention content does
+  not inherit the previous four-across truncation.
+- Mobile section indexes wrap, while the command palette shows a measured
+  vertical-scroll cue only until the operator reaches the end.
+- Projects and Approvals visual fixtures now seed and target real selected
+  master/detail records instead of accepting empty route shells.
+- Diagnostics uses a full-width primary card, responsive two-column follow-up
+  cards, and multi-column source details instead of a stranded narrow lane.
+- The five current Working Context tabs use a deliberate balanced 3+2 grid;
+  Model fit groups repeated models while retaining every backend's fit and
+  confidence; Ops Quality states its read-only/no-call boundary once instead of
+  repeating the same chips on adjacent cards.
+- Projects now keeps `/projects` as an overview and gives `/projects/:projectId`
+  a distinct detail frame; the selected-project continuation lead and
+  cross-project row no longer repeat inside detail, and editing appears only
+  after an explicit selection.
+- The legacy agents-catalog focus now scrolls and focuses the imported-catalog
+  owner with route-specific context instead of reproducing the generic Agents
+  page unchanged.
+- Onboarding outcome states and the Mason staging caption use operator language
+  instead of raw internal keys. Curator timestamps are formatted for people and
+  its usage, score, recommendation, and status fields share aligned columns.
+- The composer now presents one canonical approval or user-input card with the
+  required controls; its second near-identical blocked-state strip was removed.
+  Header approval navigation and execution-plan status remain intentionally
+  distinct, and pending decisions remain excluded from transcript ownership.
+- A shared accessible identifier chip now gives approval, input-prompt, and
+  selected-turn trace IDs a labeled mono treatment, middle ellipsis, full-value
+  semantics, hover inspection, and an exact copy action.
+- The same copyable treatment is selectively applied to Council seat references,
+  Journey event/actor/workspace evidence, artifact session/turn lineage, and
+  expanded Trust-policy evidence. Descriptive prose stays plain text.
+
+These fixes received focused component tests and package typecheck. The
+consolidated accessibility, surface, and visual pass remains owned by `M7` in
+`MASTER_COMPLETION_PROGRAM.md`.
+
+## Deferred findings still open (recommend before/shortly after 1.0)
 
 **UX suggestions (product-level):**
-- **Chat blocked state repeats itself up to five times** in one viewport (timeline heading, evidence
-  strip, notice, the approval card, and two near-identical composer strips). Merging the two composer
-  strips alone frees ~120px and calms the highest-stakes moment in the product.
-- **Identifier discipline**: bare UUIDs render as body text in the approval/user-input cards, Council
-  seat rows, Journey/Artifacts metric tiles, and Trust-policy prose. A shared "id chip" (mono,
-  middle-ellipsis, copy affordance, optional label) would fix a dozen surfaces at once.
-- **Projects page redundancy**: the same project appears four times (hero, list, detail, edit panel),
-  and `/projects/:projectId` is pixel-identical to `/projects`. Hide the hero when it duplicates the
-  selection; make the detail route visibly distinct.
-- Library agents-catalog route is pixel-identical to `/library/agents` — focus/scroll the catalog card
-  or drop the separate slug.
-- Ops board "Usage & cost" widget asserts `$0.00` while the Costs route correctly reports Unknown /
-  lower-bound — propagate the evidence flag into the widget.
-- Reminders "Due at" expects a hand-typed millisecond ISO timestamp — use `datetime-local`.
-- Onboarding stage captions (`PROVIDER-READY`, `FIRST-TASK-PENDING`) and Mason's `FAIL-CLOSED STAGING`
-  kicker read as internal spec keys; the surrounding copy already explains them in plain language.
-- Curator is reachable only by URL/palette with no nav highlight (intentional for experimental scope,
-  but it also drops the humanized-timestamp and column-alignment conventions).
-- Diagnostics directory renders one ~286px column and leaves two-thirds of the viewport empty.
-- Working-context tab strip wraps 3+1 ("Session" orphaned) at every desktop width — size the four tabs
-  to one row or commit to a 2x2 grid.
-- Model-fit list repeats the same model per backend (4 of 6 visible rows are duplicates) — group by
-  model with backend chips.
-- Security quality cards on Ops Quality repeat the same disclaimer sentence verbatim side by side.
+- Curator remains reachable only by URL/palette with no nav highlight. That is
+  intentional for experimental scope; its timestamp and column alignment now
+  match the maintained route conventions.
 
 ## Release-readiness verdict
 
@@ -146,11 +158,13 @@ found were overwhelmingly of one family — layout-primitive edge cases (auto-fi
 min-content overflow, nowrap in narrow tracks) plus one systemic token-cycle regression — and the
 fixes here close all of the high-severity items. The deferred list is polish, not blockers.
 
-**Visual baselines: refreshed (no outstanding follow-up).** Because the border-cycle fixes change
-hairline rendering app-wide, `visual-rebaseline.yml` was run twice against this branch on the Linux
-renderer — run 30273608156 after the initial fixes, and run 30277840694 after the review round that
-also broke the remaining Citadel Light cycle — and both results were cherry-picked into this PR
-(all 400 baselines, then the 324 affected by the light/dark token changes).
+**Historical review baselines: refreshed.** Because the original border-cycle fixes changed
+hairline rendering app-wide, `visual-rebaseline.yml` ran twice against that review branch on the
+Linux renderer — run 30273608156 after the initial fixes, and run 30277840694 after the review round
+that also broke the remaining Citadel Light cycle — and both results were cherry-picked into that PR
+(all 400 baselines, then the 324 affected by the light/dark token changes). The later 2026-08-08
+master-program changes listed above intentionally wait for the single final M7 accessibility,
+surface, and visual campaign; those historical runs are not proof for the new layouts.
 
 **Review-feedback round (same PR):** the Citadel Light theme block carried a second border-token
 cycle (`--border: var(--border-default)` + `--border-default: var(--border)`) that the first fix did

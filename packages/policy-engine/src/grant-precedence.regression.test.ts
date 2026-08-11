@@ -210,6 +210,71 @@ describe("declared tool-grant parsing", () => {
 });
 
 describe("allow-vs-block precedence (multiple matching rules)", () => {
+  it("loads independent grant scopes concurrently without weakening deny-wins", async () => {
+    const storage = createStorageStub();
+    const activeGrants = [
+      grant({
+        grantId: "task-allow",
+        toolPattern: "fs.delete",
+        decision: "allow",
+        scope: "task",
+        scopeRef: "task-1",
+      }),
+      grant({
+        grantId: "workspace-deny",
+        toolPattern: "fs.*",
+        decision: "deny",
+        scope: "workspace",
+        scopeRef: "workspace-1",
+      }),
+    ];
+    const started: string[] = [];
+    let releaseReads!: () => void;
+    const readsReleased = new Promise<void>((resolve) => {
+      releaseReads = resolve;
+    });
+    vi.mocked(storage.toolGrants.listActive).mockImplementation(async (scope?: string, scopeRef?: string) => {
+      started.push(`${scope}:${scopeRef}`);
+      await readsReleased;
+      return activeGrants.filter((candidate) => candidate.scope === scope && candidate.scopeRef === scopeRef);
+    });
+    const engine = new ToolPolicyEngine(baseConfig, storage);
+
+    const evaluationPromise = engine.evaluateAccess({
+      ...baseRequest,
+      taskId: "task-1",
+      toolName: "fs.delete",
+      args: { path: "./workspace/secret" },
+    });
+
+    let concurrencyError: unknown;
+    try {
+      await vi.waitFor(
+        () =>
+          expect(started).toEqual([
+            "task:task-1",
+            "agent:agent-1",
+            "session:session-1",
+            "workspace:workspace-1",
+            "global:global",
+          ]),
+        { timeout: 500 },
+      );
+    } catch (error) {
+      concurrencyError = error;
+    } finally {
+      releaseReads();
+    }
+
+    const evaluation = await evaluationPromise;
+    if (concurrencyError) {
+      throw concurrencyError;
+    }
+    expect(evaluation.allowed).toBe(false);
+    expect(evaluation.reasonCodes).toEqual(["grant_deny"]);
+    expect(evaluation.matchedGrantId).toBe("workspace-deny");
+  });
+
   it("deny-wins when an allow and a deny grant match at the same scope", async () => {
     const storage = createStorageStub();
     withActiveGrants(storage, [

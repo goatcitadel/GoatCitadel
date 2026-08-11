@@ -31,8 +31,21 @@ import {
   POSTGRES_MIGRATION_SESSION_TRANSACTION_PROBE_SQL,
   POSTGRES_MIGRATION_TRANSACTION_EPOCH_BARRIER_SQL,
 } from "./postgres/migration-ledger-compatibility.js";
-import { applyPostgresMigrationsSync, runPostgresMigrations } from "./postgres/migrator.js";
+import {
+  applyPostgresMigrationsSync,
+  buildCanonicalPostgresSchemaShapeManifest,
+  runPostgresMigrations,
+} from "./postgres/migrator.js";
 import { POSTGRES_MIGRATIONS, type PostgresMigration } from "./postgres/migrations.js";
+import {
+  assertPostgresSchemaShapeIssues,
+  buildPostgresSchemaShapeManifest,
+  buildPostgresSchemaShapeRelationLockSql,
+  buildPostgresSchemaShapeReplacementLockSql,
+  buildPostgresSchemaShapeReplacementValidationSql,
+  POSTGRES_SCHEMA_SHAPE_REPLACEMENT_VALIDATION_SQL,
+  POSTGRES_SCHEMA_SHAPE_VALIDATION_SQL,
+} from "./postgres/schema-shape.js";
 
 interface QueryCall {
   sql: string;
@@ -297,6 +310,13 @@ class PinnedSessionDatabase implements DatabaseClient {
   }
 
   public prepare(sql: string): DbStatement {
+    if (sql.includes("goatcitadel_postgres_schema_shape_validation")) {
+      return {
+        run: () => ({ changes: 0 }),
+        get: () => undefined,
+        all: () => [],
+      };
+    }
     if (sql.includes("advisory_xact_lock")) {
       return createStaticStatement(() => ({ transaction_probe_acquired: this.migrationTransactionProbeAcquired }));
     }
@@ -616,6 +636,362 @@ describe("Postgres migration ledger compatibility", () => {
     assert.throws(
       () => parsePostgresMigrationActiveTransactionIds([{ active_xid: "not-an-xid" }]),
       /invalid transaction id/,
+    );
+  });
+
+  it("derives the canonical table, column, constraint, index, and predicate manifest from migration SQL", () => {
+    const manifest = buildPostgresSchemaShapeManifest([
+      {
+        version: 1,
+        name: "shape_manifest",
+        sql: `
+          CREATE TABLE IF NOT EXISTS parent_shape (
+            parent_id INTEGER PRIMARY KEY,
+            state TEXT NOT NULL DEFAULT 'active'
+          );
+          CREATE TABLE IF NOT EXISTS child_shape (
+            child_id BIGSERIAL PRIMARY KEY,
+            parent_id INTEGER NOT NULL,
+            FOREIGN KEY (parent_id) REFERENCES parent_shape(parent_id) ON DELETE CASCADE
+          );
+          ALTER TABLE child_shape
+            ADD COLUMN IF NOT EXISTS payload_doc JSONB GENERATED ALWAYS AS ('{}'::jsonb) STORED;
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_child_shape_active
+            ON child_shape(parent_id DESC)
+            WHERE payload_doc IS NOT NULL AND parent_id > 0;
+        `,
+      },
+    ]);
+
+    assert.deepEqual(
+      manifest.tables.map((table) => table.name),
+      ["child_shape", "parent_shape"],
+    );
+    const child = manifest.tables[0]!;
+    assert.deepEqual(child.columns, [
+      { name: "child_id", type: "bigint", notNull: true, hasDefault: true, generated: false },
+      { name: "parent_id", type: "integer", notNull: true, hasDefault: false, generated: false },
+      { name: "payload_doc", type: "jsonb", notNull: false, hasDefault: true, generated: true },
+    ]);
+    assert.equal(
+      child.constraints.some((constraint) => constraint.type === "p"),
+      true,
+    );
+    assert.equal(
+      child.constraints.some(
+        (constraint) =>
+          constraint.type === "f" && constraint.referencedTable === "parent_shape" && constraint.onDelete === "c",
+      ),
+      true,
+    );
+    assert.deepEqual(manifest.indexes, [
+      {
+        name: "idx_child_shape_active",
+        tableName: "child_shape",
+        unique: true,
+        method: "btree",
+        keys: ["parent_id desc"],
+        predicate: "payload_doc IS NOT NULL AND parent_id > 0",
+        predicateTerms: ["0", "parent_id", "payload_doc"],
+        predicateMode: "exact",
+        predicateFingerprint: "payload_docisnotnullandparent_id>0",
+      },
+    ]);
+  });
+
+  it("replaces historical table and index shape after DROP TABLE CASCADE", () => {
+    const manifest = buildPostgresSchemaShapeManifest([
+      {
+        version: 1,
+        name: "initial_shape",
+        sql: `
+          CREATE TABLE IF NOT EXISTS rebuilt_shape (
+            legacy_id TEXT PRIMARY KEY,
+            legacy_payload TEXT NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS idx_rebuilt_shape_legacy
+            ON rebuilt_shape(legacy_payload);
+          CREATE TABLE IF NOT EXISTS preserved_shape (
+            preserved_id TEXT PRIMARY KEY
+          );
+        `,
+      },
+      {
+        version: 2,
+        name: "replacement_shape",
+        sql: `
+          DROP TABLE IF EXISTS public.rebuilt_shape CASCADE;
+          CREATE TABLE IF NOT EXISTS rebuilt_shape (
+            current_id BIGINT PRIMARY KEY
+          );
+          CREATE INDEX IF NOT EXISTS idx_rebuilt_shape_current
+            ON rebuilt_shape(current_id);
+        `,
+      },
+    ]);
+
+    assert.deepEqual(
+      manifest.tables.map((table) => table.name),
+      ["preserved_shape", "rebuilt_shape"],
+    );
+    assert.deepEqual(manifest.tables[1]?.columns, [
+      { name: "current_id", type: "bigint", notNull: true, hasDefault: false, generated: false },
+    ]);
+    assert.deepEqual(
+      manifest.indexes.map((index) => index.name),
+      ["idx_rebuilt_shape_current"],
+    );
+  });
+
+  it("simulates ordered PostgreSQL DDL with first-wins creation and explicit lifecycle changes", () => {
+    const manifest = buildPostgresSchemaShapeManifest([
+      {
+        version: 1,
+        name: "ordered_shape",
+        sql: `
+          CREATE TABLE parent_ordered_shape (
+            parent_id TEXT PRIMARY KEY
+          );
+          CREATE TABLE IF NOT EXISTS ordered_shape (
+            id TEXT PRIMARY KEY,
+            state TEXT CHECK (state IS NOT NULL),
+            literal_text TEXT CHECK (coalesce(literal_text, 'DEFAULT GENERATED ALWAYS AS PRIMARY KEY NOT NULL') IS NOT NULL),
+            legacy TEXT,
+            parent_id TEXT,
+            "timestamp" TEXT,
+            CONSTRAINT fk_ordered_shape_parent
+              FOREIGN KEY (parent_id) REFERENCES parent_ordered_shape(parent_id)
+          );
+          CREATE TABLE IF NOT EXISTS ordered_shape (
+            id BIGINT,
+            replacement_only BOOLEAN NOT NULL
+          );
+          ALTER TABLE ordered_shape ADD COLUMN IF NOT EXISTS added TEXT CHECK (added IS NOT NULL);
+          ALTER TABLE ordered_shape ADD COLUMN IF NOT EXISTS added BIGINT NOT NULL;
+          ALTER TABLE ordered_shape ALTER COLUMN state SET NOT NULL;
+          ALTER TABLE ordered_shape ALTER COLUMN state DROP NOT NULL;
+          ALTER TABLE ordered_shape DROP COLUMN legacy;
+          ALTER TABLE ordered_shape DROP CONSTRAINT fk_ordered_shape_parent;
+          ALTER TABLE ordered_shape ADD CONSTRAINT fk_ordered_shape_parent
+            FOREIGN KEY (parent_id) REFERENCES parent_ordered_shape(parent_id) ON DELETE CASCADE;
+          CREATE INDEX IF NOT EXISTS idx_ordered_shape_first
+            ON ordered_shape ("timestamp" DESC NULLS LAST);
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_ordered_shape_first
+            ON ordered_shape (id);
+          CREATE INDEX IF NOT EXISTS idx_ordered_shape_rebuilt
+            ON ordered_shape (state);
+          DROP INDEX IF EXISTS idx_ordered_shape_rebuilt;
+          CREATE UNIQUE INDEX idx_ordered_shape_rebuilt
+            ON ordered_shape (id DESC NULLS FIRST);
+          CREATE TABLE disposable_ordered_shape (legacy_id TEXT);
+          DROP TABLE disposable_ordered_shape;
+          CREATE TABLE disposable_ordered_shape (current_id BIGINT PRIMARY KEY);
+        `,
+      },
+    ]);
+
+    const ordered = manifest.tables.find((table) => table.name === "ordered_shape");
+    assert.deepEqual(ordered?.columns, [
+      { name: "id", type: "text", notNull: true, hasDefault: false, generated: false },
+      { name: "state", type: "text", notNull: false, hasDefault: false, generated: false },
+      { name: "literal_text", type: "text", notNull: false, hasDefault: false, generated: false },
+      { name: "parent_id", type: "text", notNull: false, hasDefault: false, generated: false },
+      { name: "timestamp", type: "text", notNull: false, hasDefault: false, generated: false },
+      { name: "added", type: "text", notNull: false, hasDefault: false, generated: false },
+    ]);
+    assert.equal(
+      ordered?.columns.some((column) => column.name === "replacement_only"),
+      false,
+    );
+    assert.equal(
+      ordered?.constraints.some(
+        (constraint) => constraint.name === "fk_ordered_shape_parent" && constraint.onDelete === "c",
+      ),
+      true,
+    );
+    assert.deepEqual(manifest.tables.find((table) => table.name === "disposable_ordered_shape")?.columns, [
+      { name: "current_id", type: "bigint", notNull: true, hasDefault: false, generated: false },
+    ]);
+    assert.deepEqual(
+      manifest.indexes.map(({ name, unique, keys }) => ({ name, unique, keys })),
+      [
+        {
+          name: "idx_ordered_shape_first",
+          unique: false,
+          keys: ["timestamp desc nulls last"],
+        },
+        {
+          name: "idx_ordered_shape_rebuilt",
+          unique: true,
+          keys: ["id desc"],
+        },
+      ],
+    );
+  });
+
+  it("builds deterministic exclusive replacement locks without weakening final validation locks", () => {
+    const manifest = {
+      tables: [
+        { name: "z_shape", columns: [], constraints: [] },
+        { name: "a_shape", columns: [], constraints: [] },
+        { name: "a_shape", columns: [], constraints: [] },
+      ],
+      indexes: [],
+    };
+
+    assert.equal(
+      buildPostgresSchemaShapeReplacementLockSql({ name: "quoted.schema", oid: "42" }, manifest),
+      'LOCK TABLE "quoted.schema"."a_shape", "quoted.schema"."z_shape" IN ACCESS EXCLUSIVE MODE',
+    );
+    assert.equal(
+      buildPostgresSchemaShapeRelationLockSql({ name: "quoted.schema", oid: "42" }, manifest),
+      'LOCK TABLE "quoted.schema"."z_shape", "quoted.schema"."a_shape", "quoted.schema"."a_shape" IN ACCESS SHARE MODE',
+    );
+    assert.equal(
+      buildPostgresSchemaShapeReplacementLockSql({ name: "quoted.schema", oid: "42" }, { tables: [], indexes: [] }),
+      "",
+    );
+    assert.equal(
+      buildPostgresSchemaShapeReplacementValidationSql("$1", "$2", "$3"),
+      POSTGRES_SCHEMA_SHAPE_REPLACEMENT_VALIDATION_SQL.replaceAll("@tablesJson", "$1")
+        .replaceAll("@indexesJson", "$2")
+        .replaceAll("@schemaOid", "$3"),
+    );
+    assert.match(POSTGRES_SCHEMA_SHAPE_REPLACEMENT_VALIDATION_SQL, /unexpected_constraint_issues/u);
+    assert.match(POSTGRES_SCHEMA_SHAPE_REPLACEMENT_VALIDATION_SQL, /unexpected_index_issues/u);
+    assert.match(POSTGRES_SCHEMA_SHAPE_REPLACEMENT_VALIDATION_SQL, /unexpected_statistics_issues/u);
+    assert.match(POSTGRES_SCHEMA_SHAPE_REPLACEMENT_VALIDATION_SQL, /unexpected_inheritance_issues/u);
+    assert.match(POSTGRES_SCHEMA_SHAPE_REPLACEMENT_VALIDATION_SQL, /unexpected_rule_issues/u);
+    assert.match(POSTGRES_SCHEMA_SHAPE_REPLACEMENT_VALIDATION_SQL, /unexpected_publication_issues/u);
+    assert.match(POSTGRES_SCHEMA_SHAPE_REPLACEMENT_VALIDATION_SQL, /actual\.canonical_posture/u);
+    assert.match(POSTGRES_SCHEMA_SHAPE_REPLACEMENT_VALIDATION_SQL, /NOT trigger_row\.tgisinternal/u);
+    assert.match(POSTGRES_SCHEMA_SHAPE_REPLACEMENT_VALIDATION_SQL, /unexpected row-security posture/u);
+  });
+
+  it("models one canonical final shape after bootstrap replacement and dynamic catalog normalization", () => {
+    const manifest = buildCanonicalPostgresSchemaShapeManifest(POSTGRES_MIGRATIONS);
+    assert.equal(manifest.tables.length, 311);
+    assert.equal(
+      manifest.tables.reduce((count, table) => count + table.columns.length, 0),
+      4_463,
+    );
+    assert.equal(manifest.indexes.length, 706);
+    assert.deepEqual(
+      manifest.tables
+        .find((table) => table.name === "chat_heartbeat_occurrences")
+        ?.constraints.filter((constraint) => constraint.type === "f")
+        .map((constraint) => constraint.name),
+      [
+        "fk_chat_heartbeat_occurrence_admission",
+        "fk_chat_heartbeat_occurrence_durable_run",
+        "fk_chat_heartbeat_occurrence_capability_profile",
+      ],
+    );
+    assert.deepEqual(
+      manifest.tables
+        .find((table) => table.name === "chat_turn_capability_profile_incarnation_bindings")
+        ?.constraints.filter((constraint) => constraint.type === "f")
+        .map((constraint) => constraint.name),
+      [null, "fk_chat_turn_cap_profile_binding_profile"],
+    );
+    assert.deepEqual(
+      manifest.tables
+        .find((table) => table.name === "chat_turn_secure_configuration_reservations")
+        ?.constraints.filter(
+          (constraint) => constraint.type === "f" && constraint.columns[0] === "reconciled_by_reservation_id",
+        )
+        .map((constraint) => ({ name: constraint.name, onDelete: constraint.onDelete })),
+      [
+        {
+          name: "chat_turn_secure_configuration_reservations_reconciled_by_fkey",
+          onDelete: "r",
+        },
+      ],
+    );
+    assert.deepEqual(manifest.indexes.find((index) => index.name === "idx_imported_agent_catalog_source_path")?.keys, [
+      "workspace_id",
+      "provenance_provider",
+      "coalesce(provenance_repo_url, '')",
+      "provenance_path",
+    ]);
+    assert.deepEqual(manifest.indexes.find((index) => index.name === "idx_audit_events_stream_time")?.keys, [
+      "stream_name",
+      "occurred_at desc",
+      "event_sequence desc",
+    ]);
+  });
+
+  it("keeps partial pre-v140 registries on structural secure-configuration FK identity", () => {
+    const v140Checks = new Set([
+      "assembly_runs_run_kind_check",
+      "assembly_runs_generation_check",
+      "chat_routed_context_snapshots_schema_version_v2_check",
+      "external_source_configs_input_flavor_posix_check",
+      "external_source_configs_target_flavor_posix_check",
+      "model_usage_events_cap_retry_lineage_check",
+      "workspace_path_bridge_snapshots_input_flavor_posix_check",
+      "workspace_path_bridge_snapshots_target_flavor_posix_check",
+    ]);
+    for (const head of [102, 105, 122, 128, 132, 139]) {
+      const manifest = buildCanonicalPostgresSchemaShapeManifest(
+        POSTGRES_MIGRATIONS.filter((migration) => migration.version <= head),
+      );
+      if (head >= 132) {
+        assert.deepEqual(
+          manifest.tables
+            .find((table) => table.name === "chat_turn_secure_configuration_reservations")
+            ?.constraints.filter(
+              (constraint) => constraint.type === "f" && constraint.columns[0] === "reconciled_by_reservation_id",
+            )
+            .map((constraint) => ({ name: constraint.name, onDelete: constraint.onDelete })),
+          [{ name: null, onDelete: "r" }],
+          `Postgres migration head ${head} must not require the v140 canonical FK name`,
+        );
+      }
+      assert.deepEqual(
+        manifest.tables
+          .flatMap((table) => table.constraints.map((constraint) => constraint.name))
+          .filter((name): name is string => name !== null && v140Checks.has(name)),
+        [],
+        `Postgres migration head ${head} must not claim schema-context-dependent CHECK authority before v140`,
+      );
+    }
+    const canonical = buildCanonicalPostgresSchemaShapeManifest(POSTGRES_MIGRATIONS);
+    assert.deepEqual(
+      new Set(
+        canonical.tables
+          .flatMap((table) => table.constraints.map((constraint) => constraint.name))
+          .filter((name): name is string => name !== null && v140Checks.has(name)),
+      ),
+      v140Checks,
+    );
+  });
+
+  it("covers every canonical IF NOT EXISTS table and index and fails closed on catalog issues", () => {
+    const manifest = buildPostgresSchemaShapeManifest(POSTGRES_MIGRATIONS);
+    assert.equal(manifest.tables.length, 311);
+    assert.equal(manifest.indexes.length, 716);
+    assert.equal(
+      manifest.tables.every((table) => table.columns.length > 0),
+      true,
+    );
+    assert.match(POSTGRES_SCHEMA_SHAPE_VALIDATION_SQL, /relation\.oid IS NULL/);
+    assert.match(POSTGRES_SCHEMA_SHAPE_VALIDATION_SQL, /relation\.relowner/);
+    assert.match(POSTGRES_SCHEMA_SHAPE_VALIDATION_SQL, /pg_get_expr\(index_row\.indpred/);
+    assert.match(POSTGRES_SCHEMA_SHAPE_VALIDATION_SQL, /indoption\[key_position - 1\]/);
+    assert.match(POSTGRES_SCHEMA_SHAPE_VALIDATION_SQL, /WHEN 1 THEN ' desc nulls last'/);
+    assert.match(POSTGRES_SCHEMA_SHAPE_VALIDATION_SQL, /pg_catalog\.replace\(/);
+    assert.match(POSTGRES_SCHEMA_SHAPE_VALIDATION_SQL, /OPERATOR\(pg_catalog\.\|\|\)/);
+    assert.match(POSTGRES_SCHEMA_SHAPE_VALIDATION_SQL, /"notNull" pg_catalog\.bool/);
+    assert.doesNotMatch(POSTGRES_SCHEMA_SHAPE_VALIDATION_SQL, /pg_catalog\.boolean/);
+    assert.doesNotMatch(POSTGRES_SCHEMA_SHAPE_VALIDATION_SQL, /pg_catalog\.integer/);
+    assert.match(
+      buildPostgresSchemaShapeRelationLockSql({ name: "quoted.schema", oid: "42" }, manifest),
+      /^LOCK TABLE "quoted\.schema"\./,
+    );
+    assert.throws(
+      () => assertPostgresSchemaShapeIssues([{ issue: "column sessions.account has a non-canonical shape" }]),
+      /canonical schema-shape validation failed.*sessions\.account/,
     );
   });
 

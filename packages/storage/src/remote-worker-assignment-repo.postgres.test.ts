@@ -6,6 +6,7 @@ import {
   REMOTE_WORKER_ASSIGNMENT_EVENT_GENESIS_SHA256,
   REMOTE_WORKER_ASSIGNMENT_EVENT_SCHEMA_VERSION,
   REMOTE_WORKER_ASSIGNMENT_MANIFEST_SCHEMA_VERSION,
+  REMOTE_WORKER_MESH_NODE_AUTHORITY_FENCE_SCHEMA_VERSION,
   REMOTE_WORKER_PROTOCOL_VERSION,
   REMOTE_WORKER_RUNTIME_MANIFEST_SCHEMA_VERSION,
   buildRemoteWorkerAssignmentParentContext,
@@ -64,6 +65,62 @@ describe("RemoteWorkerAssignmentRepository live PostgreSQL authority", () => {
         const started = h.assignments.startGeneration(h.startInput);
         assert.equal(started.lease.parentDispatchAuthority.durableRunVersion, 1);
         assert.ok(started.lease.expiresAt <= started.lease.parentDispatchAuthority.durableRunLeaseExpiresAt);
+
+        const protectedAdmissionEnvelopeSha256 = D(`${suffix}:protected-envelope`);
+        const protectedAdmissionContextSha256 = D(`${suffix}:protected-context`);
+        const protectedCommitFence = {
+          credentialAuthority: {
+            registryWorkspaceId: h.worker.generation.registryWorkspaceId,
+            bootstrapId: h.worker.generation.bootstrapId,
+            workerId: h.worker.generation.workerId,
+            workerGeneration: h.worker.generation.workerGeneration,
+            credentialId: h.worker.credential.credentialId,
+            credentialGeneration: h.worker.credential.credentialGeneration,
+            authorizationCredentialSha256: D(`${suffix}:credential`),
+            nodeId: h.worker.generation.nodeId,
+            clientCertificateSha256: h.worker.generation.clientCertificateSha256,
+            runtimeManifestSha256: h.worker.generation.runtimeManifestSha256,
+            workspaceCeilingSha256: h.worker.generation.workspaceCeilingSha256,
+            capabilityCeilingSha256: h.worker.generation.capabilityCeilingSha256,
+            protectedAdmissionEnvelopeSha256,
+            protectedAdmissionContextSha256,
+            claimsSha256: h.worker.credential.claimsSha256,
+          },
+          meshAdmission: {
+            schemaVersion: REMOTE_WORKER_MESH_NODE_AUTHORITY_FENCE_SCHEMA_VERSION,
+            registryWorkspaceId: h.worker.generation.registryWorkspaceId,
+            bootstrapId: h.worker.generation.bootstrapId,
+            workerId: h.worker.generation.workerId,
+            workerGeneration: h.worker.generation.workerGeneration,
+            credentialId: h.worker.credential.credentialId,
+            credentialGeneration: h.worker.credential.credentialGeneration,
+            workspaceId: "default",
+            nodeId: h.worker.generation.nodeId,
+            admissionGeneration: h.nodeAdmission.admissionGeneration,
+            joinAuthorityGeneration: 1,
+            joinCredentialSha256: D(`${suffix}:protected-join`),
+            protectedAdmissionEnvelopeSha256,
+            protectedAdmissionContextSha256,
+          },
+        } as const;
+        h.workerAdmissions.rotateRuntimeCredential({
+          registryWorkspaceId: h.worker.generation.registryWorkspaceId,
+          workerId: h.worker.generation.workerId,
+          workerGeneration: h.worker.generation.workerGeneration,
+          expectedCredentialId: h.worker.credential.credentialId,
+          expectedCredentialGeneration: h.worker.credential.credentialGeneration,
+          verifiedTransportReceiptSha256: D(`${suffix}:rotation-transport`),
+          verifiedProofOfPossessionReceiptSha256: D(`${suffix}:rotation-pop`),
+          credentialIssuanceProofSha256: D(`${suffix}:rotation-issuance`),
+          expiresInSeconds: 600,
+          credentialTokenSha256: D(`${suffix}:rotation-credential`),
+          idempotencyKey: `${suffix}:rotation`,
+        });
+        assert.throws(
+          () =>
+            h.assignments.resolveActiveAuthorityByLeaseTokenHash(h.startInput.leaseTokenSha256, protectedCommitFence),
+          /protected commit authority/u,
+        );
 
         const missingManifestField = { ...h.manifest } as Record<string, unknown>;
         delete missingManifestField.maxEventBytes;
@@ -416,7 +473,10 @@ function seedPostgresHarness(db: PostgresSyncDatabaseClient, seed: string) {
   } as const;
   return {
     durableRuns,
+    workerAdmissions,
     assignments,
+    worker,
+    nodeAdmission,
     durableRunId,
     taskId,
     manifest,

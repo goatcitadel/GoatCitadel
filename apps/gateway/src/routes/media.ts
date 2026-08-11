@@ -27,7 +27,7 @@ export const mediaRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.code(201).send(fastify.services.media.createMediaJob(parsed.data));
+      return reply.code(201).send(await fastify.services.media.createMediaJob(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -39,7 +39,7 @@ export const mediaRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.media.getMediaJob(params.data.jobId));
+      return reply.send(await fastify.services.media.getMediaJob(params.data.jobId));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -51,7 +51,7 @@ export const mediaRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: query.error.flatten() });
     }
     return reply.send({
-      items: fastify.services.media.listMediaJobs(query.data.sessionId),
+      items: await fastify.services.media.listMediaJobs(query.data.sessionId),
     });
   });
 
@@ -61,7 +61,7 @@ export const mediaRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.media.getChatAttachmentPreview(params.data.attachmentId));
+      return reply.send(await fastify.services.media.getChatAttachmentPreview(params.data.attachmentId));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }

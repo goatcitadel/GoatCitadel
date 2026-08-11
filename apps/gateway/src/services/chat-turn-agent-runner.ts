@@ -224,7 +224,10 @@ import {
   shouldUseConstrainedLocalAgentProfile,
   toolRunBudgetCostForToolCall,
 } from "./chat-agent-budget.js";
-import { buildPromptContextBudgetReceipt } from "./chat-agent-prompt-budget-receipt.js";
+import {
+  buildPromptContextBudgetReceipt,
+  shouldCapturePromptContextBudgetReceipt,
+} from "./chat-agent-prompt-budget-receipt.js";
 import { executionProfileFromNormalizationProfile } from "./chat-turn-execution-profile.js";
 import { isDurableControlError } from "./durable-control-error.js";
 import { INTERNAL_TOOL_EFFECT_POTENTIAL_KEY } from "./chat-message-sanitize.js";
@@ -523,6 +526,7 @@ const TOOL_SCHEMA_TOKEN_BUDGET = {
   cowork: 3200,
   code: 2800,
 } as const satisfies Record<ChatMode, number>;
+const TOOL_POLICY_PROBE_CONCURRENCY = 8;
 
 type PromptLabRunContract = ReturnType<typeof parsePromptLabRunContract>;
 
@@ -778,6 +782,24 @@ export interface ChatTurnAgentRunnerResult {
   };
 }
 
+type ChatToolAccessProbe = (request: {
+  toolName: string;
+  sessionId: string;
+  agentId: string;
+  taskId?: string;
+  runId?: string;
+  args?: Record<string, unknown>;
+  permissionProfileId?: string;
+  localOperatorOverrideId?: string;
+  surface?: ToolPolicyActorContext["surface"];
+  policyContext?: ToolPolicyActorContext;
+}) => Promise<{
+  allowed: boolean;
+  requiresApproval: boolean;
+  reasonCodes: string[];
+  matchedGrantId?: string;
+}>;
+
 export interface ChatTurnAgentRunnerDeps {
   storage: Storage;
   listToolCatalog: () => ToolCatalogEntry[];
@@ -834,6 +856,12 @@ export interface ChatTurnAgentRunnerDeps {
   listMcpBrowserFallbackTargets?: () => Promise<McpBrowserFallbackTarget[]>;
   /** Canonical operator decision projection for ordinary Chat tool runs. */
   recordRuntimeDecision?: (input: RuntimeDecisionTraceAppendInput) => Promise<void>;
+  /**
+   * Bounded, ordered advisory projection queue. The runner admits enqueueing
+   * through its canonical write fence after the tool row has settled; the
+   * Gateway owns persistence and shutdown drain off the response hot path.
+   */
+  enqueueRuntimeDecision?: (input: RuntimeDecisionTraceAppendInput) => boolean | void;
   persistToolArtifact?: (input: {
     sessionId: string;
     turnId: string;
@@ -851,23 +879,10 @@ export interface ChatTurnAgentRunnerDeps {
     contentType?: string;
     snippet?: string;
   }>;
-  evaluateToolAccess?: (request: {
-    toolName: string;
-    sessionId: string;
-    agentId: string;
-    taskId?: string;
-    runId?: string;
-    args?: Record<string, unknown>;
-    permissionProfileId?: string;
-    localOperatorOverrideId?: string;
-    surface?: ToolPolicyActorContext["surface"];
-    policyContext?: ToolPolicyActorContext;
-  }) => Promise<{
-    allowed: boolean;
-    requiresApproval: boolean;
-    reasonCodes: string[];
-    matchedGrantId?: string;
-  }>;
+  /** Legacy/fallback evaluator; hosts may durably record this explicit probe. */
+  evaluateToolAccess?: ChatToolAccessProbe;
+  /** Preferred non-materializing evaluator for frozen-profile and pre-dispatch probes. */
+  inspectToolAccess?: ChatToolAccessProbe;
   /** Fail-closed host readiness/profile gate before Chat renders a secure configuration card. */
   assertRuntimeConfigurationPromptAvailable?: (targetId: string) => void | Promise<void>;
   /** Revalidates a stranded, already-sealed prompt before exact-nonce crash recovery. */
@@ -948,6 +963,12 @@ export interface ChatTurnAgentRunnerDeps {
    * true forces the historical strictly-serial path.
    */
   parallelToolExecutionV1Disabled?: () => Promise<boolean>;
+  /**
+   * Diagnostic-only prompt-context receipt gate. Normal live turns omit the
+   * repeated full-context serialization; quick-web and prompt-pack proof
+   * profiles keep their required receipts independently of this switch.
+   */
+  promptContextBudgetReceiptEnabled?: () => boolean | Promise<boolean>;
   attachedContextToolsV1Enabled?: () => Promise<boolean>;
   /**
    * R3-8 `agent.fanout` kill switch (`subagentFanoutV1Disabled`). Read live
@@ -1017,6 +1038,28 @@ function throwSystemHeartbeatToolInvocationBlocked(toolName: string): never {
   throw error;
 }
 
+/** Bounded worker pool that preserves the input order of policy evidence. */
+async function mapWithBoundedConcurrency<TItem, TResult>(
+  items: readonly TItem[],
+  limit: number,
+  mapper: (item: TItem, index: number) => Promise<TResult>,
+): Promise<TResult[]> {
+  if (items.length === 0) return [];
+  const results = new Array<TResult>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.max(1, Math.min(items.length, Math.floor(limit)));
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < items.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        results[index] = await mapper(items[index] as TItem, index);
+      }
+    }),
+  );
+  return results;
+}
+
 export function buildTurnToolPolicyContext(
   input: Partial<ChatTurnAgentRunnerInput>,
   overrides: Partial<ToolPolicyActorContext> = {},
@@ -1038,8 +1081,10 @@ export function buildTurnToolPolicyContext(
 
 export class ChatTurnAgentRunner {
   private readonly browserFallbackDeps: BrowserFallbackExecutorDeps;
+  private readonly toolAccessProbe?: ChatToolAccessProbe;
 
   public constructor(private readonly deps: ChatTurnAgentRunnerDeps) {
+    this.toolAccessProbe = deps.inspectToolAccess ?? deps.evaluateToolAccess;
     this.browserFallbackDeps = {
       invokeTool: deps.invokeTool,
       invokeMcpTool: deps.invokeMcpTool,
@@ -1106,29 +1151,40 @@ export class ChatTurnAgentRunner {
     }
     const policyDecisions: ResolvedChatTurnToolSchema["policyDecisions"] = [];
     const allowedCanonicalNames = new Set<string>();
-    for (const canonicalName of schema.canonicalToModel.keys()) {
-      if (!this.deps.evaluateToolAccess) {
-        policyDecisions.push({
-          toolName: canonicalName,
-          allowed: false,
-          requiresApproval: false,
-          reasonCodes: ["policy_evaluation_unavailable"],
-        });
-        continue;
-      }
-      try {
-        const access = await this.deps.evaluateToolAccess({
-          toolName: canonicalName,
-          sessionId: input.sessionId,
-          agentId: "assistant",
-          taskId: input.policyTaskId,
-          runId: input.policyRunId,
-          args: buildToolAccessProbeArgs(canonicalName, this.deps.safeWriteFallbackDir),
-          permissionProfileId: input.permissionProfileId,
-          localOperatorOverrideId: input.localOperatorOverrideId,
-          surface: input.mode,
-          policyContext: buildTurnToolPolicyContext(input),
-        });
+    const canonicalNames = [...schema.canonicalToModel.keys()];
+    const evaluateToolAccess = this.toolAccessProbe;
+    const policyContext = buildTurnToolPolicyContext(input);
+    const probes = await mapWithBoundedConcurrency(
+      canonicalNames,
+      TOOL_POLICY_PROBE_CONCURRENCY,
+      async (canonicalName) => {
+        if (!evaluateToolAccess) {
+          return { canonicalName, access: undefined, unavailable: true };
+        }
+        try {
+          return {
+            canonicalName,
+            access: await evaluateToolAccess({
+              toolName: canonicalName,
+              sessionId: input.sessionId,
+              agentId: "assistant",
+              taskId: input.policyTaskId,
+              runId: input.policyRunId,
+              args: buildToolAccessProbeArgs(canonicalName, this.deps.safeWriteFallbackDir),
+              permissionProfileId: input.permissionProfileId,
+              localOperatorOverrideId: input.localOperatorOverrideId,
+              surface: input.mode,
+              policyContext,
+            }),
+            unavailable: false,
+          };
+        } catch {
+          return { canonicalName, access: undefined, unavailable: false };
+        }
+      },
+    );
+    for (const { canonicalName, access, unavailable } of probes) {
+      if (access) {
         policyDecisions.push({
           toolName: canonicalName,
           allowed: access.allowed,
@@ -1139,12 +1195,12 @@ export class ChatTurnAgentRunner {
         if (access.allowed && !access.requiresApproval) {
           allowedCanonicalNames.add(canonicalName);
         }
-      } catch {
+      } else {
         policyDecisions.push({
           toolName: canonicalName,
           allowed: false,
           requiresApproval: false,
-          reasonCodes: ["policy_evaluation_failed"],
+          reasonCodes: [unavailable ? "policy_evaluation_unavailable" : "policy_evaluation_failed"],
         });
       }
     }
@@ -1785,6 +1841,11 @@ export class ChatTurnAgentRunner {
     const normalizationProfile = input.normalizationProfile ?? "live";
     const executionProfile = executionProfileFromNormalizationProfile(normalizationProfile);
     const quickWebProfile = executionProfile === "quick_web";
+    const capturePromptContextBudgetReceipt = shouldCapturePromptContextBudgetReceipt({
+      debugEnabled: Boolean(await this.deps.promptContextBudgetReceiptEnabled?.()),
+      executionProfile,
+      normalizationProfile,
+    });
     const promptLabContract = parsePromptLabRunContract(input.content);
     const localBusinessResearchExpected = Boolean(buildLocalBusinessResearchPlan(input.content));
     const promptLabHarnessTurnForIntent =
@@ -1987,11 +2048,11 @@ export class ChatTurnAgentRunner {
         persistedRun.toolName === RUNTIME_CONFIGURE_TOOL_NAME &&
         persistedRun.approvalId &&
         persistedRun.result &&
-        this.deps.evaluateToolAccess
+        this.toolAccessProbe
       ) {
         const targetId = readRuntimeConfigurationTargetFromResult(persistedRun.toolName, persistedRun.result);
         if (targetId) {
-          const access = await this.deps.evaluateToolAccess({
+          const access = await this.toolAccessProbe({
             toolName: RUNTIME_CONFIGURE_TOOL_NAME,
             args: { targetId },
             agentId: "assistant",
@@ -2227,10 +2288,10 @@ export class ChatTurnAgentRunner {
     let effectiveTurnBudgetMs = executionBudget.turnBudgetMs;
     let effectiveCompletionTimeoutMs = executionBudget.completionTimeoutMs;
     let turnBudgetDeadline = createTurnBudgetDeadline(effectiveTurnBudgetMs);
-    const coworkCheckpointContinuation = executionBudget.loopLimitBehavior === "checkpoint_continue";
-    let coworkContinuationWindowIndex = 0;
-    let coworkNoProgressWindowCount = 0;
-    let coworkContinuationProgressSnapshot = captureCoworkContinuationProgress({
+    const checkpointContinuation = executionBudget.loopLimitBehavior === "checkpoint_continue";
+    let continuationWindowIndex = 0;
+    let noProgressWindowCount = 0;
+    let continuationProgressSnapshot = captureCoworkContinuationProgress({
       citations,
       localBusinessResearchExpected,
       promptLabContract,
@@ -3588,12 +3649,16 @@ export class ChatTurnAgentRunner {
               : rawToolsForCompletion;
           routingState = {
             ...routingState,
-            promptContextBudget: buildPromptContextBudgetReceipt({
-              executionProfile,
-              messages: conversationMessages,
-              tools: toolsForCompletion,
-              toolRuns,
-            }),
+            ...(capturePromptContextBudgetReceipt
+              ? {
+                  promptContextBudget: buildPromptContextBudgetReceipt({
+                    executionProfile,
+                    messages: conversationMessages,
+                    tools: toolsForCompletion,
+                    toolRuns,
+                  }),
+                }
+              : {}),
           };
           const completionRequest: ChatCompletionRequest = {
             providerId: input.providerId,
@@ -4175,12 +4240,12 @@ export class ChatTurnAgentRunner {
           // registry-safe read-only tools. The serial loop is the single
           // place that pauses on the first approval, so route there.
           const batchAccessApprovalFree = async (): Promise<boolean> => {
-            if (!this.deps.evaluateToolAccess) {
+            if (!this.toolAccessProbe) {
               return false;
             }
             try {
               for (const call of toolCalls) {
-                const access = await this.deps.evaluateToolAccess({
+                const access = await this.toolAccessProbe({
                   toolName: call.toolName,
                   sessionId: input.sessionId,
                   agentId: "assistant",
@@ -4281,14 +4346,14 @@ export class ChatTurnAgentRunner {
               if (
                 toolCall.toolName === RUNTIME_CONFIGURE_TOOL_NAME &&
                 reusableApprovedRun.result &&
-                this.deps.evaluateToolAccess
+                this.toolAccessProbe
               ) {
                 const targetId = readRuntimeConfigurationTargetFromResult(
                   reusableApprovedRun.toolName,
                   reusableApprovedRun.result,
                 );
                 if (targetId) {
-                  const access = await this.deps.evaluateToolAccess({
+                  const access = await this.toolAccessProbe({
                     toolName: RUNTIME_CONFIGURE_TOOL_NAME,
                     args: { targetId },
                     agentId: "assistant",
@@ -4380,10 +4445,10 @@ export class ChatTurnAgentRunner {
             }
             const toolRunBudgetCost = toolRunBudgetCostForToolCall(toolCall.toolName, toolCall.args);
             if (toolRunCount + toolRunBudgetCost > executionBudget.maxToolRunsPerTurn) {
-              if (coworkCheckpointContinuation) {
+              if (checkpointContinuation) {
                 coworkToolRunBudgetCheckpoint = true;
                 flushSkippedToolCallResults(
-                  `Cowork checkpoint window reached ${executionBudget.maxToolRunsPerTurn} tool calls; continue from gathered evidence.`,
+                  `Tool checkpoint window reached ${executionBudget.maxToolRunsPerTurn} tool calls; continue from gathered evidence.`,
                 );
                 break;
               }
@@ -4730,27 +4795,24 @@ export class ChatTurnAgentRunner {
             break;
           }
 
-          if (
-            coworkCheckpointContinuation &&
-            (coworkToolRunBudgetCheckpoint || loop + 1 >= executionBudget.maxToolLoops)
-          ) {
+          if (checkpointContinuation && (coworkToolRunBudgetCheckpoint || loop + 1 >= executionBudget.maxToolLoops)) {
             const nextSnapshot = captureCoworkContinuationProgress({
               citations,
               localBusinessResearchExpected,
               promptLabContract,
               toolRuns,
             });
-            const windowHadProgress = hasCoworkContinuationProgress(coworkContinuationProgressSnapshot, nextSnapshot);
-            coworkNoProgressWindowCount = windowHadProgress ? 0 : coworkNoProgressWindowCount + 1;
+            const windowHadProgress = hasCoworkContinuationProgress(continuationProgressSnapshot, nextSnapshot);
+            noProgressWindowCount = windowHadProgress ? 0 : noProgressWindowCount + 1;
             const checkpointLimitLabel = coworkToolRunBudgetCheckpoint
               ? `${executionBudget.maxToolRunsPerTurn} tool-call`
               : `${executionBudget.maxToolLoops} loop`;
             const checkpointReason = buildCoworkLoopCheckpointReason({
               checkpointLimitLabel,
               maxToolLoops: executionBudget.maxToolLoops,
-              noProgressWindowCount: coworkNoProgressWindowCount,
+              noProgressWindowCount,
               windowHadProgress,
-              windowIndex: coworkContinuationWindowIndex + 1,
+              windowIndex: continuationWindowIndex + 1,
             });
             routingState = {
               ...routingState,
@@ -4773,10 +4835,10 @@ export class ChatTurnAgentRunner {
                 citations: [...citations],
               },
             };
-            if (coworkNoProgressWindowCount >= 2) {
+            if (noProgressWindowCount >= 2) {
               const repeatedLoopReason = buildCoworkRepeatedLoopDiagnostic(
                 checkpointLimitLabel,
-                coworkNoProgressWindowCount,
+                noProgressWindowCount,
                 nextSnapshot,
               );
               routingState = {
@@ -4797,13 +4859,13 @@ export class ChatTurnAgentRunner {
               content: buildCoworkLoopContinuationInstruction({
                 checkpointLimitLabel,
                 maxToolLoops: executionBudget.maxToolLoops,
-                noProgressWindowCount: coworkNoProgressWindowCount,
+                noProgressWindowCount,
                 windowHadProgress,
-                windowIndex: coworkContinuationWindowIndex + 1,
+                windowIndex: continuationWindowIndex + 1,
               }),
             } as ChatCompletionMessage);
-            coworkContinuationWindowIndex += 1;
-            coworkContinuationProgressSnapshot = nextSnapshot;
+            continuationWindowIndex += 1;
+            continuationProgressSnapshot = nextSnapshot;
             toolRunCount = 0;
             loop = -1;
             continue;
@@ -5549,13 +5611,18 @@ export class ChatTurnAgentRunner {
     const webLookupIntent = intents.webLookup || [...explicitToolMentions].some((toolName) => isWebToolName(toolName));
     const promptLabHasExplicitToolFamily =
       promptLabContract.requiredNamedTools.length > 0 || promptLabContract.requiredToolFamilies.length > 0;
-    const recentToolRuns = await this.deps.storage.chatToolRuns.listBySession(input.sessionId, 200);
-    const projectBound = Boolean((await this.deps.storage.chatSessionProjects.get(input.sessionId))?.projectId);
-    const activePlan = this.deps.storage.chatExecutionPlans
-      ? selectActiveExecutionPlan(await this.deps.storage.chatExecutionPlans.listBySession(input.sessionId, 20))
-      : undefined;
+    const [recentToolRuns, sessionProject, executionPlans] = await Promise.all([
+      this.deps.storage.chatToolRuns.listBySession(input.sessionId, 200),
+      this.deps.storage.chatSessionProjects.get(input.sessionId),
+      this.deps.storage.chatExecutionPlans
+        ? this.deps.storage.chatExecutionPlans.listBySession(input.sessionId, 20)
+        : Promise.resolve([]),
+    ]);
+    const projectBound = Boolean(sessionProject?.projectId);
+    const activePlan = selectActiveExecutionPlan(executionPlans);
     const suggestedTools = new Set(selectExecutionPlanSuggestedTools(activePlan));
     const failedCounts = buildRecentToolFailureCounts(recentToolRuns);
+    const staticallyEligibleCatalog: ToolCatalogEntry[] = [];
     const filteredCatalog: ToolCatalogEntry[] = [];
     const exactSystemHeartbeat = isExactSystemHeartbeatRunnerPosture(input);
     const policyDecisions: ResolvedChatTurnToolSchema["policyDecisions"] = [];
@@ -5669,45 +5736,63 @@ export class ChatTurnAgentRunner {
       ) {
         continue;
       }
-      if (!this.deps.evaluateToolAccess) {
-        if (!exactSystemHeartbeat) {
-          filteredCatalog.push(tool);
-        }
-        continue;
+      staticallyEligibleCatalog.push(tool);
+    }
+    const evaluateToolAccess = this.toolAccessProbe;
+    if (!evaluateToolAccess) {
+      if (!exactSystemHeartbeat) {
+        filteredCatalog.push(...staticallyEligibleCatalog);
       }
-      try {
-        const access = await this.deps.evaluateToolAccess({
-          toolName: tool.toolName,
-          sessionId: input.sessionId,
-          agentId: "assistant",
-          taskId: input.policyTaskId,
-          runId: input.policyRunId,
-          args: buildToolAccessProbeArgs(tool.toolName, this.deps.safeWriteFallbackDir),
-          permissionProfileId: input.permissionProfileId,
-          localOperatorOverrideId: input.localOperatorOverrideId,
-          surface: input.mode,
-          policyContext: buildTurnToolPolicyContext(input),
-        });
-        policyDecisions.push({
-          toolName: tool.toolName,
-          allowed: access.allowed,
-          requiresApproval: access.requiresApproval,
-          reasonCodes: [...access.reasonCodes],
-          ...(access.matchedGrantId ? { matchedGrantId: access.matchedGrantId } : {}),
-        });
-        if (!access.allowed || (exactSystemHeartbeat && access.requiresApproval)) {
+    } else {
+      const policyContext = buildTurnToolPolicyContext(input);
+      const probes = await mapWithBoundedConcurrency(
+        staticallyEligibleCatalog,
+        TOOL_POLICY_PROBE_CONCURRENCY,
+        async (tool) => {
+          try {
+            return {
+              tool,
+              access: await evaluateToolAccess({
+                toolName: tool.toolName,
+                sessionId: input.sessionId,
+                agentId: "assistant",
+                taskId: input.policyTaskId,
+                runId: input.policyRunId,
+                args: buildToolAccessProbeArgs(tool.toolName, this.deps.safeWriteFallbackDir),
+                permissionProfileId: input.permissionProfileId,
+                localOperatorOverrideId: input.localOperatorOverrideId,
+                surface: input.mode,
+                policyContext,
+              }),
+            };
+          } catch {
+            return { tool, access: undefined };
+          }
+        },
+      );
+      for (const { tool, access } of probes) {
+        if (access) {
+          policyDecisions.push({
+            toolName: tool.toolName,
+            allowed: access.allowed,
+            requiresApproval: access.requiresApproval,
+            reasonCodes: [...access.reasonCodes],
+            ...(access.matchedGrantId ? { matchedGrantId: access.matchedGrantId } : {}),
+          });
+          if (!access.allowed || (exactSystemHeartbeat && access.requiresApproval)) {
+            continue;
+          }
+        } else {
+          policyDecisions.push({
+            toolName: tool.toolName,
+            allowed: false,
+            requiresApproval: false,
+            reasonCodes: ["policy_evaluation_failed"],
+          });
           continue;
         }
-      } catch {
-        policyDecisions.push({
-          toolName: tool.toolName,
-          allowed: false,
-          requiresApproval: false,
-          reasonCodes: ["policy_evaluation_failed"],
-        });
-        continue;
+        filteredCatalog.push(tool);
       }
-      filteredCatalog.push(tool);
     }
     const scoredCatalog = filteredCatalog
       .map((tool) => ({
@@ -5838,15 +5923,15 @@ export class ChatTurnAgentRunner {
         reasonCodes: frozen?.reasonCodes ? [...frozen.reasonCodes] : ["capability_profile_not_authorized"],
       };
     }
-    if (!this.deps.evaluateToolAccess) {
+    if (!this.toolAccessProbe) {
       return {
         blockedReason: "Current tool policy cannot be evaluated against the frozen capability profile.",
         reasonCodes: ["policy_evaluation_unavailable"],
       };
     }
-    let current: Awaited<ReturnType<NonNullable<ChatTurnAgentRunnerDeps["evaluateToolAccess"]>>>;
+    let current: Awaited<ReturnType<ChatToolAccessProbe>>;
     try {
-      current = await this.deps.evaluateToolAccess({
+      current = await this.toolAccessProbe({
         toolName: tool.toolName,
         sessionId: input.sessionId,
         agentId: "assistant",
@@ -6161,8 +6246,8 @@ export class ChatTurnAgentRunner {
       if (candidate?.secureConfiguration) {
         try {
           await this.deps.assertRuntimeConfigurationPromptAvailable?.(candidate.secureConfiguration.targetId);
-          if (res.record.toolName !== RUNTIME_CONFIGURE_TOOL_NAME && this.deps.evaluateToolAccess) {
-            const access = await this.deps.evaluateToolAccess({
+          if (res.record.toolName !== RUNTIME_CONFIGURE_TOOL_NAME && this.toolAccessProbe) {
+            const access = await this.toolAccessProbe({
               toolName: RUNTIME_CONFIGURE_TOOL_NAME,
               args: { targetId: candidate.secureConfiguration.targetId },
               agentId: "assistant",
@@ -6196,8 +6281,8 @@ export class ChatTurnAgentRunner {
             } else {
               res.userInputPrompt = candidate;
             }
-          } else if (this.deps.evaluateToolAccess) {
-            const access = await this.deps.evaluateToolAccess({
+          } else if (this.toolAccessProbe) {
+            const access = await this.toolAccessProbe({
               toolName: RUNTIME_CONFIGURE_TOOL_NAME,
               args: { targetId: candidate.secureConfiguration.targetId },
               agentId: "assistant",
@@ -6267,7 +6352,7 @@ export class ChatTurnAgentRunner {
     input: ChatTurnAgentRunnerInput,
     toolRun: ChatToolRunRecord,
   ): Promise<void> {
-    if (!this.deps.recordRuntimeDecision) return;
+    if (!this.deps.enqueueRuntimeDecision && !this.deps.recordRuntimeDecision) return;
     const kind: RuntimeDecisionTraceAppendInput["kind"] = toolRun.reused
       ? "tool_reused"
       : toolRun.status === "approval_required"
@@ -6295,55 +6380,60 @@ export class ChatTurnAgentRunner {
           (toolRun.reused
             ? (toolRun.reuseReason ?? "A prior compatible tool result was reused.")
             : "Chat selected and settled this tool through the Gateway runtime."));
+    const decision: RuntimeDecisionTraceAppendInput = {
+      kind,
+      scope: {
+        workspaceId: input.capabilityProfile?.identity.workspaceId,
+        sessionId: toolRun.sessionId,
+        turnId: toolRun.turnId,
+        runId: input.policyRunId,
+        toolRunId: toolRun.toolRunId,
+        approvalId: toolRun.approvalId,
+      },
+      selected,
+      rationale,
+      signals: [
+        { source: "capability", key: "tool_name", value: toolRun.toolName, weight: "strong" },
+        { source: "tool_result", key: "tool_status", value: toolRun.status, weight: "strong" },
+        { source: "capability", key: "effect_potential", value: toolRun.effectPotential ?? null, weight: "strong" },
+        {
+          source: "tool_result",
+          key: "effect_disposition",
+          value: toolRun.effectDisposition ?? null,
+          weight: toolRun.effectDisposition === "unknown" ? "blocking" : "strong",
+        },
+        {
+          source: "tool_result",
+          key: "effect_outcome_kind",
+          value: toolRun.effectOutcomeKind ?? null,
+          weight: toolRun.effectOutcomeKind === "uncertain" ? "blocking" : "strong",
+        },
+        {
+          source: "tool_result",
+          key: "effect_evidence_reason",
+          value: toolRun.effectEvidence?.reason ?? null,
+          weight: "informational",
+        },
+        { source: "approval", key: "approval_id", value: toolRun.approvalId ?? null },
+      ],
+      evidenceRefs: [
+        { refType: "tool_run", refId: toolRun.toolRunId },
+        ...(toolRun.approvalId ? [{ refType: "approval" as const, refId: toolRun.approvalId }] : []),
+        ...(toolRun.effectEvidence?.refs.map((ref) => ({
+          refType: "event" as const,
+          refId: ref.refId,
+          label: `tool_effect:${ref.owner}`,
+        })) ?? []),
+      ],
+    };
     try {
-      await this.runCanonicalWrite(input, () =>
-        this.deps.recordRuntimeDecision?.({
-          kind,
-          scope: {
-            workspaceId: input.capabilityProfile?.identity.workspaceId,
-            sessionId: toolRun.sessionId,
-            turnId: toolRun.turnId,
-            runId: input.policyRunId,
-            toolRunId: toolRun.toolRunId,
-            approvalId: toolRun.approvalId,
-          },
-          selected,
-          rationale,
-          signals: [
-            { source: "capability", key: "tool_name", value: toolRun.toolName, weight: "strong" },
-            { source: "tool_result", key: "tool_status", value: toolRun.status, weight: "strong" },
-            { source: "capability", key: "effect_potential", value: toolRun.effectPotential ?? null, weight: "strong" },
-            {
-              source: "tool_result",
-              key: "effect_disposition",
-              value: toolRun.effectDisposition ?? null,
-              weight: toolRun.effectDisposition === "unknown" ? "blocking" : "strong",
-            },
-            {
-              source: "tool_result",
-              key: "effect_outcome_kind",
-              value: toolRun.effectOutcomeKind ?? null,
-              weight: toolRun.effectOutcomeKind === "uncertain" ? "blocking" : "strong",
-            },
-            {
-              source: "tool_result",
-              key: "effect_evidence_reason",
-              value: toolRun.effectEvidence?.reason ?? null,
-              weight: "informational",
-            },
-            { source: "approval", key: "approval_id", value: toolRun.approvalId ?? null },
-          ],
-          evidenceRefs: [
-            { refType: "tool_run", refId: toolRun.toolRunId },
-            ...(toolRun.approvalId ? [{ refType: "approval" as const, refId: toolRun.approvalId }] : []),
-            ...(toolRun.effectEvidence?.refs.map((ref) => ({
-              refType: "event" as const,
-              refId: ref.refId,
-              label: `tool_effect:${ref.owner}`,
-            })) ?? []),
-          ],
-        }),
-      );
+      await this.runCanonicalWrite(input, () => {
+        if (this.deps.enqueueRuntimeDecision) {
+          this.deps.enqueueRuntimeDecision(decision);
+          return;
+        }
+        return this.deps.recordRuntimeDecision?.(decision);
+      });
     } catch (error) {
       if (isDurableControlError(error)) throw error;
       // Decision traces are an operator projection; the tool row remains the
@@ -6449,21 +6539,15 @@ export class ChatTurnAgentRunner {
     const startedAt = new Date().toISOString();
     const toolRunId = randomUUID();
     let effectPotential = this.resolveToolEffectPotential(input.input, preflight.toolName);
-    const effectScope = await this.resolveToolEffectScope(input.input, input.turnId);
-    const created = await this.createToolRun(input.input, {
-      toolRunId,
-      turnId: input.turnId,
-      sessionId: input.input.sessionId,
-      toolName: preflight.toolName,
-      status: "started",
-      args: preflight.args,
-      ...this.buildToolEffectPatch({ potential: effectPotential, phase: "planned" }),
-      startedAt,
-    });
 
     if (preflight.blockedReason) {
-      const updated = await this.patchToolRun(input.input, created.toolRunId, {
+      const updated = await this.createToolRun(input.input, {
+        toolRunId,
+        turnId: input.turnId,
+        sessionId: input.input.sessionId,
+        toolName: preflight.toolName,
         status: "blocked",
+        args: preflight.args,
         ...this.buildToolEffectPatch({ potential: effectPotential, phase: "pre_dispatch_blocked" }),
         error: preflight.blockedReason,
         failureGuidance: buildToolFailureGuidance({
@@ -6473,6 +6557,7 @@ export class ChatTurnAgentRunner {
           error: preflight.blockedReason,
           blockerStrictness: await this.readBlockerStrictness(),
         }),
+        startedAt,
         finishedAt: new Date().toISOString(),
       });
       return {
@@ -6487,8 +6572,13 @@ export class ChatTurnAgentRunner {
     }
 
     if (preflight.failureReason) {
-      const updated = await this.patchToolRun(input.input, created.toolRunId, {
+      const updated = await this.createToolRun(input.input, {
+        toolRunId,
+        turnId: input.turnId,
+        sessionId: input.input.sessionId,
+        toolName: preflight.toolName,
         status: "failed",
+        args: preflight.args,
         ...this.buildToolEffectPatch({ potential: effectPotential, phase: "pre_dispatch_blocked" }),
         error: preflight.failureReason,
         failureGuidance: buildToolFailureGuidance({
@@ -6497,6 +6587,7 @@ export class ChatTurnAgentRunner {
           args: preflight.args,
           error: preflight.failureReason,
         }),
+        startedAt,
         finishedAt: new Date().toISOString(),
       });
       return {
@@ -6515,8 +6606,13 @@ export class ChatTurnAgentRunner {
       if (isExactSystemHeartbeatRunnerPosture(input.input)) {
         throwSystemHeartbeatToolInvocationBlocked(preflight.toolName);
       }
-      const updated = await this.patchToolRun(input.input, created.toolRunId, {
+      const updated = await this.createToolRun(input.input, {
+        toolRunId,
+        turnId: input.turnId,
+        sessionId: input.input.sessionId,
+        toolName: preflight.toolName,
         status: "blocked",
+        args: preflight.args,
         ...this.buildToolEffectPatch({ potential: effectPotential, phase: "pre_dispatch_blocked" }),
         result: {
           policyRevalidation: {
@@ -6540,6 +6636,7 @@ export class ChatTurnAgentRunner {
           error: capabilityProfileBlock,
           blockerStrictness: await this.readBlockerStrictness(),
         }),
+        startedAt,
         finishedAt: new Date().toISOString(),
       });
       return {
@@ -6573,8 +6670,13 @@ export class ChatTurnAgentRunner {
       input.priorToolRuns,
     );
     if (reusableResult) {
-      const updated = await this.patchToolRun(input.input, created.toolRunId, {
+      const updated = await this.createToolRun(input.input, {
+        toolRunId,
+        turnId: input.turnId,
+        sessionId: input.input.sessionId,
+        toolName: preflight.toolName,
         status: "executed",
+        args: preflight.args,
         ...this.buildToolEffectPatch({ potential: effectPotential, phase: "reused" }),
         reused: true,
         reusedFromToolRunId: reusableResult.toolRunId,
@@ -6586,6 +6688,7 @@ export class ChatTurnAgentRunner {
           reusedResult: true,
           reuseReason: "matching_recent_browser_result",
         },
+        startedAt,
         finishedAt: new Date().toISOString(),
       });
       return {
@@ -6622,10 +6725,16 @@ export class ChatTurnAgentRunner {
         ...annotationResult,
         localBusinessResearch: annotationResult,
       };
-      const updated = await this.patchToolRun(input.input, created.toolRunId, {
+      const updated = await this.createToolRun(input.input, {
+        toolRunId,
+        turnId: input.turnId,
+        sessionId: input.input.sessionId,
+        toolName: preflight.toolName,
         status: "executed",
+        args: preflight.args,
         ...this.buildToolEffectPatch({ potential: effectPotential, phase: "completed" }),
         result: result as Record<string, unknown>,
+        startedAt,
         finishedAt: new Date().toISOString(),
       });
       return {
@@ -6639,6 +6748,17 @@ export class ChatTurnAgentRunner {
       };
     }
 
+    const effectScope = await this.resolveToolEffectScope(input.input, input.turnId);
+    const created = await this.createToolRun(input.input, {
+      toolRunId,
+      turnId: input.turnId,
+      sessionId: input.input.sessionId,
+      toolName: preflight.toolName,
+      status: "started",
+      args: preflight.args,
+      ...this.buildToolEffectPatch({ potential: effectPotential, phase: "planned" }),
+      startedAt,
+    });
     const sourceAttribution = collectSourceAttributionFromToolRuns(input.priorToolRuns);
     const effectInvocationContext: ToolEffectInvocationContext = {
       toolRunId: created.toolRunId,
@@ -9861,7 +9981,7 @@ function buildCoworkLoopCheckpointReason(input: {
     ? "progress observed"
     : `no new progress (${input.noProgressWindowCount} consecutive window)`;
   const checkpointLimitLabel = input.checkpointLimitLabel ?? `${input.maxToolLoops} loop`;
-  return `Cowork loop checkpoint ${input.windowIndex}: exhausted ${checkpointLimitLabel} window; ${progressLabel}; continuing from gathered evidence.`;
+  return `Tool loop checkpoint ${input.windowIndex}: exhausted ${checkpointLimitLabel} window; ${progressLabel}; continuing from gathered evidence.`;
 }
 
 function buildCoworkLoopContinuationInstruction(input: {
@@ -9876,7 +9996,7 @@ function buildCoworkLoopContinuationInstruction(input: {
     : `The last window produced no new tool results, source URLs, child completions, required-field progress, or structured local-business research progress (${input.noProgressWindowCount} consecutive no-progress window). Change approach once or synthesize the partial truth.`;
   const checkpointLimitLabel = input.checkpointLimitLabel ?? `${input.maxToolLoops}-loop`;
   return [
-    `Cowork continuation checkpoint ${input.windowIndex}: the ${checkpointLimitLabel} checkpoint window is exhausted.`,
+    `Tool continuation checkpoint ${input.windowIndex}: the ${checkpointLimitLabel} checkpoint window is exhausted.`,
     progressGuidance,
     "Do not restart the task or repeat identical tool calls. Use narrower arguments when another tool call is needed.",
     "Prefer a clear checkpoint or final synthesis over open-ended tool work.",
@@ -9891,7 +10011,7 @@ function buildCoworkRepeatedLoopDiagnostic(
   const researchDiagnostics = buildCoworkResearchDiagnosticCodes(snapshot);
   const diagnosticsSuffix =
     researchDiagnostics.length > 0 ? ` Research diagnostics: ${researchDiagnostics.join(", ")}.` : "";
-  return `repeated_tool_loop: Cowork continuation stopped after ${noProgressWindowCount} consecutive ${checkpointLimitLabel} checkpoint windows without new tool results, source URLs, child completions, required-field progress, or structured local-business research progress.${diagnosticsSuffix}`;
+  return `repeated_tool_loop: Tool continuation stopped after ${noProgressWindowCount} consecutive ${checkpointLimitLabel} checkpoint windows without new tool results, source URLs, child completions, required-field progress, or structured local-business research progress.${diagnosticsSuffix}`;
 }
 
 function buildCoworkResearchDiagnosticCodes(snapshot: CoworkContinuationProgressSnapshot): string[] {

@@ -7,6 +7,7 @@ import {
   REMOTE_WORKER_PROTOCOL_HEADERS,
   buildRemoteWorkerPopMaterial,
   consumeRemoteWorkerDurableNonce,
+  prepareRemoteWorkerProofOfPossession,
   remoteWorkerProtocolBodySha256,
   snapshotRemoteWorkerDurableNonceConsumption,
   verifyRemoteWorkerProofOfPossession,
@@ -115,6 +116,38 @@ function verifyFixture(fixture: SignedFixture) {
 }
 
 describe("remote worker proof-of-possession protocol", () => {
+  it("prepares a verified proof without consuming its nonce for an atomic owner transaction", () => {
+    const fixture = signedFixture();
+    const prepared = prepareRemoteWorkerProofOfPossession({
+      method: "POST",
+      rawPath: PATH,
+      headers: fixture.headers,
+      body: fixture.body,
+      expectedOperation: OPERATION,
+      authority: fixture.authority,
+      transportIdentity: fixture.transportIdentity,
+      now: NOW,
+    });
+
+    expect(prepared.receipt).toMatchObject({
+      authorityId: "bootstrap-1",
+      authorityGeneration: 1,
+      operation: OPERATION,
+    });
+    expect(canonicalJsonString(prepared.body)).toBe(canonicalJsonString(fixture.body));
+    expect(remoteWorkerProtocolBodySha256(prepared.body)).toBe(remoteWorkerProtocolBodySha256(fixture.body));
+    expect(prepared.nonce).toStrictEqual({
+      authorityId: "bootstrap-1",
+      authorityGeneration: 1,
+      nonce: fixture.headers[REMOTE_WORKER_PROTOCOL_HEADERS.nonce],
+      timestamp: NOW.toISOString(),
+      expiresAt: "2026-07-14T20:01:00.000Z",
+    });
+    expect(fixture.nonceConsumer).not.toHaveBeenCalled();
+    expect(Object.isFrozen(prepared)).toBe(true);
+    expect(Object.isFrozen(prepared.nonce)).toBe(true);
+  });
+
   it("accepts an exact canonical request bound to its key, certificate, TLS exporter, and nonce", async () => {
     const fixture = signedFixture();
     const receipt = await verifyFixture(fixture);

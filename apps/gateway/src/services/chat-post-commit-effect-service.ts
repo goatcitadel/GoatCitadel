@@ -1,3 +1,12 @@
+import { createHash } from "node:crypto";
+import {
+  ConflictError,
+  PolicyViolationError,
+  ValidationError,
+  type OperatorProfileFact,
+  type TraceMemoryCandidateInput,
+  type TraceMemoryCandidateRecord,
+} from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { GeneralChatPostCommitDurableEffectExecutionInput } from "./chat-durable-run-service.js";
 import type { GeneralChatPostCommitEffectExecutionContext } from "./durable-execution-service.js";
@@ -23,8 +32,9 @@ import {
 import type { CommitmentClassifierService } from "./gateway/commitment-classifier-service.js";
 import { IDEMPOTENT_REALTIME_ENVELOPE_KEY } from "./realtime-event-service.js";
 
-const BACKGROUND_REVIEW_TURNS_SINCE_SETTING_KEY = "background_review_turns_since_v1";
+const BACKGROUND_REVIEW_TURNS_SINCE_SETTING_PREFIX = "background_review_turns_since_v2";
 const BACKGROUND_REVIEW_TURN_INTERVAL = 5;
+const BACKGROUND_REVIEW_WARM_START_VALUE = BACKGROUND_REVIEW_TURN_INTERVAL - 1;
 
 export type ChatPostCommitEffectStoragePort = Pick<Storage, "systemSettings"> & ChatPostCommitEffectReceiptStoragePort;
 
@@ -45,6 +55,12 @@ interface ChatPostCommitEffectServiceBaseDeps {
   readonly storage: ChatPostCommitEffectStoragePort;
   readonly commitmentClassifier: CommitmentClassifierService;
   readonly backgroundReview: BackgroundReviewService;
+  /** Existing governed review owner. This files proposals; it never promotes them. */
+  proposeTraceMemoryCandidate(
+    input: TraceMemoryCandidateInput,
+    actorId: string,
+    authority: "agent_proposed",
+  ): Promise<Pick<TraceMemoryCandidateRecord, "candidateId">>;
   isAutonomyDisabled(): Promise<boolean>;
   publishRealtime(eventType: string, source: string, payload: Record<string, unknown>): Promise<unknown>;
 }
@@ -80,9 +96,11 @@ type EligibilityAwareEffectInput = GeneralChatPostCommitDurableEffectExecutionIn
 
 /**
  * Canonical downstream owner for deterministic `chat.post_commit.effect`
- * children. Background review is evidence-only and maintenance is production-
- * dark. Commitments remain the sole stateful domain path and are fenced by the
- * explicit D2 authority seam when it is configured.
+ * children. Background review may file evidence-only trace candidates through
+ * the existing governed memory review owner, but never promotes them or writes
+ * OperatorProfile state. Maintenance is production-dark. Commitments remain a
+ * stateful domain path and every mutation is fenced by the explicit D2 authority
+ * seam when it is configured.
  */
 export class ChatPostCommitEffectService {
   public constructor(private readonly deps: ChatPostCommitEffectServiceDeps) {}
@@ -214,7 +232,7 @@ export class ChatPostCommitEffectService {
           this.deps.storage,
           counterIdentity,
           async () => {
-            const due = await this.advanceBackgroundReviewCounter();
+            const due = await this.advanceBackgroundReviewCounter(input.workspaceId);
             return { value: due, result: { due } };
           },
           this.stageCommitOptions(context, false),
@@ -253,17 +271,23 @@ export class ChatPostCommitEffectService {
     const evidenceCommit = await commitGeneralChatPostCommitStage(
       this.deps.storage,
       evidenceIdentity,
-      async () => ({
-        value: undefined,
-        result: {
-          status: "evidence_recorded",
-          memoryFactCount: memoryEvidenceFingerprints.length,
-          memoryEvidenceFingerprints,
-          skillProposed: Boolean(skillEvidenceFingerprint),
-          ...(skillEvidenceFingerprint ? { skillEvidenceFingerprint } : {}),
-          promotionDisposition: "governed_review_required",
-        },
-      }),
+      async () => {
+        const reviewCandidates = await this.proposeOperatorProfileReviewCandidates(input, context, facts);
+        return {
+          value: undefined,
+          result: {
+            status: "evidence_recorded",
+            memoryFactCount: memoryEvidenceFingerprints.length,
+            memoryEvidenceFingerprints,
+            memoryReviewCandidateCount: reviewCandidates.candidateIds.length,
+            memoryReviewCandidateIds: reviewCandidates.candidateIds,
+            memoryReviewCandidateRejectedCount: reviewCandidates.rejectedCount,
+            skillProposed: Boolean(skillEvidenceFingerprint),
+            ...(skillEvidenceFingerprint ? { skillEvidenceFingerprint } : {}),
+            promotionDisposition: "governed_trace_candidate_review_required",
+          },
+        };
+      },
       this.stageCommitOptions(context, true),
     );
     const result = readGeneralChatPostCommitStageResult(evidenceCommit.receipt);
@@ -323,13 +347,69 @@ export class ChatPostCommitEffectService {
     };
   }
 
-  private async advanceBackgroundReviewCounter(): Promise<boolean> {
+  private async advanceBackgroundReviewCounter(workspaceId: string): Promise<boolean> {
     return (
       await this.deps.storage.systemSettings.advanceCyclicCounter(
-        BACKGROUND_REVIEW_TURNS_SINCE_SETTING_KEY,
+        buildBackgroundReviewCounterSettingKey(workspaceId),
         BACKGROUND_REVIEW_TURN_INTERVAL,
+        undefined,
+        BACKGROUND_REVIEW_WARM_START_VALUE,
       )
     ).due;
+  }
+
+  private async proposeOperatorProfileReviewCandidates(
+    input: Extract<GeneralChatPostCommitDurableEffectExecutionInput, { effect: "background_review" }>,
+    context: GeneralChatPostCommitEffectExecutionContext,
+    facts: OperatorProfileFact[],
+  ): Promise<{ candidateIds: string[]; rejectedCount: number }> {
+    const candidateIds: string[] = [];
+    let rejectedCount = 0;
+    for (const fact of facts) {
+      try {
+        const candidate = await this.deps.proposeTraceMemoryCandidate(
+          {
+            workspaceId: input.workspaceId,
+            candidateType: fact.kind === "preference" ? "operator_preference" : "fact",
+            sourceText: `Successful root Chat turn ${input.turnId} in session ${input.sessionId}.`,
+            sourceSessionId: input.sessionId,
+            sourceRunId: context.parentRunId,
+            sourceTurnId: input.turnId,
+            proposedInsight: fact.content,
+            confidence: fact.confidence,
+            sourceRefs: [
+              { sourceType: "session", sourceRef: input.sessionId },
+              { sourceType: "turn", sourceRef: input.turnId },
+              { sourceType: "run", sourceRef: context.parentRunId },
+            ],
+            metadata: {
+              operatorProfileReviewCandidate: true,
+              operatorProfileFactKind: fact.kind,
+              source: "background_review",
+              sourceEffectRunId: context.effectRunId,
+            },
+          },
+          "background-reviewer",
+          "agent_proposed",
+        );
+        candidateIds.push(candidate.candidateId);
+      } catch (error) {
+        // Content-policy and feature-state refusals are expected governed
+        // dispositions. Storage/runtime failures still throw so durable replay
+        // can retry instead of silently losing otherwise-valid review material.
+        if (
+          error instanceof ConflictError ||
+          error instanceof PolicyViolationError ||
+          error instanceof ValidationError ||
+          error instanceof TypeError
+        ) {
+          rejectedCount += 1;
+          continue;
+        }
+        throw error;
+      }
+    }
+    return { candidateIds, rejectedCount };
   }
 
   private async resolvePredispatch(
@@ -537,8 +617,11 @@ export class ChatPostCommitEffectService {
         sessionId: input.sessionId,
         workspaceId: input.workspaceId,
         memoryFactCount: readNumber(result.memoryFactCount),
+        memoryReviewCandidateCount: readNumber(result.memoryReviewCandidateCount),
+        memoryReviewCandidateIds: readStringArray(result.memoryReviewCandidateIds),
+        memoryReviewCandidateRejectedCount: readNumber(result.memoryReviewCandidateRejectedCount),
         skillProposed: result.skillProposed === true,
-        promotionDisposition: "governed_review_required",
+        promotionDisposition: "governed_trace_candidate_review_required",
       },
       `${context.effectRunId}:background-review-evidence`,
       occurredAt,
@@ -548,6 +631,16 @@ export class ChatPostCommitEffectService {
 
 function readNumber(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+export function buildBackgroundReviewCounterSettingKey(workspaceId: string): string {
+  const normalized = workspaceId.trim() || "default";
+  const workspaceHash = createHash("sha256").update(normalized).digest("hex").slice(0, 32);
+  return `${BACKGROUND_REVIEW_TURNS_SINCE_SETTING_PREFIX}:${workspaceHash}`;
 }
 
 function isNonEmpty(value: unknown): value is string {

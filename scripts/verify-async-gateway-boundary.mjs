@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
+import {
+  buildRouteServicePortMap,
+  findUnawaitedRouteServiceCalls,
+} from "./verify-async-gateway-boundary-route-ports.mjs";
 
 const GATEWAY_SOURCE_RELATIVE_PATH = "apps/gateway/src";
 const TYPESCRIPT_SOURCE_PATTERN = /\.(?:cts|mts|tsx?|d\.ts)$/u;
@@ -384,7 +388,9 @@ function isStorageDeclaredPromiseCall(checker, call, storageRoot) {
   );
 }
 
-export function scanGatewayPromiseUsage({ checker, sourceFile, filePath, repoRoot }) {
+const GATEWAY_ROUTES_PATH_PREFIX = "apps/gateway/src/routes/";
+
+export function scanGatewayPromiseUsage({ checker, sourceFile, filePath, repoRoot, routeServicePortMap }) {
   const normalizedFilePath = normalizeRelativePath(filePath);
   const storageRoot = path.join(repoRoot, "packages", "storage");
   const diagnostics = [];
@@ -439,6 +445,23 @@ export function scanGatewayPromiseUsage({ checker, sourceFile, filePath, repoRoo
     ts.forEachChild(node, visit);
   };
   visit(sourceFile);
+
+  if (routeServicePortMap && normalizedFilePath.startsWith(GATEWAY_ROUTES_PATH_PREFIX)) {
+    const findings = findUnawaitedRouteServiceCalls({
+      checker,
+      sourceFile,
+      portMap: routeServicePortMap,
+      ignoreCalls: floatingExpressionCalls,
+    });
+    for (const finding of findings) {
+      emit(
+        "unawaited_route_service_call",
+        finding.node,
+        `Route-service promise '${finding.serviceKey}.${finding.methodName}' is ${finding.violation}; ` +
+          "await the call (or hand it to Promise.all or a tracked background task) before using its result.",
+      );
+    }
+  }
 
   return diagnostics.sort(
     (left, right) => left.line - right.line || left.column - right.column || left.code.localeCompare(right.code),
@@ -621,6 +644,7 @@ export async function verifyAsyncGatewayBoundary({ repoRoot = process.cwd() } = 
   );
   const program = readGatewayProgram(repoRoot, sourceFiles);
   const checker = program.getTypeChecker();
+  const routeServicePortMap = buildRouteServicePortMap({ program, checker, repoRoot });
   const promiseResults = sourceFiles.map((absolutePath) => {
     const sourceFile = findProgramSourceFile(program, absolutePath);
     if (!sourceFile) {
@@ -631,6 +655,7 @@ export async function verifyAsyncGatewayBoundary({ repoRoot = process.cwd() } = 
       sourceFile,
       filePath: normalizeRelativePath(path.relative(repoRoot, absolutePath)),
       repoRoot,
+      routeServicePortMap,
     });
   });
   const diagnostics = [...syntaxResults, ...promiseResults]

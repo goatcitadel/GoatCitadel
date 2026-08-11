@@ -43,13 +43,29 @@ describe("sqlite chat branching migration", () => {
       DROP TABLE IF EXISTS chat_turn_traces;
       DROP TABLE IF EXISTS chat_session_prefs;
 
+      -- Faithful copy of the genuine pre-branching chat_turn_traces (and its
+      -- index) as the original agentic-chat schema declared it. Post-migration
+      -- canonical schema-shape validation refuses any migrated shape the
+      -- supported lineage never produced, and no later migration re-adds the
+      -- NOT NULL trace columns a reduced fixture would omit.
       CREATE TABLE chat_turn_traces (
         turn_id TEXT PRIMARY KEY,
         session_id TEXT NOT NULL,
+        user_message_id TEXT NOT NULL,
+        assistant_message_id TEXT,
         status TEXT NOT NULL,
+        mode TEXT NOT NULL,
+        model TEXT,
+        web_mode TEXT NOT NULL,
+        memory_mode TEXT NOT NULL,
+        thinking_level TEXT NOT NULL,
+        routing_json TEXT NOT NULL,
         started_at TEXT NOT NULL,
         finished_at TEXT
       );
+
+      CREATE INDEX idx_chat_turn_traces_session
+        ON chat_turn_traces(session_id, started_at DESC);
     `);
 
     const insertMigration = legacy.prepare(`
@@ -100,6 +116,11 @@ describe("sqlite chat branching migration", () => {
       DROP TABLE IF EXISTS chat_turn_traces;
       DROP TABLE IF EXISTS chat_session_prefs;
 
+      -- Faithful copy of the genuine pre-branching chat_session_prefs: the
+      -- original agentic-chat schema always declared vision_fallback_model and
+      -- the updated_at index, no later migration re-adds them to an existing
+      -- table, and post-migration canonical schema-shape validation refuses
+      -- any migrated shape the supported lineage never produced.
       CREATE TABLE chat_session_prefs (
         session_id TEXT PRIMARY KEY,
         mode TEXT NOT NULL,
@@ -109,9 +130,13 @@ describe("sqlite chat branching migration", () => {
         memory_mode TEXT NOT NULL,
         thinking_level TEXT NOT NULL,
         tool_autonomy TEXT NOT NULL,
+        vision_fallback_model TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+
+      CREATE INDEX idx_chat_session_prefs_updated
+        ON chat_session_prefs(updated_at DESC);
 
       CREATE TABLE chat_turn_traces (
         turn_id TEXT PRIMARY KEY,

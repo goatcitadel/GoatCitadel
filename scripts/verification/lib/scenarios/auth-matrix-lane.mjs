@@ -67,7 +67,9 @@ export async function runAuthMatrixLane(context, _options = {}, deps) {
         deviceAndCompanion = await createAuthMatrixCredentials(stack.gatewayUrl, operatorHeaders);
         const sseToken = await issueOperatorSseToken(stack.gatewayUrl, operatorHeaders);
         // Session-scoped representatives (…/:sessionId/…) need a real session so
-        // the allowed caller can reach 2xx instead of a not-found error.
+        // the allowed caller can reach 2xx instead of a not-found error; the
+        // workspace-scoped loopback representative reuses the seeded workspace
+        // id the same way.
         const seeded = await requestJson(stack.gatewayUrl, "/api/v1/dev/verification/seed", {
           method: "POST",
           headers: operatorHeaders,
@@ -80,9 +82,10 @@ export async function runAuthMatrixLane(context, _options = {}, deps) {
         });
         assertOk(seeded, "seed auth-matrix session fixture");
         const seededSessionId = seeded.body?.sessionId;
-        if (!seededSessionId) {
+        const seededWorkspaceId = seeded.body?.workspaceId;
+        if (!seededSessionId || !seededWorkspaceId) {
           throw new Error(
-            `auth-matrix seed response missing sessionId: ${clampString(JSON.stringify(seeded.body), 400)}`,
+            `auth-matrix seed response missing sessionId or workspaceId: ${clampString(JSON.stringify(seeded.body), 400)}`,
           );
         }
         const manifestItems = Array.isArray(manifestResponse.body?.items) ? manifestResponse.body.items : [];
@@ -118,6 +121,7 @@ export async function runAuthMatrixLane(context, _options = {}, deps) {
               companionPublicKey: deviceAndCompanion.companionPublicKey,
               sseToken,
               seededSessionId,
+              seededWorkspaceId,
             });
             const allowed = isAllowedStatus(probe.status);
             if (allowed !== expected) {

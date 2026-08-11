@@ -7,8 +7,19 @@ import { createDatabase } from "./sqlite.js";
 const db = createDatabase({ dbPath: ":memory:" });
 const postgresSql = POSTGRES_MIGRATIONS.find((migration) => migration.version === 111)?.sql ?? "";
 const postgresPublicationSql = POSTGRES_MIGRATIONS.find((migration) => migration.version === 110)?.sql ?? "";
+const postgresRemoteWorkerAdmissionSql = POSTGRES_MIGRATIONS.find((migration) => migration.version === 137)?.sql ?? "";
 
 after(() => db.close());
+
+/**
+ * Columns added to a paired table after the 169/111 foundation, keyed to the
+ * later paired migration that declares them in both dialects. SQLite 194 and
+ * PostgreSQL 137 (remote_worker_mesh_node_admission_authority) appended
+ * provenance_kind to the admissions table.
+ */
+const LATER_PAIRED_COLUMN_SOURCES: Record<string, string> = {
+  provenance_kind: postgresRemoteWorkerAdmissionSql,
+};
 
 const TABLE_COLUMNS = {
   mesh_capability_node_admissions: [
@@ -22,6 +33,7 @@ const TABLE_COLUMNS = {
     "idempotency_key",
     "request_sha256",
     "admitted_at",
+    "provenance_kind",
   ],
   mesh_capability_node_admission_revocations: [
     "workspace_id",
@@ -41,10 +53,13 @@ describe("HX-408 mesh capability node-admission schema parity", () => {
       assert.match(postgresSql, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`, "u"));
       assert.deepEqual(tableColumns(db, table), [...columns], `${table} SQLite columns drifted`);
       for (const column of columns) {
+        const pairedSource = LATER_PAIRED_COLUMN_SOURCES[column];
         assert.match(
-          postgresSql,
+          pairedSource ?? postgresSql,
           new RegExp(`\\b${column}\\s+(?:TEXT|BIGINT)\\b`, "u"),
-          `${table}.${column} missing in Postgres 111`,
+          pairedSource === undefined
+            ? `${table}.${column} missing in Postgres 111`
+            : `${table}.${column} missing in its later paired Postgres migration`,
         );
       }
     }

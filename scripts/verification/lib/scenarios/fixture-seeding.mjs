@@ -78,6 +78,41 @@ export async function seedMissionControlNextFixture(gatewayUrl, options = {}, de
     },
   });
   assertOk(approvalResponse, "create mission-control-next chat approval");
+  const approvalId = approvalResponse.body?.approvalId;
+  if (!approvalId) {
+    throw new Error("mission-control-next chat approval scenario did not return approvalId");
+  }
+
+  const projectResponse = await requestJson(gatewayUrl, "/api/v1/chat/projects", {
+    method: "POST",
+    body: {
+      workspaceId,
+      name: "Mission Control Verification",
+      description: "Populated project used to prove project summary and detail surfaces.",
+      workspacePath: "verification/mission-control-next",
+      color: "#20b8a6",
+    },
+  });
+  assertOk(projectResponse, "create mission-control-next verification project");
+  const projectId = projectResponse.body?.projectId;
+  if (!projectId) {
+    throw new Error("mission-control-next verification project did not return projectId");
+  }
+  for (const title of ["Release readiness review", "Operator surface polish", "Runtime evidence follow-up"]) {
+    const projectSessionResponse = await requestJson(gatewayUrl, "/api/v1/chat/sessions", {
+      method: "POST",
+      body: {
+        workspaceId,
+        projectId,
+        title,
+        mode: "chat",
+      },
+    });
+    assertOk(projectSessionResponse, `create mission-control-next project session ${title}`);
+    if (!projectSessionResponse.body?.sessionId) {
+      throw new Error(`mission-control-next project session ${title} did not return sessionId`);
+    }
+  }
 
   const agentSpecs = [
     {
@@ -414,6 +449,8 @@ export async function seedMissionControlNextFixture(gatewayUrl, options = {}, de
       approval: sessionId,
       ...(userInputSessionId ? { userInput: userInputSessionId } : {}),
     },
+    projects: { primary: projectId },
+    approvals: { primary: approvalId },
     agentIds: createdAgents.map((agent) => agent?.agentId).filter(Boolean),
     taskIds: tasks.map((task) => task?.taskId).filter(Boolean),
     opsBoardId,

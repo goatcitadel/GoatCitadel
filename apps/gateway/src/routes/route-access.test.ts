@@ -84,6 +84,23 @@ describe("route access manifest", () => {
       tracked: true,
     });
 
+    expect(
+      app.routeAccessManifest.find((entry) => entry.method === "GET" && entry.url === "/api/v1/approvals"),
+    ).toMatchObject({
+      accessClass: "operator-or-companion",
+      classificationSource: "explicit",
+      tracked: true,
+    });
+    expect(
+      app.routeAccessManifest.find(
+        (entry) => entry.method === "POST" && entry.url === "/api/v1/approvals/:approvalId/resolve",
+      ),
+    ).toMatchObject({
+      accessClass: "operator-or-companion",
+      classificationSource: "explicit",
+      tracked: true,
+    });
+
     const engineeringLearningManifest = app.routeAccessManifest.filter(
       (entry) => entry.method !== "HEAD" && entry.url.startsWith("/api/v1/engineering-learnings"),
     );
@@ -451,6 +468,7 @@ const PURPOSE_ROUTE_CLASSES = [
   "companion",
   "device-session-exchange",
   "session-control-companion",
+  "operator-or-companion",
   "operator-or-session-control-companion",
 ] as const;
 
@@ -542,6 +560,7 @@ describe("principal purpose route isolation", () => {
       "authenticated-read",
       "sse-read",
       "companion",
+      "operator-or-companion",
       "session-control-companion",
       "operator-or-session-control-companion",
     ] as const) {
@@ -567,6 +586,7 @@ describe("principal purpose route isolation", () => {
       "device-session-exchange",
       "device",
       "companion",
+      "operator-or-companion",
       "operator",
       "authenticated-read",
       "sse-read",
@@ -591,6 +611,7 @@ describe("principal purpose route isolation", () => {
 
     // Generic companion keeps its existing companion + sse access...
     expect(await status("/cls/companion", genericCompanion)).toBe(200);
+    expect(await status("/cls/operator-or-companion", genericCompanion)).toBe(200);
     expect(await status("/cls/sse-read", genericCompanion)).toBe(200);
     // ...but is refused the control classes because it lacks the confined purpose.
     expect(await status("/cls/session-control-companion", genericCompanion)).toBe(403);
@@ -608,6 +629,7 @@ describe("principal purpose route isolation", () => {
     const operator: PurposeInjection = { source: "token" };
 
     expect(await status("/cls/operator-or-session-control-companion", operator)).toBe(200);
+    expect(await status("/cls/operator-or-companion", operator)).toBe(200);
     expect(await status("/cls/operator", operator)).toBe(200);
     // The pure session-control-companion class never admits a bare operator.
     expect(await status("/cls/session-control-companion", operator)).toBe(403);

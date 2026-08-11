@@ -345,11 +345,15 @@ export const authPlugin = fp(async (fastify) => {
     }
   });
 
+  // M8 custody: the companion device-key request signature is the second
+  // factor for EVERY companion-authenticated request, reads included — a
+  // stolen companion bearer token alone must not be able to read the
+  // approvals queue (or any other companion-visible surface). OPTIONS
+  // preflights carry no Authorization header and the companion session
+  // refresh route is exempted from auth classification upstream, so neither
+  // reaches this hook as a companion principal.
   fastify.addHook("preHandler", async (request, reply) => {
     if (request.authActorSource !== "companion") {
-      return;
-    }
-    if (!isCompanionSignedMutationMethod(request.method)) {
       return;
     }
     if (!request.authCompanionSessionId) {
@@ -369,10 +373,10 @@ export const authPlugin = fp(async (fastify) => {
     }
 
     try {
-      fastify.gatewayAuth.verifyCompanionRequestSignature({
+      await fastify.gatewayAuth.verifyCompanionRequestSignature({
         sessionId: request.authCompanionSessionId,
         method: request.method,
-        path: request.url,
+        path: resolveCompanionSignedPath(request.method, request.url),
         timestamp,
         nonce,
         signature,
@@ -633,6 +637,25 @@ function setAuthActor(
   request.authActorId = actorId;
   request.authActorSource = source;
   enterRequestAttribution({ actorId });
+}
+
+/**
+ * The signed material a companion covers depends on the method. Mutations keep
+ * the established contract: the exact request target is signed and
+ * `normalizeCompanionRequestPath` rejects query-bearing mutation URLs outright.
+ * Reads legitimately carry query strings (e.g.
+ * `GET /api/v1/approvals?status=pending&limit=20`), and the verifier's
+ * canonicalization refuses any `?` in the signed path, so read signatures cover
+ * the pathname only — clients sign `METHOD\n<pathname>\n<timestamp>\n<nonce>\n<bodyHash>`
+ * and the query string stays outside the signed payload. Method, timestamp
+ * skew, the session-scoped nonce, and the `companion_request_replays`
+ * tombstone still bind and single-use every read exactly like a mutation.
+ */
+function resolveCompanionSignedPath(method: string, url: string): string {
+  if (isCompanionSignedMutationMethod(method)) {
+    return url;
+  }
+  return url.split("?", 1)[0] || "/";
 }
 
 function isCompanionSignedMutationMethod(method: string): boolean {

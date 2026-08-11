@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Keep legacy and remote-worker publication authority decisions auditable in one owner. */
 /**
  * HX-408 M1: the authenticated mesh capability publication owner.
  *
@@ -34,6 +35,7 @@ import {
   assertMeshCapabilityManifestEntry,
   canonicalJsonString,
   deriveMeshCapabilityId,
+  normalizeRemoteWorkerMeshNodeAuthorityFence,
   type CapabilityCatalogEntry,
   type MeshCapabilityActivationRecord,
   type MeshCapabilityCatalogEntryActivationProjection,
@@ -48,6 +50,7 @@ import {
   type MeshCapabilityPublisherHealthRecord,
   type MeshLeaseRecord,
   type MeshNodeRecord,
+  type RemoteWorkerMeshNodeAuthorityFence,
 } from "@goatcitadel/contracts";
 import {
   computeMeshCapabilityDescriptorSha256,
@@ -56,6 +59,7 @@ import {
   type AsyncStorage as Storage,
 } from "@goatcitadel/storage";
 import { timingSafeStringEqual } from "./crypto-equals.js";
+import type { RemoteWorkerTransportIdentity } from "./remote-worker-transport-identity.js";
 
 export const MESH_NODE_TLS_FINGERPRINT_HEADER = "x-goatcitadel-mesh-tls-fingerprint";
 const MESH_CAPABILITY_PUBLICATION_LEASE_PREFIX = "mesh-capability-publication";
@@ -69,6 +73,8 @@ export interface MeshCapabilityAuthenticatedNodeIdentity {
   admissionGeneration: number;
   mtlsRequired: boolean;
   tlsFingerprint?: string;
+  provenance: "legacy" | "remote_worker";
+  remoteWorkerAuthorityFence?: RemoteWorkerMeshNodeAuthorityFence;
 }
 
 export interface MeshCapabilityNodeAuthFailure {
@@ -133,9 +139,47 @@ export class MeshCapabilityPublicationRequestError extends Error {
 
 export interface MeshCapabilityPublicationServiceOptions {
   storage: Storage;
+  remoteWorkerAuthority?: MeshCapabilityRemoteWorkerAuthorityPort;
   now?: () => Date;
   leaseTtlSeconds?: number;
   publishRealtime?: (eventType: string, source: string, payload: Record<string, unknown>) => Promise<unknown>;
+}
+
+type Awaitable<T> = T | Promise<T>;
+
+export interface MeshCapabilityRemoteWorkerAuthorityPort {
+  resolveByRawMeshNodeCredential(rawMeshNodeCredential: string): Awaitable<
+    | undefined
+    | {
+        readonly disposition: "legacy";
+        readonly provenance: "legacy";
+        readonly admission: {
+          readonly workspaceId: string;
+          readonly nodeId: string;
+          readonly admissionGeneration: number;
+          readonly joinCredentialSha256: string;
+          readonly mtlsRequired: boolean;
+          readonly tlsFingerprint?: string;
+        };
+      }
+    | {
+        readonly disposition: "current";
+        readonly provenance: "remote_worker";
+        readonly admission: {
+          readonly workspaceId: string;
+          readonly nodeId: string;
+          readonly admissionGeneration: number;
+          readonly mtlsRequired: true;
+          readonly tlsFingerprint: string;
+        };
+        readonly fence: RemoteWorkerMeshNodeAuthorityFence;
+      }
+    | {
+        readonly disposition: "unavailable";
+        readonly provenance: "remote_worker";
+        readonly reason: string;
+      }
+  >;
 }
 
 interface NodeProjectionFacts {
@@ -167,6 +211,7 @@ export class MeshCapabilityPublicationService {
   private readonly storage: Storage;
   private readonly now: () => Date;
   private readonly leaseTtlSeconds: number;
+  private readonly remoteWorkerAuthority: MeshCapabilityRemoteWorkerAuthorityPort;
   private readonly publishRealtime?: (
     eventType: string,
     source: string,
@@ -175,6 +220,14 @@ export class MeshCapabilityPublicationService {
 
   public constructor(options: MeshCapabilityPublicationServiceOptions) {
     this.storage = options.storage;
+    this.remoteWorkerAuthority = options.remoteWorkerAuthority ?? options.storage.remoteWorkerMeshNodeAdmissions;
+    if (
+      this.remoteWorkerAuthority === null ||
+      (typeof this.remoteWorkerAuthority !== "object" && typeof this.remoteWorkerAuthority !== "function") ||
+      typeof this.remoteWorkerAuthority.resolveByRawMeshNodeCredential !== "function"
+    ) {
+      throw new TypeError("Mesh remote-worker authority owner is unavailable.");
+    }
     this.now = options.now ?? (() => new Date());
     this.leaseTtlSeconds = options.leaseTtlSeconds ?? DEFAULT_PUBLICATION_LEASE_TTL_SECONDS;
     this.publishRealtime = options.publishRealtime;
@@ -190,6 +243,7 @@ export class MeshCapabilityPublicationService {
    */
   public async authenticateNodeRequest(request: {
     headers: Record<string, string | string[] | undefined>;
+    transportIdentity?: RemoteWorkerTransportIdentity;
   }): Promise<{ identity: MeshCapabilityAuthenticatedNodeIdentity } | MeshCapabilityNodeAuthFailure> {
     const token = readBearerToken(request.headers.authorization);
     if (!token) {
@@ -199,19 +253,51 @@ export class MeshCapabilityPublicationService {
         message: "Admitted mesh-node bearer credentials are required for this route.",
       };
     }
-    const tokenSha256 = sha256Hex(token);
-    const admission = await this.storage.meshCapabilityNodeAdmissions.findByJoinTokenSha256(tokenSha256);
-    if (!admission) {
+    const resolution = await this.remoteWorkerAuthority.resolveByRawMeshNodeCredential(token);
+    if (resolution === undefined || resolution.disposition === "unavailable") {
       return unknownOrRevoked();
     }
-    const current = await this.storage.meshCapabilityNodeAdmissions.findCurrent(
-      admission.workspaceId,
-      admission.nodeId,
+    if (resolution.disposition === "current") {
+      const current = resolution.admission;
+      const fence = normalizeRemoteWorkerMeshNodeAuthorityFence(resolution.fence);
+      const transport = request.transportIdentity;
+      if (
+        transport === undefined ||
+        !isValidNativeTransportIdentity(transport) ||
+        !timingSafeStringEqual(transport.certificateDerSha256, current.tlsFingerprint) ||
+        fence.workspaceId !== current.workspaceId ||
+        fence.nodeId !== current.nodeId ||
+        fence.admissionGeneration !== current.admissionGeneration
+      ) {
+        return {
+          statusCode: 503,
+          reason: "mesh_node_native_mtls_required",
+          message: "Remote-worker mesh publication requires the native mutual-TLS authority path.",
+        };
+      }
+      return {
+        identity: Object.freeze({
+          workspaceId: current.workspaceId,
+          nodeId: current.nodeId,
+          admissionGeneration: current.admissionGeneration,
+          mtlsRequired: true,
+          tlsFingerprint: current.tlsFingerprint,
+          provenance: "remote_worker",
+          remoteWorkerAuthorityFence: fence,
+        }),
+      };
+    }
+    const current = resolution.admission;
+    const tokenSha256 = sha256Hex(token);
+    const legacyCurrent = await this.storage.meshCapabilityNodeAdmissions.findCurrent(
+      current.workspaceId,
+      current.nodeId,
     );
     if (
-      !current ||
-      current.admissionGeneration !== admission.admissionGeneration ||
-      !timingSafeStringEqual(current.joinTokenSha256, tokenSha256)
+      legacyCurrent === undefined ||
+      legacyCurrent.admissionGeneration !== current.admissionGeneration ||
+      !timingSafeStringEqual(legacyCurrent.joinTokenSha256, tokenSha256) ||
+      !timingSafeStringEqual(current.joinCredentialSha256, tokenSha256)
     ) {
       return unknownOrRevoked();
     }
@@ -245,6 +331,7 @@ export class MeshCapabilityPublicationService {
         admissionGeneration: current.admissionGeneration,
         mtlsRequired: current.mtlsRequired,
         ...(current.tlsFingerprint === undefined ? {} : { tlsFingerprint: current.tlsFingerprint }),
+        provenance: "legacy",
       },
     };
   }
@@ -261,7 +348,11 @@ export class MeshCapabilityPublicationService {
     submission: MeshCapabilityManifestPublishSubmission,
   ): Promise<MeshCapabilityManifestPublishReceipt> {
     const entries = this.buildManifestEntries(identity.nodeId, submission.entries);
-    const replay = await this.resolvePublicationKeyReplay(identity, submission, entries);
+    const authorityFence = remoteWorkerAuthorityFence(identity);
+    const replay =
+      authorityFence === undefined
+        ? await this.resolvePublicationKeyReplay(identity, submission, entries)
+        : await this.resolveRemoteWorkerPublicationKeyReplay(authorityFence, identity, submission, entries);
     if (replay) {
       return { replayed: true, manifest: replay, entries: await this.projectManifestEntries(replay) };
     }
@@ -285,7 +376,10 @@ export class MeshCapabilityPublicationService {
       manifestSha256: computeMeshCapabilityManifestSha256(unsigned),
     };
     assertMeshCapabilityManifest(manifest);
-    const stored = await this.storage.meshCapabilityPublications.publishManifest(manifest);
+    const stored =
+      authorityFence === undefined
+        ? await this.storage.meshCapabilityPublications.publishManifest(manifest)
+        : await this.storage.meshCapabilityPublications.publishRemoteWorkerManifest({ authorityFence, manifest });
     await this.publishRealtime?.("mesh_capability_manifest_published", "mesh", {
       workspaceId: stored.workspaceId,
       nodeId: stored.nodeId,
@@ -747,13 +841,44 @@ export class MeshCapabilityPublicationService {
     return existing;
   }
 
+  private async resolveRemoteWorkerPublicationKeyReplay(
+    authorityFence: RemoteWorkerMeshNodeAuthorityFence,
+    identity: MeshCapabilityAuthenticatedNodeIdentity,
+    submission: MeshCapabilityManifestPublishSubmission,
+    entries: MeshCapabilityManifestEntry[],
+  ): Promise<MeshCapabilityManifest | undefined> {
+    const publications = this.storage.meshCapabilityPublications as typeof this.storage.meshCapabilityPublications & {
+      resolveRemoteWorkerManifestReplay(input: {
+        readonly authorityFence: RemoteWorkerMeshNodeAuthorityFence;
+        readonly workspaceId: string;
+        readonly nodeId: string;
+        readonly admissionGeneration: number;
+        readonly publicationKey: string;
+        readonly supersedesManifestSha256?: string;
+        readonly entries: readonly MeshCapabilityManifestEntry[];
+      }): Promise<MeshCapabilityManifest | undefined>;
+    };
+    return await publications.resolveRemoteWorkerManifestReplay({
+      authorityFence,
+      workspaceId: identity.workspaceId,
+      nodeId: identity.nodeId,
+      admissionGeneration: identity.admissionGeneration,
+      publicationKey: submission.publicationKey,
+      ...(submission.supersedesManifestSha256 === undefined
+        ? {}
+        : { supersedesManifestSha256: submission.supersedesManifestSha256 }),
+      entries,
+    });
+  }
+
   private async resolvePublisherBinding(identity: MeshCapabilityAuthenticatedNodeIdentity): Promise<{
     publisher: MeshCapabilityPublisherGenerationRecord;
     health: MeshCapabilityPublisherHealthRecord;
   }> {
     const publications = this.storage.meshCapabilityPublications;
     const current = await publications.findCurrentPublisher(identity.workspaceId, identity.nodeId);
-    if (current) {
+    const authorityFence = remoteWorkerAuthorityFence(identity);
+    if (current && authorityFence === undefined) {
       const reused = await this.tryReuseCurrentGeneration(identity, current);
       if (reused) {
         return reused;
@@ -762,7 +887,7 @@ export class MeshCapabilityPublicationService {
     const nextGeneration = (current?.publisherGeneration ?? 0) + 1;
     const leaseKey = `${MESH_CAPABILITY_PUBLICATION_LEASE_PREFIX}:${identity.workspaceId}:${identity.nodeId}`;
     const lease = await this.storage.mesh.acquireLease(leaseKey, identity.nodeId, this.leaseTtlSeconds, this.nowIso());
-    const publisher = await publications.registerPublisher({
+    const publisherInput = {
       workspaceId: identity.workspaceId,
       nodeId: identity.nodeId,
       admissionGeneration: identity.admissionGeneration,
@@ -773,7 +898,11 @@ export class MeshCapabilityPublicationService {
       publicationLeaseFencingToken: lease.fencingToken,
       publicationLeaseExpiresAt: lease.expiresAt,
       idempotencyKey: `mesh-capability-publisher:${identity.workspaceId}:${identity.nodeId}:${nextGeneration}`,
-    });
+    };
+    const publisher =
+      authorityFence === undefined
+        ? await publications.registerPublisher(publisherInput)
+        : await publications.registerRemoteWorkerPublisher({ authorityFence, publisher: publisherInput });
     return {
       publisher,
       health: await publications.getPublisherHealth(identity.workspaceId, identity.nodeId, nextGeneration),
@@ -948,6 +1077,36 @@ function fingerprintEquals(left: string | undefined, right: string | undefined):
   return timingSafeStringEqual(left, right);
 }
 
+function remoteWorkerAuthorityFence(
+  identity: MeshCapabilityAuthenticatedNodeIdentity,
+): RemoteWorkerMeshNodeAuthorityFence | undefined {
+  if (identity.provenance === "legacy") {
+    if (identity.remoteWorkerAuthorityFence !== undefined) {
+      throw new MeshCapabilityPublicationRequestError(
+        403,
+        "mesh_node_authority_mismatch",
+        "Mesh-node publication authority is inconsistent.",
+      );
+    }
+    return undefined;
+  }
+  const fence = normalizeRemoteWorkerMeshNodeAuthorityFence(identity.remoteWorkerAuthorityFence);
+  if (
+    fence.workspaceId !== identity.workspaceId ||
+    fence.nodeId !== identity.nodeId ||
+    fence.admissionGeneration !== identity.admissionGeneration ||
+    identity.mtlsRequired !== true ||
+    identity.tlsFingerprint === undefined
+  ) {
+    throw new MeshCapabilityPublicationRequestError(
+      403,
+      "mesh_node_authority_mismatch",
+      "Mesh-node publication authority is inconsistent.",
+    );
+  }
+  return fence;
+}
+
 function unknownOrRevoked(): MeshCapabilityNodeAuthFailure {
   return {
     statusCode: 403,
@@ -975,4 +1134,17 @@ function readHeaderValue(value: string | string[] | undefined): string | undefin
 
 function sha256Hex(value: string): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function isValidNativeTransportIdentity(value: RemoteWorkerTransportIdentity): boolean {
+  return (
+    value.source === "native_mtls" &&
+    Buffer.isBuffer(value.tlsExporter) &&
+    value.tlsExporter.byteLength === 32 &&
+    /^[0-9a-f]{64}$/u.test(value.certificateDerSha256) &&
+    /^[0-9a-f]{64}$/u.test(value.publicKeySpkiSha256) &&
+    /^[0-9a-f]{64}$/u.test(value.trustAnchorDerSha256) &&
+    /^[0-9a-f]{64}$/u.test(value.tlsExporterSha256) &&
+    timingSafeStringEqual(createHash("sha256").update(value.tlsExporter).digest("hex"), value.tlsExporterSha256)
+  );
 }

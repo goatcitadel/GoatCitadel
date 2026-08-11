@@ -4,6 +4,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Socket } from "node:net";
 import { TLSSocket } from "node:tls";
 import type { RemoteWorkerRuntimeConfig } from "./remote-worker-runtime-config.js";
+import { REMOTE_WORKER_PROTOCOL_MAX_BODY_BYTES } from "./remote-worker-protocol.js";
 import {
   REMOTE_WORKER_TLS_EXPORTER_BYTES,
   REMOTE_WORKER_TLS_EXPORTER_LABEL,
@@ -22,11 +23,51 @@ export const REMOTE_WORKER_NATIVE_TLS_LIMITS = Object.freeze({
   maxHeaders: 32,
   maxHeaderBytes: 16 * 1024,
   maxConnections: 64,
+  maxProtocolBodyBytes: REMOTE_WORKER_PROTOCOL_MAX_BODY_BYTES,
+  maxResponseBodyBytes: REMOTE_WORKER_PROTOCOL_MAX_BODY_BYTES,
+  maxResponseHeaders: 16,
+  maxResponseHeaderBytes: 8 * 1024,
+  maxResponseHeaderNameBytes: 64,
+  maxResponseHeaderValueBytes: 1024,
 });
 
 const UNAVAILABLE_BODY = Buffer.from('{"error":"REMOTE_WORKER_UNAVAILABLE"}\n', "utf8");
+const REQUEST_FAILED_BODY = Buffer.from('{"error":"REMOTE_WORKER_REQUEST_FAILED"}\n', "utf8");
 const socketAdapters = new WeakMap<TLSSocket, RemoteWorkerTlsSocketPort>();
-const requestAuthorities = new WeakMap<IncomingMessage, object>();
+
+const FORBIDDEN_HANDLER_RESPONSE_HEADERS = new Set([
+  "cache-control",
+  "connection",
+  "content-length",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "set-cookie",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+]);
+
+export interface RemoteWorkerNativeHandlerRequest {
+  readonly method: "POST";
+  readonly rawPath: string;
+  readonly headers: Readonly<Record<string, string>>;
+  /** Ephemeral request bytes. The listener zeroes this buffer as soon as the handler settles or times out. */
+  readonly bodyBytes: Buffer;
+  /** Ephemeral transport authority, including exporter bytes used by the proof-of-possession verifier. */
+  readonly transportIdentity: RemoteWorkerTransportIdentity;
+}
+
+export interface RemoteWorkerNativeHandlerResponse {
+  readonly statusCode: number;
+  readonly headers?: Readonly<Record<string, string>>;
+  readonly body: string | Buffer | Uint8Array;
+}
+
+export type RemoteWorkerNativeRequestHandler = (
+  request: RemoteWorkerNativeHandlerRequest,
+) => Promise<RemoteWorkerNativeHandlerResponse> | RemoteWorkerNativeHandlerResponse;
 
 interface SecureSocketState {
   readonly socket: TLSSocket;
@@ -35,6 +76,7 @@ interface SecureSocketState {
   readonly requests: Set<IncomingMessage>;
   headerDeadline?: ReturnType<typeof setTimeout>;
   requestDeadline?: ReturnType<typeof setTimeout>;
+  requestDeadlineAt?: number;
   connectionDeadline?: ReturnType<typeof setTimeout>;
   requestAccepted: boolean;
   revoked: boolean;
@@ -57,6 +99,7 @@ export class RemoteWorkerNativeTlsListenerError extends Error {
 
 export async function startRemoteWorkerNativeTlsListener(
   config: RemoteWorkerRuntimeConfig,
+  handler?: RemoteWorkerNativeRequestHandler,
 ): Promise<RemoteWorkerNativeTlsListenerHandle> {
   if (!config.enabled) return disabledHandle();
   const enabledConfig = config;
@@ -69,7 +112,6 @@ export async function startRemoteWorkerNativeTlsListener(
   let closePromise: Promise<void> | undefined;
 
   const revokeRequest = (request: IncomingMessage, state?: SecureSocketState): void => {
-    requestAuthorities.delete(request);
     state?.requests.delete(request);
   };
   const revokeSocket = (state: SecureSocketState): void => {
@@ -80,9 +122,9 @@ export async function startRemoteWorkerNativeTlsListener(
     clearDeadline(state.connectionDeadline);
     state.headerDeadline = undefined;
     state.requestDeadline = undefined;
+    state.requestDeadlineAt = undefined;
     state.connectionDeadline = undefined;
     socketAdapters.delete(state.socket);
-    for (const request of state.requests) requestAuthorities.delete(request);
     state.requests.clear();
     state.exporter.fill(0);
     for (const certificate of state.certificateChain) certificate.fill(0);
@@ -109,7 +151,10 @@ export async function startRemoteWorkerNativeTlsListener(
           maxHeaderSize: REMOTE_WORKER_NATIVE_TLS_LIMITS.maxHeaderBytes,
         },
         (request, response) => {
-          handleRequest(request, response);
+          void handleRequest(request, response).catch(() => {
+            response.destroy();
+            request.socket.destroy();
+          });
         },
       );
     } finally {
@@ -203,7 +248,7 @@ export async function startRemoteWorkerNativeTlsListener(
       ownedServer.closeAllConnections();
     });
 
-    function handleRequest(request: IncomingMessage, response: ServerResponse): void {
+    async function handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
       const socket = request.socket as TLSSocket;
       const state = secureStates.get(socket);
       const adapter = socketAdapters.get(socket);
@@ -219,6 +264,11 @@ export async function startRemoteWorkerNativeTlsListener(
         socket.destroy();
         return;
       }
+      if (request.method !== "POST") {
+        response.destroy();
+        socket.destroy();
+        return;
+      }
       if (request.rawHeaders.length / 2 > REMOTE_WORKER_NATIVE_TLS_LIMITS.maxHeaders) {
         response.destroy();
         socket.destroy();
@@ -229,6 +279,7 @@ export async function startRemoteWorkerNativeTlsListener(
       clearDeadline(state.headerDeadline);
       state.headerDeadline = undefined;
       state.requestDeadline = destroyAtDeadline(socket, REMOTE_WORKER_NATIVE_TLS_LIMITS.requestTimeoutMs);
+      state.requestDeadlineAt = Date.now() + REMOTE_WORKER_NATIVE_TLS_LIMITS.requestTimeoutMs;
       state.requests.add(request);
       let revoked = false;
       const revoke = (): void => {
@@ -236,6 +287,7 @@ export async function startRemoteWorkerNativeTlsListener(
         revoked = true;
         clearDeadline(state.requestDeadline);
         state.requestDeadline = undefined;
+        state.requestDeadlineAt = undefined;
         revokeRequest(request, state);
       };
       request.once("aborted", revoke);
@@ -243,35 +295,52 @@ export async function startRemoteWorkerNativeTlsListener(
       response.once("close", revoke);
       response.once("finish", revoke);
       let identity: RemoteWorkerTransportIdentity | undefined;
+      let bodyBytes: Buffer | undefined;
+      let outgoing: NormalizedHandlerResponse | FixedResponse | undefined;
+      let requestReady = false;
       try {
+        const headers = normalizeRequestHeaders(request);
+        const contentLength = inspectRequestEnvelope(request, headers);
         identity = deriveRemoteWorkerTransportIdentityFromPort({
           socket: adapter,
           request: Object.freeze({
             rawPath: request.url ?? "",
-            headers: Object.freeze({ ...request.headers }),
+            headers,
             rawHeaders: Object.freeze([...request.rawHeaders]),
           }),
           expectedClientCaSha256: enabledConfig.tls.clientCaSha256,
         });
-        const authority = createRequestAuthority(identity);
-        requestAuthorities.set(request, authority);
-        if (!requestAuthorities.has(request)) throw unavailable();
-        response.statusCode = 503;
-        response.setHeader("Cache-Control", "no-store");
-        response.setHeader("Retry-After", "60");
-        response.setHeader("Connection", "close");
-        response.setHeader("Content-Type", "application/json; charset=utf-8");
-        response.setHeader("Content-Length", String(UNAVAILABLE_BODY.byteLength));
-        response.end(UNAVAILABLE_BODY, () => {
-          revoke();
-          socket.destroy();
-        });
+        bodyBytes = await readExactBody(request, contentLength, socket);
+        if (socket.destroyed || state.revoked || state.requestDeadlineAt === undefined) throw unavailable();
+        requestReady = true;
+        if (handler === undefined) {
+          outgoing = fixedResponse(503, UNAVAILABLE_BODY, { "retry-after": "60" });
+        } else {
+          const handlerRequest = createHandlerRequest(request.url ?? "", headers, bodyBytes, identity);
+          const handlerResult = await invokeHandlerBeforeDeadline(handler, handlerRequest, state.requestDeadlineAt);
+          outgoing = normalizeHandlerResponse(handlerResult);
+        }
       } catch {
+        if (requestReady && !socket.destroyed && !state.revoked && !response.headersSent) {
+          outgoing = fixedResponse(500, REQUEST_FAILED_BODY);
+        }
+      } finally {
+        bodyBytes?.fill(0);
+        identity?.tlsExporter.fill(0);
+      }
+      if (outgoing === undefined || socket.destroyed || state.revoked) {
+        outgoing?.dispose();
         revoke();
         response.destroy();
         socket.destroy();
+        return;
+      }
+      try {
+        await writeBoundedResponse(response, socket, outgoing);
       } finally {
-        identity?.tlsExporter.fill(0);
+        outgoing.dispose();
+        revoke();
+        socket.destroy();
       }
     }
 
@@ -373,16 +442,251 @@ function snapshotPeerCertificateChain(
   return Object.freeze(chain);
 }
 
-function createRequestAuthority(identity: RemoteWorkerTransportIdentity): object {
+interface NormalizedHandlerResponse {
+  readonly statusCode: number;
+  readonly headers: Readonly<Record<string, string>>;
+  readonly body: Buffer;
+  dispose(): void;
+}
+
+interface FixedResponse {
+  readonly statusCode: number;
+  readonly headers: Readonly<Record<string, string>>;
+  readonly body: Buffer;
+  dispose(): void;
+}
+
+function normalizeRequestHeaders(request: IncomingMessage): Readonly<Record<string, string>> {
+  const normalized = Object.create(null) as Record<string, string>;
+  for (const [rawName, value] of Object.entries(request.headers)) {
+    if (value === undefined) continue;
+    const name = rawName.toLowerCase();
+    if (name !== rawName || typeof value !== "string" || Object.hasOwn(normalized, name)) throw unavailable();
+    normalized[name] = value;
+  }
+  return Object.freeze(normalized);
+}
+
+function inspectRequestEnvelope(request: IncomingMessage, headers: Readonly<Record<string, string>>): number {
+  if (request.method !== "POST") throw unavailable();
+  if (request.rawHeaders.some((value, index) => index % 2 === 0 && value.toLowerCase() === "transfer-encoding")) {
+    throw unavailable();
+  }
+  if (headers["transfer-encoding"] !== undefined) throw unavailable();
+  const contentType = headers["content-type"]?.trim().toLowerCase();
+  if (contentType !== "application/json" && contentType !== "application/json; charset=utf-8") throw unavailable();
+  const rawLength = headers["content-length"];
+  if (rawLength === undefined || !/^(?:0|[1-9][0-9]*)$/u.test(rawLength)) throw unavailable();
+  const contentLength = Number(rawLength);
+  if (
+    !Number.isSafeInteger(contentLength) ||
+    contentLength < 0 ||
+    contentLength > REMOTE_WORKER_NATIVE_TLS_LIMITS.maxProtocolBodyBytes
+  ) {
+    throw unavailable();
+  }
+  return contentLength;
+}
+
+async function readExactBody(request: IncomingMessage, expectedLength: number, socket: TLSSocket): Promise<Buffer> {
+  return await new Promise<Buffer>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let received = 0;
+    let settled = false;
+    const wipeChunks = (): void => {
+      for (const chunk of chunks) chunk.fill(0);
+      chunks.length = 0;
+    };
+    const cleanup = (): void => {
+      request.off("data", onData);
+      request.off("end", onEnd);
+      request.off("aborted", onAborted);
+      request.off("error", onError);
+    };
+    const fail = (): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      wipeChunks();
+      reject(unavailable());
+    };
+    const onData = (value: Buffer | string): void => {
+      if (settled) return;
+      const chunk = Buffer.isBuffer(value) ? Buffer.from(value) : Buffer.from(value, "utf8");
+      chunks.push(chunk);
+      received += chunk.byteLength;
+      if (received > expectedLength || received > REMOTE_WORKER_NATIVE_TLS_LIMITS.maxProtocolBodyBytes) {
+        fail();
+        request.destroy();
+        socket.destroy();
+      }
+    };
+    const onEnd = (): void => {
+      if (settled) return;
+      if (received !== expectedLength || socket.destroyed) {
+        fail();
+        return;
+      }
+      settled = true;
+      cleanup();
+      try {
+        const body = Buffer.concat(chunks, received);
+        wipeChunks();
+        resolve(body);
+      } catch {
+        wipeChunks();
+        reject(unavailable());
+      }
+    };
+    const onAborted = (): void => fail();
+    const onError = (): void => fail();
+    request.on("data", onData);
+    request.once("end", onEnd);
+    request.once("aborted", onAborted);
+    request.once("error", onError);
+    request.resume();
+  });
+}
+
+function createHandlerRequest(
+  rawPath: string,
+  headers: Readonly<Record<string, string>>,
+  bodyBytes: Buffer,
+  transportIdentity: RemoteWorkerTransportIdentity,
+): RemoteWorkerNativeHandlerRequest {
   return Object.freeze(
     Object.assign(Object.create(null) as Record<string, unknown>, {
-      source: identity.source,
-      certificateDerSha256: identity.certificateDerSha256,
-      publicKeySpkiSha256: identity.publicKeySpkiSha256,
-      trustAnchorDerSha256: identity.trustAnchorDerSha256,
-      tlsExporterSha256: identity.tlsExporterSha256,
+      method: "POST",
+      rawPath,
+      headers,
+      bodyBytes,
+      transportIdentity,
     }),
-  );
+  ) as unknown as RemoteWorkerNativeHandlerRequest;
+}
+
+async function invokeHandlerBeforeDeadline(
+  handler: RemoteWorkerNativeRequestHandler,
+  request: RemoteWorkerNativeHandlerRequest,
+  deadlineAt: number,
+): Promise<RemoteWorkerNativeHandlerResponse> {
+  const remainingMs = deadlineAt - Date.now();
+  if (remainingMs <= 0) throw unavailable();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(() => handler(request)),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(unavailable()), remainingMs);
+        timer.unref();
+      }),
+    ]);
+  } finally {
+    clearDeadline(timer);
+  }
+}
+
+function normalizeHandlerResponse(response: RemoteWorkerNativeHandlerResponse): NormalizedHandlerResponse {
+  if (response === null || typeof response !== "object") throw unavailable();
+  if (
+    !Number.isInteger(response.statusCode) ||
+    response.statusCode < 200 ||
+    response.statusCode > 599 ||
+    response.statusCode === 204 ||
+    response.statusCode === 304
+  ) {
+    throw unavailable();
+  }
+  const headers = normalizeHandlerResponseHeaders(response.headers);
+  const body = copyBoundedHandlerBody(response.body);
+  return Object.freeze({
+    statusCode: response.statusCode,
+    headers,
+    body,
+    dispose: (): void => {
+      body.fill(0);
+    },
+  });
+}
+
+function normalizeHandlerResponseHeaders(
+  headers: Readonly<Record<string, string>> | undefined,
+): Readonly<Record<string, string>> {
+  const normalized = Object.create(null) as Record<string, string>;
+  if (headers === undefined) return Object.freeze(normalized);
+  if (headers === null || typeof headers !== "object" || Array.isArray(headers)) throw unavailable();
+  const entries = Object.entries(headers);
+  if (entries.length > REMOTE_WORKER_NATIVE_TLS_LIMITS.maxResponseHeaders) throw unavailable();
+  let totalBytes = 0;
+  for (const [rawName, value] of entries) {
+    const name = rawName.toLowerCase();
+    if (
+      name !== rawName ||
+      !/^[!#$%&'*+.^_`|~0-9a-z-]+$/u.test(name) ||
+      Buffer.byteLength(name, "utf8") > REMOTE_WORKER_NATIVE_TLS_LIMITS.maxResponseHeaderNameBytes ||
+      FORBIDDEN_HANDLER_RESPONSE_HEADERS.has(name) ||
+      Object.hasOwn(normalized, name) ||
+      typeof value !== "string" ||
+      // eslint-disable-next-line no-control-regex -- HTTP response values must reject control bytes explicitly.
+      /[\u0000-\u001f\u007f]/u.test(value) ||
+      Buffer.byteLength(value, "utf8") > REMOTE_WORKER_NATIVE_TLS_LIMITS.maxResponseHeaderValueBytes
+    ) {
+      throw unavailable();
+    }
+    totalBytes += Buffer.byteLength(name, "utf8") + Buffer.byteLength(value, "utf8");
+    if (totalBytes > REMOTE_WORKER_NATIVE_TLS_LIMITS.maxResponseHeaderBytes) throw unavailable();
+    normalized[name] = value;
+  }
+  return Object.freeze(normalized);
+}
+
+function copyBoundedHandlerBody(value: string | Buffer | Uint8Array): Buffer {
+  let byteLength: number;
+  if (typeof value === "string") byteLength = Buffer.byteLength(value, "utf8");
+  else if (Buffer.isBuffer(value) || value instanceof Uint8Array) byteLength = value.byteLength;
+  else throw unavailable();
+  if (byteLength > REMOTE_WORKER_NATIVE_TLS_LIMITS.maxResponseBodyBytes) throw unavailable();
+  return typeof value === "string" ? Buffer.from(value, "utf8") : Buffer.from(value);
+}
+
+function fixedResponse(
+  statusCode: number,
+  body: Buffer,
+  headers: Readonly<Record<string, string>> = Object.freeze(Object.create(null) as Record<string, string>),
+): FixedResponse {
+  return Object.freeze({ statusCode, headers: Object.freeze({ ...headers }), body, dispose: (): void => undefined });
+}
+
+async function writeBoundedResponse(
+  response: ServerResponse,
+  socket: TLSSocket,
+  outgoing: NormalizedHandlerResponse | FixedResponse,
+): Promise<void> {
+  response.statusCode = outgoing.statusCode;
+  response.shouldKeepAlive = false;
+  for (const [name, value] of Object.entries(outgoing.headers)) response.setHeader(name, value);
+  if (!response.hasHeader("content-type")) response.setHeader("Content-Type", "application/json; charset=utf-8");
+  response.setHeader("Cache-Control", "no-store");
+  response.setHeader("Connection", "close");
+  response.setHeader("Content-Length", String(outgoing.body.byteLength));
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      response.off("error", finish);
+      response.off("close", finish);
+      resolve();
+    };
+    response.once("error", finish);
+    response.once("close", finish);
+    try {
+      response.end(outgoing.body, finish);
+    } catch {
+      finish();
+    }
+  });
+  socket.destroy();
 }
 
 async function listen(server: HttpsServer, host: string, port: number): Promise<void> {

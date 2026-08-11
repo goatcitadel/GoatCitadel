@@ -41,6 +41,7 @@ import {
 } from "../SettingsShared";
 import { NativeCard, NativeDisclosureCard, NativeSectionIndex } from "../../NativeRoutePageLayout";
 import { NativeButton, NativeSelectableList } from "../../primitives";
+import { useDraftTransitionGuard, useFormDirty } from "../../library/use-form-dirty";
 import {
   createEmptyPermissionProfileDraft,
   createPermissionProfileDraftFromRecord,
@@ -124,6 +125,10 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
   const [profileEditDraft, setProfileEditDraft] = useState<PermissionProfileEditorDraft>(
     createEmptyPermissionProfileDraft,
   );
+  const [profileEditBaseline, setProfileEditBaseline] = useState<PermissionProfileEditorDraft>(
+    createEmptyPermissionProfileDraft,
+  );
+  const [profileEditOwnerId, setProfileEditOwnerId] = useState("");
   const [overrideDraft, setOverrideDraft] = useState({
     scope: "workspace" as LocalOperatorOverrideScope,
     scopeRef: activeWorkspaceId,
@@ -160,6 +165,34 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
   const activeAutonomyGrants = (data?.autonomyGrants ?? []).filter((grant) => grant.status === "active");
   const primaryEffectiveContexts = (data?.effective ?? []).filter((item) => isPrimaryPermissionContext(item.surface));
   const legacyEffectiveContexts = (data?.effective ?? []).filter((item) => isLegacyPermissionContext(item.surface));
+  const profileEditDirty = Boolean(
+    selectedProfile &&
+    !selectedProfile.builtin &&
+    profileEditOwnerId === selectedProfile.profileId &&
+    !arePermissionProfileDraftsEqual(profileEditDraft, profileEditBaseline),
+  );
+  const profileCreateDirty = !arePermissionProfileDraftsEqual(profileDraft, createEmptyPermissionProfileDraft());
+  const overrideDirty =
+    overrideDraft.scope !== "workspace" ||
+    overrideDraft.scopeRef !== activeWorkspaceId ||
+    overrideDraft.reason.trim().length > 0 ||
+    overrideDraft.ttlSeconds !== 600 ||
+    overrideAcknowledged;
+  useFormDirty("settings:permissions", profileEditDirty || profileCreateDirty || overrideDirty, {
+    label: "Permissions",
+  });
+
+  const resetSelectedProfileDraft = useCallback(() => {
+    setProfileEditDraft(profileEditBaseline);
+  }, [profileEditBaseline]);
+  const applyProfileSelection = useCallback((profileId: string) => {
+    setSelectedProfileId(profileId);
+  }, []);
+  const profileSelectionGuard = useDraftTransitionGuard(
+    profileEditDirty,
+    applyProfileSelection,
+    resetSelectedProfileDraft,
+  );
 
   useEffect(() => {
     setOverrideDraft((current) =>
@@ -187,11 +220,20 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
 
   useEffect(() => {
     if (!selectedProfile || selectedProfile.builtin) {
-      setProfileEditDraft(createEmptyPermissionProfileDraft());
+      const emptyDraft = createEmptyPermissionProfileDraft();
+      setProfileEditDraft(emptyDraft);
+      setProfileEditBaseline(emptyDraft);
+      setProfileEditOwnerId(selectedProfile?.profileId ?? "");
       return;
     }
-    setProfileEditDraft(createPermissionProfileDraftFromRecord(selectedProfile));
-  }, [selectedProfile]);
+    if (profileEditOwnerId === selectedProfile.profileId && profileEditDirty) {
+      return;
+    }
+    const nextDraft = createPermissionProfileDraftFromRecord(selectedProfile);
+    setProfileEditDraft(nextDraft);
+    setProfileEditBaseline(nextDraft);
+    setProfileEditOwnerId(selectedProfile.profileId);
+  }, [profileEditDirty, profileEditOwnerId, selectedProfile]);
 
   const handleActivateProfile = async (profileId: string, surface: PermissionSurface) => {
     const profile = data?.profiles?.find((item) => item.profileId === profileId);
@@ -249,7 +291,11 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
       const updated = await updatePermissionProfile(selectedProfile.profileId, {
         ...permissionProfileDraftToMutation(profileEditDraft),
       });
+      const nextDraft = createPermissionProfileDraftFromRecord(updated);
       setSelectedProfileId(updated.profileId);
+      setProfileEditDraft(nextDraft);
+      setProfileEditBaseline(nextDraft);
+      setProfileEditOwnerId(updated.profileId);
       setNotice({ tone: "success", message: "Permission profile updated." });
       await reload();
     } catch (updateError) {
@@ -391,7 +437,11 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
                   body: profile.description ?? describePermissionProfile(profile),
                 }))}
                 selectedId={selectedProfile?.profileId ?? ""}
-                onSelect={setSelectedProfileId}
+                onSelect={(profileId) => {
+                  if (profileId !== selectedProfileId) {
+                    profileSelectionGuard.requestTransition(profileId);
+                  }
+                }}
                 emptyLabel="No permission profiles returned by the gateway."
                 maxHeight="22rem"
               />
@@ -759,6 +809,16 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
         </>
       ) : null}
       <ConfirmModal
+        open={profileSelectionGuard.pendingTransition !== null}
+        danger
+        title="Discard permission profile changes?"
+        message="The selected permission profile has unsaved edits. Discard them and open another profile?"
+        confirmLabel="Discard changes"
+        cancelLabel="Keep editing"
+        onCancel={profileSelectionGuard.cancelDiscard}
+        onConfirm={profileSelectionGuard.confirmDiscard}
+      />
+      <ConfirmModal
         open={pendingArchiveProfile !== null}
         danger
         pending={archiveProfilePending}
@@ -793,6 +853,13 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
       />
     </SettingsSectionShell>
   );
+}
+
+function arePermissionProfileDraftsEqual(
+  left: PermissionProfileEditorDraft,
+  right: PermissionProfileEditorDraft,
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function readEffectivePermissionSurfaceState(

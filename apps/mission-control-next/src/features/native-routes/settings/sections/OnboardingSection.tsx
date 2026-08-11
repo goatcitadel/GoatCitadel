@@ -584,7 +584,7 @@ function FirstOutcomePathPanel({
           id: item.id,
           label: item.label,
           description: item.actionDescription,
-          meta: item.meta,
+          meta: humanizeEnumToken(item.meta),
           actionLabel: item.actionLabel,
           onClick: () => navigate({ ...item.route, theme: route.theme }),
         }))}

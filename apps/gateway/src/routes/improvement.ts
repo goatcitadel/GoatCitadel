@@ -118,7 +118,7 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send({
-      items: improvement.listCapabilityGapEvents(parsed.data.limit),
+      items: await improvement.listCapabilityGapEvents(parsed.data.limit),
     });
   });
 
@@ -128,7 +128,7 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send({
-      items: improvement.listRepairCandidates(parsed.data.limit),
+      items: await improvement.listRepairCandidates(parsed.data.limit),
     });
   });
 
@@ -144,7 +144,7 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(improvement.updateRepairCandidateValidation(params.data.candidateId, body.data));
+      return reply.send(await improvement.updateRepairCandidateValidation(params.data.candidateId, body.data));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -156,7 +156,7 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send({
-      items: improvement.listImprovementSignals(parsed.data.limit, parsed.data.workspaceId),
+      items: await improvement.listImprovementSignals(parsed.data.limit, parsed.data.workspaceId),
     });
   });
 
@@ -166,7 +166,7 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(improvement.getImprovementSignal(params.data.signalId));
+      return reply.send(await improvement.getImprovementSignal(params.data.signalId));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -178,7 +178,7 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send({
-      items: improvement.listImprovementCandidates(parsed.data.limit, parsed.data.workspaceId),
+      items: await improvement.listImprovementCandidates(parsed.data.limit, parsed.data.workspaceId),
     });
   });
 
@@ -188,7 +188,7 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(improvement.getImprovementCandidate(params.data.candidateId));
+      return reply.send(await improvement.getImprovementCandidate(params.data.candidateId));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -199,7 +199,7 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(improvement.listCuratorReviewItems(parsed.data));
+    return reply.send(await improvement.listCuratorReviewItems(parsed.data));
   });
 
   fastify.get("/api/v1/improvement/candidates/:candidateId/curator-review", async (request, reply) => {
@@ -208,7 +208,7 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(improvement.getCuratorReviewItem(params.data.candidateId));
+      return reply.send(await improvement.getCuratorReviewItem(params.data.candidateId));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -278,7 +278,7 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(improvement.getImprovementActivation(params.data.activationId));
+      return reply.send(await improvement.getImprovementActivation(params.data.activationId));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -297,7 +297,9 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(
-        improvement.pauseImprovementActivation(params.data.activationId, { requesterId: body.data.actorId }),
+        await Promise.resolve(
+          improvement.pauseImprovementActivation(params.data.activationId, { requesterId: body.data.actorId }),
+        ),
       );
     } catch (error) {
       return replyWithImprovementMutationError(reply, error);
@@ -317,7 +319,9 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(
-        improvement.rollbackImprovementActivation(params.data.activationId, { requesterId: body.data.actorId }),
+        await Promise.resolve(
+          improvement.rollbackImprovementActivation(params.data.activationId, { requesterId: body.data.actorId }),
+        ),
       );
     } catch (error) {
       return replyWithImprovementMutationError(reply, error);
@@ -330,7 +334,7 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send({
-      items: improvement.listImprovementReports(parsed.data.limit),
+      items: await improvement.listImprovementReports(parsed.data.limit),
     });
   });
 
@@ -344,7 +348,7 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(improvement.getImprovementReport(params.data.reportId));
+      return reply.send(await improvement.getImprovementReport(params.data.reportId));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -368,7 +372,7 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send({
-      items: improvement.listDecisionReplayRuns(parsed.data.limit),
+      items: await improvement.listDecisionReplayRuns(parsed.data.limit),
     });
   });
 
@@ -378,7 +382,7 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(improvement.getDecisionReplayRun(params.data.runId));
+      return reply.send(await improvement.getDecisionReplayRun(params.data.runId));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -390,7 +394,7 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(improvement.approveDecisionAutoTune(params.data.tuneId));
+      return reply.send(await improvement.approveDecisionAutoTune(params.data.tuneId));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -402,7 +406,7 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(improvement.revertDecisionAutoTune(params.data.tuneId));
+      return reply.send(await improvement.revertDecisionAutoTune(params.data.tuneId));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -420,7 +424,7 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(improvement.createReplayOverrideDraft(params.data.runId, body.data.overrides));
+      return reply.send(await improvement.createReplayOverrideDraft(params.data.runId, body.data.overrides));
     } catch (error) {
       return reply.code(409).send({ error: (error as Error).message });
     }
@@ -438,7 +442,7 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(improvement.executeReplayOverride(params.data.runId, body.data.overrides));
+      return reply.send(await improvement.executeReplayOverride(params.data.runId, body.data.overrides));
     } catch (error) {
       return reply.code(409).send({ error: (error as Error).message });
     }
@@ -450,7 +454,7 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(improvement.getReplayDiffSummary(params.data.replayRunId));
+      return reply.send(await improvement.getReplayDiffSummary(params.data.replayRunId));
     } catch (error) {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("not found");

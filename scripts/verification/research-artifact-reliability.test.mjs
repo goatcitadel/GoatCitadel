@@ -6,6 +6,7 @@ import {
   deterministicEvidenceUrls,
   listZipEntryNames,
   RESEARCH_ARTIFACT_GAP_QUERIES,
+  RESEARCH_ARTIFACT_GATEWAY_ENV,
   RESEARCH_ARTIFACT_PROMPT,
 } from "./research-artifact-reliability.mjs";
 import {
@@ -14,6 +15,10 @@ import {
 } from "./lib/research-artifact-prompt-contract.mjs";
 import "./lib/pptx-package-audit.test.mjs";
 import "./lib/scenarios/deterministic-firecrawl-stub.test.mjs";
+
+test("research artifact lane is the explicit prompt-budget receipt consumer", () => {
+  assert.equal(RESEARCH_ARTIFACT_GATEWAY_ENV.GOATCITADEL_DEBUG_PROMPT_CONTEXT_BUDGET_RECEIPTS, "1");
+});
 
 test("ZIP central-directory parser fails closed on non-archives", () => {
   assert.throws(() => listZipEntryNames(Buffer.from("not a zip")), /end-of-central-directory/u);

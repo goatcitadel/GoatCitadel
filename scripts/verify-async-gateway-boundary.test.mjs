@@ -266,6 +266,333 @@ test("type-aware scan rejects floating Promises and casted storage calls without
   }
 });
 
+async function writeRoutePortFixture(repoRoot) {
+  const gatewayRoot = path.join(repoRoot, "apps", "gateway");
+  const servicesDir = path.join(gatewayRoot, "src", "services");
+  const routesDir = path.join(gatewayRoot, "src", "routes");
+  await Promise.all([mkdir(servicesDir, { recursive: true }), mkdir(routesDir, { recursive: true })]);
+  await writeFile(
+    path.join(gatewayRoot, "tsconfig.json"),
+    JSON.stringify({
+      compilerOptions: {
+        target: "ES2022",
+        module: "NodeNext",
+        moduleResolution: "NodeNext",
+        strict: true,
+        skipLibCheck: true,
+        noEmit: true,
+      },
+      include: ["src/**/*.ts"],
+    }),
+    "utf8",
+  );
+  await writeFile(
+    path.join(servicesDir, "route-service-factory.ts"),
+    `
+      export type RouteMethod = (...args: any[]) => any;
+      export type RoutePort<TMethod extends string> = Record<TMethod, RouteMethod>;
+      export type RouteService<TMethod extends string> = Readonly<RoutePort<TMethod>>;
+    `,
+    "utf8",
+  );
+  await writeFile(
+    path.join(servicesDir, "widgets-route-service.ts"),
+    `
+      import type { RoutePort, RouteService } from "./route-service-factory.js";
+
+      export interface Widget {
+        id: string;
+        name: string;
+      }
+      export interface WidgetsService {
+        listWidgets(workspaceId: string): Promise<Widget[]>;
+        getWidget(id: string): Promise<Widget | undefined>;
+        updateWidget(id: string, patch: object): Promise<Widget>;
+        isFeatureEnabled(flag: string): Promise<boolean>;
+        listWidgetTemplates(): string[];
+        streamWidgetEvents(): AsyncGenerator<string>;
+      }
+      export const widgetsRouteMethods = [
+        "listWidgets",
+        "getWidget",
+        "updateWidget",
+        "isFeatureEnabled",
+        "listWidgetTemplates",
+        "streamWidgetEvents",
+      ] as const;
+      export type WidgetsRouteMethod = (typeof widgetsRouteMethods)[number];
+      export type WidgetsRoutePort = RoutePort<WidgetsRouteMethod>;
+      export type WidgetsRouteService = RouteService<WidgetsRouteMethod>;
+      export interface WidgetsRoutePortDependencies {
+        widgetsService: WidgetsService;
+      }
+      export function createWidgetsRoutePort(deps: WidgetsRoutePortDependencies): WidgetsRoutePort {
+        return {
+          listWidgets: (workspaceId) => deps.widgetsService.listWidgets(workspaceId),
+          getWidget: (id) => deps.widgetsService.getWidget(id),
+          updateWidget: (id, patch) => deps.widgetsService.updateWidget(id, patch),
+          isFeatureEnabled: (flag) => deps.widgetsService.isFeatureEnabled(flag),
+          listWidgetTemplates: () => deps.widgetsService.listWidgetTemplates(),
+          streamWidgetEvents: () => deps.widgetsService.streamWidgetEvents(),
+        };
+      }
+    `,
+    "utf8",
+  );
+  await writeFile(
+    path.join(servicesDir, "reports-route-service.ts"),
+    `
+      export class ReportsRouteService {
+        public async exportReport(id: string): Promise<{ id: string }> {
+          return { id };
+        }
+        public buildSummary(id: string): { id: string } {
+          return { id };
+        }
+      }
+    `,
+    "utf8",
+  );
+  await writeFile(
+    path.join(servicesDir, "gateway-route-services.ts"),
+    `
+      import type { WidgetsRoutePort, WidgetsRouteService } from "./widgets-route-service.js";
+      import type { ReportsRouteService } from "./reports-route-service.js";
+
+      export interface GatewayRouteServices {
+        widgets: WidgetsRouteService;
+        reports: ReportsRouteService;
+      }
+      export interface GatewayRouteServiceDependencies {
+        widgets: WidgetsRoutePort;
+      }
+    `,
+    "utf8",
+  );
+}
+
+test("route-port scan flags the e881ce811 regression shapes against any-typed service ports", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "goatcitadel-async-gateway-route-ports-"));
+  try {
+    await writeRoutePortFixture(repoRoot);
+    await writeFile(
+      path.join(repoRoot, "apps", "gateway", "src", "routes", "widgets.ts"),
+      `
+        import type { GatewayRouteServices } from "../services/gateway-route-services.js";
+
+        interface Reply {
+          send(payload: unknown): Reply;
+          code(status: number): Reply;
+        }
+        declare const fastify: { services: GatewayRouteServices };
+        declare const reply: Reply;
+        declare function sendRouteError(target: Reply, error: unknown): void;
+
+        export async function itemsNesting(): Promise<void> {
+          reply.send({ items: fastify.services.widgets.listWidgets("ws") });
+        }
+        export async function returnNesting(): Promise<{ items: unknown }> {
+          return { items: fastify.services.widgets.listWidgets("ws") };
+        }
+        export async function promiseTruthyGate(id: string): Promise<void> {
+          if (!fastify.services.widgets.getWidget(id)) {
+            reply.code(404).send({ error: "not_found" });
+          }
+          const enabled = fastify.services.widgets.isFeatureEnabled("computer-use");
+          if (enabled) {
+            reply.code(403).send({ error: "forbidden" });
+          }
+        }
+        export async function projectionOverPromise(id: string): Promise<void> {
+          const name = fastify.services.widgets.getWidget(id).name;
+          reply.send({ name });
+        }
+        export async function catchBypassSend(id: string): Promise<void> {
+          try {
+            reply.send(fastify.services.widgets.getWidget(id));
+          } catch (error) {
+            sendRouteError(reply, error);
+          }
+        }
+        export function fireAndForget(id: string): void {
+          fastify.services.widgets.updateWidget(id, {});
+        }
+        export async function aliasAssignment(): Promise<void> {
+          const { widgets } = fastify.services;
+          const rows = widgets.listWidgets("ws");
+          reply.send({ rows });
+        }
+        export async function destructuredMethod(): Promise<void> {
+          const { listWidgets } = fastify.services.widgets;
+          reply.send({ items: listWidgets("ws") });
+        }
+        export async function classServiceNesting(id: string): Promise<void> {
+          reply.send({ report: fastify.services.reports.exportReport(id) });
+        }
+        export function classFloating(id: string): void {
+          fastify.services.reports.exportReport(id);
+        }
+        export function floatingAdoption(id: string): void {
+          Promise.resolve(fastify.services.widgets.updateWidget(id, {}));
+        }
+      `,
+      "utf8",
+    );
+
+    const result = await verifyAsyncGatewayBoundary({ repoRoot });
+    const routePortDiagnostics = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "unawaited_route_service_call",
+    );
+    assert.equal(routePortDiagnostics.length, 10);
+    assert.ok(routePortDiagnostics.every((diagnostic) => diagnostic.filePath.endsWith("routes/widgets.ts")));
+    assert.ok(routePortDiagnostics.some((diagnostic) => diagnostic.message.includes("widgets.listWidgets")));
+    assert.ok(routePortDiagnostics.some((diagnostic) => diagnostic.message.includes("widgets.isFeatureEnabled")));
+    assert.ok(routePortDiagnostics.some((diagnostic) => diagnostic.message.includes("reports.exportReport")));
+
+    // classFloating is reported by the floating rule directly; floatingAdoption
+    // is reported once at the un-owned Promise.resolve result.
+    const floatingDiagnostics = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "floating_gateway_promise",
+    );
+    assert.equal(floatingDiagnostics.length, 2);
+    const floatingLines = new Set(floatingDiagnostics.map((diagnostic) => diagnostic.line));
+    assert.ok(
+      routePortDiagnostics.every((diagnostic) => !floatingLines.has(diagnostic.line)),
+      "statement-position promises already reported as floating must not be double-flagged",
+    );
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("route-port scan allows awaited, combinator, chained, thunked, streamed, owned, and sync-port shapes", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "goatcitadel-async-gateway-route-ports-ok-"));
+  try {
+    await writeRoutePortFixture(repoRoot);
+    await writeFile(
+      path.join(repoRoot, "apps", "gateway", "src", "routes", "widgets-ok.ts"),
+      `
+        import type { GatewayRouteServices } from "../services/gateway-route-services.js";
+        import type { WidgetsRouteService } from "../services/widgets-route-service.js";
+
+        interface Reply {
+          send(payload: unknown): Reply;
+        }
+        declare const fastify: { services: GatewayRouteServices };
+        declare const reply: Reply;
+        declare const backgroundTasks: Set<Promise<unknown>>;
+        declare function trackBackgroundTask(tasks: Set<Promise<unknown>>, task: Promise<unknown>): void;
+        declare function streamSse(target: Reply, handler: () => Promise<unknown>): Promise<void>;
+
+        export async function awaited(): Promise<void> {
+          const rows = await fastify.services.widgets.listWidgets("ws");
+          reply.send({ rows });
+        }
+        export function returned(): Promise<unknown> {
+          return fastify.services.widgets.listWidgets("ws");
+        }
+        export async function combinators(id: string): Promise<void> {
+          const [rows, widget] = await Promise.all([
+            fastify.services.widgets.listWidgets("ws"),
+            fastify.services.widgets.getWidget(id),
+          ]);
+          const settled = await Promise.allSettled([fastify.services.widgets.updateWidget(id, {})]);
+          reply.send({ rows, widget, settled });
+        }
+        export async function chained(id: string): Promise<void> {
+          fastify.services.widgets.updateWidget(id, {}).catch(() => undefined);
+          await fastify.services.widgets.getWidget(id).then((widget) => reply.send({ widget }));
+        }
+        export async function thunked(): Promise<void> {
+          await streamSse(reply, () => fastify.services.widgets.listWidgets("ws"));
+        }
+        export function tracked(id: string): void {
+          trackBackgroundTask(backgroundTasks, fastify.services.widgets.updateWidget(id, {}));
+        }
+        export async function adoptedResolve(id: string): Promise<void> {
+          reply.send(await Promise.resolve(fastify.services.widgets.getWidget(id)));
+        }
+        export function handledAdoption(id: string): void {
+          void Promise.resolve(fastify.services.widgets.updateWidget(id, {})).catch(() => undefined);
+        }
+        export async function deferredOwnedUse(id: string): Promise<void> {
+          const pending = fastify.services.widgets.getWidget(id);
+          reply.send({ widget: await pending });
+        }
+        export async function streamed(): Promise<void> {
+          for await (const event of fastify.services.widgets.streamWidgetEvents()) {
+            reply.send({ event });
+          }
+        }
+        export function syncPortUse(): void {
+          const templates = fastify.services.widgets.listWidgetTemplates();
+          reply.send({ templates });
+        }
+        export function syncClassUse(id: string): void {
+          reply.send({ summary: fastify.services.reports.buildSummary(id) });
+        }
+        export async function helperIdentified(services: GatewayRouteServices, id: string): Promise<void> {
+          const service: WidgetsRouteService = services.widgets;
+          const widget = await service.getWidget(id);
+          reply.send({ widget });
+        }
+      `,
+      "utf8",
+    );
+
+    const result = await verifyAsyncGatewayBoundary({ repoRoot });
+    assert.deepEqual(
+      result.diagnostics.filter((diagnostic) => diagnostic.code === "unawaited_route_service_call"),
+      [],
+    );
+    assert.deepEqual(result.diagnostics, []);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("route-port scan fails loud when an any-typed port method has no scanner-visible builder", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "goatcitadel-async-gateway-route-ports-unmapped-"));
+  const gatewayRoot = path.join(repoRoot, "apps", "gateway");
+  const servicesDir = path.join(gatewayRoot, "src", "services");
+  const routesDir = path.join(gatewayRoot, "src", "routes");
+  try {
+    await Promise.all([mkdir(servicesDir, { recursive: true }), mkdir(routesDir, { recursive: true })]);
+    await writeFile(
+      path.join(servicesDir, "route-service-factory.ts"),
+      `
+        export type RouteMethod = (...args: any[]) => any;
+        export type RoutePort<TMethod extends string> = Record<TMethod, RouteMethod>;
+        export type RouteService<TMethod extends string> = Readonly<RoutePort<TMethod>>;
+      `,
+      "utf8",
+    );
+    await writeFile(
+      path.join(servicesDir, "gateway-route-services.ts"),
+      `
+        import type { RouteService } from "./route-service-factory.js";
+
+        export type GizmosRouteService = RouteService<"listGizmos">;
+        export interface GatewayRouteServices {
+          gizmos: GizmosRouteService;
+        }
+        export interface GatewayRouteServiceDependencies {
+          gizmos: GizmosRouteService;
+        }
+      `,
+      "utf8",
+    );
+    await writeFile(path.join(routesDir, "gizmos.ts"), "export const routes = true;\n", "utf8");
+
+    await assert.rejects(
+      () => verifyAsyncGatewayBoundary({ repoRoot }),
+      (error) => error instanceof Error && /gizmos\.listGizmos/u.test(error.message),
+    );
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("repository scanner includes production TypeScript and excludes test and spec files", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "goatcitadel-async-gateway-boundary-"));
   const gatewaySource = path.join(repoRoot, "apps", "gateway", "src");

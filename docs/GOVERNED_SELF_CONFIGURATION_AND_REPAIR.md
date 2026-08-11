@@ -4,6 +4,10 @@ Last updated: 2026-08-07
 
 Status: current owner contract and parity acceptance rubric. The first direct-loopback official-search credential vertical is implemented in source, including durable pre-effect reservation and receipt-bound resume, but generic self-repair and **shipped parity** remain open until the named integrated proof lane and remaining repair classes pass.
 
+Program placement: implementation order and dependencies are owned by tranche
+`M5` in [MASTER_COMPLETION_PROGRAM.md](./MASTER_COMPLETION_PROGRAM.md). This
+document remains authoritative for the self-configuration acceptance matrix.
+
 ## Product Promise
 
 An operator should be able to ask for a capability in Chat, have GoatCitadel identify a repairable setup blocker, complete the safe configuration or repair through a governed in-product flow, verify the result against the live owner, and continue the original durable turn.

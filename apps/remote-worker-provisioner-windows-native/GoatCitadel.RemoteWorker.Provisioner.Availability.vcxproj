@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|ARM64">
+      <Configuration>Release</Configuration>
+      <Platform>ARM64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <ProjectGuid>{D9B8D8E2-CE2C-47E6-85CF-A714E4855AD0}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <RootNamespace>GoatCitadelRemoteWorkerProvisionerAvailability</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <VCToolsVersion>14.44.35207</VCToolsVersion>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <VCToolsVersion>14.44.35207</VCToolsVersion>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <TargetName>GoatCitadelRemoteWorkerProvisionerAvailability</TargetName>
+    <TargetExt>.exe</TargetExt>
+    <LinkIncremental>false</LinkIncremental>
+    <GenerateManifest>false</GenerateManifest>
+  </PropertyGroup>
+  <Target Name="RequireExpectedProvisionerSha256" BeforeTargets="ClCompile">
+    <Error Condition="'$(ExpectedProvisionerSha256)' == ''" Text="ExpectedProvisionerSha256 is required for the availability broker build." />
+  </Target>
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Release'">
+    <ClCompile>
+      <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <SDLCheck>true</SDLCheck>
+      <ConformanceMode>true</ConformanceMode>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <Optimization>MaxSpeed</Optimization>
+      <WholeProgramOptimization>true</WholeProgramOptimization>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <BufferSecurityCheck>true</BufferSecurityCheck>
+      <SpectreMitigation>Spectre</SpectreMitigation>
+      <ControlFlowGuard>Guard</ControlFlowGuard>
+      <ExceptionHandling>false</ExceptionHandling>
+      <RuntimeTypeInfo>false</RuntimeTypeInfo>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <MinimalRebuild>false</MinimalRebuild>
+      <DebugInformationFormat>None</DebugInformationFormat>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;_WIN32_WINNT=0x0A00;GOATCITADEL_EXPECTED_PROVISIONER_SHA256_HEX=&quot;$(ExpectedProvisionerSha256)&quot;;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalOptions>/Brepro /experimental:deterministic /permissive- /Zc:inline /Zc:preprocessor /volatile:iso /pathmap:$(MSBuildProjectDirectory)=/_/goatcitadel/remote-worker-provisioner-availability %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
+      <RandomizedBaseAddress>true</RandomizedBaseAddress>
+      <DataExecutionPrevention>true</DataExecutionPrevention>
+      <HighEntropyVA>true</HighEntropyVA>
+      <ControlFlowGuard>Guard</ControlFlowGuard>
+      <IgnoreAllDefaultLibraries>true</IgnoreAllDefaultLibraries>
+      <EntryPointSymbol>AvailabilityBrokerEntryPoint</EntryPointSymbol>
+      <AdditionalDependencies>kernel32.lib;advapi32.lib;bcrypt.lib;bufferoverflowu.lib;libvcruntime.lib;libcmt.lib</AdditionalDependencies>
+      <AdditionalOptions>/NODEFAULTLIB /Brepro /DEBUG:NONE /INCREMENTAL:NO /OPT:REF /OPT:ICF /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT /GUARD:CF %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions Condition="'$(Platform)'=='ARM64'">/INCLUDE:__arm64_safe_unaligned_memory_access %(AdditionalOptions)</AdditionalOptions>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="src\availability_broker.cpp" />
+    <ClCompile Include="src\availability_broker_main.cpp" />
+    <ClCompile Include="src\availability_broker_runtime.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\availability_broker.hpp" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

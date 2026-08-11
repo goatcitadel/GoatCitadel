@@ -20,8 +20,10 @@ import {
   normalizeAppendRemoteWorkerAssignmentEventsCommand,
   normalizeControlRemoteWorkerAssignmentCommand,
   normalizeCreateRemoteWorkerAssignmentCommand,
+  normalizeRemoteWorkerMeshNodeAuthorityFence,
   normalizeRecordRemoteWorkerAssignmentMaterializationCommand,
   normalizeRecoverRemoteWorkerAssignmentCommand,
+  readDurableChatTurnExecutionPayloadAuthority,
   normalizeRenewRemoteWorkerAssignmentLeaseCommand,
   normalizeSettleRemoteWorkerAssignmentCommand,
   normalizeStartRemoteWorkerAssignmentGenerationCommand,
@@ -51,13 +53,23 @@ import {
   type RemoteWorkerAssignmentMaterializationRecord,
   type RemoteWorkerAssignmentRecord,
   type RemoteWorkerAssignmentSettlementRecord,
+  type RemoteWorkerMeshNodeAuthorityFence,
   type RenewRemoteWorkerAssignmentLeaseCommand,
   type ResolvedRemoteWorkerAssignmentAuthority,
   type SettleRemoteWorkerAssignmentCommand,
   type StartRemoteWorkerAssignmentGenerationCommand,
 } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
+import { ChatTurnCapabilityProfileRepository } from "./chat-turn-capability-profile-repo.js";
+import { RemoteWorkerAdmissionRepository } from "./remote-worker-admission-repo.js";
+import { RemoteWorkerMeshNodeAdmissionRepository } from "./remote-worker-mesh-node-admission-repo.js";
+import { buildRemoteWorkerTaskBoundDispatchLockPlan } from "./remote-worker-dispatch-lock-order.js";
 import { safeJsonParse } from "./safe-json.js";
+import { SessionMutationAdmissionRepository } from "./session-mutation-admission-repo.js";
+
+export const REMOTE_WORKER_ASSIGNMENT_WORKLOAD_SCHEMA_VERSION =
+  "goatcitadel.remote-worker-assignment-workload.v1" as const;
+export const REMOTE_WORKER_ASSIGNMENT_WORKLOAD_MAX_BYTES = 512 * 1024;
 
 export interface CreateRemoteWorkerAssignmentOutcome {
   disposition: "created" | "replayed";
@@ -74,6 +86,29 @@ export interface RenewRemoteWorkerAssignmentLeaseOutcome {
   disposition: "renewed" | "replayed_without_lease_secret";
   lease: RemoteWorkerAssignmentLeaseRecord;
 }
+
+export interface ResolveRemoteWorkerAssignmentControlReadInput {
+  readonly registryWorkspaceId: string;
+  readonly assignmentId: string;
+  readonly expectedAssignmentGeneration: number;
+  readonly expectedLeaseRevision: number;
+  readonly leaseTokenSha256: string;
+}
+
+export type ResolvedRemoteWorkerAssignmentControlReadAuthority =
+  | Readonly<{
+      disposition: "active";
+      assignment: RemoteWorkerAssignmentRecord;
+      generation: RemoteWorkerAssignmentGenerationRecord;
+      lease: RemoteWorkerAssignmentLeaseRecord;
+    }>
+  | Readonly<{
+      disposition: "cancel_requested";
+      assignment: RemoteWorkerAssignmentRecord;
+      generation: RemoteWorkerAssignmentGenerationRecord;
+      lease: RemoteWorkerAssignmentLeaseRecord;
+      control: RemoteWorkerAssignmentControlRecord;
+    }>;
 
 export interface RecoverRemoteWorkerAssignmentOutcome {
   disposition: "recovered" | "replayed_without_lease_secret";
@@ -137,6 +172,118 @@ export interface ListRemoteWorkerAssignmentAggregatesOptions {
 export interface ListRemoteWorkerAssignmentAggregatesResult {
   items: readonly RemoteWorkerAssignmentAggregate[];
   nextCursor?: RemoteWorkerAssignmentAggregateCursor;
+}
+
+/** Exact protected M2 identity that the assignment owner rechecks at commit. */
+export interface RemoteWorkerAssignmentClaimAuthority {
+  readonly registryWorkspaceId: string;
+  readonly bootstrapId: string;
+  readonly workerId: string;
+  readonly workerGeneration: number;
+  readonly credentialId: string;
+  readonly credentialGeneration: number;
+  readonly authorizationCredentialSha256: string;
+  readonly nodeId: string;
+  readonly clientCertificateSha256: string;
+  readonly runtimeManifestSha256: string;
+  readonly workspaceCeilingSha256: string;
+  readonly capabilityCeilingSha256: string;
+  readonly protectedAdmissionEnvelopeSha256: string;
+  readonly protectedAdmissionContextSha256: string;
+  readonly claimsSha256: string;
+}
+
+/**
+ * Exact M2 credential/protected-admission authority joined to the one current
+ * M3 execution-workspace admission. Protected assignment RPC owners pass this
+ * advisory snapshot back to storage so the assignment transaction can compare
+ * it under the canonical worker/node/assignment locks before any replay, read,
+ * or mutation is observed.
+ */
+export interface RemoteWorkerAssignmentProtectedCommitFence {
+  readonly credentialAuthority: RemoteWorkerAssignmentClaimAuthority;
+  readonly meshAdmission: RemoteWorkerMeshNodeAuthorityFence;
+}
+
+export interface RemoteWorkerAssignmentOfferCursor {
+  readonly createdAt: string;
+  readonly assignmentId: string;
+}
+
+export interface RemoteWorkerAssignmentWorkloadIdentity {
+  readonly schemaVersion: typeof REMOTE_WORKER_ASSIGNMENT_WORKLOAD_SCHEMA_VERSION;
+  readonly registryWorkspaceId: string;
+  readonly assignmentId: string;
+  readonly assignmentManifestSha256: string;
+  readonly durableRunId: string;
+  readonly durableRunVersion: number;
+  readonly durableRunPayloadSha256: string;
+  readonly capabilityProfileId: string;
+  readonly capabilityProfileSha256: string;
+  readonly contextSnapshotSha256: string;
+  readonly workloadSha256: string;
+}
+
+export interface RemoteWorkerAssignmentWorkloadProjection extends RemoteWorkerAssignmentWorkloadIdentity {
+  readonly payload: Readonly<Record<string, unknown>>;
+}
+
+export interface RemoteWorkerAssignmentOffer {
+  readonly assignment: RemoteWorkerAssignmentRecord;
+  readonly workload: RemoteWorkerAssignmentWorkloadIdentity;
+}
+
+export type RemoteWorkerAssignmentOfferResolutionPurpose =
+  | Readonly<{ readonly kind: "poll" }>
+  | Readonly<{ readonly kind: "claim" }>
+  | Readonly<{
+      readonly kind: "workload";
+      readonly expectedAssignmentGeneration: number;
+      readonly expectedLeaseRevision: number;
+    }>;
+
+export interface ResolveRemoteWorkerAssignmentOfferInput {
+  readonly authority: RemoteWorkerAssignmentClaimAuthority;
+  readonly meshAdmission: RemoteWorkerMeshNodeAuthorityFence;
+  readonly assignmentId: string;
+  readonly purpose: RemoteWorkerAssignmentOfferResolutionPurpose;
+}
+
+export interface ListRemoteWorkerAssignmentOffersInput {
+  readonly authority: RemoteWorkerAssignmentClaimAuthority;
+  readonly limit?: number;
+  readonly cursor?: RemoteWorkerAssignmentOfferCursor;
+}
+
+export interface ListRemoteWorkerAssignmentOffersResult {
+  readonly items: readonly RemoteWorkerAssignmentOffer[];
+  readonly nextCursor?: RemoteWorkerAssignmentOfferCursor;
+}
+
+export interface ClaimRemoteWorkerAssignmentOfferInput {
+  readonly authority: RemoteWorkerAssignmentClaimAuthority;
+  readonly meshAdmission: RemoteWorkerMeshNodeAuthorityFence;
+  readonly assignmentId: string;
+  readonly leaseTokenSha256: string;
+  readonly idempotencyKey: string;
+}
+
+export interface ClaimRemoteWorkerAssignmentOfferOutcome {
+  readonly disposition: StartRemoteWorkerAssignmentGenerationOutcome["disposition"];
+  readonly assignment: RemoteWorkerAssignmentRecord;
+  readonly generation: RemoteWorkerAssignmentGenerationRecord;
+  readonly lease: RemoteWorkerAssignmentLeaseRecord;
+  readonly workload: RemoteWorkerAssignmentWorkloadProjection;
+}
+
+export interface ResolveRemoteWorkerAssignmentWorkloadInput {
+  readonly authority: RemoteWorkerAssignmentClaimAuthority;
+  readonly meshAdmission: RemoteWorkerMeshNodeAuthorityFence;
+  readonly registryWorkspaceId: string;
+  readonly assignmentId: string;
+  readonly expectedAssignmentGeneration: number;
+  readonly expectedLeaseRevision: number;
+  readonly leaseTokenSha256: string;
 }
 
 interface AssignmentListRow extends AssignmentRow {
@@ -270,12 +417,19 @@ interface MaterializationRow {
 
 interface DurableAuthorityRow {
   run_id: string;
+  workflow_key: string;
   status: string;
   attempt_count: number | bigint | string;
   lease_owner_id: string | null;
   lease_expires_at: string | null;
   version: number | bigint | string;
+  payload_json: string;
   metadata_json: string | null;
+}
+
+interface TaskBoundDispatchLockContext {
+  readonly assignmentManifestSha256: string;
+  readonly sessionId: string;
 }
 
 interface WorkerAuthorityRow {
@@ -407,8 +561,301 @@ export class RemoteWorkerAssignmentRepository {
     });
   }
 
-  public renewLease(input: RenewRemoteWorkerAssignmentLeaseCommand): RenewRemoteWorkerAssignmentLeaseOutcome {
+  /**
+   * Advisory, cursor-bounded offer polling. Only immutable task-bound durable
+   * Chat assignments without a generation are returned. M3 admission is
+   * intentionally resolved by the Gateway service because it is
+   * workspace-specific; claim compares that exact fence atomically.
+   */
+  public listTaskBoundChatOffers(input: ListRemoteWorkerAssignmentOffersInput): ListRemoteWorkerAssignmentOffersResult {
+    const authority = normalizeClaimAuthority(input.authority);
+    const limit = input.limit === undefined ? 25 : positiveInteger(input.limit, "limit", 100);
+    const cursor = input.cursor
+      ? {
+          createdAt: canonicalTimestamp(input.cursor.createdAt, "cursor.createdAt"),
+          assignmentId: identifier(input.cursor.assignmentId, "cursor.assignmentId"),
+        }
+      : undefined;
+    return this.db.transaction("immediate", () => {
+      const worker = this.assertClaimAuthorityCurrent(authority);
+      const rows = this.db
+        .prepare(
+          `SELECT assignment.* FROM remote_worker_assignments assignment
+           WHERE assignment.registry_workspace_id = @registryWorkspaceId
+             AND NOT EXISTS (
+               SELECT 1 FROM remote_worker_assignment_generations generation
+               WHERE generation.registry_workspace_id = assignment.registry_workspace_id
+                 AND generation.assignment_id = assignment.assignment_id
+             )
+             AND (
+               @cursorCreatedAt IS NULL OR assignment.created_at > @cursorCreatedAt
+               OR (assignment.created_at = @cursorCreatedAt AND assignment.assignment_id > @cursorAssignmentId)
+             )
+           ORDER BY assignment.created_at ASC, assignment.assignment_id ASC
+           LIMIT @limit`,
+        )
+        .all<AssignmentRow>({
+          registryWorkspaceId: authority.registryWorkspaceId,
+          cursorCreatedAt: cursor?.createdAt ?? null,
+          cursorAssignmentId: cursor?.assignmentId ?? "",
+          limit,
+        });
+      const items: RemoteWorkerAssignmentOffer[] = [];
+      for (const row of rows) {
+        try {
+          const assignment = this.mapAssignment(row);
+          this.assertTaskBoundOfferAuthority(assignment, worker);
+          const workload = this.buildTaskBoundChatWorkload(assignment);
+          items.push(Object.freeze({ assignment, workload: workloadIdentity(workload) }));
+        } catch (error) {
+          if (!(error instanceof ConflictError) && !(error instanceof NotFoundError)) throw error;
+        }
+      }
+      const last = rows.at(-1);
+      return Object.freeze({
+        items: Object.freeze(items),
+        ...(rows.length === limit && last
+          ? {
+              nextCursor: Object.freeze({
+                createdAt: last.created_at,
+                assignmentId: last.assignment_id,
+              }),
+            }
+          : {}),
+      });
+    });
+  }
+
+  /** Resolve the immutable claim context, including exact replay attempts. */
+  public findTaskBoundChatClaimContext(
+    authorityInput: RemoteWorkerAssignmentClaimAuthority,
+    assignmentIdInput: string,
+  ): RemoteWorkerAssignmentOffer | undefined {
+    const authority = normalizeClaimAuthority(authorityInput);
+    const assignmentId = identifier(assignmentIdInput, "assignmentId");
+    return this.db.transaction("immediate", () => {
+      const worker = this.assertClaimAuthorityCurrent(authority);
+      let assignment: RemoteWorkerAssignmentRecord;
+      try {
+        assignment = this.getAssignment(authority.registryWorkspaceId, assignmentId);
+        this.assertTaskBoundOfferAuthority(assignment, worker);
+      } catch (error) {
+        if (error instanceof ConflictError || error instanceof NotFoundError) return undefined;
+        throw error;
+      }
+      const generation = this.findCurrentGenerationRow(authority.registryWorkspaceId, assignmentId);
+      if (
+        generation &&
+        (generation.worker_id !== authority.workerId ||
+          asPositiveInteger(generation.worker_generation) !== authority.workerGeneration)
+      ) {
+        return undefined;
+      }
+      const workload = this.buildTaskBoundChatWorkload(assignment);
+      return Object.freeze({ assignment, workload: workloadIdentity(workload) });
+    });
+  }
+
+  /**
+   * Resolve one advisory offer under the complete M2 credential/protected and
+   * workspace-specific M3 mesh fence. Polls require an unclaimed assignment;
+   * claim replay may observe only this exact worker generation; workload reads
+   * additionally bind the current generation and lease revision. The complete
+   * authority is re-read after the canonical dispatch lock plan and before the
+   * offer identity is returned.
+   */
+  public resolveTaskBoundChatOffer(
+    input: ResolveRemoteWorkerAssignmentOfferInput,
+  ): RemoteWorkerAssignmentOffer | undefined {
+    const authority = normalizeClaimAuthority(input.authority);
+    const meshAdmission = normalizeRemoteWorkerMeshNodeAuthorityFence(input.meshAdmission);
+    const assignmentId = identifier(input.assignmentId, "assignmentId");
+    const purpose = normalizeOfferResolutionPurpose(input.purpose);
+    return this.db.transaction("immediate", () => {
+      let assignmentHint: RemoteWorkerAssignmentRecord;
+      try {
+        assignmentHint = this.getAssignment(authority.registryWorkspaceId, assignmentId);
+      } catch (error) {
+        if (error instanceof NotFoundError) return undefined;
+        throw error;
+      }
+      const lockContext = this.readTaskBoundDispatchLockContext(assignmentHint);
+      const lockGeneration = purpose.kind === "workload" ? purpose.expectedAssignmentGeneration : 1;
+      this.acquirePostgresTaskBoundDispatchLocks(authority, assignmentHint, lockGeneration, lockContext.sessionId);
+      const assignment = this.getAssignment(authority.registryWorkspaceId, assignmentId);
+      this.assertTaskBoundDispatchLockContext(assignment, lockContext);
+      const worker = this.assertClaimAuthorityCurrent(authority);
+      this.assertTaskBoundOfferAuthority(assignment, worker);
+      this.assertMeshAdmissionAuthority(authority, assignment, meshAdmission);
+      const run = this.getDurableAuthorityRow(assignment.manifest.durableRunId, true);
+      if (
+        run.status !== "running" ||
+        !run.lease_owner_id ||
+        !run.lease_expires_at ||
+        !this.isTimestampFresh(run.lease_expires_at)
+      ) {
+        return undefined;
+      }
+      const workload = this.buildTaskBoundChatWorkload(assignment, run, lockContext.sessionId);
+      const generation = this.findCurrentGenerationRow(authority.registryWorkspaceId, assignmentId);
+      if (purpose.kind === "poll") {
+        if (generation !== undefined) return undefined;
+      } else if (generation !== undefined) {
+        if (
+          generation.worker_id !== authority.workerId ||
+          asPositiveInteger(generation.worker_generation) !== authority.workerGeneration ||
+          (purpose.kind === "claim" && asPositiveInteger(generation.assignment_generation) !== 1)
+        ) {
+          return undefined;
+        }
+        this.assertProtectedCommitFenceCurrent(
+          Object.freeze({ credentialAuthority: authority, meshAdmission }),
+          assignment,
+          generation,
+        );
+        if (purpose.kind === "workload") {
+          if (asPositiveInteger(generation.assignment_generation) !== purpose.expectedAssignmentGeneration) {
+            return undefined;
+          }
+          const lease = this.findCurrentLeaseRow(
+            authority.registryWorkspaceId,
+            assignmentId,
+            purpose.expectedAssignmentGeneration,
+          );
+          if (lease === undefined || asPositiveInteger(lease.lease_revision) !== purpose.expectedLeaseRevision) {
+            return undefined;
+          }
+        }
+      } else if (purpose.kind === "workload") {
+        return undefined;
+      }
+      return Object.freeze({ assignment, workload: workloadIdentity(workload) });
+    });
+  }
+
+  /**
+   * Atomically claims one offer. Every worker, node, M2/M3, task, capability,
+   * and durable-dispatch field is server-derived; the caller contributes only
+   * the retained lease digest and an idempotency key.
+   */
+  public claimTaskBoundChatOffer(
+    input: ClaimRemoteWorkerAssignmentOfferInput,
+  ): ClaimRemoteWorkerAssignmentOfferOutcome {
+    const authority = normalizeClaimAuthority(input.authority);
+    const meshAdmission = normalizeRemoteWorkerMeshNodeAuthorityFence(input.meshAdmission);
+    const assignmentId = identifier(input.assignmentId, "assignmentId");
+    const leaseTokenSha256 = digest(input.leaseTokenSha256, "leaseTokenSha256");
+    const idempotencyKey = identifier(input.idempotencyKey, "idempotencyKey", 512);
+    return this.db.transaction("immediate", () => {
+      const assignmentHint = this.getAssignment(authority.registryWorkspaceId, assignmentId);
+      const lockContext = this.readTaskBoundDispatchLockContext(assignmentHint);
+      this.acquirePostgresTaskBoundDispatchLocks(authority, assignmentHint, 1, lockContext.sessionId);
+      const assignment = this.getAssignment(authority.registryWorkspaceId, assignmentId);
+      this.assertTaskBoundDispatchLockContext(assignment, lockContext);
+      const worker = this.assertClaimAuthorityCurrent(authority);
+      this.assertTaskBoundOfferAuthority(assignment, worker);
+      this.assertMeshAdmissionAuthority(authority, assignment, meshAdmission);
+      const run = this.getDurableAuthorityRow(assignment.manifest.durableRunId, true);
+      const workload = this.buildTaskBoundChatWorkload(assignment, run, lockContext.sessionId);
+      if (
+        run.status !== "running" ||
+        !run.lease_owner_id ||
+        !run.lease_expires_at ||
+        !this.isTimestampFresh(run.lease_expires_at)
+      ) {
+        throw conflict("remote worker assignment claim durable dispatch authority");
+      }
+      const started = this.startGeneration({
+        registryWorkspaceId: assignment.registryWorkspaceId,
+        assignmentId: assignment.assignmentId,
+        workerId: authority.workerId,
+        workerGeneration: authority.workerGeneration,
+        nodeId: authority.nodeId,
+        nodeAdmissionGeneration: meshAdmission.admissionGeneration,
+        dispatchOwnerId: run.lease_owner_id,
+        durableRunAttempt: asPositiveInteger(run.attempt_count),
+        leaseTokenSha256,
+        idempotencyKey,
+      });
+      const resolved = this.resolveActiveAuthorityByLeaseTokenHash(leaseTokenSha256);
+      if (
+        !resolved ||
+        resolved.assignment.assignmentId !== assignment.assignmentId ||
+        resolved.generation.workerId !== authority.workerId ||
+        resolved.generation.workerGeneration !== authority.workerGeneration ||
+        resolved.lease.leaseRevision !== started.lease.leaseRevision
+      ) {
+        throw conflict("remote worker assignment claimed authority");
+      }
+      this.assertMeshAdmissionAuthority(authority, assignment, meshAdmission);
+      return Object.freeze({
+        disposition: started.disposition,
+        assignment: resolved.assignment,
+        generation: resolved.generation,
+        lease: resolved.lease,
+        workload,
+      });
+    });
+  }
+
+  /** Resolve a workload only while the exact authenticated lease remains live. */
+  public resolveTaskBoundChatWorkload(
+    input: ResolveRemoteWorkerAssignmentWorkloadInput,
+  ): RemoteWorkerAssignmentWorkloadProjection | undefined {
+    const authority = normalizeClaimAuthority(input.authority);
+    const meshAdmission = normalizeRemoteWorkerMeshNodeAuthorityFence(input.meshAdmission);
+    const registryWorkspaceId = identifier(input.registryWorkspaceId, "registryWorkspaceId");
+    const assignmentId = identifier(input.assignmentId, "assignmentId");
+    const expectedAssignmentGeneration = positiveInteger(
+      input.expectedAssignmentGeneration,
+      "expectedAssignmentGeneration",
+    );
+    const expectedLeaseRevision = positiveInteger(input.expectedLeaseRevision, "expectedLeaseRevision");
+    const leaseTokenSha256 = digest(input.leaseTokenSha256, "leaseTokenSha256");
+    if (registryWorkspaceId !== authority.registryWorkspaceId) return undefined;
+    return this.db.transaction("immediate", () => {
+      let assignmentHint: RemoteWorkerAssignmentRecord;
+      try {
+        assignmentHint = this.getAssignment(registryWorkspaceId, assignmentId);
+      } catch (error) {
+        if (error instanceof NotFoundError) return undefined;
+        throw error;
+      }
+      const lockContext = this.readTaskBoundDispatchLockContext(assignmentHint);
+      this.acquirePostgresTaskBoundDispatchLocks(
+        authority,
+        assignmentHint,
+        expectedAssignmentGeneration,
+        lockContext.sessionId,
+      );
+      const assignment = this.getAssignment(registryWorkspaceId, assignmentId);
+      this.assertTaskBoundDispatchLockContext(assignment, lockContext);
+      this.assertClaimAuthorityCurrent(authority);
+      this.assertMeshAdmissionAuthority(authority, assignment, meshAdmission);
+      const resolved = this.resolveActiveAuthorityByLeaseTokenHash(leaseTokenSha256);
+      if (
+        !resolved ||
+        resolved.assignment.registryWorkspaceId !== registryWorkspaceId ||
+        resolved.assignment.assignmentId !== assignmentId ||
+        resolved.generation.assignmentGeneration !== expectedAssignmentGeneration ||
+        resolved.lease.leaseRevision !== expectedLeaseRevision ||
+        resolved.generation.workerId !== authority.workerId ||
+        resolved.generation.workerGeneration !== authority.workerGeneration
+      ) {
+        return undefined;
+      }
+      const run = this.getDurableAuthorityRow(resolved.assignment.manifest.durableRunId, true);
+      return this.buildTaskBoundChatWorkload(resolved.assignment, run, lockContext.sessionId);
+    });
+  }
+
+  public renewLease(
+    input: RenewRemoteWorkerAssignmentLeaseCommand,
+    expectedProtectedAuthority?: RemoteWorkerAssignmentProtectedCommitFence,
+  ): RenewRemoteWorkerAssignmentLeaseOutcome {
     const command = normalizeRenewRemoteWorkerAssignmentLeaseCommand(input);
+    const protectedAuthority =
+      expectedProtectedAuthority === undefined ? undefined : normalizeProtectedCommitFence(expectedProtectedAuthority);
     return this.db.transaction("immediate", () => {
       const generation = this.getGenerationRow(
         command.registryWorkspaceId,
@@ -423,6 +870,10 @@ export class RemoteWorkerAssignmentRepository {
         generation.assignment_id,
         asPositiveInteger(generation.assignment_generation),
       );
+      const assignment = this.getAssignment(command.registryWorkspaceId, command.assignmentId);
+      if (protectedAuthority !== undefined) {
+        this.assertProtectedCommitFenceCurrent(protectedAuthority, assignment, generation);
+      }
       const requestSha256 = sha256(remoteWorkerAssignmentLeaseReplayMaterial(command));
       const replay = this.findLeaseByIdempotency(command.registryWorkspaceId, command.idempotencyKey);
       if (replay) {
@@ -470,7 +921,6 @@ export class RemoteWorkerAssignmentRepository {
       if (command.workerSentThrough < Math.max(acknowledgedThrough, committedWorkerSentThrough)) {
         throw conflict("remote worker assignment sent-through watermark");
       }
-      const assignment = this.getAssignment(command.registryWorkspaceId, command.assignmentId);
       const clock = this.assignmentLeaseClock(assignment.manifest, parentDispatchAuthority);
       const revision = command.expectedLeaseRevision + 1;
       try {
@@ -507,8 +957,11 @@ export class RemoteWorkerAssignmentRepository {
 
   public resolveActiveAuthorityByLeaseTokenHash(
     leaseTokenSha256: string,
+    expectedProtectedAuthority?: RemoteWorkerAssignmentProtectedCommitFence,
   ): ResolvedRemoteWorkerAssignmentAuthority | undefined {
     const token = digest(leaseTokenSha256, "leaseTokenSha256");
+    const protectedAuthority =
+      expectedProtectedAuthority === undefined ? undefined : normalizeProtectedCommitFence(expectedProtectedAuthority);
     const hint = this.findLeaseByTokenHash(token);
     if (!hint) return undefined;
     return this.db.transaction("immediate", () => {
@@ -525,6 +978,10 @@ export class RemoteWorkerAssignmentRepository {
         generation.assignment_id,
         asPositiveInteger(generation.assignment_generation),
       );
+      const assignment = this.getAssignment(generation.registry_workspace_id, generation.assignment_id);
+      if (protectedAuthority !== undefined) {
+        this.assertProtectedCommitFenceCurrent(protectedAuthority, assignment, generation);
+      }
       const current = this.getCurrentLeaseRow(
         hint.registry_workspace_id,
         hint.assignment_id,
@@ -544,10 +1001,78 @@ export class RemoteWorkerAssignmentRepository {
         asPositiveInteger(generation.assignment_generation),
       );
       return {
-        assignment: this.getAssignment(generation.registry_workspace_id, generation.assignment_id),
+        assignment,
         generation: this.mapGeneration(generation),
         lease: this.mapLease(current),
       };
+    });
+  }
+
+  /**
+   * Resolve the exact current lease for a worker control read. Unlike the
+   * mutation-only active resolver, this read remains available after a
+   * `cancel_requested` control so a correctly fenced worker can observe the
+   * cancellation and settle it. Recovery/abandonment controls and settlements
+   * remain terminal, and no lease digest leaves this repository boundary.
+   */
+  public resolveControlReadAuthorityByLeaseTokenHash(
+    input: ResolveRemoteWorkerAssignmentControlReadInput,
+    expectedProtectedAuthority?: RemoteWorkerAssignmentProtectedCommitFence,
+  ): ResolvedRemoteWorkerAssignmentControlReadAuthority | undefined {
+    const registryWorkspaceId = identifier(input.registryWorkspaceId, "registryWorkspaceId");
+    const assignmentId = identifier(input.assignmentId, "assignmentId");
+    const expectedAssignmentGeneration = positiveInteger(
+      input.expectedAssignmentGeneration,
+      "expectedAssignmentGeneration",
+    );
+    const expectedLeaseRevision = positiveInteger(input.expectedLeaseRevision, "expectedLeaseRevision");
+    const leaseTokenSha256 = digest(input.leaseTokenSha256, "leaseTokenSha256");
+    const protectedAuthority =
+      expectedProtectedAuthority === undefined ? undefined : normalizeProtectedCommitFence(expectedProtectedAuthority);
+    const hint = this.findLeaseByTokenHash(leaseTokenSha256);
+    if (
+      !hint ||
+      hint.registry_workspace_id !== registryWorkspaceId ||
+      hint.assignment_id !== assignmentId ||
+      asPositiveInteger(hint.assignment_generation) !== expectedAssignmentGeneration ||
+      asPositiveInteger(hint.lease_revision) !== expectedLeaseRevision
+    ) {
+      return undefined;
+    }
+    return this.db.transaction("immediate", () => {
+      const generation = this.getGenerationRow(registryWorkspaceId, assignmentId, expectedAssignmentGeneration);
+      this.acquirePostgresGenerationLocks(
+        generation.execution_workspace_id,
+        generation.node_id,
+        generation.registry_workspace_id,
+        generation.worker_id,
+        generation.assignment_id,
+        asPositiveInteger(generation.assignment_generation),
+      );
+      const assignment = this.getAssignment(registryWorkspaceId, assignmentId);
+      if (protectedAuthority !== undefined) {
+        this.assertProtectedCommitFenceCurrent(protectedAuthority, assignment, generation);
+      }
+      const current = this.getCurrentLeaseRow(registryWorkspaceId, assignmentId, expectedAssignmentGeneration);
+      if (
+        asPositiveInteger(current.lease_revision) !== expectedLeaseRevision ||
+        current.lease_token_sha256 !== leaseTokenSha256 ||
+        !this.isTimestampFresh(current.expires_at)
+      ) {
+        return undefined;
+      }
+      this.assertLeaseDispatchAuthorityLive(generation, current);
+      if (this.findSettlement(registryWorkspaceId, assignmentId)) return undefined;
+      const control = this.findLatestControlRow(registryWorkspaceId, assignmentId, expectedAssignmentGeneration);
+      if (control !== undefined && control.action !== "cancel_requested") return undefined;
+      const authority = {
+        assignment,
+        generation: this.mapGeneration(generation),
+        lease: this.mapLease(current),
+      };
+      return control === undefined
+        ? { disposition: "active", ...authority }
+        : { disposition: "cancel_requested", ...authority, control: this.mapControl(control) };
     });
   }
 
@@ -559,8 +1084,13 @@ export class RemoteWorkerAssignmentRepository {
     return this.insertControl("recovery_exhausted", input, true);
   }
 
-  public appendEvents(input: AppendRemoteWorkerAssignmentEventsCommand): RemoteWorkerAssignmentAppendOutcome {
+  public appendEvents(
+    input: AppendRemoteWorkerAssignmentEventsCommand,
+    expectedProtectedAuthority?: RemoteWorkerAssignmentProtectedCommitFence,
+  ): RemoteWorkerAssignmentAppendOutcome {
     const command = normalizeAppendRemoteWorkerAssignmentEventsCommand(input);
+    const protectedAuthority =
+      expectedProtectedAuthority === undefined ? undefined : normalizeProtectedCommitFence(expectedProtectedAuthority);
     return this.db.transaction("immediate", () => {
       const generation = this.getGenerationRow(
         command.registryWorkspaceId,
@@ -576,6 +1106,9 @@ export class RemoteWorkerAssignmentRepository {
         asPositiveInteger(generation.assignment_generation),
       );
       const assignment = this.getAssignment(command.registryWorkspaceId, command.assignmentId);
+      if (protectedAuthority !== undefined) {
+        this.assertProtectedCommitFenceCurrent(protectedAuthority, assignment, generation);
+      }
       const replayRows = command.events.map((event) =>
         this.findEventRow(
           command.registryWorkspaceId,
@@ -775,8 +1308,13 @@ export class RemoteWorkerAssignmentRepository {
     });
   }
 
-  public settleAssignment(input: SettleRemoteWorkerAssignmentCommand): SettleRemoteWorkerAssignmentOutcome {
+  public settleAssignment(
+    input: SettleRemoteWorkerAssignmentCommand,
+    expectedProtectedAuthority?: RemoteWorkerAssignmentProtectedCommitFence,
+  ): SettleRemoteWorkerAssignmentOutcome {
     const command = normalizeSettleRemoteWorkerAssignmentCommand(input);
+    const protectedAuthority =
+      expectedProtectedAuthority === undefined ? undefined : normalizeProtectedCommitFence(expectedProtectedAuthority);
     return this.db.transaction("immediate", () => {
       const generation = this.getGenerationRow(
         command.registryWorkspaceId,
@@ -791,6 +1329,10 @@ export class RemoteWorkerAssignmentRepository {
         generation.assignment_id,
         asPositiveInteger(generation.assignment_generation),
       );
+      const assignment = this.getAssignment(command.registryWorkspaceId, command.assignmentId);
+      if (protectedAuthority !== undefined) {
+        this.assertProtectedCommitFenceCurrent(protectedAuthority, assignment, generation);
+      }
       const requestSha256 = sha256(remoteWorkerAssignmentSettlementReplayMaterial(command));
       const replay = this.findSettlementByIdempotency(command.registryWorkspaceId, command.idempotencyKey);
       if (replay) {
@@ -1505,6 +2047,220 @@ export class RemoteWorkerAssignmentRepository {
       ),
       lease: this.mapLease(this.getLeaseRow(command.registryWorkspaceId, command.assignmentId, generationNumber, 1)),
     };
+  }
+
+  private assertProtectedCommitFenceCurrent(
+    fence: RemoteWorkerAssignmentProtectedCommitFence,
+    assignment: RemoteWorkerAssignmentRecord,
+    generation: GenerationRow,
+  ): void {
+    const authority = fence.credentialAuthority;
+    const meshAdmission = fence.meshAdmission;
+    if (
+      assignment.registryWorkspaceId !== authority.registryWorkspaceId ||
+      assignment.registryWorkspaceId !== generation.registry_workspace_id ||
+      assignment.assignmentId !== generation.assignment_id ||
+      assignment.manifest.executionWorkspaceId !== generation.execution_workspace_id ||
+      generation.worker_id !== authority.workerId ||
+      asPositiveInteger(generation.worker_generation) !== authority.workerGeneration ||
+      generation.node_id !== authority.nodeId ||
+      generation.runtime_manifest_sha256 !== authority.runtimeManifestSha256 ||
+      generation.workspace_ceiling_sha256 !== authority.workspaceCeilingSha256 ||
+      generation.capability_ceiling_sha256 !== authority.capabilityCeilingSha256 ||
+      meshAdmission.workspaceId !== assignment.manifest.executionWorkspaceId ||
+      meshAdmission.admissionGeneration !== asPositiveInteger(generation.node_admission_generation)
+    ) {
+      throw conflict("remote worker assignment protected commit authority");
+    }
+    try {
+      const worker = this.assertClaimAuthorityCurrent(authority);
+      this.assertWorkerIsCurrentAndAllowed(worker, assignment.manifest);
+      this.assertMeshAdmissionAuthority(authority, assignment, meshAdmission);
+    } catch (error) {
+      if (error instanceof ConflictError || error instanceof NotFoundError) {
+        throw conflict("remote worker assignment protected commit authority");
+      }
+      throw error;
+    }
+  }
+
+  private assertClaimAuthorityCurrent(authority: RemoteWorkerAssignmentClaimAuthority): WorkerAuthorityRow {
+    const resolved = new RemoteWorkerAdmissionRepository(this.db).resolveRuntimeCredentialByHash(
+      authority.authorizationCredentialSha256,
+    );
+    if (!resolved) throw conflict("remote worker assignment current claim credential");
+    const generation = resolved.generation;
+    const credential = resolved.credential;
+    if (
+      generation.registryWorkspaceId !== authority.registryWorkspaceId ||
+      generation.bootstrapId !== authority.bootstrapId ||
+      generation.workerId !== authority.workerId ||
+      generation.workerGeneration !== authority.workerGeneration ||
+      generation.nodeId !== authority.nodeId ||
+      generation.clientCertificateSha256 !== authority.clientCertificateSha256 ||
+      generation.runtimeManifestSha256 !== authority.runtimeManifestSha256 ||
+      generation.workspaceCeilingSha256 !== authority.workspaceCeilingSha256 ||
+      generation.capabilityCeilingSha256 !== authority.capabilityCeilingSha256 ||
+      credential.registryWorkspaceId !== authority.registryWorkspaceId ||
+      credential.workerId !== authority.workerId ||
+      credential.workerGeneration !== authority.workerGeneration ||
+      credential.credentialId !== authority.credentialId ||
+      credential.credentialGeneration !== authority.credentialGeneration ||
+      credential.claimsSha256 !== authority.claimsSha256
+    ) {
+      throw conflict("remote worker assignment current claim credential");
+    }
+    const worker = this.getWorkerAuthorityRow(
+      authority.registryWorkspaceId,
+      authority.workerId,
+      authority.workerGeneration,
+    );
+    if (
+      worker.node_id !== authority.nodeId ||
+      worker.runtime_manifest_sha256 !== authority.runtimeManifestSha256 ||
+      worker.workspace_ceiling_sha256 !== authority.workspaceCeilingSha256 ||
+      worker.capability_ceiling_sha256 !== authority.capabilityCeilingSha256
+    ) {
+      throw conflict("remote worker assignment claim worker authority");
+    }
+    return worker;
+  }
+
+  private assertTaskBoundOfferAuthority(assignment: RemoteWorkerAssignmentRecord, worker: WorkerAuthorityRow): void {
+    if (
+      assignment.manifest.sessionId === undefined ||
+      assignment.manifest.turnId === undefined ||
+      !this.isTimestampFuture(assignment.manifest.deadlineAt)
+    ) {
+      throw conflict("remote worker assignment task-bound Chat offer");
+    }
+    this.assertWorkerIsCurrentAndAllowed(worker, assignment.manifest);
+  }
+
+  private assertMeshAdmissionAuthority(
+    authority: RemoteWorkerAssignmentClaimAuthority,
+    assignment: RemoteWorkerAssignmentRecord,
+    meshAdmission: RemoteWorkerMeshNodeAuthorityFence,
+  ): void {
+    const expected = {
+      registryWorkspaceId: authority.registryWorkspaceId,
+      bootstrapId: authority.bootstrapId,
+      workerId: authority.workerId,
+      workerGeneration: authority.workerGeneration,
+      credentialId: authority.credentialId,
+      credentialGeneration: authority.credentialGeneration,
+      workspaceId: assignment.manifest.executionWorkspaceId,
+      nodeId: authority.nodeId,
+      protectedAdmissionEnvelopeSha256: authority.protectedAdmissionEnvelopeSha256,
+      protectedAdmissionContextSha256: authority.protectedAdmissionContextSha256,
+    };
+    for (const [field, value] of Object.entries(expected)) {
+      if (meshAdmission[field as keyof RemoteWorkerMeshNodeAuthorityFence] !== value) {
+        throw conflict("remote worker assignment mesh admission authority");
+      }
+    }
+    new RemoteWorkerMeshNodeAdmissionRepository(this.db).compareCurrentAuthorityFence({
+      workspaceId: meshAdmission.workspaceId,
+      nodeId: meshAdmission.nodeId,
+      admissionGeneration: meshAdmission.admissionGeneration,
+      expected: meshAdmission,
+    });
+  }
+
+  private buildTaskBoundChatWorkload(
+    assignment: RemoteWorkerAssignmentRecord,
+    lockedRun?: DurableAuthorityRow,
+    preacquiredSessionId?: string,
+  ): RemoteWorkerAssignmentWorkloadProjection {
+    const run = lockedRun ?? this.getDurableAuthorityRow(assignment.manifest.durableRunId, false);
+    this.assertCanonicalParentContext(assignment.manifest, run);
+    const payload = parseJsonRecord(run.payload_json, "remote worker assignment durable Chat payload");
+    const durablePayloadAuthority = readDurableChatTurnExecutionPayloadAuthority({
+      workflowKey: run.workflow_key,
+      durableRunId: run.run_id,
+      payload,
+    });
+    if (!durablePayloadAuthority) throw conflict("remote worker assignment durable Chat payload authority");
+    const request = plainRecord(payload.request);
+    const metadata = parseJsonRecord(run.metadata_json ?? "{}", "remote worker assignment durable Chat metadata");
+    const capabilityProfileId = identifier(String(payload.capabilityProfileId ?? ""), "capabilityProfileId");
+    const capabilityProfileSha256 = digest(String(payload.capabilityProfileHash ?? ""), "capabilityProfileSha256");
+    if (
+      run.workflow_key !== "chat.turn.execute" ||
+      payload.version !== "chat.turn.execute.v2" ||
+      payload.workspaceId !== assignment.manifest.executionWorkspaceId ||
+      payload.sessionId !== assignment.manifest.sessionId ||
+      payload.turnId !== assignment.manifest.turnId ||
+      request.policyTaskId !== assignment.manifest.taskId ||
+      capabilityProfileSha256 !== assignment.manifest.capabilityProfileSha256 ||
+      metadata.capabilityProfileId !== capabilityProfileId ||
+      metadata.capabilityProfileHash !== capabilityProfileSha256
+    ) {
+      throw conflict("remote worker assignment durable Chat workload binding");
+    }
+    if (preacquiredSessionId !== undefined) {
+      if (durablePayloadAuthority.sessionId !== preacquiredSessionId || !run.lease_owner_id) {
+        throw conflict("remote worker assignment durable Chat execution claim");
+      }
+      new SessionMutationAdmissionRepository(this.db).assertActiveTurnWrite({
+        admissionId: durablePayloadAuthority.admissionId,
+        sessionIncarnationId: durablePayloadAuthority.sessionIncarnationId,
+        workspaceId: durablePayloadAuthority.workspaceId,
+        sessionId: durablePayloadAuthority.sessionId,
+        turnId: durablePayloadAuthority.turnId,
+        durableClaim: {
+          durableRunId: run.run_id,
+          leaseOwnerId: run.lease_owner_id,
+          attemptCount: asPositiveInteger(run.attempt_count),
+        },
+        requireExactDurablePayloadIdentity: true,
+      });
+    }
+    const profile = new ChatTurnCapabilityProfileRepository(this.db).findByRun(run.run_id);
+    if (
+      !profile ||
+      profile.profileId !== capabilityProfileId ||
+      profile.hashes.profileHash !== capabilityProfileSha256 ||
+      profile.identity.durableRunId !== run.run_id ||
+      profile.identity.workspaceId !== assignment.manifest.executionWorkspaceId ||
+      profile.identity.sessionId !== assignment.manifest.sessionId ||
+      profile.identity.turnId !== assignment.manifest.turnId
+    ) {
+      throw conflict("remote worker assignment capability profile authority");
+    }
+    const routedContextSnapshotId = payload.routedContextSnapshotId;
+    const routedContextSnapshotHash = payload.routedContextSnapshotHash;
+    if (
+      (routedContextSnapshotId === undefined) !== (routedContextSnapshotHash === undefined) ||
+      (routedContextSnapshotHash !== undefined &&
+        digest(String(routedContextSnapshotHash), "routedContextSnapshotHash") !==
+          assignment.manifest.contextSnapshotSha256)
+    ) {
+      throw conflict("remote worker assignment routed context authority");
+    }
+    const durableRunVersion = asPositiveInteger(run.version);
+    const durableRunPayloadSha256 = sha256Bytes(run.payload_json);
+    const identityMaterial = Object.freeze({
+      schemaVersion: REMOTE_WORKER_ASSIGNMENT_WORKLOAD_SCHEMA_VERSION,
+      registryWorkspaceId: assignment.registryWorkspaceId,
+      assignmentId: assignment.assignmentId,
+      assignmentManifestSha256: assignment.manifestSha256,
+      durableRunId: run.run_id,
+      durableRunVersion,
+      durableRunPayloadSha256,
+      capabilityProfileId,
+      capabilityProfileSha256,
+      contextSnapshotSha256: assignment.manifest.contextSnapshotSha256,
+    });
+    const projection: RemoteWorkerAssignmentWorkloadProjection = Object.freeze({
+      ...identityMaterial,
+      workloadSha256: sha256(identityMaterial),
+      payload: freezeJson(payload) as Readonly<Record<string, unknown>>,
+    });
+    if (Buffer.byteLength(canonicalJsonString(projection), "utf8") > REMOTE_WORKER_ASSIGNMENT_WORKLOAD_MAX_BYTES) {
+      throw conflict("remote worker assignment workload byte bound");
+    }
+    return projection;
   }
 
   private assertStartAuthority(
@@ -2227,7 +2983,8 @@ export class RemoteWorkerAssignmentRepository {
     const suffix = forUpdate && this.db.dialect === "postgres" ? " FOR UPDATE" : "";
     const row = this.db
       .prepare(
-        `SELECT run_id, status, attempt_count, lease_owner_id, lease_expires_at, version, metadata_json
+        `SELECT run_id, workflow_key, status, attempt_count, lease_owner_id, lease_expires_at,
+                version, payload_json, metadata_json
          FROM durable_runs WHERE run_id = @runId${suffix}`,
       )
       .get({ runId }) as DurableAuthorityRow | undefined;
@@ -2636,6 +3393,63 @@ export class RemoteWorkerAssignmentRepository {
       .get({ registryWorkspaceId, assignmentId, assignmentGeneration });
   }
 
+  private readTaskBoundDispatchLockContext(assignment: RemoteWorkerAssignmentRecord): TaskBoundDispatchLockContext {
+    const run = this.getDurableAuthorityRow(assignment.manifest.durableRunId, false);
+    this.assertCanonicalParentContext(assignment.manifest, run);
+    const payload = readDurableChatTurnExecutionPayloadAuthority({
+      workflowKey: run.workflow_key,
+      durableRunId: run.run_id,
+      payload: parseJsonRecord(run.payload_json, "remote worker assignment durable Chat payload"),
+    });
+    if (
+      !payload ||
+      payload.workspaceId !== assignment.manifest.executionWorkspaceId ||
+      payload.sessionId !== assignment.manifest.sessionId ||
+      payload.turnId !== assignment.manifest.turnId
+    ) {
+      throw conflict("remote worker assignment task-bound dispatch lock authority");
+    }
+    return Object.freeze({
+      assignmentManifestSha256: assignment.manifestSha256,
+      sessionId: payload.sessionId,
+    });
+  }
+
+  private assertTaskBoundDispatchLockContext(
+    assignment: RemoteWorkerAssignmentRecord,
+    context: TaskBoundDispatchLockContext,
+  ): void {
+    if (
+      assignment.manifestSha256 !== context.assignmentManifestSha256 ||
+      assignment.manifest.sessionId !== context.sessionId
+    ) {
+      throw conflict("remote worker assignment task-bound dispatch lock authority");
+    }
+  }
+
+  private acquirePostgresTaskBoundDispatchLocks(
+    authority: RemoteWorkerAssignmentClaimAuthority,
+    assignment: RemoteWorkerAssignmentRecord,
+    assignmentGeneration: number,
+    sessionId: string,
+  ): void {
+    if (this.db.dialect !== "postgres") return;
+    const plan = buildRemoteWorkerTaskBoundDispatchLockPlan({
+      sessionId,
+      executionWorkspaceId: assignment.manifest.executionWorkspaceId,
+      nodeId: authority.nodeId,
+      registryWorkspaceId: authority.registryWorkspaceId,
+      workerId: authority.workerId,
+      assignmentId: assignment.assignmentId,
+      assignmentGeneration,
+    });
+    for (const lock of plan) {
+      this.db
+        .prepare(`SELECT pg_advisory_xact_lock(hashtextextended(@lockKey, ${lock.namespace})) AS locked`)
+        .get({ lockKey: lock.key });
+    }
+  }
+
   private acquirePostgresRecoveryLocks(
     assignment: RemoteWorkerAssignmentRecord,
     oldGeneration: GenerationRow,
@@ -2692,6 +3506,118 @@ function deriveServerId(prefix: string, ...parts: string[]): string {
   return `${prefix}-${sha256(parts).slice(0, 48)}`;
 }
 
+function normalizeClaimAuthority(input: RemoteWorkerAssignmentClaimAuthority): RemoteWorkerAssignmentClaimAuthority {
+  return Object.freeze({
+    registryWorkspaceId: identifier(input.registryWorkspaceId, "authority.registryWorkspaceId"),
+    bootstrapId: identifier(input.bootstrapId, "authority.bootstrapId"),
+    workerId: identifier(input.workerId, "authority.workerId"),
+    workerGeneration: positiveInteger(input.workerGeneration, "authority.workerGeneration"),
+    credentialId: identifier(input.credentialId, "authority.credentialId"),
+    credentialGeneration: positiveInteger(input.credentialGeneration, "authority.credentialGeneration"),
+    authorizationCredentialSha256: digest(
+      input.authorizationCredentialSha256,
+      "authority.authorizationCredentialSha256",
+    ),
+    nodeId: identifier(input.nodeId, "authority.nodeId"),
+    clientCertificateSha256: digest(input.clientCertificateSha256, "authority.clientCertificateSha256"),
+    runtimeManifestSha256: digest(input.runtimeManifestSha256, "authority.runtimeManifestSha256"),
+    workspaceCeilingSha256: digest(input.workspaceCeilingSha256, "authority.workspaceCeilingSha256"),
+    capabilityCeilingSha256: digest(input.capabilityCeilingSha256, "authority.capabilityCeilingSha256"),
+    protectedAdmissionEnvelopeSha256: digest(
+      input.protectedAdmissionEnvelopeSha256,
+      "authority.protectedAdmissionEnvelopeSha256",
+    ),
+    protectedAdmissionContextSha256: digest(
+      input.protectedAdmissionContextSha256,
+      "authority.protectedAdmissionContextSha256",
+    ),
+    claimsSha256: digest(input.claimsSha256, "authority.claimsSha256"),
+  });
+}
+
+function normalizeProtectedCommitFence(
+  input: RemoteWorkerAssignmentProtectedCommitFence,
+): RemoteWorkerAssignmentProtectedCommitFence {
+  return Object.freeze({
+    credentialAuthority: normalizeClaimAuthority(input.credentialAuthority),
+    meshAdmission: normalizeRemoteWorkerMeshNodeAuthorityFence(input.meshAdmission),
+  });
+}
+
+function normalizeOfferResolutionPurpose(
+  input: RemoteWorkerAssignmentOfferResolutionPurpose,
+): RemoteWorkerAssignmentOfferResolutionPurpose {
+  if (input === null || typeof input !== "object" || Array.isArray(input)) {
+    throw new ValidationError({ field: "purpose", message: "Remote worker assignment purpose is invalid." });
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(input);
+  const keys = Object.keys(descriptors).sort();
+  if (
+    Object.values(descriptors).some(
+      (descriptor) => !descriptor.enumerable || descriptor.get !== undefined || descriptor.set !== undefined,
+    )
+  ) {
+    throw new ValidationError({ field: "purpose", message: "Remote worker assignment purpose is invalid." });
+  }
+  if (input.kind === "poll" || input.kind === "claim") {
+    if (keys.length !== 1 || keys[0] !== "kind") {
+      throw new ValidationError({ field: "purpose", message: "Remote worker assignment purpose is invalid." });
+    }
+    return Object.freeze({ kind: input.kind });
+  }
+  if (
+    input.kind !== "workload" ||
+    keys.length !== 3 ||
+    keys[0] !== "expectedAssignmentGeneration" ||
+    keys[1] !== "expectedLeaseRevision" ||
+    keys[2] !== "kind"
+  ) {
+    throw new ValidationError({ field: "purpose", message: "Remote worker assignment purpose is invalid." });
+  }
+  return Object.freeze({
+    kind: "workload",
+    expectedAssignmentGeneration: positiveInteger(
+      input.expectedAssignmentGeneration,
+      "purpose.expectedAssignmentGeneration",
+    ),
+    expectedLeaseRevision: positiveInteger(input.expectedLeaseRevision, "purpose.expectedLeaseRevision"),
+  });
+}
+
+function workloadIdentity(workload: RemoteWorkerAssignmentWorkloadProjection): RemoteWorkerAssignmentWorkloadIdentity {
+  const { payload: _payload, ...identity } = workload;
+  return Object.freeze(identity);
+}
+
+function plainRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw conflict("remote worker assignment durable Chat request");
+  }
+  return value as Record<string, unknown>;
+}
+
+function freezeJson(value: unknown): unknown {
+  if (Array.isArray(value)) return Object.freeze(value.map((item) => freezeJson(item)));
+  if (value && typeof value === "object") {
+    const result: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) result[key] = freezeJson(item);
+    return Object.freeze(result);
+  }
+  return value;
+}
+
+function canonicalTimestamp(value: string, field: string): string {
+  if (
+    typeof value !== "string" ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(value) ||
+    !Number.isFinite(Date.parse(value)) ||
+    new Date(Date.parse(value)).toISOString() !== value
+  ) {
+    throw new ValidationError({ field, message: `Remote worker assignment ${field} is invalid.` });
+  }
+  return value;
+}
+
 function sha256(value: unknown): string {
   return sha256Bytes(canonicalJsonString(value));
 }
@@ -2706,6 +3632,14 @@ function parseCanonicalJson<T>(value: string, label: string): T {
     throw new Error(`${label} is invalid.`);
   }
   return parsed as T;
+}
+
+function parseJsonRecord(value: string, label: string): Record<string, unknown> {
+  const parsed = safeJsonParse<unknown>(value, undefined);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`${label} is invalid.`);
+  }
+  return parsed as Record<string, unknown>;
 }
 
 function assertExactReplay(storedSha256: string, requestSha256: string, label: string): void {

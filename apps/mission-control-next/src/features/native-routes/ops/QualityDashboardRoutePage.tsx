@@ -305,6 +305,10 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
       <LibraryLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
       {exportNotice ? <NoticeBanner tone="success" message={exportNotice} /> : null}
       {exportError ? <ErrorState size="inline" description={exportError} /> : null}
+      <NoticeBanner
+        tone="info"
+        message="No provider calls. No source writes. Evidence projections are read-only; explicit import actions remain operator-initiated."
+      />
       <NativeGrid className="mc-next-quality-dashboard-grid">
         <NativeCard
           title="Quality gates"
@@ -522,9 +526,7 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
             maxHeight="min(30vh, 18rem)"
           />
           <div className="mc-next-approvals-chip-row">
-            <StatusChip tone="muted">Read-only</StatusChip>
             <StatusChip tone="muted">Stored evidence</StatusChip>
-            <StatusChip tone="muted">No provider calls</StatusChip>
           </div>
           {securityGates.some((gate) => gate.packId) ? (
             <div className="mc-next-approvals-inline-actions">
@@ -563,9 +565,6 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
             <StatusChip tone={designQuality?.state === "available" ? "success" : "warning"}>
               {formatAvailabilityState(designQuality?.state)}
             </StatusChip>
-            <StatusChip tone="muted">Read-only</StatusChip>
-            <StatusChip tone="muted">No provider calls</StatusChip>
-            <StatusChip tone="muted">No source writes</StatusChip>
           </div>
           <LibraryMetricGrid
             items={[
@@ -645,7 +644,6 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
           />
           <div className="mc-next-approvals-chip-row">
             <StatusChip tone="muted">Audit-only</StatusChip>
-            <StatusChip tone="muted">No provider calls</StatusChip>
             <StatusChip tone="muted">Stored evidence</StatusChip>
           </div>
         </NativeCard>

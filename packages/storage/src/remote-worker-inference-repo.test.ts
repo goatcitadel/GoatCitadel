@@ -3,13 +3,22 @@ import { createHash } from "node:crypto";
 import { afterEach, describe, it } from "node:test";
 import {
   REMOTE_WORKER_ASSIGNMENT_MANIFEST_SCHEMA_VERSION,
+  REMOTE_WORKER_INFERENCE_APPROVAL_RESOLUTION_SCHEMA_VERSION,
+  REMOTE_WORKER_INFERENCE_BUDGET_SCHEMA_VERSION,
+  REMOTE_WORKER_INFERENCE_EFFECTIVE_ROUTE_SCHEMA_VERSION,
   REMOTE_WORKER_INFERENCE_GOVERNANCE_SCHEMA_VERSION,
   REMOTE_WORKER_PROTOCOL_VERSION,
   REMOTE_WORKER_RUNTIME_MANIFEST_SCHEMA_VERSION,
+  authorizeRemoteWorkerInferenceRequestSubmission,
   buildRemoteWorkerAssignmentParentContext,
   canonicalJsonString,
+  remoteWorkerInferenceEffectiveRouteSha256,
+  remoteWorkerInferenceRequestSha256,
   remoteWorkerAssignmentParentContextSha256,
   type RemoteWorkerInferenceGovernanceReceipt,
+  type RemoteWorkerInferenceBudgetOperationInput,
+  type RemoteWorkerInferenceEffectiveRouteReceipt,
+  type RemoteWorkerInferenceAuthorizedSubmission,
   type RemoteWorkerInferenceRequestSubmission,
 } from "@goatcitadel/contracts";
 import { ChatSessionMetaRepository } from "./chat-session-meta-repo.js";
@@ -41,6 +50,8 @@ interface SeededAuthority {
   workerGeneration: number;
   sessionId: string;
   turnId: string;
+  durableRunId: string;
+  taskId: string;
   now: string;
 }
 
@@ -218,6 +229,8 @@ function seedAuthority(seed: string): SeededAuthority {
     workerGeneration: worker.generation.workerGeneration,
     sessionId,
     turnId,
+    durableRunId,
+    taskId,
     now,
   };
 }
@@ -225,8 +238,8 @@ function seedAuthority(seed: string): SeededAuthority {
 function submissionFor(
   a: SeededAuthority,
   overrides: Partial<RemoteWorkerInferenceRequestSubmission> = {},
-): RemoteWorkerInferenceRequestSubmission {
-  return {
+): RemoteWorkerInferenceAuthorizedSubmission {
+  return authorizeRemoteWorkerInferenceRequestSubmission({
     registryWorkspaceId: "default",
     assignmentId: a.assignmentId,
     assignmentGeneration: a.assignmentGeneration,
@@ -242,7 +255,7 @@ function submissionFor(
     reasoningTokenCeiling: 1024,
     temperatureMilli: 700,
     ...overrides,
-  };
+  }).submission;
 }
 
 function governanceReceipt(
@@ -251,7 +264,7 @@ function governanceReceipt(
   return {
     schemaVersion: REMOTE_WORKER_INFERENCE_GOVERNANCE_SCHEMA_VERSION,
     decision,
-    effectiveRouteSha256: D("route"),
+    effectiveRouteSha256: remoteWorkerInferenceEffectiveRouteSha256(routeReceipt()),
     policyRevision: 4,
     policySha256: D("policy"),
     ...(decision === "approval_required" ? { approvalReceiptSha256: D("approval") } : {}),
@@ -261,23 +274,62 @@ function governanceReceipt(
   };
 }
 
+function routeReceipt(): RemoteWorkerInferenceEffectiveRouteReceipt {
+  return {
+    schemaVersion: REMOTE_WORKER_INFERENCE_EFFECTIVE_ROUTE_SCHEMA_VERSION,
+    providerId: "anthropic",
+    modelId: "claude-opus-4",
+    apiStyle: "anthropic_messages",
+    credentialType: "api_key",
+    usagePool: "standard",
+    credentialSource: "env",
+  };
+}
+
 function admissionFor(
   a: SeededAuthority,
   overrides: Partial<RemoteWorkerInferenceRequestSubmission> = {},
   decision: RemoteWorkerInferenceGovernanceReceipt["decision"] = "allowed",
 ) {
-  return {
-    submission: submissionFor(a, overrides),
-    workerId: a.workerId,
-    workerGeneration: a.workerGeneration,
-    sessionId: a.sessionId,
-    turnId: a.turnId,
-    capabilityProfileSha256: D("capability-profile"),
-    routedContextSha256: D("routed-context"),
+  const submission = submissionFor(a, overrides);
+  const governance = governanceReceipt(decision);
+  const operation = {
     operationId: "operation-1",
     dispatchGeneration: "dispatch-generation-1",
-    governance: governanceReceipt(decision),
-    budgetReservationId: "reservation-1",
+    requestSha256: remoteWorkerInferenceRequestSha256(submission),
+    effectiveRouteSha256: governance.effectiveRouteSha256,
+    registryWorkspaceId: submission.registryWorkspaceId,
+    executionWorkspaceId: "default",
+    assignmentId: submission.assignmentId,
+    assignmentGeneration: submission.assignmentGeneration,
+    workerId: a.workerId,
+    workerGeneration: a.workerGeneration,
+    admittedLeaseRevision: 1,
+    sessionId: a.sessionId,
+    turnId: a.turnId,
+    durableRunId: a.durableRunId,
+    taskId: a.taskId,
+    capabilityProfileSha256: D("capability-profile"),
+    routedContextSha256: submission.contextSha256,
+    outputTokenCeiling: Math.min(submission.outputTokenCeiling, governance.outputTokenCeiling),
+    reasoningTokenCeiling: Math.min(submission.reasoningTokenCeiling, governance.reasoningTokenCeiling),
+  } as const;
+  return {
+    submission,
+    workerId: a.workerId,
+    workerGeneration: a.workerGeneration,
+    executionWorkspaceId: "default",
+    sessionId: a.sessionId,
+    turnId: a.turnId,
+    durableRunId: a.durableRunId,
+    taskId: a.taskId,
+    admittedLeaseRevision: 1,
+    capabilityProfileSha256: D("capability-profile"),
+    routedContextSha256: submission.contextSha256,
+    operationId: "operation-1",
+    dispatchGeneration: "dispatch-generation-1",
+    governance,
+    ...(decision === "allowed" ? { effectiveRoute: routeReceipt(), budgetOperation: operation } : {}),
     admittedAt: a.now,
   };
 }
@@ -293,12 +345,38 @@ function keyFor(a: SeededAuthority, inferenceRequestId = "inference-1", attempt 
 }
 
 function claimInputFor(a: SeededAuthority, owner: string, key = keyFor(a)) {
+  const current = a.repo.getRequest(key);
+  assert.ok(current?.budgetOperationJson);
+  const operation = JSON.parse(current.budgetOperationJson) as {
+    operationId: string;
+    requestSha256: string;
+    effectiveRouteSha256: string;
+    outputTokenCeiling: number;
+    reasoningTokenCeiling: number;
+  };
+  a.repo.recordBudgetReservation(
+    key,
+    {
+      schemaVersion: REMOTE_WORKER_INFERENCE_BUDGET_SCHEMA_VERSION,
+      budgetOwnerId: "test-budget-owner",
+      reservationId: "reservation-1",
+      operationId: operation.operationId,
+      operationSha256: current.budgetOperationSha256!,
+      requestSha256: operation.requestSha256,
+      effectiveRouteSha256: operation.effectiveRouteSha256,
+      reservedOutputTokens: operation.outputTokenCeiling,
+      reservedReasoningTokens: operation.reasoningTokenCeiling,
+      reservedCostMicrousd: 1000,
+      expiresAt: FUTURE,
+    },
+    a.now,
+  );
   return {
     ...key,
     dispatchClaimOwner: owner,
     effectiveProviderId: "anthropic",
     effectiveModelId: "claude-opus-4",
-    usageIntentEventId: `usage-intent-${owner}`,
+    effectiveRouteSha256: current.effectiveRouteSha256,
     dispatchLeaseExpiresAt: FUTURE,
     now: a.now,
   };
@@ -325,8 +403,7 @@ describe("RemoteWorkerInferenceRepository SQLite", () => {
       admissionFor(a, { idempotencyKey: "w", inferenceRequestId: "w" }, "approval_required"),
     );
     assert.equal(waiting.request.state, "waiting_approval");
-    const admitted = a.repo.resolveApproval(keyFor(a, "w"), "admitted", a.now);
-    assert.equal(admitted?.state, "admitted");
+    assert.equal(waiting.request.budgetAuthorityState, "not_required");
 
     const denied = a.repo.admitOrReplay(admissionFor(a, { idempotencyKey: "d", inferenceRequestId: "d" }, "denied"));
     assert.equal(denied.request.state, "blocked");
@@ -342,6 +419,171 @@ describe("RemoteWorkerInferenceRepository SQLite", () => {
     assert.equal(first.dispatchClaimOwner, "owner-a");
     assert.equal(first.accountingDisposition, "delegated");
     assert.equal(second, undefined);
+  });
+
+  it("exact-binds every budget authority field, ceiling, and claimed route", () => {
+    const drift = seedAuthority("operation-drift");
+    const invalid = admissionFor(drift);
+    const operationMutations: Array<Partial<RemoteWorkerInferenceBudgetOperationInput>> = [
+      { operationId: "different-operation" },
+      { dispatchGeneration: "different-dispatch" },
+      { requestSha256: D("different-request") },
+      { effectiveRouteSha256: D("different-route") },
+      { registryWorkspaceId: "different-registry-workspace" },
+      { executionWorkspaceId: "different-execution-workspace" },
+      { assignmentId: "different-assignment" },
+      { assignmentGeneration: invalid.submission.assignmentGeneration + 1 },
+      { workerId: "different-worker" },
+      { workerGeneration: invalid.workerGeneration + 1 },
+      { admittedLeaseRevision: invalid.admittedLeaseRevision + 1 },
+      { sessionId: "different-session" },
+      { turnId: "different-turn" },
+      { durableRunId: "different-run" },
+      { taskId: "different-task" },
+      { capabilityProfileSha256: D("different-capability-profile") },
+      { routedContextSha256: D("different-routed-context") },
+      { outputTokenCeiling: invalid.budgetOperation!.outputTokenCeiling + 1 },
+      { reasoningTokenCeiling: invalid.budgetOperation!.reasoningTokenCeiling + 1 },
+    ];
+    for (const mutation of operationMutations) {
+      assert.throws(
+        () =>
+          drift.repo.admitOrReplay({
+            ...invalid,
+            budgetOperation: { ...invalid.budgetOperation!, ...mutation },
+          }),
+        /budget operation does not bind/u,
+      );
+    }
+
+    const a = seedAuthority("reservation-drift");
+    const admitted = a.repo.admitOrReplay(admissionFor(a)).request;
+    const operation = JSON.parse(admitted.budgetOperationJson!) as {
+      operationId: string;
+      requestSha256: string;
+      effectiveRouteSha256: string;
+      outputTokenCeiling: number;
+      reasoningTokenCeiling: number;
+    };
+    assert.throws(
+      () =>
+        a.repo.recordBudgetReservation(
+          keyFor(a),
+          {
+            schemaVersion: REMOTE_WORKER_INFERENCE_BUDGET_SCHEMA_VERSION,
+            budgetOwnerId: "test-budget-owner",
+            reservationId: "reservation-over-ceiling",
+            operationId: operation.operationId,
+            operationSha256: admitted.budgetOperationSha256!,
+            requestSha256: operation.requestSha256,
+            effectiveRouteSha256: operation.effectiveRouteSha256,
+            reservedOutputTokens: operation.outputTokenCeiling + 1,
+            reservedReasoningTokens: operation.reasoningTokenCeiling,
+            reservedCostMicrousd: 1000,
+            expiresAt: FUTURE,
+          },
+          a.now,
+        ),
+      /ceilings do not match/u,
+    );
+    const claim = claimInputFor(a, "owner-a");
+    assert.throws(
+      () =>
+        a.db
+          .prepare(
+            "UPDATE remote_worker_inference_requests SET budget_authority_state = 'settled' WHERE inference_request_id = 'inference-1'",
+          )
+          .run(),
+      /authority transition|evidence is incomplete/u,
+    );
+    assert.throws(() => a.repo.claimDispatch({ ...claim, effectiveModelId: "different-model" }), /route drifted/u);
+    assert.throws(
+      () => a.repo.claimDispatch({ ...claim, dispatchClaimOwner: "Bearer dispatch-owner-secret-canary" }),
+      /secret-like/u,
+    );
+  });
+
+  it("exact-binds every authority and ceiling field again at approval continuation", () => {
+    const a = seedAuthority("continuation-operation-drift");
+    const waiting = admissionFor(a, {}, "approval_required");
+    a.repo.admitOrReplay(waiting);
+    const allowed = admissionFor(a);
+    const approval = {
+      schemaVersion: REMOTE_WORKER_INFERENCE_APPROVAL_RESOLUTION_SCHEMA_VERSION,
+      decision: "approved" as const,
+      pendingApprovalReceiptSha256: waiting.governance.approvalReceiptSha256!,
+      resolutionSha256: D("approval-resolution"),
+      resolvedAt: a.now,
+    };
+    assert.throws(
+      () =>
+        a.repo.recordApprovalContinuation({
+          ...keyFor(a),
+          approvalResolution: { ...approval, resolvedAt: "2000-01-01T00:00:00.000Z" },
+          governance: allowed.governance,
+          effectiveRoute: allowed.effectiveRoute!,
+          budgetOperation: allowed.budgetOperation!,
+          now: a.now,
+        }),
+      /continuation evidence drifted/u,
+    );
+    assert.throws(
+      () =>
+        a.repo.recordApprovalContinuation({
+          ...keyFor(a),
+          approvalResolution: approval,
+          governance: { ...allowed.governance, expiresAt: a.now },
+          effectiveRoute: allowed.effectiveRoute!,
+          budgetOperation: allowed.budgetOperation!,
+          now: a.now,
+        }),
+      /continuation evidence drifted/u,
+    );
+    const operationMutations: Array<Partial<RemoteWorkerInferenceBudgetOperationInput>> = [
+      { operationId: "different-operation" },
+      { dispatchGeneration: "different-dispatch" },
+      { requestSha256: D("different-request") },
+      { effectiveRouteSha256: D("different-route") },
+      { registryWorkspaceId: "different-registry-workspace" },
+      { executionWorkspaceId: "different-execution-workspace" },
+      { assignmentId: "different-assignment" },
+      { assignmentGeneration: allowed.submission.assignmentGeneration + 1 },
+      { workerId: "different-worker" },
+      { workerGeneration: allowed.workerGeneration + 1 },
+      { admittedLeaseRevision: allowed.admittedLeaseRevision + 1 },
+      { sessionId: "different-session" },
+      { turnId: "different-turn" },
+      { durableRunId: "different-run" },
+      { taskId: "different-task" },
+      { capabilityProfileSha256: D("different-capability-profile") },
+      { routedContextSha256: D("different-routed-context") },
+      { outputTokenCeiling: allowed.budgetOperation!.outputTokenCeiling + 1 },
+      { reasoningTokenCeiling: allowed.budgetOperation!.reasoningTokenCeiling + 1 },
+    ];
+    for (const mutation of operationMutations) {
+      assert.throws(
+        () =>
+          a.repo.recordApprovalContinuation({
+            ...keyFor(a),
+            approvalResolution: approval,
+            governance: allowed.governance,
+            effectiveRoute: allowed.effectiveRoute!,
+            budgetOperation: { ...allowed.budgetOperation!, ...mutation },
+            now: a.now,
+          }),
+        /continuation evidence drifted/u,
+      );
+    }
+    const continued = a.repo.recordApprovalContinuation({
+      ...keyFor(a),
+      approvalResolution: approval,
+      governance: allowed.governance,
+      effectiveRoute: allowed.effectiveRoute!,
+      budgetOperation: allowed.budgetOperation!,
+      now: a.now,
+    });
+    assert.equal(continued?.state, "admitted");
+    assert.equal(continued?.budgetAuthorityState, "reservation_pending");
   });
 
   it("appends hash-chained frames, enforces output bounds, and finalizes an immutable terminal", () => {
@@ -372,13 +614,26 @@ describe("RemoteWorkerInferenceRepository SQLite", () => {
       ...keyFor(a),
       dispatchClaimOwner: "owner-a",
       terminalState: "completed",
-      usageTerminalEventId: "usage-terminal-1",
+      usageEventIds: ["usage-intent-1", "usage-terminal-1"],
       now: a.now,
     });
     assert.equal(finalized.state, "completed");
     assert.equal(finalized.terminalFrameSequence, 3);
     assert.equal(finalized.usageTerminalEventId, "usage-terminal-1");
-    assert.equal(finalized.accountingDisposition, "settled");
+    assert.equal(finalized.accountingDisposition, "delegated");
+    assert.equal(finalized.budgetAuthorityState, "settlement_pending");
+    assert.throws(
+      () =>
+        a.db
+          .prepare(
+            "UPDATE remote_worker_inference_requests SET budget_authority_state = 'reserved' WHERE inference_request_id = 'inference-1'",
+          )
+          .run(),
+      /authority transition|evidence is incomplete/u,
+    );
+    const settled = a.repo.markBudgetSettled(keyFor(a), a.now);
+    assert.equal(settled.accountingDisposition, "settled");
+    assert.equal(settled.budgetAuthorityState, "settled");
 
     // Terminal is immutable: a raw state change is rejected by the trigger.
     assert.throws(
@@ -390,6 +645,21 @@ describe("RemoteWorkerInferenceRepository SQLite", () => {
           .run(),
       /immutable/u,
     );
+    for (const mutation of [
+      "accounting_disposition = 'delegated'",
+      "budget_authority_state = 'settlement_pending'",
+      "usage_terminal_event_id = 'fabricated-usage-id'",
+    ]) {
+      assert.throws(
+        () =>
+          a.db
+            .prepare(
+              `UPDATE remote_worker_inference_requests SET ${mutation} WHERE inference_request_id = 'inference-1'`,
+            )
+            .run(),
+        /authority transition|evidence is incomplete|immutable/u,
+      );
+    }
     // But acknowledgement still advances.
     const acked = a.repo.acknowledge(keyFor(a), 3, a.now);
     assert.equal(acked.workerAcknowledgedThrough, 3);
@@ -462,10 +732,95 @@ describe("RemoteWorkerInferenceRepository SQLite", () => {
           ...keyFor(a),
           dispatchClaimOwner: "owner-a",
           terminalState: "completed",
+          usageEventIds: ["late-usage"],
           now: a.now,
         }),
       /cannot terminate from state dispatch_unknown/u,
     );
+  });
+
+  it("permits release only for a blocked never-dispatched reservation", () => {
+    const blocked = seedAuthority("released-blocked");
+    blocked.repo.admitOrReplay(admissionFor(blocked));
+    claimInputFor(blocked, "owner-a"); // records the exact reservation without claiming dispatch
+    const intent = blocked.repo.recordBudgetReleaseIntent(keyFor(blocked), {
+      blockReason: "pre_dispatch_authority_lost",
+      reason: "pre_dispatch_authority_lost",
+      now: blocked.now,
+    });
+    assert.equal(intent.state, "blocked");
+    assert.equal(intent.budgetAuthorityState, "reserved");
+    assert.throws(
+      () =>
+        blocked.db
+          .prepare(
+            "UPDATE remote_worker_inference_requests SET budget_release_reason = 'governance_denied' WHERE inference_request_id = 'inference-1'",
+          )
+          .run(),
+      /immutable/u,
+    );
+    const released = blocked.repo.markBudgetReleased(keyFor(blocked), "pre_dispatch_authority_lost", blocked.now);
+    assert.equal(released.state, "blocked");
+    assert.equal(released.budgetAuthorityState, "released");
+    for (const mutation of [
+      "budget_authority_state = 'reserved'",
+      "accounting_disposition = 'unknown'",
+      "budget_release_requested_at = '2098-01-01T00:00:00.000Z'",
+    ]) {
+      assert.throws(
+        () =>
+          blocked.db
+            .prepare(
+              `UPDATE remote_worker_inference_requests SET ${mutation} WHERE inference_request_id = 'inference-1'`,
+            )
+            .run(),
+        /authority transition|evidence is incomplete|immutable/u,
+      );
+    }
+
+    for (const terminalState of ["completed", "failed", "cancelled"] as const) {
+      const terminal = seedAuthority(`released-${terminalState}`);
+      terminal.repo.admitOrReplay(admissionFor(terminal));
+      terminal.repo.claimDispatch(claimInputFor(terminal, "owner-a"));
+      terminal.repo.finalizeTerminal({
+        ...keyFor(terminal),
+        dispatchClaimOwner: "owner-a",
+        terminalState,
+        usageEventIds: [`usage-${terminalState}`],
+        now: terminal.now,
+      });
+      assert.throws(
+        () =>
+          terminal.db
+            .prepare(
+              `UPDATE remote_worker_inference_requests
+               SET budget_authority_state = 'released', budget_released_at = @now
+               WHERE inference_request_id = 'inference-1'`,
+            )
+            .run({ now: terminal.now }),
+        /authority transition|incomplete/u,
+      );
+    }
+  });
+
+  it("moves expired claimed and streaming rows to reconciliation without redispatch authority", () => {
+    for (const sourceState of ["dispatch_claimed", "streaming"] as const) {
+      const a = seedAuthority(`expired-${sourceState}`);
+      a.repo.admitOrReplay(admissionFor(a));
+      a.repo.claimDispatch(claimInputFor(a, "owner-a"));
+      if (sourceState === "streaming") {
+        a.repo.appendOutputFrame({ ...keyFor(a), dispatchClaimOwner: "owner-a", text: "partial", now: a.now });
+      }
+      a.db
+        .prepare(
+          "UPDATE remote_worker_inference_requests SET dispatch_lease_expires_at = '2000-01-01T00:00:00.000Z' WHERE inference_request_id = 'inference-1'",
+        )
+        .run();
+      const recovered = a.repo.recoverExpiredDispatchUnknown(keyFor(a), a.now);
+      assert.equal(recovered?.state, "dispatch_unknown");
+      assert.equal(recovered?.budgetAuthorityState, "reconciliation_required");
+      assert.equal(recovered?.usageIntentEventId, undefined);
+    }
   });
 
   it("replays durable outbox frames strictly after the acknowledgement watermark", () => {

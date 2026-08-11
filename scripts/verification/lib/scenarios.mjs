@@ -26,6 +26,7 @@ import {
   NEXT_RELEASE_SURFACE_MANIFEST,
   resolveDirectCompatibilityManifest,
   resolveLegacyRedirectManifest,
+  resolveReleaseSurfaceHref,
   resolveShellContract,
   resolveSurfaceRegressionManifest,
   resolveVisualBaselineNamespace,
@@ -49,11 +50,17 @@ import {
   appendTraceArtifact,
   attachBrowserLogging,
   captureBrowserArtifacts,
+  readBrowserSseDiagnostics,
   setBrowserCorrelation,
   startBrowserTrace,
 } from "./scenarios/browser-helpers.mjs";
 import { seedMissionControlNextFixture as seedMissionControlNextFixtureImpl } from "./scenarios/fixture-seeding.mjs";
 import { collectVisualBaselineCoverage } from "./visual-baseline-coverage.mjs";
+import {
+  captureConfigJsonSnapshots,
+  findBackupConfigSnapshotDrift,
+  removeBackupMutationFileWithRetry,
+} from "./backup-snapshot-stability.mjs";
 import {
   API_COMPAT_ALLOWLIST_PATH,
   API_COMPAT_BASELINE_PATH,
@@ -79,8 +86,16 @@ import {
   runUsabilityCoreLane as runUsabilityCoreLaneImpl,
   runUsabilityLane as runUsabilityLaneImpl,
 } from "./scenarios/usability-lane.mjs";
-import { runUsabilityBrowserActionLane as runUsabilityBrowserActionLaneImpl } from "./scenarios/usability-browser-action-lane.mjs";
-import { startDeterministicLlmStub, writeDeterministicLlmProviderConfig } from "./scenarios/deterministic-llm-stub.mjs";
+import {
+  filterExpectedBrowserConsoleMessages,
+  pollSseConnectionRecoveryEvidence,
+  runUsabilityBrowserActionLane as runUsabilityBrowserActionLaneImpl,
+} from "./scenarios/usability-browser-action-lane.mjs";
+import {
+  DETERMINISTIC_LLM_KEY_ENV,
+  startDeterministicLlmStub,
+  writeDeterministicLlmProviderConfig,
+} from "./scenarios/deterministic-llm-stub.mjs";
 import {
   assertNativeStageScrollContract,
   assertProviderAnchorAndAdviceContract,
@@ -174,6 +189,7 @@ function verificationLaneDeps() {
     ensureGatewayWorkspaceBuild,
     ensureOnboardingComplete,
     filterVisualItemsBySlug,
+    filterExpectedBrowserConsoleMessages,
     forceVerificationUiPackage,
     installMissionControlNextBrowserState,
     isAllowedStatus,
@@ -184,9 +200,11 @@ function verificationLaneDeps() {
     performVerificationInteraction,
     pinVisualRegressionProvider,
     probeKeyboardFocus,
+    pollSseConnectionRecoveryEvidence,
     prepareVerificationRuntime,
     pnpmCommand,
     randomUUID,
+    readBrowserSseDiagnostics,
     probeAuthMatrixRoute,
     readArchitectureMetricsBaseline,
     readJson,
@@ -194,7 +212,7 @@ function verificationLaneDeps() {
     repoRoot,
     requestJson,
     resolveVerificationTargetContext,
-    resolveVisualRouteHref,
+    resolveVisualRouteHref: resolveReleaseSurfaceHref,
     restartGatewayProcess,
     runCommand,
     runMissionControlNextMobileShellProof,
@@ -897,12 +915,63 @@ export async function runDeepCoreLane(context, _options = {}) {
 
     await runGatewayApiSurfaceScenarios(context, stack.gatewayUrl, seedResponse.body);
 
+    if (verificationTarget.isNext) {
+      // The Mission Control Next projects route (release-surface manifest) waits
+      // for an auto-selected `.mc-next-project-card.is-selected`. The generic
+      // verification seed creates a workspace and sessions but no project, so the
+      // raw `/projects` overview would render its empty state and never select a
+      // card. Seed one project here (mirroring seedMissionControlNextFixture) so
+      // the overview auto-selects the first card during core navigation.
+      const coreProjectResponse = await requestJson(stack.gatewayUrl, "/api/v1/chat/projects", {
+        method: "POST",
+        body: {
+          workspaceId: seedResponse.body.workspaceId,
+          name: "Verification Core Project",
+          description: "Deterministic project so the projects overview auto-selects a card.",
+          workspacePath: "verification/core-project",
+          color: "#20b8a6",
+        },
+      });
+      if (!coreProjectResponse.ok) {
+        throw new Error(`verification core project seed failed: ${JSON.stringify(coreProjectResponse.body)}`);
+      }
+      // The ops-approvals route (release-surface manifest) waits for the
+      // `.mc-next-approvals-inspector` detail pane, which mounts only after the
+      // approval queue auto-selects a visible approval. The generic verification
+      // seed creates no approval (the api-surface scenarios resolve their own),
+      // so the pending queue would render its empty state and the inspector
+      // would never appear. Mirror seedMissionControlNextFixture's approval
+      // seed so the route auto-selects the seeded pending approval.
+      const coreApprovalResponse = await requestJson(
+        stack.gatewayUrl,
+        "/api/v1/dev/verification/chat-approval-scenario",
+        {
+          method: "POST",
+          body: {
+            sessionId: seedResponse.body.sessionId,
+            workspaceId: seedResponse.body.workspaceId,
+          },
+        },
+      );
+      if (!coreApprovalResponse.ok) {
+        throw new Error(`verification core approval seed failed: ${JSON.stringify(coreApprovalResponse.body)}`);
+      }
+    }
+
     const browser = await chromium.launch({ headless: true });
     try {
       const browserContext = await browser.newContext({
         viewport: { width: 1440, height: 1024 },
         colorScheme: "dark",
       });
+      if (verificationTarget.isNext) {
+        // Point core navigation at the seeded workspace (which now owns the
+        // project seeded above) instead of the empty default workspace, so
+        // `/projects` resolves the seeded project and auto-selects its card. The
+        // citadel/mode/detail values this writes already match the app defaults,
+        // so only the active workspace changes for the navigation sweep.
+        await installMissionControlNextBrowserState(browserContext, seedResponse.body.workspaceId);
+      }
       const page = await browserContext.newPage();
       const browserLog = attachBrowserLogging(page);
 
@@ -1616,16 +1685,25 @@ export async function runOperatorProofLane(context, _options = {}) {
     },
   );
 
-  const stack = await startVerificationStack(context, {
-    includeUi: false,
-    gatewayEnv: {
-      GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED: "true",
-      GOATCITADEL_DURABLE_FOUNDATION_ENABLED: "true",
-      GOATCITADEL_FEATURE_DURABLE_KERNEL_V1_ENABLED: "true",
-      GOATCITADEL_CODE_MODE_SANDBOX_REQUIRED: "false",
-    },
+  const operatorStub = await startDeterministicLlmStub({
+    replyText: "Verification operator approval resumed.",
   });
+  let operatorRuntimeRoot;
+  let stack;
   try {
+    operatorRuntimeRoot = await prepareVerificationRuntime(`${context.runId}-operator-proof`);
+    await writeDeterministicLlmProviderConfig(operatorRuntimeRoot, operatorStub.baseUrl);
+    stack = await startVerificationStack(context, {
+      runtimeRoot: operatorRuntimeRoot,
+      includeUi: false,
+      gatewayEnv: {
+        GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED: "true",
+        GOATCITADEL_DURABLE_FOUNDATION_ENABLED: "true",
+        GOATCITADEL_FEATURE_DURABLE_KERNEL_V1_ENABLED: "true",
+        GOATCITADEL_CODE_MODE_SANDBOX_REQUIRED: "false",
+        [DETERMINISTIC_LLM_KEY_ENV]: "verification-stub-key",
+      },
+    });
     const seedResponse = await requestJson(stack.gatewayUrl, "/api/v1/dev/verification/seed", {
       method: "POST",
       body: {
@@ -1826,7 +1904,12 @@ export async function runOperatorProofLane(context, _options = {}) {
       },
     );
   } finally {
-    await stopVerificationStack(stack);
+    if (stack) {
+      await stopVerificationStack(stack);
+    } else if (operatorRuntimeRoot) {
+      await fs.rm(operatorRuntimeRoot, { recursive: true, force: true }).catch(() => undefined);
+    }
+    await operatorStub.close().catch(() => undefined);
   }
 
   const operatorToken = "verification-operator-token";
@@ -2026,6 +2109,12 @@ export async function runOperatorProofLane(context, _options = {}) {
           {
             actor: "companion",
             route: "/api/v1/approvals?status=pending&limit=20",
+            // Companion custody requires the device-key request signature on
+            // reads too. This route admits general companions at the
+            // route-access layer, so the bare bearer is rejected by the
+            // signature layer with the Gateway's established missing-signature
+            // denial code (401), not the route-access 403.
+            expectedStatus: 401,
             response: await requestJson(authStack.gatewayUrl, "/api/v1/approvals?status=pending&limit=20", {
               headers: {
                 Authorization: `Bearer ${companionToken}`,
@@ -2115,29 +2204,34 @@ export async function runOperatorProofLane(context, _options = {}) {
         ];
 
         for (const denied of deniedChecks) {
-          if (denied.response.status !== 403) {
+          // Route-access denials are 403; the companion missing-signature
+          // denial is 401 (the request is not fully authenticated without the
+          // device-key second factor). Both prove the credential cannot reach
+          // the route.
+          const expectedStatus = denied.expectedStatus ?? 403;
+          if (denied.response.status !== expectedStatus) {
             throw new Error(
-              `${denied.actor} credential unexpectedly reached ${denied.route}: ${JSON.stringify({
-                status: denied.response.status,
-                body: denied.response.body,
-              })}`,
+              `${denied.actor} credential unexpectedly reached ${denied.route} (expected ${expectedStatus}): ${JSON.stringify(
+                {
+                  status: denied.response.status,
+                  body: denied.response.body,
+                },
+              )}`,
             );
           }
         }
 
         const outPath = path.join(context.artifactRoot, "diagnostics", "operator-proof-auth-boundary.json");
-        await writeJson(outPath, {
-          deviceRequest: deviceRequest.body,
-          resolvedApproval: resolvedApproval.body,
-          approvedStatus: approvedStatus.body,
-          companionExchange: exchange.body,
-          deniedChecks: deniedChecks.map((entry) => ({
-            actor: entry.actor,
-            route: entry.route,
-            status: entry.response.status,
-            body: entry.response.body,
-          })),
-        });
+        await writeJson(
+          outPath,
+          projectOperatorAuthBoundaryEvidence({
+            deviceRequest: deviceRequest.body,
+            resolvedApproval: resolvedApproval.body,
+            approvedStatus: approvedStatus.body,
+            companionExchange: exchange.body,
+            deniedChecks,
+          }),
+        );
         return {
           status: "passed",
           metrics: {
@@ -2150,6 +2244,99 @@ export async function runOperatorProofLane(context, _options = {}) {
   } finally {
     await stopVerificationStack(authStack);
   }
+}
+
+export function projectOperatorAuthBoundaryEvidence(input) {
+  const approval = input.resolvedApproval?.approval;
+  const resolutionEffects = input.resolvedApproval?.resolutionEffects;
+  return {
+    deviceRequest: {
+      requestId: input.deviceRequest?.requestId,
+      approvalId: input.deviceRequest?.approvalId,
+      status: input.deviceRequest?.status,
+      expiresAt: input.deviceRequest?.expiresAt,
+    },
+    resolvedApproval: {
+      approval: approval
+        ? {
+            approvalId: approval.approvalId,
+            kind: approval.kind,
+            riskLevel: approval.riskLevel,
+            status: approval.status,
+            createdAt: approval.createdAt,
+            resolvedAt: approval.resolvedAt,
+            explanationStatus: approval.explanationStatus,
+          }
+        : null,
+      effects: Array.isArray(input.resolvedApproval?.effects)
+        ? input.resolvedApproval.effects.map((effect) => ({
+            effectId: effect.effectId,
+            effectKind: effect.effectKind,
+            targetKind: effect.targetKind,
+            targetId: effect.targetId,
+            status: effect.status,
+            attemptCount: effect.attemptCount,
+            version: effect.version,
+          }))
+        : [],
+      durableRunId: input.resolvedApproval?.durableRunId,
+      resolutionEffects: resolutionEffects
+        ? {
+            approvalWaitDurableRunId: resolutionEffects.approvalWaitDurableRunId,
+            proactiveRunCount: Array.isArray(resolutionEffects.proactiveRunIds)
+              ? resolutionEffects.proactiveRunIds.length
+              : 0,
+            chatTurnResume: resolutionEffects.chatTurnResume
+              ? {
+                  resumed: resolutionEffects.chatTurnResume.resumed === true,
+                  resumedTurnId: resolutionEffects.chatTurnResume.resumedTurnId,
+                  resumedRunId: resolutionEffects.chatTurnResume.resumedRunId,
+                }
+              : null,
+          }
+        : null,
+    },
+    approvedStatus: {
+      requestId: input.approvedStatus?.requestId,
+      approvalId: input.approvedStatus?.approvalId,
+      status: input.approvedStatus?.status,
+      expiresAt: input.approvedStatus?.expiresAt,
+      resolvedAt: input.approvedStatus?.resolvedAt,
+      deviceCredentialIssued:
+        typeof input.approvedStatus?.deviceToken === "string" && input.approvedStatus.deviceToken.length > 0,
+      credentialExpiresAt: input.approvedStatus?.deviceTokenExpiresAt,
+      message: input.approvedStatus?.message,
+    },
+    companionExchange: {
+      contractId: input.companionExchange?.contractId,
+      sessionId: input.companionExchange?.sessionId,
+      grantId: input.companionExchange?.grantId,
+      actorId: input.companionExchange?.actorId,
+      deviceLabel: input.companionExchange?.deviceLabel,
+      deviceType: input.companionExchange?.deviceType,
+      platform: input.companionExchange?.platform,
+      accessCredentialIssued:
+        typeof input.companionExchange?.accessToken === "string" && input.companionExchange.accessToken.length > 0,
+      accessCredentialExpiresAt: input.companionExchange?.accessTokenExpiresAt,
+      refreshCredentialIssued:
+        typeof input.companionExchange?.refreshToken === "string" && input.companionExchange.refreshToken.length > 0,
+      refreshCredentialExpiresAt: input.companionExchange?.refreshTokenExpiresAt,
+      issuedAt: input.companionExchange?.issuedAt,
+      signatureAlgorithm: input.companionExchange?.signatureAlgorithm,
+      principalPurpose: input.companionExchange?.principalPurpose,
+    },
+    deniedChecks: input.deniedChecks.map((entry) => ({
+      actor: entry.actor,
+      route: entry.route,
+      // Route-access denials expect 403; the companion missing-signature
+      // denial expects 401 (bearer possession alone is not full companion
+      // authentication).
+      expectedStatus: entry.expectedStatus ?? 403,
+      status: entry.response.status,
+      error: typeof entry.response.body?.error === "string" ? entry.response.body.error : undefined,
+      code: typeof entry.response.body?.code === "string" ? entry.response.body.code : undefined,
+    })),
+  };
 }
 
 export async function runDurableRecoveryLane(context, options = {}) {
@@ -2248,7 +2435,6 @@ export async function runBackupRoundtripLane(context, _options = {}) {
         subsystem: "runtime",
       },
       async () => {
-        const runtimeRelativePath = (targetPath) => path.relative(runtimeRoot, targetPath).replaceAll("\\", "/");
         const configDir = path.join(runtimeRoot, "config");
         const configPath = path.join(configDir, "llm-providers.json");
         const configSentinelPath = path.join(configDir, "verification-backup-roundtrip.json");
@@ -2283,38 +2469,6 @@ export async function runBackupRoundtripLane(context, _options = {}) {
         )}\n`;
 
         await fs.writeFile(configSentinelPath, configSentinelRaw, "utf8");
-        // Config generations are part of the minimum recoverable set. Walk the
-        // tree rather than only the split-file root so the proof mutates,
-        // restores, and compares canonical generation receipts byte-for-byte.
-        const configFileNames = (await fs.readdir(configDir, { recursive: true }))
-          .filter((entry) => entry.toLowerCase().endsWith(".json"))
-          .sort((left, right) => left.localeCompare(right));
-        const configSnapshots = await Promise.all(
-          configFileNames.map(async (fileName) => {
-            const absolutePath = path.join(configDir, fileName);
-            return {
-              absolutePath,
-              relativePath: runtimeRelativePath(absolutePath),
-              raw: await fs.readFile(absolutePath, "utf8"),
-            };
-          }),
-        );
-        const providerConfigSnapshot = configSnapshots.find(
-          (item) => item.relativePath === "config/llm-providers.json",
-        );
-        if (!providerConfigSnapshot) {
-          throw new Error("backup roundtrip expected config/llm-providers.json in the runtime root");
-        }
-        const originalConfigRaw = providerConfigSnapshot.raw;
-        const originalConfig = JSON.parse(originalConfigRaw);
-        const targetProvider = Array.isArray(originalConfig.providers)
-          ? (originalConfig.providers.find((item) => item?.providerId === "openai") ?? originalConfig.providers[0])
-          : null;
-        if (!targetProvider) {
-          throw new Error("backup roundtrip config mutation could not find a provider entry");
-        }
-        const originalLabel = String(targetProvider.label ?? "OpenAI");
-        const mutatedMarker = " (mutated after backup)";
         const dbSentinelPolicy = {
           realtimeEventsDays: 11,
           backupsKeep: 17,
@@ -2339,17 +2493,60 @@ export async function runBackupRoundtripLane(context, _options = {}) {
           throw new Error("DB-backed retention policy sentinel was not visible before backup");
         }
 
-        const createdBackup = await requestJson(stack.gatewayUrl, "/api/v1/admin/backups/create", {
-          method: "POST",
-          body: {
-            name: "verification-backup-roundtrip",
-          },
-        });
-        assertOk(createdBackup, "create runtime backup");
-        const backupPath = path.basename(String(createdBackup.body?.outputPath ?? ""));
-        if (!backupPath) {
-          throw new Error("backup create response did not include an outputPath");
+        // A live config owner can finish an atomic generation write between a
+        // filesystem read and the backup request. Pair the exact recursive
+        // config bytes with the completed backup before destructive mutation.
+        // This bounded precondition retry preserves byte-for-byte restore proof
+        // without classifying legitimate owner completion as restore drift.
+        const maxBackupSnapshotAttempts = 8;
+        let backupSnapshotAttempts = 0;
+        let configSnapshots = [];
+        let createdBackup;
+        let backupPath = "";
+        let snapshotDrift = [];
+        while (backupSnapshotAttempts < maxBackupSnapshotAttempts) {
+          backupSnapshotAttempts += 1;
+          configSnapshots = await captureConfigJsonSnapshots(configDir, runtimeRoot);
+          createdBackup = await requestJson(stack.gatewayUrl, "/api/v1/admin/backups/create", {
+            method: "POST",
+            body: {
+              name: "verification-backup-roundtrip",
+            },
+          });
+          assertOk(createdBackup, "create runtime backup");
+          backupPath = path.basename(String(createdBackup.body?.outputPath ?? ""));
+          if (!backupPath) {
+            throw new Error("backup create response did not include an outputPath");
+          }
+          snapshotDrift = await findBackupConfigSnapshotDrift(
+            configSnapshots,
+            path.join(backupRoot, backupPath, "payload"),
+          );
+          if (snapshotDrift.length === 0) break;
+          if (backupSnapshotAttempts < maxBackupSnapshotAttempts) await delay(250);
         }
+        if (!createdBackup || snapshotDrift.length > 0) {
+          throw new Error(
+            `backup config snapshot did not stabilize after ${backupSnapshotAttempts} attempts: ${snapshotDrift.join(", ")}`,
+          );
+        }
+
+        const providerConfigSnapshot = configSnapshots.find(
+          (item) => item.relativePath === "config/llm-providers.json",
+        );
+        if (!providerConfigSnapshot) {
+          throw new Error("backup roundtrip expected config/llm-providers.json in the runtime root");
+        }
+        const originalConfigRaw = providerConfigSnapshot.raw;
+        const originalConfig = JSON.parse(originalConfigRaw);
+        const targetProvider = Array.isArray(originalConfig.providers)
+          ? (originalConfig.providers.find((item) => item?.providerId === "openai") ?? originalConfig.providers[0])
+          : null;
+        if (!targetProvider) {
+          throw new Error("backup roundtrip config mutation could not find a provider entry");
+        }
+        const originalLabel = String(targetProvider.label ?? "OpenAI");
+        const mutatedMarker = " (mutated after backup)";
 
         const verifiedBackup = await requestJson(stack.gatewayUrl, "/api/v1/admin/backups/verify", {
           method: "POST",
@@ -2364,6 +2561,11 @@ export async function runBackupRoundtripLane(context, _options = {}) {
 
         await stopProcess(stack.gateway);
         const configMutationSummary = {};
+        const mutationRemovalAttempts = {};
+        const removeMutationFile = async (targetPath) => {
+          const relativePath = path.relative(runtimeRoot, targetPath).replaceAll("\\", "/");
+          mutationRemovalAttempts[relativePath] = await removeBackupMutationFileWithRetry(targetPath);
+        };
         for (const [index, snapshot] of configSnapshots.entries()) {
           if (snapshot.relativePath === "config/llm-providers.json") {
             const mutatedConfig = {
@@ -2397,17 +2599,17 @@ export async function runBackupRoundtripLane(context, _options = {}) {
             };
             continue;
           }
-          await fs.rm(snapshot.absolutePath, { force: true });
+          await removeMutationFile(snapshot.absolutePath);
           configMutationSummary[snapshot.relativePath] = {
             mutation: "deleted",
             mutated: !(await exists(snapshot.absolutePath)),
           };
         }
-        await fs.rm(dbPath, { force: true });
-        await fs.rm(dbWalPath, { force: true });
-        await fs.rm(dbShmPath, { force: true });
-        await fs.rm(transcriptPath, { force: true });
-        await fs.rm(auditPath, { force: true });
+        await removeMutationFile(dbPath);
+        await removeMutationFile(dbWalPath);
+        await removeMutationFile(dbShmPath);
+        await removeMutationFile(transcriptPath);
+        await removeMutationFile(auditPath);
         const dbMissing = !(await exists(dbPath));
         const transcriptMissing = !(await exists(transcriptPath));
         const auditMissing = !(await exists(auditPath));
@@ -2538,6 +2740,8 @@ export async function runBackupRoundtripLane(context, _options = {}) {
           transcriptPath,
           auditPath,
           originalConfigLabel: originalLabel,
+          backupSnapshotAttempts,
+          mutationRemovalAttempts,
           createdRetentionPolicy: createdRetentionPolicy.body,
           createdBackup: createdBackup.body,
           mutatedConfigLabel: `${originalLabel}${mutatedMarker}`,
@@ -4375,9 +4579,17 @@ function isOnboardingReconciliationConflict(response) {
   );
 }
 
-function buildCompanionSignedHeaders({ token, privateKey, path, nonce, body, timestamp = new Date().toISOString() }) {
+function buildCompanionSignedHeaders({
+  token,
+  privateKey,
+  path,
+  nonce,
+  body,
+  timestamp = new Date().toISOString(),
+  method = "POST",
+}) {
   const payload = buildCompanionVerificationPayload({
-    method: "POST",
+    method,
     path,
     timestamp,
     nonce,
@@ -4718,24 +4930,6 @@ async function stabilizeVisualRegressionSnapshot(page) {
     }
   });
   await page.waitForTimeout(100);
-}
-
-function appendQuery(href, query) {
-  if (!query) {
-    return href;
-  }
-  return `${href}${href.includes("?") ? "&" : "?"}${query}`;
-}
-
-function resolveVisualRouteHref(route, variant, fixture) {
-  let href = appendQuery(route.href, variant.themeQuery);
-  if (route?.fixtureSessionKey && fixture?.sessions) {
-    const sessionId = fixture.sessions[route.fixtureSessionKey];
-    if (sessionId) {
-      href = appendQuery(href, `sessionId=${encodeURIComponent(sessionId)}`);
-    }
-  }
-  return href;
 }
 
 async function assertNextVisualScenarioChrome(page, route) {
@@ -5194,11 +5388,17 @@ function selectRepresentativeManifestRoute(manifestItems, accessClass) {
     "sse-read": [{ method: "GET", url: "/api/v1/events/stream" }],
     "device-session-exchange": [{ method: "POST", url: "/api/v1/auth/companion/session/exchange" }],
     "session-control-companion": [{ method: "POST", url: "/api/v1/chat/sessions/:sessionId/control/requests" }],
+    "operator-or-companion": [{ method: "GET", url: "/api/v1/approvals" }],
     // Pinned to the plain JSON read; this class also carries an SSE route
     // (.../control/events/stream) that the generic JSON probe cannot exercise.
     "operator-or-session-control-companion": [{ method: "GET", url: "/api/v1/chat/sessions/:sessionId/messages" }],
     webhook: [],
-    loopback: [],
+    // The only loopback-class route is workspace-parameterized, which the
+    // generic fallbacks below skip, so it is pinned here and the probe
+    // substitutes the seeded workspace id (like :sessionId). The verification
+    // stack disables the loopback bypass, so the default all-deny expectations
+    // prove the route stays closed to every ordinary principal.
+    loopback: [{ method: "POST", url: "/api/v1/ops/workspaces/:workspaceId/remote-workers/bootstrap" }],
   };
 
   const preferred = preferredRoutes[accessClass] ?? [];
@@ -5305,6 +5505,14 @@ function buildAuthMatrixExpectations(accessClass) {
         device: false,
         companion: false,
       };
+    case "operator-or-companion":
+      return {
+        unauthenticated: false,
+        badToken: false,
+        operator: true,
+        device: false,
+        companion: true,
+      };
     default:
       return {
         unauthenticated: false,
@@ -5321,6 +5529,9 @@ async function probeAuthMatrixRoute(gatewayUrl, representative, credentials) {
   let url = representative.url;
   if (url.includes(":sessionId") && credentials.seededSessionId) {
     url = url.replace(":sessionId", encodeURIComponent(credentials.seededSessionId));
+  }
+  if (url.includes(":workspaceId") && credentials.seededWorkspaceId) {
+    url = url.replace(":workspaceId", encodeURIComponent(credentials.seededWorkspaceId));
   }
 
   switch (credentials.caller) {
@@ -5361,6 +5572,28 @@ async function probeAuthMatrixRoute(gatewayUrl, representative, credentials) {
       deviceType: "desktop",
       platform: "verification",
     };
+  } else if (representative.url === "/api/v1/ops/workspaces/:workspaceId/remote-workers/bootstrap") {
+    // Minimal JSON body so the POST clears content-type parsing and every
+    // denial in the matrix comes from the auth layer, not an empty-body 400.
+    body = {};
+  }
+
+  if (credentials.caller === "companion") {
+    // Companion custody requires the device-key request signature on every
+    // authenticated call, reads included — a bare companion bearer is denied
+    // by the signature layer even on companion-readable routes. Reads are
+    // signed over the pathname (the Gateway strips the query string from read
+    // paths before verifying), which is exactly what `url` is here: the
+    // events/stream query is appended below and stays outside the signed
+    // material.
+    headers = buildCompanionSignedHeaders({
+      token: credentials.companionToken,
+      privateKey: credentials.companionPrivateKey,
+      method,
+      path: url,
+      nonce: `auth-matrix-${randomUUID()}`,
+      body,
+    });
   }
 
   if (representative.url === "/api/v1/events/stream") {

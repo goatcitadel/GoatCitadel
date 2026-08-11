@@ -49,7 +49,7 @@ export const autonomyControlRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(autonomyControl.getStatus(parsed.data.recentLimit));
+      return reply.send(await autonomyControl.getStatus(parsed.data.recentLimit));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -68,7 +68,7 @@ export const autonomyControlRoutes: FastifyPluginAsync = async (fastify) => {
       opts.limit = parsed.data.limit;
     }
     try {
-      const summary = autonomyControl.revertAutonomousChangesSince(parsed.data.since, opts);
+      const summary = await autonomyControl.revertAutonomousChangesSince(parsed.data.since, opts);
       return reply.send(summary);
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });

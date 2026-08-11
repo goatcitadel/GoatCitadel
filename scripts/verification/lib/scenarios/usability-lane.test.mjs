@@ -42,6 +42,7 @@ import {
   assertGatewayChatFaultScenario,
   assertCompletedChatTurns,
   assertRequiredUsabilityScenarioOrder,
+  buildUsabilityFoundationStackOptions,
   buildExternalSourceBrowserActionSteps,
   readGatewayChatFaultResultRows,
   resolveBrowserActionBinding as resolveBrowserActionBindingForRun,
@@ -178,6 +179,17 @@ test("usability inventory follows current implementation truth and covers every 
   assert.equal(optionalRows.length, 2);
   assert.ok(optionalRows.every((row) => row.requiredCondition && row.skipReason && row.proofBindings.length === 0));
   assert.equal(new Set(inventory.rows.map((row) => row.stepId)).size, inventory.rows.length);
+});
+
+test("usability foundation pins an immutable preview bundle and scrubs inherited secrets", () => {
+  const options = buildUsabilityFoundationStackOptions("C:/isolated-runtime", ["OPENAI_API_KEY", "GITHUB_TOKEN"]);
+  assert.equal(options.includeUi, true);
+  assert.equal(options.uiMode, "preview");
+  assert.equal(options.runtimeRoot, "C:/isolated-runtime");
+  assert.deepEqual(options.gatewayEnvOmit, ["OPENAI_API_KEY", "GITHUB_TOKEN"]);
+  assert.deepEqual(options.uiEnvOmit, ["OPENAI_API_KEY", "GITHUB_TOKEN"]);
+  assert.equal(options.gatewayEnv.GOATCITADEL_AUTH_MODE, "token");
+  assert.equal(options.gatewayEnv.GOATCITADEL_RATE_LIMIT_ENABLED, "false");
 });
 
 test("required action evidence fails closed unless every exact owner passes with artifacts", () => {

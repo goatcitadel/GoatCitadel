@@ -209,7 +209,7 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
 
     let policyContext;
     try {
-      policyContext = fastify.services.tools.resolveToolPolicyContext({
+      policyContext = await fastify.services.tools.resolveToolPolicyContext({
         operatorId: request.authActorId,
         authActorId: request.authActorId,
         authActorSource: request.authActorSource,
@@ -225,7 +225,7 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: (error as Error).message });
     }
 
-    const evaluation = fastify.services.tools.evaluateToolAccess({
+    const evaluation = await fastify.services.tools.evaluateToolAccess({
       ...parsed.data,
       policyContext,
     });
@@ -233,7 +233,7 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
       fastify.services as {
         toolsInvoke?: {
           getDeploymentProfile?: () => DeploymentProfile;
-          isFeatureEnabled?: (flag: string) => boolean;
+          isFeatureEnabled?: (flag: string) => boolean | Promise<boolean>;
         };
       }
     ).toolsInvoke;
@@ -251,7 +251,7 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
 
-    if (toolsInvoke?.isFeatureEnabled?.("computerUseGuardrailsV1Enabled")) {
+    if (await toolsInvoke?.isFeatureEnabled?.("computerUseGuardrailsV1Enabled")) {
       const safety = evaluateComputerUseSafety(parsed.data.toolName, parsed.data.args ?? {});
       const computerUseReason =
         safety.requiresVerification && !safety.verified
@@ -282,14 +282,13 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
       request.query && typeof request.query === "object"
         ? readQueryString((request.query as Record<string, unknown>).workspaceId)
         : undefined;
-    const items = fastify.services.tools
-      .listPermissionProfiles(includeArchived)
-      .filter((profile: PermissionProfileRecord) =>
+    const items = (await fastify.services.tools.listPermissionProfiles(includeArchived)).filter(
+      (profile: PermissionProfileRecord) =>
         isPermissionProfileVisibleToActor(profile, {
           actorId: request.authActorId,
           workspaceId,
         }),
-      );
+    );
     return reply.send({ items });
   });
 
@@ -300,7 +299,7 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(
-        fastify.services.tools.resolveToolPolicyContext({
+        await fastify.services.tools.resolveToolPolicyContext({
           operatorId: request.authActorId,
           authActorId: request.authActorId,
           authActorSource: request.authActorSource,
@@ -325,7 +324,7 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
       await fastify.requireOperatorAuth(request, reply);
       if (reply.sent) return reply;
       return reply.send({
-        items: fastify.services.tools.listActiveLocalOperatorOverrides(request.authActorId),
+        items: await fastify.services.tools.listActiveLocalOperatorOverrides(request.authActorId),
       });
     },
   );
@@ -345,7 +344,7 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
         if (scope === "workspace" && !parsed.data.scopeRef) {
           return reply.code(400).send({ error: "Workspace-scoped permission profiles require scopeRef." });
         }
-        const created = fastify.services.tools.createPermissionProfile({
+        const created = await fastify.services.tools.createPermissionProfile({
           ...parsed.data,
           scope,
           scopeRef: scope === "operator" ? request.authActorId : parsed.data.scopeRef,
@@ -377,9 +376,9 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
         });
       }
       try {
-        const existingProfile = fastify.services.tools
-          .listPermissionProfiles(true)
-          .find((profile: PermissionProfileRecord) => profile.profileId === params.data.profileId);
+        const existingProfile = (await fastify.services.tools.listPermissionProfiles(true)).find(
+          (profile: PermissionProfileRecord) => profile.profileId === params.data.profileId,
+        );
         if (!existingProfile) {
           return reply.code(404).send({ error: `Permission profile ${params.data.profileId} not found` });
         }
@@ -388,7 +387,7 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
             .code(403)
             .send({ error: `Permission profile ${params.data.profileId} is not editable by this operator.` });
         }
-        const updated = fastify.services.tools.updatePermissionProfile(params.data.profileId, {
+        const updated = await fastify.services.tools.updatePermissionProfile(params.data.profileId, {
           ...body.data,
           updatedBy: request.authActorId,
         });
@@ -412,9 +411,9 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(400).send({ error: params.error.flatten() });
       }
       try {
-        const existingProfile = fastify.services.tools
-          .listPermissionProfiles(true)
-          .find((profile: PermissionProfileRecord) => profile.profileId === params.data.profileId);
+        const existingProfile = (await fastify.services.tools.listPermissionProfiles(true)).find(
+          (profile: PermissionProfileRecord) => profile.profileId === params.data.profileId,
+        );
         if (!existingProfile) {
           return reply.code(404).send({ error: `Permission profile ${params.data.profileId} not found` });
         }
@@ -423,7 +422,10 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
             .code(403)
             .send({ error: `Permission profile ${params.data.profileId} is not editable by this operator.` });
         }
-        const archived = fastify.services.tools.archivePermissionProfile(params.data.profileId, request.authActorId);
+        const archived = await fastify.services.tools.archivePermissionProfile(
+          params.data.profileId,
+          request.authActorId,
+        );
         if (archived) {
           await markMutationCommitted(request);
         }
@@ -450,13 +452,13 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(400).send({ error: parsed.error.flatten() });
       }
       try {
-        const profile = fastify.services.tools
-          .listPermissionProfiles(true)
-          .find((item: PermissionProfileRecord) => item.profileId === parsed.data.profileId);
+        const profile = (await fastify.services.tools.listPermissionProfiles(true)).find(
+          (item: PermissionProfileRecord) => item.profileId === parsed.data.profileId,
+        );
         if (!profile) {
           return reply.code(404).send({ error: `Permission profile ${parsed.data.profileId} not found` });
         }
-        const activation = fastify.services.tools.activatePermissionProfile({
+        const activation = await fastify.services.tools.activatePermissionProfile({
           ...parsed.data,
           operatorId: profile?.scope === "workspace" ? undefined : request.authActorId,
           createdBy: request.authActorId,
@@ -484,7 +486,7 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(400).send({ error: "Scoped Local Operator Override requires scopeRef." });
       }
       try {
-        const override = fastify.services.tools.createLocalOperatorOverride({
+        const override = await fastify.services.tools.createLocalOperatorOverride({
           ...parsed.data,
           operatorId: request.authActorId,
           createdBy: request.authActorId,
@@ -508,7 +510,7 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
       if (!params.success) {
         return reply.code(400).send({ error: params.error.flatten() });
       }
-      const activeForOperator = fastify.services.tools.listActiveLocalOperatorOverrides(request.authActorId);
+      const activeForOperator = await fastify.services.tools.listActiveLocalOperatorOverrides(request.authActorId);
       if (
         !activeForOperator.some(
           (override: LocalOperatorOverrideRecord) => override.overrideId === params.data.overrideId,
@@ -519,7 +521,7 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
           .send({ error: `Local operator override ${params.data.overrideId} not found or inactive` });
       }
       try {
-        const override = fastify.services.tools.revokeLocalOperatorOverride(
+        const override = await fastify.services.tools.revokeLocalOperatorOverride(
           params.data.overrideId,
           request.authActorId,
         );

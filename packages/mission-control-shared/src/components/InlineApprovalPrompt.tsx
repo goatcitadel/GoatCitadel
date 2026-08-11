@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { IdentifierChip } from "./IdentifierChip";
 
 function formatRemainingDuration(ms: number): string {
   const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
@@ -232,7 +233,7 @@ export function InlineApprovalPrompt({
           <a href={approvalsHref}>Open persisted approval record</a>
         </p>
       ) : null}
-      <p className="chat-approval-id">{approvalId}</p>
+      <IdentifierChip className="chat-approval-id" value={approvalId} label="Approval" />
     </div>
   );
 }

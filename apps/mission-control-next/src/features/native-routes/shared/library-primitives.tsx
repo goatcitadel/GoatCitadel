@@ -91,7 +91,7 @@ export function LibraryButtonRow({ children }: { children: ReactNode }) {
   return <div className="mc-next-settings-button-row">{children}</div>;
 }
 
-export function LibraryMetricGrid({ items }: { items: Array<{ label: string; value: string; meta?: string }> }) {
+export function LibraryMetricGrid({ items }: { items: Array<{ label: string; value: string; meta?: ReactNode }> }) {
   // Delegates to the canonical NativeMetricGrid primitive.
   return <NativeMetricGrid items={items} />;
 }

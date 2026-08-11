@@ -448,7 +448,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
       try {
         return reply.send(
           projectA2AExternalValue({
-            task: fastify.services.a2a.getHttpJsonTask(auth, params.data, new Date().toISOString()),
+            task: await fastify.services.a2a.getHttpJsonTask(auth, params.data, new Date().toISOString()),
           }),
         );
       } catch (error) {
@@ -514,7 +514,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
       try {
         return reply.send(
           projectA2AExternalValue(
-            fastify.services.a2a.getHttpJsonTaskEvents(
+            await fastify.services.a2a.getHttpJsonTaskEvents(
               auth,
               { ...params.data, lastEventSequence: query.data.lastEventSequence },
               new Date().toISOString(),
@@ -549,7 +549,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    const binding = fastify.services.a2a.getBinding(parsed.data.a2aTaskId);
+    const binding = await fastify.services.a2a.getBinding(parsed.data.a2aTaskId);
     if (!binding) {
       return reply.code(404).send({ error: "A2A task binding not found." });
     }
@@ -591,7 +591,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       const access = await readTaskWorkspaceAccess(request);
       return reply.send(
-        fastify.services.tasks.listAgenticRuns({
+        await fastify.services.tasks.listAgenticRuns({
           ...omitCitadelId(parsed.data),
           workspaceId: access.workspaceId ?? DEFAULT_WORKSPACE_ID,
         }),
@@ -614,7 +614,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(
-        fastify.services.tasks.getAgenticRunTree(parsed.data.runId, {
+        await fastify.services.tasks.getAgenticRunTree(parsed.data.runId, {
           citadelId: query.data.citadelId,
           workspaceId: query.data.workspaceId,
         }),
@@ -644,7 +644,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
       }
       try {
         return reply.send(
-          fastify.services.tasks.invokeAgenticControl(
+          await fastify.services.tasks.invokeAgenticControl(
             params.data.runId,
             {
               ...body.data,
@@ -668,7 +668,13 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply
         .code(201)
-        .send(fastify.services.tasks.appendTaskDiagnostic(taskId, parsed.data, await readTaskWorkspaceAccess(request)));
+        .send(
+          await fastify.services.tasks.appendTaskDiagnostic(
+            taskId,
+            parsed.data,
+            await readTaskWorkspaceAccess(request),
+          ),
+        );
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -706,7 +712,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
 
     try {
       const access = await readTaskWorkspaceAccess(request);
-      const task = fastify.services.tasks.createTask({
+      const task = await fastify.services.tasks.createTask({
         ...omitCitadelId(parsed.data),
         workspaceId: access.workspaceId,
       });
@@ -719,7 +725,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/tasks/:taskId", async (request, reply) => {
     const taskId = (request.params as { taskId: string }).taskId;
     try {
-      return reply.send(fastify.services.tasks.getTask(taskId, await readTaskWorkspaceAccess(request)));
+      return reply.send(await fastify.services.tasks.getTask(taskId, await readTaskWorkspaceAccess(request)));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -734,7 +740,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
 
     try {
       const { expectedRevision, ...input } = parsed.data;
-      const task = fastify.services.tasks.updateTaskWithRevision(
+      const task = await fastify.services.tasks.updateTaskWithRevision(
         taskId,
         input,
         expectedRevision,
@@ -767,20 +773,19 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(400).send({ error: "Hard delete requires confirmToken=PERMANENT_DELETE" });
       }
 
-      const deleted =
-        mode === "hard"
-          ? fastify.services.tasks.hardDeleteTaskWithRevision(
-              taskId,
-              expectedRevision,
-              await readTaskWorkspaceAccess(request),
-            )
-          : fastify.services.tasks.softDeleteTaskWithRevision(
-              taskId,
-              expectedRevision,
-              deletedBy,
-              deleteReason,
-              await readTaskWorkspaceAccess(request),
-            );
+      const deleted = await (mode === "hard"
+        ? fastify.services.tasks.hardDeleteTaskWithRevision(
+            taskId,
+            expectedRevision,
+            await readTaskWorkspaceAccess(request),
+          )
+        : fastify.services.tasks.softDeleteTaskWithRevision(
+            taskId,
+            expectedRevision,
+            deletedBy,
+            deleteReason,
+            await readTaskWorkspaceAccess(request),
+          ));
 
       if (!deleted) {
         return reply.code(404).send({ error: `Task ${taskId} not found` });
@@ -798,7 +803,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      const restored = fastify.services.tasks.restoreTaskWithRevision(
+      const restored = await fastify.services.tasks.restoreTaskWithRevision(
         taskId,
         parsed.data.expectedRevision,
         await readTaskWorkspaceAccess(request),
@@ -816,7 +821,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     const taskId = (request.params as { taskId: string }).taskId;
     try {
       return reply.send({
-        items: fastify.services.tasks.listTaskActivities(taskId, 200, await readTaskWorkspaceAccess(request)),
+        items: await fastify.services.tasks.listTaskActivities(taskId, 200, await readTaskWorkspaceAccess(request)),
       });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -833,7 +838,9 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply
         .code(201)
-        .send(fastify.services.tasks.appendTaskActivity(taskId, parsed.data, await readTaskWorkspaceAccess(request)));
+        .send(
+          await fastify.services.tasks.appendTaskActivity(taskId, parsed.data, await readTaskWorkspaceAccess(request)),
+        );
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -843,7 +850,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     const taskId = (request.params as { taskId: string }).taskId;
     try {
       return reply.send({
-        items: fastify.services.tasks.listTaskDeliverables(taskId, 200, await readTaskWorkspaceAccess(request)),
+        items: await fastify.services.tasks.listTaskDeliverables(taskId, 200, await readTaskWorkspaceAccess(request)),
       });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -861,7 +868,11 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
       return reply
         .code(201)
         .send(
-          fastify.services.tasks.appendTaskDeliverable(taskId, parsed.data, await readTaskWorkspaceAccess(request)),
+          await fastify.services.tasks.appendTaskDeliverable(
+            taskId,
+            parsed.data,
+            await readTaskWorkspaceAccess(request),
+          ),
         );
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -872,7 +883,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     const taskId = (request.params as { taskId: string }).taskId;
     try {
       return reply.send({
-        items: fastify.services.tasks.listTaskSubagents(taskId, 200, await readTaskWorkspaceAccess(request)),
+        items: await fastify.services.tasks.listTaskSubagents(taskId, 200, await readTaskWorkspaceAccess(request)),
       });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -889,7 +900,13 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply
         .code(201)
-        .send(fastify.services.tasks.registerTaskSubagent(taskId, parsed.data, await readTaskWorkspaceAccess(request)));
+        .send(
+          await fastify.services.tasks.registerTaskSubagent(
+            taskId,
+            parsed.data,
+            await readTaskWorkspaceAccess(request),
+          ),
+        );
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -904,7 +921,11 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
 
     try {
       return reply.send(
-        fastify.services.tasks.updateTaskSubagent(agentSessionId, parsed.data, await readTaskWorkspaceAccess(request)),
+        await fastify.services.tasks.updateTaskSubagent(
+          agentSessionId,
+          parsed.data,
+          await readTaskWorkspaceAccess(request),
+        ),
       );
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -919,7 +940,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
     try {
       const { expectedRevision, ...input } = parsed.data;
-      const task = fastify.services.tasks.emitDistressSignalWithRevision(
+      const task = await fastify.services.tasks.emitDistressSignalWithRevision(
         taskId,
         input,
         expectedRevision,
@@ -936,7 +957,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     const parsed = resolveDistressBodySchema.safeParse(request.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
     try {
-      const task = fastify.services.tasks.resolveDistressSignalWithRevision(
+      const task = await fastify.services.tasks.resolveDistressSignalWithRevision(
         taskId,
         signalId,
         { resolvedBy: resolveActorId(request) },
@@ -954,7 +975,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     const parsed = retryBudgetBodySchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
     try {
-      const task = fastify.services.tasks.setRetryBudgetWithRevision(
+      const task = await fastify.services.tasks.setRetryBudgetWithRevision(
         taskId,
         parsed.data.maxRetries,
         parsed.data.expectedRevision,
@@ -987,7 +1008,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     const parsed = bulkActionBodySchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
     try {
-      const tasks = fastify.services.tasks.bulkUpdateTasks(parsed.data, await readTaskWorkspaceAccess(request));
+      const tasks = await fastify.services.tasks.bulkUpdateTasks(parsed.data, await readTaskWorkspaceAccess(request));
       return reply.send({ tasks });
     } catch (error) {
       return sendRouteError(reply, error, request.log);

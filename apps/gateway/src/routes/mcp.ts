@@ -348,7 +348,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
 
     try {
       const actorId = request.authActorId?.trim() || "operator";
-      const policyContext = fastify.services.tools.resolveToolPolicyContext({
+      const policyContext = await fastify.services.tools.resolveToolPolicyContext({
         operatorId: actorId,
         authActorId: actorId,
         authActorSource: request.authActorSource,
@@ -539,7 +539,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       const actorId = request.authActorId?.trim() || parsed.data.agentId?.trim() || "operator";
-      const policyContext = fastify.services.tools?.resolveToolPolicyContext?.({
+      const policyContext = (await fastify.services.tools?.resolveToolPolicyContext?.({
         operatorId: actorId,
         authActorId: actorId,
         authActorSource: request.authActorSource,
@@ -550,7 +550,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
         surface: parsed.data.surface ?? "mcp",
         permissionProfileId: parsed.data.permissionProfileId,
         localOperatorOverrideId: parsed.data.localOperatorOverrideId,
-      }) ?? {
+      })) ?? {
         operatorId: actorId,
         authActorId: actorId,
         authActorSource: request.authActorSource,

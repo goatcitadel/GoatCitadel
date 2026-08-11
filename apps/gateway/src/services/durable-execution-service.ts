@@ -41,6 +41,7 @@ import {
   type ToolInvokeResult,
   isChatTurnTerminalStatus,
   isDurableRunTerminal,
+  readDurableChatTurnExecutionPayloadAuthority,
   redactStructuredSecrets,
 } from "@goatcitadel/contracts";
 import {
@@ -87,11 +88,7 @@ import type {
   DurableChatTurnExecutionPayload,
   DurableChatTurnUserInputResumeRecord,
 } from "./chat-turn-types.js";
-import {
-  computeEffectiveChatTurnRequestMaterialSha256,
-  computeFrozenChatTurnAdmissionMaterialSha256,
-  reconstructAdmittedChatTurnRequest,
-} from "./session-control-service.js";
+import { reconstructAdmittedChatTurnRequest } from "./session-control-service.js";
 import type { CuratorService } from "./curator-service.js";
 import type { ChatPostCommitEffectAuthorityContext } from "./chat-post-commit-effect-receipt.js";
 import { parseOrchestrationWorkflowPayload as parseOrchestrationLifecycleWorkflowPayload } from "./orchestration-lifecycle-state-helpers.js";
@@ -575,148 +572,19 @@ function readExactSystemHeartbeatExecutionDecision(
 }
 
 export function parseDurableChatTurnPayload(run: DurableRunRecord): DurableChatTurnPayload | undefined {
-  const payload = run.payload as Partial<DurableChatTurnPayload> | undefined;
-  if (!payload || payload.version !== "chat.turn.execute.v2") {
-    return undefined;
-  }
-  if (
-    typeof payload.admissionId !== "string" ||
-    !payload.admissionId.trim() ||
-    typeof payload.sessionIncarnationId !== "string" ||
-    !payload.sessionIncarnationId.trim() ||
-    typeof payload.admissionMaterialSha256 !== "string" ||
-    !/^[a-f0-9]{64}$/u.test(payload.admissionMaterialSha256) ||
-    typeof payload.workspaceId !== "string" ||
-    !payload.workspaceId.trim() ||
-    !Number.isSafeInteger(payload.admissionAggregateRevision) ||
-    Number(payload.admissionAggregateRevision) < 1 ||
-    !Number.isSafeInteger(payload.admissionControllerGeneration) ||
-    Number(payload.admissionControllerGeneration) < 1 ||
-    typeof payload.effectiveRequestMaterialSha256 !== "string" ||
-    !/^[a-f0-9]{64}$/u.test(payload.effectiveRequestMaterialSha256) ||
-    !isFrozenChatTurnRequestActor(payload.requestActor) ||
-    typeof payload.sessionId !== "string" ||
-    typeof payload.turnId !== "string" ||
-    typeof payload.userMessageId !== "string" ||
-    typeof payload.assistantMessageId !== "string" ||
-    typeof payload.branchKind !== "string" ||
-    typeof payload.threadEventType !== "string" ||
-    !payload.request ||
-    typeof payload.request !== "object"
-  ) {
-    return undefined;
-  }
-  const request = payload.request as DurableChatTurnPayload["request"];
-  if (["signal", "operatorId", "authActorId", "authActorSource"].some((key) => key in request)) {
-    return undefined;
-  }
-  if (!isExactChatTurnSurfaceDerivation(payload.surfaceDerivation)) {
-    return undefined;
-  }
-  if (!isExactDurablePolicyRunIdDerivation(payload, request, run.runId)) {
-    return undefined;
-  }
-  try {
-    const admittedRequest = reconstructAdmittedChatTurnRequest(request, payload.surfaceDerivation);
-    if (
-      computeFrozenChatTurnAdmissionMaterialSha256(admittedRequest) !== payload.admissionMaterialSha256 ||
-      computeEffectiveChatTurnRequestMaterialSha256(payload.admissionMaterialSha256, request) !==
-        payload.effectiveRequestMaterialSha256
-    ) {
-      return undefined;
-    }
-  } catch {
-    return undefined;
-  }
-  if (
-    (payload.capabilityProfileId !== undefined && typeof payload.capabilityProfileId !== "string") ||
-    (payload.capabilityProfileHash !== undefined && typeof payload.capabilityProfileHash !== "string") ||
-    Boolean(payload.capabilityProfileId) !== Boolean(payload.capabilityProfileHash)
-  ) {
-    return undefined;
-  }
-  if (containsRawDurableRoutedContext(payload)) {
-    return undefined;
-  }
-  if (
-    (payload.routedContextSnapshotId !== undefined &&
-      (typeof payload.routedContextSnapshotId !== "string" ||
-        !payload.routedContextSnapshotId.trim() ||
-        payload.routedContextSnapshotId.length > 256)) ||
-    (payload.routedContextSnapshotHash !== undefined &&
-      (typeof payload.routedContextSnapshotHash !== "string" ||
-        !/^[a-f0-9]{64}$/u.test(payload.routedContextSnapshotHash))) ||
-    Boolean(payload.routedContextSnapshotId) !== Boolean(payload.routedContextSnapshotHash) ||
-    (Boolean(payload.routedContextSnapshotId) && !payload.capabilityProfileId)
-  ) {
-    return undefined;
-  }
-  const parsed = payload as DurableChatTurnPayload;
+  const authority = readDurableChatTurnExecutionPayloadAuthority({
+    workflowKey: run.workflowKey,
+    durableRunId: run.runId,
+    payload: run.payload,
+  });
+  if (!authority) return undefined;
+  const parsed = authority as unknown as DurableChatTurnPayload;
   try {
     readExactSystemHeartbeatExecutionIdentity(run, parsed);
   } catch {
     return undefined;
   }
   return parsed;
-}
-
-function isExactDurablePolicyRunIdDerivation(
-  payload: Partial<DurableChatTurnPayload>,
-  request: DurableChatTurnPayload["request"],
-  durableRunId: string,
-): boolean {
-  const declaredPolicyRunId = typeof request.policyRunId === "string" ? request.policyRunId.trim() : undefined;
-  if (request.policyRunId !== undefined && !declaredPolicyRunId) return false;
-  if (declaredPolicyRunId) return payload.policyRunIdDerivation === undefined;
-  const derivation = payload.policyRunIdDerivation;
-  return Boolean(
-    derivation &&
-    typeof derivation === "object" &&
-    !Array.isArray(derivation) &&
-    Object.keys(derivation).sort().join(",") === "kind,runId,version" &&
-    derivation.version === 1 &&
-    derivation.kind === "durable_run_id" &&
-    derivation.runId === durableRunId,
-  );
-}
-
-function isFrozenChatTurnRequestActor(value: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const actor = value as Record<string, unknown>;
-  const allowed = new Set(["actorKind", "actorId", "operatorId", "authActorId", "authActorSource"]);
-  if (Object.keys(actor).some((key) => !allowed.has(key))) return false;
-  const actorKind = actor.actorKind;
-  const hasExactKind = actorKind === "operator" || actorKind === "external_companion" || actorKind === "system";
-  const hasOperatorProjection =
-    actor.operatorId !== undefined || actor.authActorId !== undefined || actor.authActorSource !== undefined;
-  return (
-    hasExactKind &&
-    typeof actor.actorId === "string" &&
-    Boolean(actor.actorId.trim()) &&
-    (actorKind === "operator" || !hasOperatorProjection) &&
-    (actor.operatorId === undefined || typeof actor.operatorId === "string") &&
-    (actor.authActorId === undefined || typeof actor.authActorId === "string") &&
-    (actor.authActorSource === undefined || typeof actor.authActorSource === "string")
-  );
-}
-
-function isExactChatTurnSurfaceDerivation(value: unknown): boolean {
-  if (value === undefined) return true;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const derivation = value as Record<string, unknown>;
-  if (
-    Object.keys(derivation).sort().join("|") !==
-    ["effectiveAutoRoute", "effectiveMode", "originalAutoRoute", "originalMode", "version"].sort().join("|")
-  ) {
-    return false;
-  }
-  return (
-    derivation.version === 1 &&
-    derivation.effectiveMode === "chat" &&
-    derivation.effectiveAutoRoute === false &&
-    (derivation.originalMode === null || typeof derivation.originalMode === "string") &&
-    (derivation.originalAutoRoute === null || typeof derivation.originalAutoRoute === "boolean")
-  );
 }
 
 /**
@@ -727,32 +595,6 @@ function isExactChatTurnSurfaceDerivation(value: unknown): boolean {
 export function isLegacyUnadmittedDurableChatTurnPayload(run: DurableRunRecord): boolean {
   const payload = run.payload as { version?: unknown } | undefined;
   return payload?.version === "chat.turn.execute.v1";
-}
-
-function containsRawDurableRoutedContext(value: unknown): boolean {
-  const forbiddenKeys = new Set([
-    "contextrefs",
-    "routedcontext",
-    "routedcontextsnapshot",
-    "routedcontextsources",
-    "resolvedroutedcontextsources",
-    "routedcontextentries",
-    "routedcontexttext",
-    "admittedtext",
-    "sourcecontent",
-  ]);
-  const visit = (candidate: unknown): boolean => {
-    if (!candidate || typeof candidate !== "object") {
-      return false;
-    }
-    if (Array.isArray(candidate)) {
-      return candidate.some(visit);
-    }
-    return Object.entries(candidate as Record<string, unknown>).some(
-      ([key, nested]) => forbiddenKeys.has(key.toLowerCase()) || visit(nested),
-    );
-  };
-  return visit(value);
 }
 
 export function parseGeneralChatPostCommitEffectWorkflowPayload(

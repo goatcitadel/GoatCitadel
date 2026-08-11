@@ -59,8 +59,6 @@ import {
   preserveSettingsSecretsForPublicUpdate,
   requiresSettingsPublicProjectionReconciliation,
 } from "./provider-settings-public-projection.js";
-
-const settingsLog = logger.child("settings-auth-service");
 import {
   COMPANION_ACCESS_TOKEN_BYTES,
   COMPANION_ACCESS_TOKEN_TTL_MS,
@@ -122,6 +120,9 @@ import { buildApprovalResolutionObservabilityEffects } from "./approval-observab
 import type { ApprovalResolutionContext } from "./approval-types.js";
 import type { ApprovalResolveResult } from "./approval-types.js";
 import type { DeviceTokenVault } from "./device-token-vault.js";
+
+const settingsLog = logger.child("settings-auth-service");
+const MOBILE_PUSH_REGISTRATION_PATH = "/api/v1/mobile/current-device/push";
 
 export interface SettingsRuntimeDependencies {
   readonly config: GatewayRuntimeConfig;
@@ -2750,7 +2751,14 @@ export async function verifyCompanionRequestSignature(
     body: input.body,
   });
   const method = input.method.toUpperCase();
-  const requestHash = createHash("sha256").update(payload, "utf8").digest("hex");
+  const requestHash = buildCompanionDurableRequestHash({
+    method,
+    path,
+    timestamp: input.timestamp,
+    nonce,
+    body: input.body,
+    signingPayload: payload,
+  });
   const signatureBuffer = decodeBase64Url(signature);
   const publicKey = createPublicKey(session.signingPublicKeyPem);
   if (!verify(null, Buffer.from(payload, "utf8"), publicKey, signatureBuffer)) {
@@ -2900,6 +2908,43 @@ export async function verifyCompanionRequestSignature(
 class CompanionRequestTimestampBoundaryError extends Error {}
 
 class CompanionRequestSessionBoundaryError extends Error {}
+
+/**
+ * The Ed25519 signature always covers the complete canonical request body, but
+ * the replay tombstone and audit stream retain this digest. A push token (or an
+ * unknown field rejected later by the strict route schema) must therefore not
+ * influence that durable digest. Replay authority is the session-scoped nonce
+ * primary key; the redacted hash is only an inspectable correlation value.
+ */
+function buildCompanionDurableRequestHash(input: {
+  method: string;
+  path: string;
+  timestamp: string;
+  nonce: string;
+  body: unknown;
+  signingPayload: string;
+}): string {
+  if (input.method === "PUT" && input.path === MOBILE_PUSH_REGISTRATION_PATH) {
+    const body = isRecord(input.body) ? input.body : {};
+    const provider = body.provider === "expo" || body.provider === "fcm" ? body.provider : null;
+    const enabled = typeof body.enabled === "boolean" ? body.enabled : null;
+    return createHash("sha256")
+      .update(
+        JSON.stringify({
+          kind: "companion_mobile_push_request_redacted_v1",
+          method: input.method,
+          path: input.path,
+          timestamp: input.timestamp.trim(),
+          nonce: input.nonce,
+          provider,
+          enabled,
+        }),
+        "utf8",
+      )
+      .digest("hex");
+  }
+  return createHash("sha256").update(input.signingPayload, "utf8").digest("hex");
+}
 
 function requireAuthRevokeIdentifier(value: string, field: string): string {
   const normalized = value.trim();

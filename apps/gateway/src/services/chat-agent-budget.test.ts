@@ -170,7 +170,14 @@ describe("chat-agent-budget", () => {
         liveDataIntent: true,
         researchListIntent: true,
       }),
-    ).toEqual(expect.objectContaining({ maxToolRunsPerTurn: 8, searchMaxResults: 6 }));
+    ).toEqual(
+      expect.objectContaining({
+        profile: "research_list",
+        loopLimitBehavior: "checkpoint_continue",
+        maxToolRunsPerTurn: 48,
+        searchMaxResults: 8,
+      }),
+    );
 
     expect(
       resolveChatExecutionBudget({
@@ -191,7 +198,7 @@ describe("chat-agent-budget", () => {
     );
   });
 
-  it("treats Cowork maxToolLoops as checkpoint windows while Chat and Code stay terminal", () => {
+  it("uses checkpoint windows for multi-step intent on Chat while preserving compatibility inputs", () => {
     expect(
       resolveChatExecutionBudget({
         mode: "cowork",
@@ -207,6 +214,24 @@ describe("chat-agent-budget", () => {
         thinkingLevel: "standard",
       }),
     ).toEqual(expect.objectContaining({ maxToolLoops: 2, loopLimitBehavior: "terminal" }));
+
+    expect(
+      resolveChatExecutionBudget({
+        mode: "chat",
+        webMode: "auto",
+        thinkingLevel: "standard",
+        artifactIntent: true,
+      }),
+    ).toEqual(expect.objectContaining({ loopLimitBehavior: "checkpoint_continue" }));
+
+    expect(
+      resolveChatExecutionBudget({
+        mode: "chat",
+        webMode: "auto",
+        thinkingLevel: "standard",
+        promptLabHarness: true,
+      }),
+    ).toEqual(expect.objectContaining({ loopLimitBehavior: "checkpoint_continue" }));
 
     expect(
       resolveChatExecutionBudget({

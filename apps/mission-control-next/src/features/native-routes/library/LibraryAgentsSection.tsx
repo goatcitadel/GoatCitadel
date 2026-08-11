@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Plus, RefreshCw, Save, Undo2 } from "lucide-react";
 import {
   archiveAgentProfile,
@@ -35,6 +35,7 @@ export function LibraryAgentsSection({ activeWorkspaceId, route, navigate }: Nat
   const [notice, setNotice] = useState<Notice | null>(null);
   const [selectedAgentId, setSelectedAgentId] = useState("");
   const [createMode, setCreateMode] = useState(false);
+  const catalogFocusRef = useRef<HTMLDivElement | null>(null);
   const [draft, setDraft] = useState({
     roleId: "",
     name: "",
@@ -75,6 +76,15 @@ export function LibraryAgentsSection({ activeWorkspaceId, route, navigate }: Nat
   }, [data]);
 
   const selectedAgent = data?.agents.find((item) => item.agentId === selectedAgentId) ?? null;
+  const catalogFocused = route.view === "catalog";
+
+  useEffect(() => {
+    if (!catalogFocused || loading) {
+      return;
+    }
+    catalogFocusRef.current?.scrollIntoView?.({ block: "center", inline: "nearest", behavior: "smooth" });
+    catalogFocusRef.current?.focus?.({ preventScroll: true });
+  }, [catalogFocused, loading]);
 
   useEffect(() => {
     if (!selectedAgent || createMode) {
@@ -201,23 +211,35 @@ export function LibraryAgentsSection({ activeWorkspaceId, route, navigate }: Nat
           </div>
         </NativeCard>
         <div className="mc-next-settings-stack">
-          <NativeCard
-            title="Imported catalog"
-            subtitle="Imported definitions are shown before editing so duplicate or stale agents are obvious."
-            density="compact"
+          <div
+            ref={catalogFocusRef}
+            id="imported-agent-catalog"
+            className="mc-next-library-route-focus"
+            tabIndex={catalogFocused ? -1 : undefined}
+            data-route-focus={catalogFocused ? "catalog" : undefined}
           >
-            <LibraryActionList
-              ariaLabel="Imported agent catalog"
-              items={(data?.catalog ?? []).map((item) => ({
-                id: item.entryId,
-                label: item.definition.frontmatter.name,
-                description: item.definition.frontmatter.description,
-                meta: `${item.division} · ${item.state}`,
-              }))}
-              emptyLabel="No imported agent catalog entries are available for this workspace."
-              maxHeight="min(28vh, 15rem)"
-            />
-          </NativeCard>
+            <NativeCard
+              title={catalogFocused ? "Imported agent catalog" : "Imported catalog"}
+              subtitle={
+                catalogFocused
+                  ? "Catalog-focused view. Review imported definitions and lifecycle state before editing profiles."
+                  : "Imported definitions are shown before editing so duplicate or stale agents are obvious."
+              }
+              density="compact"
+            >
+              <LibraryActionList
+                ariaLabel="Imported agent catalog"
+                items={(data?.catalog ?? []).map((item) => ({
+                  id: item.entryId,
+                  label: item.definition.frontmatter.name,
+                  description: item.definition.frontmatter.description,
+                  meta: `${item.division} · ${item.state}`,
+                }))}
+                emptyLabel="No imported agent catalog entries are available for this workspace."
+                maxHeight="min(28vh, 15rem)"
+              />
+            </NativeCard>
+          </div>
           <NativeCard
             title={createMode ? "Create agent profile" : (selectedAgent?.name ?? "Agent detail")}
             subtitle={

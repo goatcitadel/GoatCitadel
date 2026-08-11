@@ -255,14 +255,16 @@ export function ProjectsRoutePage({
     state.projects.find((project) => project.lifecycleStatus !== "archived") ??
     state.projects[0] ??
     null;
-  const selectedProject = state.projects.find((project) => project.projectId === route.projectId) ?? fallbackProject;
+  const routedProject = state.projects.find((project) => project.projectId === route.projectId) ?? null;
+  const selectedProject = routedProject ?? fallbackProject;
+  const isProjectDetailRoute = routedProject !== null;
 
   useEffect(() => {
-    if (route.projectId || !selectedProject) {
+    if (state.loading || !route.projectId || routedProject) {
       return;
     }
-    navigate({ area: "projects", projectId: selectedProject.projectId, theme: route.theme }, { replace: true });
-  }, [navigate, route.projectId, route.theme, selectedProject]);
+    navigate({ area: "projects", theme: route.theme }, { replace: true });
+  }, [navigate, route.projectId, route.theme, routedProject, state.loading]);
 
   const selectedSessions = useMemo(
     () =>
@@ -635,7 +637,7 @@ export function ProjectsRoutePage({
       </div>
     </article>
   );
-  const leadContent = (
+  const leadContent = !routedProject ? (
     <div className="mc-next-project-lead-stack">
       {projectContinuationLead}
       {emptyProjectLead}
@@ -651,14 +653,18 @@ export function ProjectsRoutePage({
         citadelLead
       )}
     </div>
-  );
+  ) : undefined;
 
   return (
     <NativePageFrame
       area="projects"
-      kicker="Projects · Containers"
-      title="Project containers"
-      description={`Project chat threads inside ${(activeCitadelName ?? activeCitadelId) || "the active Citadel"} > ${activeWorkspaceName}.`}
+      kicker={isProjectDetailRoute ? "Projects · Detail" : "Projects · Containers"}
+      title={routedProject?.name ?? "Project containers"}
+      description={
+        routedProject
+          ? `Threads, artifacts, and controls for ${routedProject.name} inside ${activeWorkspaceName}.`
+          : `Project chat threads inside ${(activeCitadelName ?? activeCitadelId) || "the active Citadel"} > ${activeWorkspaceName}.`
+      }
       loading={state.loading}
       error={state.error}
       lead={leadContent}
@@ -686,6 +692,11 @@ export function ProjectsRoutePage({
         )
       }
     >
+      {revisionConflict ? <NoticeBanner tone="warning" message={revisionConflict.message} /> : null}
+      {actionError ? <NoticeBanner tone="error" message={actionError} /> : null}
+      {state.artifactIssue ? (
+        <NoticeBanner tone="warning" message={`Project artifact records could not load: ${state.artifactIssue}`} />
+      ) : null}
       <NativeGrid className="mc-next-native-projects-grid">
         <NativeCard
           title="Projects"
@@ -793,77 +804,66 @@ export function ProjectsRoutePage({
           </NativeSelectableList>
         </NativeCard>
 
-        <NativeCard
-          title={selectedProject?.name ?? "Project detail"}
-          subtitle={selectedProject?.workspacePath ?? "Select a project to inspect its threads."}
-          density="compact"
-          scrollBody
-          bodyMaxHeight="min(70vh, 42rem)"
-          stats={SURFACES.map((surface) => ({
-            label: surface.label,
-            value: String(
-              selectedProject
-                ? (countsByProject.get(selectedProject.projectId) ?? createEmptyCounts())[surface.mode]
-                : 0,
-            ),
-          }))}
-        >
-          {revisionConflict ? <NoticeBanner tone="warning" message={revisionConflict.message} /> : null}
-          {actionError ? <NoticeBanner tone="error" message={actionError} /> : null}
-          {state.artifactIssue ? (
-            <NoticeBanner tone="warning" message={`Project artifact records could not load: ${state.artifactIssue}`} />
-          ) : null}
-          {selectedProject && projectHome ? (
-            <ProjectHomeBasePanel
-              home={projectHome}
-              pendingApprovals={pendingApprovals}
-              projectName={selectedProject.name}
-              onContinue={(mode) => void handleContinueSession(mode)}
-              onStartIntake={(intent) => void handleStartIntake(intent)}
-              onOpenMemory={() => navigate({ area: "library", section: "memory", theme: route.theme })}
-              onOpenArtifacts={() =>
-                navigate({
-                  area: "library",
-                  section: "artifacts",
-                  projectId: selectedProject.projectId,
-                  theme: route.theme,
-                })
-              }
-            />
-          ) : null}
-          <div className="mc-next-settings-button-row">
-            {SURFACES.map((surface) => (
-              <NativeButton
-                key={surface.mode}
-                disabled={!selectedProject}
-                onClick={() => void handleNewSession(surface.mode)}
-              >
-                <MessageSquarePlus size={16} />
-                {surface.action}
-              </NativeButton>
-            ))}
-          </div>
-          <div className="mc-next-project-thread-groups">
-            {SURFACES.map((surface) => (
-              <ProjectThreadGroup
-                key={surface.mode}
-                mode={surface.mode}
-                label={surface.label}
-                sessions={groupedSessions[surface.mode]}
-                route={route}
-                navigate={navigate}
+        {routedProject ? (
+          <NativeCard
+            title={routedProject.name}
+            subtitle={routedProject.workspacePath}
+            density="compact"
+            scrollBody
+            bodyMaxHeight="min(70vh, 42rem)"
+            stats={SURFACES.map((surface) => ({
+              label: surface.label,
+              value: String((countsByProject.get(routedProject.projectId) ?? createEmptyCounts())[surface.mode]),
+            }))}
+          >
+            {projectHome ? (
+              <ProjectHomeBasePanel
+                home={projectHome}
+                pendingApprovals={pendingApprovals}
+                projectName={routedProject.name}
+                onContinue={(mode) => void handleContinueSession(mode)}
+                onStartIntake={(intent) => void handleStartIntake(intent)}
+                onOpenMemory={() => navigate({ area: "library", section: "memory", theme: route.theme })}
+                onOpenArtifacts={() =>
+                  navigate({
+                    area: "library",
+                    section: "artifacts",
+                    projectId: routedProject.projectId,
+                    theme: route.theme,
+                  })
+                }
               />
-            ))}
-          </div>
-        </NativeCard>
+            ) : null}
+            <div className="mc-next-settings-button-row">
+              {SURFACES.map((surface) => (
+                <NativeButton key={surface.mode} onClick={() => void handleNewSession(surface.mode)}>
+                  <MessageSquarePlus size={16} />
+                  {surface.action}
+                </NativeButton>
+              ))}
+            </div>
+            <div className="mc-next-project-thread-groups">
+              {SURFACES.map((surface) => (
+                <ProjectThreadGroup
+                  key={surface.mode}
+                  mode={surface.mode}
+                  label={surface.label}
+                  sessions={groupedSessions[surface.mode]}
+                  route={route}
+                  navigate={navigate}
+                />
+              ))}
+            </div>
+          </NativeCard>
+        ) : null}
 
         <NativeCard
           className="mc-next-project-controls-card"
           title="Project controls"
           subtitle={
-            selectedProject
+            routedProject
               ? "Create a new project or rename the selected one. Pin and archive live on each card."
-              : "Create a new project. Select one to rename it; pin and archive live on each card."
+              : "Create a project here, or select one from the list to open its threads and edit its details."
           }
           density="compact"
           scrollBody
@@ -916,7 +916,7 @@ export function ProjectsRoutePage({
               </NativeButton>
             </section>
 
-            {selectedProject ? (
+            {routedProject ? (
               <section className="mc-next-project-control-section">
                 <div className="mc-next-project-control-heading">
                   <Pencil size={16} />
@@ -956,15 +956,17 @@ export function ProjectsRoutePage({
                   </NativeButton>
                 </div>
                 <p className="mc-next-settings-field-note">
-                  Revision {selectedProject.revision} fences concurrent edits. Pin or archive {selectedProject.name}{" "}
-                  from the card glyphs in the projects list.
+                  Revision {routedProject.revision} fences concurrent edits. Pin or archive {routedProject.name} from
+                  the card glyphs in the projects list.
                 </p>
               </section>
             ) : null}
           </div>
         </NativeCard>
       </NativeGrid>
-      <RecentCrossProjectSessionsRow workspaceId={activeWorkspaceId} route={route} navigate={navigate} />
+      {!routedProject ? (
+        <RecentCrossProjectSessionsRow workspaceId={activeWorkspaceId} route={route} navigate={navigate} />
+      ) : null}
     </NativePageFrame>
   );
 }

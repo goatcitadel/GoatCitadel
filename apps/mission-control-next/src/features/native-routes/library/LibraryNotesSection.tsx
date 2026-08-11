@@ -112,8 +112,17 @@ export function LibraryNotesSection({ activeWorkspaceId, activeWorkspaceName }: 
   };
 
   const handleCreateReminder = async () => {
+    const normalizedDueAt = toReminderDueAtIso(dueAt);
+    if (!reminderTitle.trim() || !normalizedDueAt) {
+      setNotice({ tone: "warning", message: "Enter a reminder title and a valid local due date and time." });
+      return;
+    }
     try {
-      const created = await createReminder({ workspaceId: activeWorkspaceId, title: reminderTitle, dueAt });
+      const created = await createReminder({
+        workspaceId: activeWorkspaceId,
+        title: reminderTitle,
+        dueAt: normalizedDueAt,
+      });
       setReminderTitle("");
       setDueAt("");
       setNotice({ tone: "success", message: `${created.title} scheduled.` });
@@ -281,7 +290,7 @@ export function LibraryNotesSection({ activeWorkspaceId, activeWorkspaceName }: 
                 label: reminder.title,
                 value: reminder.status,
                 description: reminder.sourceRef ?? "Workspace reminder",
-                meta: reminder.dueAt,
+                meta: formatDateTime(reminder.dueAt),
                 tone: reminder.status === "scheduled" ? "info" : "neutral",
               }))}
               emptyLabel="No active reminders."
@@ -297,15 +306,20 @@ export function LibraryNotesSection({ activeWorkspaceId, activeWorkspaceName }: 
               </LibraryField>
               <LibraryField label="Due at">
                 <input
+                  type="datetime-local"
                   className="mc-next-settings-input"
                   value={dueAt}
                   onChange={(event) => setDueAt(event.target.value)}
-                  placeholder="2026-06-06T17:00:00.000Z"
                 />
               </LibraryField>
             </LibraryFieldGrid>
             <LibraryButtonRow>
-              <button type="button" className="mc-next-settings-filter" onClick={() => void handleCreateReminder()}>
+              <button
+                type="button"
+                className="mc-next-settings-filter"
+                disabled={!reminderTitle.trim() || !toReminderDueAtIso(dueAt)}
+                onClick={() => void handleCreateReminder()}
+              >
                 Schedule
               </button>
             </LibraryButtonRow>
@@ -314,4 +328,13 @@ export function LibraryNotesSection({ activeWorkspaceId, activeWorkspaceName }: 
       </div>
     </LibrarySectionShell>
   );
+}
+
+export function toReminderDueAtIso(value: string): string | null {
+  const normalized = value.trim();
+  if (!normalized) {
+    return null;
+  }
+  const parsed = new Date(normalized);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }

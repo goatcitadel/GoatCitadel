@@ -5,9 +5,9 @@
     "sqlite": {
       "path": "packages/storage/src/sqlite.ts",
       "registryName": "SCHEMA_MIGRATION_GROUPS",
-      "expectedCount": 190,
+      "expectedCount": 196,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 190,
+      "expectedLastVersion": 196,
       "migrations": [
         {
           "version": 1,
@@ -1338,15 +1338,57 @@
           "groupName": "canonical",
           "definitionSha256": "5fd2e96c019b14eb730317e8d5d8424d45b4bf5f64812926ac125dc250a60904",
           "implementationSha256": "72403d2e83f1253795e4f3c5c5f4a68e9de257eb3872c4c3fc954d911b898ff0"
+        },
+        {
+          "version": 191,
+          "name": "governed_remediation_durable_owner",
+          "groupName": "canonical",
+          "definitionSha256": "1a3db779a2dd69deda5894bf4f07552184329dfa39246ee6b5849443af67047a",
+          "implementationSha256": "531dc23298c8604681e025c785e6106cdfeeaec82f665c924d9f10561e3bc8db"
+        },
+        {
+          "version": 192,
+          "name": "governed_remediation_recipe_and_phase_authority",
+          "groupName": "canonical",
+          "definitionSha256": "68fde704ae6255b4c90481e7043387356a795fcae04eade6535684910af3f29b",
+          "implementationSha256": "c7ad607658e770a81afa5f8e7c8546346688b0e90e9fcc266242b8baf08263d3"
+        },
+        {
+          "version": 193,
+          "name": "remote_worker_protected_admission_evidence",
+          "groupName": "canonical",
+          "definitionSha256": "4053d8dfe6cbdebb715c9ccceee2929066139e2124433cac9c4e6f8e7000d3f1",
+          "implementationSha256": "8c4f8a87fd82ef83e9f646b98eea1a19122b56bc0f9533376c9d7d65abdc432c"
+        },
+        {
+          "version": 194,
+          "name": "remote_worker_mesh_node_admission_authority",
+          "groupName": "canonical",
+          "definitionSha256": "640e829d1e5074053c896e157668746e5512f47e9d5131d0d42cbc3b1d39ae37",
+          "implementationSha256": "adf45eaca33f874fa3769e8bd43b55468f60d284fbcc8bfb394134c4fa960cd1"
+        },
+        {
+          "version": 195,
+          "name": "mobile_push_registration_and_delivery_owner",
+          "groupName": "canonical",
+          "definitionSha256": "2fb2e00e398bccfaf2791f17a306723761f90c8e98fe397285c44c050a6e05fe",
+          "implementationSha256": "c2a6fc3f02128808bf3d6ceeaa90fb6f12fb450511e5d76bb6d98e81e9d6bb5b"
+        },
+        {
+          "version": 196,
+          "name": "remote_worker_inference_budget_authority_correction",
+          "groupName": "canonical",
+          "definitionSha256": "db37917724c9539a0ff1cc464e3bfc048d18312cf82459c9edcabd028265082c",
+          "implementationSha256": "be7141facdff011f4e0d0f8d65c9b79ed0690ad603be5091053a7aeb21fb5d73"
         }
       ]
     },
     "postgres": {
       "path": "packages/storage/src/postgres/migrations.ts",
       "registryName": "POSTGRES_MIGRATIONS",
-      "expectedCount": 133,
+      "expectedCount": 140,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 133,
+      "expectedLastVersion": 140,
       "migrations": [
         {
           "version": 1,
@@ -2146,6 +2188,49 @@
           "name": "memory_source_authority_and_trace_candidate_dedupe",
           "definitionSha256": "1bfb044d1bb1bcc345c041eda56276bb616b76a4e7bba0bedea4446bc85c5303",
           "sqlPayloadSha256": "7bfbe6807f60628c1964eb444ea4e3d667efb70ad75fe75cafcfa342917fe372"
+        },
+        {
+          "version": 134,
+          "name": "governed_remediation_durable_owner",
+          "definitionSha256": "bb201d63f7e86fb516e17c461e58eb8357f5bcd0d1b51b95c149bc9de1a9025c",
+          "runtimeIntegritySha256": "94574755a314cbf1a6f1e285d2d3969d372ec2d3560a1b03d3cfc2b7b85187a5"
+        },
+        {
+          "version": 135,
+          "name": "governed_remediation_recipe_and_phase_authority",
+          "definitionSha256": "cd034fdeddb1c431bb46be6e79f6ba5f8f7d688e56afb08bba74c637bf7daf03",
+          "runtimeIntegritySha256": "27ca84876985f1d8836d4a2b4b441b982652e28ed6642b6afb1f43ffe92aa636"
+        },
+        {
+          "version": 136,
+          "name": "remote_worker_protected_admission_evidence",
+          "definitionSha256": "062ca5e74e812a6b6d30fe485ff901cd54115921dbf3222a8f7c12a4fec90d89",
+          "runtimeIntegritySha256": "6da2dbc1cdb2fbada57fdbaf3573003196ec9702f59519144e501a06ad28463a"
+        },
+        {
+          "version": 137,
+          "name": "remote_worker_mesh_node_admission_authority",
+          "definitionSha256": "1eb379c750425aadb7848c0b567ad64382923dfd2c3941fd5c15b50ce0177109",
+          "runtimeIntegritySha256": "2bdbf5518ee1b919a852d8e3e00b98b05ce1f92d2c0563d73c1fb4010d996f97"
+        },
+        {
+          "version": 138,
+          "name": "mobile_push_registration_and_delivery_owner",
+          "definitionSha256": "c32e8c08e119a15d9126ffdf98eebf5a31b2a2462599988038b4cdd689b96398",
+          "runtimeIntegritySha256": "b4f7a5cbfb59f358fd765207b9a36264372e5f51a82ef25bb191b0169bc470a1"
+        },
+        {
+          "version": 139,
+          "name": "remote_worker_inference_budget_authority_correction",
+          "definitionSha256": "f18c1a64b76c498b07230bef233e0bee90645b6db27a637bf8186f9501e9fa95",
+          "sqlPayloadSha256": "bb2675ed9afbd5ad4c3faaeb13713c36d0261c893508ac11190d72e404fe9e56",
+          "runtimeIntegritySha256": "b6bcf06516cfc363dddd0c78bad86cb40b78324bac4c558c5591352bc6d5bab3"
+        },
+        {
+          "version": 140,
+          "name": "canonical_postgres_schema_authority",
+          "definitionSha256": "28468592f64b831d121d8f86c244ae853bbbb689c0492aee31b6be8620a27542",
+          "runtimeIntegritySha256": "9ee72c0e2879f3cbd2e32fc58d16692969691799537b910be9eea9255e038ca3"
         }
       ]
     }

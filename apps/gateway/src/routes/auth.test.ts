@@ -4,6 +4,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import rateLimit from "@fastify/rate-limit";
 import { authPlugin } from "../plugins/auth.js";
 import { authRoutes } from "./auth.js";
+import { installRouteAccessTracking } from "./route-access.js";
 import type { AuthConfig } from "../config.js";
 
 vi.mock("node:sqlite", () => ({
@@ -480,6 +481,11 @@ async function buildApp(
       };
     });
   }
+  // Mirror the production composition seam (app.ts): route-access tracking's
+  // global preHandler is registered BEFORE authPlugin, so route-access denials
+  // (403) precede the companion request-signature check (401) exactly like the
+  // real Gateway.
+  installRouteAccessTracking(app);
   await app.register(authPlugin);
   await app.register(authRoutes);
   return app;
@@ -513,7 +519,7 @@ describe("auth routes", () => {
     expect(source).toMatch(/fastify\.get\("\/api\/v1\/auth\/device-requests\/:requestId\/status", publicAuthRoute/);
   });
 
-  it("returns 400 for SSE token bridge in auth mode none", async () => {
+  it("returns the compatibility error for the SSE bridge in auth mode none", async () => {
     app = await buildApp("none");
     const response = await app.inject({
       method: "POST",
@@ -760,13 +766,18 @@ describe("auth routes", () => {
     });
   });
 
-  it("returns companion session info for companion-authenticated requests", async () => {
+  it("returns companion session info for signed companion-authenticated requests", async () => {
     app = await buildApp("token");
     const response = await app.inject({
       method: "GET",
       url: "/api/v1/auth/companion/session",
       headers: {
+        // Companion reads require the device-key request signature; the stub
+        // verifier accepts any triple for a query-free path.
         Authorization: "Bearer companion-bearer",
+        "x-goatcitadel-companion-timestamp": "2026-03-10T12:20:00.000Z",
+        "x-goatcitadel-companion-nonce": "nonce-123456",
+        "x-goatcitadel-companion-signature": "ZmFrZV9zaWduYXR1cmU",
       },
     });
     expect(response.statusCode).toBe(200);

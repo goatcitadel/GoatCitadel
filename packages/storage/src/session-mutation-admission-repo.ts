@@ -211,6 +211,7 @@ export interface RequestRuntimeLeaseClaim {
 export interface AssertActiveTurnWriteInput extends TurnWriteAdmissionIdentity {
   requestRuntimeClaim?: RequestRuntimeLeaseClaim;
   durableClaim?: DurableTurnWriteClaim;
+  requireExactDurablePayloadIdentity?: boolean;
 }
 
 export interface AssertActiveTurnWriteOutcome {
@@ -3308,7 +3309,15 @@ export class SessionMutationAdmissionRepository {
       ? normalizeRequestRuntimeClaim(input.requestRuntimeClaim)
       : undefined;
     const durableClaim = input.durableClaim ? normalizeDurableClaim(input.durableClaim) : undefined;
+    if (
+      input.requireExactDurablePayloadIdentity !== undefined &&
+      typeof input.requireExactDurablePayloadIdentity !== "boolean"
+    ) {
+      throw new ValidationError({ field: "requireExactDurablePayloadIdentity" });
+    }
+    const requireExactDurablePayloadIdentity = input.requireExactDurablePayloadIdentity === true;
     if (requestRuntimeClaim && durableClaim) throw new ValidationError({ field: "requestRuntimeClaim" });
+    if (requireExactDurablePayloadIdentity && !durableClaim) throw new ValidationError({ field: "durableClaim" });
     try {
       return this.db.transaction("immediate", () => {
         const observed = this.requireRow(normalized.admissionId, false);
@@ -3357,6 +3366,9 @@ export class SessionMutationAdmissionRepository {
           );
         }
         const run = this.requireFreshDurableClaim(durableClaim);
+        if (requireExactDurablePayloadIdentity) {
+          this.requireExactDurableRunPayloadIdentity(admission, run);
+        }
         return {
           admission: mapAdmission(admission),
           durableRunVersion: asPositiveInteger(run.version),

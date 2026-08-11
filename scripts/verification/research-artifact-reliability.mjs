@@ -22,7 +22,14 @@ import {
   startDeterministicFirecrawlStub,
 } from "./lib/scenarios/deterministic-firecrawl-stub.mjs";
 import { parseGatewayChatSse } from "./lib/scenarios/gateway-chat-fault-recovery-lane.mjs";
-import { createRunContext, finalizeRunContext, repoRoot, runScenario, writeJson } from "./lib/shared.mjs";
+import {
+  createRunContext,
+  finalizeRunContext,
+  releaseRunContext,
+  repoRoot,
+  runScenario,
+  writeJson,
+} from "./lib/shared.mjs";
 import {
   auditPptxPackage,
   formatPptxAuditFailure,
@@ -58,23 +65,34 @@ const FIRST_PROVIDER_INPUT_TOKEN_CEILING = 12_000;
 // The structured presentation schema is part of the governed prompt-context
 // estimate even though only a smaller serialized request reaches the provider.
 const PROMPT_CONTEXT_ESTIMATE_TOKEN_CEILING = 13_000;
+export const RESEARCH_ARTIFACT_GATEWAY_ENV = Object.freeze({
+  GOATCITADEL_AUTH_MODE: "none",
+  GOATCITADEL_RATE_LIMIT_ENABLED: "false",
+  GOATCITADEL_DISABLE_SECRET_STORE: "true",
+  GOATCITADEL_DEV_DIAGNOSTICS_VERBOSE: "true",
+  GOATCITADEL_DEBUG_PROMPT_CONTEXT_BUDGET_RECEIPTS: "1",
+});
 
 export async function main() {
   const context = await createRunContext(LANE, { profile: "isolated-built-runtime" });
-  await runScenario(
-    context,
-    {
-      id: "research-artifact.three-fresh-tasks",
-      lane: LANE,
-      title: "Three fresh explicit-research tasks create grounded openable PowerPoint artifacts",
-      subsystem: "gateway-chat-reliability",
-    },
-    async ({ correlationId }) => runThreeTaskReplay(context, correlationId),
-  );
-  const manifest = await finalizeRunContext(context);
-  console.log(`Artifact: ${context.artifactRoot}`);
-  console.log(`Status: ${manifest.status}`);
-  if (manifest.status !== "passed") process.exitCode = 1;
+  try {
+    await runScenario(
+      context,
+      {
+        id: "research-artifact.three-fresh-tasks",
+        lane: LANE,
+        title: "Three fresh explicit-research tasks create grounded openable PowerPoint artifacts",
+        subsystem: "gateway-chat-reliability",
+      },
+      async ({ correlationId }) => runThreeTaskReplay(context, correlationId),
+    );
+    const manifest = await finalizeRunContext(context);
+    console.log(`Artifact: ${context.artifactRoot}`);
+    console.log(`Status: ${manifest.status}`);
+    if (manifest.status !== "passed") process.exitCode = 1;
+  } finally {
+    await releaseRunContext(context);
+  }
 }
 
 export async function runThreeTaskReplay(context, correlationId) {
@@ -138,10 +156,7 @@ export async function runThreeTaskReplay(context, correlationId) {
       gatewayMode: "built",
       processLogPrefix: PROCESS_LOG_PREFIX,
       gatewayEnv: {
-        GOATCITADEL_AUTH_MODE: "none",
-        GOATCITADEL_RATE_LIMIT_ENABLED: "false",
-        GOATCITADEL_DISABLE_SECRET_STORE: "true",
-        GOATCITADEL_DEV_DIAGNOSTICS_VERBOSE: "true",
+        ...RESEARCH_ARTIFACT_GATEWAY_ENV,
         [DETERMINISTIC_LLM_KEY_ENV]: "verification-fixture-key",
       },
     });

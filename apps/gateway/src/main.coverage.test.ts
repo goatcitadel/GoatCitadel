@@ -11,6 +11,9 @@ interface MockGatewayApp {
       };
     };
   };
+  gatewayRuntime: {
+    createRemoteWorkerAdmissionNativeRequestHandler: ReturnType<typeof vi.fn>;
+  };
   listen: ReturnType<typeof vi.fn>;
   log: {
     error: ReturnType<typeof vi.fn>;
@@ -53,6 +56,12 @@ function createSharedHostLifecycleMock() {
   };
 }
 
+function createGatewayRuntimeMock() {
+  return {
+    createRemoteWorkerAdmissionNativeRequestHandler: vi.fn(async () => undefined),
+  };
+}
+
 const importMainWithMocks = async (
   options: {
     app?: MockGatewayApp;
@@ -89,6 +98,7 @@ const importMainWithMocks = async (
           },
         },
       },
+      gatewayRuntime: createGatewayRuntimeMock(),
       listen: vi.fn(async () => undefined),
       log: {
         error: vi.fn(),
@@ -192,7 +202,12 @@ describe("gateway main entrypoint", () => {
     expect(setGoatcitadelTerminalTitle).toHaveBeenCalledWith("Gateway Dev");
     expect(createRemoteWorkerNativeRuntimeService).toHaveBeenCalledWith({
       sharedHostLifecycle: app.sharedHostLifecycle,
+      createHandler: expect.any(Function),
     });
+    const createHandler = createRemoteWorkerNativeRuntimeService.mock.calls[0]?.[0]?.createHandler;
+    const remoteConfig = { enabled: true, port: 9443 };
+    await createHandler?.(remoteConfig);
+    expect(app.gatewayRuntime.createRemoteWorkerAdmissionNativeRequestHandler).toHaveBeenCalledWith(remoteConfig);
     expect(remoteWorkerNativeRuntime.start).toHaveBeenCalledTimes(1);
     expect(app.listen).toHaveBeenCalledWith({ host: "127.0.0.1", port: 8787 });
     expect(app.log.info).toHaveBeenCalledWith("gateway listening on http://127.0.0.1:8787");
@@ -246,6 +261,7 @@ describe("gateway main entrypoint", () => {
           },
         },
       },
+      gatewayRuntime: createGatewayRuntimeMock(),
       listen: vi.fn(async () => undefined),
       log: {
         error: vi.fn(),
@@ -290,6 +306,7 @@ describe("gateway main entrypoint", () => {
           },
         },
       },
+      gatewayRuntime: createGatewayRuntimeMock(),
       listen: vi.fn(async () => undefined),
       log: {
         error: vi.fn(),
@@ -323,6 +340,7 @@ describe("gateway main entrypoint", () => {
           },
         },
       },
+      gatewayRuntime: createGatewayRuntimeMock(),
       listen: vi.fn(async () => {
         throw new Error("port already in use");
       }),
@@ -354,6 +372,7 @@ describe("gateway main entrypoint", () => {
     const app = {
       close: vi.fn(async () => undefined),
       gatewayConfig: { assistant: { auth: { mode: "token" } } },
+      gatewayRuntime: createGatewayRuntimeMock(),
       listen: vi.fn(async () => undefined),
       log: { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
       services: { a2a: {} },
@@ -374,6 +393,7 @@ describe("gateway main entrypoint", () => {
     const app = {
       close: vi.fn(async () => undefined),
       gatewayConfig: { assistant: { auth: { mode: "token" } } },
+      gatewayRuntime: createGatewayRuntimeMock(),
       listen: vi.fn(async () => undefined),
       log: { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
       services: { a2a: {} },

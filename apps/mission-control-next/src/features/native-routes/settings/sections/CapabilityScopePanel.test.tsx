@@ -81,6 +81,8 @@ describe("CapabilityScopePanel", () => {
   it("renders item labels from the view", async () => {
     const renderer = await renderPanel(makeInheritView());
     const text = instanceText(renderer.root);
+    expect(text).toContain("Skills");
+    expect(text).not.toContain("Skills — Skills");
     expect(text).toContain("Skill Alpha");
     expect(text).toContain("Skill Beta");
   });
@@ -105,17 +107,13 @@ describe("CapabilityScopePanel", () => {
 
   it("renders a Save button", async () => {
     const renderer = await renderPanel(makeInheritView());
-    const buttons = renderer.root.findAll(
-      (node) => node.type === "button" && instanceText(node).includes("Save"),
-    );
+    const buttons = renderer.root.findAll((node) => node.type === "button" && instanceText(node).includes("Save"));
     expect(buttons.length).toBeGreaterThan(0);
   });
 
   it("renders a Reset to inherited button", async () => {
     const renderer = await renderPanel(makeInheritView());
-    const buttons = renderer.root.findAll(
-      (node) => node.type === "button" && instanceText(node).includes("Reset"),
-    );
+    const buttons = renderer.root.findAll((node) => node.type === "button" && instanceText(node).includes("Reset"));
     expect(buttons.length).toBeGreaterThan(0);
   });
 });

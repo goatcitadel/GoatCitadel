@@ -56,11 +56,11 @@ function fakeUpload() {
 
 describe("HX-506 artifact settlement service", () => {
   it("rechecks authority on every part operation and re-locks before commit", async () => {
-    const authority: RemoteWorkerAssignmentAuthorityFence = { assertLiveAuthority: vi.fn() };
+    const authority: RemoteWorkerAssignmentAuthorityFence = { assertLiveAuthority: vi.fn(async () => undefined) };
     const repository = {
-      openUpload: vi.fn(() => fakeUpload()),
-      appendPart: vi.fn(() => fakeUpload()),
-      commitArtifact: vi.fn(() => fakeUpload()),
+      openUpload: vi.fn(async () => fakeUpload()),
+      appendPart: vi.fn(async () => fakeUpload()),
+      commitArtifact: vi.fn(async () => fakeUpload()),
     } as never;
     const store = {
       installBlob: vi.fn(async () => ({
@@ -79,7 +79,7 @@ describe("HX-506 artifact settlement service", () => {
       leaseTokenSha256: D("lease"),
       uploadId: "upload-1",
     };
-    service.openUpload({
+    await service.openUpload({
       ...base,
       uploadAttempt: 1,
       declaredFileCount: 1,
@@ -88,7 +88,7 @@ describe("HX-506 artifact settlement service", () => {
       expiresAt: "2099-01-01T00:00:00.000Z",
       idempotencyKey: "open",
     });
-    service.appendPart({
+    await service.appendPart({
       ...base,
       part: {
         globalSequence: 1,
@@ -125,8 +125,8 @@ describe("HX-506 artifact settlement service", () => {
   });
 
   it("fails a commit that references a file missing from the streamed set", async () => {
-    const authority: RemoteWorkerAssignmentAuthorityFence = { assertLiveAuthority: vi.fn() };
-    const repository = { commitArtifact: vi.fn(() => fakeUpload()) } as never;
+    const authority: RemoteWorkerAssignmentAuthorityFence = { assertLiveAuthority: vi.fn(async () => undefined) };
+    const repository = { commitArtifact: vi.fn(async () => fakeUpload()) } as never;
     const store = { installBlob: vi.fn() } as never;
     const service = new RemoteWorkerArtifactSettlementService({ repository, store, authority });
     await expect(

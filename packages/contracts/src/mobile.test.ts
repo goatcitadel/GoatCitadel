@@ -5,6 +5,9 @@ import {
   type MobileContextEnvelope,
   type MobileNativeCapabilityId,
   type MobileNativeCapabilityRecord,
+  type MobilePushApprovalRefreshPayload,
+  type MobilePushRegistrationResponse,
+  mobilePushRegistrationRequestSchema,
 } from "./mobile.js";
 
 describe("mobile native contracts", () => {
@@ -27,5 +30,37 @@ describe("mobile native contracts", () => {
 
   it("types capability heartbeat payloads", () => {
     expectTypeOf<MobileCapabilityHeartbeatRequest["capabilities"]>().toMatchTypeOf<MobileNativeCapabilityRecord[]>();
+  });
+
+  it("accepts a raw provider token only for an enabled signed registration boundary", () => {
+    expect(
+      mobilePushRegistrationRequestSchema.parse({ provider: "expo", enabled: true, token: "ExpoPushToken[value]" }),
+    ).toEqual({ provider: "expo", enabled: true, token: "ExpoPushToken[value]" });
+    expect(mobilePushRegistrationRequestSchema.parse({ provider: "fcm", enabled: false })).toEqual({
+      provider: "fcm",
+      enabled: false,
+    });
+    expect(
+      mobilePushRegistrationRequestSchema.safeParse({
+        provider: "expo",
+        enabled: true,
+        tokenHash: "caller-controlled",
+        tokenPreview: "leaky",
+      }).success,
+    ).toBe(false);
+    expect(mobilePushRegistrationRequestSchema.safeParse({ provider: "local_only", enabled: false }).success).toBe(
+      false,
+    );
+  });
+
+  it("keeps approval refresh payloads content-free and deep-link typed", () => {
+    expectTypeOf<MobilePushApprovalRefreshPayload>().toEqualTypeOf<{
+      schemaVersion: 1;
+      type: "approval_refresh";
+      realtimeEventId: string;
+      approvalId: string;
+      deepLink: { kind: "approval"; approvalId: string };
+    }>();
+    expectTypeOf<MobilePushRegistrationResponse["deliveryAvailability"]>().toEqualTypeOf<"available" | "unavailable">();
   });
 });

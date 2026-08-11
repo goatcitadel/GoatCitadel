@@ -353,7 +353,15 @@ describe("workbench tree, inspector drawer, and approval prompt tails", () => {
       />,
     );
     expect(textOf(renderer.toJSON())).toContain("Danger risk");
-    expect(renderer.root.findAllByType("button").every((button) => button.props.disabled)).toBe(true);
+    // Only the approval *decision* controls lock while a decision is pending. The
+    // IdentifierChip copy button (class "gc-identifier-chip-copy") is a read-only
+    // affordance for copying the approval id and stays enabled by design, so scope
+    // the disabled check to the "chat-approval-*" action buttons.
+    const pendingActionButtons = renderer.root
+      .findAllByType("button")
+      .filter((button) => String(button.props.className ?? "").includes("chat-approval-"));
+    expect(pendingActionButtons.length).toBeGreaterThan(0);
+    expect(pendingActionButtons.every((button) => button.props.disabled)).toBe(true);
 
     renderer.update(
       <InlineApprovalPrompt

@@ -203,7 +203,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(authAdmin.getCompanionSessionInfo(request.authCompanionSessionId));
+      return reply.send(await authAdmin.getCompanionSessionInfo(request.authCompanionSessionId));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -215,7 +215,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(authAdmin.listCompanionSessions(parsed.data));
+      return reply.send(await authAdmin.listCompanionSessions(parsed.data));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -227,7 +227,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(authAdmin.getCompanionSessionRecord(params.data.sessionId));
+      return reply.send(await authAdmin.getCompanionSessionRecord(params.data.sessionId));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }

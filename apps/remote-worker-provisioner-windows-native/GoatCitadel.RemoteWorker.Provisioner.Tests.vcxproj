@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|ARM64">
+      <Configuration>Release</Configuration>
+      <Platform>ARM64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <ProjectGuid>{75B15AE2-BAE3-4EED-9A77-6C79C26C31B4}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <RootNamespace>GoatCitadelRemoteWorkerProvisionerTests</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
+    <VendorPreflight Condition="'$(VendorPreflight)' == ''">false</VendorPreflight>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <VCToolsVersion>14.44.35207</VCToolsVersion>
+    <WholeProgramOptimization>false</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+    <EnableASAN Condition="'$(VendorPreflight)' != 'true'">true</EnableASAN>
+    <EnableASAN Condition="'$(VendorPreflight)' == 'true'">false</EnableASAN>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <VCToolsVersion>14.44.35207</VCToolsVersion>
+    <WholeProgramOptimization>false</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+    <EnableASAN>false</EnableASAN>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <TargetName Condition="'$(VendorPreflight)' != 'true'">GoatCitadelRemoteWorkerProvisionerTests</TargetName>
+    <TargetName Condition="'$(VendorPreflight)' == 'true'">GoatCitadelRemoteWorkerProvisionerVendorPreflight</TargetName>
+    <TargetExt>.exe</TargetExt>
+    <LinkIncremental>false</LinkIncremental>
+    <GenerateManifest>false</GenerateManifest>
+  </PropertyGroup>
+  <Target Name="RequireValidatedMonocypherSnapshot" BeforeTargets="ClCompile" Condition="'$(VendorPreflight)' != 'true'">
+    <Error Condition="'$(MonocypherSourceRoot)' == ''" Text="MonocypherSourceRoot is required and must name the validated private Monocypher 4.0.3 snapshot." />
+  </Target>
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Release'">
+    <ClCompile>
+      <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <SDLCheck>true</SDLCheck>
+      <ConformanceMode>true</ConformanceMode>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <Optimization>MaxSpeed</Optimization>
+      <WholeProgramOptimization>false</WholeProgramOptimization>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <BufferSecurityCheck>true</BufferSecurityCheck>
+      <SpectreMitigation>Spectre</SpectreMitigation>
+      <ControlFlowGuard>Guard</ControlFlowGuard>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <RuntimeTypeInfo>false</RuntimeTypeInfo>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <MinimalRebuild>false</MinimalRebuild>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <EnableASAN Condition="'$(VendorPreflight)' != 'true' and '$(Platform)' == 'x64'">true</EnableASAN>
+      <EnableASAN Condition="'$(VendorPreflight)' == 'true' or '$(Platform)' != 'x64'">false</EnableASAN>
+      <PreprocessorDefinitions Condition="'$(VendorPreflight)' != 'true'">WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;_WIN32_WINNT=0x0A00;GOATCITADEL_PROVISIONER_CUSTODY=1;GOATCITADEL_EXPECTED_CLIENT_SHA256_HEX=&quot;0000000000000000000000000000000000000000000000000000000000000000&quot;;GOATCITADEL_PROVISIONER_TESTING=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="'$(VendorPreflight)' == 'true'">WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;_WIN32_WINNT=0x0A00;GOATCITADEL_VENDOR_PREFLIGHT=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories Condition="'$(VendorPreflight)' != 'true'">$(MonocypherSourceRoot)\src;$(MonocypherSourceRoot)\src\optional;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions Condition="'$(VendorPreflight)' != 'true' and '$(Platform)' == 'x64'">/fsanitize=address /Brepro /experimental:deterministic /permissive- /Zc:inline /Zc:preprocessor /volatile:iso /pathmap:$(MSBuildProjectDirectory)=/_/goatcitadel/remote-worker-provisioner-tests %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions Condition="'$(VendorPreflight)' != 'true' and '$(Platform)' != 'x64'">/D__arm64_safe_unaligned_memory_access=goatcitadel_test_arm64_safe_unaligned_memory_access /Brepro /experimental:deterministic /permissive- /Zc:inline /Zc:preprocessor /volatile:iso /pathmap:$(MSBuildProjectDirectory)=/_/goatcitadel/remote-worker-provisioner-tests %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions Condition="'$(VendorPreflight)' == 'true'">/Brepro /experimental:deterministic /permissive- /Zc:inline /Zc:preprocessor /volatile:iso /pathmap:$(MSBuildProjectDirectory)=/_/goatcitadel/remote-worker-provisioner-preflight %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <LinkTimeCodeGeneration>Default</LinkTimeCodeGeneration>
+      <RandomizedBaseAddress>true</RandomizedBaseAddress>
+      <DataExecutionPrevention>true</DataExecutionPrevention>
+      <HighEntropyVA>true</HighEntropyVA>
+      <ControlFlowGuard>Guard</ControlFlowGuard>
+      <AdditionalDependencies>kernel32.lib;advapi32.lib;bcrypt.lib;secur32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalOptions>/Brepro /INCREMENTAL:NO /OPT:REF /OPT:ICF /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT /GUARD:CF %(AdditionalOptions)</AdditionalOptions>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup Condition="'$(VendorPreflight)' != 'true'">
+    <ClCompile Include="$(MonocypherSourceRoot)\src\monocypher.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <WholeProgramOptimization>false</WholeProgramOptimization>
+      <InlineFunctionExpansion>Disabled</InlineFunctionExpansion>
+      <ObjectFileName>$(IntDir)monocypher-core.obj</ObjectFileName>
+      <AdditionalOptions>/TC /O2 /Ob0 /GL- /Gy /volatile:iso /pathmap:$(MonocypherSourceRoot)=/_/goatcitadel/monocypher-4.0.3 %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <ClCompile Include="$(MonocypherSourceRoot)\src\optional\monocypher-ed25519.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <WholeProgramOptimization>false</WholeProgramOptimization>
+      <InlineFunctionExpansion>Disabled</InlineFunctionExpansion>
+      <ObjectFileName>$(IntDir)monocypher-ed25519.obj</ObjectFileName>
+      <AdditionalOptions>/TC /O2 /Ob0 /GL- /Gy /volatile:iso /pathmap:$(MonocypherSourceRoot)=/_/goatcitadel/monocypher-4.0.3 %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <ClCompile Include="src\ed25519_runtime.cpp">
+      <WholeProgramOptimization>false</WholeProgramOptimization>
+      <InlineFunctionExpansion>Disabled</InlineFunctionExpansion>
+      <ObjectFileName>$(IntDir)ed25519-runtime.obj</ObjectFileName>
+      <AdditionalOptions>/O2 /Ob0 /GL- /Gy /volatile:iso %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <ClCompile Include="src\key_custody.cpp">
+      <WholeProgramOptimization>false</WholeProgramOptimization>
+      <InlineFunctionExpansion>Disabled</InlineFunctionExpansion>
+      <ObjectFileName>$(IntDir)key-custody.obj</ObjectFileName>
+      <AdditionalOptions>/O2 /Ob0 /GL- /Gy /volatile:iso %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <ClCompile Include="src\protected_filesystem.cpp" />
+    <ClCompile Include="src\protected_filesystem.test.cpp" />
+    <ClCompile Include="src\protected_artifact_signing.cpp" />
+    <ClCompile Include="src\protected_artifact_signing.test.cpp" />
+    <ClCompile Include="src\operation_journal.cpp" />
+    <ClCompile Include="src\operation_journal.test.cpp" />
+    <ClCompile Include="src\key_custody.test.cpp" />
+    <ClCompile Include="src\protected_operations.cpp" />
+    <ClCompile Include="src\protected_operations.test.cpp" />
+    <ClCompile Include="src\ed25519_runtime.test.cpp" />
+    <ClCompile Include="src\local_transport.cpp" />
+    <ClCompile Include="src\local_transport.test.cpp" />
+    <ClCompile Include="src\availability_broker.cpp" />
+    <ClCompile Include="src\availability_broker.test.cpp" />
+    <ClCompile Include="src\protocol.cpp" />
+    <ClCompile Include="src\protocol.test.cpp" />
+    <ClCompile Include="src\service_runtime.cpp" />
+    <ClCompile Include="src\service_runtime.test.cpp" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(VendorPreflight)' == 'true'">
+    <ClCompile Include="src\ed25519_runtime.test.cpp" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(VendorPreflight)' != 'true'">
+    <ClInclude Include="src\ed25519_runtime.hpp" />
+    <ClInclude Include="src\local_transport.hpp" />
+    <ClInclude Include="src\availability_broker.hpp" />
+    <ClInclude Include="src\key_custody.hpp" />
+    <ClInclude Include="src\protected_filesystem.hpp" />
+    <ClInclude Include="src\protected_artifact_signing.hpp" />
+    <ClInclude Include="src\operation_journal.hpp" />
+    <ClInclude Include="src\protected_operations.hpp" />
+    <ClInclude Include="src\protocol.hpp" />
+    <ClInclude Include="src\service_runtime.hpp" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

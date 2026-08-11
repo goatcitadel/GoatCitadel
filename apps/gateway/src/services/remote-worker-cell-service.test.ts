@@ -27,7 +27,11 @@ import {
   type DatabaseClient,
   type RemoteWorkerCellKey,
 } from "@goatcitadel/storage";
-import { RemoteWorkerCellService, type WorkerCellAssignmentAuthorityPort } from "./remote-worker-cell-service.js";
+import {
+  RemoteWorkerCellService,
+  type RemoteWorkerCellRepositoryPort,
+  type WorkerCellAssignmentAuthorityPort,
+} from "./remote-worker-cell-service.js";
 
 const clients: DatabaseClient[] = [];
 const FUTURE = "2099-01-01T00:00:00.000Z";
@@ -284,7 +288,15 @@ function footprint(overrides: Partial<RemoteWorkerCellCapacityFootprint> = {}): 
   };
 }
 
-const activeAuthority: WorkerCellAssignmentAuthorityPort = { assertGenerationActive: () => undefined };
+function promiseBackedRepository(repository: RemoteWorkerCellRepository): RemoteWorkerCellRepositoryPort {
+  return {
+    profileOrReplay: async (input) => repository.profileOrReplay(input),
+    getCell: async (key) => repository.getCell(key),
+    recordCapacityHighWater: async (input) => repository.recordCapacityHighWater(input),
+  };
+}
+
+const activeAuthority: WorkerCellAssignmentAuthorityPort = { assertGenerationActive: async () => undefined };
 const deniedAuthority: WorkerCellAssignmentAuthorityPort = {
   assertGenerationActive: () => {
     throw new Error("assignment generation is not an active authority");
@@ -292,23 +304,30 @@ const deniedAuthority: WorkerCellAssignmentAuthorityPort = {
 };
 
 describe("HX-505 cell service composition", () => {
-  it("seats a cell only for a committed, active assignment generation", () => {
+  it("seats a cell only for a committed, active assignment generation", async () => {
     const s = seed("service");
     const denied = new RemoteWorkerCellService({ repository: s.repo, assignmentAuthority: deniedAuthority });
-    expect(() => denied.profileCell({ profile: s.profile, idempotencyKey: "cell:idem:1", createdAt: s.now })).toThrow(
-      /active authority/u,
-    );
-    const service = new RemoteWorkerCellService({ repository: s.repo, assignmentAuthority: activeAuthority });
-    const outcome = service.profileCell({ profile: s.profile, idempotencyKey: "cell:idem:1", createdAt: s.now });
+    await expect(
+      denied.profileCell({ profile: s.profile, idempotencyKey: "cell:idem:1", createdAt: s.now }),
+    ).rejects.toThrow(/active authority/u);
+    const service = new RemoteWorkerCellService({
+      repository: promiseBackedRepository(s.repo),
+      assignmentAuthority: activeAuthority,
+    });
+    const outcome = await service.profileCell({
+      profile: s.profile,
+      idempotencyKey: "cell:idem:1",
+      createdAt: s.now,
+    });
     expect(outcome.disposition).toBe("created");
   });
 
-  it("accepts within the reservation, rejects without touching state, and quarantines counting bytes", () => {
+  it("accepts within the reservation, rejects without touching state, and quarantines counting bytes", async () => {
     const s = seed("pressure");
     const service = new RemoteWorkerCellService({ repository: s.repo, assignmentAuthority: activeAuthority });
-    service.profileCell({ profile: s.profile, idempotencyKey: "cell:idem:1", createdAt: s.now });
+    await service.profileCell({ profile: s.profile, idempotencyKey: "cell:idem:1", createdAt: s.now });
 
-    const accept = service.evaluateCapacityAdmission({
+    const accept = await service.evaluateCapacityAdmission({
       ...s.key,
       footprint: footprint(),
       reservation: reservation(),
@@ -325,7 +344,7 @@ describe("HX-505 cell service composition", () => {
 
     // Reject: over the worst-case allocation, no unrecoverable bytes → canonical state untouched.
     const before = s.repo.getCell(s.key)!;
-    const reject = service.evaluateCapacityAdmission({
+    const reject = await service.evaluateCapacityAdmission({
       ...s.key,
       footprint: footprint(),
       reservation: reservation(),
@@ -341,7 +360,7 @@ describe("HX-505 cell service composition", () => {
     expect(reject.cell.capacityRevision).toBe(before.capacityRevision);
 
     // Quarantine: over allocation WITH unrecoverable retained bytes → counted, never deleted.
-    const quarantine = service.evaluateCapacityAdmission({
+    const quarantine = await service.evaluateCapacityAdmission({
       ...s.key,
       footprint: footprint({ quarantineEvidenceBytes: 50, failedCleanupBytes: 25 }),
       reservation: reservation({ allocatedDiskBytes: 1_000, logicalDiskBytes: 1_000 }),

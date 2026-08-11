@@ -13,6 +13,7 @@ import {
   descriptionForOpsSection,
   formatBytes,
   formatCostMetric,
+  formatActivityAge,
   formatDateTime,
   formatDuration,
   formatHumanSessionTitle,
@@ -910,6 +911,8 @@ describe("RuntimeRoutePage", () => {
       ["runtime", "Runtime posture"],
       ["runtime", "No backup"],
       ["diagnostics", "Diagnostics directory"],
+      ["diagnostics", "mc-next-ops-diagnostics-grid"],
+      ["diagnostics", "mc-next-ops-diagnostics-primary"],
       ["diagnostics", "No daemon logs available."],
       ["schedules", "No scheduled jobs."],
       ["improvement", "No improvement reports yet."],
@@ -1062,6 +1065,14 @@ describe("RuntimeRoutePage", () => {
     expect(formatDateTime(null)).toBe("Unknown");
     expect(formatDateTime("bad-date")).toBe("Unknown");
     expect(formatDateTime("2026-05-14T12:00:00.000Z")).toContain("5/14");
+    const now = Date.parse("2026-05-14T12:00:00.000Z");
+    expect(formatActivityAge(null, now)).toBe("—");
+    expect(formatActivityAge("bad-date", now)).toBe("—");
+    expect(formatActivityAge("2026-05-14T12:00:01.000Z", now)).toBe("now");
+    expect(formatActivityAge("2026-05-14T11:59:43.000Z", now)).toBe("17s");
+    expect(formatActivityAge("2026-05-14T11:31:00.000Z", now)).toBe("29m");
+    expect(formatActivityAge("2026-05-13T11:00:00.000Z", now)).toBe("25h");
+    expect(formatActivityAge("2026-05-11T12:00:00.000Z", now)).toBe("3d");
     expect(formatLoadAverage([])).toBe("n/a");
     expect(formatLoadAverage([1, 2.345, 3.456, 4])).toBe("1.00 / 2.35 / 3.46");
   });
@@ -1082,6 +1093,8 @@ describe("RuntimeRoutePage", () => {
         />,
       );
     });
+
+    expect(renderer!.root.findByProps({ className: "mc-next-ops-schedules-grid" })).toBeTruthy();
 
     await act(async () => {
       findButton(renderer!.root, "Create schedule").props.onClick();

@@ -153,6 +153,21 @@ export interface ExactGeneralChatPostCommitPendingMarker {
   durableEffectRunIds: Record<string, string>;
 }
 
+/**
+ * Pre-runtime-authority marker written by chat.turn.execute.v1. It is parsed
+ * separately so startup can retire already-terminal legacy work without
+ * synthesizing the frozen eligibility or v2 authority that did not exist when
+ * the row was committed.
+ */
+export interface ExactLegacyGeneralChatPostCommitPendingMarker {
+  version: 1;
+  generationId: string;
+  traceStatus: ChatTurnTraceRecord["status"];
+  requestedAt: string;
+  completedEffects: string[];
+  durableEffectRunIds: Record<string, string>;
+}
+
 export interface ExactLinkedFinalizationPendingMarker {
   reason: string;
   requestedAt: string;
@@ -778,6 +793,30 @@ export function readExactGeneralChatPostCommitPendingMarker(
     ],
     "General Chat post-commit pending marker",
   );
+  const common = readExactGeneralChatPostCommitPendingMarkerFields(marker);
+  return {
+    ...common,
+    postCommitEligibility: requirePostCommitEligibility(marker.postCommitEligibility),
+  };
+}
+
+export function readExactLegacyGeneralChatPostCommitPendingMarker(
+  value: unknown,
+): ExactLegacyGeneralChatPostCommitPendingMarker | undefined {
+  if (value === undefined) return undefined;
+  const marker = requireRecord(value, "Legacy General Chat post-commit pending marker");
+  if (Object.prototype.hasOwnProperty.call(marker, "postCommitEligibility")) return undefined;
+  assertExactKeys(
+    marker,
+    ["version", "generationId", "traceStatus", "requestedAt", "completedEffects", "durableEffectRunIds"],
+    "Legacy General Chat post-commit pending marker",
+  );
+  return readExactGeneralChatPostCommitPendingMarkerFields(marker);
+}
+
+function readExactGeneralChatPostCommitPendingMarkerFields(
+  marker: Record<string, unknown>,
+): ExactLegacyGeneralChatPostCommitPendingMarker {
   if (marker.version !== 1) throw new Error("General Chat post-commit pending marker version is invalid.");
   const completedEffects = requireStringArray(marker.completedEffects, "completedEffects");
   if (
@@ -805,7 +844,6 @@ export function readExactGeneralChatPostCommitPendingMarker(
     generationId: requireIdentifier(marker.generationId, "generationId"),
     traceStatus: requireTraceStatus(marker.traceStatus),
     requestedAt: requireTimestamp(marker.requestedAt, "requestedAt"),
-    postCommitEligibility: requirePostCommitEligibility(marker.postCommitEligibility),
     completedEffects,
     durableEffectRunIds,
   };

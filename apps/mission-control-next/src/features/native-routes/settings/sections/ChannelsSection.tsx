@@ -15,6 +15,7 @@ import {
   updateChannelSetupDraft,
   validateChannelSetupDraft,
 } from "@goatcitadel/mission-control-shared/api/client";
+import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import {
   getErrorMessage,
   nativeLoad,
@@ -43,6 +44,7 @@ import {
   readConnectionConfigString,
   readDraftString,
 } from "../../SettingsNativePage";
+import { useDraftTransitionGuard, useFormDirty } from "../../library/use-form-dirty";
 
 export function ChannelsSection(_props: SettingsSectionProps) {
   const load = useCallback(async () => {
@@ -66,6 +68,7 @@ export function ChannelsSection(_props: SettingsSectionProps) {
   const [draftEnabled, setDraftEnabled] = useState(true);
   const [draftValues, setDraftValues] = useState<Record<string, unknown>>({});
   const [draftDirty, setDraftDirty] = useState(false);
+  const [draftOwnerId, setDraftOwnerId] = useState("");
   const [validationResult, setValidationResult] = useState<ChannelSetupWizardFeedback | null>(null);
   const [busyAction, setBusyAction] = useState<"save" | "validate" | "test" | "finalize" | null>(null);
   const selectedDraft = data?.drafts?.find((item) => item.draftId === selectedDraftId) ?? data?.drafts?.[0] ?? null;
@@ -73,6 +76,40 @@ export function ChannelsSection(_props: SettingsSectionProps) {
   const selectedDefinition = selectedDraft
     ? (data?.definitions?.find((item) => item.catalog.catalogId === selectedDraft.catalogId) ?? null)
     : createDefinition;
+
+  const hasDraftChanges = Boolean(selectedDraft && draftOwnerId === selectedDraft.draftId && draftDirty);
+  const draftHasChanges = useCallback(
+    (valuesOverride?: Record<string, unknown>): boolean => {
+      if (!selectedDraft || draftOwnerId !== selectedDraft.draftId) {
+        return false;
+      }
+      const nextValues = valuesOverride ?? draftValues;
+      return (
+        draftDirty ||
+        draftLabel.trim() !== (selectedDraft.label ?? "").trim() ||
+        draftEnabled !== selectedDraft.enabled ||
+        JSON.stringify(nextValues) !== JSON.stringify(selectedDraft.draft)
+      );
+    },
+    [draftDirty, draftEnabled, draftLabel, draftOwnerId, draftValues, selectedDraft],
+  );
+  useFormDirty("settings:channels", hasDraftChanges, { label: "Channels" });
+
+  const resetSelectedDraft = useCallback(() => {
+    if (!selectedDraft) {
+      return;
+    }
+    setDraftLabel(selectedDraft.label ?? "");
+    setDraftEnabled(selectedDraft.enabled);
+    setDraftValues(selectedDraft.draft);
+    setDraftDirty(false);
+    setValidationResult(null);
+  }, [selectedDraft]);
+  const applyDraftSelection = useCallback((draftId: string) => {
+    setSelectedDraftId(draftId);
+    setValidationResult(null);
+  }, []);
+  const draftSelectionGuard = useDraftTransitionGuard(hasDraftChanges, applyDraftSelection, resetSelectedDraft);
 
   useEffect(() => {
     if (!data?.definitions?.length) {
@@ -103,13 +140,18 @@ export function ChannelsSection(_props: SettingsSectionProps) {
       setDraftEnabled(true);
       setDraftValues({});
       setDraftDirty(false);
+      setDraftOwnerId("");
+      return;
+    }
+    if (draftOwnerId === selectedDraft.draftId && hasDraftChanges) {
       return;
     }
     setDraftLabel(selectedDraft.label ?? "");
     setDraftEnabled(selectedDraft.enabled);
     setDraftValues(selectedDraft.draft);
     setDraftDirty(false);
-  }, [selectedDraft]);
+    setDraftOwnerId(selectedDraft.draftId);
+  }, [draftOwnerId, hasDraftChanges, selectedDraft]);
 
   useEffect(() => {
     setValidationResult(null);
@@ -234,19 +276,6 @@ export function ChannelsSection(_props: SettingsSectionProps) {
     } catch (discoverError) {
       setNotice({ tone: "error", message: getErrorMessage(discoverError) });
     }
-  };
-
-  const draftHasChanges = (valuesOverride?: Record<string, unknown>): boolean => {
-    if (!selectedDraft) {
-      return false;
-    }
-    const nextValues = valuesOverride ?? draftValues;
-    return (
-      draftDirty ||
-      draftLabel.trim() !== (selectedDraft.label ?? "").trim() ||
-      draftEnabled !== selectedDraft.enabled ||
-      JSON.stringify(nextValues) !== JSON.stringify(selectedDraft.draft)
-    );
   };
 
   const persistDraft = async (valuesOverride?: Record<string, unknown>): Promise<boolean> => {
@@ -465,8 +494,9 @@ export function ChannelsSection(_props: SettingsSectionProps) {
                 }))}
                 selectedId={selectedDraftId}
                 onSelect={(draftId) => {
-                  setSelectedDraftId(draftId);
-                  setValidationResult(null);
+                  if (draftId !== selectedDraftId) {
+                    draftSelectionGuard.requestTransition(draftId);
+                  }
                 }}
                 emptyLabel="No channel drafts yet."
               />
@@ -537,6 +567,16 @@ export function ChannelsSection(_props: SettingsSectionProps) {
           </NativeCard>
         </SettingsGrid>
       ) : null}
+      <ConfirmModal
+        open={draftSelectionGuard.pendingTransition !== null}
+        danger
+        title="Discard channel draft changes?"
+        message="The selected channel setup has unsaved edits. Discard them and open another draft?"
+        confirmLabel="Discard changes"
+        cancelLabel="Keep editing"
+        onCancel={draftSelectionGuard.cancelDiscard}
+        onConfirm={draftSelectionGuard.confirmDiscard}
+      />
     </SettingsSectionShell>
   );
 }

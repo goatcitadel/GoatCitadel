@@ -2,6 +2,11 @@
 
 Use this checklist to verify packaging, installation, startup, and remote-hardened configuration for GoatCitadel epic `GC-P1-09`.
 
+Program placement: execute this checklist once against the integrated release
+candidate in tranche `M9` of
+[MASTER_COMPLETION_PROGRAM.md](./MASTER_COMPLETION_PROGRAM.md). It is an
+acceptance checklist, not a competing implementation order.
+
 ## Preflight Verification
 - [ ] Confirm active deployment profile in current runtime.
 - [ ] Record System-page posture summary.

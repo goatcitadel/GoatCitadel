@@ -41,6 +41,10 @@ describe("sqlite subagent migration", () => {
         updated_at TEXT NOT NULL
       );
 
+      -- Faithful copy of the legacy base schema that shipped this table. The
+      -- task_id foreign key must be seeded too: post-migration canonical
+      -- schema-shape validation refuses any shape the supported lineage never
+      -- produced, and RENAME COLUMN preserves the constraint on upgrade.
       CREATE TABLE task_subagent_sessions (
         subagent_session_id TEXT PRIMARY KEY,
         task_id TEXT NOT NULL,
@@ -49,7 +53,8 @@ describe("sqlite subagent migration", () => {
         status TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
-        ended_at TEXT
+        ended_at TEXT,
+        FOREIGN KEY(task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
       );
     `);
 

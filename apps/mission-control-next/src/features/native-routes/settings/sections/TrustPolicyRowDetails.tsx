@@ -1,5 +1,6 @@
 import { Shield, Activity, AlertTriangle } from "lucide-react";
 import type { TrustPolicySkillDeclaredMetadata } from "@goatcitadel/mission-control-shared/api/trust";
+import { IdentifierChip } from "@goatcitadel/mission-control-shared/components/IdentifierChip";
 import type { TrustPolicyDeclaredGovernanceView, TrustPolicyMatrixRow } from "./TrustPolicySection";
 
 export function labelForKind(kind: TrustPolicyMatrixRow["kind"]): string {
@@ -162,7 +163,7 @@ export function TrustPolicyRowDetails({ row }: { row: TrustPolicyMatrixRow }) {
         </h4>
         <div className="mc-next-trust-details-card-body">
           <div>
-            <strong>Identifier:</strong> <code>{row.id}</code>
+            <strong>Identifier:</strong> <IdentifierChip value={row.id} />
           </div>
           <div>
             <strong>Type:</strong> {labelForKind(row.kind)}
@@ -180,17 +181,17 @@ export function TrustPolicyRowDetails({ row }: { row: TrustPolicyMatrixRow }) {
               </div>
               {row.lastUse.runId && (
                 <div>
-                  <strong>Run ID:</strong> <code>{row.lastUse.runId}</code>
+                  <strong>Run ID:</strong> <IdentifierChip value={row.lastUse.runId} label="Run" />
                 </div>
               )}
               {row.lastUse.approvalId && (
                 <div>
-                  <strong>Approval ID:</strong> <code>{row.lastUse.approvalId}</code>
+                  <strong>Approval ID:</strong> <IdentifierChip value={row.lastUse.approvalId} label="Approval" />
                 </div>
               )}
               {row.lastUse.evidenceRef && (
                 <div>
-                  <strong>Evidence Hash:</strong> <code>{row.lastUse.evidenceRef}</code>
+                  <strong>Evidence Hash:</strong> <IdentifierChip value={row.lastUse.evidenceRef} label="Evidence" />
                 </div>
               )}
             </div>

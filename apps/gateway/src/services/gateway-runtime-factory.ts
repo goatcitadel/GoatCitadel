@@ -10,6 +10,10 @@ import type { MutationIdempotencyStore } from "./mutation-idempotency-store.js";
 import type { SharedHostLifecycleAdmissionPort } from "./shared-host-lifecycle-service.js";
 import type { WorkPassportService } from "./work-passport-service.js";
 import type { EngineeringLearningService } from "./engineering-learning-service.js";
+import { createGatewayRemoteWorkerAdmissionNativeRequestHandler } from "./remote-worker-admission-composition.js";
+import type { RemoteWorkerNativeRequestHandler } from "./remote-worker-native-tls-listener.js";
+import type { EnabledRemoteWorkerRuntimeConfig } from "./remote-worker-runtime-config.js";
+import { RemoteWorkerProtectedAdmissionEvidenceVerifier } from "./remote-worker-protected-admission-evidence-verifier.js";
 
 type GatewayLogger = {
   debug: (...args: unknown[]) => void;
@@ -26,6 +30,9 @@ export interface GatewayRuntimePort {
   readonly workPassportService: WorkPassportService;
   readonly engineeringLearningService: EngineeringLearningService;
   readonly routeServices: GatewayRouteServices;
+  createRemoteWorkerAdmissionNativeRequestHandler(
+    config: EnabledRemoteWorkerRuntimeConfig,
+  ): Promise<RemoteWorkerNativeRequestHandler | undefined>;
   attachDevDiagnosticsLogger(logger: GatewayLogger): void;
   init(): Promise<void>;
   initCritical(): Promise<void>;
@@ -53,7 +60,7 @@ export interface GatewayAuthValidationPort {
       }
     | undefined
   >;
-  verifyCompanionRequestSignature(input: unknown): unknown;
+  verifyCompanionRequestSignature(input: unknown): Promise<void>;
 }
 
 export type GatewayRuntimeInstance = GatewayRuntimePort & GatewayAuthValidationPort;
@@ -137,6 +144,13 @@ function createGatewayRuntimeFacade(gateway: GatewayService): GatewayRuntimeInst
     get routeServices() {
       return gateway.routeServices;
     },
+    createRemoteWorkerAdmissionNativeRequestHandler: async (config) =>
+      await createGatewayRemoteWorkerAdmissionNativeRequestHandler({
+        config,
+        admissionStore: gateway.storage.remoteWorkerAdmissions,
+        meshNodeAdmissionStore: gateway.storage.remoteWorkerMeshNodeAdmissions,
+        createEvidenceVerifier: () => new RemoteWorkerProtectedAdmissionEvidenceVerifier(),
+      }),
     attachDevDiagnosticsLogger: (logger) => gateway.attachDevDiagnosticsLogger(logger),
     close: () => gateway.close(),
     getOnboardingStartupState: () => gateway.getOnboardingStartupState(),

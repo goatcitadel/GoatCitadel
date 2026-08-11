@@ -375,6 +375,278 @@ describe("idempotencyHeaderPlugin", () => {
     }
   });
 
+  it("binds mobile push retries to a secret-free provider tuple", async () => {
+    const built = await buildApp((fastify) => {
+      fastify.put("/api/v1/mobile/current-device/push", async () => ({ ok: true }));
+    });
+    const claim = vi.spyOn(built.store, "claim");
+    const url = "/api/v1/mobile/current-device/push";
+
+    try {
+      const requests = [
+        {
+          key: "idem-mobile-push-1",
+          payload: {
+            provider: "expo",
+            enabled: true,
+            token: "ExpoPushToken[gc-canary-push-one]",
+            maliciousExtraSecret: "gc-canary-extra-one",
+          },
+        },
+        {
+          key: "idem-mobile-push-2",
+          payload: {
+            provider: "expo",
+            enabled: true,
+            token: "ExpoPushToken[gc-canary-push-two]",
+            maliciousExtraSecret: "gc-canary-extra-two",
+          },
+        },
+        {
+          key: "idem-mobile-push-3",
+          payload: { provider: "fcm", enabled: true, token: "gc-canary-push-three" },
+        },
+        {
+          key: "idem-mobile-push-4",
+          payload: { provider: "expo", enabled: false, maliciousExtraSecret: "gc-canary-extra-four" },
+        },
+      ];
+      for (const input of requests) {
+        const response = await built.app.inject({
+          method: "PUT",
+          url,
+          headers: { "Idempotency-Key": input.key },
+          payload: input.payload,
+        });
+        expect(response.statusCode).toBe(200);
+      }
+
+      const hashes = claim.mock.calls.map(([input]) => input.payloadHash);
+      expect(hashes).toHaveLength(4);
+      expect(hashes[0]).toMatch(/^[a-f0-9]{64}$/);
+      expect(hashes[1]).toBe(hashes[0]);
+      expect(hashes[2]).not.toBe(hashes[0]);
+      expect(hashes[3]).not.toBe(hashes[0]);
+      expect(JSON.stringify(claim.mock.calls)).not.toContain("gc-canary");
+    } finally {
+      await built.app.close();
+    }
+  });
+
+  it("marks every mobile push registration response boundary no-store", async () => {
+    const app = Fastify();
+    const store = new FakeMutationIdempotencyStore();
+    app.addHook("onRequest", async (request, reply) => {
+      if (request.headers["x-test-auth-reject"] === "true") {
+        return reply.code(401).send({ error: "Unauthorized" });
+      }
+    });
+    await app.register(idempotencyHeaderPlugin, { mutationStore: store });
+    app.put("/api/v1/mobile/current-device/push", async (request) => {
+      if ((request.body as { fail?: boolean } | undefined)?.fail) {
+        throw new Error("synthetic route failure");
+      }
+      return { ok: true };
+    });
+    app.put("/api/v1/mobile/current-device/push-adjacent", async () => ({ ok: true }));
+
+    try {
+      const responses = [
+        await app.inject({
+          method: "PUT",
+          url: "/api/v1/mobile/current-device/push",
+          headers: { "x-test-auth-reject": "true" },
+          payload: { provider: "expo", enabled: true, token: "auth-rejected-token" },
+        }),
+        await app.inject({
+          method: "PUT",
+          url: "/api/v1/mobile/current-device/push",
+          headers: { "content-type": "application/json", "Idempotency-Key": "idem-mobile-parser" },
+          payload: "{definitely-not-json",
+        }),
+        await app.inject({
+          method: "PUT",
+          url: "/api/v1/mobile/current-device/push",
+          headers: { "Idempotency-Key": "idem-mobile-error" },
+          payload: { provider: "expo", enabled: true, token: "handler-error-token", fail: true },
+        }),
+        await app.inject({
+          method: "PUT",
+          url: "/api/v1/mobile/current-device/push",
+          headers: { "Idempotency-Key": "idem-mobile-success" },
+          payload: { provider: "expo", enabled: true, token: "successful-token" },
+        }),
+      ];
+
+      expect(responses.map((response) => response.statusCode)).toEqual([401, 400, 500, 200]);
+      for (const response of responses) {
+        expect(response.headers["cache-control"]).toBe("no-store");
+        expect(response.headers.pragma).toBe("no-cache");
+      }
+
+      const adjacent = await app.inject({
+        method: "PUT",
+        url: "/api/v1/mobile/current-device/push-adjacent",
+        headers: { "Idempotency-Key": "idem-mobile-adjacent" },
+        payload: { ok: true },
+      });
+      expect(adjacent.statusCode).toBe(200);
+      expect(adjacent.headers["cache-control"]).toBeUndefined();
+      expect(adjacent.headers.pragma).toBeUndefined();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("defers remote-worker bootstrap replay and drift to its one-time-secret canonical owner", async () => {
+    let handlerCalls = 0;
+    const built = await buildApp((fastify) => {
+      let canonicalPayload: string | undefined;
+      fastify.post("/api/v1/ops/workspaces/:workspaceId/remote-workers/bootstrap", async (request, reply) => {
+        handlerCalls += 1;
+        const payload = JSON.stringify((request as { body: unknown }).body);
+        canonicalPayload ??= payload;
+        if (payload !== canonicalPayload) {
+          return reply.code(409).send({ error: "canonical bootstrap request drift" });
+        }
+        await markMutationCommitted(request);
+        return handlerCalls === 1
+          ? { disposition: "created", bootstrapSecret: "one-time-secret" }
+          : { disposition: "replayed_without_secret" };
+      });
+    });
+    const claim = vi.spyOn(built.store, "claim");
+    const markCompleted = vi.spyOn(built.store, "markCompleted");
+
+    try {
+      const headers = { "Idempotency-Key": "idem-worker-bootstrap-1" };
+      const payload = { workerLabel: "Windows workstation", runtimeManifest: { payloadSha256: "a".repeat(64) } };
+      const first = await built.app.inject({
+        method: "POST",
+        url: "/api/v1/ops/workspaces/workspace-a/remote-workers/bootstrap",
+        headers,
+        payload,
+      });
+      const replay = await built.app.inject({
+        method: "POST",
+        url: "/api/v1/ops/workspaces/workspace-a/remote-workers/bootstrap",
+        headers,
+        payload,
+      });
+      const mismatch = await built.app.inject({
+        method: "POST",
+        url: "/api/v1/ops/workspaces/workspace-a/remote-workers/bootstrap",
+        headers,
+        payload: { ...payload, workerLabel: "Different workstation" },
+      });
+
+      expect(first.statusCode).toBe(200);
+      expect(first.json()).toHaveProperty("bootstrapSecret", "one-time-secret");
+      expect(replay.statusCode).toBe(200);
+      expect(replay.json()).toEqual({ disposition: "replayed_without_secret" });
+      expect(mismatch.statusCode).toBe(409);
+      expect(handlerCalls).toBe(3);
+      expect(claim).not.toHaveBeenCalled();
+      expect(markCompleted).not.toHaveBeenCalled();
+    } finally {
+      await built.app.close();
+    }
+  });
+
+  it("defers mesh join secret replay and drift to its canonical storage owner", async () => {
+    let handlerCalls = 0;
+    const built = await buildApp((fastify) => {
+      let canonicalPayload: string | undefined;
+      fastify.post(
+        "/api/v1/ops/workspaces/:workspaceId/remote-workers/:workerId/generations/:workerGeneration/mesh-node-join-authorities",
+        async (request, reply) => {
+          handlerCalls += 1;
+          const payload = JSON.stringify((request as { body: unknown }).body);
+          canonicalPayload ??= payload;
+          if (payload !== canonicalPayload) return reply.code(409).send({ error: "canonical join request drift" });
+          await markMutationCommitted(request);
+          return handlerCalls === 1
+            ? { disposition: "created", meshNodeCredential: "one-time-mesh-secret" }
+            : { disposition: "replayed_without_secret", secretDisposition: "not_recoverable" };
+        },
+      );
+    });
+    const claim = vi.spyOn(built.store, "claim");
+    const markCompleted = vi.spyOn(built.store, "markCompleted");
+
+    try {
+      const headers = { "Idempotency-Key": "idem-mesh-join-1" };
+      const url = "/api/v1/ops/workspaces/registry-a/remote-workers/worker-a/generations/2/mesh-node-join-authorities";
+      const payload = { targetWorkspaceId: "workspace-a", expiresInSeconds: 300 };
+      const first = await built.app.inject({ method: "POST", url, headers, payload });
+      const replay = await built.app.inject({ method: "POST", url, headers, payload });
+      const mismatch = await built.app.inject({
+        method: "POST",
+        url,
+        headers,
+        payload: { ...payload, expiresInSeconds: 301 },
+      });
+
+      expect(first.statusCode).toBe(200);
+      expect(first.json()).toHaveProperty("meshNodeCredential", "one-time-mesh-secret");
+      expect(replay.json()).toEqual({ disposition: "replayed_without_secret", secretDisposition: "not_recoverable" });
+      expect(mismatch.statusCode).toBe(409);
+      expect(handlerCalls).toBe(3);
+      expect(claim).not.toHaveBeenCalled();
+      expect(markCompleted).not.toHaveBeenCalled();
+    } finally {
+      await built.app.close();
+    }
+  });
+
+  it("never fingerprints a remote-worker control reason before secret validation", async () => {
+    let handlerCalls = 0;
+    const built = await buildApp((fastify) => {
+      fastify.post(
+        "/api/v1/ops/workspaces/:workspaceId/remote-workers/:workerId/generations/:workerGeneration/quarantine",
+        async (request, reply) => {
+          handlerCalls += 1;
+          if (handlerCalls === 1) return reply.code(400).send({ error: "invalid reason" });
+          await markMutationCommitted(request);
+          return { ok: true };
+        },
+      );
+    });
+    const claim = vi.spyOn(built.store, "claim");
+    const url = "/api/v1/ops/workspaces/workspace-a/remote-workers/worker-a/generations/1/quarantine";
+    const headers = { "Idempotency-Key": "idem-worker-control-1" };
+    const secret = "Authorization: Bearer ghp_SUPER_SECRET_TOKEN_1234567890";
+
+    try {
+      const rejected = await built.app.inject({
+        method: "POST",
+        url,
+        headers,
+        payload: { reasonCode: "operator.quarantine", reason: secret },
+      });
+      const corrected = await built.app.inject({
+        method: "POST",
+        url,
+        headers,
+        payload: { reasonCode: "operator.quarantine", reason: "Worker missed its integrity checkpoint." },
+      });
+
+      expect(rejected.statusCode).toBe(400);
+      expect(corrected.statusCode).toBe(200);
+      expect(handlerCalls).toBe(2);
+      expect(claim).toHaveBeenCalledTimes(2);
+      expect(claim.mock.calls[0]?.[0].payloadHash).toBe(claim.mock.calls[1]?.[0].payloadHash);
+      expect(claim.mock.calls[0]?.[0].payloadHash).not.toBe(
+        createHash("sha256")
+          .update(JSON.stringify({ reasonCode: "operator.quarantine", reason: secret }))
+          .digest("hex"),
+      );
+      expect(JSON.stringify(claim.mock.calls)).not.toContain(secret);
+    } finally {
+      await built.app.close();
+    }
+  });
+
   it("rejects reused keys when the payload changes", async () => {
     const { app } = await buildApp((fastify) => {
       fastify.post("/api/v1/approvals/:approvalId/resolve", async () => ({ ok: true }));

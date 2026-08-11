@@ -390,6 +390,16 @@ describe("OrchestrationRepository", () => {
         payload_json TEXT NOT NULL,
         created_at TEXT NOT NULL
       );
+
+      -- Faithful copies of the indexes every genuine pre-93 database carried
+      -- (base orchestration schema plus the migration-63 durable-run index).
+      -- Dropping the tables above dropped them, no later migration recreates
+      -- them, and post-migration canonical schema-shape validation refuses any
+      -- shape the supported lineage never produced.
+      CREATE INDEX idx_orchestration_runs_plan_id ON orchestration_runs(plan_id, started_at DESC);
+      CREATE INDEX idx_orchestration_runs_durable_run_id ON orchestration_runs(durable_run_id);
+      CREATE INDEX idx_orchestration_checkpoints_run_id ON orchestration_checkpoints(run_id, created_at);
+      CREATE INDEX idx_orchestration_events_run_id ON orchestration_events(run_id, created_at);
     `);
     const markApplied = legacy.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)");
     for (let version = 1; version < 93; version += 1) {

@@ -7,6 +7,7 @@ import type {
   preHandlerAsyncHookHandler,
   preHandlerHookHandler,
 } from "fastify";
+import type { MeshCapabilityAuthenticatedNodeIdentity } from "../services/mesh-capability-publication-service.js";
 
 export type RouteAccessClass =
   | "public"
@@ -23,12 +24,13 @@ export type RouteAccessClass =
   | "mesh-node"
   | "sse-read"
   | "webhook"
-  // Purpose-aware session-control classes. No route registers the two companion
-  // control classes in this tranche; they exist so the central purpose guard and
-  // the access-class switch can isolate purpose-bound authority ahead of the
-  // (still HOLD) external control surface.
+  // Purpose-aware session-control classes plus the generic paired-companion
+  // review class. The central purpose guard keeps a session-control principal
+  // out of operator-or-companion and keeps a general companion out of the
+  // session-control classes.
   | "device-session-exchange"
   | "session-control-companion"
+  | "operator-or-companion"
   | "operator-or-session-control-companion";
 
 type RoutePreHandler =
@@ -182,6 +184,7 @@ function resolveAccessPreHandler(fastify: FastifyInstance, accessClass: RouteAcc
     case "sse-read":
     case "device-session-exchange":
     case "session-control-companion":
+    case "operator-or-companion":
     case "operator-or-session-control-companion":
       return enforce;
     case "public":
@@ -226,6 +229,16 @@ async function enforceRouteAccessClass(
       return requireAuthActorSource(request, reply, "device", accessClass);
     case "session-control-companion":
       return requireSessionControlCompanion(request, reply, accessClass);
+    case "operator-or-companion":
+      if (isGeneralCompanion(request)) {
+        return;
+      }
+      if (!hasOperatorAuthHandler(fastify)) {
+        return reply.code(500).send({
+          error: "Operator authentication is not installed for this route.",
+        });
+      }
+      return fastify.requireOperatorAuth(request, reply);
     case "operator-or-session-control-companion":
       if (isSessionControlCompanion(request)) {
         return;
@@ -310,6 +323,14 @@ function isSessionControlCompanion(request: FastifyRequest): boolean {
   );
 }
 
+function isGeneralCompanion(request: FastifyRequest): boolean {
+  return (
+    request.authActorSource === "companion" &&
+    request.authPrincipalPurpose === "general_companion" &&
+    Boolean(request.authCompanionSessionId)
+  );
+}
+
 function requireSessionControlCompanion(
   request: FastifyRequest,
   reply: FastifyReply,
@@ -373,13 +394,7 @@ async function requireMeshNodeAccess(
   }
   const result = (await service.authenticateNodeRequest(request)) as
     | {
-        identity: {
-          workspaceId: string;
-          nodeId: string;
-          admissionGeneration: number;
-          mtlsRequired: boolean;
-          tlsFingerprint?: string;
-        };
+        identity: MeshCapabilityAuthenticatedNodeIdentity;
       }
     | { statusCode: number; reason: string; message: string };
   if ("statusCode" in result) {

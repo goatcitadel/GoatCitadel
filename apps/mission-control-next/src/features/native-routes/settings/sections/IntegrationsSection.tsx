@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Integrations coordinates catalog, connection drafts, diagnostics, side-effect evidence, and meeting setup in one owner pending a later surface split. */
 // Extracted verbatim from `../../SettingsNativePage.tsx` as part of the
 // per-section settings decomposition.
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -69,6 +70,21 @@ import {
 import { NativeCard } from "../../NativeRoutePageLayout";
 import { NativeButton, NativeMetricGrid, NativeSelectableList } from "../../primitives";
 import { applyIntegrationDefaults, formatDateTime, formatJson, parseJsonObject } from "../../SettingsNativePage";
+import { useDraftTransitionGuard, useFormDirty } from "../../library/use-form-dirty";
+
+type IntegrationDetailDraft = {
+  label: string;
+  enabled: boolean;
+  status: string;
+  configText: string;
+};
+
+const EMPTY_INTEGRATION_DETAIL_DRAFT: IntegrationDetailDraft = {
+  label: "",
+  enabled: true,
+  status: "connected",
+  configText: "{}",
+};
 
 export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionProps) {
   const load = useCallback(async () => {
@@ -132,6 +148,12 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
   const [createConfig, setCreateConfig] = useState("{}");
   const [createGuidedConfig, setCreateGuidedConfig] = useState<Record<string, unknown>>({});
   const [createSchema, setCreateSchema] = useState<IntegrationFormSchema | undefined>();
+  const [createBaseline, setCreateBaseline] = useState({
+    catalogId: "",
+    label: "",
+    configText: "{}",
+    guidedConfig: {} as Record<string, unknown>,
+  });
   const [showCreateJson, setShowCreateJson] = useState(false);
   const [detailForm, setDetailForm] = useState({
     label: "",
@@ -140,6 +162,11 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
     configText: "{}",
   });
   const [detailGuidedConfig, setDetailGuidedConfig] = useState<Record<string, unknown>>({});
+  const [detailBaseline, setDetailBaseline] = useState({
+    connectionId: "",
+    form: EMPTY_INTEGRATION_DETAIL_DRAFT,
+    guidedConfig: {} as Record<string, unknown>,
+  });
   const [detailSchema, setDetailSchema] = useState<IntegrationFormSchema | undefined>();
   const [showDetailJson, setShowDetailJson] = useState(false);
   const [diagnostics, setDiagnostics] = useState<ConnectorDiagnosticReport | null>(null);
@@ -159,6 +186,7 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
     displayName: "",
     accountRef: "",
   });
+  const [meetBaseline, setMeetBaseline] = useState(meetForm);
   const [lastOperatorActionResult, setLastOperatorActionResult] = useState<
     (IntegrationActionInvokeResult & { actionLabel: string }) | null
   >(null);
@@ -172,6 +200,46 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
     data?.catalog.find((item) => item.catalogId === selectedConnection?.catalogId) ??
     data?.catalog.find((item) => item.catalogId === createCatalogId) ??
     null;
+  const createDirty =
+    createLabel !== createBaseline.label ||
+    createConfig !== createBaseline.configText ||
+    !areIntegrationValuesEqual(createGuidedConfig, createBaseline.guidedConfig);
+  const detailDirty = Boolean(
+    selectedConnection &&
+    detailBaseline.connectionId === selectedConnection.connectionId &&
+    (!areIntegrationValuesEqual(detailForm, detailBaseline.form) ||
+      !areIntegrationValuesEqual(detailGuidedConfig, detailBaseline.guidedConfig)),
+  );
+  const meetDirty = !areIntegrationValuesEqual(meetForm, meetBaseline);
+  useFormDirty("settings:integrations", createDirty || detailDirty || meetDirty, { label: "Integrations" });
+
+  const resetConnectionDraft = useCallback(() => {
+    setDetailForm(detailBaseline.form);
+    setDetailGuidedConfig(detailBaseline.guidedConfig);
+    setDiagnostics(null);
+    setLastOperatorActionResult(null);
+  }, [detailBaseline]);
+  const applyConnectionSelection = useCallback((connectionId: string) => {
+    setSelectedConnectionId(connectionId);
+    setDiagnostics(null);
+    setLastOperatorActionResult(null);
+  }, []);
+  const connectionSelectionGuard = useDraftTransitionGuard(detailDirty, applyConnectionSelection, resetConnectionDraft);
+
+  const resetCreateDraft = useCallback(() => {
+    setCreateLabel(createBaseline.label);
+    setCreateConfig(createBaseline.configText);
+    setCreateGuidedConfig(createBaseline.guidedConfig);
+  }, [createBaseline]);
+  const applyCreateCatalogSelection = useCallback((catalogId: string) => {
+    setCreateCatalogId(catalogId);
+    setCreateLabel("");
+    setCreateConfig("{}");
+    setCreateGuidedConfig({});
+    setCreateSchema(undefined);
+    setCreateBaseline({ catalogId, label: "", configText: "{}", guidedConfig: {} });
+  }, []);
+  const createCatalogGuard = useDraftTransitionGuard(createDirty, applyCreateCatalogSelection, resetCreateDraft);
 
   useEffect(() => {
     if (!createableCatalog.length) {
@@ -199,16 +267,32 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
 
   useEffect(() => {
     if (!selectedConnection) {
+      setDetailForm(EMPTY_INTEGRATION_DETAIL_DRAFT);
+      setDetailGuidedConfig({});
+      setDetailBaseline({
+        connectionId: "",
+        form: EMPTY_INTEGRATION_DETAIL_DRAFT,
+        guidedConfig: {},
+      });
       return;
     }
-    setDetailForm({
+    if (detailBaseline.connectionId === selectedConnection.connectionId && detailDirty) {
+      return;
+    }
+    const nextForm = {
       label: selectedConnection.label,
       enabled: selectedConnection.enabled,
       status: selectedConnection.status,
       configText: formatJson(selectedConnection.config),
-    });
+    };
+    setDetailForm(nextForm);
     setDetailGuidedConfig(selectedConnection.config);
-  }, [selectedConnection]);
+    setDetailBaseline({
+      connectionId: selectedConnection.connectionId,
+      form: nextForm,
+      guidedConfig: selectedConnection.config,
+    });
+  }, [detailBaseline.connectionId, detailDirty, selectedConnection]);
 
   useEffect(() => {
     if (!createCatalogId) {
@@ -220,9 +304,16 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
     void fetchIntegrationFormSchema(createCatalogId)
       .then((schema) => {
         if (!cancelled) {
+          const defaults = applyIntegrationDefaults(schema, {});
           setCreateSchema(schema);
-          setCreateGuidedConfig(applyIntegrationDefaults(schema, {}));
+          setCreateGuidedConfig(defaults);
           setCreateConfig("{}");
+          setCreateBaseline({
+            catalogId: createCatalogId,
+            label: "",
+            configText: "{}",
+            guidedConfig: defaults,
+          });
         }
       })
       .catch(() => {
@@ -245,7 +336,6 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
       .then((schema) => {
         if (!cancelled) {
           setDetailSchema(schema);
-          setDetailGuidedConfig((current) => applyIntegrationDefaults(schema, current));
         }
       })
       .catch(() => {
@@ -272,10 +362,19 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
       });
       setNotice({ tone: "success", message: `Connection ${created.label} created.` });
       await reload();
-      setSelectedConnectionId(created.connectionId);
+      if (!detailDirty) {
+        setSelectedConnectionId(created.connectionId);
+      }
+      const nextGuidedConfig = createSchema ? applyIntegrationDefaults(createSchema, {}) : {};
       setCreateLabel("");
       setCreateConfig("{}");
-      setCreateGuidedConfig(createSchema ? applyIntegrationDefaults(createSchema, {}) : {});
+      setCreateGuidedConfig(nextGuidedConfig);
+      setCreateBaseline({
+        catalogId: createCatalogId,
+        label: "",
+        configText: "{}",
+        guidedConfig: nextGuidedConfig,
+      });
     } catch (createError) {
       setNotice({ tone: "error", message: getErrorMessage(createError) });
     }
@@ -286,11 +385,24 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
       return;
     }
     try {
-      await updateIntegrationConnection(selectedConnection.connectionId, {
+      const updated = await updateIntegrationConnection(selectedConnection.connectionId, {
         label: detailForm.label.trim() || undefined,
         enabled: detailForm.enabled,
         status: detailForm.status as IntegrationConnection["status"],
         config: showDetailJson ? parseJsonObject(detailForm.configText, selectedConnection.config) : detailGuidedConfig,
+      });
+      const nextForm = {
+        label: updated.label,
+        enabled: updated.enabled,
+        status: updated.status,
+        configText: formatJson(updated.config),
+      };
+      setDetailForm(nextForm);
+      setDetailGuidedConfig(updated.config);
+      setDetailBaseline({
+        connectionId: updated.connectionId,
+        form: nextForm,
+        guidedConfig: updated.config,
       });
       setNotice({ tone: "success", message: "Connection updated." });
       await reload();
@@ -494,6 +606,7 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
         tone: "success",
         message: `OpenAI Realtime voice prepared for ${session.displayName ?? session.meetingUrl} with ${token.model} / ${token.voice}.`,
       });
+      setMeetBaseline(meetForm);
       await reload();
     } catch (meetError) {
       setNotice({ tone: "error", message: getErrorMessage(meetError) });
@@ -550,7 +663,12 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
                   <select
                     className="mc-next-settings-input"
                     value={createCatalogId}
-                    onChange={(event) => setCreateCatalogId(event.target.value)}
+                    onChange={(event) => {
+                      const catalogId = event.target.value;
+                      if (catalogId !== createCatalogId) {
+                        createCatalogGuard.requestTransition(catalogId);
+                      }
+                    }}
                     disabled={createableCatalog.length === 0}
                   >
                     <option value="" disabled>
@@ -634,9 +752,9 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
                 }))}
                 selectedId={selectedConnectionId}
                 onSelect={(connectionId) => {
-                  setSelectedConnectionId(connectionId);
-                  setDiagnostics(null);
-                  setLastOperatorActionResult(null);
+                  if (connectionId !== selectedConnectionId) {
+                    connectionSelectionGuard.requestTransition(connectionId);
+                  }
                 }}
                 emptyLabel="No integration connections yet."
                 maxHeight="min(36vh, 21rem)"
@@ -856,7 +974,7 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
                     description: item.description,
                     meta: `${item.kind} · ${item.maturity} · ${item.capabilities.length} capabilities`,
                     actionLabel: reviewOnly ? "Review-only" : createCatalogId === item.catalogId ? "Selected" : "Use",
-                    onClick: reviewOnly ? undefined : () => setCreateCatalogId(item.catalogId),
+                    onClick: reviewOnly ? undefined : () => createCatalogGuard.requestTransition(item.catalogId),
                   };
                 })}
                 emptyLabel="No integration catalog entries are available."
@@ -866,6 +984,26 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
           </NativeCard>
         </SettingsGrid>
       ) : null}
+      <ConfirmModal
+        open={connectionSelectionGuard.pendingTransition !== null}
+        danger
+        title="Discard integration changes?"
+        message="The selected integration has unsaved edits. Discard them and open another connection?"
+        confirmLabel="Discard changes"
+        cancelLabel="Keep editing"
+        onCancel={connectionSelectionGuard.cancelDiscard}
+        onConfirm={connectionSelectionGuard.confirmDiscard}
+      />
+      <ConfirmModal
+        open={createCatalogGuard.pendingTransition !== null}
+        danger
+        title="Discard new connection draft?"
+        message="The new integration connection has unsaved setup values. Discard them and choose another catalog entry?"
+        confirmLabel="Discard changes"
+        cancelLabel="Keep editing"
+        onCancel={createCatalogGuard.cancelDiscard}
+        onConfirm={createCatalogGuard.confirmDiscard}
+      />
       <ConfirmModal
         open={pendingDeleteConnection !== null}
         danger
@@ -887,4 +1025,8 @@ function isGoogleMeetBrowserTransportReady(): boolean {
     typeof navigator !== "undefined" &&
     typeof navigator.mediaDevices?.getUserMedia === "function"
   );
+}
+
+function areIntegrationValuesEqual(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }

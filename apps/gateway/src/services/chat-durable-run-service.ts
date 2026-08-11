@@ -12,7 +12,13 @@ import type {
   DurableRunStatus,
   DurableRunTimelineEvent,
 } from "@goatcitadel/contracts";
-import { canonicalJsonString, isDurableRunTerminal, NotFoundError } from "@goatcitadel/contracts";
+import {
+  buildRemoteWorkerAssignmentParentContext,
+  canonicalJsonString,
+  isDurableRunTerminal,
+  NotFoundError,
+  remoteWorkerAssignmentParentContextSha256,
+} from "@goatcitadel/contracts";
 import {
   type PostCommitChildAdmissionIdentity,
   type PostCommitEligibility,
@@ -449,6 +455,19 @@ export async function beginDurableChatRun(
       deps.buildDurablePayloadRecord(prepared, input, threadEventType, runId),
       routedContextSnapshot,
     );
+    const remoteWorkerParentContextInput =
+      input.policyTaskId && prepared.turnAdmission
+        ? {
+            executionWorkspaceId: prepared.turnAdmission.identity.workspaceId,
+            durableRunId: runId,
+            taskId: input.policyTaskId,
+            sessionId: prepared.turnAdmission.identity.sessionId,
+            turnId: prepared.turnAdmission.identity.turnId,
+          }
+        : undefined;
+    const remoteWorkerParentContext = remoteWorkerParentContextInput
+      ? buildRemoteWorkerAssignmentParentContext(remoteWorkerParentContextInput)
+      : undefined;
     run = await deps.createDurableRun({
       runId,
       workflowKey: "chat.turn.execute",
@@ -457,6 +476,13 @@ export async function beginDurableChatRun(
         surface: mode,
         autoPromoted: mode === "chat",
         objective: prepared.content,
+        ...(remoteWorkerParentContext && remoteWorkerParentContextInput
+          ? {
+              remoteWorkerAssignmentParentContext: remoteWorkerParentContext,
+              remoteWorkerAssignmentParentContextSha256:
+                remoteWorkerAssignmentParentContextSha256(remoteWorkerParentContextInput),
+            }
+          : {}),
         ...(prepared.capabilityProfile
           ? {
               capabilityProfileId: prepared.capabilityProfile.profileId,

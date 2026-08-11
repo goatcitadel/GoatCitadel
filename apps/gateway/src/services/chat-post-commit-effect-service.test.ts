@@ -2,10 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CommitmentClassification } from "@goatcitadel/contracts";
+import { PolicyViolationError, type CommitmentClassification } from "@goatcitadel/contracts";
 import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import type { BackgroundReviewService } from "./background-review-service.js";
 import {
+  buildBackgroundReviewCounterSettingKey,
   ChatPostCommitEffectService,
   type ChatPostCommitEffectAuthorityPort,
   type ChatPostCommitEffectServiceDeps,
@@ -304,10 +305,10 @@ describe("ChatPostCommitEffectService D3 authority and safe disposition", () => 
     expect(currentMetaRead).not.toHaveBeenCalled();
   });
 
-  it("records only stable background evidence and calls no profile, skill, or filesystem mutation port", async () => {
+  it("files operator facts with the governed review owner while keeping durable receipts content-free", async () => {
     const storage = createStorage();
     seedEffectRun(storage, "effect-background", "background_review", "worker-current");
-    storage.systemSettings.set("background_review_turns_since_v1", 4);
+    storage.systemSettings.set(buildBackgroundReviewCounterSettingKey("workspace-1"), 4);
     const legacyMutationCalls = {
       recordMemoryFacts: vi.fn(),
       prepareSuggestedSkillMutation: vi.fn(),
@@ -317,7 +318,7 @@ describe("ChatPostCommitEffectService D3 authority and safe disposition", () => 
     };
     const backgroundReview = {
       extractTurnMemoryFacts: vi.fn(async () => [
-        { kind: "preference" as const, content: "RAW teal preference must remain response-local", confidence: 0.95 },
+        { kind: "preference" as const, content: "The operator prefers teal accents.", confidence: 0.95 },
       ]),
       suggestTurnSkill: vi.fn(async () => ({
         shouldAuthor: true,
@@ -325,10 +326,12 @@ describe("ChatPostCommitEffectService D3 authority and safe disposition", () => 
       })),
       ...legacyMutationCalls,
     } as unknown as BackgroundReviewService;
+    const proposeTraceMemoryCandidate = vi.fn(async () => ({ candidateId: "trace-review-1" }));
     const service = createService(storage, {
       authority: authorityHarness([], { readDurableRunVersion: (runId) => storage.durableRuns.getRun(runId).version })
         .port,
       backgroundReview,
+      proposeTraceMemoryCandidate,
     });
 
     const result = await service.execute(backgroundInput(), context("effect-background", "worker-current"));
@@ -336,26 +339,196 @@ describe("ChatPostCommitEffectService D3 authority and safe disposition", () => 
     expect(result).toMatchObject({
       status: "evidence_recorded",
       memoryFactCount: 1,
+      memoryReviewCandidateCount: 1,
+      memoryReviewCandidateIds: ["trace-review-1"],
       skillProposed: true,
-      promotionDisposition: "governed_review_required",
+      promotionDisposition: "governed_trace_candidate_review_required",
     });
     expect(result.memoryEvidenceFingerprints).toEqual([expect.stringMatching(/^[a-f0-9]{64}$/)]);
     expect(result.skillEvidenceFingerprint).toEqual(expect.stringMatching(/^[a-f0-9]{64}$/));
+    expect(proposeTraceMemoryCandidate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: "workspace-1",
+        sourceSessionId: "session-1",
+        sourceTurnId: "turn-1",
+        proposedInsight: "The operator prefers teal accents.",
+        candidateType: "operator_preference",
+        metadata: expect.objectContaining({
+          operatorProfileReviewCandidate: true,
+          operatorProfileFactKind: "preference",
+        }),
+      }),
+      "background-reviewer",
+      "agent_proposed",
+    );
     for (const call of Object.values(legacyMutationCalls)) {
       expect(call).not.toHaveBeenCalled();
     }
     expect(storage.skillLifecycle.list()).toEqual([]);
     const metadataText = JSON.stringify(storage.durableRuns.getRun("effect-background").metadata);
-    expect(metadataText).not.toContain("RAW teal preference");
+    expect(metadataText).not.toContain("The operator prefers teal accents.");
     expect(metadataText).not.toContain("RAW reusable CSV procedure");
     expect(metadataText).not.toContain("skillMarkdown");
     expect(metadataText).not.toContain("PreparedSkillMutationPlan");
   });
 
+  it("runs the first eligible review per workspace, then returns to the five-turn cadence", async () => {
+    const storage = createStorage();
+    const extractTurnMemoryFacts = vi.fn(async () => [
+      { kind: "goal" as const, content: "The operator wants concise release proof.", confidence: 0.9 },
+    ]);
+    let candidateSequence = 0;
+    const proposeTraceMemoryCandidate = vi.fn(async (_input) => ({
+      candidateId: `trace-review-${++candidateSequence}`,
+    }));
+    const service = createService(storage, {
+      authority: authorityHarness([], { readDurableRunVersion: (runId) => storage.durableRuns.getRun(runId).version })
+        .port,
+      backgroundReview: {
+        extractTurnMemoryFacts,
+        suggestTurnSkill: vi.fn(async () => ({ shouldAuthor: false })),
+      } as unknown as BackgroundReviewService,
+      proposeTraceMemoryCandidate,
+    });
+
+    seedEffectRun(storage, "effect-warm-workspace-1", "background_review", "worker-current");
+    await expect(
+      service.execute(backgroundInput(), context("effect-warm-workspace-1", "worker-current")),
+    ).resolves.toMatchObject({ status: "evidence_recorded", memoryReviewCandidateCount: 1 });
+
+    seedEffectRun(storage, "effect-second-workspace-1", "background_review", "worker-current");
+    await expect(
+      service.execute(backgroundInput(), context("effect-second-workspace-1", "worker-current")),
+    ).resolves.toMatchObject({ status: "skipped", reason: "counter_not_due" });
+
+    seedEffectRun(storage, "effect-warm-workspace-2", "background_review", "worker-current");
+    const workspaceTwoInput = { ...backgroundInput(), workspaceId: "workspace-2" };
+    await expect(
+      service.execute(
+        workspaceTwoInput,
+        context("effect-warm-workspace-2", "worker-current", { workspaceId: "workspace-2" }),
+      ),
+    ).resolves.toMatchObject({ status: "evidence_recorded", memoryReviewCandidateCount: 1 });
+
+    expect(extractTurnMemoryFacts).toHaveBeenCalledTimes(2);
+    expect(proposeTraceMemoryCandidate).toHaveBeenCalledTimes(2);
+    expect(storage.systemSettings.get<number>(buildBackgroundReviewCounterSettingKey("workspace-1"))?.value).toBe(1);
+    expect(storage.systemSettings.get<number>(buildBackgroundReviewCounterSettingKey("workspace-2"))?.value).toBe(0);
+    expect(buildBackgroundReviewCounterSettingKey("workspace-1")).not.toContain("workspace-1");
+  });
+
+  it("records a governed rejection without leaking or directly applying the proposed fact", async () => {
+    const storage = createStorage();
+    seedEffectRun(storage, "effect-policy-rejection", "background_review", "worker-current");
+    const service = createService(storage, {
+      authority: authorityHarness([], { readDurableRunVersion: (runId) => storage.durableRuns.getRun(runId).version })
+        .port,
+      backgroundReview: {
+        extractTurnMemoryFacts: vi.fn(async () => [
+          { kind: "constraint" as const, content: "Sensitive candidate text.", confidence: 0.9 },
+        ]),
+        suggestTurnSkill: vi.fn(async () => ({ shouldAuthor: false })),
+      } as unknown as BackgroundReviewService,
+      proposeTraceMemoryCandidate: vi.fn(async () => {
+        throw new PolicyViolationError({ message: "candidate blocked" });
+      }),
+    });
+
+    const result = await service.execute(backgroundInput(), context("effect-policy-rejection", "worker-current"));
+
+    expect(result).toMatchObject({
+      status: "evidence_recorded",
+      memoryReviewCandidateCount: 0,
+      memoryReviewCandidateIds: [],
+      memoryReviewCandidateRejectedCount: 1,
+    });
+    expect(JSON.stringify(storage.durableRuns.getRun("effect-policy-rejection").metadata)).not.toContain(
+      "Sensitive candidate text.",
+    );
+    expect(storage.operatorProfiles.getByWorkspace("workspace-1")).toBeUndefined();
+  });
+
+  it("does not review delegated, autonomous, eval, or system turns", async () => {
+    const storage = createStorage();
+    const extractTurnMemoryFacts = vi.fn(async () => [
+      { kind: "fact" as const, content: "This must never be proposed.", confidence: 0.95 },
+    ]);
+    const proposeTraceMemoryCandidate = vi.fn(async () => ({ candidateId: "must-not-exist" }));
+    const service = createService(storage, {
+      authority: authorityHarness([], { readDurableRunVersion: (runId) => storage.durableRuns.getRun(runId).version })
+        .port,
+      backgroundReview: {
+        extractTurnMemoryFacts,
+        suggestTurnSkill: vi.fn(async () => ({ shouldAuthor: false })),
+      } as unknown as BackgroundReviewService,
+      proposeTraceMemoryCandidate,
+    });
+    const cases = [
+      {
+        runId: "effect-delegated",
+        workspaceId: "workspace-delegated",
+        input: { delegatedChild: true },
+        eligibility: frozenEligibility(),
+        reason: "delegated_child",
+      },
+      {
+        runId: "effect-autonomous",
+        workspaceId: "workspace-autonomous",
+        input: { autonomous: true },
+        eligibility: frozenEligibility(),
+        reason: "autonomous_turn",
+      },
+      {
+        runId: "effect-eval",
+        workspaceId: "workspace-eval",
+        input: {},
+        eligibility: { ...frozenEligibility(), evalIntegrityTurn: true },
+        reason: "eval_integrity",
+      },
+      {
+        runId: "effect-system",
+        workspaceId: "workspace-system",
+        input: {},
+        eligibility: { ...frozenEligibility(), humanSession: false },
+        reason: "non_human_session",
+      },
+      {
+        runId: "effect-autonomy-disabled",
+        workspaceId: "workspace-autonomy-disabled",
+        input: {},
+        eligibility: { ...frozenEligibility(), autonomyEnabledAtParentSettlement: false },
+        reason: "autonomy_disabled",
+      },
+    ] as const;
+
+    for (const item of cases) {
+      seedEffectRun(storage, item.runId, "background_review", "worker-current");
+      const input = {
+        ...backgroundInput(),
+        ...item.input,
+        workspaceId: item.workspaceId,
+        postCommitEligibility: item.eligibility,
+      };
+      await expect(
+        service.execute(
+          input,
+          context(item.runId, "worker-current", {
+            workspaceId: item.workspaceId,
+            eligibility: item.eligibility,
+          }),
+        ),
+      ).resolves.toMatchObject({ status: "skipped", reason: item.reason });
+      expect(storage.systemSettings.get(buildBackgroundReviewCounterSettingKey(item.workspaceId))).toBeUndefined();
+    }
+
+    expect(extractTurnMemoryFacts).not.toHaveBeenCalled();
+    expect(proposeTraceMemoryCandidate).not.toHaveBeenCalled();
+  });
+
   it("retries idempotent retained evidence after an asynchronous publication failure", async () => {
     const storage = createStorage();
     seedEffectRun(storage, "effect-background-realtime-retry", "background_review", "worker-current");
-    storage.systemSettings.set("background_review_turns_since_v1", 4);
+    storage.systemSettings.set(buildBackgroundReviewCounterSettingKey("workspace-1"), 4);
     const publishRealtime = vi
       .fn()
       .mockRejectedValueOnce(new Error("retained realtime unavailable"))
@@ -377,7 +550,7 @@ describe("ChatPostCommitEffectService D3 authority and safe disposition", () => 
   it("replays an allowed background counter without re-guarding and terminalizes only the evidence stage", async () => {
     const storage = createStorage();
     seedEffectRun(storage, "effect-background-counter-replay", "background_review", "worker-current");
-    storage.systemSettings.set("background_review_turns_since_v1", 4);
+    storage.systemSettings.set(buildBackgroundReviewCounterSettingKey("workspace-1"), 4);
     const events: string[] = [];
     const authority = authorityHarness(events, {
       readDurableRunVersion: (runId) => storage.durableRuns.getRun(runId).version,
@@ -403,13 +576,13 @@ describe("ChatPostCommitEffectService D3 authority and safe disposition", () => 
       { stage: "background_evidence", terminal: true },
     ]);
     expect(events).toEqual(["predispatch", "guard", "retain:active", "predispatch", "guard", "settle:completed"]);
-    expect(storage.systemSettings.get<number>("background_review_turns_since_v1")?.value).toBe(0);
+    expect(storage.systemSettings.get<number>(buildBackgroundReviewCounterSettingKey("workspace-1"))?.value).toBe(0);
   });
 
   it("treats a late background counter receipt as terminal and never re-enters the cancelled admission", async () => {
     const storage = createStorage();
     seedEffectRun(storage, "effect-background-counter-late", "background_review", "worker-current");
-    storage.systemSettings.set("background_review_turns_since_v1", 4);
+    storage.systemSettings.set(buildBackgroundReviewCounterSettingKey("workspace-1"), 4);
     const events: string[] = [];
     const authority = authorityHarness(events, { atomic: "late_blocked" });
     const extractTurnMemoryFacts = vi.fn(async () => []);
@@ -554,6 +727,7 @@ function createService(
     authority?: ChatPostCommitEffectAuthorityPort;
     commitmentClassifier?: CommitmentClassifierService;
     backgroundReview?: BackgroundReviewService;
+    proposeTraceMemoryCandidate?: ChatPostCommitEffectServiceDeps["proposeTraceMemoryCandidate"];
     isAutonomyDisabled?: () => boolean;
     publishRealtime?: ChatPostCommitEffectServiceDeps["publishRealtime"];
     legacyMemoryMaintenance?: ReturnType<typeof vi.fn>;
@@ -574,6 +748,8 @@ function createService(
         extractTurnMemoryFacts: vi.fn(async () => []),
         suggestTurnSkill: vi.fn(async () => ({ shouldAuthor: false })),
       } as unknown as BackgroundReviewService),
+    proposeTraceMemoryCandidate:
+      overrides.proposeTraceMemoryCandidate ?? vi.fn(async (_input) => ({ candidateId: "trace-review-default" })),
     ...(overrides.authority ? { effectAuthority: overrides.authority } : {}),
     ...(!overrides.authority ? { allowUnfencedForTests: true as const } : {}),
     isAutonomyDisabled: async () => overrides.isAutonomyDisabled?.() ?? false,
@@ -636,24 +812,45 @@ function authorityHarness(
   };
 }
 
-function context(effectRunId: string, leaseOwnerId: string) {
+function context(
+  effectRunId: string,
+  leaseOwnerId: string,
+  options: {
+    workspaceId?: string;
+    sessionId?: string;
+    turnId?: string;
+    eligibility?: ReturnType<typeof frozenEligibility>;
+  } = {},
+) {
   return {
     effectRunId,
     leaseOwnerId,
     parentRunId: "parent-1",
     generationId: "generation-1",
-    postCommitAuthority: authorityContext(effectRunId, leaseOwnerId),
+    postCommitAuthority: authorityContext(effectRunId, leaseOwnerId, options),
   };
 }
 
-function authorityContext(effectRunId: string, leaseOwnerId: string): ChatPostCommitEffectAuthorityContext {
+function authorityContext(
+  effectRunId: string,
+  leaseOwnerId: string,
+  options: {
+    workspaceId?: string;
+    sessionId?: string;
+    turnId?: string;
+    eligibility?: ReturnType<typeof frozenEligibility>;
+  } = {},
+): ChatPostCommitEffectAuthorityContext {
+  const workspaceId = options.workspaceId ?? "workspace-1";
+  const sessionId = options.sessionId ?? "session-1";
+  const turnId = options.turnId ?? "turn-1";
   return {
     parent: {
       admissionId: "parent-admission-1",
       sessionIncarnationId: "parent-incarnation-1",
-      workspaceId: "workspace-1",
-      sessionId: "session-1",
-      turnId: "turn-1",
+      workspaceId,
+      sessionId,
+      turnId,
       aggregateRevision: 1,
       controllerGeneration: 1,
       materialSha256: "a".repeat(64),
@@ -661,8 +858,8 @@ function authorityContext(effectRunId: string, leaseOwnerId: string): ChatPostCo
     child: {
       admissionId: `child-admission-${effectRunId}`,
       sessionIncarnationId: "parent-incarnation-1",
-      workspaceId: "workspace-1",
-      sessionId: "session-1",
+      workspaceId,
+      sessionId,
       aggregateRevision: 1,
       controllerGeneration: 1,
       actorKind: "operator",
@@ -671,7 +868,7 @@ function authorityContext(effectRunId: string, leaseOwnerId: string): ChatPostCo
       materialSha256: "b".repeat(64),
     },
     childDurableClaim: { durableRunId: effectRunId, leaseOwnerId, attemptCount: 1 },
-    postCommitEligibility: frozenEligibility(),
+    postCommitEligibility: options.eligibility ?? frozenEligibility(),
   };
 }
 

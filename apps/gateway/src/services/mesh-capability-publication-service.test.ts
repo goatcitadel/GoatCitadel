@@ -204,6 +204,7 @@ describe("MeshCapabilityPublicationService node authentication", () => {
       admissionGeneration: 1,
       mtlsRequired: true,
       tlsFingerprint: "sha256:node-a",
+      provenance: "legacy",
     });
   });
 

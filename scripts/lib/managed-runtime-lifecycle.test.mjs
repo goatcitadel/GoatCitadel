@@ -10,9 +10,12 @@ import { fileURLToPath } from "node:url";
 import {
   atomicCompareAndPublishJson,
   atomicCompareAndRemove,
+  inspectLifecycleLockHolder,
   inspectProcessBinding,
+  inspectProcessBindingWithRetry,
   queryProcessCreationIdentity,
   readManagedStateFile,
+  withManagedLifecycleLock,
 } from "./managed-runtime-lifecycle.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -118,6 +121,189 @@ test("a dead lock owner is recovered after the bounded stale heartbeat window", 
   }
 });
 
+test("a live lock owner with a starved heartbeat is never reclaimed", async () => {
+  const fixtureRoot = createFixtureRoot();
+  try {
+    const lockPath = path.join(fixtureRoot, "gateway.lifecycle.lock");
+    const identity = queryProcessCreationIdentity(process.pid);
+    assert.equal(identity.status, "running");
+    const owner = buildLockOwnerFixture({ processIdentity: identity.identity });
+    writeLockOwnerFixture(lockPath, owner);
+
+    await assert.rejects(
+      withManagedLifecycleLock(
+        { lockPath, service: "gateway-fixture", timeoutMs: 750, staleHeartbeatMs: 100 },
+        async () => {
+          throw new Error("The lifecycle lock must not be stolen from a live owner.");
+        },
+      ),
+      /Timed out waiting for the gateway-fixture lifecycle lock held by PID/u,
+    );
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(lockPath, "owner.json"), "utf8")), owner);
+  } finally {
+    removeFixtureRoot(fixtureRoot);
+  }
+});
+
+test("a transiently unreadable lock owner record does not authorize reclaim", async () => {
+  const fixtureRoot = createFixtureRoot();
+  try {
+    const lockPath = path.join(fixtureRoot, "gateway.lifecycle.lock");
+    fs.mkdirSync(path.join(lockPath, "owner.json"), { recursive: true });
+    const staleMtime = new Date(Date.now() - 60_000);
+    fs.utimesSync(lockPath, staleMtime, staleMtime);
+
+    await assert.rejects(
+      withManagedLifecycleLock(
+        { lockPath, service: "gateway-fixture", timeoutMs: 600, staleHeartbeatMs: 100 },
+        async () => {
+          throw new Error("An unreadable owner record must not be treated as a dead owner.");
+        },
+      ),
+      /Timed out waiting for the gateway-fixture lifecycle lock/u,
+    );
+    assert.equal(fs.existsSync(path.join(lockPath, "owner.json")), true);
+  } finally {
+    removeFixtureRoot(fixtureRoot);
+  }
+});
+
+test("a dead lock owner is reclaimed without waiting on identity probes", async () => {
+  const fixtureRoot = createFixtureRoot();
+  try {
+    const exited = spawn(process.execPath, ["-e", ""], { windowsHide: true, stdio: "ignore" });
+    const exitedPid = await new Promise((resolve, reject) => {
+      exited.once("error", reject);
+      exited.once("close", () => resolve(exited.pid));
+    });
+    assert.ok(exitedPid);
+    const lockPath = path.join(fixtureRoot, "gateway.lifecycle.lock");
+    writeLockOwnerFixture(lockPath, buildLockOwnerFixture({ pid: exitedPid }));
+
+    const outcome = await withManagedLifecycleLock(
+      { lockPath, service: "gateway-fixture", timeoutMs: 5_000, staleHeartbeatMs: 100 },
+      async (lock) => lock.owner.pid,
+    );
+    assert.equal(outcome, process.pid);
+  } finally {
+    removeFixtureRoot(fixtureRoot);
+  }
+});
+
+test("a recorded owner whose PID now belongs to another process is reclaimed", async () => {
+  const fixtureRoot = createFixtureRoot();
+  try {
+    const lockPath = path.join(fixtureRoot, "gateway.lifecycle.lock");
+    writeLockOwnerFixture(lockPath, buildLockOwnerFixture({ pid: process.pid, processIdentity: "windows:1" }));
+    const outcome = await withManagedLifecycleLock(
+      { lockPath, service: "gateway-fixture", timeoutMs: 5_000, staleHeartbeatMs: 100 },
+      async () => "acquired",
+    );
+    assert.equal(outcome, "acquired");
+  } finally {
+    removeFixtureRoot(fixtureRoot);
+  }
+});
+
+test("lifecycle lock holder inspection reports only a live non-self owner of the same service", async () => {
+  const fixtureRoot = createFixtureRoot();
+  const sentinel = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    windowsHide: true,
+    stdio: "ignore",
+  });
+  try {
+    await new Promise((resolve, reject) => {
+      sentinel.once("spawn", resolve);
+      sentinel.once("error", reject);
+    });
+    assert.ok(sentinel.pid);
+    const sentinelIdentity = queryProcessCreationIdentity(sentinel.pid);
+    assert.equal(sentinelIdentity.status, "running");
+    const lockPath = path.join(fixtureRoot, "gateway.lifecycle.lock");
+
+    assert.equal((await inspectLifecycleLockHolder({ lockPath, service: "gateway-fixture" })).held, false);
+
+    const owner = buildLockOwnerFixture({ pid: sentinel.pid, processIdentity: sentinelIdentity.identity });
+    writeLockOwnerFixture(lockPath, owner);
+    assert.deepEqual(await inspectLifecycleLockHolder({ lockPath, service: "other-service" }), {
+      held: false,
+      reason: "service_mismatch",
+      pid: sentinel.pid,
+    });
+    const held = await inspectLifecycleLockHolder({ lockPath, service: "gateway-fixture" });
+    assert.equal(held.held, true);
+    assert.match(held.reason, /^owner_(identity_verified|alive_identity_unverified)$/u);
+
+    writeLockOwnerFixture(lockPath, buildLockOwnerFixture({ pid: process.pid }));
+    assert.equal((await inspectLifecycleLockHolder({ lockPath, service: "gateway-fixture" })).reason, "self_owned");
+
+    const closed = new Promise((resolve) => sentinel.once("close", resolve));
+    sentinel.kill("SIGKILL");
+    await closed;
+    writeLockOwnerFixture(lockPath, owner);
+    assert.deepEqual(await inspectLifecycleLockHolder({ lockPath, service: "gateway-fixture" }), {
+      held: false,
+      reason: "owner_exited",
+      pid: sentinel.pid,
+    });
+  } finally {
+    if (sentinel.exitCode === null && sentinel.signalCode === null) {
+      sentinel.kill("SIGKILL");
+    }
+    removeFixtureRoot(fixtureRoot);
+  }
+});
+
+test("process binding retry re-queries only unavailable readings within its bound", async () => {
+  const readings = [
+    { status: "unavailable" },
+    { status: "verified", rootIdentity: "windows:1", servingIdentity: "windows:1", depth: 0 },
+  ];
+  const calls = [];
+  const recovered = await inspectProcessBindingWithRetry(
+    { rootPid: 41, servingPid: 41 },
+    {
+      delayMs: 1,
+      probe: (options) => {
+        calls.push(options);
+        return readings[Math.min(calls.length - 1, readings.length - 1)];
+      },
+    },
+  );
+  assert.equal(recovered.status, "verified");
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[0], { rootPid: 41, servingPid: 41 });
+
+  calls.length = 0;
+  const exhausted = await inspectProcessBindingWithRetry(
+    { rootPid: 41, servingPid: 41 },
+    {
+      attempts: 3,
+      delayMs: 1,
+      probe: (options) => {
+        calls.push(options);
+        return { status: "unavailable" };
+      },
+    },
+  );
+  assert.equal(exhausted.status, "unavailable");
+  assert.equal(calls.length, 3);
+
+  calls.length = 0;
+  const immediate = await inspectProcessBindingWithRetry(
+    { rootPid: 41, servingPid: 41 },
+    {
+      delayMs: 1,
+      probe: (options) => {
+        calls.push(options);
+        return { status: "missing" };
+      },
+    },
+  );
+  assert.equal(immediate.status, "missing");
+  assert.equal(calls.length, 1);
+});
+
 test("OS creation identity binds a serving descendant to its live wrapper only", async () => {
   const descendantCode = "setInterval(() => {}, 1000)";
   const wrapperCode = [
@@ -170,7 +356,7 @@ test("Vite strictPort rejects a TCP-only listener without replacing it", async (
       [viteCliPath, "--host", "127.0.0.1", "--port", String(address.port), "--strictPort"],
       {
         cwd: path.join(repoRoot, "apps", "mission-control-next"),
-        timeoutMs: 15_000,
+        timeoutMs: 60_000,
       },
     );
     assert.notEqual(result.code, 0, result.stdout || result.stderr);
@@ -323,4 +509,21 @@ function removeFixtureRoot(root) {
   const expectedPrefix = `${path.resolve(os.tmpdir())}${path.sep}goatcitadel-managed-lifecycle-`;
   assert.ok(resolved.startsWith(expectedPrefix));
   fs.rmSync(resolved, { recursive: true, force: true });
+}
+
+function buildLockOwnerFixture(overrides = {}) {
+  return {
+    lockId: "11111111-2222-4333-8444-555555555555",
+    pid: process.pid,
+    processIdentity: "windows:1",
+    service: "gateway-fixture",
+    createdAt: new Date(Date.now() - 60_000).toISOString(),
+    heartbeatAt: new Date(Date.now() - 60_000).toISOString(),
+    ...overrides,
+  };
+}
+
+function writeLockOwnerFixture(lockPath, owner) {
+  fs.mkdirSync(lockPath, { recursive: true });
+  fs.writeFileSync(path.join(lockPath, "owner.json"), `${JSON.stringify(owner)}\n`, "utf8");
 }

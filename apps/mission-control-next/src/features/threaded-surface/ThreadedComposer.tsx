@@ -145,9 +145,10 @@ function useComposerV2Enabled(): boolean {
     if (typeof window === "undefined" || typeof window.addEventListener !== "function") {
       return;
     }
+    const eventTarget = window;
     const handle = () => setEnabled(readComposerV2());
-    window.addEventListener("storage", handle);
-    return () => window.removeEventListener("storage", handle);
+    eventTarget.addEventListener("storage", handle);
+    return () => eventTarget.removeEventListener("storage", handle);
   }, []);
   return enabled;
 }
@@ -316,20 +317,6 @@ function ComposerBlockingPrompt({ props }: { props: MissionThreadedActiveSession
   }
 
   return null;
-}
-
-function ComposerBlockedActionState({ props }: { props: MissionThreadedActiveSessionSurfaceProps }) {
-  const kind = props.pendingApproval ? "Approval needed" : "Input needed";
-  const detail = props.pendingApproval
-    ? "Resolve the approval before sending another instruction. The Work Record keeps the proof trail available."
-    : "Answer the requested follow-up before this thread can continue.";
-
-  return (
-    <div className="mc-next-composer-blocked-actions" role="status" aria-live="polite">
-      <StatusChip tone="warning">{kind}</StatusChip>
-      <p>{detail}</p>
-    </div>
-  );
 }
 
 const COWORK_STOP_STATE_ONLY_NOTE =
@@ -636,12 +623,13 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
   useEffect(() => {
     const palette = props.composerPalette;
     if (!palette?.enabled || typeof window === "undefined") return;
+    const eventTarget = window;
     const handlePaletteRequest = (event: Event) => {
       event.preventDefault();
       palette.onOpen();
     };
-    window.addEventListener(OPEN_CHAT_COMPOSER_PALETTE_EVENT, handlePaletteRequest);
-    return () => window.removeEventListener(OPEN_CHAT_COMPOSER_PALETTE_EVENT, handlePaletteRequest);
+    eventTarget.addEventListener(OPEN_CHAT_COMPOSER_PALETTE_EVENT, handlePaletteRequest);
+    return () => eventTarget.removeEventListener(OPEN_CHAT_COMPOSER_PALETTE_EVENT, handlePaletteRequest);
   }, [props.composerPalette]);
   useEffect(() => {
     if (props.composerPalette?.globalOpen) paletteSearchRef.current?.focus();
@@ -987,9 +975,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
         </div>
       </div>
 
-      {runtimeBlockerActive ? (
-        <ComposerBlockedActionState props={props} />
-      ) : (
+      {!runtimeBlockerActive ? (
         <div className="mc-next-composer-suggestion-row" aria-label="Composer send options">
           <button
             type="button"
@@ -1046,7 +1032,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
             Attach context
           </button>
         </div>
-      )}
+      ) : null}
 
       {props.selectedTurnRecovery ? (
         <div className="mc-next-composer-banner warning">

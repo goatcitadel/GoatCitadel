@@ -1,11 +1,30 @@
 /* eslint-disable no-console */
 import { createElement, type ReactNode } from "react";
 import type { ReactTestRenderer } from "react-test-renderer";
-import { beforeEach, vi } from "vitest";
+import { afterEach, beforeEach, vi } from "vitest";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const originalConsoleError = console.error.bind(console);
+const activeTestRenderers = new Set<ReactTestRenderer>();
+
+export function cleanupTestRenderers(renderers: Set<Pick<ReactTestRenderer, "unmount">>): void {
+  let cleanupError: unknown;
+  try {
+    for (const renderer of [...renderers]) {
+      try {
+        renderer.unmount();
+      } catch (error) {
+        cleanupError ??= error;
+      }
+    }
+  } finally {
+    renderers.clear();
+  }
+  if (cleanupError) {
+    throw cleanupError;
+  }
+}
 
 console.error = ((...args: unknown[]) => {
   const [firstArg] = args;
@@ -88,6 +107,7 @@ vi.mock("react-test-renderer", async () => {
   const actualWithDefault = actual as typeof actual & { default?: Record<string, unknown> };
 
   const wrapRenderer = (renderer: ReactTestRenderer): ReactTestRenderer => {
+    activeTestRenderers.add(renderer);
     const originalUpdate = renderer.update.bind(renderer);
     renderer.update = ((...args: Parameters<typeof originalUpdate>) => {
       let result: ReturnType<typeof originalUpdate>;
@@ -99,11 +119,15 @@ vi.mock("react-test-renderer", async () => {
 
     const originalUnmount = renderer.unmount.bind(renderer);
     renderer.unmount = (() => {
-      let result: ReturnType<typeof originalUnmount>;
-      actual.act(() => {
-        result = originalUnmount();
-      });
-      return result!;
+      try {
+        let result: ReturnType<typeof originalUnmount>;
+        actual.act(() => {
+          result = originalUnmount();
+        });
+        return result!;
+      } finally {
+        activeTestRenderers.delete(renderer);
+      }
     }) as typeof renderer.unmount;
 
     return renderer;
@@ -130,4 +154,11 @@ vi.mock("react-test-renderer", async () => {
   }
 
   return mockedModule;
+});
+
+afterEach(() => {
+  // A mounted renderer can retain polling effects and report React warnings
+  // after Vitest begins closing the worker console channel. Tests may still
+  // unmount explicitly; this closes only renderers they leave behind.
+  cleanupTestRenderers(activeTestRenderers);
 });

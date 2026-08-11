@@ -115,7 +115,7 @@ export async function registerChatCompactionBreakerActionRoutes(
         return reply;
       }
       try {
-        return reply.send({ action: service.inspectAction({ ...params.data, actorId }) });
+        return reply.send({ action: await service.inspectAction({ ...params.data, actorId }) });
       } catch (error) {
         return sendServiceError(reply, error);
       }
@@ -135,7 +135,7 @@ export async function registerChatCompactionBreakerActionRoutes(
         return reply;
       }
       try {
-        return reply.send(service.repair({ ...params.data, actorId }));
+        return reply.send(await service.repair({ ...params.data, actorId }));
       } catch (error) {
         return sendServiceError(reply, error);
       }

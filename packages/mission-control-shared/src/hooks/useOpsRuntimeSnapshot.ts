@@ -84,6 +84,18 @@ export function useOpsRuntimeSnapshot(activeSection = "activity") {
   const commitData = useCallback((next: RuntimeSnapshotData) => {
     dataRef.current = next;
     setData(next);
+    // Any committed snapshot — from the initial mount load OR a poll/refresh
+    // reload — means the route now has data and is no longer in its initial
+    // loading state. `loading` is only ever set true by the mount effect and is
+    // cleared in that effect's `.finally`, but that clear is guarded by
+    // `loadSequenceRef`: a poll `reload()` firing before the initial load
+    // resolves bumps the ref and masks the mount `.finally`, while `reload()`
+    // itself never touches `loading`. That left `NativePageFrame` stuck on
+    // "Loading current route data…" forever even though `data` was present (the
+    // hero lead rendered from `data` while the section body never did). Clearing
+    // loading here, the single data choke point, makes the loader reflect data
+    // availability regardless of how mount and reload interleave.
+    setLoading(false);
   }, []);
 
   const load = useCallback(

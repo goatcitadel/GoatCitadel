@@ -16,6 +16,14 @@ function createRecord(input: RuntimeDecisionTraceAppendInput): RuntimeDecisionTr
   };
 }
 
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve = (): void => undefined;
+  const promise = new Promise<void>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve };
+}
+
 describe("RuntimeDecisionRecorder", () => {
   it("appends compact decision records through the storage spine", async () => {
     const append = vi.fn((input: RuntimeDecisionTraceAppendInput) => createRecord(input));
@@ -82,6 +90,100 @@ describe("RuntimeDecisionRecorder", () => {
         rationale: "The canonical approval transaction already committed.",
       }),
     ).resolves.toBeUndefined();
+  });
+
+  it("queues advisory decisions in order without making the caller await storage", async () => {
+    const firstAppend = deferred();
+    const appendOrder: string[] = [];
+    const ownedTasks: Promise<void>[] = [];
+    const append = vi.fn(async (input: RuntimeDecisionTraceAppendInput) => {
+      appendOrder.push(input.decisionId ?? "missing");
+      if (input.decisionId === "decision-1") {
+        await firstAppend.promise;
+      }
+      return createRecord(input);
+    });
+    const recorder = new RuntimeDecisionRecorder({
+      runtimeDecisionTraces: { append },
+      registerBackgroundTask: (task) => {
+        ownedTasks.push(task);
+      },
+    });
+
+    expect(
+      recorder.enqueueAdvisory({
+        decisionId: "decision-1",
+        kind: "tool_selected",
+        scope: { turnId: "turn-1", toolRunId: "tool-1" },
+        selected: "Select time.now",
+        rationale: "The canonical tool row already settled.",
+      }),
+    ).toBe(true);
+    expect(
+      recorder.enqueueAdvisory({
+        decisionId: "decision-2",
+        kind: "tool_blocked",
+        scope: { turnId: "turn-2", toolRunId: "tool-2" },
+        selected: "Block browser.search",
+        rationale: "Web access is disabled.",
+      }),
+    ).toBe(true);
+
+    expect(ownedTasks).toHaveLength(2);
+    await vi.waitFor(() => expect(append).toHaveBeenCalledTimes(1));
+    expect(appendOrder).toEqual(["decision-1"]);
+    firstAppend.resolve();
+    await Promise.all(ownedTasks);
+    expect(appendOrder).toEqual(["decision-1", "decision-2"]);
+  });
+
+  it("bounds advisory backpressure and emits an explicit overflow diagnostic", async () => {
+    const releaseAppends = deferred();
+    const diagnostics = vi.fn();
+    const ownedTasks: Promise<void>[] = [];
+    const append = vi.fn(async (input: RuntimeDecisionTraceAppendInput) => {
+      await releaseAppends.promise;
+      return createRecord(input);
+    });
+    const recorder = new RuntimeDecisionRecorder({
+      runtimeDecisionTraces: { append },
+      recordDevDiagnostic: diagnostics,
+      registerBackgroundTask: (task) => {
+        ownedTasks.push(task);
+      },
+    });
+
+    for (let index = 0; index < 256; index += 1) {
+      expect(
+        recorder.enqueueAdvisory({
+          decisionId: `queued-${index}`,
+          kind: "tool_selected",
+          scope: { turnId: `turn-${index}`, toolRunId: `tool-${index}` },
+          selected: "Select time.now",
+          rationale: "Queued advisory decision.",
+        }),
+      ).toBe(true);
+    }
+    expect(
+      recorder.enqueueAdvisory({
+        decisionId: "overflow",
+        kind: "tool_selected",
+        scope: { turnId: "turn-overflow", toolRunId: "tool-overflow" },
+        selected: "Select time.now",
+        rationale: "This advisory projection exceeds the bounded queue.",
+      }),
+    ).toBe(false);
+    expect(diagnostics).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "runtime.decision_trace.queue_overflow",
+        context: expect.objectContaining({ pendingCount: 256, maxPendingCount: 256 }),
+      }),
+    );
+    expect(ownedTasks).toHaveLength(256);
+
+    releaseAppends.resolve();
+    await Promise.all(ownedTasks);
+    expect(append).toHaveBeenCalledTimes(256);
   });
 
   it("records 100 compact decisions within a small local threshold", async () => {

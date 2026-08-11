@@ -1,8 +1,9 @@
 import type { ModelUsageAttributionContext } from "@goatcitadel/contracts";
 import type { BeginModelUsageDispatchInput, ModelUsageCredentialLineage } from "@goatcitadel/gateway-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   RemoteWorkerInferenceLlmAdapter,
+  type RemoteWorkerInferenceAccountingHandle,
   type RemoteWorkerInferenceAccountingPort,
   type RemoteWorkerInferenceAccountingReservation,
   type RemoteWorkerInferenceDispatchRequest,
@@ -106,6 +107,73 @@ function request(overrides: Partial<RemoteWorkerInferenceDispatchRequest> = {}):
 }
 
 describe("RemoteWorkerInferenceLlmAdapter", () => {
+  it("persists the async transport-acceptance fence before provider completion", async () => {
+    let resolveProvider!: (result: RemoteWorkerInferenceProviderResult) => void;
+    const providerResult = new Promise<RemoteWorkerInferenceProviderResult>((resolve) => {
+      resolveProvider = resolve;
+    });
+    const accepted = vi.fn(
+      async (): Promise<RemoteWorkerInferenceAccountingHandle> => ({
+        observe: vi.fn(),
+        succeed: vi.fn(async () => ({})),
+        fail: vi.fn(async () => ({})),
+        cancel: vi.fn(async () => ({})),
+      }),
+    );
+    const accounting: RemoteWorkerInferenceAccountingPort = {
+      prepareDispatch: vi.fn(async () => ({
+        eventId: "async-event-1",
+        accept: accepted,
+        abandon: vi.fn(async () => undefined),
+        markDispatchUnknown: vi.fn(async () => undefined),
+      })),
+    };
+    const adapter = new RemoteWorkerInferenceLlmAdapter(accounting, {
+      dispatch: vi.fn(() => providerResult),
+    });
+
+    const pending = adapter.dispatch(request());
+    await vi.waitFor(() => expect(accepted).toHaveBeenCalledOnce());
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    resolveProvider({ outcome: "success", chunks: [{ text: "accepted" }] });
+    await expect(pending).resolves.toMatchObject({
+      terminalState: "completed",
+      chunks: ["accepted"],
+      usageEventId: "async-event-1",
+    });
+  });
+
+  it("returns dispatch_unknown when the async acceptance fence cannot be persisted", async () => {
+    const markDispatchUnknown = vi.fn(async () => undefined);
+    const accounting: RemoteWorkerInferenceAccountingPort = {
+      prepareDispatch: vi.fn(async () => ({
+        eventId: "uncertain-event-1",
+        accept: vi.fn(async () => {
+          throw new Error("canary persistence detail");
+        }),
+        abandon: vi.fn(async () => undefined),
+        markDispatchUnknown,
+      })),
+    };
+    const adapter = new RemoteWorkerInferenceLlmAdapter(accounting, {
+      dispatch: vi.fn(async () => ({ outcome: "success", chunks: [{ text: "must-not-deliver" }] })),
+    });
+
+    await expect(adapter.dispatch(request())).resolves.toMatchObject({
+      terminalState: "dispatch_unknown",
+      chunks: [],
+      usageEventId: "uncertain-event-1",
+      errorCode: "transport_acceptance_persistence_failed",
+    });
+    expect(markDispatchUnknown).toHaveBeenCalledOnce();
+  });
+
   it("delegates a successful dispatch to HX-306 and returns text chunks", async () => {
     const accounting = fakeAccounting();
     const { transport } = transportOf({
@@ -191,7 +259,7 @@ describe("RemoteWorkerInferenceLlmAdapter", () => {
     expect(accounting.attempts[0]?.settled).toBe("failed");
   });
 
-  it("abandons the intent and reports cancellation when the transport throws on an aborted signal", async () => {
+  it("settles an accepted attempt and reports cancellation when the transport rejects on an aborted signal", async () => {
     const accounting = fakeAccounting();
     const controller = new AbortController();
     controller.abort();
@@ -204,7 +272,7 @@ describe("RemoteWorkerInferenceLlmAdapter", () => {
     const outcome = await adapter.dispatch(request({ signal: controller.signal }));
     expect(outcome.terminalState).toBe("failed");
     expect(outcome.errorCode).toBe("cancelled");
-    expect(accounting.attempts[0]?.settled).toBe("abandoned");
+    expect(accounting.attempts[0]?.settled).toBe("failed");
   });
 
   it("rejects a non-delegation_worker call kind", async () => {

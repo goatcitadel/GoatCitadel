@@ -65,6 +65,9 @@ describe("CitadelCouncilRoutePage", () => {
     });
     expect(apiMocks.listCitadelCouncil).toHaveBeenCalledWith("default");
     expect(treeString(renderer!)).toContain("research-agent");
+    expect(renderer!.root.findAllByType("code").map((node) => node.props["aria-label"])).toEqual(
+      expect.arrayContaining(["Agent identifier: research-agent", "Seat identifier: a1"]),
+    );
   });
 
   it("seats an existing agent into the active Citadel", async () => {

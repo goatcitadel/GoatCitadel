@@ -29,14 +29,17 @@
     "zod": "3.25.76"
   },
   "scripts": {
-    "clean": "node scripts/clean-dist.mjs",
-    "build": "pnpm run clean && tsc -b tsconfig.json",
-    "typecheck": "tsc -b tsconfig.json",
+    "clean": "node ../../scripts/run-with-worktree-output-lock.mjs --label=clean:extensions-sdk -- node scripts/clean-dist.mjs",
+    "build": "node scripts/build-dist.mjs",
+    "typecheck": "node scripts/build-dist.mjs",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage.enabled --coverage.provider=v8 --coverage.reporter=json --coverage.reporter=text-summary --coverage.reportsDirectory=coverage --coverage.reportOnFailure",
-    "lint": "tsc -b tsconfig.json",
-    "prepublish:check": "pnpm run lint && pnpm run test && pnpm run build",
-    "publish:github:dry-run": "pnpm run prepublish:check && node scripts/publish-github.mjs --dry-run",
-    "publish:github": "pnpm run prepublish:check && node scripts/publish-github.mjs"
+    "lint": "node scripts/build-dist.mjs",
+    "prepublish:check": "node ../../scripts/run-with-worktree-output-lock.mjs --label=verify:extensions-sdk-publish -- pnpm run prepublish:check:unlocked",
+    "prepublish:check:unlocked": "pnpm run lint && pnpm run test && pnpm run build",
+    "publish:github:dry-run": "node ../../scripts/run-with-worktree-output-lock.mjs --label=publish:extensions-sdk-dry-run -- pnpm run publish:github:dry-run:unlocked",
+    "publish:github:dry-run:unlocked": "pnpm run prepublish:check:unlocked && node scripts/publish-github.mjs --dry-run",
+    "publish:github": "node ../../scripts/run-with-worktree-output-lock.mjs --label=publish:extensions-sdk -- pnpm run publish:github:unlocked",
+    "publish:github:unlocked": "pnpm run prepublish:check:unlocked && node scripts/publish-github.mjs"
   }
 }

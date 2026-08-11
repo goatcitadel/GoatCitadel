@@ -69,6 +69,7 @@ import {
   readJson as readRunJson,
   repoRoot,
 } from "./lib/shared.mjs";
+import { acquireWorktreeOutputLock } from "../lib/worktree-output-lock.mjs";
 
 const VALID_LANES = new Set([
   "fast",
@@ -200,6 +201,18 @@ async function main() {
   if (!VALID_LANES.has(lane)) {
     throw new Error(`Unknown verification lane: ${lane}`);
   }
+  const outputLockLease = await acquireWorktreeOutputLock({
+    repoRoot,
+    owner: `verification:${lane}`,
+  });
+  try {
+    await runLockedVerification(lane, options);
+  } finally {
+    await outputLockLease.release();
+  }
+}
+
+async function runLockedVerification(lane, options) {
   const requestedUiPackage = typeof options["ui-package"] === "string" ? options["ui-package"].trim() : "";
   if (requestedUiPackage) {
     process.env.GOATCITADEL_UI_PACKAGE = requestedUiPackage;

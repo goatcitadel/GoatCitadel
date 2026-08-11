@@ -6,8 +6,9 @@ import path from "node:path";
 const DEFAULT_MAX_FILE_BYTES = 4096;
 const DEFAULT_LOCK_TIMEOUT_MS = 190_000;
 const DEFAULT_STALE_HEARTBEAT_MS = 5_000;
-const DEFAULT_UNVERIFIED_STALE_MS = 30_000;
 const LOCK_HEARTBEAT_MS = 1_000;
+const LOCK_OWNER_READ_RETRIES = 4;
+const LOCK_OWNER_READ_RETRY_DELAY_MS = 25;
 const WINDOWS_POWERSHELL = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
 
 let cachedCurrentProcessIdentity;
@@ -113,7 +114,6 @@ export async function withManagedLifecycleLock(
     service,
     timeoutMs = DEFAULT_LOCK_TIMEOUT_MS,
     staleHeartbeatMs = DEFAULT_STALE_HEARTBEAT_MS,
-    unverifiedStaleMs = DEFAULT_UNVERIFIED_STALE_MS,
   },
   operation,
 ) {
@@ -125,7 +125,6 @@ export async function withManagedLifecycleLock(
     service,
     timeoutMs,
     staleHeartbeatMs,
-    unverifiedStaleMs,
   });
   try {
     return await operation(lock);
@@ -181,7 +180,18 @@ export function inspectProcessBinding({ rootPid, servingPid, maxDepth = 64 }) {
   };
 }
 
-async function acquireManagedLifecycleLock({ lockPath, service, timeoutMs, staleHeartbeatMs, unverifiedStaleMs }) {
+export async function inspectProcessBindingWithRetry(options, { attempts = 2, delayMs = 250, probe = inspectProcessBinding } = {}) {
+  let binding = probe(options);
+  for (let attempt = 1; binding.status === "unavailable" && attempt < attempts; attempt += 1) {
+    // One unavailable identity read under host load is contention evidence,
+    // not an identity verdict; a bounded re-query answers before classifying.
+    await delay(delayMs);
+    binding = probe(options);
+  }
+  return binding;
+}
+
+async function acquireManagedLifecycleLock({ lockPath, service, timeoutMs, staleHeartbeatMs }) {
   fs.mkdirSync(path.dirname(lockPath), { recursive: true });
   const deadline = Date.now() + timeoutMs;
   const processIdentity = queryProcessCreationIdentity(process.pid);
@@ -239,50 +249,96 @@ async function acquireManagedLifecycleLock({ lockPath, service, timeoutMs, stale
       }
     }
 
-    if (canRecoverLifecycleLock(lockPath, staleHeartbeatMs, unverifiedStaleMs)) {
-      reclaimLockDirectory(lockPath, `stale-${randomUUID()}`);
-      continue;
-    }
     if (Date.now() >= deadline) {
       const lockOwner = readLockOwner(lockPath);
       const ownerLabel = lockOwner?.pid ? ` PID ${lockOwner.pid}` : " an unknown owner";
       throw new Error(`Timed out waiting for the ${service} lifecycle lock held by${ownerLabel}.`);
     }
+    if (canRecoverLifecycleLock(lockPath, staleHeartbeatMs)) {
+      reclaimLockDirectory(lockPath, `stale-${randomUUID()}`);
+      continue;
+    }
     await delay(Math.min(100, Math.max(20, deadline - Date.now())));
   }
 }
 
-function canRecoverLifecycleLock(lockPath, staleHeartbeatMs, unverifiedStaleMs) {
+function canRecoverLifecycleLock(lockPath, staleHeartbeatMs) {
   let stat;
   try {
     stat = fs.statSync(lockPath);
   } catch (error) {
     return error?.code === "ENOENT";
   }
-  const owner = readLockOwner(lockPath);
-  if (!owner) {
+  const ownerState = readLockOwnerState(lockPath);
+  if (ownerState.state === "unreadable") {
+    // A transiently unreadable owner record is contention evidence, not death.
+    return false;
+  }
+  if (!ownerState.owner) {
     return Date.now() - stat.mtimeMs >= staleHeartbeatMs;
   }
+  const owner = ownerState.owner;
   const heartbeatAt = Date.parse(owner.heartbeatAt);
   const heartbeatAge = Number.isFinite(heartbeatAt) ? Date.now() - heartbeatAt : Number.POSITIVE_INFINITY;
   if (heartbeatAge < staleHeartbeatMs) {
     return false;
   }
-  const current = queryProcessCreationIdentity(owner.pid);
-  if (current.status === "missing" || (current.status === "running" && current.identity !== owner.processIdentity)) {
+  // A starved heartbeat proves only a busy event loop: launch identity probes
+  // block it for multi-second windows under load. Only an owner whose PID is
+  // demonstrably gone, or demonstrably reused by another process, releases the
+  // lock to a waiter.
+  if (!isLockOwnerAlive(owner.pid)) {
     return true;
   }
-  if (current.status === "running") {
-    return false;
-  }
-  return heartbeatAge >= unverifiedStaleMs;
+  const current = queryProcessCreationIdentity(owner.pid);
+  return current.status === "running" && current.identity !== owner.processIdentity;
 }
 
-function readLockOwner(lockPath) {
-  const ownerPath = path.join(lockPath, "owner.json");
-  const record = readManagedStateFile(ownerPath);
-  if (!record.exists || record.oversized || record.unreadable || typeof record.raw !== "string") {
-    return undefined;
+export async function inspectLifecycleLockHolder({ lockPath, service }) {
+  let ownerState = readLockOwnerState(lockPath);
+  for (let attempt = 0; ownerState.state === "unreadable" && attempt < LOCK_OWNER_READ_RETRIES; attempt += 1) {
+    await delay(LOCK_OWNER_READ_RETRY_DELAY_MS);
+    ownerState = readLockOwnerState(lockPath);
+  }
+  if (!ownerState.owner) {
+    return { held: false, reason: `owner_${ownerState.state}` };
+  }
+  const owner = ownerState.owner;
+  if (owner.service !== service) {
+    return { held: false, reason: "service_mismatch", pid: owner.pid };
+  }
+  if (owner.pid === process.pid) {
+    // The caller's own lock is never launch-in-progress evidence: in-lock code
+    // paths keep their strict collision refusal.
+    return { held: false, reason: "self_owned", pid: owner.pid };
+  }
+  if (!isLockOwnerAlive(owner.pid)) {
+    return { held: false, reason: "owner_exited", pid: owner.pid };
+  }
+  const current = queryProcessCreationIdentity(owner.pid);
+  if (current.status === "missing") {
+    return { held: false, reason: "owner_exited", pid: owner.pid };
+  }
+  if (current.status === "running" && current.identity !== owner.processIdentity) {
+    return { held: false, reason: "owner_pid_reused", pid: owner.pid };
+  }
+  return {
+    held: true,
+    reason: current.status === "running" ? "owner_identity_verified" : "owner_alive_identity_unverified",
+    pid: owner.pid,
+  };
+}
+
+function readLockOwnerState(lockPath) {
+  const record = readManagedStateFile(path.join(lockPath, "owner.json"));
+  if (!record.exists) {
+    return { state: "missing" };
+  }
+  if (record.unreadable) {
+    return { state: "unreadable" };
+  }
+  if (record.oversized || typeof record.raw !== "string") {
+    return { state: "malformed" };
   }
   try {
     const owner = JSON.parse(record.raw);
@@ -297,11 +353,24 @@ function readLockOwner(lockPath) {
       typeof owner.createdAt !== "string" ||
       typeof owner.heartbeatAt !== "string"
     ) {
-      return undefined;
+      return { state: "malformed" };
     }
-    return owner;
+    return { state: "owned", owner };
   } catch {
-    return undefined;
+    return { state: "malformed" };
+  }
+}
+
+function readLockOwner(lockPath) {
+  return readLockOwnerState(lockPath).owner;
+}
+
+function isLockOwnerAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code !== "ESRCH";
   }
 }
 

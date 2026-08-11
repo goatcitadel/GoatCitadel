@@ -325,9 +325,6 @@ importers:
       react-markdown:
         specifier: 10.1.0
         version: 10.1.0(@types/react@19.2.14)(react@19.2.5)
-      react-reflex:
-        specifier: 5.0.5
-        version: 5.0.5
       react-virtuoso:
         specifier: 4.18.3
         version: 4.18.3(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
@@ -374,6 +371,12 @@ importers:
       vite:
         specifier: 6.4.3
         version: 6.4.3(@types/node@25.9.1)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.22.4)(yaml@2.9.0)
+
+  apps/remote-worker-provisioner:
+    dependencies:
+      '@goatcitadel/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
 
   packages/contracts:
     dependencies:
@@ -5951,9 +5954,6 @@ packages:
     peerDependencies:
       '@types/react': '>=18'
       react: '>=18'
-
-  react-reflex@5.0.5:
-    resolution: {integrity: sha512-kHexLNMOpTZ0OTikgNTXmY9cxC3NkOnMo1vxrYzPAMztKYY4voBz4hVwraK3wRYmYE/k42DdFqMpV0Ip79i77Q==}
 
   react-refresh@0.17.0:
     resolution: {integrity: sha512-z6F7K9bV85EfseRCp2bzrpyQ0Gkw1uLoCel9XBVWPg/TjRj94SkJzUTGfOa4bs7iJvBWtQG0Wq7wnI0syw3EBQ==}
@@ -12759,11 +12759,6 @@ snapshots:
       vfile: 6.0.3
     transitivePeerDependencies:
       - supports-color
-
-  react-reflex@5.0.5:
-    dependencies:
-      react: 19.2.5
-      react-dom: 19.2.5(react@19.2.5)
 
   react-refresh@0.17.0: {}
 

@@ -18,7 +18,7 @@ export function registerObsidianIntegrationRoutes(fastify: FastifyInstance): voi
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.obsidian.updateObsidianIntegrationConfig(parsed.data));
+      return reply.send(await fastify.services.obsidian.updateObsidianIntegrationConfig(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }

@@ -8,6 +8,7 @@ import { authRoutes } from "./auth.js";
 import { durableRoutes } from "./durable.js";
 import { memoryRoutes } from "./memory.js";
 import { orchestrationRoutes } from "./orchestration.js";
+import { installRouteAccessTracking } from "./route-access.js";
 
 vi.mock("node:sqlite", () => ({
   DatabaseSync: class DatabaseSync {},
@@ -320,6 +321,11 @@ async function buildApp(mode: AuthConfig["mode"]) {
       auth: baseAuthConfig(mode),
     },
   } as never);
+  // Mirror the production composition seam (app.ts): route-access tracking's
+  // global preHandler is registered BEFORE authPlugin, so route-access denials
+  // (403) precede the companion request-signature check (401) exactly like the
+  // real Gateway.
+  installRouteAccessTracking(app);
   await app.register(authPlugin);
   await app.register(authRoutes);
   await app.register(adminRoutes);
@@ -640,48 +646,59 @@ describe("privileged auth boundary", () => {
     const built = await buildApp("token");
     app = built.app;
 
-    const responses = await Promise.all([
-      app.inject({
-        method: "GET",
+    // Operator-only routes deny the companion at the route-access layer (403)
+    // before the signature check runs. The one companion-readable route in this
+    // sweep (operator-or-companion GET /api/v1/approvals) passes route access
+    // and is then rejected by the companion request-signature layer (401):
+    // a bare companion bearer without the device-key signature headers is not
+    // fully authenticated, so a stolen token cannot read the approvals queue.
+    const probes = [
+      {
         url: "/api/v1/admin/retention",
-        headers: { Authorization: "Bearer companion-bearer" },
-      }),
-      app.inject({
-        method: "GET",
+        expectedStatus: 403,
+        expectedError: "Operator authentication is required for this control-plane route.",
+      },
+      {
         url: "/api/v1/durable/diagnostics",
-        headers: { Authorization: "Bearer companion-bearer" },
-      }),
-      app.inject({
-        method: "GET",
+        expectedStatus: 403,
+        expectedError: "Operator authentication is required for this control-plane route.",
+      },
+      {
         url: "/api/v1/memory/maintenance/status?workspaceId=default",
-        headers: { Authorization: "Bearer companion-bearer" },
-      }),
-      app.inject({
-        method: "GET",
+        expectedStatus: 403,
+        expectedError: "Operator authentication is required for this control-plane route.",
+      },
+      {
         url: "/api/v1/orchestration/runs/orch-run-1",
-        headers: { Authorization: "Bearer companion-bearer" },
-      }),
-      app.inject({
-        method: "GET",
+        expectedStatus: 403,
+        expectedError: "Operator authentication is required for this control-plane route.",
+      },
+      {
         url: "/api/v1/auth/devices?view=all",
-        headers: { Authorization: "Bearer companion-bearer" },
-      }),
-      app.inject({
-        method: "GET",
+        expectedStatus: 403,
+        expectedError: "Operator authentication is required for this control-plane route.",
+      },
+      {
         url: "/api/v1/approvals?status=pending&limit=20",
-        headers: { Authorization: "Bearer companion-bearer" },
-      }),
-      app.inject({
-        method: "GET",
+        expectedStatus: 401,
+        expectedError: "Missing companion request signature headers.",
+      },
+      {
         url: `/api/v1/approvals/${APPROVAL_ID}/replay`,
-        headers: { Authorization: "Bearer companion-bearer" },
-      }),
-    ]);
+        expectedStatus: 403,
+        expectedError: "Operator authentication is required for this control-plane route.",
+      },
+    ] as const;
 
-    for (const response of responses) {
-      expect(response.statusCode).toBe(403);
-      expect(response.json()).toMatchObject({
-        error: "Operator authentication is required for this control-plane route.",
+    for (const probe of probes) {
+      const response = await app.inject({
+        method: "GET",
+        url: probe.url,
+        headers: { Authorization: "Bearer companion-bearer" },
+      });
+      expect(response.statusCode, probe.url).toBe(probe.expectedStatus);
+      expect(response.json(), probe.url).toMatchObject({
+        error: probe.expectedError,
       });
     }
     expect(built.spies.getRetentionPolicy).not.toHaveBeenCalled();
@@ -691,9 +708,10 @@ describe("privileged auth boundary", () => {
     expect(built.spies.listDeviceAccessGrants).not.toHaveBeenCalled();
     expect(built.spies.listApprovals).not.toHaveBeenCalled();
     expect(built.spies.getApprovalReplay).not.toHaveBeenCalled();
+    expect(built.spies.verifyCompanionRequestSignature).not.toHaveBeenCalled();
   });
 
-  it("rejects signed companion mutations on privileged POST routes after signature verification passes", async () => {
+  it("rejects signed companion mutations on privileged POST routes", async () => {
     const built = await buildApp("token");
     app = built.app;
 
@@ -704,49 +722,49 @@ describe("privileged auth boundary", () => {
       "x-goatcitadel-companion-signature": "signature-1",
     };
 
-    const responses = await Promise.all([
-      app.inject({
-        method: "POST",
+    // Operator-only routes deny the companion at the route-access layer, so
+    // signature verification never runs for them (production ordering). The
+    // operator-or-companion resolve route admits the signed companion, verifies
+    // the signature, and then the handler denies the approve decision because
+    // paired companions may only review or reject.
+    const probes = [
+      {
         url: "/api/v1/auth/install-token",
-        headers,
-        payload: {
-          generateWhenMissing: true,
-        },
-      }),
-      app.inject({
-        method: "POST",
+        payload: { generateWhenMissing: true },
+        expectedError: "Operator authentication is required for this control-plane route.",
+      },
+      {
         url: "/api/v1/approvals/bulk-resolve",
-        headers,
-        payload: {
-          decision: "approve",
-        },
-      }),
-      app.inject({
-        method: "POST",
+        payload: { decision: "approve" },
+        expectedError: "Operator authentication is required for this control-plane route.",
+      },
+      {
         url: `/api/v1/approvals/${APPROVAL_ID}/resolve`,
-        headers,
-        payload: {
-          decision: "approve",
-          resolvedBy: "companion:test",
-        },
-      }),
-      app.inject({
-        method: "POST",
+        payload: { decision: "approve", resolvedBy: "companion:test" },
+        expectedError:
+          "Paired companions may review or reject approvals, but approval and edit require operator authority until a server-verifiable device approval key is registered.",
+      },
+      {
         url: `/api/v1/approvals/${APPROVAL_ID}/remote-token`,
-        headers,
-        payload: {
-          connectorId: "mission-control",
-        },
-      }),
-    ]);
+        payload: { connectorId: "mission-control" },
+        expectedError: "Operator authentication is required for this control-plane route.",
+      },
+    ] as const;
 
-    for (const response of responses) {
-      expect(response.statusCode).toBe(403);
-      expect(response.json()).toMatchObject({
-        error: "Operator authentication is required for this control-plane route.",
+    for (const probe of probes) {
+      const response = await app.inject({
+        method: "POST",
+        url: probe.url,
+        headers,
+        payload: probe.payload,
+      });
+      expect(response.statusCode, probe.url).toBe(403);
+      expect(response.json(), probe.url).toMatchObject({
+        error: probe.expectedError,
       });
     }
-    expect(built.spies.verifyCompanionRequestSignature).toHaveBeenCalledTimes(responses.length);
+    // Only the operator-or-companion resolve route reaches the signature layer.
+    expect(built.spies.verifyCompanionRequestSignature).toHaveBeenCalledTimes(1);
     expect(built.spies.resolveApprovalsBulk).not.toHaveBeenCalled();
     expect(built.spies.resolveApproval).not.toHaveBeenCalled();
     expect(built.spies.createApprovalRemoteActionToken).not.toHaveBeenCalled();

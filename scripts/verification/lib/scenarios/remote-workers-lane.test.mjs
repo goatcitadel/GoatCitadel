@@ -6,10 +6,12 @@ import { test } from "node:test";
 
 import {
   REMOTE_WORKERS_LANE_ARTIFACTS,
+  REMOTE_WORKERS_POSTGRES_AUTHORITY_ARTIFACTS,
   REMOTE_WORKER_LIVE_POSTGRES_SUITES,
   assertMigrationContiguity,
   buildRemoteWorkersLaneChecks,
   buildRemoteWorkersProofMatrix,
+  chunkRemoteWorkerEslintTargets,
   deriveCheckStatus,
   deriveRemoteWorkersLaneStatus,
   deriveRemoteWorkersRowStatuses,
@@ -89,7 +91,11 @@ test("the lane check table is complete, uniquely named, and cites only test file
   const livePostgres = checks.find((check) => check.id === "remote-workers.live-postgres");
   assert.equal(livePostgres.kind, "live-postgres");
   assert.equal(livePostgres.requireAllExecuted, true, "the live-PG suites may never self-skip inside the lane");
-  assert.equal(REMOTE_WORKER_LIVE_POSTGRES_SUITES.length, 7, "all seven generation-fenced owners run live");
+  assert.equal(
+    REMOTE_WORKER_LIVE_POSTGRES_SUITES.length,
+    8,
+    "the bootstrap bridge plus all seven generation-fenced owners run live",
+  );
   for (const suite of REMOTE_WORKER_LIVE_POSTGRES_SUITES) {
     assert.match(suite, /\.postgres\.test\.ts$/u, `${suite} is a .postgres.test.ts suite`);
     assert.ok(
@@ -110,6 +116,21 @@ test("the lane's own artifacts are the eslint anchors and exist on disk", () => 
     assert.ok(target.startsWith("scripts/verification/"), `lane artifact is a scripts/verification file: ${target}`);
     assert.ok(fs.existsSync(path.join(repoRoot, target)), `lane artifact exists: ${target}`);
   }
+  assert.ok(REMOTE_WORKERS_POSTGRES_AUTHORITY_ARTIFACTS.length >= 8);
+  for (const target of REMOTE_WORKERS_POSTGRES_AUTHORITY_ARTIFACTS) {
+    assert.match(target, /\.(?:ts|mjs)$/u, `PostgreSQL authority artifact is lintable: ${target}`);
+    assert.ok(fs.existsSync(path.join(repoRoot, target)), `PostgreSQL authority artifact exists: ${target}`);
+  }
+});
+
+test("eslint targets are chunked below the Windows command payload ceiling without reordering", () => {
+  const targets = ["a".repeat(15), "b".repeat(15), "c".repeat(15), "d".repeat(15)];
+  const chunks = chunkRemoteWorkerEslintTargets(targets, 40);
+  assert.deepEqual(chunks, [targets.slice(0, 2), targets.slice(2, 4)]);
+  assert.deepEqual(chunks.flat(), targets);
+  assert.ok(chunks.every((chunk) => chunk.reduce((total, target) => total + target.length + 3, 0) <= 40));
+  assert.throws(() => chunkRemoteWorkerEslintTargets(["x".repeat(40)], 40), /exceeds the command payload budget/u);
+  assert.throws(() => chunkRemoteWorkerEslintTargets(["valid", ""], 40), /non-empty strings/u);
 });
 
 test("the proof matrix covers 12 scenarios, cites known checks, and declares exactly two conditional skips (11-12)", () => {

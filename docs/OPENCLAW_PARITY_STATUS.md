@@ -1,8 +1,11 @@
 # OpenClaw Parity Status
 
-Last updated: 2026-07-12
+Last updated: 2026-08-08
 
-This document is the shared status ledger for GoatCitadel parity epics.
+This document preserves the contract-aligned status of the original GoatCitadel
+parity epic IDs. The aggregate execution order, including newer self-repair,
+remote-worker, UI, mobile, and packaging dependencies, is owned by
+[MASTER_COMPLETION_PROGRAM.md](./MASTER_COMPLETION_PROGRAM.md).
 
 The active July 2026 broad-capability program, including Hermes Agent and operator-owned worker parity, is tracked in [OPENCLAW_HERMES_PARITY_PROGRAM.md](./OPENCLAW_HERMES_PARITY_PROGRAM.md). This file remains the contract-aligned ledger for the original OpenClaw epic IDs.
 
@@ -23,12 +26,20 @@ The active July 2026 broad-capability program, including Hermes Agent and operat
 | `GC-P2-11` | Extension / plugin SDK breadth | complete |
 | `GC-P2-12` | Voice Wake / Talk Mode parity | complete |
 | `GC-P2-13` | Council / facilitated specialist synthesis (name TBD) | deferred |
+| `GC-P0-14` | Governed self-configuration and self-repair | partial |
 
 ## Current Focus
 
-- `GC-P1-09` remains the main open parity epic.
-- `GC-P0-06`, `GC-P0-07`, `GC-P1-08`, `GC-P1-10`, `GC-P2-11`, `GC-P2-12`, and `GC-P2-13` stay visible here because they are follow-on reference lanes even after their primary parity work closed.
-- New implementation work should update the active OpenClaw/Hermes register rather than adding another competing parity ledger.
+- `GC-P1-09` remains the only open epic from the original completion program
+  and closes under master tranche `M9`.
+- `GC-P0-14` is partial rather than complete: the first credential repair path
+  exists, but its owner contract still holds broader repair classes and real
+  packaged/browser/live-provider proof. It closes under master tranche `M5`.
+- `GC-P0-06`, `GC-P0-07`, `GC-P1-08`, `GC-P1-10`, `GC-P2-11`, and
+  `GC-P2-12` remain visible only as completed references. `GC-P2-13` remains a
+  deferred product-design reminder.
+- New implementation work updates the relevant owner contract and the master
+  program rather than creating another competing parity ledger.
 
 ## Shipped post-1.0
 

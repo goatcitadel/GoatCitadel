@@ -88,8 +88,8 @@ export function useChatApprovalController(input: {
     setEditingTurnId,
     setLocalNotices,
     setPendingApproval,
-    setPendingUserInput,
     setPendingAttachments,
+    setPendingUserInput,
     setSelectedTurnId,
     setSpecialistSuggestions,
   ]);

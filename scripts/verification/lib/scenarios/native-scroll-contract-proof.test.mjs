@@ -5,6 +5,7 @@ import {
   driveNativeStageToStableBottom,
   validateNativeNestedScrollerSnapshot,
   validateNativeStageSnapshot,
+  waitForVisibleNativeStageSnapshot,
 } from "./native-scroll-contract-proof.mjs";
 
 test("accepts a bounded native stage at its visible bottom", () => {
@@ -59,6 +60,44 @@ test("requires nested native collections to hand vertical scrolling to the stage
     () => validateNativeNestedScrollerSnapshot({ found: true, overscrollBehaviorY: "contain" }, "library-skills"),
     /blocked vertical handoff/,
   );
+});
+
+test("waits through a transient zero-height layout before certifying the native stage", async () => {
+  const clock = createClock();
+  const page = createStagePage({
+    clock,
+    samples: [stageSnapshot(0, 0), stageSnapshot(1_408, 952)],
+  });
+
+  const snapshot = await waitForVisibleNativeStageSnapshot(page, {
+    label: "settings-workspaces",
+    timeoutMs: 100,
+    pollIntervalMs: 10,
+    now: clock.now,
+  });
+
+  assert.equal(snapshot.clientHeight, 952);
+  assert.equal(page.sampleCount, 2);
+  assert.equal(page.waitCount, 1);
+  assert.equal(clock.value, 10);
+});
+
+test("fails closed when the native stage remains at zero height through the layout deadline", async () => {
+  const clock = createClock();
+  const page = createStagePage({ clock, samples: [stageSnapshot(0, 0)] });
+
+  await assert.rejects(
+    () =>
+      waitForVisibleNativeStageSnapshot(page, {
+        label: "settings-workspaces",
+        timeoutMs: 30,
+        pollIntervalMs: 10,
+        now: clock.now,
+      }),
+    /settings-workspaces: stage scroller had no visible height before the layout deadline \(samples=4,elapsedMs=30,clientHeight=0\)/u,
+  );
+  assert.equal(page.sampleCount, 4);
+  assert.equal(page.waitCount, 3);
 });
 
 test("re-drives the stage when route-owned async content grows after the first bottom scroll", async () => {

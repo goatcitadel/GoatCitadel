@@ -51,7 +51,7 @@ export const modelComparisonRoutes: FastifyPluginAsync = async (fastify) => {
     if (!query.success) {
       return reply.code(400).send({ error: query.error.flatten() });
     }
-    return reply.send(getModelComparisonService(fastify).listComparisons(query.data.limit));
+    return reply.send(await getModelComparisonService(fastify).listComparisons(query.data.limit));
   });
 
   fastify.post("/api/v1/model-comparisons", async (request, reply) => {
@@ -60,7 +60,7 @@ export const modelComparisonRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: body.error.flatten() });
     }
     try {
-      return reply.code(201).send(getModelComparisonService(fastify).createComparison(body.data));
+      return reply.code(201).send(await getModelComparisonService(fastify).createComparison(body.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -72,7 +72,7 @@ export const modelComparisonRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(getModelComparisonService(fastify).getComparison(params.data.comparisonId));
+      return reply.send(await getModelComparisonService(fastify).getComparison(params.data.comparisonId));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -92,7 +92,9 @@ export const modelComparisonRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply
         .code(201)
-        .send(getModelComparisonService(fastify).addJudgment(params.data.comparisonId, toJudgeRequest(body.data)));
+        .send(
+          await getModelComparisonService(fastify).addJudgment(params.data.comparisonId, toJudgeRequest(body.data)),
+        );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }

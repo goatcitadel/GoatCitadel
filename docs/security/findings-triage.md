@@ -1,6 +1,6 @@
 # GitHub Security Findings — Triage Reference
 
-Last updated: 2026-07-25
+Last updated: 2026-08-04
 
 This document explains how to triage the recurring categories of GitHub Security findings against this repo and how to fix them **once** without rediscovering the same root cause every time. New AI agents (Claude, Codex, Copilot review bots) and human contributors should read this before opening a PR that touches rate-limit configuration, stream pipeline error handling, Dependabot alerts, the secret-scanning allowlist, or the synthetic-token fixtures used by the secret-redaction tests.
 
@@ -220,6 +220,24 @@ Applied examples live in [`apps/gateway/src/services/chat-message-history-servic
 Each fixed site carries an inline comment naming the rule, so a later "cleanup" pass does not
 silently revert the analyzer-visible form back into the flagged one. Preserve those comments.
 
+### 2026-08-01 Standard queue snapshot
+
+The current endpoint returned three open findings before the August pre-QA closure branch:
+
+- `#1688` and `#1689`, both `js/useless-assignment-to-local`, are confirmed and repaired on
+  `codex/pre-qa-closure-2026-08-01`. The recovery evaluator call remains load-bearing; only its
+  unused intermediate assignment was removed. The overwritten `latestStatus` initializer was
+  removed without changing terminal status handling.
+- `#1687`, `cs/linq/missed-where`, is rejected as non-actionable. The input is a tiny bounded
+  command-line activation set, and the explicit loop couples validation, `out`-parameter route
+  extraction, and immediate first-valid-route return. Converting it to LINQ would add allocation
+  or indirection and obscure the queue's security-sensitive early-return semantics without a
+  correctness, performance, or readability improvement. The existing activation tests remain
+  the behavioral evidence.
+
+Re-read the endpoint after every push. A source repair is not considered cleared until the
+finding disappears or an evidence-backed non-actionable finding is dismissed/recorded.
+
 ---
 
 ## 8. Code Quality — AI findings
@@ -242,6 +260,23 @@ would have broken a passing test:
 The one accepted suggestion was a genuine naming/semantics issue: `dedupeProjects` was being reused
 to deduplicate group *names* while applying path separator normalization. It was split into a
 generic `dedupeValues` plus a path-normalizing `dedupeProjects`.
+
+### 2026-08-03 AI queue snapshot
+
+The authenticated AI view reported three findings in three files from the most recent default-branch
+pushes. Each was checked against the current implementation instead of applying the generated diff:
+
+| Reported | Disposition and evidence |
+|---|---|
+| `apps/gateway/src/routes/llm.loop23.test.ts` — await `register()` so setup errors are not swallowed | Rejected as a false positive. Fastify `register()` is synchronous and chainable; the awaited `inject()` calls boot the application and surface plugin-registration failures. Converting this one helper to async would add ceremony without changing that error boundary, while adjacent route harnesses intentionally use the same `void register(...)` form. An inline comment now records the ownership and the focused route suite is the behavioral evidence. |
+| `apps/mission-control-next/src/app/legacy-route-adapter.test.ts` — unexplained route-count literals | Accepted. The independent `42` shipped and `6` experimental inventory tripwires remain literal, with comments explaining that they are reviewed route-classification baselines rather than values to derive from the manifest under test. |
+| `packages/gateway-core/src/model-usage-accounting.test.ts` — missing cancel-first terminal idempotency case | Accepted. A deterministic reverse-order regression now proves that cancellation remains the canonical terminal record when later failure or success settlement is attempted, including that late usage cannot mutate the persisted terminal projection. |
+
+GitHub [documents that this AI analysis refreshes after pushes to the default branch](https://docs.github.com/en/code-security/how-tos/maintain-quality-code/fix-findings-in-recent-merges). The AI view has no
+manual rescan action and no API, so a ready-to-merge branch cannot obtain an exact-head AI rescan without
+violating the no-merge boundary. Before merge, re-read and triage the live default-branch queue and require
+the PR's rule-based Code Quality check; after merge, review the next default-branch AI wave. Do not report
+that post-merge wave as completed from a pre-merge PR.
 
 Confirm a suggestion by reading the implementation it describes — and, for test findings, by
 running the test — before opening the offered pull request.

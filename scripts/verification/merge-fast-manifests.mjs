@@ -39,6 +39,7 @@ import {
   writeJson,
   writeText,
 } from "./lib/shared.mjs";
+import { acquireWorktreeOutputLock } from "../lib/worktree-output-lock.mjs";
 
 // parts/<artifact-name>/artifacts/verification/<runId>/manifest.json is five levels
 // below the directory the gate job hands over; leave headroom without turning the
@@ -46,6 +47,18 @@ import {
 const MAX_MANIFEST_SEARCH_DEPTH = 6;
 
 async function main() {
+  const outputLockLease = await acquireWorktreeOutputLock({
+    repoRoot,
+    owner: "verification:fast-manifest-merge",
+  });
+  try {
+    await mergeFastManifests();
+  } finally {
+    await outputLockLease.release();
+  }
+}
+
+async function mergeFastManifests() {
   const { positional, options } = parseCliArgs(process.argv.slice(2));
   if (positional.length === 0) {
     throw new Error("Provide at least one manifest path or artifact directory to merge.");
@@ -192,8 +205,8 @@ function assertNoDuplicateScenarios(scenarios) {
   }
   if (duplicates.size > 0) {
     throw new Error(
-      `Fast lane parts recorded the same scenario more than once: ${[...duplicates].join(", ")}. `
-        + "Two jobs ran overlapping --commands selections.",
+      `Fast lane parts recorded the same scenario more than once: ${[...duplicates].join(", ")}. ` +
+        "Two jobs ran overlapping --commands selections.",
     );
   }
 }
@@ -205,8 +218,8 @@ function assertLaneIsComplete(scenarios, allowPartial) {
     return;
   }
   const message =
-    `Merged fast lane is missing ${missing.length} command(s): ${missing.join(", ")}. `
-    + "A job either failed to upload its manifest or the --commands selections do not cover the lane.";
+    `Merged fast lane is missing ${missing.length} command(s): ${missing.join(", ")}. ` +
+    "A job either failed to upload its manifest or the --commands selections do not cover the lane.";
   if (!allowPartial) {
     throw new Error(message);
   }
