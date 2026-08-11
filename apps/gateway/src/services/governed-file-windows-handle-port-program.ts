@@ -309,7 +309,7 @@ public static class GoatGovernedFileMutation {
   }
 
   public static void TryDeleteByHandle(SafeFileHandle file) {
-    try { DeleteByHandle(file); } catch {}
+    try { DeleteByHandle(file); } catch { /* best-effort temp cleanup after a refused publish */ }
   }
 
   public static string Sha256Hex(byte[] content) {

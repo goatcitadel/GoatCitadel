@@ -40,6 +40,8 @@ export const SELF_CONFIGURATION_COMMANDS = Object.freeze([
       "src/services/governed-remediation-managed-browser-adapter.test.ts",
       "src/services/governed-remediation-openai-codex-oauth-adapter.test.ts",
       "src/services/governed-remediation-owned-gateway-service-adapter.test.ts",
+      "src/services/governed-file-windows-handle-port.test.ts",
+      "src/services/governed-remediation-budgets-mirror-recipe.test.ts",
       "src/routes/chat.routes.test.ts",
       "src/routes/chat.messages.commit-truth.test.ts",
       "src/app.rate-limit.test.ts",
@@ -181,6 +183,15 @@ export function buildSelfConfigurationProofMatrix(commandOutcomes = []) {
         ],
       },
       {
+        id: "callable-budgets-mirror-file-recipe",
+        status: "exercised",
+        scenarioRefs: ["self-configuration.gateway-owner-fault-tests"],
+        notes: [
+          "First callable recipe: approval-gated budgets.json mirror repair over the native handle-relative capture/publish/restore port with pre-effect journal, restart reconciliation, rollback, and bounded journal retirement through the coordinator completion callback.",
+          "Handle-bound reparse/parent-swap refusal proofs execute only on Windows runners; POSIX runs exercise the same owner logic through the CAS-equivalent port seam and the port reports unavailable, so the recipe fails closed there.",
+        ],
+      },
+      {
         id: "secure-chat-control",
         status: "exercised",
         scenarioRefs: ["self-configuration.ui-secure-control-tests", "self-configuration.threaded-prompt-tests"],
@@ -194,7 +205,8 @@ export function buildSelfConfigurationProofMatrix(commandOutcomes = []) {
     heldRows: SELF_CONFIGURATION_HELD_ROWS.map((row) => ({ ...row })),
     knownImplementationGaps: [
       "generic-coordinator-production-composition",
-      "callable-config-managed-dependency-and-owned-service-repair",
+      "callable-generic-config-managed-dependency-and-owned-service-repair",
+      "posix-handle-bound-file-port",
       "reason-specific-rollback-reconciliation-ops",
       "delegated-child-to-parent-resume",
       "remote-hardened-secret-custody",

@@ -115,14 +115,16 @@ export interface AssessGovernedConfigRepairInput {
  * or restart reconciliation here would be unable to prove effect ownership in
  * the crash window before the remediation receipt is published.
  *
- * A separate fixed `config/budgets.json` compatibility-mirror owner was also
- * evaluated and remains manual-only. Node's path-based rename API cannot keep
- * the source parent directory bound while atomically capturing the exact
- * no-follow directory entry, so a parent/reparse swap could move or journal a
- * foreign entry. The missing filesystem port must pin the source parent and
- * entry, invoke a durable journal callback before crossing the effect boundary,
- * and capture/publish/restore relative to those same handles without replacing
- * concurrent state. A TypeScript read-check-rename wrapper is not that CAS.
+ * The narrower fixed `config/budgets.json` compatibility mirror is no longer
+ * manual: governed-remediation-budgets-mirror-recipe.ts registers it as the
+ * first callable recipe. The formerly missing filesystem port now exists as
+ * governed-file-windows-handle-port.ts, which pins the source parent and
+ * entry by handle with no-follow/no-reparse semantics and
+ * captures/publishes/restores relative to those handles, and the mirror owner
+ * persists its durable journal entry before crossing the effect boundary with
+ * bounded retirement through the coordinator completion callback. The generic
+ * declarative-config repair above still lacks a per-remediation pre-effect
+ * custody seam inside ConfigGenerationService and therefore stays manual.
  */
 export class GovernedRemediationConfigRepairAdapter {
   public constructor(private readonly configGeneration: ConfigGenerationService) {}

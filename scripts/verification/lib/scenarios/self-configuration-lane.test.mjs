@@ -65,6 +65,8 @@ test("self-configuration lane is wired as a degraded reviewed lane and package c
   assert.match(lane, /browser-tools-load-failure\.coverage\.test\.ts/u);
   assert.match(lane, /governed-remediation-managed-browser-adapter\.test\.ts/u);
   assert.match(lane, /governed-remediation-owned-gateway-service-adapter\.test\.ts/u);
+  assert.match(lane, /governed-file-windows-handle-port\.test\.ts/u);
+  assert.match(lane, /governed-remediation-budgets-mirror-recipe\.test\.ts/u);
   assert.doesNotMatch(lane, /exact-original-turn-crash-prompt-regeneration/u);
   assert.match(lane, /assertArtifactRedactionGate\(context\.artifactRoot\)/u);
 });

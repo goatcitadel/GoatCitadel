@@ -361,28 +361,46 @@ Owner contracts: `OPENCLAW_HERMES_PARITY_PROGRAM.md`, `HX-503` through `HX-507`.
 
 ## M5 - Governed self-configuration and repair expansion
 
-### Current work
+### Implementation progress
 
-- The generic durable coordinator now binds requester, parent reservation,
+- The generic durable coordinator binds requester, parent reservation,
   normalized recipe digest, purpose-specific approvals, phase leases, owner
   revisions, and receipt lineage in paired SQLite/PostgreSQL storage. Broad
-  declarative-config repair remains explicitly manual because the current
-  owner cannot prove restart-safe rollback after an arbitrary config commit.
-- The fixed `config/budgets.json` compatibility mirror was evaluated as a
-  narrower callable owner and remains manual. Node's path-based rename cannot
-  prove a handle-bound, no-follow atomic capture across a parent/reparse swap,
-  so the implementation retains byte-preservation and non-disclosure tests but
-  does not publish a journal, effect, or automatic-repair claim. A callable
-  file recipe now depends on a native handle-relative capture/publish/restore
-  port and a coordinator completion callback for bounded journal retirement.
-- OpenAI Codex OAuth now has an exact installation-scoped, secret-free
+  declarative-config repair remains explicitly manual because the canonical
+  config owner cannot prove restart-safe rollback after an arbitrary config
+  commit.
+- The two dependencies that kept the fixed `config/budgets.json`
+  compatibility mirror manual now exist. A native handle-relative
+  capture/publish/restore port (Windows, following the repo's fixed
+  System32 PowerShell + strictly-validated win32 wrapper precedent) walks
+  each path segment relative to the previous directory handle under
+  no-follow/no-reparse semantics, captures entry bytes plus volume/file
+  identity through those handles, and publishes atomically with
+  rename-by-handle against the pinned parent; live Windows tests prove it
+  refuses a mid-flight junction/parent-identity swap instead of following
+  it. The coordinator now also exposes a per-owner completion callback plus
+  a durable settlement query so a finished recipe's pre-effect journal
+  entries retire boundedly in process and across restarts.
+- The budgets.json mirror is therefore the first callable recipe. It is
+  approval-gated (`required_before_apply`), installation-scoped, limited to
+  `local_dev`/`trusted_local` with `remote_hardened` failing closed, and it
+  never auto-fires. The owner journals the handle-captured prior bytes
+  before crossing the publish boundary and proves prior state, effect
+  identity, restart reconciliation (journal replay on boot decides
+  commit/rollback/no-effect from coordinator truth), and rollback to the
+  exact captured bytes, with non-disclosure of every non-budgets config
+  section. The coordinator itself is still not composed into the production
+  Gateway, the handle port has no POSIX implementation (the recipe reports
+  owner-unavailable and fails closed off Windows), and live provider,
+  packaged-process restart, and browser secure-input rows stay held.
+- OpenAI Codex OAuth has an exact installation-scoped, secret-free
   assessment and manual-required recipe boundary. It deliberately exposes no
   effect owner or live-probe claim: current keychain/OAuth APIs cannot prove
   CAS ownership, restart reconciliation, or rollback custody after token
   replacement or refresh.
-- Implement the first callable recipe only through an existing owner that can
-  prove prior state, effect identity, restart reconciliation, and rollback
-  without persisting secrets or arbitrary corrupt bytes.
+
+### Current work
+
 - Add provider bootstrap and OAuth repair only after an owner-specific live
   probe plus durable effect/reconcile/rollback custody exists; the current
   OpenAI Codex OAuth row remains manual rather than faking that authority.
