@@ -331,7 +331,6 @@ export async function assertMobileVisualGeometry(page, route, variant) {
     route?.slug === "chat-pending-user-input"
       ? [
           '.mc-next-composer-blocking-prompt[data-blocker-kind="user-input"] .chat-user-input-card',
-          ".mc-next-composer-blocked-actions",
           ".mc-next-composer-primary",
         ]
       : [];

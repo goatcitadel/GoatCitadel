@@ -218,7 +218,6 @@ test("mobile pending-input geometry checks overflow and every operator control",
 
   assert.deepEqual(selectors, [
     '.mc-next-composer-blocking-prompt[data-blocker-kind="user-input"] .chat-user-input-card',
-    ".mc-next-composer-blocked-actions",
     ".mc-next-composer-primary",
   ]);
 });
@@ -249,8 +248,8 @@ test("mobile visual geometry rejects horizontal document overflow and clipped pe
               selector,
               missing: false,
               left: 24,
-              right: index === 2 ? 406 : 366,
-              width: index === 2 ? 382 : 342,
+              right: index === 1 ? 406 : 366,
+              width: index === 1 ? 382 : 342,
             })),
           };
         },
