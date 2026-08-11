@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { REMOTE_WORKER_BOOTSTRAP_EXCHANGE_RAW_PATH } from "./remote-worker-admission-service.js";
 import { REMOTE_WORKER_ASSIGNMENT_RPC_ROUTES } from "./remote-worker-assignment-protocol-service.js";
 import { REMOTE_WORKER_ASSIGNMENT_DISPATCH_ROUTES } from "./remote-worker-assignment-dispatch-service.js";
+import { REMOTE_WORKER_ASSIGNMENT_EXECUTION_ROUTES } from "./remote-worker-assignment-execution-protocol-service.js";
 import {
   createRemoteWorkerMeshNodeAdmissionNativeRequestHandler,
   type RemoteWorkerMeshNodeAdmissionPort,
@@ -38,12 +39,13 @@ function owned(name: string): RemoteWorkerNativeRequestHandler {
 }
 
 describe("remote worker native handler composition", () => {
-  it("dispatches the fixed bootstrap, mesh admission, assignment RPC, and dispatch route set", async () => {
+  it("dispatches the fixed bootstrap, mesh admission, assignment RPC, dispatch, and execution route set", async () => {
     const bootstrap = owned("bootstrap");
     const meshNodeAdmission = owned("mesh-node-admission");
     const assignment = owned("assignment");
     const dispatch = owned("dispatch");
-    const mux = createRemoteWorkerNativeHandlerMux({ bootstrap, meshNodeAdmission, assignment, dispatch });
+    const execution = owned("execution");
+    const mux = createRemoteWorkerNativeHandlerMux({ bootstrap, meshNodeAdmission, assignment, dispatch, execution });
 
     await expect(mux(request(REMOTE_WORKER_BOOTSTRAP_EXCHANGE_RAW_PATH))).resolves.toMatchObject({ body: "bootstrap" });
     await expect(mux(request(REMOTE_WORKER_MESH_NODE_ADMISSION_RAW_PATH))).resolves.toMatchObject({
@@ -55,6 +57,10 @@ describe("remote worker native handler composition", () => {
     for (const route of Object.values(REMOTE_WORKER_ASSIGNMENT_DISPATCH_ROUTES)) {
       await expect(mux(request(route.rawPath))).resolves.toMatchObject({ body: "dispatch" });
     }
+    expect(Object.values(REMOTE_WORKER_ASSIGNMENT_EXECUTION_ROUTES).map(({ code }) => code)).toEqual([11, 12]);
+    for (const route of Object.values(REMOTE_WORKER_ASSIGNMENT_EXECUTION_ROUTES)) {
+      await expect(mux(request(route.rawPath))).resolves.toMatchObject({ body: "execution" });
+    }
     await expect(mux(request("/api/v1/remote-workers/not-a-route"))).resolves.toStrictEqual({
       statusCode: 404,
       headers: { "content-type": "application/json; charset=utf-8" },
@@ -64,6 +70,7 @@ describe("remote worker native handler composition", () => {
     expect(meshNodeAdmission).toHaveBeenCalledOnce();
     expect(assignment).toHaveBeenCalledTimes(Object.values(REMOTE_WORKER_ASSIGNMENT_RPC_ROUTES).length);
     expect(dispatch).toHaveBeenCalledTimes(Object.values(REMOTE_WORKER_ASSIGNMENT_DISPATCH_ROUTES).length);
+    expect(execution).toHaveBeenCalledTimes(Object.values(REMOTE_WORKER_ASSIGNMENT_EXECUTION_ROUTES).length);
   });
 
   it("fails composition when any owner is missing", () => {
@@ -73,6 +80,7 @@ describe("remote worker native handler composition", () => {
         meshNodeAdmission: undefined as never,
         assignment: owned("assignment"),
         dispatch: owned("dispatch"),
+        execution: owned("execution"),
       }),
     ).toThrow("owner is unavailable");
     expect(() =>
@@ -81,6 +89,16 @@ describe("remote worker native handler composition", () => {
         meshNodeAdmission: owned("mesh-node-admission"),
         assignment: owned("assignment"),
         dispatch: undefined as never,
+        execution: owned("execution"),
+      }),
+    ).toThrow("owner is unavailable");
+    expect(() =>
+      createRemoteWorkerNativeHandlerMux({
+        bootstrap: owned("bootstrap"),
+        meshNodeAdmission: owned("mesh-node-admission"),
+        assignment: owned("assignment"),
+        dispatch: owned("dispatch"),
+        execution: undefined as never,
       }),
     ).toThrow("owner is unavailable");
   });

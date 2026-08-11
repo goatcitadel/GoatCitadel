@@ -43,6 +43,17 @@ describe("remote worker admission production composition", () => {
         createEvidenceVerifier,
       }),
     ).resolves.toBeUndefined();
+    // Dispatch present but the routes 11-12 execution owner absent keeps it dark too.
+    await expect(
+      createGatewayRemoteWorkerAdmissionNativeRequestHandler({
+        config: enabledConfig(),
+        admissionStore: unusedAdmissionStore() as never,
+        meshNodeAdmissionStore: unusedMeshAdmissionStore(),
+        assignmentProtocol: unusedAssignmentProtocol(),
+        assignmentDispatch: unusedAssignmentDispatch(),
+        createEvidenceVerifier,
+      }),
+    ).resolves.toBeUndefined();
     expect(createEvidenceVerifier).not.toHaveBeenCalled();
   });
 
@@ -58,12 +69,14 @@ describe("remote worker admission production composition", () => {
     const meshNodeAdmissionStore = unusedMeshAdmissionStore();
     const assignmentProtocol = unusedAssignmentProtocol();
     const assignmentDispatch = unusedAssignmentDispatch();
+    const assignmentExecution = unusedAssignmentExecution();
     const handler = await createGatewayRemoteWorkerAdmissionNativeRequestHandler({
       config,
       admissionStore: unusedAdmissionStore() as never,
       meshNodeAdmissionStore,
       assignmentProtocol,
       assignmentDispatch,
+      assignmentExecution,
       createEvidenceVerifier: vi.fn(() => verifier),
     });
 
@@ -71,7 +84,30 @@ describe("remote worker admission production composition", () => {
     expect(meshNodeAdmissionStore.assertAvailable).toHaveBeenCalledTimes(1);
     expect(assignmentProtocol.assertAvailable).toHaveBeenCalledTimes(1);
     expect(assignmentDispatch.assertAvailable).toHaveBeenCalledTimes(1);
+    expect(assignmentExecution.assertAvailable).toHaveBeenCalledTimes(1);
     expect(handler).toBeTypeOf("function");
+  });
+
+  it("propagates an execution owner preflight failure instead of exposing a live handler", async () => {
+    const preflightError = new Error("execution owner unavailable");
+    await expect(
+      createGatewayRemoteWorkerAdmissionNativeRequestHandler({
+        config: enabledConfig(),
+        admissionStore: unusedAdmissionStore() as never,
+        meshNodeAdmissionStore: unusedMeshAdmissionStore(),
+        assignmentProtocol: unusedAssignmentProtocol(),
+        assignmentDispatch: unusedAssignmentDispatch(),
+        assignmentExecution: {
+          assertAvailable: vi.fn(async () => {
+            throw preflightError;
+          }),
+          execute: vi.fn(async () => {
+            throw new Error("not exercised");
+          }),
+        },
+        createEvidenceVerifier: () => unusedVerifier(),
+      }),
+    ).rejects.toBe(preflightError);
   });
 
   it("propagates evidence preflight failure instead of exposing a live handler", async () => {
@@ -83,6 +119,7 @@ describe("remote worker admission production composition", () => {
         meshNodeAdmissionStore: unusedMeshAdmissionStore(),
         assignmentProtocol: unusedAssignmentProtocol(),
         assignmentDispatch: unusedAssignmentDispatch(),
+        assignmentExecution: unusedAssignmentExecution(),
         createEvidenceVerifier: () => ({
           assertAvailable: vi.fn(async () => {
             throw preflightError;
@@ -149,6 +186,15 @@ function unusedAssignmentProtocol() {
 }
 
 function unusedAssignmentDispatch() {
+  return {
+    assertAvailable: vi.fn(async () => undefined),
+    execute: vi.fn(async () => {
+      throw new Error("not exercised");
+    }),
+  };
+}
+
+function unusedAssignmentExecution() {
   return {
     assertAvailable: vi.fn(async () => undefined),
     execute: vi.fn(async () => {
