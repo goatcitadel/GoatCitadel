@@ -9,6 +9,13 @@ import {
   type RemoteWorkerAssignmentDispatchProtocolResponse,
 } from "./remote-worker-assignment-dispatch-protocol-service.js";
 import {
+  RemoteWorkerAssignmentExecutionProtocolService,
+  type RemoteWorkerAssignmentExecutionProtocolRequest,
+  type RemoteWorkerAssignmentExecutionProtocolResponse,
+  type RemoteWorkerInferenceExchangeOwnerPort,
+  type RemoteWorkerSettlementSubmissionOwnerPort,
+} from "./remote-worker-assignment-execution-protocol-service.js";
+import {
   RemoteWorkerAssignmentProtocolService,
   type RemoteWorkerAssignmentMeshAuthorityPort,
   type RemoteWorkerAssignmentProtocolRequest,
@@ -58,9 +65,31 @@ export interface RemoteWorkerAssignmentDispatchOwner {
   ): Promise<RemoteWorkerAssignmentDispatchProtocolResponse>;
 }
 
+/** An injected routes 11-12 execution owner shaped for the native-listener composition. */
+export interface RemoteWorkerAssignmentExecutionOwner {
+  assertAvailable(): Promise<void>;
+  execute(
+    input: RemoteWorkerAssignmentExecutionProtocolRequest,
+  ): Promise<RemoteWorkerAssignmentExecutionProtocolResponse>;
+}
+
 export interface RemoteWorkerAssignmentRuntimeComposition {
   readonly assignmentProtocol: RemoteWorkerAssignmentProtocolOwner;
   readonly assignmentDispatch: RemoteWorkerAssignmentDispatchOwner;
+  /**
+   * Present only when the production-dark HX-503/HX-506 inner owners were
+   * injected. Absent, the admission composition stays fail-closed dark: the
+   * listener requires ALL owners, so a missing execution owner keeps every
+   * route unregistered rather than shipping a partial mux.
+   */
+  readonly assignmentExecution?: RemoteWorkerAssignmentExecutionOwner;
+}
+
+export interface RemoteWorkerAssignmentExecutionOwnerDependencies {
+  /** The production-dark HX-503 inference owner (sole raw-lease hash boundary). */
+  readonly inference: RemoteWorkerInferenceExchangeOwnerPort;
+  /** The production-dark HX-506 artifact/effect settlement owners. */
+  readonly settlement: RemoteWorkerSettlementSubmissionOwnerPort;
 }
 
 export interface RemoteWorkerAssignmentRuntimeCompositionDependencies {
@@ -69,6 +98,12 @@ export interface RemoteWorkerAssignmentRuntimeCompositionDependencies {
   readonly meshAdmissions: RemoteWorkerAssignmentMeshAuthorityPort & RemoteWorkerAssignmentMeshAdmissionPort;
   readonly assignments: RemoteWorkerAssignmentProtocolStorePort & RemoteWorkerAssignmentDispatchStorePort;
   readonly nonceConsumer: RemoteWorkerDurableNonceConsumePort;
+  /**
+   * Optional routes 11-12 inner owners. Production has no live governance,
+   * budget, LLM, CAS, or effect-coordinator adapters, so it omits this and the
+   * whole listener stays dark; the connected-worker E2E injects both owners.
+   */
+  readonly execution?: RemoteWorkerAssignmentExecutionOwnerDependencies;
   readonly clock?: () => Date;
 }
 
@@ -103,12 +138,32 @@ export function createGatewayRemoteWorkerAssignmentRuntimeComposition(
     dispatch: dispatchService,
     clock,
   });
+  const executionProtocolService =
+    dependencies.execution === undefined
+      ? undefined
+      : new RemoteWorkerAssignmentExecutionProtocolService({
+          credentialAuthority: currentAuthority,
+          nonceConsumer: dependencies.nonceConsumer,
+          meshAdmissions: dependencies.meshAdmissions,
+          assignments: dependencies.assignments,
+          inference: dependencies.execution.inference,
+          settlement: dependencies.execution.settlement,
+          clock,
+        });
   const preflight = async (): Promise<void> => {
     await protectedAuthority.assertAvailable();
     assertPort(dependencies.nonceConsumer, "consume", "durable nonce consumer");
     assertPort(dependencies.meshAdmissions, "resolveCurrentForRuntimeCredential", "mesh admission authority");
     assertPort(dependencies.assignments, "resolveActiveAuthorityByLeaseTokenHash", "assignment store");
     assertPort(dependencies.assignments, "listTaskBoundChatOffers", "assignment offer store");
+  };
+  const executionPreflight = async (): Promise<void> => {
+    await preflight();
+    assertPort(dependencies.execution?.inference, "performInference", "inference exchange owner");
+    for (const method of ["openUpload", "appendPart", "commitArtifact"]) {
+      assertPort(dependencies.execution?.settlement.artifacts, method, "artifact settlement owner");
+    }
+    assertPort(dependencies.execution?.settlement.effects, "dispatchEffect", "effect settlement owner");
   };
   return Object.freeze({
     assignmentProtocol: Object.freeze({
@@ -119,6 +174,14 @@ export function createGatewayRemoteWorkerAssignmentRuntimeComposition(
       assertAvailable: preflight,
       execute: (input: RemoteWorkerAssignmentDispatchProtocolRequest) => dispatchProtocolService.execute(input),
     }),
+    ...(executionProtocolService === undefined
+      ? {}
+      : {
+          assignmentExecution: Object.freeze({
+            assertAvailable: executionPreflight,
+            execute: (input: RemoteWorkerAssignmentExecutionProtocolRequest) => executionProtocolService.execute(input),
+          }),
+        }),
   });
 }
 

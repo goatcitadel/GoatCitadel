@@ -149,10 +149,14 @@ function createGatewayRuntimeFacade(gateway: GatewayService): GatewayRuntimeInst
       return gateway.routeServices;
     },
     createRemoteWorkerAdmissionNativeRequestHandler: async (config) => {
-      // The assignment RPC (routes 2-6) and dispatch (routes 8-10) owners are
-      // composed only when explicitly activated. Default production omits them,
-      // so the fail-closed composition returns undefined and the listener stays
-      // dark exactly as before — the connected-worker E2E composes them.
+      // The assignment RPC (routes 2-6), dispatch (routes 8-10), and execution
+      // (routes 11-12) owners are composed only when explicitly activated.
+      // Default production omits them, so the fail-closed composition returns
+      // undefined and the listener stays dark exactly as before. Activation
+      // alone is still not enough: production supplies no HX-503/HX-506 inner
+      // owners, so `assignmentExecution` is absent and the all-or-nothing
+      // composition keeps the listener dark — the connected-worker E2E injects
+      // the inner owners and composes the live mux.
       const assignmentRuntime = remoteWorkerAssignmentRuntimeActivated()
         ? createGatewayRemoteWorkerAssignmentRuntimeComposition({
             admissionStore: gateway.storage.remoteWorkerAdmissions,
@@ -170,6 +174,9 @@ function createGatewayRuntimeFacade(gateway: GatewayService): GatewayRuntimeInst
           : {
               assignmentProtocol: assignmentRuntime.assignmentProtocol,
               assignmentDispatch: assignmentRuntime.assignmentDispatch,
+              ...(assignmentRuntime.assignmentExecution === undefined
+                ? {}
+                : { assignmentExecution: assignmentRuntime.assignmentExecution }),
             }),
         createEvidenceVerifier: () => new RemoteWorkerProtectedAdmissionEvidenceVerifier(),
       });

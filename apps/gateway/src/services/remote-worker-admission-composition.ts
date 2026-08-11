@@ -14,6 +14,11 @@ import type {
   RemoteWorkerAssignmentDispatchProtocolRequest,
   RemoteWorkerAssignmentDispatchProtocolResponse,
 } from "./remote-worker-assignment-dispatch-protocol-service.js";
+import { createRemoteWorkerAssignmentExecutionNativeRequestHandler } from "./remote-worker-assignment-execution-handler.js";
+import type {
+  RemoteWorkerAssignmentExecutionProtocolRequest,
+  RemoteWorkerAssignmentExecutionProtocolResponse,
+} from "./remote-worker-assignment-execution-protocol-service.js";
 import type {
   RemoteWorkerAssignmentProtocolRequest,
   RemoteWorkerAssignmentProtocolResponse,
@@ -54,14 +59,21 @@ interface RemoteWorkerAdmissionCompositionDependencies {
       input: RemoteWorkerAssignmentDispatchProtocolRequest,
     ): Promise<RemoteWorkerAssignmentDispatchProtocolResponse>;
   };
+  readonly assignmentExecution?: {
+    assertAvailable(): Awaitable<void>;
+    execute(
+      input: RemoteWorkerAssignmentExecutionProtocolRequest,
+    ): Promise<RemoteWorkerAssignmentExecutionProtocolResponse>;
+  };
   readonly createEvidenceVerifier?: (config: EnabledRemoteWorkerRuntimeConfig) => RemoteWorkerAdmissionEvidenceVerifier;
 }
 
 /**
  * Production native-listener composition. The entire listener stays dark until
- * bootstrap, M2 current authority, atomic M3 mesh admission, and the existing
- * assignment protocol are all present and preflighted. There is no partial
- * listener and therefore no ungoverned legacy downgrade path.
+ * bootstrap, M2 current authority, atomic M3 mesh admission, the assignment
+ * RPC (routes 2-6), the dispatch owner (routes 8-10), and the execution owner
+ * (routes 11-12) are all present and preflighted. There is no partial listener
+ * and therefore no ungoverned legacy downgrade path.
  */
 export async function createGatewayRemoteWorkerAdmissionNativeRequestHandler(
   dependencies: RemoteWorkerAdmissionCompositionDependencies,
@@ -70,7 +82,8 @@ export async function createGatewayRemoteWorkerAdmissionNativeRequestHandler(
     dependencies.createEvidenceVerifier === undefined ||
     dependencies.meshNodeAdmissionStore === undefined ||
     dependencies.assignmentProtocol === undefined ||
-    dependencies.assignmentDispatch === undefined
+    dependencies.assignmentDispatch === undefined ||
+    dependencies.assignmentExecution === undefined
   ) {
     return undefined;
   }
@@ -87,6 +100,7 @@ export async function createGatewayRemoteWorkerAdmissionNativeRequestHandler(
   await meshNodeAdmission.assertAvailable();
   await dependencies.assignmentProtocol.assertAvailable();
   await dependencies.assignmentDispatch.assertAvailable();
+  await dependencies.assignmentExecution.assertAvailable();
   const admissionService = new RemoteWorkerAdmissionService({
     admissionStore: dependencies.admissionStore,
     evidenceVerifier,
@@ -100,6 +114,9 @@ export async function createGatewayRemoteWorkerAdmissionNativeRequestHandler(
     }),
     dispatch: createRemoteWorkerAssignmentDispatchNativeRequestHandler({
       dispatchProtocol: dependencies.assignmentDispatch,
+    }),
+    execution: createRemoteWorkerAssignmentExecutionNativeRequestHandler({
+      executionProtocol: dependencies.assignmentExecution,
     }),
   });
 }

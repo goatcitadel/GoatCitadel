@@ -1,6 +1,7 @@
 import { canonicalJsonString } from "@goatcitadel/contracts";
 import { REMOTE_WORKER_BOOTSTRAP_EXCHANGE_RAW_PATH } from "./remote-worker-admission-service.js";
 import { REMOTE_WORKER_ASSIGNMENT_DISPATCH_ROUTES } from "./remote-worker-assignment-dispatch-service.js";
+import { REMOTE_WORKER_ASSIGNMENT_EXECUTION_ROUTES } from "./remote-worker-assignment-execution-protocol-service.js";
 import { REMOTE_WORKER_ASSIGNMENT_RPC_ROUTES } from "./remote-worker-assignment-protocol-service.js";
 import { REMOTE_WORKER_MESH_NODE_ADMISSION_RAW_PATH } from "./remote-worker-mesh-node-admission-service.js";
 import type {
@@ -16,6 +17,8 @@ interface NativeHandlerMuxInput {
   readonly assignment: RemoteWorkerNativeRequestHandler;
   /** Routes 8-10 offer-poll/claim/workload-read dispatch owner. */
   readonly dispatch: RemoteWorkerNativeRequestHandler;
+  /** Routes 11-12 inference-exchange/settlement-submission execution owner. */
+  readonly execution: RemoteWorkerNativeRequestHandler;
 }
 
 /** Internal exact-path mux. Production composition must supply every preflighted owner. */
@@ -28,6 +31,9 @@ export function createRemoteWorkerNativeHandlerMux(input: NativeHandlerMuxInput)
   }
   for (const route of Object.values(REMOTE_WORKER_ASSIGNMENT_DISPATCH_ROUTES)) {
     register(routes, route.rawPath, input.dispatch);
+  }
+  for (const route of Object.values(REMOTE_WORKER_ASSIGNMENT_EXECUTION_ROUTES)) {
+    register(routes, route.rawPath, input.execution);
   }
   return async (request): Promise<RemoteWorkerNativeHandlerResponse> => {
     const handler = routes.get(request.rawPath);
