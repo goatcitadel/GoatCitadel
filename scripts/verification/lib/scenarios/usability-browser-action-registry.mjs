@@ -157,11 +157,11 @@ const STEPS = [
   ]),
   step("chat-agentic-durable-code", "route.chat.approval-and-user-input-resume", "chat", [
     fixtureSession("approval"),
-    text("Approval needed"),
+    text("Approval required"),
     click("Allow once"),
     text("Approved once."),
     fixtureSession("userInput"),
-    text("Input needed"),
+    text("Answer required"),
     clickPattern("Continue with the current plan"),
     click("Submit answer"),
     api("approval-and-user-input"),
@@ -860,16 +860,24 @@ const STEPS = [
       clickPattern("Verification sandbox channel"),
       click("Save draft"),
       text("Channel draft saved."),
+      // The guided ntfy wizard has no test-kind step, so Validate lives on the
+      // always-available Advanced JSON surface of the channel setup wizard.
+      click("Advanced JSON"),
       click("Validate"),
       text("Channel draft validated."),
+      text("Validation passed"),
     ],
   ),
   step("settings-governance-runtime-integrations", "route.settings-channels.sandbox-destination", "settings-channels", [
     clickPattern("Verification sandbox channel"),
-    click("Test"),
+    click("Advanced JSON"),
+    click("Run live test"),
+    text("Live test passed"),
     text("Finalize the connection"),
-    text("Test results"),
-    click("Finalize"),
+    // The post-test refresh re-opens the guided wizard, so finalize through the
+    // guided confirm step, which only enables after the passing live test.
+    clickPattern("Finish setup"),
+    click("Finalize connection"),
     text("Verification sandbox channel finalized."),
   ]),
   step(

@@ -488,11 +488,20 @@ test("notification archive readback binds canonical IDs, lifecycleState, and the
 
 test("prompt-pack compare proof classifies exact execution, memory-distiller, and score-judge dispatches", () => {
   const prior = { model: "verification-stub-chat", outcome: "success", status: 200 };
+  const executionSignatures = [
+    // TEST-91: base + capability-profile + memory-context system messages + user prompt.
+    { prompt: "Reply with exactly: PROMPT_PACK_AUTHORED_OK", messageCount: 4 },
+    // TEST-92 additionally activates governed runtime skill instructions (+1 system message).
+    { prompt: "Compare the deterministic fixture response and report the final result.", messageCount: 5 },
+  ];
   const executions = ["verification-stub-chat", "verification-stub-chat-alt"].flatMap((model) =>
-    Array.from({ length: 2 }, () => ({
+    executionSignatures.map((signature) => ({
       model,
       stream: true,
-      messageCount: 4,
+      messageCount: signature.messageCount,
+      promptMetadata: {
+        userContentSha256: createHash("sha256").update(signature.prompt, "utf8").digest("hex"),
+      },
       outcome: "success",
       status: 200,
     })),
@@ -546,6 +555,18 @@ test("prompt-pack compare proof classifies exact execution, memory-distiller, an
         0,
       ),
     /did not succeed/u,
+  );
+  assert.throws(
+    () =>
+      validatePromptPackBenchmarkDispatchRecords(
+        [
+          ...executions.map((record) => ({ ...record, messageCount: record.messageCount + 1 })),
+          ...memoryDistillers,
+          ...judges,
+        ],
+        0,
+      ),
+    /streamed execution signature drifted for TEST-91/u,
   );
 });
 

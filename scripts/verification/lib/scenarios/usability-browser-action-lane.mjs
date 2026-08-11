@@ -35,6 +35,27 @@ const MAX_BROWSER_DOWNLOAD_BYTES = 16 * 1024 * 1024;
 const PROMPT_PACK_BENCHMARK_MODELS = Object.freeze(["verification-stub-chat", "verification-stub-chat-alt"]);
 const PROMPT_PACK_BENCHMARK_JUDGE_RULE_ID = "prompt-pack-benchmark-judge";
 const PROMPT_PACK_MEMORY_DISTILLER_RULE_ID = "prompt-pack-benchmark-memory-context-distillation";
+// Exact provider-visible request shape for each streamed benchmark execution of
+// the authored fixture pack, keyed by the user prompt each test sends verbatim.
+// Every execution carries the base chat system prompt, the server-owned
+// capability profile, and the memory-context system message. TEST-92
+// additionally activates governed runtime skill instructions (its prompt
+// matches trusted bundled-skill keywords), which inject one extra hash-verified
+// server-owned system message before the user prompt.
+const PROMPT_PACK_BENCHMARK_EXECUTION_SIGNATURES = Object.freeze([
+  Object.freeze({
+    testCode: "TEST-91",
+    userContentSha256: createHash("sha256").update("Reply with exactly: PROMPT_PACK_AUTHORED_OK", "utf8").digest("hex"),
+    messageCount: 4,
+  }),
+  Object.freeze({
+    testCode: "TEST-92",
+    userContentSha256: createHash("sha256")
+      .update("Compare the deterministic fixture response and report the final result.", "utf8")
+      .digest("hex"),
+    messageCount: 5,
+  }),
+]);
 const DEV_VERIFICATION_VAULT_KEY_ENV = "GOATCITADEL_VERIFY_VAULT_KEY_BASE64";
 const DEV_VERIFICATION_VAULT_KEY = createHash("sha256")
   .update("goatcitadel-usability-vault-fixture-v1", "utf8")
@@ -3137,8 +3158,24 @@ export function validatePromptPackBenchmarkDispatchRecords(records, baselineCoun
       );
     }
   }
-  if (executions.some((record) => record?.messageCount !== 4 || record?.behavior !== undefined)) {
-    throw new Error("prompt-pack benchmark streamed execution signature drifted");
+  for (const signature of PROMPT_PACK_BENCHMARK_EXECUTION_SIGNATURES) {
+    const matches = executions.filter(
+      (record) => record?.promptMetadata?.userContentSha256 === signature.userContentSha256,
+    );
+    if (
+      matches.length !== 2 ||
+      !isDeepStrictEqual(
+        matches.map((record) => record?.model).sort(),
+        [...PROMPT_PACK_BENCHMARK_MODELS].sort(),
+      ) ||
+      matches.some((record) => record?.messageCount !== signature.messageCount || record?.behavior !== undefined)
+    ) {
+      throw new Error(
+        `prompt-pack benchmark streamed execution signature drifted for ${signature.testCode}: ${JSON.stringify(
+          summarizePromptPackDispatchRecords(executions),
+        )}`,
+      );
+    }
   }
   if (
     judges.some(

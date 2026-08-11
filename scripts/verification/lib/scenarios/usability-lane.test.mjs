@@ -430,11 +430,11 @@ test("Chat and Projects Chromium contracts retain exact fixture sessions and com
   ]);
   assert.deepEqual(operations("route.chat.approval-and-user-input-resume"), [
     { kind: "fixture-session", sessionKey: "approval" },
-    { kind: "assert-text", value: "Approval needed" },
+    { kind: "assert-text", value: "Approval required" },
     { kind: "click", name: "Allow once", exact: true },
     { kind: "assert-text", value: "Approved once." },
     { kind: "fixture-session", sessionKey: "userInput" },
-    { kind: "assert-text", value: "Input needed" },
+    { kind: "assert-text", value: "Answer required" },
     { kind: "click-pattern", namePattern: "Continue with the current plan" },
     { kind: "click", name: "Submit answer", exact: true },
     { kind: "api", probe: "approval-and-user-input" },
