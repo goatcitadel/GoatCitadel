@@ -19,7 +19,7 @@ export function createZaloDefinition(): ChannelSetupRuntimeDefinition {
     catalog: baseCatalogMeta(catalog, ["guided", "manual"]),
     wizard: {
       archetype: "platform_api_resource_ids",
-      contentVersion: "2026.04.zalo.v1",
+      contentVersion: "2026.08.zalo.v2",
       estimatedMinutes: 6,
       difficulty: "intermediate",
       manualModePolicy: "available-secondary",
@@ -84,6 +84,21 @@ export function createZaloDefinition(): ChannelSetupRuntimeDefinition {
             paragraph(
               "Guided test posts a sandbox message through the Zalo Official Account send endpoint using the configured default recipient id. Manual confirmation is still required because the API path does not expose safe cleanup here.",
             ),
+          ],
+        },
+        {
+          id: "finish",
+          kind: "confirm",
+          title: "Finish setup",
+          body: [
+            paragraph(
+              "Finalize saves the outbound connection. After finalizing, confirm the sandbox message arrived in the recipient's Zalo conversation — manual confirmation closes the loop because the OA send path exposes no safe cleanup here.",
+            ),
+          ],
+          successCriteria: [
+            "The Official Account access token was accepted by the OA send endpoint.",
+            "The sandbox message reached the default OA user id.",
+            "You confirmed delivery manually in the recipient's Zalo conversation.",
           ],
         },
       ],

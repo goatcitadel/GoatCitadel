@@ -19,7 +19,7 @@ export function createLineDefinition(): ChannelSetupRuntimeDefinition {
     catalog: baseCatalogMeta(catalog, ["guided", "manual"]),
     wizard: {
       archetype: "bot_token_target",
-      contentVersion: "2026.04.line.v1",
+      contentVersion: "2026.08.line.v2",
       estimatedMinutes: 6,
       difficulty: "intermediate",
       manualModePolicy: "available-secondary",
@@ -109,6 +109,21 @@ export function createLineDefinition(): ChannelSetupRuntimeDefinition {
             paragraph(
               "Guided test validates the channel access token live and can post a sandbox push message to the configured default target. Inbound webhook routing still requires the optional channel secret.",
             ),
+          ],
+        },
+        {
+          id: "finish",
+          kind: "confirm",
+          title: "Finish setup",
+          body: [
+            paragraph(
+              "Finalize saves the connection for runtime sends. After finalizing, confirm the sandbox push arrived in the target LINE conversation before relying on this connection.",
+            ),
+          ],
+          successCriteria: [
+            "The channel access token passed the live auth probe.",
+            "The sandbox push message reached the default user, room, or group target.",
+            "The optional channel secret is configured when you want signed inbound webhook routing.",
           ],
         },
       ],

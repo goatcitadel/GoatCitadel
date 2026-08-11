@@ -62,7 +62,7 @@ describe("channel setup definitions", () => {
     );
   });
 
-  it("exposes a guided test step ahead of any confirm step for every guided definition", () => {
+  it("exposes a guided test step followed by a confirm step for every guided definition", () => {
     for (const definition of listChannelSetupDefinitions()) {
       if (!definition.catalog.supportedModes.includes("guided")) {
         continue;
@@ -71,12 +71,14 @@ describe("channel setup definitions", () => {
       const testIndex = steps.findIndex((step) => step.kind === "test");
       expect(testIndex, `${definition.catalog.catalogId} has no guided test step`).toBeGreaterThanOrEqual(0);
       const confirmIndex = steps.findIndex((step) => step.kind === "confirm");
-      if (confirmIndex >= 0) {
-        expect(
-          confirmIndex,
-          `${definition.catalog.catalogId} places its confirm step before its test step`,
-        ).toBeGreaterThan(testIndex);
-      }
+      expect(
+        confirmIndex,
+        `${definition.catalog.catalogId} has no guided confirm step, so Finalize is unreachable in guided mode`,
+      ).toBeGreaterThanOrEqual(0);
+      expect(
+        confirmIndex,
+        `${definition.catalog.catalogId} places its confirm step before its test step`,
+      ).toBeGreaterThan(testIndex);
     }
   });
 
@@ -399,6 +401,32 @@ describe("channel setup definitions", () => {
     expect(definition.wizard.contentVersion).toBe("2026.08.nextcloud-talk.v2");
   });
 
+  it("ends every previously test-terminal guided wizard on a finalize confirmation step", () => {
+    const expectations = [
+      { catalogId: "channel.imessage", contentVersion: "2026.08.imessage.v2" },
+      { catalogId: "channel.line", contentVersion: "2026.08.line.v2" },
+      { catalogId: "channel.mattermost", contentVersion: "2026.08.mattermost.v2" },
+      { catalogId: "channel.signal", contentVersion: "2026.08.signal.v4" },
+      { catalogId: "channel.whatsapp", contentVersion: "2026.08.whatsapp.v3" },
+      { catalogId: "channel.zalo", contentVersion: "2026.08.zalo.v2" },
+      { catalogId: "channel.zalouser", contentVersion: "2026.08.zalouser.v2" },
+    ] as const;
+
+    for (const { catalogId, contentVersion } of expectations) {
+      const definition = requireChannelSetupDefinition(catalogId).definition;
+      const steps = definition.wizard.steps;
+      const finishStep = steps[steps.length - 1];
+      expect(finishStep?.kind, `${catalogId} must end on a confirm step`).toBe("confirm");
+      expect(finishStep?.id, `${catalogId} finalize step id`).toBe("finish");
+      expect(steps[steps.length - 2]?.kind, `${catalogId} keeps its test step just before finalize`).toBe("test");
+      expect(
+        finishStep?.successCriteria?.length ?? 0,
+        `${catalogId} confirm step needs success criteria`,
+      ).toBeGreaterThan(0);
+      expect(definition.wizard.contentVersion, `${catalogId} contentVersion must be bumped`).toBe(contentVersion);
+    }
+  });
+
   it("requires a Slack auth path and a default channel", () => {
     const definition = requireChannelSetupDefinition("channel.slack");
     const issues = definition.validate(createDraft("channel.slack", {}));
@@ -584,7 +612,7 @@ describe("channel setup definitions", () => {
     const signal = requireChannelSetupDefinition("channel.signal");
     const wizardText = JSON.stringify(signal.definition.wizard);
 
-    expect(signal.definition.wizard.contentVersion).toBe("2026.07.signal.v3");
+    expect(signal.definition.wizard.contentVersion).toBe("2026.08.signal.v4");
     expect(signal.definition.wizard.introSummary).toContain("outbound-only");
     expect(wizardText).toContain("no acknowledgement or replay contract");
     expect(wizardText).not.toContain('"key":"inboundEnabled"');

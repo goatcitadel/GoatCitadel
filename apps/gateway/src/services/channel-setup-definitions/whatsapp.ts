@@ -20,7 +20,7 @@ export function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
     catalog: baseCatalogMeta(catalog, ["guided", "manual"]),
     wizard: {
       archetype: "platform_api_resource_ids",
-      contentVersion: "2026.07.whatsapp.v2",
+      contentVersion: "2026.08.whatsapp.v3",
       estimatedMinutes: 8,
       difficulty: "intermediate",
       manualModePolicy: "available-secondary",
@@ -182,6 +182,21 @@ export function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
             paragraph(
               "Runtime rich-message evidence records whether media is native, text fallback, pending hydration, or blocked before provider delivery.",
             ),
+          ],
+        },
+        {
+          id: "finish",
+          kind: "confirm",
+          title: "Finish setup",
+          body: [
+            paragraph(
+              "Finalize saves the connection for runtime sends. After finalizing, confirm the sandbox message arrived on the default recipient's WhatsApp; inbound routing stays disabled unless both the app secret and the webhook verify token are configured.",
+            ),
+          ],
+          successCriteria: [
+            "The sender identity passed the live Cloud API auth probe.",
+            "The sandbox message reached the configured default recipient.",
+            "Both the app secret and the webhook verify token are configured when you want signed inbound routing.",
           ],
         },
       ],

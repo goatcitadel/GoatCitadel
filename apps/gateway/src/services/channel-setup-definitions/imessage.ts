@@ -29,7 +29,7 @@ export function createIMessageDefinition(): ChannelSetupRuntimeDefinition {
     catalog: baseCatalogMeta(catalog, ["guided", "manual"]),
     wizard: {
       archetype: "bridge_dependent",
-      contentVersion: "2026.04.imessage.v1",
+      contentVersion: "2026.08.imessage.v2",
       estimatedMinutes: 10,
       difficulty: "advanced",
       manualModePolicy: "available-secondary",
@@ -139,12 +139,27 @@ export function createIMessageDefinition(): ChannelSetupRuntimeDefinition {
           title: "Validate the draft",
           body: [
             paragraph(
-            "Guided test queries the BlueBubbles bridge live, then sends and unsends a sandbox message against the configured default handle or chat target.",
+              "Guided test queries the BlueBubbles bridge live, then sends and unsends a sandbox message against the configured default handle or chat target.",
             ),
             note(
               "warning",
               "Photon-selected drafts produce explicit diagnostics but do not run BlueBubbles probes or send messages through Photon in this Gateway build.",
             ),
+          ],
+        },
+        {
+          id: "finish",
+          kind: "confirm",
+          title: "Finish setup",
+          body: [
+            paragraph(
+              "Finalize saves the bridge connection for runtime sends. After finalizing, send a sandbox message to the default handle and confirm it arrives in Messages before relying on this connection.",
+            ),
+          ],
+          successCriteria: [
+            "The BlueBubbles bridge URL is reachable and the bridge password is accepted, or the Photon draft intentionally stays diagnostics-only until an adapter is installed.",
+            "The sandbox send/unsend cycle against the default handle or chat target passed.",
+            "The default handle or chat target is the one GoatCitadel may use for fallback sends.",
           ],
         },
       ],
@@ -271,7 +286,9 @@ export function createIMessageDefinition(): ChannelSetupRuntimeDefinition {
           message:
             "Photon/Spectrum is recognized as third-party iMessage provider metadata, but this Gateway build blocks Photon sends until a runnable adapter is installed.",
           failureCategory: "platform_unavailable",
-          nextSteps: ["Use BlueBubbles for callable local iMessage sends or install a Photon adapter before enabling sends."],
+          nextSteps: [
+            "Use BlueBubbles for callable local iMessage sends or install a Photon adapter before enabling sends.",
+          ],
         });
       }
       if (!bridgeUrl) {

@@ -19,7 +19,7 @@ export function createSignalDefinition(): ChannelSetupRuntimeDefinition {
     catalog: baseCatalogMeta(catalog, ["guided", "manual"]),
     wizard: {
       archetype: "bridge_dependent",
-      contentVersion: "2026.07.signal.v3",
+      contentVersion: "2026.08.signal.v4",
       estimatedMinutes: 8,
       difficulty: "intermediate",
       manualModePolicy: "available-secondary",
@@ -92,6 +92,21 @@ export function createSignalDefinition(): ChannelSetupRuntimeDefinition {
             paragraph(
               "Guided test posts a sandbox send through the configured Signal JSON-RPC bridge path against the default recipient or group target. Manual confirmation still closes the loop because the bridge does not expose a safe cleanup path.",
             ),
+          ],
+        },
+        {
+          id: "finish",
+          kind: "confirm",
+          title: "Finish setup",
+          body: [
+            paragraph(
+              "Finalize saves the outbound-only bridge connection. After finalizing, confirm the sandbox message arrived on the default recipient's Signal device — manual confirmation closes the loop because the bridge exposes no safe cleanup path.",
+            ),
+          ],
+          successCriteria: [
+            "The bridge URL points at the Signal bridge GoatCitadel should call for outbound sends.",
+            "The sandbox send through the JSON-RPC path reached the default recipient or group target.",
+            "You confirmed delivery manually on a Signal device.",
           ],
         },
       ],

@@ -20,7 +20,7 @@ export function createZaloUserDefinition(): ChannelSetupRuntimeDefinition {
     catalog: baseCatalogMeta(catalog, ["guided", "manual"]),
     wizard: {
       archetype: "bridge_dependent",
-      contentVersion: "2026.04.zalouser.v1",
+      contentVersion: "2026.08.zalouser.v2",
       estimatedMinutes: 8,
       difficulty: "advanced",
       manualModePolicy: "available-secondary",
@@ -107,6 +107,21 @@ export function createZaloUserDefinition(): ChannelSetupRuntimeDefinition {
             paragraph(
               "Guided test posts a sandbox text message through the configured zca bridge profile and default target. Manual confirmation is still required because cleanup is bridge-dependent and not safely automatable here.",
             ),
+          ],
+        },
+        {
+          id: "finish",
+          kind: "confirm",
+          title: "Finish setup",
+          body: [
+            paragraph(
+              "Finalize saves the bridge connection. After finalizing, confirm the sandbox text arrived at the default target — manual confirmation closes the loop because cleanup is bridge-dependent here.",
+            ),
+          ],
+          successCriteria: [
+            "The zca bridge URL is reachable with the configured profile and optional bearer token.",
+            "The sandbox text send reached the default personal or group target.",
+            "You confirmed delivery manually in the Zalo conversation.",
           ],
         },
       ],

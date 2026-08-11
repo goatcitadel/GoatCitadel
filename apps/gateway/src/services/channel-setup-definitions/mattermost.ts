@@ -21,7 +21,7 @@ export function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
     catalog: baseCatalogMeta(catalog, ["guided", "manual"]),
     wizard: {
       archetype: "workspace_server_token",
-      contentVersion: "2026.04.mattermost.v1",
+      contentVersion: "2026.08.mattermost.v2",
       estimatedMinutes: 8,
       difficulty: "intermediate",
       manualModePolicy: "available-secondary",
@@ -105,6 +105,21 @@ export function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
             paragraph(
               "Guided test authenticates the bot token live, resolves the configured channel target, and posts a sandbox message that is deleted automatically when cleanup permissions are available.",
             ),
+          ],
+        },
+        {
+          id: "finish",
+          kind: "confirm",
+          title: "Finish setup",
+          body: [
+            paragraph(
+              "Finalize saves the connection for runtime sends. After finalizing, post a sandbox message to the default channel and confirm the bot delivers before relying on this connection.",
+            ),
+          ],
+          successCriteria: [
+            "The bot token authenticated live against the configured server URL.",
+            "The configured default channel resolved and accepted the sandbox post.",
+            "The sandbox message was cleaned up automatically, or you removed it manually where cleanup permissions were unavailable.",
           ],
         },
       ],
