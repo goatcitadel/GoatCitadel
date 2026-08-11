@@ -313,18 +313,38 @@ Owner contract: `OPENCLAW_HERMES_PARITY_PROGRAM.md`, `HX-501`.
   concurrent connections: the stale side is rejected deterministically inside
   the storage transaction and the winning side commits exactly once.
   Composition remains gated on the authenticated worker runtime below.
-- Compose the existing dispatch poll/claim/workload-read wire only after an
-  authenticated worker runtime can retain its credential and lease secret,
-  obtain the exact protected signing pin, and reconnect without replaying a
-  one-time secret.
-- Connect scheduler dispatch to generation-fenced assignments and the live
-  worker protocol.
-- Execute provider/tool work through Gateway-owned policy and secrets.
-- Carry ordered transcript/events through a retained outbox with explicit
-  acknowledgement, bounded backpressure, reconnect catch-up, and exactly-once
-  materialization.
+- The authenticated connected-worker runtime core now exists as a real second
+  process (`apps/remote-worker`). It durably retains the reusable M2 credential,
+  per-assignment leases, and the Ed25519 PoP-v2 signing pin; it refuses to store
+  any bootstrap-secret-shaped field, so reconnect and restart replay only the
+  credential bearer, never the one-time bootstrap secret. It carries ordered
+  transcript/events through a retained, hash-chained outbox with monotonic
+  idempotent acknowledgement, a bounded (fail-closed) unacknowledged window,
+  reconnect catch-up that resends byte-identical frames, and durable restart
+  re-hydration of the exact unacknowledged tail — the worker half of Gateway-side
+  exactly-once materialization. Terminal settlement is idempotent, retains the
+  canonical HX-306 usage ids without fabricating accounting, rejects a
+  conflicting re-settle, and does not re-settle after restart.
+- With the live-PostgreSQL contention gate satisfied (`96cb77496`), the
+  production-dark routes 8-10 dispatch wire and routes 2-6 assignment RPC are now
+  composable into the native listener: the native mux registers routes 8-10, the
+  admission composition requires both the assignment RPC and dispatch owners
+  (fail-closed), and a reusable runtime-composition factory assembles both over
+  the canonical repositories. This is gated behind an explicit
+  `GOATCITADEL_WORKER_ASSIGNMENT_RUNTIME_ENABLED` flag (default OFF); default
+  production omits the owners and the listener stays dark, so the connected-worker
+  E2E composes them, not production-by-default.
+- Still open on the live loop: production scheduler dispatch (offer creation is
+  still production-dark), and provider inference plus HX-506 artifact/effect
+  settlement. The latter two owners ship production-dark but have NO PoP-v2 wire
+  route in the closed ten-purpose protected-proof table
+  (`REMOTE_WORKER_POP_V2_ROUTE_BINDINGS` is exactly codes 1-10); reaching them
+  needs new route bindings the Windows protected PoP-v2 signer's closed table must
+  also admit — a separate security-reviewed tranche (HX-501B2-adjacent).
 - Prove worker death, disconnect, lease takeover, cancellation, stale callback
-  fencing, restart recovery, and approval-gated resume.
+  fencing, and approval-gated resume against the live listener once the reachable
+  loop is driven end-to-end by the worker process. Restart recovery and
+  no-duplicate-accounting are already proven in the worker runtime core.
 
 Owner contracts: `OPENCLAW_HERMES_PARITY_PROGRAM.md`, `HX-502` and `HX-504`.
 
@@ -363,9 +383,25 @@ Owner contracts: `OPENCLAW_HERMES_PARITY_PROGRAM.md`, `HX-502` and `HX-504`.
 ### Acceptance
 
 `pnpm verify:remote-workers` already proves the Gateway-side composition and
-live PostgreSQL owners. M4 closes only when its connected-worker E2E row runs
-instead of reporting the documented conditional skip and the UI renders live,
-truth-labeled data.
+live PostgreSQL owners. As of this tranche the connected-worker runtime core
+exists (`apps/remote-worker`, see M3) and the routes 2-6/8-10 assignment RPC and
+dispatch owners are composable into the native listener behind an activation
+flag, so the reachable admission -> dispatch -> workload -> ordered-event ->
+lease-renewal -> assignment-settlement sub-loop is now composable single-host.
+
+M4 still does not close, and scenario 12 remains a **sharpened** declared skip
+(not the old vague "requires a live remote worker") for one precise reason: the
+HX-503 inference proxy and HX-506 artifact/effect settlement owners have NO
+PoP-v2 wire route. `REMOTE_WORKER_POP_V2_ROUTE_BINDINGS` is a closed
+ten-purpose table (codes 1-10: bootstrap, assignment sync/lease/events/control/
+settle, mesh admit, offer-poll/claim/workload) with no inference or CAS-settlement
+purpose; adding one also requires extending the closed table the Windows
+protected PoP-v2 signer enforces. Until that security-reviewed tranche lands, a
+live worker cannot proxy inference or settle artifacts/effects through the
+Gateway, and the HX-507 live-runtime fields (connection health, usage/cost,
+resource cell, artifact/effect) stay `unavailable`-labeled. M4 closes when those
+routes exist, the full E2E row executes, and the UI renders live, truth-labeled
+data.
 
 Owner contracts: `OPENCLAW_HERMES_PARITY_PROGRAM.md`, `HX-503` through `HX-507`.
 
@@ -515,7 +551,12 @@ Owner backlogs: `CAPABILITY_SYSTEM_BACKLOG.md`,
 ### Current work
 
 - Integrate live HX-507 worker visibility after M4 instead of testing seeded and
-  live variants in separate broad campaigns.
+  live variants in separate broad campaigns. The HX-507 Ops/Chat projections are
+  wired and label registry/assignment/lease/generation/control/settlement truth
+  from canonical storage, but the live-runtime fields (connection health,
+  usage/cost, resource cell, artifact/effect) remain server-labeled `unavailable`
+  and gain new read ports only after M4's inference/settlement routing hold lands
+  and a connected worker populates those records.
 
 ### Acceptance
 

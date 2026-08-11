@@ -146,7 +146,7 @@ export function buildRemoteWorkersLaneChecks() {
       // (or a fresh worktree) self-bootstraps instead of failing on missing
       // builds. The remote-worker owners span all six packages below.
       title:
-        "Release hygiene: contracts, storage, gateway, policy-engine, shared-client, and mission-control-next boundary typechecks over the remote-worker span",
+        "Release hygiene: contracts, storage, gateway, policy-engine, shared-client, mission-control-next, and the connected-worker runtime (apps/remote-worker) boundary typechecks over the remote-worker span",
       args: [
         "--filter",
         "@goatcitadel/contracts",
@@ -160,6 +160,8 @@ export function buildRemoteWorkersLaneChecks() {
         "@goatcitadel/mission-control-shared",
         "--filter",
         "@goatcitadel/mission-control-next",
+        "--filter",
+        "@goatcitadel/remote-worker",
         "typecheck",
       ],
     },
@@ -217,9 +219,12 @@ export function buildRemoteWorkersLaneChecks() {
       // settlement (artifact store/settlement, verification, effect settlement,
       // integration), and HX-507 visibility route service + routes.
       title:
-        "Gateway owners: HX-501/501B1 protocol (durable nonce, transport/PoP evidence, secret-free diagnostics); HX-503 inference proxy (one effective route, secret isolation, atomic-budget recheck, no redispatch after ambiguous acceptance, HX-306 accounting); HX-505 execution cell (server-owned profiles, capacity, deny-by-default egress, bounded capture, container-only, hash-bound backup/restore); HX-506 settlement (CAS store, Gateway-trusted verification, generation-fenced artifact/effect settlement, worker-claim non-authority, integration); HX-507 visibility (authority labels, bounded redacted events, stable cursors, idempotent controls, access-class isolation, no-store)",
+        "Gateway owners: HX-501/501B1 protocol (durable nonce, transport/PoP evidence, secret-free diagnostics); native-listener composition (routes 2-6 + 8-10 mux registration, fail-closed admission composition, flag-gated assignment-runtime composition); HX-503 inference proxy (one effective route, secret isolation, atomic-budget recheck, no redispatch after ambiguous acceptance, HX-306 accounting); HX-505 execution cell (server-owned profiles, capacity, deny-by-default egress, bounded capture, container-only, hash-bound backup/restore); HX-506 settlement (CAS store, Gateway-trusted verification, generation-fenced artifact/effect settlement, worker-claim non-authority, integration); HX-507 visibility (authority labels, bounded redacted events, stable cursors, idempotent controls, access-class isolation, no-store)",
       args: gatewayVitest([
         "services/remote-worker-protocol.test.ts",
+        "services/remote-worker-native-handler-mux.test.ts",
+        "services/remote-worker-admission-composition.test.ts",
+        "services/remote-worker-assignment-runtime-composition.test.ts",
         "services/remote-worker-inference-service.test.ts",
         "services/remote-worker-inference-llm-adapter.test.ts",
         "services/remote-worker-cell-service.test.ts",
@@ -478,8 +483,8 @@ export function buildRemoteWorkersProofMatrix() {
       checks: [],
       suites: [],
       skipReason:
-        "SKIP: requires a live remote worker executing assigned work (a real second process connecting through the native listener, receiving a dispatched assignment, proxying inference, streaming transcript/events, and settling artifacts/effects). No connected worker runtime exists on this host. The Gateway-side owners of every stage are proven single-host by scenarios 1-9; only the live end-to-end composition is the documented HOLD.",
-      note: "Each stage's Gateway-side authority executes above: admission/nonce (scenarios 1-2), inference proxy with no-redispatch-after-ambiguous-acceptance and HX-306 accounting (scenario 3), ordered-event/materialization transport (scenario 4), settlement with generation-fenced intent-before-delivery (scenario 6), and restart/recovery fencing in the assignment owner (scenario 2). The composed live worker loop is held pending live HX-501 listener authority and a connected worker runtime — the same HOLD the HX-503/505/506/507 packets and the parity-program rows record.",
+        "SKIP: two stages of the full connected-worker loop have no worker-facing wire route, so a live remote worker cannot execute the complete admission -> dispatch -> inference -> transcript/event transport -> artifact/effect settlement journey single-host. What now EXISTS and is unit-proven: the connected-worker runtime (apps/remote-worker — durable credential/lease/signing-pin retention, reconnect/restart without one-time-secret replay, ordered exactly-once transcript outbox, idempotent no-duplicate-accounting settlement) and the routes 2-6 assignment RPC + routes 8-10 dispatch owners composed into the native listener behind GOATCITADEL_WORKER_ASSIGNMENT_RUNTIME_ENABLED (default dark). What is MISSING: the HX-503 inference proxy and HX-506 artifact/effect settlement owners have NO PoP-v2 binding in the closed ten-purpose protected-proof table (REMOTE_WORKER_POP_V2_ROUTE_BINDINGS is exactly codes 1-10; none is inference/settlement). Adding those routes also requires extending the closed table the Windows protected PoP-v2 signer enforces — a separate security-reviewed tranche that cannot be built or proven on this single host. So the reachable dispatch/ordered-event/lease-renewal/assignment-settlement sub-loop is composable, but the marquee inference and CAS-settlement stages remain routeless; this row stays a sharpened declared skip rather than faked execution.",
+      note: "Each stage's Gateway-side authority executes above: admission/nonce (scenarios 1-2), inference proxy with no-redispatch-after-ambiguous-acceptance and HX-306 accounting (scenario 3), ordered-event/materialization transport (scenario 4), settlement with generation-fenced intent-before-delivery (scenario 6), and restart/recovery fencing in the assignment owner (scenario 2). The worker runtime core and the routes 2-6/8-10 native composition now exist and are exercised by the release-hygiene typecheck (apps/remote-worker, scenario 10) and the Gateway owner check (mux, admission composition, assignment-runtime composition — scenarios 3/5/6/7). The remaining hold is precisely the inference (HX-503) and artifact/effect settlement (HX-506) stages, whose owners ship production-dark but have no PoP-v2 wire route; wiring them touches the closed protected-proof table the Windows signer enforces and is deferred to a security-reviewed tranche (HX-501B2-adjacent).",
     },
   ];
 }
