@@ -152,7 +152,7 @@ export type GovernedRemediationDurableResumeResult =
       readonly reason: "resume_failed" | "owner_revision_conflict";
     };
 
-export interface GovernedRemediationDurableResumeObservationRequest extends GovernedRemediationDurableResumeRequest {}
+export type GovernedRemediationDurableResumeObservationRequest = GovernedRemediationDurableResumeRequest;
 
 export type GovernedRemediationDurableResumeObservation =
   | { readonly observation: "resume_completed"; readonly resumedRunVersion: number }
@@ -214,6 +214,47 @@ export interface ContinueGovernedRemediationInput {
   readonly action: GovernedRemediationContinuationAction;
 }
 
+export type GovernedRemediationEffectDisposition =
+  | "no_effect"
+  | "effect_applied"
+  | "effect_rolled_back"
+  | "effect_unknown";
+
+/**
+ * Secret-free settlement summary derived only from durable state and receipts.
+ * Owners use it to retire their pre-effect journals boundedly: a decisive
+ * disposition means the durable receipt lineage already owns the evidence.
+ */
+export interface GovernedRemediationCompletionNotice {
+  readonly remediationId: string;
+  readonly ownerId: string;
+  readonly recipeId: string;
+  readonly recipeVersion: number;
+  readonly recipeSha256: string;
+  readonly scope: GovernedRemediationScope;
+  readonly terminalState: GovernedRemediationState;
+  readonly stateRevision: number;
+  readonly effectId: string | null;
+  readonly effectDisposition: GovernedRemediationEffectDisposition;
+  readonly latestReceiptId: string | null;
+  readonly settledAt: string;
+}
+
+/**
+ * Post-settlement callback. Delivery is at-least-once and in-process only, so
+ * implementations must be idempotent and must not treat a missed call as data
+ * loss: the durable truth stays queryable through completionNoticeFor, which
+ * boot-time journal replay uses to retire entries across crash windows.
+ */
+export interface GovernedRemediationCompletionPort {
+  onRemediationSettled(notice: GovernedRemediationCompletionNotice): void | Promise<void>;
+}
+
+export interface GovernedRemediationCompletionRegistration {
+  readonly ownerId: string;
+  readonly port: GovernedRemediationCompletionPort;
+}
+
 export interface GovernedRemediationRecoveryFailure {
   readonly aggregateKind: "state" | "reconciliation";
   readonly aggregateId: string;
@@ -240,6 +281,8 @@ export interface GovernedRemediationCoordinatorOptions {
   readonly deploymentProfile: DeploymentProfile;
   readonly claimantId: string;
   readonly phaseLeaseDurationSeconds?: number;
+  /** At most one completion port per owner ID; callbacks never gate settlement. */
+  readonly completionPorts?: readonly GovernedRemediationCompletionRegistration[];
   readonly now?: () => string;
 }
 
@@ -310,6 +353,7 @@ export class GovernedRemediationCoordinator {
   private readonly deploymentProfile: DeploymentProfile;
   private readonly claimantId: string;
   private readonly phaseLeaseDurationSeconds: number;
+  private readonly completionPorts: ReadonlyMap<string, GovernedRemediationCompletionPort>;
   private readonly now: () => string;
 
   public constructor(options: GovernedRemediationCoordinatorOptions) {
@@ -327,7 +371,107 @@ export class GovernedRemediationCoordinator {
     this.deploymentProfile = options.deploymentProfile;
     this.claimantId = secretFreeIdentifier(options.claimantId, "claimant ID");
     this.phaseLeaseDurationSeconds = boundedInteger(options.phaseLeaseDurationSeconds ?? 30, 1, 300);
+    const completionPorts = new Map<string, GovernedRemediationCompletionPort>();
+    for (const registration of options.completionPorts ?? []) {
+      const ownerId = secretFreeIdentifier(registration.ownerId, "completion port owner ID");
+      if (typeof registration.port?.onRemediationSettled !== "function") {
+        throw new TypeError("Governed remediation completion port must implement onRemediationSettled.");
+      }
+      if (completionPorts.has(ownerId)) {
+        throw new TypeError(`Governed remediation completion port for ${ownerId} is already registered.`);
+      }
+      completionPorts.set(ownerId, registration.port);
+    }
+    this.completionPorts = completionPorts;
     this.now = options.now ?? (() => new Date().toISOString());
+  }
+
+  /**
+   * Exact settlement truth for owner journal retirement. Returns null until the
+   * remediation is durably terminal; the disposition is derived only from the
+   * stored state, receipts, and effect-reconciliation records, never from owner
+   * or model claims.
+   */
+  public completionNoticeFor(remediationId: string): GovernedRemediationCompletionNotice | null {
+    let stored: GovernedRemediationStoredState;
+    try {
+      stored = this.repository.getState(secretFreeIdentifier(remediationId, "remediation ID"));
+    } catch (error) {
+      if (error instanceof NotFoundError) return null;
+      throw error;
+    }
+    if (!TERMINAL_STATES.has(stored.record.state)) return null;
+    return this.buildCompletionNotice(stored);
+  }
+
+  private buildCompletionNotice(stored: GovernedRemediationStoredState): GovernedRemediationCompletionNotice {
+    const receipts = this.repository.listReceipts(stored.record.remediationId);
+    const applicationReceipt = receipts.find((receipt) => receipt.kind === "application");
+    const rolledBackReceipt = receipts.find(
+      (receipt) => receipt.kind === "rollback" && receipt.outcome === "rolled_back",
+    );
+    let effectReconciliation: GovernedRemediationReconciliation | null = null;
+    if (stored.record.reconciliationId) {
+      try {
+        const reconciliation = this.repository.getReconciliation(stored.record.reconciliationId);
+        if (reconciliation.domain === "effect") effectReconciliation = reconciliation;
+      } catch (error) {
+        if (!(error instanceof NotFoundError)) throw error;
+      }
+    }
+    let effectDisposition: GovernedRemediationEffectDisposition;
+    if (rolledBackReceipt || effectReconciliation?.state === "resolved_rolled_back") {
+      effectDisposition = "effect_rolled_back";
+    } else if (effectReconciliation && !TERMINAL_RECONCILIATION_STATES.has(effectReconciliation.state)) {
+      effectDisposition = "effect_unknown";
+    } else if (effectReconciliation?.state === "manual_required") {
+      effectDisposition = "effect_unknown";
+    } else if (effectReconciliation?.state === "resolved_no_effect") {
+      effectDisposition = "no_effect";
+    } else if (applicationReceipt) {
+      effectDisposition = "effect_applied";
+    } else {
+      effectDisposition = "no_effect";
+    }
+    return Object.freeze({
+      remediationId: stored.record.remediationId,
+      ownerId: stored.ownerId,
+      recipeId: stored.record.recipeId,
+      recipeVersion: stored.record.recipeVersion,
+      recipeSha256: stored.record.recipeSha256,
+      scope: stored.record.scope,
+      terminalState: stored.record.state,
+      stateRevision: stored.record.revision,
+      effectId: stored.record.effectId,
+      effectDisposition,
+      latestReceiptId: stored.record.latestReceiptId,
+      settledAt: stored.record.updatedAt,
+    });
+  }
+
+  /**
+   * Post-commit, at-least-once notification. A callback failure never rewinds
+   * or blocks the already-durable settlement; missed deliveries stay
+   * recoverable through completionNoticeFor during owner boot replay.
+   */
+  private notifySettled(stored: GovernedRemediationStoredState): void {
+    if (!TERMINAL_STATES.has(stored.record.state)) return;
+    const port = this.completionPorts.get(stored.ownerId);
+    if (!port) return;
+    let notice: GovernedRemediationCompletionNotice;
+    try {
+      notice = this.buildCompletionNotice(stored);
+    } catch {
+      return;
+    }
+    try {
+      const result = port.onRemediationSettled(notice);
+      if (result && typeof (result as Promise<void>).catch === "function") {
+        void (result as Promise<void>).catch(() => undefined);
+      }
+    } catch {
+      // Settlement is already durable; retirement retries via boot replay.
+    }
   }
 
   /** Creation is side-effect free. A revision-bound continuation must opt in to every later phase. */
@@ -2054,13 +2198,16 @@ export class GovernedRemediationCoordinator {
       outcome,
       publicationIdempotencyKey: operationKey("claim-publish", acquired.claim.claimId),
     } as const;
+    let published: GovernedRemediationClaimedPhasePublicationResult;
     try {
-      return this.repository.publishClaimedPhaseOutcome(input);
+      published = this.repository.publishClaimedPhaseOutcome(input);
     } catch {
       // A commit may have succeeded before the response was lost. Replaying the
       // same witnessed publication is safe and must never redo the owner effect.
-      return this.repository.publishClaimedPhaseOutcome(input);
+      published = this.repository.publishClaimedPhaseOutcome(input);
     }
+    if (published.state && !published.replayed) this.notifySettled(published.state);
+    return published;
   }
 
   private async authorize(
@@ -2173,13 +2320,15 @@ export class GovernedRemediationCoordinator {
   ): Promise<GovernedRemediationStoredState> {
     const next = this.nextState(current, state, patch);
     try {
-      return this.repository.transitionState({
+      const transitioned = this.repository.transitionState({
         ownerId: current.ownerId,
         expectedRevision: current.record.revision,
         next,
         idempotencyKey,
         recordedAt: next.updatedAt,
       }).record;
+      this.notifySettled(transitioned);
+      return transitioned;
     } catch (error) {
       if (!(error instanceof ConflictError) || strict) throw error;
       const latest = this.repository.getState(current.record.remediationId);
@@ -3029,8 +3178,9 @@ function secretFreeIdentifier(value: unknown, label: string, maxLength = 256): s
     value.length > maxLength ||
     value.trim() !== value ||
     !/^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/u.test(value) ||
+    // eslint-disable-next-line no-control-regex -- control characters are rejected by design
     /[\u0000-\u001f\u007f]/u.test(value) ||
-    /(?:(?:api[_-]?key|auth(?:orization)?|cookie|credential|password|secret|token)\s*[:=]\s*["']?[a-z0-9._\/-]{8,}|\bbearer\s+[a-z0-9._~+\/-]{12,}|\bsk-[a-z0-9_-]{16,}|\bghp_[a-z0-9_]{16,}|\bxox[baprs]-[a-z0-9-]{16,}|-----BEGIN [A-Z ]*PRIVATE KEY-----)/iu.test(
+    /(?:(?:api[_-]?key|auth(?:orization)?|cookie|credential|password|secret|token)\s*[:=]\s*["']?[a-z0-9._/-]{8,}|\bbearer\s+[a-z0-9._~+/-]{12,}|\bsk-[a-z0-9_-]{16,}|\bghp_[a-z0-9_]{16,}|\bxox[baprs]-[a-z0-9-]{16,}|-----BEGIN [A-Z ]*PRIVATE KEY-----)/iu.test(
       value,
     )
   ) {

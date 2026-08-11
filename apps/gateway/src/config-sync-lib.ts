@@ -127,6 +127,21 @@ async function readJson(filePath: string): Promise<unknown> {
   return parseJson(raw, filePath);
 }
 
+/**
+ * Exact bytes a split-config mirror file must contain for the given section
+ * value, preserving the current file's line-ending convention. Governed mirror
+ * repair must reuse this so repaired bytes can never drift from what
+ * syncUnifiedConfig would itself write.
+ */
+export function renderConfigMirrorBytes(currentContent: string | null, sectionValue: unknown): string {
+  return applyPreferredLineEndings(serializeJson(sectionValue), detectLineEnding(currentContent ?? ""));
+}
+
+/** True when the two contents are equivalent under the sync comparison rules. */
+export function configMirrorContentEquals(left: string, right: string): boolean {
+  return normalizeComparableContent(left) === normalizeComparableContent(right);
+}
+
 function parseJson(raw: string, filePath: string): unknown {
   try {
     return JSON.parse(raw);

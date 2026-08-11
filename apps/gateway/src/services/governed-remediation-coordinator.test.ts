@@ -15,6 +15,8 @@ import {
   GovernedRemediationCoordinator,
   type GovernedRemediationAuthorityPort,
   type GovernedRemediationAuthorityRequest,
+  type GovernedRemediationCompletionNotice,
+  type GovernedRemediationCompletionRegistration,
   type GovernedRemediationDurableParentPort,
   type GovernedRemediationDurableResumeObservation,
   type GovernedRemediationDurableResumeRequest,
@@ -371,6 +373,7 @@ function createHarness(
     authority?: RecordingAuthority;
     phaseLeaseDurationSeconds?: number;
     extraRegistrations?: ConstructorParameters<typeof GovernedRemediationRecipeRegistry>[0];
+    completionPorts?: readonly GovernedRemediationCompletionRegistration[];
   } = {},
 ) {
   const dbPath = path.join(os.tmpdir(), `goatcitadel-remediation-coordinator-${randomUUID()}.db`);
@@ -399,6 +402,7 @@ function createHarness(
       deploymentProfile: "trusted_local",
       claimantId,
       phaseLeaseDurationSeconds: input.phaseLeaseDurationSeconds ?? 30,
+      completionPorts: input.completionPorts,
       now: () => "2026-08-08T21:00:00.000Z",
     });
   const coordinator = makeCoordinator("gateway-worker-a");
@@ -988,5 +992,143 @@ describe("GovernedRemediationCoordinator v2 authority", () => {
     });
     expect(harness.repository.getState("remediation-b").record.state).toBe("completed");
     expect(harness.owner.committedApplyCount).toBe(1);
+  });
+});
+
+describe("GovernedRemediationCoordinator completion callback seam", () => {
+  function recordingCompletionPort(ownerId = "configuration-owner") {
+    const notices: GovernedRemediationCompletionNotice[] = [];
+    const registration: GovernedRemediationCompletionRegistration = {
+      ownerId,
+      port: {
+        onRemediationSettled(notice) {
+          notices.push(notice);
+        },
+      },
+    };
+    return { notices, registration };
+  }
+
+  it("rejects duplicate or malformed completion registrations", () => {
+    const { registration } = recordingCompletionPort();
+    expect(() => createHarness({ completionPorts: [registration, registration] })).toThrow(/already registered/u);
+    expect(() =>
+      createHarness({
+        completionPorts: [{ ownerId: "configuration-owner", port: {} as never }],
+      }),
+    ).toThrow(/onRemediationSettled/u);
+  });
+
+  it("notifies the exact owner once after durable completion and stays queryable for boot replay", async () => {
+    const { notices, registration } = recordingCompletionPort();
+    const foreign = recordingCompletionPort("some-other-owner");
+    const harness = createHarness({ completionPorts: [registration, foreign.registration] });
+    harness.coordinator.start(startInput());
+    expect(harness.coordinator.completionNoticeFor("remediation-1")).toBeNull();
+    expect(harness.coordinator.completionNoticeFor("remediation-missing")).toBeNull();
+
+    const result = await proceed(harness);
+    expect(result.record.state).toBe("completed");
+    expect(foreign.notices).toEqual([]);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatchObject({
+      remediationId: "remediation-1",
+      ownerId: "configuration-owner",
+      recipeId: "recipe.declarative.configuration",
+      terminalState: "completed",
+      effectDisposition: "effect_applied",
+      effectId: result.record.effectId,
+      latestReceiptId: result.record.latestReceiptId,
+    });
+    expect(harness.coordinator.completionNoticeFor("remediation-1")).toEqual(notices[0]);
+  });
+
+  it("keeps settlement durable when the completion callback itself fails", async () => {
+    let calls = 0;
+    const harness = createHarness({
+      completionPorts: [
+        {
+          ownerId: "configuration-owner",
+          port: {
+            onRemediationSettled() {
+              calls += 1;
+              throw new Error("completion port crashed");
+            },
+          },
+        },
+      ],
+    });
+    harness.coordinator.start(startInput());
+    const result = await proceed(harness);
+    expect(result.record.state).toBe("completed");
+    expect(calls).toBe(1);
+    expect(harness.coordinator.completionNoticeFor("remediation-1")).toMatchObject({
+      effectDisposition: "effect_applied",
+    });
+  });
+
+  it("reports no_effect for pre-effect terminal outcomes", async () => {
+    const { notices, registration } = recordingCompletionPort();
+    const harness = createHarness({ completionPorts: [registration] });
+    harness.coordinator.start(startInput());
+    const declined = await harness.coordinator.continue({
+      remediationId: "remediation-1",
+      requesterActorId: "actor-1",
+      workspaceId: "workspace-1",
+      expectedStateRevision: 1,
+      commandIdempotencyKey: "decline-before-effect",
+      action: { kind: "decline" },
+    });
+    expect(declined.record.state).toBe("declined");
+    expect(harness.owner.rawApplyCalls).toBe(0);
+    expect(notices.at(-1)).toMatchObject({ terminalState: "declined", effectDisposition: "no_effect" });
+    expect(harness.coordinator.completionNoticeFor("remediation-1")).toMatchObject({
+      effectDisposition: "no_effect",
+    });
+  });
+
+  it("reports effect_rolled_back after a rollback-terminated remediation", async () => {
+    const configuredRecipe = recipe({ activationMode: "owner_step", activationApproval: "required" });
+    const owner = new FakeConfigurationOwner();
+    owner.activationMode = "owner_step";
+    const { notices, registration } = recordingCompletionPort();
+    const harness = createHarness({ configuredRecipe, owner, completionPorts: [registration] });
+    harness.coordinator.start(startInput());
+    const awaiting = await proceed(harness);
+    expect(awaiting.record.state).toBe("awaiting_activation_approval");
+    expect(notices).toEqual([]);
+    const declined = await harness.coordinator.continue({
+      remediationId: "remediation-1",
+      requesterActorId: "actor-1",
+      workspaceId: "workspace-1",
+      expectedStateRevision: awaiting.record.revision,
+      commandIdempotencyKey: "decline-activation-completion",
+      action: { kind: "decline" },
+    });
+    expect(declined.record.state).toBe("declined");
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatchObject({ terminalState: "declined", effectDisposition: "effect_rolled_back" });
+  });
+
+  it("holds effect_unknown while an effect reconciliation is open and settles it after recovery", async () => {
+    const owner = new FakeConfigurationOwner();
+    owner.applyThrowsAfterCommit = true;
+    const { notices, registration } = recordingCompletionPort();
+    const harness = createHarness({ owner, completionPorts: [registration] });
+    harness.coordinator.start(startInput());
+    const quarantined = await proceed(harness);
+    expect(quarantined.record.state).toBe("failed");
+    expect(notices.at(-1)).toMatchObject({ terminalState: "failed", effectDisposition: "effect_unknown" });
+    expect(harness.coordinator.completionNoticeFor("remediation-1")).toMatchObject({
+      effectDisposition: "effect_unknown",
+    });
+
+    owner.effectVerified = true;
+    const recovered = await harness.coordinator.recoverReconciliations({ limit: 10, pageSize: 1 });
+    expect(recovered.reconciliations[0]).toMatchObject({ state: "resolved_verified" });
+    expect(harness.coordinator.completionNoticeFor("remediation-1")).toMatchObject({
+      terminalState: "failed",
+      effectDisposition: "effect_applied",
+    });
   });
 });

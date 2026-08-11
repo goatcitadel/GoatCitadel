@@ -145,6 +145,7 @@ export default tseslint.config(
   },
   {
     files: [
+      "apps/gateway/src/services/governed-remediation-coordinator.ts",
       "apps/gateway/src/services/llm-completion-service.ts",
       "packages/gateway-core/src/channel-core.ts",
       "packages/mission-control-shared/src/components/chat/ChatThreadPrimitives.tsx",
