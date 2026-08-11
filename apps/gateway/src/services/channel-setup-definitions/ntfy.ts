@@ -22,7 +22,7 @@ export function createNtfyDefinition(): ChannelSetupRuntimeDefinition {
     catalog: baseCatalogMeta(catalog, ["guided", "manual"]),
     wizard: {
       archetype: "webhook_destination",
-      contentVersion: "2026.06.ntfy.outbound.v1",
+      contentVersion: "2026.08.ntfy.outbound.v2",
       estimatedMinutes: 4,
       difficulty: "beginner",
       manualModePolicy: "available-secondary",
@@ -124,6 +124,16 @@ export function createNtfyDefinition(): ChannelSetupRuntimeDefinition {
               explanation: "Validate routing without sending a real ntfy publish request.",
               canChangeLater: true,
             },
+          ],
+        },
+        {
+          id: "test",
+          kind: "test",
+          title: "Validate the draft",
+          body: [
+            paragraph(
+              "Guided test publishes a sandbox notification to the configured topic through the ntfy publish API. Enable dry-run first if you only want routing validation without a visible notification.",
+            ),
           ],
         },
         {

@@ -860,9 +860,7 @@ const STEPS = [
       clickPattern("Verification sandbox channel"),
       click("Save draft"),
       text("Channel draft saved."),
-      // The guided ntfy wizard has no test-kind step, so Validate lives on the
-      // always-available Advanced JSON surface of the channel setup wizard.
-      click("Advanced JSON"),
+      clickPattern("Validate the draft"),
       click("Validate"),
       text("Channel draft validated."),
       text("Validation passed"),
@@ -870,7 +868,7 @@ const STEPS = [
   ),
   step("settings-governance-runtime-integrations", "route.settings-channels.sandbox-destination", "settings-channels", [
     clickPattern("Verification sandbox channel"),
-    click("Advanced JSON"),
+    clickPattern("Validate the draft"),
     click("Run live test"),
     text("Live test passed"),
     text("Finalize the connection"),

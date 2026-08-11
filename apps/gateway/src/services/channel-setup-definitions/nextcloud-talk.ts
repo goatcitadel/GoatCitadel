@@ -20,7 +20,7 @@ export function createNextcloudTalkDefinition(): ChannelSetupRuntimeDefinition {
     catalog: baseCatalogMeta(catalog, ["guided", "manual"]),
     wizard: {
       archetype: "workspace_server_token",
-      contentVersion: "2026.04.nextcloud-talk.v1",
+      contentVersion: "2026.08.nextcloud-talk.v2",
       estimatedMinutes: 8,
       difficulty: "intermediate",
       manualModePolicy: "available-secondary",
@@ -90,6 +90,31 @@ export function createNextcloudTalkDefinition(): ChannelSetupRuntimeDefinition {
               looksLike: "room-id",
               canChangeLater: true,
             },
+          ],
+        },
+        {
+          id: "test",
+          kind: "test",
+          title: "Validate the draft",
+          body: [
+            paragraph(
+              "Guided test runs the readiness checks for this draft: the base URL shape, the configured token reference, and the default room id used for operator delivery.",
+            ),
+          ],
+        },
+        {
+          id: "finish",
+          kind: "confirm",
+          title: "Finish setup",
+          body: [
+            paragraph(
+              "After finalizing, send a sandbox message to the default room to confirm the bot can deliver before relying on this connection.",
+            ),
+          ],
+          successCriteria: [
+            "The base URL points at the Nextcloud instance that hosts Talk.",
+            "A Talk token or an env-backed token reference is configured.",
+            "The default room id is the room GoatCitadel may use for fallback sends.",
           ],
         },
       ],

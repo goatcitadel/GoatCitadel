@@ -62,6 +62,24 @@ describe("channel setup definitions", () => {
     );
   });
 
+  it("exposes a guided test step ahead of any confirm step for every guided definition", () => {
+    for (const definition of listChannelSetupDefinitions()) {
+      if (!definition.catalog.supportedModes.includes("guided")) {
+        continue;
+      }
+      const steps = definition.wizard.steps;
+      const testIndex = steps.findIndex((step) => step.kind === "test");
+      expect(testIndex, `${definition.catalog.catalogId} has no guided test step`).toBeGreaterThanOrEqual(0);
+      const confirmIndex = steps.findIndex((step) => step.kind === "confirm");
+      if (confirmIndex >= 0) {
+        expect(
+          confirmIndex,
+          `${definition.catalog.catalogId} places its confirm step before its test step`,
+        ).toBeGreaterThan(testIndex);
+      }
+    }
+  });
+
   it("publishes complete Discord gateway setup and safety guidance", () => {
     const definition = requireChannelSetupDefinition("channel.discord").definition;
     const createBot = definition.wizard.steps.find((step) => step.id === "create-bot");
@@ -352,6 +370,33 @@ describe("channel setup definitions", () => {
         expect.objectContaining({ fieldKey: "priority", failureCategory: "malformed_value" }),
       ]),
     );
+  });
+
+  it("routes guided ntfy setup through a live test step before the finalize confirmation", () => {
+    const definition = requireChannelSetupDefinition("channel.ntfy").definition;
+
+    expect(definition.wizard.steps.map((step) => step.kind)).toEqual([
+      "intro",
+      "instruction",
+      "field-collection",
+      "test",
+      "confirm",
+    ]);
+    const testStep = definition.wizard.steps.find((step) => step.kind === "test");
+    expect(testStep?.title).toBe("Validate the draft");
+    expect(JSON.stringify(testStep)).toMatch(/dry-run/i);
+    expect(definition.wizard.contentVersion).toBe("2026.08.ntfy.outbound.v2");
+  });
+
+  it("gives guided Nextcloud Talk setup a test step and a finalize confirmation step", () => {
+    const definition = requireChannelSetupDefinition("channel.nextcloud-talk").definition;
+
+    expect(definition.wizard.steps.map((step) => step.kind)).toEqual(["intro", "field-collection", "test", "confirm"]);
+    const testStep = definition.wizard.steps.find((step) => step.kind === "test");
+    expect(testStep?.title).toBe("Validate the draft");
+    expect(JSON.stringify(testStep)).toMatch(/room/i);
+    expect(JSON.stringify(testStep)).not.toMatch(/sandbox send|live send/i);
+    expect(definition.wizard.contentVersion).toBe("2026.08.nextcloud-talk.v2");
   });
 
   it("requires a Slack auth path and a default channel", () => {
