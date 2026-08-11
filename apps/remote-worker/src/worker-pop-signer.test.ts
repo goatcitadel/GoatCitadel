@@ -80,6 +80,51 @@ describe("worker PoP v2 signer", () => {
     expect(a.proofBase64Url).not.toBe(b.proofBase64Url);
   });
 
+  it("signs the inference-exchange and settlement-submission routes (codes 11-12)", () => {
+    const { context, publicKeyPem } = keyed();
+    for (const route of [
+      {
+        rawPath: "/api/v1/remote-workers/assignment-inference-exchanges",
+        operation: "assignment.inference.exchange",
+      },
+      {
+        rawPath: "/api/v1/remote-workers/assignment-settlement-submissions",
+        operation: "assignment.settlement.submit",
+      },
+    ] as const) {
+      const signed = signWorkerCredentialPop({
+        context,
+        rawPath: route.rawPath,
+        operation: route.operation,
+        bodySha256: "1".repeat(64),
+        tlsExporterSha256: "2".repeat(64),
+        idempotencyKey: "idem-key-1",
+      });
+      expect(signed.operation).toBe(route.operation);
+      expect(signed.rawPath).toBe(route.rawPath);
+      const input: RemoteWorkerPopV2Input = {
+        schemaVersion: REMOTE_WORKER_POP_V2_SCHEMA_VERSION,
+        method: "POST",
+        rawPath: route.rawPath,
+        operation: route.operation,
+        bodySha256: "1".repeat(64),
+        nonce: signed.nonce,
+        timestamp: signed.timestamp,
+        idempotencyKey: "idem-key-1",
+        authorityKind: "credential",
+        authorityId: "cred-1",
+        authorityGeneration: 3,
+        workerGeneration: 2,
+        tlsExporterSha256: "2".repeat(64),
+        clientCertificateSha256: "a".repeat(64),
+        workerPublicKeySpkiSha256: "b".repeat(64),
+      };
+      const preimage = Buffer.from(buildRemoteWorkerPopV2Preimage(input));
+      const ok = verify(null, preimage, createPublicKey(publicKeyPem), Buffer.from(signed.proofBase64Url, "base64url"));
+      expect(ok).toBe(true);
+    }
+  });
+
   it("refuses the bootstrap route and malformed digests", () => {
     const { context } = keyed();
     expect(() =>

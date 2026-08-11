@@ -74,6 +74,20 @@ export const REMOTE_WORKER_POP_V2_ROUTE_BINDINGS = Object.freeze([
     operation: "assignment.workload.read",
     authorityKind: "credential",
   }),
+  Object.freeze({
+    code: 11,
+    method: "POST",
+    rawPath: "/api/v1/remote-workers/assignment-inference-exchanges",
+    operation: "assignment.inference.exchange",
+    authorityKind: "credential",
+  }),
+  Object.freeze({
+    code: 12,
+    method: "POST",
+    rawPath: "/api/v1/remote-workers/assignment-settlement-submissions",
+    operation: "assignment.settlement.submit",
+    authorityKind: "credential",
+  }),
 ] as const);
 
 export type RemoteWorkerPopV2RouteBinding = (typeof REMOTE_WORKER_POP_V2_ROUTE_BINDINGS)[number];
@@ -116,11 +130,12 @@ export const REMOTE_WORKER_POP_V2_FIXED_MATERIAL_BYTES = FIXED_HEADER_BYTES + UI
 export const REMOTE_WORKER_POP_V2_PREIMAGE_BYTES = DOMAIN_BYTES.byteLength + REMOTE_WORKER_POP_V2_FIXED_MATERIAL_BYTES;
 
 /**
- * Normalize the closed ten-purpose protected-proof table. Codes 8 through 10
+ * Normalize the closed twelve-purpose protected-proof table. Codes 8 through 12
  * are contract-reserved and remain production-dark until their Gateway and
- * native handlers are explicitly activated. Keeping method, route, operation,
- * and authority purpose in one closed table prevents a protected key from
- * becoming a generic signing oracle.
+ * native handlers are explicitly activated (codes 11-12 carry the HX-503
+ * inference exchange and HX-506 artifact/effect settlement submission). Keeping
+ * method, route, operation, and authority purpose in one closed table prevents
+ * a protected key from becoming a generic signing oracle.
  */
 export function normalizeRemoteWorkerPopV2Material(value: unknown): RemoteWorkerPopV2Material {
   const fields = exactDataFields(

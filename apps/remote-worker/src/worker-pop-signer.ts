@@ -53,7 +53,7 @@ export function workerPopSigningContext(credential: RetainedRuntimeCredential): 
 
 /**
  * Produce an Ed25519 proof over the exact protected PoP-v2 preimage for one of
- * the credential-authority routes (2-10). The nonce is a fresh 32-byte value
+ * the credential-authority routes (2-12). The nonce is a fresh 32-byte value
  * per call, so each request consumes a distinct durable nonce Gateway-side and
  * a replay of a captured request is rejected.
  */

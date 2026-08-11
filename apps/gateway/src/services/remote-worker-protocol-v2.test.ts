@@ -129,7 +129,7 @@ function verifyV2Fixture(fixture: SignedV2Fixture) {
 }
 
 describe("remote worker protected proof v2 verification", () => {
-  it("keeps all ten contract route codes pinned while dispatch routes remain dark", () => {
+  it("keeps all twelve contract route codes pinned while dispatch and execution routes remain dark", () => {
     expect(REMOTE_WORKER_POP_V2_ROUTE_BINDINGS).toStrictEqual([
       {
         code: 1,
@@ -159,6 +159,20 @@ describe("remote worker protected proof v2 verification", () => {
         operation: route.operation,
         authorityKind: "credential",
       })),
+      {
+        code: 11,
+        method: "POST",
+        rawPath: "/api/v1/remote-workers/assignment-inference-exchanges",
+        operation: "assignment.inference.exchange",
+        authorityKind: "credential",
+      },
+      {
+        code: 12,
+        method: "POST",
+        rawPath: "/api/v1/remote-workers/assignment-settlement-submissions",
+        operation: "assignment.settlement.submit",
+        authorityKind: "credential",
+      },
     ]);
   });
 

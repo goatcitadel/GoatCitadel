@@ -11,7 +11,7 @@ import type {
 } from "./windows-helper-protocol.js";
 
 export interface WindowsProtectedRemoteWorkerPopV2Input {
-  /** Contract-owned purpose material. Only the closed ten-route v2 table is accepted. */
+  /** Contract-owned purpose material. Only the closed twelve-route v2 table is accepted. */
   readonly proof: RemoteWorkerPopV2Input;
   /** Authority pinned by the admitted protected-key owner before this one-shot call. */
   readonly protectedAuthority: {
