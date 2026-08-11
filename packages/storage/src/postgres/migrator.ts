@@ -132,6 +132,10 @@ const CANONICAL_SCHEMA_AUTHORITY_CHECKS = [
 ] as const;
 const MOBILE_PUSH_BOOTSTRAP_TABLES = ["mobile_push_registrations", "mobile_push_deliveries"] as const;
 const MOBILE_PUSH_BOOTSTRAP_DROP_ORDER = ["mobile_push_deliveries", "mobile_push_registrations"] as const;
+const MOBILE_APPROVAL_KEY_AUTHORITY_VERSION = 141;
+const MOBILE_APPROVAL_KEY_AUTHORITY_NAME = "mobile_approval_key_registration_owner";
+const MOBILE_APPROVAL_KEY_BOOTSTRAP_TABLES = ["mobile_approval_keys"] as const;
+const MOBILE_APPROVAL_KEY_BOOTSTRAP_DROP_ORDER = ["mobile_approval_keys"] as const;
 
 const POSTGRES_GOVERNED_REMEDIATION_BOOTSTRAP_PREFLIGHT_SQL = `
   /* goatcitadel_governed_remediation_bootstrap_preflight */
@@ -336,6 +340,17 @@ const POSTGRES_MOBILE_PUSH_BOOTSTRAP_DEFAULTS_SQL = `
     ON actual.column_name OPERATOR(pg_catalog.=) expected.column_name
 `;
 
+const POSTGRES_MOBILE_APPROVAL_KEY_BOOTSTRAP_PREFLIGHT_SQL = `
+  /* goatcitadel_mobile_approval_key_bootstrap_preflight */
+  SELECT EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_class AS relation
+    WHERE relation.relnamespace OPERATOR(pg_catalog.=) @schemaOid::pg_catalog.oid
+      AND relation.relname OPERATOR(pg_catalog.=) 'mobile_approval_keys'
+      AND relation.relkind OPERATOR(pg_catalog.=) 'r'
+  ) AS approval_key_table_exists
+`;
+
 export interface PostgresMigrationRunResult {
   appliedVersions: number[];
   latestVersion: number;
@@ -464,6 +479,10 @@ function isCanonicalMobilePushAuthorityMigration(migration: PostgresMigration): 
   return isCanonicalMigration(migration, MOBILE_PUSH_AUTHORITY_VERSION, MOBILE_PUSH_AUTHORITY_NAME);
 }
 
+function isCanonicalMobileApprovalKeyAuthorityMigration(migration: PostgresMigration): boolean {
+  return isCanonicalMigration(migration, MOBILE_APPROVAL_KEY_AUTHORITY_VERSION, MOBILE_APPROVAL_KEY_AUTHORITY_NAME);
+}
+
 function isCanonicalDurableHeartbeatAuthorityMigration(migration: PostgresMigration): boolean {
   return isCanonicalMigration(migration, DURABLE_HEARTBEAT_AUTHORITY_VERSION, DURABLE_HEARTBEAT_AUTHORITY_NAME);
 }
@@ -505,6 +524,13 @@ export function buildCanonicalPostgresSchemaShapeManifest(
         version: migration.version,
         name: "mobile_push_bootstrap_replacement_shape",
         sql: buildMobilePushBootstrapDropSql(POSTGRES_SCHEMA_SHAPE_SIMULATION_IDENTITY),
+      });
+    }
+    if (isCanonicalMobileApprovalKeyAuthorityMigration(migration)) {
+      simulatedMigrations.push({
+        version: migration.version,
+        name: "mobile_approval_key_bootstrap_replacement_shape",
+        sql: buildMobileApprovalKeyBootstrapDropSql(POSTGRES_SCHEMA_SHAPE_SIMULATION_IDENTITY),
       });
     }
     simulatedMigrations.push(migration);
@@ -799,6 +825,42 @@ function buildMobilePushBootstrapRowsSql(migrationSchema: PostgresMigrationSchem
   return buildBootstrapRowsSql(migrationSchema, MOBILE_PUSH_BOOTSTRAP_TABLES, "goatcitadel_mobile_push_bootstrap_rows");
 }
 
+function buildMobileApprovalKeyBootstrapManifest(): PostgresSchemaShapeManifest {
+  const bootstrap = POSTGRES_MIGRATIONS.find(
+    (migration) => migration.version === 2 && migration.name === "canonical_runtime_schema",
+  );
+  if (!bootstrap) {
+    throw new Error("Postgres mobile-approval-key bootstrap compatibility is missing canonical migration 2.");
+  }
+  const tableNames = new Set<string>(MOBILE_APPROVAL_KEY_BOOTSTRAP_TABLES);
+  const complete = buildPostgresSchemaShapeManifest([bootstrap]);
+  const manifest: PostgresSchemaShapeManifest = {
+    tables: complete.tables.filter((table) => tableNames.has(table.name)),
+    indexes: complete.indexes.filter((index) => tableNames.has(index.tableName)),
+  };
+  const actualNames = manifest.tables.map((table) => table.name).sort();
+  const expectedNames = [...MOBILE_APPROVAL_KEY_BOOTSTRAP_TABLES].sort();
+  if (actualNames.length !== expectedNames.length || actualNames.some((name, index) => name !== expectedNames[index])) {
+    throw new Error("Postgres mobile-approval-key bootstrap compatibility manifest is incomplete.");
+  }
+  return manifest;
+}
+
+function buildMobileApprovalKeyBootstrapRowsSql(migrationSchema: PostgresMigrationSchemaIdentity): string {
+  return buildBootstrapRowsSql(
+    migrationSchema,
+    MOBILE_APPROVAL_KEY_BOOTSTRAP_TABLES,
+    "goatcitadel_mobile_approval_key_bootstrap_rows",
+  );
+}
+
+function buildMobileApprovalKeyBootstrapDropSql(migrationSchema: PostgresMigrationSchemaIdentity): string {
+  const schema = quotePostgresIdentifier(migrationSchema.name);
+  return MOBILE_APPROVAL_KEY_BOOTSTRAP_DROP_ORDER.map(
+    (table) => `DROP TABLE ${schema}.${quotePostgresIdentifier(table)}`,
+  ).join(";\n");
+}
+
 async function assertPostgresBootstrapReplacementShape(
   tx: PoolClient,
   migrationSchema: PostgresMigrationSchemaIdentity,
@@ -987,6 +1049,48 @@ async function prepareMobilePushBootstrapForAuthority(
   await tx.query(buildMobilePushBootstrapDropSql(migrationSchema));
 }
 
+async function prepareMobileApprovalKeyBootstrapForAuthority(
+  tx: PoolClient,
+  migrationSchema: PostgresMigrationSchemaIdentity,
+  migration: PostgresMigration,
+): Promise<void> {
+  if (!isCanonicalMobileApprovalKeyAuthorityMigration(migration)) return;
+
+  const preflight = await tx.query<{ approval_key_table_exists: boolean }>(
+    POSTGRES_MOBILE_APPROVAL_KEY_BOOTSTRAP_PREFLIGHT_SQL.replaceAll("@schemaOid", "$1"),
+    [migrationSchema.oid],
+  );
+  if (!preflight.rows[0]?.approval_key_table_exists) return;
+
+  const manifest = buildMobileApprovalKeyBootstrapManifest();
+  const replacementLockSql = buildPostgresSchemaShapeReplacementLockSql(migrationSchema, manifest);
+  if (replacementLockSql) await tx.query(replacementLockSql);
+  const lockedPreflight = await tx.query<{ approval_key_table_exists: boolean }>(
+    POSTGRES_MOBILE_APPROVAL_KEY_BOOTSTRAP_PREFLIGHT_SQL.replaceAll("@schemaOid", "$1"),
+    [migrationSchema.oid],
+  );
+  if (!lockedPreflight.rows[0]?.approval_key_table_exists) {
+    throw new Error(
+      "Postgres mobile-approval-key bootstrap classification changed while acquiring its replacement lock; refusing automatic replacement.",
+    );
+  }
+  try {
+    await assertPostgresBootstrapReplacementShape(tx, migrationSchema, manifest);
+  } catch (error) {
+    throw new Error(
+      "Postgres mobile-approval-key bootstrap relations are not the exact current empty v141 shape; refusing automatic replacement.",
+      { cause: error },
+    );
+  }
+  const rows = await tx.query<{ has_rows: boolean }>(buildMobileApprovalKeyBootstrapRowsSql(migrationSchema));
+  if (rows.rows[0]?.has_rows !== false) {
+    throw new Error(
+      "Postgres mobile-approval-key bootstrap relations contain rows; refusing to replace authority state.",
+    );
+  }
+  await tx.query(buildMobileApprovalKeyBootstrapDropSql(migrationSchema));
+}
+
 async function reconcileLegacyCompoundV124Ledger(
   client: PostgresDatabaseClient,
   tx: PoolClient,
@@ -1043,6 +1147,7 @@ async function executePostgresAtomicMigration(
     await prepareGovernedRemediationBootstrapForFoundation(tx, migrationSchema, migration);
     await prepareRemoteWorkerMeshBootstrapForAuthority(tx, migrationSchema, migration);
     await prepareMobilePushBootstrapForAuthority(tx, migrationSchema, migration);
+    await prepareMobileApprovalKeyBootstrapForAuthority(tx, migrationSchema, migration);
     await tx.query(migration.sql);
     return false;
   }
@@ -1620,6 +1725,51 @@ function prepareMobilePushBootstrapForAuthoritySync(
   db.exec(buildMobilePushBootstrapDropSql(migrationSchema));
 }
 
+function prepareMobileApprovalKeyBootstrapForAuthoritySync(
+  db: DatabaseClient,
+  migrationSchema: PostgresMigrationSchemaIdentity | undefined,
+  migration: PostgresMigration,
+): void {
+  if (db.dialect !== "postgres" || !isCanonicalMobileApprovalKeyAuthorityMigration(migration)) return;
+  if (!migrationSchema) {
+    throw new PostgresMigrationSessionContaminationError(
+      "Postgres migration transaction is missing its validated durable schema.",
+    );
+  }
+
+  const state = db
+    .prepare(POSTGRES_MOBILE_APPROVAL_KEY_BOOTSTRAP_PREFLIGHT_SQL)
+    .get<{ approval_key_table_exists: boolean }>({ schemaOid: migrationSchema.oid });
+  if (!state?.approval_key_table_exists) return;
+
+  const manifest = buildMobileApprovalKeyBootstrapManifest();
+  const replacementLockSql = buildPostgresSchemaShapeReplacementLockSql(migrationSchema, manifest);
+  if (replacementLockSql) db.exec(replacementLockSql);
+  const lockedState = db
+    .prepare(POSTGRES_MOBILE_APPROVAL_KEY_BOOTSTRAP_PREFLIGHT_SQL)
+    .get<{ approval_key_table_exists: boolean }>({ schemaOid: migrationSchema.oid });
+  if (!lockedState?.approval_key_table_exists) {
+    throw new Error(
+      "Postgres mobile-approval-key bootstrap classification changed while acquiring its replacement lock; refusing automatic replacement.",
+    );
+  }
+  try {
+    assertPostgresBootstrapReplacementShapeSync(db, migrationSchema, manifest);
+  } catch (error) {
+    throw new Error(
+      "Postgres mobile-approval-key bootstrap relations are not the exact current empty v141 shape; refusing automatic replacement.",
+      { cause: error },
+    );
+  }
+  const rows = db.prepare(buildMobileApprovalKeyBootstrapRowsSql(migrationSchema)).get<{ has_rows: boolean }>();
+  if (rows?.has_rows !== false) {
+    throw new Error(
+      "Postgres mobile-approval-key bootstrap relations contain rows; refusing to replace authority state.",
+    );
+  }
+  db.exec(buildMobileApprovalKeyBootstrapDropSql(migrationSchema));
+}
+
 function reconcileLegacyCompoundV124LedgerSync(
   db: DatabaseClient,
   migrationSchema: PostgresMigrationSchemaIdentity | undefined,
@@ -1756,6 +1906,7 @@ function executePostgresAtomicMigrationSync(
     prepareGovernedRemediationBootstrapForFoundationSync(db, migrationSchema, migration);
     prepareRemoteWorkerMeshBootstrapForAuthoritySync(db, migrationSchema, migration);
     prepareMobilePushBootstrapForAuthoritySync(db, migrationSchema, migration);
+    prepareMobileApprovalKeyBootstrapForAuthoritySync(db, migrationSchema, migration);
     db.exec(migration.sql);
     return false;
   }

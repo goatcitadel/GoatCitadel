@@ -72,7 +72,16 @@ export {
   type MobilePushDeliveryStatus,
   type MobilePushRegistrationLifecycle,
   type MobilePushRegistrationRecord,
+  type MobilePushSendFenceOutcome,
 } from "./mobile-push-repo.js";
+import { MobileApprovalKeyRepository } from "./mobile-approval-key-repo.js";
+export {
+  MobileApprovalKeyRepository,
+  deriveMobileApprovalKeyId,
+  type MobileApprovalKeyLifecycle,
+  type MobileApprovalKeyProvenance,
+  type MobileApprovalKeyRecord,
+} from "./mobile-approval-key-repo.js";
 import { ChatTimerRepository } from "./chat-timer-repo.js";
 export { ChatTimerRepository } from "./chat-timer-repo.js";
 import { ChatSessionRunVariableRepository } from "./chat-session-run-variable-repo.js";
@@ -320,6 +329,7 @@ export class Storage {
   public readonly commsDeliveries: CommsDeliveryRepository;
   public readonly notificationRouting: NotificationRoutingRepository;
   public readonly mobilePush: MobilePushRepository;
+  public readonly mobileApprovalKeys: MobileApprovalKeyRepository;
   public readonly chatTimers: ChatTimerRepository;
   public readonly chatSessionRunVariables: ChatSessionRunVariableRepository;
   public readonly chatProjects: ChatProjectRepository;
@@ -486,6 +496,7 @@ export class Storage {
     this.commsDeliveries = new CommsDeliveryRepository(this.db);
     this.notificationRouting = new NotificationRoutingRepository(this.db);
     this.mobilePush = new MobilePushRepository(this.db);
+    this.mobileApprovalKeys = new MobileApprovalKeyRepository(this.db);
     this.chatTimers = new ChatTimerRepository(this.db);
     this.chatSessionRunVariables = new ChatSessionRunVariableRepository(this.db);
     this.chatProjects = new ChatProjectRepository(this.db);

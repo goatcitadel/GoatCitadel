@@ -6,6 +6,7 @@ import {
   type MobilePushApprovalRefreshPayload,
   type MobilePushProvider,
 } from "@goatcitadel/contracts";
+import { buildActiveGrantExpiryPredicate } from "./active-grant-predicate.js";
 import type { DatabaseClient } from "./db.js";
 
 export type MobilePushRegistrationLifecycle = "active" | "revoked";
@@ -117,6 +118,17 @@ const TERMINAL_DELIVERY_STATUSES = new Set<MobilePushDeliveryStatus>([
   "cancelled_revoked",
 ]);
 
+/**
+ * Outcome of arming the atomic revoke/send fence immediately before a provider
+ * send. `armed: false` means the send MUST NOT happen: the registration was
+ * revoked or rotated after claim, or the worker lost its lease. A revocation
+ * that commits after the fence is armed races an in-flight send; the running
+ * delivery then settles exactly once through the worker's honest finalize.
+ */
+export type MobilePushSendFenceOutcome =
+  | { armed: true; delivery: MobilePushDeliveryRecord }
+  | { armed: false; reason: "lease_lost" | "registration_revoked" | "registration_rotated" };
+
 export class MobilePushRepository {
   private readonly getRegistrationByGrantProviderStmt;
   private readonly getRegistrationByIdStmt;
@@ -132,6 +144,8 @@ export class MobilePushRepository {
   private readonly listDeliveriesStmt;
   private readonly listDueDeliveriesStmt;
   private readonly claimDeliveryStmt;
+  private readonly getRegistrationForSendFenceStmt;
+  private readonly armDeliverySendFenceStmt;
   private readonly quarantineExpiredRunningDeliveryStmt;
   private readonly finalizeDeliveryStmt;
 
@@ -313,6 +327,22 @@ export class MobilePushRepository {
         AND version = @expectedVersion
         AND status IN ('queued', 'retry_scheduled')
         AND (next_attempt_at IS NULL OR next_attempt_at <= @claimedAt)
+    `);
+    this.getRegistrationForSendFenceStmt = db.prepare(`
+      SELECT lifecycle_state, revision
+      FROM mobile_push_registrations
+      WHERE registration_id = @registrationId
+      LIMIT 1${db.dialect === "postgres" ? " FOR UPDATE" : ""}
+    `);
+    this.armDeliverySendFenceStmt = db.prepare(`
+      UPDATE mobile_push_deliveries
+      SET version = version + 1,
+          updated_at = @armedAt
+      WHERE delivery_id = @deliveryId
+        AND status = 'running'
+        AND claimed_by = @workerId
+        AND version = @expectedVersion
+        AND lease_expires_at = @expectedLeaseExpiresAt
     `);
     this.quarantineExpiredRunningDeliveryStmt = db.prepare(`
       UPDATE mobile_push_deliveries
@@ -540,6 +570,51 @@ export class MobilePushRepository {
   }
 
   /**
+   * Atomic revoke/send fence: the last durable commit point before the provider
+   * network boundary. Inside one immediate transaction the registration row is
+   * re-read (row-locked on PostgreSQL, so a concurrent revoke serializes) and
+   * the running delivery's version is advanced by CAS. A revocation or token
+   * rotation that committed before this fence therefore always wins: the fence
+   * refuses and no send happens. Once armed, a racing revocation can no longer
+   * cancel the running row (revoke only cancels queued/retry_scheduled), so the
+   * in-flight send settles exactly once through finalize with the post-fence
+   * version and an honest receipt.
+   */
+  public armDeliverySendFence(input: {
+    deliveryId: string;
+    registrationId: string;
+    expectedVersion: number;
+    expectedRegistrationRevision: number;
+    expectedLeaseExpiresAt: string;
+    workerId: string;
+    armedAt?: string;
+  }): MobilePushSendFenceOutcome {
+    const armedAt = input.armedAt ?? new Date().toISOString();
+    return this.db.transaction("immediate", () => {
+      const registration = this.getRegistrationForSendFenceStmt.get({ registrationId: input.registrationId }) as
+        | { lifecycle_state: string; revision: number }
+        | undefined;
+      if (!registration || registration.lifecycle_state !== "active") {
+        return { armed: false, reason: "registration_revoked" } as const;
+      }
+      if (Number(registration.revision) !== input.expectedRegistrationRevision) {
+        return { armed: false, reason: "registration_rotated" } as const;
+      }
+      const result = this.armDeliverySendFenceStmt.run({
+        deliveryId: input.deliveryId,
+        workerId: input.workerId,
+        expectedVersion: input.expectedVersion,
+        expectedLeaseExpiresAt: input.expectedLeaseExpiresAt,
+        armedAt,
+      });
+      if (Number(result.changes ?? 0) === 0) {
+        return { armed: false, reason: "lease_lost" } as const;
+      }
+      return { armed: true, delivery: this.getDelivery(input.deliveryId) } as const;
+    });
+  }
+
+  /**
    * A crashed running lease may already have crossed the provider boundary.
    * Quarantine it as ambiguous instead of reclaiming and risking a duplicate.
    */
@@ -738,55 +813,6 @@ function isDeliveryClassification(value: string): value is MobilePushDeliveryCla
 
 function clampLimit(value: number, max: number): number {
   return Math.max(1, Math.min(max, Math.floor(value)));
-}
-
-function buildActiveGrantExpiryPredicate(dialect: DatabaseClient["dialect"], expression: string): string {
-  if (dialect === "postgres") {
-    const canonical = `(${expression} ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]{1,9})?(Z|[+-][0-9]{2}:[0-9]{2})$')`;
-    return `COALESCE(${canonical} AND isfinite(gc_try_parse_timestamptz(${expression})) AND gc_try_parse_timestamptz(${expression}) > clock_timestamp(), FALSE)`;
-  }
-  const canonical = buildSqliteCanonicalZonedInstantPredicate(expression);
-  return `COALESCE(${canonical} AND julianday(${expression}) > julianday('now'), 0)`;
-}
-
-function buildSqliteCanonicalZonedInstantPredicate(expression: string): string {
-  const base = `substr(${expression}, 1, 19)`;
-  const basePattern = "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]";
-  const zuluFraction = `substr(${expression}, 21, length(${expression}) - 21)`;
-  const offsetFraction = `substr(${expression}, 21, length(${expression}) - 26)`;
-  const offsetShape = (signPosition: string) => `
-    substr(${expression}, ${signPosition}, 1) IN ('+', '-')
-    AND substr(${expression}, ${signPosition} + 3, 1) = ':'
-    AND substr(${expression}, ${signPosition} + 1, 2) NOT GLOB '*[^0-9]*'
-    AND substr(${expression}, ${signPosition} + 4, 2) NOT GLOB '*[^0-9]*'
-  `;
-  return `(
-    typeof(${expression}) = 'text'
-    AND ${base} GLOB '${basePattern}'
-    AND (
-      (length(${expression}) = 20 AND substr(${expression}, 20, 1) = 'Z')
-      OR (length(${expression}) = 25 AND ${offsetShape("20")})
-      OR (
-        substr(${expression}, 20, 1) = '.'
-        AND (
-          (
-            length(${expression}) >= 22
-            AND length(${expression}) <= 30
-            AND substr(${expression}, -1, 1) = 'Z'
-            AND ${zuluFraction} <> ''
-            AND ${zuluFraction} NOT GLOB '*[^0-9]*'
-          )
-          OR (
-            length(${expression}) >= 27
-            AND length(${expression}) <= 35
-            AND ${offsetShape(`length(${expression}) - 5`)}
-            AND ${offsetFraction} <> ''
-            AND ${offsetFraction} NOT GLOB '*[^0-9]*'
-          )
-        )
-      )
-    )
-  )`;
 }
 
 function sha256(value: string): string {

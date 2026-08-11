@@ -229,6 +229,185 @@ describe("MobilePushRepository", () => {
     storage.close();
   });
 
+  it("refuses the send fence after a revocation or rotation commits, and settles an armed send exactly once", () => {
+    const storage = createStorage();
+    seedActiveGrant(storage, "grant-fence");
+    const registrationId = deriveMobilePushRegistrationId("grant-fence", "expo");
+    const base = {
+      registrationId,
+      grantId: "grant-fence",
+      provider: "expo" as const,
+      tokenSecretRef: secretRef(registrationId),
+      tokenSha256: "a".repeat(64),
+    };
+    const registration = storage.mobilePush.upsertActiveRegistration({ ...base, now: "2026-08-11T06:00:00.000Z" });
+    const [queued] = storage.mobilePush.enqueueApprovalRefresh({
+      sourceRealtimeEventId: "event-fence",
+      approvalId: "approval-fence",
+      now: "2026-08-11T06:01:00.000Z",
+    });
+    assert.ok(queued);
+    const claimed = storage.mobilePush.claimDelivery({
+      deliveryId: queued.deliveryId,
+      expectedVersion: queued.version,
+      workerId: "worker-fence",
+      claimedAt: "2026-08-11T06:02:00.000Z",
+      leaseExpiresAt: "2026-08-11T06:03:00.000Z",
+    });
+    assert.ok(claimed);
+
+    // A revocation committing before the fence wins: no send may follow.
+    storage.mobilePush.ensureRevokedRegistration({ ...base, now: "2026-08-11T06:02:10.000Z" });
+    const refusedRevoked = storage.mobilePush.armDeliverySendFence({
+      deliveryId: claimed.deliveryId,
+      registrationId,
+      expectedVersion: claimed.version,
+      expectedRegistrationRevision: registration.revision,
+      expectedLeaseExpiresAt: claimed.leaseExpiresAt!,
+      workerId: "worker-fence",
+      armedAt: "2026-08-11T06:02:20.000Z",
+    });
+    assert.deepEqual(refusedRevoked, { armed: false, reason: "registration_revoked" });
+    // The claimed running row is untouched by the refusal and still settles once.
+    assert.equal(storage.mobilePush.getDelivery(claimed.deliveryId).status, "running");
+    assert.equal(storage.mobilePush.getDelivery(claimed.deliveryId).version, claimed.version);
+
+    // Re-arm path: a token rotation after claim refuses the fence too.
+    const reactivated = storage.mobilePush.upsertActiveRegistration({ ...base, now: "2026-08-11T06:04:00.000Z" });
+    const refusedRotated = storage.mobilePush.armDeliverySendFence({
+      deliveryId: claimed.deliveryId,
+      registrationId,
+      expectedVersion: claimed.version,
+      expectedRegistrationRevision: reactivated.revision - 1,
+      expectedLeaseExpiresAt: claimed.leaseExpiresAt!,
+      workerId: "worker-fence",
+      armedAt: "2026-08-11T06:04:10.000Z",
+    });
+    assert.deepEqual(refusedRotated, { armed: false, reason: "registration_rotated" });
+
+    // With an active, unrotated registration the fence arms and bumps the CAS version.
+    const armed = storage.mobilePush.armDeliverySendFence({
+      deliveryId: claimed.deliveryId,
+      registrationId,
+      expectedVersion: claimed.version,
+      expectedRegistrationRevision: reactivated.revision,
+      expectedLeaseExpiresAt: claimed.leaseExpiresAt!,
+      workerId: "worker-fence",
+      armedAt: "2026-08-11T06:05:00.000Z",
+    });
+    assert.ok(armed.armed);
+    assert.equal(armed.delivery.version, claimed.version + 1);
+    assert.equal(armed.delivery.status, "running");
+
+    // The fence is single-use: replaying with the pre-fence version loses the lease.
+    const replayedFence = storage.mobilePush.armDeliverySendFence({
+      deliveryId: claimed.deliveryId,
+      registrationId,
+      expectedVersion: claimed.version,
+      expectedRegistrationRevision: reactivated.revision,
+      expectedLeaseExpiresAt: claimed.leaseExpiresAt!,
+      workerId: "worker-fence",
+      armedAt: "2026-08-11T06:05:10.000Z",
+    });
+    assert.deepEqual(replayedFence, { armed: false, reason: "lease_lost" });
+
+    // A finalize with the stale pre-fence version cannot settle the delivery...
+    assert.equal(
+      storage.mobilePush.finalizeDelivery({
+        deliveryId: claimed.deliveryId,
+        expectedVersion: claimed.version,
+        expectedLeaseExpiresAt: claimed.leaseExpiresAt!,
+        workerId: "worker-fence",
+        status: "delivered",
+        lastClassification: "delivered",
+        updatedAt: "2026-08-11T06:06:00.000Z",
+      }),
+      undefined,
+    );
+    // ...while the armed worker settles exactly once with the honest receipt.
+    const settled = storage.mobilePush.finalizeDelivery({
+      deliveryId: claimed.deliveryId,
+      expectedVersion: armed.delivery.version,
+      expectedLeaseExpiresAt: armed.delivery.leaseExpiresAt!,
+      workerId: "worker-fence",
+      status: "delivered",
+      lastClassification: "delivered",
+      providerReceiptSha256: "b".repeat(64),
+      updatedAt: "2026-08-11T06:06:30.000Z",
+    });
+    assert.equal(settled?.status, "delivered");
+    assert.equal(settled?.providerReceiptSha256, "b".repeat(64));
+    assert.equal(
+      storage.mobilePush.finalizeDelivery({
+        deliveryId: claimed.deliveryId,
+        expectedVersion: armed.delivery.version,
+        expectedLeaseExpiresAt: armed.delivery.leaseExpiresAt!,
+        workerId: "worker-fence",
+        status: "delivered",
+        lastClassification: "delivered",
+        updatedAt: "2026-08-11T06:07:00.000Z",
+      }),
+      undefined,
+    );
+    storage.close();
+  });
+
+  it("keeps an armed in-flight send settling honestly when revocation races after the fence", () => {
+    const storage = createStorage();
+    seedActiveGrant(storage, "grant-fence-race");
+    const registrationId = deriveMobilePushRegistrationId("grant-fence-race", "expo");
+    const base = {
+      registrationId,
+      grantId: "grant-fence-race",
+      provider: "expo" as const,
+      tokenSecretRef: secretRef(registrationId),
+      tokenSha256: "c".repeat(64),
+    };
+    const registration = storage.mobilePush.upsertActiveRegistration({ ...base, now: "2026-08-11T07:00:00.000Z" });
+    const [queued] = storage.mobilePush.enqueueApprovalRefresh({
+      sourceRealtimeEventId: "event-fence-race",
+      approvalId: "approval-fence-race",
+      now: "2026-08-11T07:01:00.000Z",
+    });
+    const claimed = storage.mobilePush.claimDelivery({
+      deliveryId: queued!.deliveryId,
+      expectedVersion: queued!.version,
+      workerId: "worker-race",
+      claimedAt: "2026-08-11T07:02:00.000Z",
+      leaseExpiresAt: "2026-08-11T07:03:00.000Z",
+    });
+    const armed = storage.mobilePush.armDeliverySendFence({
+      deliveryId: claimed!.deliveryId,
+      registrationId,
+      expectedVersion: claimed!.version,
+      expectedRegistrationRevision: registration.revision,
+      expectedLeaseExpiresAt: claimed!.leaseExpiresAt!,
+      workerId: "worker-race",
+      armedAt: "2026-08-11T07:02:30.000Z",
+    });
+    assert.ok(armed.armed);
+
+    // Revocation lands while the send is in flight: it cancels only pending
+    // rows and leaves the running one for the worker's honest settlement.
+    storage.mobilePush.ensureRevokedRegistration({ ...base, now: "2026-08-11T07:02:40.000Z" });
+    assert.equal(storage.mobilePush.getDelivery(claimed!.deliveryId).status, "running");
+
+    const settled = storage.mobilePush.finalizeDelivery({
+      deliveryId: claimed!.deliveryId,
+      expectedVersion: armed.delivery.version,
+      expectedLeaseExpiresAt: armed.delivery.leaseExpiresAt!,
+      workerId: "worker-race",
+      status: "delivered",
+      lastClassification: "delivered",
+      providerReceiptSha256: "d".repeat(64),
+      updatedAt: "2026-08-11T07:02:50.000Z",
+    });
+    assert.equal(settled?.status, "delivered");
+    assert.equal(settled?.providerReceiptSha256, "d".repeat(64));
+    assert.equal(storage.mobilePush.getRegistrationById(registrationId)?.lifecycleState, "revoked");
+    storage.close();
+  });
+
   it("does not grow the outbox across an auth-revoke crash gap or expired grant", () => {
     const storage = createStorage();
     seedActiveGrant(storage, "grant-crash-gap");

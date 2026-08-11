@@ -870,12 +870,12 @@ describe("Postgres migration ledger compatibility", () => {
 
   it("models one canonical final shape after bootstrap replacement and dynamic catalog normalization", () => {
     const manifest = buildCanonicalPostgresSchemaShapeManifest(POSTGRES_MIGRATIONS);
-    assert.equal(manifest.tables.length, 311);
+    assert.equal(manifest.tables.length, 312);
     assert.equal(
       manifest.tables.reduce((count, table) => count + table.columns.length, 0),
-      4_463,
+      4_476,
     );
-    assert.equal(manifest.indexes.length, 706);
+    assert.equal(manifest.indexes.length, 708);
     assert.deepEqual(
       manifest.tables
         .find((table) => table.name === "chat_heartbeat_occurrences")
@@ -969,8 +969,8 @@ describe("Postgres migration ledger compatibility", () => {
 
   it("covers every canonical IF NOT EXISTS table and index and fails closed on catalog issues", () => {
     const manifest = buildPostgresSchemaShapeManifest(POSTGRES_MIGRATIONS);
-    assert.equal(manifest.tables.length, 311);
-    assert.equal(manifest.indexes.length, 716);
+    assert.equal(manifest.tables.length, 312);
+    assert.equal(manifest.indexes.length, 720);
     assert.equal(
       manifest.tables.every((table) => table.columns.length > 0),
       true,

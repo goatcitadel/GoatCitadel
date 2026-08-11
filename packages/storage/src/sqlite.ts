@@ -61,6 +61,7 @@ import { createRemoteWorkerProtectedAdmissionEvidenceSchema } from "./sqlite/rem
 import { createRemoteWorkerMeshNodeAdmissionSchema } from "./sqlite/remote-worker-mesh-node-admission.js";
 import { upgradeGovernedRemediationRecipeBinding } from "./sqlite/governed-remediation-recipe-binding.js";
 import { createMobilePushSchema } from "./sqlite/mobile-push-schema.js";
+import { createMobileApprovalKeySchema } from "./sqlite/mobile-approval-key-schema.js";
 
 const SQLITE_BUSY_TIMEOUT_MS = 5_000;
 const LEGACY_REMOTE_APPROVAL_BEARER_PATTERN = /grat_[A-Za-z0-9_-]{43}/;
@@ -7123,6 +7124,13 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
         up: (db) => {
           if (!tableExists(db, "remote_worker_inference_requests")) return;
           upgradeRemoteWorkerInferenceBudgetAuthority(db);
+        },
+      },
+      {
+        version: 197,
+        name: "mobile_approval_key_registration_owner",
+        up: (db) => {
+          createMobileApprovalKeySchema(db);
         },
       },
     ],

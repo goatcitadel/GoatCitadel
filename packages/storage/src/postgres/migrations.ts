@@ -5,6 +5,7 @@ import { GOVERNED_REMEDIATION_RECIPE_BINDING_POSTGRES_SQL } from "./governed-rem
 import { REMOTE_WORKER_PROTECTED_ADMISSION_EVIDENCE_POSTGRES_SQL } from "./remote-worker-protected-admission-evidence.js";
 import { REMOTE_WORKER_MESH_NODE_ADMISSION_POSTGRES_SQL } from "./remote-worker-mesh-node-admission.js";
 import { MOBILE_PUSH_POSTGRES_SCHEMA_SQL } from "./mobile-push-schema.js";
+import { MOBILE_APPROVAL_KEY_POSTGRES_SCHEMA_SQL } from "./mobile-approval-key-schema.js";
 import { buildPostgresV140CanonicalSchemaAuthoritySql } from "./v140-canonical-index-authority.js";
 
 export interface PostgresMigration {
@@ -14554,6 +14555,12 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     name: "canonical_postgres_schema_authority",
     integritySha256: "9ee72c0e2879f3cbd2e32fc58d16692969691799537b910be9eea9255e038ca3",
     sql: buildPostgresV140CanonicalSchemaAuthoritySql(),
+  },
+  {
+    version: 141,
+    name: "mobile_approval_key_registration_owner",
+    sql: MOBILE_APPROVAL_KEY_POSTGRES_SCHEMA_SQL,
+    integritySha256: "d02f99ec698724cc18468b40f71f1bc142d29bc141303987dadd89ef81b43248",
   },
 ];
 
