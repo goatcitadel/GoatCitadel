@@ -1,0 +1,16 @@
+{
+  "name": "@goatcitadel/remote-worker",
+  "version": "1.0.0",
+  "private": true,
+  "goatcitadelOwner": "runtime",
+  "type": "module",
+  "dependencies": {
+    "@goatcitadel/contracts": "workspace:*"
+  },
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json",
+    "test": "vitest run",
+    "lint": "tsc -b tsconfig.json"
+  }
+}
