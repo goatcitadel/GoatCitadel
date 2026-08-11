@@ -1,6 +1,6 @@
 # GoatCitadel Mobile Native Capabilities Plan
 
-Last updated: 2026-08-08
+Last updated: 2026-08-11
 
 Execution placement: the current companion-app closeout and pinned-Gateway
 `HX-508` proof are owned by tranche `M8` in
@@ -44,11 +44,17 @@ Operator-readable routes:
 - `GET /api/v1/mobile/capabilities`
 - `GET /api/v1/mobile/audit`
 
+Operator-only approval-key custody routes:
+
+- `GET /api/v1/mobile/approval-keys`
+- `POST /api/v1/mobile/approval-keys/revoke`
+
 Companion-signed mutation routes:
 
 - `PUT /api/v1/mobile/current-device/capabilities`
 - `POST /api/v1/mobile/context/audit`
 - `PUT /api/v1/mobile/current-device/push`
+- `PUT /api/v1/mobile/current-device/approval-key`
 - `POST /api/v1/mobile/current-device/revoke`
 
 Raw device grants are not sufficient for privileged mobile writes. Companion mutation signing remains the expected guardrail.
@@ -62,8 +68,8 @@ Raw device grants are not sufficient for privileged mobile writes. Companion mut
 | `image_library` | ready | user initiated | User-selected photo attachments. |
 | `share_intake` | ready | user initiated | Share-sheet drafts enter local review before chat. |
 | `voice_capture` | ready | user initiated | Native microphone recording and voice-note attachment are implemented. Transcription remains a separate optional follow-up. |
-| `approval_key` | scaffolded | foreground | A paired, request-signed companion can review the redacted queue and reject an item. Approve/edit remain operator-only until the Gateway can verify an approval-specific key released by device authentication; a client-only biometric prompt is not sufficient proof. |
-| `push_refresh` | scaffolded | background opt-in | Gateway and external client owners now cover signed token lifecycle, grant/session fencing, fail-closed tombstones, refresh hints, and opaque approval deep links. Live provider/scheduler, data-only payload, physical-device delivery, and pinned-SHA proof remain held. |
+| `approval_key` | scaffolded | foreground | A paired, request-signed companion can review the redacted queue and reject an item. The Gateway now owns durable, grant-bound Ed25519 approval-key registration/rotation/revoke (signed companion + operator routes) and versioned decision-signature verification helpers, all production-dark with `verificationAvailability: "unavailable"`. Approve/edit remain operator-only until the mobile client ships its device-authentication-gated signer; a client-only biometric prompt is not sufficient proof. |
+| `push_refresh` | scaffolded | background opt-in | Gateway and external client owners now cover signed token lifecycle, grant/session fencing, fail-closed tombstones, refresh hints, and opaque approval deep links. The credentialed Expo provider, outbox scheduler, atomic revoke/send fence, and pinned data-only/silent payload now exist production-dark: the credential is absent by default, so the scheduler never starts and posture stays `deliveryAvailability: "unavailable"`. Operator credential provisioning, physical-device delivery, and pinned-SHA proof remain held. |
 | `geofence_context` | deferred | background opt-in | Contract-visible only; no continuous tracking. |
 | `notification_awareness` | deferred | special access | Contract-visible only; no listener enabled in consumer build. |
 | `screen_share` | deferred | foreground | Native lane remains blocked unless visible session support is added. |

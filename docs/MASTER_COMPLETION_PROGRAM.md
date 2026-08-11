@@ -510,6 +510,38 @@ review evidence.
   proof. The production provider and scheduler remain explicitly unavailable,
   and the API reports that delivery posture instead of treating an enabled
   registration as live delivery.
+- The credentialed Expo provider and outbox scheduler now exist
+  production-dark. The Expo access token is config/secret-store shaped and
+  ABSENT by default (`GOATCITADEL_MOBILE_PUSH_EXPO_ACCESS_TOKEN`, then the
+  `mobile-push-expo` OS-keychain provider secret); with no credential the
+  scheduler creates no timer and the posture stays
+  `deliveryAvailability: "unavailable"` — both test-pinned. The adapter sends
+  the pinned data-only/silent payload (no title/body/sound the OS could
+  display before the companion app's JavaScript validates the hint),
+  classifies tickets honestly (invalid token, rate-limit/5xx retry, auth
+  failure unavailable, transport ambiguity unknown-after-send), and keeps raw
+  FCM delivery `provider_unavailable` until its own credentialed adapter
+  exists. An atomic revoke/send fence (registration row-lock plus delivery
+  CAS in one immediate transaction) commits immediately before the provider
+  boundary: a revocation or token rotation that committed after claim wins
+  and no send happens, while a revocation racing an armed in-flight send
+  leaves the running row to settle exactly once with an honest receipt —
+  proven in SQLite and under live PostgreSQL for both commit orders.
+- The Gateway-verifiable consumer approval-key owner now exists
+  production-dark in paired SQLite 197/PostgreSQL 141 storage: one Ed25519
+  device approval public key per durable companion grant, registration fenced
+  on the active grant row, idempotent rotation/revoke with revision
+  authority, cross-grant key reuse refused by a unique SPKI digest, and
+  operator forensics retained after revoke. Signed-companion
+  registration/rotation/disable, operator list/revoke, panic-off and
+  device-grant-revoke projections, and versioned
+  approval-decision-signature verification helpers
+  (`goatcitadel.mobile-approval-decision.v1`) are in place and fail closed on
+  missing/revoked keys, inactive grants, stale timestamps, and digest
+  mismatches. Every registration response pins
+  `verificationAvailability: "unavailable"`: the `approval_key` capability
+  stays `scaffolded` until the mobile client ships its device-auth-gated
+  signer under the physical-device hold.
 - Full-body companion signatures still cover push tokens and rejected extra
   fields, while the retained replay/audit correlation hash uses a versioned,
   allowlisted secret-free tuple. Durable replay authority remains the
@@ -527,11 +559,14 @@ review evidence.
   operator-only because the current client-local biometric key is not bound to
   a Gateway-verifiable approval signature; the capability must remain
   `scaffolded` until that end-to-end key owner exists.
-- Finish consumer-safe approval-key/device-auth; a credentialed Expo/FCM
-  provider and scheduler with an atomic revoke/send fence; data-only/silent
-  provider payload proof so the OS cannot display untrusted title/body before
-  JavaScript runs; physical-device delivery; and any approved geofence-context
-  work.
+- Remaining M8 mobile scope: the mobile client's device-auth-gated approval
+  signer against the new Gateway key owner (then the `approval_key`
+  capability decision that retires `scaffolded`), live credentialed delivery
+  (operator-provisioned Expo access token plus physical-device delivery
+  proof), an FCM-credentialed adapter if raw FCM delivery is ever wanted,
+  and any approved geofence-context work. The Gateway-side approval-key
+  owner, credentialed provider/scheduler, revoke/send fence, and
+  data-only/silent payload pin above are built and production-dark.
 - Exercise device auth, session paging, approvals, offline/reconnect,
   attachments, and revocation against one pinned Gateway SHA (`HX-508`).
 - Keep screen share, notification awareness, accessibility helper, and call

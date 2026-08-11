@@ -1,4 +1,5 @@
 import type { MobilePushApprovalRefreshPayload } from "@goatcitadel/contracts";
+import { readBoundedResponseJson } from "./bounded-response-reader.js";
 import {
   createUnavailableMobilePushProvider,
   type MobilePushProviderPort,
@@ -59,7 +60,8 @@ export function resolveMobilePushProviderCredential(input: {
     if (fromSecretStore && fromSecretStore.length <= MAX_ACCESS_TOKEN_LENGTH) {
       return { kind: "expo_access_token", accessToken: fromSecretStore, source: "secret_store" };
     }
-  } catch {
+  } catch (custodyError) {
+    void custodyError;
     // Custody unavailability must degrade to "no credential", never to a crash
     // or an implicit unauthenticated live send.
   }
@@ -159,7 +161,11 @@ async function classifyExpoResponse(response: Response): Promise<MobilePushProvi
   }
   let parsed: unknown;
   try {
-    parsed = await response.json();
+    parsed = await readBoundedResponseJson(response, {
+      maxBytes: 64 * 1024,
+      timeoutMs: 10_000,
+      label: "expo push ticket",
+    });
   } catch {
     // A 2xx we cannot interpret may still have enqueued the message.
     return { classification: "unknown_after_send" };
