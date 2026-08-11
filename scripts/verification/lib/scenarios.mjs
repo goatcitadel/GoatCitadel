@@ -935,6 +935,27 @@ export async function runDeepCoreLane(context, _options = {}) {
       if (!coreProjectResponse.ok) {
         throw new Error(`verification core project seed failed: ${JSON.stringify(coreProjectResponse.body)}`);
       }
+      // The ops-approvals route (release-surface manifest) waits for the
+      // `.mc-next-approvals-inspector` detail pane, which mounts only after the
+      // approval queue auto-selects a visible approval. The generic verification
+      // seed creates no approval (the api-surface scenarios resolve their own),
+      // so the pending queue would render its empty state and the inspector
+      // would never appear. Mirror seedMissionControlNextFixture's approval
+      // seed so the route auto-selects the seeded pending approval.
+      const coreApprovalResponse = await requestJson(
+        stack.gatewayUrl,
+        "/api/v1/dev/verification/chat-approval-scenario",
+        {
+          method: "POST",
+          body: {
+            sessionId: seedResponse.body.sessionId,
+            workspaceId: seedResponse.body.workspaceId,
+          },
+        },
+      );
+      if (!coreApprovalResponse.ok) {
+        throw new Error(`verification core approval seed failed: ${JSON.stringify(coreApprovalResponse.body)}`);
+      }
     }
 
     const browser = await chromium.launch({ headless: true });
