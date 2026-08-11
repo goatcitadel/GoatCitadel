@@ -7083,7 +7083,10 @@ test(
           CHECK(status IN ('reserved', 'completed', 'released'));
       `);
 
-      const repaired = await runPostgresMigrations(migrationClient, POSTGRES_MIGRATIONS);
+      const repaired = await runPostgresMigrations(
+        migrationClient,
+        POSTGRES_MIGRATIONS.filter((migration) => migration.version <= 132),
+      );
       assert.deepEqual(repaired.appliedVersions, [132]);
       const columns = await scopedPool.query<{ column_name: string; is_nullable: string }>(
         `SELECT column_name, is_nullable
@@ -7221,7 +7224,10 @@ test(
           ('source-operator', 'memory-operator', 'user', 'msg-operator', '2026-08-08T00:00:00.000Z');
       `);
 
-      const applied = await runPostgresMigrations(migrationClient, POSTGRES_MIGRATIONS);
+      const applied = await runPostgresMigrations(
+        migrationClient,
+        POSTGRES_MIGRATIONS.filter((migration) => migration.version <= 133),
+      );
       assert.deepEqual(applied.appliedVersions, [133]);
       const authorities = await scopedPool.query<{ message_id: string; source_authority: string }>(
         "SELECT message_id, source_authority FROM chat_messages ORDER BY message_id",
