@@ -112,7 +112,15 @@ export function useDurableBackgroundTaskRail(input: {
         });
         if (activeScopeKey.current !== requestScopeKey) return false;
         requestSequence.current += 1;
+        // The bump masks any in-flight refresh's sequence-guarded `.finally`,
+        // so this commit must settle the flags that refresh can no longer
+        // clear: when the control rail ends polling (everything terminal)
+        // while a poll refresh is in flight, `refreshing` would otherwise
+        // stick true forever. A committed rail also means the scope is past
+        // its initial load, so `loading` drops at this choke point too.
         setSnapshot(result.rail);
+        setLoading(false);
+        setRefreshing(false);
         return true;
       } catch (caught) {
         if (activeScopeKey.current === requestScopeKey) {
