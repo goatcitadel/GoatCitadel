@@ -230,14 +230,28 @@ validation and 9/9 Docker-secret documentation tests; `git diff --check` passed.
 
 ### Current work
 
-- Freeze a distinct shipped coordinator principal and administrator-owned
-  installer recipe for the broker service, executable/directory ACLs, service
-  SID, required privileges, and broker SCM DACL. Do not wire the existing
-  untrusted helper to start it. Until that owner is composed and pinned, keep
-  the broker and one-exchange signer production-dark.
+- The distinct shipped coordinator principal and administrator-owned installer
+  recipe for the broker service are now frozen as executable, testable
+  artifacts. `scripts/remote-worker/install-broker-coordinator.ps1` plus its
+  paired uninstall/rollback script materialize the coordinator virtual service
+  account `NT SERVICE\GoatCitadelRemoteWorkerProvisionerAvailability` through
+  the unrestricted service SID, install the exact demand-start broker/signer
+  pair the broker validates, and pin the executable/directory ACLs, required
+  privilege list, protected two-ACE broker SCM DACL, and package-verified
+  image SHA-256s, with a read-only preflight, fail-closed refusal branches,
+  mid-run rollback, and machine-readable evidence bundles. A repo-hygiene
+  contract test pins the security-critical recipe text against the broker
+  sources and proves nothing wires the untrusted helper to start anything;
+  the scripts parse and compose under Windows PowerShell 5.1 and PowerShell
+  7, and the refusal branches are proven without Service Control Manager
+  writes. Nothing is installed or started by this tranche; the broker and
+  one-exchange signer stay production-dark until the installed owner is
+  composed and pinned on a real administrator host.
 - Prove the installed stopped/start-pending/running broker contract, signer
   restart, exact caller rejection, drift rejection, ARM64 execution, and clean
-  uninstall/rollback on a real Windows host.
+  uninstall/rollback on a real Windows host, including the first-boot
+  `ERROR_SERVICE_NEVER_STARTED` status posture that the broker's exact
+  `NO_ERROR` status-metadata validation must be proven against.
 - Keep current-authority reads and every downstream mutation transactionally
   fenced through M3 node admission and assignment ownership.
 - Prove operator-visible diagnostics and the real closed-ingress, N+1 rotation,
