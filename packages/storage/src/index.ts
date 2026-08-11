@@ -43,6 +43,7 @@ import { RemoteWorkerAdmissionRepository } from "./remote-worker-admission-repo.
 import { RemoteWorkerMeshNodeAdmissionRepository } from "./remote-worker-mesh-node-admission-repo.js";
 import { RemoteWorkerArtifactRepository } from "./remote-worker-artifact-repo.js";
 import { RemoteWorkerAssignmentRepository } from "./remote-worker-assignment-repo.js";
+import { RemoteWorkerNonceRepository } from "./remote-worker-nonce-repo.js";
 import { RemoteWorkerCellRepository } from "./remote-worker-cell-repo.js";
 import { RemoteWorkerEffectRepository } from "./remote-worker-effect-repo.js";
 import { RemoteWorkerInferenceRepository } from "./remote-worker-inference-repo.js";
@@ -313,6 +314,7 @@ export class Storage {
   public readonly remoteWorkerMeshNodeAdmissions: RemoteWorkerMeshNodeAdmissionRepository;
   public readonly remoteWorkerArtifacts: RemoteWorkerArtifactRepository;
   public readonly remoteWorkerAssignments: RemoteWorkerAssignmentRepository;
+  public readonly remoteWorkerNonces: RemoteWorkerNonceRepository;
   public readonly remoteWorkerCells: RemoteWorkerCellRepository;
   public readonly remoteWorkerEffects: RemoteWorkerEffectRepository;
   public readonly remoteWorkerInference: RemoteWorkerInferenceRepository;
@@ -480,6 +482,7 @@ export class Storage {
     this.remoteWorkerMeshNodeAdmissions = new RemoteWorkerMeshNodeAdmissionRepository(this.db);
     this.remoteWorkerArtifacts = new RemoteWorkerArtifactRepository(this.db);
     this.remoteWorkerAssignments = new RemoteWorkerAssignmentRepository(this.db);
+    this.remoteWorkerNonces = new RemoteWorkerNonceRepository(this.db);
     this.remoteWorkerCells = new RemoteWorkerCellRepository(this.db);
     this.remoteWorkerEffects = new RemoteWorkerEffectRepository(this.db);
     this.remoteWorkerInference = new RemoteWorkerInferenceRepository(this.db);

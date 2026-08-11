@@ -33,6 +33,16 @@ describe("remote worker admission production composition", () => {
         createEvidenceVerifier,
       }),
     ).resolves.toBeUndefined();
+    // Assignment RPC present but dispatch (routes 8-10) absent keeps the listener dark.
+    await expect(
+      createGatewayRemoteWorkerAdmissionNativeRequestHandler({
+        config: enabledConfig(),
+        admissionStore: unusedAdmissionStore() as never,
+        meshNodeAdmissionStore: unusedMeshAdmissionStore(),
+        assignmentProtocol: unusedAssignmentProtocol(),
+        createEvidenceVerifier,
+      }),
+    ).resolves.toBeUndefined();
     expect(createEvidenceVerifier).not.toHaveBeenCalled();
   });
 
@@ -47,17 +57,20 @@ describe("remote worker admission production composition", () => {
     const config = enabledConfig();
     const meshNodeAdmissionStore = unusedMeshAdmissionStore();
     const assignmentProtocol = unusedAssignmentProtocol();
+    const assignmentDispatch = unusedAssignmentDispatch();
     const handler = await createGatewayRemoteWorkerAdmissionNativeRequestHandler({
       config,
       admissionStore: unusedAdmissionStore() as never,
       meshNodeAdmissionStore,
       assignmentProtocol,
+      assignmentDispatch,
       createEvidenceVerifier: vi.fn(() => verifier),
     });
 
     expect(assertAvailable).toHaveBeenCalledTimes(1);
     expect(meshNodeAdmissionStore.assertAvailable).toHaveBeenCalledTimes(1);
     expect(assignmentProtocol.assertAvailable).toHaveBeenCalledTimes(1);
+    expect(assignmentDispatch.assertAvailable).toHaveBeenCalledTimes(1);
     expect(handler).toBeTypeOf("function");
   });
 
@@ -69,6 +82,7 @@ describe("remote worker admission production composition", () => {
         admissionStore: unusedAdmissionStore() as never,
         meshNodeAdmissionStore: unusedMeshAdmissionStore(),
         assignmentProtocol: unusedAssignmentProtocol(),
+        assignmentDispatch: unusedAssignmentDispatch(),
         createEvidenceVerifier: () => ({
           assertAvailable: vi.fn(async () => {
             throw preflightError;
@@ -126,6 +140,15 @@ function unusedMeshAdmissionStore() {
 }
 
 function unusedAssignmentProtocol() {
+  return {
+    assertAvailable: vi.fn(async () => undefined),
+    execute: vi.fn(async () => {
+      throw new Error("not exercised");
+    }),
+  };
+}
+
+function unusedAssignmentDispatch() {
   return {
     assertAvailable: vi.fn(async () => undefined),
     execute: vi.fn(async () => {

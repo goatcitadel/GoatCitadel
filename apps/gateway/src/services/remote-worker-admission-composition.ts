@@ -9,6 +9,11 @@ import {
   type RemoteWorkerCurrentRuntimeCredentialStorePort,
 } from "./remote-worker-current-authority-service.js";
 import { createRemoteWorkerAssignmentNativeRequestHandler } from "./remote-worker-assignment-handler.js";
+import { createRemoteWorkerAssignmentDispatchNativeRequestHandler } from "./remote-worker-assignment-dispatch-handler.js";
+import type {
+  RemoteWorkerAssignmentDispatchProtocolRequest,
+  RemoteWorkerAssignmentDispatchProtocolResponse,
+} from "./remote-worker-assignment-dispatch-protocol-service.js";
 import type {
   RemoteWorkerAssignmentProtocolRequest,
   RemoteWorkerAssignmentProtocolResponse,
@@ -43,6 +48,12 @@ interface RemoteWorkerAdmissionCompositionDependencies {
     assertAvailable(): Awaitable<void>;
     execute(input: RemoteWorkerAssignmentProtocolRequest): Promise<RemoteWorkerAssignmentProtocolResponse>;
   };
+  readonly assignmentDispatch?: {
+    assertAvailable(): Awaitable<void>;
+    execute(
+      input: RemoteWorkerAssignmentDispatchProtocolRequest,
+    ): Promise<RemoteWorkerAssignmentDispatchProtocolResponse>;
+  };
   readonly createEvidenceVerifier?: (config: EnabledRemoteWorkerRuntimeConfig) => RemoteWorkerAdmissionEvidenceVerifier;
 }
 
@@ -58,7 +69,8 @@ export async function createGatewayRemoteWorkerAdmissionNativeRequestHandler(
   if (
     dependencies.createEvidenceVerifier === undefined ||
     dependencies.meshNodeAdmissionStore === undefined ||
-    dependencies.assignmentProtocol === undefined
+    dependencies.assignmentProtocol === undefined ||
+    dependencies.assignmentDispatch === undefined
   ) {
     return undefined;
   }
@@ -74,6 +86,7 @@ export async function createGatewayRemoteWorkerAdmissionNativeRequestHandler(
   });
   await meshNodeAdmission.assertAvailable();
   await dependencies.assignmentProtocol.assertAvailable();
+  await dependencies.assignmentDispatch.assertAvailable();
   const admissionService = new RemoteWorkerAdmissionService({
     admissionStore: dependencies.admissionStore,
     evidenceVerifier,
@@ -84,6 +97,9 @@ export async function createGatewayRemoteWorkerAdmissionNativeRequestHandler(
     meshNodeAdmission: createRemoteWorkerMeshNodeAdmissionNativeRequestHandler({ admissionService: meshNodeAdmission }),
     assignment: createRemoteWorkerAssignmentNativeRequestHandler({
       assignmentProtocol: dependencies.assignmentProtocol,
+    }),
+    dispatch: createRemoteWorkerAssignmentDispatchNativeRequestHandler({
+      dispatchProtocol: dependencies.assignmentDispatch,
     }),
   });
 }

@@ -11,6 +11,10 @@ import type { SharedHostLifecycleAdmissionPort } from "./shared-host-lifecycle-s
 import type { WorkPassportService } from "./work-passport-service.js";
 import type { EngineeringLearningService } from "./engineering-learning-service.js";
 import { createGatewayRemoteWorkerAdmissionNativeRequestHandler } from "./remote-worker-admission-composition.js";
+import {
+  createGatewayRemoteWorkerAssignmentRuntimeComposition,
+  remoteWorkerAssignmentRuntimeActivated,
+} from "./remote-worker-assignment-runtime-composition.js";
 import type { RemoteWorkerNativeRequestHandler } from "./remote-worker-native-tls-listener.js";
 import type { EnabledRemoteWorkerRuntimeConfig } from "./remote-worker-runtime-config.js";
 import { RemoteWorkerProtectedAdmissionEvidenceVerifier } from "./remote-worker-protected-admission-evidence-verifier.js";
@@ -144,13 +148,32 @@ function createGatewayRuntimeFacade(gateway: GatewayService): GatewayRuntimeInst
     get routeServices() {
       return gateway.routeServices;
     },
-    createRemoteWorkerAdmissionNativeRequestHandler: async (config) =>
-      await createGatewayRemoteWorkerAdmissionNativeRequestHandler({
+    createRemoteWorkerAdmissionNativeRequestHandler: async (config) => {
+      // The assignment RPC (routes 2-6) and dispatch (routes 8-10) owners are
+      // composed only when explicitly activated. Default production omits them,
+      // so the fail-closed composition returns undefined and the listener stays
+      // dark exactly as before — the connected-worker E2E composes them.
+      const assignmentRuntime = remoteWorkerAssignmentRuntimeActivated()
+        ? createGatewayRemoteWorkerAssignmentRuntimeComposition({
+            admissionStore: gateway.storage.remoteWorkerAdmissions,
+            meshAdmissions: gateway.storage.remoteWorkerMeshNodeAdmissions,
+            assignments: gateway.storage.remoteWorkerAssignments,
+            nonceConsumer: gateway.storage.remoteWorkerNonces,
+          })
+        : undefined;
+      return await createGatewayRemoteWorkerAdmissionNativeRequestHandler({
         config,
         admissionStore: gateway.storage.remoteWorkerAdmissions,
         meshNodeAdmissionStore: gateway.storage.remoteWorkerMeshNodeAdmissions,
+        ...(assignmentRuntime === undefined
+          ? {}
+          : {
+              assignmentProtocol: assignmentRuntime.assignmentProtocol,
+              assignmentDispatch: assignmentRuntime.assignmentDispatch,
+            }),
         createEvidenceVerifier: () => new RemoteWorkerProtectedAdmissionEvidenceVerifier(),
-      }),
+      });
+    },
     attachDevDiagnosticsLogger: (logger) => gateway.attachDevDiagnosticsLogger(logger),
     close: () => gateway.close(),
     getOnboardingStartupState: () => gateway.getOnboardingStartupState(),

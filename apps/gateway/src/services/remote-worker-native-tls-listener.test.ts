@@ -680,6 +680,14 @@ describe("remote worker native TLS listener", () => {
               );
             },
           },
+          assignmentDispatch: {
+            assertAvailable: async () => undefined,
+            execute: async () => {
+              throw new Error(
+                "Production-dark assignment dispatch must stay unexercised in the bootstrap replay proof.",
+              );
+            },
+          },
           createEvidenceVerifier: () => ({
             assertAvailable: async () => undefined,
             verify: async (input) => {
