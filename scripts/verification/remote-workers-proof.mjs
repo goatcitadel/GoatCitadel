@@ -2,10 +2,11 @@
 // verify:remote-workers — the integrated Phase-5 proof lane named across the
 // HX-500/501B/503/505/506/507 packets (docs/OPENCLAW_HERMES_PARITY_PROGRAM.md
 // rows HX-501..HX-507). It RUNS the already-committed, already-security-reviewed
-// remote-worker owner proofs as 12 numbered scenarios and declares the
-// genuinely two-machine / live-connected-worker scenarios (11-12) as documented
-// conditional skips — the same posture HX-408's two-node mTLS row and the
-// HX-411 session-control live-PG row use. This lane is a COMPOSITION gate: it
+// remote-worker owner proofs as 12 numbered scenarios, EXECUTES the
+// connected-worker end-to-end journey against a real spawned worker process
+// (scenario 12), and declares the genuinely two-machine scenario (11) as a
+// documented conditional skip — the same posture HX-408's two-node mTLS row
+// uses. This lane is a COMPOSITION gate: it
 // adds no runtime behavior and re-implements no assertion already owned by a
 // composed suite; it builds NO product code.
 //
@@ -23,7 +24,7 @@
 // start, readiness-polled, fast-stopped and removed on teardown) and runs ALL
 // the bootstrap bridge plus seven remote-worker `.postgres.test.ts` owner suites against it with
 // requireAllExecuted. If neither a URL nor local PostgreSQL binaries exist, the
-// live-PG check FAILS. The lane's only declared skips are scenarios 11-12.
+// live-PG check FAILS. The lane's only declared skip is scenario 11.
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
@@ -97,6 +98,12 @@ const REMOTE_WORKER_SRC_ROOTS = [
 
 const REMOTE_WORKER_FILENAME = /(^remote-worker|^remote-workers|^RemoteWorker|^useRemoteWorker|worker-cell-egress)/u;
 
+/**
+ * The connected-worker runtime app is remote-worker code by definition, so its
+ * whole `src` tree joins the scanned and linted span without a filename filter.
+ */
+const REMOTE_WORKER_APP_ROOT = "apps/remote-worker/src";
+
 const REMOTE_WORKER_MIGRATION_FILES = ["packages/storage/src/sqlite.ts", "packages/storage/src/postgres/migrations.ts"];
 
 function walkFiles(absDir, relDir, out) {
@@ -127,6 +134,11 @@ function collectRemoteWorkerTsFiles() {
       if (!/\.(ts|tsx)$/u.test(rel)) continue;
       if (REMOTE_WORKER_FILENAME.test(path.basename(rel))) files.push(rel);
     }
+  }
+  const appFiles = [];
+  walkFiles(path.join(repoRoot, REMOTE_WORKER_APP_ROOT), REMOTE_WORKER_APP_ROOT, appFiles);
+  for (const rel of appFiles) {
+    if (/\.(ts|tsx)$/u.test(rel)) files.push(rel);
   }
   return files.sort();
 }

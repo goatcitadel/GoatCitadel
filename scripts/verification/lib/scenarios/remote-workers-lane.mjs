@@ -2,10 +2,10 @@
 // gate named across the HX-500/501B/503/505/506/507 packets
 // (docs/OPENCLAW_HERMES_PARITY_PROGRAM.md rows HX-501..HX-507). It RUNS the
 // already-committed, already-security-reviewed remote-worker owner proofs as
-// numbered scenarios and declares the genuinely two-machine/live-worker
-// scenarios as documented conditional skips (exactly the posture HX-408's
-// two-node mTLS row and the HX-411 session-control live-PG row use). This lane
-// builds NO product code.
+// numbered scenarios, EXECUTES the connected-worker end-to-end journey against
+// a real spawned worker process (scenario 12), and declares the genuinely
+// two-machine scenario as a documented conditional skip (exactly the posture
+// HX-408's two-node mTLS row uses). This lane builds NO product code.
 //
 // This module owns the lane's DATA and pure logic — the numbered check table,
 // the 12-scenario proof-matrix, the four static scans, and the status
@@ -27,9 +27,10 @@
 //   * the live-PostgreSQL check must EXECUTE (hermetically provisioned or via
 //     GOATCITADEL_TEST_POSTGRES_URL) with `requireAllExecuted` so its bootstrap bridge plus seven
 //     `.postgres.test.ts` suites may never self-skip inside the lane;
-//   * the ONLY declared skips are scenarios 11 and 12 — the packets' own
-//     two-machine mTLS and live connected-worker end-to-end HOLDs — each
-//     reported with its printed reason; nothing is faked.
+//   * the connected-worker end-to-end row (scenario 12) must EXECUTE with
+//     `requireAllExecuted`, so its spawned second process can never self-skip;
+//   * the ONLY declared skip is scenario 11 — the packets' own two-machine
+//     mTLS HOLD — reported with its printed reason; nothing is faked.
 import { deriveCheckStatus, parseNodeTestCounts, parseVitestCounts, stripAnsi } from "./external-sources-lane.mjs";
 
 export { deriveCheckStatus, parseNodeTestCounts, parseVitestCounts, stripAnsi };
@@ -244,6 +245,17 @@ export function buildRemoteWorkersLaneChecks() {
         "routes/remote-workers.test.ts",
       ]),
       count: "vitest",
+    },
+    {
+      id: "remote-workers.connected-worker-e2e",
+      // Scenario 12. Spawns the real `apps/remote-worker` process against a
+      // composed native TLS listener on this host, so `requireAllExecuted`
+      // guards it: a self-skipped E2E can never pass the row.
+      title:
+        "Connected-worker end-to-end (scenario 12): a spawned apps/remote-worker process admits over native mTLS, binds its mesh node, claims a scheduler-shaped offer, reads its workload, ships an ordered transcript, dies mid-loop, restarts, replays byte-identically, renews its lease, and settles exactly once — asserted from durable state",
+      args: gatewayVitest(["services/remote-worker-connected-worker-e2e.test.ts"]),
+      count: "vitest",
+      requireAllExecuted: true,
     },
     {
       id: "remote-workers.policy",
@@ -481,12 +493,16 @@ export function buildRemoteWorkersProofMatrix() {
     {
       row: 12,
       title:
-        "Live connected-worker end-to-end: admission -> scheduler dispatch -> inference -> transcript/event transport -> artifact/effect settlement, with reconnect/restart carrying no provider redispatch or duplicate accounting",
-      checks: [],
-      suites: [],
-      skipReason:
-        "SKIP: every stage of the connected-worker loop now has a worker-facing wire route, but no harness composes them into one live remote worker on this host, so the complete admission -> dispatch -> inference -> transcript/event transport -> artifact/effect settlement journey is still not executed single-host. What now EXISTS and is unit-proven: the connected-worker runtime (apps/remote-worker — durable credential/lease/signing-pin retention, reconnect/restart without one-time-secret replay, ordered exactly-once transcript outbox, idempotent no-duplicate-accounting settlement); the routes 2-6 assignment RPC, routes 8-10 dispatch, and routes 11-12 execution (HX-503 inference exchange, HX-506 artifact/effect settlement submission) owners, all composable into the native listener behind GOATCITADEL_WORKER_ASSIGNMENT_RUNTIME_ENABLED (default dark); and the closed protected-proof table widened to exactly twelve purposes (REMOTE_WORKER_POP_V2_ROUTE_BINDINGS codes 1-12) on BOTH sides, enforced by the contracts closure test and the Windows protected PoP-v2 native signer, with unknown codes still refused everywhere. What is MISSING: (a) no E2E harness injects the routes 11-12 inner owners, and production composes none — the all-or-nothing composition therefore keeps the listener dark even with the flag on; and (b) there is still no production scheduler creating real offers. So the wire is complete and fenced, but the live journey remains unexecuted; this row stays a declared skip rather than faked execution.",
-      note: "Each stage's Gateway-side authority executes above: admission/nonce (scenarios 1-2), inference proxy with no-redispatch-after-ambiguous-acceptance and HX-306 accounting (scenario 3), ordered-event/materialization transport (scenario 4), settlement with generation-fenced intent-before-delivery (scenario 6), and restart/recovery fencing in the assignment owner (scenario 2). The worker runtime core and the routes 2-6/8-10/11-12 native composition now exist and are exercised by the release-hygiene typecheck (apps/remote-worker, scenario 10) and the Gateway owner check (mux, admission composition, assignment-runtime composition, routes 11-12 execution handler and protocol owner — scenarios 3/5/6/7). The routes 11-12 owner carries the routes 2-6 fence discipline verbatim: current M2 credential plus protected admission evidence plus the current mesh-node admission for the assignment's execution workspace, rechecked inside the assignment storage transaction before the HX-503 or HX-506 owner is reached, after the durable nonce is spent. The remaining hold is no longer the wire: it is the connected-worker E2E harness that injects the HX-503/HX-506 inner owners single-host, plus the production scheduler that creates real offers.",
+        "Live connected-worker end-to-end (single-host, routes 1-10 of the declared journey): a real second process admits -> binds its mesh node -> claims a scheduler-shaped offer -> reads its workload -> ships ordered transcript events -> is killed mid-loop -> restarts -> replays byte-identically -> renews -> settles once, with no duplicate accounting. Inference (route 11) and artifact/effect settlement submission (route 12) are NOT executed and stay held — see the note",
+      checks: ["remote-workers.connected-worker-e2e"],
+      suites: [
+        "apps/gateway/src/services/remote-worker-connected-worker-e2e.test.ts (composes the shipped admission service, protected-evidence verifier, mesh-node admission owner, and the flag-gated routes 2-6 / 8-10 owners over the canonical SQLite repositories, starts the native TLS 1.3 listener, and spawns apps/remote-worker three times)",
+        "run 1: the one-time bootstrap exchange (route 1) from a real second process over native mTLS with a protected admission envelope bound to that channel's exporter",
+        "run 2: reconnect on the RETAINED credential (never the bootstrap secret) -> mesh-node admission (route 7) -> offer poll (8) -> claim (9) -> workload read (10) -> first transcript batch (4), then exit holding a live lease and an unacknowledged tail",
+        "run 3: restart -> assignment sync (2) -> byte-identical replay of the first batch plus the fresh tail (4) -> lease renewal with secret rotation (3) -> control read (5) -> terminal settlement (6)",
+        "durable-state assertions (never logs): exactly one runtime credential, exactly one assignment generation, exactly one settlement, three contiguous non-duplicated events, and zero HX-306 model_usage_events / remote-worker inference request rows",
+      ],
+      note: "EXECUTED single-host, and deliberately narrower than the row title. What runs: admission, mesh-node binding, scheduler-shaped dispatch (the harness creates the offer through the canonical storage owners exactly as a scheduler eventually would — there is still no production scheduler), ordered exactly-once transcript transport across a kill and a restart, and one generation-fenced terminal settlement. What does NOT run and remains held: routes 11-12. The harness composes a fail-closed execution owner that refuses every call, because the HX-503 inference owner needs governance/approval/budget/routing/HX-306-accounting adapters and the HX-506 owners need a CAS store plus an effect coordinator, none of which production composes. A consequence is visible in the executed settlement itself: a `completed` outcome must cite a committed HX-506 artifact manifest, so with no artifact owner composed the worker settles the outcome it can actually evidence. Running the loop for the first time also surfaced two real defects in the composed path, both fixed here: the transport header allowlist omitted the route-7 join-credential header (making route 7 unreachable through the listener), and the mesh-node admission owner's `admittedByActorId` postcondition disagreed with the canonical storage value (committing the effect and then answering 403). Two-machine mTLS stays scenario 11's hold; this row is single-host by construction.",
     },
   ];
 }

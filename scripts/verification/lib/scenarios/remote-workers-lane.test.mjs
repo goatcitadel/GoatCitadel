@@ -37,6 +37,9 @@ const EXPECTED_CHECK_IDS = [
   // scenario proves, and the file-existence assertion below covers every suite.
   "remote-workers.storage",
   "remote-workers.gateway",
+  // Scenario 12: spawns the real apps/remote-worker process against a composed
+  // native TLS listener; requireAllExecuted so it can never self-skip.
+  "remote-workers.connected-worker-e2e",
   "remote-workers.policy",
   "remote-workers.shared",
   "remote-workers.mc-next",
@@ -88,6 +91,14 @@ test("the lane check table is complete, uniquely named, and cites only test file
   assert.ok(citedSuiteCount >= 25, `the lane cites the committed remote-worker suites (${citedSuiteCount})`);
 
   // The live-PostgreSQL check may never self-skip, and its seven owner suites exist.
+  const connectedWorkerCheck = checks.find((check) => check.id === "remote-workers.connected-worker-e2e");
+  assert.equal(connectedWorkerCheck.count, "vitest");
+  assert.equal(
+    connectedWorkerCheck.requireAllExecuted,
+    true,
+    "the connected-worker end-to-end proof may never self-skip inside the lane",
+  );
+
   const livePostgres = checks.find((check) => check.id === "remote-workers.live-postgres");
   assert.equal(livePostgres.kind, "live-postgres");
   assert.equal(livePostgres.requireAllExecuted, true, "the live-PG suites may never self-skip inside the lane");
@@ -133,7 +144,7 @@ test("eslint targets are chunked below the Windows command payload ceiling witho
   assert.throws(() => chunkRemoteWorkerEslintTargets(["valid", ""], 40), /non-empty strings/u);
 });
 
-test("the proof matrix covers 12 scenarios, cites known checks, and declares exactly two conditional skips (11-12)", () => {
+test("the proof matrix covers 12 scenarios, cites known checks, and declares exactly one conditional skip (11)", () => {
   const matrix = buildRemoteWorkersProofMatrix();
   assert.deepEqual(
     matrix.map((row) => row.row),
@@ -144,9 +155,10 @@ test("the proof matrix covers 12 scenarios, cites known checks, and declares exa
     for (const check of row.checks) {
       assert.ok(knownChecks.has(check), `scenario ${row.row} cites known check ${check}`);
     }
-    if (row.row === 11 || row.row === 12) {
-      // The packets' own two-machine / live-connected-worker HOLDs: declared
-      // conditional skips with printed reasons, NOT faked execution.
+    if (row.row === 11) {
+      // The packet's own two-machine mTLS HOLD: a declared conditional skip
+      // with a printed reason, NOT faked execution. Scenario 12 is no longer
+      // one of these — the connected-worker journey now executes for real.
       assert.equal(row.checks.length, 0, `scenario ${row.row} runs no check (it is a declared skip)`);
       assert.ok(
         typeof row.skipReason === "string" && row.skipReason.length > 0,
@@ -159,9 +171,19 @@ test("the proof matrix covers 12 scenarios, cites known checks, and declares exa
       assert.ok(row.suites.length > 0, `executed scenario ${row.row} names its executing suites`);
     }
   }
-  // Scenario 11 is the two-machine mTLS HOLD; scenario 12 is the live worker E2E HOLD.
+  // Scenario 11 is the only remaining HOLD: genuinely two-machine mTLS.
+  assert.equal(
+    matrix.filter((row) => typeof row.skipReason === "string").map((row) => row.row).length,
+    1,
+    "exactly one conditional skip remains",
+  );
   assert.match(matrix.find((row) => row.row === 11).skipReason, /two physical machines|mTLS/u);
-  assert.match(matrix.find((row) => row.row === 12).skipReason, /live remote worker/u);
+  // Scenario 12 EXECUTES the connected-worker journey and must say, in its own
+  // note, what it does not execute — routes 11-12 remain uncomposed.
+  const connectedWorker = matrix.find((row) => row.row === 12);
+  assert.deepEqual(connectedWorker.checks, ["remote-workers.connected-worker-e2e"]);
+  assert.equal(connectedWorker.skipReason, undefined);
+  assert.match(connectedWorker.note, /routes 11-12/u);
   // Every executed scenario that proves a live-DB owner cites the live-postgres check.
   for (const rowNumber of [1, 2, 3, 4, 5, 6, 8]) {
     assert.ok(
@@ -375,7 +397,7 @@ test("row statuses fold check results honestly; declared skips never report exec
   const allPassed = new Map(EXPECTED_CHECK_IDS.map((id) => [id, { id, status: "passed" }]));
   const rows = deriveRemoteWorkersRowStatuses(matrix, allPassed);
   for (const row of rows) {
-    if (row.row === 11 || row.row === 12) {
+    if (row.row === 11) {
       assert.equal(row.status, "skipped_with_reason", `scenario ${row.row} reports its declared conditional skip`);
     } else {
       assert.equal(row.status, "executed", `scenario ${row.row} executes for real`);
