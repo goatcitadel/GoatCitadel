@@ -139,7 +139,7 @@ bool DecodeRemoteWorkerPopV2Preimage(
   const std::uint8_t route_code = bytes[fixed + 2U];
   const std::uint8_t authority_kind_code = bytes[fixed + 3U];
   const std::uint8_t expected_authority_kind =
-      route_code == 1U ? 1U : route_code >= 2U && route_code <= 10U ? 2U : 0U;
+      route_code == 1U ? 1U : route_code >= 2U && route_code <= 12U ? 2U : 0U;
   const std::uint64_t authority_generation = ReadU64Be(bytes + fixed + 4U);
   const std::uint64_t worker_generation = ReadU64Be(bytes + fixed + 12U);
   const std::uint64_t timestamp_epoch_ms = ReadU64Be(bytes + fixed + 20U);

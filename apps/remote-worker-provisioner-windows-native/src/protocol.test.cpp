@@ -811,7 +811,7 @@ void TestProtectedMutationCodecs() {
     } else if (offset == 130U) {
       mutated[offset] = 2U;
     } else if (offset == 131U) {
-      mutated[offset] = 11U;
+      mutated[offset] = 13U;
     } else if (offset == 132U) {
       mutated[offset] = 1U;
     } else if (offset == 133U) {
@@ -825,7 +825,7 @@ void TestProtectedMutationCodecs() {
         InvalidPopRequestClears(mutated, mutated.size()),
         "remote-worker PoP-v2 request mutation rejected");
   }
-  for (std::uint8_t route = 1U; route <= 10U; ++route) {
+  for (std::uint8_t route = 1U; route <= 12U; ++route) {
     auto bound = pop_request;
     bound[131U] = route;
     bound[132U] = route == 1U ? 1U : 2U;
