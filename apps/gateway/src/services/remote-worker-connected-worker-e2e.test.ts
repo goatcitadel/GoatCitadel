@@ -97,7 +97,7 @@ afterEach(async () => {
     try {
       db.close();
     } catch {
-      // A failed assertion must not be masked by a close error.
+      // Best-effort cleanup: a failed assertion must not be masked by a close error.
     }
   }
   for (const root of cleanupRoots.splice(0)) rmSync(root, { recursive: true, force: true });

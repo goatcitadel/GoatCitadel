@@ -80,9 +80,10 @@ change:
 - Mark completed or superseded rows truthfully, including original parity
   epics, Google Meet, agent-fanout budget weighting, capability lifecycle APIs,
   and mobile voice capture.
-- Correct remote-worker proof wording: the named composition lane and live
-  PostgreSQL row exist, while two-machine admission and connected-worker E2E
-  remain held.
+- Correct remote-worker proof wording: the named composition lane, the live
+  PostgreSQL row, and the single-host connected-worker end-to-end row all
+  execute, while two-machine admission and the routes 11-12 inference /
+  artifact-effect settlement stages remain held.
 - Preserve dated review and QA artifacts as historical evidence rather than
   rewriting them into current status.
 
@@ -359,14 +360,40 @@ Owner contract: `OPENCLAW_HERMES_PARITY_PROGRAM.md`, `HX-501`.
   workspace is resolved, and that complete protected commit fence is rechecked
   **inside** the assignment storage transaction before the inference or
   settlement owner is reached.
+- The connected-worker loop now EXECUTES single-host as `verify:remote-workers`
+  scenario 12 (11 executed / 1 skipped-with-reason / 0 failed). A spawned
+  `apps/remote-worker` process admits itself over the composed native mTLS
+  listener (route 1, with a protected admission envelope bound to that
+  connection's exporter), binds its mesh node (route 7), polls and claims an
+  offer the harness created through the canonical storage owners exactly as a
+  scheduler eventually would (routes 8-9), reads its workload (route 10), ships
+  ordered transcript events (route 4), is killed mid-loop holding a live lease
+  and an unacknowledged tail, restarts on the RETAINED credential, replays the
+  first batch byte-identically while appending only the fresh tail, rotates its
+  lease (route 3), reads control (route 5), and settles once (route 6). The
+  assertions read durable state, never logs: exactly one runtime credential, one
+  assignment generation, one settlement, three contiguous non-duplicated events,
+  and zero HX-306 rows.
+- Running the loop for the first time surfaced two real defects in the composed
+  path, both fixed: the transport header allowlist omitted
+  `x-goatcitadel-mesh-node-join-credential`, so every route-7 request was aborted
+  before the mux and the composed route was unreachable; and the mesh-node
+  admission owner's `admittedByActorId` postcondition expected a
+  worker-generation segment the canonical storage owner never writes, so a real
+  admission committed its effect and then answered 403.
 - Still open on the live loop: production scheduler dispatch (offer creation is
-  still production-dark), and a connected-worker E2E harness that injects the
-  HX-503/HX-506 inner owners so the composed listener can actually serve routes
-  11-12 single-host.
+  still production-dark), and routes 11-12. The E2E composes a fail-closed
+  execution owner that refuses every call, because the HX-503 inference owner
+  needs governance/approval/budget/routing/HX-306-accounting adapters and the
+  HX-506 owners need a CAS store and an effect coordinator — production composes
+  none of them. That gap is visible in the executed settlement itself: a
+  `completed` outcome must cite a committed HX-506 artifact manifest, so with no
+  artifact owner composed the worker settles the outcome it can evidence.
 - Prove worker death, disconnect, lease takeover, cancellation, stale callback
-  fencing, and approval-gated resume against the live listener once the reachable
-  loop is driven end-to-end by the worker process. Restart recovery and
-  no-duplicate-accounting are already proven in the worker runtime core.
+  fencing, and approval-gated resume against the live listener. Death, restart,
+  byte-identical replay, and no-duplicate accounting are now proven end-to-end
+  by scenario 12; lease takeover by a second worker, cancellation-to-settlement,
+  and approval-gated resume remain unexecuted.
 
 Owner contracts: `OPENCLAW_HERMES_PARITY_PROGRAM.md`, `HX-502` and `HX-504`.
 
@@ -412,21 +439,28 @@ behind an activation flag, so the whole admission -> dispatch -> workload ->
 inference -> ordered-event -> lease-renewal -> artifact/effect-settlement loop
 now has a worker-facing wire route.
 
-M4 still does not close, and scenario 12 remains a declared skip — but its hold
-has **narrowed**. The old reason is gone: the HX-503 inference proxy and HX-506
-artifact/effect settlement owners now DO have PoP-v2 wire routes.
-`REMOTE_WORKER_POP_V2_ROUTE_BINDINGS` is a closed **twelve**-purpose table
-(codes 1-10: bootstrap, assignment sync/lease/events/control/settle, mesh admit,
-offer-poll/claim/workload; code 11: inference exchange; code 12: artifact/effect
-settlement submission), and the Windows protected PoP-v2 signer's closed table
-admits exactly the same twelve. What remains is (a) a connected-worker E2E
-harness that injects the production-dark HX-503/HX-506 inner owners so the
-all-or-nothing composition can return a live mux — production injects none, so
-the listener stays dark even with the activation flag ON — and (b) the
-production scheduler that creates real offers. Until both land, the HX-507
-live-runtime fields (connection health, usage/cost, resource cell,
-artifact/effect) stay `unavailable`-labeled. M4 closes when the full E2E row
-executes and the UI renders live, truth-labeled data.
+Scenario 12 now **executes**: the lane reports 11 executed / 1
+skipped-with-reason / 0 failed, and the only remaining declared skip is
+scenario 11's genuinely two-machine mTLS row. A real spawned
+`apps/remote-worker` process drives admission, mesh-node binding, offer
+poll/claim, workload read, ordered transcript transport, a mid-loop kill, a
+restart with byte-identical replay, lease rotation, control read, and one
+generation-fenced terminal settlement against the composed native listener.
+
+M4 still does not close, and the executed row is deliberately narrower than the
+declared journey. What remains is (a) the routes 11-12 inner owners — the E2E
+composes a fail-closed execution owner because the HX-503 inference owner needs
+governance/approval/budget/routing/HX-306-accounting adapters and the HX-506
+owners need a CAS store and an effect coordinator, none of which production
+composes; and (b) the production scheduler that creates real offers (the harness
+creates the offer through the canonical storage owners, standing in for one).
+The routes 11-12 gap is load-bearing rather than cosmetic: a `completed`
+settlement must cite a committed HX-506 artifact manifest, so until an artifact
+owner is composed the executed loop cannot end in a `completed` outcome. Until
+both land, the HX-507 live-runtime fields (connection health, usage/cost,
+resource cell, artifact/effect) stay `unavailable`-labeled. M4 closes when the
+inference and artifact/effect stages execute in the same row and the UI renders
+live, truth-labeled data.
 
 Owner contracts: `OPENCLAW_HERMES_PARITY_PROGRAM.md`, `HX-503` through `HX-507`.
 
