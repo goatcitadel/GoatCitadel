@@ -229,6 +229,7 @@ export class ChatWorkspaceSnapshotService {
       if (candidate && candidate.length <= 256 && !containsControlCharacter(candidate)) branch = candidate;
     } catch {
       // Detached HEAD is valid point-in-time state; omit branch rather than infer one.
+      branch = undefined;
     }
     let ahead: number | undefined;
     let behind: number | undefined;
@@ -242,6 +243,8 @@ export class ChatWorkspaceSnapshotService {
       }
     } catch {
       // No upstream is an ordinary repository posture; omit divergence counts.
+      ahead = undefined;
+      behind = undefined;
     }
     return {
       headSha,
