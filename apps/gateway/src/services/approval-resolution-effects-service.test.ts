@@ -1880,7 +1880,7 @@ describe("approval-resolution-effects-service", () => {
     const service = new ApprovalEffectsService(
       {
         storage: {
-          approvalEffects: { failEffect, skipEffect, completeEffect },
+          approvalEffects: { failEffect, skipEffect, completeEffect, listByApproval: vi.fn(() => []) },
           approvalWaitRuns: { markResolved: vi.fn() },
         },
         publishRealtime: vi.fn(),
@@ -1939,7 +1939,12 @@ describe("approval-resolution-effects-service", () => {
     const service = new ApprovalEffectsService(
       {
         storage: {
-          approvalEffects: { failEffect: vi.fn(), skipEffect: vi.fn(), completeEffect },
+          approvalEffects: {
+            failEffect: vi.fn(),
+            skipEffect: vi.fn(),
+            completeEffect,
+            listByApproval: vi.fn(() => []),
+          },
           approvalWaitRuns: { markResolved },
         },
         publishRealtime: vi.fn(),
@@ -2011,7 +2016,7 @@ describe("approval-resolution-effects-service", () => {
     const service = new ApprovalEffectsService(
       {
         storage: {
-          approvalEffects: { failEffect: vi.fn(), skipEffect, completeEffect },
+          approvalEffects: { failEffect: vi.fn(), skipEffect, completeEffect, listByApproval: vi.fn(() => []) },
           approvalWaitRuns: { markResolved },
         },
         publishRealtime: vi.fn(),
@@ -2085,6 +2090,7 @@ describe("approval-resolution-effects-service", () => {
             failEffect: vi.fn(() => ({ status: "failed" as const })),
             skipEffect,
             completeEffect: vi.fn(() => ({ status: "completed" as const })),
+            listByApproval: vi.fn(() => []),
           },
           approvalWaitRuns: { markResolved: vi.fn() },
           pendingApprovalActions: {
@@ -4272,6 +4278,7 @@ describe("approval-resolution-effects-service", () => {
             failEffect: vi.fn(() => ({ status: "failed" as const })),
             skipEffect,
             completeEffect: vi.fn(() => ({ status: "completed" as const })),
+            listByApproval: vi.fn(() => []),
           },
           approvalWaitRuns: { markResolved: vi.fn() },
         },
