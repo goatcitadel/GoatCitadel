@@ -361,6 +361,7 @@ export interface ChatDelegationServiceHost {
     mode?: ChatMode;
   }): Promise<ChatSessionRecord>;
   inheritDelegatedSessionToolGrants(parentSessionId: string, childSessionId: string): Promise<void>;
+  configureReadOnlyExplorerSession?(sessionId: string): Promise<void>;
   ensureSessionInternalToolGrant?(sessionId: string, toolName: string, reason: string): Promise<void>;
   resolveDelegatedFilesystemScope?(
     parentSessionId: string,
@@ -437,6 +438,16 @@ export class ChatDelegationService {
       throw new Error("at least one role is required");
     }
     const requestedMode = input.mode ?? "sequential";
+    const explorerProfile = input.executionProfile === "read_only_explorer";
+    if (
+      explorerProfile &&
+      (requestedMode !== "sequential" ||
+        roles.length !== 1 ||
+        input.steps?.length ||
+        roles[0]?.toLowerCase() !== "workspace explorer")
+    ) {
+      throw new ValidationError({ message: "Workspace exploration requires one sequential delegated child." });
+    }
     const mode = requestedMode;
     const requestedDelegationSteps = normalizeDelegationSteps({
       roles,
@@ -799,11 +810,19 @@ export class ChatDelegationService {
         registeredAgentSessionId = agentSessionId;
         childSessionId = agentSessionId;
         await deps.inheritDelegatedSessionToolGrants(sessionId, agentSessionId);
+        if (explorerProfile) {
+          await deps.configureReadOnlyExplorerSession?.(agentSessionId);
+        }
         const delegatedScope = await deps.resolveDelegatedFilesystemScope?.(
           sessionId,
           dispatchLease.dispatchMarker,
           runningStep.scopeControl,
         );
+        if (explorerProfile && !delegatedScope) {
+          throw new ValidationError({
+            message: "Workspace exploration requires a verified server-owned filesystem scope.",
+          });
+        }
         if (delegatedScope) {
           // The durable patch is the authority; its returned projection is intentionally unused after scope setup.
           await deps.storage.chatDelegationSteps.patch(step.stepId, { scopeControl: delegatedScope });
@@ -818,12 +837,12 @@ export class ChatDelegationService {
           planningMode: "off",
           providerId,
           model,
-          webMode: prefs.webMode,
+          webMode: explorerProfile ? "off" : prefs.webMode,
           memoryMode: prefs.memoryMode,
           thinkingLevel: prefs.thinkingLevel,
           speedMode: prefs.speedMode,
           subagentPolicy: "off",
-          toolAutonomy: prefs.toolAutonomy,
+          toolAutonomy: explorerProfile ? "manual" : prefs.toolAutonomy,
           orchestrationEnabled: false,
           orchestrationIntensity: "minimal",
           orchestrationVisibility: "explicit",
@@ -853,6 +872,7 @@ export class ChatDelegationService {
           mode,
           parentDelegationStepId: step.stepId,
           sharedContext: dependencyContext,
+          readOnlyExplorer: explorerProfile,
         });
         scheduleLateSettleRecord = (event) => {
           if (lateSettleRecordScheduled) {
@@ -912,13 +932,13 @@ export class ChatDelegationService {
                 providerId,
                 model,
                 mode: executionMode,
-                webMode: prefs.webMode,
+                webMode: explorerProfile ? "off" : prefs.webMode,
                 memoryMode: prefs.memoryMode,
                 thinkingLevel: prefs.thinkingLevel,
                 speedMode: prefs.speedMode,
                 subagentPolicy: "off",
                 retrievalMode: prefs.retrievalMode ?? "standard",
-                toolAutonomy: prefs.toolAutonomy,
+                toolAutonomy: explorerProfile ? "manual" : prefs.toolAutonomy,
                 normalizationProfile: inheritedNormalizationProfile,
                 operatorId: input.operatorId,
                 authActorId: input.authActorId,
@@ -1613,6 +1633,16 @@ export class ChatDelegationService {
       stitchedOutput,
       citations,
       trace: parent.trace ?? trace,
+      ...(explorerProfile
+        ? {
+            explorer: {
+              profile: "read_only_explorer" as const,
+              searchedScope: "server_owned_delegated_scope" as const,
+              gapsExplicit: true,
+              evidenceRefs: persistedSteps.flatMap((step) => step.workResult?.evidenceRefs ?? []),
+            },
+          }
+        : {}),
     };
   }
 
@@ -2840,6 +2870,7 @@ export interface BuildSubagentTaskFirstMessageInput {
   mode: "sequential" | "parallel";
   parentDelegationStepId: string;
   sharedContext: Array<{ role: string; output: string }>;
+  readOnlyExplorer?: boolean;
 }
 
 export function buildSubagentTaskFirstMessage(input: BuildSubagentTaskFirstMessageInput): string {
@@ -2856,6 +2887,15 @@ export function buildSubagentTaskFirstMessage(input: BuildSubagentTaskFirstMessa
     "Completed dependency outputs available to this role:",
     dependencyBlock,
     "",
+    ...(input.readOnlyExplorer
+      ? [
+          "Read-only workspace explorer posture: inspect only the server-owned delegated filesystem scope.",
+          "Do not write files, run shell commands, use browser, MCP, network, or delegate further.",
+          "Return Answer, Evidence, Searched scope, and Gaps; state partial results explicitly.",
+          "Request additional paths only through the existing scope-expansion work-result envelope.",
+          "",
+        ]
+      : []),
     "Produce your role output now.",
   ].join("\n");
 }

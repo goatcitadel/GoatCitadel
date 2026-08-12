@@ -33,6 +33,7 @@ const delegateBodySchema = z.object({
   policyRunId: z.string().trim().min(1).optional(),
   policyTaskId: z.string().trim().min(1).optional(),
   fullWebAccess: z.boolean().optional(),
+  executionProfile: z.enum(["standard", "read_only_explorer"]).optional(),
 });
 
 const delegationRunParamsSchema = z.object({

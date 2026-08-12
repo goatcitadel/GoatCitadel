@@ -257,9 +257,9 @@ function BackgroundTaskCard({
             type="button"
             disabled={pending}
             onClick={() => void onControl("detach")}
-            aria-label={`Detach background task ${task.childRunId}`}
+            aria-label={`Continue background task ${task.childRunId} in background`}
           >
-            Detach
+            Continue in background
           </button>
         ) : null}
         {task.controls.reattach.enabled ? (
@@ -269,7 +269,7 @@ function BackgroundTaskCard({
             onClick={() => void onControl("reattach")}
             aria-label={`Reattach background task ${task.childRunId}`}
           >
-            Reattach
+            Bring to foreground
           </button>
         ) : null}
         {task.controls.cancel.enabled && !confirmCancel ? (

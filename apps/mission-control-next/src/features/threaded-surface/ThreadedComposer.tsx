@@ -389,21 +389,17 @@ function ExternalSourceStrip({
   controls,
   disabled,
   openAttachFormToken = 0,
+  onOpenLibrary,
 }: {
   controls: ThreadedExternalSourceControls;
   disabled: boolean;
   openAttachFormToken?: number;
+  onOpenLibrary?: () => void;
 }) {
   const stripInstanceId = useId();
   const stripRef = useRef<HTMLElement | null>(null);
-  const sourceInputRef = useRef<HTMLInputElement | null>(null);
   const [attachFormOpen, setAttachFormOpen] = useState(false);
-  const [attachSourceId, setAttachSourceId] = useState("");
-  const [attachImportId, setAttachImportId] = useState("");
-  const [attachItemId, setAttachItemId] = useState("");
   const selectedCount = controls.selectedAttachmentIds.length;
-  const attachReady =
-    controls.canMutate && attachSourceId.trim() !== "" && attachImportId.trim() !== "" && attachItemId.trim() !== "";
   const mutationHint = controls.canMutate
     ? null
     : "Attach, detach, and knowledge-copy actions stay disabled until the server provides the live session incarnation.";
@@ -412,7 +408,6 @@ function ExternalSourceStrip({
     if (openAttachFormToken <= 0) return;
     setAttachFormOpen(true);
     stripRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-    globalThis.setTimeout(() => sourceInputRef.current?.focus(), 0);
   }, [openAttachFormToken]);
 
   return (
@@ -455,52 +450,19 @@ function ExternalSourceStrip({
       {mutationHint ? <p className="mc-next-composer-external-hint">{mutationHint}</p> : null}
       {attachFormOpen ? (
         <div className="mc-next-composer-external-attach-form">
-          <label htmlFor={`${stripInstanceId}-source`}>
-            <span>Source id</span>
-            <input
-              ref={sourceInputRef}
-              id={`${stripInstanceId}-source`}
-              value={attachSourceId}
-              disabled={disabled || !controls.canMutate}
-              onChange={(event) => setAttachSourceId(event.target.value)}
-            />
-          </label>
-          <label htmlFor={`${stripInstanceId}-import`}>
-            <span>Import id</span>
-            <input
-              id={`${stripInstanceId}-import`}
-              value={attachImportId}
-              disabled={disabled || !controls.canMutate}
-              onChange={(event) => setAttachImportId(event.target.value)}
-            />
-          </label>
-          <label htmlFor={`${stripInstanceId}-item`}>
-            <span>Item id</span>
-            <input
-              id={`${stripInstanceId}-item`}
-              value={attachItemId}
-              disabled={disabled || !controls.canMutate}
-              onChange={(event) => setAttachItemId(event.target.value)}
-            />
-          </label>
-          <button
-            type="button"
-            className="mc-next-composer-inline-button"
-            disabled={disabled || !attachReady}
-            onClick={() => {
-              controls.onAttach({
-                sourceId: attachSourceId.trim(),
-                importId: attachImportId.trim(),
-                itemId: attachItemId.trim(),
-              });
-              setAttachFormOpen(false);
-              setAttachSourceId("");
-              setAttachImportId("");
-              setAttachItemId("");
-            }}
-          >
-            Attach read-only
-          </button>
+          <p className="mc-next-composer-external-hint">
+            Choose an eligible imported item in Library. Chat never accepts raw source, import, or item identifiers.
+          </p>
+          {onOpenLibrary ? (
+            <button
+              type="button"
+              className="mc-next-composer-inline-button"
+              disabled={disabled}
+              onClick={onOpenLibrary}
+            >
+              Open Library imports
+            </button>
+          ) : null}
         </div>
       ) : null}
       {controls.attachments.length === 0 ? (
@@ -1273,6 +1235,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
           controls={props.externalSourceControls}
           disabled={composerActionDisabled}
           openAttachFormToken={externalSourceOpenToken}
+          onOpenLibrary={props.onOpenLibraryArtifacts}
         />
       ) : null}
 

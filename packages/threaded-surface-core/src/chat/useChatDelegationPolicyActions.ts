@@ -859,6 +859,54 @@ export function useChatDelegationPolicyActions(input: {
     ],
   );
 
+  const handleExploreWorkspace = useCallback(async () => {
+    if (!selectedSession || sending) return;
+    const objective = draft.trim();
+    if (!objective) {
+      setError("Write what you want to find, then choose Explore workspace.");
+      return;
+    }
+    setSending(true);
+    try {
+      const route = resolveDelegationRoute(prefs, selectedProviderId, selectedModel);
+      const result = await runDelegationAction(
+        selectedSession.sessionId,
+        {
+          objective,
+          roles: ["Workspace explorer"],
+          mode: "sequential",
+          surfaceMode: "chat",
+          providerId: route.providerId,
+          model: route.model,
+          executionProfile: "read_only_explorer",
+        },
+        "Workspace exploration",
+      );
+      const gaps = result.explorer?.gapsExplicit ? " Gaps and partial results are called out in the report." : "";
+      pushLocalNotice(
+        `Workspace exploration ${result.status}.${gaps}`,
+        result.status === "failed" ? "warning" : "success",
+      );
+      await loadSidebar();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSending(false);
+    }
+  }, [
+    draft,
+    loadSidebar,
+    prefs,
+    pushLocalNotice,
+    runDelegationAction,
+    selectedModel,
+    selectedProviderId,
+    selectedSession,
+    sending,
+    setError,
+    setSending,
+  ]);
+
   useEffect(() => {
     const subagentPolicy = prefs?.subagentPolicy ?? "ask_when_useful";
     const activeWorkflowHasDelegation = Boolean(activeWorkflowTurn?.trace.orchestration?.runId);
@@ -959,5 +1007,6 @@ export function useChatDelegationPolicyActions(input: {
     handleSuggestDelegation,
     handleAcceptDelegation,
     handleRunCodeDelegation,
+    handleExploreWorkspace,
   };
 }

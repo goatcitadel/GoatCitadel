@@ -42,6 +42,7 @@ interface BuildSourcesInput {
   projects: ChatProjectRecord[];
   knowledgeAttachments: ThreadKnowledgeAttachmentRecord[];
   externalSourcesAvailable: boolean;
+  workspaceExplorerAvailable?: boolean;
   typedRunVariablesEnabled: boolean;
   documentEditingEnabled?: boolean;
   sessionId?: string;
@@ -77,7 +78,22 @@ export function buildChatComposerPaletteSources(input: BuildSourcesInput): Compo
             action: { type: "insert_command", value: entry.command },
             keywords: [entry.usage],
           }));
-        return [...specific, ...catalog];
+        const explorer: ComposerPaletteItem[] = input.workspaceExplorerAvailable
+          ? [
+              {
+                key: "workspace-explorer",
+                command: "Explore workspace",
+                description: "Run the current draft as one governed, read-only workspace exploration.",
+                applyValue: "",
+                source: "commands",
+                sourceLabel: "Workspace explorer",
+                availabilityLabel: "Read-only delegated scope",
+                action: { type: "explore_workspace" },
+                keywords: ["workspace", "explore", "read-only", "files"],
+              },
+            ]
+          : [];
+        return [...explorer, ...specific, ...catalog];
       },
     },
     {
@@ -344,6 +360,7 @@ export function useChatComposerPaletteController(
     providerOptions,
     sessionId,
     typedRunVariablesEnabled,
+    workspaceExplorerAvailable,
   } = input;
   const registry = useMemo(
     () =>
@@ -358,6 +375,7 @@ export function useChatComposerPaletteController(
           projects,
           providerOptions,
           typedRunVariablesEnabled,
+          ...(workspaceExplorerAvailable !== undefined ? { workspaceExplorerAvailable } : {}),
           ...(documentEditingEnabled !== undefined ? { documentEditingEnabled } : {}),
           ...(loadFiles ? { loadFiles } : {}),
           ...(sessionId !== undefined ? { sessionId } : {}),
@@ -376,6 +394,7 @@ export function useChatComposerPaletteController(
       providerOptions,
       sessionId,
       typedRunVariablesEnabled,
+      workspaceExplorerAvailable,
     ],
   );
 

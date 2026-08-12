@@ -28,6 +28,7 @@ export type ComposerPaletteAction =
     }
   | { type: "attach_url"; url: string }
   | { type: "launch_external_source" }
+  | { type: "explore_workspace" }
   | {
       type: "open_template_form";
       invocation: Omit<import("@goatcitadel/contracts").RunTemplateInvocation, "values">;

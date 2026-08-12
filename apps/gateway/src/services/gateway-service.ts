@@ -2383,6 +2383,7 @@ export class GatewayService {
           : this.createChatSession(input),
       inheritDelegatedSessionToolGrants: async (parentSessionId, childSessionId) =>
         await this.inheritDelegatedSessionToolGrants(parentSessionId, childSessionId),
+      configureReadOnlyExplorerSession: async (sessionId) => await this.configureReadOnlyExplorerSession(sessionId),
       ensureSessionInternalToolGrant: async (sessionId, toolName, reason) =>
         await this.ensureSessionInternalToolGrant(sessionId, toolName, reason),
       resolveDelegatedFilesystemScope: async (parentSessionId, dispatchGeneration, current) =>
@@ -5814,6 +5815,20 @@ export class GatewayService {
 
     for (const grantInput of inheritedGrants) {
       await this.createToolGrant(grantInput);
+    }
+  }
+
+  /** Deny-wins fence for the dedicated read-only workspace explorer profile. */
+  public async configureReadOnlyExplorerSession(sessionId: string): Promise<void> {
+    for (const toolPattern of ["fs.write*", "shell*", "browser*", "mcp*", "network*", "delegate*"]) {
+      await this.createToolGrant({
+        toolPattern,
+        decision: "deny",
+        scope: "session",
+        scopeRef: sessionId,
+        grantType: "persistent",
+        createdBy: "system-read-only-explorer",
+      });
     }
   }
 

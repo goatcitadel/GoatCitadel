@@ -1693,6 +1693,8 @@ export interface ChatDelegateRequest {
   policyRunId?: string;
   policyTaskId?: string;
   fullWebAccess?: boolean;
+  /** Server-enforced posture for the dedicated single-child workspace explorer. */
+  executionProfile?: "standard" | "read_only_explorer";
   /**
    * Depth of the parent run in the subagent tree. Children are spawned at
    * `parentSubagentDepth + 1` and are subject to the configured maxDepth
@@ -1710,6 +1712,12 @@ export interface ChatDelegateResponse {
   stitchedOutput: string;
   citations: ChatCitationRecord[];
   trace?: ChatTurnTraceRecord["routing"];
+  explorer?: {
+    profile: "read_only_explorer";
+    searchedScope: "server_owned_delegated_scope";
+    gapsExplicit: true;
+    evidenceRefs: string[];
+  };
 }
 
 export interface ChatDelegationSuggestionRecord {

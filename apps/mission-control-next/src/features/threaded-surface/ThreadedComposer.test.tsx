@@ -1577,35 +1577,22 @@ describe("ThreadedComposer external source strip (HX-407 C3)", () => {
     renderer.unmount();
   });
 
-  it("attaches an imported item through the labelled identifier-only form", async () => {
+  it("routes imported-source discovery to Library and never renders raw identifier fields", async () => {
     const controls = externalControls({ attachments: [] });
-    const renderer = await renderComposer({ externalSourceControls: controls });
+    const onOpenLibraryArtifacts = vi.fn();
+    const renderer = await renderComposer({ externalSourceControls: controls, onOpenLibraryArtifacts });
 
     expect(
       renderer.root.findAll((node) => node.type === "p" && collectText(node).includes("Import them in the Library")),
     ).toHaveLength(1);
     await click(findButton(renderer.root, "Attach imported item"));
-    const fields = renderer.root.findAll(
-      (node) => node.type === "input" && typeof node.props.id === "string" && node.props.id.includes("-"),
+    expect(collectText(renderer.root)).toContain("Chat never accepts raw source, import, or item identifiers.");
+    expect(renderer.root.findAll((node) => node.type === "input" && node.props.id?.includes("-source"))).toHaveLength(
+      0,
     );
-    const byLabel = (suffix: string): ReactTestInstance => {
-      const field = fields.find((node) => String(node.props.id).endsWith(suffix));
-      if (!field) {
-        throw new Error(`Missing attach-form field ${suffix}`);
-      }
-      return field;
-    };
-    await act(async () => {
-      byLabel("-source").props.onChange({ target: { value: " source-1 " } });
-    });
-    await act(async () => {
-      byLabel("-import").props.onChange({ target: { value: "import-1" } });
-    });
-    await act(async () => {
-      byLabel("-item").props.onChange({ target: { value: "item-9" } });
-    });
-    await click(findButton(renderer.root, "Attach read-only"));
-    expect(controls.onAttach).toHaveBeenCalledWith({ sourceId: "source-1", importId: "import-1", itemId: "item-9" });
+    await click(findButton(renderer.root, "Open Library imports"));
+    expect(onOpenLibraryArtifacts).toHaveBeenCalledTimes(1);
+    expect(controls.onAttach).not.toHaveBeenCalled();
     renderer.unmount();
   });
 

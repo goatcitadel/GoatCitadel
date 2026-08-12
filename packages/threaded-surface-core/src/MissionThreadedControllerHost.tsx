@@ -1845,6 +1845,7 @@ export function MissionThreadedControllerHost({
     projects: composerPaletteProjects,
     knowledgeAttachments: composerPaletteKnowledge,
     externalSourcesAvailable: externalSourceAttachments.supported === true,
+    workspaceExplorerAvailable: Boolean(selectedSession?.projectId),
     typedRunVariablesEnabled,
     documentEditingEnabled,
     sessionId: selectedSessionId ?? undefined,
@@ -2087,6 +2088,7 @@ export function MissionThreadedControllerHost({
     handleSuggestDelegation,
     handleAcceptDelegation,
     handleRunCodeDelegation,
+    handleExploreWorkspace,
     handleMemoryStatusUpdate,
     handleRebuildLearnedMemory,
     handleCreateSpecialistDraft,
@@ -3567,6 +3569,9 @@ export function MissionThreadedControllerHost({
           case "launch_external_source":
             pushLocalNotice("Opened the governed external-source attachment flow.");
             break;
+          case "explore_workspace":
+            await handleExploreWorkspace();
+            break;
           case "open_template_form": {
             const initial = validateRunVariableBindings(item.action.schema, item.action.defaults ?? {}, {
               allowMissingRequired: true,
@@ -3593,6 +3598,7 @@ export function MissionThreadedControllerHost({
       handleAssignProject,
       handleAttachKnowledgeUrlValue,
       handleAttachPaletteFile,
+      handleExploreWorkspace,
       pushLocalNotice,
       setUiError,
       toggleDocumentContext,
@@ -4171,7 +4177,6 @@ export function MissionThreadedControllerHost({
       setSelectedFolderId,
       setSelectedProjectId,
       setSelectedTag,
-      setShowProjectCreate,
       showProjectCreate,
       sidebarLoadingMore,
       sidebarNextCursor,

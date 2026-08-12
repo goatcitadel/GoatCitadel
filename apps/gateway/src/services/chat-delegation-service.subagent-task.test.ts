@@ -36,6 +36,22 @@ describe("buildSubagentTaskFirstMessage", () => {
     });
     expect(message).toContain("None");
   });
+  it("adds the non-bypassable explorer ceiling only for the read-only profile", () => {
+    const message = buildSubagentTaskFirstMessage({
+      role: "Workspace explorer",
+      objective: "Find the current routing owner.",
+      mode: "sequential",
+      parentDelegationStepId: "step-explore",
+      sharedContext: [],
+      readOnlyExplorer: true,
+    });
+    expect(message).toContain("server-owned delegated filesystem scope");
+    expect(message).toContain(
+      "Do not write files, run shell commands, use browser, MCP, network, or delegate further.",
+    );
+    expect(message).toContain("Answer, Evidence, Searched scope, and Gaps");
+    expect(message).toContain("scope-expansion work-result envelope");
+  });
 });
 
 describe("buildDelegationSpecialistSystemPrompt", () => {
